@@ -155,6 +155,17 @@ impl Manifest {
         })
     }
 
+    /// The hash of the package's hook code, the files under `ext/`, or None
+    /// when it has none. A player built with that code is built with this
+    /// hash; a recording names it.
+    pub fn hook_hash(&self) -> Option<String> {
+        let mut text = String::new();
+        for (path, f) in self.under("ext") {
+            text.push_str(&format!("{} {} {path}\n", f.hash, f.size));
+        }
+        (!text.is_empty()).then(|| hash(text.as_bytes()))
+    }
+
     /// The manifest's text: the header, `kind`, `name`, then a line a file,
     /// `file HASH SIZE PATH`, in path order. These bytes are what the id
     /// hashes, so the same files always give the same id.

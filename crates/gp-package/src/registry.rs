@@ -519,15 +519,9 @@ impl<'a> Reader<'a> {
         Ok(y)
     }
 
-    /// A package by its exact id: the version file must name that id, its
-    /// manifest must hash to it and be signed by the namespace, and every
-    /// file must match the manifest.
-    pub fn fetch(
-        &self,
-        name: &str,
-        version: &str,
-        id: &str,
-    ) -> Result<(Manifest, BTreeMap<String, Vec<u8>>), String> {
+    /// A package's manifest by its exact id: the version file must name that
+    /// id, and the manifest must hash to it and be signed by the namespace.
+    pub fn manifest(&self, name: &str, version: &str, id: &str) -> Result<Manifest, String> {
         let (ns, _) = split_name(name)?;
         let v = self.version(name, version)?;
         if v.id != id {
@@ -560,6 +554,18 @@ impl<'a> Reader<'a> {
                 m.name
             ));
         }
+        Ok(m)
+    }
+
+    /// A package by its exact id: its [`Reader::manifest`], and every file
+    /// must match that manifest.
+    pub fn fetch(
+        &self,
+        name: &str,
+        version: &str,
+        id: &str,
+    ) -> Result<(Manifest, BTreeMap<String, Vec<u8>>), String> {
+        let m = self.manifest(name, version, id)?;
         let mut files = BTreeMap::new();
         for f in &m.files {
             let bytes = must_read(self.target, &blob_key(&f.hash))?;

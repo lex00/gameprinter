@@ -5,13 +5,14 @@
 #
 # script-src: the page's own files, and WebAssembly (the interpreter and
 # the lift module). Nothing inline: styles are in page.css and preview.css.
-# connect-src 'self': the page only fetches its own files. frame-src and
+# connect-src: its own files, and any https source a game comes from. No
+# package script runs on the page. frame-src and
 # frame-ancestors 'self': the game runs in a frame of the same site.
 # No file in the bundle has a hash in its name, so none may be cached
 # without asking: the browser keeps a copy and asks the server (ETag) each
 # time, and a deploy never leaves a new page.js beside an old wasm.
 /*
-  Content-Security-Policy: default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; frame-src 'self'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
+  Content-Security-Policy: default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' https:; frame-src 'self'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
   Cache-Control: public, max-age=0, must-revalidate
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer

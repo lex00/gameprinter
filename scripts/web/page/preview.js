@@ -351,23 +351,29 @@ function parseFrames(s) {
   });
 }
 
-// Where the build's files come from: the network, or with
-// `files=idb:GAME` in the URL the files a ROM lift stored in this
-// browser's IndexedDB (scripts/web/public/lift.js, docs/web.md "The public
-// page"). Only gp_web.wasm itself is always fetched.
+// Where the game's files come from: with `files=idb:GAME` in the URL, the
+// files a ROM lift stored in this browser (scripts/web/public/lift.js);
+// else the installed game's play files (install.js). The page's own files,
+// gp_web.wasm among them, are always fetched.
 const stored = (() => {
   const m = /^idb:(.+)$/.exec(new URLSearchParams(location.search).get("files") ?? "");
-  if (!m) return null;
-  return import("./lift.js").then(async ({ loadStored }) => {
-    const files = await loadStored(m[1]);
-    if (!files) throw new Error(`no lifted ${m[1]} is stored in this browser; load the ROM again`);
+  if (m) {
+    return import("./lift.js").then(async ({ loadStored }) => {
+      const files = await loadStored(m[1]);
+      if (!files) throw new Error(`no lifted ${m[1]} is stored in this browser; load the ROM again`);
+      return files;
+    });
+  }
+  return import("./install.js").then(async ({ playFiles }) => {
+    const files = await playFiles();
+    if (!files) throw new Error("this game isn't installed in this browser; open the page to install it");
     return files;
   });
 })();
 // A `blob:` URL (a downloaded theme's file, from the cache) is fetched in
 // either case.
 async function load(url, init) {
-  if (!stored || url.startsWith("blob:")) return fetch(url, init);
+  if (url.startsWith("blob:")) return fetch(url, init);
   const b = (await stored).get(url.split("?")[0]);
   return b ? new Response(b) : new Response(null, { status: 404 });
 }
@@ -382,7 +388,7 @@ async function load(url, init) {
 const blobs = new Map();
 async function image(src) {
   let blob = blobs.get(src);
-  if (!blob && stored && !src.startsWith("blob:")) {
+  if (!blob && !src.startsWith("blob:")) {
     const b = (await stored).get(src);
     if (!b) throw new Error(`${src}: not stored`);
     blob = new Blob([b], { type: "image/png" });

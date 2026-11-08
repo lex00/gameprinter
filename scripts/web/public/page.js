@@ -37,16 +37,59 @@ const pageFile = fetch("page.json").then((r) => {
 });
 let page = null;
 let rom = null;
+let link = null;
+// A play link's game and content: `g` and `c`, each NAME or NAME@VERSION.
+// With no link, the page's own game. The page has one source, its own.
+function gameLink(p) {
+  const q = new URLSearchParams(location.search);
+  const part = (v) => {
+    if (!v) return null;
+    const [name, version = null] = v.split("@");
+    return { name, version };
+  };
+  const game = part(q.get("g")) ?? { name: p.game, version: null };
+  if (game.name !== p.game) throw new Error(`this page plays ${p.game}, not ${game.name}`);
+  return { game, content: part(q.get("c")), direct: q.has("g") };
+}
 // page.json read into `page` and `rom`: what a ROM needs before it can
 // play. A file picked earlier waits for it in liftAndPlay.
 const ready = pageFile.then((p) => {
   page = p;
   rom = p.rom;
+  link = gameLink(p);
   $("rom-help").textContent =
     `Load your own ${rom.name} ROM (${rom.file}) to play with the original's look and layout. ` +
     "It is checked and read in this browser and never uploaded.";
 });
 ready.catch(() => {});
+
+// The game, installed from the page's source or already in this browser,
+// and the link's content. Everything that plays waits for this.
+let installer = null;
+const install = () => (installer ??= import("./game/install.js"));
+let notices = [];
+const installing = ready.then(async () => {
+  const x = await install();
+  const progress = (n, of) => say(`Getting the game: ${n} of ${of} files. It stays in this browser so it plays offline.`);
+  const g = await x.ensure(page.source, { ...link.game, hooks: page.hooks }, progress);
+  if (!g.record.files.some((f) => f.path.startsWith("play/"))) throw new Error(`${g.record.name}@${g.record.version} has no files this player can run`);
+  await x.setCurrent(g.record);
+  if (g.notice) notices.push(g.notice);
+  let theme = null;
+  if (link.content) {
+    const c = await x.ensure(page.source, { ...link.content, hooks: page.hooks, for_game: g.record.name }).catch((err) => {
+      notices.push(`${link.content.name} couldn't be used: ${err.message ?? err}. Playing in the game's own look.`);
+      return null;
+    });
+    if (c) {
+      if (c.notice) notices.push(c.notice);
+      theme = { id: c.record.name.split("/")[1], files: await x.filesOf(c.record, "theme") };
+    }
+  }
+  say("");
+  return { game: g.record, theme, files: await x.filesOf(g.record, "play") };
+});
+installing.catch(() => {});
 
 function focusGame() {
   try {
@@ -159,11 +202,13 @@ function showSkipped(skipped = []) {
     : "";
 }
 
+let linked = null;
 function play(mode, found = null, skipped = []) {
   const romMode = mode === "rom";
   // A ROM starts in its own art (own-look): a look kept from an earlier
   // visit, Paper say, would make it look like the paper version.
-  const files = romMode ? `files=idb:${rom.game}&own-look&` : "";
+  const wanted = romMode && linked?.theme && !skipped.some((t) => t.id === linked.theme.id) ? `theme=${linked.theme.id}` : "own-look";
+  const files = romMode ? `files=idb:${rom.game}&${wanted}&` : "";
   frame.src = `game/index.html?${files}scale=fit`;
   // The page's name stays Rivet Rodeo in both modes: the ROM's game is
   // named only in the line below, to say which file is being played.
@@ -175,6 +220,16 @@ function play(mode, found = null, skipped = []) {
   $("back").hidden = !romMode;
   $("load-label").hidden = romMode;
   showSkipped(romMode ? skipped : []);
+}
+
+// The play files the lift reads: those under lift/, by their path there,
+// and what its index aliases beside the folder.
+function playTemplates(files) {
+  const out = new Map();
+  for (const [k, v] of files) {
+    out.set(k.startsWith("lift/") ? k.slice(5) : k, v);
+  }
+  return out;
 }
 
 // Lifts a ROM (a File, or the ArrayBuffer kept from an earlier visit) and
@@ -189,7 +244,12 @@ async function liftAndPlay(file, name) {
     const { liftRom } = await lift().catch((err) => {
       throw new Error(`the page's ROM reader (game/lift.js) didn't load: ${err.message ?? err}`);
     });
-    const r = await liftRom(file, { moduleUrl: "game/lift/gp-web-lift.wasm", templateUrl: "game/lift/" });
+    linked = await installing;
+    const r = await liftRom(file, {
+      moduleUrl: "game/lift/gp-web-lift.wasm",
+      templateFiles: playTemplates(linked.files),
+      extraThemes: linked.theme ? [linked.theme] : [],
+    });
     if (!r.ok) {
       say(r.error, "error");
       return;
@@ -230,13 +290,17 @@ else {
 
 boot?.markReady();
 
+let started = false;
 try {
   await ready;
+  linked = await installing;
+  started = true;
+  if (notices.length) say(notices.join(" "), "warn");
 } catch (err) {
-  say(`The page didn't start: ${err.message ?? err}. Reload the page to try again.`, "error");
+  say(`${page?.title ?? "The game"} couldn't be installed: ${err.message ?? err}.`, "error");
 }
-window.__page = { play, liftRom: async (...a) => (await lift()).liftRom(...a), showSkipped };
-if (page) play("paper");
+window.__page = { play, liftRom: async (...a) => (await lift()).liftRom(...a), showSkipped, installing };
+if (started) play("paper");
 
 // Kept from an earlier visit: the ROM version is a click away, never loaded
 // on its own. The click lifts the kept ROM again, so it plays with this
@@ -246,9 +310,10 @@ if (page) play("paper");
 // IndexedDB can be refused (some private windows) or, in some Safari
 // versions, never answer; either way the page plays on without the
 // buttons, and nothing here holds up the paper version or the picker.
-const { storedRom, loadStored, clearStored } = page ? await lift().catch(() => ({})) : {};
+const { storedRom, loadStored, clearStored } = started ? await lift().catch(() => ({})) : {};
 const keptRom = storedRom ? await storedRom(rom.game).catch(() => null) : null;
 if (!keptRom && loadStored && (await loadStored(rom.game).catch(() => null))) await clearStored(rom.game).catch(() => {});
+if (keptRom && link?.direct) liftAndPlay(keptRom, "your ROM");
 if (keptRom) {
   const again = document.createElement("button");
   again.className = "quiet";

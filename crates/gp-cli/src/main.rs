@@ -5,6 +5,7 @@
 mod assets;
 mod game;
 mod model;
+mod package;
 mod registry;
 mod run;
 mod template;
@@ -65,6 +66,11 @@ enum Cmd {
     Registry {
         #[command(subcommand)]
         cmd: RegistryCmd,
+    },
+    /// Ask about a package folder.
+    Package {
+        #[command(subcommand)]
+        cmd: PackageCmd,
     },
     /// Check a template's pins against a ROM.
     Template {
@@ -204,6 +210,12 @@ enum RegistryCmd {
 }
 
 #[derive(Subcommand)]
+enum PackageCmd {
+    /// Print the hash of a package folder's hook code.
+    Hooks { dir: std::path::PathBuf },
+}
+
+#[derive(Subcommand)]
 enum TemplateCmd {
     /// Build an authored template's lifted files and hold them to its pin.
     Build {
@@ -257,6 +269,9 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                     rom_dir,
                 },
         } => game::fetch(name, id, from, root, into, rom_dir),
+        Cmd::Package {
+            cmd: PackageCmd::Hooks { dir },
+        } => package::hooks(dir),
         Cmd::Registry { cmd } => match cmd {
             RegistryCmd::Init {
                 target,

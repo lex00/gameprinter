@@ -62,7 +62,18 @@ if (!dist || !browserPath) {
 }
 const shots = resolve(opt("shots") ?? join(dist, "..", "page-shots"));
 mkdirSync(shots, { recursive: true });
-const full = process.argv.includes("--full");
+// Every section runs: the game now comes from a registry, which a kept
+// result's inputs can't name, so a kept pass could describe other files.
+const full = true;
+// The page holds no game: it installs one from its source. --play is the
+// folder the package's play/ was made from, for what the checks read
+// themselves, at /__check/play/, which the page never asks for.
+const playDir = opt("play") ? resolve(opt("play")) : `${dist}.play`;
+const entry = opt("entry") ?? "index.html";
+// --registry-folder answers the page's source from a folder (a dry run);
+// --registry-stopped installs, then refuses every request to the source.
+const registryFolder = opt("registry-folder") && resolve(opt("registry-folder"));
+const registryStopped = process.argv.includes("--registry-stopped");
 const free = Math.max(1, cpus().length - loadavg()[0]);
 const jobs = Math.max(1, Number(opt("jobs") ?? process.env.GP_PAGE_JOBS ?? Math.min(6, Math.floor(free / 2))) || 1);
 const gpHome = process.env.GP_HOME ?? join(homedir(), ".game-printer");
@@ -364,6 +375,18 @@ async function session(browser, name, opts = {}) {
   // game/runs/NAME.frames from here, not from the bundle: button holds only.
   S.server = createServer((req, res) => {
     const url = new URL(req.url, "http://x");
+    if (url.pathname.startsWith("/__check/play/")) {
+      try {
+        const f = join(playDir, decodeURIComponent(url.pathname.slice(14)));
+        res.setHeader("content-type", types[extname(f)] ?? "application/octet-stream");
+        res.end(readFileSync(f));
+      } catch {
+        res.statusCode = 404;
+        res.end();
+      }
+      return;
+    }
+    if (url.pathname === "/p") url.pathname = "/index.html"; // _redirects
     const run = /^\/game\/runs\/(.+)\.frames$/.exec(url.pathname);
     if (run && S.runs.has(run[1])) {
       res.setHeader("content-type", "text/plain");
@@ -407,7 +430,25 @@ async function session(browser, name, opts = {}) {
       (r) => r.fulfill({ contentType: "text/html", body: "<!doctype html><title>The paper version, not loaded in this section</title>" }),
     );
   }
+  const sourceUrl = page.source.url.replace(/\/$/, "");
+  if (registryFolder) {
+    await context.route(`${sourceUrl}/**`, (r) => {
+      const f = join(registryFolder, new URL(r.request().url()).pathname);
+      if (!existsSync(f)) return r.fulfill({ status: 403, headers: { "access-control-allow-origin": "*" }, body: "" });
+      return r.fulfill({ status: 200, headers: { "access-control-allow-origin": "*" }, body: readFileSync(f) });
+    });
+  }
+  if (opts.source) await context.route(`${sourceUrl}/**`, opts.source);
   context.on("request", (r) => S.requests.push({ method: r.method(), url: r.url(), body: r.postDataBuffer()?.length ?? 0 }));
+  if (registryStopped) {
+    const first = await context.newPage();
+    await first.goto(`${S.origin}/${opts.firstLink ?? entry}`);
+    await first.waitForFunction(() => window.__page);
+    await first.evaluate(() => window.__page.installing);
+    await first.close();
+    await context.route(`${sourceUrl}/**`, (r) => r.abort());
+    S.requests.length = 0;
+  }
   const p = (S.p = await context.newPage());
   p.on("websocket", (w) => S.sockets.push(w.url()));
   p.on("pageerror", (e) => S.errors.push(e.message));
@@ -532,7 +573,7 @@ async function session(browser, name, opts = {}) {
       // A preview built before __gp.scene can't be asked.
       if (typeof window.__gp.scene !== "function") return { over: 0, under: NaN };
       const s = window.__gp.scene();
-      const cfg = await (await fetch("preview.json")).json();
+      const cfg = await (await fetch("/__check/play/preview.json")).json();
       const canvas = document.getElementById("game");
       const W = canvas.width;
       const shown = canvas.getContext("2d").getImageData(0, 0, W, canvas.height).data;
@@ -540,7 +581,7 @@ async function session(browser, name, opts = {}) {
       const pic = async (i) => {
         if (!cache.has(i)) {
           const im = new Image();
-          im.src = `assets/${cfg.pictures[i]}`;
+          im.src = `/__check/play/assets/${cfg.pictures[i]}`;
           await im.decode();
           const c = document.createElement("canvas");
           [c.width, c.height] = [im.width, im.height];
@@ -926,13 +967,13 @@ async function session(browser, name, opts = {}) {
 // and the line naming a theme the lift couldn't offer.
 async function paperPage(S) {
   const { p, check, gp, key, waitFrames, settings, runs_, errors } = S;
-  await p.goto(`${S.origin}/index.html`);
+  await p.goto(`${S.origin}/${entry}`);
   check(await waitFrames(30), "the paper version starts with no click");
   check((await gp(() => window.__gp.error)) === null, "the preview loads without an error");
   const title = await p.title();
   check(title === page.title, `the page is titled ${page.title} (${title})`);
   check(!/donkey|kong|mario|nintendo|pauline/i.test(await p.locator("header").innerText()), "the header names no Nintendo game or character");
-  const cfg = await (await fetch(`${S.origin}/game/preview.json`)).json();
+  const cfg = await (await fetch(`${S.origin}/__check/play/preview.json`)).json();
   check(cfg.title === page.title, `the paper game is ${cfg.title}`);
   await p.waitForTimeout(800);
   await S.shot("paper-title.png");
@@ -1055,9 +1096,9 @@ async function paperPage(S) {
 // features.
 async function paperSaves(S) {
   const { p, check, gp, key, waitFrames, errors } = S;
-  await p.goto(`${S.origin}/index.html`);
+  await p.goto(`${S.origin}/${entry}`);
   check(await waitFrames(30), "the paper version starts");
-  const cfg = await (await fetch(`${S.origin}/game/preview.json`)).json();
+  const cfg = await (await fetch(`${S.origin}/__check/play/preview.json`)).json();
   const last = () => gp(() => window.__gp.hashes[window.__gp.hashes.length - 1]);
   await key("F2");
   await p.waitForTimeout(300);
@@ -1094,7 +1135,7 @@ async function paperSaves(S) {
 const gcBaseline = join(repo, "../games/donkey-kong/open/baselines/clear-and-loop.toml");
 async function paperFrames(S) {
   const { p, check, gp, waitFrames } = S;
-  await p.goto(`${S.origin}/index.html`);
+  await p.goto(`${S.origin}/${entry}`);
   check(await waitFrames(30), "the paper version starts");
   const gcBase = readFileSync(gcBaseline, "utf8");
   const gcHolds = JSON.parse(/^holds = (\[.*\])$/m.exec(gcBase)[1]);
@@ -1131,11 +1172,11 @@ async function paperFrames(S) {
   // each hand is whole (the user saw half hands, 2026-11-04;
   // theme_paper::tests::the_big_foes_hands_are_whole_and_one_size_in_every_box).
   await p.evaluate(async () => {
-    const cfg = await (await fetch("game/preview.json")).json();
+    const cfg = await (await fetch("/__check/play/preview.json")).json();
     const ims = [];
     for (const f of cfg.pictures) {
       const im = new Image();
-      im.src = `game/assets/${f}`;
+      im.src = `/__check/play/assets/${f}`;
       await im.decode();
       if (im.width === cfg.kinds.kong?.size[0] && im.height === cfg.kinds.kong?.size[1]) ims.push(im);
     }
@@ -1156,7 +1197,7 @@ async function paperFrames(S) {
 // A wrong ROM: a made-up image, no game's.
 async function wrongRom(S) {
   const { p, check } = S;
-  await p.goto(`${S.origin}/index.html`);
+  await p.goto(`${S.origin}/${entry}`);
   const fake = S.file("not-a-game.nes");
   const body = Buffer.alloc(16 + 16384 + 8192);
   body.set([0x4e, 0x45, 0x53, 0x1a, 1, 1]);
@@ -1179,7 +1220,7 @@ async function wrongRom(S) {
 // game, 2026-11-04.)
 async function romPlay(S, { name, sha, rom }) {
   const { p, check, gp, key, waitFrames, settings, runs_ } = S;
-  await p.goto(`${S.origin}/index.html`);
+  await p.goto(`${S.origin}/${entry}`);
   const said = await S.loadRom(rom);
   check(true, `${name} is lifted in the browser: ${said}`);
   const notOffered = (await p.locator("#skipped").isVisible()) ? await p.locator("#skipped").innerText() : "";
@@ -1295,7 +1336,7 @@ async function romPlay(S, { name, sha, rom }) {
 // GP_LIFT_LEVELS=main,m75), and this section held it to that.
 async function romRoute(S, { name, sha, rom }) {
   const { p, check, gp } = S;
-  await p.goto(`${S.origin}/index.html`);
+  await p.goto(`${S.origin}/${entry}`);
   await S.loadRom(rom);
   check(await S.waitFrames(30), `${name}: the ROM version starts`);
   const tag = sha.slice(0, 8);
@@ -1388,7 +1429,7 @@ async function romRoute(S, { name, sha, rom }) {
 // played 50m, so no death there had been played in the browser.
 async function romDeaths(S, { name, rom }) {
   const { p, check, gp } = S;
-  await p.goto(`${S.origin}/index.html`);
+  await p.goto(`${S.origin}/${entry}`);
   await S.loadRom(rom);
   check(await S.waitFrames(30), `${name}: the ROM version starts`);
   const romSrc = await p.locator("#game").getAttribute("src");
@@ -1446,7 +1487,7 @@ async function romDeaths(S, { name, rom }) {
 // The seven save features in the ROM's game.
 async function romSaves(S, { name, sha, rom }) {
   const { p, check } = S;
-  await p.goto(`${S.origin}/index.html`);
+  await p.goto(`${S.origin}/${entry}`);
   await S.loadRom(rom);
   check(await S.waitFrames(30), `${name}: the ROM version starts`);
   await S.savesCheck(`rom-${sha.slice(0, 8)}`, name);
@@ -1455,7 +1496,7 @@ async function romSaves(S, { name, sha, rom }) {
 // "Unload ROM" returns to the paper version, which plays.
 async function romUnload(S, { name, rom }) {
   const { p, check, waitFrames } = S;
-  await p.goto(`${S.origin}/index.html`);
+  await p.goto(`${S.origin}/${entry}`);
   check(await waitFrames(30), "the paper version starts");
   await S.loadRom(rom);
   check(await waitFrames(30), `${name}: the ROM version starts`);
@@ -1496,7 +1537,7 @@ async function visitor(S, { rule, input, load, rom }) {
   const heard = async (more = {}) => ({ ...(await S.soundOf(v, vgame())), state: await vgame().evaluate(() => window.__gp.audioState?.() ?? "?"), ...more });
   const asked = () => vgame().evaluate(() => !!document.getElementById("sound-prompt"));
   const who = `a new visitor under ${rule === "chrome" ? "Chrome's" : "Safari's"} rule for sound, playing with ${input === "gamepad" ? "a gamepad" : "the keyboard"}${load === "none" ? ", the ROM loaded with no click" : ""}`;
-  await v.goto(`${S.origin}/index.html`);
+  await v.goto(`${S.origin}/${entry}`);
   await v.waitForTimeout(1500);
   if (load === "click") {
     const [chooser] = await Promise.all([v.waitForEvent("filechooser"), v.locator("#load-label").click()]);
@@ -1550,7 +1591,7 @@ async function visitor(S, { rule, input, load, rom }) {
 // starts in a fresh browser).
 async function keptLook(S, { name, rom }) {
   const { p, check, waitFrames } = S;
-  await p.goto(`${S.origin}/index.html`);
+  await p.goto(`${S.origin}/${entry}`);
   await waitFrames(30);
   await p.evaluate(() => {
     for (const m of ["donkey_kong_oe", "donkey_kong_ju", "rivet_rodeo"]) localStorage.setItem(`gp-theme:${m}`, "paper");
@@ -1565,7 +1606,7 @@ async function keptLook(S, { name, rom }) {
 
 async function laterVisit(S, { rom }) {
   const { p, check, waitFrames } = S;
-  await p.goto(`${S.origin}/index.html`);
+  await p.goto(`${S.origin}/${entry}`);
   await waitFrames(30);
   await S.loadRom(rom);
   await waitFrames(30);
@@ -1779,7 +1820,7 @@ async function pictureMomentsCheck(S, section, src, runOf) {
 // Rivet Rodeo's moments, on its clear-and-loop baseline (as paperFrames).
 async function paperPictures(S) {
   const { p, check, waitFrames } = S;
-  await p.goto(`${S.origin}/index.html`);
+  await p.goto(`${S.origin}/${entry}`);
   check(await waitFrames(30), "the paper version starts");
   const gcBase = readFileSync(gcBaseline, "utf8");
   S.runs.set("gc-clear", framesOf(JSON.parse(/^holds = (\[.*\])$/m.exec(gcBase)[1]), Number(/^frames = (\d+)/m.exec(gcBase)[1])));
@@ -1790,7 +1831,7 @@ async function paperPictures(S) {
 // A ROM version's moments, on its route (ROUTES).
 async function romPictures(S, { name, sha, rom }) {
   const { p, check } = S;
-  await p.goto(`${S.origin}/index.html`);
+  await p.goto(`${S.origin}/${entry}`);
   await S.loadRom(rom);
   check(await S.waitFrames(30), `${name}: the ROM version starts`);
   const src = await p.locator("#game").getAttribute("src");
@@ -1813,6 +1854,163 @@ async function romPictures(S, { name, sha, rom }) {
 // long one takes alone (seconds, 2026-11-05), so the longest start first;
 // `files` are inputs beside the bundle files its server sends; `rom` is
 // the SHA-256 of the ROM it plays.
+
+// ---- The registry: the deep link, the install, and what is refused ----
+
+const LINK = `p?g=${page.game}`;
+const installedOf = (p, name = page.game, v = null) => p.evaluate(async ([n, ver]) => (await import("./game/install.js")).installed(n, ver), [name, v]);
+const romPlaying = (p) => p.waitForFunction(() => document.getElementById("game").src.includes("files=idb:"), null, { timeout: 60000 }).then(() => true, () => false);
+
+// A first visit by the link: the game comes from the source, whole, and the
+// page's own server holds none of it. Another visit asks for no file again.
+async function registryLink(S) {
+  const { p, check, waitFrames } = S;
+  await p.addInitScript(() => {
+    window.__persistAsked = 0;
+    const was = navigator.storage.persist.bind(navigator.storage);
+    navigator.storage.persist = () => (window.__persistAsked++, was());
+  });
+  await p.goto(`${S.origin}/${LINK}`);
+  check(await waitFrames(30), "by the link the open version plays with no click");
+  const rec = await installedOf(p);
+  check(rec?.name === page.game && rec.files.length > 300, `it is installed in this browser (${rec?.name}@${rec?.version}, ${rec?.files.length} files)`);
+  const source = page.source.url.replace(/\/$/, "");
+  const isSource = (r) => r.url.startsWith(`${source}/`);
+  const own = S.requests.filter((r) => r.url.startsWith(S.origin)).map((r) => r.url.slice(S.origin.length));
+  check(!own.some((u) => /\/(bundle|preview)\.json|\/game\/assets\/|\/game\/lift\/(?!gp-web-lift)/.test(u)), `the page's server was asked for none of the game (${own.length} requests)`);
+  if (registryStopped) {
+    check(!S.requests.some((r) => isSource(r) && r.url.includes("/blobs/")), "with the registry stopped, the game played with no file fetched from it");
+    return;
+  }
+  const blobs = S.requests.filter((r) => isSource(r) && r.url.includes("/blobs/")).length;
+  check(blobs > 200, `the game's files came from the source (${blobs} files)`);
+  check((await p.evaluate(() => window.__persistAsked)) === 1, "the first install asks once for storage that lasts");
+  S.requests.length = 0;
+  await p.reload();
+  check(await waitFrames(30), "the link plays again");
+  check(!S.requests.some((r) => isSource(r) && r.url.includes("/blobs/")), "a later visit fetches no file again");
+  check((await p.evaluate(() => window.__persistAsked)) === 0, "a later visit doesn't ask for storage again");
+}
+
+// A person's ROM by the link: it is asked for once, and after that the link
+// goes straight into the game.
+async function registryRom(S, r) {
+  const { p, check, waitFrames } = S;
+  await p.goto(`${S.origin}/${LINK}`);
+  check(await waitFrames(30), `${r.name}: the link opens`);
+  await S.loadRom(r.rom);
+  check(await waitFrames(30), `${r.name}: the ROM plays`);
+  await p.goto(`${S.origin}/${LINK}`);
+  check(await romPlaying(p), `${r.name}: on a later visit the link goes straight into the game`);
+  check(await waitFrames(30), `${r.name}: and it runs`);
+  await p.goto(`${S.origin}/index.html`);
+  check(await waitFrames(30), `${r.name}: the page with no link still opens the open version`);
+  check(!(await p.locator("#game").getAttribute("src")).includes("files=idb:"), `${r.name}: and leaves the ROM a click away`);
+}
+
+// `c=`: a content package from the source, drawn from its own files over the
+// person's ROM.
+async function registryTheme(S, r) {
+  const { p, check, gp, waitFrames } = S;
+  const link = `${LINK}&c=lex00/paper`;
+  await p.goto(`${S.origin}/${link}`);
+  check(await waitFrames(30), `${r.name}: the link with a theme opens`);
+  const c = await installedOf(p, "lex00/paper");
+  check(c?.kind === "content", `${r.name}: the theme is installed (${c?.name}@${c?.version})`);
+  const { forRom, own } = await p.evaluate(async (rec) => {
+    const x = await import("./game/install.js");
+    const t = new TextDecoder().decode((await x.filesOf(rec, "theme")).get("theme.toml"));
+    return { forRom: /^for = .*donkey_kong/m.test(t), own: JSON.parse(new TextDecoder().decode((await x.playFiles()).get("preview.json"))).look[0] };
+  }, c);
+  check(own === "paper" && (await gp(() => window.__gp.theme)) === "paper", `${r.name}: on the open version the page draws its own look, which is this theme (${own})`);
+  await S.loadRom(r.rom);
+  const frameSrc = await p.locator("#game").getAttribute("src");
+  const skipped = await p.locator("#skipped").innerText();
+  if (forRom) {
+    check(frameSrc.includes("theme=paper"), `${r.name}: a theme for this ROM's game opens the game with the theme (${frameSrc})`);
+    check(await waitFrames(30), `${r.name}: it runs`);
+    check((await gp(() => window.__gp.theme)) === "paper", `${r.name}: and draws it`);
+  } else {
+    check(frameSrc.includes("own-look"), `${r.name}: a theme for the open version leaves the ROM in its own look (${frameSrc})`);
+    check(/ROM theme not offered: Paper/.test(skipped), `${r.name}: with one line saying so (${skipped})`);
+    check(await waitFrames(30), `${r.name}: the game still runs`);
+  }
+}
+
+async function registryLinks(S) {
+  const { p, check } = S;
+  const refused = async (link, re, what) => {
+    await p.goto(`${S.origin}/${link}`);
+    await p.waitForFunction(() => document.getElementById("message").dataset.kind === "error", null, { timeout: 30000 }).catch(() => {});
+    const said = await p.locator("#message").innerText();
+    check(re.test(said) && !(await p.locator("#game").getAttribute("src")), `${what} (${said})`);
+  };
+  await refused("p?g=someone/else", /this page plays/i, "a link to a game this player doesn't have is refused in words");
+  await refused(`p?g=${page.game}@9.9.9`, /couldn't be installed/i, "a link to a version that doesn't exist is refused in words");
+  await refused(`p?g=${page.game}@1.0.0`, /no files this player can run/i, "a version with nothing this player runs is refused in words");
+}
+
+// What a source can do wrong, each on a first visit. `r` fetches the real
+// answer; each case changes it, and nothing may be installed.
+const broken = (match, change) => async (route) => {
+  const url = route.request().url();
+  if (!match(url)) return route.fallback();
+  try {
+    const real = await route.fetch();
+    await route.fulfill({ response: real, body: change(await real.body()) });
+  } catch {
+    // The section ended, and its page with it, while this file was on its way.
+  }
+};
+const flip = (b) => {
+  const c = Buffer.from(b);
+  c[c.length >> 1] ^= 1;
+  return c;
+};
+const source_ = (k) => (u) => new URL(u).pathname === `/${k}`;
+const refusedInstall = (re, what) => async (S) => {
+  const { p, check } = S;
+  await p.goto(`${S.origin}/${LINK}`);
+  await p.waitForFunction(() => document.getElementById("message").dataset.kind === "error", null, { timeout: 60000 }).catch(() => {});
+  const said = await p.locator("#message").innerText();
+  check(re.test(said), `${what}: the page says so (${said})`);
+  check(!(await p.locator("#game").getAttribute("src")), `${what}: no game starts`);
+  check((await installedOf(p)) === null, `${what}: nothing is installed`);
+};
+
+// Installed, then the source goes bad: what is installed keeps playing and
+// the page says why it isn't refreshed.
+async function registryGoesBad(S) {
+  const { p, check, waitFrames } = S;
+  await p.goto(`${S.origin}/${LINK}`);
+  check(await waitFrames(30), "installed");
+  await p.context().route(`${page.source.url.replace(/\/$/, "")}/registry.toml`, broken(() => true, flip));
+  await p.goto(`${S.origin}/${LINK}`);
+  check(await waitFrames(30), "with the source's root signature broken, what is installed keeps playing");
+  const said = await p.locator("#message").innerText();
+  check(/Using the copy in this browser/.test(said), `and the page says so (${said})`);
+}
+
+// A file changed in this browser's own storage is caught before it is used.
+async function registryLocalChange(S) {
+  const { p, check, waitFrames } = S;
+  await p.goto(`${S.origin}/${LINK}`);
+  check(await waitFrames(30), "installed");
+  await p.evaluate(async () => {
+    const db = await new Promise((ok) => (indexedDB.open("gp-installs").onsuccess = (e) => ok(e.target.result)));
+    const rec = await new Promise((ok) => (db.transaction("games").objectStore("games").getAll().onsuccess = (e) => ok(e.target.result.find((v) => v.files))));
+    const f = rec.files.find((x) => x.path === "play/preview.json");
+    const tx = db.transaction("blobs", "readwrite");
+    tx.objectStore("blobs").put(new TextEncoder().encode("{}").buffer, f.hash);
+    await new Promise((ok) => (tx.oncomplete = ok));
+    db.close();
+  });
+  await p.goto(`${S.origin}/${LINK}`);
+  await p.waitForFunction(() => document.getElementById("message").dataset.kind === "error", null, { timeout: 30000 }).catch(() => {});
+  const said = await p.locator("#message").innerText();
+  check(/changed in this browser/.test(said), `a play file changed in this browser is refused (${said})`);
+}
+
 const SECTIONS = [];
 const add = (name, est, run, extra = {}) => SECTIONS.push({ name, est, run, ...extra });
 add("paper-page", 30, paperPage);
@@ -1846,6 +2044,35 @@ if (roms.length) {
   }
   add("later-visit", 6, (S) => laterVisit(S, first), { rom: first.sha });
   add("kept-look", 8, (S) => keptLook(S, first), { rom: first.sha });
+}
+
+add("registry-link", 15, registryLink);
+for (const r of roms) {
+  const tag = r.sha.slice(0, 8);
+  add(`registry-rom-${tag}`, 15, (S) => registryRom(S, r), { rom: r.sha });
+  add(`registry-theme-${tag}`, 15, (S) => registryTheme(S, r), { rom: r.sha, firstLink: `${LINK}&c=lex00/paper` });
+}
+if (!registryStopped) {
+  add("registry-links", 15, registryLinks);
+  add("registry-goes-bad", 15, registryGoesBad);
+  add("registry-local-change", 15, registryLocalChange);
+  const bad = (name, what, re, match, change) => add(`registry-bad-${name}`, 10, refusedInstall(re, what), { source: broken(match, change) });
+  bad("root-sig", "registry.toml's signature broken", /couldn't be installed/i, source_("registry.toml.sig"), flip);
+  bad("root-text", "registry.toml changed", /couldn't be installed/i, source_("registry.toml"), (b) => Buffer.from(b.toString().replace("gp-staging", "gp-stagiing")));
+  bad("namespace", "the namespace's keys changed", /couldn't be installed/i, source_("namespaces/lex00.toml"), (b) => Buffer.from(b.toString() + "\n# changed\n"));
+  bad("catalog", "the catalog's latest changed", /couldn't be installed/i, source_("catalog.toml"), (b) => Buffer.from(b.toString().replace('latest = "1.0.1"', 'latest = "1.0.0"')));
+  bad("manifest", "the manifest changed", /couldn't be installed/i, (u) => /\/packages\/[0-9a-f]{64}$/.test(u), flip);
+  bad("manifest-sig", "the manifest's signature broken", /couldn't be installed/i, (u) => /\/packages\/[0-9a-f]{64}\.sig$/.test(u), flip);
+  bad("blob", "one file's bytes changed", /doesn't match what its maker signed/i, (u) => /\/blobs\//.test(u), flip);
+  add("registry-bad-hooks", 10, async (S) => {
+    await S.p.route("**/page.json", async (route) => {
+      const real = await route.fetch();
+      const j = await real.json();
+      j.hooks = ["0".repeat(64)];
+      return route.fulfill({ response: real, json: j });
+    });
+    return refusedInstall(/hook code/i, "hook code this player wasn't built with")(S);
+  });
 }
 
 if (opt("only") || acceptPictures) {
@@ -1979,9 +2206,10 @@ try {
           await sec.run(S);
           // The network log of every frame of the section.
           const origin = S.origin;
-          const off = S.requests.filter((r) => !(r.url.startsWith(origin) || r.url.startsWith("blob:") || r.url.startsWith("data:")));
+          const source = `${page.source.url.replace(/\/$/, "")}/`;
+          const off = S.requests.filter((r) => !(r.url.startsWith(origin) || r.url.startsWith(source) || r.url.startsWith("blob:") || r.url.startsWith("data:")));
           const posts = S.requests.filter((r) => r.method !== "GET" || r.body > 0);
-          S.check(off.length === 0, `every request is to the page's own server (${S.requests.length} requests; others: ${off.map((r) => r.url).join(", ")})`);
+          S.check(off.length === 0, `every request is to the page's own server or its source (${S.requests.length} requests; others: ${off.map((r) => r.url).join(", ")})`);
           S.check(posts.length === 0, `every request is a GET with no body (${posts.map((r) => `${r.method} ${r.url}`).join(", ")})`);
           S.check(S.sockets.length === 0, "no WebSocket opens");
           if (rules.length) S.check(S.violations.length === 0, `the policy refused nothing (${S.violations.length}${S.violations[0] ? ": " + S.violations[0].slice(0, 200) : ""})`);

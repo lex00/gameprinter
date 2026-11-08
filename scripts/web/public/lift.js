@@ -3,9 +3,9 @@
 // (crates/gp-web-lift) over an in-memory file system (wasi.js), and what
 // the preview loads is kept in this browser's IndexedDB only. The ROM's
 // bytes go to the module and nowhere else: this file makes no request
-// with them, only GETs of the module and the template's own files.
+// with them, only a GET of the module.
 //
-//   const r = await liftRom(file, { moduleUrl: "lift/gp-web-lift.wasm", templateUrl: "lift/" });
+//   const r = await liftRom(file, { moduleUrl: "lift/gp-web-lift.wasm", templateFiles });
 //   r.ok ? (await loadStored("donkey-kong")) : r.error
 //
 // IndexedDB: database `gp-public`, store `files`, keys `GAME/<path>`
@@ -103,30 +103,44 @@ async function compileModule(url) {
   return WebAssembly.compile(await r.arrayBuffer());
 }
 
-// Lifts `file` (a File, Blob, ArrayBuffer or Uint8Array). `templateUrl` is
-// a folder holding index.json (`{ game, files: [...], alias: { path: url } }`)
-// and those files.
+// Lifts `file` (a File, Blob, ArrayBuffer or Uint8Array). `templateFiles`
+// is the installed game's play files under lift/: index.json
+// (`{ game, files: [...], alias: { path: url } }`) and those files.
 // Resolves to gp-web-lift's result.json: { ok: true, sha256, files, found,
 // looks_skipped } once stored, where looks_skipped lists each theme the
 // lift couldn't offer as { id, title, reason, detail }, or { ok: false,
 // error, expected, got }.
-export async function liftRom(file, { moduleUrl, templateUrl }) {
-  const base = new URL(templateUrl, document.baseURI);
-  const indexed = await fetch(new URL("index.json", base));
-  if (!indexed.ok) throw new Error(`a file of the page (${new URL("index.json", base).pathname}) didn't load (${indexed.status})`);
-  const index = await indexed.json();
+export async function liftRom(file, { moduleUrl, templateFiles, extraThemes = [] }) {
+  const read = (name) => {
+    const b = templateFiles.get(name);
+    if (!b) throw new Error(`the installed game has no lift/${name}`);
+    return new Uint8Array(b);
+  };
+  const index = JSON.parse(new TextDecoder().decode(read("index.json")));
   const game = index.game;
   const fs = new MemFs();
   const bytes = await toBytes(file);
   fs.writeFile("/rom.nes", bytes);
-  // `alias` maps a path the lift reads to another URL from the folder:
-  // the paper version's bundle, which the page ships once.
-  const files = [...index.files.map((n) => [n, n]), ...Object.entries(index.alias ?? {})];
-  for (const [name, from] of files) {
-    const r = await fetch(new URL(from, base));
-    if (!r.ok) throw new Error(`a file of the page (${new URL(from, base).pathname}) didn't load (${r.status})`);
-    fs.writeFile(`/template/${name}`, new Uint8Array(await r.arrayBuffer()));
+  // `alias` maps a path the lift reads to one beside the lift folder.
+  const here = (from) => new URL(from, "http://x/lift/").pathname.slice(1);
+  const put = new Map(index.files.map((n) => [n, read(n)]));
+  for (const [name, from] of Object.entries(index.alias ?? {})) {
+    const b = templateFiles.get(here(from));
+    if (!b) throw new Error(`the installed game has no ${here(from)}`);
+    put.set(name, new Uint8Array(b));
   }
+  // A theme from another package, offered beside the game's own: its files
+  // in the first template, and a pointer to them in each ROM it loads.
+  const { templates } = JSON.parse(new TextDecoder().decode(read("game.json")));
+  const owner = templates.find((t) => !put.has(`${t}/load.json`));
+  for (const { id, files } of extraThemes) {
+    for (const t of templates) {
+      for (const k of [...put.keys()]) if (k.startsWith(`${t}/themes/${id}/`)) put.delete(k);
+      if (t === owner) for (const [n, b] of files) put.set(`${t}/themes/${id}/${n}`, new Uint8Array(b));
+      else put.set(`${t}/themes/${id}/same_as.toml`, new TextEncoder().encode(`theme = "../../../${owner}/themes/${id}"\n`));
+    }
+  }
+  for (const [name, b] of put) fs.writeFile(`/template/${name}`, b);
   fs.mkdirp("/out");
   const module = await compileModule(new URL(moduleUrl, document.baseURI));
   const t0 = performance.now();
