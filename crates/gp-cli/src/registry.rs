@@ -368,3 +368,124 @@ pub fn check_cmd(url: &str, root_file: &Path) -> Result<Outcome> {
         exit: u8::from(failed),
     })
 }
+
+/// The security headers a page's `_headers` sets for every path.
+fn page_headers(page: &Path) -> Vec<String> {
+    let text = fs::read_to_string(page.join("_headers")).unwrap_or_default();
+    let mut out = Vec::new();
+    let mut on = false;
+    for line in text.lines() {
+        if line.starts_with('#') {
+            continue;
+        }
+        if !line.starts_with(' ') && !line.is_empty() {
+            on = line.trim() == "/*";
+        } else if on && !line.trim().is_empty() {
+            out.push(line.trim().to_owned());
+        }
+    }
+    out
+}
+
+fn content_type(path: &Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("html") => "text/html",
+        Some("css") => "text/css",
+        Some("js") => "text/javascript",
+        Some("json") => "application/json",
+        Some("wasm") => "application/wasm",
+        Some("png") => "image/png",
+        Some("toml" | "txt") => "text/plain",
+        _ => "application/octet-stream",
+    }
+}
+
+/// The file a request path names, the page's files first and then the
+/// registry's. None for anything else, and for any path that climbs out.
+fn local_file(dir: &Path, page: &Path, url: &str) -> Option<PathBuf> {
+    let path = url.split(['?', '#']).next().unwrap_or("");
+    let rel = match path {
+        "/" | "/p" => "index.html",
+        p => p.strip_prefix('/')?,
+    };
+    if rel
+        .split('/')
+        .any(|part| part.is_empty() || part == ".." || part == ".")
+        || rel.contains('\\')
+    {
+        return None;
+    }
+    [page, dir]
+        .iter()
+        .map(|root| root.join(rel))
+        .find(|p| p.is_file())
+}
+
+fn answer(mut stream: std::net::TcpStream, dir: &Path, page: &Path, headers: &[String]) {
+    use std::io::{BufRead as _, BufReader, Write as _};
+    let Ok(clone) = stream.try_clone() else {
+        return;
+    };
+    let mut reader = BufReader::new(clone);
+    let mut first = String::new();
+    if reader.read_line(&mut first).is_err() {
+        return;
+    }
+    let mut line = String::new();
+    while reader.read_line(&mut line).is_ok_and(|n| n > 0) && line.trim() != "" {
+        line.clear();
+    }
+    let mut parts = first.split_whitespace();
+    let (method, url) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+    let file = matches!(method, "GET" | "HEAD")
+        .then(|| local_file(dir, page, url))
+        .flatten();
+    let (status, kind, body) = match file.and_then(|p| Some((content_type(&p), fs::read(&p).ok()?)))
+    {
+        Some((kind, body)) => ("200 OK", kind, body),
+        None => ("404 Not Found", "text/plain", Vec::new()),
+    };
+    let mut head = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n",
+        body.len()
+    );
+    for h in headers {
+        head.push_str(h);
+        head.push_str("\r\n");
+    }
+    head.push_str("\r\n");
+    let _ = stream.write_all(head.as_bytes());
+    if method == "GET" {
+        let _ = stream.write_all(&body);
+    }
+}
+
+/// Serves a folder registry and a built page from one address, on this
+/// machine only, until stopped.
+pub fn serve(dir: &Path, page: &Path, port: u16) -> Result<Outcome> {
+    if !dir.join("registry.toml").is_file() {
+        return Err(anyhow!(
+            "{} isn't a registry (no registry.toml)",
+            dir.display()
+        ));
+    }
+    if !page.join("index.html").is_file() {
+        return Err(anyhow!(
+            "{} isn't a built page (no index.html)",
+            page.display()
+        ));
+    }
+    let listener = std::net::TcpListener::bind(("127.0.0.1", port))
+        .with_context(|| format!("listening on 127.0.0.1:{port}"))?;
+    let headers = std::sync::Arc::new(page_headers(page));
+    println!("playing at http://127.0.0.1:{port}/p?g=lex00/donkey-kong (ctrl-C stops it)");
+    for stream in listener.incoming().flatten() {
+        let (dir, page, headers) = (dir.to_owned(), page.to_owned(), headers.clone());
+        std::thread::spawn(move || answer(stream, &dir, &page, &headers));
+    }
+    Ok(Outcome {
+        json: json!({}),
+        text: String::new(),
+        exit: 0,
+    })
+}

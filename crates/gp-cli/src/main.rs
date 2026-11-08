@@ -7,7 +7,9 @@ mod game;
 mod model;
 mod package;
 mod registry;
+mod roms;
 mod run;
+mod served;
 mod template;
 
 use std::path::PathBuf;
@@ -163,6 +165,15 @@ enum GameCmd {
 
 #[derive(Subcommand)]
 enum RegistryCmd {
+    /// Serve a folder registry and a built page on this machine only.
+    Serve {
+        dir: std::path::PathBuf,
+        /// The built page, served beside the registry.
+        #[arg(long)]
+        page: std::path::PathBuf,
+        #[arg(long, default_value_t = 8377)]
+        port: u16,
+    },
     /// Make a registry in a folder or s3://BUCKET.
     Init {
         target: String,
@@ -213,6 +224,17 @@ enum RegistryCmd {
 enum PackageCmd {
     /// Print the hash of a package folder's hook code.
     Hooks { dir: std::path::PathBuf },
+    /// Sort every file and every field of a package folder into four
+    /// buckets: ours, reference, from the ROM and needs rewrite. Compares
+    /// with each ROM of its `[[rom.entry]]` found by hash in $GP_ROM_DIR
+    /// and prints no ROM byte. With no ROM it says that nothing was
+    /// compared. Exits 1 on any needs-rewrite item or a failed rebuild.
+    Scan {
+        dir: PathBuf,
+        /// A ROM file to compare with, instead of finding it by hash.
+        #[arg(long)]
+        rom: Vec<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -228,6 +250,21 @@ enum TemplateCmd {
         dir: PathBuf,
         #[arg(long)]
         rom: PathBuf,
+    },
+    /// Check that a package's open version holds none of the original's
+    /// data: no line of 24 characters or more of its built files may be held
+    /// by the original's lifted files, and none of its bytes or lifted files
+    /// may be the ROM's. With --folder, the same for every file of a folder
+    /// to be served. Exits 1 on any find, and 2 when a ROM isn't found.
+    Served {
+        /// The package folder (games/donkey-kong).
+        dir: PathBuf,
+        /// A folder to be served; repeat for more.
+        #[arg(long)]
+        folder: Vec<PathBuf>,
+        /// A ROM file to compare with, instead of finding it by hash.
+        #[arg(long)]
+        rom: Vec<PathBuf>,
     },
 }
 
@@ -269,10 +306,14 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                     rom_dir,
                 },
         } => game::fetch(name, id, from, root, into, rom_dir),
-        Cmd::Package {
-            cmd: PackageCmd::Hooks { dir },
-        } => package::hooks(dir),
+        Cmd::Package { cmd } => match cmd {
+            PackageCmd::Hooks { dir } => package::hooks(dir),
+            PackageCmd::Scan { dir, rom } => {
+                package::scan::run(dir, rom, &gp_evidence::Paths::from_env()?)
+            }
+        },
         Cmd::Registry { cmd } => match cmd {
+            RegistryCmd::Serve { dir, page, port } => registry::serve(dir, page, *port),
             RegistryCmd::Init {
                 target,
                 name,
@@ -303,6 +344,9 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
         Cmd::Template {
             cmd: TemplateCmd::Check { dir, rom },
         } => template::check(dir, rom),
+        Cmd::Template {
+            cmd: TemplateCmd::Served { dir, folder, rom },
+        } => served::served(dir, folder, rom, &gp_evidence::Paths::from_env()?),
     }
 }
 

@@ -1,6 +1,13 @@
 # The registries a page can be built for: `GP_PAGE_SOURCE=NAME`. A page holds
-# one source's address and root public key. Official is added at phase 2.2.
+# one source's address and root public key. A url of "." is the page's own
+# address: `gp registry serve` serves the page and a folder registry together.
 [staging]
 name = "gp-staging"
 url = "https://gp-staging-354867293429.s3.us-east-2.amazonaws.com"
+root = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEoXL5YfJ6rWdggoGhTubKRNnHfvNOByMUTPuIJshfGH root@gp-staging"
+
+# A registry in a folder on this machine, signed with the staging keys.
+[local]
+name = "gp-local"
+url = "."
 root = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEoXL5YfJ6rWdggoGhTubKRNnHfvNOByMUTPuIJshfGH root@gp-staging"

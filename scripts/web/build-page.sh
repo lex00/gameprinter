@@ -7,11 +7,16 @@
 # (scripts/web/publish-game.sh) and which the page installs from its source.
 # GP_PAGE_SOURCE names the source in scripts/web/sources.toml (default staging).
 #
+# Last it runs `gp template served` on the game: its open version and the
+# files of both folders against each ROM the game names (result also in
+# OUT.served.txt).
+#
 # GAME_DIR is the game's folder (games/donkey-kong). The repo holds no game,
 # so the build works in a copy of it with the game's hook crate put in place
 # of crates/gp-ext-game, and its template folders where the build reads them.
 #
-# Exit codes: 0 built, 2 couldn't build.
+# Exit codes: 0 built and clean, 1 the served check found game data, 2 couldn't
+# build, or a ROM wasn't in $GP_ROM_DIR to compare with.
 
 set -euo pipefail
 trap 'exit 2' ERR
@@ -138,3 +143,11 @@ done
 
 lap "the page's own files"
 echo "page $(du -sk "$out" | cut -f1) KB in $out"
+
+# Holds none of the game's data: every file of both folders against each ROM.
+report="$out.served.txt"
+status=0
+"$gp" template served "$game" --folder "$out" --folder "$play" > "$report" || status=$?
+cat "$report"
+lap "gp template served"
+exit "$status"

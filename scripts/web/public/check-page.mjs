@@ -74,6 +74,14 @@ const entry = opt("entry") ?? "index.html";
 // --registry-stopped installs, then refuses every request to the source.
 const registryFolder = opt("registry-folder") && resolve(opt("registry-folder"));
 const registryStopped = process.argv.includes("--registry-stopped");
+// A request to the page's source. A source of "." is on the page's own
+// address, so only the registry's own keys count.
+const REGISTRY_KEY = /^\/(registry\.toml|catalog\.toml|yanks\.toml|namespaces\/|index\/|packages\/|blobs\/|by-game\/)/;
+const sourceOrigin = (origin) => new URL(page.source.url, `${origin}/`).origin;
+const isSourceUrl = (origin, u) => {
+  const url = typeof u === "string" ? new URL(u) : u;
+  return url.origin === sourceOrigin(origin) && REGISTRY_KEY.test(url.pathname);
+};
 const free = Math.max(1, cpus().length - loadavg()[0]);
 const jobs = Math.max(1, Number(opt("jobs") ?? process.env.GP_PAGE_JOBS ?? Math.min(6, Math.floor(free / 2))) || 1);
 const gpHome = process.env.GP_HOME ?? join(homedir(), ".game-printer");
@@ -397,7 +405,8 @@ async function session(browser, name, opts = {}) {
       const rel = decodeURIComponent(url.pathname).replace(/^\/+/, "");
       S.read.add(rel);
       for (const [k, v] of headersFor(url.pathname)) res.setHeader(k, v);
-      const p = join(dist, rel);
+      let p = join(dist, rel);
+      if (page.source.url === "." && registryFolder && REGISTRY_KEY.test(url.pathname)) p = join(registryFolder, rel);
       if (statSync(p).isDirectory()) throw new Error("dir");
       res.setHeader("content-type", types[extname(p)] ?? "application/octet-stream");
       res.end(readFileSync(p));
@@ -430,15 +439,15 @@ async function session(browser, name, opts = {}) {
       (r) => r.fulfill({ contentType: "text/html", body: "<!doctype html><title>The paper version, not loaded in this section</title>" }),
     );
   }
-  const sourceUrl = page.source.url.replace(/\/$/, "");
-  if (registryFolder) {
-    await context.route(`${sourceUrl}/**`, (r) => {
+  const isSource = (u) => isSourceUrl(S.origin, u);
+  if (registryFolder && page.source.url !== ".") {
+    await context.route(isSource, (r) => {
       const f = join(registryFolder, new URL(r.request().url()).pathname);
       if (!existsSync(f)) return r.fulfill({ status: 403, headers: { "access-control-allow-origin": "*" }, body: "" });
       return r.fulfill({ status: 200, headers: { "access-control-allow-origin": "*" }, body: readFileSync(f) });
     });
   }
-  if (opts.source) await context.route(`${sourceUrl}/**`, opts.source);
+  if (opts.source) await context.route(isSource, opts.source);
   context.on("request", (r) => S.requests.push({ method: r.method(), url: r.url(), body: r.postDataBuffer()?.length ?? 0 }));
   if (registryStopped) {
     const first = await context.newPage();
@@ -446,7 +455,7 @@ async function session(browser, name, opts = {}) {
     await first.waitForFunction(() => window.__page);
     await first.evaluate(() => window.__page.installing);
     await first.close();
-    await context.route(`${sourceUrl}/**`, (r) => r.abort());
+    await context.route(isSource, (r) => r.abort());
     S.requests.length = 0;
   }
   const p = (S.p = await context.newPage());
@@ -1874,9 +1883,8 @@ async function registryLink(S) {
   check(await waitFrames(30), "by the link the open version plays with no click");
   const rec = await installedOf(p);
   check(rec?.name === page.game && rec.files.length > 300, `it is installed in this browser (${rec?.name}@${rec?.version}, ${rec?.files.length} files)`);
-  const source = page.source.url.replace(/\/$/, "");
-  const isSource = (r) => r.url.startsWith(`${source}/`);
-  const own = S.requests.filter((r) => r.url.startsWith(S.origin)).map((r) => r.url.slice(S.origin.length));
+  const isSource = (r) => isSourceUrl(S.origin, r.url);
+  const own = S.requests.filter((r) => r.url.startsWith(S.origin) && !isSourceUrl(S.origin, r.url)).map((r) => r.url.slice(S.origin.length));
   check(!own.some((u) => /\/(bundle|preview)\.json|\/game\/assets\/|\/game\/lift\/(?!gp-web-lift)/.test(u)), `the page's server was asked for none of the game (${own.length} requests)`);
   if (registryStopped) {
     check(!S.requests.some((r) => isSource(r) && r.url.includes("/blobs/")), "with the registry stopped, the game played with no file fetched from it");
@@ -1947,7 +1955,9 @@ async function registryLinks(S) {
   };
   await refused("p?g=someone/else", /this page plays/i, "a link to a game this player doesn't have is refused in words");
   await refused(`p?g=${page.game}@9.9.9`, /couldn't be installed/i, "a link to a version that doesn't exist is refused in words");
-  await refused(`p?g=${page.game}@1.0.0`, /no files this player can run/i, "a version with nothing this player runs is refused in words");
+  // A local registry holds only the current version.
+  if (page.source.url === ".") await refused(`p?g=${page.game}@1.0.0`, /isn't there/i, "a version this source doesn't hold is refused in words");
+  else await refused(`p?g=${page.game}@1.0.0`, /no files this player can run/i, "a version with nothing this player runs is refused in words");
 }
 
 // What a source can do wrong, each on a first visit. `r` fetches the real
@@ -1984,7 +1994,7 @@ async function registryGoesBad(S) {
   const { p, check, waitFrames } = S;
   await p.goto(`${S.origin}/${LINK}`);
   check(await waitFrames(30), "installed");
-  await p.context().route(`${page.source.url.replace(/\/$/, "")}/registry.toml`, broken(() => true, flip));
+  await p.context().route((u) => isSourceUrl(S.origin, u) && u.pathname === "/registry.toml", broken(() => true, flip));
   await p.goto(`${S.origin}/${LINK}`);
   check(await waitFrames(30), "with the source's root signature broken, what is installed keeps playing");
   const said = await p.locator("#message").innerText();
@@ -2206,8 +2216,7 @@ try {
           await sec.run(S);
           // The network log of every frame of the section.
           const origin = S.origin;
-          const source = `${page.source.url.replace(/\/$/, "")}/`;
-          const off = S.requests.filter((r) => !(r.url.startsWith(origin) || r.url.startsWith(source) || r.url.startsWith("blob:") || r.url.startsWith("data:")));
+          const off = S.requests.filter((r) => !(r.url.startsWith(origin) || isSourceUrl(origin, r.url) || r.url.startsWith("blob:") || r.url.startsWith("data:")));
           const posts = S.requests.filter((r) => r.method !== "GET" || r.body > 0);
           S.check(off.length === 0, `every request is to the page's own server or its source (${S.requests.length} requests; others: ${off.map((r) => r.url).join(", ")})`);
           S.check(posts.length === 0, `every request is a GET with no body (${posts.map((r) => `${r.method} ${r.url}`).join(", ")})`);

@@ -1,7 +1,7 @@
 //! `gp template check`: a ROM held to a template's pins: the ROM's hash,
 //! the asset map's hash and the digest of what the map lifts.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
@@ -24,6 +24,65 @@ pub fn lifted_digest(files: &BTreeMap<String, Vec<u8>>) -> String {
         let _ = writeln!(lines, "{}  {name}", sha256_hex(bytes));
     }
     sha256_hex(lines.as_bytes())
+}
+
+/// A lifted text line at least this long found in another file means a
+/// lifted asset was copied into it.
+pub const LIFTED_LINE: usize = 24;
+
+/// Whether a line only names something (`asset = "palette_ground"`), as a
+/// lifted file's header does and a model's slot recipe may too.
+fn names_a_name(line: &str) -> bool {
+    let Some((key, value)) = line.split_once('=') else {
+        return false;
+    };
+    let word = |w: &str| {
+        !w.is_empty()
+            && w.bytes()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-'))
+    };
+    let value = value.trim();
+    word(key.trim())
+        && (word(value)
+            || value
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .is_some_and(word))
+}
+
+/// Whether a trimmed line of a lifted file is one a copy can be known by:
+/// long enough, not a comment and not a key naming a name.
+pub fn is_data_line(line: &str) -> bool {
+    line.len() >= LIFTED_LINE && !line.starts_with('#') && !names_a_name(line)
+}
+
+/// The lines of one set of files that a set of lifted files holds too, by
+/// [`is_data_line`]. Each as (our file, the line, their file).
+pub fn shared_lines(
+    ours: &BTreeMap<String, String>,
+    theirs: &BTreeMap<String, String>,
+) -> Vec<(String, String, String)> {
+    let mut index: HashMap<&str, &str> = HashMap::new();
+    for (name, text) in theirs {
+        if name == gp_assets::MAP_FILE {
+            continue;
+        }
+        for line in text.lines().map(str::trim).filter(|l| is_data_line(l)) {
+            index.entry(line).or_insert(name);
+        }
+    }
+    let mut out = Vec::new();
+    for (name, text) in ours {
+        if name == gp_assets::MAP_FILE {
+            continue;
+        }
+        for line in text.lines().map(str::trim) {
+            if let Some(t) = index.get(line) {
+                out.push((name.clone(), line.to_owned(), (*t).to_owned()));
+            }
+        }
+    }
+    out
 }
 
 pub fn check(dir: &Path, rom_path: &Path) -> Result<Outcome> {
@@ -128,4 +187,33 @@ pub fn build(dir: &Path, out: &Path) -> Result<Outcome> {
         ),
         exit: u8::from(!ok),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn an_original_sharing_a_data_line_with_its_base_is_found() {
+        let files = |t: &str| {
+            std::collections::BTreeMap::from([
+                ("shapes.toml".to_owned(), t.to_owned()),
+                (
+                    gp_assets::MAP_FILE.to_owned(),
+                    "  [0x00, 0x00, 0x18, 0x00],".to_owned(),
+                ),
+            ])
+        };
+        // Made-up rows: the base's, ours with one of them, and ours apart.
+        let base = files(
+            "schema = 1\nasset = \"shapes\"\nrows = [\n  [0x00, 0x00, 0x2A, 0x00],\n  [0x00, 0x00, 0x07, 0x00],\n]\n",
+        );
+        let copied =
+            files("schema = 1\nasset = \"shapes\"\nrows = [\n  [0x00, 0x00, 0x2A, 0x00],\n]\n");
+        let own =
+            files("schema = 1\nasset = \"shapes\"\nrows = [\n  [0x00, 0x03, 0x2A, 0x03],\n]\n");
+        let found = super::shared_lines(&copied, &base);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].1, "[0x00, 0x00, 0x2A, 0x00],");
+        // Format lines (schema, the asset's name, brackets) aren't data.
+        assert!(super::shared_lines(&own, &base).is_empty());
+    }
 }

@@ -49,3 +49,11 @@ _interp-mosshop:
 page out="target/page":
     just build
     GP={{quote(gp)}} scripts/web/build-page.sh ../games/donkey-kong {{quote(out)}}
+
+# Build a registry in a folder on this machine and the page that installs from it.
+local-registry:
+    GP_HOME={{quote(gp_home)}} scripts/web/local-registry.sh
+
+# Serve them at http://127.0.0.1:8377/p?g=lex00/donkey-kong until stopped.
+local-play:
+    target/debug/gp registry serve {{quote(gp_home)}}/registry --page target/page-local
