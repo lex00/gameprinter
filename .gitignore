@@ -40,6 +40,9 @@ dist/
 *.7z
 *.rar
 roms/
+# The tool's ROM list: hashes and board facts, never a game.
+!/roms/
+!/roms/nes.toml
 
 # Data dumped or derived from a game: ROM banks, music rips, save states, battery saves
 *.prg

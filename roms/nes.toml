@@ -1,0 +1,5 @@
+# The tool's own ROM entries, hashes and board facts only: never the games
+# themselves. Moss Hop and the test ROMs are clean files whose headers are
+# trusted, so nothing is listed yet. A game's ROM entries live in its own
+# package.toml, [rom].
+source = []
