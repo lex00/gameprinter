@@ -688,10 +688,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "gp-ext-game"
+version = "0.1.0"
+dependencies = [
+ "gp-cycles",
+ "gp-sim",
+]
+
+[[package]]
 name = "gp-exts"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "gp-ext-game",
  "gp-sim",
  "tempfile",
 ]

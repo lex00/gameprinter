@@ -53,6 +53,8 @@ def main() -> int:
     if not (src / "templates/donkey-kong-oe/template.toml").is_file():
         raise SystemExit(f"{src} isn't game-printer")
     game = games / "donkey-kong"
+    lock = game / "ext/Cargo.lock"
+    kept_lock = lock.read_bytes() if lock.is_file() else None
     if game.exists():
         shutil.rmtree(game)
     copy_tree(src / "templates/donkey-kong-oe", game, SKIP)
@@ -94,13 +96,25 @@ def main() -> int:
         ("[lints]\nworkspace = true\n", '[lints.rust]\nunsafe_code = "forbid"\n\n[workspace]\n'),
     ])
 
+    if kept_lock is not None:
+        lock.write_bytes(kept_lock)
+    # The two ROMs' hashes and facts, for the page's build: never their bytes.
+    blocks = (src / "sources/nes.toml").read_text().split("[[source]]")
+    (game / "roms.toml").write_text(
+        "# Hashes and facts only: never the games themselves.\n"
+        + "".join(
+            "[[source]]" + b
+            for b in blocks[1:]
+            if 'id = "donkey-kong-oe"' in b or 'id = "donkey-kong-ju"' in b
+        )
+    )
     tmpl = (game / "template.toml").read_text()
     ju_at = tmpl.index("\n[[loads]]\n")
     oe_map, ju_map = game / "assets/donkey-kong-oe.toml", game / "assets/donkey-kong-ju.toml"
     (game / "package.toml").write_text(f'''# lex00/donkey-kong: the ROM option and its open version, one game.
 [package]
 name = "lex00/donkey-kong"
-version = "1.0.0"
+version = "1.0.1"
 kind = "game"
 title = "Donkey Kong"
 license = "Apache-2.0"
@@ -159,6 +173,8 @@ asset_map_sha256 = "{sha(ju_map)}"
 levels = ["main", "m75", "m100"]
 assets = {{ title_screens = "stage_screens", title_tiles = "tiles", title_sprite_tiles = "sprite_tiles" }}
 fill_from = "open/"
+# Measured by game-printer's own lift of this ROM, 2026-11-08.
+lifted_sha256 = "b5ec0602d192f14527d336e6b28c0117f03d73f6d9592c18515d5f5df950adcb"
 
 [hooks]
 crate = "ext"

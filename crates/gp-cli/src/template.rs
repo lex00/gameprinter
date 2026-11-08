@@ -86,3 +86,46 @@ pub fn check(dir: &Path, rom_path: &Path) -> Result<Outcome> {
         exit: u8::from(!ok),
     })
 }
+
+/// `gp template build`: an authored template's lifted files, and its pins.
+pub fn build(dir: &Path, out: &Path) -> Result<Outcome> {
+    let built = gp_assets::authored::Authored::load(dir)
+        .map_err(|e| anyhow!("{e}"))?
+        .build()
+        .map_err(|e| anyhow!("{e}"))?;
+    let out = std::path::absolute(out)?;
+    if let Some(repo) = gp_evidence::paths::enclosing_git_work_tree(&out) {
+        anyhow::bail!(
+            "{} is inside the git work tree at {}",
+            out.display(),
+            repo.display()
+        );
+    }
+    let map = AssetMap::parse(&built.map_text).context("the built asset map")?;
+    let (files, _) = gp_assets::lift(&built.image, &map, &built.map_text)?;
+    let files: BTreeMap<String, Vec<u8>> = files.into_iter().map(|f| (f.name, f.bytes)).collect();
+    for (name, bytes) in &files {
+        let p = out.join(name);
+        if let Some(d) = p.parent() {
+            fs::create_dir_all(d)?;
+        }
+        fs::write(p, bytes)?;
+    }
+    let digest = lifted_digest(&files);
+    let manifest: toml::Table = fs::read_to_string(dir.join("template.toml"))?.parse()?;
+    let pin = manifest
+        .get("recipe")
+        .and_then(|r| r.get("lifted_sha256"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let ok = pin == digest;
+    Ok(Outcome {
+        json: json!({ "ok": ok, "lifted_sha256": digest, "files": files.len() }),
+        text: format!(
+            "{} files, lifted {}{digest}",
+            files.len(),
+            if ok { "" } else { "FAILED: " }
+        ),
+        exit: u8::from(!ok),
+    })
+}

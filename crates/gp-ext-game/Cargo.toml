@@ -1,0 +1,15 @@
+[package]
+name = "gp-ext-game"
+description = "A placeholder: the page's build puts one game's hook crate here, in a copy of this repo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+gp-sim = { path = "../gp-sim" }
+gp-cycles = { path = "../gp-cycles" }
+
+[lints]
+workspace = true

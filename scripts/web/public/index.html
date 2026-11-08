@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rivet Rodeo</title>
+<link rel="stylesheet" href="page.css">
+</head>
+<body>
+<header>
+  <h1 id="title">Rivet Rodeo</h1>
+  <span id="mode">Paper version</span>
+  <span class="spacer"></span>
+  <button id="howto-toggle" class="quiet" type="button" aria-expanded="true" aria-controls="howto">How to play</button>
+  <button id="settings" class="quiet" type="button">Settings</button>
+  <label class="button" id="load-label">Load your own ROM<input id="rom" type="file"></label>
+  <button id="back" class="quiet" hidden>Unload ROM</button>
+  <span id="skipped" hidden></span>
+</header>
+<section id="howto" aria-label="How to play">
+  <p><b>Controls:</b> arrows move, X jumps, Enter starts. A controller works too.</p>
+  <p><b>Settings:</b> press Esc or the Settings button (top right) to switch theme and mode.</p>
+  <p>Load your own ROM for the original look and level.</p>
+</section>
+<main>
+  <iframe id="game" title="The game" allow="gamepad; autoplay"></iframe>
+</main>
+<footer>
+  <div id="message" role="status" aria-live="polite"></div>
+  <div id="rom-help"></div>
+  <details id="about-box">
+    <summary>About</summary>
+    <div id="about">
+      <p>Rivet Rodeo is an original game made with Game Printer.</p>
+      <p>"Load your own ROM" accepts a Donkey Kong ROM file that you own. The page checks and reads it in your browser. It is never uploaded.</p>
+      <p>This page is not affiliated with or endorsed by Nintendo. Donkey Kong is a trademark of Nintendo, named here only to say which file is accepted.</p>
+      <p>No analytics, no cookies, no tracking. Your settings, and a ROM you load with the pieces read from it, stay in this browser's storage on your device, so "Play my ROM version" can read it again on a later visit. "Forget my ROM data" removes the ROM and its pieces.</p>
+    </div>
+  </details>
+</footer>
+<script type="module" src="page.js"></script>
+<script src="boot.js"></script>
+</body>
+</html>

@@ -205,6 +205,12 @@ enum RegistryCmd {
 
 #[derive(Subcommand)]
 enum TemplateCmd {
+    /// Build an authored template's lifted files and hold them to its pin.
+    Build {
+        dir: PathBuf,
+        #[arg(short, long)]
+        out: PathBuf,
+    },
     /// Check a ROM against the template: accepted hash, map pin, lift pin.
     Check {
         dir: PathBuf,
@@ -276,6 +282,9 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             } => registry::reindex_cmd(target, versions, key),
             RegistryCmd::Check { url, root } => registry::check_cmd(url, root),
         },
+        Cmd::Template {
+            cmd: TemplateCmd::Build { dir, out },
+        } => template::build(dir, out),
         Cmd::Template {
             cmd: TemplateCmd::Check { dir, rom },
         } => template::check(dir, rom),

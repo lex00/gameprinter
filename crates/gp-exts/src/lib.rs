@@ -36,6 +36,14 @@ pub struct Hooks {
 
 /// The hooks registered for a model, by its `model.name`.
 pub fn for_model(model: &str) -> Option<Hooks> {
+    // The page's build names the models its hook crate runs.
+    if option_env!("GP_HOOK_MODELS").is_some_and(|m| m.split(',').any(|x| x == model)) {
+        let (_, path, version, hash) = CRATES.iter().find(|c| c.0 == "game")?;
+        return Some(Hooks {
+            exts: gp_ext_game::exts(),
+            label: format!("{path} {version} {}", &hash[..12]),
+        });
+    }
     let e = ENTRIES.iter().find(|e| e.model == model)?;
     let label = CRATES
         .iter()

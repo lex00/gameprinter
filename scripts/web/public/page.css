@@ -1,0 +1,71 @@
+:root {
+  --bg: #1b1712;
+  --panel: #2a241c;
+  --text: #f3ead8;
+  --muted: #c9bda4;
+  --accent: #e0a040;
+  --border: #4a3f30;
+}
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  display: flex;
+  flex-direction: column;
+}
+header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 8px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+h1 { font-size: 20px; margin: 0; letter-spacing: 0.02em; }
+#mode { color: var(--muted); }
+#skipped { flex-basis: 100%; color: #f0d080; font-size: 14px; }
+.spacer { flex: 1; }
+button, label.button {
+  font: inherit;
+  color: var(--bg);
+  background: var(--accent);
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+button.quiet { background: transparent; color: var(--text); border: 1px solid var(--border); }
+button:focus-visible, label.button:focus-within { outline: 3px solid var(--text); outline-offset: 2px; }
+#rom { position: absolute; width: 1px; height: 1px; opacity: 0; }
+main { flex: 1; min-height: 0; display: flex; }
+iframe { flex: 1; border: 0; background: #000; }
+footer {
+  padding: 6px 16px;
+  font-size: 14px;
+  color: var(--muted);
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}
+#message[data-kind="error"] { color: #ff9a8a; }
+#message[data-kind="ok"] { color: #a8e0a0; }
+#message[data-kind="warn"] { color: #f0d080; }
+[hidden] { display: none !important; }
+footer details { margin-top: 4px; }
+footer summary { cursor: pointer; color: var(--text); width: fit-content; }
+footer summary:focus-visible { outline: 3px solid var(--text); outline-offset: 2px; }
+#about { max-width: 70ch; margin: 6px 0 2px; }
+#about p { margin: 0 0 6px; }
+#howto {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 24px;
+  padding: 6px 16px;
+  font-size: 15px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+#howto p { margin: 0; }
+#howto b { color: var(--accent); font-weight: 600; }

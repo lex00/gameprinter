@@ -36,31 +36,16 @@ fn main() {
         env!("CARGO_PKG_VERSION"),
         hook_hash(&here, std::slice::from_ref(&demo))
     ));
-    let templates = root.join("templates");
-    let mut dirs: Vec<_> = fs::read_dir(&templates)
-        .map(|r| r.flatten().map(|e| e.path()).collect())
-        .unwrap_or_default();
-    dirs.sort();
-    for t in dirs {
-        let ext = t.join("ext");
-        if t.is_dir() {
-            println!("cargo:rerun-if-changed={}", t.display());
-        }
-        let manifest = ext.join("Cargo.toml");
-        if !manifest.is_file() {
-            continue;
-        }
+    println!("cargo:rerun-if-env-changed=GP_HOOK_MODELS");
+    if std::env::var_os("GP_HOOK_MODELS").is_some() {
+        let ext = root.join("crates/gp-ext-game");
         let files = hook_files(&ext);
         for f in &files {
             println!("cargo:rerun-if-changed={}", f.display());
         }
-        println!("cargo:rerun-if-changed={}", ext.join("src").display());
-        let name = t.file_name().unwrap().to_string_lossy().into_owned();
-        let text = fs::read_to_string(&manifest).expect("a hook crate's Cargo.toml");
+        let text = fs::read_to_string(ext.join("Cargo.toml")).expect("the hook crate's Cargo.toml");
         rows.push(format!(
-            "({:?}, {:?}, {:?}, {:?})",
-            name,
-            format!("templates/{name}/ext"),
+            "(\"game\", \"game hooks\", {:?}, {:?})",
             package_version(&text, &workspace),
             hook_hash(&ext, &files)
         ));

@@ -10,6 +10,7 @@ license.workspace = true
 # demo hook: a game's hook crate lives with the game, never in this repo.
 [dependencies]
 gp-sim = { version = "0.1.0", path = "../gp-sim" }
+gp-ext-game = { version = "0.1.0", path = "../gp-ext-game" }
 
 [build-dependencies]
 blake3 = "1.8.7"

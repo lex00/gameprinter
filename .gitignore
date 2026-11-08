@@ -82,3 +82,6 @@ __pycache__/
 
 # Tells to a clip agent (serve/tell.rs)
 .gp-inbox/
+
+# The page check's browser driver
+scripts/web/node_modules/

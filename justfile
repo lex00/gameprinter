@@ -44,3 +44,8 @@ _interp-mosshop:
     for f in baselines/mosshop/*.toml; do
         echo "$(basename "$f"): $({{quote(gp)}} interp compare templates/mosshop --rom {{quote(mosshop_rom)}} --baseline "$f" --assets {{quote(assets)}} | tail -1)"
     done
+
+# The page, built from the games repo beside this one.
+page out="target/page":
+    just build
+    GP={{quote(gp)}} scripts/web/build-page.sh ../games/donkey-kong {{quote(out)}}
