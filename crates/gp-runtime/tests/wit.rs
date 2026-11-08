@@ -225,3 +225,13 @@ fn variants_and_flags_match() {
     let rust: Vec<&str> = Capabilities::ALL.iter().map(|(name, _)| *name).collect();
     assert_eq!(rust, wit);
 }
+
+/// `wit/game`, the module's world, resolves with the runtime it builds on.
+#[test]
+fn the_game_world_resolves() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../wit/game");
+    let mut resolve = Resolve::default();
+    let (pkg, _) = resolve.push_dir(&dir).expect("wit/game resolves");
+    assert_eq!(resolve.packages[pkg].name.name, "game");
+    assert!(resolve.packages[pkg].worlds.contains_key("game-module"));
+}

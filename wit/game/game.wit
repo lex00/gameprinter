@@ -1,0 +1,160 @@
+// What a game module exports beyond the runtime protocol: the calls its
+// hooks need that game-printer:runtime doesn't have. See docs/inventory.md.
+//
+// A module is gp-sim, the interpreter core, gp-present and one game's hook
+// crate compiled to Wasm. It runs only for games with hooks; hookless models
+// keep the built-in interpreter and implement only game-printer:runtime.
+// That is why these calls sit beside the runtime protocol and not in it:
+// gp-nes and the hookless interpreter never implement them, and the protocol
+// stays at 0.4.0.
+//
+// Any change a hook can see (Ext, ExtCx, Body, World, Spec) is a major bump
+// of the sim-api the module declares, not a version of this file.
+package game-printer:game@0.1.0;
+
+interface module {
+  // What the module is, read once when it is opened. The host refuses a
+  // module whose `runtime-wit` or `sim-api` it doesn't implement, and checks
+  // a content spec major against `content-spec-majors` (the module draws
+  // themes, so the module and not the page is what has to support it).
+  record module-info {
+    // The runtime protocol it exports, such as `0.4.0`.
+    runtime-wit: string,
+    // gp-sim's major version, as `package.toml`'s `sim-api`.
+    sim-api: u32,
+    // The content spec majors the module's gp-present draws.
+    content-spec-majors: list<u32>,
+    // The hooks the module has, by the name a model's `ext` gives them.
+    // The host compares it with the hooks a model names (Interp::ext_hooks).
+    hooks: list<string>,
+  }
+
+  info: func() -> module-info;
+
+  // gp_sim::mechanic::Record, as data: what `gp model mechanics`, the
+  // catalog and the clean-room check read of a hook. A hook that describes
+  // nothing is reported as opaque, as it is today (every Donkey Kong hook
+  // does, as of this writing).
+  enum carrier { entity, level, game }
+
+  enum table-kind { mechanic, content }
+
+  record param {
+    name: string,
+    ty: string,
+    unit: string,
+    range: string,
+    optional: bool,
+  }
+
+  record table {
+    name: string,
+    kind: table-kind,
+  }
+
+  record mechanic-record {
+    name: string,
+    version: string,
+    carrier: carrier,
+    system: string,
+    class: string,
+    implementation: string,
+    like: string,
+    about: string,
+    params: list<param>,
+    tables: list<table>,
+    state: list<string>,
+    reads: list<string>,
+    writes: list<string>,
+    emits: list<string>,
+    consumes: list<string>,
+    spawns: list<string>,
+    assumes: list<string>,
+    after: list<string>,
+    excludes: list<string>,
+    // gp_sim::mechanic::Primitive by name.
+    built-from: list<string>,
+    invariants: list<string>,
+    measures: list<tuple<string, string>>,
+    envelope: list<tuple<string, string>>,
+  }
+
+  record hook-mechanics {
+    hook: string,
+    records: list<mechanic-record>,
+  }
+
+  // Every hook's records, in the module's name order.
+  describe: func() -> list<hook-mechanics>;
+}
+
+// Per-run controls a scorer sets on a runtime before stepping it.
+interface run {
+  use game-printer:runtime/session@0.4.0.{runtime};
+
+  // The digest of the spec the module compiled from the bytes `load` was
+  // given (gp_sim::save::spec_digest). Tools read `Spec` on the host from
+  // the host's own compile of the same bytes; this catches a module built
+  // from an older interpreter that compiles them differently.
+  spec-digest: func(rt: borrow<runtime>) -> string;
+
+  // The run's random draws script, in the text form gp_sim::DrawScript
+  // writes, and the original's frame the run starts from. The set paths
+  // `draws.base` and `draws.lag` still move it during a run.
+  set-draws: func(rt: borrow<runtime>, script: string, base: u64) -> result<_, string>;
+
+  // A draw the module took at another point than the script's, or not.
+  record draws-desync {
+    frame: u64,
+    site: option<string>,
+    why: string,
+  }
+
+  // How the run took the script: what `gp clip score` and the gate report.
+  record draws-report {
+    taken: u32,
+    script: u32,
+    desync: option<draws-desync>,
+    desyncs: list<draws-desync>,
+  }
+
+  // None when the run has no script.
+  report-draws: func(rt: borrow<runtime>) -> option<draws-report>;
+
+  // Whether `step` returns the hooks' sound-driver writes as `apu-write`
+  // events (Ext::apu_peek, worked out inside the module), for the sound
+  // measure and `--apu-log`.
+  set-apu-events: func(rt: borrow<runtime>, on: bool);
+
+  // What a run read of its spec and which hooks it called, by index in the
+  // spec's lists (gp_sim::reads::Reads), so the gate can tell which clips a
+  // change can move.
+  variant seen {
+    all,
+    some(list<u32>),
+  }
+
+  record reads {
+    kinds: seen,
+    levels: seen,
+    machines: seen,
+    counters: seen,
+    cameras: seen,
+    hooks: list<string>,
+  }
+
+  // Starts noting what steps read, as gp_sim::reads::recording does.
+  start-reads: func(rt: borrow<runtime>);
+  // Stops and returns what was noted since start-reads.
+  take-reads: func(rt: borrow<runtime>) -> reads;
+}
+
+// A game module: the runtime protocol with its presentation, and the calls
+// above. The browser form is a plain core module exporting this through the
+// fixed ABI the page's loader defines; gp's native host and the page speak
+// the same calls.
+world game-module {
+  include game-printer:runtime/full-runtime@0.4.0;
+  export module;
+  export run;
+}
