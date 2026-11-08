@@ -95,7 +95,7 @@ def main() -> int:
     ])
 
     tmpl = (game / "template.toml").read_text()
-    ju_at = tmpl.index("[[loads]]")
+    ju_at = tmpl.index("\n[[loads]]\n")
     oe_map, ju_map = game / "assets/donkey-kong-oe.toml", game / "assets/donkey-kong-ju.toml"
     (game / "package.toml").write_text(f'''# lex00/donkey-kong: the ROM option and its open version, one game.
 [package]
