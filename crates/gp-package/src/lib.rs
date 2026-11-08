@@ -22,6 +22,8 @@
 //! writes them with.
 
 pub mod index;
+pub mod registry;
+pub mod sig;
 mod store;
 
 pub use store::Store;
@@ -185,7 +187,11 @@ impl Manifest {
             .next()
             .and_then(|l| l.strip_prefix("name "))
             .ok_or("no `name` line")?;
-        if !valid_word(kind) || !valid_word(name) {
+        let good_name = match name.split_once('/') {
+            Some((ns, n)) => valid_word(ns) && valid_word(n),
+            None => valid_word(name),
+        };
+        if !valid_word(kind) || !good_name {
             return Err(format!("`{kind}` `{name}` isn't a kind and a name"));
         }
         let mut m = Manifest::new(kind, name);
