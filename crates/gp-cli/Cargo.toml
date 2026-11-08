@@ -21,6 +21,7 @@ gp-exts = { version = "0.1.0", path = "../gp-exts" }
 gp-interp = { version = "0.1.0", path = "../gp-interp" }
 gp-model = { version = "0.1.0", path = "../gp-model" }
 gp-nes = { version = "0.1.0", path = "../gp-nes" }
+gp-package = { version = "0.1.0", path = "../gp-package" }
 gp-runtime = { version = "0.1.0", path = "../gp-runtime" }
 serde_json = "1.0.154"
 sha2 = "0.11.1"

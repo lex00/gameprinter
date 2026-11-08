@@ -4,6 +4,7 @@
 
 mod assets;
 mod model;
+mod registry;
 mod run;
 mod template;
 
@@ -53,6 +54,11 @@ enum Cmd {
     Interp {
         #[command(subcommand)]
         cmd: InterpCmd,
+    },
+    /// Make, publish to and test registries.
+    Registry {
+        #[command(subcommand)]
+        cmd: RegistryCmd,
     },
     /// Check a template's pins against a ROM.
     Template {
@@ -122,6 +128,54 @@ enum InterpCmd {
 }
 
 #[derive(Subcommand)]
+enum RegistryCmd {
+    /// Make a registry in a folder or s3://BUCKET.
+    Init {
+        target: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        root_key: PathBuf,
+        #[arg(long)]
+        signing_key: PathBuf,
+        /// NS=KEY_FILE, repeated.
+        #[arg(long)]
+        namespace: Vec<String>,
+    },
+    /// Publish a folder of files as one exact version.
+    Publish {
+        target: String,
+        dir: PathBuf,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        version: String,
+        #[arg(long, default_value = "content")]
+        kind: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long = "for")]
+        for_games: Vec<String>,
+        #[arg(long)]
+        key: PathBuf,
+    },
+    /// Re-sign the list files from these name@version entries.
+    Reindex {
+        target: String,
+        versions: Vec<String>,
+        #[arg(long)]
+        key: PathBuf,
+    },
+    /// Test a registry from outside against its pinned root.
+    Check {
+        url: String,
+        /// A file holding the root's public key.
+        #[arg(long)]
+        root: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
 enum TemplateCmd {
     /// Check a ROM against the template: accepted hash, map pin, lift pin.
     Check {
@@ -158,6 +212,31 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                     assets,
                 },
         } => run::compare(dir, rom, baseline, assets),
+        Cmd::Registry { cmd } => match cmd {
+            RegistryCmd::Init {
+                target,
+                name,
+                root_key,
+                signing_key,
+                namespace,
+            } => registry::init_cmd(target, name, root_key, signing_key, namespace),
+            RegistryCmd::Publish {
+                target,
+                dir,
+                name,
+                version,
+                kind,
+                title,
+                for_games,
+                key,
+            } => registry::publish_cmd(target, dir, (name, version), (kind, title), for_games, key),
+            RegistryCmd::Reindex {
+                target,
+                versions,
+                key,
+            } => registry::reindex_cmd(target, versions, key),
+            RegistryCmd::Check { url, root } => registry::check_cmd(url, root),
+        },
         Cmd::Template {
             cmd: TemplateCmd::Check { dir, rom },
         } => template::check(dir, rom),

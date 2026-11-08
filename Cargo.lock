@@ -643,6 +643,7 @@ dependencies = [
  "gp-interp",
  "gp-model",
  "gp-nes",
+ "gp-package",
  "gp-runtime",
  "hex",
  "serde_json",
