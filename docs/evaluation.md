@@ -97,3 +97,14 @@ The reference tool for these is `game-printer/target/release/gp`, built 09:54 to
 5. Bringing `gp-gen-bevy`'s shared drawing code into `gp-present` at 0.2 instead of 3.3 (recommended, risk 3).
 6. A separate home for the new world, such as `~/.gameprinter`, until cutover (recommended, risk 7).
 7. One whole-corpus score of an exported copy of the import commit, to make the real baseline. It costs tens of minutes and writes nothing to `game-printer`. Now, or at 3.3 (recommended: at 3.3)?
+
+## 7. Decisions, 2026-11-08
+
+1. The research artifacts define the direction, so phase 0.1 is done.
+2. Private GitHub repos under lex00, with a self-hosted runner on the user's Mac for ROM jobs.
+3. Import the tip as it is; the two template failures are known failures and become the first patches in `games`.
+4. `clips.toml` comes across unchanged until phase 4.4.
+5. `gp-gen-bevy`'s shared drawing code comes in at 0.2. It is in a new crate, `gp-look`, not `gp-present`: it needs `gp-interp`, which depends on `gp-present`.
+6. The new world's home is `~/.gameprinter` until cutover.
+7. The whole-corpus Donkey Kong baseline is made at 3.3.
+8. Donkey Kong stays one package with OE, JU and Rivet Rodeo. Moss Hop stays only as the tool's test fixture.
