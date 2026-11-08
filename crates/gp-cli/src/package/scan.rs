@@ -231,9 +231,42 @@ struct PartReport {
     compared: Vec<String>,
     files: BTreeMap<String, FileCounts>,
     rewrite: Vec<Rewrite>,
+    /// Matches a person reviewed and kept, each with the reason they gave.
+    reviewed: Vec<(Rewrite, String)>,
+    /// Reviewed keys that matched nothing here.
+    stale: Vec<String>,
     recipes: Vec<Recipe>,
     rederive: Vec<(String, Rederive)>,
     settings: Value,
+}
+
+/// The file beside a part's model that lists the matches a person reviewed
+/// and kept. Only an exact match's key is excused; anything new still fails.
+const REVIEWED_FILE: &str = "scan-reviewed.toml";
+
+#[derive(serde::Deserialize)]
+struct ReviewedFile {
+    reviewed: Vec<ReviewedItem>,
+}
+
+#[derive(serde::Deserialize)]
+struct ReviewedItem {
+    key: String,
+    why: String,
+}
+
+fn reviewed_items(dir: &Path) -> Result<Vec<ReviewedItem>> {
+    let path = dir.join(REVIEWED_FILE);
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let items = toml::from_str::<ReviewedFile>(&fs::read_to_string(&path)?)
+        .with_context(|| path.display().to_string())?
+        .reviewed;
+    if let Some(i) = items.iter().find(|i| i.why.trim().is_empty()) {
+        anyhow::bail!("{}: {} has no reason", path.display(), i.key);
+    }
+    Ok(items)
 }
 
 /// A package's result.
@@ -318,6 +351,14 @@ impl Report {
             why.push(format!("{rewrite} to rewrite"));
         }
         why.extend(problems.iter().cloned());
+        // A reviewed match can only be seen missing when every ROM was read.
+        if not.is_empty() {
+            for k in self.parts.iter().flat_map(|p| &p.stale) {
+                why.push(format!(
+                    "{REVIEWED_FILE} lists {k}, which no longer matches"
+                ));
+            }
+        }
         let failed = !why.is_empty();
         let complete = !failed && not.is_empty();
         let verdict = if failed {
@@ -388,6 +429,16 @@ fn part_text(p: &PartReport, text: &mut String) {
                 text,
                 "\n  {}:{} {}: {}\n      fix: {}",
                 r.file, r.line, r.at, r.what, r.fix
+            );
+        }
+    }
+    if !p.reviewed.is_empty() {
+        let _ = write!(text, "\nreviewed and kept ({}):", p.reviewed.len());
+        for (r, why) in &p.reviewed {
+            let _ = write!(
+                text,
+                "\n  {}:{} {}\n      why: {}",
+                r.file, r.line, r.what, why
             );
         }
     }
@@ -966,6 +1017,27 @@ fn scan_part(pkg: &Package, part: &Part, found: &BTreeMap<String, Rom>) -> Resul
     rewrite.sort_by(|a, b| (&a.file, a.line, &a.key).cmp(&(&b.file, b.line, &b.key)));
     rewrite.dedup_by(|a, b| a.key == b.key);
 
+    // The matches a person reviewed and kept leave the list by exact key.
+    let items = reviewed_items(&part.dir)?;
+    let (kept, rewrite): (Vec<Rewrite>, Vec<Rewrite>) = rewrite
+        .into_iter()
+        .partition(|r| items.iter().any(|i| i.key == r.key));
+    let stale: Vec<String> = items
+        .iter()
+        .filter(|i| !kept.iter().any(|r| r.key == i.key))
+        .map(|i| i.key.clone())
+        .collect();
+    let reviewed: Vec<(Rewrite, String)> = kept
+        .into_iter()
+        .map(|r| {
+            let why = items
+                .iter()
+                .find(|i| i.key == r.key)
+                .map_or(String::new(), |i| i.why.clone());
+            (r, why)
+        })
+        .collect();
+
     // Counts.
     let maps: BTreeMap<&str, &AssetMap> = part
         .recipes
@@ -1007,6 +1079,8 @@ fn scan_part(pkg: &Package, part: &Part, found: &BTreeMap<String, Rom>) -> Resul
         compared: sources.iter().map(|s| s.label.clone()).collect(),
         files,
         rewrite,
+        reviewed,
+        stale,
         recipes,
         rederive,
         settings: json!({
