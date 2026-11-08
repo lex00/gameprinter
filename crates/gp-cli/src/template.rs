@@ -13,12 +13,12 @@ use sha2::{Digest, Sha256};
 
 use crate::Outcome;
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
 /// The SHA-256 of `sha256sum`'s output for the files, sorted by name.
-fn lifted_digest(files: &BTreeMap<String, Vec<u8>>) -> String {
+pub fn lifted_digest(files: &BTreeMap<String, Vec<u8>>) -> String {
     let mut lines = String::new();
     for (name, bytes) in files {
         let _ = writeln!(lines, "{}  {name}", sha256_hex(bytes));

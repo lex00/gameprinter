@@ -3,6 +3,7 @@
 //! engine here.
 
 mod assets;
+mod game;
 mod model;
 mod registry;
 mod run;
@@ -54,6 +55,11 @@ enum Cmd {
     Interp {
         #[command(subcommand)]
         cmd: InterpCmd,
+    },
+    /// Fetch a game by its exact id and lift it from a person's ROMs.
+    Game {
+        #[command(subcommand)]
+        cmd: GameCmd,
     },
     /// Make, publish to and test registries.
     Registry {
@@ -124,6 +130,28 @@ enum InterpCmd {
         baseline: PathBuf,
         #[arg(long)]
         assets: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum GameCmd {
+    /// Fetch NAME@VERSION by id into a folder, checking every signature and
+    /// hash, and lift every ROM entry it finds in the ROM folder.
+    Fetch {
+        name: String,
+        #[arg(long)]
+        id: String,
+        /// The registry: a folder, s3://BUCKET or an https address.
+        #[arg(long)]
+        from: String,
+        /// A file holding the registry's root public key.
+        #[arg(long)]
+        root: PathBuf,
+        /// The working copy to write, outside any git work tree.
+        #[arg(long)]
+        into: PathBuf,
+        #[arg(long)]
+        rom_dir: PathBuf,
     },
 }
 
@@ -212,6 +240,17 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                     assets,
                 },
         } => run::compare(dir, rom, baseline, assets),
+        Cmd::Game {
+            cmd:
+                GameCmd::Fetch {
+                    name,
+                    id,
+                    from,
+                    root,
+                    into,
+                    rom_dir,
+                },
+        } => game::fetch(name, id, from, root, into, rom_dir),
         Cmd::Registry { cmd } => match cmd {
             RegistryCmd::Init {
                 target,
