@@ -34,8 +34,13 @@ impl S3 {
             "--body",
         ])
         .arg(tmp.path());
+        // A write-once key never changes, so a browser keeps it for good. A
+        // list file is rewritten, so a browser asks each time.
         if once {
             c.args(["--if-none-match", "*"]);
+            c.args(["--cache-control", "public, max-age=31536000, immutable"]);
+        } else {
+            c.args(["--cache-control", "no-cache"]);
         }
         let o = c.output().map_err(|e| format!("running aws: {e}"))?;
         if o.status.success() {
