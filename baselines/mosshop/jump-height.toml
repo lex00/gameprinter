@@ -1,0 +1,69 @@
+# Moss Hop (docs/reference-game.md): one standing jump from the start. The
+# player leaves the ground at frame 61, peaks at PLAYER_Y 128.5 at frame 79
+# and lands at frame 100.
+#
+# The 5 lag frames are at power-on, before the main loop first reads the
+# controller.
+
+schema = 0
+source = "mosshop"
+sha256 = "44fcedf5050970a0ae6cf10c76ac80d9628f663416c22adb8432a43b0c953ec4"
+description = "One standing jump: its height and time in the air"
+frames = 120
+holds = ["a@60-70"]
+frame_hashes = "3d11765143353f35490881d5e2ff778050f501b49b6fb57258cefecee030bd9e"
+lag_frames = 5
+
+[[assert]]
+frame = 60
+label = "ON_GROUND"
+addr = 0x0016
+equals = 1
+
+[[assert]]
+frame = 61
+label = "ON_GROUND"
+addr = 0x0016
+equals = 0
+
+[[assert]]
+frame = 79
+label = "PLAYER_Y"
+addr = 0x0012
+equals = 128
+
+[[assert]]
+frame = 79
+label = "PLAYER_YSUB"
+addr = 0x0013
+equals = 128
+
+[[assert]]
+frame = 99
+label = "ON_GROUND"
+addr = 0x0016
+equals = 0
+
+[[assert]]
+frame = 100
+label = "ON_GROUND"
+addr = 0x0016
+equals = 1
+
+[[assert]]
+frame = 120
+label = "JUMP_START_Y"
+addr = 0x0018
+equals = 176
+
+[[assert]]
+frame = 120
+label = "PEAK_Y"
+addr = 0x0019
+equals = 128
+
+[[assert]]
+frame = 120
+label = "PLAYER_Y"
+addr = 0x0012
+equals = 176

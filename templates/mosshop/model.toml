@@ -1,0 +1,782 @@
+[model]
+schema = "0.4"
+name = "mosshop"
+title = "Moss Hop"
+description = "The reference game (games/mosshop/, docs/reference-game.md), written by hand from its source and checked against its baselines."
+source = "mosshop"
+view = "side"
+frame_rate = "39375000/655171"
+systems = ["rules", "entity_states", "counters", "spawn", "platformer.player", "platformer.enemies", "platformer.contact", "exits", "camera"]
+events = ["block.coin", "coin.touched", "player.fell"]
+
+[model.extensions]
+platformer = "0.4"
+
+[input]
+device = "nes-pad"
+
+[input.actions]
+jump = "a"
+left = "left"
+right = "right"
+run = "b"
+
+[assets.font]
+kind = "font"
+role = "font"
+description = "The digits from tile $30 and the cross, which the counters are drawn with"
+
+[assets.font.from]
+source = "mosshop"
+asset = "tiles"
+
+[assets.level]
+kind = "level-grid"
+role = "layout"
+
+[assets.level.from]
+source = "mosshop"
+asset = "level"
+
+[assets.metatiles]
+kind = "metatiles"
+role = "tileset"
+description = "Sky, moss over soil, soil, stone block, the burrow's two halves, the ? block, the used block it becomes, and a coin"
+item_roles = ["sky", "terrain", "terrain", "terrain", "goal", "goal", "interactive", "terrain", "collectible"]
+
+[assets.metatiles.from]
+source = "mosshop"
+asset = "metatiles"
+
+[assets.palettes]
+kind = "palettes"
+role = "palettes"
+description = "Four background palettes, then four sprite palettes"
+item_roles = ["terrain", "terrain", "terrain", "terrain", "player", "enemy", "player", "player"]
+
+[assets.palettes.from]
+source = "mosshop"
+asset = "palettes"
+
+[assets.slugs]
+kind = "table"
+role = "spawns"
+description = "Each slug's patrol: start and end"
+
+[assets.slugs.from]
+source = "mosshop"
+asset = "slugs"
+
+[assets.tiles]
+kind = "tiles"
+role = "graphics"
+description = "The whole pattern table; tiles $00 to $27 and $30 to $3C are drawn"
+
+[assets.tiles.from]
+source = "mosshop"
+asset = "tiles"
+
+[entities.player]
+description = "A round moss creature"
+role = "player"
+size = [16, 16]
+tile_collision = true
+
+[entities.player.hitbox]
+h = 16
+w = 12
+x = 2
+y = 0
+
+[entities.player.jump]
+action = "jump"
+gravity = "0.25"
+max_fall = 4
+speed = -5
+
+[entities.player.jump.head]
+point = [8, 0]
+
+[[entities.player.jump.head.hits]]
+becomes = "solid"
+event = "block.coin"
+speed = 0
+tile = "coin_block"
+
+[entities.player.jump.pickup]
+becomes = "empty"
+event = "coin.touched"
+points = [[8, 8]]
+tile = "coin"
+
+[entities.player.machine]
+initial = "normal"
+
+[entities.player.machine.states.dying]
+description = "kill_player sets PLAYER_VY to -4 and update_dying moves the player by gravity alone, through every tile, with no input. draw_sprites turns it upside down (the vertical flip, which swaps its top and bottom tiles)"
+enter_speed = [0, -4]
+ground = "leave"
+
+[entities.player.machine.states.dying.set]
+tile_collision = false
+
+[entities.player.machine.states.dying.set.run]
+off = true
+
+[entities.player.machine.states.dying.set.sprite]
+flip_when_facing_left = true
+front = true
+palette = 4
+slot = "tiles"
+tiles = [18, 19, 16, 17]
+width = 2
+
+[[entities.player.machine.states.dying.set.sprite.cells]]
+flip_y = true
+
+[[entities.player.machine.states.dying.set.sprite.cells]]
+flip_y = true
+
+[[entities.player.machine.states.dying.set.sprite.cells]]
+flip_y = true
+
+[[entities.player.machine.states.dying.set.sprite.cells]]
+flip_y = true
+
+[[entities.player.machine.states.normal.transition]]
+on = "player.died"
+to = "dying"
+
+[entities.player.run]
+air_control = true
+run_action = "run"
+run_speed = 2
+walk_speed = 1
+
+[entities.player.sprite]
+flip_when_facing_left = true
+front = true
+palette = 4
+slot = "tiles"
+tiles = [16, 17, 18, 19]
+width = 2
+
+[entities.slug]
+role = "enemy"
+size = [16, 16]
+
+[entities.slug.contact]
+bounce = -3
+keep_on_stomp = true
+otherwise = "kill-player"
+stomp_depth = 7
+
+[entities.slug.hitbox]
+h = 12
+w = 12
+x = 2
+y = 4
+
+[entities.slug.machine]
+initial = "walking"
+
+[entities.slug.machine.states.flat]
+description = "Squashed: flat on the ground for 30 frames (ENEMY_TIMER), touching nothing, then gone"
+
+[entities.slug.machine.states.flat.set.contact]
+otherwise = "nothing"
+stomp_depth = 0
+
+[entities.slug.machine.states.flat.set.patrol]
+period = 2
+step = 0
+
+[entities.slug.machine.states.flat.set.sprite]
+flip_when_facing_left = true
+palette = 5
+slot = "tiles"
+tiles = [36, 37, 38, 39]
+width = 2
+
+[[entities.slug.machine.states.flat.transition]]
+after = 30
+do = ["remove"]
+to = "flat"
+
+[[entities.slug.machine.states.walking.transition]]
+on = "enemy.stomped"
+to = "flat"
+
+[entities.slug.patrol]
+period = 2
+step = 1
+
+[entities.slug.sprite]
+flip_when_facing_left = true
+palette = 5
+slot = "tiles"
+tiles = [20, 21, 22, 23]
+width = 2
+
+[levels.main]
+description = "Two screens wide, ending at the burrow, with a ? block and five coins"
+grid = "level"
+kill_below = 208
+kind_property = "kind"
+pit_event = "player.fell"
+size = [32, 15]
+solid_property = "solid"
+tile_size = 16
+tileset = "metatiles"
+
+[levels.main.goal]
+x = 468
+
+[[levels.main.spawn]]
+entity = "player"
+x = 24
+y = 176
+
+[[levels.main.spawn]]
+entity = "slug"
+table = "slugs"
+y = 176
+
+[levels.main.spawn.columns]
+patrol_end = "end"
+x = "start"
+
+[levels.main.tile_kinds]
+2 = "coin_block"
+5 = "coin"
+
+[cameras.main]
+follow = "player"
+axis = "x"
+size = [256, 240]
+lead = [120, 0]
+clamp_to_level = true
+
+[rules.game]
+initial = "playing"
+
+[rules.game.states.clear]
+description = "The level is clear: the player is in the burrow's doorway and everything stays where it is"
+freeze = true
+
+[rules.game.states.dying]
+description = "The player is drawn upside down and hops off the screen (its machine's dying state) while the slugs, their touches and the camera stop"
+stops = ["platformer.enemies", "platformer.contact", "camera"]
+
+[[rules.game.states.dying.transition]]
+to = "playing"
+after = 90
+do = ["change:lives:-1", "restart-level"]
+
+[rules.game.states.dying.transition.if]
+counter = "lives"
+cmp = ">="
+value = 1
+
+[[rules.game.states.dying.transition]]
+to = "game_over"
+after = 90
+
+[rules.game.states.game_over]
+description = "Nothing moves, and the game starts again 120 frames later. update_dying spends the frame the time runs out without moving the player, so the freeze stops the player at once"
+freeze = true
+stops_at_once = ["platformer.player"]
+
+[[rules.game.states.game_over.transition]]
+to = "playing"
+after = 120
+do = ["reset-game"]
+
+[[rules.game.states.playing.transition]]
+to = "dying"
+on = "player.died"
+
+[[rules.game.states.playing.transition]]
+to = "playing"
+on = "player.fell"
+do = ["kill-player"]
+
+[[rules.game.states.playing.transition]]
+to = "clear"
+on = "goal.reached"
+
+[[counters.coins.change]]
+on = "block.coin"
+
+[[counters.coins.change]]
+on = "coin.touched"
+
+[[counters.deaths.change]]
+on = "player.died"
+
+[counters.lives]
+start = 2
+min = 0
+
+[[counters.stomps.change]]
+on = "enemy.stomped"
+
+[present.hud]
+tiles = "tiles"
+font = "font"
+
+[[present.hud.field]]
+at = [3, 2]
+counter = "coins"
+digits = 2
+sprite = true
+
+[[present.hud.field]]
+at = [27, 2]
+counter = "lives"
+digits = 2
+sprite = true
+
+[[present.hud.sprite]]
+at = [16, 16]
+tiles = "tiles"
+tile = 58
+
+[[present.hud.sprite]]
+at = [200, 16]
+tiles = "tiles"
+tile = 60
+
+[[present.hud.sprite]]
+at = [208, 16]
+tiles = "tiles"
+tile = 59
+
+[present.cells.kinds]
+empty = 0
+solid = 7
+
+[evidence.assets]
+source = "stated"
+confidence = 100
+note = "Each slot is filled from the asset of its name in the asset map; the slot roles are the model author's"
+
+[[evidence.assets.refs]]
+at = "assets/mosshop.toml:9"
+quote = 'source = "mosshop"'
+
+[[evidence.assets.refs]]
+at = "assets/mosshop.toml:18"
+quote = 'name = "tiles"'
+
+[[evidence.assets.refs]]
+at = "assets/mosshop.toml:29"
+quote = 'name = "palettes"'
+
+[[evidence.assets.refs]]
+at = "assets/mosshop.toml:37"
+quote = 'name = "metatiles"'
+
+[[evidence.assets.refs]]
+at = "assets/mosshop.toml:53"
+quote = 'name = "level"'
+
+[[evidence.assets.refs]]
+at = "assets/mosshop.toml:65"
+quote = 'name = "slugs"'
+
+[evidence."assets.metatiles.item_roles"]
+source = "inferred"
+confidence = 90
+note = "From the metatiles' names; the burrow is where the level ends"
+
+[[evidence."assets.metatiles.item_roles".refs]]
+at = "games/mosshop/mosshop.s:1221"
+quote = "0 sky, 1 moss over soil, 2 soil, 3 stone block, 4 burrow left,"
+
+[evidence."assets.palettes.item_roles"]
+source = "stated"
+confidence = 100
+note = "The level draws with background palette 0 everywhere (the other three are copies); sprite palette 0 is the player's and 1 the slug's, and 2 and 3 copy the player's"
+
+[[evidence."assets.palettes.item_roles".refs]]
+at = "games/mosshop/mosshop.s:1212"
+quote = "; sprites: the player (outline, moss, eye), the slug (outline, body, eyes)"
+
+[evidence.cameras]
+source = "stated"
+confidence = 100
+
+[[evidence.cameras.refs]]
+at = "games/mosshop/mosshop.s:56"
+quote = "CAMERA_LEAD  = 120"
+
+[[evidence.cameras.refs]]
+at = "games/mosshop/mosshop.s:905"
+quote = "within the level"
+
+[evidence.counters]
+source = "stated"
+confidence = 100
+
+[[evidence.counters.refs]]
+at = "games/mosshop/mosshop.s:753"
+quote = "inc DEATHS"
+
+[[evidence.counters.refs]]
+at = "games/mosshop/mosshop.s:894"
+quote = "inc STOMPS"
+
+[evidence."counters.coins"]
+source = "stated"
+confidence = 100
+
+[[evidence."counters.coins".refs]]
+at = "games/mosshop/mosshop.s:541"
+quote = "inc COINS"
+
+[[evidence."counters.coins".refs]]
+at = "games/mosshop/mosshop.s:565"
+quote = "inc COINS"
+
+[evidence."counters.lives"]
+source = "stated"
+confidence = 100
+
+[[evidence."counters.lives".refs]]
+at = "games/mosshop/mosshop.s:61"
+quote = "START_LIVES  = 2"
+
+[[evidence."counters.lives".refs]]
+at = "games/mosshop/mosshop.s:773"
+quote = "dec LIVES"
+
+[evidence."entities.player"]
+source = "stated"
+confidence = 100
+
+[[evidence."entities.player".refs]]
+at = "games/mosshop/mosshop.s:630"
+quote = "PLAYER_X + 2 and PLAYER_X + 13: the player is 12 pixels wide"
+
+[[evidence."entities.player".refs]]
+at = "games/mosshop/mosshop.s:1071"
+quote = "A 16x16 sprite from four tiles"
+
+[[evidence."entities.player".refs]]
+at = "games/mosshop/mosshop.s:957"
+quote = "lda #$10"
+
+[evidence."entities.player.jump"]
+source = "stated"
+confidence = 100
+note = "The arc these give is checked frame by frame against the jump-height baseline (crates/gp-cli/tests/model.rs)"
+
+[[evidence."entities.player.jump".refs]]
+at = "games/mosshop/mosshop.s:415"
+quote = "and #BUTTON_A"
+
+[[evidence."entities.player.jump".refs]]
+at = "games/mosshop/mosshop.s:49"
+quote = "JUMP_SPEED   = $FB00"
+
+[[evidence."entities.player.jump".refs]]
+at = "games/mosshop/mosshop.s:52"
+quote = "GRAVITY      = $40"
+
+[[evidence."entities.player.jump".refs]]
+at = "games/mosshop/mosshop.s:53"
+quote = "FALL_LIMIT   = 4"
+
+[[evidence."entities.player.jump".refs]]
+at = "baselines/mosshop/jump-height.toml:33"
+quote = "equals = 128"
+
+[evidence."entities.player.jump.head"]
+source = "stated"
+confidence = 100
+note = "The head point is checked only while rising, after the vertical move; a solid cell sets the speed to 0 and leaves the player where it is"
+
+[[evidence."entities.player.jump.head".refs]]
+at = "games/mosshop/mosshop.s:68"
+quote = "HEAD_X       = 8"
+
+[[evidence."entities.player.jump.head".refs]]
+at = "games/mosshop/mosshop.s:532"
+quote = "beq @done           ; open: the rise goes on"
+
+[[evidence."entities.player.jump.head".refs]]
+at = "games/mosshop/mosshop.s:539"
+quote = "lda #USED_BLOCK"
+
+[evidence."entities.player.jump.pickup"]
+source = "stated"
+confidence = 100
+note = "take_coin runs after the vertical move, before the pit and goal checks"
+
+[[evidence."entities.player.jump.pickup".refs]]
+at = "games/mosshop/mosshop.s:69"
+quote = "PICKUP_X     = 8"
+
+[[evidence."entities.player.jump.pickup".refs]]
+at = "games/mosshop/mosshop.s:70"
+quote = "PICKUP_Y     = 8"
+
+[[evidence."entities.player.jump.pickup".refs]]
+at = "games/mosshop/mosshop.s:563"
+quote = "lda #SKY"
+
+[evidence."entities.player.machine"]
+source = "stated"
+confidence = 100
+
+[[evidence."entities.player.machine".refs]]
+at = "games/mosshop/mosshop.s:51"
+quote = "DEATH_HOP    = $FC00"
+
+[[evidence."entities.player.machine".refs]]
+at = "games/mosshop/mosshop.s:759"
+quote = "sta ON_GROUND"
+
+[[evidence."entities.player.machine".refs]]
+at = "games/mosshop/mosshop.s:768"
+quote = "jsr apply_gravity"
+
+[evidence."entities.player.run"]
+source = "stated"
+confidence = 100
+note = "Air control: move_player runs left and right before it looks at ON_GROUND; the finish-level baseline keeps running at 2 pixels a frame in the air (crates/gp-cli/tests/model.rs)"
+
+[[evidence."entities.player.run".refs]]
+at = "games/mosshop/mosshop.s:47"
+quote = "WALK_SPEED   = 1"
+
+[[evidence."entities.player.run".refs]]
+at = "games/mosshop/mosshop.s:48"
+quote = "RUN_SPEED    = 2"
+
+[[evidence."entities.player.run".refs]]
+at = "baselines/mosshop/finish-level.toml:14"
+quote = "right+b@10-"
+
+[evidence."entities.player.sprite.front"]
+source = "stated"
+confidence = 100
+note = "draw_sprites puts the player in the sprite table before the slugs, and the NES draws a lower sprite over a higher one where they overlap"
+
+[[evidence."entities.player.sprite.front".refs]]
+at = "games/mosshop/mosshop.s:943"
+quote = "; The player: flipped when facing left, upside down while dying, and"
+
+[evidence."entities.slug"]
+source = "stated"
+confidence = 100
+
+[[evidence."entities.slug".refs]]
+at = "games/mosshop/mosshop.s:65"
+quote = "ENEMY_TOP    = ENEMY_Y + 4"
+
+[[evidence."entities.slug".refs]]
+at = "games/mosshop/mosshop.s:994"
+quote = "lda #$14"
+
+[[evidence."entities.slug".refs]]
+at = "games/mosshop/mosshop.s:1004"
+quote = "sprite palette 1"
+
+[evidence."entities.slug.contact"]
+source = "stated"
+confidence = 100
+
+[[evidence."entities.slug.contact".refs]]
+at = "games/mosshop/mosshop.s:67"
+quote = "bottom row is in the slug's top 7 rows (180-186)"
+
+[[evidence."entities.slug.contact".refs]]
+at = "games/mosshop/mosshop.s:50"
+quote = "BOUNCE_SPEED = $FD00"
+
+[[evidence."entities.slug.contact".refs]]
+at = "games/mosshop/mosshop.s:847"
+quote = "and dies otherwise."
+
+[evidence."entities.slug.machine"]
+source = "stated"
+confidence = 100
+note = "tick_squashed runs at the top of every frame, whatever the game state, as the model runs its machines on frozen frames"
+
+[[evidence."entities.slug.machine".refs]]
+at = "games/mosshop/mosshop.s:62"
+quote = "SQUASH_FRAMES = 30"
+
+[[evidence."entities.slug.machine".refs]]
+at = "games/mosshop/mosshop.s:886"
+quote = "lda #SQUASHED"
+
+[[evidence."entities.slug.machine".refs]]
+at = "games/mosshop/mosshop.s:148"
+quote = "jsr tick_squashed"
+
+[evidence."entities.slug.patrol"]
+source = "stated"
+confidence = 100
+note = "Which of each two frames a slug moves on (when FRAMES is even) isn't modeled"
+
+[[evidence."entities.slug.patrol".refs]]
+at = "games/mosshop/mosshop.s:799"
+quote = "walks one pixel every other frame"
+
+[evidence.input]
+source = "stated"
+confidence = 100
+
+[[evidence.input.refs]]
+at = "games/mosshop/mosshop.s:28"
+quote = "BUTTON_A     = $80"
+
+[[evidence.input.refs]]
+at = "games/mosshop/mosshop.s:29"
+quote = "BUTTON_B     = $40"
+
+[evidence.levels]
+source = "stated"
+confidence = 100
+
+[[evidence.levels.refs]]
+at = "games/mosshop/mosshop.s:1238"
+quote = "32 metatiles wide and 15 high"
+
+[[evidence.levels.refs]]
+at = "games/mosshop/mosshop.s:45"
+quote = "START_X      = 24"
+
+[[evidence.levels.refs]]
+at = "games/mosshop/mosshop.s:46"
+quote = "START_Y      = 176"
+
+[[evidence.levels.refs]]
+at = "games/mosshop/mosshop.s:64"
+quote = "ENEMY_Y      = 176"
+
+[[evidence.levels.refs]]
+at = "games/mosshop/mosshop.s:1272"
+quote = "each walks right from its start to its end and back"
+
+[[evidence.levels.refs]]
+at = "games/mosshop/mosshop.s:1234"
+quote = ".byte 0, 1, 1, 1, 0, 0"
+
+[evidence."levels.main.goal"]
+source = "stated"
+confidence = 100
+
+[[evidence."levels.main.goal".refs]]
+at = "games/mosshop/mosshop.s:55"
+quote = "GOAL_X       = 468"
+
+[evidence."levels.main.kill_below"]
+source = "stated"
+confidence = 100
+
+[[evidence."levels.main.kill_below".refs]]
+at = "games/mosshop/mosshop.s:54"
+quote = "PIT_Y        = 208"
+
+[evidence."levels.main.pit_event"]
+source = "stated"
+confidence = 100
+note = "The game has no fall event: a fall into the pit kills at once (kill_player), and the model turns its pit event into kill-player so that the dying player, falling through the pit again, isn't killed twice"
+
+[[evidence."levels.main.pit_event".refs]]
+at = "games/mosshop/mosshop.s:467"
+quote = "jmp kill_player"
+
+[evidence."levels.main.tile_kinds"]
+source = "stated"
+confidence = 100
+
+[[evidence."levels.main.tile_kinds".refs]]
+at = "games/mosshop/mosshop.s:1235"
+quote = "metatile_kind:"
+
+[[evidence."levels.main.tile_kinds".refs]]
+at = "games/mosshop/mosshop.s:77"
+quote = "KIND_COIN_BLOCK = 2"
+
+[[evidence."levels.main.tile_kinds".refs]]
+at = "games/mosshop/mosshop.s:78"
+quote = "KIND_COIN  = 5"
+
+[evidence."present.cells"]
+source = "stated"
+confidence = 100
+note = "set_cell writes the cell's new metatile and queues its redraw: take_coin makes a coin sky (0) and bump_head makes the ? block the used block (7), which redraw_cells draws in the next NMI"
+
+[[evidence."present.cells".refs]]
+at = "games/mosshop/mosshop.s:75"
+quote = "SKY        = 0"
+
+[[evidence."present.cells".refs]]
+at = "games/mosshop/mosshop.s:76"
+quote = "USED_BLOCK = 7"
+
+[evidence."present.hud"]
+source = "stated"
+confidence = 100
+note = "draw_hud writes the counters into the sprite table on every frame, at sprite y 15 (row 16 on the screen): the coin at x 16 and COINS as two digits from x 24, then a life at x 200, a cross at 208 and LIVES as two digits from x 216, all in sprite palette 0. hud_number adds $30 to each digit for its tile"
+
+[[evidence."present.hud".refs]]
+at = "games/mosshop/mosshop.s:71"
+quote = "HUD_Y        = 15"
+
+[[evidence."present.hud".refs]]
+at = "games/mosshop/mosshop.s:1019"
+quote = "lda #$3A            ; coin"
+
+[[evidence."present.hud".refs]]
+at = "games/mosshop/mosshop.s:1017"
+quote = "lda #16"
+
+[[evidence."present.hud".refs]]
+at = "games/mosshop/mosshop.s:1023"
+quote = "lda #200"
+
+[[evidence."present.hud".refs]]
+at = "games/mosshop/mosshop.s:1025"
+quote = "lda #$3C            ; life"
+
+[[evidence."present.hud".refs]]
+at = "games/mosshop/mosshop.s:1027"
+quote = "lda #$3B            ; x"
+
+[[evidence."present.hud".refs]]
+at = "games/mosshop/mosshop.s:1045"
+quote = "adc #$30            ; the digits' tiles start at $30"
+
+[evidence.rules]
+source = "stated"
+confidence = 100
+
+[[evidence.rules.refs]]
+at = "games/mosshop/mosshop.s:59"
+quote = "DYING_FRAMES = 90"
+
+[[evidence.rules.refs]]
+at = "games/mosshop/mosshop.s:155"
+quote = "level clear: everything stays where it is"
+
+[[evidence.rules.refs]]
+at = "games/mosshop/mosshop.s:774"
+quote = "jmp start_level"
+
+[evidence."rules.game.states.game_over"]
+source = "stated"
+confidence = 100
+
+[[evidence."rules.game.states.game_over".refs]]
+at = "games/mosshop/mosshop.s:60"
+quote = "GAME_OVER_FRAMES = 120"
+
+[[evidence."rules.game.states.game_over".refs]]
+at = "games/mosshop/mosshop.s:168"
+quote = "jsr new_game"

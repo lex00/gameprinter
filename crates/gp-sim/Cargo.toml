@@ -1,0 +1,18 @@
+[package]
+name = "gp-sim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# The deterministic simulation every model runtime shares: the interpreter
+# (gp-interp) and generated builds call the same functions, so they agree
+# frame for frame. It reads no model text and no files; a runtime compiles
+# its model into a `Spec` first. Keep its dependencies few: generated games
+# build it too.
+[dependencies]
+blake3 = "1.8.7"
+
+[lints]
+workspace = true

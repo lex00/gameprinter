@@ -1,0 +1,27 @@
+[package]
+name = "gp-sound"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Sound as model data (docs/sound.md): the APU register log, notes and
+# instruments derived from it, songs and sound effects, a deterministic NES
+# APU synthesizer, and the interchange formats (FamiStudio text, Standard
+# MIDI files, sound bank mappings). Presentation only: no simulation crate
+# depends on it. Kept free of heavy dependencies so gp-web builds it for
+# wasm32.
+
+[dependencies]
+schemars = { version = "1.2.2", optional = true }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+toml = "1.1.8"
+
+[features]
+# JSON Schemas for the edit ops, for gp-mcp's tool inputs.
+schema = ["dep:schemars"]
+
+[lints]
+workspace = true

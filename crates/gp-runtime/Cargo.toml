@@ -1,0 +1,13 @@
+[package]
+name = "gp-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+wit-parser = "0.262.0"

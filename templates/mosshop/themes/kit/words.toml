@@ -1,0 +1,23 @@
+# Prompt words for mosshop's theme kit (docs/theme-kit.md, "Prompt words"),
+# written once by hand from watching the template's clips. `gp theme kit`
+# puts the labels, descriptions and poses into kit.toml. `deny` lists the
+# words no prompt-facing text may hold; `note` keeps the game's own term
+# and never reaches the kit.
+format = "0.1.0"
+deny = []
+
+[[art]]
+id = "entity.player"
+label = "hero"
+description = "the hero, the one the player moves: a small round creature that runs and hops, 16 by 16 pixels, drawn facing right"
+poses = [
+    "standing, facing right",
+]
+
+[[art]]
+id = "entity.enemy_483"
+label = "foe"
+description = "a small slow foe that crawls back and forth on the ground and harms the hero on touch; the hero can stomp it flat, 16 by 16 pixels, drawn facing right"
+poses = [
+    "crawling, facing right",
+]

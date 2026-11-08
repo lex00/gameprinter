@@ -1,0 +1,26 @@
+[package]
+name = "gp-interp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+gp-assets = { version = "0.1.0", path = "../gp-assets" }
+gp-evidence = { version = "0.1.0", path = "../gp-evidence" }
+gp-model = { version = "0.1.0", path = "../gp-model" }
+gp-present = { version = "0.1.0", path = "../gp-present" }
+gp-runtime = { version = "0.1.0", path = "../gp-runtime" }
+gp-sim = { version = "0.1.0", path = "../gp-sim" }
+schemars = "1.2.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+toml = "1.1.8"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

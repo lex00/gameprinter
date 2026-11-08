@@ -1,0 +1,64 @@
+# The answer key `gp model static --grade` reads for Moss Hop
+# (crates/gp-cli/src/static_grade.rs). The harvest names what it finds by
+# the ROM's own addresses (slots_20, state_05, c_0A, states s0 to sN by
+# value). This file, written from the source's RAM map and constants
+# (games/mosshop/ram.inc, mosshop.s), says which of the real model's names
+# each one is. The harvest never reads it.
+[key]
+format = "0.1.0"
+model = "../../templates/mosshop/model.toml"
+mapping = "../../templates/mosshop/mapping.toml"
+ground_truth = "ground-truth.toml"
+ram = "ram.inc"
+# The behaviour sections' numbers are graded, except these keys: geometry
+# the asset map and the console give, and presentation (as games/mosshop's
+# bench does).
+sections = ["entities", "levels", "cameras", "rules", "counters"]
+keep = ["size", "tile_size", "sprite", "tiles", "palette", "width", "frame", "cells", "description", "note"]
+
+# Harvest path prefixes and the real model's: PLAYER_X is $10, ENEMY_X $20
+# (the slugs), STATE $05, LIVES $0A, COINS $09, DEATHS $07, STOMPS $08.
+[names]
+"entities.slots_20" = "entities.slug"
+"rules.state_05" = "rules.game"
+"counters.c_0A" = "counters.lives"
+"counters.c_09" = "counters.coins"
+"counters.c_07" = "counters.deaths"
+"counters.c_08" = "counters.stomps"
+"levels.main.spawn[slots_20]" = "levels.main.spawn[slug]"
+"c_0A" = "lives"
+"slots_20" = "slug"
+
+# Each machine's states by value: STATE's PLAYING, DYING, CLEAR and
+# GAME_OVER; the player's states in the model are STATE's (mapping.toml);
+# ENEMY_STATE's GONE, WALKING and SQUASHED (a gone slug stays flat).
+[states."rules.game"]
+s0 = "playing"
+s1 = "dying"
+s2 = "clear"
+s3 = "game_over"
+
+[states."entities.player.machine"]
+s0 = "normal"
+s1 = "dying"
+s2 = "normal"
+s3 = "dying"
+
+[states."entities.slug.machine"]
+s0 = "flat"
+s1 = "walking"
+s2 = "flat"
+
+# A list element the harvest names: the field that names it in the model.
+[lists]
+"levels.main.spawn" = "entity"
+"transition" = "to"
+
+# The harvest's elements and the real model's, for the mapping rows: a
+# mapping field counts as found when its RAM is in the element's rows.
+[elements]
+player = "entities.player"
+slots_20 = "entities.slug"
+camera = "cameras.main"
+rules = "rules.game"
+hud = "counters"

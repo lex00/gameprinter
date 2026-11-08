@@ -1,0 +1,23 @@
+[package]
+name = "gp-package"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# The package format shared by models and themes (docs/packages.md): files
+# stored once by BLAKE3 hash, a manifest naming them whose hash is the
+# package id, the store layout a local store and every mirror share, and
+# the themes index. It depends on blake3 alone, so the runtimes (the web
+# preview and generated Bevy games, through gp-present) read packages with
+# the same code as gp.
+[dependencies]
+blake3 = "1.8.7"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"
+toml = "1.1.8"

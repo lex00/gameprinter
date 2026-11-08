@@ -1,0 +1,27 @@
+[package]
+name = "gp-look"
+description = "A model's pictures, looks and sound bundle: what every player draws"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+blake3 = "1.8.7"
+gp-assets = { version = "0.1.0", path = "../gp-assets" }
+gp-interp = { version = "0.1.0", path = "../gp-interp" }
+gp-model = { version = "0.1.0", path = "../gp-model" }
+gp-present = { version = "0.1.0", path = "../gp-present" }
+gp-sim = { version = "0.1.0", path = "../gp-sim" }
+gp-sound = { version = "0.1.0", path = "../gp-sound" }
+gp-sound-bank = { version = "0.1.0", path = "../gp-sound-bank" }
+gp-theme = { version = "0.1.0", path = "../gp-theme" }
+png = "0.18.1"
+toml = "1.1.8"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

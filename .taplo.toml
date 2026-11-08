@@ -1,0 +1,62 @@
+# Typed editing for the repo's TOML files (docs/model.md, "Editing with
+# types"). Taplo, Even Better TOML (VS Code) and Zed read this file and
+# check each match against a JSON Schema from schema/. The files carry no
+# directive of their own: `gp model fmt` rewrites a model to its canonical
+# text and drops comments, so a first-line `#:schema` would be lost.
+# Schema file names have no version, so the paths never change, and a
+# test (crates/gp-cli/tests/schema_mapping.rs) validates every match.
+
+[[rule]]
+include = ["templates/**/model.toml"]
+[rule.schema]
+path = "schema/model-platformer.json"
+
+[[rule]]
+include = ["templates/**/fidelity.toml"]
+[rule.schema]
+path = "schema/contract.json"
+
+[[rule]]
+include = ["templates/**/theme.toml"]
+[rule.schema]
+path = "schema/theme.json"
+
+[[rule]]
+include = ["templates/**/stack.toml"]
+[rule.schema]
+path = "schema/theme-stack.json"
+
+[[rule]]
+include = ["**/slots.toml"]
+[rule.schema]
+path = "schema/slots.json"
+
+[[rule]]
+include = ["templates/**/mapping.toml"]
+[rule.schema]
+path = "schema/mapping.json"
+
+[[rule]]
+include = ["templates/**/profiles.toml"]
+[rule.schema]
+path = "schema/profiles.json"
+
+[[rule]]
+include = ["templates/**/clips.toml"]
+[rule.schema]
+path = "schema/clips.json"
+
+[[rule]]
+include = ["templates/**/aimed.toml"]
+[rule.schema]
+path = "schema/clips.json"
+
+[[rule]]
+include = ["templates/**/corpus.toml"]
+[rule.schema]
+path = "schema/scoring-corpus.json"
+
+[[rule]]
+include = ["templates/**/loop.toml"]
+[rule.schema]
+path = "schema/loop.json"

@@ -1,0 +1,66 @@
+# Dusk: Moss Hop at sunset, with live effects only (docs/formats/theme.md).
+# Nothing here names a sprite or a tile: every rule targets a role or a
+# role group, so the theme works on any model with these roles.
+format = "0.1.0"
+id = "dusk"
+title = "Dusk"
+description = "A sunset sky, darker ground, a warm glow on the player and fireflies"
+license = "CC0-1.0"
+
+# The ground goes cool and dim; the sky is drawn by the gradient below.
+[[palette]]
+target = "world"
+hue = -20.0
+saturation = 0.8
+lightness = 0.7
+tint = "#3a2a5a"
+tint_amount = 0.25
+
+# The player stays bright against it.
+[[palette]]
+target = "player"
+lightness = 1.1
+saturation = 1.2
+
+# Enemies and hazards lean red, so they read as danger at dusk. The
+# slugs' tint is a light coral, half way: their outline is NES black
+# ($0F), and a squashed slug is mostly outline. A deep red would put that
+# outline on the dusk ground's dark red and its body on the sunset's
+# orange; half of a light coral sets both apart (gp theme check).
+[[palette]]
+target = "enemy"
+tint = "#ffaa80"
+tint_amount = 0.5
+
+[[palette]]
+target = "hazard"
+tint = "#ff7a20"
+tint_amount = 0.4
+
+[[effect]]
+kind = "gradient"
+target = "sky"
+colors = ["#1b1440", "#5a2e6a", "#d8604a", "#f4a85a"]
+
+[[effect]]
+kind = "glow"
+target = "player"
+color = "#ffe6a0"
+radius = 1
+
+[[effect]]
+kind = "particles"
+target = "screen"
+style = "fireflies"
+color = "#ffe27a"
+count = 24
+seed = 7
+
+[[effect]]
+kind = "tint"
+color = "#ff9a5a"
+amount = 0.06
+
+[[effect]]
+kind = "vignette"
+strength = 0.45

@@ -1,0 +1,192 @@
+# Moss Hop's state mapping (docs/formats/state-mapping.md): where the game's
+# RAM holds each part of the model's state, so a run of the original and a
+# run of the model can be compared frame by frame (`gp interp compare`).
+# Addresses are games/mosshop/ram.inc's; docs/reference-game.md describes
+# each variable.
+schema = 22
+model = "mosshop"
+source = "mosshop"
+description = "The player, the slugs, the camera, the level's coins, the game's state and its counters"
+# The model runs one frame per frame the game reads its controller. The game
+# reads it once a frame from the main loop's first pass (frame 6), so the
+# model's power-on state is the game's frame 5, after start_level.
+align = "polled"
+
+[[field]]
+path = "entities.player[0].x"
+ram = [0x10, 0x11]
+note = "PLAYER_X, PLAYER_X_HI"
+
+[[field]]
+path = "entities.player[0].y"
+ram = [0x12, 0x1C]
+frac = 0x13
+note = "PLAYER_Y, PLAYER_Y_HI, PLAYER_YSUB"
+
+[[field]]
+path = "entities.player[0].vy"
+ram = [0x14]
+frac = 0x15
+signed = true
+note = "PLAYER_VY, PLAYER_VYSUB"
+
+[[field]]
+path = "entities.player[0].on_ground"
+ram = [0x16]
+flag = true
+note = "ON_GROUND"
+
+[[field]]
+path = "entities.player[0].facing"
+ram = [0x17]
+values = ["right", "left"]
+note = "FACING"
+
+# The player's machine: dying while the game is (STATE 1), and still dying
+# through the game over that follows (3); normal while playing or clear.
+[[field]]
+path = "entities.player[0].state"
+ram = [0x05]
+names = [[0, "normal"], [1, "dying"], [2, "normal"], [3, "dying"]]
+note = "STATE"
+
+[[field]]
+path = "entities.slug[0].x"
+ram = [0x20, 0x22]
+note = "ENEMY_X, ENEMY_X_HI"
+
+[[field]]
+path = "entities.slug[1].x"
+ram = [0x21, 0x23]
+note = "ENEMY_X + 1, ENEMY_X_HI + 1"
+
+[[field]]
+path = "entities.slug[0].facing"
+ram = [0x24]
+values = ["right", "left"]
+note = "ENEMY_DIR"
+
+[[field]]
+path = "entities.slug[1].facing"
+ram = [0x25]
+values = ["right", "left"]
+note = "ENEMY_DIR + 1"
+
+[[field]]
+path = "entities.slug[0].alive"
+ram = [0x26]
+flag = true
+note = "ENEMY_STATE: 0 gone"
+
+[[field]]
+path = "entities.slug[0].state"
+ram = [0x26]
+names = [[0, "flat"], [1, "walking"], [2, "flat"]]
+note = "ENEMY_STATE: 1 walking, 2 squashed; a slug gone keeps its last state, flat"
+
+[[field]]
+path = "entities.slug[1].alive"
+ram = [0x27]
+flag = true
+note = "ENEMY_STATE + 1: 0 gone"
+
+[[field]]
+path = "entities.slug[1].state"
+ram = [0x27]
+names = [[0, "flat"], [1, "walking"], [2, "flat"]]
+note = "ENEMY_STATE + 1: 1 walking, 2 squashed; a slug gone keeps its last state, flat"
+
+[[field]]
+path = "cameras.main.x"
+ram = [0x1A, 0x1B]
+note = "CAMERA_X, CAMERA_X_HI"
+
+[[field]]
+path = "rules.game.state"
+ram = [0x05]
+values = ["playing", "dying", "clear", "game_over"]
+note = "STATE"
+
+[[field]]
+path = "counters.deaths"
+ram = [0x07]
+note = "DEATHS"
+
+[[field]]
+path = "counters.stomps"
+ram = [0x08]
+note = "STOMPS"
+
+[[field]]
+path = "counters.coins"
+ram = [0x09]
+note = "COINS"
+
+[[field]]
+path = "counters.lives"
+ram = [0x0A]
+note = "LIVES"
+
+# The level's cells (LEVEL_LEFT, LEVEL_RIGHT): 16 columns a page, 15 rows.
+# A coin taken is 0, sky, and a ? block bumped is 7, the used block.
+[cells]
+pages = [0x300, 0x3F0]
+page_columns = 16
+rows = 15
+top = 0
+view = 17
+kinds = ["coin", "coin_block"]
+becomes = [[0, "empty"], [7, "solid"]]
+
+# The RAM bytes the model needs no field for
+# (schema 21): input, counters, scratch, sound and pointers, from a
+# trace of every instruction of a playthrough on the original, by
+# `gp progress --write-ignore` (docs/progress.md). Written, not
+# hand-edited: write it again after a change. A byte marked review held
+# its rule on nearly every frame but not all; check it.
+# The playthrough: Run into the first slug three times: game over, then a new game (baseline:game-over).
+# The controller is read in: $C1D9.
+
+[[ignore]]
+ram = 0x0000  # FRAMES
+role = "counter"
+why = "counts up by one on 695 of its 695 changes, over 695 frames"
+
+[[ignore]]
+ram = 0x0002  # PAD, PAD_PREV, PAD_NEW
+len = 3
+role = "input"
+why = "written by the routine that reads the controller"
+
+[[ignore]]
+ram = 0x0018  # JUMP_START_Y
+role = "scratch"
+why = "written but never read in the trace"
+review = true
+
+[[ignore]]
+ram = 0x0030  # TMP_XL
+role = "pointer"
+why = "used as a pointer or an index; no frame reads it before writing it"
+
+[[ignore]]
+ram = 0x0032  # TMP_Y
+role = "scratch"
+why = "no frame reads it before writing it"
+
+[[ignore]]
+ram = 0x0036  # TMP_SPEED
+role = "scratch"
+why = "no frame reads it before writing it"
+
+[[ignore]]
+ram = 0x003A  # TMP_ATTR, TMP_MASK
+len = 2
+role = "scratch"
+why = "no frame reads it before writing it"
+
+[[ignore]]
+ram = 0x0040  # TMP_CELL, TMP_PAGE
+len = 2
+role = "scratch"
+why = "no frame reads it before writing it"

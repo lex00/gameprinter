@@ -1,0 +1,102 @@
+--- a/games/mosshop/mosshop.s
++++ b/games/mosshop/mosshop.s
+@@ -79,9 +79,9 @@
+ 
+ .segment "HEADER"
+     .byte "NES", $1A
+-    .byte 1             ; 16KB PRG
++    .byte 4             ; 64KB PRG
+     .byte 1             ; 8KB CHR
+-    .byte %00000001     ; mapper 0, vertical mirroring
++    .byte %00100001     ; mapper 2 (UxROM), vertical mirroring
+     .byte %00000000
+     .byte 0, 0, 0, 0, 0, 0, 0, 0
+ 
+@@ -450,6 +450,8 @@
+     sta ON_GROUND
+     jmp @checks
+ @rising:
++    lda #1              ; a bumped head's code is in bank 1
++    sta bank_table+1
+     jsr bump_head
+ @in_air:
+     lda #0
+@@ -512,34 +514,6 @@
+ @down:
+     adc PLAYER_Y_HI
+     sta PLAYER_Y_HI
+-    rts
+-
+-; Rising: the cell at the head point decides. A solid cell ends the rise
+-; where the player is; a ? block in it becomes a used block and gives a coin.
+-bump_head:
+-    lda PLAYER_X
+-    clc
+-    adc #HEAD_X
+-    sta TMP_XL
+-    lda PLAYER_X_HI
+-    adc #0
+-    sta TMP_XH
+-    lda PLAYER_Y
+-    sta TMP_Y
+-    jsr cell_at
+-    tax
+-    lda metatile_solid,x
+-    beq @done           ; open: the rise goes on
+-    lda #0
+-    sta PLAYER_VY
+-    sta PLAYER_VYSUB
+-    lda metatile_kind,x
+-    cmp #KIND_COIN_BLOCK
+-    bne @done
+-    lda #USED_BLOCK
+-    jsr set_cell
+-    inc COINS
+-@done:
+     rts
+ 
+ ; A coin in the cell at the pickup point is taken: the cell becomes sky.
+@@ -1201,8 +1175,43 @@
+ @done:
+     rts
+ 
++.segment "BANK1"
++
++; Rising: the cell at the head point decides. A solid cell ends the rise
++; where the player is; a ? block in it becomes a used block and gives a coin.
++bump_head:
++    lda PLAYER_X
++    clc
++    adc #HEAD_X
++    sta TMP_XL
++    lda PLAYER_X_HI
++    adc #0
++    sta TMP_XH
++    lda PLAYER_Y
++    sta TMP_Y
++    jsr cell_at
++    tax
++    lda metatile_solid,x
++    beq @done           ; open: the rise goes on
++    lda #0
++    sta PLAYER_VY
++    sta PLAYER_VYSUB
++    lda metatile_kind,x
++    cmp #KIND_COIN_BLOCK
++    bne @done
++    lda #USED_BLOCK
++    jsr set_cell
++    inc COINS
++@done:
++    rts
++
+ .segment "RODATA"
+ 
++; Bank numbers at their own values, so a write to select one agrees with
++; the ROM byte it lands on (UxROM's bus conflicts).
++bank_table:
++    .byte 0, 1, 2, 3
++
+ palette:
+     ; background: sky, moss green, soil brown, tan
+     .byte $21, $1A, $17, $37

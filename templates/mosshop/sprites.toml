@@ -1,0 +1,12 @@
+# Moss Hop's sprite states, for gp sprites capture (docs/formats/sprites.md).
+# Addresses are games/mosshop/ram.inc's.
+schema = 1
+
+# STATE: 1 dying, 3 game over (the player still as it died). draw_sprites
+# turns the player upside down while dying.
+[entity.player]
+state = [{ name = "dying", when = "ram[0x0005] == 1 || ram[0x0005] == 3" }]
+
+# ENEMY_STATE, one byte a slug: 2 squashed.
+[entity.slug]
+state = [{ name = "flat", when = "slot[0x26] == 2" }]

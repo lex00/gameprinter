@@ -1,0 +1,4636 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 00036459dc4d9792d3a608c72fc880f8c05e50a3..5ab1efb9de5f2838283afbe93abda902fa034e5f 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -90,6 +90,12 @@ features = [
+ ]
+ default-features = false
+ 
++[build-dependencies.flate2]
++version = "1.0"
++
++[build-dependencies.sha2]
++version = "0.11"
++
+ [dev-dependencies.anyhow]
+ version = "1.0"
+ 
+@@ -111,20 +117,20 @@ features = [
+ ]
+ default-features = false
+ 
+-[target.'cfg(target_arch = "wasm32")'.dependencies.base64]
++[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies.base64]
+ version = "0.23"
+ 
+-[target.'cfg(target_arch = "wasm32")'.dependencies.serde_json]
++[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies.serde_json]
+ version = "1.0"
+ 
+-[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
++[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies.web-sys]
+ version = "0.3.103"
+ features = [
+     "Storage",
+     "Window",
+ ]
+ 
+-[target.'cfg(target_arch = "wasm32")'.dependencies.web-time]
++[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies.web-time]
+ version = "1.0"
+ 
+ [lints.clippy]
+diff --git a/Cargo.toml.orig b/Cargo.toml.orig
+index 4e591ede14f71b9093f82b66fe77ab045778af8f..c43ce5882a736d5443f12c21150be7a90eb6404c 100644
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -37,7 +37,11 @@ serde.workspace = true
+ thiserror.workspace = true
+ tracing.workspace = true
+ 
+-[target.'cfg(target_arch = "wasm32")'.dependencies]
++[build-dependencies]
++flate2 = "1.0"
++sha2 = "0.11"
++
++[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+ base64.workspace = true
+ serde_json.workspace = true
+ web-time.workspace = true
+diff --git a/build.rs b/build.rs
+index 9c991a44124e81f88f1954096a6930be331c35bf..d6e26d1c32d687fe7bf258fa8d2b38c5e674071e 100644
+--- a/build.rs
++++ b/build.rs
+@@ -1,17 +1,167 @@
+-//! Bakes the NTSC filter's color lookup table into the binary.
++//! Generates the data the crate compiles in, into `OUT_DIR`:
+ //!
+-//! Generating it costs ~30 ms of `powf` and `sin_cos`. Paid lazily by whichever frame first uses the
+-//! NTSC filter, that lands as a visible hitch the moment the filter is switched on; it depends on
+-//! nothing but constants, so it is computed here instead.
++//! - `ntsc_palette.bin`: the NTSC filter's color lookup table. Generating it costs ~30 ms of `powf`
++//!   and `sin_cos`. Paid lazily by whichever frame first uses the NTSC filter, that lands as a
++//!   visible hitch the moment the filter is switched on; it depends on nothing but constants, so it
++//!   is computed here instead.
++//! - `ntscpalette.pal` and `game_db.dat`: the NTSC palette and the cartridge database, built from
++//!   the text files `ntscpalette.txt` and `game_db.txt`. Each must come out byte for byte as the
++//!   binary file upstream ships, which is checked against that file's SHA-256.
+ 
+ include!("src/video/ntsc_palette.rs");
+ 
++use flate2::{Compression, write::DeflateEncoder};
++use sha2::{Digest, Sha256};
++use std::{io::Write, path::Path};
++
++/// SHA-256 of upstream's `ntscpalette.pal` (tetanes-core 0.17.0).
++const NTSC_PAL_SHA256: &str = "d99e88417a54d73d8627a70406c48368b36e01f166156c6dc395d3e65b273444";
++/// SHA-256 of upstream's `game_db.dat` (tetanes-core 0.17.0).
++const GAME_DB_SHA256: &str = "c42d7e14ec5c48b1393905f1341aed2fe89f5ee08db132b45982c339e89d913b";
++
+ fn main() {
+-    println!("cargo::rerun-if-changed=src/video/ntsc_palette.rs");
+-    println!("cargo::rerun-if-changed=build.rs");
++    for path in [
++        "src/video/ntsc_palette.rs",
++        "build.rs",
++        "ntscpalette.txt",
++        "game_db.txt",
++    ] {
++        println!("cargo::rerun-if-changed={path}");
++    }
+ 
+     let out_dir = std::env::var_os("OUT_DIR").expect("OUT_DIR is set by cargo");
+-    let path = std::path::Path::new(&out_dir).join("ntsc_palette.bin");
+-    std::fs::write(&path, generate_ntsc_palette())
++    let out_dir = Path::new(&out_dir);
++    write(&out_dir.join("ntsc_palette.bin"), &generate_ntsc_palette());
++    write(
++        &out_dir.join("ntscpalette.pal"),
++        &checked("ntscpalette.txt", ntsc_pal(), NTSC_PAL_SHA256),
++    );
++    write(
++        &out_dir.join("game_db.dat"),
++        &checked("game_db.txt", game_db(), GAME_DB_SHA256),
++    );
++}
++
++fn write(path: &Path, bytes: &[u8]) {
++    std::fs::write(path, bytes)
+         .unwrap_or_else(|err| panic!("failed to write {}: {err}", path.display()));
+ }
++
++fn read(path: &str) -> String {
++    std::fs::read_to_string(path).unwrap_or_else(|err| panic!("failed to read {path}: {err}"))
++}
++
++/// The lines of a text file that hold data: not blank, not a `#` comment, with their line numbers.
++fn data_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
++    text.lines()
++        .enumerate()
++        .map(|(n, line)| (n + 1, line.trim()))
++        .filter(|(_, line)| !line.is_empty() && !line.starts_with('#'))
++}
++
++fn checked(source: &str, bytes: Vec<u8>, want: &str) -> Vec<u8> {
++    let got: String = Sha256::digest(&bytes)
++        .iter()
++        .map(|b| format!("{b:02x}"))
++        .collect();
++    assert!(
++        got == want,
++        "{source} builds {} bytes with SHA-256 {got}, but the file it replaces had SHA-256 {want}",
++        bytes.len()
++    );
++    bytes
++}
++
++/// `ntscpalette.txt`: `emphasis colour rgb` per line, entry `emphasis * 64 + colour`, in order.
++fn ntsc_pal() -> Vec<u8> {
++    let text = read("ntscpalette.txt");
++    let mut bytes = Vec::with_capacity(512 * 3);
++    for (index, (n, line)) in data_lines(&text).enumerate() {
++        let fields: Vec<&str> = line.split_whitespace().collect();
++        let [emphasis, colour, rgb] = fields[..] else {
++            panic!("ntscpalette.txt:{n}: expected `emphasis colour rgb`, found {line:?}");
++        };
++        let emphasis = u32::from_str_radix(emphasis, 10);
++        let colour = u32::from_str_radix(colour, 16);
++        assert!(
++            emphasis == Ok(index as u32 / 64) && colour == Ok(index as u32 % 64),
++            "ntscpalette.txt:{n}: expected entry {} {:02X} here, found {line:?}",
++            index / 64,
++            index % 64
++        );
++        let rgb = u32::from_str_radix(rgb, 16)
++            .ok()
++            .filter(|_| rgb.len() == 6)
++            .unwrap_or_else(|| panic!("ntscpalette.txt:{n}: {rgb:?} isn't RRGGBB hex"));
++        bytes.extend_from_slice(&rgb.to_be_bytes()[1..]);
++    }
++    assert!(
++        bytes.len() == 512 * 3,
++        "ntscpalette.txt has {} entries, expected 512 (64 colours times 8 emphasis settings)",
++        bytes.len() / 3
++    );
++    bytes
++}
++
++/// `game_db.txt`: `crc=HEX region=NAME mapper=N submapper=N` per line, sorted by CRC.
++///
++/// The output is what `fs::save_version(.., &Vec<GameInfo>, GAME_DB_VERSION)` writes: the save
++/// header, then the bincode (legacy config) encoding deflate-compressed at the default level.
++/// bincode's legacy encoding is a `u64` length, then per entry the `u32` CRC, the `NesRegion`
++/// variant index as a `u32`, the `u16` mapper and the `u8` submapper, all little-endian.
++fn game_db() -> Vec<u8> {
++    let text = read("game_db.txt");
++    let mut entries = Vec::new();
++    let mut last_crc = None;
++    for (n, line) in data_lines(&text) {
++        let fields: Vec<(&str, &str)> = line
++            .split_whitespace()
++            .map(|field| field.split_once('=').unwrap_or((field, "")))
++            .collect();
++        let [
++            ("crc", crc),
++            ("region", region),
++            ("mapper", mapper),
++            ("submapper", submapper),
++        ] = fields[..]
++        else {
++            panic!(
++                "game_db.txt:{n}: expected `crc=.. region=.. mapper=.. submapper=..`, found {line:?}"
++            );
++        };
++        let bad = |what: &str| -> ! { panic!("game_db.txt:{n}: bad {what} in {line:?}") };
++        let crc = u32::from_str_radix(crc, 16).unwrap_or_else(|_| bad("crc"));
++        // Variant indexes of `NesRegion` (src/common.rs), which is what bincode writes.
++        let region: u32 = match region {
++            "Auto" => 0,
++            "Ntsc" => 1,
++            "Pal" => 2,
++            "Dendy" => 3,
++            _ => bad("region"),
++        };
++        let mapper: u16 = mapper.parse().unwrap_or_else(|_| bad("mapper"));
++        let submapper: u8 = submapper.parse().unwrap_or_else(|_| bad("submapper"));
++        assert!(
++            last_crc < Some(crc),
++            "game_db.txt:{n}: entries must be sorted by crc with no repeats (the lookup is a binary search)"
++        );
++        last_crc = Some(crc);
++        entries.push((crc, region, mapper, submapper));
++    }
++
++    let mut encoded = Vec::with_capacity(8 + entries.len() * 11);
++    encoded.extend_from_slice(&(entries.len() as u64).to_le_bytes());
++    for (crc, region, mapper, submapper) in entries {
++        encoded.extend_from_slice(&crc.to_le_bytes());
++        encoded.extend_from_slice(&region.to_le_bytes());
++        encoded.extend_from_slice(&mapper.to_le_bytes());
++        encoded.push(submapper);
++    }
++
++    // The header `fs::write_header` writes: magic, then `fs::GAME_DB_VERSION`.
++    let mut bytes = b"TETANES\x1a1".to_vec();
++    let mut encoder = DeflateEncoder::new(&mut bytes, Compression::default());
++    encoder.write_all(&encoded).expect("writes to a Vec");
++    encoder.finish().expect("writes to a Vec");
++    bytes
++}
+diff --git b/game_db.txt b/game_db.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..40052d33662006330ff4531ffcd42bcbfea73440
+--- /dev/null
++++ b/game_db.txt
+@@ -0,0 +1,2688 @@
++# The cartridge database tetanes-core looks ROMs up in (Cart::lookup_info), one entry per line.
++# build.rs turns it into the bytes upstream shipped as game_db.dat (the TETANES\x1a header, format
++# version 1, then the bincode-encoded Vec<GameInfo> deflate-compressed), checking their SHA-256.
++# crc: CRC32 of the ROM's PRG and CHR data, in hex; entries are sorted by it (the lookup is a binary search).
++# region: Ntsc, Pal, Dendy or Auto. mapper: iNES mapper number. submapper: NES 2.0 submapper number.
++crc=001388B3 region=Pal mapper=4 submapper=0
++crc=0021ED29 region=Ntsc mapper=1 submapper=0
++crc=00837960 region=Ntsc mapper=4 submapper=0
++crc=008E2D30 region=Ntsc mapper=1 submapper=0
++crc=009AF6BE region=Ntsc mapper=7 submapper=0
++crc=00A53242 region=Ntsc mapper=113 submapper=0
++crc=00AD1189 region=Pal mapper=1 submapper=0
++crc=00E95D86 region=Ntsc mapper=2 submapper=0
++crc=0123BFFE region=Ntsc mapper=2 submapper=0
++crc=0143EEB4 region=Ntsc mapper=2 submapper=0
++crc=015D4555 region=Pal mapper=4 submapper=0
++crc=016C93D8 region=Ntsc mapper=1 submapper=0
++crc=018A8699 region=Ntsc mapper=4 submapper=0
++crc=01934171 region=Ntsc mapper=4 submapper=0
++crc=01B4CA89 region=Ntsc mapper=3 submapper=0
++crc=022589B9 region=Ntsc mapper=4 submapper=0
++crc=023A5A32 region=Ntsc mapper=0 submapper=0
++crc=02589598 region=Ntsc mapper=1 submapper=0
++crc=026C1E1A region=Ntsc mapper=3 submapper=0
++crc=026C5FCA region=Ntsc mapper=70 submapper=0
++crc=026E41C5 region=Ntsc mapper=4 submapper=0
++crc=028374F2 region=Ntsc mapper=4 submapper=0
++crc=02863604 region=Ntsc mapper=2 submapper=0
++crc=02B9E7C2 region=Ntsc mapper=1 submapper=0
++crc=02C41438 region=Ntsc mapper=177 submapper=0
++crc=02CC3973 region=Ntsc mapper=3 submapper=0
++crc=02D7976B region=Ntsc mapper=0 submapper=0
++crc=02E0ADA4 region=Pal mapper=4 submapper=0
++crc=02EE3706 region=Ntsc mapper=1 submapper=0
++crc=03272E9B region=Ntsc mapper=4 submapper=0
++crc=0354868A region=Ntsc mapper=3 submapper=0
++crc=035DC2E9 region=Ntsc mapper=0 submapper=0
++crc=037006F7 region=Ntsc mapper=116 submapper=0
++crc=039B4A9C region=Ntsc mapper=1 submapper=0
++crc=03B8DEFA region=Ntsc mapper=1 submapper=0
++crc=03D56CF7 region=Ntsc mapper=1 submapper=0
++crc=03E2898F region=Ntsc mapper=4 submapper=0
++crc=03EC46AF region=Ntsc mapper=69 submapper=0
++crc=03F899CD region=Ntsc mapper=4 submapper=0
++crc=03FB57B6 region=Ntsc mapper=4 submapper=0
++crc=04109355 region=Ntsc mapper=2 submapper=0
++crc=04142764 region=Pal mapper=4 submapper=0
++crc=041553C3 region=Ntsc mapper=168 submapper=0
++crc=0430DB08 region=Pal mapper=4 submapper=0
++crc=045E8CD8 region=Ntsc mapper=4 submapper=0
++crc=04766130 region=Ntsc mapper=1 submapper=0
++crc=049325D9 region=Ntsc mapper=112 submapper=0
++crc=0504B007 region=Pal mapper=0 submapper=0
++crc=05104517 region=Pal mapper=7 submapper=0
++crc=051CD5F2 region=Ntsc mapper=4 submapper=0
++crc=0537322A region=Ntsc mapper=7 submapper=0
++crc=05378607 region=Ntsc mapper=1 submapper=0
++crc=0546BD12 region=Ntsc mapper=4 submapper=0
++crc=054CB4EB region=Ntsc mapper=4 submapper=0
++crc=0554394F region=Ntsc mapper=113 submapper=0
++crc=058F23A2 region=Ntsc mapper=4 submapper=0
++crc=059E0CDF region=Ntsc mapper=1 submapper=0
++crc=05A688C8 region=Ntsc mapper=2 submapper=0
++crc=05C4AF33 region=Ntsc mapper=93 submapper=0
++crc=05CE560C region=Ntsc mapper=4 submapper=0
++crc=05F04EAC region=Ntsc mapper=82 submapper=0
++crc=06144B4A region=Ntsc mapper=77 submapper=0
++crc=063E5653 region=Ntsc mapper=1 submapper=0
++crc=06406EB9 region=Ntsc mapper=113 submapper=0
++crc=06689AA4 region=Pal mapper=1 submapper=0
++crc=06961BE4 region=Ntsc mapper=1 submapper=0
++crc=06D72C83 region=Ntsc mapper=2 submapper=0
++crc=06F15215 region=Ntsc mapper=0 submapper=0
++crc=06F9C714 region=Ntsc mapper=18 submapper=0
++crc=0719260C region=Ntsc mapper=3 submapper=0
++crc=071D4C2D region=Pal mapper=4 submapper=0
++crc=073A0EBE region=Pal mapper=1 submapper=0
++crc=074EC424 region=Ntsc mapper=1 submapper=0
++crc=0775DC68 region=Ntsc mapper=150 submapper=0
++crc=078CED30 region=Ntsc mapper=1 submapper=0
++crc=07910BF9 region=Ntsc mapper=2 submapper=0
++crc=0794F2A5 region=Ntsc mapper=1 submapper=0
++crc=07977186 region=Ntsc mapper=1 submapper=0
++crc=07D92C31 region=Ntsc mapper=4 submapper=0
++crc=083E4FC1 region=Pal mapper=4 submapper=0
++crc=08439D55 region=Ntsc mapper=0 submapper=0
++crc=085DE7C9 region=Ntsc mapper=1 submapper=0
++crc=0897021B region=Ntsc mapper=69 submapper=0
++crc=08E11357 region=Ntsc mapper=0 submapper=0
++crc=0902C8F0 region=Ntsc mapper=1 submapper=0
++crc=091ED5A9 region=Ntsc mapper=4 submapper=0
++crc=092EC15C region=Ntsc mapper=3 submapper=0
++crc=0939852F region=Ntsc mapper=1 submapper=0
++crc=093E845F region=Ntsc mapper=1 submapper=0
++crc=0955B54C region=Ntsc mapper=79 submapper=0
++crc=096D8364 region=Pal mapper=2 submapper=0
++crc=0973F714 region=Ntsc mapper=1 submapper=0
++crc=09874777 region=Ntsc mapper=7 submapper=0
++crc=098C672A region=Ntsc mapper=19 submapper=0
++crc=099B8CAA region=Ntsc mapper=1 submapper=0
++crc=09C083B7 region=Ntsc mapper=1 submapper=0
++crc=09C1FC7D region=Ntsc mapper=1 submapper=0
++crc=09C31CD4 region=Ntsc mapper=11 submapper=0
++crc=09FFDF45 region=Ntsc mapper=1 submapper=0
++crc=0A0926BD region=Ntsc mapper=1 submapper=0
++crc=0A3FC393 region=Ntsc mapper=0 submapper=0
++crc=0A42D84F region=Ntsc mapper=2 submapper=0
++crc=0A73A792 region=Ntsc mapper=1 submapper=0
++crc=0A7E62D4 region=Ntsc mapper=4 submapper=0
++crc=0AB26DB6 region=Ntsc mapper=11 submapper=0
++crc=0ABDD5CA region=Ntsc mapper=1 submapper=0
++crc=0AC1AA8F region=Ntsc mapper=2 submapper=0
++crc=0ACFC3CD region=Ntsc mapper=173 submapper=0
++crc=0AE3CC5E region=Ntsc mapper=4 submapper=0
++crc=0AE6C9E2 region=Ntsc mapper=2 submapper=0
++crc=0AEA38F7 region=Ntsc mapper=11 submapper=0
++crc=0AFB395E region=Ntsc mapper=5 submapper=0
++crc=0B0E128F region=Ntsc mapper=105 submapper=0
++crc=0B13658B region=Ntsc mapper=1 submapper=0
++crc=0B3513A0 region=Ntsc mapper=3 submapper=0
++crc=0B404915 region=Ntsc mapper=4 submapper=0
++crc=0B58880C region=Ntsc mapper=0 submapper=0
++crc=0B6443D4 region=Ntsc mapper=4 submapper=0
++crc=0B8E8649 region=Ntsc mapper=2 submapper=0
++crc=0B8F8128 region=Pal mapper=4 submapper=0
++crc=0BB5B3A0 region=Ntsc mapper=66 submapper=0
++crc=0BBF80CB region=Ntsc mapper=82 submapper=0
++crc=0BCAA4D7 region=Ntsc mapper=4 submapper=0
++crc=0BDD8DD9 region=Ntsc mapper=7 submapper=0
++crc=0BE0A328 region=Ntsc mapper=16 submapper=0
++crc=0C1792DA region=Ntsc mapper=19 submapper=0
++crc=0C1FE23D region=Ntsc mapper=0 submapper=0
++crc=0C2E7863 region=Ntsc mapper=4 submapper=0
++crc=0C401790 region=Ntsc mapper=1 submapper=0
++crc=0C462638 region=Ntsc mapper=1 submapper=0
++crc=0C47946D region=Ntsc mapper=210 submapper=1
++crc=0C5A6297 region=Ntsc mapper=67 submapper=0
++crc=0C5F3973 region=Pal mapper=0 submapper=0
++crc=0C783F0C region=Pal mapper=0 submapper=0
++crc=0C918A65 region=Ntsc mapper=0 submapper=0
++crc=0CC9FFEC region=Ntsc mapper=23 submapper=0
++crc=0CD79B71 region=Ntsc mapper=3 submapper=0
++crc=0CF42E69 region=Ntsc mapper=159 submapper=0
++crc=0D14285A region=Ntsc mapper=2 submapper=0
++crc=0D15687D region=Ntsc mapper=0 submapper=0
++crc=0D203DE5 region=Ntsc mapper=0 submapper=0
++crc=0D3482D7 region=Ntsc mapper=4 submapper=0
++crc=0D473EE6 region=Ntsc mapper=186 submapper=0
++crc=0D65E7C7 region=Ntsc mapper=69 submapper=0
++crc=0D9F5BD1 region=Ntsc mapper=1 submapper=0
++crc=0DA00298 region=Ntsc mapper=1 submapper=0
++crc=0DA0E723 region=Pal mapper=1 submapper=0
++crc=0DA28A50 region=Pal mapper=3 submapper=0
++crc=0DA5E32E region=Ntsc mapper=87 submapper=0
++crc=0DB4B382 region=Ntsc mapper=18 submapper=0
++crc=0DC53188 region=Ntsc mapper=1 submapper=0
++crc=0E0060C8 region=Ntsc mapper=1 submapper=0
++crc=0E1683C5 region=Ntsc mapper=80 submapper=0
++crc=0E997CF6 region=Ntsc mapper=1 submapper=0
++crc=0EAA7515 region=Ntsc mapper=2 submapper=0
++crc=0EC6C023 region=Ntsc mapper=5 submapper=0
++crc=0ED96F42 region=Ntsc mapper=4 submapper=0
++crc=0EF730E7 region=Ntsc mapper=4 submapper=0
++crc=0F05FF0A region=Ntsc mapper=185 submapper=0
++crc=0F1BABE7 region=Ntsc mapper=18 submapper=0
++crc=0F1CC048 region=Ntsc mapper=1 submapper=0
++crc=0F20210D region=Ntsc mapper=241 submapper=0
++crc=0F3B89E3 region=Ntsc mapper=0 submapper=0
++crc=0F5F1F86 region=Ntsc mapper=1 submapper=0
++crc=0F86FEB4 region=Ntsc mapper=2 submapper=0
++crc=0FC8E9B7 region=Ntsc mapper=4 submapper=0
++crc=0FCFC04D region=Ntsc mapper=1 submapper=0
++crc=0FD6BFC8 region=Ntsc mapper=4 submapper=0
++crc=0FEC90D2 region=Ntsc mapper=2 submapper=0
++crc=0FF6A3B5 region=Ntsc mapper=69 submapper=0
++crc=0FFDE258 region=Ntsc mapper=4 submapper=0
++crc=1011394F region=Ntsc mapper=112 submapper=0
++crc=10119E6B region=Ntsc mapper=93 submapper=0
++crc=10124E09 region=Ntsc mapper=11 submapper=0
++crc=10180072 region=Ntsc mapper=1 submapper=0
++crc=1027C432 region=Ntsc mapper=2 submapper=0
++crc=103E7E7F region=Ntsc mapper=1 submapper=0
++crc=1066B66D region=Ntsc mapper=4 submapper=0
++crc=10B0F8B0 region=Ntsc mapper=80 submapper=0
++crc=10BAEEF3 region=Ntsc mapper=0 submapper=0
++crc=10C06E27 region=Ntsc mapper=1 submapper=0
++crc=10C8F2FA region=Ntsc mapper=19 submapper=0
++crc=10C9A789 region=Ntsc mapper=19 submapper=0
++crc=10D62149 region=Ntsc mapper=2 submapper=0
++crc=11C9AC37 region=Ntsc mapper=1 submapper=0
++crc=11D08CC6 region=Ntsc mapper=11 submapper=0
++crc=12078AFD region=Ntsc mapper=4 submapper=0
++crc=1208E754 region=Ntsc mapper=1 submapper=0
++crc=12481CC0 region=Ntsc mapper=4 submapper=0
++crc=1248326D region=Ntsc mapper=4 submapper=0
++crc=126EBF66 region=Ntsc mapper=4 submapper=0
++crc=12748678 region=Ntsc mapper=4 submapper=0
++crc=127D76F4 region=Ntsc mapper=4 submapper=0
++crc=12906664 region=Ntsc mapper=3 submapper=0
++crc=12B2C361 region=Ntsc mapper=7 submapper=0
++crc=12C6D5C7 region=Ntsc mapper=2 submapper=0
++crc=12E6CB79 region=Ntsc mapper=0 submapper=0
++crc=12F048DF region=Ntsc mapper=75 submapper=0
++crc=1300A8B7 region=Ntsc mapper=4 submapper=0
++crc=1335CB05 region=Ntsc mapper=4 submapper=0
++crc=1352F1B9 region=Ntsc mapper=1 submapper=0
++crc=1353A134 region=Pal mapper=4 submapper=0
++crc=136CA449 region=Ntsc mapper=16 submapper=0
++crc=138862C5 region=Pal mapper=2 submapper=0
++crc=1394F57E region=Ntsc mapper=1 submapper=0
++crc=139B15BA region=Ntsc mapper=1 submapper=0
++crc=139EB5B5 region=Ntsc mapper=4 submapper=0
++crc=13C6617E region=Ntsc mapper=4 submapper=0
++crc=13C774DD region=Ntsc mapper=4 submapper=0
++crc=13D5B1A4 region=Ntsc mapper=7 submapper=0
++crc=13DA2122 region=Ntsc mapper=88 submapper=0
++crc=13E01649 region=Pal mapper=4 submapper=0
++crc=13E09D7A region=Ntsc mapper=4 submapper=0
++crc=14105C13 region=Ntsc mapper=11 submapper=0
++crc=1411005B region=Ntsc mapper=4 submapper=0
++crc=14255C57 region=Pal mapper=1 submapper=0
++crc=1425D7F4 region=Ntsc mapper=3 submapper=0
++crc=14374128 region=Ntsc mapper=1 submapper=0
++crc=145A9A6C region=Ntsc mapper=0 submapper=0
++crc=1488E95F region=Pal mapper=0 submapper=0
++crc=149C0EC3 region=Ntsc mapper=1 submapper=0
++crc=14A81635 region=Ntsc mapper=11 submapper=0
++crc=14CD576E region=Ntsc mapper=1 submapper=0
++crc=14F477C3 region=Ntsc mapper=66 submapper=0
++crc=1500E835 region=Ntsc mapper=48 submapper=0
++crc=15141401 region=Ntsc mapper=4 submapper=0
++crc=15454CB2 region=Ntsc mapper=143 submapper=0
++crc=1545BD13 region=Ntsc mapper=1 submapper=0
++crc=1570A0C8 region=Ntsc mapper=189 submapper=0
++crc=1590CF62 region=Pal mapper=4 submapper=0
++crc=15A1CBB0 region=Ntsc mapper=4 submapper=0
++crc=15F0D3F1 region=Ntsc mapper=2 submapper=0
++crc=15FE6D0F region=Ntsc mapper=5 submapper=0
++crc=161D717B region=Ntsc mapper=4 submapper=0
++crc=162CCBD0 region=Ntsc mapper=1 submapper=0
++crc=162F328E region=Ntsc mapper=3 submapper=0
++crc=163ECCAE region=Ntsc mapper=0 submapper=0
++crc=1675A6C1 region=Ntsc mapper=4 submapper=0
++crc=1677D21D region=Pal mapper=1 submapper=0
++crc=16A0A3A3 region=Ntsc mapper=1 submapper=0
++crc=16E93F39 region=Ntsc mapper=1 submapper=0
++crc=16EBA50A region=Ntsc mapper=4 submapper=0
++crc=171251E3 region=Ntsc mapper=0 submapper=0
++crc=17389E3D region=Pal mapper=1 submapper=0
++crc=174F860A region=Ntsc mapper=1 submapper=0
++crc=175C4A3C region=Ntsc mapper=75 submapper=0
++crc=175EDA0B region=Ntsc mapper=4 submapper=0
++crc=1771EA8F region=Ntsc mapper=3 submapper=0
++crc=1773F76D region=Ntsc mapper=3 submapper=0
++crc=178DBA78 region=Pal mapper=0 submapper=0
++crc=179A0D57 region=Ntsc mapper=4 submapper=0
++crc=18027A1F region=Pal mapper=2 submapper=0
++crc=1829616A region=Ntsc mapper=3 submapper=0
++crc=183859D2 region=Ntsc mapper=16 submapper=0
++crc=184C2124 region=Ntsc mapper=5 submapper=0
++crc=18A04825 region=Pal mapper=4 submapper=0
++crc=18A2E74F region=Ntsc mapper=4 submapper=0
++crc=18A885B0 region=Ntsc mapper=4 submapper=0
++crc=18A9F0D9 region=Ntsc mapper=4 submapper=0
++crc=18B249E5 region=Ntsc mapper=1 submapper=0
++crc=18D44BBA region=Ntsc mapper=1 submapper=0
++crc=190E52FF region=Ntsc mapper=4 submapper=0
++crc=192D546F region=Ntsc mapper=4 submapper=0
++crc=1948810E region=Ntsc mapper=11 submapper=0
++crc=1973AEA8 region=Ntsc mapper=1 submapper=0
++crc=198C2F41 region=Ntsc mapper=1 submapper=0
++crc=198F1C37 region=Ntsc mapper=0 submapper=0
++crc=1992D163 region=Ntsc mapper=4 submapper=0
++crc=19CE7F12 region=Pal mapper=0 submapper=0
++crc=19E81461 region=Ntsc mapper=16 submapper=0
++crc=1A018A26 region=Ntsc mapper=3 submapper=0
++crc=1A2A7EF7 region=Ntsc mapper=178 submapper=0
++crc=1A2EA6B9 region=Ntsc mapper=1 submapper=0
++crc=1A7E97ED region=Ntsc mapper=1 submapper=0
++crc=1AC701B5 region=Ntsc mapper=1 submapper=0
++crc=1AE7B933 region=Ntsc mapper=1 submapper=0
++crc=1B421E9C region=Ntsc mapper=3 submapper=0
++crc=1B71CCDB region=Ntsc mapper=4 submapper=0
++crc=1B7BD879 region=Ntsc mapper=1 submapper=0
++crc=1B932BEA region=Pal mapper=4 submapper=0
++crc=1BC686A8 region=Ntsc mapper=71 submapper=0
++crc=1C212E9D region=Pal mapper=119 submapper=0
++crc=1C2A58FF region=Ntsc mapper=4 submapper=0
++crc=1C31DD60 region=Ntsc mapper=3 submapper=0
++crc=1C66BAF6 region=Ntsc mapper=2 submapper=0
++crc=1C9EA55C region=Ntsc mapper=1 submapper=0
++crc=1CB9A019 region=Ntsc mapper=4 submapper=0
++crc=1CED086F region=Ntsc mapper=5 submapper=0
++crc=1CEE0C21 region=Ntsc mapper=7 submapper=0
++crc=1CF48EF1 region=Ntsc mapper=3 submapper=0
++crc=1D0F4D6B region=Ntsc mapper=2 submapper=0
++crc=1D20A5C6 region=Ntsc mapper=4 submapper=0
++crc=1D2D93FF region=Ntsc mapper=4 submapper=0
++crc=1D41CC8C region=Ntsc mapper=3 submapper=0
++crc=1D5B03A5 region=Ntsc mapper=2 submapper=0
++crc=1D6DECCC region=Ntsc mapper=1 submapper=0
++crc=1D89610E region=Ntsc mapper=4 submapper=0
++crc=1D8BF724 region=Ntsc mapper=1 submapper=0
++crc=1DAC6208 region=Ntsc mapper=1 submapper=0
++crc=1DB07C0D region=Ntsc mapper=0 submapper=0
++crc=1DBD1D2B region=Ntsc mapper=0 submapper=0
++crc=1DC0F740 region=Ntsc mapper=210 submapper=2
++crc=1E407387 region=Ntsc mapper=0 submapper=0
++crc=1E472E7A region=Ntsc mapper=1 submapper=0
++crc=1E4D3831 region=Ntsc mapper=1 submapper=0
++crc=1EB4A920 region=Ntsc mapper=79 submapper=0
++crc=1EBB5B42 region=Ntsc mapper=1 submapper=0
++crc=1ED48C5C region=Ntsc mapper=2 submapper=0
++crc=1ED5C801 region=Pal mapper=4 submapper=0
++crc=1ED7D6BE region=Ntsc mapper=4 submapper=0
++crc=1EFE38EB region=Pal mapper=7 submapper=0
++crc=1F2D9DB7 region=Ntsc mapper=0 submapper=0
++crc=1F6660E6 region=Pal mapper=1 submapper=0
++crc=1F6EA423 region=Ntsc mapper=1 submapper=0
++crc=1F74EA6C region=Ntsc mapper=2 submapper=0
++crc=1FA8C4A4 region=Ntsc mapper=1 submapper=0
++crc=1FF251AE region=Ntsc mapper=1 submapper=0
++crc=20353E63 region=Ntsc mapper=1 submapper=0
++crc=203583D5 region=Ntsc mapper=23 submapper=0
++crc=2055971A region=Ntsc mapper=4 submapper=0
++crc=2061772A region=Ntsc mapper=2 submapper=0
++crc=209B4BED region=Ntsc mapper=26 submapper=0
++crc=209F3587 region=Ntsc mapper=1 submapper=0
++crc=20A5219B region=Ntsc mapper=4 submapper=0
++crc=20AF7E1A region=Ntsc mapper=4 submapper=0
++crc=20C5D187 region=Ntsc mapper=4 submapper=0
++crc=20C795EB region=Ntsc mapper=1 submapper=0
++crc=20CC079D region=Ntsc mapper=4 submapper=0
++crc=20F98977 region=Ntsc mapper=87 submapper=0
++crc=213CB3FB region=Ntsc mapper=4 submapper=0
++crc=219DFABF region=Ntsc mapper=2 submapper=0
++crc=21DD2174 region=Ntsc mapper=1 submapper=0
++crc=21E28F50 region=Ntsc mapper=1 submapper=0
++crc=21F2A1A6 region=Pal mapper=4 submapper=0
++crc=21F85681 region=Ntsc mapper=87 submapper=0
++crc=21F8C4AB region=Ntsc mapper=89 submapper=0
++crc=2220E14A region=Ntsc mapper=1 submapper=0
++crc=2225C20F region=Ntsc mapper=1 submapper=0
++crc=22276213 region=Ntsc mapper=11 submapper=0
++crc=227CF577 region=Ntsc mapper=4 submapper=0
++crc=22AB9694 region=Pal mapper=2 submapper=0
++crc=22D6D5BD region=Ntsc mapper=4 submapper=0
++crc=231BC76E region=Ntsc mapper=11 submapper=0
++crc=2328046E region=Ntsc mapper=7 submapper=0
++crc=2337F45E region=Ntsc mapper=3 submapper=0
++crc=2370C0A9 region=Ntsc mapper=4 submapper=0
++crc=2394AE1C region=Pal mapper=243 submapper=0
++crc=239971D1 region=Ntsc mapper=2 submapper=0
++crc=23BEFF5E region=Pal mapper=1 submapper=0
++crc=23BF0507 region=Ntsc mapper=1 submapper=0
++crc=23C3FB2D region=Ntsc mapper=1 submapper=0
++crc=23D17F5E region=Ntsc mapper=4 submapper=0
++crc=23D7D48F region=Pal mapper=7 submapper=0
++crc=23D91BC6 region=Ntsc mapper=0 submapper=0
++crc=23E03DC1 region=Ntsc mapper=0 submapper=0
++crc=23E9C736 region=Ntsc mapper=1 submapper=0
++crc=23F38647 region=Ntsc mapper=0 submapper=0
++crc=23F4B48F region=Ntsc mapper=4 submapper=0
++crc=240863B9 region=Ntsc mapper=2 submapper=0
++crc=240C6DE8 region=Ntsc mapper=1 submapper=0
++crc=240DE736 region=Ntsc mapper=4 submapper=0
++crc=243A8735 region=Ntsc mapper=32 submapper=0
++crc=2447E03B region=Ntsc mapper=210 submapper=2
++crc=24598791 region=Ntsc mapper=0 submapper=0
++crc=2470402B region=Ntsc mapper=1 submapper=0
++crc=2472C3EB region=Ntsc mapper=0 submapper=0
++crc=247CC73D region=Ntsc mapper=243 submapper=0
++crc=248566A7 region=Ntsc mapper=2 submapper=0
++crc=24BA12DD region=Ntsc mapper=71 submapper=0
++crc=24BA90CA region=Ntsc mapper=1 submapper=0
++crc=24EECC15 region=Ntsc mapper=1 submapper=0
++crc=250F7913 region=Ntsc mapper=1 submapper=0
++crc=2526C943 region=Ntsc mapper=66 submapper=0
++crc=252FFD12 region=Ntsc mapper=1 submapper=0
++crc=2538D860 region=Ntsc mapper=1 submapper=0
++crc=2545214C region=Ntsc mapper=1 submapper=0
++crc=25468546 region=Ntsc mapper=3 submapper=0
++crc=25519E6E region=Ntsc mapper=3 submapper=0
++crc=25551F3F region=Pal mapper=9 submapper=0
++crc=256392F1 region=Pal mapper=4 submapper=0
++crc=25952141 region=Ntsc mapper=4 submapper=0
++crc=25EDAF5C region=Ntsc mapper=1 submapper=0
++crc=26049798 region=Ntsc mapper=4 submapper=0
++crc=262B5A1D region=Ntsc mapper=3 submapper=0
++crc=262F31AC region=Ntsc mapper=1 submapper=0
++crc=263AC8A0 region=Ntsc mapper=4 submapper=0
++crc=264F26B1 region=Ntsc mapper=1 submapper=0
++crc=2651F227 region=Ntsc mapper=4 submapper=0
++crc=26535EF5 region=Ntsc mapper=7 submapper=0
++crc=26796758 region=Ntsc mapper=4 submapper=0
++crc=267DE4CC region=Ntsc mapper=3 submapper=0
++crc=267E592F region=Ntsc mapper=4 submapper=0
++crc=268E39D0 region=Ntsc mapper=1 submapper=0
++crc=26BB1C8C region=Ntsc mapper=3 submapper=0
++crc=26BD6EC6 region=Ntsc mapper=0 submapper=0
++crc=26BFED27 region=Ntsc mapper=4 submapper=0
++crc=26CEC726 region=Ntsc mapper=1 submapper=0
++crc=26D3082C region=Ntsc mapper=4 submapper=0
++crc=26E39935 region=Ntsc mapper=4 submapper=0
++crc=26E82008 region=Ntsc mapper=4 submapper=0
++crc=2705EAEB region=Ntsc mapper=234 submapper=0
++crc=270EAED5 region=Ntsc mapper=0 submapper=0
++crc=2746B39E region=Ntsc mapper=4 submapper=0
++crc=276237B3 region=Ntsc mapper=4 submapper=0
++crc=276AC722 region=Ntsc mapper=159 submapper=0
++crc=27738241 region=Ntsc mapper=0 submapper=0
++crc=27777635 region=Pal mapper=0 submapper=0
++crc=279710DC region=Ntsc mapper=7 submapper=0
++crc=27AA3933 region=Ntsc mapper=0 submapper=0
++crc=27C16011 region=Ntsc mapper=1 submapper=0
++crc=27CA0679 region=Pal mapper=7 submapper=0
++crc=27D14A54 region=Ntsc mapper=3 submapper=0
++crc=27D34A57 region=Ntsc mapper=4 submapper=0
++crc=27DDF227 region=Ntsc mapper=2 submapper=0
++crc=27F8D0D2 region=Ntsc mapper=4 submapper=0
++crc=280AD3C5 region=Pal mapper=1 submapper=0
++crc=282745C5 region=Ntsc mapper=191 submapper=0
++crc=283AD224 region=Ntsc mapper=32 submapper=0
++crc=28492586 region=Pal mapper=4 submapper=0
++crc=2856111F region=Ntsc mapper=1 submapper=0
++crc=2858933B region=Ntsc mapper=1 submapper=0
++crc=286FCD20 region=Ntsc mapper=21 submapper=0
++crc=28C1D3D5 region=Ntsc mapper=2 submapper=0
++crc=28C2DFCE region=Ntsc mapper=1 submapper=0
++crc=28F9B41F region=Ntsc mapper=4 submapper=0
++crc=28FB71AE region=Ntsc mapper=1 submapper=0
++crc=2915FAF0 region=Ntsc mapper=3 submapper=0
++crc=291BCD7D region=Ntsc mapper=1 submapper=0
++crc=29582CA1 region=Ntsc mapper=243 submapper=0
++crc=2969A5C1 region=Ntsc mapper=79 submapper=0
++crc=297198B9 region=Ntsc mapper=4 submapper=0
++crc=29DD37F4 region=Ntsc mapper=69 submapper=0
++crc=29DE87AF region=Ntsc mapper=3 submapper=0
++crc=29E173FF region=Ntsc mapper=0 submapper=0
++crc=29EC0FD1 region=Ntsc mapper=4 submapper=0
++crc=2A01F9D1 region=Ntsc mapper=4 submapper=0
++crc=2A1919FE region=Ntsc mapper=4 submapper=0
++crc=2A3CA509 region=Ntsc mapper=4 submapper=0
++crc=2A46B57F region=Ntsc mapper=2 submapper=0
++crc=2A5F4C5A region=Ntsc mapper=132 submapper=0
++crc=2A6559A1 region=Ntsc mapper=33 submapper=0
++crc=2A662AC7 region=Ntsc mapper=7 submapper=0
++crc=2A7D3ADF region=Ntsc mapper=19 submapper=0
++crc=2AAF0804 region=Ntsc mapper=11 submapper=0
++crc=2AC5233C region=Ntsc mapper=2 submapper=0
++crc=2AC87283 region=Ntsc mapper=0 submapper=0
++crc=2AE535CA region=Ntsc mapper=19 submapper=0
++crc=2AE97660 region=Ntsc mapper=1 submapper=0
++crc=2B11E0B0 region=Ntsc mapper=1 submapper=0
++crc=2B1497DC region=Ntsc mapper=4 submapper=0
++crc=2B160BF0 region=Ntsc mapper=4 submapper=0
++crc=2B20B022 region=Pal mapper=4 submapper=0
++crc=2B20ED9B region=Ntsc mapper=3 submapper=0
++crc=2B378D11 region=Ntsc mapper=7 submapper=0
++crc=2B462010 region=Ntsc mapper=0 submapper=0
++crc=2B4D80AE region=Ntsc mapper=4 submapper=0
++crc=2B750BF9 region=Ntsc mapper=87 submapper=0
++crc=2BA86F76 region=Ntsc mapper=3 submapper=0
++crc=2BB3DABE region=Ntsc mapper=82 submapper=0
++crc=2BB6A0F8 region=Ntsc mapper=2 submapper=0
++crc=2BC25D5A region=Ntsc mapper=1 submapper=0
++crc=2BC67AA8 region=Ntsc mapper=4 submapper=0
++crc=2BCF2132 region=Ntsc mapper=4 submapper=0
++crc=2BE254E9 region=Ntsc mapper=64 submapper=0
++crc=2BF0F9C5 region=Pal mapper=0 submapper=0
++crc=2BF61C53 region=Ntsc mapper=4 submapper=0
++crc=2BFB1186 region=Ntsc mapper=1 submapper=0
++crc=2C043781 region=Ntsc mapper=3 submapper=0
++crc=2C088DC5 region=Pal mapper=4 submapper=0
++crc=2C2DDFB4 region=Ntsc mapper=1 submapper=0
++crc=2C33161D region=Ntsc mapper=1 submapper=0
++crc=2C4421B2 region=Ntsc mapper=16 submapper=0
++crc=2C5908A7 region=Ntsc mapper=4 submapper=0
++crc=2C5FAC1C region=Ntsc mapper=1 submapper=0
++crc=2C624B5F region=Ntsc mapper=64 submapper=0
++crc=2C7D68F3 region=Ntsc mapper=0 submapper=0
++crc=2C818014 region=Ntsc mapper=9 submapper=0
++crc=2CAAE01C region=Ntsc mapper=4 submapper=0
++crc=2CECD630 region=Ntsc mapper=36 submapper=0
++crc=2CF5DB05 region=Ntsc mapper=176 submapper=0
++crc=2D020965 region=Pal mapper=1 submapper=0
++crc=2D1FEE70 region=Ntsc mapper=4 submapper=0
++crc=2D273AA4 region=Ntsc mapper=2 submapper=0
++crc=2D2F91B8 region=Ntsc mapper=1 submapper=0
++crc=2D41EF92 region=Ntsc mapper=2 submapper=0
++crc=2D664D99 region=Ntsc mapper=4 submapper=0
++crc=2D75C7A9 region=Ntsc mapper=1 submapper=0
++crc=2D8730E2 region=Ntsc mapper=0 submapper=0
++crc=2DB7C31E region=Ntsc mapper=1 submapper=0
++crc=2DBB054D region=Ntsc mapper=0 submapper=0
++crc=2DC05A6F region=Ntsc mapper=0 submapper=0
++crc=2DC331A2 region=Ntsc mapper=4 submapper=0
++crc=2DD71ACB region=Ntsc mapper=1 submapper=0
++crc=2DDC2DC3 region=Ntsc mapper=1 submapper=0
++crc=2DEB12B8 region=Ntsc mapper=3 submapper=0
++crc=2DFF7FDC region=Ntsc mapper=1 submapper=0
++crc=2E0741B6 region=Ntsc mapper=4 submapper=0
++crc=2E0F51AF region=Ntsc mapper=0 submapper=0
++crc=2E1E7FD8 region=Ntsc mapper=4 submapper=0
++crc=2E2ACAE9 region=Ntsc mapper=1 submapper=0
++crc=2E326A1D region=Ntsc mapper=4 submapper=0
++crc=2E4CCF46 region=Ntsc mapper=0 submapper=0
++crc=2E563C66 region=Ntsc mapper=4 submapper=0
++crc=2E6301ED region=Ntsc mapper=4 submapper=0
++crc=2E68ACFC region=Ntsc mapper=3 submapper=0
++crc=2E6EE98D region=Ntsc mapper=1 submapper=0
++crc=2EA8CC16 region=Ntsc mapper=2 submapper=0
++crc=2F128512 region=Ntsc mapper=3 submapper=0
++crc=2F1686E5 region=Ntsc mapper=0 submapper=0
++crc=2F2D1FA9 region=Ntsc mapper=2 submapper=0
++crc=2F2E30F7 region=Ntsc mapper=4 submapper=0
++crc=2F52BBE0 region=Ntsc mapper=148 submapper=0
++crc=2F55BE88 region=Ntsc mapper=0 submapper=0
++crc=2F66E302 region=Ntsc mapper=2 submapper=0
++crc=2F698C4D region=Ntsc mapper=3 submapper=0
++crc=2FA8CBB4 region=Ntsc mapper=79 submapper=0
++crc=2FBEA66D region=Ntsc mapper=79 submapper=0
++crc=2FC1ABAE region=Ntsc mapper=1 submapper=0
++crc=2FD2E632 region=Ntsc mapper=1 submapper=0
++crc=2FE20D79 region=Ntsc mapper=4 submapper=0
++crc=2FFDE228 region=Ntsc mapper=2 submapper=0
++crc=303D4371 region=Ntsc mapper=2 submapper=0
++crc=304FA926 region=Pal mapper=0 submapper=0
++crc=3057B904 region=Ntsc mapper=1 submapper=0
++crc=305B4E62 region=Ntsc mapper=4 submapper=0
++crc=308DA987 region=Pal mapper=7 submapper=0
++crc=30A225A8 region=Ntsc mapper=4 submapper=0
++crc=30BF2DBA region=Ntsc mapper=86 submapper=0
++crc=30C5E6CF region=Ntsc mapper=2 submapper=0
++crc=31957AE4 region=Ntsc mapper=1 submapper=0
++crc=31B44C65 region=Ntsc mapper=4 submapper=0
++crc=31C7AD13 region=Ntsc mapper=4 submapper=0
++crc=32086826 region=Ntsc mapper=3 submapper=0
++crc=322C9F6A region=Ntsc mapper=3 submapper=0
++crc=3256114C region=Ntsc mapper=4 submapper=0
++crc=326AB3B6 region=Ntsc mapper=4 submapper=0
++crc=3275FD7E region=Ntsc mapper=3 submapper=0
++crc=3293AFEA region=Ntsc mapper=66 submapper=0
++crc=329C0349 region=Ntsc mapper=0 submapper=0
++crc=32CF4307 region=Ntsc mapper=1 submapper=0
++crc=32E02CB8 region=Ntsc mapper=0 submapper=0
++crc=32FA246F region=Ntsc mapper=0 submapper=0
++crc=32FB0583 region=Ntsc mapper=3 submapper=0
++crc=33007B67 region=Ntsc mapper=177 submapper=0
++crc=330DE468 region=Ntsc mapper=0 submapper=0
++crc=3322105A region=Ntsc mapper=1 submapper=0
++crc=332C47E0 region=Ntsc mapper=4 submapper=0
++crc=333C48A0 region=Ntsc mapper=4 submapper=0
++crc=336093EF region=Ntsc mapper=66 submapper=0
++crc=3368F7FB region=Ntsc mapper=7 submapper=0
++crc=339437F6 region=Ntsc mapper=1 submapper=0
++crc=33B899C9 region=Ntsc mapper=16 submapper=0
++crc=340713DD region=Ntsc mapper=4 submapper=0
++crc=3417EC46 region=Ntsc mapper=2 submapper=0
++crc=342727B1 region=Ntsc mapper=80 submapper=0
++crc=343C7BB0 region=Ntsc mapper=3 submapper=0
++crc=34540318 region=Ntsc mapper=1 submapper=0
++crc=345D3A1A region=Ntsc mapper=11 submapper=0
++crc=34629104 region=Pal mapper=4 submapper=0
++crc=348D3FF1 region=Pal mapper=4 submapper=0
++crc=34BB757B region=Pal mapper=1 submapper=0
++crc=34C1E893 region=Pal mapper=1 submapper=0
++crc=34DDF806 region=Ntsc mapper=243 submapper=0
++crc=34DEBDFD region=Ntsc mapper=1 submapper=0
++crc=34EAB034 region=Ntsc mapper=4 submapper=0
++crc=350D835E region=Ntsc mapper=3 submapper=0
++crc=35476E87 region=Ntsc mapper=4 submapper=0
++crc=358E29DD region=Ntsc mapper=1 submapper=0
++crc=35B6FEBF region=Ntsc mapper=2 submapper=0
++crc=35C41CD4 region=Ntsc mapper=1 submapper=0
++crc=35C6F574 region=Ntsc mapper=4 submapper=0
++crc=35D8C961 region=Ntsc mapper=19 submapper=0
++crc=35EFFD0E region=Ntsc mapper=2 submapper=0
++crc=360AA8B4 region=Ntsc mapper=1 submapper=0
++crc=36584C96 region=Ntsc mapper=4 submapper=0
++crc=367566CE region=Ntsc mapper=1 submapper=0
++crc=3691C120 region=Ntsc mapper=18 submapper=0
++crc=369DA42D region=Ntsc mapper=19 submapper=0
++crc=36B35988 region=Ntsc mapper=79 submapper=0
++crc=36C3B13A region=Pal mapper=2 submapper=0
++crc=36CA3102 region=Ntsc mapper=4 submapper=0
++crc=37088EFF region=Ntsc mapper=4 submapper=0
++crc=370CEB65 region=Ntsc mapper=70 submapper=0
++crc=37138039 region=Ntsc mapper=7 submapper=0
++crc=3719A26D region=Ntsc mapper=4 submapper=0
++crc=37397194 region=Pal mapper=1 submapper=0
++crc=3747CD0B region=Ntsc mapper=0 submapper=0
++crc=37A5EB52 region=Pal mapper=4 submapper=0
++crc=37B62D04 region=Ntsc mapper=118 submapper=0
++crc=37BA3261 region=Ntsc mapper=1 submapper=0
++crc=37C474D5 region=Ntsc mapper=2 submapper=0
++crc=37CB1801 region=Ntsc mapper=2 submapper=0
++crc=37E24797 region=Ntsc mapper=4 submapper=0
++crc=37F59450 region=Ntsc mapper=2 submapper=0
++crc=3824F7A5 region=Pal mapper=1 submapper=0
++crc=3836EEAC region=Ntsc mapper=1 submapper=0
++crc=383CABBF region=Ntsc mapper=119 submapper=0
++crc=3869E598 region=Ntsc mapper=2 submapper=0
++crc=38810A91 region=Ntsc mapper=0 submapper=0
++crc=38946C43 region=Ntsc mapper=3 submapper=0
++crc=38B590E4 region=Ntsc mapper=1 submapper=0
++crc=38BFC03C region=Ntsc mapper=2 submapper=0
++crc=38DE7053 region=Pal mapper=2 submapper=0
++crc=38EF66B5 region=Ntsc mapper=87 submapper=0
++crc=38FBCC85 region=Ntsc mapper=71 submapper=0
++crc=391AA1B8 region=Ntsc mapper=1 submapper=0
++crc=396F0D59 region=Ntsc mapper=1 submapper=0
++crc=398B8182 region=Ntsc mapper=1 submapper=0
++crc=39B68AA3 region=Ntsc mapper=23 submapper=0
++crc=39BB6616 region=Ntsc mapper=1 submapper=0
++crc=39D43261 region=Ntsc mapper=4 submapper=0
++crc=39F2CE4B region=Ntsc mapper=5 submapper=0
++crc=3A0965B1 region=Ntsc mapper=2 submapper=0
++crc=3A4D4D10 region=Pal mapper=9 submapper=0
++crc=3A8723B9 region=Ntsc mapper=1 submapper=0
++crc=3A8F81B0 region=Ntsc mapper=184 submapper=0
++crc=3A990EE0 region=Ntsc mapper=71 submapper=0
++crc=3AC0830A region=Pal mapper=1 submapper=0
++crc=3B0F4DB2 region=Ntsc mapper=2 submapper=0
++crc=3B1A7EEF region=Ntsc mapper=4 submapper=0
++crc=3B3F88F0 region=Ntsc mapper=1 submapper=0
++crc=3B7F5B3B region=Ntsc mapper=4 submapper=0
++crc=3B90D11E region=Ntsc mapper=3 submapper=0
++crc=3BB31E38 region=Pal mapper=4 submapper=0
++crc=3BBFF3A6 region=Ntsc mapper=1 submapper=0
++crc=3BE244EF region=Ntsc mapper=2 submapper=0
++crc=3BE91A23 region=Ntsc mapper=4 submapper=0
++crc=3BF55966 region=Ntsc mapper=3 submapper=0
++crc=3C5C81D4 region=Ntsc mapper=4 submapper=0
++crc=3C7E38F5 region=Ntsc mapper=11 submapper=0
++crc=3CCB5D57 region=Ntsc mapper=4 submapper=0
++crc=3CD4B420 region=Ntsc mapper=33 submapper=0
++crc=3CD6BB0E region=Ntsc mapper=2 submapper=0
++crc=3CF67AEC region=Ntsc mapper=2 submapper=0
++crc=3CF749DE region=Ntsc mapper=1 submapper=0
++crc=3D0996B2 region=Ntsc mapper=1 submapper=0
++crc=3D1C3137 region=Ntsc mapper=78 submapper=0
++crc=3D1C4894 region=Ntsc mapper=4 submapper=0
++crc=3D3FF543 region=Ntsc mapper=79 submapper=0
++crc=3D4B64F1 region=Ntsc mapper=4 submapper=0
++crc=3D564757 region=Pal mapper=0 submapper=0
++crc=3D95D866 region=Ntsc mapper=3 submapper=0
++crc=3DA2085E region=Ntsc mapper=2 submapper=0
++crc=3DBD6DAF region=Pal mapper=1 submapper=0
++crc=3DCADA42 region=Ntsc mapper=2 submapper=0
++crc=3E00A373 region=Ntsc mapper=3 submapper=0
++crc=3E1271D5 region=Ntsc mapper=79 submapper=0
++crc=3E170708 region=Ntsc mapper=0 submapper=0
++crc=3E470FE0 region=Ntsc mapper=4 submapper=0
++crc=3E58A87E region=Ntsc mapper=1 submapper=0
++crc=3E59E951 region=Ntsc mapper=168 submapper=0
++crc=3E785DC3 region=Ntsc mapper=1 submapper=0
++crc=3E95BA25 region=Ntsc mapper=0 submapper=0
++crc=3ECA3DDA region=Ntsc mapper=4 submapper=0
++crc=3ECDB1F7 region=Ntsc mapper=2 submapper=0
++crc=3EDCF7E8 region=Ntsc mapper=4 submapper=0
++crc=3EEA372E region=Ntsc mapper=189 submapper=0
++crc=3EFF62E4 region=Ntsc mapper=4 submapper=0
++crc=3F0C8136 region=Ntsc mapper=1 submapper=0
++crc=3F0FD764 region=Ntsc mapper=1 submapper=0
++crc=3F15D20D region=Ntsc mapper=153 submapper=0
++crc=3F2450EA region=Ntsc mapper=0 submapper=0
++crc=3F2BDA65 region=Ntsc mapper=1 submapper=0
++crc=3F56A392 region=Ntsc mapper=1 submapper=0
++crc=3F57E040 region=Ntsc mapper=1 submapper=0
++crc=3F78037C region=Ntsc mapper=4 submapper=0
++crc=3F7AD415 region=Ntsc mapper=1 submapper=0
++crc=3F8D6889 region=Ntsc mapper=18 submapper=0
++crc=3FA96277 region=Ntsc mapper=2 submapper=0
++crc=3FC1DC19 region=Ntsc mapper=3 submapper=0
++crc=3FE272FB region=Ntsc mapper=1 submapper=0
++crc=3FEA656A region=Ntsc mapper=1 submapper=0
++crc=3FF10E3D region=Ntsc mapper=2 submapper=0
++crc=3FF44F87 region=Ntsc mapper=1 submapper=0
++crc=3FFA5762 region=Ntsc mapper=1 submapper=0
++crc=401349A8 region=Ntsc mapper=0 submapper=0
++crc=401521F7 region=Ntsc mapper=4 submapper=0
++crc=4022C94E region=Pal mapper=2 submapper=0
++crc=404B2E8B region=Ntsc mapper=4 submapper=0
++crc=4057C51B region=Ntsc mapper=3 submapper=0
++crc=40684E95 region=Ntsc mapper=3 submapper=0
++crc=407D6FFD region=Ntsc mapper=47 submapper=0
++crc=40A5E676 region=Ntsc mapper=11 submapper=0
++crc=40BFA660 region=Pal mapper=3 submapper=0
++crc=40C0AD47 region=Ntsc mapper=48 submapper=0
++crc=40D159B6 region=Ntsc mapper=1 submapper=0
++crc=40DAFCBA region=Ntsc mapper=1 submapper=0
++crc=40DBF7A2 region=Pal mapper=243 submapper=0
++crc=40ED2A9D region=Ntsc mapper=1 submapper=0
++crc=41462D21 region=Ntsc mapper=1 submapper=0
++crc=4156A3CD region=Ntsc mapper=1 submapper=0
++crc=415E5109 region=Ntsc mapper=1 submapper=0
++crc=41632CB6 region=Ntsc mapper=1 submapper=0
++crc=4178497A region=Ntsc mapper=2 submapper=0
++crc=4185ADA1 region=Pal mapper=0 submapper=0
++crc=419461D0 region=Ntsc mapper=2 submapper=0
++crc=41CC30A7 region=Ntsc mapper=1 submapper=0
++crc=41CF5B6A region=Ntsc mapper=246 submapper=0
++crc=41D32FD7 region=Pal mapper=7 submapper=0
++crc=41F5D38D region=Ntsc mapper=1 submapper=0
++crc=41F9E0AA region=Ntsc mapper=118 submapper=0
++crc=4220C170 region=Ntsc mapper=7 submapper=0
++crc=4232C609 region=Ntsc mapper=1 submapper=0
++crc=423ADA8E region=Ntsc mapper=2 submapper=0
++crc=42749A95 region=Ntsc mapper=11 submapper=0
++crc=429103C9 region=Ntsc mapper=210 submapper=2
++crc=4318A2F8 region=Ntsc mapper=1 submapper=0
++crc=4339865C region=Ntsc mapper=69 submapper=0
++crc=43539A3C region=Ntsc mapper=1 submapper=0
++crc=435AEEC6 region=Ntsc mapper=4 submapper=0
++crc=437E7B69 region=Ntsc mapper=2 submapper=0
++crc=43B0944B region=Ntsc mapper=3 submapper=0
++crc=43D01C10 region=Ntsc mapper=4 submapper=0
++crc=43D30C2F region=Ntsc mapper=0 submapper=0
++crc=441AEAE6 region=Ntsc mapper=94 submapper=0
++crc=441DE6D8 region=Pal mapper=1 submapper=0
++crc=443FC6CD region=Ntsc mapper=1 submapper=0
++crc=44B060DA region=Ntsc mapper=1 submapper=0
++crc=44D21F83 region=Ntsc mapper=0 submapper=0
++crc=44F34172 region=Ntsc mapper=0 submapper=0
++crc=44F92026 region=Ntsc mapper=1 submapper=0
++crc=4536FE1C region=Ntsc mapper=2 submapper=0
++crc=455CA7DE region=Ntsc mapper=0 submapper=0
++crc=4582F22E region=Ntsc mapper=4 submapper=0
++crc=45878D7F region=Ntsc mapper=4 submapper=0
++crc=459D0C2A region=Ntsc mapper=1 submapper=0
++crc=45A41784 region=Ntsc mapper=4 submapper=0
++crc=45A9DB6F region=Pal mapper=2 submapper=0
++crc=45F03D2E region=Ntsc mapper=1 submapper=0
++crc=46135141 region=Ntsc mapper=2 submapper=0
++crc=4640EBE0 region=Ntsc mapper=1 submapper=0
++crc=4642DDA6 region=Ntsc mapper=1 submapper=0
++crc=46480432 region=Pal mapper=1 submapper=0
++crc=464A67AB region=Pal mapper=0 submapper=0
++crc=465E5483 region=Ntsc mapper=4 submapper=0
++crc=466EFDC2 region=Ntsc mapper=1 submapper=0
++crc=4681691A region=Ntsc mapper=1 submapper=0
++crc=4686C5DD region=Ntsc mapper=41 submapper=0
++crc=46931EA0 region=Pal mapper=1 submapper=0
++crc=46B5751B region=Ntsc mapper=244 submapper=0
++crc=46E0D37D region=Ntsc mapper=1 submapper=0
++crc=46F30F2D region=Ntsc mapper=1 submapper=0
++crc=46FD7843 region=Ntsc mapper=210 submapper=2
++crc=471173E7 region=Pal mapper=243 submapper=0
++crc=47232739 region=Ntsc mapper=1 submapper=0
++crc=4751A751 region=Ntsc mapper=1 submapper=0
++crc=475CDBFE region=Ntsc mapper=72 submapper=0
++crc=476E022B region=Ntsc mapper=4 submapper=0
++crc=477A478D region=Ntsc mapper=3 submapper=0
++crc=47918D84 region=Pal mapper=243 submapper=0
++crc=47B6A39F region=Pal mapper=1 submapper=0
++crc=47C2020B region=Ntsc mapper=19 submapper=0
++crc=47EA8047 region=Pal mapper=0 submapper=0
++crc=47F7F860 region=Ntsc mapper=4 submapper=0
++crc=47FD88CF region=Pal mapper=1 submapper=0
++crc=481519B1 region=Ntsc mapper=1 submapper=0
++crc=48239B42 region=Ntsc mapper=113 submapper=0
++crc=4823EEFE region=Ntsc mapper=1 submapper=0
++crc=482C79AF region=Ntsc mapper=1 submapper=0
++crc=48349B0B region=Ntsc mapper=2 submapper=0
++crc=484A60DB region=Ntsc mapper=2 submapper=0
++crc=485AC098 region=Ntsc mapper=3 submapper=0
++crc=4864C304 region=Ntsc mapper=0 submapper=0
++crc=489D19AB region=Ntsc mapper=1 submapper=0
++crc=489EF6A2 region=Ntsc mapper=1 submapper=0
++crc=48B8EE58 region=Pal mapper=1 submapper=0
++crc=48CA0EE1 region=Ntsc mapper=69 submapper=0
++crc=48E904D0 region=Ntsc mapper=1 submapper=0
++crc=48F68D40 region=Ntsc mapper=0 submapper=0
++crc=490E8A4C region=Ntsc mapper=25 submapper=0
++crc=49123146 region=Ntsc mapper=23 submapper=0
++crc=491CD95E region=Ntsc mapper=0 submapper=0
++crc=491D8CDB region=Ntsc mapper=4 submapper=0
++crc=493BD2FF region=Ntsc mapper=0 submapper=0
++crc=4942BDA8 region=Ntsc mapper=4 submapper=0
++crc=498187B6 region=Ntsc mapper=1 submapper=0
++crc=49AEB3A6 region=Ntsc mapper=0 submapper=0
++crc=49DA2F76 region=Ntsc mapper=18 submapper=0
++crc=49F745E0 region=Ntsc mapper=1 submapper=0
++crc=4A601A2C region=Ntsc mapper=25 submapper=0
++crc=4A99B47E region=Ntsc mapper=0 submapper=0
++crc=4AE58F5D region=Ntsc mapper=18 submapper=0
++crc=4AEA40F7 region=Ntsc mapper=4 submapper=0
++crc=4B041B6B region=Ntsc mapper=7 submapper=0
++crc=4B0DACCE region=Ntsc mapper=1 submapper=0
++crc=4B40CBD9 region=Ntsc mapper=232 submapper=0
++crc=4B5177E9 region=Ntsc mapper=4 submapper=0
++crc=4B6EF399 region=Ntsc mapper=188 submapper=0
++crc=4B750880 region=Pal mapper=4 submapper=0
++crc=4BB6B430 region=Ntsc mapper=3 submapper=0
++crc=4BB9B840 region=Pal mapper=4 submapper=0
++crc=4BC75F16 region=Ntsc mapper=11 submapper=0
++crc=4BF80AF8 region=Ntsc mapper=0 submapper=0
++crc=4C049CFE region=Ntsc mapper=69 submapper=0
++crc=4C0E8BBB region=Ntsc mapper=1 submapper=0
++crc=4C5836BD region=Ntsc mapper=19 submapper=0
++crc=4D1AC58C region=Ntsc mapper=1 submapper=0
++crc=4D1DF589 region=Pal mapper=1 submapper=0
++crc=4D345422 region=Pal mapper=1 submapper=0
++crc=4D3FBA78 region=Ntsc mapper=1 submapper=0
++crc=4D527D4A region=Ntsc mapper=11 submapper=0
++crc=4D68CFB1 region=Ntsc mapper=38 submapper=0
++crc=4D7859A9 region=Ntsc mapper=69 submapper=0
++crc=4D7D896C region=Pal mapper=0 submapper=0
++crc=4DCD15EE region=Ntsc mapper=1 submapper=0
++crc=4DFD949E region=Ntsc mapper=0 submapper=0
++crc=4E22368D region=Ntsc mapper=2 submapper=0
++crc=4E42F13A region=Ntsc mapper=2 submapper=0
++crc=4E44FF44 region=Ntsc mapper=4 submapper=0
++crc=4E5257D7 region=Ntsc mapper=1 submapper=0
++crc=4E77733A region=Ntsc mapper=4 submapper=0
++crc=4E959173 region=Ntsc mapper=3 submapper=0
++crc=4E99CEA4 region=Ntsc mapper=4 submapper=0
++crc=4EC0FECC region=Pal mapper=4 submapper=0
++crc=4ECD4624 region=Ntsc mapper=4 submapper=0
++crc=4ED3C6F1 region=Ntsc mapper=1 submapper=0
++crc=4ED5AA56 region=Ntsc mapper=1 submapper=0
++crc=4F032933 region=Ntsc mapper=4 submapper=0
++crc=4F089E8A region=Pal mapper=4 submapper=0
++crc=4F16C504 region=Ntsc mapper=4 submapper=0
++crc=4F2F1846 region=Ntsc mapper=206 submapper=0
++crc=4F3B2E57 region=Ntsc mapper=66 submapper=0
++crc=4F467410 region=Ntsc mapper=1 submapper=0
++crc=4F48B240 region=Pal mapper=2 submapper=0
++crc=4F74E236 region=Ntsc mapper=2 submapper=0
++crc=4F9DBBE5 region=Ntsc mapper=2 submapper=0
++crc=4FBBE319 region=Ntsc mapper=1 submapper=0
++crc=4FC2F673 region=Ntsc mapper=75 submapper=0
++crc=505F9715 region=Ntsc mapper=7 submapper=0
++crc=5062A34B region=Ntsc mapper=184 submapper=0
++crc=506E259D region=Ntsc mapper=1 submapper=0
++crc=50893B58 region=Ntsc mapper=1 submapper=0
++crc=509E6032 region=Pal mapper=2 submapper=0
++crc=50A1B3FE region=Ntsc mapper=0 submapper=0
++crc=50CCC8ED region=Ntsc mapper=3 submapper=0
++crc=50CCDA33 region=Ntsc mapper=1 submapper=0
++crc=50D141FC region=Ntsc mapper=1 submapper=0
++crc=50D296B3 region=Ntsc mapper=1 submapper=0
++crc=50DA4867 region=Ntsc mapper=4 submapper=0
++crc=50F3E338 region=Ntsc mapper=188 submapper=0
++crc=50FD0CC6 region=Ntsc mapper=4 submapper=0
++crc=5104833E region=Ntsc mapper=4 submapper=0
++crc=5112DC21 region=Ntsc mapper=0 submapper=0
++crc=516B2412 region=Ntsc mapper=4 submapper=0
++crc=517611FE region=Ntsc mapper=0 submapper=0
++crc=51BD8336 region=Ntsc mapper=2 submapper=0
++crc=51BEE3EA region=Ntsc mapper=1 submapper=0
++crc=51BF28AF region=Pal mapper=7 submapper=0
++crc=51C51C35 region=Pal mapper=3 submapper=0
++crc=51C70247 region=Ntsc mapper=11 submapper=0
++crc=5229FCDD region=Ntsc mapper=2 submapper=0
++crc=52387646 region=Ntsc mapper=1 submapper=0
++crc=5248CAF3 region=Ntsc mapper=1 submapper=0
++crc=524A5A32 region=Pal mapper=7 submapper=0
++crc=52880295 region=Ntsc mapper=1 submapper=0
++crc=529B621F region=Ntsc mapper=1 submapper=0
++crc=52B58732 region=Ntsc mapper=4 submapper=0
++crc=52E2B5E0 region=Ntsc mapper=4 submapper=0
++crc=530BCCB4 region=Ntsc mapper=4 submapper=0
++crc=5318CDB9 region=Ntsc mapper=4 submapper=0
++crc=532A27E6 region=Ntsc mapper=4 submapper=0
++crc=53328FC4 region=Ntsc mapper=2 submapper=0
++crc=5337F73C region=Ntsc mapper=4 submapper=0
++crc=535C5446 region=Ntsc mapper=3 submapper=0
++crc=536E5200 region=Ntsc mapper=0 submapper=0
++crc=538218B2 region=Pal mapper=2 submapper=0
++crc=538CD2EA region=Ntsc mapper=1 submapper=0
++crc=5393D949 region=Ntsc mapper=76 submapper=0
++crc=5397E80B region=Ntsc mapper=4 submapper=0
++crc=53A9B53A region=Pal mapper=1 submapper=0
++crc=53A9E2BA region=Ntsc mapper=4 submapper=0
++crc=5440811C region=Ntsc mapper=2 submapper=0
++crc=548A2C3C region=Ntsc mapper=4 submapper=0
++crc=54E43C57 region=Pal mapper=4 submapper=0
++crc=5529431F region=Pal mapper=1 submapper=0
++crc=55397DB3 region=Ntsc mapper=4 submapper=0
++crc=555042B3 region=Ntsc mapper=3 submapper=0
++crc=55761931 region=Ntsc mapper=0 submapper=0
++crc=55773880 region=Ntsc mapper=2 submapper=0
++crc=5581E835 region=Ntsc mapper=0 submapper=0
++crc=55B4052B region=Ntsc mapper=2 submapper=0
++crc=55DB7E2A region=Ntsc mapper=4 submapper=0
++crc=560BF5A6 region=Ntsc mapper=11 submapper=0
++crc=563C2CC0 region=Ntsc mapper=4 submapper=0
++crc=563E394A region=Ntsc mapper=150 submapper=0
++crc=565A4681 region=Ntsc mapper=1 submapper=0
++crc=565B1BDB region=Pal mapper=0 submapper=0
++crc=56756615 region=Ntsc mapper=1 submapper=0
++crc=567E1620 region=Ntsc mapper=1 submapper=0
++crc=56B9F640 region=Ntsc mapper=216 submapper=0
++crc=56F05853 region=Pal mapper=4 submapper=0
++crc=5734EB9E region=Ntsc mapper=3 submapper=0
++crc=5746A461 region=Ntsc mapper=19 submapper=0
++crc=574E5F8B region=Ntsc mapper=1 submapper=0
++crc=576A0DE8 region=Ntsc mapper=2 submapper=0
++crc=57AC67AF region=Ntsc mapper=4 submapper=0
++crc=57C2AE4E region=Ntsc mapper=4 submapper=0
++crc=57D162F1 region=Ntsc mapper=4 submapper=0
++crc=57DD23D1 region=Ntsc mapper=1 submapper=0
++crc=57E220D0 region=Ntsc mapper=4 submapper=0
++crc=57E9B21C region=Ntsc mapper=1 submapper=0
++crc=5800BE2D region=Ntsc mapper=4 submapper=0
++crc=58152B42 region=Ntsc mapper=142 submapper=0
++crc=58507BC9 region=Ntsc mapper=1 submapper=0
++crc=585BA83D region=Pal mapper=4 submapper=0
++crc=586A3277 region=Ntsc mapper=3 submapper=0
++crc=588A31FE region=Ntsc mapper=1 submapper=0
++crc=588E7492 region=Ntsc mapper=1 submapper=0
++crc=58C7DDAF region=Ntsc mapper=4 submapper=0
++crc=58D1F46A region=Pal mapper=0 submapper=0
++crc=58E63E82 region=Ntsc mapper=112 submapper=0
++crc=59280BEC region=Ntsc mapper=4 submapper=0
++crc=5931BE01 region=Ntsc mapper=1 submapper=0
++crc=59449E3B region=Ntsc mapper=4 submapper=0
++crc=5991B9D0 region=Ntsc mapper=4 submapper=0
++crc=59977A46 region=Ntsc mapper=0 submapper=0
++crc=5A0454F3 region=Ntsc mapper=4 submapper=0
++crc=5A18F611 region=Ntsc mapper=2 submapper=0
++crc=5A4F156D region=Ntsc mapper=1 submapper=0
++crc=5A5A0CD9 region=Ntsc mapper=1 submapper=0
++crc=5A62F17F region=Ntsc mapper=4 submapper=0
++crc=5A6860F1 region=Ntsc mapper=4 submapper=0
++crc=5A8B4DA8 region=Ntsc mapper=1 submapper=0
++crc=5AB54795 region=Ntsc mapper=1 submapper=0
++crc=5ABBF861 region=Ntsc mapper=1 submapper=0
++crc=5ADBF660 region=Ntsc mapper=25 submapper=0
++crc=5AEFBC94 region=Pal mapper=150 submapper=0
++crc=5B16A3C8 region=Ntsc mapper=11 submapper=0
++crc=5B457641 region=Ntsc mapper=16 submapper=0
++crc=5B4B6056 region=Ntsc mapper=4 submapper=0
++crc=5B4C6146 region=Ntsc mapper=4 submapper=0
++crc=5B5AB1F8 region=Pal mapper=4 submapper=0
++crc=5B6CA654 region=Ntsc mapper=1 submapper=0
++crc=5B7AC91F region=Ntsc mapper=18 submapper=0
++crc=5B837E8D region=Ntsc mapper=1 submapper=0
++crc=5BB62688 region=Ntsc mapper=4 submapper=0
++crc=5BC9D7A1 region=Ntsc mapper=1 submapper=0
++crc=5C123EF7 region=Ntsc mapper=4 submapper=0
++crc=5C5A1AB8 region=Ntsc mapper=3 submapper=0
++crc=5C9063E0 region=Ntsc mapper=0 submapper=0
++crc=5CAA3E61 region=Ntsc mapper=144 submapper=0
++crc=5CD5FDA4 region=Ntsc mapper=66 submapper=0
++crc=5CDB2823 region=Ntsc mapper=0 submapper=0
++crc=5CE55F5B region=Pal mapper=3 submapper=0
++crc=5CF536F4 region=Ntsc mapper=4 submapper=0
++crc=5CF6A82E region=Ntsc mapper=1 submapper=0
++crc=5D0D3047 region=Pal mapper=4 submapper=0
++crc=5D105C10 region=Ntsc mapper=4 submapper=0
++crc=5D1301C5 region=Ntsc mapper=0 submapper=0
++crc=5D2444D7 region=Ntsc mapper=86 submapper=0
++crc=5D2B1962 region=Pal mapper=4 submapper=0
++crc=5D40C08A region=Ntsc mapper=2 submapper=0
++crc=5D99053D region=Pal mapper=3 submapper=0
++crc=5DA9CEC8 region=Ntsc mapper=11 submapper=0
++crc=5DBD6099 region=Ntsc mapper=1 submapper=0
++crc=5DC9BC41 region=Ntsc mapper=7 submapper=0
++crc=5DCE2EEA region=Ntsc mapper=1 submapper=0
++crc=5DE61639 region=Ntsc mapper=1 submapper=0
++crc=5DEC84F8 region=Ntsc mapper=1 submapper=0
++crc=5E24EEDA region=Ntsc mapper=4 submapper=0
++crc=5E345B6D region=Ntsc mapper=0 submapper=0
++crc=5E36D3BE region=Ntsc mapper=113 submapper=0
++crc=5E66EAEA region=Ntsc mapper=13 submapper=0
++crc=5E6D9975 region=Pal mapper=7 submapper=0
++crc=5E767671 region=Ntsc mapper=2 submapper=0
++crc=5E900522 region=Ntsc mapper=1 submapper=0
++crc=5EA7D410 region=Ntsc mapper=4 submapper=0
++crc=5EB8E707 region=Ntsc mapper=1 submapper=0
++crc=5ED6F221 region=Ntsc mapper=4 submapper=0
++crc=5EDEC8CD region=Ntsc mapper=1 submapper=0
++crc=5EE6008E region=Ntsc mapper=1 submapper=0
++crc=5F0BCE2A region=Ntsc mapper=1 submapper=0
++crc=5F14DC48 region=Ntsc mapper=4 submapper=0
++crc=5F2C3195 region=Ntsc mapper=4 submapper=0
++crc=5F5BFA54 region=Ntsc mapper=11 submapper=0
++crc=5F6E8A07 region=Ntsc mapper=66 submapper=0
++crc=5FAB6BCE region=Ntsc mapper=0 submapper=0
++crc=5FD2AAB1 region=Ntsc mapper=4 submapper=0
++crc=6025C660 region=Ntsc mapper=11 submapper=0
++crc=603AAA57 region=Ntsc mapper=4 submapper=0
++crc=6058C65D region=Ntsc mapper=0 submapper=0
++crc=607BD020 region=Pal mapper=1 submapper=0
++crc=60925D08 region=Pal mapper=1 submapper=0
++crc=60A3B803 region=Ntsc mapper=3 submapper=0
++crc=60A59624 region=Ntsc mapper=113 submapper=0
++crc=60AA9AE0 region=Ntsc mapper=2 submapper=0
++crc=60AD090A region=Ntsc mapper=3 submapper=0
++crc=60E563F1 region=Ntsc mapper=2 submapper=0
++crc=60E63537 region=Ntsc mapper=1 submapper=0
++crc=60EA98A0 region=Ntsc mapper=1 submapper=0
++crc=61061352 region=Ntsc mapper=112 submapper=0
++crc=61179BFA region=Ntsc mapper=4 submapper=0
++crc=61253D1C region=Ntsc mapper=11 submapper=0
++crc=6150517C region=Ntsc mapper=1 submapper=0
++crc=619BEA12 region=Ntsc mapper=4 submapper=0
++crc=61A852EA region=Ntsc mapper=1 submapper=0
++crc=61B4295A region=Ntsc mapper=87 submapper=0
++crc=61D86167 region=Ntsc mapper=1 submapper=0
++crc=62217BA7 region=Ntsc mapper=184 submapper=0
++crc=622E054A region=Pal mapper=1 submapper=0
++crc=622F059D region=Ntsc mapper=0 submapper=0
++crc=623020FB region=Ntsc mapper=3 submapper=0
++crc=626ABD49 region=Ntsc mapper=4 submapper=0
++crc=6272C549 region=Pal mapper=4 submapper=0
++crc=62C67984 region=Ntsc mapper=1 submapper=0
++crc=62E2E7FC region=Ntsc mapper=4 submapper=0
++crc=6328B44D region=Pal mapper=4 submapper=0
++crc=63338C3C region=Ntsc mapper=0 submapper=0
++crc=63469396 region=Ntsc mapper=1 submapper=0
++crc=636923BB region=Ntsc mapper=0 submapper=0
++crc=637134E8 region=Ntsc mapper=193 submapper=0
++crc=6377CB75 region=Ntsc mapper=1 submapper=0
++crc=637A7ACB region=Ntsc mapper=1 submapper=0
++crc=637FE65C region=Ntsc mapper=79 submapper=0
++crc=638DBC52 region=Ntsc mapper=193 submapper=0
++crc=6396B988 region=Ntsc mapper=5 submapper=0
++crc=63AEA200 region=Ntsc mapper=0 submapper=0
++crc=63C4E122 region=Ntsc mapper=1 submapper=0
++crc=63D38B86 region=Ntsc mapper=71 submapper=0
++crc=63D3AFF4 region=Ntsc mapper=4 submapper=0
++crc=63E992AC region=Ntsc mapper=2 submapper=0
++crc=63FCC0DD region=Ntsc mapper=1 submapper=0
++crc=6435C095 region=Ntsc mapper=1 submapper=0
++crc=6439F53A region=Ntsc mapper=1 submapper=0
++crc=644E312B region=Ntsc mapper=1 submapper=0
++crc=6479E76A region=Ntsc mapper=18 submapper=0
++crc=64A02715 region=Ntsc mapper=1 submapper=0
++crc=64B710D2 region=Ntsc mapper=2 submapper=0
++crc=64B8CDE2 region=Ntsc mapper=64 submapper=0
++crc=64BBCB77 region=Ntsc mapper=0 submapper=0
++crc=64BD6CDB region=Ntsc mapper=1 submapper=0
++crc=64C0FA3B region=Ntsc mapper=2 submapper=0
++crc=64C96F53 region=Ntsc mapper=0 submapper=0
++crc=64FD3BA6 region=Ntsc mapper=4 submapper=0
++crc=652F3324 region=Ntsc mapper=18 submapper=0
++crc=654F4E90 region=Pal mapper=1 submapper=0
++crc=65518EAE region=Ntsc mapper=1 submapper=0
++crc=655EFEED region=Ntsc mapper=2 submapper=0
++crc=656D4265 region=Ntsc mapper=0 submapper=0
++crc=656FA3B5 region=Ntsc mapper=87 submapper=0
++crc=657F7875 region=Ntsc mapper=0 submapper=0
++crc=65B6AF68 region=Ntsc mapper=0 submapper=0
++crc=65D1AB64 region=Pal mapper=4 submapper=0
++crc=66066326 region=Pal mapper=4 submapper=0
++crc=662B8C9C region=Ntsc mapper=0 submapper=0
++crc=666BE5EC region=Pal mapper=4 submapper=0
++crc=668D1715 region=Pal mapper=4 submapper=0
++crc=66DD04E1 region=Ntsc mapper=1 submapper=0
++crc=66EBDB64 region=Pal mapper=2 submapper=0
++crc=66ED9C00 region=Ntsc mapper=4 submapper=0
++crc=66F4D9F5 region=Ntsc mapper=1 submapper=0
++crc=66F6A39E region=Pal mapper=1 submapper=0
++crc=671F23A8 region=Pal mapper=5 submapper=0
++crc=6720ABAC region=Pal mapper=4 submapper=0
++crc=67555417 region=Ntsc mapper=4 submapper=0
++crc=6772CA86 region=Ntsc mapper=4 submapper=0
++crc=67751094 region=Ntsc mapper=1 submapper=0
++crc=6776A977 region=Ntsc mapper=3 submapper=0
++crc=67811DA6 region=Ntsc mapper=3 submapper=0
++crc=67861A27 region=Ntsc mapper=0 submapper=0
++crc=67A3C362 region=Ntsc mapper=1 submapper=0
++crc=67CBC0A0 region=Pal mapper=4 submapper=0
++crc=67D5C3F9 region=Ntsc mapper=2 submapper=0
++crc=67F77118 region=Ntsc mapper=1 submapper=0
++crc=67FC2E40 region=Ntsc mapper=69 submapper=0
++crc=6800C5B3 region=Ntsc mapper=4 submapper=0
++crc=680D2EDA region=Ntsc mapper=150 submapper=0
++crc=680DA78D region=Ntsc mapper=11 submapper=0
++crc=681798A8 region=Pal mapper=3 submapper=0
++crc=68379FDB region=Ntsc mapper=79 submapper=0
++crc=68383607 region=Ntsc mapper=7 submapper=0
++crc=684AFCCD region=Ntsc mapper=3 submapper=0
++crc=684B292F region=Ntsc mapper=19 submapper=0
++crc=6866A989 region=Ntsc mapper=1 submapper=0
++crc=689971F9 region=Ntsc mapper=1 submapper=0
++crc=68AFEF5F region=Ntsc mapper=3 submapper=0
++crc=68C62E50 region=Pal mapper=4 submapper=0
++crc=68CF9B78 region=Pal mapper=1 submapper=0
++crc=68EC97CB region=Ntsc mapper=1 submapper=0
++crc=68F9B5F5 region=Pal mapper=1 submapper=0
++crc=690AFE9F region=Pal mapper=4 submapper=0
++crc=692F2096 region=Ntsc mapper=11 submapper=0
++crc=6944A01A region=Ntsc mapper=4 submapper=0
++crc=694C801F region=Pal mapper=7 submapper=0
++crc=695515A2 region=Ntsc mapper=1 submapper=0
++crc=69565F13 region=Ntsc mapper=4 submapper=0
++crc=69635A6E region=Ntsc mapper=1 submapper=0
++crc=696D7839 region=Ntsc mapper=1 submapper=0
++crc=6997F5E1 region=Ntsc mapper=3 submapper=0
++crc=699FA085 region=Ntsc mapper=0 submapper=0
++crc=69BCDB8B region=Ntsc mapper=1 submapper=0
++crc=69D07DDB region=Ntsc mapper=2 submapper=0
++crc=69FEECB2 region=Ntsc mapper=3 submapper=0
++crc=6A154B68 region=Ntsc mapper=3 submapper=0
++crc=6A1F628A region=Ntsc mapper=4 submapper=0
++crc=6A457A43 region=Ntsc mapper=3 submapper=0
++crc=6A483073 region=Ntsc mapper=11 submapper=0
++crc=6A6B7239 region=Ntsc mapper=2 submapper=0
++crc=6A88579F region=Ntsc mapper=7 submapper=0
++crc=6ABAD366 region=Ntsc mapper=1 submapper=0
++crc=6AE69227 region=Ntsc mapper=4 submapper=0
++crc=6AE762AE region=Ntsc mapper=0 submapper=0
++crc=6B53006A region=Ntsc mapper=1 submapper=0
++crc=6B761858 region=Pal mapper=1 submapper=0
++crc=6BB6A0CE region=Ntsc mapper=1 submapper=0
++crc=6BC33D2F region=Ntsc mapper=4 submapper=0
++crc=6BC65D7E region=Ntsc mapper=66 submapper=0
++crc=6BD7047A region=Ntsc mapper=79 submapper=0
++crc=6C1AB645 region=Pal mapper=4 submapper=0
++crc=6C4A9735 region=Pal mapper=1 submapper=0
++crc=6C61B622 region=Ntsc mapper=72 submapper=0
++crc=6C70A17B region=Ntsc mapper=2 submapper=0
++crc=6C93377C region=Ntsc mapper=71 submapper=0
++crc=6C940A59 region=Ntsc mapper=4 submapper=0
++crc=6CCA1C1F region=Ntsc mapper=3 submapper=0
++crc=6CD46979 region=Ntsc mapper=3 submapper=0
++crc=6CD9CC23 region=Ntsc mapper=1 submapper=0
++crc=6CDC0CD9 region=Ntsc mapper=48 submapper=0
++crc=6D65CAC6 region=Ntsc mapper=2 submapper=0
++crc=6DC28B5A region=Ntsc mapper=25 submapper=0
++crc=6DCBAAFD region=Pal mapper=4 submapper=0
++crc=6DCE4B23 region=Ntsc mapper=1 submapper=0
++crc=6DECD886 region=Ntsc mapper=1 submapper=0
++crc=6E0EB43E region=Ntsc mapper=2 submapper=0
++crc=6E4DCFD2 region=Ntsc mapper=4 submapper=0
++crc=6E68E31A region=Ntsc mapper=16 submapper=0
++crc=6E85D8DD region=Ntsc mapper=1 submapper=0
++crc=6EC51DE5 region=Ntsc mapper=210 submapper=2
++crc=6ED31CCD region=Ntsc mapper=1 submapper=0
++crc=6EE4BB0A region=Ntsc mapper=2 submapper=0
++crc=6EE94D32 region=Ntsc mapper=4 submapper=0
++crc=6EEA1B10 region=Ntsc mapper=1 submapper=0
++crc=6F10097D region=Ntsc mapper=1 submapper=0
++crc=6F27300B region=Ntsc mapper=1 submapper=0
++crc=6F4E4312 region=Ntsc mapper=5 submapper=0
++crc=6F5D9B2A region=Ntsc mapper=32 submapper=0
++crc=6F6686B0 region=Ntsc mapper=65 submapper=0
++crc=6F790F9B region=Ntsc mapper=2 submapper=0
++crc=6F8AF3E8 region=Ntsc mapper=4 submapper=0
++crc=6F97C721 region=Ntsc mapper=0 submapper=0
++crc=6FB349E2 region=Ntsc mapper=4 submapper=0
++crc=6FD5A271 region=Ntsc mapper=4 submapper=0
++crc=6FD69F34 region=Ntsc mapper=1 submapper=0
++crc=7002FE8D region=Pal mapper=2 submapper=0
++crc=70080810 region=Ntsc mapper=1 submapper=0
++crc=701B1ADF region=Ntsc mapper=4 submapper=0
++crc=705BD7C3 region=Ntsc mapper=4 submapper=0
++crc=7077B075 region=Ntsc mapper=1 submapper=0
++crc=7080D1F8 region=Ntsc mapper=3 submapper=0
++crc=70860FCA region=Ntsc mapper=0 submapper=0
++crc=708EA2BE region=Ntsc mapper=4 submapper=0
++crc=709C9399 region=Pal mapper=1 submapper=0
++crc=70CE3771 region=Ntsc mapper=2 submapper=0
++crc=70F31D2C region=Pal mapper=71 submapper=0
++crc=70F67AB7 region=Ntsc mapper=1 submapper=0
++crc=711896B8 region=Ntsc mapper=1 submapper=0
++crc=711C2B0E region=Ntsc mapper=4 submapper=0
++crc=7156CB4D region=Ntsc mapper=1 submapper=0
++crc=716DAEA5 region=Ntsc mapper=19 submapper=0
++crc=7172F3D4 region=Ntsc mapper=1 submapper=0
++crc=719571B3 region=Pal mapper=0 submapper=0
++crc=71BF075F region=Ntsc mapper=1 submapper=0
++crc=71C01B19 region=Ntsc mapper=0 submapper=0
++crc=71C9ED1E region=Ntsc mapper=1 submapper=0
++crc=71CAF097 region=Ntsc mapper=0 submapper=0
++crc=71D8C6E9 region=Ntsc mapper=1 submapper=0
++crc=721B5217 region=Ntsc mapper=2 submapper=0
++crc=728BFA8D region=Ntsc mapper=0 submapper=0
++crc=72928698 region=Ntsc mapper=69 submapper=0
++crc=72E66392 region=Ntsc mapper=11 submapper=0
++crc=72FA78C3 region=Ntsc mapper=139 submapper=0
++crc=73140EEF region=Ntsc mapper=11 submapper=0
++crc=7329118D region=Ntsc mapper=2 submapper=0
++crc=73298C87 region=Pal mapper=4 submapper=0
++crc=73418721 region=Ntsc mapper=0 submapper=0
++crc=73620901 region=Ntsc mapper=2 submapper=0
++crc=736FEBC4 region=Ntsc mapper=4 submapper=0
++crc=739A1027 region=Ntsc mapper=0 submapper=0
++crc=73C09BCB region=Ntsc mapper=3 submapper=0
++crc=73C246D4 region=Ntsc mapper=11 submapper=0
++crc=73C7FCF4 region=Ntsc mapper=2 submapper=0
++crc=73D5F7D3 region=Ntsc mapper=0 submapper=0
++crc=73E41AC7 region=Ntsc mapper=1 submapper=0
++crc=73F7E5D8 region=Ntsc mapper=1 submapper=0
++crc=73FB55AC region=Ntsc mapper=243 submapper=0
++crc=7416903F region=Ntsc mapper=4 submapper=0
++crc=74189E12 region=Ntsc mapper=1 submapper=0
++crc=743387FF region=Ntsc mapper=85 submapper=0
++crc=74386F15 region=Ntsc mapper=1 submapper=0
++crc=74663267 region=Ntsc mapper=1 submapper=0
++crc=7474AC92 region=Ntsc mapper=4 submapper=0
++crc=74920C13 region=Ntsc mapper=168 submapper=0
++crc=74BEA652 region=Ntsc mapper=3 submapper=0
++crc=74EE0FFC region=Ntsc mapper=1 submapper=0
++crc=74F0A89F region=Ntsc mapper=185 submapper=0
++crc=75255F88 region=Ntsc mapper=1 submapper=0
++crc=752743EC region=Ntsc mapper=1 submapper=0
++crc=753768A6 region=Ntsc mapper=4 submapper=0
++crc=757EFB63 region=Ntsc mapper=0 submapper=0
++crc=75901B18 region=Ntsc mapper=1 submapper=0
++crc=759418D2 region=Pal mapper=2 submapper=0
++crc=75A7E399 region=Ntsc mapper=0 submapper=0
++crc=75B3EB37 region=Ntsc mapper=18 submapper=0
++crc=75C3E7D4 region=Pal mapper=3 submapper=0
++crc=7653103A region=Pal mapper=4 submapper=0
++crc=7678F1D5 region=Ntsc mapper=80 submapper=0
++crc=768A1B6A region=Ntsc mapper=4 submapper=0
++crc=76C161E3 region=Pal mapper=1 submapper=0
++crc=771C8855 region=Ntsc mapper=4 submapper=0
++crc=771CE357 region=Ntsc mapper=1 submapper=0
++crc=7739672E region=Ntsc mapper=0 submapper=0
++crc=77512388 region=Ntsc mapper=0 submapper=0
++crc=7751588D region=Pal mapper=1 submapper=0
++crc=77833016 region=Ntsc mapper=0 submapper=0
++crc=77BF8B23 region=Ntsc mapper=0 submapper=0
++crc=77D59400 region=Ntsc mapper=0 submapper=0
++crc=77DA06CF region=Ntsc mapper=115 submapper=0
++crc=77DCBBA3 region=Ntsc mapper=1 submapper=0
++crc=77F0F71D region=Ntsc mapper=4 submapper=0
++crc=78211EBF region=Ntsc mapper=4 submapper=0
++crc=7840B18D region=Ntsc mapper=4 submapper=0
++crc=784272F2 region=Ntsc mapper=2 submapper=0
++crc=78A48B23 region=Ntsc mapper=0 submapper=0
++crc=78B657AC region=Ntsc mapper=118 submapper=0
++crc=78C4460D region=Ntsc mapper=1 submapper=0
++crc=78C72C75 region=Ntsc mapper=1 submapper=0
++crc=78CC796B region=Ntsc mapper=4 submapper=0
++crc=790B295B region=Pal mapper=4 submapper=0
++crc=792070A9 region=Ntsc mapper=232 submapper=0
++crc=794CAAB6 region=Ntsc mapper=75 submapper=0
++crc=795BC424 region=Pal mapper=137 submapper=0
++crc=79698B98 region=Ntsc mapper=4 submapper=0
++crc=7980C4F7 region=Ntsc mapper=4 submapper=0
++crc=7984AE6D region=Ntsc mapper=79 submapper=0
++crc=798EEB98 region=Ntsc mapper=1 submapper=0
++crc=79D48F34 region=Pal mapper=4 submapper=0
++crc=79F688BC region=Pal mapper=4 submapper=0
++crc=7A11D2C9 region=Ntsc mapper=1 submapper=0
++crc=7A3A49ED region=Ntsc mapper=0 submapper=0
++crc=7A497AE3 region=Ntsc mapper=33 submapper=0
++crc=7AA02377 region=Ntsc mapper=2 submapper=0
++crc=7AC3E8A1 region=Ntsc mapper=4 submapper=0
++crc=7AE0BF3C region=Ntsc mapper=1 submapper=0
++crc=7AE5C002 region=Pal mapper=4 submapper=0
++crc=7B0A41B9 region=Ntsc mapper=2 submapper=0
++crc=7B44FB2A region=Ntsc mapper=1 submapper=0
++crc=7B4ED0BB region=Ntsc mapper=4 submapper=0
++crc=7B5206AF region=Ntsc mapper=16 submapper=0
++crc=7B55D481 region=Pal mapper=1 submapper=0
++crc=7B6DC772 region=Ntsc mapper=95 submapper=0
++crc=7B72FBA4 region=Ntsc mapper=1 submapper=0
++crc=7BA3F8AE region=Pal mapper=4 submapper=0
++crc=7BB5664F region=Ntsc mapper=4 submapper=0
++crc=7BCCAFBB region=Ntsc mapper=4 submapper=0
++crc=7BD8F902 region=Ntsc mapper=4 submapper=0
++crc=7BF8A890 region=Ntsc mapper=4 submapper=0
++crc=7C108923 region=Ntsc mapper=1 submapper=0
++crc=7C16F819 region=Pal mapper=4 submapper=0
++crc=7C27AB86 region=Ntsc mapper=4 submapper=0
++crc=7C3D2EA3 region=Ntsc mapper=2 submapper=0
++crc=7C42CB7B region=Ntsc mapper=3 submapper=0
++crc=7C4A72D8 region=Ntsc mapper=1 submapper=0
++crc=7C596E45 region=Ntsc mapper=0 submapper=0
++crc=7C6A3D51 region=Ntsc mapper=3 submapper=0
++crc=7C6F615F region=Ntsc mapper=1 submapper=0
++crc=7C7A0A73 region=Ntsc mapper=1 submapper=0
++crc=7CB0D70D region=Pal mapper=7 submapper=0
++crc=7CF6B30A region=Pal mapper=0 submapper=0
++crc=7D55CF29 region=Ntsc mapper=2 submapper=0
++crc=7D5F149B region=Ntsc mapper=4 submapper=0
++crc=7D6C2065 region=Ntsc mapper=1 submapper=0
++crc=7DA77F11 region=Pal mapper=4 submapper=0
++crc=7DCB4C18 region=Ntsc mapper=1 submapper=0
++crc=7DD0AFC8 region=Pal mapper=0 submapper=0
++crc=7E053E64 region=Ntsc mapper=0 submapper=0
++crc=7E4BA78F region=Pal mapper=4 submapper=0
++crc=7E57FBEC region=Ntsc mapper=4 submapper=0
++crc=7E9BCA05 region=Ntsc mapper=2 submapper=0
++crc=7EABDA5C region=Ntsc mapper=11 submapper=0
++crc=7EAE9A13 region=Ntsc mapper=234 submapper=0
++crc=7EC6F75B region=Ntsc mapper=4 submapper=0
++crc=7EE02CA2 region=Ntsc mapper=1 submapper=0
++crc=7EE625EB region=Ntsc mapper=0 submapper=0
++crc=7F08D0D9 region=Pal mapper=4 submapper=0
++crc=7F24EFC0 region=Ntsc mapper=11 submapper=0
++crc=7F45CFF5 region=Ntsc mapper=92 submapper=0
++crc=7F495283 region=Ntsc mapper=0 submapper=0
++crc=7F4CB1B4 region=Pal mapper=2 submapper=0
++crc=7F801368 region=Ntsc mapper=1 submapper=0
++crc=7F9C1DEC region=Ntsc mapper=7 submapper=0
++crc=7FA191E7 region=Ntsc mapper=1 submapper=0
++crc=7FA2CC55 region=Ntsc mapper=3 submapper=0
++crc=7FB74A43 region=Ntsc mapper=4 submapper=0
++crc=7FF76219 region=Ntsc mapper=1 submapper=0
++crc=80250D64 region=Pal mapper=4 submapper=0
++crc=803B9979 region=Ntsc mapper=4 submapper=0
++crc=804F898A region=Ntsc mapper=2 submapper=0
++crc=805F81BC region=Ntsc mapper=2 submapper=0
++crc=806DE21E region=Pal mapper=7 submapper=0
++crc=808606F0 region=Ntsc mapper=210 submapper=1
++crc=80D63472 region=Pal mapper=0 submapper=0
++crc=80F39D59 region=Ntsc mapper=79 submapper=0
++crc=80FB7E6B region=Ntsc mapper=4 submapper=0
++crc=8106E694 region=Pal mapper=1 submapper=0
++crc=810B7AB9 region=Ntsc mapper=2 submapper=0
++crc=8111BA08 region=Ntsc mapper=7 submapper=0
++crc=811F06D9 region=Ntsc mapper=66 submapper=0
++crc=81210F63 region=Pal mapper=0 submapper=0
++crc=81241DEC region=Ntsc mapper=4 submapper=0
++crc=81389607 region=Ntsc mapper=0 submapper=0
++crc=816AD178 region=Ntsc mapper=4 submapper=0
++crc=817431EC region=Ntsc mapper=2 submapper=0
++crc=8192D2E7 region=Ntsc mapper=1 submapper=0
++crc=81A5EB65 region=Ntsc mapper=4 submapper=0
++crc=81AF4AF9 region=Pal mapper=2 submapper=0
++crc=81B2A3CD region=Pal mapper=4 submapper=0
++crc=81B7F1A8 region=Ntsc mapper=210 submapper=1
++crc=81ECDA0D region=Ntsc mapper=11 submapper=0
++crc=821F2F9F region=Ntsc mapper=1 submapper=0
++crc=821FEB7A region=Ntsc mapper=0 submapper=0
++crc=822F17EB region=Ntsc mapper=1 submapper=0
++crc=828F8F1F region=Ntsc mapper=1 submapper=0
++crc=8293803A region=Ntsc mapper=2 submapper=0
++crc=82AFA828 region=Ntsc mapper=1 submapper=0
++crc=82BE4724 region=Ntsc mapper=2 submapper=0
++crc=83000991 region=Pal mapper=2 submapper=0
++crc=8308FED7 region=Ntsc mapper=1 submapper=0
++crc=831F9C1A region=Ntsc mapper=79 submapper=0
++crc=8324A464 region=Ntsc mapper=2 submapper=0
++crc=836685C4 region=Pal mapper=1 submapper=0
++crc=8366CF72 region=Ntsc mapper=2 submapper=0
++crc=836C4FA7 region=Ntsc mapper=0 submapper=0
++crc=836FE2C2 region=Pal mapper=2 submapper=0
++crc=837A3D8A region=Pal mapper=4 submapper=0
++crc=83CB743F region=Ntsc mapper=1 submapper=0
++crc=83EA7B04 region=Ntsc mapper=4 submapper=0
++crc=83EAF3B1 region=Ntsc mapper=1 submapper=0
++crc=83FC38F8 region=Ntsc mapper=4 submapper=0
++crc=84148F73 region=Ntsc mapper=1 submapper=0
++crc=841B69B6 region=Ntsc mapper=1 submapper=0
++crc=84382231 region=Ntsc mapper=9 submapper=0
++crc=846C9304 region=Ntsc mapper=4 submapper=0
++crc=847D672D region=Ntsc mapper=4 submapper=0
++crc=84BE00E9 region=Ntsc mapper=0 submapper=0
++crc=84C4A12E region=Pal mapper=2 submapper=0
++crc=84F7FC31 region=Pal mapper=1 submapper=0
++crc=850090BC region=Ntsc mapper=1 submapper=0
++crc=851EB9BE region=Ntsc mapper=3 submapper=0
++crc=8531C166 region=Ntsc mapper=1 submapper=0
++crc=85323FD6 region=Ntsc mapper=79 submapper=0
++crc=853FEEA4 region=Pal mapper=4 submapper=0
++crc=856E7600 region=Ntsc mapper=1 submapper=0
++crc=8575A0CB region=Ntsc mapper=0 submapper=0
++crc=8593E5AD region=Ntsc mapper=4 submapper=0
++crc=859C65E1 region=Ntsc mapper=1 submapper=0
++crc=85A6C0D5 region=Ntsc mapper=1 submapper=0
++crc=85BC0777 region=Ntsc mapper=4 submapper=0
++crc=85BFFFEF region=Ntsc mapper=2 submapper=0
++crc=85C5953F region=Ntsc mapper=1 submapper=0
++crc=85D02CD4 region=Ntsc mapper=4 submapper=0
++crc=85E0090B region=Ntsc mapper=4 submapper=0
++crc=85F12D37 region=Ntsc mapper=1 submapper=0
++crc=86083FBC region=Ntsc mapper=3 submapper=0
++crc=8650BE49 region=Ntsc mapper=4 submapper=0
++crc=86670C93 region=Ntsc mapper=0 submapper=0
++crc=86759C0F region=Ntsc mapper=1 submapper=0
++crc=86867830 region=Pal mapper=3 submapper=0
++crc=869501CA region=Ntsc mapper=1 submapper=0
++crc=86964EDD region=Ntsc mapper=4 submapper=0
++crc=86974CCC region=Ntsc mapper=11 submapper=0
++crc=86ACB36B region=Ntsc mapper=3 submapper=0
++crc=86B0D1CF region=Ntsc mapper=1 submapper=0
++crc=86C495C6 region=Pal mapper=4 submapper=0
++crc=86DBA660 region=Ntsc mapper=219 submapper=0
++crc=86E02D65 region=Pal mapper=4 submapper=0
++crc=872DE7A2 region=Ntsc mapper=4 submapper=0
++crc=8752DCCB region=Ntsc mapper=3 submapper=0
++crc=87CE3F34 region=Ntsc mapper=4 submapper=0
++crc=87D7CAF0 region=Ntsc mapper=3 submapper=0
++crc=87DA4BD0 region=Ntsc mapper=185 submapper=0
++crc=88053D25 region=Ntsc mapper=3 submapper=0
++crc=88062D9A region=Ntsc mapper=4 submapper=0
++crc=882E1901 region=Ntsc mapper=79 submapper=0
++crc=88338ED5 region=Ntsc mapper=4 submapper=0
++crc=883454EA region=Ntsc mapper=87 submapper=0
++crc=8889C564 region=Ntsc mapper=4 submapper=0
++crc=889129CB region=Ntsc mapper=4 submapper=0
++crc=8897A8F1 region=Pal mapper=2 submapper=0
++crc=88A6B192 region=Ntsc mapper=79 submapper=0
++crc=88C30FDA region=Pal mapper=4 submapper=0
++crc=88E1A5F4 region=Ntsc mapper=1 submapper=0
++crc=8904149E region=Pal mapper=7 submapper=0
++crc=892434DD region=Ntsc mapper=71 submapper=0
++crc=8927FD4C region=Ntsc mapper=4 submapper=0
++crc=892CBBC2 region=Ntsc mapper=185 submapper=0
++crc=894EFDBC region=Ntsc mapper=16 submapper=0
++crc=89550500 region=Ntsc mapper=0 submapper=0
++crc=89567668 region=Ntsc mapper=1 submapper=0
++crc=89821E2B region=Pal mapper=1 submapper=0
++crc=898E4232 region=Pal mapper=7 submapper=0
++crc=899213DC region=Ntsc mapper=4 submapper=0
++crc=89984244 region=Pal mapper=7 submapper=0
++crc=89A45446 region=Pal mapper=4 submapper=0
++crc=89D42098 region=Ntsc mapper=0 submapper=0
++crc=89E085FE region=Ntsc mapper=1 submapper=0
++crc=89EC53C8 region=Pal mapper=2 submapper=0
++crc=8A043CD6 region=Ntsc mapper=4 submapper=0
++crc=8A0C7337 region=Pal mapper=0 submapper=0
++crc=8A12A7D9 region=Ntsc mapper=3 submapper=0
++crc=8A368744 region=Ntsc mapper=2 submapper=0
++crc=8A36D2B7 region=Ntsc mapper=1 submapper=0
++crc=8A5BC0D3 region=Ntsc mapper=4 submapper=0
++crc=8A640AEF region=Ntsc mapper=4 submapper=0
++crc=8A65E57C region=Ntsc mapper=4 submapper=0
++crc=8A7D0ABE region=Ntsc mapper=33 submapper=0
++crc=8A96E00D region=Ntsc mapper=23 submapper=0
++crc=8AB52A24 region=Ntsc mapper=2 submapper=0
++crc=8ADA3497 region=Ntsc mapper=1 submapper=0
++crc=8AF25130 region=Ntsc mapper=4 submapper=0
++crc=8B03F74D region=Ntsc mapper=21 submapper=0
++crc=8B4A2866 region=Ntsc mapper=3 submapper=0
++crc=8B4D2443 region=Pal mapper=1 submapper=0
++crc=8B7D3C75 region=Pal mapper=1 submapper=0
++crc=8B9CB8F2 region=Ntsc mapper=3 submapper=0
++crc=8B9D3E9C region=Ntsc mapper=1 submapper=0
++crc=8BA75848 region=Ntsc mapper=0 submapper=0
++crc=8BCA5146 region=Ntsc mapper=1 submapper=0
++crc=8BCB0993 region=Ntsc mapper=4 submapper=0
++crc=8BCDE59A region=Ntsc mapper=2 submapper=0
++crc=8BDD3D93 region=Pal mapper=4 submapper=0
++crc=8BF29CB6 region=Ntsc mapper=1 submapper=0
++crc=8C252AC4 region=Pal mapper=4 submapper=0
++crc=8C4D59D6 region=Ntsc mapper=1 submapper=0
++crc=8C5A784E region=Ntsc mapper=1 submapper=0
++crc=8C71F706 region=Ntsc mapper=1 submapper=0
++crc=8C88536F region=Pal mapper=4 submapper=0
++crc=8C8DEDB6 region=Ntsc mapper=4 submapper=0
++crc=8C95A69F region=Ntsc mapper=4 submapper=0
++crc=8CA72D80 region=Ntsc mapper=82 submapper=0
++crc=8CACCA85 region=Ntsc mapper=4 submapper=0
++crc=8CE478DB region=Ntsc mapper=5 submapper=0
++crc=8D26FDEA region=Ntsc mapper=4 submapper=0
++crc=8D3C33B3 region=Ntsc mapper=1 submapper=0
++crc=8D5B77C0 region=Ntsc mapper=1 submapper=0
++crc=8D77E5E6 region=Ntsc mapper=4 submapper=0
++crc=8D901FAD region=Pal mapper=4 submapper=0
++crc=8D97155C region=Ntsc mapper=2 submapper=0
++crc=8D9AD3BF region=Pal mapper=2 submapper=0
++crc=8DA4E539 region=Ntsc mapper=1 submapper=0
++crc=8DA651D4 region=Ntsc mapper=4 submapper=0
++crc=8DA6667D region=Pal mapper=4 submapper=0
++crc=8DB31730 region=Ntsc mapper=0 submapper=0
++crc=8DB43824 region=Ntsc mapper=1 submapper=0
++crc=8DCD9486 region=Ntsc mapper=1 submapper=0
++crc=8DD92725 region=Ntsc mapper=1 submapper=0
++crc=8E0D9179 region=Ntsc mapper=1 submapper=0
++crc=8E373118 region=Ntsc mapper=1 submapper=0
++crc=8E62D229 region=Ntsc mapper=185 submapper=0
++crc=8E7ABDFC region=Ntsc mapper=2 submapper=0
++crc=8EAB381C region=Ntsc mapper=79 submapper=0
++crc=8EE25F78 region=Ntsc mapper=80 submapper=0
++crc=8EE7C43E region=Ntsc mapper=4 submapper=0
++crc=8EEF8B76 region=Ntsc mapper=4 submapper=0
++crc=8F011713 region=Ntsc mapper=4 submapper=0
++crc=8F154A0D region=Ntsc mapper=3 submapper=0
++crc=8F197B0A region=Pal mapper=2 submapper=0
++crc=8F4497EE region=Ntsc mapper=3 submapper=0
++crc=8F628D51 region=Ntsc mapper=4 submapper=0
++crc=8FA6E92C region=Pal mapper=4 submapper=0
++crc=8FF31896 region=Ntsc mapper=0 submapper=0
++crc=900E3A23 region=Ntsc mapper=4 submapper=0
++crc=90150FAC region=Ntsc mapper=177 submapper=0
++crc=90226E40 region=Ntsc mapper=4 submapper=0
++crc=902E3168 region=Ntsc mapper=4 submapper=0
++crc=9044550E region=Ntsc mapper=3 submapper=0
++crc=905B93F6 region=Ntsc mapper=3 submapper=0
++crc=90600B85 region=Ntsc mapper=0 submapper=0
++crc=908505EE region=Ntsc mapper=0 submapper=0
++crc=90C773C1 region=Ntsc mapper=118 submapper=0
++crc=90D68A43 region=Ntsc mapper=3 submapper=0
++crc=90ECDADE region=Ntsc mapper=3 submapper=0
++crc=90F3F161 region=Ntsc mapper=86 submapper=0
++crc=90F6FA33 region=Ntsc mapper=22 submapper=0
++crc=91328C1D region=Ntsc mapper=23 submapper=0
++crc=91440AAB region=Ntsc mapper=147 submapper=0
++crc=915A53A7 region=Ntsc mapper=0 submapper=0
++crc=917770D8 region=Ntsc mapper=4 submapper=0
++crc=917D9262 region=Ntsc mapper=2 submapper=0
++crc=9198279E region=Pal mapper=7 submapper=0
++crc=91AC514E region=Ntsc mapper=88 submapper=0
++crc=91B4B1D7 region=Pal mapper=66 submapper=0
++crc=91D52E9A region=Ntsc mapper=18 submapper=0
++crc=91E2E863 region=Ntsc mapper=4 submapper=0
++crc=92197173 region=Ntsc mapper=1 submapper=0
++crc=9235B57B region=Ntsc mapper=71 submapper=0
++crc=9237B447 region=Pal mapper=4 submapper=0
++crc=923F915B region=Ntsc mapper=4 submapper=0
++crc=9247C38D region=Pal mapper=119 submapper=0
++crc=924CDE0B region=Pal mapper=1 submapper=0
++crc=92547F1C region=Ntsc mapper=1 submapper=0
++crc=9273F18E region=Ntsc mapper=1 submapper=0
++crc=927C7A3A region=Ntsc mapper=0 submapper=0
++crc=92924548 region=Pal mapper=0 submapper=0
++crc=92A2185C region=Ntsc mapper=9 submapper=0
++crc=92A3D007 region=Ntsc mapper=34 submapper=0
++crc=92C138E4 region=Ntsc mapper=1 submapper=0
++crc=92DD67EA region=Ntsc mapper=1 submapper=0
++crc=92F04530 region=Ntsc mapper=2 submapper=0
++crc=93216279 region=Ntsc mapper=46 submapper=0
++crc=93484CC9 region=Ntsc mapper=234 submapper=0
++crc=934DB14A region=Ntsc mapper=1 submapper=0
++crc=9369A2F8 region=Pal mapper=2 submapper=0
++crc=93991433 region=Ntsc mapper=4 submapper=0
++crc=93A2EEFB region=Ntsc mapper=1 submapper=0
++crc=93A7D26C region=Ntsc mapper=4 submapper=0
++crc=93B2CEC4 region=Ntsc mapper=65 submapper=0
++crc=93B49582 region=Ntsc mapper=1 submapper=0
++crc=93F3A490 region=Ntsc mapper=64 submapper=0
++crc=942B1210 region=Ntsc mapper=4 submapper=0
++crc=94476A70 region=Pal mapper=2 submapper=0
++crc=948E0BD6 region=Ntsc mapper=4 submapper=0
++crc=9509F703 region=Ntsc mapper=4 submapper=0
++crc=952A9E77 region=Ntsc mapper=1 submapper=0
++crc=9552E8DF region=Ntsc mapper=66 submapper=0
++crc=9561798D region=Ntsc mapper=1 submapper=0
++crc=9568EB74 region=Ntsc mapper=1 submapper=0
++crc=956E3D90 region=Ntsc mapper=4 submapper=0
++crc=958E4BAE region=Ntsc mapper=1 submapper=0
++crc=95CE3B58 region=Pal mapper=4 submapper=0
++crc=95D3BFFF region=Pal mapper=3 submapper=0
++crc=95E4E594 region=Ntsc mapper=1 submapper=0
++crc=96087988 region=Ntsc mapper=1 submapper=0
++crc=9630A7E5 region=Pal mapper=1 submapper=0
++crc=9632C470 region=Pal mapper=1 submapper=0
++crc=965834BD region=Ntsc mapper=18 submapper=0
++crc=967011AD region=Pal mapper=4 submapper=0
++crc=96773F32 region=Ntsc mapper=19 submapper=0
++crc=969EF9E4 region=Ntsc mapper=2 submapper=0
++crc=96BA90B0 region=Ntsc mapper=2 submapper=0
++crc=96CFB4D8 region=Pal mapper=7 submapper=0
++crc=96DFC776 region=Ntsc mapper=4 submapper=0
++crc=96E6C1CE region=Ntsc mapper=3 submapper=0
++crc=972D08C5 region=Ntsc mapper=1 submapper=0
++crc=972D2784 region=Pal mapper=0 submapper=0
++crc=9735D267 region=Pal mapper=1 submapper=0
++crc=973BBF75 region=Ntsc mapper=11 submapper=0
++crc=9747AC09 region=Ntsc mapper=1 submapper=0
++crc=974D0745 region=Ntsc mapper=4 submapper=0
++crc=974E8840 region=Ntsc mapper=1 submapper=0
++crc=976893D2 region=Pal mapper=3 submapper=0
++crc=978E19FC region=Ntsc mapper=1 submapper=0
++crc=979C5314 region=Ntsc mapper=2 submapper=0
++crc=97BC4585 region=Ntsc mapper=1 submapper=0
++crc=97CAD370 region=Ntsc mapper=10 submapper=0
++crc=97D52C06 region=Pal mapper=1 submapper=0
++crc=9806CB84 region=Ntsc mapper=7 submapper=0
++crc=980BE936 region=Ntsc mapper=0 submapper=0
++crc=982DFB38 region=Ntsc mapper=4 submapper=0
++crc=983948A5 region=Ntsc mapper=3 submapper=0
++crc=983D8175 region=Ntsc mapper=16 submapper=0
++crc=985B1D05 region=Ntsc mapper=3 submapper=0
++crc=988798A8 region=Ntsc mapper=4 submapper=0
++crc=988B446D region=Ntsc mapper=0 submapper=0
++crc=988C290E region=Ntsc mapper=1 submapper=0
++crc=98977591 region=Ntsc mapper=4 submapper=0
++crc=989C1019 region=Pal mapper=4 submapper=0
++crc=98A97A59 region=Ntsc mapper=4 submapper=0
++crc=98C7B4DA region=Ntsc mapper=2 submapper=0
++crc=98CCC9AB region=Ntsc mapper=68 submapper=0
++crc=99083B3A region=Ntsc mapper=11 submapper=0
++crc=990985C0 region=Ntsc mapper=1 submapper=0
++crc=99240573 region=Ntsc mapper=16 submapper=0
++crc=992AF039 region=Ntsc mapper=1 submapper=0
++crc=99686DAD region=Ntsc mapper=1 submapper=0
++crc=998422FC region=Pal mapper=4 submapper=0
++crc=9992F445 region=Ntsc mapper=3 submapper=0
++crc=999577B6 region=Ntsc mapper=2 submapper=0
++crc=999584A8 region=Pal mapper=0 submapper=0
++crc=99A28276 region=Pal mapper=2 submapper=0
++crc=99A62E47 region=Ntsc mapper=2 submapper=0
++crc=99A9F57E region=Ntsc mapper=1 submapper=0
++crc=99C395F9 region=Ntsc mapper=48 submapper=0
++crc=99D15A91 region=Ntsc mapper=0 submapper=0
++crc=99D38676 region=Ntsc mapper=4 submapper=0
++crc=99DDDB04 region=Ntsc mapper=4 submapper=0
++crc=9A23A458 region=Ntsc mapper=3 submapper=0
++crc=9A2DB086 region=Pal mapper=0 submapper=0
++crc=9A808C3B region=Ntsc mapper=3 submapper=0
++crc=9AACD75D region=Ntsc mapper=3 submapper=0
++crc=9AB274AE region=Ntsc mapper=228 submapper=0
++crc=9ACE456E region=Pal mapper=0 submapper=0
++crc=9ADFC8F0 region=Ntsc mapper=4 submapper=0
++crc=9B05B278 region=Pal mapper=4 submapper=0
++crc=9B3C5124 region=Ntsc mapper=4 submapper=0
++crc=9B506A48 region=Ntsc mapper=0 submapper=0
++crc=9B53F848 region=Ntsc mapper=1 submapper=0
++crc=9B568CC4 region=Pal mapper=1 submapper=0
++crc=9B821A83 region=Ntsc mapper=1 submapper=0
++crc=9BAC73EF region=Ntsc mapper=4 submapper=0
++crc=9BD3F3C2 region=Pal mapper=4 submapper=0
++crc=9BDCD892 region=Ntsc mapper=4 submapper=0
++crc=9BDE3267 region=Ntsc mapper=3 submapper=0
++crc=9C04C8D5 region=Ntsc mapper=16 submapper=0
++crc=9C053F24 region=Ntsc mapper=1 submapper=0
++crc=9C18762B region=Ntsc mapper=5 submapper=0
++crc=9C304DEC region=Pal mapper=4 submapper=0
++crc=9C3E8FC0 region=Ntsc mapper=1 submapper=0
++crc=9C521240 region=Ntsc mapper=185 submapper=0
++crc=9C537919 region=Ntsc mapper=4 submapper=0
++crc=9C58F4A6 region=Ntsc mapper=4 submapper=0
++crc=9C924719 region=Pal mapper=4 submapper=0
++crc=9C9F3571 region=Ntsc mapper=3 submapper=0
++crc=9CBADC25 region=Ntsc mapper=5 submapper=0
++crc=9CBB0291 region=Ntsc mapper=4 submapper=0
++crc=9CBC8253 region=Ntsc mapper=4 submapper=0
++crc=9CFA55E7 region=Ntsc mapper=1 submapper=0
++crc=9D048EA4 region=Ntsc mapper=96 submapper=0
++crc=9D21FE96 region=Ntsc mapper=4 submapper=0
++crc=9D34EDC5 region=Ntsc mapper=3 submapper=0
++crc=9D38F8F9 region=Ntsc mapper=0 submapper=0
++crc=9D45D8EC region=Ntsc mapper=1 submapper=0
++crc=9D779B08 region=Ntsc mapper=0 submapper=0
++crc=9D976153 region=Ntsc mapper=1 submapper=0
++crc=9D9A4A26 region=Ntsc mapper=4 submapper=0
++crc=9DC96EC7 region=Ntsc mapper=18 submapper=0
++crc=9DDF9017 region=Ntsc mapper=4 submapper=0
++crc=9DF58E80 region=Ntsc mapper=1 submapper=0
++crc=9E356267 region=Ntsc mapper=1 submapper=0
++crc=9E36080E region=Ntsc mapper=4 submapper=0
++crc=9E379698 region=Ntsc mapper=71 submapper=0
++crc=9E382EBF region=Ntsc mapper=1 submapper=0
++crc=9E4701CB region=Ntsc mapper=3 submapper=0
++crc=9E4E9CC2 region=Ntsc mapper=0 submapper=0
++crc=9E6092A4 region=Ntsc mapper=4 submapper=0
++crc=9E66A66B region=Ntsc mapper=3 submapper=0
++crc=9E777EA5 region=Ntsc mapper=1 submapper=0
++crc=9E898385 region=Ntsc mapper=65 submapper=0
++crc=9EA1DC76 region=Ntsc mapper=2 submapper=0
++crc=9EBDC94E region=Ntsc mapper=1 submapper=0
++crc=9ECB9DCD region=Ntsc mapper=1 submapper=0
++crc=9EDBE2E2 region=Ntsc mapper=19 submapper=0
++crc=9EDD2159 region=Ntsc mapper=7 submapper=0
++crc=9EE83916 region=Ntsc mapper=72 submapper=0
++crc=9EEFB4B4 region=Ntsc mapper=4 submapper=0
++crc=9EF351DC region=Ntsc mapper=3 submapper=0
++crc=9EFF96D2 region=Ntsc mapper=1 submapper=0
++crc=9F01687D region=Ntsc mapper=4 submapper=0
++crc=9F03B11F region=Ntsc mapper=2 submapper=0
++crc=9F2712DF region=Ntsc mapper=1 submapper=0
++crc=9F2EEF20 region=Ntsc mapper=2 submapper=0
++crc=9F432594 region=Ntsc mapper=2 submapper=0
++crc=9F5138CB region=Ntsc mapper=1 submapper=0
++crc=9F6C119C region=Ntsc mapper=1 submapper=0
++crc=9F6CE171 region=Ntsc mapper=4 submapper=0
++crc=9F8336DB region=Ntsc mapper=2 submapper=0
++crc=9FAE4D46 region=Ntsc mapper=2 submapper=0
++crc=9FB32923 region=Ntsc mapper=1 submapper=0
++crc=9FD35802 region=Ntsc mapper=3 submapper=0
++crc=9FD718FD region=Ntsc mapper=4 submapper=0
++crc=9FFE2F55 region=Ntsc mapper=1 submapper=0
++crc=A0006B26 region=Ntsc mapper=1 submapper=0
++crc=A0230D75 region=Ntsc mapper=2 submapper=0
++crc=A038AFF2 region=Pal mapper=4 submapper=0
++crc=A03A422B region=Ntsc mapper=3 submapper=0
++crc=A045FE1D region=Pal mapper=232 submapper=0
++crc=A0568E1D region=Ntsc mapper=2 submapper=0
++crc=A058219D region=Ntsc mapper=1 submapper=0
++crc=A07C1F81 region=Ntsc mapper=0 submapper=0
++crc=A08B4701 region=Ntsc mapper=0 submapper=0
++crc=A0A095C4 region=Ntsc mapper=3 submapper=0
++crc=A0A5A0B9 region=Pal mapper=4 submapper=0
++crc=A0B0B742 region=Ntsc mapper=4 submapper=0
++crc=A0C31A57 region=Ntsc mapper=4 submapper=0
++crc=A0DF4B8F region=Ntsc mapper=4 submapper=0
++crc=A0F99BB8 region=Ntsc mapper=2 submapper=0
++crc=A166548F region=Ntsc mapper=1 submapper=0
++crc=A189843D region=Ntsc mapper=0 submapper=0
++crc=A1A0C13F region=Pal mapper=1 submapper=0
++crc=A1C0DA00 region=Pal mapper=0 submapper=0
++crc=A1DC16C0 region=Ntsc mapper=0 submapper=0
++crc=A1F90826 region=Pal mapper=1 submapper=0
++crc=A1FF4E1D region=Ntsc mapper=1 submapper=0
++crc=A20B4983 region=Ntsc mapper=0 submapper=0
++crc=A2194CAD region=Ntsc mapper=2 submapper=0
++crc=A21E675C region=Ntsc mapper=34 submapper=0
++crc=A222F5A0 region=Ntsc mapper=0 submapper=0
++crc=A22657FA region=Ntsc mapper=4 submapper=0
++crc=A23CB659 region=Ntsc mapper=79 submapper=0
++crc=A23F0A27 region=Ntsc mapper=3 submapper=0
++crc=A2469526 region=Ntsc mapper=0 submapper=0
++crc=A25A750F region=Ntsc mapper=1 submapper=0
++crc=A2623BC1 region=Ntsc mapper=68 submapper=0
++crc=A262A81F region=Ntsc mapper=16 submapper=0
++crc=A2AF25D0 region=Ntsc mapper=0 submapper=0
++crc=A2D074F5 region=Pal mapper=0 submapper=0
++crc=A2F713C0 region=Ntsc mapper=4 submapper=0
++crc=A31142FF region=Pal mapper=1 submapper=0
++crc=A342A5FD region=Ntsc mapper=2 submapper=0
++crc=A38857EB region=Ntsc mapper=1 submapper=0
++crc=A3BF2ADA region=Ntsc mapper=2 submapper=0
++crc=A3C0D49F region=Ntsc mapper=2 submapper=0
++crc=A4062017 region=Ntsc mapper=1 submapper=0
++crc=A46D7F02 region=Ntsc mapper=4 submapper=0
++crc=A485ABED region=Ntsc mapper=1 submapper=0
++crc=A48D26C1 region=Ntsc mapper=2 submapper=0
++crc=A49253C6 region=Ntsc mapper=4 submapper=0
++crc=A49B48B8 region=Ntsc mapper=1 submapper=0
++crc=A4BDCC1D region=Pal mapper=1 submapper=0
++crc=A4DCDF28 region=Ntsc mapper=1 submapper=0
++crc=A4DCF72E region=Pal mapper=4 submapper=0
++crc=A4E935DF region=Ntsc mapper=69 submapper=0
++crc=A547A6EC region=Ntsc mapper=0 submapper=0
++crc=A55701DD region=Ntsc mapper=11 submapper=0
++crc=A558FB52 region=Ntsc mapper=1 submapper=0
++crc=A55FA397 region=Ntsc mapper=3 submapper=0
++crc=A56208A0 region=Ntsc mapper=2 submapper=0
++crc=A58A8DA1 region=Ntsc mapper=4 submapper=0
++crc=A5E6BAF9 region=Ntsc mapper=4 submapper=0
++crc=A5E89675 region=Ntsc mapper=11 submapper=0
++crc=A5E8D2CD region=Ntsc mapper=1 submapper=0
++crc=A60CA3D6 region=Ntsc mapper=4 submapper=0
++crc=A60FBA51 region=Ntsc mapper=4 submapper=0
++crc=A6153536 region=Pal mapper=1 submapper=0
++crc=A6638CBA region=Pal mapper=1 submapper=0
++crc=A6648353 region=Ntsc mapper=1 submapper=0
++crc=A66596D9 region=Ntsc mapper=4 submapper=0
++crc=A69A1F2A region=Ntsc mapper=0 submapper=0
++crc=A69F29FA region=Ntsc mapper=1 submapper=0
++crc=A6A725B8 region=Ntsc mapper=2 submapper=0
++crc=A713DD30 region=Pal mapper=69 submapper=0
++crc=A725B2D3 region=Ntsc mapper=4 submapper=0
++crc=A72FDE03 region=Ntsc mapper=7 submapper=0
++crc=A781FFAA region=Ntsc mapper=11 submapper=0
++crc=A7B0536C region=Ntsc mapper=48 submapper=0
++crc=A7D3635E region=Ntsc mapper=2 submapper=0
++crc=A7DE65E4 region=Ntsc mapper=1 submapper=0
++crc=A7E784ED region=Ntsc mapper=1 submapper=0
++crc=A7EF8F80 region=Ntsc mapper=0 submapper=0
++crc=A80A0F01 region=Ntsc mapper=4 submapper=0
++crc=A80FA181 region=Ntsc mapper=1 submapper=0
++crc=A851CAE9 region=Ntsc mapper=16 submapper=0
++crc=A86A5318 region=Ntsc mapper=1 submapper=0
++crc=A8784932 region=Ntsc mapper=2 submapper=0
++crc=A8923256 region=Ntsc mapper=1 submapper=0
++crc=A8A9B982 region=Ntsc mapper=185 submapper=0
++crc=A8B0DA56 region=Ntsc mapper=1 submapper=0
++crc=A8D93537 region=Pal mapper=1 submapper=0
++crc=A8E6A7C2 region=Pal mapper=0 submapper=0
++crc=A8F4D99E region=Ntsc mapper=1 submapper=0
++crc=A8F5C2AB region=Ntsc mapper=4 submapper=0
++crc=A9068D17 region=Ntsc mapper=0 submapper=0
++crc=A91460B8 region=Ntsc mapper=7 submapper=0
++crc=A9217EA2 region=Ntsc mapper=4 submapper=0
++crc=A923E441 region=Ntsc mapper=133 submapper=0
++crc=A93527E2 region=Pal mapper=2 submapper=0
++crc=A9415562 region=Ntsc mapper=1 submapper=0
++crc=A94591B0 region=Ntsc mapper=4 submapper=0
++crc=A9541452 region=Ntsc mapper=16 submapper=0
++crc=A95A915A region=Ntsc mapper=243 submapper=0
++crc=A9660690 region=Pal mapper=1 submapper=0
++crc=A97567A4 region=Pal mapper=1 submapper=0
++crc=A98046B8 region=Ntsc mapper=10 submapper=0
++crc=A9842027 region=Ntsc mapper=0 submapper=0
++crc=A99016C6 region=Ntsc mapper=1 submapper=0
++crc=A9BBF44F region=Ntsc mapper=0 submapper=0
++crc=AA20F73D region=Ntsc mapper=4 submapper=0
++crc=AA4318AE region=Ntsc mapper=1 submapper=0
++crc=AA4997C1 region=Ntsc mapper=4 submapper=0
++crc=AA6BB985 region=Ntsc mapper=2 submapper=0
++crc=AA74A4D8 region=Ntsc mapper=3 submapper=0
++crc=AA9F9765 region=Ntsc mapper=23 submapper=0
++crc=AAA985D7 region=Pal mapper=1 submapper=0
++crc=AAC2E75E region=Ntsc mapper=3 submapper=0
++crc=AAED295C region=Ntsc mapper=1 submapper=0
++crc=AAEF2264 region=Ntsc mapper=168 submapper=0
++crc=AAF49344 region=Ntsc mapper=1 submapper=0
++crc=AB2006B4 region=Pal mapper=3 submapper=0
++crc=AB2AC325 region=Pal mapper=1 submapper=0
++crc=AB41445E region=Ntsc mapper=4 submapper=0
++crc=AB47A50E region=Ntsc mapper=2 submapper=0
++crc=AB671224 region=Pal mapper=1 submapper=0
++crc=ABAA6F78 region=Ntsc mapper=1 submapper=0
++crc=ABBF7217 region=Ntsc mapper=1 submapper=0
++crc=AC136F2D region=Ntsc mapper=3 submapper=0
++crc=AC3E5677 region=Pal mapper=1 submapper=0
++crc=AC4BF9DC region=Ntsc mapper=75 submapper=0
++crc=AC609320 region=Pal mapper=4 submapper=0
++crc=AC652B47 region=Ntsc mapper=73 submapper=0
++crc=AC8DCDEA region=Ntsc mapper=3 submapper=0
++crc=AC92E9E0 region=Ntsc mapper=0 submapper=0
++crc=AC97AA09 region=Ntsc mapper=172 submapper=0
++crc=AC9895CC region=Ntsc mapper=23 submapper=0
++crc=ACA145D8 region=Ntsc mapper=3 submapper=0
++crc=ACA15643 region=Ntsc mapper=5 submapper=0
++crc=ACE56F39 region=Ntsc mapper=19 submapper=0
++crc=AD0394F0 region=Pal mapper=4 submapper=0
++crc=AD12A34F region=Ntsc mapper=1 submapper=0
++crc=AD9C63E2 region=Ntsc mapper=70 submapper=0
++crc=ADA1B12F region=Ntsc mapper=3 submapper=0
++crc=ADA40FB2 region=Ntsc mapper=1 submapper=0
++crc=ADB5D0B3 region=Ntsc mapper=0 submapper=0
++crc=ADB810F8 region=Ntsc mapper=2 submapper=0
++crc=ADF606F6 region=Ntsc mapper=33 submapper=0
++crc=ADFAD6B6 region=Ntsc mapper=188 submapper=0
++crc=ADFFD64F region=Ntsc mapper=210 submapper=2
++crc=AE128FAC region=Ntsc mapper=2 submapper=0
++crc=AE280E20 region=Ntsc mapper=4 submapper=0
++crc=AE321339 region=Ntsc mapper=4 submapper=0
++crc=AE52DECE region=Ntsc mapper=0 submapper=0
++crc=AE5C3D94 region=Ntsc mapper=1 submapper=0
++crc=AE64CA77 region=Ntsc mapper=0 submapper=0
++crc=AE7DF77F region=Ntsc mapper=4 submapper=0
++crc=AE8666B4 region=Ntsc mapper=3 submapper=0
++crc=AE97627C region=Ntsc mapper=1 submapper=0
++crc=AE9F33D0 region=Ntsc mapper=4 submapper=0
++crc=AEB2D754 region=Pal mapper=4 submapper=0
++crc=AEB7FCE9 region=Ntsc mapper=33 submapper=0
++crc=AEBD6549 region=Ntsc mapper=48 submapper=0
++crc=AF05F37E region=Ntsc mapper=4 submapper=0
++crc=AF4010EA region=Ntsc mapper=3 submapper=0
++crc=AF5676DE region=Ntsc mapper=0 submapper=0
++crc=AF65AA84 region=Pal mapper=4 submapper=0
++crc=AF6B5B85 region=Ntsc mapper=1 submapper=0
++crc=AFB46DD6 region=Ntsc mapper=2 submapper=0
++crc=AFC32114 region=Ntsc mapper=1 submapper=0
++crc=AFDCBD24 region=Pal mapper=0 submapper=0
++crc=B0480AE9 region=Ntsc mapper=5 submapper=0
++crc=B049A8C4 region=Ntsc mapper=16 submapper=0
++crc=B04BA659 region=Ntsc mapper=2 submapper=0
++crc=B06C0674 region=Ntsc mapper=75 submapper=0
++crc=B0874760 region=Ntsc mapper=1 submapper=0
++crc=B0BC46D1 region=Ntsc mapper=66 submapper=0
++crc=B0CD000F region=Ntsc mapper=4 submapper=0
++crc=B0EBF3DB region=Ntsc mapper=4 submapper=0
++crc=B1250D0C region=Ntsc mapper=4 submapper=0
++crc=B134D713 region=Ntsc mapper=1 submapper=0
++crc=B13F00D4 region=Pal mapper=2 submapper=0
++crc=B14EA4D2 region=Ntsc mapper=1 submapper=0
++crc=B15653BD region=Ntsc mapper=2 submapper=0
++crc=B1612FE6 region=Ntsc mapper=1 submapper=0
++crc=B1723338 region=Ntsc mapper=3 submapper=0
++crc=B174B680 region=Ntsc mapper=0 submapper=0
++crc=B17574F3 region=Ntsc mapper=1 submapper=0
++crc=B19A55DD region=Ntsc mapper=64 submapper=0
++crc=B1A94B82 region=Ntsc mapper=70 submapper=0
++crc=B1B16B8A region=Ntsc mapper=2 submapper=0
++crc=B1C937C8 region=Pal mapper=1 submapper=0
++crc=B20C1030 region=Ntsc mapper=93 submapper=0
++crc=B2530AFC region=Ntsc mapper=0 submapper=0
++crc=B2781C19 region=Pal mapper=4 submapper=0
++crc=B27B8CF4 region=Ntsc mapper=23 submapper=0
++crc=B297B5E7 region=Ntsc mapper=92 submapper=0
++crc=B2EF7F4B region=Ntsc mapper=4 submapper=0
++crc=B30599A1 region=Ntsc mapper=4 submapper=0
++crc=B3769A51 region=Ntsc mapper=1 submapper=0
++crc=B3783F2A region=Ntsc mapper=2 submapper=0
++crc=B3974D6C region=Ntsc mapper=1 submapper=0
++crc=B39A3F5B region=Ntsc mapper=2 submapper=0
++crc=B3C30BEA region=Ntsc mapper=0 submapper=0
++crc=B3D74C0D region=Ntsc mapper=0 submapper=0
++crc=B400172A region=Pal mapper=2 submapper=0
++crc=B4113F3C region=Ntsc mapper=1 submapper=0
++crc=B422A67A region=Ntsc mapper=64 submapper=0
++crc=B4241FCC region=Ntsc mapper=1 submapper=0
++crc=B459EDC4 region=Ntsc mapper=66 submapper=0
++crc=B462718E region=Pal mapper=232 submapper=0
++crc=B462BF6F region=Pal mapper=3 submapper=0
++crc=B4735FAC region=Ntsc mapper=5 submapper=0
++crc=B47569E2 region=Ntsc mapper=4 submapper=0
++crc=B4801882 region=Ntsc mapper=4 submapper=0
++crc=B4BADF56 region=Ntsc mapper=0 submapper=0
++crc=B4C81ADB region=Ntsc mapper=4 submapper=0
++crc=B4CDF95F region=Ntsc mapper=1 submapper=0
++crc=B4E4879E region=Ntsc mapper=2 submapper=0
++crc=B4FF91E7 region=Ntsc mapper=1 submapper=0
++crc=B5576820 region=Ntsc mapper=1 submapper=0
++crc=B5D10D5C region=Ntsc mapper=7 submapper=0
++crc=B5D28EA2 region=Ntsc mapper=3 submapper=0
++crc=B5E24324 region=Ntsc mapper=4 submapper=0
++crc=B5E392E2 region=Ntsc mapper=4 submapper=0
++crc=B5E83C9A region=Ntsc mapper=178 submapper=0
++crc=B5F7E661 region=Ntsc mapper=1 submapper=0
++crc=B5FF71AB region=Ntsc mapper=19 submapper=0
++crc=B629D555 region=Ntsc mapper=4 submapper=0
++crc=B64078F3 region=Ntsc mapper=4 submapper=0
++crc=B6661BDA region=Ntsc mapper=2 submapper=0
++crc=B668C7FC region=Ntsc mapper=2 submapper=0
++crc=B67D16F6 region=Pal mapper=1 submapper=0
++crc=B683A856 region=Ntsc mapper=1 submapper=0
++crc=B68F9814 region=Pal mapper=4 submapper=0
++crc=B69F7C0F region=Ntsc mapper=3 submapper=0
++crc=B6A2B981 region=Ntsc mapper=79 submapper=0
++crc=B6A727FA region=Ntsc mapper=113 submapper=0
++crc=B6B5C372 region=Pal mapper=2 submapper=0
++crc=B6BF5137 region=Ntsc mapper=1 submapper=0
++crc=B6D2D300 region=Ntsc mapper=0 submapper=0
++crc=B70129F4 region=Ntsc mapper=4 submapper=0
++crc=B7773A07 region=Ntsc mapper=4 submapper=0
++crc=B780521C region=Ntsc mapper=4 submapper=0
++crc=B786AB95 region=Ntsc mapper=3 submapper=0
++crc=B786C2AC region=Ntsc mapper=11 submapper=0
++crc=B79C320D region=Pal mapper=2 submapper=0
++crc=B79F2651 region=Ntsc mapper=0 submapper=0
++crc=B7D69A6D region=Ntsc mapper=4 submapper=0
++crc=B7F28915 region=Ntsc mapper=16 submapper=0
++crc=B7F39933 region=Pal mapper=2 submapper=0
++crc=B80192B7 region=Pal mapper=2 submapper=0
++crc=B811C054 region=Ntsc mapper=3 submapper=0
++crc=B834EB30 region=Ntsc mapper=2 submapper=0
++crc=B843EB84 region=Ntsc mapper=2 submapper=0
++crc=B84A73CC region=Ntsc mapper=4 submapper=0
++crc=B8747ABF region=Ntsc mapper=1 submapper=0
++crc=B87AB35A region=Ntsc mapper=0 submapper=0
++crc=B89888C9 region=Ntsc mapper=232 submapper=0
++crc=B8B9ACA3 region=Ntsc mapper=0 submapper=0
++crc=B8DAD5D2 region=Ntsc mapper=0 submapper=0
++crc=B918580C region=Ntsc mapper=1 submapper=0
++crc=B9582F60 region=Ntsc mapper=0 submapper=0
++crc=B95E9E7F region=Ntsc mapper=9 submapper=0
++crc=B96F8321 region=Ntsc mapper=3 submapper=0
++crc=B976219A region=Ntsc mapper=4 submapper=0
++crc=B9762DA8 region=Ntsc mapper=3 submapper=0
++crc=B979CAD5 region=Ntsc mapper=32 submapper=0
++crc=B97BFDD7 region=Ntsc mapper=3 submapper=0
++crc=B9AB06AA region=Ntsc mapper=1 submapper=0
++crc=B9B4D9E0 region=Ntsc mapper=118 submapper=0
++crc=B9CF171F region=Ntsc mapper=1 submapper=0
++crc=B9DC755E region=Ntsc mapper=3 submapper=0
++crc=BA322865 region=Ntsc mapper=1 submapper=0
++crc=BA327FD9 region=Pal mapper=69 submapper=0
++crc=BA43568A region=Ntsc mapper=80 submapper=0
++crc=BA51AC6F region=Ntsc mapper=78 submapper=0
++crc=BA58ED29 region=Ntsc mapper=1 submapper=0
++crc=BA766EC6 region=Ntsc mapper=1 submapper=0
++crc=BAACF521 region=Ntsc mapper=3 submapper=0
++crc=BACA10A9 region=Ntsc mapper=33 submapper=0
++crc=BAD36C17 region=Ntsc mapper=4 submapper=0
++crc=BAEBA201 region=Ntsc mapper=1 submapper=0
++crc=BB0F2D56 region=Ntsc mapper=132 submapper=0
++crc=BB435255 region=Ntsc mapper=1 submapper=0
++crc=BB6D7949 region=Ntsc mapper=4 submapper=0
++crc=BB7F829A region=Ntsc mapper=5 submapper=0
++crc=BBA58BE5 region=Ntsc mapper=70 submapper=0
++crc=BBB710D9 region=Ntsc mapper=4 submapper=0
++crc=BBE40DC4 region=Ntsc mapper=11 submapper=0
++crc=BBED6E6E region=Ntsc mapper=3 submapper=0
++crc=BBF464EB region=Pal mapper=0 submapper=0
++crc=BBFE23F4 region=Pal mapper=4 submapper=0
++crc=BC06543C region=Ntsc mapper=0 submapper=0
++crc=BC11E61A region=Ntsc mapper=19 submapper=0
++crc=BC25A18B region=Pal mapper=4 submapper=0
++crc=BC7364BB region=Ntsc mapper=4 submapper=0
++crc=BC7485B5 region=Ntsc mapper=1 submapper=0
++crc=BC7B1D0F region=Ntsc mapper=33 submapper=0
++crc=BC7FEDB9 region=Ntsc mapper=4 submapper=0
++crc=BC80FB52 region=Ntsc mapper=5 submapper=0
++crc=BC9BFFCB region=Pal mapper=1 submapper=0
++crc=BCACBBF4 region=Ntsc mapper=4 submapper=0
++crc=BCCFEF1C region=Pal mapper=4 submapper=0
++crc=BCE77871 region=Ntsc mapper=3 submapper=0
++crc=BCF68611 region=Ntsc mapper=1 submapper=0
++crc=BD018F0F region=Pal mapper=0 submapper=0
++crc=BD139BE7 region=Ntsc mapper=11 submapper=0
++crc=BD154C3E region=Ntsc mapper=71 submapper=0
++crc=BD29178A region=Ntsc mapper=79 submapper=0
++crc=BD339E75 region=Pal mapper=1 submapper=0
++crc=BD50F230 region=Ntsc mapper=4 submapper=0
++crc=BD523011 region=Ntsc mapper=210 submapper=1
++crc=BD9D0E85 region=Ntsc mapper=2 submapper=0
++crc=BDA183BB region=Ntsc mapper=4 submapper=0
++crc=BDA7925E region=Ntsc mapper=87 submapper=0
++crc=BDA8F8E4 region=Ntsc mapper=70 submapper=0
++crc=BDC124E5 region=Ntsc mapper=4 submapper=0
++crc=BDE3AE9B region=Ntsc mapper=66 submapper=0
++crc=BDE7A7B5 region=Ntsc mapper=113 submapper=0
++crc=BDE93999 region=Ntsc mapper=1 submapper=0
++crc=BDF046EF region=Ntsc mapper=7 submapper=0
++crc=BE06853F region=Ntsc mapper=16 submapper=0
++crc=BE0E93C3 region=Pal mapper=1 submapper=0
++crc=BE17E27B region=Ntsc mapper=243 submapper=0
++crc=BE250388 region=Ntsc mapper=4 submapper=0
++crc=BE387AF0 region=Ntsc mapper=3 submapper=0
++crc=BE3BF3B3 region=Ntsc mapper=1 submapper=0
++crc=BE95B219 region=Ntsc mapper=2 submapper=0
++crc=BEB15855 region=Ntsc mapper=3 submapper=0
++crc=BEB30478 region=Ntsc mapper=0 submapper=0
++crc=BEB8AB01 region=Pal mapper=66 submapper=0
++crc=BED47813 region=Pal mapper=4 submapper=0
++crc=BEE1C0D9 region=Ntsc mapper=4 submapper=0
++crc=BEE30C5F region=Ntsc mapper=4 submapper=0
++crc=BEE54426 region=Ntsc mapper=79 submapper=0
++crc=BEFE5480 region=Ntsc mapper=177 submapper=0
++crc=BF0C485D region=Ntsc mapper=3 submapper=0
++crc=BF250AF2 region=Ntsc mapper=0 submapper=0
++crc=BF3635CF region=Ntsc mapper=2 submapper=0
++crc=BF4F4BA6 region=Ntsc mapper=4 submapper=0
++crc=BF700470 region=Pal mapper=1 submapper=0
++crc=BF7F54B4 region=Ntsc mapper=4 submapper=0
++crc=BF888B75 region=Pal mapper=1 submapper=0
++crc=BF93112A region=Ntsc mapper=1 submapper=0
++crc=BFBFD25D region=Ntsc mapper=4 submapper=0
++crc=C0103592 region=Pal mapper=1 submapper=0
++crc=C05A365B region=Ntsc mapper=0 submapper=0
++crc=C05A63B2 region=Pal mapper=4 submapper=0
++crc=C060ED0A region=Ntsc mapper=1 submapper=0
++crc=C06FACFC region=Pal mapper=243 submapper=0
++crc=C09227A0 region=Ntsc mapper=4 submapper=0
++crc=C0B23520 region=Ntsc mapper=3 submapper=0
++crc=C0EDEDD0 region=Pal mapper=2 submapper=0
++crc=C0F251EA region=Pal mapper=4 submapper=0
++crc=C115A022 region=Pal mapper=4 submapper=0
++crc=C1719664 region=Ntsc mapper=1 submapper=0
++crc=C1B43207 region=Ntsc mapper=7 submapper=0
++crc=C1B79B14 region=Ntsc mapper=146 submapper=0
++crc=C1BA8BB9 region=Ntsc mapper=4 submapper=0
++crc=C1C3636B region=Ntsc mapper=4 submapper=0
++crc=C1D7AB1D region=Ntsc mapper=0 submapper=0
++crc=C1E91D3F region=Pal mapper=0 submapper=0
++crc=C1FBF659 region=Ntsc mapper=23 submapper=0
++crc=C226157D region=Ntsc mapper=79 submapper=0
++crc=C22BC87B region=Ntsc mapper=4 submapper=0
++crc=C22C23AB region=Ntsc mapper=1 submapper=0
++crc=C22F3E9F region=Ntsc mapper=1 submapper=0
++crc=C22FF1D8 region=Ntsc mapper=1 submapper=0
++crc=C247A23D region=Ntsc mapper=4 submapper=0
++crc=C247CC80 region=Ntsc mapper=210 submapper=1
++crc=C2730C30 region=Ntsc mapper=34 submapper=0
++crc=C2840372 region=Ntsc mapper=16 submapper=0
++crc=C2A4612E region=Ntsc mapper=79 submapper=0
++crc=C2EF3422 region=Ntsc mapper=1 submapper=0
++crc=C30848D3 region=Pal mapper=0 submapper=0
++crc=C30C9EC9 region=Ntsc mapper=1 submapper=0
++crc=C313EF54 region=Ntsc mapper=2 submapper=0
++crc=C32E9672 region=Pal mapper=4 submapper=0
++crc=C3463A3D region=Ntsc mapper=4 submapper=0
++crc=C372399B region=Ntsc mapper=4 submapper=0
++crc=C37F225C region=Ntsc mapper=2 submapper=0
++crc=C3A0A3E0 region=Pal mapper=0 submapper=0
++crc=C3C0811D region=Ntsc mapper=96 submapper=0
++crc=C3C7A568 region=Ntsc mapper=3 submapper=0
++crc=C3CCC493 region=Ntsc mapper=1 submapper=0
++crc=C3DE7C69 region=Ntsc mapper=1 submapper=0
++crc=C42E648A region=Ntsc mapper=1 submapper=0
++crc=C46969DF region=Pal mapper=4 submapper=0
++crc=C471E42D region=Ntsc mapper=1 submapper=0
++crc=C47EFC0E region=Ntsc mapper=79 submapper=0
++crc=C48363B4 region=Ntsc mapper=4 submapper=0
++crc=C48DDB52 region=Ntsc mapper=4 submapper=0
++crc=C49FCAB4 region=Ntsc mapper=1 submapper=0
++crc=C4A02712 region=Ntsc mapper=0 submapper=0
++crc=C4B6ED3C region=Ntsc mapper=1 submapper=0
++crc=C4BC85A2 region=Ntsc mapper=2 submapper=0
++crc=C4C3949A region=Ntsc mapper=0 submapper=0
++crc=C4E1886F region=Ntsc mapper=1 submapper=0
++crc=C4E81924 region=Pal mapper=4 submapper=0
++crc=C527C297 region=Ntsc mapper=4 submapper=0
++crc=C528ED56 region=Pal mapper=4 submapper=0
++crc=C53CF1D0 region=Pal mapper=1 submapper=0
++crc=C5657C12 region=Pal mapper=4 submapper=0
++crc=C58EEA57 region=Ntsc mapper=3 submapper=0
++crc=C5B0B1AB region=Ntsc mapper=2 submapper=0
++crc=C5CFE54E region=Ntsc mapper=2 submapper=0
++crc=C6000085 region=Ntsc mapper=2 submapper=0
++crc=C6182024 region=Ntsc mapper=1 submapper=0
++crc=C6224026 region=Ntsc mapper=1 submapper=0
++crc=C6557E02 region=Ntsc mapper=4 submapper=0
++crc=C67865A2 region=Ntsc mapper=0 submapper=0
++crc=C68363F6 region=Ntsc mapper=180 submapper=0
++crc=C6ADD8C5 region=Ntsc mapper=4 submapper=0
++crc=C6B5D7E0 region=Ntsc mapper=1 submapper=0
++crc=C6C2EDB5 region=Ntsc mapper=1 submapper=0
++crc=C6DD7E69 region=Ntsc mapper=1 submapper=0
++crc=C7197FB1 region=Ntsc mapper=3 submapper=0
++crc=C739E88E region=Ntsc mapper=86 submapper=0
++crc=C73B82FC region=Ntsc mapper=11 submapper=0
++crc=C740EB46 region=Ntsc mapper=7 submapper=0
++crc=C7642467 region=Ntsc mapper=1 submapper=0
++crc=C769BB34 region=Ntsc mapper=4 submapper=0
++crc=C76AADF4 region=Ntsc mapper=2 submapper=0
++crc=C7BCC981 region=Ntsc mapper=3 submapper=0
++crc=C7F0C457 region=Ntsc mapper=4 submapper=0
++crc=C811DC7A region=Ntsc mapper=19 submapper=0
++crc=C8228B54 region=Pal mapper=4 submapper=0
++crc=C829007E region=Ntsc mapper=66 submapper=0
++crc=C8AD4F32 region=Ntsc mapper=7 submapper=0
++crc=C8BD1908 region=Ntsc mapper=3 submapper=0
++crc=C8EBD977 region=Pal mapper=4 submapper=0
++crc=C8EDC97E region=Ntsc mapper=4 submapper=0
++crc=C8F203F9 region=Pal mapper=1 submapper=0
++crc=C9187B43 region=Ntsc mapper=4 submapper=0
++crc=C92B814B region=Pal mapper=4 submapper=0
++crc=C9484BB3 region=Ntsc mapper=1 submapper=0
++crc=C9556B36 region=Ntsc mapper=1 submapper=0
++crc=C973699D region=Ntsc mapper=1 submapper=0
++crc=C99B690A region=Pal mapper=1 submapper=0
++crc=C9EDF585 region=Ntsc mapper=4 submapper=0
++crc=CA033B3A region=Ntsc mapper=2 submapper=0
++crc=CA094848 region=Ntsc mapper=32 submapper=0
++crc=CA0A869E region=Ntsc mapper=11 submapper=0
++crc=CA24A1A2 region=Ntsc mapper=67 submapper=0
++crc=CA503F32 region=Ntsc mapper=1 submapper=0
++crc=CA594ACE region=Ntsc mapper=4 submapper=0
++crc=CA5EDBFC region=Ntsc mapper=4 submapper=0
++crc=CA69751B region=Ntsc mapper=19 submapper=0
++crc=CA6A7BF1 region=Ntsc mapper=4 submapper=0
++crc=CA730971 region=Ntsc mapper=4 submapper=0
++crc=CA96AD0E region=Ntsc mapper=4 submapper=0
++crc=CAB40A6C region=Pal mapper=243 submapper=0
++crc=CB04726D region=Ntsc mapper=3 submapper=0
++crc=CB0A3AF4 region=Ntsc mapper=1 submapper=0
++crc=CB0A76B1 region=Ntsc mapper=1 submapper=0
++crc=CB17D41E region=Ntsc mapper=2 submapper=0
++crc=CB32E243 region=Ntsc mapper=4 submapper=0
++crc=CB35FA90 region=Ntsc mapper=23 submapper=0
++crc=CB5ACB49 region=Ntsc mapper=4 submapper=0
++crc=CB8F9AB7 region=Ntsc mapper=4 submapper=0
++crc=CBF4366F region=Ntsc mapper=118 submapper=0
++crc=CBFB6DE5 region=Ntsc mapper=4 submapper=0
++crc=CC3544B0 region=Ntsc mapper=1 submapper=0
++crc=CC37094C region=Ntsc mapper=1 submapper=0
++crc=CC553FC4 region=Ntsc mapper=4 submapper=0
++crc=CC6CA4DC region=Ntsc mapper=1 submapper=0
++crc=CC7A4DCA region=Ntsc mapper=4 submapper=0
++crc=CCAF543A region=Ntsc mapper=4 submapper=0
++crc=CCC03440 region=Ntsc mapper=156 submapper=0
++crc=CCCAF368 region=Ntsc mapper=232 submapper=0
++crc=CCDCBFC6 region=Ntsc mapper=71 submapper=0
++crc=CCF35C02 region=Ntsc mapper=1 submapper=0
++crc=CD10DCE2 region=Ntsc mapper=4 submapper=0
++crc=CD50A092 region=Ntsc mapper=4 submapper=0
++crc=CD7A2FD7 region=Ntsc mapper=1 submapper=0
++crc=CD883CDC region=Ntsc mapper=0 submapper=0
++crc=CDC641FC region=Ntsc mapper=2 submapper=0
++crc=CE00022D region=Ntsc mapper=1 submapper=0
++crc=CE06F2D4 region=Ntsc mapper=4 submapper=0
++crc=CE07194F region=Ntsc mapper=66 submapper=0
++crc=CE228874 region=Ntsc mapper=4 submapper=0
++crc=CE2450C0 region=Ntsc mapper=3 submapper=0
++crc=CE67507A region=Ntsc mapper=0 submapper=0
++crc=CE77B4BE region=Ntsc mapper=1 submapper=0
++crc=CEA35D5A region=Ntsc mapper=80 submapper=0
++crc=CEB65B06 region=Ntsc mapper=7 submapper=0
++crc=CEBD2A31 region=Ntsc mapper=1 submapper=0
++crc=CEC28502 region=Ntsc mapper=136 submapper=0
++crc=CEE5857B region=Ntsc mapper=1 submapper=0
++crc=CF0C9D97 region=Ntsc mapper=185 submapper=0
++crc=CF23290F region=Ntsc mapper=19 submapper=0
++crc=CF26A149 region=Ntsc mapper=2 submapper=0
++crc=CF322BB3 region=Ntsc mapper=3 submapper=0
++crc=CF40B1C5 region=Ntsc mapper=4 submapper=0
++crc=CF4483AF region=Ntsc mapper=3 submapper=0
++crc=CF4487A2 region=Ntsc mapper=1 submapper=0
++crc=CF4DBDBE region=Ntsc mapper=0 submapper=0
++crc=CF5F8AF0 region=Ntsc mapper=1 submapper=0
++crc=CF6D0D7A region=Ntsc mapper=2 submapper=0
++crc=CF701DA4 region=Ntsc mapper=0 submapper=0
++crc=CF7CA9BD region=Pal mapper=2 submapper=0
++crc=CF849F72 region=Pal mapper=1 submapper=0
++crc=CF9CF7A2 region=Ntsc mapper=1 submapper=0
++crc=CFAE9DFA region=Ntsc mapper=1 submapper=0
++crc=CFD29C93 region=Ntsc mapper=4 submapper=0
++crc=CFD4A281 region=Ntsc mapper=1 submapper=0
++crc=CFD5AC62 region=Ntsc mapper=11 submapper=0
++crc=CFE02ADA region=Pal mapper=0 submapper=0
++crc=D029F841 region=Pal mapper=2 submapper=0
++crc=D04A40E6 region=Ntsc mapper=0 submapper=0
++crc=D054FFB0 region=Ntsc mapper=4 submapper=0
++crc=D074653D region=Ntsc mapper=3 submapper=0
++crc=D09B74DC region=Ntsc mapper=1 submapper=0
++crc=D0A9F4E1 region=Ntsc mapper=1 submapper=0
++crc=D0CC5EC8 region=Ntsc mapper=1 submapper=0
++crc=D0DF525E region=Pal mapper=4 submapper=0
++crc=D0DF726E region=Ntsc mapper=2 submapper=0
++crc=D0E53454 region=Ntsc mapper=80 submapper=0
++crc=D0E96F6B region=Ntsc mapper=2 submapper=0
++crc=D0EB749F region=Ntsc mapper=18 submapper=0
++crc=D0F70E36 region=Pal mapper=4 submapper=0
++crc=D1397940 region=Ntsc mapper=97 submapper=0
++crc=D152FB02 region=Ntsc mapper=1 submapper=0
++crc=D153CAF6 region=Pal mapper=2 submapper=0
++crc=D161888B region=Pal mapper=2 submapper=0
++crc=D1691028 region=Ntsc mapper=154 submapper=0
++crc=D175B0CB region=Ntsc mapper=1 submapper=0
++crc=D17B76DA region=Ntsc mapper=1 submapper=0
++crc=D188963D region=Ntsc mapper=11 submapper=0
++crc=D18E6BE3 region=Ntsc mapper=4 submapper=0
++crc=D19ADDEB region=Ntsc mapper=119 submapper=0
++crc=D19DCB2B region=Ntsc mapper=4 submapper=0
++crc=D1E50064 region=Ntsc mapper=1 submapper=0
++crc=D1EA84C3 region=Ntsc mapper=1 submapper=0
++crc=D1F7DF3A region=Ntsc mapper=2 submapper=0
++crc=D201EDCE region=Ntsc mapper=113 submapper=0
++crc=D2038FC5 region=Ntsc mapper=32 submapper=0
++crc=D20BB617 region=Pal mapper=118 submapper=0
++crc=D229FD5C region=Pal mapper=9 submapper=0
++crc=D2562072 region=Ntsc mapper=7 submapper=0
++crc=D2574720 region=Ntsc mapper=1 submapper=0
++crc=D2674B0A region=Ntsc mapper=0 submapper=0
++crc=D2699893 region=Ntsc mapper=88 submapper=0
++crc=D26EFD78 region=Ntsc mapper=66 submapper=0
++crc=D273B409 region=Ntsc mapper=4 submapper=0
++crc=D27B9D50 region=Ntsc mapper=4 submapper=0
++crc=D29DB3C7 region=Ntsc mapper=1 submapper=0
++crc=D2BC86F3 region=Ntsc mapper=1 submapper=0
++crc=D308D52C region=Ntsc mapper=0 submapper=0
++crc=D31DC910 region=Ntsc mapper=2 submapper=0
++crc=D31EB7BB region=Ntsc mapper=1 submapper=0
++crc=D323B806 region=Ntsc mapper=210 submapper=2
++crc=D343C66A region=Ntsc mapper=16 submapper=0
++crc=D353D351 region=Ntsc mapper=4 submapper=0
++crc=D364F816 region=Pal mapper=1 submapper=0
++crc=D3BFF72E region=Ntsc mapper=3 submapper=0
++crc=D3EC98AA region=Ntsc mapper=4 submapper=0
++crc=D40FA953 region=Ntsc mapper=185 submapper=0
++crc=D445F698 region=Ntsc mapper=0 submapper=0
++crc=D44B412E region=Pal mapper=1 submapper=0
++crc=D4611B79 region=Ntsc mapper=4 submapper=0
++crc=D467C0CC region=Ntsc mapper=23 submapper=0
++crc=D4924CBA region=Ntsc mapper=0 submapper=0
++crc=D49DCA84 region=Ntsc mapper=1 submapper=0
++crc=D4D9E21A region=Ntsc mapper=0 submapper=0
++crc=D532E98F region=Ntsc mapper=5 submapper=0
++crc=D534C98E region=Ntsc mapper=4 submapper=0
++crc=D568563F region=Ntsc mapper=4 submapper=0
++crc=D5941AA9 region=Ntsc mapper=1 submapper=0
++crc=D5C588DF region=Pal mapper=1 submapper=0
++crc=D5C64257 region=Ntsc mapper=0 submapper=0
++crc=D6190C63 region=Ntsc mapper=4 submapper=0
++crc=D630EE8F region=Ntsc mapper=1 submapper=0
++crc=D63B30F5 region=Ntsc mapper=4 submapper=0
++crc=D679627A region=Ntsc mapper=4 submapper=0
++crc=D67FD6A6 region=Pal mapper=1 submapper=0
++crc=D68A6F33 region=Ntsc mapper=1 submapper=0
++crc=D6AD4E9D region=Pal mapper=0 submapper=0
++crc=D6BBD8BA region=Ntsc mapper=0 submapper=0
++crc=D6EFAB8D region=Ntsc mapper=4 submapper=0
++crc=D6F7383E region=Pal mapper=1 submapper=0
++crc=D6FE9826 region=Ntsc mapper=1 submapper=0
++crc=D7077D96 region=Ntsc mapper=4 submapper=0
++crc=D7215873 region=Ntsc mapper=1 submapper=0
++crc=D72560E1 region=Pal mapper=1 submapper=0
++crc=D738C059 region=Ntsc mapper=2 submapper=0
++crc=D73AA04C region=Ntsc mapper=1 submapper=0
++crc=D745D7CB region=Pal mapper=0 submapper=0
++crc=D74B2719 region=Ntsc mapper=3 submapper=0
++crc=D754F500 region=Ntsc mapper=68 submapper=0
++crc=D7794AFC region=Ntsc mapper=4 submapper=0
++crc=D78BFB28 region=Pal mapper=2 submapper=0
++crc=D7AA0B6D region=Ntsc mapper=88 submapper=0
++crc=D7B35F7D region=Pal mapper=2 submapper=0
++crc=D7CB398F region=Ntsc mapper=1 submapper=0
++crc=D7E29C03 region=Ntsc mapper=4 submapper=0
++crc=D7F6320C region=Ntsc mapper=1 submapper=0
++crc=D7FABAC1 region=Ntsc mapper=22 submapper=0
++crc=D80B44BC region=Ntsc mapper=66 submapper=0
++crc=D821A1C6 region=Ntsc mapper=3 submapper=0
++crc=D8230D0E region=Ntsc mapper=1 submapper=0
++crc=D8578BFD region=Ntsc mapper=4 submapper=0
++crc=D8748E0A region=Ntsc mapper=18 submapper=0
++crc=D898A900 region=Ntsc mapper=3 submapper=0
++crc=D89E5A67 region=Ntsc mapper=3 submapper=0
++crc=D8D42F2F region=Ntsc mapper=0 submapper=0
++crc=D8EE7669 region=Ntsc mapper=1 submapper=0
++crc=D8EFF0DF region=Ntsc mapper=3 submapper=0
++crc=D8F651E2 region=Ntsc mapper=2 submapper=0
++crc=D9084936 region=Ntsc mapper=4 submapper=0
++crc=D91104F1 region=Ntsc mapper=0 submapper=0
++crc=D920F9DF region=Ntsc mapper=33 submapper=0
++crc=D923EB5B region=Ntsc mapper=1 submapper=0
++crc=D9323EE6 region=Pal mapper=1 submapper=0
++crc=D97595A3 region=Ntsc mapper=87 submapper=0
++crc=D97C31B0 region=Ntsc mapper=4 submapper=0
++crc=D996AB4E region=Ntsc mapper=66 submapper=0
++crc=D99A8804 region=Ntsc mapper=3 submapper=0
++crc=D9BB572C region=Ntsc mapper=1 submapper=0
++crc=D9C093B1 region=Ntsc mapper=0 submapper=0
++crc=D9F0749F region=Pal mapper=1 submapper=0
++crc=D9F1E47C region=Ntsc mapper=4 submapper=0
++crc=D9F45BE9 region=Ntsc mapper=1 submapper=0
++crc=DA2CB59A region=Ntsc mapper=7 submapper=0
++crc=DA430FB3 region=Ntsc mapper=113 submapper=0
++crc=DA690D17 region=Ntsc mapper=1 submapper=0
++crc=DA8E4AF4 region=Ntsc mapper=4 submapper=0
++crc=DA8F65AE region=Ntsc mapper=1 submapper=0
++crc=DAB84A9C region=Ntsc mapper=4 submapper=0
++crc=DAD34EE6 region=Ntsc mapper=1 submapper=0
++crc=DAD88CC5 region=Ntsc mapper=2 submapper=0
++crc=DAEE19F2 region=Ntsc mapper=1 submapper=0
++crc=DAF9D7E3 region=Ntsc mapper=0 submapper=0
++crc=DB05106E region=Ntsc mapper=16 submapper=0
++crc=DB196068 region=Ntsc mapper=2 submapper=0
++crc=DB1D03E5 region=Ntsc mapper=2 submapper=0
++crc=DB2D4F9D region=Ntsc mapper=4 submapper=0
++crc=DB479677 region=Ntsc mapper=1 submapper=0
++crc=DB564628 region=Ntsc mapper=1 submapper=0
++crc=DB99D0CB region=Ntsc mapper=71 submapper=0
++crc=DB9C072D region=Pal mapper=7 submapper=0
++crc=DB9DCF89 region=Ntsc mapper=0 submapper=0
++crc=DBB06A25 region=Ntsc mapper=0 submapper=0
++crc=DBC5ECD9 region=Ntsc mapper=0 submapper=0
++crc=DBECE74F region=Ntsc mapper=4 submapper=0
++crc=DBF90772 region=Ntsc mapper=3 submapper=0
++crc=DC02F095 region=Ntsc mapper=1 submapper=0
++crc=DC1E07D2 region=Ntsc mapper=1 submapper=0
++crc=DC320617 region=Ntsc mapper=0 submapper=0
++crc=DC45A886 region=Ntsc mapper=4 submapper=0
++crc=DC4DA5D4 region=Ntsc mapper=2 submapper=0
++crc=DC529482 region=Ntsc mapper=1 submapper=0
++crc=DC52BF0C region=Ntsc mapper=16 submapper=0
++crc=DC75732F region=Ntsc mapper=4 submapper=0
++crc=DCB7C0A1 region=Ntsc mapper=2 submapper=0
++crc=DCB972CE region=Ntsc mapper=16 submapper=0
++crc=DCD8D6F4 region=Ntsc mapper=4 submapper=0
++crc=DCDF06DE region=Ntsc mapper=4 submapper=0
++crc=DD062F9C region=Ntsc mapper=7 submapper=0
++crc=DD29FD59 region=Ntsc mapper=4 submapper=0
++crc=DD8ED0F7 region=Ntsc mapper=70 submapper=0
++crc=DDA190F9 region=Pal mapper=146 submapper=0
++crc=DDC6D9C9 region=Pal mapper=4 submapper=0
++crc=DDCBDA16 region=Ntsc mapper=243 submapper=0
++crc=DDD90C39 region=Ntsc mapper=4 submapper=0
++crc=DDDC56B8 region=Ntsc mapper=240 submapper=0
++crc=DE0C29A9 region=Ntsc mapper=1 submapper=0
++crc=DE25B90F region=Ntsc mapper=2 submapper=0
++crc=DE395EFD region=Ntsc mapper=3 submapper=0
++crc=DE581355 region=Ntsc mapper=1 submapper=0
++crc=DE7E4629 region=Pal mapper=1 submapper=0
++crc=DE84354A region=Ntsc mapper=1 submapper=0
++crc=DE8FD935 region=Ntsc mapper=4 submapper=0
++crc=DE9C9C64 region=Ntsc mapper=80 submapper=0
++crc=DF31B364 region=Ntsc mapper=112 submapper=0
++crc=DF3776C6 region=Ntsc mapper=4 submapper=0
++crc=DF3E45D2 region=Ntsc mapper=1 submapper=0
++crc=DF43E073 region=Ntsc mapper=4 submapper=0
++crc=DF4EDC13 region=Pal mapper=1 submapper=0
++crc=DF64963B region=Ntsc mapper=4 submapper=0
++crc=DF67DAA1 region=Ntsc mapper=0 submapper=0
++crc=DF6D0CE8 region=Pal mapper=1 submapper=0
++crc=DFA111F1 region=Ntsc mapper=4 submapper=0
++crc=DFAD3F66 region=Ntsc mapper=245 submapper=0
++crc=DFC0CE21 region=Ntsc mapper=1 submapper=0
++crc=DFD70E27 region=Ntsc mapper=0 submapper=0
++crc=DFEFE8CD region=Ntsc mapper=0 submapper=0
++crc=E02133AC region=Ntsc mapper=1 submapper=0
++crc=E043C6A5 region=Pal mapper=1 submapper=0
++crc=E0604F76 region=Ntsc mapper=0 submapper=0
++crc=E08C8A60 region=Ntsc mapper=4 submapper=0
++crc=E095C3F2 region=Ntsc mapper=4 submapper=0
++crc=E0AC6242 region=Pal mapper=2 submapper=0
++crc=E0B6B7BB region=Ntsc mapper=2 submapper=0
++crc=E0CBC2BA region=Ntsc mapper=1 submapper=0
++crc=E0FFFBD2 region=Pal mapper=4 submapper=0
++crc=E116447F region=Ntsc mapper=3 submapper=0
++crc=E1383DEB region=Ntsc mapper=26 submapper=0
++crc=E145B441 region=Ntsc mapper=1 submapper=0
++crc=E149E0B2 region=Ntsc mapper=1 submapper=0
++crc=E14F0A3F region=Ntsc mapper=1 submapper=0
++crc=E1526228 region=Ntsc mapper=4 submapper=0
++crc=E15C973D region=Ntsc mapper=1 submapper=0
++crc=E170404C region=Ntsc mapper=16 submapper=0
++crc=E19293A2 region=Ntsc mapper=1 submapper=0
++crc=E19EE99C region=Ntsc mapper=4 submapper=0
++crc=E1B260DA region=Ntsc mapper=2 submapper=0
++crc=E1C03EB6 region=Ntsc mapper=3 submapper=0
++crc=E1C41D7C region=Ntsc mapper=2 submapper=0
++crc=E1C59D94 region=Pal mapper=4 submapper=0
++crc=E211B93A region=Ntsc mapper=0 submapper=0
++crc=E2265BF4 region=Ntsc mapper=0 submapper=0
++crc=E2281986 region=Ntsc mapper=1 submapper=0
++crc=E2313813 region=Ntsc mapper=4 submapper=0
++crc=E24483B1 region=Ntsc mapper=1 submapper=0
++crc=E24DF353 region=Ntsc mapper=2 submapper=0
++crc=E292AA10 region=Ntsc mapper=2 submapper=0
++crc=E2A79A57 region=Ntsc mapper=1 submapper=0
++crc=E2B43A68 region=Ntsc mapper=2 submapper=0
++crc=E2C4EDCE region=Ntsc mapper=1 submapper=0
++crc=E3027EBE region=Pal mapper=1 submapper=0
++crc=E305202E region=Ntsc mapper=4 submapper=0
++crc=E30B2BCF region=Ntsc mapper=0 submapper=0
++crc=E326E0F5 region=Ntsc mapper=3 submapper=0
++crc=E333FFA1 region=Ntsc mapper=1 submapper=0
++crc=E349AF38 region=Ntsc mapper=24 submapper=0
++crc=E353969F region=Ntsc mapper=4 submapper=0
++crc=E37A39AB region=Pal mapper=4 submapper=0
++crc=E387C77F region=Ntsc mapper=4 submapper=0
++crc=E3C5BB3D region=Ntsc mapper=4 submapper=0
++crc=E3E2C3BF region=Ntsc mapper=3 submapper=0
++crc=E402B134 region=Pal mapper=3 submapper=0
++crc=E40B4973 region=Ntsc mapper=4 submapper=0
++crc=E429F0D3 region=Ntsc mapper=1 submapper=0
++crc=E4362167 region=Ntsc mapper=85 submapper=0
++crc=E44001D8 region=Ntsc mapper=1 submapper=0
++crc=E46AEE21 region=Ntsc mapper=4 submapper=0
++crc=E46B1C5D region=Ntsc mapper=140 submapper=0
++crc=E4776A2B region=Pal mapper=2 submapper=0
++crc=E47E9FA7 region=Ntsc mapper=0 submapper=0
++crc=E492D45A region=Ntsc mapper=0 submapper=0
++crc=E4A6E151 region=Ntsc mapper=3 submapper=0
++crc=E4A7D436 region=Ntsc mapper=4 submapper=0
++crc=E4E7C62D region=Ntsc mapper=4 submapper=0
++crc=E50A9130 region=Ntsc mapper=1 submapper=0
++crc=E53F7A55 region=Ntsc mapper=1 submapper=0
++crc=E54138A9 region=Pal mapper=0 submapper=0
++crc=E542E3CF region=Ntsc mapper=4 submapper=0
++crc=E56AA5E8 region=Ntsc mapper=4 submapper=0
++crc=E575687C region=Ntsc mapper=2 submapper=0
++crc=E57E5384 region=Pal mapper=0 submapper=0
++crc=E5901A99 region=Pal mapper=4 submapper=0
++crc=E592F53A region=Pal mapper=3 submapper=0
++crc=E5A8401B region=Pal mapper=1 submapper=0
++crc=E5A972BE region=Pal mapper=7 submapper=0
++crc=E5EA0EBE region=Ntsc mapper=1 submapper=0
++crc=E5FCC4C1 region=Pal mapper=1 submapper=0
++crc=E616FF0A region=Ntsc mapper=1 submapper=0
++crc=E62E3382 region=Ntsc mapper=71 submapper=0
++crc=E63D9193 region=Ntsc mapper=1 submapper=0
++crc=E64B8975 region=Ntsc mapper=19 submapper=0
++crc=E661918C region=Ntsc mapper=69 submapper=0
++crc=E66AD6B8 region=Pal mapper=0 submapper=0
++crc=E66BDDCF region=Ntsc mapper=1 submapper=0
++crc=E681B300 region=Pal mapper=4 submapper=0
++crc=E6857563 region=Ntsc mapper=4 submapper=0
++crc=E6A477B2 region=Ntsc mapper=2 submapper=0
++crc=E6B30BB3 region=Ntsc mapper=1 submapper=0
++crc=E6C9029E region=Ntsc mapper=1 submapper=0
++crc=E6DF6616 region=Ntsc mapper=87 submapper=0
++crc=E6F08E93 region=Ntsc mapper=2 submapper=0
++crc=E71D034E region=Pal mapper=1 submapper=0
++crc=E71DB268 region=Ntsc mapper=1 submapper=0
++crc=E73E7260 region=Ntsc mapper=4 submapper=0
++crc=E74A91BB region=Ntsc mapper=1 submapper=0
++crc=E74AA15A region=Ntsc mapper=1 submapper=0
++crc=E78A394C region=Ntsc mapper=4 submapper=0
++crc=E7C981A2 region=Ntsc mapper=4 submapper=0
++crc=E7D2C49D region=Ntsc mapper=0 submapper=0
++crc=E7DA8A04 region=Ntsc mapper=4 submapper=0
++crc=E7DDFEE3 region=Ntsc mapper=4 submapper=0
++crc=E8000BF7 region=Ntsc mapper=0 submapper=0
++crc=E840FD21 region=Ntsc mapper=4 submapper=0
++crc=E85B4D3D region=Ntsc mapper=2 submapper=0
++crc=E8A11BD7 region=Ntsc mapper=3 submapper=0
++crc=E8AF6FF5 region=Ntsc mapper=3 submapper=0
++crc=E8BAA782 region=Ntsc mapper=1 submapper=0
++crc=E9023072 region=Ntsc mapper=0 submapper=0
++crc=E911BCC4 region=Ntsc mapper=0 submapper=0
++crc=E9176129 region=Ntsc mapper=4 submapper=0
++crc=E943EC4D region=Ntsc mapper=1 submapper=0
++crc=E949EF8A region=Ntsc mapper=4 submapper=0
++crc=E94D5181 region=Ntsc mapper=1 submapper=0
++crc=E94E883D region=Pal mapper=4 submapper=0
++crc=E95454FC region=Ntsc mapper=4 submapper=0
++crc=E95E51E0 region=Ntsc mapper=1 submapper=0
++crc=E98AB943 region=Ntsc mapper=4 submapper=0
++crc=E9A6C211 region=Ntsc mapper=1 submapper=0
++crc=E9AD2163 region=Ntsc mapper=3 submapper=0
++crc=E9C387EC region=Ntsc mapper=4 submapper=0
++crc=E9D352EB region=Pal mapper=4 submapper=0
++crc=E9EDBA24 region=Ntsc mapper=0 submapper=0
++crc=E9F16673 region=Ntsc mapper=3 submapper=0
++crc=E9F8EF15 region=Pal mapper=4 submapper=0
++crc=EA113128 region=Ntsc mapper=11 submapper=0
++crc=EA19080A region=Ntsc mapper=79 submapper=0
++crc=EA27B477 region=Ntsc mapper=4 submapper=0
++crc=EA31CCD3 region=Ntsc mapper=2 submapper=0
++crc=EA3E78DD region=Ntsc mapper=18 submapper=0
++crc=EA4EB69E region=Ntsc mapper=1 submapper=0
++crc=EA89963F region=Ntsc mapper=3 submapper=0
++crc=EA90F3E2 region=Ntsc mapper=3 submapper=0
++crc=EAB002AE region=Ntsc mapper=4 submapper=0
++crc=EAB93CFB region=Ntsc mapper=1 submapper=0
++crc=EAC38105 region=Ntsc mapper=3 submapper=0
++crc=EAF7ED72 region=Ntsc mapper=1 submapper=0
++crc=EB0BDA7E region=Ntsc mapper=64 submapper=0
++crc=EB15169E region=Ntsc mapper=1 submapper=0
++crc=EB465156 region=Ntsc mapper=3 submapper=0
++crc=EB4CCA31 region=Pal mapper=0 submapper=0
++crc=EB61133B region=Ntsc mapper=3 submapper=0
++crc=EB764567 region=Ntsc mapper=0 submapper=0
++crc=EB803610 region=Ntsc mapper=4 submapper=0
++crc=EB84C54C region=Ntsc mapper=7 submapper=0
++crc=EB92B32A region=Ntsc mapper=25 submapper=0
++crc=EB9960EE region=Ntsc mapper=3 submapper=0
++crc=EBB5E666 region=Ntsc mapper=2 submapper=0
++crc=EBCF8419 region=Ntsc mapper=4 submapper=0
++crc=EBCFE7C5 region=Ntsc mapper=1 submapper=0
++crc=EBD0644D region=Ntsc mapper=0 submapper=0
++crc=EC0517C4 region=Ntsc mapper=0 submapper=0
++crc=EC0FC2DE region=Ntsc mapper=1 submapper=0
++crc=EC40E71B region=Ntsc mapper=140 submapper=0
++crc=EC8A884F region=Ntsc mapper=3 submapper=0
++crc=EC968C51 region=Ntsc mapper=4 submapper=0
++crc=ECBF33CE region=Ntsc mapper=4 submapper=0
++crc=ECCD4089 region=Ntsc mapper=1 submapper=0
++crc=ED2465BE region=Ntsc mapper=5 submapper=0
++crc=ED3FA60E region=Pal mapper=4 submapper=0
++crc=ED4D696F region=Ntsc mapper=2 submapper=0
++crc=ED77B453 region=Pal mapper=2 submapper=0
++crc=ED7F5555 region=Pal mapper=1 submapper=0
++crc=EDC3662B region=Ntsc mapper=1 submapper=0
++crc=EDCF1B71 region=Ntsc mapper=7 submapper=0
++crc=EDDCC468 region=Ntsc mapper=2 submapper=0
++crc=EE219A49 region=Pal mapper=3 submapper=0
++crc=EE6892EB region=Ntsc mapper=2 submapper=0
++crc=EE7E61DE region=Ntsc mapper=0 submapper=0
++crc=EE810D55 region=Ntsc mapper=74 submapper=0
++crc=EE8E6553 region=Ntsc mapper=5 submapper=0
++crc=EE921D8E region=Ntsc mapper=1 submapper=0
++crc=EEE111C2 region=Ntsc mapper=3 submapper=0
++crc=EEE6314E region=Ntsc mapper=4 submapper=0
++crc=EEE9A682 region=Ntsc mapper=5 submapper=0
++crc=EF7996BF region=Ntsc mapper=19 submapper=0
++crc=EFB09075 region=Ntsc mapper=2 submapper=0
++crc=EFB2B7E8 region=Ntsc mapper=0 submapper=0
++crc=EFCF375D region=Ntsc mapper=2 submapper=0
++crc=EFD26E37 region=Ntsc mapper=7 submapper=0
++crc=F00584B6 region=Ntsc mapper=4 submapper=0
++crc=F009DDD2 region=Ntsc mapper=4 submapper=0
++crc=F011E490 region=Ntsc mapper=5 submapper=0
++crc=F03E6D72 region=Ntsc mapper=4 submapper=0
++crc=F053AC5F region=Ntsc mapper=4 submapper=0
++crc=F05870D5 region=Ntsc mapper=79 submapper=0
++crc=F08E8EF0 region=Ntsc mapper=4 submapper=0
++crc=F0C198FF region=Pal mapper=1 submapper=0
++crc=F0E9971B region=Ntsc mapper=4 submapper=0
++crc=F161A5D8 region=Ntsc mapper=4 submapper=0
++crc=F17486DF region=Ntsc mapper=1 submapper=0
++crc=F181C021 region=Ntsc mapper=4 submapper=0
++crc=F184EB2D region=Pal mapper=4 submapper=0
++crc=F19A11AF region=Ntsc mapper=1 submapper=0
++crc=F1C76AED region=Ntsc mapper=1 submapper=0
++crc=F1E6B576 region=Ntsc mapper=86 submapper=0
++crc=F1FED9B8 region=Ntsc mapper=2 submapper=0
++crc=F2096D9C region=Ntsc mapper=2 submapper=0
++crc=F24D4F03 region=Ntsc mapper=177 submapper=0
++crc=F2594374 region=Ntsc mapper=4 submapper=0
++crc=F283CF58 region=Pal mapper=3 submapper=0
++crc=F2CE3641 region=Ntsc mapper=68 submapper=0
++crc=F2FC8212 region=Ntsc mapper=0 submapper=0
++crc=F304F1B9 region=Ntsc mapper=2 submapper=0
++crc=F31D36A3 region=Ntsc mapper=4 submapper=0
++crc=F31DCC15 region=Ntsc mapper=4 submapper=0
++crc=F32748A1 region=Ntsc mapper=4 submapper=0
++crc=F3623561 region=Ntsc mapper=4 submapper=0
++crc=F37BEFD5 region=Ntsc mapper=4 submapper=0
++crc=F3808245 region=Ntsc mapper=2 submapper=0
++crc=F3841DCD region=Ntsc mapper=79 submapper=0
++crc=F3F1269D region=Ntsc mapper=1 submapper=0
++crc=F41ADD60 region=Ntsc mapper=4 submapper=0
++crc=F42B0DBD region=Ntsc mapper=3 submapper=0
++crc=F450DB3A region=Ntsc mapper=2 submapper=0
++crc=F4615036 region=Ntsc mapper=1 submapper=0
++crc=F46EF39A region=Pal mapper=37 submapper=0
++crc=F471827D region=Ntsc mapper=1 submapper=0
++crc=F4B70BFE region=Ntsc mapper=1 submapper=0
++crc=F4DD5BA5 region=Ntsc mapper=1 submapper=0
++crc=F4DFDB14 region=Ntsc mapper=2 submapper=0
++crc=F4E5DF0E region=Ntsc mapper=4 submapper=0
++crc=F518DD58 region=Ntsc mapper=7 submapper=0
++crc=F51A7F46 region=Ntsc mapper=16 submapper=0
++crc=F532F09A region=Ntsc mapper=1 submapper=0
++crc=F540677B region=Ntsc mapper=5 submapper=0
++crc=F54B34BD region=Ntsc mapper=3 submapper=0
++crc=F56135C0 region=Ntsc mapper=4 submapper=0
++crc=F568A7A4 region=Ntsc mapper=1 submapper=0
++crc=F59CFC3D region=Pal mapper=1 submapper=0
++crc=F5A1B8FB region=Pal mapper=4 submapper=0
++crc=F5B2AFCA region=Ntsc mapper=1 submapper=0
++crc=F5CEEF8F region=Ntsc mapper=206 submapper=0
++crc=F5F435B1 region=Ntsc mapper=0 submapper=0
++crc=F6035030 region=Ntsc mapper=2 submapper=0
++crc=F6139EE9 region=Ntsc mapper=2 submapper=0
++crc=F613A8F9 region=Ntsc mapper=7 submapper=0
++crc=F6271A51 region=Ntsc mapper=25 submapper=0
++crc=F62B0327 region=Ntsc mapper=2 submapper=0
++crc=F635C594 region=Ntsc mapper=184 submapper=0
++crc=F64CB545 region=Ntsc mapper=2 submapper=0
++crc=F651398D region=Ntsc mapper=1 submapper=0
++crc=F66EC512 region=Ntsc mapper=4 submapper=0
++crc=F6751D3D region=Ntsc mapper=2 submapper=0
++crc=F6898A59 region=Ntsc mapper=4 submapper=0
++crc=F699EE7E region=Ntsc mapper=68 submapper=0
++crc=F6A9CB75 region=Ntsc mapper=168 submapper=0
++crc=F6AB12A2 region=Ntsc mapper=1 submapper=0
++crc=F6B9799C region=Ntsc mapper=1 submapper=0
++crc=F714FAE3 region=Ntsc mapper=1 submapper=0
++crc=F71E7EDD region=Ntsc mapper=1 submapper=0
++crc=F732C8FD region=Ntsc mapper=71 submapper=0
++crc=F74DFC91 region=Ntsc mapper=1 submapper=0
++crc=F7606810 region=Ntsc mapper=0 submapper=0
++crc=F760F1CB region=Ntsc mapper=0 submapper=0
++crc=F7762A20 region=Ntsc mapper=4 submapper=0
++crc=F7893859 region=Ntsc mapper=2 submapper=0
++crc=F79A75D7 region=Ntsc mapper=4 submapper=0
++crc=F7A9822E region=Ntsc mapper=0 submapper=0
++crc=F7B852E4 region=Ntsc mapper=3 submapper=0
++crc=F7D20181 region=Ntsc mapper=1 submapper=0
++crc=F7E07B83 region=Ntsc mapper=1 submapper=0
++crc=F808AF60 region=Ntsc mapper=184 submapper=0
++crc=F80BDC50 region=Ntsc mapper=33 submapper=0
++crc=F83E0D2D region=Pal mapper=1 submapper=0
++crc=F85E264D region=Ntsc mapper=4 submapper=0
++crc=F863D5BB region=Ntsc mapper=0 submapper=0
++crc=F885D931 region=Ntsc mapper=1 submapper=0
++crc=F89300FB region=Ntsc mapper=2 submapper=0
++crc=F8A713BE region=Ntsc mapper=3 submapper=0
++crc=F8C1A690 region=Ntsc mapper=1 submapper=0
++crc=F8C358D7 region=Pal mapper=0 submapper=0
++crc=F8D53171 region=Ntsc mapper=4 submapper=0
++crc=F919795D region=Pal mapper=4 submapper=0
++crc=F927FA43 region=Ntsc mapper=4 submapper=0
++crc=F92BE3EC region=Ntsc mapper=64 submapper=0
++crc=F92BE7F2 region=Ntsc mapper=2 submapper=0
++crc=F96D07C8 region=Ntsc mapper=1 submapper=0
++crc=F989296C region=Ntsc mapper=2 submapper=0
++crc=F99E37EB region=Ntsc mapper=1 submapper=0
++crc=F9B4240F region=Ntsc mapper=5 submapper=0
++crc=F9FC0700 region=Pal mapper=2 submapper=0
++crc=FA014BA1 region=Pal mapper=2 submapper=0
++crc=FA2A8A8B region=Ntsc mapper=4 submapper=0
++crc=FA43146B region=Ntsc mapper=2 submapper=0
++crc=FA434E09 region=Ntsc mapper=1 submapper=0
++crc=FA6D4281 region=Ntsc mapper=3 submapper=0
++crc=FA704C86 region=Ntsc mapper=2 submapper=0
++crc=FA73D3A2 region=Pal mapper=4 submapper=0
++crc=FA74F656 region=Ntsc mapper=4 submapper=0
++crc=FA7E02FA region=Ntsc mapper=3 submapper=0
++crc=FA7EE642 region=Pal mapper=1 submapper=0
++crc=FB1C0551 region=Ntsc mapper=1 submapper=0
++crc=FB2B6B10 region=Ntsc mapper=178 submapper=0
++crc=FB2F949F region=Ntsc mapper=112 submapper=0
++crc=FB3439FC region=Ntsc mapper=0 submapper=0
++crc=FB69743A region=Ntsc mapper=1 submapper=0
++crc=FB77099E region=Ntsc mapper=1 submapper=0
++crc=FB8A9B80 region=Ntsc mapper=1 submapper=0
++crc=FB98D46E region=Pal mapper=0 submapper=0
++crc=FBD48274 region=Pal mapper=4 submapper=0
++crc=FBDD0F1B region=Ntsc mapper=2 submapper=0
++crc=FBF8A785 region=Ntsc mapper=7 submapper=0
++crc=FC00A282 region=Ntsc mapper=0 submapper=0
++crc=FC2DA286 region=Pal mapper=3 submapper=0
++crc=FC2F9B2D region=Pal mapper=4 submapper=0
++crc=FC3236D1 region=Pal mapper=2 submapper=0
++crc=FC3E5C86 region=Ntsc mapper=2 submapper=0
++crc=FC5026EE region=Pal mapper=3 submapper=0
++crc=FC5783A7 region=Ntsc mapper=1 submapper=0
++crc=FC778215 region=Ntsc mapper=0 submapper=0
++crc=FC8DEBEF region=Ntsc mapper=152 submapper=0
++crc=FCB13110 region=Ntsc mapper=1 submapper=0
++crc=FCB5CB1E region=Ntsc mapper=2 submapper=0
++crc=FCBF28B1 region=Ntsc mapper=23 submapper=0
++crc=FCD772EB region=Pal mapper=4 submapper=0
++crc=FCDACA80 region=Ntsc mapper=0 submapper=0
++crc=FCE408A4 region=Ntsc mapper=3 submapper=0
++crc=FCE71311 region=Ntsc mapper=3 submapper=0
++crc=FCEBCC5F region=Pal mapper=0 submapper=0
++crc=FD21F54D region=Ntsc mapper=1 submapper=0
++crc=FD45E9C1 region=Ntsc mapper=1 submapper=0
++crc=FD55DD33 region=Ntsc mapper=112 submapper=0
++crc=FD63E7AC region=Ntsc mapper=4 submapper=0
++crc=FD7E9A7E region=Pal mapper=1 submapper=0
++crc=FD8D6C75 region=Ntsc mapper=2 submapper=0
++crc=FDB8AA9A region=Ntsc mapper=4 submapper=0
++crc=FDDF2135 region=Ntsc mapper=4 submapper=0
++crc=FDE14CCE region=Ntsc mapper=0 submapper=0
++crc=FDE1C7ED region=Ntsc mapper=1 submapper=0
++crc=FDF4569B region=Ntsc mapper=1 submapper=0
++crc=FDFF80D5 region=Pal mapper=1 submapper=0
++crc=FE08D602 region=Pal mapper=1 submapper=0
++crc=FE18E6B6 region=Ntsc mapper=0 submapper=0
++crc=FE3488D1 region=Ntsc mapper=5 submapper=0
++crc=FE364BE5 region=Ntsc mapper=1 submapper=0
++crc=FE387FE5 region=Ntsc mapper=32 submapper=0
++crc=FE4ED42B region=Ntsc mapper=4 submapper=0
++crc=FE84FCAC region=Ntsc mapper=4 submapper=0
++crc=FE907015 region=Pal mapper=2 submapper=0
++crc=FE99BBED region=Ntsc mapper=4 submapper=0
++crc=FE9FE4DA region=Ntsc mapper=3 submapper=0
++crc=FF1CEFAA region=Ntsc mapper=0 submapper=0
++crc=FF24D794 region=Ntsc mapper=0 submapper=0
++crc=FF53D73E region=Ntsc mapper=2 submapper=0
++crc=FFD9DB04 region=Ntsc mapper=0 submapper=0
++crc=FFE8507E region=Ntsc mapper=4 submapper=0
++crc=FFFDC310 region=Ntsc mapper=79 submapper=0
+diff --git b/ntscpalette.txt b/ntscpalette.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..b0491c163519ac6018d0027ce112b462da97a18d
+--- /dev/null
++++ b/ntscpalette.txt
+@@ -0,0 +1,518 @@
++# The NTSC palette that tetanes-core's Ntsc video filter and PPU debug views read (Ppu::NTSC_PALETTE).
++# build.rs turns it into the 1,536 bytes upstream shipped as ntscpalette.pal, checking their SHA-256.
++# One line per entry, in the order the code indexes them: entry = emphasis * 64 + colour,
++# where colour is the PPU palette value ($00-$3F) and emphasis is PPUMASK's three emphasis bits
++# (bit 0 red, bit 1 green, bit 2 blue in NTSC terms; 0-7). The last field is the RGB colour in hex.
++# emphasis colour rgb
++0 00 5B5B5B
++0 01 00237B
++0 02 12119D
++0 03 310499
++0 04 4F0071
++0 05 600135
++0 06 5E0901
++0 07 491800
++0 08 2A2C00
++0 09 0C3C00
++0 0A 004500
++0 0B 004309
++0 0C 003642
++0 0D 000000
++0 0E 030303
++0 0F 030303
++0 10 AAAAAA
++0 11 1455D9
++0 12 3A38FF
++0 13 6B22FF
++0 14 9818CA
++0 15 B21B71
++0 16 AE2B1C
++0 17 904400
++0 18 606200
++0 19 307C00
++0 1A 0E8900
++0 1B 00852B
++0 1C 017284
++0 1D 030303
++0 1E 030303
++0 1F 030303
++0 20 FFFFFF
++0 21 5CABFF
++0 22 8C89FF
++0 23 C56FFF
++0 24 F762FF
++0 25 FF66CB
++0 26 FF7967
++0 27 ED981F
++0 28 B8BA02
++0 29 80D704
++0 2A 54E62A
++0 2B 3EE279
++0 2C 41CCE0
++0 2D 444444
++0 2E 030303
++0 2F 030303
++0 30 FFFFFF
++0 31 BFE2FF
++0 32 D4D3FF
++0 33 EDC7FF
++0 34 FFC1FF
++0 35 FFC3F0
++0 36 FFCCC4
++0 37 FEDAA0
++0 38 E8E98D
++0 39 CFF58F
++0 3A BBFBA6
++0 3B B0F9CC
++0 3C B2F0F9
++0 3D B3B3B3
++0 3E 030303
++0 3F 030303
++1 00 5C3935
++1 01 000C4E
++1 02 12016C
++1 03 2F006B
++1 04 4C004E
++1 05 5D0020
++1 06 5E0200
++1 07 490C00
++1 08 2C1900
++1 09 0F2400
++1 0A 002800
++1 0B 002400
++1 0C 00181E
++1 0D 000000
++1 0E 040000
++1 0F 040000
++1 10 AC756E
++1 11 152E94
++1 12 3A1BC0
++1 13 680DC0
++1 14 930994
++1 15 AD0D4F
++1 16 AF1C0E
++1 17 902E00
++1 18 624300
++1 19 345400
++1 1A 125B00
++1 1B 03550B
++1 1C 02414B
++1 1D 040000
++1 1E 040000
++1 1F 040000
++1 20 FFBFB6
++1 21 5E6FDF
++1 22 8C57FF
++1 23 C245FF
++1 24 F23FDF
++1 25 FF4592
++1 26 FF5944
++1 27 EE6F09
++1 28 BB8700
++1 29 859B00
++1 2A 5BA209
++1 2B 449B41
++1 2C 42858E
++1 2D 452824
++1 2E 040000
++1 2F 040000
++1 30 FFBFB6
++1 31 C19DC6
++1 32 D693DA
++1 33 ED8BD9
++1 34 FF87C6
++1 35 FF8BA7
++1 36 FF9484
++1 37 FF9D66
++1 38 EAA855
++1 39 D3B055
++1 3A BFB366
++1 3B B4B083
++1 3C B4A7A5
++1 3D B57C75
++1 3E 040000
++1 3F 040000
++2 00 305325
++2 01 001E48
++2 02 000C60
++2 03 11015A
++2 04 250038
++2 05 35000E
++2 06 360600
++2 07 281500
++2 08 122700
++2 09 003800
++2 0A 004300
++2 0B 003E00
++2 0C 00301E
++2 0D 000000
++2 0E 000100
++2 0F 000100
++2 10 679D56
++2 11 004C8A
++2 12 1530AE
++2 13 371AA5
++2 14 570F72
++2 15 6F1531
++2 16 702500
++2 17 5B3E00
++2 18 395C00
++2 19 167600
++2 1A 018500
++2 1B 007E0A
++2 1C 00694A
++2 1D 000100
++2 1E 000100
++2 1F 000100
++2 20 ABF892
++2 21 2B9DCC
++2 22 4C7CF2
++2 23 7561E9
++2 24 9953B2
++2 25 B35A69
++2 26 B56E21
++2 27 9D8D00
++2 28 77AF00
++2 29 4DCC00
++2 2A 2EDD04
++2 2B 1AD539
++2 2C 19BE85
++2 2D 203D17
++2 2E 000100
++2 2F 000100
++2 30 ABF892
++2 31 72D2A9
++2 32 82C3B9
++2 33 94B7B5
++2 34 A3B09F
++2 35 AEB381
++2 36 AFBD60
++2 37 A5CA47
++2 38 95D93A
++2 39 83E63D
++2 3A 74ED50
++2 3B 6AE96C
++2 3C 6AE08D
++2 3D 6DA65B
++2 3E 000100
++2 3F 000100
++3 00 36361F
++3 01 000B3C
++3 02 010152
++3 03 140050
++3 04 270036
++3 05 37000C
++3 06 380000
++3 07 2A0A00
++3 08 151600
++3 09 022100
++3 0A 002700
++3 0B 002300
++3 0C 001717
++3 0D 000000
++3 0E 000000
++3 0F 000000
++3 10 70714B
++3 11 032D79
++3 12 1B1A9A
++3 13 3B0C96
++3 14 5A066F
++3 15 720A2E
++3 16 731900
++3 17 5E2A00
++3 18 3D3F00
++3 19 1C5100
++3 1A 055A00
++3 1B 005303
++3 1C 004040
++3 1D 000000
++3 1E 000000
++3 1F 000000
++3 20 B8B983
++3 21 356CB5
++3 22 5654D9
++3 23 7D42D5
++3 24 9F3AAA
++3 25 BA4062
++3 26 BB531C
++3 27 A46900
++3 28 7F8100
++3 29 579500
++3 2A 399F00
++3 2B 24982C
++3 2C 238276
++3 2D 252512
++3 2E 000000
++3 2F 000000
++3 30 B8B983
++3 31 7F9897
++3 32 8E8EA5
++3 33 9F85A4
++3 34 AE8193
++3 35 B98475
++3 36 B98D55
++3 37 B0973E
++3 38 A0A133
++3 39 8FAA34
++3 3A 81AE42
++3 3B 76AB5D
++3 3C 76A27E
++3 3D 777750
++3 3E 000000
++3 3F 000000
++4 00 3E3D73
++4 01 001684
++4 02 0B0AA5
++4 03 22009E
++4 04 380078
++4 05 430040
++4 06 3F000C
++4 07 2C0600
++4 08 111200
++4 09 002100
++4 0A 002B00
++4 0B 002B17
++4 0C 00234E
++4 0D 000000
++4 0E 00000A
++4 0F 00000A
++4 10 7C7BCF
++4 11 0B40E8
++4 12 2D2BFF
++4 13 5316FF
++4 14 740BD6
++4 15 850B83
++4 16 7E1431
++4 17 612500
++4 18 383900
++4 19 155100
++4 1A 005F06
++4 1B 006043
++4 1C 005498
++4 1D 00000A
++4 1E 00000A
++4 1F 00000A
++4 20 C9C8FF
++4 21 4485FF
++4 22 6F6CFF
++4 23 9B52FF
++4 24 C044FF
++4 25 D344EA
++4 26 CB508B
++4 27 AB6543
++4 28 7C7D1F
++4 29 529825
++4 2A 33A951
++4 2B 24A9A0
++4 2C 2A9CFF
++4 2D 2B2B58
++4 2E 00000A
++4 2F 00000A
++4 30 C9C8FF
++4 31 8FACFF
++4 32 A3A1FF
++4 33 B695FF
++4 34 C68FFF
++4 35 CD8EFF
++4 36 CA94F1
++4 37 BD9ECE
++4 38 A8A8BB
++4 39 96B4BF
++4 3A 87BBD6
++4 3B 80BBFA
++4 3C 83B6FF
++4 3D 8483D9
++4 3E 00000A
++4 3F 00000A
++5 00 3D2C43
++5 01 000952
++5 02 0A0071
++5 03 20006E
++5 04 340052
++5 05 400028
++5 06 3F0002
++5 07 2C0300
++5 08 110E00
++5 09 001800
++5 0A 001E00
++5 0B 001C00
++5 0C 001422
++5 0D 000000
++5 0E 000000
++5 0F 000000
++5 10 7B6184
++5 11 0A289C
++5 12 2C15C9
++5 13 4F08C5
++5 14 6E039B
++5 15 80045C
++5 16 7E0D1D
++5 17 611D00
++5 18 373100
++5 19 174200
++5 1A 024A00
++5 1B 004816
++5 1C 003B52
++5 1D 000000
++5 1E 000000
++5 1F 000000
++5 20 C7A2D4
++5 21 4261EE
++5 22 6D4AFF
++5 23 9639FF
++5 24 BA31EE
++5 25 CD33A7
++5 26 CB405E
++5 27 AA541D
++5 28 7B6C01
++5 29 547F03
++5 2A 36891D
++5 2B 278655
++5 2C 28779D
++5 2D 2B1D30
++5 2E 000000
++5 2F 000000
++5 30 C7A2D4
++5 31 8E87DF
++5 32 A17CF3
++5 33 B374F1
++5 34 C270DF
++5 35 CA72C2
++5 36 C977A2
++5 37 BB8182
++5 38 A78B70
++5 39 969372
++5 3A 889882
++5 3B 80969D
++5 3C 8190BD
++5 3D 82678C
++5 3E 000000
++5 3F 000000
++6 00 28383A
++6 01 001250
++6 02 000667
++6 03 0F0061
++6 04 23003F
++6 05 2E0018
++6 06 2C0000
++6 07 1F0500
++6 08 0C1100
++6 09 002000
++6 0A 002900
++6 0B 002703
++6 0C 001F29
++6 0D 000000
++6 0E 000000
++6 0F 000000
++6 10 5A7477
++6 11 003998
++6 12 1224BB
++6 13 3310B2
++6 14 52067E
++6 15 630842
++6 16 611209
++6 17 4C2200
++6 18 2D3700
++6 19 0D4E00
++6 1A 005D00
++6 1B 005A1E
++6 1C 004D5C
++6 1D 000000
++6 1E 000000
++6 1F 000000
++6 20 99BDC2
++6 21 257AE6
++6 22 4462FF
++6 23 6C49FF
++6 24 903BCA
++6 25 A33E86
++6 26 A04B41
++6 27 896010
++6 28 657800
++6 29 3E9301
++6 2A 20A323
++6 2B 13A15C
++6 2C 1491A4
++6 2D 1A2729
++6 2E 000000
++6 2F 000000
++6 30 99BDC2
++6 31 66A1D1
++6 32 7496E0
++6 33 868BDC
++6 34 9584C5
++6 35 9D86A9
++6 36 9C8C8A
++6 37 929571
++6 38 83A064
++6 39 71AC67
++6 3A 63B27B
++6 3B 5CB196
++6 3C 5DABB6
++6 3D 607B7E
++6 3E 000000
++6 3F 000000
++7 00 2C2C2C
++7 01 000941
++7 02 000057
++7 03 110055
++7 04 24003A
++7 05 2F0014
++7 06 2E0000
++7 07 200300
++7 08 0D0E00
++7 09 001800
++7 0A 001E00
++7 0B 001C00
++7 0C 00141B
++7 0D 000000
++7 0E 000000
++7 0F 000000
++7 10 616161
++7 11 002880
++7 12 1715A2
++7 13 37089E
++7 14 550376
++7 15 65043B
++7 16 630D05
++7 17 4F1D00
++7 18 2F3100
++7 19 104200
++7 1A 004A00
++7 1B 00480D
++7 1C 003B47
++7 1D 000000
++7 1E 000000
++7 1F 000000
++7 20 A2A2A2
++7 21 2D61C5
++7 22 4C4AE9
++7 23 7239E5
++7 24 9430BA
++7 25 A73377
++7 26 A54034
++7 27 8E5406
++7 28 6A6B00
++7 29 447F00
++7 2A 27890D
++7 2B 198640
++7 2C 1B7785
++7 2D 1D1D1D
++7 2E 000000
++7 2F 000000
++7 30 A2A2A2
++7 31 6E86B0
++7 32 7D7CBF
++7 33 8E74BD
++7 34 9C70AC
++7 35 A47190
++7 36 A37772
++7 37 99815A
++7 38 8A8B4D
++7 39 79934F
++7 3A 6C975E
++7 3B 659678
++7 3C 659096
++7 3D 676767
++7 3E 000000
++7 3F 000000
+diff --git a/src/bus.rs b/src/bus.rs
+index edaf8d28febff38c05af1cfc9e8ff2081be5d17a..ce66f2d6090586c25207c826db3c740e63721e8e 100644
+--- a/src/bus.rs
++++ b/src/bus.rs
+@@ -171,6 +171,10 @@ pub struct Bus {
+     /// waiting. See [`ControlDeck::clear_interrupt`](crate::control_deck::ControlDeck::clear_interrupt).
+     #[serde(skip)]
+     pub interrupt_taken: Option<FrameKind>,
++    /// Game Printer: a collector's shim ([`crate::shim`]), attached by whoever watches the run.
++    /// It only observes, so it is session state: never serialized or snapshotted.
++    #[serde(skip)]
++    pub shim: Option<Box<crate::shim::Shim>>,
+     /// Cheats: values substituted for what a read would otherwise return.
+     ///
+     /// Not serialized. A cheat is the player's current choice rather than the machine's - the same
+@@ -222,6 +226,7 @@ impl Bus {
+             instr_addr: 0,
+             access_hit: None,
+             interrupt_taken: None,
++            shim: None,
+             pc_history: None,
+             code_map: None,
+             call_stack: None,
+@@ -273,6 +278,7 @@ impl Bus {
+             // These are all session-specific values and are not restored across snapshots.
+             debugger: _,
+             interrupt_taken: _,
++            shim: _,
+             pc_history: _,
+             code_map: _,
+             call_stack: _,
+@@ -420,6 +426,38 @@ impl Bus {
+     }
+ }
+ 
++/// Game Printer: the PRG and CHR page tables, compared around a cartridge write to find bank
++/// switches.
++type PageTables = (
++    [crate::memory::Page; crate::memory::PRG_PAGES],
++    [crate::memory::Page; crate::memory::CHR_PAGES],
++);
++
++impl Bus {
++    #[cold]
++    #[inline(never)]
++    fn page_tables(&self) -> PageTables {
++        (*self.memory.prg_pages(), *self.memory.chr_pages())
++    }
++
++    /// Logs a bank switch if the write at `addr` changed the page tables from `before`.
++    #[cold]
++    #[inline(never)]
++    fn record_bank_switch(&mut self, before: &PageTables, addr: u16, val: u8) {
++        if self.page_tables() != *before {
++            let (scanline, dot) = (self.ppu.scanline, self.ppu.cycle);
++            crate::events::record(
++                &mut self.ppu.events,
++                crate::events::EventKind::BankSwitch,
++                scanline,
++                dot,
++                addr,
++                val,
++            );
++        }
++    }
++}
++
+ impl Bus {
+     /// Route a read to whichever component owns `addr`, without moving the console.
+     ///
+@@ -447,7 +485,8 @@ impl Bus {
+             0x4015 => self.apu.read_status(),
+             0x4016 => self.input_read(Player::One),
+             0x4017 => self.input_read(Player::Two),
+-            0x2000 | 0x2001 | 0x2003 | 0x2005 | 0x2006 => self.ppu.open_bus,
++            // Game Printer: a write-only register reads the whole open bus, decayed.
++            0x2000 | 0x2001 | 0x2003 | 0x2005 | 0x2006 => self.ppu.apply_open_bus(0xFF, 0),
+             _ => self.open_bus,
+         };
+         self.open_bus
+@@ -478,7 +517,7 @@ impl Bus {
+             0x4015 => self.apu.peek_status(),
+             0x4016 => self.input_peek(Player::One),
+             0x4017 => self.input_peek(Player::Two),
+-            0x2000 | 0x2001 | 0x2003 | 0x2005 | 0x2006 => self.ppu.open_bus,
++            0x2000 | 0x2001 | 0x2003 | 0x2005 | 0x2006 => self.ppu.peek_open_bus(),
+             _ => self.open_bus,
+         }
+     }
+@@ -496,15 +535,21 @@ impl Bus {
+         match addr {
+             0x0000..=0x07FF => self.wram[usize::from(addr)] = val,
+             0x4100..=0xFFFF => {
++                // Game Printer: with an event log attached, compare the page tables around the
++                // write to log bank switches ([`crate::events`]).
++                let pages = self.ppu.events.is_some().then(|| self.page_tables());
+                 // Data store first, then let the board act on any register the write hit.
+                 // Destructured so both fields can be borrowed at once.
+                 let Self { mapper, memory, .. } = self;
+                 memory.prg_write(addr, val);
+                 mapper.write_register(memory, addr, val);
++                if let Some(before) = pages {
++                    self.record_bank_switch(&before, addr, val);
++                }
+             }
+             0x2000 => self.write_ctrl(val),
+             0x2001 => self.write_mask(val),
+-            0x2002 => self.ppu.open_bus = val,
++            0x2002 => self.ppu.set_open_bus(0xFF, val),
+             0x2003 => self.ppu.write_oamaddr(val),
+             0x2004 => self.ppu.write_oamdata(val),
+             0x2005 => self.ppu.write_scroll(val),
+diff --git a/src/cart.rs b/src/cart.rs
+index a10abc83d8d000a3c5714f52d208a27bc5134550..87e4fce6a4f6e5ee3a0c8dcd0d7cb8f5bc2765d0 100644
+--- a/src/cart.rs
++++ b/src/cart.rs
+@@ -514,7 +514,7 @@ impl Cart {
+     }
+ 
+     fn lookup_info(crc32: u32) -> Option<GameInfo> {
+-        const GAME_DB: &[u8] = include_bytes!("../game_db.dat");
++        const GAME_DB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/game_db.dat"));
+ 
+         let Ok(games) = fs::load_version::<Vec<GameInfo>>(GAME_DB, fs::GAME_DB_VERSION) else {
+             error!("failed to load `game_db.dat`");
+diff --git a/src/control_deck.rs b/src/control_deck.rs
+index 9564a4fae8fa9ac48139e381a05b5331bb890db1..a88158246a2d70a352fdc7381c38177bf9ec4d0e 100644
+--- a/src/control_deck.rs
++++ b/src/control_deck.rs
+@@ -1331,7 +1331,7 @@ impl ControlDeck {
+         while self.cycles_remaining > 0.0 {
+             let start_cycles = self.bus.cpu.cycle;
+             self.step_instr()?;
+-            let cycles = self.bus.cpu.cycle - start_cycles;
++            let cycles = (self.bus.cpu.cycle - start_cycles) as u32;
+             total_cycles += cycles;
+             self.cycles_remaining -= cycles as f32;
+         }
+diff --git a/src/cpu.rs b/src/cpu.rs
+index 3a6657ae6dc03d5df4c6d3fdaf91c237f998281a..a14f06ee8b80f007d616b550e23a6f9dd78dde01 100644
+--- a/src/cpu.rs
++++ b/src/cpu.rs
+@@ -15,6 +15,7 @@
+ //! point is [`ControlDeck`](crate::control_deck::ControlDeck). See the crate-level
+ //! [stability](crate#stability) note for the tier this belongs to and why.
+ 
++use crate::events::{self, EventKind};
+ use crate::{
+     bus::Bus,
+     common::{NesRegion, ResetKind},
+@@ -216,7 +217,7 @@ impl fmt::Display for Disasm {
+ #[repr(C)]
+ pub struct Cpu {
+     /// Total CPU cycles run.
+-    pub cycle: u32,
++    pub cycle: u64,
+     /// Master clock cycles run, which is what the PPU and APU are caught up against.
+     pub master_clock: u32,
+     /// Program counter.
+@@ -668,6 +669,11 @@ impl Bus {
+                 self.ppu.cycle, self.ppu.scanline, self.cpu.cycle
+             );
+         }
++        if self.ppu.events.is_some() {
++            let kind = if nmi { EventKind::Nmi } else { EventKind::Irq };
++            let (scanline, dot, pc) = (self.ppu.scanline, self.ppu.cycle, self.cpu.pc);
++            events::record(&mut self.ppu.events, kind, scanline, dot, pc, 0);
++        }
+     }
+ 
+     /// Handle CPU interrupt requests, if any are pending.
+@@ -843,6 +849,13 @@ impl Bus {
+     /// Push a byte to the stack.
+     #[inline(always)]
+     pub(crate) fn push_byte(&mut self, val: u8) {
++        if self.shim.is_some() {
++            self.shim_pushing(true);
++            self.write(Cpu::SP_BASE | u16::from(self.cpu.sp), val);
++            self.shim_pushing(false);
++            self.cpu.sp = self.cpu.sp.wrapping_sub(1);
++            return;
++        }
+         self.write(Cpu::SP_BASE | u16::from(self.cpu.sp), val);
+         self.cpu.sp = self.cpu.sp.wrapping_sub(1);
+     }
+@@ -1005,6 +1018,12 @@ impl Bus {
+     #[inline(always)]
+     pub fn write_unwatched(&mut self, addr: u16, val: u8) {
+         self.start_cycle(self.cpu.start_cycles + 1);
++        if self.ppu.events.is_some() {
++            self.record_register_write(addr, val);
++        }
++        if self.shim.is_some() {
++            self.shim_write(addr, val);
++        }
+         if addr == 0x4014 {
+             self.cpu.start_oam_dma(u16::from(val) << 8);
+         } else {
+@@ -1013,6 +1032,21 @@ impl Bus {
+         self.end_cycle(self.cpu.end_cycles - 1);
+     }
+ 
++    /// Game Printer: logs a CPU write to a PPU, APU or controller register ([`crate::events`]).
++    #[cold]
++    #[inline(never)]
++    fn record_register_write(&mut self, addr: u16, val: u8) {
++        let (kind, addr) = match addr {
++            0x2000..=0x3FFF => (EventKind::PpuWrite, addr & 0x2007),
++            0x4014 => (EventKind::PpuWrite, addr),
++            0x4016 => (EventKind::ControllerWrite, addr),
++            0x4000..=0x4013 | 0x4015 | 0x4017 => (EventKind::ApuWrite, addr),
++            _ => return,
++        };
++        let (scanline, dot) = (self.ppu.scanline, self.ppu.cycle);
++        events::record(&mut self.ppu.events, kind, scanline, dot, addr, val);
++    }
++
+     /// Fetch a byte and increments PC by 1.
+     #[inline(always)]
+     #[must_use]
+diff --git b/src/events.rs b/src/events.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..b3203d7ffc9788a393637731049779140216c46d
+--- /dev/null
++++ b/src/events.rs
+@@ -0,0 +1,72 @@
++//! A log of console events, kept only when someone asks for one.
++//!
++//! Game Printer records these alongside each frame: interrupts taken, sprite 0 hits, bank
++//! switches, controller reads and writes to the PPU, APU and controller registers. The log lives
++//! on the [`Ppu`](crate::ppu::Ppu) because the sprite 0 hit is found inside it and its scanline and
++//! dot are every event's timestamp; events found on the bus push to the same log, so it stays in
++//! the order things happened.
++//!
++//! Off, which is the default, every hook is one test of an `Option` that is `None`, and nothing
++//! about emulation changes either way: the hooks only read state.
++
++/// What happened.
++#[derive(Debug, Copy, Clone, PartialEq, Eq)]
++#[repr(u8)]
++pub enum EventKind {
++    /// The CPU took the NMI vector. `addr` is the handler's address.
++    Nmi = 0,
++    /// The CPU took the IRQ vector (not a `BRK`). `addr` is the handler's address.
++    Irq = 1,
++    /// The PPU set the sprite 0 hit flag.
++    Sprite0Hit = 2,
++    /// A CPU write to the cartridge changed the PRG or CHR page tables (a bank switch or a
++    /// mirroring change). `addr` and `value` are the write's.
++    BankSwitch = 3,
++    /// The CPU read $4016 or $4017. `value` is what it read.
++    ControllerRead = 4,
++    /// The CPU wrote $4016, the controller strobe.
++    ControllerWrite = 5,
++    /// The CPU wrote a PPU register: $2000-$2007 (mirrors folded down) or $4014, OAM DMA.
++    PpuWrite = 6,
++    /// The CPU wrote an APU register: $4000-$4013, $4015 or $4017.
++    ApuWrite = 7,
++}
++
++/// One event, at the PPU dot it happened on.
++#[derive(Debug, Copy, Clone, PartialEq, Eq)]
++pub struct Event {
++    /// What happened.
++    pub kind: EventKind,
++    /// The PPU's scanline when it happened.
++    pub scanline: u16,
++    /// The PPU's dot within the scanline.
++    pub dot: u16,
++    /// The register written or read, or the handler's address for an interrupt; 0 for a sprite 0
++    /// hit.
++    pub addr: u16,
++    /// The value written or read; 0 for an interrupt or a sprite 0 hit.
++    pub value: u8,
++}
++
++/// Appends an event to `log` if a log is attached. A free function over the field rather than a
++/// method, so a caller holding a borrow of another part of the PPU can still record.
++#[cold]
++#[inline(never)]
++pub fn record(
++    log: &mut Option<Box<Vec<Event>>>,
++    kind: EventKind,
++    scanline: u16,
++    dot: u16,
++    addr: u16,
++    value: u8,
++) {
++    if let Some(log) = log {
++        log.push(Event {
++            kind,
++            scanline,
++            dot,
++            addr,
++            value,
++        });
++    }
++}
+diff --git a/src/input.rs b/src/input.rs
+index 14a8a0eb6e20125395490bce2a55533da88ea9c9..726a7b94e1d16df0df94d6bae0d2f62773368369 100644
+--- a/src/input.rs
++++ b/src/input.rs
+@@ -324,7 +324,25 @@ impl Input {
+ impl Bus {
+     /// Reads $4016/$4017 for one port, shifting the controller's register on.
+     pub(crate) fn input_read(&mut self, player: Player) -> u8 {
+-        self.zapper_sense(player) | self.input.read_port(player) | 0x40
++        let val = self.zapper_sense(player) | self.input.read_port(player) | 0x40;
++        // Game Printer: log the read ([`crate::events`]).
++        if self.ppu.events.is_some() {
++            let addr = if player == Player::Two {
++                0x4017
++            } else {
++                0x4016
++            };
++            let (scanline, dot) = (self.ppu.scanline, self.ppu.cycle);
++            crate::events::record(
++                &mut self.ppu.events,
++                crate::events::EventKind::ControllerRead,
++                scanline,
++                dot,
++                addr,
++                val,
++            );
++        }
++        val
+     }
+ 
+     /// Reads $4016/$4017 without shifting.
+@@ -442,6 +460,12 @@ pub struct Joypad {
+     pub index: u8,
+     /// Whether $4016 bit 0 is holding the register in reload.
+     pub strobe: bool,
++    /// How many times the shift register has been read since this was last
++    /// zeroed. Game Printer uses it to tell frames where the game polled the
++    /// controller from lag frames. Not part of the console's state, so it isn't
++    /// serialized and save states are unchanged.
++    #[serde(skip)]
++    pub reads: u32,
+ }
+ 
+ impl Joypad {
+@@ -452,6 +476,7 @@ impl Joypad {
+             concurrent_dpad: false,
+             index: 0,
+             strobe: false,
++            reads: 0,
+         }
+     }
+ 
+@@ -486,12 +511,14 @@ impl Joypad {
+             concurrent_dpad: false,
+             index: 0,
+             strobe: false,
++            reads: 0,
+         }
+     }
+ 
+     /// Shifts the next button out of the register.
+     #[must_use]
+     pub const fn read(&mut self) -> u8 {
++        self.reads = self.reads.wrapping_add(1);
+         let val = self.peek();
+         if !self.strobe && self.index < 8 {
+             self.index += 1;
+diff --git a/src/lib.rs b/src/lib.rs
+index d4f0c69a0e06c82d3d828cd143854b4a018b9c54..72f9d150c040faa1a80f4ec0de992404ccd75b75 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -19,12 +19,14 @@ pub mod common;
+ pub mod control_deck;
+ pub mod cpu;
+ pub mod error;
++pub mod events;
+ pub mod genie;
+ pub mod input;
+ pub mod mapper;
+ pub mod memory;
+ pub mod patch;
+ pub mod ppu;
++pub mod shim;
+ pub mod sys;
+ pub mod video;
+ 
+@@ -122,7 +124,7 @@ mod tests {
+     fn print_layouts() {
+         print_struct_layout!(
+             Cpu,
+-            cycle: u32,
++            cycle: u64,
+             master_clock: u32,
+             start_cycles: u8,
+             end_cycles: u8,
+@@ -225,6 +227,7 @@ mod tests {
+             nmi_pending: bool,
+ 
+             vram_buffer: u8,
++            open_bus_age: [u8; 8],
+             prevent_vbl: bool,
+             region: NesRegion,
+             emulate_warmup: bool,
+diff --git a/src/ppu.rs b/src/ppu.rs
+index 0f14b398168a975a575eda1c977a4c562ac8a688..71ed2c342203f722adf899b1361ea0227d5d491d 100644
+--- a/src/ppu.rs
++++ b/src/ppu.rs
+@@ -269,9 +269,12 @@ pub struct Ppu {
+     // === 160 ===
+     /// Each scanline can hold 8 sprites at a time before the `spr_overflow` flag is set.
+     pub sprites: [Sprite; 8],
+-    /// Which of the scanline's sprites cover each dot, one bit per index into [`Ppu::sprites`].
++    /// Which of the scanline's sprites cover each pixel, by X (dot - 1), one bit per index into
++    /// [`Ppu::sprites`]. Game Printer: indexed by X rather than dot, so the last pixel (X 255,
++    /// dot 256) has an entry: indexed by dot, a 256-entry array left a sprite's pixel at X 255
++    /// never drawn, where the console (and Mesen 2's `_hasSprite[257]`) draws it.
+     ///
+-    /// A set bit means that sprite's 8-pixel span contains the dot, so the pixel path visits only
++    /// A set bit means that sprite's 8-pixel span contains the pixel, so the pixel path visits only
+     /// the sprites that can contribute instead of scanning all [`Ppu::spr_count`] of them and
+     /// range-testing each.
+     // Rebuilt every scanline, so there is nothing here worth saving.
+@@ -287,12 +290,21 @@ pub struct Ppu {
+ 
+     /// $2007 PPUDATA buffer.
+     pub vram_buffer: u8,
++    /// Game Printer: frames since each bit of `open_bus` was last driven, saturating at
++    /// [`OPEN_BUS_DECAY_FRAMES`] + 1. A bit not driven for more than that many frames reads as 0,
++    /// as Mesen 2 models it (`NesPpu::SetOpenBus`). Counted at the start of scanline 240. Kept out of
++    /// the first cache line, which the per-dot path reads (`assert_ppu_cache_lines` in lib.rs).
++    pub open_bus_age: [u8; 8],
+     /// Prevents VBL from being triggered this frame.
+     pub prevent_vbl: bool,
+     /// Current NesRegion.
+     pub region: NesRegion,
+     /// Whether to emulate PPU warmup on power up.
+     pub emulate_warmup: bool,
++    /// Game Printer: the event log, when one is attached ([`crate::events`]). Not console state,
++    /// so it isn't serialized, and a restore leaves the console without one.
++    #[serde(skip)]
++    pub events: Option<Box<Vec<crate::events::Event>>>,
+ }
+ 
+ impl Default for Ppu {
+@@ -408,6 +420,10 @@ pub mod cycle {
+     pub const DIVIDER_DENDY: u8 = DIVIDER_PAL;
+ }
+ 
++/// Game Printer: an open bus bit not driven for more than this many frames reads as 0. Mesen 2
++/// uses 3 (`NesPpu::SetOpenBus`, "Decay bits to 0 after 3 frames"); see docs/oracle.md.
++pub const OPEN_BUS_DECAY_FRAMES: u8 = 3;
++
+ pub mod scanline {
+     //! Scanline constants.
+     //! <https://www.nesdev.org/wiki/PPU_rendering>
+@@ -440,7 +456,8 @@ pub mod scanline {
+ 
+ impl Ppu {
+     /// The NTSC palette the `Ntsc` video filter samples, as raw RGB triples.
+-    pub const NTSC_PALETTE: &'static [u8] = include_bytes!("../ntscpalette.pal");
++    pub const NTSC_PALETTE: &'static [u8] =
++        include_bytes!(concat!(env!("OUT_DIR"), "/ntscpalette.pal"));
+ 
+     /// NES PPU System Palette
+     /// 64 total possible colors, though only 32 can be loaded at a time
+@@ -482,6 +499,7 @@ impl Ppu {
+             is_render_scanline: true,
+             is_pal_spr_eval_scanline: false,
+             open_bus: 0x00,
++            open_bus_age: [0; 8],
+ 
+             ctrl_bg_select: 0,
+             ctrl_spr_select: 0,
+@@ -547,6 +565,7 @@ impl Ppu {
+             skip_rendering: false,
+             reset_signal: false,
+             emulate_warmup: false,
++            events: None,
+         };
+ 
+         // Decode both registers from zero rather than trusting the literals above: everything
+@@ -594,6 +613,7 @@ impl Ppu {
+             is_render_scanline: self.is_render_scanline,
+             is_pal_spr_eval_scanline: self.is_pal_spr_eval_scanline,
+             open_bus: self.open_bus,
++            open_bus_age: self.open_bus_age,
+ 
+             mask_min_draw_bg_cycle: self.mask_min_draw_bg_cycle,
+             mask_min_draw_spr_cycle: self.mask_min_draw_spr_cycle,
+@@ -868,7 +888,8 @@ impl Ppu {
+         self.reset_in_vblank();
+         self.nmi_pending = false;
+         self.reset_signal = false;
+-        self.open_bus = 0; // Clear open bus every frame
++        // Game Printer: the open bus decays bit by bit instead of clearing here
++        // ([`Ppu::set_open_bus`]).
+     }
+ 
+     fn oam_eval_cycle(&mut self) {
+@@ -1028,7 +1049,7 @@ impl Ppu {
+             * ((((self.tile_shift_hi >> bg_shift) & 0x01) << 1)
+                 | ((self.tile_shift_lo >> bg_shift) & 0x01)) as u8;
+ 
+-        let mut covering = self.spr_cover[usize::from(cycle)];
++        let mut covering = self.spr_cover[usize::from(x)];
+         if (covering != 0) & (cycle > self.mask_min_draw_spr_cycle) {
+             while covering != 0 {
+                 // Lowest set bit first, which is sprite priority order.
+@@ -1061,6 +1082,16 @@ impl Ppu {
+                             // `&mut self`, which would conflict with the borrow of `self.sprites`
+                             // above and force a copy of the sprite per pixel.
+                             self.status_spr_zero_hit = true;
++                            if self.events.is_some() {
++                                crate::events::record(
++                                    &mut self.events,
++                                    crate::events::EventKind::Sprite0Hit,
++                                    self.scanline,
++                                    self.cycle,
++                                    0,
++                                    0,
++                                );
++                            }
+                         }
+ 
+                         if !sprite.bg_priority | (bg_color == 0) {
+@@ -1091,7 +1122,7 @@ impl Ppu {
+         if (bg_mask == 0)
+             | (cycle <= self.mask_min_draw_spr_cycle)
+             | (cycle == 256)
+-            | (self.spr_cover[usize::from(cycle)] == 0)
++            | (self.spr_cover[usize::from(cycle.saturating_sub(1))] == 0)
+         {
+             return;
+         }
+@@ -1116,6 +1147,16 @@ impl Ppu {
+                 | ((sprite.tile_lo >> spr_shift) & 0x01);
+             if spr_color != 0 {
+                 self.set_spr_zero_hit(true);
++                if self.events.is_some() {
++                    crate::events::record(
++                        &mut self.events,
++                        crate::events::EventKind::Sprite0Hit,
++                        self.scanline,
++                        self.cycle,
++                        0,
++                        0,
++                    );
++                }
+             }
+         }
+     }
+@@ -1164,6 +1205,50 @@ impl Ppu {
+         self.color_bits_applied = through;
+     }
+ 
++    /// Game Printer: drives the bits of the open bus in `mask` with `value`, and lets every other
++    /// bit that hasn't been driven for more than [`OPEN_BUS_DECAY_FRAMES`] frames decay to 0, as
++    /// Mesen 2 does (`NesPpu::SetOpenBus`). Decay is applied here, when the bus is next used,
++    /// rather than on a clock.
++    pub fn set_open_bus(&mut self, mask: u8, value: u8) {
++        for bit in 0..8 {
++            let b = 1u8 << bit;
++            if mask & b != 0 {
++                self.open_bus = (self.open_bus & !b) | (value & b);
++                self.open_bus_age[bit] = 0;
++            } else if self.open_bus_age[bit] > OPEN_BUS_DECAY_FRAMES {
++                self.open_bus &= !b;
++            }
++        }
++    }
++
++    /// Game Printer: a register read that drives the bits outside `mask` with `value` and reads
++    /// the bits in `mask` from the open bus, after decay (Mesen 2's `NesPpu::ApplyOpenBus`).
++    pub fn apply_open_bus(&mut self, mask: u8, value: u8) -> u8 {
++        self.set_open_bus(!mask, value);
++        value | (self.open_bus & mask)
++    }
++
++    /// Game Printer: the open bus as a read would see it, decayed bits as 0, with no side effects.
++    #[must_use]
++    pub const fn peek_open_bus(&self) -> u8 {
++        let mut out = self.open_bus;
++        let mut bit = 0;
++        while bit < 8 {
++            if self.open_bus_age[bit] > OPEN_BUS_DECAY_FRAMES {
++                out &= !(1 << bit);
++            }
++            bit += 1;
++        }
++        out
++    }
++
++    /// Game Printer: one more frame since each open bus bit was driven, saturating.
++    pub fn age_open_bus(&mut self) {
++        for age in &mut self.open_bus_age {
++            *age = (*age + 1).min(OPEN_BUS_DECAY_FRAMES + 1);
++        }
++    }
++
+     // $2002 | R   | PPUSTATUS
+     //       | 0-5 | Unknown (???)
+     //       |   6 | Sprite0 Hit Flag, 1 = PPU rendering has hit sprite #0
+@@ -1173,9 +1258,8 @@ impl Ppu {
+     /// Reads $2002 PPUSTATUS, which clears the VBlank flag and resets the address latch as a side
+     /// effect. Use [`Ppu::peek_status`] to look without disturbing it.
+     pub fn read_status(&mut self) -> u8 {
+-        let status = self.peek_status();
+-        // Top three bits ignored for open bus
+-        self.open_bus |= status & 0xE0;
++        // Game Printer: the top three bits drive the open bus; the rest read it, decayed.
++        let status = self.apply_open_bus(0x1F, self.read_status_bits() & 0xE0);
+ 
+         if self.nmi_pending {
+             trace!("$2002 NMI Ack - PPU:{:3},{:3}", self.cycle, self.scanline);
+@@ -1209,7 +1293,7 @@ impl Ppu {
+     #[inline(always)]
+     pub const fn peek_status(&self) -> u8 {
+         // Only upper 3 bits are connected for this register
+-        (self.read_status_bits() & 0xE0) | (self.open_bus & 0x1F)
++        (self.read_status_bits() & 0xE0) | (self.peek_open_bus() & 0x1F)
+     }
+ 
+     // $2003 | W   | OAMADDR
+@@ -1219,8 +1303,8 @@ impl Ppu {
+     //       |     | colors, and other attributes of the sprites.
+     /// Writes $2003 OAMADDR, the index the next OAM access starts from.
+     #[inline(always)]
+-    pub const fn write_oamaddr(&mut self, val: u8) {
+-        self.open_bus = val;
++    pub fn write_oamaddr(&mut self, val: u8) {
++        self.set_open_bus(0xFF, val);
+         self.oamaddr = val;
+     }
+ 
+@@ -1232,8 +1316,9 @@ impl Ppu {
+     /// Reads $2004 OAMDATA at the current OAM address.
+     #[inline(always)]
+     pub fn read_oamdata(&mut self) -> u8 {
+-        self.open_bus = self.peek_oamdata();
+-        self.open_bus
++        let val = self.peek_oamdata();
++        self.set_open_bus(0xFF, val);
++        val
+     }
+ 
+     // $2004 | RW  | OAMDATA
+@@ -1263,7 +1348,7 @@ impl Ppu {
+     //       |     | sprites.
+     /// Writes $2004 OAMDATA at the current OAM address, incrementing it.
+     pub fn write_oamdata(&mut self, mut val: u8) {
+-        self.open_bus = val;
++        self.set_open_bus(0xFF, val);
+ 
+         if self.mask_rendering_enabled
+             && (self.is_visible_scanline
+@@ -1304,7 +1389,7 @@ impl Ppu {
+     /// Writes $2005 PPUSCROLL: X then Y, selected by the shared address latch.
+     #[inline(always)]
+     pub fn write_scroll(&mut self, val: u8) {
+-        self.open_bus = val;
++        self.set_open_bus(0xFF, val);
+ 
+         if self.reset_signal {
+             return;
+@@ -1316,7 +1401,7 @@ impl Ppu {
+     /// Writes $2006 PPUADDR: high byte then low, selected by the shared address latch.
+     #[inline(always)]
+     pub fn write_addr(&mut self, val: u8) {
+-        self.open_bus = val;
++        self.set_open_bus(0xFF, val);
+ 
+         if self.reset_signal {
+             return;
+@@ -1373,6 +1458,7 @@ impl Ppu {
+         self.is_render_scanline = true;
+         self.is_pal_spr_eval_scanline = false;
+         self.open_bus = 0x00;
++        self.open_bus_age = [0; 8];
+ 
+         self.reset_mask(kind);
+         self.scroll.reset(kind);
+@@ -1458,15 +1544,16 @@ impl Bus {
+     /// A12 counter. [`Bus::ppu_bus_peek`] observes without them.
+     #[inline]
+     pub(crate) fn ppu_bus_read(&mut self, addr: u16) -> u8 {
+-        self.ppu.open_bus = match addr {
++        // Game Printer: the CPU-facing open bus is set by the register that made the read
++        // ([`Bus::read_data`]), not here.
++        match addr {
+             0x0000..=0x3EFF => self.chr_read(addr),
+             0x3F00..=0x3FFF => self.ppu.palette.peek(addr),
+             _ => {
+                 error!("unexpected PPU memory access at ${:04X}", addr);
+                 0x00
+             }
+-        };
+-        self.ppu.open_bus
++        }
+     }
+ 
+     /// Route a read on the PPU bus with no side effects at all.
+@@ -1486,7 +1573,6 @@ impl Bus {
+     /// Route a write on the PPU bus.
+     #[inline]
+     pub(crate) fn ppu_bus_write(&mut self, addr: u16, val: u8) {
+-        self.ppu.open_bus = val;
+         match addr {
+             0x0000..=0x3EFF => self.chr_write(addr, val),
+             0x3F00..=0x3FFF => self.ppu.palette.write(addr, val),
+@@ -1613,9 +1699,9 @@ impl Bus {
+                     bg_priority: (attr & 0x20) == 0x20,
+                     flip_horizontal: (attr & 0x40) == 0x40,
+                 };
+-                let cycle = usize::from(x + 1);
++                let left = usize::from(x);
+                 let bit = 1 << idx;
+-                for dot in &mut self.ppu.spr_cover[cycle..(cycle + 8).min(256)] {
++                for dot in &mut self.ppu.spr_cover[left..(left + 8).min(256)] {
+                     *dot |= bit;
+                 }
+             } else {
+@@ -1727,6 +1813,7 @@ impl Bus {
+                 // outstanding rather than folding the bits into the finished frame a second time.
+                 self.ppu.apply_color_bits(size::FRAME);
+                 self.ppu.frame.increment();
++                self.ppu.age_open_bus();
+             }
+             s if s > self.ppu.prerender_scanline => {
+                 // Wrap scanline back to 0
+@@ -1845,25 +1932,31 @@ impl Bus {
+         let val = self.ppu_bus_read(addr);
+         // MMC3 clocks using A12
+         self.notify_ppu_bus(self.ppu.scroll.addr());
+-        self.ppu.open_bus = if addr < addr::PALETTE_START {
++        if addr < addr::PALETTE_START {
+             let buffer = self.ppu.vram_buffer;
+             self.ppu.vram_buffer = val;
+-            buffer
++            self.ppu.set_open_bus(0xFF, buffer);
+         } else {
+             // Set internal buffer with mirrors of nametable when reading palettes
+             // Since we're reading from > $3EFF subtract $1000 to fill
+             // buffer with nametable mirror data
+             self.ppu.vram_buffer = self.ppu_bus_read(addr - 0x1000);
+-            // Hi 2 bits of palette should be open bus
+-            val | (prev_open_bus & 0xC0)
+-        };
++            // Hi 2 bits of palette should be open bus. Game Printer: as Mesen reads them, before
++            // they decay, and only the low six bits are driven.
++            let val = val | (prev_open_bus & 0xC0);
++            self.ppu.set_open_bus(0x3F, val);
++            return self.trace_data_read(val);
++        }
++        let out = self.ppu.open_bus;
++        self.trace_data_read(out)
++    }
+ 
++    fn trace_data_read(&self, val: u8) -> u8 {
+         trace!(
+             "PPU $2007 read: {:02X} - PPU:{:3},{:3}",
+-            self.ppu.open_bus, self.ppu.cycle, self.ppu.scanline
++            val, self.ppu.cycle, self.ppu.scanline
+         );
+-
+-        self.ppu.open_bus
++        val
+     }
+ 
+     // $2007 | RW  | PPUDATA
+@@ -1884,6 +1977,7 @@ impl Bus {
+     // $2007 | RW  | PPUDATA
+     /// Writes $2007 PPUDATA at the current VRAM address, incrementing it.
+     pub fn write_data(&mut self, val: u8) {
++        self.ppu.set_open_bus(0xFF, val);
+         let addr = self.ppu.scroll.addr();
+         trace!(
+             "PPU $2007 write: ${addr:04X} -> {val:02X} - PPU:{:3},{:3}",
+@@ -1921,7 +2015,7 @@ impl Bus {
+     /// Writes $2000 PPUCTRL: nametable select, VRAM increment, pattern table selects, sprite size
+     /// and NMI enable.
+     pub fn write_ctrl(&mut self, val: u8) {
+-        self.ppu.open_bus = val;
++        self.ppu.set_open_bus(0xFF, val);
+         if self.ppu.reset_signal {
+             return;
+         }
+@@ -1959,7 +2053,7 @@ impl Bus {
+     /// colour emphasis.
+     #[inline(always)]
+     pub fn write_mask(&mut self, val: u8) {
+-        self.ppu.open_bus = val;
++        self.ppu.set_open_bus(0xFF, val);
+         if self.ppu.reset_signal {
+             return;
+         }
+@@ -2198,7 +2292,7 @@ mod tests {
+         bus.ppu.tile_shift_hi = 0x0000;
+ 
+         bus.ppu.spr_zero_visible = true;
+-        bus.ppu.spr_cover[9..17].fill(1 << 0);
++        bus.ppu.spr_cover[8..16].fill(1 << 0);
+ 
+         bus.ppu.sprites[0].x = 8;
+         bus.ppu.sprites[0].tile_lo = 0b0100;
+diff --git b/src/shim.rs b/src/shim.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..14f17ff98f96a983555a36a02e7bce24033dece7
+--- /dev/null
++++ b/src/shim.rs
+@@ -0,0 +1,345 @@
++//! Game Printer: the cartridge shim, a collector's view of the console from inside it
++//! (docs/research/rom-event-model.md in Game Printer, section 5).
++//!
++//! The CPU marks each instruction's PRG ROM bytes as it starts it (the opcode and its operands,
++//! by offset into PRG ROM), and each CPU write on its way to the bus: internal RAM and PRG RAM
++//! bytes written, and writes to watched addresses with their value and writer. A collector is
++//! called out to only where it asked: before an instruction whose opcode it set in
++//! [`Shim::opcodes`], at a PRG offset it set in [`Shim::hooks`], after an interrupt, when it
++//! set [`Shim::follow`] to see the next instruction, or at the instruction after one whose
++//! opcode it set in [`Shim::transfers`], with that one in [`Shim::arrived`]. So a transfer of
++//! control costs one call, where it went. Everything else is a bit set inline.
++//!
++//! The shim only observes. It is never serialized and never copied into a snapshot, so a
++//! console with one reaches the same states as one without.
++
++use crate::cpu::Cpu;
++
++/// A CPU write the shim saw to a watched address.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct ShimWrite {
++    /// The address as the CPU wrote it.
++    pub addr: u16,
++    /// The value written.
++    pub value: u8,
++    /// The writing instruction's opcode.
++    pub opcode: u8,
++    /// Its CPU address.
++    pub pc: u16,
++    /// Its PRG ROM offset, if it ran from PRG ROM.
++    pub offset: Option<usize>,
++    /// The instruction's number since the shim was attached ([`Shim::instructions`] when it
++    /// ran), so two writes by one read-modify-write tell apart from two instructions' writes.
++    pub instruction: u64,
++    /// A push to the stack (by `PHA`, `PHP`, `JSR`, `BRK` or an interrupt), not a write the
++    /// instruction's operand names.
++    pub push: bool,
++}
++
++/// An instruction whose opcode is in [`Shim::transfers`], kept until the next one starts.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct Transfer {
++    /// Its opcode.
++    pub opcode: u8,
++    /// Its PRG ROM offset, if it ran from PRG ROM.
++    pub offset: Option<usize>,
++    /// Its CPU address.
++    pub pc: u16,
++    /// The stack pointer before it ran.
++    pub sp: u8,
++}
++
++/// What the shim records, and where it calls out.
++#[derive(Debug, Clone)]
++pub struct Shim {
++    /// PRG ROM's and PRG RAM's place in the memory arena (offsets [`Memory::prg_offset`]
++    /// gives) and their lengths.
++    ///
++    /// [`Memory::prg_offset`]: crate::memory::Memory::prg_offset
++    rom_start: usize,
++    rom_len: usize,
++    ram_start: usize,
++    ram_len: usize,
++    /// Every byte of every instruction run from PRG ROM, by PRG ROM offset, bit `i % 64` of
++    /// word `i / 64`.
++    pub executed: Vec<u64>,
++    /// The opcode byte of each.
++    pub starts: Vec<u64>,
++    /// For each PRG ROM offset an instruction started at: its length, 0 for none yet, and its
++    /// opcode. ROM doesn't change, so an offset seen once needs no decoding again.
++    lens: Vec<u8>,
++    ops: Vec<u8>,
++    /// For each 1 KiB page of PRG ROM, the CPU pages (bit `n` for `$n*0x400`) it ran at.
++    pub windows: Vec<u64>,
++    /// Internal RAM bytes written ($0000-$07FF, mirrors folded).
++    pub ram_written: [u64; 32],
++    /// PRG RAM bytes written, by PRG RAM offset.
++    pub prg_ram_written: Vec<u64>,
++    /// Instructions started.
++    pub instructions: u64,
++    /// Instructions started anywhere but PRG ROM.
++    pub outside_rom: u64,
++    /// Opcodes to call out before, wherever they run: bit `op % 64` of word `op / 64`.
++    pub opcodes: [u64; 4],
++    /// PRG ROM offsets to call out before, as [`Shim::executed`] is laid out. Empty: none.
++    pub hooks: Vec<u64>,
++    /// Opcodes whose next instruction is called out, with them in [`Shim::arrived`].
++    pub transfers: [u64; 4],
++    /// The last instruction with an opcode in [`Shim::transfers`], until the next starts.
++    pending: Option<Transfer>,
++    /// At a call out: the instruction just run, when its opcode is in [`Shim::transfers`].
++    pub arrived: Option<Transfer>,
++    /// Call out before the next instruction, whatever it is. Cleared by the call.
++    pub follow: bool,
++    /// The PRG ROM offset of the instruction about to run, set as it starts.
++    pub here: Option<usize>,
++    /// Its CPU address.
++    pub pc: u16,
++    /// Its opcode.
++    pub opcode: u8,
++    /// The instruction before it.
++    pub last: (Option<usize>, u16),
++    /// Addresses whose writes are kept, as CPU addresses: bit `a % 64` of word `a / 64`. Empty:
++    /// none.
++    pub watch: Vec<u64>,
++    /// Writes to watched addresses since the collector last took them.
++    pub writes: Vec<ShimWrite>,
++    pushing: bool,
++}
++
++#[inline(always)]
++fn set(words: &mut [u64], i: usize) {
++    words[i / 64] |= 1 << (i % 64);
++}
++
++#[inline(always)]
++fn has(words: &[u64], i: usize) -> bool {
++    words.get(i / 64).is_some_and(|w| w & (1 << (i % 64)) != 0)
++}
++
++impl Shim {
++    /// A shim for a cartridge whose PRG ROM is `rom_len` bytes at arena offset `rom_start` and
++    /// whose PRG RAM is `ram_len` bytes at `ram_start`.
++    pub fn new(rom_start: usize, rom_len: usize, ram_start: usize, ram_len: usize) -> Self {
++        Self {
++            rom_start,
++            rom_len,
++            ram_start,
++            ram_len,
++            executed: vec![0; rom_len.div_ceil(64)],
++            starts: vec![0; rom_len.div_ceil(64)],
++            lens: vec![0; rom_len],
++            ops: vec![0; rom_len],
++            windows: vec![0; rom_len.div_ceil(1024)],
++            ram_written: [0; 32],
++            prg_ram_written: vec![0; ram_len.div_ceil(64)],
++            instructions: 0,
++            outside_rom: 0,
++            opcodes: [0; 4],
++            transfers: [0; 4],
++            pending: None,
++            arrived: None,
++            hooks: Vec::new(),
++            follow: false,
++            here: None,
++            pc: 0,
++            opcode: 0,
++            last: (None, 0),
++            watch: Vec::new(),
++            writes: Vec::new(),
++            pushing: false,
++        }
++    }
++
++    /// Calls out before every instruction with `op`.
++    pub fn hook_opcode(&mut self, op: u8) {
++        self.opcodes[usize::from(op) / 64] |= 1 << (op % 64);
++    }
++
++    /// Calls out after every instruction with `op`, at the next one, with it in
++    /// [`Shim::arrived`].
++    pub fn follow_opcode(&mut self, op: u8) {
++        self.transfers[usize::from(op) / 64] |= 1 << (op % 64);
++    }
++
++    /// Forgets a transfer waiting for its next instruction (a reset came between them).
++    pub fn forget(&mut self) {
++        self.pending = None;
++        self.arrived = None;
++    }
++
++    /// Calls out before the instruction at PRG ROM offset `offset`.
++    pub fn hook_offset(&mut self, offset: usize) {
++        if offset < self.rom_len {
++            if self.hooks.is_empty() {
++                self.hooks = vec![0; self.rom_len.div_ceil(64)];
++            }
++            set(&mut self.hooks, offset);
++        }
++    }
++
++    /// Whether the instruction at PRG ROM offset `offset` is hooked.
++    pub fn hooked(&self, offset: usize) -> bool {
++        has(&self.hooks, offset)
++    }
++
++    /// Keeps the writes to CPU address `addr`.
++    pub fn watch_addr(&mut self, addr: u16) {
++        if self.watch.is_empty() {
++            self.watch = vec![0; 1024];
++        }
++        set(&mut self.watch, usize::from(addr));
++    }
++
++    /// The PRG ROM offset of an arena offset, if it is in PRG ROM.
++    #[inline(always)]
++    fn rom(&self, arena: Option<usize>) -> Option<usize> {
++        let o = arena?.checked_sub(self.rom_start)?;
++        (o < self.rom_len).then_some(o)
++    }
++}
++
++impl crate::bus::Bus {
++    /// Game Printer: the shim's look at the instruction about to run. Marks its bytes and
++    /// returns whether the collector asked to be called before it. Call it before each
++    /// [`Bus::clock_instr`](crate::bus::Bus::clock_instr) while a shim is attached.
++    #[inline(always)]
++    pub fn shim_before(&mut self) -> bool {
++        if self.shim.is_none() {
++            return false;
++        }
++        let pc = self.cpu.pc;
++        let interrupted = self.interrupt_taken.is_some();
++        let sp = self.cpu.sp;
++        // A board that serves PRG reads itself, or a cheat, can make a fetch read something other
++        // than the ROM byte, so then each instruction is decoded as it is fetched.
++        let constant = self.patches.is_empty()
++            && !self
++                .mapper_ops
++                .intersects(crate::mapper::MapperOps::SERVES_PRG_READS);
++        let here = if pc < 0x4020 {
++            None
++        } else {
++            self.shim
++                .as_deref()
++                .and_then(|s| s.rom(self.memory.prg_offset(pc)))
++        };
++        let known = match (here, self.shim.as_deref()) {
++            (Some(o), Some(s)) if constant && s.lens[o] != 0 => Some((s.ops[o], s.lens[o])),
++            _ => None,
++        };
++        let (opcode, len) = match known {
++            Some(k) => k,
++            None => {
++                let opcode = self.peek(pc);
++                (
++                    opcode,
++                    1 + Cpu::INSTR_REF[usize::from(opcode)].addr_mode.operand_len(),
++                )
++            }
++        };
++        let memory = &self.memory;
++        let Some(s) = self.shim.as_deref_mut() else {
++            return false;
++        };
++        s.last = (s.here, s.pc);
++        s.instructions += 1;
++        let within = (usize::from(pc) & 0x3FF) + usize::from(len) <= 0x400;
++        match here {
++            Some(o) => {
++                s.windows[o / 1024] |= 1 << (pc >> 10);
++                if known.is_none() {
++                    set(&mut s.starts, o);
++                    if constant {
++                        s.lens[o] = len;
++                        s.ops[o] = opcode;
++                    }
++                }
++                // Within one 1 KiB page (the page tables' unit) the bytes are consecutive in
++                // PRG ROM, and were marked when the offset was first seen; past it, each is
++                // looked up.
++                if known.is_none() || !within {
++                    set(&mut s.executed, o);
++                    for i in 1..len {
++                        let addr = pc.wrapping_add(u16::from(i));
++                        if within {
++                            set(&mut s.executed, o + usize::from(i));
++                        } else if addr >= 0x4020
++                            && let Some(x) = s.rom(memory.prg_offset(addr))
++                        {
++                            set(&mut s.executed, x);
++                        }
++                    }
++                }
++            }
++            None => {
++                s.outside_rom += 1;
++                for i in 1..len {
++                    let addr = pc.wrapping_add(u16::from(i));
++                    if addr >= 0x4020
++                        && let Some(x) = s.rom(memory.prg_offset(addr))
++                    {
++                        set(&mut s.executed, x);
++                    }
++                }
++            }
++        }
++        s.here = here;
++        s.pc = pc;
++        s.opcode = opcode;
++        s.arrived = s.pending.take();
++        if has(&s.transfers, usize::from(opcode)) {
++            s.pending = Some(Transfer {
++                opcode,
++                offset: here,
++                pc,
++                sp,
++            });
++        }
++        let want = interrupted
++            || s.arrived.is_some()
++            || std::mem::take(&mut s.follow)
++            || has(&s.opcodes, usize::from(opcode))
++            || here.is_some_and(|o| has(&s.hooks, o));
++        want
++    }
++
++    /// Game Printer: a CPU write, as the shim sees it on its way to the bus.
++    #[inline(always)]
++    pub(crate) fn shim_write(&mut self, addr: u16, val: u8) {
++        let memory = &self.memory;
++        let Some(s) = self.shim.as_deref_mut() else {
++            return;
++        };
++        if addr < 0x2000 {
++            set(&mut s.ram_written, usize::from(addr) & 0x7FF);
++        } else if addr >= 0x4020
++            && s.ram_len > 0
++            && let Some(o) = memory
++                .prg_offset(addr)
++                .and_then(|o| o.checked_sub(s.ram_start))
++            && o < s.ram_len
++        {
++            set(&mut s.prg_ram_written, o);
++        }
++        if has(&s.watch, usize::from(addr)) {
++            s.writes.push(ShimWrite {
++                addr,
++                value: val,
++                opcode: s.opcode,
++                pc: s.pc,
++                offset: s.here,
++                instruction: s.instructions,
++                push: s.pushing,
++            });
++        }
++    }
++
++    /// Game Printer: marks the writes while `on` as pushes to the stack.
++    #[inline(always)]
++    pub(crate) fn shim_pushing(&mut self, on: bool) {
++        if let Some(s) = self.shim.as_deref_mut() {
++            s.pushing = on;
++        }
++    }
++}
+diff --git a/src/sys/fs.rs b/src/sys/fs.rs
+index 1a26106ba4fcfaefbcf9c731451a6b54cf2a351d..ca5b8dada519e7d4b847a5fdc2783499957d6244 100644
+--- a/src/sys/fs.rs
++++ b/src/sys/fs.rs
+@@ -3,7 +3,7 @@
+ use cfg_if::cfg_if;
+ 
+ cfg_if! {
+-    if #[cfg(target_arch = "wasm32")] {
++    if #[cfg(all(target_arch = "wasm32", target_os = "unknown"))] {
+         mod wasm;
+         pub use wasm::*;
+     } else {
+diff --git a/src/sys/time.rs b/src/sys/time.rs
+index 17c62068625f10df0e827fc22554f5de4c5951b0..a921f9bc50a8eed2987bc1ee2d16ba7c13a57f45 100644
+--- a/src/sys/time.rs
++++ b/src/sys/time.rs
+@@ -3,7 +3,7 @@
+ use cfg_if::cfg_if;
+ 
+ cfg_if! {
+-    if #[cfg(target_arch = "wasm32")] {
++    if #[cfg(all(target_arch = "wasm32", target_os = "unknown"))] {
+         pub use web_time::{Duration, Instant};
+     } else {
+         pub use std::time::{Duration, Instant};

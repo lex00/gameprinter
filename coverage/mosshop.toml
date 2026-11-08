@@ -1,0 +1,31 @@
+# Coverage definition for Moss Hop, the reference game (docs/reference-game.md,
+# docs/coverage.md). Moss Hop isn't in the source registry (its ROM is built
+# at check time and its hash changes with the game), so this file is given by
+# path: gp coverage --definition coverage/mosshop.toml.
+schema = 1
+source = "mosshop"
+title = "Moss Hop"
+
+# The level is two screens wide; a screen is the high byte of the player's
+# position, PLAYER_X_HI ($11), read while STATE ($05) is 0 (playing).
+[screens]
+when = "ram[0x05] == 0"
+parts = [{ name = "screen", read = "ram[0x11]" }]
+screen = "screen {screen}"
+level = "1"
+
+# Two slugs, of one kind. A slot counts while ENEMY_ALIVE is 1.
+[objects]
+when = "ram[0x05] == 0"
+slots = [
+  { id = 0, active = "ram[0x26]" },
+  { id = 0, active = "ram[0x27]" },
+]
+names = { "0" = "Slug" }
+
+# What the four baselines in baselines/mosshop/ reach together.
+[thresholds]
+screens = ["screen 0", "screen 1"]
+levels = ["1"]
+objects = ["Slug"]
+inputs = ["none", "a", "right+b", "right+b+a", "left+b"]

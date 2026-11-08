@@ -1,0 +1,75 @@
+# Moss Hop (docs/reference-game.md): walks right at a pixel a frame, jumps
+# at frame 21, and in the air meets the side of the ? block at x 50, which
+# stops it; then turns left at frame 42, has landed by frame 60 and walks
+# back to x 10.
+#
+# The 5 lag frames are at power-on.
+
+schema = 0
+source = "mosshop"
+sha256 = "44fcedf5050970a0ae6cf10c76ac80d9628f663416c22adb8432a43b0c953ec4"
+description = "Walk right, jump into the side of the ? block, turn left in the air and walk back"
+frames = 120
+holds = ["right@10-40", "a@20-22", "left@41-80"]
+frame_hashes = "1caf1708ef43cf3621da2064d180bd0a2b6ae36c213f5d850c9ba737f89ffe7f"
+lag_frames = 5
+
+[[assert]]
+frame = 10
+label = "PLAYER_X"
+addr = 0x0010
+equals = 24
+
+[[assert]]
+frame = 30
+label = "PLAYER_X"
+addr = 0x0010
+equals = 44
+
+[[assert]]
+frame = 40
+label = "PLAYER_X"
+addr = 0x0010
+equals = 50
+
+[[assert]]
+frame = 41
+label = "FACING"
+addr = 0x0017
+equals = 0
+
+[[assert]]
+frame = 42
+label = "PLAYER_X"
+addr = 0x0010
+equals = 49
+
+[[assert]]
+frame = 60
+label = "ON_GROUND"
+addr = 0x0016
+equals = 1
+
+[[assert]]
+frame = 61
+label = "ON_GROUND"
+addr = 0x0016
+equals = 1
+
+[[assert]]
+frame = 61
+label = "PLAYER_Y"
+addr = 0x0012
+equals = 176
+
+[[assert]]
+frame = 120
+label = "PLAYER_X"
+addr = 0x0010
+equals = 10
+
+[[assert]]
+frame = 120
+label = "COINS"
+addr = 0x0009
+equals = 0

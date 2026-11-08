@@ -1,0 +1,56 @@
+# The improvement loop's recipe (docs/formats/loop.md): `gp loop
+# templates/mosshop --rom ROM` runs it from a fresh home, and a run made
+# from this template starts with these settings. Moss Hop has no committed
+# corpus, so `gp loop` makes one from the ROM (the generator's clips, kept
+# by the prune) and then verifies it.
+[loop]
+format = "0.1.0"
+
+[corpus]
+name = "mosshop"
+version = "1.0.0"
+mutants = "loop-mutants.toml"
+
+[source]
+baselines = "baselines/mosshop"
+
+[grid]
+seed = 1
+scout_every = 4
+in_flight = 3
+clips = 6
+
+[dense]
+seed = 1
+budget = 4000
+keep = 15
+write = 30
+
+[keep]
+rule = "better_none_worse"
+
+[budget]
+workers = 8
+agents = 2
+pool_threads = 0
+nice = 15
+rounds = 1
+steps = 200
+
+# Blank commands run the loop with no LLM, which is the reproducible mode.
+[agents.clip]
+command = ""
+model = ""
+attempts = 6
+timeout_s = 3600
+
+[agents.request]
+command = ""
+model = ""
+attempts = 1
+timeout_s = 600
+
+[integrate]
+branch = ""
+dry_run = true
+skip = []

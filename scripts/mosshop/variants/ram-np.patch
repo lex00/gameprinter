@@ -1,0 +1,32 @@
+--- a/games/mosshop/mosshop.s	2026-10-31 16:34:13
++++ b/games/mosshop/mosshop.s	2026-10-31 16:34:13
+@@ -13,6 +13,8 @@
+ 
+ .include "ram.inc"
+ 
++NMI_HOOK = $6A          ; two bytes: where the NMI goes on, set by reset
++
+ PPUCTRL   = $2000
+ PPUMASK   = $2001
+ PPUSTATUS = $2002
+@@ -133,6 +135,10 @@
+     lda #0
+     sta PPUSCROLL
+     sta PPUSCROLL
++    lda #<nmi_work      ; the NMI's work, reached through NMI_HOOK
++    sta NMI_HOOK
++    lda #>nmi_work
++    sta NMI_HOOK+1
+     lda #%10000000      ; NMI on, nametable $2000, both pattern tables at $0000
+     sta PPUCTRL
+     lda #%00011110      ; background and sprites, including the left 8 pixels
+@@ -176,6 +182,9 @@
+     pha
+     tya
+     pha
++    jmp (NMI_HOOK)
++
++nmi_work:
+     inc FRAMES
+     lda #0
+     sta OAMADDR

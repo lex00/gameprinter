@@ -1,0 +1,37 @@
+# Profiles for Moss Hop (docs/model.md, "Profiles";
+# docs/formats/profiles.md). The model as written is "retro", every switch
+# off, and every comparison, score and scenario uses it. Moss Hop has none
+# of the NES quirk options, so it has no physics fixes; it has lives but no
+# timer, so its assist makes the slugs easier instead.
+
+format = "0.2.0"
+
+[[groups]]
+name = "assist"
+title = "Assist"
+description = "Easier play. The level and the jump stay the game's"
+
+[[groups.switches]]
+name = "slow_slugs"
+description = "Slugs step half as often"
+
+[groups.switches.set]
+"entities.slug.patrol.period" = 4
+
+[[groups.switches]]
+name = "easy_stomp"
+description = "Landing on a slug stomps it with your feet up to 12 pixels into it, not 7"
+
+[groups.switches.set]
+"entities.slug.contact.stomp_depth" = 12
+
+[presets.assist]
+description = "Slow slugs and easy stomps"
+switches = ["slow_slugs", "easy_stomp"]
+
+# The standard mode beside "retro" (docs/settings.md, "Modes"). Moss Hop
+# has no lag, no timing switch and none of the console quirk options, so
+# "normal" turns nothing on and plays as retro does.
+[presets.normal]
+description = "No lag and no console quirks: Moss Hop has none to turn off, so this is the game as written"
+switches = []

@@ -1,0 +1,13 @@
+# CRT: Moss Hop as a television showed it, with live effects only
+# (docs/formats/theme.md). A runtime that draws the overlay at three pixels
+# to a game pixel shows the line gaps and the aperture grille; at the
+# view's size it shows the gaps on every other line and the dark corners.
+format = "0.1.2"
+id = "crt"
+title = "CRT"
+description = "A television's line gaps, aperture grille and dark corners"
+license = "CC0-1.0"
+
+[[effect]]
+kind = "crt"
+strength = 0.7

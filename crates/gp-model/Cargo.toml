@@ -1,0 +1,22 @@
+[package]
+name = "gp-model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+# The JSON Schema in schema/ is generated from the Rust types by schemars, so
+# the parser and the published schema can't drift (docs/model.md).
+schemars = "1.2.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+toml = "1.1.8"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+gp-runtime = { version = "0.1.0", path = "../gp-runtime" }

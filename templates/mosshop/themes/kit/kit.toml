@@ -1,0 +1,87 @@
+# The theme kit for mosshop (docs/theme-kit.md), written by `gp theme kit` from
+# the model. It names no character and holds no art: describe and draw
+# each slot from its role and description, and replace each sound role
+# with an original sound. .claude/skills/theme-generation/SKILL.md says how.
+format = "0.1.0"
+game = "mosshop"
+model = "mosshop"
+screen = [256, 240]
+pixel_aspect = "1"
+slots = "573245051bc656a4e7835ea8f3f4a2baa20a6c0676705e4913968427edc4902e"
+sound = []
+
+[[art]]
+id = "entity.player"
+kind = "sprite"
+role = "player"
+size = [16, 16]
+frames = 1
+frame_names = ["base"]
+timing = "one picture"
+colors = "3 colors and transparent in each 8 by 8 tile (a console palette); paint flat shapes in a dark, a middle and a light tone"
+anchor = "stands on the body's bottom edge; drawn facing right, mirrored to face left"
+description = "the hero, the one the player moves: a small round creature that runs and hops, 16 by 16 pixels, drawn facing right"
+label = "hero"
+poses = ["standing, facing right"]
+
+[art.geometry]
+feet = 16
+min_size = [12, 16]
+contrast = "stand apart from the stage's sky, background, terrain, water, platform: at least 50% of its pixels 20 or more (CIE76) from each of the stage's main colors, and a contrast of 1.5 or more with the most common one; measured as the `player` group, refused under 25%"
+
+[[art.geometry.boxes]]
+kind = "touch"
+what = "the hero's own box: a foe harms the hero where it meets this"
+rect = [2, 0, 12, 16]
+
+[[art.geometry.boxes]]
+kind = "solid"
+what = "stands on floors and stops at walls"
+rect = [2, 0, 12, 16]
+
+[[art]]
+id = "entity.enemy_483"
+kind = "sprite"
+role = "enemy"
+size = [16, 16]
+frames = 1
+frame_names = ["base"]
+timing = "one picture"
+colors = "3 colors and transparent in each 8 by 8 tile (a console palette); paint flat shapes in a dark, a middle and a light tone"
+anchor = "stands on the body's bottom edge; drawn facing right, mirrored to face left"
+description = "a small slow foe that crawls back and forth on the ground and harms the hero on touch; the hero can stomp it flat, 16 by 16 pixels, drawn facing right"
+label = "foe"
+poses = ["crawling, facing right"]
+
+[art.geometry]
+danger = ["base"]
+danger_what = "harms the hero on touch"
+feet = 16
+min_size = [12, 12]
+contrast = "stand apart from the stage's sky, background, terrain, water, platform: at least 50% of its pixels 20 or more (CIE76) from each of the stage's main colors, and a contrast of 1.5 or more with the most common one; measured as the `enemies` group, refused under 25%"
+
+[[art.geometry.boxes]]
+kind = "touch"
+what = "harms the hero where the hero's box meets it"
+rect = [2, 4, 12, 12]
+
+[[art]]
+id = "font"
+kind = "font"
+role = "hud"
+size = [8, 8]
+frames = 10
+frame_names = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+timing = "one glyph a character"
+colors = "3 colors and transparent in each 8 by 8 tile (a console palette); paint flat shapes in a dark, a middle and a light tone"
+anchor = "a cell of the score display"
+description = "the digits 0 to 9 of the score, the bonus and the lives"
+label = "digits"
+poses = ["the digit 0", "the digit 1", "the digit 2", "the digit 3", "the digit 4", "the digit 5", "the digit 6", "the digit 7", "the digit 8", "the digit 9"]
+
+[tolerance]
+edge = 2
+size = 4
+feet = 1
+floor = 1
+cover = 0.5

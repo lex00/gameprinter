@@ -1,0 +1,75 @@
+# Moss Hop (docs/reference-game.md): the run of slug-death.toml three
+# times. The deaths are at frames 74, 234 and 394; after the third the
+# game is over (STATE 3) at frame 484, and a new game starts at frame 604
+# with three lives and every counter at 0.
+#
+# The 5 lag frames are at power-on.
+
+schema = 0
+source = "mosshop"
+sha256 = "44fcedf5050970a0ae6cf10c76ac80d9628f663416c22adb8432a43b0c953ec4"
+description = "Run into the first slug three times: game over, then a new game"
+frames = 700
+holds = ["right+b@10-90", "a@30-32", "right+b@170-250", "a@190-192", "right+b@330-410", "a@350-352"]
+frame_hashes = "e7857f5272881573b630b334d2f772190b1accf2d7f5443bc40bc8add16c23b4"
+lag_frames = 5
+
+[[assert]]
+frame = 164
+label = "LIVES"
+addr = 0x000A
+equals = 1
+
+[[assert]]
+frame = 324
+label = "LIVES"
+addr = 0x000A
+equals = 0
+
+[[assert]]
+frame = 394
+label = "DEATHS"
+addr = 0x0007
+equals = 3
+
+[[assert]]
+frame = 483
+label = "STATE"
+addr = 0x0005
+equals = 1
+
+[[assert]]
+frame = 484
+label = "STATE"
+addr = 0x0005
+equals = 3
+
+[[assert]]
+frame = 603
+label = "STATE"
+addr = 0x0005
+equals = 3
+
+[[assert]]
+frame = 604
+label = "STATE"
+addr = 0x0005
+equals = 0
+
+[[assert]]
+frame = 604
+label = "LIVES"
+addr = 0x000A
+equals = 2
+
+[[assert]]
+frame = 604
+label = "DEATHS"
+addr = 0x0007
+equals = 0
+
+[[assert]]
+frame = 604
+label = "PLAYER_X"
+addr = 0x0010
+equals = 24

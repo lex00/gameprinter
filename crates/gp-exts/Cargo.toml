@@ -1,0 +1,22 @@
+[package]
+name = "gp-exts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# The registry of hook crates the tool's own builds run. It holds only the
+# demo hook: a game's hook crate lives with the game, never in this repo.
+[dependencies]
+gp-sim = { version = "0.1.0", path = "../gp-sim" }
+
+[build-dependencies]
+blake3 = "1.8.7"
+
+[dev-dependencies]
+blake3 = "1.8.7"
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

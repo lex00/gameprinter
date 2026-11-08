@@ -1,0 +1,70 @@
+# Moss Hop (docs/reference-game.md): the first part of finish-level.toml,
+# stomping the second slug at frame 169, then Left with B held from frame
+# 185. The player runs back past the floating blocks and falls into the pit.
+# When the level starts over, the stomped slug is back: a death restores
+# both slugs and the coins, while STOMPS, COINS and DEATHS keep counting.
+#
+# The 5 lag frames are at power-on.
+
+schema = 0
+source = "mosshop"
+sha256 = "44fcedf5050970a0ae6cf10c76ac80d9628f663416c22adb8432a43b0c953ec4"
+description = "Stomp a slug, fall into the pit, and find the slug and the coins back"
+frames = 420
+holds = ["right+b@10-180", "a@26-28", "a@68-70", "a@110-112", "left+b@185-"]
+frame_hashes = "0551136c7ebef41c6509e4cb4816210eeac9969f9c04a2a9a2e157b6a5d9827a"
+lag_frames = 5
+
+[[assert]]
+frame = 169
+label = "STOMPS"
+addr = 0x0008
+equals = 1
+
+[[assert]]
+frame = 169
+label = "ENEMY_STATE+1"
+addr = 0x0027
+equals = 2
+
+[[assert]]
+frame = 199
+label = "ENEMY_STATE+1"
+addr = 0x0027
+equals = 0
+
+[[assert]]
+frame = 420
+label = "STOMPS"
+addr = 0x0008
+equals = 1
+
+[[assert]]
+frame = 420
+label = "DEATHS"
+addr = 0x0007
+equals = 1
+
+[[assert]]
+frame = 420
+label = "COINS"
+addr = 0x0009
+equals = 3
+
+[[assert]]
+frame = 420
+label = "LIVES"
+addr = 0x000A
+equals = 1
+
+[[assert]]
+frame = 420
+label = "ENEMY_STATE+1"
+addr = 0x0027
+equals = 1
+
+[[assert]]
+frame = 420
+label = "LEVEL_RIGHT+145"
+addr = 0x0481
+equals = 8

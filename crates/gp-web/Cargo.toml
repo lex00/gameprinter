@@ -1,0 +1,47 @@
+[package]
+name = "gp-web"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# The model interpreter in the browser, Milestone 3's playable web build
+# (docs/web.md). The library is built for the browser with
+# `cargo rustc --lib --crate-type cdylib --target wasm32-unknown-unknown`
+# (scripts/web/build-preview.sh), so the native workspace build compiles it
+# as an ordinary rlib. `gp-web-prep` writes what a preview page loads.
+[dependencies]
+blake3 = "1.8.7"
+# The models' ext hooks, the registry `gp` runs them from, so the preview
+# runs the same game as the native interpreter (docs/web.md, "Hooks").
+gp-exts = { version = "0.1.0", path = "../gp-exts" }
+gp-interp = { version = "0.1.0", path = "../gp-interp" }
+gp-model = { version = "0.1.0", path = "../gp-model" }
+gp-package = { version = "0.1.0", path = "../gp-package" }
+gp-present = { version = "0.1.0", path = "../gp-present" }
+gp-runtime = { version = "0.1.0", path = "../gp-runtime" }
+gp-sim = { version = "0.1.0", path = "../gp-sim" }
+gp-sound = { version = "0.1.0", path = "../gp-sound" }
+serde_json = "1.0.154"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+gp-evidence = { version = "0.1.0", path = "../gp-evidence" }
+gp-look = { version = "0.1.0", path = "../gp-look" }
+gp-theme = { version = "0.1.0", path = "../gp-theme" }
+# What gp-web-prep writes, shared with the public page's in-browser lift.
+gp-web-lift = { version = "0.1.0", path = "../gp-web-lift" }
+toml = "1.1.8"
+
+[[bin]]
+name = "gp-web-prep"
+path = "src/bin/prep.rs"
+
+# The workspace forbids unsafe code. This crate denies it instead, so the
+# one module that exports functions to JavaScript (`abi`, wasm32 only) can
+# allow it: an export needs `#[unsafe(no_mangle)]` and raw pointers.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

@@ -1,0 +1,213 @@
+// The runtime protocol: the one interface between every tool and every way
+// of running a game (the original in an emulator, the model interpreter, a
+// generated build). See ARCHITECTURE.md, "Runtime protocol".
+//
+// Any change to it bumps the version and says which runtimes and tools must
+// change. crates/gp-runtime mirrors it as a Rust trait, and a test there
+// keeps the two in step.
+//
+// 0.2.0 (2026-10-27): `step` and `run-until` return a result, since a
+// runtime can fail mid-run (an NES CPU that hits a jam opcode), and
+// `run-until` says whether its condition was met. Nothing implemented 0.1.0.
+//
+// 0.3.0 (2026-10-27): `input-frame` gains `reset`, the reset button pressed
+// at the start of the frame, so a run that resets (a TAS movie) replays
+// through the protocol exactly. Runtimes must apply it before the frame;
+// tools that build input frames set it from the input log (format 1).
+// gp-nes is the only runtime.
+//
+// 0.4.0 (2026-10-29): `load-state` loads a canonical model state, the bytes
+// `canonical-state` returns (gp-sim's `GPSM`), into any runtime of the same
+// model, and says what it loaded in `load-note`s; the capability
+// `load-state` says a runtime has it. Tools build such a state from the
+// original's through a state mapping (gp_interp::translate). Model runtimes
+// (the interpreter, a generated build) must implement it; a runtime with no
+// model (gp-nes) refuses it and leaves the flag unset.
+package game-printer:runtime@0.4.0;
+
+interface types {
+  // A model path such as `entities.enemies[*].pos`, or for a runtime with no
+  // model a raw-state selector such as `ram[0x0770]` (grammar in
+  // docs/runtime-protocol.md).
+  type path = string;
+
+  // One frame of input. `buttons` holds one byte per controller port, port 1
+  // in the low byte; NES bits are A, B, Select, Start, Up, Down, Left, Right
+  // from bit 0. `axes` is for sources with analog input. `reset` presses
+  // the console's reset button at the start of the frame, before it runs;
+  // a runtime holding the last input past the end of a run doesn't repeat it.
+  record input-frame {
+    buttons: u32,
+    axes: list<s16>,
+    reset: bool,
+  }
+
+  record rect {
+    x: s64,
+    y: s64,
+    w: u64,
+    h: u64,
+  }
+
+  // Game-logic values are integers or fixed-point; floats exist only in the
+  // present interface.
+  variant value {
+    int(s64),
+    fixed(s64),
+    flag(bool),
+    text(string),
+    entity(u64),
+    vec2(tuple<s64, s64>),
+  }
+
+  record entry {
+    path: path,
+    value: value,
+  }
+
+  // Something that happened during a step, in the frame it happened in.
+  // Kinds are lowercase and hyphenated. A frame's events come in the order
+  // they happened, and `frame` ends each frame (`data`: `polled`). The NES
+  // runtime's other kinds are its event stream's: `nmi`, `irq`,
+  // `sprite0-hit`, `bank-switch`, `controller-read`, `controller-write`,
+  // `ppu-write` and `apu-write`, with `scanline` and `dot` first in `data`.
+  record event {
+    frame: u64,
+    kind: string,
+    entity: option<u64>,
+    data: list<entry>,
+  }
+
+  // What `run-until` did: whether the condition held when it stopped, and
+  // the events of the frames it ran.
+  record until {
+    met: bool,
+    events: list<event>,
+  }
+
+  variant patch-result {
+    applied,
+    needs-reload,
+    rejected(string),
+  }
+
+  // Features a runtime may support, so tools can degrade gracefully.
+  flags capabilities {
+    snapshot,
+    fork,
+    patch-in-place,
+    patch-parameters,
+    full-model-query,
+    explain-model,
+    explain-code,
+    explain-original,
+    present,
+    load-state,
+  }
+
+  // How `load-state`, or a translation into a model state, took one part
+  // of the state: as given, close to it (`why` says how), or not at all.
+  enum load-how {
+    loaded,
+    approximated,
+    missing,
+  }
+
+  // One part of a loaded state, by model path (a pattern such as
+  // `entities.goomba[*]` for many), and why it was taken as it was.
+  record load-note {
+    path: path,
+    how: load-how,
+    why: string,
+  }
+}
+
+interface session {
+  use types.{path, input-frame, rect, value, entry, event, until, patch-result, capabilities, load-note};
+
+  resource runtime {
+    capabilities: func() -> capabilities;
+
+    // Time. Each input frame advances one fixed tick. Where a call runs more
+    // frames than it has inputs, the last input stays held.
+    step: func(inputs: list<input-frame>) -> result<list<event>, string>;
+    // Checks the condition before the first frame and after each one.
+    run-until: func(condition: string, inputs: list<input-frame>, max-frames: u32) -> result<until, string>;
+    frame: func() -> u64;
+
+    // State. Snapshots and canonical state are opaque to clients; only the
+    // runtime that made a snapshot can restore it.
+    snapshot: func() -> list<u8>;
+    restore: func(snap: list<u8>) -> result<_, string>;
+    fork: func() -> runtime;
+    canonical-state: func() -> list<u8>;
+    state-hash: func() -> u64;
+    // Loads a canonical model state (another runtime's `canonical-state` of
+    // the same model, or one built from the original's state), returning
+    // notes on parts it approximated or couldn't load: none when it loaded
+    // all of it. A runtime with no model refuses it.
+    load-state: func(state: list<u8>) -> result<list<load-note>, string>;
+
+    // Observe.
+    query: func(selector: string) -> result<list<entry>, string>;
+    sample: func(selectors: list<string>, inputs: list<input-frame>, frames: u32) -> result<list<list<entry>>, string>;
+    entities-at: func(area: rect) -> list<u64>;
+
+    // Change.
+    patch: func(model-diff: string) -> patch-result;
+    set: func(p: path, v: value) -> result<_, string>;
+
+    // Explain: the model rule, generated code or original routine behind a value.
+    explain: func(p: path) -> list<string>;
+  }
+
+  load: func(model: list<u8>, assets: string, config: string) -> result<runtime, string>;
+}
+
+// Rendering, audio and the camera. Kept separate so headless runtimes on a
+// cluster don't have to implement them. Themes live only here.
+interface present {
+  use session.{runtime};
+  use types.{rect};
+
+  record image {
+    width: u32,
+    height: u32,
+    // RGBA8, row-major.
+    pixels: list<u8>,
+  }
+
+  record camera-transform {
+    // World-to-screen transform: screen = (world - origin) * scale.
+    origin: tuple<s64, s64>,
+    scale-num: u32,
+    scale-den: u32,
+    viewport: rect,
+  }
+
+  record audio-block {
+    sample-rate: u32,
+    channels: u8,
+    // Interleaved samples.
+    samples: list<f32>,
+    // The sound events behind the samples, such as `sfx.jump`.
+    cues: list<string>,
+  }
+
+  render: func(rt: borrow<runtime>, layer: option<string>) -> image;
+  audio: func(rt: borrow<runtime>, frames: u32) -> audio-block;
+  camera: func(rt: borrow<runtime>) -> camera-transform;
+}
+
+// A runtime with no presentation, for validation and refinement runs.
+world headless-runtime {
+  export types;
+  export session;
+}
+
+// A runtime that can also draw and play, for the editor and shipped builds.
+world full-runtime {
+  export types;
+  export session;
+  export present;
+}

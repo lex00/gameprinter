@@ -1,0 +1,42 @@
+[contract]
+schema = "0.2.0"
+model = "mosshop"
+default = "metric"
+description = "Moss Hop as itself: the level and rules as written, movement within measured tolerances, the look free to restyle"
+
+[[rule]]
+path = "levels"
+level = "structural"
+note = "Same tiles, spawns, pit and goal"
+
+[[rule]]
+path = "rules"
+level = "exact"
+note = "Dying, restarting and winning happen on the same frames"
+
+[[rule]]
+path = "counters"
+level = "exact"
+
+[[rule]]
+path = "entities.player.jump"
+level = "metric"
+
+[rule.tolerance]
+airtime = 2
+height = "5%"
+
+[[rule]]
+path = "entities[role=enemy]"
+level = "metric"
+
+[rule.tolerance]
+speed = "3%"
+
+[[rule]]
+path = "assets"
+level = "style"
+
+[[rule]]
+path = "entities[*].sprite"
+level = "style"

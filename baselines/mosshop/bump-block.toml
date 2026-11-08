@@ -1,0 +1,63 @@
+# Moss Hop (docs/reference-game.md): walks right under the ? block and jumps.
+# At frame 56 the head point (PLAYER_X + 8, PLAYER_Y) is in the block's
+# cell: the rise stops there, COINS goes to 1 and the cell (LEVEL_LEFT + 132,
+# row 8, column 4) becomes the used block, metatile 7.
+#
+# The 5 lag frames are at power-on.
+
+schema = 0
+source = "mosshop"
+sha256 = "44fcedf5050970a0ae6cf10c76ac80d9628f663416c22adb8432a43b0c953ec4"
+description = "Jump under the ? block: it gives a coin and becomes a used block"
+frames = 120
+holds = ["right@10-46", "a@47-49"]
+frame_hashes = "07765dee1cd9970277bb28abd49e1b09fe8ffc5bdb4638467a7f5f2300cd6e25"
+lag_frames = 5
+
+[[assert]]
+frame = 55
+label = "COINS"
+addr = 0x0009
+equals = 0
+
+[[assert]]
+frame = 55
+label = "LEVEL_LEFT+132"
+addr = 0x0384
+equals = 6
+
+[[assert]]
+frame = 56
+label = "COINS"
+addr = 0x0009
+equals = 1
+
+[[assert]]
+frame = 56
+label = "LEVEL_LEFT+132"
+addr = 0x0384
+equals = 7
+
+[[assert]]
+frame = 56
+label = "PLAYER_VY"
+addr = 0x0014
+equals = 0
+
+[[assert]]
+frame = 56
+label = "PLAYER_Y"
+addr = 0x0012
+equals = 142
+
+[[assert]]
+frame = 120
+label = "COINS"
+addr = 0x0009
+equals = 1
+
+[[assert]]
+frame = 120
+label = "PLAYER_Y"
+addr = 0x0012
+equals = 176

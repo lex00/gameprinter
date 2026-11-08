@@ -1,0 +1,314 @@
+--- a/games/mosshop/mosshop.s	2026-10-31 16:34:13
++++ b/games/mosshop/mosshop.s	2026-10-31 16:34:13
+@@ -13,6 +13,8 @@
+ 
+ .include "ram.inc"
+ 
++CUR_BANK = $6C          ; the bank the slugs' code is in, set by reset
++
+ PPUCTRL   = $2000
+ PPUMASK   = $2001
+ PPUSTATUS = $2002
+@@ -79,9 +81,9 @@
+ 
+ .segment "HEADER"
+     .byte "NES", $1A
+-    .byte 1             ; 16KB PRG
++    .byte 4             ; 64KB PRG
+     .byte 1             ; 8KB CHR
+-    .byte %00000001     ; mapper 0, vertical mirroring
++    .byte %00100001     ; mapper 2 (UxROM), vertical mirroring
+     .byte %00000000
+     .byte 0, 0, 0, 0, 0, 0, 0, 0
+ 
+@@ -133,6 +135,8 @@
+     lda #0
+     sta PPUSCROLL
+     sta PPUSCROLL
++    lda #1
++    sta CUR_BANK
+     lda #%10000000      ; NMI on, nametable $2000, both pattern tables at $0000
+     sta PPUCTRL
+     lda #%00011110      ; background and sprites, including the left 8 pixels
+@@ -145,6 +149,9 @@
+     lda #0
+     sta NMI_DONE
+     jsr read_pad
++    ldx CUR_BANK        ; the slugs' bank, from RAM
++    lda bank_table,x
++    sta bank_table,x
+     jsr tick_squashed   ; a squashed slug's time runs in every state
+     lda STATE
+     beq @playing
+@@ -777,130 +784,9 @@
+     sta STATE
+     lda #GAME_OVER_FRAMES
+     sta TIMER
+-    rts
+-
+-; A squashed slug's time runs out, and it goes.
+-tick_squashed:
+-    ldx #0
+-@enemy:
+-    lda ENEMY_STATE,x
+-    cmp #SQUASHED
+-    bne @next
+-    dec ENEMY_TIMER,x
+-    bne @next
+-    lda #GONE
+-    sta ENEMY_STATE,x
+-@next:
+-    inx
+-    cpx #ENEMY_COUNT
+-    bne @enemy
+     rts
+ 
+-; Each walking enemy walks one pixel every other frame and turns at the ends
+-; of its patrol.
+-move_enemies:
+-    lda FRAMES
+-    and #1
+-    bne @done
+-    ldx #0
+-@enemy:
+-    lda ENEMY_STATE,x
+-    cmp #WALKING
+-    bne @next
+-    lda ENEMY_DIR,x
+-    bne @left
+-    inc ENEMY_X,x
+-    bne @right_end
+-    inc ENEMY_X_HI,x
+-@right_end:
+-    lda ENEMY_X,x
+-    cmp enemy_max_lo,x
+-    bne @next
+-    lda ENEMY_X_HI,x
+-    cmp enemy_max_hi,x
+-    bne @next
+-    lda #1
+-    sta ENEMY_DIR,x
+-    jmp @next
+-@left:
+-    lda ENEMY_X,x
+-    bne @left_low
+-    dec ENEMY_X_HI,x
+-@left_low:
+-    dec ENEMY_X,x
+-    lda ENEMY_X,x
+-    cmp enemy_start_lo,x
+-    bne @next
+-    lda ENEMY_X_HI,x
+-    cmp enemy_start_hi,x
+-    bne @next
+-    lda #0
+-    sta ENEMY_DIR,x
+-@next:
+-    inx
+-    cpx #ENEMY_COUNT
+-    bne @enemy
+-@done:
+-    rts
+ 
+-; A player touching a walking enemy squashes it when falling onto its top,
+-; and dies otherwise.
+-touch_enemies:
+-    lda STATE
+-    bne @done           ; already fell into a pit or reached the goal
+-    ldx #0
+-@enemy:
+-    lda ENEMY_STATE,x
+-    cmp #WALKING
+-    bne @next
+-    lda PLAYER_Y
+-    cmp #ENEMY_TOP - 15
+-    bcc @next
+-    cmp #ENEMY_Y + 16
+-    bcs @next
+-    lda PLAYER_X
+-    sec
+-    sbc ENEMY_X,x
+-    sta TMP_XL
+-    lda PLAYER_X_HI
+-    sbc ENEMY_X_HI,x
+-    beq @right_of
+-    cmp #$FF
+-    bne @next
+-    lda TMP_XL
+-    cmp #256 - 11       ; player at most 11 pixels left of the enemy
+-    bcc @next
+-    jmp @touch
+-@right_of:
+-    lda TMP_XL
+-    cmp #12             ; player at most 11 pixels right of the enemy
+-    bcs @next
+-@touch:
+-    lda PLAYER_VY
+-    bmi @hurt
+-    ora PLAYER_VYSUB
+-    beq @hurt
+-    lda PLAYER_Y
+-    cmp #STOMP_BELOW
+-    bcs @hurt
+-    lda #SQUASHED
+-    sta ENEMY_STATE,x
+-    lda #SQUASH_FRAMES
+-    sta ENEMY_TIMER,x
+-    lda #<BOUNCE_SPEED
+-    sta PLAYER_VYSUB
+-    lda #>BOUNCE_SPEED
+-    sta PLAYER_VY
+-    inc STOMPS
+-@next:
+-    inx
+-    cpx #ENEMY_COUNT
+-    bne @enemy
+-@done:
+-    rts
+-@hurt:
+-    jmp kill_player
+-
+ ; The camera keeps the player CAMERA_LEAD pixels from the screen's left edge,
+ ; within the level.
+ follow_player:
+@@ -1198,11 +1084,140 @@
+     lda #16
+     sta TMP_COL
+     jmp @nametable
++@done:
++    rts
++
++.segment "BANK1"
++
++; A squashed slug's time runs out, and it goes.
++tick_squashed:
++    ldx #0
++@enemy:
++    lda ENEMY_STATE,x
++    cmp #SQUASHED
++    bne @next
++    dec ENEMY_TIMER,x
++    bne @next
++    lda #GONE
++    sta ENEMY_STATE,x
++@next:
++    inx
++    cpx #ENEMY_COUNT
++    bne @enemy
++    rts
++
++; Each walking enemy walks one pixel every other frame and turns at the ends
++; of its patrol.
++move_enemies:
++    lda FRAMES
++    and #1
++    bne @done
++    ldx #0
++@enemy:
++    lda ENEMY_STATE,x
++    cmp #WALKING
++    bne @next
++    lda ENEMY_DIR,x
++    bne @left
++    inc ENEMY_X,x
++    bne @right_end
++    inc ENEMY_X_HI,x
++@right_end:
++    lda ENEMY_X,x
++    cmp enemy_max_lo,x
++    bne @next
++    lda ENEMY_X_HI,x
++    cmp enemy_max_hi,x
++    bne @next
++    lda #1
++    sta ENEMY_DIR,x
++    jmp @next
++@left:
++    lda ENEMY_X,x
++    bne @left_low
++    dec ENEMY_X_HI,x
++@left_low:
++    dec ENEMY_X,x
++    lda ENEMY_X,x
++    cmp enemy_start_lo,x
++    bne @next
++    lda ENEMY_X_HI,x
++    cmp enemy_start_hi,x
++    bne @next
++    lda #0
++    sta ENEMY_DIR,x
++@next:
++    inx
++    cpx #ENEMY_COUNT
++    bne @enemy
+ @done:
+     rts
+ 
++; A player touching a walking enemy squashes it when falling onto its top,
++; and dies otherwise.
++touch_enemies:
++    lda STATE
++    bne @done           ; already fell into a pit or reached the goal
++    ldx #0
++@enemy:
++    lda ENEMY_STATE,x
++    cmp #WALKING
++    bne @next
++    lda PLAYER_Y
++    cmp #ENEMY_TOP - 15
++    bcc @next
++    cmp #ENEMY_Y + 16
++    bcs @next
++    lda PLAYER_X
++    sec
++    sbc ENEMY_X,x
++    sta TMP_XL
++    lda PLAYER_X_HI
++    sbc ENEMY_X_HI,x
++    beq @right_of
++    cmp #$FF
++    bne @next
++    lda TMP_XL
++    cmp #256 - 11       ; player at most 11 pixels left of the enemy
++    bcc @next
++    jmp @touch
++@right_of:
++    lda TMP_XL
++    cmp #12             ; player at most 11 pixels right of the enemy
++    bcs @next
++@touch:
++    lda PLAYER_VY
++    bmi @hurt
++    ora PLAYER_VYSUB
++    beq @hurt
++    lda PLAYER_Y
++    cmp #STOMP_BELOW
++    bcs @hurt
++    lda #SQUASHED
++    sta ENEMY_STATE,x
++    lda #SQUASH_FRAMES
++    sta ENEMY_TIMER,x
++    lda #<BOUNCE_SPEED
++    sta PLAYER_VYSUB
++    lda #>BOUNCE_SPEED
++    sta PLAYER_VY
++    inc STOMPS
++@next:
++    inx
++    cpx #ENEMY_COUNT
++    bne @enemy
++@done:
++    rts
++@hurt:
++    jmp kill_player
++
+ .segment "RODATA"
+ 
++; Bank numbers at their own values, so a write to select one agrees with
++; the ROM byte it lands on (UxROM's bus conflicts).
++bank_table:
++    .byte 0, 1, 2, 3
++
+ palette:
+     ; background: sky, moss green, soil brown, tan
+     .byte $21, $1A, $17, $37

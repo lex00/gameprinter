@@ -1,0 +1,112 @@
+# Moss Hop (docs/reference-game.md): jumps the step and the first slug,
+# lands on it at frame 105 (squashed, ENEMY_STATE 2, for 30 frames), takes
+# the two coins over the pit at frames 109 and 125, and falls in, dying at
+# frame 139. The level starts over at frame 229: the slug and both coins
+# are back, and COINS keeps counting.
+#
+# The 5 lag frames are at power-on.
+
+schema = 0
+source = "mosshop"
+sha256 = "44fcedf5050970a0ae6cf10c76ac80d9628f663416c22adb8432a43b0c953ec4"
+description = "Stomp the first slug, take the two coins over the pit and fall into it"
+frames = 260
+holds = ["right+b@10-70", "a@26-28", "a@68-70", "right@71-"]
+frame_hashes = "b38b7a28bc2a7f5b7a4f36c52a29a795f4c469bfc09c934a2f737616c366aeaf"
+lag_frames = 5
+
+[[assert]]
+frame = 105
+label = "ENEMY_STATE"
+addr = 0x0026
+equals = 2
+
+[[assert]]
+frame = 105
+label = "ENEMY_TIMER"
+addr = 0x0028
+equals = 30
+
+[[assert]]
+frame = 105
+label = "STOMPS"
+addr = 0x0008
+equals = 1
+
+[[assert]]
+frame = 109
+label = "COINS"
+addr = 0x0009
+equals = 1
+
+[[assert]]
+frame = 109
+label = "LEVEL_LEFT+172"
+addr = 0x03AC
+equals = 0
+
+[[assert]]
+frame = 125
+label = "COINS"
+addr = 0x0009
+equals = 2
+
+[[assert]]
+frame = 125
+label = "LEVEL_LEFT+173"
+addr = 0x03AD
+equals = 0
+
+[[assert]]
+frame = 134
+label = "ENEMY_STATE"
+addr = 0x0026
+equals = 2
+
+[[assert]]
+frame = 135
+label = "ENEMY_STATE"
+addr = 0x0026
+equals = 0
+
+[[assert]]
+frame = 139
+label = "STATE"
+addr = 0x0005
+equals = 1
+
+[[assert]]
+frame = 139
+label = "PLAYER_Y"
+addr = 0x0012
+equals = 208
+
+[[assert]]
+frame = 229
+label = "STATE"
+addr = 0x0005
+equals = 0
+
+[[assert]]
+frame = 229
+label = "ENEMY_STATE"
+addr = 0x0026
+equals = 1
+
+[[assert]]
+frame = 229
+label = "LEVEL_LEFT+172"
+addr = 0x03AC
+equals = 8
+
+[[assert]]
+frame = 229
+label = "COINS"
+addr = 0x0009
+equals = 2
+
+[[assert]]
+frame = 229
+label = "LIVES"
+addr = 0x000A
+equals = 1

@@ -1,0 +1,416 @@
+//! The event stream: what happened inside each frame, at the PPU dot it
+//! happened on.
+//!
+//! Chunks like the frame trace's: a 24-byte header (`GPEV`, schema u32,
+//! first frame u64, frame count u32, body length u32) and an LZ4-compressed
+//! body holding, for each frame in order, an event count (unsigned LEB128)
+//! and that many records: kind (u8), the position's change from the event
+//! before (zigzag LEB128), address (u16, little-endian) and value (u8). A
+//! position is `scanline * 341 + dot`, and the first event in a frame counts
+//! from 0. Storing the change rather than the scanline and dot makes the
+//! same writes in consecutive frames the same bytes, which is what LZ4
+//! finds: it took the event stream of the Super Mario Bros. baseline run from
+//! 246KB to 58KB. See docs/formats/recording.md.
+
+use crate::chunk::{self, ChunkError, Reader, put_varint};
+
+pub const MAGIC: &[u8; 4] = b"GPEV";
+/// The event chunk schema [`EventWriter`] writes and [`decode_chunk`] reads.
+pub const SCHEMA: u32 = 1;
+const HEADER: usize = 24;
+/// The fewest bytes a record takes.
+const MIN_RECORD: usize = 5;
+/// Dots per scanline, the same in every region.
+pub const DOTS: u16 = 341;
+/// Scanlines per frame in the longest region (PAL and Dendy have 312, NTSC
+/// 262). Every event's scanline is below it.
+pub const MAX_SCANLINES: u16 = 312;
+/// The most events a frame can hold: one per dot of the longest frame.
+/// Events come from CPU accesses and interrupts, and the CPU runs one cycle
+/// per three dots or more, so a real frame stays far below it.
+pub const MAX_EVENTS_PER_FRAME: usize = MAX_SCANLINES as usize * DOTS as usize;
+/// The most bytes [`EventWriter`] writes for one event: the kind, a
+/// position change of at most a frame's dots (3 bytes of zigzag LEB128),
+/// the address and the value.
+const MAX_RECORD: usize = 1 + 3 + 2 + 1;
+/// The longest an unsigned LEB128 integer gets (a u64).
+const MAX_VARINT: usize = 10;
+
+/// The most body bytes `frames` frames can take: per frame an event count
+/// and at most [`MAX_EVENTS_PER_FRAME`] records.
+pub fn max_body(frames: u32) -> usize {
+    (frames as usize).saturating_mul(MAX_VARINT + MAX_EVENTS_PER_FRAME * MAX_RECORD)
+}
+
+/// What happened. The numbers are the stored kind codes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum EventKind {
+    /// The CPU took the NMI vector; `addr` is the handler's address.
+    Nmi = 0,
+    /// The CPU took the IRQ vector; `addr` is the handler's address.
+    Irq = 1,
+    /// The PPU set the sprite 0 hit flag.
+    Sprite0Hit = 2,
+    /// A write to the cartridge changed which banks are mapped (or the
+    /// mirroring); `addr` and `value` are the write's.
+    BankSwitch = 3,
+    /// A read of $4016 or $4017; `value` is what the CPU read.
+    ControllerRead = 4,
+    /// A write to $4016, the controller strobe.
+    ControllerWrite = 5,
+    /// A write to a PPU register, $2000-$2007, or to $4014 (OAM DMA).
+    PpuWrite = 6,
+    /// A write to an APU register: $4000-$4013, $4015 or $4017.
+    ApuWrite = 7,
+}
+
+impl EventKind {
+    pub const ALL: [Self; 8] = [
+        Self::Nmi,
+        Self::Irq,
+        Self::Sprite0Hit,
+        Self::BankSwitch,
+        Self::ControllerRead,
+        Self::ControllerWrite,
+        Self::PpuWrite,
+        Self::ApuWrite,
+    ];
+
+    /// The name commands take and print, such as `ppu-write`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Nmi => "nmi",
+            Self::Irq => "irq",
+            Self::Sprite0Hit => "sprite0-hit",
+            Self::BankSwitch => "bank-switch",
+            Self::ControllerRead => "controller-read",
+            Self::ControllerWrite => "controller-write",
+            Self::PpuWrite => "ppu-write",
+            Self::ApuWrite => "apu-write",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.name() == name)
+    }
+
+    pub fn from_code(code: u8) -> Option<Self> {
+        Self::ALL.get(usize::from(code)).copied()
+    }
+}
+
+/// One event. The frame is the one whose run it happened in: frame N's
+/// events happened between the boundary that ends frame N-1 and the one that
+/// ends frame N, so frame 0 (power-on) has none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Event {
+    pub frame: u64,
+    pub kind: EventKind,
+    pub scanline: u16,
+    pub dot: u16,
+    pub addr: u16,
+    pub value: u8,
+}
+
+/// Builds event chunks from each frame's events, starting at frame 0.
+pub struct EventWriter {
+    chunk_frames: u32,
+    next_frame: u64,
+    first_frame: u64,
+    frames: u32,
+    body: Vec<u8>,
+}
+
+impl EventWriter {
+    pub fn new(chunk_frames: u32) -> Self {
+        assert!(chunk_frames > 0, "a chunk holds at least one frame");
+        Self {
+            chunk_frames,
+            next_frame: 0,
+            first_frame: 0,
+            frames: 0,
+            body: Vec::new(),
+        }
+    }
+
+    /// Adds the next frame's events, in the order they happened (their
+    /// `frame` is ignored). Returns a finished chunk once it holds
+    /// `chunk_frames` frames.
+    pub fn push(&mut self, events: &[Event]) -> Option<Vec<u8>> {
+        if self.frames == 0 {
+            self.first_frame = self.next_frame;
+            self.body.clear();
+        }
+        put_varint(&mut self.body, events.len() as u64);
+        let mut last = 0i64;
+        for e in events {
+            assert!(e.dot < DOTS, "a scanline has {DOTS} dots");
+            assert!(
+                e.scanline < MAX_SCANLINES,
+                "a frame has at most {MAX_SCANLINES} scanlines"
+            );
+            let at = i64::from(e.scanline) * i64::from(DOTS) + i64::from(e.dot);
+            let change = at - last;
+            last = at;
+            self.body.push(e.kind as u8);
+            put_varint(&mut self.body, ((change << 1) ^ (change >> 63)) as u64);
+            self.body.extend_from_slice(&e.addr.to_le_bytes());
+            self.body.push(e.value);
+        }
+        self.frames += 1;
+        self.next_frame += 1;
+        (self.frames == self.chunk_frames).then(|| self.seal())
+    }
+
+    /// The last, partly filled chunk, if any frames are left in it.
+    pub fn finish(mut self) -> Option<Vec<u8>> {
+        (self.frames > 0).then(|| self.seal())
+    }
+
+    fn seal(&mut self) -> Vec<u8> {
+        let packed = chunk::compress(&self.body);
+        let mut out = Vec::with_capacity(HEADER + packed.len());
+        out.extend_from_slice(MAGIC);
+        out.extend_from_slice(&SCHEMA.to_le_bytes());
+        out.extend_from_slice(&self.first_frame.to_le_bytes());
+        out.extend_from_slice(&self.frames.to_le_bytes());
+        out.extend_from_slice(&(self.body.len() as u32).to_le_bytes());
+        out.extend_from_slice(&packed);
+        self.frames = 0;
+        out
+    }
+}
+
+/// A decoded chunk: frames `first_frame` to `first_frame + frames - 1`, and
+/// their events in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventChunk {
+    pub first_frame: u64,
+    pub frames: u32,
+    pub events: Vec<Event>,
+}
+
+/// The header's first frame, frame count and body length, and the
+/// compressed body after it.
+fn parse_header(bytes: &[u8]) -> Result<(u64, u32, usize, &[u8]), ChunkError> {
+    let mut r = Reader { rest: bytes };
+    if r.bytes(4, "magic")? != MAGIC {
+        return Err(ChunkError::Magic("event"));
+    }
+    let version = r.u32("schema")?;
+    if version != SCHEMA {
+        return Err(ChunkError::Schema {
+            what: "event",
+            version,
+        });
+    }
+    let first_frame = r.u64("first frame")?;
+    let frames = r.u32("frame count")?;
+    if frames == 0 {
+        return Err(ChunkError::Invalid("a chunk with no frames".into()));
+    }
+    let len = r.u32("body length")? as usize;
+    Ok((first_frame, frames, len, r.rest))
+}
+
+/// [`decode_chunk`] for a chunk the manifest says covers `expected`: a
+/// header claiming other frames is refused before the body is decoded, and
+/// a body longer than those frames can need ([`max_body`]) before it's
+/// decompressed.
+pub fn decode_chunk_covering(
+    bytes: &[u8],
+    expected: std::ops::Range<u64>,
+) -> Result<EventChunk, ChunkError> {
+    let (first_frame, frames, _, _) = parse_header(bytes)?;
+    chunk::expect_frames("event", first_frame, frames, &expected)?;
+    decode(bytes, max_body(frames))
+}
+
+/// Decodes a chunk on its own, bounded by its header's frame count.
+/// Readers of a stored recording use [`decode_chunk_covering`].
+pub fn decode_chunk(bytes: &[u8]) -> Result<EventChunk, ChunkError> {
+    let (_, frames, _, _) = parse_header(bytes)?;
+    decode(bytes, max_body(frames))
+}
+
+fn decode(bytes: &[u8], limit: usize) -> Result<EventChunk, ChunkError> {
+    let (first_frame, frames, len, rest) = parse_header(bytes)?;
+    let end = first_frame
+        .checked_add(u64::from(frames))
+        .ok_or_else(|| ChunkError::Invalid(format!("frames from {first_frame} run past u64")))?;
+    let body = chunk::decompress(rest, len, limit)?;
+    let mut r = Reader { rest: &body };
+    let mut events = Vec::new();
+    let positions = i64::from(MAX_SCANLINES) * i64::from(DOTS);
+    for frame in first_frame..end {
+        let n = r.len("event count")?;
+        if n > MAX_EVENTS_PER_FRAME {
+            return Err(ChunkError::Invalid(format!(
+                "frame {frame} has {n} events, more than its {MAX_EVENTS_PER_FRAME} dots"
+            )));
+        }
+        if n.saturating_mul(MIN_RECORD) > r.rest.len() {
+            return Err(ChunkError::Truncated("events"));
+        }
+        let mut at = 0i64;
+        for _ in 0..n {
+            let code = r.u8("kind")?;
+            let kind = EventKind::from_code(code)
+                .ok_or_else(|| ChunkError::Invalid(format!("event kind {code}")))?;
+            let zigzag = r.varint("position")?;
+            let change = (zigzag >> 1) as i64 ^ -((zigzag & 1) as i64);
+            at = at
+                .checked_add(change)
+                .filter(|at| (0..positions).contains(at))
+                .ok_or_else(|| {
+                    ChunkError::Invalid(format!(
+                        "an event in frame {frame} is outside the frame's {MAX_SCANLINES} scanlines"
+                    ))
+                })?;
+            let (scanline, dot) = (at / i64::from(DOTS), at % i64::from(DOTS));
+            let scanline = scanline as u16;
+            events.push(Event {
+                frame,
+                kind,
+                scanline,
+                dot: dot as u16,
+                addr: r.u16("address")?,
+                value: r.u8("value")?,
+            });
+        }
+    }
+    if !r.rest.is_empty() {
+        return Err(ChunkError::Trailing(r.rest.len()));
+    }
+    Ok(EventChunk {
+        first_frame,
+        frames,
+        events,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ev(frame: u64, kind: EventKind, addr: u16, value: u8) -> Event {
+        Event {
+            frame,
+            kind,
+            scanline: ((frame * 97 + u64::from(addr)) % 262) as u16,
+            dot: (u64::from(addr) * 31 % 341) as u16,
+            addr,
+            value,
+        }
+    }
+
+    #[test]
+    fn chunks_round_trip() {
+        let mut w = EventWriter::new(3);
+        let mut all = Vec::new();
+        let mut chunks = Vec::new();
+        for f in 0..7u64 {
+            let events: Vec<Event> = (0..f)
+                .map(|i| {
+                    ev(
+                        f,
+                        EventKind::ALL[(i % 8) as usize],
+                        0x2000 + i as u16,
+                        i as u8,
+                    )
+                })
+                .collect();
+            all.extend(events.clone());
+            chunks.extend(w.push(&events));
+        }
+        chunks.extend(w.finish());
+        assert_eq!(chunks.len(), 3);
+        let decoded: Vec<_> = chunks.iter().map(|c| decode_chunk(c).unwrap()).collect();
+        assert_eq!(
+            decoded
+                .iter()
+                .map(|c| (c.first_frame, c.frames))
+                .collect::<Vec<_>>(),
+            [(0, 3), (3, 3), (6, 1)]
+        );
+        let back: Vec<Event> = decoded.into_iter().flat_map(|c| c.events).collect();
+        assert_eq!(back, all);
+    }
+
+    #[test]
+    fn kinds_have_stable_codes_and_names() {
+        for (i, k) in EventKind::ALL.into_iter().enumerate() {
+            assert_eq!(k as usize, i);
+            assert_eq!(EventKind::from_code(i as u8), Some(k));
+            assert_eq!(EventKind::from_name(k.name()), Some(k));
+        }
+        assert_eq!(EventKind::from_code(8), None);
+        assert_eq!(EventKind::from_name("ppu"), None);
+    }
+
+    #[test]
+    fn rejects_bad_chunks() {
+        let mut w = EventWriter::new(1);
+        let c = w.push(&[ev(0, EventKind::Nmi, 0x8082, 0)]).unwrap();
+        let mut bad = c.clone();
+        bad[0] = b'X';
+        assert_eq!(decode_chunk(&bad), Err(ChunkError::Magic("event")));
+        let mut bad = c.clone();
+        bad[4] = 2;
+        assert!(matches!(decode_chunk(&bad), Err(ChunkError::Schema { .. })));
+        assert_eq!(
+            decode_chunk(&c[..10]),
+            Err(ChunkError::Truncated("first frame"))
+        );
+        assert_eq!(decode_chunk_covering(&c, 0..1).unwrap().events.len(), 1);
+        assert!(decode_chunk_covering(&c, 1..2).is_err());
+        // A first frame near u64::MAX is an error, not an overflow.
+        let mut bad = c.clone();
+        bad[8..16].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(matches!(decode_chunk(&bad), Err(ChunkError::Invalid(_))));
+        // A body length the frame can't need is refused before decompressing.
+        let mut bad = c.clone();
+        bad[20..24].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(matches!(
+            decode_chunk_covering(&bad, 0..1),
+            Err(ChunkError::Invalid(_))
+        ));
+    }
+
+    /// Positions outside a frame, or past i64, are errors rather than
+    /// overflows or wrong scanlines.
+    #[test]
+    fn refuses_positions_outside_the_frame() {
+        let chunk = |zigzags: &[u64]| {
+            let mut body = Vec::new();
+            put_varint(&mut body, zigzags.len() as u64);
+            for z in zigzags {
+                body.push(0);
+                put_varint(&mut body, *z);
+                body.extend_from_slice(&[0, 0, 0]);
+            }
+            let mut out = MAGIC.to_vec();
+            out.extend_from_slice(&SCHEMA.to_le_bytes());
+            out.extend_from_slice(&0u64.to_le_bytes());
+            out.extend_from_slice(&1u32.to_le_bytes());
+            out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            out.extend_from_slice(&chunk::compress(&body));
+            out
+        };
+        let last = (u64::from(MAX_SCANLINES) * u64::from(DOTS) - 1) * 2;
+        let ok = decode_chunk(&chunk(&[last])).unwrap();
+        assert_eq!((ok.events[0].scanline, ok.events[0].dot), (311, 340));
+        for bad in [
+            vec![last + 2],
+            vec![1],
+            vec![u64::MAX - 1, u64::MAX - 1],
+            vec![u64::MAX, u64::MAX],
+        ] {
+            assert!(
+                matches!(decode_chunk(&chunk(&bad)), Err(ChunkError::Invalid(_))),
+                "{bad:?}"
+            );
+        }
+    }
+}

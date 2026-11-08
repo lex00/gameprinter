@@ -1,0 +1,473 @@
+//! The input log: controller state for every frame of a recording.
+//!
+//! Text, one line per frame, so logs diff cleanly. Format version 0:
+//!
+//! ```text
+//! gp-input-log 0
+//! controllers 2
+//! P R..U...A ........
+//! - R..U...A ........
+//! ```
+//!
+//! Each frame line starts with `P` if the game read the controllers during the
+//! frame or `-` for a lag frame, then one field per controller. A field lists
+//! the buttons in the order Right, Left, Down, Up, sTart, Select, B, A, with
+//! the letter `RLDUTSBA` when held and `.` when not (the FCEUX convention).
+//! Lag frames keep whatever was held, since importers and replays need it.
+//!
+//! Format version 1 adds one thing: a `!` after the `P` or `-` (`P!`, `-!`)
+//! presses the console's reset button at the start of that frame, before
+//! the frame runs. Logs without a reset are still written as version 0, so
+//! their bytes and hashes don't change.
+
+use std::fmt::Write as _;
+
+use serde::{Deserialize, Serialize};
+
+/// The newest format version: 1, which adds resets. A log without a reset
+/// is written as [`FORMAT_VERSION_NO_RESET`].
+pub const FORMAT_VERSION: u32 = 1;
+/// The version a log without any reset is written as.
+pub const FORMAT_VERSION_NO_RESET: u32 = 0;
+const ORDER: &[u8; 8] = b"RLDUTSBA";
+
+/// Button bits within one controller byte, in the order the NES reads them
+/// from its shift register (A first).
+pub mod button {
+    pub const A: u8 = 1 << 0;
+    pub const B: u8 = 1 << 1;
+    pub const SELECT: u8 = 1 << 2;
+    pub const START: u8 = 1 << 3;
+    pub const UP: u8 = 1 << 4;
+    pub const DOWN: u8 = 1 << 5;
+    pub const LEFT: u8 = 1 << 6;
+    pub const RIGHT: u8 = 1 << 7;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct InputFrame {
+    /// Whether the game read the controllers during this frame.
+    pub polled: bool,
+    /// One byte per controller port, bits as in [`button`].
+    pub pads: [u8; 4],
+    /// Whether the reset button is pressed at the start of this frame,
+    /// before it runs (a soft reset). Format version 1 only.
+    #[serde(default)]
+    pub reset: bool,
+}
+
+impl InputFrame {
+    /// The runtime protocol's `input-frame.buttons`: port 1 in the low byte.
+    pub fn buttons_word(&self) -> u32 {
+        u32::from_le_bytes(self.pads)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputLog {
+    pub controllers: u8,
+    pub frames: Vec<InputFrame>,
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[error("input log line {line}: {message}")]
+pub struct InputLogError {
+    pub line: usize,
+    pub message: String,
+}
+
+fn err(line: usize, message: impl Into<String>) -> InputLogError {
+    InputLogError {
+        line,
+        message: message.into(),
+    }
+}
+
+impl InputLog {
+    pub fn new(controllers: u8) -> Self {
+        assert!((1..=4).contains(&controllers), "1 to 4 controllers");
+        Self {
+            controllers,
+            frames: Vec::new(),
+        }
+    }
+
+    pub fn parse(text: &str) -> Result<Self, InputLogError> {
+        let mut lines = text.lines().enumerate().map(|(i, l)| (i + 1, l));
+
+        let (n, header) = lines.next().ok_or_else(|| err(1, "empty input log"))?;
+        let version = match header.strip_prefix("gp-input-log ") {
+            Some("0") => 0,
+            Some("1") => 1,
+            Some(v) => return Err(err(n, format!("unsupported format version {v}"))),
+            None => return Err(err(n, "expected `gp-input-log 0` or `gp-input-log 1`")),
+        };
+
+        let (n, line) = lines
+            .next()
+            .ok_or_else(|| err(2, "missing `controllers` line"))?;
+        let controllers: u8 = line
+            .strip_prefix("controllers ")
+            .and_then(|c| c.parse().ok())
+            .filter(|c| (1..=4).contains(c))
+            .ok_or_else(|| err(n, "expected `controllers N` with N from 1 to 4"))?;
+
+        let mut frames = Vec::new();
+        for (n, line) in lines {
+            let mut fields = line.split(' ');
+            let (polled, reset) = match fields.next() {
+                Some("P") => (true, false),
+                Some("-") => (false, false),
+                Some("P!") if version >= 1 => (true, true),
+                Some("-!") if version >= 1 => (false, true),
+                Some("P!" | "-!") => {
+                    return Err(err(n, "a reset (`!`) needs format version 1"));
+                }
+                _ => return Err(err(n, "frame line must start with `P` or `-`")),
+            };
+            let mut pads = [0u8; 4];
+            for (port, pad) in pads.iter_mut().enumerate().take(controllers as usize) {
+                let field = fields
+                    .next()
+                    .ok_or_else(|| err(n, format!("missing controller {}", port + 1)))?;
+                *pad = parse_pad(field).ok_or_else(|| {
+                    err(
+                        n,
+                        format!(
+                            "controller {} field {field:?} is not 8 of `RLDUTSBA` or `.`",
+                            port + 1
+                        ),
+                    )
+                })?;
+            }
+            if fields.next().is_some() {
+                return Err(err(n, "more controller fields than declared"));
+            }
+            frames.push(InputFrame {
+                polled,
+                pads,
+                reset,
+            });
+        }
+        Ok(Self {
+            controllers,
+            frames,
+        })
+    }
+
+    pub fn to_text(&self) -> String {
+        let version = if self.has_resets() {
+            FORMAT_VERSION
+        } else {
+            FORMAT_VERSION_NO_RESET
+        };
+        let mut out = format!("gp-input-log {version}\ncontrollers {}\n", self.controllers);
+        for frame in &self.frames {
+            out.push(if frame.polled { 'P' } else { '-' });
+            if frame.reset {
+                out.push('!');
+            }
+            for pad in &frame.pads[..self.controllers as usize] {
+                out.push(' ');
+                for (i, letter) in ORDER.iter().enumerate() {
+                    let bit = 1u8 << (7 - i);
+                    out.push(if pad & bit != 0 { *letter as char } else { '.' });
+                }
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Whether any frame presses reset, which needs format version 1.
+    pub fn has_resets(&self) -> bool {
+        self.frames.iter().any(|f| f.reset)
+    }
+
+    pub fn lag_frames(&self) -> usize {
+        self.frames.iter().filter(|f| !f.polled).count()
+    }
+
+    /// A one-line summary, for logs and run manifests.
+    pub fn summary(&self) -> String {
+        let mut s = String::new();
+        let _ = write!(
+            s,
+            "{} frames, {} lag, {} controllers",
+            self.frames.len(),
+            self.lag_frames(),
+            self.controllers
+        );
+        s
+    }
+}
+
+/// The prefix of a controller 2 span ([`generate`], [`spans_of`]).
+pub const P2: &str = "p2:";
+
+/// The first two controllers of `frames` as button spans, the inverse of
+/// [`generate`]: one span for each run of frames holding the same buttons,
+/// none for frames holding nothing, controller 1's first and then
+/// controller 2's with the `p2:` prefix. `None` when a frame presses reset
+/// or a third or fourth controller, which spans can't say.
+pub fn spans_of(frames: &[InputFrame]) -> Option<Vec<String>> {
+    const NAMES: [(u8, &str); 8] = [
+        (button::RIGHT, "right"),
+        (button::LEFT, "left"),
+        (button::DOWN, "down"),
+        (button::UP, "up"),
+        (button::START, "start"),
+        (button::SELECT, "select"),
+        (button::B, "b"),
+        (button::A, "a"),
+    ];
+    if frames
+        .iter()
+        .any(|f| f.reset || f.pads[2..].iter().any(|&p| p != 0))
+    {
+        return None;
+    }
+    let mut out = Vec::new();
+    for (port, prefix) in [(0, ""), (1, P2)] {
+        let mut i = 0;
+        while i < frames.len() {
+            let bits = frames[i].pads[port];
+            let mut j = i;
+            while j + 1 < frames.len() && frames[j + 1].pads[port] == bits {
+                j += 1;
+            }
+            if bits != 0 {
+                let names: Vec<&str> = NAMES
+                    .iter()
+                    .filter(|(b, _)| bits & b != 0)
+                    .map(|(_, n)| *n)
+                    .collect();
+                out.push(format!("{prefix}{}@{i}-{j}", names.join("+")));
+            }
+            i = j + 1;
+        }
+    }
+    Some(out)
+}
+
+/// Builds an input log from button spans, for scripted recordings:
+/// `start@120-124` holds Start on frames 120 to 124, `right+b@130-` holds
+/// Right and B from frame 130 to the end. A span with the `p2:` prefix is
+/// controller 2's (`p2:start@60-60`), and the log then has two controllers.
+/// Frames count from 0; every frame is marked polled, since the runtime
+/// records what the game actually read.
+pub fn generate(frames: usize, spans: &[&str]) -> Result<InputLog, InputLogError> {
+    let mut log = InputLog::new(1);
+    log.frames = vec![
+        InputFrame {
+            polled: true,
+            pads: [0; 4],
+            reset: false,
+        };
+        frames
+    ];
+    for (i, spec) in spans.iter().enumerate() {
+        let bad = |message: String| err(i + 1, format!("span {spec:?}: {message}"));
+        let (port, body) = match spec.strip_prefix(P2) {
+            Some(rest) => {
+                log.controllers = 2;
+                (1, rest)
+            }
+            None => (0, *spec),
+        };
+        let (buttons, range) = body
+            .split_once('@')
+            .ok_or_else(|| bad("expected BUTTONS@FROM-TO, e.g. a+right@10-20".into()))?;
+        let mut bits = 0u8;
+        for name in buttons.split('+') {
+            bits |= match name.to_ascii_lowercase().as_str() {
+                "a" => button::A,
+                "b" => button::B,
+                "select" => button::SELECT,
+                "start" => button::START,
+                "up" => button::UP,
+                "down" => button::DOWN,
+                "left" => button::LEFT,
+                "right" => button::RIGHT,
+                other => return Err(bad(format!("unknown button {other:?}"))),
+            };
+        }
+        let (from, to) = range
+            .split_once('-')
+            .ok_or_else(|| bad("expected a frame range FROM-TO or FROM-".into()))?;
+        let from: usize = from
+            .parse()
+            .map_err(|_| bad(format!("bad frame {from:?}")))?;
+        let to: usize = if to.is_empty() {
+            frames.saturating_sub(1)
+        } else {
+            to.parse().map_err(|_| bad(format!("bad frame {to:?}")))?
+        };
+        if from > to || to >= frames {
+            return Err(bad(format!(
+                "range {from}-{to} isn't within 0-{}",
+                frames.saturating_sub(1)
+            )));
+        }
+        for f in &mut log.frames[from..=to] {
+            f.pads[port] |= bits;
+        }
+    }
+    Ok(log)
+}
+
+fn parse_pad(field: &str) -> Option<u8> {
+    let bytes = field.as_bytes();
+    if bytes.len() != 8 {
+        return None;
+    }
+    let mut pad = 0u8;
+    for (i, (&b, &letter)) in bytes.iter().zip(ORDER).enumerate() {
+        match b {
+            b'.' => {}
+            _ if b == letter => pad |= 1 << (7 - i),
+            _ => return None,
+        }
+    }
+    Some(pad)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn round_trip() {
+        let mut log = InputLog::new(2);
+        log.frames.push(InputFrame {
+            polled: true,
+            pads: [button::RIGHT | button::A, 0, 0, 0],
+            reset: false,
+        });
+        log.frames.push(InputFrame {
+            polled: false,
+            pads: [button::RIGHT | button::A, button::START, 0, 0],
+            reset: false,
+        });
+        let text = log.to_text();
+        assert_eq!(
+            text,
+            "gp-input-log 0\ncontrollers 2\nP R......A ........\n- R......A ....T...\n"
+        );
+        assert_eq!(InputLog::parse(&text).unwrap(), log);
+        assert_eq!(log.lag_frames(), 1);
+    }
+
+    #[test]
+    fn a_reset_writes_version_1() {
+        let mut log = InputLog::new(1);
+        log.frames.push(InputFrame::default());
+        log.frames.push(InputFrame {
+            polled: true,
+            pads: [button::START, 0, 0, 0],
+            reset: true,
+        });
+        let text = log.to_text();
+        assert_eq!(
+            text,
+            "gp-input-log 1\ncontrollers 1\n- ........\nP! ....T...\n"
+        );
+        assert_eq!(InputLog::parse(&text).unwrap(), log);
+        // Version 0 has no resets, and a version 1 log may have none.
+        let v0 = "gp-input-log 0\ncontrollers 1\nP! ........\n";
+        assert!(
+            InputLog::parse(v0)
+                .unwrap_err()
+                .message
+                .contains("version 1")
+        );
+        let none =
+            InputLog::parse("gp-input-log 1\ncontrollers 1\n-! ........\nP ........\n").unwrap();
+        assert!(none.frames[0].reset && !none.frames[0].polled && !none.frames[1].reset);
+    }
+
+    #[test]
+    fn buttons_word_puts_port_one_low() {
+        let f = InputFrame {
+            polled: true,
+            pads: [button::A, button::B, 0, 0],
+            reset: false,
+        };
+        assert_eq!(f.buttons_word(), 0x0201);
+    }
+
+    #[test]
+    fn letters_must_be_in_their_own_column() {
+        let text = "gp-input-log 0\ncontrollers 1\nP A.......\n";
+        assert_eq!(InputLog::parse(text).unwrap_err().line, 3);
+    }
+
+    #[test]
+    fn rejects_wrong_version_and_counts() {
+        assert_eq!(
+            InputLog::parse("gp-input-log 9\ncontrollers 1\n")
+                .unwrap_err()
+                .line,
+            1
+        );
+        assert_eq!(
+            InputLog::parse("gp-input-log 0\ncontrollers 5\n")
+                .unwrap_err()
+                .line,
+            2
+        );
+        let extra = "gp-input-log 0\ncontrollers 1\nP ........ ........\n";
+        assert_eq!(InputLog::parse(extra).unwrap_err().line, 3);
+        let missing = "gp-input-log 0\ncontrollers 2\nP ........\n";
+        assert_eq!(InputLog::parse(missing).unwrap_err().line, 3);
+    }
+
+    #[test]
+    fn generates_from_spans() {
+        let log = generate(10, &["start@2-3", "right+b@5-"]).unwrap();
+        assert_eq!(log.frames.len(), 10);
+        assert_eq!(log.frames[1].pads[0], 0);
+        assert_eq!(log.frames[2].pads[0], button::START);
+        assert_eq!(log.frames[4].pads[0], 0);
+        assert_eq!(log.frames[9].pads[0], button::RIGHT | button::B);
+        assert!(generate(10, &["jump@1-2"]).is_err());
+        assert!(generate(10, &["a@5-20"]).is_err());
+        assert!(generate(10, &["a@5"]).is_err());
+    }
+
+    #[test]
+    fn spans_of_gives_back_the_spans_it_was_made_from() {
+        let log = generate(12, &["start@2-3", "right+b@5-8", "a@10-11"]).unwrap();
+        let spans = spans_of(&log.frames).unwrap();
+        assert_eq!(spans, ["start@2-3", "right+b@5-8", "a@10-11"]);
+        let refs: Vec<&str> = spans.iter().map(String::as_str).collect();
+        assert_eq!(generate(12, &refs).unwrap().frames, log.frames);
+        let mut reset = log.frames.clone();
+        reset[0].reset = true;
+        assert!(spans_of(&reset).is_none());
+    }
+
+    #[test]
+    fn a_p2_span_is_controller_twos() {
+        let log = generate(8, &["start@1-1", "p2:a+left@2-4"]).unwrap();
+        assert_eq!(log.controllers, 2);
+        assert_eq!(log.frames[1].pads, [button::START, 0, 0, 0]);
+        assert_eq!(log.frames[3].pads, [0, button::A | button::LEFT, 0, 0]);
+        assert_eq!(generate(8, &["a@1-1"]).unwrap().controllers, 1);
+        let spans = spans_of(&log.frames).unwrap();
+        assert_eq!(spans, ["start@1-1", "p2:left+a@2-4"]);
+        let refs: Vec<&str> = spans.iter().map(String::as_str).collect();
+        assert_eq!(generate(8, &refs).unwrap(), log);
+        assert_eq!(InputLog::parse(&log.to_text()).unwrap(), log);
+        let mut third = log.frames.clone();
+        third[0].pads[2] = button::A;
+        assert!(spans_of(&third).is_none());
+        assert!(generate(8, &["p3:a@1-1"]).is_err());
+    }
+
+    #[test]
+    fn empty_log_has_no_frames() {
+        let log = InputLog::parse("gp-input-log 0\ncontrollers 1\n").unwrap();
+        assert!(log.frames.is_empty());
+    }
+}

@@ -1,0 +1,1313 @@
+# Moss Hop's ground truth: every routine in games/mosshop/mosshop.s, every
+# branch, and the inputs each routine's own instructions read. Written by
+# scripts/mosshop/ground_truth.py from the source, ram.inc and ld65's debug
+# file; `scripts/mosshop/ground_truth.py --check` fails when it is stale.
+# A generator that reads only the ROM is measured against it
+# (docs/research/mosshop-testbed.md). Addresses are CPU addresses.
+
+[ground_truth]
+format = "0.1.0"
+rom_sha256 = "44fcedf5050970a0ae6cf10c76ac80d9628f663416c22adb8432a43b0c953ec4"
+routines = 37
+branches = 99
+# A row is a routine's run or one direction of one of its branches.
+rows = 235
+inputs = 112
+# Routines that run only at power-on, before the main loop: no clip
+# starts there.
+power_on = ["reset", "load_palette", "draw_level"]
+
+[[routine]]
+name = "reset"
+element = "system"
+reached = "power-on"
+addr = 0xC000
+line = 90
+instructions = 41
+calls = ["draw_level", "draw_sprites", "hide_sprites", "load_palette", "new_game"]
+reads = [
+  { label = "PPUSTATUS", kind = "hardware" },
+]
+writes = ["APU_FRAME", "DMC_FREQ", "PPUCTRL", "PPUMASK", "PPUSCROLL", "REDRAW_COUNT"]
+
+[[routine.branch]]
+addr = 0xC01A
+line = 104
+op = "bpl"
+taken_to = "@vblank1"
+after = "bit PPUSTATUS; bit PPUSTATUS"
+
+[[routine.branch]]
+addr = 0xC035
+line = 118
+op = "bne"
+taken_to = "@clear"
+after = "sta $0700,x; inx"
+
+[[routine.branch]]
+addr = 0xC03D
+line = 123
+op = "bpl"
+taken_to = "@vblank2"
+after = "jsr hide_sprites; bit PPUSTATUS"
+
+[[routine]]
+name = "main"
+element = "system"
+reached = "play"
+addr = 0xC064
+line = 142
+instructions = 25
+calls = ["draw_sprites", "follow_player", "main", "move_enemies", "move_player", "new_game", "read_pad", "tick_squashed", "touch_enemies", "update_dying"]
+reads = [
+  { label = "NMI_DONE", addr = 0x0001, kind = "state" },
+  { label = "STATE", addr = 0x0005, kind = "state" },
+  { label = "TIMER", addr = 0x0006, kind = "state" },
+]
+writes = ["NMI_DONE", "TIMER"]
+
+[[routine.branch]]
+addr = 0xC066
+line = 144
+op = "beq"
+taken_to = "main"
+after = "lda NMI_DONE"
+
+[[routine.branch]]
+addr = 0xC074
+line = 150
+op = "beq"
+taken_to = "@playing"
+after = "jsr tick_squashed; lda STATE"
+
+[[routine.branch]]
+addr = 0xC078
+line = 152
+op = "beq"
+taken_to = "@dying"
+after = "beq @playing; cmp #DYING"
+
+[[routine.branch]]
+addr = 0xC07C
+line = 154
+op = "beq"
+taken_to = "@game_over"
+after = "beq @dying; cmp #GAME_OVER"
+
+[[routine.branch]]
+addr = 0xC098
+line = 167
+op = "bne"
+taken_to = "@draw"
+after = "jmp @draw; dec TIMER"
+
+[[routine]]
+name = "nmi"
+element = "system"
+reached = "play"
+addr = 0xC0A3
+line = 173
+instructions = 27
+calls = ["redraw_cells"]
+reads = [
+  { label = "CAMERA_X", addr = 0x001A, kind = "state" },
+  { label = "CAMERA_X_HI", addr = 0x001B, kind = "state" },
+  { label = "FRAMES", addr = 0x0000, kind = "frame counter" },
+  { label = "PPUSTATUS", kind = "hardware" },
+]
+writes = ["FRAMES", "NMI_DONE", "OAMADDR", "OAMDMA", "PPUCTRL", "PPUSCROLL"]
+
+[[routine]]
+name = "irq"
+element = "system"
+reached = "play"
+addr = 0xC0D6
+line = 201
+instructions = 1
+calls = []
+reads = [
+]
+writes = []
+
+[[routine]]
+name = "redraw_cells"
+element = "level"
+reached = "play"
+addr = 0xC0D7
+line = 206
+instructions = 34
+calls = []
+reads = [
+  { label = "PPUSTATUS", kind = "hardware" },
+  { label = "REDRAW_COUNT", addr = 0x0050, kind = "state" },
+  { label = "REDRAW_HI", addr = 0x0051, kind = "state" },
+  { label = "REDRAW_LO", addr = 0x0059, kind = "state" },
+  { label = "REDRAW_TILE", addr = 0x0061, kind = "state" },
+  { label = "metatile_tiles", kind = "rom table" },
+  { label = "metatile_tiles+1", kind = "rom table" },
+  { label = "metatile_tiles+2", kind = "rom table" },
+  { label = "metatile_tiles+3", kind = "rom table" },
+]
+writes = ["PPUADDR", "PPUDATA", "REDRAW_COUNT"]
+
+[[routine.branch]]
+addr = 0xC0DE
+line = 211
+op = "beq"
+taken_to = "@done"
+after = "ldx #0; cpx REDRAW_COUNT"
+
+[[routine]]
+name = "new_game"
+element = "rules"
+reached = "play"
+addr = 0xC121
+line = 245
+instructions = 7
+calls = ["start_level"]
+reads = [
+]
+writes = ["COINS", "DEATHS", "LIVES", "STOMPS"]
+
+[[routine]]
+name = "start_level"
+element = "rules"
+reached = "play"
+addr = 0xC130
+line = 256
+instructions = 29
+calls = ["restore_level"]
+reads = [
+  { label = "enemy_start_hi", kind = "rom table" },
+  { label = "enemy_start_lo", kind = "rom table" },
+]
+writes = ["CAMERA_X", "CAMERA_X_HI", "ENEMY_DIR", "ENEMY_STATE", "ENEMY_TIMER", "ENEMY_X", "ENEMY_X_HI", "FACING", "ON_GROUND", "PLAYER_VY", "PLAYER_VYSUB", "PLAYER_X", "PLAYER_X_HI", "PLAYER_Y", "PLAYER_YSUB", "PLAYER_Y_HI", "STATE"]
+
+[[routine.branch]]
+addr = 0xC167
+line = 285
+op = "bpl"
+taken_to = "@enemy"
+after = "sta ENEMY_STATE,x; dex"
+
+[[routine]]
+name = "restore_level"
+element = "level"
+reached = "play"
+addr = 0xC16C
+line = 290
+instructions = 44
+calls = ["restore_half"]
+reads = [
+  { label = "TMP_CELL", addr = 0x0040, kind = "scratch" },
+  { label = "TMP_PTR", addr = 0x0034, kind = "scratch" },
+  { label = "TMP_PTR+1", addr = 0x0035, kind = "scratch" },
+  { label = "TMP_ROW", addr = 0x003C, kind = "scratch" },
+  { label = "level_rows_hi", kind = "rom table" },
+  { label = "level_rows_lo", kind = "rom table" },
+]
+writes = ["TMP_CELL", "TMP_DST", "TMP_DST+1", "TMP_PAGE", "TMP_PTR", "TMP_PTR+1", "TMP_ROW"]
+
+[[routine.branch]]
+addr = 0xC1BD
+line = 334
+op = "bne"
+taken_to = "@row"
+after = "lda TMP_ROW; cmp #15"
+
+[[routine]]
+name = "restore_half"
+element = "level"
+reached = "play"
+addr = 0xC1C0
+line = 339
+instructions = 15
+calls = ["queue_redraw"]
+reads = [
+  { label = "LEVEL_LEFT", addr = 0x0300, kind = "tiles" },
+  { label = "LEVEL_RIGHT", addr = 0x03F0, kind = "tiles" },
+  { label = "TMP_CELL", addr = 0x0040, kind = "scratch" },
+  { label = "TMP_DST", addr = 0x0042, kind = "scratch" },
+  { label = "TMP_DST+1", addr = 0x0043, kind = "scratch" },
+  { label = "TMP_PTR", addr = 0x0034, kind = "scratch" },
+  { label = "TMP_PTR+1", addr = 0x0035, kind = "scratch" },
+  { label = "level", kind = "rom table" },
+]
+writes = ["LEVEL_LEFT", "LEVEL_RIGHT"]
+
+[[routine.branch]]
+addr = 0xC1C6
+line = 344
+op = "beq"
+taken_to = "@same"
+after = "lda (TMP_PTR),y; cmp (TMP_DST),y"
+
+[[routine.branch]]
+addr = 0xC1D6
+line = 355
+op = "bne"
+taken_to = "@cell"
+after = "iny; cpy #16"
+
+[[routine]]
+name = "read_pad"
+element = "input"
+reached = "play"
+addr = 0xC1D9
+line = 359
+instructions = 17
+calls = []
+reads = [
+  { label = "JOY1", kind = "controller" },
+  { label = "PAD", addr = 0x0002, kind = "controller" },
+  { label = "PAD_PREV", addr = 0x0003, kind = "controller" },
+]
+writes = ["JOY1", "PAD", "PAD_NEW", "PAD_PREV"]
+
+[[routine.branch]]
+addr = 0xC1F0
+line = 372
+op = "bne"
+taken_to = "@bit"
+after = "rol PAD; dex"
+
+[[routine]]
+name = "move_player"
+element = "player"
+reached = "play"
+addr = 0xC1FB
+line = 381
+instructions = 80
+calls = ["apply_gravity", "bump_head", "kill_player", "move_vertically", "solid_under_player", "step_left", "step_right", "take_coin"]
+reads = [
+  { label = "ON_GROUND", addr = 0x0016, kind = "state" },
+  { label = "PAD", addr = 0x0002, kind = "controller" },
+  { label = "PAD_NEW", addr = 0x0004, kind = "controller" },
+  { label = "PEAK_Y", addr = 0x0019, kind = "state" },
+  { label = "PLAYER_VY", addr = 0x0014, kind = "state" },
+  { label = "PLAYER_X", addr = 0x0010, kind = "state" },
+  { label = "PLAYER_X_HI", addr = 0x0011, kind = "state" },
+  { label = "PLAYER_Y", addr = 0x0012, kind = "state" },
+  { label = "TMP_SPEED", addr = 0x0036, kind = "scratch" },
+  { label = "TMP_Y", addr = 0x0032, kind = "scratch" },
+]
+writes = ["FACING", "JUMP_START_Y", "ON_GROUND", "PEAK_Y", "PLAYER_VY", "PLAYER_VYSUB", "PLAYER_Y", "PLAYER_YSUB", "STATE", "TMP_SPEED", "TMP_Y"]
+
+[[routine.branch]]
+addr = 0xC203
+line = 386
+op = "beq"
+taken_to = "@right"
+after = "lda PAD; and #BUTTON_B"
+
+[[routine.branch]]
+addr = 0xC20D
+line = 392
+op = "beq"
+taken_to = "@not_right"
+after = "lda PAD; and #BUTTON_RIGHT"
+
+[[routine.branch]]
+addr = 0xC218
+line = 398
+op = "bne"
+taken_to = "@step_right"
+after = "jsr step_right; dec TMP_SPEED"
+
+[[routine.branch]]
+addr = 0xC221
+line = 403
+op = "beq"
+taken_to = "@jump"
+after = "lda PAD; and #BUTTON_LEFT"
+
+[[routine.branch]]
+addr = 0xC22C
+line = 409
+op = "bne"
+taken_to = "@step_left"
+after = "jsr step_left; dec TMP_SPEED"
+
+[[routine.branch]]
+addr = 0xC230
+line = 413
+op = "beq"
+taken_to = "@gravity"
+after = "bne @step_left; lda ON_GROUND"
+
+[[routine.branch]]
+addr = 0xC236
+line = 416
+op = "beq"
+taken_to = "@gravity"
+after = "lda PAD_NEW; and #BUTTON_A"
+
+[[routine.branch]]
+addr = 0xC252
+line = 432
+op = "bmi"
+taken_to = "@rising"
+after = "jsr move_vertically; lda PLAYER_VY"
+
+[[routine.branch]]
+addr = 0xC25E
+line = 439
+op = "bcc"
+taken_to = "@in_air"
+after = "sta TMP_Y; jsr solid_under_player"
+
+[[routine.branch]]
+addr = 0xC283
+line = 459
+op = "bcs"
+taken_to = "@checks"
+after = "lda PLAYER_Y; cmp PEAK_Y"
+
+[[routine.branch]]
+addr = 0xC28E
+line = 466
+op = "bcc"
+taken_to = "@goal"
+after = "lda PLAYER_Y; cmp #PIT_Y"
+
+[[routine.branch]]
+addr = 0xC295
+line = 470
+op = "beq"
+taken_to = "@done"
+after = "jmp kill_player; lda PLAYER_X_HI"
+
+[[routine.branch]]
+addr = 0xC29B
+line = 473
+op = "bcc"
+taken_to = "@done"
+after = "lda PLAYER_X; cmp #<GOAL_X"
+
+[[routine]]
+name = "apply_gravity"
+element = "player"
+reached = "play"
+addr = 0xC2A2
+line = 480
+instructions = 15
+calls = []
+reads = [
+  { label = "PLAYER_VY", addr = 0x0014, kind = "state" },
+  { label = "PLAYER_VYSUB", addr = 0x0015, kind = "state" },
+]
+writes = ["PLAYER_VY", "PLAYER_VYSUB"]
+
+[[routine.branch]]
+addr = 0xC2AF
+line = 488
+op = "bmi"
+taken_to = "@done"
+after = "adc #0; sta PLAYER_VY"
+
+[[routine.branch]]
+addr = 0xC2B3
+line = 490
+op = "bcc"
+taken_to = "@done"
+after = "bmi @done; cmp #FALL_LIMIT"
+
+[[routine]]
+name = "move_vertically"
+element = "player"
+reached = "play"
+addr = 0xC2BE
+line = 500
+instructions = 14
+calls = []
+reads = [
+  { label = "PLAYER_VY", addr = 0x0014, kind = "state" },
+  { label = "PLAYER_VYSUB", addr = 0x0015, kind = "state" },
+  { label = "PLAYER_Y", addr = 0x0012, kind = "state" },
+  { label = "PLAYER_YSUB", addr = 0x0013, kind = "state" },
+  { label = "PLAYER_Y_HI", addr = 0x001C, kind = "state" },
+]
+writes = ["PLAYER_Y", "PLAYER_YSUB", "PLAYER_Y_HI"]
+
+[[routine.branch]]
+addr = 0xC2CF
+line = 510
+op = "bpl"
+taken_to = "@down"
+after = "lda #0; ldx PLAYER_VY"
+
+[[routine]]
+name = "bump_head"
+element = "block"
+reached = "play"
+addr = 0xC2D8
+line = 519
+instructions = 23
+calls = ["cell_at", "set_cell"]
+reads = [
+  { label = "COINS", addr = 0x0009, kind = "state" },
+  { label = "PLAYER_X", addr = 0x0010, kind = "state" },
+  { label = "PLAYER_X_HI", addr = 0x0011, kind = "state" },
+  { label = "PLAYER_Y", addr = 0x0012, kind = "state" },
+  { label = "metatile_kind", kind = "rom table" },
+  { label = "metatile_solid", kind = "rom table" },
+]
+writes = ["COINS", "PLAYER_VY", "PLAYER_VYSUB", "TMP_XH", "TMP_XL", "TMP_Y"]
+
+[[routine.branch]]
+addr = 0xC2F0
+line = 532
+op = "beq"
+taken_to = "@done"
+after = "tax; lda metatile_solid,x"
+
+[[routine.branch]]
+addr = 0xC2FD
+line = 538
+op = "bne"
+taken_to = "@done"
+after = "lda metatile_kind,x; cmp #KIND_COIN_BLOCK"
+
+[[routine]]
+name = "take_coin"
+element = "coin"
+reached = "play"
+addr = 0xC307
+line = 546
+instructions = 20
+calls = ["cell_at", "set_cell"]
+reads = [
+  { label = "COINS", addr = 0x0009, kind = "state" },
+  { label = "PLAYER_X", addr = 0x0010, kind = "state" },
+  { label = "PLAYER_X_HI", addr = 0x0011, kind = "state" },
+  { label = "PLAYER_Y", addr = 0x0012, kind = "state" },
+  { label = "metatile_kind", kind = "rom table" },
+]
+writes = ["COINS", "TMP_XH", "TMP_XL", "TMP_Y"]
+
+[[routine.branch]]
+addr = 0xC324
+line = 562
+op = "bne"
+taken_to = "@done"
+after = "lda metatile_kind,x; cmp #KIND_COIN"
+
+[[routine]]
+name = "step_right"
+element = "player"
+reached = "play"
+addr = 0xC32E
+line = 570
+instructions = 18
+calls = ["solid_beside_player"]
+reads = [
+  { label = "PLAYER_X", addr = 0x0010, kind = "state" },
+  { label = "PLAYER_X_HI", addr = 0x0011, kind = "state" },
+]
+writes = ["PLAYER_X", "PLAYER_X_HI", "TMP_XH", "TMP_XL"]
+
+[[routine.branch]]
+addr = 0xC330
+line = 572
+op = "beq"
+taken_to = "@inside"
+after = "lda PLAYER_X_HI"
+
+[[routine.branch]]
+addr = 0xC336
+line = 575
+op = "bcs"
+taken_to = "@blocked"
+after = "lda PLAYER_X; cmp #<WORLD_MAX_X"
+never_taken = "the goal at x 468 clears the level before the player can reach WORLD_MAX_X, 496"
+
+[[routine.branch]]
+addr = 0xC348
+line = 585
+op = "bcs"
+taken_to = "@blocked"
+after = "sta TMP_XH; jsr solid_beside_player"
+
+[[routine.branch]]
+addr = 0xC34C
+line = 587
+op = "bne"
+taken_to = "@blocked"
+after = "bcs @blocked; inc PLAYER_X"
+
+[[routine]]
+name = "step_left"
+element = "player"
+reached = "play"
+addr = 0xC351
+line = 593
+instructions = 17
+calls = ["solid_beside_player"]
+reads = [
+  { label = "PLAYER_X", addr = 0x0010, kind = "state" },
+  { label = "PLAYER_X_HI", addr = 0x0011, kind = "state" },
+]
+writes = ["PLAYER_X", "PLAYER_X_HI", "TMP_XH", "TMP_XL"]
+
+[[routine.branch]]
+addr = 0xC355
+line = 596
+op = "beq"
+taken_to = "@blocked"
+after = "lda PLAYER_X; ora PLAYER_X_HI"
+
+[[routine.branch]]
+addr = 0xC367
+line = 605
+op = "bcs"
+taken_to = "@blocked"
+after = "sta TMP_XH; jsr solid_beside_player"
+
+[[routine.branch]]
+addr = 0xC36B
+line = 607
+op = "bne"
+taken_to = "@low"
+after = "bcs @blocked; lda PLAYER_X"
+
+[[routine]]
+name = "solid_beside_player"
+element = "player"
+reached = "play"
+addr = 0xC372
+line = 616
+instructions = 10
+calls = ["solid_at"]
+reads = [
+  { label = "PLAYER_Y", addr = 0x0012, kind = "state" },
+]
+writes = ["TMP_Y"]
+
+[[routine.branch]]
+addr = 0xC379
+line = 620
+op = "bcs"
+taken_to = "@done"
+after = "sta TMP_Y; jsr solid_at"
+
+[[routine]]
+name = "solid_under_player"
+element = "player"
+reached = "play"
+addr = 0xC386
+line = 631
+instructions = 18
+calls = ["solid_at"]
+reads = [
+  { label = "PLAYER_X", addr = 0x0010, kind = "state" },
+  { label = "PLAYER_X_HI", addr = 0x0011, kind = "state" },
+]
+writes = ["TMP_XH", "TMP_XL"]
+
+[[routine.branch]]
+addr = 0xC396
+line = 640
+op = "bcs"
+taken_to = "@done"
+after = "sta TMP_XH; jsr solid_at"
+
+[[routine]]
+name = "solid_at"
+element = "level"
+reached = "play"
+addr = 0xC3A9
+line = 654
+instructions = 5
+calls = ["cell_at"]
+reads = [
+  { label = "metatile_solid", kind = "rom table" },
+]
+writes = []
+
+[[routine]]
+name = "cell_at"
+element = "level"
+reached = "play"
+addr = 0xC3B2
+line = 664
+instructions = 26
+calls = []
+reads = [
+  { label = "LEVEL_LEFT", addr = 0x0300, kind = "tiles" },
+  { label = "LEVEL_RIGHT", addr = 0x03F0, kind = "tiles" },
+  { label = "TMP_CELL", addr = 0x0040, kind = "scratch" },
+  { label = "TMP_PAGE", addr = 0x0041, kind = "scratch" },
+  { label = "TMP_XH", addr = 0x0031, kind = "scratch" },
+  { label = "TMP_XL", addr = 0x0030, kind = "scratch" },
+  { label = "TMP_Y", addr = 0x0032, kind = "scratch" },
+]
+writes = ["TMP_CELL", "TMP_PAGE"]
+
+[[routine.branch]]
+addr = 0xC3B6
+line = 667
+op = "bcs"
+taken_to = "@open"
+after = "lda TMP_Y; cmp #240"
+never_taken = "no point the game tests is below row 240 in play"
+
+[[routine.branch]]
+addr = 0xC3BC
+line = 670
+op = "bcs"
+taken_to = "@open"
+after = "lda TMP_XH; cmp #2"
+never_taken = "no point the game tests is past the level's two pages in play"
+
+[[routine.branch]]
+addr = 0xC3D3
+line = 684
+op = "bne"
+taken_to = "@right"
+after = "tay; lda TMP_PAGE"
+
+[[routine]]
+name = "set_cell"
+element = "level"
+reached = "play"
+addr = 0xC3E0
+line = 695
+instructions = 7
+calls = ["queue_redraw"]
+reads = [
+  { label = "TMP_CELL", addr = 0x0040, kind = "scratch" },
+  { label = "TMP_PAGE", addr = 0x0041, kind = "scratch" },
+]
+writes = ["LEVEL_LEFT", "LEVEL_RIGHT"]
+
+[[routine.branch]]
+addr = 0xC3E4
+line = 698
+op = "bne"
+taken_to = "@right"
+after = "ldx TMP_CELL; ldy TMP_PAGE"
+
+[[routine]]
+name = "queue_redraw"
+element = "level"
+reached = "play"
+addr = 0xC3F2
+line = 707
+instructions = 33
+calls = []
+reads = [
+  { label = "REDRAW_COUNT", addr = 0x0050, kind = "state" },
+  { label = "TMP_PAGE", addr = 0x0041, kind = "scratch" },
+  { label = "TMP_QCELL", addr = 0x0045, kind = "scratch" },
+  { label = "TMP_QCOL", addr = 0x0046, kind = "scratch" },
+  { label = "TMP_QTILE", addr = 0x0044, kind = "scratch" },
+]
+writes = ["REDRAW_COUNT", "REDRAW_HI", "REDRAW_LO", "REDRAW_TILE", "TMP_QCELL", "TMP_QCOL", "TMP_QTILE"]
+
+[[routine.branch]]
+addr = 0xC3FA
+line = 712
+op = "bcs"
+taken_to = "@full"
+after = "ldx REDRAW_COUNT; cpx #REDRAW_MAX"
+never_taken = "at most six cells change before a restart, under REDRAW_MAX, 8"
+
+[[routine.branch]]
+addr = 0xC41D
+line = 736
+op = "beq"
+taken_to = "@left"
+after = "sta TMP_QCOL; lda TMP_PAGE"
+
+[[routine]]
+name = "kill_player"
+element = "player"
+reached = "play"
+addr = 0xC42A
+line = 748
+instructions = 12
+calls = []
+reads = [
+  { label = "DEATHS", addr = 0x0007, kind = "state" },
+]
+writes = ["DEATHS", "ON_GROUND", "PLAYER_VY", "PLAYER_VYSUB", "STATE", "TIMER"]
+
+[[routine]]
+name = "update_dying"
+element = "rules"
+reached = "play"
+addr = 0xC441
+line = 765
+instructions = 13
+calls = ["apply_gravity", "move_vertically", "start_level"]
+reads = [
+  { label = "LIVES", addr = 0x000A, kind = "state" },
+  { label = "TIMER", addr = 0x0006, kind = "state" },
+]
+writes = ["LIVES", "STATE", "TIMER"]
+
+[[routine.branch]]
+addr = 0xC443
+line = 767
+op = "beq"
+taken_to = "@time_up"
+after = "dec TIMER"
+
+[[routine.branch]]
+addr = 0xC44D
+line = 772
+op = "beq"
+taken_to = "@no_lives"
+after = "jmp move_vertically; lda LIVES"
+
+[[routine]]
+name = "tick_squashed"
+element = "slug"
+reached = "play"
+addr = 0xC45D
+line = 783
+instructions = 12
+calls = []
+reads = [
+  { label = "ENEMY_STATE", addr = 0x0026, kind = "state" },
+  { label = "ENEMY_TIMER", addr = 0x0028, kind = "state" },
+]
+writes = ["ENEMY_STATE", "ENEMY_TIMER"]
+
+[[routine.branch]]
+addr = 0xC463
+line = 788
+op = "bne"
+taken_to = "@next"
+after = "lda ENEMY_STATE,x; cmp #SQUASHED"
+
+[[routine.branch]]
+addr = 0xC467
+line = 790
+op = "bne"
+taken_to = "@next"
+after = "bne @next; dec ENEMY_TIMER,x"
+
+[[routine.branch]]
+addr = 0xC470
+line = 796
+op = "bne"
+taken_to = "@enemy"
+after = "inx; cpx #ENEMY_COUNT"
+
+[[routine]]
+name = "move_enemies"
+element = "slug"
+reached = "play"
+addr = 0xC473
+line = 801
+instructions = 37
+calls = []
+reads = [
+  { label = "ENEMY_DIR", addr = 0x0024, kind = "state" },
+  { label = "ENEMY_STATE", addr = 0x0026, kind = "state" },
+  { label = "ENEMY_X", addr = 0x0020, kind = "state" },
+  { label = "ENEMY_X_HI", addr = 0x0022, kind = "state" },
+  { label = "FRAMES", addr = 0x0000, kind = "frame counter" },
+  { label = "enemy_max_hi", kind = "rom table" },
+  { label = "enemy_max_lo", kind = "rom table" },
+  { label = "enemy_start_hi", kind = "rom table" },
+  { label = "enemy_start_lo", kind = "rom table" },
+]
+writes = ["ENEMY_DIR", "ENEMY_X", "ENEMY_X_HI"]
+
+[[routine.branch]]
+addr = 0xC477
+line = 804
+op = "bne"
+taken_to = "@done"
+after = "lda FRAMES; and #1"
+
+[[routine.branch]]
+addr = 0xC47F
+line = 809
+op = "bne"
+taken_to = "@next"
+after = "lda ENEMY_STATE,x; cmp #WALKING"
+
+[[routine.branch]]
+addr = 0xC483
+line = 811
+op = "bne"
+taken_to = "@left"
+after = "bne @next; lda ENEMY_DIR,x"
+
+[[routine.branch]]
+addr = 0xC487
+line = 813
+op = "bne"
+taken_to = "@right_end"
+after = "bne @left; inc ENEMY_X,x"
+never_not_taken = "no patrol crosses a page boundary walking right: the first is 128-176, the second 256-352"
+
+[[routine.branch]]
+addr = 0xC490
+line = 818
+op = "bne"
+taken_to = "@next"
+after = "lda ENEMY_X,x; cmp enemy_max_lo,x"
+
+[[routine.branch]]
+addr = 0xC497
+line = 821
+op = "bne"
+taken_to = "@next"
+after = "lda ENEMY_X_HI,x; cmp enemy_max_hi,x"
+never_taken = "a patrol's end and its x share a high byte"
+
+[[routine.branch]]
+addr = 0xC4A2
+line = 827
+op = "bne"
+taken_to = "@left_low"
+after = "jmp @next; lda ENEMY_X,x"
+never_not_taken = "the second slug turns at 256, so it never steps left from a low byte of 0"
+
+[[routine.branch]]
+addr = 0xC4AD
+line = 833
+op = "bne"
+taken_to = "@next"
+after = "lda ENEMY_X,x; cmp enemy_start_lo,x"
+
+[[routine.branch]]
+addr = 0xC4B4
+line = 836
+op = "bne"
+taken_to = "@next"
+after = "lda ENEMY_X_HI,x; cmp enemy_start_hi,x"
+never_taken = "a patrol's start and its x share a high byte"
+
+[[routine.branch]]
+addr = 0xC4BD
+line = 842
+op = "bne"
+taken_to = "@enemy"
+after = "inx; cpx #ENEMY_COUNT"
+
+[[routine]]
+name = "touch_enemies"
+element = "slug"
+reached = "play"
+addr = 0xC4C0
+line = 848
+instructions = 48
+calls = ["kill_player"]
+reads = [
+  { label = "ENEMY_STATE", addr = 0x0026, kind = "state" },
+  { label = "ENEMY_X", addr = 0x0020, kind = "state" },
+  { label = "ENEMY_X_HI", addr = 0x0022, kind = "state" },
+  { label = "PLAYER_VY", addr = 0x0014, kind = "state" },
+  { label = "PLAYER_VYSUB", addr = 0x0015, kind = "state" },
+  { label = "PLAYER_X", addr = 0x0010, kind = "state" },
+  { label = "PLAYER_X_HI", addr = 0x0011, kind = "state" },
+  { label = "PLAYER_Y", addr = 0x0012, kind = "state" },
+  { label = "STATE", addr = 0x0005, kind = "state" },
+  { label = "STOMPS", addr = 0x0008, kind = "state" },
+  { label = "TMP_XL", addr = 0x0030, kind = "scratch" },
+]
+writes = ["ENEMY_STATE", "ENEMY_TIMER", "PLAYER_VY", "PLAYER_VYSUB", "STOMPS", "TMP_XL"]
+
+[[routine.branch]]
+addr = 0xC4C2
+line = 850
+op = "bne"
+taken_to = "@done"
+after = "lda STATE"
+
+[[routine.branch]]
+addr = 0xC4CA
+line = 855
+op = "bne"
+taken_to = "@next"
+after = "lda ENEMY_STATE,x; cmp #WALKING"
+
+[[routine.branch]]
+addr = 0xC4D0
+line = 858
+op = "bcc"
+taken_to = "@next"
+after = "lda PLAYER_Y; cmp #ENEMY_TOP - 15"
+
+[[routine.branch]]
+addr = 0xC4D4
+line = 860
+op = "bcs"
+taken_to = "@next"
+after = "bcc @next; cmp #ENEMY_Y + 16"
+
+[[routine.branch]]
+addr = 0xC4E1
+line = 867
+op = "beq"
+taken_to = "@right_of"
+after = "lda PLAYER_X_HI; sbc ENEMY_X_HI,x"
+
+[[routine.branch]]
+addr = 0xC4E5
+line = 869
+op = "bne"
+taken_to = "@next"
+after = "beq @right_of; cmp #$FF"
+
+[[routine.branch]]
+addr = 0xC4EB
+line = 872
+op = "bcc"
+taken_to = "@next"
+after = "lda TMP_XL; cmp #256 - 11"
+
+[[routine.branch]]
+addr = 0xC4F4
+line = 877
+op = "bcs"
+taken_to = "@next"
+after = "lda TMP_XL; cmp #12"
+
+[[routine.branch]]
+addr = 0xC4F8
+line = 880
+op = "bmi"
+taken_to = "@hurt"
+after = "bcs @next; lda PLAYER_VY"
+
+[[routine.branch]]
+addr = 0xC4FC
+line = 882
+op = "beq"
+taken_to = "@hurt"
+after = "bmi @hurt; ora PLAYER_VYSUB"
+
+[[routine.branch]]
+addr = 0xC502
+line = 885
+op = "bcs"
+taken_to = "@hurt"
+after = "lda PLAYER_Y; cmp #STOMP_BELOW"
+
+[[routine.branch]]
+addr = 0xC519
+line = 898
+op = "bne"
+taken_to = "@enemy"
+after = "inx; cpx #ENEMY_COUNT"
+
+[[routine]]
+name = "follow_player"
+element = "camera"
+reached = "play"
+addr = 0xC51F
+line = 906
+instructions = 20
+calls = []
+reads = [
+  { label = "CAMERA_X", addr = 0x001A, kind = "state" },
+  { label = "PLAYER_X", addr = 0x0010, kind = "state" },
+  { label = "PLAYER_X_HI", addr = 0x0011, kind = "state" },
+]
+writes = ["CAMERA_X", "CAMERA_X_HI"]
+
+[[routine.branch]]
+addr = 0xC52C
+line = 914
+op = "bcs"
+taken_to = "@inside"
+after = "sbc #0; sta CAMERA_X_HI"
+
+[[routine.branch]]
+addr = 0xC535
+line = 920
+op = "beq"
+taken_to = "@done"
+after = "sta CAMERA_X_HI; rts"
+
+[[routine.branch]]
+addr = 0xC539
+line = 922
+op = "beq"
+taken_to = "@done"
+after = "beq @done; lda CAMERA_X"
+
+[[routine]]
+name = "hide_sprites"
+element = "draw"
+reached = "play"
+addr = 0xC544
+line = 930
+instructions = 6
+calls = []
+reads = [
+]
+writes = ["OAM"]
+
+[[routine.branch]]
+addr = 0xC54C
+line = 936
+op = "bne"
+taken_to = "@sprite"
+after = "sta OAM,x; inx"
+
+[[routine]]
+name = "draw_sprites"
+element = "draw"
+reached = "play"
+addr = 0xC54F
+line = 940
+instructions = 61
+calls = ["draw_hud", "draw_metasprite", "hide_sprites"]
+reads = [
+  { label = "CAMERA_X", addr = 0x001A, kind = "state" },
+  { label = "CAMERA_X_HI", addr = 0x001B, kind = "state" },
+  { label = "ENEMY_DIR", addr = 0x0024, kind = "state" },
+  { label = "ENEMY_STATE", addr = 0x0026, kind = "state" },
+  { label = "ENEMY_X", addr = 0x0020, kind = "state" },
+  { label = "ENEMY_X_HI", addr = 0x0022, kind = "state" },
+  { label = "FACING", addr = 0x0017, kind = "state" },
+  { label = "PLAYER_X", addr = 0x0010, kind = "state" },
+  { label = "PLAYER_Y", addr = 0x0012, kind = "state" },
+  { label = "PLAYER_Y_HI", addr = 0x001C, kind = "state" },
+  { label = "STATE", addr = 0x0005, kind = "state" },
+  { label = "TMP_ROW", addr = 0x003C, kind = "scratch" },
+  { label = "TMP_SX", addr = 0x0037, kind = "scratch" },
+]
+writes = ["TMP_ATTR", "TMP_ROW", "TMP_SX", "TMP_SY", "TMP_TILE"]
+
+[[routine.branch]]
+addr = 0xC556
+line = 946
+op = "bne"
+taken_to = "@enemies"
+after = "ldy #0; lda PLAYER_Y_HI"
+
+[[routine.branch]]
+addr = 0xC55C
+line = 949
+op = "bcs"
+taken_to = "@enemies"
+after = "lda PLAYER_Y; cmp #239"
+
+[[routine.branch]]
+addr = 0xC572
+line = 961
+op = "beq"
+taken_to = "@facing_right"
+after = "lda #0; ldx FACING"
+
+[[routine.branch]]
+addr = 0xC57A
+line = 966
+op = "bne"
+taken_to = "@upright"
+after = "ldx STATE; cpx #DYING"
+
+[[routine.branch]]
+addr = 0xC58B
+line = 978
+op = "beq"
+taken_to = "@next"
+after = "ldx TMP_ROW; lda ENEMY_STATE,x"
+
+[[routine.branch]]
+addr = 0xC598
+line = 985
+op = "bne"
+taken_to = "@next"
+after = "lda ENEMY_X_HI,x; sbc CAMERA_X_HI"
+
+[[routine.branch]]
+addr = 0xC59E
+line = 988
+op = "bcs"
+taken_to = "@next"
+after = "lda TMP_SX; cmp #241"
+
+[[routine.branch]]
+addr = 0xC5A8
+line = 993
+op = "beq"
+taken_to = "@flat"
+after = "lda ENEMY_STATE,x; cmp #SQUASHED"
+
+[[routine.branch]]
+addr = 0xC5B5
+line = 1001
+op = "beq"
+taken_to = "@enemy_right"
+after = "sta TMP_TILE; lda ENEMY_DIR,x"
+
+[[routine.branch]]
+addr = 0xC5C6
+line = 1011
+op = "bne"
+taken_to = "@enemy"
+after = "lda TMP_ROW; cmp #ENEMY_COUNT"
+
+[[routine]]
+name = "draw_hud"
+element = "hud"
+reached = "play"
+addr = 0xC5CB
+line = 1016
+instructions = 14
+calls = ["hud_number", "hud_sprite"]
+reads = [
+  { label = "COINS", addr = 0x0009, kind = "state" },
+  { label = "LIVES", addr = 0x000A, kind = "state" },
+]
+writes = ["TMP_SX"]
+
+[[routine]]
+name = "hud_number"
+element = "hud"
+reached = "play"
+addr = 0xC5EC
+line = 1033
+instructions = 15
+calls = ["hud_sprite"]
+reads = [
+]
+writes = []
+
+[[routine.branch]]
+addr = 0xC5F0
+line = 1037
+op = "bcc"
+taken_to = "@ones"
+after = "ldx #0; cmp #10"
+
+[[routine]]
+name = "hud_sprite"
+element = "hud"
+reached = "play"
+addr = 0xC607
+line = 1054
+instructions = 15
+calls = []
+reads = [
+  { label = "TMP_SX", addr = 0x0037, kind = "scratch" },
+]
+writes = ["OAM", "OAM+1", "OAM+2", "OAM+3", "TMP_SX"]
+
+[[routine]]
+name = "draw_metasprite"
+element = "draw"
+reached = "play"
+addr = 0xC623
+line = 1074
+instructions = 42
+calls = []
+reads = [
+  { label = "TMP_ATTR", addr = 0x003A, kind = "scratch" },
+  { label = "TMP_MASK", addr = 0x003B, kind = "scratch" },
+  { label = "TMP_SX", addr = 0x0037, kind = "scratch" },
+  { label = "TMP_SY", addr = 0x0038, kind = "scratch" },
+  { label = "TMP_TILE", addr = 0x0039, kind = "scratch" },
+]
+writes = ["OAM", "OAM+1", "OAM+2", "OAM+3", "TMP_MASK"]
+
+[[routine.branch]]
+addr = 0xC627
+line = 1077
+op = "beq"
+taken_to = "@no_hflip"
+after = "lda TMP_ATTR; and #%01000000"
+
+[[routine.branch]]
+addr = 0xC631
+line = 1083
+op = "beq"
+taken_to = "@no_vflip"
+after = "lda TMP_ATTR; and #%10000000"
+
+[[routine.branch]]
+addr = 0xC667
+line = 1118
+op = "bne"
+taken_to = "@sprite"
+after = "inx; cpx #4"
+
+[[routine]]
+name = "load_palette"
+element = "draw"
+reached = "power-on"
+addr = 0xC66A
+line = 1121
+instructions = 12
+calls = []
+reads = [
+  { label = "PPUSTATUS", kind = "hardware" },
+  { label = "palette", kind = "rom table" },
+]
+writes = ["PPUADDR", "PPUDATA"]
+
+[[routine.branch]]
+addr = 0xC682
+line = 1133
+op = "bne"
+taken_to = "@color"
+after = "inx; cpx #32"
+
+[[routine]]
+name = "draw_level"
+element = "level"
+reached = "power-on"
+addr = 0xC685
+line = 1139
+instructions = 55
+calls = []
+reads = [
+  { label = "PPUSTATUS", kind = "hardware" },
+  { label = "TMP_COL", addr = 0x0033, kind = "scratch" },
+  { label = "TMP_COUNT", addr = 0x003E, kind = "scratch" },
+  { label = "TMP_HALF", addr = 0x003D, kind = "scratch" },
+  { label = "TMP_NT", addr = 0x003F, kind = "scratch" },
+  { label = "TMP_PTR", addr = 0x0034, kind = "scratch" },
+  { label = "TMP_PTR+1", addr = 0x0035, kind = "scratch" },
+  { label = "TMP_ROW", addr = 0x003C, kind = "scratch" },
+  { label = "level", kind = "rom table" },
+  { label = "level_rows_hi", kind = "rom table" },
+  { label = "level_rows_lo", kind = "rom table" },
+  { label = "metatile_tiles", kind = "rom table" },
+  { label = "metatile_tiles+1", kind = "rom table" },
+]
+writes = ["PPUADDR", "PPUDATA", "TMP_COL", "TMP_COUNT", "TMP_HALF", "TMP_NT", "TMP_PTR", "TMP_PTR+1", "TMP_ROW"]
+
+[[routine.branch]]
+addr = 0xC6C8
+line = 1175
+op = "bne"
+taken_to = "@metatile"
+after = "iny; dec TMP_COUNT"
+
+[[routine.branch]]
+addr = 0xC6CC
+line = 1177
+op = "bne"
+taken_to = "@next_row"
+after = "bne @metatile; lda TMP_HALF"
+
+[[routine.branch]]
+addr = 0xC6DB
+line = 1185
+op = "bne"
+taken_to = "@row"
+after = "lda TMP_ROW; cmp #15"
+
+[[routine.branch]]
+addr = 0xC6E5
+line = 1192
+op = "bne"
+taken_to = "@attribute"
+after = "sta PPUDATA; dex"
+
+[[routine.branch]]
+addr = 0xC6EB
+line = 1195
+op = "beq"
+taken_to = "@done"
+after = "lda TMP_NT; cmp #$24"

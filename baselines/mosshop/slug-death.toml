@@ -1,0 +1,93 @@
+# Moss Hop (docs/reference-game.md): jumps the step, lands behind the first
+# slug and runs into it at frame 74. The player hops up (PLAYER_VY -4),
+# falls through the ground and off the screen (PLAYER_Y_HI 1), and the
+# level starts over 90 frames later with a life fewer.
+#
+# The 5 lag frames are at power-on.
+
+schema = 0
+source = "mosshop"
+sha256 = "44fcedf5050970a0ae6cf10c76ac80d9628f663416c22adb8432a43b0c953ec4"
+description = "Run into the first slug on the ground, hop off the screen and start over"
+frames = 240
+holds = ["right+b@10-90", "a@30-32"]
+frame_hashes = "45dc4665097d8fcb072ea60b181816edef8732f7137e115428b3b510a764e5e7"
+lag_frames = 5
+
+[[assert]]
+frame = 73
+label = "STATE"
+addr = 0x0005
+equals = 0
+
+[[assert]]
+frame = 74
+label = "STATE"
+addr = 0x0005
+equals = 1
+
+[[assert]]
+frame = 74
+label = "PLAYER_X"
+addr = 0x0010
+equals = 152
+
+[[assert]]
+frame = 74
+label = "ENEMY_X"
+addr = 0x0020
+equals = 162
+
+[[assert]]
+frame = 74
+label = "PLAYER_VY"
+addr = 0x0014
+equals = 252
+
+[[assert]]
+frame = 74
+label = "DEATHS"
+addr = 0x0007
+equals = 1
+
+[[assert]]
+frame = 90
+label = "PLAYER_Y"
+addr = 0x0012
+equals = 146
+
+[[assert]]
+frame = 130
+label = "PLAYER_Y_HI"
+addr = 0x001C
+equals = 1
+
+[[assert]]
+frame = 163
+label = "STATE"
+addr = 0x0005
+equals = 1
+
+[[assert]]
+frame = 164
+label = "STATE"
+addr = 0x0005
+equals = 0
+
+[[assert]]
+frame = 164
+label = "PLAYER_X"
+addr = 0x0010
+equals = 24
+
+[[assert]]
+frame = 164
+label = "LIVES"
+addr = 0x000A
+equals = 1
+
+[[assert]]
+frame = 240
+label = "DEATHS"
+addr = 0x0007
+equals = 1

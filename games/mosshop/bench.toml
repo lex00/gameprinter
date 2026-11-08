@@ -1,0 +1,98 @@
+# Phase 1 of docs/plan-extraction-process.md: `gp bench clips mosshop`.
+#
+# The bench runs the ROM-only tools on Moss Hop in a home of its own: a
+# capture run of the template with its baselines, its generated clips, the
+# code matrix from the ROM with no labels (`gp clips matrix --labels rom`)
+# at each seed, and the model grid; then the same for one wrong model, for
+# stable targets; then the clips scored on mutants of the real model
+# (`gp capture prune --mutants`). The tools never read the source. Only the
+# grader does: ground_truth, labels and source below are its answer key.
+
+[bench]
+format = "0.1.0"
+template = "templates/mosshop"
+baselines = "baselines/mosshop"
+rom = "target/mosshop/mosshop.nes"
+seeds = [1, 2]
+search_rows = 16
+generate_steps = 60
+background_steps = 3
+# Clips the grid makes from its code part (`gp capture grid --drive`), so
+# the code matrix's targets have clips of their own in the run.
+drive = 16
+
+# The grader's files, from Moss Hop's source.
+[grade]
+ground_truth = "games/mosshop/ground-truth.toml"
+labels = "games/mosshop/labels.toml"
+source = "games/mosshop/mosshop.s"
+# The real model and its state mapping, the answer key for the facts.
+model = "templates/mosshop"
+
+# What a player sees, as rows of the source's routines (a routine's run,
+# or one direction of the branch at a source line), as
+# scripts/mosshop/measure_grid.py has them: the elements the ROM's code
+# must show.
+[[grade.part]]
+says = "? block bumped"
+routine = "bump_head"
+
+[[grade.part]]
+says = "coin taken"
+routine = "take_coin"
+
+[[grade.part]]
+says = "slug walks"
+routine = "move_enemies"
+
+[[grade.part]]
+says = "slug touched or stomped"
+routine = "touch_enemies"
+
+[[grade.part]]
+says = "squashed slug's time"
+routine = "tick_squashed"
+
+[[grade.part]]
+says = "death"
+routine = "kill_player"
+
+[[grade.part]]
+says = "pit"
+routine = "move_player"
+line = 466
+way = "not_taken"
+
+[[grade.part]]
+says = "game over"
+routine = "update_dying"
+line = 772
+way = "taken"
+
+[[grade.part]]
+says = "level end"
+routine = "move_player"
+line = 473
+way = "not_taken"
+
+# The wrong model whose run gives the targets a second time.
+[wrong_model]
+says = "The jump's gravity 0.1875 instead of 0.25"
+set = { "entities.player.jump.gravity" = "0.1875" }
+
+# `gp bench scratch mosshop`: the start is the model's header and the asset
+# map's slots only, with no state mapping. Stage 0's command reads only the
+# ROM and the asset map: `gp model blind`, which plays the ROM
+# (`gp model derive --from code` reads the assembly source and is refused
+# here).
+[scratch]
+rounds = 3
+# What the start holds besides the ROM: the template manifest (its source
+# declaration) and the asset map.
+manifest = "templates/mosshop/template.toml"
+asset_map = "assets/mosshop.toml"
+# The search over the level takes its moves in a seeded order
+# (`--decide uniform`), not from a decision server: the bench measures the
+# tools with no outside model, and a server that isn't running cost x's high
+# byte (a wrong fact) on 2026-11-05.
+static_command = ["model", "blind", "{model}", "--rom", "{rom}", "--assets", "{asset_map}", "--decide", "uniform"]

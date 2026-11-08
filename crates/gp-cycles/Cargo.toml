@@ -1,0 +1,18 @@
+[package]
+name = "gp-cycles"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# The cycle cost of an original's routine, for a model that steps a random
+# generator in an idle loop as the original does (docs/cycles.md). It takes
+# the routine's code and data from a slice made from the user's ROM under
+# $GP_HOME/work (`gp cycles slice`), never from the repo, and returns cycles
+# only: what it computes on its scratch copy of RAM goes nowhere. No
+# dependencies, so generated games can build it.
+[dependencies]
+
+[lints]
+workspace = true

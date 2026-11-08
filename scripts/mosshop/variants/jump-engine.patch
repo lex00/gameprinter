@@ -1,0 +1,58 @@
+--- a/games/mosshop/mosshop.s	2026-10-31 13:51:40
++++ b/games/mosshop/mosshop.s	2026-10-31 13:51:40
+@@ -147,29 +147,42 @@
+     jsr read_pad
+     jsr tick_squashed   ; a squashed slug's time runs in every state
+     lda STATE
+-    beq @playing
+-    cmp #DYING
+-    beq @dying
+-    cmp #GAME_OVER
+-    beq @game_over
+-    jmp @draw           ; level clear: everything stays where it is
+-@playing:
++    jsr jump_engine     ; picks the word after the call by STATE
++    .word st_playing, st_dying, st_draw, st_game_over
++st_playing:
+     jsr move_player
+     jsr move_enemies
+     jsr touch_enemies
+     jsr follow_player
+-    jmp @draw
+-@dying:
++    jmp st_draw
++st_dying:
+     jsr update_dying
+-    jmp @draw
+-@game_over:
++    jmp st_draw
++st_game_over:
+     dec TIMER
+-    bne @draw
++    bne st_draw
+     jsr new_game
+-@draw:
++st_draw:
+     jsr draw_sprites
+     jmp main
+ 
++; Jumps to the A'th word after the JSR that called it: the caller's return
++; address, pulled from the stack, is one less than the table.
++jump_engine:
++    asl a
++    tay
++    pla
++    sta TMP_PTR
++    pla
++    sta TMP_PTR+1
++    iny
++    lda (TMP_PTR),y
++    sta TMP_DST
++    iny
++    lda (TMP_PTR),y
++    sta TMP_DST+1
++    jmp (TMP_DST)
++
+ nmi:
+     pha
+     txa

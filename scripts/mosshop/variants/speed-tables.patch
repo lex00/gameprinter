@@ -1,0 +1,45 @@
+--- a/games/mosshop/mosshop.s	2026-10-31 14:31:37
++++ b/games/mosshop/mosshop.s	2026-10-31 14:31:37
+@@ -379,12 +379,13 @@
+ ; Runs and jumps, applies gravity, lands or bumps its head, takes coins,
+ ; and checks for a pit or the goal.
+ move_player:
+-    lda #WALK_SPEED
+-    sta TMP_SPEED
++    ldx #0              ; 1 with B held
+     lda PAD
+     and #BUTTON_B
+-    beq @right
+-    lda #RUN_SPEED
++    beq @speed
++    inx
++@speed:
++    lda walk_speeds,x
+     sta TMP_SPEED
+ @right:
+     lda PAD
+@@ -414,9 +415,9 @@
+     lda PAD_NEW
+     and #BUTTON_A
+     beq @gravity
+-    lda #<JUMP_SPEED
++    lda jump_speed
+     sta PLAYER_VYSUB
+-    lda #>JUMP_SPEED
++    lda jump_speed+1
+     sta PLAYER_VY
+     lda PLAYER_Y
+     sta JUMP_START_Y
+@@ -1203,6 +1204,12 @@
+ 
+ .segment "RODATA"
+ 
++; Steps per frame walking and running (B held), and the jump's speed.
++walk_speeds:
++    .byte WALK_SPEED, RUN_SPEED
++jump_speed:
++    .word JUMP_SPEED
++
+ palette:
+     ; background: sky, moss green, soil brown, tan
+     .byte $21, $1A, $17, $37

@@ -1,0 +1,32 @@
+# Template manifest (docs/templates.md). Moss Hop is ours, but its
+# template ships asset-free like a commercial game's, so the path that
+# guards commercial games is the one `just check` runs every day.
+[template]
+format = "0.1.0"
+id = "mosshop"
+title = "Moss Hop"
+tier = "open"
+model = "model.toml"
+contract = "fidelity.toml"
+
+# The ROM built from games/mosshop. Its hash changes with the game's
+# source, like the baselines' and the asset map's.
+[source]
+id = "mosshop"
+platform = "nes"
+how = "build"
+build = "just mosshop"
+accepts = ["44fcedf5050970a0ae6cf10c76ac80d9628f663416c22adb8432a43b0c953ec4"]
+
+[recipe]
+asset_map = "../../assets/mosshop.toml"
+asset_map_sha256 = "90899db48ccdd34ade161aeca039d2cbcfa8024c49f3227213e5e8e41497c3f7"
+lifted_sha256 = "297ed681b05b44ca18dbe1e621fbbd473fb5373daacefaac100762e1161e49a8"
+
+[slots]
+font = "font"
+level = "layout"
+metatiles = "tileset"
+palettes = "palettes"
+slugs = "spawns"
+tiles = "graphics"

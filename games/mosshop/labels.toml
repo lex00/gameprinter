@@ -1,0 +1,355 @@
+# Moss Hop's RAM map, for tools: the trace inspector's labeled RAM watch,
+# selectors such as ram[0x0010], and the labels in baselines/mosshop/.
+# ram.inc holds the same names and addresses for the assembler; a test in
+# crates/gp-cli/tests/mosshop.rs fails if the two disagree, or if a baseline
+# assertion names a label at another address. docs/reference-game.md
+# describes each variable.
+#
+# `addr` is in the console's 2KB of internal RAM; `size` is in bytes, and a
+# variable of more than one byte is an array, one entry per enemy (or per
+# queued redraw, or per level cell).
+
+schema = 0
+game = "mosshop"
+
+[[label]]
+name = "FRAMES"
+addr = 0x00
+size = 1
+description = "NMI count, wraps at 256"
+
+[[label]]
+name = "NMI_DONE"
+addr = 0x01
+size = 1
+description = "Set by the NMI handler, cleared by the main loop"
+
+[[label]]
+name = "PAD"
+addr = 0x02
+size = 1
+description = "Controller 1 this frame: A B Select Start Up Down Left Right, A in bit 7"
+
+[[label]]
+name = "PAD_PREV"
+addr = 0x03
+size = 1
+description = "Controller 1 the frame before"
+
+[[label]]
+name = "PAD_NEW"
+addr = 0x04
+size = 1
+description = "Buttons down this frame and up the frame before"
+
+[[label]]
+name = "STATE"
+addr = 0x05
+size = 1
+description = "0 playing, 1 dying, 2 level clear, 3 game over"
+
+[[label]]
+name = "TIMER"
+addr = 0x06
+size = 1
+description = "Frames left in the dying or game over state"
+
+[[label]]
+name = "DEATHS"
+addr = 0x07
+size = 1
+description = "Deaths since the game started"
+
+[[label]]
+name = "STOMPS"
+addr = 0x08
+size = 1
+description = "Enemies stomped since the game started"
+
+[[label]]
+name = "COINS"
+addr = 0x09
+size = 1
+description = "Coins taken since the game started"
+
+[[label]]
+name = "LIVES"
+addr = 0x0A
+size = 1
+description = "Lives left after this one"
+
+[[label]]
+name = "PLAYER_X"
+addr = 0x10
+size = 1
+description = "Player's left edge in the level, pixels, low byte"
+
+[[label]]
+name = "PLAYER_X_HI"
+addr = 0x11
+size = 1
+description = "Player's left edge, high byte (0 or 1)"
+
+[[label]]
+name = "PLAYER_Y"
+addr = 0x12
+size = 1
+description = "Player's top edge, pixels from the top of the screen, low byte"
+
+[[label]]
+name = "PLAYER_YSUB"
+addr = 0x13
+size = 1
+description = "Fraction of a pixel of PLAYER_Y, in 256ths"
+
+[[label]]
+name = "PLAYER_VY"
+addr = 0x14
+size = 1
+description = "Vertical speed, whole pixels per frame, signed, down is positive"
+
+[[label]]
+name = "PLAYER_VYSUB"
+addr = 0x15
+size = 1
+description = "Fraction of PLAYER_VY, in 256ths"
+
+[[label]]
+name = "ON_GROUND"
+addr = 0x16
+size = 1
+description = "1 while standing on something solid"
+
+[[label]]
+name = "FACING"
+addr = 0x17
+size = 1
+description = "0 right, 1 left"
+
+[[label]]
+name = "JUMP_START_Y"
+addr = 0x18
+size = 1
+description = "PLAYER_Y when the last jump started"
+
+[[label]]
+name = "PEAK_Y"
+addr = 0x19
+size = 1
+description = "Smallest PLAYER_Y since the last jump started"
+
+[[label]]
+name = "CAMERA_X"
+addr = 0x1A
+size = 1
+description = "Left edge of the screen in the level, low byte"
+
+[[label]]
+name = "CAMERA_X_HI"
+addr = 0x1B
+size = 1
+description = "Left edge of the screen, high byte"
+
+[[label]]
+name = "PLAYER_Y_HI"
+addr = 0x1C
+size = 1
+description = "High byte of PLAYER_Y: 1 once a dying player falls below the screen"
+
+[[label]]
+name = "ENEMY_X"
+addr = 0x20
+size = 2
+description = "Enemies' left edges in the level, low bytes"
+
+[[label]]
+name = "ENEMY_X_HI"
+addr = 0x22
+size = 2
+description = "Enemies' left edges, high bytes"
+
+[[label]]
+name = "ENEMY_DIR"
+addr = 0x24
+size = 2
+description = "0 moving right, 1 moving left"
+
+[[label]]
+name = "ENEMY_STATE"
+addr = 0x26
+size = 2
+description = "0 gone, 1 walking, 2 squashed"
+
+[[label]]
+name = "ENEMY_TIMER"
+addr = 0x28
+size = 2
+description = "Frames left squashed"
+
+[[label]]
+name = "TMP_XL"
+addr = 0x30
+size = 1
+description = "Scratch"
+
+[[label]]
+name = "TMP_XH"
+addr = 0x31
+size = 1
+description = "Scratch"
+
+[[label]]
+name = "TMP_Y"
+addr = 0x32
+size = 1
+description = "Scratch"
+
+[[label]]
+name = "TMP_COL"
+addr = 0x33
+size = 1
+description = "Scratch"
+
+[[label]]
+name = "TMP_PTR"
+addr = 0x34
+size = 2
+description = "Scratch pointer"
+
+[[label]]
+name = "TMP_SPEED"
+addr = 0x36
+size = 1
+description = "Scratch"
+
+[[label]]
+name = "TMP_SX"
+addr = 0x37
+size = 1
+description = "Scratch"
+
+[[label]]
+name = "TMP_SY"
+addr = 0x38
+size = 1
+description = "Scratch"
+
+[[label]]
+name = "TMP_TILE"
+addr = 0x39
+size = 1
+description = "Scratch"
+
+[[label]]
+name = "TMP_ATTR"
+addr = 0x3A
+size = 1
+description = "Scratch"
+
+[[label]]
+name = "TMP_MASK"
+addr = 0x3B
+size = 1
+description = "Scratch"
+
+[[label]]
+name = "TMP_ROW"
+addr = 0x3C
+size = 1
+description = "Scratch"
+
+[[label]]
+name = "TMP_HALF"
+addr = 0x3D
+size = 1
+description = "Scratch"
+
+[[label]]
+name = "TMP_COUNT"
+addr = 0x3E
+size = 1
+description = "Scratch"
+
+[[label]]
+name = "TMP_NT"
+addr = 0x3F
+size = 1
+description = "Scratch"
+
+[[label]]
+name = "TMP_CELL"
+addr = 0x40
+size = 1
+description = "Scratch"
+
+[[label]]
+name = "TMP_PAGE"
+addr = 0x41
+size = 1
+description = "Scratch"
+
+[[label]]
+name = "TMP_DST"
+addr = 0x42
+size = 2
+description = "Scratch pointer"
+
+[[label]]
+name = "TMP_QTILE"
+addr = 0x44
+size = 1
+description = "Scratch"
+
+[[label]]
+name = "TMP_QCELL"
+addr = 0x45
+size = 1
+description = "Scratch"
+
+[[label]]
+name = "TMP_QCOL"
+addr = 0x46
+size = 1
+description = "Scratch"
+
+[[label]]
+name = "REDRAW_COUNT"
+addr = 0x50
+size = 1
+description = "Metatiles queued for the next NMI to draw"
+
+[[label]]
+name = "REDRAW_HI"
+addr = 0x51
+size = 8
+description = "Each queued metatile's nametable address, high byte"
+
+[[label]]
+name = "REDRAW_LO"
+addr = 0x59
+size = 8
+description = "Each queued metatile's nametable address, low byte"
+
+[[label]]
+name = "REDRAW_TILE"
+addr = 0x61
+size = 8
+description = "Each queued metatile"
+
+[[label]]
+name = "OAM"
+addr = 0x0200
+size = 256
+description = "Sprite table, copied to the PPU by DMA in every NMI"
+
+[[label]]
+name = "LEVEL_LEFT"
+addr = 0x0300
+size = 240
+description = "The level's cells, columns 0-15: 15 rows of 16 metatiles"
+
+[[label]]
+name = "LEVEL_RIGHT"
+addr = 0x03F0
+size = 240
+description = "The level's cells, columns 16-31: 15 rows of 16 metatiles"

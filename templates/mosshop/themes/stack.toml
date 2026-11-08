@@ -1,0 +1,20 @@
+# Moss Hop's baked look (docs/formats/theme.md, "Stacking"): the themes it
+# ships with, under any a player adds. Dusk is on; the paper restyle and the
+# CRT filter ship off, for a fork to turn on or a player to put in their own
+# stack.
+format = "0.1.0"
+model = "mosshop"
+
+[[layer]]
+theme = "paper"
+scope = "baked"
+enabled = false
+
+[[layer]]
+theme = "dusk"
+scope = "baked"
+
+[[layer]]
+theme = "crt"
+scope = "baked"
+enabled = false

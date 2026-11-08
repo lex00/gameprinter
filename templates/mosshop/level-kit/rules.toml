@@ -1,0 +1,84 @@
+# The level kit's rules for Moss Hop (docs/level-kit.md), written by hand.
+# `gp level kit mosshop` puts them into kit.toml and level-kit.md with what
+# the model and the asset map say. Moss Hop is our own game, built from
+# games/mosshop/mosshop.s, so every rule here is read from its source.
+format = "0.1.0"
+summary = """
+A stage is one level two screens wide (32 by 15 cells of 16 px). The hero runs and jumps from the left, stomps or avoids slugs that patrol between two places, bumps a ? block, picks up coins, and reaches the burrow at the right. Falling below the level costs a life.
+"""
+open = [
+  "The play measures a Moss Hop level should land near aren't taken: gp level measure is for stages of girders and ladders; a measure of a scrolling level (the jumps' margins, gp level difficulty) would give them",
+  "The room left in the ROM for a bigger level isn't measured: the grid's size is fixed at 32 by 15 in the source",
+  "Originality has no base to compare with: Moss Hop is an original, so a stage of it is held to nothing but its own checks",
+]
+
+[[data]]
+what = "The level"
+rule = "A grid of 32 by 15 cells, a character a cell from the legend .MSB()?uo (sky, moss over soil, soil, stone block, the burrow's two halves, a ? block, a used block, a coin). The used block `u` is never written: a bumped ? block becomes one"
+slot = "level"
+source = "the asset map; games/mosshop/mosshop.s, level_row"
+
+[[data]]
+what = "The metatiles"
+rule = "9 metatiles of 4 tiles each, with a solid byte and a kind byte: solid cells stop the hero, kinds mark the ? block and coins"
+slot = "metatiles"
+source = "the asset map"
+
+[[data]]
+what = "The slugs"
+rule = "2 slugs, each a start and an end x in pixels: it walks right from start to end and back, on row 176"
+slot = "slugs"
+source = "the asset map; the model's spawn table"
+
+[[code]]
+what = "The level's size"
+rule = "32 by 15 cells; the camera follows the hero across, never back past the level's left edge"
+source = "the model's cameras.main and the asset map"
+
+[[code]]
+what = "The goal"
+rule = "The hero's left edge at x 468 or past: the burrow must stand there"
+source = "the model's levels.main.goal"
+
+[[code]]
+what = "Falling out"
+rule = "A body below row 208 is out and the hero loses a life (player.fell)"
+source = "the model's kill_below and pit_event"
+
+[[code]]
+what = "The hero's start"
+rule = "x 24, y 176: the start cell must have solid ground under it"
+source = "the model's spawn"
+
+[[limit]]
+what = "Cells"
+limit = "32 by 15, 480 cells"
+source = "the asset map (level: width 32, height 15)"
+
+[[limit]]
+what = "Slugs"
+limit = "2"
+source = "the asset map (slugs: 2 rows)"
+
+[[limit]]
+what = "Metatiles"
+limit = "9"
+source = "the asset map"
+
+[[limit]]
+what = "A jump's reach"
+limit = "about 50 px up, 40 px across walking and 80 running (the hero's moves below; Badge In, which takes this jump, measures 48, 40 and 80 with gp interp reach); a gap wider or a step higher can't be crossed"
+why = "every level must stay reachable: gp interp reach checks it"
+source = "the model's run and jump"
+
+[[verify]]
+step = "1. Reachable"
+how = "gp interp reach templates/mosshop: the goal reachable by the hero alone"
+
+[[verify]]
+step = "2. The scenarios"
+how = "gp host scenarios on a copy (templates/mosshop/AGENTS.md): a scenario that fails after the change names a behavior that moved"
+
+[[verify]]
+step = "3. The ROM"
+how = "Moss Hop builds from its source with cc65; a new level is written in games/mosshop/mosshop.s's level_row lines and the build's asset test checks the offsets"

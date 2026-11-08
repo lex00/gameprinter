@@ -1,0 +1,6 @@
+# Fixes switched off, for `gp capture prune --mutants` and the grid's doubt
+# (docs/research/clip-set.md, section 3).
+[[mutant]]
+name = "jump.gravity"
+says = "The jump's gravity"
+set = { "entities.player.jump.gravity" = "0.1875" }

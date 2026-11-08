@@ -1,0 +1,47 @@
+--- a/games/mosshop/mosshop.s	2026-10-31 16:34:13
++++ b/games/mosshop/mosshop.s	2026-10-31 16:34:13
+@@ -13,6 +13,8 @@
+ 
+ .include "ram.inc"
+ 
++MODE = $6D              ; the game's mode: 0 is play; only reset sets it
++
+ PPUCTRL   = $2000
+ PPUMASK   = $2001
+ PPUSTATUS = $2002
+@@ -133,6 +135,8 @@
+     lda #0
+     sta PPUSCROLL
+     sta PPUSCROLL
++    lda #0
++    sta MODE
+     lda #%10000000      ; NMI on, nametable $2000, both pattern tables at $0000
+     sta PPUCTRL
+     lda #%00011110      ; background and sprites, including the left 8 pixels
+@@ -145,6 +149,15 @@
+     lda #0
+     sta NMI_DONE
+     jsr read_pad
++    lda MODE            ; the mode's frame, through a table
++    asl a
++    tax
++    lda mode_table,x
++    sta TMP_PTR
++    lda mode_table+1,x
++    sta TMP_PTR+1
++    jmp (TMP_PTR)
++play_frame:
+     jsr tick_squashed   ; a squashed slug's time runs in every state
+     lda STATE
+     beq @playing
+@@ -1203,6 +1216,10 @@
+ 
+ .segment "RODATA"
+ 
++; Each mode's frame.
++mode_table:
++    .word play_frame
++
+ palette:
+     ; background: sky, moss green, soil brown, tan
+     .byte $21, $1A, $17, $37

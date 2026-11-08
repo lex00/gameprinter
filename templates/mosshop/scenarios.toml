@@ -1,0 +1,126 @@
+# Scenario tests for Moss Hop (docs/host.md). `gp host scenarios mosshop
+# --template` runs them on the template; in a working copy,
+# `gp host scenarios COPY` does, and the change recipes in AGENTS.md say
+# which ones an edit is expected to break. Numbers are the shipped game's:
+# the player starts on the ground at y 176, and the held jump peaks at y
+# 128.5 (47.5 pixels up) at frame 69.
+
+format = "0.1.0"
+
+[scenarios.stands-still]
+description = "With no input the player stays put on the ground and the level goes on"
+frames = 60
+
+[[scenarios.stands-still.expect]]
+path = "entities.player[0].y"
+op = "eq"
+value = "176"
+
+[[scenarios.stands-still.expect]]
+path = "entities.player[0].on_ground"
+op = "eq"
+value = "true"
+
+[[scenarios.stands-still.expect]]
+path = "rules.game.state"
+op = "eq"
+value = "playing"
+
+[scenarios.walks-right]
+description = "Holding right for a second moves the player right along the ground"
+frames = 60
+holds = ["right@0-"]
+
+[[scenarios.walks-right.expect]]
+path = "entities.player[0].x"
+op = "between"
+min = "60"
+max = "100"
+
+[[scenarios.walks-right.expect]]
+path = "entities.player[0].on_ground"
+op = "eq"
+value = "true"
+
+[scenarios.jump-height]
+description = "A jump started at frame 50 peaks near frame 69, 47.5 pixels up, and lands"
+frames = 130
+holds = ["a@50-60"]
+
+[[scenarios.jump-height.expect]]
+at = 49
+path = "entities.player[0].y"
+op = "eq"
+value = "176"
+
+[[scenarios.jump-height.expect]]
+at = 69
+path = "entities.player[0].y"
+op = "between"
+min = "124"
+max = "133"
+
+[[scenarios.jump-height.expect]]
+at = 69
+path = "entities.player[0].on_ground"
+op = "eq"
+value = "false"
+
+[[scenarios.jump-height.expect]]
+path = "entities.player[0].y"
+op = "eq"
+value = "176"
+
+[scenarios.jump-airtime]
+description = "The jump is over by frame 93: the player is in the air at 80 and on the ground at 100"
+frames = 100
+holds = ["a@50-60"]
+
+[[scenarios.jump-airtime.expect]]
+at = 80
+path = "entities.player[0].on_ground"
+op = "eq"
+value = "false"
+
+[[scenarios.jump-airtime.expect]]
+at = 100
+path = "entities.player[0].on_ground"
+op = "eq"
+value = "true"
+
+[scenarios.finish-level]
+description = "The shipped run to the burrow clears the level, stomping one slug and never dying"
+baseline = "finish-level"
+
+[[scenarios.finish-level.expect]]
+path = "rules.game.state"
+op = "eq"
+value = "clear"
+
+[[scenarios.finish-level.expect]]
+path = "counters.stomps"
+op = "eq"
+value = "1"
+
+[[scenarios.finish-level.expect]]
+path = "counters.deaths"
+op = "eq"
+value = "0"
+
+[[scenarios.finish-level.expect]]
+event = "goal.reached"
+count_min = 1
+
+[scenarios.slug-death]
+description = "Running into the first slug kills the player once"
+baseline = "slug-death"
+
+[[scenarios.slug-death.expect]]
+path = "counters.deaths"
+op = "eq"
+value = "1"
+
+[[scenarios.slug-death.expect]]
+path = "counters.stomps"
+op = "eq"
+value = "0"

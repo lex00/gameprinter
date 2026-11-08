@@ -1,0 +1,102 @@
+--- a/games/mosshop/mosshop.s	2026-10-31 16:47:19
++++ b/games/mosshop/mosshop.s	2026-10-31 16:47:19
+@@ -13,6 +13,8 @@
+ 
+ .include "ram.inc"
+ 
++CUR_BANK = $6C          ; the mode's bank: 1 playing, 2 dying
++
+ PPUCTRL   = $2000
+ PPUMASK   = $2001
+ PPUSTATUS = $2002
+@@ -79,9 +81,9 @@
+ 
+ .segment "HEADER"
+     .byte "NES", $1A
+-    .byte 1             ; 16KB PRG
++    .byte 4             ; 64KB PRG
+     .byte 1             ; 8KB CHR
+-    .byte %00000001     ; mapper 0, vertical mirroring
++    .byte %00100001     ; mapper 2 (UxROM), vertical mirroring
+     .byte %00000000
+     .byte 0, 0, 0, 0, 0, 0, 0, 0
+ 
+@@ -147,21 +149,15 @@
+     jsr read_pad
+     jsr tick_squashed   ; a squashed slug's time runs in every state
+     lda STATE
+-    beq @playing
+-    cmp #DYING
+-    beq @dying
+     cmp #GAME_OVER
+     beq @game_over
+-    jmp @draw           ; level clear: everything stays where it is
+-@playing:
+-    jsr move_player
+-    jsr move_enemies
+-    jsr touch_enemies
+-    jsr follow_player
++    cmp #CLEAR
++    beq @draw           ; level clear: everything stays where it is
++    ldx CUR_BANK        ; playing or dying: the mode's bank has its frame
++    lda bank_table,x    ; at $8000
++    sta bank_table,x
++    jsr $8000
+     jmp @draw
+-@dying:
+-    jsr update_dying
+-    jmp @draw
+ @game_over:
+     dec TIMER
+     bne @draw
+@@ -254,6 +250,8 @@
+ ; Puts the player, the enemies and the camera at the start of the level,
+ ; and the level's cells as they were.
+ start_level:
++    lda #1              ; the playing frame's bank
++    sta CUR_BANK
+     lda #START_X
+     sta PLAYER_X
+     lda #0
+@@ -746,6 +744,8 @@
+ ; The player dies: it hops up and falls off the screen while nothing else
+ ; moves (update_dying).
+ kill_player:
++    lda #2              ; the dying frame's bank
++    sta CUR_BANK
+     lda #DYING
+     sta STATE
+     lda #DYING_FRAMES
+@@ -1199,10 +1199,32 @@
+     sta TMP_COL
+     jmp @nametable
+ @done:
++    rts
++
++.segment "BANK1"
++
++; Bank 1 at $8000: the playing frame.
++play_frame:
++    jsr move_player
++    jsr move_enemies
++    jsr touch_enemies
++    jsr follow_player
++    rts
++
++.segment "BANK2"
++
++; Bank 2 at $8000: the dying frame.
++dying_frame:
++    jsr update_dying
+     rts
+ 
+ .segment "RODATA"
+ 
++; Bank numbers at their own values, so a write to select one agrees with
++; the ROM byte it lands on (UxROM's bus conflicts).
++bank_table:
++    .byte 0, 1, 2, 3
++
+ palette:
+     ; background: sky, moss green, soil brown, tan
+     .byte $21, $1A, $17, $37

@@ -1,0 +1,76 @@
+# Moss Hop (docs/reference-game.md): runs right with B held and jumps four
+# times: over the step, over the first slug and the pit (taking a coin),
+# onto the floating blocks (two coins), and onto the second slug, stomped at
+# frame 169. It lies flat until frame 199. The level is clear at frame 250,
+# with PLAYER_X 468 in the burrow's doorway.
+#
+# The 5 lag frames are at power-on.
+
+schema = 0
+source = "mosshop"
+sha256 = "44fcedf5050970a0ae6cf10c76ac80d9628f663416c22adb8432a43b0c953ec4"
+description = "Run and jump to the burrow, taking three coins and stomping the second slug"
+frames = 300
+holds = ["right+b@10-", "a@26-28", "a@68-70", "a@110-112", "a@200-202"]
+frame_hashes = "1d77693e874ee91bc0b815c8e997ec777ea5ce77df355d5a5b433cb2882b0ea3"
+lag_frames = 5
+
+[[assert]]
+frame = 102
+label = "COINS"
+addr = 0x0009
+equals = 1
+
+[[assert]]
+frame = 146
+label = "COINS"
+addr = 0x0009
+equals = 3
+
+[[assert]]
+frame = 169
+label = "STOMPS"
+addr = 0x0008
+equals = 1
+
+[[assert]]
+frame = 169
+label = "ENEMY_STATE+1"
+addr = 0x0027
+equals = 2
+
+[[assert]]
+frame = 199
+label = "ENEMY_STATE+1"
+addr = 0x0027
+equals = 0
+
+[[assert]]
+frame = 249
+label = "STATE"
+addr = 0x0005
+equals = 0
+
+[[assert]]
+frame = 250
+label = "STATE"
+addr = 0x0005
+equals = 2
+
+[[assert]]
+frame = 250
+label = "PLAYER_X"
+addr = 0x0010
+equals = 212
+
+[[assert]]
+frame = 300
+label = "DEATHS"
+addr = 0x0007
+equals = 0
+
+[[assert]]
+frame = 300
+label = "COINS"
+addr = 0x0009
+equals = 3
