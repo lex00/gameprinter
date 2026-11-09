@@ -437,14 +437,6 @@ async function session(browser, name, opts = {}) {
       if (!S.runs.has(name)) return route.fallback();
       return route.fulfill({ body: S.runs.get(name), contentType: "text/plain", headers: { "cross-origin-resource-policy": "same-origin" } });
     });
-    if (registryFolder) {
-      await context.route((u) => isSourceUrl(live, u), (route) => {
-        const key = sourceKey(live, new URL(route.request().url())).slice(1);
-        const f = join(registryFolder, key);
-        if (!existsSync(f)) return route.fulfill({ status: 404, headers: { "access-control-allow-origin": "*" } });
-        return route.fulfill({ path: f, contentType: "application/octet-stream", headers: { "access-control-allow-origin": "*", "cross-origin-resource-policy": "cross-origin" } });
-      });
-    }
   }
   if (opts.gesture) await context.addInitScript((r) => (window.__checkGesture = r), opts.gesture);
   await context.addInitScript(audioProbe);
@@ -463,14 +455,14 @@ async function session(browser, name, opts = {}) {
   }
   if (opts.paper === false) {
     await context.route(
-      (u) => u.pathname === "/game/index.html" && !u.search.includes("files="),
+      (u) => /^\/game\/(index\.html)?$/.test(u.pathname) && !u.search.includes("files="),
       (r) => r.fulfill({ contentType: "text/html", body: "<!doctype html><title>The paper version, not loaded in this section</title>" }),
     );
   }
   const isSource = (u) => isSourceUrl(S.origin, u);
   if (registryFolder && page.source.url !== ".") {
     await context.route(isSource, (r) => {
-      const f = join(registryFolder, new URL(r.request().url()).pathname);
+      const f = join(registryFolder, sourceKey(S.origin, new URL(r.request().url())));
       if (!existsSync(f)) return r.fulfill({ status: 403, headers: { "access-control-allow-origin": "*" }, body: "" });
       return r.fulfill({ status: 200, headers: { "access-control-allow-origin": "*" }, body: readFileSync(f) });
     });
@@ -493,7 +485,7 @@ async function session(browser, name, opts = {}) {
   p.on("console", (m) => /Content Security Policy|Content-Security-Policy|Refused to/i.test(m.text()) && S.violations.push(m.text()));
   const check = S.check;
   const errors = S.errors;
-  const game = (S.game = () => p.frame({ url: /\/game\/index\.html/ }));
+  const game = (S.game = () => p.frame({ url: /\/game\/(index\.html)?(\?|$)/ }));
   const gp = (S.gp = async (f, arg) => (await game()).evaluate(f, arg));
   const waitFrames = (S.waitFrames = async (n, ms = 20000) => {
     const t0 = Date.now();
@@ -520,7 +512,8 @@ async function session(browser, name, opts = {}) {
     while (!(await gp(() => (window.__checkOld = true)).catch(() => false)) && Date.now() - t0 < ms) await p.waitForTimeout(50);
     await p.locator("#game").evaluate((f, s) => (f.src = s), src);
     while (Date.now() - t0 < ms) {
-      const h = await gp((url) => (window.__checkOld || location.href !== url ? -1 : (window.__gp?.hashes?.length ?? 0)), url).catch(() => -1);
+      // Cloudflare serves /game/index.html at /game/.
+      const h = await gp((url) => (window.__checkOld || location.href !== url.replace("/game/index.html", location.pathname) ? -1 : (window.__gp?.hashes?.length ?? 0)), url).catch(() => -1);
       if (h >= n) return true;
       await p.waitForTimeout(100);
     }
@@ -1558,7 +1551,7 @@ async function romUnload(S, { name, rom }) {
 async function visitor(S, { rule, input, load, rom }) {
   const { check } = S;
   const v = S.p;
-  const vgame = () => v.frame({ url: /\/game\/index\.html\?files=idb/ });
+  const vgame = () => v.frame({ url: /\/game\/(index\.html)?\?files=idb/ });
   const press = async (k, ms = 100) => {
     if (input === "gamepad") {
       const b = { Enter: 9, ArrowRight: 15 }[k];
@@ -1634,7 +1627,13 @@ async function keptLook(S, { name, rom }) {
     for (const m of ["donkey_kong_oe", "donkey_kong_ju", "rivet_rodeo"]) localStorage.setItem(`gp-theme:${m}`, "paper");
   });
   await S.loadRom(rom);
-  const g = await S.game();
+  // The ROM's frame, and never the one it replaces: on a host that redirects
+  // the frame's address, the old document is still there for a moment.
+  const romFrame = () => p.frames().find((f) => /[?&]files=idb:/.test(f.url()));
+  await p.waitForFunction(() => document.getElementById("game").src.includes("files=idb:"), null, { timeout: 5000 });
+  const t0 = Date.now();
+  while (!romFrame() && Date.now() - t0 < 30000) await p.waitForTimeout(50);
+  const g = romFrame();
   await g.waitForFunction(() => window.__gp && window.__gp.theme !== undefined && window.__gp.hashes?.length > 30, null, { timeout: 60000 });
   const theme = await g.evaluate(() => window.__gp.theme);
   await S.shot("kept-look.png");
@@ -2070,7 +2069,8 @@ async function registryLinks(S) {
   await refused("p?g=someone/else", /this page plays/i, "a link to a game this player doesn't have is refused in words");
   await refused(`p?g=${page.game}@9.9.9`, /couldn't be installed/i, "a link to a version that doesn't exist is refused in words");
   // A local registry holds only the current version.
-  if (page.source.url === ".") await refused(`p?g=${page.game}@1.0.0`, /isn't there/i, "a version this source doesn't hold is refused in words");
+  // Only staging still holds 1.0.0.
+  if (page.source.name !== "gp-staging") await refused(`p?g=${page.game}@1.0.0`, /isn't there/i, "a version this source doesn't hold is refused in words");
   else await refused(`p?g=${page.game}@1.0.0`, /hook code and no module/i, "a version with hooks and no module is refused in words");
 }
 
