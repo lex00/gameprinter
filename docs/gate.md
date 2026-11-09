@@ -1,13 +1,13 @@
 # The gates
 
-Nothing lands on `main` in `gameprinter` or `games` except through a gate. A gate takes a patch, tests it in a worktree in the gate's own home (`$GP_GATE_HOME`, default `~/.gameprinter/gate`), and moves the branch only when it passes. Run the gate from your worktree; it tests the tip of the branch, not your tree, and a failed gate leaves the branch and your tree alone.
+Nothing lands on `main` in `gameprinter` or `games` except through a gate. A gate takes a patch, tests it in a worktree in the gate's own home (`$GP_GATE_HOME`, default `~/.gameprinter/gate`), and moves the branch only when it passes. Run the gate from your worktree and pass `--onto main`: without it the gate lands on the branch checked out where it runs, which in a worktree is your task branch. It tests the tip of that branch, not your tree, and a failed gate leaves the branch and your tree alone.
 
 Every commit a gate makes passes the ROM-blocking hook. A patch with a ROM's bytes, a game image, or anything else the hook refuses stops the gate with nothing committed. A patch can't change the hook: the tool gate refuses a patch to `.githooks/` or `scripts/romguard/`, and only the person edits those.
 
 ## The game gate: a patch to a game
 
 ```text
-gp model gate ../games/donkey-kong --patch "$GP_WORKER_OUT/fix.patch" -m "Donkey Kong: ..."
+gp model gate donkey-kong --patch "$GP_WORKER_OUT/fix.patch" --onto main -m "Donkey Kong: ..."
 ```
 
 `gp model gate` scores the game's corpus on the tip of `games`, applies the patch, builds the game's module if its hooks changed, scans the package for ROM data, checks the model, and scores the corpus again. If no clip got worse, the commit lands on the branch. A patch that removes a clip from the corpus has to name it with `--removes`, or the gate refuses it. `--dry-run` says PASS or FAIL and lands nothing.
@@ -28,7 +28,7 @@ The first run takes the folder as it stands as the baseline commit, after the ho
 
 ```text
 cd your-gameprinter-worktree
-gp tool gate --patch "$GP_WORKER_OUT/fix.patch" -m "gp-nes: ..."
+gp tool gate --patch "$GP_WORKER_OUT/fix.patch" --onto main -m "gp-nes: ..."
 ```
 
 `gp tool gate` puts a worktree at the branch tip, applies the patch, and in order:

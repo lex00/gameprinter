@@ -61,7 +61,7 @@ pub(crate) const RULES: &[&str] = &[
     "Never commit with --no-verify, and never push.",
     "Never open $GP_HOME/sealed or a sealed run's session; those are scored only by the coordinator.",
     "ROMs stay in $GP_ROM_DIR. Nothing made from a ROM (bytes, lifted files, a built game) goes into a commit or leaves this machine.",
-    "A game change lands through `gp model gate PACKAGE --patch FILE -m MSG`; a change to the tool lands through `gp tool gate --patch FILE -m MSG` (docs/gate.md). Neither repo's main branch takes a commit any other way.",
+    "A game change lands through `gp model gate PACKAGE --patch FILE --onto main -m MSG`; a change to the tool lands through `gp tool gate --patch FILE --onto main -m MSG` (docs/gate.md). Neither repo's main branch takes a commit any other way.",
     "Not changing Rust? Run the gate's published gp ($GP_HOME/bin/gp, `gp` on PATH after --shell) and build nothing. Changing Rust? Pass --rust and build with the nice level and job limit below, in your worktree's own target folder, in the fastdev profile.",
     "Build through the locked cargo ($GP_HOME/bin/locked/cargo, first on PATH after --shell): one build at a time on the machine, jobs from free memory. At most 2 workers change Rust at once.",
     "Write outputs in your own folder below, never in a shared one.",

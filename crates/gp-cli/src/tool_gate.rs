@@ -361,10 +361,7 @@ fn trial(
 pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
     let cwd = std::env::current_dir()?;
     let repo = PathBuf::from(git(&cwd, &["rev-parse", "--show-toplevel"])?);
-    let onto = match &a.onto {
-        Some(b) => b.clone(),
-        None => git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])?,
-    };
+    let onto = gate::onto_branch(a.onto.as_deref(), &repo, false)?;
     let home = gate::gate_home(a.home.as_deref())?;
     let lock = fs::File::create(home.join("gate.lock"))?;
     lock.lock()?;

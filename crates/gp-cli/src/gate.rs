@@ -520,6 +520,20 @@ fn trial(
     })
 }
 
+/// The branch to land on: `--onto`, else the one checked out in `repo`. A
+/// detached checkout has none, so it must name one (a score-only run lands
+/// nothing and doesn't care).
+pub(crate) fn onto_branch(onto: Option<&str>, repo: &Path, any: bool) -> Result<String> {
+    if let Some(b) = onto {
+        return Ok(b.to_owned());
+    }
+    let b = git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if b == "HEAD" && !any {
+        bail!("this checkout is detached, so name the branch to land on with --onto");
+    }
+    Ok(b)
+}
+
 /// The gate's home, from `--home`, $GP_GATE_HOME, else ~/.gameprinter/gate,
 /// made if missing and held outside any git work tree.
 pub(crate) fn gate_home(home: Option<&Path>) -> Result<PathBuf> {
@@ -568,10 +582,7 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
     } else {
         let repo = PathBuf::from(git(&game, &["rev-parse", "--show-toplevel"])?);
         let rel = game.strip_prefix(&repo)?.to_owned();
-        let onto = match &a.onto {
-            Some(b) => b.clone(),
-            None => git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])?,
-        };
+        let onto = onto_branch(a.onto.as_deref(), &repo, a.score_only)?;
         // A score-only run reads the checkout as it stands: it's made by
         // the tool gate for this one job and never changes.
         let tree = if a.score_only {
