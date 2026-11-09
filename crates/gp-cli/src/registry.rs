@@ -123,9 +123,130 @@ impl Target for Http {
     }
 }
 
-/// A folder, `s3://BUCKET` or an https address.
+/// A registry in a git checkout, named `git:PATH`: a folder whose changes each
+/// command commits, and pushes when the repo has an `origin`. It's a folder
+/// for writing, so a write-once key is refused the same way, and a repo host
+/// serves it as static files.
+pub struct Repo(PathBuf);
+
+impl Repo {
+    fn at(spec: &str) -> Option<Self> {
+        spec.strip_prefix("git:").map(|p| Self(PathBuf::from(p)))
+    }
+
+    fn git(&self, args: &[&str]) -> Result<String> {
+        let o = Command::new("git")
+            .arg("-C")
+            .arg(&self.0)
+            .args(args)
+            .output()
+            .context("running git")?;
+        if !o.status.success() {
+            anyhow::bail!(
+                "git {} in {}: {}",
+                args.join(" "),
+                self.0.display(),
+                String::from_utf8_lossy(&o.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8_lossy(&o.stdout).trim().to_owned())
+    }
+
+    fn has_origin(&self) -> Result<bool> {
+        Ok(self.git(&["remote"])?.lines().any(|r| r == "origin"))
+    }
+
+    /// Before a command writes: a clean checkout, at the remote's tip, so a
+    /// key someone else published counts as taken.
+    fn ready(&self) -> Result<()> {
+        self.git(&["rev-parse", "--is-inside-work-tree"])?;
+        let dirty = self.git(&["status", "--porcelain"])?;
+        if !dirty.is_empty() {
+            anyhow::bail!(
+                "{} has changes not committed, so nothing is published from it",
+                self.0.display()
+            );
+        }
+        if self.has_origin()? && !self.git(&["ls-remote", "--heads", "origin"])?.is_empty() {
+            self.git(&["pull", "-q", "--ff-only", "origin", "HEAD"])?;
+        }
+        Ok(())
+    }
+
+    /// After it: one commit for what the command wrote, then the push.
+    fn commit(&self, message: &str) -> Result<()> {
+        self.git(&["add", "-A"])?;
+        if self.git(&["status", "--porcelain"])?.is_empty() {
+            return Ok(());
+        }
+        self.git(&["commit", "-q", "-m", message])?;
+        if self.has_origin()? {
+            self.git(&["push", "-q", "origin", "HEAD"])?;
+        }
+        Ok(())
+    }
+}
+
+/// `f`, with a repo target made ready first and committed after.
+fn committing(target: &str, message: &str, f: impl FnOnce() -> Result<Outcome>) -> Result<Outcome> {
+    let Some(repo) = Repo::at(target) else {
+        return f();
+    };
+    repo.ready()?;
+    let outcome = f()?;
+    if outcome.exit == 0 {
+        repo.commit(message)?;
+    }
+    Ok(outcome)
+}
+
+/// Nothing goes into a repo with a ROM's bytes in it: a repo's history keeps
+/// what it's given. Every file of a package that names ROMs is compared with
+/// each of them, and a ROM not found here stops the publish.
+fn no_rom_bytes(dir: &Path) -> Result<()> {
+    if !dir.join("package.toml").exists() {
+        return Ok(());
+    }
+    let pkg = crate::package::Package::load(dir)?;
+    let wanted = pkg.rom_hashes();
+    if wanted.is_empty() {
+        return Ok(());
+    }
+    let paths = gp_evidence::Paths::from_env()?;
+    let found = crate::roms::find(&wanted, &[], &paths.roms)?;
+    if let Some(gone) = wanted.iter().find(|h| !found.contains_key(*h)) {
+        anyhow::bail!(
+            "ROM {gone} isn't in $GP_ROM_DIR, so this package can't be compared with it before going into a repo"
+        );
+    }
+    let mut stack = vec![dir.to_owned()];
+    while let Some(d) = stack.pop() {
+        for e in fs::read_dir(&d).with_context(|| d.display().to_string())? {
+            let p = e?.path();
+            if p.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            let bytes = fs::read(&p)?;
+            for (id, rom) in &found {
+                if let Some((at, len)) = crate::served::runs_of_rom(&bytes, rom.data()).first() {
+                    anyhow::bail!(
+                        "{} holds {len} bytes of ROM {} at ROM offset {at:#x}; nothing was published",
+                        p.display(),
+                        &id[..12]
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A folder, `git:PATH`, `s3://BUCKET` or an https address.
 pub fn open(spec: &str) -> Box<dyn Target> {
-    if let Some(bucket) = spec.strip_prefix("s3://") {
+    if let Some(repo) = Repo::at(spec) {
+        Box::new(Folder(repo.0))
+    } else if let Some(bucket) = spec.strip_prefix("s3://") {
         Box::new(S3 {
             bucket: bucket.trim_end_matches('/').to_owned(),
         })
@@ -204,6 +325,18 @@ pub fn init_cmd(
     signing_key: &Path,
     namespaces: &[String],
 ) -> Result<Outcome> {
+    committing(target, &format!("Make registry {name}"), || {
+        init_inner(target, name, root_key, signing_key, namespaces)
+    })
+}
+
+fn init_inner(
+    target: &str,
+    name: &str,
+    root_key: &Path,
+    signing_key: &Path,
+    namespaces: &[String],
+) -> Result<Outcome> {
     let t = open(target);
     let mut ns = Vec::new();
     for n in namespaces {
@@ -225,6 +358,22 @@ pub fn init_cmd(
 
 /// Publishes a folder of text files as one exact version.
 pub fn publish_cmd(
+    target: &str,
+    dir: &Path,
+    (name, version): (&str, &str),
+    (kind, title): (&str, &str),
+    for_games: &[String],
+    key: &Path,
+) -> Result<Outcome> {
+    if Repo::at(target).is_some() {
+        no_rom_bytes(dir)?;
+    }
+    committing(target, &format!("Publish {name}@{version}"), || {
+        publish_inner(target, dir, (name, version), (kind, title), for_games, key)
+    })
+}
+
+fn publish_inner(
     target: &str,
     dir: &Path,
     (name, version): (&str, &str),
@@ -264,6 +413,12 @@ pub fn publish_cmd(
 }
 
 pub fn reindex_cmd(target: &str, versions: &[String], key: &Path) -> Result<Outcome> {
+    committing(target, "Re-sign the list files", || {
+        reindex_inner(target, versions, key)
+    })
+}
+
+fn reindex_inner(target: &str, versions: &[String], key: &Path) -> Result<Outcome> {
     let t = open(target);
     let mut list = Vec::new();
     for v in versions {
@@ -488,4 +643,104 @@ pub fn serve(dir: &Path, page: &Path, port: u16) -> Result<Outcome> {
         text: String::new(),
         exit: 0,
     })
+}
+
+#[cfg(test)]
+mod repo_tests {
+    use super::*;
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let o = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{args:?}: {o:?}");
+        String::from_utf8_lossy(&o.stdout).trim().to_owned()
+    }
+
+    /// A checkout of a repo with an `origin`, and the origin.
+    fn pair() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let d = tempfile::tempdir().unwrap();
+        let (origin, work) = (d.path().join("origin.git"), d.path().join("work"));
+        git(d.path(), &["init", "-q", "--bare", "origin.git"]);
+        git(d.path(), &["clone", "-q", origin.to_str().unwrap(), "work"]);
+        git(&work, &["config", "user.email", "t@t"]);
+        git(&work, &["config", "user.name", "t"]);
+        (d, origin, work)
+    }
+
+    fn ok() -> Result<Outcome> {
+        Ok(Outcome {
+            json: json!({}),
+            text: String::new(),
+            exit: 0,
+        })
+    }
+
+    #[test]
+    fn a_command_commits_what_it_wrote_and_pushes() {
+        let (_d, origin, work) = pair();
+        let spec = format!("git:{}", work.display());
+        committing(&spec, "first", || {
+            open(&spec).write_once("a/b", b"x").unwrap();
+            ok()
+        })
+        .unwrap();
+        assert_eq!(git(&origin, &["log", "--format=%s", "HEAD"]), "first");
+        assert_eq!(git(&origin, &["show", "HEAD:a/b"]), "x");
+    }
+
+    #[test]
+    fn a_published_key_is_not_written_again() {
+        let (_d, _origin, work) = pair();
+        let spec = format!("git:{}", work.display());
+        assert!(open(&spec).write_once("k", b"one").unwrap());
+        assert!(!open(&spec).write_once("k", b"two").unwrap());
+        assert_eq!(fs::read(work.join("k")).unwrap(), b"one");
+    }
+
+    #[test]
+    fn a_dirty_checkout_is_refused_and_a_failed_command_commits_nothing() {
+        let (_d, _origin, work) = pair();
+        let spec = format!("git:{}", work.display());
+        fs::write(work.join("stray"), "x").unwrap();
+        let e = committing(&spec, "m", ok).err().unwrap().to_string();
+        assert!(e.contains("not committed"), "{e}");
+        git(&work, &["add", "-A"]);
+        git(&work, &["commit", "-q", "-m", "base"]);
+        let r = committing(&spec, "bad", || {
+            open(&spec).write_once("half", b"x").unwrap();
+            anyhow::bail!("stopped")
+        });
+        assert!(r.is_err());
+        assert_eq!(git(&work, &["log", "--format=%s"]), "base");
+    }
+
+    #[test]
+    fn a_key_another_publisher_took_counts_as_taken() {
+        let (d, origin, work) = pair();
+        git(
+            d.path(),
+            &["clone", "-q", origin.to_str().unwrap(), "other"],
+        );
+        let other = d.path().join("other");
+        git(&other, &["config", "user.email", "o@o"]);
+        git(&other, &["config", "user.name", "o"]);
+        let (a, b) = (
+            format!("git:{}", work.display()),
+            format!("git:{}", other.display()),
+        );
+        committing(&a, "theirs", || {
+            open(&a).write_once("k", b"one").unwrap();
+            ok()
+        })
+        .unwrap();
+        committing(&b, "mine", || {
+            assert!(!open(&b).write_once("k", b"two").unwrap());
+            ok()
+        })
+        .unwrap();
+    }
 }

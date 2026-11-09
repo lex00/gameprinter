@@ -78,9 +78,12 @@ const registryStopped = process.argv.includes("--registry-stopped");
 // address, so only the registry's own keys count.
 const REGISTRY_KEY = /^\/(registry\.toml|catalog\.toml|yanks\.toml|namespaces\/|index\/|packages\/|blobs\/|by-game\/)/;
 const sourceOrigin = (origin) => new URL(page.source.url, `${origin}/`).origin;
+// A source can be under a path, as a repo host's is.
+const sourcePath = (origin) => new URL(page.source.url, `${origin}/`).pathname.replace(/\/$/, "");
+const sourceKey = (origin, url) => (url.pathname.startsWith(`${sourcePath(origin)}/`) ? url.pathname.slice(sourcePath(origin).length) : null);
 const isSourceUrl = (origin, u) => {
   const url = typeof u === "string" ? new URL(u) : u;
-  return url.origin === sourceOrigin(origin) && REGISTRY_KEY.test(url.pathname);
+  return url.origin === sourceOrigin(origin) && REGISTRY_KEY.test(sourceKey(origin, url) ?? "");
 };
 const free = Math.max(1, cpus().length - loadavg()[0]);
 const jobs = Math.max(1, Number(opt("jobs") ?? process.env.GP_PAGE_JOBS ?? Math.min(6, Math.floor(free / 2))) || 1);
@@ -2063,7 +2066,7 @@ const flip = (b) => {
   c[c.length >> 1] ^= 1;
   return c;
 };
-const source_ = (k) => (u) => new URL(u).pathname === `/${k}`;
+const source_ = (k) => (u) => new URL(u).pathname.endsWith(`/${k}`);
 const refusedInstall = (re, what, { version } = {}) => async (S) => {
   const { p, check } = S;
   await p.goto(`${S.origin}/${LINK}${version ? `@${version}` : ""}`);
@@ -2080,7 +2083,7 @@ async function registryGoesBad(S) {
   const { p, check, waitFrames } = S;
   await p.goto(`${S.origin}/${LINK}`);
   check(await waitFrames(30), "installed");
-  await p.context().route((u) => isSourceUrl(S.origin, u) && u.pathname === "/registry.toml", broken(() => true, flip));
+  await p.context().route((u) => isSourceUrl(S.origin, u) && sourceKey(S.origin, u) === "/registry.toml", broken(() => true, flip));
   await p.goto(`${S.origin}/${LINK}`);
   check(await waitFrames(30), "with the source's root signature broken, what is installed keeps playing");
   const said = await p.locator("#message").innerText();
