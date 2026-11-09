@@ -16,6 +16,7 @@ pub mod board;
 pub mod canonical;
 pub mod codemap;
 pub mod coverage;
+pub mod footprint;
 pub mod harvest;
 pub mod instructions;
 pub mod poke;

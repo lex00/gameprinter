@@ -28,6 +28,7 @@ pub const SPEC_DIGEST: u32 = 19;
 pub const WORLD_HASH: u32 = 20;
 pub const START_READS: u32 = 21;
 pub const TAKE_READS: u32 = 22;
+pub const RESTORE: u32 = 23;
 
 #[derive(Default)]
 pub struct Writer(pub Vec<u8>);

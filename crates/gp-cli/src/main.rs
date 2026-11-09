@@ -3,15 +3,20 @@
 //! engine here.
 
 mod assets;
+mod clip;
 mod clip_score;
 mod clipset;
 mod game;
+mod hosted;
+mod lockstep;
 mod model;
 mod module;
 mod package;
+mod pool;
 mod registry;
 mod roms;
 mod run;
+mod screen;
 mod served;
 mod template;
 
@@ -46,6 +51,10 @@ struct Cli {
     /// Print machine-readable JSON on stdout.
     #[arg(long, global = true)]
     json: bool,
+    /// Helper threads for scoring clips (default: GP_JOBS, else every core
+    /// less two, at least one).
+    #[arg(long, global = true)]
+    jobs: Option<usize>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -435,6 +444,9 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Some(n) = cli.jobs {
+        pool::set_jobs(n);
+    }
     match dispatch(&cli.cmd) {
         Ok(o) => {
             if cli.json {

@@ -53,13 +53,37 @@ struct Host {
     rt: TypedFunc<(u32, u32, u32), i32>,
 }
 
-impl Host {
-    fn open(wasm: &[u8]) -> Result<Self, String> {
+/// A game's module, compiled once: each [`ModuleCode::load`] is a fresh
+/// instance of it, so a tool that scores many clips compiles it one time.
+#[derive(Clone)]
+pub struct ModuleCode {
+    module: Module,
+}
+
+impl ModuleCode {
+    pub fn compile(wasm: &[u8]) -> Result<Self, String> {
         let module =
             Module::new(engine(), wasm).map_err(|e| format!("the module doesn't compile: {e}"))?;
         if module.imports().len() != 0 {
             return Err("the module imports something, so gp won't run it".into());
         }
+        Ok(Self { module })
+    }
+
+    /// A fresh instance of the module with a model bundle loaded.
+    pub fn load(&self, bundle: &[u8]) -> Result<ModuleRuntime, String> {
+        ModuleRuntime::start(Host::start(&self.module)?, bundle)
+    }
+}
+
+impl Host {
+    /// The module's first instance, compiling it first.
+    #[cfg(test)]
+    fn open(wasm: &[u8]) -> Result<Self, String> {
+        Self::start(&ModuleCode::compile(wasm)?.module)
+    }
+
+    fn start(module: &Module) -> Result<Self, String> {
         let limits = StoreLimitsBuilder::new()
             .memory_size(MAX_MEMORY)
             .trap_on_grow_failure(true)
@@ -67,7 +91,7 @@ impl Host {
         let mut store = Store::new(engine(), limits);
         store.limiter(|l| l);
         store.set_epoch_deadline(CALL_TICKS);
-        let instance = Instance::new(&mut store, &module, &[])
+        let instance = Instance::new(&mut store, module, &[])
             .map_err(|e| format!("the module wouldn't start: {e}"))?;
         let missing = |what: &str| format!("the module has no {what}");
         let memory = instance
@@ -150,7 +174,10 @@ pub struct ModuleRuntime {
 impl ModuleRuntime {
     /// Opens a module and loads a model bundle into it.
     pub fn load(wasm: &[u8], bundle: &[u8]) -> Result<Self, String> {
-        let mut host = Host::open(wasm)?;
+        ModuleCode::compile(wasm)?.load(bundle)
+    }
+
+    fn start(mut host: Host, bundle: &[u8]) -> Result<Self, String> {
         let out = host.call(wire::LOAD, bundle, CALL_TICKS)?;
         let mut r = Reader::new(&out);
         Ok(Self {
@@ -291,8 +318,11 @@ impl Runtime for ModuleRuntime {
         self.canonical_state()
     }
 
+    /// Puts the session back to a snapshot: a restore is not a load, so a
+    /// script of random draws doesn't start or resume on it.
     fn restore(&mut self, snap: &[u8]) -> Result<(), String> {
-        self.load_state(snap).map(|_| ())
+        self.call(wire::RESTORE, CALL_TICKS, |w| w.bytes(snap))
+            .map(|_| ())
     }
 
     fn fork(&self) -> Self {

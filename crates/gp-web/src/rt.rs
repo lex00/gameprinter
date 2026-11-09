@@ -87,6 +87,10 @@ impl Sessions {
                 let state = r.bytes()?;
                 w.notes(&self.get(id)?.load_state(state)?);
             }
+            wire::RESTORE => {
+                let snap = r.bytes()?;
+                self.get(id)?.restore(snap)?;
+            }
             wire::QUERY => {
                 let selector = r.str()?;
                 w.entries(&self.get(id)?.query(&selector)?);

@@ -17,7 +17,7 @@ use serde_json::json;
 
 use crate::Outcome;
 
-fn frames(input: &InputLog) -> Vec<InputFrame> {
+pub(crate) fn frames(input: &InputLog) -> Vec<InputFrame> {
     input
         .frames
         .iter()

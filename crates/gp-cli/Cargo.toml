@@ -20,15 +20,20 @@ gp-contract = { version = "0.1.0", path = "../gp-contract" }
 gp-evidence = { version = "0.1.0", path = "../gp-evidence" }
 gp-exts = { version = "0.1.0", path = "../gp-exts" }
 gp-interp = { version = "0.1.0", path = "../gp-interp" }
+gp-look = { version = "0.1.0", path = "../gp-look" }
 gp-model = { version = "0.1.0", path = "../gp-model" }
 gp-module = { version = "0.1.0", path = "../gp-module" }
 gp-nes = { version = "0.1.0", path = "../gp-nes" }
 gp-package = { version = "0.1.0", path = "../gp-package" }
+gp-present = { version = "0.1.0", path = "../gp-present" }
 gp-runtime = { version = "0.1.0", path = "../gp-runtime" }
+gp-sim = { version = "0.1.0", path = "../gp-sim" }
+gp-sound = { version = "0.1.0", path = "../gp-sound" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 hex = "0.4.3"
+png = "0.18.1"
 tempfile = "3.27.0"
 toml = "1.1.8"
 
