@@ -28,10 +28,10 @@ The first run takes the folder as it stands as the baseline commit, after the ho
 
 ```text
 cd your-gameprinter-worktree
-gp tool gate --patch "$GP_WORKER_OUT/fix.patch" --onto main -m "gp-nes: ..."
+$GP_HOME/bin/gp tool gate --patch "$GP_WORKER_OUT/fix.patch" --onto main -m "gp-nes: ..."
 ```
 
-`gp tool gate` puts a worktree at the branch tip, applies the patch, and in order:
+A worker started with `--rust` has its own build on `PATH` in place of the published gp, so this names the published one. `gp tool gate` puts a worktree at the branch tip, applies the patch, and in order:
 
 1. builds gp in the optimized `fastdev` profile, in the gate's own target folder;
 2. runs `just check` from the patched tree;

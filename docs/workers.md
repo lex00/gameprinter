@@ -20,6 +20,7 @@ Make a worktree and a branch for the task, then, in the worktree:
 ```text
 git -C gameprinter worktree add ../wt-tool -b task/my-fix
 cd ../wt-tool
+export GP_HOME="${GP_HOME:-$HOME/.gameprinter}"
 eval "$($GP_HOME/bin/gp worker env NAME --shell)"
 ```
 
@@ -40,7 +41,7 @@ A worker changing Rust passes `--rust`. Run it again at the start of each new sh
 `gp worker env NAME` prints these, and `--shell` writes them as comments.
 
 - No `rm` in any form. List what should be deleted in your report; the person deletes it.
-- Remove a worktree with `git worktree remove`. Empty a build folder with `cargo clean --target-dir DIR`.
+- Remove a worktree with `git worktree remove`, adding `--force` once its patch has landed: the change is still uncommitted in it. Empty a build folder with `cargo clean --target-dir DIR`.
 - Never commit with `--no-verify`, and never push.
 - Never open `$GP_HOME/sealed` or a sealed run's session.
 - ROMs stay in `$GP_ROM_DIR`. Nothing made from a ROM (bytes, lifted files, a built game) goes into a commit or leaves the machine.
