@@ -381,7 +381,15 @@ fn sandboxed_program(
         }
         c.arg("--ro-bind").arg(toolchain).arg(toolchain);
         c.arg("--bind").arg(work).arg(work);
-        c.arg("--chdir").arg(work).arg(cargo);
+        // The sandbox's own working folder; a build runs in its source.
+        let start = work.join("src");
+        c.arg("--chdir")
+            .arg(if start.is_dir() {
+                start.as_path()
+            } else {
+                work
+            })
+            .arg(cargo);
         c
     } else {
         bail!("no build sandbox here: gp game build needs sandbox-exec (macOS) or bwrap (Linux)");
