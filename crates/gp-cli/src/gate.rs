@@ -638,6 +638,24 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
         let tip = git(&c.repo, &["rev-parse", &c.onto])?;
         if !a.score_only {
             checkout(&c.repo, &c.tree, &tip)?;
+            // Before any scoring: a patch that doesn't apply, or that the
+            // hook refuses, stops here in seconds.
+            let early = apply(&c.tree, &patch.diff)
+                .map_err(|why| Failed {
+                    why,
+                    phase: "patch",
+                })
+                .and_then(|()| {
+                    hook(&c.tree, &gp).map_err(|why| Failed {
+                        why: format!("the ROM-blocking hook refuses it: {why}"),
+                        phase: "hook",
+                    })
+                });
+            clean(&c.tree);
+            if let Err(f) = early {
+                last_fail = Some(f);
+                break;
+            }
         }
         let started = std::time::Instant::now();
         let tree_game = c.tree.join(&c.rel);
