@@ -37,7 +37,7 @@ pub fn fetch(
     spec: &str,
     id: &str,
     from: &str,
-    root_file: &Path,
+    root_file: Option<&Path>,
     into: &Path,
     rom_dir: &Path,
 ) -> Result<Outcome> {
@@ -52,12 +52,13 @@ pub fn fetch(
             repo.display()
         );
     }
-    let root = fs::read_to_string(root_file)
-        .with_context(|| root_file.display().to_string())?
-        .trim()
-        .to_owned();
+    let root = root_file.map(crate::registry::read_root).transpose()?;
     let target = crate::registry::open(from);
-    let reader = Reader::open(&*target, &root).map_err(|e| anyhow!(e))?;
+    let reader = match &root {
+        Some(root) => Reader::open(&*target, root),
+        None => Reader::unsigned(&*target),
+    }
+    .map_err(|e| anyhow!(e))?;
     let (_, files) = reader.fetch(name, version, id).map_err(|e| anyhow!(e))?;
     for (path, bytes) in &files {
         let out = into.join(path);
@@ -81,8 +82,13 @@ pub fn fetch(
         .unwrap_or_default();
     let have = roms(rom_dir)?;
     let mut lines = vec![format!(
-        "fetched {spec} ({} files), every signature and hash checked",
-        files.len()
+        "fetched {spec} ({} files), every {} checked",
+        files.len(),
+        if root.is_some() {
+            "signature and hash"
+        } else {
+            "hash"
+        }
     )];
     let (mut bad, mut results) = (0u32, Vec::new());
     for e in &entries {

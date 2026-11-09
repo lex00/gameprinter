@@ -1,5 +1,5 @@
 # The registries a page can be built for: `GP_PAGE_SOURCE=NAME`. A page holds
-# one source's address and root public key. A url of "." is the page's own
+# one source's address and, if it's signed, its root public key. A url of "." is the page's own
 # address: `gp registry serve` serves the page and a folder registry together.
 [staging]
 name = "gp-staging"
@@ -12,9 +12,9 @@ name = "gp-local"
 url = "."
 root = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEoXL5YfJ6rWdggoGhTubKRNnHfvNOByMUTPuIJshfGH root@gp-staging"
 
-# The public repo lex00/rivetrodeo, signed with the staging keys until the
-# official root key is made.
+# The public repo lex00/rivetrodeo. It has no root key, so the page doesn't
+# look at signatures or expiries for it. Signing is opt-in: give a source a
+# root and the page requires them. See docs/registry-backends.md.
 [repo]
 name = "rivetrodeo"
 url = "https://raw.githubusercontent.com/lex00/rivetrodeo/main"
-root = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEoXL5YfJ6rWdggoGhTubKRNnHfvNOByMUTPuIJshfGH root@gp-staging"

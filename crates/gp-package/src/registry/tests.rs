@@ -292,3 +292,87 @@ fn an_attestation_is_written_once_signed_and_listed() {
     assert!(with(&f.ns, |s| attest(&t, &f.id, text, s)).is_err());
     assert!(with(&f.ns, |s| attest(&t, "missing", "y = 1\n", s)).is_err());
 }
+
+/// A registry made with no key at all.
+fn unsigned_fixture() -> (tempfile::TempDir, String) {
+    let d = tempfile::tempdir().unwrap();
+    let t = Folder(d.path().to_owned());
+    let ns = [("lex00".to_owned(), Vec::new())];
+    let none = Signer::none();
+    init(&t, "open", &none, &[], &ns, "2026-11-08").unwrap();
+    let id = publish(
+        &t,
+        &Publish {
+            name: "lex00/game",
+            version: "1.0.0",
+            kind: "game",
+            title: "Game",
+            for_games: &[],
+            published: NOW,
+        },
+        &files(),
+        &none,
+    )
+    .unwrap();
+    let versions = [("lex00/game".to_owned(), "1.0.0".to_owned())];
+    reindex(&t, &versions, &none, NOW, LATER).unwrap();
+    (d, id)
+}
+
+#[test]
+fn a_registry_with_no_keys_is_read_with_no_signatures_and_no_expiry() {
+    let (d, id) = unsigned_fixture();
+    let t = Folder(d.path().to_owned());
+    let has_sig = walk(d.path()).iter().any(|p| p.ends_with(".sig"));
+    assert!(!has_sig, "no signature file is written");
+    let r = Reader::unsigned(&t).unwrap();
+    let (_, got) = r.fetch("lex00/game", "1.0.0", &id).unwrap();
+    assert_eq!(got, files());
+    assert_eq!(r.catalog(AFTER).unwrap().package.len(), 1, "long expired");
+    assert!(r.yanks(AFTER).unwrap().yank.is_empty());
+}
+
+#[test]
+fn hashes_are_still_checked_with_no_signatures() {
+    let (d, id) = unsigned_fixture();
+    let t = Folder(d.path().to_owned());
+    let r = Reader::unsigned(&t).unwrap();
+    let (m, _) = r.fetch("lex00/game", "1.0.0", &id).unwrap();
+    let blob = d.path().join(blob_key(&m.files[0].hash));
+    let mut bytes = std::fs::read(&blob).unwrap();
+    bytes[0] ^= 1;
+    std::fs::write(&blob, bytes).unwrap();
+    assert!(r.fetch("lex00/game", "1.0.0", &id).is_err());
+}
+
+#[test]
+fn a_changed_manifest_is_refused_with_no_signatures() {
+    let (d, id) = unsigned_fixture();
+    let t = Folder(d.path().to_owned());
+    let r = Reader::unsigned(&t).unwrap();
+    let at = d.path().join(package_key(&id));
+    let text = std::fs::read_to_string(&at).unwrap();
+    std::fs::write(&at, text + "\n").unwrap();
+    assert!(r.manifest("lex00/game", "1.0.0", &id).is_err());
+}
+
+#[test]
+fn a_reader_with_a_root_refuses_a_registry_with_no_signatures() {
+    let f = fixture();
+    let (d, _) = unsigned_fixture();
+    let t = Folder(d.path().to_owned());
+    assert!(Reader::open(&t, &f.root.public).is_err());
+}
+
+fn walk(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(dir).unwrap().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            out.extend(walk(&p));
+        } else {
+            out.push(p.display().to_string());
+        }
+    }
+    out
+}

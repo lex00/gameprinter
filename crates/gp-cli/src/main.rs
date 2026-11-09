@@ -257,7 +257,7 @@ enum InterpCmd {
 
 #[derive(Subcommand)]
 enum GameCmd {
-    /// Fetch NAME@VERSION by id into a folder, checking every signature and
+    /// Fetch NAME@VERSION by id into a folder, checking every signature (with --root) and
     /// hash, and lift every ROM entry it finds in the ROM folder.
     Fetch {
         name: String,
@@ -266,9 +266,9 @@ enum GameCmd {
         /// The registry: a folder, s3://BUCKET or an https address.
         #[arg(long)]
         from: String,
-        /// A file holding the registry's root public key.
+        /// A file holding the registry's root public key, to check signatures.
         #[arg(long)]
-        root: PathBuf,
+        root: Option<PathBuf>,
         /// The working copy to write, outside any git work tree.
         #[arg(long)]
         into: PathBuf,
@@ -318,7 +318,7 @@ enum GameCmd {
         to: String,
         /// The namespace's signing key file.
         #[arg(long)]
-        key: PathBuf,
+        key: Option<PathBuf>,
     },
     /// Build a game's module from its package folder and the kit, in a
     /// sandbox that reads nothing else and has no network. Exits 1 when the
@@ -352,9 +352,9 @@ enum RegistryCmd {
         #[arg(long)]
         name: String,
         #[arg(long)]
-        root_key: PathBuf,
+        root_key: Option<PathBuf>,
         #[arg(long)]
-        signing_key: PathBuf,
+        signing_key: Option<PathBuf>,
         /// NS=KEY_FILE, repeated.
         #[arg(long)]
         namespace: Vec<String>,
@@ -374,21 +374,22 @@ enum RegistryCmd {
         #[arg(long = "for")]
         for_games: Vec<String>,
         #[arg(long)]
-        key: PathBuf,
+        key: Option<PathBuf>,
     },
-    /// Re-sign the list files from these name@version entries.
+    /// Rewrite the list files from these name@version entries, signed if
+    /// --key is given.
     Reindex {
         target: String,
         versions: Vec<String>,
         #[arg(long)]
-        key: PathBuf,
+        key: Option<PathBuf>,
     },
-    /// Test a registry from outside against its pinned root.
+    /// Test a registry from outside, against its root if --root is given.
     Check {
         url: String,
         /// A file holding the root's public key.
         #[arg(long)]
-        root: PathBuf,
+        root: Option<PathBuf>,
     },
 }
 
@@ -517,7 +518,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                     into,
                     rom_dir,
                 },
-        } => game::fetch(name, id, from, root, into, rom_dir),
+        } => game::fetch(name, id, from, root.as_deref(), into, rom_dir),
         Cmd::Game {
             cmd: GameCmd::Kit { out },
         } => module::kit(out),
@@ -552,7 +553,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                 module: module.as_deref(),
                 id,
                 to,
-                key,
+                key: key.as_deref(),
             },
         ),
         Cmd::Game {
@@ -578,7 +579,13 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                 root_key,
                 signing_key,
                 namespace,
-            } => registry::init_cmd(target, name, root_key, signing_key, namespace),
+            } => registry::init_cmd(
+                target,
+                name,
+                root_key.as_deref(),
+                signing_key.as_deref(),
+                namespace,
+            ),
             RegistryCmd::Publish {
                 target,
                 dir,
@@ -588,13 +595,20 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                 title,
                 for_games,
                 key,
-            } => registry::publish_cmd(target, dir, (name, version), (kind, title), for_games, key),
+            } => registry::publish_cmd(
+                target,
+                dir,
+                (name, version),
+                (kind, title),
+                for_games,
+                key.as_deref(),
+            ),
             RegistryCmd::Reindex {
                 target,
                 versions,
                 key,
-            } => registry::reindex_cmd(target, versions, key),
-            RegistryCmd::Check { url, root } => registry::check_cmd(url, root),
+            } => registry::reindex_cmd(target, versions, key.as_deref()),
+            RegistryCmd::Check { url, root } => registry::check_cmd(url, root.as_deref()),
         },
         Cmd::Template {
             cmd: TemplateCmd::Build { dir, out },

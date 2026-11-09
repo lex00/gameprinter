@@ -15,8 +15,9 @@ use serde_json::json;
 
 #[derive(Deserialize)]
 pub struct Ask {
-    /// The source's pinned root key.
-    pub root: String,
+    /// The source's pinned root key. With none, a source's signatures and
+    /// expiries aren't looked at, and hashes still are.
+    pub root: Option<String>,
     /// `namespace/name`.
     pub name: String,
     /// An exact version, or none for the latest in the catalog.
@@ -80,7 +81,10 @@ impl Target for Held<'_> {
 }
 
 fn run(ask: &Ask, t: &Held<'_>) -> Result<Resolved, String> {
-    let r = Reader::open(t, &ask.root)?;
+    let r = match &ask.root {
+        Some(root) => Reader::open(t, root)?,
+        None => Reader::unsigned(t)?,
+    };
     let yanks = r.yanks(&ask.now)?;
     let version = match &ask.version {
         Some(v) => v.clone(),

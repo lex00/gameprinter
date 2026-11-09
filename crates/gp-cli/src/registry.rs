@@ -259,6 +259,14 @@ pub fn open(spec: &str) -> Box<dyn Target> {
     }
 }
 
+/// The public key in a `--root` file.
+pub(crate) fn read_root(file: &Path) -> Result<String> {
+    Ok(fs::read_to_string(file)
+        .with_context(|| file.display().to_string())?
+        .trim()
+        .to_owned())
+}
+
 pub(crate) fn public_of(key: &Path) -> Result<String> {
     let p = PathBuf::from(format!("{}.pub", key.display()));
     Ok(fs::read_to_string(&p)
@@ -283,8 +291,11 @@ fn ssh_sign(key: &Path, data: &[u8]) -> Result<Vec<u8>, String> {
     fs::read(f.with_extension("sig")).map_err(|e| e.to_string())
 }
 
-/// `f` given a signer for the key file.
-fn signing<T>(key: &Path, f: impl FnOnce(&Signer) -> Result<T, String>) -> Result<T> {
+/// `f` given a signer for the key file, or one that signs nothing.
+fn signing<T>(key: Option<&Path>, f: impl FnOnce(&Signer) -> Result<T, String>) -> Result<T> {
+    let Some(key) = key else {
+        return f(&Signer::none()).map_err(|e| anyhow!(e));
+    };
     let public = public_of(key)?;
     let path = key.to_owned();
     let sign = move |d: &[u8]| ssh_sign(&path, d);
@@ -323,8 +334,8 @@ pub(crate) fn utc(after_days: u32) -> Result<String> {
 pub fn init_cmd(
     target: &str,
     name: &str,
-    root_key: &Path,
-    signing_key: &Path,
+    root_key: Option<&Path>,
+    signing_key: Option<&Path>,
     namespaces: &[String],
 ) -> Result<Outcome> {
     committing(target, &format!("Make registry {name}"), || {
@@ -335,21 +346,36 @@ pub fn init_cmd(
 fn init_inner(
     target: &str,
     name: &str,
-    root_key: &Path,
-    signing_key: &Path,
+    root_key: Option<&Path>,
+    signing_key: Option<&Path>,
     namespaces: &[String],
 ) -> Result<Outcome> {
     let t = open(target);
     let mut ns = Vec::new();
     for n in namespaces {
-        let (name, key) = n
-            .split_once('=')
-            .with_context(|| format!("--namespace wants NS=KEY_FILE, not {n}"))?;
-        ns.push((name.to_owned(), vec![public_of(Path::new(key))?]));
+        match n.split_once('=') {
+            Some((name, key)) => ns.push((name.to_owned(), vec![public_of(Path::new(key))?])),
+            None if root_key.is_none() => ns.push((n.clone(), Vec::new())),
+            None => return Err(anyhow!("--namespace wants NS=KEY_FILE, not {n}")),
+        }
     }
     let today = utc(0)?[..10].to_owned();
+    let (root_key, signing_key) = match (root_key, signing_key) {
+        (Some(r), Some(s)) => (r, s),
+        (None, None) => {
+            init(&*t, name, &Signer::none(), &[], &ns, &today).map_err(|e| anyhow!(e))?;
+            return Ok(Outcome {
+                json: json!({ "name": name, "root": null }),
+                text: format!("made registry {name} at {target}, not signed"),
+                exit: 0,
+            });
+        }
+        _ => return Err(anyhow!("--root-key and --signing-key go together")),
+    };
     let index = public_of(signing_key)?;
-    signing(root_key, |r| init(&*t, name, r, &[index], &ns, &today))?;
+    signing(Some(root_key), |r| {
+        init(&*t, name, r, &[index], &ns, &today)
+    })?;
     let fp = fingerprint(&public_of(root_key)?).map_err(|e| anyhow!(e))?;
     Ok(Outcome {
         json: json!({ "name": name, "root": fp }),
@@ -365,7 +391,7 @@ pub fn publish_cmd(
     (name, version): (&str, &str),
     (kind, title): (&str, &str),
     for_games: &[String],
-    key: &Path,
+    key: Option<&Path>,
 ) -> Result<Outcome> {
     if Repo::at(target).is_some() {
         no_rom_bytes(dir)?;
@@ -381,7 +407,7 @@ fn publish_inner(
     (name, version): (&str, &str),
     (kind, title): (&str, &str),
     for_games: &[String],
-    key: &Path,
+    key: Option<&Path>,
 ) -> Result<Outcome> {
     let t = open(target);
     let mut files = BTreeMap::new();
@@ -420,7 +446,7 @@ pub(crate) fn attest_cmd(
     target: &str,
     id: &str,
     statements: &[String],
-    key: &Path,
+    key: Option<&Path>,
 ) -> Result<Outcome> {
     committing(
         target,
@@ -440,13 +466,16 @@ pub(crate) fn attest_cmd(
     )
 }
 
-pub fn reindex_cmd(target: &str, versions: &[String], key: &Path) -> Result<Outcome> {
-    committing(target, "Re-sign the list files", || {
-        reindex_inner(target, versions, key)
-    })
+pub fn reindex_cmd(target: &str, versions: &[String], key: Option<&Path>) -> Result<Outcome> {
+    let message = if key.is_some() {
+        "Re-sign the list files"
+    } else {
+        "Rewrite the list files"
+    };
+    committing(target, message, || reindex_inner(target, versions, key))
 }
 
-fn reindex_inner(target: &str, versions: &[String], key: &Path) -> Result<Outcome> {
+fn reindex_inner(target: &str, versions: &[String], key: Option<&Path>) -> Result<Outcome> {
     let t = open(target);
     let mut list = Vec::new();
     for v in versions {
@@ -459,7 +488,11 @@ fn reindex_inner(target: &str, versions: &[String], key: &Path) -> Result<Outcom
     signing(key, |s| reindex(&*t, &list, s, &now, &expires))?;
     Ok(Outcome {
         json: json!({ "versions": list.len(), "expires": expires }),
-        text: format!("re-signed the list files; they expire at {expires}"),
+        text: if key.is_some() {
+            format!("re-signed the list files; they expire at {expires}")
+        } else {
+            "rewrote the list files, not signed".to_string()
+        },
         exit: 0,
     })
 }
@@ -489,11 +522,8 @@ fn cors(url: &str) -> Result<bool> {
 
 /// Tests a registry from outside: CORS, signatures, expiry and the catalog,
 /// and that every package the catalog lists fetches by its exact id.
-pub fn check_cmd(url: &str, root_file: &Path) -> Result<Outcome> {
-    let root = fs::read_to_string(root_file)
-        .with_context(|| root_file.display().to_string())?
-        .trim()
-        .to_owned();
+pub fn check_cmd(url: &str, root_file: Option<&Path>) -> Result<Outcome> {
+    let root = root_file.map(read_root).transpose()?;
     let t = open(url);
     let now = utc(0)?;
     let mut lines = Vec::new();
@@ -515,12 +545,24 @@ pub fn check_cmd(url: &str, root_file: &Path) -> Result<Outcome> {
             },
         );
     }
-    match Reader::open(&*t, &root) {
+    let opened = match &root {
+        Some(root) => Reader::open(&*t, root),
+        None => Reader::unsigned(&*t),
+    };
+    match opened {
         Err(e) => step("registry.toml", Err(e)),
         Ok(r) => {
             step(
                 "registry.toml",
-                Ok(format!("{} under the pinned root", r.file.name)),
+                Ok(format!(
+                    "{}{}",
+                    r.file.name,
+                    if root.is_some() {
+                        " under the pinned root"
+                    } else {
+                        ", signatures not looked at"
+                    }
+                )),
             );
             step(
                 "yanks.toml",

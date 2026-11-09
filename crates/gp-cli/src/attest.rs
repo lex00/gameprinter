@@ -27,7 +27,7 @@ pub(crate) struct Given<'a> {
     pub module: Option<&'a Path>,
     pub id: &'a str,
     pub to: &'a str,
-    pub key: &'a Path,
+    pub key: Option<&'a Path>,
 }
 
 /// A JSON value as TOML, nulls left out (TOML has none).
@@ -147,7 +147,11 @@ pub(crate) fn run(paths: &Paths, g: &Given) -> Result<Outcome> {
     if score["curves"] != json!(curve_set) {
         bail!("the score's curve-set hash isn't its rows'");
     }
-    let by = crate::registry::public_of(g.key)?;
+    let by = g
+        .key
+        .map(crate::registry::public_of)
+        .transpose()?
+        .unwrap_or_default();
     let at = crate::registry::utc(0)?;
     let common = |runtime: Value| json!({"by": by, "at": at, "gp": r["gp"], "runtime": runtime});
     let merged = |mut base: Value, extra: Value| {

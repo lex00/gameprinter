@@ -2182,12 +2182,15 @@ if (!registryStopped) {
   add("registry-goes-bad", 15, registryGoesBad);
   add("registry-local-change", 15, registryLocalChange);
   const bad = (name, what, re, match, change) => add(`registry-bad-${name}`, 10, refusedInstall(re, what), { source: broken(match, change) });
-  bad("root-sig", "registry.toml's signature broken", /couldn't be installed/i, source_("registry.toml.sig"), flip);
-  bad("root-text", "registry.toml changed", /couldn't be installed/i, source_("registry.toml"), (b) => Buffer.from(b.toString().replace("gp-staging", "gp-stagiing")));
-  bad("namespace", "the namespace's keys changed", /couldn't be installed/i, source_("namespaces/lex00.toml"), (b) => Buffer.from(b.toString() + "\n# changed\n"));
-  bad("catalog", "the catalog's latest changed", /couldn't be installed/i, source_("catalog.toml"), (b) => Buffer.from(b.toString().replace(/latest = "\d+\.\d+\.\d+"/, 'latest = "1.0.0"')));
+  // A source with no root isn't signed, so only hashes can catch a change.
+  if (page.source.root) {
+    bad("root-sig", "registry.toml's signature broken", /couldn't be installed/i, source_("registry.toml.sig"), flip);
+    bad("root-text", "registry.toml changed", /couldn't be installed/i, source_("registry.toml"), (b) => Buffer.from(b.toString().replace("gp-staging", "gp-stagiing")));
+    bad("namespace", "the namespace's keys changed", /couldn't be installed/i, source_("namespaces/lex00.toml"), (b) => Buffer.from(b.toString() + "\n# changed\n"));
+    bad("catalog", "the catalog's latest changed", /couldn't be installed/i, source_("catalog.toml"), (b) => Buffer.from(b.toString().replace(/latest = "\d+\.\d+\.\d+"/, 'latest = "1.0.0"')));
+    bad("manifest-sig", "the manifest's signature broken", /couldn't be installed/i, (u) => /\/packages\/[0-9a-f]{64}\.sig$/.test(u), flip);
+  }
   bad("manifest", "the manifest changed", /couldn't be installed/i, (u) => /\/packages\/[0-9a-f]{64}$/.test(u), flip);
-  bad("manifest-sig", "the manifest's signature broken", /couldn't be installed/i, (u) => /\/packages\/[0-9a-f]{64}\.sig$/.test(u), flip);
   bad("blob", "one file's bytes changed", /doesn't match what its maker signed/i, (u) => /\/blobs\//.test(u), flip);
   // A version from before modules: hook code and no module.wasm. Only the
   // staging registry still holds one.

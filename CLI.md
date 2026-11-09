@@ -13,7 +13,7 @@ For making and playing games: what a person installing gp uses.
 | `gp corpus score` | Score a game's corpus on a model: every clip made again from the ROM, played through the model and checked against its curve. Prints the clips exact and the fidelity and, with --json, the score record |
 | `gp game attest` | Attest a published version of a game: derivation, module build and score, as signed statements under attest/<id>/ in the registry. Takes a clean `gp game score` output of the package |
 | `gp game build` | Build a game's module from its package folder and the kit, in a sandbox that reads nothing else and has no network. Exits 1 when the hook crate breaks the rules, 2 when the build fails |
-| `gp game fetch` | Fetch NAME@VERSION by id into a folder, checking every signature and hash, and lift every ROM entry it finds in the ROM folder |
+| `gp game fetch` | Fetch NAME@VERSION by id into a folder, checking every signature (with --root) and hash, and lift every ROM entry it finds in the ROM folder |
 | `gp game hash` | Print a built module's BLAKE3 hash |
 | `gp game kit` | Write the module kit: the tool's sources for a game module and the crates they need, ready for a build with no network |
 | `gp game score` | Score a game from its package and the ROM alone, in this $GP_HOME: every clip and curve derived from the corpus plan and the ROM, played through the module, and the score record written to FILE. Exits 1 when the corpus has problems |
@@ -22,10 +22,10 @@ For making and playing games: what a person installing gp uses.
 | `gp model gate` | Hold a patch to a game in the games repo to its corpus: PASS or FAIL, and what passes lands |
 | `gp package hooks` | Print the hash of a package folder's hook code |
 | `gp package scan` | Sort every file and every field of a package folder into four buckets: ours, reference, from the ROM and needs rewrite. Compares with each ROM of its `[[rom.entry]]` found by hash in $GP_ROM_DIR and prints no ROM byte. With no ROM it says that nothing was compared. Exits 1 on any needs-rewrite item or a failed rebuild |
-| `gp registry check` | Test a registry from outside against its pinned root |
+| `gp registry check` | Test a registry from outside, against its root if --root is given |
 | `gp registry init` | Make a registry in a folder or s3://BUCKET |
 | `gp registry publish` | Publish a folder of files as one exact version |
-| `gp registry reindex` | Re-sign the list files from these name@version entries |
+| `gp registry reindex` | Rewrite the list files from these name@version entries, signed if --key is given |
 | `gp registry serve` | Serve a folder registry and a built page on this machine only |
 | `gp template build` | Build an authored template's lifted files and hold them to its pin |
 | `gp template check` | Check a ROM against the template: accepted hash, map pin, lift pin |

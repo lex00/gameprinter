@@ -75,6 +75,22 @@ pub struct Signer<'a> {
     pub sign: &'a SignFn,
 }
 
+impl Signer<'static> {
+    /// No key: files are written with no signature beside them.
+    pub fn none() -> Self {
+        Signer {
+            public: String::new(),
+            sign: &|_: &[u8]| Err("no signing key was given".to_string()),
+        }
+    }
+}
+
+impl Signer<'_> {
+    fn signs(&self) -> bool {
+        !self.public.is_empty()
+    }
+}
+
 /// `registry.toml`, signed by the root.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RegistryFile {
@@ -222,6 +238,9 @@ fn put_signed(t: &dyn Target, key: &str, bytes: &[u8], s: &Signer) -> Result<(),
     if !t.write_once(key, bytes)? {
         return Err(format!("{key} is already published"));
     }
+    if !s.signs() {
+        return Ok(());
+    }
     let sig = (s.sign)(bytes)?;
     if !t.write_once(&sig_key(key), &sig)? {
         return Err(format!("{} is already published", sig_key(key)));
@@ -231,6 +250,9 @@ fn put_signed(t: &dyn Target, key: &str, bytes: &[u8], s: &Signer) -> Result<(),
 
 /// Rewrites a list file and its signature.
 fn replace_signed(t: &dyn Target, key: &str, bytes: &[u8], s: &Signer) -> Result<(), String> {
+    if !s.signs() {
+        return t.replace(key, bytes);
+    }
     let sig = (s.sign)(bytes)?;
     t.replace(key, bytes)?;
     t.replace(&sig_key(key), &sig)
@@ -338,7 +360,7 @@ pub fn publish(
     }
     let id = m.id();
     let text = m.write();
-    if t.write_once(&package_key(&id), text.as_bytes())? {
+    if t.write_once(&package_key(&id), text.as_bytes())? && s.signs() {
         let sig = (s.sign)(text.as_bytes())?;
         t.write_once(&signature_key(&id), &sig)?;
     }
@@ -472,10 +494,14 @@ fn fresh(key: &str, expires: &str, now: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// A registry read through its pinned root.
+/// A registry read through its pinned root, or, for a source the reader has
+/// no root for, with signatures and expiries not looked at. The reader chooses
+/// which: nothing a registry holds can turn its own checks off. Hashes are
+/// checked either way.
 pub struct Reader<'a> {
     pub target: &'a dyn Target,
     pub file: RegistryFile,
+    signed: bool,
 }
 
 impl<'a> Reader<'a> {
@@ -486,7 +512,37 @@ impl<'a> Reader<'a> {
         if crate::sig::key_blob(&file.root)? != crate::sig::key_blob(root)? {
             return Err("registry.toml names another root key".into());
         }
-        Ok(Self { target, file })
+        Ok(Self {
+            target,
+            file,
+            signed: true,
+        })
+    }
+
+    /// Opens a registry with no pinned root: no signature or expiry is read.
+    pub fn unsigned(target: &'a dyn Target) -> Result<Self, String> {
+        Ok(Self {
+            target,
+            file: read_registry_unchecked(target)?,
+            signed: false,
+        })
+    }
+
+    /// A key's bytes, checked against `keys` when this reader checks.
+    fn signed_by(&self, key: &str, keys: &[String]) -> Result<Vec<u8>, String> {
+        if self.signed {
+            checked(self.target, key, keys)
+        } else {
+            must_read(self.target, key)
+        }
+    }
+
+    fn fresh(&self, key: &str, expires: &str, now: &str) -> Result<(), String> {
+        if self.signed {
+            fresh(key, expires, now)
+        } else {
+            Ok(())
+        }
     }
 
     /// A namespace's file, checked against the root.
@@ -494,7 +550,7 @@ impl<'a> Reader<'a> {
         let key = format!("namespaces/{ns}.toml");
         let f: NamespaceFile = parse(
             &key,
-            &checked(self.target, &key, std::slice::from_ref(&self.file.root))?,
+            &self.signed_by(&key, std::slice::from_ref(&self.file.root))?,
         )?;
         if f.namespace != ns {
             return Err(format!("{key} is the file of {:?}", f.namespace));
@@ -512,7 +568,7 @@ impl<'a> Reader<'a> {
             .map(|k| k.key)
             .collect();
         let key = version_key(name, version)?;
-        let v: VersionFile = parse(&key, &checked(self.target, &key, &keys)?)?;
+        let v: VersionFile = parse(&key, &self.signed_by(&key, &keys)?)?;
         if v.name != name || v.version != version {
             return Err(format!("{key} describes {}@{}", v.name, v.version));
         }
@@ -523,9 +579,9 @@ impl<'a> Reader<'a> {
     pub fn catalog(&self, now: &str) -> Result<Catalog, String> {
         let c: Catalog = parse(
             "catalog.toml",
-            &checked(self.target, "catalog.toml", &self.file.signing)?,
+            &self.signed_by("catalog.toml", &self.file.signing)?,
         )?;
-        fresh("catalog.toml", &c.expires, now)?;
+        self.fresh("catalog.toml", &c.expires, now)?;
         Ok(c)
     }
 
@@ -533,8 +589,8 @@ impl<'a> Reader<'a> {
     pub fn by_game(&self, game: &str, now: &str) -> Result<ByGame, String> {
         let (ns, n) = split_name(game)?;
         let key = format!("by-game/{ns}/{n}.toml");
-        let f: ByGame = parse(&key, &checked(self.target, &key, &self.file.signing)?)?;
-        fresh(&key, &f.expires, now)?;
+        let f: ByGame = parse(&key, &self.signed_by(&key, &self.file.signing)?)?;
+        self.fresh(&key, &f.expires, now)?;
         Ok(f)
     }
 
@@ -542,9 +598,9 @@ impl<'a> Reader<'a> {
     pub fn yanks(&self, now: &str) -> Result<Yanks, String> {
         let y: Yanks = parse(
             "yanks.toml",
-            &checked(self.target, "yanks.toml", &self.file.signing)?,
+            &self.signed_by("yanks.toml", &self.file.signing)?,
         )?;
-        fresh("yanks.toml", &y.expires, now)?;
+        self.fresh("yanks.toml", &y.expires, now)?;
         Ok(y)
     }
 
@@ -567,15 +623,17 @@ impl<'a> Reader<'a> {
             .collect();
         let text = must_read(self.target, &package_key(id))?;
         check(id, &text)?;
-        let sig = must_read(self.target, &signature_key(id))?;
-        let mut signed = Err(String::from("no key may sign it"));
-        for k in &keys {
-            signed = verify(k, NAMESPACE, &sig, &text);
-            if signed.is_ok() {
-                break;
+        if self.signed {
+            let sig = must_read(self.target, &signature_key(id))?;
+            let mut signed = Err(String::from("no key may sign it"));
+            for k in &keys {
+                signed = verify(k, NAMESPACE, &sig, &text);
+                if signed.is_ok() {
+                    break;
+                }
             }
+            signed.map_err(|e| format!("the manifest of {id}: {e}"))?;
         }
-        signed.map_err(|e| format!("the manifest of {id}: {e}"))?;
         let m = Manifest::read_checked(id, &text)?;
         if m.name != name {
             return Err(format!(

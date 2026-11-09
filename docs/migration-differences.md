@@ -9,4 +9,4 @@ Each of these was the owner's decision, on 2026-11-08 or 2026-11-09.
 | 3.4 | Loops brought over | `gp loop` left out: neither landing used it |
 | 4.3 | The old repo archived read-only | It has no remote, so its archive is the read-only bundle `~/Documents/archives/game-printer-9003564a.bundle`, with its full history. The working folder is unchanged |
 
-The registry's list files expire after 7 days. `scripts/web/resign-registry.sh` signs them again.
+Signing is off for `lex00/rivetrodeo`, by the owner's decision on 2026-11-09: there is one publisher, and signing shouldn't block work until there is another. The code and its tests stay, and a source opts in by having a root key in `scripts/web/sources.toml`. Hashes are still checked. `scripts/web/resign-registry.sh` is for a signed registry, whose list files expire after 7 days.

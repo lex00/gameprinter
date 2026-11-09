@@ -1,5 +1,6 @@
 #!/bin/bash
-# Re-signs a registry's list files, which expire after 7 days: run it weekly.
+# Re-signs a signed registry's list files, which expire after 7 days: run it
+# weekly on a registry whose readers hold its root. One with no root needs nothing.
 #   scripts/web/resign-registry.sh [TARGET]   (default: the rivetrodeo checkout)
 # Each package's newest version is named last, which is what makes it latest.
 # Exit codes: 0 done, 2 couldn't.
