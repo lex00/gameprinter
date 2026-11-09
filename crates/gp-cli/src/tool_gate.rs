@@ -418,6 +418,7 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
         match trial(&c, a, &patch, &tip, &tip_gp, &patch_hash, &mut lines)? {
             Err(f) => {
                 failed = Some(f);
+                gate::clean(&c.tree);
                 break;
             }
             Ok(commit) => {

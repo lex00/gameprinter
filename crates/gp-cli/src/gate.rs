@@ -235,6 +235,13 @@ pub(crate) fn checkout(repo: &Path, tree: &Path, commit: &str) -> Result<()> {
     Ok(())
 }
 
+/// The tree back to its last commit, so a refused patch's files don't stay
+/// on disk until the next gate.
+pub(crate) fn clean(tree: &Path) {
+    let _ = git(tree, &["reset", "-q", "--hard"]);
+    let _ = git(tree, &["clean", "-fdq"]);
+}
+
 /// A failure's reason and the phase it failed in.
 pub(crate) struct Failed {
     pub why: String,
@@ -680,6 +687,7 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
         let (commit, moved_rows, remeasured) = match t {
             Trial::Fail(f) => {
                 last_fail = Some(f);
+                clean(&c.tree);
                 break;
             }
             Trial::Pass { commit, remeasured } => (commit, tip_rows.len(), remeasured),

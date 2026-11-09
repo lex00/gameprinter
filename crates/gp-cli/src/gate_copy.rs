@@ -43,9 +43,9 @@ pub(crate) fn open(copy: &Path, home: &Path, gp: &Path, message: Option<&str>) -
     let key = blake3::hash(copy.as_os_str().as_encoded_bytes()).to_hex();
     let root = home.join("private").join(format!("{name}-{}", &key[..12]));
     let repo = root.join("repo");
-    let plain = |msg: &str| Patch {
+    let plain = Patch {
         diff: PathBuf::new(),
-        message: Some(msg.to_owned()),
+        message: None,
         author: None,
         date: None,
     };
@@ -69,7 +69,7 @@ pub(crate) fn open(copy: &Path, home: &Path, gp: &Path, message: Option<&str>) -
         commit(
             &repo,
             "The gate's ROM-blocking hook, from this gp",
-            &plain(""),
+            &plain,
             gp,
         )?;
     }
@@ -178,7 +178,7 @@ fn baseline(
     repo: &Path,
     diff: &Path,
     gp: &Path,
-    plain: &impl Fn(&str) -> Patch,
+    plain: &Patch,
     message: Option<&str>,
 ) -> Result<Outcome> {
     let refuse = |why: String| {
@@ -197,7 +197,7 @@ fn baseline(
         return Ok(refuse(why));
     }
     let msg = message.unwrap_or("The working copy, as the gate first found it");
-    commit(repo, msg, &plain(msg), gp)?;
+    commit(repo, msg, plain, gp)?;
     let head = git(repo, &["rev-parse", "HEAD"])?;
     let text =
         format!("BASELINE: {head} holds the folder as it stands. Edit it and run the gate again.");
