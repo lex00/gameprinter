@@ -1,19 +1,11 @@
-//! The start cache: emulator states along an input log, kept so a clip deep
-//! in a play starts from the nearest checkpoint instead of power-on.
+//! The start cache: the console at a clip's start, kept so a clip deep in
+//! a play doesn't replay the input from power-on on every score.
 
-// Only part of this is used until the corpus score comes in.
-#![allow(dead_code)]
-
-/// A shared cache of emulator states along any input log, so tools that
-/// replay the same play again and again (sweeps, loop passes, clips deep
-/// in a run) start from the nearest checkpoint instead of power-on.
-///
-/// A checkpoint is the state after every [`CHECKPOINT`] frames of a log.
-/// Its key is a chain hash: the ROM, the power-on settings and the
-/// emulator's identity, then each block of frames in turn, so two logs
-/// share checkpoints exactly as far as they share frames. Files live under
-/// `$GP_HOME/work/snapshots/cp`, and the oldest-used are removed past a size
-/// cap ([`cap_bytes`]).
+/// Starts kept under a chain hash: the ROM, the power-on settings and the
+/// emulator's identity, then each block of [`CHECKPOINT`] frames in turn,
+/// so two logs share a start exactly as far as they share frames. Files
+/// live under `$GP_HOME/work/snapshots`, and the oldest-used are removed
+/// past a size cap ([`cap_bytes`]).
 pub(crate) mod cache {
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -39,11 +31,6 @@ pub(crate) mod cache {
 
     fn dir(home: &Path) -> PathBuf {
         home.join("work").join("snapshots").join("cp")
-    }
-
-    fn file(home: &Path, key: &[u8; 32]) -> PathBuf {
-        let h: String = key.iter().map(|b| format!("{b:02x}")).collect();
-        dir(home).join(&h[..2]).join(format!("{h}.snap"))
     }
 
     /// The chain hash's first link: what makes two runs of the same frames
@@ -81,42 +68,7 @@ pub(crate) mod cache {
         out
     }
 
-    /// A checkpoint file: the buttons held, then the snapshot.
-    fn read(home: &Path, key: &[u8; 32], touch: bool) -> Option<([u8; 4], Vec<u8>)> {
-        let f = file(home, key);
-        let mut b = fs::read(&f).ok()?;
-        if b.len() < 4 {
-            return None;
-        }
-        // Used now, so it's the last to go (unless the run is private).
-        if touch && let Ok(h) = fs::File::options().append(true).open(&f) {
-            let _ = h.set_modified(std::time::SystemTime::now());
-        }
-        let snap = b.split_off(4);
-        Some(([b[0], b[1], b[2], b[3]], snap))
-    }
-
     static WRITES: AtomicUsize = AtomicUsize::new(0);
-
-    fn write(home: &Path, key: &[u8; 32], held: [u8; 4], snap: &[u8]) {
-        let f = file(home, key);
-        if f.is_file() {
-            return;
-        }
-        let Some(parent) = f.parent() else { return };
-        if fs::create_dir_all(parent).is_err() {
-            return;
-        }
-        let tmp = f.with_extension(format!("tmp{}", std::process::id()));
-        let mut b = held.to_vec();
-        b.extend_from_slice(snap);
-        if fs::write(&tmp, &b).is_ok() {
-            let _ = fs::rename(&tmp, &f);
-        }
-        if WRITES.fetch_add(1, Ordering::Relaxed).is_multiple_of(64) {
-            evict(home, cap_bytes());
-        }
-    }
 
     /// Removes the least recently used checkpoints and starts until the
     /// cache is under `cap` bytes.
@@ -156,62 +108,6 @@ pub(crate) mod cache {
                 total -= len;
             }
         }
-    }
-
-    /// The emulator after the first `n` frames of `frames`, from power-on
-    /// with `power_on`: restored from the nearest cached checkpoint at or
-    /// before `n` and stepped from there, writing the checkpoints it passes.
-    /// The same state a plain replay gives.
-    pub(crate) fn state_at(
-        home: &Path,
-        rom: &[u8],
-        power_on: PowerOn,
-        frames: &[InputFrame],
-        n: usize,
-        video: bool,
-    ) -> Result<gp_nes::Nes> {
-        state_at_with(home, rom, power_on, frames, n, video, true)
-    }
-
-    /// [`state_at`], writing the checkpoints it passes only when `keep`:
-    /// a private run (a sealed one) reads the cache and leaves nothing in it.
-    pub(crate) fn state_at_with(
-        home: &Path,
-        rom: &[u8],
-        power_on: PowerOn,
-        frames: &[InputFrame],
-        n: usize,
-        video: bool,
-        keep: bool,
-    ) -> Result<gp_nes::Nes> {
-        let n = n.min(frames.len());
-        let keys = keys(rom, &power_on, frames, n);
-        let mut nes = gp_nes::Nes::power_on(rom, power_on)?;
-        nes.set_video(video);
-        let mut at = 0;
-        for (i, k) in keys.iter().enumerate().rev() {
-            if let Some((held, snap)) = read(home, k, keep) {
-                let f = (i + 1) * CHECKPOINT;
-                if nes.restore(&snap, f as u64, held).is_ok() {
-                    at = f;
-                    nes.set_video(video);
-                    break;
-                }
-            }
-        }
-        while at < n {
-            nes.step(frames[at])?;
-            at += 1;
-            if keep && at % CHECKPOINT == 0 {
-                write(
-                    home,
-                    &keys[at / CHECKPOINT - 1],
-                    nes.held(),
-                    &nes.snapshot()?,
-                );
-            }
-        }
-        Ok(nes)
     }
 
     /// Frames a clip's start snapshot stands before the clip's first frame:
@@ -371,34 +267,6 @@ pub(crate) mod cache {
     pub(crate) fn write_note(home: &Path, key: &[u8; 32], tag: &str, b: &[u8]) {
         put_file(home, &note_file(home, key, tag), b);
     }
-
-    /// The console after the first `n` frames of `frames`: the start under
-    /// [`start_key`] when it is kept and checks, else stepped from the
-    /// nearest checkpoint ([`state_at_with`]) and kept as a start. With the
-    /// start cache off, a plain replay from power-on. Video off.
-    pub(crate) fn start_state(
-        home: &Path,
-        rom: &[u8],
-        power_on: PowerOn,
-        frames: &[InputFrame],
-        n: usize,
-    ) -> Result<gp_nes::Nes> {
-        let n = n.min(frames.len());
-        if !starts_on() {
-            let mut nes = gp_nes::Nes::power_on(rom, power_on)?;
-            for f in &frames[..n] {
-                nes.step(*f)?;
-            }
-            return Ok(nes);
-        }
-        let key = start_key(rom, &power_on, frames, n);
-        if let Some(s) = read_start(home, &key, rom, power_on) {
-            return s.nes(rom, power_on);
-        }
-        let nes = state_at_with(home, rom, power_on, frames, n, false, true)?;
-        let saved = write_start(home, &key, &nes)?;
-        saved.nes(rom, power_on)
-    }
 }
 
 #[cfg(test)]
@@ -474,11 +342,10 @@ mod cache_tests {
         );
     }
 
-    /// A start from the cache, cold and warm, is the replayed console and
-    /// steps on the same; a start whose state hash doesn't match is
-    /// refused, removed and made again.
+    /// A kept start is restored as the console it was, and a start whose
+    /// state hash doesn't match is refused and removed.
     #[test]
-    fn a_cached_start_is_the_replayed_start() {
+    fn a_kept_start_is_the_console_it_was() {
         let rom = counting_rom();
         let p = gp_evidence::manifest::PowerOn::default();
         let home = tempfile::tempdir().unwrap();
@@ -488,19 +355,18 @@ mod cache_tests {
             for f in &log[..n] {
                 plain.step(*f).unwrap();
             }
-            for _ in 0..2 {
-                let mut c = cache::start_state(home.path(), &rom, p, &log, n).unwrap();
-                let mut q = plain.clone();
-                assert_eq!(c.state_hash().unwrap(), q.state_hash().unwrap());
-                assert_eq!((c.frame(), c.held()), (q.frame(), q.held()));
-                for f in &log[n..n + 40] {
-                    c.step(*f).unwrap();
-                    q.step(*f).unwrap();
-                    assert_eq!(c.state_hash().unwrap(), q.state_hash().unwrap());
-                }
-            }
             let key = cache::start_key(&rom, &p, &log, n);
-            assert!(cache::read_start(home.path(), &key, &rom, p).is_some());
+            cache::write_start(home.path(), &key, &plain).unwrap();
+            let saved = cache::read_start(home.path(), &key, &rom, p).unwrap();
+            let mut c = saved.nes(&rom, p).unwrap();
+            let mut q = plain.clone();
+            assert_eq!(c.state_hash().unwrap(), q.state_hash().unwrap());
+            assert_eq!((c.frame(), c.held()), (q.frame(), q.held()));
+            for f in &log[n..n + 40] {
+                c.step(*f).unwrap();
+                q.step(*f).unwrap();
+                assert_eq!(c.state_hash().unwrap(), q.state_hash().unwrap());
+            }
         }
         // A kept start with a wrong hash.
         let key = cache::start_key(&rom, &p, &log, 5);
@@ -515,8 +381,8 @@ mod cache_tests {
         fs::write(&f, &b).unwrap();
         assert!(cache::read_start(home.path(), &key, &rom, p).is_none());
         assert!(!f.exists());
-        cache::start_state(home.path(), &rom, p, &log, 5).unwrap();
-        assert!(cache::read_start(home.path(), &key, &rom, p).is_some());
+        let plain = gp_nes::Nes::power_on(&rom, p).unwrap();
+        cache::write_start(home.path(), &key, &plain).unwrap();
         cache::evict(home.path(), 0);
         assert!(!f.exists());
     }

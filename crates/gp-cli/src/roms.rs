@@ -36,6 +36,11 @@ impl Rom {
     }
 }
 
+/// A ROM's headerless SHA-256.
+pub fn sha256_of(bytes: &[u8]) -> Result<String> {
+    Ok(identify_nes(bytes)?.sha256)
+}
+
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     for e in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
         let e = e?;

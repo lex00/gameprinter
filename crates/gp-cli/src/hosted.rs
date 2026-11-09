@@ -34,6 +34,9 @@ pub(crate) struct Source {
     pub exts: Arc<Exts>,
     /// Set when the model's hooks run in a game's module.
     module: Option<ModuleCode>,
+    /// What the hooks are, for caches: the module file's hash, else
+    /// `gp`'s own label for them.
+    pub hooks: String,
 }
 
 impl Source {
@@ -72,7 +75,7 @@ impl Source {
     pub(crate) fn new(bundle: Bundle, module: Option<&Path>) -> Result<Self> {
         let interp = Interp::from_bundle(&bundle).map_err(|e| anyhow!("{e}"))?;
         let spec = interp.spec().clone();
-        let (exts, _) = gp_exts::registry(&spec.name);
+        let (exts, label) = gp_exts::registry(&spec.name);
         let exts = Arc::new(exts);
         let missing: Vec<String> = interp
             .with_exts(exts.clone())
@@ -81,9 +84,11 @@ impl Source {
             .map(|h| (*h).to_owned())
             .collect();
         let bytes = bundle.to_bytes();
+        let mut module_hash = String::new();
         let module = match module {
             Some(p) => {
                 let wasm = fs::read(p).with_context(|| p.display().to_string())?;
+                module_hash = blake3::hash(&wasm).to_hex().to_string();
                 let code = ModuleCode::compile(&wasm).map_err(|e| anyhow!("{e}"))?;
                 let first = code.load(&bytes).map_err(|e| anyhow!("{e}"))?;
                 let theirs = first.spec_digest().map_err(|e| anyhow!("{e}"))?;
@@ -102,12 +107,17 @@ impl Source {
                 missing.join(", ")
             ),
         };
+        let hooks = match module {
+            Some(_) => module_hash,
+            None => label,
+        };
         Ok(Self {
             bundle,
             bytes,
             spec,
             exts,
             module,
+            hooks,
         })
     }
 

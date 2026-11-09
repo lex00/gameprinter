@@ -6,6 +6,7 @@ mod assets;
 mod clip;
 mod clip_score;
 mod clipset;
+mod corpus_score;
 mod game;
 mod hosted;
 mod lockstep;
@@ -16,8 +17,10 @@ mod pool;
 mod registry;
 mod roms;
 mod run;
+mod scenario;
 mod screen;
 mod served;
+mod tape;
 mod template;
 
 use std::path::PathBuf;
@@ -65,6 +68,11 @@ enum Cmd {
     Assets {
         #[command(subcommand)]
         cmd: AssetsCmd,
+    },
+    /// A game's scoring corpus.
+    Corpus {
+        #[command(subcommand)]
+        cmd: corpus_score::CorpusCmd,
     },
     /// Corpus clips: their input logs and their scores on a model.
     Clip {
@@ -346,6 +354,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             AssetsCmd::Pack { dir, check } => assets::check_dir(dir, check),
         },
         Cmd::Clip { cmd } => clip_score::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Corpus { cmd } => corpus_score::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Model { cmd } => match cmd {
             ModelCmd::Check { dir, assets } => model::check(dir, assets.as_deref()),
             ModelCmd::Fmt { dir, .. } => model::fmt_check(dir),

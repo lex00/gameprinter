@@ -139,7 +139,8 @@ pub(crate) fn nes_palette() -> &'static [[u8; 3]; 64] {
     COLORS.get_or_init(gp_look::present::nes_colors)
 }
 
-/// An original that shows a picture: the emulator.
+/// An original that shows a picture: the emulator, or its side of a clip
+/// played back from a tape (`crate::tape`).
 pub(crate) trait Shows: gp_runtime::Runtime {
     /// The picture it shows now.
     fn shown(&self) -> Frame;
@@ -154,6 +155,16 @@ impl Shows for NesRuntime {
 
     fn draw(&mut self) {
         self.set_video(true);
+    }
+}
+
+impl Shows for crate::tape::Original {
+    fn shown(&self) -> Frame {
+        self.picture()
+    }
+
+    fn draw(&mut self) {
+        crate::tape::Original::draw(self);
     }
 }
 
