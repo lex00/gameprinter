@@ -5,6 +5,7 @@
 mod assets;
 mod game;
 mod model;
+mod module;
 mod package;
 mod registry;
 mod roms;
@@ -161,6 +162,27 @@ enum GameCmd {
         #[arg(long)]
         rom_dir: PathBuf,
     },
+    /// Write the module kit: the tool's sources for a game module and the
+    /// crates they need, ready for a build with no network.
+    Kit {
+        #[arg(short, long)]
+        out: PathBuf,
+    },
+    /// Print a built module's BLAKE3 hash.
+    Hash { file: PathBuf },
+    /// Build a game's module from its package folder and the kit, in a
+    /// sandbox that reads nothing else and has no network. Exits 1 when the
+    /// hook crate breaks the rules, 2 when the build fails.
+    Build {
+        dir: PathBuf,
+        #[arg(long)]
+        kit: PathBuf,
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Write the package's Cargo.lock from the kit's, first.
+        #[arg(long)]
+        update_lock: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -234,6 +256,10 @@ enum PackageCmd {
         /// A ROM file to compare with, instead of finding it by hash.
         #[arg(long)]
         rom: Vec<PathBuf>,
+        /// A built module to check too: each data segment and custom
+        /// section against the ROMs. Any .wasm in the folder is always read.
+        #[arg(long)]
+        wasm: Vec<PathBuf>,
     },
 }
 
@@ -306,10 +332,25 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                     rom_dir,
                 },
         } => game::fetch(name, id, from, root, into, rom_dir),
+        Cmd::Game {
+            cmd: GameCmd::Kit { out },
+        } => module::kit(out),
+        Cmd::Game {
+            cmd: GameCmd::Hash { file },
+        } => module::hash(file),
+        Cmd::Game {
+            cmd:
+                GameCmd::Build {
+                    dir,
+                    kit,
+                    out,
+                    update_lock,
+                },
+        } => module::build(dir, kit, out, *update_lock),
         Cmd::Package { cmd } => match cmd {
             PackageCmd::Hooks { dir } => package::hooks(dir),
-            PackageCmd::Scan { dir, rom } => {
-                package::scan::run(dir, rom, &gp_evidence::Paths::from_env()?)
+            PackageCmd::Scan { dir, rom, wasm } => {
+                package::scan::run(dir, rom, wasm, &gp_evidence::Paths::from_env()?)
             }
         },
         Cmd::Registry { cmd } => match cmd {

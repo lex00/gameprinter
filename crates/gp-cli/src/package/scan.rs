@@ -43,10 +43,75 @@ use crate::template::{self, lifted_digest, sha256_hex};
 
 use rom_match::{Match, Num, RomIndex};
 
-pub fn run(dir: &Path, given: &[PathBuf], paths: &Paths) -> Result<Outcome> {
+pub fn run(dir: &Path, given: &[PathBuf], wasm: &[PathBuf], paths: &Paths) -> Result<Outcome> {
     let pkg = Package::load(dir)?;
     let found = roms::find(&pkg.rom_hashes(), given, &paths.roms)?;
-    Ok(scan(&pkg, &found)?.outcome())
+    let mut outcome = scan(&pkg, &found)?.outcome();
+    let wasm_report = scan_wasm(dir, wasm, &found)?;
+    outcome.text.push_str(&wasm_report.0);
+    outcome.json["wasm"] = wasm_report.1;
+    if wasm_report.2 {
+        outcome.exit = outcome.exit.max(1);
+    }
+    Ok(outcome)
+}
+
+/// Every data segment and custom section of each `.wasm` of the folder, and
+/// of `extra`, against the ROMs: the text report, the JSON and whether any
+/// ROM bytes were found.
+fn scan_wasm(
+    dir: &Path,
+    extra: &[PathBuf],
+    found: &BTreeMap<String, Rom>,
+) -> Result<(String, serde_json::Value, bool)> {
+    let mut files: Vec<PathBuf> = extra.to_vec();
+    let mut stack = vec![dir.to_owned()];
+    while let Some(d) = stack.pop() {
+        for e in fs::read_dir(&d)? {
+            let e = e?;
+            let p = e.path();
+            if e.file_type()?.is_dir() {
+                if e.file_name() != "target" && e.file_name() != ".git" {
+                    stack.push(p);
+                }
+            } else if p.extension().is_some_and(|x| x == "wasm") {
+                files.push(p);
+            }
+        }
+    }
+    let mut text = String::new();
+    let mut finds = Vec::new();
+    for f in &files {
+        let bytes = fs::read(f).with_context(|| f.display().to_string())?;
+        let parts = crate::module::data_parts(&bytes).with_context(|| f.display().to_string())?;
+        let total: usize = parts.iter().map(|p| p.1.len()).sum();
+        for (id, rom) in found {
+            for (name, data) in &parts {
+                for (rom_offset, len) in crate::served::runs_of_rom(data, rom.data()) {
+                    let line = format!(
+                        "{}: {name} holds {len} bytes of ROM {} at ROM offset {rom_offset:#x}",
+                        f.display(),
+                        &id[..12]
+                    );
+                    finds.push(json!({ "file": f, "part": name, "rom": id, "rom_offset": rom_offset, "len": len }));
+                    text.push_str(&format!("\nNEEDS REWRITE {line}"));
+                }
+            }
+        }
+        text.push_str(&format!(
+            "\nwasm {}: {} data parts, {total} bytes, compared with {} ROM(s)",
+            f.display(),
+            parts.len(),
+            found.len()
+        ));
+    }
+    if !files.is_empty() && found.is_empty() {
+        text.push_str(
+            "\nNOT COMPARED: no ROM here, so nothing says these modules are free of ROM data",
+        );
+    }
+    let bad = !finds.is_empty();
+    Ok((text, json!({ "files": files, "finds": finds }), bad))
 }
 
 // ---- Buckets ----

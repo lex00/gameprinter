@@ -76,6 +76,7 @@ t0=$(now)
 # Sized for download: one codegen unit, LTO, optimized for size.
 cargo_args=(rustc -q --locked -p gp-web --lib --release --target wasm32-unknown-unknown
   --crate-type cdylib --target-dir "$target/web-preview"
+  --config 'target.wasm32-unknown-unknown.rustflags=["-Clink-arg=--max-memory=268435456"]'
   --config 'profile.release.lto=true' --config 'profile.release.opt-level="s"'
   --config 'profile.release.codegen-units=1' --config 'profile.release.strip=true')
 # The key names the target folder TARGET, so worktrees share the module.
@@ -98,7 +99,7 @@ else
 fi
 # The page and the scripts preview.js imports (crates/gp-cli/src/mechanic.rs,
 # PAGE_SCRIPTS, lists the same).
-for f in index.html preview.js level.js shell-keys.js storage.js storage-wit.js; do
+for f in index.html preview.js level.js shell-keys.js storage.js storage-wit.js module-host.js module-worker.js; do
   cp "$repo/scripts/web/page/$f" "$out/" || exit 2
 done
 echo "gp_web.wasm $(wc -c < "$out/gp_web.wasm" | tr -d ' ') bytes"

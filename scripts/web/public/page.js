@@ -71,13 +71,13 @@ let notices = [];
 const installing = ready.then(async () => {
   const x = await install();
   const progress = (n, of) => say(`Getting the game: ${n} of ${of} files. It stays in this browser so it plays offline.`);
-  const g = await x.ensure(page.source, { ...link.game, hooks: page.hooks }, progress);
+  const g = await x.ensure(page.source, link.game, progress);
   if (!g.record.files.some((f) => f.path.startsWith("play/"))) throw new Error(`${g.record.name}@${g.record.version} has no files this player can run`);
   await x.setCurrent(g.record);
   if (g.notice) notices.push(g.notice);
   let theme = null;
   if (link.content) {
-    const c = await x.ensure(page.source, { ...link.content, hooks: page.hooks, for_game: g.record.name }).catch((err) => {
+    const c = await x.ensure(page.source, { ...link.content, for_game: g.record.name }).catch((err) => {
       notices.push(`${link.content.name} couldn't be used: ${err.message ?? err}. Playing in the game's own look.`);
       return null;
     });

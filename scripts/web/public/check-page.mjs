@@ -1945,6 +1945,92 @@ async function registryTheme(S, r) {
   }
 }
 
+// A small Wasm module with the loader's calls, whose gp_step is `step`.
+function testModule(step, maxPages) {
+  const section = (id, body) => [id, body.length, ...body];
+  const name = (n) => [n.length, ...Buffer.from(n)];
+  const exp = (n, kind, i) => [...name(n), kind, i];
+  const fn = (code) => [code.length + 1, 0, ...code];
+  const limits = maxPages === null ? [0, 1] : [1, 1, maxPages & 0x7f | 0x80, maxPages >> 7];
+  const exports_ = [5, ...exp("memory", 2, 0), ...exp("gp_alloc", 0, 0), ...exp("gp_out_ptr", 0, 1), ...exp("gp_out_len", 0, 2), ...exp("gp_step", 0, 3)];
+  const zero = fn([0x41, 0, 0x0b]);
+  const code = [4, ...zero, ...zero, ...zero, ...fn(step)];
+  return [
+    0, 0x61, 0x73, 0x6d, 1, 0, 0, 0,
+    ...section(1, [3, 0x60, 1, 0x7f, 1, 0x7f, 0x60, 0, 1, 0x7f, 0x60, 2, 0x7f, 0x7f, 1, 0x7f]),
+    ...section(3, [4, 0, 1, 1, 2]),
+    ...section(5, [1, ...limits]),
+    ...section(7, exports_),
+    ...section(10, code),
+  ];
+}
+
+// The game's own module runs in a Worker, the page's own build has no game's
+// hooks, and a module that breaks a limit stops at it with a message.
+async function moduleSection(S) {
+  const { p, check, waitFrames, gp } = S;
+  await p.goto(`${S.origin}/${LINK}`);
+  check(await waitFrames(60), "the game runs");
+  check((await gp(() => window.__gp.module)) === "game", "it runs the game's own module, not the page's");
+  await waitFrames(600, 30000);
+  const timing = await gp(() => ({ ...window.__gp.timing }));
+  check(timing.frames > 0, `the frames go through the Worker (${timing.frames})`);
+  const each = (ms) => (ms / timing.frames).toFixed(2);
+  console.log(`measure frame time over ${timing.frames} frames: ${each(timing.worker)} ms in the module, ${each(timing.round)} ms for the page's whole call; worst ${timing.workerMax.toFixed(1)} and ${timing.roundMax.toFixed(1)} ms`);
+  check((await gp(() => self.crossOriginIsolated)) === true, "the frame is cross-origin isolated");
+  const frame = p.frames().find((f) => f.url().includes("/game/"));
+  check(!!frame, "the game's frame is there");
+  const loop = testModule([0x03, 0x40, 0x0c, 0, 0x0b, 0x41, 0, 0x0b], 16);
+  const grow = testModule([0x03, 0x40, 0x41, 1, 0x40, 0, 0x41, 0x7f, 0x46, 0x04, 0x40, 0, 0x0b, 0x0c, 0, 0x0b, 0x41, 0, 0x0b], 16);
+  const r = await frame.evaluate(async ({ loop, grow, noMax, tooBig, bundleUrl }) => {
+    const { ModuleHost } = await import("./module-host.js");
+    const refused = (b) => ModuleHost.open(new Uint8Array(b).buffer).then(() => null, (e) => e.message);
+    const run = async (b) => {
+      let told = null;
+      const h = await ModuleHost.open(new Uint8Array(b).buffer, (m) => (told = m));
+      const t0 = performance.now();
+      let threw = null;
+      try {
+        h.call("gp_step", [0, 0]);
+      } catch (e) {
+        threw = e.message;
+      }
+      let after = null;
+      try {
+        h.call("gp_step", [0, 0]);
+      } catch (e) {
+        after = e.message;
+      }
+      return { told, threw, after, ms: performance.now() - t0 };
+    };
+    // The page's own build and the game's module, given the game's bundle.
+    const bundle = new Uint8Array(await (await fetch(bundleUrl)).arrayBuffer());
+    const load = async (bytes) => {
+      const h = await ModuleHost.open(bytes);
+      const { r, out } = h.call("gp_load", [bundle]);
+      return { r, out: new TextDecoder().decode(out) };
+    };
+    const pageWasm = await (await fetch("gp_web.wasm")).arrayBuffer();
+    const { playFiles } = await import("./install.js");
+    const moduleWasm = (await playFiles()).get("module.wasm");
+    return {
+      loop: await run(loop),
+      grow: await run(grow),
+      noMax: await refused(noMax),
+      tooBig: await refused(tooBig),
+      own: await load(pageWasm),
+      game: await load(moduleWasm),
+    };
+  }, { loop, grow, noMax: testModule([0x41, 0, 0x0b], null), tooBig: testModule([0x41, 0, 0x0b], 4097), bundleUrl: "/__check/play/bundle.json" });
+  check(/one frame took more than/.test(r.loop.told ?? "") && r.loop.ms < 5000, `a module that loops forever stops at the deadline (${r.loop.told}, ${Math.round(r.loop.ms)} ms)`);
+  check(/stopped/.test(r.loop.after ?? ""), "and answers nothing more");
+  check(/module failed/.test(r.grow.told ?? ""), `a module that grows without end stops at its limit (${r.grow.told})`);
+  check(/sets no memory limit/.test(r.noMax ?? ""), `a module with no memory limit is refused (${r.noMax})`);
+  check(/allows 256 MB/.test(r.tooBig ?? ""), `a module asking for more than 256 MB is refused (${r.tooBig})`);
+  check(r.own.r !== 0 && /hook/i.test(r.own.out), `the page's own build has no game's hooks: it refuses the game's model (${r.own.out.slice(0, 120)})`);
+  check(r.game.r === 0 && r.game.out.length > 0, `the game's module runs the same model with its hooks (${r.game.out})`);
+}
+
 async function registryLinks(S) {
   const { p, check } = S;
   const refused = async (link, re, what) => {
@@ -1957,7 +2043,7 @@ async function registryLinks(S) {
   await refused(`p?g=${page.game}@9.9.9`, /couldn't be installed/i, "a link to a version that doesn't exist is refused in words");
   // A local registry holds only the current version.
   if (page.source.url === ".") await refused(`p?g=${page.game}@1.0.0`, /isn't there/i, "a version this source doesn't hold is refused in words");
-  else await refused(`p?g=${page.game}@1.0.0`, /no files this player can run/i, "a version with nothing this player runs is refused in words");
+  else await refused(`p?g=${page.game}@1.0.0`, /hook code and no module/i, "a version with hooks and no module is refused in words");
 }
 
 // What a source can do wrong, each on a first visit. `r` fetches the real
@@ -1978,9 +2064,9 @@ const flip = (b) => {
   return c;
 };
 const source_ = (k) => (u) => new URL(u).pathname === `/${k}`;
-const refusedInstall = (re, what) => async (S) => {
+const refusedInstall = (re, what, { version } = {}) => async (S) => {
   const { p, check } = S;
-  await p.goto(`${S.origin}/${LINK}`);
+  await p.goto(`${S.origin}/${LINK}${version ? `@${version}` : ""}`);
   await p.waitForFunction(() => document.getElementById("message").dataset.kind === "error", null, { timeout: 60000 }).catch(() => {});
   const said = await p.locator("#message").innerText();
   check(re.test(said), `${what}: the page says so (${said})`);
@@ -2057,6 +2143,7 @@ if (roms.length) {
 }
 
 add("registry-link", 15, registryLink);
+add("module", 15, moduleSection);
 for (const r of roms) {
   const tag = r.sha.slice(0, 8);
   add(`registry-rom-${tag}`, 15, (S) => registryRom(S, r), { rom: r.sha });
@@ -2070,19 +2157,15 @@ if (!registryStopped) {
   bad("root-sig", "registry.toml's signature broken", /couldn't be installed/i, source_("registry.toml.sig"), flip);
   bad("root-text", "registry.toml changed", /couldn't be installed/i, source_("registry.toml"), (b) => Buffer.from(b.toString().replace("gp-staging", "gp-stagiing")));
   bad("namespace", "the namespace's keys changed", /couldn't be installed/i, source_("namespaces/lex00.toml"), (b) => Buffer.from(b.toString() + "\n# changed\n"));
-  bad("catalog", "the catalog's latest changed", /couldn't be installed/i, source_("catalog.toml"), (b) => Buffer.from(b.toString().replace('latest = "1.0.1"', 'latest = "1.0.0"')));
+  bad("catalog", "the catalog's latest changed", /couldn't be installed/i, source_("catalog.toml"), (b) => Buffer.from(b.toString().replace(/latest = "\d+\.\d+\.\d+"/, 'latest = "1.0.0"')));
   bad("manifest", "the manifest changed", /couldn't be installed/i, (u) => /\/packages\/[0-9a-f]{64}$/.test(u), flip);
   bad("manifest-sig", "the manifest's signature broken", /couldn't be installed/i, (u) => /\/packages\/[0-9a-f]{64}\.sig$/.test(u), flip);
   bad("blob", "one file's bytes changed", /doesn't match what its maker signed/i, (u) => /\/blobs\//.test(u), flip);
-  add("registry-bad-hooks", 10, async (S) => {
-    await S.p.route("**/page.json", async (route) => {
-      const real = await route.fetch();
-      const j = await real.json();
-      j.hooks = ["0".repeat(64)];
-      return route.fulfill({ response: real, json: j });
-    });
-    return refusedInstall(/hook code/i, "hook code this player wasn't built with")(S);
-  });
+  // A version from before modules: hook code and no module.wasm. Only the
+  // staging registry still holds one.
+  if (!opt("registry-folder")) {
+    add("registry-no-module", 10, async (S) => refusedInstall(/hook code and no module/i, "a game with hooks and no module", { version: "1.0.1" })(S));
+  }
 }
 
 if (opt("only") || acceptPictures) {

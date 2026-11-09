@@ -65,6 +65,7 @@
 import { withLevel } from "./level.js";
 import { AUTOSAVE_SLOT, BINDINGS, NES, NES2, SCREEN, QUICK_SLOTS, SHELL_SETTINGS, exportName, slotName, whenName } from "./shell-keys.js";
 import { openStorage } from "./storage.js";
+import { ModuleHost } from "./module-host.js";
 
 const t = (window.__gp = { marks: {}, hashes: [], results: null, error: null });
 const mark = (n) => {
@@ -80,19 +81,22 @@ const enc = new TextEncoder();
 const hex = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 
 class Preview {
-  constructor(instance) {
-    this.x = instance.exports;
+  // `host` is the module in its Worker (module-host.js).
+  constructor(host) {
+    this.host = host;
+    this.last = new Uint8Array(0);
   }
-  mem() {
-    return new Uint8Array(this.x.memory.buffer);
+  has(name) {
+    return this.host.has(name);
   }
-  put(bytes) {
-    const p = this.x.gp_alloc(bytes.length);
-    this.mem().set(bytes, p);
-    return p;
+  // Calls an export; what it left in its output buffer is `this.last`.
+  run(name, ...args) {
+    const { r, out } = this.host.call(name, args);
+    this.last = out;
+    return r;
   }
   out() {
-    return text.decode(this.mem().slice(this.x.gp_out_ptr(), this.x.gp_out_ptr() + this.x.gp_out_len()));
+    return text.decode(this.last);
   }
   check(code) {
     if (code !== 0) throw new Error(this.out());
@@ -101,51 +105,47 @@ class Preview {
   // Returns the hooks' label (crate, version, code hash), empty for a model
   // without hooks. Throws when the model names a hook the module lacks.
   load(bundle) {
-    return this.check(this.x.gp_load(this.put(bundle), bundle.length));
+    return this.check(this.run("gp_load", bundle));
   }
   // The bundle in a profile (any set of switches), from the text of
   // profiles.toml; null from a gp_web.wasm built before switches.
   profileBundle(bundle, profiles, name) {
-    if (typeof this.x.gp_profile_bundle !== "function") return null;
+    if (!this.has("gp_profile_bundle")) return null;
     const [t, n] = [enc.encode(profiles), enc.encode(name)];
-    const code = this.x.gp_profile_bundle(this.put(bundle), bundle.length, this.put(t), t.length, this.put(n), n.length);
+    const code = this.run("gp_profile_bundle", bundle, t, n);
     if (code !== 0) throw new Error(this.out());
-    const ptr = this.x.gp_out_ptr();
-    return this.mem().slice(ptr, ptr + this.x.gp_out_len());
+    return this.last;
   }
   step(buttons, reset) {
-    this.check(this.x.gp_step(buttons, reset ? 1 : 0));
+    this.check(this.run("gp_step", buttons, reset ? 1 : 0));
   }
   hash() {
-    const p = this.x.gp_hash();
-    return hex(this.mem().slice(p, p + 32));
+    return hex(this.host.call("gp_hash", [], 3).out);
   }
   state() {
-    return JSON.parse(this.check(this.x.gp_draw_state()));
+    return JSON.parse(this.check(this.run("gp_draw_state")));
   }
   // The canonical model state's bytes, which loadState puts back; null
   // from a gp_web.wasm built before gp_state.
   stateBytes() {
-    if (typeof this.x.gp_state !== "function") return null;
-    if (this.x.gp_state() !== 0) throw new Error(this.out());
-    const p = this.x.gp_out_ptr();
-    return this.mem().slice(p, p + this.x.gp_out_len());
+    if (!this.has("gp_state")) return null;
+    if (this.run("gp_state") !== 0) throw new Error(this.out());
+    return this.last;
   }
   // The game as a save record (gp_sim::save), the bytes the generated
   // game's save slots hold too; null from a gp_web.wasm built before it.
   saveRecord(profile) {
-    if (typeof this.x.gp_save_record !== "function") return null;
+    if (!this.has("gp_save_record")) return null;
     const n = enc.encode(profile);
-    if (this.x.gp_save_record(this.put(n), n.length) !== 0) throw new Error(this.out());
-    const p = this.x.gp_out_ptr();
-    return this.mem().slice(p, p + this.x.gp_out_len());
+    if (this.run("gp_save_record", n) !== 0) throw new Error(this.out());
+    return this.last;
   }
   // Loads a save record: {loaded: true}, {refused: sentence} for a save of
   // another build or game, or {profile} when it was saved in another
   // profile (nothing loaded).
   loadRecord(bytes, profile) {
     const n = enc.encode(profile);
-    const code = this.x.gp_load_record(this.put(bytes), bytes.length, this.put(n), n.length);
+    const code = this.run("gp_load_record", bytes, n);
     if (code === 0) return { loaded: true };
     if (code === 2) return { profile: this.out() };
     return { refused: this.out() };
@@ -153,54 +153,53 @@ class Preview {
   // The rewind ring, the shell standard's (gp_present::shell::Ring), held
   // by the module: false from a gp_web.wasm built before it.
   ringReset(num, den) {
-    if (typeof this.x.gp_ring_reset !== "function") return false;
-    this.check(this.x.gp_ring_reset(num, den));
+    if (!this.has("gp_ring_reset")) return false;
+    this.check(this.run("gp_ring_reset", num, den));
     return true;
   }
   ringClear() {
-    this.check(this.x.gp_ring_clear());
+    this.check(this.run("gp_ring_clear"));
   }
   ringNote() {
-    this.check(this.x.gp_ring_note());
+    this.check(this.run("gp_ring_note"));
   }
   // One step of held rewind: true when a state was put back.
   ringBack() {
-    const code = this.x.gp_ring_back();
+    const code = this.run("gp_ring_back");
     if (code === 1) throw new Error(this.out());
     return code === 0;
   }
   loadState(bytes) {
-    if (typeof this.x.gp_load_state !== "function") throw new Error("this preview's gp_web.wasm can't load a state; rebuild the run's preview");
-    this.check(this.x.gp_load_state(this.put(bytes), bytes.length));
+    if (!this.has("gp_load_state")) throw new Error("this preview's gp_web.wasm can't load a state; rebuild the run's preview");
+    this.check(this.run("gp_load_state", bytes));
   }
   loadPresent(text) {
     const b = enc.encode(text);
-    this.check(this.x.gp_load_present(this.put(b), b.length));
+    this.check(this.run("gp_load_present", b));
   }
   scene() {
-    return JSON.parse(this.check(this.x.gp_scene()));
+    return JSON.parse(this.check(this.run("gp_scene")));
   }
   // Picture and sound options (gp_present::view), as play's --picture
   // takes them. False for a module built before them.
   view(list) {
-    if (typeof this.x.gp_view !== "function") return false;
+    if (!this.has("gp_view")) return false;
     const b = enc.encode(list);
-    this.check(this.x.gp_view(this.put(b), b.length));
+    this.check(this.run("gp_view", b));
     return true;
   }
   specDigest() {
-    return this.check(this.x.gp_spec_digest());
+    return this.check(this.run("gp_spec_digest"));
   }
   loadSound(text) {
     const b = enc.encode(text);
-    this.check(this.x.gp_load_sound(this.put(b), b.length));
+    this.check(this.run("gp_load_sound", b));
   }
   // The last frame's samples as floats, from the wasm synthesizer.
   audio() {
-    const n = this.x.gp_audio();
+    const n = this.run("gp_audio");
     if (n <= 0) return null;
-    const p = this.x.gp_out_ptr();
-    const v = new Int16Array(this.x.memory.buffer.slice(p, p + 2 * n));
+    const v = new Int16Array(this.last.buffer, this.last.byteOffset, n);
     const f = new Float32Array(n);
     for (let i = 0; i < n; i++) f[i] = v[i] / 32768;
     return f;
@@ -208,19 +207,19 @@ class Preview {
   // The standard settings screen (gp_present::settings); false from a
   // module built before it.
   hasSettings() {
-    return typeof this.x.gp_settings_open === "function";
+    return this.has("gp_settings_open");
   }
   settingsOpen(profiles, name) {
     const [t, n] = [enc.encode(profiles), enc.encode(name)];
-    this.check(this.x.gp_settings_open(this.put(t), t.length, this.put(n), n.length));
+    this.check(this.run("gp_settings_open", t, n));
   }
   // The open screen's Theme line: [id, title] pairs and the one shown. A
   // published theme's pair goes on with its author, state ("downloaded"
   // or "download") and size.
   settingsThemes(list, current) {
-    if (typeof this.x.gp_settings_themes !== "function" || list.length < 2) return;
+    if (!this.has("gp_settings_themes") || list.length < 2) return;
     const [l, c] = [enc.encode(list.map((x) => x.join("\t")).join("\n")), enc.encode(current)];
-    this.check(this.x.gp_settings_themes(this.put(l), l.length, this.put(c), c.length));
+    this.check(this.run("gp_settings_themes", l, c));
   }
   // A key's number (SETTINGS_KEY): 0 nothing, 1 redraw, on a close
   // {closed, restart, profile, theme} (the look chosen comes on a second
@@ -228,7 +227,7 @@ class Preview {
   // player asked for something done with a save slot (save, load, delete,
   // download, or file to load one from a file).
   settingsKey(code) {
-    return this.settingsOutcome(this.x.gp_settings_key(code));
+    return this.settingsOutcome(this.run("gp_settings_key", code));
   }
   settingsOutcome(r) {
     if (r === 4) {
@@ -242,74 +241,74 @@ class Preview {
   // Whether the module has the Saves line and the shell's settings on the
   // screen (2026-11-05).
   hasSaves() {
-    return typeof this.x.gp_settings_saves === "function";
+    return this.has("gp_settings_saves");
   }
   // The open screen's Console only and Quick save buttons lines, from the
   // settings' file text.
   settingsShell(text) {
     const b = enc.encode(text);
-    this.check(this.x.gp_settings_shell(this.put(b), b.length));
+    this.check(this.run("gp_settings_shell", b));
   }
   // The shell's settings the last screen closed with, as file text, or null.
   settingsShellChosen() {
-    return this.x.gp_settings_shell_chosen() === 0 ? this.out() : null;
+    return this.run("gp_settings_shell_chosen") === 0 ? this.out() : null;
   }
   // The open screen's Saves line: [slot, bytes or null, seconds or null]
   // for each slot, the profile played, the clock and the frame rate.
   settingsSaves(slots, profile, now, rate, files) {
     for (const [n, bytes, when] of slots) {
       const b = bytes ?? new Uint8Array(0);
-      this.x.gp_settings_slot(n, b.length ? this.put(b) : 0, b.length, when ?? -1);
+      this.run("gp_settings_slot", n, b, when ?? -1);
     }
     const pr = enc.encode(profile);
-    this.check(this.x.gp_settings_saves(this.put(pr), pr.length, now, rate[0], rate[1], files ? 1 : 0));
+    this.check(this.run("gp_settings_saves", pr, now, rate[0], rate[1], files ? 1 : 0));
   }
   // The open screen as text: a line each, the cursor's marked "> ", and
   // what is shown under the list last, after "| ". For the checks.
   settingsLines() {
-    return typeof this.x.gp_settings_lines === "function" && this.x.gp_settings_lines() === 0 ? this.out().split("\n") : null;
+    return this.has("gp_settings_lines") && this.run("gp_settings_lines") === 0 ? this.out().split("\n") : null;
   }
   settingsSay(text) {
     const b = enc.encode(text);
-    this.check(this.x.gp_settings_say(this.put(b), b.length));
+    this.check(this.run("gp_settings_say", b));
   }
   // Closes the screen after a load from it: as settingsKey's close.
   settingsCloseLoaded() {
-    return this.settingsOutcome(this.x.gp_settings_close_loaded());
+    return this.settingsOutcome(this.run("gp_settings_close_loaded"));
   }
   // Whether the last frame started a level: the shell autosaves then.
   autosaveDue() {
-    return typeof this.x.gp_autosave_due === "function" && this.x.gp_autosave_due() === 1;
+    return this.has("gp_autosave_due") && this.host.call("gp_autosave_due", [], 0).r === 1;
   }
   // A theme's sound for a role, from a 16-bit WAV file's bytes
   // (gp_present::sound::RolePlayer); false from a module built before it.
   soundRole(name, wav) {
-    if (typeof this.x.gp_sound_role !== "function") return false;
+    if (!this.has("gp_sound_role")) return false;
     const n = enc.encode(name);
-    this.check(this.x.gp_sound_role(this.put(n), n.length, this.put(wav), wav.length));
+    this.check(this.run("gp_sound_role", n, wav));
     return true;
   }
   clearSoundRoles() {
-    if (typeof this.x.gp_sound_roles_clear === "function") this.x.gp_sound_roles_clear();
+    if (this.has("gp_sound_roles_clear")) this.run("gp_sound_roles_clear");
   }
   // The themes removed from the cache on the settings screen since the
   // last call, by id.
   settingsRemoved() {
-    if (typeof this.x.gp_settings_removed !== "function") return [];
-    return this.x.gp_settings_removed() > 0 ? this.out().split("\n") : [];
+    if (!this.has("gp_settings_removed")) return [];
+    return this.run("gp_settings_removed") > 0 ? this.out().split("\n") : [];
   }
   // Whether the module reads packages (docs/theme-publishing.md).
   hasCatalogue() {
-    return typeof this.x.gp_catalogue === "function";
+    return this.has("gp_catalogue");
   }
   blake3(bytes) {
-    this.check(this.x.gp_blake3(this.put(bytes), bytes.length));
+    this.check(this.run("gp_blake3", bytes));
     return this.out();
   }
   // The themes of an index this build can draw.
   catalogue(index, pictures) {
     const [a, b] = [enc.encode(index), enc.encode(pictures.join("\n"))];
-    const out = this.check(this.x.gp_catalogue(this.put(a), a.length, this.put(b), b.length));
+    const out = this.check(this.run("gp_catalogue", a, b));
     return out
       .split("\n")
       .filter((l) => l)
@@ -321,20 +320,19 @@ class Preview {
   // A package's look files from its manifest, checked against its id.
   packageLook(id, manifest) {
     const i = enc.encode(id);
-    const out = this.check(this.x.gp_package_look(this.put(i), i.length, this.put(manifest), manifest.length));
+    const out = this.check(this.run("gp_package_look", i, manifest));
     return out.split("\n").map((l) => {
       const [hash, size, path] = l.split("\t");
       return { hash, size: Number(size), path };
     });
   }
   settingsPicture(w, h) {
-    this.check(this.x.gp_settings_draw(w, h));
-    const ptr = this.x.gp_out_ptr();
-    return new ImageData(new Uint8ClampedArray(this.mem().slice(ptr, ptr + w * h * 4)), w, h);
+    this.check(this.run("gp_settings_draw", w, h));
+    return new ImageData(new Uint8ClampedArray(this.last.buffer, this.last.byteOffset, w * h * 4), w, h);
   }
   runFrames(frames) {
     const b = enc.encode(frames);
-    return this.check(this.x.gp_run_frames(this.put(b), b.length));
+    return this.check(this.run("gp_run_frames", b));
   }
 }
 
@@ -825,10 +823,43 @@ async function findLooks(cfg, catalogue) {
   };
 }
 
+// The game's own module when it ships one (a game with hooks has to); the
+// page's own interpreter, which has no game's hooks, for a game without.
+let moduleSource = "page";
+async function moduleBytes() {
+  let bytes = (await stored).get("module.wasm");
+  if (!bytes && /^idb:/.test(new URLSearchParams(location.search).get("files") ?? "")) {
+    // A lifted ROM's files are the lift's; the module is the installed game's.
+    const { playFiles } = await import("./install.js");
+    bytes = (await playFiles())?.get("module.wasm");
+  }
+  if (bytes) {
+    moduleSource = "game";
+    return bytes;
+  }
+  return fetch("gp_web.wasm").then((r) => r.arrayBuffer());
+}
+
+function showError(message) {
+  const p = document.createElement("p");
+  p.id = "error";
+  p.setAttribute("role", "alert");
+  p.textContent = message;
+  p.style.cssText = "color: #fdd; background: #511; font: 16px/1.4 system-ui, sans-serif; max-width: 720px; margin: 16px auto; padding: 12px 16px; white-space: pre-wrap;";
+  document.body.prepend(p);
+}
+
+const openHost = (bytes) =>
+  ModuleHost.open(bytes, (message) => {
+    t.error ??= message;
+    t.stopped = message;
+    showError(message);
+  });
+
 async function main() {
   const q = new URLSearchParams(location.search);
-  const [{ module, instance }, cfg, presentText, profilesText] = await Promise.all([
-    WebAssembly.instantiateStreaming(fetch("gp_web.wasm"), {}),
+  const [gameModule, cfg, presentText, profilesText] = await Promise.all([
+    moduleBytes(),
     load("preview.json").then((r) => r.json()),
     load("assets/present.txt").then((r) => r.text()),
     load("profiles.toml", { cache: "no-store" }).then((r) => (r.ok ? r.text() : 'format = "0.2.0"\n')).catch(() => 'format = "0.2.0"\n'),
@@ -845,7 +876,12 @@ async function main() {
     if (cfg.levels && !cfg.levels.includes(wanted)) throw new Error(`no level \`${wanted}\`; this model has ${cfg.levels.join(", ")}`);
     startLevel = wanted;
   }
-  const p = new Preview(instance);
+  const host = await openHost(gameModule);
+  host.frameLimit = (10000 * cfg.frame_rate[1]) / cfg.frame_rate[0];
+  // Which module runs, and each frame's times, for the checks.
+  t.module = moduleSource;
+  t.timing = host.timing;
+  const p = new Preview(host);
   let bundle;
   try {
     bundle = await fetchBundle(profile, p);
@@ -1226,7 +1262,7 @@ async function main() {
   if (q.has("control")) {
     // A second model for still pictures, so asking for one never moves the
     // one being watched (seeking back starts a model over from power-on).
-    const stills = new Preview(await WebAssembly.instantiate(module, {}));
+    const stills = new Preview(await openHost(gameModule));
     control(p, stills, bundle, presentText, canvas, draw, profile, st);
     placeInView(canvas, cfg.visible, cfg.view);
     return;
@@ -2051,10 +2087,5 @@ main().catch((e) => {
   console.error(e);
   // On the page too, so a refused model (one naming ext hooks this module
   // has no crate for) never looks like a game that just does less.
-  const p = document.createElement("p");
-  p.id = "error";
-  p.setAttribute("role", "alert");
-  p.textContent = `The preview didn't start: ${e?.message ?? e}`;
-  p.style.cssText = "color: #fdd; background: #511; font: 16px/1.4 system-ui, sans-serif; max-width: 720px; margin: 16px auto; padding: 12px 16px; white-space: pre-wrap;";
-  document.body.prepend(p);
+  showError(`The preview didn't start: ${e?.message ?? e}`);
 });

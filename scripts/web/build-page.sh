@@ -12,8 +12,9 @@
 # OUT.served.txt).
 #
 # GAME_DIR is the game's folder (games/donkey-kong). The repo holds no game,
-# so the build works in a copy of it with the game's hook crate put in place
-# of crates/gp-ext-game, and its template folders where the build reads them.
+# so the build works in a copy of it with the game's template folders where
+# the build reads them. The page itself has no game's hooks: they go in the
+# game's own module (`gp game build`), which is one of the play files.
 #
 # Exit codes: 0 built and clean, 1 the served check found game data, 2 couldn't
 # build, or a ROM wasn't in $GP_ROM_DIR to compare with.
@@ -28,22 +29,10 @@ home="${GP_HOME:-$HOME/.gameprinter}"
 gp="${GP:-$real/target/debug/gp}"
 repo="$real/target/page-src"
 export CARGO_TARGET_DIR="$real/target/page-target"
-export GP_HOOK_MODELS="donkey_kong_oe,rivet_rodeo"
 
 rm -rf "$repo"
 mkdir -p "$repo/templates" "$repo/sources"
 rsync -a --exclude target --exclude .git "$real/" "$repo/"
-rm -rf "$repo/crates/gp-ext-game"
-cp -R "$game/ext" "$repo/crates/gp-ext-game"
-rm -f "$repo/crates/gp-ext-game/Cargo.lock"
-python3 -I - "$repo/crates/gp-ext-game/Cargo.toml" <<'PY'
-import sys
-p = sys.argv[1]; s = open(p).read()
-s = s.replace('name = "gp-ext-dk"', 'name = "gp-ext-game"')
-s = s.replace('../../../gameprinter/crates/gp-sim', '../gp-sim').replace('../../../gameprinter/crates/gp-cycles', '../gp-cycles')
-s = s.replace('\n[workspace]\n', '\n')
-open(p, 'w').write(s)
-PY
 mkdir -p "$repo/templates/donkey-kong-oe" "$repo/templates/rivet-rodeo"
 rsync -a --exclude open --exclude ext "$game/" "$repo/templates/donkey-kong-oe/"
 rsync -a --exclude generators "$game/open/" "$repo/templates/rivet-rodeo/"
@@ -70,10 +59,9 @@ lap "build-lift.sh"
 
 # The game's name, kept in one place (scripts/rivet-rodeo/name.txt).
 title="$(python3 -I -c 'import sys; print(open(sys.argv[1]).read().strip())' "$game/open/generators/name.txt")"
-hooks="$("$gp" package hooks "$game")"
-python3 -I - "$out" "$title" "$out/game/lift/game.json" "$repo/sources/nes.toml" "$repo/scripts/web/sources.toml" "${GP_PAGE_SOURCE:-staging}" "$hooks" "$game/package.toml" <<'EOF'
+python3 -I - "$out" "$title" "$out/game/lift/game.json" "$repo/sources/nes.toml" "$repo/scripts/web/sources.toml" "${GP_PAGE_SOURCE:-staging}" "$game/package.toml" <<'EOF'
 import json, sys, tomllib
-out, title, game_file, registry, sources_file, source_name, hooks, package = sys.argv[1:]
+out, title, game_file, registry, sources_file, source_name, package = sys.argv[1:]
 game = json.load(open(game_file))
 sources = tomllib.load(open(registry, "rb"))["source"]
 names, known = [], {}
@@ -87,7 +75,6 @@ page = {
     "title": title,
     "game": tomllib.load(open(package, "rb"))["package"]["name"],
     "source": tomllib.load(open(sources_file, "rb"))[source_name],
-    "hooks": [hooks],
     "rom": {
         "game": game["game"],
         "title": game["title"],
@@ -141,7 +128,9 @@ for f in "$out/game/lift/"*; do
   [ "$(basename "$f")" = gp-web-lift.wasm ] || mv "$f" "$play/lift/"
 done
 
-lap "the page's own files"
+"$gp" game kit -o "$real/target/module-kit" >/dev/null
+GP_HOME="$home" "$gp" game build "$game" --kit "$real/target/module-kit" -o "$play/module.wasm"
+lap "the game's module"
 echo "page $(du -sk "$out" | cut -f1) KB in $out"
 
 # Holds none of the game's data: every file of both folders against each ROM.

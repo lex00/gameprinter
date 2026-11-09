@@ -55,5 +55,10 @@ local-registry:
     GP_HOME={{quote(gp_home)}} scripts/web/local-registry.sh
 
 # Serve them at http://127.0.0.1:8377/p?g=lex00/donkey-kong until stopped.
+# A game's module, built in the sandbox from the kit (GAME is its package folder).
+game-module GAME OUT:
+    target/debug/gp game kit -o target/module-kit
+    target/debug/gp game build {{quote(GAME)}} --kit target/module-kit -o {{quote(OUT)}}
+
 local-play:
     target/debug/gp registry serve {{quote(gp_home)}}/registry --page target/page-local

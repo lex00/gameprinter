@@ -71,6 +71,15 @@ fn rom_windows(rom: &[u8]) -> HashMap<&[u8], Vec<usize>> {
     map
 }
 
+/// Where `data` holds a run of `rom`'s bytes, as (ROM offset, length).
+pub fn runs_of_rom(data: &[u8], rom: &[u8]) -> Vec<(usize, usize)> {
+    let windows = rom_windows(rom);
+    let pos: Vec<usize> = (0..data.len()).collect();
+    let mut shared = Vec::new();
+    shared_runs(data, &pos, rom, &windows, "raw", &mut shared);
+    shared.into_iter().map(|s| (s.rom_offset, s.len)).collect()
+}
+
 /// Whether every byte of `w` is the one before it plus the same step.
 fn counts(w: &[u8]) -> bool {
     let step = w[1].wrapping_sub(w[0]);

@@ -23,9 +23,6 @@ pub struct Ask {
     pub version: Option<String>,
     /// UTC, `YYYY-MM-DDTHH:MM:SSZ`, for the signed files' expiries.
     pub now: String,
-    /// The hook hashes this page's player was built with.
-    #[serde(default)]
-    pub hooks: Vec<String>,
     /// For content: the game it must be offered for.
     pub for_game: Option<String>,
     /// Every key fetched so far, null when the source doesn't hold it.
@@ -104,11 +101,9 @@ fn run(ask: &Ask, t: &Held<'_>) -> Result<Resolved, String> {
             return Err(format!("{}@{version} isn't offered for {game}", ask.name));
         }
     }
-    if let Some(h) = m.hook_hash()
-        && !ask.hooks.contains(&h)
-    {
+    if m.hook_hash().is_some() && !m.under("play").any(|(p, _)| p.ends_with("module.wasm")) {
         return Err(format!(
-            "{}@{version} has hook code ({h}) this player wasn't built with",
+            "{}@{version} has hook code and no module, so this player can't run it",
             ask.name
         ));
     }
