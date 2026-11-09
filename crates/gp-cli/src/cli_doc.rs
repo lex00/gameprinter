@@ -18,7 +18,9 @@ const PUBLIC: &[&str] = &[
     "assets", "corpus", "game", "model", "package", "registry", "template",
 ];
 /// Top-level commands in the lab set.
-const LAB: &[&str] = &["baseline", "clip", "interp", "self", "tool", "worker"];
+const LAB: &[&str] = &[
+    "baseline", "clip", "interp", "level", "self", "tool", "worker",
+];
 
 /// A set's table rows: each leaf command's words and first help line.
 fn rows(cmd: &clap::Command, words: &str, out: &mut Vec<(String, String)>) {

@@ -275,6 +275,13 @@ impl ModuleRuntime {
         self.call(wire::DESCRIBE, CALL_TICKS, |_| {})
     }
 
+    /// Puts the session's level on the flat floor of
+    /// `gp_interp::variant::flat_floor`: `flat-level` in `wit/game/game.wit`.
+    pub fn flat_level(&mut self, level: u32) -> Result<(), String> {
+        self.call(wire::FLAT_LEVEL, CALL_TICKS, |w| w.u32(level))
+            .map(|_| ())
+    }
+
     /// Makes `step` return the hooks' sound-driver writes as events.
     pub fn set_apu_events(&mut self) -> Result<(), String> {
         self.call(wire::SET_APU_EVENTS, CALL_TICKS, |_| {})

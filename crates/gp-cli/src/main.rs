@@ -26,6 +26,7 @@ mod roms;
 mod run;
 mod scenario;
 mod screen;
+mod search;
 mod served;
 mod tape;
 mod template;
@@ -102,6 +103,12 @@ enum Cmd {
     Interp {
         #[command(subcommand)]
         cmd: InterpCmd,
+    },
+    /// The searches and the stage measure of a level, run through the game's
+    /// module.
+    Level {
+        #[command(subcommand)]
+        cmd: search::LevelCmd,
     },
     /// Fetch a game by its exact id and lift it from a person's ROMs.
     Game {
@@ -212,6 +219,29 @@ enum InterpCmd {
         input: PathBuf,
         #[arg(long)]
         hashes: PathBuf,
+    },
+    /// Check that each level's goal can be reached by the player's own
+    /// moves (gp_interp::reach, the player alone) and measure the jump's
+    /// envelope, through the game's module. With `--record`, also search each
+    /// level with its enemies and rules for a run to the goal and write it as
+    /// a model baseline, `MODEL/baselines/<level>.toml`. Exits 1 when a goal
+    /// can't be reached or no run is found.
+    Reach {
+        /// A model directory (holding model.toml) or a model.toml file.
+        model: PathBuf,
+        /// The game's built module. Needed for a model with hooks.
+        #[arg(long)]
+        module: Option<PathBuf>,
+        /// The model's lifted assets (default:
+        /// $GP_HOME/work/assets/<model.source>).
+        #[arg(long, value_name = "DIR")]
+        assets: Option<PathBuf>,
+        /// Only this level (repeat for more; default: every level).
+        #[arg(long)]
+        level: Vec<String>,
+        /// Record a run through each level as a model baseline.
+        #[arg(long)]
+        record: bool,
     },
     /// Compare the model with the original on a baseline's input.
     Compare {
@@ -459,6 +489,24 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                     assets,
                 },
         } => run::compare(dir, rom, baseline, assets),
+        Cmd::Interp {
+            cmd:
+                InterpCmd::Reach {
+                    model,
+                    module,
+                    assets,
+                    level,
+                    record,
+                },
+        } => search::reach_cmd(
+            model,
+            assets.as_deref(),
+            level,
+            *record,
+            module.as_deref(),
+            &gp_evidence::Paths::from_env()?,
+        ),
+        Cmd::Level { cmd } => search::level_run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Game {
             cmd:
                 GameCmd::Fetch {

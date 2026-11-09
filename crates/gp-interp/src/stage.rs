@@ -22,7 +22,9 @@
 use std::collections::BTreeMap;
 
 use gp_sim::spec::{EventKind, Level, Role, Tile};
-use gp_sim::{Exts, Fx, Spec, World, step_with_ext};
+use gp_sim::{Fx, Spec, World};
+
+use crate::variant::{Edit, Sim, Variant};
 
 /// Frames the player holds right for the walk speed.
 pub const WALK_FRAMES: u32 = 96;
@@ -479,7 +481,7 @@ fn died(ev: &[gp_sim::Event]) -> bool {
 
 /// Powers on, presses Start at `start` and plays until a held direction
 /// moves the player: the world then, and its frame.
-fn ready(spec: &Spec, exts: &Exts, o: &Options, start: u64) -> Result<World, String> {
+fn ready(spec: &Variant, o: &Options, start: u64) -> Result<World, String> {
     let mut w = World::power_on(spec);
     let p = player(spec, &w).ok_or("the level has no player")?;
     let (_, right, _, _) = masks(spec, w.bodies[p].kind);
@@ -494,7 +496,7 @@ fn ready(spec: &Spec, exts: &Exts, o: &Options, start: u64) -> Result<World, Str
             let Some(p) = player(spec, &t) else { continue };
             let x0 = t.bodies[p].x;
             for _ in 0..6 {
-                step_with_ext(spec, &mut t, right, exts);
+                spec.step(&mut t, right);
             }
             if let Some(q) = player(spec, &t)
                 && t.bodies[q].x != x0
@@ -503,7 +505,7 @@ fn ready(spec: &Spec, exts: &Exts, o: &Options, start: u64) -> Result<World, Str
                 return Ok(w);
             }
         }
-        step_with_ext(spec, &mut w, pad, exts);
+        spec.step(&mut w, pad);
     }
     Err("the player never moved in 4000 frames from power-on".into())
 }
@@ -540,14 +542,7 @@ fn center(spec: &Spec, w: &World, p: usize) -> i64 {
 
 /// The player alone: climbs ladder `i` from its foot; the frames to stand
 /// on the girder above.
-fn climb(
-    spec: &Spec,
-    exts: &Exts,
-    o: &Options,
-    lay: &Layout,
-    base: &World,
-    i: usize,
-) -> Option<(u32, i64)> {
+fn climb(spec: &Variant, o: &Options, lay: &Layout, base: &World, i: usize) -> Option<(u32, i64)> {
     let l = &lay.ladders[i];
     let (lo, up) = (l.lower?, l.upper?);
     let top = lay.girders[up].surface(l.cx())?;
@@ -562,11 +557,11 @@ fn climb(
             }
             let p = player(spec, &w)?;
             let mut holds = Vec::new();
-            if walk_to(spec, exts, o, &mut w, l.cx() + dx, &mut holds, base.frame).is_err() {
+            if walk_to(spec, o, &mut w, l.cx() + dx, &mut holds, base.frame).is_err() {
                 continue;
             }
             let at = w.frame;
-            if up_to(spec, exts, o, &mut w, p, top, &mut holds, base.frame) {
+            if up_to(spec, o, &mut w, p, top, &mut holds, base.frame) {
                 let f = (w.frame - at) as u32;
                 if best.is_none_or(|b| f < b.0) {
                     best = Some((f, dx));
@@ -581,8 +576,7 @@ fn climb(
 /// Holds up until the player stands at row `top`: whether he did.
 #[allow(clippy::too_many_arguments)]
 fn up_to(
-    spec: &Spec,
-    exts: &Exts,
+    spec: &Variant,
     o: &Options,
     w: &mut World,
     p: usize,
@@ -599,7 +593,7 @@ fn up_to(
             _ => holds.push((upm, f, f)),
         }
         put_away(w, &o.enemies);
-        if died(&step_with_ext(spec, w, upm, exts)) {
+        if died(&spec.step(w, upm)) {
             return false;
         }
         let b = &w.bodies[p];
@@ -620,23 +614,21 @@ fn up_to(
 /// Walks the player alone to `x` on its girder, then climbs: the holds
 /// played, as (buttons, first frame, last frame) from `from`.
 fn walk_to(
-    spec: &Spec,
-    exts: &Exts,
+    spec: &Variant,
     o: &Options,
     w: &mut World,
     x: i64,
     holds: &mut Vec<Hold>,
     from: u64,
 ) -> Result<(), String> {
-    walk_jumping(spec, exts, o, w, x, holds, from, None)
+    walk_jumping(spec, o, w, x, holds, from, None)
 }
 
 /// [`walk_to`], jumping when a roller on the player's girder coming his
 /// way is `jump` pixels or nearer.
 #[allow(clippy::too_many_arguments)]
 fn walk_jumping(
-    spec: &Spec,
-    exts: &Exts,
+    spec: &Variant,
     o: &Options,
     w: &mut World,
     x: i64,
@@ -683,7 +675,7 @@ fn walk_jumping(
             _ => holds.push((pad, f, f)),
         }
         put_away(w, &o.enemies);
-        if died(&step_with_ext(spec, w, pad, exts)) {
+        if died(&spec.step(w, pad)) {
             return Err("the player died walking".into());
         }
     }
@@ -691,7 +683,14 @@ fn walk_jumping(
 }
 
 /// Measures a girder stage's play.
-pub fn measure(spec: &Spec, level: usize, exts: &Exts, o: &Options) -> Result<Measures, String> {
+pub fn measure(
+    sim: &dyn Sim,
+    base_spec: &Spec,
+    level: usize,
+    o: &Options,
+) -> Result<Measures, String> {
+    let v = sim.open(base_spec, &Edit::Full)?;
+    let spec = &v;
     let lay = layout(spec, level);
     let mut m = Measures::default();
     if lay.girders.len() < 2 {
@@ -701,7 +700,7 @@ pub fn measure(spec: &Spec, level: usize, exts: &Exts, o: &Options) -> Result<Me
             lay.girders.len()
         ));
     }
-    let base = ready(spec, exts, o, 40)?;
+    let base = ready(spec, o, 40)?;
     m.ready = base.frame;
     let p = player(spec, &base).ok_or("no player")?;
     let (_, right, _, jump) = masks(spec, base.bodies[p].kind);
@@ -710,12 +709,12 @@ pub fn measure(spec: &Spec, level: usize, exts: &Exts, o: &Options) -> Result<Me
     let x0 = w.bodies[p].x;
     for _ in 0..WALK_FRAMES {
         put_away(&mut w, &o.enemies);
-        step_with_ext(spec, &mut w, right, exts);
+        spec.step(&mut w, right);
     }
     m.walk_px = (w.bodies[p].x.sub(x0)).floor().max(1);
     // Each ladder's climb.
     for i in 0..lay.ladders.len() {
-        let c = climb(spec, exts, o, &lay, &base, i);
+        let c = climb(spec, o, &lay, &base, i);
         m.climbs.push(Climb {
             ladder: i,
             frames: c.map(|c| c.0),
@@ -784,7 +783,6 @@ pub fn measure(spec: &Spec, level: usize, exts: &Exts, o: &Options) -> Result<Me
                 if past > 0 {
                     if walk_to(
                         spec,
-                        exts,
                         o,
                         &mut t,
                         l.cx() + dx + way * past,
@@ -797,8 +795,8 @@ pub fn measure(spec: &Spec, level: usize, exts: &Exts, o: &Options) -> Result<Me
                     }
                     walked += 2 * past;
                 }
-                if walk_to(spec, exts, o, &mut t, l.cx() + dx, &mut h, base.frame).is_ok()
-                    && up_to(spec, exts, o, &mut t, p, top, &mut h, base.frame)
+                if walk_to(spec, o, &mut t, l.cx() + dx, &mut h, base.frame).is_ok()
+                    && up_to(spec, o, &mut t, p, top, &mut h, base.frame)
                 {
                     done = Some((t, h, walked));
                     break;
@@ -827,20 +825,14 @@ pub fn measure(spec: &Spec, level: usize, exts: &Exts, o: &Options) -> Result<Me
     // Rollers.
     if let Some(roller) = o.roller {
         // Nothing touches the player: no kind but his has a contact.
-        let mut safe = spec.clone();
-        let pk = base.bodies[p].kind;
-        for (k, kind) in safe.kinds.iter_mut().enumerate() {
-            if k != pk {
-                kind.contact = None;
-            }
-        }
+        let safe = sim.open(base_spec, &Edit::Contactless(base.bodies[p].kind))?;
         let rh = spec.kinds[roller].size[1].floor();
         let rw = spec.kinds[roller].size[0].floor();
         for run in 0..o.runs {
-            let mut w = ready(spec, exts, o, 40 + u64::from(run) * 37)?;
+            let mut w = ready(spec, o, 40 + u64::from(run) * 37)?;
             let mut live: BTreeMap<usize, Life> = BTreeMap::new();
             for _ in 0..o.run_frames {
-                let ev = step_with_ext(&safe, &mut w, 0, exts);
+                let ev = safe.step(&mut w, 0);
                 for (i, b) in w.bodies.iter().enumerate() {
                     if b.kind != roller {
                         continue;
@@ -924,7 +916,7 @@ pub fn measure(spec: &Spec, level: usize, exts: &Exts, o: &Options) -> Result<Me
                     back.pop_front();
                 }
                 // Keep him where he stands.
-                let ev = step_with_ext(&safe, &mut w, 0, exts);
+                let ev = safe.step(&mut w, 0);
                 if died(&ev) || !playing(&w, o) {
                     m.notes.push(format!(
                         "windows: girder {g} ended at frame {} ({})",
@@ -959,7 +951,7 @@ pub fn measure(spec: &Spec, level: usize, exts: &Exts, o: &Options) -> Result<Me
                             let mut alive = true;
                             for f in 0..WINDOW_AFTER {
                                 let pad = if f < 2 { jump } else { 0 };
-                                if died(&step_with_ext(spec, &mut t, pad, exts)) {
+                                if died(&spec.step(&mut t, pad)) {
                                     alive = false;
                                     break;
                                 }
@@ -993,12 +985,14 @@ pub fn measure(spec: &Spec, level: usize, exts: &Exts, o: &Options) -> Result<Me
 /// the frame the next stage after the last starts on. For a model
 /// baseline of an authored stage.
 pub fn clears(
-    spec: &Spec,
-    exts: &Exts,
+    sim: &dyn Sim,
+    base_spec: &Spec,
     o: &Options,
     m: &Measures,
     n: u32,
 ) -> Result<(Vec<Hold>, Vec<u64>, u64), String> {
+    let v = sim.open(base_spec, &Edit::Full)?;
+    let spec = &v;
     let lay = m.layout.as_ref().ok_or("not measured")?;
     let live = Options {
         enemies: Vec::new(),
@@ -1017,7 +1011,7 @@ pub fn clears(
                 _ => holds.push((pad, f, f)),
             }
         }
-        step_with_ext(spec, &mut w, pad, exts);
+        spec.step(&mut w, pad);
     }
     let mut cleared = Vec::new();
     let wait_ready = |w: &mut World| -> Result<(), String> {
@@ -1027,13 +1021,13 @@ pub fn clears(
                 let mut t = w.clone();
                 let x0 = t.bodies[p].x;
                 for _ in 0..6 {
-                    step_with_ext(spec, &mut t, right, exts);
+                    spec.step(&mut t, right);
                 }
                 if t.bodies[p].x != x0 && t.bodies[p].alive {
                     return Ok(());
                 }
             }
-            step_with_ext(spec, w, 0, exts);
+            spec.step(w, 0);
         }
         Err("play never started".into())
     };
@@ -1076,28 +1070,19 @@ pub fn clears(
                     let f = t.frame as u32 + 1;
                     h.push((pad, f, f));
                 }
-                if died(&step_with_ext(spec, &mut t, pad, exts)) {
+                if died(&spec.step(&mut t, pad)) {
                     return None;
                 }
             }
             let at = center(spec, &t, p);
             let way = if l.cx() + dx >= at { 1 } else { -1 };
             if past > 0
-                && walk_to(
-                    spec,
-                    exts,
-                    &live,
-                    &mut t,
-                    l.cx() + dx + way * past,
-                    &mut h,
-                    0,
-                )
-                .is_err()
+                && walk_to(spec, &live, &mut t, l.cx() + dx + way * past, &mut h, 0).is_err()
             {
                 return None;
             }
-            walk_jumping(spec, exts, &live, &mut t, l.cx() + dx, &mut h, 0, jump).ok()?;
-            if !up_to(spec, exts, &live, &mut t, p, top, &mut h, 0) {
+            walk_jumping(spec, &live, &mut t, l.cx() + dx, &mut h, 0, jump).ok()?;
+            if !up_to(spec, &live, &mut t, p, top, &mut h, 0) {
                 return None;
             }
             Some((t, h))
@@ -1160,7 +1145,7 @@ pub fn clears(
             if !playing(&w, o) {
                 break;
             }
-            step_with_ext(spec, &mut w, 0, exts);
+            spec.step(&mut w, 0);
         }
         cleared.push(w.frame);
     }

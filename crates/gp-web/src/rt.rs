@@ -162,6 +162,11 @@ impl Sessions {
                 self.get(id)?;
                 gp_interp::reads::write_reads(&gp_sim::reads::take(), w);
             }
+            wire::FLAT_LEVEL => {
+                let level = r.u32()? as usize;
+                self.get(id)?
+                    .edit_spec(|s| gp_interp::variant::flat_floor(s, level))?;
+            }
             wire::SPEC_DIGEST => w.str(&gp_sim::save::spec_digest(self.get(id)?.spec())),
             _ => return Err(format!("this module has no call {op}")),
         }

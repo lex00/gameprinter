@@ -32,9 +32,10 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap};
 
 use gp_sim::spec::EventKind;
-use gp_sim::{Exts, Fx, Spec, World, step_with_ext};
+use gp_sim::{Fx, Spec, World};
 
 use crate::reach::{self, Dir, End, LIMIT, Move, Pad};
+use crate::variant::{Edit, Sim};
 
 /// What [`score`] searches and measures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -332,14 +333,19 @@ fn words(mv: &Move) -> String {
 
 /// Searches `level` for a run to its goal (or `opts.to_x`) and measures
 /// the window of every input of it.
-pub fn score(spec: &Spec, level: usize, exts: &Exts, opts: Options) -> Result<Difficulty, String> {
-    let mut spec = spec.clone();
-    spec.start_level = level;
-    let kind = reach::player_kind(&spec, level)?;
-    let pad = reach::pad(&spec, kind)?;
-    let tries = reach::moves(&spec, kind);
+pub fn score(
+    spec: &Spec,
+    level: usize,
+    sim: &dyn Sim,
+    opts: Options,
+) -> Result<Difficulty, String> {
+    let kind = reach::player_kind(spec, level)?;
+    let run = sim.open(spec, &Edit::StartAt(level))?;
+    let spec = &run.spec;
+    let pad = reach::pad(spec, kind)?;
+    let tries = reach::moves(spec, kind);
     let name = spec.levels[level].name.clone();
-    let mut w = World::power_on(&spec);
+    let mut w = World::power_on(spec);
     let p = w
         .bodies
         .iter()
@@ -354,7 +360,7 @@ pub fn score(spec: &Spec, level: usize, exts: &Exts, opts: Options) -> Result<Di
     };
     let mut first = Vec::new();
     if !matches!(
-        reach::play_recorded(&spec, exts, &pad, p, &mut w, settle, &mut first),
+        reach::play_recorded(&run, &pad, p, &mut w, settle, &mut first),
         End::Stand(..)
     ) {
         return Err(format!(
@@ -383,7 +389,7 @@ pub fn score(spec: &Spec, level: usize, exts: &Exts, opts: Options) -> Result<Di
         for m in &tries {
             let mut w = nodes[i].world.clone();
             let mut buttons = Vec::new();
-            let e = reach::play_recorded(&spec, exts, &pad, p, &mut w, *m, &mut buttons);
+            let e = reach::play_recorded(&run, &pad, p, &mut w, *m, &mut buttons);
             frames += buttons.len() as u64;
             match e {
                 End::Goal => {
@@ -447,9 +453,9 @@ pub fn score(spec: &Spec, level: usize, exts: &Exts, opts: Options) -> Result<Di
     }
     let mut parts: Vec<Vec<String>> = vec![Vec::new(); starts.len()];
     {
-        let mut w = World::power_on(&spec);
+        let mut w = World::power_on(spec);
         for (f, &b) in buttons.iter().enumerate() {
-            let events = step_with_ext(&spec, &mut w, b, exts);
+            let events = run.step(&mut w, b);
             let Some(j) = starts.iter().rposition(|&s| s <= f) else {
                 continue;
             };
@@ -488,10 +494,10 @@ pub fn score(spec: &Spec, level: usize, exts: &Exts, opts: Options) -> Result<Di
     // around it stay as they were (enemies keep their timing).
     let mut snaps = Vec::with_capacity(buttons.len() + 1);
     {
-        let mut w = World::power_on(&spec);
+        let mut w = World::power_on(spec);
         for &b in &buttons {
             snaps.push(w.clone());
-            step_with_ext(&spec, &mut w, b, exts);
+            run.step(&mut w, b);
         }
         snaps.push(w);
     }
@@ -534,7 +540,7 @@ pub fn score(spec: &Spec, level: usize, exts: &Exts, opts: Options) -> Result<Di
                         return false;
                     }
                 }
-                let events = step_with_ext(&spec, &mut w, b, exts);
+                let events = run.step(&mut w, b);
                 frames += 1;
                 f += 1;
                 for e in &events {
@@ -545,7 +551,7 @@ pub fn score(spec: &Spec, level: usize, exts: &Exts, opts: Options) -> Result<Di
                         return false;
                     }
                 }
-                if reach::game_frozen(&spec, &w) || !w.bodies[p].active() {
+                if reach::game_frozen(spec, &w) || !w.bodies[p].active() {
                     return false;
                 }
             }
@@ -554,15 +560,7 @@ pub fn score(spec: &Spec, level: usize, exts: &Exts, opts: Options) -> Result<Di
             }
             for &k in &path[j + 2..=last + 1] {
                 let mut b = Vec::new();
-                let e = reach::play_recorded(
-                    &spec,
-                    exts,
-                    &pad,
-                    p,
-                    &mut w,
-                    nodes[k].mv.unwrap(),
-                    &mut b,
-                );
+                let e = reach::play_recorded(&run, &pad, p, &mut w, nodes[k].mv.unwrap(), &mut b);
                 frames += b.len() as u64;
                 match e {
                     End::Goal => return true,
@@ -576,8 +574,7 @@ pub fn score(spec: &Spec, level: usize, exts: &Exts, opts: Options) -> Result<Di
                 // player who stops early walks on.
                 let mut b = Vec::new();
                 let e = reach::play_recorded(
-                    &spec,
-                    exts,
+                    &run,
                     &pad,
                     p,
                     &mut w,
@@ -703,9 +700,17 @@ mod tests {
 
     use super::*;
     use crate::reach::tests::{level, spec};
+    use crate::variant::NativeSim;
+    use gp_sim::{Exts, step_with_ext};
 
     fn run(gap: usize) -> Difficulty {
-        let d = score(&spec(level(gap, &[])), 0, &Exts::new(), Options::default()).unwrap();
+        let d = score(
+            &spec(level(gap, &[])),
+            0,
+            &NativeSim(&Exts::new()),
+            Options::default(),
+        )
+        .unwrap();
         assert!(d.cleared, "gap {gap}: {d:?}");
         d
     }
@@ -749,8 +754,8 @@ mod tests {
     #[test]
     fn the_run_replays_and_the_score_repeats() {
         let s = spec(level(3, &[]));
-        let a = score(&s, 0, &Exts::new(), Options::default()).unwrap();
-        let b = score(&s, 0, &Exts::new(), Options::default()).unwrap();
+        let a = score(&s, 0, &NativeSim(&Exts::new()), Options::default()).unwrap();
+        let b = score(&s, 0, &NativeSim(&Exts::new()), Options::default()).unwrap();
         assert_eq!(a, b);
         let mut w = World::power_on(&s);
         let mut goal = false;

@@ -43,6 +43,10 @@ Donkey Kong's module in the page, about 600 frames of play in headless Chrome on
 
 A frame is 16.7 ms. Phones haven't been measured (P4).
 
+## The searches
+
+`gp interp reach`, `gp level measure` and `gp level difficulty` run a game's hooks through its module with the world held on the host: `load-state`, `step` and `canonical-state` each frame, and each spec variant loaded as edited model text. The measure's flat floor is the one spec change model text can't say, so it is `run.flat-level`, a call that puts one session's level on the flat floor after `load`. See [docs/inventory.md](inventory.md).
+
 ## Not done yet
 
 - The official client's scan of a module on fetch waits for 3.3, when `gp` runs modules.

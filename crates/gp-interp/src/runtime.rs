@@ -130,6 +130,21 @@ impl Interp {
         }
     }
 
+    /// Edits the running spec, which a game's module does for a change the
+    /// model text can't express ([`crate::variant::Edit::AloneFlat`]), and
+    /// powers the model on from it.
+    pub fn edit_spec(
+        &mut self,
+        f: impl FnOnce(&mut Spec) -> Result<(), String>,
+    ) -> Result<(), String> {
+        self.view.take();
+        let mut spec = (*self.spec).clone();
+        f(&mut spec)?;
+        self.world = World::power_on(&spec);
+        self.spec = Arc::new(spec);
+        Ok(())
+    }
+
     /// The `ext` hooks the runtime steps the model with.
     pub fn exts(&self) -> &Exts {
         &self.exts

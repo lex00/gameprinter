@@ -10,12 +10,14 @@
 //! for.
 
 use std::cell::OnceCell;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use gp_evidence::Paths;
+use gp_interp::variant::{self, Edit, Sim, Stepper, Variant};
 use gp_interp::{Bundle, Interp, Lifted};
 use gp_module::{DrawsReport, ModuleCode, ModuleRuntime};
 use gp_runtime::{
@@ -128,6 +130,12 @@ impl Source {
         })
     }
 
+    /// A run of this source's model edited to `m`, started at power-on:
+    /// a [`Source`] compiled from it, checked against the module as usual.
+    pub(crate) fn with_model(&self, m: &gp_model::Model, module: Option<&Path>) -> Result<Self> {
+        Self::new(Bundle::new(m, self.bundle.assets.clone()), module)
+    }
+
     pub(crate) fn parse_model(&self) -> Result<gp_model::Model> {
         self.bundle.parse_model().map_err(|e| anyhow!("{e}"))
     }
@@ -148,6 +156,90 @@ impl Source {
                     .with_exts(self.exts.clone()),
             ))),
         }
+    }
+}
+
+/// Opens the searches' spec variants: the module's own session, loaded from
+/// the edited model text ([`gp_interp::variant`]), or the built-in
+/// interpreter with this model's hooks when it has no module.
+impl Sim for Source {
+    fn open(&self, base: &Spec, edit: &Edit) -> Result<Variant<'_>, String> {
+        let spec = edit.spec(base)?;
+        let Some(code) = &self.module else {
+            return variant::native(&self.exts, base, edit);
+        };
+        let model = self.bundle.parse_model()?;
+        let text = edit.model(&model, base)?;
+        let bundle = Bundle::new(&text, self.bundle.assets.clone());
+        let mut rt = code.load(&bundle.to_bytes())?;
+        if let Edit::AloneFlat(level) = edit {
+            rt.flat_level(*level as u32)?;
+        }
+        let theirs = rt.spec_digest()?;
+        let ours = gp_sim::save::spec_digest(&spec);
+        if theirs != ours {
+            return Err(format!(
+                "the model text of {edit:?} doesn't compile to the edited spec: the module has {theirs}, here {ours}"
+            ));
+        }
+        let events = spec
+            .events
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (name.clone(), gp_sim::spec::EventKind(i)))
+            .collect();
+        Ok(Variant::new(
+            spec,
+            Box::new(ModuleStepper {
+                rt,
+                events,
+                last: Vec::new(),
+            }),
+        ))
+    }
+}
+
+/// Steps a world the host holds through a session of a game's module:
+/// `load-state`, `step`, `canonical-state` for each frame, and no load when
+/// the world is still the state the module just gave back.
+struct ModuleStepper {
+    rt: ModuleRuntime,
+    events: HashMap<String, gp_sim::spec::EventKind>,
+    /// The canonical state the module holds.
+    last: Vec<u8>,
+}
+
+impl Stepper for ModuleStepper {
+    fn step(&mut self, spec: &Spec, w: &mut World, buttons: u8) -> Vec<gp_sim::Event> {
+        let state = w.canonical();
+        if state != self.last {
+            self.rt
+                .load_state(&state)
+                .unwrap_or_else(|e| panic!("load-state into the module failed: {e}"));
+        }
+        let input = InputFrame {
+            buttons: u32::from(buttons),
+            axes: Vec::new(),
+            reset: false,
+        };
+        let events = self
+            .rt
+            .step(std::slice::from_ref(&input))
+            .unwrap_or_else(|e| panic!("a step in the module failed: {e}"));
+        self.last = self.rt.canonical_state();
+        *w = World::from_canonical(spec, &self.last)
+            .unwrap_or_else(|e| panic!("the module's canonical state doesn't decode: {e}"));
+        events
+            .into_iter()
+            .filter_map(|e| {
+                let kind = self.events.get(&e.kind).copied()?;
+                Some(gp_sim::Event {
+                    kind,
+                    frame: e.frame,
+                    entity: e.entity.map(|i| i as usize),
+                })
+            })
+            .collect()
     }
 }
 
@@ -254,6 +346,15 @@ impl Model {
             })),
             Self::Module(h) => h.rt.report_draws().map_err(|e| anyhow!("{e}")),
         }
+    }
+}
+
+impl gp_interp::baseline::Runs for Model {
+    fn run_spec(&self) -> &Spec {
+        self.spec()
+    }
+    fn run_world(&self) -> World {
+        self.world().clone()
     }
 }
 

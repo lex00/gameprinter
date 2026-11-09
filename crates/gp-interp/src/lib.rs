@@ -34,6 +34,8 @@
 //! - [`screen`]: the two games' pictures compared frame by frame, as a
 //!   background layer and a sprite layer, with the places they differ
 //!   grouped into boxes.
+//! - [`variant`]: the searches' edits of a model, as the spec edit and as
+//!   the model text a game's module loads.
 //! - [`reads`]: what a run read of the spec and which hooks it called, by
 //!   name, as a clip's score keeps it.
 //! - [`external`]: an external runtime's trace (one that can't load the
@@ -70,6 +72,7 @@ pub mod stage;
 pub mod starts;
 pub mod state;
 pub mod translate;
+pub mod variant;
 
 pub use lifted::{Bundle, Lifted};
 

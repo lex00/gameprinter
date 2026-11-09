@@ -16,8 +16,8 @@
 //! rises and how far it carries walking and running. That is the
 //! mechanic's reachable envelope, the facts a level generator needs.
 //!
-//! The model's `ext` hooks (`exts`, from crates/gp-exts in gp) run as they
-//! do in the interpreter, so a hooked player moves as it plays. Limits, all
+//! The model's `ext` hooks run as they do in the interpreter, through the
+//! game's module, so a hooked player moves as it plays. Limits, all
 //! on purpose for a spike: enemies, exits and state machines other than the
 //! game's own are left out (only the player's spawn is kept); a landing is keyed by its whole pixel and
 //! restarts with no speed, so momentum carried from one move into the
@@ -28,7 +28,9 @@ use std::collections::{BTreeMap, VecDeque};
 
 use gp_sim::spec::{EventKind, Role};
 use gp_sim::world::ground_under;
-use gp_sim::{Exts, Fx, Spec, World, step_with_ext};
+use gp_sim::{Fx, Spec, World};
+
+use crate::variant::{Edit, Sim, Variant};
 
 /// The most frames one move may take before it's given up.
 pub(crate) const LIMIT: u32 = 600;
@@ -188,15 +190,7 @@ pub(crate) fn moves(spec: &Spec, kind: usize) -> Vec<Move> {
 
 /// Runs one move from the world `w` (the player standing still) and says
 /// how it ended. Counts the frames into `frames`.
-fn play(
-    spec: &Spec,
-    exts: &Exts,
-    pad: &Pad,
-    p: usize,
-    mut w: World,
-    m: Move,
-    frames: &mut u64,
-) -> End {
+fn play(v: &Variant, pad: &Pad, p: usize, mut w: World, m: Move, frames: &mut u64) -> End {
     let mut took_off = false;
     for t in 0..LIMIT {
         let since = t.checked_sub(m.runup);
@@ -221,7 +215,7 @@ fn play(
         if jump_on {
             buttons |= pad.jump;
         }
-        let events = step_with_ext(spec, &mut w, buttons, exts);
+        let events = v.step(&mut w, buttons);
         *frames += 1;
         for e in &events {
             if e.entity == Some(p) && e.kind == EventKind::PLAYER_DIED {
@@ -244,29 +238,6 @@ fn play(
     End::TimedOut
 }
 
-/// The level alone with its player, at power-on, and the player's index.
-fn alone(spec: &Spec, level: usize) -> Result<(Spec, usize, usize), String> {
-    let kind = player_kind(spec, level)?;
-    let mut s = spec.clone();
-    s.start_level = level;
-    s.levels[level].spawns.retain(|sp| sp.kind == kind);
-    s.levels[level].spawns.truncate(1);
-    // The search asks what the player's own moves reach, so a game machine
-    // that starts in a state holding the player still (a title screen)
-    // starts in the first of its states that lets the player move.
-    for m in &mut s.machines {
-        let holds = |st: &gp_sim::spec::State| {
-            st.freeze || st.part.stops.contains(&gp_sim::spec::System::Player)
-        };
-        if m.states.get(m.initial).is_some_and(holds)
-            && let Some(i) = m.states.iter().position(|st| !holds(st))
-        {
-            m.initial = i;
-        }
-    }
-    Ok((s, kind, 0))
-}
-
 /// Places the player of `w` at `x`, `y`, still, standing if there's ground
 /// under it.
 fn place(spec: &Spec, w: &mut World, p: usize, x: Fx, y: Fx) {
@@ -287,12 +258,15 @@ fn place(spec: &Spec, w: &mut World, p: usize, x: Fx, y: Fx) {
 
 /// Searches `level` (an index into `spec.levels`) for every place its
 /// player can stand, from its spawn, by the player's own moves, with the
-/// model's hooks `exts` (an empty [`Exts`] for a model without any).
-pub fn reach(spec: &Spec, level: usize, exts: &Exts) -> Result<Reach, String> {
-    let (spec, kind, p) = alone(spec, level)?;
-    let pad = pad(&spec, kind)?;
-    let tries = moves(&spec, kind);
-    let mut base = World::power_on(&spec);
+/// model's hooks through `sim`.
+pub fn reach(spec: &Spec, level: usize, sim: &dyn Sim) -> Result<Reach, String> {
+    let kind = player_kind(spec, level)?;
+    let v = sim.open(spec, &Edit::Alone(level))?;
+    let spec = &v.spec;
+    let p = 0;
+    let pad = pad(spec, kind)?;
+    let tries = moves(spec, kind);
+    let mut base = World::power_on(spec);
     let mut frames = 0;
     // Let the player settle on the ground.
     let settle = Move {
@@ -302,7 +276,7 @@ pub fn reach(spec: &Spec, level: usize, exts: &Exts) -> Result<Reach, String> {
         jump: None,
         steer: Some(0),
     };
-    let (sx, sy) = match play(&spec, exts, &pad, p, base.clone(), settle, &mut frames) {
+    let (sx, sy) = match play(&v, &pad, p, base.clone(), settle, &mut frames) {
         End::Stand(x, y) => (x, y),
         _ => {
             return Err(format!(
@@ -311,7 +285,7 @@ pub fn reach(spec: &Spec, level: usize, exts: &Exts) -> Result<Reach, String> {
             ));
         }
     };
-    place(&spec, &mut base, p, sx, sy);
+    place(spec, &mut base, p, sx, sy);
 
     let key = |x: Fx, y: Fx| [x.floor(), y.floor()];
     let mut stands = vec![key(sx, sy)];
@@ -324,9 +298,9 @@ pub fn reach(spec: &Spec, level: usize, exts: &Exts) -> Result<Reach, String> {
         let (x, y, _) = at[&here];
         for m in &tries {
             let mut w = base.clone();
-            place(&spec, &mut w, p, x, y);
+            place(spec, &mut w, p, x, y);
             count += 1;
-            match play(&spec, exts, &pad, p, w, *m, &mut frames) {
+            match play(&v, &pad, p, w, *m, &mut frames) {
                 End::Stand(nx, ny) => {
                     let k = key(nx, ny);
                     if let std::collections::btree_map::Entry::Vacant(e) = at.entry(k) {
@@ -370,26 +344,14 @@ pub fn reach(spec: &Spec, level: usize, exts: &Exts) -> Result<Reach, String> {
 
 /// Measures the player's jump on a flat floor, made here: a level of
 /// `level`'s tile size, one row of solid cells under a long open row, with
-/// no pit and no goal. `exts` are the model's hooks, as for [`reach`].
-pub fn envelope(spec: &Spec, level: usize, exts: &Exts) -> Result<Envelope, String> {
-    let (mut spec, kind, p) = alone(spec, level)?;
-    let pad = pad(&spec, kind)?;
-    let ts = spec.levels[level].tile_size;
-    let (w, h) = (512, 16);
-    let mut tiles = vec![gp_sim::spec::Tile::Empty; (w * h) as usize];
-    for c in 0..w {
-        tiles[((h - 1) * w + c) as usize] = gp_sim::spec::Tile::Solid;
-    }
-    {
-        let l = &mut spec.levels[level];
-        l.size = [w, h];
-        l.tiles = tiles;
-        l.kill_below = None;
-        l.goal_x = None;
-        l.spawns[0].x = Fx::from_int(ts * 4);
-        l.spawns[0].y = Fx::from_int(0);
-    }
-    let base = World::power_on(&spec);
+/// no pit and no goal. `sim` is the model's hooks, as for [`reach`].
+pub fn envelope(spec: &Spec, level: usize, sim: &dyn Sim) -> Result<Envelope, String> {
+    let kind = player_kind(spec, level)?;
+    let v = sim.open(spec, &Edit::AloneFlat(level))?;
+    let spec = &v.spec;
+    let p = 0;
+    let pad = pad(spec, kind)?;
+    let base = World::power_on(spec);
     let measure = |run: bool| -> Result<(i64, u32, i64), String> {
         let mut w = base.clone();
         let mut t = 0;
@@ -415,7 +377,7 @@ pub fn envelope(spec: &Spec, level: usize, exts: &Exts) -> Result<Envelope, Stri
                 top = y0;
                 took = Some(t);
             }
-            step_with_ext(&spec, &mut w, buttons, exts);
+            v.step(&mut w, buttons);
             t += 1;
             let b = w.bodies[p];
             if let Some(start) = took {
@@ -471,8 +433,7 @@ pub(crate) fn game_frozen(spec: &Spec, w: &World) -> bool {
 
 /// One move played in the whole world, its buttons recorded.
 pub(crate) fn play_recorded(
-    spec: &Spec,
-    exts: &Exts,
+    v: &Variant,
     pad: &Pad,
     p: usize,
     w: &mut World,
@@ -503,7 +464,7 @@ pub(crate) fn play_recorded(
         if jump_on {
             buttons |= pad.jump;
         }
-        let events = step_with_ext(spec, w, buttons, exts);
+        let events = v.step(w, buttons);
         out.push(buttons);
         for e in &events {
             if e.entity == Some(p) && e.kind == EventKind::GOAL_REACHED {
@@ -513,7 +474,7 @@ pub(crate) fn play_recorded(
                 return End::Died;
             }
         }
-        if game_frozen(spec, w) || !w.bodies[p].active() {
+        if game_frozen(v, w) || !w.bodies[p].active() {
             return End::Died;
         }
         let b = w.bodies[p];
@@ -538,13 +499,17 @@ pub(crate) fn play_recorded(
 /// `None` when no run is found within [`PLAYTHROUGH_LIMIT`] places. The
 /// buttons replay to the same run in the interpreter, since the search is
 /// the simulation.
-pub fn playthrough(spec: &Spec, level: usize, exts: &Exts) -> Result<Option<Playthrough>, String> {
-    let mut spec = spec.clone();
-    spec.start_level = level;
-    let kind = player_kind(&spec, level)?;
-    let pad = pad(&spec, kind)?;
-    let tries = moves(&spec, kind);
-    let mut w = World::power_on(&spec);
+pub fn playthrough(
+    spec: &Spec,
+    level: usize,
+    sim: &dyn Sim,
+) -> Result<Option<Playthrough>, String> {
+    let kind = player_kind(spec, level)?;
+    let v = sim.open(spec, &Edit::StartAt(level))?;
+    let spec = &v.spec;
+    let pad = pad(spec, kind)?;
+    let tries = moves(spec, kind);
+    let mut w = World::power_on(spec);
     let p = w
         .bodies
         .iter()
@@ -559,7 +524,7 @@ pub fn playthrough(spec: &Spec, level: usize, exts: &Exts) -> Result<Option<Play
         steer: Some(0),
     };
     let mut first = Vec::new();
-    match play_recorded(&spec, exts, &pad, p, &mut w, settle, &mut first) {
+    match play_recorded(&v, &pad, p, &mut w, settle, &mut first) {
         End::Stand(..) => {}
         _ => {
             return Err(format!(
@@ -580,7 +545,7 @@ pub fn playthrough(spec: &Spec, level: usize, exts: &Exts) -> Result<Option<Play
             let mut w = nodes[i].0.clone();
             let mut buttons = Vec::new();
             moves_n += 1;
-            let end = play_recorded(&spec, exts, &pad, p, &mut w, *m, &mut buttons);
+            let end = play_recorded(&v, &pad, p, &mut w, *m, &mut buttons);
             frames += buttons.len() as u64;
             match end {
                 End::Goal => {
@@ -628,12 +593,14 @@ pub(crate) mod tests {
     use super::*;
     use crate::Lifted;
     use crate::compile::compile;
+    use crate::variant::NativeSim;
     use gp_model::Model;
+    use gp_sim::{Exts, step_with_ext};
 
     const MODEL: &str = include_str!("../../../templates/mosshop/model.toml");
     const MAP: &str = include_str!("../../../assets/mosshop.toml");
 
-    const METATILES: &str = r#"
+    pub(crate) const METATILES: &str = r#"
 schema = 1
 asset = "metatiles"
 
@@ -683,7 +650,7 @@ solid = 0
 kind = 5
 "#;
 
-    const SLUGS: &str = r#"
+    pub(crate) const SLUGS: &str = r#"
 schema = 1
 asset = "slugs"
 
@@ -766,7 +733,7 @@ end = 192
 
     #[test]
     fn the_jump_envelope_is_the_models_arc() {
-        let e = envelope(&spec(level(0, &[])), 0, &Exts::new()).unwrap();
+        let e = envelope(&spec(level(0, &[])), 0, &NativeSim(&Exts::new())).unwrap();
         // Speed -5 and gravity 0.25 rise 47.5 pixels, from y 176 to 128.5,
         // the top the jump-height baseline records as 128 (docs/model.md).
         assert_eq!(e.rise, 48, "{e:?}");
@@ -778,7 +745,7 @@ end = 192
 
     #[test]
     fn a_flat_level_reaches_the_goal() {
-        let r = reach(&spec(level(0, &[])), 0, &Exts::new()).unwrap();
+        let r = reach(&spec(level(0, &[])), 0, &NativeSim(&Exts::new())).unwrap();
         assert!(r.goal_path.is_some(), "{r:?}");
         assert_eq!(r.stands[0], [24, 176]);
     }
@@ -787,10 +754,10 @@ end = 192
     fn five_columns_of_gap_are_cleared_and_six_arent() {
         // A running jump carries 80 pixels, so five columns (80 pixels)
         // are the widest gap it clears and six aren't cleared.
-        let near = reach(&spec(level(5, &[])), 0, &Exts::new()).unwrap();
+        let near = reach(&spec(level(5, &[])), 0, &NativeSim(&Exts::new())).unwrap();
         assert!(near.goal_path.is_some(), "{near:?}");
         assert!(near.deaths > 0, "walking into the gap falls in");
-        let far = reach(&spec(level(6, &[])), 0, &Exts::new()).unwrap();
+        let far = reach(&spec(level(6, &[])), 0, &NativeSim(&Exts::new())).unwrap();
         assert!(far.goal_path.is_none(), "{:?}", far.stands);
         // Nothing past the gap is reached.
         assert!(far.stands.iter().all(|s| s[0] < 12 * 16));
@@ -802,10 +769,10 @@ end = 192
             |n: usize| -> Vec<(usize, usize, char)> { (0..n).map(|i| (11 - i, 16, 'B')).collect() };
         // The jump rises 48 pixels, so a wall 48 high is just climbed: the
         // player stands on its top, 48 pixels above the ground's 176.
-        let low = reach(&spec(level(0, &wall(3))), 0, &Exts::new()).unwrap();
+        let low = reach(&spec(level(0, &wall(3))), 0, &NativeSim(&Exts::new())).unwrap();
         assert!(low.goal_path.is_some(), "{low:?}");
         assert!(low.stands.iter().any(|s| s[1] == 176 - 48), "{low:?}");
-        let high = reach(&spec(level(0, &wall(4))), 0, &Exts::new()).unwrap();
+        let high = reach(&spec(level(0, &wall(4))), 0, &NativeSim(&Exts::new())).unwrap();
         assert!(high.goal_path.is_none(), "{:?}", high.stands);
     }
 
@@ -814,7 +781,9 @@ end = 192
     #[test]
     fn a_playthrough_with_the_slugs_replays_to_the_goal() {
         let spec = spec(level(3, &[]));
-        let p = playthrough(&spec, 0, &Exts::new()).unwrap().expect("a run");
+        let p = playthrough(&spec, 0, &NativeSim(&Exts::new()))
+            .unwrap()
+            .expect("a run");
         let mut w = World::power_on(&spec);
         let mut goal = false;
         for &b in &p.buttons {
@@ -874,8 +843,8 @@ y = 176
         files.insert("level.toml".to_owned(), level(2, &[]));
         let composed = compile(&model, &Lifted { files }).unwrap();
         assert!(composed.kinds.iter().any(|k| k.name == "shell_walker"));
-        let alone = reach(&spec(level(2, &[])), 0, &Exts::new()).unwrap();
-        let with = reach(&composed, 0, &Exts::new()).unwrap();
+        let alone = reach(&spec(level(2, &[])), 0, &NativeSim(&Exts::new())).unwrap();
+        let with = reach(&composed, 0, &NativeSim(&Exts::new())).unwrap();
         assert_eq!(with.stands, alone.stands);
         assert!(with.goal_path.is_some());
     }

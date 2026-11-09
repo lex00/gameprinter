@@ -30,6 +30,7 @@ pub const START_READS: u32 = 21;
 pub const TAKE_READS: u32 = 22;
 pub const RESTORE: u32 = 23;
 pub const DESCRIBE: u32 = 24;
+pub const FLAT_LEVEL: u32 = 25;
 
 #[derive(Default)]
 pub struct Writer(pub Vec<u8>);

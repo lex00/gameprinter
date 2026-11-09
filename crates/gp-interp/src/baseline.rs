@@ -9,16 +9,14 @@
 //! `start_level` set to it) so each level has a baseline of its own.
 
 use std::path::Path;
-use std::sync::Arc;
 
 use gp_evidence::frame_hashes::{self, FrameHash};
 use gp_evidence::{Hash, InputLog};
 use gp_model::Model;
 use gp_runtime::InputFrame;
-use gp_sim::Exts;
 use serde::{Deserialize, Serialize};
 
-use crate::{Bundle, Interp, Lifted};
+use crate::Interp;
 
 /// The format's version.
 pub const FORMAT: &str = "0.1.0";
@@ -149,31 +147,37 @@ pub fn at_level(model: &Model, level: &str) -> Result<Model, String> {
     Ok(m)
 }
 
-/// Runs `input` on `model` from `level` in the interpreter with `exts`,
-/// reading the values of `expects` at their frames.
-pub fn run(
-    model: &Model,
-    lifted: &Lifted,
-    exts: Arc<Exts>,
-    level: &str,
-    input: &InputLog,
-    expects: &[Expect],
-) -> Result<Run, String> {
-    let m = at_level(model, level)?;
-    let bundle = Bundle::new(&m, lifted.clone());
-    let mut rt = Interp::from_bundle(&bundle)?.with_exts(exts);
-    let hash = |rt: &Interp| {
-        let h = Hash::from_bytes(rt.world().hash());
+/// A runtime that can answer a baseline's reads: a model run through its
+/// game's module or the interpreter.
+pub trait Runs: gp_runtime::Runtime {
+    fn run_spec(&self) -> &gp_sim::Spec;
+    fn run_world(&self) -> gp_sim::World;
+}
+
+impl Runs for Interp {
+    fn run_spec(&self) -> &gp_sim::Spec {
+        self.spec()
+    }
+    fn run_world(&self) -> gp_sim::World {
+        self.world().clone()
+    }
+}
+
+/// Runs `input` on a runtime already at the level's start (a model edited by
+/// [`at_level`]), reading the values of `expects` at their frames.
+pub fn run_on<R: Runs>(rt: &mut R, input: &InputLog, expects: &[Expect]) -> Result<Run, String> {
+    let hash = |rt: &R| {
+        let h = Hash::from_bytes(rt.run_world().hash());
         FrameHash { state: h, ram: h }
     };
-    let values = |rt: &Interp| -> Vec<(String, String)> {
-        crate::state::leaves(rt.spec(), rt.world())
+    let values = |rt: &R| -> Vec<(String, String)> {
+        crate::state::leaves(rt.run_spec(), &rt.run_world())
             .iter()
             .map(|(p, v)| (gp_model::path::display(p), crate::mapping::show(v)))
             .collect()
     };
     let mut got = vec![None; expects.len()];
-    let read = |frame: usize, rt: &Interp, got: &mut Vec<Option<String>>| {
+    let read = |frame: usize, rt: &R, got: &mut Vec<Option<String>>| {
         if expects.iter().any(|e| e.frame == frame) {
             let v = values(rt);
             for (i, e) in expects.iter().enumerate() {
@@ -183,21 +187,21 @@ pub fn run(
             }
         }
     };
-    let mut hashes = vec![hash(&rt)];
-    read(0, &rt, &mut got);
+    let mut hashes = vec![hash(rt)];
+    read(0, rt, &mut got);
     for (i, f) in input.frames.iter().enumerate() {
-        rt.advance(&InputFrame {
+        rt.step(std::slice::from_ref(&InputFrame {
             buttons: f.buttons_word(),
             axes: Vec::new(),
             reset: f.reset,
-        })?;
-        hashes.push(hash(&rt));
-        read(i + 1, &rt, &mut got);
+        }))?;
+        hashes.push(hash(rt));
+        read(i + 1, rt, &mut got);
     }
     Ok(Run {
         digest: Hash::of(&frame_hashes::encode(&hashes)).to_string(),
         got,
-        last: values(&rt),
+        last: values(rt),
     })
 }
 

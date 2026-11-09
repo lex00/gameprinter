@@ -51,9 +51,9 @@ The screen measure and every presentation reader run `gp-present` on the host, o
 
 `describe` returns an empty list for every Donkey Kong hook today, so `gp model mechanics` already reports them as opaque; the call is on the scoring path only because `mechanics::catalog` is.
 
-### Carried by existing calls, with one decision open
+### Carried by existing calls, decided in 3.3 step 7
 
-The searches run hooks through `gp_sim::step_with_ext` on a world the host holds: `gp-interp/src/reach.rs:224,418,506` (`gp interp reach` at `gp-cli/src/interp_reach.rs:48,216`, `gp level` at `level.rs:129,153`, `author.rs:432,437`, `gp-chunks/src/demand.rs`), `gp-interp/src/difficulty.rs:452,494,537` (`author.rs:286`), `gp-interp/src/stage.rs:497-1163` (`stage_measure.rs:401`, `level.rs`). They need `load-state`, `step` and `canonical-state` for each searched frame: two state copies per frame, and no new call. No addition is written for them. What they do need decided is that three of them edit the spec before stepping: `reach::alone` removes spawns and changes a machine's initial state (`reach.rs:250`), `playthrough` and `difficulty` set `start_level` (`reach.rs:542`, `difficulty.rs:336`), and `stage.rs:830` makes a copy of the spec with every other kind's `contact` removed. `Spec` is not serializable and the module compiles its own from `load`'s bytes, so a variant has to be an edit of the model text passed to `load`. See the open questions.
+The searches run hooks through `gp_sim::step_with_ext` on a world the host holds: `gp-interp/src/reach.rs:224,418,506` (`gp interp reach` at `gp-cli/src/interp_reach.rs:48,216`, `gp level` at `level.rs:129,153`, `author.rs:432,437`, `gp-chunks/src/demand.rs`), `gp-interp/src/difficulty.rs:452,494,537` (`author.rs:286`), `gp-interp/src/stage.rs:497-1163` (`stage_measure.rs:401`, `level.rs`). They need `load-state`, `step` and `canonical-state` for each searched frame: two state copies per frame, and no new call. No addition is written for them. What they do need decided is that three of them edit the spec before stepping: `reach::alone` removes spawns and changes a machine's initial state (`reach.rs:250`), `playthrough` and `difficulty` set `start_level` (`reach.rs:542`, `difficulty.rs:336`), and `stage.rs:830` makes a copy of the spec with every other kind's `contact` removed. `Spec` is not serializable and the module compiles its own from `load`'s bytes, so a variant is an edit of the model text passed to `load` (`crates/gp-interp/src/variant.rs`). Three of the four kinds of edit are model text. The jump measure's flat floor is not: it changes the compiled level's cells and keeps its ground boxes and tile surfaces, which no model text says, so it is the one protocol addition, `run.flat-level`, below.
 
 ### Stays native because no hook runs
 
@@ -69,6 +69,39 @@ The searches run hooks through `gp_sim::step_with_ext` on a world the host holds
 ### Not moved
 
 `gp-mcp` and `gp-host` build an `Interp` with no hooks (`gp-mcp/src/tools.rs:964`, `gp-host/src/session.rs:42`), so with Donkey Kong they run components alone today; they move, if at all, after the gate. `gp-web` is replaced by the page loading the module in 3.2. `gp-gen-bevy` links hooks into a generated Bevy build and is not brought in. Other games' tools and code (`gp-interp`'s `mm2.rs` and `smb.rs`, the Super Mario Bros., Mega Man 2 and Super Mario Bros. 2 entries in `gp_exts::ENTRIES`, `serve/remastered.rs`'s use of them) are left behind.
+
+## Steps 7 and 8 of 3.3: the searches through the module
+
+`gp interp reach` (with `--record`, which is playthrough), `gp level measure` and `gp level difficulty` run Donkey Kong through its module. `gp_interp::variant` holds each spec edit and the same edit written on the model. A module session loads the edited text and the host checks the module's spec digest against the digest of the host's edited spec, so a text edit that compiles differently stops with an error before a frame runs.
+
+| Edit | As model text | Where it runs |
+|---|---|---|
+| `StartAt(level)` | `model.start_level` | `playthrough` and `gp level difficulty` |
+| `Alone(level)` | `start_level`, the level's spawns cut to the first of the player's, each game machine's `initial` moved off a state that holds the player | `gp interp reach`'s search |
+| `AloneFlat(level)` | `Alone`'s text; the floor comes after `load`, through `run.flat-level` (`wit/game/game.wit`, wire op `FLAT_LEVEL`) | The jump measure in `gp interp reach` |
+| `Contactless(player)` | Each other entity's `contact` removed and written whole into each of its machine states' `set`, because the spec edit only clears a kind's own `contact` and a state's kind keeps what it compiled to | The rollers and jump windows of `gp level measure` |
+
+The searches hold a `World` on the host and step it through `load-state`, `step`, `canonical-state`, skipping `load-state` when the world is the state the module just returned (`ModuleStepper` in `crates/gp-cli/src/hosted.rs`). `reach.rs`, `difficulty.rs` and `stage.rs` take a `Sim` that opens a `Variant`; `NativeSim` runs a model with no hooks in the process, and `gp_cli::hosted::Source` opens module sessions.
+
+Parity was checked with the old tool's JSON field by field on `templates/donkey-kong-oe` against `games/donkey-kong` and the same lifted assets: `interp reach` on all four levels and each alone, `--record` on all four, `level measure` on all four, `--clears` on 25m, and `level difficulty` on all four. On the real levels the difficulty search stops at the title's frozen first frames, so it also ran on a copy of each tool's model that starts the game in `playing`, to 40 places on two levels. `--record` found no run on the real model, so its writing of a baseline was checked on a copy with a higher jump where the goal is reached: the two tools wrote byte-identical `baselines/main.toml`. Broken cases, each failing the comparison: the jump speed changed in the model (reach, `--record`, measure, difficulty) and the odds of a barrel taking a ladder changed in a hook crate built into a module (measure).
+
+Speed, old release binary against this tool's `fastdev` build and the Wasm module, wall clock, one run each: `reach` over all four levels 0.37 s against 2.78 s, `measure` on `main` 7.4 s against 24.9 s, on `m100` 2.9 s against 9.7 s, `--clears 1` on `main` 1.9 s against 6.3 s. The deep difficulty search of 40 places, 1.5 s against 3.5 s.
+
+### Step 8: every place in `gameprinter` that builds an `Interp`
+
+`gp-interp/src/tests.rs` is left out: tests run Moss Hop and made-up models.
+
+| Where | Hooks? | Result |
+|---|---|---|
+| `gp-cli/src/hosted.rs` `Source::new` | Compiles the spec and checks, running nothing | Refuses a named hook that neither the module nor the tool's demo crate has |
+| `gp-cli/src/hosted.rs` `Source::open`, the native branch | Reached only with no module, after `Source::new` refused a missing hook | Hookless, or the `hooks_demo` model the tool links |
+| `gp-cli/src/run.rs` `compare` (`gp interp compare`) | Refuses named hooks it doesn't link (Donkey Kong: "the model names hooks this gp has no crate for") | Hookless. `gp interp compare` has no `--module` path; Moss Hop baselines run here |
+| `gp-web/src/rt.rs` `Sessions::load` | The module's own instance, hooks linked into it | Through the module, by construction |
+| `gp-web/src/lib.rs` `Preview::load` | The page's own `gp_web.wasm` has no game's hooks and refuses a model naming any; a game's module has them built in | Hookless, or through the module the page's build names |
+| `gp-interp/src/recording.rs` (3 sites) | Called from nothing but tests | Not reached by any command |
+| `gp-interp/src/baseline.rs` | `baseline::run` (native, hooks by `exts`) is removed. `run_on` runs the module's `Hosted` through `Runs` | `gp interp reach --record` goes through the module |
+
+The old `gp serve` and route modules aren't in this repo yet (side track T1); they are not in this list.
 
 ## The protocol addition
 
@@ -169,5 +202,5 @@ The wasmtime flags follow the design: NaN canonicalization on, relaxed SIMD off.
 ## Open questions for the user
 
 1. The screen measure draws on the host with the host's `gp-present`, over a decoded world. A module carries its own `gp-present` for the page. A module built against an older tool release can therefore draw differently from the host that scores it. Should scoring draw through the module's `present` calls instead, at the cost of a frame buffer per frame across the boundary, or should the host's `gp-present` stay authoritative for scoring?
-2. `reach`, `playthrough`, `difficulty` and `stage` edit the `Spec` before stepping. The recommendation is to express those edits on the model text and call `load` for a variant, which adds no protocol call. The cost is one more `load` and compile per variant, and the edits have to be expressible as model text: `reach::alone`'s change of a machine's initial state and `stage.rs`'s removal of contacts should be, but it has not been tried. Is that acceptable, or should the module get a call that takes a spec edit?
+2. Answered in 3.3 steps 7 and 8: the edits are model text loaded per variant, as above. One isn't expressible and got a call (`run.flat-level`, the jump measure's floor).
 3. A recording's runtime label becomes the module's hash. Old model recordings' labels name the hook crate's hash and will replay as stale. Is that acceptable at cutover, as with any behaviour change?

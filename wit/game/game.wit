@@ -126,6 +126,14 @@ interface run {
   // measure and `--apu-log`.
   set-apu-events: func(rt: borrow<runtime>, on: bool);
 
+  // Puts the session's level on a flat floor, 512 by 16 cells with one row of
+  // solid cells at the bottom, no pit, no goal and the first spawn at the top
+  // four tiles in, and powers the session on: gp_interp::variant::flat_floor,
+  // the jump measure in `gp interp reach`. The change is to the compiled level
+  // and keeps its ground boxes and tile surfaces, so the model text passed to
+  // `load` can't express it.
+  flat-level: func(rt: borrow<runtime>, level: u32) -> result<_, string>;
+
   // What a run read of its spec and which hooks it called, by index in the
   // spec's lists (gp_sim::reads::Reads), so the gate can tell which clips a
   // change can move.
