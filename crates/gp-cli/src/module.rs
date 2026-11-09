@@ -376,6 +376,10 @@ fn sandboxed_program(
             "usr/bin",
             "/bin",
         ]);
+        // The system's `cc` is a link through here on Debian and Ubuntu.
+        if Path::new("/etc/alternatives").exists() {
+            c.args(["--ro-bind", "/etc/alternatives", "/etc/alternatives"]);
+        }
         if Path::new("/lib64").exists() {
             c.args(["--symlink", "usr/lib64", "/lib64"]);
         }
