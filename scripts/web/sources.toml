@@ -11,3 +11,10 @@ root = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEoXL5YfJ6rWdggoGhTubKRNnHfvNOByMUTP
 name = "gp-local"
 url = "."
 root = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEoXL5YfJ6rWdggoGhTubKRNnHfvNOByMUTPuIJshfGH root@gp-staging"
+
+# The public repo lex00/rivetrodeo, signed with the staging keys until the
+# official root key is made.
+[repo]
+name = "rivetrodeo"
+url = "https://raw.githubusercontent.com/lex00/rivetrodeo/main"
+root = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEoXL5YfJ6rWdggoGhTubKRNnHfvNOByMUTPuIJshfGH root@gp-staging"
