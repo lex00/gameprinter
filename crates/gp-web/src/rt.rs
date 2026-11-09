@@ -153,6 +153,15 @@ impl Sessions {
                 let i = self.live.remove(&id).ok_or("no such session")?;
                 self.live.insert(id, i.with_apu_events());
             }
+            wire::DESCRIBE => gp_interp::describe::write_exts(self.get(id)?.exts(), w),
+            wire::START_READS => {
+                self.get(id)?;
+                gp_sim::reads::start();
+            }
+            wire::TAKE_READS => {
+                self.get(id)?;
+                gp_interp::reads::write_reads(&gp_sim::reads::take(), w);
+            }
             wire::SPEC_DIGEST => w.str(&gp_sim::save::spec_digest(self.get(id)?.spec())),
             _ => return Err(format!("this module has no call {op}")),
         }

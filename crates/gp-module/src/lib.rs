@@ -258,6 +258,23 @@ impl ModuleRuntime {
         }))
     }
 
+    /// Starts noting what the session reads of its spec and hooks.
+    pub fn start_reads(&mut self) -> Result<(), String> {
+        self.call(wire::START_READS, CALL_TICKS, |_| {}).map(|_| ())
+    }
+
+    /// The bytes of what was noted since [`Self::start_reads`], which
+    /// `gp_interp::reads::read_reads` reads.
+    pub fn take_reads(&mut self) -> Result<Vec<u8>, String> {
+        self.call(wire::TAKE_READS, CALL_TICKS, |_| {})
+    }
+
+    /// The bytes of every hook's mechanic records, which
+    /// `gp_interp::describe::read_exts` reads.
+    pub fn describe(&self) -> Result<Vec<u8>, String> {
+        self.call(wire::DESCRIBE, CALL_TICKS, |_| {})
+    }
+
     /// Makes `step` return the hooks' sound-driver writes as events.
     pub fn set_apu_events(&mut self) -> Result<(), String> {
         self.call(wire::SET_APU_EVENTS, CALL_TICKS, |_| {})

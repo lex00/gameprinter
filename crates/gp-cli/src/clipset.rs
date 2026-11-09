@@ -137,8 +137,16 @@ fn generated() -> String {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ClipSet {
     pub clipset: Header,
+    /// Named recordings starts are taken from; carried through unread, as
+    /// `mutant` and `import` are, so a set this gp rewrites keeps them.
+    #[serde(default, skip_serializing_if = "toml::Table::is_empty")]
+    pub recordings: toml::Table,
     #[serde(default)]
     pub clips: Vec<Recipe>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mutant: Vec<toml::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import: Option<toml::Value>,
 }
 
 /// A clip set read from `file`, its format checked: same major and minor,
@@ -750,11 +758,23 @@ pub(crate) struct Regen {
     pub differ: usize,
     pub measured: usize,
     pub failed: usize,
+    /// Clips stopped at their first split, whose curves aren't compared.
+    pub stopped: usize,
+    /// Each clip's curve as measured now, by ID.
+    pub curves: BTreeMap<String, String>,
     /// Each clip's score on the model, by ID.
     pub outcomes: BTreeMap<String, Result<Ran, String>>,
     /// The bench the clips were scored on, and the model's text.
     pub bench: crate::scenario::Bench,
     pub model_text: String,
+}
+
+/// How [`regen_with`] scores: whether each clip's reads are recorded, and
+/// the clips to stop at their first split.
+#[derive(Default)]
+pub(crate) struct Scoring {
+    pub reads: bool,
+    pub stop: BTreeSet<String>,
 }
 
 /// Where a [`regen_with`] finds what it needs: the run, the model and its
@@ -769,6 +789,20 @@ pub(crate) struct Work<'a> {
     pub source: Arc<crate::hosted::Source>,
 }
 
+/// The bench clips are scored on: the model, its assets and the ROM. A
+/// clip brings its own input from power-on, so the bench's is empty.
+pub(crate) fn bench_for(w: &Work) -> anyhow::Result<crate::scenario::Bench> {
+    crate::scenario::Bench::new(
+        w.mdir,
+        w.assets,
+        w.rom.clone(),
+        gp_evidence::InputLog::new(1).to_text(),
+        "",
+        &w.paths.home.join("work").join("regenerate").join(w.run),
+        w.source.clone(),
+    )
+}
+
 /// Every clip of the set in `set_dir` (those `only` names, when given) made
 /// again from the ROM into the run, scored once on the model, and each
 /// curve compared with the set's.
@@ -776,6 +810,7 @@ pub(crate) fn regen_with(
     w: &Work,
     set_dir: &Path,
     only: Option<&BTreeSet<String>>,
+    how: &Scoring,
 ) -> anyhow::Result<Regen> {
     let file = set_dir.join(FILE);
     let set = read(&file)?;
@@ -818,17 +853,10 @@ pub(crate) fn regen_with(
         .filter_map(|m| m.as_ref().ok().map(|m| m.scenario.clone()))
         .collect();
     crate::scenario::resolve_logs(&mut list, &w.paths.home);
-    let empty = gp_evidence::InputLog::new(1).to_text();
-    let cache = w.paths.home.join("work").join("regenerate").join(w.run);
-    let b = crate::scenario::Bench::new(
-        w.mdir,
-        w.assets,
-        w.rom.clone(),
-        empty,
-        "",
-        &cache,
-        w.source.clone(),
-    )?;
+    let b = bench_for(w)?;
+    let mut b = b;
+    b.reads = how.reads;
+    b.stop.clone_from(&how.stop);
     let (m, text) = b.model()?;
     let ran = crate::scenario::score_each(
         &b,
@@ -844,15 +872,21 @@ pub(crate) fn regen_with(
         .zip(ran)
         .map(|(s, r)| (s.id.clone(), r.map_err(|e| format!("{e:#}"))))
         .collect();
-    let (mut differ, mut measured, mut failed) = (0, 0, 0);
+    let (mut differ, mut measured, mut failed, mut stopped) = (0, 0, 0, 0);
+    let mut curves = BTreeMap::new();
     for (r, mr) in recipes.iter().zip(&made) {
         let curve = outcomes
             .get(&r.id)
             .map(|o| o.as_ref().map(|o| crate::scenario::curve_hash(o, false)));
+        if let Some(Ok(c)) = &curve {
+            curves.insert(r.id.clone(), c.clone());
+        }
         match (mr, &curve) {
             (Err(_), _) => failed += 1,
             (Ok(_), Some(Err(_))) | (Ok(_), None) => failed += 1,
-            (Ok(_), Some(Ok(_))) if matches!(outcomes.get(&r.id), Some(Ok(o)) if o.stopped) => {}
+            (Ok(_), Some(Ok(_))) if matches!(outcomes.get(&r.id), Some(Ok(o)) if o.stopped) => {
+                stopped += 1;
+            }
             (Ok(_), Some(Ok(_))) if !same_mapping => measured += 1,
             (Ok(_), Some(Ok(_))) if r.curve.is_empty() => measured += 1,
             (Ok(_), Some(Ok(c))) if *c != r.curve => differ += 1,
@@ -865,6 +899,8 @@ pub(crate) fn regen_with(
         differ,
         measured,
         failed,
+        stopped,
+        curves,
         outcomes,
         bench: b,
         model_text: text,

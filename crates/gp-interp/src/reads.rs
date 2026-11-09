@@ -96,9 +96,51 @@ impl SpecNames {
     }
 }
 
+/// `r` as bytes, as a game's module gives it across its boundary: for each
+/// list whether it was read whole and which elements, then the hooks.
+pub fn write_reads(r: &Reads, w: &mut gp_runtime::wire::Writer) {
+    for l in List::ALL {
+        let seen = r.part(l);
+        w.bool(seen.all);
+        let some = seen.some();
+        w.count(some.len());
+        for i in some {
+            w.u32(i as u32);
+        }
+    }
+    w.strs(&r.hooks.iter().cloned().collect::<Vec<_>>());
+}
+
+/// The bytes [`write_reads`] made.
+pub fn read_reads(bytes: &[u8]) -> Result<Reads, String> {
+    let mut r = gp_runtime::wire::Reader::new(bytes);
+    let mut out = Reads::default();
+    for l in List::ALL {
+        let all = r.bool()?;
+        let some: Vec<usize> = (0..r.count()?)
+            .map(|_| Ok(r.u32()? as usize))
+            .collect::<Result<_, String>>()?;
+        out.parts[l as usize] = gp_sim::reads::Seen::of(all, some);
+    }
+    out.hooks = r.strs()?.into_iter().collect();
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_cross_a_boundary_unchanged() {
+        let mut r = Reads::default();
+        r.parts[List::Kind as usize] = gp_sim::reads::Seen::of(false, [1, 70]);
+        r.parts[List::Level as usize] = gp_sim::reads::Seen::of(true, []);
+        r.hooks.insert("dk_barrel".into());
+        let mut w = gp_runtime::wire::Writer::default();
+        write_reads(&r, &mut w);
+        let back = read_reads(&w.0).unwrap();
+        assert_eq!(back, r);
+    }
 
     #[test]
     fn a_read_set_meets_a_change_to_what_it_read_and_to_a_list_it_read_whole() {

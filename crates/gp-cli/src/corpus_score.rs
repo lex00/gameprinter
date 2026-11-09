@@ -18,6 +18,10 @@ use crate::clip_score::{Open, rom_of};
 use crate::clipset::{self as cs, ClipSet};
 use crate::hosted::Source;
 
+/// A game's manifest, where `[scored_against]` is.
+const MANIFEST: &str = "template.toml";
+/// Score records inside a template.
+const EVIDENCE_DIR: &str = "evidence";
 /// The manifest beside a clip set.
 pub(crate) const FILE: &str = "corpus.toml";
 /// The score record's own format.
@@ -53,6 +57,19 @@ pub enum CorpusCmd {
         /// Score only these clips, by ID. Repeatable.
         #[arg(long)]
         only: Vec<String>,
+        /// Against an earlier `gp --json corpus score` output in this file:
+        /// score only the clips the change can move, and keep the others' rows.
+        #[arg(long, conflicts_with = "only")]
+        reuse: Option<PathBuf>,
+        /// Write the score record into this template folder's evidence/, and
+        /// point its template.toml's [scored_against] at this corpus.
+        #[arg(long)]
+        write: Option<PathBuf>,
+        /// Measure the original's curves again under the model's mapping
+        /// (the model in this folder): they become the corpus's, as its next
+        /// version, and the record is written for it.
+        #[arg(long, conflicts_with = "only")]
+        remeasure: Option<PathBuf>,
     },
 }
 
@@ -66,6 +83,9 @@ pub(crate) fn run(cmd: &CorpusCmd, paths: &Paths) -> Result<Outcome> {
             assets,
             rom,
             only,
+            reuse,
+            write,
+            remeasure,
         } => score(
             paths,
             game,
@@ -77,6 +97,9 @@ pub(crate) fn run(cmd: &CorpusCmd, paths: &Paths) -> Result<Outcome> {
                 rom: rom.as_deref(),
             },
             only,
+            reuse.as_deref(),
+            write.as_deref(),
+            remeasure.as_deref(),
         ),
     }
 }
@@ -95,7 +118,11 @@ fn run_dir(home: &Path, run: &str) -> Result<PathBuf> {
     Ok(home.join("capture").join(run))
 }
 
-/// The manifest's corpus name and version.
+const HEAD_COMMENT: &str = "# A scoring corpus (docs/formats/scoring-corpus.md): the clip set beside it\n\
+    # (clips.toml) with a name, a version and the hash of its recipes. Recipes,\n\
+    # hashes and metadata only: `gp corpus verify` makes every clip again from\n\
+    # your own ROM. `gp corpus bump` suggests the next version.\n";
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CorpusFile {
@@ -243,6 +270,17 @@ pub(crate) enum Step {
     Major,
 }
 
+impl Step {
+    fn name(self) -> &'static str {
+        match self {
+            Step::None => "none",
+            Step::Patch => "patch",
+            Step::Minor => "minor",
+            Step::Major => "major",
+        }
+    }
+}
+
 /// A corpus as read from its folder.
 struct Read {
     set: ClipSet,
@@ -303,6 +341,56 @@ impl Diff {
         } else {
             Step::None
         }
+    }
+
+    /// The step when a changed clip's curve or coverage hash is all that
+    /// changed because the original was measured again under a mapping
+    /// that measures more: minor, as a clip added is. Against a recorded
+    /// version only the recipe hash is at hand (`recipe`); `score
+    /// --remeasure` calls this only when the clips were that version's
+    /// before it wrote the curves, so the curves are all that moved.
+    pub(crate) fn step_measured_again(&self) -> Step {
+        let measured = self.changed.iter().all(|(_, w)| {
+            w.iter()
+                .all(|x| matches!(*x, "curve" | "coverage" | "recipe"))
+        });
+        if self.removed.is_empty() && self.target.is_empty() && measured && !self.changed.is_empty()
+        {
+            Step::Minor
+        } else {
+            self.step()
+        }
+    }
+
+    fn json(&self) -> Value {
+        json!({
+            "added": self.added,
+            "removed": self.removed,
+            "changed": self.changed.iter().map(|(id, w)| json!({"id": id, "what": w})).collect::<Vec<_>>(),
+            "target": self.target,
+            "metadata": self.metadata,
+            "step": self.step().name(),
+        })
+    }
+
+    fn lines(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for id in &self.added {
+            out.push(format!("added    {id}"));
+        }
+        for id in &self.removed {
+            out.push(format!("removed  {id}"));
+        }
+        for (id, w) in &self.changed {
+            out.push(format!("changed  {id}  ({})", w.join(", ")));
+        }
+        for t in &self.target {
+            out.push(format!("target   {t}"));
+        }
+        for m in &self.metadata {
+            out.push(format!("metadata {m}"));
+        }
+        out
     }
 }
 
@@ -384,8 +472,258 @@ fn checked(dir: &Path) -> Result<(Read, CorpusFile, Vec<String>)> {
     Ok((now, m, problems))
 }
 
+fn write_manifest(dir: &Path, c: &CorpusFile) -> Result<PathBuf> {
+    let file = dir.join(FILE);
+    fs::write(&file, format!("{HEAD_COMMENT}{}", toml::to_string(c)?))
+        .with_context(|| format!("writing {}", file.display()))?;
+    Ok(file)
+}
+
+fn today(date: Option<&str>) -> Result<String> {
+    if let Some(d) = date {
+        let ok = d.len() == 10
+            && d.chars().enumerate().all(|(i, c)| {
+                if i == 4 || i == 7 {
+                    c == '-'
+                } else {
+                    c.is_ascii_digit()
+                }
+            });
+        if !ok {
+            bail!("--date {d} isn't YYYY-MM-DD");
+        }
+        return Ok(d.to_owned());
+    }
+    // The civil date from days since 1970 (Howard Hinnant's algorithm).
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    let z = (secs / 86400) as i64 + 719_468;
+    let era = z / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    Ok(format!("{y:04}-{m:02}-{d:02}"))
+}
+
+// ---- Commands ----
+
+fn bump_as(
+    dir: &Path,
+    write: bool,
+    says: Option<&str>,
+    date: Option<&str>,
+    measured_again: bool,
+) -> Result<Outcome> {
+    let now = load(dir)?;
+    let Some(mut m) = now.manifest.clone() else {
+        bail!("{} has no {FILE}; gp corpus init makes one", dir.display());
+    };
+    let d = diff_recorded(&m, &now);
+    let from = Version::parse(&m.corpus.version)?;
+    let step = if measured_again {
+        d.step_measured_again()
+    } else {
+        d.step()
+    };
+    let to = from.next(step);
+    let mut text = d.lines();
+    let mut v = d.json();
+    v["step"] = json!(step.name());
+    v["name"] = json!(m.corpus.name);
+    v["version"] = json!(m.corpus.version);
+    v["suggests"] = json!(to.to_string());
+    if step == Step::None {
+        text.push(format!(
+            "Corpus {} {} is as recorded: nothing to bump.",
+            m.corpus.name, m.corpus.version
+        ));
+        v["written"] = json!(false);
+        return Ok(Outcome::ok(v, text.join("\n")));
+    }
+    text.push(format!(
+        "{} added, {} removed, {} changed since {}: a {} step, {from} -> {to}.",
+        d.added.len(),
+        d.removed.len(),
+        d.changed.len(),
+        m.corpus.version,
+        step.name()
+    ));
+    if write {
+        let h = &now.set.clipset;
+        m.corpus.version = to.to_string();
+        m.corpus.format = cs::FORMAT.into();
+        m.corpus.hash = now.hash.clone();
+        m.corpus.metadata = now.metadata.clone();
+        if !h.rom.is_empty() {
+            m.target.rom = h.rom.clone();
+        }
+        if !h.mapping.is_empty() {
+            m.needs.mapping = h.mapping.clone();
+        }
+        if !h.generator.is_empty() {
+            m.needs.generator = h.generator.clone();
+        }
+        m.recipes = now.recipes.clone();
+        m.changelog.push(Change {
+            version: to.to_string(),
+            date: today(date)?,
+            says: says.unwrap_or_default().into(),
+            added: d.added.clone(),
+            removed: d.removed.clone(),
+            changed: d.changed.iter().map(|(id, _)| id.clone()).collect(),
+        });
+        let file = write_manifest(dir, &m)?;
+        text.push(format!("Recorded {to} in {}.", file.display()));
+    }
+    v["written"] = json!(write);
+    Ok(Outcome::ok(v, text.join("\n")))
+}
+
+fn accept_curves(dir: &Path, g: &cs::Regen) -> Result<usize> {
+    let file = dir.join(cs::FILE);
+    let text = fs::read_to_string(&file)?;
+    let head: String = text
+        .lines()
+        .take_while(|l| l.starts_with('#'))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    let mut set = g.set.clone();
+    let mut changed = 0;
+    for c in &mut set.clips {
+        if let Some(m) = g.curves.get(&c.id)
+            && c.curve != *m
+        {
+            c.curve.clone_from(m);
+            changed += 1;
+        }
+    }
+    set.clipset.mapping = g.mapping.clone();
+    set.clipset.format = cs::FORMAT.into();
+    fs::write(&file, format!("{head}{}", toml::to_string(&set)?))?;
+    Ok(changed)
+}
+
+pub(crate) fn record_path(template: &Path, model_hash: &str, corpus_hash: &str) -> PathBuf {
+    template
+        .join(EVIDENCE_DIR)
+        .join(model_hash)
+        .join(format!("{corpus_hash}.json"))
+}
+
+/// The version template `t`'s `[scored_against]` names when it names
+/// corpus folder `dir` at another version or hash than `c`, else None (no
+/// section, another corpus, or current).
+fn behind(t: &Path, dir: &Path, c: &Head) -> Option<String> {
+    let text = fs::read_to_string(t.join(MANIFEST)).ok()?;
+    let v: toml::Value = toml::from_str(&text).ok()?;
+    let sa: ScoredAgainst = v.get("scored_against")?.clone().try_into().ok()?;
+    let same_dir = t.join(&sa.path).canonicalize().ok()? == dir.canonicalize().ok()?;
+    (same_dir && sa.corpus == c.name && (sa.version != c.version || sa.hash != c.hash))
+        .then_some(sa.version)
+}
+
+/// `to` relative to `from`, both folders: `.` when the same.
+fn relative(from: &Path, to: &Path) -> String {
+    let (Ok(a), Ok(b)) = (from.canonicalize(), to.canonicalize()) else {
+        return to.display().to_string();
+    };
+    let (ac, bc): (Vec<_>, Vec<_>) = (a.components().collect(), b.components().collect());
+    let common = ac.iter().zip(&bc).take_while(|(x, y)| x == y).count();
+    let mut p = PathBuf::new();
+    for _ in common..ac.len() {
+        p.push("..");
+    }
+    for c in &bc[common..] {
+        p.push(c);
+    }
+    if p.as_os_str().is_empty() {
+        ".".into()
+    } else {
+        p.display().to_string()
+    }
+}
+
+/// Sets `[scored_against]` in a template manifest: an existing section's
+/// keys are rewritten where they stand, so its comments and the sections
+/// around it stay as they are; a new section goes at the end.
+fn set_scored_against(manifest: &Path, c: &Head, path: &str) -> Result<()> {
+    let text = fs::read_to_string(manifest)?;
+    let values = [
+        ("corpus", c.name.as_str()),
+        ("version", c.version.as_str()),
+        ("hash", c.hash.as_str()),
+        ("path", path),
+    ];
+    let line_of = |k: &str, v: &str| format!("{k} = {v:?}");
+    let mut out = String::new();
+    if text.lines().any(|l| l.trim() == "[scored_against]") {
+        let has = |k: &str| {
+            let mut inside = false;
+            text.lines().any(|l| {
+                let t = l.trim();
+                if t.starts_with('[') {
+                    inside = t == "[scored_against]";
+                }
+                inside && t.split('=').next().unwrap_or("").trim() == k
+            })
+        };
+        let mut inside = false;
+        for line in text.lines() {
+            let t = line.trim();
+            if t.starts_with('[') {
+                inside = t == "[scored_against]";
+            }
+            let key = t.split('=').next().unwrap_or("").trim();
+            match values.iter().find(|(k, _)| inside && *k == key) {
+                Some((k, v)) => out.push_str(&line_of(k, v)),
+                None => out.push_str(line),
+            }
+            out.push('\n');
+            // Keys the section lacks go right after its header.
+            if t == "[scored_against]" {
+                for (k, v) in values.iter().filter(|(k, _)| !has(k)) {
+                    out.push_str(&line_of(k, v));
+                    out.push('\n');
+                }
+            }
+        }
+    } else {
+        out.push_str(text.trim_end());
+        out.push_str(
+            "\n\n# The scoring corpus this game's scores are against\n\
+             # (docs/formats/scoring-corpus.md); the records are in evidence/.\n[scored_against]\n",
+        );
+        for (k, v) in values {
+            out.push_str(&line_of(k, v));
+            out.push('\n');
+        }
+    }
+    fs::write(manifest, out)?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ScoredAgainst {
+    pub corpus: String,
+    pub version: String,
+    pub hash: String,
+    /// The corpus's folder, relative to the template (default `.`).
+    #[serde(default = "here")]
+    pub path: String,
+}
+
+fn here() -> String {
+    ".".into()
+}
+
 /// The gp build: the hash of this binary, or `GP_BUILD` when set.
-fn build() -> String {
+pub(crate) fn build() -> String {
     if let Ok(b) = std::env::var("GP_BUILD") {
         return b;
     }
@@ -464,28 +802,104 @@ fn assets_of(
     Ok(out)
 }
 
-fn score(paths: &Paths, game: &Path, run: &str, how: &Open, only: &[String]) -> Result<Outcome> {
-    let (now, m, mut problems) = checked(game)?;
+#[allow(clippy::too_many_arguments)]
+fn score(
+    paths: &Paths,
+    game: &Path,
+    run: &str,
+    how: &Open,
+    only: &[String],
+    reuse: Option<&Path>,
+    write: Option<&Path>,
+    remeasure: Option<&Path>,
+) -> Result<Outcome> {
+    let (mut now, mut m, mut problems) = checked(game)?;
     let only: Option<BTreeSet<String>> = (!only.is_empty()).then(|| only.iter().cloned().collect());
+    let started = std::time::Instant::now();
     let rom = rom_of(paths, game, how.rom)?;
-    let mdir = how.model.unwrap_or(game).to_owned();
+    let mdir = how.model.or(write).or(remeasure).unwrap_or(game).to_owned();
     let assets = assets_of(paths, game, &mdir, how.assets, &rom)?;
     let (source, _) = Source::open_dir(&mdir, Some(&assets), paths, how.module)?;
+    let source = Arc::new(source);
     let dir = run_dir(&paths.home, run)?;
     fs::create_dir_all(&dir)?;
-    let g = cs::regen_with(
-        &cs::Work {
-            paths,
-            run_dir: &dir,
-            run,
-            mdir: &mdir,
-            assets: &assets,
-            rom,
-            source: Arc::new(source),
-        },
-        game,
-        only.as_ref(),
-    )?;
+    let work = cs::Work {
+        paths,
+        run_dir: &dir,
+        run,
+        mdir: &mdir,
+        assets: &assets,
+        rom,
+        source: source.clone(),
+    };
+    // Against an earlier score: only the clips the change can move.
+    let earlier = match reuse {
+        Some(f) => {
+            let before: Value = serde_json::from_slice(
+                &fs::read(f).with_context(|| format!("reading {}", f.display()))?,
+            )
+            .with_context(|| format!("{} isn't a gp corpus score --json output", f.display()))?;
+            let b = cs::bench_for(&work)?;
+            let (mm, _) = b.model()?;
+            let fp = crate::affected::fingerprint(&b, &mm, game)?;
+            let ids: Vec<String> = now.set.clips.iter().map(|r| r.id.clone()).collect();
+            let sel = crate::affected::select(&before, &fp, &ids, &now.recipes);
+            Some((fp, sel))
+        }
+        None => None,
+    };
+    let scoring = cs::Scoring {
+        reads: true,
+        stop: earlier
+            .as_ref()
+            .map(|(_, s)| s.stop.clone())
+            .unwrap_or_default(),
+    };
+    let only = match &earlier {
+        Some((_, sel)) => Some(sel.score.clone()),
+        None => only,
+    };
+    let mut g = cs::regen_with(&work, game, only.as_ref(), &scoring)?;
+    if g.stopped > 0 {
+        problems.push(format!(
+            "{} clips the earlier score had exact stopped at their first split",
+            g.stopped
+        ));
+    }
+    // Measured again: the original's curves under the model's mapping
+    // become the corpus's, as the next minor version, and the record is
+    // written for it.
+    let mut write = write;
+    let mut remeasured = Value::Null;
+    if let Some(t) = remeasure
+        && problems.is_empty()
+        && g.failed == 0
+        && g.stopped == 0
+        && g.differ + g.measured > 0
+    {
+        let changed = accept_curves(game, &g)?;
+        let says = format!(
+            "{changed} curves measured again under the model's state mapping (schema {}), by gp corpus score --remeasure",
+            g.mapping
+        );
+        let b = bump_as(game, true, Some(&says), None, true)?;
+        remeasured =
+            json!({"changed": changed, "from": m.corpus.version, "to": b.json["suggests"]});
+        (now, m, problems) = checked(game)?;
+        g.differ = 0;
+        g.measured = 0;
+        write = Some(t);
+    }
+    // A template whose `[scored_against]` names another version of this
+    // corpus gets the record and the section brought to the corpus as it is.
+    let mut caught_up = Value::Null;
+    if let Some(t) = remeasure
+        && write.is_none()
+        && let Some(was) = behind(t, game, &m.corpus)
+    {
+        caught_up = json!({"from": was, "to": m.corpus.version});
+        write = Some(t);
+    }
     if !m.needs.mapping.is_empty() && g.mapping != m.needs.mapping {
         problems.push(format!(
             "the model's state mapping is schema {}, the corpus's curves were measured with {}",
@@ -518,12 +932,20 @@ fn score(paths: &Paths, game: &Path, run: &str, how: &Open, only: &[String]) -> 
         .map_err(anyhow::Error::msg)?
         .flatten();
     let mut clips = Vec::new();
+    let mut reads = serde_json::Map::new();
     for r in &g.set.clips {
-        if only.as_ref().is_some_and(|o| !o.contains(&r.id)) {
+        if earlier.is_none() && only.as_ref().is_some_and(|o| !o.contains(&r.id)) {
+            continue;
+        }
+        // A clip the change can't move keeps the earlier score's row.
+        if let Some((row, rd)) = earlier.as_ref().and_then(|(_, s)| s.kept.get(&r.id)) {
+            reads.insert(r.id.clone(), rd.clone());
+            clips.push(row.clone());
             continue;
         }
         let row = match g.outcomes.get(&r.id) {
             Some(Ok(o)) => {
+                reads.insert(r.id.clone(), json!(o.reads));
                 // Frames on which every measure agrees, of those measured.
                 let all = (o.together_frames * 1000)
                     .checked_div(o.measured)
@@ -710,10 +1132,82 @@ fn score(paths: &Paths, game: &Path, run: &str, how: &Open, only: &[String]) -> 
         text.extend(pair_lines);
     }
 
+    let mut written = Value::Null;
+    if let Some(t) = write {
+        let tmodel = fs::read_to_string(t.join(gp_model::MODEL_FILE))
+            .with_context(|| format!("reading {}'s model", t.display()))?;
+        if model_key(&tmodel) != model_hash {
+            problems.push(format!(
+                "{}'s model isn't the one scored; the record would be for another model",
+                t.display()
+            ));
+        }
+        if problems.is_empty() {
+            let file = record_path(t, &model_hash, &m.corpus.hash);
+            fs::create_dir_all(file.parent().expect("a parent"))?;
+            fs::write(
+                &file,
+                format!("{}\n", serde_json::to_string_pretty(&record)?),
+            )?;
+            let manifest = t.join(MANIFEST);
+            if manifest.is_file() {
+                let rel = relative(t, game);
+                set_scored_against(&manifest, &m.corpus, &rel)?;
+            }
+            text.push(format!("Wrote the record to {}.", file.display()));
+            written = json!(file);
+        } else {
+            text.push("Nothing written: a record is only for the corpus as it is.".into());
+        }
+    }
     for p in &problems {
         text.push(format!("problem: {p}"));
     }
-    let v = json!({"ok": problems.is_empty(), "record": record, "problems": problems});
+    if let Some(r) = remeasured.as_object() {
+        text.push(format!(
+            "Measured again: {} curves, corpus {} -> {}.",
+            r["changed"],
+            r["from"].as_str().unwrap_or(""),
+            r["to"].as_str().unwrap_or("")
+        ));
+    }
+    if let Some(was) = caught_up["from"].as_str()
+        && !written.is_null()
+    {
+        text.push(format!(
+            "template.toml's [scored_against] brought from {was} to {}.",
+            m.corpus.version
+        ));
+    }
+    // What a later score can be measured against: the fingerprint of what
+    // this one read, and each clip's reads. Not in the record: they describe
+    // this build's run.
+    let fingerprint = match &earlier {
+        Some((fp, _)) => fp.clone(),
+        None => {
+            let mm = gp_model::Model::parse(&g.model_text)?;
+            crate::affected::fingerprint(b, &mm, game)?
+        }
+    };
+    let affected = match &earlier {
+        Some((_, sel)) => {
+            text.push(format!(
+                "Against the earlier score: {} clips scored, {} kept ({}), in {:.1} s.",
+                sel.score.len(),
+                sel.kept.len(),
+                sel.says,
+                started.elapsed().as_secs_f64()
+            ));
+            json!({"scored": sel.score, "kept": sel.kept.len(), "says": sel.says,
+                "changed": sel.changed, "stopped_at_split": g.stopped,
+                "seconds": started.elapsed().as_secs_f64()})
+        }
+        None => Value::Null,
+    };
+    let v = json!({"ok": problems.is_empty(), "record": record, "written": written,
+        "problems": problems, "remeasured": remeasured,
+        "scored_against_from": caught_up["from"],
+        "fingerprint": fingerprint, "reads": reads, "affected": affected});
     let mut out = Outcome::ok(v, text.join("\n"));
     if !problems.is_empty() {
         out.exit = 1;

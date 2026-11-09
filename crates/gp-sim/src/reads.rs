@@ -85,6 +85,20 @@ impl Seen {
         (0..self.bits.len() * 64).filter(|&i| self.has(i)).collect()
     }
 
+    /// Every element, or those named: a set read back over a boundary.
+    pub fn of(all: bool, some: impl IntoIterator<Item = usize>) -> Self {
+        let mut s = Self {
+            all,
+            bits: Vec::new(),
+        };
+        if !all {
+            for i in some {
+                s.add(i);
+            }
+        }
+        s
+    }
+
     #[inline]
     fn add(&mut self, i: usize) {
         let w = i / 64;
@@ -132,6 +146,20 @@ pub fn recording<R>(f: impl FnOnce() -> R) -> (R, Reads) {
         SET.with(|s| s.borrow_mut().union(&got));
     }
     (r, got)
+}
+
+/// Starts noting this thread's reads, until [`take`]: for a caller whose
+/// run spans several calls in, as a game's module does between `start-reads`
+/// and `take-reads`.
+pub fn start() {
+    ON.with(|o| o.set(true));
+    SET.with(|s| *s.borrow_mut() = Reads::default());
+}
+
+/// Stops noting and gives what was noted since [`start`].
+pub fn take() -> Reads {
+    ON.with(|o| o.set(false));
+    SET.with(|s| std::mem::take(&mut *s.borrow_mut()))
 }
 
 /// Runs `f` with this thread's reads not noted: for work shared by every

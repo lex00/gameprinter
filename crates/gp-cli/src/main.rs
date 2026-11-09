@@ -2,6 +2,7 @@
 //! the new world uses so far; each is one call into a library, with no
 //! engine here.
 
+mod affected;
 mod assets;
 mod clip;
 mod clip_score;

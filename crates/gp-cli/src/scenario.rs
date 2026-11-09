@@ -18,6 +18,7 @@ use gp_evidence::manifest::PowerOn;
 use gp_interp::Lifted;
 use gp_interp::lockstep::{self, Start};
 use gp_interp::mapping::{MAPPING_FILE, Mapping};
+use gp_interp::reads::{ReadSet, SpecNames};
 use gp_interp::scenario::{self, Outcome as Ran, Quiet, Scenario, StartAt};
 use gp_model::{MODEL_FILE, Model};
 use gp_nes::protocol::NesRuntime;
@@ -46,6 +47,9 @@ pub(crate) struct Bench {
     pub input: String,
     /// Where results are cached.
     pub cache: PathBuf,
+    /// Record what each clip's run reads of the spec and which hooks it
+    /// calls (`Outcome::reads`): the host's own reads and each module run's.
+    pub reads: bool,
     /// The clips to stop at their first split: clips the scorer knows the
     /// model played exactly before, so a split decides it.
     pub stop: BTreeSet<String>,
@@ -63,6 +67,9 @@ pub(crate) struct Started {
     pub approximated: usize,
     pub missing: usize,
     pub quiet: Option<Quiet>,
+    /// What taking the start read of the spec, when the bench records reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reads: Option<ReadSet>,
 }
 
 impl Started {
@@ -78,6 +85,7 @@ impl Started {
             approximated: 0,
             missing: 0,
             quiet: None,
+            reads: None,
         }
     }
 
@@ -89,6 +97,20 @@ impl Started {
             state: base64::engine::general_purpose::STANDARD.decode(&self.state)?,
         })
     }
+}
+
+/// `f`, with what it reads of the spec noted when `on`.
+fn noted<R>(on: bool, f: impl FnOnce() -> R) -> (R, gp_sim::reads::Reads) {
+    if on {
+        gp_sim::reads::recording(f)
+    } else {
+        (f(), gp_sim::reads::Reads::default())
+    }
+}
+
+/// A module run's reads by name.
+fn run_reads(m: &mut crate::hosted::Model, names: &SpecNames) -> Result<Option<ReadSet>> {
+    Ok(m.take_reads()?.map(|r| ReadSet::of(&r, names)))
 }
 
 fn key(parts: &[&[u8]]) -> String {
@@ -155,6 +177,7 @@ impl Bench {
             inputs,
             input: input.to_owned(),
             cache: cache.to_owned(),
+            reads: false,
             stop: BTreeSet::new(),
         };
         let (m, _) = b.model()?;
@@ -195,6 +218,8 @@ impl Bench {
             env!("CARGO_PKG_VERSION").as_bytes(),
             scenario::SCENARIO_VERSION.as_bytes(),
             self.hosted.hooks.as_bytes(),
+            // A result with its reads is kept apart from one without.
+            if self.reads { b"reads 1" } else { b"" },
         ] {
             k.extend_from_slice(&(p.len() as u64).to_le_bytes());
             k.extend_from_slice(p);
@@ -279,21 +304,46 @@ impl Bench {
             mf.to_string().as_bytes(),
         ]);
         let file = self.cache.join(format!("start-{k}.json"));
-        if let Some(s) = read_cache::<Started>(&file) {
+        if let Some(s) = read_cache::<Started>(&file)
+            && (!self.reads || s.reads.is_some())
+        {
             return Ok(s);
         }
         let Some(o) = self.snapshot_of(own) else {
             return self.started(model, text, Some(own.frame));
         };
-        let s = self.started_from(mf, own, &o)?;
+        let (s, got) = noted(self.reads, || self.started_from(mf, own, &o));
+        let s = self.with_host_reads(s?, &got);
         write_cache(&file, &s);
         Ok(s)
+    }
+
+    /// `s`, its reads the module's it was given and the host's noted here.
+    fn with_host_reads(&self, mut s: Started, got: &gp_sim::reads::Reads) -> Started {
+        if self.reads {
+            let mut all = ReadSet::of(got, &SpecNames::of(&self.hosted.spec));
+            if let Some(m) = s.reads.take() {
+                all.union(&m);
+            }
+            s.reads = Some(all);
+        }
+        s
+    }
+
+    /// A new run of the model, its module reads noted when the bench
+    /// records them.
+    fn open(&self) -> Result<crate::hosted::Model> {
+        let mut m = self.hosted.open()?;
+        if self.reads {
+            m.start_reads()?;
+        }
+        Ok(m)
     }
 
     /// The start from the original's snapshot `o` at `own`'s frame, the
     /// model's frame there `mf`.
     fn started_from(&self, mf: u64, own: &StartAt, o: &NesRuntime) -> Result<Started> {
-        let mut interp = self.hosted.open()?;
+        let mut interp = self.open()?;
         let spec = interp.spec().clone();
         let mut base = gp_sim::World::power_on(&spec);
         base.frame = mf;
@@ -306,7 +356,13 @@ impl Bench {
                 .map_err(|e| anyhow::anyhow!("the model: {e}"))?,
         );
         let count = |h: LoadHow| notes.iter().filter(|n| n.how == h).count();
+        let names = SpecNames::of(&spec);
         Ok(Started {
+            reads: if self.reads {
+                run_reads(&mut interp, &names)?
+            } else {
+                None
+            },
             asked: Some(own.frame),
             original_frame: own.frame,
             frame: interp.frame(),
@@ -330,17 +386,20 @@ impl Bench {
             at.map(|a| a.to_string()).unwrap_or_default().as_bytes(),
         ]);
         let file = self.cache.join(format!("start-{k}.json"));
-        if let Some(s) = read_cache::<Started>(&file) {
+        if let Some(s) = read_cache::<Started>(&file)
+            && (!self.reads || s.reads.is_some())
+        {
             return Ok(s);
         }
-        let s = self.started_fresh(model, at)?;
+        let (s, got) = noted(self.reads, || self.started_fresh(model, at));
+        let s = self.with_host_reads(s?, &got);
         write_cache(&file, &s);
         Ok(s)
     }
 
     /// [`Bench::started`] taken again.
     fn started_fresh(&self, model: &Model, at: Option<u64>) -> Result<Started> {
-        let mut interp = self.hosted.open()?;
+        let mut interp = self.open()?;
         let spec = interp.spec().clone();
         let power = NesRuntime::load(&self.rom, PowerOn::default()).map_err(anyhow::Error::msg)?;
         let quiet = match at {
@@ -378,7 +437,13 @@ impl Bench {
         )
         .map_err(anyhow::Error::msg)?;
         let count = |h: LoadHow| start.notes.iter().filter(|n| n.how == h).count();
+        let names = SpecNames::of(&spec);
         Ok(Started {
+            reads: if self.reads {
+                run_reads(&mut interp, &names)?
+            } else {
+                None
+            },
             asked: at,
             original_frame: start.original_frame,
             frame: start.frame,
@@ -401,6 +466,8 @@ struct Shared {
     /// The model's pictures for the screen measure, decoded by the first
     /// scenario not cached while the others wait.
     art: std::sync::OnceLock<Option<Arc<crate::screen::Art>>>,
+    /// The spec's names, for each clip's reads.
+    names: SpecNames,
 }
 
 /// What a thread keeps between its scenarios: the original at each start
@@ -439,6 +506,11 @@ pub(crate) fn score_each(
             b"stretches 2",
         ]),
         art: std::sync::OnceLock::new(),
+        names: if b.reads {
+            SpecNames::of(&b.hosted.spec)
+        } else {
+            SpecNames::default()
+        },
     };
     // The costliest first, so no thread is left with a long one at the
     // end: a start with no snapshot plays the input to it from power-on.
@@ -504,11 +576,29 @@ fn score_one(
             own_log,
         ])
     ));
-    if cache && let Some(r) = read_cache::<Ran>(&file) {
+    if cache
+        && let Some(r) = read_cache::<Ran>(&file)
+        && (!b.reads || r.reads.is_some())
+    {
         return Ok(r);
     }
     let stop = b.stop.contains(&s.id);
-    let r = taped_one(b, sb, &st, model, shared, mine, s, cache, stop)?;
+    let module = std::cell::RefCell::new(ReadSet::default());
+    let (r, got) = noted(b.reads, || {
+        taped_one(b, sb, &st, model, shared, mine, s, cache, stop, &module)
+    });
+    let mut r = r?;
+    if b.reads {
+        // The clip's reads, those of each of its module runs, and its
+        // start's; a start with none recorded leaves the clip's unknown,
+        // so any change scores it again.
+        r.reads = st.reads.as_ref().map(|from| {
+            let mut all = ReadSet::of(&got, &shared.names);
+            all.union(&module.borrow());
+            all.union(from);
+            all
+        });
+    }
     // A run stopped at its split covers part of the clip: not the score.
     if cache && !r.stopped {
         write_cache(&file, &r);
@@ -609,6 +699,7 @@ fn taped_one(
     s: &Scenario,
     cache: bool,
     stop: bool,
+    module: &std::cell::RefCell<ReadSet>,
 ) -> Result<Ran> {
     use crate::tape::Original;
     let file = tape_file(b, sb, st, s)?;
@@ -617,8 +708,16 @@ fn taped_one(
     } else {
         None
     };
+    let note = |m: &mut crate::hosted::Model| -> Result<()> {
+        if b.reads
+            && let Some(r) = run_reads(m, &shared.names)?
+        {
+            module.borrow_mut().union(&r);
+        }
+        Ok(())
+    };
     let run = |o: &Original, start: &Start| -> Result<Ran> {
-        let mut interp = b.hosted.open()?;
+        let mut interp = b.open()?;
         if let Some(d) = &draws {
             interp = interp.with_draws(d.clone())?;
         }
@@ -626,10 +725,12 @@ fn taped_one(
         // The pictures are the whole model's, decoded by whichever clip
         // comes first: not that clip's reads (the scorer compares them
         // whole).
-        let art = shared
-            .art
-            .get_or_init(|| crate::screen::art(model, &spec, &b.assets).ok())
-            .clone();
+        let art = gp_sim::reads::paused(|| {
+            shared
+                .art
+                .get_or_init(|| crate::screen::art(model, &spec, &b.assets).ok())
+                .clone()
+        });
         let mut probe = art.map(|a| crate::screen::Probe::new(a, crate::screen::nes_options()));
         let (mut r, _) = scenario::run_stopping(
             o,
@@ -646,10 +747,11 @@ fn taped_one(
             stop,
         )
         .map_err(anyhow::Error::msg)?;
+        note(&mut interp)?;
         // A long run is scored by its exact stretches too: the same start
         // and presses in resync mode. A run stopped at its split has none.
         if s.frames > lockstep::LONG_RUN && !r.stopped {
-            let mut interp = b.hosted.open()?;
+            let mut interp = b.open()?;
             if let Some(d) = &draws {
                 interp = interp.with_draws(d.clone())?;
             }
@@ -668,6 +770,7 @@ fn taped_one(
                 &opts,
             )
             .map_err(anyhow::Error::msg)?;
+            note(&mut interp)?;
             r.stretches = Some(lockstep::stretches(&ls));
         }
         Ok(r)

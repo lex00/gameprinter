@@ -30,7 +30,8 @@ pub(crate) struct Source {
     bundle: Bundle,
     bytes: Vec<u8>,
     pub spec: Spec,
-    /// The hooks in `gp` itself: only a game with none of its own.
+    /// The hooks' descriptions: from the module, or the hooks in `gp` itself
+    /// for a game with none of its own.
     pub exts: Arc<Exts>,
     /// Set when the model's hooks run in a game's module.
     module: Option<ModuleCode>,
@@ -85,12 +86,17 @@ impl Source {
             .collect();
         let bytes = bundle.to_bytes();
         let mut module_hash = String::new();
+        let mut described = None;
         let module = match module {
             Some(p) => {
                 let wasm = fs::read(p).with_context(|| p.display().to_string())?;
                 module_hash = blake3::hash(&wasm).to_hex().to_string();
                 let code = ModuleCode::compile(&wasm).map_err(|e| anyhow!("{e}"))?;
                 let first = code.load(&bytes).map_err(|e| anyhow!("{e}"))?;
+                described = Some(
+                    gp_interp::describe::read_exts(&first.describe().map_err(|e| anyhow!("{e}"))?)
+                        .map_err(|e| anyhow!("{e}"))?,
+                );
                 let theirs = first.spec_digest().map_err(|e| anyhow!("{e}"))?;
                 let ours = gp_sim::save::spec_digest(&spec);
                 if theirs != ours {
@@ -111,6 +117,7 @@ impl Source {
             Some(_) => module_hash,
             None => label,
         };
+        let exts = described.map_or(exts, Arc::new);
         Ok(Self {
             bundle,
             bytes,
@@ -210,6 +217,28 @@ impl Model {
                 h.rt.set_draws(&d.text(), d.base)
                     .map_err(|e| anyhow!("{e}"))?;
                 Ok(Self::Module(h))
+            }
+        }
+    }
+
+    /// Starts noting what the run reads inside its module. A native run's
+    /// reads are the host thread's, noted there.
+    pub(crate) fn start_reads(&mut self) -> Result<()> {
+        match self {
+            Self::Native(_) => Ok(()),
+            Self::Module(h) => h.rt.start_reads().map_err(|e| anyhow!("{e}")),
+        }
+    }
+
+    /// What the run read inside its module since [`Self::start_reads`].
+    pub(crate) fn take_reads(&mut self) -> Result<Option<gp_sim::reads::Reads>> {
+        match self {
+            Self::Native(_) => Ok(None),
+            Self::Module(h) => {
+                let b = h.rt.take_reads().map_err(|e| anyhow!("{e}"))?;
+                gp_interp::reads::read_reads(&b)
+                    .map(Some)
+                    .map_err(|e| anyhow!("{e}"))
             }
         }
     }

@@ -50,6 +50,7 @@ pub mod carry;
 pub mod compare;
 pub mod compile;
 pub mod corpus;
+pub mod describe;
 pub mod difficulty;
 pub mod external;
 pub mod lifted;

@@ -178,16 +178,22 @@ pub fn files_under(dir: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
     Ok(files)
 }
 
-/// The hash of a package folder's hook code, as a player's build names it.
-pub fn hooks(dir: &Path) -> Result<Outcome> {
+/// The hash of a package folder's `ext/` hook code; `None` with none.
+pub(crate) fn hook_code(dir: &Path) -> Result<Option<String>> {
+    if !dir.join("ext").is_dir() {
+        return Ok(None);
+    }
     let mut m = Manifest::new("game", "x");
     for (path, bytes) in files_under(&dir.join("ext"))? {
         m.add(&format!("ext/{path}"), &bytes)
             .map_err(|e| anyhow!(e))?;
     }
-    let h = m
-        .hook_hash()
-        .ok_or_else(|| anyhow!("{} has no hook code", dir.display()))?;
+    Ok(m.hook_hash())
+}
+
+/// The hash of a package folder's hook code, as a player's build names it.
+pub fn hooks(dir: &Path) -> Result<Outcome> {
+    let h = hook_code(dir)?.ok_or_else(|| anyhow!("{} has no hook code", dir.display()))?;
     Ok(Outcome {
         json: json!({ "hooks": h }),
         text: h,
