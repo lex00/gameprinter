@@ -256,7 +256,7 @@ fn role_of(rel: &str, part: &Part) -> Role {
     if rel.starts_with("evidence/") || rel.starts_with("baselines/") {
         return Role::Whole("score");
     }
-    if rel.starts_with("clips/") {
+    if rel.starts_with("clips/") || rel.starts_with("inputs/") {
         return Role::Whole("clip recipe");
     }
     if rel.ends_with(".toml") {

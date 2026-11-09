@@ -257,7 +257,7 @@ pub fn kit(out: &Path) -> Result<Outcome> {
 }
 
 /// A hash of a folder's paths and contents.
-fn tree_hash(dir: &Path) -> Result<String> {
+pub(crate) fn tree_hash(dir: &Path) -> Result<String> {
     let mut h = blake3::Hasher::new();
     for (rel, bytes) in read_all(dir)? {
         h.update(format!("{} {} {rel}\n", blake3::hash(&bytes).to_hex(), bytes.len()).as_bytes());
@@ -320,13 +320,18 @@ fn slot_manifest(ext: &Path) -> Result<String> {
     Ok(toml::to_string(&m)?)
 }
 
-fn toolchain_dir(kit: &Path) -> Result<PathBuf> {
-    let channel = read_table(&kit.join("rust-toolchain.toml"))?
+/// The Rust channel the kit builds with.
+pub(crate) fn kit_channel(kit: &Path) -> Result<String> {
+    Ok(read_table(&kit.join("rust-toolchain.toml"))?
         .get("toolchain")
         .and_then(|t| t.get("channel"))
         .and_then(toml::Value::as_str)
         .context("the kit names no toolchain")?
-        .to_owned();
+        .to_owned())
+}
+
+fn toolchain_dir(kit: &Path) -> Result<PathBuf> {
+    let channel = kit_channel(kit)?;
     let out = Command::new("rustup")
         .args(["which", "--toolchain", &channel, "cargo"])
         .output()

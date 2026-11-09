@@ -147,6 +147,10 @@ pub(crate) struct ClipSet {
     pub mutant: Vec<toml::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub import: Option<toml::Value>,
+    /// Read from a corpus plan ([`crate::plan`]): its clips have no curves
+    /// to compare with, the curves are derived.
+    #[serde(skip)]
+    pub plan: bool,
 }
 
 /// A clip set read from `file`, its format checked: same major and minor,
@@ -155,8 +159,27 @@ pub(crate) struct ClipSet {
 /// program has a guard installed.
 pub(crate) fn read(file: &Path) -> anyhow::Result<ClipSet> {
     let text = fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
-    let mut set = parse(&text, file)?;
+    let set = parse(&text, file)?;
     let dir = file.parent().unwrap_or(Path::new("."));
+    Ok(without_sealed(set, dir, file))
+}
+
+/// The clip set of the game in `dir`: its corpus plan when `corpus.toml` is
+/// one, else its `clips.toml`.
+pub(crate) fn read_game(dir: &Path) -> anyhow::Result<ClipSet> {
+    if let Some(p) = crate::plan::load(dir)? {
+        return Ok(without_sealed(
+            p.set,
+            dir,
+            &dir.join(crate::corpus_score::FILE),
+        ));
+    }
+    read(&dir.join(FILE))
+}
+
+/// `set` with any clip that plays a sealed run left out, as every reader of
+/// a set must, when this program has a guard installed.
+fn without_sealed(mut set: ClipSet, dir: &Path, file: &Path) -> ClipSet {
     let before = set.clips.len();
     let of = gp_evidence::guard::Of::game(&set.clipset.game);
     set.clips.retain(|r| match recipe_log(dir, r) {
@@ -174,7 +197,7 @@ pub(crate) fn read(file: &Path) -> anyhow::Result<ClipSet> {
             if left == 1 { "s" } else { "" },
         );
     }
-    Ok(set)
+    set
 }
 
 /// A clip set's text, checked as [`read`] checks a file; `file` names it
@@ -218,7 +241,7 @@ pub(crate) fn parse(text: &str, file: &Path) -> anyhow::Result<ClipSet> {
 }
 
 /// A relative path that stays in its folder.
-fn inside(p: &str) -> bool {
+pub(crate) fn inside(p: &str) -> bool {
     let path = Path::new(p);
     path.is_relative()
         && path
@@ -812,8 +835,7 @@ pub(crate) fn regen_with(
     only: Option<&BTreeSet<String>>,
     how: &Scoring,
 ) -> anyhow::Result<Regen> {
-    let file = set_dir.join(FILE);
-    let set = read(&file)?;
+    let set = read_game(set_dir)?;
     if let Some(d) = set.clips.iter().find(|r| r.source == DENSE) {
         bail!(
             "clip {} is a dense clip, which this gp can't score yet",
@@ -887,6 +909,8 @@ pub(crate) fn regen_with(
             (Ok(_), Some(Ok(_))) if matches!(outcomes.get(&r.id), Some(Ok(o)) if o.stopped) => {
                 stopped += 1;
             }
+            // A plan's curves are derived here, so there is nothing to compare.
+            (Ok(_), Some(Ok(_))) if set.plan => {}
             (Ok(_), Some(Ok(_))) if !same_mapping => measured += 1,
             (Ok(_), Some(Ok(_))) if r.curve.is_empty() => measured += 1,
             (Ok(_), Some(Ok(c))) if *c != r.curve => differ += 1,

@@ -4,6 +4,7 @@
 
 mod affected;
 mod assets;
+mod attest;
 mod cli_doc;
 mod clip;
 mod clip_score;
@@ -17,6 +18,7 @@ mod lockstep;
 mod model;
 mod module;
 mod package;
+mod plan;
 mod pool;
 mod publish;
 mod registry;
@@ -251,6 +253,43 @@ enum GameCmd {
     },
     /// Print a built module's BLAKE3 hash.
     Hash { file: PathBuf },
+    /// Score a game from its package and the ROM alone, in this $GP_HOME:
+    /// every clip and curve derived from the corpus plan and the ROM, played
+    /// through the module, and the score record written to FILE. Exits 1
+    /// when the corpus has problems.
+    Score {
+        dir: PathBuf,
+        /// The game's built module (default: the package's play/module.wasm).
+        #[arg(long)]
+        module: Option<PathBuf>,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Attest a published version of a game: derivation, module build and
+    /// score, as signed statements under attest/<id>/ in the registry. Takes
+    /// a clean `gp game score` output of the package.
+    Attest {
+        /// The package's folder (a working copy of the published version).
+        dir: PathBuf,
+        /// The `gp game score` output.
+        #[arg(long)]
+        score: PathBuf,
+        /// The module kit the module was built from (`gp game kit -o DIR`).
+        #[arg(long)]
+        kit: PathBuf,
+        /// The module (default: the package's play/module.wasm).
+        #[arg(long)]
+        module: Option<PathBuf>,
+        /// The published package's id.
+        #[arg(long)]
+        id: String,
+        /// The registry: a folder, git:PATH or s3://BUCKET.
+        #[arg(long)]
+        to: String,
+        /// The namespace's signing key file.
+        #[arg(long)]
+        key: PathBuf,
+    },
     /// Build a game's module from its package folder and the kit, in a
     /// sandbox that reads nothing else and has no network. Exits 1 when the
     /// hook crate breaks the rules, 2 when the build fails.
@@ -437,6 +476,37 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
         Cmd::Game {
             cmd: GameCmd::Hash { file },
         } => module::hash(file),
+        Cmd::Game {
+            cmd: GameCmd::Score { dir, module, out },
+        } => corpus_score::game_score(
+            &gp_evidence::Paths::from_env()?,
+            dir,
+            module.as_deref(),
+            out,
+        ),
+        Cmd::Game {
+            cmd:
+                GameCmd::Attest {
+                    dir,
+                    score,
+                    kit,
+                    module,
+                    id,
+                    to,
+                    key,
+                },
+        } => attest::run(
+            &gp_evidence::Paths::from_env()?,
+            &attest::Given {
+                dir,
+                score,
+                kit,
+                module: module.as_deref(),
+                id,
+                to,
+                key,
+            },
+        ),
         Cmd::Game {
             cmd:
                 GameCmd::Build {

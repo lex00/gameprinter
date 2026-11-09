@@ -273,3 +273,22 @@ fn a_version_is_published_once() {
     .unwrap_err();
     assert!(e.contains("already published"), "{e}");
 }
+
+#[test]
+fn an_attestation_is_written_once_signed_and_listed() {
+    let f = fixture();
+    let t = f.target();
+    let text = "x = 1\n";
+    let key = with(&f.ns, |s| attest(&t, &f.id, text, s)).unwrap();
+    assert!(key.starts_with(&format!("attest/{}/", f.id)));
+    let body = t.read(&key).unwrap().unwrap();
+    assert_eq!(body, text.as_bytes());
+    let sig = t.read(&format!("{key}.sig")).unwrap().unwrap();
+    crate::sig::verify(&f.ns.public, NAMESPACE, &sig, &body).unwrap();
+    let hash = key.rsplit('/').next().unwrap().trim_end_matches(".toml");
+    let list = t.read(&format!("attest/{}/list", f.id)).unwrap().unwrap();
+    assert_eq!(String::from_utf8(list).unwrap(), format!("{hash}\n"));
+    // The same record can't be written twice; a package not here can't be attested.
+    assert!(with(&f.ns, |s| attest(&t, &f.id, text, s)).is_err());
+    assert!(with(&f.ns, |s| attest(&t, "missing", "y = 1\n", s)).is_err());
+}

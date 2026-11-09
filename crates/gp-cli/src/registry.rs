@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow};
-use gp_package::registry::{Folder, Publish, Reader, Signer, Target, init, publish, reindex};
+use gp_package::registry::{
+    Folder, Publish, Reader, Signer, Target, attest, init, publish, reindex,
+};
 use gp_package::sig::{NAMESPACE, fingerprint};
 use serde_json::json;
 
@@ -257,7 +259,7 @@ pub fn open(spec: &str) -> Box<dyn Target> {
     }
 }
 
-fn public_of(key: &Path) -> Result<String> {
+pub(crate) fn public_of(key: &Path) -> Result<String> {
     let p = PathBuf::from(format!("{}.pub", key.display()));
     Ok(fs::read_to_string(&p)
         .with_context(|| format!("reading {}", p.display()))?
@@ -294,7 +296,7 @@ fn signing<T>(key: &Path, f: impl FnOnce(&Signer) -> Result<T, String>) -> Resul
 }
 
 /// The UTC time, whole seconds, in the registry's RFC 3339 form.
-fn utc(after_days: u32) -> Result<String> {
+pub(crate) fn utc(after_days: u32) -> Result<String> {
     let o = Command::new("date")
         .args([
             "-u",
@@ -410,6 +412,32 @@ fn publish_inner(
         text: format!("published {name}@{version}: {id} ({} files)", files.len()),
         exit: 0,
     })
+}
+
+/// Writes signed attestation files about package `id`, each a statement's
+/// text, under `attest/<id>/`. Once written they can't be replaced.
+pub(crate) fn attest_cmd(
+    target: &str,
+    id: &str,
+    statements: &[String],
+    key: &Path,
+) -> Result<Outcome> {
+    committing(
+        target,
+        &format!("Attest package {}", &id[..12.min(id.len())]),
+        || {
+            let t = open(target);
+            let mut keys = Vec::new();
+            for text in statements {
+                keys.push(signing(key, |s| attest(&*t, id, text, s))?);
+            }
+            Ok(Outcome {
+                text: format!("wrote {} attestations:\n{}", keys.len(), keys.join("\n")),
+                json: json!({ "attestations": keys }),
+                exit: 0,
+            })
+        },
+    )
 }
 
 pub fn reindex_cmd(target: &str, versions: &[String], key: &Path) -> Result<Outcome> {

@@ -11,10 +11,12 @@ For making and playing games: what a person installing gp uses.
 | `gp assets lift` | Decode a ROM's assets into a directory outside any git work tree |
 | `gp assets pack` | Pack a lifted directory and compare it with the ROM, byte for byte |
 | `gp corpus score` | Score a game's corpus on a model: every clip made again from the ROM, played through the model and checked against its curve. Prints the clips exact and the fidelity and, with --json, the score record |
+| `gp game attest` | Attest a published version of a game: derivation, module build and score, as signed statements under attest/<id>/ in the registry. Takes a clean `gp game score` output of the package |
 | `gp game build` | Build a game's module from its package folder and the kit, in a sandbox that reads nothing else and has no network. Exits 1 when the hook crate breaks the rules, 2 when the build fails |
 | `gp game fetch` | Fetch NAME@VERSION by id into a folder, checking every signature and hash, and lift every ROM entry it finds in the ROM folder |
 | `gp game hash` | Print a built module's BLAKE3 hash |
 | `gp game kit` | Write the module kit: the tool's sources for a game module and the crates they need, ready for a build with no network |
+| `gp game score` | Score a game from its package and the ROM alone, in this $GP_HOME: every clip and curve derived from the corpus plan and the ROM, played through the module, and the score record written to FILE. Exits 1 when the corpus has problems |
 | `gp model check` | Check a model, its profiles, its contract and its asset slots |
 | `gp model fmt` | Fail if the model or contract isn't in canonical form |
 | `gp model gate` | Hold a patch to a game in the games repo to its corpus: PASS or FAIL, and what passes lands |

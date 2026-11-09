@@ -1,6 +1,7 @@
-//! `gp corpus score`: the corpus of a game (its `clips.toml` and
-//! `corpus.toml`) scored on a model, each clip's curve checked against the
-//! set's.
+//! `gp corpus score` and `gp game score`: the corpus of a game (its corpus
+//! plan, or an older `clips.toml` and `corpus.toml`) scored on a model. A
+//! plan's curves are derived from the ROM each time; an older set's are
+//! checked against the ones it records.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -35,8 +36,8 @@ pub enum CorpusCmd {
     /// ROM, played through the model and checked against its curve. Prints
     /// the clips exact and the fidelity and, with --json, the score record.
     Score {
-        /// The game's package folder (games/donkey-kong), with its
-        /// clips.toml and corpus.toml.
+        /// The game's package folder (games/donkey-kong), with its corpus
+        /// plan (corpus.toml) or, for a game not moved yet, clips.toml too.
         game: PathBuf,
         /// The run's name: its starts and caches are kept under $GP_HOME.
         #[arg(long)]
@@ -291,6 +292,15 @@ struct Read {
 }
 
 fn load(dir: &Path) -> Result<Read> {
+    if let Some(p) = crate::plan::load(dir)? {
+        return Ok(Read {
+            metadata: p.manifest.corpus.metadata.clone(),
+            set: p.set,
+            recipes: p.recipes,
+            hash: p.hash,
+            manifest: Some(p.manifest),
+        });
+    }
     let file = dir.join(cs::FILE);
     let text = fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?;
     let set = cs::parse(&text, &file)?;
@@ -452,7 +462,17 @@ fn checked(dir: &Path) -> Result<(Read, CorpusFile, Vec<String>)> {
         bail!("{} has no {FILE}; gp corpus init makes one", dir.display());
     };
     let mut problems = Vec::new();
-    if now.hash != m.corpus.hash {
+    if now.set.plan {
+        if now.hash != m.corpus.hash {
+            problems.push(format!(
+                "{}'s recipes aren't version {}'s (hash {}, recorded {}): a changed recipe is a new corpus version",
+                dir.display(),
+                m.corpus.version,
+                now.hash,
+                m.corpus.hash,
+            ));
+        }
+    } else if now.hash != m.corpus.hash {
         let d = diff_recorded(&m, &now);
         problems.push(format!(
             "{}'s clips aren't version {}'s (hash {}, recorded {}); gp corpus bump suggests {}",
@@ -744,6 +764,67 @@ fn model_key(text: &str) -> String {
             || gp_evidence::Hash::of(text.as_bytes()).to_string(),
             |t| gp_evidence::Hash::of(t.as_bytes()).to_string(),
         )
+}
+
+/// `gp game score`: the corpus derived and scored in this `$GP_HOME`, from
+/// the package in `game` and the ROM alone. The score record goes to `out`
+/// with the corpus's curve-set hash and the module's hash beside it, for an
+/// attestation to name. Without `--module` a package's own
+/// `play/module.wasm` is used.
+pub(crate) fn game_score(
+    paths: &Paths,
+    game: &Path,
+    module: Option<&Path>,
+    out: &Path,
+) -> Result<Outcome> {
+    let game = fs::canonicalize(game).with_context(|| game.display().to_string())?;
+    let own = game.join("play/module.wasm");
+    let module = module
+        .map(Path::to_owned)
+        .or_else(|| own.is_file().then_some(own));
+    let scored = score(
+        paths,
+        &game,
+        "game-score",
+        &Open {
+            module: module.as_deref(),
+            model: None,
+            assets: None,
+            rom: None,
+        },
+        &[],
+        None,
+        None,
+        None,
+    )?;
+    let mut v = scored.json;
+    let rows = v["record"]["predicate"]["clips"]
+        .as_array()
+        .context("the score record has no clips")?;
+    let curves: BTreeMap<String, (String, String)> = rows
+        .iter()
+        .map(|r| {
+            let f = |k: &str| r[k].as_str().unwrap_or("").to_owned();
+            (f("id"), (f("curve"), f("coverage")))
+        })
+        .collect();
+    v["curves"] = json!(crate::plan::curve_set_hash(&curves));
+    v["module"] = match &module {
+        Some(m) => json!(gp_evidence::Hash::of(&fs::read(m)?).to_string()),
+        None => Value::Null,
+    };
+    if let Some(p) = out.parent() {
+        fs::create_dir_all(p)?;
+    }
+    fs::write(out, format!("{}\n", serde_json::to_string_pretty(&v)?))
+        .with_context(|| out.display().to_string())?;
+    let text = format!("{}\nThe score record is in {}.", scored.text, out.display());
+    let exit = scored.exit;
+    Ok(Outcome {
+        json: v,
+        text,
+        exit,
+    })
 }
 
 /// The game's asset map for this ROM: its path and text.

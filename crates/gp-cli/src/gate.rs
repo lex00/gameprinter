@@ -942,14 +942,21 @@ fn picture_worse(base: &Rows, new: &Rows) -> Option<String> {
     None
 }
 
-fn recipe_ids(text: &str) -> BTreeSet<String> {
-    toml::from_str::<toml::Value>(text)
-        .ok()
-        .and_then(|v| {
-            v.get("recipes")?
-                .as_table()
-                .map(|t| t.keys().cloned().collect())
-        })
+/// The clip IDs a `corpus.toml` names: a plan's `[[clip]]` table, or an
+/// older file's `[recipes]`.
+pub(crate) fn recipe_ids(text: &str) -> BTreeSet<String> {
+    let Ok(v) = toml::from_str::<toml::Value>(text) else {
+        return BTreeSet::new();
+    };
+    if let Some(clips) = v.get("clip").and_then(|c| c.as_array()) {
+        return clips
+            .iter()
+            .filter_map(|c| c.get("id")?.as_str().map(str::to_owned))
+            .collect();
+    }
+    v.get("recipes")
+        .and_then(|r| r.as_table())
+        .map(|t| t.keys().cloned().collect())
         .unwrap_or_default()
 }
 

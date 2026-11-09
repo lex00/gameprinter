@@ -36,7 +36,7 @@ pub enum ClipCmd {
     Log {
         /// The game's package folder (games/donkey-kong).
         game: PathBuf,
-        /// A clip of the game's clips.toml by its ID (dk.hammer.018).
+        /// A clip of the game's corpus by its ID (dk.hammer.018).
         clip: String,
         /// Where to write it, `-` for standard output (default: CLIP.log in
         /// the output folder, $GP_HOME/work/clip-score/$GP_WORKER).
@@ -52,7 +52,7 @@ pub enum ClipCmd {
     Score {
         /// The game's package folder (games/donkey-kong).
         game: PathBuf,
-        /// Clips of the game's clips.toml by their IDs.
+        /// Clips of the game's corpus by their IDs.
         #[arg(required = true)]
         clips: Vec<String>,
         /// The game's built module. Needed for a model with hooks.
@@ -118,7 +118,7 @@ pub(crate) fn out_dir(paths: &Paths) -> PathBuf {
     paths.home.join("work").join("clip-score").join(who)
 }
 
-/// A corpus clip: a recipe of a game's clips.toml, named by its ID.
+/// A corpus clip: a recipe of a game's corpus, named by its ID.
 pub(crate) struct CorpusClip {
     set_dir: PathBuf,
     pub recipe: clipset::Recipe,
@@ -138,11 +138,10 @@ impl CorpusClip {
     }
 }
 
-/// The corpus clip `spec` names in the game's clips.toml. A sealed clip is
+/// The corpus clip `spec` names in the game's corpus. A sealed clip is
 /// left out of the set when it is read.
 pub(crate) fn corpus_clip(game: &Path, spec: &str) -> Result<CorpusClip> {
-    let file = game.join(clipset::FILE);
-    let set = clipset::read(&file)?;
+    let set = clipset::read_game(game)?;
     set.clips
         .into_iter()
         .find(|r| r.id == spec)
@@ -150,7 +149,7 @@ pub(crate) fn corpus_clip(game: &Path, spec: &str) -> Result<CorpusClip> {
             set_dir: game.to_owned(),
             recipe,
         })
-        .with_context(|| format!("{} has no clip {spec}", file.display()))
+        .with_context(|| format!("{} has no clip {spec}", game.display()))
 }
 
 fn log_cmd(paths: &Paths, game: &Path, spec: &str, out: Option<&Path>) -> Result<Outcome> {

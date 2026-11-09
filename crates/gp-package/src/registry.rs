@@ -236,6 +236,35 @@ fn replace_signed(t: &dyn Target, key: &str, bytes: &[u8], s: &Signer) -> Result
     t.replace(&sig_key(key), &sig)
 }
 
+/// An attestation's key: its text is named by its own hash.
+fn attest_key(id: &str, hash: &str) -> String {
+    format!("attest/{id}/{hash}.toml")
+}
+
+/// The list of a package's attestations.
+fn attest_list_key(id: &str) -> String {
+    format!("attest/{id}/list")
+}
+
+/// Writes one attestation about package `id` with its signature and adds it
+/// to the package's list. Refuses a package the registry doesn't have and
+/// an attestation already there, so a record can't be replaced.
+pub fn attest(t: &dyn Target, id: &str, text: &str, s: &Signer) -> Result<String, String> {
+    must_read(t, &package_key(id))?;
+    let hash = blake3::hash(text.as_bytes()).to_hex().to_string();
+    let key = attest_key(id, &hash);
+    put_signed(t, &key, text.as_bytes(), s)?;
+    let list = attest_list_key(id);
+    let mut lines = match t.read(&list)? {
+        Some(b) => String::from_utf8(b).map_err(|e| e.to_string())?,
+        None => String::new(),
+    };
+    lines.push_str(&hash);
+    lines.push('\n');
+    t.replace(&list, lines.as_bytes())?;
+    Ok(key)
+}
+
 /// Makes a registry: `registry.toml` and each namespace file, root-signed.
 pub fn init(
     t: &dyn Target,
