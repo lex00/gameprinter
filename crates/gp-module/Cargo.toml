@@ -1,0 +1,18 @@
+[package]
+name = "gp-module"
+description = "Runs a game's Wasm module under wasmtime, with its limits, as a gp_runtime::Runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+gp-runtime = { version = "0.1.0", path = "../gp-runtime" }
+wasmtime = { version = "48.0.7", default-features = false, features = ["cranelift", "runtime", "parallel-compilation", "std"] }
+
+[dev-dependencies]
+wat = "1"
+
+[lints]
+workspace = true

@@ -683,6 +683,8 @@ impl gp_present::shell::Target for ShellTarget<'_> {
     }
 }
 
+pub mod rt;
+
 #[cfg(target_arch = "wasm32")]
 pub mod abi;
 

@@ -16,6 +16,7 @@
 //! [`select`]. docs/runtime-protocol.md describes both.
 
 pub mod select;
+pub mod wire;
 
 /// The WIT package this crate mirrors.
 pub const WIT_PACKAGE: &str = "game-printer:runtime@0.4.0";

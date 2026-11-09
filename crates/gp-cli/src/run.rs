@@ -29,6 +29,51 @@ fn frames(input: &InputLog) -> Vec<InputFrame> {
         .collect()
 }
 
+/// A model's run through its module, each frame's state hash written out.
+pub fn module_run(
+    dir: &Path,
+    module: &Path,
+    assets: &Path,
+    input: &Path,
+    hashes: &Path,
+) -> Result<Outcome> {
+    let file = dir.join("model.toml");
+    let text = fs::read_to_string(&file).with_context(|| file.display().to_string())?;
+    let model = Model::parse(&text).with_context(|| file.display().to_string())?;
+    let lifted = Lifted::read_dir(assets, &model).map_err(|e| anyhow!("{e}"))?;
+    let bundle = Bundle::new(&model, lifted);
+    let wasm = fs::read(module).with_context(|| module.display().to_string())?;
+    let mut rt =
+        gp_module::ModuleRuntime::load(&wasm, &bundle.to_bytes()).map_err(|e| anyhow!("{e}"))?;
+    let log =
+        InputLog::parse(&fs::read_to_string(input).with_context(|| input.display().to_string())?)
+            .map_err(|e| anyhow!("{}: {e}", input.display()))?;
+    let hex = |rt: &gp_module::ModuleRuntime| -> Result<String> {
+        Ok(hex::encode(rt.world_hash().map_err(|e| anyhow!("{e}"))?))
+    };
+    let mut out = String::new();
+    out.push_str(&hex(&rt)?);
+    out.push('\n');
+    let start = std::time::Instant::now();
+    let inputs = frames(&log);
+    for f in &inputs {
+        gp_runtime::Runtime::step(&mut rt, std::slice::from_ref(f)).map_err(|e| anyhow!("{e}"))?;
+        out.push_str(&hex(&rt)?);
+        out.push('\n');
+    }
+    let secs = start.elapsed().as_secs_f64();
+    fs::write(hashes, out).with_context(|| hashes.display().to_string())?;
+    Ok(Outcome {
+        json: json!({ "frames": inputs.len(), "seconds": secs, "hooks": rt.label }),
+        text: format!(
+            "ran {} frames through the module in {secs:.2} s; hooks: {}",
+            inputs.len(),
+            rt.label
+        ),
+        exit: 0,
+    })
+}
+
 pub fn baseline_check(files: &[PathBuf], rom_path: &Path) -> Result<Outcome> {
     let mut list = Vec::new();
     for f in files {

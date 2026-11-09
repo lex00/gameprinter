@@ -83,6 +83,29 @@ pub extern "C" fn gp_out_len() -> usize {
     OUT.with(|o| o.borrow().len())
 }
 
+thread_local! {
+    static SESSIONS: std::cell::RefCell<crate::rt::Sessions> = std::cell::RefCell::default();
+}
+
+/// One runtime protocol call from `gp`'s host: an op number and its bytes
+/// (`gp_runtime::wire`). 0 with the answer in the output buffer, 1 with the
+/// error's words there.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_rt(op: u32, ptr: *mut u8, len: usize) -> i32 {
+    let bytes = input(ptr, len);
+    let mut w = gp_runtime::wire::Writer::default();
+    match SESSIONS.with(|s| s.borrow_mut().call(op, &bytes, &mut w)) {
+        Ok(()) => {
+            set_out(&w.0);
+            0
+        }
+        Err(e) => {
+            set_out(e.as_bytes());
+            1
+        }
+    }
+}
+
 /// A model bundle in a profile ([`crate::profile_bundle`]): the bundle,
 /// the text of `profiles.toml` and the profile's name, each from
 /// `gp_alloc`. The new bundle's bytes are in the output buffer.

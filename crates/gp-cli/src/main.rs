@@ -130,6 +130,20 @@ enum BaselineCmd {
 
 #[derive(Subcommand)]
 enum InterpCmd {
+    /// Run a model through its game's module on an input log and write the
+    /// state hash at power-on and after every frame, one in hex a line.
+    Run {
+        dir: PathBuf,
+        /// The game's built module.
+        #[arg(long)]
+        module: PathBuf,
+        #[arg(long)]
+        assets: PathBuf,
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long)]
+        hashes: PathBuf,
+    },
     /// Compare the model with the original on a baseline's input.
     Compare {
         dir: PathBuf,
@@ -312,6 +326,16 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
         Cmd::Baseline {
             cmd: BaselineCmd::Check { files, rom },
         } => run::baseline_check(files, rom),
+        Cmd::Interp {
+            cmd:
+                InterpCmd::Run {
+                    dir,
+                    module,
+                    assets,
+                    input,
+                    hashes,
+                },
+        } => run::module_run(dir, module, assets, input, hashes),
         Cmd::Interp {
             cmd:
                 InterpCmd::Compare {
