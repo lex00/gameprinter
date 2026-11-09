@@ -6,6 +6,12 @@
 //! leaves any clip worse fails, and what passes lands on the branch. The
 //! old gate's queue, build of gp per commit and repo-wide guards are gone:
 //! gp is the running binary, and a patch only ever reaches the game's files.
+//!
+//! On a working copy with no git of its own (a folder from `gp game fetch`)
+//! the gate keeps a private git of it in its home (`gate_copy`): the edits
+//! since the last landed commit are the patch, and a landing is a commit
+//! there. A tool patch is the other half (`tool_gate`), and shares the
+//! apply, hook, tree and landing code here.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -30,8 +36,10 @@ pub struct GateArgs {
     pub game: PathBuf,
     /// The patch: `git diff` output, or a `git format-patch` mail, which
     /// keeps its own message and author. It may only change the game's files.
+    /// Left out for a working copy with no git of its own (the gate takes
+    /// the edits since the last landed commit) and for --score-only.
     #[arg(long)]
-    pub patch: PathBuf,
+    pub patch: Option<PathBuf>,
     /// The run in the gate's home the corpus's clips are made in.
     #[arg(long, default_value = "gate")]
     pub run: String,
@@ -53,6 +61,10 @@ pub struct GateArgs {
     /// since no score compares a clip that is gone.
     #[arg(long = "removes", value_name = "ID")]
     pub removes: Vec<String>,
+    /// Score the tip and stop: no patch, nothing lands. The tool gate's
+    /// canary runs this through the patched gp and compares the rows.
+    #[arg(long, conflicts_with = "patch")]
+    pub score_only: bool,
 }
 
 /// What every try reads.
@@ -60,6 +72,9 @@ struct Ctx {
     repo: PathBuf,
     /// The game's folder inside the repo.
     rel: PathBuf,
+    /// A working copy the private git follows, for what a landing writes
+    /// back to it.
+    copy: Option<PathBuf>,
     /// The gate's worktree.
     tree: PathBuf,
     home: PathBuf,
@@ -73,7 +88,7 @@ struct Ctx {
 }
 
 /// `Err` with git's own words.
-fn git(dir: &Path, args: &[&str]) -> Result<String> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String> {
     let o = Command::new("git").arg("-C").arg(dir).args(args).output()?;
     if !o.status.success() {
         bail!(
@@ -196,8 +211,7 @@ fn rewrites(v: &Value) -> BTreeMap<String, u64> {
 }
 
 /// The tree at `commit`, clean.
-fn checkout(c: &Ctx, commit: &str) -> Result<()> {
-    let tree = &c.tree;
+pub(crate) fn checkout(repo: &Path, tree: &Path, commit: &str) -> Result<()> {
     if tree.join(".git").exists() {
         let _ = git(tree, &["am", "--abort"]);
         let _ = git(tree, &["reset", "-q", "--hard"]);
@@ -206,8 +220,9 @@ fn checkout(c: &Ctx, commit: &str) -> Result<()> {
         // template or in gp's code.
         git(tree, &["clean", "-fdq"])?;
     } else {
+        git(repo, &["worktree", "prune"])?;
         git(
-            &c.repo,
+            repo,
             &[
                 "worktree",
                 "add",
@@ -221,31 +236,85 @@ fn checkout(c: &Ctx, commit: &str) -> Result<()> {
 }
 
 /// A failure's reason and the phase it failed in.
-struct Failed {
-    why: String,
-    phase: &'static str,
+pub(crate) struct Failed {
+    pub why: String,
+    pub phase: &'static str,
 }
 
 /// How a try went.
 enum Trial {
     Fail(Failed),
-    Pass { commit: String },
+    Pass { commit: String, remeasured: bool },
 }
 
 fn fail(why: String, phase: &'static str) -> Result<Trial> {
     Ok(Trial::Fail(Failed { why, phase }))
 }
 
-/// Applies the patch on the clean tree: as it is, else merged three ways.
-fn apply(tree: &Path, patch: &Path, mail: bool) -> std::result::Result<(), String> {
-    let p = patch.to_string_lossy();
-    if mail {
-        if git(tree, &["am", "--3way", &p]).is_ok() {
-            return Ok(());
-        }
-        let _ = git(tree, &["am", "--abort"]);
-        return Err("the patch doesn't apply on the tip".into());
+/// A patch file, read: the diff, and what a `git format-patch` mail
+/// carries of its message and author.
+pub(crate) struct Patch {
+    pub diff: PathBuf,
+    pub message: Option<String>,
+    pub author: Option<String>,
+    pub date: Option<String>,
+}
+
+/// Reads a patch or a one-commit mail, whose diff goes to `work`. A mail
+/// with several commits is refused: each lands through a gate of its own.
+pub(crate) fn read_patch(file: &Path, work: &Path) -> Result<std::result::Result<Patch, String>> {
+    let text = fs::read(file).with_context(|| file.display().to_string())?;
+    let plain = Patch {
+        diff: std::path::absolute(file)?,
+        message: None,
+        author: None,
+        date: None,
+    };
+    if !text.starts_with(b"From ") {
+        return Ok(Ok(plain));
     }
+    let commits = String::from_utf8_lossy(&text)
+        .lines()
+        .filter(|l| l.starts_with("From ") && l.ends_with("Mon Sep 17 00:00:00 2001"))
+        .count();
+    if commits > 1 {
+        return Ok(Err(format!(
+            "the mail holds {commits} commits; land them one at a time"
+        )));
+    }
+    fs::create_dir_all(work)?;
+    let (msg, diff) = (work.join("mail-message"), work.join("mail-patch"));
+    let o = Command::new("git")
+        .arg("mailinfo")
+        .arg(&msg)
+        .arg(&diff)
+        .stdin(fs::File::open(file)?)
+        .output()?;
+    if !o.status.success() {
+        return Ok(Err(format!(
+            "git mailinfo: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        )));
+    }
+    let info = String::from_utf8_lossy(&o.stdout).into_owned();
+    let field = |k: &str| {
+        info.lines()
+            .find_map(|l| l.strip_prefix(&format!("{k}: ")).map(str::to_owned))
+    };
+    let body = fs::read_to_string(&msg).unwrap_or_default();
+    let subject = field("Subject").unwrap_or_default();
+    Ok(Ok(Patch {
+        diff,
+        message: Some(format!("{subject}\n\n{body}").trim().to_owned()),
+        author: field("Author").map(|a| format!("{a} <{}>", field("Email").unwrap_or_default())),
+        date: field("Date"),
+    }))
+}
+
+/// Applies the diff on the clean tree, staged: as it is, else merged three
+/// ways. A commit comes only after the checks pass.
+pub(crate) fn apply(tree: &Path, diff: &Path) -> std::result::Result<(), String> {
+    let p = diff.to_string_lossy();
     if git(tree, &["apply", "--check", &p]).is_ok() {
         git(tree, &["apply", "--index", &p]).map_err(|e| format!("{e:#}"))?;
         return Ok(());
@@ -257,10 +326,55 @@ fn apply(tree: &Path, patch: &Path, mail: bool) -> std::result::Result<(), Strin
     Ok(())
 }
 
+/// The ROM-blocking hook over what is staged in `tree`, before any build,
+/// so a patch with a ROM's bytes is refused while nothing is committed. A
+/// tip's hook: the patch can't change it. Its package scan runs `gp`.
+pub(crate) fn hook(tree: &Path, gp: &Path) -> std::result::Result<(), String> {
+    let o = Command::new(tree.join(".githooks/pre-commit"))
+        .current_dir(tree)
+        .env("GP", gp)
+        .output()
+        .map_err(|e| format!("running the hook: {e}"))?;
+    if o.status.success() {
+        return Ok(());
+    }
+    let (out, err) = (
+        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stderr),
+    );
+    Err(format!("{err}{out}").trim().to_owned())
+}
+
+/// Commits what is staged. Commits only run the hook, never skip it.
+pub(crate) fn commit(tree: &Path, message: &str, patch: &Patch, gp: &Path) -> Result<()> {
+    let msg = patch.message.as_deref().unwrap_or(message);
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(tree)
+        .args(["commit", "-q", "-m", msg])
+        .env("GP", gp);
+    if let Some(a) = &patch.author {
+        cmd.arg("--author").arg(a);
+    }
+    if let Some(d) = &patch.date {
+        cmd.arg("--date").arg(d);
+    }
+    let o = cmd.output()?;
+    if !o.status.success() {
+        bail!(
+            "git commit: {}{}",
+            String::from_utf8_lossy(&o.stdout).trim(),
+            String::from_utf8_lossy(&o.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn trial(
     c: &Ctx,
     a: &GateArgs,
+    patch: &Patch,
     tip: &str,
     (tip_rows, tip_json): (&Rows, &Path),
     tip_model: &str,
@@ -270,20 +384,25 @@ fn trial(
 ) -> Result<Trial> {
     let tree = &c.tree;
     let game = tree.join(&c.rel);
-    let text = fs::read(&a.patch).with_context(|| a.patch.display().to_string())?;
-    let mail = text.starts_with(b"From ");
-    if let Err(why) = apply(tree, &a.patch, mail) {
+    if let Err(why) = apply(tree, &patch.diff) {
         return fail(why, "patch");
     }
-    // A plain patch stays staged until its checks pass, so what a check
-    // refuses (a ROM's bytes in the package) never becomes a commit.
+    // The patch stays staged until its checks pass, so what a check refuses
+    // (a ROM's bytes in the package) never becomes a commit.
     let files: Vec<String> = git(tree, &["diff", "--cached", "--name-only", tip])?
         .lines()
         .map(str::to_owned)
         .collect();
     let rel = c.rel.to_string_lossy().into_owned();
+    if files.is_empty() {
+        return fail("the patch changes nothing".into(), "patch");
+    }
     if let Some(f) = files.iter().find(|f| !f.starts_with(&format!("{rel}/"))) {
         return fail(format!("the patch changes {f}, outside the game"), "patch");
+    }
+    let gp = std::env::current_exe()?;
+    if let Err(why) = hook(tree, &gp) {
+        return fail(format!("the ROM-blocking hook refuses it: {why}"), "hook");
     }
     let removed = removed_clips(tree, &files, |f| {
         git(tree, &["show", &format!("{tip}:{f}")]).ok()
@@ -351,18 +470,18 @@ fn trial(
     if let Some(w) = worse(tip_rows, &rows) {
         return fail(w, "corpus");
     }
-    if !mail {
-        let msg = a
-            .message
-            .clone()
-            .unwrap_or_else(|| "A patch, by gp model gate".into());
-        git(tree, &["commit", "-q", "-m", &msg])?;
+    let msg = a
+        .message
+        .clone()
+        .unwrap_or_else(|| "A patch, by gp model gate".into());
+    if let Err(e) = commit(tree, &msg, patch, &gp) {
+        return fail(format!("{e:#}"), "commit");
     }
     // The curves measured again under a mapping the patch changed: the
     // corpus's new curves, version and record land with it, in a commit of
     // their own.
-    let dirty = !git(tree, &["status", "--porcelain", "--", &rel])?.is_empty();
-    if dirty {
+    let remeasured = !git(tree, &["status", "--porcelain", "--", &rel])?.is_empty();
+    if remeasured {
         let corpus = fs::read_to_string(game.join("corpus.toml")).unwrap_or_default();
         let version = corpus
             .lines()
@@ -373,40 +492,109 @@ fn trial(
             "{rel} corpus {version}: the curves measured again under the mapping as it now is (gp model gate)"
         );
         git(tree, &["add", "-A", "--", &rel])?;
-        git(tree, &["commit", "-q", "-m", &msg])?;
+        let plain = Patch {
+            diff: patch.diff.clone(),
+            message: None,
+            author: None,
+            date: None,
+        };
+        commit(tree, &msg, &plain, &gp)?;
         lines.push(msg);
     }
     Ok(Trial::Pass {
         commit: git(tree, &["rev-parse", "HEAD"])?,
+        remeasured,
     })
 }
 
-pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
-    let game = fs::canonicalize(&a.game).with_context(|| a.game.display().to_string())?;
-    let repo = PathBuf::from(git(&game, &["rev-parse", "--show-toplevel"])?);
-    let rel = game.strip_prefix(&repo)?.to_owned();
-    let onto = match &a.onto {
-        Some(b) => b.clone(),
-        None => git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])?,
-    };
-    let home = match &a.home {
-        Some(h) => h.clone(),
+/// The gate's home, from `--home`, $GP_GATE_HOME, else ~/.gameprinter/gate,
+/// made if missing and held outside any git work tree.
+pub(crate) fn gate_home(home: Option<&Path>) -> Result<PathBuf> {
+    let h = match home {
+        Some(h) => h.to_owned(),
         None => match std::env::var_os("GP_GATE_HOME") {
             Some(h) => PathBuf::from(h),
             None => dirs_home()?.join(".gameprinter").join("gate"),
         },
     };
-    let home = std::path::absolute(&home)?;
-    fs::create_dir_all(&home)?;
-    if let Some(r) = gp_evidence::paths::enclosing_git_work_tree(&home) {
+    let h = std::path::absolute(&h)?;
+    fs::create_dir_all(&h)?;
+    if let Some(r) = gp_evidence::paths::enclosing_git_work_tree(&h) {
         bail!(
             "the gate's home is inside the git work tree at {}",
             r.display()
         );
     }
+    Ok(h)
+}
+
+pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
+    let game = fs::canonicalize(&a.game).with_context(|| a.game.display().to_string())?;
+    let home = gate_home(a.home.as_deref())?;
     // One gate at a time on a home: they share the worktree.
     let lock = fs::File::create(home.join("gate.lock"))?;
     lock.lock()?;
+    let gp = std::env::current_exe()?;
+
+    let private = gp_evidence::paths::enclosing_git_work_tree(&game).is_none();
+    let mut copy = None;
+    let (repo, rel, onto, tree, patch_file) = if private {
+        if a.patch.is_some() {
+            bail!(
+                "{} has no git of its own: the gate takes your edits from the folder, so leave out --patch",
+                game.display()
+            );
+        }
+        match crate::gate_copy::open(&game, &home, &gp, a.message.as_deref())? {
+            crate::gate_copy::Opened::Done(outcome) => return Ok(outcome),
+            crate::gate_copy::Opened::Gate { repo, tree, diff } => {
+                copy = Some(game.clone());
+                (repo, PathBuf::from("game"), "main".to_owned(), tree, diff)
+            }
+        }
+    } else {
+        let repo = PathBuf::from(git(&game, &["rev-parse", "--show-toplevel"])?);
+        let rel = game.strip_prefix(&repo)?.to_owned();
+        let onto = match &a.onto {
+            Some(b) => b.clone(),
+            None => git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])?,
+        };
+        // A score-only run reads the checkout as it stands: it's made by
+        // the tool gate for this one job and never changes.
+        let tree = if a.score_only {
+            repo.clone()
+        } else {
+            home.join("tree")
+        };
+        let file = if a.score_only {
+            PathBuf::new()
+        } else {
+            a.patch.clone().context(
+                "--patch is needed: give the diff to gate, or point the gate at a working copy with no git",
+            )?
+        };
+        (repo, rel, onto, tree, file)
+    };
+    let patch = if a.score_only {
+        Patch {
+            diff: PathBuf::new(),
+            message: None,
+            author: None,
+            date: None,
+        }
+    } else {
+        match read_patch(&patch_file, &home)? {
+            Ok(p) => p,
+            Err(why) => {
+                return Ok(Outcome {
+                    json: json!({"verdict": "FAIL", "phase": "patch", "why": why}),
+                    text: format!("FAIL (patch): {why}"),
+                    exit: 1,
+                });
+            }
+        }
+    };
+
     let kit = home.join("kit");
     let o = self_cmd(&home)?
         .args(["--json", "game", "kit", "-o"])
@@ -423,7 +611,8 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
     let c = Ctx {
         repo,
         rel,
-        tree: home.join("tree"),
+        copy,
+        tree,
         paths: Paths {
             home: home.clone(),
             store: home.join("store"),
@@ -440,7 +629,9 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
     let mut last_fail = None;
     for _ in 0..TIP_TRIES {
         let tip = git(&c.repo, &["rev-parse", &c.onto])?;
-        checkout(&c, &tip)?;
+        if !a.score_only {
+            checkout(&c.repo, &c.tree, &tip)?;
+        }
         let started = std::time::Instant::now();
         let tree_game = c.tree.join(&c.rel);
         let module = match module_at(&c, &tree_game, &mut lines) {
@@ -463,6 +654,13 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
             tip_rows.len(),
             started.elapsed().as_secs()
         ));
+        if a.score_only {
+            let clips: Vec<Value> = tip_rows.iter().map(|(_, r)| r.raw.clone()).collect();
+            return Ok(Outcome::ok(
+                json!({"verdict": "SCORED", "tip": tip, "tip_score": tip_json, "clips": clips}),
+                lines.join("\n"),
+            ));
+        }
         let wasm: Vec<PathBuf> = module.iter().cloned().collect();
         let scan = crate::package::scan::run(&tree_game, &[], &wasm, &c.paths)?;
         let scan_before = (rewrites(&scan.json), scan.exit);
@@ -471,6 +669,7 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
         let t = trial(
             &c,
             a,
+            &patch,
             &tip,
             (&tip_rows, &tip_json),
             &model_text,
@@ -478,12 +677,12 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
             &rom,
             &mut lines,
         )?;
-        let (commit, moved_rows) = match t {
+        let (commit, moved_rows, remeasured) = match t {
             Trial::Fail(f) => {
                 last_fail = Some(f);
                 break;
             }
-            Trial::Pass { commit } => (commit, tip_rows.len()),
+            Trial::Pass { commit, remeasured } => (commit, tip_rows.len(), remeasured),
         };
         lines.push(format!(
             "{commit}: model check valid, package scan clean, corpus no worse ({moved_rows} clips held)"
@@ -498,9 +697,16 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
                 exit: 0,
             });
         }
-        match land(&c, &tip, &commit) {
+        match land(&c.repo, &c.onto, &tip, &commit) {
             Ok(()) => {
                 lines.push(format!("PASS: landed {commit} on {}", c.onto));
+                if remeasured && let Some(dir) = &c.copy {
+                    crate::gate_copy::write_back(&c.repo, &commit, dir)?;
+                    lines.push(format!(
+                        "the curves measured again are written to {}",
+                        dir.display()
+                    ));
+                }
                 return Ok(Outcome {
                     json: json!({"verdict": "PASS", "commit": commit, "tip": tip,
                         "tip_score": tip_json, "lines": lines}),
@@ -531,9 +737,9 @@ fn dirs_home() -> Result<PathBuf> {
 }
 
 /// A corpus score's rows by clip, in the corpus's order.
-type Rows = Vec<(String, Row)>;
+pub(crate) type Rows = Vec<(String, Row)>;
 
-struct Row {
+pub(crate) struct Row {
     frames: u64,
     together: u64,
     error: Option<String>,
@@ -546,7 +752,7 @@ struct Row {
 }
 
 impl Row {
-    fn of(v: &Value) -> Self {
+    pub(crate) fn of(v: &Value) -> Self {
         let bar = |k: &str| v["bars"][k].as_bool();
         Self {
             frames: v["frames"].as_u64().unwrap_or(0),
@@ -613,7 +819,7 @@ fn pairing_of(r: &Row) -> String {
         .unwrap_or_default()
 }
 
-fn worse(base: &Rows, new: &Rows) -> Option<String> {
+pub(crate) fn worse(base: &Rows, new: &Rows) -> Option<String> {
     for (id, b) in base {
         let Some((_, n)) = new.iter().find(|(i, _)| i == id) else {
             continue;
@@ -794,27 +1000,32 @@ pub(crate) fn unnamed_removals(
 
 /// Moves the branch from `tip` to `commit`: a fast-forward where it is
 /// checked out, so that checkout follows; else the ref, if still at `tip`.
-fn land(c: &Ctx, tip: &str, commit: &str) -> std::result::Result<(), (String, bool)> {
-    let porcelain = git(&c.repo, &["worktree", "list", "--porcelain"])
-        .map_err(|e| (format!("{e:#}"), false))?;
+pub(crate) fn land(
+    repo: &Path,
+    onto: &str,
+    tip: &str,
+    commit: &str,
+) -> std::result::Result<(), (String, bool)> {
+    let porcelain =
+        git(repo, &["worktree", "list", "--porcelain"]).map_err(|e| (format!("{e:#}"), false))?;
     let mut at: Option<PathBuf> = None;
     let mut cur: Option<PathBuf> = None;
     for l in porcelain.lines() {
         if let Some(p) = l.strip_prefix("worktree ") {
             cur = Some(PathBuf::from(p));
-        } else if l == format!("branch refs/heads/{}", c.onto) {
+        } else if l == format!("branch refs/heads/{onto}") {
             at = cur.clone();
         }
     }
     let landed = match &at {
         Some(w) => git(w, &["merge", "--ff-only", "-q", commit]),
         None => git(
-            &c.repo,
-            &["update-ref", &format!("refs/heads/{}", c.onto), commit, tip],
+            repo,
+            &["update-ref", &format!("refs/heads/{onto}"), commit, tip],
         ),
     };
     landed.map(|_| ()).map_err(|e| {
-        let now = git(&c.repo, &["rev-parse", &c.onto]).unwrap_or_default();
+        let now = git(repo, &["rev-parse", onto]).unwrap_or_default();
         (format!("{e:#}"), now != tip)
     })
 }

@@ -169,7 +169,7 @@ def main():
     ap.add_argument("--prg-base", type=lambda x: int(x, 0), default=0,
                     help="where Moss Hop's bank starts in the variant's PRG (0xC000 on a 64KB board)")
     a = ap.parse_args()
-    home = os.environ.get("GP_HOME", os.path.expanduser("~/.game-printer"))
+    home = os.environ.get("GP_HOME", os.path.expanduser("~/.gameprinter"))
     out = os.path.abspath(a.out or os.path.join(home, "work", "variants", a.name))
     os.makedirs(out, exist_ok=True)
     zp, moves = 0, {}

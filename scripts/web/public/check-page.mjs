@@ -84,7 +84,7 @@ const isSourceUrl = (origin, u) => {
 };
 const free = Math.max(1, cpus().length - loadavg()[0]);
 const jobs = Math.max(1, Number(opt("jobs") ?? process.env.GP_PAGE_JOBS ?? Math.min(6, Math.floor(free / 2))) || 1);
-const gpHome = process.env.GP_HOME ?? join(homedir(), ".game-printer");
+const gpHome = process.env.GP_HOME ?? join(homedir(), ".gameprinter");
 const store = join(process.env.GP_PAGE_REUSE ?? join(gpHome, "work", "page-release", "reuse"), "page-check");
 
 const types = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".json": "application/json", ".wasm": "application/wasm", ".png": "image/png", ".toml": "text/plain", ".txt": "text/plain" };
@@ -110,7 +110,7 @@ const headersFor = (path) => {
 // The accepted ROM, found by its headerless SHA-256 in $GP_ROM_DIR.
 const page = JSON.parse(readFileSync(join(dist, "page.json"), "utf8"));
 function findRom(sha) {
-  const root = process.env.GP_ROM_DIR ?? join(homedir(), ".game-printer", "roms");
+  const root = process.env.GP_ROM_DIR ?? join(homedir(), ".gameprinter", "roms");
   const stack = [root];
   while (stack.length) {
     const d = stack.pop();

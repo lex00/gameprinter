@@ -4,18 +4,21 @@
 
 mod affected;
 mod assets;
+mod cli_doc;
 mod clip;
 mod clip_score;
 mod clipset;
 mod corpus_score;
 mod game;
 mod gate;
+mod gate_copy;
 mod hosted;
 mod lockstep;
 mod model;
 mod module;
 mod package;
 mod pool;
+mod publish;
 mod registry;
 mod roms;
 mod run;
@@ -24,6 +27,8 @@ mod screen;
 mod served;
 mod tape;
 mod template;
+mod tool_gate;
+mod worker;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -52,7 +57,7 @@ impl Outcome {
 
 #[derive(Parser)]
 #[command(name = "gp", version, about = "Game Printer")]
-struct Cli {
+pub struct Cli {
     /// Print machine-readable JSON on stdout.
     #[arg(long, global = true)]
     json: bool,
@@ -116,6 +121,29 @@ enum Cmd {
         #[command(subcommand)]
         cmd: TemplateCmd,
     },
+    /// A worker's setup on a shared machine.
+    Worker {
+        #[command(subcommand)]
+        cmd: worker::WorkerCmd,
+    },
+    /// Land a patch to the tool itself (the gameprinter repo).
+    Tool {
+        #[command(subcommand)]
+        cmd: ToolCmd,
+    },
+    /// gp about itself: its published build and its command list.
+    #[command(name = "self")]
+    Itself {
+        #[command(subcommand)]
+        cmd: publish::SelfCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ToolCmd {
+    /// Hold a patch to gameprinter to the tool's checks and a Donkey Kong
+    /// canary, and land it when it passes (docs/gate.md).
+    Gate(tool_gate::ToolGateArgs),
 }
 
 #[derive(Subcommand)]
@@ -358,6 +386,11 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             } => assets::lift(rom, out, map, *force),
             AssetsCmd::Pack { dir, check } => assets::check_dir(dir, check),
         },
+        Cmd::Worker { cmd } => worker::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Tool {
+            cmd: ToolCmd::Gate(a),
+        } => tool_gate::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Itself { cmd } => publish::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Clip { cmd } => clip_score::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Corpus { cmd } => corpus_score::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Model { cmd } => match cmd {

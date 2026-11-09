@@ -53,7 +53,7 @@ import time
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 HOME = os.path.expanduser("~")
-GP_HOME = os.environ.get("GP_HOME", os.path.join(HOME, ".game-printer"))
+GP_HOME = os.environ.get("GP_HOME", os.path.join(HOME, ".gameprinter"))
 STORE = os.environ.get("GP_PAGE_REUSE", os.path.join(GP_HOME, "work", "page-release", "reuse"))
 TARGET = os.path.abspath(os.environ.get("CARGO_TARGET_DIR", os.path.join(REPO, "target")))
 PINNED = [os.path.join(HOME, ".cargo", "registry"), os.path.join(HOME, ".rustup")]

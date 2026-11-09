@@ -9,7 +9,7 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Paths {
-    /// `$GP_HOME`, default `~/.game-printer`.
+    /// `$GP_HOME`, default `~/.gameprinter` (the new world's home until cutover).
     pub home: PathBuf,
     /// `$GP_STORE`, default `$GP_HOME/store`.
     pub store: PathBuf,
@@ -50,7 +50,7 @@ impl Paths {
             Some(h) => h,
             None => dirs::home_dir()
                 .ok_or(PathsError::NoHome)?
-                .join(".game-printer"),
+                .join(".gameprinter"),
         };
         let store = store.unwrap_or_else(|| home.join("store"));
         let roms = roms.unwrap_or_else(|| home.join("roms"));

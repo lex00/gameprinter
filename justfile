@@ -2,7 +2,10 @@
 
 gp_home := env_var_or_default("GP_HOME", env_var("HOME") / ".gameprinter")
 target := env_var_or_default("CARGO_TARGET_DIR", justfile_directory() / "target")
-gp := target / "debug" / "gp"
+# Default dev, the checks' profile; the gate and a --rust worker set GP_PROFILE=fastdev.
+profile := env_var_or_default("GP_PROFILE", "dev")
+profile_dir := if profile == "dev" { "debug" } else { profile }
+gp := target / profile_dir / "gp"
 mosshop_dir := target / "mosshop"
 mosshop_rom := mosshop_dir / "mosshop.nes"
 assets := gp_home / "work" / "assets" / "mosshop"
@@ -11,12 +14,20 @@ assets := gp_home / "work" / "assets" / "mosshop"
 _hook-enabled:
     @[ "$(git config core.hooksPath)" = ".githooks" ] || { echo "The ROM-blocking hook isn't enabled. Run: just setup" >&2; exit 1; }
 
-# Turns on the ROM-blocking hook.
+# Turns on the ROM-blocking hook and installs the locked cargo.
 setup:
     git config core.hooksPath .githooks
+    mkdir -p {{quote(gp_home / "bin" / "locked")}}
+    install -m 755 scripts/cargo/locked.py {{quote(gp_home / "bin" / "locked" / "cargo")}}
+
+# Publishes this checkout's gp, optimized, at $GP_HOME/bin/gp: the first
+# published build, before any gate has run. The gate publishes after that.
+publish:
+    cargo build -q --profile fastdev -p gp-cli
+    {{quote(target / "fastdev" / "gp")}} self publish
 
 build:
-    cargo build -q -p gp-cli
+    cargo build -q --profile {{profile}} -p gp-cli
 
 mosshop:
     scripts/mosshop/build.sh {{quote(mosshop_dir)}}
@@ -24,8 +35,9 @@ mosshop:
 # Everything this repo holds, on Moss Hop alone. Exits non-zero at the first failure.
 check: _hook-enabled build mosshop
     cargo fmt --all --check
-    cargo clippy -q --workspace --all-targets -- -D warnings
-    cargo test -q --workspace
+    cargo clippy -q --workspace --all-targets --profile {{profile}} -- -D warnings
+    cargo test -q --workspace --profile {{profile}}
+    {{gp}} self docs --check CLI.md
     {{gp}} baseline check --rom {{quote(mosshop_rom)}} baselines/mosshop
     mkdir -p {{quote(assets)}}
     {{gp}} assets lift {{quote(mosshop_rom)}} --map assets/mosshop.toml -o {{quote(assets)}} --force

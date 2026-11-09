@@ -21,6 +21,25 @@ all = { level = "warn", priority = -1 }
 [profile.release]
 strip = "symbols"
 
+# What the gate builds and publishes: `gp model gate` took 3.5 minutes cold on
+# this, 10 on a debug build. A one-line change rebuilds gp in seconds.
+[profile.fastdev]
+inherits = "release"
+opt-level = 1
+lto = "off"
+incremental = true
+codegen-units = 256
+
+[profile.fastdev.package."*"]
+opt-level = 3
+
+# The emulator is most of a corpus score's time. With lto off it gets no
+# cross-unit inlining, so it is built whole and at full optimization.
+[profile.fastdev.package.tetanes-core]
+opt-level = 3
+codegen-units = 1
+incremental = false
+
 [profile.dev.package.tetanes-core]
 opt-level = 3
 

@@ -54,7 +54,7 @@ t0=$(now)
 # the model's folder (its themes too), the lifted files by content, the
 # personal themes and the package mirrors it reads, and the sound captures
 # and banks under $GP_HOME (by their names, sizes and dates).
-home="${GP_HOME:-$HOME/.game-printer}"
+home="${GP_HOME:-$HOME/.gameprinter}"
 prep_extra="gp-web-prep ${GP_WEB_PREP_FLAGS:-} $* assets $( [ "${GP_WEB_REUSE:-0}" = 0 ] || python3 -I "$reuse" digest --tree "$assets") $rustc_v"
 prep_in=(--tree "$model" --tree "$home/themes" --file "$home/mirrors.toml" --file "$repo/mirrors.toml"
   --listing "$home/work/sound" --listing "$home/sound-banks")
