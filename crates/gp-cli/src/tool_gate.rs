@@ -25,6 +25,9 @@ const CANARY: &str = "donkey-kong";
 /// The profile the gate builds and publishes.
 const PROFILE: &str = "fastdev";
 const TIP_TRIES: usize = 5;
+/// How many scored builds stay under `<gate home>/tool/canary/`, at about
+/// 1.1 GB each.
+const KEEP_BUILDS: usize = 2;
 
 #[derive(Args)]
 pub struct ToolGateArgs {
@@ -181,6 +184,8 @@ fn scored(c: &Cx, gp: &Path, label: &str) -> std::result::Result<Value, String> 
         .arg(&home)
         .output()
         .map_err(|e| format!("running {}: {e}", gp.display()))?;
+    mark_used(&home);
+    prune_builds(&c.canary_dir);
     if !o.status.success() {
         return Err(format!(
             "{}{}",
@@ -189,6 +194,40 @@ fn scored(c: &Cx, gp: &Path, label: &str) -> std::result::Result<Value, String> 
         ));
     }
     serde_json::from_slice(&o.stdout).map_err(|e| format!("gp gave no JSON: {e}"))
+}
+
+/// Stamps a build's home as just used: scoring a build again reuses its
+/// home, which needn't change the folder's own time.
+fn mark_used(home: &Path) {
+    if let Ok(f) = fs::File::open(home) {
+        let _ = f.set_modified(std::time::SystemTime::now());
+    }
+}
+
+/// Removes all but the newest [`KEEP_BUILDS`] scored builds: the `tip-*` and
+/// `patch-*` folders. The `base-*.json` scores are small and stay, so a
+/// second patch on the same tip still doesn't score the tip again.
+fn prune_builds(dir: &Path) {
+    let Ok(rd) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut builds: Vec<(std::time::SystemTime, PathBuf)> = rd
+        .flatten()
+        .filter_map(|e| {
+            let n = e.file_name();
+            let n = n.to_str()?;
+            (n.starts_with("tip-") || n.starts_with("patch-")).then_some(())?;
+            e.file_type().ok()?.is_dir().then_some(())?;
+            Some((e.metadata().ok()?.modified().ok()?, e.path()))
+        })
+        .collect();
+    builds.sort();
+    for (_, p) in builds.iter().rev().skip(KEEP_BUILDS) {
+        match fs::remove_dir_all(p) {
+            Ok(()) => progress(format!("canary: removed old build {}", p.display())),
+            Err(e) => progress(format!("canary: couldn't remove {}: {e}", p.display())),
+        }
+    }
 }
 
 fn rows_of(v: &Value) -> Rows {
@@ -456,5 +495,75 @@ fn fail(f: Failed, mut lines: Vec<String>) -> Outcome {
         json: json!({"verdict": "FAIL", "phase": f.phase, "why": f.why, "lines": lines}),
         text: lines.join("\n"),
         exit: 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    fn set_time(p: &Path, secs: u64) {
+        fs::File::open(p)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
+            .unwrap();
+    }
+
+    fn cx(root: &Path) -> Cx {
+        Cx {
+            repo: root.join("repo"),
+            onto: "main".into(),
+            tree: root.join("tree"),
+            target: root.join("target"),
+            canary_dir: root.join("canary"),
+            home: root.join("home"),
+            games_repo: root.join("games"),
+            games_tree: root.join("games-tree"),
+            paths: Paths {
+                home: root.join("home"),
+                store: root.join("store"),
+                roms: root.join("roms"),
+            },
+        }
+    }
+
+    /// Scoring a build leaves it and the next newest, whatever the score
+    /// says, and touches nothing but older builds. `true` is the gp: it
+    /// prints no JSON, so the score itself is an error.
+    #[test]
+    fn scoring_a_build_keeps_only_the_two_newest() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = cx(dir.path());
+        fs::create_dir(&c.canary_dir).unwrap();
+        for (i, name) in ["tip-rescored", "patch-b", "patch-c", "patch-d"]
+            .iter()
+            .enumerate()
+        {
+            let home = c.canary_dir.join(name);
+            fs::create_dir(&home).unwrap();
+            fs::write(home.join("cache"), b"x").unwrap();
+            set_time(&home, 1000 + i as u64);
+        }
+        let base = c.canary_dir.join("base-a-b.json");
+        fs::write(&base, b"{}").unwrap();
+        let other = c.canary_dir.join("other");
+        fs::create_dir(&other).unwrap();
+        set_time(&other, 1);
+        let outside = dir.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        let link = c.canary_dir.join("tip-link");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        assert!(scored(&c, Path::new("true"), "tip-rescored").is_err());
+
+        let has = |n: &str| c.canary_dir.join(n).exists();
+        assert!(has("tip-rescored"), "the build just scored is the newest");
+        assert!(has("patch-d"), "the next newest stays");
+        assert!(!has("patch-c"), "an older build goes");
+        assert!(!has("patch-b"), "an older build goes");
+        assert!(base.is_file(), "a kept score isn't a build");
+        assert!(other.is_dir(), "only tip-* and patch-* folders are builds");
+        assert!(outside.is_dir(), "a link isn't followed");
     }
 }
