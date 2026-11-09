@@ -73,6 +73,11 @@ const entry = opt("entry") ?? "index.html";
 // --registry-folder answers the page's source from a folder (a dry run);
 // --registry-stopped installs, then refuses every request to the source.
 const registryFolder = opt("registry-folder") && resolve(opt("registry-folder"));
+// --live URL checks a page already deployed there: the page comes from that
+// address, and the files a section reads of the game itself from --play. With
+// --registry-folder too, a section's installs read that checkout of the source
+// instead of the network, so a full run doesn't hit a host's rate limit.
+const live = opt("live")?.replace(/\/$/, "") ?? null;
 const registryStopped = process.argv.includes("--registry-stopped");
 // A request to the page's source. A source of "." is on the page's own
 // address, so only the registry's own keys count.
@@ -419,8 +424,28 @@ async function session(browser, name, opts = {}) {
     }
   });
   await new Promise((r) => S.server.listen(0, "127.0.0.1", r));
-  S.origin = `http://127.0.0.1:${S.server.address().port}`;
+  S.origin = live ?? `http://127.0.0.1:${S.server.address().port}`;
   const context = (S.context = await browser.newContext({ viewport: { width: 1366, height: 768 } }));
+  if (live) {
+    const type = (f) => types[extname(f)] ?? "application/octet-stream";
+    await context.route((u) => u.origin === live && u.pathname.startsWith("/__check/play/"), (route) => {
+      const f = join(playDir, decodeURIComponent(new URL(route.request().url()).pathname.slice(14)));
+      return route.fulfill({ path: f, contentType: type(f) }).catch(() => route.abort());
+    });
+    await context.route((u) => u.origin === live && /^\/game\/runs\/.+\.frames$/.test(u.pathname), (route) => {
+      const name = /^\/game\/runs\/(.+)\.frames$/.exec(new URL(route.request().url()).pathname)[1];
+      if (!S.runs.has(name)) return route.fallback();
+      return route.fulfill({ body: S.runs.get(name), contentType: "text/plain", headers: { "cross-origin-resource-policy": "same-origin" } });
+    });
+    if (registryFolder) {
+      await context.route((u) => isSourceUrl(live, u), (route) => {
+        const key = sourceKey(live, new URL(route.request().url())).slice(1);
+        const f = join(registryFolder, key);
+        if (!existsSync(f)) return route.fulfill({ status: 404, headers: { "access-control-allow-origin": "*" } });
+        return route.fulfill({ path: f, contentType: "application/octet-stream", headers: { "access-control-allow-origin": "*", "cross-origin-resource-policy": "cross-origin" } });
+      });
+    }
+  }
   if (opts.gesture) await context.addInitScript((r) => (window.__checkGesture = r), opts.gesture);
   await context.addInitScript(audioProbe);
   if (opts.gamepad) {
@@ -985,7 +1010,7 @@ async function paperPage(S) {
   const title = await p.title();
   check(title === page.title, `the page is titled ${page.title} (${title})`);
   check(!/donkey|kong|mario|nintendo|pauline/i.test(await p.locator("header").innerText()), "the header names no Nintendo game or character");
-  const cfg = await (await fetch(`${S.origin}/__check/play/preview.json`)).json();
+  const cfg = JSON.parse(readFileSync(join(playDir, "preview.json"), "utf8"));
   check(cfg.title === page.title, `the paper game is ${cfg.title}`);
   await p.waitForTimeout(800);
   await S.shot("paper-title.png");
@@ -1110,7 +1135,7 @@ async function paperSaves(S) {
   const { p, check, gp, key, waitFrames, errors } = S;
   await p.goto(`${S.origin}/${entry}`);
   check(await waitFrames(30), "the paper version starts");
-  const cfg = await (await fetch(`${S.origin}/__check/play/preview.json`)).json();
+  const cfg = JSON.parse(readFileSync(join(playDir, "preview.json"), "utf8"));
   const last = () => gp(() => window.__gp.hashes[window.__gp.hashes.length - 1]);
   await key("F2");
   await p.waitForTimeout(300);

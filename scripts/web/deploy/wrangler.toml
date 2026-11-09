@@ -1,0 +1,10 @@
+# Cloudflare Worker for the public page (docs/web.md, "Deploying the public
+# page"): Workers static assets, a Worker with no code that serves a folder.
+# scripts/web/deploy.sh gives `wrangler deploy` the bundle's folder with
+# --assets. The address is rivet-rodeo.<account>.workers.dev, under the
+# account's own subdomain, so no other account can hold it. No account id,
+# token or key belongs in this file; `wrangler login` keeps the login outside
+# the repo.
+name = "rivet-rodeo"
+compatibility_date = "2026-11-01"
+workers_dev = true

@@ -85,3 +85,6 @@ __pycache__/
 
 # The page check's browser driver
 scripts/web/node_modules/
+
+# wrangler
+.wrangler/
