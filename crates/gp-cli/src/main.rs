@@ -3,6 +3,8 @@
 //! engine here.
 
 mod assets;
+mod clip_score;
+mod clipset;
 mod game;
 mod model;
 mod module;
@@ -28,6 +30,16 @@ pub struct Outcome {
     pub exit: u8,
 }
 
+impl Outcome {
+    pub fn ok(json: Value, text: String) -> Self {
+        Self {
+            json,
+            text,
+            exit: 0,
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "gp", version, about = "Game Printer")]
 struct Cli {
@@ -44,6 +56,11 @@ enum Cmd {
     Assets {
         #[command(subcommand)]
         cmd: AssetsCmd,
+    },
+    /// Corpus clips: their input logs and their scores on a model.
+    Clip {
+        #[command(subcommand)]
+        cmd: clip_score::ClipCmd,
     },
     /// Check a model and its fidelity contract.
     Model {
@@ -319,6 +336,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             } => assets::lift(rom, out, map, *force),
             AssetsCmd::Pack { dir, check } => assets::check_dir(dir, check),
         },
+        Cmd::Clip { cmd } => clip_score::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Model { cmd } => match cmd {
             ModelCmd::Check { dir, assets } => model::check(dir, assets.as_deref()),
             ModelCmd::Fmt { dir, .. } => model::fmt_check(dir),
