@@ -39,7 +39,7 @@ gp tool gate --patch "$GP_WORKER_OUT/fix.patch" -m "gp-nes: ..."
 4. runs the Donkey Kong canary, the game gate's no-op scored through the patched gp and through the tip's gp: every clip must score at least as well;
 5. commits, moves the branch and publishes the new build.
 
-The canary reads the `games` checkout beside the repo (`--games DIR` or `$GP_GAMES_DIR` to name another) and needs the ROM in `$GP_ROM_DIR`; with no ROM it says so and passes without it. A failed step ends the gate with its last lines and nothing landed. `--dry-run` runs the whole gate and lands nothing. The first gate on a tip builds and publishes that tip first, which is what the canary compares against, so later gates on the same tip are faster.
+The canary reads the `games` checkout beside the repo (`--games DIR` or `$GP_GAMES_DIR` to name another) and needs the ROM in `$GP_ROM_DIR`; with no ROM it says so and passes without it. Each scored build keeps a home of about 1.1 GB under `<gate home>/tool/canary/`, and the gate doesn't remove them; the person empties that folder when disk is short. A failed step ends the gate with its last lines and nothing landed. `--dry-run` runs the whole gate and lands nothing. The first gate on a tip builds and publishes that tip first, which is what the canary compares against, so later gates on the same tip are faster.
 
 ## Published builds
 

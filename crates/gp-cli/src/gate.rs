@@ -445,14 +445,17 @@ fn trial(
         );
     }
     let assets = assets_for(c, &game, rom)?;
-    let check = crate::model::check(&game, Some(&assets))?;
+    let check = match crate::model::check(&game, Some(&assets)) {
+        Ok(c) => c,
+        Err(e) => return fail(format!("gp model check: {e:#}"), "model check"),
+    };
     if check.exit != 0 {
         return fail(
             format!("gp model check: {}", check.text.trim()),
             "model check",
         );
     }
-    let (rows, _) = score(
+    let rows = match score(
         c,
         &game,
         module.as_deref(),
@@ -460,7 +463,10 @@ fn trial(
         Some(tip_json),
         true,
         "patched",
-    )?;
+    ) {
+        Ok((rows, _)) => rows,
+        Err(e) => return fail(format!("gp corpus score: {e:#}"), "corpus"),
+    };
     let text_now = fs::read_to_string(game.join(gp_model::MODEL_FILE)).unwrap_or_default();
     let parts = changed_parts(tip_model, &text_now);
     // A patch to the model's presentation alone is held to the picture too.
