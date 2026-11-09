@@ -1,0 +1,33 @@
+---
+// Starlight's footer, with a small printer and the wordmark under it on every
+// page. From plunge's site.
+import Default from '@astrojs/starlight/components/Footer.astro';
+import Logo from './Logo.astro';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+<Default />
+<p class="gp-foot not-content">
+	<a href={`${base}/`}><Logo size={28} /><span>Game Printer</span></a>
+</p>
+
+<style>
+	.gp-foot {
+		margin: 2rem 0 1rem;
+		text-align: center;
+	}
+	.gp-foot a {
+		display: inline-flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.4rem;
+		font-family: var(--gp-display);
+		font-size: var(--sl-text-xs);
+		font-weight: 600;
+		color: var(--sl-color-gray-3);
+		text-decoration: none;
+	}
+	.gp-foot a:hover {
+		color: var(--sl-color-white);
+	}
+</style>

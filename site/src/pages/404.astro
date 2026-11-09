@@ -1,0 +1,15 @@
+---
+// The 404 page. Starlight's own 404 route is off (disable404Route).
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import Logo from '../components/Logo.astro';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+<StarlightPage frontmatter={{ title: 'Page not found', description: 'No page at this address.', template: 'splash', editUrl: false, pagefind: false }}>
+	<div class="gp-404 not-content">
+		<Logo size={128} />
+		<p class="gp-404-title">Page not found</p>
+		<p>Nothing printed at this address. Check the link for a typo.</p>
+		<p>Start from <a href={`${base}/`}>the home page</a> or <a href={`${base}/llms.txt`}>llms.txt</a>.</p>
+	</div>
+</StarlightPage>

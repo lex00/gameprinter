@@ -1,0 +1,66 @@
+---
+// "Optional: hand this page to your coding agent": the page's `prompt:` front
+// matter (which always ends with neverLine from src/prompts.ts), with a copy
+// button. Shown under the title by PageTitle.astro.
+const { entry } = Astro.locals.starlightRoute;
+const prompt: string | undefined = entry.data.prompt;
+---
+{prompt && (
+	<details class="gp-prompt not-content">
+		<summary>Optional: hand this page to your coding agent</summary>
+		<pre>{prompt}</pre>
+		<button type="button" class="gp-prompt-copy" data-copy={prompt}>Copy prompt</button>
+	</details>
+)}
+
+<script>
+	for (const button of document.querySelectorAll<HTMLButtonElement>('.gp-prompt-copy')) {
+		const label = button.textContent;
+		button.addEventListener('click', async () => {
+			try {
+				await navigator.clipboard.writeText(button.dataset.copy ?? '');
+				button.textContent = 'Copied';
+			} catch {
+				button.textContent = 'Copy failed; select the text';
+			}
+			setTimeout(() => (button.textContent = label), 2000);
+		});
+	}
+</script>
+
+<style>
+	.gp-prompt {
+		margin-top: 1rem;
+		padding: 0.6rem 0.9rem;
+		background: var(--gp-panel);
+		border: 1px solid var(--gp-rule);
+		border-inline-start: 3px solid var(--gp-cyan);
+		border-radius: 0.4rem;
+		font-size: var(--sl-text-sm);
+	}
+	summary {
+		cursor: pointer;
+		font-weight: 500;
+		color: var(--sl-color-white);
+	}
+	pre {
+		margin: 0.75rem 0;
+		white-space: pre-wrap;
+		font-family: var(--sl-font-mono);
+		font-size: 0.8rem;
+		color: var(--sl-color-gray-1);
+	}
+	button {
+		font: inherit;
+		font-weight: 500;
+		color: var(--sl-color-white);
+		background: var(--sl-color-gray-6);
+		border: 1px solid var(--gp-rule);
+		border-radius: 0.4rem;
+		padding: 0.2rem 0.7rem;
+		cursor: pointer;
+	}
+	button:hover {
+		border-color: var(--gp-accent);
+	}
+</style>

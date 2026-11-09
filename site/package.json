@@ -1,0 +1,19 @@
+{
+  "name": "gameprinter-site",
+  "private": true,
+  "type": "module",
+  "version": "0.0.1",
+  "license": "Apache-2.0",
+  "scripts": {
+    "sync": "node scripts/sync-cli.mjs",
+    "dev": "node scripts/sync-cli.mjs && astro dev",
+    "build": "node scripts/sync-cli.mjs && astro build && node scripts/check-links.mjs && node scripts/check-contrast.mjs",
+    "preview": "astro preview",
+    "check:contrast": "node scripts/check-contrast.mjs"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.42.5",
+    "astro": "7.3.5",
+    "sharp": "^0.34.2"
+  }
+}

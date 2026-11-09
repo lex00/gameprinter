@@ -1,0 +1,27 @@
+---
+// The home page: the five paths. A Starlight page rather than an
+// MDX file, as on plunge's site, so the build bundles no MDX module.
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import Landing from '../components/Landing.astro';
+import { rects } from '../logo.mjs';
+
+const fill = { p: 'var(--gp-paper)', b: 'var(--gp-body)', k: 'var(--gp-ink)', c: 'var(--gp-cyan)', m: 'var(--gp-magenta)', y: 'var(--gp-yellow)' };
+const logo = `<svg class="gp-hero-logo" viewBox="0 0 16 16" width="240" height="240" shape-rendering="crispEdges" role="img" aria-label="The Game Printer logo, a pixel-art printer">${rects()
+	.map((r) => `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="1" fill="${fill[r.c as keyof typeof fill]}"/>`)
+	.join('')}</svg>`;
+const description = 'Docs for people improving, making and hosting games with Game Printer.';
+---
+<StarlightPage
+	frontmatter={{
+		title: 'Game Printer',
+		description,
+		template: 'splash',
+		hero: {
+			title: 'Game Printer',
+			tagline: 'What do you want to do?',
+			image: { html: logo },
+		},
+	}}
+>
+	<Landing />
+</StarlightPage>

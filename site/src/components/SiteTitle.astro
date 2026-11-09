@@ -1,0 +1,46 @@
+---
+// The site title: the pixel printer and the wordmark, linking home. On a phone
+// a Docs link sits beside it, since Starlight hides the header's right side
+// (where SocialIcons.astro puts Docs) below its md width. From plunge's site.
+import Logo from './Logo.astro';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const { siteTitleHref } = Astro.locals.starlightRoute;
+---
+<a href={siteTitleHref} class="site-title sl-flex">
+	<Logo size={28} />
+	<span translate="no">Game Printer</span>
+</a>
+<a class="gp-docs-phone" href={`${base}/`}>Docs</a>
+
+<style>
+	.site-title {
+		align-items: center;
+		gap: var(--sl-nav-gap);
+		font-family: var(--gp-display);
+		font-weight: 600;
+		font-size: 1.1rem;
+		letter-spacing: -0.02em;
+		color: var(--sl-color-white);
+		text-decoration: none;
+		white-space: nowrap;
+		min-width: 0;
+	}
+	.gp-docs-phone {
+		align-self: center;
+		margin-left: 0.75rem;
+		padding: 0.2rem 0.65rem;
+		font-size: var(--sl-text-xs);
+		font-weight: 600;
+		color: var(--sl-color-white);
+		text-decoration: none;
+		border: 1px solid var(--gp-rule);
+		border-radius: 999px;
+		white-space: nowrap;
+	}
+	@media (min-width: 50rem) {
+		.gp-docs-phone {
+			display: none;
+		}
+	}
+</style>

@@ -1,0 +1,353 @@
+/*
+ * Game Printer's look, on the plunge site's structure: Geist for reading and
+ * headings, Geist Mono for anything a terminal would print, ink-black
+ * neutrals, and the four process inks of a printer. Magenta is the one accent
+ * (links, buttons, the current highlight); cyan does fine details (hairlines,
+ * hover underlines); yellow and ink only appear together with them in the
+ * pixel strip that marks headings.
+ *
+ * scripts/check-contrast.mjs reads the two token blocks below and fails the
+ * build when a pair drops under WCAG AA: 4.5:1 for text, 3:1 for hairlines and
+ * other UI. Change a colour, run `npm run check:contrast`.
+ *
+ * Starlight's dark theme lives on :root and its light theme on
+ * :root[data-theme='light'], so both palettes are set here as tokens.
+ */
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap');
+
+:root {
+	--gp-display: 'Geist', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+	--sl-font: 'Geist', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+	--sl-font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+	/* dark: ink neutrals, magenta accent, cyan details */
+	--sl-color-white: #f4f5f8;
+	--sl-color-gray-1: #dfe2ea;
+	--sl-color-gray-2: #bcc2cf;
+	--sl-color-gray-3: #949cad;
+	--sl-color-gray-4: #5d6576;
+	--sl-color-gray-5: #272c39;
+	--sl-color-gray-6: #181c27;
+	--sl-color-black: #0d0f14;
+	--sl-color-accent-low: #3a1428;
+	--sl-color-accent: #ff6fb1;
+	--sl-color-accent-high: #ffd0e6;
+
+	--gp-accent: #ff6fb1;   /* links, buttons, the one highlight */
+	--gp-cyan: #3fc6dc;     /* fine details: hairlines, hover underlines */
+	--gp-magenta: #ff6fb1;
+	--gp-yellow: #f2c94c;
+	--gp-key: #8e96a8;      /* the K of CMYK in the strip, readable on ink */
+	--gp-warn: #f5a25d;     /* refusals, cautions */
+	--gp-panel: #131620;
+	--gp-rule: #272c39;
+
+	/* the logo */
+	--gp-paper: #f4f5f8;
+	--gp-body: #8e96a8;
+	--gp-ink: #0d0f14;
+}
+
+:root[data-theme='light'] {
+	--sl-color-white: #11131a;
+	--sl-color-gray-1: #232733;
+	--sl-color-gray-2: #3a4050;
+	--sl-color-gray-3: #5b6272;
+	--sl-color-gray-4: #9aa0ad;
+	--sl-color-gray-5: #dcdfe7;
+	--sl-color-gray-6: #eeeff4;
+	--sl-color-gray-7: #f6f6f9;
+	--sl-color-black: #ffffff;
+	--sl-color-accent-low: #fbe3ef;
+	--sl-color-accent: #b0256d;
+	--sl-color-accent-high: #7a1149;
+
+	--gp-accent: #b0256d;
+	--gp-cyan: #0a7187;
+	--gp-magenta: #c42f7c;
+	--gp-yellow: #b38600;
+	--gp-key: #11131a;
+	--gp-warn: #a8431a;
+	--gp-panel: #f6f6f9;
+	--gp-rule: #dcdfe7;
+
+	--gp-paper: #e3e6ee;
+	--gp-body: #646b7c;
+	--gp-ink: #11131a;
+}
+
+/*
+ * The print strip: four pixels in cyan, magenta, yellow and key, like a
+ * printer's test pattern. It marks each section heading and stands in for a
+ * horizontal rule. Bullets are a single printed pixel.
+ */
+:root {
+	--gp-strip: linear-gradient(
+		90deg,
+		var(--gp-cyan) 0 8px,
+		transparent 8px 10px,
+		var(--gp-magenta) 10px 18px,
+		transparent 18px 20px,
+		var(--gp-yellow) 20px 28px,
+		transparent 28px 30px,
+		var(--gp-key) 30px 38px
+	);
+}
+
+/* Headings: Geist, semibold, tracked in a little. */
+.sl-markdown-content :is(h1, h2, h3),
+h1#_top {
+	font-family: var(--gp-display);
+	font-weight: 600;
+	letter-spacing: -0.02em;
+}
+h1#_top {
+	font-size: clamp(1.75rem, 3.5vw, 2.25rem);
+}
+
+/* Reading text: a size down from Starlight's, quieter grey, more air between blocks. */
+.sl-markdown-content {
+	font-size: 0.9375rem;
+	line-height: 1.7;
+	color: var(--sl-color-gray-2);
+}
+.sl-markdown-content :is(strong, b):not(.not-content, .not-content *) {
+	color: var(--sl-color-white);
+	font-weight: 600;
+}
+.sl-markdown-content :is(h2, h3, h4):not(.not-content, .not-content *) {
+	color: var(--sl-color-white);
+}
+.sl-markdown-content h2:not(.not-content, .not-content *) {
+	font-size: 1.3rem;
+	margin-top: 2.75rem;
+}
+.sl-markdown-content h2:not(.not-content, .not-content *)::before {
+	content: '';
+	display: block;
+	width: 38px;
+	height: 8px;
+	margin: 0 0 0.85rem;
+	background: var(--gp-strip);
+}
+.sl-markdown-content hr:not(.not-content, .not-content *) {
+	width: 38px;
+	height: 8px;
+	margin: 2.5rem auto;
+	border: none;
+	background: var(--gp-strip);
+}
+.sl-markdown-content h3:not(.not-content, .not-content *) {
+	font-size: 1.05rem;
+	margin-top: 2rem;
+}
+
+/* Bullets are a printed pixel in the accent. Nested lists keep a plain marker. */
+.sl-markdown-content > ul:not(.not-content, .not-content *),
+.sl-markdown-content :not(li) > ul:not(.not-content, .not-content *, .starlight-aside *) {
+	list-style: none;
+	padding-left: 1.4rem;
+}
+.sl-markdown-content > ul:not(.not-content, .not-content *) > li,
+.sl-markdown-content :not(li) > ul:not(.not-content, .not-content *, .starlight-aside *) > li {
+	position: relative;
+}
+.sl-markdown-content > ul:not(.not-content, .not-content *) > li::before,
+.sl-markdown-content :not(li) > ul:not(.not-content, .not-content *, .starlight-aside *) > li::before {
+	content: '';
+	position: absolute;
+	left: -1.15rem;
+	top: calc((1lh - 6px) / 2);
+	width: 6px;
+	height: 6px;
+	background: var(--gp-accent);
+}
+
+/* Links: the accent, a fine underline that turns cyan on hover. */
+.sl-markdown-content a:not(.not-content, .not-content *, :is(h1, h2, h3, h4) a) {
+	color: var(--gp-accent);
+	text-decoration-line: underline;
+	text-decoration-thickness: 1px;
+	text-underline-offset: 0.2em;
+	text-decoration-color: color-mix(in srgb, var(--gp-accent) 35%, transparent);
+}
+.sl-markdown-content a:not(.not-content, .not-content *):hover {
+	text-decoration-color: var(--gp-cyan);
+}
+
+/* Tables: smaller type, a tracked caps header over a cyan hairline, hairline rows. */
+.sl-markdown-content table:not(.not-content, .not-content *) {
+	border-collapse: collapse;
+	font-size: 0.85rem;
+	line-height: 1.55;
+}
+.sl-markdown-content :is(th, td):not(.not-content, .not-content *) {
+	border: none;
+	border-bottom: 1px solid var(--gp-rule);
+	padding: 0.6rem 0.9rem 0.6rem 0;
+	vertical-align: top;
+}
+.sl-markdown-content th:not(.not-content, .not-content *) {
+	font-size: 0.68rem;
+	font-weight: 600;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--sl-color-gray-3);
+	background: none;
+	border-bottom: 1px solid var(--gp-cyan);
+}
+.sl-markdown-content td:first-child:not(.not-content, .not-content *) {
+	color: var(--sl-color-white);
+}
+.sl-markdown-content tbody tr:hover td:not(.not-content, .not-content *) {
+	background: color-mix(in srgb, var(--gp-cyan) 5%, transparent);
+}
+
+/* Inline code: a quiet grey chip. */
+.sl-markdown-content :not(pre):not(.not-content, .not-content *) > code {
+	background: var(--sl-color-gray-6);
+	color: var(--sl-color-gray-1);
+	border: 1px solid var(--gp-rule);
+	border-radius: 0.3rem;
+	padding: 0.05em 0.35em;
+}
+
+/* The home hero: a large, tight claim, a quiet tagline and the big printer. */
+.hero .gp-hero-logo {
+	width: clamp(8rem, 22vw, 15rem);
+	height: auto;
+	margin-inline: auto;
+	padding: 1.25rem;
+	background: var(--gp-panel);
+	border-radius: 1rem;
+	box-shadow: 0 0 0 1px var(--gp-rule), 0 0 0 6px var(--sl-color-black), 0 0 0 7px var(--gp-cyan);
+}
+.hero {
+	padding-block: clamp(2.5rem, 8vw, 5rem) 1rem;
+}
+.hero h1 {
+	font-family: var(--gp-display);
+	font-weight: 600;
+	font-size: clamp(2.4rem, 6vw, 4rem);
+	line-height: 1.05;
+	letter-spacing: -0.035em;
+	text-wrap: balance;
+	color: var(--sl-color-white);
+}
+.hero .tagline {
+	font-size: clamp(1.05rem, 2vw, 1.3rem);
+	color: var(--sl-color-gray-2);
+	max-width: 42rem;
+	text-wrap: pretty;
+}
+
+/* Splash sections: generous air between them, headings set large. */
+[data-has-hero] .sl-markdown-content h2:not(.not-content *) {
+	font-size: clamp(1.5rem, 3vw, 2rem);
+	margin-top: 4rem;
+	border: none;
+}
+
+/* Long identifiers wrap rather than widen the page. */
+.not-content code {
+	overflow-wrap: anywhere;
+}
+
+/* Command names stay whole in table cells. */
+.sl-markdown-content td > code {
+	white-space: nowrap;
+}
+
+/* Code shows exactly what was typed: no ligatures turning -> into arrows. */
+code, pre, kbd, samp {
+	font-variant-ligatures: none;
+	font-feature-settings: 'calt' 0, 'liga' 0;
+}
+
+/* The current page in the sidebar: a quiet tint, not a solid block. */
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover,
+.sidebar-content a[aria-current='page']:focus {
+	background: var(--sl-color-gray-6);
+	color: var(--sl-color-white);
+	font-weight: 600;
+}
+.sidebar-content a {
+	font-size: var(--sl-text-sm);
+}
+
+/* Each top-level sidebar group's label starts with a cyan pixel. */
+.sidebar-content .top-level > li > details > summary .group-label {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.6rem;
+}
+.sidebar-content .top-level > li > details > summary .group-label::before {
+	content: '';
+	flex: none;
+	width: 6px;
+	height: 6px;
+	margin-left: 2px;
+	background: var(--gp-cyan);
+}
+
+/* Callouts: a neutral panel with a coloured edge. */
+.starlight-aside {
+	background: var(--sl-color-gray-6);
+	border-inline-start-color: var(--gp-accent);
+	color: var(--sl-color-gray-1);
+}
+.starlight-aside .starlight-aside__title {
+	color: var(--sl-color-white);
+}
+.starlight-aside .starlight-aside__icon {
+	color: var(--gp-accent);
+}
+.starlight-aside--caution,
+.starlight-aside--danger {
+	border-inline-start-color: var(--gp-warn);
+}
+.starlight-aside--caution .starlight-aside__icon,
+.starlight-aside--danger .starlight-aside__icon {
+	color: var(--gp-warn);
+}
+.starlight-aside a {
+	color: var(--sl-color-accent-high);
+}
+
+/* The 404 page: the printer, the news, and the way back. */
+.gp-404 {
+	display: grid;
+	justify-items: center;
+	gap: 1rem;
+	padding-block: clamp(3rem, 10vw, 6rem) 2rem;
+	text-align: center;
+}
+.gp-404 p {
+	margin: 0;
+	max-width: 36rem;
+	color: var(--sl-color-gray-2);
+}
+.gp-404 .gp-404-title {
+	font-family: var(--gp-display);
+	font-size: clamp(2rem, 5vw, 3rem);
+	font-weight: 600;
+	letter-spacing: -0.02em;
+	color: var(--sl-color-white);
+}
+.gp-404 a {
+	color: var(--sl-color-accent-high);
+	font-weight: 500;
+}
+
+/* On a phone a wide table scrolls in its box, so its columns keep readable widths. */
+@media (max-width: 40rem) {
+	.sl-markdown-content table:not(.not-content, .not-content *) {
+		display: block;
+		overflow-x: auto;
+		font-size: 0.8rem;
+	}
+	.sl-markdown-content :is(th, td):not(.not-content, .not-content *) {
+		min-width: 7.5rem;
+	}
+}

@@ -1,0 +1,82 @@
+---
+// The home page under the hero: the five paths, each saying where it stands.
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const ways = [
+	{ title: 'Play', href: 'https://lex00.github.io/games/', text: 'Go to the games.' },
+	{ title: 'Improve a game', href: `${base}/improve/`, text: 'Fix how a published game plays, and send the change back.' },
+	{ title: 'Make your own game', href: `${base}/make/`, text: 'Start from the small test game and change it. Early: it runs on your machine only.' },
+	{ title: 'Themes and levels', href: `${base}/themes/`, text: 'Add a new look or stage to a game. Early: no preview yet.' },
+	{ title: 'Bring in a game', href: `${base}/bring/`, text: 'Model a game from a ROM you own. Not available yet.' },
+];
+const more = [
+	{ title: 'Install gp', href: `${base}/install/` },
+	{ title: 'ROM rules', href: `${base}/rom-rules/` },
+	{ title: 'Run a registry', href: `${base}/registry/` },
+	{ title: 'Contribute to the tool', href: `${base}/contribute/` },
+	{ title: 'gp commands', href: `${base}/reference/cli/` },
+];
+---
+<div class="gp-landing not-content">
+	<ul class="gp-ways">
+		{ways.map((w) => (
+			<li>
+				<a href={w.href}>
+					<span class="gp-way-title">{w.title}</span>
+					<span class="gp-way-text">{w.text}</span>
+				</a>
+			</li>
+		))}
+	</ul>
+	<p class="gp-status">{more.map((m, i) => (<>{i > 0 && ' · '}<a href={m.href}>{m.title}</a></>))}</p>
+</div>
+
+<style>
+	.gp-landing {
+		display: grid;
+		gap: 2rem;
+		max-width: 64rem;
+		margin: 0 auto;
+		font-size: var(--sl-text-sm);
+		line-height: 1.55;
+	}
+	.gp-ways {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+		gap: 1rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.gp-ways a {
+		display: grid;
+		gap: 0.5rem;
+		height: 100%;
+		padding: 1.1rem 1.2rem;
+		background: var(--gp-panel);
+		border: 1px solid var(--gp-rule);
+		border-radius: 0.6rem;
+		color: var(--sl-color-gray-2);
+		text-decoration: none;
+	}
+	.gp-ways a:hover {
+		border-color: var(--gp-cyan);
+	}
+	.gp-way-title {
+		font-family: var(--gp-display);
+		font-weight: 600;
+		font-size: 1.05rem;
+		color: var(--sl-color-white);
+	}
+	.gp-status {
+		margin: 0;
+		text-align: center;
+		color: var(--sl-color-gray-3);
+	}
+	.gp-status a {
+		color: var(--gp-accent);
+		text-decoration-color: color-mix(in srgb, var(--gp-accent) 35%, transparent);
+	}
+	.gp-status a:hover {
+		text-decoration-color: var(--gp-cyan);
+	}
+</style>

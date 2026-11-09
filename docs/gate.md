@@ -4,6 +4,8 @@ Nothing lands on `main` in `gameprinter` or `games` except through a gate. A gat
 
 Every commit a gate makes passes the ROM-blocking hook. A patch with a ROM's bytes, a game image, or anything else the hook refuses stops the gate with nothing committed. A patch can't change the hook: the tool gate refuses a patch to `.githooks/` or `scripts/romguard/`, and only the person edits those.
 
+One exception: `site/` in `games`, the list of games, holds no game code, and the game gate only takes a game's folder. It lands directly, through the ROM-blocking hook.
+
 ## The game gate: a patch to a game
 
 ```text
