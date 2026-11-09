@@ -96,7 +96,7 @@ impl Sessions {
                 let inputs = r.inputs()?;
                 let frames = r.u32()?;
                 let rows = self.get(id)?.sample(&selectors, &inputs, frames)?;
-                w.len(rows.len());
+                w.count(rows.len());
                 for row in &rows {
                     w.entries(row);
                 }
@@ -104,7 +104,7 @@ impl Sessions {
             wire::ENTITIES_AT => {
                 let area = r.rect()?;
                 let ids = self.get(id)?.entities_at(area);
-                w.len(ids.len());
+                w.count(ids.len());
                 for e in ids {
                     w.u64(e);
                 }
@@ -137,7 +137,7 @@ impl Sessions {
                         w.u64(*f);
                         w.str(why);
                     }
-                    w.len(d.desyncs.len());
+                    w.count(d.desyncs.len());
                     for (f, site, why) in &d.desyncs {
                         w.u64(*f);
                         w.str(site);

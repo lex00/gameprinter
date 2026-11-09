@@ -48,18 +48,18 @@ impl Writer {
     pub fn i64(&mut self, v: i64) {
         self.0.extend(v.to_le_bytes());
     }
-    pub fn len(&mut self, n: usize) {
+    pub fn count(&mut self, n: usize) {
         self.u32(u32::try_from(n).expect("a list under 4G"));
     }
     pub fn bytes(&mut self, b: &[u8]) {
-        self.len(b.len());
+        self.count(b.len());
         self.0.extend(b);
     }
     pub fn str(&mut self, s: &str) {
         self.bytes(s.as_bytes());
     }
     pub fn strs(&mut self, list: &[String]) {
-        self.len(list.len());
+        self.count(list.len());
         for s in list {
             self.str(s);
         }
@@ -104,7 +104,7 @@ impl Writer {
         self.value(&e.value);
     }
     pub fn entries(&mut self, list: &[Entry]) {
-        self.len(list.len());
+        self.count(list.len());
         for e in list {
             self.entry(e);
         }
@@ -116,7 +116,7 @@ impl Writer {
         self.entries(&e.data);
     }
     pub fn events(&mut self, list: &[Event]) {
-        self.len(list.len());
+        self.count(list.len());
         for e in list {
             self.event(e);
         }
@@ -124,13 +124,13 @@ impl Writer {
     pub fn input(&mut self, i: &InputFrame) {
         self.u32(i.buttons);
         self.bool(i.reset);
-        self.len(i.axes.len());
+        self.count(i.axes.len());
         for a in &i.axes {
             self.0.extend(a.to_le_bytes());
         }
     }
     pub fn inputs(&mut self, list: &[InputFrame]) {
-        self.len(list.len());
+        self.count(list.len());
         for i in list {
             self.input(i);
         }
@@ -146,7 +146,7 @@ impl Writer {
         self.events(&u.events);
     }
     pub fn notes(&mut self, list: &[LoadNote]) {
-        self.len(list.len());
+        self.count(list.len());
         for n in list {
             self.str(&n.path);
             self.u8(match n.how {
@@ -198,18 +198,18 @@ impl<'a> Reader<'a> {
             self.take(8)?.try_into().expect("8 bytes"),
         ))
     }
-    pub fn len(&mut self) -> R<usize> {
+    pub fn count(&mut self) -> R<usize> {
         Ok(self.u32()? as usize)
     }
     pub fn bytes(&mut self) -> R<&'a [u8]> {
-        let n = self.len()?;
+        let n = self.count()?;
         self.take(n)
     }
     pub fn str(&mut self) -> R<String> {
         String::from_utf8(self.bytes()?.to_vec()).map_err(|e| e.to_string())
     }
     pub fn strs(&mut self) -> R<Vec<String>> {
-        (0..self.len()?).map(|_| self.str()).collect()
+        (0..self.count()?).map(|_| self.str()).collect()
     }
     pub fn opt_u64(&mut self) -> R<Option<u64>> {
         Ok(if self.bool()? {
@@ -236,7 +236,7 @@ impl<'a> Reader<'a> {
         })
     }
     pub fn entries(&mut self) -> R<Vec<Entry>> {
-        (0..self.len()?).map(|_| self.entry()).collect()
+        (0..self.count()?).map(|_| self.entry()).collect()
     }
     pub fn event(&mut self) -> R<Event> {
         Ok(Event {
@@ -247,16 +247,18 @@ impl<'a> Reader<'a> {
         })
     }
     pub fn events(&mut self) -> R<Vec<Event>> {
-        (0..self.len()?).map(|_| self.event()).collect()
+        (0..self.count()?).map(|_| self.event()).collect()
     }
     pub fn input(&mut self) -> R<InputFrame> {
         let buttons = self.u32()?;
         let reset = self.bool()?;
-        let n = self.len()?;
+        let n = self.count()?;
         let axes = self
             .take(n * 2)?
-            .chunks_exact(2)
-            .map(|c| i16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| i16::from_le_bytes(*c))
             .collect();
         Ok(InputFrame {
             buttons,
@@ -265,7 +267,7 @@ impl<'a> Reader<'a> {
         })
     }
     pub fn inputs(&mut self) -> R<Vec<InputFrame>> {
-        (0..self.len()?).map(|_| self.input()).collect()
+        (0..self.count()?).map(|_| self.input()).collect()
     }
     pub fn rect(&mut self) -> R<Rect> {
         Ok(Rect {
@@ -282,7 +284,7 @@ impl<'a> Reader<'a> {
         })
     }
     pub fn notes(&mut self) -> R<Vec<LoadNote>> {
-        (0..self.len()?)
+        (0..self.count()?)
             .map(|_| {
                 Ok(LoadNote {
                     path: self.str()?,

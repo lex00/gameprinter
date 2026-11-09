@@ -220,7 +220,7 @@ impl ModuleRuntime {
         } else {
             None
         };
-        let desyncs = (0..r.len()?)
+        let desyncs = (0..r.count()?)
             .map(|_| Ok((r.u64()?, r.str()?, r.str()?)))
             .collect::<Result<_, String>>()?;
         Ok(Some(DrawsReport {
@@ -336,13 +336,13 @@ impl Runtime for ModuleRuntime {
             w.u32(frames);
         })?;
         let mut r = Reader::new(&out);
-        (0..r.len()?).map(|_| r.entries()).collect()
+        (0..r.count()?).map(|_| r.entries()).collect()
     }
 
     fn entities_at(&self, area: Rect) -> Vec<u64> {
         let out = must(self.call(wire::ENTITIES_AT, CALL_TICKS, |w| w.rect(area)));
         let mut r = Reader::new(&out);
-        must((0..must(r.len())).map(|_| r.u64()).collect())
+        must((0..must(r.count())).map(|_| r.u64()).collect())
     }
 
     /// Not carried: a changed model is loaded again.
