@@ -746,6 +746,50 @@ fn model_key(text: &str) -> String {
         )
 }
 
+/// The game's asset map for this ROM: its path and text.
+pub(crate) fn asset_map(game: &Path, rom: &[u8]) -> Result<(PathBuf, String)> {
+    let pkg: toml::Table = fs::read_to_string(game.join("package.toml"))
+        .with_context(|| format!("reading {}/package.toml", game.display()))?
+        .parse()
+        .with_context(|| game.display().to_string())?;
+    let entries = pkg
+        .get("rom")
+        .and_then(|r| r.get("entry"))
+        .and_then(|e| e.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let sha = crate::roms::sha256_of(rom)?;
+    let entry = entries
+        .iter()
+        .find(|e| e.get("sha256").and_then(|v| v.as_str()) == Some(sha.as_str()))
+        .context("the package names no asset map for this ROM")?;
+    let map_rel = entry
+        .get("asset_map")
+        .and_then(|v| v.as_str())
+        .context("the package's ROM entry has no asset_map")?;
+    let path = game.join(map_rel);
+    let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    Ok((path, text))
+}
+
+/// Lifts the game's assets for `rom` into `out`, unless already there.
+pub(crate) fn lift_into(game: &Path, rom: &[u8], out: &Path) -> Result<()> {
+    if out.join(gp_assets::MAP_FILE).is_file() {
+        return Ok(());
+    }
+    let (path, text) = asset_map(game, rom)?;
+    let map = gp_assets::AssetMap::parse(&text).with_context(|| path.display().to_string())?;
+    let (files, _) = gp_assets::lift(rom, &map, &text)?;
+    for f in &files {
+        let p = out.join(&f.name);
+        if let Some(d) = p.parent() {
+            fs::create_dir_all(d)?;
+        }
+        fs::write(&p, &f.bytes)?;
+    }
+    Ok(())
+}
+
 /// The model's lifted assets: `--assets`, else `$GP_HOME/work/assets/SOURCE`,
 /// lifted there from the game's asset map and the ROM if not there yet.
 fn assets_of(
@@ -765,40 +809,7 @@ fn assets_of(
         bail!("the model names no source, so give its lifted assets with --assets");
     };
     let out = paths.home.join("work").join("assets").join(source);
-    if !out.join(gp_assets::MAP_FILE).is_file() {
-        let pkg: toml::Table = fs::read_to_string(game.join("package.toml"))
-            .with_context(|| format!("reading {}/package.toml", game.display()))?
-            .parse()
-            .with_context(|| game.display().to_string())?;
-        let entries = pkg
-            .get("rom")
-            .and_then(|r| r.get("entry"))
-            .and_then(|e| e.as_array())
-            .cloned()
-            .unwrap_or_default();
-        let sha = crate::roms::sha256_of(rom)?;
-        let entry = entries
-            .iter()
-            .find(|e| e.get("sha256").and_then(|v| v.as_str()) == Some(sha.as_str()))
-            .context("the package names no asset map for this ROM")?;
-        let map_rel = entry
-            .get("asset_map")
-            .and_then(|v| v.as_str())
-            .context("the package's ROM entry has no asset_map")?;
-        let map_path = game.join(map_rel);
-        let map_text = fs::read_to_string(&map_path)
-            .with_context(|| format!("reading {}", map_path.display()))?;
-        let map = gp_assets::AssetMap::parse(&map_text)
-            .with_context(|| map_path.display().to_string())?;
-        let (files, _) = gp_assets::lift(rom, &map, &map_text)?;
-        for f in &files {
-            let p = out.join(&f.name);
-            if let Some(d) = p.parent() {
-                fs::create_dir_all(d)?;
-            }
-            fs::write(&p, &f.bytes)?;
-        }
-    }
+    lift_into(game, rom, &out)?;
     Ok(out)
 }
 

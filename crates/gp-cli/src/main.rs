@@ -9,6 +9,7 @@ mod clip_score;
 mod clipset;
 mod corpus_score;
 mod game;
+mod gate;
 mod hosted;
 mod lockstep;
 mod model;
@@ -145,6 +146,9 @@ enum ModelCmd {
         #[arg(long)]
         assets: Option<PathBuf>,
     },
+    /// Hold a patch to a game in the games repo to its corpus: PASS or FAIL,
+    /// and what passes lands.
+    Gate(gate::GateArgs),
     /// Fail if the model or contract isn't in canonical form.
     Fmt {
         dir: PathBuf,
@@ -359,6 +363,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
         Cmd::Model { cmd } => match cmd {
             ModelCmd::Check { dir, assets } => model::check(dir, assets.as_deref()),
             ModelCmd::Fmt { dir, .. } => model::fmt_check(dir),
+            ModelCmd::Gate(a) => gate::run(a, &gp_evidence::Paths::from_env()?),
         },
         Cmd::Baseline {
             cmd: BaselineCmd::Check { files, rom },

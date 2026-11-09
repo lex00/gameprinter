@@ -65,6 +65,9 @@ fn scan_wasm(
     found: &BTreeMap<String, Rom>,
 ) -> Result<(String, serde_json::Value, bool)> {
     let mut files: Vec<PathBuf> = extra.to_vec();
+    // Any other file that isn't text is compared whole: no field of it can
+    // be read, so a slice of a ROM in one would pass unseen.
+    let mut binary: Vec<PathBuf> = Vec::new();
     let mut stack = vec![dir.to_owned()];
     while let Some(d) = stack.pop() {
         for e in fs::read_dir(&d)? {
@@ -76,14 +79,22 @@ fn scan_wasm(
                 }
             } else if p.extension().is_some_and(|x| x == "wasm") {
                 files.push(p);
+            } else if fs::read_to_string(&p).is_err() {
+                binary.push(p);
             }
         }
     }
     let mut text = String::new();
     let mut finds = Vec::new();
-    for f in &files {
+    let mut targets: Vec<(&PathBuf, bool)> = files.iter().map(|f| (f, true)).collect();
+    targets.extend(binary.iter().map(|f| (f, false)));
+    for (f, wasm) in targets {
         let bytes = fs::read(f).with_context(|| f.display().to_string())?;
-        let parts = crate::module::data_parts(&bytes).with_context(|| f.display().to_string())?;
+        let parts = if wasm {
+            crate::module::data_parts(&bytes).with_context(|| f.display().to_string())?
+        } else {
+            vec![("the file".to_owned(), &bytes[..])]
+        };
         let total: usize = parts.iter().map(|p| p.1.len()).sum();
         for (id, rom) in found {
             for (name, data) in &parts {
