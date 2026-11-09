@@ -28,6 +28,27 @@ const ALLOWED_DEPS: [&str; 2] = ["gp-sim", "gp-cycles"];
 /// The largest memory a module may declare: 256 MB (the loader's limit too).
 const MAX_MEMORY: u64 = 256 * 1024 * 1024;
 const TARGET: &str = "wasm32-unknown-unknown";
+/// Stands in front of rustc for a build, so nothing of the machine reaches the
+/// output. Cargo mixes the host and the flags into each crate's identity,
+/// which sets symbol names and type ids, so the wrapper names a crate by its
+/// name and version alone. Paths are remapped here and not in RUSTFLAGS,
+/// which would put this machine's path in that identity.
+const WRAPPER: &str = r#"#!/bin/sh
+rustc="$1"
+shift
+n=$#
+i=0
+while [ "$i" -lt "$n" ]; do
+  a="$1"
+  shift
+  i=$((i + 1))
+  case "$a" in
+    metadata=*) a="metadata=gp-$CARGO_PKG_NAME-$CARGO_PKG_VERSION" ;;
+  esac
+  set -- "$@" "$a"
+done
+exec "$rustc" "--remap-path-prefix=$GP_MODULE_SRC=/gp-module" "--remap-path-prefix=$GP_MODULE_TARGET=/gp-target" "$@"
+"#;
 
 fn run(cmd: &mut Command, what: &str) -> Result<()> {
     let out = cmd.output().with_context(|| format!("starting {what}"))?;
@@ -522,10 +543,14 @@ pub fn build(dir: &Path, kit_dir: &Path, out: &Path, update_lock: bool) -> Resul
         fs::write(&lock_file, fs::read(src.join("Cargo.lock"))?)?;
     }
 
-    let flags = format!(
-        "--remap-path-prefix={}=/gp-module -Clink-arg=--max-memory={MAX_MEMORY}",
-        src.display()
-    );
+    let flags = format!("-Clink-arg=--max-memory={MAX_MEMORY}");
+    let wrapper = work.join("rustc-wrapper.sh");
+    fs::write(&wrapper, WRAPPER)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755))?;
+    }
     let target_dir = work.join("target");
     let args = [
         "rustc",
@@ -554,6 +579,9 @@ pub fn build(dir: &Path, kit_dir: &Path, out: &Path, update_lock: bool) -> Resul
     let mut c = sandboxed(&work, &toolchain, &args)?;
     c.current_dir(&src)
         .env("RUSTFLAGS", flags)
+        .env("RUSTC_WRAPPER", &wrapper)
+        .env("GP_MODULE_SRC", &src)
+        .env("GP_MODULE_TARGET", &target_dir)
         .env("CARGO_TARGET_DIR", &target_dir)
         .env("GP_HOOK_MODELS", models.join(","));
     run(&mut c, "the sandboxed build")?;
