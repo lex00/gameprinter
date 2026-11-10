@@ -946,6 +946,7 @@ dependencies = [
  "gp-runtime",
  "gp-sim",
  "gp-sound",
+ "gp-theme",
  "hex",
  "lz4_flex",
  "png",

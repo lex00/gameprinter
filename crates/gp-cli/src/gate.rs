@@ -455,6 +455,13 @@ fn trial(
             "model check",
         );
     }
+    let themes = theme_problems(&game);
+    if !themes.is_empty() {
+        return fail(
+            format!("the game's themes: {}", themes.join("; ")),
+            "themes",
+        );
+    }
     let rows = match score(
         c,
         &game,
@@ -1078,4 +1085,82 @@ pub(crate) fn land(
         let now = git(repo, &["rev-parse", onto]).unwrap_or_default();
         (format!("{e:#}"), now != tip)
     })
+}
+
+/// What's wrong with a game's themes, its open version's too: each file
+/// against the SHA-256 its `theme.toml` records, and the rest of the theme's
+/// own check. The player refuses a theme that fails these.
+fn theme_problems(game: &Path) -> Vec<String> {
+    let mut problems = Vec::new();
+    for themes in [game.join("themes"), game.join("open/themes")] {
+        let Ok(entries) = fs::read_dir(&themes) else {
+            continue;
+        };
+        let mut dirs: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.join(gp_theme::format::THEME_FILE).is_file())
+            .collect();
+        dirs.sort();
+        for dir in dirs {
+            match gp_theme::format::Theme::load(&dir) {
+                Err(e) => problems.push(e),
+                Ok(theme) => problems.extend(
+                    theme
+                        .check(&dir)
+                        .into_iter()
+                        .map(|(at, what)| format!("{}: {at}: {what}", dir.display())),
+                ),
+            }
+        }
+    }
+    problems
+}
+
+#[cfg(test)]
+mod theme_tests {
+    use super::*;
+
+    /// A game holding one theme with one art file, its pin right.
+    fn game(at: &str) -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join(at);
+        fs::create_dir_all(&dir).unwrap();
+        let art = b"pix 1\nsize 1 1\na #000000\na\n";
+        fs::write(dir.join("a.pix"), art).unwrap();
+        fs::write(
+            dir.join(gp_theme::format::THEME_FILE),
+            format!(
+                "format = \"0.1.3\"\nid = \"paper\"\ntitle = \"Paper\"\nlicense = \"CC0-1.0\"\nfor = [\"m\"]\n\n[[restyle]]\nslot = \"s\"\nentry = \"e\"\nfile = \"a.pix\"\norigin = \"generated\"\nlicense = \"CC0-1.0\"\nsha256 = \"{}\"\n",
+                gp_theme::format::sha256_hex(art)
+            ),
+        )
+        .unwrap();
+        d
+    }
+
+    #[test]
+    fn a_theme_whose_files_match_their_pins_passes() {
+        for at in ["themes/paper", "open/themes/paper"] {
+            let d = game(at);
+            assert_eq!(theme_problems(d.path()), Vec::<String>::new());
+        }
+    }
+
+    #[test]
+    fn a_file_changed_without_its_pin_is_named() {
+        for at in ["themes/paper", "open/themes/paper"] {
+            let d = game(at);
+            fs::write(d.path().join(at).join("a.pix"), b"changed").unwrap();
+            let found = theme_problems(d.path());
+            assert_eq!(found.len(), 1, "{found:?}");
+            assert!(found[0].contains("a.pix has SHA-256"), "{found:?}");
+        }
+    }
+
+    #[test]
+    fn a_game_with_no_themes_has_no_problems() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(theme_problems(d.path()).is_empty());
+    }
 }
