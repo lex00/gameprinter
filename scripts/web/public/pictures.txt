@@ -47,7 +47,7 @@ moment oe-fall-turnips
   shows   Original Edition's 100m ending in the Turnips look: the thrower falling from the top, the middle girders and ladders cleared, the girders stacked at the bottom
   state   level m100, player at 61,52
   size    1536x1344
-  sha256  7e6b2c6199d049f59a996428ea8bdb7182d9d750a5af478ba9bd6a1e92c9663f
+  sha256  c8ea652dfa84178f03b60a820a95fe6704761750fbd54100868e676e75fa7608
 
 moment oe-ending-turnips
   section pictures-rom-45440d8e
@@ -56,4 +56,4 @@ moment oe-ending-turnips
   shows   Original Edition's 100m ending in the Turnips look: the heart between the hero and the friend, the thrower fallen on its head on the girders the ending stacks, the girder laid under the friend, the middle girders and ladders cleared (thin edges of the stage picture left)
   state   level m100, player at 165,53
   size    1536x1344
-  sha256  cd3412eeec0d79e963e9aef8cb661835257edd225f55ed662d13f1b2c10118fd
+  sha256  f0a76f81d9403236db1889c83e593cf2b26b9666c7617752e4e42090ed1afa3c
