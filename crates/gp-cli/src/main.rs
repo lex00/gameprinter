@@ -16,6 +16,7 @@ mod gate;
 mod gate_copy;
 mod hosted;
 mod lockstep;
+mod mechanic;
 mod model;
 mod module;
 mod package;
@@ -117,6 +118,12 @@ enum Cmd {
     Game {
         #[command(subcommand)]
         cmd: GameCmd,
+    },
+    /// One mechanic of a game, worked on by a person and their agent: the
+    /// page to play and record clips in, and the agent's side of the talk.
+    Mechanic {
+        #[command(subcommand)]
+        cmd: mechanic::MechanicCmd,
     },
     /// The ROMs you own, kept in $GP_ROM_DIR: add, list and clean them.
     Roms {
@@ -621,6 +628,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                 },
         } => module::build(dir, kit, out, *update_lock),
         Cmd::Roms { cmd } => roms_cmd::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Mechanic { cmd } => mechanic::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Package { cmd } => match cmd {
             PackageCmd::Hooks { dir } => package::hooks(dir),
             PackageCmd::Scan { dir, rom, wasm } => {

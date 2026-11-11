@@ -19,7 +19,7 @@ const PUBLIC: &[&str] = &[
 ];
 /// Top-level commands in the lab set.
 const LAB: &[&str] = &[
-    "baseline", "clip", "interp", "level", "self", "tool", "worker",
+    "baseline", "clip", "interp", "level", "mechanic", "self", "tool", "worker",
 ];
 
 /// A set's table rows: each leaf command's words and first help line.

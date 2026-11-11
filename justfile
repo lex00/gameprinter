@@ -46,6 +46,7 @@ check: _hook-enabled build mosshop
     {{gp}} model fmt --check templates/mosshop
     just _interp-mosshop
     just play-web
+    just mechanic-page
     {{gp}} template check templates/mosshop --rom {{quote(mosshop_rom)}}
     scripts/test-hook.sh
     python3 -I -B -m unittest discover -s scripts/romguard -q
@@ -69,6 +70,21 @@ play-web: mosshop
         exit 1
     fi
     echo "play-web: Moss Hop played in gp_play.wasm and replayed natively: every frame hash agrees ($web)"
+
+# The mechanic page in a headless browser on Moss Hop, in a GP_HOME made
+# for the run: play, record a clip with a note and hand it off, the agent's
+# answer from gp mechanic say, FREE PLAY, and the page's message when the
+# player isn't built (scripts/web/check-mechanic.mjs).
+mechanic-page: build mosshop
+    #!/usr/bin/env bash
+    set -euo pipefail
+    scripts/web/build-play.sh {{quote(target / "play-web")}} > /dev/null
+    if [ -z "${PLAYWRIGHT_FROM:-}" ] && [ ! -d scripts/web/node_modules/playwright-core ]; then
+        npm ci --prefix scripts/web --silent --no-audit --no-fund
+    fi
+    browser=$(scripts/inspector/fetch-browser.sh {{quote(gp_home)}})
+    node scripts/web/check-mechanic.mjs --gp {{quote(gp)}} --rom {{quote(mosshop_rom)}} \
+        --wasm {{quote(target / "play-web" / "gp_play.wasm")}} --browser "$browser"
 
 _interp-mosshop:
     #!/usr/bin/env bash

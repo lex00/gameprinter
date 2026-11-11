@@ -13,12 +13,13 @@
 //! | `model.toml` | The genre's header, the pad, a player and an empty level, each a placeholder its evidence says is one |
 //! | `mapping.toml`, `observe.toml`, `probes.toml`, `profiles.toml`, `fidelity.toml` | Empty or default, each saying what goes in it |
 //! | `corpus.toml` | The corpus plan with no clips |
+//! | `$GP_HOME/mechanics/GAME/` | The quest log seeded from the genre's checklist (mechanic/checklists.toml), and a mechanic session for each row |
 //!
-//! Nothing is written over: a folder that exists is refused. No ROM byte is
-//! written; the lift's digest is a hash of what the ROM gives, made here.
-//! Left for later steps (~/.game-printer/work/bring/PLAN.md): the draw-site
-//! search, the theme kit, the level kit and the quest log, whose tools
-//! haven't moved yet.
+//! Nothing is written over: a folder that exists is refused, and the quest
+//! log only gains the rows it lacks. No ROM byte is written; the lift's
+//! digest is a hash of what the ROM gives, made here. Left for later steps
+//! (~/.game-printer/work/bring/PLAN.md): the draw-site search, the theme kit
+//! and the level kit, whose tools haven't moved yet.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -251,6 +252,7 @@ pub fn run(a: &New<'_>, paths: &Paths) -> Result<Outcome> {
         return Err(e);
     }
     fs::rename(&tmp, &dir).with_context(|| format!("writing {}", dir.display()))?;
+    let (qdir, rows, added) = crate::mechanic::seed_quest_log(paths, game, a.genre, &sha)?;
 
     let mut text = vec![
         format!(
@@ -281,6 +283,12 @@ pub fn run(a: &New<'_>, paths: &Paths) -> Result<Outcome> {
             }
         ),
         "  corpus   no clips yet".into(),
+        format!(
+            "  quest    {} rows from the {} checklist ({added} new), a session for each, in {}",
+            rows.len(),
+            a.genre,
+            qdir.display()
+        ),
         String::new(),
         "Wrote:".into(),
     ];
@@ -288,7 +296,7 @@ pub fn run(a: &New<'_>, paths: &Paths) -> Result<Outcome> {
     text.extend([
         String::new(),
         format!(
-            "Next: gp model check {game}; gp template check {game} --rom ROM; gp package scan {game}. Then find the player's bytes and map them in mapping.toml before the first clip."
+            "Next: gp model check {game}; gp template check {game} --rom ROM; gp package scan {game}. Then find the player's bytes and map them in mapping.toml before the first clip. Then record the quest log's rows with gp mechanic start {game}."
         ),
     ]);
     Ok(Outcome::ok(
@@ -296,6 +304,7 @@ pub fn run(a: &New<'_>, paths: &Paths) -> Result<Outcome> {
             "game": game, "package": format!("{namespace}/{game}"), "genre": a.genre,
             "rom": sha, "dir": dir, "wrote": files.iter().map(|(f, _)| f).collect::<Vec<_>>(),
             "lifted_sha256": lifted_sha,
+            "quest_log": rows.iter().map(|r| r.row.clone()).collect::<Vec<_>>(),
         }),
         text.join("\n"),
     ))
@@ -638,6 +647,19 @@ mod tests {
                     .any(|w| rom_bytes[16..].windows(32).any(|r| r == w))
             );
         }
+        // The quest log: the genre's rows, each next with a session.
+        let q: Vec<serde_json::Value> = serde_json::from_str(
+            &fs::read_to_string(home.join("mechanics/test-hop/queue.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(q.len(), out.json["quest_log"].as_array().unwrap().len());
+        assert_eq!(q[1]["mechanic"], "walk");
+        assert_eq!(q[1]["status"], "next");
+        let s: toml::Table = toml::from_str(
+            &fs::read_to_string(home.join("mechanics/test-hop/walk/session.toml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(s["rom"].as_str(), out.json["rom"].as_str());
         // Again: refused, and nothing changed.
         assert!(run(&a, &paths).is_err());
         // A ROM a game names already is refused.

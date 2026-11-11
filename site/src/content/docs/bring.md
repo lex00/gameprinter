@@ -37,7 +37,18 @@ The first real work is finding where the game keeps the player in RAM and adding
 
 ## 3. Play, record and talk to the agent
 
-**Not available yet.** This is the screen where you play the original, record short clips of a mechanic with a note each, and hand them to an agent, who answers on the same page. A tab beside it shows what the agent is doing: its status, a log, and the problems it has found. It's being brought over from the older version of Game Printer.
+`gp game new` also starts the game's quest log: the mechanics to record for its genre (the title screen, walking, jumping, enemies and so on), each with a line saying what to show. In your gameprinter checkout, build the browser player once, then open the page on one of them:
+
+```sh
+scripts/web/build-play.sh
+gp mechanic start my-game walk
+```
+
+It serves the page at `http://127.0.0.1:7710/`, on your machine only, and prints a line to give your agent. Play with the keyboard or a controller. R (or the right bumper) starts a recording and stops it; type a note and press Enter to hand the clip to your agent. The agent reads the session with `gp mechanic show my-game walk` and answers with `gp mechanic say`; its words show over the game, which waits until you answer. Click another row of the quest log to work on it next. FREE PLAY is the game on its own: your agent's words wait there until Esc brings you back.
+
+Clips are kept as presses, never pictures, under `~/.gameprinter/mechanics/my-game/`.
+
+Not here yet: the tab that plays a clip on the original and the model side by side, and a tab showing what the agent is doing (its status, a log, and the problems it has found).
 
 Also still missing: support for a game on a cartridge type the emulator doesn't handle yet, which would first need a [change to the tool](../contribute/).
 

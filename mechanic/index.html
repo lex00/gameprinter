@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mechanic</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <span id="logo">GAME PRINTER</span>
+    <span id="title">Loading</span>
+    <span id="score"></span>
+    <button id="sound" type="button" tabindex="-1" title="U: the original's sound on or off" aria-pressed="true">SOUND ON</button>
+    <span id="state"></span>
+  </header>
+  <nav id="tabs"><button id="tab-mech" class="on">HELP WITH MECHANICS</button><button id="tab-free">FREE PLAY</button></nav>
+  <main>
+    <div id="side-l">
+      <section id="ctx-clip" class="ctx" aria-label="The clip loaded"></section>
+    </div>
+    <div id="left">
+      <div id="screen" data-mode="m-play"><div id="modebadge">PLAYING</div>
+        <canvas id="game" width="256" height="240"></canvas><canvas id="game2" width="256" height="240" hidden></canvas>
+        <div id="rec" hidden><span class="dot"></span><span id="rec-time">0.0 s</span></div>
+        <div id="toast" hidden></div>
+        <div id="bar" hidden><div id="bar-fill"></div><span id="bar-time"></span></div>
+      </div>
+      <div id="busy" hidden><span class="spin"></span><span id="busy-text"></span></div>
+      <div id="watch" hidden><div id="watch-goal"></div><div id="watch-pick"></div></div>
+      <div id="overlay" hidden>
+        <div id="panel">
+          <div id="to" hidden></div>
+          <p id="say"></p>
+          <ul id="choices"></ul>
+          <label id="note-row" hidden>Note (optional) <input id="note" autocomplete="off"></label>
+          <p id="hint"></p>
+        </div>
+      </div>
+    </div>
+    <section id="ctx-frame" class="ctx" aria-label="This frame"></section>
+    <aside>
+      <div class="col">
+        <h2>Quest log</h2>
+        <ol id="queue"></ol>
+        <p id="queue-hint">Click a mechanic to work on it next.</p>
+        <section id="findings" hidden></section>
+      </div>
+      <div class="col">
+        <details open><summary>Clips of this mechanic</summary><ol id="clips"></ol></details>
+        <details open><summary>Conversation</summary><ol id="talk"></ol></details>
+      </div>
+    </aside>
+  </main>
+  <footer><div id="pad-line"></div><div id="keys">Arrows move, X is A, Z is B, Enter is Start. F5 or the left trigger saves, F8 or the right trigger loads. R or the right bumper records. U turns the sound off and on. Player 2: I J K L move, M is A, N is B, H is Select, Y is Start, or a second controller.</div></footer>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,132 @@
+# The quest log a new game starts with, by genre. `gp game new` writes each
+# genre's rows into $GP_HOME/mechanics/GAME/queue.json in this order, each
+# "next" with its line, and opens a mechanic session for each so its clips
+# have somewhere to go. Each row is something a person records in
+# `gp mechanic start GAME ROW`.
+#
+# Brought over from game-printer's docs/research/genres.md ("Quest log
+# checklists"), whose rows came from the Donkey Kong quest log. The old
+# lists ended with `sealed-run`, the held-out run no worker sees; sealed
+# runs aren't in gameprinter yet, so that row is left out until they are.
+# `other` is a short list of what every game has, from the rows the old
+# genres share. The binary reads this file when it is built.
+
+[[platformer]]
+row = "title"
+what = "The title screen and the attract demo from power-on: the menu, the demo, and what Start does"
+
+[[platformer]]
+row = "walk"
+what = "Walking both ways, turning and stopping: the speed, and how a walk starts and stops"
+
+[[platformer]]
+row = "jump"
+what = "A standing jump, a running jump, a tap and a held jump: the height, the length and any control in the air"
+
+[[platformer]]
+row = "climb"
+what = "Ladders or vines, if the game has them: up, down, getting on and off"
+
+[[platformer]]
+row = "enemies"
+what = "Each enemy and hazard moving on its own, with the player out of its way"
+
+[[platformer]]
+row = "enemy-contact"
+what = "Touching each enemy, from the side and from above"
+
+[[platformer]]
+row = "power-up"
+what = "Taking each power-up and what it changes, until it runs out"
+
+[[platformer]]
+row = "die"
+what = "Each way to die (an enemy, a fall, the timer) and what happens until play starts again"
+
+[[platformer]]
+row = "score"
+what = "What gives points, and the extra life"
+
+[[platformer]]
+row = "clear-stage"
+what = "Clearing the first stage, and the scene after it"
+
+[[platformer]]
+row = "game-over"
+what = "Losing the last life: the game over and the way back to the title"
+
+[[topdown]]
+row = "title"
+what = "The title screen and the attract demo from power-on: the menu, the demo, and what Start does"
+
+[[topdown]]
+row = "class-select"
+what = "Choosing a character before play, if the game has classes"
+
+[[topdown]]
+row = "move"
+what = "Moving in each of the eight directions: the speed, starting and stopping"
+
+[[topdown]]
+row = "walls"
+what = "Walking into walls and corners: sliding along a wall, stopping at a corner"
+
+[[topdown]]
+row = "shoot"
+what = "Shooting each way: the shot's speed and what stops it"
+
+[[topdown]]
+row = "enemies"
+what = "Each enemy moving on its own, and what makes them (generators)"
+
+[[topdown]]
+row = "pickups"
+what = "Taking each pickup (food, keys, potions) and what it changes"
+
+[[topdown]]
+row = "doors"
+what = "Opening a door, with and without a key"
+
+[[topdown]]
+row = "health"
+what = "Health over time: what drains it and what restores it"
+
+[[topdown]]
+row = "exit"
+what = "Taking an exit, and the level after it"
+
+[[topdown]]
+row = "die"
+what = "Running out of health, and what happens next"
+
+[[topdown]]
+row = "game-over"
+what = "The game over and the way back to the title"
+
+[[other]]
+row = "title"
+what = "The title screen and the attract demo from power-on: the menu, the demo, and what Start does"
+
+[[other]]
+row = "move"
+what = "Moving the player each way the game allows: the speed, starting and stopping"
+
+[[other]]
+row = "enemies"
+what = "Each enemy and hazard moving on its own, with the player out of its way"
+
+[[other]]
+row = "die"
+what = "Each way to lose a life or a try, and what happens until play starts again"
+
+[[other]]
+row = "score"
+what = "What gives points, and the extra life"
+
+[[other]]
+row = "clear-stage"
+what = "Clearing the first stage or level, and the scene after it"
+
+[[other]]
+row = "game-over"
+what = "Losing the last life: the game over and the way back to the title"
