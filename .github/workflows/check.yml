@@ -8,12 +8,18 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      # The build sandbox, which gp game build and its test need.
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap && sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # The build sandbox, which gp game build and its test need, and the tools.
       - name: Tools
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq cc65 just
+          # The runner's package mirror sometimes can't be reached for a minute
+          # ("Temporary failure resolving"): apt retries each download, and
+          # the install is tried three times before the job fails.
+          for try in 1 2 3; do
+            sudo apt-get -o Acquire::Retries=5 update -qq && sudo apt-get -o Acquire::Retries=5 install -y -qq bubblewrap cc65 just && break
+            [ "$try" = 3 ] && exit 1
+            sleep 30
+          done
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           rustup show
       - uses: actions/cache@v4
         with:
