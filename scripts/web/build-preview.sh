@@ -1,13 +1,15 @@
 #!/bin/bash
 # Builds the interpreter preview of a model for the browser, the fast path
 # of the playable web build (docs/web.md):
-#   scripts/web/build-preview.sh OUT MODEL ASSETS [BASELINE...]
+#   scripts/web/build-preview.sh OUT [MODEL ASSETS [BASELINE...]]
 #
 # OUT gets index.html and preview.js (scripts/web/page/), gp_web.wasm (the
 # interpreter, crates/gp-web, for wasm32-unknown-unknown), and what
 # gp-web-prep writes: the model bundle, the generator's pictures,
 # preview.json and each baseline's frames and native hashes. bevy.html comes
-# with the Bevy build, from scripts/web/build-bevy.sh.
+# with the Bevy build, from scripts/web/build-bevy.sh. With no MODEL there
+# is no gp-web-prep step: the player only, for a page whose game files all
+# come from a ROM lifted in the browser (scripts/web/build-page.sh).
 #
 # The wasm build uses the workspace's toolchain, which needs the
 # wasm32-unknown-unknown target. With WEB_TOOLS set to the directory
@@ -25,12 +27,12 @@
 set -euo pipefail
 trap 'exit 2' ERR
 
-if [ $# -lt 3 ]; then
-  echo "usage: scripts/web/build-preview.sh OUT MODEL ASSETS [BASELINE...]" >&2
+if [ $# -ne 1 ] && [ $# -lt 3 ]; then
+  echo "usage: scripts/web/build-preview.sh OUT [MODEL ASSETS [BASELINE...]]" >&2
   exit 2
 fi
-out="$1" model="$2" assets="$3"
-shift 3
+out="$1" model="${2:-}" assets="${3:-}"
+shift "$(( $# < 3 ? $# : 3 ))"
 repo="$(cd "$(dirname "$0")/../.." && pwd)"
 target="$(cd "$repo" && mkdir -p "${CARGO_TARGET_DIR:-target}" && cd "${CARGO_TARGET_DIR:-target}" && pwd)"
 
@@ -58,7 +60,9 @@ home="${GP_HOME:-$HOME/.gameprinter}"
 prep_extra="gp-web-prep ${GP_WEB_PREP_FLAGS:-} $* assets $( [ "${GP_WEB_REUSE:-0}" = 0 ] || python3 -I "$reuse" digest --tree "$assets") $rustc_v"
 prep_in=(--tree "$model" --tree "$home/themes" --file "$home/mirrors.toml" --file "$repo/mirrors.toml"
   --listing "$home/work/sound" --listing "$home/sound-banks")
-if from="$(kept web-prep --extra "$prep_extra")"; then
+if [ -z "$model" ]; then
+  echo "prep: none, no model"
+elif from="$(kept web-prep --extra "$prep_extra")"; then
   cp -R "$from/out/$(basename "$out")/." "$out/"
   echo "prep kept ($from)"
 else

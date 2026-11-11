@@ -8,7 +8,7 @@
 //!
 //! ```toml
 //! format = "0.1.0"
-//! game = "rivet-rodeo"
+//! game = "made-up-game"
 //!
 //! [[theme]]
 //! id = "night"
@@ -391,24 +391,24 @@ mod tests {
     use super::*;
 
     fn sample() -> Index {
-        let mut ix = Index::new("rivet-rodeo");
+        let mut ix = Index::new("made-up-game");
         ix.put(Theme {
             id: "night".into(),
             title: "Night \"Shift\"\tTwo".into(),
             author: "A. Maker \\ friends".into(),
             license: "CC0-1.0".into(),
             package: crate::hash(b"m"),
-            model: "rivet_rodeo".into(),
+            model: "made_up_game".into(),
             fits: pictures_digest(&["frame-0-0.png", "frame-1-0.png"]),
             kit: crate::hash(b"kit"),
             kind: "look".into(),
-            models: "rivet_rodeo".into(),
+            models: "made_up_game".into(),
             slots: format!(
-                "rivet_rodeo:{}",
+                "made_up_game:{}",
                 slots_digest(&["art font font 8x8 frames=10 colors=any"])
             ),
-            results: "rivet_rodeo:pass".into(),
-            looks: format!("rivet_rodeo:{}", crate::hash(b"look")),
+            results: "made_up_game:pass".into(),
+            looks: format!("made_up_game:{}", crate::hash(b"look")),
             preview: crate::hash(b"p"),
             signer: "lex00".into(),
             originality: "pass: art at most 0.540".into(),
@@ -426,7 +426,7 @@ mod tests {
         assert_eq!(Index::read(&text).unwrap(), ix);
         // The same values through a TOML parser: the shape is TOML.
         let t: toml::Table = text.parse().unwrap();
-        assert_eq!(t["game"].as_str(), Some("rivet-rodeo"));
+        assert_eq!(t["game"].as_str(), Some("made-up-game"));
         let th = &t["theme"].as_array().unwrap()[0];
         assert_eq!(th["title"].as_str(), Some(ix.themes[0].title.as_str()));
         assert_eq!(th["author"].as_str(), Some(ix.themes[0].author.as_str()));
@@ -478,9 +478,9 @@ mod tests {
             (t.kind.as_str(), t.models.as_str(), t.slots.as_str()),
             ("", "", "")
         );
-        assert_eq!(t.result_for("rivet_rodeo"), None);
-        assert_eq!(t.look_for("rivet_rodeo"), None);
-        assert!(!t.fits_model("rivet_rodeo", &slots_digest(&["x"])));
+        assert_eq!(t.result_for("made_up_game"), None);
+        assert_eq!(t.look_for("made_up_game"), None);
+        assert!(!t.fits_model("made_up_game", &slots_digest(&["x"])));
     }
 
     /// A made-up fingerprint's hash, written out: the same on every

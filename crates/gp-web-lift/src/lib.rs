@@ -656,10 +656,9 @@ pub fn lift_rom(rom: &[u8], template: &Path, out: &Path) -> Result<Outcome, Stri
 }
 
 /// The file that makes a folder a game's: `{ "game", "title",
-/// "templates": [id...], "fallback": folder or null }`, each template's
-/// files ([`TEMPLATE_FILES`] less the registry, and its themes) in a folder
-/// named by its id, `sources-nes.toml` beside them, and the fallback folder
-/// holding the paper version's model.toml and lifted files.
+/// "templates": [id...] }`, each template's files ([`TEMPLATE_FILES`] less
+/// the registry, and its themes) in a folder named by its id, and
+/// `sources-nes.toml` beside them.
 pub const GAME_FILE: &str = "game.json";
 
 #[derive(serde::Deserialize)]
@@ -667,8 +666,6 @@ struct GameFile {
     game: String,
     title: String,
     templates: Vec<String>,
-    #[serde(default)]
-    fallback: Option<String>,
     /// The levels the page plays, when it plays only some: each stage of
     /// the model's stages list whose level isn't one of them is played by
     /// the list's stand-in ([`play_only`]).
@@ -718,8 +715,58 @@ pub fn skip_missing(model: &mut Model, levels: &[String]) {
 
 /// The file of a game folder's template folder that makes it a ROM a
 /// template loads only to play (its `[[loads]]`, docs/templates.md "ROMs
-/// to play"): `{ "plays", "levels", "assets" }`.
+/// to play"): `{ "plays", "levels", "assets", "without" }`.
 pub const LOAD_FILE: &str = "load.json";
+
+/// Something of the model's that a ROM loaded only to play hasn't in its
+/// own game (a `[[loads.without]]`): levels it never plays, or parts (rules
+/// and entity kinds) it never runs, and the model's assets only they use,
+/// which the ROM lacks and the lift leaves blank ([`found::fill`]).
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct Without {
+    /// What it is, in words a player reads ("50m").
+    pub what: String,
+    /// Levels of the model's the ROM's game hasn't: none may be in the
+    /// load's `levels`. The lift takes them out of the model, and the game
+    /// passes over their stages (core `stages.skip`), so their blank
+    /// assets build no level.
+    #[serde(default)]
+    pub levels: Vec<String>,
+    /// Rules and entity kinds of the model's the ROM's game never runs:
+    /// the lift takes them out of the model ([`leave_out`]).
+    #[serde(default)]
+    pub parts: Vec<String>,
+    /// The assets only these use, left blank.
+    #[serde(default)]
+    pub blank: Vec<String>,
+}
+
+/// Takes each of `parts` out of the model: a rule (its machine), or an
+/// entity kind with its spawns in every level. Their evidence goes too.
+/// A name that is neither is an error. A model that names a part elsewhere
+/// (a rule's action that makes one, say) fails its check afterwards, so the
+/// ROM's entry can't leave out a part the rest of the game uses.
+pub fn leave_out(model: &mut Model, parts: &[String]) -> Result<(), String> {
+    for name in parts {
+        let key = if model.rules.remove(name).is_some() {
+            "rules"
+        } else if model.entities.remove(name).is_some() {
+            for level in model.levels.values_mut() {
+                level.core.spawn.retain(|s| &s.entity != name);
+            }
+            "entities"
+        } else {
+            return Err(format!(
+                "the model has no rule or entity kind {name} to leave out"
+            ));
+        };
+        let at = format!("{key}.{name}");
+        model
+            .evidence
+            .retain(|k, _| k != &at && !k.starts_with(&format!("{at}.")));
+    }
+    Ok(())
+}
 
 /// A [`LOAD_FILE`].
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -734,9 +781,70 @@ pub struct Load {
     /// the model takes instead.
     #[serde(default)]
     pub assets: std::collections::BTreeMap<String, String>,
+    /// What the ROM's game hasn't of the model's.
+    #[serde(default)]
+    pub without: Vec<Without>,
 }
 
 impl Load {
+    /// The assets the ROM's game does without, each with what uses it.
+    pub fn blank(&self) -> std::collections::BTreeMap<String, String> {
+        let mut out = std::collections::BTreeMap::new();
+        for w in &self.without {
+            for a in &w.blank {
+                out.insert(a.clone(), w.what.clone());
+            }
+        }
+        out
+    }
+
+    /// Checks `without` against the model and the ROM's `levels`, then
+    /// passes over the levels the ROM hasn't ([`skip_missing`]), takes the
+    /// levels `without` names out of the model and the parts its game never
+    /// runs ([`leave_out`]). The model must still check clean.
+    pub fn apply(&self, model: &mut Model) -> Result<(), String> {
+        if !self.levels.is_empty() {
+            skip_missing(model, &self.levels);
+        }
+        for w in &self.without {
+            if w.levels.is_empty() && w.parts.is_empty() {
+                return Err(format!("load.json: `{}` names no level or part", w.what));
+            }
+            for l in &w.levels {
+                if self.levels.contains(l) {
+                    return Err(format!(
+                        "load.json: `{}`: {l} is one of the levels the ROM has",
+                        w.what
+                    ));
+                }
+                if model.levels.remove(l).is_none() {
+                    return Err(format!(
+                        "load.json: `{}`: the model has no level {l}",
+                        w.what
+                    ));
+                }
+                if let Some(st) = model.stages.as_mut()
+                    && st.order.contains(l)
+                    && !st.skip.contains(l)
+                {
+                    st.skip.push(l.clone());
+                }
+                let at = format!("levels.{l}");
+                model
+                    .evidence
+                    .retain(|k, _| k != &at && !k.starts_with(&format!("{at}.")));
+            }
+            leave_out(model, &w.parts)?;
+        }
+        let problems = gp_model::validate::validate(model);
+        if let Some(p) = problems.first() {
+            return Err(format!(
+                "the model without what this ROM's game hasn't doesn't check: {p}"
+            ));
+        }
+        Ok(())
+    }
+
     /// The model's text with every slot filled from `source` (the loaded
     /// ROM's), and each that takes an asset in [`Load::assets`] taking the
     /// one it names.
@@ -768,7 +876,7 @@ impl Load {
 /// writes (Original Edition's turn screen numerals, `|` and `#`, on a
 /// Donkey Kong (JU) ROM). Such a character is written as a blank, as a
 /// HUD field leaves out one its font hasn't. A font the map doesn't hold
-/// (filled from the paper version) or with no charset changes nothing.
+/// or with no charset changes nothing.
 fn screen_text_in_font(text: &str, map: &gp_assets::AssetMap) -> Result<String, String> {
     let mut t: toml::Table = toml::from_str(text).map_err(|e| format!("model.toml: {e}"))?;
     let font = t
@@ -827,8 +935,10 @@ fn read_load(dir: &Path) -> Result<Option<Load>, String> {
 }
 
 /// Any dump of the game in `dir` ([`GAME_FILE`]): the template its program
-/// matches ([`found::pick`]), the assets found in it, and the rest filled
-/// from the paper version. A ROM no template's program matches is refused.
+/// matches ([`found::pick`]) and the assets found in it, with those its
+/// load says its game does without left blank ([`found::fill`]). A ROM no
+/// template's program matches is refused; one that lacks any other asset
+/// the model takes is an error.
 pub fn lift_game(rom: &[u8], dir: &Path, out: &Path) -> Result<Outcome, String> {
     let game: GameFile = serde_json::from_str(&read(&dir.join(GAME_FILE))?)
         .map_err(|e| format!("{GAME_FILE}: {e}"))?;
@@ -909,6 +1019,8 @@ pub fn lift_game(rom: &[u8], dir: &Path, out: &Path) -> Result<Outcome, String> 
     let shapes: Vec<&str> = std::iter::once(t.map_text.as_str())
         .chain(plays_map.as_deref())
         .collect();
+    // The assets the loaded ROM's game does without, by what uses them.
+    let blank = load.as_ref().map(Load::blank).unwrap_or_default();
     let mut loads = Vec::new();
     if picked.report.is_source {
         let (files, _) = gp_assets::lift(rom, &t.map, &t.map_text).map_err(|e| e.to_string())?;
@@ -919,53 +1031,41 @@ pub fn lift_game(rom: &[u8], dir: &Path, out: &Path) -> Result<Outcome, String> 
             loads.push(found::AssetLoad {
                 name: a.name().to_owned(),
                 from: "same",
-                with: None,
+                without: None,
             });
         }
         // The model's assets the map hasn't (Original Edition's 50m on a
-        // Donkey Kong (JU) ROM), from the paper version.
+        // Donkey Kong (JU) ROM), left blank.
         let names: Vec<String> = t.map.assets.iter().map(|a| a.name().to_owned()).collect();
         if load.is_some() {
-            let fb = game
-                .fallback
-                .as_ref()
-                .map(|f| dir.join(f))
-                .filter(|f| f.is_dir())
-                .ok_or("the model has assets this ROM hasn't, and there is no paper version to fill them from")?;
-            for (n, from) in found::fill(
+            for n in found::fill(
                 &model_text,
                 &t.map_text,
                 &t.map,
                 &names,
-                &fb,
                 &lifted,
                 &shapes,
+                &blank.keys().cloned().collect(),
             )? {
                 loads.push(found::AssetLoad {
+                    without: blank.get(&n).cloned(),
                     name: n,
-                    from,
-                    with: None,
+                    from: "blank",
                 });
             }
         }
     } else {
         let names = found::lift_found(rom, &t.map, &t.map_text, &picked.report, &lifted)?;
-        let mut filled = Vec::new();
-        if names.len() < t.map.assets.len() {
-            let fb = game
-                .fallback
-                .as_ref()
-                .map(|f| dir.join(f))
-                .filter(|f| f.is_dir())
-                .ok_or("some assets weren't found in this ROM, and there is no paper version to fill them from")?;
-            filled = found::fill(
+        let mut left = Vec::new();
+        if names.len() < t.map.assets.len() || load.is_some() {
+            left = found::fill(
                 &model_text,
                 &t.map_text,
                 &t.map,
                 &names,
-                &fb,
                 &lifted,
                 &shapes,
+                &blank.keys().cloned().collect(),
             )?;
         }
         let state = |n: &str| {
@@ -986,25 +1086,16 @@ pub fn lift_game(rom: &[u8], dir: &Path, out: &Path) -> Result<Outcome, String> 
                     } else {
                         "same"
                     },
-                    with: None,
-                });
-            } else if let Some((_, from)) = filled.iter().find(|(x, _)| x == n) {
-                loads.push(found::AssetLoad {
-                    name: n.to_owned(),
-                    from,
-                    with: None,
+                    without: None,
                 });
             }
         }
-        // The model's assets the map hasn't (a ROM loaded only to play).
-        for (n, from) in &filled {
-            if !t.map.assets.iter().any(|a| a.name() == n) {
-                loads.push(found::AssetLoad {
-                    name: n.clone(),
-                    from,
-                    with: None,
-                });
-            }
+        for n in left {
+            loads.push(found::AssetLoad {
+                without: blank.get(&n).cloned(),
+                name: n,
+                from: "blank",
+            });
         }
     }
     let mut model =
@@ -1013,8 +1104,8 @@ pub fn lift_game(rom: &[u8], dir: &Path, out: &Path) -> Result<Outcome, String> 
         &t.dir.join(gp_present::looks::THEMES_DIR),
         &model.model.name,
     );
-    if let Some(l) = load.as_ref().filter(|l| !l.levels.is_empty()) {
-        skip_missing(&mut model, &l.levels);
+    if let Some(l) = &load {
+        l.apply(&mut model)?;
     }
     if let Some(levels) = &game.levels {
         play_only(&mut model, levels);
@@ -1192,28 +1283,25 @@ mod tests {
         assert!(r.error.contains("isn't an NES ROM"), "{}", r.error);
     }
 
-    /// A copy of Rivet Rodeo's template (an original, open template) whose
-    /// source is the data image `gp template build` makes from its
-    /// authored.toml, so the lift runs on no game's ROM. Its themes are
-    /// `paper` (its own) and two that can't be offered: `unread`, whose
-    /// restyle's hash isn't its file's, and `small`, whose tiles are 8 by 8
-    /// pixels where the game's are 128 by 128.
-    fn rivet_rodeo_with_broken_themes(t: &Path) -> Vec<u8> {
+    /// A copy of Moss Hop's template (this repo's own game) beside its ROM
+    /// as `just mosshop` builds it, so the lift runs on no commercial game.
+    /// Its themes are `paper` (its own) and two that can't be offered:
+    /// `unread`, whose restyle's hash isn't its file's, and `small`, whose
+    /// tiles are 8 by 8 pixels where the game's are 128 by 256.
+    fn mosshop_with_broken_themes(t: &Path) -> Vec<u8> {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let src = repo.join("../games/donkey-kong/open");
-        let built = gp_assets::authored::Authored::load(&src)
-            .unwrap()
-            .build()
-            .unwrap();
+        let src = repo.join("templates/mosshop");
+        let rom = std::fs::read(repo.join("target/mosshop/mosshop.nes")).unwrap();
+        let sha = gp_evidence::source::identify_nes(&rom).unwrap().sha256;
         for f in ["model.toml", "profiles.toml"] {
             std::fs::copy(src.join(f), t.join(f)).unwrap();
         }
         std::fs::write(
             t.join("template.toml"),
-            format!("[source]\naccepts = [\"{}\"]\n", built.sha256),
+            format!("[source]\naccepts = [\"{sha}\"]\n"),
         )
         .unwrap();
-        std::fs::write(t.join("asset-map.toml"), &built.map_text).unwrap();
+        std::fs::copy(repo.join("assets/mosshop.toml"), t.join("asset-map.toml")).unwrap();
         let themes = t.join("themes");
         let paper = src.join("themes/paper");
         std::fs::create_dir_all(themes.join("paper")).unwrap();
@@ -1226,7 +1314,7 @@ mod tests {
         let theme = |id: &str, title: &str, sha: &str| {
             format!(
                 "format = \"0.1.3\"\nid = \"{id}\"\ntitle = \"{title}\"\nlicense = \"CC0-1.0\"\n\
-                 for = [\"rivet_rodeo\"]\n\n[[restyle]]\nslot = \"tiles\"\nfile = \"tiles.pix\"\n\
+                 for = [\"mosshop\"]\n\n[[restyle]]\nslot = \"tiles\"\nfile = \"tiles.pix\"\n\
                  origin = \"drawn\"\nlicense = \"CC0-1.0\"\nsha256 = \"{sha}\"\n"
             )
         };
@@ -1246,19 +1334,19 @@ mod tests {
             )
             .unwrap();
         }
-        built.image
+        rom
     }
 
     /// A theme that doesn't load and one that doesn't draw are each named
     /// in result.json with a reason a player reads and the tool's message;
     /// the lift still succeeds, and offers the theme that draws.
     #[test]
-    #[ignore = "needs the games repo beside this one (phase 1.3)"]
+    #[ignore = "needs Moss Hop's ROM (just mosshop)"]
     fn themes_the_lift_cannot_offer_are_named_with_why() {
         let dir = tempfile::tempdir().unwrap();
         let t = dir.path().join("template");
         std::fs::create_dir_all(&t).unwrap();
-        let rom = rivet_rodeo_with_broken_themes(&t);
+        let rom = mosshop_with_broken_themes(&t);
         let out = dir.path().join("out");
         let (json, code) = result_json(lift_rom(&rom, &t, &out));
         assert_eq!(code, 0, "{json}");
@@ -1272,7 +1360,7 @@ mod tests {
             small["detail"]
                 .as_str()
                 .unwrap()
-                .contains("is 8 by 8, not 128 by 128"),
+                .contains("is 8 by 8, not 128 by 256"),
             "{small}"
         );
         let unread = by("unread");
@@ -1291,20 +1379,20 @@ mod tests {
         );
     }
 
-    /// Two made-up versions of Rivet Rodeo's template side by side, `a`
-    /// (model rivet_rodeo) and `b` (the same, named rivet_rodeo_b), whose
+    /// Two made-up versions of Moss Hop's template side by side, `a`
+    /// (model mosshop) and `b` (the same, named mosshop_b), whose
     /// paper theme is kept once, in `a`, with `for` naming both; `b`'s
     /// themes/paper/ holds only same_as.toml. Each is lifted from its data
     /// image and offers the paper theme, drawn the same. (`a` keeps the
     /// two themes it can't offer; they are skipped there.)
     #[test]
-    #[ignore = "needs the games repo beside this one (phase 1.3)"]
+    #[ignore = "needs Moss Hop's ROM (just mosshop)"]
     fn a_finished_look_goes_in_as_it_is_on_both_models() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("templates");
         let (a, b) = (root.join("a"), root.join("b"));
         std::fs::create_dir_all(&a).unwrap();
-        let rom = rivet_rodeo_with_broken_themes(&a);
+        let rom = mosshop_with_broken_themes(&a);
         // A large-art look: look.txt naming its rules, its art, no theme.toml.
         let clay = a.join("themes/clay");
         write(
@@ -1356,23 +1444,20 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs the games repo beside this one (phase 1.3)"]
+    #[ignore = "needs Moss Hop's ROM (just mosshop)"]
     fn a_shared_theme_is_offered_on_both_models() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("templates");
         let (a, b) = (root.join("a"), root.join("b"));
         std::fs::create_dir_all(&a).unwrap();
         // Its two broken themes stay in `a` and are skipped there.
-        let rom = rivet_rodeo_with_broken_themes(&a);
+        let rom = mosshop_with_broken_themes(&a);
         let paper = a.join("themes/paper/theme.toml");
         let text = read(&paper).unwrap();
-        assert!(text.contains("for = [\"rivet_rodeo\"]"), "{text}");
+        assert!(text.contains("for = [\"mosshop\"]"), "{text}");
         std::fs::write(
             &paper,
-            text.replace(
-                "for = [\"rivet_rodeo\"]",
-                "for = [\"rivet_rodeo\", \"rivet_rodeo_b\"]",
-            ),
+            text.replace("for = [\"mosshop\"]", "for = [\"mosshop\", \"mosshop_b\"]"),
         )
         .unwrap();
         std::fs::create_dir_all(b.join("themes/paper")).unwrap();
@@ -1382,7 +1467,7 @@ mod tests {
         let model = read(&a.join("model.toml")).unwrap();
         std::fs::write(
             b.join("model.toml"),
-            model.replacen("name = \"rivet_rodeo\"", "name = \"rivet_rodeo_b\"", 1),
+            model.replacen("name = \"mosshop\"", "name = \"mosshop_b\"", 1),
         )
         .unwrap();
         std::fs::write(
@@ -1442,9 +1527,254 @@ mod tests {
             skipped["detail"]
                 .as_str()
                 .unwrap()
-                .contains("is for rivet_rodeo, not `rivet_rodeo_b`"),
+                .contains("is for mosshop, not `mosshop_b`"),
             "{skipped}"
         );
+    }
+
+    /// A made-up model: two levels in a stages list, a `scene` rule and a
+    /// `carrier` kind spawned in both, each with evidence.
+    const TWO: &str = r#"
+[model]
+schema = "0.4.0"
+name = "two"
+title = "Two"
+view = "side"
+frame_rate = "60"
+start_level = "one"
+extensions = { platformer = "0.4.0" }
+systems = ["rules", "entity_states", "counters", "spawn", "platformer.player", "platformer.enemies", "platformer.contact", "exits", "camera"]
+
+[input]
+device = "nes-pad"
+actions = { left = "left", right = "right", jump = "a" }
+
+[assets.tiles]
+kind = "tiles"
+role = "graphics"
+
+[assets.blocks]
+kind = "metatiles"
+role = "tileset"
+item_roles = ["sky", "terrain"]
+
+[assets.map]
+kind = "level-grid"
+role = "layout"
+
+[entities.hero]
+role = "player"
+size = [16, 16]
+hitbox = { x = 2, y = 0, w = 12, h = 16 }
+
+[entities.carrier]
+role = "npc"
+size = [16, 16]
+hitbox = { x = 0, y = 0, w = 16, h = 16 }
+sprite = { slot = "tiles", tiles = [0x20], width = 1, palette = 0 }
+
+[levels.one]
+grid = "map"
+tileset = "blocks"
+solid_property = "solid"
+tile_size = 16
+size = [16, 15]
+
+[[levels.one.spawn]]
+entity = "hero"
+x = 24
+y = 176
+
+[[levels.one.spawn]]
+entity = "carrier"
+x = 100
+y = 176
+
+[levels.two]
+grid = "map"
+tileset = "blocks"
+solid_property = "solid"
+tile_size = 16
+size = [16, 15]
+
+[[levels.two.spawn]]
+entity = "hero"
+x = 24
+y = 176
+
+[[levels.two.spawn]]
+entity = "carrier"
+x = 100
+y = 176
+
+[stages]
+order = ["one", "two"]
+stand_in = "one"
+counter = "stage"
+
+[counters.stage]
+
+[rules.game]
+initial = "playing"
+
+[[rules.game.states.playing.transition]]
+on = "player.died"
+to = "playing"
+do = ["restart-level"]
+
+[rules.scene]
+initial = "waiting"
+
+[[rules.scene.states.waiting.transition]]
+after = 60
+to = "shown"
+
+[[rules.scene.states.shown.transition]]
+after = 60
+to = "waiting"
+
+[evidence.input]
+source = "stated"
+confidence = 100
+refs = [{ at = "notes.txt:1" }]
+
+[evidence.assets]
+source = "stated"
+confidence = 100
+refs = [{ at = "notes.txt:1" }]
+
+[evidence.entities]
+source = "stated"
+confidence = 100
+refs = [{ at = "notes.txt:1" }]
+
+[evidence.levels]
+source = "stated"
+confidence = 100
+refs = [{ at = "notes.txt:1" }]
+
+[evidence.stages]
+source = "stated"
+confidence = 100
+refs = [{ at = "notes.txt:1" }]
+
+[evidence.rules]
+source = "stated"
+confidence = 100
+refs = [{ at = "notes.txt:1" }]
+
+[evidence."entities.carrier"]
+source = "stated"
+confidence = 100
+refs = [{ at = "notes.txt:1" }]
+
+[evidence."entities.carrier.size"]
+source = "stated"
+confidence = 100
+refs = [{ at = "notes.txt:2" }]
+
+[evidence."rules.scene"]
+source = "stated"
+confidence = 100
+refs = [{ at = "notes.txt:3" }]
+
+[evidence."levels.two"]
+source = "stated"
+confidence = 100
+refs = [{ at = "notes.txt:4" }]
+"#;
+
+    fn load(levels: &[&str], without: Vec<Without>) -> Load {
+        Load {
+            plays: "game".into(),
+            levels: levels.iter().map(|l| (*l).to_owned()).collect(),
+            assets: Default::default(),
+            without,
+        }
+    }
+
+    fn strings(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_part_left_out_goes_with_its_spawns_and_evidence() {
+        let mut model = Model::parse(TWO).unwrap();
+        let problems = gp_model::validate::validate(&model);
+        assert!(problems.is_empty(), "{problems:?}");
+        leave_out(&mut model, &strings(&["scene", "carrier"])).unwrap();
+        assert!(!model.rules.contains_key("scene"));
+        assert!(!model.entities.contains_key("carrier"));
+        for l in model.levels.values() {
+            assert!(l.core.spawn.iter().all(|s| s.entity == "hero"));
+        }
+        assert!(
+            model
+                .evidence
+                .keys()
+                .all(|k| !k.contains("carrier") && !k.contains("scene"))
+        );
+        assert!(model.evidence.contains_key("levels.two"));
+        assert!(gp_model::validate::validate(&model).is_empty());
+        let e = leave_out(&mut model, &strings(&["nothing"])).unwrap_err();
+        assert!(e.contains("no rule or entity kind nothing"), "{e}");
+    }
+
+    #[test]
+    fn a_load_takes_out_what_its_game_does_without() {
+        let mut model = Model::parse(TWO).unwrap();
+        let l = load(
+            &["one"],
+            vec![
+                Without {
+                    what: "level two".into(),
+                    levels: strings(&["two"]),
+                    blank: strings(&["map2"]),
+                    ..Default::default()
+                },
+                Without {
+                    what: "the scene".into(),
+                    parts: strings(&["scene", "carrier"]),
+                    blank: strings(&["tiles2"]),
+                    ..Default::default()
+                },
+            ],
+        );
+        assert_eq!(
+            l.blank().into_iter().collect::<Vec<_>>(),
+            [
+                ("map2".to_owned(), "level two".to_owned()),
+                ("tiles2".to_owned(), "the scene".to_owned())
+            ]
+        );
+        l.apply(&mut model).unwrap();
+        // Level two is gone and passed over; the order stays the game's.
+        assert!(!model.levels.contains_key("two"));
+        let st = model.stages.as_ref().unwrap();
+        assert_eq!(st.order, ["one", "two"]);
+        assert_eq!(st.skip, ["two"]);
+        assert!(!model.evidence.contains_key("levels.two"));
+        assert!(!model.rules.contains_key("scene") && !model.entities.contains_key("carrier"));
+    }
+
+    #[test]
+    fn a_load_that_names_what_its_rom_has_or_nothing_is_refused() {
+        let without = |levels: &[&str], parts: &[&str]| Without {
+            what: "x".into(),
+            levels: strings(levels),
+            parts: strings(parts),
+            blank: Vec::new(),
+        };
+        let refused = |l: Load| l.apply(&mut Model::parse(TWO).unwrap()).unwrap_err();
+        let e = refused(load(&["one", "two"], vec![without(&["two"], &[])]));
+        assert!(e.contains("two is one of the levels the ROM has"), "{e}");
+        let e = refused(load(&["one"], vec![without(&["three"], &[])]));
+        assert!(e.contains("no level three"), "{e}");
+        let e = refused(load(&["one"], vec![without(&[], &[])]));
+        assert!(e.contains("names no level or part"), "{e}");
+        // The player can't be left out: the model no longer checks.
+        let e = refused(load(&["one", "two"], vec![without(&[], &["hero"])]));
+        assert!(e.contains("doesn't check"), "{e}");
     }
 
     /// Original Edition's stages list names its levels m50 (50m), m75 and

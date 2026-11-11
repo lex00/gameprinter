@@ -8,9 +8,8 @@
 # GP_PAGE_SOURCE names the source in scripts/web/sources.toml (default registry,
 # lex00/gp-registry).
 #
-# Last it runs `gp template served` on the game: its open version and the
-# files of both folders against each ROM the game names (result also in
-# OUT.served.txt).
+# Last it runs `gp template served` on the game: the files of both folders
+# against each ROM the game names (result also in OUT.served.txt).
 #
 # GAME_DIR is the game's folder (games/donkey-kong). The repo holds no game,
 # so the build works in a copy of it with the game's template folders where
@@ -34,30 +33,22 @@ export CARGO_TARGET_DIR="$real/target/page-target"
 rm -rf "$repo"
 mkdir -p "$repo/templates" "$repo/sources"
 rsync -a --exclude target --exclude .git "$real/" "$repo/"
-mkdir -p "$repo/templates/donkey-kong-oe" "$repo/templates/rivet-rodeo"
-# The ROM's template without the paper theme: Rivet Rodeo is retired, and a
-# ROM is offered its own art and the page's theme (GP_PAGE_CONTENT) only.
-rsync -a --exclude open --exclude ext --exclude themes/paper "$game/" "$repo/templates/donkey-kong-oe/"
-rsync -a --exclude generators "$game/open/" "$repo/templates/rivet-rodeo/"
+mkdir -p "$repo/templates/donkey-kong-oe"
+# The ROM's template: a ROM is offered its own art and the page's theme
+# (GP_PAGE_CONTENT) only.
+rsync -a --exclude ext "$game/" "$repo/templates/donkey-kong-oe/"
 cp "$game/roms.toml" "$repo/sources/nes.toml"
-stage="$repo/templates/rivet-rodeo"
 rom_game="donkey-kong"
-assets="$home/work/page-assets/rivet-rodeo"
-reuse="$repo/scripts/web/reuse.py"
-reusing() { false; }
-keeping() { false; }
-gp_bin="$gp"
 now() { perl -MTime::HiRes=time -e 'printf "%.1f", time'; }
 t0=$(now)
 lap() { local t; t=$(now); echo "time  $1: $(perl -e "printf '%.1f', $t - $t0") s"; t0=$t; }
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
-rm -rf "$assets"
-"$gp" template build "$stage" -o "$assets" >/dev/null
-lap "gp template build rivet-rodeo"
-GP_WEB_PREP_FLAGS="--themes" "$repo/scripts/web/build-preview.sh" "$out/game" "$stage" "$assets"
+# The player only: every game file the page plays comes from the visitor's
+# ROM, lifted in their browser.
+"$repo/scripts/web/build-preview.sh" "$out/game"
 lap "build-preview.sh"
-"$repo/scripts/web/build-lift.sh" "$out/game" "$rom_game" "$stage" "$assets"
+"$repo/scripts/web/build-lift.sh" "$out/game" "$rom_game"
 lap "build-lift.sh"
 
 # The page's name: GP_PAGE_TITLE, else the game package's title. The page

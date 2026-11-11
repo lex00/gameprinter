@@ -48,7 +48,6 @@ A patch can only change one game's folder. If it removes a clip on purpose, name
 | `fidelity.toml` | What has to match the original, and how closely |
 | `corpus.toml`, `inputs/` | The clips: button presses only |
 | `assets/` | Where the art is in a ROM: addresses, never the art |
-| `open/` | Rivet Rodeo, the retired open version. The page doesn't offer it; its art fills in what a ROM lacks |
 
 ## Try something without a fork
 

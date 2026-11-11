@@ -29,7 +29,7 @@ pub const AUTHORED_FILE: &str = "authored.toml";
 /// 0.1.1 (2026-11-03) added the `byte-rows` and `ppu-strings` formats,
 /// `bits = 8` tables and tiles drawn from a file (`file`), so an original
 /// can fill the slots of a model written for a lifted game (Rivet Rodeo on
-/// Donkey Kong's model, docs/web.md "The public page").
+/// Donkey Kong's model, removed on 2026-11-11).
 pub const FORMAT: &str = "0.1.1";
 
 /// PRG is laid out in 16KB banks and CHR in 8KB ones, as iNES counts them.

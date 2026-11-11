@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# open/ (Rivet Rodeo) and paper/ were removed from the games repo on 2026-11-11; this script is history.
 """One-way import of Donkey Kong from game-printer into the games repo.
 
     python3 -I -B scripts/import/donkey_kong.py GAME_PRINTER GAMES

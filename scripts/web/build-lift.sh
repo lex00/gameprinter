@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds the public page's in-browser ROM lift (docs/web.md, "The public
 # page"):
-#   scripts/web/build-lift.sh OUT [GAME [FALLBACK_TEMPLATE FALLBACK_ASSETS]]
+#   scripts/web/build-lift.sh OUT [GAME]
 #
 # OUT gets wasi.js and lift.js (scripts/web/public/), beside the preview's
 # preview.js, which imports lift.js for `files=idb:GAME`, and OUT/lift/:
@@ -13,11 +13,10 @@
 # asset-map.toml (with the map's content hashes, which the lift finds the
 # assets of any dump by) and its themes, and a folder for each ROM a
 # template lists under [[loads]] (its model, the ROM's asset map and
-# load.json). With FALLBACK_TEMPLATE (a
-# template folder) and FALLBACK_ASSETS (its lifted folder), fallback/ holds
-# that template's model.toml and lifted files, which fill the assets a
-# ROM doesn't have, less those the paper version's game/bundle.json holds,
-# which the lift reads from it (index.json's alias). With GP_LIFT_LEVELS
+# load.json, with what the ROM's game does without, `[[loads.without]]`,
+# which must agree with the package.toml entry of the same id when the
+# template folder has one). Nothing fills an asset a ROM lacks: the lift
+# leaves blank only those a load's `without` names. With GP_LIFT_LEVELS
 # set (level names joined by commas, such as `main`), game.json's `levels`
 # lists them: the lift then plays each stage of a model's stages list whose
 # level isn't one of them by the list's stand-in (gp_web_lift::play_only).
@@ -36,14 +35,12 @@ set -euo pipefail
 trap 'exit 2' ERR
 
 if [ $# -lt 1 ]; then
-  echo "usage: scripts/web/build-lift.sh OUT [GAME [FALLBACK_TEMPLATE FALLBACK_ASSETS]]" >&2
+  echo "usage: scripts/web/build-lift.sh OUT [GAME]" >&2
   exit 2
 fi
 out="$1"
 repo="$(cd "$(dirname "$0")/../.." && pwd)"
 game="${2:-donkey-kong}"
-fallback_template="${3:-}"
-fallback_assets="${4:-}"
 target="$(cd "$repo" && mkdir -p "${CARGO_TARGET_DIR:-target}" && cd "${CARGO_TARGET_DIR:-target}" && pwd)"
 
 reuse="$repo/scripts/web/reuse.py"
@@ -72,9 +69,9 @@ else
   esac
 fi
 cp "$repo/scripts/web/public/wasi.js" "$repo/scripts/web/public/lift.js" "$out/"
-python3 -I - "$repo" "$out/lift" "$game" "$fallback_template" "$fallback_assets" "${GP_LIFT_LEVELS:-}" <<'PY'
+python3 -I - "$repo" "$out/lift" "$game" "${GP_LIFT_LEVELS:-}" <<'PY'
 import json, os, shutil, sys, tomllib
-repo, out, game, fb_template, fb_assets, levels = sys.argv[1:]
+repo, out, game, levels = sys.argv[1:]
 files = []
 def put(src, rel):
     dst = os.path.join(out, rel)
@@ -87,7 +84,6 @@ def write(rel, text):
     open(dst, "w").write(text)
     files.append(rel)
 ids, title = [], None
-alias = {}
 tdir = os.path.join(repo, "templates")
 # The templates the page lifts, by folder name, with their manifests.
 bundled = {}
@@ -139,15 +135,22 @@ for name, m in bundled.items():
     # A ROM a person may load to play the template's model ([[loads]],
     # docs/templates.md "ROMs to play"): a folder named by its source with
     # the template's model, its own asset map, and load.json (the model's
-    # template, the levels the ROM has and the assets it takes in place of
-    # the model's). Its themes point at the template's.
+    # template, the levels the ROM has, the assets it takes in place of
+    # the model's and what its game does without). Its themes point at the
+    # template's.
+    package = os.path.join(t, "package.toml")
+    entries = tomllib.load(open(package, "rb")).get("rom", {}).get("entry", []) if os.path.isfile(package) else []
     for load in m.get("loads", []):
         lid = load["source"]
         ids.append(lid)
         for f in ["model.toml", "profiles.toml", "template.toml"]:
             put(os.path.join(t, f), f"{lid}/{f}")
         put(os.path.join(t, load["asset_map"]), f"{lid}/asset-map.toml")
-        write(f"{lid}/load.json", json.dumps({"plays": tid, "levels": load.get("levels", []), "assets": load.get("assets", {})}) + "\n")
+        said = {k: load.get(k, d) for k, d in [("levels", []), ("assets", {}), ("without", [])]}
+        for e in entries:
+            if e.get("id") == lid and said != {k: e.get(k, d) for k, d in [("levels", []), ("assets", {}), ("without", [])]}:
+                sys.exit(f"{name}: template.toml's [[loads]] for {lid} and package.toml's entry disagree on its levels, assets or without")
+        write(f"{lid}/load.json", json.dumps({"plays": tid, **said}) + "\n")
         if os.path.isdir(th):
             for d in sorted(os.listdir(th)):
                 if os.path.isfile(os.path.join(th, d, "theme.toml")):
@@ -155,28 +158,11 @@ for name, m in bundled.items():
 if not ids:
     sys.exit(f"no template's template.game is {game}")
 put(os.path.join(repo, "sources", "nes.toml"), "sources-nes.toml")
-fallback = None
-if fb_template and fb_assets:
-    fallback = "fallback"
-    put(os.path.join(fb_template, "model.toml"), "fallback/model.toml")
-    # The lifted files the paper version's bundle (game/bundle.json, beside
-    # lift/) holds are read from it, so the page ships each file once.
-    in_bundle = set()
-    bundle = os.path.join(out, "..", "bundle.json")
-    if os.path.isfile(bundle):
-        in_bundle = set(json.load(open(bundle))["assets"]["files"])
-        alias["fallback/bundle.json"] = "../bundle.json"
-    for root, _, names in sorted(os.walk(fb_assets)):
-        for f in sorted(names):
-            p = os.path.join(root, f)
-            rel = os.path.relpath(p, fb_assets)
-            if rel not in in_bundle:
-                put(p, "fallback/" + rel)
-gamefile = {"game": game, "title": title, "templates": ids, "fallback": fallback}
+gamefile = {"game": game, "title": title, "templates": ids}
 if levels:
     gamefile["levels"] = [l for l in levels.split(",") if l]
 open(os.path.join(out, "game.json"), "w").write(json.dumps(gamefile) + "\n")
 files.append("game.json")
-open(os.path.join(out, "index.json"), "w").write(json.dumps({"game": game, "files": files, "alias": alias}) + "\n")
+open(os.path.join(out, "index.json"), "w").write(json.dumps({"game": game, "files": files}) + "\n")
 PY
 echo "gp-web-lift.wasm $(wc -c < "$out/lift/gp-web-lift.wasm" | tr -d ' ') bytes"

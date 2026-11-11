@@ -167,7 +167,7 @@ mod tests {
     fn a_look_round_trips_and_refuses_paths_out_of_its_folder() {
         let l = Look {
             id: "paper".into(),
-            title: "Rivet Rodeo".into(),
+            title: "Paper".into(),
             original: false,
             files: vec!["frame-0-0.png".into(), "sound/roles/jump.wav".into()],
             own_sound: false,

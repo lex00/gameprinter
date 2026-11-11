@@ -1,13 +1,13 @@
 //! Any dump of the game, lifted (docs/web.md, "The ROM, in the browser"):
 //! each of the game's templates is compared with the ROM by its asset
 //! map's content ([`gp_assets::find`]), the model is the one its program
-//! matches, the assets found load from the ROM, and the rest are filled
-//! from the paper version's own (the fallback folder: Rivet Rodeo's
-//! lifted files and model), by the slot each fills. One the paper version
-//! has no slot for is left blank: its entry in the template's map, lifted
-//! from zero bytes.
+//! matches and the assets found load from the ROM. An asset of the model's
+//! the ROM hasn't is left blank only when the ROM's entry says its game
+//! does without the level or part that uses it (`without` in load.json,
+//! [`crate::Without`]): its entry in the template's map, lifted from zero
+//! bytes. Any other asset the ROM lacks stops the lift.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use gp_assets::find::{self, Match, Report};
@@ -17,12 +17,13 @@ use gp_assets::{Asset, AssetMap, MAP_FILE};
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AssetLoad {
     pub name: String,
-    /// `same`, `changed` (both from the ROM), `filled` (from the paper
-    /// version), or `blank` (in neither: zero bytes of its shape).
+    /// `same`, `changed` (both from the ROM), or `blank` (not in the ROM:
+    /// zero bytes of its shape).
     pub from: &'static str,
-    /// For a filled asset, the paper version's asset it was filled with.
+    /// For a blank asset, what the ROM's game does without that uses it,
+    /// in words (`Without::what`: "50m").
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub with: Option<String>,
+    pub without: Option<String>,
 }
 
 /// One template's files, read from its folder.
@@ -84,73 +85,59 @@ fn slot_assets(model_text: &str) -> Result<BTreeMap<String, String>, String> {
     Ok(out)
 }
 
-/// Offsets of filled assets are moved past any NES ROM (8MB on, under the
-/// map's 16MB limit for a span's end), so they claim no
-/// byte a found asset claims in the merged map.
-const FILLED_BASE: i64 = 0x0080_0000;
-/// Offsets of blank assets, past the filled ones (12MB on).
+/// Offsets of blank assets are moved past any NES ROM (12MB on, under the
+/// map's 16MB limit for a span's end), so they claim no byte a found asset
+/// claims in the merged map.
 const BLANK_BASE: i64 = 0x00C0_0000;
 
-fn shift(v: &mut toml::Value, rename: &BTreeMap<String, String>, base: i64) {
+fn shift(v: &mut toml::Value, base: i64) {
     match v {
         toml::Value::Table(t) => {
             for (k, x) in t.iter_mut() {
                 match (k.as_str(), &mut *x) {
                     ("offset" | "hi_offset", toml::Value::Integer(n)) => *n += base,
-                    ("asset" | "targets" | "metatiles", toml::Value::String(s)) => {
-                        if let Some(r) = rename.get(s.as_str()) {
-                            *s = r.clone();
-                        }
-                    }
-                    _ => shift(x, rename, base),
+                    _ => shift(x, base),
                 }
             }
         }
-        toml::Value::Array(a) => a.iter_mut().for_each(|x| shift(x, rename, base)),
+        toml::Value::Array(a) => a.iter_mut().for_each(|x| shift(x, base)),
         _ => {}
     }
 }
 
-/// The lifted folder `lifted` with the assets of `map`, and those the
-/// model's slots take that `map` hasn't, it lacks (those not in `found`)
-/// filled from the fallback's lifted folder, by slot, and
-/// its `assets.toml` written for the mix. `found` were lifted there from
-/// the ROM already. An asset no slot of the model takes is left out.
+/// The lifted folder `lifted` with the assets of `map` the ROM has
+/// (`found`, lifted there from the ROM already), and its `assets.toml`
+/// written for them and the blank ones. An asset no slot of the model takes
+/// is left out.
 ///
-/// The paper version is derived from a template and may lag it: a slot
-/// the template gained since has no asset there. Such an asset is left
-/// blank, lifted from zero bytes by its entry in the first of `shapes`
-/// (asset map texts: the template's own, and for a ROM loaded only to
-/// play, the map of the template it plays) that has it. Returns each
-/// asset it filled, with `filled` or `blank`.
+/// An asset a slot takes that isn't in `found` is left blank when `blank`
+/// names it: lifted from zero bytes by its entry in the first of `shapes`
+/// (asset map texts: the template's own, and for a ROM loaded only to play,
+/// the map of the template it plays) that has it. Any other missing asset
+/// is an error, and so is an asset `blank` names that the ROM has or no
+/// slot takes. Returns each asset left blank.
 pub fn fill(
     model_text: &str,
     map_text: &str,
     map: &AssetMap,
     found: &[String],
-    fallback: &Path,
     lifted: &Path,
     shapes: &[&str],
-) -> Result<Vec<(String, &'static str)>, String> {
-    let read = |p: &Path| std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()));
+    blank: &BTreeSet<String>,
+) -> Result<Vec<String>, String> {
     let ours = slot_assets(model_text)?;
-    let theirs = slot_assets(&read(&fallback.join(gp_model::MODEL_FILE))?)?;
-    let fb_file = |name: &str| fallback_file(fallback, name);
-    let fb_text = String::from_utf8(fb_file(MAP_FILE)?).map_err(|e| e.to_string())?;
-    let fb: toml::Table =
-        toml::from_str(&fb_text).map_err(|e| format!("fallback {MAP_FILE}: {e}"))?;
-    let fb_map = AssetMap::parse(&fb_text).map_err(|e| format!("fallback {MAP_FILE}: {e}"))?;
-    let fb_assets = fb
-        .get("asset")
-        .and_then(|a| a.as_array())
-        .cloned()
-        .unwrap_or_default();
-
-    // Each missing asset a slot takes, and the fallback's asset for it.
-    let mut rename: BTreeMap<String, String> = BTreeMap::new();
-    let mut filled = Vec::new();
-    // The entries of the assets left blank, as their map has them.
-    let mut blank: Vec<toml::Value> = Vec::new();
+    for name in blank {
+        if found.contains(name) {
+            return Err(format!(
+                "{name} is in this ROM, but the ROM's entry says its game does without it"
+            ));
+        }
+        if !ours.values().any(|a| a == name) {
+            return Err(format!(
+                "the ROM's entry leaves {name} blank, but no slot of the model takes it"
+            ));
+        }
+    }
     // The map's assets, then any the model's slots take that the map hasn't
     // (a ROM loaded only to play, whose map lacks some of the model's).
     let mut names: Vec<&str> = map.assets.iter().map(|a| a.name()).collect();
@@ -159,6 +146,9 @@ pub fn fill(
             names.push(a.as_str());
         }
     }
+    // The entries of the assets left blank, as their map has them.
+    let mut entries: Vec<toml::Value> = Vec::new();
+    let mut left = Vec::new();
     for name in names {
         if found.iter().any(|f| f == name) {
             continue;
@@ -170,19 +160,16 @@ pub fn fill(
         else {
             continue;
         };
-        if let Some(g) = theirs.get(slot) {
-            rename.insert(g.clone(), name.to_owned());
-            filled.push((name.to_owned(), "filled"));
-            continue;
+        if !blank.contains(name) {
+            return Err(format!(
+                "{name} (slot {slot}) isn't in this ROM, and the ROM's entry doesn't say its game does without it"
+            ));
         }
         let entry = shape_of(shapes, name)?.ok_or_else(|| {
-            format!(
-                "{name} wasn't found, the paper version has no slot {slot} to fill it from, \
-                 and no map gives its shape to leave it blank"
-            )
+            format!("{name} isn't in this ROM, and no map gives its shape to leave it blank")
         })?;
-        blank.push(entry);
-        filled.push((name.to_owned(), "blank"));
+        entries.push(blank_shape(entry));
+        left.push(name.to_owned());
     }
 
     let mut t: toml::Table = toml::from_str(map_text).map_err(|e| format!("{MAP_FILE}: {e}"))?;
@@ -195,59 +182,22 @@ pub fn fill(
         .cloned()
         .unwrap_or_default()
     {
-        let name = a
-            .get("name")
-            .and_then(|n| n.as_str())
-            .unwrap_or_default()
-            .to_owned();
-        if found.contains(&name) {
+        let name = a.get("name").and_then(|n| n.as_str()).unwrap_or_default();
+        if found.iter().any(|f| f == name) {
             assets.push(a);
         }
     }
-    for (g, name) in &rename {
-        let mut v = fb_assets
-            .iter()
-            .find(|x| x.get("name").and_then(|n| n.as_str()) == Some(g.as_str()))
-            .cloned()
-            .ok_or_else(|| format!("the paper version's map has no asset {g}"))?;
-        shift(&mut v, &rename, FILLED_BASE);
-        if let Some(tab) = v.as_table_mut() {
-            tab.insert("name".into(), toml::Value::String(name.clone()));
-        }
-        assets.push(v);
-    }
-    for v in &blank {
+    for v in &entries {
         let mut v = v.clone();
-        shift(&mut v, &BTreeMap::new(), BLANK_BASE);
+        shift(&mut v, BLANK_BASE);
         assets.push(v);
     }
     t.insert("asset".into(), toml::Value::Array(assets));
     let merged = toml::to_string(&t).map_err(|e| e.to_string())?;
-    let merged_map = AssetMap::parse(&merged).map_err(|e| format!("the merged map: {e}"))?;
+    AssetMap::parse(&merged).map_err(|e| format!("the merged map: {e}"))?;
 
-    // The fallback's files, renamed.
-    for (g, name) in &rename {
-        let (Some(from), Some(to)) = (fb_map.asset(g), merged_map.asset(name)) else {
-            continue;
-        };
-        for (src, dst) in from.files().iter().zip(to.files()) {
-            let bytes = fb_file(src)?;
-            let bytes = if src.ends_with(".toml") {
-                let mut s = String::from_utf8(bytes).map_err(|e| format!("{src}: {e}"))?;
-                for (a, b) in &rename {
-                    s = s
-                        .replace(&format!("asset = \"{a}\""), &format!("asset = \"{b}\""))
-                        .replace(&format!("data = \"{a}\""), &format!("data = \"{b}\""));
-                }
-                s.into_bytes()
-            } else {
-                bytes
-            };
-            crate::write(&lifted.join(&dst), &bytes)?;
-        }
-    }
-    if !blank.is_empty() {
-        t.insert("asset".into(), toml::Value::Array(blank));
+    if !entries.is_empty() {
+        t.insert("asset".into(), toml::Value::Array(entries));
         let text = toml::to_string(&t).map_err(|e| e.to_string())?;
         let sub = AssetMap::parse(&text).map_err(|e| format!("the blank assets' map: {e}"))?;
         let (files, _) = gp_assets::lift_any(&zero_image(&sub), &sub, &text)
@@ -257,7 +207,7 @@ pub fn fill(
         }
     }
     crate::write(&lifted.join(MAP_FILE), merged.as_bytes())?;
-    Ok(filled)
+    Ok(left)
 }
 
 /// The entry for asset `name` in the first of the map texts `shapes` that
@@ -274,6 +224,33 @@ fn shape_of(shapes: &[&str], name: &str) -> Result<Option<toml::Value>, String> 
         }
     }
     Ok(None)
+}
+
+/// An asset map entry as it is left blank. Zero bytes are a blank of most
+/// formats as they are; a `ppu-strings` asset's zeros would be one empty
+/// string and then bytes the strings don't reach, so a blank one is an
+/// empty string for each entry (a byte each, its end byte 0), with no
+/// embedded assets.
+fn blank_shape(mut entry: toml::Value) -> toml::Value {
+    let Some(t) = entry.as_table_mut() else {
+        return entry;
+    };
+    let strings = t.get("format").and_then(|f| f.as_str()) == Some("ppu-strings")
+        && t.get("end").and_then(|e| e.as_integer()).unwrap_or(0) == 0;
+    if strings {
+        let mut n = 0;
+        if let Some(es) = t.get_mut("entry").and_then(|e| e.as_array_mut()) {
+            for e in es.iter_mut() {
+                if let Some(e) = e.as_table_mut() {
+                    e.remove("records");
+                }
+            }
+            n = es.len() as i64;
+        }
+        t.insert("size".into(), toml::Value::Integer(n.max(1)));
+        t.remove("embed");
+    }
+    entry
 }
 
 /// An NES image of zero bytes with room for every span of `map`.
@@ -293,27 +270,6 @@ fn zero_image(map: &AssetMap) -> Vec<u8> {
     image.push(chr as u8);
     image.resize(16 + prg * 0x4000 + chr * 0x2000, 0);
     image
-}
-
-/// The file of the paper version's lifted folder: the one in `fallback`,
-/// else the text the paper version's bundle (`fallback/bundle.json`, the
-/// page's own `game/bundle.json`) holds for it, so the page ships each
-/// file once.
-fn fallback_file(fallback: &Path, name: &str) -> Result<Vec<u8>, String> {
-    if let Ok(b) = std::fs::read(fallback.join(name)) {
-        return Ok(b);
-    }
-    let bundle = fallback.join("bundle.json");
-    let text =
-        std::fs::read_to_string(&bundle).map_err(|e| format!("the paper version's {name}: {e}"))?;
-    let v: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", bundle.display()))?;
-    v.get("assets")
-        .and_then(|a| a.get("files"))
-        .and_then(|f| f.get(name))
-        .and_then(|t| t.as_str())
-        .map(|t| t.as_bytes().to_vec())
-        .ok_or_else(|| format!("the paper version has no {name}"))
 }
 
 /// Lifts what was found of `map` in `rom` into `lifted` (with the map's
@@ -354,92 +310,40 @@ mod tests {
         format!("schema = 1\nsource = \"{source}\"\nsha256 = \"{SHA}\"\n{assets}")
     }
 
-    #[test]
-    fn a_missing_asset_is_filled_from_the_fallback_by_its_slot() {
-        let dir = tempfile::tempdir().unwrap();
-        let fb = dir.path().join("fallback");
-        let lifted = dir.path().join("lifted");
-        std::fs::create_dir_all(&fb).unwrap();
-        // The fallback's model takes slot `ladders` from its asset
-        // `ladders`; ours takes it from `ladders_25m`.
-        std::fs::write(
-            fb.join("model.toml"),
-            "[assets.ladders.from]\nasset = \"ladders\"\n",
-        )
-        .unwrap();
-        let rows = "\n[[asset]]\nname = \"ladders\"\nformat = \"byte-rows\"\nregion = \"prg\"\noffset = 0x10\ncount = 1\nwidth = 3\n";
-        std::fs::write(fb.join("assets.toml"), map("paper", rows)).unwrap();
-        std::fs::write(
-            fb.join("ladders.toml"),
-            "schema = 1\nasset = \"ladders\"\nrows = [\n  [0x01, 0x02, 0x03],\n]\n",
-        )
-        .unwrap();
-        let ours = "[assets.ladders.from]\nasset = \"ladders_25m\"\n[assets.palettes.from]\nasset = \"pals\"\n";
-        let text = map(
-            "game",
-            "\n[[asset]]\nname = \"ladders_25m\"\nformat = \"byte-rows\"\nregion = \"prg\"\noffset = 0x10\ncount = 2\nwidth = 3\n\n[[asset]]\nname = \"pals\"\nformat = \"palette\"\nregion = \"prg\"\noffset = 0x20\ncount = 1\n",
-        );
-        let m = AssetMap::parse(&text).unwrap();
-        let filled = fill(ours, &text, &m, &["pals".into()], &fb, &lifted, &[]).unwrap();
-        assert_eq!(filled, [("ladders_25m".to_owned(), "filled")]);
-        let merged =
-            AssetMap::parse(&std::fs::read_to_string(lifted.join(MAP_FILE)).unwrap()).unwrap();
-        // The found asset keeps its place; the filled one is the
-        // fallback's, renamed, past any ROM.
-        assert_eq!(merged.assets.len(), 2);
-        let spans = merged.asset("ladders_25m").unwrap().spans();
-        assert_eq!((spans[0].offset, spans[0].len), (0x0080_0010, 3));
-        let file = std::fs::read_to_string(lifted.join("ladders_25m.toml")).unwrap();
-        assert!(file.contains("asset = \"ladders_25m\""), "{file}");
-        // A slot the fallback has no asset for can't be filled, and with
-        // no map to give its shape it can't be left blank either.
-        let e = fill(ours, &text, &m, &[], &fb, &lifted, &[]).unwrap_err();
-        assert!(e.contains("no slot palettes"), "{e}");
+    /// A ROM loaded to play: its map has `ladders`; the model also takes
+    /// `pals` and `code`, which only the played template's map has.
+    const OURS: &str = "[assets.ladders.from]\nasset = \"ladders\"\n[assets.palettes.from]\nasset = \"pals\"\n[assets.code.from]\nasset = \"code\"\n";
+    const ROWS: &str = "\n[[asset]]\nname = \"ladders\"\nformat = \"byte-rows\"\nregion = \"prg\"\noffset = 0x10\ncount = 1\nwidth = 3\n";
+    const PLAYED: &str = "\n[[asset]]\nname = \"pals\"\nformat = \"palette\"\nregion = \"prg\"\noffset = 0x20\ncount = 1\n\n[[asset]]\nname = \"code\"\nformat = \"table\"\ncount = 4\ncolumn = [{ name = \"byte\", region = \"prg\", offset = 0x5000 }]\n";
+
+    fn names(n: &[&str]) -> BTreeSet<String> {
+        n.iter().map(|s| (*s).to_owned()).collect()
     }
 
     #[test]
-    fn an_asset_the_paper_version_has_no_slot_for_is_left_blank() {
+    fn an_asset_the_roms_game_does_without_is_left_blank() {
         let dir = tempfile::tempdir().unwrap();
-        let fb = dir.path().join("fallback");
         let lifted = dir.path().join("lifted");
-        std::fs::create_dir_all(&fb).unwrap();
-        // The paper version, derived before the model took `pals` and `code`.
-        std::fs::write(
-            fb.join("model.toml"),
-            "[assets.ladders.from]\nasset = \"ladders\"\n",
-        )
-        .unwrap();
-        let rows = "\n[[asset]]\nname = \"ladders\"\nformat = \"byte-rows\"\nregion = \"prg\"\noffset = 0x10\ncount = 1\nwidth = 3\n";
-        std::fs::write(fb.join("assets.toml"), map("paper", rows)).unwrap();
-        // A ROM loaded to play: its map has `ladders`, the model also takes
-        // `pals` and `code`, which only the played template's map has.
-        let ours = "[assets.ladders.from]\nasset = \"ladders\"\n[assets.palettes.from]\nasset = \"pals\"\n[assets.code.from]\nasset = \"code\"\n";
-        let text = map(
-            "rom",
-            "\n[[asset]]\nname = \"ladders\"\nformat = \"byte-rows\"\nregion = \"prg\"\noffset = 0x10\ncount = 1\nwidth = 3\n",
-        );
-        let played = map(
-            "game",
-            "\n[[asset]]\nname = \"pals\"\nformat = \"palette\"\nregion = \"prg\"\noffset = 0x20\ncount = 1\n\n[[asset]]\nname = \"code\"\nformat = \"table\"\ncount = 4\ncolumn = [{ name = \"byte\", region = \"prg\", offset = 0x5000 }]\n",
-        );
+        let text = map("rom", ROWS);
+        let played = map("game", PLAYED);
         let m = AssetMap::parse(&text).unwrap();
-        let filled = fill(
-            ours,
+        let left = fill(
+            OURS,
             &text,
             &m,
             &["ladders".into()],
-            &fb,
             &lifted,
             &[&text, &played],
+            &names(&["pals", "code"]),
         )
         .unwrap();
-        assert_eq!(
-            filled,
-            [("code".to_owned(), "blank"), ("pals".to_owned(), "blank")]
-        );
+        assert_eq!(left, ["code", "pals"]);
         let merged =
             AssetMap::parse(&std::fs::read_to_string(lifted.join(MAP_FILE)).unwrap()).unwrap();
         assert_eq!(merged.assets.len(), 3);
+        // The found asset keeps its place; a blank one is past any ROM.
+        let spans = merged.asset("ladders").unwrap().spans();
+        assert_eq!((spans[0].offset, spans[0].len), (0x10, 3));
         let spans = merged.asset("code").unwrap().spans();
         assert_eq!((spans[0].offset, spans[0].len), (0x00C0_5000, 4));
         for a in ["pals", "code"] {
@@ -449,5 +353,76 @@ mod tests {
         }
         let code = std::fs::read_to_string(lifted.join("code.toml")).unwrap();
         assert!(!code.contains("0x01"), "{code}");
+    }
+
+    #[test]
+    fn a_missing_asset_nothing_does_without_stops_the_lift() {
+        let dir = tempfile::tempdir().unwrap();
+        let lifted = dir.path().join("lifted");
+        let text = map("rom", ROWS);
+        let played = map("game", PLAYED);
+        let m = AssetMap::parse(&text).unwrap();
+        let shapes = [text.as_str(), played.as_str()];
+        // `code` is missing too, and the entry names only `pals`.
+        let e = fill(
+            OURS,
+            &text,
+            &m,
+            &["ladders".into()],
+            &lifted,
+            &shapes,
+            &names(&["pals"]),
+        )
+        .unwrap_err();
+        assert!(e.contains("code (slot code) isn't in this ROM"), "{e}");
+        assert!(!lifted.join(MAP_FILE).exists());
+        // Nothing to leave blank: every missing asset stops it.
+        let e = fill(
+            OURS,
+            &text,
+            &m,
+            &["ladders".into()],
+            &lifted,
+            &shapes,
+            &BTreeSet::new(),
+        )
+        .unwrap_err();
+        assert!(e.contains("isn't in this ROM"), "{e}");
+        // An entry that leaves blank an asset the ROM has, or one no slot
+        // takes, is a mistake in the entry.
+        let e = fill(
+            OURS,
+            &text,
+            &m,
+            &["ladders".into()],
+            &lifted,
+            &shapes,
+            &names(&["pals", "code", "ladders"]),
+        )
+        .unwrap_err();
+        assert!(e.contains("ladders is in this ROM"), "{e}");
+        let e = fill(
+            OURS,
+            &text,
+            &m,
+            &["ladders".into()],
+            &lifted,
+            &shapes,
+            &names(&["pals", "code", "tiles"]),
+        )
+        .unwrap_err();
+        assert!(e.contains("no slot of the model takes it"), "{e}");
+        // A missing asset with no map to give its shape can't be blank.
+        let e = fill(
+            OURS,
+            &text,
+            &m,
+            &["ladders".into()],
+            &lifted,
+            &[&text],
+            &names(&["pals", "code"]),
+        )
+        .unwrap_err();
+        assert!(e.contains("no map gives its shape"), "{e}");
     }
 }

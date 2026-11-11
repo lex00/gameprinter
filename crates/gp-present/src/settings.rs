@@ -1306,7 +1306,7 @@ mod tests {
     fn a_theme_line_lists_the_looks_and_changes_with_no_restart() {
         let themes = vec![
             ("original".to_owned(), "Original".to_owned()),
-            ("paper".to_owned(), "Rivet Rodeo".to_owned()),
+            ("paper".to_owned(), "Paper".to_owned()),
         ];
         let s = Screen::open(catalog(), RETRO);
         assert!(!s.rows().contains(&Row::Theme), "no looks, no line");
@@ -1315,7 +1315,7 @@ mod tests {
         assert_eq!(s.text(Row::Theme), "Theme     < Original >");
         assert_eq!(s.key(Key::Down), Outcome::Redraw);
         assert_eq!(s.key(Key::Right), Outcome::Redraw);
-        assert_eq!(s.text(Row::Theme), "Theme     < Rivet Rodeo >");
+        assert_eq!(s.text(Row::Theme), "Theme     < Paper >");
         assert!(s.changed());
         assert_eq!(
             s.key(Key::Open),

@@ -10,10 +10,11 @@
 // the game the page takes ROMs of), game/ (the preview: gp_web.wasm,
 // preview.js, the authored stage's bundle and pictures, themes/ with the
 // looks the preview offers in its settings screen, and lift/ with
-// gp-web-lift.wasm, Donkey Kong's templates and the stand-in assets). Any
-// dump of the game is taken: the lift finds its assets by content, picks
-// the model its program matches, and fills what it lacks from the
-// stand-ins (docs/web.md, "The ROM, in the browser").
+// gp-web-lift.wasm and Donkey Kong's templates). Any dump of the game is
+// taken: the lift finds its assets by content and picks the model its
+// program matches; a ROM whose game has less than the model (Donkey Kong
+// (JU) has no 50m) leaves blank what only that part uses (docs/web.md,
+// "The ROM, in the browser").
 //
 // Nothing here waits before the ROM picker is handled: boot.js (a classic
 // script, which runs first) takes the picked file, says "Checking NAME..."
@@ -179,22 +180,22 @@ $("howto-toggle").addEventListener("click", () => {
 // Asset names in words: `kong_take` is "kong take".
 const words = (names) => names.map((n) => n.replaceAll("_", " ")).join(", ");
 
-// What the lift found and filled in, in a sentence or two.
+// What the lift found, and what it left blank, in a sentence or two.
 function foundText(found) {
   if (!found) return "the original's look and layout";
-  const by = (k) => found.assets.filter((a) => a.from === k).map((a) => a.name);
+  const by = (k) => found.assets.filter((a) => a.from === k);
   const same = by("same");
-  const changed = by("changed");
-  const filled = by("filled");
+  const changed = by("changed").map((a) => a.name);
   const blank = by("blank");
   const parts = [];
-  if (!changed.length && !filled.length && !blank.length) parts.push(`all ${same.length} of its assets found`);
+  if (!changed.length && !blank.length) parts.push(`all ${same.length} of its assets found`);
   else {
     parts.push(`${same.length + changed.length} of ${found.assets.length} assets found`);
     if (changed.length) parts.push(`with small changes: ${words(changed)}`);
-    if (filled.length) parts.push(`filled in with stand-ins: ${words(filled)}`);
-    // Named in result.json; here only counted, as their names say little to a player.
-    if (blank.length) parts.push(`${blank.length} left blank, in neither your ROM nor the stand-ins`);
+    // Named in result.json; here only counted, as their names say little
+    // to a player, with what of the game uses them.
+    const without = [...new Set(blank.map((a) => a.without).filter(Boolean))];
+    if (blank.length) parts.push(`${blank.length} left blank` + (without.length ? `, since your ROM's game has no ${without.join(" and no ")}` : ""));
   }
   return parts.join("; ");
 }

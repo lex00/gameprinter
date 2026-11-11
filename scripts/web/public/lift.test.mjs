@@ -35,7 +35,6 @@ async function lift(rom) {
   const mem = new MemFs();
   mem.writeFile("/rom.nes", rom);
   for (const f of index.files) mem.writeFile(`/template/${f}`, fs.readFileSync(path.join(dir, f)));
-  for (const [f, from] of Object.entries(index.alias ?? {})) mem.writeFile(`/template/${f}`, fs.readFileSync(path.join(dir, from)));
   mem.mkdirp("/out");
   const module = new WebAssembly.Module(fs.readFileSync(path.join(dir, "gp-web-lift.wasm")));
   const t0 = performance.now();
@@ -86,7 +85,7 @@ test("a file that isn't a ROM is refused", { skip }, async () => {
 
 const rom = out ? findRom(DK) : null;
 test(
-  "the Donkey Kong (JU) ROM plays Original Edition's model through its own asset map, with 50m filled and skipped",
+  "the Donkey Kong (JU) ROM plays JU's game on Original Edition's model through its own asset map, without 50m and the stage-clear scene",
   { skip: skip || (rom ? false : "the Donkey Kong (JU) ROM isn't in $GP_ROM_DIR/nes") },
   async () => {
     const run = await lift(rom);
@@ -101,23 +100,27 @@ test(
     assert.equal(f.plays, "donkey-kong-oe");
     assert.equal(f.match, "exact");
     const by = (k) => f.assets.filter((a) => a.from === k).map((a) => a.name);
-    assert.ok(by("same").includes("stage_screens") && by("same").includes("tiles"));
-    for (const n of ["stage_screens_50m", "ground_runs_50m", "ladders_50m", "sound_jingles"]) {
-      assert.ok(by("filled").includes(n), `${n} is filled from the paper version: ${JSON.stringify(by("filled"))}`);
+    assert.ok(by("same").includes("stage_screens") && by("same").includes("tiles") && by("same").includes("sound_jingles"));
+    // What JU's game hasn't (template.toml's [[loads.without]]): 50m's
+    // assets and the stage-clear scene's are left blank, and nothing is
+    // filled from anywhere.
+    for (const n of ["stage_screens_50m", "ground_runs_50m", "ladders_50m", "scene_sprite_tiles", "palette_scene"]) {
+      assert.ok(by("blank").includes(n), `${n} is left blank: ${JSON.stringify(by("blank"))}`);
     }
-    // The model's assets the paper version has no slot for yet (it is
-    // derived from Original Edition and lags it) are left blank.
-    for (const a of f.assets) assert.ok(["same", "filled", "blank"].includes(a.from), `${a.name}: ${a.from}`);
+    for (const a of f.assets) assert.ok(["same", "blank"].includes(a.from), `${a.name}: ${a.from}`);
+    for (const a of f.assets.filter((a) => a.from === "blank")) assert.ok(["50m", "stage-clear scene"].includes(a.without), `${a.name}: without ${a.without}`);
     const preview = JSON.parse(new TextDecoder().decode(run.mem.readFile("/out/preview.json")));
     assert.equal(preview.model, "donkey_kong_oe");
-    assert.ok(preview.levels.includes("m50"), "the model keeps its level m50");
-    // The model's text in the bundle, its stages list: JU has no 50m, so
-    // the list keeps m50 and skips it (stages.skip): 25m, 75m, 100m.
+    assert.ok(!preview.levels.includes("m50"), "the model has no level m50 for JU");
+    // The model's text in the bundle: its stages list keeps m50 in the
+    // game's order and skips it (stages.skip), so 25m, 75m, 100m; the
+    // stage-clear scene's rule and kinds are gone.
     const bundle = new TextDecoder().decode(run.mem.readFile("/out/bundle.json"));
     const order = bundle.match(/\[stages\]\\norder = \[([^\]]*)\]/)?.[1] ?? "";
     const skip = bundle.match(/\\nskip = \[([^\]]*)\]/)?.[1] ?? "";
     assert.ok(order.includes("m75") && skip.includes("m50") && !skip.includes("m75"), `the stages list skips 50m and plays 75m: order ${order}, skip ${skip}`);
-    console.log(`lift JU: ${Math.round(run.ms)} ms, ${run.result.files.length} files, ${by("filled").length} assets filled, ${by("blank").length} left blank (${by("blank").join(", ")})`);
+    for (const t of ["[rules.clear_scene]", "[entities.kong_carry]", "[entities.pauline_carry]"]) assert.ok(!bundle.includes(t), `${t} is left out`);
+    console.log(`lift JU: ${Math.round(run.ms)} ms, ${run.result.files.length} files, ${by("blank").length} left blank (${by("blank").join(", ")})`);
   },
 );
 
@@ -158,7 +161,7 @@ test(
 );
 
 test(
-  "a Donkey Kong (JU) dump with its sprite tiles gone loads them from the paper version",
+  "a Donkey Kong (JU) dump with its sprite tiles gone is refused, as nothing fills them",
   { skip: skip || (rom ? false : "the Donkey Kong (JU) ROM isn't in $GP_ROM_DIR/nes") },
   async () => {
     // In memory only: another header byte (so another file, the same
@@ -168,18 +171,9 @@ test(
     const chr = 16 + 16384;
     for (let i = 0; i < 4096; i++) b[chr + i] ^= 0xa5;
     const run = await lift(b);
-    assert.equal(run.code, 0, run.stderr);
-    const f = run.result.found;
-    assert.equal(f.template, "donkey-kong-ju");
-    assert.equal(f.plays, "donkey-kong-oe");
-    assert.equal(f.match, "code", "the program is all there");
-    const by = (k) => f.assets.filter((a) => a.from === k).map((a) => a.name);
-    // Of JU's own assets, only the sprite tiles are filled (the model's
-    // assets JU's map hasn't are filled or left blank too).
-    assert.ok(by("filled").includes("sprite_tiles") && !by("filled").includes("tiles"), JSON.stringify(by("filled")));
-    assert.ok(!by("changed").length && !by("same").includes("sprite_tiles"));
-    assert.ok(by("same").includes("tiles") && by("same").includes("stage_screens"));
-    assert.ok(run.result.files.includes("bundle.json"));
+    assert.equal(run.code, 2, run.stderr);
+    assert.equal(run.result.ok, false);
+    assert.match(run.result.error, /sprite_tiles \(slot sprite_tiles\) isn't in this ROM/);
   },
 );
 
@@ -201,19 +195,10 @@ test("a 1 MB ROM of no Donkey Kong is searched and refused in well under a secon
 });
 
 test(
-  "both Donkey Kong ROMs offer Original Edition's one paper theme, the JU load's through its pointer",
-  { skip: skip || (rom || oe ? false : "no Donkey Kong ROM in $GP_ROM_DIR/nes") },
+  "the game's templates ship no theme of their own: the page's themes come from packages",
+  { skip },
   async () => {
-    const dir = path.join(out, "lift");
-    const index = JSON.parse(fs.readFileSync(path.join(dir, "index.json"), "utf8"));
-    assert.ok(index.files.includes("donkey-kong-oe/themes/paper/theme.toml"), "Original Edition's paper ships");
-    assert.ok(index.files.includes("donkey-kong-ju/themes/paper/same_as.toml"), "the JU load's paper ships as a pointer");
-    assert.ok(!index.files.includes("donkey-kong-ju/themes/paper/theme.toml"), "and not as a second copy");
-    for (const r of [rom, oe].filter(Boolean)) {
-      const run = await lift(r);
-      assert.equal(run.code, 0, run.stderr);
-      assert.deepEqual(run.result.looks_skipped, [], JSON.stringify(run.result.looks_skipped));
-      assert.ok(run.mem.files.has("/out/themes/paper/look.txt"), `${run.result.found.template} draws paper`);
-    }
+    const index = JSON.parse(fs.readFileSync(path.join(out, "lift", "index.json"), "utf8"));
+    assert.deepEqual(index.files.filter((f) => f.includes("/themes/")), []);
   },
 );

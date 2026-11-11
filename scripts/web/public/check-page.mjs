@@ -174,7 +174,9 @@ function framesOf(holds, n) {
 // 25m, 50m and 75m, the last rivet on 100m), with Mario at a y of `top`
 // or less. `ending` is a frame of 100m's ending with `kinds` about, and
 // `again` a frame of the next loop's 25m, with Mario at his start;
-// `frames` is the run's length.
+// `frames` is the run's length. `leftOut` names the rules and entity kinds
+// of the model the ROM's game hasn't, which the lifted model must not have
+// and no frame may show.
 //
 // Original Edition's run: 25m by the route `gp level measure --clears`
 // found (worker relfix, 2026-11-07), then the original's own presses
@@ -241,6 +243,9 @@ const ROUTES = {
   },
   "donkey-kong-ju": {
     plays: ["main", "m75", "m100"],
+    // Original Edition's stage-clear scene, Kong taking Pauline up: JU's
+    // game goes on from the clear with the stage as it stands.
+    leftOut: ["clear_scene", "kong_carry", "pauline_carry"],
     stages: [
       { name: "25m", level: "main", start: 550, mario: [53, 204], shot: 1200, kinds: ["kong", "barrel", "oil_drum"], clear: 1730, top: 40 },
       { name: "75m", level: "m75", start: 2134, mario: [21, 188], shot: 2478, kinds: ["kong_75m", "elevator", "spring"], clear: 3288, top: 40 },
@@ -277,18 +282,19 @@ const ROUTES = {
 // Mario moves on JU's 100m as on Original Edition's (3686 and 4808). Each
 // start was read off the page's module (relfix's tools, gp_web.wasm under
 // Node). Found again on 2026-11-07 when JU's map gained the code from
-// $C707 on (code_c707, code_c735, code_c74e): it had been the paper
-// version's zeros, and JU's own code moves the barrels on 25m.
+// $C707 on (code_c707, code_c735, code_c74e): it had been zeros, and JU's
+// own code moves the barrels on 25m.
 
 // A ROM a template only loads to play ([[loads]]; docs/web.md, "ROMs to
 // play") has its own asset map and not every slot of the template's model:
-// what it lacks is filled from the paper version, and what the paper
-// version lacks too is left blank (gp-web-lift, since 332c9e00). Its
-// lift's counts, by the folder `found.template` names: `found` of `of`
-// assets from the ROM, `filled` from the paper version, `blank` left
-// blank. A template's own ROM is held to every asset found.
+// the assets of what its game does without ([[loads.without]]) are left
+// blank, and nothing is filled from anywhere else (until 2026-11-11 they
+// came from Rivet Rodeo, the retired open version). Its lift's counts, by
+// the folder `found.template` names: `found` of `of` assets from the ROM,
+// `blank` left blank, and `without` what the page names as missing from
+// the ROM's game. A template's own ROM is held to every asset found.
 const LOADS = {
-  "donkey-kong-ju": { found: 56, of: 72, filled: 16, blank: 0 },
+  "donkey-kong-ju": { found: 57, of: 72, blank: 15, without: ["50m", "stage-clear scene"] },
 };
 
 // What the game frame gives its AudioContexts, read in every frame: each
@@ -378,9 +384,9 @@ function audioProbe() {
 // A section's own server, browser context, page and the helpers its checks
 // use. Every file of the bundle the server is asked for is noted in
 // `S.read`; the section is reused only while those files are unchanged.
-// `opts.paper === false` serves the page's own preview (the stand-ins'
-// game) as an empty page, so a section about ROM mode reads none of its
-// pictures; the page itself no longer opens it.
+// `opts.preview === false` serves the page's preview opened with no ROM's
+// files as an empty page, so a section about ROM mode never runs it; the
+// page itself no longer opens it.
 async function session(browser, name, opts = {}) {
   const S = { name, lines: [], failures: [], read: new Set(), files: [], requests: [], sockets: [], errors: [], violations: [], runs: new Map() };
   S.check = (ok, what) => {
@@ -459,10 +465,10 @@ async function session(browser, name, opts = {}) {
       navigator.getGamepads = () => [{ connected: true, mapping: "standard", axes: [0, 0, 0, 0], buttons: Array.from({ length: 17 }, (_, i) => ({ pressed: held().includes(i), value: held().includes(i) ? 1 : 0 })) }];
     });
   }
-  if (opts.paper === false) {
+  if (opts.preview === false) {
     await context.route(
       (u) => /^\/game\/(index\.html)?$/.test(u.pathname) && !u.search.includes("files="),
-      (r) => r.fulfill({ contentType: "text/html", body: "<!doctype html><title>The paper version, not loaded in this section</title>" }),
+      (r) => r.fulfill({ contentType: "text/html", body: "<!doctype html><title>The preview with no ROM, not loaded in this section</title>" }),
     );
   }
   const isSource = (u) => isSourceUrl(S.origin, u);
@@ -1113,13 +1119,16 @@ async function romPlay(S, { name, sha, rom }) {
   if (!load) check(/all \d+ of its assets found/.test(said), `every asset of ${name} is found`);
   else {
     // A ROM loaded only to play: the page says how many of the model's
-    // assets it found, names those filled with stand-ins and counts those
-    // left blank, as the lift's result has them.
-    const by = (k) => (lifted.assets ?? []).filter((a) => a.from === k).length;
-    const got = { found: by("same") + by("changed"), of: lifted.assets?.length ?? 0, filled: by("filled"), blank: by("blank") };
-    check(JSON.stringify(got) === JSON.stringify(load), `${name}, a ROM ${lifted.plays} loads to play, lifts with ${load.found} of ${load.of} assets found, ${load.filled} filled with stand-ins and ${load.blank} left blank (${got.found} of ${got.of}, ${got.filled} filled, ${got.blank} blank)`);
-    const filledNames = /filled in with stand-ins: ([^;.]*)/.exec(said)?.[1]?.split(", ").length ?? 0;
-    check(said.includes(`${load.found} of ${load.of} assets found`) && filledNames === load.filled && (load.blank === 0 ? !/left blank/.test(said) : said.includes(`${load.blank} left blank`)), `and the page says so (${load.found} of ${load.of} found, ${filledNames} named as filled, ${load.blank} left blank)`);
+    // assets it found and counts those left blank with what of the game
+    // uses them, as the lift's result has them. Nothing is filled.
+    const by = (k) => (lifted.assets ?? []).filter((a) => a.from === k);
+    const without = [...new Set(by("blank").map((a) => a.without))];
+    const got = { found: by("same").length + by("changed").length, of: lifted.assets?.length ?? 0, blank: by("blank").length, without };
+    check(JSON.stringify(got) === JSON.stringify(load), `${name}, a ROM ${lifted.plays} loads to play, lifts with ${load.found} of ${load.of} assets found and ${load.blank} left blank for ${load.without.join(" and ")} (${JSON.stringify(got)})`);
+    const others = (lifted.assets ?? []).filter((a) => !["same", "changed", "blank"].includes(a.from));
+    check(!others.length && !/stand-in|filled/.test(said), `none of ${name}'s assets is filled from anywhere else, and the page names no stand-in (${others.map((a) => `${a.name} ${a.from}`).join(", ") || "none"})`);
+    const told = `${load.blank} left blank, since your ROM's game has no ${load.without.join(" and no ")}`;
+    check(said.includes(`${load.found} of ${load.of} assets found`) && said.includes(told), `and the page says so ("${said}")`);
   }
   check(await waitFrames(30), "the ROM version starts");
   check((await gp(() => window.__gp.error)) === null, "and loads without an error");
@@ -1273,6 +1282,17 @@ async function romRoute(S, { name, sha, rom }) {
   }, page.rom.game);
   const played = list.order.filter((l) => !list.skip.includes(l));
   check(JSON.stringify(played) === JSON.stringify(c.plays), `${name}: the lifted model plays the game's stages in its order, ${names(c.plays)} (order ${JSON.stringify(list.order)}, skipped ${JSON.stringify(list.skip)})`);
+  if (c.leftOut) {
+    const still = await p.evaluate(
+      async ({ game, parts }) => {
+        const files = await (await import("./game/lift.js")).loadStored(game);
+        const model = JSON.parse(new TextDecoder().decode(files.get("bundle.json"))).model;
+        return parts.filter((n) => model.includes(`[rules.${n}]`) || model.includes(`[entities.${n}]`));
+      },
+      { game: page.rom.game, parts: c.leftOut },
+    );
+    check(!still.length, `${name}: the lifted model leaves out what the game hasn't, ${c.leftOut.join(", ")}${still.length ? ` (still there: ${still.join(", ")})` : ""}`);
+  }
   const run = `route-${template}`;
   S.runs.set(run, framesOf(c.holds, c.frames));
   const at = async (frame, extra = "") => {
@@ -1321,7 +1341,16 @@ async function romRoute(S, { name, sha, rom }) {
     check(midPaper?.level === want && lookNow === "turnips", `${what}: and in Turnips (level ${midPaper?.level}, look ${lookNow}, rom-${tag}-${st.name}-turnips.png)`);
     const done = await at(st.clear + 1);
     check(done?.level === want && player(done)?.[2] <= st.top, `${what}: the run finishes it at frame ${st.clear} (${where(done)})`);
-    if (i === 0) await shot(st.clear + 60, `rom-${tag}-clear.png`);
+    if (i === 0) {
+      // Through the clear: shots a second, two and a bit over three in (by
+      // then the screen is off for the next stage's setup), and none of
+      // what the game leaves out on any of them.
+      const frames = [st.clear + 60, st.clear + 120, st.clear + 200];
+      const after = [];
+      for (const f of frames) after.push(await shot(f, f === frames[0] ? `rom-${tag}-clear.png` : `rom-${tag}-clear-${f - st.clear}.png`));
+      const shown = [...new Set(after.flatMap((a) => kinds(a)))].filter((k) => (c.leftOut ?? []).includes(k));
+      check(after.every((a) => a?.level === want) && !shown.length, `${what}: the clear plays on ${st.name} (frames ${frames.join(", ")}${shown.length ? `; shows ${shown.join(", ")}` : ""}, rom-${tag}-clear.png)`);
+    }
   }
   const last = c.plays[c.plays.length - 1];
   const end = await shot(c.ending.frame, `rom-${tag}-ending.png`);
@@ -1529,16 +1558,16 @@ async function visitor(S, { rule, input, load, rom }) {
 // ROM, as a page from before then kept them, are dropped.
 // A returning visitor who chose Paper on an earlier visit (kept in
 // localStorage as gp-theme:MODEL) picks their ROM: the game must open in
-// the ROM's own art. A kept Paper drew the ROM's game in the paper
-// version's art, and the page looked as if the ROM never loaded
-// (2026-11-07, reported from Safari and missed here, since every section
-// starts in a fresh browser).
+// the page's theme. A kept Paper drew the ROM's game in the paper look,
+// and the page looked as if the ROM never loaded (2026-11-07, reported
+// from Safari and missed here, since every section starts in a fresh
+// browser).
 async function keptLook(S, { name, rom }) {
   const { p, check } = S;
   await p.goto(`${S.origin}/${entry}`);
   await S.installed();
   await p.evaluate(() => {
-    for (const m of ["donkey_kong_oe", "donkey_kong_ju", "rivet_rodeo"]) localStorage.setItem(`gp-theme:${m}`, "paper");
+    for (const m of ["donkey_kong_oe", "donkey_kong_ju"]) localStorage.setItem(`gp-theme:${m}`, "paper");
   });
   await S.loadRom(rom);
   // The ROM's frame, and never the one it replaces: on a host that redirects
@@ -1815,7 +1844,11 @@ async function registryLink(S) {
   await p.goto(`${S.origin}/${LINK}`);
   check(await S.installed(), "by the link the game is installed with no click");
   const rec = await installedOf(p);
-  check(rec?.name === page.game && rec.files.length > 300, `it is installed in this browser (${rec?.name}@${rec?.version}, ${rec?.files.length} files)`);
+  // The package holds no game files the page plays from since 2026-11-11
+  // (Rivet Rodeo's went): its play files are the lift's folder and the
+  // game's module.
+  const has = (path) => rec?.files.some((f) => f.path === path);
+  check(rec?.name === page.game && has("play/module.wasm") && has("play/lift/index.json"), `it is installed in this browser (${rec?.name}@${rec?.version}, ${rec?.files.length} files, the module and the lift's folder among them)`);
   const isSource = (r) => isSourceUrl(S.origin, r.url);
   const own = S.requests.filter((r) => r.url.startsWith(S.origin) && !isSourceUrl(S.origin, r.url)).map((r) => r.url.slice(S.origin.length));
   check(!own.some((u) => /\/(bundle|preview)\.json|\/game\/assets\/|\/game\/lift\/(?!gp-web-lift)/.test(u)), `the page's server was asked for none of the game (${own.length} requests)`);
@@ -1908,7 +1941,7 @@ async function moduleSection(S, withRom) {
   check(!!frame, "the game's frame is there");
   const loop = testModule([0x03, 0x40, 0x0c, 0, 0x0b, 0x41, 0, 0x0b], 16);
   const grow = testModule([0x03, 0x40, 0x41, 1, 0x40, 0, 0x41, 0x7f, 0x46, 0x04, 0x40, 0, 0x0b, 0x0c, 0, 0x0b, 0x41, 0, 0x0b], 16);
-  const r = await frame.evaluate(async ({ loop, grow, noMax, tooBig, bundleUrl }) => {
+  const r = await frame.evaluate(async ({ loop, grow, noMax, tooBig, game }) => {
     const { ModuleHost } = await import("./module-host.js");
     const refused = (b) => ModuleHost.open(new Uint8Array(b).buffer).then(() => null, (e) => e.message);
     const run = async (b) => {
@@ -1929,8 +1962,9 @@ async function moduleSection(S, withRom) {
       }
       return { told, threw, after, ms: performance.now() - t0 };
     };
-    // The page's own build and the game's module, given the game's bundle.
-    const bundle = new Uint8Array(await (await fetch(bundleUrl)).arrayBuffer());
+    // The page's own build and the game's module, given the bundle the
+    // ROM was lifted into.
+    const bundle = new Uint8Array((await (await import("./lift.js")).loadStored(game)).get("bundle.json"));
     const load = async (bytes) => {
       const h = await ModuleHost.open(bytes);
       const { r, out } = h.call("gp_load", [bundle]);
@@ -1947,7 +1981,7 @@ async function moduleSection(S, withRom) {
       own: await load(pageWasm),
       game: await load(moduleWasm),
     };
-  }, { loop, grow, noMax: testModule([0x41, 0, 0x0b], null), tooBig: testModule([0x41, 0, 0x0b], 4097), bundleUrl: "/__check/play/bundle.json" });
+  }, { loop, grow, noMax: testModule([0x41, 0, 0x0b], null), tooBig: testModule([0x41, 0, 0x0b], 4097), game: page.rom.game });
   check(/one frame took more than/.test(r.loop.told ?? "") && r.loop.ms < 5000, `a module that loops forever stops at the deadline (${r.loop.told}, ${Math.round(r.loop.ms)} ms)`);
   check(/stopped/.test(r.loop.after ?? ""), "and answers nothing more");
   check(/module failed/.test(r.grow.told ?? ""), `a module that grows without end stops at its limit (${r.grow.told})`);
@@ -2020,7 +2054,7 @@ async function registryLocalChange(S) {
   await p.evaluate(async () => {
     const db = await new Promise((ok) => (indexedDB.open("gp-installs").onsuccess = (e) => ok(e.target.result)));
     const rec = await new Promise((ok) => (db.transaction("games").objectStore("games").getAll().onsuccess = (e) => ok(e.target.result.find((v) => v.files))));
-    const f = rec.files.find((x) => x.path === "play/preview.json");
+    const f = rec.files.find((x) => x.path === "play/lift/index.json");
     const tx = db.transaction("blobs", "readwrite");
     tx.objectStore("blobs").put(new TextEncoder().encode("{}").buffer, f.hash);
     await new Promise((ok) => (tx.oncomplete = ok));
@@ -2047,12 +2081,12 @@ for (const [name, sha] of Object.entries(page.rom.known_sha256 ?? {})) {
   const r = { name, sha, rom };
   roms.push(r);
   const tag = sha.slice(0, 8);
-  add(`rom-${tag}-play`, 35, (S) => romPlay(S, r), { rom: sha, paper: false });
-  add(`rom-${tag}-route`, 10, (S) => romRoute(S, r), { rom: sha, paper: false });
-  add(`rom-${tag}-deaths`, 10, (S) => romDeaths(S, r), { rom: sha, paper: false });
-  add(`rom-${tag}-saves`, 52, (S) => romSaves(S, r), { rom: sha, paper: false });
+  add(`rom-${tag}-play`, 35, (S) => romPlay(S, r), { rom: sha, preview: false });
+  add(`rom-${tag}-route`, 10, (S) => romRoute(S, r), { rom: sha, preview: false });
+  add(`rom-${tag}-deaths`, 10, (S) => romDeaths(S, r), { rom: sha, preview: false });
+  add(`rom-${tag}-saves`, 52, (S) => romSaves(S, r), { rom: sha, preview: false });
   add(`rom-${tag}-unload`, 6, (S) => romUnload(S, r), { rom: sha });
-  if (pictureMoments.some((m) => m.section === `pictures-rom-${tag}`)) add(`pictures-rom-${tag}`, 15, (S) => romPictures(S, r), { rom: sha, paper: false, files: [picturesFile] });
+  if (pictureMoments.some((m) => m.section === `pictures-rom-${tag}`)) add(`pictures-rom-${tag}`, 15, (S) => romPictures(S, r), { rom: sha, preview: false, files: [picturesFile] });
 }
 if (roms.length) {
   const first = roms[0];
