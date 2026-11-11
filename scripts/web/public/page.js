@@ -1,18 +1,19 @@
-// The public page (docs/web.md, "The public page"): the authored stage in
-// the preview at once, and a visitor's own ROM, checked and lifted in this
-// browser (lift.js), for the original's look and layout. No game data is
-// on the server, and the ROM's bytes never leave the browser: this file
-// sends no request with them, and lift.js only reads the module and the
-// template's own files.
+// The public page (docs/web.md, "The public page"): a visitor's own ROM,
+// checked and lifted in this browser (lift.js), played in the original's
+// look and layout or in a theme. Nothing plays until a ROM is loaded; a
+// ROM kept from an earlier visit plays at once. No game data is on the
+// server, and the ROM's bytes never leave the browser: this file sends no
+// request with them, and lift.js only reads the module and the template's
+// own files.
 //
 // The folder holds index.html and this file, page.json (the titles and
 // the game the page takes ROMs of), game/ (the preview: gp_web.wasm,
 // preview.js, the authored stage's bundle and pictures, themes/ with the
 // looks the preview offers in its settings screen, and lift/ with
-// gp-web-lift.wasm, Donkey Kong's templates and the paper version's own
-// assets). Any dump of the game is taken: the lift finds its assets by
-// content, picks the model its program matches, and fills what it lacks
-// from the paper version (docs/web.md, "The ROM, in the browser").
+// gp-web-lift.wasm, Donkey Kong's templates and the stand-in assets). Any
+// dump of the game is taken: the lift finds its assets by content, picks
+// the model its program matches, and fills what it lacks from the
+// stand-ins (docs/web.md, "The ROM, in the browser").
 //
 // Nothing here waits before the ROM picker is handled: boot.js (a classic
 // script, which runs first) takes the picked file, says "Checking NAME..."
@@ -39,7 +40,9 @@ let page = null;
 let rom = null;
 let link = null;
 // A play link's game and content: `g` and `c`, each NAME or NAME@VERSION.
-// With no link, the page's own game. The page has one source, its own.
+// With no link, the page's own game and its own content (page.json's
+// `content`, a theme installed with the game). The page has one source,
+// its own.
 function gameLink(p) {
   const q = new URLSearchParams(location.search);
   const part = (v) => {
@@ -49,7 +52,7 @@ function gameLink(p) {
   };
   const game = part(q.get("g")) ?? { name: p.game, version: null };
   if (game.name !== p.game) throw new Error(`this page plays ${p.game}, not ${game.name}`);
-  return { game, content: part(q.get("c")), direct: q.has("g") };
+  return { game, content: part(q.get("c")) ?? part(p.content), direct: q.has("g") };
 }
 // page.json read into `page` and `rom`: what a ROM needs before it can
 // play. A file picked earlier waits for it in liftAndPlay.
@@ -58,8 +61,7 @@ const ready = pageFile.then((p) => {
   rom = p.rom;
   link = gameLink(p);
   $("rom-help").textContent =
-    `Load your own ${rom.name} ROM (${rom.file}) to play with the original's look and layout. ` +
-    "It is checked and read in this browser and never uploaded.";
+    `Load your own ${rom.name} ROM (${rom.file}) to play. ` + "It is checked and read in this browser and never uploaded.";
 });
 ready.catch(() => {});
 
@@ -176,9 +178,9 @@ function foundText(found) {
   else {
     parts.push(`${same.length + changed.length} of ${found.assets.length} assets found`);
     if (changed.length) parts.push(`with small changes: ${words(changed)}`);
-    if (filled.length) parts.push(`filled in from the paper version: ${words(filled)}`);
+    if (filled.length) parts.push(`filled in with stand-ins: ${words(filled)}`);
     // Named in result.json; here only counted, as their names say little to a player.
-    if (blank.length) parts.push(`${blank.length} left blank, in neither your ROM nor the paper version`);
+    if (blank.length) parts.push(`${blank.length} left blank, in neither your ROM nor the stand-ins`);
   }
   return parts.join("; ");
 }
@@ -191,7 +193,7 @@ function romName(found) {
 // crates/gp-web-lift), in a line under the mode line: each theme's title
 // and the lift's reason, which is written to follow "because". Without
 // it a theme the visitor's ROM can't take is missing from the settings
-// with no word. Hidden when there are none and in the paper version.
+// with no word. Hidden when there are none and when no ROM plays.
 function showSkipped(skipped = []) {
   const el = $("skipped");
   el.hidden = !skipped.length;
@@ -203,20 +205,23 @@ function showSkipped(skipped = []) {
 }
 
 let linked = null;
+// `rom` plays the lifted ROM; `none` shows no game and asks for a ROM.
 function play(mode, found = null, skipped = []) {
   const romMode = mode === "rom";
-  // A ROM starts in its own art (own-look): a look kept from an earlier
-  // visit, Paper say, would make it look like the paper version.
+  // A linked theme (the page's own, Turnips say) opens the game in it; a
+  // ROM with none starts in its own art (own-look), whatever look an
+  // earlier visit kept.
   const wanted = romMode && linked?.theme && !skipped.some((t) => t.id === linked.theme.id) ? `theme=${linked.theme.id}` : "own-look";
-  const files = romMode ? `files=idb:${rom.game}&${wanted}&` : "";
-  frame.src = `game/index.html?${files}scale=fit`;
-  // The page's name stays Rivet Rodeo in both modes: the ROM's game is
-  // named only in the line below, to say which file is being played.
-  $("title").textContent = page.title;
-  document.title = page.title;
+  if (romMode) frame.src = `game/index.html?files=idb:${rom.game}&${wanted}&scale=fit`;
+  else frame.removeAttribute("src");
+  frame.hidden = !romMode;
+  if (page) {
+    $("title").textContent = page.title;
+    document.title = page.title;
+  }
   $("mode").textContent = romMode
     ? `Playing your own ${romName(found)} ROM: ${foundText(found)}, kept in this browser only`
-    : "Paper version: an original stage";
+    : "No ROM loaded";
   $("back").hidden = !romMode;
   $("load-label").hidden = romMode;
   showSkipped(romMode ? skipped : []);
@@ -269,7 +274,7 @@ async function liftAndPlay(file, name) {
 
 $("back").addEventListener("click", () => {
   say("");
-  play("paper");
+  play("none");
 });
 
 // The ROM picker, taken by boot.js; and if boot.js didn't run (a page
@@ -300,24 +305,24 @@ try {
   say(`${page?.title ?? "The game"} couldn't be installed: ${err.message ?? err}.`, "error");
 }
 window.__page = { play, liftRom: async (...a) => (await lift()).liftRom(...a), showSkipped, installing };
-if (started) play("paper");
+// No game until a ROM: unless one picked while the page loaded already plays.
+if (!frame.getAttribute("src")) play("none");
 
-// Kept from an earlier visit: the ROM version is a click away, never loaded
-// on its own. The click lifts the kept ROM again, so it plays with this
-// page's themes and fixes, not the ones of the page that first lifted it.
-// Files an older page kept without the ROM can't be lifted again, so they
-// are dropped and the visitor loads the file once more.
-// IndexedDB can be refused (some private windows) or, in some Safari
-// versions, never answer; either way the page plays on without the
-// buttons, and nothing here holds up the paper version or the picker.
+// Kept from an earlier visit: the ROM plays at once, lifted again, so it
+// plays with this page's themes and fixes, not the ones of the page that
+// first lifted it. Files an older page kept without the ROM can't be
+// lifted again, so they are dropped and the visitor loads the file once
+// more. IndexedDB can be refused (some private windows) or, in some Safari
+// versions, never answer; either way the page waits for a ROM without the
+// buttons, and nothing here holds up the picker.
 const { storedRom, loadStored, clearStored } = started ? await lift().catch(() => ({})) : {};
 const keptRom = storedRom ? await storedRom(rom.game).catch(() => null) : null;
 if (!keptRom && loadStored && (await loadStored(rom.game).catch(() => null))) await clearStored(rom.game).catch(() => {});
-if (keptRom && link?.direct) liftAndPlay(keptRom, "your ROM");
+if (keptRom) liftAndPlay(keptRom, "your ROM");
 if (keptRom) {
   const again = document.createElement("button");
   again.className = "quiet";
-  again.textContent = "Play my ROM version";
+  again.textContent = "Play my ROM";
   again.addEventListener("click", () => liftAndPlay(keptRom, "your ROM"));
   const forget = document.createElement("button");
   forget.className = "quiet";
@@ -331,7 +336,7 @@ if (keptRom) {
     }
     again.remove();
     forget.remove();
-    play("paper");
+    play("none");
     say("Your ROM and its data are gone from this browser.", "ok");
   });
   $("back").after(again, forget);

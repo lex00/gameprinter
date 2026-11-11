@@ -1,7 +1,7 @@
 # The public page's picture references (docs/web.md, "Picture
 # references"): check-page.mjs plays each moment in the page's game frame
-# to its frame (the section's run: Rivet Rodeo's clear-and-loop baseline,
-# or a ROM version's route in ROUTES) and compares the SHA-256 of the
+# to its frame (the section's run: a ROM version's route in ROUTES) and
+# compares the SHA-256 of the
 # game canvas's RGBA pixels with `sha256`. A difference fails the section
 # naming the moment, with old, new and diff pictures in
 # $GP_HOME/work/page-shots/. When a change is meant:
@@ -10,62 +10,6 @@
 # A moment with `pending` is played but not compared, and accept leaves it
 # without a hash: remove the line once its reason is gone, then accept.
 # `shows` is what a person sees there; the rest is written by accept.
-
-moment paper-title
-  section pictures-paper
-  frame   30
-  shows   Rivet Rodeo's title screen and its menu
-  state   level main, player at 88,204
-  size    256x224
-  sha256  d62e39b4afe1b5dc177433495ae65f0477485676f2940a357a1774c72dfbcec7
-
-moment paper-stand
-  section pictures-paper
-  frame   540
-  shows   the stage at its start, the hero standing at the bottom, the score bar's zeros
-  state   level main, player at 88,204
-  size    256x224
-  sha256  f1729516eaa6007c11c3573a8f2670df234c37c97dad42e647fc8e1c774dd34a
-
-moment paper-walk
-  section pictures-paper
-  frame   620
-  shows   the hero walking right on the bottom girder
-  state   level main, player at 127,203
-  size    256x224
-  sha256  65e55ee47a42c624e32112fe3dd2c7bb6f9a8a876fa3f19b9b42ecb967ab4e54
-
-moment paper-climb
-  section pictures-paper
-  frame   735
-  shows   the hero climbing the first ladder
-  state   level main, player at 185,189
-  size    256x224
-  sha256  ab5a473a0a0d3777794b27771dad3659aa6da5f2e81e54f45093347673db07a5
-
-moment paper-play
-  section pictures-paper
-  frame   1050
-  shows   play partway up: the hero on the third girder, barrels rolling, the bonus at 4500
-  state   level main, player at 122,145
-  size    256x224
-  sha256  5f091edb5beeb951f136d24b456fccaa6f3a343b0a2fb5d00d77f315b9d71623
-
-moment paper-jump
-  section pictures-paper
-  frame   1292
-  shows   the hero in the air, jumping left over a barrel
-  state   level main, player at 88,108
-  size    256x224
-  sha256  c9117cf98ed88dce331033bc92f0a604a4b69bd8139773f88f561dab00ea28c4
-
-moment paper-clear
-  section pictures-paper
-  frame   1793
-  shows   a second after the first clear: the thrower going up with the friend (the game hides the hero through it), the score bar at 200
-  state   level main, player at 113,28
-  size    256x224
-  sha256  d4ef5e0db0e720e52d1d6ef6c804422a31a02e7cdab8e78b62a0ef4cb2955359
 
 moment oe-stand
   section pictures-rom-45440d8e
@@ -96,20 +40,20 @@ moment ju-ending
   size    256x224
   sha256  367b255cba14848746ba55cbb25add31a9ced859438ea392b0ec5f04b04758d2
 
-moment oe-fall-paper
+moment oe-fall-turnips
   section pictures-rom-45440d8e
   frame   6760
-  look    paper
-  shows   Original Edition's 100m ending in the Paper look: the thrower falling from the top, the middle girders and ladders cleared, the girders stacked at the bottom
+  look    turnips
+  shows   Original Edition's 100m ending in the Turnips look: the thrower falling from the top, the middle girders and ladders cleared, the girders stacked at the bottom
   state   level m100, player at 61,52
-  size    256x224
-  sha256  8d3710c8e5c8d32d233e8768ff22c05b1203949c4603de0644bc8d5dd106d028
+  size    1536x1344
+  sha256  7e6b2c6199d049f59a996428ea8bdb7182d9d750a5af478ba9bd6a1e92c9663f
 
-moment oe-ending-paper
+moment oe-ending-turnips
   section pictures-rom-45440d8e
   frame   6900
-  look    paper
-  shows   Original Edition's 100m ending in the Paper look: the heart between the hero and the friend, the thrower fallen on its head on the girders the ending stacks, the girder laid under the friend, the middle girders and ladders cleared (thin edges of the stage picture left)
+  look    turnips
+  shows   Original Edition's 100m ending in the Turnips look: the heart between the hero and the friend, the thrower fallen on its head on the girders the ending stacks, the girder laid under the friend, the middle girders and ladders cleared (thin edges of the stage picture left)
   state   level m100, player at 165,53
-  size    256x224
-  sha256  1d275b5bdb81bb7444de5e178b26529c253f87c0effcb54bc6cda974ca52144c
+  size    1536x1344
+  sha256  cd3412eeec0d79e963e9aef8cb661835257edd225f55ed662d13f1b2c10118fd

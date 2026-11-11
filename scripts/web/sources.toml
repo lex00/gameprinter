@@ -12,9 +12,15 @@ name = "gp-local"
 url = "."
 root = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEoXL5YfJ6rWdggoGhTubKRNnHfvNOByMUTPuIJshfGH root@gp-staging"
 
-# The public repo lex00/rivetrodeo. It has no root key, so the page doesn't
+# The public repo lex00/gp-registry. It has no root key, so the page doesn't
 # look at signatures or expiries for it. Signing is opt-in: give a source a
 # root and the page requires them. See docs/registry-backends.md.
+[registry]
+name = "gp-registry"
+url = "https://raw.githubusercontent.com/lex00/gp-registry/main"
+
+# The public repo lex00/rivetrodeo, the registry gp-registry replaced. The
+# old page at rivet-rodeo.intentius.workers.dev still installs from it.
 [repo]
 name = "rivetrodeo"
 url = "https://raw.githubusercontent.com/lex00/rivetrodeo/main"

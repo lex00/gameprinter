@@ -388,17 +388,19 @@ struct DriftAt {
 
 impl Art {
     /// Resolves `rules` against `p`'s pictures. A rule naming a picture the
-    /// build hasn't got is an error, so a look made for another build isn't
-    /// drawn half right.
+    /// build hasn't got is left out (one dump of a game can lack a glyph
+    /// another has); a look with none of the build's pictures is refused,
+    /// as one made for another game.
     pub fn new(rules: ArtRules, p: &Present) -> Result<Self, String> {
         let files = rules.files();
         let n = p.pictures.len();
-        let pic = |name: &str| -> Result<u32, String> {
+        // A picture this build hasn't got (a glyph one dump of the game
+        // lacks) has no rule here: the look is drawn without it.
+        let pic = |name: &str| -> Option<u32> {
             p.pictures
                 .iter()
                 .position(|x| x.file == name)
                 .map(|i| i as u32)
-                .ok_or_else(|| format!("the build has no picture `{name}`"))
         };
         let file = |name: &str| files.iter().position(|f| f == name).unwrap_or(0) as u32;
         let placed = |s: &Sized| Placed {
@@ -408,24 +410,28 @@ impl Art {
         };
         let set = |list: &[String]| -> Result<Vec<bool>, String> {
             let mut v = vec![false; n];
-            for b in list {
-                v[pic(b)? as usize] = true;
+            for i in list.iter().filter_map(|b| pic(b)) {
+                v[i as usize] = true;
             }
             Ok(v)
         };
         // A level not in this build (another game's) matches none.
-        let level = |name: &str| pic(name).ok();
+        let level = |name: &str| pic(name);
         let mut pics = vec![None; n];
         for r in &rules.pics {
-            pics[pic(&r.build)? as usize] = Some(placed(&r.art));
+            if let Some(i) = pic(&r.build) {
+                pics[i as usize] = Some(placed(&r.art));
+            }
+        }
+        if !rules.pics.is_empty() && pics.iter().all(Option::is_none) {
+            return Err("the build has none of the pictures the look draws".into());
         }
         let mut timed = vec![Vec::new(); n];
         for t in &rules.timed {
-            let after = match &t.after {
-                Some(a) => Some(pic(a)?),
-                None => None,
-            };
-            timed[pic(&t.build)? as usize].push(TimedAt {
+            let Some(i) = pic(&t.build) else { continue };
+            // After a picture the build hasn't got: never.
+            let after = t.after.as_ref().map(|a| pic(a).unwrap_or(u32::MAX));
+            timed[i as usize].push(TimedAt {
                 from: t.from,
                 to: t.to,
                 every: t.every,
@@ -450,7 +456,7 @@ impl Art {
                 file: file(&pr.art),
                 rect: pr.rect,
                 over: set(&pr.over)?,
-                burst: pr.burst.iter().map(|b| pic(b)).collect::<Result<_, _>>()?,
+                burst: pr.burst.iter().filter_map(|b| pic(b)).collect(),
             });
         }
         let drift = rules.drift.as_ref().map(|d| DriftAt {

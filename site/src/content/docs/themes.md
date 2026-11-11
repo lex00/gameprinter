@@ -1,37 +1,60 @@
 ---
 title: Themes and levels
-description: Add a new look or a new stage to a game. Early, with no preview yet.
+description: Give a game a new look, in a repo of your own, or make a new stage.
 prompt: |
-  Read this page. Then help me make a theme in its own folder, using the folder paper/ in lex00/games as the pattern, in the style I describe next. Use no art, music or names from any existing game, and run gp package scan on the result.
+  Read this page. Then help me make a large-art theme for Donkey Kong in its own repo, using lex00/turnips as the pattern, in the style I describe next. Use no art, music or names from any existing game, and check the result with gp template served before I publish it.
 ---
 
-**This path is early.** You work by copying an existing package and editing text files. The theme kit, the automatic checks and the in-game preview from the old tool haven't been brought over.
+A theme changes how a game looks and nothing about how it plays. Every body keeps its place and its hit box. A player picks a theme under Settings, Theme, and can go back to the original's art at any time.
 
-## Make a theme
+## A theme with large art
 
-A theme is a small package of text. The one to copy is [`paper/`](https://github.com/lex00/games/tree/main/paper) in the `lex00/games` repo, the Paper look for Rivet Rodeo.
+The way to make a theme today is a finished look: pictures drawn bigger than the game's own, at the place and size of the picture each one stands for, and a rules file that says how to draw them. [`lex00/turnips`](https://github.com/lex00/turnips) is one, a clay look for Donkey Kong, and the one to copy.
 
 | File | What it holds |
 |---|---|
-| `package.toml` | The theme's name, licence and the game it's for |
-| `theme/theme.toml` | Its title, licence and colour changes |
-| `theme/*.pix` | Art, as text: a size, a palette, then a grid of characters |
-| `theme/*.tune` | Sounds and music, as text: voices and notes |
-| `theme/poses.toml` | Which pose each group of frames is drawn in |
+| `package.toml` | The theme's name, version and title |
+| `theme/look.txt` | `gp-look 1`, the theme's id and title, and `art art.txt` |
+| `theme/art.txt` | The rules, `gp-art 1`, one per line |
+| `theme/art/` | The pictures |
 
-Each `.pix` file has to keep the size and the tile layout of the one it replaces, because the game finds its art by position.
+The game reads the rules in Rust (`gp_present::art` in gameprinter), so the web page and the native player draw the same frame. The page only loads the pictures and paints what the game returns.
 
-Your work has to be your own, with an open licence stated in the package. If you used an AI tool to make any of it, name the tool, and make sure its terms let you share the result.
+### The rules
 
-Before you share a theme, check it holds nothing from a ROM:
+Pictures are named by the build's own file names (`frame-82-0.png`, `hud-0.png`), levels by their level picture's name (`level-main.png`), and art by its path in `theme/`. Sizes and places are in the game's pixels.
+
+| Line | What it does |
+|---|---|
+| `scale 6` | Canvas pixels to a game pixel, so the art keeps its detail |
+| `limit off` | Draws without the console's sprite limit |
+| `pic BUILD ART W H DX DY` | Draws `ART` in place of the build's picture, `W` by `H`, moved by `DX`, `DY` |
+| `timed BUILD FROM TO ART W H DX DY` | Another picture while a body has shown `BUILD` for `FROM` to `TO` frames. Add `every=N` for a repeat, `after=PIC`, `wait=N` or `hide` |
+| `held BUILD...` | Not drawn while a `hide` pose holds it, such as a ball in a hand |
+| `face BUILD...` | Turned the way the body really moves, after `face_turn N` pixels (6 by default) |
+| `near ART W H DX DY`, `near_when`, `near_other` | A pose shown while another body stands level with this one |
+| `elsewhere LEVEL DX DY BUILD...` | Moves those pictures on every level but one |
+| `prop LEVEL ART X Y W H`, `prop_over`, `prop_burst` | A picture in front of the bodies that pass behind it, with a burst where one lands |
+| `drift LEVEL Y RISE EVERY`, `drift_art`, `drift_at` | Pictures that rise and fade, like smoke |
+| `stage SCALE R G B R G B` | Stages built from pieces over a gradient backdrop |
+
+A stage is never a picture in the theme. The `stage`, `stage_piece` and `level` lines say how to build each one from pieces (a plank, a ladder rail, a rope, a wheel) over the level picture the player's own ROM gives, finding floors, ladders and ropes by colour. So a theme holds no layout from the original.
+
+Lettering is part of a theme too: draw your own letters and use `pic` lines for the HUD, the score pop-ups and the title screens.
+
+### Check it holds nothing from a ROM
+
+No file may hold bytes from the ROM, and no picture may be traced from the original's art. Check every file against the ROMs the game names:
 
 ```sh
-gp package scan my-theme
+gp template served ~/games/donkey-kong --folder my-theme/theme
 ```
+
+Your work has to be your own. If you used an AI tool to make any of it, name the tool in your README, and make sure its terms let you share the result.
 
 ## Get it in the game
 
-Open a pull request on [`lex00/games`](https://github.com/lex00/games) with your theme in a folder of its own. If it's accepted, it's published from there, and players can open the game with it from a link.
+Keep your theme in a repo of your own, with its pictures in Git LFS. Players get a theme from the registry the page reads, [`lex00/gp-registry`](https://github.com/lex00/gp-registry): open an issue there with your repo's link, and once it's published, a link to the page with `&c=YOUR/THEME` installs it with the game. The page at [nes-donkey-kong.intentius.workers.dev](https://nes-donkey-kong.intentius.workers.dev) installs Turnips that way.
 
 You can also [publish it to a registry of your own](../registry/), but the game page only reads its one registry, so players wouldn't see it there.
 
@@ -51,4 +74,4 @@ A new stage should be your own layout, not a copy of an original's. The module i
 
 ## Not built yet
 
-A preview of an unpublished theme or level in the game, the theme kit and its checks, and level packages that a player can pick.
+A preview of an unpublished theme in the game, a theme kit with its checks, a way to send a theme to the registry from the command line, and level packages a player can pick.

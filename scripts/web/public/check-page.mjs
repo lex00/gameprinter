@@ -1,15 +1,12 @@
 // The public page in a headless browser (docs/web.md, "The public page"):
-// the paper version plays at once (its title, play, the settings screen,
-// Normal and back to Retro playing on, the bodies over the score row, the
-// big foe's frames as a shot),
-// a wrong ROM gets a message naming the right one, the visitor's own ROM
-// (read from $GP_ROM_DIR by the browser, never copied) gives the
-// original's look and layout (and its big foe's paper frames as a shot),
-// played from power-on through 25m into 75m (on Original Edition through
-// 25m in 50m's slot), 75m shot in the ROM's art and in Paper, and on to
-// 25m in 100m's slot,
-// Paper chosen on its settings screen is drawn and
-// a mode change after it plays on, and "Unload ROM" returns to Rivet Rodeo. Every request
+// with no ROM nothing plays and the page says so (its title, the
+// how-to-play panel), a wrong ROM gets a message naming the right one, the
+// visitor's own ROM (read from $GP_ROM_DIR by the browser, never copied)
+// plays in the page's theme (Turnips, large art drawn by the game's
+// module) and in the original's look and layout, through every stage in
+// the real game's order, each shot in the ROM's art and in the theme, the
+// settings screen's theme and mode changes play on, and "Unload ROM"
+// leaves no game playing. Every request
 // any frame makes is logged: each must be a GET with no body to the page's
 // own server (or a blob: URL), and no WebSocket may open, so nothing of
 // the ROM leaves the browser.
@@ -372,9 +369,9 @@ function audioProbe() {
 // A section's own server, browser context, page and the helpers its checks
 // use. Every file of the bundle the server is asked for is noted in
 // `S.read`; the section is reused only while those files are unchanged.
-// `opts.paper === false` serves the paper version's frame as an empty
-// page until a ROM is loaded, so a section about ROM mode reads none of
-// Rivet Rodeo's pictures (the paper sections and the new visitors load it).
+// `opts.paper === false` serves the page's own preview (the stand-ins'
+// game) as an empty page, so a section about ROM mode reads none of its
+// pictures; the page itself no longer opens it.
 async function session(browser, name, opts = {}) {
   const S = { name, lines: [], failures: [], read: new Set(), files: [], requests: [], sockets: [], errors: [], violations: [], runs: new Map() };
   S.check = (ok, what) => {
@@ -987,114 +984,58 @@ async function session(browser, name, opts = {}) {
     await p.waitForFunction(() => document.getElementById("game").src.includes("files=idb:"), null, { timeout: 5000 });
     return said;
   };
+  // The page done installing (page.js sets __page once the game and its
+  // content are in this browser, or couldn't be): true when the game is.
+  S.installed = async (ms = 60000) => {
+    await p.waitForFunction(() => window.__page !== undefined, null, { timeout: ms }).catch(() => {});
+    return (await installedOf(p)) !== null;
+  };
+  // Canvas pixels to a game pixel in the game's frame: more than 1 while a
+  // large-art look (gp_present::art) is drawn.
+  S.artScale = async () => (await game()).evaluate(() => document.getElementById("game").gpScale ?? 1);
   return S;
 }
 
 // ---- The sections ----
 
-// The paper version, at once: its title, the how-to-play panel, the four
-// options, the settings screen and its button, Normal and back to Retro,
-// and the line naming a theme the lift couldn't offer.
-async function paperPage(S) {
-  const { p, check, gp, key, waitFrames, settings, runs_, errors } = S;
+// The page with no ROM: installed with no click, its title, nothing
+// playing and the header saying so, the line naming the ROM it takes, the
+// how-to-play panel, and a theme the lift couldn't offer named in words.
+async function noRomPage(S) {
+  const { p, check, errors } = S;
   await p.goto(`${S.origin}/${entry}`);
-  check(await waitFrames(30), "the paper version starts with no click");
-  check((await gp(() => window.__gp.error)) === null, "the preview loads without an error");
+  check(await S.installed(), "the game is installed with no click");
   const title = await p.title();
   check(title === page.title, `the page is titled ${page.title} (${title})`);
-  check(!/donkey|kong|mario|nintendo|pauline/i.test(await p.locator("header").innerText()), "the header names no Nintendo game or character");
-  const cfg = JSON.parse(readFileSync(join(playDir, "preview.json"), "utf8"));
-  check(cfg.title === page.title, `the paper game is ${cfg.title}`);
-  await p.waitForTimeout(800);
-  await S.shot("paper-title.png");
+  check(!/mario|pauline|jumpman/i.test(await p.locator("header").innerText()), "the header names no Nintendo character");
+  check(!(await p.locator("#game").getAttribute("src")) && !(await p.locator("#game").isVisible()), "nothing plays until a ROM is loaded");
+  check((await p.locator("#mode").innerText()) === "No ROM loaded", "and the header says so");
+  check(await p.locator("#load-label").isVisible(), "Load your own ROM is offered");
+  const help = await p.locator("#rom-help").innerText();
+  check(help.includes(page.rom.name) && /never uploaded/.test(help), `the line under it names the ROM it takes and says it isn't uploaded (${help.slice(0, 80)}...)`);
+  await S.shot("no-rom.png");
   // The how-to-play panel: open on a first visit, collapses, and stays
-  // collapsed after a reload (localStorage), and never covers the game.
+  // collapsed after a reload (localStorage).
   const panel = p.locator("#howto");
   check(await panel.isVisible(), "the how-to-play panel is open on a first visit");
-  const pb = await panel.boundingBox();
-  const fb = await p.locator("#game").boundingBox();
-  check(pb.y + pb.height <= fb.y + 1, `the panel sits above the game (panel ends ${Math.round(pb.y + pb.height)}, game starts ${Math.round(fb.y)}), ${Math.round(pb.height)} px tall`);
   check(/arrows move, X jumps, Enter starts/.test(await panel.innerText()) && /Esc or the Settings button/.test(await panel.innerText()), "it names the controls and the settings");
   check(await p.locator("#settings").isVisible(), "the Settings button is visible");
-  await S.shot("howto-open.png");
   await p.locator("#howto-toggle").click();
   check(!(await panel.isVisible()), "the toggle collapses it");
   check((await p.locator("#howto-toggle").getAttribute("aria-expanded")) === "false", "and says so (aria-expanded)");
-  await S.shot("howto-collapsed.png");
   await p.reload();
   check(!(await p.locator("#howto").isVisible()), "it stays collapsed after a reload");
-  await waitFrames(30);
-  await S.shot("howto-collapsed-reload.png");
   await p.locator("#howto-toggle").click();
   check(await p.locator("#howto").isVisible(), "the toggle opens it again");
   await p.reload();
   check(await p.locator("#howto").isVisible(), "and it stays open after a reload");
-  check(await waitFrames(30), "the game plays after the reloads");
-  // The four start options: the cursor moves with Select (Tab), and Start
-  // (Enter) plays the one picked.
-  for (let i = 0; i < 3; i++) {
-    await key("Tab");
-    await p.waitForTimeout(150);
-  }
-  await S.shot("paper-title-option4.png");
-  await key("Tab");
-  await p.waitForTimeout(150);
-  await key("Enter");
-  // The stage's setup holds the screen blank for about six seconds.
-  await p.waitForTimeout(7000);
-  for (let i = 0; i < 3; i++) await key("ArrowRight", 400);
-  await key("x");
-  await p.waitForTimeout(600);
-  await S.shot("paper-play.png");
-  await key("Escape");
-  await p.waitForTimeout(300);
-  check(await gp(() => window.__gp.settingsOpen), "Esc opens the in-game settings screen");
-  await S.shot("paper-settings.png");
-  await key("Escape");
-  await p.waitForTimeout(300);
-  check(!(await gp(() => window.__gp.settingsOpen)), "Esc closes it");
-  await key("F1");
-  await p.waitForTimeout(300);
-  check(await gp(() => window.__gp.settingsOpen), "F1 still opens it");
-  await key("Escape");
-  await p.waitForTimeout(300);
-  // The top bar's Settings button opens the same screen, and the focus goes
-  // back to the game, so Esc closes it with no click on the game.
-  check(await p.locator("#settings").isVisible(), "the top bar has a Settings button");
-  await p.locator("#settings").click();
-  await p.waitForTimeout(300);
-  check(await gp(() => window.__gp.settingsOpen), "the Settings button opens the in-game screen");
-  check(await p.evaluate(() => document.activeElement === document.getElementById("game")), "the focus is back on the game");
-  await S.shot("paper-settings-button.png");
-  await key("Escape");
-  await p.waitForTimeout(300);
-  check(!(await gp(() => window.__gp.settingsOpen)), "Esc closes it after the button");
-  // The button pressed again closes the screen too, and Esc then doesn't
-  // open it again.
-  await p.locator("#settings").click();
-  await p.waitForTimeout(300);
-  await p.locator("#settings").click();
-  await p.waitForTimeout(300);
-  check(!(await gp(() => window.__gp.settingsOpen)), "the Settings button pressed again closes the screen");
-  // Normal, then back to Retro: each close starts the game again from
-  // power-on, and it plays on (the user saw it freeze, 2026-11-04).
-  let r = await settings(["ArrowRight"]);
-  check(r.profile === "normal" && !r.open && r.steps > 30 && !r.error, `Settings to Normal, closed: the game plays (${runs_(r)})`);
-  r = await settings(["ArrowLeft"]);
-  check(r.profile === "retro" && !r.open && r.steps > 30 && !r.error, `Settings back to Retro, closed: the game plays (${runs_(r)})`);
-  r = await settings(["ArrowRight"], "button");
-  check(r.profile === "normal" && !r.open && r.steps > 30 && !r.error, `Normal again, closed with the Settings button: the game plays (${runs_(r)})`);
-  r = await settings(["ArrowLeft"]);
-  check(r.profile === "retro" && !r.open && r.steps > 30 && !r.error, `and back to Retro (${runs_(r)})`);
-  await S.shot("paper-settings-retro-again.png");
-  check(errors.length === 0, `no page errors (${errors.join("; ")})`);
-
   // A ROM theme the lift couldn't offer is named under the mode line, in
   // words a player reads. The lift's result is made up here (its reasons
   // are crates/gp-web-lift's), since a real one needs the person's ROM;
   // gp-web-lift's own test lifts a theme that can't load and one that
   // can't draw.
-  check(!(await p.locator("#skipped").isVisible()), "the paper version names no theme it couldn't offer");
+  await S.installed();
+  check(!(await p.locator("#skipped").isVisible()), "with no ROM no theme is named as not offered");
   await p.evaluate(() =>
     window.__page.showSkipped([
       { id: "small", title: "Small Tiles", reason: "it doesn't fit the art read from your ROM", detail: "themes/small/tiles.pix: a restyle of `tiles` is 8 by 8, not 128 by 128" },
@@ -1111,117 +1052,11 @@ async function paperPage(S) {
   check(!/[`_]|\.pix|sha-?256|restyle/i.test(skippedText), "in plain words, with no file names or code terms");
   const mb = await p.locator("#mode").boundingBox();
   const sb = await skippedLine.boundingBox();
-  const gb = await p.locator("#game").boundingBox();
-  check(sb.y >= mb.y + mb.height - 1 && sb.y + sb.height <= gb.y + 1, `the line sits under the mode line and above the game (mode ends ${Math.round(mb.y + mb.height)}, line ${Math.round(sb.y)} to ${Math.round(sb.y + sb.height)})`);
+  check(sb.y >= mb.y + mb.height - 1, `the line sits under the mode line (mode ends ${Math.round(mb.y + mb.height)}, line ${Math.round(sb.y)})`);
   await S.shot("theme-not-offered.png");
-  await p.evaluate(() => window.__page.play("paper"));
-  check(!(await skippedLine.isVisible()), "and the paper version hides it again");
-  await waitFrames(30);
-}
-
-// The runtime shell's saves and rewind (docs/shell.md) in Rivet Rodeo:
-// Shift+1 saves while paused, into IndexedDB under the standard's slot
-// name; 1 loads it back onto the hash of the frame saved; held Backspace
-// steps back onto states the run passed through. Then the seven save
-// features.
-async function paperSaves(S) {
-  const { p, check, gp, key, waitFrames, errors } = S;
-  await p.goto(`${S.origin}/${entry}`);
-  check(await waitFrames(30), "the paper version starts");
-  const cfg = JSON.parse(readFileSync(join(playDir, "preview.json"), "utf8"));
-  const last = () => gp(() => window.__gp.hashes[window.__gp.hashes.length - 1]);
-  await key("F2");
-  await p.waitForTimeout(300);
-  const savedHash = await last();
-  await p.keyboard.down("Shift");
-  await key("1");
-  await p.keyboard.up("Shift");
-  await p.waitForTimeout(500);
-  const keptSave = await S.keptFile(`${cfg.model ?? cfg.title}/saves/slot-1.gpsave`);
-  check(keptSave !== null && String.fromCharCode(...keptSave.slice(0, 4)) === "GPSV", `Shift+1 keeps a save record in IndexedDB (${keptSave ? keptSave.length : 0} bytes)`);
-  await key("F2");
-  check(await waitFrames((await gp(() => window.__gp.hashes.length)) + 60), "the game plays on after a save");
-  await key("F2");
-  await key("1");
-  await p.waitForTimeout(300);
-  check((await last()) === savedHash, "1 loads slot 1 onto the hash of the frame saved");
-  await key("F2");
-  await waitFrames((await gp(() => window.__gp.hashes.length)) + 60);
-  const before = await gp(() => window.__gp.hashes.length);
-  await key("Backspace", 400);
-  const back = await gp((n) => {
-    const h = window.__gp.hashes;
-    const seen = new Set(h.slice(0, n));
-    return h.slice(n).filter((x) => seen.has(x)).length;
-  }, before);
-  check(back > 3, `held Backspace rewinds onto states the run passed through (${back} steps)`);
-  check(errors.length === 0, `no page errors after saves and rewind (${errors.join("; ")})`);
-  await S.savesCheck("paper", "Rivet Rodeo");
-}
-
-// Rivet Rodeo's model baseline that clears the stage three times
-// (templates/rivet-rodeo/baselines/clear-and-loop.toml), played to
-// frames of it: the big foe's poses, and the bodies over the score row.
-const gcBaseline = join(repo, "../games/donkey-kong/open/baselines/clear-and-loop.toml");
-async function paperFrames(S) {
-  const { p, check, gp, waitFrames } = S;
-  await p.goto(`${S.origin}/${entry}`);
-  check(await waitFrames(30), "the paper version starts");
-  const gcBase = readFileSync(gcBaseline, "utf8");
-  const gcHolds = JSON.parse(/^holds = (\[.*\])$/m.exec(gcBase)[1]);
-  S.runs.set("gc-clear", framesOf(gcHolds, Number(/^frames = (\d+)/m.exec(gcBase)[1])));
-  const paperSrc = await p.locator("#game").getAttribute("src");
-  const gcAt = async (frame) => {
-    // The frame's old document is marked, so its state isn't taken for the
-    // new one's while the new one loads.
-    await gp(() => (window.__checkOld = true)).catch(() => {});
-    await p.locator("#game").evaluate((f, s) => (f.src = s), `${paperSrc}${paperSrc.includes("?") ? "&" : "?"}run=gc-clear&from=${frame}&to=${frame}`);
-    await p.waitForFunction(() => document.getElementById("game").src.includes("run="), null, { timeout: 5000 });
-    const t0 = Date.now();
-    while (Date.now() - t0 < 30000) {
-      const st = await gp(() => (window.__checkOld ? null : (window.__gp?.state?.() ?? null))).catch(() => null);
-      if (st && st.frame >= frame) return st;
-      await p.waitForTimeout(100);
-    }
-    return null;
-  };
-  // Cleared at 1733 and 3306: at each clear and a second after, a body on
-  // the HUD's tiles is drawn over them (the user saw half the hero go
-  // behind the score, 2026-11-04). In this run no body reaches them
-  // (frames 100 to 5575 every 25, 2026-11-04), so the counts are 0 and
-  // the guard is gp_present's test
-  // a_body_is_drawn_over_the_huds_fields_as_a_sprite_over_the_background.
-  for (const f of [1733, 1793, 3306, 3366]) {
-    const st = await gcAt(f);
-    await p.waitForTimeout(300);
-    const o = await S.overHud();
-    if (f === 1793) await S.shot("paper-clear-score-row.png");
-    check(!!st && o.under === 0, `frame ${f} (${st?.frame}): no body pixel is drawn under the HUD's tiles (${o.over} body pixels on them, ${o.under} under)`);
-  }
-  // The big foe's frames side by side at 4x, for a person to see that
-  // each hand is whole (the user saw half hands, 2026-11-04;
-  // theme_paper::tests::the_big_foes_hands_are_whole_and_one_size_in_every_box).
-  await p.evaluate(async () => {
-    const cfg = await (await fetch("/__check/play/preview.json")).json();
-    const ims = [];
-    for (const f of cfg.pictures) {
-      const im = new Image();
-      im.src = `/__check/play/assets/${f}`;
-      await im.decode();
-      if (im.width === cfg.kinds.kong?.size[0] && im.height === cfg.kinds.kong?.size[1]) ims.push(im);
-    }
-    const c = document.createElement("canvas");
-    c.id = "check-sheet";
-    [c.width, c.height] = [ims.length * 52 * 4, 32 * 4];
-    Object.assign(c.style, { position: "fixed", left: "0", top: "0", width: `${c.width}px`, height: `${c.height}px`, background: "#efe6cf", zIndex: 9 });
-    const x = c.getContext("2d");
-    x.imageSmoothingEnabled = false;
-    ims.forEach((im, i) => x.drawImage(im, i * 52 * 4, 0, im.width * 4, im.height * 4));
-    document.body.append(c);
-  });
-  await p.locator("#check-sheet").screenshot({ path: S.file("paper-big-foe-frames.png") });
-  await p.evaluate(() => document.getElementById("check-sheet").remove());
-  check(await S.reframe(paperSrc), "the paper version plays again after the baseline's frames");
+  await p.evaluate(() => window.__page.play("none"));
+  check(!(await skippedLine.isVisible()), "and no ROM playing hides it again");
+  check(errors.length === 0, `no page errors (${errors.join("; ")})`);
 }
 
 // A wrong ROM: a made-up image, no game's.
@@ -1242,16 +1077,18 @@ async function wrongRom(S) {
 
 // The visitor's own ROM, read by the browser where it lies: lifted with
 // every asset found (a ROM loaded only to play, with the counts LOADS
-// gives) and every ROM theme offered, its big foe's paper
-// frames, the title, sound from Start and with the context held 4 s, then
-// the settings screen in ROM mode: Theme to Paper, then Normal and back to
-// Retro, each closed with the game playing on. (Paper failed with "present
+// gives) and every ROM theme offered, opened in the page's theme (Turnips,
+// its large art drawn by the module), the title, sound from Start and with
+// the context held 4 s, the settings screen and its button, then Theme to
+// Original, Normal and back to Retro, and Theme back to Turnips, each
+// closed with the game playing on. (A theme change failed with "present
 // text doesn't start with `gp-present 15`" and the next restart froze the
 // game, 2026-11-04.)
 async function romPlay(S, { name, sha, rom }) {
   const { p, check, gp, key, waitFrames, settings, runs_ } = S;
   await p.goto(`${S.origin}/${entry}`);
   const said = await S.loadRom(rom);
+  const tag = sha.slice(0, 8);
   check(true, `${name} is lifted in the browser: ${said}`);
   const notOffered = (await p.locator("#skipped").isVisible()) ? await p.locator("#skipped").innerText() : "";
   check(!notOffered, `every ROM theme the page ships is offered with ${name}${notOffered ? `: "${notOffered}"` : ""}`);
@@ -1260,52 +1097,29 @@ async function romPlay(S, { name, sha, rom }) {
   if (!load) check(/all \d+ of its assets found/.test(said), `every asset of ${name} is found`);
   else {
     // A ROM loaded only to play: the page says how many of the model's
-    // assets it found, names those filled from the paper version and
-    // counts those left blank, as the lift's result has them.
+    // assets it found, names those filled with stand-ins and counts those
+    // left blank, as the lift's result has them.
     const by = (k) => (lifted.assets ?? []).filter((a) => a.from === k).length;
     const got = { found: by("same") + by("changed"), of: lifted.assets?.length ?? 0, filled: by("filled"), blank: by("blank") };
-    check(JSON.stringify(got) === JSON.stringify(load), `${name}, a ROM ${lifted.plays} loads to play, lifts with ${load.found} of ${load.of} assets found, ${load.filled} filled from the paper version and ${load.blank} left blank (${got.found} of ${got.of}, ${got.filled} filled, ${got.blank} blank)`);
-    const filledNames = /filled in from the paper version: ([^;.]*)/.exec(said)?.[1]?.split(", ").length ?? 0;
+    check(JSON.stringify(got) === JSON.stringify(load), `${name}, a ROM ${lifted.plays} loads to play, lifts with ${load.found} of ${load.of} assets found, ${load.filled} filled with stand-ins and ${load.blank} left blank (${got.found} of ${got.of}, ${got.filled} filled, ${got.blank} blank)`);
+    const filledNames = /filled in with stand-ins: ([^;.]*)/.exec(said)?.[1]?.split(", ").length ?? 0;
     check(said.includes(`${load.found} of ${load.of} assets found`) && filledNames === load.filled && (load.blank === 0 ? !/left blank/.test(said) : said.includes(`${load.blank} left blank`)), `and the page says so (${load.found} of ${load.of} found, ${filledNames} named as filled, ${load.blank} left blank)`);
   }
   check(await waitFrames(30), "the ROM version starts");
   check((await gp(() => window.__gp.error)) === null, "and loads without an error");
   await p.waitForTimeout(800);
-  const tag = sha.slice(0, 8);
   await S.shot(`rom-${tag}-title.png`);
-  // The big foe's frames in the paper ROM theme, as this ROM's lift drew
-  // them (from the files kept in this browser), side by side at 4x, for
-  // a person to see that each hand is whole and none shows another
-  // pose's hand (the user saw vanishing hands, 2026-11-05;
-  // theme_paper::tests::a_big_foes_hands_take_only_tiles_no_other_pose_shows_otherwise).
-  const foe = await p.evaluate(async (game) => {
+  // The page's theme, with its large art (gp_present::art): a finished look
+  // the lift passed through, opened by the page.
+  const kept = await p.evaluate(async (game) => {
     const files = await (await import("./game/lift.js")).loadStored(game);
     const text = (n) => (files?.get(n) ? new TextDecoder().decode(files.get(n)) : "");
-    const cfg = JSON.parse(text("preview.json") || "{}");
-    const size = cfg.kinds?.kong?.size;
-    const look = text("themes/paper/look.txt")
-      .split("\n")
-      .filter((l) => l.startsWith("file "))
-      .map((l) => l.slice(5).trim());
-    const ims = [];
-    for (const f of cfg.pictures ?? []) {
-      if (!size || !look.includes(f) || !files.get(`themes/paper/${f}`)) continue;
-      const im = await createImageBitmap(new Blob([files.get(`themes/paper/${f}`)], { type: "image/png" }));
-      if (im.width === size[0] && im.height === size[1]) ims.push(im);
-    }
-    const c = document.createElement("canvas");
-    c.id = "check-sheet";
-    [c.width, c.height] = [Math.max(1, ims.length) * 52 * 4, 32 * 4];
-    Object.assign(c.style, { position: "fixed", left: "0", top: "0", width: `${c.width}px`, height: `${c.height}px`, background: "#efe6cf", zIndex: 9 });
-    const x = c.getContext("2d");
-    x.imageSmoothingEnabled = false;
-    ims.forEach((im, i) => x.drawImage(im, i * 52 * 4, 0, im.width * 4, im.height * 4));
-    document.body.append(c);
-    return { frames: ims.length, size };
+    return { look: text("themes/turnips/look.txt"), art: text("themes/turnips/art.txt").slice(0, 8) };
   }, page.rom.game);
-  await p.locator("#check-sheet").screenshot({ path: S.file(`rom-${tag}-paper-big-foe-frames.png`) });
-  await p.evaluate(() => document.getElementById("check-sheet").remove());
-  check(foe.frames >= 6, `${name}: the big foe's paper frames are drawn for a person to see (${foe.frames} of ${foe.size?.join(" by ")}, rom-${tag}-paper-big-foe-frames.png)`);
+  check(/^art art\.txt$/m.test(kept.look) && kept.art === "gp-art 1", `${name}: the lifted game holds the page's theme, Turnips, as a finished look`);
+  check((await gp(() => window.__gp.theme)) === "turnips", `${name}: the ROM opens in it`);
+  const scale = await S.artScale();
+  check(scale > 1, `${name}: drawn in its large art, ${scale} canvas pixels to a game pixel (rom-${tag}-title.png)`);
   check((await p.title()) === page.title, `with a ROM loaded the page is still titled ${page.title}`);
   check((await p.textContent("#title")) === page.title, `with a ROM loaded the header still says ${page.title}`);
   await S.soundReset(p, await S.game());
@@ -1332,21 +1146,52 @@ async function romPlay(S, { name, sha, rom }) {
   await p.waitForTimeout(6000);
   const late = await S.soundOf(p, await S.game());
   check(late.held === 4000 && late.loud > 0 && late.lead !== null && late.lead < 0.3, `${name}: with the context held 4 s, the sound is played at once when it runs (${late.lead === null ? "nothing played" : late.lead.toFixed(2) + " s ahead"}, ${late.loud} frames with sound)`);
-  // The settings screen in ROM mode.
+  // The settings screen in ROM mode: Esc, F1 and the top bar's button open
+  // it, and the focus goes back to the game, so Esc closes it with no click.
   check(await S.reframe(romSrc), `${name}: the ROM version plays again`);
+  await key("Escape");
+  await p.waitForTimeout(300);
+  check(await gp(() => window.__gp.settingsOpen), "Esc opens the in-game settings screen");
+  await S.shot(`rom-${tag}-settings.png`);
+  await key("Escape");
+  await p.waitForTimeout(300);
+  check(!(await gp(() => window.__gp.settingsOpen)), "Esc closes it");
+  await key("F1");
+  await p.waitForTimeout(300);
+  check(await gp(() => window.__gp.settingsOpen), "F1 still opens it");
+  await key("Escape");
+  await p.waitForTimeout(300);
+  await p.locator("#settings").click();
+  await p.waitForTimeout(300);
+  check(await gp(() => window.__gp.settingsOpen), "the Settings button opens the in-game screen");
+  check(await p.evaluate(() => document.activeElement === document.getElementById("game")), "the focus is back on the game");
+  await key("Escape");
+  await p.waitForTimeout(300);
+  check(!(await gp(() => window.__gp.settingsOpen)), "Esc closes it after the button");
+  await p.locator("#settings").click();
+  await p.waitForTimeout(300);
+  await p.locator("#settings").click();
+  await p.waitForTimeout(300);
+  check(!(await gp(() => window.__gp.settingsOpen)), "the Settings button pressed again closes the screen");
+  // Theme: Original and Turnips, and nothing else.
   const lookWas = await gp(() => window.__gp.theme);
-  let rs = await settings(["ArrowDown", "ArrowRight"], "Escape", [["theme", "paper"]]);
+  const offered = await gp(() => window.__gp.looks?.() ?? null).catch(() => null);
+  let rs = await settings(["ArrowDown", "ArrowLeft"], "Escape", [["theme", "!=", "turnips"]]);
   const bar = async () => (await S.game()).evaluate(() => document.getElementById("game").nextElementSibling?.textContent ?? "");
   const barSaid = await bar();
-  await S.shot(`rom-${tag}-settings-paper.png`);
-  check(rs.theme === "paper" && !/not changed/i.test(barSaid) && rs.steps > 30 && !rs.error, `${name}: Theme Paper chosen on the settings screen is drawn and the game plays (theme ${lookWas} -> ${rs.theme}, "${barSaid}", ${runs_(rs)})`);
+  await S.shot(`rom-${tag}-settings-original.png`);
+  check(rs.theme === "original" && !/not changed/i.test(barSaid) && rs.steps > 30 && !rs.error, `${name}: Theme Original chosen on the settings screen is drawn and the game plays (theme ${lookWas} -> ${rs.theme}, "${barSaid}", ${runs_(rs)})`);
+  check((await S.artScale()) === 1, `${name}: in the original's pixels, one canvas pixel to a game pixel`);
   rs = await settings(["ArrowRight"], "Escape", [["profile", "normal"]]);
-  check(rs.profile === "normal" && rs.theme === "paper" && rs.steps > 30 && !rs.error, `${name}: then Normal, closed: the game plays (${runs_(rs)})`);
+  check(rs.profile === "normal" && rs.theme === "original" && rs.steps > 30 && !rs.error, `${name}: then Normal, closed: the game plays (${runs_(rs)})`);
   rs = await settings(["ArrowLeft"], "Escape", [["profile", "retro"]]);
-  check(rs.profile === "retro" && rs.theme === "paper" && rs.steps > 30 && !rs.error, `${name}: then back to Retro, closed: the game plays (${runs_(rs)})`);
+  check(rs.profile === "retro" && rs.theme === "original" && rs.steps > 30 && !rs.error, `${name}: then back to Retro, closed: the game plays (${runs_(rs)})`);
   await S.shot(`rom-${tag}-retro-again.png`);
-  rs = await settings(["ArrowDown", "ArrowLeft"], "Escape", [["theme", "!=", "paper"]]);
-  check(rs.theme !== "paper" && rs.steps > 30 && !rs.error, `${name}: and Theme back to ${rs.theme} (${runs_(rs)})`);
+  rs = await settings(["ArrowDown", "ArrowRight"], "Escape", [["theme", "turnips"]]);
+  check(rs.theme === "turnips" && rs.steps > 30 && !rs.error && (await S.artScale()) > 1, `${name}: and Theme back to Turnips, in its large art (${runs_(rs)})`);
+  await S.shot(`rom-${tag}-turnips-again.png`);
+  rs = await settings(["ArrowDown", "ArrowRight"], "Escape", [["theme", "!=", "?"]]);
+  check(["turnips", "original"].includes(rs.theme), `${name}: the theme line offers Original and Turnips only (one more step: ${rs.theme}${offered ? `, offered ${JSON.stringify(offered)}` : ""})`);
   const stored = await p.evaluate(async (game) => {
     const { loadStored } = await import("./game/lift.js");
     return (await loadStored(game))?.size ?? 0;
@@ -1357,8 +1202,8 @@ async function romPlay(S, { name, sha, rom }) {
 // The ROM's game from power-on through every stage it has, in the real
 // game's order (ROUTES' `plays`): the lifted model's stages list plays
 // that order, and a run clears each stage in turn. Each stage starts with
-// Mario at his start, is shown in the ROM's art and in Paper with its big
-// foe and what it has about (rom-TAG-25m.png, rom-TAG-25m-paper.png, and
+// Mario at his start, is shown in the ROM's art and in Turnips with its big
+// foe and what it has about (rom-TAG-25m.png, rom-TAG-25m-turnips.png, and
 // so on) and is cleared; the level played after each clear is the next
 // of `plays`, so a stage that plays another level fails. After 100m, its
 // ending (rom-TAG-ending.png) and the next loop's 25m. Until 2026-11-07
@@ -1370,7 +1215,8 @@ async function romRoute(S, { name, sha, rom }) {
   await S.loadRom(rom);
   check(await S.waitFrames(30), `${name}: the ROM version starts`);
   const tag = sha.slice(0, 8);
-  const romSrc = await p.locator("#game").getAttribute("src");
+  // In the ROM's own art: the page opens it in its theme.
+  const romSrc = (await p.locator("#game").getAttribute("src")).replace(/theme=[^&]*/, "own-look");
   const found = await p.evaluate(async (game) => (await (await import("./game/lift.js")).storedMeta(game))?.found ?? null, page.rom.game);
   const template = found?.template;
   const c = ROUTES[template];
@@ -1419,11 +1265,11 @@ async function romRoute(S, { name, sha, rom }) {
   const player = (st) => st?.bodies.find((b) => b[0] === "player" && b[4]);
   const kinds = (st) => [...new Set(st?.bodies.filter((b) => b[4]).map((b) => b[0]))];
   const where = (st) => `level ${st?.level ?? "none"}, Mario at ${player(st)?.slice(1, 3) ?? "none"}`;
-  // The paper ROM theme drawn over this ROM's art, at a fixed frame of
+  // The page's theme drawn over this ROM's art, at a fixed frame of
   // the same run, so the picture compares with an earlier page's.
-  const paper = await shot(c.stages[0].clear - 120, `rom-${tag}-paper.png`, "&theme=paper");
+  const paper = await shot(c.stages[0].clear - 120, `rom-${tag}-turnips.png`, "&theme=turnips");
   const look = await gp(() => window.__gp.theme);
-  check(!!paper && look === "paper", `${name}: the paper ROM theme is drawn over its art (look ${look}, frame ${paper?.frame})`);
+  check(!!paper && look === "turnips", `${name}: the page's theme, Turnips, is drawn over its art (look ${look}, frame ${paper?.frame})`);
   for (const [i, st] of c.stages.entries()) {
     const want = c.plays[i];
     const what = `${name}, stage ${i + 1} (${st.name})`;
@@ -1434,9 +1280,9 @@ async function romRoute(S, { name, sha, rom }) {
     const mid = await shot(st.shot, `rom-${tag}-${st.name}.png`);
     const missing = st.kinds.filter((k) => !kinds(mid).includes(k));
     check(mid?.level === want && missing.length === 0, `${what} in the ROM's art at frame ${st.shot}: ${st.kinds.join(", ")} there${missing.length ? ` (missing: ${missing.join(", ")})` : ""} (level ${mid?.level}, rom-${tag}-${st.name}.png)`);
-    const midPaper = await shot(st.shot, `rom-${tag}-${st.name}-paper.png`, "&theme=paper");
+    const midPaper = await shot(st.shot, `rom-${tag}-${st.name}-turnips.png`, "&theme=turnips");
     const lookNow = await gp(() => window.__gp.theme);
-    check(midPaper?.level === want && lookNow === "paper", `${what}: and in Paper (level ${midPaper?.level}, look ${lookNow}, rom-${tag}-${st.name}-paper.png)`);
+    check(midPaper?.level === want && lookNow === "turnips", `${what}: and in Turnips (level ${midPaper?.level}, look ${lookNow}, rom-${tag}-${st.name}-turnips.png)`);
     const done = await at(st.clear + 1);
     check(done?.level === want && player(done)?.[2] <= st.top, `${what}: the run finishes it at frame ${st.clear} (${where(done)})`);
     if (i === 0) await shot(st.clear + 60, `rom-${tag}-clear.png`);
@@ -1445,8 +1291,8 @@ async function romRoute(S, { name, sha, rom }) {
   const end = await shot(c.ending.frame, `rom-${tag}-ending.png`);
   const gone = c.ending.kinds.filter((k) => !kinds(end).includes(k));
   check(end?.level === last && gone.length === 0, `${name}: 100m's ending plays at frame ${c.ending.frame}: ${c.ending.kinds.join(", ")} there${gone.length ? ` (missing: ${gone.join(", ")})` : ""} (level ${end?.level}, rom-${tag}-ending.png)`);
-  const endPaper = await shot(c.ending.frame, `rom-${tag}-ending-paper.png`, "&theme=paper");
-  check(endPaper?.level === last, `${name}: and in Paper (level ${endPaper?.level}, rom-${tag}-ending-paper.png)`);
+  const endPaper = await shot(c.ending.frame, `rom-${tag}-ending-turnips.png`, "&theme=turnips");
+  check(endPaper?.level === last, `${name}: and in Turnips (level ${endPaper?.level}, rom-${tag}-ending-turnips.png)`);
   const again = await shot(c.again.frame, `rom-${tag}-loop-2.png`);
   const [ax, ay] = player(again)?.slice(1, 3) ?? [];
   check(again?.level === c.plays[0] && ax === c.again.mario[0] && ay === c.again.mario[1], `${name}: then the game goes round, the next loop's first stage played by ${c.plays[0]} with Mario at his start ${c.again.mario} at frame ${c.again.frame} (${where(again)}, rom-${tag}-loop-2.png)`);
@@ -1515,25 +1361,57 @@ async function romDeaths(S, { name, rom }) {
 }
 
 // The seven save features in the ROM's game.
+// The runtime shell's saves and rewind (docs/shell.md) in the ROM's game:
+// Shift+1 saves while paused, into IndexedDB under the standard's slot
+// name; 1 loads it back onto the hash of the frame saved; held Backspace
+// steps back onto states the run passed through. Then the seven save
+// features.
 async function romSaves(S, { name, sha, rom }) {
-  const { p, check } = S;
+  const { p, check, gp, key, waitFrames, errors } = S;
   await p.goto(`${S.origin}/${entry}`);
   await S.loadRom(rom);
-  check(await S.waitFrames(30), `${name}: the ROM version starts`);
+  check(await waitFrames(30), `${name}: the ROM version starts`);
+  const game = await gp(() => window.__gp.game);
+  const last = () => gp(() => window.__gp.hashes[window.__gp.hashes.length - 1]);
+  await key("F2");
+  await p.waitForTimeout(300);
+  const savedHash = await last();
+  await p.keyboard.down("Shift");
+  await key("1");
+  await p.keyboard.up("Shift");
+  await p.waitForTimeout(500);
+  const keptSave = await S.keptFile(`${game}/saves/slot-1.gpsave`);
+  check(keptSave !== null && String.fromCharCode(...keptSave.slice(0, 4)) === "GPSV", `Shift+1 keeps a save record in IndexedDB (${keptSave ? keptSave.length : 0} bytes)`);
+  await key("F2");
+  check(await waitFrames((await gp(() => window.__gp.hashes.length)) + 60), "the game plays on after a save");
+  await key("F2");
+  await key("1");
+  await p.waitForTimeout(300);
+  check((await last()) === savedHash, "1 loads slot 1 onto the hash of the frame saved");
+  await key("F2");
+  await waitFrames((await gp(() => window.__gp.hashes.length)) + 60);
+  const before = await gp(() => window.__gp.hashes.length);
+  await key("Backspace", 400);
+  const back = await gp((n) => {
+    const h = window.__gp.hashes;
+    const seen = new Set(h.slice(0, n));
+    return h.slice(n).filter((x) => seen.has(x)).length;
+  }, before);
+  check(back > 3, `held Backspace rewinds onto states the run passed through (${back} steps)`);
+  check(errors.length === 0, `no page errors after saves and rewind (${errors.join("; ")})`);
   await S.savesCheck(`rom-${sha.slice(0, 8)}`, name);
 }
 
-// "Unload ROM" returns to the paper version, which plays.
+// "Unload ROM" leaves no game playing, and the page asks for a ROM again.
 async function romUnload(S, { name, rom }) {
   const { p, check, waitFrames } = S;
   await p.goto(`${S.origin}/${entry}`);
-  check(await waitFrames(30), "the paper version starts");
   await S.loadRom(rom);
   check(await waitFrames(30), `${name}: the ROM version starts`);
   await p.locator("#back").click();
   await p.waitForTimeout(300);
-  check(!(await p.locator("#game").getAttribute("src")).includes("files=idb"), "Unload ROM returns to the paper version");
-  check(await waitFrames(30), "and it plays");
+  check(!(await p.locator("#game").getAttribute("src")) && !(await p.locator("#game").isVisible()), "Unload ROM leaves no game playing");
+  check((await p.locator("#mode").innerText()) === "No ROM loaded" && (await p.locator("#load-label").isVisible()), "and the page asks for a ROM again");
 }
 
 // Sound from the game's start in ROM mode, as a new visitor plays it:
@@ -1620,9 +1498,9 @@ async function visitor(S, { rule, input, load, rom }) {
 // (2026-11-07, reported from Safari and missed here, since every section
 // starts in a fresh browser).
 async function keptLook(S, { name, rom }) {
-  const { p, check, waitFrames } = S;
+  const { p, check } = S;
   await p.goto(`${S.origin}/${entry}`);
-  await waitFrames(30);
+  await S.installed();
   await p.evaluate(() => {
     for (const m of ["donkey_kong_oe", "donkey_kong_ju", "rivet_rodeo"]) localStorage.setItem(`gp-theme:${m}`, "paper");
   });
@@ -1637,25 +1515,23 @@ async function keptLook(S, { name, rom }) {
   await g.waitForFunction(() => window.__gp && window.__gp.theme !== undefined && window.__gp.hashes?.length > 30, null, { timeout: 60000 });
   const theme = await g.evaluate(() => window.__gp.theme);
   await S.shot("kept-look.png");
-  check(theme !== "paper", `${name}: with Paper kept from an earlier visit, a ROM picked opens in its own art (theme ${JSON.stringify(theme)}, kept-look.png)`);
+  check(theme === "turnips", `${name}: with Paper kept from an earlier visit, a ROM picked opens in the page's theme, Turnips (theme ${JSON.stringify(theme)}, kept-look.png)`);
 }
 
 async function laterVisit(S, { rom }) {
   const { p, check, waitFrames } = S;
   await p.goto(`${S.origin}/${entry}`);
-  await waitFrames(30);
+  await S.installed();
   await S.loadRom(rom);
   await waitFrames(30);
   const stamp = async () => p.evaluate(async (game) => (await (await import("./game/lift.js")).storedMeta(game))?.at ?? 0, page.rom.game);
   const at0 = await stamp();
+  await p.evaluate(() => sessionStorage.setItem("check-reloaded", "1"));
   await p.reload();
-  await waitFrames(30);
-  const again = p.getByRole("button", { name: "Play my ROM version" });
-  check(await again.isVisible(), "a later visit offers Play my ROM version");
-  await p.evaluate(() => (document.getElementById("message").dataset.kind = ""));
-  await again.click();
-  await p.waitForFunction(() => ["ok", "warn", "error"].includes(document.getElementById("message").dataset.kind), null, { timeout: 60000 });
-  check((await stamp()) > at0, "and its click lifts the kept ROM again");
+  await p.waitForFunction(() => ["ok", "warn", "error"].includes(document.getElementById("message").dataset.kind) && document.getElementById("game").src.includes("files=idb:"), null, { timeout: 60000 }).catch(() => {});
+  check((await stamp()) > at0, "a later visit lifts the kept ROM again, with no click");
+  check(await waitFrames(30), "and plays it");
+  check(await p.getByRole("button", { name: "Play my ROM" }).isVisible(), "with Play my ROM there to lift it again");
   const looks = await p.evaluate(async (game) => {
     const files = await (await import("./game/lift.js")).loadStored(game);
     return JSON.parse(new TextDecoder().decode(files.get("preview.json"))).looks === true && files.has("themes/index.json");
@@ -1673,8 +1549,9 @@ async function laterVisit(S, { rom }) {
     db.close();
   }, page.rom.game);
   await p.reload();
-  await waitFrames(30);
-  check(!(await p.getByRole("button", { name: "Play my ROM version" }).isVisible()), "files an older page kept with no ROM aren't offered");
+  await S.installed();
+  await p.waitForTimeout(1000);
+  check(!(await p.getByRole("button", { name: "Play my ROM" }).isVisible()) && !(await p.locator("#game").getAttribute("src")), "files an older page kept with no ROM aren't played or offered");
   const left = await p.evaluate(async (game) => (await (await import("./game/lift.js")).loadStored(game))?.size ?? 0, page.rom.game);
   check(left === 0, `and are dropped (${left} files left)`);
 }
@@ -1687,7 +1564,7 @@ async function laterVisit(S, { rom }) {
 // repo holds no pictures). A moment with `pending` is played and its
 // picture written out, but not compared: its reference is recorded once
 // the reason is gone (remove the line and accept). A moment with `look`
-// is played in that look (`&theme=`, the Paper look a player picks in
+// is played in that look (`&theme=`, the Turnips look a player picks in
 // Settings), and fails if the frame shows another. A ROM moment with
 // `press` plays the route with those holds added (`a@1512-1513`, more
 // apart by spaces), for a moment the route itself doesn't have. `--accept-pictures`
@@ -1853,24 +1730,14 @@ async function pictureMomentsCheck(S, section, src, runOf) {
   pictureResults.set(section, found);
 }
 
-// Rivet Rodeo's moments, on its clear-and-loop baseline (as paperFrames).
-async function paperPictures(S) {
-  const { p, check, waitFrames } = S;
-  await p.goto(`${S.origin}/${entry}`);
-  check(await waitFrames(30), "the paper version starts");
-  const gcBase = readFileSync(gcBaseline, "utf8");
-  S.runs.set("gc-clear", framesOf(JSON.parse(/^holds = (\[.*\])$/m.exec(gcBase)[1]), Number(/^frames = (\d+)/m.exec(gcBase)[1])));
-  const src = await p.locator("#game").getAttribute("src");
-  await pictureMomentsCheck(S, "pictures-paper", src, () => "gc-clear");
-}
-
 // A ROM version's moments, on its route (ROUTES).
 async function romPictures(S, { name, sha, rom }) {
   const { p, check } = S;
   await p.goto(`${S.origin}/${entry}`);
   await S.loadRom(rom);
   check(await S.waitFrames(30), `${name}: the ROM version starts`);
-  const src = await p.locator("#game").getAttribute("src");
+  // The references are in the ROM's own art unless a moment names a look.
+  const src = (await p.locator("#game").getAttribute("src")).replace(/theme=[^&]*/, "own-look");
   const found = await p.evaluate(async (game) => (await (await import("./game/lift.js")).storedMeta(game))?.found ?? null, page.rom.game);
   const c = ROUTES[found?.template];
   check(!!c, `${name}: the check has a route for its model (${found?.template})`);
@@ -1894,20 +1761,23 @@ async function romPictures(S, { name, sha, rom }) {
 // ---- The registry: the deep link, the install, and what is refused ----
 
 const LINK = `p?g=${page.game}`;
+// The theme the page installs with the game (page.json's `content`), a
+// large-art look; --art-theme names another.
+const ART_THEME = opt("art-theme") ?? page.content ?? "lex00/turnips";
 const installedOf = (p, name = page.game, v = null) => p.evaluate(async ([n, ver]) => (await import("./game/install.js")).installed(n, ver), [name, v]);
 const romPlaying = (p) => p.waitForFunction(() => document.getElementById("game").src.includes("files=idb:"), null, { timeout: 60000 }).then(() => true, () => false);
 
 // A first visit by the link: the game comes from the source, whole, and the
 // page's own server holds none of it. Another visit asks for no file again.
 async function registryLink(S) {
-  const { p, check, waitFrames } = S;
+  const { p, check } = S;
   await p.addInitScript(() => {
     window.__persistAsked = 0;
     const was = navigator.storage.persist.bind(navigator.storage);
     navigator.storage.persist = () => (window.__persistAsked++, was());
   });
   await p.goto(`${S.origin}/${LINK}`);
-  check(await waitFrames(30), "by the link the open version plays with no click");
+  check(await S.installed(), "by the link the game is installed with no click");
   const rec = await installedOf(p);
   check(rec?.name === page.game && rec.files.length > 300, `it is installed in this browser (${rec?.name}@${rec?.version}, ${rec?.files.length} files)`);
   const isSource = (r) => isSourceUrl(S.origin, r.url);
@@ -1922,7 +1792,7 @@ async function registryLink(S) {
   check((await p.evaluate(() => window.__persistAsked)) === 1, "the first install asks once for storage that lasts");
   S.requests.length = 0;
   await p.reload();
-  check(await waitFrames(30), "the link plays again");
+  check(await S.installed(), "the link opens again");
   check(!S.requests.some((r) => isSource(r) && r.url.includes("/blobs/")), "a later visit fetches no file again");
   check((await p.evaluate(() => window.__persistAsked)) === 0, "a later visit doesn't ask for storage again");
 }
@@ -1932,44 +1802,36 @@ async function registryLink(S) {
 async function registryRom(S, r) {
   const { p, check, waitFrames } = S;
   await p.goto(`${S.origin}/${LINK}`);
-  check(await waitFrames(30), `${r.name}: the link opens`);
+  check(await S.installed(), `${r.name}: the link opens`);
   await S.loadRom(r.rom);
   check(await waitFrames(30), `${r.name}: the ROM plays`);
   await p.goto(`${S.origin}/${LINK}`);
   check(await romPlaying(p), `${r.name}: on a later visit the link goes straight into the game`);
   check(await waitFrames(30), `${r.name}: and it runs`);
   await p.goto(`${S.origin}/index.html`);
-  check(await waitFrames(30), `${r.name}: the page with no link still opens the open version`);
-  check(!(await p.locator("#game").getAttribute("src")).includes("files=idb:"), `${r.name}: and leaves the ROM a click away`);
+  check(await romPlaying(p), `${r.name}: the page with no link plays the kept ROM too`);
+  check(await waitFrames(30), `${r.name}: and it runs`);
 }
 
 // `c=`: a content package from the source, drawn from its own files over the
 // person's ROM.
 async function registryTheme(S, r) {
   const { p, check, gp, waitFrames } = S;
-  const link = `${LINK}&c=lex00/paper`;
+  const link = `${LINK}&c=${ART_THEME}`;
   await p.goto(`${S.origin}/${link}`);
-  check(await waitFrames(30), `${r.name}: the link with a theme opens`);
-  const c = await installedOf(p, "lex00/paper");
+  check(await S.installed(), `${r.name}: the link with a theme opens`);
+  const c = await installedOf(p, ART_THEME);
   check(c?.kind === "content", `${r.name}: the theme is installed (${c?.name}@${c?.version})`);
-  const { forRom, own } = await p.evaluate(async (rec) => {
-    const x = await import("./game/install.js");
-    const t = new TextDecoder().decode((await x.filesOf(rec, "theme")).get("theme.toml"));
-    return { forRom: /^for = .*donkey_kong/m.test(t), own: JSON.parse(new TextDecoder().decode((await x.playFiles()).get("preview.json"))).look[0] };
-  }, c);
-  check(own === "paper" && (await gp(() => window.__gp.theme)) === "paper", `${r.name}: on the open version the page draws its own look, which is this theme (${own})`);
+  const id = ART_THEME.split("/")[1];
   await S.loadRom(r.rom);
   const frameSrc = await p.locator("#game").getAttribute("src");
-  const skipped = await p.locator("#skipped").innerText();
-  if (forRom) {
-    check(frameSrc.includes("theme=paper"), `${r.name}: a theme for this ROM's game opens the game with the theme (${frameSrc})`);
-    check(await waitFrames(30), `${r.name}: it runs`);
-    check((await gp(() => window.__gp.theme)) === "paper", `${r.name}: and draws it`);
-  } else {
-    check(frameSrc.includes("own-look"), `${r.name}: a theme for the open version leaves the ROM in its own look (${frameSrc})`);
-    check(/ROM theme not offered: Paper/.test(skipped), `${r.name}: with one line saying so (${skipped})`);
-    check(await waitFrames(30), `${r.name}: the game still runs`);
-  }
+  const skipped = (await p.locator("#skipped").isVisible()) ? await p.locator("#skipped").innerText() : "";
+  check(frameSrc.includes(`theme=${id}`) && !skipped, `${r.name}: the ROM's game opens in the theme (${frameSrc}${skipped ? `; ${skipped}` : ""})`);
+  check(await waitFrames(30), `${r.name}: it runs`);
+  check((await gp(() => window.__gp.theme)) === id, `${r.name}: and draws it`);
+  const scale = await S.artScale();
+  check(scale > 1, `${r.name}: in its large art, drawn by the game's module (${scale} canvas pixels to a game pixel)`);
+  await S.shot(`registry-theme-${r.sha.slice(0, 8)}.png`);
 }
 
 // A small Wasm module with the loader's calls, whose gp_step is `step`.
@@ -1994,9 +1856,10 @@ function testModule(step, maxPages) {
 
 // The game's own module runs in a Worker, the page's own build has no game's
 // hooks, and a module that breaks a limit stops at it with a message.
-async function moduleSection(S) {
+async function moduleSection(S, withRom) {
   const { p, check, waitFrames, gp } = S;
   await p.goto(`${S.origin}/${LINK}`);
+  await S.loadRom(withRom.rom);
   check(await waitFrames(60), "the game runs");
   check((await gp(() => window.__gp.module)) === "game", "it runs the game's own module, not the page's");
   await waitFrames(600, 30000);
@@ -2105,21 +1968,21 @@ const refusedInstall = (re, what, { version } = {}) => async (S) => {
 // Installed, then the source goes bad: what is installed keeps playing and
 // the page says why it isn't refreshed.
 async function registryGoesBad(S) {
-  const { p, check, waitFrames } = S;
+  const { p, check } = S;
   await p.goto(`${S.origin}/${LINK}`);
-  check(await waitFrames(30), "installed");
+  check(await S.installed(), "installed");
   await p.context().route((u) => isSourceUrl(S.origin, u) && sourceKey(S.origin, u) === "/registry.toml", broken(() => true, flip));
   await p.goto(`${S.origin}/${LINK}`);
-  check(await waitFrames(30), "with the source's root signature broken, what is installed keeps playing");
+  check(await S.installed(), "with the source's root signature broken, what is installed is used");
   const said = await p.locator("#message").innerText();
   check(/Using the copy in this browser/.test(said), `and the page says so (${said})`);
 }
 
 // A file changed in this browser's own storage is caught before it is used.
 async function registryLocalChange(S) {
-  const { p, check, waitFrames } = S;
+  const { p, check } = S;
   await p.goto(`${S.origin}/${LINK}`);
-  check(await waitFrames(30), "installed");
+  check(await S.installed(), "installed");
   await p.evaluate(async () => {
     const db = await new Promise((ok) => (indexedDB.open("gp-installs").onsuccess = (e) => ok(e.target.result)));
     const rec = await new Promise((ok) => (db.transaction("games").objectStore("games").getAll().onsuccess = (e) => ok(e.target.result.find((v) => v.files))));
@@ -2137,12 +2000,8 @@ async function registryLocalChange(S) {
 
 const SECTIONS = [];
 const add = (name, est, run, extra = {}) => SECTIONS.push({ name, est, run, ...extra });
-add("paper-page", 30, paperPage);
-add("paper-saves", 45, paperSaves);
-add("paper-frames", 5, paperFrames, { files: [gcBaseline] });
+add("no-rom", 15, noRomPage);
 add("wrong-rom", 3, wrongRom);
-// The picture sections, one for each set of moments the references name.
-if (pictureMoments.some((m) => m.section === "pictures-paper")) add("pictures-paper", 15, paperPictures, { files: [gcBaseline, picturesFile] });
 const skips = [];
 const roms = [];
 for (const [name, sha] of Object.entries(page.rom.known_sha256 ?? {})) {
@@ -2171,11 +2030,11 @@ if (roms.length) {
 }
 
 add("registry-link", 15, registryLink);
-add("module", 15, moduleSection);
+if (roms.length) add("module", 15, (S) => moduleSection(S, roms[0]), { rom: roms[0].sha });
 for (const r of roms) {
   const tag = r.sha.slice(0, 8);
   add(`registry-rom-${tag}`, 15, (S) => registryRom(S, r), { rom: r.sha });
-  add(`registry-theme-${tag}`, 15, (S) => registryTheme(S, r), { rom: r.sha, firstLink: `${LINK}&c=lex00/paper` });
+  add(`registry-theme-${tag}`, 15, (S) => registryTheme(S, r), { rom: r.sha, firstLink: `${LINK}&c=${ART_THEME}` });
 }
 if (!registryStopped) {
   add("registry-links", 15, registryLinks);

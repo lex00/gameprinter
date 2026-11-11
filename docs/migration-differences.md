@@ -10,3 +10,5 @@ Each of these was the owner's decision, on 2026-11-08 or 2026-11-09.
 | 4.3 | The old repo archived read-only | It has no remote, so its archive is the read-only bundle `~/Documents/archives/game-printer-9003564a.bundle`, with its full history. The working folder is unchanged |
 
 Signing is off for `lex00/rivetrodeo`, by the owner's decision on 2026-11-09: there is one publisher, and signing shouldn't block work until there is another. The code and its tests stay, and a source opts in by having a root key in `scripts/web/sources.toml`. Hashes are still checked. `scripts/web/resign-registry.sh` is for a signed registry, whose list files expire after 7 days.
+
+On 2026-11-11 the owner retired Rivet Rodeo, the open version, and replaced `lex00/rivetrodeo` with a new public, unsigned registry, `lex00/gp-registry`. The page moved to `nes-donkey-kong.intentius.workers.dev` and plays only a ROM the visitor loads, with the clay theme `lex00/turnips` (its own repo) installed beside the game. The old page and `rivetrodeo` are left as they were.

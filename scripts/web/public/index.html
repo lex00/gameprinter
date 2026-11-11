@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rivet Rodeo</title>
+<title>Game Printer</title>
 <link rel="stylesheet" href="page.css">
 </head>
 <body>
 <header>
-  <h1 id="title">Rivet Rodeo</h1>
-  <span id="mode">Paper version</span>
+  <h1 id="title">Game Printer</h1>
+  <span id="mode">No ROM loaded</span>
   <span class="spacer"></span>
   <button id="howto-toggle" class="quiet" type="button" aria-expanded="true" aria-controls="howto">How to play</button>
   <button id="settings" class="quiet" type="button">Settings</button>
@@ -20,10 +20,10 @@
 <section id="howto" aria-label="How to play">
   <p><b>Controls:</b> arrows move, X jumps, Enter starts. A controller works too.</p>
   <p><b>Settings:</b> press Esc or the Settings button (top right) to switch theme and mode.</p>
-  <p>Load your own ROM for the original look and level.</p>
+  <p>Load your own ROM to play. Under Settings, Theme switches between the original's art and a theme.</p>
 </section>
 <main>
-  <iframe id="game" title="The game" allow="gamepad; autoplay"></iframe>
+  <iframe id="game" title="The game" allow="gamepad; autoplay" hidden></iframe>
 </main>
 <footer>
   <div id="message" role="status" aria-live="polite"></div>
@@ -31,7 +31,7 @@
   <details id="about-box">
     <summary>About</summary>
     <div id="about">
-      <p>Rivet Rodeo is an original game made with Game Printer.</p>
+      <p>This page plays a ROM you own, made playable in the browser with Game Printer, in the original's art or in a theme.</p>
       <p>"Load your own ROM" accepts a Donkey Kong ROM file that you own. The page checks and reads it in your browser. It is never uploaded.</p>
       <p>This page is not affiliated with or endorsed by Nintendo. Donkey Kong is a trademark of Nintendo, named here only to say which file is accepted.</p>
       <p>No analytics, no cookies, no tracking. Your settings, and a ROM you load with the pieces read from it, stay in this browser's storage on your device, so "Play my ROM version" can read it again on a later visit. "Forget my ROM data" removes the ROM and its pieces.</p>

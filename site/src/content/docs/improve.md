@@ -7,7 +7,7 @@ prompt: |
 
 Every game here is a model: text files that say how the game behaves. A set of recorded play clips, the corpus, shows whether the model still matches the original. You change the model, the gate plays every clip again, and the change is good if no clip got worse.
 
-Today the game to improve is Donkey Kong and its open version, Rivet Rodeo. They share one model.
+Today the game to improve is Donkey Kong, played from a ROM you own.
 
 ## What you need
 
@@ -48,16 +48,16 @@ A patch can only change one game's folder. If it removes a clip on purpose, name
 | `fidelity.toml` | What has to match the original, and how closely |
 | `corpus.toml`, `inputs/` | The clips: button presses only |
 | `assets/` | Where the art is in a ROM: addresses, never the art |
-| `open/` | Rivet Rodeo, the open version |
+| `open/` | Rivet Rodeo, the retired open version. The page doesn't offer it; its art fills in what a ROM lacks |
 
 ## Try something without a fork
 
 `gp game fetch` puts a published version in a folder of its own. The folder has to be outside any git repo.
 
 ```sh
-curl -s https://raw.githubusercontent.com/lex00/rivetrodeo/main/catalog.toml
-gp game fetch lex00/donkey-kong@1.0.5 --id THE_ID_FROM_THE_CATALOG \
-  --from https://raw.githubusercontent.com/lex00/rivetrodeo/main \
+curl -s https://raw.githubusercontent.com/lex00/gp-registry/main/catalog.toml
+gp game fetch lex00/donkey-kong@1.0.8 --id THE_ID_FROM_THE_CATALOG \
+  --from https://raw.githubusercontent.com/lex00/gp-registry/main \
   --into ~/my-donkey-kong --rom-dir "$GP_ROM_DIR"
 ```
 

@@ -34,7 +34,9 @@ rm -rf "$repo"
 mkdir -p "$repo/templates" "$repo/sources"
 rsync -a --exclude target --exclude .git "$real/" "$repo/"
 mkdir -p "$repo/templates/donkey-kong-oe" "$repo/templates/rivet-rodeo"
-rsync -a --exclude open --exclude ext "$game/" "$repo/templates/donkey-kong-oe/"
+# The ROM's template without the paper theme: Rivet Rodeo is retired, and a
+# ROM is offered its own art and the page's theme (GP_PAGE_CONTENT) only.
+rsync -a --exclude open --exclude ext --exclude themes/paper "$game/" "$repo/templates/donkey-kong-oe/"
 rsync -a --exclude generators "$game/open/" "$repo/templates/rivet-rodeo/"
 cp "$game/roms.toml" "$repo/sources/nes.toml"
 stage="$repo/templates/rivet-rodeo"
@@ -57,11 +59,13 @@ lap "build-preview.sh"
 "$repo/scripts/web/build-lift.sh" "$out/game" "$rom_game" "$stage" "$assets"
 lap "build-lift.sh"
 
-# The game's name, kept in one place (scripts/rivet-rodeo/name.txt).
-title="$(python3 -I -c 'import sys; print(open(sys.argv[1]).read().strip())' "$game/open/generators/name.txt")"
-python3 -I - "$out" "$title" "$out/game/lift/game.json" "$repo/sources/nes.toml" "$repo/scripts/web/sources.toml" "${GP_PAGE_SOURCE:-staging}" "$game/package.toml" <<'EOF'
+# The page's name: GP_PAGE_TITLE, else the game package's title. The page
+# plays a visitor's ROM, so it is named for the game, and GP_PAGE_CONTENT
+# names a theme package installed with the game (lex00/turnips, say).
+title="${GP_PAGE_TITLE:-$(python3 -I -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["title"])' "$game/package.toml")}"
+python3 -I - "$out" "$title" "$out/game/lift/game.json" "$repo/sources/nes.toml" "$repo/scripts/web/sources.toml" "${GP_PAGE_SOURCE:-staging}" "$game/package.toml" "${GP_PAGE_CONTENT:-}" <<'EOF'
 import json, sys, tomllib
-out, title, game_file, registry, sources_file, source_name, package = sys.argv[1:]
+out, title, game_file, registry, sources_file, source_name, package, content = sys.argv[1:]
 game = json.load(open(game_file))
 sources = tomllib.load(open(registry, "rb"))["source"]
 names, known = [], {}
@@ -75,6 +79,7 @@ page = {
     "title": title,
     "game": tomllib.load(open(package, "rb"))["package"]["name"],
     "source": tomllib.load(open(sources_file, "rb"))[source_name],
+    "content": content or None,
     "rom": {
         "game": game["game"],
         "title": game["title"],
@@ -87,9 +92,8 @@ page = {
 }
 open(f"{out}/page.json", "w").write(json.dumps(page, indent=1) + "\n")
 EOF
-sed "s|<title>Rivet Rodeo</title>|<title>$title</title>|; s|<h1 id=\"title\">Rivet Rodeo</h1>|<h1 id=\"title\">$title</h1>|" \
+sed "s|<title>Game Printer</title>|<title>$title</title>|; s|<h1 id=\"title\">Game Printer</h1>|<h1 id=\"title\">$title</h1>|" \
   "$repo/scripts/web/public/index.html" > "$out/index.html"
-sed "s|Rivet Rodeo is an original|$title is an original|" "$out/index.html" > "$out/index.html.tmp" && mv "$out/index.html.tmp" "$out/index.html"
 cp "$repo/scripts/web/public/page.js" "$repo/scripts/web/public/boot.js" "$repo/scripts/web/public/page.css" "$repo/scripts/web/public/_headers" "$out/"
 printf '/p /index.html 200\n' > "$out/_redirects"
 cp "$repo/scripts/web/public/install.js" "$out/game/"

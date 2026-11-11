@@ -116,7 +116,16 @@ fn reads_rules() {
 }
 
 #[test]
-fn a_rule_for_a_missing_picture_is_refused() {
+fn a_rule_for_a_missing_picture_is_left_out_but_a_look_for_another_build_is_refused() {
+    // One dump of a game can lack a picture another has (a glyph): the rest
+    // of the look still draws.
+    let r = ArtRules::read(
+        "gp-art 1\npic nope.png a.png 16 16 0 0\npic hero.png h.png 16 16 0 0\nheld nope.png",
+    )
+    .unwrap();
+    let a = Art::new(r, &present()).unwrap();
+    assert!(a.pics[1].is_some());
+    // None of its pictures: a look made for another game.
     let r = ArtRules::read("gp-art 1\npic nope.png a.png 16 16 0 0").unwrap();
     assert!(Art::new(r, &present()).is_err());
 }
