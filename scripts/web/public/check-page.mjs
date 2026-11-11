@@ -1011,6 +1011,13 @@ async function noRomPage(S) {
   check(!(await p.locator("#game").getAttribute("src")) && !(await p.locator("#game").isVisible()), "nothing plays until a ROM is loaded");
   check((await p.locator("#mode").innerText()) === "No ROM loaded", "and the header says so");
   check(await p.locator("#load-label").isVisible(), "Load your own ROM is offered");
+  {
+    // In the middle of the empty page, large, not a black screen.
+    const b = await p.locator("#load-label").boundingBox();
+    const m = await p.locator("main").boundingBox();
+    const off = Math.abs(b.x + b.width / 2 - (m.x + m.width / 2)) + Math.abs(b.y + b.height / 2 - (m.y + m.height / 2));
+    check(b.height >= 50 && off < m.height / 4, `and it is a large button in the middle of the page (${Math.round(b.width)}x${Math.round(b.height)}, ${Math.round(off)} px off centre)`);
+  }
   const help = await p.locator("#rom-help").innerText();
   check(help.includes(page.rom.name) && /never uploaded/.test(help), `the line under it names the ROM it takes and says it isn't uploaded (${help.slice(0, 80)}...)`);
   await S.shot("no-rom.png");

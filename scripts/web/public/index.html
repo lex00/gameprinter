@@ -13,7 +13,6 @@
   <span class="spacer"></span>
   <button id="howto-toggle" class="quiet" type="button" aria-expanded="true" aria-controls="howto">How to play</button>
   <button id="settings" class="quiet" type="button">Settings</button>
-  <label class="button" id="load-label">Load your own ROM<input id="rom" type="file"></label>
   <button id="back" class="quiet" hidden>Unload ROM</button>
   <span id="skipped" hidden></span>
 </header>
@@ -23,11 +22,15 @@
   <p>Load your own ROM to play. Under Settings, Theme switches between the original's art and a theme.</p>
 </section>
 <main>
+  <section id="start" aria-label="Load a ROM">
+    <label class="button big" id="load-label">Load your own ROM<input id="rom" type="file"></label>
+    <p id="drop-hint">or drop the ROM file here</p>
+    <div id="rom-help"></div>
+  </section>
   <iframe id="game" title="The game" allow="gamepad; autoplay" hidden></iframe>
 </main>
 <footer>
   <div id="message" role="status" aria-live="polite"></div>
-  <div id="rom-help"></div>
   <details id="about-box">
     <summary>About</summary>
     <div id="about">

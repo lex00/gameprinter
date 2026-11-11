@@ -223,7 +223,7 @@ function play(mode, found = null, skipped = []) {
     ? `Playing your own ${romName(found)} ROM: ${foundText(found)}, kept in this browser only`
     : "No ROM loaded";
   $("back").hidden = !romMode;
-  $("load-label").hidden = romMode;
+  $("start").hidden = romMode;
   showSkipped(romMode ? skipped : []);
 }
 
@@ -292,6 +292,20 @@ else {
   $("rom").addEventListener("change", picked);
   $("rom").addEventListener("input", picked);
 }
+
+// A ROM file dropped on the start panel loads as if picked.
+const start = $("start");
+start.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  start.classList.add("over");
+});
+start.addEventListener("dragleave", () => start.classList.remove("over"));
+start.addEventListener("drop", (e) => {
+  e.preventDefault();
+  start.classList.remove("over");
+  const file = e.dataTransfer?.files?.[0];
+  if (file) liftAndPlay(file, file.name);
+});
 
 boot?.markReady();
 

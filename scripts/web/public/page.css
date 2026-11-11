@@ -69,3 +69,25 @@ footer summary:focus-visible { outline: 3px solid var(--text); outline-offset: 2
 }
 #howto p { margin: 0; }
 #howto b { color: var(--accent); font-weight: 600; }
+#start {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px 16px;
+  text-align: center;
+  border: 3px dashed transparent;
+}
+#start.over { border-color: var(--accent); background: var(--panel); }
+label.button.big {
+  font-size: 28px;
+  font-weight: 600;
+  padding: 22px 44px;
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+}
+label.button.big:hover { filter: brightness(1.08); }
+#drop-hint { margin: 0; color: var(--muted); }
+#rom-help { max-width: 52ch; color: var(--muted); font-size: 14px; }
