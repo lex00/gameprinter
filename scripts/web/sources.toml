@@ -18,9 +18,3 @@ root = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEoXL5YfJ6rWdggoGhTubKRNnHfvNOByMUTP
 [registry]
 name = "gp-registry"
 url = "https://raw.githubusercontent.com/lex00/gp-registry/main"
-
-# The public repo lex00/rivetrodeo, the registry gp-registry replaced. The
-# old page at rivet-rodeo.intentius.workers.dev still installs from it.
-[repo]
-name = "rivetrodeo"
-url = "https://raw.githubusercontent.com/lex00/rivetrodeo/main"
