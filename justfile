@@ -45,10 +45,30 @@ check: _hook-enabled build mosshop
     {{gp}} model check templates/mosshop --assets {{quote(assets)}}
     {{gp}} model fmt --check templates/mosshop
     just _interp-mosshop
+    just play-web
     {{gp}} template check templates/mosshop --rom {{quote(mosshop_rom)}}
     scripts/test-hook.sh
     python3 -I -B -m unittest discover -s scripts/romguard -q
     @echo "just check: passed"
+
+# The mechanic page's live player: gp_play.wasm built into target/play-web,
+# Moss Hop played in it under node with scripted buttons and a save point
+# restored on the way, then the input log replayed natively; both builds
+# must give the same frame hash digest.
+play-web: mosshop
+    #!/usr/bin/env bash
+    set -euo pipefail
+    scripts/web/build-play.sh {{quote(target / "play-web")}} > /dev/null
+    work={{quote(gp_home / "work" / "play-web")}}
+    mkdir -p "$work"
+    web=$(node scripts/web/check-play.mjs {{quote(target / "play-web" / "gp_play.wasm")}} {{quote(mosshop_rom)}} "$work/played.log")
+    cargo build -q --profile {{profile}} -p gp-play --example digest
+    native=$({{quote(target / profile_dir / "examples" / "digest")}} {{quote(mosshop_rom)}} "$work/played.log")
+    if [ "$web" != "$native" ]; then
+        echo "play-web: gp_play.wasm's frame hashes ($web) differ from the native replay's ($native)" >&2
+        exit 1
+    fi
+    echo "play-web: Moss Hop played in gp_play.wasm and replayed natively: every frame hash agrees ($web)"
 
 _interp-mosshop:
     #!/usr/bin/env bash

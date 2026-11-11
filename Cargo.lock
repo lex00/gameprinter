@@ -1098,6 +1098,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "gp-play"
+version = "0.1.0"
+dependencies = [
+ "gp-evidence",
+ "gp-nes",
+]
+
+[[package]]
 name = "gp-present"
 version = "0.1.0"
 dependencies = [

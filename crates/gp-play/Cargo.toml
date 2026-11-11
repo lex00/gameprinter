@@ -1,0 +1,26 @@
+[package]
+name = "gp-play"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# The original game played live in the workspace (docs/show.md): gp-nes in
+# the browser, a frame at a time, keeping the input log a person plays and
+# every frame's hash so `gp serve` can check its native re-record. Built for
+# the browser with `cargo rustc --lib --crate-type cdylib --target
+# wasm32-unknown-unknown` (scripts/web/build-play.sh), so the native
+# workspace build compiles it as an ordinary rlib and its tests run there.
+[dependencies]
+gp-evidence = { version = "0.1.0", path = "../gp-evidence" }
+gp-nes = { version = "0.1.0", path = "../gp-nes" }
+
+# The workspace forbids unsafe code. This crate denies it instead, so the
+# one module that exports functions to JavaScript (`abi`, wasm32 only) can
+# allow it, as gp-web does.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
