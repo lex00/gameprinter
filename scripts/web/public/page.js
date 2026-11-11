@@ -77,19 +77,33 @@ const installing = ready.then(async () => {
   if (!g.record.files.some((f) => f.path.startsWith("play/"))) throw new Error(`${g.record.name}@${g.record.version} has no files this player can run`);
   await x.setCurrent(g.record);
   if (g.notice) notices.push(g.notice);
+  // The themes: the link's (the page's own, Turnips say), which the game
+  // opens in, and every other theme the source offers for the game, each
+  // a choice in Settings, Theme. A theme that won't install is named and
+  // left out; the rest still play.
+  const asked = link.content ? [{ ...link.content, linked: true }] : [];
+  const list = await x.offered(page.source, g.record.name).catch(() => []);
+  for (const o of list) if (!asked.some((a) => a.name === o.name)) asked.push({ name: o.name, version: null });
   let theme = null;
-  if (link.content) {
-    const c = await x.ensure(page.source, { ...link.content, for_game: g.record.name }).catch((err) => {
-      notices.push(`${link.content.name} couldn't be used: ${err.message ?? err}. Playing in the game's own look.`);
+  const themes = [];
+  for (const a of asked) {
+    const c = await x.ensure(page.source, { name: a.name, version: a.version ?? null, for_game: g.record.name }).catch((err) => {
+      notices.push(
+        a.linked
+          ? `${a.name} couldn't be used: ${err.message ?? err}. Playing in the game's own look.`
+          : `The theme ${a.name} couldn't be installed: ${err.message ?? err}.`,
+      );
       return null;
     });
-    if (c) {
-      if (c.notice) notices.push(c.notice);
-      theme = { id: c.record.name.split("/")[1], files: await x.filesOf(c.record, "theme") };
-    }
+    if (!c) continue;
+    if (c.notice) notices.push(c.notice);
+    const t = { id: c.record.name.split("/")[1], files: await x.filesOf(c.record, "theme") };
+    if (themes.some((x) => x.id === t.id)) continue;
+    themes.push(t);
+    if (a.linked) theme = t;
   }
   say("");
-  return { game: g.record, theme, files: await x.filesOf(g.record, "play") };
+  return { game: g.record, theme, themes, files: await x.filesOf(g.record, "play") };
 });
 installing.catch(() => {});
 
@@ -253,7 +267,7 @@ async function liftAndPlay(file, name) {
     const r = await liftRom(file, {
       moduleUrl: "game/lift/gp-web-lift.wasm",
       templateFiles: playTemplates(linked.files),
-      extraThemes: linked.theme ? [linked.theme] : [],
+      extraThemes: linked.themes ?? (linked.theme ? [linked.theme] : []),
     });
     if (!r.ok) {
       say(r.error, "error");

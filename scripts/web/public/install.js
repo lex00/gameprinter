@@ -186,6 +186,16 @@ export async function ensure(source, what, progress) {
   return { record: await download(source, r, progress), notice };
 }
 
+// What the source offers for a game: [{ name, version, id, title }], the
+// latest of each, from its by-game list (gp-registry.wasm's list question).
+// A source that can't be reached offers nothing new: the page then plays
+// with what it was linked to.
+export async function offered(source, game) {
+  const a = await ask(source, { name: "", list: true, for_game: game });
+  if (a.error) throw new Error(a.error);
+  return a.ok;
+}
+
 export async function setCurrent(rec) {
   await withStore(["games"], "readwrite", async (tx) => {
     tx.objectStore("games").put(`${rec.name}@${rec.version}`, "current");

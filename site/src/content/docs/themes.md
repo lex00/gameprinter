@@ -54,7 +54,9 @@ Your work has to be your own. If you used an AI tool to make any of it, name the
 
 ## Get it in the game
 
-Keep your theme in a repo of your own, with its pictures in Git LFS. Players get a theme from the registry the page reads, [`lex00/gp-registry`](https://github.com/lex00/gp-registry): open an issue there with your repo's link, and once it's published, a link to the page with `&c=YOUR/THEME` installs it with the game. The page at [nes-donkey-kong.intentius.workers.dev](https://nes-donkey-kong.intentius.workers.dev) installs Turnips that way.
+Keep your theme in a repo of your own, with its pictures in Git LFS. Players get themes from the registry the page reads, [`lex00/gp-registry`](https://github.com/lex00/gp-registry): open an issue there with your repo's link. Once it's published for the game (`gp registry publish ... --for lex00/donkey-kong`), the page at [nes-donkey-kong.intentius.workers.dev](https://nes-donkey-kong.intentius.workers.dev) installs it with the game and offers it under Settings, Theme, beside Original and Turnips. Nothing on the page changes for that: the page asks the registry what it offers for the game each time it loads.
+
+The page opens in its own theme, Turnips. A link with `&c=YOUR/THEME` opens it in yours instead.
 
 You can also [publish it to a registry of your own](../registry/), but the game page only reads its one registry, so players wouldn't see it there.
 

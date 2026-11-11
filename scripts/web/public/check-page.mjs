@@ -76,6 +76,15 @@ const registryFolder = opt("registry-folder") && resolve(opt("registry-folder"))
 // instead of the network, so a full run doesn't hit a host's rate limit.
 const live = opt("live")?.replace(/\/$/, "") ?? null;
 const registryStopped = process.argv.includes("--registry-stopped");
+// The themes the source offers for the page's game, by id (a package's name
+// after its namespace), from the registry folder's by-game list; with no
+// folder, the page's own theme.
+function offeredThemes() {
+  const f = registryFolder && join(registryFolder, "by-game", `${page.game}.toml`);
+  if (!f || !existsSync(f)) return page.content ? [page.content.split("/")[1].split("@")[0]] : [];
+  const names = [...readFileSync(f, "utf8").matchAll(/^package = "([^"]+)"/gm)].map((m) => m[1].split("/")[1]);
+  return [...new Set(names)];
+}
 // A request to the page's source. A source of "." is on the page's own
 // address, so only the registry's own keys count.
 const REGISTRY_KEY = /^\/(registry\.toml|catalog\.toml|yanks\.toml|namespaces\/|index\/|packages\/|blobs\/|by-game\/)/;
@@ -1183,7 +1192,18 @@ async function romPlay(S, { name, sha, rom }) {
   // Theme: Original and Turnips, and nothing else.
   const lookWas = await gp(() => window.__gp.theme);
   const offered = await gp(() => window.__gp.looks?.() ?? null).catch(() => null);
-  let rs = await settings(["ArrowDown", "ArrowLeft"], "Escape", [["theme", "!=", "turnips"]]);
+  // Steps along the theme line to one theme: with more themes offered,
+  // Original isn't always the next one.
+  const want = ["original", ...offeredThemes()].sort();
+  const toTheme = async (id, key) => {
+    let r;
+    for (let i = 0; i < want.length; i++) {
+      r = await settings(["ArrowDown", key], "Escape", [["theme", "!=", "?"]]);
+      if (r.theme === id) break;
+    }
+    return r;
+  };
+  let rs = await toTheme("original", "ArrowLeft");
   const bar = async () => (await S.game()).evaluate(() => document.getElementById("game").nextElementSibling?.textContent ?? "");
   const barSaid = await bar();
   await S.shot(`rom-${tag}-settings-original.png`);
@@ -1194,11 +1214,20 @@ async function romPlay(S, { name, sha, rom }) {
   rs = await settings(["ArrowLeft"], "Escape", [["profile", "retro"]]);
   check(rs.profile === "retro" && rs.theme === "original" && rs.steps > 30 && !rs.error, `${name}: then back to Retro, closed: the game plays (${runs_(rs)})`);
   await S.shot(`rom-${tag}-retro-again.png`);
-  rs = await settings(["ArrowDown", "ArrowRight"], "Escape", [["theme", "turnips"]]);
+  rs = await toTheme("turnips", "ArrowRight");
   check(rs.theme === "turnips" && rs.steps > 30 && !rs.error && (await S.artScale()) > 1, `${name}: and Theme back to Turnips, in its large art (${runs_(rs)})`);
   await S.shot(`rom-${tag}-turnips-again.png`);
-  rs = await settings(["ArrowDown", "ArrowRight"], "Escape", [["theme", "!=", "?"]]);
-  check(["turnips", "original"].includes(rs.theme), `${name}: the theme line offers Original and Turnips only (one more step: ${rs.theme}${offered ? `, offered ${JSON.stringify(offered)}` : ""})`);
+  // The theme line offers Original and every theme the source offers for
+  // the game (its by-game list), and nothing else: stepped right until a
+  // theme comes round again.
+  const seen = new Set(["turnips"]);
+  for (let i = 0; i <= want.length; i++) {
+    rs = await settings(["ArrowDown", "ArrowRight"], "Escape", [["theme", "!=", "?"]]);
+    if (seen.has(rs.theme)) break;
+    seen.add(rs.theme);
+  }
+  const got = [...seen].sort();
+  check(JSON.stringify(got) === JSON.stringify(want), `${name}: the theme line offers Original and each theme the source offers for the game, and nothing else (${got.join(", ")}; the source offers ${want.slice().filter((t) => t !== "original").join(", ")}${offered ? `, offered ${JSON.stringify(offered)}` : ""})`);
   const stored = await p.evaluate(async (game) => {
     const { loadStored } = await import("./game/lift.js");
     return (await loadStored(game))?.size ?? 0;
