@@ -60,6 +60,24 @@
     </aside>
   </main>
   <footer><div id="pad-line"></div><div id="keys">Arrows move, X is A, Z is B, Enter is Start. F5 or the left trigger saves, F8 or the right trigger loads. R or the right bumper records. U turns the sound off and on. Player 2: I J K L move, M is A, N is B, H is Select, Y is Start, or a second controller.</div></footer>
+  <section id="rv2" hidden aria-label="A clip on the model">
+    <div id="rv2-panel">
+      <div id="rv2-head"><h2 id="rv2-title">A clip on the model</h2><button id="rv2-close" type="button" title="Esc">CLOSE</button></div>
+      <p id="rv2-says"></p>
+      <div id="rv2-body" hidden>
+        <div id="rv2-pics"><figure><canvas id="rv2-o" width="256" height="240"></canvas></figure><figure><canvas id="rv2-m" width="256" height="240"></canvas></figure></div>
+        <canvas id="rv2-strip" height="12" title="Green where the original and the model agree, red where they differ. Click to go there"></canvas>
+        <div id="rv2-bar">
+          <button id="rv2-prev-diff" type="button" title="The difference before">&lt;&lt; DIFF</button><button id="rv2-back" type="button" title="Left: a frame back">&lt;</button><button id="rv2-play" type="button" title="Space">PLAY</button><button id="rv2-fwd" type="button" title="Right: a frame on">&gt;</button><button id="rv2-next-diff" type="button" title="The next difference">DIFF &gt;&gt;</button>
+          <input type="range" id="rv2-scrub" min="0" max="1" value="0" aria-label="The frame">
+          <label>show <select id="rv2-layout"><option value="side">side by side: original, model</option><option value="top">the model over the original</option><option value="diff">the differences</option></select></label>
+          <label id="rv2-mix-row" hidden>original <input type="range" id="rv2-mix" min="0" max="100" value="50"> model</label>
+        </div>
+        <p id="rv2-at"></p>
+      </div>
+    </div>
+  </section>
   <script type="module" src="/app.js"></script>
+  <script type="module" src="/review.js"></script>
 </body>
 </html>

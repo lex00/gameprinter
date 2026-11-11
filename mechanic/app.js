@@ -758,6 +758,17 @@ async function refresh() {
       li.textContent = `${(c.frames / NES_FPS).toFixed(1)} s, by ${c.by}${c.note ? ": " + c.note : ""}`;
       li.title = "Click to watch it";
       li.addEventListener("click", () => void openClipView(c.n));
+      // The clip on the model, beside the original (review.js).
+      const rv = document.createElement("button");
+      rv.type = "button";
+      rv.className = "rv2-open";
+      rv.textContent = "ON THE MODEL";
+      rv.title = "Play this clip on the model beside the original, as the score does";
+      rv.addEventListener("click", (e) => {
+        e.stopPropagation();
+        window.dispatchEvent(new CustomEvent("gp-review", { detail: { clip: c.n, mechanic: session.mechanic } }));
+      });
+      li.appendChild(rv);
       clips.appendChild(li);
     }
   }

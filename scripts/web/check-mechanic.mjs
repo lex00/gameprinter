@@ -188,6 +188,34 @@ async function main() {
   await until("the words after Esc", async () => (await text(page, "#say")).startsWith(later) && !(await page.isHidden("#overlay")));
   if (!(await page.evaluate(() => document.getElementById("tab-mech").classList.contains("on")))) fail("Esc didn't go back to HELP WITH MECHANICS");
   ok("Esc goes back to HELP WITH MECHANICS, where the words show");
+  // Answer it, so nothing is over the game while the clip is reviewed.
+  await page.keyboard.press("Enter");
+
+  // The clip on the model: played through the original and the game's
+  // model (the skeleton gp game new wrote) as the score plays it, both
+  // pictures of each frame kept and shown, side by side and as differences.
+  await page.click("#clips .rv2-open");
+  const title = await until("the review", async () => {
+    const t = await text(page, "#rv2-title");
+    return /\d+ of \d+ frames the same/.test(t) ? t : (await text(page, "#rv2-says")).startsWith("No review") ? fail(await text(page, "#rv2-says")) : null;
+  }, 120000);
+  const reviewed = join(session, "clips", "001.review", "meta.json");
+  if (!existsSync(reviewed)) fail(`the review isn't kept in ${reviewed}`);
+  const review = JSON.parse(readFileSync(reviewed, "utf8"));
+  const shown = review.have.indexOf(true);
+  if (shown < 0) fail("the review kept no pictures");
+  await page.evaluate((k) => { const s = document.getElementById("rv2-scrub"); s.value = String(k); s.dispatchEvent(new Event("input")); }, shown);
+  await until("the original's picture drawn", () => page.evaluate(() => {
+    const c = document.getElementById("rv2-o");
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    for (let i = 0; i < d.length; i += 4) if (d[i] || d[i + 1] || d[i + 2]) return true;
+    return false;
+  }));
+  await page.selectOption("#rv2-layout", "diff");
+  await until("the differences counted", async () => /pixels differ|every pixel the same/.test(await text(page, "#rv2-says")));
+  await page.keyboard.press("Escape");
+  if (!(await page.isHidden("#rv2"))) fail("Esc didn't close the review");
+  ok(`the clip on the model: ${title.replace(/^Clip 1 on the model: /i, "")}, its pictures kept and shown, Esc closes it`);
   if (errors.length) fail(`the page threw: ${errors.join("; ")}`);
 
   // No player built: the page says so instead of a CompileError.

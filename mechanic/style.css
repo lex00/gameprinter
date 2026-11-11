@@ -167,3 +167,22 @@ aside li { margin-bottom: 6px; }
 #w-problems .st-wontfix { color: var(--muted); }
 #w-log { font-size: 13px; }
 #w-log .at { color: var(--muted); margin-right: 8px; }
+
+/* A clip on the model (review.js): over the page. */
+#rv2 { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); display: flex; align-items: flex-start; justify-content: center; overflow: auto; z-index: 20; padding: 24px 16px; }
+#rv2[hidden] { display: none; }
+#rv2-panel { background: var(--panel); border: 2px solid var(--line); padding: 14px; max-width: 1100px; width: 100%; }
+#rv2-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+#rv2-head h2 { margin: 0; font-size: 15px; color: var(--nes-28); }
+#rv2-says { color: var(--muted); min-height: 1.2em; }
+#rv2-pics { display: flex; gap: 10px; flex-wrap: wrap; }
+#rv2-pics figure { margin: 0; flex: 1 1 300px; }
+#rv2-pics figure:has(canvas[hidden]) { display: none; }
+#rv2-pics canvas { width: 100%; height: auto; image-rendering: pixelated; background: #000; display: block; }
+#rv2-strip { width: 100%; display: block; margin: 10px 0 6px; cursor: pointer; }
+#rv2-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+#rv2-bar button, #rv2-head button { font: 13px var(--mono); background: var(--nes-0f); color: var(--fg); border: 2px solid var(--line); padding: 3px 8px; cursor: pointer; }
+#rv2-scrub { flex: 1 1 200px; }
+#rv2-at.same { color: var(--nes-2a); }
+#rv2-at.differ { color: var(--nes-26); }
+#clips .rv2-open { margin-left: 8px; font: 11px var(--mono); background: var(--nes-0f); color: var(--nes-21); border: 1px solid var(--nes-21); padding: 0 5px; cursor: pointer; }

@@ -50,7 +50,7 @@ Clips are kept as presses, never pictures, under `~/.gameprinter/mechanics/my-ga
 
 Beside the game, **Your agent** shows what the agent is doing while you play: its status and a log (`gp mechanic log`), pictures and clips it pins for you to look at (`gp mechanic pin`, such as a sheet of frames or the original against the model), and a table of the problems it has found with the state of each (`gp mechanic problem`). Tell it what you see in the conversation.
 
-Not here yet: the tab that plays a clip on the original and the model side by side.
+Each clip in the list has an **ON THE MODEL** button: it plays the clip through the original and through the game's model, the way the score does, and shows the two side by side, the model over the original, or their differences, frame by frame. A strip under the pictures is green where the two agree and red where they differ, and the DIFF buttons jump between differences. A game whose model has hooks runs in its module: start the page with `--module FILE` (`gp game build` makes it), or keep it at `~/.gameprinter/work/modules/GAME.wasm`.
 
 Also still missing: support for a game on a cartridge type the emulator doesn't handle yet, which would first need a [change to the tool](../contribute/).
 

@@ -873,7 +873,7 @@ pub(crate) fn lift_into(game: &Path, rom: &[u8], out: &Path) -> Result<()> {
 
 /// The model's lifted assets: `--assets`, else `$GP_HOME/work/assets/SOURCE`,
 /// lifted there from the game's asset map and the ROM if not there yet.
-fn assets_of(
+pub(crate) fn assets_of(
     paths: &Paths,
     game: &Path,
     mdir: &Path,

@@ -201,8 +201,15 @@ pub(crate) fn model_frame(art: &Art, anim: &Animator, m: &Model) -> Frame {
     raster::draw(&art.present, w, &art.pics, &scene, &names, &art.fields)
 }
 
+/// Called with each compared frame's two pictures, the original's and the
+/// model's, in the lockstep's frame order (`None` where there is nothing
+/// to compare yet): the mechanic page's review keeps them.
+pub(crate) type Keep = Box<dyn FnMut(Option<(&Frame, &Frame)>)>;
+
 /// The two pictures for a lockstep: the model's animation steps with it.
 pub(crate) struct Probe {
+    /// Given each frame's pictures as they're compared.
+    pub(crate) keep: Option<Keep>,
     art: Arc<Art>,
     anim: Animator,
     opts: Options,
@@ -275,6 +282,7 @@ pub(crate) fn nes_options() -> Options {
 impl Probe {
     pub(crate) fn new(art: Arc<Art>, opts: Options) -> Self {
         Self {
+            keep: None,
             art,
             anim: Animator::new(),
             opts,
@@ -316,12 +324,18 @@ impl<O: Shows> Screens<O, Model> for Probe {
         self.back
             .push_back(model_frame(&self.art, &self.anim, model));
         if self.back.len() <= usize::from(self.opts.lag) {
+            if let Some(k) = self.keep.as_mut() {
+                k(None);
+            }
             return Ok(None);
         }
         while self.back.len() > usize::from(self.opts.lag) + 1 {
             self.back.pop_front();
         }
         let m = self.back.pop_front().expect("a picture was just kept");
+        if let Some(k) = self.keep.as_mut() {
+            k(Some((&o, &m)));
+        }
         Ok(Some((o, m)))
     }
 

@@ -38,6 +38,7 @@ use serde_json::{Value, json};
 
 mod http;
 pub(crate) mod paths;
+pub(crate) mod review;
 mod server;
 mod session;
 pub(crate) mod watch;
@@ -67,6 +68,10 @@ pub enum MechanicCmd {
         /// at or beside the current folder or one above it)
         #[arg(long)]
         games: Option<PathBuf>,
+        /// The game's built module (`gp game build`), for reviewing clips on
+        /// the model (default: $GP_HOME/work/modules/GAME.wasm if it's there)
+        #[arg(long)]
+        module: Option<PathBuf>,
     },
     /// Say what you're doing while it's your turn ("measuring the jump"):
     /// the person's page shows it until your next turn.
@@ -203,6 +208,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             prompt,
             port,
             games,
+            module,
         } => server::start(
             paths,
             &server::Start {
@@ -211,6 +217,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                 prompt: prompt.as_deref(),
                 port: *port,
                 games: games.as_deref(),
+                module: module.as_deref(),
             },
         ),
         MechanicCmd::Busy {

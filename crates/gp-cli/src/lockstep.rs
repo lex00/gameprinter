@@ -98,6 +98,7 @@ pub(crate) fn run_resumed(
     assets: Option<&Path>,
     draws: Option<gp_sim::DrawScript>,
     resume: Option<(&crate::clip::cache::Saved, lockstep::Prefix)>,
+    keep: Option<crate::screen::Keep>,
 ) -> Result<(Lockstep, Json, Vec<String>)> {
     let model = source.parse_model()?;
     let mut original = match resume {
@@ -120,6 +121,7 @@ pub(crate) fn run_resumed(
             // Drawn from the frame before the start: the mapping's start
             // can come later, which only draws a few frames more.
             p.video_from = from.unwrap_or(0).saturating_sub(1);
+            p.keep = keep;
             Some(p)
         }
         Some(Err(e)) => {

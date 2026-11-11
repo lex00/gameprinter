@@ -374,6 +374,49 @@ fn resume_of(
     Ok(Some((saved, p)))
 }
 
+/// Plays one clip on the model straight through, as [`score_one`] does,
+/// with the original's random draws, and gives `keep` each compared frame's
+/// two pictures: the mechanic page's review of a clip. Returns the
+/// lockstep, whose `frames` the pictures are in the order of.
+pub(crate) fn pictures(
+    ctx: &Ctx,
+    log: &InputLog,
+    start: usize,
+    keep: crate::screen::Keep,
+) -> Result<Lockstep> {
+    let from = start as u64;
+    let inputs = crate::run::frames(log);
+    let resume = resume_of(ctx, log, &inputs, start)?;
+    let draws = if ctx.mapping.score_draws {
+        Some(match &resume {
+            Some((saved, p)) => crate::lockstep::record_draws_on(
+                saved.nes(&ctx.rom, gp_evidence::manifest::PowerOn::default())?,
+                &ctx.mapping,
+                &log.frames[p.inputs..],
+                from,
+            )?,
+            None => crate::lockstep::record_draws(&ctx.rom, &ctx.mapping, &log.frames, from)?,
+        })
+    } else {
+        None
+    };
+    let (ls, _, _) = crate::lockstep::run_resumed(
+        &ctx.source,
+        &ctx.model_dir,
+        &ctx.mapping,
+        &ctx.rom,
+        &inputs,
+        Mode::Free,
+        Some(from),
+        false,
+        ctx.assets.as_deref(),
+        draws,
+        resume.as_ref().map(|(s, p)| (s, *p)),
+        Some(keep),
+    )?;
+    Ok(ls)
+}
+
 /// Scores one clip, given as its full log from power-on and its start,
 /// and writes its files into `out`.
 pub(crate) fn score_one(
@@ -416,6 +459,7 @@ pub(crate) fn score_one(
             ctx.assets.as_deref(),
             draws.clone(),
             resume.as_ref().map(|(s, p)| (s, *p)),
+            None,
         )
     };
     let (free, free_j, _) = run(Mode::Free, true)?;

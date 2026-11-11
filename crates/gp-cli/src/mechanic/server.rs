@@ -39,6 +39,8 @@ pub(crate) struct Start<'a> {
     pub prompt: Option<&'a str>,
     pub port: u16,
     pub games: Option<&'a Path>,
+    /// The game's built module, for the review of clips on the model.
+    pub module: Option<&'a Path>,
 }
 
 /// The largest request body: a play from power-on, about 11 bytes a frame,
@@ -143,14 +145,16 @@ pub(crate) fn start(paths: &Paths, a: &Start) -> Result<Outcome> {
     let mechanic = mechanic_to_open(paths, a.game, a.mechanic)?;
     let listener = listen(a.port)?;
     let port = listener.local_addr()?.port();
-    let server = Arc::new(Server::new(
-        paths.clone(),
-        a.game,
-        &repo,
-        rom.bytes,
-        &rom.sha256,
-        port,
-    ));
+    let mut server = Server::new(paths.clone(), a.game, &repo, rom.bytes, &rom.sha256, port);
+    if let Some(games) = crate::roms_cmd::games_dir(a.games) {
+        server.rebuild = Some(super::review::Rebuild::new(
+            paths,
+            &games.join(a.game),
+            a.game,
+            a.module,
+        ));
+    }
+    let server = Arc::new(server);
     let in_log = read_queue(&queue_file(paths, a.game)?)
         .iter()
         .any(|r| r["mechanic"] == json!(mechanic));
@@ -208,6 +212,9 @@ pub(crate) struct Server {
     wasm: PathBuf,
     rom: Arc<Vec<u8>>,
     port: u16,
+    /// What the review of clips on the model needs; none without a games
+    /// checkout.
+    rebuild: Option<super::review::Rebuild>,
 }
 
 impl Server {
@@ -222,6 +229,7 @@ impl Server {
             wasm: wasm_path(repo),
             rom: Arc::new(rom),
             port,
+            rebuild: None,
         }
     }
 
@@ -328,6 +336,7 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
     match (req.method.as_str(), req.path.as_str()) {
         ("GET" | "HEAD", "/") => page("index.html", "text/html; charset=utf-8"),
         ("GET" | "HEAD", "/app.js") => page("app.js", "text/javascript; charset=utf-8"),
+        ("GET" | "HEAD", "/review.js") => page("review.js", "text/javascript; charset=utf-8"),
         ("GET" | "HEAD", "/nesplayer.js") => page("nesplayer.js", "text/javascript; charset=utf-8"),
         ("GET" | "HEAD", "/style.css") => page("style.css", "text/css; charset=utf-8"),
         ("GET" | "HEAD", "/gp_play.wasm") => {
@@ -363,6 +372,39 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         // The agent's model playing live came from `gp mechanic demo`,
         // which isn't in gameprinter: nothing ever plays.
         ("GET" | "HEAD", "/api/live") => Ok(Response::json(&json!({"lines": []}))),
+        // A clip played on the model beside the original ([`super::review`]):
+        // made on first ask, which takes as long as scoring the clip.
+        ("GET" | "HEAD", p) if clip_number(p, "/api/clips/", "/review.json").is_some() => {
+            let n = clip_number(p, "/api/clips/", "/review.json").unwrap_or(0);
+            let session = s.target(req.param("mechanic"))?;
+            if !session.dir.join(format!("clips/{n:03}.toml")).is_file() {
+                return Ok(Response::error(404, "no such clip"));
+            }
+            let Some(r) = &s.rebuild else {
+                return Ok(Response::error(
+                    404,
+                    "no games checkout, so no model to review on: start the page with --games",
+                ));
+            };
+            match super::review::review(&s.paths, r, &session.dir, n) {
+                Ok(v) => Ok(Response::json(&v)),
+                Err(e) => Ok(Response::error(409, &format!("{e:#}"))),
+            }
+        }
+        ("GET" | "HEAD", p) if p.starts_with("/api/clips/") && p.contains("/review/") => {
+            let rest = &p["/api/clips/".len()..];
+            let Some((n, name)) = rest
+                .split_once("/review/")
+                .and_then(|(n, name)| Some((n.parse::<u64>().ok()?, name)))
+            else {
+                return Ok(Response::error(404, "no such picture"));
+            };
+            let session = s.target(req.param("mechanic"))?;
+            match super::review::picture(&session.dir, n, name) {
+                Some(b) => Ok(Response::bytes("image/png", b)),
+                None => Ok(Response::error(404, "no such picture")),
+            }
+        }
         // What the agent is doing, for the watch panel ([`super::watch`]).
         ("GET" | "HEAD", "/api/watch") => Ok(Response::json(&super::watch::view(
             &s.target(req.param("mechanic"))?.dir,
@@ -835,6 +877,22 @@ mod tests {
         assert_eq!((status, b.as_str()), (200, "png bytes"));
         assert_eq!(get(&srv, "/api/watch/files/..%2Fsession.toml").0, 404);
         assert_eq!(get(&srv, "/api/watch/files/../session.toml").0, 404);
+    }
+
+    /// A review asks for a clip the session has and a games checkout to
+    /// play it on; its pictures are only its own.
+    #[test]
+    fn a_review_needs_the_clip_and_the_game() {
+        let d = tempfile::tempdir().unwrap();
+        let srv = server(d.path());
+        assert_eq!(get(&srv, "/api/clips/9/review.json").0, 404);
+        let dir = srv.open_session().unwrap().dir.clone();
+        fs::write(dir.join("clips/001.toml"), "start = 0\n").unwrap();
+        let (status, body) = get(&srv, "/api/clips/1/review.json");
+        assert_eq!(status, 404);
+        assert!(body.contains("no games checkout"), "{body}");
+        assert_eq!(get(&srv, "/api/clips/1/review/meta.json").0, 404);
+        assert_eq!(get(&srv, "/api/clips/1/review/../001.log").0, 404);
     }
 
     /// A request sent under another name (DNS rebinding: a page elsewhere
