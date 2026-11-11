@@ -33,6 +33,12 @@ case "$(uname -s)-$(uname -m)" in
     sha256="94e4337b70cbc5638f0935fbc46b9f242bc7416f657e3fbe924baf348404b53d"
     exe="chrome-headless-shell-mac-arm64/chrome-headless-shell"
     ;;
+  Linux-x86_64)
+    # GitHub's hosted runners, for the page checks in just check.
+    platform="linux64"
+    sha256="c3e50596aef52c58f8fda3c6b3411c33d34c88b177b3ed1c2243359fd3b8ba20"
+    exe="chrome-headless-shell-linux64/chrome-headless-shell"
+    ;;
   *)
     echo "fetch-browser: no pinned Chrome Headless Shell for $(uname -s) $(uname -m)." >&2
     echo "  Add its URL ($cdn/<platform>/chrome-headless-shell-<platform>.zip) and SHA-256 to $0." >&2
