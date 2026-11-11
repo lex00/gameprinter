@@ -16,6 +16,7 @@ For making and playing games: what a person installing gp uses.
 | `gp game fetch` | Fetch NAME@VERSION by id into a folder, checking every signature (with --root) and hash, and lift every ROM entry it finds in the ROM folder |
 | `gp game hash` | Print a built module's BLAKE3 hash |
 | `gp game kit` | Write the module kit: the tool's sources for a game module and the crates they need, ready for a build with no network |
+| `gp game new` | Start a new game from a ROM you own that no game names yet: its package folder in the games checkout, with a model skeleton for the genre, the ROM's hashes in roms.toml, pins that hold, and no clips. Writes over nothing |
 | `gp game score` | Score a game from its package and the ROM alone, in this $GP_HOME: every clip and curve derived from the corpus plan and the ROM, played through the module, and the score record written to FILE. Exits 1 when the corpus has problems |
 | `gp model check` | Check a model, its profiles, its contract and its asset slots |
 | `gp model fmt` | Fail if the model or contract isn't in canonical form |
@@ -27,6 +28,9 @@ For making and playing games: what a person installing gp uses.
 | `gp registry publish` | Publish a folder of files as one exact version |
 | `gp registry reindex` | Rewrite the list files from these name@version entries, signed if --key is given |
 | `gp registry serve` | Serve a folder registry and a built page on this machine only |
+| `gp roms add` | Copy ROM files you own into $GP_ROM_DIR/nes/, identifying each one. A ROM no game names yet is added too, as unknown: `gp game new` starts a game for it |
+| `gp roms clean` | Write a cleaned copy of a NES image: header from the game's roms.toml (or the file's, by the header rules), no trainer, no trailing bytes. Never changes the input. Exits 1 when the cleaned data matches no game's roms.toml |
+| `gp roms scan` | Identify every NES image in $GP_ROM_DIR, whatever it's named, by the game whose roms.toml holds its hash, and report junk around the game data |
 | `gp template build` | Build an authored template's lifted files and hold them to its pin |
 | `gp template check` | Check a ROM against the template: accepted hash, map pin, lift pin |
 | `gp template served` | Check that a package's open version holds none of the original's data: no line of 24 characters or more of its built files may be held by the original's lifted files, and none of its bytes or lifted files may be the ROM's. With --folder, the same for every file of a folder to be served. Exits 1 on any find, and 2 when a ROM isn't found |

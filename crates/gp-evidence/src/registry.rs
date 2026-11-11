@@ -263,6 +263,31 @@ impl Registry {
         Ok(reg)
     }
 
+    /// Every game's `roms.toml` in a games checkout (`dir/GAME/roms.toml`),
+    /// as one registry: the games repo holds the sources now, one file a game.
+    pub fn load_games(dir: &Path) -> Result<Self, RegistryError> {
+        let io = |source| RegistryError::Io {
+            path: dir.to_path_buf(),
+            source,
+        };
+        let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+            .map_err(io)?
+            .filter_map(|e| e.ok().map(|e| e.path().join("roms.toml")))
+            .filter(|p| p.is_file())
+            .collect();
+        files.sort();
+        let mut reg = Registry::default();
+        for path in files {
+            let text = std::fs::read_to_string(&path).map_err(|source| RegistryError::Io {
+                path: path.clone(),
+                source,
+            })?;
+            reg.add_toml(&text, &path)?;
+        }
+        reg.check_patched(dir)?;
+        Ok(reg)
+    }
+
     /// A registry from one file's text; `path` names it in errors.
     pub fn from_toml(text: &str, path: &Path) -> Result<Self, RegistryError> {
         let mut reg = Registry::default();

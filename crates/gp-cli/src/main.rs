@@ -11,6 +11,7 @@ mod clip_score;
 mod clipset;
 mod corpus_score;
 mod game;
+mod game_new;
 mod gate;
 mod gate_copy;
 mod hosted;
@@ -22,7 +23,9 @@ mod plan;
 mod pool;
 mod publish;
 mod registry;
+mod romclean;
 mod roms;
+mod roms_cmd;
 mod run;
 mod scenario;
 mod screen;
@@ -114,6 +117,11 @@ enum Cmd {
     Game {
         #[command(subcommand)]
         cmd: GameCmd,
+    },
+    /// The ROMs you own, kept in $GP_ROM_DIR: add, list and clean them.
+    Roms {
+        #[command(subcommand)]
+        cmd: roms_cmd::RomsCmd,
     },
     /// Make, publish to and test registries.
     Registry {
@@ -257,6 +265,31 @@ enum InterpCmd {
 
 #[derive(Subcommand)]
 enum GameCmd {
+    /// Start a new game from a ROM you own that no game names yet: its
+    /// package folder in the games checkout, with a model skeleton for the
+    /// genre, the ROM's hashes in roms.toml, pins that hold, and no clips.
+    /// Writes over nothing
+    New {
+        /// The game's id: lower-case letters, digits and dashes (qbert-usa)
+        game: String,
+        /// The ROM, already in $GP_ROM_DIR (`gp roms add` puts it there)
+        #[arg(long)]
+        rom: PathBuf,
+        /// The genre: platformer, topdown or other
+        #[arg(long)]
+        genre: String,
+        /// The game's title (default: GAME)
+        #[arg(long)]
+        title: Option<String>,
+        /// The package's namespace, NS in NS/GAME (default: the one the other
+        /// games in the checkout share)
+        #[arg(long)]
+        namespace: Option<String>,
+        /// The games checkout (default: $GP_GAMES_DIR, else a `games` folder
+        /// at or beside the current folder or one above it)
+        #[arg(long)]
+        games: Option<PathBuf>,
+    },
     /// Fetch NAME@VERSION by id into a folder, checking every signature (with --root) and
     /// hash, and lift every ROM entry it finds in the ROM folder.
     Fetch {
@@ -520,6 +553,28 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                 },
         } => game::fetch(name, id, from, root.as_deref(), into, rom_dir),
         Cmd::Game {
+            cmd:
+                GameCmd::New {
+                    game,
+                    rom,
+                    genre,
+                    title,
+                    namespace,
+                    games,
+                },
+        } => game_new::run(
+            &game_new::New {
+                game,
+                rom,
+                genre,
+                title: title.as_deref(),
+                namespace: namespace.as_deref(),
+                games: games.as_deref(),
+                date: &game_new::today(),
+            },
+            &gp_evidence::Paths::from_env()?,
+        ),
+        Cmd::Game {
             cmd: GameCmd::Kit { out },
         } => module::kit(out),
         Cmd::Game {
@@ -565,6 +620,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                     update_lock,
                 },
         } => module::build(dir, kit, out, *update_lock),
+        Cmd::Roms { cmd } => roms_cmd::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Package { cmd } => match cmd {
             PackageCmd::Hooks { dir } => package::hooks(dir),
             PackageCmd::Scan { dir, rom, wasm } => {
