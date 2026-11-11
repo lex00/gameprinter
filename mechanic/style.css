@@ -149,3 +149,21 @@ aside li { margin-bottom: 6px; }
 #screen[data-mode="m-talk"] { border-color: #fca044; }
 #screen[data-mode="m-talk"] #modebadge { background: #fca044; }
 @keyframes blink { 50% { opacity: 0.55; } }
+
+/* The watch panel: what the agent is doing (gp mechanic log, pin, problem). */
+#w-status { margin: 0 0 10px; }
+#w-status .at { color: var(--muted); margin-right: 8px; }
+#w-pins { display: grid; gap: 10px; margin-bottom: 12px; }
+#w-pins figure { margin: 0; border: 2px solid var(--nes-2d); padding: 6px; background: var(--panel); }
+#w-pins figure.keep { border-color: var(--nes-28); }
+#w-pins img, #w-pins video { display: block; max-width: 100%; height: auto; image-rendering: pixelated; }
+#w-pins figcaption { font-size: 13px; color: var(--muted); margin-top: 4px; }
+#w-problems { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 12px; }
+#w-problems th, #w-problems td { text-align: left; vertical-align: top; padding: 4px 6px; border-bottom: 1px solid var(--nes-2d); }
+#w-problems th { color: var(--muted); font-weight: normal; }
+#w-problems .st-open { color: var(--nes-26); }
+#w-problems .st-working { color: var(--nes-28); }
+#w-problems .st-fixed { color: var(--nes-2a); }
+#w-problems .st-wontfix { color: var(--muted); }
+#w-log { font-size: 13px; }
+#w-log .at { color: var(--muted); margin-right: 8px; }

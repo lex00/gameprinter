@@ -48,7 +48,9 @@ It serves the page at `http://127.0.0.1:7710/`, on your machine only, and prints
 
 Clips are kept as presses, never pictures, under `~/.gameprinter/mechanics/my-game/`.
 
-Not here yet: the tab that plays a clip on the original and the model side by side, and a tab showing what the agent is doing (its status, a log, and the problems it has found).
+Beside the game, **Your agent** shows what the agent is doing while you play: its status and a log (`gp mechanic log`), pictures and clips it pins for you to look at (`gp mechanic pin`, such as a sheet of frames or the original against the model), and a table of the problems it has found with the state of each (`gp mechanic problem`). Tell it what you see in the conversation.
+
+Not here yet: the tab that plays a clip on the original and the model side by side.
 
 Also still missing: support for a game on a cartridge type the emulator doesn't handle yet, which would first need a [change to the tool](../contribute/).
 

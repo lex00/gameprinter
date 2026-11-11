@@ -20,7 +20,7 @@
 //
 // Exit codes: 0 passed, 1 a check failed, 2 couldn't run.
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -155,6 +155,20 @@ async function main() {
   await page.keyboard.press("Enter");
   await until("the answer in the session", () => readFileSync(join(session, "talk.ndjson"), "utf8").includes('"text":"No, a tap"'));
   ok("the answer, picked with the arrows and Enter, is the person's turn");
+
+  // The watch panel: the agent's log, a pinned picture and a problem show
+  // beside the game while the person plays.
+  gpRun(["mechanic", "log", GAME, MECH, "Measuring the hop in clip 1"]);
+  const sheet = join(work, "hop sheet.png");
+  // A one-pixel PNG, made here.
+  writeFileSync(sheet, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64"));
+  gpRun(["mechanic", "pin", GAME, MECH, sheet, "--title", "the hop, frame by frame", "--keep"]);
+  gpRun(["mechanic", "problem", GAME, MECH, "--where", "the first floor", "--what", "the hop lands a pixel low"]);
+  gpRun(["mechanic", "problem", GAME, MECH, "--n", "1", "--state", "fixed", "--fix", "land on the floor's top row"]);
+  await until("the agent's status", async () => (await text(page, "#w-status")).includes("Measuring the hop in clip 1"));
+  await until("the pinned picture", async () => (await text(page, "#w-pins")).includes("the hop, frame by frame") && (await page.evaluate(() => document.querySelector("#w-pins img")?.naturalWidth)) === 1);
+  await until("the problem row", async () => (await text(page, "#w-problems")).includes("the hop lands a pixel low") && (await text(page, "#w-problems")).includes("fixed"));
+  ok("the watch panel shows the agent's status, its pinned picture and its problem table");
 
   // FREE PLAY: the game plays on its own and the agent's words wait.
   await page.click("#tab-free");

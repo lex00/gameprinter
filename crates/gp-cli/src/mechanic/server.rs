@@ -363,6 +363,17 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         // The agent's model playing live came from `gp mechanic demo`,
         // which isn't in gameprinter: nothing ever plays.
         ("GET" | "HEAD", "/api/live") => Ok(Response::json(&json!({"lines": []}))),
+        // What the agent is doing, for the watch panel ([`super::watch`]).
+        ("GET" | "HEAD", "/api/watch") => Ok(Response::json(&super::watch::view(
+            &s.target(req.param("mechanic"))?.dir,
+        ))),
+        ("GET" | "HEAD", p) if p.starts_with("/api/watch/files/") => {
+            let name = &p["/api/watch/files/".len()..];
+            match super::watch::file(&s.target(req.param("mechanic"))?.dir, name) {
+                Some((kind, bytes)) => Ok(Response::bytes(kind, bytes)),
+                None => Ok(Response::error(404, "no such pinned file")),
+            }
+        }
         ("POST", "/api/paths") => {
             // A real-input log from power-on, kept once by its hash: the whole
             // log, or `base` (a path already stored) and the frames after it.
@@ -802,6 +813,28 @@ mod tests {
         assert_eq!(handle(&srv, &req(None)).unwrap().status, 200);
         // The four let through said the same words: one turn.
         assert_eq!(srv.open_session().unwrap().turns().unwrap().len(), 1);
+    }
+
+    /// The watch panel's data and a pinned file, from the session the page
+    /// names; nothing else in the session folder is served.
+    #[test]
+    fn the_watch_panel_reads_the_agents_log_pins_and_problems() {
+        let d = tempfile::tempdir().unwrap();
+        let srv = server(d.path());
+        let dir = srv.open_session().unwrap().dir.clone();
+        super::super::watch::log(&dir, "Measuring the jump").unwrap();
+        let pic = d.path().join("sheet.png");
+        fs::write(&pic, b"png bytes").unwrap();
+        super::super::watch::pin(&dir, &pic, "the sheet", false).unwrap();
+        let (status, body) = get(&srv, "/api/watch");
+        assert_eq!(status, 200);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["status"]["text"], "Measuring the jump");
+        assert_eq!(v["pins"][0]["file"], "001-sheet.png");
+        let (status, _, b) = call(&srv, "GET", "/api/watch/files/001-sheet.png", None);
+        assert_eq!((status, b.as_str()), (200, "png bytes"));
+        assert_eq!(get(&srv, "/api/watch/files/..%2Fsession.toml").0, 404);
+        assert_eq!(get(&srv, "/api/watch/files/../session.toml").0, 404);
     }
 
     /// A request sent under another name (DNS rebinding: a page elsewhere

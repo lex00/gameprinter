@@ -635,6 +635,72 @@ function moveChoice(d) {
 
 // The session ----------------------------------------------------------
 
+// The watch panel -------------------------------------------------------
+// What the agent is doing, from /api/watch: its status (the newest log
+// line), what it pinned, its problem table and the log. Redrawn only when
+// it changes, so a playing clip isn't restarted every poll.
+
+/** An element with a class and text. */
+function wEl(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function timed(line) {
+  const li = wEl("li");
+  li.append(wEl("span", "at", line.at ?? ""), document.createTextNode(line.text ?? ""));
+  return li;
+}
+
+async function refreshWatch() {
+  if (!session) return;
+  const q = `?mechanic=${encodeURIComponent(session.mechanic)}`;
+  const w = await api(`/api/watch${q}`);
+  const key = JSON.stringify([session.mechanic, w]);
+  const col = $("watch-col");
+  if (col.dataset.key === key) return;
+  col.dataset.key = key;
+  const status = $("w-status");
+  status.innerHTML = "";
+  if (w.status) {
+    status.className = "";
+    status.append(wEl("span", "at", w.status.at ?? ""), document.createTextNode(w.status.text ?? ""));
+  } else {
+    status.className = "muted";
+    status.textContent = "Nothing yet. Your agent writes here with gp mechanic log, pin and problem.";
+  }
+  const pins = $("w-pins");
+  pins.innerHTML = "";
+  for (const p of w.pins ?? []) {
+    const fig = wEl("figure", p.keep ? "keep" : "");
+    const src = `/api/watch/files/${encodeURIComponent(p.file)}${q}`;
+    let media;
+    if (p.kind === "video") {
+      media = wEl("video");
+      Object.assign(media, { src, muted: true, loop: true, autoplay: true, controls: true, playsInline: true });
+    } else {
+      media = wEl("img");
+      Object.assign(media, { src, alt: p.title || p.file, loading: "lazy" });
+    }
+    fig.append(media, wEl("figcaption", "", `${p.n}. ${p.title || p.file}`));
+    pins.append(fig);
+  }
+  const table = $("w-problems");
+  const body = table.querySelector("tbody");
+  body.innerHTML = "";
+  for (const r of w.problems ?? []) {
+    const tr = wEl("tr");
+    for (const [v, cls] of [[r.n], [r.where], [r.what], [r.fix], [r.state, `st-${r.state}`]]) tr.append(wEl("td", cls ?? "", String(v ?? "")));
+    body.append(tr);
+  }
+  table.hidden = !(w.problems ?? []).length;
+  const log = $("w-log");
+  log.innerHTML = "";
+  for (const line of [...(w.log ?? [])].reverse()) log.append(timed(line));
+}
+
 async function refresh() {
   session = await api("/api/session");
   $("title").textContent = `${session.game} / ${session.mechanic}`;
@@ -1230,6 +1296,7 @@ async function main() {
     await showAgent(agentTurns[agentTurns.length - 1]);
   }
   setInterval(() => void refresh().catch((e) => setState(String(e))), 1500);
+  setInterval(() => void refreshWatch().catch(() => undefined), 1000);
   setInterval(() => void pollLive().catch(() => undefined), 300);
   setInterval(updateBusy, 1000);
   setInterval(showPad, 1000);

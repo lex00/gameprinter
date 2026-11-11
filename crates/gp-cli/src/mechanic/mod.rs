@@ -13,6 +13,7 @@
 //! | `clips/NNN.toml` | Its path and start frame, its frames, the state hash there, who made it and the note |
 //! | `talk.ndjson` | The conversation, one line a turn: who, the words, the clips it hands off |
 //! | `busy.json` | What the agent said it is doing, until its next turn |
+//! | `watch/` | What the agent is doing, for the page's watch panel: its log, pins and problem table ([`watch`]) |
 //!
 //! Beside the sessions, `$GP_HOME/mechanics/GAME/queue.json` is the game's
 //! quest log (seeded by `gp game new` from [`CHECKLISTS`]) and `current`
@@ -39,6 +40,7 @@ mod http;
 pub(crate) mod paths;
 mod server;
 mod session;
+pub(crate) mod watch;
 
 use crate::Outcome;
 pub(crate) use session::name_ok;
@@ -72,6 +74,55 @@ pub enum MechanicCmd {
         game: String,
         mechanic: String,
         text: String,
+    },
+    /// Add a line to the log the person watches beside the game: what you're
+    /// doing now. The newest line is your status.
+    Log {
+        game: String,
+        mechanic: String,
+        text: String,
+    },
+    /// Pin a picture or a clip (png, jpg, gif, webp, mp4, webm) for the person
+    /// to see beside the game: a sheet of frames, the original against the
+    /// model. It's copied into the session. The newest few show; `--keep`
+    /// keeps one at the top. `--drop N` takes pin N off instead.
+    Pin {
+        game: String,
+        mechanic: String,
+        /// The file to pin.
+        #[arg(required_unless_present = "drop")]
+        file: Option<PathBuf>,
+        /// What it shows, in a line.
+        #[arg(long, default_value = "")]
+        title: String,
+        /// Keep it at the top.
+        #[arg(long)]
+        keep: bool,
+        /// Take pin N off the list.
+        #[arg(long, conflicts_with_all = ["file", "keep"])]
+        drop: Option<u64>,
+    },
+    /// Add a row to the problem table the person watches: where, what is
+    /// wrong, the change that fixes it and its state (open, working, fixed,
+    /// wontfix). With `--n`, changes the fields given of row N.
+    Problem {
+        game: String,
+        mechanic: String,
+        /// The row to change.
+        #[arg(long)]
+        n: Option<u64>,
+        /// Where it shows ("25m, the second ladder").
+        #[arg(long = "where")]
+        place: Option<String>,
+        /// What is wrong.
+        #[arg(long)]
+        what: Option<String>,
+        /// The change that fixes it.
+        #[arg(long)]
+        fix: Option<String>,
+        /// open, working, fixed or wontfix (a new row is open).
+        #[arg(long)]
+        state: Option<String>,
     },
     /// Wait until it is the agent's turn (the person handed off a clip or
     /// answered), then print the session as `show` does. Run it in the
@@ -169,6 +220,72 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
         } => {
             Session::open(paths, game, mechanic)?.set_busy(text)?;
             Ok(Outcome::ok(json!({}), format!("busy: {text}")))
+        }
+        MechanicCmd::Log {
+            game,
+            mechanic,
+            text,
+        } => {
+            let line = watch::log(&Session::open(paths, game, mechanic)?.dir, text)?;
+            Ok(Outcome::ok(
+                line.clone(),
+                format!("{} {}", line["at"].as_str().unwrap_or(""), text.trim()),
+            ))
+        }
+        MechanicCmd::Pin {
+            game,
+            mechanic,
+            file,
+            title,
+            keep,
+            drop,
+        } => {
+            let dir = Session::open(paths, game, mechanic)?.dir;
+            if let Some(n) = drop {
+                watch::unpin(&dir, *n)?;
+                return Ok(Outcome::ok(
+                    json!({"dropped": n}),
+                    format!("pin {n} taken off"),
+                ));
+            }
+            let Some(file) = file else {
+                bail!("give a file to pin, or --drop N");
+            };
+            let row = watch::pin(&dir, file, title, *keep)?;
+            Ok(Outcome::ok(
+                row.clone(),
+                format!("pin {}: {}", row["n"], row["file"].as_str().unwrap_or("")),
+            ))
+        }
+        MechanicCmd::Problem {
+            game,
+            mechanic,
+            n,
+            place,
+            what,
+            fix,
+            state,
+        } => {
+            let row = watch::problem(
+                &Session::open(paths, game, mechanic)?.dir,
+                &watch::Problem {
+                    n: *n,
+                    place: place.as_deref(),
+                    what: what.as_deref(),
+                    fix: fix.as_deref(),
+                    state: state.as_deref(),
+                },
+            )?;
+            Ok(Outcome::ok(
+                row.clone(),
+                format!(
+                    "problem {} ({}): {}: {}",
+                    row["n"],
+                    row["state"].as_str().unwrap_or(""),
+                    row["where"].as_str().unwrap_or(""),
+                    row["what"].as_str().unwrap_or("")
+                ),
+            ))
         }
         MechanicCmd::Wait { game, mechanic } => wait(paths, game, mechanic.as_deref()),
         MechanicCmd::Show { game, mechanic } => {
