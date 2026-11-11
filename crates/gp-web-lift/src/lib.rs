@@ -63,9 +63,10 @@ pub fn template_looks(
     let Ok(rd) = std::fs::read_dir(themes_dir) else {
         return (looks, skipped);
     };
+    // A finished look (`ready_look`) goes in as it is, by `add_ready_looks`.
     let mut dirs: Vec<PathBuf> = rd
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| gp_theme::same_as::is_theme_dir(p))
+        .filter(|p| gp_theme::same_as::is_theme_dir(p) && ready_look(p).is_none())
         .collect();
     dirs.sort();
     for d in dirs {
@@ -101,6 +102,105 @@ pub fn template_looks(
         }
     }
     (looks, skipped)
+}
+
+/// A finished look in a template's themes folder: a folder holding
+/// `look.txt` and no theme.toml (a large-art look, `gp_present::art`, whose
+/// art isn't drawn by gp), or a `same_as.toml` pointing at one. The folder
+/// whose files are the look.
+fn ready_look(dir: &Path) -> Option<PathBuf> {
+    let has_look = |d: &Path| {
+        d.join(gp_present::looks::LOOK_FILE).is_file()
+            && !d.join(gp_theme::format::THEME_FILE).is_file()
+    };
+    if has_look(dir) {
+        return Some(dir.to_owned());
+    }
+    let text = std::fs::read_to_string(dir.join(gp_theme::same_as::SAME_AS_FILE)).ok()?;
+    let t: toml::Table = text.parse().ok()?;
+    let target = dir.join(t.get("theme")?.as_str()?);
+    has_look(&target).then_some(target)
+}
+
+/// Copies each finished look in `themes_dir` ([`ready_look`]) into
+/// `out/themes/<id>/` as it is, lists it in `themes/index.json` beside the
+/// looks drawn there, and marks `preview.json` as offering looks. A look
+/// whose `look.txt` doesn't read is named in `skipped`.
+fn add_ready_looks(
+    themes_dir: &Path,
+    out: &Path,
+    skipped: &mut Vec<Skipped>,
+) -> Result<(), String> {
+    let Ok(rd) = std::fs::read_dir(themes_dir) else {
+        return Ok(());
+    };
+    let mut dirs: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    dirs.sort();
+    let mut added = Vec::new();
+    for d in dirs {
+        let Some(src) = ready_look(&d) else { continue };
+        let id = d
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let look = std::fs::read_to_string(src.join(gp_present::looks::LOOK_FILE))
+            .map_err(|e| e.to_string())
+            .and_then(|t| gp_present::looks::Look::read(&t));
+        let look = match look {
+            Ok(l) if gp_present::looks::valid_id(&id) && id != gp_present::looks::ORIGINAL => l,
+            Ok(_) => continue,
+            Err(e) => {
+                skipped.push(Skipped {
+                    title: id.clone(),
+                    id,
+                    reason: NOT_READ.into(),
+                    detail: e,
+                });
+                continue;
+            }
+        };
+        let mut files = Vec::new();
+        list(&src, &src, &mut files)?;
+        let to = out.join(gp_present::looks::THEMES_DIR).join(&id);
+        for f in files {
+            let b = std::fs::read(src.join(&f)).map_err(|e| format!("{f}: {e}"))?;
+            write(&to.join(&f), &b)?;
+        }
+        added.push((id, look.title));
+    }
+    if added.is_empty() {
+        return Ok(());
+    }
+    let index_file = out
+        .join(gp_present::looks::THEMES_DIR)
+        .join(gp_present::looks::INDEX_FILE);
+    let mut index: Vec<(String, String)> = std::fs::read_to_string(&index_file)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v["themes"].as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|t| {
+            Some((
+                t["id"].as_str()?.to_owned(),
+                t["title"].as_str()?.to_owned(),
+            ))
+        })
+        .collect();
+    for (id, title) in added {
+        if !index.iter().any(|(i, _)| *i == id) {
+            index.push((id, title));
+        }
+    }
+    write(
+        &index_file,
+        gp_present::looks::write_index(&index).as_bytes(),
+    )?;
+    let cfg_file = out.join("preview.json");
+    let mut cfg: serde_json::Value =
+        serde_json::from_str(&read(&cfg_file)?).map_err(|e| format!("preview.json: {e}"))?;
+    cfg["looks"] = serde_json::Value::Bool(true);
+    write(&cfg_file, cfg.to_string().as_bytes())
 }
 
 /// Writes `bundle.json`, `profiles.toml`, `profiles/<preset>.json`,
@@ -538,6 +638,11 @@ pub fn lift_rom(rom: &[u8], template: &Path, out: &Path) -> Result<Outcome, Stri
         true,
     )?;
     looks_skipped.extend(prepped.skipped);
+    add_ready_looks(
+        &template.join(gp_present::looks::THEMES_DIR),
+        out,
+        &mut looks_skipped,
+    )?;
     let mut written = Vec::new();
     list(out, out, &mut written)?;
     written.retain(|f| !f.starts_with("lifted/") && f != "result.json");
@@ -925,6 +1030,11 @@ pub fn lift_game(rom: &[u8], dir: &Path, out: &Path) -> Result<Outcome, String> 
         true,
     )?;
     looks_skipped.extend(prepped.skipped);
+    add_ready_looks(
+        &t.dir.join(gp_present::looks::THEMES_DIR),
+        out,
+        &mut looks_skipped,
+    )?;
     let mut written = Vec::new();
     list(out, out, &mut written)?;
     written.retain(|f| !f.starts_with("lifted/") && f != "result.json");
@@ -1187,6 +1297,64 @@ mod tests {
     /// themes/paper/ holds only same_as.toml. Each is lifted from its data
     /// image and offers the paper theme, drawn the same. (`a` keeps the
     /// two themes it can't offer; they are skipped there.)
+    #[test]
+    #[ignore = "needs the games repo beside this one (phase 1.3)"]
+    fn a_finished_look_goes_in_as_it_is_on_both_models() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("templates");
+        let (a, b) = (root.join("a"), root.join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        let rom = rivet_rodeo_with_broken_themes(&a);
+        // A large-art look: look.txt naming its rules, its art, no theme.toml.
+        let clay = a.join("themes/clay");
+        write(
+            &clay.join("look.txt"),
+            b"gp-look 1\nid clay\ntitle Clay\nart art.txt\n",
+        )
+        .unwrap();
+        write(&clay.join("art.txt"), b"gp-art 1\nscale 6\n").unwrap();
+        write(&clay.join("art/hero.png"), b"not drawn by gp").unwrap();
+        // Another template points at it.
+        std::fs::create_dir_all(b.join("themes/clay")).unwrap();
+        for f in [
+            "template.toml",
+            "asset-map.toml",
+            "profiles.toml",
+            "model.toml",
+        ] {
+            std::fs::copy(a.join(f), b.join(f)).unwrap();
+        }
+        std::fs::write(
+            b.join("themes/clay").join(gp_theme::same_as::SAME_AS_FILE),
+            "theme = \"../../../a/themes/clay\"\n",
+        )
+        .unwrap();
+        for t in [&a, &b] {
+            let out = dir.path().join("out").join(t.file_name().unwrap());
+            let (json, code) = result_json(lift_rom(&rom, t, &out));
+            assert_eq!(code, 0, "{json}");
+            let skipped = json["looks_skipped"].as_array().unwrap();
+            assert!(!skipped.iter().any(|s| s["id"] == "clay"), "{json}");
+            let index = read(&out.join("themes/index.json")).unwrap();
+            assert!(
+                index.contains("{\"id\": \"clay\", \"title\": \"Clay\"}"),
+                "{index}"
+            );
+            assert_eq!(
+                std::fs::read(out.join("themes/clay/art/hero.png")).unwrap(),
+                b"not drawn by gp"
+            );
+            assert!(
+                read(&out.join("themes/clay/art.txt"))
+                    .unwrap()
+                    .starts_with("gp-art 1")
+            );
+            let cfg: serde_json::Value =
+                serde_json::from_str(&read(&out.join("preview.json")).unwrap()).unwrap();
+            assert_eq!(cfg["looks"], true);
+        }
+    }
+
     #[test]
     #[ignore = "needs the games repo beside this one (phase 1.3)"]
     fn a_shared_theme_is_offered_on_both_models() {

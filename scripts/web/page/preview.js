@@ -180,6 +180,27 @@ class Preview {
   scene() {
     return JSON.parse(this.check(this.run("gp_scene")));
   }
+  // A large-art look's rules (gp_present::art; "" takes them away): the
+  // art files the frames name by number, and the level pictures it builds
+  // stages over.
+  loadArt(text) {
+    if (!this.has("gp_load_art")) throw new Error("this preview's gp_web.wasm can't draw large art; rebuild it");
+    return JSON.parse(this.check(this.run("gp_load_art", enc.encode(text))));
+  }
+  // The look's stage over level picture `pic`, built by the module from
+  // the picture's pixels (gp_present::art::stage).
+  artStage(pic, w, h, rgba) {
+    const b = new Uint8Array(12 + rgba.length);
+    new DataView(b.buffer).setUint32(0, pic, true);
+    new DataView(b.buffer).setUint32(4, w, true);
+    new DataView(b.buffer).setUint32(8, h, true);
+    b.set(rgba, 12);
+    return JSON.parse(this.check(this.run("gp_art_stage", b)));
+  }
+  // A frame of the large-art look (gp_present::art::frame), or null.
+  artFrame() {
+    return JSON.parse(this.check(this.run("gp_art_frame")));
+  }
   // Picture and sound options (gp_present::view), as play's --picture
   // takes them. False for a module built before them.
   view(list) {
@@ -506,11 +527,17 @@ function settingsScreen(p, canvas, ctx, profilesText, looks) {
     looks,
     draw() {
       if (!open) return;
-      const [w, h] = [canvas.width, canvas.height];
+      // In game pixels: a large-art look's canvas has several to each.
+      const k = canvas.gpScale ?? 1;
+      const [w, h] = [canvas.width / k, canvas.height / k];
       off.width = w;
       off.height = h;
       off.getContext("2d").putImageData(p.settingsPicture(w, h), 0, 0);
+      ctx.save();
+      ctx.setTransform(k, 0, 0, k, 0, 0);
+      ctx.imageSmoothingEnabled = false;
       ctx.drawImage(off, 0, 0);
+      ctx.restore();
     },
   };
 }
@@ -779,6 +806,7 @@ function parseLook(id, text) {
     if (k === "title") look.title = v.join(" ");
     else if (k === "original") look.original = true;
     else if (k === "own_sound") look.own_sound = true;
+    else if (k === "art") look.art = v.join(" ");
     else if (k === "file") look.files.push(v.join(" "));
   }
   return look;
@@ -1028,6 +1056,64 @@ async function main() {
   });
   const lookStore = settingsStore(cfg.model ?? cfg.title, "theme");
   let lookPresent = presentText;
+  // A large-art look's rules text and its art files (gp_present::art),
+  // or null: the module says what to paint, and the page only paints it.
+  let lookArt = null;
+  let artPics = [];
+  // By level picture: the look's built stage, painted, and the pixels it
+  // was built from (a restart builds it again in the new module).
+  let artStages = new Map();
+  // The level picture's pixels, read once.
+  const pixelsOf = (img) => {
+    const c = new OffscreenCanvas(img.width, img.height).getContext("2d", { willReadFrequently: true });
+    c.drawImage(img, 0, 0);
+    return c.getImageData(0, 0, img.width, img.height).data;
+  };
+  // A gradient from the top color at y0 to the bottom at y1.
+  const gradient = (g, [top, bottom], y0, y1) => {
+    const gr = g.createLinearGradient(0, y0, 0, y1);
+    gr.addColorStop(0, `rgb(${top.join(",")})`);
+    gr.addColorStop(1, `rgb(${bottom.join(",")})`);
+    return gr;
+  };
+  // A stage's draws (stage pixels) painted once into its own canvas.
+  const paintStage = (st, art) => {
+    const S = st.scale;
+    const c = new OffscreenCanvas(st.size[0] * S, st.size[1] * S);
+    const g = c.getContext("2d");
+    const back = gradient(g, st.backdrop, 0, st.size[1] * S);
+    g.fillStyle = back;
+    g.fillRect(0, 0, c.width, c.height);
+    g.imageSmoothingEnabled = true;
+    g.imageSmoothingQuality = "high";
+    for (const [src, part, x, y, w, h, flip, shade, clip] of st.draws) {
+      g.save();
+      if (clip) {
+        g.beginPath();
+        g.rect(...clip);
+        g.clip();
+      }
+      if (src[0] === "backdrop") {
+        g.fillStyle = back;
+        g.fillRect(x, y, w, h);
+      } else {
+        const img = art[src[1]];
+        if (img) {
+          if (shade !== 1000) g.filter = `brightness(${shade / 1000})`;
+          const [sx, sw] = [(part[0] * img.width) / 1000, (part[1] * img.width) / 1000];
+          if (flip) {
+            g.translate(x + w, 0);
+            g.scale(-1, 1);
+            g.drawImage(img, sx, 0, sw, img.height, 0, y, w, h);
+          } else {
+            g.drawImage(img, sx, 0, sw, img.height, x, y, w, h);
+          }
+        }
+      }
+      g.restore();
+    }
+    return c;
+  };
   const tinted = new Map();
   // The look's sound per role, or the build's own role files.
   const applyRoles = async (look) => {
@@ -1069,12 +1155,32 @@ async function main() {
     // and choosing Paper on the settings screen in ROM mode failed with
     // "present text doesn't start with `gp-present 15`", 2026-11-04).
     const text = look?.files.includes("present.txt") ? await load(look.src("present.txt")).then((r) => r.text()) : presentText;
+    const artText = look?.art ? await load(look.src(look.art)).then((r) => r.text()) : null;
     p.loadPresent(text);
+    let nextArt = [];
+    const nextStages = new Map();
+    if (artText) {
+      const { files, stages } = p.loadArt(artText);
+      nextArt = await Promise.all(files.map((f) => image(look.src(f))));
+      // Built over the build's own level pictures (lifted from the
+      // player's ROM for a ROM build): the look holds no layout.
+      for (const pic of stages) {
+        const img = ownPics[pic];
+        const rgba = pixelsOf(img);
+        const st = p.artStage(pic, img.width, img.height, rgba);
+        nextStages.set(pic, { canvas: paintStage(st, nextArt), rgba, w: img.width, h: img.height });
+      }
+    } else if (lookArt) {
+      p.loadArt("");
+    }
     // Kept only once the module takes it: a restart in new settings loads
     // the model afresh and then this text, so a look that failed here made
     // every later restart fail with no presentation, and the game froze
     // (Normal back to Retro after choosing Paper in ROM mode, 2026-11-04).
     lookPresent = text;
+    lookArt = artText;
+    artPics = nextArt;
+    artStages = nextStages;
     pics.splice(0, pics.length, ...next);
     looks.current = look ? look.id : looks.own[0];
     tinted.clear();
@@ -1144,14 +1250,82 @@ async function main() {
     ctx.restore();
   };
 
+  // A large-art look's frame: every picture in order, placed by the module
+  // in sixteenths of a game pixel, on a canvas `scale` pixels to each.
+  const drawArt = (a) => {
+    const k = a.scale;
+    const [W, H] = [a.size[0] * k, a.size[1] * k];
+    if (canvas.width !== W || canvas.height !== H) {
+      canvas.width = W;
+      canvas.height = H;
+      canvas.gpScale = k;
+      canvas.dispatchEvent(new Event("gp-resize"));
+    }
+    canvas.style.imageRendering = "auto";
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = `rgb(${a.clear.join(",")})`;
+    ctx.fillRect(0, 0, W, H);
+    const u = k / 16;
+    for (const [src, x, y, w, h, fx, fy, alpha, cut, clip] of a.draws) {
+      ctx.globalAlpha = alpha / 255;
+      if (src[0] === "fill" || src[0] === "backdrop") {
+        ctx.fillStyle = src[0] === "fill" ? `rgb(${src[1].join(",")})` : gradient(ctx, a.backdrop.slice(0, 2), a.backdrop[2] * u, a.backdrop[3] * u);
+        ctx.fillRect(x * u, y * u, w * u, h * u);
+        continue;
+      }
+      if (src[0] === "stage") {
+        const st = artStages.get(src[1]);
+        if (st) {
+          ctx.imageSmoothingEnabled = true;
+          ctx.drawImage(st.canvas, x * u, y * u, w * u, h * u);
+        }
+        continue;
+      }
+      const img = src[0] === "art" ? artPics[src[1]] : src[0] === "tint" ? tint(src[1], src[2]) : pics[src[1]];
+      if (!img) continue;
+      // The build's own pictures stay sharp; art is smoothed.
+      ctx.imageSmoothingEnabled = src[0] === "art";
+      ctx.save();
+      if (clip) {
+        ctx.beginPath();
+        ctx.rect(clip[0] * u, clip[1] * u, clip[2] * u, clip[3] * u);
+        ctx.clip();
+      }
+      ctx.translate(x * u, y * u);
+      // The cuts are on the screen, before any flip.
+      if (cut.length) {
+        ctx.beginPath();
+        ctx.rect(0, 0, w * u, h * u);
+        for (const [cx0, cy0, cw, ch] of cut) ctx.rect(cx0 * k, cy0 * k, cw * k, ch * k);
+        ctx.clip("evenodd");
+      }
+      ctx.translate(fx ? w * u : 0, fy ? h * u : 0);
+      ctx.scale(fx ? -1 : 1, fy ? -1 : 1);
+      ctx.drawImage(img, 0, 0, w * u, h * u);
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  };
+
   const draw = (pl = p) => {
+    const a = lookArt && pl === p ? pl.artFrame() : null;
+    if (a) {
+      drawArt(a);
+      return;
+    }
+    if (canvas.gpScale) {
+      canvas.gpScale = undefined;
+      canvas.height = vh;
+      canvas.style.imageRendering = "pixelated";
+    }
     const s = pl.scene();
     const [cx, cy] = s.camera;
     // The window drawn: the game's view, or wider with widescreen
     // (gp_present::view). A module built before it draws the view.
     const win = s.window ?? { x: cx + vl, y: cy + vt, w: vw, h: vh, view_x: 0, wall: 0, hud: [cx, cy] };
-    if (canvas.width !== win.w) {
+    if (canvas.width !== win.w || canvas.height !== vh) {
       canvas.width = win.w;
+      canvas.height = vh;
       ctx.imageSmoothingEnabled = false;
       canvas.dispatchEvent(new Event("gp-resize"));
     }
@@ -1305,6 +1479,10 @@ async function main() {
       profile = name;
       t.hooks = p.load(bundle);
       p.loadPresent(lookPresent);
+      if (lookArt) {
+        p.loadArt(lookArt);
+        for (const [pic, st] of artStages) p.artStage(pic, st.w, st.h, st.rgba);
+      }
       if (soundText) {
         p.loadSound(soundText);
         await applyRoles(looks.found.find((l) => l.id === looks.current && l.id !== looks.own[0]) ?? null);
@@ -1690,7 +1868,7 @@ function shell(p, cfg, canvas, profileNow, host) {
   let scale = scales.includes(asked) ? asked : Number(asked) || 1;
   const applyScale = () => {
     // The window's width follows the canvas's, wider with widescreen.
-    const [w, h] = [Math.round((cfg.window[0] * canvas.width) / cfg.visible[2]), cfg.window[1]];
+    const [w, h] = [Math.round((cfg.window[0] * canvas.width) / (canvas.gpScale ?? 1) / cfg.visible[2]), cfg.window[1]];
     let k = scale;
     if (scale === "fit") k = Math.min((innerWidth - 16) / w, (innerHeight - 40) / h);
     canvas.style.width = `${Math.floor(w * k)}px`;

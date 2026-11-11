@@ -333,6 +333,39 @@ pub extern "C" fn gp_scene() -> i32 {
     result(with_preview(|p| p.scene()))
 }
 
+/// Loads a large-art look's rules (`Preview::load_art`, UTF-8 bytes;
+/// empty takes them away) and writes its art files as JSON.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_load_art(ptr: *mut u8, len: usize) -> i32 {
+    let bytes = input(ptr, len);
+    result(
+        String::from_utf8(bytes.into_vec())
+            .map_err(|e| e.to_string())
+            .and_then(|text| with_preview(|p| p.load_art(&text))),
+    )
+}
+
+/// Builds the large-art look's stage over a level picture
+/// (`Preview::art_stage`): the input is the picture's number, width and
+/// height (three little-endian u32s), then its pixels, RGBA row by row.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_art_stage(ptr: *mut u8, len: usize) -> i32 {
+    let bytes = input(ptr, len);
+    result(with_preview(|p| {
+        if bytes.len() < 12 {
+            return Err("a stage's input starts with the picture, width and height".into());
+        }
+        let n = |i: usize| u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
+        p.art_stage(n(0), n(4) as usize, n(8) as usize, &bytes[12..])
+    }))
+}
+
+/// A frame of the large-art look as JSON (`Preview::art_frame`).
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_art_frame() -> i32 {
+    result(with_preview(|p| p.art_frame()))
+}
+
 /// Sets the picture and sound options (`Preview::set_view`, UTF-8 bytes).
 #[unsafe(no_mangle)]
 pub extern "C" fn gp_view(ptr: *mut u8, len: usize) -> i32 {

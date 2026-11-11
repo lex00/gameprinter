@@ -33,6 +33,16 @@ pub struct Preview {
     /// Whether the last tick started a level, so the shell autosaves
     /// (`gp_present::shell::autosaves`).
     autosave_due: bool,
+    /// A large-art look's rules (`gp_present::art`) as loaded, and
+    /// resolved against the presentation; None draws the scene as it is.
+    art_text: Option<String>,
+    art: Option<gp_present::art::Art>,
+    /// The level pictures' pixels the look's stages were built from
+    /// (picture, width, height, RGBA), kept to build them again when the
+    /// presentation is loaded afresh.
+    stage_px: Vec<(u32, usize, usize, Vec<[u8; 4]>)>,
+    /// What the large-art look keeps from frame to frame.
+    painter: gp_present::art::Painter,
 }
 
 /// The model's sound, played live: the cues say what plays when, gp-sound's
@@ -224,6 +234,10 @@ impl Preview {
             sound: None,
             ring: gp_present::shell::Ring::new(gp_present::shell::REWIND_EVERY, 0),
             autosave_due: false,
+            art_text: None,
+            art: None,
+            stage_px: Vec::new(),
+            painter: gp_present::art::Painter::new(),
         })
     }
 
@@ -318,9 +332,146 @@ impl Preview {
     /// Loads the presentation `gp gen bevy` and `gp-web-prep` write
     /// (`assets/present.txt`), for [`Preview::scene`].
     pub fn load_present(&mut self, text: &str) -> Result<(), String> {
-        self.present = Some(gp_present::text::read(text)?);
+        let p = gp_present::text::read(text)?;
+        // A large-art look loaded before stays, resolved against this
+        // presentation (a restart in new settings loads it afresh).
+        let mut art = match &self.art_text {
+            Some(t) => Some(gp_present::art::Art::new(
+                gp_present::art::ArtRules::read(t)?,
+                &p,
+            )?),
+            None => None,
+        };
+        if let Some(a) = &mut art {
+            for (pic, w, h, px) in &self.stage_px {
+                a.build_stage(&p, *pic, *w, *h, px)?;
+            }
+        }
+        self.present = Some(p);
+        self.art = art;
+        self.painter = gp_present::art::Painter::new();
         self.anim = gp_present::Animator::new();
         Ok(())
+    }
+
+    /// Loads a large-art look's rules (`gp_present::art`, the file its
+    /// `look.txt` names with `art`), after the presentation; an empty text
+    /// takes them away. Returns the art files, in the numbers
+    /// [`Preview::art_frame`] names them by, as JSON.
+    pub fn load_art(&mut self, text: &str) -> Result<String, String> {
+        self.stage_px.clear();
+        if text.trim().is_empty() {
+            self.art_text = None;
+            self.art = None;
+            return Ok(r#"{"files": [], "stages": []}"#.into());
+        }
+        let p = self.present.as_ref().ok_or("no presentation loaded")?;
+        let art = gp_present::art::Art::new(gp_present::art::ArtRules::read(text)?, p)?;
+        let out =
+            serde_json::json!({"files": art.files, "stages": art.stage_levels(p)}).to_string();
+        self.art_text = Some(text.to_owned());
+        self.art = Some(art);
+        self.painter = gp_present::art::Painter::new();
+        Ok(out)
+    }
+
+    /// Builds the large-art look's stage over level picture `pic` from its
+    /// pixels (`w` by `h`, RGBA row by row: the picture the runtime has,
+    /// lifted from the player's ROM for a ROM build) and returns it as
+    /// JSON (`gp_present::art::stage`): `size` (game pixels), `scale`
+    /// (stage pixels to a game pixel), `backdrop` (two colors, top and
+    /// bottom) and `draws`, each `[src, part, x, y, w, h, flip_x, shade,
+    /// clip]` in stage pixels, `src` `["piece", file]` or `["backdrop"]`,
+    /// `part` `[x, w]` of the piece in thousandths of its width, `shade` a
+    /// brightness in thousandths.
+    pub fn art_stage(
+        &mut self,
+        pic: u32,
+        w: usize,
+        h: usize,
+        rgba: &[u8],
+    ) -> Result<String, String> {
+        use gp_present::art::stage::StageSrc;
+        let p = self.present.as_ref().ok_or("no presentation loaded")?;
+        let art = self.art.as_mut().ok_or("no large-art look loaded")?;
+        let px: Vec<[u8; 4]> = rgba.as_chunks::<4>().0.to_vec();
+        let st = art.build_stage(p, pic, w, h, &px)?;
+        let draws: Vec<serde_json::Value> = st
+            .draws
+            .iter()
+            .map(|d| {
+                let src = match d.src {
+                    StageSrc::Piece(i) => serde_json::json!(["piece", i]),
+                    StageSrc::Backdrop => serde_json::json!(["backdrop"]),
+                };
+                serde_json::json!([src, d.part, d.x, d.y, d.w, d.h, d.flip_x, d.shade, d.clip])
+            })
+            .collect();
+        let out = serde_json::json!({
+            "size": st.size, "scale": st.scale, "backdrop": st.backdrop, "draws": draws,
+        })
+        .to_string();
+        self.stage_px.retain(|x| x.0 != pic);
+        self.stage_px.push((pic, w, h, px));
+        Ok(out)
+    }
+
+    /// The picture options a frame is drawn with: the page's, less the
+    /// sprite limit where a large-art look says so (its pictures aren't
+    /// the console's 8-pixel sprites).
+    fn draw_options(&self) -> gp_present::view::Options {
+        let mut o = self.viewer.options;
+        if self.art.as_ref().is_some_and(|a| !a.rules.limit) {
+            o.sprite_limit = false;
+        }
+        o
+    }
+
+    /// A frame of a large-art look as JSON (`gp_present::art::Painter::frame`):
+    /// `size` (the window in game pixels), `scale` (canvas pixels to a
+    /// game pixel), `clear`, and `draws`, each `[src, x, y, w, h, flip_x,
+    /// flip_y, alpha, cut, clip]` in the order painted, where `src` is
+    /// `["own", picture]`, `["art", file]`, `["tint", picture, [r, g, b]]`
+    /// or `["fill", [r, g, b]]`, places and sizes in sixteenths of a game
+    /// pixel from the window's corner, `cut` the parts not painted (game
+    /// pixels from the picture's corner, before any flip) and `clip` null
+    /// or the only box painted (`[x, y, w, h]` like the place). Null when
+    /// no large-art look is loaded.
+    pub fn art_frame(&self) -> Result<String, String> {
+        use gp_present::art::Src;
+        let Some(art) = &self.art else {
+            return Ok("null".into());
+        };
+        let p = self.present.as_ref().ok_or("no presentation loaded")?;
+        let (spec, world) = (self.interp.spec(), self.interp.world());
+        let scene = self.anim.scene(p, spec, world);
+        let mut viewer = self.viewer.clone();
+        viewer.options = self.draw_options();
+        let f = viewer.frame(p, spec, world, &scene, gp_present::view::SUB);
+        let height = p.screen.visible()[3];
+        let a = self.painter.frame(art, p, &f, height);
+        let draws: Vec<serde_json::Value> = a
+            .draws
+            .iter()
+            .map(|d| {
+                let src = match d.src {
+                    Src::Own(i) => serde_json::json!(["own", i]),
+                    Src::Art(i) => serde_json::json!(["art", i]),
+                    Src::Tint(i, c) => serde_json::json!(["tint", i, c]),
+                    Src::Fill(c) => serde_json::json!(["fill", c]),
+                    Src::Stage(l) => serde_json::json!(["stage", l]),
+                    Src::Backdrop => serde_json::json!(["backdrop"]),
+                };
+                serde_json::json!([
+                    src, d.x, d.y, d.w, d.h, d.flip_x, d.flip_y, d.alpha, d.cut, d.clip
+                ])
+            })
+            .collect();
+        Ok(serde_json::json!({
+            "size": a.size, "scale": a.scale, "clear": a.clear, "draws": draws,
+            "backdrop": a.backdrop.map(|(t, b, y0, y1)| serde_json::json!([t, b, y0, y1])),
+        })
+        .to_string())
     }
 
     /// Runs one frame with controller 1's bits (A, B, Select, Start, Up,
@@ -361,6 +512,9 @@ impl Preview {
                 .fired(p, self.interp.spec(), self.interp.world(), events);
             let scene = self.anim.scene(p, self.interp.spec(), self.interp.world());
             self.viewer.step(p, self.interp.world(), &scene);
+            if let Some(a) = &self.art {
+                self.painter.step(a, &scene);
+            }
         }
     }
 

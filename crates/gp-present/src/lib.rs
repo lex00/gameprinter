@@ -16,6 +16,7 @@
 
 use gp_sim::{Spec, World};
 
+pub mod art;
 pub mod catalogue;
 pub mod looks;
 pub mod pad;

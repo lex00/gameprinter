@@ -131,6 +131,7 @@ pub fn folder(
         original: look.id == ORIGINAL,
         files: Vec::new(),
         own_sound: !look.theme.replaces_sound(),
+        art: None,
     };
     let mut seen = std::collections::BTreeSet::new();
     for (rel, bytes) in files {

@@ -41,6 +41,9 @@ pub struct Look {
     /// Whether the game's own sound plays (no sound role replaced). A look
     /// with any `sound/roles/` file replaces the game's sound.
     pub own_sound: bool,
+    /// A large-art look's rules file (`gp_present::art`), inside its
+    /// folder.
+    pub art: Option<String>,
 }
 
 impl Look {
@@ -51,6 +54,9 @@ impl Look {
         }
         if self.own_sound {
             s.push_str("own_sound\n");
+        }
+        if let Some(a) = &self.art {
+            s.push_str(&format!("art {a}\n"));
         }
         for f in &self.files {
             s.push_str(&format!("file {f}\n"));
@@ -73,6 +79,12 @@ impl Look {
                 "title" => l.title = v.to_owned(),
                 "original" => l.original = true,
                 "own_sound" => l.own_sound = true,
+                "art" => {
+                    if v.is_empty() || v.starts_with('/') || v.split('/').any(|p| p == "..") {
+                        return Err(format!("`{v}` isn't a file inside the look"));
+                    }
+                    l.art = Some(v.to_owned());
+                }
                 "file" => {
                     if v.is_empty() || v.starts_with('/') || v.split('/').any(|p| p == "..") {
                         return Err(format!("`{v}` isn't a file inside the look"));
@@ -159,10 +171,12 @@ mod tests {
             original: false,
             files: vec!["frame-0-0.png".into(), "sound/roles/jump.wav".into()],
             own_sound: false,
+            art: Some("art.txt".into()),
         };
         assert_eq!(Look::read(&l.write()).unwrap(), l);
         assert!(l.has("sound/roles/jump.wav"));
         assert!(Look::read("gp-look 1\nid x\nfile ../a.png\n").is_err());
+        assert!(Look::read("gp-look 1\nid x\nart /a.txt\n").is_err());
         assert!(Look::read("gp-look 1\nid X\n").is_err());
         assert!(Look::read("nope").is_err());
         assert_eq!(
