@@ -5,7 +5,8 @@
 # OUT gets the page and nothing of the game. OUT.play gets the game's built
 # files, which are published as `play/` in the game's package
 # (scripts/web/publish-game.sh) and which the page installs from its source.
-# GP_PAGE_SOURCE names the source in scripts/web/sources.toml (default staging).
+# GP_PAGE_SOURCE names the source in scripts/web/sources.toml (default registry,
+# lex00/gp-registry).
 #
 # Last it runs `gp template served` on the game: its open version and the
 # files of both folders against each ROM the game names (result also in
@@ -63,7 +64,7 @@ lap "build-lift.sh"
 # plays a visitor's ROM, so it is named for the game, and GP_PAGE_CONTENT
 # names a theme package installed with the game (lex00/turnips, say).
 title="${GP_PAGE_TITLE:-$(python3 -I -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["title"])' "$game/package.toml")}"
-python3 -I - "$out" "$title" "$out/game/lift/game.json" "$repo/sources/nes.toml" "$repo/scripts/web/sources.toml" "${GP_PAGE_SOURCE:-staging}" "$game/package.toml" "${GP_PAGE_CONTENT:-}" <<'EOF'
+python3 -I - "$out" "$title" "$out/game/lift/game.json" "$repo/sources/nes.toml" "$repo/scripts/web/sources.toml" "${GP_PAGE_SOURCE:-registry}" "$game/package.toml" "${GP_PAGE_CONTENT:-}" <<'EOF'
 import json, sys, tomllib
 out, title, game_file, registry, sources_file, source_name, package, content = sys.argv[1:]
 game = json.load(open(game_file))

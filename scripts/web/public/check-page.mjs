@@ -1967,10 +1967,8 @@ async function registryLinks(S) {
   };
   await refused("p?g=someone/else", /this page plays/i, "a link to a game this player doesn't have is refused in words");
   await refused(`p?g=${page.game}@9.9.9`, /couldn't be installed/i, "a link to a version that doesn't exist is refused in words");
-  // A local registry holds only the current version.
-  // Only staging still holds 1.0.0.
-  if (page.source.name !== "gp-staging") await refused(`p?g=${page.game}@1.0.0`, /isn't there/i, "a version this source doesn't hold is refused in words");
-  else await refused(`p?g=${page.game}@1.0.0`, /hook code and no module/i, "a version with hooks and no module is refused in words");
+  // Neither registry holds 1.0.0.
+  await refused(`p?g=${page.game}@1.0.0`, /isn't there/i, "a version this source doesn't hold is refused in words");
 }
 
 // What a source can do wrong, each on a first visit. `r` fetches the real
@@ -2087,11 +2085,6 @@ if (!registryStopped) {
   }
   bad("manifest", "the manifest changed", /couldn't be installed/i, (u) => /\/packages\/[0-9a-f]{64}$/.test(u), flip);
   bad("blob", "one file's bytes changed", /doesn't match what its maker signed/i, (u) => /\/blobs\//.test(u), flip);
-  // A version from before modules: hook code and no module.wasm. Only the
-  // staging registry still holds one.
-  if (!opt("registry-folder")) {
-    add("registry-no-module", 10, async (S) => refusedInstall(/hook code and no module/i, "a game with hooks and no module", { version: "1.0.1" })(S));
-  }
 }
 
 if (opt("only") || acceptPictures) {
