@@ -15,7 +15,7 @@ use crate::{Cli, Outcome};
 
 /// Top-level commands in the public set.
 const PUBLIC: &[&str] = &[
-    "assets", "corpus", "game", "model", "package", "registry", "roms", "template",
+    "assets", "corpus", "game", "model", "package", "registry", "roms", "serve", "template",
 ];
 /// Top-level commands in the lab set.
 const LAB: &[&str] = &[

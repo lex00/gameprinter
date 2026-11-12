@@ -45,11 +45,11 @@ use serde_json::{Value, json};
 
 mod demo;
 pub(crate) mod http;
-mod live;
+pub(crate) mod live;
 pub(crate) mod paths;
 pub(crate) mod review;
 mod server;
-mod session;
+pub(crate) mod session;
 pub(crate) mod watch;
 mod watch_page;
 

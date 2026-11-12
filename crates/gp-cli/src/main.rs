@@ -59,6 +59,7 @@ mod scenario;
 mod screen;
 mod sealed;
 mod search;
+mod serve;
 mod served;
 mod sound;
 mod sprites;
@@ -192,6 +193,13 @@ enum Cmd {
     Labels {
         #[command(subcommand)]
         cmd: labels::LabelsCmd,
+    },
+    /// The editor: the main screen to play the original, make clips and
+    /// watch the background work score them on the rebuilt game, at
+    /// http://127.0.0.1:7700/ (game-printer's gp serve).
+    Serve {
+        #[command(flatten)]
+        opts: serve::ServeOpts,
     },
     /// The ROMs you own, kept in $GP_ROM_DIR: add, list and clean them.
     Roms {
@@ -838,6 +846,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
         Cmd::Labels { cmd } => labels::run(cmd),
         Cmd::Sealed { cmd } => sealed::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Mechanic { cmd } => mechanic::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Serve { opts } => serve::run(opts, &gp_evidence::Paths::from_env()?),
         Cmd::Package { cmd } => match cmd {
             PackageCmd::Hooks { dir } => package::hooks(dir),
             PackageCmd::Scan { dir, rom, wasm } => {

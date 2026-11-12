@@ -987,6 +987,7 @@ dependencies = [
  "gp-module",
  "gp-nes",
  "gp-package",
+ "gp-play",
  "gp-present",
  "gp-runtime",
  "gp-sim",

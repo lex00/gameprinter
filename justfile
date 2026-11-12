@@ -50,10 +50,19 @@ check: _hook-enabled build mosshop
     just play-web-arcade
     just mechanic-page
     just web-parity
+    just editor
     {{gp}} template check templates/mosshop --rom {{quote(mosshop_rom)}}
     scripts/test-hook.sh
     python3 -I -B -m unittest discover -s scripts/romguard -q
     @echo "just check: passed"
+
+# The editor (game-printer's editor/, served at / by `gp serve`): its
+# packages from its own lock, its type check and tests, and its build into
+# editor/dist.
+editor:
+    cd editor && npm ci --silent --no-audit --no-fund
+    cd editor && npx vitest run --silent
+    cd editor && npm run --silent build > /dev/null
 
 # The mechanic page's live player: gp_play.wasm built into target/play-web,
 # Moss Hop played in it under node with scripted buttons and a save point

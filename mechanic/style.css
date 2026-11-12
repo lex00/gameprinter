@@ -26,6 +26,7 @@
 body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 var(--mono); }
 h2, h3, summary, #logo, #score, .st { font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.08em; }
 
+#editor { margin-left: auto; color: inherit; }
 header { display: flex; gap: 16px; align-items: baseline; padding: 10px 16px; border-bottom: 2px solid var(--line); flex-wrap: wrap; }
 #logo { color: var(--nes-16); font-weight: 700; text-shadow: 2px 2px 0 var(--nes-28); }
 #title { color: var(--fg); font-weight: 700; }

@@ -55,6 +55,11 @@ fn spare(paths: &Paths, game: &str) -> (PathBuf, &'static str) {
     (out.join(slot), slot)
 }
 
+/// Whether the game's preview has been built once, so its files can be served.
+pub(crate) fn is_built(paths: &Paths, game: &str) -> bool {
+    built(&current(paths, game))
+}
+
 fn built(dir: &Path) -> bool {
     dir.join("gp_web.wasm").is_file() && dir.join("bundle.json").is_file()
 }
@@ -172,7 +177,7 @@ struct Build {
 static BUILD: Mutex<Option<Build>> = Mutex::new(None);
 
 /// Whether a preview build is running.
-pub(super) fn building() -> bool {
+pub(crate) fn building() -> bool {
     BUILD
         .lock()
         .expect("build")
@@ -185,7 +190,7 @@ fn has_model(rb: &Rebuild) -> bool {
     rb.game.join(gp_model::MODEL_FILE).is_file()
 }
 
-pub(super) fn status(paths: &Paths, repo: &Path, game: &str, rb: &Rebuild) -> Value {
+pub(crate) fn status(paths: &Paths, repo: &Path, game: &str, rb: &Rebuild) -> Value {
     let cur = current(paths, game);
     let is_built = built(&cur);
     let made = std::fs::read_to_string(cur.join(".key")).unwrap_or_default();
@@ -207,7 +212,7 @@ pub(super) fn status(paths: &Paths, repo: &Path, game: &str, rb: &Rebuild) -> Va
 /// the model as it stands rather than the build before the change. Only a
 /// preview built once is kept up to date: the first build waits until the
 /// page asks for it. The server calls this every half minute.
-pub(super) fn refresh(paths: &Paths, repo: &Path, game: &str, rb: &Rebuild, rom: &[u8]) {
+pub(crate) fn refresh(paths: &Paths, repo: &Path, game: &str, rb: &Rebuild, rom: &[u8]) {
     let cur = current(paths, game);
     if building() || !built(&cur) {
         return;
@@ -222,7 +227,7 @@ pub(super) fn refresh(paths: &Paths, repo: &Path, game: &str, rb: &Rebuild, rom:
 
 /// Starts building the preview into the spare slot, unless a build is
 /// running; the slot becomes current when the build succeeds.
-pub(super) fn build(
+pub(crate) fn build(
     paths: &Paths,
     repo: &Path,
     game: &str,
@@ -302,7 +307,7 @@ pub(super) fn build(
 /// applies), else the game's, else none. Each group with its switches and
 /// their descriptions, in the file's order, and each preset with its
 /// switches; `base` is the model as written.
-pub(super) fn profiles(paths: &Paths, game: &str, rb: &Rebuild) -> Result<Value> {
+pub(crate) fn profiles(paths: &Paths, game: &str, rb: &Rebuild) -> Result<Value> {
     let built = current(paths, game);
     let dir = if built.join(gp_model::profile::PROFILES_FILE).is_file() {
         built
@@ -350,7 +355,7 @@ pub(super) fn profiles(paths: &Paths, game: &str, rb: &Rebuild) -> Result<Value>
 /// presses, so the start is the frame itself when the game reads the pad
 /// on it. Until the game is in play (a title screen) the mapping's start
 /// doesn't hold and this says so; the page tries again.
-pub(super) fn start(
+pub(crate) fn start(
     paths: &Paths,
     rb: &Rebuild,
     rom: &[u8],
@@ -424,7 +429,7 @@ fn opened(paths: &Paths, rb: &Rebuild, rom: &[u8]) -> Result<Opened> {
 
 /// A file of the preview: the page's scripts from the repo (so a build
 /// made before a fix still runs it), the rest from the build.
-pub(super) fn file(paths: &Paths, repo: &Path, game: &str, name: &str) -> Result<Response> {
+pub(crate) fn file(paths: &Paths, repo: &Path, game: &str, name: &str) -> Result<Response> {
     if name.is_empty()
         || name.contains("..")
         || name.starts_with('/')
