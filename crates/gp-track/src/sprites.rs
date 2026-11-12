@@ -20,7 +20,7 @@ pub struct Cluster {
     pub x1: i16,
     pub y1: i16,
     pub palette: u8,
-    pub tiles: Vec<u8>,
+    pub tiles: Vec<u16>,
 }
 
 impl Cluster {
@@ -47,7 +47,7 @@ pub struct Obs {
 pub struct Track {
     pub palette: u8,
     /// Every tile the object was drawn with, sorted.
-    pub tiles: Vec<u8>,
+    pub tiles: Vec<u16>,
     pub obs: Vec<Obs>,
 }
 
@@ -61,18 +61,55 @@ impl Track {
     }
 }
 
+/// One sprite as the board drew it: its box's top left on the screen and
+/// its size in pixels, its tile, its palette and its flips. A frame's
+/// sprites reach the tracker as a list of these, so any sprite hardware
+/// feeds it through an adapter: [`from_oam`] reads the NES's 256-byte
+/// table, and an arcade board's sprite RAM needs one of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sprite {
+    pub x: i16,
+    pub y: i16,
+    pub w: u8,
+    pub h: u8,
+    pub tile: u16,
+    pub palette: u8,
+    pub flip_x: bool,
+    pub flip_y: bool,
+}
+
+/// The visible sprites of a 256-byte NES sprite table, in table order.
+/// `tall` is PPUCTRL bit 5 (8x16 sprites). A sprite's top is one line below
+/// its Y byte, as the PPU draws it.
+pub fn from_oam(oam: &[u8], tall: bool) -> Vec<Sprite> {
+    let h = if tall { 16 } else { 8 };
+    oam.as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|s| s[0] < HIDDEN_Y)
+        .map(|s| Sprite {
+            x: i16::from(s[3]),
+            y: i16::from(s[0]) + 1,
+            w: 8,
+            h,
+            tile: u16::from(s[1]),
+            palette: s[2] & 3,
+            flip_x: s[2] & 0x40 != 0,
+            flip_y: s[2] & 0x80 != 0,
+        })
+        .collect()
+}
+
 /// The visible sprites of a 256-byte sprite table, grouped into objects:
 /// sprites of one palette whose boxes touch are one object. `tall` is
 /// PPUCTRL bit 5 (8x16 sprites).
 pub fn clusters(oam: &[u8], tall: bool) -> Vec<Cluster> {
-    let h: i16 = if tall { 16 } else { 8 };
-    let sprites: Vec<(i16, i16, u8, u8)> = oam
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .filter(|s| s[0] < HIDDEN_Y)
-        .map(|s| (i16::from(s[3]), i16::from(s[0]) + 1, s[1], s[2] & 3))
-        .collect();
+    group(&from_oam(oam, tall))
+}
+
+/// A frame's visible sprites grouped into objects: sprites of one palette
+/// whose boxes touch are one object.
+pub fn group(sprites: &[Sprite]) -> Vec<Cluster> {
     let n = sprites.len();
     let mut parent: Vec<usize> = (0..n).collect();
     fn root(parent: &mut [usize], mut i: usize) -> usize {
@@ -84,13 +121,12 @@ pub fn clusters(oam: &[u8], tall: bool) -> Vec<Cluster> {
     }
     for i in 0..n {
         for j in i + 1..n {
-            let (ax, ay, _, ap) = sprites[i];
-            let (bx, by, _, bp) = sprites[j];
-            if ap == bp
-                && ax <= bx + 8 + JOIN_GAP
-                && bx <= ax + 8 + JOIN_GAP
-                && ay <= by + h + JOIN_GAP
-                && by <= ay + h + JOIN_GAP
+            let (a, b) = (&sprites[i], &sprites[j]);
+            if a.palette == b.palette
+                && a.x <= b.x + i16::from(b.w) + JOIN_GAP
+                && b.x <= a.x + i16::from(a.w) + JOIN_GAP
+                && a.y <= b.y + i16::from(b.h) + JOIN_GAP
+                && b.y <= a.y + i16::from(a.h) + JOIN_GAP
             {
                 let (ri, rj) = (root(&mut parent, i), root(&mut parent, j));
                 parent[ri.max(rj)] = ri.min(rj);
@@ -98,27 +134,28 @@ pub fn clusters(oam: &[u8], tall: bool) -> Vec<Cluster> {
         }
     }
     let mut out: Vec<(usize, Cluster)> = Vec::new();
-    for (i, &(x, y, tile, palette)) in sprites.iter().enumerate() {
+    for (i, s) in sprites.iter().enumerate() {
         let r = root(&mut parent, i);
+        let (x1, y1) = (s.x + i16::from(s.w), s.y + i16::from(s.h));
         match out.iter_mut().find(|(k, _)| *k == r) {
             Some((_, c)) => {
-                c.x0 = c.x0.min(x);
-                c.y0 = c.y0.min(y);
-                c.x1 = c.x1.max(x + 8);
-                c.y1 = c.y1.max(y + h);
-                if !c.tiles.contains(&tile) {
-                    c.tiles.push(tile);
+                c.x0 = c.x0.min(s.x);
+                c.y0 = c.y0.min(s.y);
+                c.x1 = c.x1.max(x1);
+                c.y1 = c.y1.max(y1);
+                if !c.tiles.contains(&s.tile) {
+                    c.tiles.push(s.tile);
                 }
             }
             None => out.push((
                 r,
                 Cluster {
-                    x0: x,
-                    y0: y,
-                    x1: x + 8,
-                    y1: y + h,
-                    palette,
-                    tiles: vec![tile],
+                    x0: s.x,
+                    y0: s.y,
+                    x1,
+                    y1,
+                    palette: s.palette,
+                    tiles: vec![s.tile],
                 },
             )),
         }
@@ -309,7 +346,7 @@ mod tests {
             x1: x + 16,
             y1: 116,
             palette: p,
-            tiles: vec![p],
+            tiles: vec![u16::from(p)],
         };
         for f in 1..=10u64 {
             let x = 10 + 2 * f as i16;

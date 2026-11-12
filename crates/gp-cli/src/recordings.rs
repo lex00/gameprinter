@@ -829,7 +829,7 @@ fn run_until(
 /// Parses `--frames` for a recording whose last frame is `last`: `N`,
 /// `A..B` (B excluded), `A..=B`, or `A..` (to the last frame). An empty or
 /// reversed range, or one past the last frame, is an error.
-fn parse_frames(spec: &str, last: u64) -> Result<std::ops::Range<u64>> {
+pub(crate) fn parse_frames(spec: &str, last: u64) -> Result<std::ops::Range<u64>> {
     let num = |s: &str| -> Result<u64> {
         s.trim()
             .parse()

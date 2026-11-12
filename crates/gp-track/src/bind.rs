@@ -10,7 +10,7 @@
 
 use serde::Serialize;
 
-use crate::sprites::{Obs, Track, Tracker, clusters};
+use crate::sprites::{Obs, Track, Tracker, clusters, group};
 use crate::{Frame, Options, RAM, Source};
 
 /// What the first pass keeps: the tracks, and per frame the scroll, the
@@ -56,9 +56,16 @@ pub fn pass_sprites(source: &mut dyn Source, opts: &Options) -> Result<Seen, Str
             broken = Some(f.frame);
         }
         next = f.frame + 1;
-        tracker.push(f.frame, clusters(f.oam, f.tall));
-        for (p, n) in page_equal.iter_mut().enumerate() {
-            *n += u32::from(f.ram[p * 256..p * 256 + 256] == f.oam[..256]);
+        match f.sprites {
+            Some(list) => tracker.push(f.frame, group(list)),
+            None => tracker.push(f.frame, clusters(f.oam, f.tall)),
+        }
+        // The page the game copies its sprite table from, when the table is
+        // the NES's.
+        if f.oam.len() >= 256 {
+            for (p, n) in page_equal.iter_mut().enumerate() {
+                *n += u32::from(f.ram.get(p * 256..p * 256 + 256) == Some(&f.oam[..256]));
+            }
         }
         scroll.push(f.scroll_x);
         pad.push(f.pad);

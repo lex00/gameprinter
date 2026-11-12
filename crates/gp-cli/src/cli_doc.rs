@@ -39,6 +39,10 @@ const LAB_EVENTS: &[&str] = &[
     "watch",
 ];
 
+/// Lab commands of the detectors (wave 4 of the port), on their own for
+/// the same reason.
+const LAB_DETECTORS: &[&str] = &["coverage", "gaps", "sound", "sprites", "track"];
+
 /// A set's table rows: each leaf command's words and first help line.
 fn rows(cmd: &clap::Command, words: &str, out: &mut Vec<(String, String)>) {
     let mut subs = cmd
@@ -78,7 +82,8 @@ fn render_of(cli: &clap::Command) -> Result<String> {
         let name = c.get_name();
         let set = if PUBLIC.contains(&name) {
             &mut public
-        } else if LAB.contains(&name) || LAB_EVENTS.contains(&name) {
+        } else if LAB.contains(&name) || LAB_EVENTS.contains(&name) || LAB_DETECTORS.contains(&name)
+        {
             &mut lab
         } else {
             unplaced.push(name.to_owned());

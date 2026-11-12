@@ -1,0 +1,274 @@
+{
+  "$defs": {
+    "Color": {
+      "description": "Pixel storage.",
+      "oneOf": [
+        {
+          "const": "indexed",
+          "description": "An indexed (palette) PNG: entry 4p + c is color c of sprite\npalette p, and entries 0, 4, 8 and 12 are transparent.",
+          "type": "string"
+        },
+        {
+          "const": "rgba",
+          "description": "8-bit RGBA.",
+          "type": "string"
+        }
+      ]
+    },
+    "Editor": {
+      "description": "What an editor opens.",
+      "oneOf": [
+        {
+          "const": "png",
+          "description": "PNG files and a JSON sidecar: any editor.",
+          "type": "string"
+        },
+        {
+          "const": "pixelorama",
+          "description": "PNG files with a Pixelorama palette and the sidecar; Pixelorama\nimports a sheet as frames by its grid.",
+          "type": "string"
+        },
+        {
+          "const": "aseprite",
+          "description": "PNG files with the sidecar written as Aseprite's sheet JSON\n(`frames`, `meta.frameTags`), which Aseprite's own exports use.",
+          "type": "string"
+        }
+      ]
+    },
+    "Layout": {
+      "description": "Sheet or a file per frame.",
+      "oneOf": [
+        {
+          "const": "sheet",
+          "description": "Every frame in one image, on a grid.",
+          "type": "string"
+        },
+        {
+          "const": "frames",
+          "description": "One image per frame.",
+          "type": "string"
+        }
+      ]
+    },
+    "Order": {
+      "description": "How frames fill the grid.",
+      "oneOf": [
+        {
+          "const": "state-frame",
+          "description": "A row per state, its frames left to right.",
+          "type": "string"
+        },
+        {
+          "const": "frame",
+          "description": "Frames in order, `columns` to a row.",
+          "type": "string"
+        }
+      ]
+    },
+    "PaletteFile": {
+      "description": "The palette file written beside the images.",
+      "oneOf": [
+        {
+          "enum": [
+            "none"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "gpl",
+          "description": "GIMP palette (`.gpl`), which GIMP, Aseprite, Krita and Pixelorama read.",
+          "type": "string"
+        },
+        {
+          "const": "jasc",
+          "description": "JASC-PAL (`.pal`), Paint Shop Pro's text palette, which Aseprite and\nPixelorama read.",
+          "type": "string"
+        },
+        {
+          "const": "hex",
+          "description": "One `rrggbb` per line (`.hex`), as Lospec gives palettes.",
+          "type": "string"
+        },
+        {
+          "const": "pixelorama",
+          "description": "Pixelorama's own JSON palette (`.json`).",
+          "type": "string"
+        }
+      ]
+    },
+    "Transparency": {
+      "description": "Where transparent pixels are kept.",
+      "oneOf": [
+        {
+          "const": "alpha",
+          "description": "Alpha 0 (RGBA), or the transparent entries (indexed).",
+          "type": "string"
+        },
+        {
+          "const": "key",
+          "description": "A key color, `key`, that stands for transparent (RGBA only).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "game-printer:image-config@0.1.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One layer: any of the settings, plus overrides by template and slot.",
+  "properties": {
+    "cell": {
+      "items": {
+        "format": "uint32",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "color": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Color"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "columns": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "editor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Editor"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "format": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "key": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "layout": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Layout"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "naming": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "order": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Order"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "padding": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "palette_file": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PaletteFile"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "scale": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "slots": {
+      "additionalProperties": {
+        "$ref": "#"
+      },
+      "description": "Overrides for one slot (a model asset slot, or an entity's sprite\nas `<entity>`), by name.",
+      "type": "object"
+    },
+    "spacing": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "state_tags": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "templates": {
+      "additionalProperties": {
+        "$ref": "#"
+      },
+      "description": "Overrides for one template, by its folder name.",
+      "type": "object"
+    },
+    "tile_budget": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "transparency": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Transparency"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "title": "Game Printer image format config 0.1.0",
+  "type": "object"
+}

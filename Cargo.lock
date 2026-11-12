@@ -974,6 +974,7 @@ dependencies = [
  "gp-assets",
  "gp-capture",
  "gp-contract",
+ "gp-coverage",
  "gp-events",
  "gp-evidence",
  "gp-explore",
@@ -989,7 +990,9 @@ dependencies = [
  "gp-runtime",
  "gp-sim",
  "gp-sound",
+ "gp-sprites",
  "gp-theme",
+ "gp-track",
  "hex",
  "lz4_flex",
  "md-5",
@@ -1013,6 +1016,22 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
+name = "gp-coverage"
+version = "0.1.0"
+dependencies = [
+ "gp-events",
+ "gp-evidence",
+ "gp-nes",
+ "gp-runtime",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tetanes-core",
  "thiserror",
  "toml",
 ]
@@ -1088,6 +1107,18 @@ version = "0.1.0"
 dependencies = [
  "gp-track",
  "serde",
+ "toml",
+]
+
+[[package]]
+name = "gp-imagefmt"
+version = "0.1.0"
+dependencies = [
+ "png",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
  "toml",
 ]
 
@@ -1226,6 +1257,19 @@ dependencies = [
  "gp-sound",
  "rustysynth",
  "tempfile",
+]
+
+[[package]]
+name = "gp-sprites"
+version = "0.1.0"
+dependencies = [
+ "gp-assets",
+ "gp-interp",
+ "gp-model",
+ "gp-runtime",
+ "serde",
+ "tempfile",
+ "toml",
 ]
 
 [[package]]

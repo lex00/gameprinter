@@ -13,11 +13,13 @@ mod clip_score;
 mod clipset;
 mod corpus_import;
 mod corpus_score;
+mod coverage;
 mod diagnose;
 mod explore;
 mod from_trace;
 mod game;
 mod game_new;
+mod gaps;
 mod gate;
 mod gate_append;
 mod gate_copy;
@@ -51,9 +53,12 @@ mod screen;
 mod sealed;
 mod search;
 mod served;
+mod sound;
+mod sprites;
 mod tape;
 mod template;
 mod tool_gate;
+mod track;
 mod watch;
 mod watch_serve;
 mod worker;
@@ -134,6 +139,33 @@ enum Cmd {
     Level {
         #[command(subcommand)]
         cmd: search::LevelCmd,
+    },
+    /// Find a recording's objects from its frame trace without a hand-written
+    /// mapping: sprites followed from frame to frame, the RAM bytes that hold
+    /// their positions, and a proposed `[slots]` section (docs/formats/tracks.md).
+    Track(track::TrackArgs),
+    /// Report what recordings exercised, given recordings or the whole
+    /// store (docs/coverage.md).
+    Coverage(coverage::CoverageArgs),
+    /// Find what a recording of the original shows that the model doesn't
+    /// account for: unexplained changes, interactive elements and drawn
+    /// box offsets. Detect and catalog only (docs/gaps.md).
+    Gaps {
+        #[command(subcommand)]
+        cmd: gaps::GapsCmd,
+    },
+    /// Music and sound effects as model data: capture a recording's APU
+    /// register log into songs, effects and instruments, check fidelity,
+    /// and compare register logs (docs/sound.md).
+    Sound {
+        #[command(subcommand)]
+        cmd: sound::SoundCmd,
+    },
+    /// Sprites: capture every frame of every entity from the sprite tables
+    /// and recordings (docs/capture.md).
+    Sprites {
+        #[command(subcommand)]
+        cmd: sprites::SpritesCmd,
     },
     /// Fetch a game by its exact id and lift it from a person's ROMs.
     Game {
@@ -655,6 +687,11 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             &gp_evidence::Paths::from_env()?,
         ),
         Cmd::Level { cmd } => search::level_run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Track(a) => track::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Coverage(a) => coverage::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Gaps { cmd } => gaps::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Sound { cmd } => sound::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Sprites { cmd } => sprites::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Game {
             cmd:
                 GameCmd::Fetch {

@@ -1,5 +1,7 @@
 # Capture: clips the code chooses
 
+Capturing a game's presentation (`gp sprites capture`, `gp sound capture`) is [capture-presentation.md](capture-presentation.md).
+
 `gp capture dense` and `gp capture carry` came from game-printer's capture runs (`gp serve`'s capture loop). gameprinter has no capture runs until wave 7 of the port brings them back, so for now each reads a game's package folder: its scored ROM (found in `$GP_ROM_DIR` by hash, or `--rom`), `mapping.toml`, and the starts of its clips (its corpus plan, else `clips.toml`), each run on the original once. `crates/gp-cli/src/capture/mod.rs` (`Inputs`) is the one place a capture run will plug in.
 
 ## Dense clips

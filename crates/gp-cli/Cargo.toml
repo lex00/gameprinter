@@ -20,10 +20,12 @@ gp-arcade = { version = "0.1.0", path = "../gp-arcade" }
 gp-capture = { version = "0.1.0", path = "../gp-capture" }
 gp-assets = { version = "0.1.0", path = "../gp-assets" }
 gp-contract = { version = "0.1.0", path = "../gp-contract" }
+gp-coverage = { version = "0.1.0", path = "../gp-coverage" }
 gp-events = { version = "0.1.0", path = "../gp-events" }
 gp-evidence = { version = "0.1.0", path = "../gp-evidence" }
 gp-explore = { version = "0.1.0", path = "../gp-explore" }
 gp-gaps = { version = "0.1.0", path = "../gp-gaps" }
+gp-track = { version = "0.1.0", path = "../gp-track" }
 gp-exts = { version = "0.1.0", path = "../gp-exts" }
 gp-interp = { version = "0.1.0", path = "../gp-interp" }
 gp-look = { version = "0.1.0", path = "../gp-look" }
@@ -36,6 +38,7 @@ gp-present = { version = "0.1.0", path = "../gp-present" }
 gp-runtime = { version = "0.1.0", path = "../gp-runtime" }
 gp-sim = { version = "0.1.0", path = "../gp-sim" }
 gp-sound = { version = "0.1.0", path = "../gp-sound" }
+gp-sprites = { version = "0.1.0", path = "../gp-sprites" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"

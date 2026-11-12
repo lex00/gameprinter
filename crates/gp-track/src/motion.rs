@@ -64,7 +64,7 @@ pub struct Kind {
     /// The slot ID the tracks share, when they have one.
     pub id: Option<u8>,
     pub palette: u8,
-    pub tiles: Vec<u8>,
+    pub tiles: Vec<u16>,
     pub tracks: usize,
     pub frames: usize,
     /// The frames-weighted mean of its tracks' speeds.

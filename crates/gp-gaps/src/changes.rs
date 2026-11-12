@@ -121,7 +121,7 @@ pub struct OamItem {
     /// `pal<p> tiles <t..>`, or the slot ID the sprites belong to.
     pub name: String,
     pub palette: u8,
-    pub tiles: Vec<u8>,
+    pub tiles: Vec<u16>,
     pub tracks: usize,
     pub frames: u64,
     pub mean_life: f64,
@@ -636,7 +636,7 @@ pub fn detect(run: &Run) -> Report {
         .enumerate()
         .map(|(i, f)| (f.frame, i))
         .collect();
-    let mut oam: BTreeMap<String, (u8, Vec<u8>, Vec<&gp_track::sprites::Track>)> = BTreeMap::new();
+    let mut oam: BTreeMap<String, (u8, Vec<u16>, Vec<&gp_track::sprites::Track>)> = BTreeMap::new();
     let mut slot_ids: BTreeMap<String, BTreeSet<u8>> = BTreeMap::new();
     for t in &tracks {
         if t.obs.len() < 2 {
@@ -673,7 +673,7 @@ pub fn detect(run: &Run) -> Report {
         if play * 2 < t.obs.len() || near * 2 >= t.obs.len() {
             continue;
         }
-        let tiles: Vec<u8> = t.tiles.iter().copied().take(4).collect();
+        let tiles: Vec<u16> = t.tiles.iter().copied().take(4).collect();
         let key = format!(
             "pal{} tiles {}",
             t.palette,
@@ -908,7 +908,7 @@ pub fn detect(run: &Run) -> Report {
                 {
                     *cnt.entry(cname.clone())
                         .or_default()
-                        .entry(b - a)
+                        .entry(b.wrapping_sub(*a))
                         .or_default() += 1;
                 }
             }

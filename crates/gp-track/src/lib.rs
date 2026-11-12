@@ -35,10 +35,15 @@ pub struct Frame<'a> {
     pub frame: u64,
     /// Internal RAM, 2048 bytes.
     pub ram: &'a [u8],
-    /// The sprite table drawn for this frame's state, 256 bytes.
+    /// The sprite table drawn for this frame's state, 256 bytes. Empty when
+    /// `sprites` gives the sprites instead.
     pub oam: &'a [u8],
     /// PPUCTRL bit 5: sprites are 8x16.
     pub tall: bool,
+    /// The frame's sprites as a list, read instead of `oam` and `tall` when
+    /// set: what an adapter from another board's sprite RAM gives (an
+    /// arcade board's, say). [`sprites::from_oam`] is the NES's.
+    pub sprites: Option<&'a [sprites::Sprite]>,
     /// The horizontal scroll as the PPU holds it: 0 to 511, the nametable
     /// bit as bit 8.
     pub scroll_x: u16,
@@ -59,6 +64,8 @@ pub struct Frames {
     pub ram: Vec<Vec<u8>>,
     pub oam: Vec<Vec<u8>>,
     pub tall: bool,
+    /// Each frame's sprites as a list, used instead of `oam` when set.
+    pub sprites: Option<Vec<Vec<sprites::Sprite>>>,
     pub scroll_x: Vec<u16>,
     pub pad: Vec<u8>,
 }
@@ -69,8 +76,9 @@ impl Source for Frames {
             each(&Frame {
                 frame: self.first + i as u64,
                 ram: &self.ram[i],
-                oam: &self.oam[i],
+                oam: self.oam.get(i).map_or(&[], Vec::as_slice),
                 tall: self.tall,
+                sprites: self.sprites.as_ref().map(|s| s[i].as_slice()),
                 scroll_x: self.scroll_x[i],
                 pad: self.pad[i],
             });
@@ -131,7 +139,7 @@ pub struct TrackReport {
     pub despawn: u64,
     pub seen: usize,
     pub palette: u8,
-    pub tiles: Vec<u8>,
+    pub tiles: Vec<u16>,
     pub x: Option<bind::Binding>,
     pub y: Option<bind::Binding>,
     /// Its slot group and index, when its x byte is in one.
@@ -229,6 +237,7 @@ pub(crate) mod synth {
             ram: Vec::new(),
             oam: Vec::new(),
             tall: false,
+            sprites: None,
             scroll_x: Vec::new(),
             pad: Vec::new(),
         };
@@ -355,5 +364,27 @@ mod tests {
             .unwrap();
         let speed = enemy.motion.speed_x.unwrap();
         assert!((speed - 0.5).abs() < 0.05, "{speed}");
+    }
+
+    /// A board other than the NES gives its sprites as a list; the same
+    /// sprites given that way track exactly as from the 256-byte table.
+    #[test]
+    fn a_sprite_list_tracks_as_the_table_it_was_read_from() {
+        let mut table = synth::game(1200);
+        let from_table = track(&mut table, &Options::default()).unwrap();
+        let mut list = synth::game(1200);
+        list.sprites = Some(
+            list.oam
+                .iter()
+                .map(|o| sprites::from_oam(o, list.tall))
+                .collect(),
+        );
+        list.oam.clear();
+        let from_list = track(&mut list, &Options::default()).unwrap();
+        // The sprite page is left out by being found equal to the table; a
+        // list has no table, so its bytes stay in the search. The made-up
+        // game keeps no sprite page in RAM, so the two agree in full.
+        assert_eq!(format!("{from_table:?}"), format!("{from_list:?}"));
+        assert!(!from_list.tracks.is_empty());
     }
 }
