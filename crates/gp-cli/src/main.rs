@@ -7,6 +7,7 @@ mod agent_cmd;
 mod arcade_rec;
 mod assets;
 mod attest;
+mod author;
 mod behave;
 mod capture;
 mod cli_doc;
@@ -31,6 +32,7 @@ mod draws_find_z80;
 mod element;
 mod element_z80;
 mod explore;
+mod farm;
 mod from_trace;
 mod game;
 mod game_new;
@@ -41,6 +43,7 @@ mod gate_append;
 mod gate_copy;
 mod gate_queue;
 mod harvest;
+mod host;
 mod hosted;
 mod interp;
 mod interp_args;
@@ -49,6 +52,7 @@ mod labels;
 mod labels_propose;
 mod leads;
 mod lockstep;
+mod mcp;
 mod mechanic;
 mod mechanics;
 mod model;
@@ -95,6 +99,7 @@ mod sound;
 mod sound_ay;
 mod sprites;
 mod static_grade;
+mod store;
 mod tape;
 mod template;
 mod template_build;
@@ -394,6 +399,39 @@ enum Cmd {
     /// Each non-exact clip of a scored run, its detector class and its
     /// proposals for the model's numbers. Never writes the model.
     Solve(solve::SolveArgs),
+    /// A prototype of the authoring API: a proposer edits a base
+    /// template's mechanic parameters from a short request, gp's checks
+    /// verify each proposal (schema, mechanics, the public tier, reach, a
+    /// playthrough, difficulty against a target, the asked-for feel), the
+    /// failures feed the next proposal, and one log row is written
+    /// (docs/author.md). The proposer is scripted; only `--dry-run` is
+    /// built.
+    Author(author::AuthorArgs),
+    /// A decision model plays a level, by search from savestates: it
+    /// orders the moves, the emulator says which work
+    /// (docs/research/laya-level-play.md).
+    Farm(farm::FarmArgs),
+    /// Blind mode for a top-down game (docs/research/topdown-extension.md). It
+    /// plays from power-on through a class select and reads the player's bytes
+    /// on both axes and the health that drains. Its search moves in eight ways,
+    /// in an order a decision model gives.
+    FarmTopdown(farm::topdown::TopdownArgs),
+    /// The local runtime host: interpreter sessions, parallel scenario
+    /// runs, background builds, playable links on localhost, and the speed
+    /// targets (docs/host.md).
+    Host {
+        #[command(subcommand)]
+        cmd: host::HostCmd,
+    },
+    /// Serve the agent tools over MCP on stdin and stdout, for an agent to
+    /// edit a working copy of a template by model path and check it
+    /// (docs/mcp.md).
+    Mcp(mcp::McpArgs),
+    /// The content-addressed evidence store.
+    Store {
+        #[command(subcommand)]
+        cmd: store::StoreCmd,
+    },
     /// gp about itself: its published build and its command list.
     #[command(name = "self")]
     Itself {
@@ -1250,6 +1288,12 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
         Cmd::Interp {
             cmd: InterpCmd::Draws(a),
         } => interp_draws::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Author(a) => author::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Farm(a) => farm::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::FarmTopdown(a) => farm::topdown::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Host { cmd } => host::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Mcp(a) => mcp::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Store { cmd } => store::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Template {
             cmd: TemplateCmd::Build { dir, out, write },
         } => template_build::build_cmd(
@@ -1280,6 +1324,13 @@ fn main() -> ExitCode {
     }
     if let Some(n) = cli.jobs {
         pool::set_jobs(n);
+    }
+    host::JSON_OUT.store(cli.json, std::sync::atomic::Ordering::Relaxed);
+    if cli.json && matches!(cli.cmd, Cmd::Mcp(_)) {
+        // gp prints its JSON on stdout when a command ends, which for `gp
+        // mcp` is the MCP channel.
+        eprintln!("gp: gp mcp speaks JSON-RPC on stdout, so it takes no --json");
+        return ExitCode::from(2);
     }
     match dispatch(&cli.cmd) {
         Ok(o) => {

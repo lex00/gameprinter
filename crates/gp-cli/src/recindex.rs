@@ -270,6 +270,75 @@ impl Index {
     pub fn bad_lines(&self) -> Result<Vec<(usize, String)>> {
         Ok(self.bad_lines.clone())
     }
+
+    /// Readable log entries (`gp store reindex`).
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Recordings the log names whose manifest could be read.
+    pub fn recording_count(&self) -> usize {
+        self.read.iter().filter(|(_, r)| r.is_ok()).count()
+    }
+
+    /// Store objects no recording in the log uses, nor any log entry's notes
+    /// name as `blake3:<hash>`. With `drop_retired`, also the objects only
+    /// retired recordings use, their manifests included: what `gp store gc
+    /// --retired` may delete. As gp-index's `unreferenced_with`.
+    pub fn unreferenced_with(
+        &self,
+        store: &Store,
+        drop_retired: bool,
+    ) -> Result<Vec<StoredObject>> {
+        let retired = if drop_retired {
+            self.retired()?
+        } else {
+            HashSet::new()
+        };
+        let live = |id: &Hash| !retired.contains(id);
+        let mut used: HashSet<Hash> = HashSet::new();
+        for (id, r) in &self.read {
+            if !live(id) {
+                continue;
+            }
+            used.insert(*id);
+            if let Ok(r) = r {
+                used.extend(r.objects.iter().map(|o| o.hash));
+            }
+        }
+        for e in self.entries.iter().filter(|e| live(&e.id)) {
+            if let Some(n) = &e.notes {
+                used.extend(named_hashes(n));
+            }
+        }
+        let mut out = Vec::new();
+        for hash in store.hashes()? {
+            if used.contains(&hash) {
+                continue;
+            }
+            let path = store.path_of(&hash);
+            let bytes = fs::metadata(&path)
+                .map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?
+                .len();
+            out.push(StoredObject { hash, bytes });
+        }
+        Ok(out)
+    }
+}
+
+/// A store object and its size.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct StoredObject {
+    pub hash: Hash,
+    pub bytes: u64,
+}
+
+/// The hashes a note names as `blake3:<64 hex digits>`.
+fn named_hashes(note: &str) -> impl Iterator<Item = Hash> + '_ {
+    note.match_indices("blake3:").filter_map(|(i, tag)| {
+        let hex = note.get(i + tag.len()..i + tag.len() + 64)?;
+        hex.parse::<Hash>().ok()
+    })
 }
 
 /// Reads a recording's manifest, or says why it can't.

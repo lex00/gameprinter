@@ -37,7 +37,7 @@ pub(crate) fn jobs() -> usize {
 }
 
 /// The number `--jobs` or `GP_JOBS` gave, if either did.
-fn explicit() -> Option<usize> {
+pub(crate) fn explicit() -> Option<usize> {
     match SET.load(Ordering::Relaxed) {
         0 => std::env::var("GP_JOBS")
             .ok()

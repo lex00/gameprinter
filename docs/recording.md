@@ -22,7 +22,40 @@ gp recordings show 3b27
 
 `gp recordings list` and `show` read the store's recordings log and the manifests it names. game-printer kept a SQLite index of the log (gp-index); gameprinter scans the log instead, with the same rows and output.
 
-Not here yet: `gp record --model` and the replay of a model's recording (the new world runs a model with hooks through its game's module), `gp recordings retire|unretire`, `gp video` and the `gp store` commands.
+Not here yet: `gp record --model` and the replay of a model's recording (the new world runs a model with hooks through its game's module), `gp recordings retire|unretire` and `gp video`.
+
+## The store's own commands
+
+`gp store` reads and writes the store directly, as in game-printer:
+
+```sh
+gp store put notes.json                      # add a file; prints its BLAKE3 hash
+gp store get <hash> --out run.input          # write an object to a file (or stdout without --out)
+gp store stats                               # object count and total size
+gp store verify                              # re-hash every object; exit 1 if any changed
+gp store unreferenced                        # objects no recording uses; nothing is deleted
+gp store gc                                  # what gc would delete (below)
+gp store reindex                             # read the log and say what it holds
+```
+
+To re-record a recording, `gp store get <id>` prints its manifest, whose `input_log` field is the input log's hash; `gp store get <hash> --out run.input` writes the log, and `gp record --input run.input` records it again. `gp store unreferenced` exits 2 if a manifest or a log line can't be read, because the objects that recording uses would then be listed too.
+
+game-printer's `gp store reindex` rebuilt the SQLite index. gameprinter has no index file, so `reindex` reads the log and the manifests it names, reports the entries, the recordings and any manifest it can't read, and writes nothing (its JSON `index` is null).
+
+### Deleting unused objects
+
+`gp store gc` deletes store objects that no recording uses. An object goes only when it was unused at the previous `gp store gc --yes` too, and that run was at least `--min-age` minutes ago (10 by default), so each one takes two runs some time apart:
+
+```sh
+gp store gc --yes             # lists what's unused now in <store>/gc/pending.json
+gp store gc                   # dry run: what the next --yes would delete; writes nothing
+gp store gc --yes             # 10 minutes or more later: deletes what's still unused from that list, and lists the rest
+gp store gc --retired --yes   # the same, counting objects only retired recordings use as unused
+```
+
+"Used" means named by a recording in the recordings log (its manifest and every object the manifest names), or named as `blake3:<hash>` in an entry's notes, or named by a line of the coverage index (`<store>/index/coverage.jsonl`) or the validation index (`<store>/index/validation.jsonl`). `gp coverage` writes the first; gameprinter has no `gp validate` yet, so gc reads the second if it is there, and a store game-printer used keeps its validation results. Anything else, such as an object added with `gp store put`, is unused. If a manifest or a line of any of these logs can't be read, gc deletes nothing and exits 2, since what it names would look unused. With `--yes` it takes the store's lock exclusively, so it exits 2 while a `gp record` or another writer is running. A dry run takes no lock and writes nothing.
+
+With `--retired`, a retired recording is deleted whole or not at all: its objects go only in a run that deletes its manifest, and objects it shares with a recording that isn't retired stay. Just before deleting, gc appends a `deleted` mark for the recording to the log, so it leaves every listing instead of pointing at missing objects. Recording the same run again brings the ID back. Retiring a recording takes `gp recordings retire`, which gameprinter doesn't have yet; a `retired` mark game-printer wrote counts.
 
 ## Movies
 

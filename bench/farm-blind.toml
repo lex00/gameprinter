@@ -1,0 +1,32 @@
+# The blind farming bench (`gp farm bench`). Each game is played blind
+# (`gp farm --blind`): no package, mapping or dataset. ROMs are found in
+# $GP_ROM_DIR by their headerless SHA-256, or built into the repo's target/
+# by a recipe. Nothing here is ROM data.
+#
+# set = "train": the improvement loop may run and tune on these.
+# set = "held-out": run only with `gp farm bench --held-out`, which the
+# loop never passes; a fresh agent runs them when the person asks.
+#
+# The score: levels finished over the train games, then the median rounds
+# a level (deterministic) with the median seconds beside it (the machine's
+# load changes them). Every game gets the same round budget, so a busy
+# machine slows a pass down but doesn't change what it finds.
+# docs/research/farm-ledger.md keeps the history.
+#
+# game-printer's bench also named other games; gameprinter keeps Moss Hop
+# and Donkey Kong only.
+
+rounds = 1500
+
+[[game]]
+name = "mosshop"
+set = "train"
+# Moss Hop, the project's own reference game: `just mosshop` builds it.
+path = "target/mosshop/mosshop.nes"
+
+[[game]]
+name = "donkey-kong-ju"
+set = "train"
+# Donkey Kong (JU). On 2026-11-12 none of stage 0's start runs reached
+# play on it, so its pass ends at "play start" (as in game-printer).
+sha256 = "aa408f5a6b97c0d738e7e8b489a5617ad4a9ecdee2b05c4ee504210ce31b2825"

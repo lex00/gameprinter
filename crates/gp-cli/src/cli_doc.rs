@@ -56,6 +56,10 @@ const LAB_AGENTS: &[&str] = &["agent"];
 /// line of their own as the other waves' are.
 const LAB_DERIVE: &[&str] = &["dataset", "validate"];
 
+/// Lab commands of wave 7 of the port from game-printer: the store, the
+/// farms, the authoring prototype, the host and the MCP server.
+const LAB_W7: &[&str] = &["author", "farm", "farm-topdown", "host", "mcp", "store"];
+
 /// A set's table rows: each leaf command's words and first help line.
 fn rows(cmd: &clap::Command, words: &str, out: &mut Vec<(String, String)>) {
     let mut subs = cmd
@@ -101,6 +105,7 @@ fn render_of(cli: &clap::Command) -> Result<String> {
             || LAB_CODE.contains(&name)
             || LAB_AGENTS.contains(&name)
             || LAB_DERIVE.contains(&name)
+            || LAB_W7.contains(&name)
         {
             &mut lab
         } else {
