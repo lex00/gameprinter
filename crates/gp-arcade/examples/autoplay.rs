@@ -8,6 +8,16 @@
 //!       --rom ~/Documents/roms/arcade/tapper.zip --out DIR/NAME \
 //!       [--levels N] [--idle]
 //!
+//! With `--search`, a life lost isn't retried from the same choices: the
+//! player backs up a few seconds (`--back`, 150 frames, further on each
+//! loss there) and runs a beam search over short moves (pour, up, down,
+//! wait, walk left or right) to two seconds past the loss, each position
+//! valued by playing on with the plain policy for `--horizon` frames
+//! (150): frames survived, customers served, levels cleared and score.
+//! The beam is `--width` (4) times the try, the moves are tried in a fixed
+//! order and ties keep that order, so a run is the same every time.
+//! `--jobs` (4) threads value the moves. Only the input log is kept.
+//!
 //! It writes NAME.input and NAME.phases. `--from LOG` goes on from an
 //! earlier play's log, its presses kept as they were. `--levels N` stops after the
 //! N-th level's end sequence; `--idle` coins up, starts and then presses
@@ -378,6 +388,198 @@ fn decide(t: &Tapper, m: &mut Mind, rng: &mut Rng, wild: u64, deep: bool) -> Con
     }
 }
 
+/// One move of the search ([`search`]): a few frames of controls the
+/// bartender carries out whole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Act {
+    /// Hold the tap 8 frames (a full mug) and rest 2.
+    Pour,
+    /// Press up or down once and wait until the bartender is on the next
+    /// bar (a bar every 7 frames), at most 12 frames.
+    Up,
+    Down,
+    /// Stand still 6 frames.
+    Wait,
+    /// Walk 6 frames along the bar, to catch a mug or take a tip.
+    Left,
+    Right,
+}
+
+const ACTS: [Act; 6] = [
+    Act::Pour,
+    Act::Up,
+    Act::Down,
+    Act::Wait,
+    Act::Left,
+    Act::Right,
+];
+
+/// Whether a life was lost (or the game ended) since `lives` was read.
+fn lost(t: &Tapper, lives: u8) -> bool {
+    peek(t, 0xe4a7) < lives || peek(t, 0xe3bd) == 2
+}
+
+/// Plays `act` on `t`, keeping its controls in `log`. False when a life is
+/// lost on the way.
+fn play_act(t: &mut Tapper, log: &mut Vec<Controls>, act: Act, lives: u8) -> bool {
+    let none = Controls::default();
+    let mut step = |t: &mut Tapper, c: Controls| {
+        t.step(c);
+        log.push(c);
+        !lost(t, lives)
+    };
+    // Between plays (a level's start or end, the bonus round) the
+    // bartender isn't at the bars: a frame of nothing.
+    let Some((bar, _)) = see(t).bart else {
+        return step(t, none);
+    };
+    match act {
+        Act::Pour => {
+            for i in 0..10 {
+                let c = if i < 8 {
+                    Controls { tap: true, ..none }
+                } else {
+                    none
+                };
+                if !step(t, c) {
+                    return false;
+                }
+            }
+            true
+        }
+        Act::Up | Act::Down => {
+            let c = if act == Act::Up {
+                Controls { up: true, ..none }
+            } else {
+                Controls { down: true, ..none }
+            };
+            if !step(t, c) {
+                return false;
+            }
+            for _ in 0..12 {
+                if see(t).bart.is_some_and(|(b, _)| b != bar) {
+                    break;
+                }
+                if !step(t, none) {
+                    return false;
+                }
+            }
+            true
+        }
+        Act::Wait | Act::Left | Act::Right => {
+            let c = match act {
+                Act::Left => Controls { left: true, ..none },
+                Act::Right => Controls {
+                    right: true,
+                    ..none
+                },
+                _ => none,
+            };
+            (0..6).all(|_| step(t, c))
+        }
+    }
+}
+
+/// Customers left to serve in the level (E711).
+fn customers_left(t: &Tapper) -> u32 {
+    u32::from(peek(t, 0xe711))
+}
+
+/// How good a position is: the heuristic player ([`decide`]) plays on
+/// from it for `horizon` frames; frames survived count most, then the
+/// customers served and the levels cleared, then the score.
+fn value(t: &Tapper, horizon: u32) -> i64 {
+    let mut u = t.clone();
+    let lives = peek(&u, 0xe4a7);
+    let mut m = Mind::default();
+    let mut r = Rng(0x2545_f491_4f6c_dd1d);
+    let mut survived = 0;
+    while survived < horizon {
+        let c = decide(&u, &mut m, &mut r, 0, false);
+        u.step(c);
+        if lost(&u, lives) {
+            break;
+        }
+        survived += 1;
+    }
+    let (cleared, _) = level(&u);
+    i64::from(survived) * 1000 + i64::from(cleared) * 200_000 - i64::from(customers_left(&u)) * 300
+        + i64::from(score(&u)) / 10
+}
+
+/// A position in the search: the machine and the controls that reached it
+/// from the search's start.
+#[derive(Clone)]
+struct Node {
+    t: Tapper,
+    log: Vec<Controls>,
+    value: i64,
+}
+
+/// A beam search from `start` until frame `until` with no life lost: at
+/// each step every position in the beam tries each [`Act`], each result
+/// is valued by [`value`], and the `width` best go on (ties kept in the
+/// order tried, so the result is the same on every run). Positions are
+/// compared by their state's hash, so two ways to the same state count
+/// once. The controls from `start` to the first position at `until`, and
+/// whether it got there: when every way loses a life, the controls to the
+/// furthest position any way reached, so the next search starts from
+/// further on.
+fn search(
+    start: &Tapper,
+    until: u64,
+    width: usize,
+    horizon: u32,
+    jobs: usize,
+) -> (Vec<Controls>, bool) {
+    let lives = peek(start, 0xe4a7);
+    let mut beam = vec![Node {
+        t: start.clone(),
+        log: Vec::new(),
+        value: 0,
+    }];
+    let mut furthest: Vec<Controls> = Vec::new();
+    loop {
+        if let Some(done) = beam.iter().find(|n| n.t.frame() >= until) {
+            return (done.log.clone(), true);
+        }
+        if let Some(n) = beam.iter().max_by_key(|n| n.log.len())
+            && n.log.len() > furthest.len()
+        {
+            furthest.clone_from(&n.log);
+        }
+        let tries: Vec<(usize, Act)> = (0..beam.len())
+            .flat_map(|i| ACTS.iter().map(move |&a| (i, a)))
+            .collect();
+        let mut kids: Vec<Option<Node>> = vec![None; tries.len()];
+        let chunk = tries.len().div_ceil(jobs.max(1));
+        std::thread::scope(|sc| {
+            for (part, out) in tries.chunks(chunk).zip(kids.chunks_mut(chunk)) {
+                let beam = &beam;
+                sc.spawn(move || {
+                    for (&(i, a), o) in part.iter().zip(out.iter_mut()) {
+                        let mut n = beam[i].clone();
+                        if play_act(&mut n.t, &mut n.log, a, lives) {
+                            n.value = value(&n.t, horizon);
+                            *o = Some(n);
+                        }
+                    }
+                });
+            }
+        });
+        let mut kids: Vec<Node> = kids.into_iter().flatten().collect();
+        if kids.is_empty() {
+            return (furthest, false);
+        }
+        // Best first; a stable sort keeps the order tried among equals.
+        kids.sort_by_key(|n| std::cmp::Reverse(n.value));
+        let mut seen = std::collections::HashSet::new();
+        kids.retain(|n| seen.insert(n.t.state_hash()));
+        kids.truncate(width);
+        beam = kids;
+    }
+}
+
 /// A saved point to back up to.
 #[derive(Clone)]
 struct Point {
@@ -428,9 +630,10 @@ fn mode(t: &Tapper) -> Mode {
 }
 
 /// The bonus round is waiting for a choice: the bartender stands behind
-/// the cans (codes 5C to 5E in bar 0's slots).
+/// the cans (codes 5C to 5E). The slots they're in vary: bar 0's in the
+/// first bonus round, bar 1's in the second.
 fn choosing(t: &Tapper) -> bool {
-    mode(t) == Mode::Bonus && (0..8).any(|i| (0x5c..=0x5e).contains(&peek(t, 0xe264 + 4 * i)))
+    mode(t) == Mode::Bonus && (0..0x39u16).any(|i| (0x5c..=0x5e).contains(&peek(t, 0xe264 + 4 * i)))
 }
 
 /// The bonus round's choice, found by trying each: hold left or right a while,
@@ -476,6 +679,11 @@ fn main() {
     let mut trace = None;
     let mut tries = 24u32;
     let mut from: Option<PathBuf> = None;
+    let mut search_on = false;
+    let mut jobs = 4usize;
+    let mut horizon = 150u32;
+    let mut width0 = 4usize;
+    let mut back_step = 150u64;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--rom" => rom = args.next().unwrap().into(),
@@ -484,6 +692,11 @@ fn main() {
             "--levels" => levels = args.next().unwrap().parse().unwrap(),
             "--tries" => tries = args.next().unwrap().parse().unwrap(),
             "--idle" => idle = true,
+            "--search" => search_on = true,
+            "--jobs" => jobs = args.next().unwrap().parse().unwrap(),
+            "--horizon" => horizon = args.next().unwrap().parse().unwrap(),
+            "--width" => width0 = args.next().unwrap().parse().unwrap(),
+            "--back" => back_step = args.next().unwrap().parse().unwrap(),
             "--from" => from = Some(PathBuf::from(args.next().unwrap())),
             "--trace" => {
                 trace = Some((
@@ -610,6 +823,59 @@ fn main() {
                 Some((at, n)) if t.frame() <= at + 300 => n + 1,
                 _ => 1,
             };
+            if n <= tries && search_on {
+                // Back up a few seconds (further each time) and search
+                // from there to two seconds past the loss.
+                let back = back_step * u64::from(n.min(4));
+                let target = t.frame().saturating_sub(back).max(level_start);
+                while points.len() > 1 && points.last().unwrap().t.frame() > target {
+                    points.pop();
+                }
+                let p = points.last().unwrap().clone();
+                let until = t.frame() + 60;
+                let width = (width0 * n as usize).min(48);
+                eprintln!(
+                    "life lost at frame {}, search {n}: from frame {} to {until}, beam {width}",
+                    t.frame(),
+                    p.t.frame()
+                );
+                let (cs, whole) = search(&p.t, until, width, horizon, jobs);
+                t = p.t;
+                log.truncate(p.log_len);
+                plan.clear();
+                recent.clear();
+                if chose_at > t.frame() {
+                    chose_at = 0;
+                }
+                fails_at = Some((fails_at.map_or(until, |(a, _)| a.max(until)), n));
+                // The way found, or the furthest any way got: play on from
+                // its end either way, so a hard stretch is searched a
+                // piece at a time.
+                for c in cs {
+                    t.step(c);
+                    log.push(c);
+                    // Points along the way found, so a loss soon after
+                    // backs up a little, not to before this search.
+                    if t.frame().is_multiple_of(20) {
+                        points.push(Point {
+                            t: t.clone(),
+                            log_len: log.len(),
+                            mind: Mind::default(),
+                        });
+                    }
+                }
+                if points.len() > 90 {
+                    points.drain(..points.len() - 90);
+                }
+                mind = Mind::default();
+                lives = peek(&t, 0xe4a7);
+                if whole {
+                    eprintln!("  found a way to frame {}", t.frame());
+                } else {
+                    eprintln!("  no way past frame {}; playing on from there", t.frame());
+                }
+                continue;
+            }
             if n <= tries {
                 if debug && n == 1 {
                     eprintln!("--- the frames before it:");
@@ -752,10 +1018,11 @@ fn print_trace(set: &Romset, file: &std::path::Path, from: u64, to: u64) {
         if n as u64 >= from {
             let s = see(&t);
             println!(
-                "{} {:07b} L{} {:?} {:?} b{:?} c{:?} d{:?} m{:x?} o{:x?}",
+                "{} {:07b} L{} S{} {:?} {:?} b{:?} c{:?} d{:?} m{:x?} o{:x?}",
                 n,
                 c.bits(),
                 peek(&t, 0xe4a7),
+                score(&t),
                 level(&t),
                 mode(&t),
                 s.bart,

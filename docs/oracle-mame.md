@@ -140,8 +140,9 @@ When the capture has an `ay.tsv`, the AY writes are compared too, frame by frame
 | `tapper-m3-gameover-ay` (set `tapper`) | `tapper-gameover.input` | 5351 | all match, AY writes too (18,212 writes) |
 | `tapper-m3-five-ay` (set `tapper`) | `tapper-five-levels.input` | 10934 | all match, AY writes too (109,838 writes) |
 | `tapper-m3-eight-ay` (set `tapper`) | `tapper-eight-levels.input` | 18001 | all match, AY writes too (342,346 writes) |
+| `tapper-m3b-cycle` (set `tapper`) | `tapper-cycle.input` | 27819 | all match, AY writes too (489,996 writes) |
 
-The `tapper-*` plays of milestone 3 were made by gp-arcade's autoplay example, a player that reads the board's RAM and decides each frame's presses: coin and start, then serving, catching mugs and taking tips. tapper-eight-levels clears eight levels (the saloon, the sports bar and three punk bar levels) and both bonus rounds. The speakers on tapper-five-levels (`tapper-m3-five-sound`, 6 minutes) differ from MAME's WAV by at most one step of 16 bits, as on tapper-first.
+The `tapper-*` plays of milestone 3 were made by gp-arcade's autoplay example, a player that reads the board's RAM and decides each frame's presses: coin and start, then serving, catching mugs and taking tips. tapper-eight-levels clears eight levels (the saloon, the sports bar and three punk bar levels) and both bonus rounds. tapper-cycle, from the player's search, clears levels 1 to 15 (the saloon, the sports bar, the punk bar, the space bar and the saloon again as the game cycles) and wins bonus rounds 1 to 5. The speakers on tapper-five-levels (`tapper-m3-five-sound`, 6 minutes) differ from MAME's WAV by at most one step of 16 bits, as on tapper-first.
 
 The sound example plays a capture's log with the sound on and compares the speakers with the capture's `sound.wav`:
 
