@@ -25,6 +25,7 @@ import { recordSeek, seekStats } from "./seek";
 import { modelFrameAt } from "./views/pairing";
 import { registeredViews } from "./views/registry";
 import "./views/index";
+import { LogPanel, MechanicView, type View, ViewTabs, readView, useMechanic, writeView } from "./Views";
 
 interface Selection {
   a?: string;
@@ -116,11 +117,23 @@ function rememberRun(run: string): void {
 
 /** The page: a watch session's view with ?watch=NAME (docs/watch.md), else the workspace. */
 export function App({ api = defaultApi }: { api?: Api }) {
-  const watch = typeof location === "undefined" ? null : new URLSearchParams(location.search).get("watch");
+  const q = new URLSearchParams(typeof location === "undefined" ? "" : location.search);
+  // A watch panel with no game to play (gp mechanic watch GAME TOPIC).
+  if (q.get("view") === "watch" && q.get("game") && q.get("topic")) return <LogPanel api={api} game={q.get("game")!} topic={q.get("topic")!} />;
+  const watch = q.get("watch");
   return watch ? <WatchPanel api={api} name={watch} /> : <Workspace api={api} />;
 }
 
 function Workspace({ api = defaultApi }: { api?: Api }) {
+  // The one header's tabs (Views.tsx): the view and the agent's log beside it.
+  const [view, setViewState] = useState<View>(() => readView(typeof location === "undefined" ? "" : location.search));
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const setView = (v: View) => {
+    setViewState(v);
+    if (typeof history !== "undefined") history.replaceState(null, "", writeView(location.search, v));
+  };
+  const [log, setLog] = useState(false);
   const [list, setList] = useState<RecordingEntry[]>([]);
   const [listError, setListError] = useState<string>();
   const [sel, setSel] = useState<Selection>(() => readUrl(typeof location === "undefined" ? "" : location.search));
@@ -138,6 +151,7 @@ function Workspace({ api = defaultApi }: { api?: Api }) {
   const [play, setPlay] = useState(() => typeof location !== "undefined" && new URLSearchParams(location.search).has("play"));
   // The run's events, folded for the game view and the details alike.
   const events = useLive(api, sel.run);
+  const mechanic = useMechanic(api, log ? sel.run : undefined);
   const [game, setGame] = useState<GameWords>();
   const [runs, setRuns] = useState<CaptureRun[]>([]);
   const [said, setSaid] = useState<string>();
@@ -191,7 +205,7 @@ function Workspace({ api = defaultApi }: { api?: Api }) {
 
   // Keep the URL in step.
   useEffect(() => {
-    if (typeof history !== "undefined") history.replaceState(null, "", writeUrl(sel));
+    if (typeof history !== "undefined") history.replaceState(null, "", writeView(writeUrl(sel), viewRef.current));
   }, [sel]);
 
   // In diff mode, find the first difference and go there.
@@ -367,7 +381,11 @@ function Workspace({ api = defaultApi }: { api?: Api }) {
     <div className={gameShown ? "app with-game" : "app"}>
       {sel.run ? (
         <>
-          <Unified key={sel.run} api={api} run={sel.run} words={game} />
+          <ViewTabs view={view} setView={setView} log={log} setLog={setLog} />
+          <div className={log ? "views-row with-log" : "views-row"}>
+            <div className="view-main">{view === "clips" ? <Unified key={sel.run} api={api} run={sel.run} words={game} /> : <MechanicView key={sel.run} api={api} run={sel.run} view={view} />}</div>
+            {log && <LogPanel api={api} game={sel.run} topic={mechanic} />}
+          </div>
           {bar}
         </>
       ) : (

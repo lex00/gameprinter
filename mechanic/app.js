@@ -13,8 +13,9 @@
 // (gp model refine and gp rule, /refine), so the card is rebuild-card.js,
 // and #rule-card is the slot it draws in.
 
-import { NesPlayer } from "/nesplayer.js";
-import { RefineView } from "/rebuild-card.js";
+import { NesPlayer } from "./nesplayer.js";
+import { RefineView } from "./rebuild-card.js";
+import { startShell } from "./shell.js";
 
 // What the machine is: the screen, the frame rate and the buttons, taken
 // from the player module (gp_play_info) when it loads. The NES's until then.
@@ -83,6 +84,9 @@ const down = new Set();
 let player, rom;
 let save = null; // the last save point's bytes
 let mode = "live"; // live | recording | review | sending | agent | idle | watch | refine
+// REFINE or THEMES shows in the game's place (shell.js): the games hold and
+// the keys and the controller are theirs.
+let paneOpen = false;
 let recStart = 0; // the frame a recording started on
 let pendingClip = null; // {log, start, frames}
 // The quest-log row a recording goes to: the open one when recording
@@ -284,7 +288,7 @@ let rebuild = null; // {id, frames: [entry], byF: Map original frame -> k, visib
 /** Loads a clip's rebuild for the shown clip; the hint counts the wait. */
 async function loadRebuild(n, mechanic, still) {
   const q = mechanic ? `?mechanic=${encodeURIComponent(mechanic)}` : "";
-  return loadRebuildFrom(`/api/clips/${n}.rebuild.json${q}`, still);
+  return loadRebuildFrom(`api/clips/${n}.rebuild.json${q}`, still);
 }
 
 /** Loads the rebuild of the clip shown from `url`; the hint counts the wait. */
@@ -818,17 +822,17 @@ async function rbPlay(kind = "beside") {
   else if (view === "solo") view = "side";
   syncTabs();
   try {
-    let st = await api("/api/rebuild/status");
+    let st = await api("api/rebuild/status");
     if (st.built && (st.stale || st.building !== null)) {
       // The model moved on since the last build: play that build now and
       // make a newer one beside it; the next PLAY uses it.
-      await api("/api/rebuild/build", {});
+      await api("api/rebuild/build", {});
       liveRb.olderBuild = true;
       toast("A newer rebuild is building; you're playing the previous one.", 5000);
     } else if (!st.built) {
       // No build yet: the first one has to finish before anything plays.
-      await api("/api/rebuild/build", {});
-      while (liveRb && (st = await api("/api/rebuild/status")).building !== null) {
+      await api("api/rebuild/build", {});
+      while (liveRb && (st = await api("api/rebuild/status")).building !== null) {
         $("busy-text").textContent = `Building the playable rebuild: ${Math.round(st.building)} s (the first build takes a few minutes). Keep playing.`;
         toast(`Building the playable rebuild, ${Math.round(st.building)} s.`, 2500);
         await new Promise((r) => setTimeout(r, 2000));
@@ -837,7 +841,7 @@ async function rbPlay(kind = "beside") {
       if (st.error || !st.built) throw new Error(st.error ?? "the build didn't finish");
     }
     try {
-      const pj = await api("/rebuild/preview.json");
+      const pj = await api("rebuild/preview.json");
       if (liveRb && Array.isArray(pj.visible)) liveRb.visible = pj.visible;
     } catch (e) { /* drawn from the corner */ }
     const f = $("rb-frame");
@@ -845,7 +849,7 @@ async function rbPlay(kind = "beside") {
     // FREE PLAY runs the model in the viewer's settings; beside the
     // original it is the model as written, which the clips measure.
     if (kind === "free") {
-      if (!profiles) profiles = await api("/api/rebuild/profiles").catch(() => null);
+      if (!profiles) profiles = await api("api/rebuild/profiles").catch(() => null);
       if (!liveRb) return;
       liveRb.profile = profileName();
     }
@@ -855,7 +859,7 @@ async function rbPlay(kind = "beside") {
       const prof = kind === "free" && liveRb.profile !== (profiles?.base ?? "retro") ? `&profile=${encodeURIComponent(liveRb.profile)}` : "";
       // files=here: the preview reads the build beside it, not the
       // browser's store of installed games.
-      f.src = `/rebuild/index.html?control=1&files=here${prof}&t=${Date.now()}`;
+      f.src = `rebuild/index.html?control=1&files=here${prof}&t=${Date.now()}`;
     });
     if (kind === "free") rbStartFree(); else await rbStart();
   } catch (e) {
@@ -889,7 +893,7 @@ async function rbStart() {
   liveRb.queue = [];
   try {
     const path = await sendPath(player.inputLog(0).split("\n").slice(0, frame + 2).join("\n") + "\n");
-    const r = await api("/api/rebuild/start", { path, frame });
+    const r = await api("api/rebuild/start", { path, frame });
     if (!liveRb) return;
     const frames = "gp-frames 1\n" + liveRb.queue.map(framesLine).join("\n");
     liveRb.queue = [];
@@ -972,10 +976,10 @@ function keepProfile(name) {
 }
 async function showSettings() {
   if (!profiles) {
-    try { profiles = await api("/api/rebuild/profiles"); } catch (e) { $("set-now").textContent = `No settings: ${e}`; return; }
+    try { profiles = await api("api/rebuild/profiles"); } catch (e) { $("set-now").textContent = `No settings: ${e}`; return; }
   }
   if (!modelName) {
-    try { modelName = (await api("/rebuild/preview.json")).model ?? null; } catch (e) { /* the game's name */ }
+    try { modelName = (await api("rebuild/preview.json")).model ?? null; } catch (e) { /* the game's name */ }
   }
   const b = $("set-open");
   if (b && !b.dataset.wired) {
@@ -1148,7 +1152,7 @@ async function checkStage(c) {
     const { head, frames } = splitLog(c.log);
     if (warming) { await warming; warming = null; }
     const path = await sendPath(head + frames.slice(0, c.start).map((l) => l + "\n").join(""));
-    const r = await api("/api/clips/stage", { path, start: c.start, inputs: head + frames.slice(c.start).join("\n") + "\n" });
+    const r = await api("api/clips/stage", { path, start: c.start, inputs: head + frames.slice(c.start).join("\n") + "\n" });
     c.stage = r.spans ? "spans" : "within";
     c.stages = (r.stages ?? []).map((x) => x.stage);
   } catch (e) {
@@ -1224,11 +1228,11 @@ async function sendPath(text, warm) {
   let p;
   if (sentPath && text === sentPath.text) {
     p = { path: sentPath.path };
-    if (warm !== undefined) p = await api("/api/paths", { base: sentPath.path, tail: head, warm });
+    if (warm !== undefined) p = await api("api/paths", { base: sentPath.path, tail: head, warm });
   } else if (sentPath && text.startsWith(sentPath.text)) {
-    p = await api("/api/paths", { base: sentPath.path, tail: head + text.slice(sentPath.text.length), warm });
+    p = await api("api/paths", { base: sentPath.path, tail: head + text.slice(sentPath.text.length), warm });
   } else {
-    p = await api("/api/paths", { log: text, warm });
+    p = await api("api/paths", { log: text, warm });
   }
   sentPath = { path: p.path, text };
   return p.path;
@@ -1243,7 +1247,7 @@ async function sendClip(c, note, mechanic, phase) {
   const path = await sendPath(text);
   phase("Saving the clip");
   const inputs = head + frames.slice(c.start).join("\n") + "\n";
-  return api("/api/clips", { path, start: c.start, inputs, note, mechanic });
+  return api("api/clips", { path, start: c.start, inputs, note, mechanic });
 }
 
 /** A sealed run: only the play up to its start goes to the shared paths;
@@ -1254,7 +1258,7 @@ async function sendSealed(c, note, phase) {
   phase("Sealing your run");
   const path = await sendPath(head + frames.slice(0, c.start).map((l) => l + "\n").join(""));
   const inputs = head + frames.slice(c.start).join("\n") + "\n";
-  return api("/api/clips", { path, start: c.start, inputs, note, sealed: true });
+  return api("api/clips", { path, start: c.start, inputs, note, sealed: true });
 }
 
 /** Hands the reviewed clip to the agent. The page is in the sending state
@@ -1305,7 +1309,7 @@ async function handOff(seal = false) {
     ({ n, again } = await sendClip(c, note, target, (w) => { what = `${w} to ${target}`; show(); }));
     what = `Telling your agent (${target})`;
     show();
-    await api("/api/talk", { text: note || `Here is clip ${n}.`, clips: [n], mechanic: target });
+    await api("api/talk", { text: note || `Here is clip ${n}.`, clips: [n], mechanic: target });
   } catch (e) {
     clearInterval(timer);
     // The clip stays: A tries again, B drops it.
@@ -1359,7 +1363,7 @@ async function showAgent(turn) {
   try {
     progress("Loading the clip", 0, 1);
     const q = turn.mechanic ? `?mechanic=${encodeURIComponent(turn.mechanic)}` : "";
-    const r = await fetch(`/api/clips/${turn.show}.log${q}`);
+    const r = await fetch(`api/clips/${turn.show}.log${q}`);
     if (!r.ok) throw new Error(`clip ${turn.show}: ${r.status}`);
     const text = await r.text();
     if (!still()) return;
@@ -1368,11 +1372,11 @@ async function showAgent(turn) {
     const clip = { start, end: meta ? start + meta.frames : start + 600, log: text };
     measure = null;
     if (turn.measure) {
-      const r3 = await fetch(`/api/clips/${turn.show}.measure.json${q}`);
+      const r3 = await fetch(`api/clips/${turn.show}.measure.json${q}`);
       if (r3.ok) measure = await r3.json();
     }
     if (turn.against) {
-      const r2 = await fetch(`/api/clips/${turn.against}.log${q}`);
+      const r2 = await fetch(`api/clips/${turn.against}.log${q}`);
       if (!r2.ok) throw new Error(`clip ${turn.against}: ${r2.status}`);
       const m2 = session.clips.find((c) => c.n === turn.against);
       const s2 = m2 ? m2.start : 0;
@@ -1416,7 +1420,7 @@ async function refineShow(c) {
   // the original there) and keeps both pictures, so nothing is replayed
   // here from power-on, however late in a long play the clip starts.
   const q = `?mechanic=${encodeURIComponent(c.mechanic ?? "")}`;
-  await loadRebuildFrom(c.sealed ? `/api/sealed/${c.sealed}.rebuild.json` : `/api/clips/${c.clip}.rebuild.json${q}`, still);
+  await loadRebuildFrom(c.sealed ? `api/sealed/${c.sealed}.rebuild.json` : `api/clips/${c.clip}.rebuild.json${q}`, still);
   if (!still()) return;
   if (!rebuild) { refineMsg = $("busy-text").textContent || `Couldn't load ${name}.`; return; }
   // The review's own frames: one a compared frame of the original.
@@ -1570,7 +1574,7 @@ async function answerAgent() {
     toast(`Answered: ${choices[choice]}.`);
     const body = { text: choices[choice], choice, mechanic: t.mechanic };
     if (t.judge) body.laya = t.judge.choice;
-    try { await api("/api/talk", body); } catch (e) { setState(String(e)); }
+    try { await api("api/talk", body); } catch (e) { setState(String(e)); }
   }
   setState("");
 }
@@ -1644,7 +1648,7 @@ function timed(line) {
 async function refreshWatch() {
   if (!session) return;
   const q = `?mechanic=${encodeURIComponent(session.mechanic)}`;
-  const w = await api(`/api/watch${q}`);
+  const w = await api(`api/watch${q}`);
   const key = JSON.stringify([session.mechanic, w]);
   const col = $("watch-col");
   if (col.dataset.key === key) return;
@@ -1662,14 +1666,14 @@ async function refreshWatch() {
   pins.innerHTML = "";
   for (const p of w.pins ?? []) {
     const fig = wEl("figure", p.keep ? "keep" : "");
-    const src = `/api/watch/files/${encodeURIComponent(p.file)}${q}`;
+    const src = `api/watch/files/${encodeURIComponent(p.file)}${q}`;
     let media;
     if (p.kind === "video") {
       media = wEl("video");
       Object.assign(media, { src, muted: true, loop: true, autoplay: true, controls: true, playsInline: true });
     } else {
       media = wEl("img");
-      Object.assign(media, { src, alt: p.title || p.file, loading: "lazy" });
+      Object.assign(media, { src, alt: p.title || p.file });
     }
     fig.append(media, wEl("figcaption", "", `${p.n}. ${p.title || p.file}`));
     pins.append(fig);
@@ -1689,7 +1693,7 @@ async function refreshWatch() {
 }
 
 async function refresh() {
-  session = await api("/api/session");
+  session = await api("api/session");
   $("title").textContent = `${session.game} / ${session.mechanic}`;
   const all = session.queue ?? [];
   $("score").textContent = all.length ? `${all.filter((q) => q.status === "done").length} / ${all.length} MEASURED` : "";
@@ -1905,7 +1909,7 @@ async function pick(m) {
   toast(`Opening ${m}.`);
   $("queue-hint").textContent = `Opening ${m}...`;
   try {
-    await api("/api/pick", { mechanic: m });
+    await api("api/pick", { mechanic: m });
     seenTurns = 1e9;
     watch = null;
     await refresh();
@@ -2019,6 +2023,7 @@ function doAction(name) {
 }
 
 window.addEventListener("keydown", (e) => {
+  if (paneOpen) return;
   const typing = document.activeElement === $("note");
   // U turns the sound off and on in every state, the rebuild's settings
   // screen and the note being typed aside.
@@ -2206,6 +2211,7 @@ let acc = 0, last = performance.now();
 function frame(now) {
   acc = Math.min(acc + (now - last), (1000 / FPS) * 4);
   last = now;
+  if (paneOpen) { acc = 0; requestAnimationFrame(frame); return; }
   try {
     gamepadCommands();
     const heard = heardSlot();
@@ -2311,7 +2317,7 @@ async function enterViewer(m) {
   if (idleFetching) return;
   idleFetching = true;
   try {
-    const w = await api("/api/working" + (m ? `?mechanic=${encodeURIComponent(m)}` : ""));
+    const w = await api("api/working" + (m ? `?mechanic=${encodeURIComponent(m)}` : ""));
     if (mode !== "live" || !w.mechanic || !w.log) {
       lastInput = performance.now();
       if (m) toast(`Nothing to watch on ${m} yet.`);
@@ -2367,7 +2373,7 @@ window.addEventListener("keydown", () => { lastInput = performance.now(); if (mo
 // Watching the model play ------------------------------------------------
 
 async function pollLive() {
-  const { lines } = await api("/api/live");
+  const { lines } = await api("api/live");
   // No demo yet: the first one to come is new, and plays.
   if (!lines.length) {
     watch ??= { key: null, seen: 0, queue: [], end: null, old: true };
@@ -2429,8 +2435,8 @@ function watchFrame() {
 }
 
 async function main() {
-  player = await NesPlayer.load("/gp_play.wasm");
-  const r = await fetch("/rom");
+  player = await NesPlayer.load("gp_play.wasm");
+  const r = await fetch("rom");
   if (!r.ok) throw new Error(`the ROM: ${await r.text()}`);
   rom = new Uint8Array(await r.arrayBuffer());
   player.power(0, rom);
@@ -2440,9 +2446,16 @@ async function main() {
   refine = new RefineView({ $, api, fps: () => FPS, show: (c) => void refineShow(c), sessionClips: () => (session?.clips ?? []).map((c) => ({ mechanic: session.mechanic, clip: c.n, start: c.start, frames: c.frames })) });
   reviewBar();
   $("tab-mech").addEventListener("click", () => setTab("mech"));
-  $("tab-free").addEventListener("click", () => setTab("free"));
   $("rv-live").addEventListener("click", () => void rbPlay("beside"));
   $("tab-refine").addEventListener("click", () => setTab("refine"));
+  // Inside the editor (gp serve's /mechanic/GAME/?embedded=1): the
+  // editor's header and tabs are the page's, so its own logo, link and
+  // tabs hide, and the editor's tabs choose this page's tab by message.
+  const asked = new URLSearchParams(location.search);
+  if (asked.has("embedded")) document.body.classList.add("embedded");
+  window.addEventListener("message", (e) => {
+    if (e.origin === location.origin && e.source === window.parent && e.data?.gp === "tab") setTab(e.data.tab);
+  });
   setInterval(() => { if (mode === "refine") void refine.refresh(); }, 2000);
   seenTurns = 1e9; // which turns to show is settled just below
   await refresh();
@@ -2460,6 +2473,13 @@ async function main() {
   setInterval(updateBusy, 1000);
   setInterval(showPad, 1000);
   requestAnimationFrame(frame);
+  startShell({
+    setTab, api, toast,
+    mode: () => mode,
+    liveKind: () => liveRb?.kind ?? null,
+    pause: (on) => { paneOpen = on; if (on) flushAudio(); },
+    game: () => session?.game ?? null,
+  });
 }
 
 // A page that can't start says why where the game would be: the player

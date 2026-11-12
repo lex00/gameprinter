@@ -21,7 +21,7 @@ use crate::Outcome;
 
 const MAX_BODY: usize = 1 << 20;
 
-struct Watch {
+pub(crate) struct Watch {
     session: Session,
     page: PathBuf,
     port: u16,
@@ -141,6 +141,28 @@ fn serve_one(w: &Watch, conn: &TcpStream) -> std::io::Result<()> {
 }
 
 /// Opens (or makes) the session and serves its watch page until stopped.
+/// The watch panel for a session, ready to answer at `port` (its own, or
+/// `gp serve`'s, which mounts it at /watch/GAME/TOPIC/).
+pub(crate) fn prepare(
+    paths: &Paths,
+    game: &str,
+    topic: &str,
+    prompt: Option<&str>,
+    port: u16,
+) -> Result<Arc<Watch>> {
+    Ok(Arc::new(Watch {
+        session: Session::create(paths, game, topic, prompt, "")?,
+        page: page_dir()?,
+        port,
+    }))
+}
+
+/// A request to a prepared watch panel.
+pub(crate) fn answer(w: &Watch, req: &Request) -> Response {
+    handle(w, req).unwrap_or_else(|e| Response::error(500, &format!("{e:#}")))
+}
+
+/// `gp mechanic watch --own-server`: the panel on a server of its own.
 pub(crate) fn run(
     paths: &Paths,
     game: &str,

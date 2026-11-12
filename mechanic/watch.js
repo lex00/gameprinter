@@ -4,6 +4,8 @@
 // when something changed, so a playing clip isn't restarted every poll.
 
 const $ = (id) => document.getElementById(id);
+// Inside the editor its header stands for this one.
+if (window.parent !== window) document.body.classList.add("embedded");
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -21,7 +23,7 @@ function timed(line) {
 let lastKey = "";
 
 async function refresh() {
-  const r = await fetch("/api/watch");
+  const r = await fetch("api/watch");
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   const w = await r.json();
   const key = JSON.stringify(w);
@@ -42,7 +44,7 @@ async function refresh() {
   pins.innerHTML = "";
   for (const p of w.pins ?? []) {
     const fig = el("figure", p.keep ? "keep" : "");
-    const src = `/api/watch/files/${encodeURIComponent(p.file)}`;
+    const src = `api/watch/files/${encodeURIComponent(p.file)}`;
     let media;
     if (p.kind === "video") {
       media = el("video");
@@ -75,7 +77,7 @@ $("w-say").addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = $("w-text").value.trim();
   if (!text) return;
-  const r = await fetch("/api/talk", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+  const r = await fetch("api/talk", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
   if (r.ok) $("w-text").value = "";
   void refresh();
 });

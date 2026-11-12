@@ -1,11 +1,28 @@
 # The mechanic page
 
-`gp mechanic start GAME [MECHANIC] --games GAMES` serves the page on
-127.0.0.1 (crates/gp-cli/src/mechanic/server.rs): the game to play, record
-clips of a mechanic in and hand them to your agent, and the game's model
-beside the original. The page is `mechanic/` in this repo, plain HTML, CSS
-and JavaScript. It came over from game-printer's page (docs/contributing-mechanics.md
-there) with all three of its tabs.
+`gp serve` hosts the page at `http://127.0.0.1:7710/mechanic/GAME/`, and its
+root opens it (crates/gp-cli/src/serve/pages.rs mounts the page's server,
+crates/gp-cli/src/mechanic/server.rs). `gp mechanic start GAME [MECHANIC]`
+opens its CLIPS tab, starting `gp serve` when none answers; `--own-server`
+serves the page alone on 127.0.0.1:7712 as before. The page is `mechanic/`
+in this repo, plain HTML, CSS and JavaScript, game-printer's page
+(docs/contributing-mechanics.md there) with its tabs by phase:
+
+- CLIPS: the quest log, and the game pane on THE ORIGINAL (play, record,
+  hand off, talk: once HELP WITH MECHANICS) or ON THE MODEL (a clip on the
+  original beside the model: once REVIEW REBUILD), with a line of the
+  background work under it.
+- REFINE: gp serve's background work (`/api/capture/GAME/background`): what
+  runs now with its bars, what finished, the questions, the clips scored.
+  Its parts come from `mechanic/refine/` when they are there.
+- PLAY: the rebuild alone with its settings (once FREE PLAY).
+- THEMES: the game's themes in the person's registry and its theme kit.
+
+The agent's log (log, pins, problems) is a panel at the right on every tab,
+from AGENT'S LOG in the header or L. The tab is in the address (`?tab=`).
+REFINE and THEMES take the game's place, and the games hold while they show.
+`mechanic/shell.js` does the tabs; `mechanic/app.js` the game and its modes.
+The sections below keep the old names for CLIPS's two views and PLAY.
 
 ## Layout
 
@@ -15,8 +32,8 @@ length, note and first split); its right margin holds, while a clip plays
 beside the rebuild, the frame it stands at, the measures the two games
 disagree on there with both values, and the random draws taken so far.
 Under the game are REVIEW REBUILD's bar, the line saying whose turn it is,
-FREE PLAY's settings and the agent's panel. The quest log, the clips, the
-conversation and the watch panel ("Your agent") are beneath. Below 1,200
+FREE PLAY's settings and the agent's panel. The quest log, the clips and the
+conversation are beneath, in two columns. Below 1,200
 pixels wide the margins are left out.
 
 ## The tabs

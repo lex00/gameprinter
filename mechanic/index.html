@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Mechanic</title>
-  <link rel="stylesheet" href="/style.css">
+  <title>Game Printer</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header>
@@ -12,22 +12,24 @@
     <span id="title">Loading</span>
     <span id="score"></span>
     <button id="sound" type="button" tabindex="-1" title="U: the original's sound on or off" aria-pressed="true">SOUND ON</button>
+    <button id="log-toggle" type="button" tabindex="-1" title="L: your agent's log, pins and problems, beside every tab" aria-pressed="false">AGENT'S LOG</button>
     <span id="state"></span>
-    <a id="editor" href="http://127.0.0.1:7700/" target="_blank" rel="noopener" title="The editor's main screen, from gp serve (port 7700): play the original, make clips, and watch the background work score them on the rebuilt game">THE EDITOR</a>
   </header>
-  <nav id="tabs"><button id="tab-mech" class="on">HELP WITH MECHANICS</button><button id="tab-refine">REVIEW REBUILD</button><button id="tab-free">FREE PLAY</button></nav>
+  <nav id="tabs"><button id="tab-clips" class="on" title="Record clips of the original, hand them to your agent, and review them on the model">CLIPS</button><button id="tab-work" title="The background work: clips scored and refined, the rounds and what they kept, the questions">REFINE</button><button id="tab-play" title="Play the rebuild, with its settings">PLAY</button><button id="tab-themes" title="The game's themes">THEMES</button></nav>
   <main>
     <div id="side-l">
       <section id="rule-card" hidden aria-label="Clips to review on the model"></section>
       <section id="ctx-clip" class="ctx" aria-label="The clip loaded"></section>
     </div>
     <div id="left">
+      <nav id="views" aria-label="The game pane shows"><button id="tab-mech" class="on" title="Play the original and record clips">THE ORIGINAL</button><button id="tab-refine" title="A clip on the original beside the game's model">ON THE MODEL</button></nav>
       <div id="screen" data-mode="m-play"><div id="modebadge">PLAYING</div>
         <canvas id="game" width="256" height="240"></canvas><canvas id="game2" width="256" height="240" hidden></canvas>
         <div id="rec" hidden><span class="dot"></span><span id="rec-time">0.0 s</span></div>
         <div id="toast" hidden></div>
         <div id="bar" hidden><div id="bar-fill"></div><span id="bar-time"></span></div>
       </div>
+      <div id="refine-strip" class="muted" aria-live="polite" title="The background work, as it goes: open REFINE for all of it"></div>
       <iframe id="rb-frame" title="the rebuild, played live" src="about:blank" tabindex="-1"></iframe>
       <canvas id="rv-strip" height="10" hidden title="Green where the original and the model agree, red where they differ. Click to go there"></canvas>
       <div id="review-bar" hidden>
@@ -67,16 +69,26 @@
         <details open><summary>Clips of this mechanic</summary><ol id="clips"></ol></details>
         <details open><summary>Conversation</summary><ol id="talk"></ol></details>
       </div>
-      <div class="col" id="watch-col">
-        <h2>Your agent</h2>
-        <p id="w-status" class="muted">Nothing yet. Your agent writes here with gp mechanic log, pin and problem.</p>
-        <div id="w-pins"></div>
-        <table id="w-problems" hidden><thead><tr><th>#</th><th>Where</th><th>What is wrong</th><th>Change</th><th>State</th></tr></thead><tbody></tbody></table>
-        <details><summary>Log</summary><ol id="w-log"></ol></details>
-      </div>
     </aside>
   </main>
+  <aside id="log-panel" hidden aria-label="Your agent's log">
+    <section id="watch-col">
+      <h2>Your agent</h2>
+      <p id="w-status" class="muted">Nothing yet. Your agent writes here with gp mechanic log, pin and problem.</p>
+      <div id="w-pins"></div>
+      <table id="w-problems" hidden><thead><tr><th>#</th><th>Where</th><th>What is wrong</th><th>Change</th><th>State</th></tr></thead><tbody></tbody></table>
+      <details open><summary>Log</summary><ol id="w-log"></ol></details>
+    </section>
+  </aside>
+  <section id="pane-work" class="pane" hidden aria-label="REFINE: the background work">
+    <h2>Refine</h2>
+    <div id="work-body"><p class="muted">Loading the background work.</p></div>
+  </section>
+  <section id="pane-themes" class="pane" hidden aria-label="THEMES">
+    <h2>Themes</h2>
+    <div id="themes-body"><p class="muted">Loading the game's themes.</p></div>
+  </section>
   <footer><div id="pad-line"></div><div id="keys">Arrows move, X is A, Z is B, Enter is Start. F5 or the left trigger saves, F8 or the right trigger loads. R or the right bumper records. U turns the sound off and on. Player 2: I J K L move, M is A, N is B, H is Select, Y is Start, or a second controller.</div></footer>
-  <script type="module" src="/app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

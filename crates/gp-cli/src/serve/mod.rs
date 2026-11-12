@@ -40,6 +40,7 @@ pub(crate) mod freeplay;
 pub(crate) mod game;
 pub(crate) mod generated;
 mod later;
+mod pages;
 mod play;
 pub(crate) mod scenarios;
 
@@ -51,6 +52,7 @@ const MODULES: &[fn() -> Vec<Route>] = &[
     scenarios::routes,
     generated::routes,
     background::routes,
+    pages::routes,
     later::routes,
 ];
 
@@ -62,7 +64,7 @@ const MAX_CONNECTIONS: usize = 64;
 const MAX_BODY: usize = 4 << 20;
 
 /// The port `gp serve` listens on unless told otherwise.
-pub(crate) const DEFAULT_PORT: u16 = 7700;
+pub(crate) const DEFAULT_PORT: u16 = 7710;
 
 /// What `gp serve` was asked.
 #[derive(clap::Args, Clone, Debug)]
@@ -336,18 +338,56 @@ fn handle(ctx: &Ctx, req: &Request) -> Response {
             .collect();
         return Response::json(&json!({"routes": list}));
     }
-    if req.path.starts_with("/api/") {
-        for r in &ctx.routes {
-            if let Some(params) = matches(r.path, &req.path) {
-                return match (r.handler)(ctx, req, &params) {
-                    Ok(res) => res,
-                    Err(f) => Response::error(f.status, &f.message),
-                };
-            }
+    for r in &ctx.routes {
+        if let Some(params) = matches(r.path, &req.path) {
+            return match (r.handler)(ctx, req, &params) {
+                Ok(res) => res,
+                Err(f) => Response::error(f.status, &f.message),
+            };
         }
+    }
+    if req.path.starts_with("/api/") {
         return Response::error(404, "not here");
     }
+    if req.path == "/" {
+        return landing(ctx, req);
+    }
     static_file(ctx, &req.path)
+}
+
+/// `/`: the page of a game (`?run=GAME`, else the first game in the
+/// checkout), at /mechanic/GAME/, its tab kept from `?tab=`. The editor's
+/// older screens stay at /index.html.
+fn landing(ctx: &Ctx, req: &Request) -> Response {
+    let runs = game::all_runs(ctx);
+    let run = req
+        .param("run")
+        .filter(|r| runs.iter().any(|x| x == r))
+        .map(str::to_owned)
+        .or_else(|| runs.first().cloned());
+    let Some(run) = run else {
+        return Response::bytes(
+            "text/html; charset=utf-8",
+            format!(
+                "<!doctype html><meta charset=utf-8><title>Game Printer</title><p>No game in {}: gp game new or gp serve --games.</p>",
+                ctx.games.display()
+            )
+            .into_bytes(),
+        );
+    };
+    let tab = req
+        .param("tab")
+        .filter(|t| t.bytes().all(|b| b.is_ascii_lowercase()))
+        .map(|t| format!("?tab={t}"))
+        .unwrap_or_default();
+    let to = format!("/mechanic/{run}/{tab}");
+    Response::bytes(
+        "text/html; charset=utf-8",
+        format!(
+            "<!doctype html><meta charset=utf-8><title>Game Printer</title><script>location.replace({to:?})</script><p><a href=\"{to}\">{run}</a></p>"
+        )
+        .into_bytes(),
+    )
 }
 
 /// The editor's own files.
@@ -409,6 +449,59 @@ fn serve(listener: TcpListener, ctx: Arc<Ctx>) {
             open.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         });
     }
+}
+
+/// A request to a `gp serve` on this machine: the status and the body.
+pub(crate) fn call(port: u16, method: &str, path: &str, body: &str) -> Result<(u16, String)> {
+    use std::io::{Read as _, Write as _};
+    let mut s = TcpStream::connect(("127.0.0.1", port))?;
+    s.set_read_timeout(Some(std::time::Duration::from_secs(120)))?;
+    write!(
+        s,
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )?;
+    let mut out = String::new();
+    s.read_to_string(&mut out)?;
+    let status = out
+        .split_whitespace()
+        .nth(1)
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0);
+    let body = out.split_once("\r\n\r\n").map_or("", |(_, b)| b).to_owned();
+    Ok((status, body))
+}
+
+/// A `gp serve` answering on `port`, started in the background when none
+/// does: this gp, its output in `$GP_HOME/work/serve/serve.log`. Waits up
+/// to half a minute for it to answer.
+pub(crate) fn ensure(paths: &Paths, games: Option<&Path>, port: u16) -> Result<()> {
+    if call(port, "GET", "/api", "").is_ok_and(|(s, _)| s == 200) {
+        return Ok(());
+    }
+    let dir = paths.home.join("work").join("serve");
+    std::fs::create_dir_all(&dir)?;
+    let log = std::fs::File::create(dir.join("serve.log"))?;
+    let mut cmd = std::process::Command::new(std::env::current_exe()?);
+    cmd.arg("serve").arg("--port").arg(port.to_string());
+    if let Some(g) = games {
+        cmd.arg("--games").arg(g);
+    }
+    cmd.stdout(log.try_clone()?)
+        .stderr(log)
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .context("starting gp serve")?;
+    for _ in 0..60 {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if call(port, "GET", "/api", "").is_ok_and(|(s, _)| s == 200) {
+            return Ok(());
+        }
+    }
+    bail!(
+        "gp serve didn't answer on port {port}: see {}",
+        dir.join("serve.log").display()
+    )
 }
 
 #[cfg(test)]

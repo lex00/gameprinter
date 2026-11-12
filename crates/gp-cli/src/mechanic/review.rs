@@ -299,7 +299,7 @@ pub(crate) fn as_rebuild(meta: &Value, n: u64, mechanic: &str) -> Value {
         .map(|k| {
             let have = meta["have"][k] == json!(true);
             let pic =
-                |kind: &str| have.then(|| format!("/api/clips/{n}/review/{kind}-{k:05}.png{q}"));
+                |kind: &str| have.then(|| format!("api/clips/{n}/review/{kind}-{k:05}.png{q}"));
             let drawn = at(k, "drawn");
             json!({
                 "k": k,

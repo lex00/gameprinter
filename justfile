@@ -49,9 +49,9 @@ check: _hook-enabled build mosshop
     just _interp-mosshop
     just play-web
     just play-web-arcade
+    just editor
     just mechanic-page
     just web-parity
-    just editor
     {{gp}} template check templates/mosshop --rom {{quote(mosshop_rom)}}
     scripts/test-hook.sh
     python3 -I -B -m unittest discover -s scripts/romguard -q

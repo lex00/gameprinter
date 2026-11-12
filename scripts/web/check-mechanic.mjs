@@ -92,7 +92,7 @@ function gpRun(args, extra = {}) {
 
 /** Starts `gp mechanic start` on a free port; its address once it prints it. */
 function serve(extra = {}, game = GAME, mech = MECH) {
-  const p = spawn(gp, ["mechanic", "start", game, mech, "--port", "0", "--games", games], { env: { ...env, ...extra } });
+  const p = spawn(gp, ["mechanic", "start", game, mech, "--own-server", "--port", "0", "--games", games], { env: { ...env, ...extra } });
   servers.push(p);
   let err = "";
   p.stderr.on("data", (d) => { err += d; });
@@ -224,6 +224,47 @@ async function main() {
   await until("the problem row", async () => (await text(page, "#w-problems")).includes("the hop lands a pixel low") && (await text(page, "#w-problems")).includes("fixed"));
   ok("the watch panel shows the agent's status, its pinned picture and its problem table");
 
+  // game-printer's layout beneath the game: two columns, the quest log at
+  // half the width, the clips and the conversation in the second; the
+  // score, SOUND ON and AGENT'S LOG at the header's right. The agent's log
+  // is a panel at the right, opened from the header (or L), on every tab.
+  const beneath = await page.evaluate(() => {
+    const cols = [...document.querySelectorAll("main > aside > .col")];
+    const r = (id) => document.getElementById(id).getBoundingClientRect();
+    return {
+      cols: cols.length,
+      talkIn: cols.findIndex((c) => c.contains(document.getElementById("talk"))),
+      queue: r("queue").width / document.querySelector("main > aside").getBoundingClientRect().width,
+      header: r("sound").right <= r("log-toggle").left && r("score").left > window.innerWidth / 2,
+      tabs: [...document.querySelectorAll("#tabs button")].map((b) => b.textContent).join(","),
+    };
+  });
+  if (beneath.cols !== 2 || beneath.talkIn !== 1 || beneath.queue < 0.4 || !beneath.header || beneath.tabs !== "CLIPS,REFINE,PLAY,THEMES") fail(`the layout: ${JSON.stringify(beneath)}`);
+  ok("four tabs (CLIPS, REFINE, PLAY, THEMES), two columns beneath the game, the score, SOUND ON and AGENT'S LOG at the right");
+  await page.click("#log-toggle");
+  await until("the agent's log panel", async () => !(await page.isHidden("#log-panel")) && (await text(page, "#log-panel")).includes("Measuring the hop in clip 1"));
+  const beside = await page.evaluate(() => document.getElementById("log-panel").getBoundingClientRect().left >= document.querySelector("main").getBoundingClientRect().right - 1);
+  if (!beside) fail("the agent's log covers the game");
+  await page.click("#log-toggle");
+  if (!(await page.isHidden("#log-panel"))) fail("AGENT'S LOG didn't close the panel");
+  ok("AGENT'S LOG opens the agent's log beside the game and closes it");
+
+  // The quest log takes the gate's scores ($GP_HOME/work/refine/GAME/
+  // status.json, which gp model gate writes): the row shows MEASURED and
+  // its score line, and the header counts it.
+  const refineDir = join(home, "work", "refine", GAME);
+  mkdirSync(refineDir, { recursive: true });
+  writeFileSync(join(refineDir, "status.json"), JSON.stringify({
+    clips: [{ id: `check.${MECH}.001`, mechanic: MECH, clip: 1, start: 0, frames: 60, bars: { together: true, longest_stretch: null }, straight: { of: 60, together: 60, pct: 100.0 }, first_split: null, resync: null, longest_exact: null, draws: null }],
+  }));
+  const row = await until("the row's gate scores", async () => {
+    const r = await page.evaluate((m) => document.querySelector(`#queue li[data-mechanic="${m}"]`)?.textContent ?? "", MECH);
+    return r.startsWith("MEASURED") && r.includes("1 of 1 clips meet the bars") ? r : null;
+  });
+  const measured = await text(page, "#score");
+  if (!/^1 \/ \d+ MEASURED$/.test(measured)) fail(`the header's score: ${measured}`);
+  ok(`the quest log takes the gate's scores: "${row.slice(0, 80)}", ${measured}`);
+
   // REVIEW REBUILD, from clip 1's ON THE MODEL: the clip played through
   // the original and the game's model (the skeleton gp game new wrote) as
   // the score plays it, in the game window, both pictures of each frame
@@ -298,8 +339,9 @@ async function main() {
 
   // FREE PLAY: the rebuild alone, never the original, and the agent's words
   // wait until Esc goes back.
-  await page.click("#tab-free");
+  await page.click("#tab-play");
   await until("FREE PLAY", async () => (await text(page, "#modebadge")) === "FREE PLAY: THE REBUILD", 120000);
+  if (!(await page.evaluate(() => document.getElementById("tab-play").classList.contains("on") && new URL(location.href).searchParams.get("tab") === "play"))) fail("PLAY isn't the tab shown or in the address");
   const sources = new Set();
   for (let i = 0; i < 10; i++) {
     sources.add(await page.evaluate(() => document.body.dataset.frameSource));
@@ -315,8 +357,8 @@ async function main() {
   ok(`FREE PLAY is the rebuild alone (${[...sources].join(", ")}), with its settings, and the agent's words wait`);
   await page.keyboard.press("Escape");
   await until("the words after Esc", async () => (await text(page, "#say")).startsWith(later) && !(await page.isHidden("#overlay")));
-  if (!(await page.evaluate(() => document.getElementById("tab-mech").classList.contains("on")))) fail("Esc didn't go back to HELP WITH MECHANICS");
-  ok("Esc goes back to HELP WITH MECHANICS, where the words show");
+  await until("CLIPS after Esc", async () => page.evaluate(() => document.getElementById("tab-mech").classList.contains("on") && document.getElementById("tab-clips").classList.contains("on")));
+  ok("Esc goes back to CLIPS on the original, where the words show");
   await page.keyboard.press("Enter");
 
   // The decision model at the controller, played as it comes: a stand-in
@@ -444,7 +486,7 @@ async function arcade() {
     return t.includes("an arcade game has none yet") ? t : null;
   });
   ok(`REVIEW REBUILD refuses in words: ${says.slice(0, 80)}...`);
-  await page.click("#tab-free");
+  await page.click("#tab-play");
   const free = await until("FREE PLAY's words", async () => {
     const t = (await text(page, "#toast")) + (await text(page, "#state"));
     return t.includes("an arcade game has none yet") ? t : null;
@@ -457,9 +499,60 @@ async function arcade() {
   if (errors.length) fail(`the arcade page threw: ${errors.join("; ")}`);
 }
 
+/** One server: gp serve hosts the page at /mechanic/GAME/ (its root
+ * opens it), gp mechanic start opens CLIPS of a gp serve already running,
+ * REFINE shows gp serve's background work, THEMES the game's themes, and
+ * gp mechanic watch opens a session's log at /watch/GAME/TOPIC/. */
+async function oneServer() {
+  const p = spawn(gp, ["serve", "--port", "0", "--games", games], { env });
+  servers.push(p);
+  const base = await new Promise((res, rej) => {
+    let out = "";
+    const t = setTimeout(() => rej(new Error(`gp serve printed no address: ${out}`)), 20000);
+    p.stdout.on("data", (d) => {
+      out += d;
+      const m = out.match(/http:\/\/127\.0\.0\.1:(\d+)\//);
+      if (m) { clearTimeout(t); res(m); }
+    });
+  });
+  const port = base[1];
+  const opened = gpRun(["mechanic", "start", GAME, MECH, "--port", port, "--games", games]);
+  if (!opened.includes(`/mechanic/${GAME}/?tab=clips`)) fail(`gp mechanic start didn't open CLIPS of gp serve: ${opened}`);
+  ok("gp mechanic start opens CLIPS of the gp serve running");
+  const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto(base[0]);
+  await until("gp serve's root opens the game's page", async () => page.url().includes(`/mechanic/${GAME}/`) && (await text(page, "#title").catch(() => "")) === `${GAME} / ${MECH}`);
+  ok(`gp serve's root opens ${GAME}'s page: ${page.url()}`);
+  await page.click("#tab-work");
+  await until("REFINE's background work", async () => !(await page.isHidden("#pane-work")) && (await page.isHidden("main")) && /workers/.test(await text(page, "#work-body")));
+  const holds = await frame(page);
+  await page.waitForTimeout(500);
+  if ((await frame(page)) !== holds) fail("the game kept playing behind REFINE");
+  ok(`REFINE shows gp serve's background work in the game's place, and the game holds: ${(await text(page, "#work-body")).slice(0, 70)}...`);
+  await shot(page, "refine");
+  await page.click("#tab-themes");
+  await until("THEMES", async () => !(await page.isHidden("#pane-themes")) && (await text(page, "#themes-body")).includes("Theme work comes once"));
+  ok("THEMES says what's there and what's coming");
+  await shot(page, "themes");
+  await page.click("#tab-clips");
+  await until("CLIPS again", async () => !(await page.isHidden("main")) && (await frame(page)) > holds);
+  ok("CLIPS plays the original again");
+  const w = gpRun(["mechanic", "watch", GAME, "emulator", "--port", port]);
+  if (!w.includes(`/watch/${GAME}/emulator/`)) fail(`gp mechanic watch didn't open gp serve's log page: ${w}`);
+  gpRun(["mechanic", "log", GAME, "emulator", "reading the board"]);
+  await page.goto(`${base[0]}watch/${GAME}/emulator/`);
+  await until("the topic's log", async () => (await text(page, "#w-status")).includes("reading the board"));
+  ok("gp mechanic watch opens the session's log on gp serve");
+  if (errors.length) fail(`the page under gp serve threw: ${errors.join("; ")}`);
+  await page.close();
+}
+
 let code = 0;
 try {
   await main();
+  await oneServer();
   await arcade();
   console.log(`mechanic-page: passed in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
 } catch (e) {

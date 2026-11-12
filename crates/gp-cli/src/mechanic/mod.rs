@@ -45,14 +45,15 @@ use serde_json::{Value, json};
 
 mod demo;
 pub(crate) mod http;
+mod import;
 pub(crate) mod live;
 pub(crate) mod paths;
 pub(crate) mod review;
 mod scores;
-mod server;
+pub(crate) mod server;
 pub(crate) mod session;
 pub(crate) mod watch;
-mod watch_page;
+pub(crate) mod watch_page;
 
 use crate::Outcome;
 pub(crate) use session::name_ok;
@@ -72,9 +73,15 @@ pub enum MechanicCmd {
         /// What the mechanic is, in your words, for a new session.
         #[arg(long)]
         prompt: Option<String>,
-        /// The port, on 127.0.0.1 (0 picks a free one).
-        #[arg(long, default_value_t = 7710)]
-        port: u16,
+        /// gp serve's port (7710; started when none answers there); with
+        /// --own-server, the page's own port (0 picks a free one; 7712 by
+        /// default).
+        #[arg(long)]
+        port: Option<u16>,
+        /// Serve the page on a server of its own, as before gp serve took
+        /// it in, rather than as a tab of gp serve's page.
+        #[arg(long)]
+        own_server: bool,
         /// The games checkout (default: $GP_GAMES_DIR, else a `games` folder
         /// at or beside the current folder or one above it)
         #[arg(long)]
@@ -106,9 +113,13 @@ pub enum MechanicCmd {
         /// What the work is, in your words, for a new session.
         #[arg(long)]
         prompt: Option<String>,
-        /// The port, on 127.0.0.1 (0 picks a free one).
-        #[arg(long, default_value_t = 7711)]
-        port: u16,
+        /// The editor's port (`gp serve`, started when none answers there);
+        /// with --own-server, the panel's own port (0 picks a free one).
+        #[arg(long)]
+        port: Option<u16>,
+        /// Serve the panel on a server of its own rather than in the editor.
+        #[arg(long)]
+        own_server: bool,
     },
     /// Say what you're doing while it's your turn ("measuring the jump"):
     /// the person's page shows it until your next turn.
@@ -259,6 +270,29 @@ pub enum MechanicCmd {
         #[arg(long)]
         games: Option<PathBuf>,
     },
+    /// An old home's mechanic work for GAME, brought into this home: its
+    /// sessions (clips, conversation, watch files), the quest log, the
+    /// gate's scores and the sealed runs. The old name is --old-name, else
+    /// the games checkout's corpus.toml `[import] prefix` (donkey-kong-oe for
+    /// donkey-kong), else GAME. Nothing here is overwritten: a session this
+    /// home has but never used takes the old one's place; one with clips or
+    /// conversation of its own is kept and listed.
+    Import {
+        game: String,
+        /// The old home (game-printer's was ~/.game-printer).
+        #[arg(long)]
+        from: PathBuf,
+        /// The game's name in the old home.
+        #[arg(long)]
+        old_name: Option<String>,
+        /// The games checkout, for the corpus's import prefix (default: as
+        /// `mechanic start` finds it).
+        #[arg(long)]
+        games: Option<PathBuf>,
+        /// List what would be copied, and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// The game's quest log, shown beside the game: each mechanic with its
     /// status (done, asking you, agent working, in line, next) and one plain
     /// line. With `--status`, adds the mechanic or changes it; without,
@@ -304,6 +338,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             mechanic,
             prompt,
             port,
+            own_server: true,
             games,
             module,
             rom,
@@ -314,11 +349,36 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                 game,
                 mechanic: mechanic.as_deref(),
                 prompt: prompt.as_deref(),
-                port: *port,
+                port: port.unwrap_or(7712),
                 games: games.as_deref(),
                 module: module.as_deref(),
                 rom: rom.as_deref(),
                 follow: !*no_follow,
+            },
+        ),
+        MechanicCmd::Start {
+            game,
+            mechanic,
+            prompt,
+            port,
+            games,
+            ..
+        } => in_editor(
+            paths,
+            games.as_deref(),
+            port.unwrap_or(crate::serve::DEFAULT_PORT),
+            &format!("/api/mechanic/{game}/open"),
+            &json!({"mechanic": mechanic, "prompt": prompt}),
+            |v| {
+                let m = v["mechanic"].as_str().unwrap_or("").to_owned();
+                (
+                    format!("mechanic/{game}/?tab=clips"),
+                    format!(
+                        "{game} / {m} in gp serve's page, its CLIPS tab.\nSession: {}\n{}",
+                        v["session"].as_str().unwrap_or(""),
+                        server::agent_words(game, &m)
+                    ),
+                )
             },
         ),
         MechanicCmd::Watch {
@@ -326,7 +386,50 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             topic,
             prompt,
             port,
-        } => watch_page::run(paths, game, topic, prompt.as_deref(), *port),
+            own_server: true,
+        } => watch_page::run(paths, game, topic, prompt.as_deref(), port.unwrap_or(7711)),
+        MechanicCmd::Watch {
+            game,
+            topic,
+            prompt,
+            port,
+            ..
+        } => {
+            // The session first, with the person's words when it is new;
+            // gp serve's watch page opens it.
+            Session::create(paths, game, topic, prompt.as_deref(), "")?;
+            in_editor(
+                paths,
+                None,
+                port.unwrap_or(crate::serve::DEFAULT_PORT),
+                &format!("/watch/{game}/{topic}/api/watch"),
+                &Value::Null,
+                |_| {
+                    (
+                        format!("watch/{game}/{topic}/"),
+                        format!(
+                            "{game} / {topic}: your agent's log, from gp serve. The agent writes here with gp mechanic log, pin and problem {game} {topic}, and reads your notes with gp mechanic show or wait {game} {topic}."
+                        ),
+                    )
+                },
+            )
+        }
+        MechanicCmd::Import {
+            game,
+            from,
+            old_name,
+            games,
+            dry_run,
+        } => import::run(
+            paths,
+            &import::Import {
+                game,
+                from,
+                old_name: old_name.as_deref(),
+                games: games.as_deref(),
+                dry_run: *dry_run,
+            },
+        ),
         MechanicCmd::Busy {
             game,
             mechanic,
@@ -631,6 +734,38 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
 }
 
 /// Each genre's quest log rows, in order (checklists.toml).
+/// Opens a view of the editor (`gp serve` on `port`, started when none
+/// answers): asks `path` (a POST with `body`, else a GET), and says the
+/// view's address and `words` from the answer.
+fn in_editor(
+    paths: &Paths,
+    games: Option<&std::path::Path>,
+    port: u16,
+    path: &str,
+    body: &Value,
+    words: impl FnOnce(&Value) -> (String, String),
+) -> Result<Outcome> {
+    crate::serve::ensure(paths, games, port)?;
+    let (status, text) = if body.is_null() {
+        crate::serve::call(port, "GET", path, "")?
+    } else {
+        crate::serve::call(port, "POST", path, &body.to_string())?
+    };
+    let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    if status != 200 {
+        anyhow::bail!(
+            "the editor said {status}: {}",
+            v["error"].as_str().unwrap_or(&text)
+        );
+    }
+    let (query, said) = words(&v);
+    let url = format!("http://127.0.0.1:{port}/{query}");
+    Ok(Outcome::ok(
+        json!({"url": url, "answer": v}),
+        format!("{url}\n{said}"),
+    ))
+}
+
 pub(crate) const CHECKLISTS: &str = include_str!("checklists.toml");
 
 /// One row of a genre's checklist.

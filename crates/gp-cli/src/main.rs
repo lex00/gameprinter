@@ -210,9 +210,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: rule_refine::RuleCmd,
     },
-    /// The editor: the main screen to play the original, make clips and
-    /// watch the background work score them on the rebuilt game, at
-    /// http://127.0.0.1:7700/ (game-printer's gp serve).
+    /// Game Printer's page, at http://127.0.0.1:7710/: a game's tabs CLIPS
+    /// (record clips of the original, hand them to your agent, review them
+    /// on the model), REFINE (the background work scoring and refining the
+    /// rebuilt game), PLAY (the rebuild) and THEMES, with your agent's log
+    /// beside them. gp mechanic start and watch open it.
     Serve {
         #[command(flatten)]
         opts: serve::ServeOpts,

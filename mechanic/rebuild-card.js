@@ -44,7 +44,7 @@ export class RefineView {
   async refresh(force = false) {
     let r;
     try {
-      r = await this.api("/api/rebuild/scores");
+      r = await this.api("api/rebuild/scores");
     } catch (e) {
       this.status = `the scores couldn't be read: ${e}`;
       return;
@@ -118,7 +118,7 @@ export class RefineView {
       b.title = "Lists the sealed runs for you alone; no worker sees them and nothing is kept";
       b.addEventListener("click", async () => {
         try {
-          this.sealed = (await this.api("/api/sealed")).runs ?? [];
+          this.sealed = (await this.api("api/sealed")).runs ?? [];
         } catch (e) {
           this.sealed = [];
           this.status = `the sealed runs couldn't be read: ${e}`;

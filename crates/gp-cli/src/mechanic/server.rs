@@ -236,8 +236,15 @@ fn restart(srv: &Server, bin: &Path, a: &Start) -> anyhow::Error {
         bin.display()
     );
     let mut c = std::process::Command::new(bin);
-    c.args(["mechanic", "start", &srv.game, &mechanic, "--port"])
-        .arg(srv.port.to_string());
+    c.args([
+        "mechanic",
+        "start",
+        &srv.game,
+        &mechanic,
+        "--own-server",
+        "--port",
+    ])
+    .arg(srv.port.to_string());
     for (flag, v) in [
         ("--games", a.games),
         ("--module", a.module),
@@ -250,12 +257,12 @@ fn restart(srv: &Server, bin: &Path, a: &Start) -> anyhow::Error {
     anyhow::Error::new(c.env(RESTARTED, "1").exec())
 }
 
-pub(crate) fn start(paths: &Paths, a: &Start) -> Result<Outcome> {
+/// The page's server for a game, ready to answer at `port` (its own, or
+/// `gp serve`'s, which mounts it at /mechanic/GAME/), with the mechanic
+/// `a` asks for open: its session made when new.
+pub(crate) fn prepare(paths: &Paths, a: &Start, port: u16) -> Result<(Arc<Server>, String)> {
     let repo = repo_root()?;
     let rom = game_rom(paths, a.games, a.game, a.rom)?;
-    let mechanic = mechanic_to_open(paths, a.game, a.mechanic)?;
-    let listener = listen(a.port)?;
-    let port = listener.local_addr()?.port();
     let platform = rom.platform;
     let mut server = Server::new(paths.clone(), a.game, &repo, rom.bytes, &rom.sha256, port);
     server.platform = platform;
@@ -282,37 +289,31 @@ pub(crate) fn start(paths: &Paths, a: &Start) -> Result<Outcome> {
             }
         });
     }
-    let in_log = read_queue(&queue_file(paths, a.game)?)
-        .iter()
-        .any(|r| r["mechanic"] == json!(mechanic));
-    // A session there already, or a quest log row (whose new session gets
-    // its first turn, as a pick from the page does), else a new mechanic
-    // with the person's words.
-    let session = if Session::exists(paths, a.game, &mechanic)? || (in_log && a.prompt.is_none()) {
-        server.session_named(&mechanic)?
-    } else {
-        let s = Arc::new(Session::create(
-            paths,
-            a.game,
-            &mechanic,
-            a.prompt,
-            &rom.sha256,
-        )?);
-        server
-            .open
-            .lock()
-            .expect("open lock")
-            .insert(mechanic.clone(), s.clone());
-        s
-    };
-    *server.session.lock().expect("session lock") = Some(session.clone());
-    set_current(paths, a.game, &mechanic)?;
+    let mechanic = server.open_mechanic(a.mechanic, a.prompt)?;
+    Ok((server, mechanic))
+}
+
+/// A request to a prepared server, answered as its own server answers it.
+pub(crate) fn answer(s: &Server, req: &Request) -> Response {
+    handle(s, req).unwrap_or_else(|e| Response::error(500, &format!("{e:#}")))
+}
+
+/// What to tell the person's agent about a session.
+pub(crate) fn agent_words(game: &str, mechanic: &str) -> String {
+    format!(
+        "Give your agent this: \"We're working on the {mechanic} of {game}. Run `gp mechanic show {game} {mechanic}` to see the session, answer with `gp mechanic say {game} {mechanic} \\\"...\\\"`, and keep the loop going: ask me for the clip you need next.\""
+    )
+}
+
+/// `gp mechanic start --own-server`: the page on a server of its own.
+pub(crate) fn start(paths: &Paths, a: &Start) -> Result<Outcome> {
+    let listener = listen(a.port)?;
+    let port = listener.local_addr()?.port();
+    let (server, mechanic) = prepare(paths, a, port)?;
     let game = a.game;
     println!("{game} / {mechanic}: http://127.0.0.1:{port}/");
-    println!("Session: {}", session.dir.display());
-    println!(
-        "Give your agent this: \"We're working on the {mechanic} of {game}. Run `gp mechanic show {game} {mechanic}` to see the session, answer with `gp mechanic say {game} {mechanic} \\\"...\\\"`, and keep the loop going: ask me for the clip you need next.\""
-    );
+    println!("Session: {}", server.open_session()?.dir.display());
+    println!("{}", agent_words(game, &mechanic));
     let _ = std::io::Write::flush(&mut std::io::stdout());
     // Accepted here only, so with none in flight no request is running:
     // the server restarts into a new published build then, never during a
@@ -364,6 +365,48 @@ pub(crate) fn start(paths: &Paths, a: &Start) -> Result<Outcome> {
             }
             Err(_) => {}
         }
+    }
+}
+
+impl Server {
+    /// Opens a mechanic in the page: the one asked for, else the one open
+    /// last or the quest log's first not done. A session there already, or
+    /// a quest log row (whose new session gets its first turn, as a pick
+    /// from the page does), else a new mechanic with the person's words.
+    pub(crate) fn open_mechanic(
+        &self,
+        asked: Option<&str>,
+        prompt: Option<&str>,
+    ) -> Result<String> {
+        let (paths, game) = (&self.paths, self.game.as_str());
+        let mechanic = mechanic_to_open(paths, game, asked)?;
+        let in_log = read_queue(&queue_file(paths, game)?)
+            .iter()
+            .any(|r| r["mechanic"] == json!(mechanic));
+        let session = if Session::exists(paths, game, &mechanic)? || (in_log && prompt.is_none()) {
+            self.session_named(&mechanic)?
+        } else {
+            let s = Arc::new(Session::create(
+                paths,
+                game,
+                &mechanic,
+                prompt,
+                &self.rom_sha,
+            )?);
+            self.open
+                .lock()
+                .expect("open lock")
+                .insert(mechanic.clone(), s.clone());
+            s
+        };
+        *self.session.lock().expect("session lock") = Some(session);
+        set_current(paths, game, &mechanic)?;
+        Ok(mechanic)
+    }
+
+    /// The session open now, for `gp serve`.
+    pub(crate) fn session_dir(&self) -> Result<PathBuf> {
+        Ok(self.open_session()?.dir.clone())
     }
 }
 
@@ -580,6 +623,16 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             req,
         )?
         .unwrap_or_else(|| Response::error(404, "not found"))),
+        ("GET" | "HEAD", "/shell.js") => page("shell.js", "text/javascript; charset=utf-8"),
+        // REFINE's parts (the background work's views), when they're there.
+        ("GET" | "HEAD", p) if part_name(p).is_some() => {
+            let (name, kind) = part_name(p).unwrap_or_default();
+            match fs::read(s.page.join("refine").join(name)) {
+                Ok(b) => Ok(Response::bytes(kind, b)),
+                Err(_) => Ok(Response::error(404, "not here")),
+            }
+        }
+        ("GET" | "HEAD", "/api/themes") => Ok(Response::json(&themes(s))),
         ("GET" | "HEAD", "/gp_play.wasm") => {
             if !s.wasm.is_file() {
                 return Ok(Response::error(
@@ -974,6 +1027,71 @@ fn level_key(file: &Path) -> Option<(u16, std::collections::HashMap<u8, String>)
         names.insert(v, name.to_owned());
     }
     Some((addr, names))
+}
+
+/// A file of REFINE's parts: `/refine/NAME.js` or `.css`, a plain name.
+fn part_name(p: &str) -> Option<(&str, &'static str)> {
+    let name = p.strip_prefix("/refine/")?;
+    let ok = !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.')
+        && !name.starts_with('.');
+    let kind = if name.ends_with(".js") {
+        "text/javascript; charset=utf-8"
+    } else if name.ends_with(".css") {
+        "text/css; charset=utf-8"
+    } else {
+        return None;
+    };
+    ok.then_some((name, kind))
+}
+
+/// THEMES's view: the content packages the person's registry
+/// (`$GP_HOME/registry/catalog.toml`) offers for this game, and the files
+/// of the game's theme kit (games/GAME/themes/kit).
+fn themes(s: &Server) -> Value {
+    let catalog = s.paths.home.join("registry").join("catalog.toml");
+    let suffix = format!("/{}", s.game);
+    let list: Vec<Value> = fs::read_to_string(&catalog)
+        .ok()
+        .and_then(|t| t.parse::<toml::Table>().ok())
+        .and_then(|t| t.get("package").and_then(|p| p.as_array()).cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| {
+            p.get("kind").and_then(|k| k.as_str()) == Some("content")
+                && p.get("for_games")
+                    .and_then(|g| g.as_array())
+                    .is_some_and(|g| {
+                        g.iter()
+                            .any(|n| n.as_str().is_some_and(|n| n.ends_with(&suffix)))
+                    })
+        })
+        .map(|p| {
+            json!({
+                "name": p.get("name").and_then(|v| v.as_str()),
+                "title": p.get("title").and_then(|v| v.as_str()),
+                "latest": p.get("latest").and_then(|v| v.as_str()),
+            })
+        })
+        .collect();
+    let mut kit: Vec<String> = s
+        .rebuild
+        .as_ref()
+        .and_then(|r| fs::read_dir(r.game.join("themes").join("kit")).ok())
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    kit.sort();
+    json!({
+        "registry": catalog.is_file().then(|| catalog.display().to_string()),
+        "themes": list,
+        "kit": kit,
+    })
 }
 
 /// The sealed runs (`$GP_HOME/sealed/GAME/`: its top folder's clips and the

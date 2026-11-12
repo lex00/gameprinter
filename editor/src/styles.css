@@ -1300,3 +1300,14 @@ details.dsec > summary { cursor: pointer; }
   max-height: 340px;
   overflow: auto;
 }
+
+/* The one header's tabs (Views.tsx) and the views under them. */
+.view-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin: 0 0 10px; border-bottom: 1px solid var(--line, #333); padding-bottom: 6px; }
+.view-tabs button.on { background: var(--accent, #4a9eff); color: #000; }
+.view-tabs button.log { margin-left: auto; }
+.views-row { display: flex; gap: 12px; align-items: flex-start; }
+.view-main { flex: 1; min-width: 0; }
+.mechanic-view { width: 100%; height: calc(100vh - 80px); min-height: 640px; border: 0; }
+.log-panel { width: 380px; flex: none; }
+.log-panel iframe { width: 100%; height: calc(100vh - 80px); border: 1px solid var(--line, #333); }
+@media (max-width: 900px) { .views-row { flex-direction: column; } .log-panel { width: 100%; } }
