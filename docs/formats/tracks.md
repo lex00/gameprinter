@@ -76,3 +76,9 @@ Moss Hop's mapping (`templates/mosshop/mapping.toml`) is the ground truth for th
 - An object that stands still for its whole life, or isn't on screen, has no binding.
 - Objects of one palette that touch are one object. A player and an enemy of its palette in contact are one track.
 - A group needs two slots to be seen. A flag that never clears in the range is not found.
+
+## On an arcade recording
+
+`gp track` reads an arcade recording's trace too (port wave 6). gp-arcade's adapter (`gp_arcade::video::sprite_list`) turns each frame's sprite RAM into the tracker's sprite list: each 32x32 sprite as a 16x16 box in the game's own half-pixel units (the bytes' `x - 3` and `241 - y`; Tapper's screen is 256x240 of them), with its picture (0 to 511), colour bank and flips. The RAM searched is the main board's 2 KB of work RAM (gp-track's `Options::ram`), and every address the report names is moved to where the CPU sees it, E000 on. The board draws a frame's sprites from that frame's sprite RAM, so `--oam-lag` (the NES's) isn't read, and it has no scroll. `gp_arcade::video::tilemap` gives the 32x30 background map from video RAM the same way, for the tools that read a frame's tiles.
+
+On a five-level Tapper play (frames 1000 to 3999): the player's x at $E311 (0.98), moving with the stick on every frame it was pushed (1.00), a frame counter at $E403, and a slot group of 2 at stride 4 from $E2FD.

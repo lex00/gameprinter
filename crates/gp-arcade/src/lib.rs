@@ -59,9 +59,14 @@
 //! them. The MCR board itself is one module, `mcr`.
 
 pub mod attotime;
+pub mod canonical;
 pub mod ctc;
+pub mod dasm;
+pub mod events;
+pub mod inp;
 pub mod irq;
 pub mod joystick;
+pub mod levels;
 pub mod mcr;
 pub mod oracle;
 pub mod protocol;
@@ -70,6 +75,7 @@ pub mod sched;
 pub mod sha1;
 pub mod sound;
 pub mod state;
+pub mod testrom;
 pub mod video;
 pub mod z80;
 

@@ -48,6 +48,12 @@ pub enum SourceRef {
     /// nothing else; `name` is the model's `model.name`. Added 2026-10-28
     /// within schema 1: older builds refuse it as an unknown kind.
     Model { name: String, bundle: Hash },
+    /// An arcade romset, run by gp-arcade: `identity` is the set's
+    /// identity (gp_arcade::romset::identity, the SHA-256 of its chips'
+    /// SHA-1s sorted) and `system` MAME's name for the set (`tapper`).
+    /// Added 2026-11-12 within schema 1: older builds refuse it as an
+    /// unknown kind.
+    Romset { identity: String, system: String },
 }
 
 impl SourceRef {
@@ -56,6 +62,7 @@ impl SourceRef {
         match self {
             Self::NesRom { .. } => "nes-rom",
             Self::Model { .. } => "model",
+            Self::Romset { .. } => "romset",
         }
     }
 
@@ -63,16 +70,25 @@ impl SourceRef {
     pub fn nes_sha256(&self) -> Option<&str> {
         match self {
             Self::NesRom { sha256, .. } => Some(sha256),
-            Self::Model { .. } => None,
+            Self::Model { .. } | Self::Romset { .. } => None,
         }
     }
 
-    /// What identifies the source, in hex: an NES ROM's SHA-256, or a model
-    /// bundle's BLAKE3 hash.
+    /// An arcade romset source's identity.
+    pub fn romset_identity(&self) -> Option<&str> {
+        match self {
+            Self::Romset { identity, .. } => Some(identity),
+            Self::NesRom { .. } | Self::Model { .. } => None,
+        }
+    }
+
+    /// What identifies the source, in hex: an NES ROM's SHA-256, a model
+    /// bundle's BLAKE3 hash, or a romset's identity.
     pub fn id_hex(&self) -> String {
         match self {
             Self::NesRom { sha256, .. } => sha256.clone(),
             Self::Model { bundle, .. } => bundle.to_hex(),
+            Self::Romset { identity, .. } => identity.clone(),
         }
     }
 }

@@ -172,10 +172,16 @@ impl Index {
                         format!("{} {}", r.runtime.name, r.runtime.version).contains(t.as_str())
                     })
                 });
-                let stale_ok = filter
-                    .stale_against
-                    .as_ref()
-                    .is_none_or(|now| row.is_some_and(|r| &r.runtime != now));
+                let stale_ok = filter.stale_against.as_ref().is_none_or(|now| {
+                    // An arcade recording is stale against gp-arcade.
+                    row.is_some_and(|r| {
+                        if r.source_kind == "romset" {
+                            r.runtime != crate::arcade_rec::runtime_ref()
+                        } else {
+                            &r.runtime != now
+                        }
+                    })
+                });
                 let golden_ok = !filter.golden || golden.contains(&e.id);
                 let retired_ok = match filter.retired {
                     Retired::Include => true,
@@ -320,6 +326,7 @@ fn read_recording(
     let (source_sha256, mapper) = match &m.source {
         SourceRef::NesRom { sha256, mapper } => (sha256.clone(), Some(*mapper)),
         SourceRef::Model { bundle, .. } => (bundle.to_hex(), None),
+        SourceRef::Romset { identity, .. } => (identity.clone(), None),
     };
     let row = RecordingRow {
         id: *id,

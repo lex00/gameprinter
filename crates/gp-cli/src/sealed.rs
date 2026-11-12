@@ -547,6 +547,7 @@ fn of_recording(store: &gp_evidence::Store, m: &gp_evidence::RecordingManifest) 
     use gp_evidence::manifest::SourceRef;
     match &m.source {
         SourceRef::NesRom { sha256, .. } => Of::rom(sha256),
+        SourceRef::Romset { identity, .. } => Of::rom(identity),
         SourceRef::Model { .. } => gp_interp::recording::bundle(store, m)
             .ok()
             .and_then(|b| gp_model::Model::parse(&b.model).ok())

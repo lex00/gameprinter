@@ -39,9 +39,11 @@ pub trait Z80Bus {
     fn irq_ack(&mut self, icount: &mut i32) -> i32;
     /// RETI, passed to the daisy chain.
     fn reti(&mut self, icount: &mut i32);
-    /// Called before each instruction (MAME's debugger hook), for tracing.
+    /// Called before each instruction (MAME's debugger hook), for tracing:
+    /// the CPU as it is before the instruction, `pc` at its first byte and
+    /// `icount` the cycles left in the timeslice.
     #[inline(always)]
-    fn instruction(&mut self, _pc: u16, _af: u16, _bc: u16, _de: u16, _hl: u16) {}
+    fn instruction(&mut self, _cpu: &Z80) {}
 }
 
 pub const CF: u8 = 0x01;

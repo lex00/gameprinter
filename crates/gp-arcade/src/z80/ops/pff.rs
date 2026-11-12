@@ -264,7 +264,7 @@ impl Z80 {
                 }
                 46 => {
                     self.prvpc = ((self.pc as i64)) as u16;
-                    bus.instruction(self.pc, self.af, self.bc, self.de, self.hl);
+                    bus.instruction(self);
                     { let v = ((bus.fetch(self.pc) as i64)) as u16; self.tdat = (self.tdat & 0xff00) | (v & 0xff); }
                     self.icount -= (4 - 2);
                     if self.icount <= 0 { self.m_ref = (self.m_ref & 0xffff00) | 50; return; }

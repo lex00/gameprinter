@@ -11,6 +11,12 @@
 //! same writes in consecutive frames the same bytes, which is what LZ4
 //! finds: it took the event stream of the Super Mario Bros. baseline run from
 //! 246KB to 58KB. See docs/formats/recording.md.
+//!
+//! An arcade board's frame isn't the NES's 312 lines of 341 dots, so a
+//! recording of one counts positions in its own [`Geometry`]: Tapper's is
+//! [`Geometry::MCR`], 481 lines of 512 pixels. The bytes are the same
+//! format; which geometry a stream uses follows from the recording's
+//! source (a romset), and the NES's is the default everywhere.
 
 use crate::chunk::{self, ChunkError, Reader, put_varint};
 
@@ -29,10 +35,44 @@ pub const MAX_SCANLINES: u16 = 312;
 /// Events come from CPU accesses and interrupts, and the CPU runs one cycle
 /// per three dots or more, so a real frame stays far below it.
 pub const MAX_EVENTS_PER_FRAME: usize = MAX_SCANLINES as usize * DOTS as usize;
+/// How a frame's positions are counted: `lines` lines of `dots` each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Geometry {
+    pub lines: u16,
+    pub dots: u16,
+}
+
+impl Geometry {
+    /// The NES: [`MAX_SCANLINES`] scanlines of [`DOTS`] dots.
+    pub const NES: Self = Self {
+        lines: MAX_SCANLINES,
+        dots: DOTS,
+    };
+    /// Midway's MCR boards (Tapper): 480 lines of 512 pixels a frame, from
+    /// the start of one VBLANK to the next, and one line more for what a
+    /// CPU runs past the frame's end before the scheduler stops it.
+    pub const MCR: Self = Self {
+        lines: 481,
+        dots: 512,
+    };
+
+    /// The most events a frame can hold: one per position.
+    pub fn max_events(self) -> usize {
+        usize::from(self.lines) * usize::from(self.dots)
+    }
+
+    fn positions(self) -> i64 {
+        i64::from(self.lines) * i64::from(self.dots)
+    }
+}
+
 /// The most bytes [`EventWriter`] writes for one event: the kind, a
 /// position change of at most a frame's dots (3 bytes of zigzag LEB128),
 /// the address and the value.
 const MAX_RECORD: usize = 1 + 3 + 2 + 1;
+/// The same for an arcade frame's larger positions (up to 4 bytes of
+/// zigzag LEB128).
+const MAX_RECORD_ARCADE: usize = 1 + 4 + 2 + 1;
 /// The longest an unsigned LEB128 integer gets (a u64).
 const MAX_VARINT: usize = 10;
 
@@ -40,6 +80,14 @@ const MAX_VARINT: usize = 10;
 /// and at most [`MAX_EVENTS_PER_FRAME`] records.
 pub fn max_body(frames: u32) -> usize {
     (frames as usize).saturating_mul(MAX_VARINT + MAX_EVENTS_PER_FRAME * MAX_RECORD)
+}
+
+/// [`max_body`] in another geometry.
+pub fn max_body_in(frames: u32, g: Geometry) -> usize {
+    if g == Geometry::NES {
+        return max_body(frames);
+    }
+    (frames as usize).saturating_mul(MAX_VARINT + g.max_events() * MAX_RECORD_ARCADE)
 }
 
 /// What happened. The numbers are the stored kind codes.
@@ -63,10 +111,25 @@ pub enum EventKind {
     PpuWrite = 6,
     /// A write to an APU register: $4000-$4013, $4015 or $4017.
     ApuWrite = 7,
+    /// Arcade: the main CPU read an input port; `addr` is the port and
+    /// `value` what it read.
+    PortRead = 8,
+    /// Arcade: the main CPU wrote the sound board's latch; `addr` is the
+    /// latch (0 to 3) and `value` the byte.
+    SoundLatch = 9,
+    /// Arcade: the main CPU fed the watchdog; `addr` is the port.
+    Watchdog = 10,
+    /// Arcade: the sound CPU wrote an AY-8910 register; `addr` is the chip
+    /// times 256 plus the register, `value` the byte.
+    AyWrite = 11,
+    /// Arcade: the sound CPU took its interrupt; `addr` is the handler's
+    /// address. (The main CPU's interrupts, from its CTC, are `irq`, with
+    /// the vector the CTC gave in `value`.)
+    SoundIrq = 12,
 }
 
 impl EventKind {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 13] = [
         Self::Nmi,
         Self::Irq,
         Self::Sprite0Hit,
@@ -75,6 +138,33 @@ impl EventKind {
         Self::ControllerWrite,
         Self::PpuWrite,
         Self::ApuWrite,
+        Self::PortRead,
+        Self::SoundLatch,
+        Self::Watchdog,
+        Self::AyWrite,
+        Self::SoundIrq,
+    ];
+
+    /// The kinds an NES recording holds.
+    pub const NES: [Self; 8] = [
+        Self::Nmi,
+        Self::Irq,
+        Self::Sprite0Hit,
+        Self::BankSwitch,
+        Self::ControllerRead,
+        Self::ControllerWrite,
+        Self::PpuWrite,
+        Self::ApuWrite,
+    ];
+
+    /// The kinds an arcade recording holds.
+    pub const ARCADE: [Self; 6] = [
+        Self::Irq,
+        Self::PortRead,
+        Self::SoundLatch,
+        Self::Watchdog,
+        Self::AyWrite,
+        Self::SoundIrq,
     ];
 
     /// The name commands take and print, such as `ppu-write`.
@@ -88,6 +178,11 @@ impl EventKind {
             Self::ControllerWrite => "controller-write",
             Self::PpuWrite => "ppu-write",
             Self::ApuWrite => "apu-write",
+            Self::PortRead => "port-read",
+            Self::SoundLatch => "sound-latch",
+            Self::Watchdog => "watchdog",
+            Self::AyWrite => "ay-write",
+            Self::SoundIrq => "sound-irq",
         }
     }
 
@@ -115,6 +210,7 @@ pub struct Event {
 
 /// Builds event chunks from each frame's events, starting at frame 0.
 pub struct EventWriter {
+    geometry: Geometry,
     chunk_frames: u32,
     next_frame: u64,
     first_frame: u64,
@@ -124,8 +220,14 @@ pub struct EventWriter {
 
 impl EventWriter {
     pub fn new(chunk_frames: u32) -> Self {
+        Self::with_geometry(chunk_frames, Geometry::NES)
+    }
+
+    /// A writer whose positions count in `geometry`.
+    pub fn with_geometry(chunk_frames: u32, geometry: Geometry) -> Self {
         assert!(chunk_frames > 0, "a chunk holds at least one frame");
         Self {
+            geometry,
             chunk_frames,
             next_frame: 0,
             first_frame: 0,
@@ -145,12 +247,14 @@ impl EventWriter {
         put_varint(&mut self.body, events.len() as u64);
         let mut last = 0i64;
         for e in events {
-            assert!(e.dot < DOTS, "a scanline has {DOTS} dots");
+            let g = self.geometry;
+            assert!(e.dot < g.dots, "a line has {} dots", g.dots);
             assert!(
-                e.scanline < MAX_SCANLINES,
-                "a frame has at most {MAX_SCANLINES} scanlines"
+                e.scanline < g.lines,
+                "a frame has at most {} lines",
+                g.lines
             );
-            let at = i64::from(e.scanline) * i64::from(DOTS) + i64::from(e.dot);
+            let at = i64::from(e.scanline) * i64::from(g.dots) + i64::from(e.dot);
             let change = at - last;
             last = at;
             self.body.push(e.kind as u8);
@@ -222,19 +326,28 @@ pub fn decode_chunk_covering(
     bytes: &[u8],
     expected: std::ops::Range<u64>,
 ) -> Result<EventChunk, ChunkError> {
+    decode_chunk_covering_in(bytes, expected, Geometry::NES)
+}
+
+/// [`decode_chunk_covering`] for a stream counted in `geometry`.
+pub fn decode_chunk_covering_in(
+    bytes: &[u8],
+    expected: std::ops::Range<u64>,
+    geometry: Geometry,
+) -> Result<EventChunk, ChunkError> {
     let (first_frame, frames, _, _) = parse_header(bytes)?;
     chunk::expect_frames("event", first_frame, frames, &expected)?;
-    decode(bytes, max_body(frames))
+    decode(bytes, max_body_in(frames, geometry), geometry)
 }
 
 /// Decodes a chunk on its own, bounded by its header's frame count.
 /// Readers of a stored recording use [`decode_chunk_covering`].
 pub fn decode_chunk(bytes: &[u8]) -> Result<EventChunk, ChunkError> {
     let (_, frames, _, _) = parse_header(bytes)?;
-    decode(bytes, max_body(frames))
+    decode(bytes, max_body(frames), Geometry::NES)
 }
 
-fn decode(bytes: &[u8], limit: usize) -> Result<EventChunk, ChunkError> {
+fn decode(bytes: &[u8], limit: usize, g: Geometry) -> Result<EventChunk, ChunkError> {
     let (first_frame, frames, len, rest) = parse_header(bytes)?;
     let end = first_frame
         .checked_add(u64::from(frames))
@@ -242,12 +355,13 @@ fn decode(bytes: &[u8], limit: usize) -> Result<EventChunk, ChunkError> {
     let body = chunk::decompress(rest, len, limit)?;
     let mut r = Reader { rest: &body };
     let mut events = Vec::new();
-    let positions = i64::from(MAX_SCANLINES) * i64::from(DOTS);
+    let positions = g.positions();
+    let most = g.max_events();
     for frame in first_frame..end {
         let n = r.len("event count")?;
-        if n > MAX_EVENTS_PER_FRAME {
+        if n > most {
             return Err(ChunkError::Invalid(format!(
-                "frame {frame} has {n} events, more than its {MAX_EVENTS_PER_FRAME} dots"
+                "frame {frame} has {n} events, more than its {most} dots"
             )));
         }
         if n.saturating_mul(MIN_RECORD) > r.rest.len() {
@@ -265,10 +379,11 @@ fn decode(bytes: &[u8], limit: usize) -> Result<EventChunk, ChunkError> {
                 .filter(|at| (0..positions).contains(at))
                 .ok_or_else(|| {
                     ChunkError::Invalid(format!(
-                        "an event in frame {frame} is outside the frame's {MAX_SCANLINES} scanlines"
+                        "an event in frame {frame} is outside the frame's {} lines",
+                        g.lines
                     ))
                 })?;
-            let (scanline, dot) = (at / i64::from(DOTS), at % i64::from(DOTS));
+            let (scanline, dot) = (at / i64::from(g.dots), at % i64::from(g.dots));
             let scanline = scanline as u16;
             events.push(Event {
                 frame,
@@ -345,7 +460,10 @@ mod tests {
             assert_eq!(EventKind::from_code(i as u8), Some(k));
             assert_eq!(EventKind::from_name(k.name()), Some(k));
         }
-        assert_eq!(EventKind::from_code(8), None);
+        assert_eq!(EventKind::from_code(13), None);
+        for k in EventKind::NES.into_iter().chain(EventKind::ARCADE) {
+            assert!(EventKind::ALL.contains(&k));
+        }
         assert_eq!(EventKind::from_name("ppu"), None);
     }
 
@@ -376,6 +494,37 @@ mod tests {
             decode_chunk_covering(&bad, 0..1),
             Err(ChunkError::Invalid(_))
         ));
+    }
+
+    /// An arcade stream counts 481 lines of 512 dots; the same bytes read
+    /// with the NES's geometry would put its late events past the frame.
+    #[test]
+    fn an_arcade_stream_round_trips_in_its_geometry() {
+        let g = Geometry::MCR;
+        let mut w = EventWriter::with_geometry(2, g);
+        let events = vec![
+            Event {
+                frame: 0,
+                kind: EventKind::PortRead,
+                scanline: 3,
+                dot: 500,
+                addr: 1,
+                value: 0xef,
+            },
+            Event {
+                frame: 0,
+                kind: EventKind::AyWrite,
+                scanline: 480,
+                dot: 511,
+                addr: 0x0107,
+                value: 0x38,
+            },
+        ];
+        assert!(w.push(&events).is_none());
+        let c = w.push(&[]).unwrap();
+        let back = decode_chunk_covering_in(&c, 0..2, g).unwrap();
+        assert_eq!(back.events, events);
+        assert!(decode_chunk_covering(&c, 0..2).is_err());
     }
 
     /// Positions outside a frame, or past i64, are errors rather than

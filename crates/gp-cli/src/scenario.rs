@@ -671,13 +671,7 @@ fn draws_of(
             st.start()?,
         ));
     }
-    let Some(nes) = mine.originals[&at].0.nes().map(|n| n.fork().into_nes()) else {
-        crate::original::nes_only(
-            crate::original::Platform::Arcade,
-            "a random draw (a mapping's `[[draws]]`)",
-        )?;
-        unreachable!("nes_only refuses the arcade");
-    };
+    let original = &mine.originals[&at].0;
     let inputs: Vec<gp_evidence::input_log::InputFrame> = s
         .inputs()
         .map_err(anyhow::Error::msg)?
@@ -688,7 +682,20 @@ fn draws_of(
             reset: f.reset,
         })
         .collect();
-    let d = crate::lockstep::record_draws_on(nes, &b.mapping, &inputs, st.original_frame)?;
+    let d = match original {
+        crate::original::OriginalRuntime::Nes(n) => crate::lockstep::record_draws_on(
+            n.fork().into_nes(),
+            &b.mapping,
+            &inputs,
+            st.original_frame,
+        )?,
+        crate::original::OriginalRuntime::Arcade(a) => crate::lockstep::record_draws_arcade(
+            a.clone().into_tapper(),
+            &b.mapping,
+            &inputs,
+            st.original_frame,
+        )?,
+    };
     if cache {
         let _ = fs::write(&file, d.text());
     }

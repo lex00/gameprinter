@@ -10,10 +10,16 @@ use anyhow::{Context, Result, bail};
 use gp_evidence::source::{NesImage, identify_nes};
 use gp_evidence::{Paths, Store};
 
-/// A ROM and its identity, found by hash in $GP_ROM_DIR or given as a path.
+/// A ROM and its identity, found by hash in $GP_ROM_DIR or given as a path:
+/// an NES image, or an arcade romset (a MAME zip).
 pub(crate) struct FoundRom {
     pub bytes: Vec<u8>,
-    pub image: NesImage,
+    /// The NES image's identity; `None` for a romset.
+    pub image: Option<NesImage>,
+    /// The romset, loaded; `None` for an NES image.
+    pub set: Option<gp_arcade::Romset>,
+    /// The headerless SHA-256, or the romset's identity.
+    pub sha256: String,
     pub source_id: Option<String>,
 }
 
@@ -94,13 +100,21 @@ pub(crate) fn now_rfc3339() -> String {
 
 /// Identifies `bytes` and names its registry entry, if any.
 fn identified(bytes: Vec<u8>) -> Result<FoundRom> {
-    let image = identify_nes(&bytes)?;
-    let source_id = load_registry()?
-        .by_sha256(&image.sha256)
-        .map(|k| k.id.clone());
+    let (image, set, sha256) = if gp_arcade::romset::looks_like_zip(&bytes) {
+        let set = gp_arcade::Romset::from_zip(&bytes)?;
+        let id = set.identity.clone();
+        (None, Some(set), id)
+    } else {
+        let image = identify_nes(&bytes)?;
+        let id = image.sha256.clone();
+        (Some(image), None, id)
+    };
+    let source_id = load_registry()?.by_sha256(&sha256).map(|k| k.id.clone());
     Ok(FoundRom {
         bytes,
         image,
+        set,
+        sha256,
         source_id,
     })
 }
@@ -139,8 +153,13 @@ pub(crate) fn rom_by_hash(sha256: &str, paths: &Paths) -> Result<FoundRom> {
             paths.roms.display()
         );
     }
-    match RomFolder::new(paths).read(sha256)? {
-        Some(bytes) => identified(bytes),
+    if let Some(bytes) = RomFolder::new(paths).read(sha256)? {
+        return identified(bytes);
+    }
+    // A romset's identity isn't an NES hash: look for the zip that has it.
+    let wanted = [sha256.to_owned()];
+    match crate::roms::find(&wanted, &[], &paths.roms)?.remove(sha256) {
+        Some(rom) => identified(rom.bytes),
         None => bail!(
             "no ROM in {} has SHA-256 {short}…; add it with `gp roms add`",
             paths.roms.display()
@@ -183,6 +202,7 @@ impl Opened {
     pub fn sha256(&self) -> &str {
         match &self.manifest.source {
             gp_evidence::manifest::SourceRef::NesRom { sha256, .. } => sha256,
+            gp_evidence::manifest::SourceRef::Romset { identity, .. } => identity,
             gp_evidence::manifest::SourceRef::Model { .. } => "",
         }
     }
@@ -204,7 +224,7 @@ impl Opened {
                 let bytes =
                     fs::read(path).with_context(|| format!("reading {}", path.display()))?;
                 let found = identified(bytes)?;
-                if found.image.sha256 != sha256 {
+                if found.sha256 != sha256 {
                     bail!(
                         "{} isn't the ROM this recording was made from (SHA-256 {}…)",
                         path.display(),
@@ -218,6 +238,19 @@ impl Opened {
         Ok(found)
     }
 
+    /// The romset an arcade recording was made from, loaded.
+    pub fn romset(&self, rom: Option<&Path>, paths: &Paths) -> Result<gp_arcade::Romset> {
+        match self.rom(rom, paths)?.set {
+            Some(set) => Ok(set),
+            None => bail!("{} isn't a recording of an arcade romset", self.short()),
+        }
+    }
+
+    /// Whether this is a recording of an arcade romset.
+    pub fn is_arcade(&self) -> bool {
+        crate::arcade_rec::is_arcade(&self.manifest)
+    }
+
     /// The state at `frame` and where it came from: the trace, or replay.
     pub fn state(
         &self,
@@ -227,6 +260,13 @@ impl Opened {
     ) -> Result<(Vec<u8>, &'static str)> {
         if let Some(state) = gp_nes::recording::trace_state(&self.store, &self.manifest, frame)? {
             return Ok((state, "trace"));
+        }
+        if crate::arcade_rec::is_arcade(&self.manifest) {
+            let set = self.romset(rom, paths)?;
+            return Ok((
+                crate::arcade_rec::replayed_state(&self.store, &self.manifest, &set, frame)?,
+                "replay",
+            ));
         }
         let rom = self.rom(rom, paths)?.bytes;
         Ok((

@@ -79,7 +79,8 @@ pub struct Runs {
 
 #[derive(Args, Debug, Clone)]
 pub struct ListingArgs {
-    /// The iNES ROM.
+    /// The iNES ROM, or an arcade romset (a MAME zip): both Z80s' code,
+    /// by chip.
     pub rom: PathBuf,
     #[command(flatten)]
     pub runs: Runs,
@@ -98,8 +99,13 @@ pub struct ListingArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct TablesArgs {
-    /// The iNES ROM.
+    /// The iNES ROM, or an arcade romset (a MAME zip), whose tables are
+    /// found from a run: give --input.
     pub rom: PathBuf,
+    /// For an arcade romset: the input log whose run reads the tables
+    /// (the index byte's reads are followed through it).
+    #[arg(long)]
+    pub input: Option<PathBuf>,
     /// The RAM byte used as the index: `$53` (Donkey Kong's stage).
     #[arg(long)]
     pub index: String,
@@ -472,7 +478,9 @@ fn listing(a: &ListingArgs, paths: &Paths) -> Result<Outcome> {
         );
     }
     let rom = fs::read(&a.rom).with_context(|| format!("reading {}", a.rom.display()))?;
-    crate::original::nes_only(crate::original::Platform::of_file(&rom), "gp code")?;
+    if crate::original::Platform::of_file(&rom) == crate::original::Platform::Arcade {
+        return listing_z80(a, paths, &rom);
+    }
     let window = match &a.runs.frames {
         Some(s) => parse_window(s)?,
         None => Window::WHOLE,
@@ -641,6 +649,56 @@ fn listing(a: &ListingArgs, paths: &Paths) -> Result<Outcome> {
         return Ok(Outcome::ok(
             doc,
             format!("{summary}\nwritten to {}", w.display()),
+        ));
+    }
+    Ok(Outcome::ok(doc, text.trim_end().to_owned()))
+}
+
+/// `gp code listing` on an arcade romset (crate::code_z80).
+fn listing_z80(a: &ListingArgs, paths: &Paths, rom: &[u8]) -> Result<Outcome> {
+    let set = gp_arcade::Romset::from_zip(rom)?;
+    let window = match &a.runs.frames {
+        Some(s) => parse_window(s)?,
+        None => Window::WHOLE,
+    };
+    let ran = if a.runs.clips.is_empty() {
+        None
+    } else {
+        let clips = clips_of(&a.runs, paths)?;
+        Some(crate::code_z80::run_clips(
+            &set,
+            &clips,
+            (window.first, window.last),
+        )?)
+    };
+    let wanted = a
+        .routine
+        .iter()
+        .map(|r| {
+            u16::from_str_radix(r.trim_start_matches('$').trim_start_matches("0x"), 16)
+                .with_context(|| format!("--routine {r} isn't an address"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let wanted: Vec<u16> = if a.all && wanted.is_empty() {
+        let mut all = Vec::new();
+        for c in 0..2 {
+            let lv = ran.as_ref().map(|r| &r.cpus[c]);
+            all.extend(crate::code_z80::CodeMap::of(&set, c, lv).routines.keys());
+        }
+        all
+    } else {
+        wanted
+    };
+    let (text, mut doc) = crate::code_z80::listing(&set, ran.as_ref(), &wanted, None);
+    doc["window"] = json!(window.text());
+    if let Some(w) = &a.write {
+        if let Some(d) = w.parent() {
+            fs::create_dir_all(d)?;
+        }
+        fs::write(w, &text)?;
+        return Ok(Outcome::ok(
+            doc,
+            format!("{} lines written to {}", text.lines().count(), w.display()),
         ));
     }
     Ok(Outcome::ok(doc, text.trim_end().to_owned()))
@@ -918,7 +976,20 @@ impl Found {
 fn tables(a: &TablesArgs) -> Result<Outcome> {
     use std::fmt::Write as _;
     let rom = fs::read(&a.rom).with_context(|| format!("reading {}", a.rom.display()))?;
-    crate::original::nes_only(crate::original::Platform::of_file(&rom), "gp code")?;
+    if crate::original::Platform::of_file(&rom) == crate::original::Platform::Arcade {
+        let set = gp_arcade::Romset::from_zip(&rom)?;
+        let Some(input) = &a.input else {
+            bail!("an arcade romset's tables are found from a run: give --input LOG");
+        };
+        let text =
+            fs::read_to_string(input).with_context(|| format!("reading {}", input.display()))?;
+        let log = gp_evidence::InputLog::parse(&text)?;
+        let index =
+            u16::from_str_radix(a.index.trim_start_matches('$').trim_start_matches("0x"), 16)
+                .with_context(|| format!("--index {} isn't an address", a.index))?;
+        let (text, doc) = crate::code_z80::tables(&set, &log.frames, index)?;
+        return Ok(Outcome::ok(doc, text));
+    }
     let idx = crate::reach::parse_addr(&a.index)?;
     let byte = format!("${idx:02X}");
     let map = CodeMap::of(&rom, &[])?;

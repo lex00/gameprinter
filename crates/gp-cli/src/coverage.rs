@@ -3,9 +3,12 @@
 //! the recordings, ROMs and definitions, prints the report and checks the
 //! thresholds.
 //!
-//! It replays gp-nes recordings with the 6502 observer, so it measures NES
-//! code only: a ROM that is an arcade romset is refused in words. Z80 code
-//! coverage would come from gp-arcade's instruction hook (port wave 6).
+//! It replays gp-nes recordings with the 6502 observer. Arcade recordings
+//! (port wave 6) are replayed on gp-arcade with its levels instead, and
+//! measured as both Z80s' code coverage: of each CPU's code map, the
+//! instructions run and the conditional branches that went both ways
+//! (crate::code_z80::coverage). gp-coverage's definitions (state regions,
+//! mechanics) are the NES's and aren't read for them.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -186,6 +189,9 @@ fn covered(select: &Select, check: bool, paths: &Paths) -> Result<Outcome> {
     } else {
         Store::open_existing(&paths.store)?
     };
+    if let Some(out) = arcade(select, &store, paths)? {
+        return Ok(out);
+    }
     let rom_file = match &select.rom {
         Some(path) => {
             let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
@@ -264,6 +270,58 @@ fn covered(select: &Select, check: bool, paths: &Paths) -> Result<Outcome> {
 }
 
 /// The recordings to cover, each ID once.
+/// Coverage of the selected recordings when they are arcade ones: each
+/// replayed on gp-arcade with its levels. `None` when they're NES ones; a
+/// mix is refused.
+fn arcade(select: &Select, store: &Store, paths: &Paths) -> Result<Option<Outcome>> {
+    let entries = entries(store, select)?;
+    let mut arcade = Vec::new();
+    for e in &entries {
+        let m = recordings::load_manifest(store, &e.id)?;
+        if matches!(m.source, SourceRef::Romset { .. }) {
+            arcade.push((e.clone(), m));
+        }
+    }
+    if arcade.is_empty() {
+        return Ok(None);
+    }
+    if arcade.len() != entries.len() {
+        anyhow::bail!(
+            "the recordings chosen mix arcade and NES ones; gp coverage measures one platform at a time"
+        );
+    }
+    let mut rows = Vec::new();
+    let mut lines = Vec::new();
+    for (e, _) in &arcade {
+        let opened = crate::open::Opened::open(paths, &e.id.to_hex())?;
+        let set = opened.romset(select.rom.as_deref(), paths)?;
+        let input = String::from_utf8(store.get(&opened.manifest.input_log)?)?;
+        let log = gp_evidence::InputLog::parse(&input)?;
+        let levels = crate::code_z80::run_input(&set, &log.frames)?;
+        let mut v = crate::code_z80::coverage(&set, &levels);
+        for c in v["cpus"].as_array().into_iter().flatten() {
+            lines.push(format!(
+                "{} ({})  {:<5} {} of {} instructions run, branches both ways {} and one way {} of {}",
+                e.name,
+                &e.id.to_hex()[..12],
+                c["cpu"].as_str().unwrap_or("?"),
+                c["instructions_run"],
+                c["instructions"],
+                c["branches_both_ways"],
+                c["branches_one_way"],
+                c["branches"],
+            ));
+        }
+        v["id"] = serde_json::json!(e.id);
+        v["name"] = serde_json::json!(e.name);
+        rows.push(v);
+    }
+    Ok(Some(Outcome::ok(
+        serde_json::json!({ "arcade": rows }),
+        lines.join("\n"),
+    )))
+}
+
 fn entries(store: &Store, select: &Select) -> Result<Vec<IndexEntry>> {
     if select.store {
         let listing = recordings::list_checked(store)?;

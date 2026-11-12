@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use crate::attotime::{ATTOSECONDS_PER_SECOND, Attotime};
 use crate::ctc::{Ctc, CtcTimer, DAISY_IEO, DAISY_INT};
+use crate::events::{BoardEvent, Happened};
 use crate::irq::IrqLine;
 use crate::romset::Romset;
 use crate::sched::{Exec, Scheduler};
@@ -35,7 +36,7 @@ const SSIO: usize = 1;
 
 /// The screen: 30 Hz, 480 lines; the "VBLANK" lasts 2500 us.
 const FRAME_PERIOD: i64 = ATTOSECONDS_PER_SECOND / 30;
-const SCANTIME: i64 = FRAME_PERIOD / HEIGHT as i64;
+pub(crate) const SCANTIME: i64 = FRAME_PERIOD / HEIGHT as i64;
 const PIXELTIME: i64 = FRAME_PERIOD / (HEIGHT as i64 * WIDTH as i64);
 const VBLANK_PERIOD: i64 = 2500 * 1_000_000_000_000;
 
@@ -226,19 +227,183 @@ pub struct Board {
     /// When on, every instruction both CPUs start, for debugging. Not
     /// part of the state.
     pub trace: Option<Vec<Trace>>,
+    /// When on, what happened inside the frame being run
+    /// ([`crate::events`]), for recordings. Not part of the state.
+    pub events: Option<Vec<BoardEvent>>,
+    /// When the frame being run started, where event positions count
+    /// from. Not part of the state.
+    pub frame_start: Attotime,
+    /// The vector each CPU took at its last interrupt acknowledge, until
+    /// its handler's first instruction; kept only while tracing or
+    /// logging. Not part of the state.
+    pub irq_taken: [Option<u8>; 2],
+    /// When on, every memory and port access either CPU makes, with the
+    /// instruction that made it ([`Access`]). Not part of the state.
+    pub accesses: Option<Vec<Access>>,
+    /// The instruction each CPU is running, while accesses are logged.
+    pub cur_pc: [u16; 2],
 }
 
-/// One instruction start: which CPU, the start of its timeslice, the PC
-/// and the main registers.
+/// What an access did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AccessKind {
+    Read,
+    Write,
+    /// A port read (`in`); `addr` is the whole 16-bit port address.
+    In,
+    /// A port write (`out`).
+    Out,
+}
+
+/// One memory or port access, by the instruction at `pc`. Opcode and
+/// operand fetches aren't accesses (the disassembler knows them); the
+/// stack's are, and so is the main CPU's read of its interrupt table,
+/// which is put on the instruction the interrupt came after.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Access {
+    pub cpu: u8,
+    pub pc: u16,
+    pub addr: u16,
+    pub value: u8,
+    pub kind: AccessKind,
+    /// The CPU's own time.
+    pub time: Attotime,
+}
+
+/// One instruction start: which CPU (0 the main board's, 1 the sound
+/// board's), when it started, the registers before it and the four bytes
+/// from its PC (an instruction is at most four).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Trace {
     pub cpu: u8,
+    /// The CPU's own time at the instruction's start.
     pub time: Attotime,
     pub pc: u16,
     pub af: u16,
     pub bc: u16,
     pub de: u16,
     pub hl: u16,
+    pub ix: u16,
+    pub iy: u16,
+    pub sp: u16,
+    pub bytes: [u8; 4],
+    /// The CPU's cycles since power-on at the instruction's start.
+    pub cycles: u64,
+    /// For an interrupt rather than an instruction: the vector the CPU
+    /// took (the CTC's on the main board, 0xff on the sound board). The
+    /// entry comes just before the handler's first instruction, with the
+    /// same registers and `pc`, and no bytes.
+    pub interrupt: Option<u8>,
+}
+
+impl Board {
+    /// Whether anything watches the CPUs between instructions.
+    fn watched(&self) -> bool {
+        self.trace.is_some() || self.events.is_some() || self.accesses.is_some()
+    }
+
+    /// The instruction hook: the access log's PC, an interrupt's event and
+    /// trace marker, and the trace.
+    fn before_instruction(&mut self, which: usize, cpu: &Z80) {
+        if !self.watched() {
+            return;
+        }
+        self.cur_pc[which] = cpu.pc;
+        if let Some(vector) = self.irq_taken[which].take() {
+            if self.events.is_some() {
+                let at = self.sched.execs[which].local_time(cpu.icount);
+                let (line, dot) = crate::events::position(self.frame_start, at);
+                let what = if which == MAIN {
+                    Happened::Irq
+                } else {
+                    Happened::SoundIrq
+                };
+                if let Some(events) = &mut self.events {
+                    events.push(BoardEvent {
+                        what,
+                        line,
+                        dot,
+                        addr: cpu.pc,
+                        value: vector,
+                    });
+                }
+            }
+            if self.trace.is_some() {
+                let e = self.trace_entry(which, cpu.icount, cpu);
+                if let Some(t) = &mut self.trace {
+                    t.push(Trace {
+                        interrupt: Some(vector),
+                        ..e
+                    });
+                }
+            }
+        }
+        self.trace_instruction(which, cpu);
+    }
+
+    /// Logs an access by the running instruction, when the log is on.
+    fn access(&mut self, which: usize, icount: i32, addr: u16, value: u8, kind: AccessKind) {
+        if self.accesses.is_none() {
+            return;
+        }
+        let time = self.sched.execs[which].local_time(icount);
+        let pc = self.cur_pc[which];
+        if let Some(log) = &mut self.accesses {
+            log.push(Access {
+                cpu: which as u8,
+                pc,
+                addr,
+                value,
+                kind,
+                time,
+            });
+        }
+    }
+
+    /// A trace entry for `cpu` about to run an instruction, when tracing.
+    fn trace_instruction(&mut self, which: usize, cpu: &Z80) {
+        if self.trace.is_none() {
+            return;
+        }
+        let read = |b: &mut Self, a: u16| {
+            if which == MAIN {
+                b.main_read(a)
+            } else {
+                b.ssio_read(a, false)
+            }
+        };
+        let pc = cpu.pc;
+        let bytes = [
+            read(self, pc),
+            read(self, pc.wrapping_add(1)),
+            read(self, pc.wrapping_add(2)),
+            read(self, pc.wrapping_add(3)),
+        ];
+        let e = self.trace_entry(which, cpu.icount, cpu);
+        if let Some(t) = &mut self.trace {
+            t.push(Trace { bytes, ..e });
+        }
+    }
+
+    /// An entry at `cpu`'s time, with its registers and no bytes.
+    fn trace_entry(&self, which: usize, icount: i32, cpu: &Z80) -> Trace {
+        let x = &self.sched.execs[which];
+        Trace {
+            cpu: which as u8,
+            time: x.local_time(icount),
+            pc: cpu.pc,
+            af: cpu.af,
+            bc: cpu.bc,
+            de: cpu.de,
+            hl: cpu.hl,
+            ix: cpu.ix,
+            iy: cpu.iy,
+            sp: cpu.sp,
+            bytes: [0; 4],
+            cycles: x.totalcycles + (x.cycles_running - icount).max(0) as u64,
+            interrupt: None,
+        }
+    }
 }
 
 impl Board {
@@ -302,12 +467,31 @@ impl Board {
         }
     }
 
+    /// Logs an event at the executing CPU's time, when events are on.
+    fn log(&mut self, what: Happened, addr: u16, value: u8) {
+        if self.events.is_none() {
+            return;
+        }
+        let (line, dot) = crate::events::position(self.frame_start, self.now());
+        if let Some(events) = &mut self.events {
+            events.push(BoardEvent {
+                what,
+                line,
+                dot,
+                addr,
+                value,
+            });
+        }
+    }
+
     fn main_io_read(&mut self, port: u16) -> u8 {
         let p = port & 0xff;
         let m = p & !0x18;
         if m <= 4 {
             self.polled = true;
-            return self.ports[usize::from(m)];
+            let v = self.ports[usize::from(m)];
+            self.log(Happened::PortRead, p, v);
+            return v;
         }
         if m == 7 {
             return self.ssio_status;
@@ -324,10 +508,15 @@ impl Board {
             // The SSIO's output ports; port 0's bits go to mcr_control_port_w.
             0x00..=0x03 => self.cocktail_flip = (v >> 6) & 1 != 0,
             0x04..=0x07 => {}
-            0x1c..=0x1f => self
-                .sched
-                .synchronize(What::SsioWrite, (i32::from(p & 3) << 8) | i32::from(v)),
-            0xe0 => self.watchdog_counter = WATCHDOG_FRAMES,
+            0x1c..=0x1f => {
+                self.log(Happened::SoundLatch, p & 3, v);
+                self.sched
+                    .synchronize(What::SsioWrite, (i32::from(p & 3) << 8) | i32::from(v));
+            }
+            0xe0 => {
+                self.log(Happened::Watchdog, p, v);
+                self.watchdog_counter = WATCHDOG_FRAMES;
+            }
             0xf0..=0xf3 => {
                 self.ctc
                     .write(usize::from(p & 3), v, &mut self.sched, &mut self.main_irq)
@@ -364,6 +553,9 @@ impl Board {
                 let chip = usize::from(addr >= 0xb000);
                 let latch = (a & 3) as u8;
                 self.ay_writes.push((chip as u8, latch, v));
+                if latch == 2 {
+                    self.log_ay(chip, v);
+                }
                 let now = self.now();
                 self.sound.write(chip, latch, v, now);
             }
@@ -373,14 +565,27 @@ impl Board {
     }
 }
 
+impl Board {
+    /// An AY-8910 register write, when the chip takes it.
+    fn log_ay(&mut self, chip: usize, v: u8) {
+        if self.sound.bus[chip].active {
+            let reg = u16::from(self.sound.bus[chip].latch);
+            self.log(Happened::AyWrite, ((chip as u16) << 8) | reg, v);
+        }
+    }
+}
+
 struct MainBus<'a>(&'a mut Board);
 struct SsioBus<'a>(&'a mut Board);
 
 impl Z80Bus for MainBus<'_> {
-    fn read(&mut self, addr: u16, _icount: &mut i32) -> u8 {
-        self.0.main_read(addr)
+    fn read(&mut self, addr: u16, icount: &mut i32) -> u8 {
+        let v = self.0.main_read(addr);
+        self.0.access(MAIN, *icount, addr, v, AccessKind::Read);
+        v
     }
-    fn write(&mut self, addr: u16, value: u8, _icount: &mut i32) {
+    fn write(&mut self, addr: u16, value: u8, icount: &mut i32) {
+        self.0.access(MAIN, *icount, addr, value, AccessKind::Write);
         self.0.main_write(addr, value);
     }
     fn fetch(&mut self, addr: u16) -> u8 {
@@ -390,9 +595,11 @@ impl Z80Bus for MainBus<'_> {
         self.0.sched.icount = *icount;
         let v = self.0.main_io_read(port);
         *icount = self.0.sched.icount;
+        self.0.access(MAIN, *icount, port, v, AccessKind::In);
         v
     }
     fn io_write(&mut self, port: u16, value: u8, icount: &mut i32) {
+        self.0.access(MAIN, *icount, port, value, AccessKind::Out);
         self.0.sched.icount = *icount;
         self.0.main_io_write(port, value);
         *icount = self.0.sched.icount;
@@ -406,20 +613,13 @@ impl Z80Bus for MainBus<'_> {
             b.main_irq.ack_vector()
         };
         *icount = b.sched.icount;
+        if b.watched() {
+            b.irq_taken[MAIN] = Some(v as u8);
+        }
         v
     }
-    fn instruction(&mut self, pc: u16, af: u16, bc: u16, de: u16, hl: u16) {
-        if let Some(t) = &mut self.0.trace {
-            t.push(Trace {
-                cpu: MAIN as u8,
-                time: self.0.sched.execs[MAIN].localtime,
-                pc,
-                af,
-                bc,
-                de,
-                hl,
-            });
-        }
+    fn instruction(&mut self, cpu: &Z80) {
+        self.0.before_instruction(MAIN, cpu);
     }
     fn reti(&mut self, icount: &mut i32) {
         let b = &mut *self.0;
@@ -437,9 +637,11 @@ impl Z80Bus for SsioBus<'_> {
         self.0.sched.icount = *icount;
         let v = self.0.ssio_read(addr, true);
         *icount = self.0.sched.icount;
+        self.0.access(SSIO, *icount, addr, v, AccessKind::Read);
         v
     }
     fn write(&mut self, addr: u16, value: u8, icount: &mut i32) {
+        self.0.access(SSIO, *icount, addr, value, AccessKind::Write);
         // The AYs' writes land at the CPU's time.
         self.0.sched.icount = *icount;
         self.0.ssio_write(addr, value);
@@ -453,20 +655,14 @@ impl Z80Bus for SsioBus<'_> {
     }
     fn io_write(&mut self, _port: u16, _value: u8, _icount: &mut i32) {}
     fn irq_ack(&mut self, _icount: &mut i32) -> i32 {
-        self.0.ssio_irq.ack_vector()
-    }
-    fn instruction(&mut self, pc: u16, af: u16, bc: u16, de: u16, hl: u16) {
-        if let Some(t) = &mut self.0.trace {
-            t.push(Trace {
-                cpu: SSIO as u8,
-                time: self.0.sched.execs[SSIO].localtime,
-                pc,
-                af,
-                bc,
-                de,
-                hl,
-            });
+        let v = self.0.ssio_irq.ack_vector();
+        if self.0.watched() {
+            self.0.irq_taken[SSIO] = Some(v as u8);
         }
+        v
+    }
+    fn instruction(&mut self, cpu: &Z80) {
+        self.0.before_instruction(SSIO, cpu);
     }
     fn reti(&mut self, _icount: &mut i32) {}
 }
@@ -540,6 +736,11 @@ impl Tapper {
             frame_done: false,
             polled: false,
             trace: None,
+            events: None,
+            frame_start: Attotime::ZERO,
+            irq_taken: [None; 2],
+            accesses: None,
+            cur_pc: [0; 2],
         };
         // The screen's configure(): VBLANK starts a frame from now, and
         // since this is line 0, reset_partial_updates sets the line-0 tick.
@@ -621,6 +822,7 @@ impl Tapper {
         self.board.polled = false;
         self.board.ay_writes.clear();
         self.board.sound.written.clear();
+        self.board.frame_start = self.board.sched.basetime;
         loop {
             while let Some((handle, what, param, enabled)) = self.board.sched.pop_due() {
                 if enabled {
@@ -820,6 +1022,59 @@ impl Tapper {
                 .iter()
                 .map(|&p| self.pens_palette[usize::from(p & 0x3f)]),
         )
+    }
+
+    /// Turns the event log on or off ([`crate::events`]). Off drops what
+    /// it held.
+    pub fn set_events(&mut self, on: bool) {
+        self.board.events = on.then(Vec::new);
+    }
+
+    /// The events since the last call, in the order they happened; empty
+    /// when the log is off.
+    pub fn take_events(&mut self) -> Vec<BoardEvent> {
+        self.board
+            .events
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
+
+    /// Turns the instruction trace on or off. Off drops what it held.
+    pub fn set_trace(&mut self, on: bool) {
+        self.board.trace = on.then(Vec::new);
+    }
+
+    /// The instructions both CPUs started since the last call, in the
+    /// order the scheduler ran them (a timeslice of one CPU, then of the
+    /// other); empty when the trace is off.
+    pub fn take_trace(&mut self) -> Vec<Trace> {
+        self.board
+            .trace
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
+
+    /// Turns the access log on or off ([`Access`]). Off drops what it held.
+    pub fn set_accesses(&mut self, on: bool) {
+        self.board.accesses = on.then(Vec::new);
+    }
+
+    /// The accesses since the last call, in the order the scheduler ran
+    /// them; empty when the log is off.
+    pub fn take_accesses(&mut self) -> Vec<Access> {
+        self.board
+            .accesses
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
+
+    /// When the last frame run started, where trace and event positions
+    /// count from.
+    pub fn frame_start(&self) -> Attotime {
+        self.board.frame_start
     }
 
     /// Whether the game read its input ports in the last frame run.

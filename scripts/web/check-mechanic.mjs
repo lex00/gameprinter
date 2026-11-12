@@ -499,7 +499,7 @@ async function arcade() {
   ok(`FREE PLAY refuses in words: ${free.slice(0, 80)}...`);
   const r = spawnSync(gp, ["mechanic", "demo", game, mech, "--hint", "tap", "--games", games], { env, encoding: "utf8" });
   if (r.status === 0 || !r.stderr.includes("arcade game")) fail(`gp mechanic demo on an arcade game: ${r.status} ${r.stderr}`);
-  ok("gp mechanic demo refuses an arcade game in words");
+  ok("gp mechanic demo refuses, in words, an arcade game whose mapping names no player");
   if (errors.length) fail(`the arcade page threw: ${errors.join("; ")}`);
 }
 

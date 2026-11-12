@@ -942,7 +942,7 @@ mod tests {
         let wit = include_str!("../../../wit/runtime/runtime.wit");
         let start = wit.find("record event {").unwrap();
         let comment = &wit[wit[..start].rfind("\n\n").unwrap()..start];
-        for kind in EventKind::ALL
+        for kind in EventKind::NES
             .map(EventKind::name)
             .into_iter()
             .chain([FRAME_KIND])

@@ -159,6 +159,15 @@ pub(crate) struct ClipSet {
 /// sealed run is left out, as every reader of a set must, when this
 /// program has a guard installed.
 pub(crate) fn read(file: &Path) -> anyhow::Result<ClipSet> {
+    // A game's corpus plan names its clips too (`--clips games/tapper/corpus.toml`).
+    if file
+        .file_name()
+        .is_some_and(|n| n == crate::corpus_score::FILE)
+        && let Some(dir) = file.parent()
+        && crate::plan::load(dir)?.is_some()
+    {
+        return read_game(dir);
+    }
     let text = fs::read_to_string(file).with_context(|| format!("reading {}", file.display()))?;
     let set = parse(&text, file)?;
     let dir = file.parent().unwrap_or(Path::new("."));

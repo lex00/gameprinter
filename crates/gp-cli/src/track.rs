@@ -4,9 +4,14 @@
 //! prints what it finds.
 //!
 //! The tracker reads a frame's sprites as a list (`gp_track::sprites::Sprite`);
-//! here they come from the NES's sprite table in a gp-nes recording's trace.
-//! An arcade board's recording would need its own adapter from sprite RAM to
-//! that list, so one is refused in words until gp-arcade has one.
+//! here they come from the NES's sprite table in a gp-nes recording's trace,
+//! or (port wave 6) from an arcade recording's sprite RAM through gp-arcade's
+//! adapter ([`gp_arcade::video::sprite_list`]): each 32x32 sprite as 16x16
+//! in the game's own half-pixel units, the RAM searched being the main
+//! board's 2 KB of work RAM at E000 (gp-track's `Options::ram`), with the
+//! addresses it proposes moved there. The board draws a frame's sprites
+//! from that frame's sprite RAM, so there is no lag (`--oam-lag` is the
+//! NES's), and it has no scroll.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -114,6 +119,76 @@ impl Source for TraceSource<'_> {
     }
 }
 
+/// Frames of an arcade recording's trace: the work RAM and the sprites
+/// gp-arcade's adapter reads from the same state's sprite RAM.
+struct ArcadeSource<'a> {
+    opened: &'a Opened,
+    table: FieldTable,
+    range: std::ops::Range<u64>,
+    pads: Vec<u8>,
+}
+
+/// The sprite list gp-track reads, from the board's sprite RAM.
+pub(crate) fn arcade_sprites(sprite_ram: &[u8]) -> Vec<gp_track::sprites::Sprite> {
+    gp_arcade::video::sprite_list(sprite_ram)
+        .into_iter()
+        .map(|s| gp_track::sprites::Sprite {
+            x: s.x,
+            y: s.y,
+            w: 16,
+            h: 16,
+            tile: s.code,
+            palette: s.color,
+            flip_x: s.flip_x,
+            flip_y: s.flip_y,
+        })
+        .collect()
+}
+
+impl Source for ArcadeSource<'_> {
+    fn scan(&mut self, each: &mut dyn FnMut(&Frame<'_>)) -> Result<(), String> {
+        let mut failed = None;
+        let ok = gp_nes::recording::scan_trace(
+            &self.opened.store,
+            &self.opened.manifest,
+            self.range.start..=self.range.end - 1,
+            |frame, state| {
+                let fields = match self.table.split(state) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        failed = Some(e.to_string());
+                        return false;
+                    }
+                };
+                let get = |name: &str| fields.iter().find(|(n, _)| *n == name).map(|(_, b)| *b);
+                let (Some(ram), Some(sprite_ram)) = (get("ram"), get("sprite_ram")) else {
+                    failed = Some("the trace has no `ram` and `sprite_ram` fields".into());
+                    return false;
+                };
+                let sprites = arcade_sprites(sprite_ram);
+                each(&Frame {
+                    frame,
+                    ram,
+                    oam: &[],
+                    tall: false,
+                    sprites: Some(&sprites),
+                    scroll_x: 0,
+                    pad: self.pads[(frame - self.range.start) as usize],
+                });
+                true
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        if let Some(e) = failed {
+            return Err(e);
+        }
+        if !ok {
+            return Err("the recording has no frame trace".into());
+        }
+        Ok(())
+    }
+}
+
 /// A recording's objects as the tracker finds them, with what `gp model
 /// propose` needs beside them: the frames tracked and each one's
 /// controller.
@@ -133,7 +208,10 @@ pub(crate) fn tracked(
     lag: u64,
 ) -> Result<Tracked> {
     let opened = Opened::open(paths, id)?;
-    nes_recording(&opened, "gp track")?;
+    let arcade = opened.is_arcade();
+    if !arcade {
+        nes_recording(&opened, "gp track")?;
+    }
     let manifest = &opened.manifest;
     if manifest.trace.is_none() {
         bail!(
@@ -156,8 +234,22 @@ pub(crate) fn tracked(
         .clone()
         .map(|f| (log.frames[(f - 1) as usize].buttons_word() & 0xFF) as u8)
         .collect();
-    let table = gp_nes::recording::field_table(&opened.store, manifest)?;
-    let report = {
+    let report = if arcade {
+        let mut source = ArcadeSource {
+            opened: &opened,
+            table: crate::arcade_rec::field_table_of(&opened.store, manifest)?,
+            range: range.clone(),
+            pads: pads.clone(),
+        };
+        let opts = Options {
+            ram: 0x800,
+            ..Options::default()
+        };
+        let mut r = gp_track::track(&mut source, &opts).map_err(anyhow::Error::msg)?;
+        r.rebase(0xe000);
+        r
+    } else {
+        let table = gp_nes::recording::field_table(&opened.store, manifest)?;
         let mut source = TraceSource {
             opened: &opened,
             table,

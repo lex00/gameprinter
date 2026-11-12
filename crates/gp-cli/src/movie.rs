@@ -1,11 +1,13 @@
-//! `gp movie`: importing FCEUX `.fm2` and BizHawk `.bk2` movies as input logs
-//! (docs/movies.md).
+//! `gp movie`: importing FCEUX `.fm2` and BizHawk `.bk2` movies, and MAME
+//! `.inp` recordings of an arcade set, as input logs (docs/movies.md).
 //!
 //! An import keeps only the buttons. Every frame of the log it writes is marked
 //! polled; `gp record` replaces those flags with what the game read, so lag
 //! frames come from our runtime and not from the movie's emulator. A movie is
 //! accepted only if the ROM hash it names is the target source's, and refused
-//! (exit 2) with the source it does name otherwise.
+//! (exit 2) with the source it does name otherwise. A MAME `.inp` names its
+//! set by MAME's name, not a hash (port wave 6): it must name the target
+//! romset's set, and becomes an arcade log (`gp-arcade-input 0`).
 
 use std::collections::HashMap;
 use std::fs;
@@ -33,12 +35,14 @@ pub const MAX_FRAMES: usize = 2_000_000;
 
 #[derive(Subcommand)]
 pub enum MovieCmd {
-    /// Turn an FCEUX `.fm2` or BizHawk `.bk2` movie into an input log. The
-    /// movie must name the target ROM by hash; one made on another revision
-    /// is refused with exit 2 and the revision it names. It imports buttons
-    /// only, and `gp record` (or `--record`) derives the lag frames.
+    /// Turn an FCEUX `.fm2` or BizHawk `.bk2` movie, or a MAME `.inp`
+    /// recording of an arcade set, into an input log. The movie must name
+    /// the target ROM by hash (a `.inp` names its set); one made on another
+    /// revision is refused with exit 2 and the revision it names. It
+    /// imports buttons only, and `gp record` (or `--record`) derives the
+    /// lag frames.
     Import {
-        /// The movie file, `.fm2` or `.bk2`.
+        /// The movie file, `.fm2`, `.bk2` or `.inp`.
         file: PathBuf,
         /// The ROM entry (its ID in a game's roms.toml) the movie must be
         /// made on.
@@ -294,15 +298,19 @@ pub struct Movie {
     pub rom_hash: Option<RomHash>,
     /// The ROM's file name as the movie records it.
     pub rom_name: Option<String>,
+    /// The MAME set a `.inp` was made on.
+    pub system: Option<String>,
     pub emulator: Option<String>,
     pub rerecords: Option<u64>,
 }
 
-/// The ROM a movie must name, as the hashes movies use.
+/// The ROM a movie must name, as the hashes movies use, or for an arcade
+/// romset its MAME set.
 struct Target {
     source: Option<String>,
     md5: Vec<String>,
     sha1: Vec<String>,
+    system: Option<String>,
 }
 
 impl Target {
@@ -312,6 +320,14 @@ impl Target {
                 "{id} isn't a ROM entry of any game's roms.toml; `gp roms list` shows the known IDs"
             )
         })?;
+        if known.platform == "arcade" {
+            return Ok(Self {
+                source: Some(id.to_owned()),
+                md5: Vec::new(),
+                sha1: Vec::new(),
+                system: known.system.clone(),
+            });
+        }
         if known.md5.is_none() && known.sha1.is_none() && known.ines_sha1.is_none() {
             bail!(
                 "{id} has no movie hashes in the registry; add md5, sha1 and ines_sha1 from `gp movie hashes ROM` (docs/movies.md)"
@@ -325,15 +341,26 @@ impl Target {
                 .flatten()
                 .cloned()
                 .collect(),
+            system: None,
         })
     }
 
     fn from_rom(bytes: &[u8], registry: &Registry) -> Result<Self> {
+        if gp_arcade::romset::looks_like_zip(bytes) {
+            let set = gp_arcade::Romset::from_zip(bytes)?;
+            return Ok(Self {
+                source: registry.by_sha256(&set.identity).map(|k| k.id.clone()),
+                md5: Vec::new(),
+                sha1: Vec::new(),
+                system: Some(set.name.to_owned()),
+            });
+        }
         let h = RomHashes::of(bytes)?;
         Ok(Self {
             source: registry.by_sha256(&h.sha256).map(|k| k.id.clone()),
             md5: vec![h.md5],
             sha1: vec![h.sha1, h.ines_sha1, h.file_sha1],
+            system: None,
         })
     }
 
@@ -456,6 +483,23 @@ fn hashes(rom: &Path, registry: &Registry) -> Result<Outcome> {
 
 /// Refuses a movie that doesn't name the target ROM, naming what it was made on.
 fn check_identity(movie: &Movie, target: &Target, registry: &Registry) -> Result<()> {
+    match (&movie.system, &target.system) {
+        (Some(made), Some(want)) if made == want => return Ok(()),
+        (Some(made), Some(want)) => bail!(
+            "the recording was made on MAME's {made}, not {want} ({}); recordings of one set say nothing about another",
+            target.label()
+        ),
+        (Some(made), None) => bail!(
+            "the recording was made on the arcade set {made}, and {} is an NES ROM",
+            target.label()
+        ),
+        (None, Some(want)) => bail!(
+            "{} is the arcade set {want}, which plays a MAME .inp recording, not a {} movie",
+            target.label(),
+            movie.format
+        ),
+        (None, None) => {}
+    }
     let Some(hash) = &movie.rom_hash else {
         bail!(
             "the movie doesn't name its ROM by hash, so it can't be checked against {}",
@@ -504,11 +548,43 @@ pub fn parse_movie(path: &Path, bytes: &[u8]) -> Result<Movie> {
             parse_fm2(text)
         }
         Some("bk2") => parse_bk2(bytes),
+        Some("inp") => parse_inp(bytes),
         _ => bail!(
-            "{} isn't a .fm2 or .bk2 movie (by its extension)",
+            "{} isn't a .fm2, .bk2 or .inp movie (by its extension)",
             path.display()
         ),
     }
+}
+
+/// Reads a MAME input recording (gp_arcade::inp) into an arcade log, with
+/// Tapper's columns.
+pub fn parse_inp(bytes: &[u8]) -> Result<Movie> {
+    let inp = gp_arcade::inp::parse(bytes, MAX_FRAMES).map_err(anyhow::Error::msg)?;
+    // The tilt switch is the oracle's eighth column, named only when used.
+    let columns = if inp.frames.iter().any(|c| c.tilt) {
+        "CSRLDUTX"
+    } else {
+        "CSRLDUT"
+    };
+    let mut log = InputLog::new_arcade(&inp.system, columns);
+    log.frames = inp
+        .frames
+        .iter()
+        .map(|c| InputFrame {
+            polled: true,
+            pads: c.bits().to_le_bytes(),
+            reset: false,
+        })
+        .collect();
+    Ok(Movie {
+        format: "inp",
+        log,
+        rom_hash: None,
+        rom_name: Some(inp.system.clone()),
+        system: Some(inp.system),
+        emulator: Some(inp.made_by),
+        rerecords: None,
+    })
 }
 
 const FM2_ORDER: [u8; 8] = [
@@ -634,6 +710,7 @@ pub fn parse_fm2(text: &str) -> Result<Movie> {
         log,
         rom_hash,
         rom_name: header.get("romFilename").map(|s| s.to_string()),
+        system: None,
         emulator: header.get("emuVersion").map(|v| format!("FCEUX {v}")),
         rerecords: header.get("rerecordCount").and_then(|v| v.parse().ok()),
     })
@@ -799,6 +876,7 @@ pub fn parse_bk2(bytes: &[u8]) -> Result<Movie> {
         log,
         rom_hash,
         rom_name: header.get("GameName").cloned(),
+        system: None,
         emulator: Some(
             [header.get("MovieVersion"), header.get("Core")]
                 .into_iter()
@@ -1146,6 +1224,7 @@ mod tests {
             source: Some("smb1-ntsc-prg0".into()),
             md5: vec![],
             sha1: vec!["ea343f4e445a9050d4b4fbac2c77d0693b1d0922".into()],
+            system: None,
         };
         let e = check_identity(&m, &target, &Registry::default())
             .unwrap_err()
@@ -1234,5 +1313,35 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(e.contains("Trigger"), "{e}");
+    }
+
+    /// A MAME `.inp` reads into an arcade log of the same frames, which
+    /// the target set's romset accepts and another set's or an NES ROM's
+    /// refuses in words.
+    #[test]
+    fn an_inp_imports_as_an_arcade_log() {
+        let mut frames = vec![gp_arcade::Controls::default(); 12];
+        frames[3].coin = true;
+        frames[7].tap = true;
+        let bytes = gp_arcade::inp::write("tapper", &frames);
+        let movie = parse_movie(Path::new("x.inp"), &bytes).unwrap();
+        assert_eq!(movie.format, "inp");
+        let text = movie.log.to_text();
+        assert!(text.starts_with("gp-arcade-input 0\nsystem tapper\ncolumns CSRLDUT\n"));
+        assert_eq!(InputLog::parse(&text).unwrap().frames.len(), 12);
+        assert_eq!(movie.log.frames[3].pads[0], 0x01);
+        assert_eq!(movie.log.frames[7].pads[0], 0x40);
+        let registry = Registry::default();
+        let target = |system: Option<&str>| Target {
+            source: None,
+            md5: Vec::new(),
+            sha1: Vec::new(),
+            system: system.map(str::to_owned),
+        };
+        assert!(check_identity(&movie, &target(Some("tapper")), &registry).is_ok());
+        let e = check_identity(&movie, &target(Some("rbtapper")), &registry).unwrap_err();
+        assert!(e.to_string().contains("not rbtapper"), "{e}");
+        let e = check_identity(&movie, &target(None), &registry).unwrap_err();
+        assert!(e.to_string().contains("NES ROM"), "{e}");
     }
 }

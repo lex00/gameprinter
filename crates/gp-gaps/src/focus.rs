@@ -265,7 +265,7 @@ pub fn window(run: &Run, found: &Found<'_>, from: u64, to: u64) -> Focus {
             }
         }
         for &addr in &f.ram_changed {
-            let addr = addr & 0x7FF;
+            let addr = (addr & 0x7FF) | run.ram_base;
             if (0x100..0x200).contains(&addr)
                 || (oam_lo..oam_lo + 0x100).contains(&addr)
                 || k.explains_ram(addr)
@@ -305,7 +305,7 @@ pub fn window(run: &Run, found: &Found<'_>, from: u64, to: u64) -> Focus {
                 run.frames[i]
                     .ram_changed
                     .iter()
-                    .any(|a| addrs.contains(&(a & 0x7FF)))
+                    .any(|a| addrs.contains(&((a & 0x7FF) | run.ram_base)))
             });
             Rare {
                 name,

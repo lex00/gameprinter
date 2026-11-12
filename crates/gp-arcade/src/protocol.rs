@@ -368,25 +368,7 @@ impl Runtime for ArcadeRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A made-up set: a main program that loops at 0 (`JR $`), nothing
-    /// else. No game's bytes.
-    fn looping() -> Romset {
-        let mut maincpu = vec![0u8; 0x10000];
-        maincpu[..2].copy_from_slice(&[0x18, 0xfe]);
-        let mut ssiocpu = vec![0u8; 0x10000];
-        ssiocpu[..2].copy_from_slice(&[0x18, 0xfe]);
-        Romset {
-            name: "test",
-            identity: String::new(),
-            maincpu,
-            ssiocpu,
-            gfx1: vec![0; 0x8000],
-            gfx2: vec![0; 0x20000],
-            extras: Vec::new(),
-            ssio_prom: None,
-        }
-    }
+    use crate::testrom::looping;
 
     #[test]
     fn steps_reads_and_snapshots() {

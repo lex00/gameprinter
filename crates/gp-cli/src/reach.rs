@@ -150,12 +150,34 @@ pub struct Starts {
 impl Starts {
     /// The starts as clips from power-on, with the clip sets' clips after.
     pub(crate) fn with(&self, sets: &[PathBuf], paths: &Paths) -> Result<Vec<ClipInput>> {
+        self.with_platform(sets, paths, false)
+    }
+
+    /// [`Starts::with`] for an arcade romset when `arcade`: the starts are
+    /// gp-explore's arcade palette's (a coin and Start, then the stick and
+    /// tap), and `--start-frames` keeps its NES default of 3600, two
+    /// minutes of the board's 30 Hz frames.
+    pub(crate) fn with_platform(
+        &self,
+        sets: &[PathBuf],
+        paths: &Paths,
+        arcade: bool,
+    ) -> Result<Vec<ClipInput>> {
         let mut out = Vec::new();
         if !self.no_starts {
-            let set = format!("starts {} {} {}", self.runs, self.seed, self.start_frames);
-            for (id, pads) in
+            let set = format!(
+                "starts {}{} {} {}",
+                if arcade { "arcade " } else { "" },
+                self.runs,
+                self.seed,
+                self.start_frames
+            );
+            let starts = if arcade {
+                gp_explore::arcade::start_set(self.runs, self.seed, self.start_frames)
+            } else {
                 gp_explore::presses::start_set(self.runs, self.seed, self.start_frames)
-            {
+            };
+            for (id, pads) in starts {
                 out.push(ClipInput {
                     set: set.clone(),
                     id,
@@ -186,6 +208,19 @@ pub(crate) fn clip_inputs(sets: &[PathBuf], paths: &Paths) -> Result<Vec<ClipInp
             clipset::parse_presses(&text).map(|p| (p.frames, p.spans))
         };
         for c in &set.clips {
+            // An arcade clip's presses name the board's buttons; its log
+            // comes as the corpus makes it.
+            if let Some((log, _)) = clipset::recipe_log(dir, c)?
+                && log.arcade.is_some()
+            {
+                out.push(ClipInput {
+                    set: set_hash.clone(),
+                    id: c.id.clone(),
+                    power_on: PowerOn::default(),
+                    inputs: log.frames,
+                });
+                continue;
+            }
             let mut power_on = PowerOn::default();
             let mut inputs: Vec<InputFrame> =
                 match (&c.start.presses_from_power_on, &c.start.recording) {
@@ -514,8 +549,25 @@ pub(crate) fn run(a: &ReachArgs, paths: &Paths) -> Result<Outcome> {
         return crate::reach_window::run(a, paths);
     }
     let rom = fs::read(&a.rom).with_context(|| format!("reading {}", a.rom.display()))?;
-    crate::original::nes_only(crate::original::Platform::of_file(&rom), "gp reach")?;
-    let clips = crate::code::select(a.starts.with(&a.clips, paths)?, &a.only)?;
+    let arcade = crate::original::Platform::of_file(&rom) == crate::original::Platform::Arcade;
+    let clips = crate::code::select(a.starts.with_platform(&a.clips, paths, arcade)?, &a.only)?;
+    if crate::original::Platform::of_file(&rom) == crate::original::Platform::Arcade {
+        // Both Z80s' levels, by chip (crate::code_z80); --detail, --frames
+        // and --watch are the NES's reports still.
+        if a.detail.is_some() || a.frames || !a.watch.is_empty() {
+            bail!(
+                "--detail, --frames and --watch read gp-events' NES levels; on an arcade romset gp reach reports both Z80s' code by chip (and `gp trace instructions` a window's instructions)"
+            );
+        }
+        let set = gp_arcade::Romset::from_zip(&rom)?;
+        let levels = crate::code_z80::run_clips(&set, &clips, (1, u64::MAX))?;
+        let (text, doc) = crate::code_z80::reach(&set, &levels);
+        if let Some(w) = &a.write {
+            fs::write(w, serde_json::to_string_pretty(&doc)?)
+                .with_context(|| format!("writing {}", w.display()))?;
+        }
+        return Ok(Outcome::ok(doc, text));
+    }
     if let Some(spec) = &a.detail {
         return detail(&rom, &clips, spec);
     }

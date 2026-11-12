@@ -31,3 +31,5 @@ A commercial game's ROM belongs to its publisher. Game Printer is built so that 
 | The registry | On publish | Any file holding 32 or more bytes in a row from a named ROM |
 
 The checks are a backstop. Following the rules is still on you.
+
+A clip's presses are frame numbers, and a few of them can equal bytes of a ROM by chance (one of Tapper's clips matched seven bytes of a tile chip). `gp package scan` lets such a match pass only when it is narrow: the file is a `.presses` file, every number the match covers is a press timing (the frame count, or a span's first or last frame), those numbers rise as play's do, and the match is at most 8 numbers. A longer match, or one touching any other number, is still refused.

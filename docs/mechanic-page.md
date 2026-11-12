@@ -124,7 +124,11 @@ frames, until the mechanic shows; the page watches it as it plays.
 shown clip's measured jumps. `just laya` serves Laya on 127.0.0.1:7720
 (installing @receptron/laya under `$GP_HOME/work/laya`, or using the one
 `LAYA_DIR` names). Both read the player's place from the game's state
-mapping, so an arcade game is refused until it has one.
+mapping. On an arcade game (Tapper, whose mapping names the player) the
+demo offers Laya the board's chords instead of the pad's: up, down, left,
+right, tap, wait, coin and start (gp-explore's arcade palette), keeps the
+clip as an arcade log, and plays its `--frames` without counting jumps,
+which are a platformer's measure; `--judge`'s jump measures stay the NES's.
 
 ## Routes
 

@@ -39,4 +39,41 @@ An import keeps the buttons only and marks every frame polled; `gp record` (or `
 
 On 2026-11-11 the Donkey Kong (JU) TAS 4151S (FCEUX) imported and recorded with no wasted input, and the old and new tools gave the same recording ID.
 
-Recordings read gp-nes's state: an arcade game has no recording format yet (wave 6 of the port).
+## Arcade recordings
+
+An arcade romset records the same way, by `--rom tapper.zip` or a `--source` whose roms.toml entry is a romset, with an arcade input log (`gp-arcade-input 0`, docs/oracle-mame.md). gp-arcade runs it, and every command above reads it, except `gp movie diagnose`, which reads lag marks an arcade log doesn't have. What differs from an NES recording:
+
+| | NES | Arcade |
+|---|---|---|
+| Source in the manifest | `nes-rom`, the headerless SHA-256 and mapper | `romset`, the set's identity and MAME name (`tapper`) |
+| Runtime | `gp-nes` | `gp-arcade`, its version with the board's and the recording's (`0.1.0 mcr 2 rec 3`) |
+| Frame | one NES frame, to the start of vblank | one 30 Hz video frame, to the start of VBLANK, as MAME ends it |
+| State in the trace | gp-nes's canonical state | `GPAR` 2: the frame, both Z80s' registers, the five RAMs, the sound latches, both AY-8910s' registers, the input ports, then the BLAKE3 hash of the whole machine's snapshot (`gp trace fields` lists them) |
+| Frame hashes | the canonical state, and internal RAM | the state above, and the oracle's RAM record (work, sprite, video, palette and sound RAM) |
+| Events | `nmi`, `irq`, `sprite0-hit`, `bank-switch`, `controller-read`, `controller-write`, `ppu-write`, `apu-write` | `irq` (the main CPU took a CTC interrupt: the handler, and the vector, whose bits 1 and 2 are the CTC channel), `sound-irq`, `port-read` (an input port and what the game read), `sound-latch`, `watchdog`, `ay-write` (chip × 256 + register) |
+| Event position | scanline and dot, 312 × 341 | line and dot of the 30 Hz frame from its start, 481 × 512 (the last line holds what a CPU runs past the frame's end) |
+| Lag frames | from the game's controller reads, kept in the log | from the board's input port reads, reported by `gp record`; the log keeps no marks, so replay doesn't compare them |
+| `--ram-init`, `--region` | power-on choices | unread: the board powers on one way, as MAME does |
+
+`gp trace instructions` on an arcade recording prints both Z80s, one line per instruction in the order of their times (the scheduler runs each CPU for a timeslice in turn; the lines are put back in time order), with `; frame N, controls ...` before each frame and `; IRQ M vector D6` (or `S`) before a handler's first instruction:
+
+```text
+; frame 700, controls .......
+S 04E3  C9 DD 7E 09                           AF:0400 BC:0053 DE:0353 HL:8005 IX:8199 IY:8043 SP:83F7 LINE:  0, 18 CYC:46600005
+; IRQ M vector D6
+M 00D8  FD E5 DD E5                           AF:0093 BC:0000 DE:0006 HL:2328 IX:E4A7 IY:E2E6 SP:E7F6 LINE:  0, 35 CYC:116500024
+```
+
+Each line is the state before the instruction: the CPU, its address, the four bytes from there, the registers, the line and dot of the frame as the events count them, and the CPU's cycles since power-on. It comes from gp-arcade's instruction hook (`Tapper::set_trace`), which changes no state. One Tapper frame is about 15,000 main and 6,000 sound instructions and 35 interrupts.
+
+`gp movie import` also reads a MAME `.inp` (made with `mame -record`): it names its set by MAME's name rather than a hash, so it must be the target romset's set, and it becomes an arcade log. Record N of a `.inp` holds the ports the game reads during frame N+1, which is the log's entry N. Only what the log can say is taken (coin 1, start 1, player 1's stick and tap); a `.inp` that presses anything else, or has the DIP switches off their defaults, is refused in words. MAME 0.276's layout is in `crates/gp-arcade/src/inp.rs`.
+
+```sh
+gp movie import short.inp --rom ~/roms/arcade/tapper.zip --out short.input
+gp record --rom ~/roms/arcade/tapper.zip --input short.input --name tapper-short
+gp replay ad29
+gp trace diff ad29 e12a
+gp events ad29 --frames 700 --kind port-read,sound-latch
+```
+
+On 2026-11-12 a 1,282-frame Tapper run made in MAME 0.276 (`-record`) imported to the same log MAME played, plus the one frame MAME records after the last; both recordings replayed frame-exact, `gp trace diff` found every frame's state equal to frame 1282, and gp-arcade matched MAME's own capture of the run on all 1,283 frames (RAM, input ports and picture).

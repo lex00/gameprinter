@@ -131,7 +131,7 @@ fn arcade_package(home: &Path) -> std::path::PathBuf {
 }
 
 #[test]
-fn gaps_refuses_an_arcade_game_in_words() {
+fn gaps_refuses_an_arcade_game_with_an_nes_recording_in_words() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path();
     let id = recorded(home);
@@ -148,7 +148,7 @@ fn gaps_refuses_an_arcade_game_in_words() {
     );
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("no arcade counterpart"), "{err}");
+    assert!(err.contains("is an arcade game, and"), "{err}");
 }
 
 /// test-roms/apu/notes.s (a made-up phrase, no game's data) assembled with
@@ -261,7 +261,7 @@ fn the_notes_test_rom_captures_and_holds_to_its_log() {
 }
 
 #[test]
-fn sound_capture_refuses_an_arcade_game_in_words() {
+fn sound_capture_refuses_an_arcade_template_for_an_nes_recording_in_words() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path();
     let id = recorded(home);
@@ -281,7 +281,7 @@ fn sound_capture_refuses_an_arcade_game_in_words() {
     );
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("no arcade counterpart"), "{err}");
+    assert!(err.contains("arcade"), "{err}");
 }
 
 /// Moss Hop built from source into `home` (scripts/mosshop/build.sh, cc65

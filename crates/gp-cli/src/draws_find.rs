@@ -59,22 +59,22 @@ impl Kind {
 
 /// One RAM byte's writes and end-of-frame values over the first run.
 #[derive(Clone)]
-struct ByteStats {
-    shift_writes: u64,
-    mixed_writes: u64,
-    main_writes: u64,
+pub(crate) struct ByteStats {
+    pub(crate) shift_writes: u64,
+    pub(crate) mixed_writes: u64,
+    pub(crate) main_writes: u64,
     /// The frame (counted from 1) of the first shift or mixed write.
-    first: Option<u64>,
+    pub(crate) first: Option<u64>,
     /// Frames with at least one shift or mixed write.
-    stepped_frames: u64,
-    this_frame: u64,
-    min_per_frame: u64,
-    max_per_frame: u64,
-    writers: BTreeMap<u16, u64>,
-    routines: BTreeMap<u16, u64>,
-    seen: [u64; 4],
-    prev: u8,
-    deltas: Vec<u32>,
+    pub(crate) stepped_frames: u64,
+    pub(crate) this_frame: u64,
+    pub(crate) min_per_frame: u64,
+    pub(crate) max_per_frame: u64,
+    pub(crate) writers: BTreeMap<u16, u64>,
+    pub(crate) routines: BTreeMap<u16, u64>,
+    pub(crate) seen: [u64; 4],
+    pub(crate) prev: u8,
+    pub(crate) deltas: Vec<u32>,
 }
 
 impl Default for ByteStats {
@@ -98,12 +98,12 @@ impl Default for ByteStats {
 }
 
 impl ByteStats {
-    fn distinct(&self) -> u32 {
+    pub(crate) fn distinct(&self) -> u32 {
         self.seen.iter().map(|w| w.count_ones()).sum()
     }
     /// The share of frames since the first step whose change is the most
     /// common change: 1 for a counter, small for a random byte.
-    fn modal_delta(&self) -> f64 {
+    pub(crate) fn modal_delta(&self) -> f64 {
         let total: u64 = self.deltas.iter().map(|&n| u64::from(n)).sum();
         if total == 0 {
             return 1.0;
@@ -113,7 +113,7 @@ impl ByteStats {
     /// The share of frames since the first step whose change is 8 or less
     /// either way: near 1 for a position or a timer, which move a little a
     /// frame, and about 7% for a random byte.
-    fn small_delta(&self) -> f64 {
+    pub(crate) fn small_delta(&self) -> f64 {
         let total: u64 = self.deltas.iter().map(|&n| u64::from(n)).sum();
         if total == 0 {
             return 1.0;
@@ -351,7 +351,7 @@ pub(crate) struct Register {
 }
 
 impl Register {
-    fn add(&mut self, b: &ByteStats) {
+    pub(crate) fn add(&mut self, b: &ByteStats) {
         self.bytes += 1;
         self.writes += b.shift_writes + b.mixed_writes;
         self.main_writes += b.main_writes;
@@ -369,7 +369,7 @@ impl Register {
             *self.routines.entry(*k).or_default() += n;
         }
     }
-    fn finish(&mut self, frames: u64) {
+    pub(crate) fn finish(&mut self, frames: u64) {
         self.frames = frames;
     }
     pub fn contains(&self, a: u16) -> bool {
@@ -456,7 +456,7 @@ pub(crate) struct Site {
     pub text: String,
     pub reads: u64,
     pub frames: u64,
-    last_frame: Option<u64>,
+    pub(crate) last_frame: Option<u64>,
     /// Reads followed by a write to the register at the same stack depth.
     pub steps: u64,
     /// Reads whose value reached a branch or a table index.

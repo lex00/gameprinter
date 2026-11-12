@@ -54,6 +54,24 @@ pub enum LabelsCmd {
         #[arg(long)]
         file: Option<PathBuf>,
     },
+    /// Draft a labels file from a run of an arcade romset (its access log
+    /// on the main Z80): the work RAM written, with its writers and
+    /// readers, the routines that ran, with their callers, and the ROM
+    /// read as data. Names come from addresses or the mapping; a person
+    /// or agent renames and keeps what holds. Writes to --out (outside any
+    /// git work tree) or standard output, never over a game's labels.toml.
+    Propose {
+        /// The romset (a MAME zip).
+        rom: PathBuf,
+        /// The input log to run from power-on.
+        #[arg(long)]
+        input: PathBuf,
+        /// A state mapping whose fields name the RAM they read.
+        #[arg(long)]
+        mapping: Option<PathBuf>,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 #[derive(Args)]
@@ -85,6 +103,12 @@ pub(crate) fn run(cmd: &LabelsCmd) -> Result<Outcome> {
             lookup(&file, query)
         }
         LabelsCmd::Check { mapping, file } => check(mapping, file.as_deref()),
+        LabelsCmd::Propose {
+            rom,
+            input,
+            mapping,
+            out,
+        } => crate::labels_propose::run(rom, input, mapping.as_deref(), out.as_deref()),
     }
 }
 

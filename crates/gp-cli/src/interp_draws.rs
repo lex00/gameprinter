@@ -5,8 +5,9 @@
 //!
 //! Changed from game-printer by gameprinter's layout: the input comes from
 //! [`crate::run_input`], with no sealed-run guard until wave 1 brings it
-//! back; and a draw is read from the 6502's code, so an arcade romset is
-//! refused in words.
+//! back. On an arcade romset (port wave 6) `--find` reads the main Z80's
+//! code ([`crate::draws_find_z80`]) and the draws at a mapping's sites are
+//! recorded on gp-arcade (crate::lockstep::record_draws_arcade).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -75,7 +76,13 @@ fn read_rom(rom: &Path) -> Result<Vec<u8>> {
 pub(crate) fn run(a: &DrawsArgs, paths: &Paths) -> Result<Outcome> {
     let from = a.from.unwrap_or(0);
     if let Some(rom) = &a.find {
-        let rom = read_rom(rom)?;
+        let bytes = fs::read(rom).with_context(|| format!("reading {}", rom.display()))?;
+        let rom = if crate::original::Platform::of_file(&bytes) == crate::original::Platform::Arcade
+        {
+            bytes
+        } else {
+            read_rom(rom)?
+        };
         let log = a.input.read(paths)?;
         let hand = match (&a.model, &a.mapping) {
             (None, None) => None,
@@ -87,7 +94,7 @@ pub(crate) fn run(a: &DrawsArgs, paths: &Paths) -> Result<Outcome> {
     let (Some(model), Some(rom)) = (&a.model, &a.rom) else {
         bail!("give a model and --rom, or --find ROM");
     };
-    let rom = read_rom(rom)?;
+    let rom = fs::read(rom).with_context(|| format!("reading {}", rom.display()))?;
     let log = a.input.read(paths)?;
     let mapping = load_mapping(model, a.mapping.as_deref())?;
     let script = crate::lockstep::record_draws(&rom, &mapping, &log.frames, from)?;
@@ -127,7 +134,12 @@ pub(crate) fn find(
     hand: Option<&Mapping>,
     out: Option<&Path>,
 ) -> Result<(Outcome, String)> {
-    let found = crate::draws_find::find(rom, inputs, from)?;
+    let found = if crate::original::Platform::of_file(rom) == crate::original::Platform::Arcade {
+        let set = gp_arcade::Romset::from_zip(rom)?;
+        crate::draws_find_z80::find(&set, inputs, from)?
+    } else {
+        crate::draws_find::find(rom, inputs, from)?
+    };
     let hand_sites = hand.map_or(&[][..], |m| &m.draws[..]);
     let vs = hand.map(|_| crate::draws_find::against(&found, hand_sites));
     let toml = crate::draws_find::proposal(&found, hand_sites);

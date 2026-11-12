@@ -11,7 +11,7 @@
 use serde::Serialize;
 
 use crate::sprites::{Obs, Track, Tracker, clusters, group};
-use crate::{Frame, Options, RAM, Source};
+use crate::{Frame, Options, Source};
 
 /// What the first pass keeps: the tracks, and per frame the scroll, the
 /// controller and which tracks were drawn.
@@ -43,7 +43,7 @@ pub fn pass_sprites(source: &mut dyn Source, opts: &Options) -> Result<Seen, Str
     let mut next = 0u64;
     let mut scroll = Vec::new();
     let mut pad = Vec::new();
-    let mut plus_one = vec![0u32; RAM];
+    let mut plus_one = vec![0u32; opts.ram];
     let mut prev: Option<Vec<u8>> = None;
     let mut broken = None;
     let mut page_equal = [0u32; 8];
@@ -74,7 +74,7 @@ pub fn pass_sprites(source: &mut dyn Source, opts: &Options) -> Result<Seen, Str
                 *n += u32::from(b.wrapping_sub(*a) == 1);
             }
         }
-        prev = Some(f.ram[..RAM].to_vec());
+        prev = Some(f.ram[..opts.ram].to_vec());
     })?;
     if let Some(frame) = broken {
         return Err(format!(
@@ -276,10 +276,10 @@ pub fn bind(source: &mut dyn Source, opts: &Options, seen: &Seen) -> Result<Boun
     let mut i = 0usize;
     source.scan(&mut |f: &Frame<'_>| {
         for &(t, s) in &wanted[i] {
-            track_samples[t as usize][s as usize] = f.ram[..RAM].to_vec();
+            track_samples[t as usize][s as usize] = f.ram[..opts.ram].to_vec();
         }
         if i.is_multiple_of(step) {
-            samples.push((i, f.ram[..RAM].to_vec()));
+            samples.push((i, f.ram[..opts.ram].to_vec()));
         }
         i += 1;
     })?;
@@ -311,7 +311,7 @@ pub fn bind(source: &mut dyn Source, opts: &Options, seen: &Seen) -> Result<Boun
                     continue;
                 }
                 let mut found = Vec::new();
-                for addr in 0..RAM {
+                for addr in 0..opts.ram {
                     if opts.excluded(addr) {
                         continue;
                     }
@@ -380,7 +380,7 @@ pub fn bind(source: &mut dyn Source, opts: &Options, seen: &Seen) -> Result<Boun
             }
         }
         prev.clear();
-        prev.extend_from_slice(&f.ram[..RAM]);
+        prev.extend_from_slice(&f.ram[..opts.ram]);
         i += 1;
     })?;
 

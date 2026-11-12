@@ -1147,8 +1147,12 @@ fn scan_part(pkg: &Package, part: &Part, found: &BTreeMap<String, Rom>) -> Resul
         let mut taken: Vec<(usize, usize)> = Vec::new();
         for (si, idx) in indexes.iter().enumerate() {
             let src = &sources[si];
+            let timings = press_timings(x);
             for m in rom_match::scan_text(&x.nums, &x.groups, idx, tries) {
                 if taken.iter().any(|&(a, b)| a <= m.last && m.first <= b) {
+                    continue;
+                }
+                if press_allowance(&m, x, &timings) {
                     continue;
                 }
                 taken.push((m.first, m.last));
@@ -1433,6 +1437,68 @@ fn missing_assets(x: &Text, map: &AssetMap, rewrite: &mut Vec<Rewrite>) {
 }
 
 /// A ROM match as a needs-rewrite item.
+/// The longest run of a clip's press timings that may match ROM bytes by
+/// chance ([`press_allowance`]).
+pub(crate) const PRESS_ALLOWANCE: usize = 8;
+
+/// The numbers of a `.presses` file (`gp-presses`) that are press
+/// timings: the frame count on its `frames` line and the first and last
+/// frames of each span (`tap@9-41`), by their index in the file's
+/// numbers. Empty for any other file.
+fn press_timings(x: &Text) -> BTreeSet<usize> {
+    let mut out = BTreeSet::new();
+    if !matches!(x.role, Role::Whole("clip recipe")) || !x.text.starts_with("gp-presses ") {
+        return out;
+    }
+    let mut ok_spans: Vec<(usize, usize)> = Vec::new();
+    let mut at = 0;
+    for line in x.text.split_inclusive('\n') {
+        let t = line.trim_end();
+        let timing = if let Some(n) = t.strip_prefix("frames ") {
+            n.chars().all(|c| c.is_ascii_digit())
+        } else if let Some((buttons, range)) = t.split_once('@') {
+            buttons
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '+')
+                && range.chars().all(|c| c.is_ascii_digit() || c == '-')
+        } else {
+            false
+        };
+        if timing {
+            ok_spans.push((at, at + line.len()));
+        }
+        at += line.len();
+    }
+    for (i, n) in x.nums.iter().enumerate() {
+        // A button's name can hold a digit (`start1`): only the numbers
+        // after its `@` or on a `frames` line are timings.
+        let line_start = x.text[..n.start].rfind('\n').map_or(0, |p| p + 1);
+        let after_at = x.text[line_start..n.start].contains('@')
+            || x.text[line_start..].starts_with("frames ");
+        if after_at && ok_spans.iter().any(|&(a, b)| a <= n.start && n.end <= b) {
+            out.insert(i);
+        }
+    }
+    out
+}
+
+/// Whether a match is allowed as press timings that happen to equal ROM
+/// bytes: a clip's presses are frame numbers in rising order, made by
+/// playing, and a few of them (Tapper's clip matched 7 bytes) can equal a
+/// rising run in a ROM table by chance, however unlikely the detector's
+/// model says that is. The rule, kept narrow so typed-out ROM data still
+/// fails: the file is a `.presses` file, every number the match covers is
+/// one of its press timings, those timings rise (as play's do), and the
+/// match is at most [`PRESS_ALLOWANCE`] numbers. Anything longer, or a
+/// match touching any other number, is reported as before.
+fn press_allowance(m: &Match, x: &Text, timings: &BTreeSet<usize>) -> bool {
+    if timings.is_empty() || m.last + 1 - m.first > PRESS_ALLOWANCE {
+        return false;
+    }
+    let values: Vec<i64> = (m.first..=m.last).map(|i| x.nums[i].value).collect();
+    (m.first..=m.last).all(|i| timings.contains(&i)) && values.windows(2).all(|w| w[0] <= w[1])
+}
+
 fn rom_item(x: &Text, m: &Match, src: &Source) -> Rewrite {
     let start = x.nums[m.first].start;
     let line = line_at(&x.text, start);

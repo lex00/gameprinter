@@ -239,6 +239,84 @@ pub fn draw(gfx: &Gfx, videoram: &[u8], spriteram: &[u8], flip: bool, pens: &mut
     }
 }
 
+/// One sprite as the board's sprite RAM holds it, for the tools that read
+/// a frame's objects (gp-track's sprite list, `gp sprites capture`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpriteEntry {
+    /// Its index in sprite RAM (0 to 127).
+    pub slot: u8,
+    /// Its left and top in the game's own units, half a screen pixel each
+    /// way: the bytes' `x - 3` and `241 - y`, as [`draw`] places it before
+    /// doubling. The screen is 256x240 of these.
+    pub x: i16,
+    pub y: i16,
+    /// The picture: 0 to 511 (byte 2, and bit 3 of byte 1).
+    pub code: u16,
+    /// The colour bank, 0 to 3 (bits 0 and 1 of byte 1, inverted).
+    pub color: u8,
+    pub flip_x: bool,
+    pub flip_y: bool,
+}
+
+/// The sprites [`draw`] would draw from `spriteram`, in RAM order: those
+/// with any row on the screen. Each is 32x32 screen pixels, 16x16 in the
+/// game's units. The cocktail flip isn't applied: positions are the
+/// game's.
+pub fn sprite_list(spriteram: &[u8]) -> Vec<SpriteEntry> {
+    spriteram
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| {
+            let x = i16::from(s[3]) - 3;
+            let y = 241 - i16::from(s[0]);
+            // draw's rows are (2 * y) & 0x1ff to 32 more, wrapping; it
+            // shows a row from 2 to 479.
+            let shown = (0..32).any(|r| {
+                let sy = ((i32::from(y) * 2) + r) & 0x1ff;
+                (2..HEIGHT as i32).contains(&sy)
+            });
+            shown.then_some(SpriteEntry {
+                slot: i as u8,
+                x,
+                y,
+                code: u16::from(s[2]) | (u16::from((s[1] >> 3) & 1) << 8),
+                color: !s[1] & 3,
+                flip_x: s[1] & 0x10 != 0,
+                flip_y: s[1] & 0x20 != 0,
+            })
+        })
+        .collect()
+}
+
+/// One background tile of video RAM's 32x30 map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TileEntry {
+    pub code: u16,
+    pub color: u8,
+    pub flip_x: bool,
+    pub flip_y: bool,
+    /// The priority category (bits 14 and 15).
+    pub category: u8,
+}
+
+/// The tilemap [`draw`] draws, row by row from the top: 30 rows of 32.
+pub fn tilemap(videoram: &[u8]) -> Vec<TileEntry> {
+    (0..30 * 32)
+        .map(|i| {
+            let data = u16::from(videoram[i * 2]) | (u16::from(videoram[i * 2 + 1]) << 8);
+            TileEntry {
+                code: data & 0x3ff,
+                color: ((data >> 12) & 3) as u8,
+                flip_x: (data >> 10) & 1 != 0,
+                flip_y: (data >> 11) & 1 != 0,
+                category: ((data >> 14) & 3) as u8,
+            }
+        })
+        .collect()
+}
+
 /// The oracle's picture hash: FNV-1a over 64 bits, a whole 0xRRGGBB pixel
 /// at a time, rows from the top (docs/oracle-mame.md).
 pub fn picture_hash(rgb: impl IntoIterator<Item = u32>) -> u64 {
@@ -338,5 +416,27 @@ mod tests {
             picture_hash(std::iter::repeat_n(0, WIDTH * HEIGHT)),
             0xcd3d81a7020d2325
         );
+    }
+
+    /// The sprite list holds what draw puts on the screen, at the game's
+    /// half-pixel positions; a sprite off the screen isn't in it.
+    #[test]
+    fn the_sprite_list_matches_draw() {
+        let mut ram = vec![0u8; 0x200];
+        // Slot 0 at x 0x43, y byte 0x91, picture 0x105, colour byte 1 = 0x2a
+        // (flip y, picture bit 8, colour bank !2 & 3 = 1).
+        ram[..4].copy_from_slice(&[0x91, 0x2a, 0x05, 0x43]);
+        // Every other slot has y byte 0: row 482 and on, off the screen.
+        let list = sprite_list(&ram);
+        assert_eq!(list.len(), 1);
+        let s = list[0];
+        assert_eq!((s.x, s.y), (0x40, 241 - 0x91));
+        assert_eq!(s.code, 0x105);
+        assert_eq!(s.color, 1);
+        assert!(s.flip_y && !s.flip_x);
+        let map = tilemap(&[0x34, 0x5a].repeat(0x400));
+        assert_eq!(map.len(), 960);
+        assert_eq!(map[0].code, 0x234);
+        assert_eq!((map[0].color, map[0].category), (1, 1));
     }
 }

@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 
 use crate::bind::{Bound, Camera, Seen, camera_at, edge};
-use crate::{Frame, Options, RAM, Source};
+use crate::{Frame, Options, Source};
 
 /// A RAM byte the tracker proposes, and how sure it is (0 to 1).
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -289,7 +289,7 @@ pub fn find(
 
     let positions = positions_pass(source, seen, bound, &groups, player.as_ref(), &slot_of)?;
 
-    let clock = (0..RAM)
+    let clock = (0..opts.ram)
         .filter(|a| !opts.excluded(*a))
         .max_by_key(|a| (seen.plus_one[*a], std::cmp::Reverse(*a)))
         .map(|a| Clock {
@@ -331,8 +331,8 @@ fn flag_table(
     let mut t = FlagTable {
         drawn: 0,
         undrawn: 0,
-        set_drawn: vec![0; RAM],
-        clear_undrawn: vec![0; RAM],
+        set_drawn: vec![0; opts.ram],
+        clear_undrawn: vec![0; opts.ram],
         top: BTreeSet::new(),
     };
     for ((_, row), d) in bound.samples.iter().zip(drawn) {
@@ -348,7 +348,7 @@ fn flag_table(
             }
         }
     }
-    t.top = (0..RAM)
+    t.top = (0..opts.ram)
         .filter(|f| flag_score(&t, *f, opts, taken).is_some())
         .map(|f| f as i32 - i32::from(addr))
         .collect();
@@ -467,7 +467,7 @@ fn y_of(run: &[u16], stride: usize, seen: &Seen, bound: &Bound) -> Option<Field>
 /// The value at `addr` if it's the same on at least 11 of a track's
 /// sampled frames.
 fn constant(rows: &[Vec<u8>], addr: usize) -> Option<u8> {
-    if rows.is_empty() || addr >= RAM {
+    if rows.is_empty() || addr >= rows[0].len() {
         return None;
     }
     let mut hist = [0u8; 256];
@@ -522,8 +522,14 @@ fn id_of(
         return None;
     }
     let span = (run.len() - 1) * stride;
+    let ram = bound
+        .track_samples
+        .iter()
+        .flatten()
+        .next()
+        .map_or(0, Vec::len);
     let mut best: Option<(f64, f64, usize, Vec<u8>)> = None;
-    for base in 0..RAM.saturating_sub(span) {
+    for base in 0..ram.saturating_sub(span) {
         if (0..run.len()).any(|i| taken.contains(&(base + i * stride))) {
             continue;
         }
@@ -606,11 +612,11 @@ fn page_pass(
                 *a,
                 PageTable {
                     wraps: 0,
-                    wrap_ok: vec![0; RAM],
+                    wrap_ok: vec![0; opts.ram],
                     steps: 0,
-                    step_changed: vec![0; RAM],
+                    step_changed: vec![0; opts.ram],
                     edges: 0,
-                    edge_ok: vec![0; RAM],
+                    edge_ok: vec![0; opts.ram],
                 },
             )
         })
@@ -619,7 +625,7 @@ fn page_pass(
     let mut i = 0usize;
     let _ = (opts, taken);
     source.scan(&mut |f: &Frame<'_>| {
-        let ram = &f.ram[..RAM];
+        let ram = &f.ram[..opts.ram];
         for &(t, o) in &seen.by_frame[i] {
             let Some(b) = &bound.x[t as usize] else {
                 continue;
@@ -687,7 +693,7 @@ fn pick_page(
     };
     let span = (addrs.len() - 1) * stride;
     let mut fits: Vec<PageFit> = Vec::new();
-    for base in 0..RAM.saturating_sub(span) {
+    for base in 0..opts.ram.saturating_sub(span) {
         let pages: Vec<usize> = (0..addrs.len()).map(|i| base + i * stride).collect();
         if pages.iter().any(|p| opts.excluded(*p) || taken.contains(p)) {
             continue;

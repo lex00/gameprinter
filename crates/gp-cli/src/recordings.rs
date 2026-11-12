@@ -12,7 +12,9 @@
 //! - `record --model` and the replay of a model's recordings are not here
 //!   yet: the new world runs a model with hooks through its game's module.
 //!
-//! These read gp-nes recordings, so an arcade original is refused in words.
+//! An arcade romset's recordings (port wave 6) are gp-arcade's
+//! (crate::arcade_rec): the same store objects, a romset source, the
+//! board's recorded state and events. Each command here takes either kind.
 
 use std::fs;
 use std::io::Write as _;
@@ -203,7 +205,9 @@ pub enum TraceCmd {
     },
     /// Print one line per CPU instruction over a window of frames, in the
     /// layout of nestest.log, by restoring the nearest checkpoint and
-    /// replaying up to the window.
+    /// replaying up to the window. An arcade recording prints both Z80s'
+    /// instructions in time order, `M` the main CPU's and `S` the sound
+    /// CPU's.
     Instructions {
         /// The recording's ID, or a unique prefix of at least 4 characters.
         id: String,
@@ -366,6 +370,17 @@ pub fn recordings_cmd(cmd: &RecordingsCmd, paths: &Paths) -> Result<Outcome> {
     }
 }
 
+/// The field table a recording's states follow, for either platform.
+fn field_table_of(
+    store: &Store,
+    manifest: &gp_evidence::manifest::RecordingManifest,
+) -> Result<gp_evidence::trace::FieldTable> {
+    if crate::arcade_rec::is_arcade(manifest) {
+        return crate::arcade_rec::field_table_of(store, manifest);
+    }
+    Ok(gp_nes::recording::field_table(store, manifest)?)
+}
+
 /// A recording's result in `replay --all` that this tool can't check: a
 /// run of a model in the old tool's interpreter.
 struct ModelRun;
@@ -444,14 +459,30 @@ fn record(
         })
         .unwrap_or_else(|| "recording".into());
 
-    let recorded = {
+    let recorded = if let Some(set) = &found.set {
+        crate::arcade_rec::record(
+            &store,
+            crate::arcade_rec::Request {
+                set,
+                source_id: found.source_id.clone(),
+                input: &input,
+                checkpoint_interval,
+                capture,
+                provenance,
+                name: name.clone(),
+                created_at: now_rfc3339(),
+                notes: label.notes.map(str::to_owned),
+            },
+        )?
+    } else {
+        let image = found.image.as_ref().expect("an NES image");
         gp_nes::recording::record_with(
             &store,
             gp_nes::recording::RecordRequest {
                 rom: &found.bytes,
                 source: gp_evidence::manifest::SourceRef::NesRom {
-                    sha256: found.image.sha256.clone(),
-                    mapper: found.image.header.mapper,
+                    sha256: image.sha256.clone(),
+                    mapper: image.header.mapper,
                 },
                 source_id: found.source_id.clone(),
                 power_on,
@@ -536,6 +567,9 @@ fn replay(
             "{} is a model recording, which gameprinter can't replay yet",
             opened.short()
         );
+    }
+    if opened.is_arcade() {
+        return replay_arcade(&opened, from_checkpoint, rom, paths);
     }
     let found = opened.rom(rom, paths)?;
     let Opened {
@@ -640,6 +674,116 @@ fn replay(
     })
 }
 
+/// `gp replay` for an arcade recording: as for the NES, against gp-arcade.
+fn replay_arcade(
+    opened: &Opened,
+    from_checkpoint: Option<u64>,
+    rom: Option<&Path>,
+    paths: &Paths,
+) -> Result<Outcome> {
+    let set = opened.romset(rom, paths)?;
+    let (store, entry, manifest) = (&opened.store, &opened.entry, &opened.manifest);
+    let stale = !crate::arcade_rec::made_by_this_runtime(manifest);
+    let mut report = crate::arcade_rec::replay(store, manifest, &set, from_checkpoint)?;
+    let whole = from_checkpoint.unwrap_or(0) == 0;
+    if whole && manifest.trace.is_some() {
+        let trace = gp_nes::recording::verify_trace(store, manifest)?;
+        report.divergence = match (report.divergence, trace) {
+            (Some(replayed), _) if !stale => Some(replayed),
+            (replayed, trace) => trace.or(replayed),
+        };
+    }
+    let trace_damaged = report
+        .divergence
+        .as_ref()
+        .is_some_and(|d| d.what == gp_nes::recording::DivergenceKind::Trace);
+    let span = format!("frames {} to {}", report.from_frame, manifest.frames);
+    let short = &entry.id.to_hex()[..12];
+    let (mut text, exit) = match &report.divergence {
+        None => (
+            format!(
+                "replayed {} ({short}) {span}: every frame matches, at {:.0} frames/s",
+                entry.name, report.frames_per_second
+            ),
+            0,
+        ),
+        Some(d) if stale && !trace_damaged => (
+            format!(
+                "replayed {} ({short}) {span}: STALE, differs from frame {} ({})",
+                entry.name,
+                d.frame,
+                crate::arcade_rec::describe(d.what)
+            ),
+            1,
+        ),
+        Some(d) => (
+            format!(
+                "replayed {} ({short}) {span}: DIVERGED at frame {}: {}",
+                entry.name,
+                d.frame,
+                crate::arcade_rec::describe(d.what)
+            ),
+            1,
+        ),
+    };
+    if stale {
+        text.push_str(&format!(
+            "\nRecorded by {}; this is {}.",
+            gp_nes::recording::describe_runtime(&manifest.runtime),
+            gp_nes::recording::describe_runtime(&crate::arcade_rec::runtime_ref())
+        ));
+    }
+    Ok(Outcome {
+        json: json!({
+            "id": entry.id,
+            "from_frame": report.from_frame,
+            "frames_checked": report.frames_checked,
+            "fps": report.frames_per_second,
+            "divergence": report.divergence.as_ref().map(|d| json!({ "frame": d.frame, "what": format!("{:?}", d.what).to_lowercase() })),
+            "stale": stale,
+            "recorded_runtime": manifest.runtime,
+        }),
+        text,
+        exit,
+    })
+}
+
+/// An arcade recording at `frame`, by checkpoint and replay, as the
+/// protocol runtime, with the note for a state that isn't the recorded one.
+fn seek_arcade(
+    opened: &Opened,
+    rom: Option<&Path>,
+    paths: &Paths,
+    frame: u64,
+) -> Result<(crate::arcade_rec::Cursor, Option<String>)> {
+    let set = opened.romset(rom, paths)?;
+    let cursor = crate::arcade_rec::open(&opened.store, &opened.manifest, &set, frame)?;
+    let note = note_unless_arcade(
+        cursor.matches_recording(),
+        cursor.frame(),
+        cursor.stale,
+        opened,
+    );
+    Ok((cursor, note))
+}
+
+fn note_unless_arcade(matches: bool, frame: u64, stale: bool, opened: &Opened) -> Option<String> {
+    if matches {
+        return None;
+    }
+    Some(if stale {
+        format!(
+            "frame {frame} doesn't match the recording, which {} made; this is {}. Re-record it (docs/recording.md)",
+            gp_nes::recording::describe_runtime(&opened.manifest.runtime),
+            gp_nes::recording::describe_runtime(&crate::arcade_rec::runtime_ref())
+        )
+    } else {
+        format!(
+            "frame {frame} doesn't match the recording: replay diverged (gp replay finds where)"
+        )
+    })
+}
+
 /// Opens a recording at `frame`, timed as the `seek` metrics.
 fn seek(opened: &Opened, rom: &[u8], frame: u64) -> Result<gp_nes::seek::Cursor> {
     let cursor = { gp_nes::seek::open(&opened.store, &opened.manifest, rom, frame)? };
@@ -706,18 +850,30 @@ fn query(
     if !replay && let Some(out) = crate::from_trace::query(&opened, frame, selectors)? {
         return Ok(out);
     }
-    let rom = match given {
-        Some(found) => found.bytes,
-        None => opened.rom(None, paths)?.bytes,
+    let (entries, note, checkpoint, replayed, stale) = if opened.is_arcade() {
+        let (cursor, note) = seek_arcade(&opened, rom, paths, frame)?;
+        let (checkpoint, replayed, stale) = (cursor.checkpoint, cursor.replayed, cursor.stale);
+        let runtime = gp_arcade::ArcadeRuntime::new(cursor.into_tapper());
+        let mut entries = Vec::new();
+        for s in selectors {
+            entries.extend(runtime.query(s).map_err(anyhow::Error::msg)?);
+        }
+        (entries, note, checkpoint, replayed, stale)
+    } else {
+        let rom = match given {
+            Some(found) => found.bytes,
+            None => opened.rom(None, paths)?.bytes,
+        };
+        let cursor = seek(&opened, &rom, frame)?;
+        let note = mismatch_note(&cursor, &opened)?;
+        let (checkpoint, replayed, stale) = (cursor.checkpoint, cursor.replayed, cursor.stale);
+        let runtime = gp_nes::protocol::NesRuntime::new(cursor.into_nes())?;
+        let mut entries = Vec::new();
+        for s in selectors {
+            entries.extend(runtime.query(s).map_err(anyhow::Error::msg)?);
+        }
+        (entries, note, checkpoint, replayed, stale)
     };
-    let cursor = seek(&opened, &rom, frame)?;
-    let note = mismatch_note(&cursor, &opened)?;
-    let (checkpoint, replayed, stale) = (cursor.checkpoint, cursor.replayed, cursor.stale);
-    let runtime = gp_nes::protocol::NesRuntime::new(cursor.into_nes())?;
-    let mut entries = Vec::new();
-    for s in selectors {
-        entries.extend(runtime.query(s).map_err(anyhow::Error::msg)?);
-    }
     let mut text: Vec<String> = entries.iter().map(entry_line).collect();
     if let Some(note) = &note {
         text.push(format!("note: {note}"));
@@ -758,6 +914,9 @@ fn run_until(
     {
         return Ok(out);
     }
+    if opened.is_arcade() {
+        return run_until_arcade(&opened, condition, from, max_frames, show, rom, paths);
+    }
     let rom = match given {
         Some(found) => found.bytes,
         None => opened.rom(None, paths)?.bytes,
@@ -796,6 +955,69 @@ fn run_until(
     // Past the last frame nothing was recorded to compare with.
     let matches = gp_nes::seek::matches(runtime.nes(), &hashes)?;
     let note = note_unless(matches != Some(false), at, stale, &opened);
+    let mut entries = Vec::new();
+    for s in show {
+        entries.extend(runtime.query(s).map_err(anyhow::Error::msg)?);
+    }
+    let mut text = vec![if met {
+        format!("{condition}: holds at frame {at} ({ran} frames from frame {from})")
+    } else {
+        format!("{condition}: doesn't hold by frame {at} ({ran} frames from frame {from})")
+    }];
+    text.extend(entries.iter().map(entry_line));
+    if let Some(note) = &note {
+        text.push(format!("note: {note}"));
+    }
+    Ok(Outcome {
+        json: json!({
+            "id": opened.entry.id,
+            "condition": condition,
+            "met": met,
+            "frame": at,
+            "from": from,
+            "frames_run": ran,
+            "read_from": "replay",
+            "matches_recording": matches,
+            "entries": entries.iter().map(entry_json).collect::<Vec<_>>(),
+        }),
+        text: text.join("\n"),
+        exit: u8::from(!met || note.is_some()),
+    })
+}
+
+/// `gp run-until` on an arcade recording, as for the NES.
+fn run_until_arcade(
+    opened: &Opened,
+    condition: &str,
+    from: u64,
+    max_frames: Option<u32>,
+    show: &[String],
+    rom: Option<&Path>,
+    paths: &Paths,
+) -> Result<Outcome> {
+    use gp_runtime::Runtime as _;
+    let (cursor, _) = seek_arcade(opened, rom, paths, from)?;
+    let frames = opened.manifest.frames;
+    let max = max_frames.unwrap_or(u32::try_from(frames - from).unwrap_or(u32::MAX));
+    let first = if from < frames {
+        from
+    } else {
+        frames.saturating_sub(1)
+    };
+    let inputs: Vec<gp_runtime::InputFrame> = (first..frames)
+        .filter_map(|f| cursor.input(f))
+        .map(|f| gp_runtime::InputFrame::pads(f.pads))
+        .collect();
+    let (hashes, stale) = (cursor.hashes().to_vec(), cursor.stale);
+    let mut runtime = gp_arcade::ArcadeRuntime::new(cursor.into_tapper());
+    let met = runtime
+        .run_until(condition, &inputs, max)
+        .map_err(anyhow::Error::msg)?
+        .met;
+    let ran = runtime.frame() - from;
+    let at = runtime.frame();
+    let matches = crate::arcade_rec::matches(runtime.tapper(), &hashes);
+    let note = note_unless_arcade(matches != Some(false), at, stale, opened);
     let mut entries = Vec::new();
     for s in show {
         entries.extend(runtime.query(s).map_err(anyhow::Error::msg)?);
@@ -867,6 +1089,9 @@ fn trace_instructions(
     paths: &Paths,
 ) -> Result<Outcome> {
     let opened = Opened::open(paths, id)?;
+    if opened.is_arcade() {
+        return trace_instructions_arcade(&opened, frames, out, rom, paths);
+    }
     let rom = opened.rom(rom, paths)?.bytes;
     let range = parse_frames(frames, opened.manifest.frames)?;
     // Frame 0 is power-on, which no instructions produce.
@@ -901,6 +1126,71 @@ fn trace_instructions(
         end - 1,
         opened.entry.name,
         &opened.entry.id.to_hex()[..12],
+        traced.instructions,
+        traced.interrupts
+    );
+    let trace_text = String::from_utf8(buffer).expect("the trace is ASCII");
+    let text = match out {
+        Some(path) => format!("{summary}\nwritten to {}", path.display()),
+        None => trace_text.trim_end().to_owned(),
+    };
+    Ok(Outcome {
+        json: json!({
+            "id": opened.entry.id,
+            "frames": [start, end],
+            "instructions": traced.instructions,
+            "interrupts": traced.interrupts,
+            "out": out,
+            "trace": out.is_none().then_some(trace_text),
+            "matches_recording": note.is_none(),
+        }),
+        text,
+        exit: u8::from(note.is_some()),
+    })
+}
+
+/// `gp trace instructions` on an arcade recording: both Z80s, in time
+/// order (crate::arcade_rec::trace_instructions has the layout).
+fn trace_instructions_arcade(
+    opened: &Opened,
+    frames: &str,
+    out: Option<&Path>,
+    rom: Option<&Path>,
+    paths: &Paths,
+) -> Result<Outcome> {
+    let range = parse_frames(frames, opened.manifest.frames)?;
+    let (start, end) = (range.start.max(1), range.end);
+    if start >= end {
+        bail!(
+            "frame 0 is the power-on state, which no instructions produce; traces start at frame 1"
+        );
+    }
+    let (mut cursor, _) = seek_arcade(opened, rom, paths, start - 1)?;
+    let mut buffer = Vec::new();
+    let traced = match out {
+        Some(path) => {
+            let file =
+                fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
+            let mut file = std::io::BufWriter::new(file);
+            let traced = crate::arcade_rec::trace_instructions(&mut cursor, end - 1, &mut file)?;
+            file.flush()?;
+            traced
+        }
+        None => crate::arcade_rec::trace_instructions(&mut cursor, end - 1, &mut buffer)?,
+    };
+    let note = note_unless_arcade(
+        cursor.matches_recording(),
+        cursor.frame(),
+        cursor.stale,
+        opened,
+    );
+    if let Some(note) = &note {
+        eprintln!("gp: note: {note}");
+    }
+    let summary = format!(
+        "traced frames {start} to {} of {}: {} instructions, {} interrupts",
+        end - 1,
+        opened.short(),
         traced.instructions,
         traced.interrupts
     );
@@ -1046,12 +1336,17 @@ fn recordings_show_in(id: &str, store: &Store, index: &Index) -> Result<Outcome>
         .collect();
     // A model recording is checked against the interpreter, a ROM's
     // against gp-nes.
-    let current = gp_nes::runtime_ref();
+    let arcade = row.source_kind == "romset";
+    let current = if arcade {
+        crate::arcade_rec::runtime_ref()
+    } else {
+        gp_nes::runtime_ref()
+    };
     // Another build with the same behaviour version, whose fork patch
     // differs: its checkpoints restore if they round-trip, which replay
     // checks, so it isn't called stale here.
-    let patch_only =
-        gp_nes::recording::lineage_of(&row.runtime) == gp_nes::recording::Lineage::PatchOnly;
+    let patch_only = !arcade
+        && gp_nes::recording::lineage_of(&row.runtime) == gp_nes::recording::Lineage::PatchOnly;
     let stale = row.runtime != current && !patch_only;
 
     let mut kinds: Vec<(&str, u64, u64)> = Vec::new();
@@ -1099,6 +1394,12 @@ fn recordings_show_in(id: &str, store: &Store, index: &Index) -> Result<Outcome>
         format!(
             "source      the model {}, bundle {}",
             row.source_id.as_deref().unwrap_or("?"),
+            row.source_sha256
+        )
+    } else if arcade {
+        format!(
+            "source      {}, romset, identity {}",
+            row.source_id.as_deref().unwrap_or("unregistered"),
             row.source_sha256
         )
     } else {
@@ -1201,6 +1502,15 @@ fn replay_all(paths: &Paths, include_retired: bool) -> Result<Outcome> {
         // One recording that can't be checked doesn't stop the others.
         let checked = (|| -> Result<Option<Result<gp_nes::recording::Checked, ModelRun>>> {
             let manifest = gp_evidence::recordings::load_manifest(&store, &entry.id)?;
+            if let Some(identity) = manifest.source.romset_identity() {
+                let wanted = [identity.to_owned()];
+                let Some(rom) = crate::roms::find(&wanted, &[], &paths.roms)?.remove(identity)
+                else {
+                    return Ok(None);
+                };
+                let set = gp_arcade::Romset::from_zip(&rom.bytes)?;
+                return Ok(Some(Ok(crate::arcade_rec::check(&store, &manifest, &set)?)));
+            }
             let Some(sha256) = manifest.source.nes_sha256() else {
                 return Ok(Some(Err(ModelRun)));
             };
@@ -1382,7 +1692,7 @@ fn trace_frame_of(
     paths: &Paths,
 ) -> Result<Outcome> {
     let (state, from) = opened.state(frame, rom, paths)?;
-    let table = gp_nes::recording::field_table(&opened.store, &opened.manifest)?;
+    let table = field_table_of(&opened.store, &opened.manifest)?;
     let fields: Vec<_> = table
         .split(&state)?
         .into_iter()
@@ -1476,8 +1786,8 @@ fn trace_diff_of(a: &Opened, b: &Opened, paths: &Paths) -> Result<Outcome> {
     let mut text = format!("{names}\nfirst difference at frame {frame}: {what}");
     let (sa, from_a) = a.state(frame, None, paths)?;
     let (sb, from_b) = b.state(frame, None, paths)?;
-    let ta = gp_nes::recording::field_table(&a.store, &a.manifest)?;
-    let tb = gp_nes::recording::field_table(&b.store, &b.manifest)?;
+    let ta = field_table_of(&a.store, &a.manifest)?;
+    let tb = field_table_of(&b.store, &b.manifest)?;
     let mut fields = Vec::new();
     if ta != tb {
         text.push_str(
@@ -1540,7 +1850,7 @@ fn trace_diff_of(a: &Opened, b: &Opened, paths: &Paths) -> Result<Outcome> {
 /// `gp trace fields`: the field table, from the trace or, for a recording
 /// without one, this runtime's.
 fn trace_fields(opened: &Opened) -> Result<Outcome> {
-    let table = gp_nes::recording::field_table(&opened.store, &opened.manifest)?;
+    let table = field_table_of(&opened.store, &opened.manifest)?;
     let magic = String::from_utf8_lossy(&table.state_magic).into_owned();
     let fields: Vec<Value> = table
         .fields
@@ -1647,7 +1957,23 @@ fn events_of(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let (all, from) =
+    let (all, from) = if opened.is_arcade() {
+        match crate::arcade_rec::stored_events(&opened.store, &opened.manifest, range.clone())? {
+            Some(events) => (events, "event stream"),
+            None => {
+                let set = opened.romset(rom, paths)?;
+                (
+                    crate::arcade_rec::replayed_events(
+                        &opened.store,
+                        &opened.manifest,
+                        &set,
+                        range.clone(),
+                    )?,
+                    "replay",
+                )
+            }
+        }
+    } else {
         match gp_nes::recording::stored_events(&opened.store, &opened.manifest, range.clone())? {
             Some(events) => (events, "event stream"),
             None => {
@@ -1662,7 +1988,8 @@ fn events_of(
                     "replay",
                 )
             }
-        };
+        }
+    };
     let shown: Vec<_> = all
         .into_iter()
         .filter(|e| kinds.is_empty() || kinds.contains(&e.kind))
@@ -1678,7 +2005,10 @@ fn events_of(
         let detail = match e.kind {
             EventKind::Nmi | EventKind::Irq => format!("handler ${:04x}", e.addr),
             EventKind::Sprite0Hit => String::new(),
-            EventKind::ControllerRead => format!("${:04x} -> ${:02x}", e.addr, e.value),
+            EventKind::ControllerRead | EventKind::PortRead => {
+                format!("${:04x} -> ${:02x}", e.addr, e.value)
+            }
+            EventKind::SoundIrq => format!("handler ${:04x}", e.addr),
             _ => format!("${:04x} = ${:02x}", e.addr, e.value),
         };
         text.push_str(&format!(

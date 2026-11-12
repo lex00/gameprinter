@@ -10,6 +10,14 @@
 //! is a mechanic to find before claiming exact). With `--summary`, names
 //! only: nothing quotes the ROM's bytes.
 //!
+//! Two arcade romsets (MAME zips, port wave 6) are compared chip by chip
+//! ([`romsets`]): each region of the first set (the main and sound
+//! programs, the tiles, the sprites) by the first set's chips, each chip
+//! paired with the second set's chip at the same place, said identical or
+//! with its differing ranges, by offset in the chip and, for the programs,
+//! by CPU address. `--summary` leaves the bytes out. The labels, asset
+//! map and `--cpu` are the NES's and refused for romsets.
+//!
 //! Ported from game-printer's romdiff.rs and its `roms_diff` in main.rs.
 //! The base's ROM is named, and its asset map and labels found, from the
 //! games checkout (each game's roms.toml and package.toml) instead of the
@@ -416,8 +424,161 @@ fn diff_annotator(
     Ok(Annotator { map, labels })
 }
 
+/// Whether a file is a zip, by its first bytes.
+fn is_zip(path: &Path) -> bool {
+    let mut head = [0u8; 4];
+    std::fs::File::open(path)
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head))
+        .is_ok()
+        && gp_arcade::romset::looks_like_zip(&head)
+}
+
+/// `gp roms diff` of two arcade romsets, chip by chip.
+fn romsets(opts: &DiffArgs, registry: &Registry) -> Result<Outcome> {
+    use gp_arcade::romset::{self, Region as R};
+    if opts.cpu.is_some() || opts.labels.is_some() {
+        bail!(
+            "--cpu and --labels read NES boards and labels; two romsets are compared chip by chip"
+        );
+    }
+    let load = |p: &Path| -> Result<gp_arcade::Romset> {
+        if !is_zip(p) {
+            bail!(
+                "{} isn't a romset zip: gp roms diff compares two NES images or two romsets",
+                p.display()
+            );
+        }
+        Ok(gp_arcade::Romset::load_zip(p)?)
+    };
+    let (a, b) = (load(&opts.a)?, load(&opts.b)?);
+    let label = |p: &Path, s: &gp_arcade::Romset| {
+        let id = registry
+            .by_sha256(&s.identity)
+            .map_or_else(|| "unknown source".to_owned(), |k| k.id.clone());
+        format!(
+            "{} ({}, {id}, identity {})",
+            p.display(),
+            s.name,
+            &s.identity[..16]
+        )
+    };
+    let chips = |s: &gp_arcade::Romset| -> Vec<romset::Chip> {
+        romset::set(s.name).map_or_else(Vec::new, |i| i.chips.to_vec())
+    };
+    let (ca, cb) = (chips(&a), chips(&b));
+    let region_bytes = |s: &gp_arcade::Romset, r: R| -> Vec<u8> {
+        match r {
+            R::MainCpu => s.maincpu.clone(),
+            R::SsioCpu => s.ssiocpu.clone(),
+            R::Gfx1 => s.gfx1.clone(),
+            R::Gfx2 => s.gfx2.clone(),
+        }
+    };
+    let mut lines = vec![
+        format!("a: {}", label(&opts.a, &a)),
+        format!("b: {}", label(&opts.b, &b)),
+    ];
+    let mut regions = Vec::new();
+    let (mut same, mut differ) = (0usize, 0usize);
+    for r in [R::MainCpu, R::SsioCpu, R::Gfx1, R::Gfx2] {
+        let (ra, rb) = (region_bytes(&a, r), region_bytes(&b, r));
+        let mut rows = Vec::new();
+        for c in ca.iter().filter(|c| c.region == r) {
+            let other = cb
+                .iter()
+                .find(|o| o.region == r && o.offset <= c.offset && c.offset < o.offset + o.size);
+            let end = (c.offset + c.size).min(ra.len()).min(rb.len());
+            let ranges = diff_ranges(
+                &ra[c.offset.min(end)..end],
+                &rb[c.offset.min(end)..end],
+                opts.gap,
+            );
+            let differing: u64 = ranges.iter().map(|x| x.differing).sum();
+            let same_chip = other.is_some_and(|o| o.sha1 == c.sha1);
+            let code = matches!(r, R::MainCpu | R::SsioCpu);
+            let head = format!(
+                "{} {:<12} vs {:<12} {:05X}-{:05X}",
+                r.name(),
+                c.name,
+                other.map_or("-", |o| o.name),
+                c.offset,
+                c.offset + c.size - 1
+            );
+            if ranges.is_empty() {
+                same += 1;
+                lines.push(format!(
+                    "{head}  identical{}",
+                    if same_chip { " (the same chip)" } else { "" }
+                ));
+            } else {
+                differ += 1;
+                lines.push(format!(
+                    "{head}  {differing} bytes differ in {} range{}",
+                    ranges.len(),
+                    if ranges.len() == 1 { "" } else { "s" }
+                ));
+                for x in ranges.iter().take(opts.limit) {
+                    let at = c.offset as u64 + x.offset;
+                    let place = if code {
+                        format!(
+                            "{} ${at:04X}",
+                            if r == R::MainCpu { "main" } else { "sound" }
+                        )
+                    } else {
+                        format!("+{:05X}", x.offset)
+                    };
+                    if opts.summary {
+                        lines.push(format!(
+                            "  {place}, {} bytes ({} differ)",
+                            x.len, x.differing
+                        ));
+                    } else {
+                        lines.push(format!("  {place}, {} bytes: {} -> {}", x.len, x.a, x.b));
+                    }
+                }
+                if ranges.len() > opts.limit {
+                    lines.push(format!("  {} more ranges", ranges.len() - opts.limit));
+                }
+            }
+            rows.push(json!({
+                "chip": c.name,
+                "other": other.map(|o| o.name),
+                "offset": c.offset,
+                "size": c.size,
+                "identical": ranges.is_empty(),
+                "same_chip": same_chip,
+                "bytes_differ": differing,
+                "ranges": ranges.iter().map(|x| {
+                    let mut v = json!({"offset": x.offset, "len": x.len, "differing": x.differing});
+                    if !opts.summary {
+                        v["a"] = json!(x.a);
+                        v["b"] = json!(x.b);
+                    }
+                    v
+                }).collect::<Vec<_>>(),
+            }));
+        }
+        regions.push(json!({"region": r.name(), "chips": rows}));
+    }
+    lines.push(format!("{same} chips identical, {differ} differ"));
+    Ok(Outcome::ok(
+        json!({
+            "a": {"set": a.name, "identity": a.identity},
+            "b": {"set": b.name, "identity": b.identity},
+            "regions": regions,
+            "chips_identical": same,
+            "chips_differ": differ,
+        }),
+        lines.join("\n"),
+    ))
+}
+
 pub(crate) fn run(opts: &DiffArgs) -> Result<Outcome> {
     let (gap, limit) = (opts.gap, opts.limit);
+    if is_zip(&opts.a) || is_zip(&opts.b) {
+        let (registry, _) = crate::roms_cmd::sources(opts.games.as_deref())?;
+        return romsets(opts, &registry);
+    }
     let games = crate::roms_cmd::games_dir(opts.games.as_deref());
     let (registry, _) = crate::roms_cmd::sources(opts.games.as_deref())?;
     let left = load_banks(&opts.a, &registry)?;
@@ -690,5 +851,85 @@ size = 8
             .err()
             .unwrap();
         assert!(e.to_string().contains("arcade romset"), "{e}");
+    }
+
+    fn args(a: &Path, b: &Path, games: &Path) -> DiffArgs {
+        DiffArgs {
+            a: a.to_owned(),
+            b: b.to_owned(),
+            gap: 8,
+            limit: 4,
+            labels: None,
+            summary: true,
+            cpu: None,
+            bank_a: None,
+            bank_b: None,
+            games: Some(games.to_owned()),
+        }
+    }
+
+    /// A zip against an NES image is refused in words, and a zip that's
+    /// no set gp-arcade knows says which set it is nearest.
+    #[test]
+    fn a_romset_is_compared_only_with_a_romset() {
+        let d = tempfile::tempdir().unwrap();
+        fs::write(d.path().join("a.nes"), gp_nes::testrom::build()).unwrap();
+        fs::write(
+            d.path().join("set.zip"),
+            b"PK\x05\x06"
+                .iter()
+                .chain(&[0u8; 18])
+                .copied()
+                .collect::<Vec<u8>>(),
+        )
+        .unwrap();
+        let e = run(&args(
+            &d.path().join("set.zip"),
+            &d.path().join("a.nes"),
+            d.path(),
+        ))
+        .err()
+        .unwrap();
+        assert!(
+            e.to_string().contains("no set gp-arcade knows")
+                || e.to_string().contains("isn't a romset zip"),
+            "{e}"
+        );
+        let e = run(&args(
+            &d.path().join("a.nes"),
+            &d.path().join("set.zip"),
+            d.path(),
+        ))
+        .err()
+        .unwrap();
+        assert!(e.to_string().contains("isn't a romset zip"), "{e}");
+    }
+
+    /// With tapper.zip and tapperg.zip on this machine: the alternate
+    /// graphics set has the same programs and other graphics, chip by chip.
+    /// Skipped without them.
+    #[test]
+    fn tapper_and_tapperg_differ_in_their_graphics_only() {
+        let (Some(a), Some(b)) = (
+            gp_arcade::romset::local_romset("tapper"),
+            gp_arcade::romset::local_romset("tapperg"),
+        ) else {
+            eprintln!("skipped: no tapper and tapperg romsets");
+            return;
+        };
+        let d = tempfile::tempdir().unwrap();
+        let o = run(&args(&a, &b, d.path())).unwrap();
+        for r in o.json["regions"].as_array().unwrap() {
+            let differs = r["chips"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["identical"] == false);
+            let name = r["region"].as_str().unwrap();
+            if name.ends_with("cpu") {
+                assert!(!differs, "{name}: {}", o.text);
+            }
+        }
+        assert!(o.json["chips_differ"].as_u64().unwrap() > 0);
     }
 }

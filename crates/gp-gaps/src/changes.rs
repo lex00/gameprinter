@@ -471,6 +471,7 @@ pub fn detect(run: &Run) -> Report {
     // times the share not written by the sound engine; held down for a
     // scratch byte many routines write and for a copy of the controller.
     let rank = |a: usize| {
+        let a = a & 0x7FF;
         let n = onsets[a] as f64;
         let (lift, _) = (0..events.len())
             .map(|t| {
@@ -500,6 +501,7 @@ pub fn detect(run: &Run) -> Report {
         (score, lift, per_frame, engine_share)
     };
     let lift = |a: usize| {
+        let a = a & 0x7FF;
         if play_changes[a] == 0 || input_frames == 0 || play_frames == 0 {
             return 0.0;
         }
@@ -509,8 +511,11 @@ pub fn detect(run: &Run) -> Report {
     };
     let mut groups: BTreeMap<String, Vec<u16>> = BTreeMap::new();
     let mut labelled: BTreeMap<String, bool> = BTreeMap::new();
-    for a in 0..0x800u16 {
-        if skip(a) || play_changes[usize::from(a)] == 0 || k.explains_ram(a) {
+    for i in 0..0x800u16 {
+        // The RAM's own addresses: the NES's from 0, an arcade board's work
+        // RAM from its base (Run::ram_base).
+        let a = i | run.ram_base;
+        if skip(a) || play_changes[usize::from(i)] == 0 || k.explains_ram(a) {
             continue;
         }
         let (name, label) = k.ram_name(a);
@@ -525,24 +530,24 @@ pub fn detect(run: &Run) -> Report {
     for (name, addrs) in groups {
         let pc: u64 = addrs
             .iter()
-            .map(|&a| play_changes[usize::from(a)])
+            .map(|&a| play_changes[usize::from(a & 0x7FF)])
             .max()
             .unwrap_or(0);
         let all: u64 = addrs
             .iter()
-            .map(|&a| changes[usize::from(a)])
+            .map(|&a| changes[usize::from(a & 0x7FF)])
             .max()
             .unwrap_or(0);
         let mut w: BTreeMap<String, u64> = BTreeMap::new();
         for &a in &addrs {
-            for (n, c) in &writers[usize::from(a)] {
+            for (n, c) in &writers[usize::from(a & 0x7FF)] {
                 *w.entry(n.clone()).or_default() += c;
             }
         }
         let best = addrs
             .iter()
             .copied()
-            .max_by_key(|&a| play_changes[usize::from(a)])
+            .max_by_key(|&a| play_changes[usize::from(a & 0x7FF)])
             .unwrap_or(0);
         // The label's own bytes rank it; the unlabelled bytes after it
         // only when its own never changed.
@@ -561,7 +566,7 @@ pub fn detect(run: &Run) -> Report {
             .map(|&a| rank(usize::from(a)))
             .max_by(|x, y| x.0.total_cmp(&y.0))
             .unwrap_or_default();
-        let mut s: Vec<u64> = first[usize::from(best)].clone();
+        let mut s: Vec<u64> = first[usize::from(best & 0x7FF)].clone();
         s.dedup();
         rep.ram.push(RamItem {
             labelled: labelled[&name],

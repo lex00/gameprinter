@@ -581,8 +581,9 @@ pub(crate) fn straight(
     let resume = resume_of(ctx, log, &inputs, start)?;
     let draws = if ctx.mapping.score_draws {
         Some(match &resume {
-            Some((saved, p)) => crate::lockstep::record_draws_on(
-                saved.nes(&ctx.rom, gp_evidence::manifest::PowerOn::default())?,
+            Some((saved, p)) => crate::lockstep::record_draws_saved(
+                &ctx.rom,
+                saved,
                 &ctx.mapping,
                 &log.frames[p.inputs..],
                 from,
@@ -625,8 +626,9 @@ pub(crate) fn score_one(
     let resume = resume_of(ctx, log, &inputs, start)?;
     let draws = if ctx.mapping.score_draws {
         let d = match &resume {
-            Some((saved, p)) => crate::lockstep::record_draws_on(
-                saved.nes(&ctx.rom, gp_evidence::manifest::PowerOn::default())?,
+            Some((saved, p)) => crate::lockstep::record_draws_saved(
+                &ctx.rom,
+                saved,
                 &ctx.mapping,
                 &log.frames[p.inputs..],
                 from,

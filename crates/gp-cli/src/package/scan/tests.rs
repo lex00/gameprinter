@@ -414,3 +414,53 @@ fn a_baseline_excuses_the_items_it_lists() {
         super::known_keys(&first.json.to_string()).unwrap().len()
     );
 }
+
+/// A clip's press timings may equal a short rising run of ROM bytes by
+/// chance; such a match is allowed, a longer one, one on other numbers or
+/// one in another kind of file isn't.
+#[test]
+fn press_timings_have_an_allowance() {
+    let text = "gp-presses 0\nframes 335\narcade tapper CSRLDUT\ntap@9-41\ndown@51-58\ntap@68-100\nstart1@110-117\n";
+    let x = super::Text {
+        rel: "inputs/a.presses".into(),
+        role: super::Role::Whole("clip recipe"),
+        text: text.into(),
+        nums: rom_match::numbers(text),
+        groups: Vec::new(),
+        lexed: None,
+    };
+    let timings = super::press_timings(&x);
+    // 335, then 9 41 51 58 68 100 110 117: the 1 of start1 isn't one.
+    let values: Vec<i64> = timings.iter().map(|&i| x.nums[i].value).collect();
+    assert_eq!(values, [335, 9, 41, 51, 58, 68, 100, 110, 117]);
+    let m = |first: usize, last: usize| rom_match::Match {
+        kind: Kind::Exact,
+        stream: "bytes",
+        rom: "rom".into(),
+        rom_offset: 0,
+        len: last + 1 - first,
+        first,
+        last,
+        scale: 1,
+        offset: 0,
+        ln_expected: -10.0,
+    };
+    let first_span = x.nums.iter().position(|n| n.value == 9).unwrap();
+    assert!(super::press_allowance(
+        &m(first_span, first_span + 6),
+        &x,
+        &timings
+    ));
+    // The frame count before them doesn't rise into them.
+    assert!(!super::press_allowance(
+        &m(first_span - 1, first_span + 5),
+        &x,
+        &timings
+    ));
+    let other = super::Text {
+        rel: "notes.txt".into(),
+        role: super::Role::Whole("doc"),
+        ..x
+    };
+    assert!(super::press_timings(&other).is_empty());
+}

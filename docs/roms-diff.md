@@ -23,4 +23,10 @@ The first image's game is found by its hash in the games checkout's `roms.toml` 
 
 ## Arcade
 
-An arcade romset isn't compared yet. Its counterpart is a chip-by-chip compare of the romsets (tapper, tapperg, rbtapper, sutapper) from gp-arcade's chip table.
+Two arcade romsets (MAME zips) are compared chip by chip (port wave 6), from gp-arcade's chip table: each region of the first set (the main program, the sound program, the tiles, the sprites) by its chips, each paired with the second set's chip at the same place, said identical (and "the same chip" when its SHA-1 is) or with its differing ranges, by offset in the region and, for the programs, by CPU address (`main $1234`). `--summary` leaves the bytes out; `--limit` caps the ranges per chip. `--cpu`, `--labels` and the asset map are the NES's and refused for romsets; an NES image against a romset is refused.
+
+```text
+gp roms diff tapper.zip tapperg.zip --summary
+```
+
+On the Tapper sets (2026-11-12): tapper against tapperg, 10 chips identical (both programs and the tiles, all the same chips) and the 8 sprite chips differ, 622 to 2,822 bytes each, so tapperg is tapper with other sprites. Against tappera (1/12/84), the sound program and all the graphics are the same chips and the four main program chips differ (293 to 7,775 bytes), an older revision of the game code. Against rbtapper and sutapper every chip differs, the sound program included.

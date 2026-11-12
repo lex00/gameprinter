@@ -26,10 +26,11 @@
 //! each body come from its lockstep straight through, run here as `gp clip
 //! score` runs it (with the original's draws when the mapping scores them),
 //! and only when the command needs them: `--frame` with `--byte`, or with
-//! `--measure` and `--slot`, runs no model. The labels are the game's
+//! `--measure` and `--slot`, runs no model. On an arcade game (port wave
+//! 6) `--byte` and `--frame` are sliced on the main Z80 by
+//! crate::element_z80. The labels are the game's
 //! `labels.toml` (or `--labels`); the file is read here until wave 1's `gp
-//! labels` lands with its own reader. The original starts through gp-nes,
-//! and an arcade romset is refused in words.
+//! labels` lands with its own reader. The original starts through gp-nes.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -141,10 +142,25 @@ pub fn inputs(paths: &Paths, a: &InputsArgs) -> Result<Value> {
         .with_context(|| format!("no clip {} in {}'s corpus", a.clip, game.display()))?;
     let (log, start) = clip.log()?;
     let rom = crate::clip_score::rom_of(paths, game, a.rom.as_deref())?;
-    crate::original::nes_only(
-        crate::original::Platform::of_file(&rom),
-        "an element's inputs (`gp element inputs`)",
-    )?;
+    if crate::original::Platform::of_file(&rom) == crate::original::Platform::Arcade {
+        let (byte, frame) = crate::element_z80::check_args(a.byte.as_deref(), a.frame)?;
+        let (names, _, missing) = names_for(game, a.labels.as_deref());
+        let addr = names
+            .resolve(&byte)
+            .with_context(|| format!("no label or address {byte}"))?;
+        let set = gp_arcade::Romset::from_zip(&rom)?;
+        let bytes = crate::element_z80::inputs(&set, &log.frames, start, frame, &[addr], &names)?;
+        return Ok(json!({
+            "schema": INPUTS_SCHEMA,
+            "platform": "arcade",
+            "clip": clip.recipe.id,
+            "clip_name": clip.recipe.name,
+            "frame": frame,
+            "original_frame": start as u64 + frame,
+            "labels_missing": missing,
+            "bytes": bytes,
+        }));
+    }
     let model_dir = a.model.clone().unwrap_or_else(|| game.clone());
     let mfile = model_dir.join(gp_interp::mapping::MAPPING_FILE);
     let mapping = Mapping::parse(
@@ -614,7 +630,7 @@ impl Names {
         }
     }
 
-    fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             routines: Vec::new(),
             ram: Vec::new(),
@@ -1171,6 +1187,9 @@ mod labelfile {
 
 /// The output as text: per byte, the routine, the table, the sentence.
 pub fn text_of(v: &Value) -> String {
+    if v["platform"] == "arcade" {
+        return crate::element_z80::text(v);
+    }
     let mut out = format!(
         "{} ({}), frame {} (the original's {}){}{}",
         v["clip"].as_str().unwrap_or(""),

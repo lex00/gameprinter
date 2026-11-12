@@ -27,13 +27,15 @@ pub mod truth;
 
 use serde::Serialize;
 
-/// Internal RAM, the bytes the tracker searches.
+/// The NES's internal RAM, the bytes the tracker searches by default
+/// ([`Options::ram`] sets another board's).
 pub const RAM: usize = 2048;
 
 /// One frame as the tracker reads it.
 pub struct Frame<'a> {
     pub frame: u64,
-    /// Internal RAM, 2048 bytes.
+    /// The RAM searched, [`Options::ram`] bytes (the NES's 2048 of
+    /// internal RAM, an arcade board's work RAM).
     pub ram: &'a [u8],
     /// The sprite table drawn for this frame's state, 256 bytes. Empty when
     /// `sprites` gives the sprites instead.
@@ -96,6 +98,9 @@ pub struct Options {
     pub max_gap: u64,
     /// Frames a track needs before it's bound to RAM.
     pub min_frames: usize,
+    /// How many bytes of each frame's RAM to search: [`RAM`] for the NES,
+    /// an arcade board's work RAM for it (Tapper's is 2048 too, at E000).
+    pub ram: usize,
 }
 
 impl Default for Options {
@@ -104,6 +109,7 @@ impl Default for Options {
             exclude: Vec::new(),
             max_gap: 4,
             min_frames: 16,
+            ram: RAM,
         }
     }
 }
@@ -128,6 +134,44 @@ pub struct Report {
     pub groups: Vec<slots::Group>,
     pub clock: Option<slots::Clock>,
     pub kinds: Vec<motion::Kind>,
+}
+
+impl Report {
+    /// Moves every RAM address it names by `base`: the tracker counts from
+    /// the start of the RAM it searched, which is 0 on the NES and, say,
+    /// 0xE000 for Tapper's work RAM.
+    pub fn rebase(&mut self, base: u16) {
+        let field = |f: &mut slots::Field| f.ram = f.ram.wrapping_add(base);
+        if let Some(p) = &mut self.player {
+            field(&mut p.x);
+            for f in [&mut p.page, &mut p.y].into_iter().flatten() {
+                field(f);
+            }
+        }
+        for g in &mut self.groups {
+            field(&mut g.x);
+            for f in [&mut g.x_page, &mut g.y, &mut g.active]
+                .into_iter()
+                .flatten()
+            {
+                field(f);
+            }
+            if let Some(id) = &mut g.id {
+                id.ram = id.ram.wrapping_add(base);
+            }
+        }
+        if let Some(c) = &mut self.clock {
+            c.ram = c.ram.wrapping_add(base);
+        }
+        for t in &mut self.tracks {
+            for b in [&mut t.x, &mut t.y].into_iter().flatten() {
+                b.ram = b.ram.wrapping_add(base);
+                for tie in &mut b.ties {
+                    *tie = tie.wrapping_add(base);
+                }
+            }
+        }
+    }
 }
 
 /// One tracked object.

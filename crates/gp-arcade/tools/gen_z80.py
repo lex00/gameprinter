@@ -612,7 +612,7 @@ def call(e, ctx, value):
     if name in ("opcode_read", "arg_read"):
         return ("(bus.fetch(self.pc) as i64)", "int")
     if name == "debugger_instruction_hook":
-        return ("bus.instruction(self.pc, self.af, self.bc, self.de, self.hl)", "void")
+        return ("bus.instruction(self)", "void")
     if name == "irq_ack":
         return ("(bus.irq_ack(&mut self.icount) as i64)", "int")
     if name == "daisy_call_reti_device":

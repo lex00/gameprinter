@@ -21,8 +21,11 @@
 //! the person left the game there. The original runs through
 //! `OriginalRuntime`, and the player's place is read from the game's state
 //! mapping (`entities.player[0].x` and `.y` and the RAM they name), not a
-//! ROM dataset. An arcade game is refused: its romset has no state mapping
-//! yet, so there is no player's place to read.
+//! ROM dataset. On an arcade game (port wave 6) the model picks among the
+//! board's chords instead ([`ARCADE_CHORDS`], gp-explore's arcade palette:
+//! the stick, the tap, a coin and Start), the player's place again from
+//! the game's mapping; the jump measures are a platformer's, so an arcade
+//! demo plays its `--frames` and makes its clip without counting jumps.
 
 use std::fs;
 use std::io::Write as _;
@@ -86,6 +89,40 @@ const CHORDS: &[(&str, &str, u8)] = &[
     ("run", "hold Right and B: run right", 0x82),
     ("wait", "hold nothing", 0x00),
     ("left", "hold Left only: walk left", 0x40),
+];
+
+/// The arcade board's chords a decision can hold, by name, as gp-explore's
+/// arcade palette has them (coin 0x01, start 0x02, right 0x04, left 0x08,
+/// down 0x10, up 0x20, tap 0x40).
+const ARCADE_CHORDS: &[(&str, &str, u8)] = &[
+    (
+        "up",
+        "push the stick up: move up a bar",
+        gp_explore::arcade::UP,
+    ),
+    (
+        "down",
+        "push the stick down: move down a bar",
+        gp_explore::arcade::DOWN,
+    ),
+    (
+        "left",
+        "push the stick left: walk left along the bar",
+        gp_explore::arcade::LEFT,
+    ),
+    (
+        "right",
+        "push the stick right: walk right along the bar",
+        gp_explore::arcade::RIGHT,
+    ),
+    (
+        "tap",
+        "hold the tap: pour; let go to send the drink",
+        gp_explore::arcade::TAP,
+    ),
+    ("wait", "hold nothing", 0),
+    ("coin", "drop a coin", gp_explore::arcade::COIN),
+    ("start", "press Start 1", gp_explore::arcade::START),
 ];
 
 /// POSTs JSON to `url` (`http://HOST:PORT/PATH`) on this machine and reads
@@ -178,7 +215,7 @@ fn pad(p: u8) -> InputFrame {
     }
 }
 
-/// The game's folder in the games checkout and its ROM, NES only.
+/// The game's folder in the games checkout and its ROM.
 fn game_and_rom(
     paths: &Paths,
     game: &str,
@@ -188,11 +225,6 @@ fn game_and_rom(
         .context("no games checkout: pass --games or set GP_GAMES_DIR")?;
     let dir = games.join(game);
     let rom = crate::clip_score::rom_of(paths, &dir, None)?;
-    if Platform::of_file(&rom) == Platform::Arcade {
-        bail!(
-            "a demo reads the player's place from the game's state mapping, and {game} is an arcade game with no mapping yet: there is nothing to tell the model where the player is"
-        );
-    }
     Ok((dir, rom))
 }
 
@@ -208,7 +240,27 @@ fn start_of(paths: &Paths, s: &Session, n: u64) -> Result<(String, InputLog, usi
 pub(crate) fn demo(paths: &Paths, a: &Demo) -> Result<Outcome> {
     let session = Session::open(paths, a.game, a.mechanic)?;
     let (dir, rom) = game_and_rom(paths, a.game, a.games)?;
-    let (xb, yb) = player_bytes(&dir)?;
+    let arcade = Platform::of_file(&rom) == Platform::Arcade;
+    let chords = if arcade { ARCADE_CHORDS } else { CHORDS };
+    // The log a clip is kept in: the board's columns on an arcade game.
+    let new_log = || -> Result<InputLog> {
+        Ok(if arcade {
+            let set = gp_arcade::Romset::from_zip(&rom)?;
+            InputLog::new_arcade(set.name, "CSRLDUT")
+        } else {
+            InputLog::new(1)
+        })
+    };
+    let (xb, yb) = player_bytes(&dir).map_err(|e| {
+        if arcade {
+            anyhow::anyhow!(
+                "{} is an arcade game whose state mapping doesn't name the player yet, and a demo reads the player's place from it: {e:#}",
+                a.game
+            )
+        } else {
+            e
+        }
+    })?;
     let from = match a.from {
         Some(n) => n,
         None => session
@@ -241,7 +293,7 @@ pub(crate) fn demo(paths: &Paths, a: &Demo) -> Result<Outcome> {
     // What the page plays as it happens: the start, each decision with the
     // presses it held, then the clip.
     let live_path = session.dir.join("live.ndjson");
-    let mut head = InputLog::new(1);
+    let mut head = new_log()?;
     head.frames = inputs.clone();
     fs::write(
         &live_path,
@@ -252,7 +304,7 @@ pub(crate) fn demo(paths: &Paths, a: &Demo) -> Result<Outcome> {
         writeln!(f, "{v}")?;
         Ok(())
     };
-    let criteria: serde_json::Map<String, Value> = CHORDS
+    let criteria: serde_json::Map<String, Value> = chords
         .iter()
         .map(|(n, d, _)| ((*n).to_owned(), json!(d)))
         .collect();
@@ -306,7 +358,9 @@ pub(crate) fn demo(paths: &Paths, a: &Demo) -> Result<Outcome> {
         let moving = a.steps.get(step_i).and_then(|st| pace_of(st)).is_some();
         let offered: serde_json::Map<String, Value> = criteria
             .iter()
-            .filter(|(k, _)| !moving || CHORDS.iter().any(|c| c.0 == k.as_str() && c.2 & 0x01 == 0))
+            .filter(|(k, _)| {
+                arcade || !moving || chords.iter().any(|c| c.0 == k.as_str() && c.2 & 0x01 == 0)
+            })
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         let ask = json!({
@@ -324,13 +378,14 @@ pub(crate) fn demo(paths: &Paths, a: &Demo) -> Result<Outcome> {
             .as_str()
             .unwrap_or("wait")
             .to_owned();
-        let held = CHORDS.iter().find(|c| c.0 == pick).map_or(0, |c| c.2);
+        let held = chords.iter().find(|c| c.0 == pick).map_or(0, |c| c.2);
         decisions.push(json!({"frame": played, "state": ask["state"], "choice": pick, "probabilities": answer["answers"]["buttons"]["probabilities"]}));
         // A jump starts on a new press of A: holding A on into a standing
         // decision jumps no more, so A is let go for its first frame, as a
         // thumb would; a tap holds A for one frame only.
         let prev = inputs.last().map_or(0, |f| f.pads[0]);
-        let repress = held & 0x01 != 0 && prev & 0x01 != 0 && air.is_none();
+        // (The NES's A; on the arcade board bit 0 is the coin, held as is.)
+        let repress = !arcade && held & 0x01 != 0 && prev & 0x01 != 0 && air.is_none();
         let first = inputs.len();
         let x_before = match xb {
             Some(b) => Some(ram(&o, b)?),
@@ -352,7 +407,7 @@ pub(crate) fn demo(paths: &Paths, a: &Demo) -> Result<Outcome> {
                     xs.pop_front();
                 }
             }
-            if air.is_none() && still >= 3 && y < y_prev {
+            if !arcade && air.is_none() && still >= 3 && y < y_prev {
                 let takeoff = match (xs.front(), xs.back()) {
                     (Some(a0), Some(a1)) if xs.len() > 1 => {
                         f64::from(a1.wrapping_sub(*a0) as i8) / (xs.len() - 1) as f64
@@ -414,7 +469,7 @@ pub(crate) fn demo(paths: &Paths, a: &Demo) -> Result<Outcome> {
         .iter()
         .map(|j| (j.takeoff * 100.0).round() / 100.0)
         .collect();
-    let mut log = InputLog::new(1);
+    let mut log = new_log()?;
     log.frames = inputs;
     let shown: Vec<String> = heights
         .iter()
@@ -557,6 +612,22 @@ pub(crate) fn judge(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The arcade chords are the palette's buttons, one name each, and
+    /// each holds what an arcade log's columns say (CSRLDUT from bit 0).
+    #[test]
+    fn the_arcade_chords_are_the_boards_buttons() {
+        let mut names: Vec<&str> = ARCADE_CHORDS.iter().map(|c| c.0).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), ARCADE_CHORDS.len());
+        let bits = |n: &str| ARCADE_CHORDS.iter().find(|c| c.0 == n).unwrap().2;
+        let c = gp_arcade::Controls::from_bits(u32::from(bits("tap")));
+        assert!(c.tap && !c.coin);
+        assert!(gp_arcade::Controls::from_bits(u32::from(bits("coin"))).coin);
+        assert!(gp_arcade::Controls::from_bits(u32::from(bits("up"))).up);
+        assert!(gp_arcade::Controls::from_bits(u32::from(bits("start"))).start);
+    }
 
     #[test]
     fn a_step_names_its_pace() {

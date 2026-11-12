@@ -71,7 +71,9 @@ pub struct Mapping {
     /// Feature `platform`: the original's machine, `nes` (the default) or
     /// `arcade`. An arcade mapping's `ignore` may name any of the main
     /// CPU's addresses, and the NES's own parts (`nametable`, `oam`,
-    /// `oam_tile`, `read_at`, `[[draws]]`) are refused in it.
+    /// `oam_tile`, `read_at`) are refused in it. Its `[[draws]]` name main
+    /// Z80 sites (port wave 6): a site that is a call draws the value the
+    /// routine returns in A, any other the byte it reads.
     #[serde(default)]
     pub platform: Option<String>,
     #[serde(default)]
@@ -810,9 +812,6 @@ impl Mapping {
         };
         if self.read_at.is_some() {
             return refuse("`read_at`");
-        }
-        if !self.draws.is_empty() {
-            return refuse("`[[draws]]`, a random draw site in the 6502's code,");
         }
         fn of_slots(s: &Slots) -> Vec<&Field> {
             let mut v: Vec<&Field> = s.fields.iter().chain(&s.rest).collect();

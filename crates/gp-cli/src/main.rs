@@ -4,6 +4,7 @@
 
 mod affected;
 mod agent_cmd;
+mod arcade_rec;
 mod assets;
 mod attest;
 mod behave;
@@ -16,6 +17,7 @@ mod clip_screen;
 mod clip_session;
 mod clipset;
 mod code;
+mod code_z80;
 mod corpus_import;
 mod corpus_score;
 mod coverage;
@@ -25,12 +27,15 @@ mod dataset_tables;
 mod derive;
 mod diagnose;
 mod draws_find;
+mod draws_find_z80;
 mod element;
+mod element_z80;
 mod explore;
 mod from_trace;
 mod game;
 mod game_new;
 mod gaps;
+mod gaps_arcade;
 mod gate;
 mod gate_append;
 mod gate_copy;
@@ -41,6 +46,7 @@ mod interp;
 mod interp_args;
 mod interp_draws;
 mod labels;
+mod labels_propose;
 mod leads;
 mod lockstep;
 mod mechanic;
@@ -86,6 +92,7 @@ mod served;
 mod slots;
 mod solve;
 mod sound;
+mod sound_ay;
 mod sprites;
 mod static_grade;
 mod tape;
@@ -787,6 +794,16 @@ enum GameCmd {
         #[arg(long)]
         update_lock: bool,
     },
+    /// Run a game's hook crate tests as `gp game build` builds it: in a
+    /// copy of the kit's tree under $GP_HOME/work/module-build, in the
+    /// sandbox, offline, with the package's lock, for this machine. Nothing
+    /// is written in the package folder (no ext/Cargo.lock, no target).
+    /// Exits 1 when a test fails, with cargo's last lines.
+    Test {
+        dir: PathBuf,
+        #[arg(long)]
+        kit: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1151,6 +1168,9 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                     update_lock,
                 },
         } => module::build(dir, kit, out, *update_lock),
+        Cmd::Game {
+            cmd: GameCmd::Test { dir, kit },
+        } => module::test_hooks(dir, kit),
         Cmd::Roms { cmd } => roms_cmd::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Labels { cmd } => labels::run(cmd),
         Cmd::Sealed { cmd } => sealed::run(cmd, &gp_evidence::Paths::from_env()?),

@@ -275,6 +275,9 @@ impl Known {
 #[derive(Debug, Clone, Default)]
 pub struct Run {
     pub frames: Vec<FrameFacts>,
+    /// Where the RAM the facts index by `addr & 0x7FF` starts: 0 for the
+    /// NES, 0xE000 for Tapper's work RAM. Reports name addresses from it.
+    pub ram_base: u16,
     /// Model entity names, by [`Ent::kind`].
     pub kinds: Vec<String>,
     /// Counter names, by [`FrameFacts::counters`].

@@ -227,12 +227,161 @@ pub(crate) fn record_draws(
     if mapping.draws.is_empty() {
         bail!("the state mapping names no `[[draws]]` sites");
     }
-    crate::original::nes_only(
-        crate::original::Platform::of_file(rom),
-        "a random draw (a mapping's `[[draws]]`)",
-    )?;
+    if crate::original::Platform::of_file(rom) == crate::original::Platform::Arcade {
+        let set = gp_arcade::Romset::from_zip(rom)?;
+        return record_draws_arcade(gp_arcade::Tapper::power_on(&set), mapping, inputs, from);
+    }
     let nes = gp_nes::Nes::power_on(rom, PowerOn::default()).map_err(anyhow::Error::msg)?;
     record_draws_on(nes, mapping, inputs, from)
+}
+
+/// [`record_draws`] from a start the cache kept, on either platform.
+pub(crate) fn record_draws_saved(
+    rom: &[u8],
+    saved: &crate::clip::cache::Saved,
+    mapping: &Mapping,
+    inputs: &[gp_evidence::input_log::InputFrame],
+    from: u64,
+) -> Result<gp_sim::DrawScript> {
+    if crate::original::Platform::of_file(rom) == crate::original::Platform::Arcade {
+        let set = gp_arcade::Romset::from_zip(rom)?;
+        let mut t = gp_arcade::Tapper::power_on(&set);
+        t.restore(&saved.snap).map_err(anyhow::Error::msg)?;
+        return record_draws_arcade(t, mapping, inputs, from);
+    }
+    record_draws_on(saved.nes(rom, PowerOn::default())?, mapping, inputs, from)
+}
+
+/// The random draws of an arcade original (port wave 6), from gp-arcade's
+/// instruction trace and access log on the main Z80. A Z80 game's random
+/// routine returns its number in A (Tapper's `call $5fac`), so a site can
+/// name either the call (what `gp interp draws --find` proposes) or the
+/// instruction after it (where A holds the draw): either way the draw is A
+/// when control comes back from the routine, which may be a frame later.
+/// Any other site draws the first byte its instruction reads, as the NES
+/// path takes its operand's byte (the mapping's `ram` when it reads none).
+/// A draw is in the frame it completes in. Frames are counted on from the
+/// machine's own count.
+pub(crate) fn record_draws_arcade(
+    mut t: gp_arcade::Tapper,
+    mapping: &Mapping,
+    inputs: &[gp_evidence::input_log::InputFrame],
+    from: u64,
+) -> Result<gp_sim::DrawScript> {
+    use gp_arcade::dasm::{self, Flow};
+    use gp_arcade::mcr::AccessKind;
+    if mapping.draws.is_empty() {
+        bail!("the state mapping names no `[[draws]]` sites");
+    }
+    let first = t.frame();
+    let mut script = gp_sim::DrawScript {
+        soft: mapping
+            .draws
+            .iter()
+            .filter(|d| d.soft)
+            .map(|d| d.site.clone())
+            .collect(),
+        ..gp_sim::DrawScript::default()
+    };
+    // Calls waiting for their routine to return: site, return address, SP.
+    let mut pending: Vec<(String, u16, u16)> = Vec::new();
+    // Sites just after a call: the call's address.
+    let after_call: std::collections::BTreeMap<u16, u16> = mapping
+        .draws
+        .iter()
+        .filter_map(|d| {
+            let decode = |at: u16| {
+                let bytes: Vec<u8> = (0..4).map(|k| t.peek(at.wrapping_add(k))).collect();
+                dasm::decode(&bytes, at)
+            };
+            // A site that is itself a call draws by the call; otherwise a
+            // `call nn` just before it makes it the place the number lands.
+            let calls = |i: &dasm::Insn| matches!(i.flow, Flow::Call(_) | Flow::CallIf(_));
+            let at = d.pc.wrapping_sub(3);
+            let before = decode(at);
+            (!calls(&decode(d.pc)) && before.len == 3 && calls(&before)).then_some((d.pc, at))
+        })
+        .collect();
+    // The last main-CPU instruction run, across frames.
+    let mut prev_pc: Option<u16> = None;
+    for (i, input) in inputs.iter().enumerate() {
+        let frame = first + i as u64 + 1;
+        let bits = input.buttons_word();
+        if bits > 0xff || input.reset {
+            bail!("an arcade input frame holds bits 0 to 7 and no reset; this one holds {bits:#x}");
+        }
+        let c = gp_arcade::Controls::from_bits(bits);
+        if frame <= from {
+            t.step(c);
+            continue;
+        }
+        t.set_trace(true);
+        t.set_accesses(true);
+        t.step(c);
+        let mut trace: Vec<_> = t.take_trace().into_iter().filter(|e| e.cpu == 0).collect();
+        trace.sort_by_key(|e| e.time);
+        let acc: Vec<_> = t
+            .take_accesses()
+            .into_iter()
+            .filter(|a| a.cpu == 0 && a.kind == AccessKind::Read)
+            .collect();
+        t.set_trace(false);
+        t.set_accesses(false);
+        let mut j = 0;
+        for (n, e) in trace.iter().enumerate() {
+            let end = trace.get(n + 1).map(|x| x.time);
+            let from_j = j;
+            while j < acc.len() && end.is_none_or(|end| acc[j].time < end) {
+                j += 1;
+            }
+            if e.interrupt.is_some() {
+                continue;
+            }
+            let came_from = prev_pc.replace(e.pc);
+            if let Some(k) = pending.iter().position(|p| p.1 == e.pc && p.2 == e.sp) {
+                let (site, _, _) = pending.remove(k);
+                script.draws.push(gp_sim::draws::Draw {
+                    frame,
+                    site,
+                    value: (e.af >> 8) as u8,
+                });
+            }
+            let Some(d) = mapping.draws.iter().find(|d| d.pc == e.pc) else {
+                continue;
+            };
+            if let Some(&call) = after_call.get(&e.pc) {
+                // Back from the routine, not a conditional call that fell
+                // through without calling.
+                if came_from != Some(call) {
+                    script.draws.push(gp_sim::draws::Draw {
+                        frame,
+                        site: d.site.clone(),
+                        value: (e.af >> 8) as u8,
+                    });
+                }
+                continue;
+            }
+            let insn = dasm::decode(&e.bytes, e.pc);
+            match insn.flow {
+                Flow::Call(_) | Flow::CallIf(_) | Flow::Rst(_) => {
+                    let back = e.pc.wrapping_add(u16::from(insn.len));
+                    // A call not taken comes straight back with SP as is.
+                    pending.push((d.site.clone(), back, e.sp));
+                }
+                _ => {
+                    let value = acc[from_j..j]
+                        .first()
+                        .map_or_else(|| t.peek(d.ram), |a| a.value);
+                    script.draws.push(gp_sim::draws::Draw {
+                        frame,
+                        site: d.site.clone(),
+                        value,
+                    });
+                }
+            }
+        }
+    }
+    Ok(script)
 }
 
 /// [`record_draws`] on a console already running: its frames are counted
@@ -651,5 +800,71 @@ mod arcade_tests {
         eprintln!("{}", lines.join("\n"));
         assert!(ls.original_frames > 0, "{lines:?}");
         assert!(!ls.frames.is_empty(), "{lines:?}");
+    }
+
+    /// A made-up generator routine at 0010 returns its number in A; the
+    /// draw site is its call at 0003. Each draw is A at 0006, where the
+    /// call comes back, and a site that reads memory draws the byte read.
+    #[test]
+    fn arcade_draws_are_what_the_routine_returns() {
+        let main: &[u8] = &[
+            // 0000: ld sp,e7f0 ; call 0010 ; and 01 ; jr z,+3 ; ld (e010),a ; jr 0003
+            0x31, 0xf0, 0xe7, 0xcd, 0x10, 0x00, 0xe6, 0x01, 0x28, 0x03, 0x32, 0x10, 0xe0, 0x18,
+            0xf4, 0, //
+            // 0010: ld a,(e002) ; rlca ; jr nc,+2 ; xor 1c ; ld c,a ; ld a,r ; xor c
+            0x3a, 0x02, 0xe0, 0x07, 0x30, 0x02, 0xee, 0x1c, 0x4f, 0xed, 0x5f, 0xa9,
+            // 001c: ld (e002),a ; ret
+            0x32, 0x02, 0xe0, 0xc9,
+        ];
+        let set = gp_arcade::testrom::romset(main, &[0x18, 0xfe]);
+        let mapping = gp_interp::mapping::Mapping::parse(
+            "schema = 1\nmodel = \"m\"\nsource = \"s\"\nalign = \"polled\"\n\n[[field]]\npath = \"entities.hero[0].x\"\nram = [0xE010]\n\n[[draws]]\nsite = \"pick\"\npc = 0x0003\nram = 0xE002\n\n[[draws]]\nsite = \"peek\"\npc = 0x0010\nram = 0xE002\n\n[[draws]]\nsite = \"back\"\npc = 0x0006\nram = 0xE002\n",
+        )
+        .unwrap();
+        let inputs = vec![gp_evidence::input_log::InputFrame::default(); 3];
+        let script = crate::lockstep::record_draws_arcade(
+            gp_arcade::Tapper::power_on(&set),
+            &mapping,
+            &inputs,
+            1,
+        )
+        .unwrap();
+        // What A was at 0006 and what 0010 read, from the trace itself.
+        let mut t = gp_arcade::Tapper::power_on(&set);
+        t.step(gp_arcade::Controls::default());
+        let mut want = Vec::new();
+        // A call made before the first frame watched isn't a draw of it.
+        let mut called = false;
+        for f in 2..=3 {
+            t.set_trace(true);
+            t.step(gp_arcade::Controls::default());
+            let mut tr: Vec<_> = t.take_trace().into_iter().filter(|e| e.cpu == 0).collect();
+            tr.sort_by_key(|e| e.time);
+            for e in &tr {
+                if e.pc == 0x0003 {
+                    called = true;
+                }
+                if e.pc == 0x0006 && called {
+                    want.push((f, "pick".to_owned(), (e.af >> 8) as u8));
+                }
+                if e.pc == 0x0006 {
+                    // The site after the call draws on every return.
+                    want.push((f, "back".to_owned(), (e.af >> 8) as u8));
+                }
+                if e.pc == 0x0013 {
+                    // After `ld a,(e002)` at 0010, A is the byte it read.
+                    want.push((f, "peek".to_owned(), (e.af >> 8) as u8));
+                }
+            }
+        }
+        let mut have: Vec<_> = script
+            .draws
+            .iter()
+            .map(|d| (d.frame, d.site.clone(), d.value))
+            .collect();
+        have.sort();
+        want.sort();
+        assert!(have.len() > 100, "{}", have.len());
+        assert_eq!(have, want);
     }
 }

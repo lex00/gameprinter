@@ -11,6 +11,8 @@ gp game build GAME_DIR --kit KIT -o module.wasm
 
 The kit holds the tool's source for those crates and the crates they need. `gp game build` copies the kit and the package into `$GP_HOME/work/module-build/NAME` and runs cargo in a sandbox: it reads that folder, the toolchain and the system's own tools, writes only that folder, and has no network. On macOS that's `sandbox-exec`, on Linux `bwrap`. With neither, it won't build.
 
+`gp game test GAME_DIR --kit KIT` runs the hook crate's own tests the same way: the kit and the package copied into `$GP_HOME/work/module-build/NAME-test`, cargo in the sandbox, offline, with the package's `Cargo.lock`, built for this machine instead of the browser. Nothing is written in the package folder, so no `ext/Cargo.lock` or `ext/target` is left behind as a `cargo test` in `ext/` would. It exits 1 when a test fails, with cargo's last lines. The game gate runs the same thing for a patch that changes hook code. On Tapper's package (games branch tapper-2): "ext: 3 tests pass" in under 5 seconds.
+
 The package ships a `Cargo.lock` at its top, made once with `--update-lock`. A hook crate may depend only on gp-sim and gp-cycles and may have no build script, proc macro, or target-specific dependency.
 
 The same kit, package and lock give the same bytes on any machine. `games`' CI builds the module on this Mac and on a Linux machine and fails when the hashes differ. To get there, a small wrapper in front of rustc names each crate by its name and version and remaps build paths, because cargo otherwise mixes the host and the path into each crate's identity.

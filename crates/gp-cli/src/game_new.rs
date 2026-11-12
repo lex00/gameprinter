@@ -68,7 +68,14 @@ const IDLE_FRAMES: usize = 3600;
 /// entries, and a line saying what was found.
 fn idle_draws(bytes: &[u8]) -> (Option<String>, usize, String) {
     let idle = vec![gp_evidence::input_log::InputFrame::default(); IDLE_FRAMES];
-    let draws = match crate::draws_find::find(bytes, &idle, 0) {
+    let found = if gp_arcade::romset::looks_like_zip(bytes) {
+        gp_arcade::Romset::from_zip(bytes)
+            .map_err(anyhow::Error::from)
+            .and_then(|set| crate::draws_find_z80::find(&set, &idle, 0))
+    } else {
+        crate::draws_find::find(bytes, &idle, 0)
+    };
+    let draws = match found {
         Ok(f) if f.proposed().next().is_some() => Some(crate::draws_find::proposal(&f, &[])),
         Ok(_) => None,
         Err(e) => return (None, 0, format!("the idle run failed: {e}")),
@@ -423,6 +430,11 @@ fn arcade_files(
     let lifted: BTreeMap<String, Vec<u8>> = lifted.into_iter().map(|f| (f.name, f.bytes)).collect();
     let lifted_sha = crate::template::lifted_digest(&lifted);
     let map_sha = sha256_hex(map_text.as_bytes());
+    let (draws, n_draws, draws_line) = if a.draws {
+        idle_draws(&rom.bytes)
+    } else {
+        (None, 0, "not searched (--no-draws)".to_owned())
+    };
     let files: Vec<(String, String)> = vec![
         (
             "package.toml".into(),
@@ -482,7 +494,7 @@ fn arcade_files(
         ),
         (
             "mapping.toml".into(),
-            mapping_toml(name, source, Device::Arcade, None),
+            mapping_toml(name, source, Device::Arcade, Some(draws.as_deref())),
         ),
         ("fidelity.toml".into(), fidelity_toml(name, title)),
         ("observe.toml".into(), observe_toml(name, title)),
@@ -497,8 +509,8 @@ fn arcade_files(
         input: "the arcade controls (coin, start1, a joystick and button1)",
         assets: format!("{map_rel}: 1024 tiles (gfx1) and 256 sprites (gfx2) of the {system} set"),
         lifted: Some(lifted_sha),
-        draws: 0,
-        draws_line: "not searched: a draw is read from the NES's 6502 code, and gp has no arcade counterpart yet".into(),
+        draws: n_draws,
+        draws_line,
     };
     Ok((files, about))
 }

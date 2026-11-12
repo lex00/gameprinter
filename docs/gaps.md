@@ -1,6 +1,6 @@
 # Gaps
 
-Brought from game-printer's docs/gaps.md (port wave 4). In gameprinter a template is a game's package folder in the games checkout (`games/donkey-kong`) or a folder of `templates/` (`templates/mosshop`); `--dir` names where to look, by default `templates/` then `$GP_GAMES_DIR`. No metrics are recorded: gameprinter has no run recorder. The detectors read the NES's sprite table, nametables, APU and 6502 code, so an arcade game is refused in words until gp-arcade gives a sprite list, a tilemap and a memory log (wave 6). Links to pages gameprinter doesn't carry yet name game-printer's docs (`~/Documents/checkouts/lex00/game-printer/docs`).
+Brought from game-printer's docs/gaps.md (port wave 4). In gameprinter a template is a game's package folder in the games checkout (`games/donkey-kong`) or a folder of `templates/` (`templates/mosshop`); `--dir` names where to look, by default `templates/` then `$GP_GAMES_DIR`. No metrics are recorded: gameprinter has no run recorder. The detectors read the NES's sprite table, nametables, APU and 6502 code, and an arcade recording's facts come from gp-arcade (wave 6b, the last section). Links to pages gameprinter doesn't carry yet name game-printer's docs (`~/Documents/checkouts/lex00/game-printer/docs`).
 
 `gp gaps` finds what a recording of the original game shows that the model doesn't account for, and catalogs it. The question behind it comes from playing the regenerated game and finding things missing: which parts of the original change, react or make a sound with nothing in the model behind them. The command detects and catalogs only. Nothing it does changes a model; a later step turns its findings into model kinds and facts. The work belongs to Milestone 2, part of step 7 ([the roadmap](../ROADMAP.md)).
 
@@ -211,3 +211,10 @@ The model's player leaves the original's path within seconds of the same input, 
 - Sound effect names need a listing with constants or a pointer table the engine reads; a flag queue's effects with a value shared by other constants (Super Mario Bros.' `Square1SoundQueue 0x01`) stay unnamed.
 - Pairing an original sprite object with a mapped object is by distance. Enemies close together are one object, and the spread of a kind's differences shows it.
 - The RAM place's rank can't tell a renderer's buffers (a VRAM update buffer, a PPU register's copy) from game state when they change with background cells: both start changing with the event.
+
+
+## On an arcade recording
+
+`gp gaps changes|interactive|all` read an arcade recording too (port wave 6b, `crates/gp-cli/src/gaps_arcade.rs`): the frame facts come from gp-arcade. RAM is the main CPU's address space (a mapping's addresses read as they are; changes are the work RAM, E000-E7FF, named from there: gp-gaps' `Run::ram_base`); objects are the sprite list clustered as gp-track clusters it; background cells are video RAM's 32x30 tiles, with the routines that wrote them; sound is the AY-8910 writes; code is a replay on the main Z80 with the access log (routines entered, RAM writes with their instruction and routine, and the routines that write the sound board's latch as the engine). `gp gaps drawn` needs the model's sprite boxes from its lifted assets, which an arcade asset map (`mcr-tiles`, `mcr-sprites`) doesn't give the NES box reader yet, so it says so.
+
+On Tapper (a five-level play, frames 1000 to 2500, with games branch tapper-2's model, mapping and labels): 36 RAM groups, 39 sprite kinds, 9 background changes and 90 routines the model doesn't cite, in 5.5 s; the labels name what they cover (`level_ram`, `customer_records`) and the rest by address (`$E7Ex`, written by the frame interrupt's handler $00D8 and others); the background changes are one tile column redrawn by $05D5.

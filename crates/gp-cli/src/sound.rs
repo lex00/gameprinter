@@ -8,8 +8,10 @@
 //! is game content and goes under `$GP_HOME/work/sound/`, never the repo.
 //!
 //! These are the NES APU's: its register log format, channels and synth.
-//! An arcade board's sound chip (Tapper's AY-8910s) is refused in words;
-//! its register log is gp-arcade's to give (port wave 6). game-printer's
+//! An arcade recording (Tapper's two AY-8910s, port wave 6) is captured,
+//! held to its notes and compared through crate::sound_ay instead: an
+//! `ay.log` from the recording's `ay-write` events, and notes per
+//! channel. game-printer's
 //! `decode`, `render`, `export`, `import`, `banks` and `drivers` are not
 //! here yet.
 
@@ -205,8 +207,82 @@ fn model_names(t: &crate::gaps::Template) -> (Vec<String>, Vec<String>, Vec<Stri
     (events, states, levels)
 }
 
+/// `gp sound capture` of an arcade recording: its AY register log and
+/// notes (crate::sound_ay).
+fn capture_ay(a: &CaptureArgs, opened: &Opened, paths: &Paths) -> Result<Outcome> {
+    if a.template.is_some() {
+        bail!(
+            "--template binds songs to a model through gp gaps' NES sound requests; an arcade capture writes the AY log and its notes only"
+        );
+    }
+    let range = parse_frames(&a.frames, opened.manifest.frames)?;
+    let range = range.start.max(1)..range.end.min(opened.manifest.frames + 1);
+    if range.is_empty() {
+        bail!("--frames {} leaves no frame", a.frames);
+    }
+    let (events, from) =
+        match crate::arcade_rec::stored_events(&opened.store, &opened.manifest, range.clone())? {
+            Some(e) => (e, "event stream"),
+            None => {
+                let set = opened.romset(a.rom.as_deref(), paths)?;
+                (
+                    crate::arcade_rec::replayed_events(
+                        &opened.store,
+                        &opened.manifest,
+                        &set,
+                        range.clone(),
+                    )?,
+                    "replay",
+                )
+            }
+        };
+    let log = crate::sound_ay::AyLog::of_events(&events, range.start, range.end - 1);
+    let songs = crate::sound_ay::notes(&log);
+    let name = capture::slug(&a.name);
+    let dir = a.out.clone().unwrap_or_else(|| {
+        paths
+            .home
+            .join("work/sound")
+            .join(&opened.entry.id.to_hex()[..12])
+            .join(&name)
+    });
+    write(&dir.join("ay.log"), log.text().as_bytes())?;
+    write(
+        &dir.join("songs.json"),
+        serde_json::to_string_pretty(&songs)?.as_bytes(),
+    )?;
+    let writes: usize = log.frames.values().map(Vec::len).sum();
+    let notes: Vec<String> = songs["channels"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|c| {
+            format!(
+                "{} {}",
+                c["channel"].as_str().unwrap_or("?"),
+                c["notes"].as_array().map_or(0, Vec::len)
+            )
+        })
+        .collect();
+    Ok(Outcome::ok(
+        json!({"dir": dir, "from": from, "writes": writes, "frames": [range.start, range.end - 1], "songs": songs}),
+        format!(
+            "{} AY writes in frames {} to {} of {} (from the {from}); notes by channel: {}\nwritten to {}",
+            writes,
+            range.start,
+            range.end - 1,
+            opened.short(),
+            notes.join(", "),
+            dir.display()
+        ),
+    ))
+}
+
 fn capture_cmd(a: &CaptureArgs, paths: &Paths) -> Result<Outcome> {
     let opened = Opened::open(paths, &a.recording)?;
+    if opened.is_arcade() {
+        return capture_ay(a, &opened, paths);
+    }
     crate::track::nes_recording(&opened, "gp sound capture")?;
     let range = parse_frames(&a.frames, opened.manifest.frames)?;
     let range = range.start.max(1)..range.end.min(opened.manifest.frames + 1);
@@ -503,6 +579,10 @@ fn fidelity_of(
 }
 
 fn fidelity_cmd(dir: &Path) -> Result<Outcome> {
+    if dir.join("ay.log").is_file() {
+        let (text, v) = crate::sound_ay::fidelity(dir)?;
+        return Ok(Outcome::ok(v, text));
+    }
     let log = ApuLog::parse(&read(&dir.join("apu.log"))?).map_err(anyhow::Error::msg)?;
     let set = SongSet::parse(&read(&dir.join("songs.json"))?).map_err(anyhow::Error::msg)?;
     let cj: serde_json::Value = serde_json::from_str(&read(&dir.join("claims.json"))?)?;
@@ -530,6 +610,13 @@ fn fidelity_cmd(dir: &Path) -> Result<Outcome> {
 }
 
 fn compare_cmd(a: &CompareArgs) -> Result<Outcome> {
+    let first = read(&a.original)?;
+    if first.starts_with(crate::sound_ay::HEADER) {
+        let x = crate::sound_ay::AyLog::parse(&first)?;
+        let y = crate::sound_ay::AyLog::parse(&read(&a.model)?)?;
+        let (text, json, exit) = crate::sound_ay::compare(&x, &y, a.offset);
+        return Ok(Outcome { json, text, exit });
+    }
     let original = ApuLog::parse(&read(&a.original)?).map_err(anyhow::Error::msg)?;
     let model = ApuLog::parse(&read(&a.model)?).map_err(anyhow::Error::msg)?;
     let (first, frames) = gp_sound::compare::pair_logs(&original, &model, a.offset);

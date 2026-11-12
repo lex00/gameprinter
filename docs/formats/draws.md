@@ -1,6 +1,6 @@
 # Random draws script
 
-> Brought from game-printer with wave 3b of the port. `gp interp draws` (and `--find`) is in gameprinter; `gp clip score` and `gp corpus score` already play a mapping's draws when it sets `score_draws`, and `gp interp compare --draws` runs a lockstep with a script. `gp game new` proposes the sites an idle run of 3600 frames finds into a new NES game's mapping.toml (`--no-draws` leaves the search out). A draw is read from the 6502's code, so an arcade romset is refused in words until wave 6 gives gp-arcade a memory-access log.
+> Brought from game-printer with wave 3b of the port. `gp interp draws` (and `--find`) is in gameprinter; `gp clip score` and `gp corpus score` already play a mapping's draws when it sets `score_draws`, and `gp interp compare --draws` runs a lockstep with a script. `gp game new` proposes the sites an idle run of 3600 frames finds into a new NES game's mapping.toml (`--no-draws` leaves the search out). `--find` reads an arcade romset's main Z80 too, an arcade mapping's `[[draws]]` are recorded in the lockstep, and `gp game new` searches an arcade game's idle run as well (wave 6, below).
 
 
 A random draws script is the original's random draws on one input, in order: each time its code read a random byte where the model's hooks make a random choice. A rebuild given the script takes each draw from it in place of its own generator, so a lockstep clip makes the original's random choices, and everything after a choice (the object's pixels, the player's touches with it) is compared given the original's branch. Without a script a rebuild draws from its seeded generator, so free play is unchanged. The script is a run input: it isn't world state, in the canonical state or in its hash.
@@ -64,6 +64,20 @@ Each proposed site is named by its address (`draw_fc62`), or by the mapping's na
 
 The run decides recall: a site the input never reaches can't be found, so find with the longest runs at hand, across every stage the mapping covers.
 
+### On an arcade romset (Z80)
+
+`--find tapper.zip` runs the same two passes on gp-arcade's main Z80 (`crates/gp-cli/src/draws_find_z80.rs`), reading its instruction trace and its access log (each read and write with the instruction that made it) through the Z80 disassembler. The register is looked for in the work RAM (`e000-e7ff`): stepped by a shift in place (`rlc (hl)`) or by a store of A when A was last made by an exclusive or, an add, a subtract, a rotate or `ld a,r`. The value read is followed through every register (as 8-bit units), the flags and memory (by the addresses the log saw); a conditional jump, call or return on a flag it set (`djnz` on B), a memory operand whose address register it reached, or `jp (hl)` through it, is a draw. Block copies and searches that pass over the register (`ldir`, `cpir`) aren't reads. Two things are new for the Z80:
+
+- **The refresh register.** `ld a,r` reads R, which counts instructions run, and Z80 games mix it into their numbers. A byte whose stores feed back its own value mixed with R is a generator the game calls when it wants a number, not every frame, so it needs only many values over the frames it was stepped (at least 8 frames), not a step on half of them. A byte merely set from such a number doesn't feed back, and isn't one.
+- **A generator routine's return.** A Z80 generator returns its number in A. When a routine that wrote the register returns, its call is treated as a read: the caller's use of A is followed, and the call (`call $5fbd, the number it returns`) is the draw site.
+
+| Game, run | Register | Proposed |
+|---|---|---|
+| Tapper (`tapper`), 3600 frames of attract with no input | $E390, stored by $5FBD (`ld a,($e390)`, `rlca`, `xor $2b` on a carry, `ld c,a`, `ld a,r`, `xor c`, `ld ($e390),a`), on 69 of 3600 frames | `call $5fbd` at $5FAE, inside $5FAC (which brings the number below B by subtracting and halving): 84 reads on 68 frames, deciding table indexes at $59FD and $59FF and the loop at $5FB2. Also $CCE1 (`cp (hl)` in $CCAC, read once), for review |
+| Tapper, the five-level autoplay (`tapper-five-levels.input`, 10,933 frames) | The same, on 333 frames, 1 to 14 times a frame | The same call at $5FAE: 427 reads on 332 frames, indexing tables at $259D, $25AC, $25B8 and 8 more |
+
+So Tapper has one random generator, a shift register at $E390 mixed with R, and every number the game takes from it goes through $5FAC. Because R counts instructions, a model of Tapper's draws needs the number of instructions run, which only the original gives exactly: the draws should be taken from the original (`[[draws]]` with `score_draws`) rather than computed.
+
 ## Text form
 
 ```
@@ -103,3 +117,9 @@ Scoring with the original's draws holds what follows each choice; `gp interp odd
 4. With `--rom`, the original's draws over each clip from its start are put in the site's most common branches, and their counts are tested against the model's in that pool (chi-square on the 2 by k table): whether the two games choose with the same odds. Each clip runs as a resync lockstep with the original's draws: every desync at a site (the original drew where the rule draws nothing, or the reverse) fails the site.
 
 The report names each branch by the bits of the byte it reads: `byte & 0x88: 0x00 (64/256) | 0x08,0x80,0x88 (192/256)` is Donkey Kong's ladder choice, down 1 in 4. It exits 1 when a test fails.
+
+### Recording an arcade game's draws
+
+An arcade mapping (`platform = "arcade"`) takes `[[draws]]` like an NES one, and `gp clip score`, `gp corpus score`, the scenarios and `gp interp draws MODEL --rom ROM` record them from gp-arcade's trace and access log on the main Z80 (`record_draws_arcade` in crates/gp-cli/src/lockstep.rs). A Z80 game's random routine returns its number in A, so a site may name the call (`pc = 0x258A`, `call $5fac`, as `--find` proposes it) or the instruction just after it (`pc = 0x258D`); either way the draw is A when control comes back from the routine, which may be a frame later, and the draw is in that frame. A site after a `call nn` that wasn't taken (a conditional call falling through) draws nothing. Any other site draws the byte its instruction reads, as on the NES.
+
+On Tapper with the eleven sites of games branch tapper-2's mapping (each the instruction after a call of $5FAC) and the five-level autoplay: 427 draws (arrival_wait 131, attract_pick 35, bonus_shake 15, customer_wait_start 153, game_start 1, move_picture 8, pushed_drink 43, throw_wait 41), which is every one of the 427 numbers $5FAC took from $5FBD in that run by `--find`'s count. `--find` itself now follows a number up through a routine that passes it on in A, so it proposes the calls of $5FAC ($258A, $4F35) and lists the others that store their number for later ($09DE, $10C6, $1B6C, $213B, $4AFA) for review.

@@ -8,9 +8,9 @@
 //! for the scorecard.
 //!
 //! The facts are the NES's: OAM sprites, nametable cells, APU writes and
-//! 6502 code. A game whose package names an arcade platform is refused in
-//! words; it needs gp-arcade's sprite-list and tilemap adapter and its
-//! memory log (port wave 6).
+//! 6502 code; an arcade recording's are built from gp-arcade's sprite
+//! list, tilemap, AY writes and access log instead (crate::gaps_arcade,
+//! port wave 6b).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -113,6 +113,10 @@ pub(crate) fn run(cmd: &GapsCmd, paths: &Paths) -> Result<Outcome> {
         GapsCmd::Drawn(a) => (a, [false, false, true]),
         GapsCmd::All(a) => (a, [true, true, true]),
     };
+    Template::check_platform(
+        &Template::dir_of(args.dir.as_deref(), &args.template)?,
+        &Opened::open(paths, &args.recording)?,
+    )?;
     let t = Template::open(args.dir.as_deref(), &args.template)?;
     let built = build(args, &t, paths)?;
     let out_dir = args
@@ -267,21 +271,49 @@ pub(crate) struct Template {
 }
 
 impl Template {
-    /// `name` as a folder, else under `base`, else under `templates` and
-    /// the games checkout. A game whose package names an arcade platform is
-    /// refused in words.
-    pub fn open(base: Option<&Path>, name: &str) -> Result<Self> {
+    /// The folder `name` names ([`Template::open`]'s search).
+    pub fn dir_of(base: Option<&Path>, name: &str) -> Result<PathBuf> {
         let bases: Vec<PathBuf> = match base {
             Some(b) => vec![b.to_path_buf()],
             None => std::iter::once(PathBuf::from("templates"))
                 .chain(crate::roms_cmd::games_dir(None))
                 .collect(),
         };
-        let dir = std::iter::once(PathBuf::from(name))
+        std::iter::once(PathBuf::from(name))
             .chain(bases.iter().map(|b| b.join(name)))
             .find(|p| p.join("model.toml").is_file())
-            .with_context(|| format!("no template `{name}` with a model.toml"))?;
-        crate::track::nes_package(&dir, "gp gaps")?;
+            .with_context(|| format!("no template `{name}` with a model.toml"))
+    }
+
+    /// Refuses a recording of another machine than the game's, before the
+    /// model is read.
+    pub fn check_platform(dir: &Path, opened: &Opened) -> Result<()> {
+        let arcade_game = dir.join("package.toml").is_file()
+            && crate::package::Package::load(dir)?.platform()? == crate::roms::Platform::Arcade;
+        if arcade_game != opened.is_arcade() {
+            bail!(
+                "{} is {}, and {} is a recording of {}: gp gaps reads a game's own original",
+                dir.display(),
+                if arcade_game {
+                    "an arcade game"
+                } else {
+                    "an NES game"
+                },
+                opened.short(),
+                if opened.is_arcade() {
+                    "an arcade romset"
+                } else {
+                    "an NES ROM"
+                }
+            );
+        }
+        Ok(())
+    }
+
+    /// `name` as a folder, else under `base`, else under `templates` and
+    /// the games checkout.
+    pub fn open(base: Option<&Path>, name: &str) -> Result<Self> {
+        let dir = Self::dir_of(base, name)?;
         let id = std::fs::canonicalize(&dir)
             .unwrap_or_else(|_| dir.clone())
             .file_name()
@@ -395,7 +427,7 @@ pub(crate) fn read(f: &Field, ram: &[u8], slot: u16) -> Option<i64> {
     whole(&f.slot_value(slot, &bytes))
 }
 
-fn eval(c: &Condition, ram: &[u8]) -> bool {
+pub(crate) fn eval(c: &Condition, ram: &[u8]) -> bool {
     c.eval(&mut |s: &Selector| match s.segments.as_slice() {
         [seg] if seg.name == "ram" => match seg.index {
             Some(Index::At(n)) => Ok(i64::from(ram[(n as usize) & 0x7FF])),
@@ -439,7 +471,7 @@ fn read_tree(dir: &Path, out: &mut BTreeSet<String>) {
 
 /// What the model already accounts for: mapped RAM, and every name its
 /// files, mechanic records and hooks cite.
-fn known(t: &Template) -> Known {
+pub(crate) fn known(t: &Template) -> Known {
     let mut k = Known {
         oam_page: 2,
         ..Known::default()
@@ -596,7 +628,7 @@ fn labels_file(t: &Template) -> Option<PathBuf> {
 
 /// RAM and ROM labels: the labels file, and for routines a listing's
 /// symbols when the file has none.
-fn labels(
+pub(crate) fn labels(
     args: &GapsArgs,
     t: &Template,
     paths: &Paths,
@@ -905,6 +937,10 @@ pub(crate) fn vram_cell(addr: u16, mirroring: u8, tables: usize) -> Option<(u8, 
 
 pub(crate) fn build(args: &GapsArgs, t: &Template, paths: &Paths) -> Result<Built> {
     let opened = Opened::open(paths, &args.recording)?;
+    Template::check_platform(&t.dir, &opened)?;
+    if opened.is_arcade() {
+        return crate::gaps_arcade::build(args, t, paths, opened);
+    }
     crate::track::nes_recording(&opened, "gp gaps")?;
     let manifest = &opened.manifest;
     if manifest.trace.is_none() {
@@ -940,11 +976,10 @@ pub(crate) fn build(args: &GapsArgs, t: &Template, paths: &Paths) -> Result<Buil
             }
         }
     };
-    let prg_len = rom
-        .as_ref()
-        .map_or(0, |r| r.image.header.prg_rom_bytes as usize);
-    if let Some(r) = &rom {
-        let start = 16 + r.image.trainer_bytes as usize;
+    let image = rom.as_ref().and_then(|r| r.image.as_ref());
+    let prg_len = image.map_or(0, |i| i.header.prg_rom_bytes as usize);
+    if let (Some(r), Some(i)) = (&rom, image) {
+        let start = 16 + i.trainer_bytes as usize;
         run.prg = r.bytes[start..start + prg_len].to_vec();
     }
     let mut known = std::mem::take(&mut run.known);
@@ -1391,7 +1426,7 @@ pub(crate) fn build(args: &GapsArgs, t: &Template, paths: &Paths) -> Result<Buil
 }
 
 /// How many digits the model's HUD shows a counter with (0 for none).
-fn hud_digits(m: &gp_model::Model, name: &str) -> usize {
+pub(crate) fn hud_digits(m: &gp_model::Model, name: &str) -> usize {
     m.present
         .as_ref()
         .and_then(|p| p.hud.as_ref())
