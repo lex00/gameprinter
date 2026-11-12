@@ -257,14 +257,18 @@ pub(crate) fn percent_decode(s: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-/// Writes `response`, leaving out the body for HEAD.
+/// Writes `response`, leaving out the body for HEAD. Every page is
+/// cross-origin isolated (the two Cross-Origin headers, as the public page
+/// is): the playable rebuild runs a game's module in a Worker with a shared
+/// buffer, which a browser allows only then. Everything the pages load is
+/// their own server's.
 pub(crate) fn write_response(
     mut stream: &TcpStream,
     response: &Response,
     head_only: bool,
 ) -> std::io::Result<()> {
     let head = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Opener-Policy: same-origin\r\nCross-Origin-Embedder-Policy: require-corp\r\nConnection: close\r\n\r\n",
         response.status,
         reason(response.status),
         response.content_type,

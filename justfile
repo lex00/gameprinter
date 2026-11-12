@@ -140,7 +140,8 @@ mechanic-page: build mosshop
         fi
     done
     node scripts/web/check-mechanic.mjs --gp {{quote(gp)}} --rom {{quote(mosshop_rom)}} \
-        --wasm {{quote(target / "play-web" / "gp_play.wasm")}} --browser "$browser" ${arcade[@]+"${arcade[@]}"}
+        --wasm {{quote(target / "play-web" / "gp_play.wasm")}} --browser "$browser" ${arcade[@]+"${arcade[@]}"} \
+        --shots "$HOME/.game-printer/work/mechanic-page"
 
 _interp-mosshop:
     #!/usr/bin/env bash
@@ -148,6 +149,22 @@ _interp-mosshop:
     for f in baselines/mosshop/*.toml; do
         echo "$(basename "$f"): $({{quote(gp)}} interp compare templates/mosshop --rom {{quote(mosshop_rom)}} --baseline "$f" --assets {{quote(assets)}} | tail -1)"
     done
+
+# Laya, the open Jev-compatible decision model, served on 127.0.0.1:7720
+# over Jev's wire format for `gp mechanic demo` and `gp mechanic say --judge`
+# (docs/mechanic-page.md). Installs @receptron/laya under $GP_HOME/work/laya,
+# outside the repo, unless LAYA_DIR names an install already made (game-
+# printer's, ~/.game-printer/work/laya, say); its weights (about 1.7 GB)
+# download on first use to ~/.cache/receptron-laya.
+laya port="7720":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="${LAYA_DIR:-{{gp_home / "work" / "laya"}}}"
+    mkdir -p "$dir"
+    if [ ! -d "$dir/node_modules/@receptron/laya" ]; then
+        (cd "$dir" && { [ -f package.json ] || npm init -y >/dev/null; } && npm install --silent --no-audit --no-fund @receptron/laya)
+    fi
+    node scripts/laya/serve.mjs "$dir" {{port}}
 
 # The MAME oracle (docs/oracle-mame.md): MAME in its own pinned image, run on
 # an arcade romset with an input log, writing what each frame shows. An

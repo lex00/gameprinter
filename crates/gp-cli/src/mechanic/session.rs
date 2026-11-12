@@ -125,6 +125,17 @@ impl Session {
         })
     }
 
+    /// A store kept as a session for its clip numbering and its lock, at
+    /// `dir`, outside every game's sessions: the sealed runs' store
+    /// (`$GP_HOME/sealed/GAME/sealed-run`). It has no session.toml.
+    pub fn store(dir: PathBuf) -> Result<Session> {
+        fs::create_dir_all(dir.join("clips"))?;
+        Ok(Session {
+            dir,
+            lock: Mutex::new(()),
+        })
+    }
+
     /// The mechanic's name, the folder's.
     pub fn mechanic(&self) -> &str {
         self.dir.file_name().and_then(|n| n.to_str()).unwrap_or("")

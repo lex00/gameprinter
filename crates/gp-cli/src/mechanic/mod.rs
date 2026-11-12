@@ -27,19 +27,24 @@
 //! the MAME oracle's spelling, read by the same `InputLog`), and their
 //! starts are replayed on gp-arcade ([`paths::original_at`]).
 //!
-//! Ported from game-printer's mechanic.rs: the core loop only. The analysis
-//! commands (contacts, sweep, probe, leads, harvest, demo, compare, video),
-//! sealed runs, the corpus import and the rebuild review aren't here.
+//! Ported from game-printer's mechanic.rs: the core loop, the page's three
+//! tabs (the rebuild reviewed beside the original and played live,
+//! [`live`]), the store of sealed runs the page writes, and the decision
+//! model at the controller ([`demo`]). The analysis commands (contacts,
+//! sweep, probe, leads, harvest, compare, video), the sealed guard and the
+//! corpus import aren't here.
 
 use std::path::PathBuf;
 
-use anyhow::{Result, bail};
+use anyhow::{Context as _, Result, bail};
 use clap::Subcommand;
 use gp_evidence::Paths;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+mod demo;
 mod http;
+mod live;
 pub(crate) mod paths;
 pub(crate) mod review;
 mod server;
@@ -180,10 +185,68 @@ pub enum MechanicCmd {
         /// their starts, in step, as an overlay, side by side, or a diff.
         #[arg(long, requires = "show")]
         against: Option<u64>,
+        /// Ask the decision model too: the shown clip is replayed and its
+        /// jumps measured, and the model picks among the choices from
+        /// those numbers. Its pick shows beside the choices, to confirm or
+        /// dispute.
+        #[arg(long, requires = "show")]
+        judge: bool,
+        /// Draw the measurements over the shown clip as it plays (its
+        /// clips/NNN.measure.json, from `gp mechanic contacts`).
+        #[arg(long, requires = "show")]
+        measure: bool,
+        /// The decision server for `--judge` (`just laya` serves Laya here).
+        #[arg(long, default_value = "http://127.0.0.1:7720")]
+        decide: String,
+        /// The games checkout, for `--judge` (default $GP_GAMES_DIR).
+        #[arg(long)]
+        games: Option<PathBuf>,
         /// A fact worked out from the measurements ("71 px is 5 above the
-        /// standing jump's 66"), shown to the person under the words.
+        /// standing jump's 66"), shown to the person under the words and
+        /// given to the model.
         #[arg(long = "fact")]
         facts: Vec<String>,
+    },
+    /// Make a clip of the mechanic with a decision model at the controller:
+    /// from a clip's start in the session, every few frames the model gets
+    /// the player's state and the hint and picks the buttons to hold, until
+    /// the mechanic shows (for a jump, `--times` jumps up and back down) or
+    /// the frames run out. The page shows it as it plays. The clip goes
+    /// into the session, made by the model, with each decision's
+    /// probabilities beside it. NES games only: the player's place is read
+    /// from the game's state mapping.
+    Demo {
+        game: String,
+        mechanic: String,
+        /// What to show, in words the model reads.
+        #[arg(long)]
+        hint: String,
+        /// A Jev-compatible decision server (`just laya` serves Laya here).
+        #[arg(long, default_value = "http://127.0.0.1:7720")]
+        decide: String,
+        /// How many times the mechanic should show before the clip ends.
+        #[arg(long, default_value_t = 2)]
+        times: u32,
+        /// One step of the mechanic, in order ("a short hop", "a full-height
+        /// jump"): the model is told which step it is on, and each jump
+        /// done moves to the next. A step that starts "walk" or "run" is
+        /// done when the player moves across at that pace instead. With
+        /// steps, `--times` is the count of jump steps.
+        #[arg(long = "step")]
+        steps: Vec<String>,
+        /// The most frames the clip runs after its start.
+        #[arg(long, default_value_t = 900)]
+        frames: usize,
+        /// Frames each decision holds its buttons for.
+        #[arg(long, default_value_t = 8)]
+        every: usize,
+        /// The clip whose start the demo starts from (default the
+        /// session's newest).
+        #[arg(long)]
+        from: Option<u64>,
+        /// The games checkout (default $GP_GAMES_DIR).
+        #[arg(long)]
+        games: Option<PathBuf>,
     },
     /// The game's quest log, shown beside the game: each mechanic with its
     /// status (done, asking you, agent working, in line, next) and one plain
@@ -333,6 +396,10 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             choices,
             show,
             against,
+            judge,
+            measure,
+            decide,
+            games,
             facts,
         } => {
             if choices.len() == 1 || choices.len() > 4 {
@@ -344,10 +411,67 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                     bail!("no clip {c} in this session");
                 }
             }
-            let n = s.turn(json!({"by": "agent", "text": text, "choices": choices,
-                "show": show, "against": against, "facts": facts}))?;
-            Ok(Outcome::ok(json!({"turn": n}), format!("said (turn {n})")))
+            let mut turn = json!({"by": "agent", "text": text, "choices": choices,
+                "show": show, "against": against, "facts": facts});
+            if *measure {
+                turn["measure"] = json!(true);
+            }
+            let mut line = String::new();
+            if *judge {
+                if choices.is_empty() {
+                    bail!("--judge picks among choices: give them with --choice");
+                }
+                let clip = show.context("--judge needs --show")?;
+                let j = demo::judge(
+                    paths,
+                    &s,
+                    game,
+                    games.as_deref(),
+                    clip,
+                    text,
+                    choices,
+                    facts,
+                    decide,
+                )?;
+                line = format!(
+                    " (Laya picks {}, {:.0}% sure)",
+                    j["choice"].as_str().unwrap_or("?"),
+                    j["confidence"].as_f64().unwrap_or(0.0) * 100.0
+                );
+                turn["judge"] = j;
+            }
+            let n = s.turn(turn)?;
+            Ok(Outcome::ok(
+                json!({"turn": n}),
+                format!("said (turn {n}){line}"),
+            ))
         }
+        MechanicCmd::Demo {
+            game,
+            mechanic,
+            hint,
+            decide,
+            times,
+            steps,
+            frames,
+            every,
+            from,
+            games,
+        } => demo::demo(
+            paths,
+            &demo::Demo {
+                game,
+                mechanic,
+                hint,
+                decide,
+                times: *times,
+                steps,
+                frames: *frames,
+                every: (*every).max(1),
+                from: *from,
+                games: games.as_deref(),
+            },
+        ),
         MechanicCmd::Queue {
             game,
             mechanic,

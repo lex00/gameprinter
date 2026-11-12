@@ -21,6 +21,13 @@
 //! | `POST /api/clips` | Saves a clip: a path, a start and its own inputs, or a full log and a start |
 //! | `POST /api/talk` | The person's turn |
 //! | `POST /api/pick` | Opens another mechanic of the quest log |
+//! | `GET /api/clips/N/review.json`, `/api/clips/N/review/NAME.png` | A clip on the model beside the original ([`super::review`]) |
+//! | `GET /api/clips/N.rebuild.json` | The same review as REVIEW REBUILD reads it: the pictures' addresses with the entities, what differs and the draws |
+//! | `GET /api/clips/N.measure.json` | A clip's measurements, when `gp mechanic contacts` wrote them |
+//! | `POST /api/clips/stage` | Whether a clip about to be handed off spans a stage |
+//! | `GET /api/sealed`, `/api/sealed/ID.log` | The sealed runs, for the person alone; nothing is written |
+//! | `GET /api/rebuild/scores` | The scoring status, `$GP_HOME/work/refine/GAME/status.json`, sealed rows left out |
+//! | `GET /api/rebuild/status`, `/api/rebuild/profiles`, `POST /api/rebuild/build`, `/api/rebuild/start`, `GET /rebuild/*` | The rebuild played live ([`super::live`]) |
 
 use std::fs;
 use std::net::{TcpListener, TcpStream};
@@ -168,6 +175,19 @@ pub(crate) fn start(paths: &Paths, a: &Start) -> Result<Outcome> {
         ));
     }
     let server = Arc::new(server);
+    // The playable rebuild kept as the model stands: looked at every half
+    // minute, built again in the background when it is older.
+    {
+        let s = server.clone();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(30));
+                if let Some(rb) = &s.rebuild {
+                    super::live::refresh(&s.paths, &s.repo, &s.game, rb, &s.rom);
+                }
+            }
+        });
+    }
     let in_log = read_queue(&queue_file(paths, a.game)?)
         .iter()
         .any(|r| r["mechanic"] == json!(mechanic));
@@ -222,6 +242,8 @@ pub(crate) struct Server {
     rom_sha: String,
     /// The page's files.
     page: PathBuf,
+    /// The repo they are in: the preview's build script and page.
+    repo: PathBuf,
     wasm: PathBuf,
     rom: Arc<Vec<u8>>,
     /// The machine the ROM is for, which picks the player module.
@@ -241,6 +263,7 @@ impl Server {
             game: game.to_owned(),
             rom_sha: rom_sha.to_owned(),
             page: repo.join("mechanic"),
+            repo: repo.to_path_buf(),
             wasm: wasm_path(repo, Platform::Nes),
             rom: Arc::new(rom),
             platform: Platform::Nes,
@@ -284,6 +307,41 @@ impl Server {
         let session = Arc::new(session);
         open.insert(m.to_owned(), session.clone());
         Ok(session)
+    }
+
+    /// The sealed runs' store, `$GP_HOME/sealed/GAME/sealed-run/clips/`:
+    /// outside every mechanic's session, so no worker reading the sessions
+    /// sees them. Kept as a session for its numbering and its lock.
+    fn sealed(&self) -> Result<Arc<Session>> {
+        let mut open = self.open.lock().expect("open lock");
+        if let Some(s) = open.get(SEALED_KEY) {
+            return Ok(s.clone());
+        }
+        let dir = self
+            .paths
+            .home
+            .join("sealed")
+            .join(&self.game)
+            .join(SEALED_ROW);
+        let s = Arc::new(Session::store(dir)?);
+        open.insert(SEALED_KEY.to_owned(), s.clone());
+        Ok(s)
+    }
+
+    /// What the rebuild needs, or the words for why there is none.
+    fn rebuild(&self) -> std::result::Result<&super::review::Rebuild, Response> {
+        if self.platform == Platform::Arcade {
+            return Err(Response::error(
+                409,
+                "the rebuild is the game's model, and an arcade game has none yet: it comes once a model of the game is written",
+            ));
+        }
+        self.rebuild.as_ref().ok_or_else(|| {
+            Response::error(
+                404,
+                "no games checkout, so no model to play: start the page with --games",
+            )
+        })
     }
 
     /// The session a request names with `mechanic` (the row the page had
@@ -330,6 +388,11 @@ fn serve_one(s: &Server, conn: &TcpStream) -> std::io::Result<()> {
     http::write_response(conn, &res, req.method == "HEAD")
 }
 
+/// The quest-log row sealed runs are reported under, and the key of their
+/// store among the open sessions (no mechanic's name has a colon).
+const SEALED_ROW: &str = "sealed-run";
+const SEALED_KEY: &str = "sealed:";
+
 /// A clip number from a route's middle (`/api/clips/12.log`).
 fn clip_number(p: &str, prefix: &str, suffix: &str) -> Option<u64> {
     p.strip_prefix(prefix)?.strip_suffix(suffix)?.parse().ok()
@@ -352,7 +415,9 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
     match (req.method.as_str(), req.path.as_str()) {
         ("GET" | "HEAD", "/") => page("index.html", "text/html; charset=utf-8"),
         ("GET" | "HEAD", "/app.js") => page("app.js", "text/javascript; charset=utf-8"),
-        ("GET" | "HEAD", "/review.js") => page("review.js", "text/javascript; charset=utf-8"),
+        ("GET" | "HEAD", "/rebuild-card.js") => {
+            page("rebuild-card.js", "text/javascript; charset=utf-8")
+        }
         ("GET" | "HEAD", "/nesplayer.js") => page("nesplayer.js", "text/javascript; charset=utf-8"),
         ("GET" | "HEAD", "/style.css") => page("style.css", "text/css; charset=utf-8"),
         ("GET" | "HEAD", "/gp_play.wasm") => {
@@ -390,9 +455,19 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
                 log.into_bytes(),
             ))
         }
-        // The agent's model playing live came from `gp mechanic demo`,
-        // which isn't in gameprinter: nothing ever plays.
-        ("GET" | "HEAD", "/api/live") => Ok(Response::json(&json!({"lines": []}))),
+        ("GET" | "HEAD", "/api/live") => {
+            // The demo's lines (`gp mechanic demo`) from `after` on: the page
+            // plays them as they come.
+            let after: usize = req.param("after").and_then(|a| a.parse().ok()).unwrap_or(0);
+            let f = s.open_session()?.dir.join("live.ndjson");
+            let lines: Vec<Value> = fs::read_to_string(f)
+                .unwrap_or_default()
+                .lines()
+                .skip(after)
+                .filter_map(|l| serde_json::from_str(l).ok())
+                .collect();
+            Ok(Response::json(&json!({"lines": lines})))
+        }
         // A clip played on the model beside the original ([`super::review`]):
         // made on first ask, which takes as long as scoring the clip.
         ("GET" | "HEAD", p) if clip_number(p, "/api/clips/", "/review.json").is_some() => {
@@ -481,6 +556,12 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             if let Some(c) = v["choice"].as_u64() {
                 t["choice"] = json!(c);
             }
+            // The model's pick the person saw, and whether they agreed:
+            // the record of how often it is right.
+            if let Some(l) = v["laya"].as_str() {
+                t["laya"] = json!(l);
+                t["agreed"] = json!(v["text"].as_str() == Some(l));
+            }
             let (n, again) = s.target(v["mechanic"].as_str())?.turn_once(t)?;
             Ok(Response::json(&json!({"turn": n, "again": again})))
         }
@@ -514,8 +595,273 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             *s.session.lock().expect("session lock") = Some(session);
             Ok(Response::json(&json!({"mechanic": m})))
         }
+        ("GET" | "HEAD", p) if clip_number(p, "/api/clips/", ".rebuild.json").is_some() => {
+            let n = clip_number(p, "/api/clips/", ".rebuild.json").unwrap_or(0);
+            let session = s.target(req.param("mechanic"))?;
+            if !session.dir.join(format!("clips/{n:03}.toml")).is_file() {
+                return Ok(Response::error(404, "no such clip"));
+            }
+            let rb = match s.rebuild() {
+                Ok(rb) => rb,
+                Err(r) => return Ok(r),
+            };
+            match super::review::review(&s.paths, rb, &session.dir, n) {
+                Ok(v) => Ok(Response::json(&super::review::as_rebuild(
+                    &v,
+                    n,
+                    session.mechanic(),
+                ))),
+                Err(e) => Ok(Response::error(409, &format!("{e:#}"))),
+            }
+        }
+        ("GET" | "HEAD", p) if clip_number(p, "/api/clips/", ".measure.json").is_some() => {
+            let n = clip_number(p, "/api/clips/", ".measure.json").unwrap_or(0);
+            let f = s
+                .target(req.param("mechanic"))?
+                .dir
+                .join(format!("clips/{n:03}.measure.json"));
+            if !f.is_file() {
+                return Ok(Response::error(
+                    404,
+                    "not measured: gp mechanic contacts writes a clip's measurements, and it isn't in gameprinter yet",
+                ));
+            }
+            Ok(Response::bytes("application/json", fs::read(f)?))
+        }
+        ("POST", "/api/clips/stage") => {
+            // Whether a clip about to be handed off spans a stage: the page
+            // then offers to seal it, as the default.
+            let v: Value = serde_json::from_slice(&req.body)?;
+            let inputs =
+                gp_evidence::input_log::InputLog::parse(v["inputs"].as_str().context("inputs")?)
+                    .map_err(|e| anyhow::anyhow!("the clip's inputs: {e}"))?;
+            Ok(Response::json(&stage_span(
+                s,
+                v["path"].as_str().context("path")?,
+                v["start"].as_u64().context("start")? as usize,
+                &inputs,
+            )?))
+        }
+        // The sealed runs, private to the person: read only when the page's
+        // sealed view asks, and nothing about them is written or kept.
+        ("GET" | "HEAD", "/api/sealed") => {
+            let runs: Vec<Value> = sealed_runs(&s.paths.home, &s.game)
+                .into_iter()
+                .map(|(id, toml)| {
+                    let t: toml::Table = fs::read_to_string(&toml)
+                        .ok()
+                        .and_then(|t| toml::from_str(&t).ok())
+                        .unwrap_or_default();
+                    json!({"id": id, "start": t.get("start").and_then(|v| v.as_integer()),
+                           "frames": t.get("frames").and_then(|v| v.as_integer()),
+                           "note": t.get("note").and_then(|v| v.as_str())})
+                })
+                .collect();
+            Ok(Response::json(&json!({"runs": runs})))
+        }
+        ("GET" | "HEAD", p) if p.starts_with("/api/sealed/") => {
+            let rest = &p["/api/sealed/".len()..];
+            let (id, what) = rest.split_once('.').unwrap_or((rest, ""));
+            let Some((_, toml)) = sealed_runs(&s.paths.home, &s.game)
+                .into_iter()
+                .find(|(i, _)| i == id)
+            else {
+                return Ok(Response::error(404, "no such sealed run"));
+            };
+            match what {
+                "log" => Ok(Response::bytes(
+                    "text/plain; charset=utf-8",
+                    sealed_log(&s.paths.home, &toml)?.into_bytes(),
+                )),
+                "rebuild.json" => Ok(Response::error(
+                    409,
+                    "a sealed run on the model waits for gp sealed (being ported in gameprinter-wt-port1): the review keeps its pictures beside the clip, and nothing of a sealed run may be kept",
+                )),
+                _ => Ok(Response::error(404, "a sealed run has .log")),
+            }
+        }
+        ("GET" | "HEAD", "/api/rebuild/scores") => scores(s),
+        // The rebuild played live: the interpreter preview of the game's
+        // model, built on request into $GP_HOME/work/mechanic-preview/GAME/
+        // and driven by the page.
+        ("GET" | "HEAD", "/api/rebuild/status") => match s.rebuild() {
+            Ok(rb) => Ok(Response::json(&super::live::status(
+                &s.paths, &s.repo, &s.game, rb,
+            ))),
+            Err(r) => Ok(r),
+        },
+        ("GET" | "HEAD", "/api/rebuild/profiles") => match s.rebuild() {
+            Ok(rb) => Ok(Response::json(&super::live::profiles(
+                &s.paths, &s.game, rb,
+            )?)),
+            Err(r) => Ok(r),
+        },
+        ("POST", "/api/rebuild/build") => match s.rebuild() {
+            Ok(rb) => {
+                if let Err(e) = super::live::build(&s.paths, &s.repo, &s.game, rb, &s.rom) {
+                    return Ok(Response::error(409, &format!("{e:#}")));
+                }
+                Ok(Response::json(&super::live::status(
+                    &s.paths, &s.repo, &s.game, rb,
+                )))
+            }
+            Err(r) => Ok(r),
+        },
+        ("POST", "/api/rebuild/start") => match s.rebuild() {
+            Ok(rb) => {
+                let v: Value = serde_json::from_slice(&req.body)?;
+                match super::live::start(
+                    &s.paths,
+                    rb,
+                    &s.rom,
+                    v["path"].as_str().context("path")?,
+                    v["frame"].as_u64().context("frame")?,
+                ) {
+                    Ok(v) => Ok(Response::json(&v)),
+                    Err(e) => Ok(Response::error(409, &format!("{e:#}"))),
+                }
+            }
+            Err(r) => Ok(r),
+        },
+        ("GET" | "HEAD", p) if p.starts_with("/rebuild/") => {
+            super::live::file(&s.paths, &s.repo, &s.game, &p["/rebuild/".len()..])
+        }
         _ => Ok(Response::error(404, "not found")),
     }
+}
+
+/// The scoring pipeline's status for REVIEW REBUILD's clip picker and its
+/// refinement panel, `$GP_HOME/work/refine/GAME/status.json`, with its time
+/// so the page redraws only when it changes. A sealed row is left out.
+fn scores(s: &Server) -> Result<Response> {
+    let f = s
+        .paths
+        .home
+        .join("work/refine")
+        .join(&s.game)
+        .join("status.json");
+    let Ok(meta) = fs::metadata(&f) else {
+        return Ok(Response::json(&json!({"status": null})));
+    };
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_millis() as u64);
+    let mut v: Value = serde_json::from_str(&fs::read_to_string(&f)?)
+        .with_context(|| format!("reading {}", f.display()))?;
+    let shown = |m: &str| !m.starts_with("sealed");
+    for k in ["rows", "clips"] {
+        if let Some(a) = v[k].as_array_mut() {
+            a.retain(|r| shown(r["mechanic"].as_str().unwrap_or("sealed")));
+        }
+    }
+    Ok(Response::json(&json!({"status": v, "mtime": mtime})))
+}
+
+/// Whether a clip spans a stage: the stage the game's observe.toml
+/// `[level]` reads (its RAM byte and the names of its values) moves from
+/// one to another during it, as a clear does. NES only: an arcade game's
+/// observe.toml names no stage yet.
+fn stage_span(
+    s: &Server,
+    path: &str,
+    start: usize,
+    inputs: &gp_evidence::InputLog,
+) -> Result<Value> {
+    let Some(games) = s.rebuild.as_ref().map(|r| r.game.clone()) else {
+        return Ok(json!({"spans": false, "why": "no games checkout"}));
+    };
+    if s.platform == Platform::Arcade {
+        return Ok(json!({"spans": false, "why": "an arcade game's stage isn't read yet"}));
+    }
+    let Some((addr, names)) = level_key(&games.join("observe.toml")) else {
+        return Ok(json!({"spans": false, "why": "the game's observe.toml names no stage"}));
+    };
+    let mut nes = clip_paths::nes_at(&s.paths.home, &s.rom, path, start)?;
+    // Only RAM is read: no pictures.
+    nes.set_video(false);
+    let mut seen: Vec<(String, usize)> = Vec::new();
+    let mut note = |nes: &gp_nes::Nes, at: usize| {
+        let v = nes.wram()[usize::from(addr) & 0x7ff];
+        if let Some(l) = names.get(&v)
+            && seen.last().is_none_or(|(p, _)| p != l)
+        {
+            seen.push((l.clone(), at));
+        }
+    };
+    note(&nes, 0);
+    for (i, f) in inputs.frames.iter().enumerate() {
+        nes.step(*f)?;
+        note(&nes, i + 1);
+    }
+    Ok(json!({
+        "spans": seen.len() >= 2,
+        "stages": seen.iter().map(|(l, f)| json!({"stage": l, "from": f})).collect::<Vec<_>>(),
+    }))
+}
+
+/// An observe.toml's `[level]`: the RAM byte and each value's name.
+fn level_key(file: &Path) -> Option<(u16, std::collections::HashMap<u8, String>)> {
+    let t: toml::Table = toml::from_str(&fs::read_to_string(file).ok()?).ok()?;
+    let level = t.get("level")?.as_table()?;
+    let addr = u16::try_from(level.get("ram")?.as_array()?.first()?.as_integer()?).ok()?;
+    let mut names = std::collections::HashMap::new();
+    for pair in level.get("names")?.as_array()? {
+        let pair = pair.as_array()?;
+        let (v, name) = (pair.first()?.as_str()?, pair.get(1)?.as_str()?);
+        let v = u8::from_str_radix(v.trim_start_matches("0x"), 16).ok()?;
+        names.insert(v, name.to_owned());
+    }
+    Some((addr, names))
+}
+
+/// The sealed runs (`$GP_HOME/sealed/GAME/`: its top folder's clips and the
+/// page's `sealed-run/clips/`), by an id the page names them with. Read
+/// only when the person opens the sealed view; nothing is written.
+fn sealed_runs(home: &Path, game: &str) -> Vec<(String, PathBuf)> {
+    let top = home.join("sealed").join(game);
+    let mut out = Vec::new();
+    for (dir, prefix) in [
+        (top.clone(), ""),
+        (top.join(SEALED_ROW).join("clips"), "sealed-run-"),
+    ] {
+        let Ok(rd) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().is_some_and(|x| x == "toml") && p.with_extension("log").is_file() {
+                let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                let id = format!("{prefix}{stem}");
+                if super::name_ok(&id) {
+                    out.push((id, p));
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// A sealed run's whole input log from power-on, for the page's original.
+fn sealed_log(home: &Path, toml: &Path) -> Result<String> {
+    let t: toml::Table = toml::from_str(&fs::read_to_string(toml)?)?;
+    let own = fs::read_to_string(toml.with_extension("log"))?;
+    let Some(sha) = t.get("path").and_then(|v| v.as_str()) else {
+        return Ok(own);
+    };
+    let start = t
+        .get("start")
+        .and_then(|v| v.as_integer())
+        .unwrap_or(0)
+        .max(0) as usize;
+    let mut log = clip_paths::read_path(home, sha)?;
+    log.frames.truncate(start);
+    let clip = gp_evidence::InputLog::parse(&own)
+        .map_err(|e| anyhow::anyhow!("{}: {e}", toml.display()))?;
+    log.frames.extend(clip.frames);
+    Ok(log.to_text())
 }
 
 /// The mechanic the agent is on now (or `?mechanic=NAME`) and its newest
@@ -550,7 +896,13 @@ fn working(s: &Server, asked: Option<&str>) -> Result<Response> {
 /// whatever is open now. Either a path, a start on it and the clip's own
 /// inputs, or a full log from power-on and a start.
 fn post_clip(s: &Server, v: &Value) -> Result<Response> {
-    let session = s.target(v["mechanic"].as_str())?;
+    // A sealed run goes to the sealed store, whatever row is open.
+    let sealed = v["sealed"] == json!(true);
+    let session = if sealed {
+        s.sealed()?
+    } else {
+        s.target(v["mechanic"].as_str())?
+    };
     let note = v["note"].as_str().unwrap_or("");
     let Some(path) = v["path"].as_str() else {
         let n = session.add_clip(
@@ -579,6 +931,20 @@ fn post_clip(s: &Server, v: &Value) -> Result<Response> {
     // ends.
     let (meta, log) = clip_paths::clip_fields(path, start, &inputs);
     let (n, again) = session.add_player_clip(meta, &log, note)?;
+    let kept = format!("sealed/{}/{SEALED_ROW}/clips/{n:03}", s.game);
+    // The sealed-run row hears of it, by where it is kept and not by its
+    // presses.
+    if sealed
+        && !again
+        && let Ok(row) = s.session_named(SEALED_ROW)
+    {
+        let text = if note.is_empty() {
+            "A sealed run."
+        } else {
+            note
+        };
+        row.turn_once(json!({"by": "player", "text": text, "clips": [], "sealed": kept}))?;
+    }
     if !again {
         let (session, home, rom, path) = (
             session.clone(),
@@ -598,6 +964,11 @@ fn post_clip(s: &Server, v: &Value) -> Result<Response> {
                 Err(e) => eprintln!("clip {n}: no state hash: {e:#}"),
             }
         });
+    }
+    if sealed {
+        return Ok(Response::json(
+            &json!({"n": n, "again": again, "sealed": kept}),
+        ));
     }
     Ok(Response::json(
         &json!({"n": n, "again": again, "mechanic": session.mechanic()}),
@@ -724,6 +1095,108 @@ mod tests {
         assert_eq!((s, kind.as_str()), (200, "application/wasm"));
         assert_eq!(get(&srv, "/refine.js").0, 404);
         assert_eq!(get(&srv, "/api/live").1, r#"{"lines":[]}"#);
+    }
+
+    /// A sealed run goes to the sealed store, outside every session, and
+    /// is listed and read back only through the sealed routes; the
+    /// sealed-run row hears where it is kept.
+    #[test]
+    fn a_sealed_run_is_kept_apart() {
+        let d = tempfile::tempdir().unwrap();
+        let srv = server(d.path());
+        let mut q = read_queue(&d.path().join("mechanics/dk/queue.json"));
+        q.push(json!({"mechanic": SEALED_ROW, "note": "held out", "status": "next"}));
+        write_queue(&d.path().join("mechanics/dk/queue.json"), &q).unwrap();
+        let play = log(&["........", "........", ".......A"]);
+        let (_, v) = post(&srv, "/api/paths", json!({"log": play}));
+        let path = v["path"].as_str().unwrap().to_owned();
+        let inputs = log(&["R.......", "R......A"]);
+        let (s, v) = post(
+            &srv,
+            "/api/clips",
+            json!({"path": path, "start": 3, "inputs": inputs, "note": "a clear", "sealed": true}),
+        );
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["sealed"], "sealed/dk/sealed-run/clips/001");
+        assert!(
+            d.path()
+                .join("sealed/dk/sealed-run/clips/001.toml")
+                .is_file()
+        );
+        assert!(!d.path().join("mechanics/dk/walk/clips/001.toml").exists());
+        let (_, body) = get(&srv, "/api/sealed");
+        let runs: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(runs["runs"][0]["id"], "sealed-run-001");
+        let (s, full) = get(&srv, "/api/sealed/sealed-run-001.log");
+        assert_eq!(s, 200);
+        assert_eq!(full.lines().count(), 2 + 5, "{full}");
+        let (s, body) = get(&srv, "/api/sealed/sealed-run-001.rebuild.json");
+        assert_eq!(s, 409);
+        assert!(body.contains("gp sealed"), "{body}");
+        let row = Session::open(&srv.paths, "dk", SEALED_ROW).unwrap();
+        assert_eq!(
+            row.turns().unwrap().last().unwrap()["sealed"],
+            "sealed/dk/sealed-run/clips/001"
+        );
+    }
+
+    /// The scoring status for REVIEW REBUILD: none yet says so, and a
+    /// sealed row is left out.
+    #[test]
+    fn the_scores_leave_sealed_rows_out() {
+        let d = tempfile::tempdir().unwrap();
+        let srv = server(d.path());
+        assert_eq!(get(&srv, "/api/rebuild/scores").1, r#"{"status":null}"#);
+        let f = d.path().join("work/refine/dk/status.json");
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        fs::write(
+            &f,
+            json!({"rows": [{"mechanic": "walk"}, {"mechanic": "sealed-run"}],
+                   "clips": [{"mechanic": "sealed-run", "clip": 1}, {"mechanic": "walk", "clip": 1}]})
+            .to_string(),
+        )
+        .unwrap();
+        let v: Value = serde_json::from_str(&get(&srv, "/api/rebuild/scores").1).unwrap();
+        assert_eq!(v["status"]["rows"], json!([{"mechanic": "walk"}]));
+        assert_eq!(
+            v["status"]["clips"],
+            json!([{"mechanic": "walk", "clip": 1}])
+        );
+    }
+
+    /// The stage a clip passes through, read from observe.toml's `[level]`.
+    #[test]
+    fn an_observe_level_names_its_stages() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("observe.toml");
+        fs::write(
+            &f,
+            "[level]\nnames = [[\"0x01\", \"main\"], [\"0x02\", \"m50\"]]\nram = [83]\n",
+        )
+        .unwrap();
+        let (addr, names) = level_key(&f).unwrap();
+        assert_eq!(addr, 83);
+        assert_eq!(names[&2], "m50");
+        assert!(level_key(&d.path().join("none.toml")).is_none());
+    }
+
+    /// The rebuild on an arcade game, and without a games checkout: each
+    /// route says in words why there is nothing to play.
+    #[test]
+    fn no_rebuild_says_why() {
+        let d = tempfile::tempdir().unwrap();
+        let mut srv = server(d.path());
+        let (s, body) = get(&srv, "/api/rebuild/status");
+        assert_eq!(s, 404);
+        assert!(body.contains("--games"), "{body}");
+        srv.platform = Platform::Arcade;
+        for route in ["/api/rebuild/status", "/api/rebuild/profiles"] {
+            let (s, body) = get(&srv, route);
+            assert_eq!(s, 409, "{route}");
+            assert!(body.contains("an arcade game has none yet"), "{body}");
+        }
+        let (s, v) = post(&srv, "/api/rebuild/build", json!({}));
+        assert_eq!(s, 409, "{v}");
     }
 
     /// An arcade game's page: the player's absence names the arcade build,

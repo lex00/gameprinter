@@ -14,9 +14,10 @@
     <button id="sound" type="button" tabindex="-1" title="U: the original's sound on or off" aria-pressed="true">SOUND ON</button>
     <span id="state"></span>
   </header>
-  <nav id="tabs"><button id="tab-mech" class="on">HELP WITH MECHANICS</button><button id="tab-free">FREE PLAY</button></nav>
+  <nav id="tabs"><button id="tab-mech" class="on">HELP WITH MECHANICS</button><button id="tab-refine">REVIEW REBUILD</button><button id="tab-free">FREE PLAY</button></nav>
   <main>
     <div id="side-l">
+      <section id="rule-card" hidden aria-label="Clips to review on the model"></section>
       <section id="ctx-clip" class="ctx" aria-label="The clip loaded"></section>
     </div>
     <div id="left">
@@ -26,7 +27,22 @@
         <div id="toast" hidden></div>
         <div id="bar" hidden><div id="bar-fill"></div><span id="bar-time"></span></div>
       </div>
+      <iframe id="rb-frame" title="the rebuild, played live" src="about:blank" tabindex="-1"></iframe>
+      <canvas id="rv-strip" height="10" hidden title="Green where the original and the model agree, red where they differ. Click to go there"></canvas>
+      <div id="review-bar" hidden>
+        <button id="rv-prev-diff" title="[: the difference before">&lt;&lt; DIFF</button><button id="rv-back" title="Left: a frame back">&lt;</button><button id="rv-play" title="A, Enter or Space">PLAY</button><button id="rv-fwd" title="Right: a frame on">&gt;</button><button id="rv-next-diff" title="]: the next difference">DIFF &gt;&gt;</button>
+        <input type="range" id="rv-scrub" min="0" max="1" value="0" aria-label="The frame"><span id="rv-at"></span>
+        <label>show <select id="rv-layout"><option value="side">side by side</option><option value="top">the rebuilt game on top</option><option value="diff">the differences</option></select></label>
+        <label id="rv-opacity-row" title="Up and down">original <input type="range" id="rv-opacity" min="0" max="100" value="50"> rebuilt</label>
+        <label title="C or the left bumper"><input type="checkbox" id="rv-boxes"> outline its entities</label>
+        <button id="rv-live" title="R or the right bumper: play the rebuild yourself, the original beside it on the same presses">PLAY THE REBUILD</button>
+      </div>
       <div id="busy" hidden><span class="spin"></span><span id="busy-text"></span></div>
+      <section id="settings" hidden aria-label="Settings of the rebuild">
+        <h2>Settings</h2>
+        <p id="set-now" class="muted"></p>
+        <button id="set-open" title="The button, F1 or the right stick (R3) in FREE PLAY. Esc closes it">OPEN THE SETTINGS IN THE GAME</button>
+      </section>
       <div id="watch" hidden><div id="watch-goal"></div><div id="watch-pick"></div></div>
       <div id="overlay" hidden>
         <div id="panel">
@@ -60,24 +76,6 @@
     </aside>
   </main>
   <footer><div id="pad-line"></div><div id="keys">Arrows move, X is A, Z is B, Enter is Start. F5 or the left trigger saves, F8 or the right trigger loads. R or the right bumper records. U turns the sound off and on. Player 2: I J K L move, M is A, N is B, H is Select, Y is Start, or a second controller.</div></footer>
-  <section id="rv2" hidden aria-label="A clip on the model">
-    <div id="rv2-panel">
-      <div id="rv2-head"><h2 id="rv2-title">A clip on the model</h2><button id="rv2-close" type="button" title="Esc">CLOSE</button></div>
-      <p id="rv2-says"></p>
-      <div id="rv2-body" hidden>
-        <div id="rv2-pics"><figure><canvas id="rv2-o" width="256" height="240"></canvas></figure><figure><canvas id="rv2-m" width="256" height="240"></canvas></figure></div>
-        <canvas id="rv2-strip" height="12" title="Green where the original and the model agree, red where they differ. Click to go there"></canvas>
-        <div id="rv2-bar">
-          <button id="rv2-prev-diff" type="button" title="The difference before">&lt;&lt; DIFF</button><button id="rv2-back" type="button" title="Left: a frame back">&lt;</button><button id="rv2-play" type="button" title="Space">PLAY</button><button id="rv2-fwd" type="button" title="Right: a frame on">&gt;</button><button id="rv2-next-diff" type="button" title="The next difference">DIFF &gt;&gt;</button>
-          <input type="range" id="rv2-scrub" min="0" max="1" value="0" aria-label="The frame">
-          <label>show <select id="rv2-layout"><option value="side">side by side: original, model</option><option value="top">the model over the original</option><option value="diff">the differences</option></select></label>
-          <label id="rv2-mix-row" hidden>original <input type="range" id="rv2-mix" min="0" max="100" value="50"> model</label>
-        </div>
-        <p id="rv2-at"></p>
-      </div>
-    </div>
-  </section>
   <script type="module" src="/app.js"></script>
-  <script type="module" src="/review.js"></script>
 </body>
 </html>

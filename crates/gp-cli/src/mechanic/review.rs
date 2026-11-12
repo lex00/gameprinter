@@ -12,6 +12,13 @@
 //! own art, so they stay in $GP_HOME with the clip, never in a repo. The
 //! review is made again when the model, the mapping or the module changes
 //! (`meta.json`'s `key`).
+//!
+//! The same review is REVIEW REBUILD's clip (`/api/clips/N.rebuild.json`),
+//! which game-printer drew from a rebuild of its own: `meta.json` also
+//! keeps, for each compared frame, the model's drawn things (its entities'
+//! boxes and names, for the outlines), whether it drew a sprite, and the
+//! mapped measures the two games disagree on with both values; and the
+//! original's random draws the model was given, with the first desync.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -52,9 +59,11 @@ fn dir_of(session: &Path, n: u64) -> PathBuf {
     session.join("clips").join(format!("{n:03}.review"))
 }
 
-/// What the review depends on: the model, its mapping and the module.
+/// What the review depends on: the model, its mapping and the module, and
+/// what `meta.json` holds (its `version`).
 fn key(r: &Rebuild) -> Result<String> {
     let mut h = blake3::Hasher::new();
+    h.update(b"review 2");
     for f in [gp_model::MODEL_FILE, gp_interp::mapping::MAPPING_FILE] {
         let p = r.game.join(f);
         h.update(&fs::read(&p).with_context(|| format!("reading {}", p.display()))?);
@@ -141,6 +150,7 @@ pub(crate) fn review(paths: &Paths, r: &Rebuild, session: &Path, n: u64) -> Resu
         Option<(u32, u32)>,
         Option<[u32; 4]>,
         Option<String>,
+        Vec<Value>,
     );
     let shots: std::rc::Rc<std::cell::RefCell<Shots>> = Default::default();
     let keep = {
@@ -152,8 +162,24 @@ pub(crate) fn review(paths: &Paths, r: &Rebuild, session: &Path, n: u64) -> Resu
             s.0 += 1;
             let Some((o, m)) = pair else {
                 s.1.push(false);
+                s.5.push(json!({"boxes": [], "sprites": false}));
                 return;
             };
+            // The model's entities as it drew them, for the page's
+            // outlines: its bodies on the screen, not the HUD's fields (named
+            // "the score", or their text in quotes) or a body with no
+            // picture there.
+            let (w, h) = (i64::from(m.w), i64::from(m.h));
+            let boxes: Vec<Value> = m
+                .things
+                .iter()
+                .filter(|t| {
+                    !t.name.is_empty() && !t.name.starts_with("the ") && !t.name.starts_with('"')
+                })
+                .filter(|t| t.rect[2] > 1 && t.rect[3] > 1 && t.rect[0] < w && t.rect[1] < h)
+                .map(|t| json!([t.rect[0], t.rect[1], t.rect[2], t.rect[3], t.name]))
+                .collect();
+            s.5.push(json!({"boxes": boxes, "sprites": m.sprite.iter().any(|&x| x)}));
             if s.4.is_some() {
                 s.1.push(false);
                 return;
@@ -175,12 +201,59 @@ pub(crate) fn review(paths: &Paths, r: &Rebuild, session: &Path, n: u64) -> Resu
             }
         }) as crate::screen::Keep
     };
-    let ls = crate::clip_score::pictures(&ctx, &log, start, keep)?;
-    let (count, have, size, visible, err) = shots.borrow().clone();
+    let (ls, report, draws) = crate::clip_score::pictures(&ctx, &log, start, keep, true)?;
+    let (count, have, size, visible, err, drawn) = shots.borrow().clone();
     if let Some(e) = err {
         bail!("writing clip {n}'s pictures: {e}");
     }
     let together = gp_interp::lockstep::together(&ls);
+    // What the two games disagree on at each compared frame, measure by
+    // measure, with both values (at most 16 a frame).
+    let diffs: Vec<Value> = (0..ls.frames.len())
+        .map(|k| {
+            let Some((o, m)) = ls.values.get(k) else {
+                return json!([]);
+            };
+            let unmeasured = ls.unmeasured.get(k);
+            Value::from(
+                ls.paths
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| !unmeasured.and_then(|u| u.get(*i)).copied().unwrap_or(false))
+                    .filter(|(_, p)| p.distance.get(k).is_some_and(|d| *d > p.tolerance))
+                    .filter_map(|(i, p)| Some(json!([p.path, shown(o.get(i)?), shown(m.get(i)?)])))
+                    .take(16)
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    let mut note: Vec<String> = Vec::new();
+    if draws.is_none() {
+        note.push("the mapping gives the model no random draws: it rolls its own".to_owned());
+    }
+    if !drawn.iter().any(|d| d["sprites"] == json!(true)) {
+        note.push(
+            "it draws no sprites on these frames; outline its entities to see them".to_owned(),
+        );
+    }
+    let desync = &report["draws"]["desync"];
+    if let Some(f) = desync["original_frame"].as_u64() {
+        note.push(format!(
+            "the model's random draws left the original's at frame {f}: {}",
+            desync["why"].as_str().unwrap_or("")
+        ));
+    }
+    let draws = draws.map(|d| {
+        json!({
+            "list": d.draws.iter().map(|x| json!([x.frame, x.site, x.value])).collect::<Vec<_>>(),
+            "taken": report["draws"]["taken"],
+            "desync": if desync.is_null() { Value::Null } else { json!({"frame": desync["original_frame"], "why": desync["why"]}) },
+        })
+    });
+    let loaded = ls.start.as_ref().map(|s| {
+        let missing = s.notes.iter().filter(|x| x.how.name() == "missing").count();
+        json!({"frame": s.original_frame, "notes": s.notes.len(), "missing": missing})
+    });
     let (w, h) = size.unwrap_or((256, 240));
     let meta = json!({
         "key": key,
@@ -195,6 +268,11 @@ pub(crate) fn review(paths: &Paths, r: &Rebuild, session: &Path, n: u64) -> Resu
         "together_count": together.iter().filter(|t| **t).count(),
         "original_frames": ls.frames.iter().map(|f| f.1).collect::<Vec<_>>(),
         "module": r.module.as_ref().map(|m| m.display().to_string()),
+        "drawn": drawn,
+        "diffs": diffs,
+        "draws": draws,
+        "note": note,
+        "loaded": loaded,
     });
     fs::write(tmp.join("meta.json"), serde_json::to_string(&meta)?)?;
     if dir.exists() {
@@ -207,6 +285,60 @@ pub(crate) fn review(paths: &Paths, r: &Rebuild, session: &Path, n: u64) -> Resu
     }
     fs::rename(&tmp, &dir)?;
     Ok(meta)
+}
+
+/// A review as REVIEW REBUILD reads it (`/api/clips/N.rebuild.json`): a
+/// frame each, with the original's frame it stands at, the addresses of
+/// its two pictures (none on a frame the model drew nothing for), whether
+/// the mapped state agrees there, the model's entities and what differs.
+pub(crate) fn as_rebuild(meta: &Value, n: u64, mechanic: &str) -> Value {
+    let q = format!("?mechanic={mechanic}");
+    let at = |k: usize, key: &str| meta[key].get(k).cloned().unwrap_or(Value::Null);
+    let count = meta["frames"].as_u64().unwrap_or(0) as usize;
+    let frames: Vec<Value> = (0..count)
+        .map(|k| {
+            let have = meta["have"][k] == json!(true);
+            let pic =
+                |kind: &str| have.then(|| format!("/api/clips/{n}/review/{kind}-{k:05}.png{q}"));
+            let drawn = at(k, "drawn");
+            json!({
+                "k": k,
+                "f": at(k, "original_frames"),
+                "o": pic("o"),
+                "m": pic("m"),
+                "together": at(k, "together"),
+                "boxes": drawn["boxes"],
+                "sprites": drawn["sprites"],
+                "diffs": at(k, "diffs"),
+            })
+        })
+        .collect();
+    json!({
+        "clip": n,
+        "mechanic": mechanic,
+        "start": meta["start"],
+        "w": meta["w"],
+        "h": meta["h"],
+        "visible": meta["visible"],
+        "together_count": meta["together_count"],
+        "frames": frames,
+        "draws": meta["draws"],
+        "note": meta["note"],
+        "loaded": meta["loaded"],
+    })
+}
+
+/// A measure's value as a person reads it: a fixed-point number in pixels
+/// (text for the page only; nothing computes with it).
+fn shown(v: &gp_runtime::Value) -> String {
+    match v {
+        gp_runtime::Value::Fixed(r) => {
+            let x = *r as f64 / 65536.0;
+            let t = format!("{x:.2}");
+            t.trim_end_matches('0').trim_end_matches('.').to_owned()
+        }
+        other => other.to_string(),
+    }
 }
 
 /// A kept picture of clip `n`'s review: `o-KKKKK.png` or `m-KKKKK.png`.

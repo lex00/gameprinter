@@ -60,6 +60,11 @@
 // (the public page's Settings button) can send {gp: "settings", key:
 // "open"} too, with the same effect as pressing Esc.
 //
+// `files=here` fetches the game's files from beside the page instead of
+// the browser's store: the mechanic page's playable rebuild, which `gp
+// mechanic start` builds and serves at /rebuild/ (module.wasm among them
+// when the game has hooks).
+//
 // Timings and results go to window.__gp for scripts/web/measure.mjs.
 
 import { withLevel } from "./level.js";
@@ -372,9 +377,15 @@ function parseFrames(s) {
 
 // Where the game's files come from: with `files=idb:GAME` in the URL, the
 // files a ROM lift stored in this browser (scripts/web/public/lift.js);
-// else the installed game's play files (install.js). The page's own files,
-// gp_web.wasm among them, are always fetched.
+// with `files=here`, fetched from beside the page; else the installed
+// game's play files (install.js). The page's own files, gp_web.wasm among
+// them, are always fetched.
+const HERE = new URLSearchParams(location.search).get("files") === "here";
 const stored = (() => {
+  if (HERE) {
+    // A map's `get`, by fetch: the bytes, or undefined when the file isn't there.
+    return Promise.resolve({ get: (name) => fetch(name).then((r) => (r.ok ? r.arrayBuffer().then((b) => new Uint8Array(b)) : undefined)) });
+  }
   const m = /^idb:(.+)$/.exec(new URLSearchParams(location.search).get("files") ?? "");
   if (m) {
     return import("./lift.js").then(async ({ loadStored }) => {
@@ -392,8 +403,8 @@ const stored = (() => {
 // A `blob:` URL (a downloaded theme's file, from the cache) is fetched in
 // either case.
 async function load(url, init) {
-  if (url.startsWith("blob:")) return fetch(url, init);
-  const b = (await stored).get(url.split("?")[0]);
+  if (HERE || url.startsWith("blob:")) return fetch(url, init);
+  const b = await (await stored).get(url.split("?")[0]);
   return b ? new Response(b) : new Response(null, { status: 404 });
 }
 
@@ -408,7 +419,7 @@ const blobs = new Map();
 async function image(src) {
   let blob = blobs.get(src);
   if (!blob && !src.startsWith("blob:")) {
-    const b = (await stored).get(src);
+    const b = await (await stored).get(src);
     if (!b) throw new Error(`${src}: not stored`);
     blob = new Blob([b], { type: "image/png" });
   }
@@ -855,7 +866,7 @@ async function findLooks(cfg, catalogue) {
 // page's own interpreter, which has no game's hooks, for a game without.
 let moduleSource = "page";
 async function moduleBytes() {
-  let bytes = (await stored).get("module.wasm");
+  let bytes = await (await stored).get("module.wasm");
   if (!bytes && /^idb:/.test(new URLSearchParams(location.search).get("files") ?? "")) {
     // A lifted ROM's files are the lift's; the module is the installed game's.
     const { playFiles } = await import("./install.js");

@@ -46,8 +46,10 @@ footer { padding: 8px 16px; color: var(--muted); font-size: 13px; border-top: 2p
    it, and the quest log, the clips and the conversation beneath. */
 html, body { overflow-x: hidden; }
 main { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 16px; padding: 12px 16px; align-items: start; }
-/* The left margin: the clip loaded. */
+/* The left margin: REVIEW REBUILD's clip picker (so a clip is always in
+   reach beside the game), then the clip loaded. */
 #side-l { grid-column: 1; justify-self: end; width: 100%; max-width: 360px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+#side-l #rule-card { margin: 0; max-height: calc(100vh - 140px); overflow-y: auto; }
 #left { grid-column: 2; width: min(768px, calc((100vh - 230px) * 256 / 240)); }
 #ctx-frame { grid-column: 3; justify-self: start; }
 .ctx { width: 100%; max-width: 360px; min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
@@ -80,6 +82,10 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
 #bar-time { position: absolute; right: 8px; bottom: 10px; font-size: 13px; background: var(--nes-0f); border: 2px solid var(--line); padding: 0 6px; }
 
 #toast { position: absolute; left: 12px; bottom: 34px; max-width: calc(100% - 24px); z-index: 2; background: var(--nes-0f); border: 2px solid var(--nes-28); color: var(--nes-28); padding: 2px 10px; }
+#settings { margin-top: 10px; background: var(--panel); border: 2px solid var(--line); box-shadow: 4px 4px 0 var(--nes-2d); padding: 8px 12px; }
+#settings[hidden] { display: none; }
+#settings h2, #settings h3 { margin: 4px 0; }
+#settings button { font: bold 12px var(--mono); background: var(--nes-0f); color: var(--fg); border: 2px solid var(--line); padding: 3px 8px; cursor: pointer; }
 #busy, #watch, #panel { margin-top: 10px; background: var(--panel); border: 2px solid var(--line); box-shadow: 4px 4px 0 var(--nes-2d); }
 #busy { padding: 8px 12px; display: flex; gap: 10px; align-items: center; }
 #busy.theirs { border-color: var(--accent); }
@@ -92,11 +98,13 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
 #say { margin: 0 0 12px; white-space: pre-wrap; }
 #to { font-size: 22px; font-weight: 700; letter-spacing: 0.06em; padding: 4px 10px; margin: 0 0 12px; background: var(--nes-28); color: var(--nes-0f); }
 #to.other { background: var(--nes-27); }
+#to.sealed { background: var(--rec); color: var(--nes-30); }
 #choices { list-style: none; margin: 0 0 12px; padding: 0; }
 #choices li { padding: 4px 10px; border: 2px solid transparent; }
 #choices li::before { content: "  "; white-space: pre; }
 #choices li.on { border-color: var(--nes-28); color: var(--nes-28); }
 #choices li.on::before { content: "> "; }
+#choices .laya { color: var(--muted); font-size: 13px; margin-left: 8px; }
 #note-row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
 #note { flex: 1; font: inherit; padding: 4px 8px; background: #000; color: var(--fg); border: 2px solid var(--nes-00); }
 #hint { margin: 0; color: var(--muted); font-size: 13px; }
@@ -168,23 +176,31 @@ aside li { margin-bottom: 6px; }
 #w-log { font-size: 13px; }
 #w-log .at { color: var(--muted); margin-right: 8px; }
 
-/* A clip on the model (review.js): over the page. */
-#rv2 { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); display: flex; align-items: flex-start; justify-content: center; overflow: auto; z-index: 20; padding: 24px 16px; }
-#rv2[hidden] { display: none; }
-#rv2-panel { background: var(--panel); border: 2px solid var(--line); padding: 14px; max-width: 1100px; width: 100%; }
-#rv2-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-#rv2-head h2 { margin: 0; font-size: 15px; color: var(--nes-28); }
-#rv2-says { color: var(--muted); min-height: 1.2em; }
-#rv2-pics { display: flex; gap: 10px; flex-wrap: wrap; }
-#rv2-pics figure { margin: 0; flex: 1 1 300px; }
-#rv2-pics figure:has(canvas[hidden]) { display: none; }
-#rv2-pics canvas { width: 100%; height: auto; image-rendering: pixelated; background: #000; display: block; }
-#rv2-strip { width: 100%; display: block; margin: 10px 0 6px; cursor: pointer; }
-#rv2-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-#rv2-bar button, #rv2-head button { font: 13px var(--mono); background: var(--nes-0f); color: var(--fg); border: 2px solid var(--line); padding: 3px 8px; cursor: pointer; }
-#rv2-scrub { flex: 1 1 200px; }
-#rv2-at.same { color: var(--nes-2a); }
-#rv2-at.differ { color: var(--nes-26); }
+/* REVIEW REBUILD (game-printer's refine.css, whose name the refinement
+   view has now): the clip picker card, the bar under the game, the strip
+   of frames that agree, and the hidden frame the rebuild plays in. */
+#rule-card { border: 2px solid #5c94fc; padding: 8px 10px; margin-bottom: 12px; }
+#rule-card[hidden] { display: none; }
+#rule-card h3 { font: bold 13px var(--mono); text-transform: uppercase; margin: 4px 0 6px; }
+#rule-card .r-note { color: var(--muted); }
+#rule-card .r-pick { list-style: none; padding: 0; margin: 0 0 10px; font-size: 13px; max-height: 50vh; overflow-y: auto; }
+#rule-card .r-pick li { display: grid; grid-template-columns: 1fr 72px 92px; gap: 6px; padding: 3px 6px; border: 2px solid transparent; cursor: pointer; }
+#rule-card .r-pick li:hover { border-color: var(--nes-00); }
+#rule-card .r-pick li.picked { border-color: #5c94fc; }
+#rule-card .r-pct { text-align: right; color: var(--nes-28); }
+#rule-card .r-split { color: var(--muted); }
+#rule-card .r-small { font-size: 12px; margin-bottom: 10px; }
+#rule-card .r-sealed-open { font: bold 12px var(--mono); background: #000; color: var(--nes-16); border: 2px solid var(--nes-16); padding: 3px 8px; cursor: pointer; margin-top: 4px; }
+#review-bar { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin-top: 8px; font-size: 13px; }
+#review-bar[hidden], #rv-opacity-row[hidden], #rv-strip[hidden] { display: none; }
+#review-bar button { font: bold 12px var(--mono); background: var(--nes-0f); color: var(--fg); border: 2px solid var(--line); padding: 2px 8px; cursor: pointer; }
+#review-bar #rv-scrub { flex: 1; min-width: 160px; }
+#review-bar select { font: inherit; background: #000; color: var(--fg); border: 2px solid var(--nes-00); }
+#review-bar #rv-live { border-color: var(--nes-2a); color: var(--nes-2a); }
+#rv-at.same { color: var(--nes-2a); }
+#rv-at.differ { color: var(--nes-26); }
+#rv-strip { display: block; width: 100%; height: 10px; margin-top: 6px; cursor: pointer; image-rendering: pixelated; }
+#rb-frame { position: absolute; left: -10000px; top: 0; width: 256px; height: 240px; border: 0; }
 #clips .rv2-open { margin-left: 8px; font: 11px var(--mono); background: var(--nes-0f); color: var(--nes-21); border: 1px solid var(--nes-21); padding: 0 5px; cursor: pointer; }
 
 /* gp mechanic watch: the watch panel on its own page. */

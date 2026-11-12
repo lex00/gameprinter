@@ -8,10 +8,18 @@
 // hands it off, and checks the clip is in the session folder (with its
 // state hash, added in the background) and in the page's clip list. It
 // runs `gp mechanic say` and checks the words show over the game and in the
-// conversation, answers them, then plays in FREE PLAY, where the agent's
-// next words wait until Esc goes back. Last, a second server with no player
-// built: the page must say so, in the server's words, instead of failing
-// to compile the 404 as wasm. Any error the page throws fails the check.
+// conversation, answers them, and checks the watch panel. Then the three
+// tabs: REVIEW REBUILD from the clip's ON THE MODEL (the clip on the model
+// in the game window, all three layouts, the strip, the outlines and the
+// frame's measures), PLAY THE REBUILD (the preview built on the way, the
+// model beside the original, a run recorded there and sealed with Tab into
+// the sealed store), and FREE PLAY (the rebuild alone, never the original,
+// with its settings; the agent's next words wait until Esc goes back).
+// Then `gp mechanic demo` against a stand-in decision server made here,
+// watched in the page, and `say --judge`. Last, a second server with no
+// player built: the page must say so, in the server's words, instead of
+// failing to compile the 404 as wasm. Any error the page throws fails the
+// check. With --shots DIR a screenshot of each mode goes to DIR.
 //
 // With --arcade-rom ZIP (the owner's rbtapper romset) and --arcade-wasm
 // WASM (gp_arcade_play.wasm), an arcade run follows: gp roms add and gp
@@ -19,7 +27,8 @@
 // second with MAME's keys. It drops a coin (5), starts (1), records a clip
 // of moves and taps with a note and hands it off, checks the clip's arcade
 // log and state hash in the session, that gp mechanic say shows, and that
-// ON THE MODEL says in words why it has nothing to play yet. Without the
+// REVIEW REBUILD, FREE PLAY and gp mechanic demo say in words why they
+// have nothing to play yet. Without the
 // two options the arcade run is skipped, as other ROM checks are.
 //
 // Playwright comes from scripts/web/node_modules (`npm ci --prefix
@@ -32,6 +41,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
+import { createServer } from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -42,6 +52,9 @@ const opt = (n) => {
 };
 const gp = opt("gp"), romFile = opt("rom"), wasm = opt("wasm"), browserPath = opt("browser");
 const arcadeRom = opt("arcade-rom"), arcadeWasm = opt("arcade-wasm");
+// --shots DIR: a screenshot of each mode goes there (never a repo: they
+// show the game).
+const shots = opt("shots");
 if (!gp || !romFile || !wasm || !browserPath) {
   console.error("check-mechanic: give --gp GP --rom MOSSHOP --wasm WASM --browser BROWSER");
   process.exit(2);
@@ -104,6 +117,37 @@ async function until(what, f, ms = 15000) {
     if (Date.now() > end) fail(`timed out: ${what}`);
     await new Promise((r) => setTimeout(r, 100));
   }
+}
+
+/** A screenshot of the page into --shots, when given. */
+async function shot(page, name) {
+  if (!shots) return;
+  mkdirSync(shots, { recursive: true });
+  await page.screenshot({ path: join(shots, `${GAME}-${name}.png`), fullPage: true });
+}
+
+/** A stand-in decision server on a free port, as Jev's wire format has
+ * it: every question is answered with its first choice (the chord "right"
+ * for a demo), at 80%. Its address. */
+function fakeDecider() {
+  const srv = createServer((req, res) => {
+    let body = "";
+    req.on("data", (d) => { body += d; });
+    req.on("end", () => {
+      const q = JSON.parse(body).questions;
+      const answers = {};
+      for (const [k, v] of Object.entries(q)) {
+        const names = Object.keys(v.criteria);
+        const choice = k === "buttons" ? (names.includes("right_jump") ? "right_jump" : names[0]) : names[0];
+        answers[k] = { choice, probabilities: Object.fromEntries(names.map((n) => [n, n === choice ? 0.8 : 0.2 / Math.max(1, names.length - 1)])), answer_confidence: 0.8 };
+      }
+      const text = JSON.stringify({ model: "laya", answers, usage: {} });
+      res.writeHead(200, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(text), Connection: "close" });
+      res.end(text);
+    });
+  });
+  servers.push({ kill: () => srv.close() });
+  return new Promise((r) => srv.listen(0, "127.0.0.1", () => r(`http://127.0.0.1:${srv.address().port}`)));
 }
 
 const frame = (page) => page.evaluate(() => Number(document.body.dataset.frame ?? -1));
@@ -180,52 +224,140 @@ async function main() {
   await until("the problem row", async () => (await text(page, "#w-problems")).includes("the hop lands a pixel low") && (await text(page, "#w-problems")).includes("fixed"));
   ok("the watch panel shows the agent's status, its pinned picture and its problem table");
 
-  // FREE PLAY: the game plays on its own and the agent's words wait.
-  await page.click("#tab-free");
-  await until("FREE PLAY", async () => (await text(page, "#modebadge")) === "FREE PLAY");
-  const fa = await frame(page);
-  await page.keyboard.down("ArrowLeft");
+  // REVIEW REBUILD, from clip 1's ON THE MODEL: the clip played through
+  // the original and the game's model (the skeleton gp game new wrote) as
+  // the score plays it, in the game window, both pictures of each frame
+  // kept and shown in every layout, with the strip of frames that agree,
+  // the outlines and the right margin's frame.
+  await page.click("#clips .rv2-open");
+  await until("REVIEW REBUILD", async () => (await page.evaluate(() => document.getElementById("tab-refine").classList.contains("on"))));
+  const same = await until("the review", async () => {
+    const t = await text(page, "#busy-text");
+    return /\d+ of \d+ frames the same/.test(t) ? t.match(/\d+ of \d+ frames the same/)[0] : /couldn't|No clips/.test(t) ? fail(t) : null;
+  }, 180000);
+  const reviewed = join(session, "clips", "001.review", "meta.json");
+  if (!existsSync(reviewed)) fail(`the review isn't kept in ${reviewed}`);
+  const review = JSON.parse(readFileSync(reviewed, "utf8"));
+  if (!Array.isArray(review.diffs) || !Array.isArray(review.drawn)) fail(`the review has no diffs or drawn things: ${Object.keys(review)}`);
+  const shown = review.have.indexOf(true);
+  if (shown < 0) fail("the review kept no pictures");
+  await until("the badge", async () => (await text(page, "#modebadge")) === "REVIEWING THE REBUILD");
+  await page.keyboard.press("KeyX"); // A pauses
+  await page.evaluate((k) => { const s = document.getElementById("rv-scrub"); s.value = String(k); s.dispatchEvent(new Event("input")); }, shown);
+  const lit = () => page.evaluate(() => {
+    const c = document.getElementById("game");
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    for (let i = 0; i < d.length; i += 4) if (d[i] || d[i + 1] || d[i + 2]) return true;
+    return false;
+  });
+  for (const v of ["side", "top", "diff"]) {
+    await page.selectOption("#rv-layout", v);
+    await until(`the ${v} layout drawn`, lit);
+    await shot(page, `review-rebuild-${v}`);
+  }
+  if ((await page.evaluate(() => document.body.dataset.frameSource)) !== "clip+rebuild") fail("REVIEW REBUILD didn't draw the clip beside the rebuild");
+  if (await page.isHidden("#rv-strip")) fail("no strip of the frames that agree");
+  if (!/Frame \d+ of \d+/.test(await text(page, "#ctx-frame"))) fail(`the right margin: ${await text(page, "#ctx-frame")}`);
+  if (!(await text(page, "#rule-card")).includes("moss-hop") && !(await text(page, "#rule-card")).includes(`${MECH} 1`)) fail(`the clip picker: ${await text(page, "#rule-card")}`);
+  await page.selectOption("#rv-layout", "side");
+  await page.keyboard.press("KeyC");
+  if (!(await page.evaluate(() => document.getElementById("rv-boxes").checked))) fail("C didn't outline the entities");
+  await page.keyboard.press("ArrowRight");
+  await until("a step on", async () => /frame \d+ of/.test(await text(page, "#rv-at")));
+  ok(`REVIEW REBUILD shows clip 1 in the game window: ${same}, in all three layouts, with the strip, the outlines and the frame's measures`);
+
+  // PLAY THE REBUILD: the model played live beside the original on the
+  // same presses. The first build of the preview takes minutes.
+  await page.keyboard.press("KeyR");
+  await until("the rebuild playing beside the original", async () => (await text(page, "#modebadge")) === "PLAYING THE REBUILD" && (await page.evaluate(() => document.body.dataset.frameSource)) === "original+rebuild", 900000);
+  await page.keyboard.down("ArrowRight");
+  await page.waitForTimeout(400);
+  await page.keyboard.up("ArrowRight");
+  await shot(page, "play-the-rebuild");
+  const layout = () => page.evaluate(() => (document.getElementById("game2").hidden ? "one" : "side"));
+  const before = await layout();
+  await page.keyboard.press("KeyV");
+  await until("V changes the layout", async () => (await layout()) !== before || (await text(page, "#toast")).includes("Playing the rebuild:"));
+  // Recording beside the rebuild, then sealing the run with Tab.
+  await page.keyboard.press("KeyR");
+  await until("recording beside the rebuild", async () => (await text(page, "#modebadge")) === "RECORDING BESIDE THE REBUILD");
+  await page.keyboard.down("ArrowRight");
   await page.waitForTimeout(500);
-  await page.keyboard.up("ArrowLeft");
-  const fb = await frame(page);
-  if (fb - fa < 15) fail(`FREE PLAY played ${fb - fa} frames in half a second`);
+  await page.keyboard.up("ArrowRight");
+  await page.keyboard.press("KeyR");
+  await until("the review panel", async () => (await text(page, "#modebadge")) === "YOUR CLIP");
+  await page.keyboard.press("Tab");
+  await until("sealed", async () => (await text(page, "#modebadge")) === "SEALED");
+  const sealedToml = join(home, "sealed", GAME, "sealed-run", "clips", "001.toml");
+  await until("the sealed run in the sealed store", () => existsSync(sealedToml));
+  if (existsSync(join(session, "clips", "002.toml"))) fail("the sealed run went into the session");
+  await page.keyboard.press("Enter");
+  ok("PLAY THE REBUILD plays the model beside the original; a run recorded there and sealed with Tab goes to the sealed store");
+  await page.keyboard.press("Escape");
+  await until("back to the review", async () => (await text(page, "#modebadge")).startsWith("REVIEW"));
+
+  // FREE PLAY: the rebuild alone, never the original, and the agent's words
+  // wait until Esc goes back.
+  await page.click("#tab-free");
+  await until("FREE PLAY", async () => (await text(page, "#modebadge")) === "FREE PLAY: THE REBUILD", 120000);
+  const sources = new Set();
+  for (let i = 0; i < 10; i++) {
+    sources.add(await page.evaluate(() => document.body.dataset.frameSource));
+    await page.waitForTimeout(100);
+  }
+  if (sources.has("original")) fail(`FREE PLAY showed the original: ${[...sources]}`);
+  if (await page.isHidden("#settings")) fail("FREE PLAY has no settings panel");
+  await shot(page, "free-play");
   const later = "One more when you're ready.";
   gpRun(["mechanic", "say", GAME, MECH, later]);
   await until("the waiting message", async () => (await text(page, "#busy-text")).includes("Your agent has a message"));
   if (!(await page.isHidden("#overlay"))) fail("the agent's words showed over FREE PLAY");
-  ok(`FREE PLAY plays (${fb - fa} frames in half a second) and the agent's words wait`);
+  ok(`FREE PLAY is the rebuild alone (${[...sources].join(", ")}), with its settings, and the agent's words wait`);
   await page.keyboard.press("Escape");
   await until("the words after Esc", async () => (await text(page, "#say")).startsWith(later) && !(await page.isHidden("#overlay")));
   if (!(await page.evaluate(() => document.getElementById("tab-mech").classList.contains("on")))) fail("Esc didn't go back to HELP WITH MECHANICS");
   ok("Esc goes back to HELP WITH MECHANICS, where the words show");
-  // Answer it, so nothing is over the game while the clip is reviewed.
   await page.keyboard.press("Enter");
 
-  // The clip on the model: played through the original and the game's
-  // model (the skeleton gp game new wrote) as the score plays it, both
-  // pictures of each frame kept and shown, side by side and as differences.
-  await page.click("#clips .rv2-open");
-  const title = await until("the review", async () => {
-    const t = await text(page, "#rv2-title");
-    return /\d+ of \d+ frames the same/.test(t) ? t : (await text(page, "#rv2-says")).startsWith("No review") ? fail(await text(page, "#rv2-says")) : null;
-  }, 120000);
-  const reviewed = join(session, "clips", "001.review", "meta.json");
-  if (!existsSync(reviewed)) fail(`the review isn't kept in ${reviewed}`);
-  const review = JSON.parse(readFileSync(reviewed, "utf8"));
-  const shown = review.have.indexOf(true);
-  if (shown < 0) fail("the review kept no pictures");
-  await page.evaluate((k) => { const s = document.getElementById("rv2-scrub"); s.value = String(k); s.dispatchEvent(new Event("input")); }, shown);
-  await until("the original's picture drawn", () => page.evaluate(() => {
-    const c = document.getElementById("rv2-o");
-    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
-    for (let i = 0; i < d.length; i += 4) if (d[i] || d[i + 1] || d[i + 2]) return true;
-    return false;
-  }));
-  await page.selectOption("#rv2-layout", "diff");
-  await until("the differences counted", async () => /pixels differ|every pixel the same/.test(await text(page, "#rv2-says")));
-  await page.keyboard.press("Escape");
-  if (!(await page.isHidden("#rv2"))) fail("Esc didn't close the review");
-  ok(`the clip on the model: ${title.replace(/^Clip 1 on the model: /i, "")}, its pictures kept and shown, Esc closes it`);
+  // The decision model at the controller, played as it comes: a stand-in
+  // decision server here answers every question with a chord, and gp
+  // mechanic demo plays from clip 1's start; the page watches it, then
+  // loops the clip it made under the words. Then say --judge: the model's
+  // pick shows beside the choices.
+  const decide = await fakeDecider();
+  // The demo reads the player's place from the game's mapping; the
+  // skeleton's is empty, so the check maps Moss Hop's player bytes
+  // (templates/mosshop/mapping.toml) as a person would.
+  const mapping = join(games, GAME, "mapping.toml");
+  writeFileSync(mapping, readFileSync(mapping, "utf8").replace(/^field = \[\]$/m, "") + '\n[[field]]\npath = "entities.player[0].x"\nram = [0x10, 0x11]\n\n[[field]]\npath = "entities.player[0].y"\nram = [0x12, 0x1C]\n');
+  const demo = spawn(gp, ["mechanic", "demo", GAME, MECH, "--hint", "hop once", "--times", "1", "--frames", "120", "--every", "6", "--from", "1", "--decide", decide, "--games", games], { env });
+  let demoErr = "", demoCode = null;
+  demo.stderr.on("data", (d) => { demoErr += d; });
+  demo.on("exit", (c) => { demoCode = c; });
+  await until("the page watching the demo", async () => {
+    if (demoCode !== null && demoCode !== 0) fail(`gp mechanic demo exited ${demoCode}: ${demoErr}`);
+    return (await text(page, "#modebadge")) === "WATCHING YOUR AGENT PLAY";
+  }, 60000);
+  await shot(page, "watching-the-demo");
+  await until("the demo's end", () => demoCode !== null, 60000);
+  if (demoCode !== 0) fail(`gp mechanic demo exited ${demoCode}: ${demoErr}`);
+  await until("the demo's clip under the words", async () => (await text(page, "#say")).includes("The model's clip"), 30000);
+  if (!existsSync(join(session, "clips", "002.decisions.ndjson"))) fail("the demo kept no decisions");
+  ok("gp mechanic demo plays from clip 1's start and the page watches it, then shows its clip");
+  await page.keyboard.press("Enter");
+  // Not gpRun: the stand-in server answers from this process, which a
+  // spawnSync would hold still.
+  const judged = await new Promise((r) => {
+    const p = spawn(gp, ["mechanic", "say", GAME, MECH, "Was that a hop?", "--choice", "yes", "--choice", "no", "--show", "2", "--judge", "--decide", decide, "--games", games], { env });
+    let err = "";
+    p.stderr.on("data", (d) => { err += d; });
+    p.on("exit", (c) => r({ c, err }));
+  });
+  if (judged.c !== 0) fail(`gp mechanic say --judge exited ${judged.c}: ${judged.err}`);
+  await until("Laya's pick beside the choices", async () => (await text(page, "#choices")).includes("Laya's pick"));
+  await page.keyboard.press("Enter");
+  await until("the agreement kept", () => readFileSync(join(session, "talk.ndjson"), "utf8").includes('"agreed":true'));
+  ok("say --judge shows the model's pick, and the answer keeps whether the person agreed");
   if (errors.length) fail(`the page threw: ${errors.join("; ")}`);
 
   // No player built: the page says so instead of a CompileError.
@@ -307,12 +439,21 @@ async function arcade() {
   ok("gp mechanic say shows over the arcade game");
   await page.keyboard.press("Enter");
   await page.click("#clips .rv2-open");
-  const says = await until("ON THE MODEL's words", async () => {
-    const t = await text(page, "#rv2-says");
+  const says = await until("REVIEW REBUILD's words", async () => {
+    const t = await text(page, "#busy-text");
     return t.includes("an arcade game has none yet") ? t : null;
   });
-  await page.keyboard.press("Escape");
-  ok(`ON THE MODEL refuses in words: ${says.slice(0, 80)}...`);
+  ok(`REVIEW REBUILD refuses in words: ${says.slice(0, 80)}...`);
+  await page.click("#tab-free");
+  const free = await until("FREE PLAY's words", async () => {
+    const t = (await text(page, "#toast")) + (await text(page, "#state"));
+    return t.includes("an arcade game has none yet") ? t : null;
+  });
+  if (!(await page.evaluate(() => document.getElementById("tab-mech").classList.contains("on")))) fail("the arcade page stayed in FREE PLAY with nothing to play");
+  ok(`FREE PLAY refuses in words: ${free.slice(0, 80)}...`);
+  const r = spawnSync(gp, ["mechanic", "demo", game, mech, "--hint", "tap", "--games", games], { env, encoding: "utf8" });
+  if (r.status === 0 || !r.stderr.includes("arcade game")) fail(`gp mechanic demo on an arcade game: ${r.status} ${r.stderr}`);
+  ok("gp mechanic demo refuses an arcade game in words");
   if (errors.length) fail(`the arcade page threw: ${errors.join("; ")}`);
 }
 
