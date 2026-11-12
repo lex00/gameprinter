@@ -22,7 +22,7 @@
 //! module). Sound is presentation only, as drawing is.
 
 use gp_arcade::video::{HEIGHT, WIDTH};
-use gp_arcade::{Controls, Romset, Tapper};
+use gp_arcade::{Controls, FourWay, Romset, Tapper};
 use gp_evidence::Hash;
 use gp_evidence::input_log::{InputFrame, InputLog};
 
@@ -66,6 +66,9 @@ pub struct Player {
     rgba: Vec<u8>,
     /// The last frame's sound, left and right interleaved, when on.
     audio: Vec<f32>,
+    /// MAME's 4-way joystick filter, between the person's keys and the
+    /// board ([`Player::step`]).
+    stick: FourWay,
 }
 
 impl Player {
@@ -81,6 +84,7 @@ impl Player {
             script: None,
             rgba: vec![0; RGBA_BYTES],
             audio: Vec::new(),
+            stick: FourWay::default(),
         })
     }
 
@@ -122,15 +126,26 @@ impl Player {
         &self.audio
     }
 
-    /// Runs one frame with these controls (bits 0 to 6: coin, start,
-    /// right, left, down, up, tap). Returns whether the game read them.
+    /// Runs one frame with the controls a person holds (bits 0 to 6: coin,
+    /// start, right, left, down, up, tap). The joystick goes through MAME's
+    /// 4-way filter first, as it would for a player in MAME: two directions
+    /// at once become one. The log keeps what reached the board, so it
+    /// replays the same with or without the filter, in MAME as the oracle
+    /// sets inputs. Returns whether the game read them.
     pub fn step(&mut self, bits: u32, reset: bool) -> Result<bool, String> {
         if reset {
-            return Err("the arcade board's reset isn't modelled".into());
+            return Err("the arcade board has no reset button".into());
         }
         if bits > 0x7f {
             return Err(format!("buttons {bits:#x}: bits 0 to 6 only"));
         }
+        let bits = self.stick.filter(Controls::from_bits(bits)).bits();
+        self.play(bits);
+        Ok(self.tapper.polled())
+    }
+
+    /// One frame with these bits on the board as they are.
+    fn play(&mut self, bits: u32) {
         self.tapper.step(Controls::from_bits(bits));
         self.audio.clear();
         self.audio
@@ -145,7 +160,6 @@ impl Player {
             reset: false,
         });
         self.pictures.push(self.tapper.picture_hash());
-        Ok(self.tapper.polled())
     }
 
     /// Plays the next frame of the log being replayed. False when there's
@@ -155,7 +169,15 @@ impl Player {
         let Some(f) = self.script.as_ref().and_then(|s| s.frames.get(i)).copied() else {
             return Ok(false);
         };
-        self.step(u32::from(f.pads[0]), false)?;
+        // A log holds what reached the board, already through the filter.
+        let bits = u32::from(f.pads[0]);
+        if bits > 0x7f {
+            return Err(format!("buttons {bits:#x}: bits 0 to 6 only"));
+        }
+        self.play(bits);
+        let held = Controls::from_bits(bits);
+        self.stick = FourWay::default();
+        self.stick.filter(held);
         Ok(true)
     }
 
@@ -227,6 +249,12 @@ impl Player {
         self.tapper.restore(&snap)?;
         self.tapper.take_audio();
         self.audio.clear();
+        // The filter's state isn't saved: it starts again from the last
+        // frame's directions, which differs only while a diagonal is held.
+        self.stick = FourWay::default();
+        if let Some(f) = log.frames.last() {
+            self.stick.filter(Controls::from_bits(u32::from(f.pads[0])));
+        }
         self.log = log;
         self.pictures = pictures;
         Ok(())
@@ -323,6 +351,20 @@ mod tests {
         assert_eq!(p.rgba().len(), RGBA_BYTES);
         assert!(p.step(0, true).is_err());
         assert!(p.step(0x80, false).is_err());
+    }
+
+    /// Up and right held at once from rest reach the board as right alone,
+    /// as MAME's 4-way filter has it, and the log keeps right.
+    #[test]
+    fn a_diagonal_goes_through_the_4way_filter() {
+        let Some(zip) = zip() else { return };
+        let mut p = Player::new(&zip).unwrap();
+        p.step(0, false).unwrap();
+        p.step(0x04 | 0x20, false).unwrap();
+        p.step(0x04 | 0x20, false).unwrap();
+        let log = p.input_log();
+        assert!(log.lines().any(|l| l.ends_with("..R....")), "{log}");
+        assert!(!log.contains("..R..U."), "{log}");
     }
 
     /// The log keeps the game's polled flag: false on the boot frames,

@@ -4,15 +4,24 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::joystick::FourWay;
 use crate::mcr::{Controls, RAM_RECORD, Tapper};
 
 /// The oracle's input log: one entry per frame from frame 1, as bits in
-/// the order of its `columns` line (CSRLDUT for Tapper).
+/// the order of its `columns` line: CSRLDUT for Tapper, or CSRLDUTX with
+/// the tilt switch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputLog {
     pub system: String,
     pub columns: String,
+    /// What the log holds, a frame each.
     pub frames: Vec<u32>,
+    /// `joystick 4way` in the header: the directions go through MAME's
+    /// 4-way filter, as a player's do, instead of straight to the ports.
+    pub four_way: bool,
+    /// What reaches the board each frame: `frames`, through the filter
+    /// when `four_way` is set.
+    pub played: Vec<u32>,
 }
 
 impl InputLog {
@@ -24,6 +33,7 @@ impl InputLog {
         }
         let mut system = None;
         let mut columns: Option<String> = None;
+        let mut four_way = false;
         let mut frames = Vec::new();
         for (n, raw) in lines {
             let line = raw.split('#').next().unwrap_or("").trim();
@@ -34,8 +44,28 @@ impl InputLog {
                 system = Some(s.trim().to_string());
                 continue;
             }
+            if let Some(j) = line.strip_prefix("joystick ") {
+                match j.trim() {
+                    "4way" => four_way = true,
+                    "direct" => four_way = false,
+                    other => {
+                        return Err(format!(
+                            "line {}: joystick {other}; expected `4way` or `direct`",
+                            n + 1
+                        ));
+                    }
+                }
+                continue;
+            }
             if let Some(c) = line.strip_prefix("columns ") {
-                columns = Some(c.trim().to_string());
+                let c = c.trim();
+                if !matches!(c, "CSRLDUT" | "CSRLDUTX") {
+                    return Err(format!(
+                        "line {}: columns {c}; Tapper's are CSRLDUT, or CSRLDUTX with the tilt",
+                        n + 1
+                    ));
+                }
+                columns = Some(c.to_string());
                 continue;
             }
             let cols = columns
@@ -68,16 +98,28 @@ impl InputLog {
             }
             frames.extend(std::iter::repeat_n(bits, count));
         }
+        let played = if four_way {
+            let mut stick = FourWay::default();
+            frames
+                .iter()
+                .map(|&b| stick.filter(Controls::from_bits(b)).bits())
+                .collect()
+        } else {
+            frames.clone()
+        };
         Ok(Self {
             system: system.ok_or("no `system` line")?,
             columns: columns.ok_or("no `columns` line")?,
             frames,
+            four_way,
+            played,
         })
     }
 
-    /// The controls held in frame `n` (1 is the first frame).
+    /// The controls that reach the board in frame `n` (1 is the first
+    /// frame): the log's, through the 4-way filter when it asks for it.
     pub fn controls(&self, n: usize) -> Controls {
-        Controls::from_bits(self.frames.get(n.wrapping_sub(1)).copied().unwrap_or(0))
+        Controls::from_bits(self.played.get(n.wrapping_sub(1)).copied().unwrap_or(0))
     }
 }
 
@@ -301,6 +343,26 @@ mod tests {
         );
         assert_eq!(log.controls(9), Controls::default());
         assert!(InputLog::parse("gp-arcade-input 0\nsystem x\ncolumns CS\n1 X.\n").is_err());
+        let tilt = InputLog::parse(
+            "gp-arcade-input 0\nsystem tapper\ncolumns CSRLDUTX\n1 ........\n1 .......X\n",
+        )
+        .unwrap();
+        assert_eq!(
+            tilt.controls(2),
+            Controls {
+                tilt: true,
+                ..Controls::default()
+            }
+        );
+        assert_eq!(tilt.controls(2).ports()[0], 0xdf);
+        let diag = "gp-arcade-input 0\nsystem tapper\ncolumns CSRLDUT\n1 .......\n2 ..R..U.\n";
+        let direct = InputLog::parse(diag).unwrap();
+        assert_eq!(direct.controls(2).ports()[1], !0x09);
+        let filtered = InputLog::parse(&diag.replace("columns", "joystick 4way\ncolumns")).unwrap();
+        assert!(filtered.four_way);
+        assert_eq!(filtered.frames, direct.frames);
+        assert_eq!(filtered.controls(2).ports()[1], !0x01);
+        assert_eq!(filtered.controls(3).ports()[1], !0x01);
     }
 
     #[test]

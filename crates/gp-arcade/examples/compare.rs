@@ -178,6 +178,7 @@ fn run() -> Result<bool, String> {
     let mut first: Option<(usize, FrameDiff)> = None;
     let (mut ram_frames, mut port_frames, mut pic_frames, mut ay_frames) = (0, 0, 0, 0);
     let mut ay_writes = 0usize;
+    let mut watchdog_seen = false;
     let mut png_written = false;
     for n in 0..frames {
         if n > 0 {
@@ -200,8 +201,9 @@ fn run() -> Result<bool, String> {
                 }
             }
         }
-        if t.watchdog_fired() && first.is_none() {
-            println!("frame {n}: the watchdog ran out (MAME would reset here)");
+        if t.watchdog_fired() && !watchdog_seen {
+            watchdog_seen = true;
+            println!("frame {n}: the watchdog ran out; the board resets as the next frame starts");
         }
         let d = compare(&t, &cap, n);
         ay_writes += t.ay_writes().len();

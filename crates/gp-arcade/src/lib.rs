@@ -61,6 +61,7 @@
 pub mod attotime;
 pub mod ctc;
 pub mod irq;
+pub mod joystick;
 pub mod mcr;
 pub mod oracle;
 pub mod protocol;
@@ -72,11 +73,13 @@ pub mod state;
 pub mod video;
 pub mod z80;
 
+pub use joystick::FourWay;
 pub use mcr::{Controls, Tapper};
 
 /// What made a snapshot: a start cache keys its snapshots by it, so a
 /// change to the board's emulation or its snapshot bumps it, by hand.
 /// mcr 2: the AYs make sound, and their generators are in the snapshot.
-pub const RUNTIME_VERSION: &str = concat!("gp-arcade ", env!("CARGO_PKG_VERSION"), " mcr 2");
+/// mcr 3: the watchdog resets the board; the tilt switch.
+pub const RUNTIME_VERSION: &str = concat!("gp-arcade ", env!("CARGO_PKG_VERSION"), " mcr 3");
 pub use protocol::ArcadeRuntime;
 pub use romset::Romset;

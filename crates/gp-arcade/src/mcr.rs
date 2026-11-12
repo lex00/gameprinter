@@ -65,6 +65,8 @@ pub enum What {
     /// Queued IRQ line changes for a CPU.
     MainIrq,
     SsioIrq,
+    /// running_machine's soft reset, set by the watchdog.
+    SoftReset,
 }
 
 impl What {
@@ -81,6 +83,7 @@ impl What {
             Self::SsioWrite => (8, 0),
             Self::MainIrq => (9, 0),
             Self::SsioIrq => (10, 0),
+            Self::SoftReset => (11, 0),
         }
     }
 
@@ -97,6 +100,7 @@ impl What {
             8 => Self::SsioWrite,
             9 => Self::MainIrq,
             10 => Self::SsioIrq,
+            11 => Self::SoftReset,
             _ => return Err(format!("unknown timer {tag}/{arg} in snapshot")),
         })
     }
@@ -113,10 +117,15 @@ pub struct Controls {
     pub down: bool,
     pub up: bool,
     pub tap: bool,
+    /// The cabinet's tilt switch. Only the oracle's logs name it (column
+    /// `X`, after the seven of `CSRLDUT`); the game hangs after a tilt and
+    /// the watchdog resets the board.
+    pub tilt: bool,
 }
 
 impl Controls {
-    /// The oracle log's columns, CSRLDUT, one bit each from bit 0.
+    /// The oracle log's columns, CSRLDUT and then X (tilt), one bit each
+    /// from bit 0.
     pub fn from_bits(bits: u32) -> Self {
         let b = |n: u32| bits & (1 << n) != 0;
         Self {
@@ -127,12 +136,13 @@ impl Controls {
             down: b(4),
             up: b(5),
             tap: b(6),
+            tilt: b(7),
         }
     }
 
     pub fn bits(self) -> u32 {
         [
-            self.coin, self.start, self.right, self.left, self.down, self.up, self.tap,
+            self.coin, self.start, self.right, self.left, self.down, self.up, self.tap, self.tilt,
         ]
         .iter()
         .enumerate()
@@ -148,7 +158,7 @@ impl Controls {
     /// a time is meaningful.
     pub fn ports(self) -> [u8; 5] {
         let clear = |on: bool, mask: u8| if on { mask } else { 0 };
-        let ip0 = !(clear(self.coin, 0x01) | clear(self.start, 0x04));
+        let ip0 = !(clear(self.coin, 0x01) | clear(self.start, 0x04) | clear(self.tilt, 0x20));
         let ip1 = !(clear(self.right, 0x01)
             | clear(self.left, 0x02)
             | clear(self.down, 0x04)
@@ -180,7 +190,8 @@ pub struct Board {
     pub main_irq: IrqLine<What>,
     pub ssio_irq: IrqLine<What>,
     pub watchdog_counter: i32,
-    /// Set when the watchdog ran out (MAME would reset the machine).
+    /// Set when the watchdog has run out since power-on: the board reset
+    /// itself, as MAME's does.
     pub watchdog_fired: bool,
     // The screen.
     pub vblank_start: Attotime,
@@ -541,38 +552,51 @@ impl Tapper {
         board.vblank_start = Attotime::ZERO;
         board.vblank_end = Attotime::new(0, VBLANK_PERIOD);
 
-        // The reset, in device order. The main Z80's daisy chain resets
-        // the CTC after the CPU, and the CTC resets again in its own turn.
-        let mut main = Z80::new();
-        main.reset();
+        // The AYs reset in Sound::new; the rest in reset_devices.
+        let mut tapper = Self {
+            main: Z80::new(),
+            ssio: Z80::new(),
+            board,
+            gfx: Arc::new(Gfx::decode(&rom.gfx1, &rom.gfx2)),
+            pens: vec![0; WIDTH * HEIGHT],
+            pens_palette: [0; 64],
+            frame: 0,
+        };
+        tapper.reset_devices();
+        tapper
+    }
+
+    /// running_machine::reset_all_devices, in device order, without the
+    /// AYs: at power-on, and at a soft reset. The main Z80's daisy chain
+    /// resets the CTC after the CPU, and the CTC resets again in its own
+    /// turn. Each CPU keeps the registers device_reset doesn't set; the
+    /// RAM, the palette and the screen's timing are untouched.
+    fn reset_devices(&mut self) {
+        let board = &mut self.board;
+        for e in &mut board.sched.execs {
+            // interface_pre_reset
+            e.totalcycles = 0;
+        }
+        self.main.reset();
         board.main_irq.reset(0xff);
         board.ctc.reset(&mut board.sched, &mut board.main_irq);
         board.ctc.reset_daisy();
         board.scantimer_first = true;
         board
             .sched
-            .adjust(t_scantimer, Attotime::ZERO, 0, Attotime::NEVER);
+            .adjust(board.t_scantimer, Attotime::ZERO, 0, Attotime::NEVER);
         board.ctc.reset(&mut board.sched, &mut board.main_irq);
         board.ctc.reset_daisy();
         board.watchdog_counter = WATCHDOG_FRAMES;
         board.ssio_data = [0; 4];
         board.ssio_status = 0;
         board.ssio_14024 = 0;
-        let mut ssio = Z80::new();
-        ssio.reset();
+        self.ssio.reset();
         board.ssio_irq.reset(0xff);
         let period = Attotime::from_hz(SSIO_CLOCK / (2 * 16 * 10));
-        board.sched.adjust(t_ssio_periodic, period, 0, period);
-
-        Self {
-            main,
-            ssio,
-            board,
-            gfx: Arc::new(Gfx::decode(&rom.gfx1, &rom.gfx2)),
-            pens: vec![0; WIDTH * HEIGHT],
-            pens_palette: [0; 64],
-            frame: 0,
-        }
+        board.sched.adjust(board.t_ssio_periodic, period, 0, period);
+        // mcr_state::machine_reset, after the children.
+        board.cocktail_flip = false;
     }
 
     /// Frames run since power-on.
@@ -693,10 +717,14 @@ impl Tapper {
                     &mut self.pens,
                 );
                 self.pens_palette = b.palette;
-                // The watchdog's VBLANK callback.
+                // The watchdog's VBLANK callback, after the frame's
+                // picture: when it runs out, schedule_soft_reset sets the
+                // machine's reset timer for now, so it fires after the
+                // timers already due now.
                 b.watchdog_counter -= 1;
                 if b.watchdog_counter == 0 {
                     b.watchdog_fired = true;
+                    b.sched.timer_set(Attotime::ZERO, What::SoftReset, 0);
                 }
                 let until = b.time_until_pos(HEIGHT as i64);
                 b.sched.adjust(b.t_vblank_begin, until, 0, Attotime::NEVER);
@@ -729,6 +757,15 @@ impl Tapper {
                 for state in b.ssio_irq.take() {
                     self.ssio.set_irq_line(state, false);
                 }
+            }
+            What::SoftReset => {
+                // running_machine::soft_reset: every device's reset, the
+                // AYs (the SSIO's children, after its CPU) included.
+                // sound_manager::reset resets the sound devices first, each
+                // brought up to now; the second reset changes nothing more.
+                let now = self.board.now();
+                self.board.sound.reset(now);
+                self.reset_devices();
             }
         }
     }
@@ -831,8 +868,8 @@ impl Tapper {
             .unwrap_or_default()
     }
 
-    /// Whether the watchdog ran out: MAME would have reset the machine,
-    /// which isn't modelled.
+    /// Whether the watchdog has run out since power-on, which resets the
+    /// board as MAME's soft reset does.
     pub fn watchdog_fired(&self) -> bool {
         self.board.watchdog_fired
     }
@@ -872,6 +909,16 @@ impl Tapper {
         w.bytes(&self.pens);
         for &c in &self.pens_palette {
             w.u32(c);
+        }
+        // Only between a reset and the sound update after it, so a
+        // snapshot (and its hash) without one is as it always was.
+        if let Some(sp) = &b.sound.split {
+            w.i32(sp.at.0);
+            w.i64(sp.at.1);
+            for d in &sp.duty {
+                w.bytes(d);
+            }
+            w.u8(sp.mute);
         }
         w.out
     }
@@ -915,6 +962,20 @@ impl Tapper {
         for c in &mut next.pens_palette {
             *c = r.u32()?;
         }
+        next.board.sound.split = if r.done().is_ok() {
+            None
+        } else {
+            let at = (r.i32()?, r.i64()?);
+            let mut duty = [[0u8; 3]; 2];
+            for d in &mut duty {
+                r.fill(d)?;
+            }
+            Some(crate::sound::GainSplit {
+                at,
+                duty,
+                mute: r.u8()?,
+            })
+        };
         r.done()?;
         *self = next;
         Ok(())

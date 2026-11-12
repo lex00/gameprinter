@@ -6,7 +6,9 @@
 //! - The captures: tapper-first-a and tapper-deaths-a under
 //!   $GP_HOME/work/oracle ($GP_HOME defaults to ~/.gameprinter), played
 //!   with scripts/oracle/inputs/tapper-first.input and tapper-deaths.input.
-//!   Each one that is missing is skipped.
+//!   Each one that is missing is skipped. So are tapper-watchdog-b
+//!   (tapper-watchdog.input, with its sound.wav), tapper-diagonal-a and
+//!   tapper-diagonal-4way-a.
 //! - tapper-first-sound: the same log recorded with the AY writes
 //!   (`ay.tsv`) and the speakers (`sound.wav`): every frame's AY writes
 //!   must be MAME's, and the speakers' samples all but equal.
@@ -154,6 +156,11 @@ fn tapper_first_sounds_as_mame_does() {
     };
     assert!(cap.ay.is_some(), "tapper-first-sound has no ay.tsv");
     matches_every_frame(&rom, &cap, &log);
+    sounds_as_mame_does(&rom, &cap, &log);
+}
+
+/// The speakers' samples against the capture's sound.wav, when it has one.
+fn sounds_as_mame_does(rom: &Romset, cap: &Capture, log: &InputLog) {
     let Ok(wav) = std::fs::read(cap.dir.join("sound.wav")) else {
         eprintln!("skipped the samples: no sound.wav");
         return;
@@ -170,7 +177,7 @@ fn tapper_first_sounds_as_mame_does() {
         .iter()
         .map(|b| i16::from_le_bytes(*b))
         .collect();
-    let mut t = Tapper::power_on(&rom);
+    let mut t = Tapper::power_on(rom);
     t.set_audio(true);
     let mut ours = Vec::new();
     for n in 1..cap.rows.len() {
@@ -191,4 +198,65 @@ fn tapper_first_sounds_as_mame_does() {
     // Float rounding in the mixing leaves a few samples one step apart.
     assert!(worst <= 1, "a sample differs by {worst}");
     assert!(differ * 100_000 < ours.len(), "{differ} samples differ");
+}
+
+/// A tilt hangs the game and the watchdog resets the board: run alone,
+/// the reset must come, the game must test its RAM and read its inputs
+/// again, and a second game must start. With the capture
+/// tapper-watchdog-b, every frame must match MAME's, the reset included,
+/// and the speakers too.
+#[test]
+fn the_watchdog_resets_the_board_after_a_tilt() {
+    let Some(rom) = romset() else {
+        return;
+    };
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/oracle/inputs/tapper-watchdog.input");
+    let log =
+        InputLog::parse(&std::fs::read_to_string(path).expect("the input log")).expect("it parses");
+    let mut t = Tapper::power_on(&rom);
+    let mut fired_at = None;
+    let mut polled_after = 0;
+    for n in 1..=log.frames.len() {
+        t.step(log.controls(n));
+        if fired_at.is_none() && t.watchdog_fired() {
+            fired_at = Some(n);
+        }
+        if fired_at.is_some() && t.polled() {
+            polled_after += 1;
+        }
+        if (680..700).contains(&n) {
+            // Snapshots around the reset restore exactly.
+            let mut u = t.clone();
+            u.restore(&t.snapshot()).expect("it restores");
+            assert_eq!(u.snapshot(), t.snapshot(), "frame {n}");
+        }
+    }
+    let fired_at = fired_at.expect("the watchdog ran out");
+    eprintln!("the watchdog ran out at frame {fired_at}; {polled_after} frames polled after");
+    assert!(polled_after > 300, "the game came back and read its inputs");
+    if let Some((cap, log)) = capture("tapper-watchdog-b", "tapper-watchdog.input") {
+        matches_every_frame(&rom, &cap, &log);
+        sounds_as_mame_does(&rom, &cap, &log);
+    }
+}
+
+/// Diagonals and opposing directions: as the oracle sets them they reach
+/// the board as held (tapper-diagonal-a); through MAME's 4-way filter, as
+/// a player's would, one direction is kept (tapper-diagonal-4way-a, which
+/// gp_arcade::FourWay must match).
+#[test]
+fn diagonals_match_the_mame_oracle_with_and_without_the_4way_filter() {
+    let Some(rom) = romset() else {
+        return;
+    };
+    if let Some((cap, log)) = capture("tapper-diagonal-a", "tapper-diagonal.input") {
+        assert!(!log.four_way);
+        matches_every_frame(&rom, &cap, &log);
+    }
+    if let Some((cap, log)) = capture("tapper-diagonal-4way-a", "tapper-diagonal-4way.input") {
+        assert!(log.four_way);
+        assert_ne!(log.played, log.frames, "the filter changes some frames");
+        matches_every_frame(&rom, &cap, &log);
+    }
 }

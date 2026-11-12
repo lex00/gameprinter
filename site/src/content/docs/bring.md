@@ -129,8 +129,8 @@ Tapper's board has ways a model of it must copy to match it frame for frame. Mod
 | Sprite pixel 8 | A sprite pixel of value 8 draws nothing but hides the sprites under it, so the tile shows there |
 | No sprite limit | The sprite board draws all 128 sprites every frame: no flicker, no limit a line |
 | Palette's ninth bit | Each colour is the byte of its pair the game wrote last, with a ninth bit saying which byte that was, so the palette depends on the order of writes, not only on what palette RAM holds |
-| 4-way joystick | MAME filters the joystick to four ways; gp-arcade doesn't yet, so logs press one direction at a time |
-| Watchdog | The watchdog resets the board after 16 frames without a write; gp-arcade flags it and doesn't reset |
+| 4-way joystick | The joystick moves four ways: opposing directions cancel, and a diagonal keeps the direction that just changed (the horizontal one from rest). MAME filters a player's joystick so, and the mechanic page does too; a clip keeps what reached the board |
+| Watchdog | The board resets itself after 16 frames without a write to the watchdog. A tilt during play hangs the game until it does |
 | Sound: DC offset | MAME's AY table puts silence at -0.125, so each voice sits at an offset that changes with its volume |
 | Sound: duty volume | The SSIO sets each voice's loudness by gating it with a duty cycle from its PROM, in 16 coarse steps |
 | Sound: volume steps | The SSIO's volumes and mute act a 20 ms piece at a time (MAME's stream updates), not at the write |

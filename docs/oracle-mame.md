@@ -61,11 +61,12 @@ columns CSRLDUT
 
 - The first line is the format and its version.
 - `system` is MAME's name for the set, and must match the zip's name.
-- `columns` lists the controls, which must be the script's list for that system. Tapper's are coin 1, start 1, right, left, down, up and tap.
+- `columns` lists the controls, which must be the script's list for that system. Tapper's are coin 1, start 1, right, left, down, up and tap, `CSRLDUT`. A log may add the tilt switch as an eighth column, `CSRLDUTX`.
+- `joystick 4way`, before the frames, sends the joystick's columns through MAME's 4-way filter, as a player's joystick would be (see "The joystick" below). Without it, or with `joystick direct`, they reach the ports as the log holds them.
 - Each other line is a frame count, then one character per column: the column's letter when held, `.` when not.
 - `#` starts a comment.
 
-The lines run from frame 1. Frame 1 must hold nothing (see below). Player 2's controls, coin 2, tilt and service aren't in version 0.
+The lines run from frame 1. Frame 1 must hold nothing (see below). Player 2's controls, coin 2 and service aren't in version 0.
 
 ## What a frame is
 
@@ -74,7 +75,12 @@ MAME ends a video frame when the primary screen's VBLANK starts. At that point `
 - Frame 0 is power-on. The script runs at emulated time zero, after the reset and before any instruction.
 - Frame n is the state at the n-th frame notifier, after emulating from the end of frame n-1. Frame 1 is a little shorter than the rest, since the first VBLANK comes before a full period has passed.
 - MAME's input system has its own frame notifier, which runs before the script's. Only that notifier copies a value the script sets into the ports the game reads. So the script sets the log's frame n+2 at the end of frame n, and the game sees it during frame n+2. Nothing set by a script can reach frame 1, so the log's frame 1 must be empty.
-- Each record holds the input ports as MAME had them during that frame, read back from MAME, not copied from the log. `buttons` is those ports turned back into the log's letters. If it differs from the log, `input_mismatches` in `capture.txt` counts it. A coin the game has locked out, for example, wouldn't reach the port.
+- Each record holds the input ports as MAME had them during that frame, read back from MAME, not copied from the log. `buttons` is those ports turned back into the log's letters. If it differs from the log, `input_mismatches` in `capture.txt` counts it. A coin the game has locked out, for example, wouldn't reach the port, and with `joystick 4way` every frame the filter changed counts.
+- A soft reset (the watchdog's) doesn't end the capture. MAME runs the autoboot script again after every reset, in the same Lua state, so the script does nothing the second time and its frame notifier goes on counting.
+
+## The joystick
+
+Tapper's joystick is `PORT_4WAY` in mcr.cpp. MAME filters it in `digital_joystick::frame_update` (ioport.cpp): opposing directions cancel, a diagonal keeps the direction that just changed, a diagonal reached from rest or from the other diagonal keeps the horizontal one, and a diagonal held on keeps what it chose. The filter only acts on what a field's input sequence says is pressed: a value a script sets with `set_value` skips it. So by default the oracle's log reaches the board as written, diagonals included, and a log with `joystick 4way` presses each direction through its sequence instead (`NOT KEYCODE_A`, which reads as pressed with no keyboard attached), so MAME filters it as a player's keys. gp-arcade's `FourWay` is a port of the filter: the oracle reader applies it to `joystick 4way` logs, and the mechanic page's player applies it to what a person holds, keeping what reached the board in the clip's log.
 
 ## The output
 
@@ -141,8 +147,13 @@ When the capture has an `ay.tsv`, the AY writes are compared too, frame by frame
 | `tapper-m3-five-ay` (set `tapper`) | `tapper-five-levels.input` | 10934 | all match, AY writes too (109,838 writes) |
 | `tapper-m3-eight-ay` (set `tapper`) | `tapper-eight-levels.input` | 18001 | all match, AY writes too (342,346 writes) |
 | `tapper-m3b-cycle` (set `tapper`) | `tapper-cycle.input` | 27819 | all match, AY writes too (489,996 writes) |
+| `tapper-watchdog-b` | `tapper-watchdog.input` | 2023 | all match, AY writes too (5,462 writes), the watchdog's reset at frame 684 included; the speakers too (16 of 6,468,480 samples one step apart) |
+| `tapper-diagonal-a` | `tapper-diagonal.input` | 1167 | all match, AY writes too (5,390 writes); diagonals reach the board as held |
+| `tapper-diagonal-4way-a` | `tapper-diagonal-4way.input` | 1167 | all match, AY writes too (5,338 writes); MAME's 4-way filter changed 160 frames, and `FourWay` changes the same |
 
 The `tapper-*` plays of milestone 3 were made by gp-arcade's autoplay example, a player that reads the board's RAM and decides each frame's presses: coin and start, then serving, catching mugs and taking tips. tapper-eight-levels clears eight levels (the saloon, the sports bar and three punk bar levels) and both bonus rounds. tapper-cycle, from the player's search, clears levels 1 to 15 (the saloon, the sports bar, the punk bar, the space bar and the saloon again as the game cycles) and wins bonus rounds 1 to 5. The speakers on tapper-five-levels (`tapper-m3-five-sound`, 6 minutes) differ from MAME's WAV by at most one step of 16 bits, as on tapper-first.
+
+tapper-watchdog makes the watchdog run out from the game's own code. Tapper checks the tilt switch in the CTC's channel 1 interrupt (0158 in rbtapper and tapper): while the switch is held it feeds the watchdog, and once it's let go it jumps to itself with interrupts off. So a tilt during play hangs the game, and 16 frames later the watchdog resets the board as MAME's soft reset does: every device's reset in MAME's order, the RAM, the palette and the screen's timing kept. The game then tests its RAM again, goes back to attract mode and takes a second coin. Two things about the reset were found only by comparing with MAME's WAV: the sound devices are brought up to the reset's time before they reset (`device_sound_interface::interface_pre_reset`), so the speaker samples before it keep the volumes from before, and that update ends at the 48 kHz sample its time rounds down to.
 
 The sound example plays a capture's log with the sound on and compares the speakers with the capture's `sound.wav`:
 

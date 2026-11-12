@@ -375,6 +375,9 @@ pub fn duty_volumes(prom: &[u8]) -> [u8; 16] {
     out
 }
 
+/// A [`Pending`] register that resets the chip's generators instead.
+pub const RESET_REG: u8 = 0xff;
+
 /// A register write waiting for the generators: the sample it lands at,
 /// the chip, the register and the value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -420,6 +423,24 @@ pub struct Sound {
     /// The registers written since it was last cleared: chip, register,
     /// value. Not state.
     pub written: Vec<(u8, u8, u8)>,
+    /// Set by a reset until the update after it: the volumes before the
+    /// reset and the speaker sample they last until.
+    pub split: Option<GainSplit>,
+}
+
+/// MAME brings a sound device's streams up to the moment of a reset before
+/// resetting it (device_sound_interface::interface_pre_reset), so the
+/// speaker samples before the reset are made with the volumes as they were;
+/// the rest of that 20 ms piece gets the volumes after.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GainSplit {
+    /// The first speaker sample with the new volumes, as (second, index in
+    /// the second). MAME's stream update to the reset's time ends at the
+    /// sample index it rounds down to (time_to_buffer_index without
+    /// rounding up), so this is that index.
+    pub at: (i32, i64),
+    pub duty: [[u8; 3]; 2],
+    pub mute: u8,
 }
 
 impl Sound {
@@ -441,6 +462,7 @@ impl Sound {
             have_prom: prom.is_some(),
             out: None,
             written: Vec::new(),
+            split: None,
         };
         for chip in 0..2 {
             s.gens[chip].reset();
@@ -450,6 +472,41 @@ impl Sound {
             }
         }
         s
+    }
+
+    /// Both AYs' device_reset (ay8910_reset_ym) at a soft reset, at `now`.
+    /// MAME first brings the streams up to `now` ([`GainSplit`]), so the
+    /// generators take the reset at the first sample at or after it, as a
+    /// write would, and the speakers keep the old volumes up to it. The
+    /// registers and the ports (so the volumes and the mute) change at once.
+    pub fn reset(&mut self, now: Attotime) {
+        let at = ay_index_up(now);
+        if self.split.is_none() {
+            self.split = Some(GainSplit {
+                at: {
+                    let i = now.attoseconds / OUT_ATTOS;
+                    if i >= i64::from(OUT_RATE) {
+                        (now.seconds + 1, i - i64::from(OUT_RATE))
+                    } else {
+                        (now.seconds, i)
+                    }
+                },
+                duty: self.duty,
+                mute: self.mute,
+            });
+        }
+        for chip in 0..2 {
+            let ports = self.bus[chip].reset();
+            for p in ports {
+                self.port_write(chip, p);
+            }
+            self.pending.push(Pending {
+                at,
+                chip: chip as u8,
+                reg: RESET_REG,
+                value: 0,
+            });
+        }
     }
 
     /// The SSIO's port handlers (porta0_w and the rest).
@@ -472,10 +529,14 @@ impl Sound {
     /// A channel's gain as update_volumes sets it: the duty cycle's
     /// volume over 100, or nothing when muted.
     fn gain(&self, chip: usize, chan: usize) -> f32 {
-        if self.mute != 0 {
+        self.gain_of(&self.duty, self.mute, chip, chan)
+    }
+
+    fn gain_of(&self, duty: &[[u8; 3]; 2], mute: u8, chip: usize, chan: usize) -> f32 {
+        if mute != 0 {
             0.0
         } else {
-            (f64::from(self.volumes[usize::from(self.duty[chip][chan])]) / 100.0) as f32
+            (f64::from(self.volumes[usize::from(duty[chip][chan])]) / 100.0) as f32
         }
     }
 
@@ -508,7 +569,12 @@ impl Sound {
         let mut k = 0;
         while self.made < end {
             while let Some(p) = self.pending.get(k).filter(|p| p.at <= self.made) {
-                self.gens[usize::from(p.chip)].write_reg(usize::from(p.reg), p.value);
+                let g = &mut self.gens[usize::from(p.chip)];
+                if p.reg == RESET_REG {
+                    g.reset();
+                } else {
+                    g.write_reg(usize::from(p.reg), p.value);
+                }
                 k += 1;
             }
             out.push([self.gens[0].sample(), self.gens[1].sample()]);
@@ -540,7 +606,29 @@ impl Sound {
         if count > 0 {
             let gains: [[f32; 3]; 2] =
                 std::array::from_fn(|c| std::array::from_fn(|ch| self.gain(c, ch)));
-            speakers = resample(&all, base, start, count as usize, &gains);
+            let count = count as usize;
+            match self.split.take() {
+                Some(split) => {
+                    // The samples before the reset with the volumes before it.
+                    let to = split.at;
+                    let k = (i64::from(to.0 - sec) * i64::from(OUT_RATE) + to.1 - idx)
+                        .clamp(0, count as i64) as usize;
+                    let old: [[f32; 3]; 2] = std::array::from_fn(|c| {
+                        std::array::from_fn(|ch| self.gain_of(&split.duty, split.mute, c, ch))
+                    });
+                    speakers = resample(&all, base, start, k, &old);
+                    let (s2, i2) = (
+                        sec + ((idx + k as i64) / i64::from(OUT_RATE)) as i32,
+                        (idx + k as i64) % i64::from(OUT_RATE),
+                    );
+                    let start2 = Attotime::new(s2, i2 * OUT_ATTOS);
+                    speakers.extend(resample(&all, base, start2, count - k, &gains));
+                    if (to.0, to.1) > end_idx {
+                        self.split = Some(split);
+                    }
+                }
+                None => speakers = resample(&all, base, start, count, &gains),
+            }
         }
         // MAME's speakers get each sample one 48 kHz sample after the
         // resampler makes it: found by comparing with its WAV, where every

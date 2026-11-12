@@ -25,6 +25,14 @@
 -- hold their defaults). Each record also carries the ports as the game read
 -- them during that frame, taken from MAME, so a mismatch can't hide.
 
+-- MAME runs the autoboot script again after every soft reset (the watchdog's,
+-- for one), in the same Lua state. The capture set up the first time goes
+-- on across a reset, so a second run does nothing.
+if GP_ORACLE_STARTED then
+	return
+end
+GP_ORACLE_STARTED = true
+
 local OUT = assert(os.getenv("GP_ORACLE_OUT"), "GP_ORACLE_OUT is not set")
 local LOG = assert(os.getenv("GP_ORACLE_LOG"), "GP_ORACLE_LOG is not set")
 local SHOT_EVERY = tonumber(os.getenv("GP_ORACLE_SHOT_EVERY") or "0")
@@ -50,6 +58,11 @@ end
 -- mask from mcr.cpp's INPUT_PORTS_START( tapper ); all are active low.
 local TAPPER = {
 	columns = "CSRLDUT",
+	-- Columns a log may add after those, in this order.
+	optional = "X",
+	-- The joystick's columns, which `joystick 4way` sends through MAME's
+	-- 4-way filter.
+	joystick = "RLDU",
 	controls = {
 		C = { ":ssio:IP0", 0x01 }, -- coin 1
 		S = { ":ssio:IP0", 0x04 }, -- start 1
@@ -58,6 +71,7 @@ local TAPPER = {
 		D = { ":ssio:IP1", 0x04 }, -- joystick down
 		U = { ":ssio:IP1", 0x08 }, -- joystick up
 		T = { ":ssio:IP1", 0x10 }, -- tap (button 1)
+		X = { ":ssio:IP0", 0x20 }, -- tilt
 	},
 	-- Every port the game reads through the SSIO board, recorded per frame.
 	ports = { ":ssio:IP0", ":ssio:IP1", ":ssio:IP2", ":ssio:IP3", ":ssio:IP4" },
@@ -83,6 +97,11 @@ local SYSTEM = SYSTEMS[system_name] or fail("no control table for system " .. sy
 
 -- The input log.
 
+-- The log's columns: the system's, perhaps with its optional ones.
+local COLUMNS
+-- Whether the joystick's columns go through MAME's 4-way filter.
+local FOUR_WAY = false
+
 local function read_log(path)
 	local f = io.open(path, "r") or fail("can't open the input log " .. path)
 	local frames = {}
@@ -99,21 +118,35 @@ local function read_log(path)
 			-- blank or comment
 		elseif text:match("^system ") then
 			header.system = text:match("^system (%S+)$")
+		elseif text:match("^joystick ") then
+			local mode = text:match("^joystick (%S+)$")
+			if mode ~= "4way" and mode ~= "direct" then
+				fail(("input log line %d: joystick %s; expected `4way` or `direct`"):format(n, tostring(mode)))
+			end
+			FOUR_WAY = mode == "4way"
 		elseif text:match("^columns ") then
 			header.columns = text:match("^columns (%S+)$")
+			if header.columns ~= SYSTEM.columns and header.columns ~= SYSTEM.columns .. SYSTEM.optional then
+				fail(("the input log's columns are %s, %s's are %s, or %s with the optional ones"):format(
+					tostring(header.columns), system_name, SYSTEM.columns, SYSTEM.columns .. SYSTEM.optional))
+			end
+			COLUMNS = header.columns
 		else
 			local count, buttons = text:match("^(%d+)%s+(%S+)$")
 			if not count then
 				fail(("input log line %d: expected `<frames> <buttons>`"):format(n))
 			end
-			if #buttons ~= #SYSTEM.columns then
-				fail(("input log line %d: %d buttons, the columns are %s"):format(n, #buttons, SYSTEM.columns))
+			if not COLUMNS then
+				fail(("input log line %d: frames before the `columns` line"):format(n))
+			end
+			if #buttons ~= #COLUMNS then
+				fail(("input log line %d: %d buttons, the columns are %s"):format(n, #buttons, COLUMNS))
 			end
 			for i = 1, #buttons do
 				local c = buttons:sub(i, i)
-				if c ~= "." and c ~= SYSTEM.columns:sub(i, i) then
+				if c ~= "." and c ~= COLUMNS:sub(i, i) then
 					fail(("input log line %d: column %d is `%s`, expected `.` or `%s`"):format(
-						n, i, c, SYSTEM.columns:sub(i, i)))
+						n, i, c, COLUMNS:sub(i, i)))
 				end
 			end
 			for _ = 1, tonumber(count) do
@@ -126,14 +159,13 @@ local function read_log(path)
 		fail(("the input log is for system %s, MAME is running %s"):format(
 			tostring(header.system), system_name))
 	end
-	if header.columns ~= SYSTEM.columns then
-		fail(("the input log's columns are %s, %s's are %s"):format(
-			tostring(header.columns), system_name, SYSTEM.columns))
+	if COLUMNS == nil then
+		fail("the input log has no `columns` line")
 	end
 	if #frames == 0 then
 		fail("the input log has no frames")
 	end
-	if frames[1] ~= string.rep(".", #SYSTEM.columns) then
+	if frames[1] ~= string.rep(".", #COLUMNS) then
 		fail("the input log's frame 1 must hold nothing: MAME can't apply input before frame 2")
 	end
 	return frames
@@ -157,10 +189,25 @@ for column, control in pairs(SYSTEM.controls) do
 	fields[column] = found or fail(("no field with mask 0x%02x in %s"):format(control[2], control[1]))
 end
 
+-- A value set with set_value skips MAME's joystick filter, which only acts
+-- on what the field's input sequence says is pressed (ioport_field::
+-- frame_update, digital_joystick::frame_update). So with `joystick 4way` a
+-- direction is pressed through its sequence instead, as a player's key
+-- would be: "NOT KEYCODE_A" reads as pressed (no keyboard is attached), an
+-- empty sequence as released.
+local input = machine.input
+local PRESSED = input:seq_from_tokens("NOT KEYCODE_A")
+local RELEASED = input:seq_from_tokens("")
+
 local function apply(buttons)
-	for i = 1, #SYSTEM.columns do
-		local column = SYSTEM.columns:sub(i, i)
-		fields[column]:set_value(buttons:sub(i, i) == column and 1 or 0)
+	for i = 1, #COLUMNS do
+		local column = COLUMNS:sub(i, i)
+		local on = buttons:sub(i, i) == column
+		if FOUR_WAY and SYSTEM.joystick:find(column, 1, true) then
+			fields[column]:set_input_seq("standard", on and PRESSED or RELEASED)
+		else
+			fields[column]:set_value(on and 1 or 0)
+		end
 	end
 end
 
@@ -176,8 +223,8 @@ end
 -- pressed control reads as a clear bit.
 local function ports_to_buttons(values)
 	local out = {}
-	for i = 1, #SYSTEM.columns do
-		local column = SYSTEM.columns:sub(i, i)
+	for i = 1, #COLUMNS do
+		local column = COLUMNS:sub(i, i)
 		local control = SYSTEM.controls[column]
 		local value
 		for j, tag in ipairs(SYSTEM.ports) do
@@ -365,7 +412,8 @@ local function finish()
 	meta:write("refresh_hz ", ("%.6f"):format(screen.refresh), "\n")
 	meta:write("picture ", width, "x", height, " fnv1a64-rgb24\n")
 	meta:write("shot_every ", SHOT_EVERY, "\n")
-	meta:write("columns ", SYSTEM.columns, "\n")
+	meta:write("columns ", COLUMNS, "\n")
+	meta:write("joystick ", FOUR_WAY and "4way" or "direct", "\n")
 	meta:write("dip_switches defaults ", dips_checked, "\n")
 	meta:write("input_mismatches ", mismatches, "\n")
 	meta:write("ram_record ", RAM_RECORD, "\n")
