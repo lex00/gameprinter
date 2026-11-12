@@ -152,6 +152,16 @@ impl Host {
     }
 }
 
+/// A draws script as [`ModuleRuntime::set_draw_script`] sends it.
+pub struct DrawScriptCall<'a> {
+    /// The script's text form (gp_sim::DrawScript::text).
+    pub text: &'a str,
+    pub base: u64,
+    pub origin: Option<u64>,
+    pub lenient: bool,
+    pub keep_calls: bool,
+}
+
 /// What the module reported of a run's random draws.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DrawsReport {
@@ -286,6 +296,54 @@ impl ModuleRuntime {
     pub fn set_apu_events(&mut self) -> Result<(), String> {
         self.call(wire::SET_APU_EVENTS, CALL_TICKS, |_| {})
             .map(|_| ())
+    }
+
+    /// Gives the run a draws script whole: its text and base as
+    /// [`Self::set_draws`] does, and its origin, whether it is lenient and
+    /// whether it keeps the run's draw calls ([`Self::draw_calls`]).
+    pub fn set_draw_script(&mut self, d: &DrawScriptCall<'_>) -> Result<(), String> {
+        self.call(wire::SET_DRAW_SCRIPT, CALL_TICKS, |w| {
+            w.str(d.text);
+            w.u64(d.base);
+            w.opt_u64(d.origin);
+            w.bool(d.lenient);
+            w.bool(d.keep_calls);
+        })
+        .map(|_| ())
+    }
+
+    /// `step` with a call's deadline, not a frame's: for a tool that runs a
+    /// frame no player waits on, such as one with a random draw forced to a
+    /// byte the game seldom draws, which can take a branch that runs long.
+    pub fn step_unhurried(&mut self, inputs: &[InputFrame]) -> Result<Vec<Event>, String> {
+        let out = self.call(wire::STEP, Self::frames_deadline(inputs.len()), |w| {
+            w.inputs(inputs)
+        })?;
+        Reader::new(&out).events()
+    }
+
+    /// The draw calls the run's script has kept, frame and site each; None
+    /// when it keeps none.
+    pub fn draw_calls(&self) -> Result<Option<Vec<(u64, String)>>, String> {
+        let out = self.call(wire::DRAW_CALLS, CALL_TICKS, |_| {})?;
+        let mut r = Reader::new(&out);
+        if !r.bool()? {
+            return Ok(None);
+        }
+        (0..r.count()?)
+            .map(|_| Ok((r.u64()?, r.str()?)))
+            .collect::<Result<_, String>>()
+            .map(Some)
+    }
+
+    /// Steps every body of the world `state` (a canonical model state) but
+    /// the player once with this session's spec and hooks, as the enemies
+    /// system does: whether a hook drew a random byte, and the new state.
+    pub fn step_hooks(&self, state: &[u8]) -> Result<(bool, Vec<u8>), String> {
+        let out = self.call(wire::STEP_HOOKS, CALL_TICKS, |w| w.bytes(state))?;
+        let mut r = Reader::new(&out);
+        let drew = r.bool()?;
+        Ok((drew, out[1..].to_vec()))
     }
 }
 

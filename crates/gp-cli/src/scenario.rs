@@ -851,3 +851,409 @@ pub(crate) fn curve_hash(o: &Ran, model: bool) -> String {
     }
     gp_evidence::Hash::of(s.as_bytes()).to_string()
 }
+
+/// A scenario run with screens watching, and what was kept of the
+/// screens: what [`watch_each`] gives for each scenario.
+pub(crate) type Watched<T> = Result<(Ran, Option<T>)>;
+
+/// Runs each scenario of `list` with the screens `make` gives, as
+/// [`score_each`] runs them but never cached and never from a tape, on the
+/// helper threads; the original is the emulator itself, so the screens can
+/// read its sprite table (`crate::picture`). `make` is given the model's
+/// pictures (none without them) and the scenario. Results in the list's
+/// order, each with what `keep` takes of its screens once the run is done.
+pub(crate) fn watch_each<W, T>(
+    b: &Bench,
+    model: &Model,
+    text: &str,
+    list: &[Scenario],
+    make: impl Fn(Option<Arc<crate::screen::Art>>, &Scenario) -> Option<W> + Sync,
+    keep: impl Fn(W) -> T + Sync,
+) -> Result<Vec<Watched<T>>>
+where
+    W: gp_interp::lockstep::Screens<OriginalRuntime, crate::hosted::Model>,
+    T: Send,
+{
+    let (tolerance, _): (Vec<Fx>, _) = crate::lockstep::tolerances(&b.dir, model, &b.mapping);
+    let shared = Shared {
+        catalog: gp_interp::mechanics::catalog(model, &b.hosted.exts),
+        tolerance,
+        base: key(&[&b.base_key(), text.as_bytes(), &b.lifted_bytes, b"screen 1"]),
+        art: std::sync::OnceLock::new(),
+        names: SpecNames::default(),
+    };
+    let started = Started::none();
+    let cost = |s: &Scenario| {
+        let lead = s
+            .start
+            .as_ref()
+            .filter(|st| st.snapshot.is_none())
+            .map_or(0, |st| st.frame);
+        lead + s.frames
+    };
+    let mut order: Vec<usize> = (0..list.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(cost(&list[i])));
+    let ran = crate::pool::map(
+        &order,
+        Mine::default,
+        |mine, _, &i| {
+            let s = &list[i];
+            let own_input = b.for_start(s.start.as_ref())?;
+            let sb = own_input.as_ref().unwrap_or(b);
+            let st = match &s.start {
+                Some(own) if own_input.is_some() || own.frame != started.original_frame => {
+                    sb.started_at(model, text, own)?
+                }
+                _ => started.clone(),
+            };
+            lockstep_one(b, sb, &st, model, &shared, mine, s, |a| make(a, s))
+                .map(|(r, w)| (r, w.map(&keep)))
+        },
+        &mut |_| {},
+    );
+    let mut out: Vec<Option<Watched<T>>> = Vec::new();
+    out.resize_with(list.len(), || None);
+    for (i, r) in order.into_iter().zip(ran) {
+        out[i] = Some(r);
+    }
+    Ok(out
+        .into_iter()
+        .map(|r| r.expect("every scenario ran"))
+        .collect())
+}
+
+/// One scenario's lockstep on the emulator with the screens `make` gives
+/// for the model's pictures, never cached: [`score_one`]'s run for a
+/// caller that watches the two pictures as well. `sb` is the bench of the
+/// scenario's own input (else `b`) and `st` its start.
+#[allow(clippy::too_many_arguments)]
+fn lockstep_one<W>(
+    b: &Bench,
+    sb: &Bench,
+    st: &Started,
+    model: &Model,
+    shared: &Shared,
+    mine: &mut Mine,
+    s: &Scenario,
+    make: impl FnOnce(Option<Arc<crate::screen::Art>>) -> Option<W>,
+) -> Result<(Ran, Option<W>)>
+where
+    W: gp_interp::lockstep::Screens<OriginalRuntime, crate::hosted::Model>,
+{
+    let at = (sb.input.clone(), st.original_frame);
+    if let std::collections::btree_map::Entry::Vacant(e) = mine.originals.entry(at.clone()) {
+        e.insert((
+            sb.original_from(s.start.as_ref(), st.original_frame)?,
+            st.start()?,
+        ));
+    }
+    let draws = if b.mapping.score_draws {
+        let tape = tape_file(b, sb, st, s)?;
+        Some(draws_of(b, sb, st, s, mine, &tape, true)?)
+    } else {
+        None
+    };
+    let (o, start) = &mine.originals[&at];
+    let mut interp = b.hosted.open()?;
+    if let Some(d) = draws {
+        interp = interp.with_draws(d)?;
+    }
+    let spec = interp.spec().clone();
+    // The model's pictures, for the screen measure; without them it is
+    // left out.
+    let art = shared
+        .art
+        .get_or_init(|| crate::screen::art(model, &spec, &b.assets).ok())
+        .clone();
+    let mut probe = make(art);
+    let (r, _) = scenario::run_with(
+        o,
+        &mut interp,
+        &spec,
+        &b.mapping,
+        start,
+        s,
+        &shared.tolerance,
+        &shared.catalog,
+        probe
+            .as_mut()
+            .map(|p| p as &mut dyn gp_interp::lockstep::Screens<_, _>),
+    )
+    .map_err(anyhow::Error::msg)?;
+    Ok((r, probe))
+}
+
+// The scenario ladder (`gp interp scenarios`), ported from game-printer's
+// scenario.rs: the ladder's list, its scores, their history across model
+// changes, and the ladder as JSON with each scenario's state.
+
+/// The ladder for a model: its generated scenarios, then the played ones.
+pub(crate) fn scenarios(
+    model: &Model,
+    exts: &gp_sim::Exts,
+    played: &[Scenario],
+    tier: Option<u8>,
+) -> Vec<Scenario> {
+    let catalog = gp_interp::mechanics::catalog(model, exts);
+    let mut l = scenario::ladder(model, &catalog);
+    if let Some(t) = tier {
+        l.retain(|s| s.tier <= t);
+    }
+    l.extend(played.iter().cloned());
+    l
+}
+
+/// Scores scenarios against `model`, cached unless `cache` is false, and
+/// fails with the first scenario that couldn't be scored. As
+/// [`score_each`].
+pub(crate) fn score(
+    b: &Bench,
+    model: &Model,
+    text: &str,
+    started: &Started,
+    list: &[Scenario],
+    cache: bool,
+    progress: &mut dyn FnMut(usize, usize, &Scenario),
+) -> Result<Vec<Ran>> {
+    score_each(b, model, text, started, list, cache, progress)?
+        .into_iter()
+        .collect()
+}
+
+impl Bench {
+    /// The bench with the model `m` compiled and run in place of the
+    /// bench's own (through the same module, when `module` names it): for
+    /// scoring an edited model. A bench runs the model its [`Source`] was
+    /// compiled from, so an edit needs its own.
+    pub(crate) fn with_model(&self, m: &Model, module: Option<&Path>) -> Result<Bench> {
+        let mut b = self.clone();
+        b.hosted = Arc::new(self.hosted.with_model(m, module)?);
+        Ok(b)
+    }
+}
+
+/// One model's scores in the history.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct Entry {
+    /// The model's text hash, short.
+    pub model: String,
+    /// What changed it: "first run", "refine round 2: ...".
+    pub label: String,
+    /// Each scenario's frames together (permille) and whether exact.
+    pub scores: BTreeMap<String, (u64, bool)>,
+}
+
+fn history_file(b: &Bench, started: &Started) -> PathBuf {
+    b.cache.join(format!(
+        "history-{}.json",
+        key(&[
+            b.input.as_bytes(),
+            started.original_frame.to_string().as_bytes(),
+            b.dir.to_string_lossy().as_bytes()
+        ])
+    ))
+}
+
+/// Adds the model's scores to the history, unless its last entry is this
+/// model's.
+pub(crate) fn record_history(
+    b: &Bench,
+    started: &Started,
+    text: &str,
+    label: &str,
+    results: &[Ran],
+) -> Vec<Entry> {
+    let file = history_file(b, started);
+    let mut h: Vec<Entry> = read_cache(&file).unwrap_or_default();
+    let m = model_hash(text);
+    let scores = results
+        .iter()
+        .map(|r| (r.id.clone(), (r.headline.together_permille, r.exact)))
+        .collect();
+    match h.last_mut() {
+        Some(e) if e.model == m => e.scores = scores,
+        _ => h.push(Entry {
+            model: m,
+            label: label.to_owned(),
+            scores,
+        }),
+    }
+    write_cache(&file, &h);
+    h
+}
+
+fn pct(permille: u64) -> String {
+    if permille.is_multiple_of(10) {
+        format!("{}%", permille / 10)
+    } else {
+        format!("{:.1}%", permille as f64 / 10.0)
+    }
+}
+
+/// "was 62% -> now 91%", or a regression: "worse after refine round 3".
+fn trend(history: &[Entry], id: &str) -> Option<String> {
+    let seen: Vec<(&Entry, (u64, bool))> = history
+        .iter()
+        .filter_map(|e| e.scores.get(id).map(|s| (e, *s)))
+        .collect();
+    let (first, last) = (seen.first()?, seen.last()?);
+    if seen.len() < 2 || first.1 == last.1 {
+        return None;
+    }
+    let worse = seen.windows(2).rev().find(|w| w[1].1.0 < w[0].1.0);
+    let mut s = format!("was {} -> now {}", pct(first.1.0), pct(last.1.0));
+    if let Some(w) = worse {
+        s.push_str(&format!("; got worse after {}", w[1].0.label));
+    }
+    Some(s)
+}
+
+/// "the model" as the person sees it: the rebuilt game's player.
+fn rebuilt(says: &str, player: &str) -> String {
+    says.replacen("the model", &format!("the rebuilt {player}"), 1)
+}
+
+fn capital(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
+}
+
+/// The ladder as JSON, with each scenario's state, needs and unlocks, the
+/// next one, and a sentence for each step.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ladder_json(
+    model: &Model,
+    started: &Started,
+    list: &[Scenario],
+    results: &[Ran],
+    bar: scenario::Bar,
+    opened: &[String],
+    history: &[Entry],
+    input: &str,
+) -> serde_json::Value {
+    use scenario::State;
+    use serde_json::json;
+    let player = scenario::player(model).map_or("player".to_owned(), |p| capital(&p));
+    // A played scenario needs the generated ones of what it moves.
+    let mut list = list.to_vec();
+    let generated: Vec<Scenario> = list
+        .iter()
+        .filter(|s| s.source == scenario::Source::Generated)
+        .cloned()
+        .collect();
+    for (s, r) in list.iter_mut().zip(results) {
+        if s.source != scenario::Source::Generated && s.requires.is_empty() {
+            s.requires = scenario::played_requires(&generated, &r.moved);
+        }
+    }
+    let refs: Vec<Option<&Ran>> = results.iter().map(Some).collect();
+    let states = scenario::states(&list, &refs, bar, opened);
+    let next = scenario::next(&states);
+    let rate = (model.model.frame_rate.num, model.model.frame_rate.den);
+    let secs = |f: u64| f as f64 * rate.1 as f64 / rate.0.max(1) as f64;
+    let mut tiers: BTreeMap<u8, (u64, u64, u64)> = BTreeMap::new();
+    let mut rows = Vec::new();
+    for (i, s) in list.iter().enumerate() {
+        let r = &results[i];
+        let t = tiers.entry(s.tier).or_default();
+        t.0 += u64::from(r.exact);
+        t.1 += u64::from(states[i] == State::Passed);
+        t.2 += 1;
+        let unlocks: Vec<&str> = scenario::unlocks(&list, &s.id)
+            .iter()
+            .map(|u| u.name.as_str())
+            .collect();
+        let hist: Vec<serde_json::Value> = history
+            .iter()
+            .filter_map(|e| e.scores.get(&s.id).map(|(p, x)| json!({"model": e.model, "label": e.label, "together_permille": p, "exact": x})))
+            .collect();
+        rows.push(json!({
+            "scenario": s,
+            "state": states[i],
+            "result": r,
+            "says": match &r.first {
+                Some(f) => format!("{}: {}", s.name, rebuilt(&scenario::apart(f), &player)),
+                None => r.says.clone(),
+            },
+            "needs": scenario::needs_says(&list, s, &states),
+            "unlocks": if unlocks.is_empty() { String::new() } else { format!("unlocks: {}", unlocks.join("; ")) },
+            "history": hist,
+            "trend": trend(history, &s.id),
+            "video": {"input": input, "from": r.original_from, "to": r.original_to},
+        }));
+    }
+    let first_failing = results.iter().position(|r| !bar.passes(r));
+    let passed = states.iter().filter(|s| **s == State::Passed).count();
+    let locked = states.iter().filter(|s| **s == State::Locked).count();
+    let says = match next {
+        None if locked == 0 => format!(
+            "Every sequence passes ({}). Next: record one of your own from here.",
+            bar.says()
+        ),
+        None => format!(
+            "{passed} pass, {locked} locked, nothing open. Next: open a locked one by hand."
+        ),
+        Some(i) => {
+            let r = &results[i];
+            match &r.first {
+                Some(f) => format!(
+                    "First mismatch: {}. {}. Next: fix the {}'s numbers.",
+                    list[i].name,
+                    capital(&rebuilt(&scenario::apart(f), &player)),
+                    scenario::short(&f.mechanic)
+                ),
+                None => format!(
+                    "First not passing: {}: {}. Next: refine on it.",
+                    list[i].name, r.headline.says
+                ),
+            }
+        }
+    };
+    let quiet_says = started.quiet.as_ref().map_or_else(
+        || {
+            format!(
+                "{player} at {:.1} s (frame {}), the frame asked for",
+                secs(started.original_frame),
+                started.original_frame
+            )
+        },
+        |q| rebuilt(&q.says, &player),
+    );
+    json!({
+        "state": "done",
+        "says": says,
+        "bar": bar,
+        "bar_says": bar.says(),
+        "start": {
+            "input": input,
+            "asked": started.asked,
+            "original_frame": started.original_frame,
+            "frame": started.frame,
+            "seconds": secs(started.original_frame),
+            "says": quiet_says,
+            "loaded": started.loaded,
+            "approximated": started.approximated,
+            "missing": started.missing,
+        },
+        "next": next.map(|i| list[i].id.clone()),
+        "start_here": next.map(|i| list[i].id.clone()),
+        "first_failing": first_failing.map(|i| list[i].id.clone()),
+        "tiers": tiers.iter().map(|(t, (e, p, n))| json!({"tier": t, "exact": e, "passed": p, "total": n})).collect::<Vec<_>>(),
+        "passed": passed,
+        "locked": locked,
+        "scenarios": rows,
+        "model": history.last().map(|e| e.model.clone()),
+    })
+}
+
+/// Reads played scenarios from files of JSON.
+pub(crate) fn read_played(files: &[PathBuf]) -> Result<Vec<Scenario>> {
+    files
+        .iter()
+        .map(|f| {
+            let t = fs::read_to_string(f).with_context(|| format!("reading {}", f.display()))?;
+            serde_json::from_str(&t).with_context(|| format!("{} isn't a scenario", f.display()))
+        })
+        .collect()
+}

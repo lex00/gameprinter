@@ -333,6 +333,34 @@ impl Session {
         Ok(())
     }
 
+    /// Saves a clip from its `.toml` fields and its own log, as the next
+    /// clip (`gp mechanic probe --save`).
+    pub fn add_clip_meta(&self, t: toml::Table, log: &str, note: &str, by: &str) -> Result<u64> {
+        let _g = self.lock.lock().expect("lock");
+        self.write_clip(t, log, note, by)
+    }
+
+    /// Saves a clip as clip `n`, over any clip `n` there (`gp mechanic
+    /// probe --save` for a probe that names its clips).
+    pub fn put_clip(
+        &self,
+        n: u64,
+        mut t: toml::Table,
+        log: &str,
+        note: &str,
+        by: &str,
+    ) -> Result<u64> {
+        let _g = self.lock.lock().expect("lock");
+        fs::write(self.dir.join(format!("clips/{n:03}.log")), log)?;
+        t.insert("by".into(), by.into());
+        t.insert("note".into(), note.into());
+        fs::write(
+            self.dir.join(format!("clips/{n:03}.toml")),
+            toml::to_string(&t)?,
+        )?;
+        Ok(n)
+    }
+
     /// Writes the next clip; the caller holds the lock.
     fn write_clip(&self, mut t: toml::Table, log: &str, note: &str, by: &str) -> Result<u64> {
         let n = self

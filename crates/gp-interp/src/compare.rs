@@ -515,6 +515,27 @@ pub fn compare_slots<O: Runtime>(
     exts: &gp_sim::Exts,
     trace: &mut dyn FnMut(&SlotRow<'_>),
 ) -> Result<Vec<SlotReport>, String> {
+    compare_slots_with(
+        original,
+        mapping,
+        inputs,
+        spec,
+        &mut |w| Ok(step_hooks(spec, w, exts)),
+        trace,
+    )
+}
+
+/// [`compare_slots`] with the bodies stepped by `step` (as
+/// [`step_hooks`] steps them) wherever the hooks run: in this process, or
+/// in a game's module.
+pub fn compare_slots_with<O: Runtime>(
+    original: &mut O,
+    mapping: &Mapping,
+    inputs: &[InputFrame],
+    spec: &gp_sim::Spec,
+    step: &mut dyn FnMut(&mut gp_sim::World) -> Result<bool, String>,
+    trace: &mut dyn FnMut(&SlotRow<'_>),
+) -> Result<Vec<SlotReport>, String> {
     let slots = mapping.slots.as_ref().ok_or("the mapping has no slots")?;
     let kind_index = |name: &str| {
         spec.kinds.index_of(name).ok_or(format!(
@@ -801,7 +822,7 @@ pub fn compare_slots<O: Runtime>(
                 // position, so the setup's own offsets to the placement
                 // aren't compared, and any `ext` words the kind maps, which
                 // can start where the slot's last occupant left them.
-                let drew = step_hooks(spec, &mut w, exts);
+                let drew = step(&mut w)?;
                 reports[entry].drew |= drew;
                 w.bodies[1].x = b.x;
                 w.bodies[1].y = b.y;
@@ -847,7 +868,7 @@ pub fn compare_slots<O: Runtime>(
             w.frame += u64::from(base.wrapping_sub(w.frame as u8));
             for _ in 0..ticks {
                 w.frame += 1;
-                reports[life.entry].drew |= step_hooks(spec, w, exts);
+                reports[life.entry].drew |= step(w)?;
             }
             reports[life.entry].frames += u64::from(ticks);
             let fields = slots.measured_of(&slots.kinds[life.entry]);
@@ -873,7 +894,7 @@ pub fn compare_slots<O: Runtime>(
 /// system would: its components, then its hook. Returns whether a hook
 /// drew a random byte, which an empty draws script that keeps its calls
 /// records (the hook then draws from its own source, as with no script).
-fn step_hooks(spec: &gp_sim::Spec, w: &mut gp_sim::World, exts: &gp_sim::Exts) -> bool {
+pub fn step_hooks(spec: &gp_sim::Spec, w: &mut gp_sim::World, exts: &gp_sim::Exts) -> bool {
     let n = w.bodies.len();
     let mut f = gp_sim::systems::Frame::default();
     f.out = vec![false; n];

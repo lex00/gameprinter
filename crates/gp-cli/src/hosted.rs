@@ -539,3 +539,79 @@ impl Runtime for Model {
         }
     }
 }
+
+/// What `gp interp odds` and `gp interp slots` ask of a run, in this
+/// process or in its module (the module's `set-draw-script`, `draw-calls`
+/// and `step-hooks` calls).
+impl Model {
+    /// Gives the run a draws script whole: its origin, whether it is
+    /// lenient, and whether it keeps the run's draw calls, which
+    /// [`Self::with_draws`]'s text form leaves out.
+    pub(crate) fn with_draw_script(self, d: gp_sim::DrawScript) -> Result<Self> {
+        match self {
+            Self::Native(i) => Ok(Self::Native(Box::new(i.with_draws(d)))),
+            Self::Module(mut h) => {
+                h.rt.set_draw_script(&gp_module::DrawScriptCall {
+                    text: &d.text(),
+                    base: d.base,
+                    origin: d.origin,
+                    lenient: d.lenient,
+                    keep_calls: d.calls.is_some(),
+                })
+                .map_err(|e| anyhow!("{e}"))?;
+                Ok(Self::Module(h))
+            }
+        }
+    }
+
+    /// [`Runtime::step`] with a call's deadline in a module, not a frame's
+    /// (`gp_module::ModuleRuntime::step_unhurried`).
+    pub(crate) fn step_unhurried(&mut self, inputs: &[InputFrame]) -> Result<()> {
+        match self {
+            Self::Native(i) => i.step(inputs).map(|_| ()).map_err(|e| anyhow!("{e}")),
+            Self::Module(h) => {
+                h.world = OnceCell::new();
+                h.rt.step_unhurried(inputs)
+                    .map(|_| ())
+                    .map_err(|e| anyhow!("{e}"))
+            }
+        }
+    }
+
+    /// The draw calls the run's script has kept, frame and site each, in
+    /// order; empty when it keeps none.
+    pub(crate) fn draw_calls(&self) -> Result<Vec<(u64, String)>> {
+        match self {
+            Self::Native(i) => Ok(i.draws().and_then(|d| d.calls.clone()).unwrap_or_default()),
+            Self::Module(h) => Ok(h
+                .rt
+                .draw_calls()
+                .map_err(|e| anyhow!("{e}"))?
+                .unwrap_or_default()),
+        }
+    }
+
+    /// The hash of the world the run stands at, as [`World::hash`] gives it.
+    pub(crate) fn world_hash(&self) -> Result<[u8; 32]> {
+        match self {
+            Self::Native(i) => Ok(i.world().hash()),
+            Self::Module(h) => h.rt.world_hash().map_err(|e| anyhow!("{e}")),
+        }
+    }
+
+    /// Steps every body of `w` but the player once with this run's spec and
+    /// hooks, as the enemies system does
+    /// ([`gp_interp::compare::step_hooks`]): whether a hook drew.
+    pub(crate) fn step_hooks(&self, w: &mut World) -> Result<bool> {
+        match self {
+            Self::Native(i) => Ok(gp_interp::compare::step_hooks(i.spec(), w, i.exts())),
+            Self::Module(h) => {
+                let (drew, state) =
+                    h.rt.step_hooks(&w.canonical())
+                        .map_err(|e| anyhow!("{e}"))?;
+                *w = World::from_canonical(&h.spec, &state).map_err(|e| anyhow!("{e}"))?;
+                Ok(drew)
+            }
+        }
+    }
+}

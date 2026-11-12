@@ -79,6 +79,19 @@ The first says which clips it would add, change and leave out, and the version s
 
 In a games repo the import can go through the gate instead: `gp model gate my-game --import` runs the import on the branch's tip from your sessions, gates the result as a patch (the corpus scored before and after) and lands it when nothing got worse. With nothing new in the sessions it lands nothing. `--removes ID` lets it remove a clip, as for a patch.
 
+## 5. Measure what the original does
+
+Once the mapping holds the player and a few clips are in, your agent measures the original and holds the model to it. These read RAM and the state mapping, so they work on an NES game and an arcade game alike:
+
+- `gp mechanic probe my-game` runs the probe recipes in `my-game/probes.toml`: a start, some presses, and measures read from RAM after each frame, such as the frames from a jump's press to its landing. Each measure with an expected value is checked, so the facts a mechanic rests on run again with no agent.
+- `gp interp moments` lists the game's own moments in a run (jumps, landings, deaths, lives lost, counters, level changes) and whether the model does each one.
+- `gp interp translate` shows the original's state at a frame as a model state, part by part, and what the mapping can't carry over.
+- `gp interp scenarios` runs short presses on both games from the same start, one button at a time, then in combinations.
+- `gp interp slots` and `gp interp odds` hold the model's enemies to the original's enemy slots, and its random choices to the odds its own rules give.
+- `gp picture my-game --run RUN` and `gp solve my-game --run RUN` go through a scored corpus: the first puts each picture difference down to a cause, the second proposes the model numbers that would close a clip's gap.
+
+A game whose model has hooks runs them in its module, so give these `--module FILE`. [Measuring the original](https://github.com/lex00/gameprinter/blob/main/docs/original-measures.md) has each command in full.
+
 ## Tools for reading the game
 
 Your agent reads the original with these, and you can too.

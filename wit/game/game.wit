@@ -134,6 +134,22 @@ interface run {
   // `load` can't express it.
   flat-level: func(rt: borrow<runtime>, level: u32) -> result<_, string>;
 
+  // A draws script whole, for `gp interp odds`: set-draws's script and base,
+  // the origin a load would set, whether it is lenient (a draw it doesn't
+  // hold falls back to the hook's own, so one draw of a frame can be forced)
+  // and whether it keeps every draw call the run makes.
+  set-draw-script: func(rt: borrow<runtime>, script: string, base: u64, origin: option<u64>, lenient: bool, keep-calls: bool) -> result<_, string>;
+
+  // The draw calls a script that keeps them has seen, as frame and site; none
+  // when it keeps none.
+  draw-calls: func(rt: borrow<runtime>) -> option<list<tuple<u64, string>>>;
+
+  // Steps every body of a canonical model state but the player once with the
+  // session's spec and hooks, as the enemies system steps them
+  // (gp_interp::compare::step_hooks), for `gp interp slots`: whether a hook
+  // drew a random byte, and the stepped state.
+  step-hooks: func(rt: borrow<runtime>, state: list<u8>) -> result<tuple<bool, list<u8>>, string>;
+
   // What a run read of its spec and which hooks it called, by index in the
   // spec's lists (gp_sim::reads::Reads), so the gate can tell which clips a
   // change can move.

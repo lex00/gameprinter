@@ -27,13 +27,14 @@
 //! the MAME oracle's spelling, read by the same `InputLog`), and their
 //! starts are replayed on gp-arcade ([`paths::original_at`]).
 //!
-//! Ported from game-printer's mechanic.rs: the core loop, the page's three
-//! tabs (the rebuild reviewed beside the original and played live,
-//! [`live`]), the store of sealed runs the page writes, and the decision
-//! model at the controller ([`demo`]). The analysis commands (contacts,
-//! sweep, probe, leads, harvest, compare, video) aren't here. The corpus
-//! import is `gp corpus import` (crate::corpus_import), and sealed runs are
-//! scored by `gp sealed` (crate::sealed).
+//! Ported from game-printer's mechanic.rs: the core loop, `probe`
+//! ([`probe`], the game's probes.toml), the page's three tabs (the rebuild
+//! reviewed beside the original and played live, [`live`]), the store of
+//! sealed runs the page writes, and the decision model at the controller
+//! ([`demo`]). The other analysis commands (contacts, sweep, leads, harvest,
+//! compare, video) aren't here. The corpus import is `gp corpus import`
+//! (crate::corpus_import), and sealed runs are scored by `gp sealed`
+//! (crate::sealed).
 
 use std::path::PathBuf;
 
@@ -48,6 +49,7 @@ pub(crate) mod http;
 mod import;
 pub(crate) mod live;
 pub(crate) mod paths;
+pub(crate) mod probe;
 pub(crate) mod review;
 mod scores;
 pub(crate) mod server;
@@ -295,6 +297,37 @@ pub enum MechanicCmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Run the game's probe recipes, from its package folder's probes.toml.
+    /// Each starts from power-on, a stored path or a mechanic clip at a
+    /// frame, plays its steps (presses, a walk to a RAM value, presses held
+    /// until a RAM test holds), and takes its measures from RAM after each
+    /// frame. A sweep plays one cell a value of its variable. Each measure
+    /// with an expected value is checked, and a probe that names the clips it
+    /// reproduces is compared with them, input for input from power-on.
+    /// `--save` writes a cell with no saved clip into its session.
+    /// `--import SESSION:CLIP` prints a saved clip as a probe to start from.
+    Probe {
+        game: String,
+        /// Probes to run, by id (default: every one).
+        ids: Vec<String>,
+        /// A probes file instead of the package folder's probes.toml.
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// The ROM; by default the one in $GP_ROM_DIR the game's roms.toml
+        /// names.
+        #[arg(long)]
+        rom: Option<PathBuf>,
+        /// The games checkout (default: $GP_GAMES_DIR, else a `games` folder
+        /// at or beside the current folder or one above it)
+        #[arg(long)]
+        games: Option<PathBuf>,
+        /// Save each cell that has no clip yet into its session.
+        #[arg(long)]
+        save: bool,
+        /// Print the clip SESSION:CLIP as a probe recipe instead.
+        #[arg(long, conflicts_with_all = ["save", "ids"])]
+        import: Option<String>,
+    },
     /// The game's quest log, shown beside the game: each mechanic with its
     /// status (done, asking you, agent working, in line, next) and one plain
     /// line. With `--status`, adds the mechanic or changes it; without,
@@ -521,6 +554,33 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                 ),
             ))
         }
+        MechanicCmd::Probe {
+            game,
+            ids,
+            file,
+            rom,
+            games,
+            save,
+            import,
+        } => match import {
+            Some(i) => {
+                let (s, n) = i
+                    .split_once(':')
+                    .ok_or_else(|| anyhow::anyhow!("--import is SESSION:CLIP, as jump:3"))?;
+                probe::import(paths, game, s, n.parse()?)
+            }
+            None => probe::run(
+                paths,
+                &probe::Args {
+                    game,
+                    ids,
+                    file: file.as_deref(),
+                    rom: rom.as_deref(),
+                    games: games.as_deref(),
+                    save: *save,
+                },
+            ),
+        },
         MechanicCmd::Wait { game, mechanic } => wait(paths, game, mechanic.as_deref()),
         MechanicCmd::Show { game, mechanic } => {
             let v = Session::open(paths, game, mechanic)?.state()?;

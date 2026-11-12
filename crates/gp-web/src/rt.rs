@@ -168,6 +168,36 @@ impl Sessions {
                     .edit_spec(|s| gp_interp::variant::flat_floor(s, level))?;
             }
             wire::SPEC_DIGEST => w.str(&gp_sim::save::spec_digest(self.get(id)?.spec())),
+            wire::SET_DRAW_SCRIPT => {
+                let mut d = gp_sim::DrawScript::parse(&r.str()?)?;
+                d.base = r.u64()?;
+                d.origin = r.opt_u64()?;
+                d.lenient = r.bool()?;
+                if r.bool()? {
+                    d.calls = Some(Vec::new());
+                }
+                let i = self.live.remove(&id).ok_or("no such session")?;
+                self.live.insert(id, i.with_draws(d));
+            }
+            wire::DRAW_CALLS => match self.get(id)?.draws().and_then(|d| d.calls.as_ref()) {
+                None => w.bool(false),
+                Some(calls) => {
+                    w.bool(true);
+                    w.count(calls.len());
+                    for (frame, site) in calls {
+                        w.u64(*frame);
+                        w.str(site);
+                    }
+                }
+            },
+            wire::STEP_HOOKS => {
+                let state = r.bytes()?;
+                let i = self.get(id)?;
+                let mut world = gp_sim::World::from_canonical(i.spec(), state)?;
+                let drew = gp_interp::compare::step_hooks(i.spec(), &mut world, i.exts());
+                w.bool(drew);
+                w.0.extend(world.canonical());
+            }
             _ => return Err(format!("this module has no call {op}")),
         }
         Ok(())

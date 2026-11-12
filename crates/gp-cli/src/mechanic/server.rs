@@ -193,7 +193,7 @@ pub(crate) fn choose_rom(
 /// $GP_ROM_DIR, else the scored set, else the rest in roms.toml's order,
 /// found by hash. The ROM, its set's id, and every set with whether it is
 /// here (for the page's picker).
-fn game_rom(
+pub(super) fn game_rom(
     paths: &Paths,
     games: Option<&Path>,
     game: &str,

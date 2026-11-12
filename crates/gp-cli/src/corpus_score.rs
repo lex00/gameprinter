@@ -229,7 +229,7 @@ pub(crate) fn run(cmd: &CorpusCmd, paths: &Paths) -> Result<Outcome> {
 }
 
 /// A run's folder under `$GP_HOME/capture`, its name checked.
-fn run_dir(home: &Path, run: &str) -> Result<PathBuf> {
+pub(crate) fn run_dir(home: &Path, run: &str) -> Result<PathBuf> {
     if run.is_empty()
         || run.len() > 80
         || run == "cache"

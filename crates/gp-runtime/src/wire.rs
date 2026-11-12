@@ -31,6 +31,15 @@ pub const TAKE_READS: u32 = 22;
 pub const RESTORE: u32 = 23;
 pub const DESCRIBE: u32 = 24;
 pub const FLAT_LEVEL: u32 = 25;
+/// A draws script whole: its text, base and origin, whether it is lenient
+/// (a forcing script) and whether it keeps the run's draw calls.
+pub const SET_DRAW_SCRIPT: u32 = 26;
+/// The draw calls a script that keeps them has seen: frame and site each.
+pub const DRAW_CALLS: u32 = 27;
+/// Steps every body of a world but the player once, as the enemies system
+/// does (gp_interp::compare::step_hooks): the world's canonical state in,
+/// whether a hook drew and the stepped state out.
+pub const STEP_HOOKS: u32 = 28;
 
 #[derive(Default)]
 pub struct Writer(pub Vec<u8>);

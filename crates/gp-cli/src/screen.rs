@@ -30,6 +30,18 @@ pub(crate) struct Art {
     fields: Vec<String>,
 }
 
+#[cfg(test)]
+impl Art {
+    /// Art with no pictures, for tests that draw their own frames.
+    pub(crate) fn empty() -> Self {
+        Art {
+            present: Present::default(),
+            pics: Vec::new(),
+            fields: Vec::new(),
+        }
+    }
+}
+
 /// The last model's pictures, by the assets folder and the model's text.
 static ART: Mutex<Option<(String, Arc<Art>)>> = Mutex::new(None);
 
@@ -363,6 +375,17 @@ impl Probe {
             back: std::collections::VecDeque::new(),
             video_from: 0,
         }
+    }
+
+    /// The model's pictures it draws with.
+    pub(crate) fn art(&self) -> &Art {
+        &self.art
+    }
+
+    /// The model's scene as its animation stands: what its next picture
+    /// draws.
+    pub(crate) fn scene(&self, model: &Model) -> gp_present::Scene {
+        model_scene(&self.art, &self.anim, model)
     }
 }
 

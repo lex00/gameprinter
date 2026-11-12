@@ -34,6 +34,7 @@ mod gate_copy;
 mod gate_queue;
 mod hosted;
 mod interp;
+mod interp_args;
 mod interp_draws;
 mod labels;
 mod lockstep;
@@ -42,10 +43,13 @@ mod mechanics;
 mod model;
 mod model_static;
 mod module;
+mod moments;
 mod movie;
+mod odds;
 mod open;
 mod original;
 mod package;
+mod picture;
 mod pinned;
 mod plan;
 mod pool;
@@ -65,11 +69,14 @@ mod rule_refine;
 mod run;
 mod run_input;
 mod scenario;
+mod scenarios_cmd;
 mod screen;
 mod sealed;
 mod search;
 mod serve;
 mod served;
+mod slots;
+mod solve;
 mod sound;
 mod sprites;
 mod static_grade;
@@ -80,6 +87,7 @@ mod template_cites;
 mod template_original;
 mod tool_gate;
 mod track;
+mod translate;
 mod watch;
 mod watch_serve;
 mod worker;
@@ -351,6 +359,12 @@ enum Cmd {
         #[command(subcommand)]
         cmd: element::ElementCmd,
     },
+    /// The picture-gap detector: a scored run's clips played again, and the
+    /// screen measure's boxes on each compared frame put down to a cause.
+    Picture(picture::PictureArgs),
+    /// Each non-exact clip of a scored run, its detector class and its
+    /// proposals for the model's numbers. Never writes the model.
+    Solve(solve::SolveArgs),
     /// gp about itself: its published build and its command list.
     #[command(name = "self")]
     Itself {
@@ -546,6 +560,29 @@ enum InterpCmd {
     /// path gets a line with its agreement and its first difference, and
     /// the lockstep's report follows. Exits 1 if any path disagrees.
     Compare(interp::CompareArgs),
+    /// The original's state as a model state, through the state mapping
+    /// read in reverse: at a frame of an input, or in a snapshot file of
+    /// the original. Prints a note for every part (loaded, approximated or
+    /// missing when the mapping doesn't hold it). With `--out` it writes the
+    /// canonical model state, which any runtime of the model loads with the
+    /// runtime protocol's load-state.
+    Translate(translate::TranslateArgs),
+    /// The game's own moments in a run of the original (jumps, landings,
+    /// deaths, lives lost, counter changes, level changes), read from the
+    /// state mapping's measures, and what the model does at each on the same
+    /// presses from the original's state half a second before it. An
+    /// example line reads "jump 1 at frames 218-250 (3.6 s) rises 66 px; the
+    /// model too, on the same frame, 52 px".
+    Moments(moments::MomentsArgs),
+    /// Measure the model's enemies (their components and `ext` hooks)
+    /// against the original's enemy slots, slot life by slot life.
+    Slots(slots::SlotsArgs),
+    /// The random-choice behaviour check: the model's branches at each
+    /// `[[draws]]` site tested against the rule's own odds.
+    Odds(odds::OddsArgs),
+    /// Run the scenario ladder: short generated presses, on the original
+    /// and on the model from the original's state, measured apart.
+    Scenarios(scenarios_cmd::ScenariosArgs),
     /// Record the original's random draws on an input, at the draw sites the
     /// state mapping's `[[draws]]` names: each read of a site's random byte by
     /// its instruction, with the frame, in order. The script lets the
@@ -890,6 +927,23 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             module.as_deref(),
             &gp_evidence::Paths::from_env()?,
         ),
+        Cmd::Interp {
+            cmd: InterpCmd::Translate(a),
+        } => translate::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Interp {
+            cmd: InterpCmd::Moments(a),
+        } => moments::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Interp {
+            cmd: InterpCmd::Slots(a),
+        } => slots::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Interp {
+            cmd: InterpCmd::Odds(a),
+        } => odds::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Interp {
+            cmd: InterpCmd::Scenarios(a),
+        } => scenarios_cmd::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Picture(a) => picture::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Solve(a) => solve::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Level { cmd } => search::level_run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Track(a) => track::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Coverage(a) => coverage::run(a, &gp_evidence::Paths::from_env()?),
