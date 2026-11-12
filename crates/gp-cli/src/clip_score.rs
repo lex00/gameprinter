@@ -317,6 +317,11 @@ pub(crate) struct Open<'a> {
 }
 
 impl Ctx {
+    /// The ROM's bytes.
+    pub(crate) fn rom(&self) -> &[u8] {
+        &self.rom
+    }
+
     pub(crate) fn open(paths: &Paths, game: &Path, how: &Open) -> Result<Ctx> {
         let model_dir = how.model.unwrap_or(game).to_owned();
         let (source, assets) = Source::open_dir(&model_dir, how.assets, paths, how.module)?;
@@ -445,7 +450,7 @@ pub(crate) fn first_lasting(ls: &Lockstep, hold: usize) -> Option<(usize, Vec<us
 /// snapshot under the mapping's start condition. Made on first use by
 /// playing the lockstep's first frames once. `None` with the cache off,
 /// or for a clip that starts too early to have one.
-fn resume_of(
+pub(crate) fn resume_of(
     ctx: &Ctx,
     log: &InputLog,
     inputs: &[gp_runtime::InputFrame],

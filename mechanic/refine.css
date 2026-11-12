@@ -1,0 +1,11 @@
+/* The refinement view (/refine): the jump's rule and the last refine run. */
+#refine-main { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; padding: 0 16px 16px; }
+.r-list { list-style: none; padding: 0; margin: 0 0 10px; font-size: 13px; }
+.r-list li { padding: 2px 0; }
+.r-src { display: inline-block; min-width: 56px; font: bold 11px ui-monospace, monospace; padding: 0 4px; margin-right: 6px; text-align: center; }
+.r-code { background: #3cbc3c; color: #000; }
+.r-fitted { background: #fca044; color: #000; }
+.r-rows { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 12px; }
+.r-rows th { text-align: left; font: bold 11px ui-monospace, monospace; text-transform: uppercase; color: var(--muted, #9aa0a8); padding: 2px 4px; }
+.r-rows td { padding: 3px 4px; border-top: 1px solid #3a3f48; }
+.r-bad td { color: var(--nes-16, #f83800); }

@@ -979,6 +979,7 @@ dependencies = [
  "gp-events",
  "gp-evidence",
  "gp-explore",
+ "gp-extract",
  "gp-exts",
  "gp-gaps",
  "gp-interp",
@@ -1091,6 +1092,15 @@ version = "0.1.0"
 dependencies = [
  "gp-cycles",
  "gp-sim",
+]
+
+[[package]]
+name = "gp-extract"
+version = "0.1.0"
+dependencies = [
+ "gp-model",
+ "serde",
+ "toml",
 ]
 
 [[package]]

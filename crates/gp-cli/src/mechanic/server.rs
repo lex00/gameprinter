@@ -430,6 +430,19 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         }
         ("GET" | "HEAD", "/nesplayer.js") => page("nesplayer.js", "text/javascript; charset=utf-8"),
         ("GET" | "HEAD", "/style.css") => page("style.css", "text/css; charset=utf-8"),
+        // The refinement view: the rule `gp rule` found and the last
+        // `gp model refine` run on this game.
+        ("GET" | "HEAD", "/refine") => page("refine.html", "text/html; charset=utf-8"),
+        ("GET" | "HEAD", "/refine.js") => page("refine.js", "text/javascript; charset=utf-8"),
+        ("GET" | "HEAD", "/refine.css") => page("refine.css", "text/css; charset=utf-8"),
+        ("GET" | "HEAD", "/api/refine") => {
+            Ok(Response::json(&crate::refine::last_run(&s.paths, &s.game)))
+        }
+        (_, p) if p.starts_with("/api/rule") => Ok(crate::rule_refine::route(
+            &s.paths.home.join("mechanics").join(&s.game),
+            req,
+        )?
+        .unwrap_or_else(|| Response::error(404, "not found"))),
         ("GET" | "HEAD", "/gp_play.wasm") => {
             if !s.wasm.is_file() {
                 return Ok(Response::error(
@@ -1015,7 +1028,14 @@ mod tests {
         let p = paths(d);
         let repo = d.join("repo");
         fs::create_dir_all(repo.join("mechanic")).unwrap();
-        for f in ["index.html", "app.js", "nesplayer.js", "style.css"] {
+        for f in [
+            "index.html",
+            "app.js",
+            "nesplayer.js",
+            "style.css",
+            "refine.html",
+            "refine.js",
+        ] {
             fs::write(repo.join("mechanic").join(f), format!("the page's {f}")).unwrap();
         }
         let open = Arc::new(Session::create(&p, "dk", "walk", None, "ab").unwrap());
@@ -1103,7 +1123,16 @@ mod tests {
         fs::write(&srv.wasm, b"\0asm").unwrap();
         let (s, kind, _) = call(&srv, "GET", "/gp_play.wasm", None);
         assert_eq!((s, kind.as_str()), (200, "application/wasm"));
-        assert_eq!(get(&srv, "/refine.js").0, 404);
+        assert_eq!(get(&srv, "/refine.js").1, "the page's refine.js");
+        assert_eq!(get(&srv, "/refine").1, "the page's refine.html");
+        // No rule found yet and no refine run: both say so as JSON.
+        let rule: serde_json::Value = serde_json::from_str(&get(&srv, "/api/rule").1).unwrap();
+        assert_eq!(
+            (rule["mechanic"].as_str(), rule["rule"].is_null()),
+            (Some("jump"), true)
+        );
+        let run: serde_json::Value = serde_json::from_str(&get(&srv, "/api/refine").1).unwrap();
+        assert_eq!(run["run"], serde_json::Value::Null);
         assert_eq!(get(&srv, "/api/live").1, r#"{"lines":[]}"#);
     }
 

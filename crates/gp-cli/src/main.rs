@@ -50,11 +50,13 @@ mod reach;
 mod reach_window;
 mod recindex;
 mod recordings;
+mod refine;
 mod registry;
 mod romclean;
 mod romdiff;
 mod roms;
 mod roms_cmd;
+mod rule_refine;
 mod run;
 mod run_input;
 mod scenario;
@@ -195,6 +197,12 @@ enum Cmd {
     Labels {
         #[command(subcommand)]
         cmd: labels::LabelsCmd,
+    },
+    /// The rule behind a mechanic, found from the clips and checked frame by
+    /// frame against the original; the mechanic page shows it at /refine.
+    Rule {
+        #[command(subcommand)]
+        cmd: rule_refine::RuleCmd,
     },
     /// The editor: the main screen to play the original, make clips and
     /// watch the background work score them on the rebuilt game, at
@@ -396,6 +404,21 @@ enum ModelCmd {
     /// open facts with the routine and bytes that decide them. `--grade KEY`
     /// grades it against a game's answer key (games/mosshop/static-key.toml).
     Static(model_static::StaticArgs),
+    /// Refine a working copy of a game's model against the original, clip
+    /// by clip from its corpus, through the lockstep: the clips checked
+    /// against the ROM first, numbers fitted from the original's state at
+    /// each clip's start and written as facts with evidence, shape
+    /// questions asked in questions.toml.
+    Refine(refine::RefineArgs),
+    /// List the questions in a working copy's questions.toml, and answer
+    /// them: an answer to a number's question is written into the model as
+    /// a stated fact.
+    Questions {
+        dir: PathBuf,
+        /// ID=N: choose candidate N (from 1) of question ID. Repeatable.
+        #[arg(long = "answer", value_name = "ID=N")]
+        answers: Vec<String>,
+    },
     /// Fail if the model or contract isn't in canonical form.
     Fmt {
         dir: PathBuf,
@@ -710,6 +733,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
         } => tool_gate::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Itself { cmd } => publish::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Clip { cmd } => clip_score::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Rule { cmd } => rule_refine::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Corpus { cmd } => corpus_score::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Model { cmd } => match cmd {
             ModelCmd::Check { dir, assets } => model::check(dir, assets.as_deref()),
@@ -717,6 +741,8 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             ModelCmd::Gate(a) => gate::run(a, &gp_evidence::Paths::from_env()?),
             ModelCmd::Mechanics(a) => mechanics::run(a, &gp_evidence::Paths::from_env()?),
             ModelCmd::Static(a) => model_static::run(a, &gp_evidence::Paths::from_env()?),
+            ModelCmd::Refine(a) => refine::run(a, &gp_evidence::Paths::from_env()?),
+            ModelCmd::Questions { dir, answers } => refine::questions(dir, answers),
         },
         Cmd::Baseline {
             cmd: BaselineCmd::Check { files, rom },

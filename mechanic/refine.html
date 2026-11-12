@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Refinement</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/refine.css">
+</head>
+<body class="watch-only">
+  <header>
+    <span id="logo">GAME PRINTER</span>
+    <span id="title">Refinement</span>
+  </header>
+  <main id="refine-main">
+    <section class="col">
+      <h2>The jump's rule</h2>
+      <p id="r-rule-status" class="muted">Nothing yet. gp rule jump GAME finds it from the clips.</p>
+      <ul id="r-rule" class="r-list"></ul>
+      <table id="r-clips" class="r-rows" hidden><thead><tr><th>Clip</th><th>Frames in the air</th><th>Rule matches</th></tr></thead><tbody></tbody></table>
+    </section>
+    <section class="col">
+      <h2>The last refine run</h2>
+      <p id="r-run-status" class="muted">Nothing yet. gp model refine GAME --lockstep --model COPY fits the model against the original, clip by clip.</p>
+      <table id="r-written" class="r-rows" hidden><thead><tr><th>Number</th><th>Was</th><th>Now</th><th>Clip</th></tr></thead><tbody></tbody></table>
+      <table id="r-checks" class="r-rows" hidden><thead><tr><th>Clip</th><th>Against the ROM</th></tr></thead><tbody></tbody></table>
+    </section>
+  </main>
+  <script type="module" src="/refine.js"></script>
+</body>
+</html>

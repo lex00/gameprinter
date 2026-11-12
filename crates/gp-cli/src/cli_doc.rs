@@ -19,7 +19,8 @@ const PUBLIC: &[&str] = &[
 ];
 /// Top-level commands in the lab set.
 const LAB: &[&str] = &[
-    "baseline", "clip", "interp", "labels", "level", "mechanic", "sealed", "self", "tool", "worker",
+    "baseline", "clip", "interp", "labels", "level", "mechanic", "rule", "sealed", "self", "tool",
+    "worker",
 ];
 
 /// Lab commands of the recordings, events and press searches (wave 3a of

@@ -136,6 +136,35 @@ impl Source {
         Self::new(Bundle::new(m, self.bundle.assets.clone()), module)
     }
 
+    /// This source with its model edited to `m` and the same assets, run
+    /// through the module already compiled: the refinement loop's trials
+    /// make one for each value they try. The module's spec is checked
+    /// against the edited one, as [`Self::new`] does.
+    pub(crate) fn edited(&self, m: &gp_model::Model) -> Result<Self> {
+        let bundle = Bundle::new(m, self.bundle.assets.clone());
+        let interp = Interp::from_bundle(&bundle).map_err(|e| anyhow!("{e}"))?;
+        let spec = interp.spec().clone();
+        let bytes = bundle.to_bytes();
+        if let Some(code) = &self.module {
+            let rt = code.load(&bytes).map_err(|e| anyhow!("{e}"))?;
+            let theirs = rt.spec_digest().map_err(|e| anyhow!("{e}"))?;
+            let ours = gp_sim::save::spec_digest(&spec);
+            if theirs != ours {
+                bail!(
+                    "the module compiles the edited model to a different spec: digest {theirs}, here {ours}"
+                );
+            }
+        }
+        Ok(Self {
+            bundle,
+            bytes,
+            spec,
+            exts: self.exts.clone(),
+            module: self.module.clone(),
+            hooks: self.hooks.clone(),
+        })
+    }
+
     pub(crate) fn parse_model(&self) -> Result<gp_model::Model> {
         self.bundle.parse_model().map_err(|e| anyhow!("{e}"))
     }

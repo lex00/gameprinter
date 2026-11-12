@@ -38,6 +38,28 @@ On a PASS, apply the patch again and open a pull request with the gate's result 
 
 A patch can only change one game's folder. If it removes a clip on purpose, name the clip with `--removes`, or the gate refuses it.
 
+## Let the clips find a number
+
+When a number in `model.toml` is off (a jump's gravity, a walk's speed, a timer), `gp model refine` can find it from the corpus for you. It plays each clip on your ROM and on the model side by side, from the original's state at the clip's start, and tries the numbers of the mechanic that goes wrong first. A value is written only when that clip gets closer and no other clip gets worse.
+
+It rewrites the model, so give it a copy outside any git checkout, and the game's module, built from its hook code:
+
+```sh
+mkdir -p ~/dk-refine
+cp donkey-kong/model.toml donkey-kong/mapping.toml donkey-kong/fidelity.toml donkey-kong/profiles.toml ~/dk-refine/
+gp game kit --out ~/gp-kit
+gp game build donkey-kong --kit ~/gp-kit -o ~/dk.wasm
+gp model refine donkey-kong --lockstep --model ~/dk-refine --module ~/dk.wasm
+```
+
+`--clip ID` (repeatable) works on those clips only. `--against SCORE.json`, a `gp game score` or `gp corpus score --json` output from before your change, first checks every clip against your ROM: a clip that no longer plays the same on the original is reported and left out.
+
+An example: with Mario's jump gravity in a copy changed from `0.06640625` to `0.0625`, 49 of Donkey Kong's 114 clips play exactly. The first that doesn't is `dk.double-barrel-jump.003`, wrong from frame 29 of the clip in Mario's height. Gravity moves it the most, and `0.06640625` makes the window exact. Every other clip is checked before the value is kept, and all 114 play exactly after. On an unchanged copy it changes nothing.
+
+What it prints, for each clip it worked on: the window it looked at, the number it changed and the splits before and after. Each value it writes is a fact in `~/dk-refine/model.toml` with the clip and frames as its evidence. When no number fixes a window, it doesn't change the mechanic: it asks you, in `~/dk-refine/questions.toml`. List and answer those with `gp model questions ~/dk-refine` (`--answer ID=N` picks an answer). Then copy the numbers you want into your fork and run the gate as above.
+
+`gp mechanic start donkey-kong` serves the last run and the jump's rule (`gp rule jump donkey-kong`, the gravity and takeoff speeds read from the clips) at `http://127.0.0.1:PORT/refine`.
+
 ## Where things are
 
 | In `donkey-kong/` | What it holds |
