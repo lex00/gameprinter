@@ -76,6 +76,7 @@ mod rule_refine;
 mod run;
 mod run_input;
 mod scenario;
+mod scenario_refine;
 mod scenarios_cmd;
 mod screen;
 mod sealed;

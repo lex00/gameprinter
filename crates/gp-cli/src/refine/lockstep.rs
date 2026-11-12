@@ -137,6 +137,11 @@ pub(crate) struct Scope<'a> {
     /// a window ends where a measure drifts past its threshold
     /// ([`lockstep::drift_thresholds`] has the defaults).
     pub drift: Vec<(String, Fx)>,
+    /// The solvers' proposals on the model as it stands
+    /// ([`crate::solve`]): tried after the early-stop detectors, before
+    /// the fine pass. A scenario's refine gives them its own score.
+    #[allow(clippy::type_complexity)]
+    pub solve: Option<&'a dyn Fn(&Model) -> Result<Vec<crate::solve::Proposal>>>,
 }
 
 /// Frames a window runs past the frame it drifts apart on.
@@ -1627,12 +1632,114 @@ pub(crate) fn run_scoped(
             }
             Ok(Some(full))
         };
-        // The solvers (game-printer's crate::solve, behind GP_REFINE_SOLVE):
-        // exact values read off the clip's diffs, tried here before the fine
-        // pass. They arrive with wave 2 of the port; until then this is
-        // where they are wired in, and the fine pass finds the numbers.
-        if solve_on() {
-            progress(&json!({"solve": "the solvers aren't in this gp yet (wave 2 of the port)"}));
+        // The solvers: exact values read off the clip's diffs (an
+        // arithmetic shape, a timer's change points), each tried on the
+        // window from the original's state; the best that makes the first
+        // wrong frame later is checked once, as a fit is. A number the
+        // game's code gives is never written: its proposal goes into the
+        // question with its evidence.
+        let mut solver_notes: Vec<Json> = Vec::new();
+        let mut solved: Option<(crate::solve::Proposal, Model, Lockstep, Score)> = None;
+        if let Some(f) = scope.solve.filter(|_| crate::solve::on()) {
+            let mut cands: Vec<(usize, crate::solve::Proposal, Model, Score)> = Vec::new();
+            for p in f(&model)? {
+                if stopped() {
+                    break;
+                }
+                let Ok(mm) = crate::solve::apply(&model, &p.edits) else {
+                    continue;
+                };
+                let Ok(t) = trial(&setup, &m, &mm, a.inputs, w, false) else {
+                    continue;
+                };
+                let s = score(&t, lo, w.to, &aim.aim);
+                let later = s.wrong_at() > base_score.wrong_at();
+                let wrong = |x: Score| (x.wrong_at() != u64::MAX).then_some(x.wrong_at());
+                solver_notes.push(json!({"by": p.by, "class": p.class, "measure": p.measure,
+                    "edits": p.edits, "evidence": p.evidence, "code": p.code, "later": later,
+                    "first_wrong": {"before": wrong(base_score), "after": wrong(s)}}));
+                if later {
+                    cands.push((solver_notes.len() - 1, p, mm, s));
+                }
+            }
+            cands.sort_by_key(|x| x.3);
+            if let Some((i, p, mm, s)) = cands.into_iter().find(|c| c.1.code.is_none()) {
+                let full = check(&mm, s, &mut strict_cur)?;
+                solver_notes[i]["checked"] = Json::from(full.is_some());
+                if let Some(full) = full {
+                    solved = Some((p, mm, full, s));
+                }
+            }
+        }
+        if let Some((p, mm, full, after)) = solved {
+            let facts: Vec<Fact> = p
+                .edits
+                .iter()
+                .map(|e| Fact {
+                    path: e.path.clone(),
+                    value: e.new.clone(),
+                    source: "observed",
+                    confidence: 90,
+                    note: format!(
+                        "Solved by gp model refine's {} ({}) on {}, in the window of the original's frames {} to {}: {}",
+                        p.by, p.class, a.source, w.from, w.to, p.evidence
+                    ),
+                    refs: vec![
+                        at(a.source.to_owned()),
+                        at(format!("frames {}-{}", w.from, w.to)),
+                    ],
+                })
+                .collect();
+            let old = fs::read_to_string(&model_file)?;
+            let new = apply(&old, &facts).map_err(anyhow::Error::msg)?;
+            fs::write(&model_file, &new)?;
+            model = mm;
+            let next = lockstep::first_wrong(&full, cut).map(|s| s.frame);
+            let e0 = &p.edits[0];
+            let r = json!({
+                "target": target_j,
+                "impact": impact_j,
+                "tried": [],
+                "fine": [],
+                "ties": [],
+                "round": round,
+                "window": window_json(&setup, w),
+                "mechanic": p.mechanic,
+                "by": p.by,
+                "solver": {"class": p.class, "measure": p.measure, "evidence": p.evidence, "edits": p.edits, "tried": solver_notes},
+                "param": e0.path,
+                "unit": "",
+                "old": e0.old.clone().unwrap_or_default(),
+                "new": e0.new,
+                "window_splits": {"before": before.split, "after": after.split},
+                "drift": drift_j,
+                "start": start_j,
+                "exact": after.exact(),
+                "first_split": {"before": earliest(&ls, cut).map(|s| s.frame), "after": next,
+                    "seconds_before": earliest(&ls, cut).map(|s| setup.secs(s.frame)),
+                    "seconds_after": next.map(|f| setup.secs(f))},
+                "next_window": if after.exact() { next } else { None },
+                "together": {"before": cur_together, "after": together_on(&full, &aim.guard)},
+            });
+            let _ = writeln!(
+                text_out,
+                "round {round}: frames {} to {} ({:.1} to {:.1} s): {} {} -> {}, solved by {}: {}; {} splits in the window -> {}",
+                w.model_from,
+                w.model_to,
+                setup.secs(w.model_from),
+                setup.secs(w.model_to),
+                e0.path,
+                e0.old.as_deref().unwrap_or("(unset)"),
+                e0.new,
+                p.by,
+                p.evidence,
+                before.split,
+                after.split
+            );
+            progress(&json!({"round": r}));
+            rounds.push(r);
+            ls = full;
+            continue;
         }
         let fine: Vec<usize> = (0..impacts.len())
             .filter(|&i| missing.is_none() && impacts[i].toward)
@@ -2154,12 +2261,6 @@ fn conflict_question(
         "proposal": "",
         "question": serde_json::to_value(&question).unwrap_or(Json::Null),
     })
-}
-
-/// Whether the solvers run (game-printer's `crate::solve::on`): on unless
-/// `GP_REFINE_SOLVE` is `off`. A stub until the solvers are ported.
-fn solve_on() -> bool {
-    std::env::var("GP_REFINE_SOLVE").map_or(true, |v| v != "off")
 }
 
 /// How many numbers the fine pass works on, the most effect first.

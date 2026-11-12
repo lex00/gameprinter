@@ -10,9 +10,8 @@
 //! or the built-in interpreter, the original through `OriginalRuntime`;
 //! `--recording` takes an input log or a baseline file, since gameprinter
 //! has no recordings store yet; there is no run recorder, so the ladder's
-//! metrics aren't recorded; and `--refine` and `--auto` wait for the
-//! refinement loop (`gp model refine --lockstep`, ported apart), so they
-//! refuse in words for now.
+//! metrics aren't recorded; and `--refine` and `--auto` run gp model
+//! refine --lockstep's loop (crate::scenario_refine).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -53,13 +52,11 @@ pub struct ScenariosArgs {
     pub played: Vec<PathBuf>,
     /// Refine the working copy on this scenario: its start and presses,
     /// its mechanic's numbers only, and only fits that make no other
-    /// scenario worse. Not in gameprinter yet: it comes with the refinement
-    /// loop's port.
+    /// scenario worse.
     #[arg(long, value_name = "ID")]
     pub refine: Option<String>,
     /// Work through the open scenarios: refine the next one until it
-    /// passes, then the next, until one is stuck or all pass. Not in
-    /// gameprinter yet, as `--refine`.
+    /// passes, then the next, until one is stuck or all pass.
     #[arg(long, conflicts_with = "refine")]
     pub auto: bool,
     /// The game's built module. Needed for a model with hooks.
@@ -90,11 +87,6 @@ fn input_of(input: &str) -> Result<(InputLog, String)> {
 
 pub(crate) fn run(a: &ScenariosArgs, paths: &Paths) -> Result<Outcome> {
     let bar = Bar::parse(&a.bar).map_err(anyhow::Error::msg)?;
-    if a.refine.is_some() || a.auto {
-        bail!(
-            "--refine and --auto run the refinement loop (gp model refine --lockstep), which isn't in this gp yet; score the ladder without them"
-        );
-    }
     let rom = crate::interp_args::read_rom(&a.rom)?;
     let (log, _) = input_of(&a.recording)?;
     let model_dir = crate::interp_args::model_dir(&a.model);
@@ -117,6 +109,34 @@ pub(crate) fn run(a: &ScenariosArgs, paths: &Paths) -> Result<Outcome> {
     )?;
     let mut played = sc::read_played(&a.played)?;
     sc::resolve_logs(&mut played, &paths.home);
+    let args = crate::scenario_refine::RefineArgs {
+        at: a.at,
+        tier: a.tier,
+        played: &played,
+        bar,
+        pool_only: false,
+    };
+    if a.auto {
+        let j = crate::scenario_refine::auto(&b, &args, &mut |_| {})?;
+        let mut o = Outcome::ok(j.clone(), j["says"].as_str().unwrap_or("").to_owned());
+        o.exit = u8::from(j["state"] != "done");
+        return Ok(o);
+    }
+    if let Some(id) = &a.refine {
+        let j = crate::scenario_refine::refine_one(&b, &args, id, &mut |_| {})?;
+        let mut lines = vec![j["says"].as_str().unwrap_or("").to_owned()];
+        for r in j["refine"]["rounds"].as_array().into_iter().flatten() {
+            lines.push(format!(
+                "  {} {} -> {}",
+                r["param"].as_str().unwrap_or(""),
+                r["old"].as_str().unwrap_or(""),
+                r["new"].as_str().unwrap_or("")
+            ));
+        }
+        let mut o = Outcome::ok(j.clone(), lines.join("\n"));
+        o.exit = u8::from(j["passes"] != true);
+        return Ok(o);
+    }
     let (model, text) = b.model()?;
     let started = b.started(&model, &text, a.at)?;
     let list = sc::scenarios(&model, &b.hosted.exts, &played, a.tier);

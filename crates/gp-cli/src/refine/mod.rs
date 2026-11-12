@@ -284,7 +284,7 @@ pub(crate) fn last_run(paths: &Paths, game: &str) -> Value {
 /// Refuses a working copy inside a git checkout: the loop rewrites its
 /// model.toml, and a game's folder in the games repo changes only through
 /// the gate.
-fn refuse_checkout(dir: &Path) -> Result<()> {
+pub(crate) fn refuse_checkout(dir: &Path) -> Result<()> {
     let full = dir
         .canonicalize()
         .with_context(|| format!("no folder {}", dir.display()))?;
@@ -700,6 +700,9 @@ pub(crate) fn run(a: &RefineArgs, paths: &Paths) -> Result<Outcome> {
             moment: a.moment.clone(),
             until: None,
             drift: a.drift.clone().unwrap_or_default(),
+            // As game-printer's corpus refine: the solvers read a
+            // scenario's score, which a clip's refine has none of.
+            solve: None,
         };
         let evidence = format!("clip {}", c.id);
         let out = lockstep::run_scoped(
