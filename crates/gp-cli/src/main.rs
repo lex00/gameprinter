@@ -3,6 +3,7 @@
 //! engine here.
 
 mod affected;
+mod agent_cmd;
 mod assets;
 mod attest;
 mod behave;
@@ -124,6 +125,9 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// The work record of gp serve's clip agents and the driver: notes,
+    /// attempts scored from a worktree, keep (game-printer's gp agent).
+    Agent(agent_cmd::AgentArgs),
     /// Lift a ROM's assets into files and pack them back.
     Assets {
         #[command(subcommand)]
@@ -802,6 +806,7 @@ enum TemplateCmd {
 
 fn dispatch(cmd: &Cmd) -> Result<Outcome> {
     match cmd {
+        Cmd::Agent(a) => agent_cmd::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Assets { cmd } => match cmd {
             AssetsCmd::Lift {
                 rom,

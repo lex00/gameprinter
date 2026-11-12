@@ -49,7 +49,7 @@ pub(super) fn routes() -> Vec<Route> {
         },
         Route {
             path: "/api/capture/{run}/events",
-            about: "The run's events since `after`: always none, since a game has no capture run's event log",
+            about: "The run's events since `after`: the background work's, as it happens (super::background::emit)",
             handler: events,
         },
         Route {
@@ -76,11 +76,39 @@ impl Run {
             .unwrap_or(Platform::Nes)
     }
 
+    /// The run's working copy of the game's folder, which the background
+    /// work's refine rounds write: `$GP_HOME/work/serve/GAME/model/`.
+    pub fn copy_dir(&self) -> PathBuf {
+        self.dir.join("model")
+    }
+
+    /// The model the run plays and scores: the working copy once there is
+    /// one, else the game's own folder.
+    pub fn model_dir(&self) -> PathBuf {
+        let c = self.copy_dir();
+        if c.join(gp_model::MODEL_FILE).is_file() {
+            c
+        } else {
+            self.game.clone()
+        }
+    }
+
+    /// Makes the working copy from the game's folder if there is none.
+    pub fn ensure_copy(&self) -> std::io::Result<PathBuf> {
+        let c = self.copy_dir();
+        if !c.join(gp_model::MODEL_FILE).is_file() {
+            let tmp = self.dir.join(format!("model.tmp{}", std::process::id()));
+            copy_tree(&self.game, &tmp)?;
+            fs::rename(&tmp, &c)?;
+        }
+        Ok(c)
+    }
+
     /// The model, its module and its mapping, for the rebuilt game.
     pub fn rebuild(&self, ctx: &Ctx) -> Rebuild {
         Rebuild::new(
             &ctx.paths,
-            &self.game,
+            &self.model_dir(),
             &self.name,
             ctx.modules.get(&self.name).map(PathBuf::as_path),
         )
@@ -219,7 +247,43 @@ pub(crate) fn vocab(model: &toml::Value) -> Value {
 pub(crate) fn screen(platform: Platform) -> Value {
     match platform {
         Platform::Nes => serde_json::from_str(&gp_play::info()).unwrap_or(Value::Null),
-        Platform::Arcade => json!({"platform": "arcade"}),
+        Platform::Arcade => arcade_screen(None),
+    }
+}
+
+/// An arcade game's screen, frame rate and buttons, as gp-arcade-play's
+/// `gp_play_info` gives them (its `info`): gp_arcade's screen, 30 frames a
+/// second, and the cabinet's buttons in the arcade input log's columns
+/// (`CSRLDUT`).
+pub(crate) fn arcade_screen(system: Option<&str>) -> Value {
+    json!({
+        "platform": "arcade",
+        "system": system,
+        "width": gp_arcade::video::WIDTH,
+        "height": gp_arcade::video::HEIGHT,
+        "fps": [30, 1],
+        "columns": "CSRLDUT",
+        "buttons": ["coin", "start1", "right", "left", "down", "up", "button1"],
+        "sound": true,
+        "channels": 2,
+    })
+}
+
+/// The run's screen: the platform's, with an arcade game's set named.
+pub(crate) fn run_screen(run: &Run) -> Value {
+    match run.platform() {
+        Platform::Nes => screen(Platform::Nes),
+        Platform::Arcade => {
+            let system = crate::package::Package::load(&run.game).ok().and_then(|p| {
+                let e = p
+                    .entries
+                    .iter()
+                    .find(|e| e.role == "scored")
+                    .or(p.entries.first())?;
+                e.system.clone()
+            });
+            arcade_screen(system.as_deref())
+        }
     }
 }
 
@@ -254,7 +318,7 @@ fn game(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> {
         "rom": rom_of(ctx, &run).is_ok(),
         "preview": preview,
         "platform": platform.name(),
-        "screen": screen(platform),
+        "screen": run_screen(&run),
     })))
 }
 
@@ -327,7 +391,13 @@ fn preview(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail>
 
 fn events(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> {
     let run = run_dir(ctx, params)?;
-    Ok(Response::json(&json!({"run": run.name, "events": []})))
+    let after = _req
+        .param("after")
+        .and_then(|a| a.parse().ok())
+        .unwrap_or(0);
+    Ok(Response::json(
+        &json!({"run": run.name, "events": super::background::events_after(&run.name, after)}),
+    ))
 }
 
 fn colors(_ctx: &Ctx, _req: &Request, _params: &Params) -> Result<Response, Fail> {
@@ -354,4 +424,22 @@ pub(crate) fn write_json(file: &Path, v: &Value) -> std::io::Result<()> {
     let tmp = file.with_extension(format!("tmp{}", std::process::id()));
     fs::write(&tmp, serde_json::to_vec_pretty(v).unwrap_or_default())?;
     fs::rename(&tmp, file)
+}
+
+/// Copies a folder, leaving out build output and git's.
+pub(crate) fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(to)?;
+    for e in fs::read_dir(from)? {
+        let e = e?;
+        let name = e.file_name();
+        if name == "target" || name == ".git" {
+            continue;
+        }
+        if e.file_type()?.is_dir() {
+            copy_tree(&e.path(), &to.join(&name))?;
+        } else {
+            fs::copy(e.path(), to.join(&name))?;
+        }
+    }
+    Ok(())
 }

@@ -22,18 +22,37 @@
 //! The state is `$GP_HOME/work/serve/GAME/background/state.json`, each
 //! clip's score files under `background/scores/`.
 //!
-//! What game-printer's queue also did and this doesn't yet: refine rounds
-//! (fitting numbers on the clip that parts earliest), the questions they
-//! ask, the clip agents, the grid, rescoring by what a change touches, the
-//! ledger and its verify, and the curves. The routes for them answer in
-//! words.
+//! Once every active clip is scored, the corpus clip that parts earliest
+//! gets a refine round: gameprinter's refinement loop (`gp model refine
+//! GAME --lockstep --clip ID`) on the run's working copy of the game's
+//! folder (`$GP_HOME/work/serve/GAME/model/`, made on the first round),
+//! one round at a time. Its progress lines are the job's live card; the
+//! values it writes are the round's changes, after which every clip is
+//! scored again on the changed model; a round that writes nothing leaves
+//! the clip stuck on that model with the loop's questions (the copy's
+//! questions.toml), answered from the page through `gp model questions`.
+//! The rounds are `background/history.jsonl`. Clips played in free play are
+//! refined once `gp corpus import` brings them into the corpus.
+//!
+//! A round runs `gp model refine --progress-json`, whose progress events
+//! (the window, the passes' sizes, each trial, each value kept) are folded
+//! into the job's bars ([`fold_progress`]) and sent on the run's event
+//! stream as `refine.progress`, so the REFINE tab's live card moves as the
+//! round goes. Clips put in the queue by hand ("add to the queue") are
+//! scored and refined first, in order. A clip a round leaves stuck goes to
+//! the clip agent (`serve/clip_agent.rs`) when one is turned on.
+//!
+//! What game-printer's queue also did and this doesn't yet: the grid,
+//! rescoring by what a change touches, the ledger and its verify, and the
+//! curves. Their routes answer in words.
 //!
 //! | Endpoint | What |
 //! |---|---|
 //! | `GET /api/capture/{run}/background` | The state: on or paused, the jobs running now, the jobs just done, each active clip's score, the questions and `says` |
 //! | `POST /api/capture/{run}/background/start`, `.../stop` | On (with `{clip}`, that clip first), or paused |
 //! | `GET`, `POST /api/capture/{run}/background/workers` | `{workers, max}`; POST `{workers}` |
-//! | `GET`, `POST /api/capture/{run}/background/agents` | `{agents, max}`; POST `{agents}`; kept, though no clip agent runs yet |
+//! | `GET`, `POST /api/capture/{run}/background/agents` | `{agents, max}`; POST `{agents}`: how many clip agents the stuck clips go to at once |
+//! | `GET`, `POST /api/capture/{run}/background/queue` | `{queued}`; POST `{clip}` adds a clip to the queue, `{clip, remove: true}` takes it out |
 //! | `POST /api/capture/{run}/background/rescore` | Scores every clip again |
 //! | `GET /api/capture/{run}/background/history` | The rounds: none, since no refine runs yet |
 //! | `GET /api/capture/{run}/fidelity` | The fidelity line, behaviour alone: the mean of the active clips' frames together. Coverage and the picture aren't measured here yet |
@@ -83,18 +102,23 @@ pub(super) fn routes() -> Vec<Route> {
         },
         Route {
             path: "/api/capture/{run}/background/history",
-            about: "The refine rounds: none yet, since refining isn't here yet",
+            about: "The refine rounds, oldest first: each round's changes, the clips it fixed, or the question it left",
             handler: history,
         },
         Route {
             path: "/api/capture/{run}/background/answer",
-            about: "Answers a question; there are none until refining comes",
+            about: "Answers one of the loop's questions: {question, choice}",
             handler: answer,
         },
         Route {
             path: "/api/capture/{run}/background/verify",
             about: "Replays the run's ledger: not here yet",
             handler: verify,
+        },
+        Route {
+            path: "/api/capture/{run}/background/queue",
+            about: "The clips put in the queue by hand, worked first in order: {queued}; POST {clip} adds one (with remove: true, takes it out)",
+            handler: queue,
         },
         Route {
             path: "/api/capture/{run}/fidelity",
@@ -135,6 +159,14 @@ fn pause() -> Duration {
 /// A job running now.
 #[derive(Clone)]
 struct Flight {
+    /// `score` or `refine`.
+    kind: &'static str,
+    /// What a refine round says now, from its progress lines.
+    says: String,
+    /// A refine round's bars as its progress events move them
+    /// ([`fold_progress`]): the pass, the impact pass's trials, the fine
+    /// pass's, the best split so far against the start's, the value tried.
+    bars: Value,
     clip: String,
     name: String,
     model: String,
@@ -159,12 +191,66 @@ struct Live {
 static LIVE: Mutex<BTreeMap<String, Live>> = Mutex::new(BTreeMap::new());
 /// Held while a run's state file is read and replaced.
 static FILE: Mutex<()> = Mutex::new(());
+/// Each run's events as they happen, newest last, for the page's event
+/// stream: at most [`EVENTS_KEPT`], each with its `seq`.
+static EVENTS: Mutex<BTreeMap<String, Vec<Value>>> = Mutex::new(BTreeMap::new());
+/// Wakes the streams when an event comes.
+static EVENT_BELL: std::sync::Condvar = std::sync::Condvar::new();
+const EVENTS_KEPT: usize = 2000;
+
+/// Records an event of the run's background work in the capture event
+/// format the page reads (docs/formats/capture-events.md): `score.done`,
+/// `refine.start`, `refine.progress`, `refine.round`, `queue.on`,
+/// `queue.off`.
+pub(crate) fn emit(run: &str, kind: &str, data: Value) {
+    let mut all = EVENTS.lock().unwrap_or_else(|e| e.into_inner());
+    let list = all.entry(run.to_owned()).or_default();
+    let seq = list.last().and_then(|e| e["seq"].as_u64()).unwrap_or(0) + 1;
+    list.push(json!({"v": 1, "seq": seq, "at_ms": now_ms(), "round": 0,
+                     "actor": "pipeline", "kind": kind, "stage": "background", "data": data}));
+    let over = list.len().saturating_sub(EVENTS_KEPT);
+    list.drain(..over);
+    EVENT_BELL.notify_all();
+}
+
+/// The run's events after `seq`.
+pub(crate) fn events_after(run: &str, after: u64) -> Vec<Value> {
+    EVENTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(run)
+        .map(|l| {
+            l.iter()
+                .filter(|e| e["seq"].as_u64().unwrap_or(0) > after)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Waits up to `wait` for an event after `seq`, then gives those there are.
+pub(crate) fn wait_events(run: &str, after: u64, wait: Duration) -> Vec<Value> {
+    let g = EVENTS.lock().unwrap_or_else(|e| e.into_inner());
+    let has = |g: &BTreeMap<String, Vec<Value>>| {
+        g.get(run)
+            .and_then(|l| l.last())
+            .is_some_and(|e| e["seq"].as_u64().unwrap_or(0) > after)
+    };
+    if has(&g) {
+        drop(g);
+    } else {
+        drop(EVENT_BELL.wait_timeout_while(g, wait, |g| !has(g)));
+    }
+    events_after(run, after)
+}
+
 /// The server's context, for workers started from a handler.
 static CTX: OnceLock<Arc<Ctx>> = OnceLock::new();
 /// Keeps the server's context for the workers. Every run's queue starts
 /// paused.
 pub(crate) fn start_dispatcher(ctx: Arc<Ctx>) {
-    let _ = CTX.set(ctx);
+    let _ = CTX.set(ctx.clone());
+    super::clip_agent::start_hand_off(ctx);
 }
 
 fn state_file(run: &Run) -> PathBuf {
@@ -213,6 +299,42 @@ fn with_live<T>(run: &Run, f: impl FnOnce(&mut Live) -> T) -> T {
     f(l)
 }
 
+/// The server's context, for the clip agents' threads.
+pub(crate) fn server_ctx() -> Option<Arc<Ctx>> {
+    CTX.get().cloned()
+}
+
+/// The working copy's questions, for the clip agent's prompt.
+pub(crate) fn open_questions(run: &Run) -> Vec<Value> {
+    questions(run)
+}
+
+/// The saved state, for the clip agents (`serve/clip_agent.rs`).
+pub(crate) fn saved_state(run: &Run) -> Value {
+    saved(run)
+}
+
+/// Whether the run's queue is on, and how many clip agents it hands its
+/// stuck clips to at once.
+pub(crate) fn queue_on(run: &Run) -> (bool, usize) {
+    with_live(run, |l| (l.enabled, l.agents))
+}
+
+/// Changes the saved state, for the clip agents.
+pub(crate) fn update_state(run: &Run, f: impl FnOnce(&mut Value)) -> Result<Value, Fail> {
+    update_saved(run, f)
+}
+
+/// The clips put in the queue by hand, in order.
+fn queued(v: &Value) -> Vec<String> {
+    v["queued"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c.as_str().map(str::to_owned))
+        .collect()
+}
+
 /// One active clip: its ID, its name, and whether it is starred.
 #[derive(Clone)]
 pub(crate) struct Active {
@@ -256,10 +378,10 @@ pub(crate) fn active_now(ctx: &Ctx, run: &Run) -> Vec<Active> {
 }
 
 /// What a score depends on: the model, its mapping and the module.
-fn model_key(ctx: &Ctx, run: &Run) -> String {
+pub(crate) fn model_key_of(ctx: &Ctx, run: &Run, dir: &std::path::Path) -> String {
     let mut h = blake3::Hasher::new();
     for f in [gp_model::MODEL_FILE, gp_interp::mapping::MAPPING_FILE] {
-        h.update(&std::fs::read(run.game.join(f)).unwrap_or_default());
+        h.update(&std::fs::read(dir.join(f)).unwrap_or_default());
     }
     if let Some(m) = run.rebuild(ctx).module {
         h.update(&std::fs::read(m).unwrap_or_default());
@@ -267,11 +389,36 @@ fn model_key(ctx: &Ctx, run: &Run) -> String {
     h.finalize().to_hex()[..12].to_owned()
 }
 
-/// The next clip a worker takes: the focus first, then the first active
-/// clip not scored on `model` and not running.
-fn next(ctx: &Ctx, run: &Run, live: &Live, model: &str) -> Option<(Active, usize, usize)> {
+pub(crate) fn model_key(ctx: &Ctx, run: &Run) -> String {
+    let mut h = blake3::Hasher::new();
+    for f in [gp_model::MODEL_FILE, gp_interp::mapping::MAPPING_FILE] {
+        h.update(&std::fs::read(run.model_dir().join(f)).unwrap_or_default());
+    }
+    if let Some(m) = run.rebuild(ctx).module {
+        h.update(&std::fs::read(m).unwrap_or_default());
+    }
+    h.finalize().to_hex()[..12].to_owned()
+}
+
+/// A worker's next job.
+enum Job {
+    Score(Active, usize, usize),
+    Refine(Active),
+}
+
+/// The next job a worker takes: the focus first, then the first active
+/// clip not scored on `model` and not running; once every one is scored,
+/// a refine round on the corpus clip that parts earliest, one at a time,
+/// unless it is stuck on this model.
+fn next(ctx: &Ctx, run: &Run, live: &Live, model: &str) -> Option<Job> {
+    // A refine round writes the working copy as it goes: nothing is scored
+    // on a model half written.
+    if live.flight.values().any(|f| f.kind == "refine") {
+        return None;
+    }
     let active = active_now(ctx, run);
-    let scores = saved(run)["scores"].clone();
+    let v = saved(run);
+    let scores = &v["scores"];
     let running: Vec<&str> = live.flight.values().map(|f| f.clip.as_str()).collect();
     let n = active.len();
     let todo = |a: &Active| {
@@ -281,13 +428,56 @@ fn next(ctx: &Ctx, run: &Run, live: &Live, model: &str) -> Option<(Active, usize
         && let Some((k, a)) = active.iter().enumerate().find(|(_, a)| &a.id == f)
         && todo(a)
     {
-        return Some((a.clone(), k + 1, n));
+        return Some(Job::Score(a.clone(), k + 1, n));
+    }
+    // The clips put in the queue by hand, in their order, then the rest.
+    let asked = queued(&v);
+    for q in &asked {
+        if let Some((k, a)) = active.iter().enumerate().find(|(_, a)| &a.id == q)
+            && todo(a)
+        {
+            return Some(Job::Score(a.clone(), k + 1, n));
+        }
+    }
+    if let Some((k, a)) = active.iter().enumerate().find(|(_, a)| todo(a)) {
+        return Some(Job::Score(a.clone(), k + 1, n));
+    }
+    if !running.is_empty() {
+        return None;
+    }
+    let corpus: Vec<String> = super::generated::made(run)
+        .into_iter()
+        .map(|c| c.id)
+        .collect();
+    let can = |a: &Active| {
+        let s = &scores[&a.id];
+        corpus.contains(&a.id)
+            && s["model"].as_str() == Some(model)
+            && s["exact"] == json!(false)
+            && s["error"].is_null()
+            && v["stuck"][&a.id].as_str() != Some(model)
+    };
+    if let Some(f) = &live.focus
+        && let Some(a) = active.iter().find(|a| &a.id == f && can(a))
+    {
+        return Some(Job::Refine(a.clone()));
+    }
+    for q in &asked {
+        if let Some(a) = active.iter().find(|a| &a.id == q && can(a)) {
+            return Some(Job::Refine(a.clone()));
+        }
     }
     active
         .iter()
-        .enumerate()
-        .find(|(_, a)| todo(a))
-        .map(|(k, a)| (a.clone(), k + 1, n))
+        .filter(|a| can(a))
+        .min_by_key(|a| {
+            let s = &scores[&a.id];
+            (
+                s["drift"].as_u64().unwrap_or(u64::MAX),
+                s["score"].as_u64().unwrap_or(0),
+            )
+        })
+        .map(|a| Job::Refine(a.clone()))
 }
 
 /// Starts workers up to the run's number.
@@ -304,8 +494,8 @@ fn ensure_workers(run: &Run) {
     }
 }
 
-/// One worker of a run's queue: takes the next clip while the queue is on
-/// and its slot is under the run's workers, scores it and keeps the score.
+/// One worker of a run's queue: takes the next job while the queue is on
+/// and its slot is under the run's workers.
 fn worker(ctx: &Ctx, name: &str, slot: usize) {
     let mut opened: Option<(String, crate::clip_score::Ctx)> = None;
     loop {
@@ -317,10 +507,17 @@ fn worker(ctx: &Ctx, name: &str, slot: usize) {
             if !l.enabled || slot >= l.workers {
                 return None;
             }
-            let (a, k, n) = next(ctx, &run, l, &model)?;
+            let job = next(ctx, &run, l, &model)?;
+            let (kind, a, k, n) = match &job {
+                Job::Score(a, k, n) => ("score", a, *k, *n),
+                Job::Refine(a) => ("refine", a, 0, 0),
+            };
             l.flight.insert(
                 slot,
                 Flight {
+                    kind,
+                    says: String::new(),
+                    bars: json!({}),
                     clip: a.id.clone(),
                     name: a.name.clone(),
                     model: model.clone(),
@@ -329,20 +526,35 @@ fn worker(ctx: &Ctx, name: &str, slot: usize) {
                     since: Instant::now(),
                 },
             );
-            Some(a)
+            Some(job)
         });
-        let Some(a) = job else {
-            if with_live(&run, |l| !l.enabled || slot >= l.workers) {
-                opened = None;
+        let a = match job {
+            None => {
+                if with_live(&run, |l| !l.enabled || slot >= l.workers) {
+                    opened = None;
+                }
+                std::thread::sleep(Duration::from_millis(700));
+                continue;
             }
-            std::thread::sleep(Duration::from_millis(700));
-            continue;
+            Some(Job::Refine(a)) => {
+                refine(ctx, &run, slot, &a, &model);
+                with_live(&run, |l| {
+                    l.flight.remove(&slot);
+                    if l.focus.as_deref() == Some(a.id.as_str()) {
+                        l.focus = None;
+                    }
+                });
+                std::thread::sleep(pause());
+                continue;
+            }
+            Some(Job::Score(a, _, _)) => a,
         };
         if opened.as_ref().is_none_or(|(k, _)| k != &model) {
             let rb = run.rebuild(ctx);
+            let mdir = run.model_dir();
             let how = crate::clip_score::Open {
                 module: rb.module.as_deref(),
-                model: None,
+                model: Some(&mdir),
                 assets: None,
                 rom: None,
             };
@@ -360,6 +572,12 @@ fn worker(ctx: &Ctx, name: &str, slot: usize) {
         }
         let sc = &opened.as_ref().expect("opened").1;
         let score = score_clip(ctx, &run, sc, &a, &model);
+        emit(
+            &run.name,
+            "score.done",
+            json!({"clip": a.id, "name": a.name, "score": score["score"], "exact": score["exact"],
+                   "says": score["says"], "error": score["error"]}),
+        );
         let _ = update_saved(&run, |v| {
             let before = v["scores"][&a.id]["score"].as_u64();
             if v["first"].get(&a.id).is_none() && score["error"].is_null() {
@@ -368,27 +586,23 @@ fn worker(ctx: &Ctx, name: &str, slot: usize) {
             let mut s = score.clone();
             s["fixed"] = json!(v["first"][&a.id] == json!(false) && s["exact"] == json!(true));
             v["scores"][&a.id] = s;
-            let mut done = v["done"].as_array().cloned().unwrap_or_default();
-            let seq = v["seq"].as_u64().unwrap_or(0) + 1;
-            v["seq"] = json!(seq);
-            done.push(json!({
-                "seq": seq,
-                "kind": "score",
-                "clip": a.id,
-                "name": a.name,
-                "before": before,
-                "after": score["score"],
-                "exact": score["exact"],
-                "error": score["error"],
-                "says": score["says"],
-            }));
-            let over = done.len().saturating_sub(DONE);
-            done.drain(..over);
-            v["done"] = json!(done);
+            push_done(
+                v,
+                json!({
+                    "kind": "score",
+                    "clip": a.id,
+                    "name": a.name,
+                    "before": before,
+                    "after": score["score"],
+                    "exact": score["exact"],
+                    "error": score["error"],
+                    "says": score["says"],
+                }),
+            );
         });
         with_live(&run, |l| {
             l.flight.remove(&slot);
-            if l.focus.as_deref() == Some(a.id.as_str()) {
+            if l.focus.as_deref() == Some(a.id.as_str()) && score["exact"] == json!(true) {
                 l.focus = None;
             }
         });
@@ -396,22 +610,346 @@ fn worker(ctx: &Ctx, name: &str, slot: usize) {
     }
 }
 
+/// Adds a job just done to the state's `done`, keeping the last few.
+fn push_done(v: &mut Value, mut d: Value) {
+    let seq = v["seq"].as_u64().unwrap_or(0) + 1;
+    v["seq"] = json!(seq);
+    d["seq"] = json!(seq);
+    let mut done = v["done"].as_array().cloned().unwrap_or_default();
+    done.push(d);
+    let over = done.len().saturating_sub(DONE);
+    done.drain(..over);
+    v["done"] = json!(done);
+}
+
+fn history_file(run: &Run) -> PathBuf {
+    run.dir.join("background").join("history.jsonl")
+}
+
+/// The rounds so far, oldest first.
+fn rounds(run: &Run) -> Vec<Value> {
+    std::fs::read_to_string(history_file(run))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect()
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
+/// A refine round on one clip: gameprinter's refinement loop, `gp model
+/// refine GAME --lockstep --clip ID`, run on the working copy by this gp,
+/// holding the corpus's other clips as it does. Its progress lines are the
+/// job's `target` while it runs; the values it writes are the round's
+/// changes, and a round that writes none leaves the clip stuck on this
+/// model, with the questions the loop asked in the copy's questions.toml.
+fn refine(ctx: &Ctx, run: &Run, slot: usize, a: &Active, model: &str) {
+    use std::io::BufRead as _;
+    emit(
+        &run.name,
+        "refine.start",
+        json!({"clip": a.id, "name": a.name}),
+    );
+    let said = |line: &str| {
+        if let Some(p) = line
+            .strip_prefix("progress: ")
+            .and_then(|t| serde_json::from_str::<Value>(t).ok())
+        {
+            let bars = with_live(run, |l| {
+                l.flight.get_mut(&slot).map(|f| {
+                    fold_progress(&mut f.bars, &p);
+                    f.bars.clone()
+                })
+            });
+            if let Some(mut b) = bars {
+                b["clip"] = json!(a.id);
+                b["name"] = json!(a.name);
+                b["slot"] = json!(slot);
+                emit(&run.name, "refine.progress", b);
+            }
+            return;
+        }
+        let line = line
+            .strip_prefix(&format!("{}: ", a.id))
+            .unwrap_or(line)
+            .to_owned();
+        emit(
+            &run.name,
+            "refine.progress",
+            json!({"clip": a.id, "says": line}),
+        );
+        with_live(run, |l| {
+            if let Some(f) = l.flight.get_mut(&slot) {
+                f.says = line;
+            }
+        });
+    };
+    let outcome = (|| -> Result<Value, String> {
+        let copy = run.ensure_copy().map_err(|e| e.to_string())?;
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let mut cmd = std::process::Command::new(exe);
+        cmd.args(["--json", "model", "refine"])
+            .arg(&run.game)
+            .arg("--lockstep")
+            .arg("--progress-json")
+            .arg("--model")
+            .arg(&copy)
+            .args(["--clip", &a.id])
+            .args(["--run", &format!("serve-{}", run.name)]);
+        if let Some(m) = run.rebuild(ctx).module {
+            cmd.arg("--module").arg(m);
+        }
+        let mut child = cmd
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        let mut tail = Vec::new();
+        if let Some(err) = child.stderr.take() {
+            for line in std::io::BufReader::new(err).lines().map_while(Result::ok) {
+                said(&line);
+                tail.push(line);
+            }
+        }
+        let out = child.wait_with_output().map_err(|e| e.to_string())?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        serde_json::from_str(&text).map_err(|_| {
+            let t = tail.join("\n");
+            if t.contains("unrecognized subcommand") {
+                "this gp has no `gp model refine` yet: it comes with the refine port".to_owned()
+            } else {
+                t.lines().rev().take(3).collect::<Vec<_>>().join("; ")
+            }
+        })
+    })();
+    let n = rounds(run)
+        .iter()
+        .filter(|r| r["round"].is_number())
+        .count()
+        + 1;
+    let round = match &outcome {
+        Ok(j) => {
+            let changes: Vec<Value> = j["written"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|w| json!({"param": w["param"], "old": w["old"], "new": w["new"]}))
+                .collect();
+            let fixed = j["exact"]["after"].as_i64().unwrap_or(0)
+                - j["exact"]["before"].as_i64().unwrap_or(0);
+            let stuck = changes.is_empty();
+            let says = if stuck {
+                format!(
+                    "Round {n}: no numbers make {} match; {} questions asked.",
+                    a.name, j["questions"]
+                )
+            } else {
+                format!(
+                    "Round {n}: {}; {} clips more exact.",
+                    changes
+                        .iter()
+                        .map(|c| format!(
+                            "{} {} -> {}",
+                            c["param"].as_str().unwrap_or(""),
+                            c["old"].as_str().unwrap_or(""),
+                            c["new"].as_str().unwrap_or("")
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    fixed.max(0)
+                )
+            };
+            json!({"round": n, "when_ms": now_ms(), "clip": a.id, "clip_name": a.name,
+                   "changes": changes, "fixed": fixed.max(0), "worse": [], "stuck": stuck,
+                   "passes": !stuck, "says": says})
+        }
+        Err(e) => json!({"when_ms": now_ms(), "clip": a.id, "clip_name": a.name, "stuck": true,
+                         "says": format!("Couldn't refine {}: {e}", a.name)}),
+    };
+    if let Some(d) = history_file(run).parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(history_file(run))
+    {
+        use std::io::Write as _;
+        let _ = writeln!(f, "{round}");
+    }
+    emit(&run.name, "refine.round", round.clone());
+    let _ = update_saved(run, |v| {
+        if round["stuck"] == json!(true) {
+            v["stuck"][&a.id] = json!(model);
+        }
+        if let Ok(j) = &outcome {
+            for q in j["clips"][0]["questions"].as_array().into_iter().flatten() {
+                if let Some(id) = q["id"].as_str().or(q.as_str()) {
+                    v["asked_by"][id] = json!(a.id);
+                }
+            }
+        }
+        push_done(
+            v,
+            json!({"kind": "refine", "clip": a.id, "name": a.name,
+                   "after": v["scores"][&a.id]["score"], "exact": false,
+                   "error": outcome.as_ref().err(), "says": round["says"]}),
+        );
+    });
+}
+
+/// A refine round's progress event (`gp model refine --progress-json`)
+/// folded into its bars, in the shape the live card reads
+/// (game-printer's editor/src/backfold.ts, `BgJob`): `pass`, `impact_k`
+/// of `impact_n`, `fine_k` on `fine_knobs`, `base` and `best` (the
+/// window's splits at the start and the fewest a trial reached), `kept`
+/// (values written), `trying` and `target`.
+pub(crate) fn fold_progress(b: &mut Value, p: &Value) {
+    if !b.is_object() {
+        *b = json!({});
+    }
+    let n = |v: &Value, k: &str| v[k].as_u64().unwrap_or(0);
+    if let Some(w) = p.get("window") {
+        b["window"] = w.clone();
+        if let Some(r) = p["round"].as_u64() {
+            b["round"] = json!(r);
+        }
+    } else if let Some(t) = p.get("target") {
+        b["target"] = json!({"says": t["says"]});
+    } else if let Some(pass) = p.get("pass") {
+        let base = pass["base"].clone();
+        match pass["name"].as_str() {
+            Some("impact") => {
+                b["pass"] = json!("impact");
+                b["impact_n"] = json!(n(pass, "trials"));
+                b["impact_k"] = json!(0);
+                b["fine_k"] = json!(0);
+                b["fine_knobs"] = json!(0);
+                b["fine_on"] = json!(0);
+                b["fine_params"] = json!([]);
+                b["kept"] = b["kept"].as_u64().map_or(json!(0), |k| json!(k));
+                b["base"] = base.clone();
+                b["best"] = base;
+            }
+            Some("fine") => {
+                b["pass"] = json!("fine");
+                b["fine_knobs"] = json!(n(pass, "knobs"));
+                b["fine_k"] = json!(0);
+                b["fine_on"] = json!(0);
+                b["fine_params"] = json!([]);
+                if b["base"].is_null() {
+                    b["base"] = base;
+                }
+            }
+            _ => {}
+        }
+    } else if let Some(t) = p.get("trying") {
+        if t["pass"] == "fine" {
+            b["fine_k"] = json!(n(b, "fine_k") + 1);
+            // Which of the fine pass's numbers it is on: one bar step each.
+            let mut seen: Vec<Value> = b["fine_params"].as_array().cloned().unwrap_or_default();
+            if !seen.contains(&t["param"]) {
+                seen.push(t["param"].clone());
+            }
+            b["fine_on"] = json!(seen.len());
+            b["fine_params"] = json!(seen);
+        } else {
+            b["impact_k"] = json!(n(b, "impact_k") + 1);
+        }
+        if let Some(s) = t["split"].as_u64()
+            && b["best"].as_u64().is_none_or(|best| s < best)
+        {
+            b["best"] = json!(s);
+        }
+        b["trying"] = json!({"param": t["param"], "value": t["value"], "words": t["words"],
+                             "pass": t["pass"], "split": t["split"], "curve": t["curve"]});
+    } else if let Some(i) = p.get("impact") {
+        b["impact"] = json!({"says": i["says"]});
+    } else if p.get("round").is_some_and(Value::is_object) {
+        b["kept"] = json!(n(b, "kept") + 1);
+    }
+}
+
+/// The working copy's questions as the page reads them: each with its
+/// clip (the one whose round asked it, when known), its choices (the
+/// candidates) and its answer.
+fn questions(run: &Run) -> Vec<Value> {
+    let Ok(text) = std::fs::read_to_string(run.copy_dir().join("questions.toml")) else {
+        return Vec::new();
+    };
+    let Ok(t) = toml::from_str::<toml::Table>(&text) else {
+        return Vec::new();
+    };
+    let v = saved(run);
+    let show = |c: &toml::Value| {
+        ["says", "label", "value", "text"]
+            .iter()
+            .find_map(|k| {
+                c.get(*k)
+                    .map(|x| x.as_str().map_or_else(|| x.to_string(), str::to_owned))
+            })
+            .unwrap_or_else(|| c.to_string())
+    };
+    t.get("question")
+        .and_then(|q| q.as_array())
+        .into_iter()
+        .flatten()
+        .map(|q| {
+            let s = |k: &str| q.get(k).and_then(|x| x.as_str()).unwrap_or("").to_owned();
+            let id = s("id");
+            let choices: Vec<String> = q
+                .get("candidate")
+                .and_then(|c| c.as_array())
+                .map(|c| c.iter().map(show).collect())
+                .unwrap_or_default();
+            let answer = q
+                .get("answer")
+                .and_then(|x| x.as_integer())
+                .and_then(|i| choices.get(i as usize).cloned());
+            let clip = v["asked_by"][&id].as_str().unwrap_or("").to_owned();
+            json!({"id": id, "clip": clip, "clip_name": clip, "ask": s("text"),
+                   "choices": choices, "detail": s("settle"), "model": "",
+                   "answer": answer, "kind": s("kind"), "path": s("path")})
+        })
+        .collect()
+}
+
 /// Scores one clip and says how it stands, as the strip reads a score.
 fn score_clip(ctx: &Ctx, run: &Run, sc: &crate::clip_score::Ctx, a: &Active, model: &str) -> Value {
+    score_clip_in(
+        ctx,
+        run,
+        sc,
+        &a.id,
+        model,
+        &run.dir.join("background").join("scores"),
+    )
+}
+
+/// Scores one clip on an opened model, its files under `root` (an
+/// attempt's scores go to the attempt's folder), and says how it stands.
+pub(crate) fn score_clip_in(
+    ctx: &Ctx,
+    run: &Run,
+    sc: &crate::clip_score::Ctx,
+    id: &str,
+    model: &str,
+    root: &std::path::Path,
+) -> Value {
     let failed = |e: String| {
         json!({"model": model, "score": 0, "permille": 0, "exact": false,
                "error": e, "says": format!("can't score it: {e}")})
     };
-    let (log, at, _, _) = match super::scenarios::clip_input(ctx, run, &a.id) {
+    let (log, at, _, _) = match super::scenarios::clip_input(ctx, run, id) {
         Ok(x) => x,
         Err(f) => return failed(f.message),
     };
-    let out = run
-        .dir
-        .join("background")
-        .join("scores")
-        .join(crate::clipset::file_key(&a.id));
-    let j = match crate::clip_score::score_one(sc, &a.id, &log, at, &out) {
+    let out = root.join(crate::clipset::file_key(id));
+    let j = match crate::clip_score::score_one(sc, id, &log, at, &out) {
         Ok(s) => s.json,
         Err(e) => return failed(format!("{e:#}")),
     };
@@ -498,8 +1036,20 @@ fn view(ctx: &Ctx, run: &Run) -> Value {
     let jobs: Vec<Value> = flight
         .iter()
         .map(|(slot, f)| {
-            json!({"kind": "score", "clip": f.clip, "name": f.name, "model": f.model,
-                   "slot": slot, "k": f.k, "n": f.n, "secs": f.since.elapsed().as_secs()})
+            let mut j = json!({"kind": f.kind, "clip": f.clip, "name": f.name, "model": f.model,
+                   "slot": slot, "k": f.k, "n": f.n, "round": rounds(run).len() + 1,
+                   "secs": f.since.elapsed().as_secs(),
+                   "target": if f.says.is_empty() { Value::Null } else { json!({"says": f.says}) }});
+            for (k, v) in f.bars.as_object().into_iter().flatten() {
+                if k == "round" || k == "window" {
+                    continue;
+                }
+                if k == "target" && v["says"].is_null() {
+                    continue;
+                }
+                j[k] = v.clone();
+            }
+            j
         })
         .collect();
     let would = ids.len() - on_model;
@@ -528,9 +1078,9 @@ fn view(ctx: &Ctx, run: &Run) -> Value {
         "working": !jobs.is_empty(),
         "recording": "corpus",
         "scores": scores,
-        "questions": [],
-        "round": 0,
-        "rounds": 0,
+        "questions": questions(run),
+        "round": rounds(run).iter().filter(|r| r["round"].is_number()).count(),
+        "rounds": rounds(run).len(),
         "job": jobs.first().cloned(),
         "jobs": jobs,
         "done": v["done"].as_array().cloned().unwrap_or_default(),
@@ -542,11 +1092,13 @@ fn view(ctx: &Ctx, run: &Run) -> Value {
         "agents": agents,
         "max_agents": MAX_AGENTS,
         "active": ids,
+        "names": active.iter().map(|a| (a.id.clone(), json!(a.name))).collect::<serde_json::Map<_, _>>(),
         "totals": {"active": ids.len(), "scored": scored, "exact": exact, "stored": stored},
         "start_would": {"would_score": would, "pool": ids.len()},
-        "stuck": {},
-        "clip_agents": [],
-        "agents_idle": "No clip agent runs in gameprinter's gp serve yet: the background work scores clips and doesn't fix numbers yet.",
+        "stuck": v["stuck"].clone(),
+        "clip_agents": super::clip_agent::live_json(run),
+        "agents_idle": super::clip_agent::idle_reason(ctx, run),
+        "queued": queued(&v),
         "holds": [],
         "model": model,
     })
@@ -570,16 +1122,27 @@ fn start(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
         l.enabled = true;
         l.error = None;
         if clip.is_some() {
-            l.focus = clip;
+            l.focus.clone_from(&clip);
         }
     });
-    Ok(Response::json(&view(ctx, &run)))
+    emit(&run.name, "queue.on", json!({"clip": clip}));
+    // "Fix this clip" on a clip no numbers fix on this model: the clip
+    // agent takes it (game-printer's, docs/agents.md, "The clip agent").
+    let mut out = view(ctx, &run);
+    if let Some(c) = &clip
+        && out["stuck"][c].as_str() == out["model"].as_str()
+    {
+        out["agent"] = super::clip_agent::start_agent(ctx, &run, c)
+            .unwrap_or_else(|e| json!({"started": false, "why": format!("{e:#}")}));
+    }
+    Ok(Response::json(&out))
 }
 
 fn stop(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
     post_only(req)?;
     let run = run_dir(ctx, params)?;
     with_live(&run, |l| l.enabled = false);
+    emit(&run.name, "queue.off", json!({}));
     Ok(Response::json(&view(ctx, &run)))
 }
 
@@ -614,6 +1177,44 @@ fn agents(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
     Ok(Response::json(&json!({"agents": a, "max": MAX_AGENTS})))
 }
 
+/// The clips put in the queue by hand ("add to the queue" on the page):
+/// scored and refined before the rest, in the order they were added.
+fn queue(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
+    let run = run_dir(ctx, params)?;
+    if req.method == "POST" {
+        let v: Value = super::body(req)?;
+        let clip = v["clip"]
+            .as_str()
+            .ok_or_else(|| Fail::bad_request("give {clip}"))?
+            .to_owned();
+        let remove = v["remove"] == json!(true);
+        if !remove && !active_now(ctx, &run).iter().any(|a| a.id == clip) {
+            return Err(Fail::not_found(format!(
+                "{clip} isn't one of the run's active clips (played, or the corpus's, and not skipped)"
+            )));
+        }
+        update_saved(&run, |s| {
+            let mut q = queued(s);
+            q.retain(|c| c != &clip);
+            if !remove {
+                q.push(clip.clone());
+            }
+            s["queued"] = json!(q);
+        })?;
+        emit(
+            &run.name,
+            if remove {
+                "queue.removed"
+            } else {
+                "queue.added"
+            },
+            json!({"clip": clip}),
+        );
+    }
+    let v = saved(&run);
+    Ok(Response::json(&json!({"queued": queued(&v)})))
+}
+
 fn rescore(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
     post_only(req)?;
     let run = run_dir(ctx, params)?;
@@ -628,16 +1229,54 @@ fn rescore(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> 
 }
 
 fn history(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> {
-    run_dir(ctx, params)?;
-    Ok(Response::json(&json!({"rounds": []})))
+    let run = run_dir(ctx, params)?;
+    Ok(Response::json(&json!({"rounds": rounds(&run)})))
 }
 
 fn answer(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
     post_only(req)?;
-    run_dir(ctx, params)?;
-    Err(Fail::not_found(
-        "no such question: the background work asks none until refining comes to gameprinter's gp serve",
-    ))
+    let run = run_dir(ctx, params)?;
+    let v: Value = super::body(req)?;
+    let (id, choice) = (
+        v["question"].as_str().unwrap_or(""),
+        v["choice"].as_str().unwrap_or(""),
+    );
+    let q = questions(&run)
+        .into_iter()
+        .find(|q| q["id"] == json!(id))
+        .ok_or_else(|| Fail::not_found(format!("no question {id}")))?;
+    let k = q["choices"]
+        .as_array()
+        .and_then(|c| c.iter().position(|x| x == &json!(choice)))
+        .ok_or_else(|| {
+            Fail::bad_request(format!("{choice:?} isn't one of the question's choices"))
+        })?;
+    let exe = std::env::current_exe()?;
+    let out = std::process::Command::new(exe)
+        .args(["model", "questions"])
+        .arg(run.copy_dir())
+        .arg("--answer")
+        .arg(format!("{id}={}", k + 1))
+        .output()?;
+    if !out.status.success() {
+        return Err(Fail::conflict(
+            String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+        ));
+    }
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(history_file(&run))
+        .and_then(|mut f| {
+            use std::io::Write as _;
+            writeln!(
+                f,
+                "{}",
+                json!({"when_ms": now_ms(), "clip": q["clip"], "answer": id, "choice": choice,
+                       "says": format!("Answered {id}: {choice}.")})
+            )
+        });
+    Ok(Response::json(&view(ctx, &run)))
 }
 
 fn verify(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {

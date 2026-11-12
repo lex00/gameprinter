@@ -22,18 +22,6 @@ const LATER: &[(&str, &str)] = &[
         "the grid's mode isn't in gameprinter's gp serve yet",
     ),
     (
-        "/api/capture/{run}/agent",
-        "the clip agents (game-printer's serve/work.rs and clip_agent.rs) aren't in gameprinter's gp serve yet; the mechanic session is where an agent works on a mechanic",
-    ),
-    (
-        "/api/capture/{run}/agent/{*file}",
-        "the clip agents aren't in gameprinter's gp serve yet",
-    ),
-    (
-        "/api/capture/{run}/clips/{clip}/agent",
-        "the clip agents aren't in gameprinter's gp serve yet",
-    ),
-    (
         "/api/capture/{run}/clips/{clip}/tell",
         "telling an agent about a clip isn't in gameprinter's gp serve yet; gp mechanic say is the agent's side of the mechanic page's talk",
     ),

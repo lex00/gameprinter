@@ -36,6 +36,7 @@ use crate::Outcome;
 use crate::mechanic::http::{self, ReadError, Request, Response};
 
 pub(crate) mod background;
+pub(crate) mod clip_agent;
 pub(crate) mod freeplay;
 pub(crate) mod game;
 pub(crate) mod generated;
@@ -43,6 +44,7 @@ mod later;
 mod pages;
 mod play;
 pub(crate) mod scenarios;
+pub(crate) mod work;
 
 /// Every module's routes, in the order they're matched.
 const MODULES: &[fn() -> Vec<Route>] = &[
@@ -53,6 +55,8 @@ const MODULES: &[fn() -> Vec<Route>] = &[
     generated::routes,
     background::routes,
     pages::routes,
+    work::routes,
+    clip_agent::routes,
     later::routes,
 ];
 
@@ -89,11 +93,17 @@ pub struct ServeOpts {
     /// `$GP_HOME/work/modules/GAME.wasm`).
     #[arg(long, value_name = "GAME=FILE")]
     module: Vec<String>,
+    /// The clip agent's command and its arguments ("claude --model
+    /// sonnet"), else $GP_CLIP_AGENT. Off without either: nothing starts
+    /// Claude unasked (`serve/clip_agent.rs`).
+    #[arg(long, value_name = "COMMAND")]
+    clip_agent: Option<String>,
 }
 
 pub(crate) fn run(opts: &ServeOpts, paths: &Paths) -> Result<Outcome> {
     let ip = loopback_only(&opts.bind)?;
     let ctx = Ctx::new(paths, opts)?;
+    clip_agent::set_flag(opts.clip_agent.clone());
     let listener = TcpListener::bind(SocketAddr::new(ip, opts.port))
         .with_context(|| format!("listening on {}:{}", opts.bind, opts.port))?;
     let addr = listener.local_addr()?;
@@ -146,6 +156,40 @@ pub(crate) struct Ctx {
 }
 
 impl Ctx {
+    /// GP_SERVE_MODULES for a command run on the server's behalf: the
+    /// modules it was given, as GAME=FILE,...
+    pub fn modules_env(&self) -> String {
+        self.modules
+            .iter()
+            .map(|(g, f)| format!("{g}={}", f.display()))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    /// The context `gp agent` reads a run with: the games checkout, no
+    /// editor and no port.
+    pub fn for_cli(paths: &Paths, games: Option<&Path>) -> Result<Self> {
+        let games = crate::roms_cmd::games_dir(games)
+            .context("no games checkout: pass --games or set GP_GAMES_DIR")?;
+        // The modules `gp serve` was given, passed to the clip agent's
+        // commands as GP_SERVE_MODULES (GAME=FILE, comma-separated).
+        let modules = std::env::var("GP_SERVE_MODULES")
+            .unwrap_or_default()
+            .split(',')
+            .filter_map(|m| m.split_once('='))
+            .map(|(g, f)| (g.to_owned(), PathBuf::from(f)))
+            .collect();
+        Ok(Self {
+            paths: paths.clone(),
+            repo: repo_root(),
+            editor: None,
+            games,
+            modules,
+            routes: Vec::new(),
+            port: 0,
+        })
+    }
+
     pub fn new(paths: &Paths, opts: &ServeOpts) -> Result<Self> {
         let repo = repo_root();
         let editor = match &opts.editor {
@@ -302,7 +346,7 @@ fn matches(pattern: &'static str, path: &str) -> Option<Params> {
 /// strings; found again by value so no new string is leaked.
 fn leak(name: &str) -> &'static str {
     const NAMES: &[&str] = &[
-        "run", "session", "branch", "save", "clip", "start", "sha256", "file", "name",
+        "run", "session", "branch", "save", "clip", "start", "sha256", "file", "name", "n",
     ];
     NAMES
         .iter()
@@ -430,8 +474,47 @@ fn serve_one(ctx: &Ctx, conn: &TcpStream) -> std::io::Result<()> {
         }
         Err(ReadError::Gone) => return Ok(()),
     };
+    if let Some(run) = req
+        .path
+        .strip_prefix("/api/capture/")
+        .and_then(|p| p.strip_suffix("/stream"))
+        .filter(|r| game::is_name(r))
+        && game::run_named(ctx, run).is_ok()
+        && req.headers.get("host").is_some_and(|h| {
+            h == &format!("127.0.0.1:{}", ctx.port) || h == &format!("localhost:{}", ctx.port)
+        })
+    {
+        let after = req
+            .param("after")
+            .or_else(|| req.headers.get("last-event-id").map(String::as_str))
+            .and_then(|a| a.parse().ok())
+            .unwrap_or(0);
+        return stream(conn, run, after);
+    }
     let res = handle(ctx, &req);
     http::write_response(conn, &res, req.method == "HEAD")
+}
+
+/// `GET /api/capture/{run}/stream?after=SEQ`: the run's events as
+/// server-sent events (each `id:` its seq), held open; a comment line every
+/// 15 seconds keeps it alive. Ends when the page goes away.
+fn stream(mut conn: &TcpStream, run: &str, mut after: u64) -> std::io::Result<()> {
+    use std::io::Write as _;
+    conn.write_all(
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Opener-Policy: same-origin\r\nCross-Origin-Embedder-Policy: require-corp\r\nConnection: close\r\n\r\n",
+    )?;
+    conn.flush()?;
+    loop {
+        let events = background::wait_events(run, after, std::time::Duration::from_secs(15));
+        if events.is_empty() {
+            conn.write_all(b": still here\n\n")?;
+        }
+        for e in events {
+            after = e["seq"].as_u64().unwrap_or(after);
+            write!(conn, "id: {after}\ndata: {e}\n\n")?;
+        }
+        conn.flush()?;
+    }
 }
 
 fn serve(listener: TcpListener, ctx: Arc<Ctx>) {
@@ -445,6 +528,7 @@ fn serve(listener: TcpListener, ctx: Arc<Ctx>) {
         let (ctx, open) = (ctx.clone(), open.clone());
         std::thread::spawn(move || {
             let _ = conn.set_read_timeout(Some(std::time::Duration::from_secs(30)));
+            let _ = conn.set_write_timeout(Some(std::time::Duration::from_secs(30)));
             let _ = serve_one(&ctx, &conn);
             open.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         });

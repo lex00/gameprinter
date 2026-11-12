@@ -48,6 +48,10 @@ const LAB_DETECTORS: &[&str] = &["coverage", "gaps", "sound", "sprites", "track"
 /// game-printer), on a line of their own as wave 3a's are.
 const LAB_CODE: &[&str] = &["code", "cycles", "element", "reach"];
 
+/// Lab commands of gp serve's clip agents (game-printer's gp agent), on a
+/// line of their own as the waves' are.
+const LAB_AGENTS: &[&str] = &["agent"];
+
 /// A set's table rows: each leaf command's words and first help line.
 fn rows(cmd: &clap::Command, words: &str, out: &mut Vec<(String, String)>) {
     let mut subs = cmd
@@ -91,6 +95,7 @@ fn render_of(cli: &clap::Command) -> Result<String> {
             || LAB_EVENTS.contains(&name)
             || LAB_DETECTORS.contains(&name)
             || LAB_CODE.contains(&name)
+            || LAB_AGENTS.contains(&name)
         {
             &mut lab
         } else {

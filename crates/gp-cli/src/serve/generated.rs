@@ -246,10 +246,25 @@ fn made_start(ctx: &Ctx, run: &Run, id: &str) -> Result<(PathBuf, PathBuf), Fail
     let rom = rom_of(ctx, run)?;
     let mut head = log.clone();
     head.frames.truncate(at);
-    let mut p = gp_play::Player::replay(&rom, &head.to_text()).map_err(anyhow::Error::msg)?;
-    p.run_to(at as u64).map_err(anyhow::Error::msg)?;
-    let bytes = p.save().map_err(anyhow::Error::msg)?;
-    let picture = encode_png(p.rgba(), 256, 240)?;
+    // The player the page plays this platform with, so the state bytes are
+    // ones its player restores: gp-play for the NES, gp-arcade-play for an
+    // arcade set, with the set's own screen size.
+    let (bytes, picture) = if run.platform() == crate::roms::Platform::Arcade {
+        let mut p =
+            gp_arcade_play::Player::replay(&rom, &head.to_text()).map_err(anyhow::Error::msg)?;
+        p.run_to(at as u64).map_err(anyhow::Error::msg)?;
+        let bytes = p.save().map_err(anyhow::Error::msg)?;
+        let (w, h) = (
+            gp_arcade::video::WIDTH as u32,
+            gp_arcade::video::HEIGHT as u32,
+        );
+        (bytes, encode_png(p.rgba(), w, h)?)
+    } else {
+        let mut p = gp_play::Player::replay(&rom, &head.to_text()).map_err(anyhow::Error::msg)?;
+        p.run_to(at as u64).map_err(anyhow::Error::msg)?;
+        let bytes = p.save().map_err(anyhow::Error::msg)?;
+        (bytes, encode_png(p.rgba(), 256, 240)?)
+    };
     fs::create_dir_all(&dir)?;
     fs::write(&state, bytes)?;
     fs::write(&png, picture)?;

@@ -971,6 +971,7 @@ dependencies = [
  "blake3",
  "clap",
  "gp-arcade",
+ "gp-arcade-play",
  "gp-assets",
  "gp-capture",
  "gp-contract",

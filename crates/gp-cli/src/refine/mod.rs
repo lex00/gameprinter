@@ -99,6 +99,12 @@ pub struct RefineArgs {
     /// The run the clips are made in, under $GP_HOME/work/refine/.
     #[arg(long, default_value = "refine")]
     pub run: String,
+    /// Each of the loop's progress events (the window, the passes' sizes,
+    /// each trial, each kept value) as one JSON line on standard error,
+    /// `progress: {"clip": ID, ...}`, besides the lines in words: what
+    /// `gp serve`'s live card reads to move its bars.
+    #[arg(long)]
+    pub progress_json: bool,
 }
 
 pub(crate) fn read_questions(dir: &Path) -> Result<Questions> {
@@ -438,7 +444,14 @@ impl Bench<'_> {
 
 /// A round's progress on standard error, a line for each window, impact
 /// pass and kept value, so a long run shows where it is.
-fn progress(clip: &str, p: &Value) {
+fn progress(clip: &str, p: &Value, as_json: bool) {
+    if as_json {
+        let mut e = p.clone();
+        if let Some(o) = e.as_object_mut() {
+            o.insert("clip".into(), json!(clip));
+        }
+        eprintln!("progress: {e}");
+    }
     let line = if let Some(w) = p.get("window") {
         format!(
             "window: the original's frames {} to {}",
@@ -683,7 +696,7 @@ pub(crate) fn run(a: &RefineArgs, paths: &Paths) -> Result<Outcome> {
                 from: Some(c.start),
             },
             &scope,
-            &mut |p| progress(&c.id, p),
+            &mut |p| progress(&c.id, p, a.progress_json),
         )?;
         lines.push(format!("{}:", c.id));
         lines.extend(out.text.lines().map(|l| format!("  {l}")));

@@ -60,6 +60,12 @@ What it prints, for each clip it worked on: the window it looked at, the number 
 
 `gp mechanic start donkey-kong` serves the last run and the jump's rule (`gp rule jump donkey-kong`, the gravity and takeoff speeds read from the clips) at `http://127.0.0.1:PORT/refine`.
 
+### Watch it work, and hand stuck clips to an agent
+
+`gp serve` runs the same loop in the background while you play: its REFINE tab scores every clip on the model, refines the clip that parts earliest one round at a time, and shows each job as a card whose bars move as the round goes (the impact pass's trials, the fine pass's, and the fewest wrong frames so far). Put a clip first with "add to the queue" or "fix this clip".
+
+A clip no number fixes can go to a clip agent: Claude, in a worktree of gameprinter of its own, posting each step and each attempt (scored on every clip, with a trial preview and a keep button) to the clip. It is off unless you turn it on: `GP_CLIP_AGENT=claude gp serve`. The commands it posts with (`gp agent note`, `gp agent attempt`, `gp agent done`) work by hand too; [docs/agents.md](https://github.com/lex00/gameprinter/blob/main/docs/agents.md) has the details.
+
 ## Where things are
 
 | In `donkey-kong/` | What it holds |

@@ -50,6 +50,12 @@ For research, tests and the workflow's own tools: what an agent or a contributor
 
 | Command | What it does |
 |---|---|
+| `gp agent approve` | Keep an attempt (what the page's keep does): marks it approved and writes it to $GP_HOME/work/agents/approved.json for the driver |
+| `gp agent attempt` | Record an attempt at a clip: with `--worktree`, builds that worktree's gp and trial preview, scores the clip and every active clip with them, and records the score before and after, the clips better and worse, the preview and the commit |
+| `gp agent done` | Say the work on a clip stopped, and why |
+| `gp agent note` | Post a progress note, shown on the clip's card and the REFINE tab. `--on` says in plain words what the work is on until another `--on` or done |
+| `gp agent score` | Score every active clip of a run on a model folder with this build, as JSON: what an attempt reads from a worktree's gp |
+| `gp agent state` | Who is working on what, and the attempts, in words |
 | `gp baseline check` | Record each baseline into a temporary store and check its frame hashes, lag frames and RAM assertions. A baseline whose ROM isn't in $GP_ROM_DIR is skipped; our own test ROM is built in, so its baselines always run. Exits 1 if any check fails |
 | `gp capture carry` | What the game's clip starts can't carry into the rebuilt game (gp_interp::carry), for each start and, with `--every`, for frames sampled through the starts' presses. It lists every loaded object a start there can't carry and why, grouped by cause, with the starts each gap alone holds back |
 | `gp capture dense` | Dense clips (docs/research/dense-clips.md) are a few short clips that each run much more of the original's code. Candidates from a coverage-guided search of presses at the game's clip starts, valued by the code, branches and measure values they reach on the original, chosen by greedy set cover. They are written as a clip set into a scratch folder (`--into`); the game read from is unchanged. The same seed, ROM and game give the same clips |
