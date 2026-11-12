@@ -226,6 +226,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "cfg_aliases"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
+
+[[package]]
 name = "chacha20"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -895,9 +901,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi",
  "rand_core 0.10.1",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -945,6 +953,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gp-capture"
+version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "gp-cli"
 version = "0.1.0"
 dependencies = [
@@ -954,9 +972,13 @@ dependencies = [
  "clap",
  "gp-arcade",
  "gp-assets",
+ "gp-capture",
  "gp-contract",
+ "gp-events",
  "gp-evidence",
+ "gp-explore",
  "gp-exts",
+ "gp-gaps",
  "gp-interp",
  "gp-look",
  "gp-model",
@@ -970,12 +992,16 @@ dependencies = [
  "gp-theme",
  "hex",
  "lz4_flex",
+ "md-5",
  "png",
  "serde",
  "serde_json",
+ "sha1",
  "sha2 0.11.1",
  "tempfile",
+ "tetanes-core",
  "toml",
+ "zip",
 ]
 
 [[package]]
@@ -996,6 +1022,19 @@ name = "gp-cycles"
 version = "0.1.0"
 
 [[package]]
+name = "gp-events"
+version = "0.1.0"
+dependencies = [
+ "gp-evidence",
+ "gp-nes",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tetanes-core",
+ "thiserror",
+]
+
+[[package]]
 name = "gp-evidence"
 version = "0.1.0"
 dependencies = [
@@ -1014,6 +1053,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gp-explore"
+version = "0.1.0"
+dependencies = [
+ "gp-events",
+ "gp-evidence",
+ "gp-nes",
+ "gp-runtime",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "gp-ext-game"
 version = "0.1.0"
 dependencies = [
@@ -1029,6 +1080,15 @@ dependencies = [
  "gp-ext-game",
  "gp-sim",
  "tempfile",
+]
+
+[[package]]
+name = "gp-gaps"
+version = "0.1.0"
+dependencies = [
+ "gp-track",
+ "serde",
+ "toml",
 ]
 
 [[package]]
@@ -1180,6 +1240,14 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "tempfile",
+ "toml",
+]
+
+[[package]]
+name = "gp-track"
+version = "0.1.0"
+dependencies = [
+ "serde",
  "toml",
 ]
 
@@ -1391,6 +1459,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
 
 [[package]]
+name = "md-5"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
+dependencies = [
+ "cfg-if",
+ "digest 0.11.3",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1423,6 +1501,18 @@ checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
 dependencies = [
  "adler2",
  "simd-adler32",
+]
+
+[[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
 ]
 
 [[package]]
@@ -1842,6 +1932,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.1",
+ "digest 0.11.3",
+]
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2090,6 +2191,12 @@ checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
 ]
+
+[[package]]
+name = "typed-path"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ce898823d8cd0f028662d2f349694b1af0a5cc9be83f1d213a00d3147445e1e"
 
 [[package]]
 name = "typenum"
@@ -2562,6 +2669,22 @@ name = "zeroize"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
+
+[[package]]
+name = "zip"
+version = "9.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec2e3161de27091f18a831d9494e9c53378a34833af5c1dda35ad85849da18d6"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "getrandom 0.4.3",
+ "indexmap",
+ "memchr",
+ "nix",
+ "typed-path",
+ "windows-sys",
+]
 
 [[package]]
 name = "zlib-rs"

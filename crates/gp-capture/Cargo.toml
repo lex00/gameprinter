@@ -1,0 +1,20 @@
+[package]
+name = "gp-capture"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+# The JSON Schema in schema/ is generated from these types, so the writer,
+# the readers and the published schema can't drift (docs/formats/capture-events.md).
+schemars = "1.2.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

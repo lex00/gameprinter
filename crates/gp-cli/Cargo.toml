@@ -17,9 +17,13 @@ base64 = "0.23.1"
 blake3 = "1.8.7"
 clap = { version = "4.6.7", features = ["derive"] }
 gp-arcade = { version = "0.1.0", path = "../gp-arcade" }
+gp-capture = { version = "0.1.0", path = "../gp-capture" }
 gp-assets = { version = "0.1.0", path = "../gp-assets" }
 gp-contract = { version = "0.1.0", path = "../gp-contract" }
+gp-events = { version = "0.1.0", path = "../gp-events" }
 gp-evidence = { version = "0.1.0", path = "../gp-evidence" }
+gp-explore = { version = "0.1.0", path = "../gp-explore" }
+gp-gaps = { version = "0.1.0", path = "../gp-gaps" }
 gp-exts = { version = "0.1.0", path = "../gp-exts" }
 gp-interp = { version = "0.1.0", path = "../gp-interp" }
 gp-look = { version = "0.1.0", path = "../gp-look" }
@@ -36,6 +40,10 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 hex = "0.4.3"
+md-5 = "0.11.0"
+sha1 = "0.11.0"
+zip = { version = "=9.1.2", default-features = false, features = ["deflate-flate2"] }
+tetanes-core = { path = "../../third_party/tetanes-core" }
 lz4_flex = { version = "=0.14.0", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
 png = "0.18.1"
 tempfile = "3.27.0"

@@ -384,6 +384,12 @@ fn serve_one(s: &Server, conn: &TcpStream) -> std::io::Result<()> {
         }
         Err(http::ReadError::Gone) => return Ok(()),
     };
+    // A watch session's event stream (crate::watch_serve) is written as it goes.
+    if s.own_host(&req)
+        && let Some(done) = crate::watch_serve::stream(&req, conn)
+    {
+        return done;
+    }
     let res = handle(s, &req).unwrap_or_else(|e| Response::error(500, &format!("{e:#}")));
     http::write_response(conn, &res, req.method == "HEAD")
 }
@@ -411,6 +417,10 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
     let post = req.method == "POST";
     if post && !s.same_origin(req) {
         return Ok(Response::error(403, "only this server's own page writes"));
+    }
+    // Watch sessions' routes (crate::watch_serve, docs/watch.md).
+    if let Some(r) = crate::watch_serve::handle(req) {
+        return r;
     }
     match (req.method.as_str(), req.path.as_str()) {
         ("GET" | "HEAD", "/") => page("index.html", "text/html; charset=utf-8"),

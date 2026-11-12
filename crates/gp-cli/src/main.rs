@@ -5,12 +5,17 @@
 mod affected;
 mod assets;
 mod attest;
+mod behave;
+mod capture;
 mod cli_doc;
 mod clip;
 mod clip_score;
 mod clipset;
 mod corpus_import;
 mod corpus_score;
+mod diagnose;
+mod explore;
+mod from_trace;
 mod game;
 mod game_new;
 mod gate;
@@ -23,12 +28,18 @@ mod lockstep;
 mod mechanic;
 mod mechanics;
 mod model;
+mod model_static;
 mod module;
+mod movie;
+mod open;
 mod original;
 mod package;
 mod plan;
 mod pool;
 mod publish;
+mod reach;
+mod recindex;
+mod recordings;
 mod registry;
 mod romclean;
 mod romdiff;
@@ -43,6 +54,8 @@ mod served;
 mod tape;
 mod template;
 mod tool_gate;
+mod watch;
+mod watch_serve;
 mod worker;
 
 use std::path::PathBuf;
@@ -174,6 +187,69 @@ enum Cmd {
     Tool {
         #[command(subcommand)]
         cmd: ToolCmd,
+    },
+    /// Search for presses that run code no run has run yet, with no model
+    /// (gp-explore, docs/research/rom-event-model.md). It starts at the end of
+    /// each of stage 0's own starts and `--start`'s clips, aims at the routines
+    /// the code map has that no start clip ran (or those named, or the targets
+    /// of the places the reader stopped), ranks each candidate by the fewest
+    /// calls from a routine it ran to a target, and writes what it keeps as
+    /// clips from power-on. Its output depends only on the ROM, the start and
+    /// the seed
+    Explore(explore::ExploreArgs),
+    /// Watch stage 0 on a ROM as it runs: a session whose events (the code,
+    /// banks, edges and pointer values each run shows first, the places the
+    /// static reader stopped that a run went past, what the reader reads
+    /// after the runs, the search's progress and kept clips) are written to
+    /// $GP_HOME/watch/NAME/events.ndjson as they come, for `gp watch
+    /// events --follow` and `gp mechanic watch`'s page to follow
+    Watch {
+        #[command(subcommand)]
+        cmd: watch::WatchCmd,
+    },
+    /// Clips the original's code chooses, written as a clip set from a
+    /// game's package: dense clips found by a coverage-guided search of
+    /// presses (docs/research/dense-clips.md).
+    Capture {
+        #[command(subcommand)]
+        cmd: capture::CaptureCmd,
+    },
+    /// Run a ROM from power-on through an input log and store a recording
+    /// (docs/recording.md).
+    Record(recordings::RecordArgs),
+    /// Replay a recording and check every frame against it.
+    Replay(recordings::ReplayArgs),
+    /// Read raw console state such as `ram[0x0770]` or `cpu.pc` at a frame of
+    /// a recording. It reads the frame from the recording's trace if it has
+    /// one. For `bus[...]` or a recording without a trace it restores the
+    /// nearest checkpoint and replays, and exits 1 if the state it reaches
+    /// isn't the one recorded.
+    Query(recordings::QueryArgs),
+    /// Run a recording until a condition over raw state holds, such as
+    /// `ram[0x0770] == 1`, and print the frame where it does. A recording
+    /// with a trace needs no replay up to its last frame. It exits 1 if the
+    /// condition never holds, or if the state it stops at isn't the one
+    /// recorded.
+    RunUntil(recordings::RunUntilArgs),
+    /// Traces of a recording: its full state at any frame, and CPU
+    /// instructions over a window of frames.
+    Trace {
+        #[command(subcommand)]
+        cmd: recordings::TraceCmd,
+    },
+    /// List a recording's events (interrupts, sprite 0 hits, bank switches,
+    /// controller reads, register writes). Read from its event stream, or by
+    /// replay when it has none.
+    Events(recordings::EventsArgs),
+    /// Stored recordings.
+    Recordings {
+        #[command(subcommand)]
+        cmd: recordings::RecordingsCmd,
+    },
+    /// FCEUX and BizHawk movies, imported as input logs (docs/movies.md).
+    Movie {
+        #[command(subcommand)]
+        cmd: movie::MovieCmd,
     },
     /// gp about itself: its published build and its command list.
     #[command(name = "self")]
@@ -707,6 +783,19 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             } => registry::reindex_cmd(target, versions, key.as_deref()),
             RegistryCmd::Check { url, root } => registry::check_cmd(url, root.as_deref()),
         },
+        Cmd::Explore(a) => explore::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Watch { cmd } => watch::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Capture { cmd } => capture::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Record(a) => recordings::record_cmd(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Replay(a) => recordings::replay_cmd(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Query(a) => recordings::query_cmd(a, &gp_evidence::Paths::from_env()?),
+        Cmd::RunUntil(a) => recordings::run_until_cmd(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Trace { cmd } => recordings::trace_cmd(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Events(a) => recordings::events_cmd(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Recordings { cmd } => {
+            recordings::recordings_cmd(cmd, &gp_evidence::Paths::from_env()?)
+        }
+        Cmd::Movie { cmd } => recordings::movie_cmd(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Template {
             cmd: TemplateCmd::Build { dir, out },
         } => template::build(dir, out),

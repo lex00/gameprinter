@@ -22,6 +22,23 @@ const LAB: &[&str] = &[
     "baseline", "clip", "interp", "labels", "level", "mechanic", "sealed", "self", "tool", "worker",
 ];
 
+/// Lab commands of the recordings, events and press searches (wave 3a of
+/// the port from game-printer), kept on a line of their own so the waves'
+/// landings don't edit one line.
+const LAB_EVENTS: &[&str] = &[
+    "capture",
+    "events",
+    "explore",
+    "movie",
+    "query",
+    "record",
+    "recordings",
+    "replay",
+    "run-until",
+    "trace",
+    "watch",
+];
+
 /// A set's table rows: each leaf command's words and first help line.
 fn rows(cmd: &clap::Command, words: &str, out: &mut Vec<(String, String)>) {
     let mut subs = cmd
@@ -61,7 +78,7 @@ fn render_of(cli: &clap::Command) -> Result<String> {
         let name = c.get_name();
         let set = if PUBLIC.contains(&name) {
             &mut public
-        } else if LAB.contains(&name) {
+        } else if LAB.contains(&name) || LAB_EVENTS.contains(&name) {
             &mut lab
         } else {
             unplaced.push(name.to_owned());

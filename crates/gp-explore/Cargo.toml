@@ -1,0 +1,18 @@
+[package]
+name = "gp-explore"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+gp-events = { version = "0.1.0", path = "../gp-events" }
+gp-evidence = { version = "0.1.0", path = "../gp-evidence" }
+gp-nes = { version = "0.1.0", path = "../gp-nes" }
+gp-runtime = { version = "0.1.0", path = "../gp-runtime" }
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.21"
+
+[lints]
+workspace = true

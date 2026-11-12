@@ -1,0 +1,903 @@
+{
+  "$defs": {
+    "event": {
+      "$defs": {
+        "EdgeKind": {
+          "description": "How control moved.",
+          "oneOf": [
+            {
+              "enum": [
+                "jsr",
+                "rts",
+                "rti",
+                "jmp",
+                "jmp-indirect",
+                "brk"
+              ],
+              "type": "string"
+            },
+            {
+              "const": "rts-jump",
+              "description": "An `rts` to somewhere other than just after the `jsr` that pushed\nits return address: a jump through a pushed address.",
+              "type": "string"
+            },
+            {
+              "const": "branch",
+              "description": "A conditional branch taken.",
+              "type": "string"
+            },
+            {
+              "const": "fall",
+              "description": "A conditional branch not taken.",
+              "type": "string"
+            },
+            {
+              "const": "interrupt",
+              "description": "An NMI or IRQ, from the instruction it followed.",
+              "type": "string"
+            },
+            {
+              "const": "reset",
+              "description": "A soft reset: from wherever the CPU was to the reset handler.",
+              "type": "string"
+            }
+          ]
+        },
+        "ExploreOpts": {
+          "description": "What a session's search aims at.",
+          "properties": {
+            "aim": {
+              "description": "`stops`, `unrun`, `unread`, `new-code` or `named`.",
+              "type": "string"
+            },
+            "budget": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "seed": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "targets": {
+              "description": "The routines aimed at, by the harvest's names.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "aim",
+            "targets",
+            "budget",
+            "seed"
+          ],
+          "type": "object"
+        },
+        "StartClip": {
+          "description": "A start clip of the session: a recipe from power-on.",
+          "properties": {
+            "frames": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "id": {
+              "type": "string"
+            },
+            "recipe": {
+              "description": "The recipe's hash.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "recipe",
+            "frames"
+          ],
+          "type": "object"
+        },
+        "Stop": {
+          "description": "A place the static reader stopped, from the unread report.",
+          "properties": {
+            "behind": {
+              "description": "Routines behind it.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "id": {
+              "description": "The report's id (`followed, not read@C27D`).",
+              "type": "string"
+            },
+            "pc": {
+              "description": "The stopping instruction's CPU address.",
+              "type": "string"
+            },
+            "target": {
+              "description": "Where it goes, when known (`8000`).",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "pc",
+            "behind"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "One line of a session's `events.ndjson`.",
+      "oneOf": [
+        {
+          "description": "The session began.",
+          "properties": {
+            "data": {
+              "properties": {
+                "explore": {
+                  "$ref": "#/$defs/ExploreOpts"
+                },
+                "mapper": {
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "prg_bytes": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "rom_sha256": {
+                  "type": "string"
+                },
+                "starts": {
+                  "items": {
+                    "$ref": "#/$defs/StartClip"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "rom_sha256",
+                "mapper",
+                "prg_bytes",
+                "starts",
+                "explore"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "watch.start",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "What stage 0 read from the start clips' runs: the session folder's\nfiles a reader fetches, by name with their BLAKE3 hash, and the\ncounts.",
+          "properties": {
+            "data": {
+              "properties": {
+                "files": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "read": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "routines": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "stops": {
+                  "items": {
+                    "$ref": "#/$defs/Stop"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "files",
+                "routines",
+                "read",
+                "stops"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "snapshot",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "PRG bytes first executed in the session, as `[start, end)` offset\nranges, with the name of each range's first byte.",
+          "properties": {
+            "data": {
+              "properties": {
+                "at": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "ranges": {
+                  "items": {
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "format": "uint32",
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "format": "uint32",
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    ],
+                    "type": "array"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "ranges",
+                "at"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "new-code",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The first code the session ran in a switched bank.",
+          "properties": {
+            "data": {
+              "properties": {
+                "at": {
+                  "type": "string"
+                },
+                "bank": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "bank",
+                "at"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "bank",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A transfer of control first taken in the session.",
+          "properties": {
+            "data": {
+              "properties": {
+                "edge": {
+                  "$ref": "#/$defs/EdgeKind"
+                },
+                "from": {
+                  "type": "string"
+                },
+                "to": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "edge",
+                "from",
+                "to"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "edge",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A value first seen in a pointer a `jmp (ptr)` went through.",
+          "properties": {
+            "data": {
+              "properties": {
+                "ptr": {
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "to": {
+                  "type": "string"
+                },
+                "value": {
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "ptr",
+                "value",
+                "to"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "pointer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The search's progress: candidates run of the budget, clips kept, and\nthe best rank (distance in calls to a target, then minus the new\ninstruction starts).",
+          "properties": {
+            "data": {
+              "properties": {
+                "best": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "format": "int64",
+                      "type": "integer"
+                    }
+                  ],
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "budget": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "kept": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "ran": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "ran",
+                "budget",
+                "kept"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "explore.progress",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The search kept a clip: from a start clip's end, its presses as\nspans; `recipe` is the whole recipe from power-on.",
+          "properties": {
+            "data": {
+              "properties": {
+                "end_hash": {
+                  "description": "The console's state hash at the clip's last frame, as gp-play\ncomputes it (`gp_nes::Nes::state_or_board_free_hash`), so a player\ncan check its replay.",
+                  "type": "string"
+                },
+                "frames": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "presses": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "recipe": {
+                  "type": "string"
+                },
+                "start": {
+                  "type": "string"
+                },
+                "why": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "start",
+                "presses",
+                "frames",
+                "recipe",
+                "why",
+                "end_hash"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "clip.kept",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A run went past a place the static reader stopped: the stop's\ntransfer, taken to the routine named.",
+          "properties": {
+            "data": {
+              "properties": {
+                "routine": {
+                  "type": "string"
+                },
+                "stop": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "stop",
+                "routine"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "stop.reached",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Stage 0 read something new after the runs: a routine read.",
+          "properties": {
+            "data": {
+              "properties": {
+                "routine": {
+                  "type": "string"
+                },
+                "what": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "what",
+                "routine"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "fact",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "What the runs did that no rule names yet, from `gp behave`'s\ndetectors over the start and kept clips: a sound interface, a\nbackground cell kind, a timer or counter, a handler, an element kind,\neach in words with the routine or bytes behind it.",
+          "properties": {
+            "data": {
+              "properties": {
+                "routine": {
+                  "type": "string"
+                },
+                "what": {
+                  "type": "string"
+                },
+                "why": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "what",
+                "routine",
+                "why"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "behaviour",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The session's recipes run again with addresses watched and\ninstructions hooked (an agent's `watch_watch` or `watch_hook`):\n`watch` and `hook` events follow, then `rerun.end`.",
+          "properties": {
+            "data": {
+              "properties": {
+                "hooks": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "recipes": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "watch": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "watch",
+                "hooks",
+                "recipes"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "rerun",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A write to a watched address in a rerun: the value, and the writing\ninstruction named as `gp reach` names it.",
+          "properties": {
+            "data": {
+              "properties": {
+                "addr": {
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "value": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "writer": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "addr",
+                "value",
+                "writer"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "watch",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A hooked instruction about to run in a rerun, with its registers.",
+          "properties": {
+            "data": {
+              "properties": {
+                "a": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "at": {
+                  "type": "string"
+                },
+                "p": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "s": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "x": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "y": {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "at",
+                "a",
+                "x",
+                "y",
+                "s",
+                "p"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "hook",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A rerun ended: hits seen and written (at most a cap a recipe, each\naddress or hook).",
+          "properties": {
+            "data": {
+              "properties": {
+                "hook_hits": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "watch_hits": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "written": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "watch_hits",
+                "hook_hits",
+                "written"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "rerun.end",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The session ended.",
+          "properties": {
+            "data": {
+              "properties": {
+                "kept": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "ran": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "reached": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "read": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "routines": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "ran",
+                "kept",
+                "reached",
+                "read",
+                "routines"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "watch.end",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "frame": {
+          "description": "The frame of that run (frame 1 is the first frame run).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "The level the event is from (0 to 2), when it is from a run.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "run": {
+          "description": "The recipe the event came from, by hash, when it came from a run.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seq": {
+          "description": "1, 2, 3, ... with no gaps.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "v": {
+          "description": "[`SCHEMA`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v",
+        "seq"
+      ],
+      "title": "WatchEvent",
+      "type": "object"
+    },
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "One line of a session's `inputs.ndjson`: what a page or an agent did,\nappended in one write each by whoever sends it (the events file keeps\nits one writer). `view` is what the page shows now (recipe, frame,\nfocus), `point` a box pointed at with what is under it, `tool` an\nagent's call (the tool, its arguments and result in a line each).",
+      "properties": {
+        "actor": {
+          "description": "`person` or `agent`.",
+          "type": "string"
+        },
+        "data": {
+          "default": null
+        },
+        "kind": {
+          "description": "`view`, `point`, `tool` or `note`.",
+          "type": "string"
+        },
+        "v": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v",
+        "actor",
+        "kind"
+      ],
+      "title": "WatchInput",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One object a line of a watch session's events.ndjson (event) and inputs.ndjson (input). docs/watch.md",
+  "title": "Game Printer watch events, format 1"
+}

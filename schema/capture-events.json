@@ -1,0 +1,1442 @@
+{
+  "$defs": {
+    "event": {
+      "$defs": {
+        "Actor": {
+          "description": "Who an event or input is from.",
+          "enum": [
+            "pipeline",
+            "person",
+            "agent"
+          ],
+          "type": "string"
+        },
+        "Candidate": {
+          "description": "A candidate answer to a question.",
+          "properties": {
+            "from": {
+              "type": "string"
+            },
+            "refs": {
+              "description": "The sources it was read at, as model evidence refs.",
+              "items": true,
+              "type": "array"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "value",
+            "from"
+          ],
+          "type": "object"
+        },
+        "Delta": {
+          "description": "A number and the one before it.",
+          "properties": {
+            "prev": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "value": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "value"
+          ],
+          "type": "object"
+        },
+        "Input": {
+          "additionalProperties": false,
+          "description": "An input from a person or an agent, one a line of `inputs.ndjson`.",
+          "properties": {
+            "actor": {
+              "$ref": "#/$defs/Actor"
+            },
+            "args": {
+              "description": "For `tool`: its arguments, summarized.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "choice": {
+              "description": "The candidate chosen, from 1.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "data": {
+              "description": "For `asset_edit`: what the live panel shows of the edit (status,\npreviews, shots, checks) and where the agent's server keeps the copy.\nFor `request`: the frame, the region in both games, the things\nthere, the choice and the recording (docs/point-and-tell.md). For\n`reply`: its status, lines and the structured explanation."
+            },
+            "item": {
+              "description": "For `asset_edit`, `accept` and `reject`: the sprite edit,\n`<copy>:<seq>` (docs/sprite-editing.md). For `sound_edit`, and for\n`accept` and `reject` of one: `sound:<seq>` (docs/sound.md).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "description": "`answer` (question, choice), `pin` and `unpin` (path), `note`\n(text), `tool` (tool, args, result: an agent's tool call),\n`request` (item, text, data: a person's point and tell) or `reply`\n(item, text, data: an answer to one).",
+              "type": "string"
+            },
+            "path": {
+              "description": "A model path, question ID or gap ID.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "question": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "result": {
+              "description": "For `tool`: its result, summarized.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tool": {
+              "description": "For `tool`: the tool's name.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "v": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "v",
+            "actor",
+            "kind"
+          ],
+          "type": "object"
+        },
+        "RunState": {
+          "description": "A run's state, as the job running its rounds reports it.",
+          "oneOf": [
+            {
+              "const": "running",
+              "description": "A round is running.",
+              "type": "string"
+            },
+            {
+              "const": "debounce",
+              "description": "Inputs arrived; the next round starts once they stop arriving.",
+              "type": "string"
+            },
+            {
+              "const": "waiting",
+              "description": "Questions are open; the next round starts when an input arrives.",
+              "type": "string"
+            },
+            {
+              "const": "steady",
+              "description": "A round changed nothing and nothing is open or pending.",
+              "type": "string"
+            },
+            {
+              "const": "stopped",
+              "description": "The job stopped: its round limit, its idle limit, or a failure.",
+              "type": "string"
+            }
+          ]
+        },
+        "Status": {
+          "description": "How a stage ended.",
+          "oneOf": [
+            {
+              "enum": [
+                "ok",
+                "fail",
+                "error"
+              ],
+              "type": "string"
+            },
+            {
+              "const": "cached",
+              "description": "Its inputs matched a saved output, which was replayed.",
+              "type": "string"
+            },
+            {
+              "const": "skipped",
+              "description": "It had nothing to run on, or its command isn't in this build.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "One event of a run, one a line of `events.ndjson`.",
+      "oneOf": [
+        {
+          "description": "A run began.",
+          "properties": {
+            "data": {
+              "properties": {
+                "model": {
+                  "type": "string"
+                },
+                "run": {
+                  "type": "string"
+                },
+                "stages": {
+                  "description": "The stages each round runs, in order.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "run",
+                "model",
+                "stages"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "run.start",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "type": "object"
+            },
+            "kind": {
+              "const": "round.start",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "properties": {
+                "calls": {
+                  "description": "The commands it runs.",
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "calls"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "stage.start",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "properties": {
+                "from_run": {
+                  "description": "For a cached stage, the run whose output was replayed, when it\nwas another run.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "result": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Status"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "For a cached stage, how the replayed run of it ended."
+                },
+                "status": {
+                  "$ref": "#/$defs/Status"
+                },
+                "summary": {
+                  "default": "",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "status",
+                "ms"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "stage.end",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Something a stage found that is worth a line: an asset, a recording,\na fact that differs, a failing check, a gap.",
+          "properties": {
+            "data": {
+              "properties": {
+                "data": {
+                  "description": "For `asset_edit`: its preview files and checks."
+                },
+                "id": {
+                  "type": "string"
+                },
+                "pinned": {
+                  "description": "Pinned as won't model: shown, left out of the counts.",
+                  "type": "boolean"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "text": {
+                  "default": "",
+                  "type": "string"
+                },
+                "what": {
+                  "description": "`asset`, `recording`, `fact`, `check`, `gap`, `label`, `frame`,\n`asset_edit` (an agent's sprite edit, docs/sprite-editing.md).",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "what",
+                "id",
+                "status"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "item",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A number that changed. `key` is a scorecard metric name where one\nexists (docs/scorecard.md).",
+          "properties": {
+            "data": {
+              "properties": {
+                "budget": {
+                  "description": "Over this is a failure, for a tracked speed metric.",
+                  "format": "double",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "key": {
+                  "type": "string"
+                },
+                "prev": {
+                  "format": "double",
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "value": {
+                  "format": "double",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "key",
+                "value"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "metric",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An open question for the person.",
+          "properties": {
+            "data": {
+              "properties": {
+                "candidates": {
+                  "items": {
+                    "$ref": "#/$defs/Candidate"
+                  },
+                  "type": "array"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "path": {
+                  "default": "",
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "text",
+                "candidates"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "question",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An input applied, refused or noted, echoed with its sender as actor.",
+          "properties": {
+            "data": {
+              "properties": {
+                "input": {
+                  "$ref": "#/$defs/Input"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "status": {
+                  "description": "`applied`, `refused` or `noted`.",
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "status",
+                "summary",
+                "input"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "input",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "One row of a loop's table: a refine round, a catalog round.",
+          "properties": {
+            "data": {
+              "properties": {
+                "cells": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "index": {
+                  "description": "The row's number within its table, from 1.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "table": {
+                  "description": "`refine` or `catalog`.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "table",
+                "index",
+                "cells"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "row",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "properties": {
+                "deltas": {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/Delta"
+                  },
+                  "description": "Those that changed since the last round.",
+                  "type": "object"
+                },
+                "failed": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "metrics": {
+                  "additionalProperties": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "description": "Every number the round reported.",
+                  "type": "object"
+                },
+                "ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "open": {
+                  "default": 0,
+                  "description": "Open questions and gaps, less the pinned ones.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "summary": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "summary",
+                "ms",
+                "failed",
+                "metrics",
+                "deltas"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "round.end",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "What the job running the rounds is doing.",
+          "properties": {
+            "data": {
+              "properties": {
+                "reason": {
+                  "default": "",
+                  "type": "string"
+                },
+                "state": {
+                  "$ref": "#/$defs/RunState"
+                }
+              },
+              "required": [
+                "state"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "run.state",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A person started playing the original.",
+          "properties": {
+            "data": {
+              "properties": {
+                "name": {
+                  "default": "",
+                  "description": "The ROM's name or the source's title.",
+                  "type": "string"
+                },
+                "notes": {
+                  "default": "",
+                  "type": "string"
+                },
+                "real_store": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "rom": {
+                  "description": "The ROM's headerless SHA-256.",
+                  "type": "string"
+                },
+                "run": {
+                  "type": "string"
+                },
+                "source": {
+                  "default": null,
+                  "description": "Its registry ID, when it's a registered source.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "store": {
+                  "description": "The store the session records into.",
+                  "type": "string"
+                },
+                "template": {
+                  "default": null,
+                  "description": "The template the model comes from, when there is one.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "run",
+                "rom",
+                "store"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "play.start",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A mark on the moments the model gets wrong: frames `from` to `to`.",
+          "properties": {
+            "data": {
+              "properties": {
+                "annotation": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "by": {
+                  "description": "`key` (dropped while playing) or `timeline`.",
+                  "type": "string"
+                },
+                "from": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "note": {
+                  "default": "",
+                  "type": "string"
+                },
+                "to": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "from",
+                "to",
+                "by"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "play.mark",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The person stopped playing.",
+          "properties": {
+            "data": {
+              "properties": {
+                "digest": {
+                  "description": "The page's frame hash digest.",
+                  "type": "string"
+                },
+                "frames": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "marks": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "frames",
+                "digest",
+                "marks"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "play.stop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The session's input log recorded natively.",
+          "properties": {
+            "data": {
+              "properties": {
+                "digest": {
+                  "default": null,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "digest_matches": {
+                  "type": "boolean"
+                },
+                "frames": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "id": {
+                  "description": "The recording's ID.",
+                  "type": "string"
+                },
+                "lag_frames": {
+                  "default": null,
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "provenance": {
+                  "description": "`human-play`.",
+                  "type": "string"
+                },
+                "real_store": {
+                  "default": false,
+                  "type": "boolean"
+                },
+                "recording_digest": {
+                  "default": null,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "store": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "frames",
+                "store",
+                "digest_matches",
+                "provenance"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "play.recorded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A mark written as an annotation of the recording.",
+          "properties": {
+            "data": {
+              "properties": {
+                "annotation": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "from": {
+                  "default": 0,
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "mark": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "recording": {
+                  "type": "string"
+                },
+                "to": {
+                  "default": 0,
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "mark",
+                "annotation",
+                "recording"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "play.annotated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Something in a session failed.",
+          "properties": {
+            "data": {
+              "properties": {
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "message"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "play.error",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`gp show explain` started on the marks.",
+          "properties": {
+            "data": {
+              "properties": {
+                "marks": {
+                  "items": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "template": {
+                  "default": "",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "marks"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "show.start",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "What the original did in a mark's frames that the model didn't.",
+          "properties": {
+            "data": {
+              "properties": {
+                "from": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "mark": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "missing": {
+                  "default": null,
+                  "description": "One line per thing the original did that the model didn't.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "model": {
+                  "default": null,
+                  "description": "The model's side: frames, events, counters, cells, spawns."
+                },
+                "note": {
+                  "default": "",
+                  "type": "string"
+                },
+                "original": {
+                  "default": null,
+                  "description": "The original's side: interactions, cells, counters, sound, code."
+                },
+                "recording": {
+                  "default": "",
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "to": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "mark",
+                "from",
+                "to",
+                "summary"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "show.mark",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The explanation ended.",
+          "properties": {
+            "data": {
+              "properties": {
+                "has_code": {
+                  "default": null,
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "marks": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "model_error": {
+                  "default": null,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "no_code_why": {
+                  "default": null,
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "ms",
+                "marks"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "show.end",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The model's preview for the replay: `building`, `ok`, `skipped` or\n`failed`.",
+          "properties": {
+            "data": {
+              "properties": {
+                "run": {
+                  "description": "The preview's run of the session's input.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "status": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "why": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "show.preview",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "No explanation: the session has no template, so no model.",
+          "properties": {
+            "data": {
+              "properties": {
+                "why": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "why"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "show.skipped",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The explanation failed.",
+          "properties": {
+            "data": {
+              "properties": {
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "message"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "show.error",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A person's request about a spot of the screen at one frame.",
+          "properties": {
+            "data": {
+              "properties": {
+                "choice": {
+                  "description": "The quick choice: `missing`, `position`, `look`, `sound`,\n`react`, or none.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "context": {
+                  "default": null,
+                  "description": "The region in both games and the things resolved there, as\nthe input's `data` holds them."
+                },
+                "frame": {
+                  "description": "The frame of the original both games were paused on.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "id": {
+                  "description": "Its number in the run, from 1 (its input's `item` is\n`request:<id>`).",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "label": {
+                  "default": "",
+                  "description": "What was pointed at, in plain words (\"a brick\", \"the goomba\").",
+                  "type": "string"
+                },
+                "recording": {
+                  "default": "",
+                  "description": "The recording or baseline the games were showing, by name.",
+                  "type": "string"
+                },
+                "text": {
+                  "default": "",
+                  "description": "The person's words.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "frame"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "request",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An answer to a request: what the original does there, what the\nmodel does instead and the model piece that would cover it.",
+          "properties": {
+            "data": {
+              "properties": {
+                "data": {
+                  "default": null,
+                  "description": "The structured explanation: both sides, the model piece, any\nproposal."
+                },
+                "lines": {
+                  "default": [],
+                  "description": "The explanation, a line each.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "reply": {
+                  "description": "This reply's number among the request's replies, from 1.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "request": {
+                  "description": "The request's number.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "status": {
+                  "description": "`explained`, `proposed`, `needs_mechanic` or `waiting`.",
+                  "type": "string"
+                },
+                "text": {
+                  "description": "The explanation in a sentence.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "request",
+                "reply",
+                "status",
+                "text"
+              ],
+              "type": "object"
+            },
+            "kind": {
+              "const": "request.reply",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        },
+        "at_ms": {
+          "description": "Wall time since the run started, for a person to read. Nothing\ncompares it.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "round": {
+          "description": "The round it belongs to; 0 for `run.start`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "seq": {
+          "description": "1, 2, 3, ... with no gaps.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "v": {
+          "description": "[`SCHEMA`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v",
+        "seq",
+        "at_ms",
+        "round",
+        "actor"
+      ],
+      "title": "Event",
+      "type": "object"
+    },
+    "input": {
+      "$defs": {
+        "Actor": {
+          "description": "Who an event or input is from.",
+          "enum": [
+            "pipeline",
+            "person",
+            "agent"
+          ],
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "description": "An input from a person or an agent, one a line of `inputs.ndjson`.",
+      "properties": {
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        },
+        "args": {
+          "description": "For `tool`: its arguments, summarized.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "choice": {
+          "description": "The candidate chosen, from 1.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "data": {
+          "description": "For `asset_edit`: what the live panel shows of the edit (status,\npreviews, shots, checks) and where the agent's server keeps the copy.\nFor `request`: the frame, the region in both games, the things\nthere, the choice and the recording (docs/point-and-tell.md). For\n`reply`: its status, lines and the structured explanation."
+        },
+        "item": {
+          "description": "For `asset_edit`, `accept` and `reject`: the sprite edit,\n`<copy>:<seq>` (docs/sprite-editing.md). For `sound_edit`, and for\n`accept` and `reject` of one: `sound:<seq>` (docs/sound.md).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "`answer` (question, choice), `pin` and `unpin` (path), `note`\n(text), `tool` (tool, args, result: an agent's tool call),\n`request` (item, text, data: a person's point and tell) or `reply`\n(item, text, data: an answer to one).",
+          "type": "string"
+        },
+        "path": {
+          "description": "A model path, question ID or gap ID.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "question": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result": {
+          "description": "For `tool`: its result, summarized.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "description": "For `tool`: the tool's name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "v": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v",
+        "actor",
+        "kind"
+      ],
+      "title": "Input",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One object a line of a capture run's events.ndjson (event) and inputs.ndjson (input). docs/formats/capture-events.md",
+  "title": "Game Printer capture events, format 1"
+}

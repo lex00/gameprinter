@@ -1,0 +1,40 @@
+# What the no-model behaviour detectors should find in Moss Hop, for
+# grading them (docs/gaps.md, "Scoring"). Written from the game's source
+# (games/mosshop/mosshop.s, games/mosshop/ram.inc) before the detectors were
+# run on it, 2026-10-31. Names only; the grader resolves them through the
+# build's labels, which no detector reads.
+
+schema = 0
+template = "mosshop"
+
+# Moss Hop has no sound: it only silences the APU frame interrupt at reset.
+[sound]
+interfaces = []
+
+# The two routines that change a level cell in play, each through set_cell
+# (restore_level puts cells back after a death; that's the level's restart,
+# not an element).
+[[element]]
+name = "coin"
+handlers = ["take_coin", "set_cell"]
+
+[[element]]
+name = "question block"
+handlers = ["bump_head", "set_cell"]
+
+# Bytes whose changes are the game: counters, the state, the player, the
+# camera and the enemies. Bookkeeping: the frame count, the NMI flag, the
+# controller's copies and the scratch bytes.
+[ram]
+matter = [
+  "STATE", "TIMER", "DEATHS", "STOMPS", "COINS", "LIVES",
+  "PLAYER_X", "PLAYER_X_HI", "PLAYER_Y", "PLAYER_YSUB", "PLAYER_VY", "PLAYER_VYSUB",
+  "ON_GROUND", "FACING", "JUMP_START_Y", "PEAK_Y", "CAMERA_X", "CAMERA_X_HI", "PLAYER_Y_HI",
+  "ENEMY_X", "ENEMY_X_HI", "ENEMY_DIR", "ENEMY_STATE", "ENEMY_TIMER",
+]
+bookkeeping = [
+  "FRAMES", "NMI_DONE", "PAD", "PAD_PREV", "PAD_NEW",
+  "TMP_XL", "TMP_XH", "TMP_Y", "TMP_COL", "TMP_PTR", "TMP_SPEED", "TMP_SX", "TMP_SY",
+  "TMP_TILE", "TMP_ATTR", "TMP_MASK", "TMP_ROW", "TMP_HALF", "TMP_COUNT", "TMP_NT",
+  "TMP_CELL", "TMP_PAGE", "TMP_DST", "TMP_QTILE", "TMP_QCELL", "TMP_QCOL",
+]

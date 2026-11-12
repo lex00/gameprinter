@@ -800,7 +800,11 @@ pub fn today() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    let days = (secs / 86_400) as i64;
+    date_of_days((secs / 86_400) as i64)
+}
+
+/// The date `days` after 1970-01-01, `YYYY-MM-DD`.
+pub fn date_of_days(days: i64) -> String {
     // Howard Hinnant's days-to-civil.
     let z = days + 719_468;
     let era = z.div_euclid(146_097);

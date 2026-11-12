@@ -78,6 +78,10 @@ fn handle(w: &Watch, req: &Request) -> Result<Response> {
     let page = |name: &str, kind: &'static str| -> Result<Response> {
         Ok(Response::bytes(kind, fs::read(w.page.join(name))?))
     };
+    // Watch sessions' routes (crate::watch_serve, docs/watch.md).
+    if let Some(r) = crate::watch_serve::handle(req) {
+        return r;
+    }
     match (req.method.as_str(), req.path.as_str()) {
         ("GET" | "HEAD", "/") => page("watch.html", "text/html; charset=utf-8"),
         ("GET" | "HEAD", "/watch.js") => page("watch.js", "text/javascript; charset=utf-8"),
@@ -126,6 +130,12 @@ fn serve_one(w: &Watch, conn: &TcpStream) -> std::io::Result<()> {
         }
         Err(http::ReadError::Gone) => return Ok(()),
     };
+    // A watch session's event stream (crate::watch_serve) is written as it goes.
+    if w.own_host(&req)
+        && let Some(done) = crate::watch_serve::stream(&req, conn)
+    {
+        return done;
+    }
     let res = handle(w, &req).unwrap_or_else(|e| Response::error(500, &format!("{e:#}")));
     http::write_response(conn, &res, req.method == "HEAD")
 }

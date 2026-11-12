@@ -44,7 +44,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 mod demo;
-mod http;
+pub(crate) mod http;
 mod live;
 pub(crate) mod paths;
 pub(crate) mod review;
