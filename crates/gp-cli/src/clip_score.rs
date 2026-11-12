@@ -398,6 +398,22 @@ pub(crate) fn pictures(
     keep: crate::screen::Keep,
     values: bool,
 ) -> Result<(Lockstep, Value, Option<gp_sim::DrawScript>)> {
+    straight(ctx, log, start, Some(keep), values)
+}
+
+/// One clip's lockstep straight through, with the original's random
+/// draws, as [`score_one`] plays it; `keep` takes each compared frame's
+/// pictures, and with `values` the lockstep keeps each frame's mapped
+/// values. Returns the lockstep, its report and the draws the model was
+/// given. `gp element inputs` reads its first wrong frames and its bodies'
+/// slots.
+pub(crate) fn straight(
+    ctx: &Ctx,
+    log: &InputLog,
+    start: usize,
+    keep: Option<crate::screen::Keep>,
+    values: bool,
+) -> Result<(Lockstep, Value, Option<gp_sim::DrawScript>)> {
     let from = start as u64;
     let inputs = crate::run::frames(log);
     let resume = resume_of(ctx, log, &inputs, start)?;
@@ -426,7 +442,7 @@ pub(crate) fn pictures(
         ctx.assets.as_deref(),
         draws.clone(),
         resume.as_ref().map(|(s, p)| (s, *p)),
-        Some(keep),
+        keep,
     )?;
     Ok((ls, report, draws))
 }

@@ -290,3 +290,18 @@ game-module GAME OUT:
 
 local-play:
     target/debug/gp registry serve {{quote(gp_home)}}/registry --page target/page-local
+
+# game-printer's recipe also graded `gp behave`, which isn't ported.
+# An optimized build, since a large banked game takes about a minute.
+# Stage 0 on Moss Hop and each ROM given, from its own starts with no clip
+# file: routines read (gp model static ROM --unread), one line a ROM.
+[positional-arguments]
+stage0 *ROMS: mosshop
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build -q --profile fastdev -p gp-cli
+    gp={{quote(target / "fastdev" / "gp")}}
+    for r in {{quote(mosshop_rom)}} "$@"; do
+        line=$("$gp" model static "$r" --unread | grep '^Unread:')
+        echo "$r: ${line#Unread: }"
+    done

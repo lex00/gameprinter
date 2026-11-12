@@ -598,6 +598,7 @@ mod arcade_tests {
                 namespace: Some("someone"),
                 games: Some(&games),
                 date: "2026-11-11",
+                draws: true,
             },
             &paths,
         )

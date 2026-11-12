@@ -106,6 +106,14 @@ These read the original's code as it runs. They are NES-only for now: an arcade 
 
 `gp watch start my-game ~/roms/my-game.nes` runs stage 0 on a ROM, with no model: it reads the code, runs seeded starts, searches for presses that reach code no run has, and writes each thing it finds first (new code, banks, jumps, pointer values) to `~/.gameprinter/watch/my-game/events.ndjson` as it goes. Your agent follows it with `gp watch events my-game --follow`, and a page with the `/api/watch/my-game/stream` route of the mechanic page's server. `gp explore` is the search on its own: it writes the presses it keeps as a clip set. `gp capture dense games/my-game` searches from your game's clip starts for a few short clips that each run much more of the original's code. `docs/watch.md` and `docs/capture.md` have the rest.
 
+## Reading the original's code
+
+These read the NES's 6502 code too, and refuse an arcade game in words for now.
+
+`gp model static ~/roms/my-game.nes --unread` reads everything the code settles without running it: its routines and dispatch, constants, state machines, the RAM a model will need, and where the reader stopped. `gp code listing ~/roms/my-game.nes --clips clips.toml` lists each routine with how often each instruction ran and each branch went each way over your clips, and `gp code tables ~/roms/my-game.nes --index '$53'` finds the tables a RAM byte (a stage counter) indexes. `gp reach` says what your clips ran, by routine with `--window`, and compares two windows or clip sets with `--diff-*`.
+
+`gp interp draws --find ~/roms/my-game.nes --input run.input` finds the game's random number generator and the places its code reads it, and proposes `[[draws]]` entries for your mapping; `gp game new` already runs it on a minute of no input. `gp element inputs --run games/my-game --clip CLIP` names the routine that wrote a wrong measure's byte on the clip's first wrong frame, and every byte and branch that decided it. `gp cycles` measures the CPU's work per frame, for a game that steps its random generator while it waits for the next frame. `docs/code-reading.md`, `docs/element.md`, `docs/formats/draws.md` and `docs/cycles.md` in the gameprinter repo have the rest.
+
 ## What the original shows that your model doesn't
 
 These read a recording of the original (`gp record`) beside your game's folder. They are NES-only for now: an arcade game is refused in words.

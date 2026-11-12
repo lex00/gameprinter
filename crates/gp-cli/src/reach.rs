@@ -1,12 +1,20 @@
-//! The runs stage 0 makes of a ROM, from gp-events' levels L0
-//! (footprints) and L1 (edges) (docs/research/rom-event-model.md): clips
-//! from power-on, stage 0's own seeded starts, each clip's run kept in
-//! gp-events' store (`$GP_HOME/work/events`) by the ROM and the input's
-//! hash, so a clip run once isn't run again.
+//! `gp reach`: run a ROM under clips and say what its code did, from
+//! gp-events' levels L0 (footprints) and L1 (edges)
+//! (docs/research/rom-event-model.md).
 //!
-//! The helpers of game-printer's `gp reach` that `gp explore` and `gp
-//! watch` run on, under their old names; wave 3b brings `gp reach` itself
-//! (its report, `--window` and `--diff-*`) on top of them.
+//! Each clip of a clip set (docs/formats/clips.md) runs from power-on: its
+//! start's presses from power-on (a `.presses` file, empty for power-on
+//! itself) or the first frames of a recording's input, then its own
+//! presses. The clips' levels are merged per ROM. The output names each
+//! address as the static harvest does (`C123`, `03:8123`), holds no time
+//! and no ROM byte, and is the same for the same ROM and clips.
+//!
+//! Each run's levels are kept in gp-events' store (`$GP_HOME/work/events`)
+//! by the ROM and the input's hash, so a clip run once isn't run again.
+//! `--frames` adds L2 (frame events, with `--watch` addresses) per clip,
+//! and `--detail CLIP:A..B` prints L3, the instructions of frames A to B
+//! of one clip, made again by running it.
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,15 +22,85 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
+use gp_events::names::Namer;
 use gp_events::store::Store as EventStore;
-use gp_events::{EdgeKind, Levels};
+use gp_events::{COLLECTOR_VERSION, EdgeKind, Levels, NO_ROM};
 use gp_evidence::input_log::InputFrame;
 use gp_evidence::manifest::PowerOn;
 use gp_evidence::{InputLog, Paths, Store};
 use serde_json::{Value, json};
 use sha2::Digest;
 
+use crate::Outcome;
 use crate::clipset;
+
+/// The shape of `gp reach`'s output. A change to it bumps this.
+pub const SCHEMA: &str = "gp-events reach 0.1.0";
+
+#[derive(Args, Debug, Clone)]
+pub struct ReachArgs {
+    /// The iNES ROM to run.
+    pub rom: PathBuf,
+    /// Clip sets (clips.toml) whose clips to run after stage 0's own
+    /// starts, each from power-on.
+    #[arg(long = "clip")]
+    pub clips: Vec<PathBuf>,
+    #[command(flatten)]
+    pub starts: Starts,
+    /// Write reach.json (the whole output) into this directory, and with
+    /// --frames each clip's L2 as CLIP.frames.ndjson.
+    #[arg(long)]
+    pub write: Option<PathBuf>,
+    /// Also keep L2, each frame's events: the console's event log, code and
+    /// edges first seen, RAM bytes changed, writes to --watch addresses.
+    #[arg(long)]
+    pub frames: bool,
+    /// Addresses whose writes L2 lists with their writer (`$F0`, `0x6F0`).
+    #[arg(long = "watch", value_name = "ADDR")]
+    pub watch: Vec<String>,
+    /// Print L3 instead: every instruction of frames A to B of one clip
+    /// (`CLIP:A..B` without B, `CLIP:A..=B` with it), as `gp trace
+    /// instructions` prints them.
+    #[arg(long, value_name = "CLIP:A..B")]
+    pub detail: Option<String>,
+    /// The store folder (default $GP_HOME/work/events).
+    #[arg(long)]
+    pub store: Option<PathBuf>,
+    /// Run every clip again, reading nothing from the store.
+    #[arg(long)]
+    pub no_store: bool,
+    /// Only these clips of the sets: an ID, or a prefix ending in `*`.
+    /// Repeat for more.
+    #[arg(long, value_name = "ID")]
+    pub only: Vec<String>,
+    /// Report by routine of the code map over frames A to B of each clip
+    /// (`A..B`, `A..=B`, `A..`, or `..` for whole clips): the instructions
+    /// each ran and the ways each branch went, counted instruction by
+    /// instruction (docs/code-reading.md). Stage 0's starts run only when
+    /// no clip set is given.
+    #[arg(long, value_name = "A..B")]
+    pub window: Option<String>,
+    /// Compare with other clip sets (side B): the routines, instructions
+    /// and branch ways one side ran and the other didn't. B's clips are
+    /// these sets' (whole clips unless --diff-window), else A's sets with
+    /// --diff-only and --diff-window.
+    #[arg(long = "diff-clip", value_name = "SET")]
+    pub diff_clips: Vec<PathBuf>,
+    /// Side B's clips: an ID, or a prefix ending in `*`.
+    #[arg(long, value_name = "ID")]
+    pub diff_only: Vec<String>,
+    /// Side B's window (`A..B`, `A..=B`, `A..`, `..`).
+    #[arg(long, value_name = "A..B")]
+    pub diff_window: Option<String>,
+    /// Side B is a `gp reach --write` output (reach.json): its instruction
+    /// starts and branch edges, without counts.
+    #[arg(long, value_name = "REACH_JSON", conflicts_with_all = ["diff_clips", "diff_only", "diff_window"])]
+    pub diff_reach: Option<PathBuf>,
+    /// Count, for each routine, the addresses these templates cite (`gp
+    /// template cites`).
+    #[arg(long = "cites", value_name = "TEMPLATE")]
+    pub cites: Vec<PathBuf>,
+}
 
 /// One clip's input from power-on.
 #[derive(Clone)]
@@ -165,7 +243,6 @@ fn log_frames(frames: u64, spans: &[String]) -> Result<Vec<InputFrame>> {
 }
 
 /// The clips' runs, merged, with the clip each edge was first taken in.
-#[allow(dead_code, reason = "`gp reach`'s report (wave 3b) reads the rest")]
 pub(crate) struct Reached {
     pub levels: Levels,
     /// For each edge, the clip (index into the clips) that first took it.
@@ -303,6 +380,80 @@ fn run_one(
 
 /// The output, as JSON: the clips, L0's counts and sets, and L1's edges
 /// by kind and in full, with a hash over all of it.
+pub(crate) fn report(rom: &[u8], r: &Reached) -> Result<Value> {
+    let (prg, mapper) = gp_nes::harvest::ines_prg(rom).context("not an iNES ROM")?;
+    let mut board = gp_nes::codemap::Board::of(prg, mapper);
+    board.switched = Namer::observed_switched(&board, &r.levels.footprint.windows);
+    let namer = Namer::of_board(board);
+    let f = &r.levels.footprint;
+    let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
+    let mut list = Vec::new();
+    for e in &r.levels.edges {
+        let (k, s) = ((e.kind, e.from, e.to), &e.stat);
+        let kind = serde_json::to_value(k.0)?
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        *by_kind.entry(kind.clone()).or_default() += 1;
+        let first = r.first_clip.get(&k).map(|&i| &r.clips[i].1);
+        let mut v = json!({
+            "kind": kind,
+            "from": namer.name(k.1, s.from_cpu),
+            "to": namer.name(k.2, s.to_cpu),
+            "from_offset": (k.1 != NO_ROM).then_some(k.1),
+            "to_offset": (k.2 != NO_ROM).then_some(k.2),
+            "count": s.count,
+            "first": {"clip": first, "frame": s.first_frame},
+        });
+        if !s.pointers.is_empty() {
+            v["pointers"] = json!(
+                s.pointers
+                    .iter()
+                    .map(|(p, val)| format!("${p:04X}=${val:04X}"))
+                    .collect::<Vec<_>>()
+            );
+        }
+        list.push(v);
+    }
+    let entries: Vec<String> = r
+        .levels
+        .edges
+        .iter()
+        .filter(|e| e.kind.enters() && e.to != NO_ROM)
+        .map(|e| (e.to, namer.name(e.to, e.stat.to_cpu)))
+        .collect::<BTreeMap<_, _>>()
+        .into_values()
+        .collect();
+    let mut doc = json!({
+        "schema": SCHEMA,
+        "collector_version": COLLECTOR_VERSION,
+        "rom_sha256": hex::encode(sha2::Sha256::digest(rom)),
+        "prg_bytes": f.executed.len(),
+        "clips": r.clips.iter().map(|(set, id, frames, input)| json!({
+            "set": set, "id": id, "frames": frames, "input": input,
+        })).collect::<Vec<_>>(),
+        "footprint": {
+            "instructions": f.instructions,
+            "outside_rom": f.outside_rom,
+            "instruction_starts": f.starts.count(),
+            "executed_bytes": f.executed.count(),
+            "ram_written_bytes": f.ram_written.count(),
+            "prg_ram_written_bytes": f.prg_ram_written.count(),
+            "executed": f.executed,
+            "starts": f.starts,
+        },
+        "edges": {
+            "count": r.levels.edges.len(),
+            "by_kind": by_kind,
+            "entries": entries,
+            "list": list,
+        },
+    });
+    let hash = gp_evidence::Hash::of(&serde_json::to_vec(&doc)?).to_string();
+    doc["hash"] = json!(hash);
+    Ok(doc)
+}
+
 /// An address as `--watch` takes it: `$F0`, `0x6F0` or decimal.
 pub(crate) fn parse_addr(s: &str) -> Result<u16> {
     let t = s.trim();
@@ -339,4 +490,132 @@ pub(crate) fn detail_of(rom: &[u8], c: &ClipInput, a: u64, last: u64) -> Result<
         json!({"clip": c.id, "start": t.start, "end": t.end, "instructions": t.instructions, "interrupts": t.interrupts, "trace": text}),
         text.trim_end().to_owned(),
     ))
+}
+
+/// `--detail CLIP:A..B`: L3 for one clip's frames.
+fn detail(rom: &[u8], clips: &[ClipInput], spec: &str) -> Result<Outcome> {
+    let (id, range) = spec.rsplit_once(':').context("--detail takes CLIP:A..B")?;
+    let (a, last) = frame_range(range).with_context(|| format!("--detail {spec}"))?;
+    let c = clips
+        .iter()
+        .find(|c| c.id == id)
+        .with_context(|| format!("no clip {id} in the sets given"))?;
+    let (v, text) = detail_of(rom, c, a, last)?;
+    Ok(Outcome::ok(v, text))
+}
+
+pub(crate) fn run(a: &ReachArgs, paths: &Paths) -> Result<Outcome> {
+    if crate::reach_window::wanted(a) {
+        if a.detail.is_some() || a.frames {
+            bail!(
+                "--window and --diff-* report by routine; --detail and --frames are other reports"
+            );
+        }
+        return crate::reach_window::run(a, paths);
+    }
+    let rom = fs::read(&a.rom).with_context(|| format!("reading {}", a.rom.display()))?;
+    crate::original::nes_only(crate::original::Platform::of_file(&rom), "gp reach")?;
+    let clips = crate::code::select(a.starts.with(&a.clips, paths)?, &a.only)?;
+    if let Some(spec) = &a.detail {
+        return detail(&rom, &clips, spec);
+    }
+    let store = (!a.no_store).then(|| {
+        EventStore::at(
+            a.store
+                .clone()
+                .unwrap_or_else(|| paths.home.join("work").join("events")),
+        )
+    });
+    let watch: std::collections::BTreeSet<u16> = a
+        .watch
+        .iter()
+        .map(|w| parse_addr(w))
+        .collect::<Result<_>>()?;
+    if a.frames && store.is_none() && a.write.is_none() {
+        bail!("--frames with --no-store needs --write, where L2 goes");
+    }
+    let store_ref = store.as_ref();
+    let keep = Keep {
+        store: store_ref,
+        frames: a.frames.then_some(&watch),
+        out: a.write.as_deref().filter(|_| a.frames),
+    };
+    let r = run_clips(&rom, &clips, &keep)?;
+    let doc = report(&rom, &r)?;
+    if let Some(d) = &a.write {
+        fs::create_dir_all(d)?;
+        fs::write(
+            d.join("reach.json"),
+            serde_json::to_string_pretty(&doc)? + "\n",
+        )?;
+    }
+    let frames: u64 = r.clips.iter().map(|c| c.2).sum();
+    let f = &doc["footprint"];
+    let e = &doc["edges"];
+    let text = format!(
+        "{} clips ({} run, {} from the store), {frames} frames in {:.2} s: {} instruction starts, {} PRG bytes executed of {}; {} edges ({}), {} entries\nhash {}",
+        r.clips.len(),
+        r.ran,
+        r.clips.len() - r.ran,
+        r.seconds,
+        f["instruction_starts"],
+        f["executed_bytes"],
+        doc["prg_bytes"],
+        e["count"],
+        e["by_kind"]
+            .as_object()
+            .map(|m| m
+                .iter()
+                .map(|(k, v)| format!("{k} {v}"))
+                .collect::<Vec<_>>()
+                .join(", "))
+            .unwrap_or_default(),
+        e["entries"].as_array().map_or(0, Vec::len),
+        doc["hash"].as_str().unwrap_or_default(),
+    );
+    Ok(Outcome::ok(doc, text))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn clip(pad2: u8, power_on: PowerOn) -> ClipInput {
+        ClipInput {
+            set: String::new(),
+            id: "c".into(),
+            power_on,
+            inputs: vec![
+                InputFrame {
+                    polled: true,
+                    pads: [0, pad2, 0, 0],
+                    reset: false,
+                };
+                20
+            ],
+        }
+    }
+
+    /// Two runs share a store key only when they are the same run: the
+    /// second controller and the power-on are part of it.
+    #[test]
+    fn the_key_holds_every_controller_and_the_power_on() {
+        let base = clip(0, PowerOn::default());
+        assert_eq!(
+            base.key().unwrap(),
+            clip(0, PowerOn::default()).key().unwrap()
+        );
+        assert_ne!(
+            base.key().unwrap(),
+            clip(1, PowerOn::default()).key().unwrap()
+        );
+        let fceux = PowerOn {
+            ram_init: gp_evidence::manifest::RamInit::Fceux,
+            ..PowerOn::default()
+        };
+        assert_ne!(base.key().unwrap(), clip(0, fceux).key().unwrap());
+        let mut reset = clip(0, PowerOn::default());
+        reset.inputs[5].reset = true;
+        assert_ne!(base.key().unwrap(), reset.key().unwrap());
+    }
 }

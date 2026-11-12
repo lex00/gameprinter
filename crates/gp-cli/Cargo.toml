@@ -21,6 +21,7 @@ gp-capture = { version = "0.1.0", path = "../gp-capture" }
 gp-assets = { version = "0.1.0", path = "../gp-assets" }
 gp-contract = { version = "0.1.0", path = "../gp-contract" }
 gp-coverage = { version = "0.1.0", path = "../gp-coverage" }
+gp-cycles = { version = "0.1.0", path = "../gp-cycles" }
 gp-events = { version = "0.1.0", path = "../gp-events" }
 gp-evidence = { version = "0.1.0", path = "../gp-evidence" }
 gp-explore = { version = "0.1.0", path = "../gp-explore" }

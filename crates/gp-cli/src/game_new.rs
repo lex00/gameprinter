@@ -17,9 +17,13 @@
 //!
 //! Nothing is written over: a folder that exists is refused, and the quest
 //! log only gains the rows it lacks. No ROM byte is written; the lift's
-//! digest is a hash of what the ROM gives, made here. Left for later steps
-//! (~/.game-printer/work/bring/PLAN.md): the draw-site search, the theme kit
-//! and the level kit, whose tools haven't moved yet.
+//! digest is a hash of what the ROM gives, made here.
+//!
+//! On an NES ROM the state mapping gets the draw sites `gp interp draws
+//! --find` finds on an idle run from power-on, with `score_draws`, for
+//! review (`--no-draws` leaves the search out), as game-printer's did. Left
+//! for later steps (~/.game-printer/work/bring/PLAN.md): the theme kit and
+//! the level kit, whose tools haven't moved yet.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -47,6 +51,36 @@ pub struct New<'a> {
     pub games: Option<&'a Path>,
     /// Today, for the evidence lines.
     pub date: &'a str,
+    /// Search an idle run for draw sites (an NES ROM's).
+    pub draws: bool,
+}
+
+/// How many frames of no input the draw search runs from power-on: a
+/// minute, long enough for most attract demos to start.
+const IDLE_FRAMES: usize = 3600;
+
+/// The draw sites an idle run of an NES image finds, as `[[draws]]`
+/// entries, and a line saying what was found.
+fn idle_draws(bytes: &[u8]) -> (Option<String>, usize, String) {
+    let idle = vec![gp_evidence::input_log::InputFrame::default(); IDLE_FRAMES];
+    let draws = match crate::draws_find::find(bytes, &idle, 0) {
+        Ok(f) if f.proposed().next().is_some() => Some(crate::draws_find::proposal(&f, &[])),
+        Ok(_) => None,
+        Err(e) => return (None, 0, format!("the idle run failed: {e}")),
+    };
+    let n = draws
+        .as_deref()
+        .map_or(0, |d| d.matches("[[draws]]").count());
+    let line = if n > 0 {
+        format!(
+            "{n} draw sites found on {IDLE_FRAMES} idle frames, in mapping.toml with score_draws for review"
+        )
+    } else {
+        format!(
+            "none found on {IDLE_FRAMES} idle frames: run `gp interp draws --find ROM --input LOG` on the first clips"
+        )
+    };
+    (draws, n, line)
 }
 
 /// The genres a skeleton can start from.
@@ -213,6 +247,7 @@ pub fn run(a: &New<'_>, paths: &Paths) -> Result<Outcome> {
             &sha[..16]
         ),
         format!("  assets   {}", about.assets),
+        format!("  draws    {}", about.draws_line),
         "  corpus   no clips yet".into(),
         format!(
             "  quest    {} rows from the {} checklist ({added} new), a session for each, in {}",
@@ -235,7 +270,7 @@ pub fn run(a: &New<'_>, paths: &Paths) -> Result<Outcome> {
             "game": game, "package": format!("{namespace}/{game}"), "genre": a.genre,
             "platform": rom.platform.name(), "system": rom.system,
             "rom": sha, "dir": dir, "wrote": files.iter().map(|(f, _)| f).collect::<Vec<_>>(),
-            "lifted_sha256": about.lifted,
+            "lifted_sha256": about.lifted, "draws": about.draws,
             "quest_log": rows.iter().map(|r| r.row.clone()).collect::<Vec<_>>(),
         }),
         text.join("\n"),
@@ -247,6 +282,9 @@ struct About {
     input: &'static str,
     assets: String,
     lifted: Option<String>,
+    /// The draw sites the idle run found, and what to say of them.
+    draws: usize,
+    draws_line: String,
 }
 
 /// An NES game's files: the package with its pins, the asset map of what
@@ -274,6 +312,11 @@ fn nes_files(
     let lifted_sha = crate::template::lifted_digest(&lifted);
     let map_sha = sha256_hex(map_text.as_bytes());
     let recipes = crate::plan::recipe_set_hash(&BTreeMap::new());
+    let (draws, n_draws, draws_line) = if a.draws {
+        idle_draws(bytes)
+    } else {
+        (None, 0, "not searched (--no-draws)".to_owned())
+    };
 
     let files: Vec<(String, String)> = vec![
         (
@@ -301,7 +344,7 @@ fn nes_files(
         ),
         (
             "mapping.toml".into(),
-            mapping_toml(name, game, Device::NesPad),
+            mapping_toml(name, game, Device::NesPad, Some(draws.as_deref())),
         ),
         ("fidelity.toml".into(), fidelity_toml(name, &title)),
         ("observe.toml".into(), observe_toml(name, &title)),
@@ -323,6 +366,8 @@ fn nes_files(
             }
         ),
         lifted: Some(lifted_sha),
+        draws: n_draws,
+        draws_line,
     };
     Ok((files, about))
 }
@@ -392,7 +437,7 @@ fn arcade_files(
         ),
         (
             "mapping.toml".into(),
-            mapping_toml(name, game, Device::Arcade),
+            mapping_toml(name, game, Device::Arcade, None),
         ),
         ("fidelity.toml".into(), fidelity_toml(name, title)),
         ("observe.toml".into(), observe_toml(name, title)),
@@ -407,6 +452,8 @@ fn arcade_files(
         input: "the arcade controls (coin, start1, a joystick and button1)",
         assets: "none: the tools lift no arcade assets yet".into(),
         lifted: None,
+        draws: 0,
+        draws_line: "not searched: a draw is read from the NES's 6502 code, and gp has no arcade counterpart yet".into(),
     };
     Ok((files, about))
 }
@@ -687,7 +734,10 @@ fn model_toml(
         .expect("the skeleton's model parses")
 }
 
-fn mapping_toml(name: &str, source: &str, device: Device) -> String {
+/// The state mapping. `draws` is `None` where no draw search ran (an
+/// arcade original, which has no draw search yet); `Some(sites)` the
+/// search's `[[draws]]` entries, if it found any.
+fn mapping_toml(name: &str, source: &str, device: Device, draws: Option<Option<&str>>) -> String {
     let (platform, example) = match device {
         Device::NesPad => ("", "ram[0x0000]"),
         Device::Arcade => (
@@ -703,15 +753,44 @@ fn mapping_toml(name: &str, source: &str, device: Device) -> String {
          # on every frame, and the gate would then hold every clip to it.\n\
          schema = {}\nmodel = {}\nsource = {}\ndescription = \"Nothing measured yet\"\nalign = \"polled\"\n\
          # No fields yet: replace this line with the first [[field]] tables.\nfield = []\n\n\
+         {}\
          # Where a run leaves what the template holds: scoring stops at the first\n\
          # frame out of scope. Set it once the level or stage byte is known, as:\n\
          # [scope]\n\
          # leaves = [\"{example}\"]\n",
         gp_interp::mapping::SCHEMA,
         q(name),
-        q(source)
+        q(source),
+        draws_text(draws),
     );
     format!("{platform}{text}")
+}
+
+/// The mapping's draws section: the sites an idle run found, or how to
+/// find them.
+fn draws_text(draws: Option<Option<&str>>) -> String {
+    let Some(found) = draws else {
+        return String::new();
+    };
+    let mut s = "# A clip's score takes the original's random draws at the [[draws]] sites\n\
+                 # (feature draws.score, docs/formats/draws.md), so the rebuild makes the\n\
+                 # original's random choices from the first clip.\n"
+        .to_owned();
+    match found {
+        Some(d) => {
+            let _ = write!(
+                s,
+                "# The sites below were found by `gp interp draws --find` on {IDLE_FRAMES} frames\n# of no input from power-on.\n{d}"
+            );
+        }
+        None => {
+            s += "# None were found on an idle run from power-on. Run `gp interp draws --find\n\
+                  # ROM --input LOG` on the first clips (`gp clip log GAME CLIP`) and\n\
+                  # paste what it proposes here, with:\n\
+                  # score_draws = true\n";
+        }
+    }
+    s + "\n"
 }
 
 fn fidelity_toml(name: &str, title: &str) -> String {
@@ -851,6 +930,7 @@ mod tests {
             namespace: Some("someone"),
             games: Some(&games),
             date: "2026-11-11",
+            draws: true,
         };
         let out = run(&a, &paths).unwrap();
         assert_eq!(out.json["package"], "someone/test-hop");
@@ -934,6 +1014,7 @@ mod tests {
             namespace: Some("someone"),
             games: Some(&games),
             date: "2026-11-11",
+            draws: true,
         };
         let out = run(&a, &paths).unwrap();
         assert_eq!(out.json["platform"], "arcade");
@@ -970,6 +1051,25 @@ mod tests {
         }
     }
 
+    /// The state mapping parses with the draw search's sites, without them,
+    /// and with no search (an arcade original), as game-printer's test had.
+    #[test]
+    fn the_mapping_parses_with_or_without_draw_sites() {
+        let found = "score_draws = true\n\n[[draws]]\nsite = \"s\"\npc = 0xE2DD\nram = 0x19\n";
+        for (device, d) in [
+            (Device::NesPad, Some(Some(found))),
+            (Device::NesPad, Some(None)),
+            (Device::Arcade, None),
+        ] {
+            let m = gp_interp::mapping::Mapping::parse(&mapping_toml(
+                "new_game", "new-game", device, d,
+            ))
+            .unwrap();
+            assert_eq!(m.draws.len(), usize::from(d == Some(Some(found))));
+            assert_eq!(m.score_draws, d == Some(Some(found)));
+        }
+    }
+
     #[test]
     fn a_rom_not_in_the_rom_folder_is_refused() {
         let d = tempfile::tempdir().unwrap();
@@ -991,6 +1091,7 @@ mod tests {
             namespace: Some("someone"),
             games: Some(&games),
             date: "2026-11-11",
+            draws: true,
         };
         let e = run(&a, &paths).err().unwrap();
         assert!(e.to_string().contains("gp roms add"), "{e}");

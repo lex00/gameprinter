@@ -11,10 +11,14 @@ mod cli_doc;
 mod clip;
 mod clip_score;
 mod clipset;
+mod code;
 mod corpus_import;
 mod corpus_score;
 mod coverage;
+mod cycles;
 mod diagnose;
+mod draws_find;
+mod element;
 mod explore;
 mod from_trace;
 mod game;
@@ -25,6 +29,7 @@ mod gate_append;
 mod gate_copy;
 mod gate_queue;
 mod hosted;
+mod interp_draws;
 mod labels;
 mod lockstep;
 mod mechanic;
@@ -40,6 +45,7 @@ mod plan;
 mod pool;
 mod publish;
 mod reach;
+mod reach_window;
 mod recindex;
 mod recordings;
 mod registry;
@@ -48,6 +54,7 @@ mod romdiff;
 mod roms;
 mod roms_cmd;
 mod run;
+mod run_input;
 mod scenario;
 mod screen;
 mod sealed;
@@ -55,8 +62,10 @@ mod search;
 mod served;
 mod sound;
 mod sprites;
+mod static_grade;
 mod tape;
 mod template;
+mod template_cites;
 mod tool_gate;
 mod track;
 mod watch;
@@ -283,6 +292,35 @@ enum Cmd {
         #[command(subcommand)]
         cmd: movie::MovieCmd,
     },
+    /// Read a ROM's code with what runs of it did: listings with each
+    /// instruction's count and each branch's ways, and the tables a RAM
+    /// byte indexes (docs/code-reading.md).
+    Code {
+        #[command(subcommand)]
+        cmd: code::CodeCmd,
+    },
+    /// Run a ROM under clips and say what its code did. It lists the PRG bytes
+    /// the code executed and every transfer of control by bank, with the
+    /// pointer values at each `jmp (ptr)`. gp-events names these levels L0 and
+    /// L1 (docs/research/rom-event-model.md). Each clip runs from power-on: its
+    /// start's presses (or a recording's input) and then its own. Addresses are
+    /// named as `gp model static` names them; the same ROM and clips give the
+    /// same output. With --window or --diff-*, it reports by routine of the
+    /// code map instead, and can compare two sides (docs/code-reading.md)
+    Reach(reach::ReachArgs),
+    /// Measure an original's per-frame CPU work, for a model of a random
+    /// generator stepped in an idle loop (docs/cycles.md). Analysis only.
+    Cycles {
+        #[command(subcommand)]
+        cmd: cycles::CyclesCmd,
+    },
+    /// Read one game element's code from the original's run: the routine
+    /// that wrote a measure's byte on a clip's frame and every input it
+    /// read (the element-extraction skill, steps 2 and 3).
+    Element {
+        #[command(subcommand)]
+        cmd: element::ElementCmd,
+    },
     /// gp about itself: its published build and its command list.
     #[command(name = "self")]
     Itself {
@@ -339,6 +377,15 @@ enum ModelCmd {
     /// the model to the records (docs/mechanics.md). Exits 1 when the model
     /// and a record disagree.
     Mechanics(mechanics::MechanicsArgs),
+    /// Stage 0, the static harvest, is every part of a model the ROM's code
+    /// settles without running it, from the ROM and the asset map only
+    /// (docs/plan-extraction-process.md). Elements from the code's dispatch and
+    /// what each routine touches; constants, thresholds and periods; state
+    /// machines from the bytes the code branches on and writes by constant;
+    /// mapping rows; model facts, each with the instruction it comes from; and
+    /// open facts with the routine and bytes that decide them. `--grade KEY`
+    /// grades it against a game's answer key (games/mosshop/static-key.toml).
+    Static(model_static::StaticArgs),
     /// Fail if the model or contract isn't in canonical form.
     Fmt {
         dir: PathBuf,
@@ -406,6 +453,16 @@ enum InterpCmd {
         #[arg(long)]
         assets: PathBuf,
     },
+    /// Record the original's random draws on an input, at the draw sites the
+    /// state mapping's `[[draws]]` names: each read of a site's random byte by
+    /// its instruction, with the frame, in order. The script lets the
+    /// lockstep make the rebuild choose as the original did
+    /// (docs/formats/draws.md). With `--find ROM` and no model, find the game's
+    /// random register and its draw sites from the run instead and propose
+    /// `[[draws]]` entries for review, as that page's section "Finding draw
+    /// sites" says; a model or `--mapping` given too scores them against its
+    /// hand-written sites.
+    Draws(interp_draws::DrawsArgs),
 }
 
 #[derive(Subcommand)]
@@ -434,6 +491,9 @@ enum GameCmd {
         /// at or beside the current folder or one above it)
         #[arg(long)]
         games: Option<PathBuf>,
+        /// Leave out the search for draw sites on an idle run
+        #[arg(long)]
+        no_draws: bool,
     },
     /// Fetch NAME@VERSION by id into a folder, checking every signature (with --root) and
     /// hash, and lift every ROM entry it finds in the ROM folder.
@@ -646,6 +706,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             ModelCmd::Fmt { dir, .. } => model::fmt_check(dir),
             ModelCmd::Gate(a) => gate::run(a, &gp_evidence::Paths::from_env()?),
             ModelCmd::Mechanics(a) => mechanics::run(a, &gp_evidence::Paths::from_env()?),
+            ModelCmd::Static(a) => model_static::run(a, &gp_evidence::Paths::from_env()?),
         },
         Cmd::Baseline {
             cmd: BaselineCmd::Check { files, rom },
@@ -712,6 +773,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                     title,
                     namespace,
                     games,
+                    no_draws,
                 },
         } => game_new::run(
             &game_new::New {
@@ -722,6 +784,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                 namespace: namespace.as_deref(),
                 games: games.as_deref(),
                 date: &game_new::today(),
+                draws: !no_draws,
             },
             &gp_evidence::Paths::from_env()?,
         ),
@@ -833,6 +896,13 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             recordings::recordings_cmd(cmd, &gp_evidence::Paths::from_env()?)
         }
         Cmd::Movie { cmd } => recordings::movie_cmd(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Code { cmd } => code::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Reach(a) => reach::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Cycles { cmd } => cycles::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Element { cmd } => element::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Interp {
+            cmd: InterpCmd::Draws(a),
+        } => interp_draws::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Template {
             cmd: TemplateCmd::Build { dir, out },
         } => template::build(dir, out),

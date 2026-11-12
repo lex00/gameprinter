@@ -975,6 +975,7 @@ dependencies = [
  "gp-capture",
  "gp-contract",
  "gp-coverage",
+ "gp-cycles",
  "gp-events",
  "gp-evidence",
  "gp-explore",
