@@ -23,12 +23,16 @@ In order, a try of a patch (or of a batch's patches, below) on the tip:
 | Removed clips | A clip the patch removes from corpus.toml fails unless `--removes` names it |
 | Module | The game's module built for its hook code, once per hook code and kit |
 | Package scan | A needs-rewrite item the tip doesn't have is a FAIL |
-| Model | `gp model check` against the lifted assets, and `gp model fmt --check`: model.toml and fidelity.toml stay in canonical form (the old guard.py's `models`) |
+| Model | `gp model check` against the lifted assets (an arcade map's slots are held to the asset being there), and `gp model fmt --check`: model.toml and fidelity.toml stay in canonical form (the old guard.py's `models`) |
 | Loads | No ROM the package loads only to play (a `[[rom.entry]]` whose role isn't `scored`, or a template.toml `[[loads]]`) is named as template.toml's `[source]` or corpus.toml's `[target]` (the old `ju_rom.py`): no tool may score or gate on one |
 | Themes | Each theme's files against their pins |
 | Hook tests | When the patch changes the hook crate (or the package's Cargo.lock), the crate's own tests, built from the kit in the build sandbox for this machine (`cargo test -p gp-ext-game`, about 12 s cold) |
 | Corpus | Every clip scored and compared with the tip's: a clip at 100% stays there, no bar a clip met is lost, no clip that scored stops scoring. A patch to the model's `present` sections and themes alone is held to the picture too |
 | Land | Committed in the gate's worktree and fast-forwarded onto the branch, else the branch's ref is moved if it is still at the tip scored |
+
+### A new game
+
+A patch may add a game that isn't on the tip yet: GAME names its folder (`gp model gate tapper --patch ...` from a checkout of `games`, though the folder isn't there), and the patch creates it, with its package.toml, and changes nothing outside it. The ROM is the one the patch's package.toml names. The tip has no score for the game, so the gate holds the patch to the rest: model check valid, the package scan clean (any needs-rewrite item fails), the hook crate's tests pass, and the corpus scores, every clip making a score, whatever it is. That score is printed as the game's first baseline and kept in the gate's home (`scores/state-<commit>-<run>.json`, and `first_baseline` in `--json`); once it lands, the next gate scores the tip with the game on it and compares as usual. A patch to a game the tip doesn't have that doesn't create its package.toml fails, saying so.
 
 ### Batches
 

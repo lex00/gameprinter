@@ -59,9 +59,19 @@ pub fn check(dir: &Path, assets: Option<&Path>) -> Result<Outcome> {
     let mut checked = Vec::new();
     if let Some(a) = assets {
         let map_text = read(&a.join(MAP_FILE))?;
-        let map =
-            AssetMap::parse(&map_text).with_context(|| a.join(MAP_FILE).display().to_string())?;
-        for (path, message) in check_slots(&model, &map, &mut checked) {
+        let found = if gp_assets::arcade::is_arcade(&map_text) {
+            // An arcade lift: its slots name assets by the board's regions,
+            // and no slot kind has an arcade format yet, so a slot is held
+            // to the asset being there.
+            let map = gp_assets::arcade::ArcadeMap::parse(&map_text)
+                .with_context(|| a.join(MAP_FILE).display().to_string())?;
+            check_arcade_slots(&model, &map, &mut checked)
+        } else {
+            let map = AssetMap::parse(&map_text)
+                .with_context(|| a.join(MAP_FILE).display().to_string())?;
+            check_slots(&model, &map, &mut checked)
+        };
+        for (path, message) in found {
             problems.push(problem(MODEL_FILE, &path, &message));
         }
     }
@@ -117,6 +127,29 @@ pub fn fmt_check(dir: &Path) -> Result<Outcome> {
         },
         exit: u8::from(!ok),
     })
+}
+
+/// Each slot filled from an arcade map's source names an asset the map has.
+fn check_arcade_slots(
+    model: &Model,
+    map: &gp_assets::arcade::ArcadeMap,
+    checked: &mut Vec<String>,
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for (name, slot) in &model.assets {
+        let Some(from) = slot.from.as_ref().filter(|f| f.source == map.source) else {
+            continue;
+        };
+        if map.assets.iter().any(|a| a.name == from.asset) {
+            checked.push(name.clone());
+        } else {
+            out.push((
+                format!("assets.{name}.from"),
+                format!("{} has no asset named `{}`", map.source, from.asset),
+            ));
+        }
+    }
+    out
 }
 
 /// Checks each slot filled from `map`'s source against the asset it names:

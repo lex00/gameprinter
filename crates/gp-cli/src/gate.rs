@@ -35,7 +35,9 @@ const TIP_TRIES: usize = 5;
 
 #[derive(Args)]
 pub struct GateArgs {
-    /// The game's package folder in a checkout of the games repo.
+    /// The game's package folder in a checkout of the games repo. For a new
+    /// game it may be a folder the tip doesn't have yet, which the patch
+    /// creates with its package.toml.
     pub game: PathBuf,
     /// The patch: `git diff` output, or a `git format-patch` mail, which
     /// keeps its own message and author. It may only change the game's files.
@@ -802,6 +804,9 @@ fn trial(
     let game = tree.join(&c.rel);
     let rel = c.rel.to_string_lossy().into_owned();
     let started = std::time::Instant::now();
+    // No score to compare with: the patch adds the game, and its score is
+    // the game's first baseline.
+    let first = base.json.as_os_str().is_empty();
     checkout(&c.repo, tree, &base.commit)?;
     let base_model = fs::read_to_string(game.join(gp_model::MODEL_FILE)).unwrap_or_default();
     let (commits, files) = match apply_items(c, a, items, set, lines)? {
@@ -882,7 +887,7 @@ fn trial(
         &game,
         module.as_deref(),
         &assets,
-        Some(&base.json),
+        (!first).then_some(base.json.as_path()),
         true,
         "patched",
     ) {
@@ -900,6 +905,14 @@ fn trial(
             p.iter()
                 .all(|x| x == "present" || x.starts_with("present."))
         });
+    let baseline = if first {
+        match first_baseline(&rows) {
+            Ok(line) => Some(line),
+            Err(w) => return fail(w, "corpus"),
+        }
+    } else {
+        None
+    };
     if picture && let Some(w) = picture_worse(&base.rows, &rows) {
         return fail(w, "picture");
     }
@@ -937,12 +950,22 @@ fn trial(
         .join("scores")
         .join(format!("state-{}-{}.json", &commit_now[..12], c.run));
     fs::copy(&json, &kept)?;
-    lines.push(format!(
-        "{}: model check valid, package scan clean, corpus no worse ({} clips held) in {} s",
-        what_of(set),
-        rows.len(),
-        started.elapsed().as_secs()
-    ));
+    match baseline {
+        Some(line) => {
+            lines.push(format!(
+                "{}: model check valid, package scan clean, every clip makes, in {} s",
+                what_of(set),
+                started.elapsed().as_secs()
+            ));
+            lines.push(format!("{rel}'s {line}, recorded at {}", kept.display()));
+        }
+        None => lines.push(format!(
+            "{}: model check valid, package scan clean, corpus no worse ({} clips held) in {} s",
+            what_of(set),
+            rows.len(),
+            started.elapsed().as_secs()
+        )),
+    }
     let mut all = base.commits.clone();
     all.extend(commits);
     Ok(Tried::Pass(State {
@@ -1162,6 +1185,7 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
             &mut free_try,
         )?;
         let mut tip_json = None;
+        let mut first = false;
         let end = if scored.is_empty() {
             mid
         } else {
@@ -1170,31 +1194,44 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
             checkout(&c.repo, &c.tree, &mid.commit)?;
             let started = std::time::Instant::now();
             let tree_game = c.tree.join(&c.rel);
-            let module = match module_at(c, &tree_game, &mut lines) {
-                Ok(m) => m,
-                Err(e) => bail!("the tip's module doesn't build: {e:#}"),
+            let (base, scan_before) = if !tree_game.join("package.toml").is_file() {
+                // A new game: the tip has no score and no scan to keep to,
+                // so the patch's score is the first baseline (`trial`).
+                first = true;
+                lines.push(format!(
+                    "tip {}: no {rel} yet; the patch adds it, so its score is the game's first baseline",
+                    &tip[..8]
+                ));
+                (mid, (BTreeMap::new(), 0))
+            } else {
+                let module = match module_at(c, &tree_game, &mut lines) {
+                    Ok(m) => m,
+                    Err(e) => bail!("the tip's module doesn't build: {e:#}"),
+                };
+                let assets = assets_for(c, &tree_game, rom)?;
+                let (rows, json) = score(
+                    c,
+                    &tree_game,
+                    module.as_deref(),
+                    &assets,
+                    None,
+                    false,
+                    "tip",
+                )?;
+                lines.push(format!(
+                    "tip {}: {} clips scored in {} s",
+                    &tip[..8],
+                    rows.len(),
+                    started.elapsed().as_secs()
+                ));
+                let wasm: Vec<PathBuf> = module.iter().cloned().collect();
+                let scan = crate::package::scan::run(&tree_game, &[], &wasm, &c.paths)?;
+                tip_json = Some(json.clone());
+                (
+                    State { rows, json, ..mid },
+                    (rewrites(&scan.json), scan.exit),
+                )
             };
-            let assets = assets_for(c, &tree_game, rom)?;
-            let (rows, json) = score(
-                c,
-                &tree_game,
-                module.as_deref(),
-                &assets,
-                None,
-                false,
-                "tip",
-            )?;
-            lines.push(format!(
-                "tip {}: {} clips scored in {} s",
-                &tip[..8],
-                rows.len(),
-                started.elapsed().as_secs()
-            ));
-            let wasm: Vec<PathBuf> = module.iter().cloned().collect();
-            let scan = crate::package::scan::run(&tree_game, &[], &wasm, &c.paths)?;
-            let scan_before = (rewrites(&scan.json), scan.exit);
-            tip_json = Some(json.clone());
-            let base = State { rows, json, ..mid };
             let at = AtTip {
                 scan_before: &scan_before,
                 rom,
@@ -1278,6 +1315,9 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
                 let mut json = json;
                 json["tip"] = json!(tip);
                 json["tip_score"] = json!(tip_json);
+                if first && mine.is_some() {
+                    json["first_baseline"] = json!(end.json);
+                }
                 json["batch"] = json!(n);
                 let mut all = said.clone();
                 all.push(line);
@@ -1330,10 +1370,19 @@ pub(crate) fn gate_home(home: Option<&Path>) -> Result<PathBuf> {
 }
 
 pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
-    let game = fs::canonicalize(&a.game).with_context(|| a.game.display().to_string())?;
+    // A new game's folder may not be here yet: the patch creates it.
+    let game = gp_evidence::paths::real_path(&a.game);
     let home = gate_home(a.home.as_deref())?;
     let gp = std::env::current_exe()?;
     let private = gp_evidence::paths::enclosing_git_work_tree(&game).is_none();
+    if !game.is_dir() && (private || a.score_only) {
+        bail!("{}: No such folder", a.game.display());
+    }
+    let near = game
+        .ancestors()
+        .find(|d| d.is_dir())
+        .context("no folder above the game")?
+        .to_owned();
     // One gate at a time on a home: they share the worktree. A gate that
     // may share a batch takes a ticket first, so the gate holding the lock
     // can take its patch in (gate_queue).
@@ -1356,7 +1405,7 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
             }
         }
     } else {
-        let repo = PathBuf::from(git(&game, &["rev-parse", "--show-toplevel"])?);
+        let repo = PathBuf::from(git(&near, &["rev-parse", "--show-toplevel"])?);
         let rel = game.strip_prefix(&repo)?.to_owned();
         let onto = onto_branch(a.onto.as_deref(), &repo, a.score_only)?;
         // A score-only run reads the checkout as it stands: it's made by
@@ -1428,7 +1477,20 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
         kit,
         kit_hash,
     };
-    let rom = rom_of(&c.paths, &game, None)?;
+    let rom = if c.copy.is_none() && !a.score_only && !on_tip(&c.repo, &c.onto, &c.rel) {
+        match new_game_rom(&c, a, &patch_file)? {
+            Ok(rom) => rom,
+            Err(why) => {
+                return Ok(Outcome {
+                    json: json!({"verdict": "FAIL", "phase": "patch", "why": why}),
+                    text: format!("FAIL (patch): {why}"),
+                    exit: 1,
+                });
+            }
+        }
+    } else {
+        rom_of(&c.paths, &game, None)?
+    };
     if a.score_only {
         return score_only(&c, &rom);
     }
@@ -1495,6 +1557,94 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
         }
     }
     mine.context("the gate reached no outcome for its own patch")
+}
+
+/// Whether the tip of `onto` has the game in `rel` (its package.toml).
+fn on_tip(repo: &Path, onto: &str, rel: &Path) -> bool {
+    git(
+        repo,
+        &[
+            "cat-file",
+            "-e",
+            &format!("{onto}:{}/package.toml", rel.to_string_lossy()),
+        ],
+    )
+    .is_ok()
+}
+
+/// Why a patch can't add the game in `rel`, the tip having none: it must
+/// create the game's package.toml. `files` are the patch's, relative to the
+/// repo; that they are all in the game's folder is checked as for any patch.
+pub(crate) fn new_game_problem(files: &[String], rel: &str) -> Option<String> {
+    let package = format!("{rel}/package.toml");
+    (!files.contains(&package)).then(|| {
+        format!(
+            "{rel} isn't on the tip, and the patch doesn't create {package}: a patch to a game that isn't there yet must add its package"
+        )
+    })
+}
+
+/// A new game's ROM, read from its package.toml as the patch writes it on
+/// the tip; `Err` says in words why the patch can't add the game.
+fn new_game_rom(
+    c: &Ctx,
+    a: &GateArgs,
+    file: &Path,
+) -> Result<std::result::Result<Vec<u8>, String>> {
+    let patch = match read_patch(file, &c.home.join("batch").join("new"))? {
+        Ok(p) => p,
+        Err(why) => return Ok(Err(why)),
+    };
+    let files: Vec<String> = git(
+        &c.repo,
+        &["apply", "--numstat", &patch.diff.to_string_lossy()],
+    )
+    .unwrap_or_default()
+    .lines()
+    .filter_map(|l| l.split('\t').nth(2).map(str::to_owned))
+    .collect();
+    if let Some(why) = new_game_problem(&files, &c.rel.to_string_lossy()) {
+        return Ok(Err(why));
+    }
+    let tip = git(&c.repo, &["rev-parse", &c.onto])?;
+    checkout(&c.repo, &c.tree, &tip)?;
+    let rom = match apply_how(&c.tree, &patch.diff, !a.no_rebase) {
+        Ok(_) => rom_of(&c.paths, &c.tree.join(&c.rel), None),
+        Err(why) => {
+            clean(&c.tree);
+            return Ok(Err(why));
+        }
+    };
+    clean(&c.tree);
+    rom.map(Ok)
+}
+
+/// A new game's first score, held to the one rule a game with no score on
+/// the tip has: every clip makes, whatever its score. The line that gives it
+/// as the game's first baseline, or the clips that don't make.
+pub(crate) fn first_baseline(rows: &Rows) -> std::result::Result<String, String> {
+    if rows.is_empty() {
+        return Err("the corpus has no clips, so there is no first baseline".into());
+    }
+    let broken: Vec<String> = rows
+        .iter()
+        .filter_map(|(id, r)| r.error.as_ref().map(|e| format!("{id}: {e}")))
+        .collect();
+    if !broken.is_empty() {
+        return Err(format!(
+            "{} of {} clips don't make: {}",
+            broken.len(),
+            rows.len(),
+            broken.join("; ")
+        ));
+    }
+    let full = rows.iter().filter(|(_, r)| r.full()).count();
+    let together: u64 = rows.iter().map(|(_, r)| r.together).sum();
+    let frames: u64 = rows.iter().map(|(_, r)| r.frames).sum();
+    Ok(format!(
+        "first baseline: {} clips, {full} at 100%, {together}/{frames} frames together",
+        rows.len()
+    ))
 }
 
 /// `--score-only`: the tip scored, and nothing lands. The tool gate's
@@ -2124,6 +2274,65 @@ mod tests {
         let patch = d.join("fix.patch");
         fs::write(&patch, diff).unwrap();
         (t, patch)
+    }
+
+    /// A made-up game with no ROM, Moss Pond, that the tip of `games`
+    /// doesn't have yet: a patch that creates its package adds it, and its
+    /// first score passes when every clip makes; a patch that only touches
+    /// the missing game fails in words.
+    #[test]
+    fn a_patch_may_add_a_game_the_tip_doesnt_have() {
+        let (t, _) = repo_with_patch();
+        let d = t.path();
+        let g = |args: &[&str]| git(d, args).unwrap();
+        let rel = Path::new("moss-pond");
+        assert!(!on_tip(d, "HEAD", rel));
+        fs::create_dir_all(d.join(rel)).unwrap();
+        fs::write(
+            d.join("moss-pond/package.toml"),
+            "[package]\nid = \"moss-pond\"\n",
+        )
+        .unwrap();
+        fs::write(d.join("moss-pond/corpus.toml"), "[[clip]]\nid = \"walk\"\n").unwrap();
+        g(&["add", "-N", "moss-pond"]);
+        let adds = d.join("adds.patch");
+        fs::write(&adds, g(&["diff"]) + "\n").unwrap();
+        g(&["rm", "-q", "-r", "--cached", "moss-pond"]);
+        fs::remove_dir_all(d.join(rel)).unwrap();
+        let files: Vec<String> = git(d, &["apply", "--numstat", &adds.to_string_lossy()])
+            .unwrap()
+            .lines()
+            .filter_map(|l| l.split('\t').nth(2).map(str::to_owned))
+            .collect();
+        assert_eq!(new_game_problem(&files, "moss-pond"), None);
+        assert_eq!(apply_how(d, &adds, true).unwrap(), None);
+        g(&["commit", "-q", "-m", "Moss Pond"]);
+        assert!(on_tip(d, "HEAD", rel));
+        // Only a note in the game's folder: no package, so no game.
+        let note = vec!["moss-pond/NOTES.md".to_owned()];
+        let why = new_game_problem(&note, "moss-pond").unwrap();
+        assert!(
+            why.contains("doesn't create moss-pond/package.toml"),
+            "{why}"
+        );
+        // The first score: every clip makes, whatever its score.
+        let mut walk = row(100, 40);
+        walk.raw = json!({"id": "walk"});
+        let mut rows: Rows = vec![("walk".into(), walk), ("jump".into(), row(50, 50))];
+        let line = first_baseline(&rows).unwrap();
+        assert_eq!(
+            line,
+            "first baseline: 2 clips, 1 at 100%, 90/150 frames together"
+        );
+        // And later gates hold to it as usual.
+        assert!(worse(&rows, &rows).is_none());
+        rows[1].1.error = Some("the recording ended early".into());
+        let why = first_baseline(&rows).unwrap_err();
+        assert_eq!(
+            why,
+            "1 of 2 clips don't make: jump: the recording ended early"
+        );
+        assert!(first_baseline(&Rows::new()).is_err());
     }
 
     /// Moves the repository's tip: line `n` of model.toml becomes `text`.
