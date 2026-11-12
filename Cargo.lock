@@ -913,6 +913,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gp-arcade"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "flate2",
+ "png",
+ "thiserror",
+]
+
+[[package]]
 name = "gp-assets"
 version = "0.1.0"
 dependencies = [

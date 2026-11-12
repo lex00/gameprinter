@@ -60,3 +60,7 @@ opt-level = 3
 
 [profile.dev.package.gp-sound]
 opt-level = 3
+
+# Tapper's tests play 1511 frames of two Z80s against the MAME oracle.
+[profile.dev.package.gp-arcade]
+opt-level = 3

@@ -1,0 +1,19 @@
+[package]
+name = "gp-arcade"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Arcade boards held to MAME frame by frame; first Midway MCR (Tapper)"
+
+[dependencies]
+blake3 = "1.8.7"
+flate2 = "1.1.10"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+png = "0.18.1"
+
+[lints]
+workspace = true

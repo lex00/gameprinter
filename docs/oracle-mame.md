@@ -113,3 +113,23 @@ The layout of each `ram.bin` record:
 The main board's ranges are mcr.cpp's `cpu_91490_map`; the sound board's is midway_sound.cpp's `ssio_map`.
 
 **The picture hash.** The script asks MAME for the frame as 32-bit pixels, `0xAARRGGBB`, in rows from the top, at 512x480. It then takes FNV-1a over 64 bits, one pixel at a time, using each pixel's 24-bit `0xRRGGBB` with alpha left out. h starts at `0xcbf29ce484222325`, and for each pixel h = (h XOR rgb) * `0x100000001b3`, modulo 2^64. It works on whole pixels, not bytes, so our emulator can compute the same number from its own picture without matching MAME's pixel format.
+
+## Holding gp-arcade to it
+
+`crates/gp-arcade` is our own Tapper. Its compare example plays a capture's input log and checks every frame's RAM, input ports and picture hash against the capture, stopping at the first difference and saying what it is:
+
+```text
+cargo run --release -p gp-arcade --example compare -- \
+    --rom ~/Downloads/rbtapper.zip \
+    --capture ~/.gameprinter/work/oracle/tapper-first-a \
+    --log scripts/oracle/inputs/tapper-first.input
+```
+
+`--all` runs to the end and counts the frames that differ in each way. `--png DIR --at N` writes our picture of frame N beside MAME's shot and a third panel with the differing pixels in red; DIR goes outside the repo, since the pictures show the game. `--dump N` prints frame N's differing RAM rows and both CPUs' registers, and `--trace N` every instruction both CPUs start in frame N.
+
+| Capture | Input log | Frames | Result |
+|---|---|---|---|
+| `tapper-first-a` | `tapper-first.input` | 1511 | all match |
+| `tapper-deaths-a` | `tapper-deaths.input` | 6095 | all match |
+
+`cargo test -p gp-arcade` runs both comparisons when the romset and the captures are present, and skips them otherwise.

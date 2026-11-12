@@ -42,7 +42,6 @@ pub(crate) mod review;
 mod server;
 mod session;
 pub(crate) mod watch;
-mod watch_page;
 
 use crate::Outcome;
 pub(crate) use session::name_ok;
@@ -73,23 +72,6 @@ pub enum MechanicCmd {
         /// the model (default: $GP_HOME/work/modules/GAME.wasm if it's there)
         #[arg(long)]
         module: Option<PathBuf>,
-    },
-    /// The watch panel on a page of its own, on 127.0.0.1: what your agent is
-    /// doing (its log, pins and problem table) and a box for your notes, for
-    /// work with no game to play in the mechanic page, such as a new
-    /// platform's emulator. Makes the session if it is new. Needs no ROM.
-    /// Runs until stopped.
-    Watch {
-        /// A name for the work's game (tapper).
-        game: String,
-        /// What is being worked on (emulator).
-        topic: String,
-        /// What the work is, in your words, for a new session.
-        #[arg(long)]
-        prompt: Option<String>,
-        /// The port, on 127.0.0.1 (0 picks a free one).
-        #[arg(long, default_value_t = 7711)]
-        port: u16,
     },
     /// Say what you're doing while it's your turn ("measuring the jump"):
     /// the person's page shows it until your next turn.
@@ -238,12 +220,6 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                 module: module.as_deref(),
             },
         ),
-        MechanicCmd::Watch {
-            game,
-            topic,
-            prompt,
-            port,
-        } => watch_page::run(paths, game, topic, prompt.as_deref(), *port),
         MechanicCmd::Busy {
             game,
             mechanic,
