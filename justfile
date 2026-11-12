@@ -93,6 +93,34 @@ _interp-mosshop:
         echo "$(basename "$f"): $({{quote(gp)}} interp compare templates/mosshop --rom {{quote(mosshop_rom)}} --baseline "$f" --assets {{quote(assets)}} | tail -1)"
     done
 
+# The MAME oracle (docs/oracle-mame.md): MAME in its own pinned image, run on
+# an arcade romset with an input log, writing what each frame shows. An
+# optional pair of recipes, not part of `just check`. The tag names Debian's
+# MAME version, which docker/mame/Dockerfile pins.
+mame_version := "0.276"
+host_arch := if arch() == "aarch64" { "arm64" } else { "amd64" }
+mame_image := "gameprinter-mame:" + mame_version + "-" + host_arch
+
+# Builds the MAME oracle image, for this machine's architecture by default.
+mame-build platform=("linux/" + host_arch):
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag="gameprinter-mame:{{mame_version}}-{{replace(platform, "linux/", "")}}"
+    start=$SECONDS
+    docker build -q --platform {{platform}} -t "$tag" docker/mame > /dev/null
+    version=$(docker run --rm --network none --platform {{platform}} --entrypoint cat "$tag" /MAME_VERSION)
+    case "$version" in
+        "{{mame_version}} "*|"{{mame_version}}") ;;
+        *) echo "mame-build: the image holds MAME $version, the justfile says {{mame_version}}" >&2; exit 1 ;;
+    esac
+    echo "mame-build: $tag (MAME $version) in $((SECONDS - start))s"
+
+# ROMSET is a MAME romset zip, mounted read-only for the run; OUT goes under
+# $GP_HOME/work/oracle/; SHOT_EVERY 0 writes no PNGs.
+# Plays an input log on a romset in the MAME image, writing every frame.
+mame-record ROMSET LOG OUT SHOT_EVERY="30":
+    GP_HOME={{quote(gp_home)}} scripts/oracle/mame-record.sh {{mame_image}} {{quote(ROMSET)}} {{quote(LOG)}} {{quote(OUT)}} {{quote(SHOT_EVERY)}}
+
 # The page, built from the games repo beside this one.
 page out="target/page":
     just build
