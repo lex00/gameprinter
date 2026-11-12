@@ -41,7 +41,7 @@ header { display: flex; gap: 16px; align-items: baseline; padding: 10px 16px; bo
 #state:empty { display: none; }
 /* The tabs (from game-printer's refine.css, which held them). */
 #tabs { display: flex; gap: 0; padding: 0 16px 10px; }
-#tabs button { flex: 1; max-width: 360px; font: bold 15px/1.2 ui-monospace, monospace; letter-spacing: 1px; padding: 10px 14px; background: #1c2027; color: var(--muted, #9aa0a8); border: 2px solid #444; cursor: pointer; }
+#tabs button { flex: 1; max-width: 360px; font: bold 15px/1.2 var(--mono); letter-spacing: 1px; padding: 10px 14px; background: #1c2027; color: var(--muted, #9aa0a8); border: 2px solid #444; cursor: pointer; }
 #tabs button + button { border-left: 0; }
 #tabs button.on { background: #5c94fc; color: #fff; border-color: #5c94fc; }
 #tabs button:first-child.on { background: #3cbc3c; border-color: #3cbc3c; }

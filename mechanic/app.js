@@ -2473,12 +2473,30 @@ async function main() {
   setInterval(updateBusy, 1000);
   setInterval(showPad, 1000);
   requestAnimationFrame(frame);
-  startShell({
+  const shell = startShell({
     setTab, api, toast,
     mode: () => mode,
     liveKind: () => liveRb?.kind ?? null,
     pause: (on) => { paneOpen = on; if (on) flushAudio(); },
     game: () => session?.game ?? null,
+  });
+  // A clip named in REFINE (mechanic/refine/'s "gp-open-clip", a corpus
+  // clip's ID such as dk.walk.003): CLIPS, on the model, at that clip of
+  // its mechanic's session.
+  window.addEventListener("gp-open-clip", async (e) => {
+    const id = String(e.detail?.clip ?? "");
+    const st = await api("api/rebuild/scores").catch(() => null);
+    const c = (st?.status?.clips ?? []).find((x) => x.id === id);
+    const parts = id.split(".");
+    const n = c?.clip ?? Number(parts.pop());
+    const mechanic = c?.mechanic ?? parts.slice(1).join(".");
+    if (!mechanic || !Number.isFinite(n)) { toast(`No session clip for ${id}.`); return; }
+    shell.show("clips");
+    if (mode !== "refine") setTab("refine");
+    if (mode !== "refine") return;
+    refine.picked = `${mechanic}/${n}`;
+    refine.card();
+    await refineShow({ mechanic, clip: n, start: c?.start ?? 0, frames: c?.frames ?? 0 });
   });
 }
 

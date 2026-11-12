@@ -1,0 +1,81 @@
+/* REFINE's parts (mechanic/refine/*.js): the live cards, the queue, the
+   background line and CLIPS's strip, in the mechanic page's NES colors.
+   The page's variables (--nes-*, --fg, --muted, --mono) are used when
+   there, with fallbacks. */
+.rf { font: 13px/1.4 var(--mono, ui-monospace, monospace); color: var(--fg, #fcfcfc); }
+.rf h3 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--nes-28, #f8b800); }
+.rf-head { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 10px 0 6px; }
+.rf-muted { color: var(--muted, #bcbcbc); }
+.rf-error { color: var(--nes-16, #f83800); }
+.rf-note { color: var(--nes-28, #f8b800); margin: 4px 0; }
+.rf-btn { font: bold 12px var(--mono, monospace); background: var(--nes-0f, #000); color: var(--fg, #fcfcfc); border: 2px solid var(--line, #fcfcfc); padding: 1px 8px; cursor: pointer; margin-right: 6px; }
+.rf-btn:hover { border-color: var(--nes-28, #f8b800); }
+.rf-btn.keep { border-color: var(--nes-2a, #58d854); color: var(--nes-2a, #58d854); }
+.rf-link { font: 12px var(--mono, monospace); background: none; border: 0; color: var(--accent, #3cbcfc); cursor: pointer; text-decoration: underline; padding: 0 4px; }
+.rf-badge { font: bold 12px var(--mono, monospace); background: var(--nes-28, #f8b800); color: #000; border: 0; padding: 2px 8px; cursor: pointer; margin-right: 6px; }
+.rf-tag { font-size: 11px; border: 1px solid var(--nes-00, #7c7c7c); color: var(--muted, #bcbcbc); padding: 0 5px; margin-left: 6px; }
+.rf-tag.now { border-color: var(--nes-2a, #58d854); color: var(--nes-2a, #58d854); }
+.rf-tag.stuck { border-color: var(--nes-27, #fca044); color: var(--nes-27, #fca044); }
+
+/* A bar toward its goal. */
+.rf-bar { display: inline-block; width: 90px; height: 8px; border: 1px solid var(--nes-00, #7c7c7c); background: var(--nes-0f, #000); vertical-align: middle; margin: 0 6px; }
+.rf-bar > span { display: block; height: 100%; background: var(--nes-2a, #58d854); transition: width 0.4s ease-out; }
+
+/* The stepper. */
+.rf-stepper { display: inline-flex; gap: 4px; align-items: center; font-size: 12px; }
+.rf-stepper button { font: bold 12px var(--mono, monospace); background: var(--nes-0f, #000); color: var(--fg, #fcfcfc); border: 1px solid var(--line, #fcfcfc); width: 20px; cursor: pointer; padding: 0; }
+.rf-stepper button:disabled { opacity: 0.4; cursor: default; }
+.rf-label { color: var(--muted, #bcbcbc); }
+
+/* The live cards. */
+.rf-live-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.rf-card { display: flex; flex-direction: column; gap: 3px; align-items: stretch; text-align: left; width: 270px; padding: 8px; background: var(--panel, #1c1c1c); color: var(--fg, #fcfcfc); border: 2px solid var(--nes-2d, #3c3c3c); font: 12px/1.35 var(--mono, monospace); cursor: pointer; }
+.rf-card.refine { border-color: var(--accent, #3cbcfc); }
+.rf-card.score { border-color: var(--nes-2a, #58d854); }
+.rf-card.matches { border-color: var(--nes-28, #f8b800); }
+.rf-card .rf-pic { align-self: center; height: auto; max-width: 100%; image-rendering: pixelated; background: #000; }
+.rf-card .rf-nopic { min-height: 60px; }
+.rf-card .rf-name { font-weight: bold; overflow-wrap: anywhere; }
+.rf-card .rf-doing { color: var(--muted, #bcbcbc); }
+.rf-card .rf-row { display: grid; grid-template-columns: 92px 92px 1fr; align-items: center; }
+.rf-card .rf-row .rf-bar { width: 84px; margin: 0 4px 0 0; }
+.rf-card .rf-says { color: var(--fg, #fcfcfc); }
+.rf-card .rf-says.up { color: var(--nes-2a, #58d854); }
+.rf-card .rf-says.down { color: var(--nes-16, #f83800); }
+.rf-card .rf-trying { color: var(--nes-28, #f8b800); font-size: 11px; overflow-wrap: anywhere; }
+.rf-busy { display: inline-block; width: 8px; height: 8px; margin-right: 6px; background: var(--nes-2a, #58d854); animation: rf-blink 0.8s steps(2) infinite; }
+@keyframes rf-blink { 50% { opacity: 0.2; } }
+
+/* The line. */
+.rf-line-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.rf-line .rf-says { flex: 1 1 320px; }
+.rf-questions .rf-q { border-left: 3px solid var(--nes-28, #f8b800); padding: 2px 8px; margin: 6px 0; }
+.rf-questions p { margin: 2px 0; }
+.rf-history { margin: 4px 0; padding-left: 22px; color: var(--muted, #bcbcbc); }
+
+/* The queue. */
+.rf-add { display: flex; gap: 6px; margin: 4px 0 8px; flex-wrap: wrap; }
+.rf-add select { font: 12px var(--mono, monospace); background: var(--nes-0f, #000); color: var(--fg, #fcfcfc); border: 2px solid var(--line, #fcfcfc); max-width: 520px; }
+.rf-agent { display: flex; gap: 8px; align-items: baseline; padding: 4px 8px; margin: 4px 0; border: 2px solid var(--accent, #3cbcfc); }
+.rf-who { color: var(--accent, #3cbcfc); font-weight: bold; white-space: nowrap; }
+.rf-list { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 6px; }
+.rf-clip { padding: 6px 8px; background: var(--panel, #1c1c1c); border-left: 4px solid var(--nes-00, #7c7c7c); }
+.rf-clip.not-matching { border-left-color: var(--nes-27, #fca044); }
+.rf-clip.matches, .rf-clip.fixed { border-left-color: var(--nes-2a, #58d854); }
+.rf-clip.can-t-start { border-left-color: var(--nes-16, #f83800); }
+.rf-clip-top { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.rf-clip .rf-name { color: var(--fg, #fcfcfc); font-weight: bold; text-decoration: none; padding: 0; }
+.rf-line-says { color: var(--muted, #bcbcbc); font-size: 12px; overflow-wrap: anywhere; }
+.rf-attempt { font-size: 12px; margin-top: 3px; display: flex; gap: 6px; flex-wrap: wrap; align-items: baseline; }
+.rf-btns { margin-top: 4px; }
+.rf-spark { margin-left: auto; }
+.rf-spark polyline { fill: none; stroke: var(--nes-2a, #58d854); stroke-width: 1.5; }
+
+/* CLIPS's strip. */
+.rf-strip { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; font-size: 12px; }
+.rf-strip-job { display: inline-flex; align-items: center; white-space: nowrap; }
+.rf-strip-job .rf-bar { width: 70px; height: 6px; }
+.rf-strip-agent { color: var(--accent, #3cbcfc); }
+.rf-card .rf-name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.rf-clip .rf-name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-align: left; }
+.rf-strip-job .rf-name { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
