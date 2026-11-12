@@ -46,6 +46,15 @@ FREE PLAY's settings and the agent's panel. The quest log, the clips and the
 conversation are beneath, in two columns. Below 1,200
 pixels wide the margins are left out.
 
+A click on a quest log row only opens it: its clips and conversation show,
+and nothing goes to the agent (`POST api/pick`). HAND TO THE AGENT on the
+open row hands it over: the person's "Let's do" turn (`POST api/handoff`),
+once, and the row is the agent's until it answers. A row reads WORKING ON IT
+only when something is on it: a person's turn waits for the agent, or gp
+serve's background work has a job or a clip agent on one of its clips (the
+hub the strip under the game reads). The rows follow the session poll with
+no click: turns, `queue.json` and the gate's `status.json`.
+
 ## The tabs
 
 HELP WITH MECHANICS plays the original (gp_play.wasm, or

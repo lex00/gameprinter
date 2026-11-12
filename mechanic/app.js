@@ -1700,15 +1700,16 @@ async function refresh() {
   // Rebuilt only when it changes: a list redrawn under the mouse every poll
   // loses the click.
   const queue = $("queue");
-  const qkey = JSON.stringify([session.mechanic, all]);
+  const qkey = JSON.stringify([session.mechanic, all, [...toolsOn], handable()]);
   if (queue.dataset.key !== qkey) {
     queue.dataset.key = qkey;
     queue.innerHTML = "";
     for (const q of all) {
       const li = document.createElement("li");
       const st = document.createElement("span");
-      st.className = `st st-${q.status.replace(/ /g, "-")}`;
-      st.textContent = LABELS[q.status] ?? q.status.toUpperCase();
+      const status = shownStatus(q);
+      st.className = `st st-${status.replace(/ /g, "-")}`;
+      st.textContent = LABELS[status] ?? status.toUpperCase();
       li.appendChild(st);
       const name = document.createElement("span");
       name.className = "qname";
@@ -1730,6 +1731,15 @@ async function refresh() {
         cmp.title = "Its newest clip beside the rebuild (C, or the left bumper)";
         cmp.addEventListener("click", (e) => { e.stopPropagation(); doAction("compareNewest"); });
         li.appendChild(cmp);
+        // Opening a row hands nothing over; this does.
+        if (handable()) {
+          const give = document.createElement("button");
+          give.className = "qcmp qgive";
+          give.textContent = "HAND TO THE AGENT";
+          give.title = "Ask your agent to work on this mechanic now";
+          give.addEventListener("click", (e) => { e.stopPropagation(); void handTo(q.mechanic); });
+          li.appendChild(give);
+        }
       }
       li.dataset.mechanic = q.mechanic;
       li.addEventListener("click", () => (mode === "refine" ? void refine.enter(q.mechanic) : void pick(q.mechanic)));
@@ -1789,6 +1799,36 @@ async function refresh() {
 
 // What the queue's statuses show as.
 const LABELS = { done: "MEASURED", "asking you": "YOUR MOVE", "agent working": "WORKING ON IT", "in line": "IN LINE", next: "NEXT" };
+
+// The mechanics the background work (gp serve's, streamed to the page's
+// hub in refine/fold.js) has a job or a clip agent on now, from its clip
+// IDs (GAME.MECHANIC.NNN).
+let toolsOn = new Set();
+function mechanicOfClip(id) {
+  const parts = String(id ?? "").split(".");
+  return parts.length >= 3 ? parts.slice(1, -1).join(".") : null;
+}
+function readToolsOn(s) {
+  const on = new Set();
+  for (const j of s?.jobs ?? []) on.add(mechanicOfClip(j.clip));
+  for (const g of s?.clip_agents ?? []) for (const c of [g.clip, ...(g.clips ?? [])]) on.add(mechanicOfClip(c));
+  on.delete(null);
+  return on;
+}
+
+/** A row's status as shown: WORKING ON IT while the background work is on
+ * its clips, otherwise the server's (the agent's turn, the gate's scores). */
+function shownStatus(q) {
+  return q.status !== "done" && toolsOn.has(q.mechanic) ? "agent working" : q.status;
+}
+
+/** Whether the open row can be handed to the agent: no turn of the
+ * person's is waiting for it, and it isn't measured. */
+function handable() {
+  const row = (session?.queue ?? []).find((q) => q.mechanic === session.mechanic);
+  const last = session?.talk?.[session.talk.length - 1];
+  return !!row && row.status !== "done" && last?.by !== "player";
+}
 
 /** The open mechanic's findings: what was measured, what the agent read
  * into it, and what isn't found yet. */
@@ -1882,8 +1922,17 @@ function leaveRefine() {
   void refresh();
 }
 
-/** Opens another mechanic from the queue and hands it to the agent. The
- * game keeps running where it is. */
+/** HAND TO THE AGENT on the open row: its "Let's do" turn. */
+async function handTo(m) {
+  try {
+    const r = await api("api/handoff", { mechanic: m });
+    toast(r.again ? `${m} is with your agent already.` : `${m} handed to your agent.`);
+    await refresh();
+  } catch (e) { toast(`Couldn't hand ${m} over: ${e.message ?? e}`); }
+}
+
+/** Opens another mechanic from the queue in the page; nothing goes to the
+ * agent (HAND TO THE AGENT does that). The game keeps running where it is. */
 let picking = null; // the mechanic being opened
 async function pick(m) {
   if (picking) { toast(`Still opening ${picking}.`); return; }
@@ -2473,6 +2522,13 @@ async function main() {
   setInterval(updateBusy, 1000);
   setInterval(showPad, 1000);
   requestAnimationFrame(frame);
+  // The background work's jobs, from the hub the strip under the game
+  // shares (no poll of its own while the strip has one).
+  import("./refine/fold.js").then((f) => {
+    f.hub(f.opts({ api, run: session.game })).subscribe((x, why) => {
+      if (why === "state") toolsOn = readToolsOn(x.state);
+    });
+  }).catch(() => undefined);
   const shell = startShell({
     setTab, api, toast,
     mode: () => mode,

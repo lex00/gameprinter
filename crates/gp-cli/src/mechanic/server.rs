@@ -20,7 +20,8 @@
 //! | `POST /api/paths` | Keeps the play so far as a path |
 //! | `POST /api/clips` | Saves a clip: a path, a start and its own inputs, or a full log and a start |
 //! | `POST /api/talk` | The person's turn |
-//! | `POST /api/pick` | Opens another mechanic of the quest log |
+//! | `POST /api/pick` | Opens another mechanic of the quest log; nothing goes to the agent |
+//! | `POST /api/handoff` | Hands a quest log row to the agent: its "Let's do" turn |
 //! | `GET /api/clips/N/review.json`, `/api/clips/N/review/NAME.png` | A clip on the model beside the original ([`super::review`]) |
 //! | `GET /api/clips/N.rebuild.json` | The same review as REVIEW REBUILD reads it: the pictures' addresses with the entities, what differs and the draws |
 //! | `GET /api/clips/N.measure.json` | A clip's measurements, when `gp mechanic contacts` wrote them |
@@ -40,7 +41,7 @@ use serde_json::{Value, json};
 
 use super::http::{self, Request, Response};
 use super::paths as clip_paths;
-use super::session::{Session, current, queue_file, read_queue, set_current, write_queue};
+use super::session::{Session, current, queue_file, read_queue, set_current};
 use crate::Outcome;
 use crate::original::Platform;
 
@@ -624,7 +625,8 @@ impl Server {
     }
 
     /// A mechanic's session, opened once for the server's life (made, with
-    /// its "Let's do" turn, when it is new and in the quest log).
+    /// no turn, when it is new and in the quest log: opening a row hands
+    /// nothing to the agent; [`Self::hand_off`] does).
     fn session_named(&self, m: &str) -> Result<Arc<Session>> {
         let mut open = self.open.lock().expect("open lock");
         if let Some(s) = open.get(m) {
@@ -638,13 +640,34 @@ impl Server {
                 bail!("{m} is not in the quest log");
             };
             let note = row["note"].as_str().unwrap_or("").to_owned();
-            let s = Session::create(&self.paths, &self.game, m, Some(&note), &self.rom_sha)?;
-            s.turn(json!({"by": "player", "text": format!("Let's do {m}: {note}"), "clips": []}))?;
-            s
+            Session::create(&self.paths, &self.game, m, Some(&note), &self.rom_sha)?
         };
         let session = Arc::new(session);
         open.insert(m.to_owned(), session.clone());
         Ok(session)
+    }
+
+    /// The person hands a row to the agent (the open row's HAND TO THE
+    /// AGENT): its "Let's do" turn, which makes the row the agent's. A row
+    /// whose last turn is the person's is the agent's already; nothing is
+    /// added. Whether a turn was added.
+    fn hand_off(&self, m: &str) -> Result<bool> {
+        let q = read_queue(&self.queue_file()?);
+        let Some(row) = q.iter().find(|r| r["mechanic"] == json!(m)) else {
+            bail!("{m} is not in the quest log");
+        };
+        let session = self.session_named(m)?;
+        if session
+            .turns()?
+            .last()
+            .is_some_and(|t| t["by"] == json!("player"))
+        {
+            return Ok(false);
+        }
+        let note = row["note"].as_str().unwrap_or("");
+        session
+            .turn(json!({"by": "player", "text": format!("Let's do {m}: {note}"), "clips": []}))?;
+        Ok(true)
     }
 
     /// The sealed runs' store, `$GP_HOME/sealed/GAME/sealed-run/clips/`:
@@ -968,32 +991,32 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             let (n, again) = s.target(v["mechanic"].as_str())?.turn_once(t)?;
             Ok(Response::json(&json!({"turn": n, "again": again})))
         }
-        ("POST", "/api/pick") => {
-            // The person picked a mechanic from the quest log: open its
-            // session (made if new) and hand it to the agent.
+        ("POST", "/api/handoff") => {
             let v: Value = serde_json::from_slice(&req.body)?;
             let m = v["mechanic"].as_str().context("mechanic")?;
-            let qf = s.queue_file()?;
-            let mut q = read_queue(&qf);
-            let Some(row) = q.iter().find(|r| r["mechanic"] == json!(m)).cloned() else {
+            if !read_queue(&s.queue_file()?)
+                .iter()
+                .any(|r| r["mechanic"] == json!(m))
+            {
                 return Ok(Response::error(404, "not in the quest log"));
-            };
+            }
+            let added = s.hand_off(m)?;
+            Ok(Response::json(&json!({"mechanic": m, "again": !added})))
+        }
+        ("POST", "/api/pick") => {
+            // The person picked a mechanic from the quest log: open its
+            // session (made if new) in the page. Nothing goes to the agent
+            // and no status changes; HAND TO THE AGENT (/api/handoff) does
+            // that.
+            let v: Value = serde_json::from_slice(&req.body)?;
+            let m = v["mechanic"].as_str().context("mechanic")?;
+            if !read_queue(&s.queue_file()?)
+                .iter()
+                .any(|r| r["mechanic"] == json!(m))
+            {
+                return Ok(Response::error(404, "not in the quest log"));
+            }
             let session = s.session_named(m)?;
-            // Picking a new one makes it the agent's. Others keep their
-            // status: one with clips handed in stays the agent's until it
-            // answers, whatever the person opens next.
-            if row["status"] == json!("next") {
-                if let Some(r) = q.iter_mut().find(|r| r["mechanic"] == json!(m)) {
-                    r["status"] = json!("agent working");
-                }
-                write_queue(&qf, &q)?;
-            }
-            if session.turns()?.is_empty() {
-                let note = row["note"].as_str().unwrap_or("");
-                session.turn(
-                    json!({"by": "player", "text": format!("Let's do {m}: {note}"), "clips": []}),
-                )?;
-            }
             set_current(&s.paths, &s.game, m)?;
             *s.session.lock().expect("session lock") = Some(session);
             Ok(Response::json(&json!({"mechanic": m})))
@@ -1446,6 +1469,7 @@ fn post_clip(s: &Server, v: &Value) -> Result<Response> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mechanic::session::write_queue;
 
     fn paths(home: &Path) -> Paths {
         Paths {
@@ -1785,9 +1809,10 @@ mod tests {
         st["clips"][0]["state"].as_str().map(str::to_owned)
     }
 
-    /// A clip names its mechanic: it is filed there (the session made with
-    /// its first turn when new) while another mechanic stays open, and both
-    /// requests for it share one session. Picking a row opens it.
+    /// A clip names its mechanic: it is filed there (the session made, with
+    /// no turn, when new) while another mechanic stays open, and both
+    /// requests for it share one session. Picking a row opens it and hands
+    /// nothing to the agent; HAND TO THE AGENT does, once.
     #[test]
     fn a_clip_goes_to_the_row_it_names_not_the_open_one() {
         let d = tempfile::tempdir().unwrap();
@@ -1798,10 +1823,7 @@ mod tests {
             &srv.target(Some("fireball-moves")).unwrap()
         ));
         assert!(f.dir.ends_with("fireball-moves"));
-        assert_eq!(
-            f.turns().unwrap()[0]["text"],
-            "Let's do fireball-moves: a fireball"
-        );
+        assert!(f.turns().unwrap().is_empty());
         assert!(srv.target(None).unwrap().dir.ends_with("walk"));
         assert!(srv.target(Some("not-a-row")).is_err());
         let (s, v) = post(
@@ -1815,11 +1837,26 @@ mod tests {
         assert_eq!((s, v["mechanic"].clone()), (200, json!("fireball-moves")));
         assert!(srv.open_session().unwrap().dir.ends_with("fireball-moves"));
         assert_eq!(current(&srv.paths, "dk").unwrap(), "fireball-moves");
-        assert_eq!(
-            read_queue(&srv.queue_file().unwrap())[1]["status"],
-            "agent working"
-        );
+        let status = || read_queue(&srv.queue_file().unwrap())[1]["status"].clone();
+        let before = status();
+        assert_ne!(before, "agent working");
+        assert!(f.turns().unwrap().is_empty());
         assert_eq!(post(&srv, "/api/pick", json!({"mechanic": "nope"})).0, 404);
+        // HAND TO THE AGENT: the "Let's do" turn, once.
+        let (s, v) = post(&srv, "/api/handoff", json!({"mechanic": "fireball-moves"}));
+        assert_eq!((s, v["again"].clone()), (200, json!(false)));
+        assert_eq!(status(), "agent working");
+        assert_eq!(
+            f.turns().unwrap()[0]["text"],
+            "Let's do fireball-moves: a fireball"
+        );
+        let (_, v) = post(&srv, "/api/handoff", json!({"mechanic": "fireball-moves"}));
+        assert_eq!(v["again"], json!(true));
+        assert_eq!(f.turns().unwrap().len(), 1);
+        assert_eq!(
+            post(&srv, "/api/handoff", json!({"mechanic": "nope"})).0,
+            404
+        );
     }
 
     /// A POST from another origin is refused; this server's own origin

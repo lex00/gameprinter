@@ -214,6 +214,57 @@ async function main() {
   await until("the answer in the session", () => readFileSync(join(session, "talk.ndjson"), "utf8").includes('"text":"No, a tap"'));
   ok("the answer, picked with the arrows and Enter, is the person's turn");
 
+  // The quest log follows the files under it with no click: the session
+  // poll redraws a row when its turn changes (the agent's turn makes it
+  // YOUR MOVE, the person's WORKING ON IT) and when queue.json is written
+  // by anything else.
+  const badge = (m) => page.evaluate((x) => document.querySelector(`#queue li[data-mechanic="${x}"] .st`)?.textContent ?? "", m);
+  await until("the row back with the agent after the answer", async () => (await badge(MECH)) === "WORKING ON IT");
+  gpRun(["mechanic", "say", GAME, MECH, "One more: was that on the first floor?", "--choice", "Yes", "--choice", "No"]);
+  await until("the row the person's move, with no click", async () => (await badge(MECH)) === "YOUR MOVE");
+  await until("the second question over the game", async () => (await text(page, "#say")).startsWith("One more") && !(await page.isHidden("#overlay")));
+  await page.keyboard.press("Enter");
+  await until("the row the agent's again, with no click", async () => (await badge(MECH)) === "WORKING ON IT");
+  const qf = join(home, "mechanics", GAME, "queue.json");
+  const other = JSON.parse(readFileSync(qf, "utf8")).find((r) => r.mechanic !== MECH)?.mechanic;
+  if (!other) fail("the quest log has one row only");
+  const shownBefore = await badge(other);
+  const edited = JSON.parse(readFileSync(qf, "utf8")).map((r) => (r.mechanic === other ? { ...r, status: "asking you" } : r));
+  writeFileSync(qf, JSON.stringify(edited, null, 2));
+  await until(`${other} redrawn from queue.json, with no click`, async () => (await badge(other)) === "YOUR MOVE");
+  ok(`the quest log follows the turns and queue.json with no click: ${MECH} YOUR MOVE then WORKING ON IT, ${other} ${shownBefore} to YOUR MOVE`);
+
+  // A click only opens a row: its status and its conversation stay as
+  // they were. HAND TO THE AGENT on the open row hands it over, once.
+  const third = JSON.parse(readFileSync(qf, "utf8")).find((r) => r.mechanic !== MECH && r.mechanic !== other && r.status === "next")?.mechanic;
+  if (!third) fail("no row at NEXT to open");
+  await page.click(`#queue li[data-mechanic="${third}"]`);
+  await until(`${third} open`, async () => (await text(page, "#title")) === `${GAME} / ${third}`);
+  await page.waitForTimeout(2000); // a poll or more
+  const thirdTalk = join(home, "mechanics", GAME, third, "talk.ndjson");
+  const turnsOf = () => (existsSync(thirdTalk) ? readFileSync(thirdTalk, "utf8").trim() : "");
+  if ((await badge(third)) !== "NEXT" || turnsOf()) fail(`opening ${third} changed it: ${await badge(third)}, talk ${turnsOf()}`);
+  await page.click(`#queue li[data-mechanic="${third}"] .qgive`);
+  await until(`${third} handed over`, async () => (await badge(third)) === "WORKING ON IT" && turnsOf().includes(`Let's do ${third}`));
+  if (await page.$(`#queue li[data-mechanic="${third}"] .qgive`)) fail("HAND TO THE AGENT still offered once handed over");
+  await page.click(`#queue li[data-mechanic="${MECH}"]`);
+  await until(`${MECH} open again`, async () => (await text(page, "#title")) === `${GAME} / ${MECH}`);
+  if (turnsOf().split("\n").length !== 1) fail(`${third}'s talk: ${turnsOf()}`);
+  ok(`a click opens ${third} and leaves it NEXT with no turn; HAND TO THE AGENT makes it WORKING ON IT with its one "Let's do" turn`);
+
+  // The background work on a row's clips (gp serve's, as the strip's hub
+  // reads it; stood in for here) shows the row WORKING ON IT while it runs.
+  const fourth = JSON.parse(readFileSync(qf, "utf8")).find((r) => ![MECH, other, third].includes(r.mechanic) && r.status === "next")?.mechanic;
+  if (!fourth) fail("no fourth row at NEXT");
+  const bg = `**/api/capture/${GAME}/background`;
+  await page.route(bg, (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify({ jobs: [{ kind: "score", clip: `check.${fourth}.001`, name: `${fourth} 001` }], clip_agents: [] }) }));
+  await until(`${fourth} WORKING ON IT while a job runs on its clip`, async () => (await badge(fourth)) === "WORKING ON IT");
+  await page.unroute(bg);
+  await page.route(bg, (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify({ jobs: [], clip_agents: [] }) }));
+  await until(`${fourth} NEXT again once the job is done`, async () => (await badge(fourth)) === "NEXT");
+  await page.unroute(bg);
+  ok(`a background job on ${fourth}'s clip shows it WORKING ON IT, and NEXT again when it ends`);
+
   // The watch panel: the agent's log, a pinned picture and a problem show
   // beside the game while the person plays.
   gpRun(["mechanic", "log", GAME, MECH, "Measuring the hop in clip 1"]);
