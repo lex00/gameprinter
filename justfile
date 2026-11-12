@@ -46,6 +46,7 @@ check: _hook-enabled build mosshop
     {{gp}} model fmt --check templates/mosshop
     just _interp-mosshop
     just play-web
+    just play-web-arcade
     just mechanic-page
     {{gp}} template check templates/mosshop --rom {{quote(mosshop_rom)}}
     scripts/test-hook.sh
@@ -71,10 +72,56 @@ play-web: mosshop
     fi
     echo "play-web: Moss Hop played in gp_play.wasm and replayed natively: every frame hash agrees ($web)"
 
+# The arcade player: gp_arcade_play.wasm built into target/play-web, an
+# rbtapper capture's input (scripts/oracle/inputs/tapper-first.input)
+# played in it under node, drawing every frame, with a save point restored
+# on the way, then the same log replayed natively; every frame's picture
+# hash must agree, and with the MAME capture of that log on this machine
+# ($GP_HOME/work/oracle/tapper-first-a), MAME's too. Needs the owner's
+# romset ($GP_ARCADE_RBTAPPER, $GP_ROM_DIR/arcade/rbtapper.zip or
+# ~/Downloads/rbtapper.zip) and skips without it, so it can't run in CI.
+play-web-arcade:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    zip=""
+    for z in "${GP_ARCADE_RBTAPPER:-}" "${GP_ROM_DIR:+$GP_ROM_DIR/arcade/rbtapper.zip}" "$HOME/Downloads/rbtapper.zip"; do
+        if [ -n "$z" ] && [ -f "$z" ]; then zip="$z"; break; fi
+    done
+    if [ -z "$zip" ]; then
+        echo "play-web-arcade: skipped, no rbtapper romset on this machine"
+        exit 0
+    fi
+    log=scripts/oracle/inputs/tapper-first.input
+    scripts/web/build-play.sh --arcade {{quote(target / "play-web")}} > /dev/null
+    work={{quote(gp_home / "work" / "play-web")}}
+    mkdir -p "$work"
+    node scripts/web/check-play-arcade.mjs {{quote(target / "play-web" / "gp_arcade_play.wasm")}} "$zip" "$log" "$work/arcade-web.txt" > /dev/null
+    cargo build -q --profile {{profile}} -p gp-arcade-play --example pictures
+    {{quote(target / profile_dir / "examples" / "pictures")}} "$zip" "$log" > "$work/arcade-native.txt"
+    frames=$(wc -l < "$work/arcade-web.txt" | tr -d ' ')
+    if ! cmp -s "$work/arcade-web.txt" "$work/arcade-native.txt"; then
+        first=$(diff <(cat -n "$work/arcade-web.txt") <(cat -n "$work/arcade-native.txt") | sed -n 2p)
+        echo "play-web-arcade: gp_arcade_play.wasm's picture hashes differ from the native replay's, first at: $first" >&2
+        exit 1
+    fi
+    mame="no MAME capture of it here"
+    tsv={{quote(gp_home / "work" / "oracle" / "tapper-first-a" / "frames.tsv")}}
+    if [ -f "$tsv" ]; then
+        if cmp -s "$work/arcade-web.txt" <(tail -n +2 "$tsv" | cut -f9); then
+            mame="and MAME's capture agrees on every frame too"
+        else
+            echo "play-web-arcade: the picture hashes differ from MAME's capture ($tsv)" >&2
+            exit 1
+        fi
+    fi
+    echo "play-web-arcade: tapper-first ($frames frames) played in gp_arcade_play.wasm and replayed natively: every frame's picture hash agrees, $mame"
+
 # The mechanic page in a headless browser on Moss Hop, in a GP_HOME made
 # for the run: play, record a clip with a note and hand it off, the agent's
 # answer from gp mechanic say, FREE PLAY, and the page's message when the
-# player isn't built (scripts/web/check-mechanic.mjs).
+# player isn't built (scripts/web/check-mechanic.mjs). Then, with the
+# owner's rbtapper romset on this machine, the same on Tapper: coin, start,
+# a clip, gp mechanic say, and ON THE MODEL's refusal; skipped without it.
 mechanic-page: build mosshop
     #!/usr/bin/env bash
     set -euo pipefail
@@ -83,8 +130,17 @@ mechanic-page: build mosshop
         npm ci --prefix scripts/web --silent --no-audit --no-fund
     fi
     browser=$(scripts/inspector/fetch-browser.sh {{quote(gp_home)}})
+    # The arcade run, with the owner's rbtapper romset when it is here.
+    arcade=()
+    for z in "${GP_ARCADE_RBTAPPER:-}" "${GP_ROM_DIR:+$GP_ROM_DIR/arcade/rbtapper.zip}" "$HOME/Downloads/rbtapper.zip"; do
+        if [ -n "$z" ] && [ -f "$z" ]; then
+            scripts/web/build-play.sh --arcade {{quote(target / "play-web")}} > /dev/null
+            arcade=(--arcade-rom "$z" --arcade-wasm {{quote(target / "play-web" / "gp_arcade_play.wasm")}})
+            break
+        fi
+    done
     node scripts/web/check-mechanic.mjs --gp {{quote(gp)}} --rom {{quote(mosshop_rom)}} \
-        --wasm {{quote(target / "play-web" / "gp_play.wasm")}} --browser "$browser"
+        --wasm {{quote(target / "play-web" / "gp_play.wasm")}} --browser "$browser" ${arcade[@]+"${arcade[@]}"}
 
 _interp-mosshop:
     #!/usr/bin/env bash

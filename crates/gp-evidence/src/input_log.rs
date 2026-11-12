@@ -19,6 +19,29 @@
 //! presses the console's reset button at the start of that frame, before
 //! the frame runs. Logs without a reset are still written as version 0, so
 //! their bytes and hashes don't change.
+//!
+//! # An arcade log
+//!
+//! An arcade game's log is spelt as the MAME oracle's input log
+//! (docs/oracle-mame.md), so a capture's log and a clip's are one format
+//! and the oracle replays a clip as it is:
+//!
+//! ```text
+//! gp-arcade-input 0
+//! system rbtapper
+//! columns CSRLDUT
+//! 600 .......
+//! 6 C......
+//! ```
+//!
+//! `system` names the MAME set and `columns` the buttons, one letter each
+//! from bit 0. Each line is a count of frames and the buttons held through
+//! them, the column's letter when held and `.` when not; `#` starts a
+//! comment. The bits go in controller 1's byte ([`InputFrame::pads`]), as
+//! the runtime protocol's `buttons` has them. The log keeps no lag marks
+//! or resets: every frame reads as polled. [`InputLog::arcade`] says which
+//! spelling a log has, and [`InputLog::to_text`] writes it back the same
+//! way.
 
 use std::fmt::Write as _;
 
@@ -67,7 +90,22 @@ impl InputFrame {
 pub struct InputLog {
     pub controllers: u8,
     pub frames: Vec<InputFrame>,
+    /// An arcade log's set and button columns; none for the NES.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arcade: Option<ArcadeLayout>,
 }
+
+/// What an arcade log names: the MAME set and its button columns, a
+/// letter each from bit 0 (Tapper's `CSRLDUT`: coin, start, right, left,
+/// down, up, tap).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArcadeLayout {
+    pub system: String,
+    pub columns: String,
+}
+
+/// An arcade log's first line.
+pub const ARCADE_HEADER: &str = "gp-arcade-input 0";
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error("input log line {line}: {message}")]
@@ -89,10 +127,26 @@ impl InputLog {
         Self {
             controllers,
             frames: Vec::new(),
+            arcade: None,
+        }
+    }
+
+    /// An empty arcade log for the set `system` with these button columns.
+    pub fn new_arcade(system: &str, columns: &str) -> Self {
+        Self {
+            controllers: 1,
+            frames: Vec::new(),
+            arcade: Some(ArcadeLayout {
+                system: system.to_owned(),
+                columns: columns.to_owned(),
+            }),
         }
     }
 
     pub fn parse(text: &str) -> Result<Self, InputLogError> {
+        if text.lines().next().map(str::trim_end) == Some(ARCADE_HEADER) {
+            return Self::parse_arcade(text);
+        }
         let mut lines = text.lines().enumerate().map(|(i, l)| (i + 1, l));
 
         let (n, header) = lines.next().ok_or_else(|| err(1, "empty input log"))?;
@@ -152,10 +206,109 @@ impl InputLog {
         Ok(Self {
             controllers,
             frames,
+            arcade: None,
         })
     }
 
+    /// Reads an arcade log (the module docs' "An arcade log").
+    fn parse_arcade(text: &str) -> Result<Self, InputLogError> {
+        let mut system = None;
+        let mut columns: Option<String> = None;
+        let mut frames = Vec::new();
+        for (i, raw) in text.lines().enumerate().skip(1) {
+            let n = i + 1;
+            let line = raw.split('#').next().unwrap_or("").trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Some(v) = line.strip_prefix("system ") {
+                system = Some(v.trim().to_owned());
+                continue;
+            }
+            if let Some(v) = line.strip_prefix("columns ") {
+                let v = v.trim();
+                if v.is_empty() || v.chars().count() > 8 || v.contains('.') {
+                    return Err(err(n, "`columns` is 1 to 8 letters, one a button"));
+                }
+                columns = Some(v.to_owned());
+                continue;
+            }
+            let cols = columns
+                .as_deref()
+                .ok_or_else(|| err(n, "frames before `columns`"))?;
+            let mut parts = line.split_whitespace();
+            let count: usize = parts
+                .next()
+                .and_then(|c| c.parse().ok())
+                .ok_or_else(|| err(n, "expected `<frames> <buttons>`"))?;
+            let held = parts.next().ok_or_else(|| err(n, "no buttons"))?;
+            if parts.next().is_some() || held.chars().count() != cols.chars().count() {
+                return Err(err(
+                    n,
+                    format!("the buttons are one field of {cols}'s letters or `.`"),
+                ));
+            }
+            let mut bits = 0u8;
+            for (k, (b, c)) in held.chars().zip(cols.chars()).enumerate() {
+                if b == c {
+                    bits |= 1 << k;
+                } else if b != '.' {
+                    return Err(err(
+                        n,
+                        format!("column {} is `{b}`, not `.` or `{c}`", k + 1),
+                    ));
+                }
+            }
+            frames.extend(std::iter::repeat_n(
+                InputFrame {
+                    polled: true,
+                    pads: [bits, 0, 0, 0],
+                    reset: false,
+                },
+                count,
+            ));
+        }
+        Ok(Self {
+            controllers: 1,
+            frames,
+            arcade: Some(ArcadeLayout {
+                system: system.ok_or_else(|| err(1, "no `system` line"))?,
+                columns: columns.ok_or_else(|| err(1, "no `columns` line"))?,
+            }),
+        })
+    }
+
+    /// An arcade log's text: a line for each run of frames holding the same
+    /// buttons.
+    fn arcade_text(&self, a: &ArcadeLayout) -> String {
+        let mut out = format!(
+            "{ARCADE_HEADER}\nsystem {}\ncolumns {}\n",
+            a.system, a.columns
+        );
+        let held = |bits: u8| -> String {
+            a.columns
+                .chars()
+                .enumerate()
+                .map(|(k, c)| if bits & (1 << k) != 0 { c } else { '.' })
+                .collect()
+        };
+        let mut i = 0;
+        while i < self.frames.len() {
+            let bits = self.frames[i].pads[0];
+            let mut j = i;
+            while j < self.frames.len() && self.frames[j].pads[0] == bits {
+                j += 1;
+            }
+            let _ = writeln!(out, "{} {}", j - i, held(bits));
+            i = j;
+        }
+        out
+    }
+
     pub fn to_text(&self) -> String {
+        if let Some(a) = &self.arcade {
+            return self.arcade_text(a);
+        }
         let version = if self.has_resets() {
             FORMAT_VERSION
         } else {
@@ -335,6 +488,35 @@ fn parse_pad(field: &str) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An arcade log reads as the oracle writes it and is written back in
+    /// one spelling: runs merged, comments gone.
+    #[test]
+    fn an_arcade_log_reads_and_writes_the_oracle_spelling() {
+        let text = "gp-arcade-input 0\n# a comment\nsystem rbtapper\ncolumns CSRLDUT\n3 .......\n2 C......\n1 C......\n4 .S..D.T\n";
+        let log = InputLog::parse(text).unwrap();
+        let a = log.arcade.as_ref().unwrap();
+        assert_eq!(
+            (a.system.as_str(), a.columns.as_str()),
+            ("rbtapper", "CSRLDUT")
+        );
+        assert_eq!(log.frames.len(), 10);
+        assert_eq!(log.frames[3].pads[0], 1);
+        // start (bit 1), down (bit 4), tap (bit 6)
+        assert_eq!(log.frames[9].pads[0], 0b101_0010);
+        assert_eq!(log.frames[9].buttons_word(), 0x52);
+        let out = log.to_text();
+        assert_eq!(
+            out,
+            "gp-arcade-input 0\nsystem rbtapper\ncolumns CSRLDUT\n3 .......\n3 C......\n4 .S..D.T\n"
+        );
+        assert_eq!(InputLog::parse(&out).unwrap(), log);
+        assert!(InputLog::parse("gp-arcade-input 0\nsystem x\ncolumns AB\n1 BA\n").is_err());
+        assert!(InputLog::parse("gp-arcade-input 0\ncolumns AB\n1 A.\n").is_err());
+        let mut fresh = InputLog::new_arcade("rbtapper", "CSRLDUT");
+        fresh.frames = log.frames.clone();
+        assert_eq!(fresh.to_text(), out);
+    }
 
     #[test]
     fn round_trip() {

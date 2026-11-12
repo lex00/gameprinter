@@ -1,7 +1,8 @@
 //! Tapper against the MAME oracle, when the romset and a capture are on
 //! this machine; otherwise each test says so and passes.
 //!
-//! - The romset: $GP_ARCADE_RBTAPPER, else ~/Downloads/rbtapper.zip.
+//! - The romset: $GP_ARCADE_RBTAPPER, else $GP_ROM_DIR/arcade/rbtapper.zip,
+//!   else ~/Downloads/rbtapper.zip (gp_arcade::romset::local_romset).
 //! - The captures: tapper-first-a and tapper-deaths-a under
 //!   $GP_HOME/work/oracle ($GP_HOME defaults to ~/.gameprinter), played
 //!   with scripts/oracle/inputs/tapper-first.input and tapper-deaths.input.
@@ -17,13 +18,13 @@ fn home() -> PathBuf {
 }
 
 fn romset() -> Option<Romset> {
-    let path = std::env::var_os("GP_ARCADE_RBTAPPER")
-        .map_or_else(|| home().join("Downloads/rbtapper.zip"), PathBuf::from);
-    if !path.exists() {
-        eprintln!("skipped: no rbtapper romset at {}", path.display());
+    let Some(path) = gp_arcade::romset::local_romset("rbtapper") else {
+        eprintln!("skipped: no rbtapper romset");
         return None;
-    }
-    Some(Romset::load_zip(&path).expect("the rbtapper romset loads"))
+    };
+    let set = Romset::load_zip(&path).expect("the rbtapper romset loads");
+    assert_eq!(set.name, "rbtapper");
+    Some(set)
 }
 
 fn capture(name: &str, log: &str) -> Option<(Capture, InputLog)> {
@@ -120,4 +121,22 @@ fn snapshots_restore_exactly_and_runs_repeat() {
         c.step(coin_at(n));
     }
     assert_eq!(c.state_hash(), end);
+}
+
+/// The game reads its inputs on most frames once it runs, and the runtime
+/// protocol's `frame` event says so.
+#[test]
+fn the_frame_event_says_when_the_game_read_its_inputs() {
+    use gp_runtime::Runtime;
+    let Some(rom) = romset() else { return };
+    let mut rt = gp_arcade::ArcadeRuntime::load(&rom);
+    let ev = rt
+        .step(&vec![gp_runtime::InputFrame::default(); 300])
+        .unwrap();
+    let polled = ev
+        .iter()
+        .filter(|e| e.data[0].value == gp_runtime::Value::Flag(true))
+        .count();
+    eprintln!("{polled} of 300 frames polled");
+    assert!(polled > 150, "{polled} of 300 frames polled");
 }

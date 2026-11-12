@@ -44,7 +44,7 @@
 //! mid-instruction and the pending timers included. An `InputFrame`'s
 //! `buttons` maps to [`Controls::from_bits`]: bits 0 to 6 are coin, start,
 //! right, left, down, up and tap, the oracle log's columns. The runtime
-//! wrapper, selectors and the tools come in milestone 2.
+//! wrapper is [`ArcadeRuntime`] ([`protocol`], with its selectors).
 //!
 //! examples/compare.rs plays an oracle capture's input log and checks
 //! every frame against MAME; tests/rbtapper.rs does the same in
@@ -61,6 +61,7 @@ pub mod ctc;
 pub mod irq;
 pub mod mcr;
 pub mod oracle;
+pub mod protocol;
 pub mod romset;
 pub mod sched;
 pub mod sha1;
@@ -69,4 +70,9 @@ pub mod video;
 pub mod z80;
 
 pub use mcr::{Controls, Tapper};
+
+/// What made a snapshot: a start cache keys its snapshots by it, so a
+/// change to the board's emulation or its snapshot bumps it.
+pub const RUNTIME_VERSION: &str = concat!("gp-arcade ", env!("CARGO_PKG_VERSION"), " mcr 1");
+pub use protocol::ArcadeRuntime;
 pub use romset::Romset;

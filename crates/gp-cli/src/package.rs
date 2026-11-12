@@ -17,6 +17,10 @@ pub struct RomEntry {
     pub id: String,
     pub role: String,
     pub sha256: String,
+    /// `nes` (the default) or `arcade`.
+    pub platform: String,
+    /// An arcade entry's MAME set name.
+    pub system: Option<String>,
     /// Relative to the package folder.
     pub asset_map: String,
     pub asset_map_sha256: String,
@@ -74,6 +78,15 @@ impl Package {
                 id: str_of(e.get("id")),
                 role: str_of(e.get("role")),
                 sha256: str_of(e.get("sha256")),
+                platform: e
+                    .get("platform")
+                    .and_then(toml::Value::as_str)
+                    .unwrap_or("nes")
+                    .to_owned(),
+                system: e
+                    .get("system")
+                    .and_then(toml::Value::as_str)
+                    .map(str::to_owned),
                 asset_map: str_of(e.get("asset_map")),
                 asset_map_sha256: str_of(e.get("asset_map_sha256")),
                 lifted_sha256: e
@@ -126,6 +139,16 @@ impl Package {
         })
     }
 
+    /// The platform of the scored entry (else the first), `nes` with none.
+    pub fn platform(&self) -> Result<crate::roms::Platform> {
+        let e = self
+            .entries
+            .iter()
+            .find(|e| e.role == "scored")
+            .or(self.entries.first());
+        crate::roms::Platform::named(e.map(|e| e.platform.as_str()))
+    }
+
     pub fn rom_hashes(&self) -> Vec<String> {
         self.entries.iter().map(|e| e.sha256.clone()).collect()
     }
@@ -153,6 +176,23 @@ impl Package {
                     e.id.clone(),
                     "roms.toml gives another sha256 than package.toml".into(),
                 )),
+                Some(s)
+                    if s.get("platform")
+                        .and_then(toml::Value::as_str)
+                        .unwrap_or("nes")
+                        != e.platform =>
+                {
+                    out.push((
+                        e.id.clone(),
+                        "roms.toml gives another platform than package.toml".into(),
+                    ))
+                }
+                Some(s) if s.get("system").and_then(toml::Value::as_str) != e.system.as_deref() => {
+                    out.push((
+                        e.id.clone(),
+                        "roms.toml gives another system than package.toml".into(),
+                    ))
+                }
                 Some(_) => {}
             }
         }

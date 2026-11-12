@@ -454,6 +454,16 @@ pub fn validate(model: &Model) -> Vec<Problem> {
     for a in &input_actions {
         c.name(&format!("input.actions.{a}"), a);
     }
+    if let Some(i) = &model.input {
+        for (a, b) in &i.actions {
+            if i.device.bit(*b).is_none() {
+                c.add(
+                    format!("input.actions.{a}"),
+                    format!("the input device has no button {b:?}"),
+                );
+            }
+        }
+    }
     if let Some(t) = model.input.as_ref().and_then(|i| i.turn.as_ref()) {
         if !model.counters.contains_key(&t.counter) {
             c.add(

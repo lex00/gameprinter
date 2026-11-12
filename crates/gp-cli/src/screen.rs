@@ -158,6 +158,37 @@ impl Shows for NesRuntime {
     }
 }
 
+impl Shows for crate::original::OriginalRuntime {
+    fn shown(&self) -> Frame {
+        match self {
+            Self::Nes(n) => original_frame(n),
+            Self::Arcade(a) => arcade_frame(a.tapper()),
+        }
+    }
+
+    fn draw(&mut self) {
+        self.set_video(true);
+    }
+}
+
+/// An arcade original's frame: its picture as it is, with no sprite mask
+/// (the board's sprites aren't told apart from its tiles yet).
+pub(crate) fn arcade_frame(t: &gp_arcade::Tapper) -> Frame {
+    use gp_arcade::video::{HEIGHT, WIDTH};
+    Frame {
+        w: WIDTH as u32,
+        h: HEIGHT as u32,
+        rgb: t
+            .picture()
+            .iter()
+            .map(|c| [(c >> 16) as u8, (c >> 8) as u8, *c as u8])
+            .collect(),
+        sprite: vec![false; WIDTH * HEIGHT],
+        visible: [0, 0, WIDTH as u32, HEIGHT as u32],
+        things: Vec::new(),
+    }
+}
+
 impl Shows for crate::tape::Original {
     fn shown(&self) -> Frame {
         self.picture()

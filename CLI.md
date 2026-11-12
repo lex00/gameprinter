@@ -28,9 +28,9 @@ For making and playing games: what a person installing gp uses.
 | `gp registry publish` | Publish a folder of files as one exact version |
 | `gp registry reindex` | Rewrite the list files from these name@version entries, signed if --key is given |
 | `gp registry serve` | Serve a folder registry and a built page on this machine only |
-| `gp roms add` | Copy ROM files you own into $GP_ROM_DIR/nes/, identifying each one. A ROM no game names yet is added too, as unknown: `gp game new` starts a game for it |
+| `gp roms add` | Copy ROM files you own into $GP_ROM_DIR/nes/, or a romset (a MAME zip) into $GP_ROM_DIR/arcade/, identifying each one. A ROM no game names yet is added too, as unknown: `gp game new` starts a game for it |
 | `gp roms clean` | Write a cleaned copy of a NES image: header from the game's roms.toml (or the file's, by the header rules), no trainer, no trailing bytes. Never changes the input. Exits 1 when the cleaned data matches no game's roms.toml |
-| `gp roms scan` | Identify every NES image in $GP_ROM_DIR, whatever it's named, by the game whose roms.toml holds its hash, and report junk around the game data |
+| `gp roms scan` | Identify every NES image and arcade romset (a MAME zip) in $GP_ROM_DIR, whatever it's named, by the game whose roms.toml holds its hash, and report junk around an NES image's game data |
 | `gp template build` | Build an authored template's lifted files and hold them to its pin |
 | `gp template check` | Check a ROM against the template: accepted hash, map pin, lift pin |
 | `gp template served` | Check that a package's open version holds none of the original's data: no line of 24 characters or more of its built files may be held by the original's lifted files, and none of its bytes or lifted files may be the ROM's. With --folder, the same for every file of a folder to be served. Exits 1 on any find, and 2 when a ROM isn't found |

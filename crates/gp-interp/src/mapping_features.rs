@@ -464,6 +464,12 @@ pub const FEATURES: &[Feature] = &[
         "A slot group's name, by which a derived template's delta merges its groups over its base's",
         &["slots.group.name"],
     ),
+    mapping(
+        "platform",
+        "",
+        "The original's machine: `arcade` for a romset, whose `ignore` may name any of the main CPU's addresses and which has none of the NES's own parts (`nametable`, `oam`, `oam_tile`, `read_at`, `[[draws]]`)",
+        &["platform"],
+    ),
 ];
 
 #[cfg(test)]
@@ -509,6 +515,30 @@ mod tests {
     }
 
     const BASE: &str = "schema = 20\nmodel = \"m\"\nsource = \"m\"\nalign = \"polled\"\n\n[[field]]\npath = \"entities.player[0].state\"\nram = [0x10]\nvalues = [\"small\", \"big\"]\n";
+
+    /// An arcade mapping reads RAM anywhere in the main CPU's addresses and
+    /// may ignore bytes there; an NES one still may not; the NES's own
+    /// parts are refused in an arcade mapping.
+    #[test]
+    fn an_arcade_mapping_reads_the_main_cpus_addresses_and_none_of_the_nes_parts() {
+        let ignore = "\n[[ignore]]\nram = 0xE010\nlen = 4\nrole = \"scratch\"\nwhy = \"test\"\n";
+        let base = BASE
+            .replace("schema = 20", "schema = 21")
+            .replace("ram = [0x10]", "ram = [0xE000]");
+        let arcade = format!("platform = \"arcade\"\n{base}{ignore}");
+        let m = Mapping::parse(&arcade).unwrap();
+        assert_eq!(m.platform.as_deref(), Some("arcade"));
+        assert_eq!(m.fields[0].ram, [0xE000]);
+        let e = Mapping::parse(&format!("{base}{ignore}")).unwrap_err();
+        assert!(e.contains("($0000-$07FF)"), "{e}");
+        let e = Mapping::parse(&format!(
+            "platform = \"arcade\"\n{base}\n[[field]]\npath = \"counters.x\"\nnametable = [0x2000]\n"
+        ))
+        .unwrap_err();
+        assert!(e.contains("the NES's"), "{e}");
+        let e = Mapping::parse(&format!("platform = \"sega\"\n{base}")).unwrap_err();
+        assert!(e.contains("nes or arcade"), "{e}");
+    }
 
     #[test]
     fn a_bcd_field_reads_two_digits_a_byte() {

@@ -13,15 +13,14 @@ use anyhow::{Context, Result};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
+use crate::original::OriginalRuntime;
 use gp_evidence::Hash;
-use gp_evidence::manifest::PowerOn;
 use gp_interp::Lifted;
 use gp_interp::lockstep::{self, Start};
 use gp_interp::mapping::{MAPPING_FILE, Mapping};
 use gp_interp::reads::{ReadSet, SpecNames};
 use gp_interp::scenario::{self, Outcome as Ran, Quiet, Scenario, StartAt};
 use gp_model::{MODEL_FILE, Model};
-use gp_nes::protocol::NesRuntime;
 use gp_runtime::{InputFrame, LoadHow, Runtime};
 use gp_sim::Fx;
 
@@ -248,8 +247,8 @@ impl Bench {
     /// The original at its frame `frame` of the input, with video on from
     /// its last frame, so the picture it shows there is drawn for the screen
     /// measure.
-    fn original_at(&self, frame: u64) -> Result<NesRuntime> {
-        let mut o = NesRuntime::load(&self.rom, PowerOn::default()).map_err(anyhow::Error::msg)?;
+    fn original_at(&self, frame: u64) -> Result<OriginalRuntime> {
+        let mut o = OriginalRuntime::of_rom(&self.rom)?;
         let n = usize::try_from(frame)
             .unwrap_or(usize::MAX)
             .min(self.inputs.len());
@@ -267,17 +266,17 @@ impl Bench {
     /// The original's snapshot a start names, when it has one at its own
     /// frame made by this gp-nes: the original standing there without
     /// playing the input to it.
-    fn snapshot_of(&self, start: &StartAt) -> Option<NesRuntime> {
+    fn snapshot_of(&self, start: &StartAt) -> Option<OriginalRuntime> {
         let path = start.snapshot.as_deref()?;
         let bytes = fs::read(path).ok()?;
-        let mut o = NesRuntime::load(&self.rom, PowerOn::default()).ok()?;
+        let mut o = OriginalRuntime::of_rom(&self.rom).ok()?;
         o.restore(&bytes).ok()?;
         (o.frame() == start.frame).then_some(o)
     }
 
     /// The original standing at `frame`: from the start's snapshot when
     /// it has one there, else the input played to it.
-    fn original_from(&self, start: Option<&StartAt>, frame: u64) -> Result<NesRuntime> {
+    fn original_from(&self, start: Option<&StartAt>, frame: u64) -> Result<OriginalRuntime> {
         if let Some(st) = start.filter(|st| st.frame == frame)
             && let Some(o) = self.snapshot_of(st)
         {
@@ -342,7 +341,7 @@ impl Bench {
 
     /// The start from the original's snapshot `o` at `own`'s frame, the
     /// model's frame there `mf`.
-    fn started_from(&self, mf: u64, own: &StartAt, o: &NesRuntime) -> Result<Started> {
+    fn started_from(&self, mf: u64, own: &StartAt, o: &OriginalRuntime) -> Result<Started> {
         let mut interp = self.open()?;
         let spec = interp.spec().clone();
         let mut base = gp_sim::World::power_on(&spec);
@@ -401,7 +400,7 @@ impl Bench {
     fn started_fresh(&self, model: &Model, at: Option<u64>) -> Result<Started> {
         let mut interp = self.open()?;
         let spec = interp.spec().clone();
-        let power = NesRuntime::load(&self.rom, PowerOn::default()).map_err(anyhow::Error::msg)?;
+        let power = OriginalRuntime::of_rom(&self.rom)?;
         let quiet = match at {
             Some(_) => None,
             None => {
@@ -474,7 +473,7 @@ struct Shared {
 /// it took.
 #[derive(Default)]
 struct Mine {
-    originals: BTreeMap<(String, u64), (NesRuntime, Start)>,
+    originals: BTreeMap<(String, u64), (OriginalRuntime, Start)>,
 }
 
 /// Scores scenarios against `model`, each its own result, cached unless
@@ -661,7 +660,13 @@ fn draws_of(
             st.start()?,
         ));
     }
-    let nes = mine.originals[&at].0.fork().into_nes();
+    let Some(nes) = mine.originals[&at].0.nes().map(|n| n.fork().into_nes()) else {
+        crate::original::nes_only(
+            crate::original::Platform::Arcade,
+            "a random draw (a mapping's `[[draws]]`)",
+        )?;
+        unreachable!("nes_only refuses the arcade");
+    };
     let inputs: Vec<gp_evidence::input_log::InputFrame> = s
         .inputs()
         .map_err(anyhow::Error::msg)?

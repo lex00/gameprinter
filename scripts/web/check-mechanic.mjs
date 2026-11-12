@@ -13,6 +13,15 @@
 // built: the page must say so, in the server's words, instead of failing
 // to compile the 404 as wasm. Any error the page throws fails the check.
 //
+// With --arcade-rom ZIP (the owner's rbtapper romset) and --arcade-wasm
+// WASM (gp_arcade_play.wasm), an arcade run follows: gp roms add and gp
+// game new on the romset, then the page on it at 512x480 and 30 frames a
+// second with MAME's keys. It drops a coin (5), starts (1), records a clip
+// of moves and taps with a note and hands it off, checks the clip's arcade
+// log and state hash in the session, that gp mechanic say shows, and that
+// ON THE MODEL says in words why it has nothing to play yet. Without the
+// two options the arcade run is skipped, as other ROM checks are.
+//
 // Playwright comes from scripts/web/node_modules (`npm ci --prefix
 // scripts/web`), or PLAYWRIGHT_FROM names another package.json whose
 // node_modules has it. The browser is the one
@@ -32,6 +41,7 @@ const opt = (n) => {
   return i < 0 || !process.argv[i + 1] ? null : resolve(process.argv[i + 1]);
 };
 const gp = opt("gp"), romFile = opt("rom"), wasm = opt("wasm"), browserPath = opt("browser");
+const arcadeRom = opt("arcade-rom"), arcadeWasm = opt("arcade-wasm");
 if (!gp || !romFile || !wasm || !browserPath) {
   console.error("check-mechanic: give --gp GP --rom MOSSHOP --wasm WASM --browser BROWSER");
   process.exit(2);
@@ -52,7 +62,7 @@ const t0 = Date.now();
 const work = mkdtempSync(join(tmpdir(), "gp-mechanic-page-"));
 const home = join(work, "home"), games = join(work, "games");
 mkdirSync(games, { recursive: true });
-const env = { ...process.env, GP_HOME: home, GP_ROM_DIR: join(home, "roms"), GP_GAMES_DIR: games, GP_PLAY_WASM: wasm };
+const env = { ...process.env, GP_HOME: home, GP_ROM_DIR: join(home, "roms"), GP_GAMES_DIR: games, GP_PLAY_WASM: wasm, GP_ARCADE_PLAY_WASM: arcadeWasm ?? "" };
 const GAME = "moss-hop", MECH = "walk";
 const servers = [];
 let browser;
@@ -68,8 +78,8 @@ function gpRun(args, extra = {}) {
 }
 
 /** Starts `gp mechanic start` on a free port; its address once it prints it. */
-function serve(extra = {}) {
-  const p = spawn(gp, ["mechanic", "start", GAME, MECH, "--port", "0", "--games", games], { env: { ...env, ...extra } });
+function serve(extra = {}, game = GAME, mech = MECH) {
+  const p = spawn(gp, ["mechanic", "start", game, mech, "--port", "0", "--games", games], { env: { ...env, ...extra } });
   servers.push(p);
   let err = "";
   p.stderr.on("data", (d) => { err += d; });
@@ -231,9 +241,85 @@ async function main() {
   ok("with no player built the page says how to build it");
 }
 
+/** The arcade run: the owner's romset in the page (see the head). */
+async function arcade() {
+  if (!arcadeRom || !arcadeWasm) {
+    console.log("skip the arcade run: no --arcade-rom and --arcade-wasm (the owner's rbtapper romset isn't here)");
+    return;
+  }
+  const game = "tapper", mech = "walk";
+  gpRun(["roms", "add", arcadeRom, "--games", games]);
+  const zip = join(home, "roms", "arcade", arcadeRom.split("/").pop());
+  gpRun(["game", "new", game, "--rom", zip, "--genre", "other", "--namespace", "check", "--games", games]);
+  ok(`gp roms add and gp game new made ${game} from the romset`);
+  const url = await serve({}, game, mech);
+  const page = await browser.newPage();
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto(url);
+  await until("the arcade page shows the session", async () => (await text(page, "#title")) === `${game} / ${mech}`);
+  const shape = await page.evaluate(() => ({ p: document.body.dataset.platform, w: document.getElementById("game").width, h: document.getElementById("game").height }));
+  if (shape.p !== "arcade" || shape.w !== 512 || shape.h !== 480) fail(`the arcade page: ${JSON.stringify(shape)}`);
+  if (!(await text(page, "#keys")).includes("5 drops a coin")) fail(`the footer: ${await text(page, "#keys")}`);
+  const a0 = await frame(page);
+  await page.waitForTimeout(1000);
+  const a1 = await frame(page);
+  if (a1 - a0 < 20 || a1 - a0 > 40) fail(`the arcade page played ${a1 - a0} frames in a second, not about 30`);
+  ok(`the arcade page is 512x480 at ${a1 - a0} frames a second, with MAME's keys in the footer`);
+
+  // A coin, start, then a recording of moves and taps.
+  await page.keyboard.down("Digit5");
+  await page.waitForTimeout(250);
+  await page.keyboard.up("Digit5");
+  await page.waitForTimeout(1500);
+  await page.keyboard.down("Digit1");
+  await page.waitForTimeout(250);
+  await page.keyboard.up("Digit1");
+  await page.waitForTimeout(3000);
+  await page.keyboard.press("KeyR");
+  await until("recording", async () => (await text(page, "#modebadge")) === "RECORDING");
+  for (const k of ["ArrowDown", "KeyX", "ArrowUp", "KeyX", "ArrowLeft"]) {
+    await page.keyboard.down(k);
+    await page.waitForTimeout(300);
+    await page.keyboard.up(k);
+    await page.waitForTimeout(150);
+  }
+  await page.keyboard.press("KeyR");
+  await until("the review panel", async () => (await text(page, "#modebadge")) === "YOUR CLIP");
+  const note = "a tap at the second bar";
+  await page.fill("#note", note);
+  await page.keyboard.press("Enter");
+  const dir = join(home, "mechanics", game, mech);
+  const toml = join(dir, "clips", "001.toml");
+  const meta = await until("the arcade clip's state hash", () => {
+    if (!existsSync(toml)) return null;
+    const t = readFileSync(toml, "utf8");
+    return /state = "[0-9a-f]{64}"/.test(t) ? t : null;
+  }, 60000);
+  if (!meta.includes(`note = "${note}"`)) fail(`the arcade clip's toml: ${meta}`);
+  const log = readFileSync(join(dir, "clips", "001.log"), "utf8");
+  if (!log.startsWith("gp-arcade-input 0\nsystem rbtapper\ncolumns CSRLDUT\n") || !/T\n/.test(log)) fail(`the arcade clip's log: ${log}`);
+  ok("the arcade clip is in the session: an arcade input log with taps, its note, path and state hash");
+  await until("the arcade hand-off in the conversation", async () => (await text(page, "#talk")).includes(`player: ${note}`));
+  const said = "Got it. Which bar was that?";
+  gpRun(["mechanic", "say", game, mech, said]);
+  await until("the agent's words over the arcade game", async () => (await text(page, "#say")).startsWith(said) && !(await page.isHidden("#overlay")));
+  ok("gp mechanic say shows over the arcade game");
+  await page.keyboard.press("Enter");
+  await page.click("#clips .rv2-open");
+  const says = await until("ON THE MODEL's words", async () => {
+    const t = await text(page, "#rv2-says");
+    return t.includes("an arcade game has none yet") ? t : null;
+  });
+  await page.keyboard.press("Escape");
+  ok(`ON THE MODEL refuses in words: ${says.slice(0, 80)}...`);
+  if (errors.length) fail(`the arcade page threw: ${errors.join("; ")}`);
+}
+
 let code = 0;
 try {
   await main();
+  await arcade();
   console.log(`mechanic-page: passed in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
 } catch (e) {
   console.error(`FAIL ${e.message}`);

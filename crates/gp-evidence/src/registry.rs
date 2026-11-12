@@ -21,12 +21,19 @@ pub struct KnownSource {
     /// Stable ID used in recordings and templates, e.g. `smb1-ntsc-prg0`.
     pub id: String,
     pub title: String,
+    /// `nes` or `arcade`.
     pub platform: String,
     pub region: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
-    /// SHA-256 of PRG and CHR without header (see `source::identify_nes`).
+    /// An arcade source's MAME set name, such as `rbtapper`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    /// SHA-256 of PRG and CHR without header (see `source::identify_nes`);
+    /// for an arcade romset, its set's identity (gp_arcade::romset).
     pub sha256: String,
+    /// The NES mapper; an arcade source has none and leaves it out.
+    #[serde(default)]
     pub mapper: u16,
     /// Board facts (docs/sources.md, "Board facts"): with them, the source
     /// is run and cleaned with a header built from the registry, not the

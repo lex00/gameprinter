@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use gp_assets::map::{Asset, AssetMap};
-use gp_model::model::{Axis, Button};
+use gp_model::model::Axis;
 use gp_model::{Fixed, Model};
 use gp_sim::Fx;
 use gp_sim::spec::{
@@ -30,20 +30,6 @@ pub const TOPDOWN: &str = "0.1";
 
 fn fx(f: Fixed) -> Fx {
     Fx::from_raw(f.raw())
-}
-
-/// The controller bit a button is, in the runtime protocol's order.
-fn bit(b: Button) -> u8 {
-    1 << match b {
-        Button::A => 0,
-        Button::B => 1,
-        Button::Select => 2,
-        Button::Start => 3,
-        Button::Up => 4,
-        Button::Down => 5,
-        Button::Left => 6,
-        Button::Right => 7,
-    }
 }
 
 fn major_minor(v: &str) -> &str {
@@ -76,12 +62,16 @@ pub fn compile(model: &Model, assets: &Lifted) -> Result<Spec, String> {
     let actions: Vec<Action> = model
         .input
         .iter()
-        .flat_map(|i| &i.actions)
-        .map(|(name, b)| Action {
-            name: name.clone(),
-            mask: bit(*b),
+        .flat_map(|i| i.actions.iter().map(move |a| (i.device, a)))
+        .map(|(device, (name, b))| {
+            Ok(Action {
+                name: name.clone(),
+                mask: device.bit(*b).ok_or(format!(
+                    "input.actions.{name}: the {device:?} device has no button {b:?}"
+                ))?,
+            })
         })
-        .collect();
+        .collect::<Result<_, String>>()?;
     let action = |at: &str, name: &str| {
         actions
             .iter()

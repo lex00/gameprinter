@@ -255,6 +255,10 @@ pub struct Board {
     pub ports: [u8; 5],
     /// Set by the VBLANK timer: the frame is over.
     pub frame_done: bool,
+    /// Whether the main CPU read an input port (0 to 4) in the frame being
+    /// run: a frame without is a lag frame. Cleared when a frame starts;
+    /// not part of the state.
+    pub polled: bool,
     /// When on, every instruction both CPUs start, for debugging. Not
     /// part of the state.
     pub trace: Option<Vec<Trace>>,
@@ -338,6 +342,7 @@ impl Board {
         let p = port & 0xff;
         let m = p & !0x18;
         if m <= 4 {
+            self.polled = true;
             return self.ports[usize::from(m)];
         }
         if m == 7 {
@@ -568,6 +573,7 @@ impl Tapper {
             ay: [Ay8910::default(), Ay8910::default()],
             ports: Controls::default().ports(),
             frame_done: false,
+            polled: false,
             trace: None,
         };
         // The screen's configure(): VBLANK starts a frame from now, and
@@ -637,6 +643,7 @@ impl Tapper {
     /// next VBLANK, where MAME ends a frame.
     pub fn step(&mut self, controls: Controls) {
         self.board.ports = controls.ports();
+        self.board.polled = false;
         loop {
             while let Some((handle, what, param, enabled)) = self.board.sched.pop_due() {
                 if enabled {
@@ -800,6 +807,21 @@ impl Tapper {
     /// picture, is black, as MAME's is.
     pub fn picture_hash(&self) -> u64 {
         video::picture_hash(self.pens.iter().map(|&p| self.pens_palette[usize::from(p)]))
+    }
+
+    /// Whether the game read its input ports in the last frame run.
+    pub fn polled(&self) -> bool {
+        self.board.polled
+    }
+
+    /// The SSIO board's 1 KB of RAM, as its Z80 sees it at 0x8000.
+    pub fn sound_ram(&self) -> &[u8] {
+        &self.board.ssio_ram
+    }
+
+    /// The palette RAM's 128 bytes, which the main CPU writes at 0xF800.
+    pub fn palette_ram(&self) -> &[u8] {
+        &self.board.paletteram
     }
 
     /// Whether the watchdog ran out: MAME would have reset the machine,

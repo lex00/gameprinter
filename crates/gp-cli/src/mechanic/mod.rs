@@ -22,7 +22,10 @@
 //!
 //! Clips are recipes, never pictures: anyone with the ROM plays them again.
 //! `gp mechanic start` serves the page (`mechanic/` in the repo) on this
-//! machine only, with the player module and the ROM ([`server`]).
+//! machine only, with the player module and the ROM ([`server`]). An arcade
+//! game's logs, paths and clips are arcade input logs (`gp-arcade-input 0`,
+//! the MAME oracle's spelling, read by the same `InputLog`), and their
+//! starts are replayed on gp-arcade ([`paths::original_at`]).
 //!
 //! Ported from game-printer's mechanic.rs: the core loop only. The analysis
 //! commands (contacts, sweep, probe, leads, harvest, demo, compare, video),

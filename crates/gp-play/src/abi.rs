@@ -250,3 +250,10 @@ pub extern "C" fn gp_play_audio(slot: u32) -> *const u8 {
 pub extern "C" fn gp_play_audio_rate() -> u32 {
     crate::AUDIO_RATE
 }
+
+/// The screen, the frame rate and the buttons as JSON ([`crate::info`]),
+/// in the output buffer.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_play_info(_slot: u32) -> i32 {
+    result(Ok(crate::info()))
+}

@@ -18,9 +18,9 @@ use crate::{Outcome, romclean};
 
 #[derive(Subcommand)]
 pub enum RomsCmd {
-    /// Identify every NES image in $GP_ROM_DIR, whatever it's named, by the
-    /// game whose roms.toml holds its hash, and report junk around the game
-    /// data.
+    /// Identify every NES image and arcade romset (a MAME zip) in
+    /// $GP_ROM_DIR, whatever it's named, by the game whose roms.toml holds
+    /// its hash, and report junk around an NES image's game data.
     Scan {
         /// The games checkout whose roms.toml files name the ROMs (default:
         /// $GP_GAMES_DIR, else a `games` folder at or beside the current
@@ -28,9 +28,10 @@ pub enum RomsCmd {
         #[arg(long)]
         games: Option<PathBuf>,
     },
-    /// Copy ROM files you own into $GP_ROM_DIR/nes/, identifying each one.
-    /// A ROM no game names yet is added too, as unknown: `gp game new`
-    /// starts a game for it.
+    /// Copy ROM files you own into $GP_ROM_DIR/nes/, or a romset (a MAME
+    /// zip) into $GP_ROM_DIR/arcade/, identifying each one. A ROM no game
+    /// names yet is added too, as unknown: `gp game new` starts a game for
+    /// it.
     Add {
         /// The ROM files to add.
         #[arg(required = true)]
@@ -162,6 +163,25 @@ fn known_json(reg: &Registry, sha256: &str) -> Value {
         .map_or(Value::Null, |k| json!({ "id": k.id, "title": k.title }))
 }
 
+/// What `scan` and `add` say of a romset: its set, its identity and what
+/// else the zip held. Never its bytes.
+fn romset_json(set: &gp_arcade::Romset, rel: &Path, reg: &Registry) -> Value {
+    let title = gp_arcade::romset::set(set.name).map_or("", |s| s.title);
+    let mut notes: Vec<String> = vec![format!("{} ({title})", set.name)];
+    if !set.ssio_prom {
+        notes.push(
+            "no SSIO PROM (82s123.12d) in the zip: not needed while the sound is silent".into(),
+        );
+    }
+    notes.extend(set.extras.iter().cloned());
+    json!({
+        "path": rel,
+        "romset": {"system": set.name, "title": title, "identity": set.identity, "ssio_prom": set.ssio_prom, "extras": set.extras},
+        "known": known_json(reg, &set.identity),
+        "notes": notes,
+    })
+}
+
 fn scan(paths: &Paths, reg: &Registry, from: &str) -> Result<Outcome> {
     if !paths.roms.is_dir() {
         return Ok(Outcome::ok(
@@ -175,15 +195,25 @@ fn scan(paths: &Paths, reg: &Registry, from: &str) -> Result<Outcome> {
     let mut files = Vec::new();
     walk(&paths.roms, &mut files)?;
     files.sort();
-    let (mut roms, mut problems, mut skipped) = (Vec::new(), Vec::new(), 0u64);
+    let (mut roms, mut romsets, mut problems, mut skipped) =
+        (Vec::new(), Vec::new(), Vec::new(), 0u64);
     for path in &files {
         let rel = path.strip_prefix(&paths.roms).unwrap_or(path).to_path_buf();
         let mut head = [0u8; 4];
-        let is_nes = fs::File::open(path)
+        let read = fs::File::open(path)
             .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head))
-            .is_ok()
-            && looks_like_nes(&head);
-        if !is_nes {
+            .is_ok();
+        if read && gp_arcade::romset::looks_like_zip(&head) {
+            let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+            match gp_arcade::Romset::from_zip(&bytes) {
+                Ok(set) => romsets.push(romset_json(&set, &rel, reg)),
+                Err(e) => problems.push(
+                    json!({ "path": rel, "error": e.to_string(), "line": format!("a zip that is no romset gp knows: {e}") }),
+                ),
+            }
+            continue;
+        }
+        if !(read && looks_like_nes(&head)) {
             skipped += 1;
             continue;
         }
@@ -204,8 +234,9 @@ fn scan(paths: &Paths, reg: &Registry, from: &str) -> Result<Outcome> {
         }
     }
     let mut text = format!(
-        "{} NES images in {} ({} other files skipped), named from {from}",
+        "{} NES images and {} arcade romsets in {} ({} other files skipped), named from {from}",
         roms.len(),
+        romsets.len(),
         paths.roms.display(),
         skipped
     );
@@ -225,6 +256,18 @@ fn scan(paths: &Paths, reg: &Registry, from: &str) -> Result<Outcome> {
             text.push_str(&format!("\n      {}", line.as_str().unwrap_or_default()));
         }
     }
+    for r in &romsets {
+        text.push_str(&format!(
+            "\n  {}  arcade {:<9} {:<22} {}",
+            &r["romset"]["identity"].as_str().unwrap_or_default()[..16],
+            r["romset"]["system"].as_str().unwrap_or_default(),
+            r["known"]["id"].as_str().unwrap_or("unknown"),
+            r["path"].as_str().unwrap_or_default(),
+        ));
+        for line in r["notes"].as_array().into_iter().flatten() {
+            text.push_str(&format!("\n      {}", line.as_str().unwrap_or_default()));
+        }
+    }
     for p in &problems {
         text.push_str(&format!(
             "\n  problem: {}: {}",
@@ -233,7 +276,7 @@ fn scan(paths: &Paths, reg: &Registry, from: &str) -> Result<Outcome> {
         ));
     }
     Ok(Outcome::ok(
-        json!({ "roms_dir": paths.roms, "exists": true, "roms": roms, "problems": problems, "skipped": skipped, "named_from": from }),
+        json!({ "roms_dir": paths.roms, "exists": true, "roms": roms, "romsets": romsets, "problems": problems, "skipped": skipped, "named_from": from }),
         text,
     ))
 }
@@ -247,18 +290,30 @@ fn add(
     from: &str,
 ) -> Result<Outcome> {
     let dir = paths.roms.join("nes");
-    if let Some(repo) = gp_evidence::paths::enclosing_git_work_tree(&dir) {
+    if let Some(repo) = gp_evidence::paths::enclosing_git_work_tree(&paths.roms) {
         bail!(
             "$GP_ROM_DIR ({}) is inside the git work tree at {}; ROMs never go in a repo",
             paths.roms.display(),
             repo.display()
         );
     }
-    fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let (mut results, mut text) = (Vec::new(), vec![format!("named from {from}")]);
     let mut unknown_cleaned = 0u64;
     for file in files {
         let original = fs::read(file).with_context(|| format!("reading {}", file.display()))?;
+        if gp_arcade::romset::looks_like_zip(&original) {
+            if clean {
+                bail!(
+                    "{} is an arcade romset: --clean is for NES images only",
+                    file.display()
+                );
+            }
+            let (r, line) = add_romset(file, &original, move_files, paths, reg)?;
+            text.extend(line);
+            results.push(r);
+            continue;
+        }
+        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let img = identify_nes(&original).map_err(|e| {
             anyhow::anyhow!(
                 "{} is not a usable NES image: {}",
@@ -349,6 +404,83 @@ fn add(
         text: text.join("\n"),
         exit: u8::from(unknown_cleaned > 0),
     })
+}
+
+/// Copies (or moves) a file into `dir` under its own name: nothing is
+/// written over, and the copy must read back the same. Returns the
+/// destination and what was done.
+fn put_in(
+    dir: &Path,
+    file: &Path,
+    bytes: &[u8],
+    move_files: bool,
+) -> Result<(PathBuf, &'static str)> {
+    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let name = file
+        .file_name()
+        .with_context(|| format!("{} has no file name", file.display()))?;
+    let dest = dir.join(name);
+    let action = if dest.exists() {
+        if fs::read(&dest)? != bytes {
+            bail!(
+                "{} already exists with other contents; rename one of them",
+                dest.display()
+            );
+        }
+        "already there"
+    } else {
+        let tmp = dir.join(format!(".{}.partial", name.to_string_lossy()));
+        fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
+        if fs::read(&tmp)? != bytes {
+            let _ = fs::remove_file(&tmp);
+            bail!("the copy of {} didn't read back the same", file.display());
+        }
+        fs::rename(&tmp, &dest).with_context(|| format!("writing {}", dest.display()))?;
+        if move_files { "moved" } else { "copied" }
+    };
+    if move_files && gp_evidence::paths::real_path(file) != gp_evidence::paths::real_path(&dest) {
+        fs::remove_file(file).with_context(|| format!("removing {}", file.display()))?;
+    }
+    Ok((dest, action))
+}
+
+/// `add` for an arcade romset: checked against the sets gp-arcade knows,
+/// then copied whole into $GP_ROM_DIR/arcade/.
+fn add_romset(
+    file: &Path,
+    bytes: &[u8],
+    move_files: bool,
+    paths: &Paths,
+    reg: &Registry,
+) -> Result<(Value, Vec<String>)> {
+    let set = gp_arcade::Romset::from_zip(bytes)
+        .map_err(|e| anyhow::anyhow!("{} is not a romset gp knows: {e}", file.display()))?;
+    let (dest, action) = put_in(&paths.roms.join("arcade"), file, bytes, move_files)?;
+    let known = reg.by_sha256(&set.identity);
+    let rel = dest
+        .strip_prefix(&paths.roms)
+        .unwrap_or(&dest)
+        .to_path_buf();
+    let mut r = romset_json(&set, &rel, reg);
+    let mut lines = vec![format!(
+        "{action:<14} {}  {}  {}",
+        &set.identity[..16],
+        known.map_or("unknown: `gp game new` starts a game for it", |k| k
+            .id
+            .as_str()),
+        dest.display()
+    )];
+    lines.extend(
+        r["notes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|l| format!("      {}", l.as_str().unwrap_or_default())),
+    );
+    r["file"] = json!(file);
+    r["dest"] = json!(dest);
+    r["action"] = json!(action);
+    Ok((r, lines))
 }
 
 #[cfg(test)]
@@ -443,6 +575,32 @@ mod tests {
         .err()
         .unwrap();
         assert!(err.to_string().contains("never go in a repo"), "{err}");
+    }
+
+    /// A zip that is no set gp-arcade knows (an empty one, made here) is a
+    /// problem for scan and refused by add; NES files beside it still read.
+    #[test]
+    fn a_zip_that_is_no_known_romset_is_a_problem_and_is_not_added() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let p = paths(&home);
+        fs::create_dir_all(p.roms.join("arcade")).unwrap();
+        let mut empty_zip = b"PK\x05\x06".to_vec();
+        empty_zip.resize(22, 0);
+        fs::write(p.roms.join("arcade/nothing.zip"), &empty_zip).unwrap();
+        fs::create_dir_all(p.roms.join("nes")).unwrap();
+        fs::write(p.roms.join("nes/a.nes"), image(1)).unwrap();
+        let out = scan(&p, &Registry::default(), "nowhere").unwrap();
+        assert_eq!(out.json["roms"].as_array().unwrap().len(), 1);
+        assert_eq!(out.json["romsets"].as_array().unwrap().len(), 0);
+        let problem = out.json["problems"][0]["line"].as_str().unwrap();
+        assert!(problem.contains("no set gp-arcade knows"), "{problem}");
+        let src = d.path().join("other.zip");
+        fs::write(&src, &empty_zip).unwrap();
+        let e = add(&[src], false, false, &p, &Registry::default(), "nowhere")
+            .err()
+            .unwrap();
+        assert!(e.to_string().contains("not a romset gp knows"), "{e}");
     }
 
     #[test]

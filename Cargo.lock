@@ -918,8 +918,18 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "flate2",
+ "gp-runtime",
  "png",
+ "sha2 0.11.1",
  "thiserror",
+]
+
+[[package]]
+name = "gp-arcade-play"
+version = "0.1.0"
+dependencies = [
+ "gp-arcade",
+ "gp-evidence",
 ]
 
 [[package]]
@@ -942,6 +952,7 @@ dependencies = [
  "base64",
  "blake3",
  "clap",
+ "gp-arcade",
  "gp-assets",
  "gp-contract",
  "gp-evidence",

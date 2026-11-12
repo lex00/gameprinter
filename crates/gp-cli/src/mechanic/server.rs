@@ -2,6 +2,10 @@
 //! page (`mechanic/` in the repo), the player module (`gp_play.wasm`, built
 //! by scripts/web/build-play.sh into target/play-web, or `$GP_PLAY_WASM`)
 //! and the ROM the game's roms.toml names, found by hash in $GP_ROM_DIR.
+//! For an arcade game (its package's platform), the player is
+//! gp_arcade_play.wasm (`scripts/web/build-play.sh --arcade`, or
+//! `$GP_ARCADE_PLAY_WASM`), served under the same name, and the ROM is the
+//! romset's zip; its clips' logs are arcade input logs.
 //! Every write comes from the page itself: a POST from another origin is
 //! refused.
 //!
@@ -31,6 +35,7 @@ use super::http::{self, Request, Response};
 use super::paths as clip_paths;
 use super::session::{Session, current, queue_file, read_queue, set_current, write_queue};
 use crate::Outcome;
+use crate::original::Platform;
 
 /// What `gp mechanic start` was asked.
 pub(crate) struct Start<'a> {
@@ -64,11 +69,16 @@ fn repo_root() -> Result<PathBuf> {
 }
 
 /// The player module: `$GP_PLAY_WASM`, else the repo's
-/// target/play-web/gp_play.wasm.
-fn wasm_path(repo: &Path) -> PathBuf {
-    std::env::var_os("GP_PLAY_WASM")
+/// target/play-web/gp_play.wasm; for an arcade game,
+/// `$GP_ARCADE_PLAY_WASM`, else target/play-web/gp_arcade_play.wasm.
+fn wasm_path(repo: &Path, platform: Platform) -> PathBuf {
+    let (var, file) = match platform {
+        Platform::Nes => ("GP_PLAY_WASM", "gp_play.wasm"),
+        Platform::Arcade => ("GP_ARCADE_PLAY_WASM", "gp_arcade_play.wasm"),
+    };
+    std::env::var_os(var)
         .filter(|v| !v.is_empty())
-        .map_or_else(|| repo.join("target/play-web/gp_play.wasm"), PathBuf::from)
+        .map_or_else(|| repo.join("target/play-web").join(file), PathBuf::from)
 }
 
 /// The game's ROM: the one its roms.toml names, found by hash in
@@ -145,7 +155,10 @@ pub(crate) fn start(paths: &Paths, a: &Start) -> Result<Outcome> {
     let mechanic = mechanic_to_open(paths, a.game, a.mechanic)?;
     let listener = listen(a.port)?;
     let port = listener.local_addr()?.port();
+    let platform = rom.platform;
     let mut server = Server::new(paths.clone(), a.game, &repo, rom.bytes, &rom.sha256, port);
+    server.platform = platform;
+    server.wasm = wasm_path(&repo, platform);
     if let Some(games) = crate::roms_cmd::games_dir(a.games) {
         server.rebuild = Some(super::review::Rebuild::new(
             paths,
@@ -211,6 +224,8 @@ pub(crate) struct Server {
     page: PathBuf,
     wasm: PathBuf,
     rom: Arc<Vec<u8>>,
+    /// The machine the ROM is for, which picks the player module.
+    platform: Platform,
     port: u16,
     /// What the review of clips on the model needs; none without a games
     /// checkout.
@@ -226,8 +241,9 @@ impl Server {
             game: game.to_owned(),
             rom_sha: rom_sha.to_owned(),
             page: repo.join("mechanic"),
-            wasm: wasm_path(repo),
+            wasm: wasm_path(repo, Platform::Nes),
             rom: Arc::new(rom),
+            platform: Platform::Nes,
             port,
             rebuild: None,
         }
@@ -344,7 +360,12 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
                 return Ok(Response::error(
                     404,
                     &format!(
-                        "the player isn't built: run scripts/web/build-play.sh (no {})",
+                        "the player isn't built: run scripts/web/build-play.sh{} (no {})",
+                        if s.platform == Platform::Arcade {
+                            " --arcade"
+                        } else {
+                            ""
+                        },
                         s.wasm.display()
                     ),
                 ));
@@ -379,6 +400,12 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             let session = s.target(req.param("mechanic"))?;
             if !session.dir.join(format!("clips/{n:03}.toml")).is_file() {
                 return Ok(Response::error(404, "no such clip"));
+            }
+            if s.platform == Platform::Arcade {
+                return Ok(Response::error(
+                    409,
+                    "ON THE MODEL plays a clip on the game's model, and an arcade game has none yet: it comes once a model of the game is written",
+                ));
             }
             let Some(r) = &s.rebuild else {
                 return Ok(Response::error(
@@ -437,7 +464,7 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             if let Some(w) = v["warm"].as_u64() {
                 let (home, rom, sha) = (home.clone(), s.rom.clone(), path.clone());
                 std::thread::spawn(move || {
-                    let _ = clip_paths::nes_at(&home, &rom, &sha, w as usize);
+                    let _ = clip_paths::original_at(&home, &rom, &sha, w as usize);
                 });
             }
             Ok(Response::json(&json!({"path": path, "frames": frames})))
@@ -550,7 +577,7 @@ fn post_clip(s: &Server, v: &Value) -> Result<Response> {
     // start, slow on a long play with a cold cache: the clip is saved and
     // answered first, and the hash is added to its .toml when the replay
     // ends.
-    let (meta, log) = clip_paths::clip_fields(path, start, &inputs.frames);
+    let (meta, log) = clip_paths::clip_fields(path, start, &inputs);
     let (n, again) = session.add_player_clip(meta, &log, note)?;
     if !again {
         let (session, home, rom, path) = (
@@ -560,8 +587,8 @@ fn post_clip(s: &Server, v: &Value) -> Result<Response> {
             path.to_owned(),
         );
         std::thread::spawn(move || {
-            let hash = clip_paths::nes_at(&home, &rom, &path, start)
-                .and_then(|nes| clip_paths::state_of(&nes));
+            let hash =
+                clip_paths::original_at(&home, &rom, &path, start).and_then(|o| o.state_hex());
             match hash {
                 Ok(h) => {
                     if let Err(e) = session.set_clip_field(n, "state", h.into()) {
@@ -697,6 +724,32 @@ mod tests {
         assert_eq!((s, kind.as_str()), (200, "application/wasm"));
         assert_eq!(get(&srv, "/refine.js").0, 404);
         assert_eq!(get(&srv, "/api/live").1, r#"{"lines":[]}"#);
+    }
+
+    /// An arcade game's page: the player's absence names the arcade build,
+    /// and ON THE MODEL says in words why it can't play a clip yet.
+    #[test]
+    fn an_arcade_page_names_its_player_and_has_no_model_yet() {
+        let d = tempfile::tempdir().unwrap();
+        let mut srv = server(d.path());
+        srv.platform = Platform::Arcade;
+        srv.wasm = d.path().join("no-such/gp_arcade_play.wasm");
+        let (s, body) = get(&srv, "/gp_play.wasm");
+        assert_eq!(s, 404);
+        assert!(body.contains("build-play.sh --arcade"), "{body}");
+        let play = log(&["........", "........"]);
+        let (_, v) = post(&srv, "/api/paths", json!({"log": play}));
+        let path = v["path"].as_str().unwrap().to_owned();
+        let inputs = log(&["........"]);
+        post(
+            &srv,
+            "/api/clips",
+            json!({"path": path, "start": 1, "inputs": inputs, "mechanic": "walk"}),
+        );
+        let (s, body) = get(&srv, "/api/clips/1/review.json");
+        assert_eq!(s, 409, "{body}");
+        assert!(body.contains("an arcade game has none yet"), "{body}");
+        assert!(wasm_path(Path::new("/r"), Platform::Arcade).ends_with("gp_arcade_play.wasm"));
     }
 
     /// The core loop over HTTP: the play kept as a path, a clip on it handed

@@ -11,6 +11,8 @@ use serde_json::{Value as Json, json};
 
 use gp_contract::{CONTRACT_FILE, Contract, Level, Tolerance};
 use gp_evidence::manifest::PowerOn;
+
+use crate::original::OriginalRuntime;
 use gp_interp::lockstep::{self, Lockstep, Mode, Options};
 use gp_interp::mapping::{Mapping, show};
 use gp_model::path::Step;
@@ -102,10 +104,8 @@ pub(crate) fn run_resumed(
 ) -> Result<(Lockstep, Json, Vec<String>)> {
     let model = source.parse_model()?;
     let mut original = match resume {
-        Some((saved, _)) => gp_nes::protocol::NesRuntime::new(saved.nes(rom, PowerOn::default())?)
-            .map_err(anyhow::Error::msg)?,
-        None => gp_nes::protocol::NesRuntime::load(rom, PowerOn::default())
-            .map_err(anyhow::Error::msg)?,
+        Some((saved, _)) => OriginalRuntime::from_saved(rom, saved)?,
+        None => OriginalRuntime::of_rom(rom)?,
     };
     // The hooks' APU writes, for the sound measure.
     let mut interp = source.open()?.with_apu_events()?;
@@ -226,6 +226,10 @@ pub(crate) fn record_draws(
     if mapping.draws.is_empty() {
         bail!("the state mapping names no `[[draws]]` sites");
     }
+    crate::original::nes_only(
+        crate::original::Platform::of_file(rom),
+        "a random draw (a mapping's `[[draws]]`)",
+    )?;
     let nes = gp_nes::Nes::power_on(rom, PowerOn::default()).map_err(anyhow::Error::msg)?;
     record_draws_on(nes, mapping, inputs, from)
 }
@@ -555,4 +559,94 @@ fn report(
 
 fn count(notes: &[LoadNote], how: gp_runtime::LoadHow) -> usize {
     notes.iter().filter(|n| n.how == how).count()
+}
+
+#[cfg(test)]
+mod arcade_tests {
+    use std::fs;
+
+    /// The seam end to end, with the owner's rbtapper romset: the skeleton
+    /// `gp game new` writes for it (an arcade mapping with no fields yet)
+    /// in lockstep with Tapper on gp-arcade, a coin and a start on the way.
+    /// The model is a placeholder, so this shows only that the lockstep
+    /// runs on an arcade original and lines its frames up; scoring waits
+    /// for a model. Skipped without the romset.
+    #[test]
+    fn a_lockstep_runs_on_an_arcade_original() {
+        let Some(zip) = gp_arcade::romset::local_romset("rbtapper") else {
+            eprintln!("skipped: no rbtapper romset");
+            return;
+        };
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let paths = gp_evidence::Paths {
+            home: home.clone(),
+            store: home.join("store"),
+            roms: home.join("roms"),
+        };
+        fs::create_dir_all(paths.roms.join("arcade")).unwrap();
+        let rom_path = paths.roms.join("arcade/rbtapper.zip");
+        fs::copy(&zip, &rom_path).unwrap();
+        let games = d.path().join("games");
+        fs::create_dir_all(&games).unwrap();
+        crate::game_new::run(
+            &crate::game_new::New {
+                game: "tapper",
+                rom: &rom_path,
+                genre: "other",
+                title: None,
+                namespace: Some("someone"),
+                games: Some(&games),
+                date: "2026-11-11",
+            },
+            &paths,
+        )
+        .unwrap();
+        let dir = games.join("tapper");
+        // No arcade assets are lifted yet: an empty lift, as a map with
+        // no assets would give.
+        let assets = d.path().join("assets");
+        fs::create_dir_all(&assets).unwrap();
+        fs::write(
+            assets.join(gp_assets::MAP_FILE),
+            format!(
+                "schema = 1\nsource = \"tapper\"\nsha256 = \"{}\"\nasset = []\n",
+                gp_arcade::romset::set("rbtapper").unwrap().identity()
+            ),
+        )
+        .unwrap();
+        let (source, _) =
+            crate::hosted::Source::open_dir(&dir, Some(&assets), &paths, None).unwrap();
+        let mapping =
+            super::Mapping::parse(&fs::read_to_string(dir.join("mapping.toml")).unwrap()).unwrap();
+        let rom = crate::clip_score::rom_of(&paths, &dir, None).unwrap();
+        let inputs: Vec<gp_runtime::InputFrame> = (0..400u32)
+            .map(|i| gp_runtime::InputFrame {
+                buttons: match i {
+                    100..106 => 1,
+                    160..166 => 2,
+                    _ => 0,
+                },
+                ..Default::default()
+            })
+            .collect();
+        let (ls, _, lines) = super::run_resumed(
+            &source,
+            &dir,
+            &mapping,
+            &rom,
+            &inputs,
+            super::Mode::Free,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        eprintln!("{}", lines.join("\n"));
+        assert!(ls.original_frames > 0, "{lines:?}");
+        assert!(!ls.frames.is_empty(), "{lines:?}");
+    }
 }

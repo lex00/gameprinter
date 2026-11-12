@@ -12,13 +12,50 @@
 
 import { NesPlayer } from "/nesplayer.js";
 
-const NES_FPS = 60.0988;
-// Keys for A, B, Select, Start, Up, Down, Left, Right (the input log's bits).
-const KEYS = [["KeyX", "Space"], ["KeyZ", "ShiftLeft"], ["ShiftRight", "Tab"], ["Enter"], ["ArrowUp", "KeyW"], ["ArrowDown", "KeyS"], ["ArrowLeft", "KeyA"], ["ArrowRight", "KeyD"]];
-// Controller 2 from the keyboard, as the preview and the Bevy build map it:
-// M and N for A and B, H Select, Y Start, I J K L the d-pad. A second
-// gamepad is controller 2 too.
-const KEYS2 = [["KeyM"], ["KeyN"], ["KeyH"], ["KeyY"], ["KeyI"], ["KeyK"], ["KeyJ"], ["KeyL"]];
+// What the machine is: the screen, the frame rate and the buttons, taken
+// from the player module (gp_play_info) when it loads. The NES's until then.
+// `keys` and `keys2` are each button's keys in the order of the player's
+// bits; `bit` names the game bits the page's own commands read as presses.
+const LAYOUTS = {
+  nes: {
+    fps: 60.0988,
+    // A, B, Select, Start, Up, Down, Left, Right (the input log's bits).
+    keys: [["KeyX", "Space"], ["KeyZ", "ShiftLeft"], ["ShiftRight", "Tab"], ["Enter"], ["ArrowUp", "KeyW"], ["ArrowDown", "KeyS"], ["ArrowLeft", "KeyA"], ["ArrowRight", "KeyD"]],
+    // Controller 2 from the keyboard, as the preview and the Bevy build map
+    // it: M and N for A and B, H Select, Y Start, I J K L the d-pad. A second
+    // gamepad is controller 2 too.
+    keys2: [["KeyM"], ["KeyN"], ["KeyH"], ["KeyY"], ["KeyI"], ["KeyK"], ["KeyJ"], ["KeyL"]],
+    bit: { a: 1, b: 2, select: 4, start: 8, up: 16, down: 32, left: 64, right: 128 },
+    footer: "Arrows move, X is A, Z is B, Enter is Start. F5 or the left trigger saves, F8 or the right trigger loads. R or the right bumper records. U turns the sound off and on. Player 2: I J K L move, M is A, N is B, H is Select, Y is Start, or a second controller.",
+  },
+  // An arcade cabinet, as MAME keys it: 5 drops a coin, 1 is the one-player
+  // start. Coin, start, right, left, down, up, button 1 (Tapper's tap).
+  arcade: {
+    fps: 30,
+    keys: [["Digit5"], ["Digit1"], ["ArrowRight", "KeyD"], ["ArrowLeft", "KeyA"], ["ArrowDown", "KeyS"], ["ArrowUp", "KeyW"], ["KeyX", "Space"]],
+    keys2: [],
+    bit: { a: 64, b: 0, select: 1, start: 2, up: 32, down: 16, left: 8, right: 4 },
+    footer: "5 drops a coin and 1 starts, as in MAME. Arrows move, X or Space taps. On a controller: Select is the coin, Start starts, A taps. F5 or the left trigger saves, F8 or the right trigger loads. R or the right bumper records.",
+  },
+};
+let LAYOUT = LAYOUTS.nes;
+let FPS = LAYOUT.fps;
+let KEYS = LAYOUT.keys;
+let KEYS2 = LAYOUT.keys2;
+let W = 256, H = 240;
+
+/** Takes the machine's numbers from the player's `gp_play_info`. */
+function useMachine(info) {
+  LAYOUT = LAYOUTS[info.platform] ?? LAYOUTS.nes;
+  FPS = info.fps ? info.fps[0] / info.fps[1] : LAYOUT.fps;
+  KEYS = LAYOUT.keys;
+  KEYS2 = LAYOUT.keys2;
+  W = info.width ?? 256;
+  H = info.height ?? 240;
+  for (const c of [canvas, $("game2"), ...off]) { c.width = W; c.height = H; c.style.aspectRatio = `${W} / ${H}`; }
+  $("keys").textContent = LAYOUT.footer;
+  document.body.dataset.platform = info.platform ?? "nes";
+}
 // Gamepad buttons, standard mapping.
 const PAD = { a: 0, b: 1, lb: 4, rb: 5, lt: 6, rt: 7, select: 8, start: 9, up: 12, down: 13 };
 
@@ -94,17 +131,31 @@ function rawPad() {
   return pad | gamepadBits(firstPad());
 }
 
-/** Controller 2: its keys and the second gamepad. */
+/** Controller 2: its keys and the second gamepad. An arcade board has one
+ * player's controls here. */
 function rawPad2() {
+  if (!KEYS2.length) return 0;
   let pad = 0;
   KEYS2.forEach((ks, bit) => { if (ks.some((k) => down.has(k))) pad |= 1 << bit; });
   return pad | gamepadBits(secondPad());
 }
 
-/** A gamepad's NES buttons, its left stick as the d-pad. */
+/** A gamepad's buttons as the machine's bits, its left stick as the
+ * d-pad. On an arcade board: Select is the coin, Start the start and A or
+ * B the button. */
 function gamepadBits(g) {
   let pad = 0;
-  if (g) {
+  if (g && LAYOUT === LAYOUTS.arcade) {
+    const b = (i) => g.buttons[i]?.pressed === true;
+    const ax = g.axes[0] ?? 0, ay = g.axes[1] ?? 0;
+    if (b(8)) pad |= 1;
+    if (b(9)) pad |= 2;
+    if (b(15) || ax > 0.5) pad |= 4;
+    if (b(14) || ax < -0.5) pad |= 8;
+    if (b(13) || ay > 0.5) pad |= 16;
+    if (b(12) || ay < -0.5) pad |= 32;
+    if (b(0) || b(1) || b(2) || b(3)) pad |= 64;
+  } else if (g) {
     const b = (i) => g.buttons[i]?.pressed === true;
     const ax = g.axes[0] ?? 0, ay = g.axes[1] ?? 0;
     if (b(0) || b(1)) pad |= 1;
@@ -137,7 +188,7 @@ const off = [document.createElement("canvas"), document.createElement("canvas")]
 for (const c of off) { c.width = 256; c.height = 240; }
 
 function draw(slot) {
-  const img = new ImageData(player.rgba(slot), 256, 240);
+  const img = new ImageData(player.rgba(slot), W, H);
   ctx.putImageData(img, 0, 0);
 }
 
@@ -154,12 +205,12 @@ function drawPair(a, b) {
   $("screen").classList.toggle("side", view === "side");
   $("game2").hidden = view !== "side";
   if (view === "side") {
-    ctx.putImageData(new ImageData(a, 256, 240), 0, 0);
+    ctx.putImageData(new ImageData(a, W, H), 0, 0);
     const c2 = $("game2").getContext("2d");
-    c2.putImageData(new ImageData(b, 256, 240), 0, 0);
+    c2.putImageData(new ImageData(b, W, H), 0, 0);
   } else if (view === "top") {
-    off[0].getContext("2d").putImageData(new ImageData(a, 256, 240), 0, 0);
-    off[1].getContext("2d").putImageData(new ImageData(b, 256, 240), 0, 0);
+    off[0].getContext("2d").putImageData(new ImageData(a, W, H), 0, 0);
+    off[1].getContext("2d").putImageData(new ImageData(b, W, H), 0, 0);
     ctx.globalAlpha = 1;
     ctx.drawImage(off[0], 0, 0);
     ctx.globalAlpha = opacity;
@@ -170,7 +221,7 @@ function drawPair(a, b) {
     for (let i = 0; i < a.length; i += 4) {
       out[i] = Math.abs(a[i] - b[i]); out[i + 1] = Math.abs(a[i + 1] - b[i + 1]); out[i + 2] = Math.abs(a[i + 2] - b[i + 2]); out[i + 3] = 255;
     }
-    ctx.putImageData(new ImageData(out, 256, 240), 0, 0);
+    ctx.putImageData(new ImageData(out, W, H), 0, 0);
   }
 }
 
@@ -255,7 +306,7 @@ function setBar(at, of) {
   }
   $("bar").hidden = false;
   $("bar-fill").style.width = `${Math.max(0, Math.min(1, at / Math.max(1, of))) * 100}%`;
-  $("bar-time").textContent = of === undefined ? `${(at / NES_FPS).toFixed(1)} s` : `${(at / NES_FPS).toFixed(1)} of ${(of / NES_FPS).toFixed(1)} s`;
+  $("bar-time").textContent = of === undefined ? `${(at / FPS).toFixed(1)} s` : `${(at / FPS).toFixed(1)} of ${(of / FPS).toFixed(1)} s`;
 }
 
 /** The banner while it's the agent's turn, with what it says it is doing. */
@@ -322,7 +373,7 @@ function renderCtx() {
   left.innerHTML = "";
   if (!viewing) return;
   const c = viewing.ctx ?? {};
-  const secs = (f) => `${(f / NES_FPS).toFixed(1)} s`;
+  const secs = (f) => `${(f / FPS).toFixed(1)} s`;
   el(left, "h3", c.title ?? "This clip");
   const t = el(left, "table");
   const row = (k, v) => { const tr = el(t, "tr"); el(tr, "td", k); el(tr, "td", v, "v"); };
@@ -389,7 +440,7 @@ function stopRecording() {
 
 function reviewPanel() {
   const c = pendingClip;
-  showPanel(`Clip of ${(c.frames / NES_FPS).toFixed(1)} s. Hand off to ${clipFor}?`, [], true,
+  showPanel(`Clip of ${(c.frames / FPS).toFixed(1)} s. Hand off to ${clipFor}?`, [], true,
     "A or Enter: hand it off to that row. B or Esc: discard it. Right bumper or R: record it again. Click another quest-log row to hand it to that one.");
   showTo(clipFor);
 }
@@ -411,12 +462,30 @@ function markTarget() {
   for (const li of $("queue").children) li.classList.toggle("target", li.dataset.mechanic === on);
 }
 
+/** An input log's header, and its frames one line each: an NES log's frame
+ * lines as they are; an arcade log's runs (`gp-arcade-input 0`, a count of
+ * frames and the buttons held) spelt out a frame a line, `1 C......`, which
+ * reads back the same. */
+function splitLog(text) {
+  const lines = text.split("\n").filter((l) => l.length);
+  if (lines[0] === "gp-arcade-input 0") {
+    const head = lines.filter((l) => /^(gp-arcade-input|system|columns) /.test(l));
+    const frames = [];
+    for (const l of lines) {
+      const m = /^(\d+)\s+(\S+)$/.exec(l.split("#")[0].trim());
+      if (m) for (let k = 0; k < Number(m[1]); k++) frames.push(`1 ${m[2]}`);
+    }
+    return { head: head.join("\n") + "\n", frames };
+  }
+  return { head: lines.slice(0, 2).join("\n") + "\n", frames: lines.slice(2) };
+}
+
 // The play log the server already holds as a path, so a clip only sends
 // what was played since: the path is the play from power-on, the clip is
 // a frame on it and the buttons pressed from there.
 let sentPath = null; // {path, text}
 async function sendPath(text, warm) {
-  const head = text.split("\n", 2).join("\n") + "\n";
+  const { head } = splitLog(text);
   let p;
   if (sentPath && text === sentPath.text) {
     p = { path: sentPath.path };
@@ -432,9 +501,7 @@ async function sendPath(text, warm) {
 
 async function sendClip(c, note, mechanic, phase) {
   const text = c.log;
-  const lines = text.split("\n");
-  const head = lines.slice(0, 2).join("\n") + "\n";
-  const frames = lines.slice(2).filter((l) => l.length);
+  const { head, frames } = splitLog(text);
   const tail = sentPath && text.startsWith(sentPath.text) ? text.length - sentPath.text.length : text.length;
   if (warming) { phase("Sending your play"); await warming; warming = null; }
   phase(`Sending your play (${Math.max(1, Math.round(tail / 1024))} KB)`);
@@ -755,7 +822,7 @@ async function refresh() {
     for (const c of session.clips) {
       const li = document.createElement("li");
       li.value = c.n;
-      li.textContent = `${(c.frames / NES_FPS).toFixed(1)} s, by ${c.by}${c.note ? ": " + c.note : ""}`;
+      li.textContent = `${(c.frames / FPS).toFixed(1)} s, by ${c.by}${c.note ? ": " + c.note : ""}`;
       li.title = "Click to watch it";
       li.addEventListener("click", () => void openClipView(c.n));
       // The clip on the model, beside the original (review.js).
@@ -979,7 +1046,8 @@ function gamePresses() {
   const now = rawPad();
   const fresh = now & ~padPrev;
   padPrev = now;
-  return { a: !!(fresh & 1), b: !!(fresh & 2), select: !!(fresh & 4), start: !!(fresh & 8), up: !!(fresh & 16), down: !!(fresh & 32), left: !!(fresh & 64), right: !!(fresh & 128) };
+  const on = (name) => !!(fresh & LAYOUT.bit[name]);
+  return { a: on("a"), b: on("b"), select: on("select"), start: on("start"), up: on("up"), down: on("down"), left: on("left"), right: on("right") };
 }
 
 /** The controller the browser sees, in the footer, to tell why a button does nothing. */
@@ -1101,14 +1169,14 @@ function showSound() {
 
 let acc = 0, last = performance.now();
 function frame(now) {
-  acc = Math.min(acc + (now - last), (1000 / NES_FPS) * 4);
+  acc = Math.min(acc + (now - last), (1000 / FPS) * 4);
   last = now;
   try {
     gamepadCommands();
     const heard = heardSlot();
     if (heard !== audioSlot) { flushAudio(); audioSlot = heard; }
-    while (acc >= 1000 / NES_FPS) {
-      acc -= 1000 / NES_FPS;
+    while (acc >= 1000 / FPS) {
+      acc -= 1000 / FPS;
       if (mode === "live" || mode === "recording") {
         player.step(0, padNow());
         playFrame(0);
@@ -1148,7 +1216,7 @@ function frame(now) {
     renderCtx();
     idleCheck();
     showMode();
-    if (mode === "recording") $("rec-time").textContent = `${((player.frame(0) - recStart) / NES_FPS).toFixed(1)} s`;
+    if (mode === "recording") $("rec-time").textContent = `${((player.frame(0) - recStart) / FPS).toFixed(1)} s`;
   } catch (e) {
     setState(String(e));
   }
@@ -1292,6 +1360,7 @@ async function main() {
   if (!r.ok) throw new Error(`the ROM: ${await r.text()}`);
   rom = new Uint8Array(await r.arrayBuffer());
   player.power(0, rom);
+  useMachine(player.info(0));
   showSound();
   $("sound").addEventListener("click", (e) => { setSound(!soundOn); e.currentTarget.blur(); });
   $("tab-mech").addEventListener("click", () => setTab("mech"));

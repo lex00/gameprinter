@@ -108,6 +108,14 @@ pub fn check(dir: &Path, rom_path: &Path) -> Result<Outcome> {
                 .collect()
         })
         .unwrap_or_default();
+    if manifest
+        .get("source")
+        .and_then(|s| s.get("platform"))
+        .and_then(|v| v.as_str())
+        == Some("arcade")
+    {
+        return check_romset(dir, rom_path, &accepts);
+    }
     let map_pin = text("recipe", "asset_map_sha256")?;
     let lifted_pin = text("recipe", "lifted_sha256")?;
     let map_path = dir.join(text("recipe", "asset_map")?);
@@ -142,6 +150,26 @@ pub fn check(dir: &Path, rom_path: &Path) -> Result<Outcome> {
     Ok(Outcome {
         json: json!({ "ok": ok, "rom_sha256": layout.sha256, "asset_map_sha256": map_sha, "lifted_sha256": lifted, "files": files.len() }),
         text: out,
+        exit: u8::from(!ok),
+    })
+}
+
+/// [`check`] for an arcade template: the romset's identity is one the
+/// template accepts. There is no asset map or lift to pin yet: the tools
+/// lift no arcade assets.
+fn check_romset(dir: &Path, rom_path: &Path, accepts: &[String]) -> Result<Outcome> {
+    let rom = crate::roms::Rom::read(rom_path)?;
+    let ok = accepts.contains(&rom.sha256);
+    let system = rom.system.unwrap_or_default();
+    Ok(Outcome {
+        json: json!({ "ok": ok, "rom_sha256": rom.sha256, "system": system, "assets": null }),
+        text: format!(
+            "{}:\n  {:<10} {}{} ({system})\n  assets     none to check: the tools lift no arcade assets yet",
+            dir.display(),
+            "romset",
+            if ok { "" } else { "FAILED: " },
+            rom.sha256
+        ),
         exit: u8::from(!ok),
     })
 }

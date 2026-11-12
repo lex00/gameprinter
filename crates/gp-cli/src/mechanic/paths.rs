@@ -19,6 +19,7 @@ use gp_evidence::manifest::PowerOn;
 use sha2::{Digest as _, Sha256};
 
 use crate::clip::cache;
+use crate::original::{OriginalRuntime, Platform};
 
 /// Where paths are kept.
 fn paths_dir(home: &Path) -> PathBuf {
@@ -89,9 +90,44 @@ pub(crate) fn nes_at(home: &Path, rom: &[u8], sha: &str, n: usize) -> Result<gp_
     Ok(nes)
 }
 
-/// The canonical state's hash, as the clip's `state` field writes it.
-pub(crate) fn state_of(nes: &gp_nes::Nes) -> Result<String> {
-    Ok(nes.state_hash()?.to_hex())
+/// The original at frame `n` of a path on either platform: [`nes_at`] for
+/// an NES image; for a romset, the start cache's snapshot or the path's
+/// frames replayed on gp-arcade from power-on, and kept there.
+pub(crate) fn original_at(home: &Path, rom: &[u8], sha: &str, n: usize) -> Result<OriginalRuntime> {
+    use gp_runtime::Runtime as _;
+    if Platform::of_file(rom) == Platform::Nes {
+        let nes = nes_at(home, rom, sha, n)?;
+        return Ok(OriginalRuntime::Nes(
+            gp_nes::protocol::NesRuntime::new(nes).map_err(anyhow::Error::msg)?,
+        ));
+    }
+    let log = read_path(home, sha)?;
+    if n > log.frames.len() {
+        bail!("path {sha} has {} frames, not {n}", log.frames.len());
+    }
+    if log.arcade.is_none() {
+        bail!("path {sha} is an NES input log, and the game is an arcade romset");
+    }
+    let power_on = PowerOn::default();
+    let key = cache::start_key(rom, &power_on, &log.frames, n);
+    if cache::starts_on()
+        && let Some(saved) = cache::read_start(home, &key, rom, power_on)
+    {
+        return OriginalRuntime::from_saved(rom, &saved);
+    }
+    let mut o = OriginalRuntime::load(Platform::Arcade, rom)?;
+    let inputs: Vec<gp_runtime::InputFrame> = log.frames[..n]
+        .iter()
+        .map(|f| gp_runtime::InputFrame {
+            buttons: f.buttons_word(),
+            ..Default::default()
+        })
+        .collect();
+    o.step(&inputs).map_err(anyhow::Error::msg)?;
+    if cache::starts_on() {
+        cache::write_start_of(home, &key, &o)?;
+    }
+    Ok(o)
 }
 
 /// What a clip's `.toml` says about where it starts.
@@ -129,14 +165,15 @@ pub(crate) fn full_log(home: &Path, dir: &Path, n: u64) -> Result<(String, usize
 /// The `.toml` fields and the `.log` text of a clip that starts at frame
 /// `start` of a stored path, without the state's hash (added once a replay
 /// to the start has found it).
-pub(crate) fn clip_fields(sha: &str, start: usize, inputs: &[InputFrame]) -> (toml::Table, String) {
+pub(crate) fn clip_fields(sha: &str, start: usize, inputs: &InputLog) -> (toml::Table, String) {
     let mut t = toml::Table::new();
     t.insert("path".into(), sha.into());
     t.insert("start".into(), (start as i64).into());
-    t.insert("frames".into(), (inputs.len() as i64).into());
+    t.insert("frames".into(), (inputs.frames.len() as i64).into());
     let log = InputLog {
-        controllers: controllers_of(inputs),
-        frames: inputs.to_vec(),
+        controllers: controllers_of(&inputs.frames),
+        frames: inputs.frames.clone(),
+        arcade: inputs.arcade.clone(),
     };
     (t, log.to_text())
 }
@@ -205,16 +242,25 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let rom = counting_rom();
         let (sha, _) = put_path(d.path(), &log_of(30)).unwrap();
-        let first = state_of(&nes_at(d.path(), &rom, &sha, 20).unwrap()).unwrap();
-        let again = state_of(&nes_at(d.path(), &rom, &sha, 20).unwrap()).unwrap();
+        let first = original_at(d.path(), &rom, &sha, 20)
+            .unwrap()
+            .state_hex()
+            .unwrap();
+        let again = original_at(d.path(), &rom, &sha, 20)
+            .unwrap()
+            .state_hex()
+            .unwrap();
         assert_eq!(first, again);
         assert_ne!(
             first,
-            state_of(&nes_at(d.path(), &rom, &sha, 21).unwrap()).unwrap()
+            original_at(d.path(), &rom, &sha, 21)
+                .unwrap()
+                .state_hex()
+                .unwrap()
         );
-        assert!(nes_at(d.path(), &rom, &sha, 31).is_err());
+        assert!(original_at(d.path(), &rom, &sha, 31).is_err());
 
-        let own = InputLog::parse(&log_of(3)).unwrap().frames;
+        let own = InputLog::parse(&log_of(3)).unwrap();
         let (t, log) = clip_fields(&sha, 20, &own);
         let dir = d.path().join("s");
         fs::create_dir_all(dir.join("clips")).unwrap();
@@ -223,5 +269,43 @@ mod tests {
         let (full, start) = full_log(d.path(), &dir, 1).unwrap();
         assert_eq!(start, 20);
         assert_eq!(InputLog::parse(&full).unwrap().frames.len(), 23);
+    }
+
+    /// An arcade game's path and clip, in the arcade log's spelling, with
+    /// the owner's rbtapper romset: the start is the same cached or
+    /// replayed, and the clip's full log is its path then its frames.
+    /// Skipped without the romset.
+    #[test]
+    fn an_arcade_clip_starts_the_same_cached_or_replayed() {
+        let Some(zip) = gp_arcade::romset::local_romset("rbtapper") else {
+            eprintln!("skipped: no rbtapper romset");
+            return;
+        };
+        let rom = fs::read(zip).unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let play = "gp-arcade-input 0\nsystem rbtapper\ncolumns CSRLDUT\n40 .......\n6 C......\n20 .......\n";
+        let (sha, n) = put_path(d.path(), play).unwrap();
+        assert_eq!(n, 66);
+        let first = original_at(d.path(), &rom, &sha, 50).unwrap();
+        assert_eq!(gp_runtime::Runtime::frame(&first), 50);
+        let again = original_at(d.path(), &rom, &sha, 50).unwrap();
+        assert_eq!(first.state_hex().unwrap(), again.state_hex().unwrap());
+        let own =
+            InputLog::parse("gp-arcade-input 0\nsystem rbtapper\ncolumns CSRLDUT\n5 .S.....\n")
+                .unwrap();
+        let (t, log) = clip_fields(&sha, 50, &own);
+        assert!(log.starts_with("gp-arcade-input 0\n"), "{log}");
+        let dir = d.path().join("s");
+        fs::create_dir_all(dir.join("clips")).unwrap();
+        fs::write(dir.join("clips/001.toml"), toml::to_string(&t).unwrap()).unwrap();
+        fs::write(dir.join("clips/001.log"), log).unwrap();
+        let (full, start) = full_log(d.path(), &dir, 1).unwrap();
+        assert_eq!(start, 50);
+        let full = InputLog::parse(&full).unwrap();
+        assert_eq!(full.frames.len(), 55);
+        assert_eq!(full.frames[52].pads[0], 2);
+        // An NES log is no path for an arcade game.
+        let (nes_sha, _) = put_path(d.path(), &log_of(10)).unwrap();
+        assert!(original_at(d.path(), &rom, &nes_sha, 5).is_err());
     }
 }

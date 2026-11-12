@@ -7,12 +7,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::original::OriginalRuntime;
 use anyhow::{Context as _, bail};
 use gp_evidence::Paths;
 use gp_evidence::manifest::PowerOn;
 use gp_interp::mapping::Mapping;
 use gp_interp::scenario::{Outcome as Ran, Scenario, Source, StartAt};
-use gp_nes::protocol::NesRuntime;
 use gp_runtime::Runtime as _;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -487,11 +487,10 @@ fn scan_start(
     log: &gp_evidence::InputLog,
     inputs: &[gp_runtime::InputFrame],
     frame: u64,
-) -> anyhow::Result<(NesRuntime, usize, gp_interp::corpus::scan::ScanAt)> {
+) -> anyhow::Result<(OriginalRuntime, usize, gp_interp::corpus::scan::ScanAt)> {
     use crate::clip::cache;
     use gp_interp::corpus::scan::{ScanAt, at_frame_prefix};
-    let power_on =
-        || NesRuntime::load(rom, PowerOn::default()).map_err(|e| anyhow::anyhow!("the ROM: {e}"));
+    let power_on = || OriginalRuntime::of_rom(rom).map_err(|e| anyhow::anyhow!("the ROM: {e}"));
     let k = usize::try_from(frame)
         .unwrap_or(usize::MAX)
         .saturating_sub(cache::START_LEAD)
@@ -503,9 +502,7 @@ fn scan_start(
     let tag = format!("scan at_frame 1\nstart {:?}\n", mapping.start);
     let note =
         cache::read_note(home, &key, &tag).and_then(|b| serde_json::from_slice::<ScanAt>(&b).ok());
-    let runtime = |s: &cache::Saved| -> anyhow::Result<NesRuntime> {
-        NesRuntime::new(s.nes(rom, PowerOn::default())?).map_err(anyhow::Error::msg)
-    };
+    let runtime = |s: &cache::Saved| OriginalRuntime::from_saved(rom, s);
     if let Some(count) = note
         && let Some(saved) = cache::read_start(home, &key, rom, PowerOn::default())
     {
@@ -515,7 +512,7 @@ fn scan_start(
     let Ok(count) = at_frame_prefix(&mut o, mapping, inputs, k, frame) else {
         return Ok((power_on()?, 0, ScanAt::default()));
     };
-    let saved = cache::write_start(home, &key, o.nes())?;
+    let saved = cache::write_start_of(home, &key, &o)?;
     cache::write_note(home, &key, &tag, &serde_json::to_vec(&count)?);
     Ok((runtime(&saved)?, k, count))
 }

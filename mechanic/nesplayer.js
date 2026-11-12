@@ -1,6 +1,9 @@
 // The mechanic page's live player, as plain JavaScript (no build step):
 // gp_play.wasm (crates/gp-play, gp-nes for the browser) over its plain
-// exports, as preview.js drives gp_web.wasm. One module holds two
+// exports, as preview.js drives gp_web.wasm. An arcade game's server
+// serves gp_arcade_play.wasm (crates/gp-arcade-play) under the same name,
+// with the same exports: `info` says which machine it is, and the
+// picture's size follows it. One module holds two
 // consoles: slot 0 for playing, slot 1 for a replay. Nothing here reads a
 // clock; the panel decides when to step. A slot's whole state saves to
 // bytes and restores from them (the save points): the console, the input
@@ -29,6 +32,8 @@ export function stubImports(module) {
 export class NesPlayer {
   constructor(x) {
     this.x = x;
+    this.w = 256;
+    this.h = 240;
   }
 
   /** Loads the module from `url`. Anything but a wasm answer (the
@@ -68,6 +73,16 @@ export class NesPlayer {
     return this.out();
   }
 
+  /** The machine: platform, width, height, fps as [num, den] and buttons,
+   * from the module's gp_play_info; the NES's for a module without it. */
+  info(slot) {
+    let i = { platform: "nes", width: 256, height: 240, fps: [39375000, 655171] };
+    if (this.x.gp_play_info) i = JSON.parse(this.check(this.x.gp_play_info(slot)));
+    this.w = i.width;
+    this.h = i.height;
+    return i;
+  }
+
   /** Powers a ROM on in a slot. */
   power(slot, rom) {
     this.check(this.x.gp_play_load(slot, this.put(rom), rom.length));
@@ -100,10 +115,10 @@ export class NesPlayer {
   frame(slot) {
     return this.x.gp_play_frame(slot);
   }
-  /** The last frame as 256x240 RGBA, copied out. */
+  /** The last frame as RGBA at the machine's size (`info`), copied out. */
   rgba(slot) {
     const p = this.x.gp_play_rgba(slot);
-    return new Uint8ClampedArray(this.x.memory.buffer.slice(p, p + 256 * 240 * 4));
+    return new Uint8ClampedArray(this.x.memory.buffer.slice(p, p + this.w * this.h * 4));
   }
   /** The last frame's sound: mono samples at `audioRate()` a second,
    * copied out. Empty after a restore or a `runTo`, so a jump is silent. */

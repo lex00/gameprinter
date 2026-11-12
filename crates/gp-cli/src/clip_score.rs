@@ -261,6 +261,18 @@ pub(crate) fn rom_of(paths: &Paths, game: &Path, rom: Option<&Path>) -> Result<V
             paths.roms.display()
         )
     })?;
+    // The original's runtime is picked by the package's platform; a ROM of
+    // the other form is refused here, so the file's form, which the start
+    // cache and the factory read again, always agrees with it.
+    let platform = crate::package::Package::load(game)?.platform()?;
+    if r.platform != platform {
+        bail!(
+            "{} says the ROM is for the {} platform, and the file found is for the {}",
+            file.display(),
+            platform.name(),
+            r.platform.name()
+        );
+    }
     Ok(r.bytes)
 }
 
@@ -354,8 +366,7 @@ fn resume_of(
         return Ok(Some((saved, p)));
     }
     // Made: the lockstep's first k frames from power-on, once.
-    let mut original = gp_nes::protocol::NesRuntime::load(&ctx.rom, PowerOn::default())
-        .map_err(anyhow::Error::msg)?;
+    let mut original = crate::original::OriginalRuntime::of_rom(&ctx.rom)?;
     let mut interp = ctx.source.open()?;
     let spec = ctx.source.spec.clone();
     let Ok(p) = gp_interp::lockstep::prefix(
@@ -369,7 +380,7 @@ fn resume_of(
     ) else {
         return Ok(None);
     };
-    let saved = cache::write_start(home, &key, original.nes())?;
+    let saved = cache::write_start_of(home, &key, &original)?;
     cache::write_note(home, &key, &tag, &serde_json::to_vec(&p)?);
     Ok(Some((saved, p)))
 }

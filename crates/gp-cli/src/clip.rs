@@ -40,7 +40,11 @@ pub(crate) mod cache {
         h.update(b"gp-snapshot-cache 1\n");
         h.update(Sha256::digest(rom));
         h.update(serde_json::to_vec(power_on).unwrap_or_default());
-        h.update(serde_json::to_vec(&gp_nes::runtime_ref()).unwrap_or_default());
+        if gp_arcade::romset::looks_like_zip(rom) {
+            h.update(gp_arcade::RUNTIME_VERSION.as_bytes());
+        } else {
+            h.update(serde_json::to_vec(&gp_nes::runtime_ref()).unwrap_or_default());
+        }
         h.finalize().into()
     }
 
@@ -211,10 +215,14 @@ pub(crate) mod cache {
             frame,
             held,
         };
-        match saved
-            .nes(rom, power_on)
-            .and_then(|n| Ok(n.state_hash()?.to_hex()))
-        {
+        let hash = if gp_arcade::romset::looks_like_zip(rom) {
+            crate::original::OriginalRuntime::from_saved(rom, &saved).and_then(|o| o.state_hex())
+        } else {
+            saved
+                .nes(rom, power_on)
+                .and_then(|n| Ok(n.state_hash()?.to_hex()))
+        };
+        match hash {
             Ok(h) if h == want => {
                 if let Ok(h) = fs::File::options().append(true).open(&f) {
                     let _ = h.set_modified(std::time::SystemTime::now());
@@ -233,6 +241,26 @@ pub(crate) mod cache {
         b.extend_from_slice(&saved.frame.to_le_bytes());
         b.extend_from_slice(&saved.held);
         b.extend_from_slice(nes.state_hash()?.to_hex().as_bytes());
+        b.extend_from_slice(&saved.snap);
+        put_file(home, &f, &b);
+        Ok(saved)
+    }
+
+    /// [`write_start`] for the original on either platform.
+    pub(crate) fn write_start_of(
+        home: &Path,
+        key: &[u8; 32],
+        o: &crate::original::OriginalRuntime,
+    ) -> Result<Saved> {
+        if let Some(n) = o.nes() {
+            return write_start(home, key, n.nes());
+        }
+        let saved = o.saved()?;
+        let f = start_file(home, key, "start");
+        let mut b = START_MAGIC.to_vec();
+        b.extend_from_slice(&saved.frame.to_le_bytes());
+        b.extend_from_slice(&saved.held);
+        b.extend_from_slice(o.state_hex()?.as_bytes());
         b.extend_from_slice(&saved.snap);
         put_file(home, &f, &b);
         Ok(saved)

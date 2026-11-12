@@ -67,6 +67,15 @@ pub struct Player {
 /// Samples a second of [`Player::audio`].
 pub const AUDIO_RATE: u32 = gp_nes::AUDIO_RATE;
 
+/// The screen, the frame rate and the buttons, as `gp_play_info` gives
+/// them to the page: JSON. The arcade player (gp-arcade-play) gives its
+/// own, so the page takes its numbers from whichever module it loaded.
+pub fn info() -> String {
+    format!(
+        "{{\"platform\":\"nes\",\"width\":{WIDTH},\"height\":{HEIGHT},\"fps\":[39375000,655171],\"buttons\":[\"a\",\"b\",\"select\",\"start\",\"up\",\"down\",\"left\",\"right\"],\"sound\":true}}"
+    )
+}
+
 fn text<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }

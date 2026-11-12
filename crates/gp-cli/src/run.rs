@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use gp_evidence::baseline::Baseline;
-use gp_evidence::manifest::PowerOn;
 use gp_evidence::source::identify_nes;
 use gp_evidence::{InputLog, Store};
 use gp_interp::mapping::{MAPPING_FILE, Mapping};
@@ -139,8 +138,7 @@ pub fn compare(dir: &Path, rom_path: &Path, baseline: &Path, assets: &Path) -> R
     .map_err(|e| anyhow!("{}: {e}", mapping_file.display()))?;
     let input = Baseline::load(baseline)?.input()?;
     let rom = fs::read(rom_path).with_context(|| rom_path.display().to_string())?;
-    let mut original =
-        gp_nes::protocol::NesRuntime::load(&rom, PowerOn::default()).map_err(|e| anyhow!("{e}"))?;
+    let mut original = crate::original::OriginalRuntime::of_rom(&rom)?;
     let interp = Interp::from_bundle(&bundle).map_err(|e| anyhow!("{e}"))?;
     let (exts, _) = gp_exts::registry(&interp.spec().name);
     let mut interp = interp.with_exts(std::sync::Arc::new(exts));

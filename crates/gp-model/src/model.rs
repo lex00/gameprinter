@@ -304,6 +304,44 @@ pub struct Turn {
 pub enum Device {
     /// The standard NES controller.
     NesPad,
+    /// An arcade cabinet's controls for one player: the coin slot, the
+    /// one-player start button, a joystick and one button. The runtime
+    /// protocol's bits are coin, start1, right, left, down, up and
+    /// button1 from bit 0 (gp-arcade's order, MAME's oracle log's).
+    Arcade,
+}
+
+impl Device {
+    /// The buttons the device has, in the order of their runtime bits.
+    pub fn buttons(self) -> &'static [Button] {
+        match self {
+            Self::NesPad => &[
+                Button::A,
+                Button::B,
+                Button::Select,
+                Button::Start,
+                Button::Up,
+                Button::Down,
+                Button::Left,
+                Button::Right,
+            ],
+            Self::Arcade => &[
+                Button::Coin,
+                Button::Start1,
+                Button::Right,
+                Button::Left,
+                Button::Down,
+                Button::Up,
+                Button::Button1,
+            ],
+        }
+    }
+
+    /// The bit a button is in the runtime protocol's `buttons`, or none
+    /// when the device hasn't that button.
+    pub fn bit(self, b: Button) -> Option<u8> {
+        self.buttons().iter().position(|&x| x == b).map(|i| 1 << i)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -317,6 +355,12 @@ pub enum Button {
     Down,
     Left,
     Right,
+    /// An arcade coin slot.
+    Coin,
+    /// An arcade one-player start button.
+    Start1,
+    /// An arcade player's first button (Tapper's tap).
+    Button1,
 }
 
 /// A named place for an asset. The model refers to assets only by slot.
@@ -2996,3 +3040,21 @@ extended!(
     topdown::EXTENSION.level_fields,
     "level"
 );
+
+#[cfg(test)]
+mod device_tests {
+    use super::{Button, Device};
+
+    #[test]
+    fn each_device_gives_its_buttons_their_runtime_bits() {
+        assert_eq!(Device::NesPad.bit(Button::A), Some(1));
+        assert_eq!(Device::NesPad.bit(Button::Right), Some(0x80));
+        assert_eq!(Device::NesPad.bit(Button::Coin), None);
+        // gp-arcade's order: coin, start, right, left, down, up, tap.
+        assert_eq!(Device::Arcade.bit(Button::Coin), Some(1));
+        assert_eq!(Device::Arcade.bit(Button::Start1), Some(2));
+        assert_eq!(Device::Arcade.bit(Button::Up), Some(0x20));
+        assert_eq!(Device::Arcade.bit(Button::Button1), Some(0x40));
+        assert_eq!(Device::Arcade.bit(Button::A), None);
+    }
+}

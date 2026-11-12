@@ -68,6 +68,12 @@ pub struct Mapping {
     pub model: String,
     /// The original's source ID, as in its asset map and baselines.
     pub source: String,
+    /// Feature `platform`: the original's machine, `nes` (the default) or
+    /// `arcade`. An arcade mapping's `ignore` may name any of the main
+    /// CPU's addresses, and the NES's own parts (`nametable`, `oam`,
+    /// `oam_tile`, `read_at`, `[[draws]]`) are refused in it.
+    #[serde(default)]
+    pub platform: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
     /// How the model's frames line up with the original's.
@@ -227,7 +233,8 @@ fn one() -> u16 {
 pub const IGNORE_ROLES: [&str; 5] = ["input", "counter", "scratch", "sound", "pointer"];
 
 impl Ignore {
-    /// The RAM addresses it covers.
+    /// The RAM addresses it covers, on the NES (whose $0800 to $1FFF
+    /// mirror the 2 KB of RAM).
     pub fn addrs(&self) -> impl Iterator<Item = u16> + '_ {
         (0..self.len).map(move |i| self.ram.wrapping_add(i) & 0x7FF)
     }
@@ -794,6 +801,34 @@ impl Mapping {
         m
     }
 
+    /// An arcade mapping has none of the NES's own parts.
+    fn check_arcade(&self) -> Result<(), String> {
+        let refuse = |what: &str| {
+            Err(format!(
+                "{what} is the NES's: an arcade mapping (platform = \"arcade\") reads ram[...] and the runtime's own selectors"
+            ))
+        };
+        if self.read_at.is_some() {
+            return refuse("`read_at`");
+        }
+        if !self.draws.is_empty() {
+            return refuse("`[[draws]]`, a random draw site in the 6502's code,");
+        }
+        fn of_slots(s: &Slots) -> Vec<&Field> {
+            let mut v: Vec<&Field> = s.fields.iter().chain(&s.rest).collect();
+            v.extend(s.groups.iter().flat_map(of_slots));
+            v
+        }
+        let mut fields: Vec<&Field> = self.fields.iter().collect();
+        fields.extend(self.slots.iter().flat_map(of_slots));
+        for f in fields {
+            if !f.nametable.is_empty() || !f.oam.is_empty() || f.oam_tile.is_some() {
+                return refuse(&format!("{}: `nametable`, `oam` or `oam_tile`", f.path));
+            }
+        }
+        Ok(())
+    }
+
     pub fn parse(text: &str) -> Result<Self, String> {
         let listed = gp_model::features::listed_in(text, None);
         let unknown = gp_model::features::unknown(&listed, crate::mapping_features::FEATURES);
@@ -875,6 +910,14 @@ impl Mapping {
                 return Err(format!("draws: two sites at pc {:#06x}", d.pc));
             }
         }
+        let arcade = match m.platform.as_deref() {
+            None | Some("nes") => false,
+            Some("arcade") => true,
+            Some(p) => return Err(format!("platform {p:?}: nes or arcade")),
+        };
+        if arcade {
+            m.check_arcade()?;
+        }
         for i in &m.ignore {
             if !IGNORE_ROLES.contains(&i.role.as_str()) {
                 return Err(format!(
@@ -884,7 +927,14 @@ impl Mapping {
                     IGNORE_ROLES.join(", ")
                 ));
             }
-            if i.len == 0 || u32::from(i.ram) + u32::from(i.len) > 0x800 {
+            if arcade {
+                if i.len == 0 || u32::from(i.ram) + u32::from(i.len) > 0x1_0000 {
+                    return Err(format!(
+                        "ignore ${:04X}: {} bytes from there aren't all in the main CPU's addresses",
+                        i.ram, i.len
+                    ));
+                }
+            } else if i.len == 0 || u32::from(i.ram) + u32::from(i.len) > 0x800 {
                 return Err(format!(
                     "ignore ${:04X}: {} bytes from there aren't all in RAM ($0000-$07FF)",
                     i.ram, i.len

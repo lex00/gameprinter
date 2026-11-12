@@ -1,0 +1,26 @@
+[package]
+name = "gp-arcade-play"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# An arcade original played live in the mechanic page: gp-arcade in the
+# browser, a frame at a time, with the same plain exports as gp-play (its
+# abi.rs). Built for the browser with `cargo rustc --lib --crate-type cdylib
+# --target wasm32-unknown-unknown` (scripts/web/build-play.sh --arcade), so
+# the native workspace build compiles it as an ordinary rlib and its tests
+# run there.
+[dependencies]
+gp-arcade = { version = "0.1.0", path = "../gp-arcade" }
+gp-evidence = { version = "0.1.0", path = "../gp-evidence" }
+
+# The workspace forbids unsafe code. This crate denies it instead, so the
+# one module that exports functions to JavaScript (`abi`, wasm32 only) can
+# allow it, as gp-play does.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

@@ -1,5 +1,9 @@
 //! The person's ROMs, found by headerless hash. A folder named `sealed` is
 //! never opened.
+//!
+//! A ROM is an NES image (`.nes`, known by the SHA-256 of its data without
+//! the header) or an arcade romset (a MAME zip, known by its set's
+//! identity: gp_arcade::romset's module docs say how it is made).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -9,25 +13,92 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use gp_evidence::source::{identify_nes, looks_like_nes};
 
-/// A ROM: its file bytes and headerless SHA-256.
+/// The machine a ROM is for: what a package entry's and a roms.toml
+/// source's `platform` names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Platform {
+    Nes,
+    Arcade,
+}
+
+impl Platform {
+    /// The machine a ROM file is for, by its first bytes: a zip is an
+    /// arcade romset, anything else is taken as an NES image.
+    pub fn of_file(bytes: &[u8]) -> Self {
+        if gp_arcade::romset::looks_like_zip(bytes) {
+            Self::Arcade
+        } else {
+            Self::Nes
+        }
+    }
+
+    /// From its name in package.toml or roms.toml; none is the NES.
+    pub fn named(name: Option<&str>) -> Result<Self> {
+        match name {
+            None | Some("nes") => Ok(Self::Nes),
+            Some("arcade") => Ok(Self::Arcade),
+            Some(p) => bail!("no platform {p}: nes or arcade"),
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Nes => "nes",
+            Self::Arcade => "arcade",
+        }
+    }
+}
+
+/// A ROM: its file bytes, its identity and the machine it is for.
 pub struct Rom {
     pub bytes: Vec<u8>,
+    /// An NES image's headerless SHA-256, or a romset's identity.
     pub sha256: String,
+    pub platform: Platform,
+    /// A romset's MAME set name (rbtapper); none for the NES.
+    pub system: Option<String>,
+    /// A romset's chips, unzipped, one after another in the set's order:
+    /// what a copy of its bytes would hold. Empty for the NES.
+    chips: Vec<u8>,
 }
 
 impl Rom {
     pub fn read(path: &Path) -> Result<Self> {
         let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-        let img = identify_nes(&bytes).with_context(|| path.display().to_string())?;
-        Ok(Self {
-            bytes,
-            sha256: img.sha256,
-        })
+        Self::of_bytes(bytes).with_context(|| path.display().to_string())
     }
 
-    /// The data after the iNES header.
+    pub fn of_bytes(bytes: Vec<u8>) -> Result<Self> {
+        match Platform::of_file(&bytes) {
+            Platform::Arcade => {
+                let set = gp_arcade::Romset::from_zip(&bytes)?;
+                Ok(Self {
+                    sha256: set.identity.clone(),
+                    system: Some(set.name.to_owned()),
+                    chips: chips_of(&bytes, set.name)?,
+                    bytes,
+                    platform: Platform::Arcade,
+                })
+            }
+            Platform::Nes => {
+                let img = identify_nes(&bytes)?;
+                Ok(Self {
+                    bytes,
+                    sha256: img.sha256,
+                    platform: Platform::Nes,
+                    system: None,
+                    chips: Vec::new(),
+                })
+            }
+        }
+    }
+
+    /// The data after the iNES header; a romset's chips unzipped.
     pub fn data(&self) -> &[u8] {
-        self.bytes.get(16..).unwrap_or(&[])
+        match self.platform {
+            Platform::Nes => self.bytes.get(16..).unwrap_or(&[]),
+            Platform::Arcade => &self.chips,
+        }
     }
 
     /// A short name for reports: the id and the start of the hash, no path.
@@ -36,9 +107,29 @@ impl Rom {
     }
 }
 
-/// A ROM's headerless SHA-256.
+/// A romset zip's chips of the set `name`, in its list's order.
+fn chips_of(zip: &[u8], name: &str) -> Result<Vec<u8>> {
+    let set = gp_arcade::romset::set(name).with_context(|| format!("no arcade set {name}"))?;
+    let files: Vec<(String, Vec<u8>)> =
+        gp_arcade::romset::read_zip(zip).map_err(anyhow::Error::msg)?;
+    let hashed: Vec<(String, &[u8])> = files
+        .iter()
+        .map(|(_, d)| (hex::encode(gp_arcade::sha1::sha1(d)), d.as_slice()))
+        .collect();
+    let mut out = Vec::new();
+    for c in set.chips {
+        let (_, d) = hashed
+            .iter()
+            .find(|(h, _)| h == c.sha1)
+            .with_context(|| format!("{name}: no chip {}", c.name))?;
+        out.extend_from_slice(d);
+    }
+    Ok(out)
+}
+
+/// A ROM's headerless SHA-256, or a romset's identity.
 pub fn sha256_of(bytes: &[u8]) -> Result<String> {
-    Ok(identify_nes(bytes)?.sha256)
+    Ok(Rom::of_bytes(bytes.to_vec())?.sha256)
 }
 
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
@@ -56,12 +147,13 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-fn is_nes(path: &Path) -> bool {
+/// Whether a file starts as an NES image or a zip does.
+pub fn is_rom_file(path: &Path) -> bool {
     let mut head = [0u8; 4];
     fs::File::open(path)
         .and_then(|mut f| f.read_exact(&mut head))
         .is_ok()
-        && looks_like_nes(&head)
+        && (looks_like_nes(&head) || gp_arcade::romset::looks_like_zip(&head))
 }
 
 /// The ROMs with the wanted headerless hashes, by hash: each file given
@@ -86,7 +178,7 @@ pub fn find(wanted: &[String], given: &[PathBuf], dir: &Path) -> Result<BTreeMap
     walk(dir, &mut files)?;
     files.sort();
     for path in files {
-        if !is_nes(&path) {
+        if !is_rom_file(&path) {
             continue;
         }
         let Ok(rom) = Rom::read(&path) else { continue };

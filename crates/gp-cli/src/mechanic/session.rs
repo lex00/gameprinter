@@ -448,7 +448,8 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let s = Session::create(&paths(d.path()), "test-hop", "jump", None, "ab").unwrap();
         let sha = "0".repeat(64);
-        let a = vec![gp_evidence::input_log::InputFrame::default(); 3];
+        let mut a = gp_evidence::InputLog::new(1);
+        a.frames = vec![gp_evidence::input_log::InputFrame::default(); 3];
         let (t, log) = super::super::paths::clip_fields(&sha, 40, &a);
         assert_eq!(s.add_player_clip(t.clone(), &log, "").unwrap(), (1, false));
         assert_eq!(s.add_player_clip(t, &log, "").unwrap(), (1, true));

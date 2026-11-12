@@ -28,8 +28,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::rc::Rc;
 
+use crate::original::OriginalRuntime;
 use base64::Engine as _;
-use gp_nes::protocol::NesRuntime;
 use gp_present::raster::Frame;
 use gp_runtime::select::Selector;
 use gp_runtime::{
@@ -227,7 +227,7 @@ pub(crate) fn key_parts() -> Vec<u8> {
 /// asked into a tape, or a tape played back. Forks share the tape and the
 /// missed mark.
 pub(crate) struct Original {
-    live: Option<NesRuntime>,
+    live: Option<OriginalRuntime>,
     /// Whether a live run writes the tape.
     record: bool,
     /// A replay's frame.
@@ -242,18 +242,22 @@ pub(crate) struct Original {
 }
 
 impl Original {
-    /// The emulator at the clip's start, writing a new tape.
-    pub(crate) fn recording(nes: NesRuntime) -> Self {
+    /// The emulator at the clip's start, writing a new tape. A tape keeps
+    /// the NES's 2 KB of RAM and its pictures in NES colours, so an arcade
+    /// original runs live and writes none: it is marked missed from the
+    /// start, and nothing is saved.
+    pub(crate) fn recording(nes: OriginalRuntime) -> Self {
         let tape = Tape {
             start: nes.frame(),
             ..Tape::default()
         };
+        let arcade = nes.platform() == crate::original::Platform::Arcade;
         Self {
             live: Some(nes),
             record: true,
             frame: 0,
             tape: Rc::new(RefCell::new(tape)),
-            missed: Rc::new(Cell::new(false)),
+            missed: Rc::new(Cell::new(arcade)),
             at_nmi: false,
             ram_at: RefCell::new(None),
         }
@@ -300,7 +304,10 @@ impl Original {
     /// The original's picture as it stands: the screen measure's.
     pub(crate) fn picture(&self) -> Frame {
         use gp_nes::video::{HEIGHT, WIDTH};
-        if let Some(nes) = &self.live {
+        if let Some(live) = &self.live {
+            let Some(nes) = live.nes() else {
+                return crate::screen::Shows::shown(live);
+            };
             let f = crate::screen::original_frame(nes);
             if self.record {
                 let colors = nes.nes().frame_colors();
@@ -400,7 +407,9 @@ impl Runtime for Original {
     }
 
     fn frame(&self) -> u64 {
-        self.live.as_ref().map_or(self.frame, NesRuntime::frame)
+        self.live
+            .as_ref()
+            .map_or(self.frame, OriginalRuntime::frame)
     }
 
     fn snapshot(&self) -> Vec<u8> {
@@ -424,7 +433,7 @@ impl Runtime for Original {
 
     fn fork(&self) -> Self {
         Self {
-            live: self.live.as_ref().map(NesRuntime::fork),
+            live: self.live.as_ref().map(OriginalRuntime::fork),
             record: self.record,
             frame: self.frame,
             tape: Rc::clone(&self.tape),
@@ -468,7 +477,8 @@ impl Runtime for Original {
         let parsed = Selector::parse(selector);
         if let Some(nes) = &self.live {
             let r = nes.query(selector);
-            if self.record {
+            // An arcade original writes no tape (see `recording`).
+            if self.record && nes.nes().is_some() {
                 let f = nes.frame();
                 let ram = parsed
                     .as_ref()
@@ -605,8 +615,11 @@ mod tests {
     use super::*;
     use gp_evidence::manifest::PowerOn;
 
-    fn nes() -> NesRuntime {
-        NesRuntime::load(&gp_nes::testrom::build(), PowerOn::default()).unwrap()
+    fn nes() -> OriginalRuntime {
+        OriginalRuntime::Nes(
+            gp_nes::protocol::NesRuntime::load(&gp_nes::testrom::build(), PowerOn::default())
+                .unwrap(),
+        )
     }
 
     /// Steps 40 frames with a press now and then, reading all of RAM on
