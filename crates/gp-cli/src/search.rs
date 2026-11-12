@@ -44,6 +44,24 @@ fn source(
     Source::open_dir(&model_dir(model), assets, paths, module).map(|(s, _)| s)
 }
 
+/// A template named on the command line: a folder holding model.toml, else
+/// a name under templates/ (Moss Hop), else a game's package folder in the
+/// games checkout (donkey-kong), as game-printer took a name under its
+/// templates/.
+fn template_dir(t: &Path) -> PathBuf {
+    if t.exists() || t.components().count() != 1 {
+        return t.to_owned();
+    }
+    let tool = Path::new("templates").join(t);
+    if tool.is_dir() {
+        return tool;
+    }
+    match crate::roms_cmd::games_dir(None).map(|g| g.join(t)) {
+        Some(g) if g.is_dir() => g,
+        _ => t.to_owned(),
+    }
+}
+
 /// A variant's failure, as the search's `Err` carries it: the search gave a
 /// result for a level that can't be searched, so this is the caller's to fail
 /// on, as [`gp_interp::reach::envelope`]'s other errors aren't.
@@ -218,7 +236,9 @@ pub enum LevelCmd {
     /// This is a research spike, so the run is the first one found and a
     /// window is a lower bound.
     Difficulty {
-        /// The template: a directory holding model.toml.
+        /// The template: a directory holding model.toml, a name under
+        /// templates/ (mosshop) or a game's folder in the games checkout
+        /// (donkey-kong).
         #[arg(long)]
         template: PathBuf,
         /// The level, by its name in the model.
@@ -246,7 +266,9 @@ pub enum LevelCmd {
     /// the ladders they take and the frames from the throw to the end, and the
     /// jump window over each roller that meets the player on each girder.
     Measure {
-        /// The template: a directory holding model.toml.
+        /// The template: a directory holding model.toml, a name under
+        /// templates/ (mosshop) or a game's folder in the games checkout
+        /// (donkey-kong).
         #[arg(long)]
         template: PathBuf,
         /// The level, by its name in the model.
@@ -289,7 +311,12 @@ pub fn level_run(cmd: &LevelCmd, paths: &Paths) -> Result<Outcome> {
         module,
     } = cmd
     {
-        let src = source(template, assets.as_deref(), paths, module.as_deref())?;
+        let src = source(
+            &template_dir(template),
+            assets.as_deref(),
+            paths,
+            module.as_deref(),
+        )?;
         let m = src.parse_model()?;
         return measure(&m, &src, level, roller, (*runs, *frames, *clears));
     }
@@ -304,7 +331,12 @@ pub fn level_run(cmd: &LevelCmd, paths: &Paths) -> Result<Outcome> {
     else {
         unreachable!("the measure's above")
     };
-    let src = source(template, assets.as_deref(), paths, module.as_deref())?;
+    let src = source(
+        &template_dir(template),
+        assets.as_deref(),
+        paths,
+        module.as_deref(),
+    )?;
     let spec = &src.spec;
     let i = spec
         .levels

@@ -17,13 +17,16 @@
 //!
 //! Nothing is written over: a folder that exists is refused, and the quest
 //! log only gains the rows it lacks. No ROM byte is written; the lift's
-//! digest is a hash of what the ROM gives, made here.
+//! digest is a hash of what the ROM gives, made here. `--source` names the
+//! ROM's source ID (default: the game's id), and the genres are game-
+//! printer's: platformer, topdown, gridhop, events, and other.
 //!
 //! On an NES ROM the state mapping gets the draw sites `gp interp draws
 //! --find` finds on an idle run from power-on, with `score_draws`, for
 //! review (`--no-draws` leaves the search out), as game-printer's did. Left
 //! for later steps (~/.game-printer/work/bring/PLAN.md): the theme kit and
-//! the level kit, whose tools haven't moved yet.
+//! the level kit, whose tools haven't moved yet; `--branch` and the
+//! loop.toml it wrote went with `gp loop`.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -49,6 +52,8 @@ pub struct New<'a> {
     pub namespace: Option<&'a str>,
     /// The games checkout.
     pub games: Option<&'a Path>,
+    /// The source ID the ROM is registered under (default: the game's id).
+    pub source: Option<&'a str>,
     /// Today, for the evidence lines.
     pub date: &'a str,
     /// Search an idle run for draw sites (an NES ROM's).
@@ -84,7 +89,7 @@ fn idle_draws(bytes: &[u8]) -> (Option<String>, usize, String) {
 }
 
 /// The genres a skeleton can start from.
-pub const GENRES: &[&str] = &["platformer", "topdown", "other"];
+pub const GENRES: &[&str] = &["platformer", "topdown", "gridhop", "events", "other"];
 
 /// What a genre gives the model's header.
 struct Shape {
@@ -102,6 +107,12 @@ fn shape(genre: &str) -> Shape {
         "topdown" => Shape {
             view: "top-down",
             extension: ext("topdown"),
+        },
+        // A hop on a grid of cells (Q*bert): no extension yet, and the
+        // model's view has no `isometric`, so top-down.
+        "gridhop" => Shape {
+            view: "top-down",
+            extension: None,
         },
         _ => Shape {
             view: "side",
@@ -207,9 +218,13 @@ pub fn run(a: &New<'_>, paths: &Paths) -> Result<Outcome> {
             k.id
         );
     }
-    if reg.by_id(game).is_some() {
+    let source = a.source.unwrap_or(game);
+    if !name_ok(source) {
+        bail!("a source ID is lower-case letters, digits and dashes: {source}");
+    }
+    if reg.by_id(source).is_some() {
         bail!(
-            "a roms.toml in {} has a source named {game} already",
+            "a roms.toml in {} has a source named {source} already: give --source",
             games.display()
         );
     }
@@ -243,7 +258,7 @@ pub fn run(a: &New<'_>, paths: &Paths) -> Result<Outcome> {
             about.input
         ),
         format!(
-            "  rom      {game} ({}), unverified, in roms.toml",
+            "  rom      {source} ({}), unverified, in roms.toml",
             &sha[..16]
         ),
         format!("  assets   {}", about.assets),
@@ -299,12 +314,13 @@ fn nes_files(
     bytes: &[u8],
 ) -> Result<(Vec<(String, String)>, About)> {
     let game = a.game;
+    let source = a.source.unwrap_or(game);
     let sha = image.sha256.clone();
     let title = title.to_owned();
     let namespace = namespace.to_owned();
     // The asset map and what it lifts, for the pins.
-    let map_rel = format!("assets/{game}.toml");
-    let map_text = asset_map(game, &title, image);
+    let map_rel = format!("assets/{source}.toml");
+    let map_text = asset_map(source, &title, image);
     let map = gp_assets::AssetMap::parse(&map_text).context("the skeleton's asset map")?;
     let (lifted, _) =
         gp_assets::lift(bytes, &map, &map_text).context("lifting with the skeleton's asset map")?;
@@ -323,7 +339,7 @@ fn nes_files(
             "package.toml".into(),
             package_toml(
                 &namespace,
-                game,
+                (game, source),
                 &title,
                 image,
                 &map_rel,
@@ -332,19 +348,29 @@ fn nes_files(
                 &recipes,
             ),
         ),
-        ("roms.toml".into(), roms_toml(game, &title, image, a.date)?),
+        (
+            "roms.toml".into(),
+            roms_toml(source, &title, image, a.date)?,
+        ),
         (
             "template.toml".into(),
-            template_toml(game, &title, &sha, &map_rel, &map_sha, &lifted_sha),
+            template_toml(
+                (game, source),
+                &title,
+                &sha,
+                &map_rel,
+                &map_sha,
+                &lifted_sha,
+            ),
         ),
         (map_rel.clone(), map_text.clone()),
         (
             "model.toml".into(),
-            model_toml(name, &title, game, a.genre, shape, Device::NesPad),
+            model_toml(name, &title, source, a.genre, shape, Device::NesPad),
         ),
         (
             "mapping.toml".into(),
-            mapping_toml(name, game, Device::NesPad, Some(draws.as_deref())),
+            mapping_toml(name, source, Device::NesPad, Some(draws.as_deref())),
         ),
         ("fidelity.toml".into(), fidelity_toml(name, &title)),
         ("observe.toml".into(), observe_toml(name, &title)),
@@ -352,7 +378,7 @@ fn nes_files(
         ("profiles.toml".into(), profiles_toml(&title)),
         (
             "corpus.toml".into(),
-            corpus_toml(game, &title, &sha, &recipes),
+            corpus_toml(source, &title, &sha, &recipes),
         ),
     ];
     let about = About {
@@ -385,6 +411,7 @@ fn arcade_files(
     rom: &crate::roms::Rom,
 ) -> Result<(Vec<(String, String)>, About)> {
     let game = a.game;
+    let source = a.source.unwrap_or(game);
     let system = rom.system.clone().unwrap_or_default();
     let set = gp_arcade::romset::set(&system).with_context(|| format!("no arcade set {system}"))?;
     let recipes = crate::plan::recipe_set_hash(&BTreeMap::new());
@@ -413,7 +440,7 @@ fn arcade_files(
                  [corpus]\nname = {}\nversion = \"0.1.0\"\nrecipes = {}\n",
                 q(&format!("{namespace}/{game}")),
                 q(title),
-                q(game),
+                q(source),
                 q(set.title),
                 q(&rom.sha256),
                 q(&system),
@@ -426,7 +453,7 @@ fn arcade_files(
         ),
         (
             "roms.toml".into(),
-            arcade_roms_toml(game, title, rom, set, a.date)?,
+            arcade_roms_toml(source, title, rom, set, a.date)?,
         ),
         (
             "template.toml".into(),
@@ -440,7 +467,7 @@ fn arcade_files(
                 q(game),
                 q(title),
                 q(game),
-                q(game),
+                q(source),
                 q(&system),
                 q(&rom.sha256),
                 q(&map_rel),
@@ -451,11 +478,11 @@ fn arcade_files(
         (map_rel.clone(), map_text.clone()),
         (
             "model.toml".into(),
-            model_toml(name, title, game, a.genre, shape, Device::Arcade),
+            model_toml(name, title, source, a.genre, shape, Device::Arcade),
         ),
         (
             "mapping.toml".into(),
-            mapping_toml(name, game, Device::Arcade, None),
+            mapping_toml(name, source, Device::Arcade, None),
         ),
         ("fidelity.toml".into(), fidelity_toml(name, title)),
         ("observe.toml".into(), observe_toml(name, title)),
@@ -545,7 +572,7 @@ fn write_package(games: &Path, dir: &Path, game: &str, files: &[(String, String)
 #[allow(clippy::too_many_arguments)]
 fn package_toml(
     ns: &str,
-    game: &str,
+    (game, source): (&str, &str),
     title: &str,
     image: &NesImage,
     map: &str,
@@ -565,7 +592,7 @@ fn package_toml(
          [corpus]\nname = {}\nversion = \"0.1.0\"\nrecipes = {}\n",
         q(&format!("{ns}/{game}")),
         q(title),
-        q(game),
+        q(source),
         q(title),
         q(&image.sha256),
         h.mapper,
@@ -637,7 +664,7 @@ fn asset_map(source: &str, title: &str, image: &NesImage) -> String {
 }
 
 fn template_toml(
-    game: &str,
+    (game, source): (&str, &str),
     title: &str,
     sha: &str,
     map: &str,
@@ -654,7 +681,7 @@ fn template_toml(
         q(game),
         q(title),
         q(game),
-        q(game),
+        q(source),
         q(sha),
         q(map),
         q(map_sha),
@@ -947,6 +974,7 @@ mod tests {
             title: Some("Test Hop"),
             namespace: Some("someone"),
             games: Some(&games),
+            source: None,
             date: "2026-11-11",
             draws: true,
         };
@@ -1031,6 +1059,7 @@ mod tests {
             title: Some("Tapper"),
             namespace: Some("someone"),
             games: Some(&games),
+            source: None,
             date: "2026-11-11",
             draws: true,
         };
@@ -1108,6 +1137,7 @@ mod tests {
             title: None,
             namespace: Some("someone"),
             games: Some(&games),
+            source: None,
             date: "2026-11-11",
             draws: true,
         };

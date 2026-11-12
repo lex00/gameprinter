@@ -76,6 +76,17 @@ impl Source {
     }
 
     pub(crate) fn new(bundle: Bundle, module: Option<&Path>) -> Result<Self> {
+        Self::new_allowing(bundle, module, false)
+    }
+
+    /// [`Self::new`], and with `allow_missing_ext` a model that names hooks
+    /// runs with no module in the built-in interpreter, its entities doing
+    /// only what their components say (`gp interp run --allow-missing-ext`).
+    pub(crate) fn new_allowing(
+        bundle: Bundle,
+        module: Option<&Path>,
+        allow_missing_ext: bool,
+    ) -> Result<Self> {
         let interp = Interp::from_bundle(&bundle).map_err(|e| anyhow!("{e}"))?;
         let spec = interp.spec().clone();
         let (exts, label) = gp_exts::registry(&spec.name);
@@ -108,7 +119,7 @@ impl Source {
                 }
                 Some(code)
             }
-            None if missing.is_empty() => None,
+            None if missing.is_empty() || allow_missing_ext => None,
             None => bail!(
                 "the model `{}` names hooks, which run only in its game's module (--module): {}",
                 spec.name,

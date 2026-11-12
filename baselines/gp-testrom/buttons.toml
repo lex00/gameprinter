@@ -1,0 +1,60 @@
+# Our own test program (gp_nes::testrom), so this baseline runs in the open
+# tier on every platform with no ROM files: `just check` checks it natively,
+# under Rosetta and in both Linux images, and gp-wasm-check embeds it and
+# checks it natively and under wasmtime. Every platform compares against the
+# frame hash digest below, so they all agree when they all pass.
+#
+# The program reads controller 1 on even NMI counts into BUTTONS ($01), with
+# A in bit 7 and Right in bit 0, and counts NMIs in FRAMES ($00). Each button
+# is held alone, then in a pair, long enough to be read. The program lags on
+# every other frame, hence the 1,802 lag frames, and FRAMES wraps at 256.
+
+schema = 0
+source = "gp-testrom"
+sha256 = "22a1758b7c46d2d21db98410ac8bd8090ac8281afb8a096dcbf4f76ba82f0d46"
+description = "Every button alone and in pairs, then Right and B to the end"
+frames = 3600
+holds = [
+  "a@100-140", "b@200-240", "select@300-340", "start@400-440",
+  "up@500-540", "down@600-640", "left@700-740", "right@800-840",
+  "a+b@1000-1100", "up+left@1200-1300", "down+right@1400-1500", "start+select@1600-1700",
+  "a@2000-2003", "b@2010-2011", "right+b@2500-",
+]
+frame_hashes = "9ecd0e63628b070ffd101f6fb755350e844a81a847541a075afed38950c3feed"
+lag_frames = 1802
+
+[[assert]]
+frame = 140
+label = "BUTTONS"
+addr = 0x0001
+equals = 128
+
+[[assert]]
+frame = 840
+label = "BUTTONS"
+addr = 0x0001
+equals = 1
+
+[[assert]]
+frame = 1100
+label = "BUTTONS"
+addr = 0x0001
+equals = 192
+
+[[assert]]
+frame = 1800
+label = "BUTTONS"
+addr = 0x0001
+equals = 0
+
+[[assert]]
+frame = 3600
+label = "BUTTONS"
+addr = 0x0001
+equals = 65
+
+[[assert]]
+frame = 3600
+label = "FRAMES"
+addr = 0x0000
+equals = 13

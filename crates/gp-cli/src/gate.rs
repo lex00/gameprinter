@@ -43,8 +43,14 @@ pub struct GateArgs {
     /// keeps its own message and author. It may only change the game's files.
     /// Left out for a working copy with no git of its own (the gate takes
     /// the edits since the last landed commit) and for --score-only.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "import")]
     pub patch: Option<PathBuf>,
+    /// Gate the clips the mechanic sessions have that the corpus hasn't, in
+    /// place of a patch: `gp corpus import GAME --write` on the tip, with
+    /// the person's sessions ($GP_HOME), gated as a patch. Nothing to
+    /// import lands nothing.
+    #[arg(long, conflicts_with = "score_only")]
+    pub import: bool,
     /// The run in the gate's home the corpus's clips are made in.
     #[arg(long, default_value = "gate")]
     pub run: String,
@@ -1186,6 +1192,8 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
         )?;
         let mut tip_json = None;
         let mut first = false;
+        // The tip's rows, for the status file a landing writes.
+        let mut tip_rows = Rows::new();
         let end = if scored.is_empty() {
             mid
         } else {
@@ -1227,6 +1235,7 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
                 let wasm: Vec<PathBuf> = module.iter().cloned().collect();
                 let scan = crate::package::scan::run(&tree_game, &[], &wasm, &c.paths)?;
                 tip_json = Some(json.clone());
+                tip_rows = rows.clone();
                 (
                     State { rows, json, ..mid },
                     (rewrites(&scan.json), scan.exit),
@@ -1273,6 +1282,9 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
                 "the curves measured again are written to {}",
                 dir.display()
             ));
+        }
+        if landed.is_ok() && !a.dry_run && !end.commits.is_empty() && !tip_rows.is_empty() {
+            lines.push(status_line(c, &end.commit, &tip_rows, &end.rows));
         }
         said.extend(lines);
         let outcomes = items
@@ -1389,6 +1401,8 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
     let lock = fs::File::create(home.join("gate.lock"))?;
     let mut copy = None;
     let mut ticket = None;
+    // An --import's commit message, unless -m gives one.
+    let mut import_msg = None;
     let (repo, rel, onto, tree, patch_file) = if private {
         if a.patch.is_some() {
             bail!(
@@ -1417,6 +1431,14 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
         };
         let file = if a.score_only {
             PathBuf::new()
+        } else if a.import {
+            match import_patch(&repo, &rel, &onto, &home, paths, &a.removes)? {
+                Imported::Nothing(o) => return Ok(o),
+                Imported::Patch(f, msg) => {
+                    import_msg = Some(msg);
+                    f
+                }
+            }
         } else {
             a.patch.clone().context(
                 "--patch is needed: give the diff to gate, or point the gate at a working copy with no git",
@@ -1430,7 +1452,7 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
             let req = crate::gate_queue::Request {
                 patch: PathBuf::new(),
                 shown: file.display().to_string(),
-                message: a.message.clone(),
+                message: a.message.clone().or(import_msg.clone()),
                 repo: PathBuf::from(common),
                 game: rel.to_string_lossy().into_owned(),
                 onto: onto.clone(),
@@ -1504,7 +1526,7 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
         None,
         patch_file.clone(),
         patch_file.display().to_string(),
-        a.message.clone(),
+        a.message.clone().or(import_msg),
         a.removes.clone(),
     );
     let others = claimed
@@ -2602,5 +2624,357 @@ mod tests {
             return;
         }
         assert_eq!(loads_problems(&dk), Vec::<String>::new());
+    }
+}
+
+/// What `--import` made: nothing to gate, or a patch and its message.
+enum Imported {
+    Nothing(Outcome),
+    Patch(PathBuf, String),
+}
+
+/// `gp corpus import GAME --write` on the tip of `onto`, in a worktree of
+/// its own under the gate's home, from the person's sessions
+/// (`paths.home`): the result is a patch for the gate to take like any
+/// other. The import removes only the clips `--removes` names; the same
+/// names then let the removed-clips check pass. Ported from game-printer's
+/// gate.rs; the plan keeps no curves here, so no run measures them.
+fn import_patch(
+    repo: &Path,
+    rel: &Path,
+    onto: &str,
+    home: &Path,
+    paths: &Paths,
+    removes: &[String],
+) -> Result<Imported> {
+    let game = repo
+        .join(rel)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let rel_s = rel.to_string_lossy().into_owned();
+    let dir = home
+        .join("work")
+        .join("import")
+        .join(format!("{game}-{}", std::process::id()));
+    let tip = git(repo, &["rev-parse", onto])?;
+    git(
+        repo,
+        &["worktree", "add", "--detach", &dir.to_string_lossy(), &tip],
+    )?;
+    let made = (|| -> Result<Imported> {
+        let o = crate::corpus_import::run(
+            &crate::corpus_import::Args {
+                game: &game,
+                template: Some(&dir.join(rel)),
+                from: Some(&paths.home),
+                write: true,
+                says: None,
+                date: None,
+                remove: removes,
+                sessions: &[],
+            },
+            paths,
+        )?;
+        let v = o.json;
+        git(&dir, &["add", "-A", "--", &rel_s])?;
+        // Untrimmed: a patch's last context line may be a lone space.
+        let diff = String::from_utf8(
+            Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(["diff", "--cached", "--binary"])
+                .output()
+                .context("running git diff")?
+                .stdout,
+        )?;
+        if diff.trim().is_empty() {
+            return Ok(Imported::Nothing(Outcome::ok(
+                json!({"verdict": "PASS", "landed": false, "import": v}),
+                "PASS: the corpus has every clip of the sessions; nothing to land".to_owned(),
+            )));
+        }
+        let ids = |k: &str| {
+            v[k].as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default()
+        };
+        let mut what = Vec::new();
+        for k in ["added", "changed", "removed"] {
+            let i = ids(k);
+            if !i.is_empty() {
+                what.push(format!("{k} {i}"));
+            }
+        }
+        if what.is_empty() {
+            what.push("the corpus plan".into());
+        }
+        let msg = format!(
+            "{game} corpus {}: {} (gp corpus import)",
+            v["corpus"]["suggests"].as_str().unwrap_or(""),
+            what.join("; ")
+        );
+        let file = home
+            .join("work")
+            .join("import")
+            .join(format!("{game}-{}.patch", std::process::id()));
+        fs::write(&file, diff)?;
+        Ok(Imported::Patch(file, msg))
+    })();
+    let _ = git(
+        repo,
+        &["worktree", "remove", "--force", &dir.to_string_lossy()],
+    );
+    made
+}
+
+/// Writes the status file for a landed patch into the person's
+/// `$GP_HOME` (not the gate's), and says where, or why not.
+fn status_line(c: &Ctx, commit: &str, base: &Rows, new: &Rows) -> String {
+    let tree_game = c.tree.join(&c.rel);
+    let game = c.copy.clone().unwrap_or_else(|| c.repo.join(&c.rel));
+    let home = match gp_evidence::Paths::from_env() {
+        Ok(p) => p.home,
+        Err(e) => return format!("status not written: {e:#}"),
+    };
+    let title = git(&c.tree, &["log", "-1", "--format=%s", commit]).unwrap_or_default();
+    let when = git(&c.tree, &["log", "-1", "--format=%cI", commit]).unwrap_or_default();
+    let hash = {
+        let mut b = fs::read(tree_game.join(gp_model::MODEL_FILE)).unwrap_or_default();
+        b.extend(fs::read(tree_game.join(gp_interp::mapping::MAPPING_FILE)).unwrap_or_default());
+        gp_evidence::Hash::of(&b).to_string()
+    };
+    let name = game
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    match write_status(&home, &name, commit, (&title, &when), &hash, base, new) {
+        Ok(f) => format!("status: {}", f.display()),
+        Err(e) => format!("status not written: {e:#}"),
+    }
+}
+
+/// A clip ID's mechanic session and clip number: `dk.clear-25m.001`.
+fn session_of(id: &str) -> (String, Option<u64>) {
+    let mut parts = id.rsplitn(2, '.');
+    let n = parts.next().and_then(|n| n.parse().ok());
+    let rest = parts.next().unwrap_or("");
+    let session = rest.split_once('.').map_or(rest, |(_, s)| s);
+    (session.to_owned(), n)
+}
+
+/// Frames together over frames, straight through, and in resync for the
+/// long runs, summed over `rows`.
+fn totals<'a>(rows: impl Iterator<Item = &'a Row>) -> (u64, u64, u64, u64) {
+    let (mut t, mut f, mut rt, mut rf) = (0, 0, 0, 0);
+    for r in rows {
+        t += r.together;
+        f += r.frames;
+        if let (Some(a), Some(b)) = (
+            r.raw["stretches"]["together"].as_u64(),
+            r.raw["stretches"]["frames"].as_u64(),
+        ) {
+            rt += a;
+            rf += b;
+        }
+    }
+    (t, f, rt, rf)
+}
+
+fn pct(a: u64, b: u64) -> Value {
+    match (a * 1000).checked_div(b) {
+        None => Value::Null,
+        Some(q) => json!((q as f64) / 10.0),
+    }
+}
+
+fn together_json(t: u64, f: u64) -> Value {
+    if f == 0 {
+        Value::Null
+    } else {
+        json!({"together": t, "of": f, "pct": pct(t, f)})
+    }
+}
+
+/// The scoring status the mechanic page and `gp mechanic queue` read:
+/// `$GP_HOME/work/refine/<game>/status.json`, written to a temporary file
+/// and renamed, with the last five merges. Ported from game-printer's
+/// gate.rs.
+pub(crate) fn write_status(
+    home: &Path,
+    game: &str,
+    commit: &str,
+    (title, at): (&str, &str),
+    hash: &str,
+    base: &Rows,
+    new: &Rows,
+) -> Result<PathBuf> {
+    let dir = home.join("work").join("refine").join(game);
+    fs::create_dir_all(&dir)?;
+    let file = dir.join("status.json");
+    let old: Value = fs::read(&file)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or(Value::Null);
+    let clip_json = |id: &str, r: &Row| -> Value {
+        let (session, n) = session_of(id);
+        let start = r.raw["start"].as_u64();
+        let st = &r.raw["stretches"];
+        json!({
+            "id": id,
+            "mechanic": session,
+            "clip": n,
+            "start": start,
+            "frames": r.frames,
+            "straight": together_json(r.together, r.frames),
+            "resync": together_json(st["together"].as_u64().unwrap_or(0), st["frames"].as_u64().unwrap_or(0)),
+            "longest_exact": st["longest_any"].as_u64().map(|f| json!({"frames": f, "from": Value::Null})),
+            "first_split": r.first.as_ref().map(|(f, of, p)| json!({
+                "frame": of, "clip_frame": f, "what": format!("{p} apart"), "paths": [p], "owner": Value::Null})),
+            "draws": Value::Null,
+            "bars": r.raw["bars"].clone(),
+        })
+    };
+    let mut sessions: Vec<String> = Vec::new();
+    for (id, _) in new {
+        let s = session_of(id).0;
+        if !sessions.contains(&s) {
+            sessions.push(s);
+        }
+    }
+    let row_pct = |rows: &Rows, s: &str| {
+        let (t, f, _, _) = totals(
+            rows.iter()
+                .filter(|(i, _)| session_of(i).0 == s)
+                .map(|(_, r)| r),
+        );
+        pct(t, f)
+    };
+    let rows: Vec<Value> = sessions
+        .iter()
+        .map(|s| {
+            let mine: Vec<(&String, &Row)> = new
+                .iter()
+                .filter(|(i, _)| &session_of(i).0 == s)
+                .map(|(i, r)| (i, r))
+                .collect();
+            let (t, f, rt, rf) = totals(mine.iter().map(|(_, r)| *r));
+            let best = mine
+                .iter()
+                .filter_map(|(i, r)| {
+                    r.raw["stretches"]["longest_any"]
+                        .as_u64()
+                        .map(|l| (l, session_of(i).1))
+                })
+                .max_by_key(|(l, _)| *l);
+            json!({
+                "mechanic": s,
+                "straight": together_json(t, f),
+                "resync": together_json(rt, rf),
+                "longest_exact": best.map(|(l, n)| json!({"frames": l, "clip": n, "from": Value::Null})),
+                "clips": mine.iter().map(|(i, _)| session_of(i).1).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    let (bt, bf, brt, brf) = totals(base.iter().map(|(_, r)| r));
+    let (nt, nf, nrt, nrf) = totals(new.iter().map(|(_, r)| r));
+    let mut moved = serde_json::Map::new();
+    for s in &sessions {
+        let (b, n) = (row_pct(base, s), row_pct(new, s));
+        if b != n {
+            moved.insert(s.clone(), json!({"before": b, "after": n}));
+        }
+    }
+    let mut merges = vec![json!({
+        "commit": &commit[..8.min(commit.len())],
+        "title": title,
+        "at": at,
+        "before": {"straight_pct": pct(bt, bf), "resync_pct": pct(brt, brf)},
+        "after": {"straight_pct": pct(nt, nf), "resync_pct": pct(nrt, nrf)},
+        "rows": moved,
+    })];
+    if let Some(a) = old["merges"].as_array() {
+        merges.extend(a.iter().take(4).cloned());
+    }
+    let status = json!({
+        "game": game,
+        "version": old["version"].as_u64().unwrap_or(0) + 1,
+        "model": {"commit": &commit[..8.min(commit.len())], "hash": hash},
+        "rows": rows,
+        "clips": new.iter().map(|(i, r)| clip_json(i, r)).collect::<Vec<_>>(),
+        "merges": merges,
+    });
+    let tmp = dir.join("status.json.tmp");
+    fs::write(
+        &tmp,
+        format!("{}\n", serde_json::to_string_pretty(&status)?),
+    )?;
+    fs::rename(&tmp, &file)?;
+    Ok(file)
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    fn row(id: &str, together: u64, frames: u64) -> (String, Row) {
+        let first = (together < frames).then(
+            || json!({"frame": together, "original_frame": together + 100, "path": "mario.x"}),
+        );
+        (
+            id.to_owned(),
+            Row::of(&json!({
+                "frames": frames, "frames_together": together, "start": 50,
+                "stretches": {"together": together, "frames": frames, "longest_any": together},
+                "first": first, "bars": {"together": together == frames},
+            })),
+        )
+    }
+
+    /// The status file a landing writes: a row for each mechanic, each
+    /// clip with its first split, the merge with the scores before and
+    /// after, and the earlier merges kept; and the quest log reads it.
+    #[test]
+    fn a_landing_writes_the_status_the_quest_log_reads() {
+        let d = tempfile::tempdir().unwrap();
+        let base = vec![row("dk.walk.001", 100, 100), row("dk.jump.001", 40, 80)];
+        let new = vec![row("dk.walk.001", 100, 100), row("dk.jump.001", 80, 80)];
+        let f = write_status(
+            d.path(),
+            "dk",
+            "0123456789ab",
+            ("Jump fixed", "2026-11-12"),
+            "h",
+            &base,
+            &new,
+        )
+        .unwrap();
+        let v: Value = serde_json::from_str(&fs::read_to_string(&f).unwrap()).unwrap();
+        assert_eq!(v["model"]["commit"], "01234567");
+        assert_eq!(v["rows"][1]["mechanic"], "jump");
+        assert_eq!(v["rows"][1]["straight"]["pct"], 100.0);
+        assert_eq!(v["merges"][0]["rows"]["jump"]["before"], 50.0);
+        assert!(v["merges"][0]["rows"].get("walk").is_none());
+        let f = write_status(
+            d.path(),
+            "dk",
+            "fedcba98",
+            ("Again", "2026-11-12"),
+            "h",
+            &new,
+            &base,
+        )
+        .unwrap();
+        let v: Value = serde_json::from_str(&fs::read_to_string(&f).unwrap()).unwrap();
+        assert_eq!(
+            (v["version"].as_u64(), v["merges"].as_array().unwrap().len()),
+            (Some(2), 2)
+        );
+        assert_eq!(v["clips"][1]["first_split"]["what"], "mario.x apart");
     }
 }

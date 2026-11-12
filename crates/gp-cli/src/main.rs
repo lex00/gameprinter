@@ -12,6 +12,7 @@ mod clip;
 mod clip_presses;
 mod clip_score;
 mod clip_screen;
+mod clip_session;
 mod clipset;
 mod code;
 mod corpus_import;
@@ -31,6 +32,7 @@ mod gate_append;
 mod gate_copy;
 mod gate_queue;
 mod hosted;
+mod interp;
 mod interp_draws;
 mod labels;
 mod lockstep;
@@ -43,6 +45,7 @@ mod movie;
 mod open;
 mod original;
 mod package;
+mod pinned;
 mod plan;
 mod pool;
 mod publish;
@@ -54,6 +57,7 @@ mod refine;
 mod registry;
 mod romclean;
 mod romdiff;
+mod rompatch;
 mod roms;
 mod roms_cmd;
 mod rule_refine;
@@ -70,7 +74,9 @@ mod sprites;
 mod static_grade;
 mod tape;
 mod template;
+mod template_build;
 mod template_cites;
+mod template_original;
 mod tool_gate;
 mod track;
 mod watch;
@@ -356,31 +362,78 @@ enum ToolCmd {
 
 #[derive(Subcommand)]
 enum AssetsCmd {
-    /// Decode a ROM's assets into a directory outside any git work tree.
+    /// Decode a ROM's assets into files: tiles as indexed PNG, palettes,
+    /// metatiles, levels, tables, text and pointer tables as TOML, object
+    /// lists and music as directories of TOML files, plus the asset map as
+    /// assets.toml. The map is the one for the ROM's hash in $GP_ASSETS, or
+    /// in the tool repo's and each game's assets/, unless one is given.
     Lift {
+        /// The ROM file.
         rom: PathBuf,
+        /// The directory to write, outside any git work tree (default
+        /// $GP_HOME/work/assets/<source-id>). A directory that already
+        /// holds a lift (an assets.toml) is refused unless `--force`, since
+        /// its files may have been edited.
         #[arg(short, long)]
-        out: PathBuf,
+        out: Option<PathBuf>,
+        /// The asset map, instead of finding one by the ROM's hash.
         #[arg(long)]
-        map: PathBuf,
+        map: Option<PathBuf>,
+        /// Lift into a directory that already holds a lift, replacing the
+        /// files of the names it writes (nothing else in it is touched).
         #[arg(long)]
         force: bool,
     },
-    /// Pack a lifted directory and compare it with the ROM, byte for byte.
+    /// Encode a lifted directory back into ROM bytes, then compare them
+    /// with a ROM (the round-trip check, which exits 1 naming each asset
+    /// and offset that differs), or write a copy of a base ROM with the
+    /// encoded assets in place and list the bytes that changed.
+    #[command(group(clap::ArgGroup::new("mode").required(true).args(["check", "base"])))]
     Pack {
+        /// A directory written by gp assets lift (its assets.toml says how
+        /// to pack it).
         dir: PathBuf,
-        #[arg(long)]
-        check: PathBuf,
+        /// The ROM to compare with: the round-trip check.
+        #[arg(long, value_name = "ROM")]
+        check: Option<PathBuf>,
+        /// The ROM to write the assets into.
+        #[arg(long, value_name = "ROM", requires = "out")]
+        base: Option<PathBuf>,
+        /// The ROM file to write, outside any git work tree.
+        #[arg(short, long, requires = "base")]
+        out: Option<PathBuf>,
+        /// Replace an existing output file.
+        #[arg(long, requires = "out")]
+        force: bool,
+        /// With --check, give the bytes compared and the differences in
+        /// the JSON as PREFIX.bytes_covered and PREFIX.differences.
+        #[arg(long, value_name = "PREFIX")]
+        metrics: Option<String>,
     },
 }
 
 #[derive(Subcommand)]
 enum ModelCmd {
-    /// Check a model, its profiles, its contract and its asset slots.
+    /// Check a model directory: model.toml against the schema (references,
+    /// roles, events, extensions, evidence for every fact, each evidence
+    /// ref's file and line, in the repo or package or in a pinned download
+    /// under $GP_HOME/work, skipped with a notice when that isn't there),
+    /// and fidelity.toml, if there is one, against the model. A
+    /// profiles.toml beside it is checked too. Prints the facts by source.
+    /// Exits 1 on any problem.
     Check {
+        /// A directory holding model.toml (and optionally fidelity.toml and
+        /// profiles.toml).
         dir: PathBuf,
-        #[arg(long)]
+        /// A directory written by gp assets lift: also check each asset slot
+        /// filled from that asset map against the asset it names.
+        #[arg(long, value_name = "DIR")]
         assets: Option<PathBuf>,
+        /// The directory evidence refs are relative to (default: the
+        /// package folder for a game's model, else the git work tree the
+        /// model is in, else the model's directory).
+        #[arg(long, value_name = "DIR")]
+        root: Option<PathBuf>,
     },
     /// Hold a patch to a game in the games repo to its corpus: PASS or FAIL,
     /// and what passes lands.
@@ -420,39 +473,45 @@ enum ModelCmd {
         answers: Vec<String>,
     },
     /// Fail if the model or contract isn't in canonical form.
+    /// Rewrite model.toml and fidelity.toml in their canonical form, the
+    /// one text each model has. With `--check`, write nothing and exit 1 if
+    /// either isn't in it.
     Fmt {
         dir: PathBuf,
-        #[arg(long, required = true)]
+        #[arg(long)]
         check: bool,
     },
 }
 
 #[derive(Subcommand)]
 enum BaselineCmd {
-    /// Run baselines and compare them with their expected results.
+    /// Record each baseline into a temporary store and check its frame
+    /// hashes, lag frames and RAM assertions. A baseline whose ROM isn't in
+    /// $GP_ROM_DIR is skipped; our own test ROM is built in, so its
+    /// baselines always run. Exits 1 if any check fails.
     Check {
+        /// Baseline files, or directories of them. By default, every .toml
+        /// under the nearest baselines/ directory.
         files: Vec<PathBuf>,
+        /// Also run each baseline with video rendering on, and fail if its
+        /// frame hashes change.
         #[arg(long)]
-        rom: PathBuf,
+        video: bool,
+        /// The ROM file for every baseline checked, instead of finding each
+        /// in $GP_ROM_DIR by hash; for a game built from source, such as the
+        /// reference game (`just mosshop`). A baseline that expects another
+        /// SHA-256 can't be checked.
+        #[arg(long)]
+        rom: Option<PathBuf>,
     },
 }
 
 #[derive(Subcommand)]
 enum InterpCmd {
-    /// Run a model through its game's module on an input log and write the
-    /// state hash at power-on and after every frame, one in hex a line.
-    Run {
-        dir: PathBuf,
-        /// The game's built module.
-        #[arg(long)]
-        module: PathBuf,
-        #[arg(long)]
-        assets: PathBuf,
-        #[arg(long)]
-        input: PathBuf,
-        #[arg(long)]
-        hashes: PathBuf,
-    },
+    /// Run a model through an input log, through its game's module or the
+    /// built-in interpreter, and print its frame count, the digest of its
+    /// per-frame state hashes, and its state at the last frame by model path.
+    Run(interp::RunArgs),
     /// Check that each level's goal can be reached by the player's own
     /// moves (gp_interp::reach, the player alone) and measure the jump's
     /// envelope, through the game's module. With `--record`, also search each
@@ -476,16 +535,11 @@ enum InterpCmd {
         #[arg(long)]
         record: bool,
     },
-    /// Compare the model with the original on a baseline's input.
-    Compare {
-        dir: PathBuf,
-        #[arg(long)]
-        rom: PathBuf,
-        #[arg(long)]
-        baseline: PathBuf,
-        #[arg(long)]
-        assets: PathBuf,
-    },
+    /// Run the original and the model on the same input, and compare them
+    /// frame by frame through the model's state mapping. Each mapped model
+    /// path gets a line with its agreement and its first difference, and
+    /// the lockstep's report follows. Exits 1 if any path disagrees.
+    Compare(interp::CompareArgs),
     /// Record the original's random draws on an input, at the draw sites the
     /// state mapping's `[[draws]]` names: each read of a site's random byte by
     /// its instruction, with the frame, in order. The script lets the
@@ -510,7 +564,7 @@ enum GameCmd {
         /// The ROM, already in $GP_ROM_DIR (`gp roms add` puts it there)
         #[arg(long)]
         rom: PathBuf,
-        /// The genre: platformer, topdown or other
+        /// The genre: platformer, topdown, gridhop, events or other
         #[arg(long)]
         genre: String,
         /// The game's title (default: GAME)
@@ -527,6 +581,10 @@ enum GameCmd {
         /// Leave out the search for draw sites on an idle run
         #[arg(long)]
         no_draws: bool,
+        /// The source ID to register the ROM under in roms.toml (default:
+        /// GAME)
+        #[arg(long)]
+        source: Option<String>,
     },
     /// Fetch NAME@VERSION by id into a folder, checking every signature (with --root) and
     /// hash, and lift every ROM entry it finds in the ROM folder.
@@ -672,7 +730,9 @@ enum PackageCmd {
     /// buckets: ours, reference, from the ROM and needs rewrite. Compares
     /// with each ROM of its `[[rom.entry]]` found by hash in $GP_ROM_DIR
     /// and prints no ROM byte. With no ROM it says that nothing was
-    /// compared. Exits 1 on any needs-rewrite item or a failed rebuild.
+    /// compared. Exits 1 on any needs-rewrite item or a failed rebuild, or
+    /// with --baseline only on a needs-rewrite item the baseline doesn't
+    /// list.
     Scan {
         dir: PathBuf,
         /// A ROM file to compare with, instead of finding it by hash.
@@ -682,22 +742,44 @@ enum PackageCmd {
         /// section against the ROMs. Any .wasm in the folder is always read.
         #[arg(long)]
         wasm: Vec<PathBuf>,
+        /// An earlier scan's --json output: its needs-rewrite items are
+        /// listed as known, and only new ones fail.
+        #[arg(long)]
+        baseline: Option<PathBuf>,
     },
 }
 
 #[derive(Subcommand)]
 enum TemplateCmd {
-    /// Build an authored template's lifted files and hold them to its pin.
+    /// Build an original template's assets (source.how = "authored") from
+    /// its authored.toml: a data image (to $GP_HOME/work/images/), its asset
+    /// map, and the lifted directory. Exits 1 when the asset map or
+    /// template.toml's pins are stale, unless --write updates them.
     Build {
+        /// An original template directory.
         dir: PathBuf,
+        /// The lifted directory to write, outside any git work tree
+        /// (default $GP_HOME/work/assets/<source>).
         #[arg(short, long)]
-        out: PathBuf,
+        out: Option<PathBuf>,
+        /// Rewrite the asset map and template.toml's pins when they're stale.
+        #[arg(long)]
+        write: bool,
     },
     /// Check a ROM against the template: accepted hash, map pin, lift pin.
     Check {
         dir: PathBuf,
+        /// The source ROM (default: the first file in $GP_ROM_DIR whose hash
+        /// the template accepts).
         #[arg(long)]
-        rom: PathBuf,
+        rom: Option<PathBuf>,
+        /// For a derived template with authored stages: the layout check.
+        /// Each level's cells, ladders and things against the base's, lifted
+        /// in memory from your ROM of the base, and refused when too close;
+        /// and any data line of the template's built files that the base's
+        /// lifted files hold.
+        #[arg(long)]
+        original: bool,
     },
     /// Check that a package's open version holds none of the original's
     /// data: no line of 24 characters or more of its built files may be held
@@ -724,8 +806,29 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                 out,
                 map,
                 force,
-            } => assets::lift(rom, out, map, *force),
-            AssetsCmd::Pack { dir, check } => assets::check_dir(dir, check),
+            } => assets::lift(
+                rom,
+                out.as_deref(),
+                map.as_deref(),
+                *force,
+                &gp_evidence::Paths::from_env()?.home,
+            ),
+            AssetsCmd::Pack {
+                dir,
+                check: Some(rom),
+                metrics,
+                ..
+            } => assets::check_dir(dir, rom, metrics.as_deref()),
+            AssetsCmd::Pack {
+                dir,
+                base: Some(base),
+                out: Some(out),
+                force,
+                ..
+            } => assets::pack_into(dir, base, out, *force),
+            AssetsCmd::Pack { .. } => {
+                anyhow::bail!("give --check ROM, or --base ROM with --out FILE")
+            }
         },
         Cmd::Worker { cmd } => worker::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Tool {
@@ -736,8 +839,13 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
         Cmd::Rule { cmd } => rule_refine::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Corpus { cmd } => corpus_score::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Model { cmd } => match cmd {
-            ModelCmd::Check { dir, assets } => model::check(dir, assets.as_deref()),
-            ModelCmd::Fmt { dir, .. } => model::fmt_check(dir),
+            ModelCmd::Check { dir, assets, root } => model::check_in(
+                dir,
+                assets.as_deref(),
+                root.as_deref(),
+                &gp_evidence::Paths::from_env()?.home,
+            ),
+            ModelCmd::Fmt { dir, check } => model::fmt(dir, *check),
             ModelCmd::Gate(a) => gate::run(a, &gp_evidence::Paths::from_env()?),
             ModelCmd::Mechanics(a) => mechanics::run(a, &gp_evidence::Paths::from_env()?),
             ModelCmd::Static(a) => model_static::run(a, &gp_evidence::Paths::from_env()?),
@@ -745,27 +853,19 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             ModelCmd::Questions { dir, answers } => refine::questions(dir, answers),
         },
         Cmd::Baseline {
-            cmd: BaselineCmd::Check { files, rom },
-        } => run::baseline_check(files, rom),
+            cmd: BaselineCmd::Check { files, video, rom },
+        } => run::baseline_check(
+            files,
+            *video,
+            rom.as_deref(),
+            &gp_evidence::Paths::from_env()?.roms,
+        ),
         Cmd::Interp {
-            cmd:
-                InterpCmd::Run {
-                    dir,
-                    module,
-                    assets,
-                    input,
-                    hashes,
-                },
-        } => run::module_run(dir, module, assets, input, hashes),
+            cmd: InterpCmd::Run(a),
+        } => interp::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Interp {
-            cmd:
-                InterpCmd::Compare {
-                    dir,
-                    rom,
-                    baseline,
-                    assets,
-                },
-        } => run::compare(dir, rom, baseline, assets),
+            cmd: InterpCmd::Compare(a),
+        } => interp::compare(a, &gp_evidence::Paths::from_env()?),
         Cmd::Interp {
             cmd:
                 InterpCmd::Reach {
@@ -810,6 +910,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                     namespace,
                     games,
                     no_draws,
+                    source,
                 },
         } => game_new::run(
             &game_new::New {
@@ -819,6 +920,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                 title: title.as_deref(),
                 namespace: namespace.as_deref(),
                 games: games.as_deref(),
+                source: source.as_deref(),
                 date: &game_new::today(),
                 draws: !no_draws,
             },
@@ -877,9 +979,18 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
         Cmd::Serve { opts } => serve::run(opts, &gp_evidence::Paths::from_env()?),
         Cmd::Package { cmd } => match cmd {
             PackageCmd::Hooks { dir } => package::hooks(dir),
-            PackageCmd::Scan { dir, rom, wasm } => {
-                package::scan::run(dir, rom, wasm, &gp_evidence::Paths::from_env()?)
-            }
+            PackageCmd::Scan {
+                dir,
+                rom,
+                wasm,
+                baseline: None,
+            } => package::scan::run(dir, rom, wasm, &gp_evidence::Paths::from_env()?),
+            PackageCmd::Scan {
+                dir,
+                rom,
+                wasm,
+                baseline: Some(b),
+            } => package::scan::run_against(dir, rom, wasm, b, &gp_evidence::Paths::from_env()?),
         },
         Cmd::Registry { cmd } => match cmd {
             RegistryCmd::Serve { dir, page, port } => registry::serve(dir, page, *port),
@@ -941,11 +1052,21 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             cmd: InterpCmd::Draws(a),
         } => interp_draws::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Template {
-            cmd: TemplateCmd::Build { dir, out },
-        } => template::build(dir, out),
+            cmd: TemplateCmd::Build { dir, out, write },
+        } => template_build::build_cmd(
+            dir,
+            out.as_deref(),
+            *write,
+            &gp_evidence::Paths::from_env()?,
+        ),
         Cmd::Template {
-            cmd: TemplateCmd::Check { dir, rom },
-        } => template::check(dir, rom),
+            cmd: TemplateCmd::Check { dir, rom, original },
+        } => template_original::check_cmd(
+            dir,
+            rom.as_deref(),
+            *original,
+            &gp_evidence::Paths::from_env()?,
+        ),
         Cmd::Template {
             cmd: TemplateCmd::Served { dir, folder, rom },
         } => served::served(dir, folder, rom, &gp_evidence::Paths::from_env()?),

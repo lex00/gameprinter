@@ -1,9 +1,13 @@
 //! `gp model`: check a model and its fidelity contract, and hold them to
-//! their canonical form.
+//! their canonical form. Ported from game-printer's model.rs: the evidence
+//! refs are checked against the repo or the package folder and the pinned
+//! downloads (`crate::pinned`), and `fmt` rewrites as well as checks. The
+//! facts by source, once metrics, are in the report.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use gp_assets::MAP_FILE;
@@ -27,24 +31,73 @@ fn problem(file: &str, path: &str, message: &str) -> Value {
 }
 
 pub fn check(dir: &Path, assets: Option<&Path>) -> Result<Outcome> {
+    let home = gp_evidence::Paths::from_env()?.home;
+    check_in(dir, assets, None, &home)
+}
+
+/// The directory a model's evidence refs are relative to by default: a
+/// package folder (with its `package.toml`) for a game's model, else the
+/// git work tree the model is in, else the model's own directory.
+fn ref_root(dir: &Path) -> PathBuf {
+    if dir.join("package.toml").is_file() {
+        return dir.to_path_buf();
+    }
+    gp_evidence::paths::enclosing_git_work_tree(dir).unwrap_or_else(|| dir.to_path_buf())
+}
+
+/// `gp model check`: the model against the schema, each evidence ref's file
+/// and line (in the repo or a pinned download under `$GP_HOME/work`), the
+/// profiles and the contract, the screen-copy counters, and with `assets`
+/// the asset slots. Reports the facts by source.
+pub fn check_in(
+    dir: &Path,
+    assets: Option<&Path>,
+    root: Option<&Path>,
+    gp_home: &Path,
+) -> Result<Outcome> {
     if !dir.is_dir() {
         bail!("{} isn't a directory", dir.display());
     }
-    let text = read(&dir.join(MODEL_FILE))?;
-    let model = Model::parse(&text).with_context(|| dir.join(MODEL_FILE).display().to_string())?;
-    let mut problems: Vec<Value> = validate::validate(&model)
-        .into_iter()
-        .map(|p| problem(MODEL_FILE, &p.path, &p.message))
-        .collect();
+    let model_path = dir.join(MODEL_FILE);
+    let text = read(&model_path)?;
+    let mut problems = Vec::new();
+    let model = match Model::parse(&text) {
+        Ok(m) => m,
+        Err(e) => {
+            problems.push(problem(MODEL_FILE, "", &e.to_string()));
+            return Ok(report(dir, None, problems, json!(null), BTreeMap::new()));
+        }
+    };
+    for p in validate::validate(&model) {
+        problems.push(problem(MODEL_FILE, &p.path, &p.message));
+    }
+    let root = root.map_or_else(|| ref_root(dir), Path::to_path_buf);
+    let mut resolver = crate::pinned::Resolver::new(gp_home);
+    let (ref_problems, skipped) =
+        validate::check_refs_in(&model, |within, file| resolver.root(within, file, &root));
+    for p in ref_problems {
+        problems.push(problem(MODEL_FILE, &p.path, &p.message));
+    }
+
+    // Profiles: each path the model has, a mechanic's parameter or option,
+    // and the model each makes valid.
     let profile_file = gp_model::profile::PROFILES_FILE;
+    let mut profile_names = Vec::new();
+    let mut switch_names: Vec<String> = Vec::new();
     match gp_model::profile::Profiles::read_dir(dir) {
         Err(e) => problems.push(problem(profile_file, "", &e)),
         Ok(p) => {
             for x in p.check(&model) {
                 problems.push(problem(profile_file, &x.path, &x.message));
             }
+            if !p.is_empty() {
+                profile_names = p.names();
+                switch_names = p.switches().map(|(_, s)| s.name.clone()).collect();
+            }
         }
     }
+
+    let mut contract_json = json!(null);
     let contract_path = dir.join(CONTRACT_FILE);
     if contract_path.exists() {
         match Contract::parse(&read(&contract_path)?) {
@@ -53,79 +106,191 @@ pub fn check(dir: &Path, assets: Option<&Path>) -> Result<Outcome> {
                 for p in c.check(&model) {
                     problems.push(problem(CONTRACT_FILE, &p.at, &p.message));
                 }
+                let summary: BTreeMap<String, usize> = c
+                    .bind(&model)
+                    .summary(&model)
+                    .into_iter()
+                    .map(|(l, n)| (l.name().to_owned(), n))
+                    .collect();
+                contract_json = json!(summary);
             }
         }
     }
-    let mut checked = Vec::new();
-    if let Some(a) = assets {
-        let map_text = read(&a.join(MAP_FILE))?;
+    let mapping_path = dir.join(gp_interp::mapping::MAPPING_FILE);
+    if let Ok(mt) = fs::read_to_string(&mapping_path)
+        && let Ok(mapping) = gp_interp::mapping::Mapping::parse(&mt)
+    {
+        for (path, message) in screen_copies(&model, &mapping) {
+            problems.push(problem(MODEL_FILE, &path, &message));
+        }
+    }
+    let mut checked_slots = Vec::new();
+    if let Some(adir) = assets {
+        let map_text = read(&adir.join(MAP_FILE))?;
         let found = if gp_assets::arcade::is_arcade(&map_text) {
             // An arcade lift: its slots name assets by the board's regions,
             // and no slot kind has an arcade format yet, so a slot is held
             // to the asset being there.
             let map = gp_assets::arcade::ArcadeMap::parse(&map_text)
-                .with_context(|| a.join(MAP_FILE).display().to_string())?;
-            check_arcade_slots(&model, &map, &mut checked)
+                .with_context(|| adir.join(MAP_FILE).display().to_string())?;
+            check_arcade_slots(&model, &map, &mut checked_slots)
         } else {
             let map = AssetMap::parse(&map_text)
-                .with_context(|| a.join(MAP_FILE).display().to_string())?;
-            check_slots(&model, &map, &mut checked)
+                .with_context(|| adir.join(MAP_FILE).display().to_string())?;
+            check_slots(&model, &map, &mut checked_slots)
         };
         for (path, message) in found {
             problems.push(problem(MODEL_FILE, &path, &message));
         }
     }
-    let lines: Vec<String> = problems
-        .iter()
-        .map(|p| format!("problem  {}  {}: {}", p["file"], p["path"], p["message"]))
-        .collect();
-    let ok = problems.is_empty();
-    let text = if ok {
-        format!(
-            "{}: ok ({} asset slots checked)",
-            dir.display(),
-            checked.len()
-        )
-    } else {
-        lines.join("\n")
-    };
-    Ok(Outcome {
-        json: json!({ "ok": ok, "problems": problems, "slots": checked }),
-        text,
-        exit: u8::from(!ok),
-    })
+
+    // Facts by source.
+    let mut by_source: BTreeMap<String, usize> = BTreeMap::new();
+    for (_, key) in &validate::evidence_for(&model) {
+        let source = key
+            .as_ref()
+            .and_then(|k| model.evidence.get(k))
+            .map_or("none", |e| e.source.name());
+        *by_source.entry(source.to_owned()).or_insert(0) += 1;
+    }
+    let mut out = report(dir, Some(&model), problems, contract_json, by_source);
+    out.json["refs_skipped"] = json!(skipped);
+    out.json["profiles"] = json!(profile_names);
+    out.json["switches"] = json!(switch_names);
+    if !profile_names.is_empty() {
+        let _ = write!(out.text, "; profiles: {}", profile_names.join(", "));
+    }
+    if skipped > 0 {
+        let fetch: Vec<String> = resolver
+            .missing
+            .iter()
+            .map(|(name, cmd)| format!("{name} ({cmd})"))
+            .collect();
+        let _ = write!(
+            out.text,
+            "\nnotice: {skipped} evidence refs into pinned downloads weren't checked, because these aren't in {}: {}",
+            gp_home.join("work").display(),
+            fetch.join(", ")
+        );
+    }
+    if let Some(adir) = assets {
+        let _ = write!(
+            out.text,
+            "; asset slots checked against {}: {}",
+            adir.display(),
+            if checked_slots.is_empty() {
+                "none".to_owned()
+            } else {
+                checked_slots.join(", ")
+            }
+        );
+        out.json["assets_checked"] = json!(checked_slots);
+    }
+    Ok(out)
 }
 
+fn report(
+    dir: &Path,
+    model: Option<&Model>,
+    problems: Vec<Value>,
+    contract: Value,
+    by_source: BTreeMap<String, usize>,
+) -> Outcome {
+    let ok = problems.is_empty();
+    let facts: usize = by_source.values().sum();
+    let mut text = String::new();
+    for p in &problems {
+        let at = p["path"].as_str().unwrap_or("");
+        let _ = writeln!(
+            text,
+            "{}{}{}: {}",
+            p["file"].as_str().unwrap_or(""),
+            if at.is_empty() { "" } else { " " },
+            at,
+            p["message"].as_str().unwrap_or("")
+        );
+    }
+    if let Some(m) = model {
+        let sources: Vec<String> = by_source.iter().map(|(s, n)| format!("{n} {s}")).collect();
+        let _ = write!(
+            text,
+            "{}: {} ({}), {} facts: {}",
+            dir.display(),
+            if ok { "valid" } else { "invalid" },
+            m.model.name,
+            facts,
+            sources.join(", ")
+        );
+        if let Some(c) = contract.as_object() {
+            let levels: Vec<String> = c.iter().map(|(l, n)| format!("{n} {l}")).collect();
+            let _ = write!(text, "; contract: {}", levels.join(", "));
+        }
+        let _ = write!(text, "; {} features", m.features_used().len());
+    } else {
+        let _ = write!(text, "{}: invalid", dir.display());
+    }
+    Outcome {
+        json: json!({
+            "ok": ok,
+            "dir": dir,
+            "model": model.map(|m| m.model.name.clone()),
+            "facts": facts,
+            "facts_by_source": by_source,
+            "features": model.map(|m| m.features_used().into_iter().collect::<Vec<_>>()),
+            "contract": contract,
+            "problems": problems,
+        }),
+        text,
+        exit: u8::from(!ok),
+    }
+}
+
+/// Whether the model and contract are in canonical form, as the gate asks:
+/// [`fmt`] with `--check`.
 pub fn fmt_check(dir: &Path) -> Result<Outcome> {
-    let mut stale = Vec::new();
+    fmt(dir, true)
+}
+
+/// `gp model fmt`: rewrites model.toml and fidelity.toml in their canonical
+/// form; with `check`, writes nothing and exits 1 if either isn't in it.
+pub fn fmt(dir: &Path, check: bool) -> Result<Outcome> {
+    let mut files = Vec::new();
     let model_path = dir.join(MODEL_FILE);
     let text = read(&model_path)?;
     let canon = Model::parse(&text)
         .with_context(|| model_path.display().to_string())?
         .to_toml();
-    if text != canon {
-        stale.push(model_path);
-    }
+    files.push((model_path, text, canon));
     let contract_path = dir.join(CONTRACT_FILE);
     if contract_path.exists() {
         let text = read(&contract_path)?;
         let canon = Contract::parse(&text)
             .with_context(|| contract_path.display().to_string())?
             .to_toml();
+        files.push((contract_path, text, canon));
+    }
+    let mut changed = Vec::new();
+    for (path, text, canon) in &files {
         if text != canon {
-            stale.push(contract_path);
+            changed.push(path.clone());
+            if !check {
+                fs::write(path, canon).with_context(|| format!("writing {}", path.display()))?;
+            }
         }
     }
-    let ok = stale.is_empty();
-    let names: Vec<String> = stale.iter().map(|p| p.display().to_string()).collect();
+    let names: Vec<String> = changed.iter().map(|p| p.display().to_string()).collect();
+    let text = match (check, changed.is_empty()) {
+        (_, true) => format!("{}: canonical", dir.display()),
+        (true, false) => format!(
+            "not in canonical form (run gp model fmt): {}",
+            names.join(", ")
+        ),
+        (false, false) => format!("rewrote {}", names.join(", ")),
+    };
     Ok(Outcome {
-        json: json!({ "ok": ok, "not_canonical": names }),
-        text: if ok {
-            format!("{}: canonical", dir.display())
-        } else {
-            format!("not in canonical form: {}", names.join(", "))
-        },
-        exit: u8::from(!ok),
+        json: json!({ "dir": dir, "check": check, "changed": changed }),
+        text,
+        exit: if check && !changed.is_empty() { 1 } else { 0 },
     })
 }
 
@@ -147,6 +312,51 @@ fn check_arcade_slots(
                 format!("assets.{name}.from"),
                 format!("{} has no asset named `{}`", map.source, from.asset),
             ));
+        }
+    }
+    out
+}
+
+/// Sprite clips and blinks keyed on a counter the state mapping reads from
+/// the screen (the name table or OAM): the screen shows a frame after the
+/// game's RAM, so the model's picture would show a frame late.
+fn screen_copies(model: &Model, mapping: &gp_interp::mapping::Mapping) -> Vec<(String, String)> {
+    let screen: BTreeMap<&str, &str> = mapping
+        .fields
+        .iter()
+        .filter(|f| f.ram.is_empty() && f.cases.iter().all(|c| c.ram.is_none()))
+        .filter_map(|f| {
+            let from = if !f.nametable.is_empty() {
+                "the name table"
+            } else if !f.oam.is_empty() {
+                "the sprite table (OAM)"
+            } else {
+                return None;
+            };
+            Some((f.path.strip_prefix("counters.")?, from))
+        })
+        .collect();
+    let mut out = Vec::new();
+    for (name, e) in &model.entities {
+        let Some(s) = &e.core.sprite else { continue };
+        let blink = s.blink.iter().map(|b| ("blink.when".to_owned(), &b.when));
+        let clips = s
+            .clips
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (format!("clips[{i}].when"), &c.when));
+        for (at, when) in clips.chain(blink) {
+            for t in when.counters.iter() {
+                if let Some(from) = screen.get(t.name.as_str()) {
+                    out.push((
+                        format!("entities.{name}.sprite.{at}"),
+                        format!(
+                            "reads counter `{}`, which the state mapping reads from {from}: it is what the screen shows, a frame after the game's RAM, so the picture shows a frame late; key it on the counter the game writes",
+                            t.name
+                        ),
+                    ));
+                }
+            }
         }
     }
     out

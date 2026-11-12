@@ -1,15 +1,15 @@
 # Random draws script
 
-> Brought from game-printer with wave 3b of the port. `gp interp draws` (and `--find`) is in gameprinter; `gp clip score` and `gp corpus score` already play a mapping's draws when it sets `score_draws`, and `gp interp compare --draws` comes back with wave 1b. `gp game new` proposes the sites an idle run of 3600 frames finds into a new NES game's mapping.toml (`--no-draws` leaves the search out). A draw is read from the 6502's code, so an arcade romset is refused in words until wave 6 gives gp-arcade a memory-access log.
+> Brought from game-printer with wave 3b of the port. `gp interp draws` (and `--find`) is in gameprinter; `gp clip score` and `gp corpus score` already play a mapping's draws when it sets `score_draws`, and `gp interp compare --draws` runs a lockstep with a script. `gp game new` proposes the sites an idle run of 3600 frames finds into a new NES game's mapping.toml (`--no-draws` leaves the search out). A draw is read from the 6502's code, so an arcade romset is refused in words until wave 6 gives gp-arcade a memory-access log.
 
 
-A random draws script is the original's random draws on one input, in order: each time its code read a random byte where the model's hooks make a random choice. A rebuild given the script takes each draw from it in place of its own generator, so a lockstep clip makes the original's random choices, and everything after a choice (the object's pixels, the player's touches with it) is compared given the original's branch (docs/benchmarks.md, "Random choices"). Without a script a rebuild draws from its seeded generator, so free play is unchanged. The script is a run input: it isn't world state, in the canonical state or in its hash.
+A random draws script is the original's random draws on one input, in order: each time its code read a random byte where the model's hooks make a random choice. A rebuild given the script takes each draw from it in place of its own generator, so a lockstep clip makes the original's random choices, and everything after a choice (the object's pixels, the player's touches with it) is compared given the original's branch. Without a script a rebuild draws from its seeded generator, so free play is unchanged. The script is a run input: it isn't world state, in the canonical state or in its hash.
 
 `gp interp draws` records one; `gp interp compare --draws FILE` runs a lockstep with it. `gp_sim::draws` holds it.
 
 ## Draw sites
 
-The state mapping's `[[draws]]` (feature `draws`, docs/formats/state-mapping.md) names the original's draw sites:
+The state mapping's `[[draws]]` (feature `draws`) names the original's draw sites:
 
 | Key | Meaning |
 |---|---|
@@ -91,13 +91,13 @@ The draws on or before the start count as taken, so one script of a whole run se
 
 ## Scoring with draws
 
-A state mapping with `score_draws = true` (feature `draws.score`) scores with the original's draws everywhere a clip is scored, with no script file: `gp interp compare` records one from its input when `--draws` isn't given, a clip's score (`gp corpus score`, `gp capture regenerate`, the queue and `gp loop`) records the draws over the clip from its start and keeps them beside the clip's tape, and `gp model refine --lockstep` (the queue's refine rounds) records the whole input's once and gives each trial the draws after its start. A run with no start (a whole run from power-on with no `--from`) takes none, since the script needs the original's frame its first load stands for.
+A state mapping with `score_draws = true` (feature `draws.score`) scores with the original's draws everywhere a clip is scored, with no script file: `gp interp compare` records one from its input when `--draws` isn't given, a clip's score (`gp clip score`, `gp corpus score` and the gate) records the draws over the clip from its start and keeps them beside the clip's tape, and `gp model refine --lockstep` (the queue's refine rounds) records the whole input's once and gives each trial the draws after its start. A run with no start (a whole run from power-on with no `--from`) takes none, since the script needs the original's frame its first load stands for.
 
 ## The behaviour check
 
-Scoring with the original's draws holds what follows each choice; `gp interp odds MODEL --clips clips.toml [--rom ROM]` holds the rule that makes the choice (docs/benchmarks.md, "Random choices"). It reads the rule from the model, with nothing written down for it:
+Scoring with the original's draws holds what follows each choice; `gp interp odds MODEL --clips clips.toml [--rom ROM]` holds the rule that makes the choice. It reads the rule from the model, with nothing written down for it:
 
-1. The model plays each clip from power-on with its own generator (with `--rom`, on the frames the state mapping lines up with the original's, as `gp gen conform --rom` gives them). Every draw a hook makes is kept with its frame and site (the script's `calls`).
+1. The model plays each clip from power-on with its own generator (with `--rom`, on the frames the state mapping lines up with the original's). Every draw a hook makes is kept with its frame and site (the script's `calls`).
 2. At each draw the frame is run again from the state before it, with the draw set to each of the 256 byte values by a lenient script (one that sets that draw alone and lets the frame's other draws fall back to the hook's own). The bytes that lead to the same state are one branch, and a branch's share of the 256 is the rule's odds for it there. The draw's own branch is the one whose state the free run reached. A site's second draw in one frame isn't set (a script sets a site's first draw of the frame), and is counted as not tested.
 3. The decisions at a site with the same branches are pooled. A pool's count of each branch is tested against the rule's odds with a chi-square test, which fails when its p-value is below 0.001. With `--rom` a branch's odds are the share of the original's draws at the site whose bytes lead to it, since a game's generator needn't give the 256 values evenly: Donkey Kong's register ($18-$1F, stepped by the idle loop) doesn't, and against an even split even the original's own draws failed (roll_off p 0.0005, fire_way p 0.0004, 2026-11-03). Without `--rom` the odds are the 256 values' shares. A pool with an expected count under 5 is reported as too few to test. A decision with one branch only (Donkey Kong's barrel at a crowded ladder) is counted apart.
 4. With `--rom`, the original's draws over each clip from its start are put in the site's most common branches, and their counts are tested against the model's in that pool (chi-square on the 2 by k table): whether the two games choose with the same odds. Each clip runs as a resync lockstep with the original's draws: every desync at a site (the original drew where the rule draws nothing, or the reverse) fails the site.

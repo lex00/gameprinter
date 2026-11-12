@@ -103,6 +103,76 @@ what = "Running out of health, and what happens next"
 row = "game-over"
 what = "The game over and the way back to the title"
 
+# A hop on a grid of cells (Q*bert).
+[[gridhop]]
+row = "title"
+what = "The title screen and the attract demo from power-on: the menu, the demo, and what Start does"
+
+[[gridhop]]
+row = "hop"
+what = "A hop in each of the four directions: the frames it takes, its arc, and when the next press counts"
+
+[[gridhop]]
+row = "cells"
+what = "What a landing does to a cell, and how the level is cleared"
+
+[[gridhop]]
+row = "fall-off"
+what = "Hopping off the edge, and the lost life"
+
+[[gridhop]]
+row = "discs"
+what = "Riding a disc to the top, and an enemy that follows"
+
+[[gridhop]]
+row = "enemies"
+what = "Each enemy's hops, with the player out of its way"
+
+[[gridhop]]
+row = "caught"
+what = "Being caught by each enemy, and what happens until play starts again"
+
+[[gridhop]]
+row = "level-clear"
+what = "Clearing the first level, and the scene after it"
+
+[[gridhop]]
+row = "game-over"
+what = "Losing the last life: the game over and the way back to the title"
+
+# Track and field events (Track & Field): button runs and timed presses.
+[[events]]
+row = "title"
+what = "The title screen and the attract demo from power-on: the menu, the demo, and what Start does"
+
+[[events]]
+row = "run"
+what = "Pressing the two buttons in turn: how speed builds and drains"
+
+[[events]]
+row = "timed-action"
+what = "The timed press of each event (a jump at the line, a throw): early, on time and late"
+
+[[events]]
+row = "hold-angle"
+what = "Holding a button to set an angle, and letting go at several angles"
+
+[[events]]
+row = "foul"
+what = "Crossing the line before the action"
+
+[[events]]
+row = "qualify"
+what = "Reaching the qualifying mark, and the next event"
+
+[[events]]
+row = "miss"
+what = "Missing the mark, and the tries left"
+
+[[events]]
+row = "game-over"
+what = "Running out of tries: the game over and the way back to the title"
+
 [[other]]
 row = "title"
 what = "The title screen and the attract demo from power-on: the menu, the demo, and what Start does"

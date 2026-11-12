@@ -598,6 +598,7 @@ mod arcade_tests {
                 title: None,
                 namespace: Some("someone"),
                 games: Some(&games),
+                source: None,
                 date: "2026-11-11",
                 draws: true,
             },

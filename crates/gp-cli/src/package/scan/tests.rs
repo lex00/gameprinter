@@ -372,3 +372,45 @@ fn a_romset_place_names_its_region_and_chip() {
     );
     assert!(!s.place(total - 1).contains("PRG"));
 }
+
+/// With a baseline, the items an earlier scan listed are known and only a
+/// new one fails (game-printer's `--baseline`).
+#[test]
+fn a_baseline_excuses_the_items_it_lists() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = made_up_package(d.path(), None, true);
+    let paths = gp_evidence::Paths {
+        home: d.path().join("home"),
+        store: d.path().join("home/store"),
+        roms: d.path().join("roms"),
+    };
+    let first = super::run(&dir, &[], &[], &paths).unwrap();
+    assert_eq!(first.exit, 1);
+    let base = d.path().join("base.json");
+    fs::write(&base, first.json.to_string()).unwrap();
+    let again = super::run_against(&dir, &[], &[], &base, &paths).unwrap();
+    assert_eq!(again.exit, 0, "{}", again.text);
+    assert!(
+        again
+            .text
+            .contains("against the baseline: 0 new needs-rewrite items, 3 known"),
+        "{}",
+        again.text
+    );
+    // A baseline that lists only some of them: the rest are new.
+    let mut v = first.json.clone();
+    v["parts"][0]["rewrite"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|r| r["at"] != "fn r8100");
+    fs::write(&base, v.to_string()).unwrap();
+    let again = super::run_against(&dir, &[], &[], &base, &paths).unwrap();
+    assert_eq!(again.exit, 1);
+    assert_eq!(again.json["new_rewrite"], 1);
+    // game-printer's scan JSON, its items at the top level, reads the same.
+    let old = serde_json::json!({"rewrite": first.json["parts"][0]["rewrite"]});
+    assert_eq!(
+        super::known_keys(&old.to_string()).unwrap().len(),
+        super::known_keys(&first.json.to_string()).unwrap().len()
+    );
+}

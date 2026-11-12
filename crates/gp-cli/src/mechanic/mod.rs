@@ -48,6 +48,7 @@ pub(crate) mod http;
 pub(crate) mod live;
 pub(crate) mod paths;
 pub(crate) mod review;
+mod scores;
 mod server;
 pub(crate) mod session;
 pub(crate) mod watch;
@@ -82,6 +83,15 @@ pub enum MechanicCmd {
         /// the model (default: $GP_HOME/work/modules/GAME.wasm if it's there)
         #[arg(long)]
         module: Option<PathBuf>,
+        /// The ROM; by default the one in $GP_ROM_DIR the game's roms.toml
+        /// names.
+        #[arg(long)]
+        rom: Option<PathBuf>,
+        /// Stay on this build. By default the server restarts into
+        /// $GP_HOME/bin/gp when a new one is published (by the gate or `gp
+        /// self publish`), between requests, on the same port and mechanic.
+        #[arg(long)]
+        no_follow: bool,
     },
     /// The watch panel on a page of its own, on 127.0.0.1: what your agent is
     /// doing (its log, pins and problem table) and a box for your notes, for
@@ -252,7 +262,9 @@ pub enum MechanicCmd {
     /// The game's quest log, shown beside the game: each mechanic with its
     /// status (done, asking you, agent working, in line, next) and one plain
     /// line. With `--status`, adds the mechanic or changes it; without,
-    /// prints the quest log.
+    /// prints the quest log. A row whose clips are in the corpus takes its
+    /// status and a line of scores from the gate's status.json; the typed
+    /// note is shown under it.
     Queue {
         game: String,
         mechanic: Option<String>,
@@ -294,6 +306,8 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             port,
             games,
             module,
+            rom,
+            no_follow,
         } => server::start(
             paths,
             &server::Start {
@@ -303,6 +317,8 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                 port: *port,
                 games: games.as_deref(),
                 module: module.as_deref(),
+                rom: rom.as_deref(),
+                follow: !*no_follow,
             },
         ),
         MechanicCmd::Watch {
@@ -582,6 +598,7 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
         }
         write_queue(&f, &q)?;
     }
+    let q = scores::scored_queue(&paths.home, game);
     let text = q
         .iter()
         .map(|r| {
@@ -590,9 +607,15 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
                 r["mechanic"].as_str().unwrap_or(""),
                 r["status"].as_str().unwrap_or("")
             );
-            if let Some(t) = r["note"].as_str().filter(|t| !t.is_empty()) {
-                l.push_str("\n    ");
-                l.push_str(t);
+            for k in ["scores", "note"] {
+                if let Some(t) = r[k].as_str().filter(|t| !t.is_empty()) {
+                    l.push_str(if k == "scores" || r["scores"].is_null() {
+                        " "
+                    } else {
+                        "\n    "
+                    });
+                    l.push_str(t);
+                }
             }
             if r["scope"] == json!("out") {
                 l.push_str(&format!(

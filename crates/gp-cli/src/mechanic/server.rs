@@ -53,6 +53,10 @@ pub(crate) struct Start<'a> {
     pub games: Option<&'a Path>,
     /// The game's built module, for the review of clips on the model.
     pub module: Option<&'a Path>,
+    /// The ROM, instead of the one found in $GP_ROM_DIR by hash.
+    pub rom: Option<&'a Path>,
+    /// Whether to restart into a newly published `$GP_HOME/bin/gp`.
+    pub follow: bool,
 }
 
 /// The largest request body: a play from power-on, about 11 bytes a frame,
@@ -90,7 +94,12 @@ fn wasm_path(repo: &Path, platform: Platform) -> PathBuf {
 
 /// The game's ROM: the one its roms.toml names, found by hash in
 /// $GP_ROM_DIR. A source with the game's own id is taken first.
-fn game_rom(paths: &Paths, games: Option<&Path>, game: &str) -> Result<crate::roms::Rom> {
+fn game_rom(
+    paths: &Paths,
+    games: Option<&Path>,
+    game: &str,
+    given: Option<&Path>,
+) -> Result<crate::roms::Rom> {
     let games = crate::roms_cmd::games_dir(games)
         .context("no games checkout: pass --games or set GP_GAMES_DIR")?;
     let file = games.join(game).join("roms.toml");
@@ -117,7 +126,8 @@ fn game_rom(paths: &Paths, games: Option<&Path>, game: &str) -> Result<crate::ro
     let mut wanted: Vec<&gp_evidence::registry::KnownSource> = reg.sources.iter().collect();
     wanted.sort_by_key(|s| (!scored.contains(&s.sha256), s.id != game));
     let shas: Vec<String> = wanted.iter().map(|s| s.sha256.clone()).collect();
-    let mut found = crate::roms::find(&shas, &[], &paths.roms)?;
+    let given: Vec<std::path::PathBuf> = given.iter().map(|p| p.to_path_buf()).collect();
+    let mut found = crate::roms::find(&shas, &given, &paths.roms)?;
     for s in &shas {
         if let Some(r) = found.remove(s) {
             return Ok(r);
@@ -152,13 +162,97 @@ fn mechanic_to_open(paths: &Paths, game: &str, asked: Option<&str>) -> Result<St
 
 /// The server's listening socket, on this machine only.
 fn listen(port: u16) -> Result<TcpListener> {
-    TcpListener::bind(("127.0.0.1", port))
+    // A build the server restarted into may find its port held for a
+    // moment, so it tries again for a few seconds.
+    let tries = if std::env::var_os(RESTARTED).is_some() {
+        50
+    } else {
+        1
+    };
+    let mut last = None;
+    for _ in 0..tries {
+        match TcpListener::bind(("127.0.0.1", port)) {
+            Ok(l) => return Ok(l),
+            Err(e) => last = Some(e),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Err(anyhow::Error::new(last.expect("one try at least")))
         .with_context(|| format!("port {port} is taken: give another with --port"))
+}
+
+/// Set for the build a server restarts into.
+const RESTARTED: &str = "GP_MECHANIC_RESTARTED";
+
+/// What `bin/gp` resolves to and when that file was written: a change
+/// means a new build was published.
+fn published_id(link: &Path) -> Option<(std::path::PathBuf, std::time::SystemTime)> {
+    let real = fs::canonicalize(link).ok()?;
+    let when = fs::metadata(&real).ok()?.modified().ok()?;
+    Some((real, when))
+}
+
+/// Whether `bin --version` exits 0 within ten seconds.
+fn runs(bin: &Path) -> bool {
+    let Ok(mut child) = std::process::Command::new(bin)
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(s)) => return s.success(),
+            Ok(None) if started.elapsed() < std::time::Duration::from_secs(10) => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
+}
+
+/// Replaces this process with `bin`, serving the same port and the
+/// mechanic open now, with the options it was started with. The listening
+/// socket closes with the exec and the new build binds the port again, a
+/// fraction of a second later. Returns only when the exec fails.
+fn restart(srv: &Server, bin: &Path, a: &Start) -> anyhow::Error {
+    use std::os::unix::process::CommandExt as _;
+    let mechanic = srv
+        .session
+        .lock()
+        .expect("session lock")
+        .as_ref()
+        .and_then(|s| s.dir.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_default();
+    eprintln!(
+        "gp mechanic: a new build is published; restarting into {}",
+        bin.display()
+    );
+    let mut c = std::process::Command::new(bin);
+    c.args(["mechanic", "start", &srv.game, &mechanic, "--port"])
+        .arg(srv.port.to_string());
+    for (flag, v) in [
+        ("--games", a.games),
+        ("--module", a.module),
+        ("--rom", a.rom),
+    ] {
+        if let Some(v) = v {
+            c.arg(flag).arg(v);
+        }
+    }
+    anyhow::Error::new(c.env(RESTARTED, "1").exec())
 }
 
 pub(crate) fn start(paths: &Paths, a: &Start) -> Result<Outcome> {
     let repo = repo_root()?;
-    let rom = game_rom(paths, a.games, a.game)?;
+    let rom = game_rom(paths, a.games, a.game, a.rom)?;
     let mechanic = mechanic_to_open(paths, a.game, a.mechanic)?;
     let listener = listen(a.port)?;
     let port = listener.local_addr()?.port();
@@ -220,14 +314,57 @@ pub(crate) fn start(paths: &Paths, a: &Start) -> Result<Outcome> {
         "Give your agent this: \"We're working on the {mechanic} of {game}. Run `gp mechanic show {game} {mechanic}` to see the session, answer with `gp mechanic say {game} {mechanic} \\\"...\\\"`, and keep the loop going: ask me for the clip you need next.\""
     );
     let _ = std::io::Write::flush(&mut std::io::stdout());
-    for conn in listener.incoming() {
-        let Ok(conn) = conn else { continue };
-        let s = server.clone();
-        std::thread::spawn(move || {
-            let _ = serve_one(&s, &conn);
-        });
+    // Accepted here only, so with none in flight no request is running:
+    // the server restarts into a new published build then, never during a
+    // request or a rebuild's build.
+    let busy = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let link = paths.home.join("bin").join("gp");
+    let mut seen = published_id(&link);
+    let mut looked = std::time::Instant::now();
+    listener.set_nonblocking(true)?;
+    loop {
+        match listener.accept() {
+            Ok((conn, _)) => {
+                // Accepted sockets take the listener's non-blocking flag on
+                // macOS.
+                let _ = conn.set_nonblocking(false);
+                let s = server.clone();
+                let b = busy.clone();
+                b.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::thread::spawn(move || {
+                    let _ = serve_one(&s, &conn);
+                    drop(conn);
+                    b.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                if a.follow && looked.elapsed() >= std::time::Duration::from_secs(2) {
+                    looked = std::time::Instant::now();
+                    let now = published_id(&link);
+                    if let Some((bin, _)) = now.as_ref().filter(|_| now != seen)
+                        && busy.load(std::sync::atomic::Ordering::SeqCst) == 0
+                        && !super::live::building()
+                    {
+                        if runs(bin) {
+                            let e = restart(&server, bin, a);
+                            eprintln!(
+                                "gp mechanic: couldn't restart into {}: {e:#}",
+                                bin.display()
+                            );
+                        } else {
+                            eprintln!(
+                                "gp mechanic: {} doesn't run `--version`; staying on this build",
+                                bin.display()
+                            );
+                        }
+                        seen = now;
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(_) => {}
+        }
     }
-    Ok(Outcome::ok(json!({}), String::new()))
 }
 
 pub(crate) struct Server {

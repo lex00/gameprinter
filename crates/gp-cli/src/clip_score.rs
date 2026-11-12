@@ -30,18 +30,27 @@ pub(crate) const LASTING: usize = 30;
 
 #[derive(Subcommand)]
 pub enum ClipCmd {
-    /// Write a corpus clip's input log from power-on: the presses to its
-    /// start, then its own presses or presses file. Prints the file and the
-    /// frame the clip starts at.
+    /// Write a clip's input log from power-on: for a mechanic session's
+    /// clip, the stored path up to its start, then the clip's own inputs,
+    /// the start checked against the state hash the clip was saved with;
+    /// for a corpus clip, the presses to its start, then its own presses or
+    /// presses file. Prints the file and the frame the clip starts at, the
+    /// frame to give `gp interp compare --from`.
     Log {
         /// The game's package folder (games/donkey-kong).
         game: PathBuf,
-        /// A clip of the game's corpus by its ID (dk.hammer.018).
+        /// The clip: SESSION:N (jump:3), a clip of the game's mechanic
+        /// sessions, or a clip of the game's corpus by its ID (dk.hammer.018).
         clip: String,
-        /// Where to write it, `-` for standard output (default: CLIP.log in
-        /// the output folder, $GP_HOME/work/clip-score/$GP_WORKER).
+        /// Where to write it, `-` for standard output (default: CLIP.log or
+        /// SESSION-NNN.log in the output folder,
+        /// $GP_HOME/work/clip-score/$GP_WORKER).
         #[arg(long)]
         out: Option<PathBuf>,
+        /// The ROM, for a session clip's start check; by default the one in
+        /// $GP_ROM_DIR the package names.
+        #[arg(long)]
+        rom: Option<PathBuf>,
     },
     /// Save a played clip as a corpus clip: its input from power-on split
     /// at its start into inputs/ID.start.presses and inputs/ID.presses (an
@@ -110,13 +119,19 @@ pub enum ClipCmd {
     /// draws when the state mapping sets `score_draws`. Prints the frames
     /// together both ways, the frame pairing, the exact stretches, the first
     /// lasting split and the splits by measure, and writes each clip's log,
-    /// both lockstep JSONs and its score into OUT/CLIP/.
+    /// both lockstep JSONs and its score into OUT/CLIP/ (OUT/SESSION-NNN/
+    /// for a session's clip). Refuses a sealed session.
     Score {
         /// The game's package folder (games/donkey-kong).
         game: PathBuf,
-        /// Clips of the game's corpus by their IDs.
-        #[arg(required = true)]
+        /// Clips: SESSION:N, SESSION for every clip of a mechanic session,
+        /// or a clip of the game's corpus by its ID (dk.hammer.018).
+        #[arg(required_unless_present = "all")]
         clips: Vec<String>,
+        /// Every clip of every mechanic session of the game, leaving out
+        /// sealed sessions.
+        #[arg(long, conflicts_with = "clips")]
+        all: bool,
         /// The game's built module. Needed for a model with hooks.
         #[arg(long)]
         module: Option<PathBuf>,
@@ -144,7 +159,12 @@ pub enum ClipCmd {
 
 pub(crate) fn run(cmd: &ClipCmd, paths: &Paths) -> Result<Outcome> {
     match cmd {
-        ClipCmd::Log { game, clip, out } => log_cmd(paths, game, clip, out.as_deref()),
+        ClipCmd::Log {
+            game,
+            clip,
+            out,
+            rom,
+        } => log_cmd(paths, game, clip, out.as_deref(), rom.as_deref()),
         ClipCmd::Screen {
             game,
             clip,
@@ -197,6 +217,7 @@ pub(crate) fn run(cmd: &ClipCmd, paths: &Paths) -> Result<Outcome> {
         ClipCmd::Score {
             game,
             clips,
+            all,
             module,
             model,
             assets,
@@ -206,7 +227,7 @@ pub(crate) fn run(cmd: &ClipCmd, paths: &Paths) -> Result<Outcome> {
         } => score_cmd(
             paths,
             game,
-            clips,
+            (clips, *all),
             &Open {
                 module: module.as_deref(),
                 model: model.as_deref(),
@@ -263,10 +284,30 @@ pub(crate) fn corpus_clip(game: &Path, spec: &str) -> Result<CorpusClip> {
         .with_context(|| format!("{} has no clip {spec}", game.display()))
 }
 
-fn log_cmd(paths: &Paths, game: &Path, spec: &str, out: Option<&Path>) -> Result<Outcome> {
-    let r = corpus_clip(game, spec)?;
-    let (log, start) = r.log()?;
-    let name = clipset::file_key(&r.recipe.id);
+fn log_cmd(
+    paths: &Paths,
+    game: &Path,
+    spec: &str,
+    out: Option<&Path>,
+    rom: Option<&Path>,
+) -> Result<Outcome> {
+    let session = spec.contains(':') || corpus_clip(game, spec).is_err();
+    let (log, start, name) = if session && crate::clip_session::is_session_spec(spec) {
+        let name = crate::clip_session::game_name(game)?;
+        let mut clips = crate::clip_session::clips(paths, &name, spec)?;
+        if !spec.contains(':') || clips.len() != 1 {
+            bail!("a clip is SESSION:N or a corpus clip's ID, not {spec}");
+        }
+        let c = clips.remove(0);
+        // Checks the start against the clip's state hash.
+        c.check_start(&paths.home, &rom_of(paths, game, rom)?)?;
+        let (log, start) = c.log(&paths.home)?;
+        (log, start, c.key())
+    } else {
+        let r = corpus_clip(game, spec)?;
+        let (log, start) = r.log()?;
+        (log, start, clipset::file_key(&r.recipe.id))
+    };
     let text = log.to_text();
     let j = json!({"clip": spec, "start": start, "frames": log.frames.len()});
     if out == Some(Path::new("-")) {
@@ -285,9 +326,14 @@ fn log_cmd(paths: &Paths, game: &Path, spec: &str, out: Option<&Path>) -> Result
     Ok(Outcome::ok(
         j,
         format!(
-            "wrote {}: {} frames from power-on; the clip starts at frame {start}",
+            "wrote {}: {} frames from power-on; the clip starts at frame {start}{}",
             file.display(),
-            log.frames.len()
+            log.frames.len(),
+            if session {
+                " (its start state checked)"
+            } else {
+                ""
+            }
         ),
     ))
 }
@@ -761,41 +807,70 @@ pub(crate) fn score_one(
 fn score_cmd(
     paths: &Paths,
     game: &Path,
-    specs: &[String],
+    (specs, all): (&[String], bool),
     how: &Open,
     out: Option<&Path>,
     values: &[String],
 ) -> Result<Outcome> {
-    let corpus: Vec<CorpusClip> = specs
-        .iter()
-        .map(|c| corpus_clip(game, c))
-        .collect::<Result<_>>()?;
-    if corpus.is_empty() {
+    // Session clips, each refused if it is sealed; with --all, sealed
+    // sessions are left out instead. Corpus clips by ID.
+    let mut sessions: Vec<crate::clip_session::SessionClip> = Vec::new();
+    let mut corpus: Vec<CorpusClip> = Vec::new();
+    let (mut sealed_sessions, mut left_out) = (0usize, 0usize);
+    if all {
+        let name = crate::clip_session::game_name(game)?;
+        (sessions, sealed_sessions, left_out) = crate::clip_session::all(paths, &name)?;
+    } else {
+        for spec in specs {
+            match corpus_clip(game, spec) {
+                Ok(c) if !spec.contains(':') => corpus.push(c),
+                Err(e) if !crate::clip_session::is_session_spec(spec) => return Err(e),
+                _ => {
+                    let name = crate::clip_session::game_name(game)?;
+                    sessions.extend(crate::clip_session::clips(paths, &name, spec)?);
+                }
+            }
+        }
+    }
+    if sessions.is_empty() && corpus.is_empty() {
         bail!("no clips to score");
     }
     let mut ctx = Ctx::open(paths, game, how)?;
     ctx.values = values.to_vec();
     let out = out.map_or_else(|| out_dir(paths), Path::to_owned);
-    let results = crate::pool::map(
-        &corpus,
-        || (),
-        |_, _, c| -> Result<Scored, String> {
-            let (log, start) = c.log().map_err(|e| format!("{e:#}"))?;
-            score_one(
-                &ctx,
-                &c.recipe.id,
-                &log,
-                start,
-                &out.join(clipset::file_key(&c.recipe.id)),
+    // Each clip's name, its output folder, and where its full log comes from.
+    enum From<'a> {
+        Session(&'a crate::clip_session::SessionClip),
+        Corpus(&'a CorpusClip),
+    }
+    let items: Vec<(String, String, From)> = sessions
+        .iter()
+        .map(|c| (c.name(), c.key(), From::Session(c)))
+        .chain(corpus.iter().map(|c| {
+            (
+                c.recipe.id.clone(),
+                clipset::file_key(&c.recipe.id),
+                From::Corpus(c),
             )
-            .map_err(|e| format!("{e:#}"))
+        }))
+        .collect();
+    let results = crate::pool::map(
+        &items,
+        || (),
+        |_, _, (name, folder, from)| -> Result<Scored, String> {
+            let (log, start) = match from {
+                From::Session(c) => c.log(&paths.home),
+                From::Corpus(c) => c.log(),
+            }
+            .map_err(|e| format!("{e:#}"))?;
+            score_one(&ctx, name, &log, start, &out.join(folder)).map_err(|e| format!("{e:#}"))
         },
         &mut |_| {},
     );
     let mut text = Vec::new();
     let mut rows = Vec::new();
     let mut failed = 0;
-    for (c, r) in corpus.iter().zip(results) {
+    for ((name, _, _), r) in items.iter().zip(results) {
         match r {
             Ok(sc) => {
                 text.push(sc.text);
@@ -803,12 +878,21 @@ fn score_cmd(
             }
             Err(e) => {
                 failed += 1;
-                text.push(format!("{}: couldn't be scored: {e}", c.recipe.id));
-                rows.push(json!({"clip": c.recipe.id, "error": e}));
+                text.push(format!("{name}: couldn't be scored: {e}"));
+                rows.push(json!({"clip": name, "error": e}));
             }
         }
     }
-    let mut o = Outcome::ok(json!({"clips": rows, "out": out}), text.join("\n"));
+    let mut j = json!({"clips": rows, "out": out});
+    if all {
+        if left_out + sealed_sessions > 0 {
+            text.push(format!(
+                "left out {sealed_sessions} sealed sessions and {left_out} clips that are sealed runs"
+            ));
+        }
+        j["left_out"] = json!({"sealed_sessions": sealed_sessions, "clips": left_out});
+    }
+    let mut o = Outcome::ok(j, text.join("\n"));
     if failed > 0 {
         o.exit = 1;
     }

@@ -56,6 +56,60 @@ pub fn run(dir: &Path, given: &[PathBuf], wasm: &[PathBuf], paths: &Paths) -> Re
     Ok(outcome)
 }
 
+/// [`run`] held to a baseline, an earlier scan's `--json` output: its
+/// needs-rewrite items are known, each item is marked new or not, and only
+/// new ones fail (with any ROM bytes in a module).
+pub fn run_against(
+    dir: &Path,
+    given: &[PathBuf],
+    wasm: &[PathBuf],
+    baseline: &Path,
+    paths: &Paths,
+) -> Result<Outcome> {
+    let known = known_keys(
+        &fs::read_to_string(baseline)
+            .with_context(|| format!("reading the baseline {}", baseline.display()))?,
+    )?;
+    let mut o = run(dir, given, wasm, paths)?;
+    let (mut new, mut all) = (0usize, 0usize);
+    for part in o.json["parts"].as_array_mut().into_iter().flatten() {
+        for r in part["rewrite"].as_array_mut().into_iter().flatten() {
+            let fresh = !r["key"].as_str().is_some_and(|k| known.contains(k));
+            r["new"] = json!(fresh);
+            all += 1;
+            new += usize::from(fresh);
+        }
+    }
+    let _ = write!(
+        o.text,
+        "\nagainst the baseline: {new} new needs-rewrite items, {} known",
+        all - new
+    );
+    o.json["new_rewrite"] = json!(new);
+    let wasm_found = o.json["wasm"]["finds"]
+        .as_array()
+        .is_some_and(|f| !f.is_empty());
+    o.exit = u8::from(new > 0 || wasm_found);
+    Ok(o)
+}
+
+/// The needs-rewrite keys of a scan's `--json` output: every part's, and
+/// the top level's in game-printer's form.
+pub fn known_keys(text: &str) -> Result<BTreeSet<String>> {
+    let v: serde_json::Value =
+        serde_json::from_str(text).context("the baseline isn't a scan's JSON")?;
+    let parts = v["parts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|p| p["rewrite"].as_array().into_iter().flatten());
+    let top = v["rewrite"].as_array().into_iter().flatten();
+    Ok(parts
+        .chain(top)
+        .filter_map(|r| r["key"].as_str().map(str::to_owned))
+        .collect())
+}
+
 /// Every data segment and custom section of each `.wasm` of the folder, and
 /// of `extra`, against the ROMs: the text report, the JSON and whether any
 /// ROM bytes were found.

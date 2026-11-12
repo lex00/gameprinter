@@ -15,6 +15,8 @@ gp roms add ~/Downloads/my-game.nes
 
 Each file is named by the game whose `roms.toml` in your [games checkout](https://github.com/lex00/games) holds its hash. A ROM no game names yet is added as unknown, and that's the one you start a game from. `--move` moves the file instead of copying it, and `--clean` adds a copy without the junk some dumps carry (a trainer, bytes after the game data), with a note of what was removed.
 
+A ROM hack is a patched source: a game's `roms.toml` names the base it is made from and the author's patch by its hash (`kind = "patched"`). Download the patch from its author's page yourself, then `gp roms add --patch hack.ips` applies it to your own base in the ROM folder, checks every hash the entry gives, and writes the result to `nes/patched/` with a note of how it was made. `--base ID` picks one base, and `--new --base ID` applies a patch nobody has registered yet and prints a draft entry, writing nothing. The patch and the result never go in a repo.
+
 `gp roms scan` lists what's in the folder and which game each file belongs to.
 
 If the game has several revisions, compare them and choose one as the target. `gp roms diff a.nes b.nes --summary` lists each range of PRG and CHR that differs, named by the first one's asset map and labels (graphics, level data, a table, code), without quoting any byte. When the two programs sit at different offsets, `--cpu C000-FFFF` compares what the CPU sees there instead. `docs/roms-diff.md` in the gameprinter repo has the rest.
@@ -25,7 +27,9 @@ If the game has several revisions, compare them and choose one as the target. `g
 gp game new my-game --rom ~/.gameprinter/roms/nes/my-game.nes --genre platformer --title "My Game"
 ```
 
-This makes `my-game/` in your games checkout. It holds the package, the ROM's hashes in `roms.toml`, an asset map of what the ROM's header says, and a model skeleton for the genre (`platformer`, `topdown` or `other`): a pad, a player and an empty level, each marked as a placeholder. There's a corpus with no clips, and pins that already hold against your ROM. No byte of the ROM is written. It writes over nothing, and it refuses a ROM another game already names.
+This makes `my-game/` in your games checkout. It holds the package, the ROM's hashes in `roms.toml`, an asset map of what the ROM's header says, and a model skeleton for the genre (`platformer`, `topdown`, `gridhop` for a hop on a grid of cells such as Q*bert, `events` for track and field, or `other`): a pad, a player and an empty level, each marked as a placeholder. There's a corpus with no clips, and pins that already hold against your ROM. No byte of the ROM is written. It writes over nothing, and it refuses a ROM another game already names.
+
+The ROM's source in `roms.toml` is named after the game; `--source ID` names it otherwise (`qbert-u`), when the game will have more than one ROM.
 
 Check what it made:
 
@@ -34,6 +38,8 @@ gp model check my-game
 gp template check my-game --rom ~/.gameprinter/roms/nes/my-game.nes
 gp package scan my-game
 ```
+
+`gp package scan --json` output kept as a baseline (`--baseline FILE`) lists what the scan found then as known, so a later scan fails only on something new.
 
 The first real work is finding where the game keeps the player in RAM and adding it to `mapping.toml`, before the first clip.
 
@@ -46,9 +52,13 @@ scripts/web/build-play.sh
 gp mechanic start my-game walk
 ```
 
-It serves the page at `http://127.0.0.1:7710/`, on your machine only, and prints a line to give your agent. Play with the keyboard or a controller. R (or the right bumper) starts a recording and stops it; type a note and press Enter to hand the clip to your agent. The agent reads the session with `gp mechanic show my-game walk` and answers with `gp mechanic say`; its words show over the game, which waits until you answer. Click another row of the quest log to work on it next. FREE PLAY is the game on its own: your agent's words wait there until Esc brings you back.
+It serves the page at `http://127.0.0.1:7710/`, on your machine only, and prints a line to give your agent. When a new `gp` is published to `~/.gameprinter/bin/gp` (by the gate, or `gp self publish`), the server restarts into it between requests, on the same port and mechanic; `--no-follow` keeps it on the build it started with. `--rom FILE` names the ROM instead of finding it in your ROM folder. Play with the keyboard or a controller. R (or the right bumper) starts a recording and stops it; type a note and press Enter to hand the clip to your agent. The agent reads the session with `gp mechanic show my-game walk` and answers with `gp mechanic say`; its words show over the game, which waits until you answer. Click another row of the quest log to work on it next. FREE PLAY is the game on its own: your agent's words wait there until Esc brings you back.
+
+Once a mechanic's clips are in the corpus and a patch lands through `gp model gate`, the gate writes its scores to `~/.gameprinter/work/refine/my-game/status.json`, and the quest log (`gp mechanic queue my-game`, and the page's list) shows each row's scores: how many clips meet the contract's bars, the share of frames together, and the first split. A row whose clips all meet the bars shows as done.
 
 Clips are kept as presses, never pictures, under `~/.gameprinter/mechanics/my-game/`.
+
+A clip of a session is scored on the model before it's in the corpus: `gp clip score my-game walk:3` scores clip 3 of the walk session, `gp clip score my-game walk` every clip of it, and `--all` every clip of every session. `gp clip log my-game walk:3` writes the clip's input from power-on, its start checked against the state saved with it. A sealed session (its name starts with `sealed`) is refused, and left out of `--all`.
 
 Beside the game, **Your agent** shows what the agent is doing while you play: its status and a log (`gp mechanic log`), pictures and clips it pins for you to look at (`gp mechanic pin`, such as a sheet of frames or the original against the model), and a table of the problems it has found with the state of each (`gp mechanic problem`). Tell it what you see in the conversation.
 
@@ -64,6 +74,8 @@ gp corpus import my-game --write
 ```
 
 The first says which clips it would add, change and leave out, and the version step; `--write` writes them into `corpus.toml` and `inputs/` and records the new version. A clip already there is kept as it is, and nothing is removed unless you name it with `--remove`. `--session walk` takes only that session's clips. Sealed runs, rows marked out of scope and anything `[import] exclude` names stay out. After editing `corpus.toml` by hand, `gp corpus bump my-game` says what changed since the recorded version and `--write` records the next one. The format and the version rules are in `docs/formats/scoring-corpus.md` in the gameprinter repo.
+
+In a games repo the import can go through the gate instead: `gp model gate my-game --import` runs the import on the branch's tip from your sessions, gates the result as a patch (the corpus scored before and after) and lands it when nothing got worse. With nothing new in the sessions it lands nothing. `--removes ID` lets it remove a clip, as for a patch.
 
 ## Tools for reading the game
 

@@ -207,7 +207,20 @@ impl Session {
             "clips": clips,
             "talk": turns,
             "waiting_for": waiting,
-            "queue": read_queue(&self.dir.with_file_name("queue.json")),
+            // The quest log with the gate's scores, as `gp mechanic queue`
+            // prints it: $GP_HOME is three folders up (mechanics/GAME/M).
+            "queue": super::scores::scored_queue(
+                self.dir
+                    .parent()
+                    .and_then(Path::parent)
+                    .and_then(Path::parent)
+                    .unwrap_or(Path::new("")),
+                self.dir
+                    .parent()
+                    .and_then(Path::file_name)
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(""),
+            ),
         }))
     }
 

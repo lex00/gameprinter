@@ -39,6 +39,7 @@ check: _hook-enabled build mosshop
     cargo test -q --workspace --profile {{profile}}
     {{gp}} self docs --check CLI.md
     {{gp}} baseline check --rom {{quote(mosshop_rom)}} baselines/mosshop
+    {{gp}} baseline check baselines/gp-testrom
     mkdir -p {{quote(assets)}}
     {{gp}} assets lift {{quote(mosshop_rom)}} --map assets/mosshop.toml -o {{quote(assets)}} --force
     {{gp}} assets pack {{quote(assets)}} --check {{quote(mosshop_rom)}}
