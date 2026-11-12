@@ -21,7 +21,11 @@
 //! both CPUs, the timers, every RAM and the last frame's picture. Its hash
 //! is [`Tapper::state_hash`]. Each frame stepped gives one `frame` event
 //! with a `polled` flag, false on a frame where the game didn't read its
-//! inputs.
+//! inputs. With `set("ay_events", true)` it also gives an `ay-write` event
+//! for each AY register the sound CPU wrote in the frame, in order, with
+//! `chip`, `reg` and `value`: the original's side of a sound measure, as
+//! gp-nes's `apu-write` events are for the NES. A model has no AY hook
+//! yet, so nothing compares them.
 
 use gp_runtime::select::{Condition, Index, Selector, hex};
 use gp_runtime::{
@@ -31,10 +35,15 @@ use gp_runtime::{
 
 use crate::{Controls, Romset, Tapper};
 
+/// The kind of the events that carry the AY writes.
+pub const AY_KIND: &str = "ay-write";
+
 /// Tapper behind the runtime protocol.
 #[derive(Clone)]
 pub struct ArcadeRuntime {
     tapper: Tapper,
+    /// Whether a step gives `ay-write` events.
+    ay_events: bool,
 }
 
 impl ArcadeRuntime {
@@ -52,7 +61,10 @@ impl ArcadeRuntime {
 
     /// Wraps a machine already running, such as one restored from a start.
     pub fn new(tapper: Tapper) -> Self {
-        Self { tapper }
+        Self {
+            tapper,
+            ay_events: false,
+        }
     }
 
     pub fn tapper(&self) -> &Tapper {
@@ -83,15 +95,34 @@ impl ArcadeRuntime {
 
     fn step_frame(&mut self, input: &InputFrame) -> Result<Vec<Event>, String> {
         let polled = self.advance(input)?;
-        Ok(vec![Event {
-            frame: self.tapper.frame(),
+        let frame = self.tapper.frame();
+        let mut events = vec![Event {
+            frame,
             kind: "frame".into(),
             entity: None,
             data: vec![Entry {
                 path: "polled".into(),
                 value: Value::Flag(polled),
             }],
-        }])
+        }];
+        if self.ay_events {
+            let int = |path: &str, v: u8| Entry {
+                path: path.into(),
+                value: Value::Int(i64::from(v)),
+            };
+            events.extend(
+                self.tapper
+                    .ay_registers_written()
+                    .iter()
+                    .map(|&(chip, reg, value)| Event {
+                        frame,
+                        kind: AY_KIND.into(),
+                        entity: None,
+                        data: vec![int("chip", chip), int("reg", reg), int("value", value)],
+                    }),
+            );
+        }
+        Ok(events)
     }
 
     /// Reads a parsed selector.
@@ -136,6 +167,49 @@ impl ArcadeRuntime {
 
     fn holds(&self, cond: &Condition) -> Result<bool, String> {
         cond.eval(&mut |sel| self.read_one(sel))
+    }
+}
+
+/// Answers `sel` from a RAM record (the oracle's layout, [`Tapper::ram_record`])
+/// alone, as [`ArcadeRuntime::read`] would on the machine that made it:
+/// `ram[...]` from 0xE000 up, `sound_ram[...]` and `palette[...]`. `None`
+/// for a selector the record can't answer (the program below 0xE000, the
+/// ports, the CPUs), which a score tape keeps by selector instead.
+pub fn read_record(record: &[u8], sel: &Selector) -> Option<Result<Vec<Entry>, String>> {
+    if record.len() != crate::mcr::RAM_RECORD {
+        return None;
+    }
+    let index = match sel.last_index() {
+        Err(e) => return Some(Err(e)),
+        Ok(None) => return None,
+        Ok(Some(i)) => i,
+    };
+    match sel.name().as_str() {
+        "sound_ram" => Some(indexed("sound_ram", index, &record[4736..])),
+        "palette" => Some(indexed("palette", index, &record[4608..4736])),
+        "ram" => {
+            let r = match range("ram", index, 0x1_0000) {
+                Ok(r) => r,
+                Err(e) => return Some(Err(e)),
+            };
+            if r.start < 0xe000 {
+                return None;
+            }
+            // Board::main_read for 0xE000 up.
+            let byte = |a: usize| match a {
+                0xe000..=0xe7ff => record[a & 0x7ff],
+                0xe800..=0xebff => record[2048 + (a & 0x1ff)],
+                0xf000..=0xf7ff => record[2560 + (a & 0x7ff)],
+                _ => 0xff,
+            };
+            Some(Ok(r
+                .map(|a| Entry {
+                    path: format!("ram[{}]", hex(a as i64)),
+                    value: Value::Int(byte(a).into()),
+                })
+                .collect()))
+        }
+        _ => None,
     }
 }
 
@@ -274,10 +348,16 @@ impl Runtime for ArcadeRuntime {
         PatchResult::Rejected("the original game can't be patched".into())
     }
 
-    fn set(&mut self, p: &str, _v: Value) -> Result<(), String> {
-        Err(format!(
-            "{p}: gp-arcade sets nothing; the original runs as it is"
-        ))
+    fn set(&mut self, p: &str, v: Value) -> Result<(), String> {
+        match (p, v) {
+            ("ay_events", Value::Flag(on)) => {
+                self.ay_events = on;
+                Ok(())
+            }
+            _ => Err(format!(
+                "{p}: gp-arcade sets only ay_events (on or off); the original runs as it is"
+            )),
+        }
     }
 
     fn explain(&self, _p: &str) -> Vec<String> {
@@ -304,7 +384,7 @@ mod tests {
             gfx1: vec![0; 0x8000],
             gfx2: vec![0; 0x20000],
             extras: Vec::new(),
-            ssio_prom: false,
+            ssio_prom: None,
         }
     }
 
@@ -349,5 +429,50 @@ mod tests {
         };
         assert!(rt.step(&[reset]).is_err());
         assert!(rt.load_state(&[]).is_err());
+    }
+
+    /// `ay_events` turns the AY write events on; with the owner's romset,
+    /// the sound board's start-up writes come out as events. Skipped
+    /// without it.
+    #[test]
+    fn ay_events_carry_the_sound_cpus_writes() {
+        let mut rt = ArcadeRuntime::load(&looping());
+        assert!(rt.set("ay_events", Value::Flag(true)).is_ok());
+        assert!(rt.set("volume", Value::Int(3)).is_err());
+        let Some(zip) = crate::romset::local_romset("rbtapper") else {
+            eprintln!("skipped: no rbtapper romset");
+            return;
+        };
+        let mut rt = ArcadeRuntime::load_zip(&std::fs::read(zip).unwrap()).unwrap();
+        rt.set("ay_events", Value::Flag(true)).unwrap();
+        let ev = rt.step(&vec![InputFrame::default(); 30]).unwrap();
+        let ay: Vec<&Event> = ev.iter().filter(|e| e.kind == AY_KIND).collect();
+        assert!(!ay.is_empty());
+        assert_eq!(ay[0].data[0].path, "chip");
+    }
+
+    /// A RAM record answers what the machine answers, for the parts it
+    /// holds, and nothing else.
+    #[test]
+    fn a_ram_record_answers_as_the_machine() {
+        let mut rt = ArcadeRuntime::load(&looping());
+        rt.step(&vec![InputFrame::default(); 3]).unwrap();
+        let rec = rt.tapper().ram_record();
+        for sel in [
+            "ram[0xe000..0xe010]",
+            "ram[0xe9f0..0xec10]",
+            "ram[0xf7f0..0xf810]",
+            "sound_ram[0..8]",
+            "palette[*]",
+        ] {
+            let s = Selector::parse(sel).unwrap();
+            assert_eq!(read_record(&rec, &s).unwrap(), rt.read(&s), "{sel}");
+        }
+        for sel in ["ram[0x100]", "ports[0]", "cpu.pc", "frame"] {
+            assert!(
+                read_record(&rec, &Selector::parse(sel).unwrap()).is_none(),
+                "{sel}"
+            );
+        }
     }
 }

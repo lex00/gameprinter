@@ -39,6 +39,17 @@ impl Lifted {
         };
         let mut files = BTreeMap::new();
         let map_text = read(MAP_FILE)?;
+        if gp_assets::arcade::is_arcade(&map_text) {
+            // An arcade lift is pictures only (gp_assets::arcade): nothing
+            // the simulation reads, and no slot kind takes them yet.
+            if let Some(name) = model.assets.keys().next() {
+                return Err(format!(
+                    "{MAP_FILE} is an arcade lift, whose pictures no model slot takes yet; slot `{name}` can't be filled from it"
+                ));
+            }
+            files.insert(MAP_FILE.into(), map_text);
+            return Ok(Self { files });
+        }
         let map = AssetMap::parse(&map_text).map_err(|e| format!("{MAP_FILE}: {e}"))?;
         for asset in needed(model, &map)? {
             for file in asset.files() {
@@ -54,6 +65,21 @@ impl Lifted {
             .files
             .get(MAP_FILE)
             .ok_or(format!("the lifted assets have no {MAP_FILE}"))?;
+        if gp_assets::arcade::is_arcade(text) {
+            // An arcade lift holds nothing the simulation reads: to it, a
+            // map with no assets.
+            let a = gp_assets::arcade::ArcadeMap::parse(text)
+                .map_err(|e| format!("{MAP_FILE}: {e}"))?;
+            return Ok(AssetMap {
+                schema: a.schema,
+                source: a.source,
+                title: a.title,
+                sha256: String::new(),
+                assets: Vec::new(),
+                content: Vec::new(),
+                code: None,
+            });
+        }
         AssetMap::parse(text).map_err(|e| format!("{MAP_FILE}: {e}"))
     }
 

@@ -171,20 +171,52 @@ impl Shows for crate::original::OriginalRuntime {
     }
 }
 
-/// An arcade original's frame: its picture as it is, with no sprite mask
-/// (the board's sprites aren't told apart from its tiles yet).
+/// An arcade original's frame: its picture, from its pens and the
+/// palette they were drawn with.
 pub(crate) fn arcade_frame(t: &gp_arcade::Tapper) -> Frame {
+    let (pens, palette) = t.pens();
+    let rgb: Vec<[u8; 3]> = palette
+        .iter()
+        .map(|c| [(c >> 16) as u8, (c >> 8) as u8, *c as u8])
+        .collect();
+    arcade_pens_frame(pens, &rgb)
+}
+
+/// A frame from an arcade board's pens (0 to 63, a pixel, with
+/// gp_arcade::video::SPRITE_BIT where a sprite drew it) and its 64
+/// colours. The sprite bits are the frame's sprite mask, as gp-nes's
+/// sprite_mask is the NES frame's: every pixel a sprite drew.
+pub(crate) fn arcade_pens_frame(pens: &[u8], palette: &[[u8; 3]]) -> Frame {
     use gp_arcade::video::{HEIGHT, WIDTH};
     Frame {
         w: WIDTH as u32,
         h: HEIGHT as u32,
-        rgb: t
-            .picture()
+        rgb: pens
             .iter()
-            .map(|c| [(c >> 16) as u8, (c >> 8) as u8, *c as u8])
+            .map(|p| {
+                palette
+                    .get(usize::from(p & 0x3f))
+                    .copied()
+                    .unwrap_or_default()
+            })
             .collect(),
-        sprite: vec![false; WIDTH * HEIGHT],
+        sprite: pens
+            .iter()
+            .map(|p| p & gp_arcade::video::SPRITE_BIT != 0)
+            .collect(),
         visible: [0, 0, WIDTH as u32, HEIGHT as u32],
+        things: Vec::new(),
+    }
+}
+
+/// A black frame of this size, for a picture a tape lacks.
+pub(crate) fn blank_frame(w: usize, h: usize) -> Frame {
+    Frame {
+        w: w as u32,
+        h: h as u32,
+        rgb: vec![[0; 3]; w * h],
+        sprite: vec![false; w * h],
+        visible: [0, 0, w as u32, h as u32],
         things: Vec::new(),
     }
 }
@@ -307,6 +339,17 @@ pub(crate) fn nes_options() -> Options {
     Options {
         lag: 1,
         ..Options::default()
+    }
+}
+
+/// The screen measure's options for a platform. An arcade board's picture
+/// is drawn as its VBLANK starts, where its frame ends, from the RAM as it
+/// stands then, so it isn't behind the RAM: no lag. Exact colors, no
+/// pixels allowed, as for the NES.
+pub(crate) fn options_for(platform: crate::original::Platform) -> Options {
+    match platform {
+        crate::original::Platform::Nes => nes_options(),
+        crate::original::Platform::Arcade => Options::default(),
     }
 }
 

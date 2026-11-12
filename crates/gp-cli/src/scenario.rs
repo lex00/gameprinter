@@ -620,13 +620,24 @@ fn tape_file(b: &Bench, sb: &Bench, st: &Started, s: &Scenario) -> Result<PathBu
         "tape-{}.lz4",
         key(&[
             &crate::tape::key_parts(),
-            &b.rom,
+            &rom_key(&b.rom),
             sb.log_text.as_bytes(),
             &serde_json::to_vec(s)?,
             &snap,
             st.original_frame.to_string().as_bytes(),
         ])
     )))
+}
+
+/// What a tape's key holds of the ROM: an NES image's bytes, or an
+/// arcade romset's identity, so any zip of the same chips shares tapes.
+fn rom_key(rom: &[u8]) -> Vec<u8> {
+    if gp_arcade::romset::looks_like_zip(rom)
+        && let Ok(sha) = crate::roms::sha256_of(rom)
+    {
+        return format!("romset {sha}").into_bytes();
+    }
+    rom.to_vec()
 }
 
 /// The original's random draws over a scenario, from its start (mapping
@@ -736,7 +747,8 @@ fn taped_one(
                 .get_or_init(|| crate::screen::art(model, &spec, &b.assets).ok())
                 .clone()
         });
-        let mut probe = art.map(|a| crate::screen::Probe::new(a, crate::screen::nes_options()));
+        let opts = crate::screen::options_for(crate::roms::Platform::of_file(&b.rom));
+        let mut probe = art.map(|a| crate::screen::Probe::new(a, opts));
         let (mut r, _) = scenario::run_stopping(
             o,
             &mut interp,

@@ -9,7 +9,7 @@
 //! | `package.toml` | The package: its name, version 0.1.0, the ROM entry with its pins |
 //! | `roms.toml` | The ROM's `[[source]]`: its hashes and header facts, unverified |
 //! | `template.toml` | The template manifest, pinned to the ROM, the asset map and the lift |
-//! | `assets/SOURCE.toml` | An asset map of what the iNES header says: the CHR ROM as tiles, when there is one |
+//! | `assets/SOURCE.toml` | An asset map of what the iNES header says: the CHR ROM as tiles, when there is one. For an arcade game, the board's: every tile and sprite by region and index (gp_assets::arcade) |
 //! | `model.toml` | The genre's header, the pad, a player and an empty level, each a placeholder its evidence says is one |
 //! | `mapping.toml`, `observe.toml`, `probes.toml`, `profiles.toml`, `fidelity.toml` | Empty or default, each saying what goes in it |
 //! | `corpus.toml` | The corpus plan with no clips |
@@ -373,8 +373,9 @@ fn nes_files(
 }
 
 /// An arcade game's files: the package entry and roms.toml source name
-/// the romset's set and identity; there is no asset map, since the tools
-/// lift no arcade assets yet; the model reads the arcade device.
+/// the romset's set and identity; the asset map is the board's, every
+/// tile and sprite by region and index, pinned with what it lifts from
+/// this set; the model reads the arcade device.
 fn arcade_files(
     a: &New<'_>,
     namespace: &str,
@@ -387,6 +388,14 @@ fn arcade_files(
     let system = rom.system.clone().unwrap_or_default();
     let set = gp_arcade::romset::set(&system).with_context(|| format!("no arcade set {system}"))?;
     let recipes = crate::plan::recipe_set_hash(&BTreeMap::new());
+    let map_rel = format!("assets/{game}.toml");
+    let sets: Vec<&str> = gp_arcade::romset::SETS.iter().map(|s| s.name).collect();
+    let map_text = gp_assets::arcade::mcr_91490_map(game, title, &sets);
+    let (lifted, _) = crate::assets::lift_files(&rom.bytes, &map_text)
+        .context("lifting with the skeleton's asset map")?;
+    let lifted: BTreeMap<String, Vec<u8>> = lifted.into_iter().map(|f| (f.name, f.bytes)).collect();
+    let lifted_sha = crate::template::lifted_digest(&lifted);
+    let map_sha = sha256_hex(map_text.as_bytes());
     let files: Vec<(String, String)> = vec![
         (
             "package.toml".into(),
@@ -396,9 +405,11 @@ fn arcade_files(
                  [package]\nname = {}\nversion = \"0.1.0\"\nkind = \"game\"\ntitle = {}\ntier = \"commercial\"\n\n\
                  [rom]\nhow_to_get = \"\"\"\nSay here which romset this game reads and how a player gets their own copy.\n\"\"\"\n\n\
                  # The romset's identity: the SHA-256 of its chips' SHA-1s, sorted\n\
-                 # (gp_arcade::romset). No asset map: the tools lift no arcade assets yet.\n\
+                 # (gp_arcade::romset). The asset map names pictures by region and\n\
+                 # index; lifted_sha256 is what it lifts from this set.\n\
                  [[rom.entry]]\nid = {}\nrole = \"scored\"\ntitle = {}\nsha256 = {}\nplatform = \"arcade\"\nsystem = {}\n\
-                 board_status = \"unverified\"\n\n\
+                 board_status = \"unverified\"\n\
+                 asset_map = {}\nasset_map_sha256 = {}\nlifted_sha256 = {}\n\n\
                  [corpus]\nname = {}\nversion = \"0.1.0\"\nrecipes = {}\n",
                 q(&format!("{namespace}/{game}")),
                 q(title),
@@ -406,6 +417,9 @@ fn arcade_files(
                 q(set.title),
                 q(&rom.sha256),
                 q(&system),
+                q(&map_rel),
+                q(&map_sha),
+                q(&lifted_sha),
                 q(game),
                 q(&recipes),
             ),
@@ -418,19 +432,23 @@ fn arcade_files(
             "template.toml".into(),
             format!(
                 "# Template manifest for {title}, a commercial game, written by gp game new:\n\
-                 # it ships with no assets and no facts. An arcade romset has no asset\n\
-                 # map yet, so there is no [recipe].\n\
+                 # it ships with no assets and no facts.\n\
                  [template]\nformat = \"0.3.1\"\nid = {}\ntitle = {}\ntier = \"commercial\"\nmodel = \"model.toml\"\n\
                  contract = \"fidelity.toml\"\nclips = \"corpus.toml\"\ngame = {}\n\n\
-                 [source]\nid = {}\nplatform = \"arcade\"\nsystem = {}\nhow = \"rom\"\naccepts = [{}]\n",
+                 [source]\nid = {}\nplatform = \"arcade\"\nsystem = {}\nhow = \"rom\"\naccepts = [{}]\n\n\
+                 [recipe]\nasset_map = {}\nasset_map_sha256 = {}\nlifted_sha256 = {}\n",
                 q(game),
                 q(title),
                 q(game),
                 q(game),
                 q(&system),
                 q(&rom.sha256),
+                q(&map_rel),
+                q(&map_sha),
+                q(&lifted_sha),
             ),
         ),
+        (map_rel.clone(), map_text.clone()),
         (
             "model.toml".into(),
             model_toml(name, title, game, a.genre, shape, Device::Arcade),
@@ -450,8 +468,8 @@ fn arcade_files(
     ];
     let about = About {
         input: "the arcade controls (coin, start1, a joystick and button1)",
-        assets: "none: the tools lift no arcade assets yet".into(),
-        lifted: None,
+        assets: format!("{map_rel}: 1024 tiles (gfx1) and 256 sprites (gfx2) of the {system} set"),
+        lifted: Some(lifted_sha),
         draws: 0,
         draws_line: "not searched: a draw is read from the NES's 6502 code, and gp has no arcade counterpart yet".into(),
     };

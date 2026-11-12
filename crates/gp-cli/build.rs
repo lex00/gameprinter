@@ -1,4 +1,5 @@
-//! Hashes the sources the original's side of a clip depends on, so a tape
+//! Hashes the sources the original's side of a clip depends on (gp-nes
+//! and gp-arcade, and what they build on), so a tape
 //! (`src/tape.rs`) is reused only for the same emulator. Sets
 //! `GP_ORIGINAL_SOURCES`.
 
@@ -7,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 const SOURCES: &[&str] = &[
     "../gp-nes",
+    "../gp-arcade",
     "../gp-runtime",
     "../gp-evidence",
     "../../third_party/tetanes-core",

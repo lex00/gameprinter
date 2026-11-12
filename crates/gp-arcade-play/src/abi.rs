@@ -90,9 +90,12 @@ pub extern "C" fn gp_out_len() -> usize {
     OUT.with(|o| o.borrow().len())
 }
 
-/// A player for the page. The board has no sound yet.
+/// A player for the page: sound on ([`Player::set_audio`]).
 fn sounding(p: Result<Player, String>) -> Result<Player, String> {
-    p
+    p.map(|mut p| {
+        p.set_audio(true);
+        p
+    })
 }
 
 /// Powers on the romset (a MAME zip's bytes) in a slot.
@@ -218,8 +221,8 @@ pub extern "C" fn gp_play_hash(slot: u32) -> i32 {
     result(with_player(slot, |p| Ok(p.state_hash().to_hex())))
 }
 
-/// The last frame's sound in the output buffer, as gp-play gives it:
-/// always empty, since the board makes no sound yet.
+/// The last frame's sound in the output buffer: f32 samples, little
+/// endian, left and right interleaved (`gp_play_audio_channels`).
 #[unsafe(no_mangle)]
 pub extern "C" fn gp_play_audio(slot: u32) -> *const u8 {
     match with_player(slot, |p| {
@@ -239,10 +242,17 @@ pub extern "C" fn gp_play_audio(slot: u32) -> *const u8 {
     }
 }
 
-/// Samples a second of `gp_play_audio`.
+/// Samples a second of `gp_play_audio`, each speaker.
 #[unsafe(no_mangle)]
 pub extern "C" fn gp_play_audio_rate() -> u32 {
     crate::AUDIO_RATE
+}
+
+/// The speakers `gp_play_audio` interleaves: 2. gp-play has no such
+/// export, and the page reads its sound as one.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_play_audio_channels() -> u32 {
+    crate::AUDIO_CHANNELS
 }
 
 /// The screen, the frame rate and the buttons as JSON ([`crate::info`]),

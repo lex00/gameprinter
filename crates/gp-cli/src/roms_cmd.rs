@@ -172,15 +172,15 @@ fn known_json(reg: &Registry, sha256: &str) -> Value {
 fn romset_json(set: &gp_arcade::Romset, rel: &Path, reg: &Registry) -> Value {
     let title = gp_arcade::romset::set(set.name).map_or("", |s| s.title);
     let mut notes: Vec<String> = vec![format!("{} ({title})", set.name)];
-    if !set.ssio_prom {
+    if set.ssio_prom.is_none() {
         notes.push(
-            "no SSIO PROM (82s123.12d) in the zip: not needed while the sound is silent".into(),
+            "no SSIO PROM (82s123.12d) in the zip: the sound's volumes come from it, so the board plays silent".into(),
         );
     }
     notes.extend(set.extras.iter().cloned());
     json!({
         "path": rel,
-        "romset": {"system": set.name, "title": title, "identity": set.identity, "ssio_prom": set.ssio_prom, "extras": set.extras},
+        "romset": {"system": set.name, "title": title, "identity": set.identity, "ssio_prom": set.ssio_prom.is_some(), "extras": set.extras},
         "known": known_json(reg, &set.identity),
         "notes": notes,
     })

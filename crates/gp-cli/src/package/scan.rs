@@ -730,6 +730,9 @@ struct Source {
     /// The CPU's view of PRG ($8000 to $FFFF), for reading routines.
     image: Vec<u8>,
     owned: Owned,
+    /// A romset's chips in `data`'s order, for naming a place by its chip
+    /// and region; empty for an NES image.
+    chips: &'static [gp_arcade::romset::Chip],
 }
 
 impl Source {
@@ -743,23 +746,43 @@ impl Source {
             prg_len,
             image,
             owned,
+            chips: &[],
         }
     }
 
     /// A romset: its chips unzipped, one after another. It has no 6502
     /// program, so no hook is judged a transcription of one: that reading
     /// is the NES's only, and Z80 code has no counterpart yet.
-    fn of_romset(label: String, chips: &[u8], owned: Owned) -> Self {
+    fn of_romset(label: String, system: &str, chips: &[u8], owned: Owned) -> Self {
         Self {
             label,
             data: chips.to_vec(),
             prg_len: chips.len(),
             image: Vec::new(),
             owned,
+            chips: gp_arcade::romset::set(system).map_or(&[], |s| s.chips),
         }
     }
 
+    /// Where `offset` of `data` is: PRG or CHR for an NES image; for a
+    /// romset, MAME's region and the offset in it, then the chip
+    /// (`gfx2 0x1a234 (fg_1.a7 +0x2234)`).
     fn place(&self, offset: usize) -> String {
+        if !self.chips.is_empty() {
+            let mut at = 0;
+            for c in self.chips {
+                if offset < at + c.size {
+                    let within = offset - at;
+                    return format!(
+                        "{} {:#07x} ({} +{within:#06x})",
+                        c.region.name(),
+                        c.offset + within,
+                        c.name
+                    );
+                }
+                at += c.size;
+            }
+        }
         if offset < self.prg_len {
             format!("PRG {offset:#06x}")
         } else {
@@ -899,8 +922,18 @@ fn entry_map(pkg: &Package, e: &RomEntry) -> Result<(String, AssetMap)> {
 
 fn root_part(pkg: &Package) -> Result<Part<'_>> {
     let mut recipes = BTreeMap::new();
-    // An arcade entry has no asset map yet: the tools lift no arcade assets.
-    let mapped = || pkg.entries.iter().filter(|e| !e.asset_map.is_empty());
+    // An arcade entry's asset map names pictures by region and index, not
+    // spans of one ROM, so it marks no bytes as the ROM's own: its chips
+    // are compared whole.
+    let arcade = |e: &RomEntry| {
+        fs::read_to_string(pkg.dir.join(&e.asset_map))
+            .is_ok_and(|t| gp_assets::arcade::is_arcade(&t))
+    };
+    let mapped = || {
+        pkg.entries
+            .iter()
+            .filter(|e| !e.asset_map.is_empty() && !arcade(e))
+    };
     for e in mapped() {
         let (text, map) = entry_map(pkg, e)?;
         recipes.insert(e.asset_map.clone(), (map, text, Some(e)));
@@ -997,7 +1030,12 @@ fn scan_part(pkg: &Package, part: &Part, found: &BTreeMap<String, Rom>) -> Resul
         };
         sources.push(match r.platform {
             roms::Platform::Nes => Source::of(label, &r.bytes, owned),
-            roms::Platform::Arcade => Source::of_romset(label, r.data(), owned),
+            roms::Platform::Arcade => Source::of_romset(
+                label,
+                r.system.as_deref().unwrap_or_default(),
+                r.data(),
+                owned,
+            ),
         });
     }
 

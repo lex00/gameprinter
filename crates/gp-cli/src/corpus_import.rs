@@ -93,6 +93,15 @@ pub(crate) struct Excluded {
 /// Frames and their spans.
 type Spans = (u64, Vec<String>);
 
+/// Spans as an NES `.presses` file's contents.
+fn nes_presses(s: &Spans) -> cs::Presses {
+    cs::Presses {
+        frames: s.0,
+        spans: s.1.clone(),
+        arcade: None,
+    }
+}
+
 /// One clip a session gives.
 #[derive(Debug, Clone, PartialEq)]
 struct Taken {
@@ -338,7 +347,11 @@ fn take(
 
 /// A recipe's start presses and own presses as read from the game's folder.
 fn recipe_inputs(dir: &Path, r: &Recipe) -> Option<(Spans, Spans)> {
-    let read = |p: &str| cs::parse_presses(&fs::read_to_string(dir.join(p)).ok()?).ok();
+    let read = |p: &str| {
+        cs::parse_presses(&fs::read_to_string(dir.join(p)).ok()?)
+            .ok()
+            .map(|p| (p.frames, p.spans))
+    };
     let lead = read(r.start.presses_from_power_on.as_deref()?)?;
     let body = match &r.presses_file {
         Some(p) => read(p)?.1,
@@ -419,9 +432,9 @@ fn merge(
     let clip = |t: &Taken, files: &mut Vec<(String, String)>| -> PlanClip {
         let key = cs::file_key(&t.id);
         let lead = format!("inputs/{key}.start.presses");
-        files.push((lead.clone(), cs::presses_text(t.lead.0, &t.lead.1)));
+        files.push((lead.clone(), cs::presses_text(&nes_presses(&t.lead))));
         let presses = format!("inputs/{key}.presses");
-        files.push((presses.clone(), cs::presses_text(t.body.0, &t.body.1)));
+        files.push((presses.clone(), cs::presses_text(&nes_presses(&t.body))));
         let note = if t.note.trim().is_empty() {
             t.session.as_str()
         } else {

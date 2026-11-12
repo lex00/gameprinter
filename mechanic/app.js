@@ -39,7 +39,7 @@ const LAYOUTS = {
     keys: [["Digit5"], ["Digit1"], ["ArrowRight", "KeyD"], ["ArrowLeft", "KeyA"], ["ArrowDown", "KeyS"], ["ArrowUp", "KeyW"], ["KeyX", "Space"]],
     keys2: [],
     bit: { a: 64, b: 0, select: 1, start: 2, up: 32, down: 16, left: 8, right: 4 },
-    footer: "5 drops a coin and 1 starts, as in MAME. Arrows move, X or Space taps. On a controller: Select is the coin, Start starts, A taps. F5 or the left trigger saves, F8 or the right trigger loads. R or the right bumper records.",
+    footer: "5 drops a coin and 1 starts, as in MAME. Arrows move, X or Space taps. On a controller: Select is the coin, Start starts, A taps. F5 or the left trigger saves, F8 or the right trigger loads. R or the right bumper records. U turns the sound off and on.",
   },
 };
 let LAYOUT = LAYOUTS.nes;
@@ -2167,13 +2167,23 @@ function playFrame(slot) {
     audioOut.connect(audio.destination);
   }
   const rate = player.audioRate();
-  const b = audio.createBuffer(1, f.length, rate);
-  b.copyToChannel(f, 0);
+  const ch = player.audioChannels();
+  const n = f.length / ch;
+  const b = audio.createBuffer(ch, n, rate);
+  if (ch === 1) {
+    b.copyToChannel(f, 0);
+  } else {
+    for (let c = 0; c < ch; c++) {
+      const one = new Float32Array(n);
+      for (let i = 0; i < n; i++) one[i] = f[i * ch + c];
+      b.copyToChannel(one, c);
+    }
+  }
   const src = audio.createBufferSource();
   src.buffer = b;
   src.connect(audioOut);
   src.start(audioAt);
-  audioAt += f.length / rate;
+  audioAt += n / rate;
 }
 
 function setSound(on) {

@@ -1,5 +1,6 @@
 //! Reading what the MAME oracle writes (docs/oracle-mame.md): the input
-//! log, `frames.tsv` and `ram.bin`, and comparing a run of ours with it.
+//! log, `frames.tsv`, `ram.bin` and `ay.tsv`, and comparing a run of ours
+//! with it.
 
 use std::path::{Path, PathBuf};
 
@@ -97,6 +98,9 @@ pub struct Capture {
     pub dir: PathBuf,
     pub rows: Vec<FrameRow>,
     pub ram: Vec<u8>,
+    /// Each frame's AY writes as `ay.tsv` spells them ([`ay_text`]), when
+    /// the capture has the file (captures from before it don't).
+    pub ay: Option<Vec<String>>,
 }
 
 impl Capture {
@@ -144,10 +148,38 @@ impl Capture {
                 rows.len() * RAM_RECORD
             ));
         }
+        let ay = match std::fs::read_to_string(dir.join("ay.tsv")) {
+            Ok(text) => {
+                let mut v = Vec::with_capacity(rows.len());
+                for (n, line) in text.lines().enumerate().skip(1) {
+                    let (frame, writes) = line
+                        .split_once('\t')
+                        .ok_or(format!("ay.tsv line {}: no tab", n + 1))?;
+                    if frame.parse::<usize>().ok() != Some(v.len()) {
+                        return Err(format!("ay.tsv line {}: frame {frame} out of order", n + 1));
+                    }
+                    v.push(if writes == "-" {
+                        String::new()
+                    } else {
+                        writes.to_string()
+                    });
+                }
+                if v.len() != rows.len() {
+                    return Err(format!(
+                        "ay.tsv has {} frames, frames.tsv {}",
+                        v.len(),
+                        rows.len()
+                    ));
+                }
+                Some(v)
+            }
+            Err(_) => None,
+        };
         Ok(Self {
             dir: dir.to_path_buf(),
             rows,
             ram,
+            ay,
         })
     }
 
@@ -167,6 +199,16 @@ pub fn ram_address(offset: usize) -> String {
     }
 }
 
+/// A frame's AY writes as `ay.tsv` spells them: the chip, `a` (address
+/// latch) or `d` (data latch) and the value in hex, a space between.
+pub fn ay_text(writes: &[(u8, u8, u8)]) -> String {
+    writes
+        .iter()
+        .map(|&(chip, latch, v)| format!("{chip}{}{v:02x}", if latch == 0 { 'a' } else { 'd' }))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// How one frame of ours differs from the capture's.
 #[derive(Debug, Clone, Default)]
 pub struct FrameDiff {
@@ -174,11 +216,13 @@ pub struct FrameDiff {
     pub ram: Vec<(usize, u8, u8)>,
     pub ports: Option<([u8; 5], [u8; 5])>,
     pub picture: Option<(u64, u64)>,
+    /// (ours, MAME's) AY writes, as [`ay_text`] spells them.
+    pub ay: Option<(String, String)>,
 }
 
 impl FrameDiff {
     pub fn is_empty(&self) -> bool {
-        self.ram.is_empty() && self.ports.is_none() && self.picture.is_none()
+        self.ram.is_empty() && self.ports.is_none() && self.picture.is_none() && self.ay.is_none()
     }
 
     pub fn describe(&self, max_bytes: usize) -> String {
@@ -188,6 +232,9 @@ impl FrameDiff {
         }
         if let Some((ours, theirs)) = self.picture {
             out.push(format!("picture: ours {ours:016x}, MAME's {theirs:016x}"));
+        }
+        if let Some((ours, theirs)) = &self.ay {
+            out.push(format!("AY writes: ours [{ours}], MAME's [{theirs}]"));
         }
         if !self.ram.is_empty() {
             out.push(format!("{} RAM bytes differ:", self.ram.len()));
@@ -220,10 +267,15 @@ pub fn compare(t: &Tapper, cap: &Capture, n: usize) -> FrameDiff {
     let ports = (n > 0 && t.ports() != row.ports).then_some((t.ports(), row.ports));
     let ph = t.picture_hash();
     let picture = (ph != row.picture).then_some((ph, row.picture));
+    let ay = cap.ay.as_ref().and_then(|v| {
+        let ours = ay_text(t.ay_writes());
+        (ours != v[n]).then(|| (ours, v[n].clone()))
+    });
     FrameDiff {
         ram,
         ports,
         picture,
+        ay,
     }
 }
 
@@ -249,6 +301,15 @@ mod tests {
         );
         assert_eq!(log.controls(9), Controls::default());
         assert!(InputLog::parse("gp-arcade-input 0\nsystem x\ncolumns CS\n1 X.\n").is_err());
+    }
+
+    #[test]
+    fn spells_ay_writes_as_the_oracle() {
+        assert_eq!(
+            ay_text(&[(0, 0, 7), (0, 2, 0x38), (1, 2, 0xf0)]),
+            "0a07 0d38 1df0"
+        );
+        assert_eq!(ay_text(&[]), "");
     }
 
     #[test]

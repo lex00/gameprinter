@@ -19,6 +19,7 @@ use crate::ctc::{Ctc, CtcTimer, DAISY_IEO, DAISY_INT};
 use crate::irq::IrqLine;
 use crate::romset::Romset;
 use crate::sched::{Exec, Scheduler};
+use crate::sound::Sound;
 use crate::state::{Reader, Writer};
 use crate::video::{self, Gfx, HEIGHT, WIDTH};
 use crate::z80::{Z80, Z80Bus};
@@ -157,60 +158,6 @@ impl Controls {
     }
 }
 
-/// The AY-8910's register file. The chips make no sound yet; the sound
-/// CPU can read its registers back, so they're kept.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Ay8910 {
-    pub active: bool,
-    pub latch: u8,
-    pub regs: [u8; 16],
-    pub last_enable: u8,
-}
-
-impl Ay8910 {
-    /// ay8910_reset_ym.
-    fn reset(&mut self) {
-        self.active = false;
-        self.latch = 0;
-        self.last_enable = 0xc0;
-        for r in 0..14 {
-            self.write_reg(r, 0);
-        }
-    }
-
-    fn write_reg(&mut self, r: usize, v: u8) {
-        self.regs[r] = v;
-        if r == 7 {
-            self.last_enable = v;
-        }
-    }
-
-    fn address_w(&mut self, data: u8) {
-        self.active = data >> 4 == 0;
-        if self.active {
-            self.latch = data & 0x0f;
-        }
-    }
-
-    fn data_w(&mut self, data: u8) {
-        if self.active {
-            self.write_reg(usize::from(self.latch), data);
-        }
-    }
-
-    fn data_r(&self) -> u8 {
-        if !self.active {
-            return 0xff;
-        }
-        const MASK: [u8; 16] = [
-            0xff, 0x0f, 0xff, 0x0f, 0xff, 0x0f, 0x1f, 0xff, 0x1f, 0x1f, 0x1f, 0xff, 0xff, 0x0f,
-            0xff, 0xff,
-        ];
-        let r = usize::from(self.latch);
-        self.regs[r] & MASK[r]
-    }
-}
-
 /// Everything but the two CPUs.
 #[derive(Clone)]
 pub struct Board {
@@ -251,7 +198,13 @@ pub struct Board {
     pub ssio_status: u8,
     pub ssio_14024: u8,
     pub t_ssio_periodic: usize,
-    pub ay: [Ay8910; 2],
+    /// The two AY-8910s, the SSIO's volumes and the speakers.
+    pub sound: Sound,
+    /// The sound CPU's writes to the AYs in the frame being run: the chip,
+    /// the latch (0 address, 2 data) and the value, as the oracle's
+    /// `ay.tsv` has them. Cleared when a frame starts; not part of the
+    /// state.
+    pub ay_writes: Vec<(u8, u8, u8)>,
     pub ports: [u8; 5],
     /// Set by the VBLANK timer: the frame is over.
     pub frame_done: bool,
@@ -378,8 +331,8 @@ impl Board {
             0x0000..=0x3fff => self.ssio_rom[a],
             0x8000..=0x8fff => self.ssio_ram[a & 0x3ff],
             0x9000..=0x9fff => self.ssio_data[a & 3],
-            0xa000..=0xafff if a & 3 == 1 => self.ay[0].data_r(),
-            0xb000..=0xbfff if a & 3 == 1 => self.ay[1].data_r(),
+            0xa000..=0xafff if a & 3 == 1 => self.sound.bus[0].data_r(),
+            0xb000..=0xbfff if a & 3 == 1 => self.sound.bus[1].data_r(),
             0xe000..=0xefff => {
                 // irq_clear: resets the 14024 count and clears /SINT.
                 if side_effects {
@@ -396,16 +349,13 @@ impl Board {
         let a = usize::from(addr);
         match addr {
             0x8000..=0x8fff => self.ssio_ram[a & 0x3ff] = v,
-            0xa000..=0xafff => match a & 3 {
-                0 => self.ay[0].address_w(v),
-                2 => self.ay[0].data_w(v),
-                _ => {}
-            },
-            0xb000..=0xbfff => match a & 3 {
-                0 => self.ay[1].address_w(v),
-                2 => self.ay[1].data_w(v),
-                _ => {}
-            },
+            0xa000..=0xbfff if a & 1 == 0 => {
+                let chip = usize::from(addr >= 0xb000);
+                let latch = (a & 3) as u8;
+                self.ay_writes.push((chip as u8, latch, v));
+                let now = self.now();
+                self.sound.write(chip, latch, v, now);
+            }
             0xc000..=0xcfff => self.ssio_status = v,
             _ => {}
         }
@@ -478,7 +428,9 @@ impl Z80Bus for SsioBus<'_> {
         *icount = self.0.sched.icount;
         v
     }
-    fn write(&mut self, addr: u16, value: u8, _icount: &mut i32) {
+    fn write(&mut self, addr: u16, value: u8, icount: &mut i32) {
+        // The AYs' writes land at the CPU's time.
+        self.0.sched.icount = *icount;
         self.0.ssio_write(addr, value);
     }
     fn fetch(&mut self, addr: u16) -> u8 {
@@ -515,7 +467,8 @@ pub struct Tapper {
     pub ssio: Z80,
     pub board: Board,
     gfx: Arc<Gfx>,
-    /// The last frame's picture, one pen (0 to 63) a pixel.
+    /// The last frame's picture, one pen (0 to 63) a pixel, with
+    /// video::SPRITE_BIT where a sprite drew it.
     pens: Vec<u8>,
     /// The palette as it was when the picture was drawn.
     pens_palette: [u32; 64],
@@ -570,7 +523,8 @@ impl Tapper {
             ssio_status: 0,
             ssio_14024: 0,
             t_ssio_periodic,
-            ay: [Ay8910::default(), Ay8910::default()],
+            sound: Sound::new(rom.ssio_prom.as_deref()),
+            ay_writes: Vec::new(),
             ports: Controls::default().ports(),
             frame_done: false,
             polled: false,
@@ -609,9 +563,6 @@ impl Tapper {
         board.ssio_irq.reset(0xff);
         let period = Attotime::from_hz(SSIO_CLOCK / (2 * 16 * 10));
         board.sched.adjust(t_ssio_periodic, period, 0, period);
-        for ay in &mut board.ay {
-            ay.reset();
-        }
 
         Self {
             main,
@@ -644,6 +595,8 @@ impl Tapper {
     pub fn step(&mut self, controls: Controls) {
         self.board.ports = controls.ports();
         self.board.polled = false;
+        self.board.ay_writes.clear();
+        self.board.sound.written.clear();
         loop {
             while let Some((handle, what, param, enabled)) = self.board.sched.pop_due() {
                 if enabled {
@@ -702,7 +655,10 @@ impl Tapper {
     fn fire(&mut self, what: What, param: i32) {
         let b = &mut self.board;
         match what {
-            What::SoundUpdate => {}
+            What::SoundUpdate => {
+                let now = b.now();
+                b.sound.update(now);
+            }
             What::ScanTimer => {
                 // timer_device::scanline_tick with mcr_interrupt.
                 let mut next = 0;
@@ -799,14 +755,34 @@ impl Tapper {
     pub fn picture(&self) -> Vec<u32> {
         self.pens
             .iter()
-            .map(|&p| self.pens_palette[usize::from(p)])
+            .map(|&p| self.pens_palette[usize::from(p & 0x3f)])
+            .collect()
+    }
+
+    /// The last frame's picture as pens (0 to 63, a pixel, with
+    /// video::SPRITE_BIT where a sprite drew it), rows from the top, and
+    /// the palette they were drawn with.
+    pub fn pens(&self) -> (&[u8], &[u32; 64]) {
+        (&self.pens, &self.pens_palette)
+    }
+
+    /// Which pixels of the last frame a sprite drew, rows from the top:
+    /// the screen measure's sprite mask.
+    pub fn sprite_mask(&self) -> Vec<bool> {
+        self.pens
+            .iter()
+            .map(|p| p & video::SPRITE_BIT != 0)
             .collect()
     }
 
     /// The oracle's hash of the last frame's picture. Frame 0, before any
     /// picture, is black, as MAME's is.
     pub fn picture_hash(&self) -> u64 {
-        video::picture_hash(self.pens.iter().map(|&p| self.pens_palette[usize::from(p)]))
+        video::picture_hash(
+            self.pens
+                .iter()
+                .map(|&p| self.pens_palette[usize::from(p & 0x3f)]),
+        )
     }
 
     /// Whether the game read its input ports in the last frame run.
@@ -824,6 +800,37 @@ impl Tapper {
         &self.board.paletteram
     }
 
+    /// The sound CPU's writes to the AYs in the last frame run: chip, latch
+    /// (0 address, 2 data) and value, in order.
+    pub fn ay_writes(&self) -> &[(u8, u8, u8)] {
+        &self.board.ay_writes
+    }
+
+    /// The AY registers the sound CPU wrote in the last frame run: chip,
+    /// register, value, in order (the data writes of [`Tapper::ay_writes`]
+    /// with the register each landed in).
+    pub fn ay_registers_written(&self) -> &[(u8, u8, u8)] {
+        &self.board.sound.written
+    }
+
+    /// Keeps the speakers' samples from now on ([`Tapper::take_audio`]),
+    /// or stops keeping them. They're not part of the state.
+    pub fn set_audio(&mut self, on: bool) {
+        self.board.sound.out = on.then(Vec::new);
+    }
+
+    /// The speakers' samples made since the last call, left and right, at
+    /// [`crate::sound::OUT_RATE`]: a 20 ms piece at each of MAME's stream
+    /// updates, so a frame has one or two pieces.
+    pub fn take_audio(&mut self) -> Vec<[f32; 2]> {
+        self.board
+            .sound
+            .out
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
+
     /// Whether the watchdog ran out: MAME would have reset the machine,
     /// which isn't modelled.
     pub fn watchdog_fired(&self) -> bool {
@@ -833,7 +840,7 @@ impl Tapper {
     /// The whole machine state, without the ROMs.
     pub fn snapshot(&self) -> Vec<u8> {
         let mut w = Writer::default();
-        w.bytes(b"gp-arcade tapper 1");
+        w.bytes(b"gp-arcade tapper 2");
         w.u64(self.frame);
         save_z80(&mut w, &self.main);
         save_z80(&mut w, &self.ssio);
@@ -860,12 +867,7 @@ impl Tapper {
         w.bytes(&b.ssio_data);
         w.u8(b.ssio_status);
         w.u8(b.ssio_14024);
-        for ay in &b.ay {
-            w.bool(ay.active);
-            w.u8(ay.latch);
-            w.bytes(&ay.regs);
-            w.u8(ay.last_enable);
-        }
+        b.sound.save(&mut w);
         w.bytes(&b.ports);
         w.bytes(&self.pens);
         for &c in &self.pens_palette {
@@ -877,7 +879,7 @@ impl Tapper {
     /// Puts back a snapshot of this machine (same ROMs).
     pub fn restore(&mut self, snap: &[u8]) -> Result<(), String> {
         let mut r = Reader::new(snap);
-        if r.bytes()? != b"gp-arcade tapper 1" {
+        if r.bytes()? != b"gp-arcade tapper 2" {
             return Err("not a gp-arcade Tapper snapshot".into());
         }
         let mut next = self.clone();
@@ -907,12 +909,7 @@ impl Tapper {
         r.fill(&mut b.ssio_data)?;
         b.ssio_status = r.u8()?;
         b.ssio_14024 = r.u8()?;
-        for ay in &mut b.ay {
-            ay.active = r.bool()?;
-            ay.latch = r.u8()?;
-            r.fill(&mut ay.regs)?;
-            ay.last_enable = r.u8()?;
-        }
+        b.sound.load(&mut r)?;
         r.fill(&mut b.ports)?;
         r.fill(&mut next.pens)?;
         for c in &mut next.pens_palette {
@@ -1167,17 +1164,5 @@ mod tests {
         assert_eq!(FRAME_PERIOD, 33_333_333_333_333_333);
         assert_eq!(SCANTIME, 69_444_444_444_444);
         assert_eq!(PIXELTIME, 135_633_680_555);
-    }
-
-    #[test]
-    fn the_ay_reads_back_masked_registers() {
-        let mut ay = Ay8910::default();
-        ay.reset();
-        assert_eq!(ay.data_r(), 0xff); // no register selected yet
-        ay.address_w(1);
-        ay.data_w(0xff);
-        assert_eq!(ay.data_r(), 0x0f);
-        ay.address_w(0x21); // a wrong upper nibble deselects the chip
-        assert_eq!(ay.data_r(), 0xff);
     }
 }

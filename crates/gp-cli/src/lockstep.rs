@@ -117,7 +117,8 @@ pub(crate) fn run_resumed(
     let mut no_screen = None;
     let mut probe = match assets.map(|a| crate::screen::art(&model, &spec, a)) {
         Some(Ok(art)) => {
-            let mut p = crate::screen::Probe::new(art, crate::screen::nes_options());
+            let mut p =
+                crate::screen::Probe::new(art, crate::screen::options_for(original.platform()));
             // Drawn from the frame before the start: the mapping's start
             // can come later, which only draws a few frames more.
             p.video_from = from.unwrap_or(0).saturating_sub(1);

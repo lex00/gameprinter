@@ -43,6 +43,68 @@ pub enum ClipCmd {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Save a played clip as a corpus clip: its input from power-on split
+    /// at its start into inputs/ID.start.presses and inputs/ID.presses (an
+    /// arcade clip's with its set's `arcade` line), the clip added to the
+    /// game's corpus plan with its recipe-set hash made again, and the
+    /// files read back as the scorer reads them. With the ROM, replays the
+    /// clip and prints the state hash at its start and end; a mechanic
+    /// session's clip must replay to the start state it recorded
+    Presses {
+        /// The game's package folder (games/tapper).
+        game: PathBuf,
+        /// The clip's ID in the corpus (tapper.serve.001).
+        id: String,
+        /// A clip of the game's mechanic sessions, MECHANIC/N (serve/1).
+        #[arg(long, conflicts_with_all = ["log", "start"])]
+        from_session: Option<String>,
+        /// An input log from power-on (an NES log or gp-arcade-input 0).
+        #[arg(long, requires = "start")]
+        log: Option<PathBuf>,
+        /// With --log: the frame the clip starts at.
+        #[arg(long)]
+        start: Option<u64>,
+        /// With --log: the clip's frames (default: to the log's end).
+        #[arg(long)]
+        frames: Option<u64>,
+        /// The clip's name in the plan.
+        #[arg(long)]
+        name: String,
+        /// Why it is kept, in game words.
+        #[arg(long, default_value = "")]
+        why: String,
+        /// The level it is on.
+        #[arg(long, default_value = "")]
+        level: String,
+        /// `played` (a person's) or `generated`.
+        #[arg(long, default_value = "played")]
+        source: String,
+        /// The ROM; by default the one in $GP_ROM_DIR the package names.
+        #[arg(long)]
+        rom: Option<PathBuf>,
+    },
+    /// Run the screen measure on a corpus clip's original against itself:
+    /// the clip played live, writing a score tape, then from that tape,
+    /// every frame's pictures measured with the platform's options and the
+    /// sprite mask. Exits 1 unless every frame measures 0. With --mask,
+    /// writes one frame's picture beside its sprite mask in red (outside
+    /// any repo)
+    Screen {
+        /// The game's package folder (games/tapper).
+        game: PathBuf,
+        /// A clip of the game's corpus by its ID.
+        clip: String,
+        /// The ROM; by default the one in $GP_ROM_DIR the package names.
+        #[arg(long)]
+        rom: Option<PathBuf>,
+        /// Write a picture of a frame and its sprite mask here (a PNG).
+        #[arg(long)]
+        mask: Option<PathBuf>,
+        /// With --mask: the original's frame to draw (default: the clip's
+        /// frame with the most sprite pixels).
+        #[arg(long, requires = "mask")]
+        at: Option<u64>,
+    },
     /// Score corpus clips on a model: each clip's lockstep from its start,
     /// straight through and with resync, both with the original's random
     /// draws when the state mapping sets `score_draws`. Prints the frames
@@ -83,6 +145,55 @@ pub enum ClipCmd {
 pub(crate) fn run(cmd: &ClipCmd, paths: &Paths) -> Result<Outcome> {
     match cmd {
         ClipCmd::Log { game, clip, out } => log_cmd(paths, game, clip, out.as_deref()),
+        ClipCmd::Screen {
+            game,
+            clip,
+            rom,
+            mask,
+            at,
+        } => crate::clip_screen::run(
+            paths,
+            game,
+            clip,
+            rom.as_deref(),
+            mask.as_deref().map(|m| (m, *at)),
+        ),
+        ClipCmd::Presses {
+            game,
+            id,
+            from_session,
+            log,
+            start,
+            frames,
+            name,
+            why,
+            level,
+            source,
+            rom,
+        } => {
+            let from = match (from_session, log) {
+                (Some(s), _) => crate::clip_presses::From::Session(s),
+                (None, Some(file)) => crate::clip_presses::From::Log {
+                    file,
+                    start: start.unwrap_or(0),
+                    frames: *frames,
+                },
+                (None, None) => bail!("give --from-session MECHANIC/N, or --log FILE --start N"),
+            };
+            crate::clip_presses::run(
+                paths,
+                game,
+                id,
+                &from,
+                &crate::clip_presses::About {
+                    name,
+                    why,
+                    level,
+                    source,
+                },
+                rom.as_deref(),
+            )
+        }
         ClipCmd::Score {
             game,
             clips,

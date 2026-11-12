@@ -16,7 +16,10 @@
 //! the wasm build and natively must give the same picture hash on every
 //! frame.
 //!
-//! The board makes no sound yet, so [`Player::audio`] is always empty.
+//! With the sound on ([`Player::set_audio`], on in the page), each frame
+//! keeps what reached the two speakers ([`Player::audio`]): stereo, left
+//! and right interleaved, at 48 kHz, as MAME makes it (gp-arcade's sound
+//! module). Sound is presentation only, as drawing is.
 
 use gp_arcade::video::{HEIGHT, WIDTH};
 use gp_arcade::{Controls, Romset, Tapper};
@@ -34,14 +37,16 @@ pub const COLUMNS: &str = "CSRLDUT";
 /// Bytes of one RGBA frame.
 pub const RGBA_BYTES: usize = WIDTH * HEIGHT * 4;
 
-/// Samples a second of [`Player::audio`], which is empty for now.
-pub const AUDIO_RATE: u32 = 48_000;
+/// Samples a second of [`Player::audio`], each speaker.
+pub const AUDIO_RATE: u32 = gp_arcade::sound::OUT_RATE;
+/// The speakers: left (the first AY) and right (the second).
+pub const AUDIO_CHANNELS: u32 = 2;
 
 /// The screen, the frame rate and the buttons, as `gp_play_info` gives
 /// them to the page: JSON.
 pub fn info(system: &str) -> String {
     format!(
-        "{{\"platform\":\"arcade\",\"system\":\"{system}\",\"width\":{WIDTH},\"height\":{HEIGHT},\"fps\":[30,1],\"columns\":\"{COLUMNS}\",\"buttons\":[\"coin\",\"start1\",\"right\",\"left\",\"down\",\"up\",\"button1\"],\"sound\":false}}"
+        "{{\"platform\":\"arcade\",\"system\":\"{system}\",\"width\":{WIDTH},\"height\":{HEIGHT},\"fps\":[30,1],\"columns\":\"{COLUMNS}\",\"buttons\":[\"coin\",\"start1\",\"right\",\"left\",\"down\",\"up\",\"button1\"],\"sound\":true,\"channels\":{AUDIO_CHANNELS}}}"
     )
 }
 
@@ -59,6 +64,8 @@ pub struct Player {
     /// A log being replayed, whose frames [`Player::advance`] plays.
     script: Option<InputLog>,
     rgba: Vec<u8>,
+    /// The last frame's sound, left and right interleaved, when on.
+    audio: Vec<f32>,
 }
 
 impl Player {
@@ -73,6 +80,7 @@ impl Player {
             pictures,
             script: None,
             rgba: vec![0; RGBA_BYTES],
+            audio: Vec::new(),
         })
     }
 
@@ -101,12 +109,17 @@ impl Player {
         self.log.arcade.as_ref().map_or("", |a| a.system.as_str())
     }
 
-    /// Kept for gp-play's shape: the board has no sound to turn on yet.
-    pub fn set_audio(&mut self, _on: bool) {}
+    /// Turns keeping each frame's sound on or off.
+    pub fn set_audio(&mut self, on: bool) {
+        self.tapper.set_audio(on);
+        self.audio.clear();
+    }
 
-    /// The last frame's sound: none yet.
+    /// The last frame's sound: left and right interleaved at
+    /// [`AUDIO_RATE`], one or two of MAME's 20 ms pieces (960 samples a
+    /// speaker each). Empty after a restore, so a jump is silent.
     pub fn audio(&self) -> &[f32] {
-        &[]
+        &self.audio
     }
 
     /// Runs one frame with these controls (bits 0 to 6: coin, start,
@@ -119,8 +132,15 @@ impl Player {
             return Err(format!("buttons {bits:#x}: bits 0 to 6 only"));
         }
         self.tapper.step(Controls::from_bits(bits));
+        self.audio.clear();
+        self.audio
+            .extend(self.tapper.take_audio().iter().flat_map(|s| [s[0], s[1]]));
+        // The game's own flag, as gp-play keeps it: false on the boot
+        // frames before the game first reads its ports (Tapper's first 94)
+        // and on any other frame it doesn't. The text log can't say it, so
+        // a log read back has every frame polled.
         self.log.frames.push(InputFrame {
-            polled: true,
+            polled: self.tapper.polled(),
             pads: [bits as u8, 0, 0, 0],
             reset: false,
         });
@@ -205,6 +225,8 @@ impl Player {
             return Err("the saved state's log and hashes don't reach its frame".into());
         }
         self.tapper.restore(&snap)?;
+        self.tapper.take_audio();
+        self.audio.clear();
         self.log = log;
         self.pictures = pictures;
         Ok(())
@@ -301,6 +323,44 @@ mod tests {
         assert_eq!(p.rgba().len(), RGBA_BYTES);
         assert!(p.step(0, true).is_err());
         assert!(p.step(0x80, false).is_err());
+    }
+
+    /// The log keeps the game's polled flag: false on the boot frames,
+    /// true once the game reads its ports.
+    #[test]
+    fn the_log_keeps_the_polled_flag_of_boot_frames() {
+        let Some(zip) = zip() else { return };
+        let mut p = Player::new(&zip).unwrap();
+        let read: Vec<bool> = (0..120).map(|_| p.step(0, false).unwrap()).collect();
+        let kept: Vec<bool> = p.log.frames.iter().map(|f| f.polled).collect();
+        assert_eq!(kept, read);
+        assert!(!kept[0] && kept[119]);
+    }
+
+    /// With the sound on, a frame gives one or two 20 ms pieces of stereo,
+    /// and after the game has started making sound some of it isn't
+    /// silent; with it off, none.
+    #[test]
+    fn the_sound_comes_out_in_pieces() {
+        let Some(zip) = zip() else { return };
+        let mut p = Player::new(&zip).unwrap();
+        p.set_audio(true);
+        let mut loud = 0usize;
+        for i in 0..900 {
+            p.step(if (100..106).contains(&i) { 1 } else { 0 }, false)
+                .unwrap();
+            let n = p.audio().len();
+            // Frame 1 ends before MAME's first 20 ms stream update.
+            assert!(
+                n == 2 * 960 || n == 4 * 960 || (i == 0 && n == 0),
+                "frame {i}: {n} samples"
+            );
+            loud += p.audio().iter().filter(|s| s.abs() > 0.01).count();
+        }
+        assert!(loud > 0, "900 frames with a coin dropped made no sound");
+        p.set_audio(false);
+        p.step(0, false).unwrap();
+        assert!(p.audio().is_empty());
     }
 
     #[test]

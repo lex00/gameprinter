@@ -19,9 +19,11 @@
 //! - The CTC, the SSIO board, the screen timing and the video are ports of
 //!   mcr.cpp, mcr_m.cpp, mcr_v.cpp, midway.cpp, z80ctc.cpp and screen.cpp.
 //!
+//! - The sound (sound.rs) is MAME's AY-8910 and the SSIO's volumes, made
+//!   in MAME's 50 Hz stream updates and resampled to 48 kHz as MAME does.
+//!
 //! Every MAME file ported is BSD-3-Clause; each Rust file names the files
-//! it comes from and keeps their copyright holders. The AY-8910s are
-//! register files only: no sound comes out yet.
+//! it comes from and keeps their copyright holders.
 //!
 //! # Using it
 //!
@@ -65,6 +67,7 @@ pub mod protocol;
 pub mod romset;
 pub mod sched;
 pub mod sha1;
+pub mod sound;
 pub mod state;
 pub mod video;
 pub mod z80;
@@ -72,7 +75,8 @@ pub mod z80;
 pub use mcr::{Controls, Tapper};
 
 /// What made a snapshot: a start cache keys its snapshots by it, so a
-/// change to the board's emulation or its snapshot bumps it.
-pub const RUNTIME_VERSION: &str = concat!("gp-arcade ", env!("CARGO_PKG_VERSION"), " mcr 1");
+/// change to the board's emulation or its snapshot bumps it, by hand.
+/// mcr 2: the AYs make sound, and their generators are in the snapshot.
+pub const RUNTIME_VERSION: &str = concat!("gp-arcade ", env!("CARGO_PKG_VERSION"), " mcr 2");
 pub use protocol::ArcadeRuntime;
 pub use romset::Romset;

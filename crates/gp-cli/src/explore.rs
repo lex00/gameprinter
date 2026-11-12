@@ -346,7 +346,11 @@ pub(crate) fn write_clips(d: &std::path::Path, a: &ExploreArgs, e: &Explored) ->
         let pads: Vec<u8> = c.inputs.iter().map(|i| i.pads[0]).collect();
         fs::write(
             d.join(format!("explore-start-{k}.presses")),
-            clipset::presses_text(pads.len() as u64, &spans(&pads)),
+            clipset::presses_text(&crate::clipset::Presses {
+                frames: pads.len() as u64,
+                spans: spans(&pads),
+                arcade: None,
+            }),
         )?;
     }
     let mut text = String::from("[clipset]\nformat = \"0.3.0\"\ngenerator = \"gp explore\"\n");

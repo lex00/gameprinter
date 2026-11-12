@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
-use gp_assets::{AssetMap, RomLayout};
+use gp_assets::RomLayout;
 use gp_package::registry::Reader;
 use serde_json::json;
 
@@ -104,8 +104,8 @@ pub fn fetch(
         let map_text = text(&map_path)?;
         let map_sha = sha256_hex(map_text.as_bytes());
         let map_ok = map_sha == field("asset_map_sha256");
-        let map = AssetMap::parse(&map_text).with_context(|| map_path.clone())?;
-        let (lifted, _) = gp_assets::lift(rom, &map, &map_text)?;
+        let (lifted, _) =
+            crate::assets::lift_files(rom, &map_text).with_context(|| map_path.clone())?;
         let out = into.join("lifted").join(&rom_id);
         let lifted: BTreeMap<String, Vec<u8>> =
             lifted.into_iter().map(|f| (f.name, f.bytes)).collect();

@@ -445,28 +445,124 @@ pub fn generate(frames: usize, spans: &[&str]) -> Result<InputLog, InputLogError
                 other => return Err(bad(format!("unknown button {other:?}"))),
             };
         }
-        let (from, to) = range
-            .split_once('-')
-            .ok_or_else(|| bad("expected a frame range FROM-TO or FROM-".into()))?;
-        let from: usize = from
-            .parse()
-            .map_err(|_| bad(format!("bad frame {from:?}")))?;
-        let to: usize = if to.is_empty() {
-            frames.saturating_sub(1)
-        } else {
-            to.parse().map_err(|_| bad(format!("bad frame {to:?}")))?
-        };
-        if from > to || to >= frames {
-            return Err(bad(format!(
-                "range {from}-{to} isn't within 0-{}",
-                frames.saturating_sub(1)
-            )));
-        }
+        let (from, to) = span_range(range, frames).map_err(bad)?;
         for f in &mut log.frames[from..=to] {
             f.pads[port] |= bits;
         }
     }
     Ok(log)
+}
+
+/// An arcade button's name in a span, by its column letter in the log
+/// (`columns`): coin, start1, right, left, down, up, tap. `None` for a
+/// letter no arcade set here uses.
+pub fn arcade_button(letter: char) -> Option<&'static str> {
+    Some(match letter {
+        'C' => "coin",
+        'S' => "start1",
+        'R' => "right",
+        'L' => "left",
+        'D' => "down",
+        'U' => "up",
+        'T' => "tap",
+        _ => return None,
+    })
+}
+
+/// [`generate`] for an arcade set: the spans name the layout's buttons
+/// ([`arcade_button`]: `coin@10-15`, `up+tap@100-`), and each sets its
+/// column's bit. The log is an arcade log of that layout.
+pub fn generate_arcade(
+    frames: usize,
+    layout: &ArcadeLayout,
+    spans: &[&str],
+) -> Result<InputLog, InputLogError> {
+    let mut log = InputLog::new_arcade(&layout.system, &layout.columns);
+    log.frames = vec![
+        InputFrame {
+            polled: true,
+            pads: [0; 4],
+            reset: false,
+        };
+        frames
+    ];
+    for (i, spec) in spans.iter().enumerate() {
+        let bad = |message: String| err(i + 1, format!("span {spec:?}: {message}"));
+        let (buttons, range) = spec
+            .split_once('@')
+            .ok_or_else(|| bad("expected BUTTONS@FROM-TO, e.g. up+tap@10-20".into()))?;
+        let mut bits = 0u8;
+        for name in buttons.split('+') {
+            let name = name.to_ascii_lowercase();
+            let k = layout
+                .columns
+                .chars()
+                .position(|c| arcade_button(c) == Some(name.as_str()))
+                .ok_or_else(|| {
+                    let known: Vec<&str> =
+                        layout.columns.chars().filter_map(arcade_button).collect();
+                    bad(format!(
+                        "unknown button {name:?}; {}'s are {}",
+                        layout.system,
+                        known.join(", ")
+                    ))
+                })?;
+            bits |= 1 << k;
+        }
+        let (from, to) = span_range(range, frames).map_err(bad)?;
+        for f in &mut log.frames[from..=to] {
+            f.pads[0] |= bits;
+        }
+    }
+    Ok(log)
+}
+
+/// An arcade log's frames as spans, the inverse of [`generate_arcade`]:
+/// one span for each run of frames holding the same buttons, none for
+/// frames holding nothing. `None` when a frame holds a column with no
+/// button name.
+pub fn arcade_spans_of(frames: &[InputFrame], layout: &ArcadeLayout) -> Option<Vec<String>> {
+    let names: Vec<Option<&str>> = layout.columns.chars().map(arcade_button).collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < frames.len() {
+        let bits = frames[i].pads[0];
+        let mut j = i;
+        while j + 1 < frames.len() && frames[j + 1].pads[0] == bits {
+            j += 1;
+        }
+        if bits != 0 {
+            let mut held = Vec::new();
+            for k in 0..8 {
+                if bits & (1 << k) != 0 {
+                    held.push((*names.get(k)?)?);
+                }
+            }
+            out.push(format!("{}@{i}-{j}", held.join("+")));
+        }
+        i = j + 1;
+    }
+    Some(out)
+}
+
+/// A span's `FROM-TO` or `FROM-` within `frames` frames.
+fn span_range(range: &str, frames: usize) -> Result<(usize, usize), String> {
+    let (from, to) = range
+        .split_once('-')
+        .ok_or_else(|| "expected a frame range FROM-TO or FROM-".to_string())?;
+    let from: usize = from.parse().map_err(|_| format!("bad frame {from:?}"))?;
+    let to: usize = if to.is_empty() {
+        frames.saturating_sub(1)
+    } else {
+        to.parse().map_err(|_| format!("bad frame {to:?}"))?
+    };
+    if from > to || to >= frames {
+        return Err(format!(
+            "range {from}-{to} isn't within 0-{}",
+            frames.saturating_sub(1)
+        ));
+    }
+    Ok((from, to))
 }
 
 fn parse_pad(field: &str) -> Option<u8> {
@@ -645,6 +741,33 @@ mod tests {
         third[0].pads[2] = button::A;
         assert!(spans_of(&third).is_none());
         assert!(generate(8, &["p3:a@1-1"]).is_err());
+    }
+
+    /// Arcade spans name the layout's buttons, make an arcade log, and
+    /// come back from it unchanged.
+    #[test]
+    fn arcade_spans_make_an_arcade_log_and_come_back() {
+        let layout = ArcadeLayout {
+            system: "tapper".into(),
+            columns: "CSRLDUT".into(),
+        };
+        let spans = ["coin@2-3", "start1@6-6", "up+tap@8-9", "left@10-"];
+        let log = generate_arcade(12, &layout, &spans).unwrap();
+        assert_eq!(log.arcade.as_ref(), Some(&layout));
+        assert_eq!(log.frames[2].pads[0], 0b1);
+        assert_eq!(log.frames[6].pads[0], 0b10);
+        assert_eq!(log.frames[8].pads[0], 0b110_0000);
+        assert_eq!(log.frames[11].pads[0], 0b1000);
+        let text = log.to_text();
+        assert!(text.starts_with("gp-arcade-input 0\nsystem tapper\ncolumns CSRLDUT\n"));
+        let back = arcade_spans_of(&InputLog::parse(&text).unwrap().frames, &layout).unwrap();
+        assert_eq!(back, ["coin@2-3", "start1@6-6", "up+tap@8-9", "left@10-11"]);
+        let refs: Vec<&str> = back.iter().map(String::as_str).collect();
+        assert_eq!(generate_arcade(12, &layout, &refs).unwrap(), log);
+        // NES names aren't arcade buttons, and the range is checked.
+        assert!(generate_arcade(12, &layout, &["a@1-2"]).is_err());
+        assert!(generate_arcade(12, &layout, &["coin@5-20"]).is_err());
+        assert!(generate(12, &["coin@1-2"]).is_err());
     }
 
     #[test]

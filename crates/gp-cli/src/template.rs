@@ -114,7 +114,14 @@ pub fn check(dir: &Path, rom_path: &Path) -> Result<Outcome> {
         .and_then(|v| v.as_str())
         == Some("arcade")
     {
-        return check_romset(dir, rom_path, &accepts);
+        let recipe = manifest.get("recipe").map(|_| {
+            (
+                text("recipe", "asset_map").unwrap_or_default(),
+                text("recipe", "asset_map_sha256").unwrap_or_default(),
+                text("recipe", "lifted_sha256").unwrap_or_default(),
+            )
+        });
+        return check_romset(dir, rom_path, &accepts, recipe);
     }
     let map_pin = text("recipe", "asset_map_sha256")?;
     let lifted_pin = text("recipe", "lifted_sha256")?;
@@ -155,21 +162,58 @@ pub fn check(dir: &Path, rom_path: &Path) -> Result<Outcome> {
 }
 
 /// [`check`] for an arcade template: the romset's identity is one the
-/// template accepts. There is no asset map or lift to pin yet: the tools
-/// lift no arcade assets.
-fn check_romset(dir: &Path, rom_path: &Path, accepts: &[String]) -> Result<Outcome> {
+/// template accepts, and when it has a [recipe], the arcade asset map and
+/// what it lifts from this set are the ones pinned.
+fn check_romset(
+    dir: &Path,
+    rom_path: &Path,
+    accepts: &[String],
+    recipe: Option<(String, String, String)>,
+) -> Result<Outcome> {
     let rom = crate::roms::Rom::read(rom_path)?;
-    let ok = accepts.contains(&rom.sha256);
-    let system = rom.system.unwrap_or_default();
+    let ok_rom = accepts.contains(&rom.sha256);
+    let system = rom.system.clone().unwrap_or_default();
+    let mut out = format!(
+        "{}:\n  {:<10} {}{} ({system})",
+        dir.display(),
+        "romset",
+        if ok_rom { "" } else { "FAILED: " },
+        rom.sha256
+    );
+    let mut ok = ok_rom;
+    let mut j = json!({ "rom_sha256": rom.sha256, "system": system, "assets": null });
+    match recipe {
+        None => out.push_str("\n  assets     none to check: the template has no [recipe]"),
+        Some((map_rel, map_pin, lifted_pin)) => {
+            let map_path = dir.join(&map_rel);
+            let map_text =
+                fs::read_to_string(&map_path).with_context(|| map_path.display().to_string())?;
+            let (files, _) = crate::assets::lift_files(&rom.bytes, &map_text)
+                .with_context(|| map_path.display().to_string())?;
+            let files: BTreeMap<String, Vec<u8>> =
+                files.into_iter().map(|f| (f.name, f.bytes)).collect();
+            let map_sha = sha256_hex(map_text.as_bytes());
+            let lifted = lifted_digest(&files);
+            for (name, pass, value) in [
+                ("asset map", map_sha == map_pin, &map_sha),
+                ("lifted", lifted == lifted_pin, &lifted),
+            ] {
+                ok &= pass;
+                let _ = write!(
+                    out,
+                    "\n  {name:<10} {}{value}",
+                    if pass { "" } else { "FAILED: " }
+                );
+            }
+            j["asset_map_sha256"] = json!(map_sha);
+            j["lifted_sha256"] = json!(lifted);
+            j["assets"] = json!(files.len());
+        }
+    }
+    j["ok"] = json!(ok);
     Ok(Outcome {
-        json: json!({ "ok": ok, "rom_sha256": rom.sha256, "system": system, "assets": null }),
-        text: format!(
-            "{}:\n  {:<10} {}{} ({system})\n  assets     none to check: the tools lift no arcade assets yet",
-            dir.display(),
-            "romset",
-            if ok { "" } else { "FAILED: " },
-            rom.sha256
-        ),
+        json: j,
+        text: out,
         exit: u8::from(!ok),
     })
 }

@@ -7,6 +7,9 @@
 //!   $GP_HOME/work/oracle ($GP_HOME defaults to ~/.gameprinter), played
 //!   with scripts/oracle/inputs/tapper-first.input and tapper-deaths.input.
 //!   Each one that is missing is skipped.
+//! - tapper-first-sound: the same log recorded with the AY writes
+//!   (`ay.tsv`) and the speakers (`sound.wav`): every frame's AY writes
+//!   must be MAME's, and the speakers' samples all but equal.
 
 use std::path::PathBuf;
 
@@ -139,4 +142,53 @@ fn the_frame_event_says_when_the_game_read_its_inputs() {
         .count();
     eprintln!("{polled} of 300 frames polled");
     assert!(polled > 150, "{polled} of 300 frames polled");
+}
+
+#[test]
+fn tapper_first_sounds_as_mame_does() {
+    let (Some(rom), Some((cap, log))) = (
+        romset(),
+        capture("tapper-first-sound", "tapper-first.input"),
+    ) else {
+        return;
+    };
+    assert!(cap.ay.is_some(), "tapper-first-sound has no ay.tsv");
+    matches_every_frame(&rom, &cap, &log);
+    let Ok(wav) = std::fs::read(cap.dir.join("sound.wav")) else {
+        eprintln!("skipped the samples: no sound.wav");
+        return;
+    };
+    // The data chunk of MAME's 16-bit stereo WAV.
+    let at = wav
+        .windows(4)
+        .position(|w| w == b"data")
+        .expect("a data chunk")
+        + 8;
+    let theirs: Vec<i16> = wav[at..]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| i16::from_le_bytes(*b))
+        .collect();
+    let mut t = Tapper::power_on(&rom);
+    t.set_audio(true);
+    let mut ours = Vec::new();
+    for n in 1..cap.rows.len() {
+        t.step(log.controls(n));
+        for s in t.take_audio() {
+            ours.push(gp_arcade::sound::to_i16(s[0]));
+            ours.push(gp_arcade::sound::to_i16(s[1]));
+        }
+    }
+    assert_eq!(ours.len(), theirs.len());
+    let worst = ours
+        .iter()
+        .zip(&theirs)
+        .map(|(a, b)| (i32::from(*a) - i32::from(*b)).abs())
+        .max()
+        .unwrap_or(0);
+    let differ = ours.iter().zip(&theirs).filter(|(a, b)| a != b).count();
+    // Float rounding in the mixing leaves a few samples one step apart.
+    assert!(worst <= 1, "a sample differs by {worst}");
+    assert!(differ * 100_000 < ours.len(), "{differ} samples differ");
 }

@@ -11,6 +11,7 @@
 //! The lifted files' bytes depend only on the ROM and the map, so lifting
 //! the same ROM gives the same files on every platform.
 
+pub mod arcade;
 pub mod authored;
 pub mod blobs;
 pub mod charset;

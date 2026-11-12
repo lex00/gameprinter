@@ -202,8 +202,8 @@ mame-build platform=("linux/" + host_arch):
 # ROMSET is a MAME romset zip, mounted read-only for the run; OUT goes under
 # $GP_HOME/work/oracle/; SHOT_EVERY 0 writes no PNGs.
 # Plays an input log on a romset in the MAME image, writing every frame.
-mame-record ROMSET LOG OUT SHOT_EVERY="30":
-    GP_HOME={{quote(gp_home)}} scripts/oracle/mame-record.sh {{mame_image}} {{quote(ROMSET)}} {{quote(LOG)}} {{quote(OUT)}} {{quote(SHOT_EVERY)}}
+mame-record ROMSET LOG OUT SHOT_EVERY="30" WAV="0":
+    GP_HOME={{quote(gp_home)}} GP_ORACLE_WAV={{quote(WAV)}} scripts/oracle/mame-record.sh {{mame_image}} {{quote(ROMSET)}} {{quote(LOG)}} {{quote(OUT)}} {{quote(SHOT_EVERY)}}
 
 # The page, built from the games repo beside this one.
 page out="target/page":

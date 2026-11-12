@@ -49,6 +49,16 @@ pub enum Region {
 }
 
 impl Region {
+    /// MAME's name for the region.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::MainCpu => "maincpu",
+            Self::SsioCpu => "ssio:cpu",
+            Self::Gfx1 => "gfx1",
+            Self::Gfx2 => "gfx2",
+        }
+    }
+
     pub fn size(self) -> usize {
         match self {
             Self::MainCpu | Self::SsioCpu => 0x10000,
@@ -845,9 +855,10 @@ pub struct Romset {
     /// Files in the zip that aren't chips of the set, with what they are
     /// when MAME knows them. Reported, then ignored.
     pub extras: Vec<String>,
-    /// Whether the zip held the SSIO board's PROM ([`SSIO_PROM`]), under
-    /// whatever name. Nothing reads it yet: the sound is silent.
-    pub ssio_prom: bool,
+    /// The SSIO board's PROM ([`SSIO_PROM`]), found by its hash under
+    /// whatever name: the sound's volumes come from it. Without it the
+    /// board is silent.
+    pub ssio_prom: Option<Vec<u8>>,
 }
 
 impl std::fmt::Debug for Romset {
@@ -992,11 +1003,11 @@ impl Romset {
             };
             regions[r][c.offset..c.offset + c.size].copy_from_slice(bytes);
         }
-        let mut ssio_prom = false;
+        let mut ssio_prom = None;
         let mut extras = Vec::new();
         for ((n, h, d), _) in hashed.iter().zip(&used).filter(|(_, u)| !**u) {
             if h == SSIO_PROM.sha1 {
-                ssio_prom = true;
+                ssio_prom = Some(d.clone());
             } else {
                 extras.push(format!(
                     "{n} ({} bytes, SHA-1 {h}): not in the set's list; ignored",

@@ -230,9 +230,8 @@ pub(crate) fn cli(paths: &gp_evidence::Paths, o: &CarryArgs) -> anyhow::Result<c
             .iter()
             .position(|f| f.path == format!("entities.{player}[0].on_ground"));
         for rec in files {
-            let (n, spans) =
-                crate::clipset::parse_presses(&fs::read_to_string(inp.dir.join(rec))?)?;
-            let log = gp_evidence::InputLog::parse(&crate::clipset::log_of(n, &spans)?)?;
+            let p = crate::clipset::parse_presses(&fs::read_to_string(inp.dir.join(rec))?)?;
+            let log = gp_evidence::InputLog::parse(&crate::clipset::log_of_presses(&p)?)?;
             let inputs: Vec<gp_runtime::InputFrame> = log
                 .frames
                 .iter()

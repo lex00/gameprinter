@@ -5,7 +5,9 @@
 # input log in the gp-arcade-input format. OUT is a folder name under
 # $GP_HOME/work/oracle/, or a path inside it; it must not exist yet.
 # SHOT_EVERY writes a PNG every N frames (default 30, one a second for
-# Tapper; 0 for none).
+# Tapper; 0 for none). With GP_ORACLE_WAV=1 in the environment, MAME also
+# records what reaches the speakers as OUT/sound.wav (48 kHz, 16-bit
+# stereo, about 11 MB a minute).
 #
 # The romset is mounted read-only into the container for this run only; it
 # never goes into the image or the output. Everything the run writes is
@@ -67,6 +69,11 @@ if git -C "$out" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   die "$out is inside a git work tree; captures are derived from the ROM and stay out of repos"
 fi
 
+wav=()
+if [ "${GP_ORACLE_WAV:-0}" = 1 ]; then
+  wav=(-wavwrite /out/sound.wav -samplerate 48000)
+fi
+
 start=$SECONDS
 set +e
 docker run --rm --network none \
@@ -84,7 +91,7 @@ docker run --rm --network none \
   -autoboot_script /oracle/mame-capture.lua \
   -noreadconfig -nowriteconfig -noplugins -nocheat -noautosave \
   -skip_gameinfo \
-  -video none -sound none \
+  -video none -sound none ${wav[@]+"${wav[@]}"} \
   -nothrottle -frameskip 0 \
   -keyboardprovider none -mouseprovider none -joystickprovider none -lightgunprovider none \
   -cfg_directory /work/cfg -nvram_directory /work/nvram \

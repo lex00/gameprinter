@@ -10,6 +10,7 @@ use std::sync::Arc;
 use crate::original::OriginalRuntime;
 use anyhow::{Context as _, bail};
 use gp_evidence::Paths;
+use gp_evidence::input_log::ArcadeLayout;
 use gp_evidence::manifest::PowerOn;
 use gp_interp::mapping::Mapping;
 use gp_interp::scenario::{Outcome as Ran, Scenario, Source, StartAt};
@@ -249,8 +250,24 @@ pub(crate) fn inside(p: &str) -> bool {
             .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
-pub(crate) fn parse_presses(text: &str) -> anyhow::Result<(u64, Vec<String>)> {
-    let mut lines = text.lines();
+/// A `.presses` file: its frames, its spans, and for an arcade game the
+/// set and button columns its spans name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Presses {
+    pub frames: u64,
+    pub spans: Vec<String>,
+    pub arcade: Option<ArcadeLayout>,
+}
+
+/// The line after `frames N` in an arcade game's `.presses` file:
+/// `arcade SYSTEM COLUMNS`, the MAME set and the input log's columns. Its
+/// spans then name arcade buttons (coin, start1, right, left, down, up,
+/// tap; gp_evidence::input_log::arcade_button). An NES file has no such
+/// line, so its bytes are as they always were.
+const ARCADE_LINE: &str = "arcade ";
+
+pub(crate) fn parse_presses(text: &str) -> anyhow::Result<Presses> {
+    let mut lines = text.lines().peekable();
     if lines.next() != Some(PRESSES_HEAD) {
         bail!("a presses file starts with {PRESSES_HEAD:?}");
     }
@@ -259,22 +276,57 @@ pub(crate) fn parse_presses(text: &str) -> anyhow::Result<(u64, Vec<String>)> {
         .and_then(|l| l.strip_prefix("frames "))
         .and_then(|n| n.trim().parse::<u64>().ok())
         .context("a presses file's second line is `frames N`")?;
+    let arcade = match lines.peek().and_then(|l| l.strip_prefix(ARCADE_LINE)) {
+        Some(rest) => {
+            let mut w = rest.split_whitespace();
+            let (Some(system), Some(columns), None) = (w.next(), w.next(), w.next()) else {
+                bail!("a presses file's arcade line is `arcade SYSTEM COLUMNS`");
+            };
+            lines.next();
+            Some(ArcadeLayout {
+                system: system.to_owned(),
+                columns: columns.to_owned(),
+            })
+        }
+        None => None,
+    };
     let spans: Vec<String> = lines
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .map(str::to_owned)
         .collect();
-    Ok((frames, spans))
+    Ok(Presses {
+        frames,
+        spans,
+        arcade,
+    })
 }
 
-/// A `.presses` file: its frames and spans.
-pub(crate) fn presses_text(frames: u64, spans: &[String]) -> String {
-    let mut s = format!("{PRESSES_HEAD}\nframes {frames}\n");
-    for p in spans {
-        s.push_str(p);
+/// A `.presses` file's text.
+pub(crate) fn presses_text(p: &Presses) -> String {
+    let mut s = format!("{PRESSES_HEAD}\nframes {}\n", p.frames);
+    if let Some(a) = &p.arcade {
+        s.push_str(&format!("{ARCADE_LINE}{} {}\n", a.system, a.columns));
+    }
+    for span in &p.spans {
+        s.push_str(span);
         s.push('\n');
     }
     s
+}
+
+/// The presses an input log holds, as spans ([`Presses`]); `None` when a
+/// frame holds what spans can't say (a reset, a third controller).
+pub(crate) fn presses_of(log: &gp_evidence::InputLog) -> Option<Presses> {
+    let spans = match &log.arcade {
+        Some(a) => gp_evidence::input_log::arcade_spans_of(&log.frames, a)?,
+        None => gp_evidence::input_log::spans_of(&log.frames)?,
+    };
+    Some(Presses {
+        frames: log.frames.len() as u64,
+        spans,
+        arcade: log.arcade.clone(),
+    })
 }
 
 /// A clip's recipe hash: the BLAKE3 of what makes it and what it must
@@ -290,13 +342,13 @@ pub(crate) fn recipe_hash(
     file: &dyn Fn(&str) -> anyhow::Result<String>,
 ) -> anyhow::Result<String> {
     let presses = match &r.presses_file {
-        Some(p) => parse_presses(&file(p)?)?.1,
+        Some(p) => parse_presses(&file(p)?)?.spans,
         None => r.presses.clone(),
     };
     let from = match &r.start.presses_from_power_on {
         Some(p) => {
-            let (frames, spans) = parse_presses(&file(p)?)?;
-            Some(gp_evidence::Hash::of(presses_text(frames, &spans).as_bytes()).to_string())
+            let start = parse_presses(&file(p)?)?;
+            Some(gp_evidence::Hash::of(presses_text(&start).as_bytes()).to_string())
         }
         None => None,
     };
@@ -331,12 +383,52 @@ pub(crate) fn content_hash(recipes: &BTreeMap<String, String>) -> String {
     gp_evidence::Hash::of(s.as_bytes()).to_string()
 }
 
-/// Spans as an input log's text, `frames` long.
-pub(crate) fn log_of(frames: u64, spans: &[String]) -> anyhow::Result<String> {
+/// Spans as an input log's text, `frames` long: an NES log, or an arcade
+/// log of `arcade`'s set and columns.
+pub(crate) fn log_of(
+    frames: u64,
+    spans: &[String],
+    arcade: Option<&ArcadeLayout>,
+) -> anyhow::Result<String> {
     let refs: Vec<&str> = spans.iter().map(String::as_str).collect();
-    Ok(
-        gp_evidence::input_log::generate(usize::try_from(frames).unwrap_or(usize::MAX), &refs)?
-            .to_text(),
+    let n = usize::try_from(frames).unwrap_or(usize::MAX);
+    Ok(match arcade {
+        Some(a) => gp_evidence::input_log::generate_arcade(n, a, &refs)?,
+        None => gp_evidence::input_log::generate(n, &refs)?,
+    }
+    .to_text())
+}
+
+/// A `.presses` file's input log's text.
+pub(crate) fn log_of_presses(p: &Presses) -> anyhow::Result<String> {
+    log_of(p.frames, &p.spans, p.arcade.as_ref())
+}
+
+/// A clip's own presses: its `.presses` file's spans, else the recipe's.
+/// A file must be for the same platform and set as the clip's start.
+fn own_presses(set_dir: &Path, r: &Recipe, start: &Presses) -> anyhow::Result<Vec<String>> {
+    let Some(p) = &r.presses_file else {
+        return Ok(r.presses.clone());
+    };
+    let own = parse_presses(
+        &fs::read_to_string(set_dir.join(p))
+            .with_context(|| format!("reading {p} beside the clip set"))?,
+    )?;
+    if own.arcade != start.arcade {
+        bail!(
+            "clip {}: {p} names {}, its start {}",
+            r.id,
+            layout_name(own.arcade.as_ref()),
+            layout_name(start.arcade.as_ref())
+        );
+    }
+    Ok(own.spans)
+}
+
+fn layout_name(a: Option<&ArcadeLayout>) -> String {
+    a.map_or_else(
+        || "NES buttons".to_owned(),
+        |a| format!("the arcade set {} ({})", a.system, a.columns),
     )
 }
 
@@ -366,16 +458,13 @@ pub(crate) fn recipe_log(
     let Ok(text) = fs::read_to_string(set_dir.join(p)) else {
         return Ok(None);
     };
-    let (frames, spans) = parse_presses(&text)?;
-    let mut log = gp_evidence::InputLog::parse(&log_of(frames, &spans)?)?;
+    let from = parse_presses(&text)?;
+    let mut log = gp_evidence::InputLog::parse(&log_of_presses(&from)?)?;
     let start = usize::try_from(r.start.frame).unwrap_or(usize::MAX);
     log.frames.truncate(start);
     let start = log.frames.len();
-    let presses = match &r.presses_file {
-        Some(p) => parse_presses(&fs::read_to_string(set_dir.join(p))?)?.1,
-        None => r.presses.clone(),
-    };
-    let own = gp_evidence::InputLog::parse(&log_of(r.frames, &presses)?)?;
+    let presses = own_presses(set_dir, r, &from)?;
+    let own = gp_evidence::InputLog::parse(&log_of(r.frames, &presses, from.arcade.as_ref())?)?;
     log.frames.extend(own.frames);
     Ok(Some((log, start)))
 }
@@ -566,12 +655,13 @@ pub(crate) fn take_on(
         Err(e) => e,
     };
     let start = gp_evidence::InputLog::parse(log_text)?;
-    let own = gp_evidence::InputLog::parse(&log_of(frames, presses)?)?;
+    let own = gp_evidence::InputLog::parse(&log_of(frames, presses, start.arcade.as_ref())?)?;
     // Only a start whose presses end at it goes on into the clip's own.
     if start.frames.len() as u64 != frame || own.frames.is_empty() {
         return Err(first);
     }
     let mut joined = gp_evidence::InputLog::new(start.controllers.max(own.controllers));
+    joined.arcade.clone_from(&start.arcade);
     joined.frames = start.frames.clone();
     joined.frames.extend(own.frames.iter().cloned());
     let t = take(home, rom, mapping, &joined.to_text(), frame, stem).map_err(|e| {
@@ -591,8 +681,11 @@ pub(crate) fn take_on(
     let mut start_log = joined.clone();
     start_log.frames.truncate(start.frames.len() + cut);
     let rest = &own.frames[cut..];
-    let presses = gp_evidence::input_log::spans_of(rest)
-        .context("the clip presses reset or a third or fourth controller, which spans can't say")?;
+    let presses = match &start.arcade {
+        Some(a) => gp_evidence::input_log::arcade_spans_of(rest, a),
+        None => gp_evidence::input_log::spans_of(rest),
+    }
+    .context("the clip presses reset or a third or fourth controller, which spans can't say")?;
     Ok(TakenOn {
         taken: t,
         shift,
@@ -635,10 +728,10 @@ pub(crate) fn make(
         let Ok(text) = fs::read_to_string(set_dir.join(p)) else {
             continue;
         };
-        let Ok((frames, spans)) = parse_presses(&text) else {
+        let Ok(start) = parse_presses(&text) else {
             continue;
         };
-        let Ok(log) = log_of(frames, &spans) else {
+        let Ok(log) = log_of_presses(&start) else {
             continue;
         };
         saves.push((
@@ -685,22 +778,13 @@ fn make_one(
     };
     let text = fs::read_to_string(set_dir.join(p))
         .with_context(|| format!("reading {p} beside the clip set"))?;
-    let (frames, spans) = parse_presses(&text)?;
+    let start = parse_presses(&text)?;
     let log_file = logs.join(format!("save.{}.log", file_key(&r.id)));
-    fs::write(&log_file, log_of(frames, &spans)?)?;
+    fs::write(&log_file, log_of_presses(&start)?)?;
     let input = format!("save point {}", r.id);
     let stem = sdir.join(format!("recipe.save.{}", file_key(&r.id)));
     let log_text = fs::read_to_string(&log_file)?;
-    let presses = match &r.presses_file {
-        Some(p) => {
-            parse_presses(
-                &fs::read_to_string(set_dir.join(p))
-                    .with_context(|| format!("reading {p} beside the clip set"))?,
-            )?
-            .1
-        }
-        None => r.presses.clone(),
-    };
+    let presses = own_presses(set_dir, r, &start)?;
     let o = take_on(
         home,
         rom,
@@ -731,6 +815,12 @@ fn make_one(
         );
     }
     let played = r.source == "played";
+    // An arcade clip's presses go to the scenario as its log: the
+    // scenario's spans are NES buttons.
+    let (presses, log) = match &start.arcade {
+        Some(a) => (Vec::new(), Some(log_of(frames, &presses, Some(a))?)),
+        None => (presses, None),
+    };
     Ok(Made {
         scenario: Scenario {
             id: r.id.clone(),
@@ -740,7 +830,7 @@ fn make_one(
             params: Vec::new(),
             frames,
             presses,
-            log: None,
+            log,
             requires: r.requires.clone(),
             start: Some(StartAt {
                 input,

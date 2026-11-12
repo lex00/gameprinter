@@ -6,10 +6,10 @@
 //!
 //! | Part | What |
 //! |---|---|
-//! | RAM | The 2 KB of internal RAM on each frame something was read, so any `ram[...]` selector answers from it, whatever the mapping reads |
+//! | RAM | The 2 KB of internal RAM on each frame something was read, so any `ram[...]` selector answers from it, whatever the mapping reads. For an arcade original, the board's RAM record (gp-arcade's 5,760 bytes: work, sprite, video and palette RAM and the sound board's), which answers `ram[...]` from 0xE000 up, `sound_ram[...]` and `palette[...]` |
 //! | Other reads | The answer to any other selector, by frame and selector |
 //! | Steps | Each frame's step: the frame after it and its events |
-//! | Pictures | The original's picture on each frame the screen measure took one: each pixel's colour index, with the sprite bit |
+//! | Pictures | The original's picture on each frame the screen measure took one: each pixel's colour index, with the sprite bit. An arcade picture is its pens (0 to 63) with the sprite bit, after the 64 colours it was drawn with |
 //! | Read at NMI | Whether `ram[...]` read the RAM as the CPU takes the next NMI (a mapping's `read_at = "nmi"`), so the RAM kept is what those reads saw. A replay is read the same way or not at all |
 //!
 //! A later score plays the tape in place of the emulator ([`Original`] is a
@@ -17,9 +17,10 @@
 //! comparison. Anything the tape doesn't hold (a frame, a selector, a
 //! picture, a call it can't answer) marks the replay missed, and the clip
 //! is run on the emulator again, which writes a new tape. A tape is keyed
-//! by the ROM, the clip's start and presses, the input played to the start
-//! and the sources of gp-nes and what it builds on ([`key_parts`]), so a
-//! change to the emulator never reads an old one. The mapping isn't in the
+//! by the ROM (for an arcade romset, its identity, so any zip of the same
+//! chips shares tapes), the clip's start and presses, the input played to
+//! the start and the sources of gp-nes, gp-arcade and what they build on
+//! ([`key_parts`]), so a change to either emulator never reads an old one. The mapping isn't in the
 //! key: RAM answers any selector, and a selector the tape never saw is a
 //! miss.
 
@@ -48,7 +49,8 @@ fn unpack(s: &str) -> Option<Vec<u8>> {
 
 /// The tape format's version: a change to what a tape holds or how it is
 /// read bumps it.
-pub(crate) const TAPE_VERSION: &str = "tape 2";
+/// Tape 3 adds the arcade's RAM record and pictures.
+pub(crate) const TAPE_VERSION: &str = "tape 3";
 
 /// What the lockstep read from the original.
 #[derive(Default, Serialize, Deserialize)]
@@ -69,6 +71,10 @@ pub(crate) struct Tape {
     /// (`set("read_at_nmi", true)`).
     #[serde(default)]
     read_at_nmi: bool,
+    /// Whether it is an arcade original's: `ram` then holds RAM records
+    /// and `pictures` pens after their palette.
+    #[serde(default)]
+    arcade: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -223,6 +229,11 @@ pub(crate) fn key_parts() -> Vec<u8> {
     k
 }
 
+/// Whether an arcade original's RAM record answers `sel`.
+fn arcade_record(sel: &Selector) -> bool {
+    gp_arcade::protocol::read_record(&[0; gp_arcade::mcr::RAM_RECORD], sel).is_some()
+}
+
 /// The original as the lockstep sees it: the emulator, writing what it is
 /// asked into a tape, or a tape played back. Forks share the tape and the
 /// missed mark.
@@ -242,22 +253,19 @@ pub(crate) struct Original {
 }
 
 impl Original {
-    /// The emulator at the clip's start, writing a new tape. A tape keeps
-    /// the NES's 2 KB of RAM and its pictures in NES colours, so an arcade
-    /// original runs live and writes none: it is marked missed from the
-    /// start, and nothing is saved.
+    /// The emulator at the clip's start, writing a new tape.
     pub(crate) fn recording(nes: OriginalRuntime) -> Self {
         let tape = Tape {
             start: nes.frame(),
+            arcade: nes.platform() == crate::original::Platform::Arcade,
             ..Tape::default()
         };
-        let arcade = nes.platform() == crate::original::Platform::Arcade;
         Self {
             live: Some(nes),
             record: true,
             frame: 0,
             tape: Rc::new(RefCell::new(tape)),
-            missed: Rc::new(Cell::new(arcade)),
+            missed: Rc::new(Cell::new(false)),
             at_nmi: false,
             ram_at: RefCell::new(None),
         }
@@ -306,6 +314,17 @@ impl Original {
         use gp_nes::video::{HEIGHT, WIDTH};
         if let Some(live) = &self.live {
             let Some(nes) = live.nes() else {
+                if self.record
+                    && let OriginalRuntime::Arcade(a) = live
+                {
+                    let (pens, palette) = a.tapper().pens();
+                    let mut px: Vec<u8> = palette
+                        .iter()
+                        .flat_map(|c| [(c >> 16) as u8, (c >> 8) as u8, *c as u8])
+                        .collect();
+                    px.extend_from_slice(pens);
+                    self.tape.borrow_mut().pictures.insert(a.frame(), pack(&px));
+                }
                 return crate::screen::Shows::shown(live);
             };
             let f = crate::screen::original_frame(nes);
@@ -330,6 +349,16 @@ impl Original {
         }
         let t = self.tape.borrow();
         let px = t.pictures.get(&self.frame).and_then(|b| unpack(b));
+        if t.arcade {
+            use gp_arcade::video::{HEIGHT, WIDTH};
+            let Some(px) = px.filter(|p| p.len() == 64 * 3 + WIDTH * HEIGHT) else {
+                drop(t);
+                self.missed.set(true);
+                return crate::screen::blank_frame(WIDTH, HEIGHT);
+            };
+            let (palette, pens) = px.split_at(64 * 3);
+            return crate::screen::arcade_pens_frame(pens, palette.as_chunks::<3>().0);
+        }
         let Some(px) = px.filter(|p| p.len() == WIDTH * HEIGHT) else {
             drop(t);
             self.missed.set(true);
@@ -477,7 +506,24 @@ impl Runtime for Original {
         let parsed = Selector::parse(selector);
         if let Some(nes) = &self.live {
             let r = nes.query(selector);
-            // An arcade original writes no tape (see `recording`).
+            if self.record
+                && let OriginalRuntime::Arcade(a) = nes
+            {
+                let f = nes.frame();
+                let ram = parsed.as_ref().ok().is_some_and(arcade_record);
+                let mut t = self.tape.borrow_mut();
+                if ram {
+                    t.ram
+                        .entry(f)
+                        .or_insert_with(|| pack(&a.tapper().ram_record()));
+                } else {
+                    t.other
+                        .entry(f)
+                        .or_default()
+                        .insert(selector.to_owned(), to_answer(&r));
+                }
+                return r;
+            }
             if self.record && nes.nes().is_some() {
                 let f = nes.frame();
                 let ram = parsed
@@ -513,7 +559,19 @@ impl Runtime for Original {
             return r;
         }
         let t = self.tape.borrow();
-        if let Ok(sel) = &parsed
+        if t.arcade
+            && let Ok(sel) = &parsed
+            && arcade_record(sel)
+        {
+            let Some(rec) = t.ram.get(&self.frame).and_then(|b| unpack(b)) else {
+                drop(t);
+                return self.miss(&format!("RAM at frame {}", self.frame));
+            };
+            return gp_arcade::protocol::read_record(&rec, sel)
+                .unwrap_or_else(|| self.miss("RAM read"));
+        }
+        if !t.arcade
+            && let Ok(sel) = &parsed
             && gp_nes::protocol::read_ram(&[], sel).is_some()
         {
             if t.read_at_nmi != self.at_nmi {
@@ -670,5 +728,54 @@ mod tests {
         let mut b = Original::recording(nes());
         b.set("read_at_nmi", Value::Flag(true)).unwrap();
         assert_ne!(play(&mut a), play(&mut b));
+    }
+
+    /// An arcade original's tape: its RAM record answers the RAM
+    /// selectors, the other selectors are kept as asked, and its pictures
+    /// come back as they were drawn, sprite mask included. Needs the
+    /// owner's rbtapper romset; skipped without it.
+    #[test]
+    fn an_arcade_tape_replays_its_reads_and_pictures() {
+        let Some(zip) = gp_arcade::romset::local_romset("rbtapper") else {
+            eprintln!("skipped: no rbtapper romset");
+            return;
+        };
+        let rom = std::fs::read(zip).unwrap();
+        let o = OriginalRuntime::of_rom(&rom).unwrap();
+        let sels = [
+            "ram[0xe000..0xe800]",
+            "ram[0xe800..0xea00]",
+            "sound_ram[*]",
+            "palette[0..4]",
+            "ports[*]",
+            "ram[0x100]",
+        ];
+        let run = |o: &mut Original| {
+            let mut out = Vec::new();
+            for k in 0..120u32 {
+                let b = if (60..66).contains(&k) { 1 } else { 0 };
+                o.step(&[InputFrame::pads([b, 0, 0, 0])]).unwrap();
+                for s in sels {
+                    out.push(format!("{:?}", o.query(s)));
+                }
+                if k % 30 == 0 {
+                    let f = o.picture();
+                    out.push(format!(
+                        "{:?} {:?}",
+                        blake3::hash(&f.rgb.concat()),
+                        f.sprite.iter().filter(|x| **x).count()
+                    ));
+                }
+            }
+            out
+        };
+        let mut live = Original::recording(o);
+        let seen = run(&mut live);
+        assert!(!live.missed());
+        let tape = Tape::from_bytes(&live.into_tape().unwrap().to_bytes()).unwrap();
+        assert!(tape.arcade);
+        let mut again = Original::replay(tape);
+        assert_eq!(run(&mut again), seen);
+        assert!(!again.missed());
     }
 }

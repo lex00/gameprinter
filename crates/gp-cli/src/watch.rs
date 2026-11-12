@@ -117,7 +117,7 @@ pub(crate) fn recipe(dir: &Path, hash: &str) -> Result<ClipInput> {
     }
     let text = fs::read_to_string(dir.join("recipes").join(format!("{hash}.presses")))
         .with_context(|| format!("the session has no recipe {hash}"))?;
-    let (frames, spans) = crate::clipset::parse_presses(&text)?;
+    let crate::clipset::Presses { frames, spans, .. } = crate::clipset::parse_presses(&text)?;
     let refs: Vec<&str> = spans.iter().map(String::as_str).collect();
     let inputs = gp_evidence::input_log::generate(usize::try_from(frames)?, &refs)?.frames;
     Ok(ClipInput {
@@ -211,7 +211,11 @@ impl Writer {
         let pads: Vec<u8> = clip.inputs.iter().map(|i| i.pads[0]).collect();
         fs::write(
             d.join(format!("{hash}.presses")),
-            crate::clipset::presses_text(pads.len() as u64, &spans(&pads)),
+            crate::clipset::presses_text(&crate::clipset::Presses {
+                frames: pads.len() as u64,
+                spans: spans(&pads),
+                arcade: None,
+            }),
         )?;
         Ok(())
     }

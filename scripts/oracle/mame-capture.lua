@@ -1,8 +1,8 @@
 -- The MAME oracle's capture script (docs/oracle-mame.md). MAME runs it with
 -- -autoboot_script; it plays an input log from power-on and writes, for
 -- every video frame, the main board's RAM, the sound board's RAM, the input
--- ports as the game could read them, and a hash of the picture, plus a PNG
--- of the picture every Nth frame.
+-- ports as the game could read them, a hash of the picture and the sound
+-- CPU's writes to its AY-8910s, plus a PNG of the picture every Nth frame.
 --
 -- Settings come from the environment (`just mame-record` sets them):
 --   GP_ORACLE_LOG         the input log (format in docs/oracle-mame.md)
@@ -296,9 +296,25 @@ end
 local ram_file = open("ram.bin", "wb")
 local frames_file = open("frames.tsv", "w")
 frames_file:write("frame\ttime\tbuttons\tip0\tip1\tip2\tip3\tip4\tpicture\tmain_pc\tssio_pc\tshot\n")
+local ay_file = open("ay.tsv", "w")
+ay_file:write("frame\twrites\n")
 
 local maincpu = machine.devices[":maincpu"]
 local ssiocpu = machine.devices[":ssio:cpu"]
+
+-- The sound CPU's writes to its two AY-8910s, in order, a frame at a
+-- time: midway.cpp's ssio_map puts chip 0 at a000 and chip 1 at b000, each
+-- with its address latch at offset 0 and its data latch at offset 2,
+-- mirrored over 0ffc. Each is written as the chip, `a` or `d`, and the
+-- value in hex: `0a07 0d38` selects chip 0's register 7 and writes 38.
+local ay_writes = {}
+AY_TAP = ssiocpu.spaces["program"]:install_write_tap(0xa000, 0xbfff, "gp-ay", function(offset, data, mask)
+	local latch = offset & 3
+	if latch == 0 or latch == 2 then
+		ay_writes[#ay_writes + 1] = ("%d%s%02x"):format(offset >= 0xb000 and 1 or 0,
+			latch == 0 and "a" or "d", data & 0xff)
+	end
+end)
 
 local function pc(cpu)
 	return ("%04x"):format(cpu.state["PC"].value)
@@ -325,6 +341,8 @@ local function record(n)
 		end
 	end
 	ram_file:write(read_ram())
+	ay_file:write(n, "\t", #ay_writes > 0 and table.concat(ay_writes, " ") or "-", "\n")
+	ay_writes = {}
 	local buttons = n == 0 and "-" or ports_to_buttons(live_ports)
 	if n > 0 and buttons ~= frames[n] then
 		mismatches = mismatches + 1
@@ -338,6 +356,7 @@ end
 local function finish()
 	ram_file:close()
 	frames_file:close()
+	ay_file:close()
 	local meta = open("capture.txt", "w")
 	meta:write("gp-mame-capture 0\n")
 	meta:write("mame ", emu.app_version(), "\n")

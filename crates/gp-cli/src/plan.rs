@@ -184,11 +184,11 @@ pub(crate) fn load_with(
     }))
 }
 
-/// A `.presses` file of the plan: its frames and spans.
+/// A `.presses` file of the plan.
 fn presses(
     read: &dyn Fn(&str) -> anyhow::Result<String>,
     rel: &str,
-) -> anyhow::Result<(u64, Vec<String>)> {
+) -> anyhow::Result<cs::Presses> {
     if !cs::inside(rel) {
         bail!("{rel} isn't inside the game's folder");
     }
@@ -202,18 +202,25 @@ fn recipe(
     read: &dyn Fn(&str) -> anyhow::Result<String>,
     c: &PlanClip,
 ) -> anyhow::Result<(Recipe, String)> {
-    let (start_frames, start_spans) = presses(read, &c.start)?;
+    let from = presses(read, &c.start)?;
+    let start_frames = from.frames;
     let (own, presses_file) = match &c.presses {
         Presses::Spans(spans) => (spans.clone(), None),
         Presses::File(rel) => {
-            let (frames, spans) = presses(read, rel)?;
-            if frames != c.frames {
-                bail!("{rel} has {frames} frames, the plan says {}", c.frames);
+            let p = presses(read, rel)?;
+            if p.frames != c.frames {
+                bail!("{rel} has {} frames, the plan says {}", p.frames, c.frames);
             }
-            (spans, Some(rel.clone()))
+            if p.arcade != from.arcade {
+                bail!(
+                    "{rel} and {} name different buttons (an arcade line in one only, or two sets)",
+                    c.start
+                );
+            }
+            (p.spans, Some(rel.clone()))
         }
     };
-    let start = cs::presses_text(start_frames, &start_spans);
+    let start = cs::presses_text(&from);
     let v = json!({
         "id": c.id,
         "start": {"input": gp_evidence::Hash::of(start.as_bytes()).to_string()},

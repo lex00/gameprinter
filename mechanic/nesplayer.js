@@ -120,8 +120,9 @@ export class NesPlayer {
     const p = this.x.gp_play_rgba(slot);
     return new Uint8ClampedArray(this.x.memory.buffer.slice(p, p + this.w * this.h * 4));
   }
-  /** The last frame's sound: mono samples at `audioRate()` a second,
-   * copied out. Empty after a restore or a `runTo`, so a jump is silent. */
+  /** The last frame's sound: samples at `audioRate()` a second, the
+   * speakers (`audioChannels()`) interleaved, copied out. Empty after a
+   * restore or a `runTo`, so a jump is silent. */
   audio(slot) {
     const p = this.x.gp_play_audio(slot);
     if (p === 0) throw new Error(this.out());
@@ -129,6 +130,10 @@ export class NesPlayer {
   }
   audioRate() {
     return this.x.gp_play_audio_rate();
+  }
+  /** Speakers: 1 for the NES, 2 for an arcade board that has two. */
+  audioChannels() {
+    return this.x.gp_play_audio_channels ? this.x.gp_play_audio_channels() : 1;
   }
   inputLog(slot) {
     return this.check(this.x.gp_play_input_log(slot));

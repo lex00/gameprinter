@@ -7,7 +7,7 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 
 use super::rom_match::{self, Kind, RomIndex};
-use super::{Bucket, Package, fields, roms, scan, transcribe};
+use super::{Bucket, Package, Source, fields, roms, scan, transcribe};
 
 /// A made-up NROM image: 16 KB of PRG and 8 KB of CHR of xorshift noise,
 /// with a routine at PRG 0x0100 ($8100) and two tables.
@@ -346,4 +346,29 @@ fn a_disagreement_between_package_and_roms_toml_needs_rewrite() {
     let r = scan(&pkg, &BTreeMap::new()).unwrap();
     assert_eq!(r.rewrite_count(), 1);
     assert_eq!(r.outcome().exit, 1);
+}
+
+/// A place in a romset is named by MAME's region and the chip, not PRG.
+#[test]
+fn a_romset_place_names_its_region_and_chip() {
+    let set = gp_arcade::romset::set("tapper").unwrap();
+    let total: usize = set.chips.iter().map(|c| c.size).sum();
+    let s = Source::of_romset("t".into(), "tapper", &vec![0; total], Vec::new());
+    let first = &set.chips[0];
+    assert_eq!(
+        s.place(0x10),
+        format!(
+            "{} {:#07x} ({} +0x0010)",
+            first.region.name(),
+            first.offset + 0x10,
+            first.name
+        )
+    );
+    let last = set.chips.last().unwrap();
+    assert!(
+        s.place(total - 1).starts_with(last.region.name()),
+        "{}",
+        s.place(total - 1)
+    );
+    assert!(!s.place(total - 1).contains("PRG"));
 }

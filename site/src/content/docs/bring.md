@@ -83,7 +83,16 @@ gp roms scan
 gp game new tapper --rom ~/.gameprinter/roms/arcade/rbtapper.zip --genre other --title Tapper
 ```
 
-`gp roms add` checks the zip against the sets and copies it whole to `$GP_ROM_DIR/arcade/`. `gp game new` writes the package as for an NES game, with `platform = "arcade"` and the MAME set in `system`, a model on the arcade controls (coin, start1, a joystick and button1) at 30 frames a second with a 512x480 screen, and a state mapping marked `platform = "arcade"`, whose `ram[...]` reads the main CPU's addresses (Tapper's work RAM is at `0xE000`). There is no asset map yet: the tools don't lift arcade pictures. `gp model check`, `gp template check` (the romset's identity) and `gp package scan` work on it.
+`gp roms add` checks the zip against the sets and copies it whole to `$GP_ROM_DIR/arcade/`. `gp game new` writes the package as for an NES game, with `platform = "arcade"` and the MAME set in `system`, a model on the arcade controls (coin, start1, a joystick and button1) at 30 frames a second with a 512x480 screen, and a state mapping marked `platform = "arcade"`, whose `ram[...]` reads the main CPU's addresses (Tapper's work RAM is at `0xE000`). Its asset map, `assets/tapper.toml`, is the board's: the 1024 background tiles (`gfx1`) and 256 sprites (`gfx2`) by index, the same in every Tapper set, so the same model draws with whichever set's art a player has (`tapper`'s, or `tapperg`'s other sprites). `gp model check`, `gp template check` (the romset's identity, the map and what it lifts) and `gp package scan` work on it.
+
+Lift the pictures, from whichever listed set the zip is, into a folder outside any repo, and check they pack back to the chips:
+
+```sh
+gp assets lift ~/.gameprinter/roms/arcade/tapper.zip --map ../games/tapper/assets/tapper.toml -o ~/.gameprinter/work/assets/tapper
+gp assets pack ~/.gameprinter/work/assets/tapper --check ~/.gameprinter/roms/arcade/tapper.zip
+```
+
+Each picture is an indexed PNG of 4-bit values with gray previews, and `source.toml` says which set they came from. The colours aren't in the chips: the board looks them up in its palette RAM, which the game writes as it runs, so a model does the same.
 
 To play it, build the arcade player once, then open the page:
 
@@ -92,7 +101,40 @@ scripts/web/build-play.sh --arcade
 gp mechanic start tapper walk
 ```
 
-5 drops a coin and 1 starts, as in MAME; the arrows move and X or Space taps. On a controller, Select is the coin, Start starts and A taps. Recording, notes, hand-offs, talk and FREE PLAY work as for an NES game. Clips are kept in the MAME oracle's input log format (`gp-arcade-input 0`), so MAME can replay any clip as it is. **ON THE MODEL** says why it has nothing to show until the game has a model. The board makes no sound yet.
+5 drops a coin and 1 starts, as in MAME; the arrows move and X or Space taps. On a controller, Select is the coin, Start starts and A taps. Recording, notes, hand-offs, talk and FREE PLAY work as for an NES game. Clips are kept in the MAME oracle's input log format (`gp-arcade-input 0`), so MAME can replay any clip as it is. **ON THE MODEL** says why it has nothing to show until the game has a model. The board's sound plays in stereo, as MAME makes it: the first AY-8910 on the left, the second on the right. U turns it off and on.
+
+To keep a clip in the game's corpus, save it as presses:
+
+```sh
+gp clip presses ../games/tapper tapper.serve.001 --from-session walk/1 --name "Serving at three bars"
+```
+
+This writes `inputs/tapper.serve.001.start.presses` (power-on to the clip's start) and `inputs/tapper.serve.001.presses` (the clip), adds the clip to `corpus.toml` and makes its `recipes` hash again. An arcade game's files say which set and buttons they're for on their third line, `arcade tapper CSRLDUT`, and name the buttons `coin`, `start1`, `up`, `down`, `left`, `right` and `tap` (`start1@120-125`, `up+tap@300-340`). The files are read back as the scorer reads them, and the clip is replayed to the state its session recorded. `--log FILE --start N` takes a clip from any input log from power-on instead, such as a MAME oracle log.
+
+Before a model is held to the screen measure, check the measure on the original against itself:
+
+```sh
+gp clip screen ../games/tapper tapper.score.001 --mask ~/.gameprinter/work/tapper-mask.png
+```
+
+It plays the clip on the board live, keeping a score tape, then from that tape, and measures each frame's two pictures with the sprite mask (every pixel a sprite drew); every frame must come out exact. `--mask` writes a frame beside its mask in red. Scoring an arcade clip keeps the board's side in a score tape as for the NES, keyed by the romset's identity, so a long clip doesn't replay the board each time.
+
+Tapper's board has ways a model of it must copy to match it frame for frame. Model each one as a quirk switch in the profiles, as for the NES games (Retro is the original's behaviour, Normal turns the quirk off), not as fixed behaviour:
+
+| Quirk | What the board does |
+|---|---|
+| 30 Hz frame | One video frame is 1/30 s, so the model runs at 30 frames a second |
+| Boot frames | The game reads no input for its first 94 frames while it tests its RAM |
+| Doubled tiles | Background tiles are 8 by 8 in the chips and drawn 16 by 16; sprites move in steps of 2 pixels |
+| Sprite pixel 8 | A sprite pixel of value 8 draws nothing but hides the sprites under it, so the tile shows there |
+| No sprite limit | The sprite board draws all 128 sprites every frame: no flicker, no limit a line |
+| Palette's ninth bit | Each colour is the byte of its pair the game wrote last, with a ninth bit saying which byte that was, so the palette depends on the order of writes, not only on what palette RAM holds |
+| 4-way joystick | MAME filters the joystick to four ways; gp-arcade doesn't yet, so logs press one direction at a time |
+| Watchdog | The watchdog resets the board after 16 frames without a write; gp-arcade flags it and doesn't reset |
+| Sound: DC offset | MAME's AY table puts silence at -0.125, so each voice sits at an offset that changes with its volume |
+| Sound: duty volume | The SSIO sets each voice's loudness by gating it with a duty cycle from its PROM, in 16 coarse steps |
+| Sound: volume steps | The SSIO's volumes and mute act a 20 ms piece at a time (MAME's stream updates), not at the write |
+| Sound: stereo by chip | Each AY has its own speaker |
 
 Also still missing: support for a game on a cartridge type the emulator doesn't handle yet, which would first need a [change to the tool](../contribute/).
 

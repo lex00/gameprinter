@@ -86,6 +86,56 @@ impl Gfx {
     }
 }
 
+impl Gfx {
+    /// The graphics ROMs' bytes from the decoded tiles and sprites, the
+    /// inverse of [`Gfx::decode`]: (gfx1, gfx2). A lift's round trip
+    /// packs its pictures back through this and compares with the chips.
+    pub fn encode(&self) -> (Vec<u8>, Vec<u8>) {
+        let mut gfx1 = vec![0u8; self.tiles.len() * 128 * 2 / 8];
+        let half = gfx1.len() * 8 / 2;
+        let planes = [half, half + 1, 0, 1];
+        for (code, t) in self.tiles.iter().enumerate() {
+            for y in 0..8 {
+                for x in 0..8 {
+                    let v = t[y * 8 + x];
+                    for (p, &po) in planes.iter().enumerate() {
+                        if v & (1 << (3 - p)) != 0 {
+                            set_bit(&mut gfx1, code * 128 + po + y * 16 + x * 2);
+                        }
+                    }
+                }
+            }
+        }
+        let mut gfx2 = vec![0u8; self.sprites.len() * 1024 * 4 / 8];
+        let quarter = gfx2.len() * 8 / 4;
+        let mut xoffs = [0usize; 32];
+        for group in 0..4 {
+            for q in 0..4 {
+                for k in 0..2 {
+                    xoffs[group * 8 + q * 2 + k] = q * quarter + group * 8 + k * 4;
+                }
+            }
+        }
+        for (code, s) in self.sprites.iter().enumerate() {
+            for y in 0..32 {
+                for (x, &xo) in xoffs.iter().enumerate() {
+                    let v = s[y * 32 + x];
+                    for p in 0..4 {
+                        if v & (1 << (3 - p)) != 0 {
+                            set_bit(&mut gfx2, code * 1024 + p + xo + y * 32);
+                        }
+                    }
+                }
+            }
+        }
+        (gfx1, gfx2)
+    }
+}
+
+fn set_bit(region: &mut [u8], n: usize) {
+    region[n / 8] |= 0x80 >> (n % 8);
+}
+
 /// mcr_set_color: 9 bits of RGB, 3 each (red the top 3, then blue, then
 /// green at the bottom), as 0xRRGGBB through MAME's pal3bit.
 pub fn color_9bit(data: u16) -> u32 {
@@ -99,8 +149,17 @@ pub fn color_9bit(data: u16) -> u32 {
     (r << 16) | (g << 8) | b
 }
 
+/// The bit a pen carries in [`draw`]'s output where a sprite drew the
+/// pixel: the screen measure's sprite mask.
+pub const SPRITE_BIT: u8 = 0x80;
+
 /// screen_update_mcr for the 91490 board with the 91464 sprite board:
-/// each pixel's pen (0 to 63) into `pens`.
+/// each pixel's pen (0 to 63) into `pens`, with [`SPRITE_BIT`] set where
+/// a sprite drew it.
+///
+/// A sprite pixel whose low three bits are 0 but whose bit 3 is set draws
+/// nothing yet hides every sprite under it, so the tile shows through
+/// there: such a pixel isn't in the mask, since what shows is the tile.
 pub fn draw(gfx: &Gfx, videoram: &[u8], spriteram: &[u8], flip: bool, pens: &mut [u8]) {
     let mut pri = vec![0u8; WIDTH * HEIGHT];
 
@@ -169,7 +228,7 @@ pub fn draw(gfx: &Gfx, videoram: &[u8], spriteram: &[u8], flip: bool, pens: &mut
                         if pix & 0x0f != 0 {
                             pri[at] = 0xff;
                             if pix & 0x07 != 0 {
-                                pens[at] = pix;
+                                pens[at] = pix | SPRITE_BIT;
                             }
                         }
                     }
@@ -230,6 +289,15 @@ mod tests {
         assert_eq!(s[32], 0xa);
     }
 
+    /// Made-up chips decode and encode back to the same bytes.
+    #[test]
+    fn encode_is_decodes_inverse() {
+        let gfx1: Vec<u8> = (0..2 * 2 * 16 * 4).map(|i| (i * 37 % 251) as u8).collect();
+        let gfx2: Vec<u8> = (0..4 * 128 * 3).map(|i| (i * 91 % 253) as u8).collect();
+        let g = Gfx::decode(&gfx1, &gfx2);
+        assert_eq!(g.encode(), (gfx1, gfx2));
+    }
+
     #[test]
     fn colours_spread_three_bits_as_mame() {
         assert_eq!(color_9bit(0), 0);
@@ -259,8 +327,8 @@ mod tests {
         spriteram[4..8].copy_from_slice(&[191, 0x03, 1, 61]);
         let mut pens = vec![0u8; WIDTH * HEIGHT];
         draw(&gfx, &videoram, &spriteram, false, &mut pens);
-        assert_eq!(pens[100 * WIDTH + 100], 0x33);
-        assert_eq!(pens[100 * WIDTH + 116], 0); // under sprite 1: background
+        assert_eq!(pens[100 * WIDTH + 100], 0x33 | SPRITE_BIT);
+        assert_eq!(pens[100 * WIDTH + 116], 0); // under sprite 1: background, no sprite
         assert_eq!(pens[100 * WIDTH + 99], 0);
     }
 

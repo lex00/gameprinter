@@ -1244,8 +1244,8 @@ pub(crate) fn lift_into(game: &Path, rom: &[u8], out: &Path) -> Result<()> {
         return Ok(());
     }
     let (path, text) = asset_map(game, rom)?;
-    let map = gp_assets::AssetMap::parse(&text).with_context(|| path.display().to_string())?;
-    let (files, _) = gp_assets::lift(rom, &map, &text)?;
+    let (files, _) =
+        crate::assets::lift_files(rom, &text).with_context(|| path.display().to_string())?;
     for f in &files {
         let p = out.join(&f.name);
         if let Some(d) = p.parent() {

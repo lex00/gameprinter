@@ -183,7 +183,7 @@ pub(crate) fn clip_inputs(sets: &[PathBuf], paths: &Paths) -> Result<Vec<ClipInp
         let read = |p: &str| -> Result<(u64, Vec<String>)> {
             let text = fs::read_to_string(dir.join(p))
                 .with_context(|| format!("reading {}", dir.join(p).display()))?;
-            clipset::parse_presses(&text)
+            clipset::parse_presses(&text).map(|p| (p.frames, p.spans))
         };
         for c in &set.clips {
             let mut power_on = PowerOn::default();

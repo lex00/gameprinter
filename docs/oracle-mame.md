@@ -15,6 +15,7 @@ ROMs stay where the owner keeps them. The romset zip is mounted read-only into t
 | Build the image, once per architecture | `just mame-build`, or `just mame-build linux/amd64` |
 | Run a capture | `just mame-record ~/Downloads/rbtapper.zip scripts/oracle/inputs/tapper-first.input tapper-first` |
 | Fewer or no PNGs | add a fourth argument: `90` for one every 3 seconds, `0` for none |
+| The speakers too | add a fifth argument, `1`: MAME records what reaches the speakers as `sound.wav` (48 kHz, 16-bit stereo, about 11 MB a minute) |
 
 OUT is a folder name under `$GP_HOME/work/oracle/` that doesn't exist yet. The recipe prints the frame count, the time taken and the number of input mismatches (see below). To check determinism, run the same log twice into two folders and compare their `SHA256SUMS` files.
 
@@ -84,6 +85,8 @@ A folder under `$GP_HOME/work/oracle/`:
 | `capture.txt` | MAME's version, the system, the frame count, the refresh rate, the picture size and hash, the DIP check, the number of input mismatches, and the layout of `ram.bin` |
 | `frames.tsv` | One line per frame, with a header line (columns below) |
 | `ram.bin` | One fixed-size record per frame, frame 0 first, 5,760 bytes each (layout below) |
+| `ay.tsv` | One line per frame, with a header line: the frame, then the sound CPU's writes to its two AY-8910s in that frame, in order (below) |
+| `sound.wav` | With the fifth argument only: the speakers, left and right, as MAME's `-wavwrite` writes them |
 | `shots/frame-NNNNNN.png` | The picture of every Nth frame, from frame 0, written by MAME at the screen's native 512x480 |
 | `SHA256SUMS` | A digest of every file above, to compare two runs |
 | `mame.log` | MAME's own output. Left out of `SHA256SUMS` |
@@ -112,6 +115,8 @@ The layout of each `ram.bin` record:
 
 The main board's ranges are mcr.cpp's `cpu_91490_map`; the sound board's is midway_sound.cpp's `ssio_map`.
 
+**The AY writes.** A write tap on the sound CPU's program space sees every write to `a000-bfff`. midway.cpp's `ssio_map` puts the first AY at `a000` and the second at `b000`, each with its address latch at offset 0 and its data latch at offset 2, mirrored over `0ffc`, so the tap keeps writes whose offset ends in 0 or 2. Each is written as the chip, `a` or `d` and the value in hex, a space between: `0a07 0d38` selects the first chip's register 7 and writes `38` to it. A frame with none has `-`. Captures made before the tap have no `ay.tsv`.
+
 **The picture hash.** The script asks MAME for the frame as 32-bit pixels, `0xAARRGGBB`, in rows from the top, at 512x480. It then takes FNV-1a over 64 bits, one pixel at a time, using each pixel's 24-bit `0xRRGGBB` with alpha left out. h starts at `0xcbf29ce484222325`, and for each pixel h = (h XOR rgb) * `0x100000001b3`, modulo 2^64. It works on whole pixels, not bytes, so our emulator can compute the same number from its own picture without matching MAME's pixel format.
 
 ## Holding gp-arcade to it
@@ -125,11 +130,28 @@ cargo run --release -p gp-arcade --example compare -- \
     --log scripts/oracle/inputs/tapper-first.input
 ```
 
-`--all` runs to the end and counts the frames that differ in each way. `--png DIR --at N` writes our picture of frame N beside MAME's shot and a third panel with the differing pixels in red; DIR goes outside the repo, since the pictures show the game. `--dump N` prints frame N's differing RAM rows and both CPUs' registers, and `--trace N` every instruction both CPUs start in frame N.
+When the capture has an `ay.tsv`, the AY writes are compared too, frame by frame. `--all` runs to the end and counts the frames that differ in each way. `--png DIR --at N` writes our picture of frame N beside MAME's shot and a third panel with the differing pixels in red; DIR goes outside the repo, since the pictures show the game. `--dump N` prints frame N's differing RAM rows and both CPUs' registers, and `--trace N` every instruction both CPUs start in frame N.
 
 | Capture | Input log | Frames | Result |
 |---|---|---|---|
 | `tapper-first-a` | `tapper-first.input` | 1511 | all match |
 | `tapper-deaths-a` | `tapper-deaths.input` | 6095 | all match |
+| `tapper-first-sound` | `tapper-first.input` | 1511 | all match, AY writes too (3,500 writes) |
+| `tapper-m3-gameover-ay` (set `tapper`) | `tapper-gameover.input` | 5351 | all match, AY writes too (18,212 writes) |
+| `tapper-m3-five-ay` (set `tapper`) | `tapper-five-levels.input` | 10934 | all match, AY writes too (109,838 writes) |
+| `tapper-m3-eight-ay` (set `tapper`) | `tapper-eight-levels.input` | 18001 | all match, AY writes too (342,346 writes) |
 
-`cargo test -p gp-arcade` runs both comparisons when the romset and the captures are present, and skips them otherwise.
+The `tapper-*` plays of milestone 3 were made by gp-arcade's autoplay example, a player that reads the board's RAM and decides each frame's presses: coin and start, then serving, catching mugs and taking tips. tapper-eight-levels clears eight levels (the saloon, the sports bar and three punk bar levels) and both bonus rounds. The speakers on tapper-five-levels (`tapper-m3-five-sound`, 6 minutes) differ from MAME's WAV by at most one step of 16 bits, as on tapper-first.
+
+The sound example plays a capture's log with the sound on and compares the speakers with the capture's `sound.wav`:
+
+```text
+cargo run --release -p gp-arcade --example sound -- \
+    --rom ~/Documents/roms/arcade/rbtapper.zip \
+    --capture ~/.gameprinter/work/oracle/tapper-first-sound \
+    --log scripts/oracle/inputs/tapper-first.input
+```
+
+On `tapper-first-sound`, 2,415,360 samples a speaker (50.3 seconds), 12 of the 4,830,720 differ, each by one step of 16 bits; the rest are equal. gp-arcade makes the sound the way MAME 0.276 does: each AY's 250 kHz samples with a write landing at the first sample at or after its time, MAME's 50 Hz stream updates with the gains as they stand at each, its default resampler to 48 kHz, and its 16-bit mix. The one-step differences look like float rounding in the order the mixer adds the channels. One thing was found only by comparing: MAME's speakers get each 48 kHz sample one sample after the resampler makes it, so gp-arcade holds each back one sample too.
+
+`cargo test -p gp-arcade` runs the comparisons, and the sound one on `tapper-first-sound`, when the romset and the captures are present, and skips them otherwise.

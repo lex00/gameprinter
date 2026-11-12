@@ -105,10 +105,11 @@ impl Inputs {
                 want.len() - 1
             });
             let spans = match &c.presses_file {
-                Some(f) => crate::clipset::parse_presses(&fs::read_to_string(dir.join(f))?)?.1,
+                Some(f) => crate::clipset::parse_presses(&fs::read_to_string(dir.join(f))?)?.spans,
                 None => c.presses.clone(),
             };
-            let log = gp_evidence::InputLog::parse(&crate::clipset::log_of(c.frames, &spans)?)?;
+            let log =
+                gp_evidence::InputLog::parse(&crate::clipset::log_of(c.frames, &spans, None)?)?;
             pool.push((
                 c.id.clone(),
                 k,
@@ -124,9 +125,8 @@ impl Inputs {
             &want,
             || (),
             |_, _, (file, frame)| -> Result<Vec<u8>> {
-                let (n, spans) =
-                    crate::clipset::parse_presses(&fs::read_to_string(dir.join(file))?)?;
-                let log = gp_evidence::InputLog::parse(&crate::clipset::log_of(n, &spans)?)?;
+                let p = crate::clipset::parse_presses(&fs::read_to_string(dir.join(file))?)?;
+                let log = gp_evidence::InputLog::parse(&crate::clipset::log_of_presses(&p)?)?;
                 let upto = usize::try_from(*frame)?.min(log.frames.len());
                 let mut o = gp_nes::protocol::NesRuntime::load(
                     &rom,

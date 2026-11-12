@@ -1,5 +1,6 @@
 //! Plays a MAME oracle capture's input log in gp-arcade's Tapper and
-//! compares every frame's RAM, input ports and picture hash with MAME's.
+//! compares every frame's RAM, input ports and picture hash with MAME's,
+//! and the AY writes when the capture has them (`ay.tsv`).
 //!
 //!   cargo run --release -p gp-arcade --example compare -- \
 //!       --rom ~/Downloads/rbtapper.zip \
@@ -175,7 +176,8 @@ fn run() -> Result<bool, String> {
 
     let mut t = Tapper::power_on(&rom);
     let mut first: Option<(usize, FrameDiff)> = None;
-    let (mut ram_frames, mut port_frames, mut pic_frames) = (0, 0, 0);
+    let (mut ram_frames, mut port_frames, mut pic_frames, mut ay_frames) = (0, 0, 0, 0);
+    let mut ay_writes = 0usize;
     let mut png_written = false;
     for n in 0..frames {
         if n > 0 {
@@ -202,6 +204,7 @@ fn run() -> Result<bool, String> {
             println!("frame {n}: the watchdog ran out (MAME would reset here)");
         }
         let d = compare(&t, &cap, n);
+        ay_writes += t.ay_writes().len();
         if a.dump.contains(&n) {
             dump(&t, &cap, n);
         }
@@ -221,6 +224,7 @@ fn run() -> Result<bool, String> {
             ram_frames += usize::from(!d.ram.is_empty());
             port_frames += usize::from(d.ports.is_some());
             pic_frames += usize::from(d.picture.is_some());
+            ay_frames += usize::from(d.ay.is_some());
             if first.is_none() {
                 println!(
                     "first difference at frame {n} (time {}):\n{}",
@@ -240,14 +244,22 @@ fn run() -> Result<bool, String> {
     }
     match first {
         None => {
-            println!("all {frames} frames match MAME: RAM, input ports and picture hash");
+            if cap.ay.is_some() {
+                println!(
+                    "all {frames} frames match MAME: RAM, input ports, picture hash and AY writes ({ay_writes} writes)"
+                );
+            } else {
+                println!(
+                    "all {frames} frames match MAME: RAM, input ports and picture hash (the capture has no AY writes)"
+                );
+            }
             Ok(true)
         }
         Some((n, _)) => {
             if a.all {
                 println!(
                     "{frames} frames from frame 0; first difference at frame {n}; frames differing: \
-                     RAM {ram_frames}, ports {port_frames}, picture {pic_frames}"
+                     RAM {ram_frames}, ports {port_frames}, picture {pic_frames}, AY writes {ay_frames}"
                 );
             }
             Ok(false)
