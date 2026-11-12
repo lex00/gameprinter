@@ -23,7 +23,7 @@
 //! now. The search reads the NES's RAM and sprite table, so an arcade game
 //! is refused in words.
 
-mod blind;
+pub(crate) mod blind;
 mod support;
 pub(crate) mod topdown;
 

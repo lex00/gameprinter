@@ -56,6 +56,7 @@ mod mcp;
 mod mechanic;
 mod mechanics;
 mod model;
+mod model_blind;
 mod model_static;
 mod module;
 mod moments;
@@ -100,6 +101,7 @@ mod sound_ay;
 mod sprites;
 mod static_grade;
 mod store;
+mod sweep;
 mod tape;
 mod template;
 mod template_build;
@@ -554,6 +556,11 @@ enum ModelCmd {
     /// backs is written, answered questions are written as stated facts,
     /// the rest asked.
     Refine(refine::RefineArgs),
+    /// A model and a state mapping from the ROM alone, by playing it. Blind
+    /// discovery finds the player and its buttons. Then runs of the game
+    /// measure the player's speeds, jump and size. Facts are `observed`,
+    /// each with the frames it came from (crates/gp-cli/src/model_blind.rs).
+    Blind(model_blind::BlindArgs),
     /// Derive the model's hand-written facts from what their evidence
     /// cites (docs/derivation.md): the constant, immediate or data row a ref
     /// names in assembly source (evidence), the value the routine's code
@@ -1031,6 +1038,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             ModelCmd::Mechanics(a) => mechanics::run(a, &gp_evidence::Paths::from_env()?),
             ModelCmd::Static(a) => model_static::run(a, &gp_evidence::Paths::from_env()?),
             ModelCmd::Refine(a) => refine::run(a, &gp_evidence::Paths::from_env()?),
+            ModelCmd::Blind(a) => model_blind::run(a, &gp_evidence::Paths::from_env()?),
             ModelCmd::Derive {
                 dir,
                 from,

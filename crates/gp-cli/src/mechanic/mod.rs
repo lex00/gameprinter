@@ -367,6 +367,48 @@ pub enum MechanicCmd {
         #[arg(long, requires = "mechanic")]
         in_scope: bool,
     },
+    /// A sweep of one mechanic: a grid of clips from one spot, each played
+    /// on the original and on a rebuilt model in lockstep. `jump` (the
+    /// jumpathon) varies the takeoff speed, how long A is held and the
+    /// steering in the air, from open flat ground found blind. The grid
+    /// says which cells the model gets wrong and what parts first.
+    Sweep {
+        /// The mechanic to sweep: jump.
+        #[arg(value_parser = ["jump"])]
+        kind: String,
+        game: String,
+        /// The model folder to score (model.toml and mapping.toml); by
+        /// default the game's package folder.
+        #[arg(long)]
+        model: Option<PathBuf>,
+        /// The ROM; by default the one in $GP_ROM_DIR the package names.
+        #[arg(long)]
+        rom: Option<PathBuf>,
+        /// Leave out writing the cells as clips of a jumpathon session.
+        #[arg(long)]
+        no_clips: bool,
+        /// Sweep along a path through a level instead (an input log from
+        /// power-on, such as a farm clip or a blind path). Every place the
+        /// player stands, a 16 px column and a height, on the path or
+        /// reached by probe moves chained from places already stood on, gets
+        /// a standing full jump and a hop from 0, 4, 8 and 12 px into the
+        /// column and from the next column's edge, and running jumps forward
+        /// and back, with the head hits, the sprites and the code each runs
+        /// for the first time. Level x is the x byte and its high byte, found
+        /// on the path, checked against the scroll.
+        #[arg(long)]
+        along: Option<PathBuf>,
+        /// Instead of sweeping, fit the jump blind and write a scratch
+        /// model: the player's bytes from blind discovery, jumps from the
+        /// game's jumpathon clips, its farm runs and its blind paths (never a
+        /// recording), a third held out. The model given (or the template) is
+        /// copied to this folder with only its jump facts replaced.
+        #[arg(long, conflicts_with = "along")]
+        fit_blind: Option<PathBuf>,
+        /// The game's built module. Needed for a model with hooks.
+        #[arg(long)]
+        module: Option<PathBuf>,
+    },
     /// Mechanics from a long recording in the store (a TAS run): it is
     /// replayed once and every detector runs over it; each kind of event
     /// gets an example clip per level (a session `harvest-LEVEL`) and the
@@ -721,6 +763,36 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                 opens,
                 out_of_scope: out_of_scope.as_deref(),
                 in_scope: *in_scope,
+            },
+        ),
+        MechanicCmd::Sweep {
+            kind: _,
+            game,
+            model,
+            rom,
+            no_clips: _,
+            along: _,
+            fit_blind: Some(out),
+            ..
+        } => crate::sweep::fit_blind(paths, game, model.as_deref(), rom.as_deref(), out),
+        MechanicCmd::Sweep {
+            kind: _,
+            game,
+            model,
+            rom,
+            no_clips,
+            along,
+            fit_blind: None,
+            module,
+        } => crate::sweep::jump(
+            paths,
+            &crate::sweep::Args {
+                game,
+                model: model.as_deref(),
+                rom: rom.as_deref(),
+                clips: !no_clips,
+                along: along.as_deref(),
+                module: module.as_deref(),
             },
         ),
         MechanicCmd::Harvest {

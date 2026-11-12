@@ -1061,3 +1061,88 @@ fn simulate_all(
         .collect();
     (clips, matched, total, missing)
 }
+
+/// The jump rule fitted from given traces (each frame's RAM and pad, from
+/// the frame the trace starts), with no file read: for a tool that plays
+/// the game itself, as `gp model blind` does. `yb` is the player's y byte
+/// and `vyb` its vertical speed's whole byte. Returns the rule (takeoff
+/// speeds and gravities in 1/256 px a frame, by case), the fraction bytes
+/// found, how many jumps it saw, and the frames it reproduces.
+pub(crate) fn fit_traces(traces: Vec<(Vec<Vec<u8>>, Vec<u8>)>, yb: usize, vyb: usize) -> Value {
+    let traces: Vec<Trace> = traces
+        .into_iter()
+        .enumerate()
+        .map(|(i, (ram, pads))| Trace {
+            session: "given".into(),
+            clip: i as u64,
+            start: 0,
+            ram,
+            pads,
+            boxes: Vec::new(),
+        })
+        .collect();
+    let jumps = find_jumps(&traces, yb);
+    let frac = find_fractions(&traces, &jumps, yb, vyb);
+    let rule = fit_rule(&traces, &jumps, yb, vyb, &frac);
+    json!({
+        "jumps": jumps.len(),
+        "y_fraction": frac.pos,
+        "speed_fraction": frac.speed,
+        "takeoff": rule.takeoff,
+        "gravity": rule.gravity,
+        "max_fall": rule.max_fall,
+        "cap_above": rule.cap_above,
+        "cap_to": rule.cap_to,
+        "order": rule.order,
+        "gravity_first": frac.gravity_first,
+    })
+}
+
+/// Fits the rule on `train` and plays it on `test`, both given as traces
+/// (each frame's RAM and pad), with no file read: a held-out check for a
+/// tool that gathers its own traces. Returns the rule as [`fit_traces`]
+/// does, plus the test's frames matched and total and the cases it had no
+/// gravity for.
+pub(crate) fn fit_and_test(
+    train: Vec<(Vec<Vec<u8>>, Vec<u8>)>,
+    test: Vec<(Vec<Vec<u8>>, Vec<u8>)>,
+    yb: usize,
+    vyb: usize,
+) -> Value {
+    let to_traces = |v: Vec<(Vec<Vec<u8>>, Vec<u8>)>, name: &str| -> Vec<Trace> {
+        v.into_iter()
+            .enumerate()
+            .map(|(i, (ram, pads))| Trace {
+                session: name.into(),
+                clip: i as u64,
+                start: 0,
+                ram,
+                pads,
+                boxes: Vec::new(),
+            })
+            .collect()
+    };
+    let train = to_traces(train, "train");
+    let test = to_traces(test, "test");
+    let jumps = find_jumps(&train, yb);
+    let frac = find_fractions(&train, &jumps, yb, vyb);
+    let rule = fit_rule(&train, &jumps, yb, vyb, &frac);
+    let fit = simulate_all(&train, &jumps, yb, vyb, &frac, &rule);
+    let test_jumps = find_jumps(&test, yb);
+    let held = simulate_all(&test, &test_jumps, yb, vyb, &frac, &rule);
+    json!({
+        "jumps": jumps.len(),
+        "test_jumps": test_jumps.len(),
+        "y_fraction": frac.pos,
+        "speed_fraction": frac.speed,
+        "takeoff": rule.takeoff,
+        "gravity": rule.gravity,
+        "max_fall": rule.max_fall,
+        "cap_above": rule.cap_above,
+        "cap_to": rule.cap_to,
+        "order": rule.order,
+        "gravity_first": frac.gravity_first,
+        "fitted": {"matched": fit.1, "total": fit.2},
+        "held_out": {"matched": held.1, "total": held.2, "uncovered": held.3},
+    })
+}

@@ -191,6 +191,12 @@ These read the NES's code and sprites too, and refuse an arcade game in words fo
 
 `gp mechanic harvest my-game RECORDING` replays a long recording (a published speedrun, imported with `gp movie import`) once and runs the mechanic sessions' detectors over all of it: head hits, side hits, landings, stomps, items, hurts, input ignored, changes nothing explains, code and objects seen for the first time. Each kind gets an example clip per level in a `harvest-LEVEL` session, and `--add` puts the kinds in your quest log. `gp mechanic leads my-game` replays every session clip and lists the code and RAM stage 0's runs reached that no clip has, by the routine it branches off: what to play next.
 
+## A first model from the ROM alone, and the jumpathon
+
+`gp model blind ~/my-game-model --rom ~/roms/my-game.nes` plays the ROM with no model and no mapping: it finds play start, the player's x and y bytes, the jump and run buttons and the forward direction, then measures the walk and run speeds, the jump's takeoff speed, gravity and fastest fall, and the player's size, and writes them as `observed` facts with the frames they came from, and the player's bytes as mapping fields. `--play-rounds N` adds a search over the first level with a decision model (`--decide`, as `gp farm` uses). It works on platformers whose start the blind discovery can reach; on Donkey Kong it stops at "play start: no start run reaches play".
+
+`gp mechanic sweep jump my-game` is the jumpathon: a grid of jumps (takeoff speed, how long A is held, steering in the air) from open ground found blind, each played on the original and on your model in lockstep, and the grid says which cells the model gets wrong first. `--along PATH` sweeps every place a path through a level stands on, and `--fit-blind DIR` fits the jump from the game's own clips into a scratch copy of the model. Both read the NES's RAM and sprite table, and refuse an arcade game in words for now.
+
 ## What the original shows that your model doesn't
 
 These read a recording of the original (`gp record`) beside your game's folder. They are NES-only for now: an arcade game is refused in words.
