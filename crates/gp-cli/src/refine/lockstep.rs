@@ -587,6 +587,136 @@ fn knobs(
     out
 }
 
+/// Whether `name` is `ext:HOOK` for a hook some entity runs: how a hook
+/// that describes no mechanic is named to `--mechanic`.
+fn hook_named(model: &Model, name: &str) -> bool {
+    name.strip_prefix("ext:").is_some_and(|h| {
+        model
+            .entities
+            .values()
+            .any(|e| e.core.ext.as_deref() == Some(h))
+    })
+}
+
+/// Whether the hook mechanic `name` (`ext:HOOK`, or a mechanic a hook's
+/// record describes) owns the mapped `path`: a field of an entity running
+/// the hook, or a counter the hook may write.
+fn hook_owns(
+    model: &Model,
+    catalog: &gp_interp::mechanics::Catalog,
+    name: &str,
+    path: &str,
+) -> bool {
+    let hook = match name.strip_prefix("ext:") {
+        Some(h) => h.to_owned(),
+        None => match catalog.get(name).and_then(|m| m.hook.clone()) {
+            Some(h) => h,
+            None => return false,
+        },
+    };
+    let part = part_of(path);
+    let runs = |entity_part: &str| {
+        entity_part
+            .strip_prefix("entities.")
+            .and_then(|e| model.entities.get(e))
+            .is_some_and(|e| e.core.ext.as_deref() == Some(hook.as_str()))
+    };
+    if runs(&part) {
+        return true;
+    }
+    part.strip_prefix("counters.")
+        .is_some_and(|c| counter_hooks(model, catalog, c).iter().any(|p| runs(p)))
+}
+
+/// The entities whose hooks may write the counter `c`: a hook whose
+/// records write `counters` or `counters.C`, or one that describes nothing
+/// (gp_validate's rule for a counter a hook keeps).
+fn counter_hooks(model: &Model, catalog: &gp_interp::mechanics::Catalog, c: &str) -> Vec<String> {
+    let one = format!("counters.{c}");
+    model
+        .entities
+        .iter()
+        .filter(|(_, e)| {
+            let Some(hook) = e.core.ext.as_ref() else {
+                return false;
+            };
+            let records: Vec<&gp_interp::mechanics::Mechanic> = catalog
+                .mechanics
+                .iter()
+                .filter(|m| m.hook.as_deref() == Some(hook.as_str()))
+                .collect();
+            records.is_empty()
+                || records
+                    .iter()
+                    .any(|m| m.writes.iter().any(|w| *w == "counters" || *w == one))
+        })
+        .map(|(n, _)| format!("entities.{n}"))
+        .collect()
+}
+
+/// The numbers of `part`'s hook: each number in the entity's `ext_params`
+/// (a hook's own numbers, such as a walk's step), by the mechanic the hook
+/// describes for it, or `ext:HOOK` for a hook that describes none.
+fn hook_knobs(
+    model: &Model,
+    catalog: &gp_interp::mechanics::Catalog,
+    tree: &toml::Value,
+    part: &str,
+) -> Vec<Knob> {
+    let Some(entity) = part.strip_prefix("entities.") else {
+        return Vec::new();
+    };
+    let Some(hook) = model.entities.get(entity).and_then(|e| e.core.ext.as_ref()) else {
+        return Vec::new();
+    };
+    let base = format!("{part}.ext_params");
+    let Some(toml::Value::Table(t)) = get(tree, &base) else {
+        return Vec::new();
+    };
+    let records: Vec<&gp_interp::mechanics::Mechanic> = catalog
+        .mechanics
+        .iter()
+        .filter(|m| m.hook.as_deref() == Some(hook.as_str()))
+        .collect();
+    let mut out = Vec::new();
+    for (name, v) in t {
+        let Some(value) = fx_of(v) else { continue };
+        let declared = records.iter().find_map(|m| {
+            m.params
+                .iter()
+                .find(|p| p.name == name.as_str())
+                .map(|p| (m.name, p))
+        });
+        let (mechanic, unit, whole, range) = match declared {
+            // A number the model writes whole (an integer) is tried whole:
+            // a hook reads it as a count or a step in pixels.
+            Some((m, p)) => (
+                m.to_owned(),
+                p.unit.to_owned(),
+                p.ty != "fixed" || v.is_integer(),
+                p.range.to_owned(),
+            ),
+            // An integer the hook reads, with nothing declared: a whole
+            // number, as a frame count or a step in pixels is.
+            None => (
+                format!("ext:{hook}"),
+                String::new(),
+                v.is_integer(),
+                String::new(),
+            ),
+        };
+        out.push(Knob {
+            mechanic,
+            path: format!("{base}.{name}"),
+            value,
+            unit,
+            whole,
+            range,
+        });
+    }
+    out
+}
+
 fn in_range(range: &str, v: Fx) -> bool {
     match range.trim() {
         "> 0" => v > Fx::ZERO,
@@ -1004,7 +1134,11 @@ pub(crate) fn run_scoped(
         for (i, f) in mapping.fields.iter().enumerate() {
             let owned = lockstep::owners(&catalog, &f.path)
                 .iter()
-                .any(|o| scope.mechanics.iter().any(|m| m == o));
+                .any(|o| scope.mechanics.iter().any(|m| m == o))
+                || scope
+                    .mechanics
+                    .iter()
+                    .any(|m| hook_owns(&model, &catalog, m, &f.path));
             if !owned && let Some(t) = tolerance.get_mut(i) {
                 *t = Fx::from_raw(i64::MAX);
             }
@@ -1088,6 +1222,7 @@ pub(crate) fn run_scoped(
         && gp_interp::mechanics::catalog(&model, &exts)
             .get(name)
             .is_none()
+        && !hook_named(&model, name)
     {
         bail!("the model's catalog has no mechanic {name} (gp mechanics list names them)");
     }
@@ -1096,10 +1231,11 @@ pub(crate) fn run_scoped(
     // The user's rules on every measure, for a moment's loop: no measure's
     // first split earlier, no fewer frames together.
     let strict_on = target.is_some() && setup.tolerance != strict;
-    let strict_run =
-        |m: &Model| -> Result<Lockstep> { setup.full_with(m, a.inputs, false, Some(&strict)) };
+    let strict_run = |setup: &Setup, m: &Model| -> Result<Lockstep> {
+        setup.full_with(m, a.inputs, false, Some(&strict))
+    };
     let mut strict_cur = if strict_on {
-        Some(strict_run(&model)?)
+        Some(strict_run(&setup, &model)?)
     } else {
         None
     };
@@ -1111,6 +1247,11 @@ pub(crate) fn run_scoped(
     let mut windows = 0u32;
     let mut last_window: Option<u64> = None;
     let mut exact_windows: Vec<Json> = Vec::new();
+    // Measures wrong first that no mechanic's numbers write (an arcade
+    // game's score, read through the mapping but not yet modelled):
+    // recorded, and not held from there on, so the loop goes on to the
+    // next window a mechanic owns.
+    let mut unheld: Vec<Json> = Vec::new();
     loop {
         let Some((mut w, fw)) = window_at(&ls, a.window, cut) else {
             stop = "every measure is exact on every frame".into();
@@ -1189,7 +1330,7 @@ pub(crate) fn run_scoped(
             }
             owners
         };
-        let knobs_of = |owners: &[(&'static str, String)]| -> Vec<Knob> {
+        let knobs_of = |owners: &[(&'static str, String)], paths: &[usize]| -> Vec<Knob> {
             let mut ks: Vec<Knob> = Vec::new();
             for (o, part) in owners {
                 for k in knobs(&catalog, &tree, &[o], part) {
@@ -1198,10 +1339,50 @@ pub(crate) fn run_scoped(
                     }
                 }
             }
+            // The numbers of each wrong part's hook (its `ext_params`), tried
+            // like any mechanic's, whether its record describes them or not.
+            let mut parts: Vec<String> =
+                paths.iter().map(|&i| part_of(&ls.paths[i].path)).collect();
+            if let Some((m, ..)) = &target {
+                parts.push(part_of(&format!("{}.x", m.part)));
+            }
+            // A counter's hooks: each that says it writes counters (or that
+            // one), and each that describes nothing, which may write any.
+            let counters: Vec<String> = parts
+                .iter()
+                .filter_map(|p| p.strip_prefix("counters."))
+                .map(str::to_owned)
+                .collect();
+            for c in &counters {
+                parts.extend(counter_hooks(&model, &catalog, c));
+            }
+            parts.sort();
+            parts.dedup();
+            for part in &parts {
+                for k in hook_knobs(&model, &catalog, &tree, part) {
+                    let wanted = |n: &str| {
+                        scope.mechanics.is_empty() || scope.mechanics.iter().any(|m| m == n)
+                    };
+                    let in_moment =
+                        target.is_none() || mechanic.as_deref().is_some_and(|n| n == k.mechanic);
+                    if wanted(&k.mechanic) && in_moment && !ks.iter().any(|x| x.path == k.path) {
+                        ks.push(k);
+                    }
+                }
+            }
             ks
         };
         let mut owners = owners_of(&split_paths);
-        let mut ks = knobs_of(&owners);
+        let mut ks = knobs_of(&owners, &split_paths);
+        if ks.is_empty() && target.is_none() && !split_paths.is_empty() {
+            let frame = ls.frames.get(w.at).map_or(w.from, |f| f.1);
+            let says = unhold(&mut setup, &ls, &split_paths, frame, &mut unheld);
+            let _ = writeln!(text_out, "{says}");
+            progress(&json!({"unheld": unheld.last()}));
+            ls = setup.full(&model, a.inputs)?;
+            round -= 1;
+            continue;
+        }
         if w.at == 0 {
             stop = "the two part on the first frame measured, before either takes a step: the model's starting state, not a mechanic's numbers".into();
             questions.push(shape_question(
@@ -1275,7 +1456,16 @@ pub(crate) fn run_scoped(
         if let Some((_, _, wrong)) = first_on(&base, lo, &aim.aim) {
             split_paths = wrong;
             owners = owners_of(&split_paths);
-            ks = knobs_of(&owners);
+            ks = knobs_of(&owners, &split_paths);
+        }
+        if ks.is_empty() && target.is_none() && !split_paths.is_empty() {
+            let frame = first_on(&base, lo, &aim.aim).map_or(w.from, |(_, f, _)| f);
+            let says = unhold(&mut setup, &base, &split_paths, frame, &mut unheld);
+            let _ = writeln!(text_out, "{says}");
+            progress(&json!({"unheld": unheld.last()}));
+            ls = setup.full(&model, a.inputs)?;
+            round -= 1;
+            continue;
         }
         let target_j = target_json(
             &base,
@@ -1420,7 +1610,7 @@ pub(crate) fn run_scoped(
                 return Ok(None);
             }
             if let Some(cur) = strict_cur.as_ref() {
-                let st = strict_run(mm)?;
+                let st = strict_run(&setup, mm)?;
                 let earlier =
                     firsts(&st, cut, &[])
                         .iter()
@@ -1784,6 +1974,7 @@ pub(crate) fn run_scoped(
         "together": {"before": together_before, "after": together(&ls), "measured": ls.frames.len()},
         "windows": windows,
         "exact_from_start": exact_windows,
+        "unheld": unheld,
         "questions": questions,
         "scope": {
             "moment": target.as_ref().map(|(m, _, first)| moment_json(m, None, mechanic.as_deref(), &|f| setup.secs(f), *first)),
@@ -1794,6 +1985,36 @@ pub(crate) fn run_scoped(
     });
     progress(&json!({"done": j}));
     Ok(Outcome::ok(j, text_out.trim_end().to_owned()))
+}
+
+/// Stops holding `paths`, measures no mechanic's numbers write (none owns
+/// them, or those that do have no numbers, as a counter the model only
+/// counts) that are wrong first
+/// at the original's frame `frame`: their tolerance and drift become
+/// unlimited from here on, and a record of it goes into `unheld`. Returns
+/// the record in words.
+fn unhold(
+    setup: &mut Setup,
+    ls: &Lockstep,
+    paths: &[usize],
+    frame: u64,
+    unheld: &mut Vec<Json>,
+) -> String {
+    let names: Vec<String> = paths.iter().map(|&i| ls.paths[i].path.clone()).collect();
+    for &i in paths {
+        if let Some(t) = setup.tolerance.get_mut(i) {
+            *t = Fx::from_raw(i64::MAX);
+        }
+        if let Some(d) = setup.drift.get_mut(i) {
+            *d = Fx::from_raw(i64::MAX);
+        }
+    }
+    let says = format!(
+        "{} wrong from the original's frame {frame}, and no mechanic owns it: not held from here, on to the next window a mechanic owns",
+        names.join(", ")
+    );
+    unheld.push(json!({"original_frame": frame, "paths": names, "says": says}));
+    says
 }
 
 /// Where the model, run free from the window's start, drifts past a
@@ -2756,5 +2977,46 @@ at = "game.s:11"
         assert_eq!(parse_window("2.5s"), Ok(150));
         assert!(parse_window("0").is_err());
         assert!(parse_window("five").is_err());
+    }
+
+    /// A hook's numbers are tried like a mechanic's: each number in its
+    /// entity's ext_params, whole when the model writes it whole, under
+    /// `ext:HOOK` for a hook that describes nothing; and a counter's hooks
+    /// are those that may write it. Donkey Kong's model from the games
+    /// checkout beside this one; skipped without it.
+    #[test]
+    fn a_hooks_numbers_are_knobs() {
+        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../games/donkey-kong/model.toml");
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            return;
+        };
+        let model = Model::parse(&text).unwrap();
+        let catalog = gp_interp::mechanics::catalog(&model, &gp_sim::ext::Exts::new());
+        let tree = model.to_tree();
+        let ks = hook_knobs(&model, &catalog, &tree, "entities.kong");
+        let hold = ks
+            .iter()
+            .find(|k| k.path == "entities.kong.ext_params.hold")
+            .unwrap();
+        assert_eq!(hold.mechanic, "ext:dk_throw");
+        assert!(hold.whole);
+        assert_eq!(hold.value, Fx::from_int(16));
+        assert!(
+            counter_hooks(&model, &catalog, "drop_timer").contains(&"entities.kong".to_owned())
+        );
+        assert!(hook_named(&model, "ext:dk_throw") && !hook_named(&model, "ext:nope"));
+        assert!(hook_owns(
+            &model,
+            &catalog,
+            "ext:dk_throw",
+            "entities.kong[0].x"
+        ));
+        assert!(!hook_owns(
+            &model,
+            &catalog,
+            "ext:dk_throw",
+            "entities.player[0].x"
+        ));
     }
 }

@@ -1,0 +1,21 @@
+[package]
+name = "gp-derive"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Deriving a model's hand-written facts (Milestone 2, step 7;
+# docs/derivation.md): a reader for 6502 assembly source in the common
+# dialects, a constant-propagation pass over its routines, the encodings a
+# number in a game's code or data takes, and the matching of a model's
+# facts against what their evidence cites. Tooling only: nothing here runs
+# in a game.
+[dependencies]
+gp-model = { version = "0.1.0", path = "../gp-model" }
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.8"
+
+[lints]
+workspace = true

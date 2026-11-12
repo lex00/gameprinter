@@ -18,9 +18,10 @@
 //! Ported from game-printer's refine_lockstep.rs and refine.rs. Its
 //! `gp model propose` and the recording-driven `gp model refine`, which
 //! measure from sprite tracks of store recordings (gp-track, gp-extract's
-//! feel and propose), aren't here; neither are the solvers.
+//! feel and propose), are in [`recording`].
 
 pub(crate) mod lockstep;
+pub(crate) mod recording;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -51,10 +52,23 @@ pub struct RefineArgs {
     /// The game's package folder (games/donkey-kong): its corpus is what
     /// the model is refined on.
     pub game: PathBuf,
-    /// Refine from the lockstep with the original, clip by clip. The only
-    /// way this gp refines.
-    #[arg(long, required = true)]
+    /// Refine from the lockstep with the original, clip by clip. Without
+    /// it, the loop measures store recordings (`--recording`) and runs gp
+    /// validate between rounds, rewriting the model directory GAME (or
+    /// `--model`): it proposes from recordings, writes the measured facts
+    /// a failing check backs and the answered questions, asks the rest and
+    /// goes again, until the checks pass with nothing left to write or
+    /// `--rounds` rounds have run.
+    #[arg(long, required_unless_present = "recordings")]
     pub lockstep: bool,
+    /// Without `--lockstep`, the recordings to measure (IDs with frame
+    /// traces).
+    #[arg(long = "recording", num_args = 1.., conflicts_with = "lockstep")]
+    pub recordings: Vec<String>,
+    /// Without `--lockstep`, which frames of the recordings: `N`, `A..B`,
+    /// `A..=B` or `A..`.
+    #[arg(long, default_value = "1..", conflicts_with = "lockstep")]
+    pub frames: String,
     /// The working copy whose model.toml and questions.toml are rewritten:
     /// a copy of the game's folder outside any git checkout (default: GAME
     /// itself, when it isn't in one).
@@ -66,7 +80,9 @@ pub struct RefineArgs {
     pub clips: Vec<String>,
     /// A score whose rows record each clip's curve (`gp corpus score`,
     /// `gp game score` or a canary's JSON): each clip is checked against
-    /// it before it is used.
+    /// it before it is used. Without `--lockstep`, what gp validate holds
+    /// the model against, as its `--against` (default: the recordings
+    /// measured).
     #[arg(long)]
     pub against: Option<PathBuf>,
     /// The game's built module. Needed for a model with hooks.
@@ -82,9 +98,10 @@ pub struct RefineArgs {
     /// A window's length: frames (300) or seconds (5s).
     #[arg(long, default_value_t = lockstep::DEFAULT_WINDOW, value_parser = lockstep::parse_window)]
     pub window: u64,
-    /// The most rounds on each clip.
-    #[arg(long, default_value_t = lockstep::DEFAULT_ROUNDS)]
-    pub rounds: u32,
+    /// The most rounds on each clip (default 32); without `--lockstep`,
+    /// the most rounds of the loop (default 4).
+    #[arg(long)]
+    pub rounds: Option<u32>,
     /// One of the clip's own moments, KIND:N (jump:1), with a single
     /// --clip: windows in its frames, and only its mechanic's numbers.
     #[arg(long, value_parser = lockstep::parse_moment)]
@@ -117,7 +134,7 @@ pub(crate) fn read_questions(dir: &Path) -> Result<Questions> {
     }
 }
 
-fn read_model(dir: &Path) -> Result<(String, Model)> {
+pub(crate) fn read_model(dir: &Path) -> Result<(String, Model)> {
     let file = dir.join(MODEL_FILE);
     let text = fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?;
     let model = Model::parse(&text).with_context(|| file.display().to_string())?;
@@ -136,7 +153,7 @@ fn value_text(v: &toml::Value) -> String {
 /// the sources the chosen candidate was read at. A candidate without refs
 /// that keeps the model's value keeps the refs of the evidence entry that
 /// covers the fact, so an answer never drops the source it was read from.
-fn answer_refs(model: &Model, q: &Question, chosen: usize) -> Vec<gp_model::model::Ref> {
+pub(crate) fn answer_refs(model: &Model, q: &Question, chosen: usize) -> Vec<gp_model::model::Ref> {
     let mut refs = vec![at(format!("{QUESTIONS_FILE} {}", q.id))];
     let c = &q.candidates[chosen];
     let mut cited = c.refs.clone();
@@ -477,6 +494,9 @@ fn progress(clip: &str, p: &Value, as_json: bool) {
 
 /// `gp model refine GAME --lockstep`.
 pub(crate) fn run(a: &RefineArgs, paths: &Paths) -> Result<Outcome> {
+    if !a.lockstep {
+        return recording_driven(a, paths);
+    }
     let game = fs::canonicalize(&a.game).with_context(|| a.game.display().to_string())?;
     let dir = a.model.clone().unwrap_or_else(|| game.clone());
     refuse_checkout(&dir)?;
@@ -691,7 +711,7 @@ pub(crate) fn run(a: &RefineArgs, paths: &Paths) -> Result<Outcome> {
                 model: &source,
                 resume: c.resume.as_ref().map(|(s, p)| (s, *p)),
                 draws: c.draws.clone(),
-                rounds: a.rounds,
+                rounds: a.rounds.unwrap_or(lockstep::DEFAULT_ROUNDS),
                 window: a.window,
                 from: Some(c.start),
             },
@@ -754,4 +774,28 @@ pub(crate) fn run(a: &RefineArgs, paths: &Paths) -> Result<Outcome> {
         text: lines.join("\n"),
         exit: u8::from(asked > 0),
     })
+}
+
+/// `gp model refine` without `--lockstep`: the recording-driven loop
+/// ([`recording::refine`]) on GAME, or the working copy `--model`.
+fn recording_driven(a: &RefineArgs, paths: &Paths) -> Result<Outcome> {
+    let dir = a.model.clone().unwrap_or_else(|| a.game.clone());
+    let against: Vec<String> = a
+        .against
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    recording::refine(
+        &recording::RefineArgs {
+            dir: &dir,
+            recordings: &a.recordings,
+            against: &against,
+            rom: a.rom.as_ref(),
+            assets: a.assets.as_ref(),
+            module: a.module.as_ref(),
+            rounds: a.rounds.unwrap_or(recording::DEFAULT_ROUNDS),
+            frames: &a.frames,
+        },
+        paths,
+    )
 }

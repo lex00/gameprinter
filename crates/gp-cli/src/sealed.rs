@@ -648,6 +648,27 @@ impl gp_evidence::guard::Guard for Guard {
     }
 }
 
+/// A baseline's input log (its holds), refused when it plays a sealed run
+/// of the game and ROM the baseline names (`gp validate` reads baselines
+/// through this, as game-printer's did).
+pub(crate) fn read_baseline_input(file: &Path) -> Result<InputLog> {
+    let b = gp_evidence::baseline::Baseline::load(file)?;
+    let log = b.input()?;
+    let of = Of {
+        game: b.source.clone().filter(|s| !s.is_empty()),
+        rom: Some(b.sha256.clone()).filter(|s| !s.is_empty()),
+    };
+    gp_evidence::guard::input(&format!("the baseline {}", file.display()), &of, &log, 0)
+        .map_err(anyhow::Error::msg)?;
+    Ok(log)
+}
+
+/// Whether an error is the guard's refusal of a recording, which a run
+/// over the whole store leaves out and counts.
+pub(crate) fn is_refusal(e: &gp_evidence::recordings::RecordingsError) -> bool {
+    matches!(e, gp_evidence::recordings::RecordingsError::Refused(_))
+}
+
 /// Installs the guard for this process (`main` does, before any command).
 pub(crate) fn install(home: &Path) {
     gp_evidence::guard::install(Box::new(Guard::new(home)));

@@ -183,6 +183,14 @@ These read the NES's 6502 code too, and refuse an arcade game in words for now.
 
 `gp interp draws --find ~/roms/my-game.nes --input run.input` finds the game's random number generator and the places its code reads it, and proposes `[[draws]]` entries for your mapping; `gp game new` already runs it on a minute of no input. `gp element inputs --run games/my-game --clip CLIP` names the routine that wrote a wrong measure's byte on the clip's first wrong frame, and every byte and branch that decided it. `gp cycles` measures the CPU's work per frame, for a game that steps its random generator while it waits for the next frame. `docs/code-reading.md`, `docs/element.md`, `docs/formats/draws.md` and `docs/cycles.md` in the gameprinter repo have the rest.
 
+## Stage 0 as data, and mechanics from a long run
+
+These read the NES's code and sprites too, and refuse an arcade game in words for now.
+
+`gp dataset rom ~/roms/my-game.nes --out ~/.gameprinter/work/datasets/my-game` writes stage 0 of a ROM as tables: its routines and branches, the RAM it writes, its elements, state machines, constants, the mechanics it can name and what it leaves open. No file holds the ROM's bytes, and the command fails if one would. `gp dataset gaps DIR...` counts what datasets leave open. `docs/formats/rom-dataset.md` in the gameprinter repo has every table.
+
+`gp mechanic harvest my-game RECORDING` replays a long recording (a published speedrun, imported with `gp movie import`) once and runs the mechanic sessions' detectors over all of it: head hits, side hits, landings, stomps, items, hurts, input ignored, changes nothing explains, code and objects seen for the first time. Each kind gets an example clip per level in a `harvest-LEVEL` session, and `--add` puts the kinds in your quest log. `gp mechanic leads my-game` replays every session clip and lists the code and RAM stage 0's runs reached that no clip has, by the routine it branches off: what to play next.
+
 ## What the original shows that your model doesn't
 
 These read a recording of the original (`gp record`) beside your game's folder. They are NES-only for now: an arcade game is refused in words.

@@ -36,6 +36,8 @@
 //! (crate::corpus_import), and sealed runs are scored by `gp sealed`
 //! (crate::sealed).
 
+use std::fmt::Write as _;
+use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result, bail};
@@ -45,6 +47,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 mod demo;
+pub(crate) mod detect;
 pub(crate) mod http;
 mod import;
 pub(crate) mod live;
@@ -363,6 +366,33 @@ pub enum MechanicCmd {
         /// Take the out-of-scope mark off the row.
         #[arg(long, requires = "mechanic")]
         in_scope: bool,
+    },
+    /// Mechanics from a long recording in the store (a TAS run): it is
+    /// replayed once and every detector runs over it; each kind of event
+    /// gets an example clip per level (a session `harvest-LEVEL`) and the
+    /// kinds are listed as candidate mechanics, matched to queue rows.
+    /// `--add` notes the matches on their rows and adds the rest as "next".
+    Harvest {
+        game: String,
+        recording: String,
+        #[arg(long, default_value_t = 25)]
+        top: usize,
+        #[arg(long)]
+        add: bool,
+    },
+    /// New mechanics to look at: every clip of every mechanic of GAME is
+    /// replayed, and the routines and RAM bytes the ROM dataset says stage
+    /// 0's runs reached but no clip did are grouped by the routine (one the
+    /// clips run) they branch off from. Each queue row's open items are
+    /// leads too. Best first; `--add` puts the top ones in the queue.
+    Leads {
+        game: String,
+        /// How many to print.
+        #[arg(long, default_value_t = 10)]
+        top: usize,
+        /// Add the top leads to the queue as "next".
+        #[arg(long)]
+        add: bool,
     },
 }
 
@@ -693,6 +723,70 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                 in_scope: *in_scope,
             },
         ),
+        MechanicCmd::Harvest {
+            game,
+            recording,
+            top,
+            add,
+        } => {
+            let (v, text) = crate::harvest::harvest(paths, game, recording, *add, *top)?;
+            Ok(Outcome::ok(v, text))
+        }
+        MechanicCmd::Leads { game, top, add } => {
+            if !name_ok(game) {
+                bail!("a game name is lower-case letters, digits and dashes: {game}");
+            }
+            let games = crate::roms_cmd::games_dir(None)
+                .context("no games checkout found: set GP_GAMES_DIR")?;
+            let game_dir = crate::labels::game_folder(&games, game)
+                .with_context(|| format!("no game {game} in {}", games.display()))?;
+            let rom = crate::clip_score::rom_of(paths, &game_dir, None)?;
+            crate::original::nes_only(
+                crate::original::Platform::of_file(&rom),
+                "the leads (clips replayed against stage 0's ROM dataset)",
+            )?;
+            let (all, summary) = crate::leads::leads(&paths.home, &rom, game)?;
+            let shown: Vec<Value> = all.iter().take(*top).cloned().collect();
+            let mut text = format!(
+                "{} clips ({} frames) ran {} of {} routines ({} of {} code bytes); stage 0's runs wrote {} RAM bytes, {} of them no clip wrote.\n",
+                summary["clips"],
+                summary["frames"],
+                summary["routines_in_clips"],
+                summary["routines"],
+                summary["code_bytes_in_clips"],
+                summary["code_bytes"],
+                summary["ram_written_by_stage0"],
+                summary["ram_no_clip_wrote"]
+            );
+            for (n, l) in shown.iter().enumerate() {
+                let _ = writeln!(
+                    text,
+                    "{}. [{}] {}",
+                    n + 1,
+                    l["kind"].as_str().unwrap_or(""),
+                    l["lead"].as_str().unwrap_or("")
+                );
+            }
+            if *add {
+                let f = paths.home.join("mechanics").join(game).join("queue.json");
+                let mut q = read_queue(&f);
+                let mut k = q.len();
+                for l in shown.iter().filter(|l| l["kind"] != json!("open")) {
+                    k += 1;
+                    let name = format!("lead-{k}");
+                    if q.iter().any(|r| r["mechanic"] == json!(name)) {
+                        continue;
+                    }
+                    q.push(json!({"mechanic": name, "status": "next", "note": l["lead"]}));
+                }
+                fs::write(&f, serde_json::to_string_pretty(&q)?)?;
+                text.push_str("added to the queue as next\n");
+            }
+            Ok(Outcome::ok(
+                json!({"summary": summary, "leads": shown}),
+                text,
+            ))
+        }
     }
 }
 

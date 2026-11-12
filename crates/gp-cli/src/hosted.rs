@@ -176,6 +176,17 @@ impl Source {
         })
     }
 
+    /// The model and assets as one run keeps them, for keys.
+    pub(crate) fn bundle_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// The hooks, when they run in gp itself: none for a model whose hooks
+    /// run in its module, which `exts` only describes.
+    pub(crate) fn native_exts(&self) -> Option<&Exts> {
+        self.module.is_none().then_some(&*self.exts)
+    }
+
     pub(crate) fn parse_model(&self) -> Result<gp_model::Model> {
         self.bundle.parse_model().map_err(|e| anyhow!("{e}"))
     }

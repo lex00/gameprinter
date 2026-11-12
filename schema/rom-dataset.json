@@ -1,0 +1,1305 @@
+{
+  "$defs": {
+    "branches": {
+      "additionalProperties": false,
+      "description": "One row a conditional branch: the bytes its test reads, the value compared, and which ways runs took it. Key: rom, pc.",
+      "properties": {
+        "compare": {
+          "description": "The constant the test compares with, null if it compares with none",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "not_taken": {
+          "description": "Times runs fell through here; null if no run reached it (unit: count)",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "op": {
+          "description": "Its mnemonic (beq, bne, bcc, ...)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pc": {
+          "description": "The branch instruction, `BANK:ADDR`",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rom": {
+          "description": "The ROM's headerless SHA-256 (PRG then CHR), the same in every table: the column datasets of many ROMs are joined on",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "routine": {
+          "description": "The routine it is in",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rule": {
+          "description": "The rule of the tool that made the row",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "src": {
+          "description": "Where the row came from: `read:BANK:ADDR` (an instruction the reader read; the bank is left out on an unbanked board), `run:RECIPE@FRAME` (a run's recipe hash and frame), `asset-map:ENTRY`, or a JSON list of these",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "taken": {
+          "description": "Times runs branched here; null if no run reached it (unit: count)",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "tests": {
+          "description": "The RAM places its flags come from, a JSON list (`$05`, `$20,x`)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "description": "The tool and its version (`gp 0.1.0`)",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "rom",
+        "pc",
+        "routine",
+        "op",
+        "tests",
+        "compare",
+        "taken",
+        "not_taken",
+        "src",
+        "rule",
+        "tool"
+      ],
+      "type": "object"
+    },
+    "constants": {
+      "additionalProperties": false,
+      "description": "One row a value the code uses, at a compare, a load or a ROM table entry: its raw value, what it is, its fixed-point format and its value as a number. Key: rom, pc, entry.",
+      "properties": {
+        "compared": {
+          "description": "For a compare: the RAM place compared with it (`$12`), null otherwise",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "element": {
+          "description": "The element it belongs to, null if none",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "entry": {
+          "description": "The entry of a table, 0 for an instruction's own operand",
+          "type": "integer"
+        },
+        "format": {
+          "description": "How the code reads it: u8, s8, u16, s16, or a fixed-point form as INT.FRAC bits (`8.8`, `4.4`, `0.8`); null if not known",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mechanic": {
+          "description": "The mechanic part it is a parameter of (docs/mechanics.md: platformer.jump), null if none",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "number": {
+          "description": "The value as a number in its format (-3.5); null if the format is not known",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "op": {
+          "description": "The use: cmp, cpx, cpy, lda, ldx, ldy, adc, sbc, and, ora, or table",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parameter": {
+          "description": "The parameter of that part (gravity), null if none",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pc": {
+          "description": "The instruction, or the table's first byte, `BANK:ADDR`",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quantity": {
+          "description": "What it is, in a vocabulary shared by every game: gravity, jump_speed, max_speed, accel, decel, threshold, period, duration, count, offset, size, limit, kind, mask, other; null if not known (then an open row says why)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "raw": {
+          "description": "The value as stored: a byte, or two bytes as one 16-bit number",
+          "type": "integer"
+        },
+        "rom": {
+          "description": "The ROM's headerless SHA-256 (PRG then CHR), the same in every table: the column datasets of many ROMs are joined on",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "routine": {
+          "description": "The routine that uses it",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rule": {
+          "description": "The rule of the tool that made the row",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "src": {
+          "description": "Where the row came from: `read:BANK:ADDR` (an instruction the reader read; the bank is left out on an unbanked board), `run:RECIPE@FRAME` (a run's recipe hash and frame), `asset-map:ENTRY`, or a JSON list of these",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "description": "The tool and its version (`gp 0.1.0`)",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "rom",
+        "pc",
+        "entry",
+        "routine",
+        "op",
+        "raw",
+        "format",
+        "number",
+        "quantity",
+        "element",
+        "mechanic",
+        "parameter",
+        "compared",
+        "src",
+        "rule",
+        "tool"
+      ],
+      "type": "object"
+    },
+    "elements": {
+      "additionalProperties": false,
+      "description": "One row a thing in the game: the player, a group of object slots, the camera, the level, the HUD, the game's own state. Key: rom, element.",
+      "properties": {
+        "element": {
+          "description": "Its name, made by the tool from the ROM (`player`, `slots_20`): the name every other table uses",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "player, slots, camera, level, hud, game, sound, input or other",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ram": {
+          "description": "RAM bytes that belong to it (unit: count)",
+          "type": "integer"
+        },
+        "rom": {
+          "description": "The ROM's headerless SHA-256 (PRG then CHR), the same in every table: the column datasets of many ROMs are joined on",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "routines": {
+          "description": "Routines that belong to it (unit: count)",
+          "type": "integer"
+        },
+        "rule": {
+          "description": "The rule of the tool that made the row",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "slots": {
+          "description": "For a group of object slots, how many (unit: count)",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "src": {
+          "description": "Where the row came from: `read:BANK:ADDR` (an instruction the reader read; the bank is left out on an unbanked board), `run:RECIPE@FRAME` (a run's recipe hash and frame), `asset-map:ENTRY`, or a JSON list of these",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tile_kinds": {
+          "description": "The level tile kinds it acts on, a JSON list, null if none",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "description": "The tool and its version (`gp 0.1.0`)",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "rom",
+        "element",
+        "kind",
+        "slots",
+        "routines",
+        "ram",
+        "tile_kinds",
+        "src",
+        "rule",
+        "tool"
+      ],
+      "type": "object"
+    },
+    "estimates": {
+      "additionalProperties": false,
+      "description": "One row a value measured from the runs, close but not exact: a fact to refine, with how it was measured, how much the samples spread and what would make it exact. Key: rom, element, mechanic, parameter.",
+      "properties": {
+        "element": {
+          "description": "The element it is about",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mechanic": {
+          "description": "The mechanic part (docs/mechanics.md: platformer.jump), or a pattern for an element no part fits",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "method": {
+          "description": "The measurer: feel (gp-extract's player and enemy feel), pattern (gp-track's behaviour classes), timer (a byte's count steps)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parameter": {
+          "description": "The parameter of that part (gravity)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quantity": {
+          "description": "What it is, in the constants table's vocabulary; null if not one of them",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "refine": {
+          "description": "What would make it exact: the code that writes the value, or clips that isolate it",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rom": {
+          "description": "The ROM's headerless SHA-256 (PRG then CHR), the same in every table: the column datasets of many ROMs are joined on",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rule": {
+          "description": "The rule of the tool that made the row",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "samples": {
+          "description": "Measurements the estimate is made from (unit: count)",
+          "type": "integer"
+        },
+        "spread": {
+          "description": "Half the distance between the samples' lowest and highest values; 0 when they agree",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "src": {
+          "description": "Where the row came from: `read:BANK:ADDR` (an instruction the reader read; the bank is left out on an unbanked board), `run:RECIPE@FRAME` (a run's recipe hash and frame), `asset-map:ENTRY`, or a JSON list of these",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "description": "The tool and its version (`gp 0.1.0`)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unit": {
+          "description": "pixels, pixels a frame, pixels a frame a frame, frames, or count",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "The estimate: the median of the samples",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "rom",
+        "element",
+        "mechanic",
+        "parameter",
+        "quantity",
+        "value",
+        "spread",
+        "samples",
+        "unit",
+        "method",
+        "refine",
+        "src",
+        "rule",
+        "tool"
+      ],
+      "type": "object"
+    },
+    "facts": {
+      "additionalProperties": false,
+      "description": "One row a fact of the game's model the ROM settles, by model path in the tool's own names. Key: rom, path.",
+      "properties": {
+        "element": {
+          "description": "The element it is about, null if none",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "number": {
+          "description": "The value as a number, null if it isn't one",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "The model path (entities.slots_20.walk.speed)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rom": {
+          "description": "The ROM's headerless SHA-256 (PRG then CHR), the same in every table: the column datasets of many ROMs are joined on",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rule": {
+          "description": "The rule of the tool that made the row",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "settled_by": {
+          "description": "read (the code), run (a run), or asset-map",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "src": {
+          "description": "Where the row came from: `read:BANK:ADDR` (an instruction the reader read; the bank is left out on an unbanked board), `run:RECIPE@FRAME` (a run's recipe hash and frame), `asset-map:ENTRY`, or a JSON list of these",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "description": "The tool and its version (`gp 0.1.0`)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "The value as JSON",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "rom",
+        "path",
+        "value",
+        "number",
+        "element",
+        "settled_by",
+        "src",
+        "rule",
+        "tool"
+      ],
+      "type": "object"
+    },
+    "links": {
+      "additionalProperties": false,
+      "description": "One row a routine's part in an element: the routine that draws it, or one that updates it, found by following the element's sprites back to the code that wrote them. Key: rom, element, routine, link.",
+      "properties": {
+        "bytes": {
+          "description": "The RAM bytes involved, a JSON list: for draws those it reads, for updates those it writes",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "element": {
+          "description": "The element",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "link": {
+          "description": "draws (it writes the element's sprites from its state) or updates (it writes the element's position)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pc": {
+          "description": "For draws: the instruction that writes the sprite's x, `BANK:ADDR`",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rom": {
+          "description": "The ROM's headerless SHA-256 (PRG then CHR), the same in every table: the column datasets of many ROMs are joined on",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "routine": {
+          "description": "The routine, `BANK:ADDR`",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rule": {
+          "description": "The rule of the tool that made the row",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "src": {
+          "description": "Where the row came from: `read:BANK:ADDR` (an instruction the reader read; the bank is left out on an unbanked board), `run:RECIPE@FRAME` (a run's recipe hash and frame), `asset-map:ENTRY`, or a JSON list of these",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "description": "The tool and its version (`gp 0.1.0`)",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "rom",
+        "element",
+        "routine",
+        "link",
+        "pc",
+        "bytes",
+        "src",
+        "rule",
+        "tool"
+      ],
+      "type": "object"
+    },
+    "mechanics": {
+      "additionalProperties": false,
+      "description": "One row a mechanic part an element uses, with one of its options (docs/mechanics.md). Key: rom, element, mechanic, option.",
+      "properties": {
+        "element": {
+          "description": "The element",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mechanic": {
+          "description": "The mechanic part (platformer.jump)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "option": {
+          "description": "The option, or `*` for the part itself",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rom": {
+          "description": "The ROM's headerless SHA-256 (PRG then CHR), the same in every table: the column datasets of many ROMs are joined on",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rule": {
+          "description": "The rule of the tool that made the row",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "src": {
+          "description": "Where the row came from: `read:BANK:ADDR` (an instruction the reader read; the bank is left out on an unbanked board), `run:RECIPE@FRAME` (a run's recipe hash and frame), `asset-map:ENTRY`, or a JSON list of these",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "description": "The tool and its version (`gp 0.1.0`)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "The option's value as JSON, null for the part itself",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "rom",
+        "element",
+        "mechanic",
+        "option",
+        "value",
+        "src",
+        "rule",
+        "tool"
+      ],
+      "type": "object"
+    },
+    "open": {
+      "additionalProperties": false,
+      "description": "One row a question the ROM leaves: what is not known, the routine and bytes that decide it, and what would settle it. Key: rom, what, pc.",
+      "properties": {
+        "bytes": {
+          "description": "The RAM places it depends on, a JSON list",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "element": {
+          "description": "The element it is about, null if none",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pc": {
+          "description": "The instruction that decides it, `BANK:ADDR`; empty if none is known",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rom": {
+          "description": "The ROM's headerless SHA-256 (PRG then CHR), the same in every table: the column datasets of many ROMs are joined on",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "routine": {
+          "description": "The routine that decides it, null if none is known",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rule": {
+          "description": "The rule of the tool that made the row",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "settle_by": {
+          "description": "What would settle it: run (a run that reaches the instruction), trace (values from a clip), bank (a bank the reader can't place), name (a choice no code makes)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "src": {
+          "description": "Where the row came from: `read:BANK:ADDR` (an instruction the reader read; the bank is left out on an unbanked board), `run:RECIPE@FRAME` (a run's recipe hash and frame), `asset-map:ENTRY`, or a JSON list of these",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "description": "The tool and its version (`gp 0.1.0`)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "what": {
+          "description": "What is not known: a table and key (`ram:$0507`, `constants:C4CE`) or a model path",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "why": {
+          "description": "Why the tool can't settle it",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "rom",
+        "what",
+        "element",
+        "routine",
+        "pc",
+        "bytes",
+        "why",
+        "settle_by",
+        "src",
+        "rule",
+        "tool"
+      ],
+      "type": "object"
+    },
+    "ram": {
+      "additionalProperties": false,
+      "description": "One row a RAM byte the game writes: its role, the element and slot it belongs to, the quantity it holds, and the routines that read and write it. Key: rom, addr.",
+      "properties": {
+        "addr": {
+          "description": "The CPU address ($0000 to $07FF, or $6000 to $7FFF for PRG RAM)",
+          "type": "integer"
+        },
+        "element": {
+          "description": "The element it belongs to, null if none",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "part": {
+          "description": "Which byte of a wider value: whole, lo, hi or fraction; null if not known",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quantity": {
+          "description": "What it holds, in a vocabulary shared by every game: x, y, speed_x, speed_y, state, timer, facing, kind, flag, count, pointer, buttons, cell, other; null if not known",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "readers": {
+          "description": "Routines that read it, a JSON list",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "description": "state, counter, timer, pointer, input, sound, scratch or level; null if not known (then an open row says why)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rom": {
+          "description": "The ROM's headerless SHA-256 (PRG then CHR), the same in every table: the column datasets of many ROMs are joined on",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rule": {
+          "description": "The rule of the tool that made the row",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "slot": {
+          "description": "For an element with slots: the slot it is in, from 0",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "src": {
+          "description": "Where the row came from: `read:BANK:ADDR` (an instruction the reader read; the bank is left out on an unbanked board), `run:RECIPE@FRAME` (a run's recipe hash and frame), `asset-map:ENTRY`, or a JSON list of these",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "description": "The tool and its version (`gp 0.1.0`)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "writers": {
+          "description": "Routines that write it, a JSON list",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "written": {
+          "description": "A run wrote it",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "rom",
+        "addr",
+        "role",
+        "element",
+        "slot",
+        "quantity",
+        "part",
+        "written",
+        "readers",
+        "writers",
+        "src",
+        "rule",
+        "tool"
+      ],
+      "type": "object"
+    },
+    "rom": {
+      "additionalProperties": false,
+      "description": "One row: the ROM and the extraction that made the dataset. Key: rom.",
+      "properties": {
+        "asset_map": {
+          "description": "BLAKE3 of the asset map read beside the ROM; null when the ROM alone was read",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "board": {
+          "description": "The board as the reader models it (nrom, uxrom, mmc1, mmc3, or another name for one it reads only in part)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "chr_bytes": {
+          "description": "CHR ROM size (0 for CHR RAM) (unit: bytes)",
+          "type": "integer"
+        },
+        "format": {
+          "description": "This format's version",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "frames": {
+          "description": "Frames run, over all runs (unit: frames)",
+          "type": "integer"
+        },
+        "mapper": {
+          "description": "The iNES mapper number",
+          "type": "integer"
+        },
+        "prg_bytes": {
+          "description": "PRG ROM size (unit: bytes)",
+          "type": "integer"
+        },
+        "rom": {
+          "description": "The ROM's headerless SHA-256 (PRG then CHR), the same in every table: the column datasets of many ROMs are joined on",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runs": {
+          "description": "Runs of the ROM the extraction made (the runs table) (unit: count)",
+          "type": "integer"
+        },
+        "tool": {
+          "description": "The tool and its version (`gp 0.1.0`)",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "rom",
+        "mapper",
+        "board",
+        "prg_bytes",
+        "chr_bytes",
+        "asset_map",
+        "runs",
+        "frames",
+        "format",
+        "tool"
+      ],
+      "type": "object"
+    },
+    "routines": {
+      "additionalProperties": false,
+      "description": "One row a routine of the ROM's code: where it is, what calls it, the element it belongs to. Key: rom, routine.",
+      "properties": {
+        "addr": {
+          "description": "Its entry's CPU address",
+          "type": "integer"
+        },
+        "bank": {
+          "description": "The PRG bank it is in, null on an unbanked board",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "callees": {
+          "description": "The routines it calls or jumps to, a JSON list",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "callers": {
+          "description": "The routines that call or jump to it, a JSON list",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "element": {
+          "description": "The element it belongs to (the elements table), null if none",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ran": {
+          "description": "A run entered it",
+          "type": "boolean"
+        },
+        "read": {
+          "description": "The reader read its instructions",
+          "type": "boolean"
+        },
+        "rom": {
+          "description": "The ROM's headerless SHA-256 (PRG then CHR), the same in every table: the column datasets of many ROMs are joined on",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "routine": {
+          "description": "Its entry as `BANK:ADDR` (hex; the bank left out on an unbanked board): the name every other table uses",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rule": {
+          "description": "The rule of the tool that made the row",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size": {
+          "description": "Bytes of code from its entry to its last instruction (unit: bytes)",
+          "type": "integer"
+        },
+        "src": {
+          "description": "Where the row came from: `read:BANK:ADDR` (an instruction the reader read; the bank is left out on an unbanked board), `run:RECIPE@FRAME` (a run's recipe hash and frame), `asset-map:ENTRY`, or a JSON list of these",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "description": "The tool and its version (`gp 0.1.0`)",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "rom",
+        "routine",
+        "bank",
+        "addr",
+        "size",
+        "element",
+        "read",
+        "ran",
+        "callers",
+        "callees",
+        "src",
+        "rule",
+        "tool"
+      ],
+      "type": "object"
+    },
+    "runs": {
+      "additionalProperties": false,
+      "description": "One row a run of the ROM the extraction made: its recipe and what it reached. Key: rom, run.",
+      "properties": {
+        "frames": {
+          "description": "Frames run (unit: frames)",
+          "type": "integer"
+        },
+        "kind": {
+          "description": "idle, start, random, clip or explore",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prg_bytes": {
+          "description": "PRG bytes it executed (unit: bytes)",
+          "type": "integer"
+        },
+        "ram_written": {
+          "description": "RAM bytes it wrote (unit: bytes)",
+          "type": "integer"
+        },
+        "rom": {
+          "description": "The ROM's headerless SHA-256 (PRG then CHR), the same in every table: the column datasets of many ROMs are joined on",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "routines": {
+          "description": "Routines it entered (unit: count)",
+          "type": "integer"
+        },
+        "rule": {
+          "description": "The rule of the tool that made the row",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "description": "The recipe's hash: the ROM, the start and the presses",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seed": {
+          "description": "The seed of a random or explored run",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "tool": {
+          "description": "The tool and its version (`gp 0.1.0`)",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "rom",
+        "run",
+        "kind",
+        "seed",
+        "frames",
+        "routines",
+        "prg_bytes",
+        "ram_written",
+        "rule",
+        "tool"
+      ],
+      "type": "object"
+    },
+    "states": {
+      "additionalProperties": false,
+      "description": "One row a state of a state machine: the byte it lives in and the value that means it. Key: rom, machine, value.",
+      "properties": {
+        "byte": {
+          "description": "The RAM address that holds the state",
+          "type": "integer"
+        },
+        "element": {
+          "description": "The element the machine belongs to",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "initial": {
+          "description": "The state the machine starts in",
+          "type": "boolean"
+        },
+        "machine": {
+          "description": "The machine's name, made by the tool (`state_05`)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rom": {
+          "description": "The ROM's headerless SHA-256 (PRG then CHR), the same in every table: the column datasets of many ROMs are joined on",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rule": {
+          "description": "The rule of the tool that made the row",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "src": {
+          "description": "Where the row came from: `read:BANK:ADDR` (an instruction the reader read; the bank is left out on an unbanked board), `run:RECIPE@FRAME` (a run's recipe hash and frame), `asset-map:ENTRY`, or a JSON list of these",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "description": "The state's name, made by the tool (`s0`)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "description": "The tool and its version (`gp 0.1.0`)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "description": "The byte's value in this state",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rom",
+        "machine",
+        "byte",
+        "element",
+        "value",
+        "state",
+        "initial",
+        "src",
+        "rule",
+        "tool"
+      ],
+      "type": "object"
+    },
+    "transitions": {
+      "additionalProperties": false,
+      "description": "One row a change of state: from, to, the instruction that writes it and what must hold. Key: rom, machine, from_state, to_state, pc.",
+      "properties": {
+        "after": {
+          "description": "When the change waits on a timer: the frames it waits (unit: frames)",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "from_state": {
+          "description": "The state before",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "guards": {
+          "description": "What must hold on the path to it, a JSON list of conditions (`$12 >= #$C0`)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "machine": {
+          "description": "The machine (the states table)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pc": {
+          "description": "The instruction that writes the new state, `BANK:ADDR`",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rom": {
+          "description": "The ROM's headerless SHA-256 (PRG then CHR), the same in every table: the column datasets of many ROMs are joined on",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "routine": {
+          "description": "The routine it is in",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rule": {
+          "description": "The rule of the tool that made the row",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "src": {
+          "description": "Where the row came from: `read:BANK:ADDR` (an instruction the reader read; the bank is left out on an unbanked board), `run:RECIPE@FRAME` (a run's recipe hash and frame), `asset-map:ENTRY`, or a JSON list of these",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to_state": {
+          "description": "The state after",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "description": "The tool and its version (`gp 0.1.0`)",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "rom",
+        "machine",
+        "from_state",
+        "to_state",
+        "pc",
+        "routine",
+        "guards",
+        "after",
+        "src",
+        "rule",
+        "tool"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "game-printer:rom-dataset@0.1.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One row of each table of a ROM dataset (docs/formats/rom-dataset.md). The tables are Parquet files, data/TABLE.parquet; each row has these columns.",
+  "title": "ROM dataset"
+}

@@ -28,7 +28,9 @@ gp-evidence = { version = "0.1.0", path = "../gp-evidence" }
 gp-explore = { version = "0.1.0", path = "../gp-explore" }
 gp-gaps = { version = "0.1.0", path = "../gp-gaps" }
 gp-track = { version = "0.1.0", path = "../gp-track" }
+gp-validate = { version = "0.1.0", path = "../gp-validate" }
 gp-exts = { version = "0.1.0", path = "../gp-exts" }
+gp-derive = { version = "0.1.0", path = "../gp-derive" }
 gp-extract = { version = "0.1.0", path = "../gp-extract" }
 gp-interp = { version = "0.1.0", path = "../gp-interp" }
 gp-look = { version = "0.1.0", path = "../gp-look" }
@@ -46,6 +48,8 @@ gp-sprites = { version = "0.1.0", path = "../gp-sprites" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
+# The ROM dataset's tables (gp dataset rom), as game-printer wrote them.
+parquet = { version = "=60.1.0", default-features = false }
 hex = "0.4.3"
 md-5 = "0.11.0"
 sha1 = "0.11.0"

@@ -58,6 +58,10 @@ An example: with Mario's jump gravity in a copy changed from `0.06640625` to `0.
 
 What it prints, for each clip it worked on: the window it looked at, the number it changed and the splits before and after. Each value it writes is a fact in `~/dk-refine/model.toml` with the clip and frames as its evidence. When no number fixes a window, it doesn't change the mechanic: it asks you, in `~/dk-refine/questions.toml`. List and answer those with `gp model questions ~/dk-refine` (`--answer ID=N` picks an answer). Then copy the numbers you want into your fork and run the gate as above.
 
+A number in a hook (an entity's `ext_params`, such as a walk's step or a hold's frames) is tried like any mechanic's number: with Kong's `hold` changed from 16 to 20 in a copy, `gp model refine donkey-kong --lockstep --model ~/dk-refine --module ~/dk.wasm --clip dk.clear-25m.001` finds 16 again. `--mechanic ext:dk_throw` keeps it to one hook's numbers, which is quicker. A measure that no mechanic's numbers write (a score the model only counts) is noted as not held from there, and the loop goes on to the next window a mechanic owns.
+
+Without `--lockstep`, `gp model refine ~/dk-refine --recording ID` works from stored recordings (`gp record`) instead of the corpus: it measures the player's speeds and jump and the enemies' steps from the recording's sprites (`gp model propose ~/dk-refine --recording ID` prints those measures alone), writes the ones a failing `gp validate` check backs, asks about the rest, and validates again. `gp validate ~/dk-refine --against ID --module ~/dk.wasm` holds the model to its contract (`fidelity.toml`) on its own, and `gp model derive ~/dk-refine --assets LIFTED` reads each fact back from what its evidence cites (the ROM's lifted tables, a disassembly's lines) and asks where they differ. `docs/validation.md`, `docs/derivation.md` and `docs/mechanics.md` in the gameprinter repo have the rest.
+
 `gp mechanic start donkey-kong` serves the last run and the jump's rule (`gp rule jump donkey-kong`, the gravity and takeoff speeds read from the clips) at `http://127.0.0.1:PORT/refine`.
 
 ### Watch it work, and hand stuck clips to an agent

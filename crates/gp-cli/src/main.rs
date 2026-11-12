@@ -20,6 +20,9 @@ mod corpus_import;
 mod corpus_score;
 mod coverage;
 mod cycles;
+mod dataset;
+mod dataset_tables;
+mod derive;
 mod diagnose;
 mod draws_find;
 mod element;
@@ -32,11 +35,13 @@ mod gate;
 mod gate_append;
 mod gate_copy;
 mod gate_queue;
+mod harvest;
 mod hosted;
 mod interp;
 mod interp_args;
 mod interp_draws;
 mod labels;
+mod leads;
 mod lockstep;
 mod mechanic;
 mod mechanics;
@@ -60,6 +65,8 @@ mod recindex;
 mod recordings;
 mod refine;
 mod registry;
+mod rom_dataset;
+mod rom_extract;
 mod romclean;
 mod romdiff;
 mod rompatch;
@@ -88,6 +95,7 @@ mod template_original;
 mod tool_gate;
 mod track;
 mod translate;
+mod validate;
 mod watch;
 mod watch_serve;
 mod worker;
@@ -176,6 +184,12 @@ enum Cmd {
     /// mapping: sprites followed from frame to frame, the RAM bytes that hold
     /// their positions, and a proposed `[slots]` section (docs/formats/tracks.md).
     Track(track::TrackArgs),
+    /// Hold a model to its fidelity contract against recordings of the
+    /// original (docs/validation.md): the contract's rules compiled into
+    /// checks, each recording's input run on the original (read through the
+    /// state mapping) and on the model, and compared. Exits 1 when a check
+    /// fails, 2 when no recording could be run.
+    Validate(validate::ValidateArgs),
     /// Report what recordings exercised, given recordings or the whole
     /// store (docs/coverage.md).
     Coverage(coverage::CoverageArgs),
@@ -192,6 +206,13 @@ enum Cmd {
     Sound {
         #[command(subcommand)]
         cmd: sound::SoundCmd,
+    },
+    /// Stage 0's ROM dataset: one ROM's routines, RAM, elements, state
+    /// machines, constants, mechanics and open questions as Parquet tables
+    /// (docs/formats/rom-dataset.md).
+    Dataset {
+        #[command(subcommand)]
+        cmd: dataset::DatasetCmd,
     },
     /// Sprites: capture every frame of every entity from the sprite tables
     /// and recordings (docs/capture.md).
@@ -481,8 +502,68 @@ enum ModelCmd {
     /// by clip from its corpus, through the lockstep: the clips checked
     /// against the ROM first, numbers fitted from the original's state at
     /// each clip's start and written as facts with evidence, shape
-    /// questions asked in questions.toml.
+    /// questions asked in questions.toml. Without --lockstep, the loop
+    /// measures store recordings (--recording) as gp model propose does and
+    /// runs gp validate between rounds: a measured fact a failing check
+    /// backs is written, answered questions are written as stated facts,
+    /// the rest asked.
     Refine(refine::RefineArgs),
+    /// Derive the model's hand-written facts from what their evidence
+    /// cites (docs/derivation.md): the constant, immediate or data row a ref
+    /// names in assembly source (evidence), the value the routine's code
+    /// computes there by constant propagation (code), the table the line's
+    /// label names lifted through the asset map, the asset slots against the
+    /// map, and the generator scripts the evidence names rerun over the
+    /// lifted assets (data, with `--assets`), and the feel parameters
+    /// measured from recordings (recordings, with `--recording`). Each fact
+    /// either agrees or differs, or is new or underivable (with the class
+    /// that could derive it and why); a question goes into questions.toml
+    /// where a derived value differs.
+    Derive {
+        dir: PathBuf,
+        /// Which derivers: evidence, code, data, recordings or all (repeat
+        /// or comma-separate).
+        #[arg(long, default_value = "all")]
+        from: Vec<String>,
+        /// A directory gp assets lift wrote, for `--from` data.
+        #[arg(long, value_name = "DIR")]
+        assets: Option<PathBuf>,
+        /// Recordings (IDs with frame traces) for `--from` recordings.
+        #[arg(long = "recording", num_args = 1..)]
+        recordings: Vec<String>,
+        #[arg(long, default_value = "1..")]
+        frames: String,
+        /// The directory refs are relative to (default: the game's package
+        /// folder when DIR is one, else the git work tree DIR is in).
+        #[arg(long, value_name = "DIR")]
+        root: Option<PathBuf>,
+        /// Don't write questions.toml.
+        #[arg(long)]
+        no_questions: bool,
+        /// List every fact, not only those that differ or are new.
+        #[arg(long)]
+        list: bool,
+    },
+    /// Measure the model's feel parameters from store recordings. gp track
+    /// finds the player and the enemies, and their positions and the
+    /// controller give the player's movement (walk and run speed,
+    /// acceleration), its jump (speed, gravity, held gravity, fall limit and
+    /// rise by hold time) and the enemies' steps, periods and speeds. Each is
+    /// proposed as a fact by model path, compared with the model's own, and
+    /// where the measurement can't decide, a question goes into the
+    /// directory's `questions.toml` (docs/mechanics.md).
+    Propose {
+        dir: PathBuf,
+        /// Recording IDs (or unique prefixes) with frame traces.
+        #[arg(long = "recording", required = true, num_args = 1..)]
+        recordings: Vec<String>,
+        /// Which frames: `N`, `A..B`, `A..=B` or `A..`.
+        #[arg(long, default_value = "1..")]
+        frames: String,
+        /// Don't write questions.toml.
+        #[arg(long)]
+        no_questions: bool,
+    },
     /// List the questions in a working copy's questions.toml, and answer
     /// them: an answer to a number's question is written into the model as
     /// a stated fact.
@@ -894,6 +975,40 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             ModelCmd::Mechanics(a) => mechanics::run(a, &gp_evidence::Paths::from_env()?),
             ModelCmd::Static(a) => model_static::run(a, &gp_evidence::Paths::from_env()?),
             ModelCmd::Refine(a) => refine::run(a, &gp_evidence::Paths::from_env()?),
+            ModelCmd::Derive {
+                dir,
+                from,
+                assets,
+                recordings,
+                frames,
+                root,
+                no_questions,
+                list,
+            } => derive::run(
+                &derive::DeriveArgs {
+                    dir,
+                    from,
+                    assets: assets.as_deref(),
+                    recordings,
+                    frames,
+                    root: root.as_deref(),
+                    questions: !no_questions,
+                    list: *list,
+                },
+                &gp_evidence::Paths::from_env()?,
+            ),
+            ModelCmd::Propose {
+                dir,
+                recordings,
+                frames,
+                no_questions,
+            } => refine::recording::propose(
+                dir,
+                recordings,
+                frames,
+                !no_questions,
+                &gp_evidence::Paths::from_env()?,
+            ),
             ModelCmd::Questions { dir, answers } => refine::questions(dir, answers),
         },
         Cmd::Baseline {
@@ -946,10 +1061,12 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
         Cmd::Solve(a) => solve::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Level { cmd } => search::level_run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Track(a) => track::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Validate(a) => validate::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Coverage(a) => coverage::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Gaps { cmd } => gaps::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Sound { cmd } => sound::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Sprites { cmd } => sprites::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Dataset { cmd } => dataset::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Game {
             cmd:
                 GameCmd::Fetch {

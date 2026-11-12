@@ -52,6 +52,10 @@ const LAB_CODE: &[&str] = &["code", "cycles", "element", "reach"];
 /// line of their own as the waves' are.
 const LAB_AGENTS: &[&str] = &["agent"];
 
+/// Lab commands of derivation and validation (wave 5 of the port), on a
+/// line of their own as the other waves' are.
+const LAB_DERIVE: &[&str] = &["dataset", "validate"];
+
 /// A set's table rows: each leaf command's words and first help line.
 fn rows(cmd: &clap::Command, words: &str, out: &mut Vec<(String, String)>) {
     let mut subs = cmd
@@ -96,6 +100,7 @@ fn render_of(cli: &clap::Command) -> Result<String> {
             || LAB_DETECTORS.contains(&name)
             || LAB_CODE.contains(&name)
             || LAB_AGENTS.contains(&name)
+            || LAB_DERIVE.contains(&name)
         {
             &mut lab
         } else {

@@ -166,6 +166,55 @@ _interp-mosshop:
         echo "$(basename "$f"): $({{quote(gp)}} interp compare templates/mosshop --rom {{quote(mosshop_rom)}} --baseline "$f" --assets {{quote(assets)}} | tail -1)"
     done
 
+# Moss Hop held to its contract (docs/validation.md): templates/mosshop
+# against its baselines, the model in the interpreter. Nothing is kept
+# (--no-save). The same as crates/gp-cli/tests/validate.rs's first test.
+validate-mosshop: build mosshop _validate-mosshop
+
+_validate-mosshop:
+    mkdir -p {{quote(assets)}}
+    {{gp}} assets lift {{quote(mosshop_rom)}} --map assets/mosshop.toml -o {{quote(assets)}} --force
+    {{gp}} validate templates/mosshop --against baselines/mosshop --rom {{quote(mosshop_rom)}} --assets {{quote(assets)}} --no-save
+
+# Moss Hop's facts read back from games/mosshop/mosshop.s and its lifted
+# tables (docs/derivation.md), then a copy with its kill line made wrong:
+# derive must find 208 again and ask about it. Writes only under
+# $GP_HOME/work/mosshop. game-printer also measured the baselines'
+# recordings here; that needs `gp input-log generate` (wave 9).
+derive-mosshop: build mosshop _derive-mosshop
+
+_derive-mosshop:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    work={{quote(gp_home / "work" / "mosshop")}}
+    mkdir -p "$work" {{quote(assets)}}
+    {{gp}} assets lift {{quote(mosshop_rom)}} --map assets/mosshop.toml -o {{quote(assets)}} --force >/dev/null
+    out=$({{gp}} model derive templates/mosshop --no-questions --assets {{quote(assets)}}) || { echo "$out"; exit 1; }
+    echo "derive-mosshop: $(head -1 <<<"$out")"
+    copy="$work/derive-copy"
+    mkdir -p "$copy"
+    cp templates/mosshop/model.toml "$copy/"
+    : > "$copy/questions.toml"
+    python3 -I -c 'import sys; p = sys.argv[1]; t = open(p).read().replace("kill_below = 208\n", "kill_below = 200\n", 1); open(p, "w").write(t)' "$copy/model.toml"
+    out=$({{gp}} model derive "$copy" --from evidence --root .) || { echo "$out"; exit 1; }
+    grep -q 'differ .*levels.main.kill_below .* -> 208' <<<"$out" || { echo "$out"; echo "derive-mosshop: the wrong kill_below wasn't found" >&2; exit 1; }
+    grep -q 'id = "derive:levels.main.kill_below"' "$copy/questions.toml" || { echo "derive-mosshop: no question for kill_below" >&2; exit 1; }
+    echo "derive-mosshop: the mutated copy: $(head -1 <<<"$out")"
+
+# Stage 0's ROM dataset (docs/formats/rom-dataset.md) for every ROM on this
+# machine: Moss Hop and the NES ROMs in $GP_ROM_DIR/nes, each written to
+# $GP_HOME/work/datasets/NAME and never into the repo. One line a ROM.
+dataset-all: mosshop
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build -q --profile fastdev -p gp-cli
+    gp={{quote(target / "fastdev" / "gp")}}
+    roms="${GP_ROM_DIR:-$HOME/roms}"
+    out={{quote(gp_home / "work" / "datasets")}}
+    one() { "$gp" dataset rom "$2" --out "$out/$1" | sed "s|^.* -> $out/||"; }
+    one mosshop {{quote(mosshop_rom)}}
+    for r in "$roms"/nes/*.nes; do [ -f "$r" ] && one "$(basename "$r" .nes | tr -c 'A-Za-z0-9\n' '-')" "$r"; done
+
 # Laya, the open Jev-compatible decision model, served on 127.0.0.1:7720
 # over Jev's wire format for `gp mechanic demo` and `gp mechanic say --judge`
 # (docs/mechanic-page.md). Installs @receptron/laya under $GP_HOME/work/laya,
