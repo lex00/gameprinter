@@ -101,10 +101,25 @@ fn run_step(cmd: &mut Command, what: &str) -> std::result::Result<(), String> {
         .rev()
         .take(25)
         .collect();
+    let names = failed_tests(&all);
+    let named = if names.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", names.join(", "))
+    };
     Err(format!(
-        "{what} failed:\n{}",
+        "{what} failed{named}:\n{}",
         tail.into_iter().rev().collect::<Vec<_>>().join("\n")
     ))
+}
+
+/// The tests cargo's output says failed, by their paths, so a FAIL line
+/// names them.
+pub(crate) fn failed_tests(out: &str) -> Vec<String> {
+    out.lines()
+        .filter_map(|l| l.strip_prefix("test ")?.strip_suffix(" ... FAILED"))
+        .map(str::to_owned)
+        .collect()
 }
 
 fn path_with_locked(c: &Cx) -> Result<std::ffi::OsString> {
@@ -353,8 +368,12 @@ fn trial(
         };
     }
     let tree = &c.tree;
-    if let Err(why) = gate::apply(tree, &patch.diff) {
-        refuse!(why, "patch");
+    let merged = match gate::apply_how(tree, &patch.diff, true) {
+        Ok(how) => how,
+        Err(why) => refuse!(why, "patch"),
+    };
+    if let Some(how) = &merged {
+        lines.push(how.clone());
     }
     let files = git(tree, &["diff", "--cached", "--name-only", tip])?;
     if files.is_empty() {
@@ -375,6 +394,17 @@ fn trial(
     }
     if let Err(why) = build(c) {
         refuse!(why, "build");
+    }
+    // A merge that took the tip's CLI.md: written again by the merged gp.
+    if merged
+        .as_deref()
+        .is_some_and(|m| m.contains("CLI.md written again"))
+    {
+        match gate::regenerate(tree, &built_gp(c)) {
+            Ok(true) => lines.push("CLI.md written again by the merged gp".into()),
+            Ok(false) => {}
+            Err(e) => refuse!(format!("{e:#}"), "build"),
+        }
     }
     match check_and_test(c) {
         Ok(None) => {}
@@ -526,6 +556,19 @@ mod tests {
                 roms: root.join("roms"),
             },
         }
+    }
+
+    /// A FAIL line names the tests cargo says failed.
+    #[test]
+    fn the_failed_tests_are_read_from_cargos_output() {
+        let out = "running 3 tests\ntest a::b ... ok\ntest serve::agent::tests::slow ... FAILED\ntest c ... FAILED\n\nfailures:\n";
+        assert_eq!(failed_tests(out), ["serve::agent::tests::slow", "c"]);
+        let why = run_step(
+            Command::new("sh").args(["-c", "printf 'test x::y ... FAILED\\n'; exit 101"]),
+            "cargo test",
+        )
+        .unwrap_err();
+        assert!(why.starts_with("cargo test failed (x::y):"), "{why}");
     }
 
     /// Scoring a build leaves it and the next newest, whatever the score

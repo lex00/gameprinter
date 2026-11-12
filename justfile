@@ -48,6 +48,7 @@ check: _hook-enabled build mosshop
     just play-web
     just play-web-arcade
     just mechanic-page
+    just web-parity
     {{gp}} template check templates/mosshop --rom {{quote(mosshop_rom)}}
     scripts/test-hook.sh
     python3 -I -B -m unittest discover -s scripts/romguard -q
@@ -198,6 +199,83 @@ mame-record ROMSET LOG OUT SHOT_EVERY="30":
 page out="target/page":
     just build
     GP={{quote(gp)}} scripts/web/build-page.sh ../games/donkey-kong {{quote(out)}}
+
+# The public page (docs/web.md, "The public page"), built from the games
+# repo beside this one into $GP_HOME/work/page/ and checked to hold no game
+# data; with `check`, also played headless (scripts/web/public/check-page.mjs,
+# the ROM from $GP_ROM_DIR, its ROM steps skipped without it) and its lift
+# run under Node (lift.test.mjs); `accept-pictures` writes the picture
+# sections' new hashes into scripts/web/public/pictures.txt.
+# Builds the public page; `check` plays it headless and runs the lift's tests.
+web-page *args: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{args}}" in ""|check|accept-pictures) ;; *) echo "web-page: give nothing, check or accept-pictures" >&2; exit 2 ;; esac
+    WEB_TOOLS=$(scripts/web/fetch-tools.sh {{quote(gp_home)}})
+    export WEB_TOOLS
+    out={{quote(gp_home / "work" / "page")}}
+    # The deployed page's theme, as the release check builds it.
+    export GP_PAGE_CONTENT="${GP_PAGE_CONTENT-lex00/turnips}"
+    GP={{quote(gp)}} scripts/web/build-page.sh ../games/donkey-kong "$out"
+    [ -n "{{args}}" ] || exit 0
+    browser=$(scripts/inspector/fetch-browser.sh {{quote(gp_home)}})
+    if [ -z "${PLAYWRIGHT_FROM:-}" ] && [ ! -d scripts/web/node_modules/playwright-core ]; then
+        npm ci --prefix scripts/web --silent --no-audit --no-fund
+    fi
+    shots={{quote(gp_home / "work" / "page-shots")}}
+    case "{{args}}" in
+      # Every section, the picture references among them, then the lift.
+      check)
+        node scripts/web/public/check-page.mjs --dist "$out" --browser "$browser" --shots "$shots"
+        mkdir -p "$out.lift-test/lift" "$out.lift-test/work"
+        cp -R "$out/game/lift/gp-web-lift.wasm" "$out.play/lift/"* "$out.lift-test/lift/"
+        GP_WEB_LIFT_OUT="$out.lift-test" GP_WORKER_OUT="$out.lift-test/work" node --test scripts/web/public/lift.test.mjs ;;
+      # The picture sections alone, their new hashes written into pictures.txt: look at
+      # the pictures in $GP_HOME/work/page-shots/ (MOMENT-new.png) before committing it.
+      accept-pictures) node scripts/web/public/check-page.mjs --dist "$out" --browser "$browser" --shots "$shots" --accept-pictures ;;
+    esac
+
+# The release check (docs/web.md, "Deploying the public page"): the page built at
+# this tip, its game-data check, the headless check under its headers, the
+# lift's tests, gp package scan on the game, and on a pass a record of the
+# page's digest, which `just web-page-deploy` needs. `--full` reuses nothing.
+# The page's release check, which a deploy needs a pass of.
+web-page-release *args: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{args}}" in ""|--full) ;; *) echo "web-page-release: give nothing or --full" >&2; exit 2 ;; esac
+    WEB_TOOLS=$(scripts/web/fetch-tools.sh {{quote(gp_home)}})
+    export WEB_TOOLS
+    GP={{quote(gp)}} scripts/web/release-check.sh {{args}}
+
+# Runs the full release check (`--full`: nothing reused), shows what would
+# upload, asks for the worker name, then runs `npx wrangler deploy --assets`
+# (needs `npx wrangler login` once; docs/web.md). `just web-page-deploy list`
+# stops before the upload, with wrangler's dry run.
+# Deploys the page after the full release check and a typed confirmation.
+web-page-deploy *args: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{args}}" in ""|list) ;; *) echo "web-page-deploy: give nothing or list" >&2; exit 2 ;; esac
+    WEB_TOOLS=$(scripts/web/fetch-tools.sh {{quote(gp_home)}})
+    export WEB_TOOLS
+    flag=""; [ "{{args}}" = list ] && flag="--list"
+    GP={{quote(gp)}} scripts/web/deploy.sh $flag
+
+# The web build against the native interpreter on Moss Hop's baselines
+# (docs/web.md, "Parity"): gp_web.wasm under Node and the interpreter built
+# for this machine must give the same state hash on every frame. No ROM but
+# Moss Hop. WEB_TOOLS, when set, has wasm-opt shrink the module first.
+# Moss Hop's baselines in gp_web.wasm and the native interpreter, every frame's hash.
+web-parity: build mosshop
+    #!/usr/bin/env bash
+    set -euo pipefail
+    assets={{quote(assets)}}
+    mkdir -p "$assets"
+    {{quote(gp)}} assets lift {{quote(mosshop_rom)}} --map assets/mosshop.toml -o "$assets" --force > /dev/null
+    out={{quote(target / "web" / "mosshop")}}
+    scripts/web/build-preview.sh "$out" templates/mosshop "$assets" > /dev/null
+    scripts/web/parity.sh "$out" templates/mosshop "$assets" scripts/web/parity/mosshop.toml | grep -v '^{'
 
 # Build a registry in a folder on this machine and the page that installs from it.
 local-registry:

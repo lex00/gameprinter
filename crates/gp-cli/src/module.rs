@@ -605,6 +605,88 @@ pub fn build(dir: &Path, kit_dir: &Path, out: &Path, update_lock: bool) -> Resul
     })
 }
 
+/// The tests of a game's hook crate, run as `gp game build` builds it: in
+/// the kit's tree, in the sandbox, offline and with the package's lock, for
+/// this machine rather than for the browser. The game gate runs them for a
+/// patch that changes the hook code. Exits 1 when a test fails, with
+/// cargo's last lines.
+pub fn test_hooks(dir: &Path, kit_dir: &Path) -> Result<Outcome> {
+    let dir = dir
+        .canonicalize()
+        .with_context(|| dir.display().to_string())?;
+    let kit_dir = kit_dir
+        .canonicalize()
+        .with_context(|| format!("the module kit {}", kit_dir.display()))?;
+    let manifest = read_table(&dir.join("package.toml"))?;
+    let name = manifest
+        .get("package")
+        .and_then(|p| p.get("name"))
+        .and_then(toml::Value::as_str)
+        .context("package.toml names no package")?
+        .to_owned();
+    let krate = manifest
+        .get("hooks")
+        .and_then(|h| h.get("crate"))
+        .and_then(toml::Value::as_str)
+        .context("this package has no [hooks] crate")?;
+    let ext = dir.join(krate);
+    let toolchain = toolchain_dir(&kit_dir)?;
+    // A folder of its own, so the build's cargo output is left alone.
+    let work = work_dir(&format!("{name}-test"))?;
+    let src = work.join("src");
+    let mut files = read_all(&kit_dir)?;
+    files.retain(|rel, _| rel != "Cargo.lock" && !rel.starts_with(&format!("crates/{SLOT}/")));
+    for (rel, bytes) in read_all(&dir)? {
+        files.insert(format!("package/{rel}"), bytes);
+    }
+    for (rel, bytes) in read_all(&ext)? {
+        if rel != "Cargo.toml" && rel != "Cargo.lock" {
+            files.insert(format!("crates/{SLOT}/{rel}"), bytes);
+        }
+    }
+    files.insert(
+        format!("crates/{SLOT}/Cargo.toml"),
+        slot_manifest(&ext)?.into_bytes(),
+    );
+    let lock = dir.join("Cargo.lock");
+    files.insert(
+        "Cargo.lock".into(),
+        fs::read(&lock).with_context(|| lock.display().to_string())?,
+    );
+    write_tree(&files, &src)?;
+    let mut c = sandboxed(
+        &work,
+        &toolchain,
+        &["test", "-q", "--locked", "--offline", "-p", SLOT],
+    )?;
+    c.current_dir(&src)
+        .env("CARGO_TARGET_DIR", work.join("target"));
+    let o = c.output().context("starting cargo test in the sandbox")?;
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let passed: u64 = all
+        .lines()
+        .filter_map(|l| l.strip_prefix("test result: ")?.split("; ").next())
+        .filter_map(|p| p.split_whitespace().nth(1)?.parse::<u64>().ok())
+        .sum();
+    if o.status.success() {
+        return Ok(Outcome::ok(
+            json!({ "passed": passed }),
+            format!("{krate}: {passed} tests pass"),
+        ));
+    }
+    let tail: Vec<&str> = all.lines().filter(|l| !l.trim().is_empty()).collect();
+    let tail = tail[tail.len().saturating_sub(20)..].join("\n");
+    Ok(Outcome {
+        json: json!({ "passed": passed, "failed": crate::tool_gate::failed_tests(&all) }),
+        text: format!("{krate}: the tests fail:\n{tail}"),
+        exit: 1,
+    })
+}
+
 pub fn hash(file: &Path) -> Result<Outcome> {
     let bytes = fs::read(file).with_context(|| file.display().to_string())?;
     let h = blake3::hash(&bytes).to_hex().to_string();

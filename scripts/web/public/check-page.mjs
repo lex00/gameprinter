@@ -40,9 +40,10 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../../..");
-// playwright-core comes from editor/node_modules (`npm ci` in editor/), or
-// PLAYWRIGHT_FROM names another package.json whose node_modules has it.
-const from = process.env.PLAYWRIGHT_FROM ?? join(here, "../../../editor/package.json");
+// playwright-core comes from scripts/web/node_modules (`npm ci --prefix
+// scripts/web`), or PLAYWRIGHT_FROM names another package.json whose
+// node_modules has it.
+const from = process.env.PLAYWRIGHT_FROM ?? join(here, "../package.json");
 const require_ = createRequire(from);
 const { chromium } = require_("playwright-core");
 const playwrightVersion = JSON.parse(readFileSync(require_.resolve("playwright-core/package.json"), "utf8")).version;

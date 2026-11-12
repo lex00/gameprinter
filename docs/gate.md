@@ -14,6 +14,48 @@ gp model gate donkey-kong --patch "$GP_WORKER_OUT/fix.patch" --onto main -m "Don
 
 `gp model gate` scores the game's corpus on the tip of `games`, applies the patch, builds the game's module if its hooks changed, scans the package for ROM data, checks the model, and scores the corpus again. If no clip got worse, the commit lands on the branch. A patch that removes a clip from the corpus has to name it with `--removes`, or the gate refuses it. `--dry-run` says PASS or FAIL and lands nothing.
 
+In order, a try of a patch (or of a batch's patches, below) on the tip:
+
+| Step | What |
+|---|---|
+| Patch | Applied as it is (`git apply --index`). A patch made on an older tip that no longer applies is merged onto the tip three ways (`git apply --3way`) and the merge is gated; a merge that conflicts is a FAIL naming the files. Three kinds of file have a rule for a conflict: CLI.md, which gp writes of itself, takes the tip's side and the tool gate writes it again with the merged build; an append-only file ("Append-only files" below) keeps both sides' added rows; a game's model.toml or fidelity.toml is merged through its canonical text (`gp model fmt`'s), so a patch made on a hand-laid layout lands as the facts it changes. `--no-rebase` turns the merge off: the patch must apply as it is. A patch may change only the game's folder |
+| Hook | The ROM-blocking hook over what is staged, before each commit, so a ROM's bytes never become a commit |
+| Removed clips | A clip the patch removes from corpus.toml fails unless `--removes` names it |
+| Module | The game's module built for its hook code, once per hook code and kit |
+| Package scan | A needs-rewrite item the tip doesn't have is a FAIL |
+| Model | `gp model check` against the lifted assets, and `gp model fmt --check`: model.toml and fidelity.toml stay in canonical form (the old guard.py's `models`) |
+| Loads | No ROM the package loads only to play (a `[[rom.entry]]` whose role isn't `scored`, or a template.toml `[[loads]]`) is named as template.toml's `[source]` or corpus.toml's `[target]` (the old `ju_rom.py`): no tool may score or gate on one |
+| Themes | Each theme's files against their pins |
+| Hook tests | When the patch changes the hook crate (or the package's Cargo.lock), the crate's own tests, built from the kit in the build sandbox for this machine (`cargo test -p gp-ext-game`, about 12 s cold) |
+| Corpus | Every clip scored and compared with the tip's: a clip at 100% stays there, no bar a clip met is lost, no clip that scored stops scoring. A patch to the model's `present` sections and themes alone is held to the picture too |
+| Land | Committed in the gate's worktree and fast-forwarded onto the branch, else the branch's ref is moved if it is still at the tip scored |
+
+### Batches
+
+Gates on one home run one at a time. A gate that waits leaves a ticket in the home's `queue/` with a copy of its patch. The gate whose turn comes takes up to seven waiting patches on the same repo, game, branch and run into its batch, in the order they asked: each patch is tried alone on the tip first (it applies, the hook passes), then the Markdown-only ones (the free lane: no score reads them, so the hook is their check) are committed, then the rest are gated together on top of them. A batch that fails is split in halves: the first half is settled, then the second on what the first left passing, and a first half that all passed means the failure is in the second, so it isn't tried whole again. A patch that fails on its own (doesn't apply, the hook, an unnamed removed clip) drops out without a split. What passed lands at once, and each waiting gate prints its own patch's outcome, with the batch's lines. A gate with `--dry-run` or `--no-rebase` batches with no other. A gate whose batch-taker dies before it answers gates its patch itself.
+
+A batch commits each patch in the gate's worktree before the package scan and the score, so a FAIL can leave unlanded commits there; nothing lands on the branch unless the whole state passes.
+
+When the branch's tip moves while a gate runs, the gate runs again on the new tip, up to five times in all, merging the patches onto it as above.
+
+### Guards the old gate had that the game gate doesn't
+
+The old `scripts/check/guard.py` ran these on the old one-repo gate. Each is accounted for:
+
+| Guard | Here |
+|---|---|
+| fmt, clippy | The tool gate's `just check`; a game patch changes no Rust in gameprinter, and its hook crate is built and tested by the steps above |
+| models | The game gate's Model step |
+| pictures | The game gate's picture rule |
+| loads | The game gate's Loads step |
+| data | The tool gate runs every test; for a game, its hook crate's tests (Hook tests) |
+| prose | Not yet: the site's prose lint (`site/scripts/lint-prose.mjs`) hasn't come over |
+| fonts | Not yet: `gp template font` hasn't come over |
+| originals | Not yet: the original templates (Badge In, Signal Failure, Swing State) haven't come over |
+| budgets | Not yet: gp-metrics and the budget files haven't come over |
+
+The check levels (`just check-change`, `just check-batch`, scripts/check/level.py) and the flaky quarantine (flaky.txt, nightly.txt) are not brought back: they chose which tests a gate try ran to save time in the old gate's batches of tool patches. The tool gate runs all of `just check` and the whole test suite for every patch, and a quarantine list would let a patch skip tests, which the tool gate exists to stop.
+
 Run it from a checkout of `games` (your worktree is fine). A patch may change only that game's folder.
 
 ### A working copy with no git
@@ -41,6 +83,8 @@ A worker started with `--rust` has its own build on `PATH` in place of the publi
 4. runs the Donkey Kong canary, the game gate's no-op scored through the patched gp and through the tip's gp: every clip must score at least as well;
 5. commits, moves the branch and publishes the new build.
 
+The patch is applied, or merged three ways onto a newer tip, by the game gate's rules ("Patch" above). When the merge took the tip's CLI.md, the merged build writes it again before `just check`. A failing test step names the tests cargo says failed.
+
 The canary reads the `games` checkout beside the repo (`--games DIR` or `$GP_GAMES_DIR` to name another) and needs the ROM in `$GP_ROM_DIR`; with no ROM it says so and passes without it. Each scored build keeps a home of about 1.1 GB under `<gate home>/tool/canary/`; the gate keeps the two newest and removes the rest. A failed step ends the gate with its last lines and nothing landed. `--dry-run` runs the whole gate and lands nothing. The first gate on a tip builds and publishes that tip first, which is what the canary compares against, so later gates on the same tip are faster.
 
 ## Published builds
@@ -52,3 +96,13 @@ gp=$($GP_HOME/bin/gp self path) && "$gp" corpus score ...
 ```
 
 `gp self path` prints the file behind the link, to hold one build through a long job, and exits 1 when none is published. `just publish` publishes the build of the commit checked out here, for a first setup.
+
+## Append-only files
+
+Some files every lane appends to. Two patches made on one tip each add rows at the end, so the second's three-way merge conflicts there. A conflict in an append-only file is resolved by its rows (`crates/gp-cli/src/gate_append.rs`): every line the base has stays as it is, and at each place both sides added lines, both sides' lines are kept, in date order by the first cell (`| YYYY-MM-DD |`), each side's own order kept and the tip's first on a tie; a line both added is kept once. A side that changed or dropped a line the base has is still a conflict, and the patch fails naming the file. The rest of the file merges as git merges it.
+
+| File | What appends to it |
+|---|---|
+| `docs/research/deterministic-inference.md` | The notes log: a dated row from each lane that finds a rule by a signal a tool could read (comes back with the research docs) |
+
+A file joins the list by a row here and in `APPEND_ONLY` in gate_append.rs; a test holds the two lists together.

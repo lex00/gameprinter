@@ -1,0 +1,24 @@
+# Moss Hop's inputs for the web parity check (docs/web.md, "Parity"): its
+# baselines, played by the web build and the native interpreter with the
+# same state hash on every frame. Moss Hop has no hooks, so the label is
+# empty on both sides.
+
+[[clip]]
+name = "finish-level"
+baseline = "baselines/mosshop/finish-level.toml"
+
+[[clip]]
+name = "jump-height"
+baseline = "baselines/mosshop/jump-height.toml"
+
+[[clip]]
+name = "slug-death"
+baseline = "baselines/mosshop/slug-death.toml"
+
+[[clip]]
+name = "stomp-then-pit"
+baseline = "baselines/mosshop/stomp-then-pit.toml"
+
+[[clip]]
+name = "walk-and-turn"
+baseline = "baselines/mosshop/walk-and-turn.toml"
