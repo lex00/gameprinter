@@ -44,6 +44,7 @@ check: _hook-enabled build mosshop
     {{gp}} assets pack {{quote(assets)}} --check {{quote(mosshop_rom)}}
     {{gp}} model check templates/mosshop --assets {{quote(assets)}}
     {{gp}} model fmt --check templates/mosshop
+    {{gp}} labels check templates/mosshop/mapping.toml
     just _interp-mosshop
     just play-web
     just play-web-arcade

@@ -66,6 +66,9 @@ pub enum RomsCmd {
         #[arg(long)]
         games: Option<PathBuf>,
     },
+    /// Compare the PRG and CHR data of two NES images. Either side may be a
+    /// raw PRG binary, such as a disassembly build.
+    Diff(crate::romdiff::DiffArgs),
 }
 
 pub fn run(cmd: &RomsCmd, paths: &Paths) -> Result<Outcome> {
@@ -92,6 +95,7 @@ pub fn run(cmd: &RomsCmd, paths: &Paths) -> Result<Outcome> {
             let (reg, _) = sources(games.as_deref())?;
             romclean::clean(file, out, *force, &reg)
         }
+        RomsCmd::Diff(a) => crate::romdiff::run(a),
     }
 }
 

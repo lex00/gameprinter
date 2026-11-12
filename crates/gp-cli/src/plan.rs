@@ -99,8 +99,20 @@ pub(crate) struct Loaded {
 /// The plan in `dir`, or `None` when its `corpus.toml` is the older kind or
 /// there is none.
 pub(crate) fn load(dir: &Path) -> anyhow::Result<Option<Loaded>> {
-    let file = dir.join(FILE);
-    let Ok(text) = fs::read_to_string(&file) else {
+    let read = |rel: &str| -> anyhow::Result<String> {
+        fs::read_to_string(dir.join(rel)).with_context(|| format!("reading {rel}"))
+    };
+    load_with(&read, &dir.join(FILE))
+}
+
+/// [`load`] with each file of the game's folder, by its path in the
+/// folder, read by `read`: a folder as a git revision has it, for `gp
+/// corpus bump`. `file` names the plan in messages.
+pub(crate) fn load_with(
+    read: &dyn Fn(&str) -> anyhow::Result<String>,
+    file: &Path,
+) -> anyhow::Result<Option<Loaded>> {
+    let Ok(text) = read(FILE) else {
         return Ok(None);
     };
     let major = toml::from_str::<toml::Value>(&text)
@@ -133,7 +145,7 @@ pub(crate) fn load(dir: &Path) -> anyhow::Result<Option<Loaded>> {
                 c.id
             );
         }
-        let (recipe, hash) = recipe(dir, c).with_context(|| format!("clip {}", c.id))?;
+        let (recipe, hash) = recipe(read, c).with_context(|| format!("clip {}", c.id))?;
         recipes.insert(c.id.clone(), hash);
         clips.push(recipe);
     }
@@ -173,22 +185,28 @@ pub(crate) fn load(dir: &Path) -> anyhow::Result<Option<Loaded>> {
 }
 
 /// A `.presses` file of the plan: its frames and spans.
-fn presses(dir: &Path, rel: &str) -> anyhow::Result<(u64, Vec<String>)> {
+fn presses(
+    read: &dyn Fn(&str) -> anyhow::Result<String>,
+    rel: &str,
+) -> anyhow::Result<(u64, Vec<String>)> {
     if !cs::inside(rel) {
         bail!("{rel} isn't inside the game's folder");
     }
-    let text = fs::read_to_string(dir.join(rel)).with_context(|| format!("reading {rel}"))?;
+    let text = read(rel)?;
     cs::parse_presses(&text).with_context(|| rel.to_owned())
 }
 
 /// A clip as a recipe, and its recipe hash: the BLAKE3 of its canonical
 /// JSON, over its ID, its start's input, its presses and its frames.
-fn recipe(dir: &Path, c: &PlanClip) -> anyhow::Result<(Recipe, String)> {
-    let (start_frames, start_spans) = presses(dir, &c.start)?;
+fn recipe(
+    read: &dyn Fn(&str) -> anyhow::Result<String>,
+    c: &PlanClip,
+) -> anyhow::Result<(Recipe, String)> {
+    let (start_frames, start_spans) = presses(read, &c.start)?;
     let (own, presses_file) = match &c.presses {
         Presses::Spans(spans) => (spans.clone(), None),
         Presses::File(rel) => {
-            let (frames, spans) = presses(dir, rel)?;
+            let (frames, spans) = presses(read, rel)?;
             if frames != c.frames {
                 bail!("{rel} has {frames} frames, the plan says {}", c.frames);
             }
@@ -254,6 +272,46 @@ pub(crate) fn curve_set_hash(curves: &BTreeMap<String, (String, String)>) -> Str
         s.push('\n');
     }
     format!("{PREFIX}{}", gp_evidence::Hash::of(s.as_bytes()))
+}
+
+/// The name of the table a TOML line heads (`corpus`, `clip` for
+/// `[[clip]]`, `import.exclude`), if it heads one.
+fn header(line: &str) -> Option<&str> {
+    let l = line.split_once('#').map_or(line, |(a, _)| a).trim();
+    let inner = l
+        .strip_prefix("[[")
+        .and_then(|x| x.strip_suffix("]]"))
+        .or_else(|| l.strip_prefix('[').and_then(|x| x.strip_suffix(']')))?
+        .trim();
+    (inner.starts_with(|c: char| c.is_ascii_alphabetic())
+        && inner
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c)))
+    .then_some(inner)
+}
+
+/// A TOML file's tables: each one's name and its lines, from its header to
+/// its last line that isn't blank or a comment. The lines between
+/// (comments, blank lines) are no table's.
+pub(crate) fn tables(lines: &[&str]) -> Vec<(String, usize, usize)> {
+    let heads: Vec<(usize, &str)> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(i, l)| header(l).map(|h| (i, h)))
+        .collect();
+    let mut out = Vec::new();
+    for (k, &(i, h)) in heads.iter().enumerate() {
+        let to = heads.get(k + 1).map_or(lines.len(), |&(j, _)| j);
+        let end = (i..to)
+            .rev()
+            .find(|&j| {
+                let l = lines[j].trim();
+                !l.is_empty() && !l.starts_with('#')
+            })
+            .map_or(i + 1, |j| j + 1);
+        out.push((h.to_owned(), i, end));
+    }
+    out
 }
 
 #[cfg(test)]

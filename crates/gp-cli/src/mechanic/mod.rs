@@ -31,8 +31,9 @@
 //! tabs (the rebuild reviewed beside the original and played live,
 //! [`live`]), the store of sealed runs the page writes, and the decision
 //! model at the controller ([`demo`]). The analysis commands (contacts,
-//! sweep, probe, leads, harvest, compare, video), the sealed guard and the
-//! corpus import aren't here.
+//! sweep, probe, leads, harvest, compare, video) aren't here. The corpus
+//! import is `gp corpus import` (crate::corpus_import), and sealed runs are
+//! scored by `gp sealed` (crate::sealed).
 
 use std::path::PathBuf;
 

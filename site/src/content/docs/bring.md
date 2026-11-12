@@ -17,6 +17,8 @@ Each file is named by the game whose `roms.toml` in your [games checkout](https:
 
 `gp roms scan` lists what's in the folder and which game each file belongs to.
 
+If the game has several revisions, compare them and choose one as the target. `gp roms diff a.nes b.nes --summary` lists each range of PRG and CHR that differs, named by the first one's asset map and labels (graphics, level data, a table, code), without quoting any byte. When the two programs sit at different offsets, `--cpu C000-FFFF` compares what the CPU sees there instead. `docs/roms-diff.md` in the gameprinter repo has the rest.
+
 ## 2. Start the game's folder
 
 ```sh
@@ -51,6 +53,25 @@ Clips are kept as presses, never pictures, under `~/.gameprinter/mechanics/my-ga
 Beside the game, **Your agent** shows what the agent is doing while you play: its status and a log (`gp mechanic log`), pictures and clips it pins for you to look at (`gp mechanic pin`, such as a sheet of frames or the original against the model), and a table of the problems it has found with the state of each (`gp mechanic problem`). Tell it what you see in the conversation.
 
 Each clip in the list has an **ON THE MODEL** button: it plays the clip through the original and through the game's model, the way the score does, and shows the two side by side, the model over the original, or their differences, frame by frame. A strip under the pictures is green where the two agree and red where they differ, and the DIFF buttons jump between differences. A game whose model has hooks runs in its module: start the page with `--module FILE` (`gp game build` makes it), or keep it at `~/.gameprinter/work/modules/GAME.wasm`.
+
+## 4. Put the clips in the corpus
+
+The clips you hand off stay in the session until they join the game's corpus, the clips its model is scored against:
+
+```sh
+gp corpus import my-game
+gp corpus import my-game --write
+```
+
+The first says which clips it would add, change and leave out, and the version step; `--write` writes them into `corpus.toml` and `inputs/` and records the new version. A clip already there is kept as it is, and nothing is removed unless you name it with `--remove`. `--session walk` takes only that session's clips. Sealed runs, rows marked out of scope and anything `[import] exclude` names stay out. After editing `corpus.toml` by hand, `gp corpus bump my-game` says what changed since the recorded version and `--write` records the next one. The format and the version rules are in `docs/formats/scoring-corpus.md` in the gameprinter repo.
+
+## Tools for reading the game
+
+Your agent reads the original with these, and you can too.
+
+A game can keep a labels file, `labels.toml` in its folder, naming its RAM variables, routines and data tables. `gp labels show my-game` lists it, `gp labels lookup my-game '$0400'` (an address or a name) finds what's there, and `gp labels check my-game/mapping.toml` lists every RAM address the state mapping reads that has no label. The format is in `docs/formats/labels.md` in the gameprinter repo.
+
+`gp model mechanics my-game --module ~/.gameprinter/work/modules/my-game.wasm` lists the mechanics the model uses, from the records its components and hooks declare, with the class of every model path and the hooks that are still game-specific code. It exits 1 when the model and a record disagree. A model with no hooks needs no `--module`. `docs/mechanics.md` in the gameprinter repo has the catalog's parts.
 
 ## An arcade game
 

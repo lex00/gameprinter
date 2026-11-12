@@ -32,6 +32,84 @@ pub(crate) const PREDICATE: &str = "urn:game-printer:score-record:0";
 
 #[derive(Subcommand)]
 pub enum CorpusCmd {
+    /// Write corpus.toml beside DIR/clips.toml, so an older clip set becomes
+    /// a scoring corpus with a name, a version (1.0.0 unless given), the ROM
+    /// and mapping from the set and the content hash of its recipes. A game
+    /// started by `gp game new` has a corpus plan already.
+    Init {
+        dir: PathBuf,
+        /// The corpus's name: lowercase letters, digits, `-` and `_`.
+        #[arg(long)]
+        name: String,
+        #[arg(long, default_value = "1.0.0")]
+        version: String,
+        /// A title for people.
+        #[arg(long)]
+        title: Option<String>,
+        /// For a hack: the patch's SHA-256, applied to the base ROM.
+        #[arg(long)]
+        patch: Option<String>,
+        /// The changelog line (default: "First version: N clips.").
+        #[arg(long)]
+        says: Option<String>,
+        /// The changelog date, YYYY-MM-DD (default: today, UTC).
+        #[arg(long)]
+        date: Option<String>,
+    },
+    /// The next version from the clips' changes since the version corpus.toml
+    /// records. A clip added is minor; a clip removed, a recipe changed, or
+    /// another ROM or mapping is major; metadata only is a patch. A plan's
+    /// clips are compared with the plan git has at HEAD. `--write` records
+    /// it with a changelog entry.
+    Bump {
+        dir: PathBuf,
+        #[arg(long)]
+        write: bool,
+        /// The changelog line.
+        #[arg(long)]
+        says: Option<String>,
+        /// The changelog date, YYYY-MM-DD (default: today, UTC).
+        #[arg(long)]
+        date: Option<String>,
+    },
+    /// Turn GAME's mechanic sessions ($GP_HOME/mechanics/GAME) into the
+    /// clips of its corpus plan: every clip of every session, as its presses
+    /// from power-on to its start and its own, in inputs/. Sealed sessions
+    /// stay out, and so do clips whose inputs are a sealed run's
+    /// ($GP_HOME/sealed/GAME). Rows out of scope in the quest log stay out
+    /// too, as does what the plan's [import] excludes. Prints what changed
+    /// and the version step; `--write` writes the clips and records the
+    /// version.
+    Import {
+        game: String,
+        /// The game's folder (default: GAME in the games checkout).
+        #[arg(long)]
+        template: Option<PathBuf>,
+        /// The home holding the sessions, their paths and the sealed runs
+        /// (default: $GP_HOME).
+        #[arg(long)]
+        from: Option<PathBuf>,
+        #[arg(long)]
+        write: bool,
+        /// The changelog line (default: the clips added, changed and
+        /// removed).
+        #[arg(long)]
+        says: Option<String>,
+        /// The changelog date, YYYY-MM-DD (default: today, UTC).
+        #[arg(long)]
+        date: Option<String>,
+        /// A clip to remove from the plan: its ID, or a pattern with `*`
+        /// (`dk.climb-sweep.*`). Repeat it for each. No other clip is
+        /// removed: a clip whose session isn't in the home, or that the
+        /// sessions now leave out, is kept as it is.
+        #[arg(long, value_name = "ID")]
+        remove: Vec<String>,
+        /// Import only this session's clips (repeat it for each), so a
+        /// worker importing from a shared home adds its own sessions and
+        /// nobody else's. The plan's other clips are left as they are.
+        #[arg(long, value_name = "NAME")]
+        session: Vec<String>,
+    },
     /// Score a game's corpus on a model: every clip made again from the
     /// ROM, played through the model and checked against its curve. Prints
     /// the clips exact and the fidelity and, with --json, the score record.
@@ -76,6 +154,51 @@ pub enum CorpusCmd {
 
 pub(crate) fn run(cmd: &CorpusCmd, paths: &Paths) -> Result<Outcome> {
     match cmd {
+        CorpusCmd::Init {
+            dir,
+            name,
+            version,
+            title,
+            patch,
+            says,
+            date,
+        } => init(
+            dir,
+            name,
+            version,
+            title.as_deref(),
+            patch.as_deref(),
+            says.as_deref(),
+            date.as_deref(),
+        ),
+        CorpusCmd::Bump {
+            dir,
+            write,
+            says,
+            date,
+        } => bump(dir, *write, says.as_deref(), date.as_deref()),
+        CorpusCmd::Import {
+            game,
+            template,
+            from,
+            write,
+            says,
+            date,
+            remove,
+            session,
+        } => crate::corpus_import::run(
+            &crate::corpus_import::Args {
+                game,
+                template: template.as_deref(),
+                from: from.as_deref(),
+                write: *write,
+                says: says.as_deref(),
+                date: date.as_deref(),
+                remove,
+                sessions: session,
+            },
+            paths,
+        ),
         CorpusCmd::Score {
             game,
             run,
@@ -532,6 +655,268 @@ fn today(date: Option<&str>) -> Result<String> {
 
 // ---- Commands ----
 
+/// `gp corpus init`: a manifest beside an older `clips.toml`.
+pub(crate) fn init(
+    dir: &Path,
+    name: &str,
+    version: &str,
+    title: Option<&str>,
+    patch: Option<&str>,
+    says: Option<&str>,
+    date: Option<&str>,
+) -> Result<Outcome> {
+    if !valid_name(name) {
+        bail!("--name {name:?} isn't lowercase letters, digits, - and _");
+    }
+    let v = Version::parse(version)?;
+    if dir.join(FILE).is_file() {
+        bail!(
+            "{} is there already; gp corpus bump records a new version",
+            dir.join(FILE).display()
+        );
+    }
+    let now = load(dir)?;
+    let h = &now.set.clipset;
+    if h.rom.is_empty() {
+        bail!(
+            "{}'s [clipset] names no rom; a corpus is for one ROM",
+            cs::FILE
+        );
+    }
+    let c = CorpusFile {
+        corpus: Head {
+            format: cs::FORMAT.into(),
+            name: name.into(),
+            version: v.to_string(),
+            title: title.unwrap_or_default().into(),
+            hash: now.hash.clone(),
+            metadata: now.metadata.clone(),
+            ..Head::default()
+        },
+        target: Target {
+            game: h.game.clone(),
+            rom: h.rom.clone(),
+            patch: patch.unwrap_or_default().into(),
+        },
+        needs: Needs {
+            generator: h.generator.clone(),
+            mapping: h.mapping.clone(),
+        },
+        recipes: now.recipes.clone(),
+        changelog: vec![Change {
+            version: v.to_string(),
+            date: today(date)?,
+            says: says.map_or_else(
+                || format!("First version: {} clips.", now.recipes.len()),
+                str::to_owned,
+            ),
+            ..Change::default()
+        }],
+    };
+    let file = write_manifest(dir, &c)?;
+    Ok(Outcome::ok(
+        json!({"file": file, "name": name, "version": c.corpus.version, "hash": c.corpus.hash,
+            "clips": now.recipes.len()}),
+        format!(
+            "Corpus {name} {} with {} clips, hash {}: {}.",
+            c.corpus.version,
+            now.recipes.len(),
+            short(&c.corpus.hash),
+            file.display()
+        ),
+    ))
+}
+
+/// `gp corpus bump`: a plan's by [`plan_bump`], an older clip set's against
+/// the recipes its manifest records.
+pub(crate) fn bump(
+    dir: &Path,
+    write: bool,
+    says: Option<&str>,
+    date: Option<&str>,
+) -> Result<Outcome> {
+    if crate::plan::load(dir)?.is_some() {
+        return plan_bump(dir, write, says, date, None);
+    }
+    bump_as(dir, write, says, date, false)
+}
+
+/// A plan as git has it at HEAD, by each file's path in the game's folder.
+fn plan_at_head(dir: &Path) -> Option<crate::plan::Loaded> {
+    let read = |rel: &str| -> Result<String> {
+        let o = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["show", &format!("HEAD:./{rel}")])
+            .output()
+            .context("running git")?;
+        if !o.status.success() {
+            bail!(
+                "git show HEAD:{rel}: {}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8(o.stdout)?)
+    };
+    crate::plan::load_with(&read, &dir.join(FILE))
+        .ok()
+        .flatten()
+}
+
+/// The version a plan's recipes make since the version it records, and with
+/// `write`, that version and its recipe-set hash written in place with a
+/// changelog entry. A plan records only the recipe-set hash, so each clip's
+/// recorded recipe is `known` (the import's, when the plan was as recorded
+/// before it), else the plan git has at HEAD when that is the recorded
+/// version. Without either, a changed hash is a major step.
+pub(crate) fn plan_bump(
+    dir: &Path,
+    write: bool,
+    says: Option<&str>,
+    date: Option<&str>,
+    known: Option<&BTreeMap<String, String>>,
+) -> Result<Outcome> {
+    let Some(now) = crate::plan::load(dir)? else {
+        bail!("{} has no corpus plan", dir.display());
+    };
+    let m = &now.manifest;
+    let recorded = &m.corpus.hash;
+    let head = if known.is_none() && now.hash != *recorded {
+        plan_at_head(dir).filter(|h| h.hash == *recorded)
+    } else {
+        None
+    };
+    let mut d = Diff::default();
+    if now.hash != *recorded {
+        match known.or(head.as_ref().map(|h| &h.recipes)) {
+            Some(was) => {
+                for (id, h) in &now.recipes {
+                    match was.get(id) {
+                        None => d.added.push(id.clone()),
+                        Some(x) if x != h => d.changed.push((id.clone(), vec!["recipe"])),
+                        _ => {}
+                    }
+                }
+                for id in was.keys() {
+                    if !now.recipes.contains_key(id) {
+                        d.removed.push(id.clone());
+                    }
+                }
+            }
+            None => d.target.push(format!(
+                "recipes {} -> {}: no recorded version to compare clip by clip (the plan at git HEAD isn't it)",
+                short(recorded),
+                short(&now.hash)
+            )),
+        }
+    }
+    if let Some(h) = &head {
+        let (a, b) = (&h.manifest, m);
+        if a.target.rom != b.target.rom {
+            d.target.push(format!(
+                "rom {} -> {}",
+                or_none(&a.target.rom),
+                b.target.rom
+            ));
+        }
+        if a.needs.mapping != b.needs.mapping {
+            d.target.push(format!(
+                "mapping {} -> {}",
+                or_none(&a.needs.mapping),
+                b.needs.mapping
+            ));
+        }
+    }
+    let from = Version::parse(&m.corpus.version)?;
+    let step = d.step();
+    let to = from.next(step);
+    let mut text = d.lines();
+    let mut v = d.json();
+    v["step"] = json!(step.name());
+    v["name"] = json!(m.corpus.name);
+    v["version"] = json!(m.corpus.version);
+    v["suggests"] = json!(to.to_string());
+    if step == Step::None {
+        text.push(format!(
+            "Corpus {} {} is as recorded: nothing to bump.",
+            m.corpus.name, m.corpus.version
+        ));
+        v["written"] = json!(false);
+        return Ok(Outcome::ok(v, text.join("\n")));
+    }
+    text.push(format!(
+        "{} added, {} removed, {} changed since {}: a {} step, {from} -> {to}.",
+        d.added.len(),
+        d.removed.len(),
+        d.changed.len(),
+        m.corpus.version,
+        step.name()
+    ));
+    if write {
+        let file = dir.join(FILE);
+        let before = fs::read_to_string(&file)?;
+        let change = Change {
+            version: to.to_string(),
+            date: today(date)?,
+            says: says.unwrap_or_default().into(),
+            added: d.added.clone(),
+            removed: d.removed.clone(),
+            changed: d.changed.iter().map(|(id, _)| id.clone()).collect(),
+        };
+        fs::write(
+            &file,
+            plan_versioned(&before, &to.to_string(), &now.hash, &change)?,
+        )
+        .with_context(|| format!("writing {}", file.display()))?;
+        text.push(format!("Recorded {to} in {}.", file.display()));
+    }
+    v["written"] = json!(write);
+    Ok(Outcome::ok(v, text.join("\n")))
+}
+
+/// A plan's text with its `[corpus]` version and recipe-set hash set and a
+/// changelog entry added at its end; every other byte kept.
+fn plan_versioned(text: &str, version: &str, recipes: &str, change: &Change) -> Result<String> {
+    #[derive(Serialize)]
+    struct Log<'a> {
+        changelog: [&'a Change; 1],
+    }
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let tabs = crate::plan::tables(&lines);
+    let Some((_, from, to)) = tabs.iter().find(|(n, _, _)| n == "corpus") else {
+        bail!("the plan has no [corpus] table");
+    };
+    let mut out = String::new();
+    let (mut set_version, mut set_recipes) = (false, false);
+    for (i, l) in lines.iter().enumerate() {
+        let key = l.split('=').next().unwrap_or("").trim();
+        if i > *from && i < *to && key == "version" {
+            out.push_str(&format!("version = {}\n", toml::Value::from(version)));
+            set_version = true;
+        } else if i > *from && i < *to && key == "recipes" {
+            out.push_str(&format!("recipes = {}\n", toml::Value::from(recipes)));
+            set_recipes = true;
+        } else {
+            out.push_str(l);
+        }
+    }
+    if !(set_version && set_recipes) {
+        bail!("the plan's [corpus] has no version or recipes line");
+    }
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push('\n');
+    out.push_str(
+        toml::to_string(&Log {
+            changelog: [change],
+        })?
+        .trim_end(),
+    );
+    out.push('\n');
+    Ok(out)
+}
+
 fn bump_as(
     dir: &Path,
     write: bool,
@@ -756,7 +1141,7 @@ pub(crate) fn build() -> String {
 
 /// The hash of a model's text as the record names it: its canonical tree's,
 /// else the text's, so a reformatted model gets the same record.
-fn model_key(text: &str) -> String {
+pub(crate) fn model_key(text: &str) -> String {
     gp_model::Model::parse(text)
         .ok()
         .and_then(|m| toml::to_string(&m.to_tree()).ok())

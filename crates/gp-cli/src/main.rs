@@ -9,6 +9,7 @@ mod cli_doc;
 mod clip;
 mod clip_score;
 mod clipset;
+mod corpus_import;
 mod corpus_score;
 mod game;
 mod game_new;
@@ -17,8 +18,10 @@ mod gate_append;
 mod gate_copy;
 mod gate_queue;
 mod hosted;
+mod labels;
 mod lockstep;
 mod mechanic;
+mod mechanics;
 mod model;
 mod module;
 mod original;
@@ -28,11 +31,13 @@ mod pool;
 mod publish;
 mod registry;
 mod romclean;
+mod romdiff;
 mod roms;
 mod roms_cmd;
 mod run;
 mod scenario;
 mod screen;
+mod sealed;
 mod search;
 mod served;
 mod tape;
@@ -128,10 +133,22 @@ enum Cmd {
         #[command(subcommand)]
         cmd: mechanic::MechanicCmd,
     },
+    /// A game's labels: names for its RAM, routines and data tables
+    /// (docs/formats/labels.md).
+    Labels {
+        #[command(subcommand)]
+        cmd: labels::LabelsCmd,
+    },
     /// The ROMs you own, kept in $GP_ROM_DIR: add, list and clean them.
     Roms {
         #[command(subcommand)]
         cmd: roms_cmd::RomsCmd,
+    },
+    /// Sealed runs: held-out play scored by the coordinator alone
+    /// (docs/sealed.md).
+    Sealed {
+        #[command(subcommand)]
+        cmd: sealed::SealedCmd,
     },
     /// Make, publish to and test registries.
     Registry {
@@ -204,6 +221,16 @@ enum ModelCmd {
     /// Hold a patch to a game in the games repo to its corpus: PASS or FAIL,
     /// and what passes lands.
     Gate(gate::GateArgs),
+    /// A model's mechanic catalog: every mechanic it uses, from the record
+    /// the simulation's components and the model's hooks declare (system,
+    /// parameters with types, units and ranges, reads and writes, events,
+    /// assumptions, invariants, measures, the primitives it's built from,
+    /// and for a hook the general mechanic it's like), the class of every
+    /// model path (mechanic, parameter, content or presentation), the hooks
+    /// that are still game-specific code, and the problems found by holding
+    /// the model to the records (docs/mechanics.md). Exits 1 when the model
+    /// and a record disagree.
+    Mechanics(mechanics::MechanicsArgs),
     /// Fail if the model or contract isn't in canonical form.
     Fmt {
         dir: PathBuf,
@@ -510,6 +537,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             ModelCmd::Check { dir, assets } => model::check(dir, assets.as_deref()),
             ModelCmd::Fmt { dir, .. } => model::fmt_check(dir),
             ModelCmd::Gate(a) => gate::run(a, &gp_evidence::Paths::from_env()?),
+            ModelCmd::Mechanics(a) => mechanics::run(a, &gp_evidence::Paths::from_env()?),
         },
         Cmd::Baseline {
             cmd: BaselineCmd::Check { files, rom },
@@ -631,6 +659,8 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                 },
         } => module::build(dir, kit, out, *update_lock),
         Cmd::Roms { cmd } => roms_cmd::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Labels { cmd } => labels::run(cmd),
+        Cmd::Sealed { cmd } => sealed::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Mechanic { cmd } => mechanic::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Package { cmd } => match cmd {
             PackageCmd::Hooks { dir } => package::hooks(dir),
@@ -691,6 +721,10 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    // Every reader of a recording or an input log asks the sealed-run guard.
+    if let Ok(p) = gp_evidence::Paths::from_env() {
+        sealed::install(&p.home);
+    }
     if let Some(n) = cli.jobs {
         pool::set_jobs(n);
     }
