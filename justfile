@@ -148,6 +148,10 @@ mechanic-page: build mosshop
         if [ -n "$z" ] && [ -f "$z" ]; then
             scripts/web/build-play.sh --arcade {{quote(target / "play-web")}} > /dev/null
             arcade=(--arcade-rom "$z" --arcade-wasm {{quote(target / "play-web" / "gp_arcade_play.wasm")}})
+            # The ROM set picker on Tapper: a games checkout with tapper/.
+            for g in "${GP_GAMES_DIR:-}" ../games; do
+                if [ -n "$g" ] && [ -f "$g/tapper/roms.toml" ]; then arcade+=(--arcade-games "$g"); break; fi
+            done
             break
         fi
     done

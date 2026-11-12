@@ -77,9 +77,7 @@ fn server(
         port: ctx.port,
         games: Some(&ctx.games),
         module: ctx.modules.get(game).map(std::path::PathBuf::as_path),
-        // The ROM from the game's roms.toml; gp serve follows no build of
-        // its own for a page it mounts.
-        rom: None,
+        // gp serve follows no build of its own for a page it mounts.
         follow: false,
     };
     let (s, _) = mserver::prepare(&ctx.paths, &start, ctx.port)?;
@@ -98,7 +96,48 @@ fn mechanic(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail>
     let game = params.get("run").map(String::as_str).unwrap_or("");
     let s = server(ctx, game, None, None)?;
     let file = params.get("file").map(String::as_str).unwrap_or("");
-    Ok(mserver::answer(&s, &under(req, file)))
+    if file.is_empty() {
+        remember(ctx, game);
+    }
+    let res = mserver::answer(&s, &under(req, file));
+    if s.wants_reload() {
+        drop_server(game, &s);
+    }
+    Ok(res)
+}
+
+/// Forgets a game's server so the next request makes it again: another
+/// ROM set was chosen for it.
+fn drop_server(game: &str, s: &Arc<Server>) {
+    let mut all = MECHANIC.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(map) = all.as_mut()
+        && map.get(game).is_some_and(|x| Arc::ptr_eq(x, s))
+    {
+        map.remove(game);
+    }
+}
+
+/// The last game whose page was opened, kept for gp serve's root:
+/// `$GP_HOME/work/serve/last-game`.
+fn last_file(ctx: &Ctx) -> std::path::PathBuf {
+    ctx.paths.home.join("work").join("serve").join("last-game")
+}
+
+fn remember(ctx: &Ctx, game: &str) {
+    let f = last_file(ctx);
+    if let Some(d) = f.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let _ = std::fs::write(f, format!("{game}\n"));
+}
+
+/// The game whose page was opened last, if it is still a game here.
+pub(super) fn last_game(ctx: &Ctx) -> Option<String> {
+    let g = std::fs::read_to_string(last_file(ctx))
+        .ok()?
+        .trim()
+        .to_owned();
+    super::game::all_runs(ctx).contains(&g).then_some(g)
 }
 
 fn open(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
@@ -110,6 +149,14 @@ fn open(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
         super::body(req)?
     };
     let (m, p) = (v["mechanic"].as_str(), v["prompt"].as_str());
+    // gp mechanic start --rom chose a set (kept already): the server is
+    // made again for it.
+    if v["reload"] == json!(true) {
+        let mut all = MECHANIC.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(map) = all.as_mut() {
+            map.remove(game);
+        }
+    }
     let s = server(ctx, game, m.filter(|x| !x.is_empty()), p)?;
     say(&s)
 }

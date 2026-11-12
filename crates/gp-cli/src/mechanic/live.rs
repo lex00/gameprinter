@@ -117,7 +117,10 @@ fn content_key(paths: &Paths, repo: &Path, rb: &Rebuild) -> String {
         h.update(b"module");
         h.update(&std::fs::read(m).unwrap_or_default());
     }
-    if let Some(src) = std::fs::read_to_string(dir.join("model.toml"))
+    if let Some(a) = &rb.assets {
+        h.update(b"set assets");
+        add_dir(&mut h, a, &[]);
+    } else if let Some(src) = std::fs::read_to_string(dir.join("model.toml"))
         .ok()
         .and_then(|t| gp_model::Model::parse(&t).ok())
         .and_then(|m| m.model.source.clone())
@@ -245,7 +248,7 @@ pub(crate) fn build(
             rb.game.display()
         );
     }
-    let assets = crate::corpus_score::assets_of(paths, &rb.game, &rb.game, None, rom)?;
+    let assets = rb.assets_for(paths, rom)?;
     let (dir, slot) = spare(paths, game);
     let pointer = out_dir(paths, game).join("current");
     state.started = Some(std::time::Instant::now());
@@ -407,6 +410,9 @@ fn opened(paths: &Paths, rb: &Rebuild, rom: &[u8]) -> Result<Opened> {
     if let Some(m) = &rb.module {
         h.update(&std::fs::read(m).unwrap_or_default());
     }
+    if let Some((_, sha)) = &rb.rom {
+        h.update(sha.as_bytes());
+    }
     let key = h.finalize();
     let mut kept = OPENED.lock().expect("opened");
     if let Some((k, o)) = kept.as_ref()
@@ -419,7 +425,7 @@ fn opened(paths: &Paths, rb: &Rebuild, rom: &[u8]) -> Result<Opened> {
         &std::fs::read_to_string(&mfile).with_context(|| format!("reading {}", mfile.display()))?,
     )
     .map_err(|e| anyhow::anyhow!("{}: {e}", mfile.display()))?;
-    let assets = crate::corpus_score::assets_of(paths, &rb.game, &rb.game, None, rom)?;
+    let assets = rb.assets_for(paths, rom)?;
     let (source, _) =
         crate::hosted::Source::open_dir(&rb.game, Some(&assets), paths, rb.module.as_deref())?;
     let o: Opened = std::sync::Arc::new((source, mapping));

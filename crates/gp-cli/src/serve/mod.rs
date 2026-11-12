@@ -98,6 +98,11 @@ pub struct ServeOpts {
     /// Claude unasked (`serve/clip_agent.rs`).
     #[arg(long, value_name = "COMMAND")]
     clip_agent: Option<String>,
+    /// A game's ROM set, as GAME=SET or GAME=FILE (tapper=rbtapper): the
+    /// set its page plays, kept for the game as the page's set picker keeps
+    /// it.
+    #[arg(long, value_name = "GAME=SET")]
+    rom: Vec<String>,
 }
 
 pub(crate) fn run(opts: &ServeOpts, paths: &Paths) -> Result<Outcome> {
@@ -208,6 +213,12 @@ impl Ctx {
                 .split_once('=')
                 .with_context(|| format!("--module {m}: give it as GAME=FILE"))?;
             modules.insert(game.to_owned(), PathBuf::from(file));
+        }
+        for r in &opts.rom {
+            let (game, set) = r
+                .split_once('=')
+                .with_context(|| format!("--rom {r}: give it as GAME=SET or GAME=FILE"))?;
+            crate::mechanic::server::choose_rom(paths, Some(&games), game, set)?;
         }
         Ok(Self {
             paths: paths.clone(),
@@ -399,38 +410,47 @@ fn handle(ctx: &Ctx, req: &Request) -> Response {
     static_file(ctx, &req.path)
 }
 
-/// `/`: the page of a game (`?run=GAME`, else the first game in the
-/// checkout), at /mechanic/GAME/, its tab kept from `?tab=`. The editor's
-/// older screens stay at /index.html.
+/// `/`: the page of a game, at /mechanic/GAME/ with its tab kept from
+/// `?tab=`: `?run=GAME`, else the game whose page was opened last
+/// ($GP_HOME/work/serve/last-game), else a list of the games to pick from.
+/// The editor's older screens stay at /index.html.
 fn landing(ctx: &Ctx, req: &Request) -> Response {
     let runs = game::all_runs(ctx);
     let run = req
         .param("run")
         .filter(|r| runs.iter().any(|x| x == r))
         .map(str::to_owned)
-        .or_else(|| runs.first().cloned());
-    let Some(run) = run else {
-        return Response::bytes(
-            "text/html; charset=utf-8",
-            format!(
-                "<!doctype html><meta charset=utf-8><title>Game Printer</title><p>No game in {}: gp game new or gp serve --games.</p>",
-                ctx.games.display()
-            )
-            .into_bytes(),
-        );
-    };
+        .or_else(|| pages::last_game(ctx));
     let tab = req
         .param("tab")
         .filter(|t| t.bytes().all(|b| b.is_ascii_lowercase()))
         .map(|t| format!("?tab={t}"))
         .unwrap_or_default();
+    let head = "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width, initial-scale=1\"><title>Game Printer</title><style>body{margin:0;background:#000;color:#fcfcfc;font:15px/1.45 ui-monospace,\"SF Mono\",Menlo,monospace}header{padding:10px 16px;border-bottom:2px solid #fcfcfc}#logo{color:#f83800;font-weight:700}main{padding:12px 16px}a{color:#fcfcfc}h2{font-size:14px;color:#f8b800}</style>";
+    let Some(run) = run else {
+        let items: String = runs
+            .iter()
+            .map(|r| format!("<li><a href=\"/mechanic/{r}/{tab}\">{r}</a></li>"))
+            .collect();
+        let body = if runs.is_empty() {
+            format!(
+                "<p>No game in {}: gp game new, or gp serve --games.</p>",
+                ctx.games.display()
+            )
+        } else {
+            format!("<h2>Pick a game</h2><ul id=\"games\">{items}</ul>")
+        };
+        return Response::bytes(
+            "text/html; charset=utf-8",
+            format!("{head}<header><span id=logo>GAME PRINTER</span></header><main style=\"display:block\">{body}</main>")
+                .into_bytes(),
+        );
+    };
     let to = format!("/mechanic/{run}/{tab}");
     Response::bytes(
         "text/html; charset=utf-8",
-        format!(
-            "<!doctype html><meta charset=utf-8><title>Game Printer</title><script>location.replace({to:?})</script><p><a href=\"{to}\">{run}</a></p>"
-        )
-        .into_bytes(),
+        format!("{head}<script>location.replace({to:?})</script><p><a href=\"{to}\">{run}</a></p>")
+            .into_bytes(),
     )
 }
 

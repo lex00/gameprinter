@@ -90,10 +90,12 @@ pub enum MechanicCmd {
         /// the model (default: $GP_HOME/work/modules/GAME.wasm if it's there)
         #[arg(long)]
         module: Option<PathBuf>,
-        /// The ROM; by default the one in $GP_ROM_DIR the game's roms.toml
-        /// names.
+        /// The ROM set to play, for a game with several in its roms.toml:
+        /// its id (rbtapper) or a file of it. Kept for the game, as the
+        /// page's set picker keeps it (default: the set chosen last, else
+        /// the package's scored set).
         #[arg(long)]
-        rom: Option<PathBuf>,
+        rom: Option<String>,
         /// Stay on this build. By default the server restarts into
         /// $GP_HOME/bin/gp when a new one is published (by the gate or `gp
         /// self publish`), between requests, on the same port and mechanic.
@@ -343,32 +345,47 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             module,
             rom,
             no_follow,
-        } => server::start(
-            paths,
-            &server::Start {
-                game,
-                mechanic: mechanic.as_deref(),
-                prompt: prompt.as_deref(),
-                port: port.unwrap_or(7712),
-                games: games.as_deref(),
-                module: module.as_deref(),
-                rom: rom.as_deref(),
-                follow: !*no_follow,
-            },
-        ),
+        } => {
+            if let Some(r) = rom {
+                server::choose_rom(paths, games.as_deref(), game, r)?;
+            }
+            server::start(
+                paths,
+                &server::Start {
+                    game,
+                    mechanic: mechanic.as_deref(),
+                    prompt: prompt.as_deref(),
+                    port: port.unwrap_or(7712),
+                    games: games.as_deref(),
+                    module: module.as_deref(),
+                    follow: !*no_follow,
+                },
+            )
+        }
         MechanicCmd::Start {
             game,
             mechanic,
             prompt,
             port,
             games,
+            rom,
             ..
         } => in_editor(
             paths,
             games.as_deref(),
             port.unwrap_or(crate::serve::DEFAULT_PORT),
             &format!("/api/mechanic/{game}/open"),
-            &json!({"mechanic": mechanic, "prompt": prompt}),
+            &json!({
+                "mechanic": mechanic,
+                "prompt": prompt,
+                "reload": match rom {
+                    Some(r) => {
+                        server::choose_rom(paths, games.as_deref(), game, r)?;
+                        true
+                    }
+                    None => false,
+                },
+            }),
             |v| {
                 let m = v["mechanic"].as_str().unwrap_or("").to_owned();
                 (

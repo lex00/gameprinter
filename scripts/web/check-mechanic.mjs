@@ -38,7 +38,7 @@
 //
 // Exit codes: 0 passed, 1 a check failed, 2 couldn't run.
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
@@ -52,6 +52,10 @@ const opt = (n) => {
 };
 const gp = opt("gp"), romFile = opt("rom"), wasm = opt("wasm"), browserPath = opt("browser");
 const arcadeRom = opt("arcade-rom"), arcadeWasm = opt("arcade-wasm");
+// --arcade-games DIR: a games checkout with tapper/ (its roms.toml names
+// tapper, rbtapper and the rest), for the ROM set picker, with the sets
+// beside --arcade-rom.
+const arcadeGames = opt("arcade-games");
 // --shots DIR: a screenshot of each mode goes there (never a repo: they
 // show the game).
 const shots = opt("shots");
@@ -91,8 +95,8 @@ function gpRun(args, extra = {}) {
 }
 
 /** Starts `gp mechanic start` on a free port; its address once it prints it. */
-function serve(extra = {}, game = GAME, mech = MECH) {
-  const p = spawn(gp, ["mechanic", "start", game, mech, "--own-server", "--port", "0", "--games", games], { env: { ...env, ...extra } });
+function serve(extra = {}, game = GAME, mech = MECH, gamesDir = games, more = []) {
+  const p = spawn(gp, ["mechanic", "start", game, mech, "--own-server", "--port", "0", "--games", gamesDir, ...more], { env: { ...env, ...extra } });
   servers.push(p);
   let err = "";
   p.stderr.on("data", (d) => { err += d; });
@@ -522,9 +526,21 @@ async function oneServer() {
   const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
+  // gp mechanic start opened nothing in a browser, so no game was opened
+  // yet: the root lists the games.
   await page.goto(base[0]);
-  await until("gp serve's root opens the game's page", async () => page.url().includes(`/mechanic/${GAME}/`) && (await text(page, "#title").catch(() => "")) === `${GAME} / ${MECH}`);
-  ok(`gp serve's root opens ${GAME}'s page: ${page.url()}`);
+  const listed = await until("gp serve's root lists the games", async () => page.evaluate(() => [...document.querySelectorAll("#games a")].map((a) => a.textContent)));
+  if (!listed.includes(GAME)) fail(`gp serve's root lists ${listed}`);
+  await page.click(`#games a:text("${GAME}")`);
+  await until("the game's page", async () => page.url().includes(`/mechanic/${GAME}/`) && (await text(page, "#title").catch(() => "")) === `${GAME} / ${MECH}`);
+  await page.goto(base[0]);
+  await until("gp serve's root opens the last game", async () => page.url().includes(`/mechanic/${GAME}/`) && (await text(page, "#title").catch(() => "")) === `${GAME} / ${MECH}`);
+  ok(`gp serve's root lists the games (${listed.join(", ")}), then opens the last one opened: ${page.url()}`);
+  const picks = await until("the game picker", async () => (!(await page.isHidden("#game-pick")) ? page.evaluate(() => [...document.querySelectorAll("#game-pick option")].map((o) => o.value)) : null));
+  if (!picks.includes(GAME)) fail(`the game picker: ${picks}`);
+  const last = readFileSync(join(home, "work", "serve", "last-game"), "utf8").trim();
+  if (last !== GAME) fail(`gp serve kept ${last} as the last game`);
+  ok(`the header picks among the games (${picks.join(", ")}), and gp serve keeps the last one opened for its root`);
   await page.click("#tab-work");
   await until("REFINE's background work", async () => !(await page.isHidden("#pane-work")) && (await page.isHidden("main")) && /workers/.test(await text(page, "#work-body")));
   const holds = await frame(page);
@@ -549,11 +565,70 @@ async function oneServer() {
   await page.close();
 }
 
+/** The ROM set picker, on Tapper: the games checkout's tapper/ (five sets
+ * in its roms.toml) with the owner's sets beside --arcade-rom. The page
+ * lists the sets that are here, plays the scored one (tapper) at first,
+ * and choosing rbtapper plays it, keeps it for the game and loads the page
+ * again; gp serve --rom tapper=FILE chooses it too. */
+async function romSets() {
+  if (!arcadeRom || !arcadeWasm || !arcadeGames || !existsSync(join(arcadeGames, "tapper", "roms.toml"))) {
+    console.log("skip the ROM sets: no --arcade-rom, --arcade-wasm and --arcade-games with tapper/");
+    return;
+  }
+  const games2 = join(work, "games2");
+  cpSync(join(arcadeGames, "tapper"), join(games2, "tapper"), { recursive: true, filter: (p) => !p.includes("/target") });
+  const romDir = dirname(arcadeRom);
+  const RB = "05c721e1f53c60355abc0f38c4db05040b305118630b86e67721ced1bda22657";
+  const url = await serve({ GP_ROM_DIR: romDir }, "tapper", "sets", games2);
+  const page = await browser.newPage();
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto(url);
+  await until("Tapper's page", async () => (await text(page, "#title")) === "tapper / sets");
+  const listed = await until("the set picker", async () => (!(await page.isHidden("#rom-pick")) ? page.evaluate(() => [...document.querySelectorAll("#rom-pick option")].map((o) => o.value)) : null));
+  if (!listed.includes("rbtapper") || listed.length < 2) fail(`the set picker lists ${listed}`);
+  const first = await page.evaluate(() => fetch("api/rom").then((r) => r.json()));
+  ok(`the set picker lists the sets here (${listed.join(", ")}), playing ${first.set}`);
+  await page.selectOption("#rom-pick", "rbtapper");
+  await until("the page again on rbtapper", async () => {
+    const r = await page.evaluate(() => fetch("api/rom").then((x) => x.json()).catch(() => null)).catch(() => null);
+    return r?.set === "rbtapper" && r?.sha256 === RB && (await text(page, "#title").catch(() => "")) === "tapper / sets";
+  }, 30000);
+  const f0 = await frame(page);
+  await page.waitForTimeout(800);
+  if ((await frame(page)) <= f0) fail("the page doesn't play after the set changed");
+  const kept = readFileSync(join(home, "mechanics", "tapper", "rom-set"), "utf8").trim();
+  if (kept !== "rbtapper") fail(`the set kept for tapper: ${kept}`);
+  ok("choosing rbtapper plays it (its identity 05c721e1...), keeps it for the game, and the page plays on");
+  await page.close();
+
+  // gp serve --rom tapper=FILE: the set chosen from the command line.
+  writeFileSync(join(home, "mechanics", "tapper", "rom-set"), "tapper\n");
+  const rbZip = join(romDir, "rbtapper.zip");
+  const p = spawn(gp, ["serve", "--port", "0", "--games", games2, "--rom", `tapper=${rbZip}`], { env: { ...env, GP_ROM_DIR: romDir } });
+  servers.push(p);
+  const base = await new Promise((res, rej) => {
+    let out = "", err = "";
+    const t = setTimeout(() => rej(new Error(`gp serve printed no address: ${out}${err}`)), 20000);
+    p.stderr.on("data", (d) => { err += d; });
+    p.stdout.on("data", (d) => {
+      out += d;
+      const m = out.match(/http:\/\/127\.0\.0\.1:\d+\//);
+      if (m) { clearTimeout(t); res(m[0]); }
+    });
+  });
+  const viaServe = await (await fetch(`${base}mechanic/tapper/api/rom`)).json();
+  if (viaServe.set !== "rbtapper") fail(`gp serve --rom tapper=rbtapper.zip played ${viaServe.set}`);
+  ok("gp serve --rom tapper=FILE plays that set");
+  if (errors.length) fail(`the set picker's page threw: ${errors.join("; ")}`);
+}
+
 let code = 0;
 try {
   await main();
   await oneServer();
   await arcade();
+  await romSets();
   console.log(`mechanic-page: passed in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
 } catch (e) {
   console.error(`FAIL ${e.message}`);

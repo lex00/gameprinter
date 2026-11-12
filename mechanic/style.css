@@ -34,6 +34,8 @@ header { display: flex; gap: 16px; align-items: baseline; padding: 10px 16px; bo
 #score { color: var(--nes-28); margin-left: auto; }
 #sound { font: bold 12px var(--mono); background: var(--nes-0f, #000); color: var(--fg); border: 2px solid var(--line); padding: 2px 8px; cursor: pointer; align-self: center; }
 #sound[aria-pressed="false"] { color: var(--muted); }
+#game-pick, #rom-pick { font: bold 12px var(--mono); background: var(--nes-0f, #000); color: var(--fg); border: 2px solid var(--line); padding: 1px 4px; align-self: center; }
+#game-pick[hidden], #rom-pick[hidden] { display: none; }
 #log-toggle { font: bold 12px var(--mono); background: var(--nes-0f, #000); color: var(--muted); border: 2px solid var(--line); padding: 2px 8px; cursor: pointer; align-self: center; }
 #log-toggle[aria-pressed="true"] { color: var(--nes-28); border-color: var(--nes-28); }
 #log-toggle.news { color: var(--fg); }

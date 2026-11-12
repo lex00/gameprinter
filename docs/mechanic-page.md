@@ -18,6 +18,16 @@ in this repo, plain HTML, CSS and JavaScript, game-printer's page
 - PLAY: the rebuild alone with its settings (once FREE PLAY).
 - THEMES: the game's themes in the person's registry and its theme kit.
 
+The header picks the game (every game gp serve has; gp serve's root opens
+the one opened last, kept in `$GP_HOME/work/serve/last-game`, else lists
+them) and, for a game whose roms.toml names several sets (Tapper's tapper,
+rbtapper, tapperg, sutapper and tappera; Donkey Kong's OE and JU), the set:
+the ones in `$GP_ROM_DIR` are listed, and choosing one plays it, draws the
+model with that set's pictures (lifted by the same asset map into
+`$GP_HOME/work/assets/SOURCE@SET`) and keeps it for the game
+(`$GP_HOME/mechanics/GAME/rom-set`). `gp mechanic start --rom SET|FILE` and
+`gp serve --rom GAME=SET|FILE` choose it too.
+
 The agent's log (log, pins, problems) is a panel at the right on every tab,
 from AGENT'S LOG in the header or L. The tab is in the address (`?tab=`).
 REFINE and THEMES take the game's place, and the games hold while they show.

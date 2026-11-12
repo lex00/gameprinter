@@ -45,6 +45,7 @@ use crate::Outcome;
 use crate::original::Platform;
 
 /// What `gp mechanic start` was asked.
+#[derive(Clone, Copy)]
 pub(crate) struct Start<'a> {
     pub game: &'a str,
     pub mechanic: Option<&'a str>,
@@ -53,8 +54,6 @@ pub(crate) struct Start<'a> {
     pub games: Option<&'a Path>,
     /// The game's built module, for the review of clips on the model.
     pub module: Option<&'a Path>,
-    /// The ROM, instead of the one found in $GP_ROM_DIR by hash.
-    pub rom: Option<&'a Path>,
     /// Whether to restart into a newly published `$GP_HOME/bin/gp`.
     pub follow: bool,
 }
@@ -92,14 +91,17 @@ fn wasm_path(repo: &Path, platform: Platform) -> PathBuf {
         .map_or_else(|| repo.join("target/play-web").join(file), PathBuf::from)
 }
 
-/// The game's ROM: the one its roms.toml names, found by hash in
-/// $GP_ROM_DIR. A source with the game's own id is taken first.
-fn game_rom(
-    paths: &Paths,
+/// A game's ROM sets: its roms.toml's sources, the package's scored set
+/// (package.toml's `role = "scored"`, the one the clips are of) first, then
+/// the rest in roms.toml's order; and the file.
+fn sets_of(
     games: Option<&Path>,
     game: &str,
-    given: Option<&Path>,
-) -> Result<crate::roms::Rom> {
+) -> Result<(
+    PathBuf,
+    Vec<gp_evidence::registry::KnownSource>,
+    Vec<String>,
+)> {
     let games = crate::roms_cmd::games_dir(games)
         .context("no games checkout: pass --games or set GP_GAMES_DIR")?;
     let file = games.join(game).join("roms.toml");
@@ -112,8 +114,6 @@ fn game_rom(
     })?;
     let reg = gp_evidence::registry::Registry::from_toml(&text, &file)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-    // The package's scored ROM first (package.toml's `role = "scored"`):
-    // the clips are of that one. Then the rest in roms.toml's order.
     let scored: Vec<String> = crate::package::Package::load(&games.join(game))
         .map(|p| {
             p.entries
@@ -123,14 +123,105 @@ fn game_rom(
                 .collect()
         })
         .unwrap_or_default();
-    let mut wanted: Vec<&gp_evidence::registry::KnownSource> = reg.sources.iter().collect();
-    wanted.sort_by_key(|s| (!scored.contains(&s.sha256), s.id != game));
-    let shas: Vec<String> = wanted.iter().map(|s| s.sha256.clone()).collect();
-    let given: Vec<std::path::PathBuf> = given.iter().map(|p| p.to_path_buf()).collect();
-    let mut found = crate::roms::find(&shas, &given, &paths.roms)?;
-    for s in &shas {
-        if let Some(r) = found.remove(s) {
-            return Ok(r);
+    let mut sources = reg.sources;
+    sources.sort_by_key(|s| (!scored.contains(&s.sha256), s.id != game));
+    Ok((file, sources, scored))
+}
+
+/// Where the person's choice of a game's ROM set is kept: its id, one line.
+fn choice_file(paths: &Paths, game: &str) -> Result<PathBuf> {
+    Ok(super::session::game_dir(paths, game)?.join("rom-set"))
+}
+
+/// The ROM set chosen for a game, if one was.
+fn chosen(paths: &Paths, game: &str) -> Option<String> {
+    let t = fs::read_to_string(choice_file(paths, game).ok()?).ok()?;
+    Some(t.trim().to_owned()).filter(|t| !t.is_empty())
+}
+
+/// Chooses the ROM set a game's page plays, by its id in roms.toml (rbtapper)
+/// or by a file of it (a zip or a .nes): kept for the game, so the page,
+/// gp serve and gp mechanic start all play it until another is chosen. The
+/// set's id.
+pub(crate) fn choose_rom(
+    paths: &Paths,
+    games: Option<&Path>,
+    game: &str,
+    asked: &str,
+) -> Result<String> {
+    let (file, sources, _) = sets_of(games, game)?;
+    let p = Path::new(asked);
+    let id = if p.is_file() {
+        let rom = crate::roms::Rom::read(p)?;
+        sources
+            .iter()
+            .find(|s| s.sha256 == rom.sha256)
+            .map(|s| s.id.clone())
+            .with_context(|| {
+                format!(
+                    "{asked} (sha256 {}) isn't a set {} names",
+                    rom.sha256,
+                    file.display()
+                )
+            })?
+    } else {
+        sources
+            .iter()
+            .find(|s| s.id == asked || s.system.as_deref() == Some(asked))
+            .map(|s| s.id.clone())
+            .with_context(|| {
+                format!(
+                    "{} names no set {asked}: it has {}",
+                    file.display(),
+                    sources
+                        .iter()
+                        .map(|s| s.id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?
+    };
+    let f = choice_file(paths, game)?;
+    if let Some(d) = f.parent() {
+        fs::create_dir_all(d)?;
+    }
+    fs::write(&f, format!("{id}\n"))?;
+    Ok(id)
+}
+
+/// The game's ROM: the set chosen for it (see [`choose_rom`]) when it is in
+/// $GP_ROM_DIR, else the scored set, else the rest in roms.toml's order,
+/// found by hash. The ROM, its set's id, and every set with whether it is
+/// here (for the page's picker).
+fn game_rom(
+    paths: &Paths,
+    games: Option<&Path>,
+    game: &str,
+) -> Result<(crate::roms::Rom, String, Vec<Value>)> {
+    let (file, mut sources, scored) = sets_of(games, game)?;
+    let picked = chosen(paths, game);
+    if let Some(id) = &picked {
+        sources.sort_by_key(|s| &s.id != id);
+    }
+    let shas: Vec<String> = sources.iter().map(|s| s.sha256.clone()).collect();
+    let mut found = crate::roms::find(&shas, &[], &paths.roms)?;
+    let list: Vec<Value> = sources
+        .iter()
+        .map(|s| {
+            json!({
+                "id": s.id,
+                "title": s.title,
+                "revision": s.revision,
+                "system": s.system,
+                "sha256": s.sha256,
+                "scored": scored.contains(&s.sha256),
+                "here": found.contains_key(&s.sha256),
+            })
+        })
+        .collect();
+    for s in &sources {
+        if let Some(r) = found.remove(&s.sha256) {
+            return Ok((r, s.id.clone(), list));
         }
     }
     bail!(
@@ -138,6 +229,36 @@ fn game_rom(
         paths.roms.display(),
         file.display()
     )
+}
+
+/// The model's pictures for a ROM set: the scored set's in the usual place
+/// (corpus_score::assets_of, $GP_HOME/work/assets/SOURCE); another set's
+/// lifted by the same asset map, chip by chip and index by index, into
+/// $GP_HOME/work/assets/SOURCE@SET, so the model draws with that set's art.
+fn set_assets(
+    paths: &Paths,
+    game_dir: &Path,
+    rom: &[u8],
+    set: &str,
+    scored: bool,
+) -> Result<PathBuf> {
+    if scored {
+        return crate::corpus_score::assets_of(paths, game_dir, game_dir, None, rom);
+    }
+    let file = game_dir.join(gp_model::MODEL_FILE);
+    let text = fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?;
+    let model = gp_model::Model::parse(&text).with_context(|| file.display().to_string())?;
+    let source = model
+        .model
+        .source
+        .context("the model names no source to lift its pictures for")?;
+    let out = paths
+        .home
+        .join("work")
+        .join("assets")
+        .join(format!("{source}@{set}"));
+    crate::corpus_score::lift_into(game_dir, rom, &out)?;
+    Ok(out)
 }
 
 /// The mechanic to open: the one asked for, else the one open last, else
@@ -245,11 +366,7 @@ fn restart(srv: &Server, bin: &Path, a: &Start) -> anyhow::Error {
         "--port",
     ])
     .arg(srv.port.to_string());
-    for (flag, v) in [
-        ("--games", a.games),
-        ("--module", a.module),
-        ("--rom", a.rom),
-    ] {
+    for (flag, v) in [("--games", a.games), ("--module", a.module)] {
         if let Some(v) = v {
             c.arg(flag).arg(v);
         }
@@ -262,18 +379,24 @@ fn restart(srv: &Server, bin: &Path, a: &Start) -> anyhow::Error {
 /// `a` asks for open: its session made when new.
 pub(crate) fn prepare(paths: &Paths, a: &Start, port: u16) -> Result<(Arc<Server>, String)> {
     let repo = repo_root()?;
-    let rom = game_rom(paths, a.games, a.game, a.rom)?;
+    let (rom, set, sets) = game_rom(paths, a.games, a.game)?;
     let platform = rom.platform;
+    let scored = sets
+        .iter()
+        .any(|s| s["id"] == json!(set) && s["scored"] == json!(true));
     let mut server = Server::new(paths.clone(), a.game, &repo, rom.bytes, &rom.sha256, port);
     server.platform = platform;
     server.wasm = wasm_path(&repo, platform);
+    server.set = set.clone();
+    server.sets = sets;
     if let Some(games) = crate::roms_cmd::games_dir(a.games) {
-        server.rebuild = Some(super::review::Rebuild::new(
-            paths,
-            &games.join(a.game),
-            a.game,
-            a.module,
-        ));
+        let game_dir = games.join(a.game);
+        let mut rb = super::review::Rebuild::new(paths, &game_dir, a.game, a.module);
+        rb.rom = Some((server.rom.clone(), server.rom_sha.clone()));
+        // A game with no model has no pictures to lift: the page says so
+        // where the model would play.
+        rb.assets = set_assets(paths, &game_dir, &server.rom, &set, scored).ok();
+        server.rebuild = Some(rb);
     }
     let server = Arc::new(server);
     // The playable rebuild kept as the model stands: looked at every half
@@ -315,6 +438,7 @@ pub(crate) fn start(paths: &Paths, a: &Start) -> Result<Outcome> {
     println!("Session: {}", server.open_session()?.dir.display());
     println!("{}", agent_words(game, &mechanic));
     let _ = std::io::Write::flush(&mut std::io::stdout());
+    let mut server = server;
     // Accepted here only, so with none in flight no request is running:
     // the server restarts into a new published build then, never during a
     // request or a rebuild's build.
@@ -329,6 +453,24 @@ pub(crate) fn start(paths: &Paths, a: &Start) -> Result<Outcome> {
                 // Accepted sockets take the listener's non-blocking flag on
                 // macOS.
                 let _ = conn.set_nonblocking(false);
+                // Another ROM set chosen in the page: the server is made
+                // again for it before the page's next request.
+                if server.wants_reload() {
+                    match prepare(
+                        paths,
+                        &Start {
+                            mechanic: None,
+                            prompt: None,
+                            ..*a
+                        },
+                        port,
+                    ) {
+                        Ok((s, _)) => server = s,
+                        Err(e) => {
+                            eprintln!("gp mechanic start: the set chosen couldn't start: {e:#}")
+                        }
+                    }
+                }
                 let s = server.clone();
                 let b = busy.clone();
                 b.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -432,6 +574,12 @@ pub(crate) struct Server {
     /// What the review of clips on the model needs; none without a games
     /// checkout.
     rebuild: Option<super::review::Rebuild>,
+    /// The ROM set played (its id in roms.toml), and every set of the game
+    /// with whether it is in $GP_ROM_DIR.
+    set: String,
+    sets: Vec<Value>,
+    /// Another set was chosen: the server is made again for it.
+    reload: std::sync::atomic::AtomicBool,
 }
 
 impl Server {
@@ -449,7 +597,17 @@ impl Server {
             platform: Platform::Nes,
             port,
             rebuild: None,
+            set: String::new(),
+            sets: Vec::new(),
+            reload: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Whether another ROM set was chosen since the server was made: then
+    /// whoever holds it makes it again (gp serve's mount, or the server of
+    /// its own), and the page loads again.
+    pub(crate) fn wants_reload(&self) -> bool {
+        self.reload.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     fn queue_file(&self) -> Result<PathBuf> {
@@ -633,6 +791,38 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             }
         }
         ("GET" | "HEAD", "/api/themes") => Ok(Response::json(&themes(s))),
+        // The game's ROM sets: the one played and every one with whether
+        // it is here; a POST {set} chooses another.
+        ("GET" | "HEAD", "/api/rom") => Ok(Response::json(
+            &json!({"set": s.set, "sha256": s.rom_sha, "sets": s.sets}),
+        )),
+        ("POST", "/api/rom") => {
+            let v: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+            let want = v["set"].as_str().unwrap_or("");
+            let Some(row) = s.sets.iter().find(|r| r["id"] == json!(want)) else {
+                return Ok(Response::error(
+                    404,
+                    &format!("{} has no set {want}", s.game),
+                ));
+            };
+            if row["here"] != json!(true) {
+                return Ok(Response::error(
+                    409,
+                    &format!(
+                        "{want} isn't in {}: add it with gp roms add",
+                        s.paths.roms.display()
+                    ),
+                ));
+            }
+            fs::create_dir_all(super::session::game_dir(&s.paths, &s.game)?)?;
+            fs::write(choice_file(&s.paths, &s.game)?, format!("{want}\n"))?;
+            if want != s.set {
+                s.reload.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            Ok(Response::json(
+                &json!({"set": want, "reload": want != s.set}),
+            ))
+        }
         ("GET" | "HEAD", "/gp_play.wasm") => {
             if !s.wasm.is_file() {
                 return Ok(Response::error(

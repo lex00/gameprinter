@@ -81,6 +81,7 @@ export function startShell(page) {
   new MutationObserver(() => { if ($("log-panel").hidden) toggle.classList.add("news"); })
     .observe($("w-status"), { childList: true, characterData: true, subtree: true });
 
+  void pickers(page, () => phase);
   const work = refineWork(page);
   const themes = themesPane(page);
   strip(page);
@@ -262,4 +263,49 @@ function row(parent, kind, name, k, n, says) {
   s.textContent = says;
   r.append(a, bar, s);
   parent.append(r);
+}
+
+/** The header's two pickers. The game: every game gp serve has (its
+ * /api/capture), which opens that game's page; hidden on a server of the
+ * page's own. The ROM set: the sets of the game's roms.toml that are in
+ * $GP_ROM_DIR (api/rom), shown when there are two or more; choosing one
+ * plays it, draws the model with its art, keeps it for the game, and
+ * loads the page again. */
+async function pickers(page, phase) {
+  const gp = $("game-pick");
+  const r = await fetch("/api/capture").catch(() => null);
+  const runs = r?.ok ? ((await r.json()).runs ?? []).map((x) => x.run) : [];
+  if (runs.length) {
+    for (const g of runs) {
+      const o = document.createElement("option");
+      o.value = o.textContent = g;
+      gp.append(o);
+    }
+    gp.value = page.game();
+    gp.hidden = false;
+    gp.addEventListener("change", () => { location.href = `/mechanic/${encodeURIComponent(gp.value)}/?tab=${phase()}`; });
+  }
+  const rp = $("rom-pick");
+  let sets;
+  try { sets = await page.api("api/rom"); } catch (e) { return; }
+  const here = (sets.sets ?? []).filter((x) => x.here);
+  if (here.length < 2) return;
+  for (const x of here) {
+    const o = document.createElement("option");
+    o.value = x.id;
+    o.textContent = `${x.id}${x.revision ? `: ${x.revision}` : ""}${x.scored ? " (scored)" : ""}`;
+    rp.append(o);
+  }
+  rp.value = sets.set;
+  rp.hidden = false;
+  rp.addEventListener("change", async () => {
+    if (["recording", "review", "sending"].includes(page.mode())) { page.toast("Finish the recording first."); rp.value = sets.set; return; }
+    try {
+      await page.api("api/rom", { set: rp.value });
+      location.reload();
+    } catch (e) {
+      page.toast(String(e.message ?? e));
+      rp.value = sets.set;
+    }
+  });
 }

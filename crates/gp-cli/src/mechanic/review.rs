@@ -34,6 +34,11 @@ pub(crate) struct Rebuild {
     pub game: PathBuf,
     /// The game's built module, for a model with hooks.
     pub module: Option<PathBuf>,
+    /// The ROM set the page plays and its identity, when it isn't the
+    /// package's scored one: the review and the rebuild play it.
+    pub rom: Option<(std::sync::Arc<Vec<u8>>, String)>,
+    /// The model's pictures lifted from that set.
+    pub assets: Option<PathBuf>,
 }
 
 impl Rebuild {
@@ -51,6 +56,17 @@ impl Rebuild {
         Self {
             game: game_dir.to_owned(),
             module,
+            rom: None,
+            assets: None,
+        }
+    }
+
+    /// The model's pictures: the set's own when lifted, else the scored
+    /// set's.
+    pub fn assets_for(&self, paths: &Paths, rom: &[u8]) -> Result<PathBuf> {
+        match &self.assets {
+            Some(a) => Ok(a.clone()),
+            None => crate::corpus_score::assets_of(paths, &self.game, &self.game, None, rom),
         }
     }
 }
@@ -70,6 +86,9 @@ fn key(r: &Rebuild) -> Result<String> {
     }
     if let Some(m) = &r.module {
         h.update(&fs::read(m).with_context(|| format!("reading {}", m.display()))?);
+    }
+    if let Some((_, sha)) = &r.rom {
+        h.update(sha.as_bytes());
     }
     Ok(h.finalize().to_hex().to_string())
 }
@@ -111,8 +130,11 @@ pub(crate) fn review(paths: &Paths, r: &Rebuild, session: &Path, n: u64) -> Resu
     }
     let (text, start) = super::paths::full_log(&paths.home, session, n)?;
     let log = gp_evidence::InputLog::parse(&text).map_err(|e| anyhow::anyhow!("clip {n}: {e}"))?;
-    let rom = crate::clip_score::rom_of(paths, &r.game, None)?;
-    let assets = crate::corpus_score::assets_of(paths, &r.game, &r.game, None, &rom)?;
+    let rom = match &r.rom {
+        Some((bytes, _)) => bytes.to_vec(),
+        None => crate::clip_score::rom_of(paths, &r.game, None)?,
+    };
+    let assets = r.assets_for(paths, &rom)?;
     let ctx = crate::clip_score::Ctx::open(
         paths,
         &r.game,
