@@ -55,7 +55,7 @@ A patch can only change one game's folder. If it removes a clip on purpose, name
 
 ```sh
 curl -s https://raw.githubusercontent.com/lex00/gp-registry/main/catalog.toml
-gp game fetch lex00/donkey-kong@1.0.8 --id THE_ID_FROM_THE_CATALOG \
+gp game fetch lex00/donkey-kong@1.0.9 --id THE_ID_FROM_THE_CATALOG \
   --from https://raw.githubusercontent.com/lex00/gp-registry/main \
   --into ~/my-donkey-kong --rom-dir "$GP_ROM_DIR"
 ```
