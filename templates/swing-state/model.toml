@@ -1,0 +1,735 @@
+[model]
+schema = "0.4.0"
+name = "swing_state"
+title = "Swing State"
+description = "An original: a campaign as a platformer. The candidate runs the trail from a town hall to election night, stomping hecklers, dodging attack ads and pundits who rise from their lecterns, and taking donations on the way. Its mechanics are composed from Super Mario Bros.' movement, paratroopas, piranha plants and bullet bills and Moss Hop's patrolling slugs, rescaled to the candidate (docs/originals.md)"
+source = "swing-state"
+view = "side"
+frame_rate = "60"
+systems = ["rules", "entity_states", "counters", "spawn", "platformer.player", "platformer.enemies", "platformer.contact", "exits", "camera"]
+start_level = "town_hall"
+
+[model.extensions]
+platformer = "0.4.0"
+
+[input]
+device = "nes-pad"
+
+[input.actions]
+jump = "a"
+left = "left"
+right = "right"
+run = "b"
+
+[assets.debate_stage]
+kind = "level-grid"
+role = "layout"
+
+[assets.debate_stage.from]
+source = "swing-state"
+asset = "debate_stage"
+
+[assets.election_night]
+kind = "level-grid"
+role = "layout"
+
+[assets.election_night.from]
+source = "swing-state"
+asset = "election_night"
+
+[assets.metatiles]
+kind = "metatiles"
+role = "tileset"
+description = "Night sky, stage floor, bunting, lectern, crowd barrier, banner, and the victory podium's two halves"
+item_roles = ["sky", "terrain", "platform", "terrain", "terrain", "background", "goal", "goal"]
+
+[assets.metatiles.from]
+source = "swing-state"
+asset = "metatiles"
+
+[assets.palettes]
+kind = "palettes"
+role = "palettes"
+item_roles = ["terrain", "background", "background", "goal", "player", "enemy", "enemy", "collectible"]
+
+[assets.palettes.from]
+source = "swing-state"
+asset = "palettes"
+
+[assets.pollsters_debate_stage]
+kind = "table"
+role = "spawns"
+description = "Each pollster's walk: start and end"
+
+[assets.pollsters_debate_stage.from]
+source = "swing-state"
+asset = "pollsters_debate_stage"
+
+[assets.pollsters_election_night]
+kind = "table"
+role = "spawns"
+description = "Each pollster's walk: start and end"
+
+[assets.pollsters_election_night.from]
+source = "swing-state"
+asset = "pollsters_election_night"
+
+[assets.pollsters_town_hall]
+kind = "table"
+role = "spawns"
+description = "Each pollster's walk: start and end"
+
+[assets.pollsters_town_hall.from]
+source = "swing-state"
+asset = "pollsters_town_hall"
+
+[assets.tiles]
+kind = "tiles"
+role = "graphics"
+description = "Generated stub tiles"
+
+[assets.tiles.from]
+source = "swing-state"
+asset = "tiles"
+
+[assets.town_hall]
+kind = "level-grid"
+role = "layout"
+
+[assets.town_hall.from]
+source = "swing-state"
+asset = "town_hall"
+
+[entities.attack_ad]
+description = "A thirty-second spot, aimed at the candidate. Stomping it runs a correction"
+role = "projectile"
+size = [16, 16]
+
+[entities.attack_ad.contact]
+bounce = -4
+otherwise = "kill-player"
+stomp_depth = 7
+
+[entities.attack_ad.fly]
+speed = "1.5"
+
+[entities.attack_ad.hitbox]
+h = 8
+w = 12
+x = 2
+y = 4
+
+[entities.attack_ad.sprite]
+flip_when_facing_left = true
+palette = 6
+slot = "tiles"
+tiles = [72, 73, 88, 89]
+width = 2
+
+[entities.candidate]
+description = "The candidate, on message and on the move"
+role = "player"
+size = [16, 16]
+tile_collision = true
+
+[entities.candidate.hitbox]
+h = 12
+w = 10
+x = 3
+y = 4
+
+[entities.candidate.jump]
+action = "jump"
+gravity = "0.5625"
+gravity_held = "0.15625"
+max_fall = 4
+move_first = true
+speed = -5
+
+[[entities.candidate.jump.bands]]
+below = "0.5625"
+gravity = "0.4375"
+gravity_held = "0.125"
+speed = -4
+
+[[entities.candidate.jump.bands]]
+below = 1
+gravity = "0.4375"
+gravity_held = "0.125"
+speed = -4
+
+[[entities.candidate.jump.bands]]
+below = "1.5625"
+gravity = "0.375"
+gravity_held = "0.1171875"
+speed = -4
+
+[[entities.candidate.jump.bands]]
+below = "1.75"
+gravity = "0.5625"
+gravity_held = "0.15625"
+speed = -5
+
+[entities.candidate.run]
+acceleration = "0.037109375"
+air_control = true
+deceleration = "0.037109375"
+run_acceleration = "0.0556640625"
+run_action = "run"
+run_speed = "2.5"
+skid_deceleration = "0.07421875"
+walk_speed = "1.5"
+
+[entities.candidate.sprite]
+flip_when_facing_left = true
+palette = 4
+slot = "tiles"
+tiles = [64, 65, 80, 81]
+width = 2
+
+[entities.donation]
+description = "A small-dollar donation"
+role = "collectible"
+size = [16, 16]
+
+[entities.donation.contact]
+otherwise = "collect"
+
+[entities.donation.hitbox]
+h = 12
+w = 8
+x = 4
+y = 2
+
+[entities.donation.sprite]
+palette = 7
+slot = "tiles"
+tiles = [76, 77, 92, 93]
+width = 2
+
+[entities.heckler]
+description = "Hops up and down shouting. Stomped, they keep shouting on foot"
+role = "enemy"
+size = [16, 16]
+tile_collision = true
+
+[entities.heckler.contact]
+bounce = -4
+keep_on_stomp = true
+otherwise = "kill-player"
+stomp_depth = 6
+
+[entities.heckler.fall]
+gravity = "0.23828125"
+max_fall = 3
+move_first = true
+
+[entities.heckler.hitbox]
+h = 12
+w = 10
+x = 3
+y = 4
+
+[entities.heckler.hop]
+speed = -3
+
+[entities.heckler.machine]
+initial = "hopping"
+
+[entities.heckler.machine.states.grounded]
+description = "Gone: the heckler on foot takes its place"
+
+[[entities.heckler.machine.states.hopping.transition]]
+do = ["become:heckler_on_foot"]
+on = "enemy.stomped"
+to = "grounded"
+
+[entities.heckler.sprite]
+flip_when_facing_left = true
+palette = 5
+slot = "tiles"
+tiles = [66, 67, 82, 83]
+width = 2
+
+[entities.heckler.walk]
+speed = "0.5"
+
+[entities.heckler_on_foot]
+description = "A heckler who has stopped hopping"
+role = "enemy"
+size = [16, 16]
+tile_collision = true
+
+[entities.heckler_on_foot.contact]
+bounce = -4
+otherwise = "kill-player"
+stomp_depth = 6
+
+[entities.heckler_on_foot.fall]
+gravity = "0.23828125"
+max_fall = 3
+move_first = true
+
+[entities.heckler_on_foot.hitbox]
+h = 12
+w = 10
+x = 3
+y = 4
+
+[entities.heckler_on_foot.sprite]
+flip_when_facing_left = true
+palette = 5
+slot = "tiles"
+tiles = [68, 69, 84, 85]
+width = 2
+
+[entities.heckler_on_foot.walk]
+speed = "0.5"
+
+[entities.pollster]
+description = "Walks the same short beat with a clipboard"
+role = "enemy"
+size = [16, 16]
+
+[entities.pollster.contact]
+bounce = -3
+otherwise = "kill-player"
+stomp_depth = 7
+
+[entities.pollster.hitbox]
+h = 12
+w = 12
+x = 2
+y = 4
+
+[entities.pollster.patrol]
+period = 4
+step = 3
+
+[entities.pollster.sprite]
+flip_when_facing_left = true
+palette = 6
+slot = "tiles"
+tiles = [74, 75, 90, 91]
+width = 2
+
+[entities.pundit]
+description = "Rises from behind a lectern with a take, and sinks back. Waits while the candidate is close"
+role = "enemy"
+size = [16, 16]
+
+[entities.pundit.contact]
+otherwise = "kill-player"
+
+[entities.pundit.hitbox]
+h = 12
+w = 12
+x = 2
+y = 4
+
+[entities.pundit.path]
+axis = "y"
+distance = -24
+pause = 64
+speed = "0.5"
+wait_near = 33
+
+[entities.pundit.sprite]
+palette = 6
+slot = "tiles"
+tiles = [70, 71, 86, 87]
+width = 2
+
+[levels.debate_stage]
+description = "The debate: two lecterns, two gaps and the ads start in earnest"
+grid = "debate_stage"
+kill_below = 208
+next = "election_night"
+size = [64, 15]
+solid_property = "solid"
+spawn_ahead = 32
+tile_size = 16
+tileset = "metatiles"
+
+[levels.debate_stage.counters]
+days = 120
+
+[levels.debate_stage.goal]
+x = 964
+
+[[levels.debate_stage.spawn]]
+entity = "candidate"
+x = 24
+y = 176
+
+[[levels.debate_stage.spawn]]
+entity = "pundit"
+x = 176
+y = 176
+
+[[levels.debate_stage.spawn]]
+entity = "donation"
+x = 384
+y = 112
+
+[[levels.debate_stage.spawn]]
+entity = "heckler"
+x = 448
+y = 176
+
+[[levels.debate_stage.spawn]]
+entity = "pundit"
+x = 624
+y = 176
+
+[[levels.debate_stage.spawn]]
+entity = "attack_ad"
+x = 880
+y = 168
+
+[[levels.debate_stage.spawn]]
+entity = "pollster"
+table = "pollsters_debate_stage"
+y = 176
+
+[levels.debate_stage.spawn.columns]
+patrol_end = "end"
+x = "start"
+
+[levels.election_night]
+description = "Election night: wide gaps, two lecterns and the victory podium"
+grid = "election_night"
+kill_below = 208
+size = [72, 15]
+solid_property = "solid"
+spawn_ahead = 32
+tile_size = 16
+tileset = "metatiles"
+
+[levels.election_night.counters]
+days = 140
+
+[levels.election_night.goal]
+x = 1092
+
+[[levels.election_night.spawn]]
+entity = "candidate"
+x = 24
+y = 176
+
+[[levels.election_night.spawn]]
+entity = "heckler"
+x = 320
+y = 176
+
+[[levels.election_night.spawn]]
+entity = "pundit"
+x = 400
+y = 176
+
+[[levels.election_night.spawn]]
+entity = "donation"
+x = 640
+y = 96
+
+[[levels.election_night.spawn]]
+entity = "attack_ad"
+x = 608
+y = 168
+
+[[levels.election_night.spawn]]
+entity = "pundit"
+x = 816
+y = 176
+
+[[levels.election_night.spawn]]
+entity = "heckler"
+x = 880
+y = 176
+
+[[levels.election_night.spawn]]
+entity = "attack_ad"
+x = 1040
+y = 168
+
+[[levels.election_night.spawn]]
+entity = "pollster"
+table = "pollsters_election_night"
+y = 176
+
+[levels.election_night.spawn.columns]
+patrol_end = "end"
+x = "start"
+
+[levels.town_hall]
+description = "The first stop: a crowd barrier, a gap in the risers and the first pundit"
+grid = "town_hall"
+kill_below = 208
+next = "debate_stage"
+size = [56, 15]
+solid_property = "solid"
+spawn_ahead = 32
+tile_size = 16
+tileset = "metatiles"
+
+[levels.town_hall.counters]
+days = 100
+
+[levels.town_hall.goal]
+x = 836
+
+[[levels.town_hall.spawn]]
+entity = "candidate"
+x = 24
+y = 176
+
+[[levels.town_hall.spawn]]
+entity = "heckler"
+x = 240
+y = 176
+
+[[levels.town_hall.spawn]]
+entity = "donation"
+x = 240
+y = 96
+
+[[levels.town_hall.spawn]]
+entity = "pundit"
+x = 496
+y = 176
+
+[[levels.town_hall.spawn]]
+entity = "attack_ad"
+x = 720
+y = 168
+
+[[levels.town_hall.spawn]]
+entity = "pollster"
+table = "pollsters_town_hall"
+y = 176
+
+[levels.town_hall.spawn.columns]
+patrol_end = "end"
+x = "start"
+
+[cameras.main]
+follow = "candidate"
+axis = "x"
+size = [256, 240]
+lead = [112, 0]
+clamp_to_level = true
+scroll_back = false
+
+[rules.game]
+initial = "campaigning"
+
+[[rules.game.states.campaigning.transition]]
+to = "news_cycle"
+on = "player.died"
+do = ["change:approval:-1"]
+
+[[rules.game.states.campaigning.transition]]
+to = "news_cycle"
+on = "days.reached_min"
+do = ["change:approval:-1"]
+
+[[rules.game.states.campaigning.transition]]
+to = "elected"
+on = "goal.reached"
+
+[rules.game.states.campaigning.transition.if]
+counter = "stops"
+cmp = ">="
+value = 3
+
+[[rules.game.states.campaigning.transition]]
+to = "rally"
+on = "goal.reached"
+
+[rules.game.states.conceded]
+description = "Approval at zero: the game is over"
+freeze = true
+
+[rules.game.states.elected]
+description = "The last podium: the game is won"
+freeze = true
+
+[rules.game.states.news_cycle]
+description = "A gaffe: the story runs for a moment, then the stop starts again"
+freeze = true
+
+[[rules.game.states.news_cycle.transition]]
+to = "campaigning"
+after = 90
+do = ["restart-level"]
+
+[rules.game.states.news_cycle.transition.if]
+counter = "approval"
+cmp = ">"
+value = 0
+
+[[rules.game.states.news_cycle.transition]]
+to = "conceded"
+after = 90
+
+[rules.game.states.rally]
+description = "A stop won; the bus to the next one"
+freeze = true
+
+[[rules.game.states.rally.transition]]
+to = "campaigning"
+after = 60
+do = ["next-level"]
+
+[counters.approval]
+description = "Lives"
+start = 3
+min = 0
+
+[counters.days]
+description = "Days left until the vote, one every 60 frames"
+min = 0
+
+[[counters.days.change]]
+every = 60
+by = -1
+
+[counters.donations]
+max = 999
+
+[[counters.donations.change]]
+on = "item.collected"
+
+[[counters.rebuttals.change]]
+on = "enemy.stomped"
+
+[[counters.stops.change]]
+on = "goal.reached"
+
+[evidence.assets]
+source = "stated"
+confidence = 100
+note = "Each slot is filled from the asset of its name in the template's authored.toml"
+
+[[evidence.assets.refs]]
+at = "template:swing-state"
+
+[evidence.cameras]
+source = "stated"
+confidence = 100
+note = "The template author's; scroll_back false as in Super Mario Bros."
+
+[[evidence.cameras.refs]]
+at = "template:swing-state"
+
+[evidence.counters]
+source = "stated"
+confidence = 100
+note = "The template author's"
+
+[[evidence.counters.refs]]
+at = "template:swing-state"
+
+[evidence.entities]
+source = "stated"
+confidence = 100
+note = "Designed for this template"
+
+[[evidence.entities.refs]]
+at = "template:swing-state"
+
+[evidence."entities.attack_ad.fly"]
+source = "stated"
+confidence = 100
+note = "Super Mario Bros.' bullet bill speed (entities.bullet_bill.fly), aimed at the player"
+
+[[evidence."entities.attack_ad.fly".refs]]
+at = "inspired-by:smb1-ntsc-prg0"
+
+[evidence."entities.candidate.hitbox"]
+source = "stated"
+confidence = 100
+note = "Small Mario's hitbox (entities.mario.hitbox) moved to the top of a 16 by 16 box"
+
+[[evidence."entities.candidate.hitbox".refs]]
+at = "inspired-by:smb1-ntsc-prg0"
+
+[evidence."entities.candidate.jump"]
+source = "stated"
+confidence = 100
+note = "Super Mario Bros.' jump with its bands, gravity while held and move_first, taken whole from entities.mario.jump"
+
+[[evidence."entities.candidate.jump".refs]]
+at = "inspired-by:smb1-ntsc-prg0"
+
+[evidence."entities.candidate.run"]
+source = "stated"
+confidence = 100
+note = "Super Mario Bros.' run, taken whole from entities.mario.run: the candidate is the scale the rest is converted to"
+
+[[evidence."entities.candidate.run".refs]]
+at = "inspired-by:smb1-ntsc-prg0"
+
+[evidence."entities.heckler"]
+source = "stated"
+confidence = 100
+note = "Super Mario Bros.' jumping paratroopa (entities.paratroopa_green): walk, fall, hop -3, and a stomp that leaves a walker. Speeds are unchanged, since the candidate moves as Mario does"
+
+[[evidence."entities.heckler".refs]]
+at = "inspired-by:smb1-ntsc-prg0"
+
+[evidence."entities.heckler_on_foot"]
+source = "stated"
+confidence = 100
+note = "The koopa a stomped paratroopa becomes, without its shell"
+
+[[evidence."entities.heckler_on_foot".refs]]
+at = "inspired-by:smb1-ntsc-prg0"
+
+[evidence."entities.pollster.contact"]
+source = "stated"
+confidence = 100
+note = "Moss Hop's slug contact (entities.slug.contact). Its stomp depth, 7, is at least the candidate's max_fall of 4, so a stomp can't be fallen through"
+
+[[evidence."entities.pollster.contact".refs]]
+at = "inspired-by:mosshop"
+
+[evidence."entities.pollster.patrol"]
+source = "stated"
+confidence = 100
+note = "Moss Hop's slug patrols a pixel every 2 frames, half the player's walk of 1 (templates/mosshop/model.toml, entities.slug.patrol). Kept at half the candidate's walk of 1.5: 3 pixels every 4 frames"
+
+[[evidence."entities.pollster.patrol".refs]]
+at = "inspired-by:mosshop"
+
+[evidence."entities.pundit.path"]
+source = "stated"
+confidence = 100
+note = "Super Mario Bros.' piranha plant path (entities.piranha_plant.path), unchanged"
+
+[[evidence."entities.pundit.path".refs]]
+at = "inspired-by:smb1-ntsc-prg0"
+
+[evidence.input]
+source = "stated"
+confidence = 100
+note = "The template author's choice of buttons"
+
+[[evidence.input.refs]]
+at = "template:swing-state"
+
+[evidence.levels]
+source = "stated"
+confidence = 100
+note = "Three stops written for this template"
+
+[[evidence.levels.refs]]
+at = "template:swing-state"
+
+[evidence.rules]
+source = "stated"
+confidence = 100
+note = "The template author's: approval as lives, days per stop and three stops to win"
+
+[[evidence.rules.refs]]
+at = "template:swing-state"

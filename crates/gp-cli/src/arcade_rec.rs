@@ -558,9 +558,13 @@ pub(crate) fn open(
 }
 
 impl Cursor {
-    #[cfg(test)]
     pub fn tapper(&self) -> &Tapper {
         &self.tapper
+    }
+
+    /// The machine, to turn its event log on and take its events.
+    pub fn tapper_mut(&mut self) -> &mut Tapper {
+        &mut self.tapper
     }
 
     pub fn into_tapper(self) -> Tapper {

@@ -102,7 +102,9 @@ function serve(extra = {}, game = GAME, mech = MECH, gamesDir = games, more = []
   p.stderr.on("data", (d) => { err += d; });
   return new Promise((res, rej) => {
     let out = "";
-    const t = setTimeout(() => rej(new Error(`gp mechanic start printed no address: ${out}${err}`)), 20000);
+    // A fresh home builds the game's module from the kit first (about a
+    // minute for Tapper's hook crate), so the address can be slow to come.
+    const t = setTimeout(() => rej(new Error(`gp mechanic start printed no address: ${out}${err}`)), 240000);
     p.stdout.on("data", (d) => {
       out += d;
       const m = out.match(/http:\/\/127\.0\.0\.1:\d+\//);

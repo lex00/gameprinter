@@ -1,0 +1,740 @@
+# Moss Hop's key (docs/formats/rom-dataset-key.md), brought from game-printer
+# (games/keys/mosshop) as gp dataset grade's test fixture: what a dataset of
+# target/mosshop/mosshop.nes should say, from templates/mosshop/model.toml,
+# templates/mosshop/mapping.toml and the source, games/mosshop/mosshop.s and
+# ram.inc. Instruction addresses are the CODE segment's, which starts at
+# $C000. Moss Hop is practice: the tool lane may read this key.
+#
+# Where the code and the model or mapping differ, the code wins:
+# - STATE ($05) is both the game's state and the player's in the mapping;
+#   here it is the game's only, since one byte belongs to one element.
+# - The mapping's [[ignore]] calls TMP_XL ($30) a pointer. The code uses it
+#   as the low byte of a pixel column (touch_enemies, cell_at): scratch.
+# - The slug's stomp_depth (7) is a model number the code never holds: it
+#   compares PLAYER_Y with STOMP_BELOW, 172. The constant at that compare is
+#   keyed as 172.
+# - Bytes the mapping doesn't map but ram.inc names (TIMER, ENEMY_TIMER,
+#   PEAK_Y, the scratch and redraw bytes) are keyed from the source.
+
+[key]
+format = "0.1.0"
+game = "mosshop"
+rom = "44fcedf5050970a0ae6cf10c76ac80d9628f663416c22adb8432a43b0c953ec4"
+rom_file = "target/mosshop/mosshop.nes"
+model = "templates/mosshop/model.toml"
+mapping = "templates/mosshop/mapping.toml"
+sources = ["games/mosshop/mosshop.s", "games/mosshop/ram.inc"]
+
+[[element]]
+name = "player"
+kind = "player"
+model = "entities.player"
+class = "rom"
+
+[[element]]
+name = "slug"
+kind = "slots"
+slots = 2
+model = "entities.slug"
+class = "rom"
+
+[[element]]
+name = "camera"
+kind = "camera"
+model = "cameras.main"
+class = "rom"
+
+[[element]]
+name = "game"
+kind = "game"
+model = "rules.game"
+class = "rom"
+
+[[element]]
+name = "counters"
+kind = "hud"
+model = "counters"
+class = "rom"
+
+[[element]]
+name = "level"
+kind = "level"
+model = "levels.main"
+class = "rom"
+
+[[element]]
+name = "input"
+kind = "input"
+class = "rom"
+
+# The player.
+
+[[ram]]
+addr = 0x10
+element = "player"
+field = "entities.player[0].x"
+quantity = "x"
+part = "lo"
+role = "state"
+class = "rom"
+src = "C132"
+
+[[ram]]
+addr = 0x11
+element = "player"
+field = "entities.player[0].x"
+quantity = "x"
+part = "hi"
+role = "state"
+class = "rom"
+src = "C136"
+
+[[ram]]
+addr = 0x12
+element = "player"
+field = "entities.player[0].y"
+quantity = "y"
+part = "lo"
+role = "state"
+class = "rom"
+src = "C14A"
+
+[[ram]]
+addr = 0x1C
+element = "player"
+field = "entities.player[0].y"
+quantity = "y"
+part = "hi"
+role = "state"
+class = "rom"
+src = "C138"
+
+[[ram]]
+addr = 0x13
+element = "player"
+field = "entities.player[0].y"
+quantity = "y"
+part = "fraction"
+role = "state"
+class = "rom"
+src = "C13A"
+
+[[ram]]
+addr = 0x14
+element = "player"
+field = "entities.player[0].vy"
+quantity = "speed_y"
+part = ["whole", "hi"]
+role = "state"
+class = "rom"
+src = "C23E"
+
+[[ram]]
+addr = 0x15
+element = "player"
+field = "entities.player[0].vy"
+quantity = "speed_y"
+part = "fraction"
+role = "state"
+class = "rom"
+src = "C23A"
+
+[[ram]]
+addr = 0x16
+element = "player"
+field = "entities.player[0].on_ground"
+quantity = "flag"
+part = "whole"
+role = "state"
+class = "rom"
+src = "C273"
+
+[[ram]]
+addr = 0x17
+element = "player"
+field = "entities.player[0].facing"
+quantity = "facing"
+part = "whole"
+role = "state"
+class = "rom"
+src = "C211"
+
+[[ram]]
+addr = 0x19
+element = "player"
+role = "state"
+class = "rom"
+src = "C285"
+note = "PEAK_Y, the smallest PLAYER_Y since the last jump: compared each frame in the air"
+
+[[ram]]
+addr = 0x18
+role = "scratch"
+class = "rom"
+src = "C242"
+note = "JUMP_START_Y: written, never read"
+
+# The slugs: two slots, slot i at each base plus i.
+
+[[ram]]
+addr = 0x20
+slots = 2
+element = "slug"
+field = "entities.slug[].x"
+quantity = "x"
+part = "lo"
+role = "state"
+class = "rom"
+src = "C155"
+
+[[ram]]
+addr = 0x22
+slots = 2
+element = "slug"
+field = "entities.slug[].x"
+quantity = "x"
+part = "hi"
+role = "state"
+class = "rom"
+src = "C15A"
+
+[[ram]]
+addr = 0x24
+slots = 2
+element = "slug"
+field = "entities.slug[].facing"
+quantity = "facing"
+part = "whole"
+role = "state"
+class = "rom"
+src = "C49B"
+
+[[ram]]
+addr = 0x26
+slots = 2
+element = "slug"
+field = "entities.slug[].state"
+quantity = "state"
+part = "whole"
+role = "state"
+class = "rom"
+src = "C506"
+
+[[ram]]
+addr = 0x28
+slots = 2
+element = "slug"
+quantity = "timer"
+part = "whole"
+role = "timer"
+class = "rom"
+src = "C50A"
+note = "ENEMY_TIMER, frames left squashed; not mapped"
+
+# The camera.
+
+[[ram]]
+addr = 0x1A
+element = "camera"
+field = "cameras.main.x"
+quantity = "x"
+part = "lo"
+role = "state"
+class = "rom"
+src = "C524"
+
+[[ram]]
+addr = 0x1B
+element = "camera"
+field = "cameras.main.x"
+quantity = "x"
+part = "hi"
+role = "state"
+class = "rom"
+src = "C52A"
+
+# The game.
+
+[[ram]]
+addr = 0x05
+element = "game"
+field = "rules.game.state"
+quantity = "state"
+part = "whole"
+role = "state"
+class = "rom"
+src = "C42C"
+
+[[ram]]
+addr = 0x06
+element = "game"
+quantity = "timer"
+part = "whole"
+role = "timer"
+class = "rom"
+src = "C430"
+note = "TIMER, frames left dying or in the game over; not mapped"
+
+[[ram]]
+addr = 0x00
+role = "counter"
+quantity = "count"
+part = "whole"
+class = "rom"
+src = "C0A8"
+note = "FRAMES, counted in the NMI"
+
+# The counters.
+
+[[ram]]
+addr = 0x07
+element = "counters"
+field = "counters.deaths"
+quantity = "count"
+part = "whole"
+role = "counter"
+class = "rom"
+src = "C432"
+
+[[ram]]
+addr = 0x08
+element = "counters"
+field = "counters.stomps"
+quantity = "count"
+part = "whole"
+role = "counter"
+class = "rom"
+src = "C514"
+
+[[ram]]
+addr = 0x09
+element = "counters"
+field = "counters.coins"
+quantity = "count"
+part = "whole"
+role = "counter"
+class = "rom"
+src = "C12B"
+
+[[ram]]
+addr = 0x0A
+element = "counters"
+field = "counters.lives"
+quantity = "count"
+part = "whole"
+role = "counter"
+class = "rom"
+src = "C123"
+
+# The level's cells: LEVEL_LEFT and LEVEL_RIGHT, 480 bytes.
+
+[[ram]]
+addr = 0x300
+len = 480
+element = "level"
+field = "cells"
+quantity = "cell"
+part = "whole"
+role = "level"
+class = "rom"
+src = "C16C"
+
+# Input.
+
+[[ram]]
+addr = 0x02
+len = 3
+element = "input"
+quantity = "buttons"
+part = "whole"
+role = "input"
+class = "rom"
+src = "C1D9"
+
+# Scratch and pointers, valid only inside one routine.
+
+[[ram]]
+addr = 0x01
+role = "state"
+class = "rom"
+note = "NMI_DONE, set by the NMI and cleared by the main loop"
+
+[[ram]]
+addr = 0x30
+len = 4
+role = "scratch"
+class = "rom"
+note = "TMP_XL, TMP_XH, TMP_Y, TMP_COL"
+
+[[ram]]
+addr = 0x34
+len = 2
+role = "pointer"
+class = "rom"
+note = "TMP_PTR"
+
+[[ram]]
+addr = 0x36
+len = 12
+role = "scratch"
+class = "rom"
+note = "TMP_SPEED to TMP_PAGE"
+
+[[ram]]
+addr = 0x42
+len = 2
+role = "pointer"
+class = "rom"
+note = "TMP_DST"
+
+[[ram]]
+addr = 0x44
+len = 3
+role = "scratch"
+class = "rom"
+note = "TMP_QTILE, TMP_QCELL, TMP_QCOL"
+
+# Constants: the model's behaviour numbers, each at its instruction.
+
+[[constant]]
+path = "entities.player.run.walk_speed"
+value = 1
+raw = 1
+format = "u8"
+quantity = "max_speed"
+mechanic = "platformer.run"
+parameter = "walk_speed"
+element = "player"
+pc = ["C1FB"]
+class = "rom"
+
+[[constant]]
+path = "entities.player.run.run_speed"
+value = 2
+raw = 2
+format = "u8"
+quantity = "max_speed"
+mechanic = "platformer.run"
+parameter = "run_speed"
+element = "player"
+pc = ["C205"]
+class = "rom"
+
+[[constant]]
+path = "entities.player.jump.speed"
+value = -5
+raw = 0xFB
+format = "s8"
+quantity = "jump_speed"
+mechanic = "platformer.jump"
+parameter = "speed"
+element = "player"
+pc = ["C23C"]
+part_pc = ["C238"]
+class = "rom"
+note = "JUMP_SPEED, $FB00 in 8.8: the whole byte at C23C, the fraction 0 at C238"
+
+[[constant]]
+path = "entities.player.jump.gravity"
+value = "0.25"
+number = 0.25
+raw = 0x40
+format = "0.8"
+quantity = "gravity"
+mechanic = "platformer.jump"
+parameter = "gravity"
+element = "player"
+pc = ["C2A5"]
+class = "rom"
+
+[[constant]]
+path = "entities.player.jump.max_fall"
+value = 4
+raw = 4
+format = "u8"
+quantity = "max_speed"
+mechanic = "platformer.jump"
+parameter = "max_fall"
+element = "player"
+pc = ["C2B1", "C2B5"]
+class = "rom"
+
+[[constant]]
+path = "entities.player.machine.states.dying.enter_speed"
+value = -4
+raw = 0xFC
+format = "s8"
+quantity = "jump_speed"
+mechanic = "core.modes"
+parameter = "enter_speed"
+element = "player"
+pc = ["C438"]
+part_pc = ["C434"]
+class = "rom"
+note = "DEATH_HOP, $FC00 in 8.8"
+
+[[constant]]
+path = "entities.slug.contact.bounce"
+value = -3
+raw = 0xFD
+format = "s8"
+quantity = "jump_speed"
+mechanic = "platformer.contact"
+parameter = "bounce"
+element = "slug"
+pc = ["C510"]
+part_pc = ["C50C"]
+class = "rom"
+note = "BOUNCE_SPEED, $FD00 in 8.8"
+
+[[constant]]
+path = "entities.slug.contact.stomp_depth"
+value = 7
+number = 172
+raw = 172
+format = "u8"
+quantity = "threshold"
+mechanic = "platformer.contact"
+parameter = "stomp_depth"
+element = "slug"
+pc = ["C500"]
+class = "rom"
+note = "STOMP_BELOW: a falling player above y 172 stomps, so its bottom is in the slug's top 7 rows"
+
+[[constant]]
+path = "entities.slug.machine.states.flat.transition.after"
+value = 30
+raw = 30
+format = "u8"
+quantity = "duration"
+mechanic = "core.modes"
+parameter = "after"
+element = "slug"
+pc = ["C508"]
+class = "rom"
+note = "SQUASH_FRAMES"
+
+[[constant]]
+path = "entities.slug.patrol.period"
+value = 2
+number = 1
+raw = 1
+format = "u8"
+quantity = "mask"
+mechanic = "platformer.patrol"
+parameter = "period"
+element = "slug"
+pc = ["C475"]
+class = "rom"
+note = "move_enemies runs on frames whose FRAMES & 1 is 0: the mask 1 gives the period 2"
+
+[[constant]]
+path = "rules.game.states.dying.transition.after"
+value = 90
+raw = 90
+format = "u8"
+quantity = "duration"
+mechanic = "core.flow"
+parameter = "after"
+element = "game"
+pc = ["C42E"]
+class = "rom"
+note = "DYING_FRAMES"
+
+[[constant]]
+path = "rules.game.states.game_over.transition.after"
+value = 120
+raw = 120
+format = "u8"
+quantity = "duration"
+mechanic = "core.flow"
+parameter = "after"
+element = "game"
+pc = ["C458"]
+class = "rom"
+note = "GAME_OVER_FRAMES"
+
+[[constant]]
+path = "counters.lives.start"
+value = 2
+raw = 2
+format = "u8"
+quantity = "count"
+mechanic = "core.counters"
+parameter = "start"
+element = "counters"
+pc = ["C121"]
+class = "rom"
+note = "START_LIVES"
+
+[[constant]]
+path = "levels.main.kill_below"
+value = 208
+raw = 208
+format = "u8"
+quantity = "limit"
+mechanic = "platformer.pit"
+parameter = "kill_below"
+element = "level"
+pc = ["C28C"]
+class = "rom"
+note = "PIT_Y"
+
+[[constant]]
+path = "levels.main.goal.x"
+value = 468
+raw = 0xD4
+format = "u8"
+quantity = "threshold"
+mechanic = "platformer.goal"
+parameter = "x"
+element = "level"
+part_pc = ["C299"]
+class = "rom"
+note = "GOAL_X: only its low byte is compared, after PLAYER_X_HI is checked nonzero. No single operand holds 468, so no pc"
+
+[[constant]]
+path = "cameras.main.lead"
+value = 120
+raw = 120
+format = "u8"
+quantity = "offset"
+mechanic = "core.camera"
+parameter = "lead"
+element = "camera"
+pc = ["C522"]
+class = "rom"
+note = "CAMERA_LEAD"
+
+[[constant]]
+path = "entities.player.jump.head.point"
+value = 8
+raw = 8
+format = "u8"
+quantity = "offset"
+mechanic = "platformer.jump"
+parameter = "head.point"
+element = "player"
+pc = ["C2DB"]
+class = "rom"
+note = "HEAD_X, the head point's x"
+
+[[constant]]
+path = "entities.player.jump.pickup.points"
+value = 8
+raw = 8
+format = "u8"
+quantity = "offset"
+mechanic = "platformer.jump"
+parameter = "pickup.points"
+element = "player"
+pc = ["C30A", "C317"]
+class = "rom"
+note = "PICKUP_X and PICKUP_Y, the pickup point (8, 8)"
+
+[[constant]]
+path = "levels.main.spawn[player].x"
+value = 24
+raw = 24
+format = "u8"
+quantity = "offset"
+element = "player"
+pc = ["C130"]
+class = "name"
+note = "START_X: where the level places the player, a choice of the level's design"
+
+[[constant]]
+path = "levels.main.spawn[player].y"
+value = 176
+raw = 176
+format = "u8"
+quantity = "offset"
+element = "player"
+pc = ["C148"]
+class = "name"
+note = "START_Y"
+
+# State machines.
+
+[[machine]]
+byte = 0x05
+element = "game"
+values = [0, 1, 2, 3]
+initial = 0
+complete = true
+class = "rom"
+note = "STATE: 0 playing, 1 dying, 2 clear, 3 game over"
+
+[[transition]]
+byte = 0x05
+from = 0
+to = 1
+pc = "C42C"
+class = "rom"
+note = "kill_player: a slug's touch or the pit"
+
+[[transition]]
+byte = 0x05
+from = 0
+to = 2
+pc = "C29F"
+class = "rom"
+note = "move_player: the goal"
+
+[[transition]]
+byte = 0x05
+from = 1
+to = 0
+pc = "C142"
+class = "rom"
+note = "update_dying -> start_level with a life left"
+
+[[transition]]
+byte = 0x05
+from = 1
+to = 3
+pc = "C456"
+class = "rom"
+note = "update_dying with no life left"
+
+[[transition]]
+byte = 0x05
+from = 3
+to = 0
+pc = "C142"
+class = "rom"
+note = "main's game over -> new_game -> start_level"
+
+[[machine]]
+byte = 0x26
+bytes = [0x26, 0x27]
+element = "slug"
+values = [0, 1, 2]
+initial = 1
+complete = true
+class = "rom"
+note = "ENEMY_STATE: 0 gone, 1 walking, 2 squashed"
+
+[[transition]]
+byte = 0x26
+from = 1
+to = 2
+pc = "C506"
+class = "rom"
+note = "touch_enemies: a stomp"
+
+[[transition]]
+byte = 0x26
+from = 2
+to = 0
+pc = "C46B"
+class = "rom"
+note = "tick_squashed: the time is up"
+
+[[transition]]
+byte = 0x26
+from = [0, 2]
+to = 1
+pc = "C164"
+class = "rom"
+note = "start_level puts every slug back to walking"

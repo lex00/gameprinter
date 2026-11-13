@@ -1,0 +1,29 @@
+# Template manifest (docs/templates.md, docs/originals.md). Signal Failure
+# is an original: no source game. Its assets are written in authored.toml,
+# and `gp template build` makes the data image and asset map the pins name.
+[template]
+format = "0.1.1"
+id = "signal-failure"
+title = "Signal Failure"
+tier = "open"
+model = "model.toml"
+contract = "fidelity.toml"
+
+[source]
+id = "signal-failure"
+platform = "nes"
+how = "authored"
+accepts = ["2650c37ff10fdbf6e60fdb22000e8266b4fc87a88f401625c83de6d7956da248"]
+
+[recipe]
+asset_map = "../../assets/signal-failure.toml"
+asset_map_sha256 = "015f013d07314739a9b66d297b0c9ae9b696c40e9af4a0eb02c2cb0c57330fd9"
+lifted_sha256 = "d13ad586ef56c4e6f3a6a28610c8b8d1de2080cb9188093fb57135270f2902c0"
+
+[slots]
+interchange = "layout"
+last_train = "layout"
+metatiles = "tileset"
+palettes = "palettes"
+platform_9 = "layout"
+tiles = "graphics"

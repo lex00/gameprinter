@@ -54,7 +54,9 @@ check: _hook-enabled build mosshop
     just mechanic-page
     just web-parity
     {{gp}} template check templates/mosshop --rom {{quote(mosshop_rom)}}
+    just originals
     scripts/test-hook.sh
+    just check-vendor
     python3 -I -B -m unittest discover -s scripts/romguard -q
     just site-prose
     just check-roms
@@ -137,11 +139,31 @@ _dk-module games: build
     {{quote(gp)}} game kit -o {{quote(target / "module-kit")}} > /dev/null
     {{quote(gp)}} game build {{quote(games / "donkey-kong")}} --kit {{quote(target / "module-kit")}} -o {{quote(target / "modules" / "donkey-kong.wasm")}} > /dev/null
 
+# The original templates (docs/originals.md): each built from its
+# authored.toml into $GP_HOME/work, held to its pins, its model checked
+# against the build and in canonical form, and every level's model baseline
+# replayed in the interpreter. Under a second for the three.
+originals_list := "badge-in signal-failure swing-state"
+
+originals: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for t in {{originals_list}}; do
+        {{gp}} template build "templates/$t" > /dev/null
+        {{gp}} template check "templates/$t" --rom {{quote(gp_home / "work" / "images")}}/"$t.nes" > /dev/null
+        {{gp}} model check "templates/$t" --assets {{quote(gp_home / "work" / "assets")}}/"$t" > /dev/null
+        {{gp}} model fmt --check "templates/$t" > /dev/null
+        {{gp}} interp baselines "templates/$t" > /dev/null
+        echo "originals: $t ok"
+    done
+
 # Writes the generated files: CLI.md from gp's commands and schema/ from
 # the Rust types that read each format (schema/README.md).
 docs: build
     {{gp}} self docs CLI.md
     {{gp}} self schemas schema
+    {{gp}} self shell
+    {{gp}} self features > docs/features.md
 
 # The editor (game-printer's editor/, served at / by `gp serve`): its
 # packages from its own lock, its type check and tests, and its build into
@@ -243,7 +265,7 @@ mechanic-page: build mosshop
     done
     node scripts/web/check-mechanic.mjs --gp {{quote(gp)}} --rom {{quote(mosshop_rom)}} \
         --wasm {{quote(target / "play-web" / "gp_play.wasm")}} --browser "$browser" ${arcade[@]+"${arcade[@]}"} \
-        --shots "$HOME/.game-printer/work/mechanic-page"
+        --shots {{quote(gp_home / "work" / "mechanic-page")}}
 
 _interp-mosshop:
     #!/usr/bin/env bash
@@ -304,8 +326,7 @@ dataset-all: mosshop
 # Laya, the open Jev-compatible decision model, served on 127.0.0.1:7720
 # over Jev's wire format for `gp mechanic demo` and `gp mechanic say --judge`
 # (docs/mechanic-page.md). Installs @receptron/laya under $GP_HOME/work/laya,
-# outside the repo, unless LAYA_DIR names an install already made (game-
-# printer's, ~/.game-printer/work/laya, say); its weights (about 1.7 GB)
+# outside the repo, unless LAYA_DIR names an install already made; its weights (about 1.7 GB)
 # download on first use to ~/.cache/receptron-laya.
 laya port="7720":
     #!/usr/bin/env bash
@@ -344,6 +365,41 @@ mame-build platform=("linux/" + host_arch):
 # Plays an input log on a romset in the MAME image, writing every frame.
 mame-record ROMSET LOG OUT SHOT_EVERY="30" WAV="0":
     GP_HOME={{quote(gp_home)}} GP_ORACLE_WAV={{quote(WAV)}} scripts/oracle/mame-record.sh {{mame_image}} {{quote(ROMSET)}} {{quote(LOG)}} {{quote(OUT)}} {{quote(SHOT_EVERY)}}
+
+# The Mesen oracle (docs/oracle.md): Mesen 2 built from source at a pinned
+# commit, in its own image, separate from the toolchain image. The tag
+# names the commit's first 8 hex digits, as gp_oracle::mesen::image does.
+# Optional, not part of .
+mesen_image := "game-printer-mesen:b9fa69dd"
+
+# Builds the Mesen image, for this machine's architecture by default.
+mesen-build platform=("linux/" + host_arch):
+    @echo "building the Mesen image for {{platform}} (from source: a few minutes, longer under emulation)"
+    docker build -q --platform {{platform}} -t {{mesen_image}}-{{replace(platform, "linux/", "")}} docker/mesen
+
+# Each baseline in gp-nes and in Mesen on both architectures, diffed, every class triaged in oracle/triage.toml.
+check-mesen: build (mesen-build "linux/arm64") (mesen-build "linux/amd64")
+    {{gp}} oracle check baselines/gp-testrom --platform linux/arm64 --platform linux/amd64
+
+# The accuracy baseline (docs/test-roms.md): the standard NES test ROMs, downloaded at pinned hashes, run on gp-nes. Not part of check, since it needs the network once.
+check-testroms *suites: build build-testroms
+    {{gp}} testroms run {{suites}}
+
+# Assemble our own test programs, every `built_from` source in test-roms/suites.toml (`gp testroms built` lists them), with ca65 into $GP_HOME/work/test-roms/. Each x.s is linked with the x.cfg beside it.
+build-testroms: build _build-testroms
+
+_build-testroms:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v ca65 >/dev/null && command -v ld65 >/dev/null || { echo "build-testroms: needs ca65 and ld65 (cc65): brew install cc65, or apt-get install cc65" >&2; exit 2; }
+    work={{quote(gp_home / "work" / "test-roms")}}
+    built=$({{gp}} testroms built)
+    [ -n "$built" ] || { echo "build-testroms: the manifest lists no programs to build" >&2; exit 2; }
+    while IFS=$'\t' read -r path src; do
+        mkdir -p "$work/$(dirname "$path")"
+        ca65 -o "$work/${path%.nes}.o" "$src"
+        ld65 -C "${src%.s}.cfg" -o "$work/$path" "$work/${path%.nes}.o"
+    done <<< "$built"
 
 # The page, built from the games repo beside this one.
 page out="target/page":
@@ -454,3 +510,142 @@ stage0 *ROMS: mosshop
         line=$("$gp" model static "$r" --unread | grep '^Unread:')
         echo "$r: ${line#Unread: }"
     done
+
+# The wasmtime release the WASM checks expect.
+wasmtime_version := "48.0.7"
+
+# gp-wasm-check on the WASM platform (docs/platform-checks.md): the open-tier
+# baseline (baselines/gp-testrom/buttons.toml, compiled in) natively and
+# under wasmtime, then Moss Hop's baselines under wasmtime. Both must give
+# the committed digests. Not part of `just check`: it builds gp-wasm-check
+# for wasm32-wasip2 in release.
+check-wasm: mosshop
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release -q -p gp-wasm-check
+    field() { sed -n "s/^$1 //p" <<<"$2"; }
+    native=$({{quote(target / "release" / "gp-wasm-check")}}) || { echo "$native"; echo "check-wasm: the native build doesn't match baselines/gp-testrom/buttons.toml" >&2; exit 1; }
+    echo "check-wasm: native $(field digest "$native") at $(field fps "$native") frames/s"
+    if ! command -v wasmtime >/dev/null; then
+        echo "check-wasm: wasmtime not found, so the WASM platform can't be checked. Install it with: cargo install --locked wasmtime-cli@{{wasmtime_version}}" >&2
+        exit 1
+    fi
+    version=$(wasmtime --version | cut -d' ' -f2)
+    [ "$version" = "{{wasmtime_version}}" ] || echo "check-wasm: note, wasmtime $version is not the pinned {{wasmtime_version}}"
+    cargo build --release -q -p gp-wasm-check --target wasm32-wasip2
+    module={{quote(target / "wasm32-wasip2" / "release" / "gp-wasm-check.wasm")}}
+    wasm=$(wasmtime run "$module") || { echo "$wasm"; echo "check-wasm: the wasm32-wasip2 build doesn't match baselines/gp-testrom/buttons.toml" >&2; exit 1; }
+    echo "check-wasm: wasm   $(field digest "$wasm") at $(field fps "$wasm") frames/s (wasmtime $version)"
+    files=()
+    for f in baselines/mosshop/*.toml; do files+=("/baselines/$(basename "$f")"); done
+    echo "check-wasm: baselines/mosshop under wasmtime $version"
+    wasmtime run --dir {{quote(mosshop_dir)}}::/rom --dir baselines/mosshop::/baselines "$module" baseline /rom/mosshop.nes "${files[@]}"
+
+# Every recording in the store ($GP_STORE, else $GP_HOME/store) replayed
+# natively and under wasmtime by gp-wasm-check, each ROM found by hash in
+# $GP_ROM_DIR: NES images, arcade romsets by their identity, and model
+# recordings from the store alone. Both must replay every recording that
+# runs identically. Reads the store and the ROMs, writes nothing.
+check-wasm-roms:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    store="${GP_STORE:-{{gp_home / "store"}}}"
+    roms="${GP_ROM_DIR:-{{gp_home / "roms"}}}"
+    cargo build --release -q -p gp-wasm-check
+    echo "check-wasm-roms: natively"
+    {{quote(target / "release" / "gp-wasm-check")}} replay-all "$store" "$roms"
+    if ! command -v wasmtime >/dev/null; then
+        echo "check-wasm-roms: wasmtime not found. Install it with: cargo install --locked wasmtime-cli@{{wasmtime_version}}" >&2
+        exit 1
+    fi
+    cargo build --release -q -p gp-wasm-check --target wasm32-wasip2
+    echo "check-wasm-roms: under wasmtime $(wasmtime --version | cut -d' ' -f2)"
+    wasmtime run --dir "$store"::/store --dir "$roms"::/roms {{quote(target / "wasm32-wasip2" / "release" / "gp-wasm-check.wasm")}} replay-all /store /roms
+
+# The open-tier baseline and Moss Hop's baselines on an x86_64 build of
+# gp-wasm-check, under Rosetta on an Apple Silicon Mac: the same digests as
+# the native and WASM builds. macOS only.
+check-x86_64: mosshop
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "$(uname -s)" != Darwin ]; then echo "check-x86_64: macOS only (Rosetta)"; exit 0; fi
+    cargo build --release -q -p gp-wasm-check --target x86_64-apple-darwin
+    bin={{quote(target / "x86_64-apple-darwin" / "release" / "gp-wasm-check")}}
+    "$bin" | sed -n 's/^digest /check-x86_64: digest /p'
+    "$bin" baseline {{quote(mosshop_rom)}} baselines/mosshop/*.toml
+
+# The vendored emulator core is exactly its import plus our patch
+# (third_party/README.md), and the check catches each kind of edit.
+check-vendor:
+    scripts/vendor/tetanes-core.sh --check
+    scripts/test-vendor.sh
+
+# Full sprite capture on Moss Hop (docs/capture.md, "Sprites"), end to
+# end: two baseline inputs recorded into a store of its own under
+# $GP_HOME/work/sprites-check, captured (Moss Hop's sprites agree with
+# capture, so the proposed model must equal the template's), exported as a
+# sheet with a palette and sidecar, and imported back with its checks.
+sprites-mosshop: build mosshop
+    #!/usr/bin/env bash
+    set -euo pipefail
+    work={{quote(gp_home / "work" / "sprites-check")}}
+    mkdir -p "$work/store" {{quote(assets)}}
+    {{gp}} assets lift {{quote(mosshop_rom)}} --map assets/mosshop.toml -o {{quote(assets)}} --force > /dev/null
+    ids=()
+    for b in finish-level stomp-then-pit; do
+        {{gp}} input-log generate --baseline baselines/mosshop/$b.toml --out "$work/$b.log" >/dev/null
+        id=$(GP_STORE="$work/store" {{gp}} --json record --rom {{quote(mosshop_rom)}} --input "$work/$b.log" --name "mosshop-$b" | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["id"])')
+        ids+=(--recording "$id")
+    done
+    GP_STORE="$work/store" {{gp}} sprites capture templates/mosshop "${ids[@]}"
+    cmp templates/mosshop/model.toml {{quote(gp_home / "work" / "sprites" / "mosshop" / "model.toml")}} || { echo "sprites-mosshop: capture proposes a change to Moss Hop's model" >&2; exit 1; }
+    {{gp}} sprites export templates/mosshop --out "$work/export"
+    {{gp}} sprites import templates/mosshop --from "$work/export" --out "$work/theme"
+
+# Every version pin in the repo (the toolchain, crates, npm, the MAME
+# image, wasmtime, the inspector's browser, tetanes-core) with its newest
+# release, the newest the pinned toolchain can use, and what blocks the
+# rest. Read only: it asks public indexes what exists and changes nothing.
+# Needs the network except with --offline.
+upgrades *args:
+    python3 -I -B scripts/upgrades/report.py {{args}}
+
+# gp-nes's criterion micro-benchmarks, each mean recorded as a metric
+# (bench.criterion.*, docs/platform-checks.md).
+bench:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    stamp={{quote(target / "criterion-started")}}
+    mkdir -p {{quote(target)}}
+    touch "$stamp"
+    cargo bench -q -p gp-nes --bench hot_paths -- --quick
+    python3 -I -B scripts/bench/criterion-metrics.py --since "$stamp" {{quote(target / "criterion")}} | while read -r name value; do
+        {{gp}} metrics record --name "$name" --value "$value" --unit ns >/dev/null
+    done
+
+# Time a clean build and an incremental one, as metrics, and save cargo's
+# per-crate timing report. Builds into its own target directory
+# (target/timings, emptied first), so the usual one stays warm.
+build-timings: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir={{quote(target / "timings")}}
+    rm -rf "$dir"
+    ms() { python3 -I -c 'import time; print(int(time.monotonic() * 1000))'; }
+    t0=$(ms)
+    CARGO_TARGET_DIR="$dir" cargo build --workspace --all-targets --timings -q
+    t1=$(ms)
+    {{gp}} metrics record --name build.clean.duration --value $((t1 - t0)) --unit ms >/dev/null
+    # One edited line in the emulator crate: what most work on gp-nes costs.
+    touch crates/gp-nes/src/lib.rs
+    t0=$(ms)
+    CARGO_TARGET_DIR="$dir" cargo build --workspace --all-targets -q
+    t1=$(ms)
+    {{gp}} metrics record --name build.incremental.gp-nes.duration --value $((t1 - t0)) --unit ms >/dev/null
+    mkdir -p {{quote(gp_home / "reports")}}
+    cp "$dir/cargo-timings/cargo-timing.html" {{quote(gp_home / "reports" / "cargo-timing.html")}}
+    python3 -I -B scripts/build-timings.py "$dir/cargo-timings/cargo-timing.html" | while read -r name value; do
+        {{gp}} metrics record --name "$name" --value "$value" --unit ms >/dev/null
+    done
+    python3 -I -B scripts/build-timings.py --summary "$dir/cargo-timings/cargo-timing.html"
+    echo "clean build and incremental gp-nes rebuild recorded; cargo's report: {{gp_home / "reports" / "cargo-timing.html"}}"

@@ -154,17 +154,10 @@ pub(crate) fn cli(paths: &gp_evidence::Paths, o: &CarryArgs) -> anyhow::Result<c
             "--write puts each start's reason into a capture run's starts.json, which gameprinter doesn't have until the capture runs come back (wave 7 of the port)"
         );
     }
-    let module = o.module.clone().or_else(|| {
-        let name = o.run.file_name()?.to_string_lossy().into_owned();
-        Some(
-            paths
-                .home
-                .join("work")
-                .join("modules")
-                .join(format!("{name}.wasm")),
-        )
-        .filter(|p| p.is_file())
-    });
+    let module = match &o.module {
+        Some(m) => Some(m.clone()),
+        None => crate::module::built_for(&paths.home, &o.run)?.map(|m| m.0),
+    };
     let (source, _) =
         crate::hosted::Source::open_dir(&o.run, o.assets.as_deref(), paths, module.as_deref())?;
     let spec = source.spec.clone();

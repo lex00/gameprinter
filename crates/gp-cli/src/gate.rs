@@ -194,6 +194,7 @@ fn score(
         rom: None,
         only: Vec::new(),
         reuse: reuse.map(Path::to_owned),
+        impact: false,
         write: None,
         remeasure: remeasure.then(|| game.to_owned()),
     };

@@ -1,0 +1,41 @@
+# A model baseline (docs/originals.md): the interpreter plays last_train of signal_failure
+# from its start to its goal on this input, with every enemy in place.
+# Recorded by `gp interp reach --record`; `gp interp baselines` checks it.
+format = "0.1.0"
+model = "signal_failure"
+level = "last_train"
+description = "Plays last_train from its start to its goal; found by gp interp reach --record"
+recorded = "search"
+frames = 840
+holds = ["a@1-1", "b@1-36", "right@1-36", "a@53-105", "b@53-105", "right@53-105", "a@108-171", "b@108-171", "right@108-171", "b@188-235", "right@188-235", "a@220-220", "b@259-335", "right@259-335", "a@291-335", "a@343-402", "b@343-402", "right@343-402", "a@404-448", "right@404-448", "a@456-515", "right@456-515", "right@526-565", "a@558-632", "b@643-706", "right@643-706", "a@675-675", "b@710-719", "right@710-719", "b@736-775", "right@736-775", "a@768-809"]
+digest = "06686b8c0ec976183b1182ccd0d70c08197fcfd3f8ff27cee2b7e0123766fa0b"
+
+[[expect]]
+frame = 840
+path = "level"
+equals = "last_train"
+
+[[expect]]
+frame = 840
+path = "rules.game.state"
+equals = "on_board"
+
+[[expect]]
+frame = 840
+path = "counters.departure"
+equals = "77"
+
+[[expect]]
+frame = 840
+path = "counters.papers"
+equals = "0"
+
+[[expect]]
+frame = 840
+path = "counters.patience"
+equals = "3"
+
+[[expect]]
+frame = 840
+path = "counters.trains"
+equals = "1"

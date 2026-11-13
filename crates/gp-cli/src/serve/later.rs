@@ -10,18 +10,6 @@ use crate::mechanic::http::{Request, Response};
 /// Each route and why it isn't here yet.
 const LATER: &[(&str, &str)] = &[
     (
-        "/api/capture/{run}/grid",
-        "the grid (game-printer's serve/grid.rs) isn't in gameprinter's gp serve yet",
-    ),
-    (
-        "/api/capture/{run}/grid/in-flight",
-        "the grid's clips in flight aren't in gameprinter's gp serve yet",
-    ),
-    (
-        "/api/capture/{run}/grid/mode",
-        "the grid's mode isn't in gameprinter's gp serve yet",
-    ),
-    (
         "/api/capture/{run}/clips/{clip}/tell",
         "telling an agent about a clip isn't in gameprinter's gp serve yet; gp mechanic say is the agent's side of the mechanic page's talk",
     ),

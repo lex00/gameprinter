@@ -1220,12 +1220,14 @@ dependencies = [
  "gp-model",
  "gp-module",
  "gp-nes",
+ "gp-oracle",
  "gp-package",
  "gp-play",
  "gp-present",
  "gp-runtime",
  "gp-sim",
  "gp-sound",
+ "gp-sound-bank",
  "gp-sprites",
  "gp-theme",
  "gp-track",
@@ -1237,16 +1239,21 @@ dependencies = [
  "md-5",
  "parquet",
  "png",
+ "proc-macro2",
+ "quote",
  "schemars",
  "serde",
  "serde_json",
  "sha1",
  "sha2 0.11.1",
+ "syn 2.0.119",
  "tempfile",
  "tetanes-core",
+ "time",
  "toml",
  "tracing",
  "tracing-subscriber",
+ "wit-parser",
  "zip",
 ]
 
@@ -1522,6 +1529,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "gp-oracle"
+version = "0.1.0"
+dependencies = [
+ "gp-evidence",
+ "gp-nes",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
 name = "gp-package"
 version = "0.1.0"
 dependencies = [
@@ -1635,6 +1655,17 @@ dependencies = [
  "tempfile",
  "thiserror",
  "toml",
+]
+
+[[package]]
+name = "gp-wasm-check"
+version = "0.1.0"
+dependencies = [
+ "gp-arcade",
+ "gp-evidence",
+ "gp-exts",
+ "gp-interp",
+ "gp-nes",
 ]
 
 [[package]]

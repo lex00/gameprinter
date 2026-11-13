@@ -1,6 +1,6 @@
 # Sound
 
-Brought from game-printer's docs/sound.md (port wave 4). gameprinter has `gp sound capture`, `fidelity` and `compare`; `decode`, `drivers`, `render`, `export`, `import` and `banks` are not here yet, and what this page says of them is game-printer's. No metrics are recorded. These are the NES APU's; an arcade recording's AY-8910 log is the last section (wave 6). Links to pages gameprinter doesn't carry yet name game-printer's docs (`~/Documents/checkouts/lex00/game-printer/docs`).
+Brought from game-printer's docs/sound.md (port wave 4; `decode`, `drivers`, `render`, `export`, `import` and `banks` in the later tools port). gameprinter has every `gp sound` command game-printer had. No metrics are recorded. The measured results for Super Mario Bros., Mega Man 2 and Super Mario Bros. 2 are game-printer's, from games gameprinter doesn't carry. An arcade recording's AY-8910 log, its decoder, renders and MIDI files are the last section.
 
 Music and sound effects are model data. A recording of any NES game gives them as notes and instruments; the model ties each song to a level or a rule state and each effect to an event; one deterministic APU synthesizer plays them in every runtime; and FamiStudio and MIDI files carry them out and back. Sound is presentation, so the simulation never reads it and no state hash depends on it.
 
@@ -18,7 +18,7 @@ Music and sound effects are model data. A recording of any NES game gives them a
 | Sound banks | Which instrument plays through the APU, a General MIDI program or a free SF2 or SFZ bank's patch | [sound-banks format](formats/sound-banks.md), `gp_sound::banks`, `crates/gp-sound-bank` |
 | Model | Asset kinds `songs` and `sound-effects`, a slot's capture recipe, `present.sound` | [model](model.md) (core 0.4.3) |
 | Themes | A restyled-audio tier: the same notes through another bank, by sound role | [theme format](formats/theme.md) (0.1.1) |
-| Playback | Cues (`gp_present::sound`) for the Bevy build (WAV files) and the web preview (live, WebAudio); a hook's APU writes, live through the synthesizer, in both | [generator](generator.md), [web](web.md) |
+| Playback | Cues (`gp_present::sound`) for the Bevy build (WAV files) and the web preview (live, WebAudio); a hook's APU writes, live through the synthesizer, in both | game-printer's generator page, [web](web.md) |
 | Agent editing | `sound_banks`, `sound_describe`, `sound_edit`, `sound_preview` | [MCP tools](mcp.md) |
 
 ## Capture
@@ -54,23 +54,23 @@ Loudness correlates below the notes because the player writes constant-volume re
 
 ## Drivers
 
-`gp sound drivers` lists the registry. A driver is a sound engine several games share; the registry finds it by the asset map format its music data lifts as, so a new game whose map lifts that format reuses the decoder with no code.
+`gp sound drivers` lists the registry (`gp_sound::drivers`). A driver is a sound engine several games share; the registry finds it by the asset map format its music data lifts as, so a new game whose map lifts that format reuses the decoder with no code. An arcade driver whose music data isn't mapped has the format `ay-log`: its decoder reads the songs from the AY-8910 register log the sound program wrote, so it works on any game the board runs, whatever the romset.
 
 | Driver | Format | Decoder | Games |
 |---|---|---|---|
-| `smb` | `smb-music` | Yes: song slots, 3- to 6-byte headers, square 2 with sticky lengths, square 1 and noise with lengths packed in the note byte, the triangle reading from the data's start, noise only for area music outside the underground and castle themes (SMBDIS.ASM's `LoadHeader`, `HandleSquare1Music`, `HandleTriangleMusic`, `HandleNoiseMusic`) | `smb1-ntsc-prg0` |
-| `capcom-mm2` | `mm2-sounds` | Filed | `mm2-usa` |
-| `smb2` | `smb2-music` | Filed | `smb2-usa-prg0` |
+| `nintendo-dk` | `dk-music` | No: no asset map lifts Donkey Kong's music data yet. `gp sound capture` reads its songs from the APU log, and the model keeps the driver as state (`dk_sound`, below) | `donkey-kong-ju`, `donkey-kong-oe` |
+| `midway-ssio` | `ay-log` | Yes, from an AY register log: each run of frames where a channel sounds, ended by `--gap` frames (60 by default) of silence on all six channels, is a song, holding each channel's notes as `gp sound capture` makes them | `tapper`, `rbtapper`, `tapperg`, `sutapper`, `tappera` |
 
-`gp sound decode --source smb1-ntsc-prg0 --song ground=16-48@1 --against <capture>/songs.json` encodes the lifted files back to bytes (`gp_assets::encode`), decodes them as the game reads them, and cross-checks each decoded song with the captured ones at the time offset where they agree most. Decoded instruments are flat, since the driver's envelopes live in its code; log capture supplies them.
+`gp sound decode --source SOURCE` finds the source's asset map (`--maps DIR`, else `$GP_ASSETS`, else the tool's `assets/` and each game's `assets/` in the games checkout), and the driver by an asset's format or, failing that, by the games the registry lists. A driver with no decoder is refused in words. On Tapper, `--ay-log` names `gp sound capture`'s `ay.log` (or its folder):
 
-| Decoded song | Against the capture | Onset F1 | Per channel (captured notes, matched) |
-|---|---|---|---|
-| Ground theme, steps 16 to 48, loop at step 17 (5,328 frames, loop at 144) | The overworld after the bonus room | 0.895 | pulse 1 17, 10; pulse 2 25, 25; triangle 26, 26; noise 37, 37 |
-| Underground theme | The bonus room | 0.69 | pulse 1 8, 0; pulse 2 25, 12; triangle 18, 18 |
-| End of level | The flagpole | 0.61 | pulse 1 24, 24; pulse 2 49, 6; triangle 18, 18 |
+```sh
+gp sound capture --recording c0130f81267d --frames 1..3000 --name five
+gp sound decode --source tapper --ay-log $GP_HOME/work/sound/c0130f81267d/five --against $GP_HOME/work/sound/c0130f81267d/five/songs.json
+```
 
-The misses are on the pulses where effects played that capture didn't claim (coin and timer tick sounds on square 2, which the game asks for every few frames); the decoded notes match the music wherever it sounds alone.
+`--song name=FIRST-LAST[@LOOP]` names a song by its frames instead (LOOP counted from FIRST). The songs go to `$GP_HOME/work/sound/decoded/SOURCE/songs.json` (`gp-ay-songs 0`, a `songs` list, each with its name, first and last frame, loop and channels). `--against` holds each decoded song to a capture's notes: the note starts (channel, frame, period) that match at the frame offset where most do, as an F1. On frames 1 to 2,999 of the five-level Tapper recording (c0130f81267d): three songs, the long one (frames 1,102 to 2,837) matching 794 of the capture's 935 notes, F1 0.918.
+
+game-printer's registry held Super Mario Bros.' decoder (`smb`, from SMBDIS.ASM's music routines, with an onset F1 of 0.895 on the ground theme against its capture) and two drivers without decoders, Mega Man 2's and Super Mario Bros. 2's. They were cut with those games.
 
 ## Playback
 
@@ -78,7 +78,7 @@ The misses are on the pulses where effects played that capture didn't claim (coi
 
 | Runtime | How it plays |
 |---|---|
-| Bevy (`gp gen bevy`) | The generator renders each bound song (one pass and one loop) and effect into `assets/sound/<slot>/<name>.wav` through the APU synthesizer, or through a theme's sound bank when its restyled-audio layer maps the slot's role. The render crate's `sound` module, built with the `audio` feature, plays the level's song on loop and each effect once with Bevy's audio. `play` has the feature by default; the headless builds and the Linux container build without it, since it needs the platform's audio libraries ([the generator](generator.md#bevy-features)) |
+| Bevy (`gp gen bevy`) | The generator renders each bound song (one pass and one loop) and effect into `assets/sound/<slot>/<name>.wav` through the APU synthesizer, or through a theme's sound bank when its restyled-audio layer maps the slot's role. The render crate's `sound` module, built with the `audio` feature, plays the level's song on loop and each effect once with Bevy's audio. `play` has the feature by default; the headless builds and the Linux container build without it, since it needs the platform's audio libraries (game-printer's generator page) |
 | A theme's sound per role | The theme's file for each sound role, rendered to `assets/sound/roles/<role>.wav`, played on the role's cue by `gp_present::sound::RolePlayer` in both runtimes, in place of the model's own sound ([theme format](formats/theme.md#sound-replacements)) |
 | Web preview | `gp-web-prep` writes `assets/sound.json` (the cues, the song sets, and the roles a theme replaces); the wasm module runs the same `Director`, `gp_sound::player` and `gp_sound::synth` after every step (`gp_load_sound`, `gp_audio`), and `preview.js` queues each frame's 735 samples as a WebAudio buffer once a key is pressed |
 
@@ -167,10 +167,16 @@ A song is ready to edit when the model knows it completely (`gp_sound::edit::rea
 
 ## Not yet
 
-These are rows in [open questions](open-questions.md): the Mega Man 2 and Super Mario Bros. 2 driver decoders; music and effects through one play-sound routine; DMC sample bytes in capture (the event stream has the writes, not the bytes the DMC reads); SFZ rendering; capture from rendered audio (`origin = "samples"`); FamiStudio's reading of three details (note times in frames in FamiStudio tempo mode, a pitch envelope's sign, noise note numbering), to confirm by importing an export into FamiStudio; and live mixing of effects over music in the Bevy build, which plays bound songs as pre-rendered files (a hook's APU writes play live).
+These were rows in game-printer's open questions: the Mega Man 2 and Super Mario Bros. 2 driver decoders; music and effects through one play-sound routine; DMC sample bytes in capture (the event stream has the writes, not the bytes the DMC reads); SFZ rendering; capture from rendered audio (`origin = "samples"`); FamiStudio's reading of three details (note times in frames in FamiStudio tempo mode, a pitch envelope's sign, noise note numbering), to confirm by importing an export into FamiStudio; and live mixing of effects over music in the Bevy build, which plays bound songs as pre-rendered files (a hook's APU writes play live).
 
 ## On an arcade recording (AY-8910)
 
-`gp sound capture --recording ID` on an arcade recording (port wave 6) writes the register log of Tapper's two AY-8910s, `ay.log`, from the recording's `ay-write` events (or a replay with the event log on), and `songs.json`, each of the six channels' notes: runs of frames with one tone period while the mixer lets the tone through and the volume isn't 0, with the pitch in hertz (the chips' 2 MHz clock over 16 over the period) and the volume of each frame. `gp sound fidelity DIR` holds the notes to the log frame by frame (onsets, pitch, volume); `gp sound compare A/ay.log B/ay.log` holds one log to another (frames with the same writes, frames whose every channel's state is the same; exit 1 at the first that differs). The format is in `crates/gp-cli/src/sound_ay.rs`. `--template` (songs bound to a model through gp gaps' sound requests) and the renders' loudness are the NES's and not here for the AY; milestone 3's AY synth (`gp_arcade::sound`) is what a render would use.
+`gp sound capture --recording ID` on an arcade recording (port wave 6) writes the register log of Tapper's two AY-8910s, `ay.log`, from the recording's `ay-write` events (or a replay with the event log on), and `songs.json`, each of the six channels' notes: runs of frames with one tone period while the mixer lets the tone through and the volume isn't 0, with the pitch in hertz (the chips' 2 MHz clock over 16 over the period) and the volume of each frame. `gp sound fidelity DIR` holds the notes to the log frame by frame (onsets, pitch, volume); `gp sound compare A/ay.log B/ay.log` holds one log to another (frames with the same writes, frames whose every channel's state is the same; exit 1 at the first that differs). The format is in `crates/gp-cli/src/sound_ay.rs`. `--template` (songs bound to a model through gp gaps' sound requests) and the renders' loudness are the NES's and not here for the AY; `gp sound render` plays the log through milestone 3's AY synth (`gp_arcade::sound`), below.
 
 On Tapper (a 1,282-frame clip): 2,114 AY writes, notes by channel 0a 93, 0b 32, 0c 25, 1a 36, 1b 28, 1c 26; fidelity 240 of 240 onsets, pitch and volume on all 3,046 sounding channel frames. The same clip with the first tap 10 frames earlier: writes the same on 943 frames, channel states on 910, first differing at frame 865. The log's writes are, frame by frame, milestone 3's own AY write list (held to MAME's), on 900 frames (a test, skipped without tapper.zip).
+
+### Rendering, MIDI and the decoder on AY
+
+`gp sound render` takes an `ay.log` or an AY song file (`gp-ay-songs 0`, from a capture or `gp sound decode`) as well, and plays it through milestone 3's board sound (`gp_arcade::sound`: the two AYs, the SSIO's duty-cycle volumes and its mute, MAME's resampling) into a stereo WAV at 48 kHz, AY 0 left and AY 1 right. The log keeps each frame's writes but not their times inside it, so every write lands at its frame's start, 30 frames a second. The SSIO's PROM sets the voices' loudness; `--rom` names the romset, else tapper's is looked for in `$GP_ROM_DIR`, and without one every voice plays at full volume. A song renders from the register writes its notes give (`--song`, `--loops` back to its `loop_frame`). `--banks` is the NES's and refused.
+
+`gp sound export SONGS --midi FILE [--song NAME]` writes an AY song as a type 1 MIDI file: a tick a frame, a track per AY channel (`0a` to `1c`) on MIDI channels 1 to 6, each note at the nearest key with a pitch bend (a range of 2 semitones) for the rest of its pitch, its velocity and each later frame's volume (CC 11) the AY volume times 4, and a `loop` marker. `--famistudio` is refused: FamiStudio's AY expansion (Sunsoft 5B) has three channels and the board six. `gp sound import FILE.mid --ay --out SONGS` reads one back: up to six tracks with notes, by track name where it names a channel, a note that starts over another on its track cutting it with a warning, the first tempo. On the five-level Tapper recording, the decoded song of frames 1,102 to 2,837 renders to 57.9 seconds and comes back from its MIDI file with all 794 notes the same (frame, length, period and every frame's volume). The code is `crates/gp-cli/src/sound_ay_render.rs`.

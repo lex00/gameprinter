@@ -1,6 +1,6 @@
 # Interactive element catalog, version 0
 
-Brought from game-printer's docs/formats/interactive.md (port wave 4). Links to pages gameprinter doesn't carry yet name game-printer's docs (`~/Documents/checkouts/lex00/game-printer/docs`).
+Brought from game-printer's docs/formats/interactive.md (port wave 4).
 
 `gp gaps interactive` writes what it finds in a recording of the original game as a catalog of interactive element kinds: the parts of a level that react to the player, such as blocks that give a coin when hit from below, bricks that break, coins that vanish when touched. Each record says what sets it off, what it does, what it becomes and how often it can, with the frames that show it. A later lane can build model kinds from the records, and the catalog itself changes no model. [Gaps](../gaps.md) says how the records are found.
 

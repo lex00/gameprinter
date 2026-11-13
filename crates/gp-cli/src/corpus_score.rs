@@ -171,6 +171,11 @@ pub enum CorpusCmd {
         /// score only the clips the change can move, and keep the others' rows.
         #[arg(long, conflicts_with = "only")]
         reuse: Option<PathBuf>,
+        /// With --reuse: say what changed since that score and which clips
+        /// it would score again, and score none (game-printer's `gp capture
+        /// impact`).
+        #[arg(long, requires = "reuse")]
+        impact: bool,
         /// Write the score record into this template folder's evidence/, and
         /// point its template.toml's [scored_against] at this corpus.
         #[arg(long)]
@@ -181,10 +186,23 @@ pub enum CorpusCmd {
         #[arg(long, conflicts_with = "only")]
         remeasure: Option<PathBuf>,
     },
+    /// Propose the fewest clips of a game's corpus that still run every
+    /// routine and branch way the corpus runs, each counted by stage (the
+    /// stage byte the mapping names). Each clip's own frames are counted as
+    /// `gp code listing` counts them (on a romset, as `gp reach --window`
+    /// does) and, for the NES, kept in the events store. Guards (the first
+    /// clip each fix commit of the model, mapping and hooks names, and
+    /// `--keep`) stay; then the greedy multi-cover by frames, and a reverse
+    /// pass. Prints the kept set by stage and family, the clips any cover
+    /// needs, the exact duplicates and the untaken branch ways by stage. A
+    /// plan only: `--write PLAN` writes it outside the repo, and the clips
+    /// are never changed.
+    Reduce(crate::corpus_reduce::ReduceArgs),
 }
 
 pub(crate) fn run(cmd: &CorpusCmd, paths: &Paths) -> Result<Outcome> {
     match cmd {
+        CorpusCmd::Reduce(a) => crate::corpus_reduce::run(a, paths),
         CorpusCmd::Show { dir } => crate::corpus_w9::show(dir),
         CorpusCmd::Diff { a, b } => crate::corpus_w9::diff_cmd(a, b),
         CorpusCmd::Verify {
@@ -259,6 +277,7 @@ pub(crate) fn run(cmd: &CorpusCmd, paths: &Paths) -> Result<Outcome> {
             rom,
             only,
             reuse,
+            impact,
             write,
             remeasure,
         } => score(
@@ -273,6 +292,7 @@ pub(crate) fn run(cmd: &CorpusCmd, paths: &Paths) -> Result<Outcome> {
             },
             only,
             reuse.as_deref(),
+            *impact,
             write.as_deref(),
             remeasure.as_deref(),
         ),
@@ -1215,9 +1235,11 @@ pub(crate) fn game_score(
 ) -> Result<Outcome> {
     let game = fs::canonicalize(game).with_context(|| game.display().to_string())?;
     let own = game.join("play/module.wasm");
-    let module = module
-        .map(Path::to_owned)
-        .or_else(|| own.is_file().then_some(own));
+    let module = match module {
+        Some(m) => Some(m.to_owned()),
+        None if own.is_file() => Some(own),
+        None => crate::module::built_for(&paths.home, &game)?.map(|m| m.0),
+    };
     let scored = score(
         paths,
         &game,
@@ -1230,6 +1252,7 @@ pub(crate) fn game_score(
         },
         &[],
         None,
+        false,
         None,
         None,
     )?;
@@ -1338,6 +1361,7 @@ fn score(
     how: &Open,
     only: &[String],
     reuse: Option<&Path>,
+    impact: bool,
     write: Option<&Path>,
     remeasure: Option<&Path>,
 ) -> Result<Outcome> {
@@ -1376,6 +1400,20 @@ fn score(
         }
         None => None,
     };
+    if impact && let Some((_, sel)) = &earlier {
+        let v = json!({"affected": {
+            "changed": sel.changed, "says": sel.says,
+            "would_score": sel.score, "kept": sel.kept.len(),
+            "would_stop_at_split": sel.stop.intersection(&sel.score).count(),
+        }});
+        let text = format!(
+            "{}. It would score {} clips and keep {}; it scored none.",
+            sel.says,
+            sel.score.len(),
+            sel.kept.len()
+        );
+        return Ok(Outcome::ok(v, text));
+    }
     let scoring = cs::Scoring {
         reads: true,
         stop: earlier

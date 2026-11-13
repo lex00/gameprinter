@@ -48,6 +48,19 @@ pub enum SelfCmd {
         #[arg(long)]
         check: bool,
     },
+    /// Print the named features this build knows as Markdown (the source
+    /// of docs/features.md, which `just docs` writes).
+    Features,
+    /// Write the runtime shell's generated files (docs/shell.md): the
+    /// storage interface's bindings from wit/shell/storage.wit (a Rust
+    /// trait in gp-present and the JavaScript host's check) and the web
+    /// preview's copy of the key table (scripts/web/page/shell-keys.js).
+    /// Run in the repo; `just docs` runs it.
+    Shell {
+        /// Write nothing; exit 1 if a file is stale.
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 pub(crate) fn run(cmd: &SelfCmd, paths: &Paths) -> Result<Outcome> {
@@ -56,6 +69,22 @@ pub(crate) fn run(cmd: &SelfCmd, paths: &Paths) -> Result<Outcome> {
         SelfCmd::Publish => self_publish(paths),
         SelfCmd::Docs { file, check } => crate::cli_doc::run(file, *check),
         SelfCmd::Schemas { dir, check } => crate::schemas::run(dir, *check),
+        SelfCmd::Features => {
+            let md = crate::schemas::features_markdown();
+            Ok(Outcome::ok(
+                serde_json::json!({ "markdown": md }),
+                md.trim_end().to_owned(),
+            ))
+        }
+        SelfCmd::Shell { check } => {
+            let here = std::env::current_dir()?;
+            let Some(repo) = here.ancestors().find(|d| d.join("wit/shell").is_dir()) else {
+                anyhow::bail!(
+                    "run gp self shell inside the gameprinter repo (it reads wit/shell/)"
+                );
+            };
+            crate::docs_shell::run(repo, *check)
+        }
     }
 }
 

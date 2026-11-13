@@ -11,9 +11,12 @@
 //! An arcade recording (Tapper's two AY-8910s, port wave 6) is captured,
 //! held to its notes and compared through crate::sound_ay instead: an
 //! `ay.log` from the recording's `ay-write` events, and notes per
-//! channel. game-printer's
-//! `decode`, `render`, `export`, `import`, `banks` and `drivers` are not
-//! here yet.
+//! channel. `decode` reads songs with a registered driver's decoder
+//! (gp_sound::drivers); Tapper's driver decodes the AY log. `render`
+//! writes WAV files, `export` and `import` speak FamiStudio text and MIDI,
+//! and `banks` lists the sound banks found; AY logs and songs render
+//! through the arcade board's sound and travel as MIDI
+//! (crate::sound_ay_render).
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -23,6 +26,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use gp_evidence::Paths;
 use gp_sound::apu::{Channel, Region};
+use gp_sound::banks::Mapping;
 use gp_sound::capture::{self, Claim, Req};
 use gp_sound::log::{ApuLog, Write as LogWrite, cycle_in_frame};
 use gp_sound::song::{Kind, Request, SongSet};
@@ -37,6 +41,10 @@ pub enum SoundCmd {
     /// Write a recording's APU register log and derive its songs, effects
     /// and instruments (docs/formats/apu-log.md, docs/formats/songs.md).
     Capture(CaptureArgs),
+    /// Read songs from the game's music data with a registered driver's
+    /// decoder, and cross-check them against a capture's songs. On arcade
+    /// the driver's decoder reads an AY register log (`--ay-log`).
+    Decode(DecodeArgs),
     /// Hold songs to the register log they came from: note onsets, pitch
     /// and volume per frame, and the two renders' loudness.
     Fidelity(FidelityArgs),
@@ -45,6 +53,22 @@ pub enum SoundCmd {
     /// (gp_sound::compare). `gp interp compare` and `gp clip score` measure
     /// the same in their lockstep. Exits 1 when a frame's channels differ.
     Compare(CompareArgs),
+    /// Render a song, or a register log, to a WAV file through the APU
+    /// synthesizer (or a sound bank mapping). An AY register log or AY
+    /// songs play through the arcade board's sound (gp_arcade::sound).
+    Render(RenderArgs),
+    /// Write a song set as a FamiStudio text project or a song as a MIDI
+    /// file. AY songs write as MIDI.
+    Export(ExportArgs),
+    /// Read a FamiStudio text project or a MIDI file into a song set,
+    /// checked against the NES's channels (with --ay, a MIDI file into AY
+    /// songs for the arcade board's two AY-8910s).
+    Import(ImportArgs),
+    /// List the sound banks. The APU synthesizer comes first, then the SF2 and
+    /// SFZ files found in $GP_SOUND_BANKS and $GP_HOME/sound-banks.
+    Banks,
+    /// The sound drivers the registry knows.
+    Drivers,
 }
 
 #[derive(Args)]
@@ -84,6 +108,101 @@ pub struct CaptureArgs {
 }
 
 #[derive(Args)]
+pub struct DecodeArgs {
+    /// The source ID, whose asset map names the music asset and its format.
+    #[arg(long)]
+    pub source: String,
+    /// The lifted assets (default $GP_HOME/work/assets/<source>).
+    #[arg(long)]
+    pub assets: Option<PathBuf>,
+    /// The asset maps' folder (default: $GP_ASSETS, else the tool's
+    /// assets/ and each game's assets/ in the games checkout).
+    #[arg(long)]
+    pub maps: Option<PathBuf>,
+    /// The songs to decode: `name=slot,slot,...[@loop index]`, e.g.
+    /// `ground=16-48@1`. On an AY log, `name=FIRST-LAST[@LOOP]` in
+    /// frames, the loop counted from FIRST. Default: every slot as its own
+    /// song (on an AY log, each run of sound between silences).
+    #[arg(long)]
+    pub song: Vec<String>,
+    /// A capture's songs to cross-check against (`gp sound capture`'s
+    /// songs.json).
+    #[arg(long)]
+    pub against: Option<PathBuf>,
+    /// An AY register log (`gp sound capture`'s ay.log, or its folder),
+    /// for a driver that decodes one (midway-ssio, Tapper's).
+    #[arg(long)]
+    pub ay_log: Option<PathBuf>,
+    /// On an AY log, the frames of silence on all six channels that end a
+    /// song.
+    #[arg(long, default_value_t = 60)]
+    pub gap: u64,
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct RenderArgs {
+    /// A song set (songs.json) or a register log (apu.log, or an AY
+    /// log's ay.log).
+    pub input: PathBuf,
+    /// The song to render (from a song set).
+    #[arg(long)]
+    pub song: Option<String>,
+    /// Loops of the song to render after the first pass.
+    #[arg(long, default_value_t = 0)]
+    pub loops: u32,
+    /// A sound bank mapping (docs/formats/sound-banks.md): its mix applies;
+    /// bank targets need gp-sound-bank's renderer.
+    #[arg(long)]
+    pub banks: Option<PathBuf>,
+    /// For AY sound, the romset whose SSIO PROM sets the voices' volumes
+    /// (default: tapper's from $GP_ROM_DIR; without one every voice plays
+    /// at full volume).
+    #[arg(long)]
+    pub rom: Option<PathBuf>,
+    #[arg(long)]
+    pub out: PathBuf,
+}
+
+#[derive(Args)]
+pub struct ExportArgs {
+    /// A song set (songs.json).
+    pub songs: PathBuf,
+    /// Write a FamiStudio text project here.
+    #[arg(long)]
+    pub famistudio: Option<PathBuf>,
+    /// Write a MIDI file of `--song` here.
+    #[arg(long)]
+    pub midi: Option<PathBuf>,
+    #[arg(long)]
+    pub song: Option<String>,
+    /// A sound bank mapping, for MIDI's General MIDI programs.
+    #[arg(long)]
+    pub banks: Option<PathBuf>,
+    /// The FamiStudio version written in the project header.
+    #[arg(long, default_value = gp_sound::famistudio::DEFAULT_VERSION)]
+    pub famistudio_version: String,
+}
+
+#[derive(Args)]
+pub struct ImportArgs {
+    /// A FamiStudio text project (.txt) or a MIDI file (.mid).
+    pub input: PathBuf,
+    /// The region the songs play in.
+    #[arg(long, default_value = "ntsc")]
+    pub region: String,
+    /// Read a MIDI file into AY songs (`gp-ay-songs 0`) for the arcade
+    /// board's two AY-8910s, up to six tracks, instead of the NES's
+    /// channels.
+    #[arg(long)]
+    pub ay: bool,
+    /// The song set to write.
+    #[arg(long)]
+    pub out: PathBuf,
+}
+
+#[derive(Args)]
 pub struct FidelityArgs {
     /// A capture's directory (holding apu.log, songs.json, claims.json).
     pub capture: PathBuf,
@@ -107,6 +226,12 @@ pub(crate) fn run(cmd: &SoundCmd, paths: &Paths) -> Result<Outcome> {
         SoundCmd::Capture(a) => capture_cmd(a, paths),
         SoundCmd::Fidelity(a) => fidelity_cmd(&a.capture),
         SoundCmd::Compare(a) => compare_cmd(a),
+        SoundCmd::Decode(a) => decode_cmd(a, paths),
+        SoundCmd::Drivers => drivers_cmd(),
+        SoundCmd::Render(a) => render_cmd(a, &paths.home),
+        SoundCmd::Export(a) => export_cmd(a),
+        SoundCmd::Import(a) => import_cmd(a),
+        SoundCmd::Banks => banks_cmd(paths),
     }
 }
 
@@ -644,4 +769,516 @@ fn compare_cmd(a: &CompareArgs) -> Result<Outcome> {
         out.exit = 1;
     }
     Ok(out)
+}
+
+fn drivers_cmd() -> Result<Outcome> {
+    let mut text = String::new();
+    let mut v = Vec::new();
+    for d in gp_sound::drivers::REGISTRY {
+        let _ = writeln!(
+            text,
+            "{:<11} {:<11} decoder {:<3} {}: {}",
+            d.name,
+            d.format,
+            if d.decoder { "yes" } else { "no" },
+            d.games.join(", "),
+            d.about
+        );
+        v.push(json!({"name": d.name, "format": d.format, "decoder": d.decoder, "games": d.games}));
+    }
+    Ok(Outcome::ok(json!(v), text.trim_end().to_owned()))
+}
+
+/// `name=a-b,c@k`: slots and the loop's index into them.
+fn song_spec(s: &str) -> Result<(String, Vec<usize>, Option<usize>)> {
+    let (name, rest) = s.split_once('=').context("a song is name=slots[@loop]")?;
+    let (list, lp) = match rest.split_once('@') {
+        Some((l, k)) => (l, Some(k.parse::<usize>()?)),
+        None => (rest, None),
+    };
+    let mut slots = Vec::new();
+    for part in list.split(',') {
+        match part.split_once('-') {
+            Some((a, b)) => slots.extend(a.parse::<usize>()?..=b.parse::<usize>()?),
+            None => slots.push(part.parse()?),
+        }
+    }
+    Ok((name.to_owned(), slots, lp))
+}
+
+/// The asset map `<source>.toml`: in `--maps`, else the maps folders.
+fn source_map(a: &DecodeArgs) -> Option<(PathBuf, String)> {
+    let dirs = match &a.maps {
+        Some(d) => vec![d.clone()],
+        None => crate::assets::maps_dirs(),
+    };
+    dirs.iter().find_map(|d| {
+        let p = d.join(format!("{}.toml", a.source));
+        std::fs::read_to_string(&p).ok().map(|t| (p, t))
+    })
+}
+
+fn decode_cmd(a: &DecodeArgs, paths: &Paths) -> Result<Outcome> {
+    use gp_sound::drivers;
+    // The driver: by the format of an asset the NES map lifts, else the
+    // one the registry knows the game by.
+    let map = source_map(a);
+    let by_asset = map
+        .as_ref()
+        .filter(|(_, t)| !gp_assets::arcade::is_arcade(t))
+        .and_then(|(_, t)| gp_assets::map::AssetMap::parse(t).ok())
+        .and_then(|m| {
+            m.assets
+                .iter()
+                .find_map(|x| drivers::by_format(x.format()).map(|d| (d, x.name().to_owned())))
+        });
+    let driver = by_asset
+        .as_ref()
+        .map(|(d, _)| *d)
+        .or_else(|| drivers::by_game(&a.source))
+        .with_context(|| {
+            format!(
+                "no asset of {}'s map has a registered driver's format, and no driver lists the game (gp sound drivers)",
+                a.source
+            )
+        })?;
+    if !driver.decoder {
+        bail!(
+            "{} uses driver `{}`, which has no decoder yet: {}",
+            a.source,
+            driver.name,
+            driver.about
+        );
+    }
+    if driver.format != drivers::AY_LOG {
+        // Every NES decoder game-printer had was another game's (Super
+        // Mario Bros.'s), cut in the port.
+        bail!(
+            "driver `{}` decodes `{}` music data, which gameprinter has no decoder for",
+            driver.name,
+            driver.format
+        );
+    }
+    decode_ay(a, driver, paths)
+}
+
+/// The midway-ssio decoder over an AY register log.
+fn decode_ay(a: &DecodeArgs, driver: &gp_sound::drivers::Driver, paths: &Paths) -> Result<Outcome> {
+    let mut log_path = a.ay_log.clone().with_context(|| {
+        format!(
+            "driver `{}` decodes an AY register log: give --ay-log (gp sound capture's ay.log of a {} recording)",
+            driver.name, a.source
+        )
+    })?;
+    if log_path.is_dir() {
+        log_path = log_path.join("ay.log");
+    }
+    let log = crate::sound_ay::AyLog::parse(&read(&log_path)?)?;
+    let mut specs = Vec::new();
+    for s in &a.song {
+        let (name, frames, lp) = song_spec(s)?;
+        let (first, last) = (
+            *frames.iter().min().context("a song names no frame")? as u64,
+            *frames.iter().max().context("a song names no frame")? as u64,
+        );
+        specs.push(crate::sound_ay::SongSpec {
+            name,
+            first,
+            last,
+            loop_at: lp.map(|k| k as u64),
+        });
+    }
+    let set = crate::sound_ay::decode(&log, &specs, a.gap);
+    let songs = set["songs"].as_array().cloned().unwrap_or_default();
+    let out = a.out.clone().unwrap_or_else(|| {
+        paths
+            .home
+            .join("work/sound/decoded")
+            .join(&a.source)
+            .join("songs.json")
+    });
+    write(&out, serde_json::to_string_pretty(&set)?.as_bytes())?;
+    let mut text = format!(
+        "{}: driver {}, {} songs decoded from {} (frames {} to {})\nwrote {}",
+        a.source,
+        driver.name,
+        songs.len(),
+        log_path.display(),
+        log.first,
+        log.last,
+        out.display()
+    );
+    let mut cross = serde_json::Map::new();
+    if let Some(p) = &a.against {
+        let cap: serde_json::Value = serde_json::from_str(&read(p)?)?;
+        let caps = crate::sound_ay::songs_of(&cap, "captured");
+        for d in &songs {
+            let best = caps
+                .iter()
+                .map(|c| (c, crate::sound_ay::cross_check(d, c)))
+                .max_by(|x, y| x.1["f1"].as_f64().partial_cmp(&y.1["f1"].as_f64()).unwrap());
+            if let Some((c, o)) = best {
+                let name = d["name"].as_str().unwrap_or("?");
+                let _ = write!(
+                    text,
+                    "\n  {name} vs captured {}: onset F1 {} at offset {} ({} of {} captured notes matched)",
+                    c["name"].as_str().unwrap_or("?"),
+                    o["f1"],
+                    o["offset"],
+                    o["matched"],
+                    o["reference"]
+                );
+                cross.insert(name.to_owned(), json!({"against": c["name"], "onsets": o}));
+            }
+        }
+    }
+    for s in &songs {
+        let notes: usize = s["channels"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|c| c["notes"].as_array().map_or(0, Vec::len))
+            .sum();
+        let _ = write!(
+            text,
+            "\n  {:<8} frames {} to {}, {notes} notes",
+            s["name"].as_str().unwrap_or("?"),
+            s["first"],
+            s["last"]
+        );
+    }
+    let failed: Vec<String> = Vec::new();
+    Ok(Outcome::ok(
+        json!({"out": out, "songs": songs.len(), "driver": driver.name, "cross_check": cross, "failed": failed}),
+        text,
+    ))
+}
+
+fn region_of(s: &str) -> Result<Region> {
+    match s {
+        "ntsc" => Ok(Region::Ntsc),
+        "pal" => Ok(Region::Pal),
+        _ => bail!("--region is ntsc or pal"),
+    }
+}
+
+fn mapping(p: Option<&Path>) -> Result<Mapping> {
+    match p {
+        Some(p) => Mapping::parse(&read(p)?).map_err(anyhow::Error::msg),
+        None => Ok(Mapping::default()),
+    }
+}
+
+/// A song's samples through the APU: its first pass and `loops` more.
+pub(crate) fn render_song(
+    set: &SongSet,
+    song: &str,
+    loops: u32,
+    gains: gp_sound::synth::Gains,
+) -> Result<Vec<i16>> {
+    let s = set
+        .song(song)
+        .with_context(|| format!("no song `{song}`"))?;
+    let mut p = gp_sound::player::Player::new(set.clone());
+    p.play_music(Some(song));
+    let lf = s.loop_frame.unwrap_or(0);
+    let frames = s.frames + u64::from(loops) * (s.frames - lf);
+    let mut synth = gp_sound::synth::Synth::new(
+        set.region,
+        gp_sound::synth::SAMPLE_RATE,
+        set.samples.clone(),
+    );
+    synth.gains = gains;
+    let mut out = Vec::new();
+    for _ in 0..frames {
+        let w = p.frame();
+        out.extend(synth.frame(&w));
+    }
+    Ok(out)
+}
+
+/// Whether a file's text is an AY song file (`gp-ay-songs 0`).
+fn ay_songs(text: &str) -> Option<serde_json::Value> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    (v["format"] == "gp-ay-songs 0").then_some(v)
+}
+
+/// The AY song asked for, or the first.
+fn ay_song(v: &serde_json::Value, input: &Path, want: Option<&str>) -> Result<serde_json::Value> {
+    let name = input
+        .parent()
+        .and_then(|d| d.file_name())
+        .map_or("capture".into(), |n| n.to_string_lossy().into_owned());
+    let songs = crate::sound_ay::songs_of(v, &name);
+    match want {
+        Some(w) => songs
+            .into_iter()
+            .find(|s| s["name"] == w)
+            .with_context(|| format!("no song `{w}`")),
+        None => songs.into_iter().next().context("the set has no song"),
+    }
+}
+
+/// `gp sound render` of an AY log or AY songs, through the board's sound.
+fn render_ay(a: &RenderArgs, text: &str) -> Result<Outcome> {
+    if a.banks.is_some() {
+        bail!("--banks maps the NES's instruments; AY sound plays through the board's own voices");
+    }
+    let (log, what) = if text.starts_with(crate::sound_ay::HEADER) {
+        (
+            crate::sound_ay::AyLog::parse(text)?,
+            "the AY log".to_owned(),
+        )
+    } else {
+        let v = ay_songs(text).context("not AY songs")?;
+        let song = ay_song(&v, &a.input, a.song.as_deref())?;
+        let name = song["name"].as_str().unwrap_or("?").to_owned();
+        (
+            crate::sound_ay_render::song_log(&song, a.loops),
+            format!("song {name}"),
+        )
+    };
+    let zip = match &a.rom {
+        Some(p) => Some(p.clone()),
+        None => gp_arcade::romset::local_romset("tapper"),
+    };
+    let prom = zip
+        .as_deref()
+        .and_then(|z| gp_arcade::Romset::load_zip(z).ok())
+        .and_then(|s| s.ssio_prom);
+    let samples = crate::sound_ay_render::render_log(&log, prom.as_deref());
+    write(&a.out, &crate::sound_ay_render::wav_stereo(&samples))?;
+    let secs = samples.len() as f64 / f64::from(gp_arcade::sound::OUT_RATE);
+    Ok(Outcome::ok(
+        json!({"out": a.out, "samples": samples.len(), "seconds": secs, "channels": 2, "prom": prom.is_some()}),
+        format!(
+            "wrote {} ({secs:.1} s, stereo, {what} through the AY-8910s{})",
+            a.out.display(),
+            if prom.is_some() {
+                ", the SSIO PROM's volumes"
+            } else {
+                "; no romset with the SSIO PROM, so every voice at full volume"
+            }
+        ),
+    ))
+}
+
+fn render_cmd(a: &RenderArgs, home: &Path) -> Result<Outcome> {
+    let text = read(&a.input)?;
+    if text.starts_with(crate::sound_ay::HEADER) || ay_songs(&text).is_some() {
+        return render_ay(a, &text);
+    }
+    let map = mapping(a.banks.as_deref())?;
+    let samples = if text.starts_with("gp-apu-log") {
+        let log = ApuLog::parse(&text).map_err(anyhow::Error::msg)?;
+        let end = log.region.frame_start(log.frames());
+        gp_sound::synth::render(
+            log.region,
+            &log.timeline(),
+            end,
+            &log.samples,
+            map.mix.gains(),
+        )
+    } else {
+        let set = SongSet::parse(&text).map_err(anyhow::Error::msg)?;
+        let song = a
+            .song
+            .clone()
+            .or_else(|| set.songs.first().map(|s| s.name.clone()));
+        let song = song.context("the set has no song")?;
+        if map.uses_banks(&set, &song) {
+            let mut folders = gp_sound::banks::folders(home);
+            if let Some(d) = a.banks.as_ref().and_then(|b| b.parent()) {
+                folders.insert(0, d.to_path_buf());
+            }
+            let r = gp_sound_bank::render(&set, &song, &map, &folders, a.loops)
+                .map_err(anyhow::Error::msg)?;
+            for (c, b, p) in &r.banked {
+                tracing::info!("{} plays through {b} `{p}`", c.name());
+            }
+            for f in &r.fallbacks {
+                tracing::warn!("{f}");
+            }
+            r.samples
+        } else {
+            render_song(&set, &song, a.loops, map.mix.gains())?
+        }
+    };
+    write(
+        &a.out,
+        &gp_sound::synth::wav(&samples, gp_sound::synth::SAMPLE_RATE),
+    )?;
+    let secs = samples.len() as f64 / f64::from(gp_sound::synth::SAMPLE_RATE);
+    Ok(Outcome::ok(
+        json!({"out": a.out, "samples": samples.len(), "seconds": secs}),
+        format!("wrote {} ({secs:.1} s)", a.out.display()),
+    ))
+}
+
+fn export_cmd(a: &ExportArgs) -> Result<Outcome> {
+    let text = read(&a.songs)?;
+    if let Some(v) = ay_songs(&text) {
+        if a.famistudio.is_some() {
+            bail!(
+                "FamiStudio's AY expansion (Sunsoft 5B) has three channels and the board's two AY-8910s six; export AY songs with --midi"
+            );
+        }
+        let p = a.midi.as_ref().context("give --midi")?;
+        let song = ay_song(&v, &a.songs, a.song.as_deref())?;
+        write(p, &crate::sound_ay_render::midi_export(&song))?;
+        let said = vec![format!(
+            "wrote {} ({}, 7 tracks)",
+            p.display(),
+            song["name"].as_str().unwrap_or("?")
+        )];
+        return Ok(Outcome::ok(json!({"said": said}), said.join("\n")));
+    }
+    let set = SongSet::parse(&text).map_err(anyhow::Error::msg)?;
+    let map = mapping(a.banks.as_deref())?;
+    let mut said = Vec::new();
+    if let Some(p) = &a.famistudio {
+        let name = a
+            .songs
+            .parent()
+            .and_then(|d| d.file_name())
+            .map_or("songs".into(), |n| n.to_string_lossy().into_owned());
+        let (text, loss) = gp_sound::famistudio::export(&set, &name, &a.famistudio_version);
+        write(p, text.as_bytes())?;
+        said.push(format!(
+            "wrote {} (FamiStudio {}); clamped pitch values {}, envelopes cut at 255 frames {}, DMC instruments without bytes {}",
+            p.display(),
+            a.famistudio_version,
+            loss.clamped_pitch,
+            loss.long_envelopes,
+            loss.dmc_without_bytes
+        ));
+    }
+    if let Some(p) = &a.midi {
+        let song = a
+            .song
+            .clone()
+            .or_else(|| set.songs.first().map(|s| s.name.clone()))
+            .context("no song")?;
+        let s = set
+            .song(&song)
+            .with_context(|| format!("no song `{song}`"))?;
+        let bytes = gp_sound::midi::export(&set, s, &map.gm_programs(&set, &song));
+        write(p, &bytes)?;
+        said.push(format!(
+            "wrote {} ({song}, {} tracks)",
+            p.display(),
+            s.tracks.len() + 1
+        ));
+    }
+    if said.is_empty() {
+        bail!("give --famistudio or --midi");
+    }
+    Ok(Outcome::ok(json!({"said": said}), said.join("\n")))
+}
+
+fn import_cmd(a: &ImportArgs) -> Result<Outcome> {
+    let region = region_of(&a.region)?;
+    let ext = a
+        .input
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let midi = ext == "mid" || ext == "midi";
+    let name = a
+        .input
+        .file_stem()
+        .map_or("song".into(), |s| capture::slug(&s.to_string_lossy()));
+    if a.ay {
+        if !midi {
+            bail!("--ay reads a MIDI file (.mid); FamiStudio projects are the NES's");
+        }
+        let bytes = std::fs::read(&a.input).with_context(|| a.input.display().to_string())?;
+        let (set, warnings, errors) = crate::sound_ay_render::midi_import(&bytes, &name)?;
+        let notes: usize = set["songs"][0]["channels"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|c| c["notes"].as_array().map_or(0, Vec::len))
+            .sum();
+        let mut text = format!(
+            "{}: 1 AY song, {notes} notes; {} errors, {} warnings",
+            a.input.display(),
+            errors.len(),
+            warnings.len()
+        );
+        for e in &errors {
+            let _ = write!(text, "\nerror: {e}");
+        }
+        for w in warnings.iter().take(20) {
+            let _ = write!(text, "\nwarning: {w}");
+        }
+        let j = json!({"errors": errors, "warnings": warnings, "songs": 1});
+        if !errors.is_empty() {
+            return Ok(Outcome {
+                json: j,
+                text,
+                exit: 1,
+            });
+        }
+        write(&a.out, serde_json::to_string_pretty(&set)?.as_bytes())?;
+        let _ = write!(text, "\nwrote {}", a.out.display());
+        return Ok(Outcome::ok(j, text));
+    }
+    let (set, v) = if midi {
+        let bytes = std::fs::read(&a.input).with_context(|| a.input.display().to_string())?;
+        gp_sound::midi::import(&bytes, &name, region)
+    } else {
+        gp_sound::famistudio::import(&read(&a.input)?, region)
+    };
+    let mut text = format!(
+        "{}: {} songs, {} instruments; {} errors, {} warnings",
+        a.input.display(),
+        set.songs.len(),
+        set.instruments.len(),
+        v.errors.len(),
+        v.warnings.len()
+    );
+    for e in &v.errors {
+        let _ = write!(text, "\nerror: {e}");
+    }
+    for w in v.warnings.iter().take(20) {
+        let _ = write!(text, "\nwarning: {w}");
+    }
+    let j = json!({"errors": v.errors, "warnings": v.warnings, "songs": set.songs.len()});
+    if !v.ok() {
+        return Ok(Outcome {
+            json: j,
+            text,
+            exit: 1,
+        });
+    }
+    write(&a.out, set.to_text().as_bytes())?;
+    let _ = write!(text, "\nwrote {}", a.out.display());
+    Ok(Outcome::ok(j, text))
+}
+
+fn banks_cmd(paths: &Paths) -> Result<Outcome> {
+    let folders = gp_sound::banks::folders(&paths.home);
+    let found = gp_sound::banks::discover(&folders);
+    let mut text = format!(
+        "{} banks (looked in {})",
+        found.len(),
+        folders
+            .iter()
+            .map(|f| f.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    for b in &found {
+        let _ = write!(
+            text,
+            "\n  {:<20} {:?} {} patches, licence {}",
+            b.name,
+            b.kind,
+            b.patches.len(),
+            b.license.as_deref().unwrap_or("unknown")
+        );
+    }
+    Ok(Outcome::ok(serde_json::to_value(&found)?, text))
 }

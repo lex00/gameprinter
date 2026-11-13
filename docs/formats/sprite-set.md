@@ -1,6 +1,6 @@
 # Sprite sets (the sprite-set asset)
 
-Brought from game-printer's docs/formats/sprite-set.md (port wave 4). Links to pages gameprinter doesn't carry yet name game-printer's docs (`~/Documents/checkouts/lex00/game-printer/docs`).
+Brought from game-printer's docs/formats/sprite-set.md (port wave 4).
 
 A sprite set holds sprite frames as layouts of tiles, each tile placed in pixels from the entity's position with its own flips, palette and tiles slot, and the sprite palettes each level showed. `gp sprites capture` ([capture](../capture.md#sprites)) writes it into the lifted assets, as `<asset>.toml` beside the files `gp assets lift` writes; a model reads it through a slot of kind `sprite-set` ([the model](../model.md)). The asset map names it with `format = "sprite-set"` and no span: `gp assets lift` writes nothing for it, so a lift never replaces a capture, and `gp assets pack` encodes nothing. `crates/gp-assets/src/sprite_set.rs` is the definition. This is schema 1.
 

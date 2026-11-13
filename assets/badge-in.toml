@@ -1,0 +1,64 @@
+# Asset map for Badge In, an original template (docs/originals.md). Written by
+# gp template build from the template's authored.toml; don't edit it by hand.
+# The offsets are into the data image the build makes, which holds the
+# authored assets one after another and no code.
+schema = 1
+source = "badge-in"
+title = "Badge In"
+sha256 = "617ea299d89daa6f608fc26c263d2b71fafa2e6af19d45cd3db678e9a7d7e6e2"
+
+[[asset]]
+name = "tiles"
+format = "chr-2bpp"
+region = "chr"
+offset = 0x0000
+tiles = 256
+tiles_per_row = 16
+
+[[asset]]
+name = "palettes"
+format = "palette"
+region = "prg"
+offset = 0x0000
+count = 8
+
+[[asset]]
+name = "metatiles"
+format = "metatiles"
+region = "prg"
+offset = 0x0020
+count = 8
+names = ["air", "carpet over concrete", "desk", "cubicle wall", "filing cabinet", "window", "badge reader, left", "badge reader, right"]
+property = [
+  { name = "solid", region = "prg", offset = 0x0040 },
+]
+
+[[asset]]
+name = "lobby"
+format = "level-grid"
+region = "prg"
+offset = 0x0048
+width = 48
+height = 15
+legend = ".#=|X~[]"
+metatiles = "metatiles"
+
+[[asset]]
+name = "open_plan"
+format = "level-grid"
+region = "prg"
+offset = 0x0318
+width = 64
+height = 15
+legend = ".#=|X~[]"
+metatiles = "metatiles"
+
+[[asset]]
+name = "hot_desks"
+format = "level-grid"
+region = "prg"
+offset = 0x06d8
+width = 64
+height = 15
+legend = ".#=|X~[]"
+metatiles = "metatiles"

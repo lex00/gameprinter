@@ -2,7 +2,9 @@
 
 People edit sprites in tools of their own, such as Pixelorama or Aseprite, or by having an agent write pixels. The image format config says how frames go into image files for them and come back: the layout (one sheet or a file per frame, and the grid) and the scale. It also sets the pixel type (indexed or RGBA) and the palette file. Transparency, names and state tags are set there too, along with the editor. `crates/gp-imagefmt` is the writer and the reader, and `crates/gp-imagefmt/src/config.rs` the definition. This is format 0.1.0, and `schema/image-config.json` its JSON Schema (`gp self schemas` writes it).
 
-Brought from game-printer's docs/formats/image-config.md; the format is unchanged. In gameprinter one tool uses it: `gp mcp`'s `assets_export` with an `editor` writes an entity's frames for that editor, and `assets_edit`'s `import` op reads the folder the editor saved into back through the checks below ([mcp.md](../mcp.md)). Not here yet: `gp sprites export` and `gp sprites import` (the same round trip from the command line), `gp sprites schema`, and `gp assets open`, which started the editor and brought each save back.
+Brought from game-printer's docs/formats/image-config.md; the format is unchanged. `gp sprites export` writes a template's captured frames in the layout it says, `gp sprites import` reads them back through the checks below, `gp sprites schema` prints its schema, and `gp assets open` starts the editor and brings each save back ([sprite editing](../sprite-editing.md)). `gp mcp`'s `assets_export` with an `editor` writes an entity's frames for that editor too, and `assets_edit`'s `import` op reads the folder the editor saved into back through the same checks ([mcp.md](../mcp.md)). All of them are NES only: a sheet holds four palettes of four colours with colour 0 clear, and an arcade game's (Tapper's Midway MCR) sprite is one 32 by 32 picture of sixteen values, so they refuse an arcade game in words.
+
+The exported colours are the NES palette from gp-present; game-printer took them from gp-gen-bevy, which is retired.
 
 ## Layers
 
@@ -66,13 +68,13 @@ An import reads the images through the sidecar and refuses (each problem named w
 - a drawn pixel lies outside the frame's tiles;
 - the distinct tiles, where a tile and its mirror count once, are more than `tile_budget`.
 
-In game-printer, `gp sprites import` wrote checked frames as a theme in `$GP_HOME/themes/<template>-sprites/` (or `--out`): each frame as an RGBA PNG, and a `theme.toml` that restyles each entity's role with its own frame. In gameprinter, `assets_edit`'s `import` op brings the frames that changed back as an edit of the copy, through every edit check, placed or (with `place: false`) proposed; `gp_imagefmt::sheet::rgba_png` still makes a frame's RGBA PNG for a theme.
+`gp sprites import` writes checked frames as a theme in `$GP_HOME/themes/<template>-sprites/` (or `--out`): each frame as an RGBA PNG, and a `theme.toml` that restyles each entity's role with its own frame. `assets_edit`'s `import` op brings the frames that changed back as an edit of the copy, through every edit check, placed or (with `place: false`) proposed; `gp_imagefmt::sheet::rgba_png` still makes a frame's RGBA PNG for a theme.
 
 ## Editors
 
 | Editor | How |
 |---|---|
-| Pixelorama | `assets_export` with `editor: "pixelorama"` writes the set and a `gp-edit.json` trip file beside it, and `assets_edit` with `import` brings the saved folder back as a checked edit. game-printer's `gp assets open <copy> <entity> --editor pixelorama` also started Pixelorama and watched for saves. By hand: import `sheet.png` as a spritesheet with the sidecar's cell size (or open the per-frame PNGs), and load `palette.json` (`palette_file = "pixelorama"`) or `palette.gpl`. Save PNGs over the exported ones. Its `.pxo` project format isn't written yet: it is a ZIP of JSON and image data whose layout we haven't pinned (an open question) |
+| Pixelorama | `assets_export` with `editor: "pixelorama"` writes the set and a `gp-edit.json` trip file beside it, and `assets_edit` with `import` brings the saved folder back as a checked edit. `gp assets open <copy> <entity> --editor pixelorama` also starts Pixelorama and watches for saves. By hand: import `sheet.png` as a spritesheet with the sidecar's cell size (or open the per-frame PNGs), and load `palette.json` (`palette_file = "pixelorama"`) or `palette.gpl`. Save PNGs over the exported ones. Its `.pxo` project format isn't written yet: it is a ZIP of JSON and image data whose layout we haven't pinned (an open question) |
 | Aseprite (and LibreSprite, `editor: "aseprite"` or `"libresprite"`) | Open `sheet.png` and use Import Sprite Sheet with the cell size, or open the frames; `sprites.aseprite.json` has the frame rectangles and tags as Aseprite's own sheet export writes them. The `.aseprite` binary format isn't written |
 | Any editor | Edit the PNGs in their own palette (indexed) or colors (RGBA) |
 

@@ -1,0 +1,42 @@
+# Template manifest (docs/templates.md, docs/originals.md). Badge In is an
+# original: no source game. Its assets are written in authored.toml, and
+# `gp template build` makes the data image and asset map the pins name.
+[template]
+format = "0.1.1"
+id = "badge-in"
+title = "Badge In"
+tier = "open"
+model = "model.toml"
+contract = "fidelity.toml"
+
+[source]
+id = "badge-in"
+platform = "nes"
+how = "authored"
+accepts = ["617ea299d89daa6f608fc26c263d2b71fafa2e6af19d45cd3db678e9a7d7e6e2"]
+
+[recipe]
+asset_map = "../../assets/badge-in.toml"
+asset_map_sha256 = "1f425691a55a91da1ccdd2d038f303116edfe019090de2c347b4a0b45584101c"
+lifted_sha256 = "743e0a8ac6e2a71869b158daa6cb10d229d3c328e003193d904c024e8890fdbd"
+
+[slots]
+hot_desks = "layout"
+lobby = "layout"
+metatiles = "tileset"
+open_plan = "layout"
+palettes = "palettes"
+tiles = "graphics"
+
+# Mechanics taken from other templates (docs/originals.md, "Provenance").
+[[inspired_by]]
+template = "mosshop"
+took = ["entities.player.jump", "entities.player.run"]
+into = ["entities.associate.jump", "entities.associate.run"]
+note = "Taken whole"
+
+[[inspired_by]]
+template = "smb1-ntsc-prg0"
+took = ["entities.goomba.walk", "entities.goomba.fall", "entities.koopa_green.machine", "entities.bullet_bill.fly"]
+into = ["entities.middle_manager.walk", "entities.middle_manager.fall", "entities.printer.machine", "entities.reply_all.fly"]
+note = "Speeds kept at their ratio to the player's walk; the sliding shell kills instead of hurting; frames and sprites dropped"

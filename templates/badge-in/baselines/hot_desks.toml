@@ -1,0 +1,46 @@
+# A model baseline (docs/originals.md): the interpreter plays hot_desks of badge_in
+# from its start to its goal on this input, with every enemy in place.
+# Recorded by `gp interp reach --record`; `gp interp baselines` checks it.
+format = "0.1.0"
+model = "badge_in"
+level = "hot_desks"
+description = "Plays hot_desks from its start to its goal; found by gp interp reach --record"
+recorded = "search"
+frames = 556
+holds = ["b@1-16", "right@1-16", "a@18-57", "b@18-57", "right@18-57", "a@59-89", "b@59-89", "right@59-89", "a@91-121", "b@91-121", "right@91-121", "a@123-201", "b@123-201", "right@123-201", "a@203-233", "right@203-218", "a@235-293", "b@235-293", "right@235-293", "a@295-346", "b@295-346", "right@295-346", "a@348-383", "b@348-383", "right@348-383", "a@385-420", "b@385-420", "right@385-420", "a@422-492", "b@422-492", "right@422-492", "a@494-525", "b@494-525", "right@494-525"]
+digest = "f3911e75ad146a3931ece2e8539527d41d4c3e22b4b1de2aebd719be897e2ece"
+
+[[expect]]
+frame = 556
+path = "level"
+equals = "hot_desks"
+
+[[expect]]
+frame = 556
+path = "rules.game.state"
+equals = "badged_in"
+
+[[expect]]
+frame = 556
+path = "counters.clock"
+equals = "112"
+
+[[expect]]
+frame = 556
+path = "counters.coffee"
+equals = "0"
+
+[[expect]]
+frame = 556
+path = "counters.delegated"
+equals = "3"
+
+[[expect]]
+frame = 556
+path = "counters.floors"
+equals = "1"
+
+[[expect]]
+frame = 556
+path = "counters.lives"
+equals = "3"

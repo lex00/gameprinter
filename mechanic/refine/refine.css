@@ -79,3 +79,15 @@
 .rf-card .rf-name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .rf-clip .rf-name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-align: left; }
 .rf-strip-job .rf-name { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+
+/* The grid. */
+.rf-grid .rf-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.rf-grid-scroll { overflow-x: auto; max-width: 100%; padding: 2px 0; }
+.rf-grid-canvas { image-rendering: pixelated; cursor: pointer; display: block; }
+.rf-grid-foot { display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; font-size: 12px; margin: 4px 0 8px; }
+.rf-grid-line { flex: 1 1 320px; color: var(--muted, #bcbcbc); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rf-grid-legend { display: inline-flex; gap: 8px; flex-wrap: wrap; }
+.rf-grid-key { display: inline-flex; align-items: center; gap: 3px; }
+.rf-grid-swatch { display: inline-block; width: 8px; height: 8px; }
+.rf-chip.rf-needs-you { color: #000; background: #ffb020; padding: 0 4px; }
+

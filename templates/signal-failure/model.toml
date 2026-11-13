@@ -1,0 +1,534 @@
+[model]
+schema = "0.4.0"
+name = "signal_failure"
+title = "Signal Failure"
+description = "An original: the commute as a platformer. Make the train before it leaves, over the tracks and through the barriers, past fare inspectors, pigeons, delay announcements and doors that close on their own schedule. Its movement is its own, with coyote time and a jump buffer, and has no source (docs/originals.md)"
+source = "signal-failure"
+view = "side"
+frame_rate = "60"
+systems = ["rules", "entity_states", "counters", "spawn", "platformer.player", "platformer.enemies", "platformer.contact", "exits", "camera"]
+start_level = "platform_9"
+
+[model.extensions]
+platformer = "0.4.0"
+
+[input]
+device = "nes-pad"
+
+[input.actions]
+jump = "a"
+left = "left"
+right = "right"
+run = "b"
+
+[assets.interchange]
+kind = "level-grid"
+role = "layout"
+
+[assets.interchange.from]
+source = "signal-failure"
+asset = "interchange"
+
+[assets.last_train]
+kind = "level-grid"
+role = "layout"
+
+[assets.last_train.from]
+source = "signal-failure"
+asset = "last_train"
+
+[assets.metatiles]
+kind = "metatiles"
+role = "tileset"
+description = "Tunnel dark, platform edge, bench, ticket barrier, stairs, departure board, and the train door's two halves"
+item_roles = ["background", "terrain", "platform", "terrain", "terrain", "background", "goal", "goal"]
+
+[assets.metatiles.from]
+source = "signal-failure"
+asset = "metatiles"
+
+[assets.palettes]
+kind = "palettes"
+role = "palettes"
+item_roles = ["terrain", "terrain", "background", "goal", "player", "enemy", "enemy", "collectible"]
+
+[assets.palettes.from]
+source = "signal-failure"
+asset = "palettes"
+
+[assets.platform_9]
+kind = "level-grid"
+role = "layout"
+
+[assets.platform_9.from]
+source = "signal-failure"
+asset = "platform_9"
+
+[assets.tiles]
+kind = "tiles"
+role = "graphics"
+description = "Generated stub tiles"
+
+[assets.tiles.from]
+source = "signal-failure"
+asset = "tiles"
+
+[entities.closing_doors]
+description = "Platform screen doors that shut and open again on a timer of their own. They can't be stomped"
+role = "hazard"
+size = [16, 32]
+
+[entities.closing_doors.contact]
+otherwise = "kill-player"
+
+[entities.closing_doors.hitbox]
+h = 32
+w = 12
+x = 2
+y = 0
+
+[entities.closing_doors.path]
+axis = "y"
+distance = 48
+pause = 40
+speed = 1
+
+[entities.closing_doors.sprite]
+palette = 6
+slot = "tiles"
+tiles = [70, 71, 86, 87, 102, 103, 118, 119]
+width = 2
+
+[entities.commuter]
+description = "A commuter with a coffee and a phone at four percent"
+role = "player"
+size = [16, 16]
+tile_collision = true
+
+[entities.commuter.hitbox]
+h = 14
+w = 10
+x = 3
+y = 2
+
+[entities.commuter.jump]
+action = "jump"
+buffer_frames = 6
+coyote_frames = 6
+gravity = "0.25"
+gravity_held = "0.15625"
+max_fall = 4
+speed = "-4.5"
+
+[entities.commuter.run]
+acceleration = "0.0625"
+air_control = true
+deceleration = "0.125"
+run_action = "run"
+run_speed = 2
+walk_speed = "1.25"
+
+[entities.commuter.sprite]
+flip_when_facing_left = true
+palette = 4
+slot = "tiles"
+tiles = [64, 65, 80, 81]
+width = 2
+
+[entities.delay_announcement]
+description = "We apologise for the delay to your service. It travels left at walking pace. Stomping it silences it"
+role = "projectile"
+size = [16, 16]
+
+[entities.delay_announcement.contact]
+bounce = -3
+otherwise = "kill-player"
+stomp_depth = 7
+
+[entities.delay_announcement.fly]
+heading = "left"
+speed = 1
+
+[entities.delay_announcement.hitbox]
+h = 8
+w = 12
+x = 2
+y = 4
+
+[entities.delay_announcement.sprite]
+palette = 7
+slot = "tiles"
+tiles = [72, 73, 88, 89]
+width = 2
+
+[entities.fare_inspector]
+description = "Walks the platform asking to see a ticket, and turns at the edge"
+role = "enemy"
+size = [16, 16]
+tile_collision = true
+
+[entities.fare_inspector.contact]
+bounce = -3
+otherwise = "kill-player"
+stomp_depth = 6
+
+[entities.fare_inspector.fall]
+gravity = "0.25"
+max_fall = 4
+
+[entities.fare_inspector.hitbox]
+h = 14
+w = 10
+x = 3
+y = 2
+
+[entities.fare_inspector.sprite]
+flip_when_facing_left = true
+palette = 5
+slot = "tiles"
+tiles = [66, 67, 82, 83]
+width = 2
+
+[entities.fare_inspector.walk]
+speed = "0.5"
+turn_at_ledges = true
+
+[entities.free_paper]
+description = "A free newspaper, today's"
+role = "collectible"
+size = [16, 16]
+
+[entities.free_paper.contact]
+otherwise = "collect"
+
+[entities.free_paper.hitbox]
+h = 12
+w = 8
+x = 4
+y = 2
+
+[entities.free_paper.sprite]
+palette = 7
+slot = "tiles"
+tiles = [74, 75, 90, 91]
+width = 2
+
+[entities.pigeon]
+description = "Hops toward you for crumbs"
+role = "enemy"
+size = [16, 16]
+tile_collision = true
+
+[entities.pigeon.contact]
+bounce = -3
+otherwise = "kill-player"
+stomp_depth = 6
+
+[entities.pigeon.fall]
+gravity = "0.25"
+max_fall = 4
+
+[entities.pigeon.hitbox]
+h = 10
+w = 10
+x = 3
+y = 6
+
+[entities.pigeon.hop]
+speed = -2
+
+[entities.pigeon.sprite]
+flip_when_facing_left = true
+palette = 6
+slot = "tiles"
+tiles = [68, 69, 84, 85]
+width = 2
+
+[entities.pigeon.walk]
+speed = "0.25"
+
+[levels.interchange]
+description = "The change: stairs up and down, two tracks and an announcement"
+grid = "interchange"
+kill_below = 208
+next = "last_train"
+size = [64, 15]
+solid_property = "solid"
+spawn_ahead = 32
+tile_size = 16
+tileset = "metatiles"
+
+[levels.interchange.counters]
+departure = 75
+
+[levels.interchange.goal]
+x = 964
+
+[[levels.interchange.spawn]]
+entity = "commuter"
+x = 24
+y = 176
+
+[[levels.interchange.spawn]]
+entity = "pigeon"
+x = 352
+y = 176
+
+[[levels.interchange.spawn]]
+entity = "free_paper"
+x = 544
+y = 80
+
+[[levels.interchange.spawn]]
+entity = "delay_announcement"
+x = 720
+y = 168
+
+[[levels.interchange.spawn]]
+entity = "fare_inspector"
+x = 880
+y = 176
+
+[[levels.interchange.spawn]]
+entity = "closing_doors"
+x = 912
+y = 112
+
+[levels.last_train]
+description = "The last train out: three tracks and the doors closing"
+grid = "last_train"
+kill_below = 208
+size = [72, 15]
+solid_property = "solid"
+spawn_ahead = 32
+tile_size = 16
+tileset = "metatiles"
+
+[levels.last_train.counters]
+departure = 90
+
+[levels.last_train.goal]
+x = 1092
+
+[[levels.last_train.spawn]]
+entity = "commuter"
+x = 24
+y = 176
+
+[[levels.last_train.spawn]]
+entity = "fare_inspector"
+x = 256
+y = 176
+
+[[levels.last_train.spawn]]
+entity = "pigeon"
+x = 576
+y = 176
+
+[[levels.last_train.spawn]]
+entity = "free_paper"
+x = 848
+y = 80
+
+[[levels.last_train.spawn]]
+entity = "delay_announcement"
+x = 880
+y = 168
+
+[[levels.last_train.spawn]]
+entity = "closing_doors"
+x = 1008
+y = 112
+
+[[levels.last_train.spawn]]
+entity = "closing_doors"
+x = 1056
+y = 112
+
+[levels.platform_9]
+description = "The morning platform: barriers, benches, one track to jump and the stairs"
+grid = "platform_9"
+kill_below = 208
+next = "interchange"
+size = [56, 15]
+solid_property = "solid"
+spawn_ahead = 32
+tile_size = 16
+tileset = "metatiles"
+
+[levels.platform_9.counters]
+departure = 60
+
+[levels.platform_9.goal]
+x = 836
+
+[[levels.platform_9.spawn]]
+entity = "commuter"
+x = 24
+y = 176
+
+[[levels.platform_9.spawn]]
+entity = "fare_inspector"
+x = 272
+y = 176
+
+[[levels.platform_9.spawn]]
+entity = "free_paper"
+x = 208
+y = 112
+
+[[levels.platform_9.spawn]]
+entity = "pigeon"
+x = 480
+y = 176
+
+[[levels.platform_9.spawn]]
+entity = "closing_doors"
+x = 768
+y = 112
+
+[cameras.main]
+follow = "commuter"
+axis = "x"
+size = [256, 240]
+lead = [112, 0]
+clamp_to_level = true
+
+[rules.game]
+initial = "commuting"
+
+[[rules.game.states.commuting.transition]]
+to = "delayed"
+on = "player.died"
+do = ["change:patience:-1"]
+
+[[rules.game.states.commuting.transition]]
+to = "delayed"
+on = "departure.reached_min"
+do = ["change:patience:-1"]
+
+[[rules.game.states.commuting.transition]]
+to = "home"
+on = "goal.reached"
+
+[rules.game.states.commuting.transition.if]
+counter = "trains"
+cmp = ">="
+value = 3
+
+[[rules.game.states.commuting.transition]]
+to = "on_board"
+on = "goal.reached"
+
+[rules.game.states.delayed]
+description = "Missed it: the next one is in a moment"
+freeze = true
+
+[[rules.game.states.delayed.transition]]
+to = "commuting"
+after = 90
+do = ["restart-level"]
+
+[rules.game.states.delayed.transition.if]
+counter = "patience"
+cmp = ">"
+value = 0
+
+[[rules.game.states.delayed.transition]]
+to = "working_from_home"
+after = 90
+
+[rules.game.states.home]
+description = "Made the last train: the game is won"
+freeze = true
+
+[rules.game.states.on_board]
+description = "On the train; the next platform"
+freeze = true
+
+[[rules.game.states.on_board.transition]]
+to = "commuting"
+after = 60
+do = ["next-level"]
+
+[rules.game.states.working_from_home]
+description = "Out of patience: the game is over"
+freeze = true
+
+[counters.departure]
+description = "Seconds until the doors close, one every 60 frames"
+min = 0
+
+[[counters.departure.change]]
+every = 60
+by = -1
+
+[counters.papers]
+max = 99
+
+[[counters.papers.change]]
+on = "item.collected"
+
+[counters.patience]
+description = "Lives"
+start = 3
+min = 0
+
+[[counters.trains.change]]
+on = "goal.reached"
+
+[evidence.assets]
+source = "stated"
+confidence = 100
+note = "Each slot is filled from the asset of its name in the template's authored.toml"
+
+[[evidence.assets.refs]]
+at = "template:signal-failure"
+
+[evidence.cameras]
+source = "stated"
+confidence = 100
+note = "The template author's"
+
+[[evidence.cameras.refs]]
+at = "template:signal-failure"
+
+[evidence.counters]
+source = "stated"
+confidence = 100
+note = "The template author's"
+
+[[evidence.counters.refs]]
+at = "template:signal-failure"
+
+[evidence.entities]
+source = "stated"
+confidence = 100
+note = "Designed for this template, from no source: the commuter's coyote time and jump buffer are common platformer conventions, set here by the author"
+
+[[evidence.entities.refs]]
+at = "template:signal-failure"
+
+[evidence.input]
+source = "stated"
+confidence = 100
+note = "The template author's choice of buttons"
+
+[[evidence.input.refs]]
+at = "template:signal-failure"
+
+[evidence.levels]
+source = "stated"
+confidence = 100
+note = "Three platforms written for this template"
+
+[[evidence.levels.refs]]
+at = "template:signal-failure"
+
+[evidence.rules]
+source = "stated"
+confidence = 100
+note = "The template author's: patience as lives, a departure time per platform and three trains to win"
+
+[[evidence.rules.refs]]
+at = "template:signal-failure"

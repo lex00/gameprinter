@@ -1212,7 +1212,7 @@ fn replay_arcade(
 
 /// An arcade frame's controls (coin, start, right, left, down, up, tap
 /// from bit 0) as the NES pad's bits the detectors read.
-fn nes_pad(c: u8) -> u8 {
+pub(crate) fn nes_pad(c: u8) -> u8 {
     use gp_evidence::input_log::button as b;
     use gp_explore::arcade as a;
     [

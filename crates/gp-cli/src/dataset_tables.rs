@@ -229,8 +229,8 @@ pub(crate) fn croissant_for(
         "conformsTo": "http://mlcommons.org/croissant/1.0",
         "name": name,
         "description": description,
-        "license": "https://github.com/lex00/game-printer/blob/main/docs/research/datasets.md",
-        "url": "https://github.com/lex00/game-printer",
+        "license": "https://github.com/lex00/gameprinter/blob/main/docs/research/datasets.md",
+        "url": "https://github.com/lex00/gameprinter",
         "creator": {"@type": "sc:Person", "name": "Game Printer"},
         "datePublished": "1970-01-01",
         "version": version,
@@ -245,7 +245,7 @@ pub(crate) const WINDOW: usize = 16;
 /// Windows of 16 bytes too regular to say where they came from, as
 /// scripts/romguard/rom_text.py skips them: fewer than 4 values, a
 /// pattern of 4 bytes or fewer repeated, or a ramp of one step.
-fn trivial(w: &[u8]) -> bool {
+pub(crate) fn trivial(w: &[u8]) -> bool {
     let distinct: BTreeSet<u8> = w.iter().copied().collect();
     if distinct.len() < 4 {
         return true;

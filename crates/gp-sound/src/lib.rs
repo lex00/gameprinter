@@ -26,6 +26,7 @@ pub mod apu;
 pub mod banks;
 pub mod capture;
 pub mod compare;
+pub mod drivers;
 pub mod edit;
 pub mod famistudio;
 pub mod fidelity;

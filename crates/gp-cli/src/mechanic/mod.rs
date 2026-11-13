@@ -31,8 +31,8 @@
 //! ([`probe`], the game's probes.toml), the page's three tabs (the rebuild
 //! reviewed beside the original and played live, [`live`]), the store of
 //! sealed runs the page writes, and the decision model at the controller
-//! ([`demo`]). The other analysis commands (contacts, sweep, leads, harvest,
-//! compare, video) aren't here. The corpus import is `gp corpus import`
+//! ([`demo`]). `video`, `contacts`, `compare` and `clip-save` are
+//! [`evidence`]. The corpus import is `gp corpus import`
 //! (crate::corpus_import), and sealed runs are scored by `gp sealed`
 //! (crate::sealed).
 
@@ -48,6 +48,7 @@ use serde_json::{Value, json};
 
 mod demo;
 pub(crate) mod detect;
+mod evidence;
 pub(crate) mod http;
 mod import;
 pub(crate) mod live;
@@ -443,8 +444,8 @@ pub enum MechanicCmd {
         /// How many leads (gp mechanic leads, NES only) to triage too.
         #[arg(long, default_value_t = 5)]
         leads: usize,
-        /// gp-arcade's autoplay example binary (default: $GP_AUTOPLAY, or
-        /// beside gp's build).
+        /// An autoplay binary to run instead of gp's own (default:
+        /// $GP_AUTOPLAY, else `gp mechanic autoplay` from this gp).
         #[arg(long)]
         autoplay: Option<PathBuf>,
         /// Frames autoplay plays from power-on.
@@ -459,6 +460,84 @@ pub enum MechanicCmd {
         /// Say what would land where, and write nothing.
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Tapper's auto-player (gp_arcade::autoplay): plays the romset from
+    /// power-on, searching past each life lost, and writes NAME.input (an
+    /// oracle input log) and NAME.phases. The flags are the player's own:
+    /// `--rom FILE --out NAME [--search] [--frames N] [--levels N]
+    /// [--idle] [--from LOG] [--jobs N]`. `gp mechanic triage` runs it.
+    #[command(disable_help_flag = true)]
+    Autoplay {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Find where the player's head hit something in a clip and what changed
+    /// then, read from RAM and sprites. A rise that turns over by 3 px a frame
+    /// at once, where gravity turns it 1 px at a time, is a hit. The bytes that
+    /// had held still and changed at the hit, and the sprites that appeared
+    /// after it, are what the hit did. Uses the ROM dataset's player bytes and
+    /// names, or the game's mapping; nothing about any one game. On arcade the
+    /// board's work RAM and sprite list.
+    Contacts {
+        game: String,
+        mechanic: String,
+        clip: u64,
+        /// The ROM set to play, kept for the game (as `gp mechanic start
+        /// --rom`).
+        #[arg(long)]
+        rom: Option<PathBuf>,
+    },
+    /// Make a clip's video, the evidence a finding cites: the clip's start
+    /// is checked against the state hash it was saved with, its inputs from
+    /// power-on are stored as a recording, and `gp video` draws its frames
+    /// (checking each as it draws) into $GP_HOME/videos.
+    Video {
+        game: String,
+        mechanic: String,
+        clip: u64,
+        /// The ROM set to play, kept for the game (as `gp mechanic start
+        /// --rom`).
+        #[arg(long)]
+        rom: Option<PathBuf>,
+    },
+    /// Answer a question that the measurements settle, with no model and no
+    /// judgement: the tallest jump of clip NEW against that of clip OLD,
+    /// measured from RAM (on an arcade game, whose player doesn't jump, how
+    /// far across each took the player). The person sees both clips
+    /// together and only checks that the measured jumps are the ones in the
+    /// clips.
+    Compare {
+        game: String,
+        mechanic: String,
+        new: u64,
+        old: u64,
+    },
+    /// Save a clip in the snapshot format from an input log that runs from
+    /// power-on: the frames before `--start` are stored once as a path, the
+    /// state there is hashed (and checked on load), and the clip keeps only
+    /// its own `--frames` frames. `--as N` writes it over clip N (to convert
+    /// a clip saved the old way); else it's the session's next clip.
+    ClipSave {
+        game: String,
+        mechanic: String,
+        /// An input log from power-on.
+        #[arg(long)]
+        log: PathBuf,
+        /// The frame the clip starts at.
+        #[arg(long)]
+        start: usize,
+        /// The clip's length in frames; by default the rest of the log.
+        #[arg(long)]
+        frames: Option<usize>,
+        /// A note for the clip.
+        #[arg(long, default_value = "")]
+        note: String,
+        /// Who made it: player or agent.
+        #[arg(long, default_value = "agent")]
+        by: String,
+        /// Write over this clip instead of adding one.
+        #[arg(long = "as")]
+        replace: Option<u64>,
     },
     /// New mechanics to look at: every clip of every mechanic of GAME is
     /// replayed, and the routines and RAM bytes the ROM dataset says stage
@@ -866,6 +945,50 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                 dry_run: *dry_run,
             },
         ),
+        MechanicCmd::Contacts {
+            game,
+            mechanic,
+            clip,
+            rom,
+        } => evidence::contacts(paths, game, mechanic, *clip, rom.as_deref()),
+        MechanicCmd::Video {
+            game,
+            mechanic,
+            clip,
+            rom,
+        } => evidence::clip_video(paths, game, mechanic, *clip, rom.as_deref()),
+        MechanicCmd::Compare {
+            game,
+            mechanic,
+            new,
+            old,
+        } => evidence::compare(paths, game, mechanic, *new, *old),
+        MechanicCmd::ClipSave {
+            game,
+            mechanic,
+            log,
+            start,
+            frames,
+            note,
+            by,
+            replace,
+        } => evidence::clip_save(
+            paths,
+            &evidence::ClipSave {
+                game,
+                mechanic,
+                log,
+                start: *start,
+                frames: *frames,
+                note,
+                by,
+                replace: *replace,
+            },
+        ),
+        MechanicCmd::Autoplay { args } => {
+            gp_arcade::autoplay::main_with(args.iter().cloned());
+            Ok(Outcome::ok(Value::Null, String::new()))
+        }
         MechanicCmd::Leads { game, top, add } => {
             if !name_ok(game) {
                 bail!("a game name is lower-case letters, digits and dashes: {game}");

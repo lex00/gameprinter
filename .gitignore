@@ -19,7 +19,7 @@ dist/
 .env.*
 
 # Game images. Never commit copies of games, even ones you own.
-# ROMs live outside the repo in $GP_ROM_DIR (default ~/.game-printer/roms).
+# ROMs live outside the repo in $GP_ROM_DIR (default $GP_HOME/roms, ~/.gameprinter/roms).
 *.nes
 *.fds
 *.unf
@@ -61,14 +61,14 @@ roms/
 *.srm
 
 # Movies and recordings. Recordings live in the evidence store, outside the repo
-# ($GP_STORE, default ~/.game-printer/store). TAS movies stay private until their terms are checked.
+# ($GP_STORE, default $GP_HOME/store, ~/.gameprinter/store). TAS movies stay private until their terms are checked.
 *.fm2
 *.bk2
 *.mmo
 *.rec
 recordings/
 extracted/
-.game-printer/
+.gameprinter/
 
 # cc65 build output: object, debug and label files (scripts/mosshop/build.sh
 # writes them next to the ROM, in target/, but keep them out wherever they land)

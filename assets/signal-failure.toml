@@ -1,0 +1,64 @@
+# Asset map for Signal Failure, an original template (docs/originals.md). Written by
+# gp template build from the template's authored.toml; don't edit it by hand.
+# The offsets are into the data image the build makes, which holds the
+# authored assets one after another and no code.
+schema = 1
+source = "signal-failure"
+title = "Signal Failure"
+sha256 = "2650c37ff10fdbf6e60fdb22000e8266b4fc87a88f401625c83de6d7956da248"
+
+[[asset]]
+name = "tiles"
+format = "chr-2bpp"
+region = "chr"
+offset = 0x0000
+tiles = 256
+tiles_per_row = 16
+
+[[asset]]
+name = "palettes"
+format = "palette"
+region = "prg"
+offset = 0x0000
+count = 8
+
+[[asset]]
+name = "metatiles"
+format = "metatiles"
+region = "prg"
+offset = 0x0020
+count = 8
+names = ["tunnel dark", "platform edge", "bench", "ticket barrier", "stairs", "departure board", "train door, left", "train door, right"]
+property = [
+  { name = "solid", region = "prg", offset = 0x0040 },
+]
+
+[[asset]]
+name = "platform_9"
+format = "level-grid"
+region = "prg"
+offset = 0x0048
+width = 56
+height = 15
+legend = ".#=TS~[]"
+metatiles = "metatiles"
+
+[[asset]]
+name = "interchange"
+format = "level-grid"
+region = "prg"
+offset = 0x0390
+width = 64
+height = 15
+legend = ".#=TS~[]"
+metatiles = "metatiles"
+
+[[asset]]
+name = "last_train"
+format = "level-grid"
+region = "prg"
+offset = 0x0750
+width = 72
+height = 15
+legend = ".#=TS~[]"
+metatiles = "metatiles"

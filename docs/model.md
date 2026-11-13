@@ -27,7 +27,7 @@ Not here yet: `gp model diff A B`, which listed every fact that differs between 
 
 ## Versions
 
-The model core schema is versioned, and genre extensions are versioned on their own. A version bumps only for a breaking change, once per release. An optional part added since is a named feature, which bumps nothing.
+The model core schema is versioned, and genre extensions are versioned on their own. A version bumps only for a breaking change, once per release. An optional part added since is a named feature, which bumps nothing. [features.md](features.md), written by `gp self features` (`just docs`), lists every one the model, the state mapping, the contract and the asset map know.
 
 | Piece | Version | JSON Schema | Rust |
 |---|---|---|---|

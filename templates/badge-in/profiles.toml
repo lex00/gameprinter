@@ -1,0 +1,15 @@
+# Profiles for Badge In (docs/model.md, "Profiles";
+# docs/formats/profiles.md; docs/settings.md). The model as written is
+# "retro", every switch off, and every comparison and score uses it.
+#
+# "normal" is the game with no lag and none of the console's quirks. The
+# model has no switch yet, so it turns nothing on. When the model gains an
+# option for a quirk of the original (a whole-pixel step, a skipped logic
+# frame, a timing the frame's spare time decides), add a switch that turns
+# it off, put a timing one in the group "timing", and list it here.
+
+format = "0.2.0"
+
+[presets.normal]
+description = "No lag and no console quirks: the model has none to turn off yet, so this is the game as written"
+switches = []

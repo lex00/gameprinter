@@ -1,5 +1,5 @@
 // The shell's storage interface, `game-printer:shell@0.1.0`'s `storage`, for a
-// JavaScript host: generated from wit/shell/storage.wit by `gp docs
+// JavaScript host: generated from wit/shell/storage.wit by `gp self
 // shell`. Don't edit it; change the WIT and run `just docs`.
 //
 // A host is an object with each function below, its name in camel case,

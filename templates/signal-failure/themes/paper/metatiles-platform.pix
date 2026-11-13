@@ -1,0 +1,23 @@
+pix 1
+# platform cell of metatiles, painted by gp theme paint --id paper --seed 1 (CC0-1.0)
+size 16 16
+. transparent
+a #b89a6e
+b #5a422c
+c #8e6c4a
+aaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaa
+aaaaaaaaaaaaaaaa
+bbaababbbababbbb
+ccbbcbcccbcbcccc
+ccccccccccbccccc
+ccccbbcccccbcccc
+cccccccccccccccc
+cccccbccccbcbccc
+cccccccccccccccc
+ccccccccbccccccc
+ccccbbcccccccccc
+ccccccccccccbccc
+ccccccccbccccbcc
+ccccccccbccbcccc
+cccccccccccccccc

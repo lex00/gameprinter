@@ -310,7 +310,7 @@ An original's assets (`authored.toml`) are built into a data image in these same
 
 ## Content
 
-A map describes one revision at fixed offsets. Its content section says what each span holds, so the spans can be found in another dump of the game: another header, a revision, a region, a re-release that keeps the data in another bank. It runs from the line `# Content, written by gp assets hash ...` to the end of the file. The section holds hashes, never the bytes: a hash can't be turned back into the data. Donkey Kong's two maps have one, written by game-printer's `gp assets hash`. This gp reads it with the map and refuses a section whose spans aren't the map's, but has no command that writes it or searches with it yet.
+A map describes one revision at fixed offsets. Its content section says what each span holds, so the spans can be found in another dump of the game: another header, a revision, a region, a re-release that keeps the data in another bank. `gp assets hash ROM` writes it from the person's own ROM, after the map's last asset, from the line `# Content, written by gp assets hash ...` to the end of the file; it writes the section again each time and leaves the rest alone. The section holds hashes, never the bytes: a hash can't be turned back into the data. Donkey Kong's two maps have one.
 
 ```toml
 [[content]]
@@ -321,7 +321,7 @@ len = 4096
 blake3 = "..."            # 64 hex digits
 chunks = ["...", ...]     # 8 hex digits for each 16 bytes, 32 to a line
 
-[code]
+[code]                    # with gp assets hash --code
 region = "prg"
 len = 16384
 chunks = ["...", ...]
@@ -332,8 +332,44 @@ chunks = ["...", ...]
 | `[[content]]` | One per span, as `Asset::spans` names them (`stage_screens (part 1 of 2)`). `part`, `region`, `offset` and `len` must be a span of the map; the parser refuses one that isn't, so a map edited after hashing is refused until it is hashed again |
 | `blake3` | The BLAKE3 of the span's bytes |
 | `chunks` | The fingerprint of each 16 bytes of the span, the last one of what is left (`gp_assets::content::fingerprint`, a 32-bit mix fixed forever) |
-| `relative` | For a `pointers` asset: one entry for the table, whose `blake3` is of the pointers less the CPU address of the targets' start, each a little-endian word, and no `chunks` |
-| `[code]` | The fingerprints of the whole PRG, which told which source a ROM's program is closest to |
+| `[code]` | The fingerprints of the whole PRG, which `gp assets find` compares a ROM's program with (`asset_map.code`) |
+
+game-printer also wrote a `relative` entry for a `pointers` asset with `targets`, hashed after relocation so a table whose lists moved was still the same table. `targets` named an object-list asset, a format only Super Mario Bros. and its sequel's maps had; those formats were cut, so neither the key nor `relative` is here, and no map in gameprinter or the games checkout needs them.
+
+`gp assets hash --check` exits 1 when the section isn't what the ROM gives, as after an edit to an asset's span.
+
+An arcade map has no content section. A romset's chips are listed with their SHA-1s in gp-arcade's set lists (`romset.rs`), so `gp assets hash` on a zip names the set and writes nothing.
+
+## Finding assets in other dumps
+
+`gp assets find GAME --rom ROM` takes the templates whose `template.game` is GAME (or whose id is GAME): the game folders of the games checkout and the tool repo's `templates/`, leaving out authored ones. It searches the ROM for each span of each one's map by its content (`gp_assets::find`):
+
+1. One pass fingerprints the 16 bytes at every offset of the ROM's PRG and CHR. Each that is one of a span's chunks votes for where the span would start. Both regions are searched for every span, so tiles a CHR RAM release keeps in PRG are found. Chunks of one byte value (fill) don't vote, and a chunk that is in more than 8 places in the spans or 256 in the ROM stops voting.
+2. Each span's best starts are checked chunk by chunk. So are its map offset and that offset moved by the shifts most unchanged spans moved by. The span is found unchanged where its BLAKE3 agrees, with small changes where at least half of its bytes are in chunks that agree, and missing otherwise. Spans shorter than 16 bytes are found by their one fingerprint at every offset.
+3. Where a span was found is said as its region and offset, and the bank and CPU address the ROM's mapper shows it at where they are fixed (`PRG 0x4014 ($C014)`, `CHR 0x2000 (bank 1)`).
+
+An asset is `same` when every span is. It is `changed` if every span is found and some changed, and `missing` if any isn't found. The model is picked by the program (`find::choose`): the template whose ROM it is; else the one with most of its `[code]` chunks found anywhere in the ROM's PRG, leaving out fill, chunks the map's assets cover and chunks the program has twice; a tie goes to more assets found unchanged.
+
+| Match | When | What it means |
+|---|---|---|
+| `exact` | The ROM's hash is the map's | The template's own ROM |
+| `code` | Every chunk of the program is found | The same code, its data or places changed |
+| `close` | Half of the chunks or more | The code is changed in places: the game may not match the ROM's behaviour |
+| `none` | Fewer | No template of the game is this ROM |
+
+`--lift DIR` lifts what was found with the chosen map: `find::assemble` makes an image in the map's own layout holding each found span's bytes from the ROM, and lifts the assets whose every span was found, whole groups only (a string asset and the assets it embeds, a level and its metatiles). A ROM no game's roms.toml knows gets a draft `[[source]]` entry to check and paste into the game's roms.toml ([sources.md](sources.md)).
+
+With Donkey Kong's one template (donkey-kong-oe), on 2026-11-13, game-printer's gp and this one gave the same JSON for both of the person's Donkey Kong ROMs: Original Edition is `exact`, and Donkey Kong (JU) is `close` with donkey-kong-oe's assets found at their offsets less 0x4000.
+
+### On an arcade romset
+
+A MAME zip is compared chip by chip. For each set the game's arcade maps list (`sets`) that gp-arcade knows, every chip of the set is looked for among the zip's files by its SHA-1, whatever the file is named: `same` when a file has its hash, `changed` when a file has its name and size but not its hash (the chip's own bytes aren't known here, only its hash, so no count of bytes agreeing), `missing` otherwise. The set is the one with all its chips there; else the one with the most of its main CPU program unchanged, then the most chips. `exact` is a whole set, `code` all of its program chips, `close` half or more of the program's bytes. Each asset of the map is `same`, `changed` or `missing` by the chips of its graphics region (`tiles` by `gfx1`, `sprites` by `gfx2`).
+
+```sh
+gp assets find tapper --rom ~/.gameprinter/roms/arcade/tapperg.zip
+```
+
+`--lift DIR` lifts through the arcade map, as `gp assets lift --map` does, and only from a whole set, since an arcade lift reads every graphics chip of one set. A zip no roms.toml knows gets a draft `[[source]]` entry whose `sha256` is the identity of the zip's files (the SHA-256 of their SHA-1s sorted, gp_arcade::romset, the board's PROM left out). On tapperg's zip with one sprite chip taken out and another changed, it chose tapperg (`code`: all of its program), with `tiles` the same and `sprites` changed.
 
 ## Determinism
 
@@ -347,6 +383,8 @@ The lifted files depend only on the ROM and the map. Text files are written by h
 | `crates/gp-assets/src/tests.rs`, the content and find tests | On made-up ROMs: the content section written, checked against the spans and written again unchanged, holding no run of the span's bytes; the source found unchanged at its offsets; a made-up re-release found at its new offsets with the changed chunks named; ROMs of other bytes finding nothing |
 | `crates/gp-assets/src/module_tests.rs` | The format modules on a made-up ROM: the round trip of PPU strings (text, tiles, repeats, a vertical update, an embedded palette, a string with no end byte) and byte rows (lists and text); an edit changing exactly its bytes; and refusals (strings that change size, an embed out of place or written as tiles, an address that starts with the end byte, the end byte anywhere with `end_anywhere`, unknown keys) |
 | `crates/gp-cli/src/assets.rs`'s tests | A write through a symlink refused |
+| `crates/gp-cli/src/assets_find.rs`'s tests | On a romset's files: a chip under its name with other bytes is changed, one not there is missing, and the region states follow |
+| `crates/gp-cli/src/assets_open.rs`'s tests | An editor named by its variable or on the PATH is found, and nothing is fetched |
 | `just check` | The round trip on the Moss Hop ROM the check builds |
 
 ## Decisions

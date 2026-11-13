@@ -109,7 +109,8 @@ pub(crate) fn parse_by(by: &str) -> anyhow::Result<&'static str> {
 /// One line of `agent/work.jsonl`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Entry {
-    /// `note`, `attempt`, `approved` or `done`.
+    /// `note`, `attempt`, `approved`, `done` or `tell` (the person's note
+    /// on a clip, `serve/tell.rs`).
     pub kind: String,
     pub by: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -122,6 +123,27 @@ pub(crate) struct Entry {
     /// The attempt an `attempt` or `approved` entry is about.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt: Option<u64>,
+    /// A `tell`'s number (`serve/tell.rs`), counted from 1 in the run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u64>,
+    /// The tell a `note` answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<u64>,
+    /// A `tell`'s frame of the clip, and of the original.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orig_frame: Option<u64>,
+    /// Where on the screen a `tell` points, in game pixels: a spot `[x, y]`
+    /// or a region `[x, y, w, h]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<[u32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<[u32; 4]>,
+    /// A `tell`'s clip score when it was told, as the background work
+    /// kept it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<Value>,
     pub when_ms: u64,
 }
 
@@ -252,6 +274,9 @@ pub(crate) fn append(run: &Run, mut e: Entry) -> anyhow::Result<Entry> {
         let _g = WRITE.lock().unwrap_or_else(|e| e.into_inner());
         if e.when_ms == 0 {
             e.when_ms = now_ms();
+        }
+        if e.kind == "tell" && e.id.is_none() {
+            e.id = Some(entries(run).iter().filter_map(|x| x.id).max().unwrap_or(0) + 1);
         }
         fs::create_dir_all(folder(run))?;
         let mut f = fs::OpenOptions::new()

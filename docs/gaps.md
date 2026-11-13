@@ -1,6 +1,6 @@
 # Gaps
 
-Brought from game-printer's docs/gaps.md (port wave 4). In gameprinter a template is a game's package folder in the games checkout (`games/donkey-kong`) or a folder of `templates/` (`templates/mosshop`); `--dir` names where to look, by default `templates/` then `$GP_GAMES_DIR`. No metrics are recorded: gameprinter has no run recorder. The detectors read the NES's sprite table, nametables, APU and 6502 code, and an arcade recording's facts come from gp-arcade (wave 6b, the last section). Links to pages gameprinter doesn't carry yet name game-printer's docs (`~/Documents/checkouts/lex00/game-printer/docs`).
+Brought from game-printer's docs/gaps.md (port wave 4). In gameprinter a template is a game's package folder in the games checkout (`games/donkey-kong`) or a folder of `templates/` (`templates/mosshop`); `--dir` names where to look, by default `templates/` then `$GP_GAMES_DIR`. No metrics are recorded: gameprinter has no run recorder. The detectors read the NES's sprite table, nametables, APU and 6502 code, and an arcade recording's facts come from gp-arcade (wave 6b, the last section).
 
 `gp gaps` finds what a recording of the original game shows that the model doesn't account for, and catalogs it. The question behind it comes from playing the regenerated game and finding things missing: which parts of the original change, react or make a sound with nothing in the model behind them. The command detects and catalogs only. Nothing it does changes a model; a later step turns its findings into model kinds and facts. The work belongs to Milestone 2, part of step 7 ([the roadmap](../ROADMAP.md)).
 
@@ -17,7 +17,7 @@ gp gaps all mosshop --recording ab5050be --listing target/mosshop/mosshop.dbg
 |---|---|
 | `--recording` | The recording of the original, by ID prefix. It needs a frame trace; its event stream is read when it has one |
 | `--frames` | Frames to read, as for `gp track` (default all) |
-| `--focus` | A window to explain (repeat for more): what the detectors found in those frames, with the routines and RAM rare elsewhere, written as `focus.json` ([show](show.md)) |
+| `--focus` | A window to explain (repeat for more): what the detectors found in those frames, with the routines and RAM rare elsewhere, written as `focus.json` |
 | `--labels` | The game's labels file ([labels](formats/labels.md)), instead of `labels.toml` in the template's folder, this repo's `games/<source>/labels.toml` (Moss Hop's), or the one beside the games checkout's roms.toml that lists the source |
 | `--listing` | An ld65 debug file. Its constants name sound effects; its code labels name routines for a board with 32KB of PRG or less when the labels file has none |
 | `--dir` | The folder holding the templates (default `templates/`, then the games checkout) |
@@ -201,7 +201,7 @@ After round 8, the other store recordings (same detectors and sets; short record
 
 ## Aligning by position
 
-The model's player leaves the original's path within seconds of the same input, so comparing the two at one frame number soon compares two places. `gp_gaps::align` matches a moment by where the player is instead: on the same level when both runs name one, the nearest position (x plus half of y), then the nearest frame. `drift` gives the distance between the players at the same frame and the matched frame with how many frames apart it is. `gp request point` reports it as `alignment` ([point and tell](point-and-tell.md)). The original's level isn't read from its RAM yet, so the match there is by position alone.
+The model's player leaves the original's path within seconds of the same input, so comparing the two at one frame number soon compares two places. `gp_gaps::align` matches a moment by where the player is instead: on the same level when both runs name one, the nearest position (x plus half of y), then the nearest frame. `drift` gives the distance between the players at the same frame and the matched frame with how many frames apart it is. `gp request point` reports it as `alignment` (point and tell). The original's level isn't read from its RAM yet, so the match there is by position alone.
 
 ## Limits
 

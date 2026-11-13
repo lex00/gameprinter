@@ -1,6 +1,6 @@
 // The runtime shell's keys and gamepad buttons and its policy, as every
 // target reads them (docs/shell.md): generated from gp_present::shell by
-// `gp docs shell`. Don't edit it; change the table and run `just docs`.
+// `gp self shell`. Don't edit it; change the table and run `just docs`.
 //
 // A key is its KeyboardEvent.code; `standard` is each button's index in
 // the browser's standard gamepad layout. `on` says which targets have a

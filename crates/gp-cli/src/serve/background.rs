@@ -42,8 +42,9 @@
 //! scored and refined first, in order. A clip a round leaves stuck goes to
 //! the clip agent (`serve/clip_agent.rs`) when one is turned on.
 //!
-//! What game-printer's queue also did and this doesn't yet: the grid,
-//! rescoring by what a change touches, the ledger and its verify, and the
+//! The grid of mechanics by contexts over these clips and scores is
+//! serve/grid.rs. What game-printer's queue also did and this doesn't yet:
+//! the grid's own clips, rescoring by what a change touches, the ledger and its verify, and the
 //! curves. Their routes answer in words.
 //!
 //! | Endpoint | What |
@@ -141,7 +142,7 @@ const MAX_AGENTS: usize = 8;
 const DONE: usize = 12;
 
 /// The most workers: the machine's cores less one.
-fn max_workers() -> usize {
+pub(crate) fn max_workers() -> usize {
     std::thread::available_parallelism()
         .map_or(2, |n| n.get())
         .saturating_sub(1)
@@ -312,6 +313,11 @@ pub(crate) fn open_questions(run: &Run) -> Vec<Value> {
 /// The saved state, for the clip agents (`serve/clip_agent.rs`).
 pub(crate) fn saved_state(run: &Run) -> Value {
     saved(run)
+}
+
+/// The clips a job has now, for the grid (serve/grid.rs).
+pub(crate) fn working_on(run: &Run) -> std::collections::BTreeSet<String> {
+    with_live(run, |l| l.flight.values().map(|f| f.clip.clone()).collect())
 }
 
 /// Whether the run's queue is on, and how many clip agents it hands its
@@ -611,7 +617,7 @@ fn worker(ctx: &Ctx, name: &str, slot: usize) {
 }
 
 /// Adds a job just done to the state's `done`, keeping the last few.
-fn push_done(v: &mut Value, mut d: Value) {
+pub(crate) fn push_done(v: &mut Value, mut d: Value) {
     let seq = v["seq"].as_u64().unwrap_or(0) + 1;
     v["seq"] = json!(seq);
     d["seq"] = json!(seq);
@@ -627,7 +633,7 @@ fn history_file(run: &Run) -> PathBuf {
 }
 
 /// The rounds so far, oldest first.
-fn rounds(run: &Run) -> Vec<Value> {
+pub(crate) fn rounds(run: &Run) -> Vec<Value> {
     std::fs::read_to_string(history_file(run))
         .unwrap_or_default()
         .lines()
@@ -998,6 +1004,11 @@ pub(crate) fn score_clip_in(
         "tracks": tracks,
         "error": Value::Null,
     })
+}
+
+/// The state as the page reads it, for `gp capture background`.
+pub(crate) fn state_view(ctx: &Ctx, run: &Run) -> Value {
+    view(ctx, run)
 }
 
 /// The state as the page reads it.

@@ -3,13 +3,23 @@
 //! engine here.
 
 mod affected;
+mod agent_bench;
+mod agent_brief;
 mod agent_cmd;
+mod agent_integrate;
 mod arcade_rec;
 mod arcade_stage0;
 mod assets;
+mod assets_find;
+mod assets_open;
+mod assets_stub;
 mod attest;
 mod author;
 mod behave;
+mod bench;
+mod bench_clips;
+mod bench_grade;
+mod bench_scratch;
 mod capture;
 mod catalog;
 mod chunks;
@@ -23,6 +33,7 @@ mod clipset;
 mod code;
 mod code_z80;
 mod corpus_import;
+mod corpus_reduce;
 mod corpus_score;
 mod corpus_w9;
 mod coverage;
@@ -30,9 +41,12 @@ mod covered;
 mod cycles;
 mod cycles_z80;
 mod dataset;
+mod dataset_export;
+mod dataset_hf;
 mod dataset_tables;
 mod derive;
 mod diagnose;
+mod docs_shell;
 mod draws_find;
 mod draws_find_z80;
 mod element;
@@ -40,6 +54,8 @@ mod element_z80;
 mod explore;
 mod explore_z80;
 mod farm;
+mod findings;
+mod findings_clip;
 mod from_trace;
 mod game;
 mod game_new;
@@ -50,6 +66,7 @@ mod gate_append;
 mod gate_copy;
 mod gate_queue;
 mod harvest;
+mod hook_closure;
 mod host;
 mod hosted;
 mod interp;
@@ -60,6 +77,7 @@ mod labels_propose;
 mod laya;
 mod leads;
 mod level_kit;
+mod localize;
 mod lockstep;
 mod mcp;
 mod mechanic;
@@ -77,12 +95,16 @@ mod movie;
 mod mutants;
 mod odds;
 mod open;
+mod oracle;
+mod oracle_mame;
 mod original;
 mod package;
 mod picture;
 mod pinned;
 mod plan;
 mod pool;
+mod progress;
+mod progress_measure;
 mod publish;
 mod reach;
 mod reach_window;
@@ -93,6 +115,7 @@ mod refine;
 mod registry;
 mod rom_dataset;
 mod rom_extract;
+mod rom_grade;
 mod romclean;
 mod romdiff;
 mod rompatch;
@@ -116,6 +139,7 @@ mod slots;
 mod solve;
 mod sound;
 mod sound_ay;
+mod sound_ay_render;
 mod sprites;
 mod static_grade;
 mod store;
@@ -125,7 +149,10 @@ mod template;
 mod template_build;
 mod template_cites;
 mod template_derive;
+mod template_extract;
+mod template_font;
 mod template_original;
+mod testroms;
 mod theme;
 mod theme_apng;
 mod theme_fit;
@@ -148,6 +175,7 @@ mod tool_gate;
 mod track;
 mod translate;
 mod validate;
+mod video;
 mod watch;
 mod watch_serve;
 mod watch_z80;
@@ -218,6 +246,31 @@ enum Cmd {
     },
     /// What capture has found so far for each game: one row per template.
     Scorecard(scorecard::ScorecardArgs),
+    /// One record of what the tools found in a game, and the gate that
+    /// turns a finding into evidence.
+    Findings {
+        #[command(subcommand)]
+        cmd: findings::FindingsCmd,
+    },
+    /// Find play no run has made yet: branches that only went one way,
+    /// what guards them, where in a level that could change, and a search
+    /// sent there (docs/localize.md).
+    Localize(localize::LocalizeArgs),
+    /// The accuracy baseline: the standard NES test ROMs, downloaded at
+    /// pinned hashes, run on gp-nes (docs/test-roms.md).
+    Testroms {
+        #[command(subcommand)]
+        cmd: testroms::TestromsCmd,
+    },
+    /// Run recordings in an oracle (Mesen 2 for the NES, MAME for an arcade
+    /// romset) and compare them with gp's own (docs/oracle.md).
+    Oracle {
+        #[command(subcommand)]
+        cmd: oracle::OracleCmd,
+    },
+    /// How far along printing a game is: a ladder of nine stages from the
+    /// ROM to the whole game played identically (docs/progress.md).
+    Progress(progress::ProgressArgs),
     /// Lift a ROM's assets into files and pack them back.
     Assets {
         #[command(subcommand)]
@@ -287,12 +340,74 @@ enum Cmd {
         #[command(subcommand)]
         cmd: gaps::GapsCmd,
     },
+    /// Replay a recording with video rendering on and write it as an
+    /// animated PNG with frame, input and event overlays (docs/video.md).
+    /// Each frame is checked as it's drawn; exits 1 if one differs, unless
+    /// another runtime made the run. An arcade recording draws the board's
+    /// picture.
+    Video {
+        /// The recording's ID, or a unique prefix of at least 4 characters.
+        id: String,
+        /// The file to write, .png or .apng, outside any git work tree
+        /// (default: $GP_HOME/videos/<id>.png).
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        /// Which frames: `N`, `A..B` (B excluded), `A..=B` or `A..`. Frame
+        /// 0 is power-on and has no picture.
+        #[arg(long, default_value = "1..")]
+        frames: String,
+        /// Pixels per picture pixel, both ways (default 2 on the NES, 1 on
+        /// an arcade board, whose picture is 512 by 480).
+        #[arg(long, value_parser = clap::value_parser!(u8).range(1..=4))]
+        scale: Option<u8>,
+        /// Only the picture: no band of text, markers or border.
+        #[arg(long)]
+        no_overlay: bool,
+        /// Replace the file if it exists.
+        #[arg(long)]
+        force: bool,
+        /// The ROM file, instead of finding it in $GP_ROM_DIR by hash.
+        #[arg(long)]
+        rom: Option<PathBuf>,
+        /// Draw with a theme (a theme directory, docs/formats/theme.md);
+        /// repeat for more, bottom first. A recording's pixels have no
+        /// roles, so only `*` palette rules, screen particles and the
+        /// screen overlay apply. The frames are still checked against the
+        /// recording.
+        #[arg(long = "theme", value_name = "DIR")]
+        themes: Vec<PathBuf>,
+    },
     /// Music and sound effects as model data: capture a recording's APU
     /// register log into songs, effects and instruments, check fidelity,
     /// and compare register logs (docs/sound.md).
     Sound {
         #[command(subcommand)]
         cmd: sound::SoundCmd,
+    },
+    /// Time the whole pipeline on baselines (docs/benchmarks.md) and keep
+    /// the timings as metrics named `bench.<source>.<baseline>.*`. Works in
+    /// a temporary store, never $GP_STORE. A baseline of an arcade romset
+    /// is recorded and replayed on gp-arcade. Exits 1 if a replay or seek
+    /// misses the expected state, 2 if every baseline was skipped. Its
+    /// subcommands grade the tools on a game (docs/benchmarks.md).
+    #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
+    Bench {
+        #[command(subcommand)]
+        cmd: Option<bench_clips::BenchCmd>,
+        /// Baseline files, or folders of them.
+        #[arg(required = true)]
+        baselines: Vec<PathBuf>,
+        /// The ROM file for every baseline, as for `gp baseline check --rom`.
+        #[arg(long)]
+        rom: Option<PathBuf>,
+        /// How many frames to seek to, spread over the recording; each is
+        /// the last frame before a checkpoint, the most a seek costs.
+        #[arg(long, default_value_t = 8, value_parser = clap::value_parser!(u32).range(1..))]
+        seeks: u32,
+        /// Also write each recording as a video, and time it (refused for
+        /// now: gameprinter has no gp video yet).
+        #[arg(long)]
+        video: bool,
     },
     /// Stage 0's ROM dataset: one ROM's routines, RAM, elements, state
     /// machines, constants, mechanics and open questions as Parquet tables
@@ -577,6 +692,80 @@ enum AssetsCmd {
         /// the JSON as PREFIX.bytes_covered and PREFIX.differences.
         #[arg(long, value_name = "PREFIX")]
         metrics: Option<String>,
+    },
+    /// Copy a lifted directory with every presentation slot of a model
+    /// replaced by a placeholder of the same shape (licensed CC0-1.0) and
+    /// the slots the simulation reads unchanged, record each slot's status
+    /// and provenance in slots.toml, and with `--json` print the slot
+    /// catalog (docs/stubs.md has the details)
+    Stub {
+        /// A model directory (holding model.toml, and optionally
+        /// fidelity.toml).
+        model: PathBuf,
+        /// A directory written by gp assets lift for the model's source.
+        #[arg(long)]
+        lifted: PathBuf,
+        /// The directory to write, outside any git work tree.
+        #[arg(short, long)]
+        out: PathBuf,
+        /// The license of the original assets, as an SPDX expression, for
+        /// their provenance (Moss Hop's are Apache-2.0). Without it they're
+        /// LicenseRef-template-source when the model directory holds an
+        /// open-tier template.toml, and LicenseRef-own-copy (from the
+        /// person's own copy, never shared) otherwise.
+        #[arg(long, value_name = "SPDX")]
+        original_license: Option<String>,
+        /// Write into a directory that already holds a lift or a stub.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Edit an entity's sprite set in an external pixel editor
+    /// (docs/sprite-editing.md). It writes the set in the image config's
+    /// layout and starts the editor if it's installed (Pixelorama first;
+    /// nothing is downloaded), then brings each save back through every edit
+    /// check as a proposal, shown live in a capture run with `--run`.
+    Open(crate::assets_open::OpenArgs),
+    /// Write each span's content into the ROM's asset map: its BLAKE3, its
+    /// length and a fingerprint of each 16 bytes (hashes, not ROM data),
+    /// after the map's last asset. `gp assets find` finds the spans in other
+    /// dumps by it (docs/assets.md, "Content").
+    Hash {
+        /// The ROM the map describes, the person's own.
+        rom: PathBuf,
+        /// The asset map, instead of finding one by the ROM's hash.
+        #[arg(long)]
+        map: Option<PathBuf>,
+        /// Also write the fingerprints of the whole PRG (`[code]`), which
+        /// `gp assets find` compares a ROM's program with to pick the
+        /// model. Kept when the map has them already.
+        #[arg(long)]
+        code: bool,
+        /// Compare the map's section with the ROM's instead of writing it:
+        /// exit 1 when it is stale.
+        #[arg(long)]
+        check: bool,
+    },
+    /// Find a game's assets in any dump of it: another header, revision,
+    /// region or re-release, at any offset in any bank. Each template of
+    /// the game (its `template.game`) is compared by the content its asset
+    /// map holds (gp assets hash), the model is picked by the program
+    /// found, and each asset is reported found unchanged (where), found
+    /// with small changes (where and how much) or missing. A ROM the
+    /// ROM no game's roms.toml knows gets a draft entry (docs/sources.md).
+    Find {
+        /// The game id (a template's `template.game`, such as donkey-kong),
+        /// or a template's id.
+        game: String,
+        /// The ROM to search.
+        #[arg(long)]
+        rom: PathBuf,
+        /// Also lift the found assets with the chosen template's map into
+        /// this directory, outside any git work tree.
+        #[arg(long, value_name = "DIR")]
+        lift: Option<PathBuf>,
+        /// Lift into a directory that already holds a lift.
+        #[arg(long, requires = "lift")]
+        force: bool,
     },
 }
 
@@ -958,13 +1147,17 @@ enum GameCmd {
     },
     /// Build a game's module from its package folder and the kit, in a
     /// sandbox that reads nothing else and has no network. Exits 1 when the
-    /// hook crate breaks the rules, 2 when the build fails.
+    /// hook crate breaks the rules, 2 when the build fails. With no
+    /// `--kit` and no `-o`, the module is built from this gp's own kit into
+    /// $GP_HOME/work/modules (or reused from there), as every tool that
+    /// opens the model does, and its path printed.
     Build {
         dir: PathBuf,
+        /// The module kit (default: this gp's, made once with gp game kit).
         #[arg(long)]
-        kit: PathBuf,
+        kit: Option<PathBuf>,
         #[arg(short, long)]
-        out: PathBuf,
+        out: Option<PathBuf>,
         /// Write the package's Cargo.lock from the kit's, first.
         #[arg(long)]
         update_lock: bool,
@@ -976,8 +1169,9 @@ enum GameCmd {
     /// Exits 1 when a test fails, with cargo's last lines.
     Test {
         dir: PathBuf,
+        /// The module kit (default: this gp's, made once with gp game kit).
         #[arg(long)]
-        kit: PathBuf,
+        kit: Option<PathBuf>,
     },
 }
 
@@ -1068,6 +1262,61 @@ enum PackageCmd {
 
 #[derive(Subcommand)]
 enum TemplateCmd {
+    /// Turn a template into a working local copy from your own ROM: check
+    /// the ROM's hash against the template's source declaration, lift its
+    /// assets with the template's asset map, check the lifted files against
+    /// the ROM byte for byte and against the pinned digest, copy the
+    /// model, and check its slots against the lifted assets. Every hash
+    /// goes in extract.toml beside the copy. Exits 1 when a check fails
+    /// and 2 when no accepted ROM is found.
+    Extract {
+        /// The template to extract, a directory with template.toml.
+        dir: PathBuf,
+        /// The ROM (default: the first file in $GP_ROM_DIR whose hash the
+        /// template accepts).
+        #[arg(long)]
+        rom: Option<PathBuf>,
+        /// The directory to write, outside any git work tree (default
+        /// $GP_HOME/work/templates/<id>).
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        /// The directory the model's evidence refs are relative to
+        /// (default: the package folder, or the git work tree the template
+        /// is in, or else the template directory).
+        #[arg(long, value_name = "DIR")]
+        root: Option<PathBuf>,
+    },
+    /// Write an asset-free copy of a template, with its asset map inside,
+    /// as a directory or, for an output ending in .zip, a zip archive with
+    /// fixed timestamps (the same template always packs to the same
+    /// bytes). Runs the asset-free checks first (gp package scan on a
+    /// package folder, and the pins when an accepted ROM is found) and
+    /// refuses a template that fails them.
+    Pack {
+        /// The template to pack.
+        dir: PathBuf,
+        /// The directory (which must not exist or be empty) or .zip file
+        /// to write.
+        #[arg(short, long)]
+        out: PathBuf,
+        /// The source ROM the checks compare with.
+        #[arg(long)]
+        rom: Option<PathBuf>,
+        /// Replace an existing .zip file.
+        #[arg(long)]
+        force: bool,
+    },
+    /// The font check (docs/templates.md, "The font check"): every
+    /// character the model writes (HUD counters and text, level labels,
+    /// screen text such as a turn screen's) has a glyph with ink, no two
+    /// characters share a tile, every charset in the asset map agrees with
+    /// the font's, and no other art draws a glyph's tile. Lists the font
+    /// bank's free tiles, the only ones a generator may put a new glyph in.
+    /// Exits 1 on any problem.
+    Font {
+        /// A template directory holding template.toml.
+        dir: PathBuf,
+    },
     /// Build an original template's assets (source.how = "authored") from
     /// its authored.toml: a data image (to $GP_HOME/work/images/), its asset
     /// map, and the lifted directory. Exits 1 when the asset map or
@@ -1175,6 +1424,32 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             AssetsCmd::Pack { .. } => {
                 anyhow::bail!("give --check ROM, or --base ROM with --out FILE")
             }
+            AssetsCmd::Stub {
+                model,
+                lifted,
+                out,
+                original_license,
+                force,
+            } => assets_stub::stub(model, lifted, out, original_license.as_deref(), *force),
+            AssetsCmd::Open(a) => assets_open::open(a, &gp_evidence::Paths::from_env()?),
+            AssetsCmd::Hash {
+                rom,
+                map,
+                code,
+                check,
+            } => assets_find::hash(rom, map.as_deref(), *code, *check),
+            AssetsCmd::Find {
+                game,
+                rom,
+                lift,
+                force,
+            } => assets_find::find_cmd(
+                game,
+                rom,
+                lift.as_deref(),
+                *force,
+                &gp_evidence::Paths::from_env()?.home,
+            ),
         },
         Cmd::Worker { cmd } => worker::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Tool {
@@ -1308,13 +1583,58 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
         Cmd::Metrics { cmd } => metrics_cmd::metrics(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Runs { cmd } => metrics_cmd::runs(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Scorecard(a) => scorecard::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Findings { cmd } => findings::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Localize(a) => localize::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Testroms { cmd } => testroms::command(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Oracle { cmd } => oracle::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Progress(a) => progress::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Catalog(a) => catalog::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Validate(a) => validate::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Coverage(a) => coverage::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Gaps { cmd } => gaps::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Sound { cmd } => sound::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Video {
+            id,
+            out,
+            frames,
+            scale,
+            no_overlay,
+            force,
+            rom,
+            themes,
+        } => video::run(
+            &video::Request {
+                id,
+                out: out.as_deref(),
+                frames,
+                scale: *scale,
+                overlay: !no_overlay,
+                force: *force,
+                rom: rom.as_deref(),
+                themes,
+            },
+            &gp_evidence::Paths::from_env()?,
+        ),
         Cmd::Sprites { cmd } => sprites::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Dataset { cmd } => dataset::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Bench { cmd: Some(cmd), .. } => {
+            bench_clips::run(cmd, &gp_evidence::Paths::from_env()?)
+        }
+        Cmd::Bench {
+            cmd: None,
+            baselines,
+            rom,
+            seeks,
+            video,
+        } => bench::run(
+            &bench::Request {
+                baselines,
+                rom: rom.as_deref(),
+                seeks: *seeks,
+                video: *video,
+            },
+            &gp_evidence::Paths::from_env()?,
+        ),
         Cmd::Game {
             cmd:
                 GameCmd::Fetch {
@@ -1397,10 +1717,35 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                     out,
                     update_lock,
                 },
-        } => module::build(dir, kit, out, *update_lock),
+        } => {
+            let home = gp_evidence::Paths::from_env()?.home;
+            match (kit, out) {
+                (None, None) if !*update_lock => match module::built_for(&home, dir)? {
+                    Some((m, said)) => Ok(Outcome::ok(
+                        serde_json::json!({ "module": m, "said": said }),
+                        format!("{}: {said}", m.display()),
+                    )),
+                    None => anyhow::bail!("{} has no hook code, so no module", dir.display()),
+                },
+                (_, None) => anyhow::bail!("give the module's file with -o"),
+                (kit, Some(out)) => {
+                    let kit = match kit {
+                        Some(k) => k.clone(),
+                        None => module::own_kit(&home)?,
+                    };
+                    module::build(dir, &kit, out, *update_lock)
+                }
+            }
+        }
         Cmd::Game {
             cmd: GameCmd::Test { dir, kit },
-        } => module::test_hooks(dir, kit),
+        } => {
+            let kit = match kit {
+                Some(k) => k.clone(),
+                None => module::own_kit(&gp_evidence::Paths::from_env()?.home)?,
+            };
+            module::test_hooks(dir, &kit)
+        }
         Cmd::Roms { cmd } => roms_cmd::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Labels { cmd } => labels::run(cmd),
         Cmd::Sealed { cmd } => sealed::run(cmd, &gp_evidence::Paths::from_env()?),
@@ -1513,6 +1858,45 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
         Cmd::Template {
             cmd: TemplateCmd::Derive { dir, write },
         } => template_derive::derive_cmd(&level_kit::template_dir(dir)?, *write),
+        Cmd::Template {
+            cmd:
+                TemplateCmd::Extract {
+                    dir,
+                    rom,
+                    out,
+                    root,
+                },
+        } => {
+            let paths = gp_evidence::Paths::from_env()?;
+            template_extract::extract(
+                &level_kit::template_dir(dir)?,
+                rom.as_deref(),
+                out.as_deref(),
+                root.as_deref(),
+                &paths,
+            )
+        }
+        Cmd::Template {
+            cmd:
+                TemplateCmd::Pack {
+                    dir,
+                    out,
+                    rom,
+                    force,
+                },
+        } => template_extract::pack(
+            &level_kit::template_dir(dir)?,
+            out,
+            rom.as_deref(),
+            *force,
+            &gp_evidence::Paths::from_env()?,
+        ),
+        Cmd::Template {
+            cmd: TemplateCmd::Font { dir },
+        } => template_font::font_cmd(
+            &level_kit::template_dir(dir)?,
+            &gp_evidence::Paths::from_env()?,
+        ),
         Cmd::Template {
             cmd: TemplateCmd::Cites { dirs, rom },
         } => template_cites::run(

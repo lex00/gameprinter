@@ -1,0 +1,41 @@
+# A model baseline (docs/originals.md): the interpreter plays platform_9 of signal_failure
+# from its start to its goal on this input, with every enemy in place.
+# Recorded by `gp interp reach --record`; `gp interp baselines` checks it.
+format = "0.1.0"
+model = "signal_failure"
+level = "platform_9"
+description = "Plays platform_9 from its start to its goal; found by gp interp reach --record"
+recorded = "search"
+frames = 668
+holds = ["a@1-49", "b@1-49", "right@1-49", "b@66-105", "right@66-105", "a@98-142", "a@148-207", "a@219-271", "right@219-271", "a@273-348", "right@273-348", "a@359-398", "right@359-374", "b@407-446", "right@407-446", "a@439-491", "a@500-563", "b@572-611", "right@572-611", "a@604-604"]
+digest = "88bb974ebaae19b7888441198454d83b1340c1cec1ef3e3d337551006f9a0049"
+
+[[expect]]
+frame = 668
+path = "level"
+equals = "platform_9"
+
+[[expect]]
+frame = 668
+path = "rules.game.state"
+equals = "on_board"
+
+[[expect]]
+frame = 668
+path = "counters.departure"
+equals = "50"
+
+[[expect]]
+frame = 668
+path = "counters.papers"
+equals = "1"
+
+[[expect]]
+frame = 668
+path = "counters.patience"
+equals = "3"
+
+[[expect]]
+frame = 668
+path = "counters.trains"
+equals = "1"

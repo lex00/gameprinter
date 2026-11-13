@@ -1,0 +1,23 @@
+pix 1
+# goal cell of metatiles, painted by gp theme paint --id paper --seed 1 (CC0-1.0)
+size 16 16
+. transparent
+a #2a221c
+b #4a6eb8
+c #8aa6dc
+aaaaaaaaaaaaaaaa
+abbcbbbcbbbcbbba
+abcbbbcbbbcbbbca
+acbbbcbbbcbbbcba
+abbbcbbbcbbbcbba
+abbcbbbcbbbcbbba
+abcbbbcbbbcbbbca
+acbbbcbbbcbbbcba
+abbbcbbbcbbbcbba
+abbcbbbcbbbcbbba
+abcbbbcbbbcbbbca
+acbbbcbbbcbbbcba
+abbbcbbbcbbbcbba
+abbcbbbcbbbcbbba
+abcbbbcbbbcbbbca
+aaaaaaaaaaaaaaaa

@@ -1,0 +1,45 @@
+# Template manifest (docs/templates.md, docs/originals.md). Swing State is
+# an original: no source game. Its assets are written in authored.toml,
+# and `gp template build` makes the data image and asset map the pins name.
+[template]
+format = "0.1.1"
+id = "swing-state"
+title = "Swing State"
+tier = "open"
+model = "model.toml"
+contract = "fidelity.toml"
+
+[source]
+id = "swing-state"
+platform = "nes"
+how = "authored"
+accepts = ["3bd14f0bad9ee2bff512bfeed9bf7a40660e579d73a68e80eb690e5ef3143ab7"]
+
+[recipe]
+asset_map = "../../assets/swing-state.toml"
+asset_map_sha256 = "fffe06ab523008eb427b1590c493d5cf93215764581b085f4653720dba4f794e"
+lifted_sha256 = "700b3dff68a2bdd309339d79149733535f1594e85df1c0be3e4c7728d4d4f7b6"
+
+[slots]
+debate_stage = "layout"
+election_night = "layout"
+metatiles = "tileset"
+palettes = "palettes"
+pollsters_debate_stage = "spawns"
+pollsters_election_night = "spawns"
+pollsters_town_hall = "spawns"
+tiles = "graphics"
+town_hall = "layout"
+
+# Mechanics taken from other templates (docs/originals.md, "Provenance").
+[[inspired_by]]
+template = "smb1-ntsc-prg0"
+took = ["entities.mario.run", "entities.mario.jump", "entities.paratroopa_green.hop", "entities.piranha_plant.path", "entities.bullet_bill.fly"]
+into = ["entities.candidate.run", "entities.candidate.jump", "entities.heckler.hop", "entities.pundit.path", "entities.attack_ad.fly"]
+note = "Taken whole; the candidate moves as Mario does, so no speed is converted. The bullet is aimed at the player"
+
+[[inspired_by]]
+template = "mosshop"
+took = ["entities.slug.patrol", "entities.slug.contact"]
+into = ["entities.pollster.patrol", "entities.pollster.contact"]
+note = "The patrol kept at half the player's walk: 3 pixels every 4 frames for the candidate's 1.5"

@@ -614,6 +614,16 @@ fn prompt(
         wt.display(),
         model.display()
     ));
+    let mut mine = vec![clip.id.clone()];
+    mine.extend(status.clips.iter().filter(|c| **c != clip.id).cloned());
+    let told = super::tell::brief(run, &mine);
+    if !told.is_empty() {
+        line(String::new());
+        line("The person has told you this about the clip (reply to each, below):".into());
+        for t in told {
+            line(format!("- {t}"));
+        }
+    }
     line(String::new());
     line("How to work:".into());
     line(format!(
@@ -621,7 +631,8 @@ fn prompt(
         clip.id
     ));
     line(format!(
-        "2. Find the cause in the original's code first (`{gp} clip score`, `{gp} element inputs`, `{gp} code listing`), then make one change at a time: a mechanic, an option, the mapping or the model. A fix is a general mechanic or option that any game can turn on, never a game's special case. Describe the change in a `CHANGE.md` at the worktree root (`features:`, `log:` lines, `breaking:` only for a change that breaks old files)."
+        "2. Start with `{gp} agent brief --games {games} --run {r} --clip {} --json`: the clip's first wrong frame and values, the mechanics that own them, what the original's code read there and the next commands. Find the cause in the original's code first (`{gp} clip score`, `{gp} element inputs`, `{gp} code listing`), then make one change at a time: a mechanic, an option, the mapping or the model. A fix is a general mechanic or option that any game can turn on, never a game's special case. Describe the change in a `CHANGE.md` at the worktree root (`features:`, `log:` lines, `breaking:` only for a change that breaks old files).",
+        clip.id
     ));
     line(format!(
         "3. Record each change: `{gp} agent attempt --games {games} --run {r} --clip {} --by \"clip agent\" --worktree {} --model-from {} --commit --title \"<the change in a few words>\" --says \"<one plain sentence: what changed and why>\"`. Add `--shape` when it changes how a mechanic works. It commits, builds the worktree's gp, scores this clip and every active clip, builds a trial preview and prints the score before and after. If main moved, it merges main in first; on a conflict it scores nothing, and you run `git merge main`, fix it, commit and record again. Keep the attempt only if the clip gets better and no other clip worse; otherwise undo it with a new commit and try the next idea.",
@@ -640,6 +651,11 @@ fn prompt(
             settings.attempts, clip.id
         )
     });
+    line(format!(
+        "5. Between steps, read {}/{} if it exists: the person may have told you something about a clip. Reply to each with `{gp} agent note --games {games} --run {r} --clip <clip> --by \"clip agent\" --reply-to <number> \"<what you found or did>\"`.",
+        wt.display(),
+        super::tell::INBOX
+    ));
     line(String::new());
     line(format!(
         "The shell runs only these, one command at a time (no `cd ... &&`, no variables before the command): `{gp} agent`, `{gp} model`, `{gp} clip`, `{gp} element`, `{gp} code`, `{gp} interp`, `cargo build`/`test`/`check`/`fmt`/`clippy`, `git status`/`diff`/`log`/`show`/`add`/`commit`/`revert`/`merge`, and `ls`, `cat`, `head`, `tail`, `wc`, `sed -n`, `grep`. Your working folder is already the worktree. Use Read, Grep and Glob for files, and Edit or Write for changes in the worktree and the model copy. A refused command is only that command: go on with the allowed ones."

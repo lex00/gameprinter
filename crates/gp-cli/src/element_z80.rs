@@ -22,7 +22,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Result, bail};
 use gp_arcade::dasm::{self, Addr, Flow, Insn, Ptr, reg};
 use gp_arcade::mcr::{Access, AccessKind, Trace};
 use gp_arcade::{Controls, Romset, Tapper};
@@ -282,11 +282,17 @@ pub(crate) fn inputs(
 /// The text of an arcade `gp element inputs`.
 pub(crate) fn text(v: &Value) -> String {
     let mut out = format!(
-        "{} ({}), frame {} (the original's {}), main Z80",
+        "{} ({}), frame {} (the original's {}){}{}, main Z80",
         v["clip"].as_str().unwrap_or(""),
         v["clip_name"].as_str().unwrap_or(""),
         v["frame"],
-        v["original_frame"]
+        v["original_frame"],
+        v["measure"]
+            .as_str()
+            .map_or(String::new(), |m| format!(": {m}")),
+        v["slot"]
+            .as_u64()
+            .map_or(String::new(), |s| format!(", slot {s}")),
     );
     for b in v["bytes"].as_array().into_iter().flatten() {
         out.push_str("\n\n");
@@ -334,15 +340,6 @@ pub(crate) fn text(v: &Value) -> String {
         }
     }
     out
-}
-
-/// Refuses what an arcade game's element inputs can't read yet.
-pub(crate) fn check_args(byte: Option<&str>, frame: Option<u64>) -> Result<(String, u64)> {
-    let byte = byte.context(
-        "an arcade game's element inputs slice a --byte on a --frame: its measures come from a lockstep this doesn't run yet",
-    )?;
-    let frame = frame.context("give --frame with --byte on an arcade game")?;
-    Ok((byte.to_owned(), frame))
 }
 
 #[cfg(test)]

@@ -1,0 +1,46 @@
+# A model baseline (docs/originals.md): the interpreter plays open_plan of badge_in
+# from its start to its goal on this input, with every enemy in place.
+# Recorded by `gp interp reach --record`; `gp interp baselines` checks it.
+format = "0.1.0"
+model = "badge_in"
+level = "open_plan"
+description = "Plays open_plan from its start to its goal; found by gp interp reach --record"
+recorded = "search"
+frames = 631
+holds = ["a@1-40", "right@1-40", "a@42-72", "b@42-72", "right@42-72", "a@74-104", "b@74-104", "right@74-104", "a@106-145", "right@106-145", "a@147-202", "b@147-202", "right@147-202", "a@204-223", "b@204-223", "right@204-223", "a@225-299", "right@225-299", "a@301-340", "b@301-340", "right@301-340", "a@342-404", "b@342-404", "right@342-404", "a@406-445", "right@406-445", "a@447-504", "b@447-504", "right@447-504", "b@506-521", "right@506-521", "a@523-553", "b@523-553", "right@523-553", "a@555-600", "b@555-600", "right@555-600"]
+digest = "d249f43cd9500a58e833224f857f3c6b63a893bf0becf9664f06abde5c34aaa1"
+
+[[expect]]
+frame = 631
+path = "level"
+equals = "open_plan"
+
+[[expect]]
+frame = 631
+path = "rules.game.state"
+equals = "badged_in"
+
+[[expect]]
+frame = 631
+path = "counters.clock"
+equals = "110"
+
+[[expect]]
+frame = 631
+path = "counters.coffee"
+equals = "0"
+
+[[expect]]
+frame = 631
+path = "counters.delegated"
+equals = "3"
+
+[[expect]]
+frame = 631
+path = "counters.floors"
+equals = "1"
+
+[[expect]]
+frame = 631
+path = "counters.lives"
+equals = "3"

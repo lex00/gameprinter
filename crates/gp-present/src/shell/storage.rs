@@ -1,5 +1,5 @@
 //! The shell's storage interface, `game-printer:shell@0.1.0`'s `storage`, as Rust:
-//! generated from wit/shell/storage.wit by `gp docs shell`. Don't edit
+//! generated from wit/shell/storage.wit by `gp self shell`. Don't edit
 //! it; change the WIT and run `just docs`.
 
 /// The WIT package these bindings are of.

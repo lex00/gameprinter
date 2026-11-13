@@ -229,10 +229,19 @@ pub(crate) fn tracked(
         &String::from_utf8(opened.store.get(&manifest.input_log)?)
             .context("the recording's input log isn't text")?,
     )?;
-    // State f ran with input log entry f - 1.
+    // State f ran with input log entry f - 1. gp-track reads the NES pad's
+    // bits (right 0x80, left 0x40, ...); a board's controls (coin, start,
+    // right, left, down, up, tap from bit 0) are put in those places.
     let pads: Vec<u8> = range
         .clone()
-        .map(|f| (log.frames[(f - 1) as usize].buttons_word() & 0xFF) as u8)
+        .map(|f| {
+            let b = (log.frames[(f - 1) as usize].buttons_word() & 0xFF) as u8;
+            if arcade {
+                crate::harvest::nes_pad(b)
+            } else {
+                b
+            }
+        })
         .collect();
     let report = if arcade {
         let mut source = ArcadeSource {
@@ -247,6 +256,8 @@ pub(crate) fn tracked(
         };
         let mut r = gp_track::track(&mut source, &opts).map_err(anyhow::Error::msg)?;
         r.rebase(0xe000);
+        // A board with no scroll: every x is read against nothing.
+        r.camera = gp_track::bind::Camera::None;
         r
     } else {
         let table = gp_nes::recording::field_table(&opened.store, manifest)?;

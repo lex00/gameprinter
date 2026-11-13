@@ -110,3 +110,22 @@ Some files every lane appends to. Two patches made on one tip each add rows at t
 | `docs/research/deterministic-inference.md` | The notes log: a dated row from each lane that finds a rule by a signal a tool could read (comes back with the research docs) |
 
 A file joins the list by a row here and in `APPEND_ONLY` in gate_append.rs; a test holds the two lists together.
+
+## Affected clips
+
+Brought from game-printer's docs/gate.md, edited to gameprinter's layout. A score costs what a patch can move. Each clip's run records what it read (`gp_sim::reads`): the spec's kinds, levels, machines, counters and cameras note each element a clip touches (anything that sees a whole list notes all of it), and the hooks note each call by the hook's name. `gp corpus score` keeps them in the score's JSON (`reads`, by clip), next to a fingerprint of everything else the score read (`fingerprint`, crates/gp-cli/src/affected.rs):
+
+| Part of the fingerprint | What it covers | Changed: |
+|---|---|---|
+| `gp` | This gp build | every clip |
+| `mapping`, `contract`, `rom`, `input` | The state mapping, fidelity.toml, the ROM and the run's input | every clip |
+| `tolerances`, `catalog`, `pictures` | The tolerances, the mechanic catalog and the model's decoded pictures | every clip |
+| `spec` | The spec but its lists' elements | every clip |
+| `lists` | Each kind, level, machine, counter and camera, by name, as a hash of the compiled element | the clips that read it |
+| `hooks` | Each hook, as a hash of the code it can reach in the game's `ext/` crate (below) | the clips that called it |
+
+`gp corpus score GAME --run R --reuse EARLIER.json` compares the fingerprint with an earlier score's. When a part every clip reads changed, every clip is scored. Otherwise only a clip whose earlier reads meet an element or hook whose hash changed, a new clip, one whose recipe changed, one that couldn't be scored or was stopped, and one with no reads recorded. Every other clip keeps its earlier row. The output's `affected` says what changed and how many clips were scored and kept.
+
+A hook's hash covers the code it can reach (crates/gp-cli/src/hook_closure.rs). In game-printer build.rs hashed every template's hook crate into the binary; a game's hook crate is now its package's `ext/`, outside gp's build, so gp reads it when it scores. The crate is read with syn: each fn, const, static, type, struct, enum and trait is a unit, and each item of an `impl` belongs to the type it is for. A unit reaches the units its names resolve to, by module as Rust resolves them, and every method of a type it names. A hook is the type `exts()` registers under its name. Doc comments, comments and test modules change nothing. The crate's other files and its Cargo.toml are in every hook's hash, and a crate that can't be read so (an `exts()` of another shape, a `#[path]`, a file that doesn't parse) makes every hook the hash of the whole `ext/` tree, which is what every hook was before 2026-11-12. Matching is by name, so a hook reaches more than it calls, never less: in Donkey Kong a change to `Taken::step` (m100.rs) moves dk_taken, dk_elevators, dk_idle and dk_sound, 4 of its 17 hooks, where it moved all 17 before.
+
+A clip exact in the earlier score stops at its first wrong frame while the mapping is the earlier score's: a split decides it is worse, so the rest of its run isn't needed.

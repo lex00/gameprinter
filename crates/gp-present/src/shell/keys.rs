@@ -1,7 +1,7 @@
 //! The shell's keys and gamepad buttons: one table every target reads
 //! (docs/shell.md, "Keys and buttons"). The generated game builds its
 //! default controls and its fixed keys from it; the web preview reads it
-//! as scripts/web/page/shell-keys.js, which `gp docs shell` writes from
+//! as scripts/web/page/shell-keys.js, which `gp self shell` writes from
 //! this table.
 //!
 //! A key is named by its `KeyboardEvent.code`, which is also Bevy's

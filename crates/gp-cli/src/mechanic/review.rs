@@ -42,16 +42,19 @@ pub(crate) struct Rebuild {
 }
 
 impl Rebuild {
-    /// The module given, else `$GP_HOME/work/modules/GAME.wasm` if it's
-    /// there.
+    /// The module given, else the package's hook crate built from this
+    /// gp's kit (crate::module::built_for), so a module built for another
+    /// gp or older hook code is never used.
     pub fn new(paths: &Paths, game_dir: &Path, game: &str, module: Option<&Path>) -> Self {
+        let _ = game;
         let module = module.map(Path::to_path_buf).or_else(|| {
-            let f = paths
-                .home
-                .join("work")
-                .join("modules")
-                .join(format!("{game}.wasm"));
-            f.is_file().then_some(f)
+            match crate::module::built_for(&paths.home, game_dir) {
+                Ok(m) => m.map(|m| m.0),
+                Err(e) => {
+                    eprintln!("{}: the module didn't build: {e:#}", game_dir.display());
+                    None
+                }
+            }
         });
         Self {
             game: game_dir.to_owned(),

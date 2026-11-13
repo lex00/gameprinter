@@ -282,7 +282,7 @@ fn start_at(
     Ok(measure::StartHere {
         frame: o.frame(),
         model_frame: model_frame.context("the spot is before the mapping's start holds")?,
-        original: o,
+        original: crate::original::OriginalRuntime::Nes(o),
     })
 }
 
@@ -1057,7 +1057,7 @@ fn along(paths: &Paths, a: &Args, path: &Path) -> Result<Outcome> {
                 let start = measure::StartHere {
                     frame: c.frame as u64,
                     model_frame: mf,
-                    original: c.at.clone(),
+                    original: crate::original::OriginalRuntime::Nes(c.at.clone()),
                 };
                 match measure::lockstep_at(
                     mdir,
@@ -1662,7 +1662,6 @@ pub(crate) mod measure {
     use anyhow::Result;
     use gp_interp::lockstep::Mode;
     use gp_interp::mapping::Mapping;
-    use gp_nes::protocol::NesRuntime;
     use gp_runtime::Runtime;
     use gp_runtime::select::Condition;
 
@@ -1670,17 +1669,18 @@ pub(crate) mod measure {
 
     /// A frame of the original the rebuilt game can start from: in play,
     /// the frame before a polled one (so the lockstep's next frame is
-    /// compared), with a copy of the original there.
+    /// compared), with a copy of the original there, on either platform
+    /// (`gp progress --measure` plays an arcade romset's levels from it).
     #[derive(Clone)]
     pub(crate) struct StartHere {
         pub frame: u64,
         /// The model's frame there, as the lockstep counts it: polled
         /// frames since the mapping's start.
         pub model_frame: u64,
-        pub original: NesRuntime,
+        pub original: crate::original::OriginalRuntime,
     }
 
-    pub(crate) fn holds(o: &NesRuntime, c: &Condition) -> bool {
+    pub(crate) fn holds<R: Runtime>(o: &R, c: &Condition) -> bool {
         c.eval(&mut |sel| {
             o.query(&sel.to_string())?
                 .first()

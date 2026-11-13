@@ -31,10 +31,13 @@ pub(crate) struct Fingerprint {
     pub mapping: String,
     /// Each element's hash by list (`kinds`, `levels`, ...) and name.
     pub lists: BTreeMap<String, BTreeMap<String, String>>,
-    /// Each hook's hash by name: the hash of the game's hook code as a
-    /// whole. gp links no game's crate, so it can't hash each hook's reach
-    /// at build time; an edit anywhere in the crate rescans every clip that
-    /// calls a hook, which costs time and misses nothing.
+    /// Each hook's hash by name: the code it reaches in the game's `ext/`
+    /// crate (src/hook_closure.rs, read at run time since gp links no
+    /// game's crate), so only the clips that reach a changed hook are
+    /// scored again. When the crate can't be read by hook, every hook is
+    /// the hash of the hook code as a whole: an edit anywhere in it
+    /// rescores every clip that calls a hook, which costs time and misses
+    /// nothing.
     pub hooks: BTreeMap<String, String>,
     /// The hash of the game's `ext/` tree, which `module` is built from.
     #[serde(default)]
@@ -117,9 +120,11 @@ pub(crate) fn fingerprint(b: &Bench, model: &Model, game: &Path) -> Result<Finge
     lists.insert("machines".to_owned(), each(&spec.machines));
     lists.insert("counters".to_owned(), each(&spec.counters));
     lists.insert("cameras".to_owned(), each(&spec.cameras));
-    // A game with hooks hashes them by its `ext/` tree; with none, `gp`'s
-    // own label stands for them.
+    // A game with hooks hashes each by the code it reaches in its `ext/`
+    // crate, or by the `ext/` tree whole when the crate can't be read by
+    // hook; with none, `gp`'s own label stands for them.
     let ext = crate::package::hook_code(game)?.unwrap_or_default();
+    let by_hook = hook_hashes(game, &ext);
     let hooks: BTreeMap<String, String> = b
         .hosted
         .exts
@@ -130,7 +135,7 @@ pub(crate) fn fingerprint(b: &Bench, model: &Model, game: &Path) -> Result<Finge
                 if ext.is_empty() {
                     h(b.hosted.hooks.as_bytes())
                 } else {
-                    ext.clone()
+                    by_hook.get(k).cloned().unwrap_or_else(|| ext.clone())
                 },
             )
         })
@@ -145,6 +150,17 @@ pub(crate) fn fingerprint(b: &Bench, model: &Model, game: &Path) -> Result<Finge
         ext,
         module: b.hosted.hooks.clone(),
     })
+}
+
+/// Each hook of the game's `ext/` crate by the hash of the code it
+/// reaches (src/hook_closure.rs). Empty when there is no hook code or the
+/// crate can't be read by hook: every hook is then `ext`, the tree's hash.
+pub(crate) fn hook_hashes(game: &Path, ext: &str) -> BTreeMap<String, String> {
+    let dir = game.join("ext");
+    if ext.is_empty() || !dir.join("Cargo.toml").is_file() {
+        return BTreeMap::new();
+    }
+    crate::hook_closure::hook_hashes(&dir).unwrap_or_default()
 }
 
 /// Which clips to score against an earlier score (`gp corpus score
@@ -306,4 +322,116 @@ pub(crate) fn select(
         }
     );
     sel
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn fp(kind_hash: &str, hook_hash: &str) -> Fingerprint {
+        Fingerprint {
+            global: "g".into(),
+            whole: [("gp".to_owned(), "g".to_owned())].into(),
+            mapping: "m".into(),
+            lists: [(
+                "kinds".to_owned(),
+                [
+                    ("barrel".to_owned(), kind_hash.to_owned()),
+                    ("spring".to_owned(), "s".to_owned()),
+                ]
+                .into(),
+            )]
+            .into(),
+            hooks: [("dk_barrel".to_owned(), hook_hash.to_owned())].into(),
+            ..Fingerprint::default()
+        }
+    }
+
+    fn before(f: &Fingerprint) -> Value {
+        json!({
+            "fingerprint": f,
+            "record": {"predicate": {"clips": [
+                {"id": "a", "recipe": "ra", "exact": true},
+                {"id": "b", "recipe": "rb", "exact": false},
+                {"id": "c", "recipe": "rc", "exact": true},
+                {"id": "d", "recipe": "rd", "error": "no start"},
+            ]}},
+            "reads": {
+                "a": {"kinds": ["barrel"], "hooks": ["dk_barrel"]},
+                "b": {"kinds": ["spring"]},
+                "c": {"kinds": ["*"]},
+            },
+        })
+    }
+
+    fn ids() -> Vec<String> {
+        ["a", "b", "c", "d", "e"].map(String::from).to_vec()
+    }
+
+    fn recipes() -> BTreeMap<String, String> {
+        ["a", "b", "c", "d", "e"]
+            .map(|x| (x.to_owned(), format!("r{x}")))
+            .into()
+    }
+
+    /// A change to one element scores the clips that read it (or read the
+    /// list whole), with the new, errored and recipe-changed ones; the
+    /// rest keep their rows. A change to what every clip reads scores all.
+    #[test]
+    fn a_change_scores_exactly_the_clips_that_read_it() {
+        let b = before(&fp("k1", "h1"));
+        let s = select(&b, &fp("k2", "h1"), &ids(), &recipes());
+        assert_eq!(s.score, ["a", "c", "d", "e"].map(String::from).into());
+        assert_eq!(s.kept.keys().collect::<Vec<_>>(), ["b"]);
+        assert_eq!(s.stop, ["a", "c"].map(String::from).into());
+        let s = select(&b, &fp("k1", "h2"), &ids(), &recipes());
+        assert_eq!(s.score, ["a", "d", "e"].map(String::from).into());
+        // Nothing changed: only the new and the errored.
+        let s = select(&b, &fp("k1", "h1"), &ids(), &recipes());
+        assert_eq!(s.score, ["d", "e"].map(String::from).into());
+        // A recipe that changed.
+        let mut r = recipes();
+        r.insert("b".into(), "other".into());
+        let s = select(&b, &fp("k1", "h1"), &ids(), &r);
+        assert!(s.score.contains("b"));
+        // The global part.
+        let mut g = fp("k1", "h1");
+        g.global = "other".into();
+        g.whole.insert("gp".into(), "other".into());
+        let s = select(&b, &g, &ids(), &recipes());
+        assert_eq!(s.score.len(), 5);
+        assert!(s.says.contains("gp"), "{}", s.says);
+        // A new mapping: no clip stops at its split.
+        let mut m = fp("k1", "h1");
+        m.mapping = "m2".into();
+        m.global = "other".into();
+        assert!(select(&b, &m, &ids(), &recipes()).stop.is_empty());
+        // No fingerprint: every clip.
+        let s = select(&json!({}), &fp("k1", "h1"), &ids(), &recipes());
+        assert_eq!(s.score.len(), 5);
+    }
+    /// Each game of the games checkout ($GP_GAMES_DIR) with hook code is
+    /// read by hook: every hook its `exts()` registers gets a hash of its
+    /// own, and the hooks don't all share one. Skips without the checkout.
+    #[test]
+    fn the_games_hooks_are_read_by_hook() {
+        let Some(games) = std::env::var_os("GP_GAMES_DIR").map(std::path::PathBuf::from) else {
+            eprintln!("skipped: no GP_GAMES_DIR");
+            return;
+        };
+        for g in ["donkey-kong", "tapper"] {
+            let dir = games.join(g);
+            let Ok(Some(ext)) = crate::package::hook_code(&dir) else {
+                continue;
+            };
+            if let Err(e) = crate::hook_closure::hook_hashes(&dir.join("ext")) {
+                panic!("{g}'s ext/ can't be read by hook: {e}");
+            }
+            let m = hook_hashes(&dir, &ext);
+            assert!(!m.is_empty(), "{g}");
+            let distinct: BTreeSet<&String> = m.values().collect();
+            assert!(m.len() < 2 || distinct.len() > 1, "{g}: {m:?}");
+        }
+    }
 }

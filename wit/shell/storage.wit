@@ -1,0 +1,60 @@
+// The runtime shell's storage: what a target keeps for one game, its save
+// slots first (docs/shell.md, "Storage"). Every Game Printer target runs
+// the same shell code (gp_present::shell) and supplies only this: the
+// generated Bevy game keeps the files in the game's data folder, the web
+// preview in the browser's IndexedDB.
+//
+// A name is a path relative to the game's own storage, such as
+// `saves/slot-1.gpsave`: lowercase letters, digits, `-`, `_`, `.` and `/`,
+// with no `..`. Another game's files are never seen, so a name never
+// carries the game's.
+//
+// Bindings are generated, not written by hand: `gp self shell` writes
+// crates/gp-present/src/shell/storage.rs (a Rust trait) and
+// scripts/web/page/storage-wit.js (the JavaScript host's check), and a test
+// fails while either is stale. A browser host answers each function with a
+// promise of what the WIT gives.
+//
+// 0.1.0 (2026-11-05): the first version.
+package game-printer:shell@0.1.0;
+
+interface storage {
+  /// A file the player handed over.
+  record picked {
+    /// Its name as the player's system gave it.
+    file-name: string,
+    bytes: list<u8>,
+  }
+
+  /// The names kept that start with `prefix` (all of them for ""), sorted.
+  %list: func(prefix: string) -> list<string>;
+
+  /// The file's bytes, or none when nothing is kept under the name.
+  read: func(name: string) -> option<list<u8>>;
+
+  /// Keeps the bytes under the name, replacing what was there. Either the
+  /// whole file is kept or none of it, so a crash never leaves half a save.
+  write: func(name: string, bytes: list<u8>) -> result<_, string>;
+
+  /// Removes the file. A name that isn't kept is no error.
+  delete: func(name: string) -> result<_, string>;
+
+  /// Asks that what is kept stays when the system wants room (a browser's
+  /// navigator.storage.persist()). True when it is kept for good; a data
+  /// folder always is.
+  persist: func() -> bool;
+
+  /// Hands the kept file `name` to the player as a file called
+  /// `file-name` (a browser downloads it; a native game writes it into its
+  /// data folder's `exports/`), and says where it went.
+  %export: func(name: string, file-name: string) -> result<string, string>;
+
+  /// A file the player picks (a browser's file chooser; a native game
+  /// takes the newest file in its data folder's `imports/`), or none when
+  /// there is none or the player cancels.
+  %import: func() -> result<option<picked>, string>;
+}
+
+world shell {
+  import storage;
+}

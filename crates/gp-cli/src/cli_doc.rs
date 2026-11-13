@@ -73,6 +73,18 @@ const LAB_W9: &[&str] = &[
     "scorecard",
 ];
 
+/// Lab commands of the record of findings, the progress ladder, the
+/// oracles, the test ROMs and the localizer, ported from game-printer on a
+/// line of their own as the waves' are.
+const LAB_TOOLS: &[&str] = &["findings", "localize", "oracle", "progress", "testroms"];
+
+/// Lab commands of the benches (game-printer's gp bench), on a line of
+/// their own as the waves' are.
+const LAB_BENCH: &[&str] = &["bench"];
+
+/// Lab command of a recording's video (the tools port), on its own line.
+const LAB_VIDEO: &[&str] = &["video"];
+
 /// Public commands of the theme pipeline (wave 8 of the port), on a line
 /// of their own as the waves' are.
 const PUBLIC_THEME: &[&str] = &["theme"];
@@ -124,6 +136,9 @@ fn render_of(cli: &clap::Command) -> Result<String> {
             || LAB_DERIVE.contains(&name)
             || LAB_W7.contains(&name)
             || LAB_W9.contains(&name)
+            || LAB_BENCH.contains(&name)
+            || LAB_VIDEO.contains(&name)
+            || LAB_TOOLS.contains(&name)
         {
             &mut lab
         } else {

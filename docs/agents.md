@@ -21,6 +21,7 @@ The record is `$GP_HOME/work/serve/GAME/agent/work.jsonl`, one entry a line, app
 | `attempt` | A change tried; the attempt itself is `agent/<n>/attempt.json` |
 | `approved` | The person pressed keep on an attempt |
 | `done` | The work on the clip stopped, and why |
+| `tell` | The person's note on a clip ("Telling the agent" below); a `note` with `reply_to` answers it |
 
 A writer is working until its next `done`, and its line reads `Claude is working on: the barrel (x parts at frame 9). Last: found the cause in the roll routine.`
 
@@ -97,9 +98,78 @@ Each agent's state is `agent/clip-agents/<clip>.json`: the clip, `state` (`start
 
 While the run's queue is on (`gp serve` starts with every queue paused), the server looks once a second for clips stuck on the model as it stands (a refine round wrote nothing for them). They are grouped by the measure that parts first with the slot left out (every barrel's place across is one group, `entities.barrel.x`), and each group goes to one agent, up to the run's agents at once. A group with an agent working, or whose clips an approved change not on main yet covers, isn't handed off, nor one handed off already on the model as it stands (`background/state.json`'s `handed`). A handed-off agent's attempt that makes its clip better and no active clip worse is kept by itself, written to `approved.json` with `auto` true and the group's clips; started by hand, an agent waits for keep.
 
+## The brief
+
+`gp agent brief --run R --clip C [--json] [--no-curve]` gives everything an agent needs to start on a clip in one call (crates/gp-cli/src/agent_brief.rs, from game-printer's). It only reads. The clip is one of the run's active clips (`gp agent clips --run R` lists them with their scores, those that don't match first) and its score is the background work's. Unless `--no-curve`, it plays the clip's lockstep once on the run's model (the working copy once there is one) and gives:
+
+| Part | What |
+|---|---|
+| `measures` | Each wrong track's first wrong measure, frame and values |
+| `curve` | Each wrong measure's original and rebuilt values from 3 frames before its first wrong frame to 5 after |
+| `inputs` | What the original's code read to write the first wrong measure on that frame: `gp element inputs`, the 6502 writer slice on an NES game and the main Z80's on an arcade game |
+| `owners` | The mechanics on the wrong measures' entities, those that write the measured field first, with their parameters as the model sets them and the line in model.toml |
+| `code` | The facts the model's evidence cites for them, with each ref as file, line and the routine the line is in |
+| `questions`, `tells` | The open questions of the run's working copy, and the person's open tells on the clip and its group |
+| `attempts`, `agent` | The attempts so far on the clip or its group, and the clip agent on it |
+| `next` | The commands to run next, whole: `gp agent note`, `gp solve`, `gp element inputs`, reading the cited code, `gp agent score`, `gp agent attempt` and `gp agent done` |
+
+With `--json` it has a fixed shape named by `schema` ("gp agent brief 3"). The clip agent's prompt starts with it. game-printer's brief read the queue's stored curve; gameprinter's queue keeps no curve, so the brief plays the lockstep itself (seconds in a release build).
+
 ## Telling the agent
 
-game-printer's tells (the person clicks on a paused clip and writes a line) aren't brought over: the mechanic page's talk (`gp mechanic say`, the agent log beside the page) is where a person tells an agent about a clip.
+The person, or the coordinator, can tell the agent something about a clip: what is wrong, at which frame and where on the screen. A tell is a work record entry of kind `tell` written `by` "user" and given an `id` counted from 1 in the run (crates/gp-cli/src/serve/tell.rs, from game-printer's). It names the `clip` and gives the `text`. Its `frame` is the clip's and `orig_frame` the original's. The point is `at` (`[x, y]`) or `region` (`[x, y, w, h]`) in game pixels, and `base` keeps the clip's score as the background work had it. A reply is a `note` entry with `reply_to` set to the `id` of the tell it answers; once replied to, a tell is closed.
+
+| Where the tell goes | When |
+|---|---|
+| The agent's inbox, `.gp-inbox/tells.txt` in its worktree | A clip agent is working on the clip, alone or as one of its group. Its prompt tells it to read the file between steps and to reply with `gp agent note --run R --clip C --by "clip agent" --reply-to ID TEXT` |
+| The next prompt for the clip, and the brief | No agent is on it. The open tells for the clip and its group are in the prompt's "told you this" lines and in `gp agent brief`'s `tells` |
+| The coordinator | Always: `GET /api/capture/{run}/tells` and `gp agent tells` list them, and `needs_look` names the clips with an open tell and no agent |
+
+Each tell has a `line` for a polling script to print, as `USER TELL on tapper.l1.001 at frame 40: the mug lands short`.
+
+| Command | What |
+|---|---|
+| `gp agent tell --run R --clip C --says TEXT [--frame N] [--orig-frame N] [--at X,Y] [--region X,Y,W,H]` | Adds a tell |
+| `gp agent tells --run R [--open]` | The tells with their replies; `--open` for those with none |
+| `gp agent note --run R --clip C --reply-to ID TEXT` | A reply |
+
+| Endpoint | What |
+|---|---|
+| `POST /api/capture/{run}/clips/{clip}/tell` | `{text, frame?, orig_frame?, at?, region?}`: adds a tell; answers `tell` and `delivered` (an agent's inbox got it) |
+| `GET /api/capture/{run}/tells` | `tells` with replies (`?open=1` for open ones), `needs_look` and `fix_ready` |
+
+game-printer also credited a tell when its clip got better after it (`resolved` entries, a tally in the page's header, "fixed thanks to your note"). gameprinter's background work doesn't write those yet, and the page has no tell box yet: a tell is open or answered.
+
+## Merging attempts
+
+`gp agent integrate --branch NAME [--repo DIR] [--skip N] [--dry-run] [--check]` is the coordinator's helper for the approved attempts in `$GP_HOME/work/agents/approved.json` (crates/gp-cli/src/agent_integrate.rs, from game-printer's). It runs in a clean checkout of gameprinter. It:
+
+1. Lists the approved attempts not on main (read from git), and drops an attempt whose commit is inside a later approved attempt of the same branch. `--skip` leaves attempts out and `--dry-run` only lists.
+2. Makes branch NAME from main and cherry-picks them in the order they were kept. A conflict only in append-only docs keeps both sides; a conflict in a generated `schema/*.json` takes theirs; at the first other conflict it undoes that pick, names the attempt and the files, and stops with exit 1.
+3. Reads the `changes/*.md` notes the picks brought (each attempt's `CHANGE.md`: `features`, `breaking`, `roadmap`, `log` and `plugins` lines). It refuses a feature name two notes both add, and bumps a piece only when a note names it in `breaking`.
+4. Builds gp from the branch and writes every schema from it (`gp self schemas schema`).
+5. Adds the ROADMAP line at the top of the Decided list and a row to docs/model.md's "Changes", removes the notes, and commits.
+6. Runs `gp model check` on every game of the games checkout and exits 1 if one fails.
+
+It never merges into main or scores: the tool gate lands the branch (docs/gate.md). `--check` runs `just check` on the branch at the end (game-printer's ran its scripts/merge-check.sh, which gameprinter doesn't have).
+
+## Loop efficiency
+
+`gp agent bench --run R [--since T] [--json] [--log]` prints one table of how well the loop is doing (crates/gp-cli/src/agent_bench.rs, from game-printer's). It only reads the run's `background/history.jsonl` (and `ledger.jsonl` and `fidelity/history.json` where a run has them; gameprinter's queue writes neither yet), `$GP_HOME/results/score/`, and under `agent/` the attempts and the agent logs. With `--log` it also appends one dated row to the notes log of `docs/research/deterministic-inference.md` (`--note FILE` names another note).
+
+`--since` takes a round number (`300`), a UTC time (`"2026-10-30 08:00"`, or epoch seconds or milliseconds) or an age before the last round (`2h`, `30m`). Without it the window is the whole run.
+
+| Measure | How it is read |
+|---|---|
+| Wall time | First to last round of the window. Gaps over 30 minutes (the server was off) are idle and left out of work time, which every rate below uses |
+| Rounds, rounds per hour | History rows in the window |
+| Rounds that kept a change, by source | History rows with changes, by their `source` (or `solver`), else `fit`; an approved attempt by the clip agent counts as `LLM attempt` |
+| Clips fixed per hour, by source | The rows' `fixed` counts, plus clip agent attempts whose clip went from not exact to exact (`LLM attempt`, or `user note` when the attempt answered a tell) |
+| Seconds per round | Mean and median gap between consecutive rounds |
+| LLM calls, and per fix | Clip agent runs (`agent/clip-agent-<ms>-<clip>.log`) in the window, over the fixes by clip agent attempts |
+| Exact and fidelity at the start and end | From the ledger and the fidelity history, where the run has them |
+
+On the same files (game-printer's run `smb-side-by-side-2`: its history, ledger, fidelity history, attempts and agent log names), gameprinter's bench gives the same JSON as game-printer's, but for the run's name.
 
 ## The rules an attempt follows
 

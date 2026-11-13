@@ -22,7 +22,7 @@ gp recordings show 3b27
 
 `gp recordings list` and `show` read the store's recordings log and the manifests it names. game-printer kept a SQLite index of the log (gp-index); gameprinter scans the log instead, with the same rows and output.
 
-Not here yet: `gp record --model` and the replay of a model's recording (the new world runs a model with hooks through its game's module), `gp recordings retire|unretire` and `gp video`.
+Not here yet: `gp record --model` and the replay of a model's recording (the new world runs a model with hooks through its game's module), and `gp recordings retire|unretire`. `gp video` draws a recording as an animated PNG ([video.md](video.md)).
 
 ## The store's own commands
 

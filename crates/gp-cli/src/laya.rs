@@ -9,8 +9,7 @@
 //! - Else, at the default address, the tool asks `gp serve` (its
 //!   `POST /api/laya/start`, at $GP_SERVE_URL or http://127.0.0.1:7710) to
 //!   start it. gp serve runs scripts/laya/serve.mjs on an install already
-//!   there ($LAYA_DIR, $GP_HOME/work/laya, else ~/.game-printer/work/laya,
-//!   whose weights are cached in ~/.cache/receptron-laya), waits until it
+//!   there ($LAYA_DIR, else $GP_HOME/work/laya, whose weights are cached in ~/.cache/receptron-laya), waits until it
 //!   answers, and keeps it while it runs. The child holds a pipe from gp
 //!   serve as its standard input and exits when that closes, so it stops
 //!   with gp serve however gp serve ends.
@@ -125,17 +124,13 @@ pub(crate) fn probe(url: &str) -> Answer {
     }
 }
 
-/// The installs looked for, in order: $LAYA_DIR, $GP_HOME/work/laya, and
-/// game-printer's ~/.game-printer/work/laya.
+/// The installs looked for, in order: $LAYA_DIR and $GP_HOME/work/laya.
 fn candidates(home: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Some(d) = std::env::var_os("LAYA_DIR").filter(|d| !d.is_empty()) {
         out.push(PathBuf::from(d));
     }
     out.push(home.join("work").join("laya"));
-    if let Some(h) = std::env::var_os("HOME") {
-        out.push(Path::new(&h).join(".game-printer/work/laya"));
-    }
     out
 }
 

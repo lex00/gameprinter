@@ -520,7 +520,7 @@ pub(crate) fn demo(paths: &Paths, a: &Demo) -> Result<Outcome> {
 
 /// Each jump in a clip: how high it rose, frames A was held, and the speed
 /// across it took off at.
-fn measure_jumps(
+pub(super) fn measure_jumps(
     paths: &Paths,
     s: &Session,
     n: u64,

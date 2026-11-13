@@ -24,7 +24,7 @@ use crate::Outcome;
 
 /// Lifted assets must never be committed, so an output inside a git work
 /// tree is refused.
-fn outside_repo(path: &Path) -> Result<PathBuf> {
+pub(crate) fn outside_repo(path: &Path) -> Result<PathBuf> {
     let path = std::path::absolute(path).with_context(|| path.display().to_string())?;
     if let Some(repo) = gp_evidence::paths::enclosing_git_work_tree(&path) {
         bail!(
@@ -38,7 +38,7 @@ fn outside_repo(path: &Path) -> Result<PathBuf> {
 
 /// Writes a file, refusing to follow a symlink there: one could point into
 /// a git work tree, or anywhere else, past the check on its directory.
-fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<()> {
     if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
         bail!(
             "{} is a symlink; gp assets writes only plain files",
@@ -54,7 +54,7 @@ fn read(path: &Path) -> Result<Vec<u8>> {
 
 /// Where maps are looked for: $GP_ASSETS; else the tool repo's assets/
 /// and each game's assets/ in the games checkout.
-fn maps_dirs() -> Vec<PathBuf> {
+pub(crate) fn maps_dirs() -> Vec<PathBuf> {
     if let Some(dir) = std::env::var_os("GP_ASSETS").filter(|v| !v.is_empty()) {
         return vec![PathBuf::from(dir)];
     }
@@ -246,7 +246,7 @@ fn write_files(out: &Path, files: &[gp_assets::File]) -> Result<()> {
 /// [`lift`] for an arcade romset: the map must be given (an arcade map is
 /// for a set's name, not an image's hash), and the output defaults to
 /// $GP_HOME/work/assets/SET.
-fn lift_arcade(
+pub(crate) fn lift_arcade(
     rom: &[u8],
     out: Option<&Path>,
     map_path: Option<&Path>,

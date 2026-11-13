@@ -1,0 +1,956 @@
+# The standard NES test ROMs that `gp testroms` runs (docs/test-roms.md).
+#
+# The ROMs are never committed: their licenses vary, and the pre-commit hook
+# refuses NES images anyway. `gp testroms fetch` (and `run`, for anything
+# missing) downloads each file from raw.githubusercontent.com at the pinned
+# commit below into $GP_HOME/work/test-roms/, and refuses any whose SHA-256
+# isn't the one listed here.
+#
+# `check` is how a suite reports: `nestest` compares the CPU against
+# nestest.log, `blargg` reads the status byte and text at $6000,
+# `blargg-2005` reads the result code at $F8, `blargg-2005-screen` reads the
+# result code that blargg's 2005 PPU and APU tests print (`$01`), and
+# `screen` reads "Passed" or "Failed" off the screen, for a board with no RAM
+# at $6000. `frames` is the most frames a ROM may run before it counts as
+# timed out: at least twice what the slowest ROM in the suite took on
+# 2026-10-27, and up to 20 times for the quick suites.
+#
+# `region = "pal"` powers a suite on as a PAL console (NTSC otherwise), and
+# `mmc3_revision` picks the MMC3 revision a ROM tests. `needs_zeroed_ram`
+# marks a suite whose expected output was made with RAM powered on as zeros,
+# which `gp testroms run --ram-ones` skips.
+#
+# `built_from` marks a test program of our own: its source is in the repo,
+# `just build-testroms` assembles it into $GP_HOME/work/test-roms/gp/, and
+# it's never downloaded. Its SHA-256 pins the build, so a change to the
+# source or the assembler shows up as a wrong hash.
+#
+# docs/test-roms.md lists the collection's other directories and why each
+# isn't run.
+#
+# `known_failure` marks a ROM that fails today, with the open question that
+# tracks it, and `known_result` is how its result starts when it fails that
+# way (such as "code 2:"). Only that failure is excused: any other result,
+# a timeout included, fails the run, and so does a known failure that starts
+# passing, so this list only ever shrinks on purpose.
+
+[source]
+repo = "christopherpow/nes-test-roms"
+commit = "95d8f621ae55cee0d09b91519a8989ae0e64753b"
+
+[[suite]]
+name = "nestest"
+check = "nestest"
+about = "CPU: every instruction, official and unofficial, checked against a known-good log (nestest.log) in automation mode"
+log = { path = "other/nestest.log", sha256 = "442c4dd5539c7e88b3fd73c7b732a7eadbd22b47c2cd9e58397ef147f64f6f8f" }
+# nestest.log shows memory as a run with RAM powered on as zeros left it
+# ("STX $00 = 00"), so a --ram-ones run can't be compared with it.
+needs_zeroed_ram = true
+
+[[suite.rom]]
+path = "other/nestest.nes"
+sha256 = "f67d55fd6b3cf0bad1cc85f1df0d739c65b53e79cecb7fea8f77ec0eadab0004"
+
+[[suite]]
+name = "instr_test"
+check = "blargg"
+about = "CPU: official and unofficial instructions, one ROM per addressing mode (instr_test-v5)"
+frames = 1200
+
+[[suite.rom]]
+path = "instr_test-v5/rom_singles/01-basics.nes"
+sha256 = "4dd1cdd406bc3f747972e7da314ce8ca89321eb7a836c1ced569ee54ae44a384"
+
+[[suite.rom]]
+path = "instr_test-v5/rom_singles/02-implied.nes"
+sha256 = "1c4d4fa130cf6feebc072543a5cd3627ae71063b56b08642bf43e9a6c6f44996"
+
+[[suite.rom]]
+path = "instr_test-v5/rom_singles/03-immediate.nes"
+sha256 = "6f7ad8ff31c762c37deaee0f323df03eb94025cf1f3b0343ebe6fe567da0e943"
+
+[[suite.rom]]
+path = "instr_test-v5/rom_singles/04-zero_page.nes"
+sha256 = "7a8feada4bb4460250c8f05401e5d728878bbe71956756d0b11d488e57eb12fd"
+
+[[suite.rom]]
+path = "instr_test-v5/rom_singles/05-zp_xy.nes"
+sha256 = "767f422dc4e651e331456b207f7c6d60d19329fde0c0827e83591dbd91ae5e23"
+
+[[suite.rom]]
+path = "instr_test-v5/rom_singles/06-absolute.nes"
+sha256 = "98df36dc4fcc4f37d9eb0539c71283020776b1e5dc6a6ce58671739a8d6534af"
+
+[[suite.rom]]
+path = "instr_test-v5/rom_singles/07-abs_xy.nes"
+sha256 = "9ff58d77d8d384cc918fcd3ed877898c5e7330cd475ed2dafb11cbe80ff32eff"
+
+[[suite.rom]]
+path = "instr_test-v5/rom_singles/08-ind_x.nes"
+sha256 = "2ec6f5d4a8caee5d8295cebe563f203c26ea9bc05f1dbc967feb88f5dc4f261f"
+
+[[suite.rom]]
+path = "instr_test-v5/rom_singles/09-ind_y.nes"
+sha256 = "0fbc8b228d5daa83a4a083bf87ae3a61b5247ebdd91a6b91c8cf8c42784804ac"
+
+[[suite.rom]]
+path = "instr_test-v5/rom_singles/10-branches.nes"
+sha256 = "63ab768e88931db6f7dfcfafe43d5e29ebc3dcb80da8fc7fcda8c930f34aef54"
+
+[[suite.rom]]
+path = "instr_test-v5/rom_singles/11-stack.nes"
+sha256 = "c534191fe3ea4c8940944fda98dd58eb42710268d453f97e8e2c4ae7f15f9cdb"
+
+[[suite.rom]]
+path = "instr_test-v5/rom_singles/12-jmp_jsr.nes"
+sha256 = "f5b4652690fc04e6b573a2b3b54a29407ad0615d3c264e7cb618b6694b50de55"
+
+[[suite.rom]]
+path = "instr_test-v5/rom_singles/13-rts.nes"
+sha256 = "b711d25bc55585c252046a1304a0bc64c13cacce7c96a1bac5c8e91f9fc2597f"
+
+[[suite.rom]]
+path = "instr_test-v5/rom_singles/14-rti.nes"
+sha256 = "f084b00605be1840946b53935032581e68abe1bb24479942751cfe46ddfcb280"
+
+[[suite.rom]]
+path = "instr_test-v5/rom_singles/15-brk.nes"
+sha256 = "da7ae9a191c4483b540771e15b1f6f18df68f1d1ecd717b59ea8b1ee3596ec3e"
+
+[[suite.rom]]
+path = "instr_test-v5/rom_singles/16-special.nes"
+sha256 = "7d03410b61784e49920901e84b00a4f31a19078391f20005c6fac9036d2190f7"
+
+[[suite]]
+name = "instr_timing"
+check = "blargg"
+about = "CPU: cycle count of every instruction, and branch timing"
+frames = 3000
+
+[[suite.rom]]
+path = "instr_timing/rom_singles/1-instr_timing.nes"
+sha256 = "e260068839fe3d0402376e97e4ee15f5790ee77c701fd0700bba057527910222"
+
+[[suite.rom]]
+path = "instr_timing/rom_singles/2-branch_timing.nes"
+sha256 = "0afaa393f375844ab98834c1ecba7fa6d8c44880c8b6e738936d0f04a84c8538"
+
+[[suite]]
+name = "cpu_interrupts"
+check = "blargg"
+about = "CPU: IRQ, NMI and BRK interaction and latency (cpu_interrupts_v2)"
+frames = 1200
+
+[[suite.rom]]
+path = "cpu_interrupts_v2/rom_singles/1-cli_latency.nes"
+sha256 = "e402d36118f77dcbbe8ddca90c15fc76a46bcb30b25cb028c383e4a621de5fc0"
+
+[[suite.rom]]
+path = "cpu_interrupts_v2/rom_singles/2-nmi_and_brk.nes"
+sha256 = "6e6bf6205930afcfebdc213c583df53986a688a8b36f8856b805ef4c1853e6eb"
+
+[[suite.rom]]
+path = "cpu_interrupts_v2/rom_singles/3-nmi_and_irq.nes"
+sha256 = "3008a9524d174a8aca562ff0361eba81da53e38cf1ebb5125322fe151f14d945"
+
+[[suite.rom]]
+path = "cpu_interrupts_v2/rom_singles/4-irq_and_dma.nes"
+sha256 = "6d7b4c1947ada64679af56cf0c227286b2408afe1747dfaa4dc7363d57ff87f6"
+
+[[suite.rom]]
+path = "cpu_interrupts_v2/rom_singles/5-branch_delays_irq.nes"
+sha256 = "f9e10b4a24d8f3cd3e51fb7457c72858aab96a6467fdbbd806d0661c2d32fdc7"
+
+[[suite]]
+name = "ppu_vbl_nmi"
+check = "blargg"
+about = "PPU: vblank flag and NMI timing to the PPU clock"
+frames = 900
+
+[[suite.rom]]
+path = "ppu_vbl_nmi/rom_singles/01-vbl_basics.nes"
+sha256 = "06aea5af4edab4e3141c939cd5ac9936f8758203b25dcaf84ae1a09db49e024a"
+
+[[suite.rom]]
+path = "ppu_vbl_nmi/rom_singles/02-vbl_set_time.nes"
+sha256 = "dd98856130078844e3aa4bd95a9be8ab501ea84c089f1d8ad49a1b20af4b3a80"
+
+[[suite.rom]]
+path = "ppu_vbl_nmi/rom_singles/03-vbl_clear_time.nes"
+sha256 = "787fdaa4dd6c5b6df5f4308fb6d55b57e2c2f69bd5ecdf8ad5c69735db4fcc72"
+
+[[suite.rom]]
+path = "ppu_vbl_nmi/rom_singles/04-nmi_control.nes"
+sha256 = "84722c75b896c47c8642f83220230fe14f0a31e55e26ecb83c400e6a26d91b32"
+
+[[suite.rom]]
+path = "ppu_vbl_nmi/rom_singles/05-nmi_timing.nes"
+sha256 = "72e515d689d7404ae5779b8c9c4c7b3563a755a94bd44864516f1b03df044482"
+
+[[suite.rom]]
+path = "ppu_vbl_nmi/rom_singles/06-suppression.nes"
+sha256 = "811dd5997bbf48c2e5687ab06845f17ea76b2be472786596c334137582cc72aa"
+
+[[suite.rom]]
+path = "ppu_vbl_nmi/rom_singles/07-nmi_on_timing.nes"
+sha256 = "1ed154363660b5775b112ae63ce9bb4e400ebde2afef4d0ac12fc433efda3702"
+
+[[suite.rom]]
+path = "ppu_vbl_nmi/rom_singles/08-nmi_off_timing.nes"
+sha256 = "1d2a4093091c8e58a7f99d6a3531bbc6346b52cfc59bcb17ca04c1f2376cf2fc"
+
+[[suite.rom]]
+path = "ppu_vbl_nmi/rom_singles/09-even_odd_frames.nes"
+sha256 = "1ac04283021ddd9294cc74ee709c55e20a350dc4815c15a8a93b3654837e858d"
+
+[[suite.rom]]
+path = "ppu_vbl_nmi/rom_singles/10-even_odd_timing.nes"
+sha256 = "7217d2d172ce11ad45c4da40c2f22201cf0eb758bc2cd8dd39d2cf0a7d4ca83e"
+
+[[suite]]
+name = "sprite_hit"
+check = "blargg-2005"
+about = "PPU: sprite 0 hit, placement and timing (sprite_hit_tests_2005.10.05)"
+frames = 600
+
+[[suite.rom]]
+path = "sprite_hit_tests_2005.10.05/01.basics.nes"
+sha256 = "51819e8e502bd88fe3b7244198a074dbeef2e848f66c587be04b04f1f0d4bb52"
+
+[[suite.rom]]
+path = "sprite_hit_tests_2005.10.05/02.alignment.nes"
+sha256 = "125bbb3ce1e67370f1f4559c2ad3221e52a3e98880b9789400292b5f3a8b39e6"
+
+[[suite.rom]]
+path = "sprite_hit_tests_2005.10.05/03.corners.nes"
+sha256 = "9dd57776bc6267fe6183c5521d67cbe3fccc6662ae545eb2c419949bf39644d3"
+
+[[suite.rom]]
+path = "sprite_hit_tests_2005.10.05/04.flip.nes"
+sha256 = "5f7142bddb51b7577f93fa22f9f668efebbeea00346d7255089e1863acb9d46a"
+
+[[suite.rom]]
+path = "sprite_hit_tests_2005.10.05/05.left_clip.nes"
+sha256 = "69b329658c17b953f149c2f0de77eb272089df22c815bd2fd3d6f43206791c13"
+
+[[suite.rom]]
+path = "sprite_hit_tests_2005.10.05/06.right_edge.nes"
+sha256 = "8e6653fcb869e06873e29e5e4423122ea72ba0bf38f3ba9e39f471420db759a4"
+
+[[suite.rom]]
+path = "sprite_hit_tests_2005.10.05/07.screen_bottom.nes"
+sha256 = "05849956f80267838c5b6556310266b794078a4300841cbb36339fd141905a0b"
+
+[[suite.rom]]
+path = "sprite_hit_tests_2005.10.05/08.double_height.nes"
+sha256 = "127fd966b6b32d6d88a53c5f59d7e938827783c9ad056091f119be1c4ab21c71"
+
+[[suite.rom]]
+path = "sprite_hit_tests_2005.10.05/09.timing_basics.nes"
+sha256 = "311698c717e50150edd0b5fd0016c41de686463205c20efb5630d6adb90859fd"
+
+[[suite.rom]]
+path = "sprite_hit_tests_2005.10.05/10.timing_order.nes"
+sha256 = "0f36bc07bfe51c416e3cc1a5231053572aa6b15aa60e6d2fd0568be49b6dc2e9"
+
+[[suite.rom]]
+path = "sprite_hit_tests_2005.10.05/11.edge_timing.nes"
+sha256 = "5a7c121f6e76617be88a0a7035c0e402293be5c685c95b97190a8d70835736ab"
+
+[[suite]]
+name = "sprite_overflow"
+check = "blargg-2005"
+about = "PPU: the sprite overflow flag, including the hardware's buggy evaluation"
+frames = 600
+
+[[suite.rom]]
+path = "sprite_overflow_tests/1.Basics.nes"
+sha256 = "1a6782f63ccb3a3dd1aa6a24272036c9c3aa232c2d1ff0b21e872741a3ee4fe2"
+
+[[suite.rom]]
+path = "sprite_overflow_tests/2.Details.nes"
+sha256 = "6405a7ff1042fe7a50d9bfe521e43460a3251799425bd3e1863b29b67e7cd587"
+
+[[suite.rom]]
+path = "sprite_overflow_tests/3.Timing.nes"
+sha256 = "2252ec8fc35932b408f409ef9b6863edf084aa871fc10ad180b0ac4c2468ef8c"
+
+[[suite.rom]]
+path = "sprite_overflow_tests/4.Obscure.nes"
+sha256 = "aebf2199344321465ae0d8dcd81f6c528c7f661f31f1814711365b4e573a8263"
+
+[[suite.rom]]
+path = "sprite_overflow_tests/5.Emulator.nes"
+sha256 = "cf994454219696de82794f0b84f2bd63458444d12a1171c85bba8697ab94acb4"
+
+[[suite]]
+name = "apu_test"
+check = "blargg"
+about = "APU: length counters, frame IRQ, jitter and DMC"
+frames = 600
+
+[[suite.rom]]
+path = "apu_test/rom_singles/1-len_ctr.nes"
+sha256 = "aacf86c1d773badd11392e54506a43a06a3dd0b67a4c255909d1daf770a4a1e2"
+
+[[suite.rom]]
+path = "apu_test/rom_singles/2-len_table.nes"
+sha256 = "c002ff1483b4dfb36a6eb004d49739cd58a2dff16e0bac167d5a7c12235caeeb"
+
+[[suite.rom]]
+path = "apu_test/rom_singles/3-irq_flag.nes"
+sha256 = "dd888551665937391a2d691b1f96d1858316dbfce4951306146e9e396367f079"
+
+[[suite.rom]]
+path = "apu_test/rom_singles/4-jitter.nes"
+sha256 = "bff573d72d0f134fe307f0bb8b968b8d2ffdb85e8aadad9c152839068d6db32a"
+
+[[suite.rom]]
+path = "apu_test/rom_singles/5-len_timing.nes"
+sha256 = "4d88f8cc0b21303dc151af4d0f4169d79284634a73082d7ea1ae5cfafedd1e46"
+
+[[suite.rom]]
+path = "apu_test/rom_singles/6-irq_flag_timing.nes"
+sha256 = "fc1daff82dd1a49c7c1242392ffbf1c6f44fb70156868582117f2a844cc4dffd"
+
+[[suite.rom]]
+path = "apu_test/rom_singles/7-dmc_basics.nes"
+sha256 = "547324867ee0ba2aa11401001d8d1288530aa4e0ecaaac1667ce79980a388ec1"
+
+[[suite.rom]]
+path = "apu_test/rom_singles/8-dmc_rates.nes"
+sha256 = "5d9a79a505b37fa277cacc95a362f7e2a56e59ace7a698213d78432cc06a8867"
+
+[[suite]]
+name = "mmc1"
+check = "blargg"
+about = "MMC1 (mapper 1): the multi-test builds of other suites, each a 256K or 128K MMC1 image that runs its tests from banked PRG ROM. This collection has no MMC1-specific test that reports a result; mmc1_banking is our own"
+frames = 5000
+
+[[suite.rom]]
+path = "instr_test-v5/official_only.nes"
+sha256 = "589b8835deb5cbc69618dac193a3dbd675540f7f2794e2d2a92e97beb8abc3cb"
+
+[[suite.rom]]
+path = "instr_test-v5/all_instrs.nes"
+sha256 = "353870c157242e3d428ef7387109deaee0d2e158bdb432ab9aae4e657072c785"
+
+[[suite.rom]]
+path = "instr_test-v3/official_only.nes"
+sha256 = "5f331a713ff60c496e9d0173332dd37365080c62158ffc71ba2d9f8bbdc62c99"
+
+[[suite.rom]]
+path = "instr_test-v3/all_instrs.nes"
+sha256 = "0c276c84b578ac43b7bce7f611c29a4d77e8d06b2336b362ae4024a67fefbe02"
+
+[[suite.rom]]
+path = "instr_timing/instr_timing.nes"
+sha256 = "3d1bca14266f1e25b75a34ddd29c9df1ce9c6d990c8663a218f72e7861660fb0"
+
+[[suite.rom]]
+path = "cpu_interrupts_v2/cpu_interrupts.nes"
+sha256 = "ccbac4e824eb96ecfe8b82d331a083be186eb6776aa57e25c52251eaf7df9c4f"
+
+[[suite.rom]]
+path = "apu_test/apu_test.nes"
+sha256 = "00d4722bae1c82a14528dd3220462d3fb9ce4b14b8cec996619dea23e07fef0a"
+
+[[suite.rom]]
+path = "instr_misc/instr_misc.nes"
+sha256 = "b6762e20a285216304dfd2b5e1f192459354b23a5e48b2f5f9fb7cb0dac51243"
+
+[[suite.rom]]
+path = "ppu_vbl_nmi/ppu_vbl_nmi.nes"
+sha256 = "8dbab1be785585c399cf055ef02147b788ab75fd80e81cf9568a2feafc03fb7d"
+
+[[suite]]
+name = "mmc1_banking"
+check = "blargg"
+about = "MMC1 (mapper 1): our own test program (test-roms/mmc1/mmc1.s): the serial port, PRG modes, CHR modes, mirroring, the bit 7 reset, ignored consecutive writes and PRG RAM disable"
+frames = 600
+
+[[suite.rom]]
+path = "gp/mmc1.nes"
+sha256 = "6ec85167645da02e91c06055b67fe353b4831c2a26c8610b2d0b34754adf4a13"
+built_from = "test-roms/mmc1/mmc1.s"
+
+[[suite]]
+name = "mmc3"
+check = "blargg"
+about = "MMC3 (mapper 4): IRQ counter clocking, A12 edges and scanline timing (mmc3_test_2)"
+frames = 600
+
+[[suite.rom]]
+path = "mmc3_test_2/rom_singles/1-clocking.nes"
+sha256 = "b06d8a97f0ca672be92c841d6af7d1e650696e86e9cc0cf6eeb90d67a6ab499b"
+
+[[suite.rom]]
+path = "mmc3_test_2/rom_singles/2-details.nes"
+sha256 = "e7af16c764b119e60effb7b1cfeec3dd8e2e657041283693cdbbeedb4081f1e3"
+
+[[suite.rom]]
+path = "mmc3_test_2/rom_singles/3-A12_clocking.nes"
+sha256 = "b375f15b9f9d372c8084b9c50928be9e41a3ac48be831ce82d203c18891433ad"
+
+[[suite.rom]]
+path = "mmc3_test_2/rom_singles/4-scanline_timing.nes"
+sha256 = "14a220b9d1272acc7a820ab38e9762a7cdf2d54c65e753be87f23dfcaf1bb845"
+known_failure = "the scanline 0 IRQ fires early when sprites use $1000 (check #2); docs/open-questions.md, M1.11"
+known_result = "code 2:"
+
+[[suite.rom]]
+path = "mmc3_test_2/rom_singles/5-MMC3.nes"
+sha256 = "e0824123d60b83868dac1189b28250f8e10376a01be468a5a74aa59937cb32ca"
+
+[[suite.rom]]
+path = "mmc3_test_2/rom_singles/6-MMC3_alt.nes"
+sha256 = "56698b6918453d161a8d4e51f66e363d6966b054939c8176c53c401a6b55269b"
+mmc3_revision = "a"   # the alternate behaviour this ROM tests is MMC3A's
+
+[[suite]]
+name = "mmc3_banking"
+check = "blargg"
+about = "MMC3 (mapper 4): our own test program (test-roms/mmc3/mmc3.s): both PRG modes, both CHR modes, mirroring, two scanline IRQs a frame with the counter reloaded in vblank, and the $E000 acknowledge"
+frames = 600
+
+[[suite.rom]]
+path = "gp/mmc3.nes"
+sha256 = "ff6cc5b0be7542f937535667b23bc70714dc5328064e4598887b5bc72c106e63"
+built_from = "test-roms/mmc3/mmc3.s"
+
+[[suite]]
+name = "read_joy"
+check = "screen"
+about = "Controller 1 ($4016) reads with DMC DMA at every possible timing (read_joy3, CNROM). No ROM in the collection checks $4017"
+frames = 600
+
+[[suite.rom]]
+path = "read_joy3/thorough_test.nes"
+sha256 = "e59de3d542043acd1dbca1e499ea9987b581f8be168ba88603e6e90826f87cf9"
+
+[[suite]]
+name = "instr_misc"
+check = "blargg"
+about = "CPU: absolute,X and branch wrap-around, and the dummy reads of indexed instructions, including from the APU registers"
+frames = 600
+
+[[suite.rom]]
+path = "instr_misc/rom_singles/01-abs_x_wrap.nes"
+sha256 = "892e892b3b5d3526913b5491252f628d987baf44509dd28a7d109efc8a16bacc"
+
+[[suite.rom]]
+path = "instr_misc/rom_singles/02-branch_wrap.nes"
+sha256 = "2e535f572a16ab0e27bf6e076de6aaa2a9885c9ae1b02acda7853810529b24c5"
+
+[[suite.rom]]
+path = "instr_misc/rom_singles/03-dummy_reads.nes"
+sha256 = "9210b8a274c060e0abf9cf7a9f4a140598a8fa01ce852b0a9aef500c9728e822"
+
+[[suite.rom]]
+path = "instr_misc/rom_singles/04-dummy_reads_apu.nes"
+sha256 = "3e4e974a57b82247861576bc855b589fa6d00291ec159f79795c9e3f50c39fef"
+
+[[suite]]
+name = "instr_test_v3"
+check = "blargg"
+about = "CPU: instr_test-v5's predecessor, one ROM per addressing mode, kept because its unofficial-opcode checks differ"
+frames = 1200
+
+[[suite.rom]]
+path = "instr_test-v3/rom_singles/01-implied.nes"
+sha256 = "3093a51eb7f5c7c6af138ab74486e79df2488e6a0814e67e415ae67e1975a367"
+
+[[suite.rom]]
+path = "instr_test-v3/rom_singles/02-immediate.nes"
+sha256 = "5ce057d05b17f7a1548cbb13c80a22a9e9ed46e715f228110fb3c169f98210c8"
+
+[[suite.rom]]
+path = "instr_test-v3/rom_singles/03-zero_page.nes"
+sha256 = "cf6b1f841b593a58e80d607dee25d2826cb2a26e39ff4eb082f21cde7946f96e"
+
+[[suite.rom]]
+path = "instr_test-v3/rom_singles/04-zp_xy.nes"
+sha256 = "248fc480302c9d97aaff693e50fc6658eb3dfc38e17374b91a6b47fcd84d784a"
+
+[[suite.rom]]
+path = "instr_test-v3/rom_singles/05-absolute.nes"
+sha256 = "eb396171be156bdb82caa1f447d883fac95f6e037d25b28c6c1970469caf981b"
+
+[[suite.rom]]
+path = "instr_test-v3/rom_singles/06-abs_xy.nes"
+sha256 = "9267bde58135ac34b959b0b299f4ac7a65a66813edce2266d9d5532b162afa3f"
+
+[[suite.rom]]
+path = "instr_test-v3/rom_singles/07-ind_x.nes"
+sha256 = "9640c36982ad8021a69725926adb410370ac630738d2cfce37f9c143d6ee4c19"
+
+[[suite.rom]]
+path = "instr_test-v3/rom_singles/08-ind_y.nes"
+sha256 = "2154f645e4d58defef3e7023b7456a8d367b381f192a32fcc6a1d7e36c39546e"
+
+[[suite.rom]]
+path = "instr_test-v3/rom_singles/09-branches.nes"
+sha256 = "1ac05f2864cb72824269e3352d2591ad9cadab8d294bbc883a5ba1c29bd6c1d0"
+
+[[suite.rom]]
+path = "instr_test-v3/rom_singles/10-stack.nes"
+sha256 = "16c523a892125d3e496c976c1b5ce239b01a630316c57d47999f11d6dd831883"
+
+[[suite.rom]]
+path = "instr_test-v3/rom_singles/11-jmp_jsr.nes"
+sha256 = "903e341e4e460f8e4633e6bd1d169a865d34008d533fa2561319d88f24d38171"
+
+[[suite.rom]]
+path = "instr_test-v3/rom_singles/12-rts.nes"
+sha256 = "e6e08c5169adf685188ddef5f36a5b433c628ab2e818a329f9537e3de3fffb69"
+
+[[suite.rom]]
+path = "instr_test-v3/rom_singles/13-rti.nes"
+sha256 = "5a834bae00aede3ee9e066338207ca4cbf5d91131fe069f1bf498b8be757dd0e"
+
+[[suite.rom]]
+path = "instr_test-v3/rom_singles/14-brk.nes"
+sha256 = "f803978b90094bda7e7e7194ae7dcb814167733c0baa1e35a6985ee23f650c66"
+
+[[suite.rom]]
+path = "instr_test-v3/rom_singles/15-special.nes"
+sha256 = "7b2f490c2fadf0e2ff6e1582c857e6a75e7c90405fce2b7131d74f9ab73de45d"
+
+[[suite]]
+name = "nes_instr_test"
+check = "blargg"
+about = "CPU: the 2005 predecessor of instr_test, one ROM per addressing mode"
+frames = 900
+
+[[suite.rom]]
+path = "nes_instr_test/rom_singles/01-implied.nes"
+sha256 = "7b2c08954fc82a0cd1796b02ec79afed598d951356921a3a09b47906781ce5f2"
+
+[[suite.rom]]
+path = "nes_instr_test/rom_singles/02-immediate.nes"
+sha256 = "514f9114a1fe95c2baa086a84a962ae83947997517003da849e336838e841399"
+
+[[suite.rom]]
+path = "nes_instr_test/rom_singles/03-zero_page.nes"
+sha256 = "1454d1b3b6ba0d3781b9136ba70173590388216790dcbe6f234f6b5507ebfbaf"
+
+[[suite.rom]]
+path = "nes_instr_test/rom_singles/04-zp_xy.nes"
+sha256 = "e36cba0e33f8b659b7e07911b1e411c5ca8070e7149560ae64e6614e3d5d004a"
+
+[[suite.rom]]
+path = "nes_instr_test/rom_singles/05-absolute.nes"
+sha256 = "d72284f5e2a0b495f50a6207b424bd59b5a1d7bc651ac48a04c761e85442dfb0"
+
+[[suite.rom]]
+path = "nes_instr_test/rom_singles/06-abs_xy.nes"
+sha256 = "f02d67978b30a693e9d6ebd8a31b9f5dbdf92c180366458e18197024a1e9c108"
+
+[[suite.rom]]
+path = "nes_instr_test/rom_singles/07-ind_x.nes"
+sha256 = "1b1d89c04ccd7fa938315c6e98dc35d7b943514ed97f501ea6aa1b8091d99597"
+
+[[suite.rom]]
+path = "nes_instr_test/rom_singles/08-ind_y.nes"
+sha256 = "6e458dbb0f78dd5adcdef20a92a911e58804554478994432fc83e70616296a61"
+
+[[suite.rom]]
+path = "nes_instr_test/rom_singles/09-branches.nes"
+sha256 = "6d675caa8f29a9c695f616b82b6c7cb968fc7e2ca6282035e7255fe42085c8ff"
+
+[[suite.rom]]
+path = "nes_instr_test/rom_singles/10-stack.nes"
+sha256 = "799160a3c982702638b41f5a115bc4286a036ac3f233184dd302aefe1afea6b5"
+
+[[suite.rom]]
+path = "nes_instr_test/rom_singles/11-special.nes"
+sha256 = "1abc8c2164ff09fbaf11e3e302f5783ddef6dea037ba65694fdfd8c5fc8a9966"
+
+[[suite]]
+name = "cpu_reset"
+check = "blargg"
+about = "CPU: register values at power-on and after the reset button, and RAM kept across reset. Exercises the runner's reset path"
+frames = 600
+
+[[suite.rom]]
+path = "cpu_reset/ram_after_reset.nes"
+sha256 = "f1802a5618aaaa0c4d592caa45b0b13c54082af93fc311bda0c27bceacbc7c7f"
+
+[[suite.rom]]
+path = "cpu_reset/registers.nes"
+sha256 = "a30f33fb6c9f56012fba38dc85ddc3dccc06bfc0b25fef7711b63f8207279715"
+
+[[suite]]
+name = "cpu_dummy_reads"
+check = "screen"
+about = "CPU: the dummy reads of indexed and read-modify-write instructions, seen through PPU and controller registers (CNROM)"
+frames = 600
+
+[[suite.rom]]
+path = "cpu_dummy_reads/cpu_dummy_reads.nes"
+sha256 = "db4f91b80c5fbc123e7dcb420fb7fea9b8a18613edf4de7f3d1e3ed95e3117c9"
+
+[[suite]]
+name = "cpu_dummy_writes"
+check = "blargg"
+about = "CPU: the dummy writes of read-modify-write instructions to OAM and PPU memory"
+frames = 900
+
+[[suite.rom]]
+path = "cpu_dummy_writes/cpu_dummy_writes_oam.nes"
+sha256 = "7c1d71a38b2e873d0874add8b823ff39b99151bb29f50096d8021787020c566c"
+
+[[suite.rom]]
+path = "cpu_dummy_writes/cpu_dummy_writes_ppumem.nes"
+sha256 = "f59ac329f4872277ccbeff9dd595b901d861af8d53e8a43dcca93bb86752a6b3"
+
+[[suite]]
+name = "cpu_exec_space"
+check = "blargg"
+about = "CPU: executing code from the PPU and APU register space, with open bus"
+frames = 900
+
+[[suite.rom]]
+path = "cpu_exec_space/test_cpu_exec_space_apu.nes"
+sha256 = "9036b3d64b7f4e0ac7d44ed85eafb4b2f93ffd2ca2ddecc19f1e0d2bec3574fe"
+
+[[suite.rom]]
+path = "cpu_exec_space/test_cpu_exec_space_ppuio.nes"
+sha256 = "9f7f24d420033e032f5da0e1eb721cce1d843e032b31973acddb0255ef479251"
+
+[[suite]]
+name = "cpu_timing"
+check = "screen"
+about = "CPU: cycle count of every official instruction (cpu_timing_test6)"
+frames = 1800
+
+[[suite.rom]]
+path = "cpu_timing_test6/cpu_timing_test.nes"
+sha256 = "6ab4fe8af23b12ca0dfccfc030de3d4069bf2498e3ef20ddcf1ca75555065b85"
+
+[[suite]]
+name = "branch_timing"
+check = "blargg-2005"
+about = "CPU: branch timing, taken and not, across page boundaries"
+frames = 600
+
+[[suite.rom]]
+path = "branch_timing_tests/1.Branch_Basics.nes"
+sha256 = "7b69e3044eaeb86317147a900d1f4a467b666f59d375ec1ba6658233f23786cd"
+
+[[suite.rom]]
+path = "branch_timing_tests/2.Backward_Branch.nes"
+sha256 = "f7966e9b86b04b4adb987439a442e926e9cfe6bb71436dd5dd56f41f9eb029a4"
+
+[[suite.rom]]
+path = "branch_timing_tests/3.Forward_Branch.nes"
+sha256 = "d0fbc6b1899bc948172c45f37a981eb0dade212d7e807cc56efedae93d6f9c9b"
+
+[[suite]]
+name = "vbl_nmi_timing"
+check = "blargg-2005"
+about = "PPU: the 2005 vblank and NMI timing tests, ppu_vbl_nmi's predecessors"
+frames = 900
+
+[[suite.rom]]
+path = "vbl_nmi_timing/1.frame_basics.nes"
+sha256 = "719bf4b4ea9022aad4216b159f59846ea57f98c8bddc5069b70286f5b810e998"
+
+[[suite.rom]]
+path = "vbl_nmi_timing/2.vbl_timing.nes"
+sha256 = "39231f002784b62e5d0ab67735855198b6b62c6c6ef06b0549333cd818879fb2"
+
+[[suite.rom]]
+path = "vbl_nmi_timing/3.even_odd_frames.nes"
+sha256 = "268d5e305ab73a29ff524906f92db7da1944763ea3de464e14a44c5b4199049e"
+
+[[suite.rom]]
+path = "vbl_nmi_timing/4.vbl_clear_timing.nes"
+sha256 = "8552a65de49b677cdf7fd419f5ac51f96766786e1e1442f6f9d62c87f4c15c2c"
+
+[[suite.rom]]
+path = "vbl_nmi_timing/5.nmi_suppression.nes"
+sha256 = "059c8df6a9b41a95e827608f1c0edb496b763e0c2b861f22614f5f228f1e10aa"
+
+[[suite.rom]]
+path = "vbl_nmi_timing/6.nmi_disable.nes"
+sha256 = "4573dcff3c57351b0e6ce76d86334586ba3d1cd6d4f9ec014887e94912f543cf"
+
+[[suite.rom]]
+path = "vbl_nmi_timing/7.nmi_timing.nes"
+sha256 = "26a2475828ef9ebd6178129f530a8aaa6f9f1ddd493616f1524d8323d6e56a4c"
+
+[[suite]]
+name = "ppu_2005"
+check = "blargg-2005-screen"
+about = "PPU: palette RAM, sprite RAM through $2003/$2004/$4014, VRAM access and the read buffer, and vblank clear time. power_up_palette is left out: it compares with one console's power-on palette"
+frames = 600
+
+[[suite.rom]]
+path = "blargg_ppu_tests_2005.09.15b/palette_ram.nes"
+sha256 = "11c1de16c67795b247169819a34b9d4dd46165478d6de19d7cd6e7311e906a80"
+
+[[suite.rom]]
+path = "blargg_ppu_tests_2005.09.15b/sprite_ram.nes"
+sha256 = "81275795ea64dfe22f05e35ef3316e6cf84eba40fc9538fc637a08bf263a3110"
+
+[[suite.rom]]
+path = "blargg_ppu_tests_2005.09.15b/vbl_clear_time.nes"
+sha256 = "1a1d3ae8062ce0d4f1f3eafa35bf3c3e5df94fe198e7630a09678a60b03b73a0"
+
+[[suite.rom]]
+path = "blargg_ppu_tests_2005.09.15b/vram_access.nes"
+sha256 = "a0cde2a3c98d9f62afcba62d4e8f4f4228574ff96ce96fbfdc777e1393c16ee6"
+
+[[suite]]
+name = "ppu_open_bus"
+check = "blargg"
+about = "PPU: the open bus of the PPU registers, and its decay"
+frames = 900
+
+[[suite.rom]]
+path = "ppu_open_bus/ppu_open_bus.nes"
+sha256 = "d4208a3ff6340532dd0fced7f9d408d5b6585853a0ddc9c1f64ee1722ef08e67"
+
+[[suite]]
+name = "oam_read"
+check = "blargg"
+about = "PPU: reading OAM through $2004"
+frames = 600
+
+[[suite.rom]]
+path = "oam_read/oam_read.nes"
+sha256 = "f298973dabeb61ca35007445f7a615f77e87703c958c870986af83b1aabde926"
+
+[[suite]]
+name = "oam_stress"
+check = "blargg"
+about = "PPU: OAM reads and writes through $2003 and $2004, at random addresses"
+frames = 3600
+
+[[suite.rom]]
+path = "oam_stress/oam_stress.nes"
+sha256 = "95882d72a7acabe928fd277e3b3e0372f21ef3d41e36d7d8fb17fc017a356f70"
+
+[[suite]]
+name = "apu_reset"
+check = "blargg"
+about = "APU: state at power-on and after the reset button. Exercises the runner's reset path"
+frames = 600
+
+[[suite.rom]]
+path = "apu_reset/4015_cleared.nes"
+sha256 = "ef83bc2831f0ddb9e563ac5cbcfa21b129f092911ef42adabae7d47b3e990d95"
+
+[[suite.rom]]
+path = "apu_reset/4017_timing.nes"
+sha256 = "0e6072c6dcee98fb73dc7f3af2e48face78be300e8510515ed48dc75d15c1f13"
+
+[[suite.rom]]
+path = "apu_reset/4017_written.nes"
+sha256 = "022bd3b45a733179d9a0a9bf0311d09ca81419d7e7434e6f559e42650b39616b"
+
+[[suite.rom]]
+path = "apu_reset/irq_flag_cleared.nes"
+sha256 = "e2435b213bf21065b7c9c645359500c1c860a7395d12d051232ab14dad1b0bb5"
+
+[[suite.rom]]
+path = "apu_reset/len_ctrs_enabled.nes"
+sha256 = "e05546cbfaa1414d9193b0212084b324ea6b13130af5f171a34c9e574f5ac373"
+
+[[suite.rom]]
+path = "apu_reset/works_immediately.nes"
+sha256 = "c750113762ee375319b1bfbf65c457875dbb194649d7e7b3594fba38eb8eefa1"
+
+[[suite]]
+name = "apu_2005"
+check = "blargg-2005-screen"
+about = "APU: the 2005 length counter, frame IRQ and timing tests, apu_test's predecessors"
+frames = 600
+
+[[suite.rom]]
+path = "blargg_apu_2005.07.30/01.len_ctr.nes"
+sha256 = "e1e3a29ab5369ab84a6f5f2f426c64bde86b9a1d26a906739d43fbf624bb8829"
+
+[[suite.rom]]
+path = "blargg_apu_2005.07.30/02.len_table.nes"
+sha256 = "63cc6a57fae3da5e30df9520d02b723c5b93789e8a6eef6793f876345b245b51"
+
+[[suite.rom]]
+path = "blargg_apu_2005.07.30/03.irq_flag.nes"
+sha256 = "6f71c7e3de4b6c00da92c20a86c1c2095196a55dc201ee3286004ecf33a08c2f"
+
+[[suite.rom]]
+path = "blargg_apu_2005.07.30/04.clock_jitter.nes"
+sha256 = "46fa69b26fe8c24dc1d0b5908f90ab0141972eeb607bd563d28f53d6f4543fe6"
+
+[[suite.rom]]
+path = "blargg_apu_2005.07.30/05.len_timing_mode0.nes"
+sha256 = "606802d6849ccfcf74e907a8512c03a50d443752d1f616e62a242a1fa7eca0ff"
+
+[[suite.rom]]
+path = "blargg_apu_2005.07.30/06.len_timing_mode1.nes"
+sha256 = "0f34e26d56ad235d8d6d63565ed4728fbd0b9b8590a4fd4048eaf64283b429d4"
+
+[[suite.rom]]
+path = "blargg_apu_2005.07.30/07.irq_flag_timing.nes"
+sha256 = "851c9698941d51da34b4bfbc9644aa08ee41b39c6c814cc9b8412c204ea68085"
+
+[[suite.rom]]
+path = "blargg_apu_2005.07.30/08.irq_timing.nes"
+sha256 = "0a20a2b9ca9a8e78d65b500b161294c889399f0ff048edd104b07b15255946ca"
+
+[[suite.rom]]
+path = "blargg_apu_2005.07.30/09.reset_timing.nes"
+sha256 = "bb04f8328a51abb2d17e6e5362b8375f3cbfbf0641733d068b22f23e7dc588e6"
+
+[[suite.rom]]
+path = "blargg_apu_2005.07.30/10.len_halt_timing.nes"
+sha256 = "cbdaa9a5cf9c19ba2360d3349a47922eec25a3e610374d963c422f2b67c57ac9"
+
+[[suite.rom]]
+path = "blargg_apu_2005.07.30/11.len_reload_timing.nes"
+sha256 = "40e633285a4a8710780bfd80d346dee62406f4be161eb75615f469cd9e84e132"
+
+[[suite]]
+name = "pal_apu"
+check = "blargg-2005"
+about = "APU on a PAL console: length counter, frame IRQ and timing, with PAL's frame counter rates"
+frames = 600
+region = "pal"
+
+[[suite.rom]]
+path = "pal_apu_tests/01.len_ctr.nes"
+sha256 = "5e4a07738703232dfefce6a26f12da304f333008c60224b27e7fbadf4a7cdc0c"
+
+[[suite.rom]]
+path = "pal_apu_tests/02.len_table.nes"
+sha256 = "ac5537885469a85e733df1a7a6a0a76a76f157f080c60d04f1128902a45423d4"
+
+[[suite.rom]]
+path = "pal_apu_tests/03.irq_flag.nes"
+sha256 = "e0c04111c61d0fc671990c5c3ac6cb7f57082ad687b5e11d380277c7d75e56d1"
+
+[[suite.rom]]
+path = "pal_apu_tests/04.clock_jitter.nes"
+sha256 = "dc85b14f7ece5e7bd4010b831f5b796debfdf338837c8a29a1d221de8c63776d"
+
+[[suite.rom]]
+path = "pal_apu_tests/05.len_timing_mode0.nes"
+sha256 = "04896f081373f5ab6ce83ce115c5fc0ff823acf831f1499d7d406f4a651e7cbc"
+
+[[suite.rom]]
+path = "pal_apu_tests/06.len_timing_mode1.nes"
+sha256 = "454b1b6339bd2ea27e3f4e8a8de7e2d95e3afc26940a88255e24a033d42d5a05"
+
+[[suite.rom]]
+path = "pal_apu_tests/07.irq_flag_timing.nes"
+sha256 = "c91aa1fc7bcb2638f3b07996270eb38c67e8b0fefa1a0db02a34b2e2ffd883c7"
+
+[[suite.rom]]
+path = "pal_apu_tests/08.irq_timing.nes"
+sha256 = "dee9e8fac623327b04e8160456362cc1fe4ca0b2c8e3f45eedcb6851ebb00aae"
+
+[[suite.rom]]
+path = "pal_apu_tests/10.len_halt_timing.nes"
+sha256 = "c41238ed0e7f4044c21fcd14c99b9e4516611adbee5c5f139d3bb95bebebcec9"
+
+[[suite.rom]]
+path = "pal_apu_tests/11.len_reload_timing.nes"
+sha256 = "1e94a9c0d829378f93b460c2c5f875418490401afd50c30cd05ea22113819909"
+
+[[suite]]
+name = "sprdma_and_dmc_dma"
+check = "blargg"
+about = "OAM DMA ($4014) and DMC DMA at once: the cycles each steals"
+frames = 600
+
+[[suite.rom]]
+path = "sprdma_and_dmc_dma/sprdma_and_dmc_dma.nes"
+sha256 = "db3199bc1b0bdc07a316b3ab999d8fd8bb361456d2154e364c132cb06a26a10f"
+
+[[suite.rom]]
+path = "sprdma_and_dmc_dma/sprdma_and_dmc_dma_512.nes"
+sha256 = "3789f5134b0561b4344e3f4ce08b4d2a416f67435e083917a80d87fdb9d3583c"
+
+[[suite]]
+name = "dmc_dma_during_read"
+check = "screen"
+about = "DMC DMA during reads of $2007 and $4016, and writes of $2007. dma_2007_read and double_2007_read are left out: they print values and a checksum, with no verdict"
+frames = 600
+
+[[suite.rom]]
+path = "dmc_dma_during_read4/dma_2007_write.nes"
+sha256 = "54c75d491c685fb4cfff281bcf3e199a41e95f6c523e2b0607d67ba039f19f84"
+
+[[suite.rom]]
+path = "dmc_dma_during_read4/dma_4016_read.nes"
+sha256 = "c6af72e11c197b449129921a9992db2351d9121bb593b3d0ab71895b646b0ebe"
+
+[[suite.rom]]
+path = "dmc_dma_during_read4/read_write_2007.nes"
+sha256 = "bc5281ca3f12a6d0ac9fe1a5e727ecc3cac5fc6a47f45ac130d644f0dbd522cf"
+
+[[suite]]
+name = "mmc3_irq"
+check = "blargg-2005"
+about = "MMC3 (mapper 4): the 2005 IRQ counter tests, mmc3_test's predecessors"
+frames = 600
+
+[[suite.rom]]
+path = "mmc3_irq_tests/1.Clocking.nes"
+sha256 = "699d0644bd2b6ff4c9ba598c9609f4a3da536594b6363585b2caf82cf337ac88"
+
+[[suite.rom]]
+path = "mmc3_irq_tests/2.Details.nes"
+sha256 = "0af95238b69806c072c28aed0fa8ad812157dfee928a6c9cea8d5420268baade"
+
+[[suite.rom]]
+path = "mmc3_irq_tests/3.A12_clocking.nes"
+sha256 = "3b936e1079f12bdc5e55aa82def017ddc76fd79e3879ff0478d41ca718302e7c"
+
+[[suite.rom]]
+path = "mmc3_irq_tests/4.Scanline_timing.nes"
+sha256 = "3369e8f73a96ec97918c6c9440804a369a19256c57df91e62881555f21528894"
+
+[[suite.rom]]
+path = "mmc3_irq_tests/5.MMC3_rev_A.nes"
+sha256 = "6b662c2d08ee4094d89b6d1ddde330e47f81929fb642dc217b6e4c33f8926944"
+mmc3_revision = "a"
+
+[[suite.rom]]
+path = "mmc3_irq_tests/6.MMC3_rev_B.nes"
+sha256 = "d8a2af42cdafe8046b36109e6f6ff71ca0d7f5d62c7d5953e0aa1d1828a86088"
+
+[[suite]]
+name = "mmc3_v1"
+check = "blargg"
+about = "MMC3 (mapper 4): the first release of mmc3_test, whose sixth ROM tests MMC6"
+frames = 600
+
+[[suite.rom]]
+path = "mmc3_test/1-clocking.nes"
+sha256 = "57c77c66edde8c45e17bda02691dd3c7fd0b270c1ec024dff4e11a7778dfaa37"
+
+[[suite.rom]]
+path = "mmc3_test/2-details.nes"
+sha256 = "89e1f16514aafeee90b5ab849dd73dbf1456dbd363ec2e3b798461125a33068a"
+
+[[suite.rom]]
+path = "mmc3_test/3-A12_clocking.nes"
+sha256 = "dc6779b3d64e27b8d3b2b6dee7a1b528b9b6401ac0e6a9a1d5ab928dcd8ad6bb"
+
+[[suite.rom]]
+path = "mmc3_test/4-scanline_timing.nes"
+sha256 = "0474550dbf811bf1acda2178bf355edd5c100088479a09d881f84994c1690b82"
+known_failure = "the scanline 0 IRQ fires early when sprites use $1000 (check #2); docs/open-questions.md, M1.11"
+known_result = "code 2:"
+
+[[suite.rom]]
+path = "mmc3_test/5-MMC3.nes"
+sha256 = "f714089b5d056a50d63854a8d13359914d20d6144d8b25e48f880116ae73d8fd"
+
+[[suite.rom]]
+path = "mmc3_test/6-MMC6.nes"
+sha256 = "e6bdbadf46cc4bf7b26e496ecab44e60a8b1279c1b9cf16df090c9832adf6943"
+mmc3_revision = "a"

@@ -912,6 +912,10 @@ pub(crate) struct Against {
     /// Hand sites found, by name and address.
     pub found: Vec<(String, u16)>,
     pub missed: Vec<(String, u16)>,
+    /// Hand sites found among the reads `--find` lists for review, whose
+    /// number is stored for later (a timer set at random): found, not
+    /// proposed.
+    pub reviewed: Vec<(String, u16)>,
     /// Proposed sites the mapping doesn't name.
     pub extra: Vec<u16>,
     /// Hand sites whose random byte lies in a found register.
@@ -919,11 +923,12 @@ pub(crate) struct Against {
 }
 
 impl Against {
+    /// The hand sites found, proposed or listed for review.
     pub fn recall(&self) -> f64 {
         if self.hand == 0 {
             return 1.0;
         }
-        self.found.len() as f64 / self.hand as f64
+        (self.found.len() + self.reviewed.len()) as f64 / self.hand as f64
     }
     pub fn precision(&self) -> f64 {
         if self.proposed == 0 {
@@ -933,20 +938,39 @@ impl Against {
     }
 }
 
+/// Whether a hand-written site at `pc` names the found site `s`: the same
+/// instruction, or, for a Z80 random routine's call (`call nn`, 3 bytes),
+/// the instruction just after it, where the draw is A on the return
+/// (docs/formats/draws.md, "Recording an arcade game's draws").
+fn names(s: &Site, pc: u16) -> bool {
+    s.pc == pc || (s.text.starts_with("call ") && s.pc.wrapping_add(3) == pc)
+}
+
 pub(crate) fn against(found: &Found, hand: &[DrawSite]) -> Against {
-    let proposed: BTreeSet<u16> = found.proposed().map(|s| s.pc).collect();
-    let pcs: BTreeSet<u16> = hand.iter().map(|d| d.pc).collect();
+    let proposed: Vec<&Site> = found.proposed().collect();
+    let review: Vec<&Site> = found
+        .sites
+        .iter()
+        .filter(|s| !s.is_step() && !s.decides() && !s.stored.is_empty())
+        .collect();
     let mut a = Against {
         hand: hand.len(),
         proposed: proposed.len(),
         found: Vec::new(),
         missed: Vec::new(),
-        extra: proposed.difference(&pcs).copied().collect(),
+        reviewed: Vec::new(),
+        extra: proposed
+            .iter()
+            .filter(|s| !hand.iter().any(|d| names(s, d.pc)))
+            .map(|s| s.pc)
+            .collect(),
         ram_in_register: 0,
     };
     for d in hand {
-        if proposed.contains(&d.pc) {
+        if proposed.iter().any(|s| names(s, d.pc)) {
             a.found.push((d.site.clone(), d.pc));
+        } else if review.iter().any(|s| names(s, d.pc)) {
+            a.reviewed.push((d.site.clone(), d.pc));
         } else {
             a.missed.push((d.site.clone(), d.pc));
         }
@@ -966,7 +990,7 @@ pub(crate) fn proposal(found: &Found, hand: &[DrawSite]) -> String {
          score_draws = true\n",
     );
     for s in found.proposed() {
-        let named = hand.iter().find(|d| d.pc == s.pc);
+        let named = hand.iter().find(|d| names(s, d.pc));
         let name = named.map_or_else(|| s.name(), |d| d.site.clone());
         out += &format!(
             "\n[[draws]]\nsite = \"{name}\"\npc = 0x{:04X}\nram = 0x{:02X}\nnote = \"{}\"\n",
@@ -1045,7 +1069,7 @@ pub(crate) fn text(found: &Found, vs: Option<&Against>) -> String {
             "against the mapping's {} [[draws]] site{}: recall {}/{} ({:.0}%), precision {}/{} ({:.0}%); {} of {} random bytes in a found register",
             v.hand,
             if v.hand == 1 { "" } else { "s" },
-            v.found.len(),
+            v.found.len() + v.reviewed.len(),
             v.hand,
             100.0 * v.recall(),
             v.found.len(),
@@ -1054,6 +1078,16 @@ pub(crate) fn text(found: &Found, vs: Option<&Against>) -> String {
             v.ram_in_register,
             v.hand
         ));
+        if !v.reviewed.is_empty() {
+            lines.push(format!(
+                "  found among the reads for review: {}",
+                v.reviewed
+                    .iter()
+                    .map(|(n, pc)| format!("{n} ${pc:04X}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
         if !v.missed.is_empty() {
             lines.push(format!(
                 "  missed: {}",
@@ -1110,6 +1144,7 @@ pub(crate) fn to_json(found: &Found, vs: Option<&Against>) -> Json {
             "proposed": v.proposed,
             "found": v.found.iter().map(|(n, pc)| json!({"site": n, "pc": pc})).collect::<Vec<_>>(),
             "missed": v.missed.iter().map(|(n, pc)| json!({"site": n, "pc": pc})).collect::<Vec<_>>(),
+            "reviewed": v.reviewed.iter().map(|(n, pc)| json!({"site": n, "pc": pc})).collect::<Vec<_>>(),
             "extra": v.extra,
             "recall": v.recall(),
             "precision": v.precision(),
@@ -1212,6 +1247,47 @@ mod tests {
         let copy = found.sites.iter().find(|s| s.pc == 0xC038).unwrap();
         assert!(!copy.is_step() && !copy.decides());
         assert_eq!(copy.stored.keys().collect::<Vec<_>>(), vec![&0x40]);
+    }
+
+    /// A Z80 random routine's call matches a hand site at the instruction
+    /// after it; a read stored for later counts as found for review.
+    #[test]
+    fn a_call_site_matches_the_instruction_after_it() {
+        let call = Site {
+            pc: 0x258A,
+            text: "call $5fac, the number it returns".into(),
+            indexes: [(0x259D, BTreeSet::from([1u8, 2, 3]))].into(),
+            ..Site::default()
+        };
+        let stored = Site {
+            pc: 0x09DE,
+            text: "call $5fac, the number it returns".into(),
+            stored: [(0xE4B6, 3u64)].into(),
+            ..Site::default()
+        };
+        let found = Found {
+            frames: 1,
+            registers: Vec::new(),
+            sites: vec![call, stored],
+        };
+        let site = |name: &str, pc| DrawSite {
+            site: name.to_owned(),
+            pc,
+            ram: 0xE390,
+            note: None,
+            soft: false,
+        };
+        let hand = [
+            site("bonus_shake", 0x258D),
+            site("customer_wait_start", 0x09E1),
+            site("none", 0x1234),
+        ];
+        let v = against(&found, &hand);
+        assert_eq!(v.found, vec![("bonus_shake".to_owned(), 0x258D)]);
+        assert_eq!(v.reviewed, vec![("customer_wait_start".to_owned(), 0x09E1)]);
+        assert_eq!(v.missed, vec![("none".to_owned(), 0x1234)]);
+        assert!(v.extra.is_empty());
+        assert!(proposal(&found, &hand).contains("site = \"bonus_shake\"\npc = 0x258A"));
     }
 
     #[test]

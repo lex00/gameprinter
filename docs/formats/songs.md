@@ -1,6 +1,6 @@
 # Songs
 
-Brought from game-printer's docs/formats/songs.md (port wave 4). Links to pages gameprinter doesn't carry yet name game-printer's docs (`~/Documents/checkouts/lex00/game-printer/docs`).
+Brought from game-printer's docs/formats/songs.md (port wave 4).
 
 The `gp-songs` format holds songs and sound effects as notes (`gp_sound::song`). It's the one general representation every source writes and every player and exporter reads. A model's `songs` and `sound-effects` slots hold one (docs/model.md). Captured songs are game content and stay outside the repo, and tests use made-up songs.
 

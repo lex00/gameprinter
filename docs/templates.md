@@ -19,11 +19,14 @@ gp template served ../games/donkey-kong
 | `gp template check DIR --original` | For a template derived from another with stages of its own: each level's cells, ladders and things against the base's, lifted in memory from your ROM of the base, refused when too close, and any data line of the template's built files that the base's lifted files hold ([Originals](#originals)) |
 | `gp template build DIR` | Builds an original template's assets (`source.how = "authored"`) from its `authored.toml`: a data image (to `$GP_HOME/work/images/`), its asset map and the lifted directory (`-o`, by default `$GP_HOME/work/assets/<source>`). Exits 1 when the asset map or the manifest's pins are stale, unless `--write` updates them |
 | `gp template served DIR` | Checks that a package's open version holds none of the original's data, and with `--folder` that every file of a folder to be served holds none: no line of 24 characters or more of the original's lifted files, and no run of 32 of its ROM's bytes, raw or written as numbers. Exits 1 on any find and 2 when a ROM isn't found |
+| `gp template extract DIR` | Turns a template into a working copy from your own ROM, in `$GP_HOME/work/templates/<id>` (or `-o`): the manifest's map pin, the ROM's hash, the lift and its pin, the round trip, the template's files beside the lifted assets, and `gp model check` with every slot filled ([Extraction](#extraction)) |
+| `gp template pack DIR -o OUT` | Writes the template with its asset map inside, as a folder or, for an OUT ending in `.zip`, a zip with fixed times, after the asset-free checks ([Packing](#packing)) |
+| `gp template font DIR` | The font check, for a model with `present.hud.font` ([The font check](#the-font-check)) |
 | `gp package scan DIR` | Sorts every file and field of the package into ours, reference, from the ROM and needs rewrite, and rebuilds the from-the-ROM part from your ROM ([the package scan](package-scan.md)) |
 
 `check` prints each step (`rom`, `asset map`, `lifted`) with its value, and `FAILED:` before the one that doesn't hold. It exits 1 on any, and 2 when it can't run: no `template.toml`, a manifest that doesn't parse or a ROM it can't read. `--json` gives `ok`, `rom_sha256`, `asset_map_sha256`, `lifted_sha256` and `files`.
 
-Not here yet: `gp template extract` (the lift into a work copy of the template), `gp template pack` (a template written with its asset map inside, as a folder or a zip), `gp template derive` and `just derive` (a derived template's files made from its base's), `gp template font` (the font check) and `gp template cites`. A package goes to people through a registry instead of a packed copy ([Run a registry](../site/src/content/docs/registry.md)).
+A package goes to people through a registry ([Run a registry](../site/src/content/docs/registry.md)); `gp template pack` makes a standalone copy of one, as game-printer's did.
 
 ## What a game's folder holds
 
@@ -147,6 +150,34 @@ blank = ["climb_tops_50m", "conveyor_pattern"]   # ... the assets only 50m uses
 | The check | The gate's loads guard (`gate::loads_problems`) fails a patch when `template.toml`'s `[source]` id or `accepts`, or `corpus.toml`'s `[target]` game or ROM, names a ROM the package loads only to play |
 
 `gp roms add` and `gp roms scan` still identify a ROM to play, by its entry in the game's `roms.toml`.
+
+### The font check
+
+`gp template font DIR`, for a template whose model has `present.hud.font`. The font is the charset of the asset the font slot names: each character is drawn with one tile of the bank. It fails when:
+
+- a character the model writes has no glyph: the HUD's counters (the ten digits and their pad), its fixed text and level labels, and each `present.screens` text, such as a two-player turn screen's PLAYER 1;
+- two characters share a tile, or another charset in the asset map draws a character with a different tile from the font's;
+- a written character's glyph draws nothing in the bank (a space aside);
+- other art draws a glyph's tile: a sprite, a body drawn in name-table tiles (Donkey Kong's big foe), an effect or a level's metatiles, as the theme kit cuts them. The space is the blank tile and may be shared.
+
+It lists the bank's free tiles, the ones no art, no picture's layout and no glyph draws. A generator puts a new glyph only in one of those. The last two checks need the template's lifted files: an original's are built in memory from its authored.toml, and a ROM template's are lifted from the ROM it accepts in `$GP_ROM_DIR`, with a captured sprite set taken from `$GP_HOME/work/assets/SOURCE`. Without them those checks are skipped, and the report says why. Pictures' layouts are read through gp-look (game-printer read them through gp-gen-bevy, which is retired). In game-printer `gp template check` ran it too; gameprinter's `check` holds a ROM to the pins only, so run `font` on its own. A model with no HUD font (Tapper's) has nothing to check; an arcade asset map has no charset, so a font on one is refused in words. On 2026-11-13 it gave the same JSON as game-printer's for Moss Hop and Donkey Kong.
+
+## Extraction
+
+| Step | Checks |
+|---|---|
+| `manifest` | The recipe's asset map is there and its SHA-256 is `recipe.asset_map_sha256`. game-printer checked everything its `check` checked in the manifest here; gameprinter's `check` is the pins only |
+| `rom` | The ROM's headerless SHA-256 (a romset's identity) is in `accepts`. A ROM that isn't is named by its ID in a game's roms.toml if it has one, and by its `[[loads]]` entry when it is a ROM to play only, and nothing is written. Without `--rom` the ROM is the first file in `$GP_ROM_DIR` the template accepts, NES images first, then the zips in `arcade/` |
+| `lift` | The template's own asset map lifts the ROM into `assets/` (the `gp assets lift` code, NES or arcade). The lifted files' digest must match `recipe.lifted_sha256` when the manifest pins one |
+| `roundtrip` | The lifted files encode back to the ROM's bytes (the `gp assets pack --check` code) |
+| `copy` | The template's files, as `pack` would write them, go beside `assets/`, so the work directory is itself a template. `.git` and `target/` folders are left out |
+| `model` | `gp model check` on the copy with `--assets`: the schema, the evidence refs (against the package folder, else the git work tree the template is in, or `--root`) and every slot against the lifted assets. Every slot in `slots` must be filled |
+
+The work directory then holds the copy, `assets/` and `extract.toml`. That file records the hashes of the ROM, the asset map and the lifted files. It also lists the slots that are ready and counts the ext hooks with no implementation. `extract` refuses to write inside a git work tree, and replaces files of the names it writes. On Moss Hop it gave the same JSON and the same files as game-printer's; on Donkey Kong (games/donkey-kong) all six steps pass with 78 of 78 slots, and on Tapper all pass with the romset found in `arcade/` and no slots.
+
+## Packing
+
+`pack` writes every file of the template and a copy of the asset map at `recipe/asset-map.toml`, with the manifest's `recipe.asset_map` pointing at it. A zip's entries are sorted and deflated, dated 1980-01-01 with mode 0644, so the same template always packs to the same bytes; `pack` prints the zip's SHA-256. `content_sha256` is a digest of the packed files of the same kind as `lifted_sha256`, and a directory and a zip of one template have the same one. It first runs the asset-free checks, `gp package scan` on a package folder and the pins when an accepted ROM is found, and writes nothing if they fail. Moss Hop packs to the same zip, byte for byte, as with game-printer's `pack`.
 
 ## Limits
 

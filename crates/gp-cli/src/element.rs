@@ -26,9 +26,9 @@
 //! each body come from its lockstep straight through, run here as `gp clip
 //! score` runs it (with the original's draws when the mapping scores them),
 //! and only when the command needs them: `--frame` with `--byte`, or with
-//! `--measure` and `--slot`, runs no model. On an arcade game (port wave
-//! 6) `--byte` and `--frame` are sliced on the main Z80 by
-//! crate::element_z80. The labels are the game's
+//! `--measure` and `--slot`, runs no model. On an arcade game the measure
+//! and frame come from the same lockstep, and the bytes are sliced on the
+//! main Z80 by crate::element_z80. The labels are the game's
 //! `labels.toml` (or `--labels`); the file is read here until wave 1's `gp
 //! labels` lands with its own reader. The original starts through gp-nes.
 
@@ -142,25 +142,7 @@ pub fn inputs(paths: &Paths, a: &InputsArgs) -> Result<Value> {
         .with_context(|| format!("no clip {} in {}'s corpus", a.clip, game.display()))?;
     let (log, start) = clip.log()?;
     let rom = crate::clip_score::rom_of(paths, game, a.rom.as_deref())?;
-    if crate::original::Platform::of_file(&rom) == crate::original::Platform::Arcade {
-        let (byte, frame) = crate::element_z80::check_args(a.byte.as_deref(), a.frame)?;
-        let (names, _, missing) = names_for(game, a.labels.as_deref());
-        let addr = names
-            .resolve(&byte)
-            .with_context(|| format!("no label or address {byte}"))?;
-        let set = gp_arcade::Romset::from_zip(&rom)?;
-        let bytes = crate::element_z80::inputs(&set, &log.frames, start, frame, &[addr], &names)?;
-        return Ok(json!({
-            "schema": INPUTS_SCHEMA,
-            "platform": "arcade",
-            "clip": clip.recipe.id,
-            "clip_name": clip.recipe.name,
-            "frame": frame,
-            "original_frame": start as u64 + frame,
-            "labels_missing": missing,
-            "bytes": bytes,
-        }));
-    }
+    let arcade = crate::original::Platform::of_file(&rom) == crate::original::Platform::Arcade;
     let model_dir = a.model.clone().unwrap_or_else(|| game.clone());
     let mfile = model_dir.join(gp_interp::mapping::MAPPING_FILE);
     let mapping = Mapping::parse(
@@ -283,6 +265,34 @@ pub fn inputs(paths: &Paths, a: &InputsArgs) -> Result<Value> {
         }
     }
     anyhow::ensure!(!targets.is_empty(), "the measure reads no RAM byte");
+
+    // An arcade game: the measure and frame came from the same lockstep;
+    // the bytes are sliced on the main Z80 (crate::element_z80).
+    if arcade {
+        let set = gp_arcade::Romset::from_zip(&rom)?;
+        let addrs: Vec<u16> = targets.iter().map(|t| t.addr).collect();
+        let mut bytes =
+            crate::element_z80::inputs(&set, &log.frames, start_frame, frame, &addrs, &names)?;
+        for (b, t) in bytes.iter_mut().zip(&targets) {
+            b["part"] = json!(t.part);
+        }
+        return Ok(json!({
+            "schema": INPUTS_SCHEMA,
+            "platform": "arcade",
+            "run": a.run,
+            "clip": clip_id,
+            "clip_name": clip_name,
+            "frame": frame,
+            "original_frame": of,
+            "start": start,
+            "measure": if a.byte.is_some() { Value::Null } else { json!(measure) },
+            "entity": a.entity,
+            "slot": slot,
+            "labels": labels_file,
+            "labels_missing": labels_missing,
+            "bytes": bytes,
+        }));
+    }
 
     // Run the original to the frame, keeping each target's last write.
     let inputs = &log.frames[start_frame.min(log.frames.len())..];

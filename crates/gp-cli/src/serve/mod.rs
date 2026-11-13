@@ -43,6 +43,7 @@ mod edits;
 pub(crate) mod freeplay;
 pub(crate) mod game;
 pub(crate) mod generated;
+mod grid;
 mod labels;
 mod ladder;
 mod later;
@@ -57,6 +58,7 @@ mod recordings;
 mod resolve;
 pub(crate) mod scenarios;
 mod select;
+pub(crate) mod tell;
 mod tiles;
 mod variants;
 pub(crate) mod work;
@@ -69,8 +71,10 @@ const MODULES: &[fn() -> Vec<Route>] = &[
     scenarios::routes,
     generated::routes,
     background::routes,
+    grid::routes,
     pages::routes,
     work::routes,
+    tell::routes,
     clip_agent::routes,
     // The inspector's routes (wave 8): the recordings and their views, the
     // game view's lockstep, moments, scenario ladder and point and tell.

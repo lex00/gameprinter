@@ -709,12 +709,44 @@ fn an_agent_finds_moss_hop_generates_art_and_checks_a_publish() {
     assert_eq!(t["tier"], "open");
     assert_eq!(t["ready"], true, "{t}");
     assert_eq!(t["needs"]["extracted"]["matches_pin"], true, "{t}");
-    // game-printer also searched for Super Mario Bros. and by example
-    // (`inspired_by`, `mechanics`), which found its other templates;
-    // gameprinter's repo holds Moss Hop alone.
+    // game-printer also searched for Super Mario Bros., whose template
+    // gameprinter doesn't carry. The mechanic index, provenance and search
+    // by example (docs/originals.md), over the three originals beside
+    // Moss Hop.
+    let (r, err) = c.call("registry_search", json!({ "inspired_by": "mosshop" }));
+    assert!(!err, "{r}");
+    let names: Vec<&str> = r["templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["template"].as_str())
+        .collect();
+    assert_eq!(names, ["badge-in", "swing-state"], "{r}");
+    let (r, _) = c.call(
+        "registry_search",
+        json!({ "mechanics": ["enemy:contact.kick", "player:jump"] }),
+    );
+    assert!(
+        r["templates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|t| t["mechanics"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("enemy:contact.kick"))),
+        "{r}"
+    );
     let (r, _) = c.call("registry_search", json!({ "like": "mosshop" }));
     assert_eq!(r["templates"][0]["template"], "mosshop", "{r}");
     assert_eq!(r["templates"][0]["similarity"], 1.0, "{r}");
+    assert!(
+        r["templates"][0]["taken_by"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("badge-in")),
+        "{r}"
+    );
 
     let (r, err) = c.call(
         "template_fork",

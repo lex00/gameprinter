@@ -1,0 +1,46 @@
+# A model baseline (docs/originals.md): the interpreter plays election_night of swing_state
+# from its start to its goal on this input, with every enemy in place.
+# Recorded by `gp interp reach --record`; `gp interp baselines` checks it.
+format = "0.1.0"
+model = "swing_state"
+level = "election_night"
+description = "Plays election_night from its start to its goal; found by gp interp reach --record"
+recorded = "search"
+frames = 956
+holds = ["a@1-54", "b@1-54", "right@1-54", "a@123-168", "b@123-168", "right@123-168", "a@172-198", "b@172-198", "right@172-198", "right@224-301", "a@256-301", "a@324-335", "right@324-335", "a@367-408", "right@367-408", "a@425-440", "right@425-440", "a@482-535", "left@482-535", "b@537-576", "right@537-576", "a@569-609", "a@615-622", "a@641-667", "b@705-785", "right@705-785", "a@737-785", "a@789-800", "b@789-800", "right@789-800", "a@820-861", "b@820-861", "right@820-861", "a@874-889", "b@874-889", "right@874-889"]
+digest = "905c0ead6d5527ff8ce5f699659c8584483e789e77f3ca302087ac2cdc376da4"
+
+[[expect]]
+frame = 956
+path = "level"
+equals = "election_night"
+
+[[expect]]
+frame = 956
+path = "rules.game.state"
+equals = "rally"
+
+[[expect]]
+frame = 956
+path = "counters.approval"
+equals = "3"
+
+[[expect]]
+frame = 956
+path = "counters.days"
+equals = "125"
+
+[[expect]]
+frame = 956
+path = "counters.donations"
+equals = "0"
+
+[[expect]]
+frame = 956
+path = "counters.rebuttals"
+equals = "2"
+
+[[expect]]
+frame = 956
+path = "counters.stops"
+equals = "1"

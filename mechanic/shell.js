@@ -143,7 +143,7 @@ function refineWork(page) {
   let timer = null;
   let parts = null;
   let mounted = [];
-  const loadParts = Promise.all(["line", "cards", "queue"].map((n) => import(`./refine/${n}.js`)))
+  const loadParts = Promise.all(["line", "cards", "grid", "queue"].map((n) => import(`./refine/${n}.js`)))
     .then((ms) => { parts = ms; })
     .catch(() => undefined);
 
@@ -200,9 +200,9 @@ function refineWork(page) {
           body.innerHTML = "";
           mounted = parts.map((m, i) => {
             const el = document.createElement("div");
-            el.className = `work-${["line", "cards", "queue"][i]}`;
+            el.className = `work-${["line", "cards", "grid", "queue"][i]}`;
             body.append(el);
-            const f = m.refineLine ?? m.refineCards ?? m.refineQueue ?? m.default;
+            const f = m.refineLine ?? m.refineCards ?? m.refineGrid ?? m.refineQueue ?? m.default;
             return f(el, { api: page.api, run: page.game() });
           });
         }

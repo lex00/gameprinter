@@ -1,0 +1,43 @@
+[contract]
+schema = "0.2.0"
+model = "badge_in"
+default = "metric"
+description = "Badge In as written: its floors and rules exact to its own model baselines, the borrowed mechanics within their sources' tolerances, the look free"
+
+[[rule]]
+path = "levels"
+level = "structural"
+note = "Same floors, gaps, spawns and badge readers"
+
+[[rule]]
+path = "rules"
+level = "exact"
+
+[[rule]]
+path = "counters"
+level = "exact"
+
+[[rule]]
+path = "entities.associate.jump"
+level = "metric"
+note = "Moss Hop's jump, held to Moss Hop's tolerances"
+
+[rule.tolerance]
+airtime = 2
+height = "5%"
+
+[[rule]]
+path = "entities[role=enemy]"
+level = "metric"
+note = "Super Mario Bros.' walkers and shell, at the ratios kept, within its 3%"
+
+[rule.tolerance]
+speed = "3%"
+
+[[rule]]
+path = "assets"
+level = "style"
+
+[[rule]]
+path = "entities[*].sprite"
+level = "style"

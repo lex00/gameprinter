@@ -1,0 +1,71 @@
+# The theme kit for badge-in (docs/theme-kit.md), written by `gp theme kit` from
+# the model. It names no character and holds no art: describe and draw
+# each slot from its role and description, and replace each sound role
+# with an original sound. .claude/skills/theme-generation/SKILL.md says how.
+format = "0.1.0"
+game = "badge-in"
+model = "badge_in"
+screen = [256, 240]
+pixel_aspect = "1"
+slots = "1c1e6bae459bc634204c49d09084fc452c8493e09707b5255a6a979fe8d2d1aa"
+sound = []
+
+[[art]]
+id = "entity.player_358"
+kind = "sprite"
+role = "player"
+size = [16, 16]
+frames = 1
+frame_names = ["base"]
+timing = "one picture"
+colors = "3 colors and transparent in each 8 by 8 tile (a console palette); paint flat shapes in a dark, a middle and a light tone"
+anchor = "stands on the body's bottom edge; drawn facing right, mirrored to face left"
+description = "the hero, the one the player moves, 16 by 16 pixels: a mid-level with a lanyard and somewhere to be"
+
+[[art]]
+id = "entity.collectible_716"
+kind = "sprite"
+role = "collectible"
+size = [16, 16]
+frames = 1
+frame_names = ["base"]
+timing = "one picture"
+colors = "3 colors and transparent in each 8 by 8 tile (a console palette); paint flat shapes in a dark, a middle and a light tone"
+anchor = "stands on the body's bottom edge"
+description = "something the hero picks up, 16 by 16 pixels: a cup of office"
+
+[[art]]
+id = "entity.enemy_123"
+kind = "sprite"
+role = "enemy"
+size = [16, 16]
+frames = 1
+frame_names = ["base"]
+timing = "one picture"
+colors = "3 colors and transparent in each 8 by 8 tile (a console palette); paint flat shapes in a dark, a middle and a light tone"
+anchor = "stands on the body's bottom edge; drawn facing right, mirrored to face left"
+description = "an enemy that harms the hero, 16 by 16 pixels: toward you to ask whether you have a minute. one delegates it"
+
+[[art]]
+id = "entity.enemy_114"
+kind = "sprite"
+role = "enemy"
+size = [16, 16]
+frames = 1
+frame_names = ["base"]
+timing = "one picture"
+colors = "3 colors and transparent in each 8 by 8 tile (a console palette); paint flat shapes in a dark, a middle and a light tone"
+anchor = "stands on the body's bottom edge; drawn facing right, mirrored to face left"
+description = "an enemy that harms the hero, 16 by 16 pixels: a on casters. it jams; kicked, it slides across the floor and takes out anyone its way"
+
+[[art]]
+id = "entity.projectile_756"
+kind = "sprite"
+role = "projectile"
+size = [16, 16]
+frames = 1
+frame_names = ["base"]
+timing = "one picture"
+colors = "3 colors and transparent in each 8 by 8 tile (a console palette); paint flat shapes in a dark, a middle and a light tone"
+anchor = "stands on the body's bottom edge"
+description = "something thrown or fired, 16 by 16 pixels: an email to the whole company, flying left at head height. it unsubscribes"

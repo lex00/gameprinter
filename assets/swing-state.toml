@@ -1,0 +1,91 @@
+# Asset map for Swing State, an original template (docs/originals.md). Written by
+# gp template build from the template's authored.toml; don't edit it by hand.
+# The offsets are into the data image the build makes, which holds the
+# authored assets one after another and no code.
+schema = 1
+source = "swing-state"
+title = "Swing State"
+sha256 = "3bd14f0bad9ee2bff512bfeed9bf7a40660e579d73a68e80eb690e5ef3143ab7"
+
+[[asset]]
+name = "tiles"
+format = "chr-2bpp"
+region = "chr"
+offset = 0x0000
+tiles = 256
+tiles_per_row = 16
+
+[[asset]]
+name = "palettes"
+format = "palette"
+region = "prg"
+offset = 0x0000
+count = 8
+
+[[asset]]
+name = "metatiles"
+format = "metatiles"
+region = "prg"
+offset = 0x0020
+count = 8
+names = ["night sky", "stage floor", "bunting", "lectern", "crowd barrier", "campaign banner", "victory podium, left", "victory podium, right"]
+property = [
+  { name = "solid", region = "prg", offset = 0x0040 },
+]
+
+[[asset]]
+name = "pollsters_town_hall"
+format = "table"
+count = 1
+column = [
+  { name = "start", region = "prg", offset = 0x0048, hi_offset = 0x0049 },
+  { name = "end", region = "prg", offset = 0x004a, hi_offset = 0x004b },
+]
+
+[[asset]]
+name = "pollsters_debate_stage"
+format = "table"
+count = 2
+column = [
+  { name = "start", region = "prg", offset = 0x004c, hi_offset = 0x004e },
+  { name = "end", region = "prg", offset = 0x0050, hi_offset = 0x0052 },
+]
+
+[[asset]]
+name = "pollsters_election_night"
+format = "table"
+count = 1
+column = [
+  { name = "start", region = "prg", offset = 0x0054, hi_offset = 0x0055 },
+  { name = "end", region = "prg", offset = 0x0056, hi_offset = 0x0057 },
+]
+
+[[asset]]
+name = "town_hall"
+format = "level-grid"
+region = "prg"
+offset = 0x0058
+width = 56
+height = 15
+legend = ".#=HU~[]"
+metatiles = "metatiles"
+
+[[asset]]
+name = "debate_stage"
+format = "level-grid"
+region = "prg"
+offset = 0x03a0
+width = 64
+height = 15
+legend = ".#=HU~[]"
+metatiles = "metatiles"
+
+[[asset]]
+name = "election_night"
+format = "level-grid"
+region = "prg"
+offset = 0x0760
+width = 72
+height = 15
+legend = ".#=HU~[]"
+metatiles = "metatiles"

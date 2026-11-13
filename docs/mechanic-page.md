@@ -15,6 +15,19 @@ in this repo, plain HTML, CSS and JavaScript, game-printer's page
 - REFINE: gp serve's background work (`/api/capture/GAME/background`): what
   runs now with its bars, what finished, the questions, the clips scored.
   Its parts come from `mechanic/refine/` when they are there.
+  Among them THE GRID (`mechanic/refine/grid.js`, game-printer's
+  GridHeat, over `/api/capture/GAME/grid` from
+  `crates/gp-cli/src/serve/grid.rs`): the game's clips as a heatmap of
+  the model's parts (its mechanics, entity kinds and events) by contexts
+  (a level and the mechanic session a clip came from), each cell colored
+  by its clips' scores on the model as it stands (matches, close,
+  differs, being fixed, needs you, waiting, empty). The pointer on a cell
+  says which it is; a click opens its clip on CLIPS. Under it, the empty
+  cell to fill next, by game-printer's priorities (most doubt around it,
+  then a context nothing covers yet), as the clip to record next.
+  game-printer's grid also made that clip itself; here the clips come
+  from the mechanic sessions through `gp corpus import`, so "clips in
+  flight" is kept for when it does.
 - PLAY: the rebuild alone with its settings (once FREE PLAY).
 - THEMES: the game's themes in the person's registry and its theme kit.
 
@@ -152,8 +165,8 @@ shown clip's measured jumps. Both ask Laya on 127.0.0.1:7720. One already
 answering there is used as it is, whoever started it. Else the tool asks
 `gp serve` (`POST /api/laya/start` at `$GP_SERVE_URL`, by default
 127.0.0.1:7710) to start it: gp serve runs scripts/laya/serve.mjs on the
-install already there (`$LAYA_DIR`, `$GP_HOME/work/laya`, else
-`~/.game-printer/work/laya`, with the weights cached in
+install already there (`$LAYA_DIR`, else `$GP_HOME/work/laya`, with the
+weights cached in
 `~/.cache/receptron-laya`), waits until it answers, and stops it when gp
 serve stops; `GET /api/laya` says which. With no gp serve running the tool
 starts Laya for itself and stops it when it ends. Nothing is installed by
@@ -179,7 +192,7 @@ the row. The tools, in order:
 |---|---|
 | corpus | The corpus plan's clips, each play once, the test looked for inside each clip |
 | script | The row's `try` steps (probe steps) from its `from` start |
-| autoplay | gp-arcade's autoplay example with `--search` (arcade): once from power-on, then on from the row's near point, a save point |
+| autoplay | Tapper's auto-player, `gp mechanic autoplay --search`, which ships inside gp (arcade; `--autoplay` or $GP_AUTOPLAY name another): once from power-on, then on from the row's near point, a save point |
 | search | Seeded presses from the row's near point, the generator `gp capture dense` uses |
 | demo | `gp mechanic demo` with Laya (NES), when Laya answers |
 

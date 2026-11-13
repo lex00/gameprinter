@@ -1,9 +1,9 @@
 //! An animated PNG written frame by frame, each frame as the rectangle
-//! that changed since the one before: `gp theme video`'s output.
+//! that changed since the one before: `gp theme video`'s and `gp video`'s
+//! output.
 //!
 //! Brought from game-printer's crates/gp-cli/src/video.rs (`Apng` and
-//! `changed`) without the rest of `gp video`, which gameprinter has no
-//! command for.
+//! `changed`, with their tests).
 
 use anyhow::Result;
 
@@ -85,5 +85,42 @@ impl<W: std::io::Write> Apng<W> {
     pub(crate) fn finish(self) -> Result<()> {
         self.writer.finish()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changed_finds_the_smallest_rectangle() {
+        let (w, h) = (4, 3);
+        let a = vec![0u8; w * h * 3];
+        let mut b = a.clone();
+        assert_eq!(changed(&a, &b, w, h), None);
+        b[(w + 1) * 3] = 9; // (1, 1)
+        b[(2 * w + 2) * 3 + 2] = 9; // (2, 2)
+        assert_eq!(changed(&a, &b, w, h), Some((1, 1, 2, 2)));
+    }
+
+    #[test]
+    fn writes_a_readable_animation() {
+        let mut bytes = Vec::new();
+        let mut apng = Apng::new(&mut bytes, 2, 2, 3, (1000, 60099)).unwrap();
+        let frames = [[0u8; 12], [0u8; 12], {
+            let mut f = [0u8; 12];
+            f[9] = 200;
+            f
+        }];
+        for f in &frames {
+            apng.frame(f).unwrap();
+        }
+        apng.finish().unwrap();
+        let decoder = png::Decoder::new(std::io::Cursor::new(&bytes));
+        let reader = decoder.read_info().unwrap();
+        let info = reader.info();
+        let control = info.animation_control().unwrap();
+        assert_eq!((control.num_frames, control.num_plays), (3, 1));
+        assert_eq!((info.width, info.height), (2, 2));
     }
 }

@@ -1,6 +1,6 @@
 # Tracks, version 0
 
-Brought from game-printer's docs/formats/tracks.md (port wave 4). Links to pages gameprinter doesn't carry yet name game-printer's docs (`~/Documents/checkouts/lex00/game-printer/docs`).
+Brought from game-printer's docs/formats/tracks.md (port wave 4).
 
 `gp track` finds a game's objects from a recording, with no hand-written mapping: it follows each sprite object through the frames and finds the RAM bytes that hold its position. Bytes that repeat at a fixed stride become object slots. The output is a list of tracks and a proposed `[slots]` section ([state mapping](state-mapping.md#slots)). `crates/gp-track` implements it and `crates/gp-cli/src/track.rs` feeds it a recording's frame trace ([recording format](recording.md#frame-trace)), so it needs no ROM and no runtime.
 

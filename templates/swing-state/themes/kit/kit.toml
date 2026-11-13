@@ -1,0 +1,95 @@
+# The theme kit for swing-state (docs/theme-kit.md), written by `gp theme kit` from
+# the model. It names no character and holds no art: describe and draw
+# each slot from its role and description, and replace each sound role
+# with an original sound. .claude/skills/theme-generation/SKILL.md says how.
+format = "0.1.0"
+game = "swing-state"
+model = "swing_state"
+screen = [256, 240]
+pixel_aspect = "1"
+slots = "a808945093f5efa4a7c32cc3c45d2793226c065117ffdbb926415fe984a77d57"
+sound = []
+
+[[art]]
+id = "entity.projectile_330"
+kind = "sprite"
+role = "projectile"
+size = [16, 16]
+frames = 1
+frame_names = ["base"]
+timing = "one picture"
+colors = "3 colors and transparent in each 8 by 8 tile (a console palette); paint flat shapes in a dark, a middle and a light tone"
+anchor = "stands on the body's bottom edge; drawn facing right, mirrored to face left"
+description = "something thrown or fired, 16 by 16 pixels: a thirty-second spot, aimed at the it runs a correction"
+
+[[art]]
+id = "entity.player_171"
+kind = "sprite"
+role = "player"
+size = [16, 16]
+frames = 1
+frame_names = ["base"]
+timing = "one picture"
+colors = "3 colors and transparent in each 8 by 8 tile (a console palette); paint flat shapes in a dark, a middle and a light tone"
+anchor = "stands on the body's bottom edge; drawn facing right, mirrored to face left"
+description = "the hero, the one the player moves, 16 by 16 pixels: the message and the move"
+
+[[art]]
+id = "entity.collectible_506"
+kind = "sprite"
+role = "collectible"
+size = [16, 16]
+frames = 1
+frame_names = ["base"]
+timing = "one picture"
+colors = "3 colors and transparent in each 8 by 8 tile (a console palette); paint flat shapes in a dark, a middle and a light tone"
+anchor = "stands on the body's bottom edge"
+description = "something the hero picks up, 16 by 16 pixels"
+
+[[art]]
+id = "entity.enemy_812"
+kind = "sprite"
+role = "enemy"
+size = [16, 16]
+frames = 1
+frame_names = ["base"]
+timing = "one picture"
+colors = "3 colors and transparent in each 8 by 8 tile (a console palette); paint flat shapes in a dark, a middle and a light tone"
+anchor = "stands on the body's bottom edge; drawn facing right, mirrored to face left"
+description = "an enemy that harms the hero, 16 by 16 pixels: up and down shouting. they keep shouting"
+
+[[art]]
+id = "entity.enemy_563"
+kind = "sprite"
+role = "enemy"
+size = [16, 16]
+frames = 1
+frame_names = ["base"]
+timing = "one picture"
+colors = "3 colors and transparent in each 8 by 8 tile (a console palette); paint flat shapes in a dark, a middle and a light tone"
+anchor = "stands on the body's bottom edge; drawn facing right, mirrored to face left"
+description = "an enemy that harms the hero, 16 by 16 pixels: a who has stopped hopping"
+
+[[art]]
+id = "entity.enemy_949"
+kind = "sprite"
+role = "enemy"
+size = [16, 16]
+frames = 1
+frame_names = ["base"]
+timing = "one picture"
+colors = "3 colors and transparent in each 8 by 8 tile (a console palette); paint flat shapes in a dark, a middle and a light tone"
+anchor = "stands on the body's bottom edge; drawn facing right, mirrored to face left"
+description = "an enemy that harms the hero, 16 by 16 pixels: the same short beat with a clipboard"
+
+[[art]]
+id = "entity.enemy_350"
+kind = "sprite"
+role = "enemy"
+size = [16, 16]
+frames = 1
+frame_names = ["base"]
+timing = "one picture"
+colors = "3 colors and transparent in each 8 by 8 tile (a console palette); paint flat shapes in a dark, a middle and a light tone"
+anchor = "stands on the body's bottom edge"
+description = "an enemy that harms the hero, 16 by 16 pixels: from behind a lectern with a take, and sinks back. while the is close"

@@ -124,6 +124,11 @@ pub enum Anchor {
     Right,
     Top,
     Bottom,
+    /// A y that counts up the screen (an arcade board's, as Tapper's), read
+    /// from the box's top: the byte plus the screen y is the same number.
+    TopUp,
+    /// The same from the box's bottom.
+    BottomUp,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -158,7 +163,7 @@ const X_OPTS: [Opt; 6] = [
         camera: Camera::None,
     },
 ];
-const Y_OPTS: [Opt; 2] = [
+const Y_OPTS: [Opt; 4] = [
     Opt {
         anchor: Anchor::Top,
         camera: Camera::None,
@@ -167,18 +172,20 @@ const Y_OPTS: [Opt; 2] = [
         anchor: Anchor::Bottom,
         camera: Camera::None,
     },
+    Opt {
+        anchor: Anchor::TopUp,
+        camera: Camera::None,
+    },
+    Opt {
+        anchor: Anchor::BottomUp,
+        camera: Camera::None,
+    },
 ];
 
 impl Opt {
     /// The screen position plus the scroll, mod 256.
     fn value(self, obs: &Obs, seen: &Seen) -> u8 {
-        let edge = match self.anchor {
-            Anchor::Left => obs.x0,
-            Anchor::Right => obs.x1,
-            Anchor::Top => obs.y0,
-            Anchor::Bottom => obs.y1,
-        };
-        (i32::from(edge) + camera_at(self.camera, obs.frame, seen)) as u8
+        (edge(obs, self.anchor) + camera_at(self.camera, obs.frame, seen)) as u8
     }
 }
 
@@ -476,14 +483,17 @@ fn distinct(values: &[u8]) -> usize {
         .count()
 }
 
-/// The value an anchor reads from an observation, for the slot pass.
+/// The value an anchor reads from an observation: the edge's screen
+/// position, or its negative for a y that counts up the screen.
 pub fn edge(obs: &Obs, anchor: Anchor) -> i32 {
-    i32::from(match anchor {
-        Anchor::Left => obs.x0,
-        Anchor::Right => obs.x1,
-        Anchor::Top => obs.y0,
-        Anchor::Bottom => obs.y1,
-    })
+    match anchor {
+        Anchor::Left => i32::from(obs.x0),
+        Anchor::Right => i32::from(obs.x1),
+        Anchor::Top => i32::from(obs.y0),
+        Anchor::Bottom => i32::from(obs.y1),
+        Anchor::TopUp => -i32::from(obs.y0),
+        Anchor::BottomUp => -i32::from(obs.y1),
+    }
 }
 
 #[cfg(test)]

@@ -59,6 +59,7 @@
 //! them. The MCR board itself is one module, `mcr`.
 
 pub mod attotime;
+pub mod autoplay;
 pub mod canonical;
 pub mod ctc;
 pub mod dasm;

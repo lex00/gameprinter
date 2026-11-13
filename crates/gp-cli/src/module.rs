@@ -463,7 +463,40 @@ fn work_dir(name: &str) -> Result<PathBuf> {
     Ok(work.canonicalize()?)
 }
 
+/// Where a build's Cargo.lock comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LockFrom {
+    /// The package's own, as committed (`--locked`).
+    Package,
+    /// The kit's, trimmed to what the build uses and written back to the
+    /// package (`--update-lock`).
+    Update,
+    /// The kit's, trimmed, for this build only: the package's lock is left
+    /// as it is.
+    Kit,
+}
+
 pub fn build(dir: &Path, kit_dir: &Path, out: &Path, update_lock: bool) -> Result<Outcome> {
+    build_with(
+        dir,
+        kit_dir,
+        out,
+        if update_lock {
+            LockFrom::Update
+        } else {
+            LockFrom::Package
+        },
+    )
+}
+
+pub(crate) fn build_with(
+    dir: &Path,
+    kit_dir: &Path,
+    out: &Path,
+    from: LockFrom,
+) -> Result<Outcome> {
+    let update_lock = from == LockFrom::Update;
+    let kit_lock_only = from == LockFrom::Kit;
     let dir = dir
         .canonicalize()
         .with_context(|| dir.display().to_string())?;
@@ -501,7 +534,7 @@ pub fn build(dir: &Path, kit_dir: &Path, out: &Path, update_lock: bool) -> Resul
         });
     }
     let lock_file = dir.join("Cargo.lock");
-    if !update_lock && !lock_file.exists() {
+    if from == LockFrom::Package && !lock_file.exists() {
         bail!(
             "{} is missing; make it once with --update-lock and commit it",
             lock_file.display()
@@ -529,7 +562,7 @@ pub fn build(dir: &Path, kit_dir: &Path, out: &Path, update_lock: bool) -> Resul
         format!("crates/{SLOT}/Cargo.toml"),
         slot_manifest(&ext)?.into_bytes(),
     );
-    let lock = if update_lock {
+    let lock = if update_lock || kit_lock_only {
         kit_lock
     } else {
         fs::read(&lock_file)?
@@ -537,7 +570,7 @@ pub fn build(dir: &Path, kit_dir: &Path, out: &Path, update_lock: bool) -> Resul
     files.insert("Cargo.lock".into(), lock);
     write_tree(&files, &src)?;
 
-    if update_lock {
+    if update_lock || kit_lock_only {
         let mut c = sandboxed(
             &work,
             &toolchain,
@@ -545,7 +578,9 @@ pub fn build(dir: &Path, kit_dir: &Path, out: &Path, update_lock: bool) -> Resul
         )?;
         c.current_dir(&src);
         run(&mut c, "cargo metadata in the sandbox")?;
-        fs::write(&lock_file, fs::read(src.join("Cargo.lock"))?)?;
+        if update_lock {
+            fs::write(&lock_file, fs::read(src.join("Cargo.lock"))?)?;
+        }
     }
 
     let flags = format!("-Clink-arg=--max-memory={MAX_MEMORY}");
@@ -685,6 +720,106 @@ pub fn test_hooks(dir: &Path, kit_dir: &Path) -> Result<Outcome> {
         text: format!("{krate}: the tests fail:\n{tail}"),
         exit: 1,
     })
+}
+
+/// A short hash of the running gp's binary: what names its kit.
+fn own_exe_key() -> Result<String> {
+    static KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    if let Some(k) = KEY.get() {
+        return Ok(k.clone());
+    }
+    let exe = std::env::current_exe().context("finding gp's own binary")?;
+    let bytes = fs::read(&exe).with_context(|| exe.display().to_string())?;
+    let k = blake3::hash(&bytes).to_hex()[..16].to_owned();
+    Ok(KEY.get_or_init(|| k).clone())
+}
+
+/// The running gp's module kit, made once (`gp game kit`) into
+/// `home/work/module-kit/<gp's hash>` and reused after.
+pub(crate) fn own_kit(home: &Path) -> Result<PathBuf> {
+    let dir = home.join("work").join("module-kit").join(own_exe_key()?);
+    if dir.join("Cargo.lock").is_file() {
+        return Ok(dir);
+    }
+    let tmp = dir.with_extension(format!("tmp{}", std::process::id()));
+    kit(&tmp).context("making this gp's module kit")?;
+    // Another gp may have made it meanwhile; theirs is the same.
+    if fs::rename(&tmp, &dir).is_err() && !dir.join("Cargo.lock").is_file() {
+        bail!("couldn't move the kit to {}", dir.display());
+    }
+    Ok(dir)
+}
+
+/// The module for the game package in `dir`, built from this gp's kit
+/// whenever the hook code, the package's lock or the kit changed, and kept
+/// as `home/work/modules/<key>.wasm`. A package whose Cargo.lock no longer
+/// fits the kit is built with the kit's lock, and says so. `None` for a
+/// package without hook code. Returns the module and what was done.
+pub(crate) fn built_for(home: &Path, dir: &Path) -> Result<Option<(PathBuf, String)>> {
+    static DONE: std::sync::Mutex<BTreeMap<PathBuf, (PathBuf, String)>> =
+        std::sync::Mutex::new(BTreeMap::new());
+    let dir = dir
+        .canonicalize()
+        .with_context(|| dir.display().to_string())?;
+    let has_hooks = read_table(&dir.join("package.toml"))
+        .ok()
+        .is_some_and(|m| m.get("hooks").is_some());
+    if !has_hooks {
+        return Ok(None);
+    }
+    let Some(code) = crate::package::hook_code(&dir)? else {
+        return Ok(None);
+    };
+    if let Some(d) = DONE.lock().map_err(|_| anyhow!("poisoned"))?.get(&dir) {
+        return Ok(Some(d.clone()));
+    }
+    let kit_dir = own_kit(home)?;
+    let kit_hash = tree_hash(&kit_dir)?;
+    let lock = fs::read(dir.join("Cargo.lock")).unwrap_or_default();
+    let key = blake3::hash(
+        format!(
+            "module 1\n{code}\n{kit_hash}\n{}",
+            blake3::hash(&lock).to_hex()
+        )
+        .as_bytes(),
+    )
+    .to_hex()[..24]
+        .to_owned();
+    let out = home
+        .join("work")
+        .join("modules")
+        .join(format!("{key}.wasm"));
+    let note_file = out.with_extension("txt");
+    let found = if out.is_file() {
+        let said = fs::read_to_string(&note_file).unwrap_or_default();
+        (out, format!("module {key} reused{said}"))
+    } else {
+        let tmp = out.with_extension(format!("tmp{}", std::process::id()));
+        let built = build_with(&dir, &kit_dir, &tmp, LockFrom::Package);
+        let said = match built {
+            Ok(o) if o.exit == 0 => String::new(),
+            Ok(o) => bail!("{}", o.text),
+            Err(e) => {
+                let first = format!("{e:#}");
+                if !first.contains("lock") {
+                    return Err(e);
+                }
+                let o = build_with(&dir, &kit_dir, &tmp, LockFrom::Kit)
+                    .with_context(|| format!("with the package's lock: {first}"))?;
+                if o.exit != 0 {
+                    bail!("{}", o.text);
+                }
+                "; the package's Cargo.lock doesn't fit this gp's kit, so it was built with the kit's (gp game build --update-lock writes it)".to_owned()
+            }
+        };
+        fs::rename(&tmp, &out)?;
+        fs::write(&note_file, &said)?;
+        (out, format!("module {key} built from this gp's kit{said}"))
+    };
+    DONE.lock()
+        .map_err(|_| anyhow!("poisoned"))?
+        .insert(dir, found.clone());
+    Ok(Some(found))
 }
 
 pub fn hash(file: &Path) -> Result<Outcome> {

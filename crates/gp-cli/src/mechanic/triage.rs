@@ -9,7 +9,7 @@
 //! |---|---|
 //! | `corpus` | Replays the corpus plan's clips (the same play once for all clips that share it) and looks for the test inside each clip |
 //! | `script` | Plays the row's `try` steps (`gp mechanic probe`'s steps) from its `from` start |
-//! | `autoplay` | Runs gp-arcade's autoplay example (`--search`) from power-on once, and from each row's near point (a save point) on, and looks in its logs (arcade only) |
+//! | `autoplay` | Runs Tapper's auto-player, `gp mechanic autoplay --search` (gp_arcade::autoplay, inside gp), from power-on once, and from each row's near point (a save point) on, and looks in its logs (arcade only) |
 //! | `search` | Seeded presses from the row's near points, as `gp capture dense`'s generator makes them, kept when the test holds |
 //! | `demo` | `gp mechanic demo` with Laya (NES only, when Laya answers) |
 //!
@@ -396,7 +396,7 @@ pub(crate) struct Args<'a> {
     pub budget: u64,
     /// How many of the leads to triage (NES only).
     pub leads: usize,
-    /// gp-arcade's autoplay example; by default found beside gp's build.
+    /// An auto-player to run instead of gp's own `gp mechanic autoplay`.
     pub autoplay: Option<&'a Path>,
     /// Frames autoplay plays from power-on.
     pub autoplay_frames: usize,
@@ -454,28 +454,42 @@ fn start_of(
     Ok(log.frames[..n].to_vec())
 }
 
-/// The autoplay example's binary: given, or beside gp's own build.
-fn autoplay_bin(given: Option<&Path>) -> Option<PathBuf> {
+/// The auto-player triage runs: a program, the arguments before its own,
+/// and how it was found, which the triage's report says.
+#[derive(Debug, Clone)]
+struct AutoplayBin {
+    program: PathBuf,
+    pre: Vec<String>,
+    said: String,
+}
+
+/// The auto-player: `--autoplay`, else $GP_AUTOPLAY, else this gp's own
+/// `gp mechanic autoplay` (gp_arcade::autoplay), which every published gp
+/// carries.
+fn autoplay_bin(given: Option<&Path>) -> Option<AutoplayBin> {
+    let other = |p: PathBuf, how: &str| AutoplayBin {
+        said: format!("{} ({how})", p.display()),
+        program: p,
+        pre: Vec::new(),
+    };
     if let Some(p) = given {
-        return Some(p.to_path_buf());
+        return Some(other(p.to_path_buf(), "--autoplay"));
     }
     if let Some(p) = std::env::var_os("GP_AUTOPLAY") {
-        return Some(PathBuf::from(p));
+        return Some(other(PathBuf::from(p), "$GP_AUTOPLAY"));
     }
     let exe = std::env::current_exe().ok()?;
-    let dir = exe.parent()?;
-    [
-        dir.join("examples/autoplay"),
-        dir.join("../release/examples/autoplay"),
-    ]
-    .into_iter()
-    .find(|p| p.is_file())
+    Some(AutoplayBin {
+        said: format!("{} mechanic autoplay (this gp's own)", exe.display()),
+        program: exe,
+        pre: vec!["mechanic".into(), "autoplay".into()],
+    })
 }
 
 /// Runs autoplay with `--search` into the triage's folder, once for the same
 /// asking: from power-on, or on from `prefix` (a save point's frames).
 fn autoplay(
-    bin: &Path,
+    bin: &AutoplayBin,
     rom_file: &Path,
     dir: &Path,
     board: &Board,
@@ -492,8 +506,9 @@ fn autoplay(
     let out = dir.join(format!("autoplay-{key}"));
     let input = out.with_extension("input");
     if !input.is_file() {
-        let mut cmd = std::process::Command::new(bin);
-        cmd.arg("--rom")
+        let mut cmd = std::process::Command::new(&bin.program);
+        cmd.args(&bin.pre)
+            .arg("--rom")
             .arg(rom_file)
             .arg("--out")
             .arg(&out)
@@ -510,7 +525,7 @@ fn autoplay(
             .stderr(std::process::Stdio::null());
         let mut child = cmd
             .spawn()
-            .with_context(|| format!("running {}", bin.display()))?;
+            .with_context(|| format!("running {}", bin.said))?;
         let until = Instant::now() + Duration::from_secs(secs);
         loop {
             if child.try_wait()?.is_some() {
@@ -1026,7 +1041,8 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
             }
             _ => {
                 for &k in &ap_items {
-                    tried[k].push(json!({"tool": "autoplay", "said": "no autoplay binary (cargo build --release -p gp-arcade --example autoplay, or GP_AUTOPLAY) or no romset file"}));
+                    tried[k]
+                        .push(json!({"tool": "autoplay", "said": "no romset file for autoplay"}));
                 }
             }
         }
@@ -1209,6 +1225,9 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
         yours.len(),
         started.elapsed().as_secs_f64()
     );
+    if let Some(b) = bin.as_ref().filter(|_| platform == Platform::Arcade) {
+        text.push_str(&format!("Autoplay: {}\n", b.said));
+    }
     text.push_str("Made by the tools:\n");
     for m in &made {
         text.push_str(&format!("  {m}\n"));
@@ -1321,5 +1340,20 @@ mod tests {
             ("the saloon", "lose a life")
         );
         assert!(toml::from_str::<Plan>("[[item]]\nrow = \"x\"\nwhat = 1\n").is_err());
+    }
+
+    /// A given auto-player is run as it is; gp's own is `gp mechanic
+    /// autoplay` from this gp, so a published gp needs nothing beside it.
+    #[test]
+    fn the_auto_player_is_found() {
+        let b = autoplay_bin(Some(Path::new("/x/autoplay"))).unwrap();
+        assert_eq!(b.program, PathBuf::from("/x/autoplay"));
+        assert!(b.pre.is_empty());
+        assert!(b.said.contains("--autoplay"));
+        if std::env::var_os("GP_AUTOPLAY").is_none() {
+            let own = autoplay_bin(None).unwrap();
+            assert_eq!(own.pre, ["mechanic", "autoplay"]);
+            assert_eq!(own.program, std::env::current_exe().unwrap());
+        }
     }
 }

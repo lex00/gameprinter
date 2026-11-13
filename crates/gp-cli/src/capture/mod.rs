@@ -13,6 +13,7 @@
 
 pub(crate) mod carry;
 pub(crate) mod dense;
+pub(crate) mod run;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -41,12 +42,105 @@ pub enum CaptureCmd {
     /// start there can't carry and why, grouped by cause, with the starts
     /// each gap alone holds back.
     Carry(carry::CarryArgs),
+    /// List the runs: every game of the games checkout, with the round and
+    /// state of `gp serve`'s background work on it.
+    List {
+        #[command(flatten)]
+        games: run::Games,
+    },
+    /// Print a run's events after a sequence number, one JSON object a
+    /// line, from the running `gp serve`.
+    Events {
+        run: String,
+        #[arg(long, default_value_t = 0)]
+        after: u64,
+        #[command(flatten)]
+        server: run::Server,
+    },
+    /// Print the event format's JSON Schema (`schema/capture-events.json`).
+    Schema,
+    /// The run's background queue (docs/show.md, "The background work").
+    /// It shows the queue's state, or scores clips here in the foreground.
+    /// A job scores the next active clip not scored on the model as it
+    /// stands. While the queue is on, `gp serve` does this work itself, and
+    /// refines the working copy on the clip that drifts apart earliest.
+    Background(run::BackgroundArgs),
+    /// The run's fidelity: `gp corpus score` on the run's game, every clip
+    /// made again from the ROM and played through the model, with its
+    /// fidelity line and record (game-printer's `capture fidelity`).
+    Fidelity(run::ScoreArgs),
+    /// Make a game's kept clip set again from the ROM and check each clip's
+    /// curve against the set's: `gp corpus score TEMPLATE --run RUN`
+    /// (game-printer's `capture regenerate`). Exits 1 when a curve differs
+    /// or a clip can't be made.
+    Regenerate {
+        /// The game's folder, holding its corpus.
+        #[arg(long)]
+        template: PathBuf,
+        /// The run to make them into: its starts and caches under $GP_HOME.
+        #[arg(long)]
+        run: String,
+        /// The game's built module (default: built from its hook code).
+        #[arg(long)]
+        module: Option<PathBuf>,
+        /// The ROM; by default the one in $GP_ROM_DIR the package names.
+        #[arg(long)]
+        rom: Option<PathBuf>,
+    },
+    /// What a change since an earlier score reaches (docs/gate.md,
+    /// "Affected clips"), and how many of the run's clips it would score
+    /// again by what each read. Scores none: `gp corpus score GAME --run
+    /// RUN --reuse FILE --impact`.
+    Impact {
+        #[command(flatten)]
+        score: run::ScoreArgs,
+        /// An earlier `gp --json corpus score` output of the run's game.
+        #[arg(long)]
+        reuse: PathBuf,
+    },
+    /// Make every clip again from the ROM and check every curve hash:
+    /// `gp corpus verify GAME --run RUN`. Exits 1 on any difference.
+    Verify(run::ScoreArgs),
 }
 
 pub fn run(cmd: &CaptureCmd, paths: &Paths) -> Result<Outcome> {
     match cmd {
         CaptureCmd::Dense(a) => dense::cli(paths, a),
         CaptureCmd::Carry(a) => carry::cli(paths, a),
+        CaptureCmd::List { games } => run::list(paths, games),
+        CaptureCmd::Events { run, after, server } => run::events(run, *after, server),
+        CaptureCmd::Schema => Ok(run::schema()),
+        CaptureCmd::Background(a) => run::background(paths, a),
+        CaptureCmd::Fidelity(a) => {
+            let game = run::game_of(paths, &a.games, &a.run)?;
+            run::corpus_score(paths, &game, &a.run, a, None, false)
+        }
+        CaptureCmd::Regenerate {
+            template,
+            run: r,
+            module,
+            rom,
+        } => run::corpus_score(
+            paths,
+            template,
+            r,
+            &run::ScoreArgs {
+                run: r.clone(),
+                games: run::Games::default(),
+                module: module.clone(),
+                rom: rom.clone(),
+            },
+            None,
+            false,
+        ),
+        CaptureCmd::Impact { score, reuse } => {
+            let game = run::game_of(paths, &score.games, &score.run)?;
+            run::corpus_score(paths, &game, &score.run, score, Some(reuse.clone()), true)
+        }
+        CaptureCmd::Verify(a) => {
+            let game = run::game_of(paths, &a.games, &a.run)?;
+            run::corpus_verify(paths, &game, a)
+        }
     }
 }
 

@@ -40,6 +40,11 @@ opt-level = 3
 codegen-units = 1
 incremental = false
 
+# The arcade board is the same for arcade games, and gp mechanic autoplay
+# runs thousands of board frames a second inside the published gp.
+[profile.fastdev.package.gp-arcade]
+opt-level = 3
+
 [profile.dev.package.tetanes-core]
 opt-level = 3
 

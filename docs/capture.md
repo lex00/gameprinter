@@ -22,7 +22,30 @@ gp capture carry games/donkey-kong [--every 60]
 
 What the game's clip starts can't carry into the rebuilt game (`gp_interp::carry`): every loaded object a start can't carry and why, grouped by cause, with the starts each gap alone holds back. `--every N` also samples, through each start's presses from power-on, every Nth polled frame in play with the player on the ground. It needs the model's lifted assets (`--assets`, default `$GP_HOME/work/assets/<model.source>`). `--write` (into a capture run's `starts.json`) waits for wave 7.
 
+## The run commands
+
+game-printer's capture loop kept a run per model (`$GP_HOME/capture/RUN`: a copy of the model, its stages' outputs, an event log, a background queue). In gameprinter a run is a game of the games checkout, and `gp serve` keeps its background work, the agents' record and the working copy in `$GP_HOME/work/serve/GAME/` (docs/mechanic-page.md). These commands work on that, on NES and arcade games alike (crates/gp-cli/src/capture/run.rs):
+
+| Command | What |
+|---|---|
+| `gp capture list` | Every run, with the background work's round and state, as game-printer's printed them |
+| `gp capture background RUN` | The queue's state; `--steps N` scores the next N active clips not scored on the model as it stands here in the foreground and keeps each in the run's state; `--workers`, `--agents` and `--rescore-all` change what the run keeps; `--start` and `--stop` ask the running `gp serve` (`--server`, default `$GP_SERVE_URL` or http://127.0.0.1:7710), which starts every queue paused; `--history` prints the refine rounds |
+| `gp capture events RUN [--after N]` | The run's events from the running `gp serve`, one JSON object a line |
+| `gp capture schema` | The event format's JSON Schema, as game-printer's |
+
+Four were folded into the command that already does their job, with that command's output:
+
+| Old command | Is now |
+|---|---|
+| `gp capture fidelity RUN` | `gp corpus score games/RUN --run RUN`: every clip made again from the ROM and played through the model, with the fidelity line and record |
+| `gp capture regenerate --template DIR --run RUN` | `gp corpus score DIR --run RUN` |
+| `gp capture impact RUN --reuse FILE` | `gp corpus score games/RUN --run RUN --reuse FILE --impact`: what changed since that score and the clips it would score again ([gate.md](gate.md), "Affected clips"), scoring none. game-printer's took two git revisions of gp's own code; a score's fingerprint now says what changed |
+| `gp capture verify RUN` | `gp corpus verify games/RUN --run RUN` |
+
 ## Not here yet
+
+game-printer's stage loop (`gp capture start`, `resume`, `watch`, `input` and `stages`: lift, record, track, derive and the rest run as rounds on a copy of the model, answered through inputs) and its clip makers on the old runs (`grid`, `generate`, `corpus`, `prune`) aren't brought over: `gp serve`'s background work and `gp corpus` do the scoring and refining, and these would need their own home in it.
+
 
 `gp capture steer` (routine, branch, cited, directed and element clips, docs/research/code-steered-clips.md) reads a capture run's recordings, its generated clips and their scores, and its directed method the capture run's starts: it comes with wave 7. Its press search is gp-explore's `drive` with a `Toward`-like plan, which `gp explore --target` already runs.
 

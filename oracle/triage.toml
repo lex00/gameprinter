@@ -1,0 +1,44 @@
+# Triage of the divergence classes `gp oracle diff` reports (docs/oracle.md).
+# Written by `gp oracle triage`; one [[class]] per class and scope, sorted.
+# verdict is fork-bug, mesen-difference or accepted-configuration. sources
+# (registry IDs) and frames ([first, last]) limit where a record applies;
+# without them it applies to every source or frame.
+
+schema = 0
+
+[[class]]
+class = "boundary-instruction"
+verdict = "accepted-configuration"
+sources = ["gp-testrom"]
+note = "The two runtimes align their CPU and PPU differently: at the same CPU cycle Mesen's PPU reads 4 dots further than gp-nes's (measured at frame 1 of both baselines), and after the reset sequence, with both CPUs at cycle 7, it is at dot 25 against 20 (Mesen runs 8 cycles before the first instruction, NesCpu::Reset, and counts 7). Each runtime ends a frame at the first instruction boundary at or after its own PPU's scanline 241, dot 1, so on some frames the two ends land an instruction, or a turn of a wait loop, apart: at most 7 cycles, with the PPU positions 3 dots a cycle apart after the alignment, and the registers that instruction changes. Mesen's alignment is fixed or random, never set, so neither side can be moved to the other's. 2026-10-27, both baselines."
+date = "2026-10-27"
+
+[[class]]
+class = "nmi-boundary"
+verdict = "accepted-configuration"
+sources = ["gp-testrom"]
+note = "The same alignment as boundary-instruction, at a frame whose last instruction is followed by the NMI entry on one side and not the other. Checked per frame: S is 3 lower on the side that took it, its stack holds the other side's PC (or the next instruction's) and P, its I flag is set, and it is 5 to 14 cycles ahead (the 7-cycle entry, up to 2 cycles earlier because of the alignment, and at most one instruction). Both runtimes take every NMI in the same order with the same handler address. 2026-10-27, both baselines."
+date = "2026-10-27"
+
+[[class]]
+class = "palette"
+verdict = "accepted-configuration"
+sources = ["gp-testrom"]
+frames = [0, 0]
+note = "Frame 0: power-on palette RAM isn't defined on hardware. With RAM init zeros or ones, Mesen fills it with a fixed table that matches blargg's power-up palette test (NesPpu.cpp: 09 01 00 01 ...); tetanes-core fills it with zeros. Super Mario Bros. writes the palette in its first frames and the two agree from then on; gp-testrom never writes it, so the same 24 bytes differ for the whole run and are reported once, at frame 0. A palette byte differing anywhere else is outside this record."
+date = "2026-10-27"
+
+[[class]]
+class = "ppu-alignment"
+verdict = "accepted-configuration"
+sources = ["gp-testrom"]
+note = "Frame ends at the same CPU cycle whose PPU positions differ by exactly the alignment measured at frame 1 (Mesen 4 dots ahead): the alignment itself, as boundary-instruction describes. 2026-10-27, both baselines."
+date = "2026-10-27"
+
+[[class]]
+class = "ppu.dot"
+verdict = "accepted-configuration"
+sources = ["gp-testrom"]
+frames = [0, 0]
+note = "Frame 0 only: Mesen's PPU is at dot 25 after the reset sequence and gp-nes's at dot 20, both CPUs at cycle 7. That is 5 dots, where every later frame measures the alignment at 4; gp-nes's power-on position isn't on its later alignment. From frame 1 on, positions are covered by the boundary classes and ppu-alignment."
+date = "2026-10-27"

@@ -1,6 +1,6 @@
 # Sprite capture config (sprites.toml)
 
-Brought from game-printer's docs/formats/sprites.md (port wave 4). Links to pages gameprinter doesn't carry yet name game-printer's docs (`~/Documents/checkouts/lex00/game-printer/docs`).
+Brought from game-printer's docs/formats/sprites.md (port wave 4).
 
 `sprites.toml` in a template directory tells `gp sprites capture` ([capture](../capture.md#sprites)) where a game's sprite tables are and how its RAM names the model's states. It is data: everything particular to a game is here, in its state mapping and in its asset map, and the capture that reads it is the same for every game. `crates/gp-sprites/src/config.rs` is the definition. This is schema 1. A template without the file is captured from its recordings alone.
 

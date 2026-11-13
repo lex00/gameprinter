@@ -1,0 +1,46 @@
+# A model baseline (docs/originals.md): the interpreter plays town_hall of swing_state
+# from its start to its goal on this input, with every enemy in place.
+# Recorded by `gp interp reach --record`; `gp interp baselines` checks it.
+format = "0.1.0"
+model = "swing_state"
+level = "town_hall"
+description = "Plays town_hall from its start to its goal; found by gp interp reach --record"
+recorded = "search"
+frames = 541
+holds = ["b@1-40", "right@1-40", "a@33-89", "b@150-197", "right@150-197", "a@182-250", "a@263-308", "b@263-308", "right@263-308", "a@315-326", "b@315-326", "right@315-326", "b@395-434", "right@395-434", "a@427-483"]
+digest = "2a7f948a8c5088a5cf17c8979f0aee48404eec77254ed4e7204941b971b36738"
+
+[[expect]]
+frame = 541
+path = "level"
+equals = "town_hall"
+
+[[expect]]
+frame = 541
+path = "rules.game.state"
+equals = "rally"
+
+[[expect]]
+frame = 541
+path = "counters.approval"
+equals = "3"
+
+[[expect]]
+frame = 541
+path = "counters.days"
+equals = "92"
+
+[[expect]]
+frame = 541
+path = "counters.donations"
+equals = "0"
+
+[[expect]]
+frame = 541
+path = "counters.rebuttals"
+equals = "1"
+
+[[expect]]
+frame = 541
+path = "counters.stops"
+equals = "1"

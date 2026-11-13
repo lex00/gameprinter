@@ -45,7 +45,9 @@ pub(crate) struct Source {
 impl Source {
     /// A model read from `dir` with its lifted assets in `assets`, its
     /// `$GP_HOME/work/assets/<source>` when `assets` is `None`. A model with
-    /// hooks needs `module`; the module's spec is checked against this one.
+    /// hooks needs `module`; without one, a game package's hook crate is
+    /// built (once) from this gp's kit. The module's spec is checked
+    /// against this one.
     pub(crate) fn open_dir(
         dir: &Path,
         assets: Option<&Path>,
@@ -71,6 +73,13 @@ impl Source {
             )
         })?;
         let bundle = Bundle::new(&model, lifted);
+        // A game package's own hooks, built from this gp's kit when no
+        // module is named, so a stale module is never picked up.
+        let own = match module {
+            Some(_) => None,
+            None => crate::module::built_for(&paths.home, dir)?,
+        };
+        let module = module.or(own.as_ref().map(|o| o.0.as_path()));
         let source = Self::new(bundle, module)?;
         Ok((source, assets))
     }

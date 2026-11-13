@@ -1,0 +1,43 @@
+[contract]
+schema = "0.2.0"
+model = "swing_state"
+default = "metric"
+description = "Swing State as written: its stops and rules exact to its own model baselines, the borrowed mechanics within their sources' tolerances, the look free"
+
+[[rule]]
+path = "levels"
+level = "structural"
+note = "Same stops, gaps, spawns and podiums"
+
+[[rule]]
+path = "rules"
+level = "exact"
+
+[[rule]]
+path = "counters"
+level = "exact"
+
+[[rule]]
+path = "entities.candidate.jump"
+level = "metric"
+note = "Super Mario Bros.' jump, held to its tolerances"
+
+[rule.tolerance]
+airtime = 2
+height = "5%"
+
+[[rule]]
+path = "entities[role=enemy]"
+level = "metric"
+note = "Each enemy to its source, within 3%"
+
+[rule.tolerance]
+speed = "3%"
+
+[[rule]]
+path = "assets"
+level = "style"
+
+[[rule]]
+path = "entities[*].sprite"
+level = "style"

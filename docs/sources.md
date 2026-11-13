@@ -30,6 +30,10 @@ A dump with junk around the game data can go in cleaned instead (see [Junk aroun
 gp roms add --clean ~/Downloads/game.nes    # adds a cleaned copy and its sidecar; the original stays
 ```
 
+### ROMs game-printer registered
+
+`roms/known.toml` in the tool repo holds the six NES entries game-printer's `sources/nes.toml` registered for games that have no folder here yet: Kirby's Adventure (`kirby-usa-prg0`), Ninja Gaiden, Gauntlet, Gauntlet II, Q*bert and Track & Field, with their hashes, board facts where a cartridge database confirmed them, evidence and notes. Nothing names a ROM by them, so `roms scan` still calls these ROMs unknown and `gp game new` can start a game from one; when it does, it copies the matching entry into the new game's `roms.toml` under the new game's source id, instead of drafting one from the header. gp-nes's compiled-in list, `roms/nes.toml`, stays empty: a game's board facts live with the game.
+
 ## 3. Identify it
 
 ```sh

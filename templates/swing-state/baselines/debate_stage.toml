@@ -1,0 +1,46 @@
+# A model baseline (docs/originals.md): the interpreter plays debate_stage of swing_state
+# from its start to its goal on this input, with every enemy in place.
+# Recorded by `gp interp reach --record`; `gp interp baselines` checks it.
+format = "0.1.0"
+model = "swing_state"
+level = "debate_stage"
+description = "Plays debate_stage from its start to its goal; found by gp interp reach --record"
+recorded = "search"
+frames = 874
+holds = ["right@1-40", "a@33-40", "right@106-188", "a@138-188", "a@209-220", "right@209-220", "b@254-293", "right@254-293", "a@286-330", "a@391-444", "b@391-444", "right@391-444", "a@452-467", "b@452-467", "right@452-467", "right@482-559", "a@514-559", "a@582-593", "right@582-593", "right@625-698", "a@657-698", "b@717-756", "right@717-756", "a@749-821"]
+digest = "242affdea7b3e138035bae9f2a9ea069d5f3ce471799d9c26d39856435df9036"
+
+[[expect]]
+frame = 874
+path = "level"
+equals = "debate_stage"
+
+[[expect]]
+frame = 874
+path = "rules.game.state"
+equals = "rally"
+
+[[expect]]
+frame = 874
+path = "counters.approval"
+equals = "3"
+
+[[expect]]
+frame = 874
+path = "counters.days"
+equals = "106"
+
+[[expect]]
+frame = 874
+path = "counters.donations"
+equals = "0"
+
+[[expect]]
+frame = 874
+path = "counters.rebuttals"
+equals = "0"
+
+[[expect]]
+frame = 874
+path = "counters.stops"
+equals = "1"

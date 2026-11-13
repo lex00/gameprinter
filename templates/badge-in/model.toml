@@ -1,0 +1,584 @@
+[model]
+schema = "0.4.0"
+name = "badge_in"
+title = "Badge In"
+description = "An original: the return-to-office mandate as a platformer. Badge in at the far end of each floor before the clock runs out, past middle managers, a printer that jams and reply-all chains. Its mechanics are composed from Moss Hop's player and Super Mario Bros.' walkers, shells and bullets, scaled to the player's walking speed (docs/originals.md)"
+source = "badge-in"
+view = "side"
+frame_rate = "60"
+systems = ["rules", "entity_states", "counters", "spawn", "platformer.player", "platformer.enemies", "platformer.contact", "exits", "camera"]
+start_level = "lobby"
+
+[model.extensions]
+platformer = "0.4.0"
+
+[input]
+device = "nes-pad"
+
+[input.actions]
+jump = "a"
+left = "left"
+right = "right"
+run = "b"
+
+[assets.hot_desks]
+kind = "level-grid"
+role = "layout"
+
+[assets.hot_desks.from]
+source = "badge-in"
+asset = "hot_desks"
+
+[assets.lobby]
+kind = "level-grid"
+role = "layout"
+
+[assets.lobby.from]
+source = "badge-in"
+asset = "lobby"
+
+[assets.metatiles]
+kind = "metatiles"
+role = "tileset"
+description = "Air, carpet, desk, cubicle wall, filing cabinet, window, and the badge reader's two halves"
+item_roles = ["background", "terrain", "platform", "terrain", "terrain", "background", "goal", "goal"]
+
+[assets.metatiles.from]
+source = "badge-in"
+asset = "metatiles"
+
+[assets.open_plan]
+kind = "level-grid"
+role = "layout"
+
+[assets.open_plan.from]
+source = "badge-in"
+asset = "open_plan"
+
+[assets.palettes]
+kind = "palettes"
+role = "palettes"
+item_roles = ["background", "platform", "background", "goal", "player", "enemy", "hazard", "collectible"]
+
+[assets.palettes.from]
+source = "badge-in"
+asset = "palettes"
+
+[assets.tiles]
+kind = "tiles"
+role = "graphics"
+description = "Generated stub tiles"
+
+[assets.tiles.from]
+source = "badge-in"
+asset = "tiles"
+
+[entities.associate]
+description = "A mid-level associate with a lanyard and somewhere to be"
+role = "player"
+size = [16, 16]
+tile_collision = true
+
+[entities.associate.hitbox]
+h = 16
+w = 12
+x = 2
+y = 0
+
+[entities.associate.jump]
+action = "jump"
+gravity = "0.25"
+max_fall = 4
+speed = -5
+
+[entities.associate.run]
+air_control = true
+run_action = "run"
+run_speed = 2
+walk_speed = 1
+
+[entities.associate.sprite]
+flip_when_facing_left = true
+palette = 4
+slot = "tiles"
+tiles = [64, 65, 80, 81]
+width = 2
+
+[entities.coffee]
+description = "A cup of office coffee"
+role = "collectible"
+size = [16, 16]
+
+[entities.coffee.contact]
+otherwise = "collect"
+
+[entities.coffee.hitbox]
+h = 12
+w = 8
+x = 4
+y = 2
+
+[entities.coffee.sprite]
+palette = 7
+slot = "tiles"
+tiles = [72, 73, 88, 89]
+width = 2
+
+[entities.middle_manager]
+description = "Walks toward you to ask whether you have a minute. Stomping one delegates it"
+role = "enemy"
+size = [16, 16]
+tile_collision = true
+
+[entities.middle_manager.contact]
+bounce = -3
+otherwise = "kill-player"
+stomp_depth = 7
+
+[entities.middle_manager.fall]
+gravity = "0.23828125"
+max_fall = 3
+
+[entities.middle_manager.hitbox]
+h = 12
+w = 10
+x = 3
+y = 4
+
+[entities.middle_manager.sprite]
+flip_when_facing_left = true
+palette = 5
+slot = "tiles"
+tiles = [66, 67, 82, 83]
+width = 2
+
+[entities.middle_manager.walk]
+speed = "0.3333282470703125"
+
+[entities.printer]
+description = "A printer on casters. Stomped, it jams; kicked, it slides across the floor and takes out anyone in its way"
+role = "enemy"
+size = [16, 16]
+tile_collision = true
+
+[entities.printer.contact]
+bounce = -3
+keep_on_stomp = true
+otherwise = "kill-player"
+stomp_depth = 7
+
+[entities.printer.fall]
+gravity = "0.23828125"
+max_fall = 3
+
+[entities.printer.hitbox]
+h = 12
+w = 12
+x = 2
+y = 4
+
+[entities.printer.machine]
+initial = "rolling"
+
+[entities.printer.machine.states.jammed]
+description = "PC LOAD LETTER: it sits still, and a touch kicks it"
+
+[entities.printer.machine.states.jammed.set.contact]
+otherwise = "kick"
+
+[entities.printer.machine.states.jammed.set.walk]
+speed = 0
+
+[[entities.printer.machine.states.jammed.transition]]
+on = "enemy.kicked"
+to = "sliding"
+
+[[entities.printer.machine.states.jammed.transition]]
+after = 336
+to = "rolling"
+
+[[entities.printer.machine.states.rolling.transition]]
+on = "enemy.stomped"
+to = "jammed"
+
+[entities.printer.machine.states.sliding.set.contact]
+otherwise = "kill-player"
+
+[entities.printer.machine.states.sliding.set.walk]
+speed = 2
+
+[[entities.printer.machine.states.sliding.transition]]
+on = "enemy.stomped"
+to = "jammed"
+
+[entities.printer.sprite]
+flip_when_facing_left = true
+palette = 6
+slot = "tiles"
+tiles = [68, 69, 84, 85]
+width = 2
+
+[entities.printer.walk]
+speed = "0.3333282470703125"
+
+[entities.reply_all]
+description = "An email to the whole company, flying left at head height. Stomping it unsubscribes"
+role = "projectile"
+size = [16, 16]
+
+[entities.reply_all.contact]
+bounce = -3
+otherwise = "kill-player"
+stomp_depth = 7
+
+[entities.reply_all.fly]
+heading = "left"
+speed = 1
+
+[entities.reply_all.hitbox]
+h = 8
+w = 12
+x = 2
+y = 4
+
+[entities.reply_all.sprite]
+palette = 6
+slot = "tiles"
+tiles = [70, 71, 86, 87]
+width = 2
+
+[levels.hot_desks]
+description = "The ninth floor: hot desks over missing floor, cabinets to climb and the last badge reader"
+grid = "hot_desks"
+kill_below = 208
+size = [64, 15]
+solid_property = "solid"
+spawn_ahead = 32
+tile_size = 16
+tileset = "metatiles"
+
+[levels.hot_desks.counters]
+clock = 120
+
+[levels.hot_desks.goal]
+x = 980
+
+[[levels.hot_desks.spawn]]
+entity = "associate"
+x = 24
+y = 176
+
+[[levels.hot_desks.spawn]]
+entity = "coffee"
+x = 288
+y = 96
+
+[[levels.hot_desks.spawn]]
+entity = "middle_manager"
+x = 384
+y = 176
+
+[[levels.hot_desks.spawn]]
+entity = "reply_all"
+x = 560
+y = 120
+
+[[levels.hot_desks.spawn]]
+entity = "printer"
+x = 672
+y = 176
+
+[[levels.hot_desks.spawn]]
+entity = "middle_manager"
+x = 896
+y = 176
+
+[levels.lobby]
+description = "The ground floor: turnstiles, a gap in the marble and the first manager"
+grid = "lobby"
+kill_below = 208
+next = "open_plan"
+size = [48, 15]
+solid_property = "solid"
+tile_size = 16
+tileset = "metatiles"
+
+[levels.lobby.counters]
+clock = 90
+
+[levels.lobby.goal]
+x = 724
+
+[[levels.lobby.spawn]]
+entity = "associate"
+x = 24
+y = 176
+
+[[levels.lobby.spawn]]
+entity = "middle_manager"
+x = 368
+y = 176
+
+[[levels.lobby.spawn]]
+entity = "coffee"
+x = 528
+y = 128
+
+[levels.open_plan]
+description = "The fourth floor: cubicles, two gaps, a printer and a reply-all chain"
+grid = "open_plan"
+kill_below = 208
+next = "hot_desks"
+size = [64, 15]
+solid_property = "solid"
+spawn_ahead = 32
+tile_size = 16
+tileset = "metatiles"
+
+[levels.open_plan.counters]
+clock = 120
+
+[levels.open_plan.goal]
+x = 980
+
+[[levels.open_plan.spawn]]
+entity = "associate"
+x = 24
+y = 176
+
+[[levels.open_plan.spawn]]
+entity = "middle_manager"
+x = 240
+y = 176
+
+[[levels.open_plan.spawn]]
+entity = "coffee"
+x = 208
+y = 112
+
+[[levels.open_plan.spawn]]
+entity = "printer"
+x = 464
+y = 176
+
+[[levels.open_plan.spawn]]
+entity = "reply_all"
+x = 640
+y = 168
+
+[[levels.open_plan.spawn]]
+entity = "middle_manager"
+x = 784
+y = 176
+
+[cameras.main]
+follow = "associate"
+axis = "x"
+size = [256, 240]
+lead = [112, 0]
+clamp_to_level = true
+
+[rules.game]
+initial = "playing"
+
+[rules.game.states.badged_in]
+description = "Badged in on time; the elevator to the next floor"
+freeze = true
+
+[[rules.game.states.badged_in.transition]]
+to = "playing"
+after = 60
+do = ["next-level"]
+
+[rules.game.states.dying]
+description = "Late, or worse: the floor waits a moment, then starts again"
+freeze = true
+
+[[rules.game.states.dying.transition]]
+to = "playing"
+after = 90
+do = ["restart-level"]
+
+[rules.game.states.dying.transition.if]
+counter = "lives"
+cmp = ">"
+value = 0
+
+[[rules.game.states.dying.transition]]
+to = "laid_off"
+after = 90
+
+[rules.game.states.laid_off]
+description = "Out of lives: the game is over"
+freeze = true
+
+[[rules.game.states.playing.transition]]
+to = "dying"
+on = "player.died"
+do = ["change:lives:-1"]
+
+[[rules.game.states.playing.transition]]
+to = "dying"
+on = "clock.reached_min"
+do = ["change:lives:-1"]
+
+[[rules.game.states.playing.transition]]
+to = "promoted"
+on = "goal.reached"
+
+[rules.game.states.playing.transition.if]
+counter = "floors"
+cmp = ">="
+value = 3
+
+[[rules.game.states.playing.transition]]
+to = "badged_in"
+on = "goal.reached"
+
+[rules.game.states.promoted]
+description = "Badged in on the top floor: the game is won"
+freeze = true
+
+[counters.clock]
+description = "Seconds until the standup, counted every 60 frames"
+min = 0
+
+[[counters.clock.change]]
+every = 60
+by = -1
+
+[counters.coffee]
+max = 99
+
+[[counters.coffee.change]]
+on = "item.collected"
+
+[[counters.delegated.change]]
+on = "enemy.stomped"
+
+[[counters.floors.change]]
+on = "goal.reached"
+
+[counters.lives]
+start = 3
+min = 0
+
+[evidence.assets]
+source = "stated"
+confidence = 100
+note = "Each slot is filled from the asset of its name in the template's authored.toml"
+
+[[evidence.assets.refs]]
+at = "template:badge-in"
+
+[evidence.cameras]
+source = "stated"
+confidence = 100
+note = "The template author's"
+
+[[evidence.cameras.refs]]
+at = "template:badge-in"
+
+[evidence.counters]
+source = "stated"
+confidence = 100
+note = "The template author's"
+
+[[evidence.counters.refs]]
+at = "template:badge-in"
+
+[evidence.entities]
+source = "stated"
+confidence = 100
+note = "Designed for this template"
+
+[[evidence.entities.refs]]
+at = "template:badge-in"
+
+[evidence."entities.associate.jump"]
+source = "stated"
+confidence = 100
+note = "Moss Hop's jump, taken whole: speed -5, gravity 0.25, max_fall 4 (templates/mosshop/model.toml, entities.player.jump). Moss Hop's tile size and its scale match, so nothing is converted"
+
+[[evidence."entities.associate.jump".refs]]
+at = "inspired-by:mosshop"
+
+[evidence."entities.associate.run"]
+source = "stated"
+confidence = 100
+note = "Moss Hop's run, taken whole: walk 1, run 2, air control (templates/mosshop/model.toml, entities.player.run)"
+
+[[evidence."entities.associate.run".refs]]
+at = "inspired-by:mosshop"
+
+[evidence."entities.middle_manager.fall"]
+source = "stated"
+confidence = 100
+note = "Super Mario Bros.' enemy gravity and fall cap (entities.goomba.fall), without move_first"
+
+[[evidence."entities.middle_manager.fall".refs]]
+at = "inspired-by:smb1-ntsc-prg0"
+
+[evidence."entities.middle_manager.walk"]
+source = "stated"
+confidence = 100
+note = "Super Mario Bros.' goomba walks at 0.5 against Mario's walk of 1.5 (templates/smb1-ntsc-prg0/model.toml, entities.goomba.walk). The ratio, 1/3, is kept against the associate's walk of 1 and rounded to 1/65536"
+
+[[evidence."entities.middle_manager.walk".refs]]
+at = "inspired-by:smb1-ntsc-prg0"
+
+[evidence."entities.printer.fall"]
+source = "stated"
+confidence = 100
+note = "As the middle manager's"
+
+[[evidence."entities.printer.fall".refs]]
+at = "inspired-by:smb1-ntsc-prg0"
+
+[evidence."entities.printer.machine"]
+source = "stated"
+confidence = 100
+note = "Super Mario Bros.' shell (entities.koopa_green.machine): stomped it stops, a touch kicks it, it slides and is stomped still again, and after 336 frames it walks. The slide is 2, twice the associate's walk, as 3 is twice Mario's"
+
+[[evidence."entities.printer.machine".refs]]
+at = "inspired-by:smb1-ntsc-prg0"
+
+[evidence."entities.printer.walk"]
+source = "stated"
+confidence = 100
+note = "As the middle manager's"
+
+[[evidence."entities.printer.walk".refs]]
+at = "inspired-by:smb1-ntsc-prg0"
+
+[evidence."entities.reply_all.fly"]
+source = "stated"
+confidence = 100
+note = "Super Mario Bros.' bullet bill flies left at 1.5 against Mario's walk of 1.5 (entities.bullet_bill.fly), so 1 here"
+
+[[evidence."entities.reply_all.fly".refs]]
+at = "inspired-by:smb1-ntsc-prg0"
+
+[evidence.input]
+source = "stated"
+confidence = 100
+note = "The template author's choice of buttons"
+
+[[evidence.input.refs]]
+at = "template:badge-in"
+
+[evidence.levels]
+source = "stated"
+confidence = 100
+note = "Three floors written for this template"
+
+[[evidence.levels.refs]]
+at = "template:badge-in"
+
+[evidence.rules]
+source = "stated"
+confidence = 100
+note = "The template author's: lives, a clock per floor and three floors to win"
+
+[[evidence.rules.refs]]
+at = "template:badge-in"

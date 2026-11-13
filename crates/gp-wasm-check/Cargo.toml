@@ -1,0 +1,17 @@
+[package]
+name = "gp-wasm-check"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+gp-arcade = { version = "0.1.0", path = "../gp-arcade" }
+gp-evidence = { version = "0.1.0", path = "../gp-evidence" }
+gp-exts = { version = "0.1.0", path = "../gp-exts" }
+gp-interp = { version = "0.1.0", path = "../gp-interp" }
+gp-nes = { version = "0.1.0", path = "../gp-nes" }
+
+[lints]
+workspace = true

@@ -1,0 +1,87 @@
+# Painted by gp theme paint --id paper --seed 1 from swing_state's roles (docs/formats/theme.md).
+format = "0.1.3"
+id = "paper"
+title = "Paper"
+description = "Paper cutouts in place of Swing State's art, painted from its roles"
+license = "CC0-1.0"
+for = ["swing_state"]
+
+[[palette]]
+target = "collectible"
+replace = [["#5b5b5b", "#6e5210"], ["#aaaaaa", "#d8a828"], ["#ffffff", "#f8e090"]]
+
+[[palette]]
+target = "enemy"
+replace = [["#5b5b5b", "#5e1a10"], ["#aaaaaa", "#c4462c"], ["#ffffff", "#f08c5e"]]
+
+[[palette]]
+target = "player"
+replace = [["#5b5b5b", "#1f3558"], ["#aaaaaa", "#3d6fb6"], ["#ffffff", "#9cc0e8"]]
+
+[[palette]]
+target = "projectile"
+replace = [["#5b5b5b", "#2b333b"], ["#aaaaaa", "#5b6b7a"], ["#ffffff", "#b0c0cc"]]
+
+[[palette]]
+target = "sky"
+tint = "#efe6cf"
+tint_amount = 1.0
+
+[[restyle]]
+target = "background"
+slot = "metatiles"
+file = "metatiles-background.pix"
+origin = "generated"
+license = "CC0-1.0"
+sha256 = "f0ea9e4c8b2c43f22b212765ed3941c9e5635de98a587e20fef8e4079b8a9f7f"
+generator = "gp theme paint --id paper --seed 1"
+
+[[restyle]]
+target = "goal"
+slot = "metatiles"
+file = "metatiles-goal.pix"
+origin = "generated"
+license = "CC0-1.0"
+sha256 = "b4f59337602b3b5d035040e298039513114e199bfa206c8b228841e8020ed758"
+generator = "gp theme paint --id paper --seed 1"
+
+[[restyle]]
+target = "platform"
+slot = "metatiles"
+file = "metatiles-platform.pix"
+origin = "generated"
+license = "CC0-1.0"
+sha256 = "bbc47733de41736399bc8b5d3b0d11bdd01fec26053e440bcc9abc20a17249e8"
+generator = "gp theme paint --id paper --seed 1"
+
+[[restyle]]
+target = "sky"
+slot = "metatiles"
+file = "metatiles-sky.pix"
+origin = "generated"
+license = "CC0-1.0"
+sha256 = "5830af0cb3934bb6486caa97ec9c95e978cf32f7b772282926632cbf3b47329b"
+generator = "gp theme paint --id paper --seed 1"
+
+[[restyle]]
+target = "terrain"
+slot = "metatiles"
+file = "metatiles-terrain.pix"
+origin = "generated"
+license = "CC0-1.0"
+sha256 = "e1736b5a08682fd6c72a68b1d6953a67c115ca3971a2161ddb12a04773a11bf1"
+generator = "gp theme paint --id paper --seed 1"
+
+[[restyle]]
+slot = "tiles"
+file = "tiles.pix"
+origin = "generated"
+license = "CC0-1.0"
+sha256 = "c6c33988f31e938fecfc09ed9710af836079b715457c7efa81eae22139c51531"
+generator = "gp theme paint --id paper --seed 1"
+
+[style]
+palette = ["#1f3558", "#3d6fb6", "#9cc0e8", "#5e1a10", "#c4462c", "#f08c5e", "#6e2240", "#d05e8a", "#f6bcd0", "#2b333b", "#5b6b7a", "#b0c0cc", "#6e5210", "#d8a828", "#f8e090", "#2a221c", "#6a5a4a", "#c8b898", "#3a6a3a", "#6ca85a", "#b8dc9a", "#efe6cf", "#e6dbc0", "#c9bb9c", "#2a221c"]
+max_palette_distance = 4.0
+edge_density = [0.1, 0.8]
+size_tolerance = 0.35

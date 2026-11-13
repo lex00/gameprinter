@@ -49,10 +49,12 @@ gp-present = { version = "0.1.0", path = "../gp-present" }
 gp-runtime = { version = "0.1.0", path = "../gp-runtime" }
 gp-sim = { version = "0.1.0", path = "../gp-sim" }
 gp-sound = { version = "0.1.0", path = "../gp-sound" }
+gp-sound-bank = { version = "0.1.0", path = "../gp-sound-bank" }
 gp-sprites = { version = "0.1.0", path = "../gp-sprites" }
 schemars = "1.2.2"
 gp-chunks = { version = "0.1.0", path = "../gp-chunks" }
 gp-metrics = { version = "0.1.0", path = "../gp-metrics" }
+gp-oracle = { version = "0.1.0", path = "../gp-oracle" }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -68,7 +70,15 @@ tetanes-core = { path = "../../third_party/tetanes-core" }
 lz4_flex = { version = "=0.14.0", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
 png = "0.18.1"
 tempfile = "3.27.0"
+# `gp agent bench --since` reads dates.
+time = "0.3.55"
+# Each hook of a game's ext/ crate hashed by the code it reaches
+# (src/hook_closure.rs), for the clips a change can move (affected.rs).
+proc-macro2 = "1.0.107"
+quote = "1.0.47"
+syn = { version = "2.0.119", default-features = false, features = ["full", "parsing", "printing", "clone-impls"] }
 toml = "1.1.8"
+wit-parser = "0.262.0"
 
 [dev-dependencies]
 # tests/schema_mapping.rs checks the repo's TOML files against schema/.

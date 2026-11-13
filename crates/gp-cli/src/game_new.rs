@@ -275,8 +275,16 @@ pub fn run(a: &New<'_>, paths: &Paths) -> Result<Outcome> {
             about.input
         ),
         format!(
-            "  rom      {source} ({}), unverified, in roms.toml",
-            &sha[..16]
+            "  rom      {source} ({}), {}, in roms.toml{}",
+            &sha[..16],
+            known_entry(&sha)
+                .and_then(|b| b.lines().find_map(|l| l.strip_prefix("status = ")))
+                .map_or("unverified", |v| v.trim_matches('"')),
+            if known_entry(&sha).is_some() {
+                " (its entry from roms/known.toml)"
+            } else {
+                ""
+            }
         ),
         format!("  assets   {}", about.assets),
         format!("  draws    {}", about.draws_line),
@@ -629,7 +637,38 @@ fn package_toml(
     )
 }
 
+/// The NES ROM entries game-printer registered for games with no folder
+/// here yet (roms/known.toml).
+const KNOWN: &str = include_str!("../../../roms/known.toml");
+
+/// The entry of roms/known.toml with this headerless SHA-256, as its
+/// text, from its `id` line to its last.
+fn known_entry(sha256: &str) -> Option<&'static str> {
+    let line = format!("sha256 = {}", q(sha256));
+    KNOWN
+        .split("\n[[source]]\n")
+        .skip(1)
+        .find(|b| b.lines().any(|l| l == line))
+}
+
 fn roms_toml(id: &str, title: &str, image: &NesImage, date: &str) -> Result<String> {
+    if let Some(block) = known_entry(&image.sha256) {
+        // The known entry, under the new game's source id.
+        let mut s = String::from(
+            "# Hashes and facts only: never the game itself. Copied by gp game new from gameprinter's roms/known.toml, which game-printer's sources/nes.toml registered.\n[[source]]\n",
+        );
+        for l in block.trim_end().lines() {
+            if l.starts_with("id = ") {
+                let _ = writeln!(s, "id = {}", q(id));
+            } else {
+                s.push_str(l);
+                s.push('\n');
+            }
+        }
+        gp_evidence::registry::Registry::from_toml(&s, Path::new("roms.toml"))
+            .map_err(|e| anyhow::anyhow!("the new roms.toml doesn't read back: {e}"))?;
+        return Ok(s);
+    }
     let h = &image.header;
     let k = |n: u64| n / 1024;
     let mut s = String::from("# Hashes and facts only: never the game itself.\n[[source]]\n");
@@ -1119,6 +1158,18 @@ mod tests {
                     .any(|w| chips.data().windows(32).any(|r| r == w))
             );
         }
+    }
+
+    /// A ROM game-printer registered gets its entry from roms/known.toml.
+    #[test]
+    fn the_known_entries_load_and_one_is_copied_under_the_new_games_id() {
+        let reg = gp_evidence::registry::Registry::from_toml(KNOWN, Path::new("roms/known.toml"))
+            .unwrap();
+        assert_eq!(reg.sources.len(), 6);
+        let kirby = "a6b81fec11c24a33fd763db5c28005e760a1614e70c1bb5ccde0bd4242431000";
+        let block = known_entry(kirby).unwrap();
+        assert!(block.starts_with("id = \"kirby-usa-prg0\""));
+        assert!(known_entry(&"0".repeat(64)).is_none());
     }
 
     /// The state mapping parses with the draw search's sites, without them,

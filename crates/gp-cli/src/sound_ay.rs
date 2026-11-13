@@ -27,8 +27,8 @@
 //!
 //! What the NES's capture also does and this doesn't: songs bound to a
 //! model's levels and the game's sound requests (`--template`), and the
-//! renders' loudness. milestone 3's AY synth (gp_arcade::sound) renders
-//! the board's sound; rendering the notes through it is left for later.
+//! renders' loudness. `gp sound render` plays a log or
+//! its notes through milestone 3's AY synth (crate::sound_ay_render).
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -176,7 +176,12 @@ const NAMES: [&str; 6] = ["0a", "0b", "0c", "1a", "1b", "1c"];
 
 /// The notes: each channel's runs of a sounding tone at one period.
 pub fn notes(log: &AyLog) -> Value {
-    let states = log.states();
+    let channels = channel_notes(&log.states());
+    json!({"format": "gp-ay-songs 0", "clock": CLOCK, "first": log.first, "last": log.last, "channels": channels})
+}
+
+/// Each of the six channels' notes over `states`, as `notes` gives them.
+fn channel_notes(states: &[(u64, [Channel; 6])]) -> Vec<Value> {
     let mut channels = Vec::new();
     for (c, name) in NAMES.iter().enumerate() {
         let mut notes: Vec<Value> = Vec::new();
@@ -190,7 +195,7 @@ pub fn notes(log: &AyLog) -> Value {
                 }));
             }
         };
-        for (f, chans) in &states {
+        for (f, chans) in states {
             let ch = chans[c];
             match cur {
                 Some((_, p, ref mut v)) if ch.sounds() && ch.period == p => v.push(ch.volume),
@@ -205,7 +210,150 @@ pub fn notes(log: &AyLog) -> Value {
         close(&mut cur, &mut notes);
         channels.push(json!({"channel": name, "notes": notes}));
     }
-    json!({"format": "gp-ay-songs 0", "clock": CLOCK, "first": log.first, "last": log.last, "channels": channels})
+    channels
+}
+
+/// A song asked for by name: frames `first` to `last` of the log, and the
+/// frame its loop goes back to, counted from `first`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SongSpec {
+    pub name: String,
+    pub first: u64,
+    pub last: u64,
+    pub loop_at: Option<u64>,
+}
+
+/// The midway-ssio decoder (gp_sound::drivers): the songs a register log
+/// holds. Given `specs`, those frame ranges; else each run of frames where
+/// a channel sounds, ended by `gap` frames of silence on all six. Each
+/// song holds its channels' notes as `notes` gives them, with the
+/// registers as the log leaves them before its first frame.
+pub fn decode(log: &AyLog, specs: &[SongSpec], gap: u64) -> Value {
+    let states = log.states();
+    let sounding = |chans: &[Channel; 6]| chans.iter().any(|c| c.sounds());
+    let mut ranges: Vec<SongSpec> = specs.to_vec();
+    if ranges.is_empty() {
+        let mut cur: Option<(u64, u64)> = None;
+        let mut k = 0;
+        let mut push = |cur: (u64, u64), ranges: &mut Vec<SongSpec>| {
+            ranges.push(SongSpec {
+                name: format!("song{k}"),
+                first: cur.0,
+                last: cur.1,
+                loop_at: None,
+            });
+            k += 1;
+        };
+        for (f, chans) in &states {
+            if !sounding(chans) {
+                continue;
+            }
+            cur = match cur {
+                Some((a, b)) if f - b <= gap => Some((a, *f)),
+                Some(done) => {
+                    push(done, &mut ranges);
+                    Some((*f, *f))
+                }
+                None => Some((*f, *f)),
+            };
+        }
+        if let Some(done) = cur {
+            push(done, &mut ranges);
+        }
+    }
+    let songs: Vec<Value> = ranges
+        .iter()
+        .map(|s| {
+            let part: Vec<(u64, [Channel; 6])> = states
+                .iter()
+                .filter(|(f, _)| (s.first..=s.last).contains(f))
+                .copied()
+                .collect();
+            json!({
+                "name": s.name, "origin": "driver", "driver": "midway-ssio",
+                "first": s.first, "last": s.last, "frames": s.last + 1 - s.first,
+                "loop_frame": s.loop_at, "channels": channel_notes(&part),
+            })
+        })
+        .collect();
+    json!({"format": "gp-ay-songs 0", "clock": CLOCK, "first": log.first, "last": log.last, "songs": songs})
+}
+
+/// The songs of an AY song file: a decode's `songs`, or a capture's
+/// notes as one song named `name`.
+pub fn songs_of(v: &Value, name: &str) -> Vec<Value> {
+    if let Some(s) = v["songs"].as_array() {
+        return s.clone();
+    }
+    let mut one = v.clone();
+    one["name"] = json!(name);
+    vec![one]
+}
+
+/// Each note's start: (channel index, frame, period).
+fn onsets(song: &Value) -> Vec<(usize, u64, u64)> {
+    let mut out = Vec::new();
+    for (c, ch) in song["channels"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        for n in ch["notes"].as_array().into_iter().flatten() {
+            out.push((
+                c,
+                n["frame"].as_u64().unwrap_or(0),
+                n["period"].as_u64().unwrap_or(0),
+            ));
+        }
+    }
+    out
+}
+
+/// A decoded song held to a captured one: their note starts (channel,
+/// frame, period) matched at the offset that matches most, as an F1.
+/// The offset is the captured frame less the decoded one.
+pub fn cross_check(decoded: &Value, captured: &Value) -> Value {
+    let dec = onsets(decoded);
+    let cap = onsets(captured);
+    let set: std::collections::BTreeSet<(usize, u64, u64)> = cap.iter().copied().collect();
+    let mut offsets: Vec<i64> = vec![0];
+    if let Some(&(c0, f0, p0)) = dec.first() {
+        offsets.extend(
+            cap.iter()
+                .filter(|&&(c, _, p)| c == c0 && p == p0)
+                .map(|&(_, f, _)| f as i64 - f0 as i64)
+                .take(4000),
+        );
+    }
+    offsets.sort_unstable();
+    offsets.dedup();
+    let (mut best_off, mut best) = (0i64, 0usize);
+    for off in offsets {
+        let m = dec
+            .iter()
+            .filter(|&&(c, f, p)| {
+                u64::try_from(f as i64 + off).is_ok_and(|g| set.contains(&(c, g, p)))
+            })
+            .count();
+        if m > best {
+            (best_off, best) = (off, m);
+        }
+    }
+    let f1 = if dec.is_empty() || cap.is_empty() {
+        0.0
+    } else {
+        let (p, r) = (
+            best as f64 / dec.len() as f64,
+            best as f64 / cap.len() as f64,
+        );
+        if p + r == 0.0 {
+            0.0
+        } else {
+            (2.0 * p * r / (p + r) * 1000.0).round() / 1000.0
+        }
+    };
+    json!({"offset": best_off, "matched": best, "decoded": dec.len(), "reference": cap.len(), "f1": f1})
 }
 
 /// The channel states the notes give each frame: the period and volume of
@@ -373,6 +521,44 @@ mod tests {
         );
         let (_, c, exit) = compare(&l, &other, 0);
         assert_eq!((c["first_differing"].as_u64(), exit), (Some(3), 1));
+    }
+
+    #[test]
+    fn the_decoder_splits_songs_at_silences_and_cross_checks() {
+        let mut l = log();
+        l.last = 200;
+        let w = |chip, reg, value| Write { chip, reg, value };
+        // A second run of sound on chip 1, channel A, 100 frames later.
+        l.frames
+            .insert(100, vec![w(1, 0, 0x40), w(1, 7, 0x3e), w(1, 8, 0x0c)]);
+        l.frames.insert(110, vec![w(1, 8, 0x00)]);
+        let d = decode(&l, &[], 60);
+        let songs = d["songs"].as_array().unwrap();
+        assert_eq!(songs.len(), 2);
+        assert_eq!(
+            (songs[0]["first"].as_u64(), songs[0]["last"].as_u64()),
+            (Some(2), Some(5))
+        );
+        assert_eq!(songs[1]["channels"][3]["notes"][0]["frame"], 100);
+        let named = decode(
+            &l,
+            &[SongSpec {
+                name: "all".into(),
+                first: 1,
+                last: 200,
+                loop_at: None,
+            }],
+            60,
+        );
+        assert_eq!(named["songs"][0]["name"], "all");
+        let cap = notes(&l);
+        let c = cross_check(&named["songs"][0], &songs_of(&cap, "cap")[0]);
+        assert_eq!(
+            (c["f1"].as_f64(), c["offset"].as_i64()),
+            (Some(1.0), Some(0))
+        );
+        let c = cross_check(&songs[1], &cap);
+        assert_eq!(c["matched"], 1);
     }
 
     /// With tapper.zip on this machine: the log made from the event

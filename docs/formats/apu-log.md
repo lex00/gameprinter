@@ -1,6 +1,6 @@
 # APU register log
 
-Brought from game-printer's docs/formats/apu-log.md (port wave 4). Links to pages gameprinter doesn't carry yet name game-printer's docs (`~/Documents/checkouts/lex00/game-printer/docs`).
+Brought from game-printer's docs/formats/apu-log.md (port wave 4).
 
 Version 1. Every write a recording made to the NES's APU registers over a range of frames, as `gp sound capture` writes it (`apu.log`) from a recording's event stream or a replay with the event log on. It's an observe-only output of replay: nothing about the replay changes, and BEHAVIOUR_VERSION doesn't either. A log is game content, so it lives with the recording's derived data under `$GP_HOME/work/sound/<recording>/<capture>/` and never in the repo. `gp_sound::log` reads and writes it; tests use made-up logs. `gp interp run --apu-log FILE` writes one from a model's hooks (a game's sound driver kept as state), untimed, with every write at cycle 0.
 
