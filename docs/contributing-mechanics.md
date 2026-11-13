@@ -20,7 +20,7 @@ Each step says what exists in gameprinter and what doesn't yet.
 | Playing and recording | Free play, F5 and F8 save points, and the controller's left and right triggers for save and load; clips as recipes from a save point | A record button of its own on the controller (R or the right bumper records) |
 | Saying what a clip shows | A note on each clip, handed off with the controller's A or Enter; the agent's words over the paused game, with choices picked with the controller (`gp mechanic say GAME MECHANIC TEXT --choice ... --show CLIP`) | |
 | The agent's answer | `gp mechanic show` (the session and whose turn it is), `gp mechanic wait`, `gp mechanic say`; `gp mechanic probe`; `gp element inputs` for the routine behind a wrong byte | `gp mechanic read CLIP`: the rules over one clip, giving what is now known and what is estimated |
-| Checking and sending | `gp clip score GAME SESSION`, `gp mechanic probe GAME`, `gp corpus import GAME`, `gp model gate GAME`, the pre-commit hook | `gp mechanic check`, `gp dataset grade` |
+| Checking and sending | `gp clip score GAME SESSION`, `gp mechanic probe GAME`, `gp corpus import GAME`, `gp model gate GAME`, the pre-commit hook, `gp dataset grade` | `gp mechanic check` |
 
 ## 1. Setup
 

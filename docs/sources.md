@@ -89,31 +89,21 @@ Checksums come in several forms. NesCartDB gives the SHA-1 and CRC32 of PRG and 
 
 The package's `[[rom.entry]]` gives the same `id`, `sha256` and `platform`, the entry's `role` (`scored` for the ROM the corpus is scored on, `play` for one the package only loads to play), its asset map and that map's pins.
 
-Not here yet: `gp sources list`, the registry printed, and `gp assets find`, which found a known game's assets in a new dump of it by content and printed a draft entry. For a new dump of a game you have, compare it with the one you have (`gp roms diff --summary`, with `--cpu` when its program sits elsewhere) and write its entry and asset map from what the diff says.
+Not here yet: `gp sources list`, the registry printed. `gp assets find` finds a known game's assets in a new dump of it by content and prints a draft entry. For a new dump of a game you have, you can also compare it with the one you have (`gp roms diff --summary`, with `--cpu` when its program sits elsewhere) and write its entry and asset map from what the diff says.
 
 ## Arcade romsets
 
-An arcade game comes in as a romset: a MAME zip named for its MAME system, such as `rbtapper.zip`. Game Printer knows a set by its chips, never by the file names inside: each chip's SHA-1 must match the set's list from MAME's own source. The set's identity, the `sha256` its `roms.toml` and `package.toml` give, is the SHA-256 of its chips' SHA-1s, sorted, one a line, so it is the same for any zip that holds those chips. The sets known so far are Tapper's: `rbtapper`, `tapper`, `tappera`, `tapperg` and `sutapper`. `gp roms add` checks the zip against the sets and copies it whole to `$GP_ROM_DIR/arcade/`. `gp roms clean`, `gp roms diff` and `--patch` are for NES images.
+An arcade game comes in as a romset: a MAME zip named for its MAME system, such as `rbtapper.zip`. Game Printer knows a set by its chips, never by the file names inside: each chip's SHA-1 must match the set's list from MAME's own source. The set's identity, the `sha256` its `roms.toml` and `package.toml` give, is the SHA-256 of its chips' SHA-1s, sorted, one a line, so it is the same for any zip that holds those chips. The sets known so far are Tapper's: `rbtapper`, `tapper`, `tappera`, `tapperg` and `sutapper`. `gp roms add` checks the zip against the sets and copies it whole to `$GP_ROM_DIR/arcade/`. `gp roms clean` and `gp roms diff` are for NES images.
 
 ## Patched sources
 
-A ROM hack is a base source plus a patch its author hands out, usually an IPS or BPS file. Game Printer never holds either: the person downloads the patch from the author's page, `gp roms add --patch` applies it to their own base ROM, and the game's `roms.toml` holds only hashes and URLs.
+A ROM hack is a base source plus a patch its author hands out, usually an IPS or BPS file. Game Printer never holds either, and the game's `roms.toml` holds only hashes and URLs.
 
-```sh
-gp roms add --patch ~/Downloads/hack.ips                       # every registered base in $GP_ROM_DIR
-gp roms add --patch ~/Downloads/hack.ips --base BASE-ID
-gp roms add --patch ~/Downloads/new-hack.ips --base BASE-ID --new   # prints a draft entry, writes nothing
-```
-
-1. The patch is found among the games' `roms.toml` entries by its SHA-256. An unknown patch is refused, since IPS has no checksum of its own and nothing else could check the result. `--new` applies it anyway and prints a draft entry with the result's hashes, to check and paste.
-2. Each base the patch is registered for (or the one `--base` names, by ID or by 8 or more hex digits of its hash) is found in `$GP_ROM_DIR` by hash, and cleaned by [the header rules](#the-header-rules) first, so a junk header can't move the patch's offsets.
-3. The patch is applied in memory, in Rust (`crates/gp-evidence/src/patch.rs`). BPS checks its own source, target and patch CRC32s.
-4. Every hash the entry holds for the result (`sha256`, `md5`, `sha1`, `ines_sha1`) must match, or nothing is written.
-5. The result goes to `$GP_ROM_DIR/nes/patched/<id>.nes`, through a temporary file read back and checked, with a sidecar `<id>.patch.toml` holding every hash. The patch itself is kept as `$GP_ROM_DIR/patches/<sha256>.<format>`, so the result can be made again.
+`gp roms add --patch`, which applied a registered patch to the person's own base ROM and checked the result's hashes, was removed on 2026-11-13 with the other commands that wrote ROMs. The patched image now has to be made outside Game Printer. Since a patched source's entry holds the patched image's hashes, `gp roms add` and `gp roms scan` then identify that image like any dump, and a file whose hashes don't match isn't taken for the hack.
 
 A patched source is a `[[source]]` entry with `kind = "patched"` and a `[source.patch]` table: the base it is made from, the format, its size and offsets, the URL and page it comes from, its author, contact, the `permission` they gave and the credits. Its own hashes and board facts are the patched image's, so `gp roms scan` and `gp record` find it by hash like any dump.
 
-The pre-commit hook refuses patch files by name (`*.ips`, `*.bps`, `*.ups`, `*.xdelta`) and by their magic bytes, and `.gitignore` lists them. Once a patched source is registered and its result is in `$GP_ROM_DIR`, the hook's [ROM bytes check](#rom-bytes-in-text) covers the hack's bytes too.
+The pre-commit hook refuses patch files by name (`*.ips`, `*.bps`, `*.ups`, `*.xdelta`) and by their magic bytes, and `.gitignore` lists them. Once a patched source is registered and the patched image is in `$GP_ROM_DIR`, the hook's [ROM bytes check](#rom-bytes-in-text) covers the hack's bytes too.
 
 A hack is read with its base's labels file (`gp labels`), since it keeps the base's code and RAM except where `gp roms diff --summary` says.
 

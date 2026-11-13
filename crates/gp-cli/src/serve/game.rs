@@ -368,14 +368,12 @@ fn rom(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> {
 
 /// The page shown in the rebuilt game's frame while its preview builds: it
 /// asks again every few seconds.
-const WAITING: &str = "<!doctype html><meta charset=utf-8><body style=\"background:#000;color:#9aa;font:13px system-ui;margin:12px\">Building the rebuilt game (the model's interpreter preview); it shows here when it's done.<script>setTimeout(()=>location.reload(),3000)</script>";
+const WAITING: &str = "<!doctype html><meta charset=utf-8><body style=\"background:#000;color:#9aa;font:13px system-ui;margin:12px\">Building the model's interpreter preview; it shows here when it's done.<script>setTimeout(()=>location.reload(),3000)</script>";
 
 fn preview(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> {
     let run = run_dir(ctx, params)?;
     if run.platform() != Platform::Nes {
-        return Err(Fail::conflict(
-            "the rebuilt game is the game's model, and an arcade game has none yet",
-        ));
+        return Err(Fail::conflict("an arcade game's model draws nothing yet"));
     }
     let file = params.get("file").map(String::as_str).unwrap_or("");
     let built = crate::mechanic::live::is_built(&ctx.paths, &run.name);

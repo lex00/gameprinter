@@ -63,7 +63,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "registry_search",
             title: "Search templates and sources",
-            description: "Search the templates in the repo's templates/ and the sources registered in sources/*.toml by words, platform, genre (a model extension such as platformer), entity roles (boss), systems (platformer.enemies) and mechanics from the mechanic index (enemy:contact.kick, or jump.coyote for any role), or ask for the templates inspired by one (inspired_by) or most like one (like, ranked by the share of mechanics in common). Each result lists its mechanics, its inspired_by provenance and the templates that took from it. Each template says what it needs before it can be forked and played: the source ROM, found by hash in $GP_ROM_DIR or given to the server, and its lifted assets.",
+            description: "Search the templates (game folders holding a model and no ROM data, ready to copy) under the repo's templates/ and in the games checkout ($GP_GAMES_DIR, or a games folder at, above or beside the folder the server started in), and the sources registered in sources/*.toml by words, platform, genre (a model extension such as platformer), entity roles (boss), systems (platformer.enemies) and mechanics from the mechanic index (enemy:contact.kick, or jump.coyote for any role), or ask for the templates inspired by one (inspired_by) or most like one (like, ranked by the share of mechanics in common). Each result lists its mechanics, its inspired_by provenance and the templates that took from it. Each template says what it needs before it can be copied and played: its lifted assets, lifted from the person's own ROM of the source (found by hash in $GP_ROM_DIR or given to the server) for a ported game, or built from its authored.toml for a game made here. template_fork does that step itself when it can.",
             input_schema: schema::<crate::registry::SearchArgs>(),
             read_only: true,
             destructive: false,
@@ -71,16 +71,16 @@ pub fn list() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "template_fork",
-            title: "Fork a template",
-            description: "Copy a template from the repo's templates/ into a new working copy, which every other tool then names. The committed template is never changed.",
-            input_schema: schema::<ForkArgs>(),
+            title: "Copy a template",
+            description: "Copy a template (a game's folder: its model, the rules as text, and nothing from a ROM) into a new copy for the person, which every other tool then names. template is the folder's name or the template's id, under the repo's templates/ or in the games checkout. The whole folder is copied, subfolders too, except build output, git's files and any ROM image; the template is never changed. A copy runs on its lifted assets (art, sound and levels): when they aren't there yet, the fork makes them if it can do so here and offline (built from authored.toml for a game made here, lifted from the person's ROM when one is found), and otherwise ready is false and next says the step. notes say what else the copy can't do yet.",
+            input_schema: schema::<crate::fork::ForkArgs>(),
             read_only: false,
             destructive: false,
             idempotent: false,
         },
         ToolDef {
             name: "surface_describe",
-            title: "Describe a working copy",
+            title: "Describe a copy",
             description: "The model's header, input actions, contract rules, every fact by model path with its value, the contract level that governs it and its evidence, and the slot catalog: each asset slot's kind, role, shape (sizes and format limits), the entities that draw from it, whether the simulation reads it, its status (original, stub or replaced), provenance and the checks a replacement must pass. Also the template's change recipes (`recipes`, its AGENTS.md) and the names of its scenario tests (`scenarios`), when the copy has them.",
             input_schema: schema::<CopyArgs>(),
             read_only: true,
@@ -117,7 +117,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "assets_place",
             title: "Place an asset in a slot",
-            description: "Replace a tiles slot's image or a palettes slot's palettes in the working copy, or only what one entity's sprite uses (entity): its tiles, or its one palette. An image must be an indexed PNG of the slot's or the sprite's image_size with color indices 0 to 3 (surface_describe gives both); a palette is four NES color numbers, 0 to 63. It is packed, the model is checked and every baseline of the source is run before and after: the placement is refused, and nothing written, unless the state digests are the same. The slot's status, origin, license and digest go into the copy's assets/slots.toml; replacing part of a slot records both licenses.",
+            description: "Replace a tiles slot's image or a palettes slot's palettes in the copy, or only what one entity's sprite uses (entity): its tiles, or its one palette. An image must be an indexed PNG of the slot's or the sprite's image_size with color indices 0 to 3 (surface_describe gives both); a palette is four NES color numbers, 0 to 63. It is packed, the model is checked and every baseline of the source is run before and after: the placement is refused, and nothing written, unless the state digests are the same. The slot's status, origin, license and digest go into the copy's assets/slots.toml; replacing part of a slot records both licenses.",
             input_schema: schema::<crate::place::PlaceArgs>(),
             read_only: false,
             destructive: true,
@@ -135,7 +135,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "assets_history",
             title: "List a copy's art edits",
-            description: "A working copy's sprite and palette edits by seq with their status (proposed, placed, accepted, rejected, undone) and who decided: what a person accepted or rejected in the live panel. waiting lists proposals still open.",
+            description: "A copy's sprite and palette edits by seq with their status (proposed, placed, accepted, rejected, undone) and who decided: what a person accepted or rejected in the live panel. waiting lists proposals still open.",
             input_schema: schema::<crate::asset_edit::HistoryArgs>(),
             read_only: true,
             destructive: false,
@@ -162,7 +162,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "sound_describe",
             title: "Describe the music and effects",
-            description: "A working copy's songs and sound effects, slot by slot: each song's channels and notes, its instruments with their roles (lead, bass, harmony, drums, sfx) and what each plays through now (the APU, a GM program or a bank's patch), where the notes came from (driver, log, import, edited) and how sure capture is, its tempo and loop, what the model binds it to (a level, a rule state, an event), and whether it's ready to edit (editable, with what's missing when not). Read this before sound_edit.",
+            description: "A copy's songs and sound effects, slot by slot: each song's channels and notes, its instruments with their roles (lead, bass, harmony, drums, sfx) and what each plays through now (the APU, a GM program or a bank's patch), where the notes came from (driver, log, import, edited) and how sure capture is, its tempo and loop, what the model binds it to (a level, a rule state, an event), and whether it's ready to edit (editable, with what's missing when not). Read this before sound_edit.",
             input_schema: schema::<crate::sound::DescribeArgs>(),
             read_only: true,
             destructive: false,
@@ -180,7 +180,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "sound_preview",
             title: "Hear the game's sound in context",
-            description: "Run the working copy in the model interpreter on a baseline's input (or frames and holds) with its music and effects cued as the game cues them (the level's song, a rule state's song, each event's effect), played by the APU synthesizer with the copy's mix, into a WAV file. Returns the file, its length and the cues with their frames.",
+            description: "Run the copy in the model interpreter on a baseline's input (or frames and holds) with its music and effects cued as the game cues them (the level's song, a rule state's song, each event's effect), played by the APU synthesizer with the copy's mix, into a WAV file. Returns the file, its length and the cues with their frames.",
             input_schema: schema::<crate::sound::PreviewArgs>(),
             read_only: true,
             destructive: false,
@@ -189,7 +189,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "run_preview",
             title: "Preview a run",
-            description: "Run the working copy in the model interpreter on scripted input (frames and button holds, such as a@60-70) or a baseline's input, and return its events and its state at chosen paths and frames. No picture yet: the model has no renderer.",
+            description: "Run the copy in the model interpreter on scripted input (frames and button holds, such as a@60-70) or a baseline's input, and return its events and its state at chosen paths and frames. No picture yet: the model has no renderer.",
             input_schema: schema::<PreviewArgs>(),
             read_only: true,
             destructive: false,
@@ -198,7 +198,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "validate",
             title: "Validate against the original",
-            description: "Check the model, then hold it to its fidelity contract against the original's baselines with gp validate, the interpreter as the subject. ok is false when a check fails; each check gives its measured and expected values. With scenarios true it also runs the copy's scenario tests (scenarios.toml) in parallel and returns the failing expectations under scenarios.",
+            description: "Check the model, then hold it to its fidelity contract with gp validate, the interpreter as the subject, against the original game's recorded runs in the repo's baselines/<source> (only Moss Hop has them today, so on another copy this step finds nothing to run). ok is false when a check fails; each check gives its measured and expected values. With scenarios true it also runs the copy's scenario tests (scenarios.toml) in parallel and returns the failing expectations under scenarios.",
             input_schema: schema::<ValidateArgs>(),
             read_only: true,
             destructive: false,
@@ -207,7 +207,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "model_refine",
             title: "Refine the model from the baselines",
-            description: "The refinement loop on the working copy: record the source's baselines (or the named ones) with frame traces, then repeatedly validate, measure feel parameters from the recordings' tracks (walk and run speed, acceleration, jump speed and gravity, fall limit, enemy steps, periods and speeds), write each measured fact a failing check backs (with observed evidence) and each answered question, and ask the rest, until the checks pass or only questions remain. Returns the rounds (iterations), the facts written and the open questions. Needs the source ROM.",
+            description: "The refinement loop on the copy: record the source's baselines (or the named ones) with frame traces, then repeatedly validate, measure feel parameters from the recordings' tracks (walk and run speed, acceleration, jump speed and gravity, fall limit, enemy steps, periods and speeds), write each measured fact a failing check backs (with observed evidence) and each answered question, and ask the rest, until the checks pass or only questions remain. Returns the rounds (iterations), the facts written and the open questions. Needs the source ROM, so it works on a ported game's copy; a game made here has no ROM to measure.",
             input_schema: schema::<crate::refine::RefineArgs>(),
             read_only: false,
             destructive: true,
@@ -216,7 +216,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "model_questions",
             title: "Questions for the person",
-            description: "The working copy's open questions from model_refine: each with its candidate answers and what would settle it. answers (ID=N) choose candidate N, written into the model as a stated fact with evidence. Ask the person; don't answer for them.",
+            description: "The copy's open questions from model_refine: each with its candidate answers and what would settle it. answers (ID=N) choose candidate N, written into the model as a stated fact with evidence. Ask the person; don't answer for them.",
             input_schema: schema::<crate::refine::QuestionsArgs>(),
             read_only: false,
             destructive: true,
@@ -234,7 +234,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "build_publish",
             title: "Build for the browser",
-            description: "Build the working copy for the browser into a local directory (there's no hosted runtime yet): web-preview, the interpreter preview, or web, the preview and the Bevy game. Writes manifest.json with the template, the model's digest, every slot's provenance from slots.toml, the licenses and each file's digest. Refused when the model check fails, a slot's files don't match their recorded digest, or any slot still holds an original asset of a commercial source. dry_run runs the checks only.",
+            description: "Build the copy for the browser into a local directory that a page on this computer plays (there's no hosted runtime yet). The target is web-preview, the interpreter preview; the other target, web, runs gp gen bevy, which this gp doesn't have, so it fails. Writes manifest.json with the template, the model's digest, every slot's provenance from slots.toml, the licenses and each file's digest. Refused when the model check fails, a slot's files don't match their recorded digest, or any slot still holds an original asset of a commercial source. dry_run runs the checks only.",
             input_schema: schema::<crate::publish::PublishArgs>(),
             read_only: false,
             destructive: false,
@@ -252,7 +252,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "requests",
             title: "What the person pointed at",
-            description: "The person's point-and-tell requests in a run (docs/point-and-tell.md): they paused both games, boxed part of the screen (\"a brick\", \"the goomba\", \"the score\") and said what should happen there (\"this is missing\", \"wrong look\", \"should react when I hit it\", or their own words). Each comes with its frame, the region in both games, the things resolved there, and every reply so far. explain: N runs gp request explain on request N (what the original does there, what the model does instead, the general model piece that would cover it) and posts it as a reply. reply answers one yourself: plain words for a person who doesn't read code, with a proposal item from assets_edit (place false) or sound_edit for them to accept or reject, or status needs_mechanic and would_build when no tool can make the change yet.",
+            description: "The person's point-and-tell requests in a run (docs/point-and-tell.md): they paused both games, boxed part of the screen (\"a brick\", \"the goomba\", \"the score\") and said what should happen there (\"this is missing\", \"wrong look\", \"should react when I hit it\", or their own words). Each comes with its frame, the region in both games, the things resolved there, and every reply so far. explain (N) fails today: it runs gp request explain, which this gp doesn't have. reply answers one yourself: plain words for a person who doesn't read code, with a proposal item from assets_edit (place false) or sound_edit for them to accept or reject, or status needs_mechanic and would_build when no tool can make the change yet.",
             input_schema: schema::<crate::requests::RequestsArgs>(),
             read_only: false,
             destructive: false,
@@ -270,7 +270,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "refine_moment",
             title: "Refine one moment",
-            description: "Ask for the refinement loop on one of the game's moments (from moments: its kind and number): the person's workspace starts it beside the two games, with its windows in that moment's frames and only the numbers of the mechanic that owns that kind of moment (a jump's are platformer.jump's), then measures any value it keeps on every other moment of the kind and turns the ones it makes worse into questions. It changes the run's working copy only as the loop does; tell the person in plain words what was asked.",
+            description: "Ask for the refinement loop on one of the game's moments (from moments: its kind and number): the person's workspace starts it beside the two games, with its windows in that moment's frames and only the numbers of the mechanic that owns that kind of moment (a jump's are platformer.jump's), then measures any value it keeps on every other moment of the kind and turns the ones it makes worse into questions. It changes the run's copy only as the loop does; tell the person in plain words what was asked.",
             input_schema: schema::<crate::moments::RefineMomentArgs>(),
             read_only: false,
             destructive: false,
@@ -416,7 +416,7 @@ fn call_tool(config: &Config, name: &str, args: Value) -> Option<Reply> {
         .map(crate::CopyLock::take);
     Some(match name {
         "registry_search" => with(args, |a| crate::registry::search(config, a)),
-        "template_fork" => with(args, |a| fork(config, a)),
+        "template_fork" => with(args, |a| crate::fork::fork(config, a)),
         "surface_describe" => with(args, |a| describe(config, a)),
         "model_edit" => with(args, |a| model_edit(config, a)),
         "contract_edit" => with(args, |a| contract_edit(config, a)),
@@ -478,56 +478,8 @@ fn load_contract(dir: &FsPath) -> Result<Option<(String, Contract)>, String> {
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ForkArgs {
-    /// A template directory under templates/, such as `mosshop`.
-    pub template: String,
-    /// The new working copy's name: letters, digits and `_`.
-    pub copy: String,
-}
-
-fn fork(config: &Config, a: ForkArgs) -> Result<Reply, String> {
-    if !crate::is_source_name(&a.template) {
-        return Err(format!("`{}` isn't a template name", a.template));
-    }
-    let from = config.repo.join("templates").join(&a.template);
-    if !from.join(MODEL_FILE).is_file() {
-        return Err(format!("templates/{} has no {MODEL_FILE}", a.template));
-    }
-    let to = config.copy_dir(&a.copy)?;
-    if to.exists() {
-        return Err(format!("the working copy `{}` already exists", a.copy));
-    }
-    // Copied under another name and renamed into place, so a fork that
-    // stopped halfway is never taken for a working copy.
-    let tmp = config
-        .work
-        .join(format!(".{}.tmp-{}", a.copy, std::process::id()));
-    fs::create_dir_all(&tmp).map_err(|e| format!("creating {}: {e}", tmp.display()))?;
-    let mut files = Vec::new();
-    let mut entries: Vec<_> = fs::read_dir(&from)
-        .map_err(|e| format!("reading {}: {e}", from.display()))?
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
-        .collect();
-    entries.sort_by_key(fs::DirEntry::file_name);
-    for e in entries {
-        let name = e.file_name().to_string_lossy().into_owned();
-        fs::copy(e.path(), tmp.join(&name)).map_err(|err| format!("copying {name}: {err}"))?;
-        files.push(name);
-    }
-    fs::rename(&tmp, &to).map_err(|e| format!("renaming {} into place: {e}", tmp.display()))?;
-    Ok(Reply::ok(json!({
-        "copy": a.copy,
-        "template": a.template,
-        "dir": to,
-        "files": files,
-    })))
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct CopyArgs {
-    /// The working copy's name, from template_fork.
+    /// The copy's name, from template_fork.
     pub copy: String,
 }
 
@@ -797,7 +749,7 @@ fn contract_edit(config: &Config, a: ContractArgs) -> Result<Reply, String> {
     let dir = config.existing_copy(&a.copy)?;
     let (_, model) = load_model(&dir)?;
     let Some((old_text, old)) = load_contract(&dir)? else {
-        return Err(format!("the working copy has no {CONTRACT_FILE}"));
+        return Err(format!("the copy has no {CONTRACT_FILE}"));
     };
     let mut new = old.clone();
     edit::apply_contract(&mut new, &a.ops)?;

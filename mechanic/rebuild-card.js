@@ -160,6 +160,6 @@ export class RefineView {
   }
 
   statusText() {
-    return "Reviewing the rebuild: pick a clip at the side. A plays and pauses, left and right step a frame, the triggers a second, [ and ] jump to the difference before or after, up and down set the transparency, Select changes the layout, C or the left bumper outlines its entities, B goes back to the split, R or the right bumper plays the rebuild.";
+    return "Reviewing the model: pick a clip at the side. A plays and pauses, left and right step a frame, the triggers a second, [ and ] jump to the difference before or after, up and down set the transparency, Select changes the layout, C or the left bumper outlines its entities, B goes back to the split, R or the right bumper plays the model.";
   }
 }

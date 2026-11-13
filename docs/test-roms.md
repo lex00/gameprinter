@@ -75,7 +75,7 @@ They're never committed. Their licenses vary or aren't stated, and the pre-commi
 
 `gp testroms fetch` downloads each file from `raw.githubusercontent.com/christopherpow/nes-test-roms/<commit>/<path>` into `$GP_HOME/work/test-roms/<path>` and checks its hash. A file already there with the pinned hash isn't downloaded again; one with another hash is replaced. A download with the wrong hash is deleted and reported, and nothing runs from it. That means the pinned source changed upstream or the download was corrupted: review it before changing a pin.
 
-The manifest lives in its own `test-roms/` directory rather than with the games. Every game's `roms.toml` is part of the registry of games you own, which `gp roms scan` matches by headerless hash. Test ROMs are downloads with a URL, a commit and a result protocol, closer to the disassembly pin in `scripts/disasm/verify-smbdis.sh`. `gp` compiles the manifest in, so a change to it needs a rebuild (`just build` does that).
+The manifest lives in its own `test-roms/` directory rather than with the games. Every game's `roms.toml` is part of the registry of games you own, which `gp roms scan` matches by headerless hash. Test ROMs are downloads with a URL, a commit and a result protocol, closer to the disassembly pin in game-printer's `scripts/disasm/verify-smbdis.sh`. `gp` compiles the manifest in, so a change to it needs a rebuild (`just build` does that).
 
 ## Our MMC1 test program
 
@@ -96,9 +96,9 @@ Mega Man 2 is MMC1, and the collection's only MMC1-specific ROM, `MMC1_A12/mmc1_
 
 The routines that switch the bank at $C000 run from RAM, and every bank ends with a reset stub and vectors, so the program starts the same way whichever bank the console powers on with. `tetanes-core` passes all ten checks. Changing an expected value in a copy of the source makes the program report that check's code, which is how its failure path was tested.
 
-After the checks it runs on, writing the PRG bank, CHR bank 1 and the control register through the serial port every frame, and stores the result and its frame and button counts in internal RAM ($00 to $02). That's what the open baseline `baselines/mmc1` records. Frames end between serial writes, so the shift register and write delay are at rest at every frame boundary; the unit tests in `crates/gp-nes/src/canonical.rs` cover their other values.
+After the checks it runs on, writing the PRG bank, CHR bank 1 and the control register through the serial port every frame, and stores the result and its frame and button counts in internal RAM ($00 to $02). That's what game-printer's open baseline `baselines/mmc1` recorded (not carried here). Frames end between serial writes, so the shift register and write delay are at rest at every frame boundary; the unit tests in `crates/gp-nes/src/canonical.rs` cover their other values.
 
-It's never downloaded and never committed as a binary. `just build-testroms` assembles every program the manifest lists with a `built_from` source (`gp testroms built` prints them): each `x.s` with the `x.cfg` beside it, into `$GP_HOME/work/test-roms/gp/x.nes`, the path the manifest must give it. `just check-testroms` builds them before running the suites, and `just check` builds them for the open baselines. The manifest pins the build's SHA-256, with `built_from` naming the source. A missing build stops the run with exit 2 and says to run `just build-testroms`. A build with another hash is never used: the source or the assembler changed. After editing the source on purpose, update the pin.
+It's never downloaded and never committed as a binary. `just build-testroms` assembles every program the manifest lists with a `built_from` source (`gp testroms built` prints them): each `x.s` with the `x.cfg` beside it, into `$GP_HOME/work/test-roms/gp/x.nes`, the path the manifest must give it. `just check-testroms` builds them before running the suites. The manifest pins the build's SHA-256, with `built_from` naming the source. A missing build stops the run with exit 2 and says to run `just build-testroms`. A build with another hash is never used: the source or the assembler changed. After editing the source on purpose, update the pin.
 
 ## A second program, for MMC3
 
@@ -115,7 +115,7 @@ The collection's MMC3 tests cover the IRQ counter in depth but not banking or mi
 | 8 | With sprites at $1000, a latch of 99 and the counter reloaded in vblank, two IRQs a frame |
 | 9 | Writing $E000 disables the IRQ: none in a whole frame. The acknowledge is covered by check 8, whose handler writes $E000 and would otherwise take the IRQ again at once |
 
-MMC3 never switches out $E000, so the whole program lives in the last bank and needs no routines in RAM. `tetanes-core` passes every check, and an edited copy with one wrong expected value fails with that check's number. Once it has passed, the program keeps the IRQ firing. Each frame it sets R6 and R2 to the frame count and takes the mirroring from the A button. `baselines/mmc3` records that part.
+MMC3 never switches out $E000, so the whole program lives in the last bank and needs no routines in RAM. `tetanes-core` passes every check, and an edited copy with one wrong expected value fails with that check's number. Once it has passed, the program keeps the IRQ firing. Each frame it sets R6 and R2 to the frame count and takes the mirroring from the A button. game-printer kept that part as a baseline, `baselines/mmc3`, which didn't come over.
 
 ## How to run
 
@@ -180,7 +180,7 @@ Run on 2026-10-27 at commit `fb23aa1`, on macOS ARM64, with the ROMs downloaded 
 | `mmc3_irq` | 6 of 6 | Its `4.Scanline_timing` is the 2005 version, which doesn't check scanline 0 with $2000 = $08 |
 | `read_joy` | 1 of 1 | |
 
-The one failing check is in MMC3 IRQ timing. With sprites fetched from $1000 and the background from $0000 ($2000 = $08), the scanline counter clocks on the rising edge of PPU address line A12 during sprite fetches, and on scanline 0 `tetanes-core` raises the IRQ earlier than the hardware does. Super Mario Bros. doesn't use MMC3, so no recording depends on it yet. Kirby's Adventure does (MMC3, splitting the screen with the scanline IRQ), so it's a row in [open questions](open-questions.md) that bites at step 11. It isn't fixed here, since a fix to the PPU's fetch timing changes emulation and needs the Mesen comparison of step 5 to confirm it.
+The one failing check is in MMC3 IRQ timing. With sprites fetched from $1000 and the background from $0000 ($2000 = $08), the scanline counter clocks on the rising edge of PPU address line A12 during sprite fetches, and on scanline 0 `tetanes-core` raises the IRQ earlier than the hardware does. Super Mario Bros. doesn't use MMC3, so no recording depends on it yet. Kirby's Adventure does (MMC3, splitting the screen with the scanline IRQ), so it's a row in game-printer's open questions (not carried here) that bites at step 11. It isn't fixed here, since a fix to the PPU's fetch timing changes emulation and needs the Mesen comparison of step 5 to confirm it.
 
 ## With RAM powered on as all ones
 
@@ -211,5 +211,5 @@ No ROM in the collection checks reads of controller 2 through $4017. `read_joy3`
 
 ## A test program for sound capture
 
-Sound capture's open tier has a program that isn't a suite, `test-roms/apu/notes.s`. Its NMI plays a made-up eight-note phrase on pulse 1 with a falling volume, a bass note on the triangle every four notes and a noise beat on every note, 12 frames a note, looping. `crates/gp-cli/tests/sound.rs` (in `just check`) assembles and records it for 400 frames, then captures the song and holds it to its log. The same test round-trips the song through FamiStudio text and MIDI ([sound](sound.md)).
+Sound capture's open tier has a program that isn't a suite, `test-roms/apu/notes.s`. Its NMI plays a made-up eight-note phrase on pulse 1 with a falling volume, a bass note on the triangle every four notes and a noise beat on every note, 12 frames a note, looping. `crates/gp-cli/tests/detectors.rs` (`the_notes_test_rom_captures_and_holds_to_its_log`, in `just check`) assembles and records it for 400 frames, then captures the song and holds it to its log ([sound](sound.md)).
 

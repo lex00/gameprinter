@@ -370,7 +370,7 @@ The key is read from the first of these that has one. gp never prints it: curl r
 |---|---|
 | `RUNWAY_API_KEY` | `export RUNWAY_API_KEY=...` in the shell that runs gp. Simplest; the variable is seen by every program the shell starts |
 | The macOS keychain, service `game-printer-runway` | `security add-generic-password -s game-printer-runway -a "$USER" -w` (it asks for the key, so it isn't in the shell's history). gp reads it with `security find-generic-password -s game-printer-runway -w`. `GP_RUNWAY_KEYCHAIN=0` skips it |
-| `$GP_HOME/secrets/runway` | `mkdir -p ~/.game-printer/secrets && (umask 077 && cat > ~/.game-printer/secrets/runway)`, paste the key, then Ctrl-D. gp refuses the file while anyone but its owner can read it (`chmod 600`) |
+| `$GP_HOME/secrets/runway` | `mkdir -p ~/.gameprinter/secrets && (umask 077 && cat > ~/.gameprinter/secrets/runway)`, paste the key, then Ctrl-D. gp refuses the file while anyone but its owner can read it (`chmod 600`) |
 
 ### Cost before money
 
@@ -417,4 +417,4 @@ Only the sheets folder's files (grids, a stage's geometry guide, prompts), the r
 
 ### Tests
 
-`crates/gp-cli/tests/theme_generate.rs` runs gp against a mock of the API on 127.0.0.1: a run in order with each result downloaded, a refunded failure made again and a safety refusal not, rate limits, a run killed with a task in flight and continued with no second request, the budget's stop and its continuation, a paid run with no terminal and no `--yes`, and a wrong key that shows in no output and a right one in no file. No test calls Runway.
+game-printer's `crates/gp-cli/tests/theme_generate.rs`, not carried here, ran gp against a mock of the API on 127.0.0.1: a run in order with each result downloaded, a refunded failure made again and a safety refusal not, rate limits, a run killed with a task in flight and continued with no second request, the budget's stop and its continuation, a paid run with no terminal and no `--yes`, and a wrong key that shows in no output and a right one in no file. No test calls Runway.

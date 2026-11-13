@@ -1,8 +1,7 @@
 //! The agent side of music editing (docs/sound.md, "Editing by asking an
 //! agent"; the pattern of docs/research/agent-sprite-editor.md): a person
 //! asks for "a warmer bass" or "1-1 a little slower" and the agent answers
-//! with these tools. There's no manual music editor; FamiStudio and MIDI
-//! (`gp sound export`) stay the external path.
+//! with these tools. There's no manual music editor.
 //!
 //! - `sound_banks`: the banks there are (the APU synthesizer and every SF2
 //!   and SFZ in the bank folders), each patch with a short preview.
@@ -161,7 +160,7 @@ fn clip(
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BanksArgs {
-    /// A working copy, whose `sound/` folder is searched too.
+    /// A copy, whose `sound/` folder is searched too.
     #[serde(default)]
     pub copy: Option<String>,
     /// Render a one-second preview of each patch (the first eight of a

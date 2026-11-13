@@ -288,7 +288,7 @@ _validate-mosshop:
 # tables (docs/derivation.md), then a copy with its kill line made wrong:
 # derive must find 208 again and ask about it. Writes only under
 # $GP_HOME/work/mosshop. game-printer also measured the baselines'
-# recordings here; that needs `gp input-log generate` (wave 9).
+# recordings here with `gp input-log generate`, which this recipe doesn't run.
 derive-mosshop: build mosshop _derive-mosshop
 
 _derive-mosshop:
@@ -369,7 +369,7 @@ mame-record ROMSET LOG OUT SHOT_EVERY="30" WAV="0":
 # The Mesen oracle (docs/oracle.md): Mesen 2 built from source at a pinned
 # commit, in its own image, separate from the toolchain image. The tag
 # names the commit's first 8 hex digits, as gp_oracle::mesen::image does.
-# Optional, not part of .
+# Optional, not part of `just check`.
 mesen_image := "game-printer-mesen:b9fa69dd"
 
 # Builds the Mesen image, for this machine's architecture by default.
@@ -583,8 +583,7 @@ check-vendor:
 # Full sprite capture on Moss Hop (docs/capture.md, "Sprites"), end to
 # end: two baseline inputs recorded into a store of its own under
 # $GP_HOME/work/sprites-check, captured (Moss Hop's sprites agree with
-# capture, so the proposed model must equal the template's), exported as a
-# sheet with a palette and sidecar, and imported back with its checks.
+# capture, so the proposed model must equal the template's).
 sprites-mosshop: build mosshop
     #!/usr/bin/env bash
     set -euo pipefail
@@ -599,8 +598,6 @@ sprites-mosshop: build mosshop
     done
     GP_STORE="$work/store" {{gp}} sprites capture templates/mosshop "${ids[@]}"
     cmp templates/mosshop/model.toml {{quote(gp_home / "work" / "sprites" / "mosshop" / "model.toml")}} || { echo "sprites-mosshop: capture proposes a change to Moss Hop's model" >&2; exit 1; }
-    {{gp}} sprites export templates/mosshop --out "$work/export"
-    {{gp}} sprites import templates/mosshop --from "$work/export" --out "$work/theme"
 
 # Every version pin in the repo (the toolchain, crates, npm, the MAME
 # image, wasmtime, the inspector's browser, tetanes-core) with its newest

@@ -1,15 +1,15 @@
 ---
 title: Themes and levels
-description: Give a game a new look, in a repo of your own, or make a new stage.
+description: Give a game new pictures, in a repo of your own, or make a new stage.
 prompt: |
   Read this page. Then help me make a large-art theme for Donkey Kong in its own repo, using lex00/turnips as the pattern, in the style I describe next. Use no art, music or names from any existing game, and check the result with gp template served before I publish it.
 ---
 
-A theme changes how a game looks and nothing about how it plays. Every body keeps its place and its hit box. A player picks a theme under Settings, Theme, and can go back to the original's art at any time.
+A theme is new pictures and sounds for a game. It changes how the game looks and nothing about how it plays: the game's model, the text file of its rules ([what a model and a template are](../)), stays as it was, so every body keeps its place and its hit box. A player picks a theme under Settings, Theme, and can go back to the original art at any time. On a ported game such as Donkey Kong the levels and the rules' tables still come from the player's own ROM, so the game with your theme plays in a browser only for someone who has that ROM.
 
 ## A theme with large art
 
-The way to make a theme today is a finished look: pictures drawn bigger than the game's own, at the place and size of the picture each one stands for, and a rules file that says how to draw them. [`lex00/turnips`](https://github.com/lex00/turnips) is one, a clay look for Donkey Kong, and the one to copy.
+The way to make a theme today is a large-art theme: pictures drawn bigger than the game's own, at the place and size of the picture each one stands for, and a rules file that says how to draw them. [`lex00/turnips`](https://github.com/lex00/turnips) is one, a clay theme for Donkey Kong, and the one to copy.
 
 | File | What it holds |
 |---|---|
@@ -54,7 +54,7 @@ Your work has to be your own. If you used an AI tool to make any of it, name the
 
 ## Get it in the game
 
-Keep your theme in a repo of your own, with its pictures in Git LFS. Players get themes from the registry the page reads, [`lex00/gp-registry`](https://github.com/lex00/gp-registry): open an issue there with your repo's link. Once it's published for the game (`gp registry publish ... --for lex00/donkey-kong`), the page at [nes-donkey-kong.intentius.workers.dev](https://nes-donkey-kong.intentius.workers.dev) installs it with the game and offers it under Settings, Theme, beside Original and Turnips. Nothing on the page changes for that: the page asks the registry what it offers for the game each time it loads.
+Keep your theme in a repo of your own, with its pictures in Git LFS. Players get themes from the registry the page reads, [`lex00/gp-registry`](https://github.com/lex00/gp-registry): open an issue there with your repo's link. Once it's published for the game (`gp registry publish ... --for lex00/donkey-kong`), the page at [nes-donkey-kong.intentius.workers.dev](https://nes-donkey-kong.intentius.workers.dev) installs it with the game and offers it under Settings, Theme, beside Original (the ROM's own art) and Turnips. Nothing on the page changes for that: the page asks the registry what it offers for the game each time it loads.
 
 The page opens in its own theme, Turnips. A link with `&c=YOUR/THEME` opens it in yours instead.
 
@@ -82,7 +82,7 @@ The other way to make a theme is the one game-printer had: a theme folder (`them
 
 A game's level kit says what a stage is made of and what limits it has to keep. Donkey Kong's is `donkey-kong/level-kit/level-kit.md` in `lex00/games`. Stages live in the game's model.
 
-`gp level measure` reports a stage's girders, ladders and routes on the model, once you've made a working copy as described in [Improve a game](../improve/):
+`gp level measure` reports a stage's girders, ladders and routes on the model, once you've made a copy of the game's folder as described in [Improve a game](../improve/):
 
 ```sh
 gp level measure --template ~/my-donkey-kong --level main \
@@ -90,8 +90,8 @@ gp level measure --template ~/my-donkey-kong --level main \
   --assets ~/my-donkey-kong/lifted/donkey-kong-oe
 ```
 
-A new stage should be your own layout, not a copy of an original's. The module in version 1.0.5 can only measure the sloped stage, `main`. The flat stages need a module built with a newer `gp`.
+A new stage should be your own layout, not a copy of the original game's. The `module.wasm` of Donkey Kong 1.0.5 (its custom code, compiled) can only measure the sloped stage, `main`; the flat stages need one built with a newer `gp`.
 
 ## Not built yet
 
-A large-art look (like Turnips) in the THEMES tab's clip review, a way to send a theme to the registry from the command line, and level packages a player can pick.
+A large-art theme (like Turnips) in the THEMES tab's clip review, a way to put a theme in the page's registry yourself (today you open an issue there; `gp registry publish` works only on a registry you run), and new levels a player can pick.

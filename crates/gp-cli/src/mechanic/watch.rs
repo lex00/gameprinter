@@ -4,7 +4,7 @@
 //! of each. Kept in the session folder under `watch/`, written only by the
 //! agent's commands (`gp mechanic log`, `pin`, `problem`) and read by the
 //! page once a second. From the watch page of the clay theme work
-//! (~/.game-printer/work/clay/hires/live/watch.html), which the owner found
+//! (~/.gameprinter/notes/clay/hires/live/watch.html), which the owner found
 //! the most useful way to follow an agent at work.
 //!
 //! | File | What |

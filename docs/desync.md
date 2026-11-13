@@ -2,7 +2,7 @@
 
 A movie imported with `gp movie import` ([movies.md](movies.md)) replays exactly in `gp-nes`: the recording is what our runtime does with the movie's buttons. It desyncs when that isn't what the author's emulator did, and the run then goes somewhere the author never went. This is the procedure for finding out why, in order. Each step has its command. Work in a scratch store (`export GP_STORE=$(mktemp -d)/store`, which keeps `$GP_ROM_DIR` where it is) until the last step; only a movie that syncs goes into the real store.
 
-Brought from game-printer's docs/desync.md. Its steps are the same. Three helpers it used are game-printer's `scripts/movie/` and aren't in gameprinter: `ram_drift.py` (step 3), `sweep.sh` with `variants.py` (step 4) and `fcm2fm2.py`, which converted an old FCEU `.fcm` movie to `.fm2`. Each step says what to run instead. The Mesen oracle of step 5 isn't here either. The worked examples on Mega Man 2, Kirby's Adventure, Ninja Gaiden and Super Mario Bros. 2 stay in game-printer, with a summary at the end; Donkey Kong's is in [corpus.md](corpus.md).
+Brought from game-printer's docs/desync.md. Its steps are the same. Three helpers it used are game-printer's `scripts/movie/` and aren't in gameprinter: `ram_drift.py` (step 3), `sweep.sh` with `variants.py` (step 4) and `fcm2fm2.py`, which converted an old FCEU `.fcm` movie to `.fm2`. Each step says what to run instead. The worked examples on Mega Man 2, Kirby's Adventure, Ninja Gaiden and Super Mario Bros. 2 stay in game-printer, with a summary at the end; Donkey Kong's is in [corpus.md](corpus.md).
 
 ## 1. Read the movie's header and notes
 
@@ -73,7 +73,7 @@ Not here yet: game-printer's `scripts/movie/sweep.sh MOVIE ID --shifts -4..6 --r
 
 If another accurate emulator plays the input log to the same states, `gp-nes` isn't the cause, and the difference is between the author's emulator and accurate ones. If it goes further, the frame where `gp-nes` leaves it is a fork bug to triage.
 
-Not here yet: game-printer's Mesen oracle (`gp oracle record <recording>`, `gp oracle diff`), which played a recording's input log in Mesen 2 and found where the two parted. For an arcade set, the MAME oracle plays an input log in MAME and writes every frame ([oracle-mame.md](oracle-mame.md)).
+The Mesen oracle (`gp oracle record <recording>`, `gp oracle diff`, [oracle.md](oracle.md)) plays a recording's input log in Mesen 2 and finds where the two part. For an arcade set, the MAME oracle plays an input log in MAME and writes every frame ([oracle-mame.md](oracle-mame.md)).
 
 ## 6. Record the outcome
 

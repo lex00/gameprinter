@@ -108,7 +108,7 @@ let compare = null; // {old: {log, start, end}, saved}
 // by side, the rebuilt game on top of the original at a transparency, and
 // their difference, black where the two match. Kept in the browser.
 const VIEWS = ["side", "top", "diff"];
-const VIEW_WORDS = { side: "side by side", top: "the rebuilt game on top", diff: "the differences", solo: "the rebuild only" };
+const VIEW_WORDS = { side: "side by side", top: "the model on top", diff: "the differences", solo: "the model only" };
 // Playing the rebuild live adds the rebuild by itself to the cycle.
 const LIVE_VIEWS = ["side", "top", "diff", "solo"];
 let view = "side";
@@ -311,11 +311,11 @@ async function loadRebuildFrom(url, still) {
       same: r.together_count ?? 0,
     };
     if (mode === "refine") drawStrip();
-    line.set(`${base} ${mode === "refine" ? `${rebuild.same} of ${frames.length} frames the same. A plays and pauses, left and right step, up and down set the transparency, Select changes the layout.` : "Left and right: side by side, on top, the differences."}${mode === "refine" && rebuild.note.length ? " The rebuild: " + rebuild.note.join("; ") + "." : ""}`.trim());
-    if (mode !== "refine" && rebuild.note.length) $("say").textContent += `\n\nThe rebuild: ${rebuild.note.join("; ")}.`;
+    line.set(`${base} ${mode === "refine" ? `${rebuild.same} of ${frames.length} frames the same. A plays and pauses, left and right step, up and down set the transparency, Select changes the layout.` : "Left and right: side by side, on top, the differences."}${mode === "refine" && rebuild.note.length ? " The model: " + rebuild.note.join("; ") + "." : ""}`.trim());
+    if (mode !== "refine" && rebuild.note.length) $("say").textContent += `\n\nThe model: ${rebuild.note.join("; ")}.`;
     cycleView(0);
   } catch (e) {
-    if (still()) line.set(`${base} The rebuild couldn't play it: ${String(e.message ?? e).replace(/^[^ ]+: \d+ /, "")}`.trim());
+    if (still()) line.set(`${base} The model couldn't play it: ${String(e.message ?? e).replace(/^[^ ]+: \d+ /, "")}`.trim());
   } finally {
     clearInterval(tick);
   }
@@ -395,7 +395,7 @@ function drawRebuild() {
       g.fillStyle = "rgb(248,56,0)";
       g.fillText(t, 5, 10);
     }
-    const label = view === "side" ? "REBUILT" : view === "top" ? `REBUILT ON TOP, ${Math.round(opacity * 100)}%`
+    const label = view === "side" ? "MODEL" : view === "top" ? `MODEL ON TOP, ${Math.round(opacity * 100)}%`
       : pixelsDiffer === null ? "DIFFERENCE: MAGENTA WHERE THEY DIFFER" : `DIFFERENCE: ${pixelsDiffer ? pixelsDiffer + " PIXELS DIFFER" : "EVERY PIXEL THE SAME"}`;
     g.fillStyle = "rgba(0,0,0,0.7)";
     g.fillRect(2, H - 10, g.measureText(label).width + 6, 10);
@@ -603,7 +603,7 @@ function cycleView(d) {
   const i = list.indexOf(view);
   view = list[((i < 0 ? 0 : i) + d + list.length) % list.length];
   keepView();
-  toast(`${liveRb ? "Playing the rebuild" : rebuild ? "Original and rebuilt" : "Two clips"}: ${VIEW_WORDS[view]}.`, 1500);
+  toast(`${liveRb ? "Playing the model" : rebuild ? "Original and model" : "Two clips"}: ${VIEW_WORDS[view]}.`, 1500);
 }
 
 function setOpacity(o) {
@@ -611,7 +611,7 @@ function setOpacity(o) {
   if (liveRb) liveRb.labelUntil = performance.now() + 3000;
   if (view !== "top") view = "top";
   keepView();
-  toast(`The rebuilt game on top at ${Math.round(opacity * 100)}%.`, 1200);
+  toast(`The model on top at ${Math.round(opacity * 100)}%.`, 1200);
 }
 
 /** A route's JSON; a failure throws the server's own words (its `error`). */
@@ -689,9 +689,9 @@ function updateBusy() {
   const waiting = session.talk.filter((t) => t.by === "agent").length > seenTurns;
   if (liveRb && (mode === "live" || mode === "recording")) {
     const what = liveRb.kind === "free"
-      ? "Free play: the rebuild alone, with its own random numbers. The original follows your presses unseen, so a clip you record can be reviewed against it."
-      : `The rebuild beside the original, ${VIEW_WORDS[view]}. V or the left bumper changes the layout, [ and ] the transparency.`;
-    const rec = mode === "recording" ? " Recording: R or the right bumper stops." : " R or the right bumper records; Esc stops playing the rebuild.";
+      ? "Free play: the model alone, with its own random numbers. The original follows your presses unseen, so a clip you record can be reviewed against it."
+      : `The model beside the original, ${VIEW_WORDS[view]}. V or the left bumper changes the layout, [ and ] the transparency.`;
+    const rec = mode === "recording" ? " Recording: R or the right bumper stops." : " R or the right bumper records; Esc stops playing the model.";
     if (liveRb.on) $("busy-text").textContent = what + rec + (waiting ? " Your agent has a message: Esc to see it." : "");
     return;
   }
@@ -768,9 +768,9 @@ function renderCtx() {
       const sp = c.first_split;
       if (sp) el(left, "p", `First split at ${secs(sp.clip_frame ?? sp.frame - (c.start ?? viewing.start))}: ${sp.what ?? "a measure differs"}`, "bad");
       else if (c.straight) el(left, "p", "No lasting split.", "muted");
-      if (rebuild?.drawsDesync) el(left, "p", `The rebuild's random draws leave the original's at frame ${rebuild.drawsDesync.frame}.`, "bad");
+      if (rebuild?.drawsDesync) el(left, "p", `The model's random draws leave the original's at frame ${rebuild.drawsDesync.frame}.`, "bad");
     } else if (live) {
-      el(left, "h3", "Playing the rebuild");
+      el(left, "h3", "Playing the model");
       el(left, "p", "You play the model; the original takes the same presses. Measures aren't taken while playing live: record a clip and review it to see them.", "muted");
     }
   }
@@ -783,7 +783,7 @@ function renderCtx() {
   if (!diffs.length) el(right, "p", e?.together === false ? "The mapped state differs, but no measure is out of its tolerance." : "Nothing measured differs.", "muted");
   else {
     const t = el(right, "table");
-    const h = el(t, "tr"); el(h, "td", "measure", "muted"); el(h, "td", "original", "v muted"); el(h, "td", "rebuild", "v muted");
+    const h = el(t, "tr"); el(h, "td", "measure", "muted"); el(h, "td", "original", "v muted"); el(h, "td", "model", "v muted");
     for (const [path, o, m] of diffs) { const tr = el(t, "tr"); el(tr, "td", path); el(tr, "td", o, "v"); el(tr, "td", m, "v bad"); }
   }
   const first = rebuild.frames[0]?.f ?? 0;
@@ -828,13 +828,13 @@ async function rbPlay(kind = "beside") {
       // make a newer one beside it; the next PLAY uses it.
       await api("api/rebuild/build", {});
       liveRb.olderBuild = true;
-      toast("A newer rebuild is building; you're playing the previous one.", 5000);
+      toast("A newer build of the model is building; you're playing the previous one.", 5000);
     } else if (!st.built) {
       // No build yet: the first one has to finish before anything plays.
       await api("api/rebuild/build", {});
       while (liveRb && (st = await api("api/rebuild/status")).building !== null) {
-        $("busy-text").textContent = `Building the playable rebuild: ${Math.round(st.building)} s (the first build takes a few minutes). Keep playing.`;
-        toast(`Building the playable rebuild, ${Math.round(st.building)} s.`, 2500);
+        $("busy-text").textContent = `Building the playable model: ${Math.round(st.building)} s (the first build takes a few minutes). Keep playing.`;
+        toast(`Building the playable model, ${Math.round(st.building)} s.`, 2500);
         await new Promise((r) => setTimeout(r, 2000));
       }
       if (!liveRb) return;
@@ -854,7 +854,7 @@ async function rbPlay(kind = "beside") {
       liveRb.profile = profileName();
     }
     await new Promise((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error("the rebuild didn't load")), 30000);
+      const t = setTimeout(() => reject(new Error("the model didn't load")), 30000);
       liveRb.onReady = () => { clearTimeout(t); resolve(); };
       const prof = kind === "free" && liveRb.profile !== (profiles?.base ?? "retro") ? `&profile=${encodeURIComponent(liveRb.profile)}` : "";
       // files=here: the preview reads the build beside it, not the
@@ -863,7 +863,7 @@ async function rbPlay(kind = "beside") {
     });
     if (kind === "free") rbStartFree(); else await rbStart();
   } catch (e) {
-    const why = `The rebuild couldn't start: ${e.message ?? e}`;
+    const why = `The model couldn't start: ${e.message ?? e}`;
     toast(why, 8000);
     setState(why);
     rbStop(true);
@@ -881,8 +881,8 @@ function rbStartFree() {
   rbPost({ gp: "frames", text: "gp-frames 1\n", frame: 0 });
   liveRb.on = true;
   liveRb.labelUntil = performance.now() + 3000;
-  const older = liveRb.olderBuild ? " A newer rebuild is building; you're playing the previous one." : "";
-  toast("Free play: the rebuild alone, from its own start. R records, Esc stops." + older, older ? 7000 : 4000);
+  const older = liveRb.olderBuild ? " A newer build of the model is building; you're playing the previous one." : "";
+  toast("Free play: the model alone, from its own start. R records, Esc stops." + older, older ? 7000 : 4000);
 }
 
 async function rbStart() {
@@ -900,15 +900,15 @@ async function rbStart() {
     rbPost({ gp: "load-state", state: r.state, text: frames + "\n", frame: 1e9 });
     liveRb.on = true;
     liveRb.labelUntil = performance.now() + 3000;
-    const older = liveRb.olderBuild ? " A newer rebuild is building; you're playing the previous one." : "";
+    const older = liveRb.olderBuild ? " A newer build of the model is building; you're playing the previous one." : "";
     toast((liveRb.kind === "free"
-      ? "Free play: the rebuild alone. R records, Esc stops."
-      : `Playing the rebuild from here${r.missing ? ` (${r.missing} parts of the state not carried over)` : ""}. V or the left bumper changes the layout, [ and ] the transparency, Esc stops.`) + older, older ? 7000 : 4000);
+      ? "Free play: the model alone. R records, Esc stops."
+      : `Playing the model from here${r.missing ? ` (${r.missing} parts of the state not carried over)` : ""}. V or the left bumper changes the layout, [ and ] the transparency, Esc stops.`) + older, older ? 7000 : 4000);
   } catch (e) {
     // Not in play yet (the title screen): try again in a second.
     if (!liveRb) return;
     liveRb.queue = null;
-    $("busy-text").textContent = `The rebuild joins once the game is in play: ${String(e).slice(0, 120)}`;
+    $("busy-text").textContent = `The model joins once the game is in play: ${String(e).slice(0, 120)}`;
     setTimeout(() => { if (liveRb && !liveRb.on) void rbStart(); }, 1000);
   }
 }
@@ -994,7 +994,7 @@ function syncSettings() {
   if (b) b.disabled = busy || liveRb?.kind !== "free";
   const name = profileName();
   const playing = liveRb?.profile ?? name;
-  $("set-now").textContent = `Playing: ${name.split("+").join(", ")}${playing !== name ? " (starting)" : ""}. The button below, F1 or the right stick (R3) opens the settings in the game (Esc only closes them here, since it also leaves FREE PLAY): the mode, retro or normal, and every switch. A change starts the rebuild again from power-on.`;
+  $("set-now").textContent = `Playing: ${name.split("+").join(", ")}${playing !== name ? " (starting)" : ""}. The button below, F1 or the right stick (R3) opens the settings in the game (Esc only closes them here, since it also leaves FREE PLAY): the mode, retro or normal, and every switch. A change starts the model again from power-on.`;
 }
 /** Opens the settings screen inside the rebuild: FREE PLAY only, since
  * beside the original the rebuild is always the model as written. */
@@ -1030,7 +1030,7 @@ function onSettings(m) {
   keepProfile(m.profile);
   syncSettings();
   if (m.restart && liveRb.kind === "free") {
-    toast(`Settings: ${m.profile.split("+").join(", ")}. The rebuild starts again from power-on.`, 4000);
+    toast(`Settings: ${m.profile.split("+").join(", ")}. The model starts again from power-on.`, 4000);
     void rbPlay("free");
   }
 }
@@ -1040,7 +1040,7 @@ window.addEventListener("message", (e) => {
   const m = e.data;
   if (m?.gp === "ready") { liveRb.ready = true; liveRb.onReady?.(); }
   else if (m?.gp === "settings") onSettings(m);
-  else if (m?.gp === "error") toast(`The rebuild: ${m.message}`, 6000);
+  else if (m?.gp === "error") toast(`The model: ${m.message}`, 6000);
 });
 
 const rbOff = document.createElement("canvas");
@@ -1060,14 +1060,14 @@ function drawLiveRebuild() {
       ctx.fillRect(0, 0, W, H);
       ctx.font = "8px monospace";
       ctx.fillStyle = "rgb(252,160,68)";
-      ctx.fillText("THE REBUILD IS STARTING", 80, 120);
+      ctx.fillText("THE MODEL IS STARTING", 80, 120);
       return;
     }
     frameSource = "original";
     draw(0);
     ctx.save();
     ctx.font = "8px monospace";
-    const t = "THE REBUILD JOINS ONCE THE GAME IS IN PLAY";
+    const t = "THE MODEL JOINS ONCE THE GAME IS IN PLAY";
     ctx.fillStyle = "rgba(0,0,0,0.75)";
     ctx.fillRect(2, 2, ctx.measureText(t).width + 6, 11);
     ctx.fillStyle = "rgb(252,160,68)";
@@ -1089,7 +1089,7 @@ function drawLiveRebuild() {
     // The layout's name, for a few seconds after it changes; the badge
     // names the mode the rest of the time.
     if (performance.now() > (liveRb.labelUntil ?? 0)) return;
-    const label = view === "solo" ? (liveRb.kind === "free" ? "FREE PLAY: THE REBUILD ALONE" : "THE REBUILD ONLY") : view === "side" ? "SIDE BY SIDE: ORIGINAL, REBUILT" : view === "top" ? `REBUILT ON TOP, ${Math.round(opacity * 100)}%` : "DIFFERENCE: BLACK WHERE THEY MATCH";
+    const label = view === "solo" ? (liveRb.kind === "free" ? "FREE PLAY: THE MODEL ALONE" : "THE MODEL ONLY") : view === "side" ? "SIDE BY SIDE: ORIGINAL, MODEL" : view === "top" ? `MODEL ON TOP, ${Math.round(opacity * 100)}%` : "DIFFERENCE: BLACK WHERE THEY MATCH";
     k.font = "8px monospace";
     k.fillStyle = "rgba(0,0,0,0.7)";
     k.fillRect(2, H - 10, k.measureText(label).width + 6, 10);
@@ -1530,10 +1530,10 @@ async function openClipView(n) {
   if (mode === "agent") { agentTurn = null; showClip = null; endCompare(); hidePanel(); mode = "live"; }
   if (mode !== "live") { toast(mode === "sending" ? "Wait for the clip to send." : "Finish the recording first."); return; }
   const c = session.clips.find((x) => x.n === n);
-  toast(`Clip ${n} beside the rebuild.`);
+  toast(`Clip ${n} beside the model.`);
   // Shown as an agent turn of the page's own, which answers nothing.
   seenTurns = session.talk.filter((t) => t.by === "agent").length;
-  await showAgent({ text: `Clip ${n}${c?.note ? ": " + c.note : ""}. The original, and the rebuild on the same presses from the original's state at the clip's start.`, choices: [], show: n, rebuild: true, mine: true });
+  await showAgent({ text: `Clip ${n}${c?.note ? ": " + c.note : ""}. The original, and the model on the same presses from the original's state at the clip's start.`, choices: [], show: n, rebuild: true, mine: true });
 }
 
 /** Powers a slot on to replay a clip's log and runs it to the clip's start
@@ -1681,7 +1681,7 @@ async function refreshWatch() {
   } else {
     status.className = "muted";
     const where = watchTopic ? `in ${watchTopic}` : `in any topic of ${session.game}`;
-    status.textContent = `Nothing yet ${where}. Your agent writes here with gp mechanic log ${session.game} TOPIC "what it's doing" (and pin, problem); this panel shows every topic.`;
+    status.textContent = `Nothing yet ${where}. What your agent is doing shows here, every topic of the game.`;
   }
   const pins = $("w-pins");
   pins.innerHTML = "";
@@ -1759,7 +1759,7 @@ async function refresh() {
         const cmp = document.createElement("button");
         cmp.className = "qcmp";
         cmp.textContent = "COMPARE";
-        cmp.title = "Its newest clip beside the rebuild (C, or the left bumper)";
+        cmp.title = "Its newest clip beside the model (C, or the left bumper)";
         cmp.addEventListener("click", (e) => { e.stopPropagation(); doAction("compareNewest"); });
         li.appendChild(cmp);
         // Opening a row hands nothing over; this does.
@@ -1791,14 +1791,14 @@ async function refresh() {
       const li = document.createElement("li");
       li.value = c.n;
       li.textContent = `${(c.frames / FPS).toFixed(1)} s, by ${c.by}${c.note ? ": " + c.note : ""}`;
-      li.title = "Click to watch it beside the rebuild";
+      li.title = "Click to watch it beside the model";
       li.addEventListener("click", () => void openClipView(c.n));
       // The clip on the model beside the original, in REVIEW REBUILD.
       const rv = document.createElement("button");
       rv.type = "button";
       rv.className = "rv2-open";
       rv.textContent = "ON THE MODEL";
-      rv.title = "Review this clip on the model beside the original, as the score plays it (REVIEW REBUILD)";
+      rv.title = "Review this clip on the model beside the original, as the score plays it (ON THE MODEL)";
       rv.addEventListener("click", (e) => {
         e.stopPropagation();
         void reviewOnModel(c.n);
@@ -1972,7 +1972,7 @@ function setTab(t) {
     $("rule-card").hidden = false;
     // The tab opens on a clip beside the rebuild, never on the bare game.
     void refine.enter(session?.mechanic ?? null).then(() => {
-      if (mode === "refine" && !showClip && !refineToken && !refine.showFirst()) refineMsg = "No clips yet: record one in HELP WITH MECHANICS.";
+      if (mode === "refine" && !showClip && !refineToken && !refine.showFirst()) refineMsg = "No clips yet: record one in CLIPS.";
     });
     syncReviewBar();
   } else if (t === "free") {
@@ -2182,7 +2182,7 @@ function doAction(name) {
     case "rvMore": setOpacity(opacity + 0.1); break;
     case "rvLess": setOpacity(opacity - 0.1); break;
     case "rvLayout": cycleView(1); break;
-    case "rvBoxes": showBoxes = !showBoxes; keepView(); toast(showBoxes ? "The rebuild's entities outlined." : "No outlines."); break;
+    case "rvBoxes": showBoxes = !showBoxes; keepView(); toast(showBoxes ? "The model's entities outlined." : "No outlines."); break;
     case "rvSplit": review.playing = false; seekReview(refineSplit?.frame && showClip?.server ? frameAt(refineSplit.frame - 60) : showClip?.start ?? 0); break;
     case "viewLeft": if (compare || rebuild) cycleView(-1); break;
     case "viewRight": if (compare || rebuild) cycleView(1); break;
@@ -2453,7 +2453,7 @@ function frame(now) {
       ctx.fillRect(0, H / 2 - 16, W, 24);
       ctx.fillStyle = "#fff";
       ctx.font = "8px monospace";
-      ctx.fillText(refineMsg ?? "Pick a clip in the card to watch it beside the rebuild.", 8, H / 2 - 1);
+      ctx.fillText(refineMsg ?? "Pick a clip in the card to watch it beside the model.", 8, H / 2 - 1);
     }
     if ((mode === "agent" || mode === "idle") && showClip && measure) drawMeasure(player.frame(1) - showClip.start);
     if (mode === "refine" && showClip && review.playing) { syncReviewBar(); drawStrip(); }
@@ -2535,16 +2535,16 @@ function leaveIdle() {
 /** The badge over the game and the screen's border: watching the agent,
  * playing, recording, or the agent talking. */
 function showMode() {
-  const [cls, text] = mode === "refine" ? ["m-watch", !showClip ? "REVIEW REBUILD: PICK A CLIP" : refine.picked?.startsWith("sealed/") ? "REVIEWING A SEALED RUN" : "REVIEWING THE REBUILD"]
+  const [cls, text] = mode === "refine" ? ["m-watch", !showClip ? "ON THE MODEL: PICK A CLIP" : refine.picked?.startsWith("sealed/") ? "REVIEWING A SEALED RUN" : "REVIEWING THE MODEL"]
     : mode === "idle" ? ["m-watch", "WATCHING YOUR AGENT"]
     : mode === "watch" ? ["m-watch", "WATCHING YOUR AGENT PLAY"]
-    : mode === "recording" ? ["m-rec", liveRb?.kind === "free" ? "RECORDING IN FREE PLAY" : liveRb ? "RECORDING BESIDE THE REBUILD" : "RECORDING"]
+    : mode === "recording" ? ["m-rec", liveRb?.kind === "free" ? "RECORDING IN FREE PLAY" : liveRb ? "RECORDING BESIDE THE MODEL" : "RECORDING"]
     : mode === "sending" ? ["m-talk", "SENDING"]
     : mode === "sealed" ? ["m-rec", "SEALED"]
     : mode === "review" ? ["m-talk", "YOUR CLIP"]
-    : mode === "agent" ? ["m-talk", agentTurn?.mine ? "A CLIP BESIDE THE REBUILD" : "YOUR AGENT SAYS"]
-    : liveRb?.kind === "free" ? ["m-play", liveRb.on ? "FREE PLAY: THE REBUILD" : "FREE PLAY: STARTING"]
-    : liveRb ? ["m-play", liveRb.on ? "PLAYING THE REBUILD" : "THE REBUILD: STARTING"]
+    : mode === "agent" ? ["m-talk", agentTurn?.mine ? "A CLIP BESIDE THE MODEL" : "YOUR AGENT SAYS"]
+    : liveRb?.kind === "free" ? ["m-play", liveRb.on ? "FREE PLAY: THE MODEL" : "FREE PLAY: STARTING"]
+    : liveRb ? ["m-play", liveRb.on ? "PLAYING THE MODEL" : "THE MODEL: STARTING"]
     : ["m-play", "PLAYING"];
   const b = $("modebadge");
   if (b.textContent !== text) b.textContent = text;

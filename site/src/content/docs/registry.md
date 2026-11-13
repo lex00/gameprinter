@@ -1,9 +1,9 @@
 ---
 title: Run a registry
-description: Publish packages to a registry of your own, in a folder or a git repo.
+description: Publish games and themes to a registry of your own, in a folder or a git repo.
 ---
 
-A registry is a set of static files that holds published games and themes. You can run your own on anything that serves files.
+A registry is a set of static files that holds published games and themes. Each published version is a package: the folder's files, each named by a hash of its bytes, and a list of them, of kind `game` or `content` (a theme). You can run your own on anything that serves files.
 
 ## Make one and publish to it
 

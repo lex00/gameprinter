@@ -15,8 +15,6 @@ gp host scenarios COPY                               # or a working copy's
 gp host record COPY NAME --frames 300 --hold ...     # record a run of the copy as a scenario of its own
 gp host search COPY --baseline finish-level --goal rules.game.state=won --progress 'entities.player[0].x'
 gp host speed --plan 2.1 --first-link 40 --tweak 0.4 # hold timings to their budgets
-just host-mosshop                                    # Moss Hop's scenarios (in just check)
-just poc-mosshop                                     # the whole loop, host included (docs/poc.md)
 ```
 
 `--work` is the directory `gp mcp` uses for working copies (default `$GP_HOME/work/mcp`), so the host and the MCP server see the same copies. It must be outside any git work tree. The host keeps its own files in `WORK/.host/`: `links.json`, `builds/`, a shared cargo target directory for Bevy builds, and short-lived snapshots.
@@ -159,7 +157,7 @@ The roadmap sets three targets, kept as metrics so a regression shows (`gp_host:
 | `tweak_link_s` | A model edit is sent | The rebuilt link answers | 30 s | 10 s |
 | `rom_to_preview_s` | `gp capture start` is given a ROM | The run's first interpreter preview is built ([watching capture live](capture-live.md)) | 60 s | 20 s |
 
-The POC loop measures them with its own clock around the MCP calls and the host's job record, so they are tool time and not a model's thinking time. It sums the calls an agent has to wait for and leaves out the checks the script makes of its own. `just capture-mosshop` measures `rom_to_preview_s` on a fresh `$GP_HOME`. `gp host speed` holds them to the budgets and exits 1 when one is over. In game-printer it also recorded each as a run metric (`speed.plan_s` and so on) for its metrics database; gameprinter has no run recorder. The host also keeps a log of its own timings (`build_s`, `scenarios_s`) at `GET /api/speed`.
+The POC loop measures them with its own clock around the MCP calls and the host's job record, so they are tool time and not a model's thinking time. It sums the calls an agent has to wait for and leaves out the checks the script makes of its own. In game-printer, `just capture-mosshop` measured `rom_to_preview_s` on a fresh `$GP_HOME`. `gp host speed` holds them to the budgets and exits 1 when one is over. In game-printer it also recorded each as a run metric (`speed.plan_s` and so on) for its metrics database; gameprinter's records none. The host also keeps a log of its own timings (`build_s`, `scenarios_s`) at `GET /api/speed`.
 
 ## Measured
 

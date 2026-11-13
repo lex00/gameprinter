@@ -37,8 +37,8 @@ pub const MANIFEST: &str = "manifest.json";
 pub struct PublishArgs {
     pub copy: String,
     /// `web-preview` (default): the interpreter preview, which plays any
-    /// model with one prebuilt module. `web`: the preview and the generated
-    /// Bevy game, built for WebGL2 with LTO for size (minutes cold).
+    /// model with one prebuilt module. `web` adds a generated Bevy game; it
+    /// runs `gp gen bevy`, which this gp doesn't have, so it fails today.
     #[serde(default)]
     pub target: Option<String>,
     /// The output directory, outside any git work tree, new, empty or an

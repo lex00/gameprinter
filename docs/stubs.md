@@ -139,7 +139,7 @@ The simulation check can't fail for a slot that passes the slot check, since the
 | `crates/gp-assets/src/stub.rs`, `no_asset_may_be_named_like_the_state_file` | A map naming an asset `slots` is refused |
 | `crates/gp-cli/tests/assets.rs`, `stubs_keep_the_simulation` | On Moss Hop built from source: stubbed slots, the simulation's files copied byte for byte, the stubs pack, the same digest on stubs and lift, an existing stub refused without `--force` |
 | `crates/gp-cli/tests/mcp.rs`, `an_agent_replaces_the_player_sprite` | Over MCP stdio: the catalog in `surface_describe`, a wrong size refused with no `assets/` made, a simulation slot refused, the player's sprite placed (tiles 16 to 19 changed, at most 64 packed bytes), `slots.toml` recording it and the originals as `LicenseRef-template-source`, the same `run_preview` state hash and the same `gp interp run` digest as the lift, and the copy's assets packing into a ROM |
-| `crates/gp-cli/tests/model.rs`, `schema_files_are_current` | `schema/slots.json` is what `gp model schema slots` prints |
+| `crates/gp-cli/src/schemas.rs`, `every_schema_file_is_current` | `schema/slots.json` is what `gp model schema slots` prints |
 
 All of them run in `just check`, on made-up data or Moss Hop.
 

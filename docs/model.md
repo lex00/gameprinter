@@ -1,6 +1,6 @@
 # The game model
 
-A game model is an engine-neutral description of a game, written as TOML, that a runtime runs: the interpreter ([interpreter](interpreter.md)) and the web build both read it. This page says how to read and write one. Moss Hop's model is in `templates/mosshop/`, written by hand from the game's source in `games/mosshop/mosshop.s`; a commercial game's model is in its package in the games checkout, such as Donkey Kong's in `games/donkey-kong/model.toml`. The page came from game-printer's docs/model.md; the examples from Super Mario Bros., Super Mario Bros. 2 and Mega Man 2 went with those games, the version history before features is cut, and the Bevy generator is gone.
+A game model is an engine-neutral description of a game, written as TOML, that a runtime runs: the interpreter ([interpreter](interpreter.md)) and the web build both read it when the game loads, and it is never compiled. Hook code, Rust in a game's `ext/` crate for what the model text can't say, is separate from the model; a game with hooks runs in its module ([modules](modules.md)). This page says how to read and write one. Moss Hop's model is in `templates/mosshop/`, written by hand from the game's source in `games/mosshop/mosshop.s`; a commercial game's model is in its package in the games checkout, such as Donkey Kong's in `games/donkey-kong/model.toml`. The page came from game-printer's docs/model.md; the examples from Super Mario Bros., Super Mario Bros. 2 and Mega Man 2 went with those games, the version history before features is cut, and the Bevy generator is gone.
 
 ## Run it
 
@@ -23,7 +23,7 @@ just check    # builds Moss Hop, lifts its assets, and runs gp model check and g
 
 Every command exits 2 when it can't run, as when a directory or file is missing.
 
-Not here yet: `gp model diff A B`, which listed every fact that differs between two models by model path.
+`gp model diff A B` lists every fact that differs between two models by model path, and exits 1 if any does.
 
 ## Versions
 
@@ -1043,7 +1043,7 @@ People's statements outrank agent inferences. A fact stated in the source and al
 
 A model has one canonical text, which `gp model fmt` writes. Tables come in the schema's order, and an entity's or level's keys in alphabetical order. Whole numbers are integers and fractions the shortest exact decimal string, and defaults are left out. An entity state's `set` values are written the same way as the entity's own fields. Any two tools write a model's text the same way, byte for byte. A change to one fact then changes one line, so models diff and merge cleanly in git. Comments don't survive, so notes go in `description` fields and evidence `note`s. Models are kept canonical: `gp game new` writes the skeleton's model and contract in canonical form, the game gate's Model step runs `gp model fmt --check` on a game a patch touches and merges a conflicting model through its canonical text ([gate](gate.md)), and `just check` runs it on Moss Hop. Donkey Kong's model.toml was hand-laid from its skeleton until 2026-11-05, when its 214 lines of comments became descriptions and evidence notes of the parts they were about and the file was written canonically.
 
-Not here yet: `gp model diff`, which compared canonical forms, so writing a value another way (`"-5.0"` for `-5`, `0x10` for `16`) was no change.
+`gp model diff` compares the parsed models, so writing a value another way (`"-5.0"` for `-5`, `0x10` for `16`) is no change.
 
 ## Editing with types
 

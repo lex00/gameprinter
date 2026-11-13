@@ -1,6 +1,6 @@
 //! Sound as model data (docs/sound.md): music and sound effects captured
 //! from any NES game, held as notes and instruments, played by a
-//! deterministic APU synthesizer, and exchanged with external editors.
+//! deterministic APU synthesizer.
 //!
 //! - [`log`]: the APU register log a replay writes (docs/formats/apu-log.md).
 //! - [`apu`]: a model of the APU that both capture and the synthesizer run.
@@ -11,7 +11,6 @@
 //! - [`synth`]: register writes -> samples.
 //! - [`fidelity`]: a song's render against its log's.
 //! - [`drivers`]: decoders for known sound drivers' data, and the registry.
-//! - [`famistudio`], [`midi`]: export and import.
 //! - [`banks`]: sound bank mappings (docs/formats/sound-banks.md) and the
 //!   banks found on disk.
 //! - [`edit`]: deterministic edits on a song set, for agents.
@@ -28,10 +27,8 @@ pub mod capture;
 pub mod compare;
 pub mod drivers;
 pub mod edit;
-pub mod famistudio;
 pub mod fidelity;
 pub mod log;
-pub mod midi;
 pub mod player;
 pub mod song;
 pub mod synth;

@@ -1,5 +1,5 @@
 //! The agent tools as an MCP server (Milestone 3, docs/mcp.md). An agent
-//! forks a template into a working copy, reads its surface, edits the model and contract by model path, previews a run in
+//! copies a template ([`fork`]), reads the copy's surface, edits the model and contract by model path, previews a run in
 //! the interpreter and validates against the original's recordings.
 //!
 //! - [`tools`]: each tool's arguments, its JSON Schema and what it does.
@@ -22,6 +22,7 @@ pub mod edit;
 pub mod edit_log;
 pub mod editor_trip;
 pub mod exchange;
+pub mod fork;
 pub mod generate;
 pub mod moments;
 pub mod place;
@@ -68,6 +69,10 @@ pub struct Config {
     pub rom: Option<PathBuf>,
     /// Lifted assets, instead of `$GP_HOME/work/assets/<model.source>`.
     pub assets: Option<PathBuf>,
+    /// The games checkout, whose game folders are templates too (`gp`
+    /// finds it as its other commands do: $GP_GAMES_DIR, else a `games`
+    /// folder at, above or beside the current folder). None without one.
+    pub games: Option<PathBuf>,
 }
 
 impl Config {
@@ -76,7 +81,7 @@ impl Config {
     pub fn copy_dir(&self, name: &str) -> Result<PathBuf, String> {
         if !gp_model::path::is_name(name) {
             return Err(format!(
-                "`{name}` isn't a working copy name: letters, digits and `_`, not starting with a digit"
+                "`{name}` isn't a copy name: letters, digits and `_`, not starting with a digit"
             ));
         }
         Ok(self.work.join(name))
@@ -87,7 +92,7 @@ impl Config {
         let dir = self.copy_dir(name)?;
         if !dir.join(gp_model::MODEL_FILE).is_file() {
             return Err(format!(
-                "there's no working copy `{name}`; make one with template_fork"
+                "there's no copy `{name}`; make one with template_fork"
             ));
         }
         Ok(dir)
@@ -229,14 +234,22 @@ pub fn model_check(
     dir: &Path,
     source: Option<&str>,
 ) -> Result<(bool, Value), String> {
-    // A working copy's evidence refs are the template's, relative to the
-    // repo (`--root REPO`, as game-printer passed).
+    // A copy's evidence refs are the template's: relative to the repo for
+    // a template under its templates/ (`--root REPO`, as game-printer
+    // passed), and to the game's own folder, which the copy holds whole,
+    // for a game folder (one with package.toml), as gp template extract
+    // reads them.
+    let root = if dir.join("package.toml").is_file() {
+        dir
+    } else {
+        config.repo.as_path()
+    };
     let mut args: Vec<&std::ffi::OsStr> = vec![
         "model".as_ref(),
         "check".as_ref(),
         dir.as_os_str(),
         "--root".as_ref(),
-        config.repo.as_os_str(),
+        root.as_os_str(),
     ];
     let assets = config.assets_of(dir, source);
     if let Some(a) = assets.as_ref().filter(|a| a.join("assets.toml").is_file()) {

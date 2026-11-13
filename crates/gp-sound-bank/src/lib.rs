@@ -221,7 +221,7 @@ pub fn render(
                     let at = if k == 0 { p.start } else { base + p.start - lf };
                     let ins = &set.instruments[usize::from(p.note.instrument)];
                     let key = match c {
-                        Channel::Noise => i32::from(gp_sound::midi::drum_key(
+                        Channel::Noise => i32::from(gp_sound::banks::drum_key(
                             p.note.pitch,
                             p.note.len,
                             ins.duty_at(0),

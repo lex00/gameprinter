@@ -250,10 +250,6 @@ pub enum ThemeCmd {
     /// `--budget`. The key comes from RUNWAY_API_KEY, the keychain (service
     /// game-printer-runway) or $GP_HOME/secrets/runway (mode 600).
     Generate(crate::theme_generate::GenerateArgs),
-    /// Run a model in the interpreter on an input and write its frames, drawn
-    /// with a theme stack, as an animated PNG. Prints the digest of the
-    /// per-frame state hashes, which is `gp interp run`'s for the same input
-    /// with any theme: the presentation reads the world and never writes it.
     /// Publish a theme version for a game (docs/theme-publishing.md). It
     /// refuses an id a theme the game ships with already has, runs every check
     /// (readability and Style, originality against the game's ROM when it is
@@ -304,6 +300,10 @@ pub enum ThemeCmd {
         #[arg(long)]
         mirror: bool,
     },
+    /// Run a model in the interpreter on an input and write its frames, drawn
+    /// with a theme stack, as an animated PNG. Prints the digest of the
+    /// per-frame state hashes, which is `gp interp run`'s for the same input
+    /// with any theme: the presentation reads the world and never writes it.
     Video {
         /// A model directory (holding model.toml) or a model.toml file.
         model: PathBuf,

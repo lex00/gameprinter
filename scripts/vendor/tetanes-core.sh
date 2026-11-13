@@ -65,7 +65,7 @@ repo="$(cd "$(dirname "$0")/../.." && pwd)"
 dest="$repo/third_party/tetanes-core"
 patch_file="$repo/third_party/tetanes-core.patch"
 hashes_file="$repo/third_party/tetanes-core.upstream.sha256"
-cache="${GP_HOME:-$HOME/.game-printer}/work/tetanes-core"
+cache="${GP_HOME:-$HOME/.gameprinter}/work/tetanes-core"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 

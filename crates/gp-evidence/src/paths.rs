@@ -9,7 +9,7 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Paths {
-    /// `$GP_HOME`, default `~/.gameprinter` (the new world's home until cutover).
+    /// `$GP_HOME`, default `~/.gameprinter`.
     pub home: PathBuf,
     /// `$GP_STORE`, default `$GP_HOME/store`.
     pub store: PathBuf,

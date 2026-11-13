@@ -38,7 +38,7 @@ async function refresh() {
     status.append(el("span", "at", w.status.at ?? ""), document.createTextNode(w.status.text ?? ""));
   } else {
     status.className = "muted";
-    status.textContent = "Nothing yet. Your agent writes here with gp mechanic log, pin and problem.";
+    status.textContent = "Nothing yet. What your agent is doing shows here.";
   }
   const pins = $("w-pins");
   pins.innerHTML = "";

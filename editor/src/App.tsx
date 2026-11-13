@@ -368,7 +368,7 @@ function Workspace({ api = defaultApi, only }: { api?: Api; only?: "inspector" }
               target="_blank"
               rel="noopener"
               aria-disabled={!r}
-              title={r ? `Play ${r.run}'s rebuilt game in a new tab: arrows move, Z jumps, X runs, Enter starts` : "No run has a rebuilt game yet"}
+              title={r ? `Play ${r.run}'s model in a new tab: arrows move, Z jumps, X runs, Enter starts` : "No run has a playable model yet"}
             >
               play the rebuild
             </a>
@@ -512,7 +512,7 @@ function Workspace({ api = defaultApi, only }: { api?: Api; only?: "inspector" }
       {!sel.run && !play && <p className="hint">Choose a run above to play it, or press "play the original".</p>}
 
       <details className="details" open={!gameShown || details} onToggle={(e) => setDetails((e.target as HTMLDetailsElement).open)} data-testid="details">
-        <summary>Details: the recording measured against the rebuilt game (charts, the scenario ladder, moments), the run's stages and log, and the trace inspector</summary>
+        <summary>Details: the recording measured against the model (charts, the scenario ladder, moments), the run's stages and log, and the trace inspector</summary>
         {sel.run && details && (
           <div className="details-recording">
             <h2>The recording, measured</h2>

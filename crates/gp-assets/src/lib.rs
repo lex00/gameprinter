@@ -712,18 +712,6 @@ pub fn differences(
     Ok(out)
 }
 
-/// A copy of `rom` with the encoded assets written over their spans.
-pub fn apply(rom: &[u8], map: &AssetMap, encoded: &[Encoded]) -> Result<Vec<u8>, Error> {
-    let layout = RomLayout::of(rom)?;
-    layout.check(map)?;
-    let mut out = rom.to_vec();
-    for e in encoded {
-        let range = layout.file_range(&e.span)?;
-        out[range].copy_from_slice(&e.bytes);
-    }
-    Ok(out)
-}
-
 #[cfg(test)]
 mod tests;
 

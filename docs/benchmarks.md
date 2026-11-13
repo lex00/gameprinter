@@ -31,7 +31,7 @@ A baseline is the `gp baseline check` format: `source`, `sha256`, `frames` and `
 
 What it left behind:
 
-- `--video` is refused: it wrote each recording as a video with `gp video`, which gameprinter hasn't got yet.
+- `--video` is refused: it wrote each recording as a video with `gp video`, and gameprinter's bench doesn't call `gp video` yet.
 - game-printer's budgets (`budgets.toml`, held by `just check` on the test ROM and Moss Hop) and its criterion micro-benchmarks didn't come with it.
 
 ## gp bench clips, scratch and report

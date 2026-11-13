@@ -31,7 +31,7 @@ The screen is drawn at the game's own resolution (256 by 224 on Donkey Kong), in
 |---|---|
 | SETTINGS | The title |
 | Mode | `< retro >`, `< normal >`, another preset's name, or `< custom >` for a set no mode names |
-| Theme | `< Original >` and the other looks the game found, then the themes published for the game, when there is more than one. `Original` is listed only where the ROM's assets were lifted. A change draws the next frame in the look chosen, pictures and sound, with no restart, since the simulation never reads it; a published theme not yet downloaded is downloaded first and every file checked |
+| Theme | `< Original >` and the other looks the game found, then the themes published for the game, when there is more than one. `Original` is the ROM's own art, and is listed only where the ROM's assets were lifted. A change draws the next frame in the look chosen, pictures and sound, with no restart, since the simulation never reads it; a published theme not yet downloaded is downloaded first and every file checked |
 | Under the Theme line | For a published theme: `by AUTHOR, downloaded`, or `by AUTHOR, download 2.1 MB`. The cursor passes over it |
 | Remove it from the cache | For a downloaded theme: takes its files out of the browser's cache. It can be downloaded again |
 | `[ ] Console only` | The shell's switch for no saves, loads or rewind ("Saves on the screen", below) |

@@ -25,7 +25,7 @@
 //! --find` finds on an idle run from power-on, with `score_draws`, for
 //! review (`--no-draws` leaves the search out), as game-printer's did. It
 //! writes the level kit's stub rules and the kit (docs/level-kit.md). Left
-//! for later steps (~/.game-printer/work/bring/PLAN.md): the theme kit;
+//! for later steps (~/.gameprinter/notes/bring-PLAN.md): the theme kit;
 //! `--branch` and the loop.toml it wrote went with `gp loop`.
 
 use std::collections::BTreeMap;

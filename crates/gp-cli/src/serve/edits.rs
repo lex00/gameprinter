@@ -160,6 +160,7 @@ fn server_config(data: &Value) -> Result<gp_mcp::Config> {
         home: path_of(&s["home"]).ok_or_else(|| anyhow!("the edit doesn't name its home"))?,
         rom: path_of(&s["rom"]),
         assets: path_of(&s["assets"]),
+        games: crate::roms_cmd::games_dir(None),
     })
 }
 

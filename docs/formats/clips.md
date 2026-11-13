@@ -101,7 +101,7 @@ The first line is the format, the second the frame count, then one span a line, 
 
 A save point's start whose frame doesn't read the controller, where its presses from power-on end, goes on into the clip's own presses to the first frame that does, and the clip starts there. A clip from power-on is one: frame 0 reads nothing, and Donkey Kong first reads the controller a few frames in. The frames before the start move from the front of the clip's presses to the end of the start's input, so the original plays the same input to the same last frame, as the mechanic page scores such a clip (`clipset::take_on`). A clip whose frames end first can't be made.
 
-Not here yet: `gp capture regenerate`, `gp capture generate` and `gp capture prune`, which made a set's clips in a capture run, checked each curve and coverage hash, and chose the kept set by the mutants it catches. `gp corpus score` and `gp game score` make a corpus plan's clips from their start presses and derive the curves.
+Not here yet: `gp capture generate` and `gp capture prune`, which made a set's clips in a capture run and chose the kept set by the mutants it catches. `gp capture regenerate`, which makes the clips again and checks each curve, is here as `gp corpus score GAME --run RUN`. `gp corpus score` and `gp game score` make a corpus plan's clips from their start presses and derive the curves.
 
 ## A new clip that takes a branch way
 

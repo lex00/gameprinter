@@ -2,7 +2,7 @@
 
 A mechanic is a named composition of primitives with a version and parameters. Entities, levels and the game all carry them. A running jump, a patrol and a camera that never scrolls back are examples. `gp model mechanics` lists the ones a model uses, from records the code declares.
 
-Ported from game-printer's docs/mechanics.md: the catalog only. The capture, measuring and refinement sections described commands gameprinter doesn't have.
+Ported from game-printer's docs/mechanics.md: the catalog first, then measuring feel, questions and the refinement loop, which came with their commands.
 
 ## The rule for game-specific code
 

@@ -6,7 +6,7 @@ A level kit is what a designer needs to make a stage for a game by hand: the sta
 gp level kit GAME [-o DIR]
 ```
 
-GAME is a folder holding template.toml, a template id under `templates/` (Moss Hop), or a game's folder in the games checkout (`donkey-kong`, `tapper`). In game-printer every game was under `templates/`; in gameprinter only Moss Hop is, and the commercial games' kits live with their packages.
+GAME is a template: a game's folder holding template.toml, given as a path, as a game's name in the games checkout (`donkey-kong`, `tapper`), or as a template id under `templates/` (Moss Hop). In game-printer every game was under `templates/`; in gameprinter Moss Hop and the games made here are, and the ported games' kits live in their folders in the games checkout.
 
 | File | Written by | What |
 |---|---|---|
@@ -31,7 +31,7 @@ A kit holds rules, sizes, counts, boxes and descriptions, never a table of a gam
 | Measures | `[[measure]]`: `name` (as `gp level measure` prints it), `what`, `target`, `within`, `example` (the worked example's value), `source` |
 | Originality | The thresholds `gp template check --original` refuses at (`template_original::CELLS_REFUSE`, `LADDERS_REFUSE`, the shift `stage::SHIFT_REACH`) and what counts as copying, in words |
 | Verify | `[[verify]]`: `step`, `how` |
-| What fits | `[[fit]]`: findings from packing a stage into a copy of the ROM and running it on the real engine |
+| What fits | `[[fit]]`: findings from packing a stage into a copy of the ROM and running it on the real engine, kept as a record (Game Printer stopped writing ROMs on 2026-11-13) |
 | The worked example | `[example]`: `template` and paragraphs of `text`; the kit adds the example template's spawns from its model |
 | Open | `open`: what isn't known yet, each with the tool that would find it where one is named |
 
@@ -39,7 +39,7 @@ A kit holds rules, sizes, counts, boxes and descriptions, never a table of a gam
 
 | Game | What the kit holds | Open |
 |---|---|---|
-| Donkey Kong (`donkey-kong-oe`, until 2026-11-06 `donkey-kong-ju`) | 13 data rules (girder runs and shapes, ladders, tops, heights, gaps, the slope list, barrel ladders, broken ladders' stops, straight drops, hammers and the start, the stage picture, the demo), 10 fixed in code (2 runs on the bottom row and 1 on each other, sloped ends, the fires' 4 ladders, the third barrel ladder on girders 4 and 5, the throw's height, a pushed barrel's drop, the drum, the screen's edges, the goal and the top platform, the thrower's place), 11 limits (8 runs, 3 shapes, 13 ladders, 4 broken, 9 tops, 2 hammers, the screen, 1258 bytes for five screens with 449 for 25m), the 11 measures of Rivet Rodeo's table with their tolerances, 6 steps to verify, 6 findings on what fits and Rivet Rodeo as the worked example | 4 |
+| Donkey Kong (`donkey-kong-oe`, until 2026-11-06 `donkey-kong-ju`) | 13 data rules (girder runs and shapes, ladders, tops, heights, gaps, the slope list, barrel ladders, broken ladders' stops, straight drops, hammers and the start, the stage picture, the demo), 10 fixed in code (2 runs on the bottom row and 1 on each other, sloped ends, the fires' 4 ladders, the third barrel ladder on girders 4 and 5, the throw's height, a pushed barrel's drop, the drum, the screen's edges, the goal and the top platform, the thrower's place), 11 limits (8 runs, 3 shapes, 13 ladders, 4 broken, 9 tops, 2 hammers, the screen, 1258 bytes for five screens with 449 for 25m), the 11 measures with their tolerances, 6 steps to verify and 3 findings on what fits; no worked example since Rivet Rodeo was deleted | 4 |
 | Moss Hop (`mosshop`, in this repo) | The level grid (32 by 15 cells, the legend), its 9 metatiles and 2 slugs; the size, goal, fall and start fixed; the jump's reach | 3: no play measures, no room measured, no base for originality |
 
 ## Donkey Kong's rules, and where they came from
@@ -56,11 +56,11 @@ packP's findings on what fits: Rivet Rodeo's girders (9 runs, 54 bytes) are 6 by
 | The play measures | `gp level measure --template T` against the kit's table; `--clears 3` for a baseline's holds |
 | Originality | `gp template check T --original`, with the base game's ROM in `$GP_ROM_DIR` |
 | Baselines | `gp interp baselines T` |
-| The real engine | Pack the slots into a copy of the ROM outside the repo (`gp assets pack` for slots that keep their size), then `gp interp compare T --rom COPY --input LOG --mode free` |
 | A theme | `gp theme check T --theme DIR`: the theme kit's geometry |
 
 ## Limits
 
+- Nothing checks a stage on the real engine. That step packed the slots into a copy of the ROM with `gp assets pack --base` and ran `gp interp compare T --rom COPY --input LOG --mode free`; the pack was removed on 2026-11-13. A stage now passes on the model and the kit's rules alone, so an engine rule the kit doesn't list yet goes unseen until someone reads it in the code.
 - The rules file is written by hand. What the code fixes was read by people and agents from the model's notes; a detector that finds a table's reader and the immediates it compares with would write it (docs/research/deterministic-inference.md, 2026-11-04).
 - The space left in the ROM is counted by hand: no tool yet encodes a layout entry and reports its bytes.
 - `gp level measure` measures stages of girders and ladders only, so Moss Hop's kit has no measures.

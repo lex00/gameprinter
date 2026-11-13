@@ -324,7 +324,7 @@ why = "written by the routine that reads the controller"
 | `why` | The rule that put it there, in words |
 | `review` | Optional: the rule held on nearly every frame but not all, so a person checks it |
 
-A byte the mapping names is never in it. No translation or comparison reads the list. Moss Hop's was written by game-printer's `gp progress --write-ignore` from a trace of the original. Not here yet: `gp progress`, which counted the memory map against the list and wrote it.
+A byte the mapping names is never in it. No translation or comparison reads the list. Moss Hop's was written by game-printer's `gp progress --write-ignore` from a trace of the original. `gp progress` counts the memory map against the list, and `gp progress --write-ignore MAPPING` writes it.
 
 ## An arcade original
 

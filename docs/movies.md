@@ -75,7 +75,7 @@ A MAME `.inp` names its set by MAME's name (`tapper`, `rbtapper`), so the target
 
 A run syncs when our runtime, given its buttons, reaches the same states its emulator did. Expect many to fail at first. Emulators differ in power-on state and input polling and timing. FCEUX and BizHawk also count frames from their own boundaries, which may not line up with ours (a frame ends at the start of vertical blank, [formats/recording.md](formats/recording.md#frame-boundary)). A run that doesn't sync still records; it just goes somewhere else.
 
-Not here yet: game-printer's Mesen oracle (`gp oracle record`, `gp oracle diff`), which showed where a run leaves the intended path on another accurate emulator. The MAME oracle ([oracle-mame.md](oracle-mame.md)) does that for an arcade set.
+The Mesen oracle (`gp oracle record`, `gp oracle diff`, [oracle.md](oracle.md)) shows where a run leaves the intended path on another accurate emulator. The MAME oracle ([oracle-mame.md](oracle-mame.md)) does that for an arcade set.
 
 ## When a movie desyncs
 

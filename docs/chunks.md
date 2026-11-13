@@ -1,15 +1,13 @@
 # Level chunks
 
-> Brought from game-printer with wave 9 of the port. gameprinter cut other games' code, so the readers of Super Mario Bros.', Super Mario Bros. 2's and Mega Man 2's layouts are gone; their rows below, and the results and notes on those games, are game-printer's record and are kept as they were. New here: a reader for a level drawn by a PPU string, so Donkey Kong's four stages are read (game-printer refused them: "a layout from a ppu-strings asset isn't read yet"), and `--module`, the game's built module that the reachability tests step the model through, as `gp interp reach` does. A template is a folder, an id under `templates/` or a game in the games checkout (`gp chunks donkey-kong --module ...`). An arcade game is read the same way once its model's levels name a layout; Tapper's model has no level layout yet, so `gp chunks tapper` says that its level names no layout or grid slot. gp-metrics' run recorder isn't here, so the `chunks.<template>.*` metrics aren't recorded.
+> Brought from game-printer with wave 9 of the port. gameprinter cut other games' code, so the readers of Super Mario Bros.', Super Mario Bros. 2's and Mega Man 2's layouts are gone; their rows below, and the results and notes on those games, are game-printer's record and are kept as they were. New here: a reader for a level drawn by a PPU string, so Donkey Kong's four stages are read (game-printer refused them: "a layout from a ppu-strings asset isn't read yet"), and `--module`, the game's built module that the reachability tests step the model through, as `gp interp reach` does. A template is a folder, an id under `templates/` or a game in the games checkout (`gp chunks donkey-kong --module ...`). An arcade game is read the same way once its model's levels name a layout; Tapper's model has no level layout yet, so `gp chunks tapper` says that its level names no layout or grid slot. The `chunks.<template>.*` metrics aren't recorded, since `gp chunks` doesn't hand them to the run recorder yet.
 
 A level chunk is a group of cells that a game's levels use again and again in the same arrangement: a pipe of some height, a row of ? blocks, a gap two cells wide, a staircase, a ledge with a walker on it. `gp chunks` finds a game's chunks, says what each one does for the player, and writes them as a catalog ([the format](formats/chunks.md)). It detects and catalogs only. A level generator that builds new levels from the catalog comes later (the user's rule: detect before fixing), and the end of this page says how it would use it. It's Milestone 2 work, beside [gaps](gaps.md) and the [mechanics](mechanics.md) catalog; the research it serves is [the mechanics research](research/mechanics.md), whose clean-room model needs new levels that play under the same mechanics.
 
 ```sh
-gp chunks templates/smb1-ntsc-prg0             # every area; the catalog goes to $GP_HOME/work/chunks/<template>/
+gp chunks donkey-kong --module ~/.gameprinter/work/modules/donkey-kong.wasm   # every stage; the catalog goes to $GP_HOME/work/chunks/<template>/
 gp chunks templates/mosshop --min-count 1 --json
-gp chunks templates/smb2-usa-prg0 --level w1_1_area0 --reach-tests 0
 gp chunks --schema                             # the catalog format's JSON Schema
-just chunks                                    # every game: Moss Hop, the originals, and the three NES games whose assets are lifted
 ```
 
 | Option | Meaning |
@@ -23,7 +21,7 @@ just chunks                                    # every game: Moss Hop, the origi
 | `--top` | Kinds printed per layer (default 8); the catalog keeps all |
 | `--out` | Where to write the catalog; refused inside a git work tree |
 
-Each run records `chunks.<template>.kinds`, `.objects`, `.groups`, `.gaps`, `.patterns`, `.compounds` and the mean coverage `chunks.<template>.coverage` (and `.coverage.objects`, `.groups`, `.patterns`), which the [scorecard](scorecard.md) shows in its `chunks` column.
+The metrics a run is to record (not yet, above) are `chunks.<template>.kinds`, `.objects`, `.groups`, `.gaps`, `.patterns`, `.compounds` and the mean coverage `chunks.<template>.coverage` (and `.coverage.objects`, `.groups`, `.patterns`), which the [scorecard](scorecard.md) shows in its `chunks` column.
 
 ## What it reads
 

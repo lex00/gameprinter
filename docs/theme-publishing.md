@@ -11,7 +11,7 @@ the games checkout. The notes on Rivet Rodeo, retired and deleted on
 
 # Publishing themes
 
-A theme version is published as a package ([theme packages](theme-packages.md)), checked, signed and listed in its game's themes index, so a rebuild can list the themes for its game, download one into a cache and draw it with no restart. The user asked for it on 2026-11-04: "the rebuild needs to be able to scan for available themes and let the player pick one, with a download for cache". The code is `crates/gp-cli/src/theme_publish.rs`, `crates/gp-package` and `crates/gp-cli/src/mirror.rs`.
+A theme version is published as a package ([theme packages](theme-packages.md)), checked, signed and listed in its game's themes index, so a rebuild can list the themes for its game, download one into a cache and draw it with no restart. The user asked for it on 2026-11-04: "the rebuild needs to be able to scan for available themes and let the player pick one, with a download for cache". The code is `crates/gp-cli/src/theme_publish.rs`, `crates/gp-package` and `crates/gp-cli/src/theme_mirror.rs`.
 
 ## The package
 
@@ -19,16 +19,16 @@ A theme package holds only what the theme's maker made and what gp checked. Ther
 
 | Kind | For | Holds |
 |---|---|---|
-| `look` | A game with no ROM art: originals (`how = "authored"`, Rivet Rodeo, the public page's game) and games built from source (`how = "build"`, Moss Hop) | `theme/`, `look/` and `checks.json` |
+| `look` | A game with no ROM art: games made here (`how = "authored"`, Rivet Rodeo, the public page's game) and games built from source (`how = "build"`, Moss Hop) | `theme/`, `look/` and `checks.json` |
 | `source` | A game lifted from the player's ROM (`[source] how = "rom"`, Donkey Kong JU and Original Edition) | `theme/` and `checks.json`, no `look/` |
 
 | Path | What |
 |---|---|
 | `theme/` | The theme folder as it is: `theme.toml`, its `.pix` art and `.tune` sound, prompts and sources |
-| `look/` | A look package only. The look the runtimes draw: the theme drawn for the game's build by the same code `gp-web-prep` and `gp gen bevy` use (`gp_gen_bevy::looks`), with `look.txt` and the pictures, `present.txt` and sound role WAV files it changes ([themes found at run time](formats/theme.md#themes-found-at-run-time)) |
+| `look/` | A look package only. The look the runtimes draw: the theme drawn for the game's build by the same code `gp-web-prep` uses (`gp_look::looks`), with `look.txt` and the pictures, `present.txt` and sound role WAV files it changes ([themes found at run time](formats/theme.md#themes-found-at-run-time)) |
 | `checks.json` | The check results: readability and Style, originality with every score, geometry, the package scan, and each model the theme is for with its result (below) |
 
-A look is drawn on the game's own assets, which for a game lifted from a ROM are the lifted art: a picture the theme leaves alone would hold the original's pixels. So a ROM game's theme is published as a source package. gp still draws its look on the maker's machine, over the maker's own lifted art, to run the checks and to record the look's digest, and the look is never packaged. The player's runtime draws the theme over the player's own lifted art (ROADMAP, ROM themes, step 8). No pixel drawn from the ROM leaves the maker's machine.
+A look is a theme drawn for one game (`look.txt` and the pictures and sounds it changes). It is drawn on the game's own assets, which for a game lifted from a ROM are the lifted art: a picture the theme leaves alone would hold the original's pixels. So a ROM game's theme is published as a source package. gp still draws its look on the maker's machine, over the maker's own lifted art, to run the checks and to record the look's digest, and the look is never packaged. The player's runtime draws the theme over the player's own lifted art (ROADMAP, ROM themes, step 8). No pixel drawn from the ROM leaves the maker's machine.
 
 ### checks.json
 
@@ -131,7 +131,7 @@ gp theme publish THEME_DIR --game TEMPLATE [--assets DIR] [--rom FILE] [--key FI
 | Store | The blobs and the manifest into `$GP_STORE` |
 | Sign | `ssh-keygen -Y sign -n game-printer-package` over the manifest with `--key` (else `$GP_SIGNING_KEY`, else git's `user.signingkey`), checked against the allowed signers before anything is sent. Only maintainers sign and publish (the user, 2026-11-04): the allowed signers are the maintainers' keys. An artist runs `--dry-run` and hands the theme folder to a maintainer |
 | Mirrors | For each mirror with a write endpoint or folder: the blobs it lacks, then the manifest, then its signature |
-| Index | The theme's line in the game's index file, as a patch landed by `gp model gate --gate TEMPLATE` (default `templates/donkey-kong-oe`); `--no-gate` writes the file in place instead, for a fork's own index or a test's |
+| Index | The theme's line in the game's index file, as a patch landed through `gp model gate` on the game `--gate` names (default `donkey-kong`); `--no-gate` writes the file in place instead, for a fork's own index or a test's |
 | Index copies | Once the index has landed, its copy on each mirror |
 
 A dry run of Donkey Kong's paper theme for JU, 2026-11-04, with both ROMs in `$GP_ROM_DIR`. It is from before 2026-11-06, when `templates/donkey-kong-ju` was a template and the theme was for both models (`donkey_kong` and `donkey_kong_oe`); since then the theme is in `templates/donkey-kong-oe/themes/paper` and for `donkey_kong_oe` alone, and `--game donkey-kong-oe` is the one game to name:
@@ -181,7 +181,7 @@ A theme published by someone without every ROM of its game lists the other model
 | Checks | The same as publish's for each model ([publish](#publish)), on the package's own files: `gp theme check --original` over assets lifted from the ROM here (or `--assets`), the look drawn and its coverage, a drawn file in the package, and the ROM-bytes check of the package's files against the model's ROM and the ROM of the template it is derived from |
 | Look | The digest of the look drawn here is compared with the one recorded for the model: the index's `looks`, else the package's checks.json. The same digest, or none recorded yet, adds the model. A different one is reported and not added: "the look drawn here differs from the maker's for donkey_kong_oe: the maker's ROM or gp differs (recorded 7c941b02fb72, drawn here ...); not added", with both ROMs' SHA-256 when they differ |
 | Dry run | With `--dry-run`, it prints each model's checks and the index line it would write, and stops |
-| Index | The theme's line with each model checked added to `models`, `slots`, `results` and `looks`, landed by `gp model gate --gate TEMPLATE` as a whole-file patch (`--no-gate` writes it in place), then its copy on each mirror |
+| Index | The theme's line with each model checked added to `models`, `slots`, `results` and `looks`, landed through `gp model gate` on the game `--gate` names, as a whole-file patch (`--no-gate` writes it in place), then its copy on each mirror |
 
 A failed check, a different look, or a ROM-bytes find refuses the whole recheck: nothing is written, exit 1, and the JSON's `models` gives each model's result (`pass`, `fail` with the checks that failed, or `differs` with both digests).
 

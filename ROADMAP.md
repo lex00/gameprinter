@@ -2,7 +2,7 @@
 
 As of 2026-11-12. This replaces game-printer's ROADMAP.md, whose last version froze game and tool work on 2026-11-08 for the migration research. The research was adopted that day ([docs/evaluation.md](docs/evaluation.md), section 7), and the work since has been the migration into this repo and `lex00/games`, then the port of what game-printer had. This page says what is done and what is left. It gives no dates.
 
-The full lists behind it are the port ledger and its three audits, kept outside the repo under `~/.game-printer/work/audit/` (`PORT-LEDGER.md`, `libraries.md`, `commands-pages.md`, `around.md`).
+The full lists behind it are the port ledger and its three audits, kept outside the repo under `~/.gameprinter/notes/audit/` (`PORT-LEDGER.md`, `libraries.md`, `commands-pages.md`, `around.md`).
 
 ## Done
 
@@ -10,9 +10,9 @@ The full lists behind it are the port ledger and its three audits, kept outside 
 
 | Step | State |
 |---|---|
-| The tool repo | gameprinter, a Rust workspace of 38 crates, with Moss Hop as its test game and `just check` needing no ROM |
+| The tool repo | gameprinter, a Rust workspace of 42 crates, with Moss Hop as its test game and `just check` needing no ROM |
 | The games repo | `lex00/games`, one package folder a game: Donkey Kong (its OE and JU ROMs, one package, now 1.0.9) and Tapper |
-| A home of its own | `~/.gameprinter`, apart from game-printer's `~/.game-printer` until cutover |
+| A home of its own | `~/.gameprinter`; game-printer's `~/.game-printer` is gone |
 | Registry | `lex00/gp-registry`, a public git repo read at its raw GitHub address, unsigned by the owner's choice |
 | The public page | [nes-donkey-kong.intentius.workers.dev](https://nes-donkey-kong.intentius.workers.dev): Donkey Kong from a ROM the visitor loads, with the clay theme `lex00/turnips` beside it |
 | Game modules | A game's hooks in one Wasm module, built from a kit in a sandbox with no network, the same bytes on a Mac and on Linux, run in the page's Worker and in gp under wasmtime with a deadline and a memory cap ([docs/modules.md](docs/modules.md)) |
@@ -58,17 +58,16 @@ Each comes after what it depends on.
 | Games and levels | Level kit, chunks, catalog, progress, scorecard, findings, localize |
 | The NES oracle and accuracy | The Mesen oracle (gp-oracle), the NES test ROMs |
 | Model and assets | `model diff`, `mutants`; `assets find`, `hash`, `stub`, `open`; `template extract`, `pack`, `cites`, `derive`, `font` |
-| Sprites and sound | `sprites export`, `import`, `schema`; `sound render`, `decode`, `drivers`, `banks`, `export`, `import`; gp-sound's driver registry |
+| Sprites and sound | `sprites schema`; `sound render`, `decode`, `drivers`, `banks`; gp-sound's driver registry. `sprites export` and `import` and `sound export` and `import` came over and were removed on 2026-11-13 |
 | Video and clips | `gp video`, `mechanic video`, `compare`, `contacts`, `clip-save` |
-| Corpus and datasets | `corpus show`, `diff`, `verify`, `reduce`; `input-log`; interp baselines; `dataset export`, `catalogue`, `grade`, `gaps` |
+| Corpus and datasets | `corpus show`, `diff`, `verify`, `reduce`; `input-log`; interp baselines; `dataset grade`, `gaps`. `dataset export` and `catalogue` came over and were removed on 2026-11-13 |
 | Measuring | `gp bench`, metrics and runs, gp-metrics, gp-chunks, gp-wasm-check replay, gp-assets pointer hashing, per-hook affected-clip hashing |
 | Small ones | `docs`, `env`, `noop`; the server's status and capture progress routes |
 
 ### Wave 10: around the code
 
-Docs and tests land with each wave. The wave-10 branch brings the three agent skills (`.claude/skills/`, with the commands that aren't here yet named as such), the new-game checklist (the site's bring page, "The steps, in order"), `schema/` with `gp self schemas` and `gp model schema`, the ROM-tier tests (`profiles_dk` in part, `clip_agree`, `roms clean` and `roms scan` end to end, the junk-dump boot) under `just check-roms`, the recipes `fmt`, `test`, `site`, `site-dev` and `docs`, the pre-merge hook, the site's prose lint, and the workflow docs whose commands have landed. Left after it:
+Docs and tests land with each wave. The wave-10 branch brings the three agent skills (`.claude/skills/`, with the commands that aren't here yet named as such), the checklist for bringing in a game (the site's bring page, "The steps, in order"), `schema/` with `gp self schemas` and `gp model schema`, the ROM-tier tests (`profiles_dk` in part, `clip_agree`, `roms clean` and `roms scan` end to end, the junk-dump boot) under `just check-roms`, the recipes `fmt`, `test`, `site`, `site-dev` and `docs`, the pre-merge hook, the site's prose lint, and the workflow docs whose commands have landed. Left after it:
 
-- The original templates Badge In, Signal Failure and Swing State. Until they come, the gate's originals guard has nothing to hold.
 - Six source entries: Kirby, Ninja Gaiden, Gauntlet, Gauntlet II, Q*bert, Track & Field.
 - Donkey Kong's `evidence/` score records, including the whole-corpus baseline the evaluation put at step 3.3.
 - `profiles_dk`'s frame-by-frame hammer and jump checks, which need a module run's counters on every frame.
@@ -83,7 +82,7 @@ Already in the tree: the Z80 code map behind `gp code` on a romset, the access l
 
 Still open:
 
-- `gp model static` on the Z80. It refuses an arcade romset today.
+- `gp model static --clips` and `--unread` on the Z80. The rest of `gp model static` reads a romset's main Z80 today.
 - `gp model blind` on an arcade board. The faithful port on branch `arcade-tools` finds play start and the bartender's x, then stops looking for a jump. Seven changes to the method (ties between objects that move together, lanes, held actions, moves from what discovery found, progress from a rising counter, the drawn check, system order from the access log) wait for the owner's answer before any is made.
 - `gp interp moments` and `gp rule` on arcade, and a rule for lanes: `gp rule` has only `jump`.
 - Components for a player that switches lanes.
@@ -94,7 +93,7 @@ Still open:
 - A signed module kit inside each tool release (T3). The kit is made from a checkout today.
 - Frame timing of a module on phones (P4). Only an Apple M5 Pro in headless Chrome has been measured.
 - The registry can't take submissions from other people, and the page reads one registry.
-- On the site's own "Not built yet" lists: a theme preview before publishing, a theme kit with its checks, level packages a player can pick, playing and publishing an original game, and sending a change from a fetched folder without a fork.
+- On the site's own "Not built yet" lists: a theme preview before publishing, a theme kit with its checks, level packages a player can pick, playing a game made here on a page others can open, and sending a change from a fetched folder without a fork.
 
 ## Decided
 

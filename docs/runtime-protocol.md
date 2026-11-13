@@ -2,7 +2,7 @@
 
 The runtime protocol is the one interface between tools and every way of running a game ([ARCHITECTURE.md](../ARCHITECTURE.md)). The NES runtime (`gp-nes`) and the arcade runtime (`gp-arcade`) implement the operations that don't need a game model, and three commands use them on stored recordings. The model interpreter (`gp-interp`) implements the protocol over a game model, reading its state by model path ([formats/model-path.md](formats/model-path.md)).
 
-Brought from game-printer's docs/runtime-protocol.md. The protocol (`game-printer:runtime@0.4.0`), the selectors, the conditions and the trace layout are unchanged. What changed: the examples use Donkey Kong instead of the Super Mario Bros. baseline, an arcade section is added, and the cost tables are game-printer's measurements, whose example program (`protocol-costs`) and `gp testroms` aren't here.
+Brought from game-printer's docs/runtime-protocol.md. The protocol (`game-printer:runtime@0.4.0`), the selectors, the conditions and the trace layout are unchanged. What changed: the examples use Donkey Kong instead of the Super Mario Bros. baseline, an arcade section is added, and the cost tables are game-printer's measurements, whose example program (`protocol-costs`) isn't here.
 
 | Command | Does |
 |---|---|
@@ -102,7 +102,7 @@ C014  4C 14 C0  JMP $C014                       A:44 X:00 Y:00 P:A4 SP:FF PPU:24
 | `PPU:241, 31` | The PPU's scanline and dot |
 | `CYC` | CPU cycles since power-on |
 
-In game-printer, `gp testroms` ran nestest through this same tracer and compared every line with nestest.log, the disassembly as text and the registers as numbers, and all 8,991 lines matched. The one column left out is the value after `=` for a PPU or APU register ($2000-$401F), which is what each emulator's debugger shows for a read without side effects: nestest.log shows FF for the write-only APU registers, where `gp` shows 00. In gameprinter the comparison is `gp_nes::accuracy::run_nestest`, whose line reader the unit tests check; not here yet: `gp testroms`, the command that runs it on the downloaded test ROMs.
+In game-printer, `gp testroms` ran nestest through this same tracer and compared every line with nestest.log, the disassembly as text and the registers as numbers, and all 8,991 lines matched. The one column left out is the value after `=` for a PPU or APU register ($2000-$401F), which is what each emulator's debugger shows for a read without side effects: nestest.log shows FF for the write-only APU registers, where `gp` shows 00. In gameprinter the comparison is `gp_nes::accuracy::run_nestest`, whose line reader the unit tests check; `gp testroms run` runs it on the downloaded nestest ([test-roms.md](test-roms.md)).
 
 Lines starting with `;` are comments: a header for each frame with its input, and `; NMI` or `; IRQ` after an instruction that was followed by an interrupt, so the next line is the handler's first. The frame ends at the first instruction boundary at or after vblank starts, so whether the NMI that follows falls in this frame or the next varies. When the instruction ending the frame before the window took an NMI, the window starts inside the handler with no `; NMI` line.
 

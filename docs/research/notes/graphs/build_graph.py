@@ -14,8 +14,8 @@ model.toml, mapping.toml, sprites.toml (when it has one) and
 assets/SOURCE.toml, where SOURCE is the ROM entry the asset map is named
 for (default: the model's `source`). Attempts come from the git log of the
 repo GAME is in. HF_DIR is game-printer's `gp dataset export --hf` output
-(facts, mapping, mechanics, clips, scores), which gameprinter has no command
-for yet. OUT should be outside every repo. Every id is "<kind>:<name>", so
+(facts, mapping, mechanics, clips, scores). gameprinter removed that command
+on 2026-11-13, so only an export made before then can feed this script. OUT should be outside every repo. Every id is "<kind>:<name>", so
 the same inputs give the same rows in the same order, and the manifest
 records each input's BLAKE2b hash.
 """

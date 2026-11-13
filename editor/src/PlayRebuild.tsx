@@ -64,7 +64,7 @@ export function PlayRebuild({ api, run, back }: { api: Pick<Api, "capturePreview
         <iframe
           key={src}
           ref={frame}
-          title="the rebuilt game, playable"
+          title="the model, playable"
           src={src}
           allow="gamepad; autoplay"
           tabIndex={0}

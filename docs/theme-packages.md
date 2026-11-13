@@ -4,9 +4,9 @@ folder in the games checkout in gameprinter (games/GAME). -->
 
 # Theme packages
 
-A package is one version of a model or a theme, in one format for both: its files, each stored once as a blob named by the BLAKE3 hash of its bytes, and a manifest that names them. The package id is the BLAKE3 hash of the manifest's bytes, so one id pins every byte of every file. This is the format decided on 2026-11-04 (docs/research/model-data-storage.md, option C, and docs/research/package-hosting.md, "Deduplication"). The code is `crates/gp-package`, which depends on `blake3` alone, so gp, the web preview and the generated Bevy games read packages with the same code.
+A package is a published version of a folder, a game's (kind `game`) or a theme's (kind `content`), in one format for both: its files, each stored once as a blob named by the BLAKE3 hash of its bytes, and a manifest that names them. The package id is the BLAKE3 hash of the manifest's bytes, so one id pins every byte of every file. This is the format decided on 2026-11-04 (docs/research/model-data-storage.md, option C, and docs/research/package-hosting.md, "Deduplication"). The code is `crates/gp-package`, which depends on `blake3` alone, so gp and the web preview read packages with the same code.
 
-Themes are the first packages ([theme publishing](theme-publishing.md)). A theme package is a look package (`theme/`, the `look/` gp drew, `checks.json`) for a game with no ROM art, or a source package (`theme/` and `checks.json` only) for a game lifted from the player's ROM, so that no picture drawn from a ROM's art is ever in a package. Model packages (`gp game publish`, `gp game fetch`) use the same crate when they are built.
+Themes are the first packages ([theme publishing](theme-publishing.md)). A look is a theme drawn for one game, as gp draws it: `look.txt` and the pictures and sounds it changes. A theme package is a look package (`theme/`, the `look/` gp drew, `checks.json`) for a game with no ROM art, or a source package (`theme/` and `checks.json` only) for a game lifted from the player's ROM, so that no picture drawn from a ROM's art is ever in a package. Game packages (`gp registry publish`, `gp game fetch`) use the same crate.
 
 ## The manifest
 
@@ -39,7 +39,7 @@ The local store and every mirror hold the same tree of keys, so a mirror is a co
 | `packages/<id>.sig` | The manifest's SSH signature |
 | `index/themes/<game>.toml` | A copy of a game's themes index |
 
-The local store is `$GP_STORE` (`~/.game-printer/store`), beside the evidence store's `objects/`. Every key but the index copy is written once: a key that is there holds the same bytes, since its name is their hash. A write is staged beside the key and renamed into place. Blobs go first and the manifest last, so a manifest in a store always has its files. Every read is checked: a blob against its hash and its size in the manifest, a manifest against the id it was asked for by. A mismatch stops the read.
+The local store is `$GP_STORE` (`~/.gameprinter/store`), beside the evidence store's `objects/`. Every key but the index copy is written once: a key that is there holds the same bytes, since its name is their hash. A write is staged beside the key and renamed into place. Blobs go first and the manifest last, so a manifest in a store always has its files. Every read is checked: a blob against its hash and its size in the manifest, a manifest against the id it was asked for by. A mismatch stops the read.
 
 Blobs are stored as they are, not compressed: a theme is mostly PNG and WAV files, which are compressed already, and a plain blob is checked against its key with no decoder, which the browser needs. Compressing text blobs (zstd, as the hosting note suggests) is an open item for model packages.
 
@@ -71,7 +71,7 @@ dir = "/srv/packages"      # a folder a static host serves, written as files
 
 gp writes through one client for every S3-compatible host: curl with its AWS Signature Version 4 (`--aws-sigv4 aws:amz:REGION:s3`). Before each PUT it asks HEAD, and a key that is there is not sent again. A mirror's write key is never in either file. It is `GP_MIRROR_KEY_<NAME>` (the name upper-cased, other characters as `_`), `ID:SECRET`, or the file `$GP_HOME/secrets/mirror-<name>`, which gp refuses while anyone but its owner can read it. curl reads the key from its standard input, never from its arguments, and every message from a request has the key and its secret taken out (`mirror::redact`). Reads need no key.
 
-The code is `crates/gp-cli/src/mirror.rs`.
+The code is `crates/gp-cli/src/theme_mirror.rs`.
 
 ## Signing
 
@@ -97,5 +97,5 @@ Before a package is stored, every file is checked:
 | `gp_package::tests` | A manifest round trip and its id; the same files in another order give the same id; bad paths and texts refused; a blob checked by size and hash |
 | `gp_package::store::tests` | A package through a store and back; two paths with the same bytes as one blob; a key written once; a blob or manifest changed on disk refused |
 | `gp_package::index::tests` | The themes index round trip, read the same by a TOML parser; a bad index refused; keys from a newer gp passed over |
-| `mirror::tests` | `$GP_HOME/mirrors.toml` first; a key redacted |
+| `theme_mirror::tests` | `$GP_HOME/mirrors.toml` first; a key redacted |
 | `crates/gp-cli/tests/theme_publish.rs` | Publish to a mock S3 mirror on 127.0.0.1 and fetch back into an empty store; a source package for a made-up ROM game with no `look/` and no ROM bytes; a dry run that writes nothing; a bundled theme's id refused; a recheck that adds a model the publisher had no ROM for and reports a different look ([theme publishing](theme-publishing.md#tests)) |

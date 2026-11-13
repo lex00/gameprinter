@@ -2,7 +2,20 @@
 
 This document describes how gameprinter, Game Printer's tool repo, is put together: its crates and what each depends on, the path from a ROM to a scored model, and where state lives on a machine. It came from game-printer's ARCHITECTURE.md, which described a target design; this one describes the repo as it is, on 2026-11-12. The Bevy generator, `gp loop` and other games' code were dropped in the move, and the games themselves now live in a separate checkout.
 
-Scope is NES games and one arcade board, Midway's MCR (Tapper). A game is a model plus hook code, scored against the original by replaying clips on both.
+Scope is NES games and one arcade board, Midway's MCR (Tapper). A ported game is scored against the original by replaying clips on both.
+
+The words below mean one thing each in this repo's docs:
+
+| Word | What it is |
+|---|---|
+| model | A game's rules and numbers as text: `model.toml` (TOML), with `fidelity.toml` and `profiles.toml` beside it. Read when the game loads and turned into a `gp_sim::Spec` in memory; never compiled |
+| hook code | Rust in a game's `ext/` crate, for what the model text can't say. Some games have it (Donkey Kong, Tapper) and some don't (Moss Hop, the games made here). Person-facing text calls it custom code |
+| module | One game's hook crate compiled to Wasm together with gp-sim, the interpreter core and gp-present (`module.wasm`). Only a game with hook code has one; it reads the model text when it loads |
+| rebuild | What plays a model: the interpreter, or the module for a game with hook code. Person-facing text says "the model" or "the game" |
+| template | A game's folder holding `template.toml` and a model and no ROM data, which anyone can copy to start a game. Every ported game's folder in the games checkout is one (`games/donkey-kong`); so is each starter under `templates/` (Moss Hop and the games made here) |
+| package | A published version of a folder: a manifest and its files as blobs named by BLAKE3 hash, of kind `game` or `content` (a theme). A game's folder is the source of its package |
+| original | The old game being ported, run on gp-nes or gp-arcade. A game written directly as a model is "a game made here" (`docs/originals.md`; the recipe is still `just originals`) |
+| the game | What a person plays in the browser. The result is never a new ROM |
 
 ## Overview
 
@@ -16,7 +29,7 @@ Scope is NES games and one arcade board, Midway's MCR (Tapper). A game is a mode
        |                  (events, track, gaps,        |
        |                   coverage, explore)          |
        |                         |                     |
-       |                  GAME MODEL (package) <-------+
+       |                  GAME FOLDER (template) <-----+
        |                  model.toml, mapping.toml,
        |                  fidelity.toml, ext/ hooks
        |                         |
@@ -31,7 +44,7 @@ Scope is NES games and one arcade board, Midway's MCR (Tapper). A game is a mode
                           score record, gate
 ```
 
-Every tool reaches a running game through one runtime protocol, so the original, the interpreter and a game's Wasm module can be swapped and run side by side. The model is the source of truth: the rebuild is the model run by the interpreter, with a game's hook crate for what model text can't say.
+Every tool reaches a running game through one runtime protocol, so the original, the interpreter and a game's Wasm module can be swapped and run side by side. The model is the source of truth. The rebuild is what plays it: the interpreter, or for a game with hook code that game's module.
 
 ## Fixed interfaces
 
@@ -60,7 +73,7 @@ A module declares the `runtime-wit` and `sim-api` it was built for, and the host
 
 ## The crates
 
-There are 38, all under `crates/`. Arrows below mean "depends on" and list only gameprinter's own crates.
+There are 42, all under `crates/`. Arrows below mean "depends on" and list only gameprinter's own crates.
 
 ### Shared base
 
@@ -71,6 +84,7 @@ There are 38, all under `crates/`. Arrows below mean "depends on" and list only 
 | `gp-package` | Packages and the local store's keys (`blobs/`, `packages/`, signatures, theme indexes); depends on blake3 alone so the browser reads packages with the code that writes them | none |
 | `gp-capture` | The capture event stream: event and input types, a run folder's reading and appending, the writer lock | none |
 | `gp-imagefmt` | Image and sprite sheet formats with a JSON sidecar, palette files for editors | none |
+| `gp-metrics` | Run manifests, metrics and their history: what each `gp` command read and wrote and how long it took ([docs/formats/run-manifest.md](docs/formats/run-manifest.md)) | none |
 
 ### NES side
 
@@ -87,6 +101,7 @@ There are 38, all under `crates/`. Arrows below mean "depends on" and list only 
 | `gp-assets` | Asset lifting: tiles, palettes, metatiles, levels and tables from a ROM by an asset map, packed back with a round-trip check | gp-evidence |
 | `gp-sound` | Sound as model data: the APU register log, an APU model, capture into songs and instruments, a player and a synthesizer ([docs/sound.md](docs/sound.md)) | none |
 | `gp-sound-bank` | Songs rendered through SF2 banks, the rest on the APU | gp-sound |
+| `gp-oracle` | The Mesen oracle: a Mesen 2 capture turned into a recording, two recordings compared field by field, and the triage of what differs ([docs/oracle.md](docs/oracle.md)) | gp-evidence, gp-nes |
 
 The readers on this side read the NES's 6502 code, sprite table, nametables or APU. A command built on them refuses an arcade romset in words rather than guessing (the list is under "The arcade side").
 
@@ -99,7 +114,7 @@ The readers on this side read the NES's 6502 code, sprite table, nametables or A
 
 A package says which side it is on with `platform` in each `[[rom.entry]]`: `"nes"`, or `"arcade"` for a MAME romset (a zip). Anything that starts the original goes through that platform. Tapper is the one arcade game.
 
-On an arcade romset, `gp reach`, `gp code listing` and `gp code tables`, `gp coverage`, `gp element inputs`, `gp interp draws --find`, `gp gaps`, `gp sound capture` (an AY log and its notes), `gp movie import` (MAME `.inp`) and `gp labels propose` run on gp-arcade instead. These refuse one, saying why: `gp model blind`, `gp model static`, `gp cycles`, `gp explore`'s search, `gp watch start`'s stage 0, `gp dataset rom`, `gp farm` and `gp farm-topdown`, `gp mechanic harvest`, `leads` and `sweep`, `gp sprites capture`, `gp roms diff`, `gp roms clean` and `gp validate`. The page's ON THE MODEL and PLAY need a model, which Tapper doesn't have yet.
+On an arcade romset, `gp reach`, `gp code listing` and `gp code tables`, `gp coverage`, `gp element inputs`, `gp interp draws --find`, `gp gaps`, `gp sound capture` (an AY log and its notes), `gp movie import` (MAME `.inp`), `gp labels propose`, `gp model blind`, `gp model static`, `gp cycles`, `gp explore`'s search, `gp watch start`'s stage 0, `gp dataset rom`, `gp farm --blind`, `gp mechanic harvest` and `leads`, `gp sprites capture` (it proposes, without `--apply`) and `gp roms diff` of two romsets run on gp-arcade instead. These refuse one, saying why: `gp farm`'s search and `gp farm-topdown`, `gp mechanic sweep`, `gp roms clean` and `gp validate`. Tapper has a model, but no model slot takes an arcade lift's pictures yet, so its model draws nothing and the page's ON THE MODEL and PLAY refuse an arcade game.
 
 ### The model and the interpreter
 
@@ -118,6 +133,7 @@ On an arcade romset, `gp reach`, `gp code listing` and `gp code tables`, `gp cov
 | `gp-extract` | Facts from a recording's tracks: feel measured, proposed facts, the questions file, facts applied with evidence | gp-model, gp-track |
 | `gp-exts` | The hook crates the tool's own builds run. It holds only the demo hook | gp-sim, gp-ext-game |
 | `gp-ext-game` | A placeholder that the page's build fills with one game's hook crate, in a copy of the repo. This repo holds no game's hooks | gp-sim, gp-cycles |
+| `gp-chunks` | The level chunk catalog: the groups of cells a game's levels are built from and what each does for the player ([docs/chunks.md](docs/chunks.md)) | gp-assets, gp-interp, gp-model, gp-sim |
 
 ### Modules under wasmtime
 
@@ -126,6 +142,7 @@ A game with hooks ships one Wasm module: gp-sim, the interpreter core, gp-presen
 | Crate | What it is | Depends on |
 |---|---|---|
 | `gp-module` | A game's module as a `gp_runtime::Runtime`: wasmtime with NaN canonicalization on, relaxed SIMD off, no imports, a deadline on every call and a memory cap. Forks of one runtime share one instance | gp-runtime |
+| `gp-wasm-check` | A program of its own: the open-tier baseline and the stored recordings replayed natively and under wasmtime (`just check-wasm`, `just check-wasm-roms`, [docs/platform-checks.md](docs/platform-checks.md)) | gp-arcade, gp-evidence, gp-exts, gp-interp, gp-nes |
 
 `gp game kit` writes the tool's sources a module needs; `gp game build` and `gp game test` build and test a game's hook crate from that kit in a sandbox with no network (`sandbox-exec` on macOS, `bwrap` on Linux), under `$GP_HOME/work/module-build/`. A hook crate may depend only on gp-sim and gp-cycles. The same kit, package and lock give the same bytes on any machine, and `gp package scan --wasm` holds a built module to the package's ROMs.
 
@@ -163,7 +180,7 @@ The page holds no game data. A game's module runs in a Worker (`page/module-host
 
 ### The command
 
-`gp-cli` builds `gp`, a thin client over the library crates: each command is one call into a library. It links every crate above but the page's own (gp-web, gp-web-lift, gp-web-registry), most of them directly. [CLI.md](CLI.md) lists every command, in a public set and a lab set, and `gp self docs --check CLI.md` fails `just check` when it drifts.
+`gp-cli` builds `gp`, a thin client over the library crates: each command is one call into a library. It links every crate above but the page's own (gp-web, gp-web-lift, gp-web-registry) and gp-wasm-check, most of them directly. [CLI.md](CLI.md) lists every command, in a public set and a lab set, and `gp self docs --check CLI.md` fails `just check` when it drifts.
 
 ### How the layers stack
 
@@ -188,9 +205,9 @@ The emulator crates don't depend on the model, and the model crates (gp-model, g
 ## From ROM to scored model
 
 1. The person copies a ROM they own into `$GP_ROM_DIR` with `gp roms add`: an NES image to `nes/`, a MAME romset to `arcade/`. `gp roms scan` identifies each file by the hashes in the games' `roms.toml` and `package.toml` `[[rom.entry]]` rows, whatever it is named. A ROM no game names yet is kept as unknown.
-2. `gp game new` starts a package folder in the games checkout for an unknown ROM: a model skeleton for the genre, the ROM's hashes, pins that hold, no clips.
+2. `gp game new` starts a game's folder in the games checkout for an unknown ROM: a model skeleton for the genre, the ROM's hashes, pins that hold, no clips.
 3. `gp assets lift` decodes the ROM's assets by the package's asset map into files under `$GP_HOME/work/assets/SOURCE`. `gp assets pack` is the round-trip check. The lifted files never enter a repo.
-4. Readers measure the original: `gp record` keeps runs in the store; `gp watch`, `gp reach`, `gp code`, `gp events`, `gp track`, `gp gaps`, `gp coverage`, `gp element inputs` and `gp model static` read what its code does. `gp model blind` drafts a model and a state mapping from the ROM alone, on the NES.
+4. Readers measure the original: `gp record` keeps runs in the store; `gp watch`, `gp reach`, `gp code`, `gp events`, `gp track`, `gp gaps`, `gp coverage`, `gp element inputs` and `gp model static` read what its code does. `gp model blind` drafts a model and a state mapping from the ROM alone, on an NES ROM or an arcade romset.
 5. Clips: in `gp serve`'s CLIPS tab the person plays the original, records a mechanic's clips and hands them to the agent. Sessions are kept in `$GP_HOME/mechanics/GAME`. `gp corpus import` turns them into the corpus: `corpus.toml` and `inputs/`, presses only.
 6. The model is written and fitted: by hand and by agent in `model.toml`, `mapping.toml`, `fidelity.toml` and the `ext/` hook crate, with `gp model refine --lockstep`, `gp rule`, `gp solve` and `gp model questions` proposing numbers with evidence.
 7. Scoring: `gp corpus score` or `gp game score` makes each clip again from the ROM on gp-nes or gp-arcade, plays it through the model (gp-interp, or the module under gp-module), and compares the two each frame through the state mapping. The result is clips exact and a fidelity figure, with a score record.
@@ -205,7 +222,7 @@ ROMs and the store are refused inside any git work tree, so nothing made from a 
 
 ### `$GP_HOME`
 
-`$GP_HOME` defaults to `~/.gameprinter`, the new tool's home until cutover (the old tool's is `~/.game-printer`).
+`$GP_HOME` defaults to `~/.gameprinter`. The old tool's home, `~/.game-printer`, is gone.
 
 | Folder | Holds |
 |---|---|
@@ -223,9 +240,9 @@ ROMs and the store are refused inside any git work tree, so nothing made from a 
 
 ### The games checkout
 
-Games live in their own repo, `lex00/games`, not here. gp finds the checkout through `--games`, then `$GP_GAMES_DIR`, then a `games` folder at or beside the current folder or one above it; normally that is `games/` beside the tool repo. Each game is a package folder: `games/donkey-kong` (its old id was donkey-kong-oe) and `games/tapper`.
+Games live in their own repo, `lex00/games`, not here. gp finds the checkout through `--games`, then `$GP_GAMES_DIR`, then a `games` folder at or beside the current folder or one above it; normally that is `games/` beside the tool repo. Each game is a folder there, which is its template and the source of its package: `games/donkey-kong` (its old id was donkey-kong-oe) and `games/tapper`.
 
-| In a package | What it holds |
+| In a game's folder | What it holds |
 |---|---|
 | `package.toml` | Name, version, tier, the tool versions it needs (`runtime-wit`, `sim-api`, `gp`), its play files and `[[rom.entry]]` rows: hash, platform, board, asset map and lift pins, and a role (`scored`, or loaded only to play) |
 | `roms.toml` | The ROMs' hashes, as gp looks them up |

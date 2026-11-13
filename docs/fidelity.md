@@ -14,7 +14,7 @@ It is a different thing from the fidelity contract (`fidelity.toml`, [formats/co
 
 Donkey Kong's last gate score record ([evaluation](evaluation.md)) was 111 of 111 clips exact, fidelity 1000 per mille.
 
-Not here yet: game-printer's `gp capture fidelity RUN [--json]`, its metric `fidelity.<template>.score`, the coverage and picture parts, the confidence, what holds the score down and the history. Everything below is that score as game-printer worked it out (its `crates/gp-cli/src/fidelity.rs` and `serve/fidelity.rs`), which a port should keep to.
+`gp capture fidelity` is here as `gp corpus score` on the run's game, with the fidelity line above. Not here yet: game-printer's own `gp capture fidelity RUN [--json]`, its metric `fidelity.<template>.score`, the coverage and picture parts, the confidence, what holds the score down and the history. Everything below is that score as game-printer worked it out (its `crates/gp-cli/src/fidelity.rs` and `serve/fidelity.rs`), which a port should keep to.
 
 ## game-printer's formula, version `fidelity 2`
 

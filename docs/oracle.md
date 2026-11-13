@@ -115,7 +115,7 @@ The tests in `crates/gp-oracle/src/diff.rs` run in `just check`, in well under a
 | Ends an instruction apart, and lookalikes (same cycles with another PC, too far apart, S off by other than 3, a position or frame counter that didn't move with the cycles) | `boundary-instruction` for the real one only |
 | A PPU 4 dots ahead from frame 1, and another offset | `ppu-alignment`, and `ppu.dot` for the other |
 
-`scripts/oracle/mutate-diff.py` makes 20 changes to the classifier and resync, each undoing one of those conditions, and checks the tests catch each; on 2026-10-27 they caught all 20.
+game-printer's `scripts/oracle/mutate-diff.py` (not carried here) made 20 changes to the classifier and resync, each undoing one of those conditions, and checked the tests caught each; on 2026-10-27 they caught all 20.
 
 ## Triage
 

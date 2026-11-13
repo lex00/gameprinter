@@ -34,29 +34,8 @@ pub enum RomsCmd {
     /// it.
     Add {
         /// The ROM files to add.
-        #[arg(required_unless_present = "patch", conflicts_with = "patch")]
+        #[arg(required = true)]
         files: Vec<PathBuf>,
-        /// An IPS or BPS patch registered in a game's roms.toml (found by
-        /// its SHA-256, a `kind = "patched"` source). Download it from its
-        /// author's page yourself; it never goes in a repo. The result goes
-        /// to $GP_ROM_DIR/nes/patched/, checked against every registered
-        /// hash first.
-        #[arg(long)]
-        patch: Option<PathBuf>,
-        /// With `--patch`: the base to apply it to, by registry ID or
-        /// headerless SHA-256 (8 hex digits or more). Default: every base
-        /// the patch is registered for that is in $GP_ROM_DIR.
-        #[arg(long, requires = "patch")]
-        base: Option<String>,
-        /// With `--patch`: apply a patch that isn't registered yet to
-        /// `--base` and print a draft registry entry with the result's
-        /// hashes. Writes nothing.
-        #[arg(long, requires = "patch")]
-        new: bool,
-        /// Platform subdirectory under $GP_ROM_DIR for a patched source.
-        /// Only `nes` so far.
-        #[arg(long, default_value = "nes", requires = "patch")]
-        platform: String,
         /// Move the files instead of copying them.
         #[arg(long = "move", conflicts_with = "clean")]
         move_files: bool,
@@ -99,25 +78,10 @@ pub fn run(cmd: &RomsCmd, paths: &Paths) -> Result<Outcome> {
             scan(paths, &reg, &from)
         }
         RomsCmd::Add {
-            patch: Some(patch),
-            base,
-            new,
-            platform,
-            games,
-            ..
-        } => {
-            if platform != "nes" {
-                bail!("--platform {platform}: a patched source is an NES image, so only nes");
-            }
-            let (reg, _) = sources(games.as_deref())?;
-            crate::rompatch::add(patch, base.as_deref(), *new, &reg, paths)
-        }
-        RomsCmd::Add {
             files,
             move_files,
             clean,
             games,
-            ..
         } => {
             let (reg, from) = sources(games.as_deref())?;
             add(files, *move_files, *clean, paths, &reg, &from)

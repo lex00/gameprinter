@@ -34,6 +34,11 @@ pub struct McpArgs {
     /// $GP_HOME/work/assets/<model.source>).
     #[arg(long, value_name = "DIR")]
     assets: Option<PathBuf>,
+    /// The games checkout, whose game folders are templates the tools see
+    /// beside the repo's templates/ (default: $GP_GAMES_DIR, else a `games`
+    /// folder at or beside the current folder or one above it).
+    #[arg(long, value_name = "DIR")]
+    games: Option<PathBuf>,
 }
 
 fn absolute(p: &Path) -> Result<PathBuf> {
@@ -75,8 +80,11 @@ pub(crate) fn run(args: &McpArgs, paths: &Paths) -> Result<Outcome> {
         home: paths.home.clone(),
         rom: args.rom.as_deref().map(absolute).transpose()?,
         assets: args.assets.as_deref().map(absolute).transpose()?,
+        games: crate::roms_cmd::games_dir(args.games.as_deref())
+            .map(|g| absolute(&g))
+            .transpose()?,
     };
-    let shown = json!({ "repo": config.repo, "work": config.work });
+    let shown = json!({ "repo": config.repo, "work": config.work, "games": config.games });
     gp_mcp::server::serve_stdio(config).map_err(anyhow::Error::msg)?;
     // stdout was the MCP channel, so nothing more is printed there.
     Ok(Outcome::ok(shown, String::new()))

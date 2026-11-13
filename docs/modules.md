@@ -52,5 +52,4 @@ A frame is 16.7 ms. Phones haven't been measured (P4).
 ## Not done yet
 
 - The official client's scan of a module on fetch waits for 3.3, when `gp` runs modules.
-- The native limits (epoch deadline and `StoreLimits`) come with the wasmtime host in 3.3.
 - The kit is made from a checkout. A signed kit inside each tool release is T3.

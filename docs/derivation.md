@@ -1,6 +1,6 @@
 # Derivation
 
-A game's model (Moss Hop's template, a game's package) holds facts a person wrote by reading the game's source or disassembly, with evidence that cites the file and line. Derivation reads those facts back automatically. It starts from the cited lines and the code around them, then turns to the ROM's data through the asset map. After that come recordings and other derived values. A fact that a deriver reads back can be checked on every run and filled for the next game without a person; a fact that none reads back says what capture still needs.
+A game's model (`model.toml` in its template folder: `templates/mosshop` for Moss Hop, `games/GAME` in the games checkout for a ported game) holds facts a person wrote by reading the game's source or disassembly, with evidence that cites the file and line. Derivation reads those facts back automatically. It starts from the cited lines and the code around them, then turns to the ROM's data through the asset map. After that come recordings and other derived values. A fact that a deriver reads back can be checked on every run and filled for the next game without a person; a fact that none reads back says what capture still needs.
 
 Ported from game-printer in wave 5; what changed is at the end. Every deriver below works in a first form on any NES game with its source or disassembly, an asset map and a state mapping. game-printer's measurements on other games are in its own docs/derivation.md.
 
@@ -58,7 +58,7 @@ An arcade game's notes or listing in Z80 source are read the same way: a `.z80` 
 
 ### The data deriver
 
-With `--assets DIR` (a directory `gp assets lift` wrote), each asset map entry's `label` names its lifted file, so a ref to `BoundBoxCtrlData` reads the lifted `bounding_boxes` rows even when the disassembly isn't downloaded. The slots' `from` and `kind` are checked against the map. A generator script named in an evidence ref or note is run as `python3 -I -B <script> DIR` and its TOML output is compared fact by fact; Super Mario Bros.' `scripts/model/smb-levels.py` re-derives 2,042 of its level facts this way and Super Mario Bros. 2's `scripts/model/smb2-levels.py` 172.
+With `--assets DIR` (a directory `gp assets lift` wrote), each asset map entry's `label` names its lifted file, so a ref to `BoundBoxCtrlData` reads the lifted `bounding_boxes` rows even when the disassembly isn't downloaded. The slots' `from` and `kind` are checked against the map. A generator script named in an evidence ref or note is run as `python3 -I -B <script> DIR` and its TOML output is compared fact by fact; in game-printer, Super Mario Bros.' `scripts/model/smb-levels.py` re-derived 2,042 of its level facts this way and Super Mario Bros. 2's `scripts/model/smb2-levels.py` 172 (neither script is in gameprinter).
 
 ### How capture finds each class for any game
 

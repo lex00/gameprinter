@@ -1,6 +1,6 @@
 # The package scan
 
-`gp package scan DIR` sorts everything in a game's package folder into what its package may hold and what must be rebuilt from the person's own ROM. Each piece of a game's model ships in its package, or ships as a recipe that rebuilds it from the ROM with a hash that checks the rebuild. Nothing may simply be missing. It came from game-printer's docs/package-scan.md, where it read a template folder; here it reads a package folder in the games checkout and its `[[rom.entry]]` list, and `gp package rederive` is part of the scan only.
+`gp package scan DIR` sorts everything in a game's folder into what its package (the published version of that folder) may hold and what must be lifted again from the person's own ROM. Each piece of a game's model ships in its package, or ships as a recipe that lifts it from the ROM with a hash that checks the result. Nothing may simply be missing. It came from game-printer's docs/package-scan.md, where it read a template folder; here it reads a package folder in the games checkout and its `[[rom.entry]]` list, and `gp package rederive` is part of the scan only.
 
 ```text
 gp package scan ../games/donkey-kong [--rom ROM] [--wasm MODULE] [--baseline SCAN.json]
@@ -87,9 +87,9 @@ Every `.wasm` in the folder (a `target` or `.git` folder aside), and each module
 
 ## Rederive
 
-The scan rebuilds everything in the from-the-ROM bucket from the package alone and each ROM found: for each ROM entry, its asset map checked against the entry's `asset_map_sha256`, the lift's digest against its `lifted_sha256`, the lifted files encoded back and compared with the ROM byte for byte, and every asset the model names found in the lift. A missing pin is a problem: a rebuild with no hash to check it against is trusted, not checked.
+The scan rebuilds everything in the from-the-ROM bucket from the package alone and each ROM found: for each ROM entry, its asset map checked against the entry's `asset_map_sha256`, the lift's digest against its `lifted_sha256`, the lifted files encoded back and compared with the ROM byte for byte, and every asset the model names found in the lift. A missing pin is a problem: a lift with no hash to check it against is trusted, not checked.
 
-A package is complete when it has no needs-rewrite item and the rebuild passes with every hash present. `gp package scan` exits 1 when the package isn't complete, or with `--baseline` only when it finds a needs-rewrite item the baseline doesn't list (or ROM bytes in a module).
+A package is complete when it has no needs-rewrite item and the lift from the ROM passes with every hash present. `gp package scan` exits 1 when the package isn't complete, or with `--baseline` only when it finds a needs-rewrite item the baseline doesn't list (or ROM bytes in a module).
 
 Not here yet: `gp package rederive`, the rebuild on its own.
 

@@ -123,6 +123,7 @@ mod tests {
             home: home.clone(),
             rom: None,
             assets: None,
+            games: None,
         };
         let r = explain(
             &c,

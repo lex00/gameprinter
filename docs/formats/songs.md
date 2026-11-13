@@ -2,7 +2,7 @@
 
 Brought from game-printer's docs/formats/songs.md (port wave 4).
 
-The `gp-songs` format holds songs and sound effects as notes (`gp_sound::song`). It's the one general representation every source writes and every player and exporter reads. A model's `songs` and `sound-effects` slots hold one (docs/model.md). Captured songs are game content and stay outside the repo, and tests use made-up songs.
+The `gp-songs` format holds songs and sound effects as notes (`gp_sound::song`). It's the one general representation every source writes and every player reads. A model's `songs` and `sound-effects` slots hold one (docs/model.md). Captured songs are game content and stay outside the repo, and tests use made-up songs.
 
 The file is JSON. A reader takes the same major and minor version with any patch, and checks that every note's instrument exists and fits its channel.
 
@@ -33,7 +33,7 @@ A song has these fields.
 |---|---|
 | `name` | Unique in the set: a model path name |
 | `kind` | `music` or `sfx` |
-| `origin` | `driver`, `log`, `samples`, `import` or `edited` |
+| `origin` | `driver`, `log`, `samples`, `import` or `edited`; only files the removed `gp sound import` wrote say `import` |
 | `confidence` | 0 to 1: how sure the source is these are the game's notes (docs/sound.md, "Capture") |
 | `driver` | The decoder's driver, for `origin = "driver"` |
 | `frames` | Its length (to the loop's end when it loops) |

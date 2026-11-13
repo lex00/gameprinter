@@ -1,13 +1,13 @@
 ---
 name: level-design
-description: Design a new stage for a game in Game Printer by hand from its level kit (GAME/level-kit/level-kit.md and kit.toml in the game's package): read the format, keep to what the code fixes and to the limits, lay the stage out on paper or in a script, land the play measures within their tolerances, stay apart from the original's layout, and verify it on the model and, for a commercial game's format, on the real engine. Use it when someone asks for a new level, stage or layout for a game, or to check one they made.
+description: Design a new stage for a game in Game Printer by hand from its level kit (GAME/level-kit/level-kit.md and kit.toml in the game's folder): read the format, keep to what the code fixes and to the limits, lay the stage out on paper or in a script, land the play measures within their tolerances, stay apart from the original's layout, and verify it on the model. Use it when someone asks for a new level, stage or layout for a game, or to check one they made.
 ---
 
 # Level design
 
 A stage is data the game's model reads: floors, ladders, things and where they start. The level kit says, for one game, what is data and what the game's code fixes, the limits with numbers, the play measures a stage of its kind should land near, the originality rules and how to verify. [docs/level-kit.md](../../../docs/level-kit.md) is the reference. Everything here works by hand; the tools only check.
 
-This skill came from game-printer. A game is a package folder in the games checkout (`$GP_GAMES_DIR`, or `games` beside the tool repo): GAME below is that folder (`games/donkey-kong`), and T is the folder of your stage's game. Moss Hop's kit is in this repo, `templates/mosshop/level-kit/`. Tapper has no kit yet.
+This skill came from game-printer. GAME below is a game's folder in the games checkout (`$GP_GAMES_DIR`, or `games` beside the tool repo), such as `games/donkey-kong`. That folder is the game's template: `template.toml`, the model (the game's rules and numbers as text, `model.toml`, where the stages live) and no ROM data, and T is the folder of your stage's game. Moss Hop's kit is in this repo, `templates/mosshop/level-kit/`. Tapper has no kit yet.
 
 The rules hold at every step:
 
@@ -17,7 +17,7 @@ The rules hold at every step:
 
 ## 1. Read the kit
 
-The kit is in the game's package: `GAME/level-kit/level-kit.md`, `kit.toml` and `rules.toml`. game-printer wrote the first two with `gp level kit GAME`; that command isn't in gameprinter yet (it is planned with wave 9), so the kits are as game-printer wrote them, and a change to `rules.toml` has to be carried into the other two by hand until it lands. Donkey Kong's kit still names the game by its old id, `donkey-kong-oe`.
+The kit is in the game's folder: `GAME/level-kit/level-kit.md`, `kit.toml` and `rules.toml`. `gp level kit GAME` writes the first two from the model, the asset map and `rules.toml`, so after a change to `rules.toml`, run it again. Donkey Kong's kit still names the game by its old id, `donkey-kong-oe`.
 
 Read `level-kit.md` top to bottom. Note:
 
@@ -30,7 +30,7 @@ Read `level-kit.md` top to bottom. Note:
 | Play measures | The targets and tolerances your stage should land within |
 | Originality | The thresholds, and what counts as copying |
 | How to verify | The commands, in order (some name commands that aren't here yet; step 4 below has the ones that are) |
-| What fits on the real engine | What earlier stages found when packed into a copy of the ROM |
+| What fits on the real engine | What earlier stages found when they were packed into a copy of the ROM, before Game Printer stopped writing ROMs. Read it as a record: nothing checks a new stage this way now |
 | Worked example | A stage explained against these rules |
 | Open | What nobody knows yet: don't rely on it |
 
@@ -47,7 +47,7 @@ Draw the screen at the level's tile size (Donkey Kong: 32 by 30 cells of 8 px). 
 
 Keep each number your own. Write the stage as a script that emits the slots, not as edited copies of lifted files. game-printer's example, Rivet Rodeo's `scripts/rivet-rodeo/stage.py`, went with Rivet Rodeo (retired by the owner on 2026-11-11); its shape is still the one to follow: one function a slot, each number with a comment saying which rule it keeps.
 
-Your stage's game is a package folder of its own (T) with the base's model and its own stage files, and `[derive] from` in its `template.toml` naming the base (docs/templates.md, "Originals"). game-printer's `gp template derive` made those files from the base's; it isn't here yet, so copy the base's model and mapping by hand and keep the stage's slots your own.
+Your stage's game is a template folder of its own (T) with the base's model and its own stage files, and `[derive] from` in its `template.toml` naming the base (docs/templates.md, "Originals"). `gp template derive T --write` makes those files from the base's; keep the stage's slots your own.
 
 ## 3. Check the reach by hand
 
@@ -68,10 +68,10 @@ gp level difficulty --template T --level L                # how late or early ea
 
 A measure out of tolerance names what to move: slopes and gaps move floors, the route and climbs move ladders, the barrels' share and the throw's time move barrel ladders, the jump window moves where foes meet the hero. Change one thing, measure again.
 
-Not here yet: `gp template derive T --write` and `gp interp baselines T`, which the kit's verify steps still name. Keep the `--clears` output as the holds until baselines come back.
+The kit's verify steps also name `gp template derive T --write` and `gp interp baselines T`; run them too.
 
-For a stage meant to run on the game's own engine, pack its slots into a copy of the ROM outside any repo (`gp assets pack DIR --base ROM -o COPY` for slots that keep their size) and run the same inputs on both (`gp interp compare T --rom COPY --input LOG --mode free`). The first frame a run splits where the original game's own run doesn't is where the stage breaks a rule the kit may not list yet: add it to the rules file.
+There is no check on the game's own engine any more. `gp assets pack --base`, which wrote the stage's slots into a copy of the ROM to run beside the model, was removed on 2026-11-13, since Game Printer's games play in the browser on the model. A stage is checked on the model alone: the steps above, the kit's code rules kept by hand, and its "What fits" findings from the stages packed before. A rule the engine holds that the kit doesn't list yet won't show up; when the code is read and one is found, add it to the rules file.
 
 ## 5. Theme it
 
-A theme keeps the stage's geometry. game-printer's `gp theme check T --theme DIR` flagged a platform whose top edge wasn't the floor line and a ladder left undrawn; it isn't here yet. A large-art theme builds each stage from pieces over the level picture the player's ROM gives (site/src/content/docs/themes.md), so it follows a new stage's floors and ladders by itself; look at the stage in the page's PLAY tab under each theme. .claude/skills/theme-generation/SKILL.md makes the theme.
+A theme keeps the stage's geometry. game-printer's `gp theme check T --theme DIR` flagged a platform whose top edge wasn't the floor line and a ladder left undrawn; it is back with wave 8, for a theme directory rather than a look. A large-art theme builds each stage from pieces over the level picture the player's ROM gives (site/src/content/docs/themes.md), so it follows a new stage's floors and ladders by itself; look at the stage in the page's PLAY tab under each theme. .claude/skills/theme-generation/SKILL.md makes the theme.

@@ -9,8 +9,8 @@
 //!
 //! game-printer's command was `gp docs schemas`; gameprinter's `gp docs cli`
 //! became `gp self docs`, so this is `gp self schemas`. game-printer's
-//! loop.json (gp loop, dropped) and chunks.json (gp-chunks, not ported) are
-//! gone; corpus.json (the corpus plan), package.json and roms.json are new.
+//! loop.json (gp loop, dropped) is gone; corpus.json (the corpus plan),
+//! package.json and roms.json are new.
 
 use std::collections::BTreeMap;
 use std::fs;

@@ -43,7 +43,7 @@ export interface CurveLinesProps {
 }
 
 /** The chart itself: two or three lines in a small box. */
-export function CurveLines({ title, original, rebuilt, third, rebuiltLabel = "rebuilt", from, to, playhead, firstWrong, drift, picker }: CurveLinesProps) {
+export function CurveLines({ title, original, rebuilt, third, rebuiltLabel = "model", from, to, playhead, firstWrong, drift, picker }: CurveLinesProps) {
   const b = bounds([original, rebuilt, ...(third ? [third.points] : [])], from, to);
   const mark = (f: number | null | undefined, cls: string, label: string) =>
     f != null && f >= b.x0 && f <= b.x1 ? (

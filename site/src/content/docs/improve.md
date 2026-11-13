@@ -5,14 +5,14 @@ prompt: |
   Read this page. Then help me find where the behaviour I describe next lives in the game's model.toml or its ext/ hook code, make the change in my fork of lex00/games, and run the gate with --dry-run. Show me its result before anything else.
 ---
 
-Every game here is a model: text files that say how the game behaves. A set of recorded play clips, the corpus, shows whether the model still matches the original. You change the model, the gate plays every clip again, and the change is good if no clip got worse.
+Every game here has a model: a plain text file of its rules and numbers (`model.toml`). Some games, Donkey Kong among them, also have custom code (hooks, in Rust) for what the text can't say. A set of recorded play clips, the corpus, shows whether the model still matches the original. You change the model, the gate plays every clip again, and the change is good if no clip got worse.
 
 Today the game to improve is Donkey Kong, played from a ROM you own.
 
 ## What you need
 
 - [`gp` installed](../install/).
-- Your own copy of the game, in `GP_ROM_DIR`. The gate compares the model with the original, so it can't run without one. See the [ROM rules](../rom-rules/).
+- Your own ROM of the game, in `GP_ROM_DIR`. The gate compares the model with the original, so it can't run without one. See the [ROM rules](../rom-rules/).
 
 ## Send a change
 

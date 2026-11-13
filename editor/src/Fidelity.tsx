@@ -82,7 +82,7 @@ export function FidelityLine({ f }: { f: FidelityState }) {
   const low = f.confidence.level === "low";
   return (
     <div className="progress-row fidelity" data-testid="fidelity">
-      <span className="progress-label" title={`The fidelity score (${f.version}): how close the rebuilt game's play is to the original's, from every clip's score (docs/fidelity.md)`}>
+      <span className="progress-label" title={`The fidelity score (${f.version}): how close the model's play is to the original's, from every clip's score (docs/fidelity.md)`}>
         Fidelity
       </span>
       <span>

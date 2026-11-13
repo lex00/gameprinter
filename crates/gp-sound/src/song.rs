@@ -1,8 +1,7 @@
 //! Songs and sound effects as notes (docs/formats/songs.md): the general
 //! representation every source lands in. A captured register log, a
-//! decoded driver format, a MIDI or FamiStudio import and an agent's edit
-//! all produce a [`SongSet`]; the player, the synthesizer, the exporters
-//! and the model's `songs` slots read one.
+//! decoded driver format and an agent's edit all produce a [`SongSet`];
+//! the player, the synthesizer and the model's `songs` slots read one.
 //!
 //! A song has a track per NES channel. A track is patterns placed in order;
 //! a pattern holds notes timed in frames from its start, so a song keeps
@@ -50,7 +49,9 @@ pub enum Origin {
     Log,
     /// Taken from rendered audio (none yet: filed).
     Samples,
-    /// Imported from an external editor's file (FamiStudio, MIDI).
+    /// Imported from an external editor's file (FamiStudio, MIDI) by an
+    /// older gp, which had `gp sound import`. Kept so those files still
+    /// read.
     Import,
     /// Written or edited by hand or by an agent.
     Edited,

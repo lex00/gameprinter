@@ -1,6 +1,6 @@
 # Capturing presentation
 
-Brought from game-printer's docs/capture.md (port wave 4) for `gp sprites capture` and `gp sound capture`; gameprinter's docs/capture.md is the dense and carry clips. What it says of `gp sprites export`, `gp sound decode` and the Bevy generator is game-printer's: those aren't in gameprinter. `gp sound capture` reads the NES's APU. `gp sprites capture` reads an arcade game too (port wave T): see "An arcade game" below. Links to pages gameprinter doesn't carry yet name game-printer's docs.
+Brought from game-printer's docs/capture.md (port wave 4) for `gp sprites capture` and `gp sound capture`; gameprinter's docs/capture.md is the dense and carry clips. What it says of the Bevy generator is game-printer's: that isn't in gameprinter. `gp sound capture` reads the NES's APU. `gp sprites capture` reads an arcade game too (port wave T): see "An arcade game" below. Links to pages gameprinter doesn't carry yet name game-printer's docs.
 
 A model's presentation is everything a runtime draws ([the model](model.md#presentation)). For each part of it, this page says how capture finds the part for any NES game. It also says what is still written by hand and what would make it automatic. Super Mario Bros. is the worked example; nothing here is particular to it.
 
@@ -92,7 +92,7 @@ A frame's place is kept from the mapped position, so it is right in the rebuilt 
 
 The set goes to the lifted assets. The model, with each captured entity's sprite and states, is written beside it as a proposal. With `--apply` it is written over the template's instead, and its evidence names the recordings and `sprites.toml`. A sprite the model already has stays first: its frames move into the set, a captured clip goes after its clips where none of them holds, and before them only where the first that holds shows other frames and capture saw it at least 30 times (falling off a ledge keeps the walk). A sprite capture agrees with is left as it was, so Moss Hop's model doesn't change. A hand-written frame that differs from a captured one only by a flip is that frame, and one no recording or table showed gives way to the captured one, so capturing an applied template again gives the same model and the same set (`just sprites-roms` checks this).
 
-`gp sprites export` and `import` take the set out to image editors and back in the layout of an [image format config](formats/image-config.md).
+To draw on the set by hand, `gp assets open` takes an entity's frames from a copy of the game to a pixel editor and back, laid out as an [image format config](formats/image-config.md) says ([sprite editing](sprite-editing.md)).
 
 Run on 2026-10-29 (recordings named in each template's evidence):
 

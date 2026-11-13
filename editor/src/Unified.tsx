@@ -753,7 +753,7 @@ export function Unified({ api, run, words: g }: UnifiedProps) {
     ? "Starting the original."
     : paused
       ? "Paused. Press P to go on."
-      : `${cutSays(cut, frame, settings)}${follow === "none" && showModel ? " The rebuilt game can't start from this save state yet; play on and save again." : ""}`;
+      : `${cutSays(cut, frame, settings)}${follow === "none" && showModel ? " The model can't start from this save state yet; play on and save again." : ""}`;
 
   // The thumbnails of the clips in progress (calmfold.ts), needs you first.
   const ctx: Ctx = { bg: bg.state, work: work.state, changed, now: Date.now() };

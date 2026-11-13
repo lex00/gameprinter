@@ -37,7 +37,7 @@ export function FidelityGauge({ f }: { f?: FidelityState }) {
     ["coverage", f.coverage.score],
     ["picture", f.picture?.score],
   ];
-  const tip = ["Fidelity: how close the rebuild plays to the original, measured clip by clip against the ROM (behaviour 60, coverage 25, picture 15).", f.says, f.confidence.says, ...f.holding.map((h) => `Holding it down: ${h.says}`)].join("\n");
+  const tip = ["Fidelity: how close the model plays to the original, measured clip by clip against the ROM (behaviour 60, coverage 25, picture 15).", f.says, f.confidence.says, ...f.holding.map((h) => `Holding it down: ${h.says}`)].join("\n");
   return (
     <div className="fid" data-testid="fidelity-gauge" title={tip}>
       <svg className="fid-ring" width="44" height="44" viewBox="0 0 44 44" role="img" aria-label={`fidelity ${f.score} of 100`}>
@@ -203,7 +203,7 @@ function AttemptItem({ a, watching, watch, keep }: { a: WorkAttempt; watching: b
       <span className="try-acts">
         {a.approved && <span className="chip match">kept</span>}
         {a.preview && (
-          <button onClick={() => watch(watching ? undefined : a.n)} className={watching ? "on" : undefined} data-testid="agent-watch" title="Play this attempt's rebuilt game on the screen">
+          <button onClick={() => watch(watching ? undefined : a.n)} className={watching ? "on" : undefined} data-testid="agent-watch" title="Play this attempt's model on the screen">
             {watching ? "as it is" : "watch"}
           </button>
         )}

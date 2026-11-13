@@ -11,7 +11,7 @@ cd gameprinter && just setup && just publish
 cd ../games && just setup
 ```
 
-`just setup` turns on the ROM-blocking git hook and installs the locked cargo at `$GP_HOME/bin/locked/cargo`. `just publish` builds gp (optimized) and publishes it at `$GP_HOME/bin/gp`, so workers have a gp to run before any gate has run. After that the tool gate publishes a new build each time it lands a patch. `$GP_HOME` is `~/.gameprinter` until cutover. `$GP_ROM_DIR` is where ROMs live (`/Users/alex/Documents/roms` on the maintainer's machine).
+`just setup` turns on the ROM-blocking git hook and installs the locked cargo at `$GP_HOME/bin/locked/cargo`. `just publish` builds gp (optimized) and publishes it at `$GP_HOME/bin/gp`, so workers have a gp to run before any gate has run. After that the tool gate publishes a new build each time it lands a patch. `$GP_HOME` is `~/.gameprinter`. `$GP_ROM_DIR` is where ROMs live (`/Users/alex/Documents/roms` on the maintainer's machine).
 
 ## Setup, at the start of each shell
 

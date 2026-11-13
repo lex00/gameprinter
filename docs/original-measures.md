@@ -98,7 +98,7 @@ The scenario ladder. A scenario is a few frames of presses run on both games fro
 
 Without `--at`, the start is a quiet frame found in the input: the player in the level, on the ground and still, nothing alive within 80 px. Each scenario is exact or names its first split in words. `--bar exact` (the default) passes a scenario with no split on any mapped measure; `--bar 99%` passes it with that share of every measure's frames within tolerance. Each scenario is shown as passed, open, failing or locked, with the next one to work on and a score history across model changes. It exits 1 while a scenario doesn't pass.
 
-Changed: `--recording` takes an input log or a baseline file, since there is no recordings store yet. `--refine` and `--auto` refuse in words until the refinement loop (`gp model refine`, ported apart) lands. The ladder's run metrics are gone with the old run recorder.
+Changed: `--recording` takes an input log or a baseline file, since there is no recordings store yet. `--refine` and `--auto` run `gp model refine --lockstep`'s loop on the scenario, on a working copy outside any git checkout. The ladder's run metrics are gone with the old run recorder.
 
 ## gp solve
 

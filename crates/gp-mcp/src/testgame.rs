@@ -281,6 +281,7 @@ pub fn config(root: &Path) -> (Config, PathBuf) {
         home: root.join("home"),
         rom: None,
         assets: Some(lifted),
+        games: None,
     };
     (config, gp)
 }

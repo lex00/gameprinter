@@ -115,7 +115,7 @@ pub struct PatchSource {
     /// The base source's ID, a `dump` entry in the registry.
     pub base: String,
     /// `ips` or `bps`.
-    pub format: crate::patch::PatchFormat,
+    pub format: PatchFormat,
     /// SHA-256 and size of the patch file, measured on the author's file.
     pub sha256: String,
     pub bytes: u64,
@@ -138,6 +138,14 @@ pub struct PatchSource {
     /// levels' author.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub credits: Vec<String>,
+}
+
+/// A patch file's format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum PatchFormat {
+    Ips,
+    Bps,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

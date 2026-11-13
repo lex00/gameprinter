@@ -2,7 +2,7 @@
 
 People edit sprites in tools of their own, such as Pixelorama or Aseprite, or by having an agent write pixels. The image format config says how frames go into image files for them and come back: the layout (one sheet or a file per frame, and the grid) and the scale. It also sets the pixel type (indexed or RGBA) and the palette file. Transparency, names and state tags are set there too, along with the editor. `crates/gp-imagefmt` is the writer and the reader, and `crates/gp-imagefmt/src/config.rs` the definition. This is format 0.1.0, and `schema/image-config.json` its JSON Schema (`gp self schemas` writes it).
 
-Brought from game-printer's docs/formats/image-config.md; the format is unchanged. `gp sprites export` writes a template's captured frames in the layout it says, `gp sprites import` reads them back through the checks below, `gp sprites schema` prints its schema, and `gp assets open` starts the editor and brings each save back ([sprite editing](../sprite-editing.md)). `gp mcp`'s `assets_export` with an `editor` writes an entity's frames for that editor too, and `assets_edit`'s `import` op reads the folder the editor saved into back through the same checks ([mcp.md](../mcp.md)). All of them are NES only: a sheet holds four palettes of four colours with colour 0 clear, and an arcade game's (Tapper's Midway MCR) sprite is one 32 by 32 picture of sixteen values, so they refuse an arcade game in words.
+Brought from game-printer's docs/formats/image-config.md; the format is unchanged. `gp sprites schema` prints its schema. `gp assets open` writes an entity's frames in the layout it says and brings each save back through the checks below, after starting the editor ([sprite editing](../sprite-editing.md)). `gp mcp`'s `assets_export` with an `editor` writes an entity's frames for that editor too, and `assets_edit`'s `import` op reads the folder the editor saved into back through the same checks ([mcp.md](../mcp.md)). All of them are NES only: a sheet holds four palettes of four colours with colour 0 clear, and an arcade game's (Tapper's Midway MCR) sprite is one 32 by 32 picture of sixteen values, so they refuse an arcade game in words. `gp sprites export` and `gp sprites import`, which wrote a template's frames out and read them back without an editor or a copy, were removed on 2026-11-13.
 
 The exported colours are the NES palette from gp-present; game-printer took them from gp-gen-bevy, which is retired.
 
@@ -16,7 +16,7 @@ A config is resolved from layers, each setting only the keys it names, the last 
 4. Within each layer, `[templates.<template>]` for the template exported, then its `[slots.<slot>]` (an entity's frames are the slot `<entity>`).
 5. A file given with `--config`.
 
-`assets_export` reads layers 1, 2 and 4: the defaults, then `$GP_HOME/config/image.toml` with its `[templates.<source>]` for the copy's model `source` (such as `donkey-kong-oe`) and its `[slots.<entity>]` for the entity exported, then the `editor` asked for (`pixelorama` by default, which also picks Pixelorama's palette file when the layers left `gpl`). Nothing in gameprinter reads `gp.toml` or a `--config` file yet; the crate's `resolve` takes any layers it is given.
+`assets_export` reads layers 1, 2 and 4: the defaults, then `$GP_HOME/config/image.toml` with its `[templates.<source>]` for the copy's model `source` (such as `donkey-kong-oe`) and its `[slots.<entity>]` for the entity exported, then the `editor` asked for (`pixelorama` by default, which also picks Pixelorama's palette file when the layers left `gpl`). `gp assets open` reads all five (`--config` for the last); the crate's `resolve` takes any layers it is given.
 
 ```toml
 # $GP_HOME/config/image.toml
@@ -68,7 +68,7 @@ An import reads the images through the sidecar and refuses (each problem named w
 - a drawn pixel lies outside the frame's tiles;
 - the distinct tiles, where a tile and its mirror count once, are more than `tile_budget`.
 
-`gp sprites import` writes checked frames as a theme in `$GP_HOME/themes/<template>-sprites/` (or `--out`): each frame as an RGBA PNG, and a `theme.toml` that restyles each entity's role with its own frame. `assets_edit`'s `import` op brings the frames that changed back as an edit of the copy, through every edit check, placed or (with `place: false`) proposed; `gp_imagefmt::sheet::rgba_png` still makes a frame's RGBA PNG for a theme.
+The frames that changed come back as an edit of the copy, through every edit check. That holds for `assets_edit`'s `import` op and for each save `gp assets open` sees; the edit is placed, or with `place: false` proposed.
 
 ## Editors
 

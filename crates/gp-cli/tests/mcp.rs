@@ -671,9 +671,9 @@ fn an_agent_replaces_the_player_sprite() {
     assert_eq!(before["state_hash"], after["state_hash"]);
 
     // game-printer also ran `gp interp run --baseline` on the copy's assets
-    // and packed them into a ROM with `gp assets pack --base`. gameprinter's
-    // `interp run` runs a game's module and its `assets pack` checks a pack
-    // against the original, so neither applies to an edited copy here.
+    // and packed them into a ROM. gameprinter's `interp run` runs a game's
+    // module, its `assets pack` only checks a pack against the original,
+    // and nothing here writes a ROM, so neither applies to an edited copy.
 
     drop(c.stdin.take());
     let status = c.child.wait().unwrap();

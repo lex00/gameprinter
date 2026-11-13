@@ -132,7 +132,7 @@ function AttemptRow({ a, watching, watch, keep }: { a: WorkAttempt; watching: bo
         </span>
       )}
       {a.preview && (
-        <button onClick={() => watch(watching ? undefined : a.n)} className={watching ? "on" : undefined} data-testid="agent-watch" title="Play this attempt's rebuilt game on the main screen, looping the clip on top of the original, and show its curve">
+        <button onClick={() => watch(watching ? undefined : a.n)} className={watching ? "on" : undefined} data-testid="agent-watch" title="Play this attempt's model on the main screen, looping the clip on top of the original, and show its curve">
           {watching ? "back to the game as it is" : "watch this try"}
         </button>
       )}

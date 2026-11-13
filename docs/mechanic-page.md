@@ -28,7 +28,7 @@ in this repo, plain HTML, CSS and JavaScript, game-printer's page
   game-printer's grid also made that clip itself; here the clips come
   from the mechanic sessions through `gp corpus import`, so "clips in
   flight" is kept for when it does.
-- PLAY: the rebuild alone with its settings (once FREE PLAY).
+- PLAY: the game's model played alone (the rebuild: the interpreter, or the game's module when it has hook code) with its settings (once FREE PLAY).
 - THEMES: the game's themes in the person's registry and its theme kit.
 
 The header picks the game (every game gp serve has; gp serve's root opens
@@ -153,7 +153,8 @@ sealed-run row hears where it is kept. A run that spans a stage (the stage
 `observe.toml`'s `[level]` reads changes during it) is offered for sealing
 first. REVIEW REBUILD lists the sealed runs only when asked (OPEN A SEALED
 RUN), and reads them without writing anything. The guard that keeps every
-other tool off them, and a sealed run on the model, come with `gp sealed`.
+other tool off them, and a sealed run on the model, are `gp sealed`'s
+([sealed.md](sealed.md)).
 
 ## The decision model at the controller
 

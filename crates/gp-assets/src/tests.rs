@@ -7,6 +7,19 @@ use std::collections::BTreeMap;
 
 use super::*;
 
+/// A copy of `rom` with the encoded assets written over their spans, so an
+/// edit's effect on the packed bytes can be read off.
+fn apply(rom: &[u8], map: &AssetMap, encoded: &[Encoded]) -> Result<Vec<u8>, Error> {
+    let layout = RomLayout::of(rom)?;
+    layout.check(map)?;
+    let mut out = rom.to_vec();
+    for e in encoded {
+        let range = layout.file_range(&e.span)?;
+        out[range].copy_from_slice(&e.bytes);
+    }
+    Ok(out)
+}
+
 /// A 16KB PRG + 8KB CHR iNES image of pseudo-random bytes, with a level
 /// grid at PRG 0x100 whose cells are 0 to 3.
 fn rom() -> Vec<u8> {

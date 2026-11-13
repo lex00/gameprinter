@@ -1,8 +1,8 @@
 # Sound bank mappings
 
-Brought from game-printer's docs/formats/sound-banks.md with gp sound render, export, import and banks.
+Brought from game-printer's docs/formats/sound-banks.md with gp sound render, export, import and banks. `gp sound export` and `import` were removed on 2026-11-13.
 
-A `gp-sound-banks` mapping says what each captured instrument sounds like (`gp_sound::banks`; this page is version 0.1.0), and every instrument plays on the faithful APU synthesizer unless a rule sends it elsewhere: to a General MIDI program (for MIDI export and GM banks) or to a free sound bank's patch, an SF2 SoundFont preset or an SFZ file's regions. A working copy keeps its mapping in `sound/banks.toml`; a theme's restyled-audio layer names one ([theme format](theme.md)); `gp sound render --banks` and `gp sound export --banks` take one. The format is TOML, in the same style as the image formats' configs; a reader takes 0.1 with any patch.
+A `gp-sound-banks` mapping says what each captured instrument sounds like (`gp_sound::banks`; this page is version 0.1.0), and every instrument plays on the faithful APU synthesizer unless a rule sends it elsewhere: to a General MIDI program (for GM banks) or to a free sound bank's patch, an SF2 SoundFont preset or an SFZ file's regions. A working copy keeps its mapping in `sound/banks.toml`; a theme's restyled-audio layer names one ([theme format](theme.md)); `gp sound render --banks` takes one. The format is TOML, in the same style as the image formats' configs; a reader takes 0.1 with any patch.
 
 ```toml
 format = "gp-sound-banks"

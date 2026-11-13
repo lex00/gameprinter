@@ -53,10 +53,10 @@ The old `scripts/check/guard.py` ran these on the old one-repo gate. Each is acc
 | pictures | The game gate's picture rule |
 | loads | The game gate's Loads step |
 | data | The tool gate runs every test; for a game, its hook crate's tests (Hook tests) |
-| prose | Not yet: the site's prose lint (`site/scripts/lint-prose.mjs`) hasn't come over |
-| fonts | Not yet: `gp template font` hasn't come over |
-| originals | Not yet: the original templates (Badge In, Signal Failure, Swing State) haven't come over |
-| budgets | Not yet: gp-metrics and the budget files haven't come over |
+| prose | The tool gate's `just check` (`just site-prose`, the site's prose lint `site/scripts/lint-prose.mjs`) |
+| fonts | Not in a gate: `gp template font` is here, but no gate runs it |
+| originals | The tool gate's `just check` (`just originals`: Badge In, Signal Failure, Swing State) |
+| budgets | Not in a gate: gp-metrics and `gp metrics check` are here, but no gate runs them |
 
 The check levels (`just check-change`, `just check-batch`, scripts/check/level.py) and the flaky quarantine (flaky.txt, nightly.txt) are not brought back: they chose which tests a gate try ran to save time in the old gate's batches of tool patches. The tool gate runs all of `just check` and the whole test suite for every patch, and a quarantine list would let a patch skip tests, which the tool gate exists to stop.
 
@@ -107,7 +107,7 @@ Some files every lane appends to. Two patches made on one tip each add rows at t
 
 | File | What appends to it |
 |---|---|
-| `docs/research/deterministic-inference.md` | The notes log: a dated row from each lane that finds a rule by a signal a tool could read (comes back with the research docs) |
+| `docs/research/deterministic-inference.md` | The notes log: a dated row from each lane that finds a rule by a signal a tool could read |
 
 A file joins the list by a row here and in `APPEND_ONLY` in gate_append.rs; a test holds the two lists together.
 

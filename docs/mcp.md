@@ -1,6 +1,6 @@
 # Agent tools over MCP
 
-`gp mcp` serves Game Printer's agent tools to an agent over MCP. It came from game-printer (crates/gp-mcp whole, and gp-cli's mcp.rs) in wave 7 of the port; "In gameprinter" below says what works here and what waits for other commands. The rest of this page is game-printer's, with paths edited; it was written for Milestone 3 there, and its links to pages gameprinter doesn't have (stubs, sprite editing, sound, show, point and tell, capture live) mean game-printer's docs/. It began as a research spike and was adopted by the user on 2026-10-28. The roadmap's agent tools are `registry.search`, `template.fork`, `surface.describe`, `model.edit`, `contract.edit`, `assets.generate`, `assets.place`, `run.preview`, `validate` and `build.publish`. This page describes the server and those tools, with three more: `model.refine`, `model.questions` and `show.explain`. The agent skill that went with it is game-printer's docs/agent-skill.md.
+`gp mcp` serves Game Printer's agent tools to an agent over MCP. It came from game-printer (crates/gp-mcp whole, and gp-cli's mcp.rs) in wave 7 of the port; "In gameprinter" below says what works here and what waits for other commands. The rest of this page is game-printer's, with paths edited; it was written for Milestone 3 there, and its links to pages gameprinter doesn't have (show, point and tell, capture live) mean game-printer's docs/. It began as a research spike and was adopted by the user on 2026-10-28. The roadmap's agent tools are `registry.search`, `template.fork`, `surface.describe`, `model.edit`, `contract.edit`, `assets.generate`, `assets.place`, `run.preview`, `validate` and `build.publish`. This page describes the server and those tools, with three more: `model.refine`, `model.questions` and `show.explain`. The agent skill that went with it is game-printer's docs/agent-skill.md.
 
 The code is `crates/gp-mcp`, with the command in `crates/gp-cli/src/mcp.rs`.
 
@@ -31,10 +31,10 @@ Many tools run `gp` as a child process. Those whose command gameprinter has work
 |---|---|---|
 | registry_search, template_fork, surface_describe, model_edit, contract_edit, run_preview, assets_*, sound_* | gp-mcp itself, `gp model check`, `gp roms scan` | Yes |
 | watch_start, watch_events, watch_watch, watch_hook, watch_explore, watch_point | `gp watch` | Yes (wave 3a) |
-| watch_detail | `gp watch detail`, over `gp reach` | Once wave 3b lands |
-| validate | `gp validate` | Wave 5 |
-| model_refine, model_questions, refine_moment | `gp model refine`, `gp model questions`, `gp input-log generate` | Not yet |
-| moments | `gp interp moments` | Once wave 2 lands |
+| watch_detail | `gp watch detail`, over `gp reach` | The command is here |
+| validate | `gp validate` | The command is here |
+| model_refine, model_questions, refine_moment | `gp model refine`, `gp model questions`, `gp input-log generate` | The commands are here |
+| moments | `gp interp moments` | The command is here |
 | build_publish | scripts/web/build-preview.sh; with `target = "web"`, `gp gen bevy` | The preview yes; the Bevy build no (the generator was dropped) |
 | show_explain, requests, capture_events, capture_input, view_now | `gp serve`'s sessions, `gp request explain`, the capture-run loop | When the editor port brings `gp serve` back |
 
@@ -60,14 +60,14 @@ The child's stdin is closed, since the server's stdin is the MCP channel.
 Any MCP client can launch it as a command. In a config file of the form `claude --mcp-config` reads, name the server `gp`; its tools are then `mcp__gp__*`:
 
 ```json
-{"mcpServers": {"gp": {"command": "/path/to/gp", "args": ["mcp", "--repo", "/path/to/game-printer"], "env": {"GP_HOME": "/home/me/.game-printer"}}}}
+{"mcpServers": {"gp": {"command": "/path/to/gp", "args": ["mcp", "--repo", "/path/to/gameprinter"], "env": {"GP_HOME": "/home/me/.gameprinter"}}}}
 ```
 
 `gp serve` writes this file itself for the agent it starts on a point-and-tell request, and lets that agent call `mcp__gp` and nothing else.
 
 ## Working copies
 
-A tool never writes to the repo. `template_fork` copies a template's files into `<work>/<copy>/`, and every other tool names that copy. A copy's name is a name in the model path grammar (letters, digits and `_`), so it can't reach outside the work directory. Evidence refs are read against `--repo`, so a copy outside the repo still passes `gp model check`.
+A working copy (in what the person reads, "your copy") is a template's files copied for the agent to change. A template is a game's folder holding `template.toml` and a model and no ROM data ([templates](templates.md)); every ported game's folder is one, but `template_fork` and `registry_search` see only the folders under the repo's `templates/` today. A tool never writes to the repo. `template_fork` copies a template's files into `<work>/<copy>/`, and every other tool names that copy. A copy's name is a name in the model path grammar (letters, digits and `_`), so it can't reach outside the work directory. Evidence refs are read against `--repo`, so a copy outside the repo still passes `gp model check`.
 
 ## Names
 
@@ -141,7 +141,7 @@ A template's manifest, `template.toml` ([templates.md](templates.md)), declares 
 | | |
 |---|---|
 | Input | `copy` |
-| Output | `model`: the header (name, title, source, schema, extensions, view, systems, start level). `input`: the device and actions. `entities`, `levels`, `rules`, `counters`: their names. `slots`: the slot catalog ([stubs](stubs.md)), each slot's kind, role, `from`, item roles, shape, the entities that draw from it, whether the simulation reads it, its contract level, status and provenance, and the checks a replacement must pass. `contract`: the default level, each rule with its `index`, and `facts_by_level`. `facts`: every fact by concrete model path, with its `value`, the `level` that governs it, the `tolerance` of a metric level, the `rule` that sets it, and its `evidence` (key, source, confidence) |
+| Output | `model`: the model's header only (name, title, source, schema, extensions, view, systems, start level). `input`: the device and actions. `entities`, `levels`, `rules`, `counters`: their names. `slots`: the slot catalog ([stubs](stubs.md)), each slot's kind, role, `from`, item roles, shape, the entities that draw from it, whether the simulation reads it, its contract level, status and provenance, and the checks a replacement must pass. `contract`: the default level, each rule with its `index`, and `facts_by_level`. `facts`: every fact by concrete model path, with its `value`, the `level` that governs it, the `tolerance` of a metric level, the `rule` that sets it, and its `evidence` (key, source, confidence) |
 
 On Moss Hop that's 95 facts (about 17KB of JSON), and the tool list is about 10KB. Today it describes the whole model. A template's change recipes come with it as `recipes` (the copy's `AGENTS.md`, up to 64 KB) and its scenario tests as `scenarios` (name and description of each entry in `scenarios.toml`). The modification surface proper is still to do. It will lead with the parts a template invites changes to, and the tool will keep the full list behind an option.
 
@@ -252,7 +252,7 @@ With `progressive: true` the tool fills every presentation slot in an order the 
 
 ### sound_banks, sound_describe, sound_edit, sound_preview
 
-Music editing is talking to an agent: there's no editor of its own in Game Printer, and FamiStudio and MIDI (`gp sound export` and `import`) stay the manual path ([sound](sound.md), "Editing by asking an agent").
+Music editing is talking to an agent: there's no editor of its own in Game Printer, and no file to take to a tracker since `gp sound export` and `import` were removed on 2026-11-13 ([sound](sound.md), "Editing by asking an agent").
 
 | Tool | Input | Output |
 |---|---|---|
@@ -293,7 +293,7 @@ The tests are part of `cargo test --workspace`, so `just check` runs them.
 - The first forks Moss Hop and describes it. A contract rule with a bad `when` is refused, and so is a float. Lowering the jump's gravity changes one line, and a preview shows the jump's peak 64.1875 pixels up. Validation then fails the jump against the model's numbers, with `ok` false. With the gravity put back the copy is the template byte for byte, and every check passes. It also checks that an unknown tool is a JSON-RPC error and that closing stdin ends the server with exit 0 and nothing more on stdout.
 - The art tests replace the player's sprite, and find Moss Hop with `registry_search`, generate art into its sprite and palette slots and see all five baselines unchanged, and check a publish without building it.
 - Unit tests in `crates/gp-mcp` run the placement, generation and publishing paths and the registry on a made-up game with a stand-in for `gp`. They cover a whole-slot placement and pixels past the last tile, and a refusal after a write that restores both files. They also cover two slots on one asset and calls on one copy taking turns.
-- Two ignored tests build the preview and the Bevy game for real. `just check-cycle` runs them as the step `publish-mosshop`.
+- Two ignored tests build the preview and the Bevy game for real. game-printer's `just check-cycle` ran them as the step `publish-mosshop`; gameprinter has no such step.
 
 ## What's left
 

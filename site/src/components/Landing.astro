@@ -5,8 +5,8 @@ const ways = [
 	{ title: 'Play', href: 'https://lex00.github.io/games/', text: 'Go to the games.' },
 	{ title: 'Improve a game', href: `${base}/improve/`, text: 'Fix how a published game plays, and send the change back.' },
 	{ title: 'Make your own game', href: `${base}/make/`, text: 'Start from the small test game and change it. Early: it runs on your machine only.' },
-	{ title: 'Themes and levels', href: `${base}/themes/`, text: 'Add a new look or stage to a game. Early: no preview yet.' },
-	{ title: 'Bring in a game', href: `${base}/bring/`, text: 'Model a game from a ROM you own. Not available yet.' },
+	{ title: 'Themes and levels', href: `${base}/themes/`, text: 'Give a game new pictures or a new stage. Early: no preview yet.' },
+	{ title: 'Bring in a game', href: `${base}/bring/`, text: 'Port a game from a ROM you own. Not available yet.' },
 ];
 const more = [
 	{ title: 'Install gp', href: `${base}/install/` },
@@ -17,6 +17,7 @@ const more = [
 ];
 ---
 <div class="gp-landing not-content">
+	<p class="gp-intro">Game Printer writes down how a game plays: what moves, how fast, what happens when things touch. That written-down game is a plain text file called the <strong>model</strong>. A web page plays it, so nothing gets installed. The pictures, sounds and level layouts of an old game come from your own copy of it, which your browser reads there and sends nowhere. A <strong>template</strong> is a finished model that holds nothing from any old game, ready to copy. Porting a game makes a new template; making your own game starts from a copy of one.</p>
 	<ul class="gp-ways">
 		{ways.map((w) => (
 			<li>
@@ -38,6 +39,12 @@ const more = [
 		margin: 0 auto;
 		font-size: var(--sl-text-sm);
 		line-height: 1.55;
+	}
+	.gp-intro {
+		max-width: 44rem;
+		margin: 0 auto;
+		font-size: var(--sl-text-base);
+		color: var(--sl-color-gray-2);
 	}
 	.gp-ways {
 		display: grid;

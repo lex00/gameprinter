@@ -382,7 +382,7 @@ async function main() {
   if (!Array.isArray(review.diffs) || !Array.isArray(review.drawn)) fail(`the review has no diffs or drawn things: ${Object.keys(review)}`);
   const shown = review.have.indexOf(true);
   if (shown < 0) fail("the review kept no pictures");
-  await until("the badge", async () => (await text(page, "#modebadge")) === "REVIEWING THE REBUILD");
+  await until("the badge", async () => (await text(page, "#modebadge")) === "REVIEWING THE MODEL");
   await page.keyboard.press("KeyX"); // A pauses
   await page.evaluate((k) => { const s = document.getElementById("rv-scrub"); s.value = String(k); s.dispatchEvent(new Event("input")); }, shown);
   const lit = () => page.evaluate(() => {
@@ -410,7 +410,7 @@ async function main() {
   // PLAY THE REBUILD: the model played live beside the original on the
   // same presses. The first build of the preview takes minutes.
   await page.keyboard.press("KeyR");
-  await until("the rebuild playing beside the original", async () => (await text(page, "#modebadge")) === "PLAYING THE REBUILD" && (await page.evaluate(() => document.body.dataset.frameSource)) === "original+rebuild", 900000);
+  await until("the rebuild playing beside the original", async () => (await text(page, "#modebadge")) === "PLAYING THE MODEL" && (await page.evaluate(() => document.body.dataset.frameSource)) === "original+rebuild", 900000);
   await page.keyboard.down("ArrowRight");
   await page.waitForTimeout(400);
   await page.keyboard.up("ArrowRight");
@@ -418,10 +418,10 @@ async function main() {
   const layout = () => page.evaluate(() => (document.getElementById("game2").hidden ? "one" : "side"));
   const before = await layout();
   await page.keyboard.press("KeyV");
-  await until("V changes the layout", async () => (await layout()) !== before || (await text(page, "#toast")).includes("Playing the rebuild:"));
+  await until("V changes the layout", async () => (await layout()) !== before || (await text(page, "#toast")).includes("Playing the model:"));
   // Recording beside the rebuild, then sealing the run with Tab.
   await page.keyboard.press("KeyR");
-  await until("recording beside the rebuild", async () => (await text(page, "#modebadge")) === "RECORDING BESIDE THE REBUILD");
+  await until("recording beside the rebuild", async () => (await text(page, "#modebadge")) === "RECORDING BESIDE THE MODEL");
   await page.keyboard.down("ArrowRight");
   await page.waitForTimeout(500);
   await page.keyboard.up("ArrowRight");
@@ -440,7 +440,7 @@ async function main() {
   // FREE PLAY: the rebuild alone, never the original, and the agent's words
   // wait until Esc goes back.
   await page.click("#tab-play");
-  await until("FREE PLAY", async () => (await text(page, "#modebadge")) === "FREE PLAY: THE REBUILD", 120000);
+  await until("FREE PLAY", async () => (await text(page, "#modebadge")) === "FREE PLAY: THE MODEL", 120000);
   if (!(await page.evaluate(() => document.getElementById("tab-play").classList.contains("on") && new URL(location.href).searchParams.get("tab") === "play"))) fail("PLAY isn't the tab shown or in the address");
   const sources = new Set();
   for (let i = 0; i < 10; i++) {
@@ -583,13 +583,13 @@ async function arcade() {
   await page.click("#clips .rv2-open");
   const says = await until("REVIEW REBUILD's words", async () => {
     const t = await text(page, "#busy-text");
-    return t.includes("an arcade game has none yet") ? t : null;
+    return t.includes("draws nothing yet") ? t : null;
   });
   ok(`REVIEW REBUILD refuses in words: ${says.slice(0, 80)}...`);
   await page.click("#tab-play");
   const free = await until("FREE PLAY's words", async () => {
     const t = (await text(page, "#toast")) + (await text(page, "#state"));
-    return t.includes("an arcade game has none yet") ? t : null;
+    return t.includes("draws nothing yet") ? t : null;
   });
   if (!(await page.evaluate(() => document.getElementById("tab-mech").classList.contains("on")))) fail("the arcade page stayed in FREE PLAY with nothing to play");
   ok(`FREE PLAY refuses in words: ${free.slice(0, 80)}...`);

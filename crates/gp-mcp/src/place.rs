@@ -269,6 +269,19 @@ pub fn copy_assets(
         };
         fs::write(tmp.join(catalog::STATE_FILE), state.to_toml())
             .map_err(|e| format!("writing {}: {e}", catalog::STATE_FILE))?;
+        // A copy of a game's folder already has an assets/ of its own, the
+        // template's asset maps: they move in beside the lifted files.
+        if to.is_dir() {
+            for e in fs::read_dir(&to).map_err(|e| format!("reading {}: {e}", to.display()))? {
+                let e = e.map_err(|e| format!("reading {}: {e}", to.display()))?;
+                let dst = tmp.join(e.file_name());
+                if !dst.exists() {
+                    fs::rename(e.path(), &dst)
+                        .map_err(|err| format!("moving {}: {err}", e.path().display()))?;
+                }
+            }
+            fs::remove_dir_all(&to).map_err(|e| format!("clearing {}: {e}", to.display()))?;
+        }
         fs::rename(&tmp, &to).map_err(|e| format!("renaming {} into place: {e}", tmp.display()))?;
     }
     let map = read_map(&to)?;

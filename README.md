@@ -1,16 +1,20 @@
 # Game Printer
 
-gameprinter is the tool repo of Game Printer. It turns a game you own into a model: text files that say how the game behaves, plus hook code for what text can't say. The model is checked by playing a set of recorded clips, the corpus, on the original and on the model and comparing them frame by frame. Then it is published as a package that a web page plays from the visitor's own ROM.
+gameprinter is the tool repo of Game Printer. With it a person who talks to an AI agent can port an old game, give a game themes or make a new game.
+
+Game Printer writes down how a game plays: what moves, how fast, what happens when things touch. That written-down game is a plain text file called the model. A web page plays it, so nothing gets installed. The pictures, sounds and level layouts of an old game come from your own copy of it, which your browser reads there and sends nowhere. A template is a finished model that holds nothing from any old game, ready to copy. Porting a game makes a new template; making your own game starts from a copy of one.
+
+In files: the model is `model.toml`, TOML read when the game loads and never compiled. Some games add custom code (Rust hooks in the game's `ext/` crate) for what the model text can't say. Donkey Kong has some and Moss Hop has none. A template is a game's folder holding `template.toml` and the model and no ROM data. Every ported game's folder in the games checkout is one, and so is each starter under `templates/`. A port is checked by playing a set of recorded clips, the corpus, on the original and on the model and comparing them frame by frame. Then it is published to a registry, and a web page plays it from the visitor's own ROM. The result is never a new ROM.
 
 It came from game-printer, the old one-repo tool. The games moved to their own repo, `lex00/games`, and the Bevy generator, `gp loop` and the other games' code were left behind.
 
-Today there are two games: Donkey Kong (NES), playable at [nes-donkey-kong.intentius.workers.dev](https://nes-donkey-kong.intentius.workers.dev) from a ROM you load, and Tapper (arcade, MAME's `rbtapper`), whose model is in progress. Moss Hop, a small NES game written for testing, lives here and is what the checks run on.
+Today there are two games: Donkey Kong (NES), playable at [nes-donkey-kong.intentius.workers.dev](https://nes-donkey-kong.intentius.workers.dev) from a ROM you load, and Tapper (arcade, MAME's `rbtapper`), whose model is in progress. Moss Hop, a small game written here in NES assembly for testing, lives here and is what the checks run on.
 
 ## What's in the repo
 
 | Folder | What |
 |---|---|
-| `crates/` | 38 Rust crates: the `gp` command, the NES and arcade emulators, the model, simulation and interpreter, packages, the browser builds |
+| `crates/` | 42 Rust crates: the `gp` command, the NES and arcade emulators, the model, simulation and interpreter, packages, the browser builds |
 | `wit/` | The runtime protocol and a game module's interface |
 | `mechanic/`, `editor/` | The page `gp serve` hosts |
 | `scripts/web/` | The public page's build, checks and deploy |
@@ -34,7 +38,7 @@ gp --help
 
 `just check` builds gp, assembles Moss Hop and runs formatting, clippy, the tests and the Moss Hop checks. Changes land on `main` only through `gp tool gate` ([docs/gate.md](docs/gate.md)).
 
-ROMs never go in a repo. They live in `$GP_ROM_DIR` (default `~/.gameprinter/roms`), and the hook refuses them. Read the [ROM rules](site/src/content/docs/rom-rules.md) before you use one.
+ROMs never go in a repo. They live in `$GP_ROM_DIR` (default `~/.gameprinter/roms`), and the git hook refuses them. Read the [ROM rules](site/src/content/docs/rom-rules.md) before you use one.
 
 ## Where the docs are
 

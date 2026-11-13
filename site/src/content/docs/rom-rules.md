@@ -27,7 +27,7 @@ A commercial game's ROM belongs to its publisher. Game Printer is built so that 
 | Check | When | What it refuses |
 |---|---|---|
 | The commit hook | Every commit, after `just setup` | ROM files, ROM bytes in any form it can recognise, game images |
-| `gp package scan` | Before a package is published | Any file holding data from a ROM the package names |
+| `gp package scan` | Before a game or theme is published | Any file holding data from a ROM it names |
 | The registry | On publish | Any file holding 32 or more bytes in a row from a named ROM |
 
 The checks are a backstop. Following the rules is still on you.

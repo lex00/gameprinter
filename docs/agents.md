@@ -56,7 +56,7 @@ The card shows it as `Attempt 2: the barrel rolls off the edge. Clip: 62% -> 81%
 
 ### Keep
 
-Keep is offered on an attempt that makes its clip better and no active clip worse. It marks the attempt approved and appends it to `$GP_HOME/work/agents/approved.json` with the same fields as game-printer's (`run`, `clip`, `clip_name`, `attempt`, `title`, `says`, `by`, `branch`, `commit`, `squash`, `squash_ref`, `worktree`, `dirty`, `shape`, `user_ok`, `auto`, `clips`, `group`, `approved_ms`). Whether an entry is merged is read from git (`GP_AGENT_REPO`, else the gameprinter checkout), never stored: its squash ref or commit is an ancestor of main, or main holds a commit with the same patch. The driver merges an entry not on main through the tool gate and restarts `gp serve`. `gp agent integrate`, game-printer's batch merge helper, isn't brought over: gameprinter's tool gate lands branches.
+Keep is offered on an attempt that makes its clip better and no active clip worse. It marks the attempt approved and appends it to `$GP_HOME/work/agents/approved.json` with the same fields as game-printer's (`run`, `clip`, `clip_name`, `attempt`, `title`, `says`, `by`, `branch`, `commit`, `squash`, `squash_ref`, `worktree`, `dirty`, `shape`, `user_ok`, `auto`, `clips`, `group`, `approved_ms`). Whether an entry is merged is read from git (`GP_AGENT_REPO`, else the gameprinter checkout), never stored: its squash ref or commit is an ancestor of main, or main holds a commit with the same patch. The driver merges an entry not on main through the tool gate and restarts `gp serve`. `gp agent integrate`, game-printer's batch merge helper, makes a branch of them for the tool gate to land ("Merging attempts" below).
 
 ## The clip agent
 
@@ -138,7 +138,7 @@ Each tell has a `line` for a polling script to print, as `USER TELL on tapper.l1
 | `POST /api/capture/{run}/clips/{clip}/tell` | `{text, frame?, orig_frame?, at?, region?}`: adds a tell; answers `tell` and `delivered` (an agent's inbox got it) |
 | `GET /api/capture/{run}/tells` | `tells` with replies (`?open=1` for open ones), `needs_look` and `fix_ready` |
 
-game-printer also credited a tell when its clip got better after it (`resolved` entries, a tally in the page's header, "fixed thanks to your note"). gameprinter's background work doesn't write those yet, and the page has no tell box yet: a tell is open or answered.
+game-printer also credited a tell when its clip got better after it (`resolved` entries, a tally in the page's header, "fixed thanks to your note"). gameprinter's background work doesn't write those yet: a tell is open or answered.
 
 ## Merging attempts
 

@@ -13,10 +13,8 @@
 //! `ay.log` from the recording's `ay-write` events, and notes per
 //! channel. `decode` reads songs with a registered driver's decoder
 //! (gp_sound::drivers); Tapper's driver decodes the AY log. `render`
-//! writes WAV files, `export` and `import` speak FamiStudio text and MIDI,
-//! and `banks` lists the sound banks found; AY logs and songs render
-//! through the arcade board's sound and travel as MIDI
-//! (crate::sound_ay_render).
+//! writes WAV files and `banks` lists the sound banks found; AY logs and
+//! songs render through the arcade board's sound (crate::sound_ay_render).
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -57,13 +55,6 @@ pub enum SoundCmd {
     /// synthesizer (or a sound bank mapping). An AY register log or AY
     /// songs play through the arcade board's sound (gp_arcade::sound).
     Render(RenderArgs),
-    /// Write a song set as a FamiStudio text project or a song as a MIDI
-    /// file. AY songs write as MIDI.
-    Export(ExportArgs),
-    /// Read a FamiStudio text project or a MIDI file into a song set,
-    /// checked against the NES's channels (with --ay, a MIDI file into AY
-    /// songs for the arcade board's two AY-8910s).
-    Import(ImportArgs),
     /// List the sound banks. The APU synthesizer comes first, then the SF2 and
     /// SFZ files found in $GP_SOUND_BANKS and $GP_HOME/sound-banks.
     Banks,
@@ -166,43 +157,6 @@ pub struct RenderArgs {
 }
 
 #[derive(Args)]
-pub struct ExportArgs {
-    /// A song set (songs.json).
-    pub songs: PathBuf,
-    /// Write a FamiStudio text project here.
-    #[arg(long)]
-    pub famistudio: Option<PathBuf>,
-    /// Write a MIDI file of `--song` here.
-    #[arg(long)]
-    pub midi: Option<PathBuf>,
-    #[arg(long)]
-    pub song: Option<String>,
-    /// A sound bank mapping, for MIDI's General MIDI programs.
-    #[arg(long)]
-    pub banks: Option<PathBuf>,
-    /// The FamiStudio version written in the project header.
-    #[arg(long, default_value = gp_sound::famistudio::DEFAULT_VERSION)]
-    pub famistudio_version: String,
-}
-
-#[derive(Args)]
-pub struct ImportArgs {
-    /// A FamiStudio text project (.txt) or a MIDI file (.mid).
-    pub input: PathBuf,
-    /// The region the songs play in.
-    #[arg(long, default_value = "ntsc")]
-    pub region: String,
-    /// Read a MIDI file into AY songs (`gp-ay-songs 0`) for the arcade
-    /// board's two AY-8910s, up to six tracks, instead of the NES's
-    /// channels.
-    #[arg(long)]
-    pub ay: bool,
-    /// The song set to write.
-    #[arg(long)]
-    pub out: PathBuf,
-}
-
-#[derive(Args)]
 pub struct FidelityArgs {
     /// A capture's directory (holding apu.log, songs.json, claims.json).
     pub capture: PathBuf,
@@ -229,8 +183,6 @@ pub(crate) fn run(cmd: &SoundCmd, paths: &Paths) -> Result<Outcome> {
         SoundCmd::Decode(a) => decode_cmd(a, paths),
         SoundCmd::Drivers => drivers_cmd(),
         SoundCmd::Render(a) => render_cmd(a, &paths.home),
-        SoundCmd::Export(a) => export_cmd(a),
-        SoundCmd::Import(a) => import_cmd(a),
         SoundCmd::Banks => banks_cmd(paths),
     }
 }
@@ -954,14 +906,6 @@ fn decode_ay(a: &DecodeArgs, driver: &gp_sound::drivers::Driver, paths: &Paths) 
     ))
 }
 
-fn region_of(s: &str) -> Result<Region> {
-    match s {
-        "ntsc" => Ok(Region::Ntsc),
-        "pal" => Ok(Region::Pal),
-        _ => bail!("--region is ntsc or pal"),
-    }
-}
-
 fn mapping(p: Option<&Path>) -> Result<Mapping> {
     match p {
         Some(p) => Mapping::parse(&read(p)?).map_err(anyhow::Error::msg),
@@ -1113,149 +1057,6 @@ fn render_cmd(a: &RenderArgs, home: &Path) -> Result<Outcome> {
         json!({"out": a.out, "samples": samples.len(), "seconds": secs}),
         format!("wrote {} ({secs:.1} s)", a.out.display()),
     ))
-}
-
-fn export_cmd(a: &ExportArgs) -> Result<Outcome> {
-    let text = read(&a.songs)?;
-    if let Some(v) = ay_songs(&text) {
-        if a.famistudio.is_some() {
-            bail!(
-                "FamiStudio's AY expansion (Sunsoft 5B) has three channels and the board's two AY-8910s six; export AY songs with --midi"
-            );
-        }
-        let p = a.midi.as_ref().context("give --midi")?;
-        let song = ay_song(&v, &a.songs, a.song.as_deref())?;
-        write(p, &crate::sound_ay_render::midi_export(&song))?;
-        let said = vec![format!(
-            "wrote {} ({}, 7 tracks)",
-            p.display(),
-            song["name"].as_str().unwrap_or("?")
-        )];
-        return Ok(Outcome::ok(json!({"said": said}), said.join("\n")));
-    }
-    let set = SongSet::parse(&text).map_err(anyhow::Error::msg)?;
-    let map = mapping(a.banks.as_deref())?;
-    let mut said = Vec::new();
-    if let Some(p) = &a.famistudio {
-        let name = a
-            .songs
-            .parent()
-            .and_then(|d| d.file_name())
-            .map_or("songs".into(), |n| n.to_string_lossy().into_owned());
-        let (text, loss) = gp_sound::famistudio::export(&set, &name, &a.famistudio_version);
-        write(p, text.as_bytes())?;
-        said.push(format!(
-            "wrote {} (FamiStudio {}); clamped pitch values {}, envelopes cut at 255 frames {}, DMC instruments without bytes {}",
-            p.display(),
-            a.famistudio_version,
-            loss.clamped_pitch,
-            loss.long_envelopes,
-            loss.dmc_without_bytes
-        ));
-    }
-    if let Some(p) = &a.midi {
-        let song = a
-            .song
-            .clone()
-            .or_else(|| set.songs.first().map(|s| s.name.clone()))
-            .context("no song")?;
-        let s = set
-            .song(&song)
-            .with_context(|| format!("no song `{song}`"))?;
-        let bytes = gp_sound::midi::export(&set, s, &map.gm_programs(&set, &song));
-        write(p, &bytes)?;
-        said.push(format!(
-            "wrote {} ({song}, {} tracks)",
-            p.display(),
-            s.tracks.len() + 1
-        ));
-    }
-    if said.is_empty() {
-        bail!("give --famistudio or --midi");
-    }
-    Ok(Outcome::ok(json!({"said": said}), said.join("\n")))
-}
-
-fn import_cmd(a: &ImportArgs) -> Result<Outcome> {
-    let region = region_of(&a.region)?;
-    let ext = a
-        .input
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
-    let midi = ext == "mid" || ext == "midi";
-    let name = a
-        .input
-        .file_stem()
-        .map_or("song".into(), |s| capture::slug(&s.to_string_lossy()));
-    if a.ay {
-        if !midi {
-            bail!("--ay reads a MIDI file (.mid); FamiStudio projects are the NES's");
-        }
-        let bytes = std::fs::read(&a.input).with_context(|| a.input.display().to_string())?;
-        let (set, warnings, errors) = crate::sound_ay_render::midi_import(&bytes, &name)?;
-        let notes: usize = set["songs"][0]["channels"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|c| c["notes"].as_array().map_or(0, Vec::len))
-            .sum();
-        let mut text = format!(
-            "{}: 1 AY song, {notes} notes; {} errors, {} warnings",
-            a.input.display(),
-            errors.len(),
-            warnings.len()
-        );
-        for e in &errors {
-            let _ = write!(text, "\nerror: {e}");
-        }
-        for w in warnings.iter().take(20) {
-            let _ = write!(text, "\nwarning: {w}");
-        }
-        let j = json!({"errors": errors, "warnings": warnings, "songs": 1});
-        if !errors.is_empty() {
-            return Ok(Outcome {
-                json: j,
-                text,
-                exit: 1,
-            });
-        }
-        write(&a.out, serde_json::to_string_pretty(&set)?.as_bytes())?;
-        let _ = write!(text, "\nwrote {}", a.out.display());
-        return Ok(Outcome::ok(j, text));
-    }
-    let (set, v) = if midi {
-        let bytes = std::fs::read(&a.input).with_context(|| a.input.display().to_string())?;
-        gp_sound::midi::import(&bytes, &name, region)
-    } else {
-        gp_sound::famistudio::import(&read(&a.input)?, region)
-    };
-    let mut text = format!(
-        "{}: {} songs, {} instruments; {} errors, {} warnings",
-        a.input.display(),
-        set.songs.len(),
-        set.instruments.len(),
-        v.errors.len(),
-        v.warnings.len()
-    );
-    for e in &v.errors {
-        let _ = write!(text, "\nerror: {e}");
-    }
-    for w in v.warnings.iter().take(20) {
-        let _ = write!(text, "\nwarning: {w}");
-    }
-    let j = json!({"errors": v.errors, "warnings": v.warnings, "songs": set.songs.len()});
-    if !v.ok() {
-        return Ok(Outcome {
-            json: j,
-            text,
-            exit: 1,
-        });
-    }
-    write(&a.out, set.to_text().as_bytes())?;
-    let _ = write!(text, "\nwrote {}", a.out.display());
-    Ok(Outcome::ok(j, text))
 }
 
 fn banks_cmd(paths: &Paths) -> Result<Outcome> {

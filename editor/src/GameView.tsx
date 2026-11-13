@@ -459,14 +459,14 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
         <figure className="model-side" style={layout === "top" ? { opacity } : undefined}>
           <ScreenPointer active={paused} box={box} onBox={setBox} testid="point-model">
             {g?.preview ? (
-              <iframe ref={iframe} title="the game rebuilt from the model" src={api.capturePreview(run, "index.html?control=1")} className="game-screen" data-testid="game-model" />
+              <iframe ref={iframe} title="the game played from its model" src={api.capturePreview(run, "index.html?control=1")} className="game-screen" data-testid="game-model" />
             ) : (
               <div className="game-screen missing" data-testid="game-model">
-                No rebuilt game yet{g?.kind === "capture" ? " (start the run with --preview)" : ""}
+                No playable model yet{g?.kind === "capture" ? " (start the run with --preview)" : ""}
               </div>
             )}
           </ScreenPointer>
-          <figcaption>Rebuilt from the model</figcaption>
+          <figcaption>Played from the model</figcaption>
         </figure>
       </div>
       {free && <FreePlay api={api} run={run} recording={rec} frame={frame} canvas={canvas} model={g?.preview ? model.current : undefined} />}
@@ -479,14 +479,14 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
           show{" "}
           <select value={layout} onChange={(e) => setLayout(e.target.value as Layout)} data-testid="game-layout">
             <option value="side">side by side</option>
-            <option value="top">the rebuilt game on top</option>
+            <option value="top">the model on top</option>
             <option value="diff">the differences</option>
           </select>
         </label>
         {layout === "top" && (
-          <label title="How much of the rebuilt game shows over the original">
+          <label title="How much of the model shows over the original">
             original{" "}
-            <input type="range" min={0} max={100} value={Math.round(opacity * 100)} onChange={(e) => setOpacity(Number(e.target.value) / 100)} data-testid="game-opacity" /> rebuilt
+            <input type="range" min={0} max={100} value={Math.round(opacity * 100)} onChange={(e) => setOpacity(Number(e.target.value) / 100)} data-testid="game-opacity" /> model
           </label>
         )}
         {freeLs?.screen && (

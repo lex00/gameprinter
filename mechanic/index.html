@@ -17,7 +17,7 @@
     <button id="log-toggle" type="button" tabindex="-1" title="L: your agent's log, pins and problems, beside every tab" aria-pressed="false">AGENT'S LOG</button>
     <span id="state"></span>
   </header>
-  <nav id="tabs"><button id="tab-clips" class="on" title="Record clips of the original, hand them to your agent, and review them on the model">CLIPS</button><button id="tab-work" title="The background work: clips scored and refined, the rounds and what they kept, the questions">REFINE</button><button id="tab-play" title="Play the rebuild, with its settings">PLAY</button><button id="tab-themes" title="The game's themes">THEMES</button></nav>
+  <nav id="tabs"><button id="tab-clips" class="on" title="Record clips of the original, hand them to your agent, and review them on the model">CLIPS</button><button id="tab-work" title="The background work: clips scored and refined, the rounds and what they kept, the questions">REFINE</button><button id="tab-play" title="Play the model, with its settings">PLAY</button><button id="tab-themes" title="The game's themes">THEMES</button></nav>
   <main>
     <div id="side-l">
       <section id="rule-card" hidden aria-label="Clips to review on the model"></section>
@@ -32,18 +32,18 @@
         <div id="bar" hidden><div id="bar-fill"></div><span id="bar-time"></span></div>
       </div>
       <div id="refine-strip" class="muted" aria-live="polite" title="The background work, as it goes: open REFINE for all of it"></div>
-      <iframe id="rb-frame" title="the rebuild, played live" src="about:blank" tabindex="-1"></iframe>
+      <iframe id="rb-frame" title="the model, played live" src="about:blank" tabindex="-1"></iframe>
       <canvas id="rv-strip" height="10" hidden title="Green where the original and the model agree, red where they differ. Click to go there"></canvas>
       <div id="review-bar" hidden>
         <button id="rv-prev-diff" title="[: the difference before">&lt;&lt; DIFF</button><button id="rv-back" title="Left: a frame back">&lt;</button><button id="rv-play" title="A, Enter or Space">PLAY</button><button id="rv-fwd" title="Right: a frame on">&gt;</button><button id="rv-next-diff" title="]: the next difference">DIFF &gt;&gt;</button>
         <input type="range" id="rv-scrub" min="0" max="1" value="0" aria-label="The frame"><span id="rv-at"></span>
-        <label>show <select id="rv-layout"><option value="side">side by side</option><option value="top">the rebuilt game on top</option><option value="diff">the differences</option></select></label>
-        <label id="rv-opacity-row" title="Up and down">original <input type="range" id="rv-opacity" min="0" max="100" value="50"> rebuilt</label>
+        <label>show <select id="rv-layout"><option value="side">side by side</option><option value="top">the model on top</option><option value="diff">the differences</option></select></label>
+        <label id="rv-opacity-row" title="Up and down">original <input type="range" id="rv-opacity" min="0" max="100" value="50"> model</label>
         <label title="C or the left bumper"><input type="checkbox" id="rv-boxes"> outline its entities</label>
-        <button id="rv-live" title="R or the right bumper: play the rebuild yourself, the original beside it on the same presses">PLAY THE REBUILD</button>
+        <button id="rv-live" title="R or the right bumper: play the model yourself, the original beside it on the same presses">PLAY THE MODEL</button>
       </div>
       <div id="busy" hidden><span class="spin"></span><span id="busy-text"></span></div>
-      <section id="settings" hidden aria-label="Settings of the rebuild">
+      <section id="settings" hidden aria-label="Settings of the game">
         <h2>Settings</h2>
         <p id="set-now" class="muted"></p>
         <button id="set-open" title="The button, F1 or the right stick (R3) in FREE PLAY. Esc closes it">OPEN THE SETTINGS IN THE GAME</button>
@@ -77,7 +77,7 @@
     <section id="watch-col">
       <h2>Your agent</h2>
       <label id="w-topic-row">Topic <select id="w-topic"><option value="">All topics</option></select></label>
-      <p id="w-status" class="muted">Nothing yet. Your agent writes here with gp mechanic log GAME TOPIC "what it's doing" (and pin, problem); this panel shows every topic of the game.</p>
+      <p id="w-status" class="muted">Nothing yet. What your agent is doing shows here.</p>
       <div id="w-pins"></div>
       <table id="w-problems" hidden><thead><tr><th>Topic</th><th>#</th><th>Where</th><th>What is wrong</th><th>Change</th><th>State</th></tr></thead><tbody></tbody></table>
       <details open><summary>Log</summary><ol id="w-log"></ol></details>

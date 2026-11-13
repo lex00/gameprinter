@@ -2,8 +2,7 @@
 //! on disk.
 //!
 //! A mapping says what each captured instrument sounds like: the faithful
-//! APU synthesizer (the default), a General MIDI program (for MIDI export),
-//! or a patch of a free sound bank (an SF2 SoundFont preset or an SFZ
+//! APU synthesizer (the default), a General MIDI program, or a patch of a free sound bank (an SF2 SoundFont preset or an SFZ
 //! file's region). Rules match an instrument by name, by role, or both, in
 //! a song or every song; the first rule that matches wins, and an
 //! instrument no rule matches plays on the APU. A mix gives each channel a
@@ -53,7 +52,7 @@ pub struct Bank {
 pub enum Target {
     /// The faithful APU synthesizer.
     Apu,
-    /// A General MIDI program (0-127), for MIDI export and GM banks.
+    /// A General MIDI program (0-127), for GM banks.
     Gm { program: u8 },
     /// A bank's patch: an SF2 preset by name or bank and program, or an
     /// SFZ file (its regions play by key).
@@ -221,20 +220,6 @@ impl Mapping {
             })
     }
 
-    /// GM programs by instrument name, for MIDI export.
-    pub fn gm_programs(&self, set: &SongSet, song: &str) -> crate::midi::Programs {
-        set.instruments
-            .iter()
-            .filter_map(|i| match self.rule_for(song, i).map(|r| &r.target) {
-                Some(Target::Gm { program }) => Some((i.name.clone(), *program)),
-                Some(Target::Bank {
-                    program: Some(p), ..
-                }) => Some((i.name.clone(), *p)),
-                _ => None,
-            })
-            .collect()
-    }
-
     /// Whether any instrument of a song plays through a bank.
     pub fn uses_banks(&self, set: &SongSet, song: &str) -> bool {
         set.instruments.iter().any(|i| {
@@ -343,6 +328,32 @@ pub fn read_sf2(bytes: &[u8]) -> Result<(Option<String>, Option<String>, Vec<Pat
     Ok((name, copyright, patches))
 }
 
+/// A noise note's General MIDI drum key, for a bank's drum kit: high
+/// periods (low index) are hats, the middle snares, the low end kicks.
+pub fn drum_key(index: u8, len: u32, mode: u8) -> u8 {
+    if mode == 1 {
+        return 56; // Cowbell: the short, metallic loop
+    }
+    match index {
+        0..=5 if len > 8 => 46, // Open hi-hat
+        0..=5 => 42,            // Closed hi-hat
+        6..=10 => 38,           // Acoustic snare
+        _ => 36,                // Bass drum 1
+    }
+}
+
+/// A key named as SFZ files may name it (`C4`, `F#-1`; MIDI 12 is C0).
+fn parse_note_name(s: &str) -> Option<u8> {
+    const NAMES: [&str; 12] = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
+    let split = s.find(|c: char| c.is_ascii_digit() || c == '-')?;
+    let (n, o) = s.split_at(split);
+    let i = NAMES.iter().position(|x| *x == n)? as i32;
+    let o: i32 = o.parse().ok()?;
+    u8::try_from((o + 1) * 12 + i).ok()
+}
+
 /// An SFZ file's regions: each `<region>`'s sample and key range.
 pub fn read_sfz(text: &str) -> Vec<Patch> {
     let mut out = Vec::new();
@@ -352,7 +363,7 @@ pub fn read_sfz(text: &str) -> Vec<Patch> {
     let key = |v: &str| -> Option<u8> {
         v.parse()
             .ok()
-            .or_else(|| crate::famistudio::parse_note_name(&v.to_ascii_uppercase()))
+            .or_else(|| parse_note_name(&v.to_ascii_uppercase()))
     };
     let push = |cur: &mut Option<(String, u8, u8)>, out: &mut Vec<Patch>| {
         if let Some((s, lo, hi)) = cur.take() {

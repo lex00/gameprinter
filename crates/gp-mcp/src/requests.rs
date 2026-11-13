@@ -21,9 +21,8 @@ pub struct RequestsArgs {
     /// `needs_mechanic`, `waiting`, `accepted` or `rejected`.
     #[serde(default)]
     pub status: Option<String>,
-    /// Explain this request now (`gp request explain`): what the original
-    /// does in its frames and region, what the model does instead, and the
-    /// model piece that would cover it, posted as a reply.
+    /// Explain this request now with `gp request explain`. It fails today:
+    /// this gp has no `gp request explain`. Answer with `reply` instead.
     #[serde(default)]
     pub explain: Option<u64>,
     /// Answer a request yourself.

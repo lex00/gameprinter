@@ -694,7 +694,7 @@ impl Server {
         if self.platform == Platform::Arcade {
             return Err(Response::error(
                 409,
-                "the rebuild is the game's model, and an arcade game has none yet: it comes once a model of the game is written",
+                "an arcade game's model draws nothing yet (no model slot takes an arcade board's pictures), so there is nothing to play here",
             ));
         }
         self.rebuild.as_ref().ok_or_else(|| {
@@ -932,7 +932,7 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             if s.platform == Platform::Arcade {
                 return Ok(Response::error(
                     409,
-                    "ON THE MODEL plays a clip on the game's model, and an arcade game has none yet: it comes once a model of the game is written",
+                    "ON THE MODEL plays a clip on the game's model, and an arcade game's model draws nothing yet (no model slot takes an arcade board's pictures)",
                 ));
             }
             let Some(r) = &s.rebuild else {
@@ -1757,7 +1757,7 @@ mod tests {
         for route in ["/api/rebuild/status", "/api/rebuild/profiles"] {
             let (s, body) = get(&srv, route);
             assert_eq!(s, 409, "{route}");
-            assert!(body.contains("an arcade game has none yet"), "{body}");
+            assert!(body.contains("draws nothing yet"), "{body}");
         }
         let (s, v) = post(&srv, "/api/rebuild/build", json!({}));
         assert_eq!(s, 409, "{v}");
@@ -1785,7 +1785,7 @@ mod tests {
         );
         let (s, body) = get(&srv, "/api/clips/1/review.json");
         assert_eq!(s, 409, "{body}");
-        assert!(body.contains("an arcade game has none yet"), "{body}");
+        assert!(body.contains("draws nothing yet"), "{body}");
         assert!(wasm_path(Path::new("/r"), Platform::Arcade).ends_with("gp_arcade_play.wasm"));
     }
 

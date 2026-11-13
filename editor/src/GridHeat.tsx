@@ -174,7 +174,7 @@ export function GridHeat({ grid, bg, work, open }: { grid?: GridState; bg?: BgSt
           {gridSays(grid)}
         </span>
         {(counts.get("needs-you") ?? 0) > 0 && <span className="chip needs-you">{counts.get("needs-you")} need you</span>}
-        <label className="hint" title="Also draw the places that have no start the rebuilt game can begin at yet">
+        <label className="hint" title="Also draw the places that have no start the model can begin at yet">
           <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} data-testid="grid-all" /> places with no start
         </label>
       </div>

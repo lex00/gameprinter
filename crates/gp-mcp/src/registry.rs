@@ -1,9 +1,10 @@
 //! `registry_search` (docs/mcp.md): the templates in the repo's
-//! `templates/` and the sources registered in `sources/*.toml`, searched by
-//! words, platform, genre (a model extension), entity roles and systems.
-//! Each template says what it needs before it can be forked and played:
-//! the source ROM (found by hash in `$GP_ROM_DIR`, or the one the server
-//! was given) and its lifted assets.
+//! `templates/` and the games checkout ([`crate::fork::template_dirs`]) and
+//! the sources registered in `sources/*.toml`, searched by words, platform,
+//! genre (a model extension), entity roles and systems. Each template says
+//! what it needs before it can be copied and played: its lifted assets,
+//! from the source ROM (found by hash in `$GP_ROM_DIR`, or the one the
+//! server was given) or built from its `authored.toml`.
 //!
 //! The mechanic index (Milestone 5, docs/originals.md) is worked out from
 //! each model when it's searched, so it can't go stale: [`mechanics`]
@@ -52,10 +53,10 @@ pub struct SearchArgs {
     #[serde(default)]
     pub mechanics: Vec<String>,
     /// Only templates that took mechanics from this template, by its
-    /// directory under templates/ (their manifests' `inspired_by`).
+    /// folder's name (their manifests' `inspired_by`).
     #[serde(default)]
     pub inspired_by: Option<String>,
-    /// Search by example: a template directory. Results get a
+    /// Search by example: a template, by its folder's name. Results get a
     /// `similarity`, the share of mechanics they and the example have in
     /// common (Jaccard, 0 to 1), and come most alike first.
     #[serde(default)]
@@ -314,12 +315,13 @@ fn provenance(manifest: &toml::Table) -> (Value, Vec<String>) {
     (json!(entries), names)
 }
 
-/// A template directory's manifest and model, as plain TOML.
-fn read_template(dir: &Path, name: &str) -> Result<(toml::Table, toml::Table), String> {
+/// A template folder's manifest and model, as plain TOML.
+fn read_template(dir: &Path) -> Result<(toml::Table, toml::Table), String> {
+    let name = dir.display();
     let manifest: toml::Table = fs::read_to_string(dir.join("template.toml"))
-        .map_err(|e| format!("reading templates/{name}/template.toml: {e}"))?
+        .map_err(|e| format!("reading {name}/template.toml: {e}"))?
         .parse()
-        .map_err(|e| format!("templates/{name}/template.toml: {e}"))?;
+        .map_err(|e| format!("{name}/template.toml: {e}"))?;
     let model_file = manifest
         .get("template")
         .and_then(|t| t.get("model"))
@@ -328,9 +330,9 @@ fn read_template(dir: &Path, name: &str) -> Result<(toml::Table, toml::Table), S
     // Plain TOML, as gp template check reads it, so a template whose
     // model is on another schema version is still listed.
     let model: toml::Table = fs::read_to_string(dir.join(model_file))
-        .map_err(|e| format!("reading templates/{name}/{model_file}: {e}"))?
+        .map_err(|e| format!("reading {name}/{model_file}: {e}"))?
         .parse()
-        .map_err(|e| format!("templates/{name}/{model_file}: {e}"))?;
+        .map_err(|e| format!("{name}/{model_file}: {e}"))?;
     Ok((manifest, model))
 }
 
@@ -400,17 +402,27 @@ pub fn headerless_sha256(bytes: &[u8]) -> String {
     crate::catalog::sha256_hex(data)
 }
 
-/// The ROMs at hand by headerless SHA-256: every NES image `gp roms scan`
-/// finds in `$GP_ROM_DIR`, and the one the server was given. A scan that
+/// The ROMs at hand by headerless SHA-256 (an arcade romset by its
+/// identity), each with its full path: every one `gp roms scan` finds in
+/// `$GP_ROM_DIR`, and the one the server was given. A scan that
 /// can't run leaves a note instead.
-fn roms_at_hand(config: &Config) -> (BTreeMap<String, String>, Option<String>) {
+pub(crate) fn roms_at_hand(config: &Config) -> (BTreeMap<String, String>, Option<String>) {
     let mut out = BTreeMap::new();
     let mut note = None;
     match crate::run_gp(config, &["roms".as_ref(), "scan".as_ref()]) {
         Ok((_, v)) => {
-            for r in v["roms"].as_array().into_iter().flatten() {
-                if let (Some(h), Some(p)) = (r["image"]["sha256"].as_str(), r["path"].as_str()) {
-                    out.entry(h.to_owned()).or_insert_with(|| p.to_owned());
+            // Paths are relative to the ROM folder; an arcade romset is
+            // known by its identity.
+            let dir = Path::new(v["roms_dir"].as_str().unwrap_or(""));
+            let nes = v["roms"].as_array().into_iter().flatten();
+            let sets = v["romsets"].as_array().into_iter().flatten();
+            for (r, hash) in nes
+                .map(|r| (r, &r["image"]["sha256"]))
+                .chain(sets.map(|r| (r, &r["romset"]["identity"])))
+            {
+                if let (Some(h), Some(p)) = (hash.as_str(), r["path"].as_str()) {
+                    let path = dir.join(p).display().to_string();
+                    out.entry(h.to_owned()).or_insert(path);
                 }
             }
         }
@@ -514,21 +526,19 @@ pub fn search(config: &Config, a: SearchArgs) -> Result<Reply, String> {
     let registered = sources(&config.repo)?;
     let (roms, rom_note) = roms_at_hand(config);
 
-    let mut dirs: Vec<_> = fs::read_dir(config.repo.join("templates"))
-        .map_err(|e| format!("reading templates/: {e}"))?
-        .filter_map(Result::ok)
-        .filter(|e| e.path().join("template.toml").is_file())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
+    let found_dirs = crate::fork::template_dirs(config);
+    let dirs: Vec<String> = found_dirs.iter().map(|(n, _)| n.clone()).collect();
+    let dir_of: BTreeMap<&str, &Path> = found_dirs
+        .iter()
+        .map(|(n, d)| (n.as_str(), d.as_path()))
         .collect();
-    dirs.sort();
 
     // Every template's index and provenance first: search by example
     // needs the example's, and each result lists who took from it.
     let mut read = BTreeMap::new();
     let mut taken_by: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for name in &dirs {
-        let dir = config.repo.join("templates").join(name);
-        let (manifest, model) = read_template(&dir, name)?;
+        let (manifest, model) = read_template(dir_of[name.as_str()])?;
         let (_, from) = provenance(&manifest);
         for f in from {
             taken_by.entry(f).or_default().push(name.clone());
@@ -540,7 +550,7 @@ pub fn search(config: &Config, a: SearchArgs) -> Result<Reply, String> {
         Some(l) => Some(
             read.get(l)
                 .map(|(_, _, i)| i.clone())
-                .ok_or(format!("`{l}` isn't a template under templates/"))?,
+                .ok_or(format!("`{l}` isn't a template registry_search lists"))?,
         ),
         None => None,
     };
@@ -641,25 +651,31 @@ pub fn search(config: &Config, a: SearchArgs) -> Result<Reply, String> {
             });
         let rom_ok = found.is_some() || ex["present"] == true;
         let lifted_ok = ex["present"] == true && ex["matches_pin"] != false;
-        let next = match (lifted_ok, found.is_some(), how.as_deref()) {
-            (true, _, _) => "ready: template_fork it".to_owned(),
-            (false, _, Some("authored")) => format!(
-                "build its assets from its authored.toml: gp template build templates/{name}"
-            ),
-            (false, true, _) => {
-                format!("lift its assets: gp template extract templates/{name} (or gp assets lift)")
+        let folder = dir_of[name.as_str()];
+        let next = match (lifted_ok, found, how.as_deref()) {
+            (true, _, _) => "ready: copy it with template_fork".to_owned(),
+            (false, _, Some("authored")) => {
+                "copy it with template_fork, which builds its assets from its authored.toml"
+                    .to_owned()
             }
-            (false, false, Some("build")) => format!(
+            (false, Some(rom), _) => {
+                format!("copy it with template_fork, which lifts its assets from the ROM at {rom}")
+            }
+            (false, None, Some("build")) => format!(
                 "build its source ({}), lift its assets, and start the server with --rom and --assets",
                 get(s, "build").unwrap_or_else(|| "see the template".into())
             ),
-            (false, false, _) => format!(
-                "it needs your own copy of {}: gp roms add it to $GP_ROM_DIR (docs/sources.md), then gp template extract templates/{name}",
-                source_id.as_deref().unwrap_or("the source")
+            (false, None, _) => format!(
+                "it needs the person's own ROM of {}: gp roms add it to $GP_ROM_DIR (docs/sources.md); then template_fork lifts its assets",
+                title
+                    .as_deref()
+                    .or(source_id.as_deref())
+                    .unwrap_or("the game")
             ),
         };
         templates.push(json!({
             "template": name,
+            "folder": folder,
             "id": id,
             "title": title,
             "description": get(header, "description"),

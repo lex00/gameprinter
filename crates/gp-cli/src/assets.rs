@@ -1,5 +1,5 @@
-//! `gp assets`: lift a ROM's assets into files and pack them back, with a
-//! byte-for-byte check, or into a copy of a base ROM. The formats are in
+//! `gp assets`: lift a ROM's assets into files and pack them back for a
+//! byte-for-byte check against the ROM. The formats are in
 //! `gp-assets`; this module finds the asset map, reads and writes the files
 //! and reports.
 //!
@@ -383,49 +383,6 @@ pub fn check_dir(dir: &Path, rom_path: &Path, metrics: Option<&str>) -> Result<O
         text: text.trim_end().to_owned(),
         exit: u8::from(!ok),
     })
-}
-
-/// `gp assets pack --base ROM -o FILE`: a copy of the base ROM with the
-/// lifted directory's assets encoded in place, and the bytes that changed.
-pub fn pack_into(dir: &Path, base_path: &Path, out: &Path, force: bool) -> Result<Outcome> {
-    let out = outside_repo(out)?;
-    if fs::symlink_metadata(&out).is_ok_and(|m| m.file_type().is_symlink()) {
-        bail!(
-            "{} is a symlink; gp assets writes only plain files",
-            out.display()
-        );
-    }
-    if out.exists() && !force {
-        bail!(
-            "{} already exists; pass --force to replace it",
-            out.display()
-        );
-    }
-    let base = read(base_path)?;
-    let (map, encoded) = encode_dir(dir)?;
-    let packed =
-        gp_assets::apply(&base, &map, &encoded).with_context(|| base_path.display().to_string())?;
-    let changed = gp_assets::differences(&base, &map, &encoded)?;
-    write_file(&out, &packed)?;
-    let mut text = format!(
-        "packed {} into {}: {} bytes changed from {}\n",
-        dir.display(),
-        out.display(),
-        changed.len(),
-        base_path.display()
-    );
-    list_differences(&mut text, &changed, "was", "now");
-    Ok(Outcome::ok(
-        json!({
-            "source": map.source,
-            "base": base_path,
-            "out": out,
-            "sha256": RomLayout::of(&packed)?.sha256,
-            "bytes_changed": changed.len(),
-            "changes": changed,
-        }),
-        text.trim_end().to_owned(),
-    ))
 }
 
 /// A set's graphics regions decoded, for the arcade lift.

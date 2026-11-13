@@ -8,8 +8,7 @@ license.workspace = true
 
 # Sound as model data (docs/sound.md): the APU register log, notes and
 # instruments derived from it, songs and sound effects, a deterministic NES
-# APU synthesizer, and the interchange formats (FamiStudio text, Standard
-# MIDI files, sound bank mappings). Presentation only: no simulation crate
+# APU synthesizer, and sound bank mappings. Presentation only: no simulation crate
 # depends on it. Kept free of heavy dependencies so gp-web builds it for
 # wasm32.
 

@@ -173,16 +173,16 @@ export function ScenarioSideBySide({ row, input, player, rom, previewSrc }: Scen
         </figure>
         {previewSrc && !modelError ? (
           <figure>
-            <iframe ref={iframe} title={`the rebuilt game playing ${row.scenario.name}`} src={previewSrc} width={W} height={H} />
+            <iframe ref={iframe} title={`the model playing ${row.scenario.name}`} src={previewSrc} width={W} height={H} />
             <figcaption>
-              The rebuilt game, from the original's state at frame {input?.start_frame ?? "..."}, on the same presses
+              The model, from the original's state at frame {input?.start_frame ?? "..."}, on the same presses
               {r.first && `. At frame ${r.first.frame} its ${r.first.path} is ${r.first.model}, the original's ${r.first.original}`}
             </figcaption>
           </figure>
         ) : (
           <figure className="scenario-model-missing">
             <figcaption>
-              {modelError ? `The rebuilt game couldn't start from the original's state: ${modelError}. ` : "There is no rebuilt game to show; its values are in the scores below. "}
+              {modelError ? `The model couldn't start from the original's state: ${modelError}. ` : "There is no playable model to show; its values are in the scores below. "}
               {r.first && ` At frame ${r.first.frame} the rebuilt game's ${r.first.path} is ${r.first.model}, the original's ${r.first.original}.`}
             </figcaption>
           </figure>

@@ -1,6 +1,6 @@
 # Reading a ROM's code
 
-> Brought from game-printer with wave 3b of the port. In gameprinter, `gp code listing`, `gp code tables` and `gp reach` are here; `gp roms diff --cpu` comes with wave 1's `gp roms diff`, and `gp template cites` with wave 9. A game's template is its package folder in the games checkout, so `templates/donkey-kong-ju` below is `games/donkey-kong` now. The section "On Donkey Kong, against the planners' numbers" is game-printer's record of 2026-11-05 and is kept as it was. Wave 6 brings them to an arcade romset's two Z80s: see "On an arcade romset" at the end.
+> Brought from game-printer with wave 3b of the port. In gameprinter, `gp code listing`, `gp code tables`, `gp reach`, `gp roms diff --cpu` and `gp template cites` are all here. A game's template is its package folder in the games checkout, so `templates/donkey-kong-ju` below is `games/donkey-kong` now. The section "On Donkey Kong, against the planners' numbers" is game-printer's record of 2026-11-05 and is kept as it was. Wave 6 brings them to an arcade romset's two Z80s: see "On an arcade romset" at the end.
 
 
 These commands do the reading the Donkey Kong level planners did by hand for 50m, 75m and 100m (workers lv50, lv75, lv100, m50, m75, m100 and ride, 2026-11-04 and 05). Each of their cost logs named a scratch script or a step read off bytes that one of these replaces. They read the ROM and runs of it in gp-nes; none needs labels or source, and none writes code into the repo.

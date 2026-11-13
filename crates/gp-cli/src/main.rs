@@ -41,8 +41,6 @@ mod covered;
 mod cycles;
 mod cycles_z80;
 mod dataset;
-mod dataset_export;
-mod dataset_hf;
 mod dataset_tables;
 mod derive;
 mod diagnose;
@@ -118,7 +116,6 @@ mod rom_extract;
 mod rom_grade;
 mod romclean;
 mod romdiff;
-mod rompatch;
 mod roms;
 mod roms_cmd;
 mod rule_refine;
@@ -244,7 +241,7 @@ enum Cmd {
         #[command(subcommand)]
         cmd: metrics_cmd::RunsCmd,
     },
-    /// What capture has found so far for each game: one row per template.
+    /// What capture has found so far for each game: one row per game.
     Scorecard(scorecard::ScorecardArgs),
     /// One record of what the tools found in a game, and the gate that
     /// turns a finding into evidence.
@@ -422,7 +419,9 @@ enum Cmd {
         #[command(subcommand)]
         cmd: sprites::SpritesCmd,
     },
-    /// Fetch a game by its exact id and lift it from a person's ROMs.
+    /// Port a game from a ROM you own (new), fetch a published game
+    /// (fetch), and build, test and score a game's custom code and corpus
+    /// (kit, build, test, hash, score, attest).
     Game {
         #[command(subcommand)]
         cmd: GameCmd,
@@ -448,7 +447,7 @@ enum Cmd {
     /// Game Printer's page, at http://127.0.0.1:7710/: a game's tabs CLIPS
     /// (record clips of the original, hand them to your agent, review them
     /// on the model), REFINE (the background work scoring and refining the
-    /// rebuilt game), PLAY (the rebuild) and THEMES, with your agent's log
+    /// model), PLAY (the model) and THEMES, with your agent's log
     /// beside them. gp mechanic start and watch open it.
     Serve {
         #[command(flatten)]
@@ -465,7 +464,8 @@ enum Cmd {
         #[command(subcommand)]
         cmd: sealed::SealedCmd,
     },
-    /// Themes on a model: check a stack's readability and style, paint
+    /// Themes, new pictures and sounds for a game that leave its model as it
+    /// is: check a stack's readability and style, paint
     /// placeholder art, a game's theme kit, fit art to it, publish, and
     /// render a themed video (docs/theme-kit.md, docs/theme-publishing.md).
     Theme {
@@ -482,7 +482,9 @@ enum Cmd {
         #[command(subcommand)]
         cmd: PackageCmd,
     },
-    /// Check a template's pins against a ROM.
+    /// Templates, game folders holding template.toml and a model and no ROM
+    /// data, ready to copy: check one against a ROM, build a game made here,
+    /// derive, extract, pack, check its font, served and cites.
     Template {
         #[command(subcommand)]
         cmd: TemplateCmd,
@@ -667,29 +669,18 @@ enum AssetsCmd {
         #[arg(long)]
         force: bool,
     },
-    /// Encode a lifted directory back into ROM bytes, then compare them
-    /// with a ROM (the round-trip check, which exits 1 naming each asset
-    /// and offset that differs), or write a copy of a base ROM with the
-    /// encoded assets in place and list the bytes that changed.
-    #[command(group(clap::ArgGroup::new("mode").required(true).args(["check", "base"])))]
+    /// Encode a lifted directory back into ROM bytes and compare them with
+    /// a ROM: the round-trip check, which exits 1 naming each asset and
+    /// offset that differs. Nothing is written.
     Pack {
         /// A directory written by gp assets lift (its assets.toml says how
         /// to pack it).
         dir: PathBuf,
-        /// The ROM to compare with: the round-trip check.
+        /// The ROM to compare with.
         #[arg(long, value_name = "ROM")]
-        check: Option<PathBuf>,
-        /// The ROM to write the assets into.
-        #[arg(long, value_name = "ROM", requires = "out")]
-        base: Option<PathBuf>,
-        /// The ROM file to write, outside any git work tree.
-        #[arg(short, long, requires = "base")]
-        out: Option<PathBuf>,
-        /// Replace an existing output file.
-        #[arg(long, requires = "out")]
-        force: bool,
-        /// With --check, give the bytes compared and the differences in
-        /// the JSON as PREFIX.bytes_covered and PREFIX.differences.
+        check: PathBuf,
+        /// Give the bytes compared and the differences in the JSON as
+        /// PREFIX.bytes_covered and PREFIX.differences.
         #[arg(long, value_name = "PREFIX")]
         metrics: Option<String>,
     },
@@ -1050,8 +1041,8 @@ enum InterpCmd {
 
 #[derive(Subcommand)]
 enum GameCmd {
-    /// Start a new game from a ROM you own that no game names yet: its
-    /// package folder in the games checkout, with a model skeleton for the
+    /// Port a game from a ROM you own that no game names yet: its folder (a
+    /// template) in the games checkout, with a model skeleton for the
     /// genre, the ROM's hashes in roms.toml, pins that hold, and no clips.
     /// Writes over nothing
     New {
@@ -1262,7 +1253,7 @@ enum PackageCmd {
 
 #[derive(Subcommand)]
 enum TemplateCmd {
-    /// Turn a template into a working local copy from your own ROM: check
+    /// Turn a template into a copy filled from your own ROM: check
     /// the ROM's hash against the template's source declaration, lift its
     /// assets with the template's asset map, check the lifted files against
     /// the ROM byte for byte and against the pinned digest, copy the
@@ -1317,9 +1308,9 @@ enum TemplateCmd {
         /// A template directory holding template.toml.
         dir: PathBuf,
     },
-    /// Build an original template's assets (source.how = "authored") from
-    /// its authored.toml: a data image (to $GP_HOME/work/images/), its asset
-    /// map, and the lifted directory. Exits 1 when the asset map or
+    /// Build the assets of a game made here (source.how = "authored") from
+    /// its authored.toml: a data image that nothing plays (to
+    /// $GP_HOME/work/images/), its asset map, and the lifted directory. Exits 1 when the asset map or
     /// template.toml's pins are stale, unless --write updates them.
     Build {
         /// An original template directory.
@@ -1347,8 +1338,8 @@ enum TemplateCmd {
         #[arg(long)]
         original: bool,
     },
-    /// Check that a package's open version holds none of the original's
-    /// data: no line of 24 characters or more of its built files may be held
+    /// Check that a game's folder, as it would be published, holds none of
+    /// the original game's data: no line of 24 characters or more of its built files may be held
     /// by the original's lifted files, and none of its bytes or lifted files
     /// may be the ROM's. With --folder, the same for every file of a folder
     /// to be served. Exits 1 on any find, and 2 when a ROM isn't found.
@@ -1410,20 +1401,9 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             ),
             AssetsCmd::Pack {
                 dir,
-                check: Some(rom),
+                check,
                 metrics,
-                ..
-            } => assets::check_dir(dir, rom, metrics.as_deref()),
-            AssetsCmd::Pack {
-                dir,
-                base: Some(base),
-                out: Some(out),
-                force,
-                ..
-            } => assets::pack_into(dir, base, out, *force),
-            AssetsCmd::Pack { .. } => {
-                anyhow::bail!("give --check ROM, or --base ROM with --out FILE")
-            }
+            } => assets::check_dir(dir, check, metrics.as_deref()),
             AssetsCmd::Stub {
                 model,
                 lifted,

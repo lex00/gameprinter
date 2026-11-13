@@ -1,6 +1,6 @@
 # The reference game
 
-Moss Hop is a small NES platformer written for Game Printer. The project owns it outright: its code, graphics and level are original, and it's licensed with the repo under Apache-2.0. Since no commercial ROM is involved, every check that runs on it runs in `just check`. Its game model, written by hand from this source and checked against its baselines, is in `templates/mosshop/`. It came from game-printer's docs/reference-game.md; the game, its baselines and its model came over unchanged, and the checks on other platforms didn't come with them.
+Moss Hop is a small NES platformer written for Game Printer. The project owns it outright: its code, graphics and level are original, and it's licensed with the repo under Apache-2.0. Since no commercial ROM is involved, every check that runs on it runs in `just check`. Its game model, written by hand from this source and checked against its baselines, is in `templates/mosshop/`. It came from game-printer's docs/reference-game.md; the game, its baselines and its model came over unchanged, and the checks on other platforms are in [platform-checks.md](platform-checks.md).
 
 ## Build it
 
@@ -131,7 +131,7 @@ Eight baselines in `baselines/mosshop/` script the game and commit what it does:
 
 `just check` builds the game and runs, on Moss Hop: the baselines, the asset round trip (`gp assets lift` and `gp assets pack --check`), `gp model check` with the lifted assets, `gp model fmt --check`, `gp labels check` on its mapping, `gp interp compare` on each baseline, the browser player against the native one (`just play-web`), the mechanic page (`just mechanic-page`) and `gp template check`. `just validate-mosshop` holds the model to its contract against the baselines ([validation](validation.md)), and `just derive-mosshop` reads its facts back from the source ([derivation](derivation.md)).
 
-Not here yet: game-printer's checks on other platforms (`just check-open-platforms` under Rosetta and wasmtime with `gp-wasm-check`, and `just docker-check` in Linux containers), and `gp input-log generate`, which turned a baseline into an input log to record and replay.
+game-printer's `just check-open-platforms` (Rosetta and wasmtime with `gp-wasm-check`) is `just check-wasm` and `just check-x86_64` here ([platform-checks.md](platform-checks.md)); its `just docker-check` in Linux containers didn't come. `gp input-log generate` turns a baseline into an input log to record and replay.
 
 ## Ground truth
 

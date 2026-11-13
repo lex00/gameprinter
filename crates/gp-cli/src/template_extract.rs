@@ -244,38 +244,10 @@ pub(crate) fn find_rom(
 }
 
 /// Every file of a template folder, by its path inside it, sorted: no
-/// `.git`, no build output (`target/`), and refusing symlinks.
+/// `.git`, no build output (`target/`), and refusing symlinks. The MCP
+/// tool template_fork copies the same files.
 fn template_files(dir: &Path) -> Result<Vec<(String, PathBuf)>> {
-    fn walk(base: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) -> Result<()> {
-        let mut entries: Vec<_> = fs::read_dir(dir)
-            .with_context(|| format!("reading {}", dir.display()))?
-            .filter_map(|e| e.ok())
-            .collect();
-        entries.sort_by_key(|e| e.file_name());
-        for e in entries {
-            let path = e.path();
-            let rel = path
-                .strip_prefix(base)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            let ft = e.file_type()?;
-            if ft.is_symlink() {
-                bail!("{rel} is a symlink; a template holds only plain files");
-            } else if ft.is_dir() {
-                if e.file_name() == ".git" || e.file_name() == "target" {
-                    continue;
-                }
-                walk(base, &path, out)?;
-            } else if ft.is_file() {
-                out.push((rel, path));
-            }
-        }
-        Ok(())
-    }
-    let mut out = Vec::new();
-    walk(dir, dir, &mut out)?;
-    Ok(out)
+    gp_mcp::fork::template_files(dir).map_err(anyhow::Error::msg)
 }
 
 /// The manifest text with `recipe.asset_map` pointing at the packed copy.

@@ -1,5 +1,7 @@
 # Graphs: what links Game Printer's data, and where to keep the links
 
+> `gp dataset export` (with `--hf`) and `gp dataset catalogue` were removed from `gp` on 2026-11-13, so the prototype's `--export` input can't be made any more. The report is kept as it was written.
+
 Brought from game-printer's docs/research/ as written on 2026-11-12, with the prototype's paths changed for a package folder. The measurements are game-printer's, on Super Mario Bros. at `aa540854`; `gp dataset export`, `gp capture` runs and the loop it names are game-printer's commands, not gameprinter's.
 
 Research for the user's question of 2026-10-30: "what kind of graphs are here. asset graph, graph of gameplay element relationships, graph of full extracted dataset. specifically i want to know if there is a case for using a graph database vs columnar or other storage types for this work ... a graph of the code starting from a spot related to its assets". Later the same day: "look into ladybug", "this should be something a data scientist would approve of", "be open to re-engineering this part now is the time for it", and "this research in turn should help drive the spec for game printer games". The last section is a draft package spec that follows from the recommendation.

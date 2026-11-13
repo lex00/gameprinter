@@ -11,7 +11,6 @@ pub mod hash;
 pub mod input_log;
 pub mod manifest;
 pub mod model_events;
-pub mod patch;
 pub mod paths;
 pub mod recordings;
 pub mod registry;

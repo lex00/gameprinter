@@ -209,7 +209,7 @@
       ]
     },
     "PatchFormat": {
-      "description": "A patch file's format, found by its magic bytes.",
+      "description": "A patch file's format.",
       "type": "string",
       "enum": [
         "ips",

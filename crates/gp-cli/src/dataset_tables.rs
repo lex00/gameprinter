@@ -1,8 +1,7 @@
 //! The tables a data set is written as (game-printer's serve/dataset.rs
 //! and serve/dataset_hf.rs, the parts `gp dataset rom` uses): typed
 //! columns, deterministic Parquet, Croissant metadata, and the check that
-//! no file written holds a run of the ROM's bytes. `gp dataset export`
-//! (wave 9 of the port) can share them.
+//! no file written holds a run of the ROM's bytes.
 
 use std::collections::{BTreeSet, HashSet};
 use std::fmt::Write as _;

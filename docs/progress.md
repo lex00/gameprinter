@@ -77,4 +77,4 @@ Tapper (the Budweiser set), against `tapper-five-levels-arcsprites` (10,933 fram
 - The frame boundary is the PPU's vblank start. A game that does its work in the NMI keeps a frame's work in one frame, except on a lag frame (the 1-in-100 slack for scratch); a game that works in its main loop across the boundary would show more live bytes.
 - The NES powers on with RAM cleared (`PowerOn::default()`), as the lockstep does. A game that seeds from uninitialized RAM needs the recording's power-on fill first.
 - Mapper banks aren't in the code count, nor in a routine's key: an address is the CPU's.
-- gameprinter has no `gp agent bench`, so the effort lines game-printer printed beside the ladder aren't here.
+- `gp progress` doesn't read `gp agent bench` yet, so the effort lines game-printer printed beside the ladder aren't here.

@@ -1,5 +1,7 @@
 # A game's data model as a Hugging Face dataset
 
+> `gp dataset export` (with `--hf`) and `gp dataset catalogue`, which this report built, were removed from `gp` on 2026-11-13, since Game Printer's target is a game that plays in a browser. The report is kept as it was written.
+
 > In gameprinter (2026-11-12): `gp dataset export --hf DIR --template GAME [--run R [--measures]]` and `gp dataset catalogue --out DIR GAME...` take game packages (games/donkey-kong, games/tapper). A package's clips are its corpus plan's, and their `.presses` files from `inputs/` are copied beside the tables. The ROM check finds the ROM the package accepts in `$GP_ROM_DIR`, an NES image or an arcade romset. On Donkey Kong the facts, mechanics and mapping tables are byte for byte game-printer's; Tapper's export holds 52 facts, 11 mapping fields and 52 clips. The code is `crates/gp-cli/src/dataset_hf.rs`. The rest of this page is game-printer's research report of 2026-10-30, kept as history.
 
 A research report of 2026-10-30, on branch `research/hf-draft`. The user, 2026-10-30: "continue to think about how we are extracting a giant data model from each rom and what it might look like on hugging face".

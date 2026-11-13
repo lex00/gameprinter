@@ -1,8 +1,8 @@
 # Packages
 
-A package is one version of a game or of content for a game (a theme), in one format for both: its files, each stored once as a blob named by the BLAKE3 hash of its bytes, and a manifest that names them. The package id is the BLAKE3 hash of the manifest's bytes, so one id pins every byte of every file. The code is `crates/gp-package`, which depends on `blake3` alone, so `gp`, the web player and the registry reader in the page read packages with the same code. It came from game-printer's docs/packages.md; the format is the same, and game-printer's local package store, its mirrors (`mirrors.toml`) and `gp theme publish` are replaced by registries ([Run a registry](../site/src/content/docs/registry.md)).
+A package is a published version of a folder, a game's (kind `game`) or a theme's (kind `content`), in one format for both: its files, each stored once as a blob named by the BLAKE3 hash of its bytes, and a manifest that names them. The package id is the BLAKE3 hash of the manifest's bytes, so one id pins every byte of every file. The code is `crates/gp-package`, which depends on `blake3` alone, so `gp`, the web player and the registry reader in the page read packages with the same code. It came from game-printer's docs/packages.md; the format is the same, and game-printer's local package store, its mirrors (`mirrors.toml`) and `gp theme publish` are replaced by registries ([Run a registry](../site/src/content/docs/registry.md)).
 
-A game's package starts as a folder in the games checkout (`games/donkey-kong`), with `package.toml` at its root. `gp registry publish` turns a folder into a package and writes it to a registry; `gp game fetch` reads one back into a working copy and lifts each ROM entry it finds in the ROM folder.
+A game's package starts as its folder in the games checkout (`games/donkey-kong`, which is also the game's template), with `package.toml` at its root. `gp registry publish` turns a folder into a package and writes it to a registry; `gp game fetch` reads one back into a working copy and lifts each ROM entry it finds in the ROM folder.
 
 ## The manifest
 

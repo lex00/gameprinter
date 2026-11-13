@@ -14,7 +14,6 @@ A theme is presentation only. It lives in the `present` side of every runtime: t
 gp theme check templates/mosshop                       # the template's own stack: each theme, readability, Style
 gp theme check templates/mosshop --theme templates/mosshop/themes/paper
 gp theme video templates/mosshop --baseline baselines/mosshop/stomp-then-pit.toml --themes -o /tmp/dusk.png
-gp gen bevy templates/mosshop -o /tmp/mosshop-game --themes
 gp theme paint templates/mosshop -o /tmp/paper --id paper
 gp-web-prep --themes templates/mosshop LIFTED OUT BASELINE...
 ```
@@ -29,7 +28,7 @@ gp-web-prep --themes templates/mosshop LIFTED OUT BASELINE...
 | Command | Options |
 |---|---|
 | `gp theme check` | All four; `--themes` when given none |
-| `gp gen bevy`, `gp gen conform`, `gp theme video` | All four |
+| `gp theme video` | All four |
 | `gp-web-prep` | `--themes`, `--stack`, `--theme` |
 | `gp video` | `--theme` only |
 
@@ -68,7 +67,7 @@ count = 24
 | `id` | Lowercase letters, digits, `-` and `_`, starting with a letter. A stack names the theme by it, and it's the theme's directory name |
 | `title`, `description`, `author` | For people |
 | `license` | The theme's own license, an SPDX expression |
-| `for` | Optional: the models it was made for, by `model.name`. A stack applying it to another model is refused, and so is a look drawn for one (`gp_gen_bevy::looks::offered`, the lift). `gp theme check` checks the restyles' slot names against each (below) |
+| `for` | Optional: the models it was made for, by `model.name`. A stack applying it to another model is refused, and so is a look drawn for one (`gp_look::looks::offered`, the lift). `gp theme check` checks the restyles' slot names against each (below) |
 | `palette` | Live effects: palette rules (below) |
 | `effect` | Live effects: picture, particle and screen effects (below) |
 | `restyle` | Restyled assets (below) |
@@ -158,7 +157,7 @@ A restyle of a slot the simulation reads (`gp_interp::lifted::simulation_slots`)
 
 ### Slot names
 
-A runtime passes over a restyle whose slot or entry its model lacks, with no word (`gp_gen_bevy::present::art_themed`). That lets one theme serve two versions of a game, and it hides a typo. `gp theme check` checks each restyle that names a slot against every model in the theme's `for` list, or against the model checked when the theme has no `for` (`gp_theme::slots`, `crates/gp-cli/src/theme_slots.rs`). It reads the other models from the templates beside the checked one whose `template.game` is the same (Donkey Kong JU and Original Edition are both `donkey-kong`). A model's entries of a slot are the `{ slot, entry }` pairs the model names and the entries its asset map lists for the slot's source asset.
+A runtime passes over a restyle whose slot or entry its model lacks, with no word (`gp_look::present::art_themed`). That lets one theme serve two versions of a game, and it hides a typo. `gp theme check` checks each restyle that names a slot against every model in the theme's `for` list, or against the model checked when the theme has no `for` (`gp_theme::slots`, `crates/gp-cli/src/theme_slots.rs`). It reads the other models from the templates beside the checked one whose `template.game` is the same (Donkey Kong JU and Original Edition are both `donkey-kong`). A model's entries of a slot are the `{ slot, entry }` pairs the model names and the entries its asset map lists for the slot's source asset.
 
 | Case | Result |
 |---|---|
@@ -281,7 +280,7 @@ The path is relative to the pointing folder and must name `TEMPLATE/themes/ID` i
 | Reader | What it does with a pointer |
 |---|---|
 | `gp_theme::stack::load` | Loads the target; the layer's `dir` is the target, so restyle files are found there. A baked stack layer may name a pointer folder |
-| `gp_gen_bevy::looks::offered`, `gp gen bevy`, `gp-web-prep` | Offer it as a look like any theme, refused when `for` doesn't name the model |
+| `gp_look::looks::offered`, `gp-web-prep` | Offer it as a look like any theme, refused when `for` doesn't name the model |
 | gp-web-lift | The same, for the public page's in-browser lift. A pointer that doesn't resolve is listed in `looks_skipped` |
 | `scripts/web/build-lift.sh` | Ships the pointer, naming the target by its folder in the bundle, when the target's template is in the bundle; otherwise ships the target's files in its place |
 | `gp theme check`, `gp theme publish` | Read the target (`--theme` may name the pointer folder) |
@@ -357,7 +356,7 @@ The background is every pixel with a `world` role, plus each level's backdrop co
 | warn | A group under 50% distinct; a contrast under 1.5 with under 75% distinct; two groups within delta E 10 of each other |
 | ok | Otherwise |
 
-A group the model has nothing of is listed as absent (Moss Hop has no text). `gp gen bevy`, `gp gen conform`, `gp theme video` and `gp-web-prep` refuse a stack the check refuses, unless `--allow-unreadable`; `gp theme check` exits 1.
+A group the model has nothing of is listed as absent (Moss Hop has no text). `gp theme video` and `gp-web-prep` refuse a stack the check refuses, unless `--allow-unreadable`; `gp theme check` exits 1.
 
 The thresholds are first guesses, set so Moss Hop's two themes pass and a theme that tints everything one gray is refused.
 
@@ -378,7 +377,7 @@ The thresholds are first guesses, set so Moss Hop's two themes pass and a theme 
 
 | Runtime | How |
 |---|---|
-| Generator pictures (`gp_gen_bevy::present::art_themed`) | Restyles, then palette rules, gradients and glows, into each level picture, each sprite frame in each palette set and the HUD's pictures; a cycling color's tint by the `sky` role's palette rules; the overlay as `overlay.png`; the emitters and each entity's role for particles |
+| Generator pictures (`gp_look::present::art_themed`) | Restyles, then palette rules, gradients and glows, into each level picture, each sprite frame in each palette set and the HUD's pictures; a cycling color's tint by the `sky` role's palette rules; the overlay as `overlay.png`; the emitters and each entity's role for particles |
 | Bevy build | The themed pictures; the overlay on the camera at z 50, at three overlay pixels to a game pixel with a CRT or a grid, one for each window width the widescreen option draws (`overlay.png`, `overlay-<width>.png`), and hidden while the player turns screen effects off ([the generator](../generator.md#picture-options)); particles as small sprites on the camera, from the copied `particles.rs`, made again each frame drawn. The sim crate is byte for byte the same with any theme |
 | Web preview | The themed pictures; `preview.json`'s `theme` names the overlay and the emitters, and `preview.js` draws them after the sprites |
 | `gp theme video` and the editor's preview | The same pictures, composed on the CPU (`gp_theme::compose`) from the interpreter's world each frame |

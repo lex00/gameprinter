@@ -192,7 +192,7 @@ export function Filmstrip({ items, current, playing, picture, choose, load, open
                     {MARK_WORDS[st]}
                   </button>
                 )}
-                {it.save.native && !it.save.native.matches && <span className="error">rebuilt differently</span>}
+                {it.save.native && !it.save.native.matches && <span className="error">the model made it differently</span>}
               </div>
             );
           })}

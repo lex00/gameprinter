@@ -3,9 +3,7 @@ title: Install gp
 description: Build the gp command from source on a Mac or Linux machine.
 ---
 
-`gp` is the command-line tool behind Game Printer. You only need it to change or make something. Playing a game takes a browser and nothing else.
-
-There are no downloads yet, so you build it from source. It's built and tested on macOS and Linux. Windows hasn't been tried.
+`gp` is the command-line tool behind Game Printer. Playing a game takes a browser and nothing installed; a ported game such as Donkey Kong also asks for your own ROM of it, which stays in your browser. Making or changing a game takes `gp`, and `gp` has no download yet: you build it from source, with the tools below. It's built and tested on macOS and Linux. Windows hasn't been tried.
 
 ## What you need
 
@@ -14,7 +12,7 @@ There are no downloads yet, so you build it from source. It's built and tested o
 | [rustup](https://rustup.rs) | Installs the exact Rust version the repo names, on the first build |
 | [just](https://github.com/casey/just) | Runs the repo's recipes |
 | cc65 (Homebrew or apt) | Only to build Moss Hop, the test game |
-| bubblewrap, on Linux | Only to build a game's module, in a sandbox with no network |
+| bubblewrap, on Linux | Only to build the custom code some games have (Donkey Kong does, Moss Hop doesn't), in a sandbox with no network |
 
 ## Build it
 

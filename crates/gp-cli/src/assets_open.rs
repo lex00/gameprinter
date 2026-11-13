@@ -12,8 +12,7 @@
 //! exported ones, and this command notices by their digest.
 //!
 //! Ported from game-printer's assets_open.rs, with `image_layers` (the
-//! image config's layers, which `gp sprites export` and `import` read too)
-//! moved here from its sprites.rs. An arcade game's lift is refused in
+//! image config's layers) moved here from its sprites.rs. An arcade game's lift is refused in
 //! words: the editor trip cuts frames into NES tiles (gp_sprites::chr).
 
 use std::path::{Path, PathBuf};
@@ -180,6 +179,7 @@ fn config(a: &OpenArgs, paths: &Paths) -> Result<gp_mcp::Config> {
         home: paths.home.clone(),
         rom: None,
         assets: a.assets.as_deref().map(std::path::absolute).transpose()?,
+        games: crate::roms_cmd::games_dir(None),
     })
 }
 

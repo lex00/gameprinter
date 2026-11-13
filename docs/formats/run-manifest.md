@@ -1,6 +1,6 @@
 # Run manifest, version 0
 
-> Brought from game-printer with wave 9 of the port. As in game-printer, every `gp` command writes one. Different here: `--json` output doesn't carry a `run_manifest` key (other tools read gameprinter's JSON as it is), the manifest path is in `gp runs list`; a run that can't be written is skipped silently. gameprinter has no `budgets.toml` yet, so `gp metrics check` needs `--budgets`.
+> Brought from game-printer with wave 9 of the port. As in game-printer, every `gp` command writes one. Different here: `--json` output doesn't carry a `run_manifest` key (other tools read gameprinter's JSON as it is), the manifest path is in `gp runs list`; a run that can't be written is skipped silently. gameprinter has none of the budget files below yet (`budgets.toml`, `budgets-cycle.toml`, `budgets-roms.toml`), so `gp metrics check` needs `--budgets` and `just check` doesn't run it, and its justfile sets no `$GP_RUN_GROUP`.
 
 Every `gp` command writes one JSON manifest describing the run, so any result can be traced back to exactly what produced it. Defined by `RunManifest` in `crates/gp-metrics/src/run.rs`.
 

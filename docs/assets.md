@@ -1,6 +1,6 @@
 # Asset lifting
 
-Asset lifting decodes a game's tiles, palettes, metatiles, level data and tables from its ROM into files that people and tools can edit, and encodes the files back into ROM bytes. The round-trip check lifts a ROM, encodes the files again and compares the result with the ROM byte for byte: any difference is a bug in a decoder, an encoder or the asset map. It came from game-printer's docs/assets.md. The commands, the general formats and the map came over; the maps and formats of other commercial games, and the commands that found assets in other dumps, did not.
+Asset lifting decodes a game's tiles, palettes, metatiles, level data and tables from its ROM into files that people and tools can edit, and can encode the files back into ROM bytes to compare them with the ROM. The round-trip check lifts a ROM, encodes the files again and compares the result with the ROM byte for byte: any difference is a bug in a decoder, an encoder or the asset map. It came from game-printer's docs/assets.md. The commands, the general formats and the map came over; the maps and formats of other commercial games did not.
 
 Moss Hop's map is in the tool repo (`assets/mosshop.toml`). A game's maps are in its package folder in the games checkout, one for each ROM entry (`games/donkey-kong/assets/donkey-kong-oe.toml` and `donkey-kong-ju.toml`, `games/tapper/assets/tapper.toml`). The code is `crates/gp-assets`, with the commands in `crates/gp-cli/src/assets.rs`.
 
@@ -16,8 +16,9 @@ gp assets pack ~/.gameprinter/work/assets/mosshop --check target/mosshop/mosshop
 | Command | What it does |
 |---|---|
 | `gp assets lift ROM` | Decodes every asset the ROM's asset map names into a directory, by default `$GP_HOME/work/assets/<source-id>/`. `-o DIR` names another. The map is found by the ROM's hash in `$GP_ASSETS`, else in the tool repo's `assets/` and each game's `assets/` in the games checkout; `--map FILE` gives it instead. A directory that already holds a lift (an `assets.toml`) is refused unless `--force`, since its files may have been edited |
-| `gp assets pack DIR --check ROM` | Encodes the lifted files in `DIR` and compares them with the ROM. Exits 1 if any byte differs, listing each one by asset, offset and value. `--metrics PREFIX` adds `PREFIX.bytes_covered` and `PREFIX.differences` to the JSON |
-| `gp assets pack DIR --base ROM -o FILE` | Writes a copy of the ROM with the encoded assets in place and lists the bytes that changed. `--force` replaces an existing file |
+| `gp assets pack DIR --check ROM` | Encodes the lifted files in `DIR` and compares them with the ROM. Exits 1 if any byte differs, listing each one by asset, offset and value. `--metrics PREFIX` adds `PREFIX.bytes_covered` and `PREFIX.differences` to the JSON. It writes nothing |
+
+`gp assets pack --base`, which wrote a copy of the ROM with the encoded assets in place, was removed on 2026-11-13: Game Printer makes games that play in a browser, not new ROMs.
 
 With `--json` the commands print these fields:
 
@@ -25,9 +26,8 @@ With `--json` the commands print these fields:
 |---|---|
 | `lift` | `source`, `title`, `sha256` (the ROM's), `map` (the file used), `out`, `bytes_covered`, `files`, and `assets`, each with `name`, `format`, `file` and `bytes` |
 | `pack --check` | `ok`, `rom_is_maps`, `source`, `rom`, `dir`, `bytes_covered`, `difference_count` and `differences`, and `metrics` with `--metrics` |
-| `pack --base` | `source`, `base`, `out`, `sha256` (the new ROM's), `bytes_changed` and `changes` |
 
-Each difference or change has these fields:
+Each difference has these fields:
 
 | Field | Meaning |
 |---|---|
@@ -36,14 +36,14 @@ Each difference or change has these fields:
 | `region` | `prg` or `chr` |
 | `offset` | Where the byte is in PRG or CHR data |
 | `file_offset` | Where the byte is in the ROM file, header included |
-| `rom` | The ROM's byte (the base ROM's, for `pack --base`) |
+| `rom` | The ROM's byte |
 | `encoded` | The byte the lifted files encode to |
 
-Exit codes are the usual ones: 0 when the files match the ROM or were written, 1 when the round trip finds a difference, and 2 when the command can't run. A ROM that no map describes is exit 2, and so is a lifted file that doesn't parse or holds a value out of range.
+Exit codes are the usual ones: 0 when the files match the ROM, 1 when the round trip finds a difference, and 2 when the command can't run. A ROM that no map describes is exit 2, and so is a lifted file that doesn't parse or holds a value out of range.
 
-Both commands refuse to write inside a git work tree, using the same check as `$GP_STORE` and `$GP_ROM_DIR` (`gp_evidence::paths::enclosing_git_work_tree`). They also refuse to write through a symlink, file or directory, which could point into a repo past that check. Assets lifted from a commercial game, and ROMs packed from them, must never be committed. Moss Hop's assets are ours, but they go through the same path, so the check that guards commercial games is the one that runs every day.
+`lift` refuses to write inside a git work tree, using the same check as `$GP_STORE` and `$GP_ROM_DIR` (`gp_evidence::paths::enclosing_git_work_tree`). It also refuses to write through a symlink, file or directory, which could point into a repo past that check. Assets lifted from a commercial game must never be committed. Moss Hop's assets are ours, but they go through the same path, so the check that guards commercial games is the one that runs every day.
 
-Not here yet: `gp assets hash` (writes a map's content section), `gp assets find` (finds a game's assets in another dump of it by content), `gp assets stub` (placeholder assets with each asset's shape and none of its content, which `gp_assets::stub` still makes in code) and `gp assets open`.
+`gp assets hash` (writes a map's content section) and `gp assets find` (finds a game's assets in another dump of it by content) are below; `gp assets stub` ([stubs.md](stubs.md)) and `gp assets open` ([sprite-editing.md](sprite-editing.md)) have pages of their own.
 
 ## What Moss Hop's map lifts
 
@@ -278,7 +278,7 @@ count = 8
 | `schema` | 1 |
 | `source` | The source ID, as the game's `roms.toml` names it, or the game's own name for one that isn't registered, as for Moss Hop. The default output directory is named after it, so it takes the same characters as an asset name |
 | `title` | Optional, one line, for the lifted files' comments |
-| `sha256` | The ROM this map describes: the SHA-256 of its PRG and CHR data without the header, as `gp roms scan` prints it. `lift` and `pack --base` refuse any other ROM. `pack --check` compares another ROM all the same (an edited one, say), since a comparison can only find real differences, and says it isn't the map's (`rom_is_maps` is false in its JSON) |
+| `sha256` | The ROM this map describes: the SHA-256 of its PRG and CHR data without the header, as `gp roms scan` prints it. `lift` refuses any other ROM. `pack --check` compares another ROM all the same (an edited one, say), since a comparison can only find real differences, and says it isn't the map's (`rom_is_maps` is false in its JSON) |
 | `[[asset]]` | One per asset. Every asset has a `name` (lowercase letters, digits, `-` and `_`; it's the file name), a `format` and the keys below. No two assets may claim the same byte, and no span may be over 16MB, more than any NES ROM holds |
 
 Offsets count from the start of PRG ROM (`region = "prg"`) or CHR ROM (`region = "chr"`), after the iNES header and any trainer. So a map holds for every dump of a revision, whatever header the dump has. Any span may have a `label`, the symbol the game's source or disassembly gives its data. People read it, and a test can check the map against a debug file with it.

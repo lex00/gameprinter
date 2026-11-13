@@ -1,8 +1,8 @@
 # Sound
 
-Brought from game-printer's docs/sound.md (port wave 4; `decode`, `drivers`, `render`, `export`, `import` and `banks` in the later tools port). gameprinter has every `gp sound` command game-printer had. No metrics are recorded. The measured results for Super Mario Bros., Mega Man 2 and Super Mario Bros. 2 are game-printer's, from games gameprinter doesn't carry. An arcade recording's AY-8910 log, its decoder, renders and MIDI files are the last section.
+Brought from game-printer's docs/sound.md (port wave 4; `decode`, `drivers`, `render` and `banks` in the later tools port). gameprinter has every `gp sound` command game-printer had except `export` and `import`, the FamiStudio and MIDI round trips, which were removed on 2026-11-13 since they fed tools outside the browser. No metrics are recorded. The measured results for Super Mario Bros., Mega Man 2 and Super Mario Bros. 2 are game-printer's, from games gameprinter doesn't carry. The last section is about sound on an arcade board (the AY-8910).
 
-Music and sound effects are model data. A recording of any NES game gives them as notes and instruments; the model ties each song to a level or a rule state and each effect to an event; one deterministic APU synthesizer plays them in every runtime; and FamiStudio and MIDI files carry them out and back. Sound is presentation, so the simulation never reads it and no state hash depends on it.
+Music and sound effects are model data. A recording of any NES game gives them as notes and instruments; the model ties each song to a level or a rule state and each effect to an event; and one deterministic APU synthesizer plays them in every runtime. Sound is presentation, so the simulation never reads it and no state hash depends on it.
 
 | Part | What it is | Where |
 |---|---|---|
@@ -14,7 +14,6 @@ Music and sound effects are model data. A recording of any NES game gives them a
 | Synthesizer | Register writes -> 16-bit samples at 44,100 Hz | `gp_sound::synth` |
 | Fidelity | A song played back against the log it came from | `gp_sound::fidelity`, `gp sound fidelity` |
 | Drivers | Decoders for sound engines a pinned disassembly documents, and the registry | `gp_sound::drivers`, `gp sound decode`, `gp sound drivers` |
-| Interchange | FamiStudio text and Standard MIDI files, both ways, with the NES's limits checked on import | `gp_sound::famistudio`, `gp_sound::midi`, `gp sound export`, `gp sound import` |
 | Sound banks | Which instrument plays through the APU, a General MIDI program or a free SF2 or SFZ bank's patch | [sound-banks format](formats/sound-banks.md), `gp_sound::banks`, `crates/gp-sound-bank` |
 | Model | Asset kinds `songs` and `sound-effects`, a slot's capture recipe, `present.sound` | [model](model.md) (core 0.4.3) |
 | Themes | A restyled-audio tier: the same notes through another bank, by sound role | [theme format](formats/theme.md) (0.1.1) |
@@ -36,7 +35,7 @@ Music and sound effects are model data. A recording of any NES game gives them a
 | 7. Roles | Effects' instruments are `sfx`; in music noise and DMC are `drums`, the triangle `bass`, the higher pulse `lead` and the other `harmony` | Channel and pitch |
 | 8. Bindings | Effects bind to a model event by the words of their names (`Sfx_EnemyStomp` -> `enemy.stomped`, through a small table of general synonyms such as coin -> collected); music to a rule state the same way (`EndOfLevelMusic` -> `game.level_end`); `--level` goes to the music that plays while the player is in control most (the state mapping's start condition) | Names and the state mapping; a binding no word supports stays empty, and the song isn't ready to edit until a person or an agent binds it |
 
-Each song records where it came from (`origin`: `driver`, `log`, `import`, `edited`; `samples` is reserved for capture from audio, not built) and a `confidence`: for log capture, the share of the song's channel frames no effect took, lowered by a fifth when no loop was found; for an effect, 0.9 when its interface names its channel, 0.7 otherwise, lowered when it ran into the 120-frame cap.
+Each song records where it came from (`origin`: `driver`, `log`, `import`, `edited`; `import` is read only in files the removed `gp sound import` wrote; `samples` is reserved for capture from audio, not built) and a `confidence`: for log capture, the share of the song's channel frames no effect took, lowered by a fifth when no loop was found; for an effect, 0.9 when its interface names its channel, 0.7 otherwise, lowered when it ran into the 120-frame cap.
 
 ### Results
 
@@ -48,7 +47,7 @@ On the store's recordings, frames 1 to 2,400 of each (the warpless run's 1-1 for
 | Mega Man 2, Wood Man | 1 song, 9 effects, 63 instruments | 1.0, 1.0, 1.0 | 0.84 | 0.90 | Mega Man 2 asks for music and effects through one routine (`sound_queue_push`), so the stage select and stage music are one song; filed |
 | Super Mario Bros. 2, 1-1 | 3 songs, 3 effects, 17 instruments | 1.0, 1.0, 1.0 | 1.0 | 0.93 | |
 
-The test program `test-roms/apu/notes.s` (ours, a made-up phrase) captures to one song of 96 frames with its loop at 0, 12 frames a row, 18 notes and 3 instruments, with every agreement number at 1.0 (`crates/gp-cli/tests/sound.rs`, in `just check`).
+The test program `test-roms/apu/notes.s` (ours, a made-up phrase) captures to one song of 96 frames with its loop at 0, 12 frames a row, 18 notes and 3 instruments, with every agreement number at 1.0 (`crates/gp-cli/tests/detectors.rs`, `the_notes_test_rom_captures_and_holds_to_its_log`, in `just check`).
 
 Loudness correlates below the notes because the player writes constant-volume registers where a game used the hardware envelope and resets a pulse's phase at other moments; the levels match frame by frame, the waveforms' phases don't.
 
@@ -95,7 +94,7 @@ A model can keep a game's sound driver as state instead of binding songs: its ho
 | Bevy | The render crate's `sound` module, with the `audio` feature: `game_sim::ApuWrites` holds each tick's writes (worked out in the tick's first system, on the world before it, as the interpreter does), and from the first tick with any the synthesizer makes its 735 samples, streamed to one Bevy audio player (`ApuStream`, a source that never ends and plays silence while nothing waits; at most a fifth of a second waits, older samples are dropped). The cues' music stops then, as in the web preview. A muted channel plays at gain 0 |
 | `gp gen conform` | `headless --apu-hashes FILE` writes each tick's writes' BLAKE3 (register, value, in order) a line a tick, and the suite compares them with the interpreter's `hook_apu` on every frame of every input, as it does the state hashes. A run whose states agree and whose writes don't says from which frame |
 
-Donkey Kong's `dk_sound` is one (`templates/donkey-kong-oe/ext/src/sound.rs`). It is stepped from the original's driver bytes at each NMI. Its writes equal the driver's writes in the recording's APU log, in order. They do on 7190 of 7190 frames of the user's play (recording ad8352d8c24f) and 5220 of 5220 of run 5658S (76c9bb11a914). Its `apu` also gives the game's own `$4015` writes that change what sounds: the channels turned off while no song plays on the title and in the attract demo ($C8F8, $CE85), which keep the demo silent.
+Donkey Kong's `dk_sound` is one (`ext/src/sound.rs` in the `donkey-kong` package). It is stepped from the original's driver bytes at each NMI. Its writes equal the driver's writes in the recording's APU log, in order. They do on 7190 of 7190 frames of the user's play (recording ad8352d8c24f) and 5220 of 5220 of run 5658S (76c9bb11a914). Its `apu` also gives the game's own `$4015` writes that change what sounds: the channels turned off while no song plays on the title and in the attract demo ($C8F8, $CE85), which keep the demo silent.
 
 Donkey Kong's `dk_sound` steps the driver in `frame_start` (core `entity.hook_frame_start`, docs/model.md), at the start of every frame before the first system, frozen or not, as the game's NMI runs it first ($C890 calls $FA48). There it takes the requests the last frame left, from the rules and the hooks alike. The driver plays through the Start pause. The hook's `step` runs in the frame's body order and keeps only the death's sound and its wait ($3A).
 
@@ -135,17 +134,6 @@ cd $GP_HOME/work/gen/smb1 && cargo run --locked -p game --bin play
 
 and for the web preview, `scripts/web/build-preview.sh OUT templates/smb1-ntsc-prg0 $GP_HOME/work/assets/smb1-ntsc-prg0` builds the page with `assets/sound.json` (gp-web-prep reads the capture under `$GP_HOME`); serve OUT on localhost ([web](web.md)), open `index.html` and press a key to start the sound. `gp sound render <capture>/songs.json --song areamusicqueue_0x01 --out 1-1.wav` writes the song alone.
 
-## FamiStudio and MIDI
-
-FamiStudio (MIT, famistudio.org) is the faithful external editor, as Pixelorama is for sprites; MIDI is the general interchange. Neither is a way to ship game code: NSF export is left out, since an NSF holds the game's driver.
-
-| | Export | Import and its checks |
-|---|---|---|
-| FamiStudio text (`gp sound export --famistudio`, FamiStudio's documented text format, header version 4.5.0 by default) | FamiStudio tempo mode, a song's frames per row as its note length, notes at their own frames with `FinePitch` keeping exact periods, instruments as volume, duty and pitch envelopes (absolute when they fit -64 to 63, else relative, which keeps sweeps), DMC samples with their bytes when capture read them, a shorter last pattern as `PatternCustomSettings` | Expansion audio and channels beyond the 2A03's five are errors; so are volumes outside 0 to 15, duties outside 0 to 3, envelopes over 255 frames, notes too low or high for their channel, an instrument on two kinds of channel; overlapping notes are cut with a warning; arpeggios and custom lengths before the last column are warned about and left out |
-| Standard MIDI file, type 1 (`gp sound export --midi --song`) | A tempo track, then a track per NES channel named after it; a tick a frame and a quarter note four rows; pulse and triangle on MIDI channels 1 to 3 with a General MIDI program by role (or the mapping's), noise and DMC on channel 10 with the drum map (hats, snare, kick, cowbell for the short loop); velocity from the first volume, volume envelopes as expression (CC 11), pitch envelopes as bends over a 12-semitone range, loop and end as markers | Melodic channels go to pulse 1, pulse 2 and the triangle by track name or first note; a fourth melodic part is an error; chords keep their highest note with a warning; out-of-range notes are errors; one tempo |
-
-On Super Mario Bros.' 1-1 capture, the FamiStudio text round trip keeps all 405 notes of the 12 songs exactly (start, pitch, length, fine pitch) and 21 of 24 instruments exactly; the other three are sweeps that fall faster than 64 timer units a frame, which FamiStudio's envelope values can't hold (11 values clamped). MIDI keeps all 97 pitched notes of the overworld song (start and pitch); noise comes back by drum class. The test program round-trips exactly through both (`crates/gp-cli/tests/sound.rs`).
-
 ## Sound banks and themes
 
 A sound bank mapping ([format](formats/sound-banks.md)) gives each instrument, or every instrument of a role, a target: the APU (the default), a General MIDI program, or a bank's patch. `gp sound banks` lists the banks found in `$GP_SOUND_BANKS` and `$GP_HOME/sound-banks`; none ship with Game Printer, and a bank's licence is read from a `.license` or `LICENSE` file beside it or its INFO chunk. `crates/gp-sound-bank` renders SF2 banks with rustysynth (MIT, pure Rust): banked channels as MIDI events, the rest on the APU, mixed. SFZ files are listed and mapped but not rendered yet (filed); their channels fall back to the APU and the render says so.
@@ -167,7 +155,7 @@ A song is ready to edit when the model knows it completely (`gp_sound::edit::rea
 
 ## Not yet
 
-These were rows in game-printer's open questions: the Mega Man 2 and Super Mario Bros. 2 driver decoders; music and effects through one play-sound routine; DMC sample bytes in capture (the event stream has the writes, not the bytes the DMC reads); SFZ rendering; capture from rendered audio (`origin = "samples"`); FamiStudio's reading of three details (note times in frames in FamiStudio tempo mode, a pitch envelope's sign, noise note numbering), to confirm by importing an export into FamiStudio; and live mixing of effects over music in the Bevy build, which plays bound songs as pre-rendered files (a hook's APU writes play live).
+These were rows in game-printer's open questions: the Mega Man 2 and Super Mario Bros. 2 driver decoders; music and effects through one play-sound routine; DMC sample bytes in capture (the event stream has the writes, not the bytes the DMC reads); SFZ rendering; capture from rendered audio (`origin = "samples"`); and live mixing of effects over music in the Bevy build, which plays bound songs as pre-rendered files (a hook's APU writes play live).
 
 ## On an arcade recording (AY-8910)
 
@@ -175,8 +163,8 @@ These were rows in game-printer's open questions: the Mega Man 2 and Super Mario
 
 On Tapper (a 1,282-frame clip): 2,114 AY writes, notes by channel 0a 93, 0b 32, 0c 25, 1a 36, 1b 28, 1c 26; fidelity 240 of 240 onsets, pitch and volume on all 3,046 sounding channel frames. The same clip with the first tap 10 frames earlier: writes the same on 943 frames, channel states on 910, first differing at frame 865. The log's writes are, frame by frame, milestone 3's own AY write list (held to MAME's), on 900 frames (a test, skipped without tapper.zip).
 
-### Rendering, MIDI and the decoder on AY
+### Rendering and the decoder on AY
 
 `gp sound render` takes an `ay.log` or an AY song file (`gp-ay-songs 0`, from a capture or `gp sound decode`) as well, and plays it through milestone 3's board sound (`gp_arcade::sound`: the two AYs, the SSIO's duty-cycle volumes and its mute, MAME's resampling) into a stereo WAV at 48 kHz, AY 0 left and AY 1 right. The log keeps each frame's writes but not their times inside it, so every write lands at its frame's start, 30 frames a second. The SSIO's PROM sets the voices' loudness; `--rom` names the romset, else tapper's is looked for in `$GP_ROM_DIR`, and without one every voice plays at full volume. A song renders from the register writes its notes give (`--song`, `--loops` back to its `loop_frame`). `--banks` is the NES's and refused.
 
-`gp sound export SONGS --midi FILE [--song NAME]` writes an AY song as a type 1 MIDI file: a tick a frame, a track per AY channel (`0a` to `1c`) on MIDI channels 1 to 6, each note at the nearest key with a pitch bend (a range of 2 semitones) for the rest of its pitch, its velocity and each later frame's volume (CC 11) the AY volume times 4, and a `loop` marker. `--famistudio` is refused: FamiStudio's AY expansion (Sunsoft 5B) has three channels and the board six. `gp sound import FILE.mid --ay --out SONGS` reads one back: up to six tracks with notes, by track name where it names a channel, a note that starts over another on its track cutting it with a warning, the first tempo. On the five-level Tapper recording, the decoded song of frames 1,102 to 2,837 renders to 57.9 seconds and comes back from its MIDI file with all 794 notes the same (frame, length, period and every frame's volume). The code is `crates/gp-cli/src/sound_ay_render.rs`.
+On the five-level Tapper recording, the decoded song of frames 1,102 to 2,837 renders to 57.9 seconds. The code is `crates/gp-cli/src/sound_ay_render.rs`.

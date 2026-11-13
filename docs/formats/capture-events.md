@@ -2,7 +2,7 @@
 
 A capture run (game-printer's docs/capture-live.md) writes what happens as an event stream, and takes inputs from people and agents as a second stream. Both are NDJSON (one JSON object a line). Lines are appended and never rewritten. This is format 1. The types are in `crates/gp-capture` and the JSON Schema generated from them is `schema/capture-events.json` (`gp self schemas` writes it, and `--check` fails while it's stale).
 
-Brought from game-printer's docs/formats/capture-events.md. The format and `gp-capture`, which reads and appends it, came whole. What writes a run in gameprinter is less: `gp mcp` appends an agent's inputs (every tool's `run` argument, `capture_input`, `requests`) and reads the events (`capture_events`), and `gp watch` takes the same writer lock for its sessions ([watch.md](../watch.md)), whose events are gp-events' own format. Not here yet: the writers of a run's events, `gp capture start`, `resume` and `watch`, and `gp capture input`; `gp serve`'s routes for a run's events, stream and inputs (its `/api/capture/{run}/background` routes are the background work of the mechanic page's REFINE tab, a different thing); `gp capture schema`, whose job `gp self schemas` does; and the play sessions and point-and-tell page that wrote the kinds below.
+Brought from game-printer's docs/formats/capture-events.md. The format and `gp-capture`, which reads and appends it, came whole. What writes a run in gameprinter is less: `gp mcp` appends an agent's inputs (every tool's `run` argument, `capture_input`, `requests`) and reads the events (`capture_events`), and `gp watch` takes the same writer lock for its sessions ([watch.md](../watch.md)), whose events are gp-events' own format. Not here yet: the writers of a run's events, `gp capture start`, `resume` and `watch`, and `gp capture input`; and the play sessions and point-and-tell page that wrote the kinds below.
 
 Format 0 was the research prototype's (game-printer's docs/research/live-capture.md). Format 1 adds the kinds `row` and `run.state`, the input kinds `unpin` and `tool`, and optional fields, and changes one meaning: `questions.open` no longer counts pinned questions. Readers take inputs of format 0 and 1.
 
@@ -110,7 +110,7 @@ The writer applies inputs in order. Answers, pins and unpins change what a round
 
 ## Transport
 
-Not here yet: game-printer's `gp serve` served the stream in three ways, listed with its other endpoints in its docs/inspector.md.
+game-printer's `gp serve` served the stream in three ways, listed with its other endpoints in its docs/inspector.md. gameprinter's `gp serve` has the same three routes, but the events it serves are its background work's (the mechanic page's REFINE tab), kept in memory (`serve::background::events_after`), not a run's `events.ndjson`; `gp capture events RUN` prints them.
 
 | Request | Answers |
 |---|---|

@@ -151,6 +151,7 @@ fn config(work: &Path) -> Config {
         home: work.join("home"),
         rom: None,
         assets: None,
+        games: None,
     }
 }
 
@@ -361,13 +362,7 @@ fn fork_and_describe_need_no_gp() {
         json!({ "template": "mosshop", "copy": "../x" }),
     )
     .unwrap();
-    assert!(
-        r.is_error
-            && r.json["error"]
-                .as_str()
-                .unwrap()
-                .contains("working copy name")
-    );
+    assert!(r.is_error && r.json["error"].as_str().unwrap().contains("copy name"));
     let r = tools::call(
         &c,
         "template_fork",
@@ -409,6 +404,223 @@ fn fork_and_describe_need_no_gp() {
     assert_eq!(d["slots"].as_array().unwrap().len(), mosshop().assets.len());
     // The committed template is untouched by anything above.
     assert!(!repo().join("templates/mosshop/hop").exists());
+}
+
+/// A copy holds the whole template folder, subfolders included, and says
+/// what it still needs before it runs when the fork can't make it here
+/// (no `gp` in these tests).
+#[test]
+fn a_fork_copies_subfolders_and_says_what_it_needs() {
+    let work = tempfile::tempdir().unwrap();
+    let c = config(work.path());
+    let r = tools::call(
+        &c,
+        "template_fork",
+        json!({ "template": "mosshop", "copy": "hop" }),
+    )
+    .unwrap();
+    assert!(!r.is_error, "{}", r.json);
+    let copy = work.path().join("hop");
+    for f in ["level-kit/kit.toml", "level-kit/level-kit.md", "AGENTS.md"] {
+        assert!(copy.join(f).is_file(), "{f} wasn't copied: {}", r.json);
+        assert!(
+            r.json["files"].as_array().unwrap().contains(&json!(f)),
+            "{f} isn't listed: {}",
+            r.json
+        );
+    }
+    assert!(copy.join("themes").is_dir());
+    // Moss Hop's ROM is built from source, which the fork doesn't do.
+    assert_eq!(r.json["ready"], false, "{}", r.json);
+    let next = r.json["next"].as_str().unwrap();
+    assert!(
+        next.contains("just mosshop") && next.contains("gp assets lift"),
+        "{next}"
+    );
+
+    // A game made here: its baselines come along, and the build its assets
+    // need is tried (and fails here, with no gp) and named.
+    let r = tools::call(
+        &c,
+        "template_fork",
+        json!({ "template": "badge-in", "copy": "badge" }),
+    )
+    .unwrap();
+    assert!(!r.is_error, "{}", r.json);
+    assert!(work.path().join("badge/baselines/lobby.toml").is_file());
+    assert_eq!(r.json["tier"], "open");
+    assert_eq!(r.json["ready"], false);
+    assert!(r.json["assets"]["tried"].is_string(), "{}", r.json);
+    let next = r.json["next"].as_str().unwrap();
+    assert!(next.contains("gp template build"), "{next}");
+    assert!(r.json.get("notes").is_none(), "{}", r.json);
+}
+
+/// A made-up game folder in a games checkout: a commercial game's
+/// template, with custom code, build output, git's files and a ROM image
+/// left in it by hand.
+fn games_checkout(root: &Path) -> PathBuf {
+    let games = root.join("games");
+    let g = games.join("hopper");
+    for d in ["ext/src", "level-kit", "target/debug", ".git", "inputs"] {
+        std::fs::create_dir_all(g.join(d)).unwrap();
+    }
+    std::fs::write(
+        g.join("template.toml"),
+        r#"[template]
+format = "0.3.1"
+id = "hopper-us"
+title = "Hopper"
+tier = "commercial"
+model = "model.toml"
+
+[source]
+id = "mosshop"
+platform = "nes"
+how = "rom"
+accepts = ["00"]
+
+[recipe]
+asset_map = "assets/hopper.toml"
+
+[ext]
+hooks = ["hop_spring"]
+crate = "ext"
+"#,
+    )
+    .unwrap();
+    std::fs::copy(
+        repo().join("templates/mosshop/model.toml"),
+        g.join("model.toml"),
+    )
+    .unwrap();
+    std::fs::write(g.join("ext/src/lib.rs"), "// the hooks\n").unwrap();
+    std::fs::write(g.join("level-kit/kit.toml"), "# the kit\n").unwrap();
+    std::fs::write(g.join("target/debug/module.wasm"), "built").unwrap();
+    std::fs::write(g.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    let mut rom = b"NES\x1a".to_vec();
+    rom.extend([0u8; 16]);
+    std::fs::write(g.join("inputs/hopper.nes"), rom).unwrap();
+    games
+}
+
+#[test]
+fn a_template_in_the_games_checkout_is_found_listed_and_copied() {
+    let work = tempfile::tempdir().unwrap();
+    let mut c = config(work.path());
+    c.games = Some(games_checkout(work.path()));
+    // By the folder's name and by the template's id.
+    for (template, copy) in [("hopper", "mine"), ("hopper-us", "mine2")] {
+        let r = tools::call(
+            &c,
+            "template_fork",
+            json!({ "template": template, "copy": copy }),
+        )
+        .unwrap();
+        assert!(!r.is_error, "{}", r.json);
+        assert_eq!(r.json["id"], "hopper-us");
+        assert!(r.json["from"].as_str().unwrap().ends_with("games/hopper"));
+    }
+    let r = tools::call(
+        &c,
+        "template_fork",
+        json!({ "template": "hopper", "copy": "mine3" }),
+    )
+    .unwrap();
+    let copy = work.path().join("mine3");
+    assert!(copy.join("ext/src/lib.rs").is_file());
+    assert!(copy.join("level-kit/kit.toml").is_file());
+    assert!(!copy.join("target").exists() && !copy.join(".git").exists());
+    assert!(!copy.join("inputs/hopper.nes").exists());
+    assert_eq!(
+        r.json["left_out"][0]["path"], "inputs/hopper.nes",
+        "{}",
+        r.json
+    );
+    // A commercial game's template is copied: the copy holds nothing from
+    // the ROM, and it says what that means and what it needs.
+    assert_eq!(r.json["tier"], "commercial");
+    assert_eq!(r.json["ready"], false);
+    assert!(
+        r.json["next"]
+            .as_str()
+            .unwrap()
+            .contains("own ROM of Hopper"),
+        "{}",
+        r.json
+    );
+    let notes = r.json["notes"].to_string();
+    assert!(notes.contains("build_publish refuses"), "{notes}");
+    assert!(notes.contains("hop_spring"), "{notes}");
+    // The copy is one the other tools take.
+    let d = tools::call(&c, "surface_describe", json!({ "copy": "mine3" })).unwrap();
+    assert!(!d.is_error, "{}", d.json);
+
+    // registry_search lists it beside the repo's templates.
+    let s = tools::call(&c, "registry_search", json!({ "query": "hopper" })).unwrap();
+    assert!(!s.is_error, "{}", s.json);
+    assert_eq!(s.json["templates"][0]["template"], "hopper", "{}", s.json);
+    assert!(
+        s.json["templates"][0]["folder"]
+            .as_str()
+            .unwrap()
+            .ends_with("games/hopper")
+    );
+    let all = tools::call(&c, "registry_search", json!({ "limit": 50 })).unwrap();
+    let names: Vec<&str> = all.json["templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["template"].as_str().unwrap())
+        .collect();
+    assert!(
+        names.contains(&"mosshop") && names.contains(&"hopper"),
+        "{names:?}"
+    );
+}
+
+#[test]
+fn a_fork_refuses_what_it_cant_copy_and_writes_nothing() {
+    let work = tempfile::tempdir().unwrap();
+    let mut c = config(work.path());
+    // No such template: the error says where the tools looked.
+    let r = tools::call(
+        &c,
+        "template_fork",
+        json!({ "template": "hopper", "copy": "mine" }),
+    )
+    .unwrap();
+    assert!(r.is_error);
+    let err = r.json["error"].as_str().unwrap();
+    assert!(
+        err.contains("GP_GAMES_DIR") && err.contains("registry_search"),
+        "{err}"
+    );
+    // A template holding a symlink isn't copied, and no copy is left.
+    let games = games_checkout(work.path());
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("/etc/hosts", games.join("hopper/level-kit/hosts")).unwrap();
+    c.games = Some(games);
+    let r = tools::call(
+        &c,
+        "template_fork",
+        json!({ "template": "hopper", "copy": "mine" }),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        assert!(r.is_error, "{}", r.json);
+        let err = r.json["error"].as_str().unwrap();
+        assert!(err.contains("level-kit/hosts is a symlink"), "{err}");
+        assert!(!work.path().join("mine").exists());
+        let left: Vec<_> = std::fs::read_dir(work.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".mine"))
+            .collect();
+        assert!(left.is_empty(), "a half copy was left behind");
+    }
+    let _ = r;
 }
 
 #[test]
