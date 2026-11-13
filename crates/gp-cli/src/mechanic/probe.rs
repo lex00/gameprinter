@@ -83,13 +83,13 @@ const ARCADE_ORDER: &[u8; 7] = b"CSRLDUT";
 #[derive(Clone, Debug)]
 pub(crate) struct Board {
     /// Each button's letter and its bit in controller 1's byte.
-    keys: Vec<(u8, u8)>,
+    pub(crate) keys: Vec<(u8, u8)>,
     /// Whether a step may press controller 2 (`P1|P2`).
     two: bool,
     /// RAM addresses run 0 to this, less one.
     space: u32,
     /// An arcade log's set and columns, for the logs saved; none on the NES.
-    arcade: Option<ArcadeLayout>,
+    pub(crate) arcade: Option<ArcadeLayout>,
 }
 
 impl Board {
@@ -148,7 +148,7 @@ impl Board {
     }
 
     /// An empty log of this board's spelling.
-    fn log(&self, controllers: u8) -> InputLog {
+    pub(crate) fn log(&self, controllers: u8) -> InputLog {
         let mut l = InputLog::new(controllers);
         l.arcade = self.arcade.clone();
         if l.arcade.is_some() {
@@ -181,7 +181,7 @@ impl Layout {
         }
     }
 
-    fn sparse(set: BTreeSet<u16>) -> Self {
+    pub(crate) fn sparse(set: BTreeSet<u16>) -> Self {
         Self {
             addrs: set.into_iter().collect(),
             dense: false,
@@ -212,9 +212,12 @@ impl Layout {
 }
 
 /// The byte at RAM address `a` of the original now.
-fn peek(o: &OriginalRuntime, a: u16) -> Result<u8> {
+pub(crate) fn peek(o: &OriginalRuntime, a: u16) -> Result<u8> {
     if let Some(n) = o.nes() {
         return Ok(n.nes().wram()[usize::from(a)]);
+    }
+    if let OriginalRuntime::Arcade(r) = o {
+        return Ok(r.tapper().peek(a));
     }
     let sel = format!("ram[{a:#06x}]");
     o.query(&sel)
@@ -226,7 +229,7 @@ fn peek(o: &OriginalRuntime, a: u16) -> Result<u8> {
 }
 
 /// One frame on the original.
-fn step(o: &mut OriginalRuntime, f: &InputFrame) -> Result<()> {
+pub(crate) fn step(o: &mut OriginalRuntime, f: &InputFrame) -> Result<()> {
     o.step(&[gp_runtime::InputFrame {
         buttons: f.buttons_word(),
         axes: Vec::new(),
@@ -356,7 +359,7 @@ fn pad(b: &Board, s: &str) -> Result<u8> {
 
 /// Both controllers' buttons, controller 1 in the low byte: `P1`, or
 /// `P1|P2` for a press on controller 2 as well (the NES only).
-fn pads(b: &Board, s: &str) -> Result<u16> {
+pub(crate) fn pads(b: &Board, s: &str) -> Result<u16> {
     match s.split_once('|') {
         Some(_) if !b.two => bail!("{s}: this board has one set of controls"),
         Some((x, y)) => Ok(u16::from(pad(b, x)?) | u16::from(pad(b, y)?) << 8),
@@ -364,7 +367,7 @@ fn pads(b: &Board, s: &str) -> Result<u16> {
     }
 }
 
-fn press(p: u16) -> InputFrame {
+pub(crate) fn press(p: u16) -> InputFrame {
     let [p1, p2] = p.to_le_bytes();
     InputFrame {
         polled: true,
@@ -421,15 +424,15 @@ enum Op {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Atom {
-    addr: u16,
+pub(crate) struct Atom {
+    pub(crate) addr: u16,
     op: Op,
     v: i64,
 }
 
 /// Tests joined by `and`.
 #[derive(Clone, Debug)]
-struct Cond(Vec<Atom>);
+pub(crate) struct Cond(pub(crate) Vec<Atom>);
 
 impl Cond {
     /// Whether it holds on a kept frame.
@@ -438,7 +441,7 @@ impl Cond {
     }
 
     /// Whether it holds on the original now.
-    fn holds_now(&self, o: &OriginalRuntime) -> Result<bool> {
+    pub(crate) fn holds_now(&self, o: &OriginalRuntime) -> Result<bool> {
         let mut err = None;
         let r = self.holds_by(|a| {
             peek(o, a).unwrap_or_else(|e| {
@@ -452,7 +455,7 @@ impl Cond {
         }
     }
 
-    fn holds_by(&self, mut byte: impl FnMut(u16) -> u8) -> bool {
+    pub(crate) fn holds_by(&self, mut byte: impl FnMut(u16) -> u8) -> bool {
         self.0.iter().all(|a| {
             let x = i64::from(byte(a.addr));
             match a.op {
@@ -467,7 +470,7 @@ impl Cond {
     }
 }
 
-fn num(s: &str) -> Result<i64> {
+pub(crate) fn num(s: &str) -> Result<i64> {
     if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix('$')) {
         return i64::from_str_radix(h, 16).with_context(|| format!("not a number: {s}"));
     }
@@ -485,7 +488,7 @@ fn addr(names: &Names, s: &str) -> Result<u16> {
     Ok(a as u16)
 }
 
-fn cond(names: &Names, t: &[&str]) -> Result<Cond> {
+pub(crate) fn cond(names: &Names, t: &[&str]) -> Result<Cond> {
     let mut atoms = Vec::new();
     for part in t.split(|w| *w == "and") {
         let [name, op, v] = part else {
@@ -829,7 +832,7 @@ pub(crate) struct Played {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn play(
+pub(crate) fn play(
     mut o: OriginalRuntime,
     board: &Board,
     names: &Names,

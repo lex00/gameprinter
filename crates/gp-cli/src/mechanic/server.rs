@@ -944,6 +944,18 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
                 None => Ok(Response::error(404, "no such pinned file")),
             }
         }
+        // A stored path's log, for a request's PLAY FROM HERE (gp mechanic
+        // triage): the page replays it to the request's frame.
+        ("GET" | "HEAD", p) if p.starts_with("/api/paths/") => {
+            let sha = &p["/api/paths/".len()..];
+            match clip_paths::read_path(&s.paths.home, sha) {
+                Ok(log) => Ok(Response::bytes(
+                    "text/plain; charset=utf-8",
+                    log.to_text().into_bytes(),
+                )),
+                Err(e) => Ok(Response::error(404, &format!("{e:#}"))),
+            }
+        }
         ("POST", "/api/paths") => {
             // A real-input log from power-on, kept once by its hash: the whole
             // log, or `base` (a path already stored) and the frames after it.

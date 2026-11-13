@@ -250,3 +250,14 @@ main[hidden] { display: none; }
 .pane .bar > span { display: block; height: 100%; background: var(--nes-2a); }
 .pane button { font: bold 12px var(--mono); background: var(--nes-0f); color: var(--fg); border: 2px solid var(--line); padding: 3px 8px; cursor: pointer; }
 .pane .q { border: 2px solid var(--nes-28); padding: 6px 10px; margin: 6px 0; }
+
+/* gp mechanic triage: the person's rows first with their request, the
+   tools' rows collapsed at the end. */
+.st-needs-you { border-color: var(--nes-28); color: var(--nes-0f); background: var(--nes-28); }
+.st-by-tools { border-color: var(--nes-1a); color: var(--nes-2a); border-style: dashed; }
+#queue .qreq { color: var(--fg); }
+#queue .qwhy { font-size: 12px; }
+#queue .qplay { grid-column: 2; justify-self: start; margin-top: 4px; font: 12px var(--mono); letter-spacing: 0.08em; background: var(--nes-28); color: var(--nes-0f); border: 2px solid var(--nes-28); padding: 2px 8px; cursor: pointer; }
+#queue li.qgroup { display: block; cursor: default; padding: 6px 0 0; }
+#queue li.qgroup summary { cursor: pointer; color: var(--nes-2a); padding: 0 8px; }
+#queue ol.qtools { list-style: none; margin: 4px 0 0; padding: 0; }

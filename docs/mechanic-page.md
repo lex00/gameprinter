@@ -139,6 +139,37 @@ right, tap, wait, coin and start (gp-explore's arcade palette), keeps the
 clip as an arcade log, and plays its `--frames` without counting jumps,
 which are a platformer's measure; `--judge`'s jump measures stay the NES's.
 
+## The tools first: gp mechanic triage
+
+The quest log is for play only the person can get. `gp mechanic triage
+GAME` has the tools try each row first, and each lead (`gp mechanic leads`,
+NES only), with `--budget` seconds a tool. What a row has to show is a test
+on RAM in the game's package folder, `triage.toml` (its format is in
+`crates/gp-cli/src/mechanic/triage.rs`): it comes to hold when a clip shows
+the row. The tools, in order:
+
+| Tool | What it tries |
+|---|---|
+| corpus | The corpus plan's clips, each play once, the test looked for inside each clip |
+| script | The row's `try` steps (probe steps) from its `from` start |
+| autoplay | gp-arcade's autoplay example with `--search` (arcade): once from power-on, then on from the row's near point, a save point |
+| search | Seeded presses from the row's near point, the generator `gp capture dense` uses |
+| demo | `gp mechanic demo` with Laya (NES), when Laya answers |
+
+A run that shows the row is cut around the frame the test holds and saved
+into the row's session as a clip with `by = "tools"` and its `tool`: a path
+and the presses after it, scored like any clip. The row's `triage` says
+"tools", or "you" with why each tool missed and a request: the start (a
+path and frame where the row's `near` test first held, in a corpus clip or
+the tools' own runs), what to do and when to stop.
+
+The quest log shows NEEDS YOU rows first with their request and PLAY FROM
+HERE, which opens the row, plays the request's path to its frame unseen,
+makes that the quick save (F8 goes back to it) and starts recording into
+the row: the person plays only the hard stretch. Rows the tools made are
+under DONE BY THE TOOLS, collapsed, with their clips. Rows not triaged show
+as before.
+
 ## Routes
 
 | Route | What |
@@ -151,3 +182,4 @@ which are a platformer's measure; `--judge`'s jump measures stay the NES's.
 | `GET /api/sealed`, `/api/sealed/ID.log` | The sealed runs, for the person alone |
 | `GET /api/clips/N.measure.json` | A clip's measurements, once `gp mechanic contacts` writes them |
 | `GET /api/live` | The demo as it plays |
+| `GET /api/paths/SHA` | A stored path's log, for PLAY FROM HERE |

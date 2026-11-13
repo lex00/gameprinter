@@ -57,6 +57,7 @@ pub(crate) mod review;
 mod scores;
 pub(crate) mod server;
 pub(crate) mod session;
+mod triage;
 pub(crate) mod watch;
 pub(crate) mod watch_page;
 
@@ -421,6 +422,43 @@ pub enum MechanicCmd {
         top: usize,
         #[arg(long)]
         add: bool,
+    },
+    /// The tools try each quest log row and each lead first, with a
+    /// budget, so the queue holds only play the tools can't get: the
+    /// corpus's clips, the row's scripted presses, gp-arcade's autoplay
+    /// with its search (from power-on and from save points), seeded
+    /// presses from the row's near point, and the demo with Laya. What a
+    /// row has to show is its test in the package's triage.toml. A run
+    /// that shows it is saved into the row's session as a clip made by the
+    /// tools and the row is marked "made by the tools"; else "needs you",
+    /// with why, and a request: a start point (a path and a frame), what
+    /// to do and when to stop, which the page's PLAY FROM HERE loads.
+    Triage {
+        game: String,
+        /// Only these rows (default every item of triage.toml).
+        rows: Vec<String>,
+        /// Seconds each tool may spend on a row.
+        #[arg(long, default_value_t = 60)]
+        budget: u64,
+        /// How many leads (gp mechanic leads, NES only) to triage too.
+        #[arg(long, default_value_t = 5)]
+        leads: usize,
+        /// gp-arcade's autoplay example binary (default: $GP_AUTOPLAY, or
+        /// beside gp's build).
+        #[arg(long)]
+        autoplay: Option<PathBuf>,
+        /// Frames autoplay plays from power-on.
+        #[arg(long, default_value_t = 12000)]
+        autoplay_frames: usize,
+        /// The decision server for the demo.
+        #[arg(long, default_value = "http://127.0.0.1:7720")]
+        decide: String,
+        /// The games checkout (default $GP_GAMES_DIR).
+        #[arg(long)]
+        games: Option<PathBuf>,
+        /// Say what would land where, and write nothing.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// New mechanics to look at: every clip of every mechanic of GAME is
     /// replayed, and the routines and RAM bytes the ROM dataset says stage
@@ -804,6 +842,30 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             let (v, text) = crate::harvest::harvest(paths, game, recording, *add, *top)?;
             Ok(Outcome::ok(v, text))
         }
+        MechanicCmd::Triage {
+            game,
+            rows,
+            budget,
+            leads,
+            autoplay,
+            autoplay_frames,
+            decide,
+            games,
+            dry_run,
+        } => triage::run(
+            paths,
+            &triage::Args {
+                game,
+                games: games.as_deref(),
+                rows,
+                budget: *budget,
+                leads: *leads,
+                autoplay: autoplay.as_deref(),
+                autoplay_frames: *autoplay_frames,
+                decide,
+                dry_run: *dry_run,
+            },
+        ),
         MechanicCmd::Leads { game, top, add } => {
             if !name_ok(game) {
                 bail!("a game name is lower-case letters, digits and dashes: {game}");

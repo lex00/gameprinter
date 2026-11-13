@@ -1198,7 +1198,7 @@ function showTo(row) {
  * recorded, reviewed and sent. */
 function markTarget() {
   const on = mode === "recording" || mode === "review" || mode === "sending" ? clipFor : null;
-  for (const li of $("queue").children) li.classList.toggle("target", li.dataset.mechanic === on);
+  for (const li of $("queue").querySelectorAll("li[data-mechanic]")) li.classList.toggle("target", li.dataset.mechanic === on);
 }
 
 /** An input log's header, and its frames one line each: an NES log's frame
@@ -1704,12 +1704,17 @@ async function refresh() {
   if (queue.dataset.key !== qkey) {
     queue.dataset.key = qkey;
     queue.innerHTML = "";
-    for (const q of all) {
+    // gp mechanic triage's rows: what needs the person first, with its
+    // request; what the tools made, collapsed at the end with its clips.
+    const ordered = [...all.filter((q) => q.triage?.by === "you"), ...all.filter((q) => !q.triage?.by), ...all.filter((q) => q.triage?.by === "tools")];
+    const toolsList = toolsGroup(all.filter((q) => q.triage?.by === "tools").length);
+    for (const q of ordered) {
       const li = document.createElement("li");
       const st = document.createElement("span");
       const status = shownStatus(q);
       st.className = `st st-${status.replace(/ /g, "-")}`;
-      st.textContent = LABELS[status] ?? status.toUpperCase();
+      st.textContent = triageLabel(q) ?? LABELS[status] ?? status.toUpperCase();
+      if (q.triage?.by) st.className = `st st-${q.triage.by === "you" ? "needs-you" : "by-tools"}`;
       li.appendChild(st);
       const name = document.createElement("span");
       name.className = "qname";
@@ -1741,10 +1746,12 @@ async function refresh() {
           li.appendChild(give);
         }
       }
+      triageLines(li, q);
       li.dataset.mechanic = q.mechanic;
       li.addEventListener("click", () => (mode === "refine" ? void refine.enter(q.mechanic) : void pick(q.mechanic)));
-      queue.appendChild(li);
+      (q.triage?.by === "tools" ? toolsList : queue).appendChild(li);
     }
+    if (toolsList) queue.appendChild(toolsList.closest("li"));
     markTarget();
     showFindings(all.find((q) => q.mechanic === session.mechanic));
     if (mode === "refine") $("findings").hidden = true;
@@ -1795,6 +1802,64 @@ async function refresh() {
   }
   if (mode === "live") setState("");
   updateBusy();
+}
+
+// gp mechanic triage's marks ------------------------------------------
+
+/** A triaged row's badge: the person's to play, or made by the tools. */
+function triageLabel(q) {
+  if (q.triage?.by === "you") return "NEEDS YOU";
+  if (q.triage?.by === "tools") return "BY THE TOOLS";
+  return null;
+}
+
+/** The collapsed group the tools' rows go in: an <ol> inside a <details>
+ * row at the end of the quest log; none when the tools made nothing. */
+function toolsGroup(n) {
+  if (!n) return null;
+  const li = document.createElement("li");
+  li.className = "qgroup";
+  const d = document.createElement("details");
+  const sum = document.createElement("summary");
+  sum.textContent = `Done by the tools (${n})`;
+  sum.title = "gp mechanic triage: the tools made a clip of each of these on their own, in its session, scored like any clip";
+  d.appendChild(sum);
+  const ol = document.createElement("ol");
+  ol.className = "qtools";
+  d.appendChild(ol);
+  li.appendChild(d);
+  return ol;
+}
+
+/** A triaged row's lines: for the person, the request (where it starts,
+ * what to do, when to stop) and PLAY FROM HERE; for the tools, which tool
+ * and its clips. Why the tools couldn't is the badge's tooltip. */
+function triageLines(li, q) {
+  const t = q.triage;
+  if (!t?.by) return;
+  const line = (text, cls) => {
+    const s = document.createElement("span");
+    s.className = `qnote ${cls}`;
+    s.textContent = text;
+    li.appendChild(s);
+    return s;
+  };
+  if (t.by === "tools") {
+    const clips = (t.clips ?? []).map((n) => `clip ${n}`).join(", ");
+    line(`${t.why}${clips ? ` (${clips})` : ""}`, "qtool");
+    return;
+  }
+  const r = t.request ?? {};
+  line(`Starts: ${r.where ?? r.from ?? "power-on"}`, "qreq");
+  if (r.do) line(`Do: ${r.do}`, "qreq");
+  if (r.stop) line(`Stop: ${r.stop}`, "qreq");
+  line(`The tools: ${t.why}`, "qwhy");
+  const b = document.createElement("button");
+  b.className = "qplay";
+  b.textContent = "PLAY FROM HERE";
+  b.title = "Opens this row at the request's start, and starts recording: play only the hard stretch, then R";
+  b.addEventListener("click", (e) => { e.stopPropagation(); void playFrom(q.mechanic); });
+  li.appendChild(b);
 }
 
 // What the queue's statuses show as.
@@ -1969,6 +2034,48 @@ async function pick(m) {
   } catch (e) { setState(String(e)); toast(`Couldn't open ${m}.`); } finally { picking = null; }
   const row = (session.queue ?? []).find((q) => q.mechanic === m);
   if (row && (row.status === "agent working" || row.status === "in line")) void enterViewer(m);
+}
+
+/** A request's PLAY FROM HERE (gp mechanic triage): opens the row, plays
+ * the request's path to its frame unseen, makes that the quick save (F8
+ * goes back to it) and starts recording into the row, so the person plays
+ * only the hard stretch. */
+let starting = null;
+async function playFrom(m) {
+  if (starting) { toast("Still loading the start point."); return; }
+  const row = (session?.queue ?? []).find((q) => q.mechanic === m);
+  const r = row?.triage?.request;
+  if (!r) return;
+  if (m !== session.mechanic) await pick(m);
+  if (session.mechanic !== m) return;
+  if (mode === "idle") leaveIdle();
+  if (mode !== "live") { toast("Finish what's on the game first."); return; }
+  starting = m;
+  mode = "loading";
+  try {
+    if (r.path) {
+      const res = await fetch(`api/paths/${r.path}`);
+      if (!res.ok) throw new Error(await res.text());
+      player.replay(0, rom, await res.text());
+      if (!(await runToSliced(0, r.frame ?? 0, "Loading the start point", () => mode === "loading"))) return;
+    } else {
+      player.power(0, rom);
+    }
+    setBar(0, null);
+    flushAudio();
+    save = player.save(0);
+    mode = "live";
+    startRecording();
+    clipFor = m;
+    markTarget();
+    toast(`Recording from the start point. ${r.stop ? "Stop: " + r.stop : "R stops."}`, 6000);
+  } catch (e) {
+    toast(`Couldn't load the start point: ${e.message ?? e}`);
+  } finally {
+    if (mode === "loading") mode = "live";
+    $("bar").hidden = true;
+    starting = null;
+  }
 }
 
 // Input ----------------------------------------------------------------
