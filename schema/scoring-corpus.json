@@ -1,0 +1,163 @@
+{
+  "$id": "game-printer:scoring-corpus@0.5.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Scoring corpus manifest, `corpus.toml` beside a clip set",
+  "type": "object",
+  "properties": {
+    "changelog": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Change"
+      }
+    },
+    "corpus": {
+      "$ref": "#/$defs/Head"
+    },
+    "needs": {
+      "$ref": "#/$defs/Needs",
+      "default": {
+        "generator": "",
+        "mapping": ""
+      }
+    },
+    "recipes": {
+      "description": "Each clip's recipe hash at this version, by ID: what `bump`\ncompares the clip set with.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {}
+    },
+    "target": {
+      "$ref": "#/$defs/Target"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "corpus",
+    "target"
+  ],
+  "$defs": {
+    "Change": {
+      "type": "object",
+      "properties": {
+        "added": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "changed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "date": {
+          "type": "string"
+        },
+        "removed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "says": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "date"
+      ]
+    },
+    "Head": {
+      "type": "object",
+      "properties": {
+        "authors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "format": {
+          "description": "The clip set format this manifest is part of, [`cs::FORMAT`].",
+          "type": "string"
+        },
+        "hash": {
+          "description": "The content hash over the clips' recipes ([`cs::content_hash`]).",
+          "type": "string"
+        },
+        "license": {
+          "type": "string"
+        },
+        "metadata": {
+          "description": "The BLAKE3 of `clips.toml` itself: a change here with the same\n`hash` is metadata only.",
+          "type": "string",
+          "default": ""
+        },
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "version": {
+          "description": "Semver of the corpus's content.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "name",
+        "version",
+        "hash"
+      ]
+    },
+    "Needs": {
+      "description": "What a corpus needs of the tools that make its clips again.",
+      "type": "object",
+      "properties": {
+        "generator": {
+          "description": "gp's version and the corpus generator's, as the clip set says.",
+          "type": "string",
+          "default": ""
+        },
+        "mapping": {
+          "description": "The state mapping's `schema` the curves were measured with.",
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false
+    },
+    "Target": {
+      "description": "The game a corpus is for.",
+      "type": "object",
+      "properties": {
+        "game": {
+          "description": "The template or source ID.",
+          "type": "string",
+          "default": ""
+        },
+        "patch": {
+          "description": "For a hack: the patch's SHA-256.",
+          "type": "string"
+        },
+        "rom": {
+          "description": "The base ROM's headerless SHA-256, as `sources/<platform>.toml`\nregisters it.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "rom"
+      ]
+    }
+  }
+}

@@ -44,13 +44,16 @@ pub(crate) struct DeriveArgs<'a> {
 }
 
 /// Source files read in full, so constants defined in one resolve in
-/// another. Other cited files (TOML, Markdown) are read for their cited
+/// another: 6502 source, and Z80 source for an arcade game (gp-derive's
+/// asm reads either, by the file's mnemonics). Other cited files (TOML, Markdown) are read for their cited
 /// lines only.
 fn is_asm(file: &str) -> bool {
     let lower = file.to_ascii_lowercase();
-    [".s", ".asm", ".inc", ".a65", ".65s"]
-        .iter()
-        .any(|e| lower.ends_with(e))
+    [
+        ".s", ".asm", ".inc", ".a65", ".65s", ".z80", ".s80", ".z80s",
+    ]
+    .iter()
+    .any(|e| lower.ends_with(e))
 }
 
 /// The sources every ref of the model names, by pin (`None`: the repo).

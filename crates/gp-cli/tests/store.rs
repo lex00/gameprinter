@@ -126,7 +126,9 @@ fn put_get_stats_verify_and_reindex() {
     assert_eq!(got["bytes"], 10);
     assert_eq!(std::fs::read(&out).unwrap(), b"some bytes");
     let raw = env.gp(&["store", "get", &hash]);
-    assert_eq!(raw.stdout, b"some bytes\n");
+    // The object's bytes, exactly: a command that printed its own output
+    // returns no text, so nothing follows them.
+    assert_eq!(raw.stdout, b"some bytes");
     let stats = env.json(&["store", "stats"]);
     assert_eq!(
         (stats["objects"].as_u64(), stats["bytes"].as_u64()),

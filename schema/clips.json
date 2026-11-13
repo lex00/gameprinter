@@ -1,0 +1,209 @@
+{
+  "$id": "game-printer:clips@0.5.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Clip set, `clips.toml`",
+  "description": "A clip set file.",
+  "type": "object",
+  "properties": {
+    "clips": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Recipe"
+      }
+    },
+    "clipset": {
+      "$ref": "#/$defs/Header"
+    },
+    "import": true,
+    "mutant": {
+      "type": "array",
+      "items": true
+    },
+    "recordings": {
+      "description": "Named recordings starts are taken from; carried through unread, as\n`mutant` and `import` are, so a set this gp rewrites keeps them.",
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "clipset"
+  ],
+  "$defs": {
+    "Header": {
+      "description": "What a clip set was made from.",
+      "type": "object",
+      "properties": {
+        "format": {
+          "description": "[`FORMAT`].",
+          "type": "string"
+        },
+        "game": {
+          "description": "The template's ID.",
+          "type": "string",
+          "default": ""
+        },
+        "generator": {
+          "description": "What made the clips: gp's version and the corpus generator's.",
+          "type": "string"
+        },
+        "mapping": {
+          "description": "The state mapping's schema the curves were measured with.",
+          "type": "string"
+        },
+        "model": {
+          "description": "The model the set was chosen on (informative).",
+          "type": "string"
+        },
+        "rom": {
+          "description": "The ROM's SHA-256.",
+          "type": "string"
+        },
+        "run": {
+          "description": "The run it was chosen from (informative).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "format"
+      ]
+    },
+    "Recipe": {
+      "description": "One clip.",
+      "type": "object",
+      "properties": {
+        "aims": {
+          "description": "For an aimed clip: the mutants it is aimed at.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "coverage": {
+          "description": "For a dense clip: the hash of the original's code map over the clip.",
+          "type": "string"
+        },
+        "curve": {
+          "description": "The hash of the original's mapped measures on every frame.",
+          "type": "string"
+        },
+        "found": {
+          "description": "The fixes found on it.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "frames": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "guards": {
+          "description": "The mutants it catches.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "holds": {
+          "description": "What it exercises (the prune's parts).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "presses": {
+          "description": "Button spans from the start, `right+b@0-59`.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "presses_file": {
+          "description": "A `.presses` file in place of `presses`, for a long one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requires": {
+          "description": "Clips the queue needs to pass first.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source": {
+          "description": "`generated`, `played` (a person's, from a save point), `aimed` or\n`dense` (chosen for the original's code it runs).",
+          "type": "string",
+          "default": "generated"
+        },
+        "start": {
+          "$ref": "#/$defs/StartRecipe"
+        },
+        "why": {
+          "description": "Why it is kept or made, in game words.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "frames",
+        "start"
+      ]
+    },
+    "StartRecipe": {
+      "description": "Where a clip starts: a frame of presses from power-on (a save point's,\nin a `.presses` file beside the set), or of a recording, which this gp\nhas none of.",
+      "type": "object",
+      "properties": {
+        "context": {
+          "description": "The start's kind: `level_start`, `pit`, `wall`, a corpus context.",
+          "type": "string"
+        },
+        "frame": {
+          "description": "The original's frame.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "level": {
+          "type": "string"
+        },
+        "model_frame": {
+          "description": "The model's frame there, as the lockstep counts it: checked when\nthe start is made again.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "presses_from_power_on": {
+          "description": "A `.presses` file of spans from power-on, relative to the set's\nfolder.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recording": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "frame"
+      ]
+    }
+  }
+}

@@ -1,0 +1,117 @@
+{
+  "$id": "game-printer:profiles@0.2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Profiles",
+  "description": "A `profiles.toml`.",
+  "type": "object",
+  "properties": {
+    "format": {
+      "type": "string"
+    },
+    "groups": {
+      "description": "The switches, in groups, in the order an options screen shows them.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Group"
+      }
+    },
+    "presets": {
+      "description": "Named sets of switches, by name, besides [`BASE`].",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Preset"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "format"
+  ],
+  "$defs": {
+    "Group": {
+      "description": "A group of switches, such as \"physics fixes\" or \"assist\".",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "switches": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Switch"
+          }
+        },
+        "title": {
+          "description": "The group's heading on an options screen; the name without it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "Preset": {
+      "description": "A named set of switches, such as \"normal\".",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "switches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "switches"
+      ]
+    },
+    "Switch": {
+      "description": "One switch: values to set and options to turn off while it's on.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "What turning it on does, in plain words, for the options screen.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "off": {
+          "description": "Model paths to remove, so each goes back to its default: an option\noff, a list empty.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "set": {
+          "description": "New values by model path, of the type the base has there.",
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "description"
+      ]
+    }
+  }
+}

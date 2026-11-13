@@ -9,8 +9,10 @@
 //! picks among a question's choices from a clip's measured jumps.
 //!
 //! The model is Laya (Convai's open, Jev-compatible decision model), over
-//! Jev's wire format: `just laya` serves it on 127.0.0.1:7720
-//! (scripts/laya/serve.mjs). The decision is the model's; where play
+//! Jev's wire format on 127.0.0.1:7720 (scripts/laya/serve.mjs). When none
+//! answers there, `gp serve` starts it from the install and stops it when
+//! gp serve stops ([`crate::laya`]); `just laya` installs and serves it by
+//! hand. The decision is the model's; where play
 //! starts, the state it reads and the check that the mechanic happened are
 //! the tools'.
 //!
@@ -136,7 +138,7 @@ fn post_json(url: &str, body: &Value) -> Result<Value> {
         .split_once('/')
         .map_or((rest, "/".to_owned()), |(h, p)| (h, format!("/{p}")));
     let mut conn = TcpStream::connect(host)
-        .with_context(|| format!("no decision server at {url}: start one with `just laya`"))?;
+        .with_context(|| format!("no decision server at {url}: gp serve starts Laya when a tool needs it, or start one with `just laya`"))?;
     let text = body.to_string();
     write!(
         conn,
@@ -239,6 +241,12 @@ fn start_of(paths: &Paths, s: &Session, n: u64) -> Result<(String, InputLog, usi
 
 pub(crate) fn demo(paths: &Paths, a: &Demo) -> Result<Outcome> {
     let session = Session::open(paths, a.game, a.mechanic)?;
+    // Laya answering before the first decision: gp serve starts it when
+    // none does ([`crate::laya`]).
+    eprintln!(
+        "gp mechanic demo: {}",
+        crate::laya::for_tool(&paths.home, a.decide)?
+    );
     let (dir, rom) = game_and_rom(paths, a.game, a.games)?;
     let arcade = Platform::of_file(&rom) == Platform::Arcade;
     let chords = if arcade { ARCADE_CHORDS } else { CHORDS };
@@ -582,6 +590,10 @@ pub(crate) fn judge(
     decide: &str,
 ) -> Result<Value> {
     let (dir, rom) = game_and_rom(paths, game, games)?;
+    eprintln!(
+        "gp mechanic say --judge: {}",
+        crate::laya::for_tool(&paths.home, decide)?
+    );
     let jumps = measure_jumps(paths, s, clip, &rom, &dir)?;
     let others: Vec<String> = s
         .clips()?

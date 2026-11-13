@@ -1,0 +1,810 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Game Printer level chunk catalog 0.1.0",
+  "description": "A game's level chunk catalog: the pieces its levels are made of, what\neach does, and how they sit together.",
+  "type": "object",
+  "properties": {
+    "chunks": {
+      "description": "The chunk kinds, by layer and then most frequent first.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Chunk"
+      }
+    },
+    "controls": {
+      "description": "Objects of the format that changed no cell of the grid, by kind and\ncount: page jumps and area pointers, scenery the grid doesn't hold\n(Super Mario Bros.' castles and ropes are drawn but not kept), and\nobjects a later one drew over entirely.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "format": "uint",
+        "minimum": 0
+      }
+    },
+    "envelope": {
+      "description": "The player's jump on a flat floor, from `gp_interp::reach::envelope`,\nwhen the model's player can be searched.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Envelope"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "format": {
+      "description": "Always `gp-chunks`.",
+      "type": "string"
+    },
+    "interactive": {
+      "description": "The interactive element catalog (docs/formats/interactive.md) the\ncells' interactive kinds come from, when one was read.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "layers": {
+      "description": "Chunk kinds by layer.",
+      "$ref": "#/$defs/Layers"
+    },
+    "levels": {
+      "description": "Every level layout read, in model order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/LevelInfo"
+      }
+    },
+    "model": {
+      "description": "The model's name.",
+      "type": "string"
+    },
+    "notes": {
+      "description": "What the catalog couldn't do, and why.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "settings": {
+      "description": "The settings the catalog was mined with.",
+      "$ref": "#/$defs/Settings"
+    },
+    "source": {
+      "description": "The model's source, when it names one.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "template": {
+      "description": "The template's folder name.",
+      "type": "string"
+    },
+    "version": {
+      "description": "The format's version, `0.1.0`.",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "version",
+    "template",
+    "model",
+    "settings",
+    "levels",
+    "layers",
+    "controls",
+    "chunks",
+    "notes"
+  ],
+  "$defs": {
+    "Adjacency": {
+      "type": "object",
+      "properties": {
+        "above": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          }
+        },
+        "below": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          }
+        },
+        "left": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          }
+        },
+        "right": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "left",
+        "right",
+        "above",
+        "below"
+      ]
+    },
+    "Chunk": {
+      "description": "One chunk kind.",
+      "type": "object",
+      "properties": {
+        "by_level": {
+          "description": "Occurrences by level.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          }
+        },
+        "count": {
+          "description": "Occurrences across every level read.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "examples": {
+          "description": "Up to five occurrences, `{level, x, y}` in cells (the top left).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Example"
+          }
+        },
+        "function": {
+          "$ref": "#/$defs/Function"
+        },
+        "id": {
+          "description": "Unique in the catalog: `object:<name>`, `group:<hash>`, `gap:<width>`,\n`window:<w>x<h>:<hash>`, `slice:<hash>`, `compound:<relation>:<a>|<b>`.",
+          "type": "string"
+        },
+        "layer": {
+          "$ref": "#/$defs/Layer"
+        },
+        "name": {
+          "description": "A name for people: the format's object name, a gap's width, the\ncells' names, or the parts and their relation.",
+          "type": "string"
+        },
+        "params": {
+          "description": "For an object kind, its parameters and its footprint as a function\nof each.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Param"
+          }
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "relation": {
+          "description": "For a compound, the relation (`with`, `over`, `above`, `left-of`)\nand the ids of its two parts (an enemy part is `enemy:<entity>`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "shape": {
+          "description": "The example's cells, rows from the top: the format's cell value\n(metatile or tile number), or null where the chunk has no cell.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        },
+        "size": {
+          "description": "The example's size in cells, `[width, height]`.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "layer",
+        "name",
+        "size",
+        "shape",
+        "params",
+        "count",
+        "by_level",
+        "parts",
+        "function",
+        "examples"
+      ]
+    },
+    "Coverage": {
+      "description": "Shares of a level's structure cells inside at least one occurrence of a\nchunk kind of each layer, and of any layer. `groups` is of the cells\nthat aren't terrain, since terrain is never a group.",
+      "type": "object",
+      "properties": {
+        "any": {
+          "type": "number",
+          "format": "double"
+        },
+        "groups": {
+          "type": "number",
+          "format": "double"
+        },
+        "objects": {
+          "type": "number",
+          "format": "double"
+        },
+        "patterns": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "objects",
+        "groups",
+        "patterns",
+        "any"
+      ]
+    },
+    "Demand": {
+      "type": "object",
+      "properties": {
+        "gap_px": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "height_px": {
+          "description": "The highest wall from the floor, and the widest gap, in pixels.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "moves": {
+          "description": "Moves the search simulated.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "needs": {
+          "description": "`walk`, `jump`, `running jump` or `blocked`, from the search and the\nchunk's shape.",
+          "type": "string"
+        },
+        "reachable": {
+          "description": "Whether the search reached the goal past the chunk.",
+          "type": "boolean"
+        },
+        "stands_on_top": {
+          "description": "Whether the player stood on the chunk.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "reachable",
+        "needs",
+        "height_px",
+        "gap_px",
+        "stands_on_top",
+        "moves"
+      ]
+    },
+    "Envelope": {
+      "type": "object",
+      "properties": {
+        "airtime": {
+          "description": "Frames in the air.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "rise": {
+          "description": "Pixels the jump rises, held to its top.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "run_distance": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "walk_distance": {
+          "description": "Pixels carried walking and running.",
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "rise",
+        "airtime",
+        "walk_distance"
+      ]
+    },
+    "Example": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string"
+        },
+        "x": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "y": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "level",
+        "x",
+        "y"
+      ]
+    },
+    "Fit": {
+      "description": "`axis = base + per * value`, in cells.",
+      "type": "object",
+      "properties": {
+        "axis": {
+          "description": "`width` or `height`.",
+          "type": "string"
+        },
+        "base": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "per": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "axis",
+        "base",
+        "per"
+      ]
+    },
+    "Footprint": {
+      "type": "object",
+      "properties": {
+        "count": {
+          "description": "Occurrences with this value.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "size": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "value": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "size",
+        "count"
+      ]
+    },
+    "Function": {
+      "description": "What a chunk is to the player and where it goes.",
+      "type": "object",
+      "properties": {
+        "adjacency": {
+          "description": "What sits next to occurrences, by chunk id (or `terrain`, `edge`,\n`none`), on each side.",
+          "$ref": "#/$defs/Adjacency"
+        },
+        "classes": {
+          "description": "The example's cells by the model's collision class (`empty`,\n`solid`, `top`, `ladder`, `hazard`, `water`, `ice`).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          }
+        },
+        "demand": {
+          "description": "What getting past it demands, from a reachability search on a\nmade-up level holding it, when one was run.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Demand"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enemies": {
+          "description": "Entities placed on or near occurrences.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Near"
+          }
+        },
+        "interactive": {
+          "description": "The example's cells by interactive element kind, matched by the\ncell's tile numbers (docs/formats/interactive.md).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          }
+        },
+        "placement": {
+          "$ref": "#/$defs/Placement"
+        },
+        "tile_kinds": {
+          "description": "The example's cells by the format's tile kinds (a coin, a block hit\nfrom below, a pipe top, a door).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "classes",
+        "tile_kinds",
+        "interactive",
+        "enemies",
+        "placement",
+        "adjacency"
+      ]
+    },
+    "Layer": {
+      "type": "string",
+      "enum": [
+        "objects",
+        "groups",
+        "gaps",
+        "patterns",
+        "compounds"
+      ]
+    },
+    "Layers": {
+      "type": "object",
+      "properties": {
+        "compounds": {
+          "description": "Pairs of chunks or a chunk and an enemy that sit together (above\nthe object layer).",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "gaps": {
+          "description": "Gaps in the floor, by width (layer b).",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "groups": {
+          "description": "Connected pieces of the decoded grid, by shape (layer b).",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "objects": {
+          "description": "Object kinds of the format's own vocabulary (layer a).",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "patterns": {
+          "description": "Window and slice patterns (layer b).",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "objects",
+        "groups",
+        "gaps",
+        "patterns",
+        "compounds"
+      ]
+    },
+    "LevelInfo": {
+      "type": "object",
+      "properties": {
+        "cells": {
+          "description": "Cells that are part of the level's structure (foreground): not\nempty to collision, or holding a tile kind.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "coverage": {
+          "description": "Shares of the foreground cells inside a known chunk.",
+          "$ref": "#/$defs/Coverage"
+        },
+        "layout": {
+          "description": "Where its layout comes from: `<slot>/<entry>` or the grid's slot.",
+          "type": "string"
+        },
+        "levels": {
+          "description": "Every model level with this layout.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "name": {
+          "description": "The first model level with this layout.",
+          "type": "string"
+        },
+        "objects": {
+          "description": "Objects of the format's list, when it has one.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "size": {
+          "description": "Width and height in cells.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "spawns": {
+          "description": "Entities placed, the player left out.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "terrain": {
+          "description": "Of those, the terrain: the floor's values joined to an edge of the\nlevel.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "tile_size": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "levels",
+        "layout",
+        "size",
+        "tile_size",
+        "cells",
+        "terrain",
+        "objects",
+        "spawns",
+        "coverage"
+      ]
+    },
+    "Near": {
+      "type": "object",
+      "properties": {
+        "count": {
+          "description": "Entities of this kind on or near an occurrence.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "entity": {
+          "type": "string"
+        },
+        "share": {
+          "description": "The share of occurrences with at least one.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "entity",
+        "count",
+        "share"
+      ]
+    },
+    "Param": {
+      "type": "object",
+      "properties": {
+        "fit": {
+          "description": "A line through the footprints, when every one is on it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "footprint": {
+          "description": "The most common footprint `[width, height]` for each value seen.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Footprint"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "values": {
+          "description": "The values seen, smallest first.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "values",
+        "footprint"
+      ]
+    },
+    "Placement": {
+      "type": "object",
+      "properties": {
+        "air": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "ground": {
+          "description": "Occurrences resting on something solid below, and in the air.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "rows": {
+          "description": "Occurrences by the third of the level's height their middle is in:\ntop, middle, bottom.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "maxItems": 3,
+          "minItems": 3
+        },
+        "screen": {
+          "description": "By the third of a screen (16 cells) across: left, middle, right.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "maxItems": 3,
+          "minItems": 3
+        },
+        "segment": {
+          "description": "By the third of the level's length: early, middle, late.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "maxItems": 3,
+          "minItems": 3
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "ground",
+        "air",
+        "rows",
+        "segment",
+        "screen"
+      ]
+    },
+    "Settings": {
+      "type": "object",
+      "properties": {
+        "max_group": {
+          "description": "The largest group kept, `[width, height]` in cells; larger connected\npieces count as terrain.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "max_patterns": {
+          "description": "The most window patterns kept per size.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "min_count": {
+          "description": "Occurrences a mined pattern, group or compound needs to be a kind.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "reach_tests": {
+          "description": "Chunk kinds per layer that got a reachability test.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "slices": {
+          "description": "Whether one-cell-wide slices across the level (columns for a level\nwider than high, rows otherwise) were mined.",
+          "type": "boolean"
+        },
+        "windows": {
+          "description": "Window sizes mined, `[width, height]` in cells.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "maxItems": 2,
+            "minItems": 2
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "min_count",
+        "windows",
+        "slices",
+        "max_patterns",
+        "max_group",
+        "reach_tests"
+      ]
+    }
+  }
+}

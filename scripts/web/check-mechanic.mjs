@@ -135,6 +135,14 @@ async function shot(page, name) {
  * for a demo), at 80%. Its address. */
 function fakeDecider() {
   const srv = createServer((req, res) => {
+    // As serve.mjs answers anything but a POST: gp asks this way whether
+    // a decision server is there (crate::laya::probe).
+    if (req.method !== "POST") {
+      const text = JSON.stringify({ error: "POST /v1/systemone only" });
+      res.writeHead(404, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(text), Connection: "close" });
+      res.end(text);
+      return;
+    }
     let body = "";
     req.on("data", (d) => { body += d; });
     req.on("end", () => {
@@ -278,6 +286,41 @@ async function main() {
   await until("the pinned picture", async () => (await text(page, "#w-pins")).includes("the hop, frame by frame") && (await page.evaluate(() => document.querySelector("#w-pins img")?.naturalWidth)) === 1);
   await until("the problem row", async () => (await text(page, "#w-problems")).includes("the hop lands a pixel low") && (await text(page, "#w-problems")).includes("fixed"));
   ok("the watch panel shows the agent's status, its pinned picture and its problem table");
+
+  // A log written to another topic of the game (as agents do with gp
+  // mechanic log GAME emulator) shows in the panel too, labelled with its
+  // topic, beside the open mechanic's own lines, which are marked; the
+  // topic picker shows one topic. The topic is made as agents make one
+  // outside the quest log, with gp mechanic watch (on a server of its own
+  // here, stopped once it answers).
+  await new Promise((res, rej) => {
+    const w = spawn(gp, ["mechanic", "watch", GAME, "emulator", "--own-server", "--port", "0"], { env });
+    let out = "";
+    const t = setTimeout(() => { w.kill(); rej(new Error(`gp mechanic watch printed no address: ${out}`)); }, 20000);
+    w.stdout.on("data", (d) => { out += d; if (/watch at http/.test(out)) { clearTimeout(t); w.kill(); res(); } });
+    w.on("exit", (c) => { clearTimeout(t); if (!/watch at http/.test(out)) rej(new Error(`gp mechanic watch exited ${c}`)); });
+  });
+  gpRun(["mechanic", "log", GAME, "emulator", "Booting the emulator core"]);
+  gpRun(["mechanic", "problem", GAME, "emulator", "--where", "the title", "--what", "the logo is a line low"]);
+  await until("another topic's line in the panel", async () => {
+    const lines = await page.$$eval("#w-log li", (ls) => ls.map((l) => [l.querySelector(".topic")?.textContent, l.textContent, l.classList.contains("mine")]));
+    const other = lines.find((l) => l[1].includes("Booting the emulator core"));
+    const mine = lines.find((l) => l[1].includes("Measuring the hop in clip 1"));
+    return other && other[0] === "emulator" && !other[2] && mine && mine[0] === MECH && mine[2];
+  });
+  await until("another topic's open problem", async () => (await text(page, "#w-problems")).includes("the logo is a line low"));
+  if (!(await text(page, "#w-status")).includes("Booting the emulator core")) fail(`the newest line of every topic isn't the status: ${await text(page, "#w-status")} / ${await text(page, "#w-log")}`);
+  await page.click("#log-toggle");
+  await page.selectOption("#w-topic", MECH);
+  await until("the topic picked", async () => {
+    const log = await text(page, "#w-log");
+    return log.includes("Measuring the hop in clip 1") && !log.includes("Booting the emulator core");
+  });
+  await page.selectOption("#w-topic", "");
+  await until("every topic again", async () => (await text(page, "#w-log")).includes("Booting the emulator core"));
+  await shot(page, "log-every-topic");
+  await page.click("#log-toggle");
+  ok("a log written to another topic shows in the panel with its topic, and the picker shows one topic");
 
   // game-printer's layout beneath the game: two columns, the quest log at
   // half the width, the clips and the conversation in the second; the
@@ -599,6 +642,33 @@ async function oneServer() {
   if ((await frame(page)) !== holds) fail("the game kept playing behind REFINE");
   ok(`REFINE shows gp serve's background work in the game's place, and the game holds: ${(await text(page, "#work-body")).slice(0, 70)}...`);
   await shot(page, "refine");
+  // The old inspector's views (mechanic/details/, wave 8): REFINE's THE
+  // CLIP MEASURED and the header's DETAILS drawer of the trace inspector,
+  // each the editor's view in the page (or, with no editor build, words
+  // saying so).
+  const measured = await until("REFINE's clip measured", async () => {
+    const n = await page.evaluate(() => {
+      const f = document.querySelector("#measured iframe.details-frame");
+      const doc = f?.contentDocument;
+      if (doc?.querySelector("[data-testid=game-view]")) return "the game view";
+      return /just editor/.test(document.querySelector("#measured")?.textContent ?? "") ? "no editor build" : null;
+    });
+    return n;
+  }, 30000);
+  ok(`REFINE has THE CLIP MEASURED under the work: ${measured}`);
+  await page.click("#details-toggle");
+  const drawer = await until("the DETAILS drawer", async () => {
+    if (await page.isHidden("#details-drawer")) return null;
+    return page.evaluate(() => {
+      const doc = document.querySelector("#details-drawer iframe.details-frame")?.contentDocument;
+      if (doc && /Trace inspector/i.test(doc.body?.textContent ?? "")) return "the trace inspector";
+      return /just editor/.test(document.querySelector("#details-drawer")?.textContent ?? "") ? "no editor build" : null;
+    });
+  }, 30000);
+  if (!page.url().includes("details=1")) fail(`the drawer isn't in the URL: ${page.url()}`);
+  await page.click("#details-drawer .details-head button");
+  if (!(await page.isHidden("#details-drawer"))) fail("the DETAILS drawer didn't close");
+  ok(`DETAILS opens a drawer with ${drawer} and closes`);
   await page.click("#tab-themes");
   await until("THEMES", async () => !(await page.isHidden("#pane-themes")) && (await text(page, "#themes-body")).includes("Theme work comes once"));
   ok("THEMES says what's there and what's coming");

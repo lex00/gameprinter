@@ -71,6 +71,12 @@ impl ArcadeRuntime {
         &self.tapper
     }
 
+    /// The machine, for a caller that steps it watched (its trace or
+    /// access log on), as gp-cli's covered steps do.
+    pub fn tapper_mut(&mut self) -> &mut Tapper {
+        &mut self.tapper
+    }
+
     pub fn into_tapper(self) -> Tapper {
         self.tapper
     }

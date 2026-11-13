@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum SourceStatus {
     /// Hash recorded from a file we were given, not yet checked against a reference.
@@ -16,7 +16,7 @@ pub enum SourceStatus {
     Verified,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct KnownSource {
     /// Stable ID used in recordings and templates, e.g. `smb1-ntsc-prg0`.
     pub id: String,
@@ -91,7 +91,9 @@ pub struct KnownSource {
     pub patch: Option<PatchSource>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum SourceKind {
     #[default]
@@ -107,7 +109,7 @@ impl SourceKind {
 
 /// How a patched source is made: which base, which patch file, and who
 /// made it. The repo holds these facts only, never the patch or the result.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PatchSource {
     /// The base source's ID, a `dump` entry in the registry.
@@ -138,7 +140,7 @@ pub struct PatchSource {
     pub credits: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum PatchOffsets {
     Ines,
@@ -146,7 +148,7 @@ pub enum PatchOffsets {
 }
 
 /// How a board wires nametable mirroring.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum BoardMirroring {
     Horizontal,
@@ -203,10 +205,21 @@ impl KnownSource {
     }
 }
 
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize, schemars::JsonSchema)]
 struct RegistryFile {
     #[serde(default)]
     source: Vec<KnownSource>,
+}
+
+/// The JSON Schema of a games checkout's `roms.toml` (and of the older
+/// `sources/*.toml` files), for `gp self schemas`: its `[[source]]` rows.
+pub fn schema() -> String {
+    let mut s = schemars::schema_for!(RegistryFile);
+    s.insert("$id".into(), "game-printer:roms@1".into());
+    s.insert("title".into(), "ROM sources, `roms.toml`".into());
+    let mut text = serde_json::to_string_pretty(&s).expect("schemas serialize");
+    text.push('\n');
+    text
 }
 
 #[derive(Debug, Default, Clone)]

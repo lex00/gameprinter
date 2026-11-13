@@ -26,48 +26,12 @@ const LATER: &[(&str, &str)] = &[
         "telling an agent about a clip isn't in gameprinter's gp serve yet; gp mechanic say is the agent's side of the mechanic page's talk",
     ),
     (
-        "/api/capture/{run}/lockstep",
-        "the lockstep view on a run's recordings isn't in gameprinter's gp serve yet",
-    ),
-    (
-        "/api/capture/{run}/moments",
-        "the moments view isn't in gameprinter's gp serve yet; gp interp moments gives them",
-    ),
-    (
         "/api/capture/{run}/refine",
-        "the refine view isn't in gameprinter's gp serve yet",
+        "the game view's refine panel (game-printer's serve/refine.rs) isn't in gameprinter's gp serve: the background work on the REFINE tab runs the same loop (gp model refine --lockstep) on a clip",
     ),
     (
         "/api/capture/{run}/refine/stop",
-        "the refine view isn't in gameprinter's gp serve yet",
-    ),
-    (
-        "/api/capture/{run}/scenarios",
-        "the scenario ladder view isn't in gameprinter's gp serve yet; gp interp scenarios runs it",
-    ),
-    (
-        "/api/capture/{run}/start-state",
-        "a start state from a run's recording isn't in gameprinter's gp serve yet",
-    ),
-    (
-        "/api/capture/{run}/point",
-        "point and tell isn't in gameprinter's gp serve yet",
-    ),
-    (
-        "/api/capture/{run}/requests",
-        "point and tell's requests aren't in gameprinter's gp serve yet",
-    ),
-    (
-        "/api/capture/{run}/edits",
-        "the sprite edits list isn't in gameprinter's gp serve yet",
-    ),
-    (
-        "/api/capture/{run}/inputs/{name}",
-        "a run's recordings' input logs aren't in gameprinter's gp serve yet: a game has no capture run's recordings",
-    ),
-    (
-        "/api/capture/{run}/input",
-        "a capture run's inputs (answers, pins, notes) aren't in gameprinter's gp serve: a game has no capture run",
+        "the game view's refine panel isn't in gameprinter's gp serve: the REFINE tab's background work has the pause",
     ),
 ];
 

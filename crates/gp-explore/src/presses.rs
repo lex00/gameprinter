@@ -83,9 +83,42 @@ pub fn legal(p: u8) -> u8 {
     p & !(button::START | button::SELECT)
 }
 
+/// The presses a mutation picks from and the rule that makes one legal:
+/// the NES pad's ([`NES`]) or the arcade board's
+/// ([`crate::arcade::PALETTE`]).
+#[derive(Debug, Clone, Copy)]
+pub struct Palette {
+    /// What a stretch is set to.
+    pub chords: &'static [u8],
+    /// What a stretch has toggled.
+    pub play: &'static [u8],
+    pub legal: fn(u8) -> u8,
+}
+
+/// The NES pad's palette.
+pub const NES: Palette = Palette {
+    chords: CHORDS,
+    play: PLAY,
+    legal,
+};
+
 /// One mutation of a press sequence, `min..=max` frames long. `other` is
 /// another kept sequence from the same start, for a splice.
 pub fn mutate(rng: &mut Rng, pads: &[u8], other: Option<&[u8]>, min: usize, max: usize) -> Vec<u8> {
+    mutate_with(rng, pads, other, min, max, &NES)
+}
+
+/// [`mutate`] over another platform's presses: the same draws from `rng`
+/// in the same order, so the NES's searches are unchanged.
+pub fn mutate_with(
+    rng: &mut Rng,
+    pads: &[u8],
+    other: Option<&[u8]>,
+    min: usize,
+    max: usize,
+    palette: &Palette,
+) -> Vec<u8> {
+    let (chords, play) = (palette.chords, palette.play);
     let mut p = pads.to_vec();
     let rounds = 1 + rng.below(4);
     for _ in 0..rounds {
@@ -95,14 +128,14 @@ pub fn mutate(rng: &mut Rng, pads: &[u8], other: Option<&[u8]>, min: usize, max:
         match rng.below(6) {
             // Toggle one button over a span.
             0 => {
-                let b = PLAY[rng.below(PLAY.len())];
+                let b = play[rng.below(play.len())];
                 for x in &mut p[at..at + len] {
                     *x ^= b;
                 }
             }
             // A chord held over a span.
             1 | 2 => {
-                let c = CHORDS[rng.below(CHORDS.len())];
+                let c = chords[rng.below(chords.len())];
                 for x in &mut p[at..at + len] {
                     *x = c;
                 }
@@ -135,7 +168,7 @@ pub fn mutate(rng: &mut Rng, pads: &[u8], other: Option<&[u8]>, min: usize, max:
     while p.len() < min {
         p.push(p.last().copied().unwrap_or(0));
     }
-    p.iter().map(|&x| legal(x)).collect()
+    p.iter().map(|&x| (palette.legal)(x)).collect()
 }
 
 /// How long each run of a start set is: a minute at 60 frames a second.

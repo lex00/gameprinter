@@ -221,7 +221,11 @@ pub(crate) fn locate(game: &str) -> Result<PathBuf, String> {
     )
 }
 
-fn locate_in(game: &str, repo: Option<&Path>, games: Option<&Path>) -> Result<PathBuf, String> {
+pub(crate) fn locate_in(
+    game: &str,
+    repo: Option<&Path>,
+    games: Option<&Path>,
+) -> Result<PathBuf, String> {
     if let Some(repo) = repo {
         let f = repo.join("games").join(game).join(FILE);
         if !game.contains('/') && !game.contains("..") && f.is_file() {

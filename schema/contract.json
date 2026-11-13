@@ -1,0 +1,183 @@
+{
+  "$id": "game-printer:contract@0.2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Game Printer fidelity contract 0.2.0",
+  "description": "One `fidelity.toml`.",
+  "type": "object",
+  "properties": {
+    "contract": {
+      "$ref": "#/$defs/Header"
+    },
+    "corpus": {
+      "description": "Features `corpus.together` and `corpus.longest_stretch`: what each\nclip of the scoring corpus the model is scored against must reach\n(docs/formats/scoring-corpus.md), checked by `gp corpus score`.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CorpusBars"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "rule": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Rule"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "contract"
+  ],
+  "$defs": {
+    "CorpusBars": {
+      "description": "The bars every clip of the model's scoring corpus is held to.",
+      "type": "object",
+      "properties": {
+        "longest_stretch": {
+          "description": "Each long run's (a clip of more than 600 frames) longest exact\nstretch in resync mode, counting the one its end cuts off, in\nseconds: \"10s\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "together": {
+          "description": "Each clip's frames together, run straight through from its start\n(free mode, with the original's draws when the state mapping\nscores with them), as a percentage: \"100%\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Header": {
+      "type": "object",
+      "properties": {
+        "default": {
+          "description": "The level of any fact no rule names.",
+          "$ref": "#/$defs/Level"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "description": "The `model.name` of the model it applies to.",
+          "type": "string"
+        },
+        "schema": {
+          "description": "The contract format version, such as \"0.2.0\".",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "model",
+        "default"
+      ]
+    },
+    "Level": {
+      "oneOf": [
+        {
+          "description": "State equal to the original's every frame, through a state mapping.",
+          "type": "string",
+          "const": "exact"
+        },
+        {
+          "description": "Measured behavior within tolerances.",
+          "type": "string",
+          "const": "metric"
+        },
+        {
+          "description": "Same layout and connections, numbers free.",
+          "type": "string",
+          "const": "structural"
+        },
+        {
+          "description": "Plays alike, judged by bots.",
+          "type": "string",
+          "const": "experiential"
+        },
+        {
+          "description": "Looks and sounds alike, judged by embeddings and critics.",
+          "type": "string",
+          "const": "style"
+        },
+        {
+          "description": "Nothing is checked.",
+          "type": "string",
+          "const": "free"
+        }
+      ]
+    },
+    "Rule": {
+      "type": "object",
+      "properties": {
+        "aspect": {
+          "description": "One aspect of the parts named, such as \"arc\" or \"reach\", when the\nrule shouldn't cover all of them.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "$ref": "#/$defs/Level"
+        },
+        "note": {
+          "description": "Why the rule is there.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "A model path or pattern (docs/formats/model-path.md).",
+          "type": "string"
+        },
+        "tolerance": {
+          "description": "For metric rules: how far each measured quantity may be from the\noriginal's, as a percentage (\"5%\") or in the quantity's own units.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Tolerance"
+          }
+        },
+        "when": {
+          "description": "A condition over runtime state while which the rule holds, such as\n`world == 1`: the run-until condition grammar of\ndocs/runtime-protocol.md over state paths, evaluated on each frame\nof the original's run (docs/validation.md).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "level"
+      ]
+    },
+    "Tolerance": {
+      "description": "A percentage such as \"5%\", or an amount in the quantity's units: an integer or an exact decimal string.",
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]{1,16})?%?$"
+        }
+      ]
+    }
+  }
+}

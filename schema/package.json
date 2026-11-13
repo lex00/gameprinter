@@ -1,0 +1,393 @@
+{
+  "$id": "game-printer:package@1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "A package, `package.toml`",
+  "description": "A package's `package.toml`.",
+  "type": "object",
+  "properties": {
+    "corpus": {
+      "description": "The corpus plan's name, version and recipe-set hash, as corpus.toml\nrecords them.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PackageCorpus"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "hooks": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PackageHooks"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "open": {
+      "description": "An open version kept beside the game: its model's path in the package.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": null
+    },
+    "package": {
+      "$ref": "#/$defs/PackageHead"
+    },
+    "play": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PackagePlay"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "rom": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PackageRom"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "tool": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PackageTool"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "package"
+  ],
+  "$defs": {
+    "PackageCorpus": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "recipes": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "recipes"
+      ]
+    },
+    "PackageHead": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "`game`, `content` (a theme) or `model`.",
+          "type": "string"
+        },
+        "license": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "name": {
+          "description": "`owner/name`.",
+          "type": "string"
+        },
+        "tier": {
+          "description": "`commercial` (the package holds no game data) or `open`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "version": {
+          "description": "Semver.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "kind"
+      ]
+    },
+    "PackageHooks": {
+      "type": "object",
+      "properties": {
+        "crate": {
+          "description": "The hook crate's folder in the package.",
+          "type": "string"
+        },
+        "models": {
+          "description": "The models the hooks are for.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "crate"
+      ]
+    },
+    "PackagePlay": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "description": "The files and folders a player downloads.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "files"
+      ]
+    },
+    "PackageRom": {
+      "type": "object",
+      "properties": {
+        "entry": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PackageRomEntry"
+          }
+        },
+        "how_to_get": {
+          "description": "How a person gets the ROM themselves, shown on the page.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      }
+    },
+    "PackageRomEntry": {
+      "type": "object",
+      "properties": {
+        "asset_map": {
+          "description": "The asset map, relative to the package folder.",
+          "type": "string"
+        },
+        "asset_map_sha256": {
+          "type": "string"
+        },
+        "assets": {
+          "description": "Model asset names to the map's names for this ROM.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": null
+        },
+        "board_status": {
+          "description": "`unverified` or `verified`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "chr_rom_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
+        "id": {
+          "type": "string"
+        },
+        "levels": {
+          "description": "The model's levels this ROM plays, when not all.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "string"
+          }
+        },
+        "lifted_sha256": {
+          "description": "What lifting the ROM with the map gives, so a person's lift is checked.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "mapper": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "default": null,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "platform": {
+          "description": "`nes` (the default) or `arcade`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "prg_rom_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
+        "role": {
+          "description": "`scored` (the corpus is scored on it) or `play`.",
+          "type": "string"
+        },
+        "sha256": {
+          "description": "The headerless SHA-256 of an NES ROM, or a romset's identity.",
+          "type": "string"
+        },
+        "submapper": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "default": null,
+          "maximum": 255,
+          "minimum": 0
+        },
+        "system": {
+          "description": "An arcade entry's MAME set name.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "without": {
+          "description": "What the scored ROM's model has that this ROM's game hasn't.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PackageWithout"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "sha256",
+        "asset_map",
+        "asset_map_sha256"
+      ]
+    },
+    "PackageTool": {
+      "type": "object",
+      "properties": {
+        "gp": {
+          "description": "The gp versions it works with, a semver range.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "runtime-wit": {
+          "description": "The runtime interface the package was built against, such as\n`game-printer:runtime@0.4.0`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "sim-api": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      }
+    },
+    "PackageWithout": {
+      "type": "object",
+      "properties": {
+        "blank": {
+          "description": "Assets left blank.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "levels": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "parts": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "what": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "what"
+      ]
+    }
+  }
+}

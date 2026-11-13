@@ -399,10 +399,10 @@ pub(crate) fn start(
 /// The model and its mapping, opened once and kept while their files and
 /// the module are unchanged: each start of the rebuild needs them, and
 /// opening them (the module above all) takes seconds.
-type Opened = std::sync::Arc<(crate::hosted::Source, Mapping)>;
+pub(crate) type Opened = std::sync::Arc<(crate::hosted::Source, Mapping)>;
 static OPENED: Mutex<Option<(blake3::Hash, Opened)>> = Mutex::new(None);
 
-fn opened(paths: &Paths, rb: &Rebuild, rom: &[u8]) -> Result<Opened> {
+pub(crate) fn opened(paths: &Paths, rb: &Rebuild, rom: &[u8]) -> Result<Opened> {
     let mut h = blake3::Hasher::new();
     for f in [gp_model::MODEL_FILE, gp_interp::mapping::MAPPING_FILE] {
         h.update(&std::fs::read(rb.game.join(f)).unwrap_or_default());

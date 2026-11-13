@@ -6,7 +6,7 @@
 use gp_events::{Bits, Levels, RunError};
 
 use crate::graph::CallGraph;
-use crate::presses::{Rng, mutate};
+use crate::presses::{NES, Palette, Rng, mutate_with};
 use crate::start::{Start, run_from};
 
 /// How the search runs.
@@ -91,6 +91,19 @@ pub fn drive<P: Plan>(
     d: &Drive,
     run: &mut Runner<'_, P>,
 ) -> usize {
+    drive_with(plan, rng, seeds, d, &NES, run)
+}
+
+/// [`drive`] mutating with another platform's presses (the arcade board's
+/// [`crate::arcade::PALETTE`]).
+pub fn drive_with<P: Plan>(
+    plan: &mut P,
+    rng: &mut Rng,
+    seeds: Vec<(usize, Vec<u8>)>,
+    d: &Drive,
+    palette: &Palette,
+    run: &mut Runner<'_, P>,
+) -> usize {
     let mut todo = seeds;
     let budget = d.budget.max(todo.len());
     let mut ran = 0usize;
@@ -102,7 +115,10 @@ pub fn drive<P: Plan>(
             plan.prepare();
             for _ in 0..d.batch.min(budget - ran) {
                 let (s, p, m) = plan.parents(rng);
-                todo.push((s, mutate(rng, &p, m.as_deref(), d.min_frames, d.max_frames)));
+                todo.push((
+                    s,
+                    mutate_with(rng, &p, m.as_deref(), d.min_frames, d.max_frames, palette),
+                ));
             }
         }
         let batch = std::mem::take(&mut todo);

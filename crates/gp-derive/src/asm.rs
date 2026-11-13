@@ -1,6 +1,10 @@
 //! A reader for 6502 assembly source: the lines of the dialects the pinned
 //! disassemblies and Moss Hop are written in (ca65, asm6f, x816), parsed far
-//! enough to read a fact's value from the line its evidence cites. A line
+//! enough to read a fact's value from the line its evidence cites. Z80
+//! source (an arcade game's: `ld a,05h`, `cp (ix+3)`, `defb`, `equ`) is
+//! read the same way, by [`parse_line_z80`], for a file [`is_z80_source`]
+//! says is one; its instructions keep their mnemonic as `z80:ld`, so
+//! nothing that reads the 6502's takes them for one. A line
 //! is a label, a constant definition, a data row or an instruction; the
 //! numbers in them are expressions over constants, read without an
 //! assembler. Nothing here needs the ROM.
@@ -113,6 +117,15 @@ fn is_ident_char(c: char) -> bool {
 
 /// Parses one line of source.
 pub fn parse_line(text: &str) -> Line {
+    parse_line_in(text, false)
+}
+
+/// Parses one line of Z80 source.
+pub fn parse_line_z80(text: &str) -> Line {
+    parse_line_in(text, true)
+}
+
+fn parse_line_in(text: &str, z80: bool) -> Line {
     let code = strip_comment(text);
     let trimmed = code.trim_start();
     let mut label = None;
@@ -134,7 +147,11 @@ pub fn parse_line(text: &str) -> Line {
             rest = &trimmed[end + 1..];
         }
     }
-    let stmt = parse_stmt(rest.trim());
+    let stmt = if z80 {
+        parse_z80(label.as_deref(), rest.trim())
+    } else {
+        parse_stmt(rest.trim())
+    };
     let comment = text
         .get(code.len()..)
         .and_then(|c| c.strip_prefix(';'))
@@ -213,6 +230,147 @@ fn parse_stmt(s: &str) -> Stmt {
         };
     }
     Stmt::Other
+}
+
+const Z80_MNEMONICS: &[&str] = &[
+    "adc", "add", "and", "bit", "call", "ccf", "cp", "cpd", "cpdr", "cpi", "cpir", "cpl", "daa",
+    "dec", "di", "djnz", "ei", "ex", "exx", "halt", "im", "in", "inc", "ind", "indr", "ini",
+    "inir", "jp", "jr", "ld", "ldd", "lddr", "ldi", "ldir", "neg", "nop", "or", "otdr", "otir",
+    "out", "outd", "outi", "pop", "push", "res", "ret", "reti", "retn", "rl", "rla", "rlc", "rlca",
+    "rld", "rr", "rra", "rrc", "rrca", "rrd", "rst", "sbc", "scf", "set", "sla", "sll", "sra",
+    "srl", "sub", "xor",
+];
+
+/// Mnemonics only one of the two CPUs has, which tell a file's dialect.
+const Z80_ONLY: &[&str] = &[
+    "ld", "jp", "jr", "call", "ret", "push", "pop", "djnz", "ldir", "exx", "ex", "di", "ei",
+    "halt", "rst", "cp", "sub", "xor", "or", "out", "in", "ldi", "lddr",
+];
+const M6502_ONLY: &[&str] = &[
+    "lda", "ldx", "ldy", "sta", "stx", "sty", "jsr", "rts", "rti", "jmp", "bne", "beq", "bcc",
+    "bcs", "bpl", "bmi", "cmp", "cpx", "cpy", "eor", "ora", "tax", "tay", "txa", "tya", "pha",
+    "pla",
+];
+
+/// Whether `m` (lower case) is a Z80 mnemonic.
+pub fn is_z80_mnemonic(m: &str) -> bool {
+    Z80_MNEMONICS.contains(&m)
+}
+
+/// Whether a source file is the Z80's: a `.z80` or `.s80` file, or one
+/// whose instructions use more of the mnemonics only the Z80 has than of
+/// those only the 6502 has.
+pub fn is_z80_source(name: &str, text: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    if [".z80", ".s80", ".z80s"].iter().any(|e| lower.ends_with(e)) {
+        return true;
+    }
+    let (mut z, mut m) = (0usize, 0usize);
+    for l in text.lines() {
+        let code = strip_comment(l).trim();
+        let code = match code.split_once(':') {
+            Some((label, rest)) if label.chars().all(is_ident_char) => rest.trim(),
+            _ => code,
+        };
+        let head = code
+            .split(|c: char| c.is_whitespace())
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        z += usize::from(Z80_ONLY.contains(&head.as_str()));
+        m += usize::from(M6502_ONLY.contains(&head.as_str()));
+    }
+    z > m
+}
+
+/// The Z80's registers and conditions, which an operand that names a
+/// number isn't.
+const Z80_NAMES: &[&str] = &[
+    "a", "b", "c", "d", "e", "h", "l", "i", "r", "f", "af", "af'", "bc", "de", "hl", "sp", "ix",
+    "iy", "ixh", "ixl", "iyh", "iyl", "nz", "z", "nc", "po", "pe", "p", "m",
+];
+
+/// One line of Z80 source after its label: a constant (`NAME equ n`, or
+/// `NAME: equ n`), a data row (`db`, `defb`, `dw`, `defw`, `.byte`), an
+/// instruction, or something else. An instruction's number is its operand
+/// that isn't a register (`ld a,05h`, `cp 30`, `bit 3,(hl)`: Immediate),
+/// else the address in parentheses (`ld a,(0e3bdh)`: Address); a jump,
+/// call or restart's target is an Address.
+fn parse_z80(label: Option<&str>, s: &str) -> Stmt {
+    if s.is_empty() {
+        return Stmt::Empty;
+    }
+    let (head, tail) = match s.find(|c: char| c.is_whitespace()) {
+        Some(i) => (&s[..i], s[i..].trim()),
+        None => (s, ""),
+    };
+    let lower = head.to_ascii_lowercase();
+    if let Some(name) = label
+        && matches!(lower.as_str(), "equ" | ".equ" | "defl" | "=")
+    {
+        return match parse_expr(tail) {
+            Some(value) => Stmt::Const {
+                name: name.to_owned(),
+                value,
+            },
+            None => Stmt::Other,
+        };
+    }
+    let width = match lower.as_str() {
+        "defb" | "dm" | "defm" => Some(1),
+        "defw" => Some(2),
+        _ => None,
+    };
+    if let Some(width) = width {
+        let items = split_items(tail)
+            .into_iter()
+            .map(|t| {
+                if t.starts_with('"') {
+                    None
+                } else {
+                    parse_expr(t)
+                }
+            })
+            .collect();
+        return Stmt::Data { width, items };
+    }
+    if !is_z80_mnemonic(&lower) {
+        // Constants and data rows as the other dialects write them.
+        return parse_stmt(s);
+    }
+    let ops = split_items(tail);
+    let jump = matches!(lower.as_str(), "jp" | "jr" | "call" | "djnz" | "rst");
+    let mut addr = None;
+    for o in &ops {
+        let ol = o.to_ascii_lowercase().replace(' ', "");
+        if Z80_NAMES.contains(&ol.as_str()) {
+            continue;
+        }
+        if ol.starts_with('(') && ol.ends_with(')') {
+            let inner = &ol[1..ol.len() - 1];
+            let indexed = ["ix", "iy"].iter().any(|r| inner.starts_with(r));
+            if !indexed && !Z80_NAMES.contains(&inner) && addr.is_none() {
+                addr = parse_expr(&o.trim()[1..o.trim().len() - 1]);
+            }
+            continue;
+        }
+        let e = parse_expr(o);
+        let mode = if jump { Mode::Address } else { Mode::Immediate };
+        return Stmt::Op {
+            mnemonic: format!("z80:{lower}"),
+            mode,
+            arg: e,
+        };
+    }
+    Stmt::Op {
+        mnemonic: format!("z80:{lower}"),
+        mode: if addr.is_some() {
+            Mode::Address
+        } else {
+            Mode::Implied
+        },
+        arg: addr,
+    }
 }
 
 /// Splits a data row on commas outside quotes and parentheses.
@@ -447,9 +605,14 @@ pub struct File {
 
 impl File {
     pub fn parse(name: &str, text: &str) -> Self {
+        let parse = if is_z80_source(name, text) {
+            parse_line_z80
+        } else {
+            parse_line
+        };
         File {
             name: name.to_owned(),
-            lines: text.lines().map(parse_line).collect(),
+            lines: text.lines().map(parse).collect(),
         }
     }
 
@@ -637,6 +800,66 @@ pub fn mentions(e: &Expr, sym: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn op(m: &str, mode: Mode, n: Option<i64>) -> Stmt {
+        Stmt::Op {
+            mnemonic: m.into(),
+            mode,
+            arg: n.map(Expr::Num),
+        }
+    }
+
+    #[test]
+    fn z80_lines() {
+        let l = parse_line_z80("serve:  ld   a,04h      ; four bars");
+        assert_eq!(l.label.as_deref(), Some("serve"));
+        assert_eq!(l.stmt, op("z80:ld", Mode::Immediate, Some(4)));
+        assert_eq!(l.comment.as_deref(), Some("four bars"));
+        let l = parse_line_z80("        ld   a,(0E3BDh)");
+        assert_eq!(l.stmt, op("z80:ld", Mode::Address, Some(0xE3BD)));
+        let l = parse_line_z80("        ld   ($E2E9),a");
+        assert_eq!(l.stmt, op("z80:ld", Mode::Address, Some(0xE2E9)));
+        let l = parse_line_z80("        ld   (ix+3),0x30");
+        assert_eq!(l.stmt, op("z80:ld", Mode::Immediate, Some(0x30)));
+        let l = parse_line_z80("        cp   (hl)");
+        assert_eq!(l.stmt, op("z80:cp", Mode::Implied, None));
+        let l = parse_line_z80("        jp   nz,5FACh");
+        assert_eq!(l.stmt, op("z80:jp", Mode::Address, Some(0x5FAC)));
+        let l = parse_line_z80("        bit  3,(hl)");
+        assert_eq!(l.stmt, op("z80:bit", Mode::Immediate, Some(3)));
+        let l = parse_line_z80("        ex   af,af'");
+        assert_eq!(l.stmt, op("z80:ex", Mode::Implied, None));
+        let l = parse_line_z80("BARS:   equ  4");
+        assert_eq!(
+            l.stmt,
+            Stmt::Const {
+                name: "BARS".into(),
+                value: Expr::Num(4)
+            }
+        );
+        let l = parse_line_z80("ROWS    equ  48");
+        assert!(matches!(l.stmt, Stmt::Const { ref name, .. } if name == "ROWS"));
+        let l = parse_line_z80("rows:   defb 48, 96, 144, 0C0h");
+        assert!(matches!(&l.stmt, Stmt::Data { width: 1, items } if items.len() == 4));
+        let l = parse_line_z80("        defw 5FACh");
+        assert!(matches!(&l.stmt, Stmt::Data { width: 2, .. }));
+        assert!(is_z80_source("notes/tapper.asm", "  ld a,1\n  ret\n"));
+        assert!(is_z80_source("x.z80", "  lda #1\n"));
+        assert!(!is_z80_source(
+            "src/main.asm",
+            "  lda #1\n  and #3\n  rts\n"
+        ));
+        let mut src = Source::default();
+        src.add("t.z80", "BARS: equ 4\n  ld a,BARS\n");
+        let Some(Line {
+            stmt: Stmt::Op { arg: Some(e), .. },
+            ..
+        }) = src.files["t.z80"].line(2)
+        else {
+            panic!("line 2 is an instruction");
+        };
+        assert_eq!(src.eval(e), Some(4));
+    }
 
     #[test]
     fn lines_of_each_dialect() {

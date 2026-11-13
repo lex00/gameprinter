@@ -1627,9 +1627,12 @@ function moveChoice(d) {
 // The session ----------------------------------------------------------
 
 // The watch panel -------------------------------------------------------
-// What the agent is doing, from /api/watch: its status (the newest log
-// line), what it pinned, its problem table and the log. Redrawn only when
-// it changes, so a playing clip isn't restarted every poll.
+// What the agents are doing in every topic of the game, from /api/watch:
+// each topic's log (gp mechanic log GAME TOPIC) merged newest first with
+// its topic, the pins and the problem rows still to do in every topic, and
+// all of the open mechanic's own, which are marked. A picker shows one
+// topic. Redrawn only when it changes, so a playing clip isn't restarted
+// every poll.
 
 /** An element with a class and text. */
 function wEl(tag, cls, text) {
@@ -1639,34 +1642,52 @@ function wEl(tag, cls, text) {
   return e;
 }
 
-function timed(line) {
-  const li = wEl("li");
-  li.append(wEl("span", "at", line.at ?? ""), document.createTextNode(line.text ?? ""));
+/** A log line: its time, its topic and what it says. */
+function timed(line, open) {
+  const li = wEl("li", line.topic === open ? "mine" : "");
+  li.append(wEl("span", "at", line.at ?? ""), wEl("span", "topic", line.topic ?? ""), document.createTextNode(line.text ?? ""));
   return li;
 }
 
+let watchTopic = ""; // "" is every topic
+// Blurred once picked, so the arrows go back to the game.
+$("w-topic").addEventListener("change", (e) => { watchTopic = e.target.value; e.target.blur(); void refreshWatch(); });
+
 async function refreshWatch() {
   if (!session) return;
-  const q = `?mechanic=${encodeURIComponent(session.mechanic)}`;
-  const w = await api(`api/watch${q}`);
-  const key = JSON.stringify([session.mechanic, w]);
+  const w = await api(`api/watch?mechanic=${encodeURIComponent(session.mechanic)}`);
+  const open = w.open ?? session.mechanic;
+  const key = JSON.stringify([session.mechanic, watchTopic, w]);
   const col = $("watch-col");
   if (col.dataset.key === key) return;
   col.dataset.key = key;
+  const topics = w.topics ?? [];
+  if (watchTopic && !topics.some((t) => t.topic === watchTopic)) watchTopic = "";
+  const pick = $("w-topic");
+  pick.innerHTML = "";
+  pick.append(new Option(`All topics (${topics.length})`, ""));
+  for (const t of topics) {
+    const todo = t.problems ? `, ${t.problems} to do` : "";
+    pick.append(new Option(`${t.topic}${t.topic === open ? " (open here)" : ""}: ${t.lines} lines${todo}`, t.topic));
+  }
+  pick.value = watchTopic;
+  const shown = (x) => !watchTopic || x.topic === watchTopic;
+  const lines = (w.log ?? []).filter(shown);
   const status = $("w-status");
   status.innerHTML = "";
-  if (w.status) {
-    status.className = "";
-    status.append(wEl("span", "at", w.status.at ?? ""), document.createTextNode(w.status.text ?? ""));
+  if (lines.length) {
+    status.className = lines[0].topic === open ? "mine" : "";
+    status.append(wEl("span", "at", lines[0].at ?? ""), wEl("span", "topic", lines[0].topic ?? ""), document.createTextNode(lines[0].text ?? ""));
   } else {
     status.className = "muted";
-    status.textContent = "Nothing yet. Your agent writes here with gp mechanic log, pin and problem.";
+    const where = watchTopic ? `in ${watchTopic}` : `in any topic of ${session.game}`;
+    status.textContent = `Nothing yet ${where}. Your agent writes here with gp mechanic log ${session.game} TOPIC "what it's doing" (and pin, problem); this panel shows every topic.`;
   }
   const pins = $("w-pins");
   pins.innerHTML = "";
-  for (const p of w.pins ?? []) {
-    const fig = wEl("figure", p.keep ? "keep" : "");
-    const src = `api/watch/files/${encodeURIComponent(p.file)}${q}`;
+  for (const p of (w.pins ?? []).filter(shown)) {
+    const fig = wEl("figure", [p.keep ? "keep" : "", p.topic === open ? "mine" : ""].join(" ").trim());
+    const src = `api/watch/files/${encodeURIComponent(p.file)}?topic=${encodeURIComponent(p.topic)}`;
     let media;
     if (p.kind === "video") {
       media = wEl("video");
@@ -1675,21 +1696,26 @@ async function refreshWatch() {
       media = wEl("img");
       Object.assign(media, { src, alt: p.title || p.file });
     }
-    fig.append(media, wEl("figcaption", "", `${p.n}. ${p.title || p.file}`));
+    const cap = wEl("figcaption");
+    cap.append(wEl("span", "topic", p.topic), document.createTextNode(`${p.n}. ${p.title || p.file}`));
+    fig.append(media, cap);
     pins.append(fig);
   }
+  // Every topic's rows still to do and all of the open one's; a topic
+  // picked shows all of its own.
+  const rows = (w.problems ?? []).filter((r) => (watchTopic ? r.topic === watchTopic : r.todo || r.topic === open));
   const table = $("w-problems");
   const body = table.querySelector("tbody");
   body.innerHTML = "";
-  for (const r of w.problems ?? []) {
-    const tr = wEl("tr");
-    for (const [v, cls] of [[r.n], [r.where], [r.what], [r.fix], [r.state, `st-${r.state}`]]) tr.append(wEl("td", cls ?? "", String(v ?? "")));
+  for (const r of rows) {
+    const tr = wEl("tr", r.topic === open ? "mine" : "");
+    for (const [v, cls] of [[r.topic, "topic"], [r.n], [r.where], [r.what], [r.fix], [r.state, `st-${r.state}`]]) tr.append(wEl("td", cls ?? "", String(v ?? "")));
     body.append(tr);
   }
-  table.hidden = !(w.problems ?? []).length;
+  table.hidden = !rows.length;
   const log = $("w-log");
   log.innerHTML = "";
-  for (const line of [...(w.log ?? [])].reverse()) log.append(timed(line));
+  for (const line of lines) log.append(timed(line, open));
 }
 
 async function refresh() {

@@ -21,6 +21,7 @@ pub mod start;
 
 pub use graph::CallGraph;
 pub use search::{
-    Drive, Found, NewCode, Opts, Plan, Progress, Score, Toward, drive, search, search_watched,
+    Drive, Found, NewCode, Opts, Plan, Progress, Score, Toward, drive, drive_with, search,
+    search_watched,
 };
 pub use start::{Start, run_from};

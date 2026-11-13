@@ -17,6 +17,7 @@ import { Annotations } from "./Annotations";
 import { Explainer, GameView, dismissExplainer, explainerDismissed } from "./GameView";
 import { LivePanel, personInput, sendInput, useLive } from "./Live";
 import { Unified } from "./Unified";
+import { Embed } from "./Embed";
 import { PlayPanel } from "./Play";
 import { Api, type CaptureRun, type DiffJson, type GameWords, type PairJson, type RecordingEntry } from "./api";
 import { heldNames } from "./decode/input";
@@ -115,16 +116,26 @@ function rememberRun(run: string): void {
   }
 }
 
-/** The page: a watch session's view with ?watch=NAME (docs/watch.md), else the workspace. */
+/** The page: a watch session's view with ?watch=NAME (docs/watch.md), one
+ * view inside gp serve's one page with ?embed=VIEW&run=GAME (Embed.tsx),
+ * else the workspace. */
 export function App({ api = defaultApi }: { api?: Api }) {
   const q = new URLSearchParams(typeof location === "undefined" ? "" : location.search);
+  const embed = q.get("embed");
+  if (embed === "inspector") return <Workspace api={api} only="inspector" />;
+  if (embed) return <Embed api={api} view={embed} run={q.get("run") ?? undefined} />;
   // A watch panel with no game to play (gp mechanic watch GAME TOPIC).
   if (q.get("view") === "watch" && q.get("game") && q.get("topic")) return <LogPanel api={api} game={q.get("game")!} topic={q.get("topic")!} />;
   const watch = q.get("watch");
   return watch ? <WatchPanel api={api} name={watch} /> : <Workspace api={api} />;
 }
 
-function Workspace({ api = defaultApi }: { api?: Api }) {
+/** The workspace; `only` "inspector" draws the trace inspector alone, for
+ * the Details drawer of gp serve's one page (?embed=inspector). */
+function Workspace({ api = defaultApi, only }: { api?: Api; only?: "inspector" }) {
+  useEffect(() => {
+    if (only) document.documentElement.classList.add("embed");
+  }, [only]);
   // The one header's tabs (Views.tsx): the view and the agent's log beside it.
   const [view, setViewState] = useState<View>(() => readView(typeof location === "undefined" ? "" : location.search));
   const viewRef = useRef(view);
@@ -205,8 +216,10 @@ function Workspace({ api = defaultApi }: { api?: Api }) {
 
   // Keep the URL in step.
   useEffect(() => {
-    if (typeof history !== "undefined") history.replaceState(null, "", writeView(writeUrl(sel), viewRef.current));
-  }, [sel]);
+    if (typeof history === "undefined") return;
+    const url = writeView(writeUrl(sel), viewRef.current);
+    history.replaceState(null, "", only ? `${url}&embed=${only}` : url);
+  }, [sel, only]);
 
   // In diff mode, find the first difference and go there.
   useEffect(() => {
@@ -377,6 +390,110 @@ function Workspace({ api = defaultApi }: { api?: Api }) {
     </>
   );
 
+  // The trace inspector: pick a recording, and a second one to compare,
+  // scrub to a frame, and every registered view draws that frame.
+  const inspector = (
+    <div className="inspector">
+      <header>
+        <h2>Trace inspector</h2>
+        <label>
+          Recording{" "}
+          <select
+            data-testid="pick-a"
+            value={list.find((r) => sel.a && r.id.startsWith(sel.a))?.id ?? ""}
+            onChange={(e) => setSel({ a: e.target.value || undefined, b: sel.b, m: sel.m, run: sel.run, frame: 0 })}
+          >
+            <option value="">choose a recording</option>
+            {list.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name} ({r.id.slice(0, 8)}, {r.frames} frames)
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          model run{" "}
+          <select
+            data-testid="pick-m"
+            value={list.find((r) => sel.m && r.id.startsWith(sel.m))?.id ?? ""}
+            onChange={(e) => setSel({ ...sel, m: e.target.value || undefined })}
+          >
+            <option value="">nothing</option>
+            {list.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name} ({r.id.slice(0, 8)})
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          compare with{" "}
+          <select
+            data-testid="pick-b"
+            value={list.find((r) => sel.b && r.id.startsWith(sel.b))?.id ?? ""}
+            onChange={(e) => setSel({ ...sel, b: e.target.value || undefined })}
+          >
+            <option value="">nothing</option>
+            {list.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name} ({r.id.slice(0, 8)})
+              </option>
+            ))}
+          </select>
+        </label>
+        {listError && <span className="error">{listError}</span>}
+      </header>
+
+      {A.error && <p className="error">{A.error}</p>}
+      {B.error && <p className="error">{B.error}</p>}
+      {M.error && <p className="error">{M.error}</p>}
+      {pairError && <p className="error">{pairError}</p>}
+      {!sel.a && <p className="hint">Choose a recording. `gp recordings list` shows the same list.</p>}
+
+      {A.cache && (
+        <section className="scrubber">
+          <button onClick={() => setFrame(sel.frame - 1)} aria-label="previous frame">
+            &lt;
+          </button>
+          <input
+            type="range"
+            min={0}
+            max={frames}
+            value={Math.min(sel.frame, frames)}
+            onChange={(e) => setFrame(Number(e.target.value))}
+            data-testid="scrubber"
+          />
+          <button onClick={() => setFrame(sel.frame + 1)} aria-label="next frame">
+            &gt;
+          </button>
+          <label>
+            frame <FrameInput frame={Math.min(sel.frame, frames)} max={frames} onCommit={setFrame} /> of {frames}
+          </label>
+          <span className="status" data-testid="status">
+            {shown ? `frame ${a.frame} from the ${a.from}` : "loading"}
+            {input ? `; input ${heldNames(input.pads[0] ?? "")}${input.polled ? "" : " (lag frame)"}` : ""}
+            {lastSeek !== undefined ? `; seek ${lastSeek.toFixed(0)} ms (slowest ${stats.max.toFixed(0)} ms)` : ""}
+          </span>
+        </section>
+      )}
+      {A.cache && <Annotations api={api} id={A.cache.recording.id} frames={frames} frame={Math.min(sel.frame, frames)} setFrame={setFrame} />}
+      {frameError && <p className="error">{frameError}</p>}
+
+      {a && current && (
+        <main className="views">
+          {views.map((v) => (
+            <section key={v.id} className={v.wide ? "view wide" : "view"} data-view={v.id}>
+              <h2>{v.title}</h2>
+              <v.component api={api} frame={a.frame} a={a} b={panes.b} diff={diff} m={pair ? panes.m : undefined} pair={pair} setFrame={setFrame} />
+            </section>
+          ))}
+        </main>
+      )}
+    </div>
+  );
+
+  if (only === "inspector") return <div className="app embed">{inspector}</div>;
+
   return (
     <div className={gameShown ? "app with-game" : "app"}>
       {sel.run ? (
@@ -404,103 +521,7 @@ function Workspace({ api = defaultApi }: { api?: Api }) {
         )}
         <div className={sel.run ? "details-body has-run" : "details-body"}>
           <LivePanel api={api} run={sel.run} events={events} setRun={(run: string | undefined) => setSel((s) => ({ ...s, run }))} open={(a) => setSel((s) => ({ ...s, a, frame: 0 }))} />
-          <div className="inspector">
-            <header>
-              <h2>Trace inspector</h2>
-              <label>
-                Recording{" "}
-                <select
-                  data-testid="pick-a"
-                  value={list.find((r) => sel.a && r.id.startsWith(sel.a))?.id ?? ""}
-                  onChange={(e) => setSel({ a: e.target.value || undefined, b: sel.b, m: sel.m, run: sel.run, frame: 0 })}
-                >
-                  <option value="">choose a recording</option>
-                  {list.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name} ({r.id.slice(0, 8)}, {r.frames} frames)
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                model run{" "}
-                <select
-                  data-testid="pick-m"
-                  value={list.find((r) => sel.m && r.id.startsWith(sel.m))?.id ?? ""}
-                  onChange={(e) => setSel({ ...sel, m: e.target.value || undefined })}
-                >
-                  <option value="">nothing</option>
-                  {list.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name} ({r.id.slice(0, 8)})
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                compare with{" "}
-                <select
-                  data-testid="pick-b"
-                  value={list.find((r) => sel.b && r.id.startsWith(sel.b))?.id ?? ""}
-                  onChange={(e) => setSel({ ...sel, b: e.target.value || undefined })}
-                >
-                  <option value="">nothing</option>
-                  {list.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name} ({r.id.slice(0, 8)})
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {listError && <span className="error">{listError}</span>}
-            </header>
-
-            {A.error && <p className="error">{A.error}</p>}
-            {B.error && <p className="error">{B.error}</p>}
-            {M.error && <p className="error">{M.error}</p>}
-            {pairError && <p className="error">{pairError}</p>}
-            {!sel.a && <p className="hint">Choose a recording. `gp recordings list` shows the same list.</p>}
-
-            {A.cache && (
-              <section className="scrubber">
-                <button onClick={() => setFrame(sel.frame - 1)} aria-label="previous frame">
-                  &lt;
-                </button>
-                <input
-                  type="range"
-                  min={0}
-                  max={frames}
-                  value={Math.min(sel.frame, frames)}
-                  onChange={(e) => setFrame(Number(e.target.value))}
-                  data-testid="scrubber"
-                />
-                <button onClick={() => setFrame(sel.frame + 1)} aria-label="next frame">
-                  &gt;
-                </button>
-                <label>
-                  frame <FrameInput frame={Math.min(sel.frame, frames)} max={frames} onCommit={setFrame} /> of {frames}
-                </label>
-                <span className="status" data-testid="status">
-                  {shown ? `frame ${a.frame} from the ${a.from}` : "loading"}
-                  {input ? `; input ${heldNames(input.pads[0] ?? "")}${input.polled ? "" : " (lag frame)"}` : ""}
-                  {lastSeek !== undefined ? `; seek ${lastSeek.toFixed(0)} ms (slowest ${stats.max.toFixed(0)} ms)` : ""}
-                </span>
-              </section>
-            )}
-            {A.cache && <Annotations api={api} id={A.cache.recording.id} frames={frames} frame={Math.min(sel.frame, frames)} setFrame={setFrame} />}
-            {frameError && <p className="error">{frameError}</p>}
-
-            {a && current && (
-              <main className="views">
-                {views.map((v) => (
-                  <section key={v.id} className={v.wide ? "view wide" : "view"} data-view={v.id}>
-                    <h2>{v.title}</h2>
-                    <v.component api={api} frame={a.frame} a={a} b={panes.b} diff={diff} m={pair ? panes.m : undefined} pair={pair} setFrame={setFrame} />
-                  </section>
-                ))}
-              </main>
-            )}
-          </div>
+          {inspector}
         </div>
       </details>
     </div>

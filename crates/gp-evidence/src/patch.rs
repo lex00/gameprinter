@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 
 /// A patch file's format, found by its magic bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum PatchFormat {
     Ips,

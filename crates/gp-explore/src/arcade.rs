@@ -8,7 +8,7 @@
 //! names are the corpus's (`coin`, `start1`, `right`, `left`, `down`, `up`,
 //! `tap`), so a sequence writes as a `.presses` file's spans.
 
-use crate::presses::Rng;
+use crate::presses::{Palette, Rng};
 
 pub const COIN: u8 = 1 << 0;
 pub const START: u8 = 1 << 1;
@@ -35,6 +35,28 @@ pub const CHORDS: &[u8] = &[
 
 /// One button each, for a search's single presses.
 pub const PLAY: &[u8] = &[UP, DOWN, LEFT, RIGHT, TAP];
+
+/// A press the board can take in play: the stick one way on each axis
+/// (right over left, down over up, as the NES's rule keeps one), no coin
+/// and no start.
+pub fn legal(p: u8) -> u8 {
+    let mut p = p;
+    if p & LEFT != 0 && p & RIGHT != 0 {
+        p &= !LEFT;
+    }
+    if p & UP != 0 && p & DOWN != 0 {
+        p &= !UP;
+    }
+    p & !(COIN | START)
+}
+
+/// The palette a search mutates arcade presses with
+/// ([`crate::presses::mutate_with`]).
+pub const PALETTE: Palette = Palette {
+    chords: CHORDS,
+    play: PLAY,
+    legal,
+};
 
 /// Each button's name in a span, by bit.
 pub const NAMES: [(u8, &str); 7] = [

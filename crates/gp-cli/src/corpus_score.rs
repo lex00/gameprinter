@@ -22,7 +22,7 @@ use crate::hosted::Source;
 /// A game's manifest, where `[scored_against]` is.
 const MANIFEST: &str = "template.toml";
 /// Score records inside a template.
-const EVIDENCE_DIR: &str = "evidence";
+pub(crate) const EVIDENCE_DIR: &str = "evidence";
 /// The manifest beside a clip set.
 pub(crate) const FILE: &str = "corpus.toml";
 /// The score record's own format.
@@ -32,6 +32,37 @@ pub(crate) const PREDICATE: &str = "urn:game-printer:score-record:0";
 
 #[derive(Subcommand)]
 pub enum CorpusCmd {
+    /// A corpus's name, version and hash, whether its clips changed since
+    /// that version, and, for a template, the corpus it is scored against
+    /// and its score records, each with the corpus it is from.
+    Show { dir: PathBuf },
+    /// The clips added, removed and changed from corpus A to corpus B, and
+    /// the version step that makes. Each is a folder, or REV:DIR for a
+    /// folder as git revision REV has it (`HEAD~1:games/donkey-kong`).
+    Diff { a: String, b: String },
+    /// Check the corpus's content hash, then make every clip again from the
+    /// ROM through the game's module into run RUN (as `gp corpus score`
+    /// does) and check every curve hash; a plan's curves are derived, so
+    /// each of its clips is only made. Exit 1 on any difference.
+    Verify {
+        dir: PathBuf,
+        #[arg(long)]
+        run: String,
+        /// When every clip was made, write the curves measured under the
+        /// model's state mapping into clips.toml (not for a plan). A major
+        /// change: `gp corpus bump` says so.
+        #[arg(long)]
+        accept: bool,
+        /// The game's built module. Needed for a model with hooks.
+        #[arg(long)]
+        module: Option<PathBuf>,
+        /// The model's lifted assets (default: $GP_HOME/work/assets/SOURCE).
+        #[arg(long)]
+        assets: Option<PathBuf>,
+        /// The ROM; by default the one in $GP_ROM_DIR the package names.
+        #[arg(long)]
+        rom: Option<PathBuf>,
+    },
     /// Write corpus.toml beside DIR/clips.toml, so an older clip set becomes
     /// a scoring corpus with a name, a version (1.0.0 unless given), the ROM
     /// and mapping from the set and the content hash of its recipes. A game
@@ -154,6 +185,26 @@ pub enum CorpusCmd {
 
 pub(crate) fn run(cmd: &CorpusCmd, paths: &Paths) -> Result<Outcome> {
     match cmd {
+        CorpusCmd::Show { dir } => crate::corpus_w9::show(dir),
+        CorpusCmd::Diff { a, b } => crate::corpus_w9::diff_cmd(a, b),
+        CorpusCmd::Verify {
+            dir,
+            run,
+            accept,
+            module,
+            assets,
+            rom,
+        } => crate::corpus_w9::verify(
+            paths,
+            dir,
+            run,
+            *accept,
+            &crate::corpus_w9::VerifyOpen {
+                module: module.as_deref(),
+                assets: assets.as_deref(),
+                rom: rom.as_deref(),
+            },
+        ),
         CorpusCmd::Init {
             dir,
             name,
@@ -247,7 +298,7 @@ const HEAD_COMMENT: &str = "# A scoring corpus (docs/formats/scoring-corpus.md):
     # hashes and metadata only: `gp corpus verify` makes every clip again from\n\
     # your own ROM. `gp corpus bump` suggests the next version.\n";
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CorpusFile {
     pub corpus: Head,
@@ -262,7 +313,7 @@ pub(crate) struct CorpusFile {
     pub changelog: Vec<Change>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Head {
     /// The clip set format this manifest is part of, [`cs::FORMAT`].
@@ -285,7 +336,7 @@ pub(crate) struct Head {
 }
 
 /// The game a corpus is for.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Target {
     /// The template or source ID.
@@ -300,7 +351,7 @@ pub(crate) struct Target {
 }
 
 /// What a corpus needs of the tools that make its clips again.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Needs {
     /// gp's version and the corpus generator's, as the clip set says.
@@ -311,7 +362,7 @@ pub(crate) struct Needs {
     pub mapping: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Change {
     pub version: String,
@@ -395,7 +446,7 @@ pub(crate) enum Step {
 }
 
 impl Step {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Step::None => "none",
             Step::Patch => "patch",
@@ -406,15 +457,15 @@ impl Step {
 }
 
 /// A corpus as read from its folder.
-struct Read {
-    set: ClipSet,
-    recipes: BTreeMap<String, String>,
-    hash: String,
-    metadata: String,
-    manifest: Option<CorpusFile>,
+pub(crate) struct Read {
+    pub set: ClipSet,
+    pub recipes: BTreeMap<String, String>,
+    pub hash: String,
+    pub metadata: String,
+    pub manifest: Option<CorpusFile>,
 }
 
-fn load(dir: &Path) -> Result<Read> {
+pub(crate) fn load(dir: &Path) -> Result<Read> {
     if let Some(p) = crate::plan::load(dir)? {
         return Ok(Read {
             metadata: p.manifest.corpus.metadata.clone(),
@@ -495,7 +546,7 @@ impl Diff {
         }
     }
 
-    fn json(&self) -> Value {
+    pub(crate) fn json(&self) -> Value {
         json!({
             "added": self.added,
             "removed": self.removed,
@@ -506,7 +557,7 @@ impl Diff {
         })
     }
 
-    fn lines(&self) -> Vec<String> {
+    pub(crate) fn lines(&self) -> Vec<String> {
         let mut out = Vec::new();
         for id in &self.added {
             out.push(format!("added    {id}"));
@@ -571,15 +622,15 @@ fn diff_recorded(m: &CorpusFile, now: &Read) -> Diff {
     d
 }
 
-fn or_none(s: &str) -> &str {
+pub(crate) fn or_none(s: &str) -> &str {
     if s.is_empty() { "none" } else { s }
 }
 
-fn short(h: &str) -> &str {
+pub(crate) fn short(h: &str) -> &str {
     &h[..h.len().min(12)]
 }
 
-fn checked(dir: &Path) -> Result<(Read, CorpusFile, Vec<String>)> {
+pub(crate) fn checked(dir: &Path) -> Result<(Read, CorpusFile, Vec<String>)> {
     let now = load(dir)?;
     let Some(m) = now.manifest.clone() else {
         bail!("{} has no {FILE}; gp corpus init makes one", dir.display());
@@ -989,7 +1040,7 @@ fn bump_as(
     Ok(Outcome::ok(v, text.join("\n")))
 }
 
-fn accept_curves(dir: &Path, g: &cs::Regen) -> Result<usize> {
+pub(crate) fn accept_curves(dir: &Path, g: &cs::Regen) -> Result<usize> {
     let file = dir.join(cs::FILE);
     let text = fs::read_to_string(&file)?;
     let head: String = text

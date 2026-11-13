@@ -117,9 +117,9 @@ pub(crate) fn recipe(dir: &Path, hash: &str) -> Result<ClipInput> {
     }
     let text = fs::read_to_string(dir.join("recipes").join(format!("{hash}.presses")))
         .with_context(|| format!("the session has no recipe {hash}"))?;
-    let crate::clipset::Presses { frames, spans, .. } = crate::clipset::parse_presses(&text)?;
-    let refs: Vec<&str> = spans.iter().map(String::as_str).collect();
-    let inputs = gp_evidence::input_log::generate(usize::try_from(frames)?, &refs)?.frames;
+    // An arcade session's recipes name the board's buttons in its layout.
+    let p = crate::clipset::parse_presses(&text)?;
+    let inputs = gp_evidence::InputLog::parse(&crate::clipset::log_of_presses(&p)?)?.frames;
     Ok(ClipInput {
         set: "watch".into(),
         id: hash.to_owned(),
@@ -191,7 +191,7 @@ pub(crate) fn run(cmd: &WatchCmd, paths: &Paths) -> Result<Outcome> {
 }
 
 /// The one writer of a session's events.
-struct Writer {
+pub(crate) struct Writer {
     dir: PathBuf,
     file: File,
     seq: u64,
@@ -220,7 +220,34 @@ impl Writer {
         Ok(())
     }
 
-    fn emit(
+    /// Events written so far.
+    pub(crate) fn seq(&self) -> u64 {
+        self.seq
+    }
+
+    /// [`Writer::recipe`] for an arcade session: the presses in the
+    /// board's buttons, with the set's layout line.
+    pub(crate) fn recipe_arcade(
+        &self,
+        clip: &ClipInput,
+        hash: &str,
+        layout: &gp_evidence::input_log::ArcadeLayout,
+    ) -> Result<()> {
+        let d = self.dir.join("recipes");
+        fs::create_dir_all(&d)?;
+        let pads: Vec<u8> = clip.inputs.iter().map(|i| i.pads[0]).collect();
+        fs::write(
+            d.join(format!("{hash}.presses")),
+            crate::clipset::presses_text(&crate::clipset::Presses {
+                frames: pads.len() as u64,
+                spans: gp_explore::arcade::spans(&pads),
+                arcade: Some(layout.clone()),
+            }),
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn emit(
         &mut self,
         run: Option<&str>,
         frame: Option<u64>,
@@ -510,7 +537,9 @@ fn start(a: &WatchStartArgs, paths: &Paths) -> Result<Outcome> {
         _lock: lock,
     };
     let rom = fs::read(&e.rom).with_context(|| format!("reading {}", e.rom.display()))?;
-    crate::original::nes_only(crate::roms::Platform::of_file(&rom), "gp watch's stage 0")?;
+    if crate::roms::Platform::of_file(&rom) == crate::roms::Platform::Arcade {
+        return crate::watch_z80::start(&a.name, e, &mut w, &dir, &rom, paths, t0);
+    }
     let (prg, mapper) = gp_nes::harvest::ines_prg(&rom).context("not an iNES file")?;
     let board = gp_nes::codemap::Board::of(prg, mapper);
     let sets: Vec<PathBuf> = e.start.iter().cloned().collect();
@@ -893,7 +922,8 @@ impl Writer {
 pub(crate) struct Session {
     pub rom_path: PathBuf,
     pub rom: Vec<u8>,
-    pub board: gp_nes::codemap::Board,
+    /// The NES cartridge's board; `None` for an arcade romset's session.
+    pub board: Option<gp_nes::codemap::Board>,
     pub starts: Vec<ClipInput>,
     pub kept: Vec<ClipInput>,
 }
@@ -905,8 +935,12 @@ pub(crate) fn load_session(dir: &Path) -> Result<Session> {
     )?;
     let rom_path = PathBuf::from(s["rom"].as_str().context("the session names no ROM")?);
     let rom = fs::read(&rom_path).with_context(|| format!("reading {}", rom_path.display()))?;
-    let (prg, mapper) = gp_nes::harvest::ines_prg(&rom).context("not an iNES file")?;
-    let board = gp_nes::codemap::Board::of(prg, mapper);
+    let board = if crate::roms::Platform::of_file(&rom) == crate::roms::Platform::Arcade {
+        None
+    } else {
+        let (prg, mapper) = gp_nes::harvest::ines_prg(&rom).context("not an iNES file")?;
+        Some(gp_nes::codemap::Board::of(prg, mapper))
+    };
     let named = |id: &str, hash: &str| -> Result<ClipInput> {
         let mut c = recipe(dir, hash)?;
         c.id = id.to_owned();
@@ -1007,6 +1041,30 @@ fn explore_more(a: &WatchExploreArgs, paths: &Paths) -> Result<Outcome> {
     let dir = session_dir(&paths.home, &a.name)?;
     let sess = load_session(&dir)?;
     let mut w = Writer::append(&dir)?;
+    let Some(board) = &sess.board else {
+        let e = more_args(a, &sess);
+        let (ex, map) = crate::watch_z80::explore_more(
+            &mut w,
+            &dir,
+            &sess.rom,
+            &e,
+            sess.starts.clone(),
+            &sess.kept,
+        )?;
+        return Ok(Outcome::ok(
+            json!({"name": a.name, "events": w.seq, "kept": ex.kept.len(), "targets": ex.targets,
+                   "reached": ex.reached, "read": map.routines.len(), "routines": map.routines.len()}),
+            format!(
+                "session {}: search {} of {} targets reached ({}); kept {}; {} routines in the main Z80's code map",
+                a.name,
+                ex.reached.len(),
+                ex.targets.len(),
+                ex.reached.join(", "),
+                ex.kept.len(),
+                map.routines.len()
+            ),
+        ));
+    };
     let store = gp_events::store::Store::at(paths.home.join("work").join("events"));
     let mut all = sess.starts.clone();
     all.extend(sess.kept.iter().cloned());
@@ -1021,26 +1079,8 @@ fn explore_more(a: &WatchExploreArgs, paths: &Paths) -> Result<Outcome> {
     .levels;
     let (_, u) = crate::model_static::harvest_seeded(&sess.rom_path, None, true, Some(&known))?;
     let u = u.context("the reader gives an unread report")?;
-    let mut seen = Seen::from_known(&sess.board, &known, &u);
-    let e = ExploreArgs {
-        rom: sess.rom_path.clone(),
-        start: None,
-        start_runs: 0,
-        start_seed: 0,
-        start_frames: 0,
-        no_starts: false,
-        from: Vec::new(),
-        targets: a.targets.clone(),
-        aim: a.aim.clone(),
-        new_code: a.new_code,
-        budget: a.budget,
-        seed: a.seed,
-        min_frames: a.min_frames,
-        max_frames: a.max_frames,
-        keep: a.keep,
-        write: None,
-        store: None,
-    };
+    let mut seen = Seen::from_known(board, &known, &u);
+    let e = more_args(a, &sess);
     let (ex, u2) = search_into(
         &mut w,
         &mut seen,
@@ -1065,6 +1105,29 @@ fn explore_more(a: &WatchExploreArgs, paths: &Paths) -> Result<Outcome> {
             u2.routines
         ),
     ))
+}
+
+/// The search `gp watch explore` asks for, from the session's starts.
+fn more_args(a: &WatchExploreArgs, sess: &Session) -> ExploreArgs {
+    ExploreArgs {
+        rom: sess.rom_path.clone(),
+        start: None,
+        start_runs: 0,
+        start_seed: 0,
+        start_frames: 0,
+        no_starts: false,
+        from: Vec::new(),
+        targets: a.targets.clone(),
+        aim: a.aim.clone(),
+        new_code: a.new_code,
+        budget: a.budget,
+        seed: a.seed,
+        min_frames: a.min_frames,
+        max_frames: a.max_frames,
+        keep: a.keep,
+        write: None,
+        store: None,
+    }
 }
 
 /// The PRG offset of an instruction named as the harvest names it:
@@ -1094,14 +1157,51 @@ fn rerun(paths: &Paths, name: &str, watch: &[String], hooks: &[String]) -> Resul
         .iter()
         .map(|a| crate::reach::parse_addr(a))
         .collect::<Result<_>>()?;
-    let at: Vec<usize> = hooks
-        .iter()
-        .map(|h| parse_at(&sess.board, h))
-        .collect::<Result<_>>()?;
-    let mut w = Writer::append(&dir)?;
-    let namer = Namer::of_board(sess.board.clone());
     let mut all = sess.starts.clone();
     all.extend(sess.kept.iter().cloned());
+    let Some(board) = &sess.board else {
+        if !hooks.is_empty() {
+            bail!(
+                "--hook writes the 6502's registers (A, X, Y, S, P) in its events; an arcade session's recipes run on the Z80, whose registers the event can't hold. Watch writes with --watch, or read a window's instructions and registers with `gp watch detail`"
+            );
+        }
+        let mut w = Writer::append(&dir)?;
+        w.emit(
+            None,
+            None,
+            None,
+            WatchBody::Rerun {
+                watch: addrs.iter().map(|a| format!("{a:04X}")).collect(),
+                hooks: Vec::new(),
+                recipes: all.len(),
+            },
+        )?;
+        let (watch_hits, written) =
+            crate::watch_z80::rerun_watch(&mut w, &sess.rom, &all, &addrs, RERUN_CAP)?;
+        w.emit(
+            None,
+            None,
+            None,
+            WatchBody::RerunEnd {
+                watch_hits,
+                hook_hits: 0,
+                written,
+            },
+        )?;
+        return Ok(Outcome::ok(
+            json!({"name": name, "recipes": all.len(), "watch_hits": watch_hits, "hook_hits": 0, "written": written, "events": w.seq}),
+            format!(
+                "session {name}: {} recipes run again; {watch_hits} watched writes, {written} written as events",
+                all.len()
+            ),
+        ));
+    };
+    let at: Vec<usize> = hooks
+        .iter()
+        .map(|h| parse_at(board, h))
+        .collect::<Result<_>>()?;
+    let mut w = Writer::append(&dir)?;
+    let namer = Namer::of_board(board.clone());
     w.emit(
         None,
         None,
@@ -1195,7 +1295,11 @@ fn detail(paths: &Paths, name: &str, hash: &str, frames: &str) -> Result<Outcome
     let sess = load_session(&dir)?;
     let clip = recipe(&dir, hash)?;
     let (a, last) = crate::reach::frame_range(frames)?;
-    let (v, text) = crate::reach::detail_of(&sess.rom, &clip, a, last)?;
+    let (v, text) = if sess.board.is_none() {
+        crate::watch_z80::detail(&sess.rom, &clip, a, last)?
+    } else {
+        crate::reach::detail_of(&sess.rom, &clip, a, last)?
+    };
     Ok(Outcome::ok(v, text))
 }
 
@@ -1211,6 +1315,9 @@ pub(crate) fn point(
 ) -> Result<Value> {
     let sess = load_session(dir)?;
     let clip = recipe(dir, hash)?;
+    let Some(board) = &sess.board else {
+        return crate::watch_z80::point(&sess.rom, &clip, hash, frame, rect);
+    };
     let n = usize::try_from(frame)?.min(clip.inputs.len());
     let inputs = &clip.inputs[..n];
     let mut nes = gp_nes::Nes::power_on(&sess.rom, clip.power_on)?;
@@ -1229,7 +1336,7 @@ pub(crate) fn point(
     // The page the code copies to OAM: the last value written to $4014.
     let mut page = None;
     let mut writers: BTreeMap<u16, (String, u64, u8)> = BTreeMap::new();
-    let namer = Namer::of_board(sess.board.clone());
+    let namer = Namer::of_board(board.clone());
     gp_events::run_frames_with(
         &sess.rom,
         clip.power_on,

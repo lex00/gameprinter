@@ -1,0 +1,15 @@
+/* The old inspector's views on the page (details.js): the header's DETAILS
+   button, its drawer, and REFINE's THE CLIP MEASURED. */
+#details-toggle { font: bold 12px var(--mono); background: var(--nes-0f, #000); color: var(--muted); border: 2px solid var(--line); padding: 2px 8px; cursor: pointer; align-self: center; }
+#details-toggle[aria-pressed="true"] { color: var(--nes-28); border-color: var(--nes-28); }
+#details-drawer { display: block; position: fixed; left: 0; right: 0; bottom: 0; height: 72vh; overflow-y: auto; background: var(--bg); border-top: 2px solid var(--nes-28); padding: 8px 16px 16px; z-index: 20; }
+#details-drawer[hidden] { display: none; }
+#details-drawer .details-head { display: flex; align-items: baseline; gap: 16px; position: sticky; top: -8px; background: var(--bg); padding: 4px 0; z-index: 1; }
+#details-drawer h2 { font-size: 14px; color: var(--nes-28); margin: 0; }
+#details-drawer .details-head button { margin-left: auto; font: bold 12px var(--mono); background: var(--bg); color: var(--fg); border: 2px solid var(--line); padding: 2px 8px; cursor: pointer; }
+#details-drawer .muted, #measured .muted { color: var(--muted); font-size: 13px; }
+body.details-open footer { margin-bottom: 72vh; }
+body.log-open #details-drawer { right: 380px; }
+@media (max-width: 900px) { body.log-open #details-drawer { right: 0; } }
+#measured { margin-top: 20px; padding-top: 10px; border-top: 2px solid var(--nes-2d); }
+.details-frame { display: block; width: 100%; border: 0; background: var(--bg); }

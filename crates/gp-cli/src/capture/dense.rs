@@ -37,12 +37,12 @@ use gp_evidence::input_log::button;
 use gp_explore::presses::{Rng, inputs_of, spans};
 use gp_interp::mapping::Mapping;
 use gp_nes::coverage::{CodeMap, EXTRA, SIZE, TAKEN};
-use gp_nes::protocol::NesRuntime;
 use gp_runtime::{InputFrame, Runtime, Value};
 use serde::Serialize;
 use serde_json::{Value as Json, json};
 
 use super::{Inputs, StartPoint};
+use crate::original::{OriginalRuntime, Platform};
 
 #[derive(Args, Debug, Clone)]
 pub struct DenseArgs {
@@ -138,20 +138,23 @@ impl<'a> Measures<'a> {
         Self { mapping, tables }
     }
 
-    pub(crate) fn read(&self, o: &NesRuntime, map: &mut CodeMap) {
+    pub(crate) fn read(&self, o: &OriginalRuntime, map: &mut CodeMap) {
         if let Ok(vals) = gp_interp::translate::read_original(o, self.mapping) {
             for (i, v) in vals.iter().enumerate() {
                 map.extra((i as u64) << 32 | (bucket(v) as u64 & 0xFFFF_FFFF));
             }
         }
-        let nes = o.nes();
+        let peek = |a: u16| match o {
+            OriginalRuntime::Nes(n) => n.nes().peek(a),
+            OriginalRuntime::Arcade(t) => t.tapper().peek(a),
+        };
         for (t, sl) in self.tables.iter().enumerate() {
             for i in 0..sl.count {
-                if sl.flag_of(i, |a| Ok(nes.peek(a))).unwrap_or(0) == 0 {
+                if sl.flag_of(i, |a| Ok(peek(a))).unwrap_or(0) == 0 {
                     continue;
                 }
-                let k = u64::from(sl.id.map_or(0, |at| nes.peek(at + i)));
-                let s = sl.state.map_or(0, |a| u64::from(nes.peek(a + i)));
+                let k = u64::from(sl.id.map_or(0, |at| peek(at + i)));
+                let s = sl.state.map_or(0, |a| u64::from(peek(a + i)));
                 map.extra(1 << 62 | (t as u64) << 24 | k << 8 | s);
             }
         }
@@ -170,7 +173,7 @@ pub(crate) struct Reach {
 /// measures to a map, and noting the last frame that found a feature
 /// `base` lacks.
 pub(crate) fn reach(
-    o: &mut NesRuntime,
+    o: &mut OriginalRuntime,
     inputs: &[InputFrame],
     m: &Measures,
     base: &CodeMap,
@@ -178,7 +181,7 @@ pub(crate) fn reach(
     let mut map = CodeMap::new();
     let (mut last_new, mut new) = (0, 0);
     for (k, i) in inputs.iter().enumerate() {
-        if o.step_covered(i, &mut map).is_err() {
+        if crate::covered::step_covered(o, i, &mut map).is_err() {
             break;
         }
         m.read(o, &mut map);
@@ -199,9 +202,8 @@ struct Cand {
     map: CodeMap,
 }
 
-pub(crate) fn restore(rom: &[u8], snap: &[u8]) -> anyhow::Result<NesRuntime> {
-    let mut o = NesRuntime::load(rom, gp_evidence::manifest::PowerOn::default())
-        .map_err(|e| anyhow::anyhow!("the ROM: {e}"))?;
+pub(crate) fn restore(rom: &[u8], snap: &[u8]) -> anyhow::Result<OriginalRuntime> {
+    let mut o = OriginalRuntime::of_rom(rom).map_err(|e| anyhow::anyhow!("the ROM: {e}"))?;
     o.restore(snap).map_err(anyhow::Error::msg)?;
     Ok(o)
 }
@@ -276,19 +278,41 @@ fn search(
 ) -> Vec<Cand> {
     let (min, max) = (o.min_frames as usize, o.max_frames as usize);
     let mut rng = Rng::new(o.seed);
-    // The seeds: nothing, a walk, a run, a run with jumps, a walk back.
+    let arcade = Platform::of_file(rom) == Platform::Arcade;
+    // The seeds: nothing, a walk, a run, a run with jumps, a walk back. On
+    // the arcade board: nothing, the stick each way, the stick with the
+    // tap held on and off.
     let mut todo: Vec<(usize, Vec<u8>)> = Vec::new();
     for s in 0..starts.len() {
-        let run_jumps: Vec<u8> = (0..max)
-            .map(|k| button::RIGHT | button::B | if k % 40 < 20 { button::A } else { 0 })
-            .collect();
-        for p in [
-            vec![0; min],
-            vec![button::RIGHT; max],
-            vec![button::RIGHT | button::B; max],
-            run_jumps,
-            vec![button::LEFT; min],
-        ] {
+        let seeds = if arcade {
+            use gp_explore::arcade::{DOWN, LEFT, RIGHT, TAP, UP};
+            let tapping = |d: u8| -> Vec<u8> {
+                (0..max)
+                    .map(|k| d | if k % 20 < 10 { TAP } else { 0 })
+                    .collect()
+            };
+            vec![
+                vec![0; min],
+                vec![UP; max],
+                vec![DOWN; max],
+                vec![LEFT; max],
+                vec![RIGHT; min],
+                tapping(0),
+                tapping(LEFT),
+            ]
+        } else {
+            let run_jumps: Vec<u8> = (0..max)
+                .map(|k| button::RIGHT | button::B | if k % 40 < 20 { button::A } else { 0 })
+                .collect();
+            vec![
+                vec![0; min],
+                vec![button::RIGHT; max],
+                vec![button::RIGHT | button::B; max],
+                run_jumps,
+                vec![button::LEFT; min],
+            ]
+        };
+        for p in seeds {
             todo.push((s, p));
         }
     }
@@ -304,19 +328,31 @@ fn search(
         min_frames: min,
         max_frames: max,
     };
-    gp_explore::drive(&mut plan, &mut rng, todo, &d, &mut |plan, batch| {
-        let base = plan.global.clone();
-        crate::pool::map(
-            batch,
-            || (),
-            |_, _, (s, p)| -> Option<(CodeMap, u64, usize)> {
-                let mut or = restore(rom, &starts[*s].snapshot).ok()?;
-                let r = reach(&mut or, &inputs_of(p), m, &base);
-                Some((r.map, r.last_new, r.new))
-            },
-            &mut |_| {},
-        )
-    });
+    let palette = if arcade {
+        gp_explore::arcade::PALETTE
+    } else {
+        gp_explore::presses::NES
+    };
+    gp_explore::drive_with(
+        &mut plan,
+        &mut rng,
+        todo,
+        &d,
+        &palette,
+        &mut |plan, batch| {
+            let base = plan.global.clone();
+            crate::pool::map(
+                batch,
+                || (),
+                |_, _, (s, p)| -> Option<(CodeMap, u64, usize)> {
+                    let mut or = restore(rom, &starts[*s].snapshot).ok()?;
+                    let r = reach(&mut or, &inputs_of(p), m, &base);
+                    Some((r.map, r.last_new, r.new))
+                },
+                &mut |_| {},
+            )
+        },
+    );
     let mut kept = plan.kept;
     // The maps again on the cut sequences.
     let maps = crate::pool::map(
@@ -366,15 +402,34 @@ fn greedy(maps: &[(&CodeMap, u64)], n: usize) -> Vec<(usize, usize)> {
     out
 }
 
+/// Where the program is in the CPU's address space: the NES cartridge's
+/// 8000-FFFF, Tapper's main Z80's ROM below E000.
+pub(crate) fn rom_range(rom: &[u8]) -> std::ops::Range<u32> {
+    if Platform::of_file(rom) == Platform::Arcade {
+        0..0xE000
+    } else {
+        0x8000..0x1_0000
+    }
+}
+
+/// Press spans of a sequence in the platform's button names.
+pub(crate) fn spans_of(rom: &[u8], pads: &[u8]) -> Vec<String> {
+    if Platform::of_file(rom) == Platform::Arcade {
+        gp_explore::arcade::spans(pads)
+    } else {
+        spans(pads)
+    }
+}
+
 /// What a set of maps covers, in the report's terms.
-pub(crate) fn covered(maps: &[&CodeMap]) -> Json {
+pub(crate) fn covered(maps: &[&CodeMap], rom_range: std::ops::Range<u32>) -> Json {
     let mut u = CodeMap::new();
     for m in maps {
         u.union(m);
     }
     json!({
         "features": u.count(),
-        "rom_code": u.count_in(0x8000..0x1_0000),
+        "rom_code": u.count_in(rom_range),
         "branches": u.count_in(TAKEN..EXTRA),
         "measures": u.count_in(EXTRA..SIZE),
     })
@@ -531,7 +586,7 @@ pub(crate) fn cli(paths: &gp_evidence::Paths, o: &DenseArgs) -> anyhow::Result<c
             fs::copy(inp.dir.join(&s.presses_file), &to)
                 .with_context(|| format!("copying {}", s.presses_file))?;
         }
-        let presses = spans(&c.pads);
+        let presses = spans_of(&rom, &c.pads);
         let frames = c.pads.len() as u64;
         let name = format!("searched presses, {frames} frames, from frame {}", s.frame);
         set.clips.push(crate::clipset::Recipe {
@@ -543,7 +598,7 @@ pub(crate) fn cli(paths: &gp_evidence::Paths, o: &DenseArgs) -> anyhow::Result<c
             coverage: coverage_hash(&c.map),
             why: format!(
                 "runs {} ROM addresses and {} features of the original's code",
-                c.map.count_in(0x8000..0x1_0000),
+                c.map.count_in(rom_range(&rom)),
                 c.map.count()
             ),
             start: crate::clipset::StartRecipe {
@@ -561,7 +616,7 @@ pub(crate) fn cli(paths: &gp_evidence::Paths, o: &DenseArgs) -> anyhow::Result<c
             presses,
             frames,
             coverage: coverage_hash(&c.map),
-            rom_code: c.map.count_in(0x8000..0x1_0000),
+            rom_code: c.map.count_in(rom_range(&rom)),
             features: c.map.count(),
         });
     }
@@ -579,13 +634,13 @@ pub(crate) fn cli(paths: &gp_evidence::Paths, o: &DenseArgs) -> anyhow::Result<c
     let maps_of = |order: &[(usize, usize)], all: &[(&CodeMap, u64)], k: usize| -> Json {
         let ms: Vec<&CodeMap> = order.iter().take(k).map(|&(i, _)| all[i].0).collect();
         let frames: u64 = order.iter().take(k).map(|&(i, _)| all[i].1).sum();
-        let mut c = covered(&ms);
+        let mut c = covered(&ms, rom_range(&rom));
         c["clips"] = json!(ms.len());
         c["frames"] = json!(frames);
         c
     };
     let pool_all: Vec<&CodeMap> = pool_pairs.iter().map(|p| p.0).collect();
-    let mut pool_cov = covered(&pool_all);
+    let mut pool_cov = covered(&pool_all, rom_range(&rom));
     pool_cov["clips"] = json!(pool_all.len());
     pool_cov["frames"] = json!(pool_pairs.iter().map(|p| p.1).sum::<u64>());
     let curve = |order: &[(usize, usize)], all: &[(&CodeMap, u64)]| -> Vec<Json> {

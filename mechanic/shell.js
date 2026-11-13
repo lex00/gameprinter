@@ -85,6 +85,9 @@ export function startShell(page) {
   const work = refineWork(page);
   const themes = themesPane(page);
   strip(page);
+  // The old inspector's views (wave 8): REFINE's THE CLIP MEASURED and the
+  // header's DETAILS drawer (mechanic/details/).
+  import("./details/details.js").then((m) => m.startDetails(page)).catch(() => undefined);
 
   const asked = new URLSearchParams(location.search).get("tab");
   // The old names: mech and refine were CLIPS's two views, free was PLAY.
@@ -219,7 +222,12 @@ function refineWork(page) {
 function themesPane(page) {
   const body = $("themes-body");
   let done = false;
+  // The full pane (mechanic/themes/pane.js, crates/gp-cli/src/theme_serve.rs)
+  // when the server has it; else the list below.
+  let full;
   async function load() {
+    if (full === undefined) full = await import("./themes/pane.js").then((m) => m.mountThemes(body, page)).catch(() => null);
+    if (full) return full.load();
     if (done) return;
     let t;
     try { t = await page.api("api/themes"); } catch (e) { body.textContent = `No themes: ${e.message ?? e}`; return; }

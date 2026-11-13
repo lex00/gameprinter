@@ -1,0 +1,317 @@
+{
+  "$id": "game-printer:roms@1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ROM sources, `roms.toml`",
+  "type": "object",
+  "properties": {
+    "source": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/KnownSource"
+      }
+    }
+  },
+  "$defs": {
+    "BoardMirroring": {
+      "description": "How a board wires nametable mirroring.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "horizontal",
+            "vertical",
+            "four-screen"
+          ]
+        },
+        {
+          "description": "The mapper chip sets it (MMC1, MMC3 without four-screen RAM). The\nheader's mirroring bit is no board fact, so it isn't compared, and\nthe registry's header writes 0. Emulators may still read it as the\npower-on mirroring (tetanes-core does for MMC3, not MMC1), which is\nwhy it's normalised.",
+          "type": "string",
+          "const": "mapper"
+        }
+      ]
+    },
+    "KnownSource": {
+      "type": "object",
+      "properties": {
+        "battery": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "board": {
+          "description": "The board's name, e.g. `NES-SGROM`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "board_evidence": {
+          "description": "Where the board facts come from.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "chr_ram_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "chr_rom_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "evidence": {
+          "description": "How the hash was verified, or why it isn't yet.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Stable ID used in recordings and templates, e.g. `smb1-ntsc-prg0`.",
+          "type": "string"
+        },
+        "ines_sha1": {
+          "description": "SHA-1 of the file with a plain iNES 1.0 header and no trainer,\nlowercase hex: header bytes 0 to 6 as in the file with byte 6's\ntrainer bit cleared, byte 7's high nibble (the mapper's) kept, the\nrest zero. What BizHawk writes as a `.bk2` movie's `SHA1` for a ROM\nnot in its game database.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "`dump` (the default): a release, read from a cartridge. `patched`: a\nbase source with a ROM hack's patch applied (docs/sources.md,\n\"Patched sources\"), described by `patch`.",
+          "$ref": "#/$defs/SourceKind"
+        },
+        "mapper": {
+          "description": "The NES mapper; an arcade source has none and leaves it out.",
+          "type": "integer",
+          "format": "uint16",
+          "default": 0,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "md5": {
+          "description": "MD5 of PRG and CHR without header, lowercase hex: what FCEUX writes\nas an `.fm2` movie's `romChecksum` (docs/movies.md).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mirroring": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BoardMirroring"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "patch": {
+          "description": "For a patched source: the base and the patch. `sha256` and the other\nhashes are the patched image's.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PatchSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "platform": {
+          "description": "`nes` or `arcade`.",
+          "type": "string"
+        },
+        "prg_ram_bytes": {
+          "description": "PRG RAM on the board, battery-backed or not (`battery` says which).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "prg_rom_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "region": {
+          "type": "string"
+        },
+        "revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha1": {
+          "description": "SHA-1 of PRG and CHR without header, lowercase hex.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha256": {
+          "description": "SHA-256 of PRG and CHR without header (see `source::identify_nes`);\nfor an arcade romset, its set's identity (gp_arcade::romset).",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/SourceStatus"
+        },
+        "submapper": {
+          "description": "Board facts (docs/sources.md, \"Board facts\"): with them, the source\nis run and cleaned with a header built from the registry, not the\nfile's. All of `mirroring`, `battery` and the four sizes are given,\nor none of them.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "system": {
+          "description": "An arcade source's MAME set name, such as `rbtapper`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "platform",
+        "region",
+        "sha256",
+        "status"
+      ]
+    },
+    "PatchFormat": {
+      "description": "A patch file's format, found by its magic bytes.",
+      "type": "string",
+      "enum": [
+        "ips",
+        "bps"
+      ]
+    },
+    "PatchOffsets": {
+      "type": "string",
+      "enum": [
+        "ines",
+        "headerless"
+      ]
+    },
+    "PatchSource": {
+      "description": "How a patched source is made: which base, which patch file, and who\nmade it. The repo holds these facts only, never the patch or the result.",
+      "type": "object",
+      "properties": {
+        "author": {
+          "type": "string"
+        },
+        "base": {
+          "description": "The base source's ID, a `dump` entry in the registry.",
+          "type": "string"
+        },
+        "bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "contact": {
+          "description": "How to reach the author.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "credits": {
+          "description": "Other people whose work is in the hack, such as the original\nlevels' author.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "format": {
+          "description": "`ips` or `bps`.",
+          "$ref": "#/$defs/PatchFormat"
+        },
+        "offsets": {
+          "description": "Where the patch counts offsets from: `ines` when they count the\n16-byte header (most NES IPS patches), `headerless` otherwise.",
+          "$ref": "#/$defs/PatchOffsets"
+        },
+        "page": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission": {
+          "description": "`none`, `asked <date>` or `granted <date> <where>`: whether the\nauthor has agreed to anything printed from the hack being shown.",
+          "type": "string"
+        },
+        "sha256": {
+          "description": "SHA-256 and size of the patch file, measured on the author's file.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Where the author or a hub hosts the patch, and the hack's page.\nNever a copy of ours.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "base",
+        "format",
+        "sha256",
+        "bytes",
+        "offsets",
+        "url",
+        "author",
+        "permission"
+      ]
+    },
+    "SourceKind": {
+      "type": "string",
+      "enum": [
+        "dump",
+        "patched"
+      ]
+    },
+    "SourceStatus": {
+      "oneOf": [
+        {
+          "description": "Hash recorded from a file we were given, not yet checked against a reference.",
+          "type": "string",
+          "const": "unverified"
+        },
+        {
+          "description": "Hash matches an independent reference: a byte-exact build, or checksums\npublished by at least two independent sources (weaker; see `evidence`).",
+          "type": "string",
+          "const": "verified"
+        }
+      ]
+    }
+  }
+}

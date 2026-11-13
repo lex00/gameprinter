@@ -1,0 +1,20 @@
+[package]
+name = "gp-chunks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+gp-assets = { version = "0.1.0", path = "../gp-assets" }
+gp-interp = { version = "0.1.0", path = "../gp-interp" }
+gp-model = { version = "0.1.0", path = "../gp-model" }
+gp-sim = { version = "0.1.0", path = "../gp-sim" }
+schemars = "1.2.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+toml = "1.1.8"
+
+[lints]
+workspace = true

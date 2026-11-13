@@ -35,15 +35,30 @@ use serde_json::json;
 use crate::Outcome;
 use crate::mechanic::http::{self, ReadError, Request, Response};
 
+mod annotations;
 pub(crate) mod background;
 pub(crate) mod clip_agent;
+mod coverage;
+mod edits;
 pub(crate) mod freeplay;
 pub(crate) mod game;
 pub(crate) mod generated;
+mod labels;
+mod ladder;
 mod later;
+mod laya;
+mod lockstep;
 mod pages;
+mod pair;
 mod play;
+mod point;
+mod pointing;
+mod recordings;
+mod resolve;
 pub(crate) mod scenarios;
+mod select;
+mod tiles;
+mod variants;
 pub(crate) mod work;
 
 /// Every module's routes, in the order they're matched.
@@ -57,7 +72,23 @@ const MODULES: &[fn() -> Vec<Route>] = &[
     pages::routes,
     work::routes,
     clip_agent::routes,
+    // The inspector's routes (wave 8): the recordings and their views, the
+    // game view's lockstep, moments, scenario ladder and point and tell.
+    recordings::routes,
+    labels::routes,
+    annotations::routes,
+    select::routes,
+    resolve::routes,
+    variants::routes,
+    coverage::routes,
+    pair::routes,
+    tiles::routes,
+    lockstep::routes,
+    ladder::routes,
+    point::routes,
+    edits::routes,
     later::routes,
+    laya::routes,
 ];
 
 /// How many connections are served at once; more wait in the listen queue.
@@ -357,7 +388,8 @@ fn matches(pattern: &'static str, path: &str) -> Option<Params> {
 /// strings; found again by value so no new string is leaked.
 fn leak(name: &str) -> &'static str {
     const NAMES: &[&str] = &[
-        "run", "session", "branch", "save", "clip", "start", "sha256", "file", "name", "n",
+        "run", "session", "branch", "save", "clip", "start", "sha256", "file", "name", "n", "id",
+        "frame", "chunk", "note", "game", "copy", "seq", "which",
     ];
     NAMES
         .iter()

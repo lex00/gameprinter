@@ -6,7 +6,7 @@
 //! | Endpoint | What |
 //! |---|---|
 //! | `GET /api/capture` | The runs: every game in the games checkout |
-//! | `GET /api/capture/{run}/game` | The game in its own words: the model's title, entities, levels, counters, rule states and input actions; its recordings; whether the ROM and the rebuilt game are there; and the screen, frame rate and buttons of its platform |
+//! | `GET /api/capture/{run}/game` | The game in its own words: the model's title, entities, levels, counters, rule states and input actions; its recordings (corpus clips, free play clips and store recordings of its ROM); whether the ROM and the rebuilt game are there; and the screen, frame rate and buttons of its platform |
 //! | `GET /api/capture/{run}/rom` | The game's scored ROM, for the page's player; never written anywhere |
 //! | `GET /api/capture/{run}/preview/{file}` | A file of the rebuilt game's interpreter preview, built as the mechanic page builds it |
 //! | `GET /api/capture/{run}/events` | The run's events: none, since a game has no capture run's event log |
@@ -314,12 +314,23 @@ fn game(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> {
         "template": Value::Null,
         "vocab": vocab(&model),
         "mechanics": {"mechanics": [], "paths": []},
-        "recordings": [{"id": "corpus", "name": "corpus", "frames": Value::Null, "input": "corpus"}],
+        "recordings": recordings(ctx, &run),
         "rom": rom_of(ctx, &run).is_ok(),
         "preview": preview,
         "platform": platform.name(),
         "screen": run_screen(&run),
     })))
+}
+
+/// The run's recordings by name: `corpus`, the background work's name for
+/// the corpus as a whole (no input of its own), then each recording the
+/// game view can play and measure (super::lockstep::recordings).
+fn recordings(ctx: &Ctx, run: &Run) -> Vec<Value> {
+    let mut out = vec![
+        json!({"id": "corpus", "name": "corpus", "frames": Value::Null, "input": Value::Null}),
+    ];
+    out.extend(super::lockstep::recordings(ctx, run));
+    out
 }
 
 /// The ROMs read so far, by game: reading one finds it by hash in the ROM

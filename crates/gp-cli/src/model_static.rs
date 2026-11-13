@@ -121,6 +121,13 @@ pub(crate) fn template_rom(dir: &Path, t: &Toml, paths: &Paths) -> Result<PathBu
         {
             return Ok(p);
         }
+        // An arcade package accepts a romset by its identity.
+        if gp_arcade::romset::looks_like_zip(&b)
+            && let Ok(set) = gp_arcade::Romset::from_zip(&b)
+            && accepts.contains(&set.identity)
+        {
+            return Ok(p);
+        }
     }
     bail!(
         "no ROM in {} that {} accepts; give it with --rom",
@@ -469,12 +476,12 @@ fn set_path(doc: &mut toml::Table, path: &str, v: Toml) {
 pub(crate) fn run(a: &StaticArgs, paths: &Paths) -> Result<Outcome> {
     let t0 = Instant::now();
     let (rom, map) = resolve(a, paths)?;
-    crate::original::nes_only(
-        crate::original::Platform::of_file(
-            &fs::read(&rom).with_context(|| format!("reading {}", rom.display()))?,
-        ),
-        "gp model static",
-    )?;
+    let bytes = fs::read(&rom).with_context(|| format!("reading {}", rom.display()))?;
+    // A romset: the Z80 harvest (crate::model_static_z80).
+    if crate::original::Platform::of_file(&bytes) == crate::original::Platform::Arcade {
+        return crate::model_static_z80::run(a, &rom, &bytes, t0);
+    }
+    drop(bytes);
     let runs = if a.no_run {
         None
     } else {
@@ -604,7 +611,7 @@ fn unread_text(u: &harvest::unread::Unread) -> String {
 }
 
 /// The harvest as text.
-fn summary(h: &Harvest, rom: &Path, secs: f64, grade: Option<&Value>) -> String {
+pub(crate) fn summary(h: &Harvest, rom: &Path, secs: f64, grade: Option<&Value>) -> String {
     use std::fmt::Write as _;
     let mut s = String::new();
     let _ = writeln!(

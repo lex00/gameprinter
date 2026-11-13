@@ -846,12 +846,16 @@ fn table_of(spec: &TableSpec, rows: &[Row]) -> Table {
 /// (empty ones too), `README.md` (the card), `croissant.json` and
 /// `dataset.json`. With the ROM's bytes, fails if any written file holds
 /// a run of them (the pre-commit hook's 16-byte window).
+///
+/// Writes the dataset's files for a ROM of `kind` (`NES ROM`, `arcade
+/// romset`), which the card and the Croissant description name.
 pub(crate) fn write(
     out: &Path,
     d: &Dataset,
     rom_sha: &str,
     title: &str,
     rom: Option<&[u8]>,
+    kind: &str,
 ) -> Result<()> {
     let data = out.join("data");
     fs::create_dir_all(&data).with_context(|| format!("making {}", data.display()))?;
@@ -869,11 +873,14 @@ pub(crate) fn write(
         files.push((rel, ds::sha256(&fs::read(&p)?), t.rows()));
         tables.push(t);
     }
-    fs::write(out.join("README.md"), card(title, rom_sha, &tables, &files))?;
+    fs::write(
+        out.join("README.md"),
+        card(title, rom_sha, &tables, &files, kind),
+    )?;
     let cr = ds::croissant_for(
         &format!("game-printer-rom-{}", &rom_sha[..rom_sha.len().min(12)]),
         &format!(
-            "What Game Printer's stage 0 extracted from the NES ROM with SHA-256 {rom_sha}: routines, branches, RAM, elements, state machines, constants, mechanics, model facts, open questions and runs. No bytes of the ROM."
+            "What Game Printer's stage 0 extracted from the {kind} with SHA-256 {rom_sha}: routines, branches, RAM, elements, state machines, constants, mechanics, model facts, open questions and runs. No bytes of the ROM."
         ),
         FORMAT,
         &tables,
@@ -909,12 +916,20 @@ pub(crate) fn write(
     Ok(())
 }
 
-fn card(title: &str, rom_sha: &str, tables: &[Table], files: &[(String, String, usize)]) -> String {
+fn card(
+    title: &str,
+    rom_sha: &str,
+    tables: &[Table],
+    files: &[(String, String, usize)],
+    kind: &str,
+) -> String {
     let mut c = String::from("---\n");
     let _ = writeln!(c, "pretty_name: \"{title}\"");
     c.push_str("license: other\nlicense_name: game-printer-recipes\n");
-    c.push_str(
-        "tags:\n- game-printer\n- nes\n- reverse-engineering\n- game-mechanics\n- tabular\n",
+    let _ = write!(
+        c,
+        "tags:\n- game-printer\n- {}\n- reverse-engineering\n- game-mechanics\n- tabular\n",
+        if kind == "NES ROM" { "nes" } else { "arcade" }
     );
     c.push_str("configs:\n");
     for (k, t) in tables.iter().enumerate() {
@@ -931,7 +946,7 @@ fn card(title: &str, rom_sha: &str, tables: &[Table], files: &[(String, String, 
     let _ = writeln!(c, "# {title}\n");
     let _ = writeln!(
         c,
-        "What Game Printer's stage 0 extracted from one NES ROM (SHA-256 `{rom_sha}`), from the ROM alone, by running it and reading its code. Format `rom-dataset` {FORMAT} (docs/formats/rom-dataset.md). Every table has the same columns for every game, so the datasets of many ROMs union into one table each, joined on `rom`.\n"
+        "What Game Printer's stage 0 extracted from one {kind} (SHA-256 `{rom_sha}`), from the ROM alone, by running it and reading its code. Format `rom-dataset` {FORMAT} (docs/formats/rom-dataset.md). Every table has the same columns for every game, so the datasets of many ROMs union into one table each, joined on `rom`.\n"
     );
     c.push_str("It holds no bytes of the ROM: addresses, names the tool made, numbers it read and the questions it left. Every row says where it came from (`src`) and which rule made it (`rule`).\n\n");
     c.push_str("## Tables\n\n");
@@ -1005,8 +1020,7 @@ pub(crate) fn read(dir: &Path) -> Result<Dataset> {
 }
 
 /// `schema/rom-dataset.json`: one row schema a table, under `$defs`. The
-/// committed file is checked against it.
-#[cfg(test)]
+/// committed file is checked against it, and `gp self schemas` writes it.
 pub(crate) fn json_schema() -> String {
     let mut defs = serde_json::Map::new();
     for t in TABLES {
@@ -1093,28 +1107,43 @@ pub(crate) fn cli(
     paths: &gp_evidence::Paths,
 ) -> Result<crate::Outcome> {
     let bytes = fs::read(rom).with_context(|| format!("reading {}", rom.display()))?;
-    // Stage 0 reads 6502 code and the NES's banks.
-    crate::original::nes_only(
-        crate::original::Platform::of_file(&bytes),
-        "stage 0's ROM dataset",
-    )?;
-    let (img, prg, chr) = gp_evidence::source::nes_banks(&bytes)?;
-    let mut d = if empty {
-        Dataset::default()
-    } else {
-        crate::rom_extract::extract(rom, runs, seed, paths)?
-    };
+    // An arcade romset's stage 0 reads the main Z80's code map
+    // (crate::arcade_stage0); an NES image's reads 6502 code and its banks.
+    let (sha, raw, platform, mut d) =
+        if crate::original::Platform::of_file(&bytes) == crate::original::Platform::Arcade {
+            let set = gp_arcade::Romset::from_zip(&bytes)?;
+            let d = if empty {
+                Dataset::default()
+            } else {
+                crate::arcade_stage0::extract(&set, runs, seed)?
+            };
+            (
+                set.identity.clone(),
+                crate::arcade_stage0::rom_bytes(&set),
+                "arcade romset",
+                d,
+            )
+        } else {
+            let (img, prg, chr) = gp_evidence::source::nes_banks(&bytes)?;
+            let d = if empty {
+                Dataset::default()
+            } else {
+                crate::rom_extract::extract(rom, runs, seed, paths)?
+            };
+            let mut raw = prg.to_vec();
+            raw.extend_from_slice(chr);
+            (img.sha256, raw, "NES ROM", d)
+        };
     d.sort();
-    let mut raw = prg.to_vec();
-    raw.extend_from_slice(chr);
     // Named by the ROM's hash: a file name can be text the ROM holds (a
     // test ROM's own name), which the ROM check would refuse.
     write(
         out,
         &d,
-        &img.sha256,
-        &format!("ROM dataset {}", &img.sha256[..12]),
+        &sha,
+        &format!("ROM dataset {}", &sha[..12]),
         Some(&raw),
+        platform,
     )?;
     let counts: Vec<String> = TABLES
         .iter()
@@ -1125,7 +1154,7 @@ pub(crate) fn cli(
         .map(|t| (t.name.to_owned(), json!(d.rows(t.name).len())))
         .collect();
     Ok(crate::Outcome::ok(
-        json!({"rom": img.sha256, "out": out.display().to_string(), "rows": rows}),
+        json!({"rom": sha, "out": out.display().to_string(), "rows": rows}),
         format!(
             "{} -> {}: {}",
             rom.display(),
@@ -1225,7 +1254,7 @@ mod tests {
     fn an_empty_dataset_writes_every_table_and_reads_back() {
         let dir = tempfile::tempdir().unwrap();
         let d = Dataset::default();
-        write(dir.path(), &d, "00", "empty", None).unwrap();
+        write(dir.path(), &d, "00", "empty", None, "NES ROM").unwrap();
         let back = read(dir.path()).unwrap();
         for t in TABLES {
             assert!(dir.path().join(format!("data/{}.parquet", t.name)).exists());
@@ -1253,8 +1282,8 @@ mod tests {
             d
         };
         let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        write(a.path(), &mk(&[5, 3, 9]), "ab", "t", None).unwrap();
-        write(b.path(), &mk(&[9, 5, 3]), "ab", "t", None).unwrap();
+        write(a.path(), &mk(&[5, 3, 9]), "ab", "t", None, "NES ROM").unwrap();
+        write(b.path(), &mk(&[9, 5, 3]), "ab", "t", None, "NES ROM").unwrap();
         for t in TABLES {
             let f = format!("data/{}.parquet", t.name);
             assert_eq!(
@@ -1302,7 +1331,7 @@ mod tests {
         // A string holding 16 of the ROM's bytes in a row.
         let leak: String = rom[8..24].iter().map(|&b| b as char).collect();
         d.push("open", json!({"rom": "ab", "what": leak})).unwrap();
-        assert!(write(dir.path(), &d, "ab", "t", Some(&rom)).is_err());
+        assert!(write(dir.path(), &d, "ab", "t", Some(&rom), "NES ROM").is_err());
     }
 
     /// The committed schema/rom-dataset.json is the one TABLES makes.

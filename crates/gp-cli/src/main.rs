@@ -5,11 +5,14 @@
 mod affected;
 mod agent_cmd;
 mod arcade_rec;
+mod arcade_stage0;
 mod assets;
 mod attest;
 mod author;
 mod behave;
 mod capture;
+mod catalog;
+mod chunks;
 mod cli_doc;
 mod clip;
 mod clip_presses;
@@ -21,8 +24,11 @@ mod code;
 mod code_z80;
 mod corpus_import;
 mod corpus_score;
+mod corpus_w9;
 mod coverage;
+mod covered;
 mod cycles;
+mod cycles_z80;
 mod dataset;
 mod dataset_tables;
 mod derive;
@@ -32,6 +38,7 @@ mod draws_find_z80;
 mod element;
 mod element_z80;
 mod explore;
+mod explore_z80;
 mod farm;
 mod from_trace;
 mod game;
@@ -50,17 +57,24 @@ mod interp_args;
 mod interp_draws;
 mod labels;
 mod labels_propose;
+mod laya;
 mod leads;
+mod level_kit;
 mod lockstep;
 mod mcp;
 mod mechanic;
 mod mechanics;
+mod metrics_cmd;
+mod misc_w9;
 mod model;
 mod model_blind;
 mod model_static;
+mod model_static_z80;
+mod model_w9;
 mod module;
 mod moments;
 mod movie;
+mod mutants;
 mod odds;
 mod open;
 mod original;
@@ -72,6 +86,7 @@ mod pool;
 mod publish;
 mod reach;
 mod reach_window;
+mod reach_window_z80;
 mod recindex;
 mod recordings;
 mod refine;
@@ -86,9 +101,12 @@ mod roms_cmd;
 mod rule_refine;
 mod run;
 mod run_input;
+mod runrec;
 mod scenario;
 mod scenario_refine;
 mod scenarios_cmd;
+mod schemas;
+mod scorecard;
 mod screen;
 mod sealed;
 mod search;
@@ -106,13 +124,33 @@ mod tape;
 mod template;
 mod template_build;
 mod template_cites;
+mod template_derive;
 mod template_original;
+mod theme;
+mod theme_apng;
+mod theme_fit;
+mod theme_generate;
+mod theme_geometry;
+mod theme_kit;
+mod theme_mirror;
+mod theme_original;
+mod theme_paper;
+mod theme_publish;
+mod theme_run;
+mod theme_runway;
+mod theme_serve;
+mod theme_sheet;
+mod theme_slots;
+mod theme_style;
+mod theme_template;
+mod theme_words;
 mod tool_gate;
 mod track;
 mod translate;
 mod validate;
 mod watch;
 mod watch_serve;
+mod watch_z80;
 mod worker;
 
 use std::path::PathBuf;
@@ -159,6 +197,27 @@ enum Cmd {
     /// The work record of gp serve's clip agents and the driver: notes,
     /// attempts scored from a worktree, keep (game-printer's gp agent).
     Agent(agent_cmd::AgentArgs),
+    /// Show resolved paths, versions and store state.
+    Env,
+    /// Do nothing, but record a run. Measures command startup cost.
+    Noop,
+    /// Input logs (docs/formats/recording.md).
+    InputLog {
+        #[command(subcommand)]
+        cmd: misc_w9::InputLogCmd,
+    },
+    /// Metrics, budgets and reports (gp-metrics).
+    Metrics {
+        #[command(subcommand)]
+        cmd: metrics_cmd::MetricsCmd,
+    },
+    /// Recorded runs (gp-metrics).
+    Runs {
+        #[command(subcommand)]
+        cmd: metrics_cmd::RunsCmd,
+    },
+    /// What capture has found so far for each game: one row per template.
+    Scorecard(scorecard::ScorecardArgs),
     /// Lift a ROM's assets into files and pack them back.
     Assets {
         #[command(subcommand)]
@@ -199,6 +258,19 @@ enum Cmd {
     /// mapping: sprites followed from frame to frame, the RAM bytes that hold
     /// their positions, and a proposed `[slots]` section (docs/formats/tracks.md).
     Track(track::TrackArgs),
+    /// The pattern library's finders on a template, beside what its model
+    /// holds (docs/catalog-patterns.md). It lists each entity's patterns and
+    /// whether they are components or hooks, and the asset map sorted by
+    /// pattern. RAM slot arrays from the game's labels are set against the
+    /// mapping's [slots] and, with `--recording`, tracked objects fitted to
+    /// the behaviour patterns against the entities the mapping names.
+    Catalog(catalog::CatalogArgs),
+    /// A template's level chunk catalog, listing the groups of cells its
+    /// levels are built from (the format's objects and patterns mined from the
+    /// decoded grids), what each does for the player and how they sit
+    /// together. It is written under `$GP_HOME/work/chunks/<template>/`
+    /// (docs/chunks.md).
+    Chunks(chunks::ChunksArgs),
     /// Hold a model to its fidelity contract against recordings of the
     /// original (docs/validation.md): the contract's rules compiled into
     /// checks, each recording's input run on the original (read through the
@@ -277,6 +349,13 @@ enum Cmd {
     Sealed {
         #[command(subcommand)]
         cmd: sealed::SealedCmd,
+    },
+    /// Themes on a model: check a stack's readability and style, paint
+    /// placeholder art, a game's theme kit, fit art to it, publish, and
+    /// render a themed video (docs/theme-kit.md, docs/theme-publishing.md).
+    Theme {
+        #[command(subcommand)]
+        cmd: theme::ThemeCmd,
     },
     /// Make, publish to and test registries.
     Registry {
@@ -545,6 +624,9 @@ enum ModelCmd {
     /// mapping rows; model facts, each with the instruction it comes from; and
     /// open facts with the routine and bytes that decide them. `--grade KEY`
     /// grades it against a game's answer key (games/mosshop/static-key.toml).
+    /// On an arcade romset it reads the main Z80's code alone: routines and
+    /// their roles, the interrupts, record tables, state machines, counters,
+    /// timers, input and the random routine (docs/code-reading.md).
     Static(model_static::StaticArgs),
     /// Refine a working copy of a game's model against the original, clip
     /// by clip from its corpus, through the lockstep: the clips checked
@@ -635,6 +717,34 @@ enum ModelCmd {
         #[arg(long)]
         check: bool,
     },
+    /// List every fact that differs between two models, by model path.
+    /// Exits 1 if any does.
+    Diff {
+        /// A model directory or model.toml file.
+        a: PathBuf,
+        /// A model directory or model.toml file.
+        b: PathBuf,
+    },
+    /// Write the model's mutants (`[[mutant]]`): each number up by one (a
+    /// fraction by a sixteenth) and each flag turned over (`constant`, or
+    /// `period` for `period`, `every` and `after`), each transition deleted,
+    /// each condition, `stops` entry and tile kind dropped (`input`), and
+    /// each pair of adjacent systems swapped (`order`). Pictures and
+    /// documentation are left alone.
+    Mutants {
+        /// A model directory or model.toml file.
+        dir: PathBuf,
+        /// The file to write (default: mutants.toml beside model.toml).
+        #[arg(long, value_name = "FILE")]
+        out: Option<PathBuf>,
+    },
+    /// Print the JSON Schema of the format WHICH names.
+    /// Print the JSON Schema of the format WHICH names. `gp self schemas`
+    /// writes them all to schema/ (`just docs`).
+    Schema {
+        #[arg(value_enum)]
+        which: schemas::Which,
+    },
 }
 
 #[derive(Subcommand)]
@@ -688,6 +798,26 @@ enum InterpCmd {
         /// Record a run through each level as a model baseline.
         #[arg(long)]
         record: bool,
+    },
+    /// Replay every model baseline in MODEL/baselines/ in the interpreter,
+    /// each from its level, and compare its digest and expectations.
+    /// Exits 1 if any differs.
+    Baselines {
+        /// A model directory holding model.toml and baselines/.
+        model: PathBuf,
+        /// The game's built module. Needed for a model with hooks.
+        #[arg(long)]
+        module: Option<PathBuf>,
+        /// The model's lifted assets (default:
+        /// $GP_HOME/work/assets/<model.source>).
+        #[arg(long, value_name = "DIR")]
+        assets: Option<PathBuf>,
+        /// Rewrite each baseline that differs with what its input gives
+        /// now: its digest and its expectations at the last frame. For a
+        /// baseline written by hand, and after a change meant to change
+        /// play; read the diff before committing it.
+        #[arg(long)]
+        write: bool,
     },
     /// Run the original and the model on the same input, and compare them
     /// frame by frame through the model's state mapping. Each mapped model
@@ -983,6 +1113,34 @@ enum TemplateCmd {
         #[arg(long)]
         rom: Vec<PathBuf>,
     },
+    /// Make a derived template's files (template.toml's [derive]). They are
+    /// the base template's per-game files (model, contract, state mapping
+    /// and the rest), with its source renamed to this template's and the
+    /// delta merged over them (docs/templates.md, "Derived templates").
+    /// Exits 1 when a file is stale; `--write` rewrites them.
+    Derive {
+        /// A template directory whose template.toml has [derive].
+        dir: PathBuf,
+        /// Write the stale files.
+        #[arg(long)]
+        write: bool,
+    },
+    /// Index the ROM addresses ($8000 and up, written `$C46B` or `0xC46B`;
+    /// on an arcade romset any inside the main CPU's program) that
+    /// templates' model.toml, mapping.toml, probes.toml, delta.toml and
+    /// hooks (the `[ext]` crate's sources, a derived template's base's)
+    /// cite, each with its files and lines and the routine of the code map
+    /// it is in, so a planner can see what is covered
+    /// (docs/code-reading.md).
+    Cites {
+        /// Template directories; their citations are indexed together.
+        #[arg(required = true)]
+        dirs: Vec<PathBuf>,
+        /// The ROM whose code map places the addresses. Default: the one
+        /// in $GP_ROM_DIR the first template accepts.
+        #[arg(long)]
+        rom: Option<PathBuf>,
+    },
 }
 
 fn dispatch(cmd: &Cmd) -> Result<Outcome> {
@@ -1034,6 +1192,9 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                 &gp_evidence::Paths::from_env()?.home,
             ),
             ModelCmd::Fmt { dir, check } => model::fmt(dir, *check),
+            ModelCmd::Diff { a, b } => model_w9::diff(a, b),
+            ModelCmd::Mutants { dir, out } => mutants::cli(dir, out.as_deref()),
+            ModelCmd::Schema { which } => schemas::print(*which),
             ModelCmd::Gate(a) => gate::run(a, &gp_evidence::Paths::from_env()?),
             ModelCmd::Mechanics(a) => mechanics::run(a, &gp_evidence::Paths::from_env()?),
             ModelCmd::Static(a) => model_static::run(a, &gp_evidence::Paths::from_env()?),
@@ -1107,6 +1268,21 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             &gp_evidence::Paths::from_env()?,
         ),
         Cmd::Interp {
+            cmd:
+                InterpCmd::Baselines {
+                    model,
+                    module,
+                    assets,
+                    write,
+                },
+        } => search::baselines_cmd(
+            model,
+            assets.as_deref(),
+            *write,
+            module.as_deref(),
+            &gp_evidence::Paths::from_env()?,
+        ),
+        Cmd::Interp {
             cmd: InterpCmd::Translate(a),
         } => translate::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Interp {
@@ -1125,6 +1301,14 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
         Cmd::Solve(a) => solve::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Level { cmd } => search::level_run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Track(a) => track::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Chunks(a) => chunks::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Env => misc_w9::env(&gp_evidence::Paths::from_env()?),
+        Cmd::Noop => Ok(misc_w9::noop()),
+        Cmd::InputLog { cmd } => misc_w9::input_log(cmd),
+        Cmd::Metrics { cmd } => metrics_cmd::metrics(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Runs { cmd } => metrics_cmd::runs(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Scorecard(a) => scorecard::run(a, &gp_evidence::Paths::from_env()?),
+        Cmd::Catalog(a) => catalog::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Validate(a) => validate::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Coverage(a) => coverage::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Gaps { cmd } => gaps::run(cmd, &gp_evidence::Paths::from_env()?),
@@ -1220,6 +1404,11 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
         Cmd::Roms { cmd } => roms_cmd::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Labels { cmd } => labels::run(cmd),
         Cmd::Sealed { cmd } => sealed::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Theme { cmd } => theme::run(
+            cmd,
+            &gp_evidence::Paths::from_env()?,
+            &mut theme::RunRecorder,
+        ),
         Cmd::Mechanic { cmd } => mechanic::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Serve { opts } => serve::run(opts, &gp_evidence::Paths::from_env()?),
         Cmd::Package { cmd } => match cmd {
@@ -1321,11 +1510,31 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
         Cmd::Template {
             cmd: TemplateCmd::Served { dir, folder, rom },
         } => served::served(dir, folder, rom, &gp_evidence::Paths::from_env()?),
+        Cmd::Template {
+            cmd: TemplateCmd::Derive { dir, write },
+        } => template_derive::derive_cmd(&level_kit::template_dir(dir)?, *write),
+        Cmd::Template {
+            cmd: TemplateCmd::Cites { dirs, rom },
+        } => template_cites::run(
+            &dirs
+                .iter()
+                .map(|d| level_kit::template_dir(d))
+                .collect::<Result<Vec<_>>>()?,
+            rom.as_deref(),
+            &gp_evidence::Paths::from_env()?,
+        ),
     }
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let matches = <Cli as clap::CommandFactory>::command().get_matches();
+    let cli = match <Cli as clap::FromArgMatches>::from_arg_matches(&matches) {
+        Ok(c) => c,
+        Err(e) => e.exit(),
+    };
+    // Every run is recorded (gp-metrics), as game-printer did.
+    let name = runrec::command_name(&matches);
+    runrec::start(&name);
     // Every reader of a recording or an input log asks the sealed-run guard.
     if let Ok(p) = gp_evidence::Paths::from_env() {
         sealed::install(&p.home);
@@ -1340,15 +1549,28 @@ fn main() -> ExitCode {
         eprintln!("gp: gp mcp speaks JSON-RPC on stdout, so it takes no --json");
         return ExitCode::from(2);
     }
-    match dispatch(&cli.cmd) {
+    let result = {
+        let _span = tracing::info_span!("command", name = name.as_str()).entered();
+        dispatch(&cli.cmd)
+    };
+    let recorded = match &result {
+        Ok(o) => runrec::finish(&name, o.exit, None),
+        Err(e) => runrec::finish(&name, 2, Some(format!("{e:#}"))),
+    };
+    match result {
         Ok(o) => {
             if cli.json {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&o.json).unwrap_or_default()
                 );
-            } else {
+            } else if !o.text.is_empty() {
+                // A command that printed its own output (gp input-log
+                // generate) returns no text, as in game-printer.
                 println!("{}", o.text);
+                if let (Cmd::Noop, Some(path)) = (&cli.cmd, &recorded) {
+                    println!("run recorded: {}", path.display());
+                }
             }
             ExitCode::from(o.exit)
         }

@@ -63,6 +63,7 @@ pub mod canonical;
 pub mod ctc;
 pub mod dasm;
 pub mod events;
+pub mod harvest;
 pub mod inp;
 pub mod irq;
 pub mod joystick;

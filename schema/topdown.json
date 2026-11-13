@@ -1,0 +1,199 @@
+{
+  "$id": "game-printer:topdown@0.1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Game Printer top-down extension 0.1",
+  "description": "The extension's whole schema, for `gp model schema topdown`.",
+  "type": "object",
+  "properties": {
+    "entity": {
+      "description": "Components it adds to entities.",
+      "$ref": "#/$defs/EntityComponents"
+    },
+    "level": {
+      "description": "Fields it adds to levels.",
+      "$ref": "#/$defs/LevelFields"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "entity",
+    "level"
+  ],
+  "$defs": {
+    "Class": {
+      "description": "A player class, chosen before play: its name as the game shows it, and\nits stats. In 0.1 the stats are stated facts only; the simulation reads\nthe class's own components (its `move8.speed` is its speed).",
+      "type": "object",
+      "properties": {
+        "armor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "magic": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "shot_power": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "ClassSelect": {
+      "description": "The class select screen before play: the classes in menu order (each a\nplayer entity with a `class`), the action that moves the cursor to the\nnext one, and the action that picks the one under it. A rebuild starts\nas one class by pressing `next` that class's index times, then `pick`.",
+      "type": "object",
+      "properties": {
+        "classes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "next": {
+          "type": "string"
+        },
+        "pick": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "classes",
+        "next",
+        "pick"
+      ]
+    },
+    "EntityComponents": {
+      "title": "Game Printer top-down extension 0.1: entity components",
+      "description": "The components a top-down entity can have. Each is optional.",
+      "type": "object",
+      "properties": {
+        "class": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Class"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "move8": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Move8"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Fixed": {
+      "description": "A fixed-point number with 16 fraction bits: an integer, or an exact decimal string such as \"0.25\". Floats are refused.",
+      "oneOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string",
+          "pattern": "^-?[0-9]+(\\.[0-9]{1,16})?$"
+        }
+      ]
+    },
+    "LevelFields": {
+      "title": "Game Printer top-down extension 0.1: level fields",
+      "description": "The fields the extension adds to levels.",
+      "type": "object",
+      "properties": {
+        "class_select": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClassSelect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Move8": {
+      "description": "Moving in eight directions with no gravity: each frame the entity\nmoves `speed` pixels across while `left` or `right` is held, and\n`speed` pixels down or up while `down` or `up` is held, both on a\ndiagonal. Solid tiles stop each axis on its own, so it slides along a\nwall it meets at an angle.",
+      "type": "object",
+      "properties": {
+        "actions": {
+          "description": "The input actions it moves by. Default `left`, `right`, `up` and\n`down`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Move8Actions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "speed": {
+          "description": "Pixels a frame on each axis.",
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "speed"
+      ]
+    },
+    "Move8Actions": {
+      "description": "The action names [`Move8`] reads.",
+      "type": "object",
+      "properties": {
+        "down": {
+          "type": "string"
+        },
+        "left": {
+          "type": "string"
+        },
+        "right": {
+          "type": "string"
+        },
+        "up": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "left",
+        "right",
+        "up",
+        "down"
+      ]
+    }
+  }
+}

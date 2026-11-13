@@ -7,7 +7,8 @@
 //! `gp reach --write` output (`--diff-reach`), whose instruction starts and
 //! branch edges say what ran without how often. Both sides are named by
 //! one code map, the static harvest's from the ROM alone, so routines
-//! compare as names.
+//! compare as names. On an arcade romset the same report reads both Z80s'
+//! code maps (crate::reach_window_z80).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -225,7 +226,9 @@ fn spans(map: &CodeMap, list: &[Va]) -> String {
 
 pub(crate) fn run(a: &ReachArgs, paths: &Paths) -> Result<Outcome> {
     let rom = fs::read(&a.rom).with_context(|| format!("reading {}", a.rom.display()))?;
-    crate::original::nes_only(crate::original::Platform::of_file(&rom), "gp reach")?;
+    if crate::original::Platform::of_file(&rom) == crate::original::Platform::Arcade {
+        return crate::reach_window_z80::run(&rom, a, paths);
+    }
     let w_a = match &a.window {
         Some(s) => parse_window(s)?,
         None => Window::WHOLE,

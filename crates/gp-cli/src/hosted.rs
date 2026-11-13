@@ -589,6 +589,18 @@ impl Model {
         }
     }
 
+    /// [`Self::step_unhurried`] with the step's events: for the theme
+    /// tools, which draw frames no player waits on (crate::theme_run).
+    pub(crate) fn step_unhurried_events(&mut self, inputs: &[InputFrame]) -> Result<Vec<Event>> {
+        match self {
+            Self::Native(i) => i.step(inputs).map_err(|e| anyhow!("{e}")),
+            Self::Module(h) => {
+                h.world = OnceCell::new();
+                h.rt.step_unhurried(inputs).map_err(|e| anyhow!("{e}"))
+            }
+        }
+    }
+
     /// The draw calls the run's script has kept, frame and site each, in
     /// order; empty when it keeps none.
     pub(crate) fn draw_calls(&self) -> Result<Vec<(u64, String)>> {

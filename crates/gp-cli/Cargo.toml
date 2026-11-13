@@ -27,6 +27,8 @@ gp-events = { version = "0.1.0", path = "../gp-events" }
 gp-evidence = { version = "0.1.0", path = "../gp-evidence" }
 gp-explore = { version = "0.1.0", path = "../gp-explore" }
 gp-gaps = { version = "0.1.0", path = "../gp-gaps" }
+# schema/image-config.json (gp self schemas); tests/mcp.rs reads its sheets.
+gp-imagefmt = { version = "0.1.0", path = "../gp-imagefmt" }
 gp-host = { version = "0.1.0", path = "../gp-host" }
 gp-track = { version = "0.1.0", path = "../gp-track" }
 gp-validate = { version = "0.1.0", path = "../gp-validate" }
@@ -38,6 +40,7 @@ gp-look = { version = "0.1.0", path = "../gp-look" }
 gp-mcp = { version = "0.1.0", path = "../gp-mcp" }
 gp-model = { version = "0.1.0", path = "../gp-model" }
 gp-theme = { version = "0.1.0", path = "../gp-theme" }
+gp-web-lift = { version = "0.1.0", path = "../gp-web-lift" }
 gp-module = { version = "0.1.0", path = "../gp-module" }
 gp-nes = { version = "0.1.0", path = "../gp-nes" }
 gp-play = { version = "0.1.0", path = "../gp-play" }
@@ -47,6 +50,11 @@ gp-runtime = { version = "0.1.0", path = "../gp-runtime" }
 gp-sim = { version = "0.1.0", path = "../gp-sim" }
 gp-sound = { version = "0.1.0", path = "../gp-sound" }
 gp-sprites = { version = "0.1.0", path = "../gp-sprites" }
+schemars = "1.2.2"
+gp-chunks = { version = "0.1.0", path = "../gp-chunks" }
+gp-metrics = { version = "0.1.0", path = "../gp-metrics" }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
@@ -63,8 +71,8 @@ tempfile = "3.27.0"
 toml = "1.1.8"
 
 [dev-dependencies]
-# tests/mcp.rs reads and writes the sprite sheets the MCP tools exchange.
-gp-imagefmt = { version = "0.1.0", path = "../gp-imagefmt" }
+# tests/schema_mapping.rs checks the repo's TOML files against schema/.
+jsonschema = { version = "0.49.9", default-features = false }
 
 [build-dependencies]
 blake3 = "1.8.7"

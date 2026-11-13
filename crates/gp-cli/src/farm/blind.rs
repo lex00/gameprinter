@@ -13,6 +13,8 @@
 //! | Death | the pad stops moving the player, then the player jumps back (a respawn) in the same scene, or nothing answers for 20 s |
 //! | Level end | a jump to another scene; a scene the path later comes back from (a bonus room) isn't counted |
 //! | Walls, pits | learned: where a move stops dead against something, and where a fall ended in a death |
+//! | Two x bytes that move alike | on the board, the one the game copies from (lanes.rs); on the NES, the later address |
+//! | No jump: lanes | a stick way that steps y by one amount and holds, and the lane number that changes with it (lanes.rs); then play starts at the first frame after the first Start press where the stick moves x, the held button, the score as progress, and moves from those |
 //!
 //! No game's addresses, constants or names are in this file.
 
@@ -24,6 +26,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 use serde_json::{Value, json};
 
+use super::lanes::{self, Held, Lanes};
 use super::machine::{Machine, Pads};
 use super::support as m;
 use super::{self as farm, A, B, LEFT, Move, RIGHT, Rng};
@@ -121,6 +124,12 @@ struct Learned {
     box_dy: i64,
     /// The device's buttons.
     pads: Pads,
+    /// A player who changes lanes instead of jumping (then `jump` is 0).
+    lanes: Option<Lanes>,
+    /// A button that acts after being held (then it is no run button).
+    held: Option<Held>,
+    /// The score's digits: progress where x doesn't advance.
+    score: Option<Vec<usize>>,
 }
 
 /// Where a run is.
@@ -138,6 +147,8 @@ struct Pos {
     scroll: i64,
     /// Where on the screen the player's box is (its left), if seen.
     sx: Option<i64>,
+    /// The score, when progress is the score's (a lane player).
+    sc: i64,
 }
 
 struct Cell {
@@ -236,11 +247,39 @@ impl World {
     /// byte, nearest the last place it was.
     fn player_box(&self, near: Option<i64>) -> Option<[i32; 4]> {
         let boxes = self.nes.boxes();
-        let y = self.byte(self.l.y);
+        let y = self.screen_y(self.byte(self.l.y));
         boxes
             .into_iter()
             .filter(|b| (i64::from(b[1]) - y - self.l.box_dy).abs() <= 12)
             .min_by_key(|b| near.map_or(0, |n| (i64::from(b[0]) - n).abs()))
+    }
+
+    /// A y byte where the screen has it: the other way round for a y that
+    /// counts up the screen.
+    fn screen_y(&self, y: i64) -> i64 {
+        if self.l.lanes.as_ref().is_some_and(|l| l.y_up) {
+            -y
+        } else {
+            y
+        }
+    }
+
+    /// The score now, where progress is the score's.
+    fn score(&self) -> Option<i64> {
+        self.l
+            .score
+            .as_ref()
+            .filter(|_| self.l.lanes.is_some())
+            .map(|d| lanes::score_of(self.wram(), d))
+    }
+
+    /// Whether x jumped further than walking goes since `p`: a respawn or
+    /// a new scene, unless y changed lanes on the same frame (a lane
+    /// player lands at the new lane's place).
+    fn jumped(&self, p: &Pos) -> bool {
+        let xb = self.byte(self.l.x);
+        wrap8(xb - i64::from(p.xb)).abs() > TELEPORT
+            && !(self.l.lanes.is_some() && self.byte(self.l.y) != p.y)
     }
 
     /// The position after one more frame, from the one before.
@@ -257,7 +296,12 @@ impl World {
             if s > 256 { s - 512 } else { s }
         };
         let fwd = if self.l.right { 1 } else { -1 };
-        let gain = d * fwd + if self.l.screen_x { ds * fwd } else { 0 };
+        let mut gain = d * fwd + if self.l.screen_x { ds * fwd } else { 0 };
+        // A lane player's progress is the score.
+        let sc = self.score().unwrap_or(0);
+        if self.score().is_some() {
+            gain = sc - p.sc;
+        }
         let b = self.player_box(p.sx);
         Pos {
             x: p.x + gain,
@@ -268,6 +312,7 @@ impl World {
             tall: b.map_or(p.tall, |b| i64::from(b[3]) / 8),
             scroll,
             sx: b.map(|b| i64::from(b[0])),
+            sc,
         }
     }
 
@@ -282,6 +327,7 @@ impl World {
             tall: b.map_or(2, |b| i64::from(b[3]) / 8),
             scroll: self.scroll(),
             sx: b.map(|b| i64::from(b[0])),
+            sc: self.score().unwrap_or(0),
         }
     }
 
@@ -470,6 +516,18 @@ impl World {
         let mut o = 0;
         if p & A != 0 {
             o |= self.l.jump;
+            // A lane player's A is the held button.
+            if let Some(h) = &self.l.held {
+                o |= h.button;
+            }
+        }
+        if let Some(ln) = &self.l.lanes {
+            if p & farm::UP != 0 {
+                o |= ln.up;
+            }
+            if p & farm::DOWN != 0 {
+                o |= ln.down;
+            }
         }
         if p & B != 0 {
             o |= self.l.run;
@@ -511,8 +569,7 @@ impl World {
                 let pad = self.pad(pad);
                 self.step(pad, log)?;
                 frames += 1;
-                let xb = self.byte(self.l.x);
-                if wrap8(xb - i64::from(p.xb)).abs() > TELEPORT {
+                if self.jumped(&p) {
                     teleported = true;
                     break 'outer;
                 }
@@ -531,7 +588,11 @@ impl World {
                 }
             }
         }
-        if !teleported && frames > 0 && p.x == p0.x && p.y == p0.y && mv.name != "wait" {
+        // A lane player stalls only walking: a lane change or a pour may
+        // move nothing the rule reads and still have happened.
+        let can_stall = self.l.lanes.is_none() || matches!(mv.name, "walk" | "back");
+        if !teleported && frames > 0 && p.x == p0.x && p.y == p0.y && mv.name != "wait" && can_stall
+        {
             return Ok(End::Stalled);
         }
         if !teleported && self.responsive()? {
@@ -547,7 +608,7 @@ impl World {
         for i in 0..RECOVER {
             self.step(0, log)?;
             let xb = self.byte(self.l.x);
-            if wrap8(xb - i64::from(p.xb)).abs() > TELEPORT {
+            if self.jumped(&p) {
                 teleported = true;
             }
             if !teleported {
@@ -640,6 +701,10 @@ pub(crate) struct Discovery {
     pub box_dy: i64,
     /// The device's buttons.
     pub pads: Pads,
+    /// A lane player's lanes, its held button and the score (Wave T).
+    pub lanes: Option<Lanes>,
+    pub held: Option<Held>,
+    pub score: Option<Vec<usize>>,
     /// The power-on the inputs replay from, and the start run used.
     pub power_on: gp_evidence::manifest::PowerOn,
     pub start_run: String,
@@ -751,6 +816,63 @@ pub(crate) fn discover(bytes: &[u8], paths: &Paths) -> Result<Discovery> {
             }
         }
     };
+    let mut l = l;
+    if let Some(ln) = l.lanes.clone() {
+        lane_start(&mut nes, &mut log, bytes, power_on, &l)?;
+        if let Ok(d) = std::env::var("GP_BLIND_SHOTS") {
+            shot(&mut nes, &Path::new(&d).join("lane-start.png"))?;
+            eprintln!("lane start at frame {}", log.len());
+        }
+        let at = (nes.snapshot()?, nes.frame(), nes.held());
+        let (x, y) = (usize::from(l.x), usize::from(l.y));
+        let pads = l.pads.clone();
+        let skip: Vec<usize> = [Some(x), Some(y), ln.lane].into_iter().flatten().collect();
+        l.held = lanes::find_held(
+            &mut nes,
+            &at,
+            pads.actions.first().copied().unwrap_or(0),
+            &skip,
+        )?;
+        // Play that should score, each lane on its own run from here (a
+        // miss can cost a life, and a game over's demo writes its own
+        // numbers): the button held until it acts and let go, twice.
+        let act = l
+            .held
+            .as_ref()
+            .map_or((pads.actions.first().copied().unwrap_or(0), 2), |h| {
+                (h.button, h.frames + 1)
+            });
+        let plays: Vec<Vec<(u8, usize)>> = (0..4)
+            .map(|k| {
+                let mut p = Vec::new();
+                for _ in 0..k {
+                    p.push((ln.up, 10));
+                    p.push((0, 10));
+                }
+                for _ in 0..2 {
+                    p.push(act);
+                    p.push((0, 40));
+                }
+                p
+            })
+            .collect();
+        l.score = lanes::find_score(&mut nes, &at, &plays)?;
+    }
+    if std::env::var_os("GP_BLIND_DEBUG").is_some() {
+        let b = nes.ram_base();
+        eprintln!(
+            "learned: x ${:04X} y ${:04X} right {} jump {:#x} run {:#x} box_dy {} lanes {:?} held {:?} score {:?} (RAM from ${b:04X})",
+            usize::from(l.x) + b,
+            usize::from(l.y) + b,
+            l.right,
+            l.jump,
+            l.run,
+            l.box_dy,
+            l.lanes,
+            l.held,
+            l.score
+        );
+    }
     Ok(Discovery {
         nes,
         log,
@@ -762,6 +884,9 @@ pub(crate) fn discover(bytes: &[u8], paths: &Paths) -> Result<Discovery> {
         run: l.run,
         box_dy: l.box_dy,
         pads: l.pads,
+        lanes: l.lanes,
+        held: l.held,
+        score: l.score,
         power_on,
         start_run,
     })
@@ -770,6 +895,61 @@ pub(crate) fn discover(bytes: &[u8], paths: &Paths) -> Result<Discovery> {
 /// A picture of the next frame, for looking by hand (GP_BLIND_SHOTS).
 fn shot(nes: &mut Machine, to: &Path) -> Result<()> {
     nes.shot(to)
+}
+
+/// For a lane player, the earliest start in the run that reached play:
+/// the play-start rule takes the first frame the pad moved the player in a
+/// start run, which on a board can come long after the game began (the
+/// stage 0 runs press nothing for minutes) with lives already lost; and
+/// discover's settle waits 4 s more. From the first Start press on, every
+/// 10 frames, the first state where 8 frames of Right and of Left end x in
+/// different places is play's real start: the machine and its inputs are
+/// put there. The first Start press, not the last: a press in a game
+/// already going does nothing.
+fn lane_start(
+    nes: &mut Machine,
+    log: &mut Vec<InputFrame>,
+    bytes: &[u8],
+    power_on: gp_evidence::manifest::PowerOn,
+    l: &Learned,
+) -> Result<()> {
+    let Some(last_start) = log
+        .iter()
+        .position(|f| f.pads[0] & l.pads.start != 0 && l.pads.start != 0)
+    else {
+        return Ok(());
+    };
+    let mut m = Machine::power_on(bytes, power_on)?;
+    for (i, f) in log.iter().enumerate() {
+        m.step(*f)?;
+        if i > last_start && (i - last_start) % 10 == 0 {
+            let (snap, frame, held) = (m.snapshot()?, m.frame(), m.held());
+            // Nothing, Right and Left: x answers the pad when Right ends it
+            // no further left than nothing does, Left no further right, and
+            // the two differ (an intro that moves x moves it all three ways
+            // alike).
+            let mut ends = Vec::new();
+            for pad in [0, l.pads.right, l.pads.left] {
+                m.restore(&snap, frame, held)?;
+                for _ in 0..8 {
+                    m.step(InputFrame {
+                        polled: true,
+                        pads: [pad, 0, 0, 0],
+                        reset: false,
+                    })?;
+                }
+                ends.push(m.wram()[usize::from(l.x)]);
+            }
+            m.restore(&snap, frame, held)?;
+            let d = |a: u8, b: u8| wrap8(i64::from(a) - i64::from(b));
+            if d(ends[1], ends[0]) >= 0 && d(ends[2], ends[0]) <= 0 && ends[1] != ends[2] {
+                log.truncate(i + 1);
+                *nes = m;
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Learns the player's bytes, the jump button and forward from play start.
@@ -877,6 +1057,7 @@ fn learn_with(nes: &mut Machine, hold: usize) -> Result<Learned> {
         cands.retain(|c| !nes.scratch(c.1));
     }
     let mut best: Option<(i64, usize, bool)> = None;
+    let mut ranked: Vec<(i64, usize, bool)> = Vec::new();
     for &(s0, a, right) in &cands {
         let fwd = if right { rt } else { lt };
         // The device's second action held (B, run, on the NES), and its
@@ -904,6 +1085,26 @@ fn learn_with(nes: &mut Machine, hold: usize) -> Result<Learned> {
         // player's x each frame is a scratch copy of the table's.
         if best.is_none_or(|(b, _, _)| rank >= b) {
             best = Some((rank, a, right));
+        }
+        ranked.push((s0, a, right));
+    }
+    // Bytes that move alike under Right and Left move together: the one
+    // the game copies from, by the board's access log (none on the NES,
+    // where the furthest, then the later address, stands).
+    if let Some((_, b, _)) = best
+        && let Some(&(s_best, _, _)) = ranked.iter().find(|c| c.1 == b)
+    {
+        let tied: Vec<(i64, usize, bool)> =
+            ranked.iter().copied().filter(|c| c.0 == s_best).collect();
+        if tied.len() > 1 {
+            let at = (snap.clone(), frame, held);
+            let walk = [(lt, hold), (rt, hold)];
+            let addrs: Vec<usize> = tied.iter().map(|c| c.1).collect();
+            if let Some(src) = lanes::copy_source(nes, &at, &walk, &addrs)? {
+                best = best.map(|(rk, _, r)| {
+                    (rk, src, tied.iter().find(|c| c.1 == src).map_or(r, |c| c.2))
+                });
+            }
         }
     }
     let (_, x, right) =
@@ -957,13 +1158,29 @@ fn learn_with(nes: &mut Machine, hold: usize) -> Result<Learned> {
             break;
         }
     }
+    // No jump: a player who changes lanes, with a button held to act.
+    let at = (snap.clone(), frame, held);
+    let mut lanes_found = None;
+    if found.is_none() {
+        lanes_found = lanes::find_lanes(nes, &at, &pads, x)?;
+        if let Some(ln) = &lanes_found {
+            found = Some((ln.y, 0, 0));
+        }
+    }
     let (y, jump, run_b) = found.with_context(|| {
         format!(
-            "no button sends the player up and back down: no jump found (x at ${:04X}, forward {})",
+            "no button sends the player up and back down: no jump found, and no stick way changes a lane (x at ${:04X}, forward {})",
             x + nes.ram_base(),
             if right { "right" } else { "left" }
         )
     })?;
+    let y_sign = if lanes_found.as_ref().is_some_and(|l| l.y_up) {
+        -1
+    } else {
+        1
+    };
+    // The held button and the score are found from discover's start.
+    let (held_found, score) = (None, None);
     // The player's box: the one that moves with the pad, at one offset from y.
     nes.restore(&snap, frame, held)?;
     let boxes0 = nes.boxes();
@@ -975,7 +1192,7 @@ fn learn_with(nes: &mut Machine, hold: usize) -> Result<Learned> {
             reset: false,
         })?;
     }
-    let y1 = i64::from(nes.wram()[y]);
+    let y1 = y_sign * i64::from(nes.wram()[y]);
     let boxes1 = nes.boxes();
     let moved = boxes1
         .iter()
@@ -1016,6 +1233,9 @@ fn learn_with(nes: &mut Machine, hold: usize) -> Result<Learned> {
         run: run_b,
         box_dy,
         pads,
+        lanes: lanes_found,
+        held: held_found,
+        score,
     })
 }
 
@@ -1030,13 +1250,7 @@ fn run_seen(
     pads: &[(u8, usize)],
 ) -> Result<(Vec<Vec<u8>>, Vec<(Vec<i64>, i64)>)> {
     nes.restore(snap, frame, held)?;
-    let seen = |nes: &Machine| {
-        let boxes = nes.boxes();
-        (
-            boxes.iter().map(|b| i64::from(b[0])).collect::<Vec<_>>(),
-            nes.scroll(),
-        )
-    };
+    let seen = |nes: &Machine| (nes.drawn_xs(), nes.scroll());
     let mut out = vec![nes.wram()[..0x800].to_vec()];
     let mut vis = vec![seen(nes)];
     for &(p, n) in pads {
@@ -1088,6 +1302,54 @@ fn still_bytes(nes: &mut Machine, l: &Learned) -> Result<Vec<u16>> {
     Ok((0..0x800u16)
         .filter(|a| !moved[usize::from(*a)] && !nes.noise(usize::from(*a)))
         .collect())
+}
+
+/// The search's moves for a lane player (in the farm's pad bits, which
+/// `World::pad` turns into the game's): `act` frames hold the button
+/// until it acts.
+fn lane_moves(act: usize) -> Vec<Move> {
+    let mv = |name, about, press: Vec<(u8, usize)>| Move {
+        name,
+        about,
+        press,
+        then: 0,
+        settle: 0,
+    };
+    vec![
+        mv(
+            "walk",
+            "walk forward along the lane a short way",
+            vec![(RIGHT, 16)],
+        ),
+        mv(
+            "back",
+            "walk back along the lane a short way",
+            vec![(LEFT, 16)],
+        ),
+        mv(
+            "lane_up",
+            "move to the next lane up",
+            vec![(farm::UP, 8), (0, 8)],
+        ),
+        mv(
+            "lane_down",
+            "move to the next lane down",
+            vec![(farm::DOWN, 8), (0, 8)],
+        ),
+        mv(
+            "act",
+            "hold the button until it acts, let go to send what it made, and watch it go",
+            // Long enough after the release for what was sent to arrive:
+            // the score moves then, and a cell kept sooner wouldn't show it.
+            vec![(A, act), (0, 45)],
+        ),
+        mv(
+            "press",
+            "press the button and let go at once",
+            vec![(A, 2), (0, 12)],
+        ),
+        mv("wait", "stand still and let things move", vec![(0, 16)]),
+    ]
 }
 
 /// One blind farm of a ROM. Returns the result JSON.
@@ -1229,6 +1491,9 @@ fn farm_for(
         run: d.run,
         box_dy: d.box_dy,
         pads: d.pads.clone(),
+        lanes: d.lanes.clone(),
+        held: d.held.clone(),
+        score: d.score.clone(),
     };
     let (mut nes, log) = (d.nes, d.log);
     let clip = crate::reach::ClipInput {
@@ -1266,7 +1531,13 @@ fn farm_for(
         }
     };
     let (hop, full) = (pick(0.0, 3).max(2), pick(1.0, 32).max(8));
-    let moves = farm::moves(hop, ((hop + full) / 2).max(hop + 1), full);
+    // A lane player's moves come from what discovery found: walking along
+    // the lane, a lane up or down, the held button until it acts and let
+    // go, a press, and a wait.
+    let moves = match (&w.l.lanes, &w.l.held) {
+        (Some(_), held) => lane_moves(held.as_ref().map_or(2, |h| h.frames + 1)),
+        _ => farm::moves(hop, ((hop + full) / 2).max(hop + 1), full),
+    };
 
     let mut cells: BTreeMap<Key, Cell> = BTreeMap::new();
     let first = vec![0usize];
@@ -1288,7 +1559,11 @@ fn farm_for(
     let mut probe_won: Option<(Vec<InputFrame>, Value, usize, f64)> = None;
     let uniform = o.decide == "uniform";
     let mut rng = Rng(o.seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
-    let plan = "Get the player as far forward as possible without dying. Jump over gaps and walls. Avoid what hurts; stomp or jump over enemies.";
+    let plan = if w.l.lanes.is_some() {
+        "Score as many points as possible without losing a life. The player changes lanes and walks along them; holding the button acts after a while and letting go sends what it made."
+    } else {
+        "Get the player as far forward as possible without dying. Jump over gaps and walls. Avoid what hurts; stomp or jump over enemies."
+    };
     let criteria: serde_json::Map<String, Value> = moves
         .iter()
         .map(|mv| (mv.name.to_owned(), json!(mv.about)))
@@ -1412,7 +1687,7 @@ fn farm_for(
                 let fwd = if w.l.right { 1 } else { -1 };
                 for b in &boxes {
                     let d = (i64::from(b[0]) - sx) * fwd;
-                    let dy = i64::from(b[1]) - (pos.y + w.l.box_dy);
+                    let dy = i64::from(b[1]) - (w.screen_y(pos.y) + w.l.box_dy);
                     if d <= 8 || d > 160 || dy.abs() > 64 {
                         continue;
                     }

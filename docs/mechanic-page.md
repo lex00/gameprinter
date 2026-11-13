@@ -32,6 +32,24 @@ The agent's log (log, pins, problems) is a panel at the right on every tab,
 from AGENT'S LOG in the header or L. The tab is in the address (`?tab=`).
 REFINE and THEMES take the game's place, and the games hold while they show.
 `mechanic/shell.js` does the tabs; `mechanic/app.js` the game and its modes.
+
+The old inspector's views (wave 8) are drawn by the editor's build, which
+gp serve serves at `/index.html` (`just editor`): `?embed=game&run=GAME`
+or `?embed=inspector&run=GAME` draws one view with no header, in the
+page's colors (`editor/src/Embed.tsx`). `mechanic/details/` puts them on
+the page:
+
+- REFINE, under the background work: THE CLIP MEASURED, a corpus clip,
+  free play clip or store recording of the game's ROM on the original and
+  on the rebuilt game from the same moment, with the lockstep panel and
+  its curves, the moments, the scenario ladder, pause, point and tell with
+  the requests, and the agent's sprite edits.
+- DETAILS in the header, on every tab (`?details=1`): a drawer with the
+  trace inspector, a store recording's frames drawn by each view (RAM
+  heatmap and watch, box selection and resolution card, OAM, nametables,
+  event lanes, tiles, coverage, annotations, compare two recordings).
+
+With no editor build, or on a server of the page's own, each says so.
 The sections below keep the old names for CLIPS's two views and PLAY.
 
 ## Layout
@@ -130,9 +148,18 @@ other tool off them, and a sealed run on the model, come with `gp sealed`.
 (`--from`, by default the newest) with Laya picking the buttons every few
 frames, until the mechanic shows; the page watches it as it plays.
 `gp mechanic say --judge` has Laya pick among a question's choices from the
-shown clip's measured jumps. `just laya` serves Laya on 127.0.0.1:7720
-(installing @receptron/laya under `$GP_HOME/work/laya`, or using the one
-`LAYA_DIR` names). Both read the player's place from the game's state
+shown clip's measured jumps. Both ask Laya on 127.0.0.1:7720. One already
+answering there is used as it is, whoever started it. Else the tool asks
+`gp serve` (`POST /api/laya/start` at `$GP_SERVE_URL`, by default
+127.0.0.1:7710) to start it: gp serve runs scripts/laya/serve.mjs on the
+install already there (`$LAYA_DIR`, `$GP_HOME/work/laya`, else
+`~/.game-printer/work/laya`, with the weights cached in
+`~/.cache/receptron-laya`), waits until it answers, and stops it when gp
+serve stops; `GET /api/laya` says which. With no gp serve running the tool
+starts Laya for itself and stops it when it ends. Nothing is installed by
+either: with no install the error says to run `just laya`, which installs
+@receptron/laya under `$GP_HOME/work/laya` and fetches the weights (about
+1.7 GB) on first use. Both read the player's place from the game's state
 mapping. On an arcade game (Tapper, whose mapping names the player) the
 demo offers Laya the board's chords instead of the pad's: up, down, left,
 right, tap, wait, coin and start (gp-explore's arcade palette), keeps the

@@ -286,6 +286,11 @@ pub struct Trace {
     pub ix: u16,
     pub iy: u16,
     pub sp: u16,
+    /// The refresh register as the core keeps it: `r` counts the opcode
+    /// fetches (its bit 7 unused), `r2` holds the bit 7 `ld r,a` set. `ld
+    /// a,r` reads `r & 0x7f | r2 & 0x80`, a random routine's usual source.
+    pub r: u8,
+    pub r2: u8,
     pub bytes: [u8; 4],
     /// The CPU's cycles since power-on at the instruction's start.
     pub cycles: u64,
@@ -399,6 +404,8 @@ impl Board {
             ix: cpu.ix,
             iy: cpu.iy,
             sp: cpu.sp,
+            r: cpu.r,
+            r2: cpu.r2,
             bytes: [0; 4],
             cycles: x.totalcycles + (x.cycles_running - icount).max(0) as u64,
             interrupt: None,

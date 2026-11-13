@@ -6,11 +6,21 @@
 // are cached under ~/.cache/receptron-laya. It listens on 127.0.0.1 only.
 //
 // Usage: node scripts/laya/serve.mjs INSTALL_DIR [PORT]
+//
+// With GP_LAYA_EXIT_WITH_STDIN=1 it exits when its standard input closes:
+// `gp serve` starts it that way with a pipe of its own, so it stops when
+// gp serve stops, however gp serve ends.
 
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+
+if (process.env.GP_LAYA_EXIT_WITH_STDIN === "1") {
+  process.stdin.on("end", () => process.exit(0));
+  process.stdin.on("close", () => process.exit(0));
+  process.stdin.resume();
+}
 
 const dir = process.argv[2];
 const port = Number(process.argv[3] ?? 7720);

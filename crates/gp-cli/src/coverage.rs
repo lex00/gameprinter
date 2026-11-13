@@ -80,6 +80,21 @@ pub(crate) fn run(args: &CoverageArgs, paths: &Paths) -> Result<Outcome> {
     }
 }
 
+/// One recording's coverage for gp serve's `/api/recordings/{id}/coverage`
+/// (wave 8): `gp coverage ID --no-save`'s output, so the store is only read.
+pub(crate) fn served(id: &str, rom: Option<&Path>, paths: &Paths) -> Result<Outcome> {
+    let select = Select {
+        ids: vec![id.to_owned()],
+        store: false,
+        retired: false,
+        definition: None,
+        rom: rom.map(Path::to_path_buf),
+        no_save: true,
+        threads: None,
+    };
+    covered(&select, false, paths)
+}
+
 /// What a report needs from the command line: the ROM folder, the
 /// registry and the definitions.
 struct CliEnv<'a> {
@@ -189,19 +204,33 @@ fn covered(select: &Select, check: bool, paths: &Paths) -> Result<Outcome> {
     } else {
         Store::open_existing(&paths.store)?
     };
-    if let Some(out) = arcade(select, &store, paths)? {
-        return Ok(out);
+    // The recordings by platform: an arcade one is measured on gp-arcade
+    // (`arcade`), an NES one by gp-coverage's report; a selection of both
+    // gets both reports.
+    let rom_bytes = match &select.rom {
+        Some(path) => Some(fs::read(path).with_context(|| format!("reading {}", path.display()))?),
+        None => None,
+    };
+    let rom_arcade = rom_bytes
+        .as_deref()
+        .is_some_and(|b| crate::roms::Platform::of_file(b) == crate::roms::Platform::Arcade);
+    let (arcade_entries, mut entries) = split_platforms(&store, entries(&store, select)?)?;
+    let arcade_out = if rom_arcade || !arcade_entries.is_empty() {
+        let rom = rom_bytes.as_deref().filter(|_| rom_arcade);
+        arcade(select, rom, &arcade_entries, &entries, paths)?
+    } else {
+        None
+    };
+    if rom_arcade || entries.is_empty() {
+        return arcade_out.context("no recording was chosen");
     }
-    let rom_file = match &select.rom {
-        Some(path) => {
-            let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-            crate::original::nes_only(crate::roms::Platform::of_file(&bytes), "gp coverage")?;
+    let rom_file = match rom_bytes {
+        Some(bytes) => {
             let sha = identify_nes(&bytes)?.sha256;
             Some((sha, bytes))
         }
         None => None,
     };
-    let mut entries = entries(&store, select)?;
     if let (true, Some((sha, _))) = (select.store, &rom_file) {
         entries.retain(|e| {
             recordings::load_manifest(&store, &e.id)
@@ -262,40 +291,76 @@ fn covered(select: &Select, check: bool, paths: &Paths) -> Result<Outcome> {
             exit = 1;
         }
     }
-    Ok(Outcome {
-        json: serde_json::to_value(&report).expect("reports serialize"),
-        text,
-        exit,
-    })
+    let mut json = serde_json::to_value(&report).expect("reports serialize");
+    if let Some(a) = arcade_out {
+        json["arcade"] = a.json["arcade"].clone();
+        text = format!("{}\n{text}", a.text);
+    }
+    Ok(Outcome { json, text, exit })
+}
+
+/// The chosen recordings split by platform: the arcade ones with their
+/// manifests, and the NES ones.
+type ArcadeEntries = Vec<(IndexEntry, gp_evidence::manifest::RecordingManifest)>;
+
+fn split_platforms(
+    store: &Store,
+    entries: Vec<IndexEntry>,
+) -> Result<(ArcadeEntries, Vec<IndexEntry>)> {
+    let mut arcade = Vec::new();
+    let mut nes = Vec::new();
+    for e in entries {
+        let m = recordings::load_manifest(store, &e.id)?;
+        if matches!(m.source, SourceRef::Romset { .. }) {
+            arcade.push((e, m));
+        } else {
+            nes.push(e);
+        }
+    }
+    Ok((arcade, nes))
 }
 
 /// The recordings to cover, each ID once.
-/// Coverage of the selected recordings when they are arcade ones: each
-/// replayed on gp-arcade with its levels. `None` when they're NES ones; a
-/// mix is refused.
-fn arcade(select: &Select, store: &Store, paths: &Paths) -> Result<Option<Outcome>> {
-    let entries = entries(store, select)?;
-    let mut arcade = Vec::new();
-    for e in &entries {
-        let m = recordings::load_manifest(store, &e.id)?;
-        if matches!(m.source, SourceRef::Romset { .. }) {
-            arcade.push((e.clone(), m));
+/// Coverage of the arcade recordings chosen: each replayed on gp-arcade
+/// with its levels. With `--rom` an arcade romset, only recordings of that
+/// set are measured (`--store`), and an NES recording named is refused as
+/// not that set's. `None` when there is nothing arcade to measure.
+fn arcade(
+    select: &Select,
+    rom: Option<&[u8]>,
+    chosen: &ArcadeEntries,
+    nes: &[IndexEntry],
+    paths: &Paths,
+) -> Result<Option<Outcome>> {
+    let mut arcade: Vec<&(IndexEntry, _)> = chosen.iter().collect();
+    if let Some(bytes) = rom {
+        let set = gp_arcade::Romset::from_zip(bytes)?;
+        let identity = set.identity.clone();
+        if !select.store
+            && let Some(e) = nes.first()
+        {
+            anyhow::bail!(
+                "recording {} plays an NES ROM, and --rom is the arcade romset {}",
+                e.name,
+                set.name
+            );
+        }
+        arcade.retain(
+            |(_, m)| matches!(&m.source, SourceRef::Romset { identity: i, .. } if *i == identity),
+        );
+        if arcade.is_empty() {
+            anyhow::bail!("no recording chosen plays the romset {}", set.name);
         }
     }
     if arcade.is_empty() {
         return Ok(None);
     }
-    if arcade.len() != entries.len() {
-        anyhow::bail!(
-            "the recordings chosen mix arcade and NES ones; gp coverage measures one platform at a time"
-        );
-    }
     let mut rows = Vec::new();
     let mut lines = Vec::new();
-    for (e, _) in &arcade {
+    for (e, _) in arcade {
         let opened = crate::open::Opened::open(paths, &e.id.to_hex())?;
         let set = opened.romset(select.rom.as_deref(), paths)?;
-        let input = String::from_utf8(store.get(&opened.manifest.input_log)?)?;
+        let input = String::from_utf8(opened.store.get(&opened.manifest.input_log)?)?;
         let log = gp_evidence::InputLog::parse(&input)?;
         let levels = crate::code_z80::run_input(&set, &log.frames)?;
         let mut v = crate::code_z80::coverage(&set, &levels);

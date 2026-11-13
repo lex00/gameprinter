@@ -36,6 +36,18 @@ pub enum SelfCmd {
         #[arg(long)]
         check: bool,
     },
+    /// Write every format's JSON Schema into DIR, one file per format with
+    /// no version in its name, as schema/README.md says. `just docs` runs
+    /// it on the schema/ folder.
+    Schemas {
+        /// The folder to write or check (default schema here).
+        #[arg(default_value = "schema")]
+        dir: PathBuf,
+        /// Write nothing; exit 1 if a file is stale or missing, or a JSON
+        /// file in DIR is no format's.
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 pub(crate) fn run(cmd: &SelfCmd, paths: &Paths) -> Result<Outcome> {
@@ -43,6 +55,7 @@ pub(crate) fn run(cmd: &SelfCmd, paths: &Paths) -> Result<Outcome> {
         SelfCmd::Path => self_path(paths),
         SelfCmd::Publish => self_publish(paths),
         SelfCmd::Docs { file, check } => crate::cli_doc::run(file, *check),
+        SelfCmd::Schemas { dir, check } => crate::schemas::run(dir, *check),
     }
 }
 

@@ -25,6 +25,7 @@
 //! `gp model blind`) plays an arcade romset too, on gp-arcade (machine.rs).
 
 pub(crate) mod blind;
+pub(crate) mod lanes;
 pub(crate) mod machine;
 mod support;
 pub(crate) mod topdown;

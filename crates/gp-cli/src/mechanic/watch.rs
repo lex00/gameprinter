@@ -256,6 +256,165 @@ pub(crate) fn view(session: &Path) -> Value {
     })
 }
 
+/// Milliseconds since 1970 of a file's last change, 0 when it can't be read.
+fn modified(f: &Path) -> u64 {
+    fs::metadata(f)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// `HH:MM:SS` as seconds into the day.
+fn secs_of(at: &str) -> Option<u64> {
+    let mut p = at.split(':').map(|x| x.parse::<u64>().ok());
+    let (h, m, s) = (p.next()??, p.next()??, p.next()??);
+    Some(h * 3600 + m * 60 + s)
+}
+
+const DAY_MS: u64 = 86_400_000;
+
+/// A topic's log lines with the time each was written (milliseconds since
+/// 1970), newest last. A line keeps only its time of day, so the day comes
+/// from the file: the last line was written when the file last changed (to
+/// the millisecond, which orders lines of two topics in the same second),
+/// and walking back, a time later than the line after it was the day
+/// before.
+fn dated_log(f: &Path) -> Vec<(u64, Value)> {
+    let lines: Vec<Value> = fs::read_to_string(f)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    let changed = modified(f);
+    let mut next = changed + 60_000;
+    let mut out: Vec<(u64, Value)> = lines
+        .into_iter()
+        .rev()
+        .enumerate()
+        .map(|(i, line)| {
+            if let Some(s) = line["at"].as_str().and_then(secs_of) {
+                let mut t = next / DAY_MS * DAY_MS + s * 1000;
+                if t > next {
+                    t = t.saturating_sub(DAY_MS);
+                }
+                if i == 0 && (t..t + 1000).contains(&changed) {
+                    t = changed;
+                }
+                next = t;
+            }
+            (next, line)
+        })
+        .collect();
+    out.reverse();
+    out
+}
+
+/// The topics of a game with watch files: its session folders that have
+/// `watch/`, and `open` (the mechanic open in the page) though it has none.
+fn topics(game: &Path, open: &str) -> Vec<String> {
+    let mut all: Vec<String> = fs::read_dir(game)
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.path().join("watch").is_dir())
+                .filter_map(|e| e.file_name().to_str().map(str::to_owned))
+                .filter(|n| super::session::name_ok(n))
+                .collect()
+        })
+        .unwrap_or_default();
+    if super::session::name_ok(open) && !all.iter().any(|t| t == open) {
+        all.push(open.to_owned());
+    }
+    all.sort();
+    all
+}
+
+/// The problem states still to do.
+fn unresolved(row: &Value) -> bool {
+    matches!(row["state"].as_str(), Some("open" | "working") | None)
+}
+
+/// What the page's panel shows for the whole game: every topic's log under
+/// `GAME/*/watch`, merged newest first with each line's topic; every topic's
+/// pins (kept ones, then the newest few of each); every topic's problem
+/// rows, `todo` on those still open or being worked on (the panel shows
+/// those of every topic and all of `open`'s, the mechanic open in the
+/// page); and the topics, with how many lines each has, when it last wrote (in
+/// milliseconds since 1970) and how many problems it has still to do.
+pub(crate) fn game_view(game: &Path, open: &str) -> Value {
+    let mut log: Vec<(u64, usize, Value)> = Vec::new();
+    let mut kept: Vec<Value> = Vec::new();
+    let mut recent: Vec<(u64, Value)> = Vec::new();
+    let mut problems: Vec<Value> = Vec::new();
+    let mut listed: Vec<Value> = Vec::new();
+    for t in topics(game, open) {
+        let d = game.join(&t).join("watch");
+        let mut lines = dated_log(&d.join("log.ndjson"));
+        let count = lines.len();
+        let last = lines.last().map_or(0, |(at, _)| *at);
+        lines.drain(..lines.len().saturating_sub(LOG_LINES));
+        for (at, mut line) in lines {
+            line["topic"] = json!(t);
+            log.push((at, log.len(), line));
+        }
+        let pins_file = d.join("pins.json");
+        let pinned_at = modified(&pins_file);
+        let pins = read_list(&pins_file);
+        let mut mark = |mut p: Value| {
+            let name = p["file"].as_str().unwrap_or_default();
+            let video = kind_of(name).is_some_and(|k| k.starts_with("video/"));
+            p["kind"] = json!(if video { "video" } else { "image" });
+            p["topic"] = json!(t);
+            p
+        };
+        kept.extend(
+            pins.iter()
+                .filter(|p| p["keep"] == json!(true))
+                .cloned()
+                .map(&mut mark),
+        );
+        for (i, p) in pins
+            .iter()
+            .rev()
+            .filter(|p| p["keep"] != json!(true))
+            .take(RECENT)
+            .enumerate()
+        {
+            // Newest of the topic first; topics by their newest pin.
+            recent.push((pinned_at.saturating_sub(i as u64), mark(p.clone())));
+        }
+        let rows = read_list(&d.join("problems.json"));
+        let still = rows.iter().filter(|r| unresolved(r)).count();
+        for mut r in rows {
+            r["topic"] = json!(t);
+            r["todo"] = json!(unresolved(&r));
+            problems.push(r);
+        }
+        listed.push(json!({"topic": t, "lines": count, "last": last, "problems": still}));
+    }
+    // Newest first; of lines in the same second, the one written after.
+    log.sort_by_key(|l| std::cmp::Reverse((l.0, l.1)));
+    recent.sort_by_key(|p| std::cmp::Reverse(p.0));
+    let log: Vec<Value> = log.into_iter().map(|(_, _, l)| l).collect();
+    kept.extend(recent.into_iter().map(|(_, p)| p));
+    json!({
+        "open": open,
+        "status": log.first().cloned(),
+        "log": log,
+        "pins": kept,
+        "problems": problems,
+        "topics": listed,
+    })
+}
+
+/// A pinned file of any topic of the game, by the topic and its name.
+pub(crate) fn topic_file(game: &Path, topic: &str, name: &str) -> Option<(&'static str, Vec<u8>)> {
+    if !super::session::name_ok(topic) {
+        return None;
+    }
+    file(&game.join(topic), name)
+}
+
 /// A pinned file's media type, by its extension; none for a name that isn't
 /// one a pin writes (so nothing else in the session is served).
 pub(crate) fn kind_of(name: &str) -> Option<&'static str> {
@@ -360,6 +519,99 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// The game's view: every topic's log merged newest first with its
+    /// topic, pins from every topic, and the rows still to do in the other
+    /// topics beside all of the open one's.
+    #[test]
+    fn the_game_view_takes_every_topics_watch_files() {
+        let d = tempfile::tempdir().unwrap();
+        let game = d.path().join("tapper");
+        let (title, emu) = (game.join("title"), game.join("emulator"));
+        fs::create_dir_all(title.join("watch")).unwrap();
+        fs::create_dir_all(emu.join("watch")).unwrap();
+        fs::write(
+            emu.join("watch/log.ndjson"),
+            "{\"at\":\"23:59:50\",\"text\":\"Booting the Z80\"}\n{\"at\":\"00:00:05\",\"text\":\"The bar draws\"}\n",
+        )
+        .unwrap();
+        log(&title, "Recording the title").unwrap();
+        let pic = d.path().join("frame.png");
+        fs::write(&pic, b"png").unwrap();
+        pin(&emu, &pic, "the bar", false).unwrap();
+        for (s, what, state) in [
+            (&emu, "sprites off by one", "open"),
+            (&emu, "old", "fixed"),
+            (&title, "fades late", "fixed"),
+        ] {
+            let n = problem(
+                s,
+                &Problem {
+                    place: Some("x"),
+                    what: Some(what),
+                    ..Default::default()
+                },
+            )
+            .unwrap()["n"]
+                .as_u64();
+            problem(
+                s,
+                &Problem {
+                    n,
+                    state: Some(state),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        // Not a topic: no watch folder.
+        fs::create_dir_all(game.join("move")).unwrap();
+
+        let v = game_view(&game, "title");
+        let log: Vec<(&str, &str)> = v["log"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| (l["topic"].as_str().unwrap(), l["text"].as_str().unwrap()))
+            .collect();
+        // The emulator's lines span midnight: the later one is the newer.
+        let (a, b) = (
+            log.iter().position(|l| l.1 == "The bar draws").unwrap(),
+            log.iter().position(|l| l.1 == "Booting the Z80").unwrap(),
+        );
+        assert!(a < b, "{log:?}");
+        assert_eq!(log.len(), 3);
+        assert!(log.contains(&("title", "Recording the title")));
+        assert_eq!(v["status"], v["log"][0]);
+        assert_eq!(v["pins"][0]["topic"], "emulator");
+        let rows: Vec<(&str, bool)> = v["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| (r["what"].as_str().unwrap(), r["todo"] == true))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("sprites off by one", true),
+                ("old", false),
+                ("fades late", false)
+            ]
+        );
+        assert_eq!(v["topics"][0]["problems"], 1);
+        let topics: Vec<&str> = v["topics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["topic"].as_str().unwrap())
+            .collect();
+        assert_eq!(topics, ["emulator", "title"]);
+        assert_eq!(
+            topic_file(&game, "emulator", "001-frame.png").unwrap().1,
+            b"png"
+        );
+        assert!(topic_file(&game, "..", "001-frame.png").is_none());
     }
 
     #[test]

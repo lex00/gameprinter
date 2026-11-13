@@ -371,7 +371,7 @@ pub fn recordings_cmd(cmd: &RecordingsCmd, paths: &Paths) -> Result<Outcome> {
 }
 
 /// The field table a recording's states follow, for either platform.
-fn field_table_of(
+pub(crate) fn field_table_of(
     store: &Store,
     manifest: &gp_evidence::manifest::RecordingManifest,
 ) -> Result<gp_evidence::trace::FieldTable> {
@@ -1230,7 +1230,10 @@ fn recordings_list(filter: crate::recindex::Filter, paths: &Paths) -> Result<Out
 
 /// `gp recordings list` over an index that's already up to date. `gp serve`
 /// passes one built in memory, so serving never writes the store.
-fn recordings_list_in(filter: crate::recindex::Filter, index: &Index) -> Result<Outcome> {
+pub(crate) fn recordings_list_in(
+    filter: crate::recindex::Filter,
+    index: &Index,
+) -> Result<Outcome> {
     warn_index_problems(index)?;
     let unreadable = index.unreadable()?;
     if filter.reads_manifests() && !unreadable.is_empty() {
@@ -1308,7 +1311,7 @@ fn recordings_show(id: &str, paths: &Paths) -> Result<Outcome> {
 
 /// `gp recordings show` over an index that's already up to date, as
 /// [`recordings_list_in`].
-fn recordings_show_in(id: &str, store: &Store, index: &Index) -> Result<Outcome> {
+pub(crate) fn recordings_show_in(id: &str, store: &Store, index: &Index) -> Result<Outcome> {
     let entry = index.resolve(id)?;
     let names = index.entries_for(&entry.id)?;
     let marks = index.marks_for(&entry.id)?;
@@ -1635,7 +1638,7 @@ fn replay_all(paths: &Paths, include_retired: bool) -> Result<Outcome> {
     })
 }
 
-fn field_selected(name: &str, filters: &[String]) -> bool {
+pub(crate) fn field_selected(name: &str, filters: &[String]) -> bool {
     filters.is_empty()
         || filters.iter().any(|f| {
             name == f
@@ -1684,7 +1687,7 @@ fn trace_frame(
 }
 
 /// `gp trace frame` for a recording that's already open.
-fn trace_frame_of(
+pub(crate) fn trace_frame_of(
     opened: &Opened,
     frame: u64,
     filters: &[String],
@@ -1750,7 +1753,7 @@ fn trace_diff(a: &str, b: &str, paths: &Paths) -> Result<Outcome> {
 }
 
 /// `gp trace diff` for two recordings that are already open.
-fn trace_diff_of(a: &Opened, b: &Opened, paths: &Paths) -> Result<Outcome> {
+pub(crate) fn trace_diff_of(a: &Opened, b: &Opened, paths: &Paths) -> Result<Outcome> {
     let ha = gp_nes::recording::frame_hashes_of(&a.store, &a.manifest)?;
     let hb = gp_nes::recording::frame_hashes_of(&b.store, &b.manifest)?;
     let common = ha.len().min(hb.len());
@@ -1849,7 +1852,7 @@ fn trace_diff_of(a: &Opened, b: &Opened, paths: &Paths) -> Result<Outcome> {
 
 /// `gp trace fields`: the field table, from the trace or, for a recording
 /// without one, this runtime's.
-fn trace_fields(opened: &Opened) -> Result<Outcome> {
+pub(crate) fn trace_fields(opened: &Opened) -> Result<Outcome> {
     let table = field_table_of(&opened.store, &opened.manifest)?;
     let magic = String::from_utf8_lossy(&table.state_magic).into_owned();
     let fields: Vec<Value> = table
@@ -1936,7 +1939,7 @@ fn events(
 }
 
 /// `gp events` for a recording that's already open.
-fn events_of(
+pub(crate) fn events_of(
     opened: &Opened,
     frames: &str,
     kinds: &[String],

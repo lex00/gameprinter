@@ -56,6 +56,18 @@ The input is an input log (`--input FILE`), a baseline's holds (`--baseline`), o
 
 An original whose data is written by hand (`source.how = "authored"`, an `authored.toml`) is built with `gp template build DIR`: a data image, its asset map and the lifted files, into `~/.gameprinter/work/assets/SOURCE` unless `-o` says otherwise. It exits 1 when the asset map or `template.toml`'s pins are stale; `--write` rewrites them. For a template derived from a game (`[derive] from` in `template.toml`), `gp template check DIR --original` holds each of its stages to the game's: the share of cells and of ladders in the same places, refused at 0.6 and 0.5, and any data line of its built files that the game's lifted files hold. The game's files are lifted in memory from your ROM and never written.
 
+## Derived templates, baselines and the level kit
+
+A template made as a small delta on another (a hack of a game, or an original built on one) names its base and a delta file under `[derive]` in `template.toml`. `gp template derive DIR` makes its model, contract, state mapping and the other per-game files from the base's, with the base's source renamed to its own and the delta merged over them, and exits 1 while one is stale; `--write` rewrites them. It reads files only, so it works the same for an NES game and an arcade romset.
+
+`gp interp reach DIR --record` writes a run through each level as a model baseline in `DIR/baselines/`. `gp interp baselines DIR` plays every baseline there on the model alone, through the game's module (`--module`) or the built-in interpreter, and exits 1 when a digest or an expectation differs; `--write` rewrites the ones that differ after a change meant to change play.
+
+`gp level kit GAME` writes `level-kit/kit.toml` and `level-kit/level-kit.md`: what a designer needs to make a stage by hand, from the model, the asset map and the hand-written `level-kit/rules.toml` ([the level kit](https://github.com/lex00/gameprinter/blob/main/docs/level-kit.md)). `gp game new` writes a stub rules file and the first kit.
+
+`gp chunks GAME` reads the model's levels from their lifted assets and finds the groups of cells they are built from: the format's own objects (a Donkey Kong stage's rows and columns of tiles), connected pieces, gaps, and patterns mined from the grid, each with what it does for the player. Its catalog goes to `~/.gameprinter/work/chunks/GAME/chunks.json`, never into a git checkout, since it holds the game's levels ([level chunks](https://github.com/lex00/gameprinter/blob/main/docs/chunks.md)). `--module` gives the game's built module for the reachability tests.
+
+`gp catalog GAME` sets what the model holds against the pattern library ([catalog patterns](https://github.com/lex00/gameprinter/blob/main/docs/catalog-patterns.md)): each entity's patterns, as components or hooks (`--module` reads the hooks from the game's module), the asset map sorted by pattern, RAM slot arrays from the game's labels against the mapping's `[slots]`, and with `--recording ID` the tracked objects of a recording fitted to the behaviour patterns.
+
 ## What has to be yours
 
 An original game can't use another game's art, music, levels, characters or name. Copying how something moves is a much greyer area than it sounds. This site isn't legal advice, so talk to a lawyer before you serve a game built on someone else's.

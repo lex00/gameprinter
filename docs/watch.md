@@ -62,4 +62,20 @@ game-printer served the session list at `/api/watch`; that route is the mechanic
 
 `gp watch detail NAME --recipe H --frames A..B` and `gp watch point NAME --recipe H --frame F --rect X,Y,W,H` only read.
 
-Stage 0 reads the NES's 6502 code through gp-events' collector, so `gp watch start` and `gp explore` refuse an arcade ROM in words.
+## On an arcade romset
+
+Given a romset zip (`gp watch start tap tapper.zip --start-frames 900`), `gp watch start` and `gp explore` run on gp-arcade (`crates/gp-cli/src/watch_z80.rs`, `explore_z80.rs`). The starts are gp-explore's arcade palette's (a coin and Start, then the stick and tap); the search mutates presses over the same palette and ranks runs as on the NES, by calls from a target and then by new instruction starts of either Z80 and new branch directions of the main one. The routines are the main Z80's code map (`crate::code_z80`), named `sub_XXXX` by entry. The events are the same schema:
+
+| Event | On the arcade board |
+|---|---|
+| `watch.start` | `mapper` 0, `prg_bytes` the main CPU's ROM |
+| `snapshot` | `static-0.json` and `static.json`: the code map's routines (all read) and its stops, each `jp (hl)`, `jp (ix)` and `jp (iy)` |
+| `new-code` | Main-CPU instructions first run, as address ranges |
+| `edge` | gp-events' kinds: a call or `rst` is `jsr`, `ret` is `rts`, a conditional jump taken `branch`, a fall-through `fall`, a `jp (..)` `jmp_indirect` |
+| `stop.reached` | A `jp (..)` first taken, to the routine it went to |
+| `fact` | A routine the code map gains from the runs (a `jp (..)` or interrupt target) |
+| `clip.kept` | `end_hash` is the machine's state hash |
+
+`gp watch rerun --watch` reads gp-arcade's access log; `--hook` is refused, since a `hook` event holds the 6502's registers. `gp watch detail` prints each instruction of both Z80s with its registers, and `gp watch point` the sprites under the box from the sprite list with the instruction that last wrote each one's bytes. No `bank`, `pointer` or `behaviour` events are made (no banks, no pointer in memory, and `gp behave` reads gp-events' NES runs). `--aim unread` is the 6502 static reader's report and is refused; `unrun`, `stops` and `--target sub_XXXX` work.
+
+A start clip of Tapper that tends no bar loses every life within a minute, so with the default `--start-frames 3600` the search starts in attract mode and finds nothing new; start from clips in play (`--start`, or `--start-frames 900`).

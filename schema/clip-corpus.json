@@ -1,0 +1,783 @@
+{
+  "$id": "game-printer:clip-corpus@1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Corpus",
+  "description": "The whole corpus file.",
+  "type": "object",
+  "properties": {
+    "anchors": {
+      "description": "Timings measured on the original once, by name.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Anchor"
+      }
+    },
+    "cells": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Cell"
+      }
+    },
+    "clips": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Clip"
+      }
+    },
+    "contexts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Context"
+      }
+    },
+    "corpus": {
+      "$ref": "#/$defs/Header"
+    },
+    "coverage": {
+      "$ref": "#/$defs/Coverage"
+    },
+    "order": {
+      "description": "The clip IDs in the queue's order, before any score or mark\n([`coverage::rank`]).",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "corpus",
+    "anchors",
+    "contexts",
+    "cells",
+    "clips",
+    "coverage",
+    "order"
+  ],
+  "$defs": {
+    "Anchor": {
+      "description": "A timing measured on the original.",
+      "type": "object",
+      "properties": {
+        "frames": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "from": {
+          "description": "The start it was measured from.",
+          "type": "string"
+        },
+        "held": {
+          "description": "What was held: `right`, `right+b`.",
+          "type": "string"
+        },
+        "says": {
+          "description": "In words: \"the top of a held jump from standing, 32 frames\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "frames",
+        "from",
+        "says"
+      ]
+    },
+    "Cell": {
+      "description": "One cell of the grid.",
+      "type": "object",
+      "properties": {
+        "check": {
+          "description": "For a mapping check, its result on the original.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CheckResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "context": {
+          "type": "string"
+        },
+        "enters": {
+          "description": "The mechanic states its clips enter on the model.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "excites": {
+          "description": "The numbers the cell's clips move on the model, measured.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "frames": {
+          "description": "Frames its presses and settle run.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "id": {
+          "description": "`MECHANIC:PATTERN:CONTEXT`: `platformer.jump:jump.hold-16:ground.still`.",
+          "type": "string"
+        },
+        "mechanic": {
+          "type": "string"
+        },
+        "name": {
+          "description": "In plain words: \"Jump, held 16 frames, standing still\".",
+          "type": "string"
+        },
+        "pattern": {
+          "$ref": "#/$defs/Pattern"
+        },
+        "presses": {
+          "description": "The presses with `fwd` as right, frames from the cell's first\n(after any lead-in); a press placed by an event is added per clip.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requires": {
+          "description": "Cells that must match first.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "tier": {
+          "description": "0 checks, 1 one action from standing, 2 other contexts and\ncombinations, 3 lead-ins, 4 probes and mixed.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "mechanic",
+        "pattern",
+        "context",
+        "tier",
+        "name",
+        "presses",
+        "frames",
+        "status"
+      ]
+    },
+    "CheckResult": {
+      "description": "A mapping check's result on the original.",
+      "type": "object",
+      "properties": {
+        "passed": {
+          "type": "boolean"
+        },
+        "says": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "passed",
+        "says"
+      ]
+    },
+    "Clip": {
+      "description": "A cell at one start: the unit the background queue scores.",
+      "type": "object",
+      "properties": {
+        "cell": {
+          "type": "string"
+        },
+        "effect": {
+          "description": "For each number in `excites`, how much it moves the clip: the\nmapped measures on frames that change, counted, the larger of the\ntwo perturbations. Two clips that move the same two numbers in a\ndifferent ratio tell them apart.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "enters": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "excites": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "frames": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "id": {
+          "description": "`CELL@CONTEXT/START`.",
+          "type": "string"
+        },
+        "minimal": {
+          "description": "In the minimal set.",
+          "type": "boolean",
+          "default": false
+        },
+        "original": {
+          "description": "The hash of the original's mapped measures on every frame.",
+          "type": "string"
+        },
+        "presses": {
+          "description": "Every press from the start, lead-in included, directions resolved\nby the player's facing there.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "spec": {
+          "description": "`blake3:` of the clip's spec (its ID, start, presses and frames):\nwhat the queue's ledger keys a clip's results on.",
+          "type": "string"
+        },
+        "start": {
+          "description": "`CONTEXT/START`.",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        }
+      },
+      "required": [
+        "id",
+        "cell",
+        "start",
+        "presses",
+        "frames",
+        "spec",
+        "status"
+      ]
+    },
+    "Context": {
+      "description": "A situation a press happens in, and where it was found.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "`ground.still`, `ground.edge[1].over`, `enemy.near[goomba]`.",
+          "type": "string"
+        },
+        "lead": {
+          "description": "For a context reached by a lead-in: from which context, holding\nwhat, for which anchor's frames.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Lead"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "missing": {
+          "description": "Why no start the rebuilt game can begin at was found.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "needs": {
+          "description": "The mechanics whose records name it.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "predicate": {
+          "description": "The predicate over the original's mapped measures, in words.",
+          "type": "string"
+        },
+        "starts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Start"
+          }
+        },
+        "words": {
+          "description": "\"On the ground, standing still\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "words",
+        "predicate",
+        "needs",
+        "starts"
+      ]
+    },
+    "Coverage": {
+      "type": "object",
+      "properties": {
+        "gaps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Gap"
+          }
+        },
+        "minimal": {
+          "description": "The minimal set's clips, in the order they were chosen.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pairs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PairCover"
+          }
+        },
+        "params": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ParamCover"
+          }
+        },
+        "says": {
+          "description": "\"26 of 30 numbers moved by two independent clips; minimal set 24\nclips; 5 gaps\".",
+          "type": "string"
+        },
+        "states": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StateCover"
+          }
+        }
+      },
+      "required": [
+        "params",
+        "states",
+        "pairs",
+        "minimal",
+        "gaps",
+        "says"
+      ]
+    },
+    "EventAt": {
+      "description": "A press placed by the original's own timing in each clip.",
+      "type": "object",
+      "properties": {
+        "button": {
+          "description": "The button pressed there and for how many frames.",
+          "type": "string"
+        },
+        "event": {
+          "description": "`land`: the player's next landing after leaving the ground;\n`leave`: the player's leaving the ground.",
+          "type": "string"
+        },
+        "len": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "offset": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "event",
+        "offset",
+        "button",
+        "len"
+      ]
+    },
+    "Gap": {
+      "description": "What the corpus doesn't cover, in words.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "`param`, `pair`, `context`, `state` or `probe`.",
+          "type": "string"
+        },
+        "says": {
+          "type": "string"
+        },
+        "what": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "what",
+        "says"
+      ]
+    },
+    "Header": {
+      "description": "What the corpus was built from.",
+      "type": "object",
+      "properties": {
+        "catalog": {
+          "description": "The extensions' versions the records came from: \"core 0.4.4,\nplatformer 0.4.2\".",
+          "type": "string"
+        },
+        "catalog_hash": {
+          "type": "string"
+        },
+        "format": {
+          "description": "[`CORPUS_VERSION`].",
+          "type": "string"
+        },
+        "generator": {
+          "description": "[`GENERATOR`].",
+          "type": "string"
+        },
+        "genre": {
+          "description": "The model's genre extensions, which choose the probe cells.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mapping": {
+          "type": "string"
+        },
+        "model": {
+          "description": "`blake3:` hashes of the model text, the catalog (its records and\nuses as JSON), the state mapping's text and the ROM.",
+          "type": "string"
+        },
+        "player": {
+          "description": "The player entity.",
+          "type": "string"
+        },
+        "recordings": {
+          "description": "The recordings and save points the starts were looked for in, in\norder.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rom": {
+          "type": "string"
+        },
+        "seed": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "format",
+        "generator",
+        "catalog",
+        "model",
+        "catalog_hash",
+        "mapping",
+        "rom",
+        "recordings",
+        "genre",
+        "seed",
+        "player"
+      ]
+    },
+    "How": {
+      "description": "How a context's start is reached.",
+      "oneOf": [
+        {
+          "description": "Found in a recording of the original.",
+          "type": "string",
+          "const": "recording"
+        },
+        {
+          "description": "A free play save point the user made.",
+          "type": "string",
+          "const": "save-point"
+        },
+        {
+          "description": "Another context's start plus presses that reach it on the original.",
+          "type": "string",
+          "const": "lead-in"
+        }
+      ]
+    },
+    "Lead": {
+      "description": "A lead-in: the presses that take a start of `from` into this context.",
+      "type": "object",
+      "properties": {
+        "anchor": {
+          "description": "The anchor whose frames the lead-in lasts, less `back`.",
+          "type": "string"
+        },
+        "back": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "from": {
+          "type": "string"
+        },
+        "hold": {
+          "description": "Actions held through the lead-in and the cell: `fwd`, `run`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "from",
+        "hold",
+        "anchor"
+      ]
+    },
+    "PairCover": {
+      "description": "Two numbers of a mechanic some clip moves together, and the clips that\ntell them apart: one that moves one without the other, or two that\nmove both in a different ratio.",
+      "type": "object",
+      "properties": {
+        "a": {
+          "type": "string"
+        },
+        "b": {
+          "type": "string"
+        },
+        "separated_by": {
+          "description": "Up to three clips that move one and not the other, or else two\nthat move both in ratios more than a quarter apart.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "together": {
+          "description": "Clips that move both.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "a",
+        "b",
+        "together",
+        "separated_by"
+      ]
+    },
+    "ParamCover": {
+      "description": "One number and the clips that move it.",
+      "type": "object",
+      "properties": {
+        "clips": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "covered": {
+          "description": "Moved by at least two independent clips.",
+          "type": "boolean"
+        },
+        "independent": {
+          "description": "The most clips among them that are pairwise independent.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "mechanic": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "mechanic",
+        "clips",
+        "independent",
+        "covered"
+      ]
+    },
+    "Pattern": {
+      "description": "A press pattern (docs/research/clip-corpus.md, section 2).",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "The action pressed (`fwd` and `back` are directions relative to\nthe player's facing), or empty.",
+          "type": "string"
+        },
+        "anchor": {
+          "description": "A length or time measured on the original, by anchor name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "event": {
+          "description": "For a press placed at the original's own event in the clip\n(`land`, `leave`): the event, and frames from it (negative before).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventAt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "frames": {
+          "description": "A length from [`HOLDS`] or another fixed number.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "name": {
+          "description": "`idle`, `tap`, `hold`, `release`, `taps`, `chord`, `through`,\n`early`, `again`, `late`, `doublet`, `turn`, `mixed`, `check`.",
+          "type": "string"
+        },
+        "with": {
+          "description": "Actions held with it.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "Start": {
+      "description": "One start of a context.",
+      "type": "object",
+      "properties": {
+        "cant": {
+          "description": "Why the rebuilt game can't begin here: kept, with no clips.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "facing_left": {
+          "description": "The player faces left: `fwd` is the left button.",
+          "type": "boolean",
+          "default": false
+        },
+        "frame": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "how": {
+          "$ref": "#/$defs/How"
+        },
+        "id": {
+          "description": "`s1`, `s2`, by recording and frame.",
+          "type": "string"
+        },
+        "level": {
+          "type": "string"
+        },
+        "log": {
+          "description": "The input log the original plays to the frame, relative to\n`$GP_HOME`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model_frame": {
+          "description": "The model's frame there, as the lockstep counts it.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "prefix": {
+          "description": "Presses before the cell's own, and how many frames they take: a\nlead-in's, or nothing pressed until the player stands still.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "prefix_frames": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "recording": {
+          "description": "The recording (or save point) the original plays to the frame.",
+          "type": "string"
+        },
+        "snapshot": {
+          "description": "The original's snapshot there, relative to `$GP_HOME`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "how",
+        "recording",
+        "frame",
+        "model_frame",
+        "level"
+      ]
+    },
+    "StateCover": {
+      "description": "One mechanic state and the clips that enter it.",
+      "type": "object",
+      "properties": {
+        "clips": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "clips"
+      ]
+    },
+    "Status": {
+      "description": "Where a cell stands.",
+      "oneOf": [
+        {
+          "description": "Fitted from.",
+          "type": "string",
+          "const": "active"
+        },
+        {
+          "description": "Removed, with the reason; the next model change can bring it back.",
+          "type": "string",
+          "const": "pruned"
+        },
+        {
+          "description": "For a move the model lacks: scored, never fitted; a probe that\ndiffers is a gap report.",
+          "type": "string",
+          "const": "probe"
+        },
+        {
+          "description": "A check: a mapping check on the original, or a press that should\ndo nothing.",
+          "type": "string",
+          "const": "check"
+        }
+      ]
+    }
+  }
+}

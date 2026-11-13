@@ -192,6 +192,15 @@ aside li { margin-bottom: 6px; }
 #w-problems .st-wontfix { color: var(--muted); }
 #w-log { font-size: 13px; }
 #w-log .at { color: var(--muted); margin-right: 8px; }
+/* The panel in the mechanic page shows every topic of the game: each line
+   says its topic, and the open mechanic's own are marked. */
+#w-topic-row { display: block; font-size: 13px; color: var(--muted); margin: 0 0 8px; }
+#w-topic { font: 13px var(--mono); background: #000; color: var(--fg); border: 2px solid var(--nes-2d); margin-left: 6px; }
+#watch-col .topic { color: var(--nes-21); margin-right: 8px; }
+#watch-col .mine .topic, #w-status.mine .topic { color: var(--nes-28); }
+#w-log li.mine { border-left: 3px solid var(--nes-28); padding-left: 5px; }
+#w-log li:not(.mine) { padding-left: 8px; }
+#w-problems tr.mine td:first-child { color: var(--nes-28); }
 
 /* REVIEW REBUILD (game-printer's refine.css, whose name the refinement
    view has now): the clip picker card, the bar under the game, the strip

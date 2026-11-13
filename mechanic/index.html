@@ -76,9 +76,10 @@
   <aside id="log-panel" hidden aria-label="Your agent's log">
     <section id="watch-col">
       <h2>Your agent</h2>
-      <p id="w-status" class="muted">Nothing yet. Your agent writes here with gp mechanic log, pin and problem.</p>
+      <label id="w-topic-row">Topic <select id="w-topic"><option value="">All topics</option></select></label>
+      <p id="w-status" class="muted">Nothing yet. Your agent writes here with gp mechanic log GAME TOPIC "what it's doing" (and pin, problem); this panel shows every topic of the game.</p>
       <div id="w-pins"></div>
-      <table id="w-problems" hidden><thead><tr><th>#</th><th>Where</th><th>What is wrong</th><th>Change</th><th>State</th></tr></thead><tbody></tbody></table>
+      <table id="w-problems" hidden><thead><tr><th>Topic</th><th>#</th><th>Where</th><th>What is wrong</th><th>Change</th><th>State</th></tr></thead><tbody></tbody></table>
       <details open><summary>Log</summary><ol id="w-log"></ol></details>
     </section>
   </aside>

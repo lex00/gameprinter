@@ -34,6 +34,33 @@ Given the frame's RAM, these give the count exactly: `gp cycles chain`, keeping 
 | `gp clip score ... --values PATH` | A clip's per-frame values of a mapped path straight through, the original's and the model's, in `values.json` with the frame pairing: with a probe mapping that compares `counters.frame_cost` and `counters.random`, the model's cost each frame beside the original's |
 | `gp cycles chain ... --ram-out FILE` | The original's RAM at each NMI entry, 2048 bytes a frame, for checking a model of a routine's state offline. Game data: keep it under $GP_HOME/work |
 
+### On an arcade romset
+
+Given a MAME zip as `--rom`, the commands read the main Z80 from gp-arcade's
+instruction trace and access log (crate::cycles_z80):
+
+- `slice` writes the main CPU's ROM.
+- A call is a `call` or `rst` to the routine, ended by the first instruction
+  whose stack pointer is back at the caller's. An interrupt the board takes
+  inside a call (Tapper's game loop runs with interrupts on) is left out of
+  its cycles and its reads, the acknowledge's 19 cycles in mode 2 included.
+- `readset` reads work RAM (E000-E7FF); the stack's accesses are left out by
+  the instruction that made them.
+- `check` runs each call alone on gp-arcade's own Z80 (MAME's), from the
+  frame's start state with the frame's writes before the call, the call's
+  registers from the trace (the refresh register too, which `ld a,r` reads),
+  and the ports as the frame read them. Tapper, frames 2000 to 4000 of a
+  five-level run: 0325, 0379, 03EA and 5CED (the handler's) 2001 of 2001
+  calls exact each, the random routine 5FAC 95 of 95, its only RAM read E390
+  (its cost varies with R).
+- `split` takes the frame's first interrupt (the CTC's) as the handler, to the
+  first instruction back above its return address; `--ram-out` is work RAM at
+  the handler's entry.
+- `chain` reports the original's idle-loop passes a frame (Tapper's loop at
+  60F8, `ld a,(e16c); cp 1; jr c`, about 3,850 a frame) and doesn't predict
+  them: the board's interrupt comes from its CTC counting the video timing,
+  which a Z80 run alone doesn't model.
+
 ## How much the model's state decides
 
 `--known` with `--resync` scores a group of bytes on its own: hold the group at its first value and give the rest from the original, and the frames that stay exact are the ones the group doesn't move. On frames 1200 to 7200 of the user's play (recording ad8352d8c24f, 6001 frames):

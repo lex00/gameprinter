@@ -82,10 +82,6 @@ impl Inputs {
     /// corpus plan, else clips.toml), the original run to it once.
     pub(crate) fn of_game(paths: &Paths, dir: &Path, rom: Option<&Path>) -> Result<Inputs> {
         let rom = crate::clip_score::rom_of(paths, dir, rom)?;
-        crate::original::nes_only(
-            crate::roms::Platform::of_file(&rom),
-            "a capture's code coverage",
-        )?;
         let mfile = dir.join(gp_interp::mapping::MAPPING_FILE);
         let mapping = Mapping::parse(
             &fs::read_to_string(&mfile).with_context(|| format!("reading {}", mfile.display()))?,
@@ -108,8 +104,14 @@ impl Inputs {
                 Some(f) => crate::clipset::parse_presses(&fs::read_to_string(dir.join(f))?)?.spans,
                 None => c.presses.clone(),
             };
-            let log =
-                gp_evidence::InputLog::parse(&crate::clipset::log_of(c.frames, &spans, None)?)?;
+            // An arcade clip's spans name the board's buttons, in its start's
+            // layout.
+            let arcade = crate::clipset::parse_presses(&fs::read_to_string(dir.join(p))?)?.arcade;
+            let log = gp_evidence::InputLog::parse(&crate::clipset::log_of(
+                c.frames,
+                &spans,
+                arcade.as_ref(),
+            )?)?;
             pool.push((
                 c.id.clone(),
                 k,
@@ -128,11 +130,8 @@ impl Inputs {
                 let p = crate::clipset::parse_presses(&fs::read_to_string(dir.join(file))?)?;
                 let log = gp_evidence::InputLog::parse(&crate::clipset::log_of_presses(&p)?)?;
                 let upto = usize::try_from(*frame)?.min(log.frames.len());
-                let mut o = gp_nes::protocol::NesRuntime::load(
-                    &rom,
-                    gp_evidence::manifest::PowerOn::default(),
-                )
-                .map_err(|e| anyhow::anyhow!("the ROM: {e}"))?;
+                let mut o = crate::original::OriginalRuntime::of_rom(&rom)
+                    .map_err(|e| anyhow::anyhow!("the ROM: {e}"))?;
                 let inputs: Vec<gp_runtime::InputFrame> = log.frames[..upto]
                     .iter()
                     .map(|f| gp_runtime::InputFrame {

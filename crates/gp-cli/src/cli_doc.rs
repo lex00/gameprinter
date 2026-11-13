@@ -60,6 +60,23 @@ const LAB_DERIVE: &[&str] = &["dataset", "validate"];
 /// farms, the authoring prototype, the host and the MCP server.
 const LAB_W7: &[&str] = &["author", "farm", "farm-topdown", "host", "mcp", "store"];
 
+/// Lab commands of wave 9 of the port from game-printer, on a line of their
+/// own as the other waves' are.
+const LAB_W9: &[&str] = &[
+    "catalog",
+    "chunks",
+    "env",
+    "input-log",
+    "metrics",
+    "noop",
+    "runs",
+    "scorecard",
+];
+
+/// Public commands of the theme pipeline (wave 8 of the port), on a line
+/// of their own as the waves' are.
+const PUBLIC_THEME: &[&str] = &["theme"];
+
 /// A set's table rows: each leaf command's words and first help line.
 fn rows(cmd: &clap::Command, words: &str, out: &mut Vec<(String, String)>) {
     let mut subs = cmd
@@ -97,7 +114,7 @@ fn render_of(cli: &clap::Command) -> Result<String> {
     let mut unplaced = Vec::new();
     for c in cli.get_subcommands().filter(|c| c.get_name() != "help") {
         let name = c.get_name();
-        let set = if PUBLIC.contains(&name) {
+        let set = if PUBLIC.contains(&name) || PUBLIC_THEME.contains(&name) {
             &mut public
         } else if LAB.contains(&name)
             || LAB_EVENTS.contains(&name)
@@ -106,6 +123,7 @@ fn render_of(cli: &clap::Command) -> Result<String> {
             || LAB_AGENTS.contains(&name)
             || LAB_DERIVE.contains(&name)
             || LAB_W7.contains(&name)
+            || LAB_W9.contains(&name)
         {
             &mut lab
         } else {

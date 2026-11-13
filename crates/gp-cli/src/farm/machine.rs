@@ -27,6 +27,7 @@ pub(crate) struct Pads {
     pub right: u8,
     pub left: u8,
     pub up: u8,
+    pub down: u8,
     pub start: u8,
     /// Bits that put a coin in before Start (none on the NES).
     pub coin: u8,
@@ -61,6 +62,7 @@ impl Pads {
             right: bit(Button::Right),
             left: bit(Button::Left),
             up: bit(Button::Up),
+            down: bit(Button::Down),
             start: bit(Button::Start) | bit(Button::Start1),
             coin: bit(Button::Coin),
             actions,
@@ -243,6 +245,18 @@ impl Machine {
                 .iter()
                 .map(|s| [i64::from(s.x), i64::from(s.y), 16, 16])
                 .collect(),
+        }
+    }
+
+    /// The left edges discovery's "drawn" test looks for x at: the NES's
+    /// merged boxes (a body of 8-pixel sprites), the board's sprites one by
+    /// one. Merged on the board, the player's box takes in a customer or a
+    /// mug it touches, its left edge then theirs, and x failed the test
+    /// whenever it walked into one.
+    pub(crate) fn drawn_xs(&self) -> Vec<i64> {
+        match self {
+            Machine::Nes(_) => self.boxes().iter().map(|b| i64::from(b[0])).collect(),
+            Machine::Arcade(_) => self.cells().iter().map(|c| c[0]).collect(),
         }
     }
 

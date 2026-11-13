@@ -1,0 +1,11 @@
+# A style card (docs/theme-kit.md, "Style cards"): how a theme looks,
+# apart from any game. `gp theme sheet GAME --style riso-site` puts it into
+# every prompt.
+format = "0.1.0"
+name = "riso-site"
+title = "Risograph site poster"
+author = "Game Printer"
+license = "CC0-1.0"
+look = "thick ink outlines, risograph print colors with slight misregistration, a 1950s work-site safety poster, chunky rounded proportions, flat fills, no gradients"
+cast = "the hero is a small site worker in a hard hat and work boots; foes are clockwork machines and living tool crates; the world is scaffolding, planks and rope ladders"
+palette = ["#1d1d3a", "#ff4f5e", "#ffd23f", "#2fb8ac", "#f4ecd8"]

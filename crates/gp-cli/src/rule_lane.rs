@@ -2,10 +2,11 @@
 //! Tapper's bartender moves between the bars. Fitted from the clips and
 //! checked against the original frame by frame, as `gp rule jump` is.
 //!
-//! The player's bytes are the lane (0 the top lane), x and y. They come from
+//! The player's bytes are the lane (0 the lane whose number is lowest:
+//! Tapper's bottom bar, its y counting up the screen), x and y. They come from
 //! the flags or from the state mapping: `entities.player[0].x` and `.y`,
 //! and `entities.player[0].lane`; each lane's tap, where it has one, from
-//! `entities.tap[K].x` (or `--tap`, one per lane, top first).
+//! `entities.tap[K].x` (or `--tap`, one per lane, lane 0 first).
 //!
 //! What is fitted, each from the frames that show it:
 //!
@@ -76,7 +77,7 @@ pub(crate) struct LaneArgs {
     /// The player's y byte (default: the mapping's entities.player[0].y).
     #[arg(long, value_parser = parse_addr)]
     pub y: Option<u16>,
-    /// Each lane's tap x byte, top lane first (default: the mapping's
+    /// Each lane's tap x byte, lane 0 first (default: the mapping's
     /// entities.tap[K].x). Without them, a lane's landing x is fitted as
     /// one number for each lane.
     #[arg(long = "tap", value_parser = parse_addr)]
@@ -206,8 +207,8 @@ pub(crate) struct Rule {
     pub bob: i32,
     pub switch_frames: usize,
     pub switch_busy: usize,
-    /// Up from the top lane goes to the bottom one (and down from the
-    /// bottom to the top).
+    /// A move past the last lane comes round to lane 0 (and back from
+    /// lane 0 to the last).
     pub wrap: bool,
     /// The lane a press of up moves to, from the lane's number: 1 or -1
     /// (down moves the other way).
@@ -870,7 +871,7 @@ pub(crate) fn run(a: &LaneArgs, paths: &Paths) -> Result<Outcome> {
             "row_top",
             json!(rule.row_top),
             "px",
-            "the commonest y in the top lane",
+            "the commonest y in lane 0",
         ),
         c(
             "row_height",

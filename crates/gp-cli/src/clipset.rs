@@ -39,7 +39,7 @@ pub(crate) const FILE: &str = "clips.toml";
 const PRESSES_HEAD: &str = "gp-presses 0";
 
 /// What a clip set was made from.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct Header {
     /// [`FORMAT`].
     pub format: String,
@@ -66,7 +66,7 @@ pub(crate) struct Header {
 /// Where a clip starts: a frame of presses from power-on (a save point's,
 /// in a `.presses` file beside the set), or of a recording, which this gp
 /// has none of.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct StartRecipe {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recording: Option<String>,
@@ -88,7 +88,7 @@ pub(crate) struct StartRecipe {
 }
 
 /// One clip.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct Recipe {
     pub id: String,
     pub name: String,
@@ -135,18 +135,21 @@ fn generated() -> String {
 }
 
 /// A clip set file.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub(crate) struct ClipSet {
     pub clipset: Header,
     /// Named recordings starts are taken from; carried through unread, as
     /// `mutant` and `import` are, so a set this gp rewrites keeps them.
     #[serde(default, skip_serializing_if = "toml::Table::is_empty")]
+    #[schemars(with = "serde_json::Map<String, serde_json::Value>")]
     pub recordings: toml::Table,
     #[serde(default)]
     pub clips: Vec<Recipe>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(with = "Vec<serde_json::Value>")]
     pub mutant: Vec<toml::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<serde_json::Value>")]
     pub import: Option<toml::Value>,
     /// Read from a corpus plan ([`crate::plan`]): its clips have no curves
     /// to compare with, the curves are derived.

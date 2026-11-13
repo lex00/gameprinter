@@ -1,0 +1,570 @@
+{
+  "$id": "game-printer:theme@0.1.3",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Game Printer theme 0.1.0",
+  "description": "A theme: live effects keyed by role, and restyled assets by slot or role.",
+  "type": "object",
+  "properties": {
+    "audio": {
+      "description": "Restyled audio: the same notes through other sound banks, by sound\nrole (since format 0.1.1).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/AudioRestyle"
+      }
+    },
+    "author": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "description": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "effect": {
+      "description": "Live effects: picture, particle and screen effects.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Effect"
+      }
+    },
+    "for": {
+      "description": "Models it was made for, by `model.name`. Empty: any model.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "format": {
+      "description": "The format version, \"0.1.3\" (0.1.0 to 0.1.2 themes read as before).",
+      "type": "string"
+    },
+    "id": {
+      "description": "A short name: lowercase letters, digits, `-` and `_`.",
+      "type": "string"
+    },
+    "license": {
+      "description": "The theme's own license, an SPDX expression.",
+      "type": "string"
+    },
+    "palette": {
+      "description": "Live effects: color changes for the pixels of a role.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PaletteRule"
+      }
+    },
+    "restyle": {
+      "description": "Restyled assets: replacement art by role or slot.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Restyle"
+      }
+    },
+    "sound": {
+      "description": "Sound replacements (since format 0.1.3, the feature `sound`): a\nfile played on a sound role's cue in place of the model's own sound\n(model feature `present.sound_roles`).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SoundReplace"
+      }
+    },
+    "style": {
+      "description": "What Style checks measure art against while the theme is on.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StyleGuide"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "title": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "id",
+    "title",
+    "license"
+  ],
+  "$defs": {
+    "AudioRestyle": {
+      "description": "A remaster: every song or effect whose slot has the target role plays\nits notes through a sound bank mapping (docs/formats/sound-banks.md)\ninstead of the APU. The notes, and so the simulation, don't change.",
+      "type": "object",
+      "properties": {
+        "banks": {
+          "description": "The mapping file, relative to the theme's directory.",
+          "type": "string"
+        },
+        "license": {
+          "description": "The mapping's (and its banks') license, an SPDX expression.",
+          "type": "string"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "description": "`sound` (every sound slot), `*`, or a slot role (`music.level`,\n`sfx.game`) or its prefix (`music`, `sfx`).",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "banks",
+        "license"
+      ]
+    },
+    "Effect": {
+      "description": "A live effect.",
+      "oneOf": [
+        {
+          "description": "The target's pixels drawn as a vertical gradient, top to bottom\n(a gradient sky).",
+          "type": "object",
+          "properties": {
+            "colors": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "gradient"
+            },
+            "target": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "target",
+            "colors"
+          ]
+        },
+        {
+          "description": "An outline of `color`, `radius` pixels wide (1 to 3), around the\ntarget's pixels.",
+          "type": "object",
+          "properties": {
+            "color": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "glow"
+            },
+            "radius": {
+              "type": "integer",
+              "format": "uint32",
+              "default": 1,
+              "minimum": 0
+            },
+            "target": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "target",
+            "color"
+          ]
+        },
+        {
+          "description": "Particles: around each body of an entity role, or over the whole\nscreen with target `screen`.",
+          "type": "object",
+          "properties": {
+            "color": {
+              "type": "string"
+            },
+            "count": {
+              "description": "How many, 1 to 256 (per body for a role).",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "particles"
+            },
+            "seed": {
+              "type": "integer",
+              "format": "uint32",
+              "default": 0,
+              "minimum": 0
+            },
+            "style": {
+              "$ref": "#/$defs/ParticleStyle"
+            },
+            "target": {
+              "type": "string",
+              "default": "screen"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "style",
+            "color",
+            "count"
+          ]
+        },
+        {
+          "description": "Every other row darkened, `strength` 0 to 1.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "scanlines"
+            },
+            "strength": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "strength"
+          ]
+        },
+        {
+          "description": "The corners darkened, `strength` 0 to 1.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "vignette"
+            },
+            "strength": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "strength"
+          ]
+        },
+        {
+          "description": "The whole screen mixed with `color`, `amount` 0 to 1.",
+          "type": "object",
+          "properties": {
+            "amount": {
+              "type": "number",
+              "format": "double"
+            },
+            "color": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "tint"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "color",
+            "amount"
+          ]
+        },
+        {
+          "description": "A television's picture (since format 0.1.2), drawn at three overlay\npixels to a game pixel where a runtime can: a dark gap under each\nline, the corners darkened, and with `mask` (default true) the\ncolumns tinted red, green and blue in turn, as an aperture grille.\n`strength` 0 to 1.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "crt"
+            },
+            "mask": {
+              "type": "boolean",
+              "default": true
+            },
+            "strength": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "strength"
+          ]
+        },
+        {
+          "description": "A handheld's pixel grid (since format 0.1.2): a dark line between\npixels at three overlay pixels to a game pixel, `strength` 0 to 1.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "grid"
+            },
+            "strength": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "strength"
+          ]
+        }
+      ]
+    },
+    "PaletteRule": {
+      "description": "A color change for every pixel of a target. The changes apply in the\norder of the fields below; a pixel `replace` matches keeps its new color.",
+      "type": "object",
+      "properties": {
+        "hue": {
+          "description": "Degrees added to the hue.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "lightness": {
+          "description": "Lightness multiplier.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "ramp": {
+          "description": "Map each pixel's lightness onto these colors, darkest first (two or\nmore), as a gradient map.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "replace": {
+          "description": "Exact swaps, `[from, to]`.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 2,
+            "minItems": 2
+          }
+        },
+        "saturation": {
+          "description": "Saturation multiplier.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "target": {
+          "description": "A role, a role group or `*`.",
+          "type": "string"
+        },
+        "tint": {
+          "description": "A color mixed in, `tint_amount` (0 to 1, default 0.5) of the way.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tint_amount": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "target"
+      ]
+    },
+    "ParticleStyle": {
+      "description": "How particles move (docs/formats/theme.md gives each one's formula).",
+      "type": "string",
+      "enum": [
+        "fireflies",
+        "snow",
+        "rain",
+        "sparks"
+      ]
+    },
+    "Restyle": {
+      "description": "Replacement art. With `target` and no `slot`: every entity of that role\ndraws `file` instead of its sprite. With `slot` and `target`: every item\nof that role in a metatiles slot draws `file` (16 by 16). With `slot`\nalone: the slot's whole file (a tiles slot's indexed PNG, same size).",
+      "type": "object",
+      "properties": {
+        "author": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "entry": {
+          "description": "With `slot` alone (since format 0.1.3, the feature `entry`): one\nentry of a layout slot (update strings, such as a stage's screen,\nthe HUD's layer or a title) drawn as this picture, the screen's\nsize, in place of the tiles it writes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "file": {
+          "description": "The file, relative to the theme's directory: `.pix` (text pixel art,\n[`crate::pix`]) or `.png`.",
+          "type": "string"
+        },
+        "generator": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "license": {
+          "description": "An SPDX expression; never `LicenseRef-own-copy`.",
+          "type": "string"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "origin": {
+          "description": "`generated`, `uploaded` or `drawn`.",
+          "type": "string"
+        },
+        "sha256": {
+          "description": "The file's SHA-256, in hex.",
+          "type": "string"
+        },
+        "slot": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "origin",
+        "license",
+        "sha256"
+      ]
+    },
+    "SoundReplace": {
+      "description": "A sound role's replacement (format 0.1.3): `file` plays on the role's\ncue, and while a theme replaces any role the model's own sound (its\nsongs, or a driver's APU writes) is silent, so a theme with a file for\nevery role needs none of the game's sound data.",
+      "type": "object",
+      "properties": {
+        "author": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "file": {
+          "description": "The file, relative to the theme's directory: `.tune` (text notes,\nrendered by every runtime the same way), `.wav` (16-bit PCM) or\n`.ogg` (Vorbis).",
+          "type": "string"
+        },
+        "generator": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "license": {
+          "description": "An SPDX expression; never `LicenseRef-own-copy`.",
+          "type": "string"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "origin": {
+          "description": "`generated`, `uploaded` or `drawn` (made by hand).",
+          "type": "string"
+        },
+        "role": {
+          "description": "The model's sound role (`present.sound.roles`), such as `jump`.",
+          "type": "string"
+        },
+        "sha256": {
+          "description": "The file's SHA-256, in hex.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "file",
+        "origin",
+        "license",
+        "sha256"
+      ]
+    },
+    "StyleGuide": {
+      "description": "The theme's style, which Style checks measure art against.",
+      "type": "object",
+      "properties": {
+        "edge_density": {
+          "description": "The share of a sprite's pixels on an edge, `[min, max]`.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "max_palette_distance": {
+          "description": "The most a pixel may be from the nearest palette color, on average,\nin CIE76 delta E (default 12).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "palette": {
+          "description": "The colors the theme's art keeps to.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "size_tolerance": {
+          "description": "How far a sprite's drawn box may be from its entity's size, as a\nshare (default 0.25).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

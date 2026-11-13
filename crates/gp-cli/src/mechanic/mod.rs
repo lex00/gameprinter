@@ -225,7 +225,7 @@ pub enum MechanicCmd {
         /// clips/NNN.measure.json, from `gp mechanic contacts`).
         #[arg(long, requires = "show")]
         measure: bool,
-        /// The decision server for `--judge` (`just laya` serves Laya here).
+        /// The decision server for `--judge` (Laya; gp serve starts it here when none answers).
         #[arg(long, default_value = "http://127.0.0.1:7720")]
         decide: String,
         /// The games checkout, for `--judge` (default $GP_GAMES_DIR).
@@ -251,7 +251,7 @@ pub enum MechanicCmd {
         /// What to show, in words the model reads.
         #[arg(long)]
         hint: String,
-        /// A Jev-compatible decision server (`just laya` serves Laya here).
+        /// A Jev-compatible decision server (Laya; gp serve starts it here when none answers).
         #[arg(long, default_value = "http://127.0.0.1:7720")]
         decide: String,
         /// How many times the mechanic should show before the clip ends.
@@ -875,10 +875,6 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             let game_dir = crate::labels::game_folder(&games, game)
                 .with_context(|| format!("no game {game} in {}", games.display()))?;
             let rom = crate::clip_score::rom_of(paths, &game_dir, None)?;
-            crate::original::nes_only(
-                crate::original::Platform::of_file(&rom),
-                "the leads (clips replayed against stage 0's ROM dataset)",
-            )?;
             let (all, summary) = crate::leads::leads(&paths.home, &rom, game)?;
             let shown: Vec<Value> = all.iter().take(*top).cloned().collect();
             let mut text = format!(

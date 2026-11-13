@@ -38,6 +38,7 @@ check: _hook-enabled build mosshop
     cargo clippy -q --workspace --all-targets --profile {{profile}} -- -D warnings
     cargo test -q --workspace --profile {{profile}}
     {{gp}} self docs --check CLI.md
+    {{gp}} self schemas --check schema
     {{gp}} baseline check --rom {{quote(mosshop_rom)}} baselines/mosshop
     {{gp}} baseline check baselines/gp-testrom
     mkdir -p {{quote(assets)}}
@@ -55,7 +56,92 @@ check: _hook-enabled build mosshop
     {{gp}} template check templates/mosshop --rom {{quote(mosshop_rom)}}
     scripts/test-hook.sh
     python3 -I -B -m unittest discover -s scripts/romguard -q
+    just site-prose
+    just check-roms
     @echo "just check: passed"
+
+# Formats the Rust code.
+fmt:
+    cargo fmt --all
+
+# Runs the Rust tests only.
+test:
+    cargo test --workspace --profile {{profile}}
+
+# Builds the docs site with its link and contrast checks, then the prose lint.
+site:
+    cd site && ([ -f node_modules/.package-lock.json ] || npm ci --silent --no-audit --no-fund) && npm run build --silent
+    just site-prose
+
+# Serves the site at http://localhost:4321 while editing.
+site-dev:
+    cd site && ([ -f node_modules/.package-lock.json ] || npm ci --silent --no-audit --no-fund) && npm run dev
+
+# The site's prose lint (site/scripts/lint-prose.mjs, the `sentences` trope
+# rules) on its pages and README.md: a ratchet that fails only when a
+# file's count of a rule grows over site/scripts/prose-baseline.json. When
+# counts drop, `node site/scripts/lint-prose.mjs --update-baseline`.
+site-prose:
+    cd site && ([ -f node_modules/.package-lock.json ] || npm ci --silent --no-audit --no-fund) && npm run --silent lint:prose && npm run --silent test:prose > /dev/null
+
+# The ROM tier, on what this machine has, skipping with a notice what it
+# hasn't: each NES ROM a game in the games checkout names boots in gp-nes as
+# tetanes-core boots the file, and its junk copies record the same
+# (gp-nes's registered_roms_boot_as_their_files_do); then, with Donkey Kong:
+# Original Edition in $GP_ROM_DIR and the games checkout beside the repo
+# ($GP_GAMES_DIR), Donkey Kong's module built from this tool's kit, and
+# profiles_dk and clip_agree on it. CI has no ROM, so there it checks nothing.
+check-roms:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    roms="${GP_ROM_DIR:-{{gp_home / "roms"}}}"
+    games="${GP_GAMES_DIR:-{{justfile_directory() / ".." / "games"}}}"
+    if [ ! -d "$roms" ]; then
+        echo "check-roms: skipped, no ROM folder at $roms"
+        exit 0
+    fi
+    export GP_ROM_DIR="$roms" GP_GAMES_DIR="$games"
+    # Runs a test command, printing its notices and, on a failure, all of it.
+    tier() {
+        local out status=0
+        out=$("$@" -- --ignored --nocapture 2>&1) || status=$?
+        if [ "$status" -ne 0 ]; then echo "$out" >&2; exit "$status"; fi
+        grep -E '^(profiles_dk|clip_agree):|identical|skipped' <<<"$out" || true
+    }
+    GP_CHECK_ROM_BOOT=1 tier cargo test -q -p gp-nes --profile {{profile}} --lib registered_roms_boot_as_their_files_do
+    if [ ! -f "$games/donkey-kong/corpus.toml" ]; then
+        echo "check-roms: profiles_dk and clip_agree skipped, no games checkout at $games"
+        exit 0
+    fi
+    if ! {{quote(gp)}} --json roms scan 2>/dev/null | grep -q '"donkey-kong-oe"'; then
+        echo "check-roms: profiles_dk and clip_agree skipped, no Donkey Kong: Original Edition in $roms"
+        exit 0
+    fi
+    just _dk-module "$games"
+    export GP_DK_MODULE={{quote(target / "modules" / "donkey-kong.wasm")}}
+    tier cargo test -q -p gp-cli --profile {{profile}} --test profiles_dk --test clip_agree
+    echo "check-roms: passed"
+
+# Donkey Kong's normal profile against retro on its own model and module
+# (crates/gp-cli/tests/profiles_dk.rs, ROM tier).
+profiles-dk: build (_dk-module (env_var_or_default("GP_GAMES_DIR", justfile_directory() / ".." / "games")))
+    GP_DK_MODULE={{quote(target / "modules" / "donkey-kong.wasm")}} cargo test -q -p gp-cli --profile {{profile}} --test profiles_dk -- --ignored --nocapture
+
+# gp clip score and gp corpus score agree on Donkey Kong's corpus clips
+# (crates/gp-cli/tests/clip_agree.rs, ROM tier).
+check-clip-agree-roms: build (_dk-module (env_var_or_default("GP_GAMES_DIR", justfile_directory() / ".." / "games")))
+    GP_DK_MODULE={{quote(target / "modules" / "donkey-kong.wasm")}} cargo test -q -p gp-cli --profile {{profile}} --test clip_agree -- --ignored --nocapture
+
+# Donkey Kong's module, built from this tool's kit into target/modules/.
+_dk-module games: build
+    {{quote(gp)}} game kit -o {{quote(target / "module-kit")}} > /dev/null
+    {{quote(gp)}} game build {{quote(games / "donkey-kong")}} --kit {{quote(target / "module-kit")}} -o {{quote(target / "modules" / "donkey-kong.wasm")}} > /dev/null
+
+# Writes the generated files: CLI.md from gp's commands and schema/ from
+# the Rust types that read each format (schema/README.md).
+docs: build
+    {{gp}} self docs CLI.md
+    {{gp}} self schemas schema
 
 # The editor (game-printer's editor/, served at / by `gp serve`): its
 # packages from its own lock, its type check and tests, and its build into

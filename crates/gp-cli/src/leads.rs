@@ -7,6 +7,10 @@
 //! it: a branch some play the clips haven't made. Each queue row's open
 //! items are leads too. Nothing here knows one game.
 //!
+//! On an arcade romset the clips replay on gp-arcade ([`replay_arcade`])
+//! against the arcade dataset (crate::arcade_stage0): routines by address,
+//! RAM in the work RAM from E000.
+//!
 //! Ported from game-printer's leads.rs. A clip saved from a path (the
 //! snapshot form) is replayed from power-on through its path
 //! (crate::mechanic::paths::full_log), as one saved the old way is.
@@ -29,9 +33,12 @@ struct Covered {
     frames: usize,
 }
 
-fn replay(rom: &[u8], log: &str, cov: &mut Covered) -> Result<()> {
+fn replay(rom: &[u8], log: &str, cov: &mut Covered, known: &BTreeSet<u16>) -> Result<()> {
     let parsed =
         gp_evidence::input_log::InputLog::parse(log).map_err(|e| anyhow::anyhow!("{e}"))?;
+    if crate::original::Platform::of_file(rom) == crate::original::Platform::Arcade {
+        return replay_arcade(rom, &parsed, cov, known);
+    }
     let mut nes = gp_nes::Nes::power_on(rom, gp_evidence::manifest::PowerOn::default())?;
     let layout = gp_events::Layout::of(nes.bus())?;
     let act =
@@ -50,6 +57,56 @@ fn replay(rom: &[u8], log: &str, cov: &mut Covered) -> Result<()> {
     }
     cov.clips += 1;
     cov.frames += parsed.frames.len();
+    Ok(())
+}
+
+/// [`replay`] on gp-arcade: the routine entries the main Z80 ran
+/// ([`crate::arcade_stage0::entries`], by address, where the NES counts PRG offsets), and
+/// the work RAM bytes it wrote, moved to the 2 KB window from E000 as the
+/// NES's RAM is counted from 0.
+fn replay_arcade(
+    rom: &[u8],
+    log: &gp_evidence::InputLog,
+    cov: &mut Covered,
+    known: &BTreeSet<u16>,
+) -> Result<()> {
+    use crate::arcade_stage0::{RAM_BASE, RAM_END};
+    let set = gp_arcade::Romset::from_zip(rom)?;
+    let mut t = gp_arcade::Tapper::power_on(&set);
+    for (i, f) in log.frames.iter().enumerate() {
+        let bits = f.buttons_word();
+        anyhow::ensure!(
+            bits <= 0xff && !f.reset,
+            "frame {}: an arcade input holds bits 0 to 7 and no reset",
+            i + 1
+        );
+        t.set_trace(true);
+        t.set_accesses(true);
+        t.step(gp_arcade::Controls::from_bits(bits));
+        let trace = t.take_trace();
+        let accesses = t.take_accesses();
+        t.set_trace(false);
+        t.set_accesses(false);
+        let mut trace = trace;
+        trace.sort_by_key(|e| e.time);
+        cov.routines.extend(
+            crate::arcade_stage0::entries(&trace, known)
+                .into_iter()
+                .map(u32::from),
+        );
+        cov.ram.extend(
+            accesses
+                .iter()
+                .filter(|a| {
+                    a.cpu == 0
+                        && a.kind == gp_arcade::mcr::AccessKind::Write
+                        && (RAM_BASE..RAM_END).contains(&a.addr)
+                })
+                .map(|a| a.addr - RAM_BASE),
+        );
+    }
+    cov.clips += 1;
+    cov.frames += log.frames.len();
     Ok(())
 }
 
@@ -75,6 +132,9 @@ fn i(r: &crate::rom_dataset::Row, k: &str) -> i64 {
 pub(crate) fn leads(home: &Path, rom: &[u8], game: &str) -> Result<(Vec<Value>, Value)> {
     let root = home.join("mechanics").join(game);
     let mut cov = Covered::default();
+    let data = crate::rom_dataset::read(&home.join("work/datasets").join(game))
+        .with_context(|| format!("no ROM dataset for {game} under $GP_HOME/work/datasets"))?;
+    let known = crate::arcade_stage0::dataset_routines(Some(&data));
     let mut dirs: Vec<_> = fs::read_dir(&root)
         .with_context(|| format!("no mechanics for {game}"))?
         .filter_map(|e| e.ok().map(|e| e.path()))
@@ -96,14 +156,24 @@ pub(crate) fn leads(home: &Path, rom: &[u8], game: &str) -> Result<(Vec<Value>, 
                 Some(n) => crate::mechanic::paths::full_log(home, d, n)?.0,
                 None => fs::read_to_string(&l)?,
             };
-            replay(rom, &text, &mut cov)?;
+            replay(rom, &text, &mut cov, &known)?;
         }
     }
 
-    let data = crate::rom_dataset::read(&home.join("work/datasets").join(game))
-        .with_context(|| format!("no ROM dataset for {game} under $GP_HOME/work/datasets"))?;
-    let (prg, mapper) = gp_nes::harvest::ines_prg(rom).context("not an iNES ROM")?;
-    let board = gp_nes::codemap::Board::of(prg, mapper);
+    // A routine's key in the clips' coverage: its PRG offset on the NES,
+    // its address on the arcade board (the dataset's `addr`, unbanked).
+    let arcade = crate::original::Platform::of_file(rom) == crate::original::Platform::Arcade;
+    let board = if arcade {
+        None
+    } else {
+        let (prg, mapper) = gp_nes::harvest::ines_prg(rom).context("not an iNES ROM")?;
+        Some(gp_nes::codemap::Board::of(prg, mapper))
+    };
+    let base: u16 = if arcade {
+        crate::arcade_stage0::RAM_BASE
+    } else {
+        0
+    };
 
     // Routines: by name, with offset, size, element, ran (by stage 0),
     // callers, and whether a clip entered it.
@@ -117,7 +187,10 @@ pub(crate) fn leads(home: &Path, rom: &[u8], game: &str) -> Result<(Vec<Value>, 
     let mut rs: BTreeMap<String, R> = BTreeMap::new();
     for r in data.rows("routines") {
         let name = s(r, "routine");
-        let off = gp_nes::codemap::va_parse(&name).and_then(|v| board.prg_offset(v));
+        let off = match &board {
+            Some(board) => gp_nes::codemap::va_parse(&name).and_then(|v| board.prg_offset(v)),
+            None => usize::try_from(i(r, "addr")).ok(),
+        };
         let callers: Vec<String> = serde_json::from_str(&s(r, "callers")).unwrap_or_default();
         rs.insert(
             name,
@@ -140,7 +213,8 @@ pub(crate) fn leads(home: &Path, rom: &[u8], game: &str) -> Result<(Vec<Value>, 
         }
         ram_written += 1;
         let a = i(r, "addr") as u16;
-        if a >= 0x800 || cov.ram.contains(&a) {
+        let w = a.wrapping_sub(base);
+        if w >= 0x800 || cov.ram.contains(&w) {
             continue;
         }
         ram_unseen += 1;

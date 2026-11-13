@@ -28,7 +28,8 @@ use crate::reach::{ClipInput, Keep, Starts, run_clips};
 
 #[derive(Args, Debug, Clone)]
 pub struct ExploreArgs {
-    /// The iNES ROM.
+    /// The iNES ROM, or an arcade romset's zip (searched on gp-arcade with
+    /// the board's stick and tap, crate::explore_z80).
     pub rom: PathBuf,
     /// A clip set (clips.toml) whose clips are run first, after stage 0's
     /// own starts; the search starts at the end of each (or of the `--from`
@@ -51,8 +52,8 @@ pub struct ExploreArgs {
     /// Clips to start from, by ID (default: every clip of the set).
     #[arg(long)]
     pub from: Vec<String>,
-    /// Routines to aim at, by the harvest's names (`sub_01_8000`). Default:
-    /// as `--aim` says.
+    /// Routines to aim at, by the harvest's names (`sub_01_8000`; on an
+    /// arcade romset the main Z80's, `sub_5FAC`). Default: as `--aim` says.
     #[arg(long = "target")]
     pub targets: Vec<String>,
     /// What to aim at with no `--target`: `unrun`, the routines the code map
@@ -268,7 +269,9 @@ pub(crate) fn why(f: &Found) -> String {
 pub(crate) fn run(a: &ExploreArgs, paths: &Paths) -> Result<Outcome> {
     let t0 = Instant::now();
     let rom = fs::read(&a.rom).with_context(|| format!("reading {}", a.rom.display()))?;
-    crate::original::nes_only(crate::roms::Platform::of_file(&rom), "gp explore's search")?;
+    if crate::roms::Platform::of_file(&rom) == crate::roms::Platform::Arcade {
+        return run_arcade(a, &rom, paths, t0);
+    }
     let sets: Vec<PathBuf> = a.start.iter().cloned().collect();
     let clips = a.starts().with(&sets, paths)?;
     let store = gp_events::store::Store::at(
@@ -316,6 +319,50 @@ pub(crate) fn run(a: &ExploreArgs, paths: &Paths) -> Result<Outcome> {
         reached.len(),
         reached.join(", "),
         kept.len(),
+        secs,
+    );
+    Ok(Outcome::ok(out, text))
+}
+
+/// `gp explore` on an arcade romset (crate::explore_z80): the same flags,
+/// output and clips.toml, the presses in the board's buttons.
+fn run_arcade(a: &ExploreArgs, rom: &[u8], paths: &Paths, t0: Instant) -> Result<Outcome> {
+    let set = gp_arcade::Romset::from_zip(rom)?;
+    let sets: Vec<PathBuf> = a.start.iter().cloned().collect();
+    let clips = a.starts().with_platform(&sets, paths, true)?;
+    let known = crate::explore_z80::known(&set, &clips)?;
+    let e = crate::explore_z80::explore_with(a, &set, clips, &known, &mut |_| {})?;
+    if let Some(d) = &a.write {
+        crate::explore_z80::write_clips(d, a, &set, &e)?;
+    }
+    let secs = t0.elapsed().as_secs_f64();
+    let out = json!({
+        "set": set.name,
+        "targets": e.targets,
+        "reached": e.reached,
+        "kept": e.kept.iter().map(|f| json!({
+            "presses": gp_explore::arcade::spans(&f.pads),
+            "frames": f.pads.len(),
+            "distance": (f.rank.0 != u32::MAX).then_some(f.rank.0),
+            "new_starts": -f.rank.1,
+            "why": crate::explore_z80::why(f),
+        })).collect::<Vec<_>>(),
+        "budget": a.budget,
+        "seed": a.seed,
+    });
+    let text = format!(
+        "{}: {} targets ({}); reached {} ({}); kept {} clips; {:.1} s",
+        set.name,
+        e.targets.len(),
+        e.targets
+            .iter()
+            .take(6)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", "),
+        e.reached.len(),
+        e.reached.join(", "),
+        e.kept.len(),
         secs,
     );
     Ok(Outcome::ok(out, text))

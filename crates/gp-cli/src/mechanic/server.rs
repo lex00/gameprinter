@@ -805,6 +805,14 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         )?
         .unwrap_or_else(|| Response::error(404, "not found"))),
         ("GET" | "HEAD", "/shell.js") => page("shell.js", "text/javascript; charset=utf-8"),
+        // The old inspector's views on the page (mechanic/details/).
+        ("GET" | "HEAD", p) if part_in(p, "/details/").is_some() => {
+            let (name, kind) = part_in(p, "/details/").unwrap_or_default();
+            match fs::read(s.page.join("details").join(name)) {
+                Ok(b) => Ok(Response::bytes(kind, b)),
+                Err(_) => Ok(Response::error(404, "not here")),
+            }
+        }
         // REFINE's parts (the background work's views), when they're there.
         ("GET" | "HEAD", p) if part_name(p).is_some() => {
             let (name, kind) = part_name(p).unwrap_or_default();
@@ -814,6 +822,25 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             }
         }
         ("GET" | "HEAD", "/api/themes") => Ok(Response::json(&themes(s))),
+        // THEMES's own routes and the pane's files (crate::theme_serve).
+        (_, p)
+            if (p.starts_with("/api/themes/") || p.starts_with("/themes/"))
+                && s.rebuild.is_some() =>
+        {
+            let r = s
+                .rebuild
+                .as_ref()
+                .map(|r| r.game.clone())
+                .unwrap_or_default();
+            let at = crate::theme_serve::At {
+                paths: &s.paths,
+                game: &s.game,
+                dir: &r,
+                page: &s.page,
+            };
+            crate::theme_serve::route(&at, req)
+                .unwrap_or_else(|| Ok(Response::error(404, "not found")))
+        }
         // The game's ROM sets: the one played and every one with whether
         // it is here; a POST {set} chooses another.
         ("GET" | "HEAD", "/api/rom") => Ok(Response::json(
@@ -933,13 +960,24 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
                 None => Ok(Response::error(404, "no such picture")),
             }
         }
-        // What the agent is doing, for the watch panel ([`super::watch`]).
-        ("GET" | "HEAD", "/api/watch") => Ok(Response::json(&super::watch::view(
-            &s.target(req.param("mechanic"))?.dir,
-        ))),
+        // What the agents are doing in every topic of the game, for the
+        // watch panel ([`super::watch::game_view`]); `?mechanic=` is the one
+        // open in the page.
+        ("GET" | "HEAD", "/api/watch") => {
+            let open = s.target(req.param("mechanic"))?;
+            let game = super::session::game_dir(&s.paths, &s.game)?;
+            let name = open.dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            Ok(Response::json(&super::watch::game_view(&game, name)))
+        }
         ("GET" | "HEAD", p) if p.starts_with("/api/watch/files/") => {
             let name = &p["/api/watch/files/".len()..];
-            match super::watch::file(&s.target(req.param("mechanic"))?.dir, name) {
+            let found = match req.param("topic") {
+                Some(t) => {
+                    super::watch::topic_file(&super::session::game_dir(&s.paths, &s.game)?, t, name)
+                }
+                None => super::watch::file(&s.target(req.param("mechanic"))?.dir, name),
+            };
+            match found {
                 Some((kind, bytes)) => Ok(Response::bytes(kind, bytes)),
                 None => Ok(Response::error(404, "no such pinned file")),
             }
@@ -1256,7 +1294,13 @@ fn level_key(file: &Path) -> Option<(u16, std::collections::HashMap<u8, String>)
 
 /// A file of REFINE's parts: `/refine/NAME.js` or `.css`, a plain name.
 fn part_name(p: &str) -> Option<(&str, &'static str)> {
-    let name = p.strip_prefix("/refine/")?;
+    part_in(p, "/refine/")
+}
+
+/// A file of a folder of the page's parts: `PREFIX` and a plain name,
+/// `.js` or `.css`.
+fn part_in<'a>(p: &'a str, prefix: &str) -> Option<(&'a str, &'static str)> {
+    let name = p.strip_prefix(prefix)?;
     let ok = !name.is_empty()
         && name
             .bytes()
@@ -1936,6 +1980,30 @@ mod tests {
         assert_eq!((status, b.as_str()), (200, "png bytes"));
         assert_eq!(get(&srv, "/api/watch/files/..%2Fsession.toml").0, 404);
         assert_eq!(get(&srv, "/api/watch/files/../session.toml").0, 404);
+
+        // Another topic's log, pins and open problems show too, by topic.
+        let other = dir.parent().unwrap().join("emulator");
+        super::super::watch::log(&other, "Booting the main Z80").unwrap();
+        super::super::watch::pin(&other, &pic, "the bar", false).unwrap();
+        let (_, body) = get(&srv, "/api/watch");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert!(
+            v["log"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|l| l["topic"] == "emulator" && l["text"] == "Booting the main Z80"),
+            "{v}"
+        );
+        assert_eq!(v["open"], dir.file_name().unwrap().to_str().unwrap());
+        let (status, _, b) = call(
+            &srv,
+            "GET",
+            "/api/watch/files/001-sheet.png?topic=emulator",
+            None,
+        );
+        assert_eq!((status, b.as_str()), (200, "png bytes"));
+        assert_eq!(get(&srv, "/api/watch/files/001-sheet.png?topic=..").0, 404);
     }
 
     /// A review asks for a clip the session has and a games checkout to

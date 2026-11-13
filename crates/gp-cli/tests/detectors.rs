@@ -97,8 +97,10 @@ fn coverage_measures_then_reads_back_what_it_stored() {
     assert_eq!(out.status.code(), Some(2));
 }
 
+/// `--rom` a zip is read as an arcade romset (measured on gp-arcade), so a
+/// zip that isn't one is said to be a bad romset, not refused as arcade.
 #[test]
-fn coverage_refuses_an_arcade_romset_in_words() {
+fn coverage_reads_a_zip_rom_as_an_arcade_romset() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path();
     let id = recorded(home);
@@ -110,7 +112,8 @@ fn coverage_refuses_an_arcade_romset_in_words() {
     );
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("no arcade counterpart"), "{err}");
+    assert!(err.contains("romset"), "{err}");
+    assert!(!err.contains("no arcade counterpart"), "{err}");
 }
 
 /// A made-up package whose ROM entry is an arcade board's.

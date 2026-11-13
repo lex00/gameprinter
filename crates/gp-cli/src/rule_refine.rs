@@ -39,7 +39,7 @@ use crate::mechanic::http::{Request, Response};
 use crate::original::OriginalRuntime;
 
 #[path = "rule_lane.rs"]
-mod lane;
+pub(crate) mod lane;
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum RuleCmd {

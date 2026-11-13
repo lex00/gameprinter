@@ -35,6 +35,8 @@ use serde_json::{Value, json};
 use crate::Outcome;
 use crate::farm::machine::Machine;
 
+mod lanes;
+
 /// A model fact the level gives: its path, value, the reason and whether
 /// the asset map alone gives it (false: the contacts decide).
 type LevelFact = (String, Value, String, bool);
@@ -1218,6 +1220,18 @@ pub fn run(a: &BlindArgs, paths: &Paths) -> Result<Outcome> {
     };
     let pads = d.pads.clone();
     let at = d.log.len();
+    // A player who changes lanes instead of jumping has its own measures.
+    if let Some(ln) = d.lanes.clone() {
+        let found = lanes::Found {
+            lanes: ln,
+            held: d.held.clone(),
+            score: d.score.clone(),
+            pads: pads.clone(),
+            at,
+            power_on: d.power_on,
+        };
+        return lanes::run(a, paths, &bytes, &rom_ref, &mut st, found);
+    }
     let start_x = i64::from(st.nes.wram()[st.x]);
     let start_y = i64::from(st.nes.wram()[st.y]);
     let power_on = d.power_on;
@@ -1737,7 +1751,15 @@ pub fn run(a: &BlindArgs, paths: &Paths) -> Result<Outcome> {
     fs::write(&mf, toml::to_string(&doc)?)?;
 
     // mapping.toml: the player's place.
-    let hex = |v: usize| format!("0x{v:02X}");
+    // The CPU's addresses: the board's work RAM is at E000.
+    let base = st.nes.ram_base();
+    let hex = |v: usize| {
+        if base == 0 {
+            format!("0x{v:02X}")
+        } else {
+            format!("0x{:04X}", v + base)
+        }
+    };
     let x_ram = match hi {
         Some(h) => format!("[{}, {}]", hex(st.x), hex(h)),
         None => format!("[{}]", hex(st.x)),

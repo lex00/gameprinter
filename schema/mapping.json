@@ -1,0 +1,1231 @@
+{
+  "$id": "game-printer:mapping@22",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Mapping",
+  "type": "object",
+  "properties": {
+    "align": {
+      "description": "How the model's frames line up with the original's.",
+      "$ref": "#/$defs/Align"
+    },
+    "cells": {
+      "description": "Where the original keeps its level grid, so a translation knows\nwhich cells have been taken (schema 14).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Cells"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "description": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "draws": {
+      "description": "The original's random draw sites (feature `draws`): where its code\nreads a random byte, so `gp interp draws` can record a clip's draws\nfor a rebuild to take ([`gp_sim::draws`]).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/DrawSite"
+      }
+    },
+    "features": {
+      "description": "The optional features the mapping uses, by name\n([`crate::mapping_features`]). A reader refuses a mapping listing one\nit doesn't know. Without the list they're derived from the fields\nit sets.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "field": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Field"
+      }
+    },
+    "ignore": {
+      "description": "RAM bytes the model needs no field for, each with its role and why\n(schema 21): the memory map's progress leaves them out\n(docs/progress.md).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Ignore"
+      }
+    },
+    "model": {
+      "description": "The model's name (`model.name`).",
+      "type": "string"
+    },
+    "pending": {
+      "description": "Changes to a counter the original holds back, which a translation\nloads as the model's own waiting changes (`after`).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Pending"
+      }
+    },
+    "platform": {
+      "description": "Feature `platform`: the original's machine, `nes` (the default) or\n`arcade`. An arcade mapping's `ignore` may name any of the main\nCPU's addresses, and the NES's own parts (`nametable`, `oam`,\n`oam_tile`, `read_at`) are refused in it. Its `[[draws]]` name main\nZ80 sites (port wave 6): a site that is a call draws the value the\nroutine returns in A, any other the byte it reads.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "read_at": {
+      "description": "Feature `align.read_at_nmi`: when in its frame the original's RAM\nis read. Without it, at the frame's end. `nmi`: as the CPU takes the\nnext NMI, for a game that runs its frame in the NMI handler and\nsometimes takes longer than a frame, so the handler's last routines\n(Donkey Kong's timers at $F4AC) have run when the frame is read.\nThe original's runtime must know `read_at_nmi` (gp-nes does).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReadAt"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "schema": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "scope": {
+      "description": "Features `scope.while` and `scope.leaves`: where the template's\nscope ends in a run (docs/formats/state-mapping.md, \"Scope\"). A\nlockstep stops at the first frame out of scope and counts the\nframes from there as out of scope.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Scope"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "score_draws": {
+      "description": "Feature `draws.score`: a clip's score (`gp corpus score`, the\nqueue, `gp loop`) gives the rebuild the original's draws over the\nclip, recorded at the `[[draws]]` sites, as `gp interp compare\n--draws` does. Needs `[[draws]]`.",
+      "type": "boolean",
+      "default": false
+    },
+    "slots": {
+      "description": "The original's reused object slots, if it keeps its enemies that\nway, compared entity by entity ([`crate::compare::compare_slots`]).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Slots"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source": {
+      "description": "The original's source ID, as in its asset map and baselines.",
+      "type": "string"
+    },
+    "start": {
+      "description": "A condition over the original's state (the runtime protocol's\ncondition grammar, docs/runtime-protocol.md) that marks the\noriginal's frame the model's power-on state stands for: the first\nframe it holds. Without it, the frame before the first one the\noriginal reads its controller.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "stretches": {
+      "description": "Features `stretches.play` and `stretches.state`: which of the\noriginal's frames are play for a long run's exact stretches, and\nthe original's states its splits are listed by\n(docs/benchmarks.md, \"Long runs\").",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Stretches"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "model",
+    "source",
+    "align",
+    "field"
+  ],
+  "$defs": {
+    "Align": {
+      "description": "How frames line up.",
+      "oneOf": [
+        {
+          "description": "The model runs one frame for each frame the original reads its\ncontroller, with that frame's input. Its power-on state is the\noriginal's frame just before the first such frame, and the frames\nin which the original doesn't read the controller (lag frames) are\nskipped.",
+          "type": "string",
+          "const": "polled"
+        }
+      ]
+    },
+    "Case": {
+      "description": "One of a field's cases: while `when` holds, the field is `value`\nwhatever its bytes say, and a translation of the original's state notes\nit `approximated` for the reason given.",
+      "type": "object",
+      "properties": {
+        "approximated": {
+          "description": "Why a model state taken from the original while `when` holds is\nonly approximately the original's.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "nametable": {
+          "description": "Feature `field.case.nametable`: while `when` holds, a field that\nreads the name tables (its `nametable`) reads these PPU addresses\nin place of its own, as many of them. A picture a game draws at\nanother place on one stage: Donkey Kong draws Kong at $2084 on 25m\nand 75m and at $208D on 100m (the table at $C608 by $53), so the\ncell 25m reads at $20C5 is at $20CE there.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "integer",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0
+          }
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "number": {
+          "description": "Feature `field.case.number`: a number field's value while `when`\nholds, whatever its bytes say. Donkey Kong keeps a jump's takeoff\nheight in $95 and puts $FF there once the fall is too far; a case\ngives that the takeoff far above, so the landing kills.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "default": null
+        },
+        "oam": {
+          "description": "Feature `field.case.oam`: while `when` holds, a field that reads\nOAM (its `oam`) reads these sprite table bytes in place of its own,\nas many of them. A game that sends its sprites to OAM in another\norder on one stage: Donkey Kong: Original Edition's 50m copies its\nsprite buffer into page $07 in turns ($895F), so Pauline's body is\nsprite 16 there, not 60.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "integer",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0
+          }
+        },
+        "ram": {
+          "description": "Feature `field.case.ram`: while `when` holds, the field reads these\naddresses in place of its `ram`, as many of them. A value a game\nkeeps once per player at an address picked by whose turn it is:\nDonkey Kong's scores at $25 + 4 times the player ($52).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "integer",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0
+          }
+        },
+        "unmeasured": {
+          "description": "Feature `field.case.unmeasured`: why the field means nothing to\ncompare while `when` holds. A run doesn't compare it on those\nframes (they count as agreeing); a translation still loads it.\nDonkey Kong counts Kong's throw timer and the 11-frame divider on\nthrough a death and reuses $43 as the death's own timer, while\nthe model holds them still and restart-level sets them again.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "value": {
+          "description": "A name, for a field of named values: one of its `values` or a name\nthe bytes alone don't give.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "when": {
+          "description": "A condition over the original's state, in the runtime protocol's\ncondition grammar.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "when"
+      ]
+    },
+    "Cells": {
+      "description": "The original's level grid in RAM (schema 14). It holds the columns\naround the view in pages of `page_columns` columns: the byte of a cell\nis its page's address plus its column in the page, plus its row less\n`top` times `page_columns`. A cell in view of a kind in `kinds` whose\nbyte is 0 has been taken, and a translation empties it; with `becomes`\n(the feature `cells.becomes`), a byte listed there gives the cell that\nkind instead, as Moss Hop's used block, metatile 7, is a ? block that\nis now solid.",
+      "type": "object",
+      "properties": {
+        "becomes": {
+          "description": "The kind a cell of one of `kinds` takes for each byte (the feature\n`cells.becomes`):\n`[[0, \"empty\"], [7, \"solid\"]]`. Without it, 0 is empty and any other\nbyte leaves the model's cell as it is.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "integer",
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0
+              },
+              {
+                "$ref": "#/$defs/TileKind"
+              }
+            ]
+          }
+        },
+        "kinds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TileKind"
+          }
+        },
+        "page_columns": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "pages": {
+          "description": "Each page's address; columns take them in turn.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0
+          }
+        },
+        "rows": {
+          "description": "Rows the grid holds.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "top": {
+          "description": "The level row of the grid's first.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "view": {
+          "description": "Columns from the camera's that the grid always holds.",
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "pages",
+        "page_columns",
+        "rows",
+        "top",
+        "view",
+        "kinds"
+      ]
+    },
+    "DrawSite": {
+      "description": "One of the original's random draw sites: the instruction at `pc` reads\na random byte, `ram` or, indexed, one past it (Donkey Kong's fires read\n`$19,X`); a recording takes the byte the instruction reads. A hook\ndraws for it by `site`.",
+      "type": "object",
+      "properties": {
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "pc": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "ram": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "site": {
+          "type": "string"
+        },
+        "soft": {
+          "description": "Feature `draws.soft`: the byte is read only for presentation (a\nsound driver's random pitch), so the rebuild takes the draw when it\nasks on the same frame and is never out of step for drawing it on\nanother or not at all ([`gp_sim::DrawScript::soft`]).",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "site",
+        "pc",
+        "ram"
+      ]
+    },
+    "Field": {
+      "type": "object",
+      "properties": {
+        "bcd": {
+          "description": "Feature `field.bcd`: each byte holds two decimal digits (packed\nBCD), most significant byte first, as Donkey Kong keeps its score\n($25-$27) and its bonus timer ($2E).",
+          "type": "boolean",
+          "default": false
+        },
+        "bits": {
+          "description": "Only these bits, `[from, to)`, of the number the bytes make.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "case": {
+          "description": "Conditions over the original's state that say more than the bytes\ndo: the first that holds gives the value instead, or notes that a\nstart from the original approximates it (schema 3).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Case"
+          }
+        },
+        "digits": {
+          "description": "The bytes are decimal digits, most significant first, as games keep\nscores and timers for display. Instead of low byte first.",
+          "type": "boolean",
+          "default": false
+        },
+        "flag": {
+          "description": "The number is a flag: any value but zero is true, or with `invert`,\nonly zero is.",
+          "type": "boolean",
+          "default": false
+        },
+        "frac": {
+          "description": "The address of a byte holding the fraction, in 256ths.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "default": null,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "index": {
+          "description": "A slot field whose value is the slot's own number, plus `offset`\n(feature `slots.field.index`), with `ram = []`: for a hook that\nkeeps which slot it is in a word, as Donkey Kong's oil-drum fires,\nwhose slot picks their random byte and their climb.",
+          "type": "boolean",
+          "default": false
+        },
+        "invert": {
+          "type": "boolean",
+          "default": false
+        },
+        "lookup": {
+          "description": "Feature `field.lookup`: pairs of the number the bytes hold and the\nnumber the model has for it, for a byte that a game's script steps\nunevenly (Donkey Kong's death wait at $43). A number not listed is\ntaken as it is.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "integer",
+                "format": "int64"
+              },
+              {
+                "type": "integer",
+                "format": "int64"
+              }
+            ]
+          }
+        },
+        "lookup_else": {
+          "description": "With `lookup`, the value of a number not listed, instead of the\nnumber itself.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "default": null
+        },
+        "machine": {
+          "description": "Feature `field.machine`: a selector of the original's runtime\nprotocol whose number is the field's, in place of `ram`, for state\nthe console keeps outside memory: gp-nes's `nmi.` selectors, the\nconsole as the CPU takes the next NMI (where the code it stopped\ngoes on, the CPU cycle and the PPU dot of its entry), which Donkey\nKong's idle loop needs at a clip's start (docs/cycles.md). Read\nas 4 bytes, low first, so `bits` and `flag` apply.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "names": {
+          "description": "The number names one of these, by number (schema 17): for a byte\nwhose values are sparse, such as a state byte with flags in its high\nbits (schema 17). A number none of them has is unnamed.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "nametable": {
+          "description": "Feature `field.nametable`: name table cells by PPU address ($2000\nto $2FFF), low byte first, in place of `ram`, read through the\ncartridge's mirroring (the canonical state's `mapper.mirroring`)\nfrom its `nametables`. For a value a game keeps only on the\nscreen: Donkey Kong draws Kong as background tiles.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "integer",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0
+          }
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "oam": {
+          "description": "Feature `field.oam`: sprite memory bytes by index (a slot's 4\nbytes start at 4 times the slot: y, tile, attributes, x), low byte\nfirst, in place of `ram`. OAM holds the sprite table the last DMA\nsent, the one on the screen this frame.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "integer",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0
+          }
+        },
+        "oam_tile": {
+          "description": "Feature `field.oam_tile`: one byte of the first sprite, by slot,\nwhose tile is one of `tiles`, in place of `ram`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OamTile"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "offset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "path": {
+          "description": "A concrete model path in the interpreter's state.",
+          "type": "string"
+        },
+        "presentation": {
+          "description": "A presentation value (schema 4): a translation loads it, but no\nrun compares it, so it is no measure and counts for nothing in a\nscore. Super Mario Bros.' color rotation is one.",
+          "type": "boolean",
+          "default": false
+        },
+        "ram": {
+          "description": "RAM addresses, low byte first. Empty for a field that reads the\nPPU's state (`nametable`, `oam`, `oam_tile`) or is an `index`.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "integer",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0
+          }
+        },
+        "scale": {
+          "description": "The model's value is the number times `scale`, plus `offset`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "shared": {
+          "description": "A slot field whose bytes are at one address for every slot (schema\n12), a value the game keeps once and not per object: Super Mario\nBros.' FrenzyEnemyTimer.",
+          "type": "boolean",
+          "default": false
+        },
+        "signed": {
+          "description": "The bytes are a two's complement number.",
+          "type": "boolean",
+          "default": false
+        },
+        "stride": {
+          "description": "A slot field's bytes from one slot to the next (feature\n`slots.field.stride`): slot `i`'s are `i * stride` past slot 0's.\nWithout it, 1. Donkey Kong's barrels are drawn from a sprite buffer\nwith 16 bytes a barrel, and the game keeps no other copy of their\nplaces.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "default": null,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "values": {
+          "description": "The number names one of these, by position.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "whole": {
+          "description": "Compare whole parts only: the model's value rounded down against the\noriginal's, for an original that keeps no fraction the model has.\nWith `frac` as well, a translation loads the fraction and a run\nstill compares whole parts: a fraction the game keeps but doesn't\ndraw (schema 5).",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ]
+    },
+    "Fixed": {
+      "description": "A fixed-point number with 16 fraction bits: an integer, or an exact decimal string such as \"0.25\". Floats are refused.",
+      "oneOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string",
+          "pattern": "^-?[0-9]+(\\.[0-9]{1,16})?$"
+        }
+      ]
+    },
+    "Ignore": {
+      "description": "RAM bytes the model needs no field for (schema 21): `len` bytes from\n`ram`, holding the controller's bits, a frame counter, a scratch value,\na pointer or the sound driver's state (`role`), and why. `gp progress\n--write-ignore` writes the list from a trace of the original; `review`\nmarks a byte whose rule held on nearly every frame but not all.",
+      "type": "object",
+      "properties": {
+        "len": {
+          "type": "integer",
+          "format": "uint16",
+          "default": 1,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "ram": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "review": {
+          "type": "boolean",
+          "default": false
+        },
+        "role": {
+          "type": "string"
+        },
+        "why": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "ram",
+        "role",
+        "why"
+      ]
+    },
+    "NamedState": {
+      "description": "One of the original's states, by a condition over its state.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "when": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "when"
+      ]
+    },
+    "OamTile": {
+      "description": "Feature `field.oam_tile`: a sprite found in OAM by its tile.",
+      "type": "object",
+      "properties": {
+        "byte": {
+          "description": "The byte of the sprite found that the field reads: 0 its y, 1 its\ntile, 2 its attributes, 3 its x.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "none": {
+          "description": "The field's number when no sprite has one of the tiles.",
+          "type": "integer",
+          "format": "int64",
+          "default": 0
+        },
+        "tiles": {
+          "description": "The tiles to look for, as OAM's byte 1 holds them.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "tiles",
+        "byte"
+      ]
+    },
+    "Pending": {
+      "description": "Changes to a counter the original holds back in `count` slots of its\nown, each with a byte that says how much and a timer. A slot changes\nthe counter on the frame it reads its timer as `at`, so a timer above\nthat is a change still to come. Super Mario Bros.' floatey numbers hold\nan award this way.",
+      "type": "object",
+      "properties": {
+        "amount": {
+          "description": "Slot 0's byte that says how much: 0 is an empty slot, and any other\nvalue picks from `by`, the last entry for one past its end.",
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "at": {
+          "description": "What the timer reads on the frame the change is made.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "by": {
+          "description": "How much the counter changes by, in the counter's units.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "counter": {
+          "description": "The model's counter.",
+          "type": "string"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "timer": {
+          "description": "Slot 0's timer, counted down once a frame.",
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "counter",
+        "count",
+        "amount",
+        "timer",
+        "at",
+        "by"
+      ]
+    },
+    "ReadAt": {
+      "description": "When in its frame the original's RAM is read (feature\n`align.read_at_nmi`).",
+      "oneOf": [
+        {
+          "description": "As the CPU takes the NMI after the frame's end: once a handler that\nran past the end has let it be taken.",
+          "type": "string",
+          "const": "nmi"
+        }
+      ]
+    },
+    "Scope": {
+      "description": "Where a run leaves what the template holds: the first of the\noriginal's frames after the comparison starts on which `while` no\nlonger holds, or on which a `leaves` selector's value differs from its\nvalue on the first compared frame (Donkey Kong's stage byte when 25m\ngives way to 75m).",
+      "type": "object",
+      "properties": {
+        "leaves": {
+          "description": "Selectors over the original's state (`ram[0x0053]`): the run is\nout of scope from the first frame one of them leaves the value it\nhad on the first compared frame.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "while": {
+          "description": "A condition over the original's state that holds while the run is\nin scope.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "SlotHeld": {
+      "description": "An object that keeps its slot after its life ends (schema 11): one with\nan ID of `ids` and a state bit of `state`, as a defeated enemy that\nfalls until it leaves the screen. A start carries it as an `entity`.",
+      "type": "object",
+      "properties": {
+        "entity": {
+          "type": "string"
+        },
+        "field": {
+          "description": "Values a start loads besides the slots' own; one with the same\n`path` replaces the slots'.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Field"
+          }
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0
+          }
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "state": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "entity",
+        "ids",
+        "state"
+      ]
+    },
+    "SlotKind": {
+      "description": "The slots' IDs that are one model entity, and values only it has.",
+      "type": "object",
+      "properties": {
+        "ends": {
+          "description": "Optional: the state bits that end this entity's lives, instead of\nthe slots' `ends`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "default": null,
+          "maximum": 255,
+          "minimum": 0
+        },
+        "entity": {
+          "type": "string"
+        },
+        "field": {
+          "description": "Values compared for this entity besides the slots' own; one with\nthe same `path` replaces the slots'.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Field"
+          }
+        },
+        "flags": {
+          "description": "Optional: the flag values (at `slots.active`) the entity's lives\nhave, when an object with its IDs also takes other slots, as a\nsecond half does. Without it, any flag but 0.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0
+          }
+        },
+        "holds_slot": {
+          "description": "Optional: the object only holds its slot. A start carries it as a\nbody of this entity, so a new object takes the slot the original's\ndoes, and no run pairs or measures it: Super Mario Bros.' defeated\npiranha plant, which stays in its pipe until the view leaves it.",
+          "type": "boolean",
+          "default": false
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0
+          }
+        },
+        "leave": {
+          "description": "Since schema 17: why a start leaves this object out on purpose: the\nmodel keeps no body for it and needs none (a coin jumping out of a\nblock, which is only drawn). Its lives aren't paired or measured.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "refuse": {
+          "description": "Since schema 17: why the model can't hold this object as the\noriginal has it, so a start with one loaded is refused rather than\ncarried wrong (`gp_interp::carry`). Its lives aren't paired or\nmeasured.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "up_down": {
+          "description": "Since schema 9: its direction up and down is a measure too\n(`moving_y`), with its turns as events: a fireball's bounce.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "entity",
+        "ids"
+      ]
+    },
+    "SlotLevel": {
+      "description": "A model level and the condition over the original's state that holds\nwhile the original is in it.",
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string"
+        },
+        "when": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "level",
+        "when"
+      ]
+    },
+    "Slots": {
+      "description": "Object slots the original reuses: `count` of them, each value at a base\naddress plus the slot's index. A slot holds one model entity from the\nframe its flag is set with an ID a [`SlotKind`] names until the flag\nclears or the ID changes: one life.",
+      "type": "object",
+      "properties": {
+        "active": {
+          "description": "Slot 0's flag: the slot holds something while it isn't zero (or,\nwith `free`, while it isn't that value).",
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "active_stride": {
+          "description": "The flag's bytes from one slot to the next (feature\n`slots.active_stride`). Without it, 1. Donkey Kong's oil-drum fires\nare free while their sprite's y in the sprite buffer, 16 bytes a\nfire, is $FF.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "default": null,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "clock": {
+          "description": "The original's frame counter, one byte. A life's body steps once\neach time it advances, with its value as the frame's low byte.\nWithout it (feature `slots.no_clock`), the bodies step once a frame\nand a start leaves the model's frame count as it is: Donkey Kong\nkeeps no frame counter.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "default": null,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "ends": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "default": null,
+          "maximum": 255,
+          "minimum": 0
+        },
+        "field": {
+          "description": "Slot 0's values, by body field: `x`, `y`, `vx`, `vy` or `ext[0]` to\n`ext[3]`, and since schema 5 `facing`, `state`, `home_x`, `home_y`,\n`path_back` and `wait`, which only a translation reads. A life's body\nstarts at the first frame's `x` and `y`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Field"
+          }
+        },
+        "free": {
+          "description": "The flag's value for an empty slot, instead of 0 (feature\n`slots.free`). With it, every other value reads as the flag 1.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "default": null,
+          "maximum": 255,
+          "minimum": 0
+        },
+        "group": {
+          "description": "Since schema 9: more object slots of their own, each with its own\ncount, flag, ID and kinds, read as these are: Super Mario Bros.'\nfireballs and hammers, which the game keeps apart from its enemies.\nA group's lives are paired and measured as bodies and carried into\na start as these are; it takes the levels of these slots and has\nnone of its own and no groups. Its `rest` (schema 11) is by\n[`SHOT_REST_PATHS`].",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Slots"
+          }
+        },
+        "held": {
+          "description": "Since schema 11: an object past the end of its life that still has\nits slot, which a translation carries as a body so the slot stays\ntaken until it leaves. No run compares it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SlotHeld"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "description": "Slot 0's object ID. Without it (feature `slots.no_id`), every\nslot's ID is 0, for a game whose slots hold one kind of object and\nkeep no ID: Donkey Kong's barrels.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "default": null,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "kind": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SlotKind"
+          }
+        },
+        "level": {
+          "description": "The model's level a life's world is in: the first whose `when`\nholds on the life's first frame. A slot that comes alive while none\nholds isn't compared.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SlotLevel"
+          }
+        },
+        "moving": {
+          "description": "A condition over the original's state (the runtime protocol's\ncondition grammar) that holds on frames it moves its objects. A\nclock tick on any other frame doesn't step the body.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "name": {
+          "description": "A group's name (feature `slots.group.name`), for people and for a\nderived template: `gp template derive` merges a delta's groups over\nits base's by name when every group has one, so a derived game adds\na group of its own and keeps its base's (until 2026-11-06, Donkey\nKong: Original Edition's 50m pies and moving ladders beside the\nfires, springs and elevators of the template it was derived from).\nNo run reads it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "part_flag": {
+          "description": "The flag bit of a slot that is only a second part of another's\nobject: its other bits name that object's slot, and its ID means\nnothing, so it is no object unless a kind's `flags` lists the flag.\nA start gives it to that object's body, for a model entity with\n`extra_slots`. Super Mario Bros.' DuplicateEnemyObj.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "default": null,
+          "maximum": 255,
+          "minimum": 0
+        },
+        "presentation": {
+          "description": "A presentation value (schema 4): a translation loads it, but no\nrun compares it, so it is no measure and counts for nothing in a\nscore. Super Mario Bros.' color rotation is one.",
+          "type": "boolean",
+          "default": false
+        },
+        "rest": {
+          "description": "What an empty slot's last object left, read at each slot's address\nas the fields are (schema 7): `x_frac`, the fraction of its place\nacross, and `vy`, its speed up and down. A translation loads them\ninto a model level with `slot_rest`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Field"
+          }
+        },
+        "resync": {
+          "description": "Feature `slots.resync`: a resync carries the original's slot\nobjects into the model as a start does, in place of the model's\nown, so after a split the whole world is back in step. Without it a\nresync keeps the model's enemies. Donkey Kong's barrels: a barrel\nthat has split stays split for the rest of a clip otherwise.",
+          "type": "boolean",
+          "default": false
+        },
+        "state": {
+          "description": "Slot 0's state byte, with `ends`: a slot whose state has any of\n`ends`'s bits set ends its life and starts none, as for an object\nthe original moves as defeated, which a hook doesn't.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "default": null,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "turn": {
+          "description": "A group's (schema 11): the byte whose value is the model's\n`shot_turn`, which a translation loads.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "default": null,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "vacant": {
+          "description": "A condition over the original's state under which its slots hold\nnone of these objects, so every slot reads free (feature\n`slots.vacant`): the game has drawn something else in the bytes the\nslots are read from. A group without one takes its slots'. Donkey\nKong: Original Edition's stage-clear scene draws Kong carrying\nPauline in the barrels' and the fires' sprites ($8B03, while its\nscene step $0450 is 3 or more).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "vacant_from": {
+          "description": "Feature `slots.vacant_from`: the slots from `slot` on read free\nwhile `when` holds, for a stage that uses fewer of them and the\nbytes of the rest for something else. Donkey Kong's fires take 4\nslots on 100m (C1F6[3]) and 2 elsewhere, where slots 2 and 3's\nsprites at $0230 and $0240 are barrels'.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VacantFrom"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "count",
+        "active",
+        "field",
+        "kind"
+      ]
+    },
+    "Stretches": {
+      "description": "What a long run's exact stretches read from the original\n(docs/benchmarks.md): `play`, a condition over the original's state\noutside which a frame isn't play (the player dying or waiting, a clear\nscene, a pause), so it ends a stretch and isn't counted; and named\nstates, the first whose `when` holds naming a split frame's state.",
+      "type": "object",
+      "properties": {
+        "play": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "state": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NamedState"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "TileKind": {
+      "description": "What kind of tile a cell is. The simulation collides by kind: `solid`\nstops from every side, `top` only an entity moving down onto its top\nrow, `ladder` is climbed (and its top stands, for a climber that says\nso), `hazard` touches the player as the level's `hazard` says, `water`\nand `ice` change falling and running as the level's `water` and `ice`\nsay. Since core 0.4.6, `coin_block`, `item_block` and `brick` are\nsolid like `solid`, and a head hit (platformer `jump.head`) tells them\napart: a block with a coin in it, one with an item, a brick. Since core\n0.4.16, `coin` stops nothing and a pickup (platformer `jump.pickup`)\ntakes it.",
+      "type": "string",
+      "enum": [
+        "empty",
+        "solid",
+        "top",
+        "ladder",
+        "hazard",
+        "water",
+        "ice",
+        "coin_block",
+        "item_block",
+        "brick",
+        "coin"
+      ]
+    },
+    "VacantFrom": {
+      "description": "Feature `slots.vacant_from`: slots from `slot` on read free while\n`when` holds.",
+      "type": "object",
+      "properties": {
+        "slot": {
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "when": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "slot",
+        "when"
+      ]
+    }
+  }
+}

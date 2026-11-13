@@ -17,8 +17,9 @@
 //! observe.toml, mapping.toml and package.toml), where game-printer read
 //! templates/GAME; the sessions go where gameprinter's mechanic sessions
 //! are. The detectors are crate::mechanic::detect. The recording is
-//! replayed on gp-nes, so an arcade game's is refused in words until wave
-//! 6's arcade recordings and sprite adapter are on main.
+//! replayed on gp-nes or, for an arcade game, on gp-arcade
+//! ([`replay_arcade`]): its work RAM, its sprite list and its main Z80's
+//! trace stand for the NES's RAM, sprite table and 6502 routines.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -74,10 +75,12 @@ fn level_def(game_dir: &Path) -> Option<Level> {
     Some(Level { ram, when, names })
 }
 
-fn holds(c: &gp_runtime::select::Condition, ram: &[u8]) -> bool {
+fn holds(c: &gp_runtime::select::Condition, ram: &[u8], base: u16) -> bool {
     c.eval(&mut |sel| match (sel.name().as_str(), sel.last_index()?) {
-        ("ram", Some(gp_runtime::select::Index::At(n))) if (0..0x800).contains(&n) => {
-            Ok(i64::from(ram[n as usize]))
+        ("ram", Some(gp_runtime::select::Index::At(n)))
+            if (i64::from(base)..i64::from(base) + 0x800).contains(&n) =>
+        {
+            Ok(i64::from(ram[(n - i64::from(base)) as usize]))
         }
         _ => Err("only ram[N]".into()),
     })
@@ -120,10 +123,16 @@ pub(crate) fn harvest(
     let game_dir = crate::labels::game_folder(&games, game)
         .with_context(|| format!("no game {game} in {}", games.display()))?;
     let rom = crate::clip_score::rom_of(paths, &game_dir, None)?;
-    crate::original::nes_only(
-        crate::original::Platform::of_file(&rom),
-        "a harvest (the recording replayed on the NES, its sprite table read)",
-    )?;
+    // An arcade game's recording replays on gp-arcade ([`replay_arcade`]);
+    // its RAM window is the work RAM at E000, so an address the game's
+    // files name is `base` on from the window's index.
+    let arcade = crate::original::Platform::of_file(&rom) == crate::original::Platform::Arcade;
+    let base: u16 = if arcade {
+        crate::arcade_stage0::RAM_BASE
+    } else {
+        0
+    };
+    let ix = |a: u16| usize::from(a.wrapping_sub(base));
     let store = gp_evidence::store::Store::open(&paths.store)?;
     let entry = gp_evidence::recordings::resolve(&store, recording)?;
     let manifest = gp_evidence::recordings::load_manifest(&store, &entry.id)?;
@@ -136,21 +145,10 @@ pub(crate) fn harvest(
     let level = level_def(&game_dir);
     let slots = slots_def(&game_dir);
 
-    // One replay: RAM, sprite boxes, pads, levels, first routines.
-    let mut nes = gp_nes::Nes::power_on(&rom, manifest.power_on)?;
-    let layout = gp_events::Layout::of(nes.bus())?;
-    let act =
-        gp_events::activity::Activity::watching(layout, &gp_events::Bits::new(0), BTreeSet::new());
-    let mut col = gp_events::Collector::with_activity(layout, false, act);
-    col.start(nes.bus_mut_for_observers());
     let n = log.frames.len();
-    let mut ram: Vec<Vec<u8>> = Vec::with_capacity(n);
-    let mut boxes: Vec<Vec<[i32; 4]>> = Vec::with_capacity(n);
-    let mut levels: Vec<Option<String>> = Vec::with_capacity(n);
     let mut seen_routines: BTreeSet<u32> = BTreeSet::new();
     let mut events: Vec<Event> = Vec::new();
     let mut seen_ids: BTreeSet<u8> = BTreeSet::new();
-    let mut oam_page = [0usize; 8];
     // Branches the dataset lists, by CPU address, on a board without banks
     // (a banked board's branches need the bank too; they're left out).
     let data = crate::rom_dataset::read(&dir).ok();
@@ -169,69 +167,34 @@ pub(crate) fn harvest(
             branch_at.insert(a, (get("op").to_lowercase(), get("routine")));
         }
     }
-    // Per branch: (taken, not taken) over the run.
-    let mut branch_n: std::collections::HashMap<u16, (u64, u64)> = std::collections::HashMap::new();
-    let mut scroll: Vec<i32> = Vec::with_capacity(log.frames.len());
-    let mut entered: Vec<Vec<u32>> = Vec::with_capacity(log.frames.len());
-    // The branches that ran on each frame.
-    let mut ran_branches: Vec<Vec<u16>> = Vec::with_capacity(log.frames.len());
-    let mut this_frame: BTreeSet<u16> = BTreeSet::new();
-    for (i, f) in log.frames.iter().enumerate() {
-        if f.reset {
-            col.will_reset();
-        }
-        nes.step_with(*f, |bus| {
-            col.before(bus);
-            let pc = bus.cpu.pc;
-            if let Some((op, _)) = branch_at.get(&pc) {
-                let p = bus.cpu.status.bits();
-                let flag = |b: u8| p & b != 0;
-                let taken = match op.as_str() {
-                    "beq" => flag(0x02),
-                    "bne" => !flag(0x02),
-                    "bcs" => flag(0x01),
-                    "bcc" => !flag(0x01),
-                    "bmi" => flag(0x80),
-                    "bpl" => !flag(0x80),
-                    "bvs" => flag(0x40),
-                    "bvc" => !flag(0x40),
-                    _ => return,
-                };
-                this_frame.insert(pc);
-                let e = branch_n.entry(pc).or_default();
-                if taken {
-                    e.0 += 1;
-                } else {
-                    e.1 += 1;
-                }
-            }
-        })?;
-        let fa = col.end_frame_activity(nes.bus()).context("watching")?;
-        let sc = &nes.bus().ppu.scroll;
-        scroll.push(i32::from(
-            (sc.t & 31) * 8 + u16::from(sc.fine_x as u8 & 7) + ((sc.t >> 10) & 1) * 256,
-        ));
-        entered.push(fa.entered.iter().map(|(o, _)| *o).collect());
-        ran_branches.push(std::mem::take(&mut this_frame).into_iter().collect());
-        let w = nes.wram()[..0x800].to_vec();
-        let oam = nes.oam();
-        // The sprite buffer: a page equal to OAM this frame, or to the next
-        // frame's OAM (a game that copies at the next interrupt).
-        for (p, c) in oam_page.iter_mut().enumerate() {
-            let last = ram.last().map(|r: &Vec<u8>| &r[p * 256..p * 256 + 256]);
-            if w[p * 256..p * 256 + 256] == oam[..] || last == Some(&oam[..]) {
-                *c += 1;
-            }
-        }
-        boxes.push(m::sprite_boxes(
-            &oam,
-            if nes.tall_sprites() { 16 } else { 8 },
-        ));
+    // One replay: RAM, sprite boxes, scroll, the routines entered and the
+    // branches run, each frame.
+    let r = if arcade {
+        replay_arcade(
+            &rom,
+            &log,
+            &branch_at,
+            &crate::arcade_stage0::dataset_routines(data.as_ref()),
+        )?
+    } else {
+        replay_nes(&rom, &manifest, &log, &branch_at)?
+    };
+    let Replay {
+        ram,
+        boxes,
+        scroll,
+        entered,
+        ran_branches,
+        branch_n,
+        oam_page,
+    } = r;
+    let mut levels: Vec<Option<String>> = Vec::with_capacity(n);
+    for (i, w) in ram.iter().enumerate() {
         let lv = level.as_ref().and_then(|l| {
-            if l.when.as_ref().is_some_and(|c| !holds(c, &w)) {
+            if l.when.as_ref().is_some_and(|c| !holds(c, w, base)) {
                 return None;
             }
-            let key: Vec<u8> = l.ram.iter().map(|a| w[usize::from(*a)]).collect();
+            let key: Vec<u8> = l.ram.iter().map(|a| w[ix(*a)]).collect();
             Some(l.names.get(&key).cloned().unwrap_or_else(|| {
                 key.iter()
                     .map(|b| format!("{b:02x}"))
@@ -240,10 +203,9 @@ pub(crate) fn harvest(
             }))
         });
         // Routines run for the first time, once play has started (a level).
-        let fresh: Vec<u32> = fa
-            .entered
+        let fresh: Vec<u32> = entered[i]
             .iter()
-            .map(|(o, _)| *o)
+            .copied()
             .filter(|o| seen_routines.insert(*o))
             .collect();
         if lv.is_some() && !fresh.is_empty() && i > 0 {
@@ -251,13 +213,13 @@ pub(crate) fn harvest(
                 frame: i,
                 kind: "new-code".into(),
                 what: format!("{} routine(s) ran for the first time", fresh.len()),
-                data: json!({"routines": fresh.iter().map(|o| format!("{o:05X}")).collect::<Vec<_>>()}),
+                data: json!({"routines": fresh.iter().map(|o| if arcade { format!("{o:04X}") } else { format!("{o:05X}") }).collect::<Vec<_>>()}),
             });
         }
         if let (Some((count, active, id)), Some(_)) = (slots, &lv) {
             for k in 0..count {
-                if w[usize::from(active) + k] != 0 {
-                    let t = w[usize::from(id) + k];
+                if w[ix(active) + k] != 0 {
+                    let t = w[ix(id) + k];
                     if seen_ids.insert(t) {
                         events.push(Event {
                             frame: i,
@@ -270,12 +232,24 @@ pub(crate) fn harvest(
             }
         }
         levels.push(lv);
-        ram.push(w);
     }
     let replay_secs = t0.elapsed().as_secs_f64();
 
-    let ys: Vec<i32> = ram.iter().map(|r| i32::from(r[usize::from(yb)])).collect();
-    let pads: Vec<u8> = log.frames.iter().map(|f| f.pads[0]).collect();
+    let ys: Vec<i32> = ram.iter().map(|r| i32::from(r[ix(yb)])).collect();
+    // The detectors read the NES pad's bits; an arcade frame's controls
+    // are put in them (the stick as the d-pad, tap as A, Start as Start,
+    // the coin as Select).
+    let pads: Vec<u8> = log
+        .frames
+        .iter()
+        .map(|f| {
+            if arcade {
+                nes_pad(f.pads[0])
+            } else {
+                f.pads[0]
+            }
+        })
+        .collect();
     let in_level = |i: usize| levels[i].is_some();
     let track: Vec<Option<usize>> = m::player_track(&boxes, &ys, 0)
         .into_iter()
@@ -341,10 +315,13 @@ pub(crate) fn harvest(
     }
     let churn_bytes = churn.iter().filter(|b| **b).count();
     let skip = |a: usize| {
-        let role = names.get(&(a as u16)).map(String::as_str).unwrap_or("");
+        let role = names
+            .get(&(a as u16 + base))
+            .map(String::as_str)
+            .unwrap_or("");
         scrolled[a]
             || churn[a]
-            || (0x100..0x200).contains(&a)
+            || (!arcade && (0x100..0x200).contains(&a))
             || oam_page[a / 256] * 2 > n
             || role.ends_with("scratch")
             || role.ends_with("sound")
@@ -356,7 +333,7 @@ pub(crate) fn harvest(
             return Vec::new();
         }
         (0..0x800usize)
-            .filter(|&a| a != usize::from(yb) && !skip(a))
+            .filter(|&a| a != ix(yb) && !skip(a))
             .filter_map(|a| {
                 let before = ram[i - 2][a];
                 if (i - 10..i - 1).any(|k| ram[k][a] != before) {
@@ -364,7 +341,7 @@ pub(crate) fn harvest(
                 }
                 let to = (i - 1..=i + 3).map(|k| ram[k][a]).find(|v| *v != before)?;
                 (i + 4..i + 64).all(|k| ram[k][a] != before).then(|| {
-                    json!({"addr": format!("${a:04X}"), "from": before, "to": to, "known_as": names.get(&(a as u16))})
+                    json!({"addr": format!("${:04X}", a + usize::from(base)), "from": before, "to": to, "known_as": names.get(&(a as u16 + base))})
                 })
             })
             .collect()
@@ -388,7 +365,7 @@ pub(crate) fn harvest(
         }
     }
     if let Some(xb) = xb {
-        let xs: Vec<i32> = ram.iter().map(|r| i32::from(r[usize::from(xb)])).collect();
+        let xs: Vec<i32> = ram.iter().map(|r| i32::from(r[ix(xb)])).collect();
         for w in m::walls(&xs, &ys, &pads, 0) {
             let f = w["frame"].as_u64().unwrap_or(0) as usize;
             if in_level(f) {
@@ -758,20 +735,23 @@ pub(crate) fn harvest(
     // with their branches taken both ways, one way, or never reached.
     let mut types: Vec<Value> = Vec::new();
     if let Some((count, active, id)) = slots {
-        let (prg, mapper) = gp_nes::harvest::ines_prg(&rom).context("not an iNES ROM")?;
-        let board = gp_nes::codemap::Board::of(prg, mapper);
         let mut routine_off: BTreeMap<String, u32> = BTreeMap::new();
-        for r in data.iter().flat_map(|d| d.rows("routines")) {
-            if let Some(crate::rom_dataset::Cell::S(Some(name))) = r.get("routine")
-                && let Some(o) = gp_nes::codemap::va_parse(name).and_then(|v| board.prg_offset(v))
-            {
-                routine_off.insert(name.clone(), o as u32);
+        if !arcade {
+            let (prg, mapper) = gp_nes::harvest::ines_prg(&rom).context("not an iNES ROM")?;
+            let board = gp_nes::codemap::Board::of(prg, mapper);
+            for r in data.iter().flat_map(|d| d.rows("routines")) {
+                if let Some(crate::rom_dataset::Cell::S(Some(name))) = r.get("routine")
+                    && let Some(o) =
+                        gp_nes::codemap::va_parse(name).and_then(|v| board.prg_offset(v))
+                {
+                    routine_off.insert(name.clone(), o as u32);
+                }
             }
         }
         let active_types = |i: usize| -> BTreeSet<u8> {
             (0..count)
-                .filter(|k| ram[i][usize::from(active) + k] != 0)
-                .map(|k| ram[i][usize::from(id) + k])
+                .filter(|k| ram[i][ix(active) + k] != 0)
+                .map(|k| ram[i][ix(id) + k])
                 .collect()
         };
         let mut frames_of: BTreeMap<u8, Vec<usize>> = BTreeMap::new();
@@ -1012,6 +992,19 @@ fn hashes_at(
     let Some(&last) = at.last() else {
         return Ok(out);
     };
+    if crate::original::Platform::of_file(rom) == crate::original::Platform::Arcade {
+        let mut o = crate::original::OriginalRuntime::of_rom(rom)?;
+        for i in 0..=last.min(frames.len()) {
+            if at.contains(&i) {
+                out.insert(i, o.state_hex()?);
+            }
+            if i < frames.len() {
+                let f = gp_runtime::InputFrame::pads(frames[i].pads);
+                gp_runtime::Runtime::step(&mut o, &[f]).map_err(anyhow::Error::msg)?;
+            }
+        }
+        return Ok(out);
+    }
     let mut nes = gp_nes::Nes::power_on(rom, power_on)?;
     for i in 0..=last.min(frames.len()) {
         if at.contains(&i) {
@@ -1025,7 +1018,213 @@ fn hashes_at(
 }
 
 fn manifest_rom(rom: &[u8]) -> String {
+    if crate::original::Platform::of_file(rom) == crate::original::Platform::Arcade {
+        return gp_arcade::Romset::from_zip(rom)
+            .map(|s| s.identity)
+            .unwrap_or_default();
+    }
     gp_evidence::source::identify_nes(rom)
         .map(|i| i.sha256)
         .unwrap_or_default()
+}
+
+/// What one replay of the recording gives, frame by frame: the RAM the
+/// detectors read (the NES's 2 KB, or the arcade board's work RAM at
+/// E000-E7FF), the sprite boxes, the scroll, the routines entered and the
+/// dataset's branches run, with each branch's ways over the whole run.
+struct Replay {
+    ram: Vec<Vec<u8>>,
+    boxes: Vec<Vec<[i32; 4]>>,
+    scroll: Vec<i32>,
+    entered: Vec<Vec<u32>>,
+    ran_branches: Vec<Vec<u16>>,
+    branch_n: std::collections::HashMap<u16, (u64, u64)>,
+    /// Per 256-byte page of the RAM: the frames it held the sprite table.
+    oam_page: [usize; 8],
+}
+
+/// The replay on gp-nes, with gp-events' collector: routines entered by
+/// PRG offset, branches by the 6502's flags.
+fn replay_nes(
+    rom: &[u8],
+    manifest: &gp_evidence::manifest::RecordingManifest,
+    log: &gp_evidence::InputLog,
+    branch_at: &std::collections::HashMap<u16, (String, String)>,
+) -> Result<Replay> {
+    let mut nes = gp_nes::Nes::power_on(rom, manifest.power_on)?;
+    let layout = gp_events::Layout::of(nes.bus())?;
+    let act =
+        gp_events::activity::Activity::watching(layout, &gp_events::Bits::new(0), BTreeSet::new());
+    let mut col = gp_events::Collector::with_activity(layout, false, act);
+    col.start(nes.bus_mut_for_observers());
+    let n = log.frames.len();
+    let mut ram: Vec<Vec<u8>> = Vec::with_capacity(n);
+    let mut boxes: Vec<Vec<[i32; 4]>> = Vec::with_capacity(n);
+    let mut oam_page = [0usize; 8];
+    // Per branch: (taken, not taken) over the run.
+    let mut branch_n: std::collections::HashMap<u16, (u64, u64)> = std::collections::HashMap::new();
+    let mut scroll: Vec<i32> = Vec::with_capacity(n);
+    let mut entered: Vec<Vec<u32>> = Vec::with_capacity(n);
+    // The branches that ran on each frame.
+    let mut ran_branches: Vec<Vec<u16>> = Vec::with_capacity(n);
+    let mut this_frame: BTreeSet<u16> = BTreeSet::new();
+    for f in &log.frames {
+        if f.reset {
+            col.will_reset();
+        }
+        nes.step_with(*f, |bus| {
+            col.before(bus);
+            let pc = bus.cpu.pc;
+            if let Some((op, _)) = branch_at.get(&pc) {
+                let p = bus.cpu.status.bits();
+                let flag = |b: u8| p & b != 0;
+                let taken = match op.as_str() {
+                    "beq" => flag(0x02),
+                    "bne" => !flag(0x02),
+                    "bcs" => flag(0x01),
+                    "bcc" => !flag(0x01),
+                    "bmi" => flag(0x80),
+                    "bpl" => !flag(0x80),
+                    "bvs" => flag(0x40),
+                    "bvc" => !flag(0x40),
+                    _ => return,
+                };
+                this_frame.insert(pc);
+                let e = branch_n.entry(pc).or_default();
+                if taken {
+                    e.0 += 1;
+                } else {
+                    e.1 += 1;
+                }
+            }
+        })?;
+        let fa = col.end_frame_activity(nes.bus()).context("watching")?;
+        let sc = &nes.bus().ppu.scroll;
+        scroll.push(i32::from(
+            (sc.t & 31) * 8 + u16::from(sc.fine_x as u8 & 7) + ((sc.t >> 10) & 1) * 256,
+        ));
+        entered.push(fa.entered.iter().map(|(o, _)| *o).collect());
+        ran_branches.push(std::mem::take(&mut this_frame).into_iter().collect());
+        let w = nes.wram()[..0x800].to_vec();
+        let oam = nes.oam();
+        // The sprite buffer: a page equal to OAM this frame, or to the next
+        // frame's OAM (a game that copies at the next interrupt).
+        for (p, c) in oam_page.iter_mut().enumerate() {
+            let last = ram.last().map(|r: &Vec<u8>| &r[p * 256..p * 256 + 256]);
+            if w[p * 256..p * 256 + 256] == oam[..] || last == Some(&oam[..]) {
+                *c += 1;
+            }
+        }
+        boxes.push(m::sprite_boxes(
+            &oam,
+            if nes.tall_sprites() { 16 } else { 8 },
+        ));
+        ram.push(w);
+    }
+    Ok(Replay {
+        ram,
+        boxes,
+        scroll,
+        entered,
+        ran_branches,
+        branch_n,
+        oam_page,
+    })
+}
+
+/// The replay on gp-arcade, with the main Z80's instruction trace: the
+/// work RAM at E000-E7FF; the sprite boxes from the sprite RAM through
+/// gp-arcade's sprite list (each sprite 16x16 in the game's half-pixel
+/// units, as `gp track` reads them); no scroll (the board has none); the
+/// routines entered (calls', restarts' and interrupts' targets and the
+/// dataset's routines, by address, [`crate::arcade_stage0::entries`]); and a dataset branch's way by where the next instruction
+/// starts. The sprite RAM is outside the window, so no page of it is the
+/// sprite table.
+fn replay_arcade(
+    rom: &[u8],
+    log: &gp_evidence::InputLog,
+    branch_at: &std::collections::HashMap<u16, (String, String)>,
+    known: &BTreeSet<u16>,
+) -> Result<Replay> {
+    let set = gp_arcade::Romset::from_zip(rom)?;
+    let mut t = gp_arcade::Tapper::power_on(&set);
+    let n = log.frames.len();
+    let mut out = Replay {
+        ram: Vec::with_capacity(n),
+        boxes: Vec::with_capacity(n),
+        scroll: vec![0; n],
+        entered: Vec::with_capacity(n),
+        ran_branches: Vec::with_capacity(n),
+        branch_n: std::collections::HashMap::new(),
+        oam_page: [0; 8],
+    };
+    let base = crate::arcade_stage0::RAM_BASE;
+    for (i, f) in log.frames.iter().enumerate() {
+        let bits = f.buttons_word();
+        if bits > 0xff || f.reset {
+            bail!(
+                "frame {}: an arcade input holds bits 0 to 7 and no reset",
+                i + 1
+            );
+        }
+        let trace = crate::covered::frame_trace(&mut t, gp_arcade::Controls::from_bits(bits));
+        let entered: Vec<u32> = crate::arcade_stage0::entries(&trace, known)
+            .into_iter()
+            .map(u32::from)
+            .collect();
+        let mut this_frame: BTreeSet<u16> = BTreeSet::new();
+        let main: Vec<&gp_arcade::mcr::Trace> = trace
+            .iter()
+            .filter(|e| e.cpu == 0 && e.interrupt.is_none())
+            .collect();
+        for (k, e) in main.iter().enumerate() {
+            if branch_at.contains_key(&e.pc)
+                && let Some(next) = main.get(k + 1)
+            {
+                let len = gp_arcade::dasm::decode(&e.bytes, e.pc).len;
+                let taken = next.pc != e.pc.wrapping_add(u16::from(len));
+                this_frame.insert(e.pc);
+                let c = out.branch_n.entry(e.pc).or_default();
+                if taken {
+                    c.0 += 1;
+                } else {
+                    c.1 += 1;
+                }
+            }
+        }
+        out.entered.push(entered);
+        out.ran_branches.push(this_frame.into_iter().collect());
+        out.ram.push(
+            (0..crate::arcade_stage0::RAM_END - base)
+                .map(|k| t.peek(base + k))
+                .collect(),
+        );
+        let sprites: Vec<u8> = (0xe800..0xea00u16).map(|a| t.peek(a)).collect();
+        out.boxes.push(m::merge_boxes(
+            gp_arcade::video::sprite_list(&sprites)
+                .iter()
+                .map(|s| [i32::from(s.x), i32::from(s.y), 16, 16])
+                .collect(),
+        ));
+    }
+    Ok(out)
+}
+
+/// An arcade frame's controls (coin, start, right, left, down, up, tap
+/// from bit 0) as the NES pad's bits the detectors read.
+fn nes_pad(c: u8) -> u8 {
+    use gp_evidence::input_log::button as b;
+    use gp_explore::arcade as a;
+    [
+        (a::COIN, b::SELECT),
+        (a::START, b::START),
+        (a::RIGHT, b::RIGHT),
+        (a::LEFT, b::LEFT),
+        (a::DOWN, b::DOWN),
+        (a::UP, b::UP),
+        (a::TAP, b::A),
+    ]
+    .iter()
+    .filter(|(x, _)| c & x != 0)
+    .fold(0, |p, (_, y)| p | y)
 }

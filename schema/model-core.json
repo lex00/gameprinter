@@ -1,0 +1,4263 @@
+{
+  "$id": "game-printer:model-core@0.4",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Game Printer model core schema 0.4",
+  "description": "A whole game model: one `model.toml`.",
+  "type": "object",
+  "properties": {
+    "assets": {
+      "description": "Asset slots by name: what each holds, its role, and where it's filled from.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/AssetSlot"
+      }
+    },
+    "cameras": {
+      "description": "Cameras by name.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Camera"
+      }
+    },
+    "cost": {
+      "description": "Feature `cost.frame`: the CPU cycles the original spends on a\nframe's work, as terms over the model's state, for a game that steps\nits random generator in the time the frame's work leaves\n(docs/cycles.md, \"The cost model\").",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Cost"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "counters": {
+      "description": "Numbers the game keeps across levels, such as deaths or score.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Counter"
+      }
+    },
+    "entities": {
+      "description": "Entity types by name.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Entity"
+      }
+    },
+    "evidence": {
+      "description": "Where each fact comes from, by model path. An entry covers the part\nit names and everything under it, unless a more specific entry\ncovers that.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Evidence"
+      }
+    },
+    "input": {
+      "description": "Named actions and the buttons that trigger them.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Input"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "levels": {
+      "description": "Levels by name.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Level"
+      }
+    },
+    "model": {
+      "description": "What the model is and which schema versions it uses.",
+      "$ref": "#/$defs/Header"
+    },
+    "present": {
+      "description": "How the game is shown: the screen, the HUD and palette changes over\ntime. Presentation only: the simulation never reads it.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Present"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "rules": {
+      "description": "The game's state machines by name, such as playing, dying and won.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Machine"
+      }
+    },
+    "stages": {
+      "description": "Feature `stages`: the original game's stages in the order it plays\nthem, for a model that holds fewer levels than the game has stages.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Stages"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "model"
+  ],
+  "$defs": {
+    "AssetKind": {
+      "oneOf": [
+        {
+          "description": "8x8 tiles (the asset map format `chr-2bpp`).",
+          "type": "string",
+          "const": "tiles"
+        },
+        {
+          "description": "Palettes (`palette`).",
+          "type": "string",
+          "const": "palettes"
+        },
+        {
+          "description": "Metatiles with their properties (`metatiles`).",
+          "type": "string",
+          "const": "metatiles"
+        },
+        {
+          "description": "A grid of metatile numbers (`level-grid`).",
+          "type": "string",
+          "const": "level-grid"
+        },
+        {
+          "description": "Rows of numbers (`table`).",
+          "type": "string",
+          "const": "table"
+        },
+        {
+          "description": "Lists of objects that build a level's tiles, one list per entry\n(`smb-area-objects`, `smb2-level-objects`, or Mega Man 2's\n`mm2-screens`).",
+          "type": "string",
+          "const": "level-objects"
+        },
+        {
+          "description": "Lists of objects that place entities in a level, one list per entry\n(`smb-enemy-objects`, `smb2-enemy-objects`, or `mm2-spawns`).",
+          "type": "string",
+          "const": "spawn-objects"
+        },
+        {
+          "description": "Rows of bytes, such as a game's sprite frames (`byte-rows`).",
+          "type": "string",
+          "const": "rows"
+        },
+        {
+          "description": "A text encoding: which tile stands for each character, read from\nthe `charset` of a text asset (`ppu-strings`). Presentation only.",
+          "type": "string",
+          "const": "font"
+        },
+        {
+          "description": "Tiles written to places on the screen, as a console's update\nstrings write them (`ppu-strings`): a status bar's fixed text.\nPresentation only.",
+          "type": "string",
+          "const": "screen-text"
+        },
+        {
+          "description": "Sprite frames as layouts of tiles, each tile with its own place in\npixels, flips, palette and tiles slot, with the sprite palettes\neach level showed (`sprite-set`, written by `gp sprites capture`\nfrom a game's sprite tables and recordings; docs/formats/sprite-set.md).\nPresentation only. Since core 0.4.2.",
+          "type": "string",
+          "const": "sprite-set"
+        },
+        {
+          "description": "Songs as notes per channel, with their patterns, instruments and\ntempo in frames (`gp-songs`, written by `gp sound capture` from a\nrecording's APU register log or by `gp sound decode` from a known\ndriver's data; docs/formats/songs.md). Presentation only. Since\ncore 0.4.3.",
+          "type": "string",
+          "const": "songs"
+        },
+        {
+          "description": "Sound effects in the same form, each tied to the model event it\nmarks. Presentation only. Since core 0.4.3.",
+          "type": "string",
+          "const": "sound-effects"
+        }
+      ]
+    },
+    "AssetSlot": {
+      "description": "A named place for an asset. The model refers to assets only by slot.",
+      "type": "object",
+      "properties": {
+        "capture": {
+          "description": "For a `songs` or `sound-effects` slot: the capture that fills it,\na recording's frames read by `gp sound capture`. Like `from`, a\nrecipe: the songs are game content and stay outside the repo.\nSince core 0.4.3.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SoundCapture"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "entities": {
+          "description": "For a `spawn-objects` slot: the entity type each object kind number\nplaces, by entity name. An object whose number isn't listed places\nnothing in the model.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        },
+        "from": {
+          "description": "The lifting recipe that fills the slot: an asset of an asset map\n(assets/<source>.toml). A commercial-game template ships the slot\nempty with only this recipe.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AssetSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "item_roles": {
+          "description": "A role for each item in the asset, in order (each metatile of a\ntileset, each palette of a palettes slot), for themes and the\nreadability check. Required for metatiles and palettes slots from\ncore 0.3.1 on.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kind": {
+          "$ref": "#/$defs/AssetKind"
+        },
+        "role": {
+          "description": "What the asset is for (docs/model.md lists the roles).",
+          "type": "string"
+        },
+        "tiles": {
+          "description": "For a `screen-text` slot: the `tiles` slot its layouts are drawn\nwith where a screen shows them (`present.screens`), in place of\nthe level's (feature `assets.screen_tiles`): a screen the game\ndraws with another pattern table or CHR bank. Donkey Kong: Original\nEdition draws its title with CHR bank 1 (the hook at $C8F3).\nFor a `level-objects` slot filled from update strings: the `tiles`\nslot a level drawn from it uses, in place of the level's (feature\n`assets.layout_tiles`); Original Edition draws 50m with CHR bank 1\n($CB5D -> $838A). Presentation only.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "role"
+      ]
+    },
+    "AssetSource": {
+      "type": "object",
+      "properties": {
+        "asset": {
+          "description": "The asset's `name` in the map.",
+          "type": "string"
+        },
+        "source": {
+          "description": "The asset map's `source`.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "asset"
+      ]
+    },
+    "Axis": {
+      "type": "string",
+      "enum": [
+        "x",
+        "y",
+        "both"
+      ]
+    },
+    "Blink": {
+      "description": "A sprite's blink. Presentation only.",
+      "type": "object",
+      "properties": {
+        "every": {
+          "description": "Frames shown, then as many hidden.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "when": {
+          "$ref": "#/$defs/When"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "every"
+      ]
+    },
+    "BumpPresent": {
+      "description": "A held cell's bump: how it moves, where its picture is, and the\npicture by the kind it will have, as a game draws the bouncing block\nas sprites.",
+      "type": "object",
+      "properties": {
+        "gravity": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "max_fall": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "offset": {
+          "description": "The picture's top left in pixels from the cell's.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "speed": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "sprites": {
+          "description": "By the tile kind the cell will have: the bump's picture, tiles\nfrom a `tiles` slot as a sprite's (`slot`, `tiles`, `width`,\n`palette`, `cells`). A kind without one draws the cell's metatile\nwith its backdrop clear.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/TilesPicture"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "speed",
+        "gravity"
+      ]
+    },
+    "Button": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "a",
+            "b",
+            "select",
+            "start",
+            "up",
+            "down",
+            "left",
+            "right"
+          ]
+        },
+        {
+          "description": "An arcade coin slot.",
+          "type": "string",
+          "const": "coin"
+        },
+        {
+          "description": "An arcade one-player start button.",
+          "type": "string",
+          "const": "start1"
+        },
+        {
+          "description": "An arcade player's first button (Tapper's tap).",
+          "type": "string",
+          "const": "button1"
+        }
+      ]
+    },
+    "ByMove": {
+      "description": "A camera that moves forward (right or down) by the followed entity's\nwhole-pixel move this frame, by where the entity was in the view on the\nframe before, in whole pixels from the view's top left corner: not at\nall while that place is under `from`, the move less `short_by` (but at\nleast a pixel) from `from`, and the whole move from `full` on. A move\nback or none doesn't move it. Super Mario Bros.' ScrollHandler is 80,\n112 and 1.",
+      "type": "object",
+      "properties": {
+        "from": {
+          "description": "The place in the view, in pixels, where it starts to move.",
+          "$ref": "#/$defs/Fixed"
+        },
+        "full": {
+          "description": "The place where it moves by the whole move.",
+          "$ref": "#/$defs/Fixed"
+        },
+        "hold_with_counters": {
+          "description": "Since core 0.4.23: `push_hold` is a frame timer: it counts down on\nevery frame the `counters` system runs (not frozen, not stopped by a\nstate), whether a state stops the camera or not, and on no other.\nSuper Mario Bros.' DecTimers counts SideCollisionTimer down at the\nstart of each frame unless TimerControl is set, and ScrollLock, which\nstops ScrollHandler, doesn't stop it.",
+          "type": "boolean"
+        },
+        "keep_move": {
+          "description": "Since core 0.4.12: on a frame when a state stops the followed\nentity's system (`stops`) and not the camera's, the camera moves as\nif the entity had moved by its last move again. Super Mario Bros.'\nScrollHandler reads Player_X_Scroll, which only the player's\nmovement routines set, so the screen goes on scrolling while Mario\nshrinks. The last move is world state (`cameras.<name>.move`).",
+          "type": "boolean"
+        },
+        "push_hold": {
+          "description": "Since core 0.4.11: after the followed entity is pushed out of a\nwall (a platformer `run.walls` point or `jump.land_depth`), the\ncamera doesn't move on this many frames less one, from the next.\nSuper Mario Bros.' ImpedePlayerMove sets SideCollisionTimer to $10,\nwhich ScrollHandler waits for, and DecTimers counts it down at the\nstart of each frame. The frames left are world state\n(`cameras.<name>.hold`).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "short_by": {
+          "description": "How much less than the move it moves between `from` and `full`.",
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "full",
+        "short_by"
+      ]
+    },
+    "Camera": {
+      "type": "object",
+      "properties": {
+        "axis": {
+          "description": "The axes it moves along.",
+          "$ref": "#/$defs/Axis"
+        },
+        "by_move": {
+          "description": "Moves by the followed entity's move instead of keeping it `lead`\nfrom the corner; `lead` places it when a level starts. Since core\n0.4.4.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ByMove"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clamp_to_level": {
+          "description": "Keeps the view inside the level.",
+          "type": "boolean"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "follow": {
+          "description": "The entity type it follows (the first one spawned).",
+          "type": "string"
+        },
+        "keep_in_view": {
+          "description": "Since core 0.4.12: the followed entity's whole-pixel place in the\nview across stays from the first to the second, checked each frame\nafter the camera's step, whether the camera moves or not. Past\neither, the entity is put back at it, keeping the fraction of its\nplace, and its speed's whole steps across become 0 unless only the\ndirection away from that edge is held (its `run` actions). Super\nMario Bros.' ScrollHandler ends in ChkPOffscr and KeepOnscr: 0 and\n239, the screen's right edge less 16.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "keep_in_view_rows": {
+          "description": "Feature `camera.keep_in_view_rows`: other bounds for `keep_in_view`\nwhile the followed entity's row is in a range: its whole y on the\nground, and in the air the height it took off from when\n`jump.fatal_drop` keeps it (mechanic word 3), else its y. The first\nrow that holds gives the bounds. Donkey Kong's edge test $D990 also\nstops a walk left on 25m's sixth girder ($59 = 6) at sprite x 104,\nshort of Kong.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KeepRow"
+          }
+        },
+        "keep_in_view_touch": {
+          "description": "Since core 0.4.17: `keep_in_view`'s first bound acts when the place\nreaches it, not only past it, so an entity at that edge loses its\nspeed as one past it does. Super Mario Bros.' GetXOffscreenBits\nsets bit 7 from a difference of 0, while the right edge's test\nstarts a pixel past its bound.",
+          "type": "boolean"
+        },
+        "keep_in_view_turn": {
+          "description": "Feature `camera.keep_in_view_turn`: an entity in the air at either\nbound (or past it) moving toward it turns around, its speed across\nreversed, instead of losing its speed there. Donkey Kong's jump\n($D547) flips Mario's way ($56) at the screen's edge ($D990).",
+          "type": "boolean"
+        },
+        "lead": {
+          "description": "How far the followed entity's position is kept from the view's top\nleft corner, on each axis it moves along.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fixed"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "scroll_back": {
+          "description": "Can move back left (or up). Super Mario Bros.' camera can't.",
+          "type": "boolean"
+        },
+        "size": {
+          "description": "Width and height of the view in pixels.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "follow",
+        "axis",
+        "size",
+        "lead"
+      ]
+    },
+    "Cell": {
+      "description": "One tile of a sprite's layout. Presentation only.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "Where the tile goes, as a column and row of 8-pixel tiles from the\npicture's top left, instead of its place in the rows of `width`.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "flip_x": {
+          "description": "Mirrored left to right.",
+          "type": "boolean"
+        },
+        "flip_y": {
+          "description": "Mirrored top to bottom.",
+          "type": "boolean"
+        },
+        "palette": {
+          "description": "A palette for this tile instead of the sprite's.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "CellsPresent": {
+      "description": "How the cells the game changes are drawn (the feature `present.cells`). Presentation\nonly: the simulation changes the cells' kinds, and this says which\npicture each new kind shows.",
+      "type": "object",
+      "properties": {
+        "bump": {
+          "description": "While a head hit holds a cell, the picture it will show (or its\nown, when it stays as it was) rises and falls.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BumpPresent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "held": {
+          "description": "The metatile a cell shows while a head hit holds it.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "kinds": {
+          "description": "By tile kind (`empty`, `solid`, ...): the metatile a cell changed\nto that kind is drawn with, by its number in the level's tileset\n(a grid level's `metatiles` slot, or a layout's metatile sets).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Change": {
+      "description": "One way a counter changes: when an event fires, or every so many\nframes. Exactly one of `on` and `every`.",
+      "type": "object",
+      "properties": {
+        "after": {
+          "description": "Since core 0.4.13, with `on`: the change is made this many frames\nafter the event, counted every frame, frozen or not, from the next\none. Super Mario Bros. adds an enemy's points when its floatey\nnumber's timer, set to $30 by SetupFloateyNumber, reads $2b in\nFloateyNumbersRoutine, 5 frames after the kill. Default 0, at once.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "by": {
+          "description": "How much it changes by.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "every": {
+          "description": "Frames between changes, counted in the `counters` system while\nnothing freezes the world (or always, with the counter's\n`runs_when_frozen`).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "if": {
+          "description": "Feature `change.if`, with `on`: the event changes the counter only\nwhile this counter condition holds, tested as the event fires.\nDonkey Kong's points routine ($D008) adds nothing while the attract\ndemo plays ($58), though the points sprite still shows.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Guard"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "of": {
+          "description": "Since core 0.4.13, with `on`: only an event that concerns an entity\nof one of these kinds changes it. Default any.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "on": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Clip": {
+      "description": "A run of frames a sprite shows while its `when` holds. Presentation\nonly: it reads the entity's state and never changes it.",
+      "type": "object",
+      "properties": {
+        "by_speed": {
+          "description": "Frames each picture shows for, by the entity's speed: the first\nstep whose `at_least` its speed reaches (a step without one always\ndoes). The time is picked again each time the picture changes, so a\nfaster entity steps faster.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SpeedStep"
+          }
+        },
+        "clock": {
+          "description": "What counts the time: `own` (the default), a timer per entity that\nstarts when the clip does; `game`, the frames the game has run,\nso every entity showing the clip changes picture together; or\n(since core 0.4.9) `body`, one timer per entity that runs down\nwhatever clip shows, as a game keeps one animation timer per\nobject: the clip steps after drawing a picture when the timer has\nrun out, and sets it again.",
+          "$ref": "#/$defs/Clock"
+        },
+        "every": {
+          "description": "Frames each picture shows for. Give this or `by_speed`; with\nneither, a clip of one frame.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "frames": {
+          "description": "The frames, shown in turn and then from the first again.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ClipFrame"
+          }
+        },
+        "hold": {
+          "description": "Never changes picture: it keeps the picture the entity showed when\nthe clip started, when that is one of its frames, and else shows\nits first. A walk cycle that stops in the air is a held clip of the\nwalk's frames. Since core 0.4.2.",
+          "type": "boolean"
+        },
+        "speed_before": {
+          "description": "`by_speed` reads the speed the entity had on the frame before, as\na game that picks its animation's time before it moves. Super Mario\nBros.' GetPlayerAnimSpeed runs before ImposeFriction. Since core\n0.4.18.",
+          "type": "boolean"
+        },
+        "when": {
+          "description": "What must hold for the clip to show. Empty: always.",
+          "$ref": "#/$defs/When"
+        },
+        "while_frozen": {
+          "description": "Keeps changing pictures while the world is frozen. Without it the\nclip stops while a `freeze` state holds the world.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "frames"
+      ]
+    },
+    "ClipFrame": {
+      "description": "One frame of a clip: a row of the sprite's `frame` slot or tile\nnumbers, or else the sprite's own frame, with flips and a layout.",
+      "type": "object",
+      "properties": {
+        "cells": {
+          "description": "Its tiles' flips, palettes and places, as the sprite's `cells`;\nwithout them, the sprite's.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Cell"
+          }
+        },
+        "colors": {
+          "description": "Its colors, as the sprite's `colors`, for a game that writes a\nsprite palette while something lasts (Donkey Kong's 100m turns the\nfires' palette blue from a hammer's touch to its end, $D89A and\n$D7F2). Without it, the sprite's. Feature `clip.frame_colors`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PaletteRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "every": {
+          "description": "Frames this picture shows for, in place of the clip's `every`, for\na game that holds some pictures longer than others (Donkey Kong's\nPauline calls for help in eight 16-frame steps, then waits). Every\nframe of the clip gives one, or none does. Feature\n`clip.frame_every`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "flip_x": {
+          "description": "The whole picture mirrored left to right, on top of any facing flip.",
+          "type": "boolean"
+        },
+        "flip_y": {
+          "description": "The whole picture mirrored top to bottom.",
+          "type": "boolean"
+        },
+        "offset": {
+          "description": "Its picture's top left from the entity's position, as the sprite's\n`offset`, for a game that places each picture of a turn apart\n(Super Mario Bros.' hammer, DrawHammer). Without it, the sprite's.\nSince core 0.4.21.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "row": {
+          "description": "A row of the slot the sprite's `frame` names, or of `slot`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "slot": {
+          "description": "The `rows` slot `row` is read from, in place of the sprite's frame\nslot, for a game that keeps its pictures in tables of their own\n(Donkey Kong's poses, each behind a size byte). Feature\n`clip.frame_slot`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tiles": {
+          "description": "Tile numbers, row by row, in the sprite's `width`.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Clock": {
+      "description": "What counts a clip's time.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "own",
+            "game"
+          ]
+        },
+        {
+          "description": "Since core 0.4.9.",
+          "type": "string",
+          "const": "body"
+        }
+      ]
+    },
+    "Cmp": {
+      "type": "string",
+      "enum": [
+        "<",
+        "<=",
+        "==",
+        "!=",
+        ">=",
+        ">"
+      ]
+    },
+    "ColorCycle": {
+      "description": "A palette color that steps through a list over time, as a game's\npalette rotation does.",
+      "type": "object",
+      "properties": {
+        "colors": {
+          "description": "A `table` slot whose first column lists the colors in turn.",
+          "type": "string"
+        },
+        "counter": {
+          "description": "Since core 0.4.7: a counter whose value picks the color instead of\nthe frame count, for a game that keeps its color rotation's place in\na variable (a mapping can then carry the place into a clip's start).\nThe cycle's own `every` is then ignored. Give the counter a `max`\nof the list's length less one, `wrap`, and an `every` change.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "every": {
+          "description": "Frames each color shows for.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "index": {
+          "description": "The color within it, 1 to 3.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "palette": {
+          "description": "The background palette, 0 to 3.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "shift": {
+          "description": "With `counter`: added to its value (modulo the list's length) to\nfind the color shown, for a game whose counter has already stepped\npast the color on screen (-1). Default 0.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "palette",
+        "index",
+        "colors",
+        "every"
+      ]
+    },
+    "Cost": {
+      "description": "Feature `cost.frame`: a frame's CPU cycles in the original, `base`\nplus each term whose tests hold, times the bodies of its `per` kind\nthat pass its `per_tests` when it has one. The simulation sums it at the end of each\nframe, before the `hook_last` hooks, adds what the hooks added\n(`ExtCx::add_cycles`), and a hook reads the sum\n(`ExtCx::frame_cycles`): Donkey Kong's idle loop steps its random\nregister in the cycles the frame's work leaves.",
+      "type": "object",
+      "properties": {
+        "base": {
+          "description": "Cycles every frame.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "terms": {
+          "description": "The terms, each a routine's part or a branch of one.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CostTerm"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "CostTerm": {
+      "description": "One term of a [`Cost`]: `cycles` on a frame every test holds.",
+      "type": "object",
+      "properties": {
+        "cycles": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "per": {
+          "description": "An entity kind: the term counts once for each active body of it\nthat passes `per_tests`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "per_tests": {
+          "description": "Tests on each body of `per`: its `ext` words (`word`).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CostTest"
+          }
+        },
+        "routine": {
+          "description": "The routine or branch it stands for, by the code's address, and\nwhy: informative.",
+          "type": "string"
+        },
+        "tests": {
+          "description": "Each must hold.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CostTest"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "cycles"
+      ]
+    },
+    "CostTest": {
+      "description": "A test of a [`CostTerm`]: one thing it reads, in a range.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "With `counter`: read as the frame started (`start`, the default) or\nas it ends (`end`), for a routine that runs before or after the\nframe's other work changes it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "at_least": {
+          "description": "The value is at least this.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "below": {
+          "description": "The value is below this.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "counter": {
+          "description": "A counter, by name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "held": {
+          "description": "An input action held this frame (1) or not (0).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "held_before": {
+          "description": "An input action held the frame before (1) or not (0).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pad": {
+          "description": "Feature `cost.frame_pad`: an input action's bits on controller 1 as\npressed this frame (1) or not (0), before `keep_direction`, a turn's\ncontroller or a hook's held actions: the pad a controller routine\nreads, which runs on every frame of an attract demo too.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "description": "A game machine's state (`machine:state`) as the frame started: 1 in\nit, 0 not.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "word": {
+          "description": "In `per_tests`: the body's `ext` word, 0 to 3.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "Counter": {
+      "description": "A number the game keeps: score, coins, lives, time. It starts at\n`start` when the game does, and a level's `counters` set it when the\nlevel starts; restarting a level leaves it alone otherwise.",
+      "type": "object",
+      "properties": {
+        "change": {
+          "description": "What changes it, in order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Change"
+          }
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "high_of": {
+          "description": "Feature `counter.high_of`: the counter keeps the highest value the\nnamed counter has had, raised as that one changes, as a top score\ndoes (Donkey Kong's $21-$23, which $D03E raises from the score after\nevery award).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max": {
+          "description": "It never goes above this: a change past it stops at it, or with\n`wrap`, goes on from `min` (or 0) and fires `<counter>.wrapped`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "min": {
+          "description": "It never goes below this. Reaching it fires `<counter>.reached_min`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "restarts_clock": {
+          "description": "Feature `counter.restarts_clock`: a level start that sets the counter (the level's\n`counters`) also starts its `every` clocks over, as Super Mario\nBros.' InitializeArea clears GameTimerCtrlTimer with the other frame\ntimers when an area starts.",
+          "type": "boolean"
+        },
+        "runs_when_frozen": {
+          "description": "Its `every` changes go on counting while the world is frozen\n(Super Mario Bros.' color rotation, which runs while Mario dies).\nSince core 0.4.8.",
+          "type": "boolean"
+        },
+        "shift": {
+          "description": "Since core 0.4.20: the counter is a shift register: it steps every frame the `counters`\nsystem runs (Super Mario Bros.' PseudoRandomBitReg, which the NMI\nrotates every frame).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CounterShift"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "start": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "wrap": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CounterShift": {
+      "description": "A linear feedback shift register in a counter's low `bits` bits: each\nstep moves them one bit down, and the top bit becomes the exclusive-or of\nthe old bits at `taps`.",
+      "type": "object",
+      "properties": {
+        "bits": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "taps": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "bits",
+        "taps"
+      ]
+    },
+    "CounterTest": {
+      "description": "A test on one of the model's counters. Presentation only.",
+      "type": "object",
+      "properties": {
+        "at_least": {
+          "description": "The counter is at least this.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "below": {
+          "description": "The counter is below this.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "name": {
+          "description": "The counter, by name.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ]
+    },
+    "DespawnAt": {
+      "description": "What despawning by the view measures (core 0.4.10).",
+      "oneOf": [
+        {
+          "description": "The far edge behind the view, the near edge ahead of it.",
+          "type": "string",
+          "const": "edge"
+        },
+        {
+          "description": "The entity's position, in whole pixels, both ways.",
+          "type": "string",
+          "const": "position"
+        }
+      ]
+    },
+    "Device": {
+      "oneOf": [
+        {
+          "description": "The standard NES controller.",
+          "type": "string",
+          "const": "nes-pad"
+        },
+        {
+          "description": "An arcade cabinet's controls for one player: the coin slot, the\none-player start button, a joystick and one button. The runtime\nprotocol's bits are coin, start1, right, left, down, up and\nbutton1 from bit 0 (gp-arcade's order, MAME's oracle log's).",
+          "type": "string",
+          "const": "arcade"
+        }
+      ]
+    },
+    "Draw": {
+      "description": "How a level is drawn ahead of the view (Super Mario Bros.' area\nparser): when it starts, every column left of `ahead` pixels past the\nview's far edge; then, each time the view's near edge passes a whole\n`step` (counted from the level's left edge), the next `step` pixels of\ncolumns, one column every `every` frames from that frame. Since core\n0.4.10.",
+      "type": "object",
+      "properties": {
+        "ahead": {
+          "description": "Pixels drawn past the view's far edge when the level starts.",
+          "$ref": "#/$defs/Fixed"
+        },
+        "every": {
+          "description": "Frames from one column of a set to the next.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pause": {
+          "description": "Frames after a set starts on which no entity appears by the view\nbut `drawn` ones (Super Mario Bros.' enemy loop leaves while\nAreaParserTaskNum is 7).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "step": {
+          "description": "Pixels of columns in a set: a whole number of tiles.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "ahead",
+        "step",
+        "every"
+      ]
+    },
+    "EffectAt": {
+      "description": "Where an effect starts.",
+      "oneOf": [
+        {
+          "description": "The cell a head hit took on the event's frame.",
+          "type": "string",
+          "const": "hit"
+        },
+        {
+          "description": "The event's entity's position.",
+          "type": "string",
+          "const": "entity"
+        }
+      ]
+    },
+    "EffectOrder": {
+      "description": "Feature `present.effect_order`: an effect takes the table's sprites\nfrom `at + step * k`, k being the place of the counter its phase took\namong the phase's `until_counters` (the points sprite a game with two\ngave it), else 0.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "The first hardware sprite's number in the table (0 to 63).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "step": {
+          "description": "Hardware sprites each of its places takes (default 4).",
+          "type": "integer",
+          "format": "uint32",
+          "default": 4,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "at"
+      ]
+    },
+    "EffectPhase": {
+      "description": "One phase of an effect: its pictures, how it moves and when it ends.",
+      "type": "object",
+      "properties": {
+        "cells": {
+          "description": "Each tile's flips, palette and place, as a sprite's `cells`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Cell"
+          }
+        },
+        "every": {
+          "description": "Frames each picture shows for. Default 1.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "frames": {
+          "description": "The pictures, each a list of tile numbers row by row, shown in turn\nby the game's frames.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        },
+        "length": {
+          "description": "Ends after this many frames.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "motion": {
+          "description": "How it moves up and down. The first phase's speed is the start's;\na later phase with a motion starts at its own speed.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MotionPresent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "palette": {
+          "description": "A sprite palette of the level's palettes, as a sprite's.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "rise_every": {
+          "description": "Rises a pixel on each frame whose count is a multiple of this.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "slot": {
+          "description": "A slot of kind `tiles`.",
+          "type": "string"
+        },
+        "until_counter": {
+          "description": "Ends on the frame after one on which this counter is 0 or less, as\na game that hides a sprite by a timer it reads before the frame's\ntimers step (feature `present.effects.until_counter`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "until_counters": {
+          "description": "As `until_counter`, with the one of these counters that is highest\nas the phase starts: the timer the event's picture took, for a game\nthat shows it in whichever of several slots is free (feature\n`present.effects.until_counters`). Donkey Kong's points sprites:\n`points_timer` and `points_timer_2` ($41, $42; $CFC6 takes the\nfirst free).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "until_gone": {
+          "description": "Ends on the frame the event's entity is gone, and the next phase\nstarts on that frame (feature `present.effects.until_gone`).",
+          "type": "boolean"
+        },
+        "until_speed": {
+          "description": "Ends on the frame its speed's whole part reaches this.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "while_frozen": {
+          "description": "Goes on while a state freezes the world, as a game object the\nfreeze doesn't stop; its pictures and rise count the world's\nframes.",
+          "type": "boolean"
+        },
+        "width": {
+          "description": "Tiles per row.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "with_camera": {
+          "description": "Moves across as the camera does, so it keeps its place on screen.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "slot",
+        "frames",
+        "width",
+        "palette"
+      ]
+    },
+    "EffectPresent": {
+      "description": "A short-lived picture an event starts (the feature `present.effects`): its phases in\nturn, then gone. Presentation only.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/EffectAt"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "event": {
+          "description": "An event of the model.",
+          "type": "string"
+        },
+        "offset": {
+          "description": "The picture's top left in pixels from the cell's top left or the\nentity's position.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "phases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EffectPhase"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "event",
+        "at",
+        "phases"
+      ]
+    },
+    "Enter": {
+      "description": "Where the player comes out.",
+      "type": "object",
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "y": {
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y"
+      ]
+    },
+    "Entity": {
+      "description": "Core entity fields. Other keys are components of the genre extensions the model declares, each checked against its extension's schema.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "despawn_ahead": {
+          "description": "Its own `despawn_ahead`, in place of the level's: Super Mario Bros.'\ncannon bill flies off to the right and goes past the same line\n(OffscreenBoundsCheck), where a level's would also take what a start\nor a layout leaves out there.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "despawn_behind": {
+          "description": "Its own `despawn_behind`, in place of the level's: Super Mario\nBros.' piranha plants and hammer brothers go sooner than the rest\n(OffscreenBoundsCheck). Since core 0.4.10.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "despawn_behind_wrap": {
+          "description": "`[from, behind]`: while the view's left edge is `from` or more into\nits 256-pixel page, `behind` stands in for `despawn_behind`. Super\nMario Bros.' OffscreenBoundsCheck adds 57 to the edge's low byte and\nthe carry out of that takes a whole page off the limit.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "ext": {
+          "description": "A hand-written behavior behind the `ext` boundary, by name, for what\nthe components can't say. It runs in the system of the entity's\nrole: `platformer.player` for the player, `platformer.enemies` for\nthe rest.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ext_params": {
+          "description": "The numbers the `ext` hook reads, by name: speeds, timers, offsets.\nEach is a fact with evidence, like any other, and a state's `set`\ncan change them. Only an entity with `ext` has them.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Fixed"
+          }
+        },
+        "ext_rows": {
+          "description": "Feature `entity.ext_rows`: more tables the `ext` hook reads, by\nname, each a `rows` asset slot whose rows' numbers, in order, are\none table, for a hook that reads by address a span the model lifts\nas rows. Only an entity with `ext` has them.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "ext_tables": {
+          "description": "The tables the `ext` hook reads, by name: each a column of one of\nthe model's `table` asset slots, as `<slot>.<column>`, so indexed\ndata the hook needs is lifted from the original like any asset.\nOnly an entity with `ext` has them.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "extra_slots": {
+          "description": "More of a level's `spawn_slots` it takes besides its own, numbered\nslots included: Super Mario Bros.' long firebar, for which\nDuplicateEnemyObj takes the next free enemy slot.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "hitbox": {
+          "description": "The box that touches other entities and tiles, from the entity's\nposition (its top left corner).",
+          "$ref": "#/$defs/Rect"
+        },
+        "hook_first": {
+          "description": "Feature `entity.hook_first`: its `ext` hook runs at the start of the\n`platformer.player` system, before the player moves, rather than in\n`platformer.enemies` after it: a game routine that sets what the\nplayer's routine reads. Donkey Kong's attract demo ($EBDA) puts the\nscript's direction in $56 just before Mario's routine reads it.",
+          "type": "boolean"
+        },
+        "hook_frame_start": {
+          "description": "Feature `entity.hook_frame_start`: its `ext` hook's `frame_start`\nruns at the start of every frame, before the first system, frozen\nor not, as a game's NMI runs its sound driver before anything else.\nDonkey Kong's sound driver steps there.",
+          "type": "boolean"
+        },
+        "hook_last": {
+          "description": "Feature `entity.hook_last`: its `ext` hook runs once at the end of\nevery frame, after every system, frozen, stopped or a level start\nalike, and not in `platformer.enemies`: a game's idle loop, which\nruns after the frame's work whatever it was. Donkey Kong's ($C7E1)\nsteps its random register once a pass while it waits for the NMI.",
+          "type": "boolean"
+        },
+        "hook_through_stops": {
+          "description": "Feature `entity.hook_through_stops`: its `ext` hook still runs on a\nframe a state's `stops` lists the system it runs in (not under a\n`freeze`). Donkey Kong's oil drum keeps the game's frame timers,\nwhich count on through a death while the fires stand still.",
+          "type": "boolean"
+        },
+        "machine": {
+          "description": "The entity's own state machine (small and big, walking and in its\nshell). Each instance runs its own copy. A state's `set` changes\nthe entity's fields while in it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Machine"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "no_slot": {
+          "description": "Takes none of a level's `spawn_slots`: Super Mario Bros.' hammers\nand a firebar's fireballs, which the game keeps outside its enemy\nslots. Since core 0.4.10.",
+          "type": "boolean"
+        },
+        "role": {
+          "description": "What the entity is for (docs/model.md lists the roles).",
+          "type": "string"
+        },
+        "size": {
+          "description": "Width and height.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fixed"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "sprite": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sprite"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tile_collision": {
+          "description": "Stops against solid tiles and stands on them.",
+          "type": "boolean"
+        },
+        "tile_hitbox": {
+          "description": "The box that touches tiles, when it isn't `hitbox`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "role",
+        "size",
+        "hitbox"
+      ]
+    },
+    "EntryRef": {
+      "description": "One entry of an asset that holds a list per entry, such as one area's\nobjects.",
+      "type": "object",
+      "properties": {
+        "entry": {
+          "description": "The entry's `name` in the asset map.",
+          "type": "string"
+        },
+        "slot": {
+          "description": "The slot.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "slot",
+        "entry"
+      ]
+    },
+    "Evidence": {
+      "description": "Where a fact comes from.",
+      "type": "object",
+      "properties": {
+        "confidence": {
+          "description": "How sure, in percent.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "refs": {
+          "description": "What supports it: files with line numbers, baselines, recordings.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Ref"
+          }
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "confidence"
+      ]
+    },
+    "Exit": {
+      "description": "A way from one level to another.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enter": {
+          "description": "Where the player comes out in `to`, its top left corner. Without it,\nthe player's spawn there.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Enter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "keep": {
+          "description": "The player's coordinate on this axis keeps its place in the view\nacross the exit (its position less the view's corner), as a room\nchange that scrolls does; `enter` gives the other one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KeepAxis"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scroll": {
+          "description": "The exit takes this many frames, as a room change that scrolls the\nview does: the world is frozen and the player held until they're\nover.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "start": {
+          "description": "Taking it starts `to` as a level, as `next-level` does (its counter\nvalues, `level.started`, and `restart-level` starts it again),\nrather than entering it as a room of the level being played. A\npipe intro's pipe and a warp zone's pipes are.",
+          "type": "boolean"
+        },
+        "take": {
+          "description": "What takes it. Without it the exit is only in the progression\ngraph and nothing in the game takes it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Take"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "to": {
+          "description": "The level it leads to.",
+          "type": "string"
+        },
+        "via": {
+          "$ref": "#/$defs/Via"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "to",
+        "via"
+      ]
+    },
+    "Fixed": {
+      "description": "A fixed-point number with 16 fraction bits: an integer, or an exact decimal string such as \"0.25\". Floats are refused.",
+      "oneOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string",
+          "pattern": "^-?[0-9]+(\\.[0-9]{1,16})?$"
+        }
+      ]
+    },
+    "GroundOnEnter": {
+      "description": "What entering a state does to an entity's standing (core 0.4.13).",
+      "type": "string",
+      "enum": [
+        "leave",
+        "land"
+      ]
+    },
+    "Guard": {
+      "description": "A comparison of a counter with a number.",
+      "type": "object",
+      "properties": {
+        "cmp": {
+          "$ref": "#/$defs/Cmp"
+        },
+        "counter": {
+          "type": "string"
+        },
+        "value": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "counter",
+        "cmp",
+        "value"
+      ]
+    },
+    "Halfway": {
+      "description": "A level's checkpoint (feature `level.halfway`): when `restart-level` starts the\nlevel again while the first camera's x is at least `from`, that camera\nstarts at `from` and the player at `at`, and the entities come as the\nview reaches them from there. Super Mario Bros.' PlayerLoseLife sets\nHalfwayPage from HalfwayPageNybbles when ScreenLeft_PageLoc has reached\nthe level's page, and InitializeArea starts the area at that page.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fixed"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "from": {
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "at"
+      ]
+    },
+    "Header": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "events": {
+          "description": "Events of the model's own, which `ext` hooks fire and transitions\nand counter changes name, such as `ladder.grabbed`. One fired with\nan entity concerns only that instance's machine; one fired without\nconcerns every instance.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "extensions": {
+          "description": "The genre extensions the model uses, with their versions.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "features": {
+          "description": "The optional features the model uses, by name, such as\n`launcher` or `contact.touch_edges` ([`crate::features`]). A reader\nrefuses a model listing one it doesn't know. Without the list the\nfeatures are derived from the fields the model sets; with it, each\none used must be listed.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "frame_rate": {
+          "description": "Frames per second as presented: \"60\", or a ratio such as\n\"39375000/655171\" (the NTSC NES). The simulation counts frames and\nnever reads it.",
+          "$ref": "#/$defs/Ratio"
+        },
+        "name": {
+          "description": "A short name: letters, digits and `_`.",
+          "type": "string"
+        },
+        "profile": {
+          "description": "The profile the model was built in (core 0.4.5), such as \"normal\":\nset only by applying one from the template's `profiles.toml`\n([`crate::profile`]), never in a `model.toml`. Absent, the model is\nits base profile, \"retro\". Runtimes put it in the state hash.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema": {
+          "description": "The core schema version the model is written for, such as \"0.4.1\".",
+          "type": "string"
+        },
+        "source": {
+          "description": "The source ID the model was made from, as in sources/*.toml or an\nasset map, when there is one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start_level": {
+          "description": "The level the game starts in. Needed when there's more than one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "systems": {
+          "description": "The order the systems run in each frame: every system of the core\nand of each declared extension, once each ([`CORE_SYSTEMS`]).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "title": {
+          "type": "string"
+        },
+        "view": {
+          "$ref": "#/$defs/View"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "name",
+        "title",
+        "view",
+        "frame_rate"
+      ]
+    },
+    "Hidden": {
+      "description": "Bodies not drawn while one of the rule states holds and every counter\ntest does (feature `present.hidden`). Presentation only.",
+      "type": "object",
+      "properties": {
+        "hud": {
+          "description": "The HUD not drawn either: its layer, its fields and its sprites,\nas Donkey Kong's 100m ending blanks the status rows ($C6E4, entry\n$0A of $C03C). With no `kinds`, only the HUD.",
+          "type": "boolean"
+        },
+        "kinds": {
+          "description": "The entity types hidden, whichever layer they are drawn in. None\ngiven: the console's sprite layer, every body but those drawn as\nname-table tiles and the HUD's sprites, as `present.sprites_off`,\nunless `hud` is given.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "states": {
+          "description": "The rule states, as `<machine>.<state>`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "when": {
+          "description": "The model's counters in ranges, each of which must hold too.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CounterTest"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "states"
+      ]
+    },
+    "Hud": {
+      "description": "A heads-up display: fixed tiles and fields bound to counters and the\nlevel, drawn in screen positions over the view. Its role is `hud`, for\nthemes.",
+      "type": "object",
+      "properties": {
+        "field": {
+          "description": "Text drawn from the game's state.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HudField"
+          }
+        },
+        "font": {
+          "description": "A slot of kind `font`: the tile for each character the fields show.",
+          "type": "string"
+        },
+        "layer": {
+          "description": "An entry of a `screen-text` slot: the HUD's fixed tiles and their\npalettes, such as the status bar's names.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntryRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "size": {
+          "description": "Width and height in tiles of the part of the screen the HUD covers,\nfrom the top left. Default the whole screen.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "sprite": {
+          "description": "Pictures the game draws as sprites over its status bar, such as the\none it uses to split the screen. Since core 0.4.7.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HudSprite"
+          }
+        },
+        "tiles": {
+          "description": "A slot of kind `tiles`: the tiles the HUD is drawn with.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "tiles",
+        "font"
+      ]
+    },
+    "HudField": {
+      "description": "One piece of HUD text: a counter, the level's label or fixed text.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "Column and row of its first character, in tiles from the screen's\ntop left.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "counter": {
+          "description": "A counter, by name, shown as a number.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "digits": {
+          "description": "For a counter: how many digits, padded on the left with `pad`. A\nnumber too long for them shows its last digits.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "divide": {
+          "description": "For a counter: shown divided by this, rounding down, for a game\nthat keeps a number's last digit fixed in the HUD's layer (a score\nwhose ones are always 0). Default 1.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "level_label": {
+          "description": "Shows the current level's `present.label`.",
+          "type": "boolean"
+        },
+        "pad": {
+          "description": "The character a counter is padded with. Default \"0\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "palette": {
+          "description": "The background palette its tiles use, or with `sprite` the sprite\npalette. Default 0.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "sprite": {
+          "description": "Drawn as sprites, one 8x8 sprite a character, as a game that puts\nits counters in the sprite table does (Moss Hop): the screen\nmeasure counts its pixels as the sprite layer's, like a HUD sprite.",
+          "type": "boolean"
+        },
+        "text": {
+          "description": "Fixed text.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "when": {
+          "description": "Feature `present.hud.field_when`: drawn only while every one of\nthese counter tests holds. Donkey Kong draws player 2's label and\nscore only in a two-player game, and each player's score in its own\nplace whoever's turn it is.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Guard"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "at"
+      ]
+    },
+    "HudSprite": {
+      "description": "One sprite tile fixed on the screen, drawn over the HUD. The screen\nmeasure counts its pixels as the sprite layer's.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "The tile's top left corner, in screen pixels.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "behind": {
+          "description": "Behind the background, as the NES's priority bit puts a sprite: its\npixels show only where the HUD's fixed layer draws nothing.",
+          "type": "boolean"
+        },
+        "palette": {
+          "description": "The sprite palette, 0 to 3. Default 0.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "tile": {
+          "description": "The tile's number in that slot.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "tiles": {
+          "description": "A slot of kind `tiles`: the sprite tiles.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "at",
+        "tiles",
+        "tile"
+      ]
+    },
+    "Input": {
+      "type": "object",
+      "properties": {
+        "actions": {
+          "description": "Action names to buttons. Extensions read actions by name.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Button"
+          }
+        },
+        "device": {
+          "$ref": "#/$defs/Device"
+        },
+        "keep_direction": {
+          "description": "Feature `input.keep_direction`: the pad's directions are latched as\na game filters them. A direction that acted on the frame before and\nis still held stays the only one, and newly held ones wait until it\nis let go; with none of them held, every direction held acts.\nDonkey Kong's pad routine ($F549) keeps the old directions that are\nstill held, so Up added while walking left doesn't climb until Left\nis let go.",
+          "type": "boolean"
+        },
+        "turn": {
+          "description": "Feature `input.turn`: in a game whose players take turns, the\nplayer whose turn it is plays from their own controller. While the\ncounter is k, these actions read controller k + 1; every other\naction reads controller 1. Donkey Kong's player routine reads the\npad at $15 + 2 times the player in $52 ($D175), so player 2 plays\nfrom controller 2, while Start and Select are read from controller\n1 only ($CF42, $CE8B).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Turn"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "device",
+        "actions"
+      ]
+    },
+    "KeepAxis": {
+      "description": "Which coordinate an exit keeps.",
+      "type": "string",
+      "enum": [
+        "x",
+        "y"
+      ]
+    },
+    "KeepRow": {
+      "description": "A row of a camera's `keep_in_view_rows`: from `rows[0]` to `rows[1]`\n(whole pixels down, both in), the bounds are `bounds`.",
+      "type": "object",
+      "properties": {
+        "bounds": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "rows",
+        "bounds"
+      ]
+    },
+    "Level": {
+      "description": "Core level fields. Other keys are components of the genre extensions the model declares, each checked against its extension's schema.",
+      "type": "object",
+      "properties": {
+        "appear_still": {
+          "description": "An entity that appears by the view first moves on the frame after,\nas a game that fills an enemy slot instead of running it does.\nSince core 0.4.10.",
+          "type": "boolean"
+        },
+        "camera": {
+          "description": "How the cameras move in this level, where it differs from each\ncamera's own settings.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LevelCamera"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "counters": {
+          "description": "Values counters take when the level starts, by counter name, such as\nthe time limit.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "despawn_after_move": {
+          "description": "`despawn_behind` and `despawn_ahead` are tested after the enemies\nsystem has moved everything, rather than in the `spawn` system:\nSuper Mario Bros.' RunNormalEnemies ends in OffscreenBoundsCheck, so\nan enemy goes on the frame its own step takes it past the line.\nSince core 0.4.18.",
+          "type": "boolean"
+        },
+        "despawn_ahead": {
+          "description": "Entities other than the player go when their left edge is this many\npixels right of the view's right edge (along y: their top below the\nview's bottom). Without it they stay.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "despawn_at": {
+          "description": "What `despawn_behind` and `despawn_ahead` measure from the view's\nedges: `edge` (the default), the entity's far edge behind and its\nnear edge ahead; or `position`, its position's whole pixels both\nways (Super Mario Bros.' OffscreenBoundsCheck compares\nEnemy_X_Position). Since core 0.4.10.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DespawnAt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "despawn_behind": {
+          "description": "Entities other than the player go when their right edge is this many\npixels left of the view. Without it they stay. Along y (their bottom\nedge above the view) when the level's camera follows y only.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "draw": {
+          "description": "The level is drawn ahead of the view in sets of columns, and a\nspawn marked `drawn` appears as its column is drawn. Since core\n0.4.10.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Draw"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "empty": {
+          "description": "Feature `level.empty`: a level of `size` empty cells, with no grid\nand no layout. A new game's skeleton (`gp game new`) starts with one,\nso its model runs and its clips can be scored before the level is\nlifted from the game.",
+          "type": "boolean"
+        },
+        "exit": {
+          "description": "Ways to other levels besides `next`, for the progression graph.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Exit"
+          }
+        },
+        "grid": {
+          "description": "A slot of kind `level-grid`: the level's tiles. A level has either\na grid or a `layout`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "halfway": {
+          "description": "Feature `level.halfway`: where `restart-level` starts this level again,\nrather than the level last started, once the view got far enough\nin it (a checkpoint).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Halfway"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hit_widths": {
+          "description": "The width, in pixels, an entity's touches use in this level in place\nof its hitbox's, by entity name, as Super Mario Bros.' SPBBox picks\na narrower box for lifts in castles and hard mode.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "kind_property": {
+          "description": "With `grid`: the tileset property whose value `tile_kinds` reads,\ninstead of solid or not by `solid_property`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "layout": {
+          "description": "An entry of a `level-objects` slot: the objects that build the\nlevel's tiles.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntryRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "loop_back": {
+          "description": "With `draw`: places the level tests the player as it is drawn, and\nsends them back if they aren't where it wants them.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LoopBack"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "next": {
+          "description": "The level the `next-level` action goes to.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "origin": {
+          "description": "The level's place in a stage of several levels (rooms), in pixels:\nwhat a state mapping adds to a position in it to compare with a\ngame that counts positions across the whole stage.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Fixed"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "present": {
+          "description": "How the level looks. Presentation only.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LevelPresent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "respawn": {
+          "description": "An entity that leaves by `despawn_behind` or `despawn_ahead` waits at\nits spawn to appear again when the view comes back within\n`spawn_ahead` of it, rather than going for good.",
+          "type": "boolean"
+        },
+        "scroll_stop": {
+          "description": "With `draw`: what drawing one column does. Super Mario Bros.'\nScrollLockObject_Warp, a warp zone's area object.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScrollStop"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "size": {
+          "description": "Width and height in grid cells.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "slot_rest": {
+          "description": "With `spawn_slots`, the slots are numbered and keep what their last\nentity left: an entity that appears takes the lowest free one and\nstarts with that entity's speed up and down and the fraction of\nits place across, as Super Mario Bros.' enemy init routines leave\nEnemy_Y_Speed and Enemy_X_MoveForce as the slot had them. A level\nstarts with them 0. The slots are world state. Since core 0.4.11.",
+          "type": "boolean"
+        },
+        "solid_property": {
+          "description": "The tileset property that makes a tile solid. Needed with `grid`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spawn": {
+          "description": "Where entities start, in order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Spawn"
+          }
+        },
+        "spawn_ahead": {
+          "description": "Entities other than the player appear when their spawn's x comes\nwithin this many pixels right of the view (along y, below it, when\nthe level's camera follows y only). Without it every entity appears\nwhen the level starts.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spawn_in_order": {
+          "description": "Entities appear by the view in the order of their spawns (the\n`drawn` ones aside), at most one for each free slot a frame: one\nwaits for those before it, and one whose spawn is already left of\nthe view's last column when its turn comes never appears. Super\nMario Bros.' ProcessEnemyData. Since core 0.4.10.",
+          "type": "boolean"
+        },
+        "spawn_objects": {
+          "description": "An entry of a `spawn-objects` slot: more entities, placed by the\nslot's `entities`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntryRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spawn_slots": {
+          "description": "At most this many entities other than the player (and those with\n`no_slot`) are in the level at once: one whose spawn comes within\nreach of the view while all are taken waits, and a `drawn` one is\nleft out. Super Mario Bros.' five enemy slots. Since core 0.4.10.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "tile_kinds": {
+          "description": "The kind of tile each value is: of `kind_property` for a grid, or of\nthe object format's collision class for a layout (Mega Man 2's\nstage classes). Keys are the values in decimal. A value not listed\nkeeps the kind the format gives it (solid or empty).",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/TileKind"
+          }
+        },
+        "tile_size": {
+          "description": "Width and height of a grid cell in pixels.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "tile_surfaces": {
+          "description": "Feature `level.tile_surfaces`: for a tile value, the pixel row\ninside its cell where a top-only or ladder tile stands (0 is the\ncell's top). A body standing on such tiles follows the surface as\nit walks, a pixel at a time (Donkey Kong's sloped girders). Keys are\ntile values in decimal, as `tile_kinds`'.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0
+          }
+        },
+        "tileset": {
+          "description": "A slot of kind `metatiles`: what each grid number is. Needed with\n`grid`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": true,
+      "required": [
+        "tile_size",
+        "size"
+      ]
+    },
+    "LevelCamera": {
+      "description": "A level's camera settings, for every camera while that level plays.",
+      "type": "object",
+      "properties": {
+        "axis": {
+          "description": "The axes it follows along, instead of the camera's.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Axis"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hold_player": {
+          "description": "While it's more than `step` from where it's going, the followed\nentity doesn't move: a game that scrolls in steps and holds the\nplayer meanwhile.",
+          "type": "boolean"
+        },
+        "keep_in_view": {
+          "description": "Feature `level.camera.keep_in_view`: the followed entity's bounds\nin the view across while this level plays, instead of the camera's\n`keep_in_view` and its `keep_in_view_rows`. Donkey Kong's walk\nstops at a stage's own edges ($D99D reads them by $53 from $C1B4):\nsprite x 16 to 224 on 25m, 8 to 232 on 50m.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Fixed"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "keep_in_view_rows": {
+          "description": "Feature `level.camera.keep_in_view_rows`: with `keep_in_view`, other\nbounds while the followed entity's row is in a range, as a camera's\n`keep_in_view_rows`. Donkey Kong's $D990 stops a walk left at sprite\nx 104 on 75m's fifth girder as on 25m's sixth ($D9C3-$D9DB).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KeepRow"
+          }
+        },
+        "lead": {
+          "description": "The lead, instead of the camera's.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Fixed"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "step": {
+          "description": "The most pixels it moves in a frame; without it, it moves at once.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "LevelPresent": {
+      "description": "How a level looks: presentation only, which the simulation never reads\nand a theme may replace.",
+      "type": "object",
+      "properties": {
+        "background": {
+          "description": "The background color: a row of a `table` slot whose first column is\na color number.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RowRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cycles": {
+          "description": "Palette colors that change over time in this level, instead of the\nmodel's `present.cycles`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ColorCycle"
+          }
+        },
+        "effect_order": {
+          "description": "Feature `present.effect_order`: each effect's place in the same\ntable, by the event that starts it, so it is painted under or over\nthe bodies as the console draws it. Donkey Kong's points sprites\nare $02C0 and $02C8 ($CFC6), sprites 48 and 50, over the hammers'\n52 and under the barrels' 12 on. Presentation only.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/EffectOrder"
+          }
+        },
+        "label": {
+          "description": "The level's name as the HUD shows it, such as \"1-1\".",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "palettes": {
+          "description": "A slot of kind `palettes`: the level's palettes, background first,\nthen sprites. Without it the level has the model's.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sprite_order": {
+          "description": "Feature `present.sprite_order`: each entity's place in the\nconsole's sprite table in this level, by entity name, which the\nsprite limit (`present.screen.sprite_limit`) reads: on a line past\nthe limit the sprites that come last in the table are the ones not\ndrawn. Entities not named come after those named, in body order.\nPresentation only.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/SpriteOrder"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "LoopBack": {
+      "description": "A level that loops: when its draw finishes a check's column with a slot\nfree, a player who isn't standing at the check's height goes back\n`back` pixels with the view and the draw, the level's other entities go\nand wait at their spawns (a `drawn` spawn behind the draw never comes\nback), and the last `keep` columns drawn go back with the view. Super\nMario Bros.' castle mazes (ProcLoopCommand, ExecGameLoopback).",
+      "type": "object",
+      "properties": {
+        "back": {
+          "description": "Pixels back: a whole number of the draw's steps and of tiles.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LoopCheck"
+          }
+        },
+        "keep": {
+          "description": "Columns behind the draw that go back with the view: the columns the\ngame's tile buffer holds.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "back",
+        "keep",
+        "checks"
+      ]
+    },
+    "LoopCheck": {
+      "description": "One place a [`LoopBack`] tests.",
+      "type": "object",
+      "properties": {
+        "x": {
+          "description": "The column, in pixels, the draw has reached.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "y": {
+          "description": "The player's whole pixels down that pass, standing.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y"
+      ]
+    },
+    "Machine": {
+      "description": "A state machine: the game's (`rules`) or an entity's (`states`). The\ncurrent state's first transition whose event fires, or whose time is up,\nand whose `if` holds, moves it to another state.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "initial": {
+          "type": "string"
+        },
+        "states": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/State"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "initial",
+        "states"
+      ]
+    },
+    "MotionPresent": {
+      "description": "A move up and down: each frame the place goes by `speed`, then the\nspeed by `gravity`, at most `max_fall`. Down is positive.",
+      "type": "object",
+      "properties": {
+        "gravity": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "max_fall": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "speed": {
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "speed",
+        "gravity"
+      ]
+    },
+    "MusicBinding": {
+      "description": "A song that plays while a level plays, or while a rule state holds (a\nstate's music takes over from the level's).",
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "slot": {
+          "type": "string"
+        },
+        "song": {
+          "description": "The song's name in the slot's set.",
+          "type": "string"
+        },
+        "state": {
+          "description": "`<rules machine>.<state>`, such as `game.dying`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "slot",
+        "song"
+      ]
+    },
+    "PaletteRef": {
+      "description": "One palette of a `palettes` slot, by number from 0.",
+      "type": "object",
+      "properties": {
+        "palette": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "slot": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "slot",
+        "palette"
+      ]
+    },
+    "Present": {
+      "description": "How the game is shown. Presentation only: the simulation never reads\nit, and a theme may replace any of it.",
+      "type": "object",
+      "properties": {
+        "cells": {
+          "description": "The feature `present.cells`: how a cell the game changes is drawn (a coin\ntaken, a block used), and a held cell's bump.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CellsPresent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cycles": {
+          "description": "Palette colors that change over time in every level whose `present`\ndoesn't give its own.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ColorCycle"
+          }
+        },
+        "effects": {
+          "description": "The feature `present.effects`: short-lived pictures the model's events start,\nsuch as a coin popping out of a block.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EffectPresent"
+          }
+        },
+        "hidden": {
+          "description": "Feature `present.hidden`: bodies the game doesn't draw while a\nrule state holds and counters are in ranges, though they are\nstill in play, such as Donkey Kong's sprites from a death's 13th\ndivider wrap ($F08C) until the 21st draws the stage's objects\nagain ($CC34).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Hidden"
+          }
+        },
+        "hud": {
+          "description": "The heads-up display drawn over the view, such as a status bar.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Hud"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "screen": {
+          "description": "The picture the game puts out: its size, its pixels' shape and the\nedges a television hides.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Screen"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "screens": {
+          "description": "Feature `present.screens`: whole screens shown in place of the\nlevel, its bodies and the HUD while a rule state holds, such as a\ntitle and its menu.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StateScreen"
+          }
+        },
+        "sound": {
+          "description": "What plays: music by level and by rule state, sound effects by\nevent. Since core 0.4.3.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sound"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Ratio": {
+      "description": "A positive ratio of whole numbers: \"N\" or \"N/D\".",
+      "type": "string",
+      "pattern": "^[0-9]+(/[0-9]+)?$"
+    },
+    "Rect": {
+      "type": "object",
+      "properties": {
+        "h": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "w": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "x": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "y": {
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y",
+        "w",
+        "h"
+      ]
+    },
+    "Ref": {
+      "description": "One piece of support. `at` is `path:line` for a file in the repo, which\n`gp model check` checks, or any other reference (a recording ID).",
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "in": {
+          "description": "A pinned download the file is in rather than the repo, as\n`<name>@<revision>`, such as `smbdis@7e8e9777`: `at` is then a path\nwithin it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quote": {
+          "description": "Text the line must contain.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "at"
+      ]
+    },
+    "Replaced": {
+      "description": "How a body draws the picture of the body it replaced. Presentation\nonly.",
+      "type": "object",
+      "properties": {
+        "flip_y": {
+          "description": "The picture mirrored top to bottom.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RowRef": {
+      "description": "One row of a lifted table, by number from 0.",
+      "type": "object",
+      "properties": {
+        "row": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "slot": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "slot",
+        "row"
+      ]
+    },
+    "Screen": {
+      "description": "The screen a game draws to.",
+      "type": "object",
+      "properties": {
+        "overscan": {
+          "description": "Pixels hidden at the left, top, right and bottom edges, as a\ntelevision's frame hides them. Default none.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "maxItems": 4,
+          "minItems": 4
+        },
+        "pixel_aspect": {
+          "description": "A pixel's width over its height on the display the game was made\nfor (\"8/7\" for the NTSC NES). Default \"1\".",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ratio"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "size": {
+          "description": "Width and height in pixels, as the console puts them out (256 by\n240 for the NES).",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "sprite_limit": {
+          "description": "Since core 0.4.14: the console draws at most this many sprites on\na line, and the game's own sprites past it drop out or flicker.\nPresentation only; a player can turn it off.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpriteLimit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sprite_x_wraps": {
+          "description": "The console's sprite x is a byte, so a sprite the game places left\nof the screen (x below 0) shows at x + 256, at the right edge: each\nhardware sprite of a body's picture (8 pixels across) whose left\ncolumn is left of the screen is drawn 256 pixels on. Donkey Kong's\nhammer swung left of Mario at the screen's left edge puts its head\nat x 255 ($02D3 wraps). Presentation only, for a game that never\nscrolls. Feature `present.sprite_x_wraps`.",
+          "type": "boolean"
+        },
+        "sprites_off": {
+          "description": "Rule states, each `<machine>.<state>`, in which the console's\nsprite layer is off: the level, the HUD's tiles and the bodies\ndrawn as name-table tiles show, and no sprite does. Donkey Kong\nturns its sprites off once a Start pause's 64 frames are out\n($CFA1 sets bit 4 of $11, which the NMI writes to $2001 inverted).\nPresentation only. Feature `present.sprites_off`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "size"
+      ]
+    },
+    "ScreenSprite": {
+      "description": "One sprite tile on a [`StateScreen`].",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "The tile's top left corner, in screen pixels, with the counter at 0.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "counter": {
+          "description": "A counter that moves it: `step` pixels for each 1 of its value.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "palette": {
+          "description": "The sprite palette, 0 to 3. Default 0.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "step": {
+          "description": "Pixels across and down for each 1 of the counter.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "tile": {
+          "description": "The tile's number in that slot.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "tiles": {
+          "description": "A slot of kind `tiles`: the sprite tiles.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "at",
+        "tiles",
+        "tile"
+      ]
+    },
+    "ScreenText": {
+      "description": "A line of text on a [`StateScreen`], written into its name table.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "The first character's tile column and row.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "palette": {
+          "description": "The background palette its cells are drawn in, 0 to 3, in place\nof the attribute bytes'. Default 0.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "text": {
+          "description": "The characters, each one of the HUD font's.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "at",
+        "text"
+      ]
+    },
+    "ScrollStop": {
+      "description": "A level's column that stops the scroll when it is drawn.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "Where the column is along the level's axis, in pixels. From the\nframe after it is drawn no camera moves in this level.",
+          "$ref": "#/$defs/Fixed"
+        },
+        "removes": {
+          "description": "Entities of these kinds in the level as the column is drawn go,\nwith no event (KillEnemies clears the enemy slots holding one).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "at"
+      ]
+    },
+    "SfxBinding": {
+      "description": "An effect played when an event fires.",
+      "type": "object",
+      "properties": {
+        "effect": {
+          "description": "The effect's name in the slot's set.",
+          "type": "string"
+        },
+        "event": {
+          "type": "string"
+        },
+        "slot": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "event",
+        "slot",
+        "effect"
+      ]
+    },
+    "Sound": {
+      "description": "Music and sound effects, bound to the model. Presentation only: no\nstate hash depends on them, and a theme may restyle them by the `sound`\nrole group.",
+      "type": "object",
+      "properties": {
+        "music": {
+          "description": "Songs and the levels or rule states they play in.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MusicBinding"
+          }
+        },
+        "roles": {
+          "description": "Feature `present.sound_roles`: the game's sound requests named as\nsound roles, each cued by a counter that holds the request. A theme\nreplaces a role's sound with a file (docs/formats/theme.md, \"Sound\nreplacements\"), played on the role's cue in place of what the\nmodel's own sound plays.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SoundRole"
+          }
+        },
+        "sfx": {
+          "description": "Effects and the events they mark.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SfxBinding"
+          }
+        },
+        "silent_while": {
+          "description": "Feature `present.sound_silent_while`: counter tests while any of\nwhich the game makes no sound, though it asks for some (an attract\ndemo that sets its tune's request with the sound channels off). A\ntheme's sound per role is silent then too.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SoundTest"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "SoundCapture": {
+      "description": "Where a sound slot's songs are captured from.",
+      "type": "object",
+      "properties": {
+        "frames": {
+          "description": "Its frames, as `gp sound capture --frames` takes them (`A..B`).",
+          "type": "string"
+        },
+        "name": {
+          "description": "The capture's name, which its files are kept under.",
+          "type": "string"
+        },
+        "recording": {
+          "description": "The recording's ID (or a unique prefix of it).",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "recording",
+        "frames",
+        "name"
+      ]
+    },
+    "SoundRole": {
+      "description": "A sound role (feature `present.sound_roles`): a request the game makes,\nnamed, with the counter test that marks it. The cue reads the world\nafter a tick, as every other presentation does.",
+      "type": "object",
+      "properties": {
+        "counter": {
+          "description": "The counter that holds the request.",
+          "type": "string"
+        },
+        "description": {
+          "description": "When it plays, in plain words and without any character's name: a\ntheme maker's prompt starts from it.",
+          "type": "string"
+        },
+        "equals": {
+          "description": "The masked counter equals this for the cue (default: any value but\n0).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "frames": {
+          "description": "Its usual length in frames, as a theme maker's guide.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "held": {
+          "description": "The request stays set while the sound plays (a held tune): the cue\nstarts the role on the first frame the test holds and stops it on\nthe first that it doesn't. Otherwise the game clears the request\neach frame, and every frame the test holds starts the role again.",
+          "type": "boolean"
+        },
+        "kind": {
+          "description": "`music` or `sfx`.",
+          "$ref": "#/$defs/SoundRoleKind"
+        },
+        "loops": {
+          "description": "The sound repeats until another music role starts or a held role\nstops.",
+          "type": "boolean"
+        },
+        "mask": {
+          "description": "The bits of the counter tested (default every bit).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "name": {
+          "description": "The role's name: lowercase letters, digits and `_`, such as `jump`.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind",
+        "counter",
+        "description"
+      ]
+    },
+    "SoundRoleKind": {
+      "description": "What a sound role is.",
+      "type": "string",
+      "enum": [
+        "music",
+        "sfx"
+      ]
+    },
+    "SoundTest": {
+      "description": "A counter test for the sound (feature `present.sound_silent_while`).",
+      "type": "object",
+      "properties": {
+        "counter": {
+          "type": "string"
+        },
+        "description": {
+          "description": "Why, in plain words.",
+          "type": "string"
+        },
+        "equals": {
+          "description": "The masked counter equals this (default: any value but 0).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "mask": {
+          "description": "The bits tested (default every bit).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "counter"
+      ]
+    },
+    "Source": {
+      "oneOf": [
+        {
+          "description": "Measured by the pipeline from recordings.",
+          "type": "string",
+          "const": "observed"
+        },
+        {
+          "description": "Proposed by an agent.",
+          "type": "string",
+          "const": "inferred"
+        },
+        {
+          "description": "Said by a person, in words or in the game's own source.",
+          "type": "string",
+          "const": "stated"
+        }
+      ]
+    },
+    "Spawn": {
+      "description": "Entities placed in a level: one at `x` and `y`, or one per row of a\ntable slot, with `columns` naming the column each field is read from.",
+      "type": "object",
+      "properties": {
+        "appear_moving": {
+          "description": "With the level's `appear_still`, it moves on the frame it appears\nall the same: a group's members after the first, which\nHandleGroupEnemies puts in slots the enemy loop runs later in the\nsame frame. Since core 0.4.11.",
+          "type": "boolean"
+        },
+        "at_edge": {
+          "description": "When it appears it is placed this many pixels past the view's last\ncolumn along the level's axis, instead of at its x (or y), which is\nthen only where the view reaches it: Super Mario Bros.' group\nenemies, which HandleGroupEnemies starts at the screen's right edge\nand 24 pixels apart. Since core 0.4.11.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "columns": {
+          "description": "Field name to the table column it's read from (`x`, `y`, or a\nparameter).",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "drawn": {
+          "description": "It appears when the level's `draw` draws the column its x is in,\nrather than by `spawn_ahead`, and only if a slot is free then:\nSuper Mario Bros.' piranha plants, which VerticalPipe makes as it\ndraws the pipe's first column. Since core 0.4.10.",
+          "type": "boolean"
+        },
+        "entity": {
+          "description": "The entity type.",
+          "type": "string"
+        },
+        "params": {
+          "description": "Per-entity parameters extensions define, such as `patrol_end`.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Fixed"
+          }
+        },
+        "table": {
+          "description": "A slot of kind `table`, one entity per row.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "x": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "y": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "entity"
+      ]
+    },
+    "SpeedStep": {
+      "description": "Frames per picture at and above a speed.",
+      "type": "object",
+      "properties": {
+        "at_least": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "every": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "every"
+      ]
+    },
+    "Split": {
+      "description": "A sprite's `split` (feature `sprite.split`): the part `keep` (left,\ntop, width and height in pixels from the picture's top left as drawn,\nafter any flip) stays where the body's picture is, and the rest of the\npicture is drawn moved by `x` and `y`, counters' values (0 without\none). The kept part is drawn over the rest, as a console draws its\nfirst sprites over later ones. While both values are 0 the picture is\ndrawn whole as usual.",
+      "type": "object",
+      "properties": {
+        "keep": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "maxItems": 4,
+          "minItems": 4
+        },
+        "x": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "y": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "keep"
+      ]
+    },
+    "Sprite": {
+      "description": "How an entity is drawn. Presentation only.",
+      "type": "object",
+      "properties": {
+        "behind": {
+          "description": "Drawn behind the level's picture: its pixels show only where the\nlevel draws its backdrop, as the NES's sprite priority bit does. A\nplant in a pipe. A state's `set` can turn it on and off. Since core\n0.4.18.",
+          "type": "boolean"
+        },
+        "behind_when": {
+          "description": "Drawn behind the level's picture, as `behind`, on the frames this\nholds: a game that sets a sprite's priority bit by where the object\nis or what it is doing, as Donkey Kong gives a barrel rolling on\nthe bottom girder left of x $30 attribute $23, behind the oil drum\n($DFC3). Presentation only. Feature `sprite.behind_when`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/When"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "blink": {
+          "description": "Hidden on every other run of `every` frames while `when` holds,\nwhatever it shows otherwise: a hurt entity's blink. Counted by the\ngame's frames. Since core 0.4.2.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Blink"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cells": {
+          "description": "Each tile's own flips and palette, in the order of the tiles: the\nsprite as a layout of tiles, as a console's sprite attribute bytes\ngive it. A game that saves tiles by mirroring half a sprite says so\nhere. Without it every tile is drawn as it is, in `palette`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Cell"
+          }
+        },
+        "clips": {
+          "description": "Animation: the first clip whose `when` holds is drawn; when none\ndoes, the frame above is.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Clip"
+          }
+        },
+        "colors": {
+          "description": "Colors of its own for `palette`: one palette of a `palettes` slot,\nsuch as a power-up's colors.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PaletteRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "copy": {
+          "description": "Since core 0.4.20: a second picture below the first (Super Mario Bros.'\nDrawSmallPlatform draws a small lift twice).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpriteCopy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "flip_in_place": {
+          "description": "Mirrored where it is, as a console flips a sprite by its attribute\nbits: a facing or clip flip leaves the picture's left edge at\n`offset` instead of turning it about the middle of the hitbox.\nDonkey Kong draws Mario facing left at the same $0203 as facing\nright. Feature `sprite.flip_in_place`.",
+          "type": "boolean"
+        },
+        "flip_when_facing_left": {
+          "description": "Mirrored left to right while the entity faces left.",
+          "type": "boolean"
+        },
+        "frame": {
+          "description": "The tile numbers from a lifted table instead: a row of a `rows`\nslot, such as one of the game's sprite frames.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RowRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "front": {
+          "description": "Drawn over every body without it, whatever their order: a console\ndraws its first sprites over the rest, and Super Mario Bros. puts\nMario's first (Player_SprDataOffset, DefaultSprOffsets' $04).\nSince core 0.4.21.",
+          "type": "boolean"
+        },
+        "leaves": {
+          "description": "The picture a body that replaces this one draws, when its sprite\nhas `replaced`, in place of this one's last picture turned over: a\ngame that draws a defeated enemy with a frame of its own, as Super\nMario Bros.' koopas fall as an upside-down shell\n(CheckUpsideDownShell). Its slot, frame, width, palette, cells and\noffset are read. Since core 0.4.21."
+        },
+        "name_table": {
+          "description": "Tiles the game writes into the background's name table rather\nthan sprites, drawn as a body: Donkey Kong is background tiles, his\nposes rewritten in place. The screen measure counts its pixels as\nthe background's, and the sprite limit doesn't count it. Feature\n`sprite.name_table`.",
+          "type": "boolean"
+        },
+        "offset": {
+          "description": "The picture's top left in pixels from the entity's position, in\nplace of standing it on the entity's bottom edge; mirrored about\nthe middle of the hitbox when it faces left, as a sprite-set frame\nis. A console that shows a sprite a line below where its table puts\nit (the NES) is drawn at `[0, 1]`. Since core 0.4.18.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "palette": {
+          "description": "Which palette of the game's palettes the tiles use.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "replaced": {
+          "description": "Drawn as the picture the body it replaced showed last: a body a\ndefeat leaves (`health.defeat.becomes`) looks like the enemy it\nwas, turned over with `flip_y`, as Super Mario Bros.' defeated\nenemies fall upside down. A body with nothing to copy (one a start\ncarried in) draws the sprite's own frame. Since core 0.4.21.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Replaced"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "slot": {
+          "description": "A slot of kind `tiles`.",
+          "type": "string"
+        },
+        "split": {
+          "description": "A part of the picture held where the body is while the rest is\ndrawn moved by two counters' values: a game that moves one of an\nobject's hardware sprites and leaves the others where its last\ndraw put them for a frame, as Donkey Kong moves only Mario's first\nsprite on the frame he walks off a girder's end with the hammer\n($D70A/$D710, $D72B) and draws none of the others. Presentation\nonly. Feature `sprite.split`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Split"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tiles": {
+          "description": "Tile numbers, row by row. Give these or `frame`.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "width": {
+          "description": "Tiles per row.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "slot",
+        "width",
+        "palette"
+      ]
+    },
+    "SpriteCopy": {
+      "description": "A sprite's second picture (`copy`), in pixels. Presentation only.",
+      "type": "object",
+      "properties": {
+        "above": {
+          "description": "Neither picture shows with its top above this y.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "below": {
+          "description": "How far below the first it is.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "wrap": {
+          "description": "Its height wraps at this y.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "below",
+        "wrap"
+      ]
+    },
+    "SpriteLimit": {
+      "description": "How many sprites the console draws on one line (core 0.4.14).",
+      "type": "object",
+      "properties": {
+        "flicker": {
+          "description": "The game turns its sprites' order each frame, so the ones past the\nlimit take turns and flicker (default false: the same ones drop).",
+          "type": "boolean"
+        },
+        "per_line": {
+          "description": "Hardware sprites a line holds (8 on the NES).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "sprite_width": {
+          "description": "A hardware sprite's width in pixels (default 8).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "per_line"
+      ]
+    },
+    "SpriteOrder": {
+      "description": "Feature `present.sprite_order`: body k of an entity takes the table's\nsprites from `at + step * k`, k being its slot (its `ext` word `word`\nless one, for a hook that keeps the slot there, when set; else the\nlevel's numbered spawn slot it is in) or else its count among the\nentity's drawn bodies before it. Donkey Kong's 25m keeps Mario at 0,\nthe fires from 4, the barrels from 12 ($0230 + 16 * X), the hammers\nat 52, the drum's flame at 56 and Pauline at 58. Original Edition's 50m\nlays its table out as Mario 0, the fires from 4 ($0210, 16 bytes a\nslot, $EFE7), the pies from 12 ($0230 + 16 * $5D, $EFD5), the moving\nladders from 48 ($02C0 + 16 * X, $8899) and the hammers at 60.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "The first hardware sprite's number in the table (0 to 63).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "step": {
+          "description": "Hardware sprites a body takes (default 4).",
+          "type": "integer",
+          "format": "uint32",
+          "default": 4,
+          "minimum": 0
+        },
+        "turn": {
+          "description": "The game copies the slots into the table starting from a slot that\nturns: k is the slot less this counter's value, around `count`\nslots. Original Edition's 50m copies its seven pie slots from\n$0493, one further each frame ($895F), so the pie a crowded line\ndrops takes turns.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpriteTurn"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "word": {
+          "description": "The `ext` word that holds the body's slot plus one.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "at"
+      ]
+    },
+    "SpriteTurn": {
+      "description": "Feature `present.sprite_order`: the counter whose value is the first\nslot copied, and the slots' count.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "counter": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "counter",
+        "count"
+      ]
+    },
+    "Stages": {
+      "description": "Feature `stages`: the original's stages in order, each played by the\nlevel of its name or, for a stage the model doesn't hold yet, by a\nstand-in level. A counter the model's rules step as the game does says\nwhich stage is being played; `next-level` and `restart-level` start the\nlevel that plays it. Donkey Kong's NES port plays 25m, 75m and 100m and\nthen 25m again a loop harder ($D096-$D0AE); a model with 25m only plays\n25m in each slot, while the stage counter, the loops and what they\nchange (the bonus, the difficulty, the level number) go on as the\ngame's.",
+      "type": "object",
+      "properties": {
+        "counter": {
+          "description": "The counter holding the index in `order` of the stage being\nplayed, 0 the first. The model's rules step it, as the game steps\nits own stage number.",
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "order": {
+          "description": "The stages in the order the game plays them: each a level's name,\nor the name of a stage the model has no level for yet.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skip": {
+          "description": "Feature `stages.skip`: stages of `order` the game passes over.\nWhen the rules step the counter onto one, it steps on again the\nsame way (past the end with its wrap), so no level plays it.\nDonkey Kong (JU) has no 50m and steps its stage number $53 from 1\n(25m) to 3 (75m); Original Edition's model, loaded with a JU ROM,\nskips 50m's place rather than playing a stand-in in it.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "stand_in": {
+          "description": "The level that plays a stage of `order` the model has no level for.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "order",
+        "stand_in",
+        "counter"
+      ]
+    },
+    "State": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enter_keeps_fraction": {
+          "description": "Since core 0.4.15, with `enter_speed`: the speed up and down keeps\nthe fraction below a pixel it had, and only its whole pixels are\nset. KillPlayer stores Player_Y_Speed and leaves Player_Y_MoveForce\nas it was, so Mario's speed is -4 plus the fraction of his last.",
+          "type": "boolean"
+        },
+        "enter_speed": {
+          "description": "Since core 0.4.15, an entity's state only: entering it sets the\nentity's speed across and up and down. Super Mario Bros.'\nKillPlayer stops Mario across and sets his vertical speed to -4.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Fixed"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "frees_at_once": {
+          "description": "Feature `state.frees_at_once`, a game machine's state: systems that\nmove things which run for the rest of the frame on which the state\nis left, from the system after the one that left it, though the\nframe began frozen in it. Donkey Kong's unpause clears $0516 in the\nStart check and then counts the frame timers on that frame.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "freeze": {
+          "description": "Nothing in the world moves on a frame that starts with the game, or\nany entity, in this state: entering it stops the world from the\nnext frame, and leaving it starts it again from the next frame.\nState machines and timers still run.",
+          "type": "boolean"
+        },
+        "ground": {
+          "description": "Since core 0.4.13, an entity's state only: what entering it does to\nthe entity's standing. `leave` takes it off the ground, as Super\nMario Bros.' ForceInjury sets Player_State to 1 though Mario stays\nwhere he is; `land` puts it back on the ground if there is ground\nunder it, as PlayerBGCollision does on the first frame\nPlayerCtrlRoutine runs again, though PlayerMovementSubs doesn't move\nhim while he shrinks.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GroundOnEnter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "holds": {
+          "description": "Since core 0.4.12: counters whose `every` changes wait while the\nworld starts a frame in this state: the frames still count, up to\nthe change, and the change is made on the first frame after the\nstate that comes round to it. Super Mario Bros.' RunGameTimer leaves\nwhile Mario is below the screen, though DecTimers goes on counting\nGameTimerCtrlTimer down to 0.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "keep_time": {
+          "description": "Since core 0.4.12: entering this state keeps the frames counted in\nthe state before, so its `after` counts from when the earlier state\nwas entered. A run of states that time one span, such as the parts\nof a pause, says each part's end from the span's start.",
+          "type": "boolean"
+        },
+        "seen_every": {
+          "description": "Since core 0.4.12, an entity's state only: while a camera `by_move`\nfollows the entity in this state, it keeps the entity's place in\nits view only on frames whose number is a multiple of this, the\nframes the entity is drawn. Super Mario Bros.' PlayerGfxHandler\nleaves on odd frames while InjuryTimer is set (the blink), before\nRenderPlayerSub sets Player_Pos_ForScroll, which ScrollHandler reads.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "set": {
+          "description": "An entity's state only: the entity's fields while in this state,\nwritten as the entity's own are (`hitbox = { ... }`,\n`walk = { speed = 2 }`). Tables merge into the entity's, key by key,\nand other values replace its.",
+          "type": "object",
+          "additionalProperties": true
+        },
+        "step_word": {
+          "description": "Feature `state.step_word`, an entity's state only: on each frame\nthe entity is in it, frozen or not, its mechanic word 0 (the step\ncounter of `run.step_cycle`) goes up by one, back to 0 at this, before\nits transitions are tested. Donkey Kong's death spin calls $D9E6\nevery frame, so $88 goes on counting while the world stands still.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "stops": {
+          "description": "Since core 0.4.12: a part freeze. These systems (names from\n`model.systems` that move things) don't run on a frame that starts\nin this state, from the next frame as with `freeze`, while the\nothers do. Super Mario Bros.' injury: TimerControl stops the enemies\nand the frame timers while the player routine runs on its own\nschedule. With `freeze` it is ignored.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "stops_at_once": {
+          "description": "Since core 0.4.12: of the systems this state stops (all that move,\nwith `freeze`), these also stop for the rest of the frame it is\nentered in, when they haven't run yet: InjurePlayer sets\nTimerControl inside the enemy loop, so the enemy that hurt Mario\nand the ones after it don't move that frame.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "stops_machines": {
+          "description": "Feature `state.stops_machines`: while a frame begins in this state,\nthe entities' own machines don't run (their time, their\ntransitions and a `step_word`), as the game machines still do.\nDonkey Kong's Start pause stops Mario's routine, his death spin's\ncounter included, and only the Start check runs.",
+          "type": "boolean"
+        },
+        "transition": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Transition"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "StateScreen": {
+      "description": "A screen shown in place of the level while a rule state holds\n(feature `present.screens`): its picture, drawn from update strings as\nthe game writes its name table and palettes, and sprites fixed on it,\neach moved by a counter. Donkey Kong's title is the string the title\nroutine draws ($C807 with 8) and a cursor sprite 16 lines down a menu\nline.",
+      "type": "object",
+      "properties": {
+        "blank": {
+          "description": "The screen is the first level's backdrop color alone, as a console\nshows with its picture turned off, in place of a layout (feature\n`present.screens_blank`).",
+          "type": "boolean"
+        },
+        "from_line": {
+          "description": "With `blank`: the screen line the picture goes off at (feature\n`present.screens_from_line`). The lines above it show the frame as\nit would be drawn without this screen, the level, its bodies and\nthe HUD, and the lines from it the backdrop, as a console whose\npicture is turned off partway down the frame. Donkey Kong's stage\nclear turns it off at line 34 ($CBB7 -> $D19A on the clear script's\n$7A step), so the status rows show on that frame.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "layout": {
+          "description": "An entry of a `screen-text` (update strings) slot: the screen's\nname table, attributes and palettes as the game writes them. The\npalettes it doesn't write are the first level's. A screen gives it\nor `blank`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntryRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sprite": {
+          "description": "Sprites over it.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScreenSprite"
+          }
+        },
+        "states": {
+          "description": "The rule states it shows in, as `<machine>.<state>`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "text": {
+          "description": "Text written into its name table over the layout or the blank\n(feature `present.screens_text`), in the characters of the HUD's\nfont (`present.hud.font`): Donkey Kong's turn screen, PLAYER I or\nPLAYER II on a cleared name table ($CBCA, $C6AA).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScreenText"
+          }
+        },
+        "when": {
+          "description": "The model's counters in ranges, each of which must hold too\n(feature `present.screens_when`): Donkey Kong's screen is blank\nwhile a death's wait $43 is in the stage setup's part.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CounterTest"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "states"
+      ]
+    },
+    "Take": {
+      "description": "What takes an exit: the player's hitbox overlapping `at`, with `hold`\nheld, and standing if `standing`.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "A box in the level, in pixels.",
+          "$ref": "#/$defs/Rect"
+        },
+        "hold": {
+          "description": "An input action that must be held, such as `down` on a pipe.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "if": {
+          "description": "A counter condition that must also hold, as a transition's `if`:\na door that needs a key.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Guard"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "standing": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "at"
+      ]
+    },
+    "TileKind": {
+      "description": "What kind of tile a cell is. The simulation collides by kind: `solid`\nstops from every side, `top` only an entity moving down onto its top\nrow, `ladder` is climbed (and its top stands, for a climber that says\nso), `hazard` touches the player as the level's `hazard` says, `water`\nand `ice` change falling and running as the level's `water` and `ice`\nsay. Since core 0.4.6, `coin_block`, `item_block` and `brick` are\nsolid like `solid`, and a head hit (platformer `jump.head`) tells them\napart: a block with a coin in it, one with an item, a brick. Since core\n0.4.16, `coin` stops nothing and a pickup (platformer `jump.pickup`)\ntakes it.",
+      "type": "string",
+      "enum": [
+        "empty",
+        "solid",
+        "top",
+        "ladder",
+        "hazard",
+        "water",
+        "ice",
+        "coin_block",
+        "item_block",
+        "brick",
+        "coin"
+      ]
+    },
+    "TilesPicture": {
+      "description": "A picture of tiles, as a sprite lays them out.",
+      "type": "object",
+      "properties": {
+        "cells": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Cell"
+          }
+        },
+        "palette": {
+          "description": "A palette of the level's palettes (4 to 7 for the sprite ones).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "slot": {
+          "description": "A slot of kind `tiles`.",
+          "type": "string"
+        },
+        "tiles": {
+          "description": "Tile numbers, row by row.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "width": {
+          "description": "Tiles per row.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "slot",
+        "tiles",
+        "width",
+        "palette"
+      ]
+    },
+    "Transition": {
+      "description": "Exactly one of `on` and `after`, or, in an entity's machine, `below`\n(with or without `after`).",
+      "type": "object",
+      "properties": {
+        "after": {
+          "description": "Frames after entering the state.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "align": {
+          "description": "Since core 0.4.12, with `after`: once the time is up, it is taken\nonly on a frame whose number (the frame count from power-on) is a\nmultiple of this. Super Mario Bros.' HandleChangeSize steps the\nshrink on frames whose FrameCounter is a multiple of 4, so its end\ndepends on that counter's phase.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "align_to": {
+          "description": "Feature `transition.align_to`, with `after`: once the time is up, it is taken\nonly on a frame whose counter's first `every` clock has just come\nround (its count is 0), so the state lasts to a beat that clock\nkeeps. Super Mario Bros.' lives screen waits for ScreenTimer, an\ninterval timer DecTimers counts down once every 21 frames, when\nIntervalTimerControl runs out.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "below": {
+          "description": "Feature `transition.below`, in an entity's machine: taken once the entity's\ny is at or past this (and its `after` is up, with one). Super Mario\nBros.' PlayerHole ends a death once Player_Y_HighPos reaches 4,\nhowever high Mario was hit.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "do": {
+          "description": "Actions to take on the way (docs/model.md lists them).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "held": {
+          "description": "Feature `transition.held`, without `on` or `pressed`: taken on every\nframe on which this input action is held, and with `after` only\nonce that many frames have passed in the state. Donkey Kong's title\nsets its idle timer to 64 on each frame Select is held ($C95D).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "if": {
+          "description": "A condition that must also hold.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Guard"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "on": {
+          "description": "An event (docs/model.md lists them).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pressed": {
+          "description": "Feature `transition.pressed`, without `on`: taken on a frame on\nwhich this input action is newly pressed (held, and not on the\nframe before), and with `after` only once that many frames have\npassed in the state. Donkey Kong's Start pauses the game, and\nunpauses it once the pause's 64-frame timer ($0517) has run out.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to": {
+          "type": "string"
+        },
+        "word": {
+          "description": "Feature `transition.word`, in an entity's machine with `after`:\ntaken only on a frame on which one of the entity's mechanic words\nis in this range. Donkey Kong's death spin ends on the frame $88\ncomes round to 4, 120 frames or more after it starts.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WordTest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "to"
+      ]
+    },
+    "Turn": {
+      "description": "Feature `input.turn`: which controller each turn plays from.",
+      "type": "object",
+      "properties": {
+        "actions": {
+          "description": "The actions that read the turn's controller.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "counter": {
+          "description": "The counter that says whose turn it is: 0 the first player.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "counter",
+        "actions"
+      ]
+    },
+    "Via": {
+      "oneOf": [
+        {
+          "description": "A pipe or door entered by pressing a direction on it.",
+          "type": "string",
+          "const": "pipe"
+        },
+        {
+          "description": "A vine or ladder climbed out of the view.",
+          "type": "string",
+          "const": "vine"
+        },
+        {
+          "description": "A pipe or door that skips ahead past the next level.",
+          "type": "string",
+          "const": "warp"
+        },
+        {
+          "description": "Walking or falling off an edge of the level.",
+          "type": "string",
+          "const": "edge"
+        }
+      ]
+    },
+    "View": {
+      "description": "How the world is seen. Isometric arrives with its projection.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "top-down"
+          ]
+        },
+        {
+          "description": "A side view: down is the direction gravity pulls.",
+          "type": "string",
+          "const": "side"
+        }
+      ]
+    },
+    "When": {
+      "description": "Conditions on an entity's state for a clip. Each one given must hold.",
+      "type": "object",
+      "properties": {
+        "climbing": {
+          "description": "On a ladder or vine (true), or not (false). Since core 0.4.2.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "counters": {
+          "description": "The model's counters are in ranges, each one given, for a picture\nthe game picks by a timer or a flag the model keeps as a counter\n(Donkey Kong's oil drum burns while `drum` is above 0). Presentation\nreads the counters; nothing in the simulation reads the clip.\nFeature `clip.when_counter`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CounterTest"
+          }
+        },
+        "ground": {
+          "description": "Standing on something (true) or in the air (false).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "invulnerable": {
+          "description": "In frames where no hurt counts, as after being hurt (true), or not\n(false). Since core 0.4.2.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "jumped": {
+          "description": "In the air after a jump (true), or not (false): falling off a ledge\nis in the air without a jump. Since core 0.4.2.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "moving": {
+          "description": "Moving sideways at all (true) or still (false).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "rising": {
+          "description": "Moving up (true), or not (false).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "skidding": {
+          "description": "Moving sideways against the way it faces (true), or not (false).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "slot_counters": {
+          "description": "Counters named by the body's slot, each in its range: the test's\n`name` followed by the number of the slot the body is in (Donkey\nKong's `barrel_tile` names `barrel_tile0` for the barrel in slot\n0), for a picture the game keeps per object slot. A body in no slot\nfails it. Presentation only. Feature `clip.when_slot_counter`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CounterTest"
+          }
+        },
+        "speed_at_least": {
+          "description": "Its sideways speed, either way, is at least this.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "word": {
+          "description": "One of the entity's `ext` hook's words is in a range, such as\nSuper Mario Bros.' Lakitu ducking into its cloud while its copy of\nFrenzyEnemyTimer is below 16. Since core 0.4.21.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WordTest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "words": {
+          "description": "More word tests, each of which must hold too, for a hook that keeps\nwhat a picture depends on in two words (Donkey Kong's barrels: their\nstate and their girder). Feature `clip.when_words`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WordTest"
+          }
+        },
+        "x_at_least": {
+          "description": "The entity's x in whole pixels is at least this, for a picture the\ngame picks by where the object is on the screen (Donkey Kong's\nbarrel goes behind the oil drum left of x $30, $DFC3). Presentation\nonly. Feature `clip.when_x`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "x_below": {
+          "description": "The entity's x in whole pixels is below this. Feature\n`clip.when_x`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "additionalProperties": false
+    },
+    "WordTest": {
+      "description": "A test on one of a body's `ext` hook words. Presentation only.",
+      "type": "object",
+      "properties": {
+        "at_least": {
+          "description": "The word is at least this.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "below": {
+          "description": "The word is below this.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "index": {
+          "description": "The word, 0 to 3.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "index"
+      ]
+    }
+  }
+}

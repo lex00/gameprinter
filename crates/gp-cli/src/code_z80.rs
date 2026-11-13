@@ -124,7 +124,7 @@ fn controls(f: &InputFrame) -> Result<Controls> {
     Ok(Controls::from_bits(bits))
 }
 
-fn merge(into: &mut Levels, from: Levels) {
+pub(crate) fn merge(into: &mut Levels, from: Levels) {
     for (a, b) in into.cpus.iter_mut().zip(from.cpus) {
         for (k, v) in b.starts {
             let e = a.starts.entry(k).or_default();

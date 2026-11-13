@@ -23,10 +23,10 @@
 //!
 //! On an NES ROM the state mapping gets the draw sites `gp interp draws
 //! --find` finds on an idle run from power-on, with `score_draws`, for
-//! review (`--no-draws` leaves the search out), as game-printer's did. Left
-//! for later steps (~/.game-printer/work/bring/PLAN.md): the theme kit and
-//! the level kit, whose tools haven't moved yet; `--branch` and the
-//! loop.toml it wrote went with `gp loop`.
+//! review (`--no-draws` leaves the search out), as game-printer's did. It
+//! writes the level kit's stub rules and the kit (docs/level-kit.md). Left
+//! for later steps (~/.game-printer/work/bring/PLAN.md): the theme kit;
+//! `--branch` and the loop.toml it wrote went with `gp loop`.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -247,6 +247,16 @@ pub fn run(a: &New<'_>, paths: &Paths) -> Result<Outcome> {
         crate::roms::Platform::Arcade => arcade_files(a, &namespace, &title, &shape, &name, &rom)?,
     };
     write_package(&games, &dir, game, &files)?;
+    // The level kit (docs/level-kit.md): a rules file whose parts are all
+    // open, and the kit from what the model knows.
+    let ldir = dir.join(crate::level_kit::DIR);
+    fs::create_dir_all(&ldir)?;
+    fs::write(
+        ldir.join(crate::level_kit::RULES_FILE),
+        crate::level_kit::stub_rules(game),
+    )?;
+    let (m, _) = crate::level_kit::read_model(&dir)?;
+    crate::level_kit::write(&dir, &m, &ldir)?;
     let (qdir, rows, added) = crate::mechanic::seed_quest_log(paths, game, a.genre, &sha)?;
     let mut text = vec![
         format!(
@@ -281,6 +291,7 @@ pub fn run(a: &New<'_>, paths: &Paths) -> Result<Outcome> {
         "Wrote:".into(),
     ];
     text.extend(files.iter().map(|(f, _)| format!("  {game}/{f}")));
+    text.push(format!("  {game}/{}/", crate::level_kit::DIR));
     text.extend([
         String::new(),
         format!(

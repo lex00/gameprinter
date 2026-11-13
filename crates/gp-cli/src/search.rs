@@ -1,4 +1,4 @@
-//! `gp interp reach` and `gp level measure` and `gp level difficulty`:
+//! `gp interp reach`, `gp interp baselines`, `gp level measure` and `gp level difficulty`:
 //! the searches and the stage measure of a level, run through the game's
 //! module (`--module`) or the built-in interpreter for a model with no hooks.
 //!
@@ -228,6 +228,115 @@ fn end_expects(frames: usize, run: &baseline::Run) -> Vec<Expect> {
         .collect()
 }
 
+/// A file's leading comment, without its `# ` marks.
+fn leading_comment(text: &str) -> String {
+    text.lines()
+        .take_while(|l| l.starts_with('#'))
+        .map(|l| l.trim_start_matches('#').trim_start())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// `gp interp baselines`: replays every model baseline in
+/// MODEL/baselines/, each from its level, through the game's module or the
+/// built-in interpreter, and compares its digest and expectations.
+pub fn baselines_cmd(
+    model: &Path,
+    assets: Option<&Path>,
+    write: bool,
+    module: Option<&Path>,
+    paths: &Paths,
+) -> Result<Outcome> {
+    let src = source(model, assets, paths, module)?;
+    let m = src.parse_model()?;
+    let dir = model_dir(model).join(baseline::DIR);
+    let mut files: Vec<PathBuf> = fs::read_dir(&dir)
+        .with_context(|| format!("reading {}", dir.display()))?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "toml"))
+        .collect();
+    files.sort();
+    if files.is_empty() {
+        bail!("{} holds no model baselines", dir.display());
+    }
+    let mut text = String::new();
+    let mut out = Vec::new();
+    let mut ok = true;
+    for f in &files {
+        let mut b = ModelBaseline::load(f).map_err(|e| anyhow!("{e}"))?;
+        let mut problems = Vec::new();
+        if b.model != m.model.name {
+            problems.push(format!(
+                "it's a baseline of {}, not {}",
+                b.model, m.model.name
+            ));
+        }
+        let input = b.input().map_err(|e| anyhow!("{e}"))?;
+        let at = baseline::at_level(&m, &b.level).map_err(|e| anyhow!("{e}"))?;
+        let mut rt = src.with_model(&at, module)?.open()?;
+        let run = baseline::run_on(&mut rt, &input, &b.expects).map_err(|e| anyhow!("{e}"))?;
+        if run.digest != b.digest {
+            problems.push(format!("digest {} (expected {})", run.digest, b.digest));
+        }
+        for (e, got) in b.expects.iter().zip(&run.got) {
+            if got.as_deref() != Some(e.equals.as_str()) {
+                problems.push(format!(
+                    "frame {}: {} is {} (expected {})",
+                    e.frame,
+                    e.path,
+                    got.as_deref().unwrap_or("not there"),
+                    e.equals
+                ));
+            }
+        }
+        let name = f.file_stem().unwrap_or_default().to_string_lossy();
+        if write && !problems.is_empty() {
+            // Record what the run gives now: its digest, and the state at
+            // the end in place of the expectations at the last frame.
+            let old = fs::read_to_string(f)?;
+            b.digest = run.digest.clone();
+            let mut expects: Vec<Expect> = b
+                .expects
+                .iter()
+                .filter(|e| e.frame != b.frames)
+                .cloned()
+                .collect();
+            expects.extend(end_expects(b.frames, &run));
+            b.expects = expects;
+            fs::write(f, b.to_toml(&leading_comment(&old)))
+                .with_context(|| format!("writing {}", f.display()))?;
+            let _ = writeln!(
+                text,
+                "{name}: rewritten ({} frames from {}): {}",
+                b.frames,
+                b.level,
+                problems.join("; ")
+            );
+            out.push(json!({ "baseline": f, "level": b.level, "ok": true, "rewritten": true, "problems": problems }));
+            continue;
+        }
+        ok &= problems.is_empty();
+        let _ = writeln!(
+            text,
+            "{name}: {} ({} frames from {}, {} expectations)",
+            if problems.is_empty() { "ok" } else { "FAILED" },
+            b.frames,
+            b.level,
+            b.expects.len()
+        );
+        for p in &problems {
+            let _ = writeln!(text, "  {p}");
+        }
+        out.push(json!({ "baseline": f, "level": b.level, "ok": problems.is_empty(), "problems": problems }));
+    }
+    Ok(Outcome {
+        json: json!({ "ok": ok, "model": m.model.name, "baselines": out }),
+        text: text.trim_end().to_owned(),
+        exit: if ok { 0 } else { 1 },
+    })
+}
+
 #[derive(Subcommand)]
 pub enum LevelCmd {
     /// Search a level for a run to its goal (or to `--to`) with the player's
@@ -297,9 +406,28 @@ pub enum LevelCmd {
         #[arg(long, value_name = "FILE")]
         module: Option<PathBuf>,
     },
+    /// Write a game's level kit (docs/level-kit.md): `level-kit/kit.toml`
+    /// and `level-kit/level-kit.md`, what a designer needs to make a stage
+    /// by hand. The levels' sizes, the hero's moves and the goal come from
+    /// the model and the asset map, and so do the things' boxes and the data
+    /// slots. The hand-written `level-kit/rules.toml` gives the rest. That
+    /// file says what's data and what's fixed in code, and the limits and the
+    /// play measures to land near. It also gives how to verify, a worked
+    /// example and what is still open.
+    Kit {
+        /// A template directory, a template id under ./templates or a game in
+        /// the games checkout.
+        game: PathBuf,
+        /// Where to write (default: the template's level-kit/).
+        #[arg(short, long, value_name = "DIR")]
+        out: Option<PathBuf>,
+    },
 }
 
 pub fn level_run(cmd: &LevelCmd, paths: &Paths) -> Result<Outcome> {
+    if let LevelCmd::Kit { game, out } = cmd {
+        return crate::level_kit::kit_cmd(game, out.as_deref());
+    }
     if let LevelCmd::Measure {
         template,
         level,
@@ -329,7 +457,7 @@ pub fn level_run(cmd: &LevelCmd, paths: &Paths) -> Result<Outcome> {
         module,
     } = cmd
     else {
-        unreachable!("the measure's above")
+        unreachable!("the measure and the kit are above")
     };
     let src = source(
         &template_dir(template),

@@ -44,7 +44,7 @@ pub struct InputArgs {
 }
 
 impl InputArgs {
-    fn read(&self, paths: &Paths) -> Result<InputLog> {
+    pub(crate) fn read(&self, paths: &Paths) -> Result<InputLog> {
         match (&self.input, &self.baseline, &self.recording) {
             (Some(p), _, _) => InputLog::parse(
                 &fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?,

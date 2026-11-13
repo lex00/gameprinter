@@ -7,7 +7,8 @@
 //! [`crate::run_input`], with no sealed-run guard until wave 1 brings it
 //! back. On an arcade romset (port wave 6) `--find` reads the main Z80's
 //! code ([`crate::draws_find_z80`]) and the draws at a mapping's sites are
-//! recorded on gp-arcade (crate::lockstep::record_draws_arcade).
+//! recorded on gp-arcade (crate::lockstep::record_draws_arcade), so no
+//! form of the command refuses a platform.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -64,25 +65,10 @@ fn load_mapping(model: &Path, mapping: Option<&Path>) -> Result<Mapping> {
     .map_err(|e| anyhow::anyhow!("{}: {e}", file.display()))
 }
 
-fn read_rom(rom: &Path) -> Result<Vec<u8>> {
-    let bytes = fs::read(rom).with_context(|| format!("reading {}", rom.display()))?;
-    crate::original::nes_only(
-        crate::original::Platform::of_file(&bytes),
-        "a random draw (`gp interp draws`)",
-    )?;
-    Ok(bytes)
-}
-
 pub(crate) fn run(a: &DrawsArgs, paths: &Paths) -> Result<Outcome> {
     let from = a.from.unwrap_or(0);
     if let Some(rom) = &a.find {
-        let bytes = fs::read(rom).with_context(|| format!("reading {}", rom.display()))?;
-        let rom = if crate::original::Platform::of_file(&bytes) == crate::original::Platform::Arcade
-        {
-            bytes
-        } else {
-            read_rom(rom)?
-        };
+        let rom = fs::read(rom).with_context(|| format!("reading {}", rom.display()))?;
         let log = a.input.read(paths)?;
         let hand = match (&a.model, &a.mapping) {
             (None, None) => None,

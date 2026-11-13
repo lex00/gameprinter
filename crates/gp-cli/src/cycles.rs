@@ -2,7 +2,8 @@
 //! a random generator stepped in an idle loop (docs/cycles.md). These are
 //! analysis commands: they run the original in gp-nes and the cost-only CPU
 //! of gp-cycles on a slice of the user's ROM kept under $GP_HOME/work. No
-//! rebuild runs any of this.
+//! rebuild runs any of this. On an arcade romset they read the main Z80
+//! from gp-arcade's trace instead (crate::cycles_z80).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -145,7 +146,6 @@ fn hex(s: &str) -> Result<u16> {
 /// The ROM's program as a gp-cycles slice, and the bytes.
 fn load(rom: &PathBuf) -> Result<(Vec<u8>, gp_cycles::Slice)> {
     let bytes = fs::read(rom).with_context(|| format!("reading {}", rom.display()))?;
-    crate::original::nes_only(crate::original::Platform::of_file(&bytes), "gp cycles")?;
     if bytes.len() < 16 || &bytes[..4] != b"NES\x1a" {
         bail!("{} isn't an iNES ROM", rom.display());
     }
@@ -204,7 +204,87 @@ fn target_of(bus: &tetanes_core::bus::Bus, pc: u16) -> u16 {
     u16::from(bus.peek(pc.wrapping_add(1))) | u16::from(bus.peek(pc.wrapping_add(2))) << 8
 }
 
+/// The command on an arcade romset (crate::cycles_z80), or `None` for an
+/// NES image.
+fn arcade(cmd: &CyclesCmd, paths: &Paths) -> Result<Option<Outcome>> {
+    let rom = match cmd {
+        CyclesCmd::Slice { rom }
+        | CyclesCmd::Readset { rom, .. }
+        | CyclesCmd::Check { rom, .. }
+        | CyclesCmd::Chain { rom, .. }
+        | CyclesCmd::Split { rom, .. } => rom,
+    };
+    let bytes = fs::read(rom).with_context(|| format!("reading {}", rom.display()))?;
+    if crate::original::Platform::of_file(&bytes) != crate::original::Platform::Arcade {
+        return Ok(None);
+    }
+    use crate::cycles_z80 as z;
+    Ok(Some(match cmd {
+        CyclesCmd::Slice { .. } => z::slice(&bytes, &paths.home)?,
+        CyclesCmd::Readset {
+            input,
+            from,
+            to,
+            routine,
+            ..
+        } => z::readset(&bytes, &input.read(paths)?, (*from, *to), routine)?,
+        CyclesCmd::Check {
+            input,
+            from,
+            to,
+            routines,
+            ..
+        } => z::check(&bytes, &input.read(paths)?, (*from, *to), routines)?,
+        CyclesCmd::Split {
+            input,
+            from,
+            to,
+            out,
+            pcs,
+            ram_out,
+            ..
+        } => z::split(
+            &bytes,
+            &input.read(paths)?,
+            (*from, *to),
+            out,
+            pcs.as_deref(),
+            ram_out.as_deref(),
+        )?,
+        CyclesCmd::Chain {
+            input,
+            from,
+            to,
+            idle,
+            ..
+        } => {
+            let passes = z::idle_passes(&bytes, &input.read(paths)?, (*from, *to), hex(idle)?)?;
+            let counts: BTreeSet<u32> = passes.iter().map(|p| p.1).collect();
+            Outcome {
+                json: json!({
+                    "frames": passes.len(),
+                    "passes": passes.iter().map(|(f, n)| json!({"frame": f, "passes": n})).collect::<Vec<_>>(),
+                    "predicted": false,
+                }),
+                text: format!(
+                    "the original's idle loop at {idle}: {} frames, passes a frame {}\nnot predicted: the MCR board's interrupt comes from its CTC counting the video timing, which a Z80 run alone doesn't model (gp cycles check runs calls alone, which need no interrupt)",
+                    passes.len(),
+                    counts
+                        .iter()
+                        .map(u32::to_string)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ),
+                exit: 0,
+            }
+        }
+    }))
+}
+
 pub(crate) fn run(cmd: &CyclesCmd, paths: &Paths) -> Result<Outcome> {
+    if let Some(out) = arcade(cmd, paths)? {
+        return Ok(out);
+    }
     match cmd {
         CyclesCmd::Slice { rom } => {
             let (bytes, slice) = load(rom)?;

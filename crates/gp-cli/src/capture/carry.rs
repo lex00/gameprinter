@@ -16,10 +16,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
 
+use crate::original::OriginalRuntime;
 use anyhow::Context as _;
 use clap::Args;
 use gp_interp::carry::{Cause, Gap};
-use gp_nes::protocol::NesRuntime;
 use gp_runtime::{Runtime, Value};
 use serde::Serialize;
 use serde_json::json;
@@ -154,7 +154,6 @@ pub(crate) fn cli(paths: &gp_evidence::Paths, o: &CarryArgs) -> anyhow::Result<c
             "--write puts each start's reason into a capture run's starts.json, which gameprinter doesn't have until the capture runs come back (wave 7 of the port)"
         );
     }
-    let inp = super::Inputs::of_game(paths, &o.run, o.rom.as_deref())?;
     let module = o.module.clone().or_else(|| {
         let name = o.run.file_name()?.to_string_lossy().into_owned();
         Some(
@@ -169,6 +168,8 @@ pub(crate) fn cli(paths: &gp_evidence::Paths, o: &CarryArgs) -> anyhow::Result<c
     let (source, _) =
         crate::hosted::Source::open_dir(&o.run, o.assets.as_deref(), paths, module.as_deref())?;
     let spec = source.spec.clone();
+    // The starts after the model opens: running them is the long part.
+    let inp = super::Inputs::of_game(paths, &o.run, o.rom.as_deref())?;
     let mfile = o.run.join(gp_model::MODEL_FILE);
     let model = gp_model::Model::parse(
         &fs::read_to_string(&mfile).with_context(|| format!("reading {}", mfile.display()))?,
@@ -178,19 +179,18 @@ pub(crate) fn cli(paths: &gp_evidence::Paths, o: &CarryArgs) -> anyhow::Result<c
         .context("the model has no player, so nothing says where a start is")?;
     let mapping = &inp.mapping;
     let rom = inp.rom.clone();
-    let load = |snap: &[u8]| -> anyhow::Result<NesRuntime> {
-        let mut or = NesRuntime::load(&rom, gp_evidence::manifest::PowerOn::default())
-            .map_err(|e| anyhow::anyhow!("the ROM: {e}"))?;
+    let load = |snap: &[u8]| -> anyhow::Result<OriginalRuntime> {
+        let mut or = OriginalRuntime::of_rom(&rom).map_err(|e| anyhow::anyhow!("the ROM: {e}"))?;
         or.restore(snap).map_err(anyhow::Error::msg)?;
         Ok(or)
     };
-    let look = |or: &NesRuntime| -> anyhow::Result<(Option<String>, Vec<Gap>)> {
+    let look = |or: &OriginalRuntime| -> anyhow::Result<(Option<String>, Vec<Gap>)> {
         let gaps = gp_interp::carry::gaps(or, &spec, mapping).map_err(anyhow::Error::msg)?;
         let cant = gp_interp::starts::cant_start_here(or, &spec, mapping, &player)
             .map_err(anyhow::Error::msg)?;
         Ok((cant, gaps))
     };
-    let level_at = |or: &NesRuntime| -> String {
+    let level_at = |or: &OriginalRuntime| -> String {
         gp_interp::translate::read_original(or, mapping)
             .ok()
             .and_then(|vals| {
@@ -240,8 +240,8 @@ pub(crate) fn cli(paths: &gp_evidence::Paths, o: &CarryArgs) -> anyhow::Result<c
                     ..gp_runtime::InputFrame::pads(f.pads)
                 })
                 .collect();
-            let mut or = NesRuntime::load(&rom, gp_evidence::manifest::PowerOn::default())
-                .map_err(|e| anyhow::anyhow!("the ROM: {e}"))?;
+            let mut or =
+                OriginalRuntime::of_rom(&rom).map_err(|e| anyhow::anyhow!("the ROM: {e}"))?;
             let (mut started, mut polled_n) = (false, 0u64);
             for input in &inputs {
                 let events = or
@@ -267,7 +267,9 @@ pub(crate) fn cli(paths: &gp_evidence::Paths, o: &CarryArgs) -> anyhow::Result<c
                 }
                 let vals = gp_interp::translate::read_original(&or, mapping)
                     .map_err(anyhow::Error::msg)?;
-                if !gi.is_some_and(|i| matches!(vals[i], Value::Flag(true))) {
+                // On the ground, for a game whose player has a ground; any
+                // polled frame in play for one with none (Tapper's bartender).
+                if gi.is_some_and(|i| !matches!(vals[i], Value::Flag(true))) {
                     continue;
                 }
                 let level = gp_interp::translate::level_of(&or, mapping, &vals)

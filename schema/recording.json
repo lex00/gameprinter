@@ -1,0 +1,513 @@
+{
+  "$id": "game-printer:recording@1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RecordingManifest",
+  "description": "What was run, and nothing else: the same ROM, input, runtime, power-on\nstate and checkpoint interval give the same manifest, so the same ID.\nWhen it was recorded, its name and notes are in the index\n([`crate::recordings::IndexEntry`]).",
+  "type": "object",
+  "properties": {
+    "checkpoint_interval": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "checkpoints": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Checkpoint"
+      }
+    },
+    "events": {
+      "description": "What happened within each frame ([`crate::events`]), frames 0 to `frames`.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EventsRef"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "frame_hashes": {
+      "description": "Per-frame state hashes ([`crate::frame_hashes`]), frames 0 to `frames`.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Hash"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "frames": {
+      "description": "Number of frames, which equals the input log's frame count.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "input_log": {
+      "$ref": "#/$defs/Hash"
+    },
+    "power_on": {
+      "$ref": "#/$defs/PowerOn"
+    },
+    "provenance": {
+      "$ref": "#/$defs/Provenance"
+    },
+    "runtime": {
+      "$ref": "#/$defs/RuntimeRef"
+    },
+    "schema": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "source": {
+      "$ref": "#/$defs/SourceRef"
+    },
+    "trace": {
+      "description": "Full per-frame state ([`crate::trace`]), frames 0 to `frames`.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TraceRef"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "source",
+    "runtime",
+    "power_on",
+    "frames",
+    "input_log",
+    "checkpoint_interval",
+    "provenance"
+  ],
+  "$defs": {
+    "Bf909Revision": {
+      "type": "string",
+      "enum": [
+        "bf909x",
+        "bf9097"
+      ]
+    },
+    "Checkpoint": {
+      "type": "object",
+      "properties": {
+        "frame": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "snapshot": {
+          "$ref": "#/$defs/Hash"
+        }
+      },
+      "required": [
+        "frame",
+        "snapshot"
+      ]
+    },
+    "EventsRef": {
+      "description": "An event stream, chunked like the trace.",
+      "type": "object",
+      "properties": {
+        "chunk_frames": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "chunks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Hash"
+          }
+        },
+        "schema": {
+          "description": "The chunk schema ([`crate::events::SCHEMA`]).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "schema",
+        "chunk_frames",
+        "chunks"
+      ]
+    },
+    "FourPlayer": {
+      "oneOf": [
+        {
+          "description": "Two controllers.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "The NES Four Score.",
+          "type": "string",
+          "const": "four-score"
+        },
+        {
+          "description": "The Famicom four players adapter.",
+          "type": "string",
+          "const": "satellite"
+        }
+      ]
+    },
+    "Hash": {
+      "description": "A BLAKE3 hash, as 64 lowercase hex digits",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "MapperRevisions": {
+      "type": "object",
+      "properties": {
+        "bf909": {
+          "description": "Mapper 71.",
+          "$ref": "#/$defs/Bf909Revision"
+        },
+        "mmc3": {
+          "description": "Mapper 4.",
+          "$ref": "#/$defs/Mmc3Revision"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "mmc3",
+        "bf909"
+      ]
+    },
+    "Mmc3Revision": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "a",
+            "bc"
+          ]
+        },
+        {
+          "description": "Acclaim's clone, which clocks its IRQ counter on the falling edge.",
+          "type": "string",
+          "const": "acclaim"
+        }
+      ]
+    },
+    "PowerOn": {
+      "description": "Everything that changes how the console behaves from power-on. A runtime\npowers on from this alone, so a replay reproduces it, and refuses a\ncombination it can't reproduce. [`PowerOn::default`] is what `gp record`\nuses.",
+      "type": "object",
+      "properties": {
+        "concurrent_dpad": {
+          "description": "Whether opposing D-pad directions can be held together, as input logs\ncan say. Off would change logged input before the game sees it.",
+          "type": "boolean"
+        },
+        "cpu_ppu_offset": {
+          "description": "Master clock cycles the PPU runs behind the CPU (CPU-PPU clock\nalignment, nesdev wiki \"PPU frame timing\"). `tetanes-core` fixes it at 1.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "four_player": {
+          "$ref": "#/$defs/FourPlayer"
+        },
+        "mapper_revisions": {
+          "description": "Board revisions for mappers whose revision the ROM header can't name.",
+          "$ref": "#/$defs/MapperRevisions"
+        },
+        "mix_audio": {
+          "description": "Whether the APU mixes audio samples.",
+          "type": "boolean"
+        },
+        "ppu_warmup": {
+          "description": "Whether the PPU ignores writes to some registers until about one frame\nafter power-on, as real hardware does (nesdev wiki \"PPU power up state\").",
+          "type": "boolean"
+        },
+        "ram_init": {
+          "$ref": "#/$defs/RamInit"
+        },
+        "region": {
+          "$ref": "#/$defs/Region"
+        },
+        "render_video": {
+          "description": "Whether the PPU draws pixels. Headless (off) detects sprite 0 hits on\na separate path.",
+          "type": "boolean"
+        },
+        "zapper": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "region",
+        "ram_init",
+        "cpu_ppu_offset",
+        "ppu_warmup",
+        "mapper_revisions",
+        "four_player",
+        "zapper",
+        "concurrent_dpad",
+        "render_video",
+        "mix_audio"
+      ]
+    },
+    "Provenance": {
+      "description": "Where the input came from. The input log itself is named by hash, so a\nscripted run carries no name of its own.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "human-play"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "tas-import"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "url"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "bot"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "scripted"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "RamInit": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "zeros"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "ones"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "random"
+            },
+            "seed": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "kind",
+            "seed"
+          ]
+        },
+        {
+          "description": "FCEUX's default power-on fill of internal RAM: `00 00 00 00 FF FF FF\nFF` repeated (FCEUX 2.6.6 `src/fceu.cpp`, `FCEU_MemoryRand`, option\n0). Other RAM (PRG RAM, CHR RAM) powers on as zeros, as FCEUX's does\nfor a movie. For playing movies made in FCEUX on games that read RAM\nbefore writing it.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "fceux"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "Region": {
+      "type": "string",
+      "enum": [
+        "ntsc",
+        "pal"
+      ]
+    },
+    "RuntimeRef": {
+      "type": "object",
+      "properties": {
+        "commit": {
+          "description": "Source commit for runtimes we build, such as the `tetanes-core` fork.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "For example `gp-nes` or `mesen`.",
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "SourceRef": {
+      "oneOf": [
+        {
+          "description": "Identified as in [`crate::source::identify_nes`]. The title comes\nfrom the source registry, by hash, and isn't part of the manifest.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "nes-rom"
+            },
+            "mapper": {
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "sha256": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "sha256",
+            "mapper"
+          ]
+        },
+        {
+          "description": "A game model, run by a model runtime such as the interpreter\n(`gp-interp`). `bundle` is a store object holding the model's\ncanonical text and the lifted asset files it reads, so a replay needs\nnothing else; `name` is the model's `model.name`. Added 2026-10-28\nwithin schema 1: older builds refuse it as an unknown kind.",
+          "type": "object",
+          "properties": {
+            "bundle": {
+              "$ref": "#/$defs/Hash"
+            },
+            "kind": {
+              "type": "string",
+              "const": "model"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name",
+            "bundle"
+          ]
+        },
+        {
+          "description": "An arcade romset, run by gp-arcade: `identity` is the set's\nidentity (gp_arcade::romset::identity, the SHA-256 of its chips'\nSHA-1s sorted) and `system` MAME's name for the set (`tapper`).\nAdded 2026-11-12 within schema 1: older builds refuse it as an\nunknown kind.",
+          "type": "object",
+          "properties": {
+            "identity": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "romset"
+            },
+            "system": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "identity",
+            "system"
+          ]
+        }
+      ]
+    },
+    "TraceRef": {
+      "description": "A frame trace: chunks of `chunk_frames` frames covering frames 0 to the\nrecording's last, in order.",
+      "type": "object",
+      "properties": {
+        "chunk_frames": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "chunks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Hash"
+          }
+        },
+        "fields": {
+          "description": "The field table object ([`crate::trace::FieldTable`]) that names the\nstate's fields.",
+          "$ref": "#/$defs/Hash"
+        },
+        "schema": {
+          "description": "The chunk schema ([`crate::trace::SCHEMA`]).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "schema",
+        "chunk_frames",
+        "fields",
+        "chunks"
+      ]
+    }
+  }
+}

@@ -36,10 +36,16 @@ pub(crate) fn ram_names(dir: &Path) -> std::collections::BTreeMap<u16, String> {
 
 /// The player's x, y and vertical speed bytes from a ROM dataset.
 pub(crate) fn player_bytes(dir: &Path) -> Result<(Option<u16>, u16, Option<u16>)> {
-    // A game with no ROM dataset yet can state its player's bytes in its
-    // package's state mapping (entities.player[0].x and .y).
-    if crate::rom_dataset::read(dir).is_err()
-        && let Some(game) = dir.file_name().and_then(|g| g.to_str())
+    // A game with no ROM dataset yet, or one whose dataset names no
+    // player (an arcade romset's, which has no element reader), can state
+    // its player's bytes in its package's state mapping
+    // (entities.player[0].x and .y).
+    if crate::rom_dataset::read(dir).map_or(true, |d| {
+        !d.rows("ram").iter().any(|r| {
+            matches!(r.get("element"), Some(crate::rom_dataset::Cell::S(Some(e))) if e == "player")
+                && matches!(r.get("quantity"), Some(crate::rom_dataset::Cell::S(Some(q))) if q == "y")
+        })
+    }) && let Some(game) = dir.file_name().and_then(|g| g.to_str())
         && let Some(games) = crate::roms_cmd::games_dir(None)
         && let Some(pkg) = crate::labels::game_folder(&games, game)
         && let Ok(text) = std::fs::read_to_string(pkg.join("mapping.toml"))
@@ -96,11 +102,17 @@ pub(crate) fn player_bytes(dir: &Path) -> Result<(Option<u16>, u16, Option<u16>)
 /// bytes that changed there and the sprites that appeared after.
 /// Sprites that touch, merged into boxes: [x, y, w, h] on the screen.
 pub(crate) fn sprite_boxes(oam: &[u8; 256], tall: i32) -> Vec<[i32; 4]> {
-    let mut b: Vec<[i32; 4]> = oam
+    let b: Vec<[i32; 4]> = oam
         .chunks(4)
         .filter(|e| e[0] < 0xEF)
         .map(|e| [i32::from(e[3]), i32::from(e[0]) + 1, 8, tall])
         .collect();
+    merge_boxes(b)
+}
+
+/// Sprite rectangles ([x, y, w, h]) that touch, merged into boxes: the
+/// NES's sprite table's ([`sprite_boxes`]) or an arcade sprite list's.
+pub(crate) fn merge_boxes(mut b: Vec<[i32; 4]>) -> Vec<[i32; 4]> {
     let touch = |a: &[i32; 4], c: &[i32; 4]| {
         a[0] <= c[0] + c[2] && c[0] <= a[0] + a[2] && a[1] <= c[1] + c[3] && c[1] <= a[1] + a[3]
     };

@@ -1,0 +1,209 @@
+{
+  "$id": "game-printer:corpus@1.0.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Corpus plan, `corpus.toml`",
+  "type": "object",
+  "properties": {
+    "changelog": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Change"
+      }
+    },
+    "clip": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PlanClip"
+      }
+    },
+    "corpus": {
+      "$ref": "#/$defs/PlanHead"
+    },
+    "import": {
+      "description": "Carried through unread, as `clips.toml`'s was.",
+      "default": null
+    },
+    "needs": {
+      "$ref": "#/$defs/Needs",
+      "default": {
+        "generator": "",
+        "mapping": ""
+      }
+    },
+    "target": {
+      "$ref": "#/$defs/Target"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "corpus",
+    "target"
+  ],
+  "$defs": {
+    "Change": {
+      "type": "object",
+      "properties": {
+        "added": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "changed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "date": {
+          "type": "string"
+        },
+        "removed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "says": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "date"
+      ]
+    },
+    "Needs": {
+      "description": "What a corpus needs of the tools that make its clips again.",
+      "type": "object",
+      "properties": {
+        "generator": {
+          "description": "gp's version and the corpus generator's, as the clip set says.",
+          "type": "string",
+          "default": ""
+        },
+        "mapping": {
+          "description": "The state mapping's `schema` the curves were measured with.",
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false
+    },
+    "PlanClip": {
+      "type": "object",
+      "properties": {
+        "frames": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "id": {
+          "type": "string"
+        },
+        "level": {
+          "type": "string",
+          "default": ""
+        },
+        "name": {
+          "description": "Metadata, not hashed.",
+          "type": "string"
+        },
+        "presses": {
+          "$ref": "#/$defs/Presses"
+        },
+        "source": {
+          "type": "string",
+          "default": "generated"
+        },
+        "start": {
+          "description": "A `.presses` file from power-on; its frames are where the clip starts.",
+          "type": "string"
+        },
+        "why": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "start",
+        "presses",
+        "frames"
+      ]
+    },
+    "PlanHead": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "recipes": {
+          "description": "The recipe-set hash ([`recipe_set_hash`]).",
+          "type": "string"
+        },
+        "title": {
+          "type": "string",
+          "default": ""
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "name",
+        "version",
+        "recipes"
+      ]
+    },
+    "Presses": {
+      "description": "A clip's own presses: a file in `inputs/`, or spans inline.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "Target": {
+      "description": "The game a corpus is for.",
+      "type": "object",
+      "properties": {
+        "game": {
+          "description": "The template or source ID.",
+          "type": "string",
+          "default": ""
+        },
+        "patch": {
+          "description": "For a hack: the patch's SHA-256.",
+          "type": "string"
+        },
+        "rom": {
+          "description": "The base ROM's headerless SHA-256, as `sources/<platform>.toml`\nregisters it.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "rom"
+      ]
+    }
+  }
+}

@@ -1311,3 +1311,48 @@ details.dsec > summary { cursor: pointer; }
 .log-panel { width: 380px; flex: none; }
 .log-panel iframe { width: 100%; height: calc(100vh - 80px); border: 1px solid var(--line, #333); }
 @media (max-width: 900px) { .views-row { flex-direction: column; } .log-panel { width: 100%; } }
+
+/* Inside gp serve's one page (?embed=VIEW, Embed.tsx): the page's own
+   colors and type (mechanic/style.css), so the view reads as a part of it,
+   not a second app: black, the NES palette, a monospace face, square
+   corners, headings in capitals. */
+html.embed {
+  --bg: #000000;
+  --panel: #1c1c1c;
+  --line: #3c3c3c;
+  --text: #fcfcfc;
+  --muted: #bcbcbc;
+  --accent: #3cbcfc;
+  --changed: #f8b800;
+  --differs: #f83800;
+  --good: #58d854;
+  --ask: #fca044;
+  font: 13px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace;
+}
+html.embed body {
+  background: #000000;
+}
+html.embed .app {
+  padding: 8px 0 24px;
+}
+html.embed * {
+  border-radius: 0 !important;
+}
+html.embed h2,
+html.embed h3,
+html.embed summary {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #f8b800;
+}
+html.embed button,
+html.embed .button {
+  border: 2px solid #fcfcfc;
+  background: #000000;
+  font-weight: 700;
+}
+html.embed select,
+html.embed input {
+  border: 2px solid #3c3c3c;
+  background: #000000;
+}

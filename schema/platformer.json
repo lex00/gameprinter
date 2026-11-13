@@ -1,0 +1,3241 @@
+{
+  "$id": "game-printer:platformer@0.4",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Game Printer platformer extension 0.4.5",
+  "description": "The whole extension's schema, for `gp model schema platformer`.",
+  "type": "object",
+  "properties": {
+    "entity": {
+      "description": "Components it adds to entities.",
+      "$ref": "#/$defs/EntityComponents"
+    },
+    "level": {
+      "description": "Fields it adds to levels.",
+      "$ref": "#/$defs/LevelFields"
+    }
+  },
+  "required": [
+    "entity",
+    "level"
+  ],
+  "$defs": {
+    "Bounce": {
+      "description": "Since 0.4.10: after it moves, the tile at `point` (from its position)\nis looked at. A tile there that isn't empty, water or a ladder, met\nwhile moving down for the first frame in a row, bounces it: its speed\nup and down becomes `speed`, its fraction kept (FireballBGCollision\nstores $fd in Fireball_Y_Speed and leaves the force alone), and its\nwhole height is rounded down to a\nmultiple of `snap`, its fraction kept. One met while moving up, or on\nthe frame after a bounce, removes it. Super Mario Bros.' fireballs\n(FireballBGCollision, BlockBufferChk_FBall): a wall is met the same way,\nso a fireball dies against one. Above `from_y` nothing is looked at.",
+      "type": "object",
+      "properties": {
+        "from_y": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "point": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fixed"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "snap": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "speed": {
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "point",
+        "speed"
+      ]
+    },
+    "Carry": {
+      "description": "Lifting, carrying and throwing `carryable` entities. `action` pressed\nwhile standing on one lifts it: for `lift_frames` frames the carrier\ndoesn't move, then the entity rides at `offset` from the carrier's\nposition. `action` pressed again throws it: it takes `throw` (x\nmirrored when facing left), or `throw_moving` when the carrier's speed\nacross is `moving_above` or more. `item.lifted` and `item.thrown` fire,\neach concerning the item and the carrier.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "lift_frames": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "moving_above": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "offset": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fixed"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "throw": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fixed"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "throw_moving": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Fixed"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "offset",
+        "throw"
+      ]
+    },
+    "Carryable": {
+      "description": "An entity a `carry` can lift.",
+      "type": "object",
+      "properties": {
+        "offset": {
+          "description": "Its offset from the carrier instead of the carry's, such as a\ntaller item's.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Fixed"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        }
+      },
+      "additionalProperties": false
+    },
+    "Climb": {
+      "description": "Climbing ladders: tiles of kind `ladder`. `up` held with the hitbox's\nmiddle on a ladder, or `down` held standing on a ladder's top, starts a\nclimb: the entity moves to the ladder's middle across and has no\ngravity, moving `speed` a frame while `up` or `down` is held. It stops\nclimbing when its middle leaves the ladder, when it lands, or when\n`release` is pressed.",
+      "type": "object",
+      "properties": {
+        "by_feet": {
+          "description": "Feature `climb.by_feet`: the ladder that holds the climber is the\nrow of pixels under its tile hitbox, not its middle. It climbs while\nthat row is in a ladder or a cell with a surface, stops where it\nisn't (a broken ladder's top), and stands once it reaches a surface\nrow. Down starts a climb from a surface with a ladder under it.",
+          "type": "boolean"
+        },
+        "down": {
+          "type": "string"
+        },
+        "down_cycle": {
+          "description": "Feature `climb.down_cycle`: the same for climbing down.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "down_holds": {
+          "description": "Feature `climb.down_holds`: `down` held while standing and not\nclimbing keeps the body still: the run gets no input and the step\ncounter doesn't step. Up held walks as usual (Donkey Kong's walk\nroutine looks for a ladder down instead of walking). A jump comes\nfirst: the takeoff frame and a landing hold aren't held.",
+          "type": "boolean"
+        },
+        "down_through": {
+          "description": "Feature `climb.down_through`, with `by_feet`: down newly pressed\nalso starts a climb from standing with the feet in a ladder cell (a\nladder's foot), and climbing down tests nothing on the way: it goes on until\nthe feet reach a surface row, and the height wraps at this many\npixels, as an 8-bit coordinate does. Neither `kill_below` nor a\ngoal touches a body climbing so. Donkey Kong looks for a girder\nonly of the floor its y + 8 is in, and Down at a ladder's foot\nclimbs down through the floor, round the screen and onto the top\ngirder.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "down_through_step": {
+          "description": "Feature `climb.down_through_step`, with `down_through`: the press of\ndown at a ladder's foot climbs down through the floor only while the\nentity's last move across stepped it up a surface. Donkey Kong's\nwalk tests the ground ($D20B) after the move across and before the\nstep up, so $5A is 0 after a step up the slope, and $D432 skips its\nladder-top test then (the ladder-zip, TASVideos 2299S).",
+          "type": "boolean"
+        },
+        "grab": {
+          "description": "Feature `climb.grab`, `[x0, y0, x1, y1]` from the entity's place, in\nwhole pixels: in a level with `ladders`, a climb up starts only\nwhere this box (edges included) meets one of the level's ladder\nboxes below the box's top row, instead of by the cell at the\nentity's middle. Standing on a ladder's top, up does nothing (the\ngame's climb routine finds the top in a list of its own, $D50A).\nDonkey Kong's ladder routine ($D28B) tests Mario's feet box against\neach ladder's box ($D8AD).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "maxItems": 4,
+          "minItems": 4
+        },
+        "grab_down": {
+          "description": "Pixels it moves down into the ladder when it starts climbing down\nfrom the top.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grab_snap": {
+          "description": "With `grab` (feature `climb.grab`): a climb up by a ladder box\nstarts with the entity's x at the box's left plus this, instead of\nthe middle of the cell. Donkey Kong's $D2B9 puts Mario's sprite at\nthe ladder's x less 4 ($A1).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "hold_still": {
+          "description": "Holding this action keeps it still on the ladder (firing, in Mega\nMan 2).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lone_way": {
+          "description": "Feature `climb.lone_way`: the climb reads one way from the pad, as\nthe walk does with `run.lone_direction`: up or down starts or moves\na climb only held alone, and on a ladder left or right held alone\n(both, with `run.both_left`) turns the climber to it without moving\nit. Donkey Kong's $D175 latches $56 only for a lone direction and\nwrites $57 from Left or Right on every frame but a jump's or a\nfall's, the ladder's too, and the ladder routine ($D37E) climbs on\n$56 = 8 or 4 (wallW's ladder probes, 2026-11-04: Left on a ladder\nfaces left on the frame it is pressed; Down and Left stand still).",
+          "type": "boolean"
+        },
+        "release": {
+          "description": "The action that lets go. Default none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "speed": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "stand_on_top": {
+          "description": "A ladder cell with no ladder above it stands like a `top` tile for\nthis entity while it isn't climbing.",
+          "type": "boolean"
+        },
+        "top_test": {
+          "description": "Feature `climb.top_test`, with `grab`: a climb from standing asks\nthe level's `ladder_tops` and `ladder_stops` by the grab box (edges\nincluded). Down starts only where the box meets one of the level's\nladder boxes, and a top and no stop, at the ladder's left plus\n`grab_snap`; up doesn't start where it meets a top or a stop; and\nclimbing, up doesn't move where it meets a stop. With\n`down_through_step`, a press of down after a step up skips the top\nand stop test but still needs the ladder box. Donkey Kong's ladder routine\nasks $D50A on the girder while $5A is set ($D397 up, $D43B down)\nand before each move ($D3AF, $D45A): 1 in a top's box, 2 in a\nstop's.",
+          "type": "boolean"
+        },
+        "up": {
+          "type": "string"
+        },
+        "up_cycle": {
+          "description": "Feature `climb.up_cycle`: whole pixels moved up on each count of\nthe body's step counter (its mechanic word 0, shared with\n`run.step_cycle`), in place of `speed`. A frame up is held at a\nladder steps the counter, and the climb starts on a count that\nmoves (Donkey Kong's $88 pattern at $D9E8, $24 and $49).",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "speed",
+        "up",
+        "down"
+      ]
+    },
+    "Cmp": {
+      "type": "string",
+      "enum": [
+        "<",
+        "<=",
+        "==",
+        "!=",
+        ">=",
+        ">"
+      ]
+    },
+    "Contact": {
+      "description": "What happens when the player touches this entity.",
+      "type": "object",
+      "properties": {
+        "after_move": {
+          "description": "The touch is tested in the entity's own turn, after its move, not\nbefore the enemies move. Super Mario Bros.' BulletBillHandler moves a\ncannon's bill and then calls PlayerEnemyCollision, in ProcessCannons\nafter the enemy loop, so all the enemies have moved on the frame a\nbill hits Mario. Default off.",
+          "type": "boolean"
+        },
+        "bounce": {
+          "description": "The player's vertical speed after a stomp.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "damage": {
+          "description": "How much a `hurt-player` touch takes from the player's `health`.\nDefault 1.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "every": {
+          "description": "Since 0.4.9: the touch is tested only on frames whose number is a\nmultiple of this (the frame count from power-on), as Super Mario\nBros.' PlayerEnemyCollision leaves on frames whose FrameCounter is\nodd. Default every frame.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "in_turn": {
+          "description": "Since 0.4.25: a state's `stops_at_once` that this touch sets off\nleaves the bodies in earlier numbered slots to finish their move.\nSuper Mario Bros.' RunNormalEnemies tests a touch inside the enemy\nloop, so TimerControl stops the enemy that hurt Mario and those after\nit, and those before it have moved. Default off, and a body without a\nnumbered slot stops them all.",
+          "type": "boolean"
+        },
+        "invincible": {
+          "description": "Since 0.4.10: what a touch does while the player is invincible\n(its `invincible`). Default `defeat` for an entity whose touch would\nhurt or kill the player or kick it, or that can be stomped, and\n`otherwise` for the rest. Super Mario Bros.' firebars and hammers\ndo nothing to a player with the star.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Touch"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "keep_on_stomp": {
+          "description": "A stomp leaves the entity in place, for its state machine to change\n(a Koopa into its shell, a Goomba flattened for a while).",
+          "type": "boolean"
+        },
+        "near": {
+          "description": "The touch is tested by the player's `touch_points` near the entity's\nposition, in the entity's turn after it moves, in place of the\nhitboxes in the contact system. Super Mario Bros.' FirebarCollision\nruns inside ProcFirebar. Default off.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Near"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "otherwise": {
+          "description": "What any other touch does.",
+          "$ref": "#/$defs/Touch"
+        },
+        "phase": {
+          "description": "Since 0.4.9, with `every`: the frames tested are those whose number\nless this is a multiple of `every` (PlayerHammerCollision runs on\nodd frames: `every = 2`, `phase = 1`). Default 0.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "ride": {
+          "description": "Since 0.4.26, with `stand`: how the player rides the entity. The player is placed\non the entity after the entity's own move on the same frame, keeping\nthe fraction of its height, as Super Mario Bros.' MoveSmallPlatform\nand ChkYPCollision run PositionPlayerOnVPlat after the platform moves.\nIt needs `platformer.contact` before `platformer.enemies` in the\nsystem order. Default off: the player is placed in the contact\nsystem, on a whole pixel.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ride"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sides": {
+          "description": "Since 0.4.22: the entity's sides stop the player. A touch at a side\nimpedes the player as a wall does: its speed across becomes 0 and\nit moves one pixel away, unless it is already moving away. Super\nMario Bros.' PlatformSideCollisions calls ImpedePlayerMove. Default\noff: a touch doesn't move the player.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sides"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stand": {
+          "description": "A falling player lands on the entity's hitbox top instead of\nstomping it, and rides it while it moves: `enemy.stood_on` fires on\nlanding. The touch below the top is still `otherwise`.",
+          "type": "boolean"
+        },
+        "stomp_depth": {
+          "description": "A falling player whose bottom row is within this many rows of the\ntop of this entity's hitbox stomps it: `enemy.stomped` fires and the\nentity is removed, unless `keep_on_stomp`. Without it the entity\ncan't be stomped.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "touch_edges": {
+          "description": "Since 0.4.14: the touch's test takes each hitbox one pixel wider and\ntaller, so two that only meet at their edges touch. Super Mario\nBros.' SprObjectCollisionCore compares a box's left and right as\noffsets from BoundBoxCtrlData, each a pixel in the box, and counts\nequal as a touch. Default off: hitboxes touch when they share a pixel.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "otherwise"
+      ]
+    },
+    "DecelBand": {
+      "description": "A walking rate from a speed up (since 0.4.2).",
+      "type": "object",
+      "properties": {
+        "from": {
+          "description": "At or above this speed.",
+          "$ref": "#/$defs/Fixed"
+        },
+        "rate": {
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "rate"
+      ]
+    },
+    "Defeat": {
+      "description": "What a defeat leaves (0.4.12): a body of another entity at the same\nplace, which keeps the defeated one's numbered slot until it leaves.",
+      "type": "object",
+      "properties": {
+        "becomes": {
+          "description": "The entity it becomes.",
+          "type": "string"
+        },
+        "rise": {
+          "description": "Pixels it moves up at once.",
+          "$ref": "#/$defs/Fixed"
+        },
+        "speed": {
+          "description": "The whole part of its speed up and down; the fraction is kept.",
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "becomes",
+        "rise",
+        "speed"
+      ]
+    },
+    "EntityComponents": {
+      "title": "Game Printer platformer extension 0.4.5: entity components",
+      "description": "The components a platformer entity can have. Each is optional.",
+      "type": "object",
+      "properties": {
+        "bounce": {
+          "description": "Since 0.4.10: bouncing off the ground at a point, and leaving.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Bounce"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "carry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Carry"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "carryable": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Carryable"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "climb": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Climb"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contact": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Contact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fall": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fall"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fly": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fly"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "health": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Health"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hits": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Hits"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Hop"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "invincible": {
+          "description": "Since 0.4.10, a player's: invincible while a counter holds.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Invincible"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "jump": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Jump"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "knockback": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Knockback"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "launcher": {
+          "description": "Since 0.4.28: it fires another entity on its own timer and a shift\ncounter's bits.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Launcher"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "leap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Leap"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "leave_view": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LeaveView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "locks": {
+          "description": "A player's actions that do nothing while a counter holds (feature\n`power.locks`): Donkey Kong's hammer, held while its timer runs,\ntakes away jumping and climbing.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Locks"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "orbit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Orbit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "orbit_part": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OrbitPart"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "oscillate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Oscillate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Path"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "patrol": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Patrol"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "run": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Run"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shoot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Shoot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shuttle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Shuttle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "springboard": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Springboard"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stream": {
+          "description": "A level marker that sends entities in from past the view's edge.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Stream"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "touch_points": {
+          "description": "A player's points, in pixels from its position, that a\n`contact.near` tests. Super Mario Bros.' FirebarCollision tests\ny+24 for small Mario and y, y+12 and y+24 for big Mario, 4 pixels in\nfrom his left. Default none: no `contact.near` touches this player.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "maxItems": 2,
+            "minItems": 2
+          }
+        },
+        "walk": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Walk"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Fall": {
+      "description": "Falling for an entity that doesn't jump: `gravity` is added to its\nvertical speed every frame, up to `max_fall`.",
+      "type": "object",
+      "properties": {
+        "feet": {
+          "description": "Since 0.4.19: the columns where the ground is looked for, in pixels\nfrom the entity's x, as `jump.feet`. Without them it is every column\nof the tile hitbox. Super Mario Bros.' ChkUnderEnemy tests one point,\nx + 8, so a goomba drops off a ledge once its middle is past the\nedge.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Fixed"
+          }
+        },
+        "gravity": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "max_fall": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "max_fall_from_half": {
+          "description": "Since 0.4.3: the fall limit acts from one half past it, as\n`jump.max_fall_from_half`.",
+          "type": "boolean"
+        },
+        "move_first": {
+          "description": "The position moves by the old vertical speed before gravity is\nadded, as Super Mario Bros. does, rather than after.",
+          "type": "boolean"
+        },
+        "stands_still": {
+          "description": "Since 0.4.19: a body on the ground takes no gravity. It only looks\nfor the ground, and falls from the frame after it has gone. Placed\nin a numbered slot it takes the slot's height fraction (since\n0.4.21), and on the ground no speed from the slot. Super Mario\nBros.' enemy in state 0 skips MoveD_EnemyVertically, ChkForRedKoopa's\nchange to state 1 moves it from the next frame, nothing clears\nEnemy_YMF_Dummy, and SetBBox runs on into InitVStf.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "gravity",
+        "max_fall"
+      ]
+    },
+    "Fixed": {
+      "description": "A fixed-point number with 16 fraction bits: an integer, or an exact decimal string such as \"0.25\". Floats are refused.",
+      "oneOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string",
+          "pattern": "^-?[0-9]+(\\.[0-9]{1,16})?$"
+        }
+      ]
+    },
+    "Fly": {
+      "description": "Moving sideways at a steady speed, through tiles: a bullet or a\nswimming fish. Since 0.4.10 it may have `fall` too, for a projectile\nthrown in an arc.",
+      "type": "object",
+      "properties": {
+        "heading": {
+          "description": "Which way it goes; default toward the player when it spawns.",
+          "$ref": "#/$defs/Heading"
+        },
+        "keep_speed": {
+          "description": "Since 0.4.10: it keeps the speed across it has (one a start carries\nfrom the original, or `shoot.vx`), and takes `speed` the way it\nfaces only while that is 0. Super Mario Bros.' fireball moves by\nwhatever Fireball_X_Speed holds.",
+          "type": "boolean"
+        },
+        "speed": {
+          "description": "Pixels per frame, without its sign.",
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "speed"
+      ]
+    },
+    "Goal": {
+      "description": "Reaching the goal fires `goal.reached`.",
+      "type": "object",
+      "properties": {
+        "under": {
+          "description": "Since 0.4.13: a player whose top edge is at or below this y passes\nunder the goal and doesn't reach it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "x": {
+          "description": "The player's left edge reaching this x.",
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "x"
+      ]
+    },
+    "Ground": {
+      "description": "Feature `level.ground`: each row of `runs` is a run of boxes, its first\nfive bytes x, y, shape, the step across from one box to the next (a\nsigned byte) and the count; each box is `rise` pixels above the last,\nand x and y wrap as bytes. The shape divided by `shape_step` is a row\nof `shapes`, whose four bytes are the box's left, top, right and bottom\nfrom its place, edges included. A body on the ground keeps its height\nwhile its feet, the columns `feet` from its x on the row under its tile\nhitbox, meet a box; once they meet none it moves to the nearest row a\npixel or two up or down whose box they meet. Donkey Kong's walk tests\nMario's feet box ($C186: his sprite +8 to +10, +17 down) against the\ngirder pieces of his row ($D91A, the runs at $C08C, each piece a pixel\nhigher) after each move across and steps a pixel when it finds none\n($D8EB).",
+      "type": "object",
+      "properties": {
+        "bodies": {
+          "description": "Feature `level.ground_bodies`: entities whose box is ground too, so\nthe ground can move. A ground test meets the level's boxes first,\nthen these bodies' boxes in the bodies' order. A body whose test\nmeets one of these rides it: it moves by the same step whenever\nthat body moves, and it stays standing without a test until it\nmoves across or leaves the ground. The ride ends at the next test\nthat meets no box at all (the walk's after a move across, each\nframe of a jump after its takeoff, a ledge fall's); a test that\nmeets one of the level's boxes leaves it as it was. Donkey Kong's\n75m: when the stage's boxes hold nothing ($D316), $D326 tests the\nsix elevator platforms against Mario's feet box and sets $DA by the\ncolumn it meets, or clears it when it meets none; $E834 then moves\nMario's sprite with the column on each of its steps while $DA holds.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GroundBody"
+          }
+        },
+        "boxes": {
+          "description": "Feature `level.ground_boxes`: each row of `runs` is one box, its\nfirst three bytes x, y and shape, with no step across or count.\nDonkey Kong's ground on every stage but 25m ($D2E2 reads the\nstage's rows through the pointer at $C46B and tests Mario's feet box\nagainst each, $D8AD; 75m's at $C20C).",
+          "type": "boolean"
+        },
+        "feet": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "land": {
+          "description": "Feature `level.ground_land`: a jump falling (its vertical speed 0\nor more) lands on the first box its feet meet on a row from this\nmany pixels above the row under its tile hitbox down to that row,\nwherever it was the frame before, and the tiles don't land it. A\nledge fall (`jump.ledge_fall`) lands the same way, where it is.\nDonkey Kong's jump tests Mario's feet box, +10 to +12 down from his\nheight, against the girder pieces in their list's order ($D5CC,\n$D2CB, $D91A) and puts him on the first it meets ($D5D3); his fall\noff a girder's end tests the same box and dies where it meets one\n($D6BC).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "land_rising": {
+          "description": "Feature `level.ground_land_rising`: with `land`, a jump lands on a\nbox its feet meet on any frame after its takeoff, rising too. Donkey\nKong's jump runs its ground test ($D5CC) on every frame but the\ntakeoff's ($D5BB) whichever way the arc goes, so a jump whose feet\nrise into a box's top lands there.",
+          "type": "boolean"
+        },
+        "rise": {
+          "type": "integer",
+          "format": "int32",
+          "default": 1
+        },
+        "runs": {
+          "type": "string"
+        },
+        "shape_step": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 1,
+          "minimum": 0
+        },
+        "shapes": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "runs",
+        "shapes",
+        "feet"
+      ]
+    },
+    "GroundBody": {
+      "description": "Feature `level.ground_bodies`: an entity kind whose bodies are ground,\nand its box: left, top, right and bottom from the body's place, edges\nincluded. Donkey Kong's elevator platform is the box at $C2C8: its\nsprite's x to x + 18 on the row under its y ($D326 with $2A).",
+      "type": "object",
+      "properties": {
+        "box": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "maxItems": 4,
+          "minItems": 4
+        },
+        "entity": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "entity",
+        "box"
+      ]
+    },
+    "Guard": {
+      "description": "A comparison of a counter with a number.",
+      "type": "object",
+      "properties": {
+        "cmp": {
+          "$ref": "#/$defs/Cmp"
+        },
+        "counter": {
+          "type": "string"
+        },
+        "value": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "counter",
+        "cmp",
+        "value"
+      ]
+    },
+    "Hazard": {
+      "description": "A hazard tile's touch.",
+      "type": "object",
+      "properties": {
+        "damage": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "touch": {
+          "description": "`kill-player` or `hurt-player`.",
+          "$ref": "#/$defs/Touch"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "touch"
+      ]
+    },
+    "Head": {
+      "description": "A head point (since 0.4.5). After the vertical move, while the entity\nrises (its vertical speed below 0), its y is at least `above` and at\nleast `row_from` pixels into its tile row, the cell `point` is in\ndecides: a cell that stops movement sets the vertical speed's whole\npart to its hit's `speed`, fires its `event` for the entity and turns\ninto `becomes`. The entity isn't moved. The tile hitbox still stops\nthe entity from the sides and lands it, but no longer stops a rise.",
+      "type": "object",
+      "properties": {
+        "above": {
+          "description": "No head test while the entity's y is less than this.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "busy_while": {
+          "description": "Feature `head.busy_while`: while this holds, every cell that stops movement is\nhit as a `solid` one: no event, no change to the cell. Super Mario\nBros.' PlayerBGCollision reads BlockBounceTimer, which a block hit\nsets to 16 frames, and takes no block hit while it runs (NYSpd).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Guard"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hits": {
+          "description": "What a hit does by the cell's kind, first match. A cell that stops\nmovement and isn't listed sets the speed's whole part to 0.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HeadHit"
+          }
+        },
+        "keep_fraction": {
+          "description": "A hit sets the speed's whole part and keeps its fraction, rather\nthan setting the whole speed.",
+          "type": "boolean"
+        },
+        "point": {
+          "description": "The point, x and y from the entity's position, in whole pixels.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fixed"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "row_from": {
+          "description": "A head test only when the entity's y, in the tile row it's in, is\nat least this many pixels down (y mod the tile size).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "point"
+      ]
+    },
+    "HeadAbove": {
+      "description": "What a head hit does to the cell above the one hit (feature `head.above`): when\nthat cell is `tile`, it becomes `becomes` and `event` fires for the\nentity. Super Mario Bros.' BumpBlock and BrickShatter call\nCheckTopOfBlock, which takes a coin sitting on the block that was hit.",
+      "type": "object",
+      "properties": {
+        "becomes": {
+          "$ref": "#/$defs/TileKind",
+          "default": "empty"
+        },
+        "event": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tile": {
+          "$ref": "#/$defs/TileKind"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "tile"
+      ]
+    },
+    "HeadHit": {
+      "description": "What a head hit on one kind of cell does.",
+      "type": "object",
+      "properties": {
+        "above": {
+          "description": "Feature `head.above`: what the hit does to the cell above.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HeadAbove"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "becomes": {
+          "description": "The kind the cell becomes.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TileKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "event": {
+          "description": "An event fired for the entity: the core's, an extension's or the\nmodel's own.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hold": {
+          "description": "Since 0.4.6: frames after the hit's frame that the cell stays\nsolid, as a plain `solid` cell, before it becomes `becomes` (or the\nkind it was, without one), as in a game that keeps a bumped block's\ncell solid while the block bounces. A body that hits it meanwhile\ngets the `solid` hit. It is world state, counted down on frames\nthat aren't frozen.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "speed": {
+          "description": "The vertical speed's whole part after the hit (positive: down).",
+          "$ref": "#/$defs/Fixed"
+        },
+        "tile": {
+          "description": "A kind that stops movement: `solid`, `coin_block`, `item_block` or\n`brick`.",
+          "$ref": "#/$defs/TileKind"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "tile",
+        "speed"
+      ]
+    },
+    "Heading": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "left",
+            "right"
+          ]
+        },
+        {
+          "description": "Toward the player when it spawns.",
+          "type": "string",
+          "const": "player"
+        }
+      ]
+    },
+    "Health": {
+      "description": "Hit points. The player's are a counter, so rules and the HUD read them;\nany other entity's are its own, per instance. A hurt takes `damage`\nfrom them, unless the entity is invulnerable from an earlier one.",
+      "type": "object",
+      "properties": {
+        "counter": {
+          "description": "The player's: the counter that holds its hit points.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "damage_from": {
+          "description": "Damage taken from each hitting entity, by entity name, instead of\nits `hits.damage`.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "defeat": {
+          "description": "Since 0.4.12: what a defeat by a hit or a touch leaves in its place,\ninstead of nothing.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Defeat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "invulnerable": {
+          "description": "Frames after a hurt in which no hurt counts.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "points": {
+          "description": "Any other entity's: its hit points when it appears.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "shield": {
+          "description": "Hits do nothing (the hitter still goes, unless `hits.keep`): a\nshield, usually set by a state.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Hits": {
+      "description": "Hitting other entities: a projectile, or a thrown enemy. Touching an\nentity with `health` whose role is in `roles` takes `damage` from it\n(or its `damage_from` for this entity) and fires `enemy.hit` for it;\none out of hit points fires `enemy.defeated` and leaves the level. The\nhitter leaves too, unless `keep`.",
+      "type": "object",
+      "properties": {
+        "damage": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "every": {
+          "description": "Since 0.4.10: hits are tested only on frames whose number less\n`phase` is a multiple of this, as `contact.every` (Super Mario\nBros.' FireballEnemyCollision runs on even frames).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "keep": {
+          "type": "boolean"
+        },
+        "move_first": {
+          "description": "Since 0.4.10: the hitter moves (its components, as the enemies\nsystem moves it) in the contact system, just before its hits are\ntested, and not in the enemies system, so it hits the others where\nthey were before they move. Super Mario Bros. runs FireballObjCore,\nwhich moves a fireball and tests it against the enemies, ahead of\nits enemy loop.",
+          "type": "boolean"
+        },
+        "phase": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "roles": {
+          "description": "The roles it hits. Default `enemy` and `boss`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Hop": {
+      "description": "Jumping again on landing: the vertical speed becomes `speed` (negative,\nup) whenever the entity lands. Needs `fall`.",
+      "type": "object",
+      "properties": {
+        "every": {
+          "description": "Since 0.4.1: it hops only on frames whose number, plus `phase` times\nthe body's index, is a multiple of `every`: a hop on a beat.\nStanding on other frames, it waits.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "land_first": {
+          "description": "Since 0.4.8: the landing comes before the move, as Super Mario\nBros.' EnemyJump runs in EnemyToBGCollisionDet before\nMoveJumpingEnemy. At the start of its turn, standing on ground\n(its bottom row in a tile that stops it) with its speed's whole\npart anything but -2, -1 or 0 (the game adds 2 to Enemy_Y_Speed and\ncompares it with 3 unsigned), it is placed on that tile's top, its\nheight's fraction kept, and takes the hop's speed; then it moves by\nits `fall`, and a move into the ground doesn't stop it.",
+          "type": "boolean"
+        },
+        "land_while_stopped": {
+          "description": "Since 0.4.26: with `land_first`, the landing still happens on a frame a freeze or\na state's `stops` or `stops_at_once` keeps the enemies from moving,\nas Super Mario Bros.' RunNormalEnemies runs EnemyToBGCollisionDet\nbefore its TimerControl check, which skips only EnemyMovementSubs.",
+          "type": "boolean"
+        },
+        "pattern": {
+          "description": "Since 0.4.1: the speeds of its hops in turn, from the first, then\nagain from the start (three small hops and a big one), instead of\n`speed`. The count of hops is kept in the body's mechanic words, so\nan entity with a pattern has no `ext` hook.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fixed"
+          }
+        },
+        "phase": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "speed": {
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "speed"
+      ]
+    },
+    "Ice": {
+      "type": "object",
+      "properties": {
+        "acceleration": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "deceleration": {
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "acceleration",
+        "deceleration"
+      ]
+    },
+    "Invincible": {
+      "description": "Since 0.4.10: a player that is invincible while `while` holds (a\ncounter compared with a number, as a transition's `if` is). While it\ndoes, a touch does the toucher's `contact.invincible` instead of a\nstomp or its `otherwise`: by default an entity whose touch would hurt\nor kill the player, or kick it, is defeated (Super Mario Bros.'\nStarInvincibleTimer: CheckForPUpCollision jumps to ShellOrBlockDefeat\nbefore HandlePECollisions looks at a stomp).",
+      "type": "object",
+      "properties": {
+        "while": {
+          "$ref": "#/$defs/Guard"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "while"
+      ]
+    },
+    "Jump": {
+      "description": "Jumping and falling. Vertical speed is positive downward.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "The input action that jumps, newly pressed while standing.",
+          "type": "string"
+        },
+        "bands": {
+          "description": "Jumps that depend on the horizontal speed at takeoff: the first band\nwhose `below` is above the speed gives `speed`, `gravity` and\n`gravity_held` for the whole jump, and a speed at or above every\nband's uses the values above. In order of `below`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JumpBand"
+          }
+        },
+        "buffer_frames": {
+          "description": "Frames a jump pressed in the air is remembered until landing.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "collide_y": {
+          "description": "Since 0.4.8: the entity meets tiles (landing, the head, the feet's\ndepth and the wall points) only while its y, in whole pixels, is at\nleast the first and below the second; elsewhere it goes through\nthem. Super Mario Bros.' PlayerBGCollision does nothing while\nMario's high byte is off the screen or his y is $cf or more, so he\nfalls into a pit past the ground's side.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "coyote_frames": {
+          "description": "Frames after walking off a ledge in which a jump still works.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "fatal_drop": {
+          "description": "Feature `jump.fatal_drop`: a jump that lands this many pixels or\nmore below its takeoff kills the player, when its `land_hold` ends\n(on landing without one). Mechanic word 3 keeps the takeoff height.\nDonkey Kong sets $95 to $FF 16 px below the takeoff and kills after\nthe 4-frame hold.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "fatal_drop_in_air": {
+          "description": "Feature `jump.fatal_drop_in_air`: with `fatal_drop`, mechanic word\n3 keeps the height after the takeoff frame's move, and the drop is\ntested on every later frame in the air, on the height the frame's\nmove reaches before a landing puts the body on the ground. Once it\nholds, the word is -1000 and the landing kills. Donkey Kong's jump\nroutine keeps $95 from $01 after the arc's first step ($D570-$D57C,\n$D5EA), sets it to $FF once the step's height less 16 is at or past\nit ($D5BF-$D5CA), before the landing test ($D5CC), and kills on $FF\nas the hold ends ($D615).",
+          "type": "boolean"
+        },
+        "feet": {
+          "description": "Since 0.4.5: ground points, the columns (x from the entity's\nposition, whole pixels) where the tile hitbox's bottom row looks\nfor ground, instead of across the hitbox's width. A machine state's\n`set` can change them.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Fixed"
+          }
+        },
+        "gravity": {
+          "description": "Added to the vertical speed every frame, on the ground and off it\n(off it only, with `no_gravity_on_ground`).",
+          "$ref": "#/$defs/Fixed"
+        },
+        "gravity_held": {
+          "description": "Gravity instead while the action is held and the entity is rising,\nfor jumps whose height depends on how long the button is held.\nWithout it, holding longer changes nothing.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "head": {
+          "description": "Since 0.4.5: one point over the head decides what a rise into a\ntile does, instead of the tile hitbox's top edge. A machine state's\n`set` can change it (a bigger player's head is higher).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Head"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "keep_fall_gravity": {
+          "description": "Since 0.4.6: the entity's fall gravity is kept from its last jump\n(its band's `gravity`, or `gravity` above), after it lands too, and\na fall that isn't a jump (off a ledge, or from ground that left)\nuses it, as in a game that keeps one falling force for the player\nand sets it only when a jump starts. The held phase still uses\n`gravity_held`. It is world state (`fall_gravity`), which a state\nmapping can read from the original.",
+          "type": "boolean"
+        },
+        "land_depth": {
+          "description": "Since 0.4.5: a landing on a tile only while the tile hitbox's\nbottom row is less than this many pixels into the tile. Deeper, the\nentity doesn't land: it is pushed one pixel back the way it last\nmoved, as against a wall, its speed across becomes 0, and its wall\npoints aren't tested that frame.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "land_hold": {
+          "description": "Feature `jump.land_hold`: for this many frames after the frame a\njump lands, the entity neither walks, jumps nor takes a ladder; it\nstands. Mechanic word 2 counts the frames left. Donkey Kong keeps\nMario in his jump state for 4 frames after landing ($94 from $F0 to\n$F4), and the jump routine runs no ladder test (clear-25m clip 1,\nframes 3086-3089).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "land_keeps_fraction": {
+          "description": "Since 0.4.5: landing on a tile sets the whole part of the height\nto the tile's top and keeps its fraction, and a jump's takeoff\nclears the fraction, as in a game that masks the height's whole\nbyte on landing and keeps its fraction byte apart.",
+          "type": "boolean"
+        },
+        "ledge_fall": {
+          "description": "Feature `jump.ledge_fall`: a fall that isn't a jump (walking off a\nledge) drops straight down at a fixed speed, and may kill on landing.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LedgeFall"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_fall": {
+          "description": "The fastest the entity falls.",
+          "$ref": "#/$defs/Fixed"
+        },
+        "max_fall_from_half": {
+          "description": "Since 0.4.3: the fall limit acts only once the speed's whole part\nis at least `max_fall` and its fraction at least one half, and then\nsets the speed to `max_fall`, so a fall goes a little past the limit\non some frames. `max_fall` must be whole.",
+          "type": "boolean"
+        },
+        "move_first": {
+          "description": "The position moves by the old vertical speed before gravity is\nadded, as Super Mario Bros. does, rather than after.",
+          "type": "boolean"
+        },
+        "no_gravity_on_ground": {
+          "description": "Since 0.4.5: a frame that starts on the ground and doesn't start a\njump adds no gravity and doesn't move the entity up or down, as in a\ngame that moves a standing player only across. If the ground under\nit has gone by the end of the frame it is in the air, and gravity\nstarts on the next frame.",
+          "type": "boolean"
+        },
+        "pickup": {
+          "description": "Since 0.4.18: points that take a tile by touching it, as a coin. A\nmachine state's `set` can change them.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Pickup"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "release_cap": {
+          "description": "Once the action isn't held, a rise faster than this (negative: up)\nis cut to it, every frame: a jump cut short by letting go.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "speed": {
+          "description": "The vertical speed a jump sets (negative: up).",
+          "$ref": "#/$defs/Fixed"
+        },
+        "start_fall_gravity": {
+          "description": "Since 0.4.6, with `keep_fall_gravity`: the fall gravity before the\nentity's first jump, from when it is placed at a level start or\nthrough an exit. Without it, `gravity`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "takeoff_fraction": {
+          "description": "Feature `jump.takeoff_fraction`: a takeoff sets the height's\nfraction to this (from 0, below 1), as a game that keeps a jump's\nheight in a fraction byte of its own and starts it at a set value.\nDonkey Kong's jump routine starts its fraction at $F0.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "speed",
+        "gravity",
+        "max_fall"
+      ]
+    },
+    "JumpBand": {
+      "description": "A jump band: the values a jump uses when the horizontal speed at\ntakeoff is below `below`.",
+      "type": "object",
+      "properties": {
+        "below": {
+          "description": "The horizontal speed (without its sign) the band reaches up to, not\nincluded.",
+          "$ref": "#/$defs/Fixed"
+        },
+        "gravity": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "gravity_held": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "speed": {
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "below",
+        "speed",
+        "gravity"
+      ]
+    },
+    "Knockback": {
+      "description": "Being knocked back by a hurt that counts: for `frames` frames the entity\nmoves `speed` a frame against the way it faces, its run input ignored,\nand on the first its vertical speed becomes `rise`.",
+      "type": "object",
+      "properties": {
+        "frames": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "rise": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "speed": {
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "speed",
+        "rise",
+        "frames"
+      ]
+    },
+    "Ladders": {
+      "description": "Feature `level.ladders`: each row of `places` is a ladder, its first\nthree bytes its x, its y and its shape; the shape divided by\n`shape_step` is a row of `shapes`, whose four bytes are the box's left,\ntop, right and bottom from the ladder's x and y, edges included.\nDonkey Kong keeps each stage's ladders this way ($C0E3 and $C10B for\n25m).",
+      "type": "object",
+      "properties": {
+        "end": {
+          "description": "Feature `level.ladder_lists`: the byte that ends a list read by\n`places_at`. Default 254 ($FE, Donkey Kong's).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "places": {
+          "type": "string"
+        },
+        "places_at": {
+          "description": "Feature `level.ladder_lists`: `places` names a byte table's column\n(`slot.column`) that holds the game's own list, rows of three bytes\nfrom this index up to a row that starts with `end`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "shape_step": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 1,
+          "minimum": 0
+        },
+        "shapes": {
+          "type": "string"
+        },
+        "shapes_at": {
+          "description": "Feature `level.ladder_lists`: `shapes` names a byte table's column\nwhose rows of four bytes start at this index.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "places",
+        "shapes"
+      ]
+    },
+    "Launcher": {
+      "description": "Since 0.4.28: a launcher, an object that fires the entity `fires` on its\nown timer and a shift counter's bits, aimed at the player's side (Super\nMario Bros.' bullet bill cannons: SetupCannon, ProcessCannons and\nBulletBillHandler).\n\nThe level's launchers keep `table` entries. One that appears (a `drawn`\nspawn, as its column is drawn) takes the entry the counter `next` names,\nending the launcher that had it and keeping that one's timer, and moves\n`next` on, back to 0 after the last. One placed left of `from_x` takes its\nentry and fires nothing, so it has no body. A launcher that appears is\npicked from the next frame on (the area parser runs after the enemies).\n\nEach frame after the other enemies, the level's first `slots` numbered\nslots (`slot_rest`) take a turn each, the last first. A slot that holds a\nshot gives the shot its turn: shots move there, not with the other\nenemies. A free slot reads a byte of `counter` from bit `at`, `slot_step`\nbits lower for each slot after the first, and'ed with `mask` (`hard_mask`\nin a level with `hard_spawns`). A value below `table` picks that entry's\nlauncher: a timer above 0 counts down by 1, and at 0 it fires, unless the\nenemies are frozen. The shot appears at the launcher moved by `offset`,\nin that slot with the slot's rest fraction across, and doesn't move that\nframe; the timer is set to `rearm`. A freeze counts timers down too.\n\nOn its first turn a shot goes if it is past the view's right edge,\n`behind` pixels or more left of its left edge, or within `near` pixels of\nthe player. The test is on the whole-pixel difference modulo `near_wrap`\n(none when 0), with 1 added when the shot is at or right of the player:\n`(d + near + carry) mod wrap < 2 near`. Otherwise it faces the player's\nside and flies. The launcher keeps its timer and entry in mechanic words 0\nand 1, and a shot keeps \"aimed\" in its word 0, so neither has an `ext`\nhook.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "behind": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "counter": {
+          "type": "string"
+        },
+        "fires": {
+          "type": "string"
+        },
+        "from_x": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "hard_mask": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "mask": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "near": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "near_wrap": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "next": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fixed"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "rearm": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "slot_step": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "slots": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "table": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "fires",
+        "counter",
+        "at",
+        "mask",
+        "slots",
+        "table",
+        "next",
+        "rearm",
+        "near",
+        "behind"
+      ]
+    },
+    "Leap": {
+      "description": "Leaping again and again from a start point (since 0.4.1): placed at\n`from` (a y, or where it's placed without one), it leaps at `speed`\n(negative is up; a drop starts down) and is pulled by `gravity`, on frames whose number\nis a multiple of `every`, falling at most `max_fall`, through tiles.\nWith `rise`, it first rises at `rise.speed` until `rise.height` above\nthe start, then leaps. It starts again from the start when its wait is\nover (`interval` frames times one of `waits`, drawn at random as the\nleap starts) or once it is `below` pixels under the start. A lava\nbubble, or a log that drops in a waterfall. The wait and the phase are\nkept in the body's mechanic words 0 and 1, so it has no `ext` hook.",
+      "type": "object",
+      "properties": {
+        "beat": {
+          "description": "Since 0.4.17: a counter with an `every`. The wait counts that\nshared beat's ticks instead of `interval` frames, and a new body\nwaits one tick before its first leap.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "below": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "draw": {
+          "description": "Since 0.4.26: a byte of a shift counter picks the wait and the speed's fraction,\ninstead of the generator. Needs `beat`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LeapDraw"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "every": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "from": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gravity": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "interval": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "keep_fraction": {
+          "description": "Since 0.4.17: a new leap keeps the fraction of the height.",
+          "type": "boolean"
+        },
+        "max_fall": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_fall_from_half": {
+          "description": "Since 0.4.17: as `jump.max_fall_from_half`.",
+          "type": "boolean"
+        },
+        "move_first": {
+          "description": "Since 0.4.17: the old speed moves it and gravity comes after.",
+          "type": "boolean"
+        },
+        "place_on_appear": {
+          "description": "Since 0.4.26: a body is at its start point on the frame it appears,\nas InitPodoboo places it while the area parser fills the slot.",
+          "type": "boolean"
+        },
+        "rise": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LeapRise"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "speed": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "waits": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "speed",
+        "gravity"
+      ]
+    },
+    "LeapDraw": {
+      "description": "Where a leap reads its random byte: `counter`, a counter with a `shift`,\nfrom bit `at`, `slot_step` bits lower for each numbered slot after the\nfirst. The byte modulo the length of `waits` picks the wait, and the byte\nor'd with `fraction` is the launch speed's fraction, in 256ths, added to\n`speed`.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "counter": {
+          "type": "string"
+        },
+        "fraction": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "slot_step": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "counter",
+        "at"
+      ]
+    },
+    "LeapRise": {
+      "description": "A slow rise before a leap.",
+      "type": "object",
+      "properties": {
+        "height": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "speed": {
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "speed",
+        "height"
+      ]
+    },
+    "LeaveView": {
+      "description": "Leaving the level once it is off the view (since 0.4.1): removed on the\nfirst frame its position along `axis` (whole pixels from the view's\nnear edge) is under `margin`, or at or past the view's size less\n`margin`. A projectile that is gone once it leaves the screen.",
+      "type": "object",
+      "properties": {
+        "axis": {
+          "$ref": "#/$defs/PathAxis"
+        },
+        "bottom_margin": {
+          "description": "Since 0.4.24: it also leaves at or past the view's height less this\nmargin, whatever the `axis`. Super Mario Bros.' fireball goes at\nheight 240 (0 here), where FBall_OffscreenBits' vertical half sets\na bit FireballObjCore tests, as well as past the sides.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "far_margin": {
+          "description": "Since 0.4.10: the margin at the view's far edge (right or bottom),\nwhen it isn't `margin`. Super Mario Bros.' fireball goes once any\nof it is off the screen: its left edge past the left, or its right\nedge, 8 pixels on, past the right.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "margin": {
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "margin"
+      ]
+    },
+    "LedgeFall": {
+      "description": "A fall off a ledge at a fixed speed (feature `jump.ledge_fall`). The\nframe the body walks off it moves `first` pixels down (or `speed`), and\n`speed` on each frame after, with no gravity and no move across; the\nrun gets no input, and a step counter (`run.step_cycle`) steps on each\nframe of the fall. With `kills` the landing kills the player. Donkey\nKong's state 8 ($D697): 2 a frame, 3 on the first, and death on landing.",
+      "type": "object",
+      "properties": {
+        "first": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "kills": {
+          "type": "boolean"
+        },
+        "speed": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "speed"
+      ]
+    },
+    "LevelFields": {
+      "title": "Game Printer platformer extension 0.4.0: level fields",
+      "description": "Fields a platformer level can have.",
+      "type": "object",
+      "properties": {
+        "goal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Goal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ground": {
+          "description": "Feature `level.ground`: the level's ground as one-row boxes read\nfrom runs in two `byte-rows` slots, which a body on the ground\nfollows by its feet in place of the tile surfaces.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ground"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hard_spawns": {
+          "description": "Since 0.4.26: the level's `spawn_objects` list also places the\nobjects it marks for hard mode, which are left out otherwise.\nSuper Mario Bros.' ProcessEnemyData skips them until\nSecondaryHardMode is set, from level 5-3 on.",
+          "type": "boolean"
+        },
+        "hazard": {
+          "description": "What a `hazard` tile does to the player touching it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Hazard"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ice": {
+          "description": "Running on `ice` tiles: these replace the entity's acceleration and\ndeceleration while it stands on one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ice"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kill_below": {
+          "description": "A player whose top edge is at or below this y has fallen into a pit\nand dies.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ladder_stops": {
+          "description": "Feature `level.ladder_stops`: the boxes where a climb is refused,\nread as `ladders` is, for a climber's `climb.top_test`. Donkey\nKong's $D50A refuses a climb where Mario's feet box meets one of the\nbroken ladders' zones ($C161 and $C16E for 25m).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ladders"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ladder_tops": {
+          "description": "Feature `level.ladder_tops`: the boxes of the level's ladder tops,\nread from two `byte-rows` slots as `ladders` is, for a climber's\n`climb.top_test`. Donkey Kong's $D50A tests Mario's feet box against\neach stage's list of whole ladders' top rows ($C127 and $C143 for\n25m).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ladders"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ladders": {
+          "description": "Feature `level.ladders`: the level's ladders as boxes, read from two\n`byte-rows` slots, for a climber's `climb.grab`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ladders"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pickups": {
+          "description": "Feature `level.pickups`: groups of places the player takes by\ntouching them, read from a byte table, each kept in a counter. A\ngroup may leave a hole where a place was taken (feature\n`level.pickup_holes`).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Pickups"
+          }
+        },
+        "pit_event": {
+          "description": "Since 0.4.9: a player falling into the pit fires this event (one of\n`model.events`) on the frame its top edge first reaches\n`kill_below`, instead of dying, and goes on moving, so the model's\nrules say what a fall does and when the life ends. Super Mario\nBros.' PlayerHole locks the screen once Mario is below it and ends\nthe life only later, while he and the enemies go on.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "water": {
+          "description": "Falling in `water` tiles: these replace the entity's gravity and\nfall limit while its hitbox's middle is in one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Water"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Locks": {
+      "description": "Feature `power.locks`: while `while` holds (a counter compared with a\nnumber, as `invincible`'s), the named actions count as not held and not\npressed for this entity's jump and climb. Donkey Kong's hammer: with\nits timer running, A doesn't jump and Up doesn't take a ladder.",
+      "type": "object",
+      "properties": {
+        "actions": {
+          "description": "The actions taken away, by name.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "while": {
+          "$ref": "#/$defs/Guard"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "while",
+        "actions"
+      ]
+    },
+    "Near": {
+      "description": "How a touch tests points of the player (`contact.near`).",
+      "type": "object",
+      "properties": {
+        "right": {
+          "description": "An entity this many pixels or more from the view's left edge touches\nnothing (FirebarCollision's `cmp #$f0`). Default no limit.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "within": {
+          "description": "A point touches while it is less than this many pixels from the\nentity's position on both axes.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "within"
+      ]
+    },
+    "Orbit": {
+      "description": "A pivot that turns an angle and carries parts around it (since 0.4.1).\nOn its first frame it moves by `place` and spawns `parts` of the entity\n`part` where it is. Then each frame (only while its x is inside the view\nwith `in_view`) its angle moves by `spin` steps of the `angles` in a\nturn (negative: the other way); landing on an angle in `skip` it goes a\nstep on. The\nangle is kept in 256ths of a step in the body's mechanic word 0. A\nfirebar.",
+      "type": "object",
+      "properties": {
+        "angle_in_slot": {
+          "description": "In a level with `slot_rest`, a new pivot takes its whole angle from\nits slot's speed up and down, wrapped to `angles`, and a pivot that\nleaves puts its whole angle there. Super Mario Bros.'\nInitShortFirebar clears FirebarSpinState_Low only, and\nFirebarSpinState_High is the slot's Enemy_Y_Speed. Default off: it\nstarts at angle 0.",
+          "type": "boolean"
+        },
+        "angles": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "in_view": {
+          "type": "boolean"
+        },
+        "part": {
+          "type": "string"
+        },
+        "parts": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "place": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fixed"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "place_on_appear": {
+          "description": "Since 0.4.20: it moves by `place` and spawns its parts on the frame\nit appears, in the spawn system, rather than on its first turn in\nthe enemies system, so its first turn already moves its angle.\nSuper Mario Bros.' InitShortFirebar runs as the area parser puts\nthe firebar in its slot, and ProcFirebar spins it from the next\nframe.",
+          "type": "boolean"
+        },
+        "skip": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "spin": {
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "spin",
+        "parts",
+        "part"
+      ]
+    },
+    "OrbitPart": {
+      "description": "A part carried by an `orbit` pivot (since 0.4.1): on its first frame it\nfinds its pivot, the nearest body with an `orbit` within `within`\npixels of where it was placed, and which part it is (the parts placed\nthere before it). Each frame it's at the pivot plus an offset from a\nquarter-turn table: the entity's `ext_tables` `offsets` (one run of\nentries per part, a quarter turn and one long), `rows` (where each\npart's run starts) and `signs` (each quarter turn's signs, bit 0 for x\nand bit 1 for y). x takes the angle folded into a quarter turn and y the\nangle a quarter turn on. It leaves when its pivot does.",
+      "type": "object",
+      "properties": {
+        "within": {
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "within"
+      ]
+    },
+    "Oscillate": {
+      "description": "Swinging around a center on one axis (since 0.4.1): each frame its\nspeed along the axis moves by `force` toward the center, up to\n`max_speed` either way, and it moves by its speed, through tiles. The\ncenter is `center` pixels from where it's placed, or `low_center` when\nit's placed at or past `low_at` along the axis. A flying enemy that bobs\naround a point, or a lift that swings.",
+      "type": "object",
+      "properties": {
+        "axis": {
+          "$ref": "#/$defs/PathAxis"
+        },
+        "center": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "force": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "low_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "low_center": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_speed": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "move_first": {
+          "description": "Since 0.4.23: it moves by the speed it had before the force is\nadded, which is chosen by where it was before the move.",
+          "type": "boolean"
+        },
+        "rest_creep_every": {
+          "description": "At no speed along the axis, its position's fraction is cleared, and\nshort of where it's placed it takes no force and moves a pixel\ntoward that place on frames that are multiples of this number\n(Super Mario Bros.' ProcMoveRedPTroopa).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "starts_at_rest": {
+          "description": "Since 0.4.23: it starts with no speed, whatever its numbered slot's\nlast body left there (`slot_rest`).",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "axis",
+        "center",
+        "force",
+        "max_speed"
+      ]
+    },
+    "Path": {
+      "description": "Moving back and forth along one axis from the spawn: out by `distance`\n(negative: left or up) at `speed`, waiting `pause` frames at each end,\nand back. With `wait_near`, it doesn't leave the spawn end while the\nplayer's x is within that many pixels of its own. With `every` (since\n0.4.7), it moves only on frames whose number plus `phase` is a multiple\nof `every`. No gravity, through tiles.",
+      "type": "object",
+      "properties": {
+        "axis": {
+          "$ref": "#/$defs/PathAxis"
+        },
+        "distance": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "every": {
+          "description": "Since 0.4.7: it moves only on frames whose number plus `phase` is a\nmultiple of this (Super Mario Bros.' piranha plant moves a pixel on\nodd frames). 0 or 1 for every frame.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pause": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "phase": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "speed": {
+          "description": "Pixels per frame, without its sign.",
+          "$ref": "#/$defs/Fixed"
+        },
+        "wait_near": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wait_near_wrap": {
+          "description": "Since 0.4.10, with `wait_near`: the distance across, in whole\npixels, is taken modulo this before it is compared, as Super Mario\nBros.' ChkPlayerNearPipe compares only PlayerEnemyDiff's low byte\n(256), so a plant a page and a few pixels from Mario waits. 0 for\nnone.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "axis",
+        "distance",
+        "speed"
+      ]
+    },
+    "PathAxis": {
+      "type": "string",
+      "enum": [
+        "x",
+        "y"
+      ]
+    },
+    "Patrol": {
+      "description": "Walking back and forth between the spawn's `x` and its `patrol_end`\nparameter, turning at each end.",
+      "type": "object",
+      "properties": {
+        "period": {
+          "description": "It moves once every this many frames.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "step": {
+          "description": "Pixels moved each time it moves.",
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "step",
+        "period"
+      ]
+    },
+    "Pickup": {
+      "description": "Pickup points (since 0.4.18). After the frame's moves, while the entity\nmeets tiles, the first point in a cell of kind `tile` turns the cell\ninto `becomes` and fires `event` for the entity. It takes one cell a\nframe, and the wall points aren't tested on that frame.",
+      "type": "object",
+      "properties": {
+        "becomes": {
+          "description": "The kind the cell becomes.",
+          "$ref": "#/$defs/TileKind",
+          "default": "empty"
+        },
+        "event": {
+          "description": "An event fired for the entity: the core's, an extension's or the\nmodel's own.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "points": {
+          "description": "The points, x and y from the entity's position, in whole pixels,\ntested in order.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Fixed"
+            },
+            "maxItems": 2,
+            "minItems": 2
+          }
+        },
+        "tile": {
+          "description": "The kind of cell taken.",
+          "$ref": "#/$defs/TileKind"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "tile",
+        "points"
+      ]
+    },
+    "PickupCells": {
+      "description": "Feature `level.pickup_cells`: place k's first cell is the number made\nof the bytes at `at[0] + k` (high) and `at[1] + k` (low) of the group's\n`table`, less `base`, counted row by row across the level's width; it\ncovers `size` cells across and down from there, less any outside the\nlevel. Donkey Kong's $EF38\nwrites blank tiles ($24) over a rivet taken (1 by 1, as $CC = $11 at\n$EEB6 asks) or a prize (2 by 2, $CC = $22 at $EF0C), at the name-table\naddress $C5D6 (high) and $C5E9 (low) give the place's entry.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "The indexes in `table` of the first place's high and low byte.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "base": {
+          "description": "The number of the level's first cell.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
+        "size": {
+          "description": "Cells across and down.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "maxItems": 2,
+          "minItems": 2
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "at",
+        "size"
+      ]
+    },
+    "Pickups": {
+      "description": "Feature `level.pickups`: `count` places, their x from index `x_at` of\nthe byte table `table` (a slot's column, `slot.column`) on and their y\nfrom `y_at` on. Place k is in the counter `<counter>_<k>`, 0 while it\nis there and 1 once taken; the level's counters set them at its start.\nAfter the player's moves, on a frame it moved across or is in a jump,\nits place less `offset` touches the first place not taken whose x is\nits x and whose y is within `window` of its y (place y + window[0] to\nplace y + window[1], edges included), unless it is falling off a ledge\nor out: the place's counter becomes 1 and `event` fires. Groups are\ntested in order and one touch a frame ends the test. Donkey Kong's\n$EE79 tests Mario's sprite ($0200, $0203: his place less 5) against\n100m's 8 rivets ($C5AE and $C5C2 from entry 11, a window of 16 above)\nand then the stage's 3 prizes ($EEF0, entry $C5FA[$53], exact), on a\nframe his step beat $BE is set, and returns after the first it finds.",
+      "type": "object",
+      "properties": {
+        "by_hook": {
+          "description": "Feature `level.pickup_by_hook`: the engine takes none of the\ngroup's places; an `ext` hook sets its counters, and the group gives\nthe places' cells (`level.pickup_cells`). Original Edition's 50m\ntakes a prize on a climb's step too ($EEF0 on $BE), which the\n`dk_prizes` hook models, and $EF38 blanks its cells as on 100m.",
+          "type": "boolean"
+        },
+        "cells": {
+          "description": "Feature `level.pickup_cells`: the level's cells a place covers,\nwhich show an empty cell's picture (`present.cells`, kind `empty`)\nonce it is taken. Presentation only: the cells' kinds stay.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PickupCells"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "count": {
+          "description": "How many places.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "counter": {
+          "description": "The counters' name: place k's is `<counter>_<k>`.",
+          "type": "string"
+        },
+        "event": {
+          "description": "An event (one of `model.events`) fired on a take.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hole": {
+          "description": "Feature `level.pickup_holes`: a place taken is a hole, this box\n(left, top, right, bottom from the place, edges included): a touch\nof it, as a take's but not in a jump, starts the player's fall off\na ledge (`jump.ledge_fall`) on the next frame, and that fall doesn't\nland on a ground box (`level.ground`) on the hole's rows while the\nplayer's feet are within the hole. Donkey Kong's $EED9 puts Mario in\nhis fall ($96 = 8) on a removed rivet's spot unless he is jumping;\nthe fall ($D697) goes 2 pixels a frame down past the floor, whose\nbox test ($D2CB) finds no floor under him there.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "maxItems": 4,
+          "minItems": 4
+        },
+        "offset": {
+          "description": "What the player's place less this is compared with: Donkey Kong's\nsprite is 5 left of and above Mario's place.",
+          "type": "array",
+          "default": [
+            0,
+            0
+          ],
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "table": {
+          "description": "A byte table: `slot.column`.",
+          "type": "string"
+        },
+        "window": {
+          "description": "The y window from a place's y, low and high, edges included; [0, 0]\nfor the same y.",
+          "type": "array",
+          "default": [
+            0,
+            0
+          ],
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "x_at": {
+          "description": "The index in `table` of the first place's x.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "y_at": {
+          "description": "The index in `table` of the first place's y.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "table",
+        "x_at",
+        "y_at",
+        "count",
+        "counter"
+      ]
+    },
+    "Ride": {
+      "description": "How the player rides an entity it stands on (`contact.ride`).",
+      "type": "object",
+      "properties": {
+        "above": {
+          "description": "A box whose top is above this y isn't tested (`cmp #$20`). Default 0.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "copy_below": {
+          "description": "A second box this many pixels below the first, tested after it.\nSuper Mario Bros.' SmallPlatformCollision moves the box down $80 and\ntests again. Default 0: one box.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "wrap": {
+          "description": "The boxes' heights wrap at this y, as the game's height byte does.\nDefault 0: no wrap.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "Run": {
+      "description": "Moving left and right with the input actions `left` and `right`.",
+      "type": "object",
+      "properties": {
+        "acceleration": {
+          "description": "Speed gained per frame toward the top speed. Without it the top\nspeed is reached at once.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "air_control": {
+          "description": "Can change direction and speed in the air, as on the ground.",
+          "type": "boolean"
+        },
+        "air_run_from": {
+          "description": "Since 0.4.3, with `run_speed` and `air_control`: in the air the run\ncounts (its top speed and `run_acceleration`) while the speed as the\nframe starts (whole steps with `move_step`, without its sign) is at\nleast this, and doesn't count below it, whatever the run action and\nits hold.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "air_speed": {
+          "description": "The top speed in the air while a direction is held, instead of\n`walk_speed`, with `air_control`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "air_step_cycle": {
+          "description": "Feature `run.air_step_cycle`, with `step_cycle` and without\n`air_control`: in the air the entity moves across by this list\ninstead of its speed, the way it took off (the way held on the\ntakeoff frame; none held, it doesn't move across), by a counter of\nits own in mechanic word 1, which a frame that moves advances first.\nDonkey Kong's jump moves Mario a pixel every other frame by the\ntoggle $9E: `[1, 0]`.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "both_left": {
+          "description": "Feature `run.both_left`: left and right held together turn the\nentity left and move it nowhere, on the ground and (with\n`climb.lone_way`) on a ladder. Donkey Kong's pad routine $D175\nwrites $57 left for the pad's Left and Right bits together and\nleaves $56 0, so Mario faces left and stands (wallW's pad probes,\n2026-11-04: x kept at 120 on girder 1 with both held).",
+          "type": "boolean"
+        },
+        "cap_whole": {
+          "description": "Since 0.4.2, with `move_step` and `acceleration`: a direction held\nadds its rate whatever the speed, and the top speed then caps the\nwhole steps only, keeping the fraction, so the speed wobbles just\nabove the top speed (just below it going left).",
+          "type": "boolean"
+        },
+        "decel_bands": {
+          "description": "Since 0.4.2: while the run doesn't count, at or above a band's\n`from` speed its `rate` replaces the walking rates (`acceleration`,\n`deceleration` and `skid_deceleration`): slowing down faster from a\nhigh speed. In order of `from`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DecelBand"
+          }
+        },
+        "decel_hold_from": {
+          "description": "Since 0.4.2, with `decel_bands`: once the speed reaches this on the\nground, the last band's rate holds, whatever the speed, until a\ndirection is held the way it last moved on the ground while the\nspeed is below this. A frame that jumps changes neither.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "deceleration": {
+          "description": "Speed lost per frame with no direction held. Without it the entity\nstops at once.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "face_both": {
+          "description": "Since 0.4.15: both directions held where the facing turns face the\nentity neither way, and count as a way of their own for the run's\ntests against the way it last moved, though right still wins for\nthe speed. A `skid_by = \"last_motion\"` then doubles the rate on the\nnext frame whichever way it moved, and a slow skid leaves it last\nmoved both ways. Super Mario Bros.' OnGroundStateSub stores\nLeft_Right_Buttons in PlayerFacingDir as it is, 3 with both held,\nwhich X_Physics compares with Player_MovingDir. It is world state\n(`facing` and `moved` are `both`).",
+          "type": "boolean"
+        },
+        "face_on_ground": {
+          "description": "Since 0.4.3: the facing changes only on the ground. In the air a\ndirection held still moves the speed, but the entity keeps the way\nit faced, so with `skid_by = \"last_motion\"` pressing back in the air\ndoesn't double the rate.",
+          "type": "boolean"
+        },
+        "face_way": {
+          "description": "Feature `run.face_way`: the facing is a way the game keeps from\nthe pad: the frame a jump takes off (with `takeoff_in_air`) turns\nthe entity to a lone direction held, a landing hold (`jump.land_hold`)\nkeeps it, a turn at the view's edge in the air\n(`camera.keep_in_view_turn`) turns it with the speed, and a level's\nrestart keeps it. Donkey Kong's pad routine $D175 writes $57 from\nLeft or Right held alone on every frame but the jump's and the\nwalk-off fall's ($CEC1-$CED3), the jump's edge turn writes it\n($D55F-$D56E), the stage setup leaves it, and $F070 mirrors his\npictures by it.",
+          "type": "boolean"
+        },
+        "lone_direction": {
+          "description": "Feature `run.lone_direction`: left or right moves the entity only\nheld alone, with neither of its climb's up and down actions held.\nDonkey Kong's walk and hammer routines move Mario only while the\npad's latched byte $56 is exactly 1 or 2 ($D1CF, $D6DE), so Up or\nDown with a direction stands him still.",
+          "type": "boolean"
+        },
+        "move_step": {
+          "description": "Since 0.4.2: the entity moves by its speed rounded down to a\nmultiple of this step, and the rest of the speed is kept apart and\ncarried to the next frame's speed (the state's `vx` is the whole\nsteps and `vx_frac` the rest). With nothing held, `deceleration`\nslows it only while its whole steps aren't 0, so a stop keeps the\nrest. Speeds compared with `skid_turn_below` and the bands are the\nwhole steps.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "off": {
+          "description": "Since 0.4.16: the run does nothing, so the speed across stays as it\nis and no input reaches it. For a machine state to set: while\nSuper Mario Bros.' PlayerDeath runs, PlayerCtrlRoutine loads no\nbuttons and GameEngine clears Left_Right_Buttons every frame, so\nImposeFriction doesn't run.",
+          "type": "boolean"
+        },
+        "push_masks": {
+          "description": "Since 0.4.8: on the frame after a wall or the feet push the entity\nout to one side, a direction held toward that side doesn't change\nits speed, as if nothing were held, as Super Mario Bros.'\nImpedePlayerMove clears that side's bit of Player_CollisionBits and\nImposeFriction masks the buttons with it the next frame. The side is\nworld state (`pushed`).",
+          "type": "boolean"
+        },
+        "run_acceleration": {
+          "description": "`acceleration` instead while `run_action` is held.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "run_action": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_hold_frames": {
+          "description": "Since 0.4.2, with `run_speed`: each frame the run action counts on\nthe ground (not a frame that jumps) sets a count to this, and the\ncount goes down by one as each frame starts; while it is above 0\nthe run still counts. So the run is kept\nfor this many frames, less one, after the action is let go.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "run_speed": {
+          "description": "Top speed while `run_action` is held.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "run_with_motion": {
+          "description": "Since 0.4.2, with `run_speed`: the run action (and its hold) counts\nonly while the direction held is the way the entity last moved, or\nwhile nothing is held before it has moved at all. A run pressed with\na direction from a level start, or while skidding, walks first.",
+          "type": "boolean"
+        },
+        "skid_by": {
+          "description": "Since 0.4.2: what makes a skid. `speed` (the default): a direction\nheld against the speed, on the ground, slows by\n`skid_deceleration`. `last_motion`: the rate in use (any of them)\ndoubles while the entity faces away from the way it last moved,\nso its first step after a level start, when it hasn't moved yet,\nis doubled too. The facing is the one the frame starts with.",
+          "$ref": "#/$defs/SkidBy"
+        },
+        "skid_deceleration": {
+          "description": "Speed lost per frame while the direction held is against the\nentity's motion, on the ground: a skid. Without it a turn uses\n`acceleration`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "skid_turn_below": {
+          "description": "Since 0.4.2: on the ground (not on a frame that jumps), a direction\nheld against the way it last moved, while the speed is below this,\nsets the speed to 0 at once and turns; the frame's rate then applies\nthe new way.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "skid_turn_with": {
+          "description": "Since 0.4.11, with `skid_turn_below`: input actions that steer for\nthe quick turn as a direction does. While one of them is held and\nno direction is, or a direction that isn't the way it last moved,\na speed below `skid_turn_below` is set to 0 at once and the entity\nturns to the way it faces, on the ground and not on a frame that\njumps. Super Mario Bros.' GetPlayerAnimSpeed takes any button but A\nas steering (ChkSkid), so B held after letting go of the direction\nstops Mario dead below $0b.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "speed_before_walls": {
+          "description": "Since 0.4.11: the run's speed tests (`decel_bands`,\n`decel_hold_from`, `skid_turn_below`, `air_run_from`) and the jump's\n`bands` read the speed as the run itself last left it, before a\nwall stopped it, instead of the speed as the frame starts. The run\nleaves it each frame on the ground, and in the air while a\ndirection is held. Super Mario Bros.' ImposeFriction writes\nPlayer_XSpeedAbsolute and ImpedePlayerMove nulls Player_X_Speed\nonly, so the frame after Mario runs into a wall still reads his\nrunning speed. It is world state (`seen_speed`).",
+          "type": "boolean"
+        },
+        "start": {
+          "description": "The first steps from standing: `frames` frames at `speed` before\nthe speed moves toward the top speed as usual.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunStart"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "step_cycle": {
+          "description": "Feature `run.step_cycle`: the whole pixels the entity moves on each\nwalking frame on the ground, by a step counter it keeps in its\nmechanic word 0. A walking frame (a direction held, on the ground)\nfirst advances the counter by one, back to 0 at the list's length,\nthen moves the entry at the counter, and `walk_speed` no longer\nmoves it. The counter also advances on every frame in the air and\nof a `jump.land_hold`, and not while it stands. Donkey Kong's walk\nroutine steps one counter, $88, through 15 frames, moving on the\nbits of the pattern $DB/$36: 2 px every 3 frames, the same both\nways, with the phase kept through stops and jumps.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "takeoff_in_air": {
+          "description": "Since 0.4.3, with `jump`: the frame a jump starts from the ground is\na frame in the air for the run, as in a game that sets the jump\nstate before it moves the player across. With nothing held the\nspeed is kept, and a direction held uses the air's rules\n(`air_run_from` included) and doesn't slow the first steps.",
+          "type": "boolean"
+        },
+        "walk_speed": {
+          "description": "Top speed walking.",
+          "$ref": "#/$defs/Fixed"
+        },
+        "wall_snap": {
+          "description": "Holding a direction into a wall the tile hitbox touches clears the\nposition's fraction, as a game that pushes its player back to the\nwall's edge each frame does.",
+          "type": "boolean"
+        },
+        "walls": {
+          "description": "Since 0.4.5: walls are found at points instead of across the tile\nhitbox, after the vertical move. The move across doesn't stop at a\ntile; once the frame's moves are done, the first of the points (left\nones first) in a cell that stops movement pushes the entity one\npixel away from it and stops its speed across, unless it moves away\nfrom that side. A machine state's `set` can change them.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Walls"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "walk_speed",
+        "air_control"
+      ]
+    },
+    "RunStart": {
+      "description": "Slow first steps from standing.",
+      "type": "object",
+      "properties": {
+        "frames": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "speed": {
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "speed",
+        "frames"
+      ]
+    },
+    "Shoot": {
+      "description": "Spawning another entity: when `action` is pressed, or every `every`\nframes, while fewer than `max` of it are in the level. It appears\n`ahead` from this entity's position, x mirrored when this one faces\nleft, facing the same way. One of `action` and `every`.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "after_move": {
+          "description": "Since 0.4.10, a player's: it shoots after it moves this frame, from\nwhere it has got to, as Super Mario Bros.' ProcFireball_Bubble runs\nin GameEngine after GameRoutines has moved Mario.",
+          "type": "boolean"
+        },
+        "ahead": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Fixed"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "entity": {
+          "type": "string"
+        },
+        "every": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "in_slots": {
+          "description": "Since 0.4.12: the `max` shots take numbered slots in turn, nothing\nis shot while the slot whose turn it is holds one, and a new shot\nsets only the whole parts of its place and speed down, keeping the\nfractions its slot's last shot left. FireballObjCore never clears\nSprObject_YMF_Dummy or SprObject_Y_MoveForce, and\nProcFireball_Bubble picks the slot by FireballCounter's low bit.",
+          "type": "boolean"
+        },
+        "max": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "unmirrored": {
+          "description": "Since 0.4.10: `ahead` across isn't mirrored for a shooter facing\nleft (Super Mario Bros.' fireball starts 4 pixels right of Mario\nwhichever way he faces).",
+          "type": "boolean"
+        },
+        "vx": {
+          "description": "Since 0.4.10: the new body's speed across, mirrored for a shooter\nfacing left (a fireball's $40 or $c0, 4 pixels a frame).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vx_both": {
+          "description": "The new body's speed across, signed and not mirrored, for a shooter\nfacing both ways (`run.face_both`). FireballObjCore indexes\nFireballXSpdData by PlayerFacingDir less 1, so a facing of 3 reads\nthe byte after the table, the routine's own first opcode, $86: 8\npixels left less $60 sixteenths of the next pixel, -7.625 a frame.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vy": {
+          "description": "Since 0.4.10: the new body's speed up and down (a fireball starts\nfalling at 4).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "whole": {
+          "description": "Since 0.4.10: the new body starts from the shooter's place in whole\npixels, its fractions 0 (FireballObjCore copies Player_X_Position\nand Player_Y_Position, not their fractions).",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "entity",
+        "max"
+      ]
+    },
+    "Shuttle": {
+      "description": "Moving back and forth by a counter (since 0.4.1): on frames whose\nnumber is a multiple of `every`, it counts a move, turns once the count\npasses `turn_after` (and counts from 0 again), and moves `step` pixels\nalong `axis` the way it's going, right or down first, through tiles.\nWith `sway`, each move also goes `sway.step` across the other axis,\ntoward the far side while the frame number divided by `sway.half` is\nodd and back otherwise: a flier that bobs as it goes. The count and the\nway are the body's mechanic words 0 and 1, so it has no `ext` hook.",
+      "type": "object",
+      "properties": {
+        "axis": {
+          "$ref": "#/$defs/PathAxis"
+        },
+        "every": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "step": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "sway": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sway"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "turn_after": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "axis",
+        "step",
+        "turn_after"
+      ]
+    },
+    "Sides": {
+      "description": "Where a touch counts as a side of the entity (`contact.sides`, since\n0.4.22), in pixels, measured with the touch's edges.",
+      "type": "object",
+      "properties": {
+        "left": {
+          "description": "The player is on the left side while its right edge is less than\nthis past the entity's left edge.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "right": {
+          "description": "The player is on the right side while its left edge is less than\nthis before the entity's right edge.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "top": {
+          "description": "A falling player whose bottom edge is less than this past the\nentity's top edge isn't at a side.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "left",
+        "right",
+        "top"
+      ]
+    },
+    "SkidBy": {
+      "description": "What makes a skid (since 0.4.2).",
+      "oneOf": [
+        {
+          "description": "A direction held against the speed, on the ground.",
+          "type": "string",
+          "const": "speed"
+        },
+        {
+          "description": "Facing away from the way it last moved: the rate in use doubles.",
+          "type": "string",
+          "const": "last_motion"
+        }
+      ]
+    },
+    "SpringBoost": {
+      "description": "A higher throw: from step `from_step` (counted from 0) on, `action`\nnewly pressed (or held, with `held`) on any frame of the press makes\nthe throw `speed` instead.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "from_step": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "held": {
+          "type": "boolean"
+        },
+        "speed": {
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "speed",
+        "action"
+      ]
+    },
+    "SpringStep": {
+      "description": "One step of a springboard's press.",
+      "type": "object",
+      "properties": {
+        "frames": {
+          "description": "How many frames it lasts.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "move": {
+          "description": "The player's move each frame, in pixels (positive down).",
+          "$ref": "#/$defs/Fixed"
+        },
+        "offset": {
+          "description": "The springboard's place below where it was placed, in pixels.",
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "frames"
+      ]
+    },
+    "Springboard": {
+      "description": "A springboard (since 0.4.4): a player that stands on it (its feet on\nthe springboard's top as placed, or riding it through `contact.stand`)\nis held for the frames of its `steps`, then thrown up at `speed`. Each\nframe of a step moves the player by the step's `move` (positive down)\nand puts the springboard at its `offset` below where it was placed.\nWhile held the player doesn't move by its speed, jump or fall, though\nits run still changes its speed. The press's last frame throws it,\nhigher with a `boost`. With `throw_late` the thrown player stands one\nmore frame, moving across but not up, and rises from the frame after,\nas when a game throws after the player's move. The press is kept in\nthe body's mechanic words 0 to 2, so a springboard has no `ext` hook.\nIts `on_ground` is false while it presses, for its sprite's clips.\nSuper Mario Bros.' jumpspring, or any spring or trampoline.",
+      "type": "object",
+      "properties": {
+        "boost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpringBoost"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "speed": {
+          "description": "The vertical speed of a plain throw (negative, up).",
+          "$ref": "#/$defs/Fixed"
+        },
+        "steps": {
+          "description": "The press's steps, in order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SpringStep"
+          }
+        },
+        "throw_late": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "steps",
+        "speed"
+      ]
+    },
+    "Stream": {
+      "description": "A level marker that sends entities in (Super Mario Bros.' frenzy objects).\nOnce it appears, and while a slot of the level is free, a new `entity`\ncomes in `past_edge` pixels past the view's last column, then the next\nafter `wait` frames plus the next row of the entity's `times` table, in\nturn. A shift counter's byte (`draw`, read as a leap's, by the new body's\nslot) picks its row of the `heights` table, which is its y; its `ext`\nword 0 is that row and word 3 is 1, so a hook sees it is set up. The\nmarker needs `no_slot`, and it ends once a body of `until` is in the\nlevel. It keeps the wait and the turn in its mechanic words 0 and 1.\nNeeds a level with `spawn_slots`.",
+      "type": "object",
+      "properties": {
+        "draw": {
+          "$ref": "#/$defs/LeapDraw"
+        },
+        "entity": {
+          "type": "string"
+        },
+        "past_edge": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "until": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "wait": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "entity",
+        "past_edge",
+        "draw"
+      ]
+    },
+    "Sway": {
+      "description": "A shuttle's sway across its axis.",
+      "type": "object",
+      "properties": {
+        "half": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "step": {
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "step",
+        "half"
+      ]
+    },
+    "TileKind": {
+      "description": "What kind of tile a cell is. The simulation collides by kind: `solid`\nstops from every side, `top` only an entity moving down onto its top\nrow, `ladder` is climbed (and its top stands, for a climber that says\nso), `hazard` touches the player as the level's `hazard` says, `water`\nand `ice` change falling and running as the level's `water` and `ice`\nsay. Since core 0.4.6, `coin_block`, `item_block` and `brick` are\nsolid like `solid`, and a head hit (platformer `jump.head`) tells them\napart: a block with a coin in it, one with an item, a brick. Since core\n0.4.16, `coin` stops nothing and a pickup (platformer `jump.pickup`)\ntakes it.",
+      "type": "string",
+      "enum": [
+        "empty",
+        "solid",
+        "top",
+        "ladder",
+        "hazard",
+        "water",
+        "ice",
+        "coin_block",
+        "item_block",
+        "brick",
+        "coin"
+      ]
+    },
+    "Touch": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "nothing"
+          ]
+        },
+        {
+          "description": "The player dies: `player.died` fires.",
+          "type": "string",
+          "const": "kill-player"
+        },
+        {
+          "description": "`player.hurt` fires, for the player's state machine to decide what\na hurt does (shrink, or die with `kill-player`).",
+          "type": "string",
+          "const": "hurt-player"
+        },
+        {
+          "description": "The player collects it: it's removed and `item.collected` fires.",
+          "type": "string",
+          "const": "collect"
+        },
+        {
+          "description": "The player kicks it: `enemy.kicked` fires, for its state machine.",
+          "type": "string",
+          "const": "kick"
+        },
+        {
+          "description": "Since 0.4.10: the entity is defeated: it leaves and\n`enemy.defeated` fires for it.",
+          "type": "string",
+          "const": "defeat"
+        }
+      ]
+    },
+    "Walk": {
+      "description": "Walking at a steady speed, turning at walls, and at ledges with\n`turn_at_ledges`. It starts facing the player.",
+      "type": "object",
+      "properties": {
+        "bump": {
+          "description": "Walkers with this turn each other when their hitboxes touch, as\nSuper Mario Bros.' EnemiesCollision and EnemyTurnAround do.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WalkBump"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ledge_at": {
+          "description": "With `turn_at_ledges`: the ledge is looked for after the move, at\nthis many pixels across the entity whichever way it faces, in place\nof the leading bottom corner before the move, as Super Mario Bros.'\nChkUnderEnemy reads one point under the enemy's middle and\nChkForRedKoopa only reverses the speed.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fixed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "speed": {
+          "description": "Pixels per frame, without its sign.",
+          "$ref": "#/$defs/Fixed"
+        },
+        "turn_after_move": {
+          "description": "Since 0.4.26: a wall doesn't stop the move. It moves, and if the leading edge of\nthe tile hitbox's top row is then in a solid tile it turns where it\nstands, as Super Mario Bros.' DoEnemySideCheck runs after the move\nand only reverses the speed.",
+          "type": "boolean"
+        },
+        "turn_at_ledges": {
+          "type": "boolean"
+        },
+        "walls_at_top": {
+          "description": "Since 0.4.8: walls are met only at the tile hitbox's top row, as\nSuper Mario Bros.' DoEnemySideCheck tests two points at y + 20 while\nthe hitbox reaches the foot at y + 24; a hopper that has sunk into\nthe ground (`hop.land_first`) doesn't take the ground for a wall.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "speed"
+      ]
+    },
+    "WalkBump": {
+      "description": "`walk.bump`: when two walkers test their touch. The test takes each one's\nplace before this frame's moves, and a pair turns once a touch.",
+      "type": "object",
+      "properties": {
+        "every": {
+          "description": "A touch is tested on frames where the frame less `phase` is a\nmultiple of this; 0 never, for a state that leaves the bumping.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "phase": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "view": {
+          "description": "Only a body with its x this far from the view's left edge, first to\nlast, takes part, as EnemyOffscrBitsMasked leaves the test.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "every"
+      ]
+    },
+    "Walls": {
+      "description": "Wall points (since 0.4.5), x and y from the entity's position in whole\npixels, tested in order.",
+      "type": "object",
+      "properties": {
+        "left": {
+          "description": "Points on the left side: a wall there pushes the entity right.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Fixed"
+            },
+            "maxItems": 2,
+            "minItems": 2
+          }
+        },
+        "right": {
+          "description": "Points on the right side: a wall there pushes the entity left.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Fixed"
+            },
+            "maxItems": 2,
+            "minItems": 2
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "left",
+        "right"
+      ]
+    },
+    "Water": {
+      "type": "object",
+      "properties": {
+        "gravity": {
+          "$ref": "#/$defs/Fixed"
+        },
+        "max_fall": {
+          "$ref": "#/$defs/Fixed"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "gravity",
+        "max_fall"
+      ]
+    }
+  }
+}

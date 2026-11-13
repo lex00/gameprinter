@@ -40,7 +40,7 @@ pub struct MechanicsArgs {
     pub assets: Option<PathBuf>,
 }
 
-fn model_file(arg: &Path) -> PathBuf {
+pub(crate) fn model_file(arg: &Path) -> PathBuf {
     if arg.is_dir() {
         arg.join(gp_model::MODEL_FILE)
     } else {

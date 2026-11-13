@@ -98,6 +98,12 @@ It checks every file against its hash and lifts the art from your ROM into the f
 
 `gp model gate ~/my-donkey-kong -m "what you changed"` then gates your edits in place, keeping its history in a private repo of its own. To send the work back, make the same change in a fork as above.
 
+## How far each game has come
+
+`gp scorecard GAME...` prints one row per game: its asset map, slots, mechanics and hooks, facts by source, and the numbers runs have recorded (fidelity, gaps, track, sound) ([the scorecard](https://github.com/lex00/gameprinter/blob/main/docs/scorecard.md)). `--module` reads the hooks from the game's module, and `--record` keeps every number as a metric. Every `gp` command writes a run manifest under `~/.gameprinter/runs/` and a row in `~/.gameprinter/metrics.sqlite`: `gp runs list` shows the latest, `gp metrics record` and `gp metrics time -- CMD` add numbers, `gp metrics check --budgets FILE` holds them to limits, and `gp metrics report` draws their trends, with the scorecard, as one HTML page ([run manifests](https://github.com/lex00/gameprinter/blob/main/docs/formats/run-manifest.md)).
+
+`gp corpus show DIR` prints a corpus's name, version, hash and changelog, and for a game its `[scored_against]` and score records. `gp corpus diff A B` lists the clips added, removed and changed between two corpora and the version step that makes; either may be `REV:DIR`, the folder as a git revision has it. `gp corpus verify GAME --run RUN --module M` makes every clip again from the ROM through the game's module and checks it; a plan's curves are derived, so each clip is only made. `gp model diff A B` lists the facts that differ between two models, `gp model mutants DIR` writes the model's mutants (each number nudged, each flag flipped, each transition dropped), and `gp model schema WHICH` prints a format's JSON Schema. `gp input-log generate --frames N --hold start@120-124` writes a scripted input log (`--arcade tapper --columns CSRLDUT` for an arcade one), `gp input-log check FILE` counts its frames, `gp env` shows the paths gp uses, and `gp noop` records a run and nothing else.
+
 ## Not built yet
 
 A way to send a change from a fetched folder directly, without a fork, and a credit for contributors in the published version.

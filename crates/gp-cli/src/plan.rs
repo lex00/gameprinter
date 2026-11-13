@@ -28,7 +28,7 @@ pub(crate) const FORMAT: &str = "1.0.0";
 /// What a recipe-set hash starts with.
 const PREFIX: &str = "b3:";
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct PlanHead {
     format: String,
@@ -41,14 +41,14 @@ struct PlanHead {
 }
 
 /// A clip's own presses: a file in `inputs/`, or spans inline.
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 enum Presses {
     File(String),
     Spans(Vec<String>),
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct PlanClip {
     id: String,
@@ -70,7 +70,7 @@ fn generated() -> String {
     "generated".into()
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Plan {
     corpus: PlanHead,
@@ -83,6 +83,7 @@ struct Plan {
     changelog: Vec<Change>,
     /// Carried through unread, as `clips.toml`'s was.
     #[serde(default)]
+    #[schemars(with = "Option<serde_json::Value>")]
     import: Option<toml::Value>,
 }
 
@@ -319,6 +320,17 @@ pub(crate) fn tables(lines: &[&str]) -> Vec<(String, usize, usize)> {
         out.push((h.to_owned(), i, end));
     }
     out
+}
+
+/// The plan's JSON Schema, as `schema/corpus.json` holds it, for typed
+/// editing of a game's `corpus.toml` (`gp self schemas`).
+pub(crate) fn schema() -> String {
+    let mut s = schemars::schema_for!(Plan);
+    s.insert("$id".into(), format!("game-printer:corpus@{FORMAT}").into());
+    s.insert("title".into(), "Corpus plan, `corpus.toml`".into());
+    let mut text = serde_json::to_string_pretty(&s).expect("schemas serialize");
+    text.push('\n');
+    text
 }
 
 #[cfg(test)]
