@@ -145,4 +145,23 @@ printf '[package]\nname = "x/y"\n' > pk/package.toml
 GP="$data/none" expect reject "a package folder with no gp to scan it" pk/package.toml
 rm -rf pk
 
+# A merge without conflicts runs pre-merge-commit, not pre-commit: it must
+# refuse the ROM a side branch brings in (committed there with --no-verify).
+base=$(git symbolic-ref --short HEAD)
+git commit -q --allow-empty --no-verify -m "merge base" >/dev/null
+git checkout -q -b side
+cp "$GP_ROM_DIR/made up.nes" side.nes
+git add -f side.nes && git commit -q --no-verify -m "a ROM on a side branch" >/dev/null
+git checkout -q "$base"
+git commit -q --allow-empty --no-verify -m "main moves on" >/dev/null
+if git merge -q --no-ff -m "merge side" side >/dev/null 2>&1; then got=accept; else got=reject; fi
+git merge --abort >/dev/null 2>&1 || true
+git reset -q --hard >/dev/null 2>&1 || true
+if [ "$got" = reject ]; then
+  echo "ok    a merge that brings in a ROM ($got)"
+else
+  echo "FAIL  a merge that brings in a ROM: wanted reject, got $got"
+  failures=$((failures + 1))
+fi
+
 [ "$failures" -eq 0 ] || { echo "$failures hook checks failed"; exit 1; }

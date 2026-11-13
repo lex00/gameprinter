@@ -1,0 +1,6 @@
+#!/bin/bash
+# A merge without conflicts runs this hook, not pre-commit, so run the same
+# checks on what the merge brings in. It sees the merged tree's diff against
+# the current branch, not each merged commit: history a merge brings along is
+# not checked, so squash a branch that ever held game data.
+exec "$(dirname -- "$0")/pre-commit" "$@"
