@@ -66,11 +66,6 @@ impl Of {
             rom: Some(sha256.to_owned()).filter(|r| !r.is_empty()),
         }
     }
-
-    /// Whether nothing is known.
-    pub fn is_unknown(&self) -> bool {
-        self.game.is_none() && self.rom.is_none()
-    }
 }
 
 static GUARD: OnceLock<Box<dyn Guard>> = OnceLock::new();

@@ -3,8 +3,8 @@
 //! and the frame's events after each tick and says which song should play
 //! and which effects start. Like the [`crate::Animator`] it reads the
 //! world and never writes it, keeps to whole numbers, and every runtime
-//! steps it the same way: the Bevy build plays the generator's WAV files
-//! by its word, and the web preview drives gp-sound's player.
+//! steps it the same way: the web preview drives gp-sound's player by its
+//! word.
 
 use gp_sim::World;
 use gp_sim::systems::Event;

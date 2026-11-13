@@ -1,8 +1,7 @@
 //! `gp theme`: themes on a model (docs/formats/theme.md). Checking a stack
 //! (each theme, the readability check, the Style checks), the formats'
 //! schemas, painting placeholder restyled art from roles, and a themed
-//! video of the interpreter. The theme options here are shared with
-//! `gp gen bevy` and `gp gen conform`.
+//! video of the interpreter.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -1035,33 +1034,6 @@ fn paper() -> Scheme {
         default: sh([0xb0, 0xa8, 0x98], [0xd4, 0xce, 0xc2], [0x6e, 0x66, 0x5a]),
         ink: Rgb([0x2a, 0x22, 0x1c]),
     }
-}
-
-/// The template's paper theme with the defaults, as `gp game new` writes
-/// it.
-// game-printer's `gp game new` painted a new game's paper theme with this;
-// gameprinter's `game new` doesn't yet.
-#[allow(dead_code)]
-pub(crate) fn paint_model(
-    model: &Path,
-    out: &Path,
-    paths: &Paths,
-    rec: &mut RunRecorder,
-) -> Result<()> {
-    paint(
-        model,
-        out,
-        "paper",
-        "Paper",
-        1,
-        "PAPER PLAY",
-        "MADE WITH GAME PRINTER",
-        &[],
-        true,
-        paths,
-        rec,
-    )
-    .map(|_| ())
 }
 
 /// The paper theme of a game drawn from tiles (theme_paper): the kit and

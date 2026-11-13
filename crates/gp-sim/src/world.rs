@@ -1136,11 +1136,7 @@ pub fn ground_land_row(
 pub const SURFACE_STEP: i64 = 2;
 
 /// Whether the row of pixels `row` is solid anywhere across the body's
-/// tile hitbox, in the level as built.
-pub fn row_solid(level: &Level, kind: &Kind, b: &Body, row: i64) -> bool {
-    row_solid_t(Tiles::built(level), kind, b, row)
-}
-
+/// tile hitbox, in the tiles `t`.
 pub fn row_solid_t(t: Tiles<'_>, kind: &Kind, b: &Body, row: i64) -> bool {
     let left = b.x.floor() + kind.tile_hitbox.x.floor();
     let right = left + kind.tile_hitbox.w.floor() - 1;
@@ -1148,11 +1144,7 @@ pub fn row_solid_t(t: Tiles<'_>, kind: &Kind, b: &Body, row: i64) -> bool {
 }
 
 /// Whether the column of pixels `col` is solid anywhere down the body's
-/// tile hitbox, in the level as built.
-pub fn column_solid(level: &Level, kind: &Kind, b: &Body, col: i64) -> bool {
-    column_solid_t(Tiles::built(level), kind, b, col)
-}
-
+/// tile hitbox, in the tiles `t`.
 pub fn column_solid_t(t: Tiles<'_>, kind: &Kind, b: &Body, col: i64) -> bool {
     let top = b.y.floor() + kind.tile_hitbox.y.floor();
     let bottom = top + kind.tile_hitbox.h.floor() - 1;

@@ -9,7 +9,7 @@
 //!
 //! OUT gets `bundle.json` (the model bundle the browser interpreter loads),
 //! `assets/` (the generator's pictures and `present.txt`, the
-//! presentation, as `gp gen bevy` writes them),
+//! presentation),
 //! `preview.json` (what the preview page draws them with, and the spec
 //! digest every build of the model must report, and the model's switches
 //! by group), `profiles.toml` (the model's, which the page applies to the

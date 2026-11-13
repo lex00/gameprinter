@@ -192,52 +192,6 @@ pub fn check(kit: &Kit, deny: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// A words file for a new game: each slot's label and description as the
-/// kit has them, and a placeholder pose a frame to replace after watching
-/// the clips.
-#[allow(dead_code)] // game-printer's `gp game new` wrote it; gameprinter's doesn't yet
-pub fn placeholder(kit: &Kit) -> Words {
-    Words {
-        format: "0.1.0".into(),
-        deny: Vec::new(),
-        art: kit
-            .art
-            .iter()
-            .map(|a| ArtWords {
-                id: a.id.clone(),
-                label: Some(a.label.clone()),
-                description: Some(a.description.clone()),
-                poses: (0..a.frames)
-                    .map(|k| match a.frame_names.get(k as usize) {
-                        Some(n) if a.kind == "font" => format!("the character {n}"),
-                        Some(n) => format!("pose {n}, to name after watching a clip"),
-                        None => format!("pose {k}, to name after watching a clip"),
-                    })
-                    .collect(),
-                note: None,
-            })
-            .collect(),
-        sound: kit
-            .sound
-            .iter()
-            .map(|s| SoundWords {
-                role: s.role.clone(),
-                description: Some(s.description.clone()),
-                note: None,
-            })
-            .collect(),
-    }
-}
-
-/// The words file's text, with a header for people.
-#[allow(dead_code)] // as `placeholder`
-pub fn words_text(game: &str, w: &Words) -> String {
-    format!(
-        "# Prompt words for {game}'s theme kit (docs/theme-kit.md, \"Prompt words\"),\n# written once by hand from watching the template's clips. `gp theme kit`\n# puts the labels, descriptions and poses into kit.toml. `deny` lists the\n# words no prompt-facing text may hold; `note` keeps the game's own term\n# and never reaches the kit.\n{}",
-        toml::to_string(w).expect("words serialize")
-    )
-}
-
 #[cfg(test)]
 mod tests {
 

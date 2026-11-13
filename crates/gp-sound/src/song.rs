@@ -299,16 +299,6 @@ impl Song {
         self.tracks.iter().map(|t| t.placed(self.tempo).len()).sum()
     }
 
-    /// Re-cuts every track on a new grid; what plays doesn't change.
-    pub fn regrid(&mut self, tempo: Tempo) {
-        let old = self.tempo;
-        for t in &mut self.tracks {
-            let placed = t.placed(old);
-            *t = Track::from_placed(t.channel, &placed, tempo, self.frames);
-        }
-        self.tempo = tempo;
-    }
-
     /// Channels it plays on.
     pub fn channels(&self) -> Vec<Channel> {
         self.tracks

@@ -17,9 +17,8 @@
 //! Keys are written once: a key that is there already holds the same
 //! bytes, since its name is their hash.
 //!
-//! This crate depends on blake3 alone, so the runtimes (gp-web and the
-//! generated Bevy games, through gp-present) read packages with the code gp
-//! writes them with.
+//! This crate depends on blake3 alone, so the web preview (gp-web, through
+//! gp-present) reads packages with the code gp writes them with.
 
 pub mod index;
 pub mod registry;

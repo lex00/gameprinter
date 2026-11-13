@@ -41,9 +41,17 @@ pub(crate) const VERSION: &str = "progress 2";
 #[derive(Args, Debug, Clone)]
 pub struct ProgressArgs {
     /// The game: a name in the games checkout, or a folder holding
-    /// model.toml (game-printer's template).
-    #[arg(long)]
-    pub template: String,
+    /// model.toml (game-printer's template). With `--next`, by default the
+    /// game whose page was opened last.
+    #[arg(long, required_unless_present = "next")]
+    pub template: Option<String>,
+    /// Where the port stands in a sentence, the one next step and who does
+    /// it (the tools, your agent or you), up to two other steps, what runs
+    /// in the background, and anything that waits for your yes. Reads only,
+    /// in well under a second; works before a game exists (docs/progress.md,
+    /// "What next").
+    #[arg(long, conflicts_with_all = ["run", "measure", "write_ignore"])]
+    pub next: bool,
     /// The gp serve run whose model, clips and scores to read: a run is a
     /// game of the games checkout, by its folder's name. Without it only
     /// the game's folder is read.
@@ -1532,13 +1540,20 @@ fn code_labels(path: Option<&Path>) -> BTreeMap<u16, String> {
 
 /// `gp progress`.
 pub(crate) fn run(args: &ProgressArgs, paths: &gp_evidence::Paths) -> Result<Outcome> {
+    if args.next {
+        return crate::next::run(paths, args.template.as_deref());
+    }
+    let template = args
+        .template
+        .as_deref()
+        .context("--template names the game")?;
     let mut notes = Vec::new();
     if args.measure {
         let run = args
             .run
             .as_deref()
             .context("--measure needs --run: the run's ROM, model and recordings")?;
-        let game = template_dir(&args.template)?;
+        let game = template_dir(template)?;
         let mdir = model_dir(
             &game,
             Some(&paths.home.join("work").join("serve").join(run)),
@@ -1557,7 +1572,7 @@ pub(crate) fn run(args: &ProgressArgs, paths: &gp_evidence::Paths) -> Result<Out
         )?;
         notes.push(format!("measured in {:.0} s", m.seconds));
     }
-    let f = gather(paths, &args.template, args.run.as_deref())?;
+    let f = gather(paths, template, args.run.as_deref())?;
     if let Some(file) = &args.write_ignore {
         let m = f
             .measured
@@ -1574,7 +1589,7 @@ pub(crate) fn run(args: &ProgressArgs, paths: &gp_evidence::Paths) -> Result<Out
         ));
     }
     let f = if args.write_ignore.is_some() {
-        gather(paths, &args.template, args.run.as_deref())?
+        gather(paths, template, args.run.as_deref())?
     } else {
         f
     };

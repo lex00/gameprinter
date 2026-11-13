@@ -6,8 +6,8 @@
 //! names pictures by number. [`Animator`] steps once per simulation frame,
 //! reading the world and never writing it, and [`Animator::scene`] says
 //! what to draw: each body's picture, flips and place, the level picture
-//! and its cycling colors, and the HUD's tiles. Generated Bevy games and
-//! the interpreter preview both draw from it, so they show the same thing.
+//! and its cycling colors, and the HUD's tiles. The interpreter preview
+//! draws from it.
 //!
 //! Presentation is the class of change that leaves the state hashes equal
 //! (docs/research/mechanics.md): nothing here is read by the simulation.

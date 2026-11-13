@@ -2142,11 +2142,6 @@ impl TileKind {
             name.into_deserializer();
         Self::deserialize(d).ok()
     }
-
-    /// Whether the kind is one core 0.4.6 added.
-    pub fn since_0_4_6(self) -> bool {
-        matches!(self, Self::CoinBlock | Self::ItemBlock | Self::Brick)
-    }
 }
 
 /// A level's checkpoint (feature `level.halfway`): when `restart-level` starts the

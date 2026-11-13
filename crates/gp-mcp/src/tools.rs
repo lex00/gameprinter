@@ -61,6 +61,15 @@ fn schema<T: JsonSchema>() -> Value {
 pub fn list() -> Vec<ToolDef> {
     vec![
         ToolDef {
+            name: "next",
+            title: "Where the port stands and what's next",
+            description: "Where the port of a game stands (stands, one sentence for the person), the one next step and who does it (next.who: tools, agent or person; next.how says the page's button and the command), up to two other steps (also), what runs in the background and when to look again (running), anything that costs money or makes something public (waits_for_yes), and a clue when the person seems lost (clue). text is all of it as the terminal prints it. Read from files only, the same answer as `gp progress --next` and the status line on the page; it never starts work. Works before any game exists (it asks for the game's file) and on a finished port. With wait_s (at most 30) it waits for the answer to change, so a hand-off or an answer the person gives on the page reaches you: changed says whether it did.",
+            input_schema: schema::<crate::next::NextArgs>(),
+            read_only: true,
+            destructive: false,
+            idempotent: true,
+        },
+        ToolDef {
             name: "registry_search",
             title: "Search templates and sources",
             description: "Search the templates (game folders holding a model and no ROM data, ready to copy) under the repo's templates/ and in the games checkout ($GP_GAMES_DIR, or a games folder at, above or beside the folder the server started in), and the sources registered in sources/*.toml by words, platform, genre (a model extension such as platformer), entity roles (boss), systems (platformer.enemies) and mechanics from the mechanic index (enemy:contact.kick, or jump.coyote for any role), or ask for the templates inspired by one (inspired_by) or most like one (like, ranked by the share of mechanics in common). Each result lists its mechanics, its inspired_by provenance and the templates that took from it. Each template says what it needs before it can be copied and played: its lifted assets, lifted from the person's own ROM of the source (found by hash in $GP_ROM_DIR or given to the server) for a ported game, or built from its authored.toml for a game made here. template_fork does that step itself when it can.",
@@ -234,7 +243,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "build_publish",
             title: "Build for the browser",
-            description: "Build the copy for the browser into a local directory that a page on this computer plays (there's no hosted runtime yet). The target is web-preview, the interpreter preview; the other target, web, runs gp gen bevy, which this gp doesn't have, so it fails. Writes manifest.json with the template, the model's digest, every slot's provenance from slots.toml, the licenses and each file's digest. Refused when the model check fails, a slot's files don't match their recorded digest, or any slot still holds an original asset of a commercial source. dry_run runs the checks only.",
+            description: "Build the copy for the browser into a local directory that a page on this computer plays (there's no hosted runtime yet). The one target is web-preview, the interpreter preview. Writes manifest.json with the template, the model's digest, every slot's provenance from slots.toml, the licenses and each file's digest. Refused when the model check fails, a slot's files don't match their recorded digest, or any slot still holds an original asset of a commercial source. dry_run runs the checks only.",
             input_schema: schema::<crate::publish::PublishArgs>(),
             read_only: false,
             destructive: false,
@@ -415,6 +424,7 @@ fn call_tool(config: &Config, name: &str, args: Value) -> Option<Reply> {
         .filter(|c| gp_model::path::is_name(c))
         .map(crate::CopyLock::take);
     Some(match name {
+        "next" => with(args, |a| crate::next::next(config, a)),
         "registry_search" => with(args, |a| crate::registry::search(config, a)),
         "template_fork" => with(args, |a| crate::fork::fork(config, a)),
         "surface_describe" => with(args, |a| describe(config, a)),

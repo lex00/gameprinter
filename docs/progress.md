@@ -11,8 +11,44 @@ gp progress --template donkey-kong --run donkey-kong [--measure --module donkey-
 | `gp progress --template GAME [--run RUN] [--json]` | The ladder from what exists: the game's folder in the games checkout (or a folder holding model.toml), the run's model and scores, and the last measure. Reads only. A run is gp serve's: a game by its folder's name, whose model is its working copy (`$GP_HOME/work/serve/GAME/model/`) once there is one |
 | `gp progress ... --measure` | Also measures the heavy stages (below) and keeps the result in `$GP_HOME/work/progress/<game>/<run>.json`. `--playthrough ID` picks the full-game recording (or a baseline file); without it, the longest store recording of the game's ROMs. `--no-clips` and `--no-whole` leave parts out and keep what the last measure had. `--module` gives the game's module, for a model with hooks |
 | `gp progress ... --write-ignore MAPPING` | Writes the last measure's RAM roles into a mapping file as its `[[ignore]]` list ([the ignore list](#the-memory-maps-ignore-list)). NES only: the roles come from a trace of the 6502 |
+| `gp progress --next [--template GAME] [--json]` | [What next](#what-next): where the port stands and the one next step, for the person and their agent |
 
 The code is `crates/gp-cli/src/progress.rs` (the ladder, from its facts alone, so the tests give it made-up inputs) and `crates/gp-cli/src/progress_measure.rs` (the measure). The start and the lockstep from it are the jumpathon's (`crates/gp-cli/src/sweep.rs`, `measure`).
+
+## What next
+
+`gp progress --next` answers "where are we, and what now?" for a person porting a game with their agent. The same answer is the status line under the page's header on every tab (`GET /api/next/GAME` on `gp serve`) and the MCP tool `next` ([mcp.md](mcp.md)). The owner asked for it on 2026-11-13: "i want a development loop that keeps prompting the person about what to do next, gives them clues if they seem lost, etc". The design is guided-loop.md in the owner's notes; this is its smallest first version, for porting on NES and arcade.
+
+It reads files and records only: the game's folder, the quest log and its sessions, the gate's scores (`$GP_HOME/work/refine/GAME/status.json`) or gp serve's background scores, the last `--measure`, and a published record (`$GP_HOME/work/published/GAME.json`, with its `link`; nothing writes it yet). It runs no score, ROM or build, so it answers in well under a second and a new conversation gets the same answer. It suggests and never starts work. Without `--template` it takes the game whose page was opened last, or the only game; with no game at all it reads the ROM folder and asks which file to bring over.
+
+The answer (`version` "next 1"):
+
+| Field | What |
+|---|---|
+| `stage` | One of twelve: P1 no game file, P2 a game file and no game, P3 finding the player, P4 first clips, P5 clips not in the game's tests yet, P6 scoring, P7 fixing the model, P8 play only the person can give, P9 a full run not checked, P10 the full run parts, P11 ready to go online, P12 online. P0 asks which game when several are here and none was opened |
+| `stands` | Where the work stands, in a sentence or two of plain words |
+| `next` | The one next step: `who` (`tools`, free and unattended, which the agent starts without asking; `agent`; or `person`), `says`, `how` (the page's button, the command) and `act` (what the page's button does) |
+| `also` | Up to two other steps, the person's first when `next` isn't theirs |
+| `running` | What the background is doing and when to look again |
+| `waits_for_yes` | Steps that cost money or make something public (putting the game online), which wait for the person's own yes |
+| `clue` | A clue when the person seems lost, or null |
+| `facts`, `text` | The counts it read, and all of it as the terminal prints it |
+
+The next step is the first of these that applies: something that stops all work (the game's file isn't found, the background stopped on an error); a step waiting for a yes; a question only the person can answer (the agent's question on CLIPS, a question on REFINE); a hand-off the agent hasn't answered; free work for the tools that isn't running (triage when no row was tried, scoring, the full-run measure); the agent's work (map the player, add new clips to the game's tests, the clip that goes wrong first, why a full run parts); play only the person can give (the first NEEDS YOU row, with its request); the stage's own step.
+
+The clues, at most one at a time, never while recording or reviewing, and each at most once in 10 minutes (the page keeps the count; after the third time on one signal the words offer another way in):
+
+| Signal | Seen by | When |
+|---|---|---|
+| `idle` | The page | No button for 2 minutes on CLIPS while a row only the person can play is open |
+| `drops` | The page | The same row's recording dropped or too short three times in 10 minutes |
+| `hops` | The page | Four tab changes in 2 minutes with nothing done |
+| `away` | The page | The agent's question waiting 5 minutes while another tab shows |
+| `question` | The files | A question on REFINE open for 10 minutes while nothing else runs |
+| `paused` | The page's server | The background paused (it pauses at every server start) with clips to score |
+| `words` | The files | A note typed on the page that expects a download, an install, an emulator or a new ROM: the answer is what Game Printer makes |
+
+Not yet: a handed-off clip that fails its row's goal (needs the triage's test on the server), times on turns and clips (an unanswered question's age), the person's words in the conversation (the agent sees those), and a LATER button. gp serve keeps whether its background is on in the state file's `live` (with its process), so the terminal and the agent see it too.
 
 ## The ladder
 

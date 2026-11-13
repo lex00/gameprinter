@@ -1539,7 +1539,6 @@ fn rewrite_jump(model: &Path, fit: &Value, takeoff_x: &[(i32, f64)]) -> Result<V
 /// place is reached at (where the jump's buttons start), and the inputs
 /// from power-on: the path up to the place's path frame, the probe chain,
 /// then the jump's own buttons (walking into the column, then the jump).
-#[cfg_attr(not(test), allow(dead_code))] // for the findings' clip cutter
 pub(crate) fn place_clip(
     strip_file: &Path,
     column: i64,

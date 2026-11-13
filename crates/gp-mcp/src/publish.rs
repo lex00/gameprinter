@@ -32,13 +32,26 @@ pub const FORMAT: &str = "0.2.0";
 /// The manifest's name in the output directory.
 pub const MANIFEST: &str = "manifest.json";
 
+/// The targets a build makes.
+pub const TARGETS: &[&str] = &["web-preview"];
+
+/// Refuses a target this build doesn't make, naming the ones it does.
+pub fn check_target(target: &str) -> Result<(), String> {
+    if TARGETS.contains(&target) {
+        return Ok(());
+    }
+    Err(format!(
+        "there is no target `{target}`; the targets are: {}",
+        TARGETS.join(", ")
+    ))
+}
+
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PublishArgs {
     pub copy: String,
-    /// `web-preview` (default): the interpreter preview, which plays any
-    /// model with one prebuilt module. `web` adds a generated Bevy game; it
-    /// runs `gp gen bevy`, which this gp doesn't have, so it fails today.
+    /// `web-preview` (default), the only target: the interpreter preview,
+    /// which plays any model with one prebuilt module.
     #[serde(default)]
     pub target: Option<String>,
     /// The output directory, outside any git work tree, new, empty or an
@@ -48,8 +61,8 @@ pub struct PublishArgs {
     /// Run every check and return the manifest without building.
     #[serde(default)]
     pub dry_run: bool,
-    /// Fetch the web tools (binaryen's wasm-opt, and for `web` also
-    /// wasm-bindgen) if they aren't there, so the preview module is shrunk.
+    /// Fetch the web tools (binaryen's wasm-opt and wasm-bindgen) if they
+    /// aren't there, so the preview module is shrunk.
     /// Without it the preview uses them when `$WEB_TOOLS` names them or an
     /// earlier fetch left them, and else ships the unshrunk module (1.4 MB
     /// against 1.2 MB), saying so in `wasm`. The fetch is pinned and hash
@@ -252,9 +265,7 @@ fn run_step(config: &Config, cmd: &mut Command, what: &str) -> Result<Vec<String
 
 pub fn publish(config: &Config, a: PublishArgs) -> Result<Reply, String> {
     let target = a.target.as_deref().unwrap_or("web-preview");
-    if !matches!(target, "web-preview" | "web") {
-        return Err(format!("target `{target}` isn't `web-preview` or `web`"));
-    }
+    check_target(target)?;
     let dir = config.existing_copy(&a.copy)?;
     let model_text = fs::read_to_string(dir.join(gp_model::MODEL_FILE))
         .map_err(|e| format!("reading {}: {e}", gp_model::MODEL_FILE))?;
@@ -386,11 +397,6 @@ pub fn publish(config: &Config, a: PublishArgs) -> Result<Reply, String> {
         },
         "baselines": baselines.iter().filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned())).collect::<Vec<_>>(),
     });
-    if target == "web" {
-        manifest["licenses"]["runtime_note"] = json!(
-            "the Bevy build also links the crates its lockfile pins, each under its own license"
-        );
-    }
     if !problems.is_empty() {
         let mut r = refused("slots", json!(problems));
         r.json["manifest"] = manifest;
@@ -436,9 +442,8 @@ pub fn publish(config: &Config, a: PublishArgs) -> Result<Reply, String> {
 
     fs::create_dir_all(&out).map_err(|e| format!("creating {}: {e}", out.display()))?;
     let mut steps = Vec::new();
-    let (tools, tools_note) = match web_tools(config, a.fetch_tools || target == "web") {
+    let (tools, tools_note) = match web_tools(config, a.fetch_tools) {
         Ok(t) => (t, None),
-        Err(e) if target == "web" => return Err(e),
         Err(e) => (None, Some(e)),
     };
     let mut preview = Command::new("bash");
@@ -455,40 +460,6 @@ pub fn publish(config: &Config, a: PublishArgs) -> Result<Reply, String> {
         "step": "preview",
         "output": run_step(config, &mut preview, "scripts/web/build-preview.sh")?,
     }));
-    if target == "web" {
-        let tools = tools.clone().ok_or("no web tools")?;
-        let gen_dir = config.work.join(".publish").join(&a.copy).join("gen");
-        let (code, v) = crate::run_gp(
-            config,
-            &[
-                "gen".as_ref(),
-                "bevy".as_ref(),
-                dir.as_os_str(),
-                "-o".as_ref(),
-                gen_dir.as_os_str(),
-                "--assets".as_ref(),
-                assets.as_os_str(),
-            ],
-        )?;
-        if code != 0 {
-            return Err(format!("gp gen bevy failed: {v}"));
-        }
-        let mut bevy = Command::new("bash");
-        bevy.arg(config.repo.join("scripts/web/build-bevy.sh"))
-            .arg(&gen_dir)
-            .arg(&out)
-            .arg("webgl2")
-            .arg("size")
-            .env("WEB_TOOLS", &tools)
-            .env(
-                "CARGO_TARGET_DIR",
-                config.work.join(".publish").join("bevy-target"),
-            );
-        steps.push(json!({
-            "step": "bevy",
-            "output": run_step(config, &mut bevy, "scripts/web/build-bevy.sh")?,
-        }));
-    }
 
     let mut names = Vec::new();
     walk(&out, &out, &mut names)?;

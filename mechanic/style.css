@@ -41,6 +41,16 @@ header { display: flex; gap: 16px; align-items: baseline; padding: 10px 16px; bo
 #log-toggle.news { color: var(--fg); }
 #state { color: var(--muted); flex-basis: 100%; }
 #state:empty { display: none; }
+/* The status line (next.js): where the port stands, the next step and its
+   button, or a clue; one line under the header on every tab. */
+#next-line { flex-basis: 100%; display: flex; gap: 12px; align-items: baseline; min-width: 0; font-size: 13px; }
+#next-line[hidden] { display: none; }
+#next-line .nx-stands, #next-line .nx-clue, #next-line .nx-next { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#next-line .nx-stands { color: var(--muted); flex: 1 1 auto; }
+#next-line .nx-clue { color: var(--nes-28); flex: 1 1 auto; }
+#next-line .nx-next { flex: 0 1 auto; max-width: 60%; }
+#next-line .nx-who { color: var(--nes-21); font-weight: 700; }
+#next-line button { font: bold 12px var(--mono); background: var(--nes-0f, #000); color: var(--fg); border: 2px solid var(--line); padding: 1px 8px; cursor: pointer; flex: 0 0 auto; align-self: center; }
 /* The tabs (from game-printer's refine.css, which held them). */
 #tabs { display: flex; gap: 0; padding: 0 16px 10px; }
 #tabs button { flex: 1; max-width: 360px; font: bold 15px/1.2 var(--mono); letter-spacing: 1px; padding: 10px 14px; background: #1c2027; color: var(--muted, #9aa0a8); border: 2px solid #444; cursor: pointer; }

@@ -2,8 +2,8 @@
 //! game"): its game's themes index from a mirror (`gp_package::index`),
 //! each theme's package, and a cache of the looks downloaded. The web
 //! preview keeps its cache in the browser and calls these through gp-web;
-//! the Bevy build keeps it in its data folder with [`install`] and
-//! [`remove`]. Presentation only: the simulation never reads a theme.
+//! [`install`] and [`remove`] keep one in a folder. Presentation only: the
+//! simulation never reads a theme.
 
 use std::path::{Path, PathBuf};
 

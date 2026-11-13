@@ -443,7 +443,6 @@ fn text(r: &Report, score: Option<&gp_track::truth::Score>, name: &str) -> Strin
 /// Where a game keeps its object slots, from a state mapping's `[slots]`:
 /// slot i's x byte is `x + i` and its object ID `id + i`, while `active + i`
 /// isn't zero.
-#[allow(dead_code)] // gp-extract's feel and capture read it (port wave 5)
 pub(crate) struct SlotIds {
     pub count: u16,
     pub x: u16,
@@ -451,7 +450,6 @@ pub(crate) struct SlotIds {
     pub active: u16,
 }
 
-#[allow(dead_code)]
 impl SlotIds {
     /// From a mapping's `[slots]`, when it gives the slots' IDs and an `x`
     /// field one byte a slot.
@@ -481,7 +479,6 @@ impl SlotIds {
 /// slot's ID byte, read from the trace on the track's frames while the
 /// slot is active, gives the ID it holds most often. This is how capture
 /// tells enemy kinds apart for any game whose mapping names its slots.
-#[allow(dead_code)] // gp-extract's feel and capture read it (port wave 5)
 pub(crate) fn ids_from_slots(t: &mut Tracked, slots: &SlotIds) -> Result<usize> {
     // The slot of each track that has none yet.
     let mut want: BTreeMap<usize, u16> = BTreeMap::new();
@@ -541,13 +538,11 @@ pub(crate) fn ids_from_slots(t: &mut Tracked, slots: &SlotIds) -> Result<usize> 
 
 /// Where a mapping says the player's whole-pixel position is: the bytes of
 /// `entities.<player>[0].x` and `.y`, low byte first.
-#[allow(dead_code)] // gp-extract's feel and capture read it (port wave 5)
 pub(crate) struct PlayerAt {
     pub x: Vec<u16>,
     pub y: Vec<u16>,
 }
 
-#[allow(dead_code)]
 impl PlayerAt {
     pub(crate) fn of(m: &gp_interp::mapping::Mapping, player: &str) -> Option<Self> {
         let at = |axis: &str| {
@@ -569,7 +564,6 @@ impl PlayerAt {
 /// fields: its position each frame read from RAM, so the feel of a game
 /// whose player the sprite tracker can't pick out (one drawn in pieces
 /// that change, or masked) is still measured. Returns whether it added one.
-#[allow(dead_code)] // gp-extract's feel and capture read it (port wave 5)
 pub(crate) fn player_from_mapping(t: &mut Tracked, at: &PlayerAt) -> Result<bool> {
     if t.report.tracks.iter().any(|tr| tr.player) {
         return Ok(false);

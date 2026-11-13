@@ -171,10 +171,6 @@ impl Check {
             .chain(conditional.iter().map(|c| c.governing.level))
             .collect()
     }
-
-    pub fn has_conditions(&self) -> bool {
-        self.levels.values().any(|(_, c)| !c.is_empty())
-    }
 }
 
 /// Everything compiled from one model and contract.

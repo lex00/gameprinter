@@ -23,7 +23,7 @@ gp host speed --plan 2.1 --first-link 40 --tweak 0.4 # hold timings to their bud
 
 The crate came over unchanged, with its 14 tests. The command lost what fed game-printer's run recorder: `host scenarios` and `host speed` record no metrics, and their JSON has no `run_manifest`; otherwise it is the same. Scenarios and the input search live in gp-mcp, as before.
 
-The `capture` job runs `gp capture start` and `gp capture watch`, the capture-run loop the editor port brings back; until it lands, a capture job (and `gp host serve --capture RUN`) fails with gp's error. The `build` job with `target = "web"` needs `gp gen bevy`, which gameprinter dropped; the default `web-preview` build works.
+The `capture` job runs `gp capture start` and `gp capture watch`, the capture-run loop the editor port brings back; until it lands, a capture job (and `gp host serve --capture RUN`) fails with gp's error. The `build` job's one target is `web-preview`, the interpreter preview; any other is refused when the job is submitted.
 
 On 2026-11-12, old binary against new on Moss Hop: `host scenarios mosshop --template` gave the same results but for the timings (`millis`); `host speed`, `host search` (from stomp-then-pit, 20 rounds) and `host record` on a forked copy gave equal JSON; `host serve --port 0` printed its URL line and answered `GET /api/jobs` the same.
 

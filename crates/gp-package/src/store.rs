@@ -69,13 +69,6 @@ impl Store {
         fs::read(&p).map_err(|e| io_err(&p, e))
     }
 
-    /// Stores a blob and returns its hash.
-    pub fn put_blob(&self, bytes: &[u8]) -> Result<String, String> {
-        let h = crate::hash(bytes);
-        self.put(&blob_key(&h), bytes)?;
-        Ok(h)
-    }
-
     /// A blob by its hash, checked.
     pub fn blob(&self, hash: &str) -> Result<Vec<u8>, String> {
         let b = self.get(&blob_key(hash))?;

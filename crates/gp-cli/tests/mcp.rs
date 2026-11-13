@@ -52,7 +52,12 @@ fn build_mosshop(dir: &Path, home: &Path) -> PathBuf {
 
 /// Starts `gp mcp` for `home`, with no ROM or assets, and initializes it.
 fn connect_bare(home: &Path, work: &Path) -> Client {
-    let mut child = gp(home)
+    connect_cmd(gp(home), work)
+}
+
+/// [`connect_bare`] with the command to start from.
+fn connect_cmd(mut cmd: Command, work: &Path) -> Client {
+    let mut child = cmd
         .arg("mcp")
         .arg("--repo")
         .arg(repo())
@@ -82,6 +87,12 @@ fn connect_bare(home: &Path, work: &Path) -> Client {
     );
     assert_eq!(
         init["result"]["serverInfo"]["name"], "game-printer",
+        "{init}"
+    );
+    assert!(
+        init["result"]["instructions"]
+            .as_str()
+            .is_some_and(|i| i.contains("Call next at the start of every conversation")),
         "{init}"
     );
     c.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
@@ -211,6 +222,12 @@ fn an_agent_edits_previews_and_validates_moss_hop() {
         "{init}"
     );
     assert!(
+        init["result"]["instructions"]
+            .as_str()
+            .is_some_and(|i| i.contains("Call next at the start of every conversation")),
+        "{init}"
+    );
+    assert!(
         init["result"]["capabilities"]["tools"].is_object(),
         "{init}"
     );
@@ -225,6 +242,7 @@ fn an_agent_edits_previews_and_validates_moss_hop() {
     assert_eq!(
         listed,
         [
+            "next",
             "registry_search",
             "template_fork",
             "surface_describe",
@@ -463,6 +481,72 @@ fn mcp_takes_no_json_flag_and_no_work_dir_in_the_repo() {
     assert!(!inside.exists());
 }
 
+/// The tool `next` before any game (it asks for the game's file), then on
+/// a game, where a hand-off the person makes while it waits wakes it.
+#[test]
+fn an_agent_asks_next_and_hears_a_hand_off() {
+    let d = tempfile::tempdir().unwrap();
+    let (home, work, games) = (
+        d.path().join("home"),
+        d.path().join("work"),
+        d.path().join("games"),
+    );
+    fs::create_dir_all(&games).unwrap();
+    let mut cmd = gp(&home);
+    cmd.env("GP_GAMES_DIR", &games);
+    let mut c = connect_cmd(cmd, &work);
+    let (v, err) = c.call("next", json!({}));
+    assert!(!err, "{v}");
+    assert_eq!(v["stage"]["id"], "P1", "{v}");
+    assert_eq!(v["stands"], "No game file is on this computer yet.");
+    assert_eq!(v["next"]["who"], "person");
+    assert!(v["text"].as_str().unwrap().contains("Next (you): "), "{v}");
+    let (v, err) = c.call("next", json!({"game": "nope"}));
+    assert!(err, "{v}");
+    finish(c);
+
+    // A game with Moss Hop's model, its player mapped, and a quest log.
+    let g = games.join("hop");
+    fs::create_dir_all(&g).unwrap();
+    fs::write(g.join("package.toml"), "").unwrap();
+    fs::write(g.join("template.toml"), "[template]\ntitle = \"Hop\"\n").unwrap();
+    for f in ["model.toml", "mapping.toml"] {
+        fs::copy(repo().join("templates/mosshop").join(f), g.join(f)).unwrap();
+    }
+    let m = home.join("mechanics/hop");
+    fs::create_dir_all(m.join("walk/clips")).unwrap();
+    fs::write(m.join("walk/clips/001.toml"), "start = 0\nframes = 10\n").unwrap();
+    fs::write(
+        m.join("queue.json"),
+        r#"[{"mechanic": "walk", "status": "next"}]"#,
+    )
+    .unwrap();
+    let mut cmd = gp(&home);
+    cmd.env("GP_GAMES_DIR", &games);
+    let mut c = connect_cmd(cmd, &work);
+    let talk = m.join("walk/talk.ndjson");
+    let hand = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        fs::write(
+            &talk,
+            "{\"by\":\"player\",\"text\":\"Let's do walk\",\"n\":1}\n",
+        )
+        .unwrap();
+    });
+    let t = std::time::Instant::now();
+    let (v, err) = c.call("next", json!({"game": "hop", "wait_s": 20}));
+    hand.join().unwrap();
+    assert!(!err, "{v}");
+    assert_eq!(v["changed"], true, "{v}");
+    assert!(
+        t.elapsed() < std::time::Duration::from_secs(15),
+        "{:?}",
+        t.elapsed()
+    );
+    assert_eq!(v["facts"]["handoffs"], json!(["walk"]), "{v}");
+    finish(c);
+}
+
 /// Starts `gp mcp` on Moss Hop's lifted assets and initializes a session.
 fn connect(home: &Path, work: &Path, rom: &Path, lifted: &Path) -> Client {
     let mut child = gp(home)
@@ -499,6 +583,12 @@ fn connect(home: &Path, work: &Path, rom: &Path, lifted: &Path) -> Client {
     );
     assert_eq!(
         init["result"]["serverInfo"]["name"], "game-printer",
+        "{init}"
+    );
+    assert!(
+        init["result"]["instructions"]
+            .as_str()
+            .is_some_and(|i| i.contains("Call next at the start of every conversation")),
         "{init}"
     );
     c.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
@@ -825,6 +915,18 @@ fn an_agent_finds_moss_hop_generates_art_and_checks_a_publish() {
         "generated"
     );
     assert!(!out.exists());
+    // The Bevy game was dropped: a target other than web-preview is refused
+    // with the list of targets, before any check runs.
+    let (r, err) = c.call(
+        "build_publish",
+        json!({ "copy": "gen", "out": out, "target": "web", "dry_run": true }),
+    );
+    assert!(err, "{r}");
+    assert!(
+        r.to_string()
+            .contains("there is no target `web`; the targets are: web-preview"),
+        "{r}"
+    );
 
     // An edit by hand to a slot's file shows as modified, and a publish
     // refuses it.
@@ -841,8 +943,8 @@ fn an_agent_finds_moss_hop_generates_art_and_checks_a_publish() {
     finish(c);
 }
 
-/// A real build into a directory, the interpreter preview only (no Bevy
-/// game): needs the wasm32-unknown-unknown target. Run by `just
+/// A real build into a directory, the interpreter preview: needs the
+/// wasm32-unknown-unknown target. Run by `just
 /// check-cycle` as the step `publish-mosshop`.
 #[test]
 #[ignore = "builds the wasm module: minutes; game-printer ran it in just check-cycle, which gameprinter hasn't got"]
@@ -870,8 +972,6 @@ fn build_publish_builds_moss_hops_preview() {
     for f in ["index.html", "gp_web.wasm", "preview.json", "manifest.json"] {
         assert!(out.join(f).is_file(), "{f} is missing: {r}");
     }
-    // The Bevy page comes with the Bevy build; a preview alone has none.
-    assert!(!out.join("bevy.html").exists(), "a dead bevy.html: {r}");
     let manifest: Value =
         serde_json::from_slice(&std::fs::read(out.join("manifest.json")).unwrap()).unwrap();
     assert_eq!(manifest, r["manifest"]);
@@ -884,40 +984,6 @@ fn build_publish_builds_moss_hops_preview() {
     assert_eq!(
         again["manifest"]["files"]["preview.json"],
         manifest["files"]["preview.json"]
-    );
-    finish(c);
-}
-
-/// The same with the Bevy game built for WebGL2 beside the preview.
-#[test]
-#[ignore = "needs `gp gen bevy`: gameprinter dropped the Bevy generator"]
-fn build_publish_builds_moss_hops_bevy_game() {
-    let home = tempfile::tempdir().unwrap();
-    let tmp = tempfile::tempdir().unwrap();
-    let rom = build_mosshop(tmp.path(), home.path());
-    let lifted = tmp.path().join("lifted");
-    let work = tmp.path().join("work");
-    let mut c = connect(home.path(), &work, &rom, &lifted);
-    let (r, err) = c.call(
-        "template_fork",
-        json!({ "template": "mosshop", "copy": "pub" }),
-    );
-    assert!(!err, "{r}");
-    let out = tmp.path().join("published");
-    let (r, err) = c.call(
-        "build_publish",
-        json!({ "copy": "pub", "out": out, "target": "web" }),
-    );
-    assert!(!err, "{r}");
-    for f in ["index.html", "bevy.html", "manifest.json"] {
-        assert!(out.join(f).is_file(), "{f} is missing: {r}");
-    }
-    let files = r["manifest"]["files"].as_object().unwrap();
-    assert!(
-        files
-            .keys()
-            .any(|k| k.starts_with("pkg/") && k.ends_with(".wasm")),
-        "{files:?}"
     );
     finish(c);
 }

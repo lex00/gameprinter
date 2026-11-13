@@ -29,7 +29,6 @@
 
 /// Each hook's hash by the name the crate's `exts()` registers it under;
 /// `Err` says why the crate couldn't be read by hook.
-#[allow(dead_code)]
 pub fn hook_hashes(
     dir: &std::path::Path,
 ) -> Result<std::collections::BTreeMap<String, String>, String> {
@@ -73,7 +72,6 @@ struct Closures {
     >,
 }
 
-#[allow(dead_code)]
 fn closures(dir: &std::path::Path) -> Result<Closures, String> {
     use std::collections::{BTreeMap, BTreeSet};
     let src = dir.join("src");
@@ -179,7 +177,6 @@ fn closures(dir: &std::path::Path) -> Result<Closures, String> {
 
 /// One unit of a hook crate: the names it defines, the type it belongs
 /// to, the identifiers it names, and its text (with where it is).
-#[allow(dead_code)]
 struct Unit {
     at: String,
     names: Vec<String>,
@@ -192,7 +189,6 @@ struct Unit {
 }
 
 /// What reading a crate gathers.
-#[allow(dead_code)]
 struct Read<'a> {
     units: &'a mut Vec<Unit>,
     shared: &'a mut Vec<String>,
@@ -207,7 +203,6 @@ struct Read<'a> {
 /// What a module's `use` items bring in: each name and the units it
 /// stands for (`module::name`, by the module's last name), and the first
 /// segments of its globs' paths.
-#[allow(dead_code)]
 #[derive(Default)]
 struct Imports {
     names: std::collections::BTreeMap<String, Vec<String>>,
@@ -215,14 +210,12 @@ struct Imports {
 }
 
 /// A module's path's last name, `""` for the crate's root.
-#[allow(dead_code)]
 fn last(at: &str) -> &str {
     at.rsplit("::").next().unwrap_or("")
 }
 
 /// The module a path's segments lead to from module `at`, by its last
 /// name: `crate::a::b` is `b`, `super` from `x::y` is `x`.
-#[allow(dead_code)]
 fn module_of(prefix: &[String], at: &str) -> String {
     let mut path: Vec<&str> = at.split("::").filter(|s| !s.is_empty()).collect();
     for (i, seg) in prefix.iter().enumerate() {
@@ -238,7 +231,6 @@ fn module_of(prefix: &[String], at: &str) -> String {
     path.last().map_or(String::new(), |s| (*s).to_owned())
 }
 
-#[allow(dead_code)]
 fn use_tree(t: &syn::UseTree, prefix: &mut Vec<String>, at: &str, out: &mut Imports) {
     use syn::UseTree as U;
     match t {
@@ -272,7 +264,6 @@ fn use_tree(t: &syn::UseTree, prefix: &mut Vec<String>, at: &str, out: &mut Impo
 }
 
 /// What resolving a unit's names needs.
-#[allow(dead_code)]
 struct Names<'a> {
     at: &'a str,
     modules: &'a std::collections::BTreeSet<String>,
@@ -282,7 +273,6 @@ struct Names<'a> {
 
 /// The names `ts` refers to, resolved as [`Names`] says: `m::f` for the
 /// unit `f` of module `m` (by its last name), a bare `f` for any module's.
-#[allow(dead_code)]
 fn refs_of(
     ts: proc_macro2::TokenStream,
     cx: &Names<'_>,
@@ -353,7 +343,6 @@ fn refs_of(
     }
 }
 
-#[allow(dead_code)]
 fn files(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<(String, Vec<u8>)>) {
     let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
         .map(|r| r.flatten().map(|e| e.path()).collect())
@@ -375,29 +364,14 @@ fn files(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<(String, V
     }
 }
 
-#[allow(dead_code)]
-fn idents(ts: proc_macro2::TokenStream, out: &mut std::collections::BTreeSet<String>) {
-    for t in ts {
-        match t {
-            proc_macro2::TokenTree::Ident(i) => {
-                out.insert(i.to_string().trim_start_matches("r#").to_owned());
-            }
-            proc_macro2::TokenTree::Group(g) => idents(g.stream(), out),
-            _ => {}
-        }
-    }
-}
-
 /// An item's tokens without its doc comments (`#[doc = ".."]` and
 /// `#![doc = ".."]`), which change nothing it does.
-#[allow(dead_code)]
 fn tokens(t: &impl quote::ToTokens) -> proc_macro2::TokenStream {
     let mut ts = proc_macro2::TokenStream::new();
     t.to_tokens(&mut ts);
     undoc(ts)
 }
 
-#[allow(dead_code)]
 fn undoc(ts: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     use proc_macro2::{Delimiter, Group, TokenTree as T};
     let v: Vec<T> = ts.into_iter().collect();
@@ -434,7 +408,6 @@ fn undoc(ts: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
 }
 
 /// The last identifier of a type's path: `Fire` for `fire::Fire`.
-#[allow(dead_code)]
 fn type_name(t: &syn::Type) -> Option<String> {
     match t {
         syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
@@ -442,7 +415,6 @@ fn type_name(t: &syn::Type) -> Option<String> {
     }
 }
 
-#[allow(dead_code)]
 fn unit(
     at: &str,
     names: Vec<String>,
@@ -464,7 +436,6 @@ fn unit(
 
 /// Reads the module in `file` (its items' path `at`), whose child modules
 /// are in `dir`.
-#[allow(dead_code)]
 fn read_module(
     file: &std::path::Path,
     dir: &std::path::Path,
@@ -479,7 +450,6 @@ fn read_module(
     read_items(&f.items, dir, at, r)
 }
 
-#[allow(dead_code)]
 fn read_items(
     items: &[syn::Item],
     dir: &std::path::Path,
@@ -604,7 +574,6 @@ fn read_items(
 /// [as Box<dyn Ext>])` as the name and the type `T` (`m::T`, `T {..}` or
 /// `T::new(..)` too). Any other statement but the map's `let` and its
 /// return makes the crate unreadable by hook.
-#[allow(dead_code)]
 fn registered(f: &syn::ItemFn) -> Result<Vec<(String, String)>, String> {
     use syn::{Expr, Lit, Stmt};
     fn lit(e: &Expr) -> Option<String> {

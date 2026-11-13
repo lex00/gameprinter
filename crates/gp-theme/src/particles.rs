@@ -1,8 +1,7 @@
 //! Particles, as a pure function of the frame number, so every runtime
 //! draws the same ones without any state of their own. This file depends
-//! on nothing outside `core`, because `gp gen bevy` copies it into a
-//! generated game's render crate as it is; the web preview has a copy in
-//! JavaScript (`scripts/web/page/preview.js`).
+//! on nothing outside `core`; the web preview has a copy in JavaScript
+//! (`scripts/web/page/preview.js`).
 //!
 //! Presentation only: floats are fine, and nothing here reads or writes the
 //! simulation. A runtime passes the frame, the view and the boxes of the

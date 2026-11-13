@@ -687,19 +687,6 @@ pub(crate) enum Cell {
     N(Option<f64>),
 }
 
-impl Cell {
-    #[allow(dead_code)]
-    pub(crate) fn json(&self) -> Value {
-        match self {
-            Cell::S(v) => json!(v),
-            Cell::I(v) => json!(v),
-            Cell::OI(v) => json!(v),
-            Cell::B(v) => json!(v),
-            Cell::N(v) => json!(v),
-        }
-    }
-}
-
 /// A row: each column of its table by name.
 pub(crate) type Row = BTreeMap<String, Cell>;
 
@@ -981,7 +968,6 @@ fn card(
 pub(crate) const QUERIES: &str = "## Load it\n\n```python\nimport duckdb\n# One ROM\nduckdb.sql(\"SELECT role, count(*) FROM 'data/ram.parquet' GROUP BY role ORDER BY 2 DESC\").show()\n# Every ROM in a folder of datasets\nduckdb.sql(\"SELECT rom, number FROM 'datasets/*/data/constants.parquet' WHERE quantity = 'gravity'\").show()\nduckdb.sql(\"SELECT rom, machine, count(*) AS states FROM 'datasets/*/data/states.parquet' GROUP BY ALL HAVING states > 4\").show()\nduckdb.sql(\"SELECT r.rom, count(*) FILTER (WHERE r.element IS NOT NULL) * 1.0 / count(*) AS placed FROM 'datasets/*/data/routines.parquet' r WHERE r.ran GROUP BY r.rom\").show()\n\nimport pandas as pd\nram = pd.read_parquet(\"data/ram.parquet\")\n\nfrom datasets import load_dataset\nconstants = load_dataset(\"parquet\", data_files=\"data/constants.parquet\")[\"train\"]\n```\n";
 
 /// Reads a dataset's Parquet files back as rows.
-#[allow(dead_code)]
 pub(crate) fn read(dir: &Path) -> Result<Dataset> {
     use parquet::file::reader::{FileReader, SerializedFileReader};
     use parquet::record::Field as PF;

@@ -9,10 +9,9 @@ license.workspace = true
 # What a runtime draws each frame, from a compiled presentation and the
 # simulation's world: which picture each body shows (animation, flips,
 # the level's palettes), color cycles and the HUD. Every runtime that draws
-# a model uses it: generated Bevy games (as a path dependency, like
-# gp-sim) and the interpreter preview (gp-web). It reads the world and
-# never writes it, and it depends on gp-sim and gp-package (blake3 alone)
-# only, so generated games build it as they build gp-sim.
+# a model uses it: the interpreter preview (gp-web). It reads the world
+# and never writes it, and it depends on gp-sim and gp-package (blake3
+# alone) only.
 [dependencies]
 gp-package = { version = "0.1.0", path = "../gp-package" }
 gp-sim = { version = "0.1.0", path = "../gp-sim" }

@@ -168,6 +168,7 @@ fn every_tool_takes_an_object() {
     assert_eq!(
         names,
         [
+            "next",
             "registry_search",
             "template_fork",
             "surface_describe",

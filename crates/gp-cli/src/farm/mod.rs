@@ -15,7 +15,7 @@
 //!
 //! Ported from game-printer's farm.rs, blind.rs and blind_topdown.rs. What
 //! gameprinter's layout changed: game-printer read the player's bytes from
-//! the game's ROM dataset (`gp dataset rom`, not here yet) and its template
+//! the game's ROM dataset (`gp dataset rom`) and its template
 //! under templates/; here they come from the package's mapping.toml
 //! (`entities.player[0].x` and `.y`, as `gp mechanic demo` reads them) and
 //! observe.toml, and the ROM from its roms.toml. The decision model's
@@ -236,40 +236,6 @@ pub(crate) fn moves(hop: usize, mid: usize, full: usize) -> Vec<Move> {
             90,
         ),
     ]
-}
-
-/// Aimed moves, for the last stretch to a goal once travel has brought the
-/// player near it: a short step (0 to `steps` frames each way) and then the
-/// approach the goal needs. "below": a full jump straight up (into a block
-/// overhead); "above": a full jump forward that comes down on it; "side":
-/// walk into it. Tried all of them, not in a model's order.
-// Not used by the blind farm now: aimed moves were measured in loop pass 2
-// and didn't help (docs/research/farm-ledger.md). Kept for other searches.
-#[allow(dead_code)]
-pub(crate) fn aimed_moves(approach: &str, steps: usize, full: usize) -> Vec<Move> {
-    let mut v = Vec::new();
-    let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
-    for k in 0..=steps {
-        for (dir, side) in [(RIGHT, "r"), (LEFT, "l")] {
-            if k == 0 && side == "l" {
-                continue;
-            }
-            let step = if k == 0 { vec![] } else { vec![(dir, k)] };
-            let (press, then): (Vec<(u8, usize)>, u8) = match approach {
-                "below" => ([step, vec![(0, 2), (A, full)]].concat(), 0),
-                "above" => ([step, vec![(0, 2), (RIGHT | A, full)]].concat(), RIGHT),
-                _ => ([step, vec![(RIGHT, 48)]].concat(), 0),
-            };
-            v.push(Move {
-                name: leak(format!("aim_{approach}_{side}{k}")),
-                about: leak(format!("step {k} frames {side}, then {approach}")),
-                press,
-                then,
-                settle: if approach == "side" { 0 } else { 90 },
-            });
-        }
-    }
-    v
 }
 
 /// The level key and its names, from the template's observe.toml [level].

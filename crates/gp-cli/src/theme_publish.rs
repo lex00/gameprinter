@@ -442,7 +442,7 @@ fn check_model(
     }
 
     // The look: the theme drawn for the model's build, as the web preview
-    // and the Bevy build find looks (gp_look::looks). A look package
+    // finds looks (gp_look::looks). A look package
     // holds it; a source package holds only its digest, since it is drawn
     // over the maker's own lifted art.
     let prep_tmp = tempfile::tempdir_in(work)?;

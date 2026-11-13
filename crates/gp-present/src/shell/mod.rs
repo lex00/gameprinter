@@ -1,6 +1,6 @@
 //! The runtime shell's standard parts (docs/shell.md): what every Game
-//! Printer target runs around its simulation, written once here so the
-//! generated Bevy game and the web preview do the same thing. A target
+//! Printer target runs around its simulation, written once here so every
+//! target does the same thing. A target
 //! supplies only its [`Storage`] (wit/shell/storage.wit), as the settings
 //! screen (`crate::settings`) is drawn by one piece of code for both.
 //!

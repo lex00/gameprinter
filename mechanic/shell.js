@@ -94,7 +94,7 @@ export function startShell(page) {
   const p = { mech: "clips", free: "play", refine: "clips", work: "refine" }[asked] ?? asked;
   if (p && tabs[p]) show(p, true);
   if (asked === "refine" && new URLSearchParams(location.search).get("view") !== "work") page.setTab("refine");
-  return { show };
+  return { show, phase: () => phase };
 }
 
 /** The background work's state from gp serve, or null where there's none

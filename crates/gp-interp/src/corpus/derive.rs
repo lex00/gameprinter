@@ -129,34 +129,6 @@ pub fn fitted(catalog: &Catalog, tree: &toml::Value, part: &str) -> Vec<Fitted> 
     out
 }
 
-/// The model with one number set to `raw`, for a perturbation.
-pub fn with_value(tree: &toml::Value, path: &str, raw: i64) -> Result<Model, String> {
-    let mut tree = tree.clone();
-    let p = gp_model::Path::parse(path).map_err(|e| e.to_string())?;
-    let (last, parents) = p.segments.split_last().ok_or("an empty path")?;
-    let mut node = &mut tree;
-    for s in parents {
-        node = node
-            .get_mut(s.name.as_str())
-            .ok_or_else(|| format!("{path}: no {}", s.name))?;
-        if let Some(gp_model::path::Index::At(i)) = s.index {
-            node = usize::try_from(i)
-                .ok()
-                .and_then(|i| node.get_mut(i))
-                .ok_or_else(|| format!("{path}: no item {i}"))?;
-        }
-    }
-    let t = node.as_table_mut().ok_or("not a table")?;
-    let fx = gp_sim::Fx::from_raw(raw).to_string();
-    let v = match fx.parse::<i64>() {
-        Ok(i) => toml::Value::Integer(i),
-        Err(_) => toml::Value::String(fx),
-    };
-    t.insert(last.name.clone(), v);
-    let text = toml::to_string(&tree).map_err(|e| e.to_string())?;
-    Model::parse(&text).map_err(|e| format!("{path}: {e}"))
-}
-
 /// An action and what it drives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Drive {

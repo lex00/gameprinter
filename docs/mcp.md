@@ -29,13 +29,14 @@ Many tools run `gp` as a child process. Those whose command gameprinter has work
 
 | Tool | Needs | In gameprinter |
 |---|---|---|
+| next | `gp progress --next` | Yes |
 | registry_search, template_fork, surface_describe, model_edit, contract_edit, run_preview, assets_*, sound_* | gp-mcp itself, `gp model check`, `gp roms scan` | Yes |
 | watch_start, watch_events, watch_watch, watch_hook, watch_explore, watch_point | `gp watch` | Yes (wave 3a) |
 | watch_detail | `gp watch detail`, over `gp reach` | The command is here |
 | validate | `gp validate` | The command is here |
 | model_refine, model_questions, refine_moment | `gp model refine`, `gp model questions`, `gp input-log generate` | The commands are here |
 | moments | `gp interp moments` | The command is here |
-| build_publish | scripts/web/build-preview.sh; with `target = "web"`, `gp gen bevy` | The preview yes; the Bevy build no (the generator was dropped) |
+| build_publish | scripts/web/build-preview.sh | Yes |
 | show_explain, requests, capture_events, capture_input, view_now | `gp serve`'s sessions, `gp request explain`, the capture-run loop | When the editor port brings `gp serve` back |
 
 tests/mcp.rs (game-printer's, end to end over stdio) runs four tests here; seven are ignored with the command each needs named, and the one that searched for game-printer's other templates searches for Moss Hop only.
@@ -89,8 +90,11 @@ Each tool carries the MCP annotations. `readOnlyHint` marks the tools that leave
 
 ## The tools
 
+The server's instructions tell the agent to call `next` at the start of every conversation and after each step it takes, to tell the person where things stand and offer the next step in plain words without being asked, to start what `next` marks for the tools itself, and to stop and ask before anything in `waits_for_yes`. While the person plays, `next` with `wait_s` hears a hand-off from the page.
+
 | Roadmap name | MCP name | Status | Backed by | Read-only |
 |---|---|---|---|---|
+| | `next` | Built: where the port of a game stands, the one next step and who does it, other steps, what runs and anything waiting for the person's yes, with `wait_s` (at most 30 s) to hear a hand-off ([what next](progress.md#what-next)) | `gp progress --next` | Yes |
 | `registry.search` | `registry_search` | Built, the repo's `templates/` and `sources/` | `sources/*.toml`, each `template.toml` and model, `gp roms scan`, and the mechanic index (`gp_mcp::registry::mechanics`, [originals](originals.md#the-mechanic-index)) | Yes |
 | `template.fork` | `template_fork` | Built, local templates only | Copies `templates/<name>/` | No |
 | `surface.describe` | `surface_describe` | Built, the whole model | `gp-model` (facts, evidence), `gp-contract` (levels) | Yes |
@@ -108,7 +112,7 @@ Each tool carries the MCP annotations. `readOnlyHint` marks the tools that leave
 | `run.preview` | `run_preview` | Built, no picture | `gp-interp` | Yes |
 | `validate` | `validate` | Built | `gp model check`, `gp validate --runtime interp` | Yes, besides its result cache |
 | `show.explain` | `show_explain` | Built: a play session's marks with what the original did there that the model didn't ([show](show.md)) | The session's `play.json` under `$GP_HOME/capture/`, written by `gp serve` from `gp show explain` | Yes |
-| `build.publish` | `build_publish` | Built, local only: the interpreter preview, optionally the Bevy game | `scripts/web/` ([web.md](web.md)), `gp gen bevy`. A playable link on localhost comes from `gp host` ([host.md](host.md)); a link others open and the publish check are Milestone 5 | No |
+| `build.publish` | `build_publish` | Built, local only: the interpreter preview | `scripts/web/` ([web.md](web.md)). A playable link on localhost comes from `gp host` ([host.md](host.md)); a link others open and the publish check are Milestone 5 | No |
 | `model.refine` | `model_refine` | Built: records the source's baselines, then `gp model refine` on the copy ([mechanics](mechanics.md)) | `gp record`, `gp model refine` | No |
 | `model.questions` | `model_questions` | Built: lists the copy's questions and writes chosen answers | `gp model questions` | No |
 | | `capture_events` | Built: a capture run's events after a sequence number, the questions still open and the inputs waiting ([watching capture live](capture-live.md)) | `gp-capture` | Yes |
@@ -267,11 +271,11 @@ Music editing is talking to an agent: there's no editor of its own in Game Print
 
 | | |
 |---|---|
-| Input | `copy`; `target`: `web-preview` (default, the interpreter preview) or `web` (the preview and the generated Bevy game, built for WebGL2 with the size-optimized profile, minutes when cold); `out`, a directory outside any git work tree (default `<work>/.publish/<copy>/<target>`); `dry_run`; `fetch_tools` |
+| Input | `copy`; `target`: `web-preview` (default and the only one, the interpreter preview; any other is refused with the list of targets); `out`, a directory outside any git work tree (default `<work>/.publish/<copy>/<target>`); `dry_run`; `fetch_tools` |
 | Output | `ok`, `written`, `out`, `index`, `manifest`, `serve` (a command that serves `out` on localhost). With `dry_run`, the same checks and the manifest without a build |
 | Refused | `ok` false, `written` false, `stage` (`model check` or `slots`) and `problems`: the model check fails; a slot's files don't match the digest in `slots.toml`; a slot has no recorded provenance; any slot still holds an original asset of a commercial source |
 
-There is no remote and no hosted runtime, so publishing is local: the directory is what a host would serve, and `index.html` plays it. The build runs `scripts/web/build-preview.sh` (and `build-bevy.sh` for `web`) as child processes, as `just web-mosshop` does. `manifest.json` (format 0.2.0) holds the template (`id`, `title`, `tier`) and the model's name, SHA-256 and canonical SHA-256 and the contract's. It holds the asset map's digest too, and every slot's `status`, `origin`, `license`, `generator`, `sha256` and whether the simulation or presentation reads it. The rest is the set of asset licenses and the baselines the preview replays, with the SHA-256 of every file in `out`. Format 0.2.0 adds three fields. `parent` names the template the copy came from (`template`, `found`, the SHA-256 of the template's model and contract, and the `content_sha256` that `gp template pack` printed, when the copy's `template.toml` records it in a `[parent]` table). `changes` lists what differs from that template. `model` has the model facts added, removed or changed, as `gp model diff` shows them, evidence aside. `contract_rules` lists the rules added, removed or whose level changed. `contract_set_free` is the paths now at `free` that weren't, and `slots` is every slot that is no longer original. `wasm` gives the preview module's size and whether `wasm-opt` shrank it. A viewer can tell a published Moss Hop with a Free jump from the original. Building again over an earlier build is allowed; a directory that holds other files is refused.
+There is no remote and no hosted runtime, so publishing is local: the directory is what a host would serve, and `index.html` plays it. The build runs `scripts/web/build-preview.sh` as a child process, as `just web-mosshop` does. `manifest.json` (format 0.2.0) holds the template (`id`, `title`, `tier`) and the model's name, SHA-256 and canonical SHA-256 and the contract's. It holds the asset map's digest too, and every slot's `status`, `origin`, `license`, `generator`, `sha256` and whether the simulation or presentation reads it. The rest is the set of asset licenses and the baselines the preview replays, with the SHA-256 of every file in `out`. Format 0.2.0 adds three fields. `parent` names the template the copy came from (`template`, `found`, the SHA-256 of the template's model and contract, and the `content_sha256` that `gp template pack` printed, when the copy's `template.toml` records it in a `[parent]` table). `changes` lists what differs from that template. `model` has the model facts added, removed or changed, as `gp model diff` shows them, evidence aside. `contract_rules` lists the rules added, removed or whose level changed. `contract_set_free` is the paths now at `free` that weren't, and `slots` is every slot that is no longer original. `wasm` gives the preview module's size and whether `wasm-opt` shrank it. A viewer can tell a published Moss Hop with a Free jump from the original. Building again over an earlier build is allowed; a directory that holds other files is refused.
 
 `build_publish` shrinks the preview module with `wasm-opt` when `$WEB_TOOLS` names the web tools or an earlier fetch left them in `$GP_HOME/work/web-tools/`. With `fetch_tools: true` it fetches them first (binaryen pinned by SHA-256 on macOS arm64; wasm-bindgen-cli built with `cargo install --locked`, which takes minutes the first time). When it can't, it ships the unshrunk module (1.4 MB against 1.2 MB) and says so in `wasm.note`. The `web` target always fetches.
 
@@ -291,9 +295,9 @@ On 2026-10-28, on this machine (Apple M-series, debug build):
 The tests are part of `cargo test --workspace`, so `just check` runs them.
 
 - The first forks Moss Hop and describes it. A contract rule with a bad `when` is refused, and so is a float. Lowering the jump's gravity changes one line, and a preview shows the jump's peak 64.1875 pixels up. Validation then fails the jump against the model's numbers, with `ok` false. With the gravity put back the copy is the template byte for byte, and every check passes. It also checks that an unknown tool is a JSON-RPC error and that closing stdin ends the server with exit 0 and nothing more on stdout.
-- The art tests replace the player's sprite, and find Moss Hop with `registry_search`, generate art into its sprite and palette slots and see all five baselines unchanged, and check a publish without building it.
+- The art tests replace the player's sprite, and find Moss Hop with `registry_search`, generate art into its sprite and palette slots and see all five baselines unchanged, and check a publish without building it, and that a target other than `web-preview` is refused.
 - Unit tests in `crates/gp-mcp` run the placement, generation and publishing paths and the registry on a made-up game with a stand-in for `gp`. They cover a whole-slot placement and pixels past the last tile, and a refusal after a write that restores both files. They also cover two slots on one asset and calls on one copy taking turns.
-- Two ignored tests build the preview and the Bevy game for real. game-printer's `just check-cycle` ran them as the step `publish-mosshop`; gameprinter has no such step.
+- An ignored test builds the preview for real. game-printer's `just check-cycle` ran it as the step `publish-mosshop`; gameprinter has no such step.
 
 ## What's left
 

@@ -67,6 +67,13 @@ The sections below keep the old names for CLIPS's two views and PLAY.
 
 ## Layout
 
+Under the header, on every tab, one status line (`mechanic/next.js`) says
+where the port stands, the next step and who does it, with its button
+(PLAY FROM HERE, or the tab it needs), and a clue in its place when the
+person seems lost. It reads `GET /api/next/GAME` every 5 seconds, the same
+answer as `gp progress --next` ([what next](progress.md#what-next)), and
+never covers the game.
+
 The game window is in the middle at the top. Its left margin holds REVIEW
 REBUILD's clip picker (`#rule-card`) and the clip loaded (its row, scores,
 length, note and first split); its right margin holds, while a clip plays

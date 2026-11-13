@@ -158,18 +158,6 @@ impl Channel {
     pub fn index(self) -> usize {
         self as usize
     }
-
-    /// The channel a register ($4000-$4013, as 0x00-0x13) belongs to.
-    pub fn of_register(reg: u8) -> Option<Self> {
-        match reg {
-            0x00..=0x03 => Some(Self::Pulse1),
-            0x04..=0x07 => Some(Self::Pulse2),
-            0x08..=0x0B => Some(Self::Triangle),
-            0x0C..=0x0F => Some(Self::Noise),
-            0x10..=0x13 => Some(Self::Dmc),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default)]

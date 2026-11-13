@@ -34,17 +34,3 @@ pub fn frames_file(frames: &[(u8, bool)]) -> String {
     }
     s
 }
-
-/// [`frames_file`] with both controllers' bits: controller 2's follow
-/// controller 1's on a frame it holds any.
-pub fn frames_file_pads(frames: &[([u8; 2], bool)]) -> String {
-    let mut s = format!("{FRAMES_HEADER}\n");
-    for ([b, b2], r) in frames {
-        s.push_str(&format!("{b:02x}"));
-        if *b2 != 0 {
-            s.push_str(&format!(" {b2:02x}"));
-        }
-        s.push_str(if *r { " r\n" } else { "\n" });
-    }
-    s
-}

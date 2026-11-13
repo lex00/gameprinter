@@ -69,7 +69,7 @@ pub(crate) fn scored_queue(home: &Path, game: &str) -> Vec<Value> {
 
 /// Whether a clip of the status file meets the bars: those the contract
 /// set, else 100% of its frames together straight through.
-fn meets(c: &Value) -> bool {
+pub(crate) fn meets(c: &Value) -> bool {
     let b = &c["bars"];
     if b.is_object() && (b["together"].is_boolean() || b["longest_stretch"].is_boolean()) {
         return b["together"] != json!(false) && b["longest_stretch"] != json!(false);

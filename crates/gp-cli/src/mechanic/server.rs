@@ -805,6 +805,8 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         )?
         .unwrap_or_else(|| Response::error(404, "not found"))),
         ("GET" | "HEAD", "/shell.js") => page("shell.js", "text/javascript; charset=utf-8"),
+        // The status line: where the port stands and the next step.
+        ("GET" | "HEAD", "/next.js") => page("next.js", "text/javascript; charset=utf-8"),
         // The old inspector's views on the page (mechanic/details/).
         ("GET" | "HEAD", p) if part_in(p, "/details/").is_some() => {
             let (name, kind) = part_in(p, "/details/").unwrap_or_default();

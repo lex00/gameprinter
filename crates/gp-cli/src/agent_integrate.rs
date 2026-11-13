@@ -101,80 +101,6 @@ fn note_list(v: &str) -> Vec<String> {
         .collect()
 }
 
-/// `CHANGE.md` merged from two changes made on `base`, for a three-way
-/// merge that conflicts in it: each list line (`features:`, `breaking:`,
-/// `bumps:`) is ours then theirs' items not in it, in order; each text line
-/// (`roadmap:`, `log:`, `plugins:`) is ours with what theirs added to the
-/// base's after it. A key only theirs has is appended; other lines are
-/// ours.
-// game-printer's gate merged CHANGE.md conflicts with this; gameprinter's
-// gates don't read CHANGE.md yet, so only the tests call it.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn merge_notes(base: &str, ours: &str, theirs: &str) -> String {
-    let lines = |text: &str| -> Vec<(String, String)> {
-        text.lines()
-            .filter_map(|l| l.split_once(':'))
-            .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_owned()))
-            .collect()
-    };
-    let find = |ls: &[(String, String)], k: &str| -> Option<String> {
-        ls.iter().find(|(x, _)| x == k).map(|(_, v)| v.clone())
-    };
-    let is_list = |k: &str| matches!(k, "features" | "breaking" | "bumps");
-    let known = |k: &str| is_list(k) || matches!(k, "roadmap" | "log" | "plugins");
-    let (b, t) = (lines(base), lines(theirs));
-    let merged = |k: &str, ov: &str| -> String {
-        let Some(tv) = find(&t, k) else {
-            return ov.to_owned();
-        };
-        if is_list(k) {
-            let mut items = note_list(ov);
-            for x in note_list(&tv) {
-                if !items.contains(&x) {
-                    items.push(x);
-                }
-            }
-            return items.join(", ");
-        }
-        let bv = find(&b, k).unwrap_or_default();
-        let added = tv.strip_prefix(bv.as_str()).unwrap_or(&tv).trim();
-        if added.is_empty() || ov.contains(added) {
-            ov.to_owned()
-        } else if ov.is_empty() {
-            added.to_owned()
-        } else {
-            format!("{ov} {added}")
-        }
-    };
-    let mut out = String::new();
-    let mut seen = BTreeSet::new();
-    for l in ours.lines() {
-        match l.split_once(':') {
-            Some((k, v))
-                if known(&k.trim().to_ascii_lowercase())
-                    && !seen.contains(&k.trim().to_ascii_lowercase()) =>
-            {
-                let key = k.trim().to_ascii_lowercase();
-                out.push_str(&format!("{}: {}\n", k.trim(), merged(&key, v.trim())));
-                seen.insert(key);
-            }
-            _ => {
-                out.push_str(l);
-                out.push('\n');
-            }
-        }
-    }
-    for l in theirs.lines() {
-        if let Some((k, v)) = l.split_once(':') {
-            let key = k.trim().to_ascii_lowercase();
-            if known(&key) && seen.insert(key) {
-                out.push_str(&format!("{}: {}\n", k.trim(), v.trim()));
-            }
-        }
-    }
-    out
-}
-
 fn git(dir: &Path, args: &[&str]) -> anyhow::Result<String> {
     let o = Command::new("git")
         .arg("-C")
@@ -1089,18 +1015,6 @@ mod tests {
     }
 
     use super::*;
-
-    #[test]
-    fn two_notes_on_one_base_merge_by_key() {
-        let base =
-            "features: a.one, a.two\nroadmap: Did one.\nlog: Added a.one.\nplugins: Nothing.\n";
-        let ours = "features: a.one, a.two, b.ours\nroadmap: Did one. Did ours.\nlog: Added a.one.\nplugins: Nothing.\n";
-        let theirs = "features: a.one, a.two, `c.theirs`, b.ours\nbreaking: mapping\nroadmap: Did one. Did theirs.\nlog: Added a.one. Added c.theirs.\nplugins: Nothing.\n";
-        assert_eq!(
-            merge_notes(base, ours, theirs),
-            "features: a.one, a.two, b.ours, c.theirs\nroadmap: Did one. Did ours. Did theirs.\nlog: Added a.one. Added c.theirs.\nplugins: Nothing.\nbreaking: mapping\n"
-        );
-    }
 
     #[test]
     fn a_note_is_key_lines() {

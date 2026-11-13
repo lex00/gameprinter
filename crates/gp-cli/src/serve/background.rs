@@ -20,7 +20,8 @@
 //! seconds).
 //!
 //! The state is `$GP_HOME/work/serve/GAME/background/state.json`, each
-//! clip's score files under `background/scores/`.
+//! clip's score files under `background/scores/`. Its `live` says whether
+//! the queue is on and in which server's process, for `gp progress --next`.
 //!
 //! Once every active clip is scored, the corpus clip that parts earliest
 //! gets a refine round: gameprinter's refinement loop (`gp model refine
@@ -320,6 +321,28 @@ pub(crate) fn working_on(run: &Run) -> std::collections::BTreeSet<String> {
     with_live(run, |l| l.flight.values().map(|f| f.clip.clone()).collect())
 }
 
+/// The queue as the server knows it, for the loop's answer
+/// (crate::next): on or paused, the clips a job has now, and the error
+/// that stopped it.
+pub(crate) fn live(run: &Run) -> (bool, Vec<String>, Option<String>) {
+    with_live(run, |l| {
+        (
+            l.enabled,
+            l.flight.values().map(|f| f.name.clone()).collect(),
+            l.error.clone(),
+        )
+    })
+}
+
+/// Keeps whether the queue is on in the state file, with this server's
+/// process, so `gp progress --next` and the MCP tool `next` know it
+/// without asking the server.
+fn record_live(run: &Run, on: bool) {
+    let _ = update_saved(run, |v| {
+        v["live"] = json!({"on": on, "pid": std::process::id(), "at_ms": now_ms()});
+    });
+}
+
 /// Whether the run's queue is on, and how many clip agents it hands its
 /// stuck clips to at once.
 pub(crate) fn queue_on(run: &Run) -> (bool, usize) {
@@ -572,6 +595,7 @@ fn worker(ctx: &Ctx, name: &str, slot: usize) {
                         l.enabled = false;
                         l.flight.remove(&slot);
                     });
+                    record_live(&run, false);
                     continue;
                 }
             }
@@ -1136,6 +1160,7 @@ fn start(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
             l.focus.clone_from(&clip);
         }
     });
+    record_live(&run, true);
     emit(&run.name, "queue.on", json!({"clip": clip}));
     // "Fix this clip" on a clip no numbers fix on this model: the clip
     // agent takes it (game-printer's, docs/agents.md, "The clip agent").
@@ -1153,6 +1178,7 @@ fn stop(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
     post_only(req)?;
     let run = run_dir(ctx, params)?;
     with_live(&run, |l| l.enabled = false);
+    record_live(&run, false);
     emit(&run.name, "queue.off", json!({}));
     Ok(Response::json(&view(ctx, &run)))
 }

@@ -1,10 +1,8 @@
 //! Looks: themes drawn for one game ahead of play, for a runtime to find
 //! when it runs (`gp_present::looks`; docs/formats/theme.md, "Themes found
 //! at run time"). A look's folder holds the files of the build's `assets/`
-//! that the theme changes, under the same names, and `look.txt`. The Bevy
-//! build reads them beside its executable, in its data folder and in its
-//! own `assets/themes/`; the web preview reads `themes/index.json` beside
-//! its bundle. Presentation only: the simulation never reads them.
+//! that the theme changes, under the same names, and `look.txt`. The web
+//! preview reads `themes/index.json` beside its bundle. Presentation only: the simulation never reads them.
 
 use std::collections::BTreeMap;
 use std::path::Path;

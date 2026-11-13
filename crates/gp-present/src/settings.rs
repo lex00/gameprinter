@@ -1,9 +1,8 @@
 //! The standard in-game settings screen (docs/settings.md): the modes
 //! (`retro`, `normal` and the template's other presets) and every switch of
 //! the model's `profiles.toml`, by group, each with its description and an
-//! on/off toggle. Both runtimes draw it with this code: the generated Bevy
-//! game (its shell's menu) and the interpreter preview (gp-web's
-//! `gp_settings_*` exports), so it looks and works the same in each.
+//! on/off toggle. The interpreter preview draws it with this code (gp-web's
+//! `gp_settings_*` exports).
 //!
 //! The screen is presentation. It never reads or writes the simulation:
 //! closing it gives the profile chosen, by name, and the runtime starts the

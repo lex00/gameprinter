@@ -91,6 +91,7 @@ mod module;
 mod moments;
 mod movie;
 mod mutants;
+mod next;
 mod odds;
 mod open;
 mod oracle;
@@ -266,7 +267,9 @@ enum Cmd {
         cmd: oracle::OracleCmd,
     },
     /// How far along printing a game is: a ladder of nine stages from the
-    /// ROM to the whole game played identically (docs/progress.md).
+    /// ROM to the whole game played identically (docs/progress.md). With
+    /// `--next`, where the port stands and the one next step, and who does
+    /// it.
     Progress(progress::ProgressArgs),
     /// Lift a ROM's assets into files and pack them back.
     Assets {

@@ -1,8 +1,7 @@
 //! A frame drawn on the CPU from the presentation's pictures: the level at
 //! the camera, sprites, particles and the screen overlay. For runtimes with
 //! no GPU (themed videos of the interpreter, the editor's theme preview);
-//! the web preview and the Bevy build draw the same layers in their own
-//! renderers.
+//! the web preview draws the same layers in its own renderer.
 
 use crate::particles::Dot;
 use crate::pix::Rgba;

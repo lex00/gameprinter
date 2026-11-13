@@ -1058,10 +1058,11 @@ fn speed_across(seen: &[Seen], x: usize, hi: Option<usize>) -> Option<f64> {
     Some(moves.iter().sum::<f64>() / moves.len() as f64)
 }
 
-/// A jump from standing: its takeoff speed and its gravity, by a least
-/// squares fit of y over the frames in the air (y = y0 + v t + g t(t-1)/2),
-/// and the fastest fall as the largest move down held 3 frames running.
-fn jump_of(seen: &[Seen], y: usize) -> Option<(f64, f64, Option<i64>, usize, usize)> {
+/// A jump from standing: the fastest fall as the largest move down held 3
+/// frames running, and the frames it starts and lands. None when the jump
+/// has fewer than 6 frames in the air or a least squares fit of y over
+/// them (y = y0 + v t + g t(t-1)/2) has no single answer.
+fn jump_of(seen: &[Seen], y: usize) -> Option<(Option<i64>, usize, usize)> {
     let ys: Vec<f64> = seen.iter().map(|s| f64::from(s.wram[y])).collect();
     let y0 = ys[0];
     let up = ys.iter().position(|v| *v < y0)?;
@@ -1078,74 +1079,24 @@ fn jump_of(seen: &[Seen], y: usize) -> Option<(f64, f64, Option<i64>, usize, usi
         return None;
     }
     // Two unknowns, v and g, over terms t and t(t-1)/2.
-    let (mut s11, mut s12, mut s22, mut b1, mut b2) = (0.0, 0.0, 0.0, 0.0, 0.0);
-    for &(t, d) in &pts {
+    let (mut s11, mut s12, mut s22) = (0.0, 0.0, 0.0);
+    for &(t, _) in &pts {
         let (p, q) = (t, t * (t - 1.0) / 2.0);
         s11 += p * p;
         s12 += p * q;
         s22 += q * q;
-        b1 += p * d;
-        b2 += q * d;
     }
     let det = s11 * s22 - s12 * s12;
     if det.abs() < 1e-9 {
         return None;
     }
-    let v0 = (b1 * s22 - b2 * s12) / det;
-    let g0 = (s11 * b2 - s12 * b1) / det;
-    // The fit is near; the game keeps a fraction and drops it on screen,
-    // and adds gravity before or after it moves. Each takeoff speed and
-    // gravity near the fit, in 16ths and 64ths, with each order and each
-    // starting fraction, is played forward and kept if it gives every
-    // whole y of the jump's rise; the coarsest that does wins.
-    let rise_end = (t0..back)
-        .find(|&i| i + 1 < back && ys[i + 1] >= ys[i])
-        .unwrap_or(back);
-    let target: Vec<f64> = (t0..=rise_end).map(|i| ys[i] - ys[t0]).collect();
     if std::env::var_os("GP_TRACE_BLIND").is_some() {
+        let rise_end = (t0..back)
+            .find(|&i| i + 1 < back && ys[i + 1] >= ys[i])
+            .unwrap_or(back);
+        let target: Vec<f64> = (t0..=rise_end).map(|i| ys[i] - ys[t0]).collect();
         eprintln!("jump ys: {:?}\nrise target: {:?}", &ys[t0..back], target);
     }
-    let mut best: Option<(u32, f64, f64)> = None;
-    for vi in -24..=24 {
-        let v = (v0 * 16.0).round() / 16.0 + f64::from(vi) / 16.0;
-        for gi in -16..=16 {
-            let g = (g0 * 64.0).round() / 64.0 + f64::from(gi) / 64.0;
-            if g <= 0.0 {
-                continue;
-            }
-            let fits = (0..2).any(|order| {
-                (0..16).any(|f| {
-                    let mut pos = f64::from(f) / 16.0;
-                    let mut vel = v;
-                    target.iter().enumerate().all(|(t, want)| {
-                        if t > 0 {
-                            if order == 0 {
-                                pos += vel;
-                                vel += g;
-                            } else {
-                                vel += g;
-                                pos += vel;
-                            }
-                        }
-                        (pos.floor() - (f64::from(f) / 16.0).floor()) == *want
-                    })
-                })
-            });
-            if fits {
-                // Coarseness: the smallest power of two denominator of both.
-                let den = |x: f64| {
-                    (0..=6)
-                        .find(|k| (x * f64::from(1u32 << k)).fract() == 0.0)
-                        .unwrap_or(7)
-                };
-                let c = den(v).max(den(g));
-                if best.is_none_or(|(bc, _, _)| c < bc) {
-                    best = Some((c, v, g));
-                }
-            }
-        }
-    }
-    let (v, g) = best.map_or((v0, g0), |(_, v, g)| (v, g));
     let downs: Vec<i64> = ys[t0..back]
         .windows(2)
         .map(|w| (w[1] - w[0]) as i64)
@@ -1155,7 +1106,7 @@ fn jump_of(seen: &[Seen], y: usize) -> Option<(f64, f64, Option<i64>, usize, usi
         .filter(|w| w[0] > 0 && w[0] == w[1] && w[1] == w[2])
         .map(|w| w[0])
         .max();
-    Some((v, g, max_fall, t0, back))
+    Some((max_fall, t0, back))
 }
 
 /// The box the sprites at the player's place make: its width and height.
@@ -1420,7 +1371,7 @@ pub fn run(a: &BlindArgs, paths: &Paths) -> Result<Outcome> {
         };
         rise(&jumped) == rise(&tapped)
     };
-    if let Some((_, _, max_fall, t0, t1)) = jump_of(&jumped, st.y) {
+    if let Some((max_fall, t0, t1)) = jump_of(&jumped, st.y) {
         facts.push((
             "entities.player.jump.action".into(),
             json!("jump"),

@@ -29,7 +29,7 @@ pub enum JobSpec {
     /// `build_publish` does, and register a link for it.
     Build {
         copy: String,
-        /// `web-preview` (default) or `web`.
+        /// `web-preview` (default), the only target.
         #[serde(default)]
         target: Option<String>,
         #[serde(default)]

@@ -1,9 +1,9 @@
 //! The synthesizer: the APU model run at the CPU's clock, each channel's
 //! output averaged over each sample, mixed with the NES mixer's formulas
 //! and filtered as the console's output stage does (a high pass that takes
-//! out the DC offset). Every runtime plays sound through it, so the Bevy
-//! build, the web preview and the fidelity check hear the same samples
-//! from the same writes. Floats appear only here, in presentation: the
+//! out the DC offset). Every runtime plays sound through it, so the web
+//! preview and the fidelity check hear the same samples from the same
+//! writes. Floats appear only here, in presentation: the
 //! operations are IEEE additions, multiplications and divisions, so every
 //! platform makes the same samples.
 

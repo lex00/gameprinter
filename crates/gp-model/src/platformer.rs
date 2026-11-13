@@ -2142,7 +2142,6 @@ fn is_false(b: &bool) -> bool {
 /// The whole extension's schema, for `gp model schema platformer`.
 #[derive(JsonSchema)]
 #[schemars(title = "Game Printer platformer extension 0.4.5")]
-#[allow(dead_code)]
 pub struct Schema {
     /// Components it adds to entities.
     pub entity: EntityComponents,

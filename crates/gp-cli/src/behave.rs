@@ -214,7 +214,6 @@ fn run_clip(
 }
 
 /// The detectors' run, built from clips, and the RAM roles.
-#[allow(dead_code, reason = "`gp behave`'s report (group B) reads the roles")]
 pub(crate) struct Built {
     pub run: Run,
     pub roles: gp_nes::ramrole::Classified,

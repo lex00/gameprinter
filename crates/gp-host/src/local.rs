@@ -24,8 +24,8 @@ pub const MAX_SESSIONS: usize = 32;
 pub struct HostConfig {
     /// The tools' configuration: `work` holds the working copies.
     pub mcp: Config,
-    /// The host's own directory: links, build outputs, snapshots, the shared
-    /// Bevy target directory. Outside any git work tree.
+    /// The host's own directory: links, build outputs and snapshots.
+    /// Outside any git work tree.
     pub dir: PathBuf,
     /// Background builds at once. Builds share one cargo target directory,
     /// so more than one mostly waits on cargo's lock.
@@ -295,9 +295,7 @@ impl LocalHost {
 
     /// A copy of the working copy under the host's directory, with a
     /// configuration that points at it, so a build is of the copy as it was
-    /// when the job started and edits don't wait for it. The cargo target
-    /// directory for the Bevy build is shared by symlink, since a cold
-    /// build takes minutes.
+    /// when the job started and edits don't wait for it.
     fn snapshot(&self, copy: &str, job: &str) -> Result<Config, String> {
         let src = {
             let _lock = CopyLock::take(copy);
@@ -306,13 +304,6 @@ impl LocalHost {
             copy_tree(&src, &work.join(copy))?;
             work
         };
-        let shared = self.cfg.dir.join("bevy-target");
-        std::fs::create_dir_all(&shared).map_err(|e| e.to_string())?;
-        let publish = src.join(".publish");
-        std::fs::create_dir_all(&publish).map_err(|e| e.to_string())?;
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&shared, publish.join("bevy-target"))
-            .map_err(|e| e.to_string())?;
         let mut cfg = self.cfg.mcp.clone();
         cfg.work = src;
         Ok(cfg)
@@ -429,10 +420,8 @@ impl Host for LocalHost {
         // Refuse what can never run, so the job doesn't just fail later.
         if let JobSpec::Build { copy, target, .. } = &spec {
             self.cfg.mcp.existing_copy(copy)?;
-            if let Some(t) = target
-                && !matches!(t.as_str(), "web-preview" | "web")
-            {
-                return Err(format!("target `{t}` isn't `web-preview` or `web`"));
+            if let Some(t) = target {
+                gp_mcp::publish::check_target(t)?;
             }
         }
         if let JobSpec::Capture { run, start, .. } = &spec {

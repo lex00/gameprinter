@@ -55,7 +55,7 @@ pub(crate) mod live;
 pub(crate) mod paths;
 pub(crate) mod probe;
 pub(crate) mod review;
-mod scores;
+pub(crate) mod scores;
 pub(crate) mod server;
 pub(crate) mod session;
 mod triage;

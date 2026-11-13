@@ -16,6 +16,7 @@
 import { NesPlayer } from "./nesplayer.js";
 import { RefineView } from "./rebuild-card.js";
 import { startShell } from "./shell.js";
+import { startNext } from "./next.js";
 
 // What the machine is: the screen, the frame rate and the buttons, taken
 // from the player module (gp_play_info) when it loads. The NES's until then.
@@ -2616,7 +2617,26 @@ function watchFrame() {
   }
 }
 
+// The status line under the header (next.js): where the port stands and
+// the next step, on every tab, from before the game loads, so a page that
+// can't start still says what to do.
+let shellRef = null;
+function statusLine() {
+  const fromUrl = decodeURIComponent(location.pathname.match(/\/mechanic\/([^/]+)\//)?.[1] ?? "") || null;
+  startNext({
+    game: () => session?.game ?? fromUrl,
+    mode: () => mode,
+    tab: () => shellRef?.phase() ?? "clips",
+    target: () => clipFor ?? session?.mechanic ?? null,
+    waiting: () => session?.waiting_for === "player",
+    idleMs: () => performance.now() - lastInput,
+    playFrom: (row) => { shellRef?.show("clips"); return session ? playFrom(row) : undefined; },
+    show: (tab) => shellRef?.show(tab),
+  });
+}
+
 async function main() {
+  statusLine();
   player = await NesPlayer.load("gp_play.wasm");
   const r = await fetch("rom");
   if (!r.ok) throw new Error(`the ROM: ${await r.text()}`);
@@ -2669,6 +2689,7 @@ async function main() {
     pause: (on) => { paneOpen = on; if (on) flushAudio(); },
     game: () => session?.game ?? null,
   });
+  shellRef = shell;
   // A clip named in REFINE (mechanic/refine/'s "gp-open-clip", a corpus
   // clip's ID such as dk.walk.003): CLIPS, on the model, at that clip of
   // its mechanic's session.

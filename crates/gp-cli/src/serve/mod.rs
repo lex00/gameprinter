@@ -49,6 +49,7 @@ mod ladder;
 mod later;
 mod laya;
 mod lockstep;
+mod next;
 mod pages;
 mod pair;
 mod play;
@@ -93,6 +94,7 @@ const MODULES: &[fn() -> Vec<Route>] = &[
     edits::routes,
     later::routes,
     laya::routes,
+    next::routes,
 ];
 
 /// How many connections are served at once; more wait in the listen queue.
@@ -470,7 +472,7 @@ fn landing(ctx: &Ctx, req: &Request) -> Response {
             .collect();
         let body = if runs.is_empty() {
             format!(
-                "<p>No game in {}: gp game new, or gp serve --games.</p>",
+                "<p>No game here yet. Ask your agent to bring in your game, and say where the file is.</p><p style=\"color:#bcbcbc\">The games folder: {}</p>",
                 ctx.games.display()
             )
         } else {

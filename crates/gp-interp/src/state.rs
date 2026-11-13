@@ -392,38 +392,6 @@ impl View {
         }
     }
 
-    /// A view of entries already read, such as a model trace's state
-    /// ([`crate::modeltrace::entries`]). A path with a pattern in it isn't
-    /// an entry's.
-    pub fn from_entries(entries: &[Entry]) -> Result<Self, String> {
-        let mut tree = toml::Value::Table(toml::Table::new());
-        let mut values = BTreeMap::new();
-        let mut order = Vec::new();
-        for e in entries {
-            let parsed = gp_model::Path::parse(&e.path)?;
-            if !parsed.is_concrete() {
-                return Err(format!("{} isn't a concrete path", e.path));
-            }
-            let mut steps = Vec::new();
-            for seg in &parsed.segments {
-                steps.push(Step::Key(seg.name.clone()));
-                if let Some(path::Index::At(i)) = seg.index {
-                    steps.push(Step::Item(
-                        usize::try_from(i).map_err(|_| "negative index")?,
-                    ));
-                }
-            }
-            insert(&mut tree, &steps, to_toml(&e.value));
-            order.push(e.path.clone());
-            values.insert(e.path.clone(), e.value.clone());
-        }
-        Ok(Self {
-            tree,
-            values,
-            order,
-        })
-    }
-
     /// Every leaf under every part the path names, in path order. A path
     /// that names nothing is an error.
     pub fn query(&self, text: &str) -> Result<Vec<Entry>, String> {

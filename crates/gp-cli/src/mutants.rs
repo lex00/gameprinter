@@ -53,7 +53,6 @@ pub(crate) struct Mutant {
 
 /// Applies `op` at `segs` under `v`: the count of places it changed.
 // Used by gp bench clips and a prune once they are here, and the tests.
-#[cfg_attr(not(test), allow(dead_code))]
 fn apply(v: &mut toml::Value, segs: &[&str], set: Option<&toml::Value>) -> usize {
     match v {
         toml::Value::Array(a) => a.iter_mut().map(|x| apply(x, segs, set)).sum(),
@@ -88,7 +87,6 @@ fn apply(v: &mut toml::Value, segs: &[&str], set: Option<&toml::Value>) -> usize
 
 /// The model text with the mutant's edits, or why it can't be made.
 // Used by gp bench clips and a prune once they are here, and the tests.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn mutate(text: &str, m: &Mutant) -> anyhow::Result<String> {
     let mut v: toml::Value = toml::from_str(text).context("reading model.toml")?;
     for p in &m.remove {
@@ -438,17 +436,6 @@ pub(crate) fn file_text(mutants: &[Mutant]) -> Result<String> {
     Ok(toml::to_string(&File { mutant: mutants })?)
 }
 
-/// The kind a mutant's name gives (`constant-007` is a constant), or
-/// none for a name `make` didn't give.
-// Used by gp bench clips and a prune once they are here, and the tests.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn kind_of(name: &str) -> Option<&'static str> {
-    let (k, n) = name.rsplit_once('-')?;
-    (n.len() >= 3 && n.bytes().all(|b| b.is_ascii_digit()))
-        .then(|| KINDS.iter().find(|(x, _)| *x == k).map(|(x, _)| *x))
-        .flatten()
-}
-
 /// `gp model mutants DIR`: writes the model's mutants to `out` (default
 /// DIR/mutants.toml) and says how many of each kind.
 pub(crate) fn cli(dir: &Path, out: Option<&Path>) -> Result<Outcome> {
@@ -592,11 +579,8 @@ after = 90
         assert_eq!(names[0], "constant-001");
         assert!(names.contains(&"order-002") && names.contains(&"transition-002"));
         for m in &made {
-            assert_eq!(kind_of(&m.mutant.name), Some(m.kind));
             assert_eq!(m.mutant.says, format!("{}: {}", m.path, m.what));
         }
-        assert_eq!(kind_of("control"), None);
-        assert_eq!(kind_of("constant-1"), None);
         let list: Vec<Mutant> = made.iter().map(|m| m.mutant.clone()).collect();
         #[derive(serde::Deserialize)]
         struct File {

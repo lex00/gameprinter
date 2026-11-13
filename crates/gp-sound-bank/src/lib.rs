@@ -9,8 +9,8 @@
 //! and mapped, but not rendered yet (docs/open-questions.md, M2.8): their
 //! channels fall back to the APU, which the result says.
 //!
-//! Rendering is presentation, done ahead of play (the Bevy generator writes
-//! WAV files) or on request (`gp sound render`, the MCP preview).
+//! Rendering is presentation, done on request (`gp sound render`, the MCP
+//! preview).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

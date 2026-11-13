@@ -3,8 +3,7 @@
 //! `gp_present::sound`) and each bound song and effect rendered ahead of
 //! play into `assets/sound/<slot>/<name>.wav`, through the APU synthesizer
 //! or, when a theme's restyled-audio layer maps the slot's role to a sound
-//! bank, through the bank (gp-sound-bank). The render crate plays them
-//! with Bevy's audio when built with its `audio` feature. Songs are game
+//! bank, through the bank (gp-sound-bank). Songs are game
 //! content: they come from the slots' captures outside the repo, and the
 //! project is written outside it too.
 

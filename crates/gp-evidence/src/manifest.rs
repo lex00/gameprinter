@@ -81,16 +81,6 @@ impl SourceRef {
             Self::NesRom { .. } | Self::Model { .. } => None,
         }
     }
-
-    /// What identifies the source, in hex: an NES ROM's SHA-256, a model
-    /// bundle's BLAKE3 hash, or a romset's identity.
-    pub fn id_hex(&self) -> String {
-        match self {
-            Self::NesRom { sha256, .. } => sha256.clone(),
-            Self::Model { bundle, .. } => bundle.to_hex(),
-            Self::Romset { identity, .. } => identity.clone(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
