@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 use serde_json::{Value, json};
 
+use super::machine::{Machine, Pads};
 use super::support as m;
 use super::{self as farm, A, B, LEFT, Move, RIGHT, Rng};
 use gp_evidence::Paths;
@@ -118,6 +119,8 @@ struct Learned {
     run: u8,
     /// The player's box top less its y byte.
     box_dy: i64,
+    /// The device's buttons.
+    pads: Pads,
 }
 
 /// Where a run is.
@@ -177,7 +180,7 @@ enum End {
 }
 
 struct World {
-    nes: gp_nes::Nes,
+    nes: Machine,
     l: Learned,
     /// The scene bytes: addresses that hold still in play.
     still: Vec<u16>,
@@ -205,13 +208,17 @@ impl World {
         &self.nes.wram()[..0x800]
     }
 
+    /// The NES's stack and sprite buffer pages; nothing on the board.
+    fn noise_page(&self, a: usize) -> bool {
+        !self.nes.is_arcade() && (0x100..0x300).contains(&a)
+    }
+
     fn byte(&self, a: u16) -> i64 {
         i64::from(self.wram()[usize::from(a)])
     }
 
     fn scroll(&self) -> i64 {
-        let sc = &self.nes.bus().ppu.scroll;
-        i64::from((sc.t & 31) * 8 + u16::from(sc.fine_x as u8 & 7) + ((sc.t >> 10) & 1) * 256)
+        self.nes.scroll()
     }
 
     fn step(&mut self, pad: u8, log: &mut Vec<InputFrame>) -> Result<()> {
@@ -228,8 +235,7 @@ impl World {
     /// The player's box: the sprite box whose top sits `box_dy` from the y
     /// byte, nearest the last place it was.
     fn player_box(&self, near: Option<i64>) -> Option<[i32; 4]> {
-        let oam = self.nes.oam();
-        let boxes = m::sprite_boxes(&oam, if self.nes.tall_sprites() { 16 } else { 8 });
+        let boxes = self.nes.boxes();
         let y = self.byte(self.l.y);
         boxes
             .into_iter()
@@ -304,19 +310,19 @@ impl World {
 
     /// The sprite boxes other than the player's, and the player's.
     fn boxes(&self, p: &Pos) -> (Vec<[i64; 4]>, Option<[i64; 4]>) {
-        let oam = self.nes.oam();
-        let all: Vec<[i64; 4]> =
-            m::sprite_boxes(&oam, if self.nes.tall_sprites() { 16 } else { 8 })
-                .into_iter()
-                .map(|b| {
-                    [
-                        i64::from(b[0]),
-                        i64::from(b[1]),
-                        i64::from(b[2]),
-                        i64::from(b[3]),
-                    ]
-                })
-                .collect();
+        let all: Vec<[i64; 4]> = self
+            .nes
+            .boxes()
+            .into_iter()
+            .map(|b| {
+                [
+                    i64::from(b[0]),
+                    i64::from(b[1]),
+                    i64::from(b[2]),
+                    i64::from(b[3]),
+                ]
+            })
+            .collect();
         let me = self.player_box(p.sx).map(|b| {
             [
                 i64::from(b[0]),
@@ -446,7 +452,7 @@ impl World {
     fn responsive(&mut self) -> Result<bool> {
         let (snap, frame, held) = (self.nes.snapshot()?, self.nes.frame(), self.nes.held());
         let mut ends = Vec::new();
-        for pad in [RIGHT, LEFT] {
+        for pad in [self.l.pads.right, self.l.pads.left] {
             self.nes.restore(&snap, frame, held)?;
             let mut scratch = Vec::new();
             for _ in 0..8 {
@@ -471,10 +477,10 @@ impl World {
         let (r, lft) = (p & RIGHT != 0, p & LEFT != 0);
         let (r, lft) = if self.l.right { (r, lft) } else { (lft, r) };
         if r {
-            o |= RIGHT;
+            o |= self.l.pads.right;
         }
         if lft {
-            o |= LEFT;
+            o |= self.l.pads.left;
         }
         o
     }
@@ -602,7 +608,7 @@ impl World {
             if self.clear_bytes.is_none() {
                 let now = self.wram();
                 let d: Vec<(u16, u8, u8)> = (0..0x800usize)
-                    .filter(|&a| !(0x100..0x300).contains(&a) && now[a] != ram_before[a])
+                    .filter(|&a| !self.noise_page(a) && now[a] != ram_before[a])
                     .filter(|&a| self.still.contains(&(a as u16)) || ram_before[a] < 8)
                     .map(|a| (a as u16, ram_before[a], now[a]))
                     .collect();
@@ -623,7 +629,7 @@ type ClearBytes = Option<(Vec<(u16, u8, u8)>, usize)>;
 /// inputs from power-on that reached it, and the player's bytes, controls
 /// and forward. Reads nothing under $GP_HOME/work.
 pub(crate) struct Discovery {
-    pub nes: gp_nes::Nes,
+    pub nes: Machine,
     pub log: Vec<InputFrame>,
     pub x: u16,
     pub y: u16,
@@ -632,6 +638,8 @@ pub(crate) struct Discovery {
     pub jump: u8,
     pub run: u8,
     pub box_dy: i64,
+    /// The device's buttons.
+    pub pads: Pads,
     /// The power-on the inputs replay from, and the start run used.
     pub power_on: gp_evidence::manifest::PowerOn,
     pub start_run: String,
@@ -641,10 +649,15 @@ pub(crate) struct Discovery {
 /// then `learn`. An error starts "play start" or "player" for the stage
 /// that failed.
 pub(crate) fn discover(bytes: &[u8], paths: &Paths) -> Result<Discovery> {
+    let arcade = crate::original::Platform::of_file(bytes) == crate::original::Platform::Arcade;
     let starts = crate::reach::Starts {
         runs: 4,
         seed: 1,
-        start_frames: gp_explore::presses::START_FRAMES,
+        start_frames: if arcade {
+            gp_explore::arcade::START_FRAMES
+        } else {
+            gp_explore::presses::START_FRAMES
+        },
         no_starts: false,
     };
     // A person's real-input path into play (a clip's path and start, as
@@ -677,7 +690,7 @@ pub(crate) fn discover(bytes: &[u8], paths: &Paths) -> Result<Discovery> {
             format!("path {sha}"),
         ),
         None => {
-            let clips = starts.with(&[], paths)?;
+            let clips = starts.with_platform(&[], paths, arcade)?;
             let (ci, t_start) =
                 m::play_start(bytes, &clips)?.context("play start: no start run reaches play")?;
             (
@@ -687,8 +700,8 @@ pub(crate) fn discover(bytes: &[u8], paths: &Paths) -> Result<Discovery> {
             )
         }
     };
-    let mut nes = gp_nes::Nes::power_on(bytes, power_on)?;
-    nes.set_video(false);
+    let mut nes = Machine::power_on(bytes, power_on)?;
+    let pads = nes.pads();
     for f in &log {
         nes.step(*f)?;
     }
@@ -717,8 +730,14 @@ pub(crate) fn discover(bytes: &[u8], paths: &Paths) -> Result<Discovery> {
                 if let Ok(d) = std::env::var("GP_BLIND_SHOTS") {
                     shot(&mut nes, &Path::new(&d).join(format!("try{tries:02}.png")))?;
                 }
-                let press = if tries % 2 == 1 { 0x08 } else { A };
-                for (pad, n) in [(press, 2), (0, 180)] {
+                // On a board that takes coins, a coin goes in first.
+                let first = pads.actions.first().copied().unwrap_or(0);
+                let press = if tries % 2 == 1 { pads.start } else { first };
+                let mut seq = vec![(press, 2), (0, 180)];
+                if tries % 2 == 1 && pads.coin != 0 {
+                    seq.splice(0..0, [(pads.coin, 6), (0, 54)]);
+                }
+                for (pad, n) in seq {
                     for _ in 0..n {
                         let f = InputFrame {
                             polled: true,
@@ -742,36 +761,19 @@ pub(crate) fn discover(bytes: &[u8], paths: &Paths) -> Result<Discovery> {
         jump: l.jump,
         run: l.run,
         box_dy: l.box_dy,
+        pads: l.pads,
         power_on,
         start_run,
     })
 }
 
 /// A picture of the next frame, for looking by hand (GP_BLIND_SHOTS).
-fn shot(nes: &mut gp_nes::Nes, to: &Path) -> Result<()> {
-    let (snap, frame, held) = (nes.snapshot()?, nes.frame(), nes.held());
-    nes.set_video(true);
-    nes.step(InputFrame {
-        polled: true,
-        pads: [0, 0, 0, 0],
-        reset: false,
-    })?;
-    let mut rgb = Box::new([0u8; 256 * 240 * 3]);
-    nes.frame_rgb(&mut rgb);
-    nes.set_video(false);
-    nes.restore(&snap, frame, held)?;
-    if let Some(d) = to.parent() {
-        fs::create_dir_all(d)?;
-    }
-    let mut enc = png::Encoder::new(fs::File::create(to)?, 256, 240);
-    enc.set_color(png::ColorType::Rgb);
-    enc.set_depth(png::BitDepth::Eight);
-    enc.write_header()?.write_image_data(&rgb[..])?;
-    Ok(())
+fn shot(nes: &mut Machine, to: &Path) -> Result<()> {
+    nes.shot(to)
 }
 
 /// Learns the player's bytes, the jump button and forward from play start.
-fn learn(nes: &mut gp_nes::Nes) -> Result<Learned> {
+fn learn(nes: &mut Machine) -> Result<Learned> {
     // A slow walker (a pixel every few frames) moves too little in 40-frame
     // holds to be told from noise: only when nothing is found at 40, try
     // holds three times as long.
@@ -783,9 +785,9 @@ fn learn(nes: &mut gp_nes::Nes) -> Result<Learned> {
 }
 
 /// `learn` with each hold of Right and Left this many frames long.
-fn learn_with(nes: &mut gp_nes::Nes, hold: usize) -> Result<Learned> {
+fn learn_with(nes: &mut Machine, hold: usize) -> Result<Learned> {
     let (snap, frame, held) = (nes.snapshot()?, nes.frame(), nes.held());
-    let run = |nes: &mut gp_nes::Nes, pads: &[(u8, usize)]| -> Result<Vec<Vec<u8>>> {
+    let run = |nes: &mut Machine, pads: &[(u8, usize)]| -> Result<Vec<Vec<u8>>> {
         Ok(run_seen(nes, &snap, frame, held, pads)?.0)
     };
     // x: up under Right then down under Left (or the other way at a wall),
@@ -793,8 +795,10 @@ fn learn_with(nes: &mut gp_nes::Nes, hold: usize) -> Result<Learned> {
     // drawn at one offset from it (less the scroll, or not) on 85% of the
     // frames: a counter or a scratch byte that happens to move with the pad
     // has no sprite with it.
-    let (r, r_seen) = run_seen(nes, &snap, frame, held, &[(RIGHT, hold), (LEFT, hold)])?;
-    let (l, l_seen) = run_seen(nes, &snap, frame, held, &[(LEFT, hold), (RIGHT, hold)])?;
+    let pads = nes.pads();
+    let (rt, lt) = (pads.right, pads.left);
+    let (r, r_seen) = run_seen(nes, &snap, frame, held, &[(rt, hold), (lt, hold)])?;
+    let (l, l_seen) = run_seen(nes, &snap, frame, held, &[(lt, hold), (rt, hold)])?;
     let score = |t: &[Vec<u8>], a: usize, first: i64| -> (i64, i64) {
         let mut moved = 0;
         let mut net = 0;
@@ -841,7 +845,7 @@ fn learn_with(nes: &mut gp_nes::Nes, hold: usize) -> Result<Learned> {
     };
     let mut cands: Vec<(i64, usize, bool)> = Vec::new();
     for a in 0..0x800 {
-        if (0x100..0x200).contains(&a) {
+        if nes.noise(a) {
             continue;
         }
         let (mr, nr) = score(&r, a, 1);
@@ -850,7 +854,8 @@ fn learn_with(nes: &mut gp_nes::Nes, hold: usize) -> Result<Learned> {
         let s = mr.max(0) + ml.max(0);
         if std::env::var_os("GP_BLIND_DEBUG").is_some() && s >= 20 {
             eprintln!(
-                "x candidate ${a:04X}: moves {s} (net {nr} {nl}), drawn {} {}",
+                "x candidate ${:04X}: moves {s} (net {nr} {nl}), drawn {} {}",
+                a + nes.ram_base(),
                 drawn(&r, &r_seen, a),
                 drawn(&l, &l_seen, a)
             );
@@ -868,16 +873,22 @@ fn learn_with(nes: &mut gp_nes::Nes, hold: usize) -> Result<Learned> {
     // The first 16 bytes of RAM are where NES programs keep their scratch
     // values (a copy of the player's x made while drawing it, say): left
     // out when anything else qualifies.
-    if cands.iter().any(|c| c.1 >= 0x10) {
-        cands.retain(|c| c.1 >= 0x10);
+    if cands.iter().any(|c| !nes.scratch(c.1)) {
+        cands.retain(|c| !nes.scratch(c.1));
     }
     let mut best: Option<(i64, usize, bool)> = None;
     for &(s0, a, right) in &cands {
-        let fwd = if right { RIGHT } else { LEFT };
-        let pads: Vec<(u8, usize)> = (0..15)
-            .flat_map(|_| [(fwd | B, 20), (fwd | B | A, 20)])
+        let fwd = if right { rt } else { lt };
+        // The device's second action held (B, run, on the NES), and its
+        // first (A, jump) pressed on and off.
+        let (a1, a2) = (
+            pads.actions.first().copied().unwrap_or(0),
+            pads.actions.get(1).copied().unwrap_or(0),
+        );
+        let held_pads: Vec<(u8, usize)> = (0..15)
+            .flat_map(|_| [(fwd | a2, 20), (fwd | a2 | a1, 20)])
             .collect();
-        let t = run(nes, &pads)?;
+        let t = run(nes, &held_pads)?;
         let mut far = 0i64;
         let mut gone = 0i64;
         for i in 1..t.len() {
@@ -911,7 +922,7 @@ fn learn_with(nes: &mut gp_nes::Nes, hold: usize) -> Result<Learned> {
     // y and the jump button: a byte the button sends away and back to
     // where it was, a few pixels a frame.
     let mut found = None;
-    for (jump, other) in [(A, B), (B, A), (0x10, A)] {
+    for (jump, other) in pads.jump_tries() {
         let t = run(nes, &[(jump, 24), (0, 72)])?;
         let mut best: Option<(i64, usize)> = None;
         for a in 0..0x800 {
@@ -932,7 +943,7 @@ fn learn_with(nes: &mut gp_nes::Nes, hold: usize) -> Result<Learned> {
             // Past the first 16 bytes (scratch) and the stack, unless
             // nothing else qualifies.
             let rank = ext
-                + if a >= 0x10 && !(0x100..0x200).contains(&a) {
+                + if !nes.scratch(a) && !nes.noise(a) {
                     10_000
                 } else {
                     0
@@ -946,12 +957,17 @@ fn learn_with(nes: &mut gp_nes::Nes, hold: usize) -> Result<Learned> {
             break;
         }
     }
-    let (y, jump, run_b) =
-        found.context("no button sends the player up and back down: no jump found")?;
+    let (y, jump, run_b) = found.with_context(|| {
+        format!(
+            "no button sends the player up and back down: no jump found (x at ${:04X}, forward {})",
+            x + nes.ram_base(),
+            if right { "right" } else { "left" }
+        )
+    })?;
     // The player's box: the one that moves with the pad, at one offset from y.
     nes.restore(&snap, frame, held)?;
-    let boxes0 = m::sprite_boxes(&nes.oam(), if nes.tall_sprites() { 16 } else { 8 });
-    let fwd = if right { RIGHT } else { LEFT };
+    let boxes0 = nes.boxes();
+    let fwd = if right { rt } else { lt };
     for _ in 0..12 {
         nes.step(InputFrame {
             polled: true,
@@ -960,7 +976,7 @@ fn learn_with(nes: &mut gp_nes::Nes, hold: usize) -> Result<Learned> {
         })?;
     }
     let y1 = i64::from(nes.wram()[y]);
-    let boxes1 = m::sprite_boxes(&nes.oam(), if nes.tall_sprites() { 16 } else { 8 });
+    let boxes1 = nes.boxes();
     let moved = boxes1
         .iter()
         .filter(|b| !boxes0.contains(b))
@@ -979,9 +995,7 @@ fn learn_with(nes: &mut gp_nes::Nes, hold: usize) -> Result<Learned> {
             pads: [p, 0, 0, 0],
             reset: false,
         })?;
-        let sc = &nes.bus().ppu.scroll;
-        let s =
-            i64::from((sc.t & 31) * 8 + u16::from(sc.fine_x as u8 & 7) + ((sc.t >> 10) & 1) * 256);
+        let s = nes.scroll();
         let xv = i64::from(nes.wram()[x]);
         if i > 0 && s != last.1 {
             if xv != last.0 {
@@ -1001,6 +1015,7 @@ fn learn_with(nes: &mut gp_nes::Nes, hold: usize) -> Result<Learned> {
         jump,
         run: run_b,
         box_dy,
+        pads,
     })
 }
 
@@ -1008,19 +1023,19 @@ fn learn_with(nes: &mut gp_nes::Nes, hold: usize) -> Result<Learned> {
 /// the scroll.
 #[allow(clippy::type_complexity)]
 fn run_seen(
-    nes: &mut gp_nes::Nes,
+    nes: &mut Machine,
     snap: &[u8],
     frame: u64,
     held: [u8; 4],
     pads: &[(u8, usize)],
 ) -> Result<(Vec<Vec<u8>>, Vec<(Vec<i64>, i64)>)> {
     nes.restore(snap, frame, held)?;
-    let seen = |nes: &gp_nes::Nes| {
-        let boxes = m::sprite_boxes(&nes.oam(), if nes.tall_sprites() { 16 } else { 8 });
-        let sc = &nes.bus().ppu.scroll;
-        let s =
-            i64::from((sc.t & 31) * 8 + u16::from(sc.fine_x as u8 & 7) + ((sc.t >> 10) & 1) * 256);
-        (boxes.iter().map(|b| i64::from(b[0])).collect::<Vec<_>>(), s)
+    let seen = |nes: &Machine| {
+        let boxes = nes.boxes();
+        (
+            boxes.iter().map(|b| i64::from(b[0])).collect::<Vec<_>>(),
+            nes.scroll(),
+        )
     };
     let mut out = vec![nes.wram()[..0x800].to_vec()];
     let mut vis = vec![seen(nes)];
@@ -1039,11 +1054,11 @@ fn run_seen(
 }
 
 /// The bytes that hold still in 10 s of play from here: the scene's bytes.
-fn still_bytes(nes: &mut gp_nes::Nes, l: &Learned) -> Result<Vec<u16>> {
+fn still_bytes(nes: &mut Machine, l: &Learned) -> Result<Vec<u16>> {
     let (snap, frame, held) = (nes.snapshot()?, nes.frame(), nes.held());
     let w0 = nes.wram()[..0x800].to_vec();
     let mut moved = vec![false; 0x800];
-    let fwd = if l.right { RIGHT } else { LEFT };
+    let fwd = if l.right { l.pads.right } else { l.pads.left };
     for i in 0..600 {
         let p = match (i / 60) % 4 {
             0 => fwd,
@@ -1051,9 +1066,9 @@ fn still_bytes(nes: &mut gp_nes::Nes, l: &Learned) -> Result<Vec<u16>> {
             2 => 0,
             _ => {
                 if l.right {
-                    LEFT
+                    l.pads.left
                 } else {
-                    RIGHT
+                    l.pads.right
                 }
             }
         };
@@ -1071,7 +1086,7 @@ fn still_bytes(nes: &mut gp_nes::Nes, l: &Learned) -> Result<Vec<u16>> {
     nes.restore(&snap, frame, held)?;
     // The stack and the sprite buffer change around anything.
     Ok((0..0x800u16)
-        .filter(|a| !moved[usize::from(*a)] && !(0x100..0x200).contains(a))
+        .filter(|a| !moved[usize::from(*a)] && !nes.noise(usize::from(*a)))
         .collect())
 }
 
@@ -1185,11 +1200,11 @@ fn farm_for(
 ) -> Result<Value> {
     let t0 = std::time::Instant::now();
     let bytes = fs::read(rom).with_context(|| format!("no ROM at {}", rom.display()))?;
-    let img = gp_evidence::source::identify_nes(&bytes)?;
+    let sha256 = super::machine::rom_sha256(&bytes)?;
     fs::create_dir_all(out_dir)?;
     let mut flog = fs::File::create(out_dir.join("log.ndjson"))?;
     let fail = |stage: &str, why: String, secs: f64| {
-        json!({"rom": rom.display().to_string(), "sha256": img.sha256, "stage": stage,
+        json!({"rom": rom.display().to_string(), "sha256": sha256, "stage": stage,
                "error": why, "levels": 0, "seconds": secs})
     };
 
@@ -1213,6 +1228,7 @@ fn farm_for(
         jump: d.jump,
         run: d.run,
         box_dy: d.box_dy,
+        pads: d.pads.clone(),
     };
     let (mut nes, log) = (d.nes, d.log);
     let clip = crate::reach::ClipInput {
@@ -1297,9 +1313,11 @@ fn farm_for(
     // clips can be replayed from a plain power-on.
     let mut publish = match &o.session {
         Some(sess)
-            if probe.is_none() && clip.power_on == gp_evidence::manifest::PowerOn::default() =>
+            if probe.is_none()
+                && clip.power_on == gp_evidence::manifest::PowerOn::default()
+                && !w.nes.is_arcade() =>
         {
-            Some(Publish::new(sess, paths, &img.sha256)?)
+            Some(Publish::new(sess, paths, &sha256)?)
         }
         _ => None,
     };
@@ -1388,8 +1406,7 @@ fn farm_for(
                     })
             };
             // Sprites ahead that aren't the player.
-            let oam = w.nes.oam();
-            let boxes = m::sprite_boxes(&oam, if w.nes.tall_sprites() { 16 } else { 8 });
+            let boxes = w.nes.boxes();
             let mut thing: Option<(i64, i64)> = None;
             if let Some(sx) = pos.sx {
                 let fwd = if w.l.right { 1 } else { -1 };
@@ -1666,7 +1683,7 @@ fn farm_for(
         return Ok(v);
     }
     let v = json!({
-        "rom": rom.display().to_string(), "sha256": img.sha256,
+        "rom": rom.display().to_string(), "sha256": sha256,
         "prior": if uniform { "uniform" } else { "laya" },
         "learned": {"x": format!("${:04X}", learned.x), "y": format!("${:04X}", learned.y),
                     "forward": if learned.right { "right" } else { "left" },
@@ -1690,8 +1707,7 @@ fn farm_for(
     fs::write(out_dir.join("path.log"), il.to_text())?;
     if let Ok(d) = std::env::var("GP_BLIND_SHOTS") {
         // The path's last frame, to look at by hand.
-        let mut n = gp_nes::Nes::power_on(&bytes, clip.power_on)?;
-        n.set_video(false);
+        let mut n = Machine::power_on(&bytes, clip.power_on)?;
         for f in &il.frames {
             n.step(*f)?;
         }
@@ -1700,8 +1716,7 @@ fn farm_for(
     if let Ok(a) = std::env::var("GP_FARM_PEEK") {
         // A check by hand: one RAM byte at the path's end.
         if let Ok(a) = u16::from_str_radix(a.trim_start_matches('$'), 16) {
-            let mut n = gp_nes::Nes::power_on(&bytes, clip.power_on)?;
-            n.set_video(false);
+            let mut n = Machine::power_on(&bytes, clip.power_on)?;
             for f in &il.frames {
                 n.step(*f)?;
             }
@@ -1745,8 +1760,7 @@ fn hi_and_fraction(
     x: u16,
     y: u16,
 ) -> Result<(Found, Found)> {
-    let mut nes = gp_nes::Nes::power_on(rom, power)?;
-    nes.set_video(false);
+    let mut nes = Machine::power_on(rom, power)?;
     let mut prev: Option<Vec<u8>> = None;
     let mut hi: BTreeMap<u16, (usize, usize)> = BTreeMap::new();
     let mut wraps = 0;
@@ -1761,8 +1775,15 @@ fn hi_and_fraction(
     for (i, f) in path.iter().enumerate() {
         nes.step(*f)?;
         let w = nes.wram()[..0x800].to_vec();
-        let oam = nes.oam();
+        // The board's sprites aren't in its work RAM: no page is skipped.
+        let oam: Vec<u8> = match &nes {
+            Machine::Nes(n) => n.oam().to_vec(),
+            Machine::Arcade(_) => Vec::new(),
+        };
         for (pg, n) in oam_page.iter_mut().enumerate() {
+            if oam.is_empty() {
+                break;
+            }
             // This frame's, or the frame before's (copied up a frame late).
             // Most bytes alike: the attribute byte's unused bits may differ.
             let alike =
@@ -1830,8 +1851,7 @@ fn hi_and_fraction(
         prev = Some(w);
     }
     let frames = path.len().saturating_sub(from).max(1);
-    let state =
-        |k: u16| !(0x100..0x200).contains(&k) && oam_page[usize::from(k) / 256] * 4 < frames;
+    let state = |k: u16| !nes.noise(usize::from(k)) && oam_page[usize::from(k) / 256] * 4 < frames;
     // A high byte steps at every wrap and hardly ever otherwise.
     let h = hi
         .iter()
@@ -1878,11 +1898,12 @@ fn findings(
         f
     };
     let (hi, frac) = hi_and_fraction(rom, clip.power_on, &path.frames, play_frame, l.x, l.y)?;
-    let btn = |b: u8| match b {
-        A => "A",
-        B => "B",
-        0x10 => "Up",
-        _ => "?",
+    let btn = |b: u8| match (l.pads.device, b) {
+        (gp_model::model::Device::NesPad, A) => "A",
+        (gp_model::model::Device::NesPad, B) => "B",
+        (gp_model::model::Device::NesPad, 0x10) => "Up",
+        (gp_model::model::Device::NesPad, _) => "?",
+        (_, b) => l.pads.name(b),
     };
     // A place with the first run to it, stored once by its content.
     let with_run = |mut v: Value, run: Option<&(Vec<InputFrame>, usize)>| -> Result<Value> {
@@ -2155,7 +2176,7 @@ pub(crate) fn refuse_held_out(rom: &Path, bench_file: &Path) -> Result<()> {
         return Ok(());
     };
     let t: toml::Table = toml::from_str(&text)?;
-    let sha = gp_evidence::source::identify_nes(&fs::read(rom)?)?.sha256;
+    let sha = super::machine::rom_sha256(&fs::read(rom)?)?;
     for g in t
         .get("game")
         .and_then(|g| g.as_array())

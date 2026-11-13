@@ -2,10 +2,21 @@
 //! "Sprites"). The capture is `gp-sprites`; this module reads recordings'
 //! traces and writes the files.
 //!
-//! It reads the NES's sprite table, CHR banks and palette, so a game whose
-//! package names an arcade board, or a recording whose runtime isn't
-//! gp-nes, is refused in words (its sprite RAM needs an adapter, port wave
-//! 6). game-printer's `sprites export`, `import` and `schema` (gp-imagefmt's
+//! On the NES it reads the sprite table, CHR banks and palette. On an
+//! arcade game (port wave T, Midway MCR as in Tapper) it reads each
+//! frame's sprite RAM through gp-arcade's sprite list
+//! ([`gp_arcade::video::sprite_list`]) and finds each sprite's picture by
+//! its number among the arcade lift's `mcr-sprites` (gfx2, 32 by 32):
+//! a frame's piece is a whole sprite, 16 by 16 in the game's units, with
+//! its colour bank as palette 4 to 7. A position the state mapping reads
+//! is placed as the board places a sprite with those bytes (gp_sprites::
+//! observe::Screen::Mcr). The sprite-set goes in the arcade map as a
+//! `sprite-set` entry, as in an NES map. The board's colours are in its
+//! palette RAM, not NES colour numbers, so no palettes are captured, and
+//! `--apply` is refused: no model slot takes an arcade lift's pictures yet
+//! (gp_interp::Lifted), so the model is only proposed.
+//!
+//! game-printer's `sprites export`, `import` and `schema` (gp-imagefmt's
 //! sheets) are not here yet.
 
 use std::collections::BTreeMap;
@@ -20,7 +31,7 @@ use gp_evidence::Paths;
 use gp_model::Model;
 use gp_sprites::chr::{Banks, TileBank};
 use gp_sprites::config::Config;
-use gp_sprites::observe::{Observer, Shot};
+use gp_sprites::observe::{ListSprite, Observer, Screen, Shot};
 use gp_sprites::tables::Tables;
 
 use crate::Outcome;
@@ -164,9 +175,76 @@ fn observe_recording(
     Ok(())
 }
 
+/// Feeds an arcade recording's frames to the observer: each frame's work
+/// RAM with the sprites drawn from the same frame's sprite RAM (the board
+/// has no lag between them).
+fn observe_arcade(
+    obs: &mut Observer<'_>,
+    opened: &Opened,
+    range: std::ops::Range<u64>,
+) -> Result<()> {
+    let manifest = &opened.manifest;
+    let table = crate::arcade_rec::field_table_of(&opened.store, manifest)?;
+    let mut failed = None;
+    let ok = gp_nes::recording::scan_trace(
+        &opened.store,
+        manifest,
+        range.start..=range.end.saturating_sub(1).min(manifest.frames),
+        |frame, state| {
+            let fields = match table.split(state) {
+                Ok(f) => f,
+                Err(e) => {
+                    failed = Some(e.to_string());
+                    return false;
+                }
+            };
+            let get = |name: &str| fields.iter().find(|(n, _)| *n == name).map(|(_, b)| *b);
+            let (Some(ram), Some(sprite_ram)) = (get("ram"), get("sprite_ram")) else {
+                failed = Some("the trace has no `ram` and `sprite_ram` fields".into());
+                return false;
+            };
+            // The mapping reads the main CPU's addresses: work RAM at E000.
+            let mut space = vec![0u8; 0xe000 + ram.len()];
+            space[0xe000..].copy_from_slice(ram);
+            let list: Vec<ListSprite> = gp_arcade::video::sprite_list(sprite_ram)
+                .into_iter()
+                .map(|s| ListSprite {
+                    x: i32::from(s.x),
+                    y: i32::from(s.y),
+                    code: u32::from(s.code),
+                    color: s.color,
+                    flip_x: s.flip_x,
+                    flip_y: s.flip_y,
+                })
+                .collect();
+            obs.shot_list(frame, &space, &list);
+            true
+        },
+    )?;
+    if let Some(e) = failed {
+        bail!(e);
+    }
+    if !ok {
+        bail!("{} has no frame trace", opened.short());
+    }
+    Ok(())
+}
+
+/// Whether the template is a package for an arcade board.
+fn arcade_package(dir: &Path) -> Result<bool> {
+    Ok(dir.join("package.toml").is_file()
+        && crate::package::Package::load(dir)?.platform()? == crate::roms::Platform::Arcade)
+}
+
 fn capture(args: &CaptureArgs, paths: &Paths) -> Result<Outcome> {
     let dir = &args.template;
-    crate::track::nes_package(dir, "gp sprites capture")?;
+    let arcade = arcade_package(dir)?;
+    if arcade && args.apply {
+        bail!(
+            "{} is an arcade game: no model slot takes an arcade lift's pictures yet (gp_interp::Lifted refuses them), so capture only proposes the model; leave out --apply",
+            dir.display()
+        );
+    }
     let id = template_id(dir);
     let model_path = dir.join(gp_model::MODEL_FILE);
     let model = crate::gaps::load_model(dir)?;
@@ -187,8 +265,35 @@ fn capture(args: &CaptureArgs, paths: &Paths) -> Result<Outcome> {
             map_file.display()
         )
     })?;
-    let map =
-        AssetMap::parse(&map_text).map_err(|e| anyhow::anyhow!("{}: {e}", map_file.display()))?;
+    let arcade_map = if gp_assets::arcade::is_arcade(&map_text) {
+        if !arcade {
+            bail!(
+                "{} is an arcade lift, and {} is an NES game",
+                map_file.display(),
+                dir.display()
+            );
+        }
+        Some(
+            gp_assets::arcade::ArcadeMap::parse(&map_text)
+                .map_err(|e| anyhow::anyhow!("{}: {e}", map_file.display()))?,
+        )
+    } else {
+        if arcade {
+            bail!(
+                "{} is an NES asset map, and {} is an arcade game",
+                map_file.display(),
+                dir.display()
+            );
+        }
+        None
+    };
+    let map = match &arcade_map {
+        Some(_) => None,
+        None => Some(
+            AssetMap::parse(&map_text)
+                .map_err(|e| anyhow::anyhow!("{}: {e}", map_file.display()))?,
+        ),
+    };
     let config_file = dir.join("sprites.toml");
     let config = match std::fs::read_to_string(&config_file) {
         Ok(t) => {
@@ -196,22 +301,39 @@ fn capture(args: &CaptureArgs, paths: &Paths) -> Result<Outcome> {
         }
         Err(_) => Config::parse("schema = 1").expect("the empty config parses"),
     };
-    if !map
-        .assets
-        .iter()
-        .any(|a| a.name() == config.asset && a.format() == "sprite-set")
-    {
+    let has_set = match (&map, &arcade_map) {
+        (Some(m), _) => m
+            .assets
+            .iter()
+            .any(|a| a.name() == config.asset && a.format() == "sprite-set"),
+        (_, Some(m)) => m
+            .assets
+            .iter()
+            .any(|a| a.name == config.asset && a.format == gp_assets::arcade::Format::SpriteSet),
+        _ => false,
+    };
+    if !has_set {
         bail!(
-            "the asset map has no sprite-set asset named `{}`; add `[[asset]] name = \"{}\" format = \"sprite-set\"` to assets/{source}.toml and lift again",
+            "the asset map has no sprite-set asset named `{}`; add `[[asset]] name = \"{}\" format = \"sprite-set\"` to assets/{source}.toml and lift again{}",
             config.asset,
-            config.asset
+            config.asset,
+            if arcade_map.is_some() {
+                " (an arcade map's pictures are already named `sprites`: give the set another name, and name it in sprites.toml as `asset` and `slot`)"
+            } else {
+                ""
+            }
         );
     }
     let mapping = match std::fs::read_to_string(dir.join(gp_interp::mapping::MAPPING_FILE)) {
         Ok(t) => Some(gp_interp::mapping::Mapping::parse(&t).map_err(anyhow::Error::msg)?),
         Err(_) => None,
     };
-    let bank = TileBank::load(&lifted, &map, &model).map_err(anyhow::Error::msg)?;
+    let bank = match (&map, &arcade_map) {
+        (Some(m), _) => TileBank::load(&lifted, m, &model),
+        (_, Some(m)) => TileBank::load_arcade(&lifted, m, &model),
+        _ => unreachable!("one map or the other"),
+    }
+    .map_err(anyhow::Error::msg)?;
 
     // Entity IDs: the state mapping's slot kinds, then the config's.
     let mut ids: BTreeMap<String, Vec<u8>> = BTreeMap::new();
@@ -227,14 +349,40 @@ fn capture(args: &CaptureArgs, paths: &Paths) -> Result<Outcome> {
 
     let mut obs =
         Observer::new(&model, mapping.as_ref(), &config, &bank).map_err(anyhow::Error::msg)?;
+    if arcade {
+        obs.set_screen(Screen::Mcr);
+    }
     let mut refs = Vec::new();
     for r in &args.recordings {
         let opened = Opened::open(paths, r)?;
-        crate::track::nes_recording(&opened, "gp sprites capture")?;
+        if opened.is_arcade() != arcade {
+            bail!(
+                "{} is {}, and {} is a recording of {}: capture reads a game's own original",
+                dir.display(),
+                if arcade {
+                    "an arcade game"
+                } else {
+                    "an NES game"
+                },
+                opened.short(),
+                if opened.is_arcade() {
+                    "an arcade romset"
+                } else {
+                    "an NES ROM"
+                }
+            );
+        }
+        if !arcade {
+            crate::track::nes_recording(&opened, "gp sprites capture")?;
+        }
         let range = parse_frames(&args.frames, opened.manifest.frames)?;
         let range = range.start.max(1)..range.end;
-        observe_recording(&mut obs, &opened, range, config.oam_lag)
-            .with_context(|| format!("reading {}", opened.short()))?;
+        if arcade {
+            observe_arcade(&mut obs, &opened, range)
+        } else {
+            observe_recording(&mut obs, &opened, range, config.oam_lag)
+        }
+        .with_context(|| format!("reading {}", opened.short()))?;
         refs.push(gp_model::model::Ref {
             at: format!("recording {}", opened.short()),
             within: None,

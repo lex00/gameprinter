@@ -280,22 +280,6 @@ pub(crate) fn nes_recording(opened: &Opened, what: &str) -> Result<()> {
     Ok(())
 }
 
-/// Refuses a game whose package names an arcade board, in words: the
-/// detectors read the NES's sprite table, nametables and APU. A folder with
-/// no package.toml (a template) is an NES game's.
-pub(crate) fn nes_package(dir: &std::path::Path, what: &str) -> Result<()> {
-    if !dir.join("package.toml").is_file() {
-        return Ok(());
-    }
-    if crate::package::Package::load(dir)?.platform()? == crate::roms::Platform::Arcade {
-        bail!(
-            "{} is an arcade game; {what} reads the NES's sprite table, nametables and APU, and gp has no arcade counterpart yet (an adapter from the board's sprite RAM, tilemap and sound chip)",
-            dir.display()
-        );
-    }
-    Ok(())
-}
-
 pub(crate) fn run(args: &TrackArgs, paths: &gp_evidence::Paths) -> Result<Outcome> {
     let Tracked {
         opened,

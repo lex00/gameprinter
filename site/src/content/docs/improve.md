@@ -64,6 +64,8 @@ Without `--lockstep`, `gp model refine ~/dk-refine --recording ID` works from st
 
 `gp mechanic start donkey-kong` serves the last run and the jump's rule (`gp rule jump donkey-kong`, the gravity and takeoff speeds read from the clips) at `http://127.0.0.1:PORT/refine`.
 
+A player who moves between lanes, as Tapper's bartender moves between the bars, has `gp rule lane GAME`. It reads the player's lane, x and y bytes from the mapping (`entities.player[0].lane`, `.x`, `.y`, or `--lane`, `--x`, `--y`) and each lane's tap from `entities.tap[K].x` (or `--tap`), and fits from the clips: each lane's row, the frames a move to another lane takes and keeps the stick busy, whether a move wraps round, where the player lands (so far from the new lane's tap, or one x for each lane), the walk's step a frame, and the step back after a send. It then plays the rule against every clip frame by frame and says, for each clip, the first frame where the rule and the original differ and in what (lane, x or y). `gp rule lane tapper --lane 0xE6F9` fits Tapper's bartender. The result goes to `$GP_HOME/mechanics/GAME/lane/refine.json`, or `--out`.
+
 ### Watch it work, and hand stuck clips to an agent
 
 `gp serve` runs the same loop in the background while you play: its REFINE tab scores every clip on the model, refines the clip that parts earliest one round at a time, and shows each job as a card whose bars move as the round goes (the impact pass's trials, the fine pass's, and the fewest wrong frames so far). Put a clip first with "add to the queue" or "fix this clip".

@@ -373,3 +373,84 @@ fn capture_finds_every_frame_clip_and_gap_and_writes_the_model() {
     let set_text = cap.set.to_text();
     gp_assets::sprite_set::SpriteSet::parse(&set_text).unwrap();
 }
+
+/// An arcade game on a made-up MCR lift: a hero whose state mapping reads
+/// the sprite RAM's own units, drawn as two 32x32 sprites side by side.
+/// Capture places the hero as the board places a sprite, (x - 3, 241 - y),
+/// finds each sprite's picture by its number, and keeps a frame of two
+/// whole-sprite pieces 16 apart. Nothing comes from any real game.
+#[test]
+fn an_arcade_frame_is_whole_sprites_found_by_number() {
+    use crate::observe::{ListSprite, Screen};
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let map_text = format!(
+        "{}\n[[asset]]\nname = \"set\"\nformat = \"sprite-set\"\n",
+        gp_assets::arcade::mcr_91490_map("made-up", "Made Up", &["madeup"])
+    );
+    let map = gp_assets::arcade::ArcadeMap::parse(&map_text).unwrap();
+    // Sprite k has its top left pixel k (sprite 0 blank, sprite 9 only
+    // value 8, which the board draws nothing for).
+    let decoded = gp_assets::arcade::Decoded {
+        set: "madeup".into(),
+        identity: "id".into(),
+        tiles: vec![[0; 64]; 1024],
+        sprites: (0..256)
+            .map(|k| {
+                let mut s = [0u8; 1024];
+                s[0] = if k == 9 { 8 } else { (k % 16) as u8 };
+                s[33] = 1;
+                if k == 0 || k == 9 {
+                    s[33] = 0;
+                }
+                s
+            })
+            .collect(),
+    };
+    let (files, _) = gp_assets::arcade::lift(&decoded, &map, &map_text).unwrap();
+    for f in files {
+        std::fs::write(tmp.join(&f.name), &f.bytes).unwrap();
+    }
+    let model = gp_model::Model::parse(MODEL).unwrap();
+    let mapping = Mapping::parse(
+        "schema = 1\nmodel = \"madeup\"\nsource = \"made-up\"\nalign = \"polled\"\n\n[[field]]\npath = \"entities.hero[0].x\"\nram = [0xE010]\n\n[[field]]\npath = \"entities.hero[0].y\"\nram = [0xE011]\n",
+    )
+    .unwrap();
+    let config = Config::parse("schema = 1\nslot = \"set\"\nasset = \"set\"\n").unwrap();
+    let bank = TileBank::load_arcade(tmp, &map, &model).unwrap();
+    assert_eq!(bank.sprite_at(7), Some((0, 7)));
+    assert!(bank.is_blank((0, 9)) && bank.is_blank((0, 0)));
+    assert_eq!(bank.sprite_at(300), None);
+    let mut obs = Observer::new(&model, Some(&mapping), &config, &bank).unwrap();
+    obs.set_screen(Screen::Mcr);
+    for f in 0..6u64 {
+        let mut ram = vec![0u8; 0xE800];
+        let (x, y) = (100u8 + f as u8, 120u8);
+        ram[0xE010] = x;
+        ram[0xE011] = y;
+        let at = |dx: i32, code: u32| ListSprite {
+            x: i32::from(x) - 3 + dx,
+            y: 241 - i32::from(y),
+            code,
+            color: 1,
+            flip_x: false,
+            flip_y: false,
+        };
+        // Two pictures, a blank one on the hero, and one far away.
+        let mut list = vec![at(0, 7), at(16, 8), at(0, 9)];
+        list.push(ListSprite {
+            x: 10,
+            y: 10,
+            ..at(0, 300)
+        });
+        obs.shot_list(f, &ram, &list);
+    }
+    assert_eq!(obs.unresolved, 6);
+    let hero: Vec<_> = obs.obs.iter().filter(|o| o.entity == "hero").collect();
+    assert_eq!(hero.len(), 6);
+    let l = &obs.layouts[hero[0].layout as usize];
+    let pieces: Vec<(u32, i32, i32, u8)> =
+        l.iter().map(|p| (p.tile, p.x, p.y, p.palette)).collect();
+    assert_eq!(pieces, [(7, 0, 0, 5), (8, 16, 0, 5)]);
+    assert_eq!(hero[0].anchor, [0, 0]);
+}

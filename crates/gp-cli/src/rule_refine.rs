@@ -38,6 +38,9 @@ use crate::Outcome;
 use crate::mechanic::http::{Request, Response};
 use crate::original::OriginalRuntime;
 
+#[path = "rule_lane.rs"]
+mod lane;
+
 #[derive(Subcommand, Debug)]
 pub(crate) enum RuleCmd {
     /// The rule for the player's motion in the air during a jump: the bytes
@@ -67,6 +70,12 @@ pub(crate) enum RuleCmd {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// The rule for a player who moves between lanes (Tapper's bartender:
+    /// the bars): each lane's row, the frames a move to another lane takes
+    /// and keeps the stick busy, where the player lands on the new lane,
+    /// the walk along a lane, and the step back after a send. Fitted from
+    /// the clips and checked against the original frame by frame.
+    Lane(lane::LaneArgs),
 }
 
 pub(crate) fn run(cmd: &RuleCmd, paths: &Paths) -> Result<Outcome> {
@@ -87,6 +96,7 @@ pub(crate) fn run(cmd: &RuleCmd, paths: &Paths) -> Result<Outcome> {
             rom.as_deref(),
             out.as_deref(),
         ),
+        RuleCmd::Lane(a) => lane::run(a, paths),
     }
 }
 

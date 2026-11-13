@@ -454,13 +454,19 @@ fn sprites_capture_on_moss_hop() {
     assert!(home.join("work/sprites/mosshop/model.toml").is_file());
 }
 
+/// An arcade game is captured (gp-sprites' own tests hold the capture on
+/// a made-up MCR lift), but its model only proposed: `--apply` is refused
+/// in words, since no model slot takes an arcade lift's pictures yet.
 #[test]
-fn sprites_capture_refuses_an_arcade_game_in_words() {
+fn sprites_capture_refuses_apply_on_an_arcade_game_in_words() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path();
     let pkg = arcade_package(home);
-    let out = gp(home, &["sprites", "capture", pkg.to_str().unwrap()]);
+    let out = gp(
+        home,
+        &["sprites", "capture", pkg.to_str().unwrap(), "--apply"],
+    );
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("no arcade counterpart"), "{err}");
+    assert!(err.contains("leave out --apply"), "{err}");
 }

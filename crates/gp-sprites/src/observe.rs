@@ -37,6 +37,33 @@ pub const CONDITIONS: [&str; 7] = [
 /// A sprite on screen: x, y, its lifted tile, palette and flips.
 type Sprite = (i32, i32, Option<(usize, u32)>, u8, bool, bool);
 
+/// One sprite of an arcade frame, as the board's sprite list gives it
+/// (gp_arcade::video::sprite_list): its top left in the game's units, its
+/// picture's number in the graphics region, its colour bank and flips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListSprite {
+    pub x: i32,
+    pub y: i32,
+    pub code: u32,
+    pub color: u8,
+    pub flip_x: bool,
+    pub flip_y: bool,
+}
+
+/// How a position the state mapping reads lands on the screen sprites are
+/// drawn on, and how big a sprite is there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Screen {
+    /// The NES: a position is a screen place less the camera; sprites are
+    /// 8 wide.
+    Nes,
+    /// Midway MCR (gp_arcade::video): a position is read in the sprite
+    /// RAM's own units, as the game's object slots hold them, and lands
+    /// where the board puts a sprite with those bytes, (x - 3, 241 - y);
+    /// sprites are 16 by 16 there.
+    Mcr,
+}
+
 /// One frame of a recording, as the console drew it.
 pub struct Shot<'a> {
     pub frame: u64,
@@ -134,6 +161,7 @@ pub struct Observer<'a> {
     slot_facing: Option<Condition>,
     skip_all: Option<Condition>,
     interned: HashMap<Layout, u32>,
+    screen: Screen,
     pub layouts: Vec<Layout>,
     pub obs: Vec<Obs>,
     /// Sprite palettes (16 colors) seen on each frame, by level, with
@@ -338,6 +366,7 @@ impl<'a> Observer<'a> {
                 .transpose()?,
             last: HashMap::new(),
             interned: HashMap::new(),
+            screen: Screen::Nes,
             layouts: Vec::new(),
             obs: Vec::new(),
             level_colors: BTreeMap::new(),
@@ -347,6 +376,20 @@ impl<'a> Observer<'a> {
             pattern: HashMap::new(),
             frames: 0,
         })
+    }
+
+    /// Places positions and sizes sprites as `screen` does (the NES's
+    /// unless set).
+    pub fn set_screen(&mut self, screen: Screen) {
+        self.screen = screen;
+    }
+
+    /// A sprite's side on the screen positions are placed on.
+    fn side(&self) -> i32 {
+        match self.screen {
+            Screen::Nes => 8,
+            Screen::Mcr => 16,
+        }
     }
 
     fn intern(&mut self, l: Layout) -> u32 {
@@ -363,11 +406,13 @@ impl<'a> Observer<'a> {
         let e = self.model.entities.get(entity)?;
         let hb = e.core.hitbox;
         let px = |f: gp_model::Fixed| (f.raw() >> 16) as i32;
-        let mut sx = (x - cam[0]) as i32;
+        let (mut sx, sy) = match self.screen {
+            Screen::Nes => ((x - cam[0]) as i32, (y - cam[1]) as i32),
+            Screen::Mcr => (x as i32 - 3, 241 - y as i32),
+        };
         if wrap {
             sx = sx.rem_euclid(256);
         }
-        let sy = (y - cam[1]) as i32;
         let bx = [
             sx + px(hb.x),
             sy + px(hb.y),
@@ -391,8 +436,50 @@ impl<'a> Observer<'a> {
 
     /// Takes one frame.
     pub fn shot(&mut self, s: &Shot<'_>) {
+        let Some((insts, level, frozen)) = self.entities(s.ram, s.palette) else {
+            return;
+        };
+        let sprites = self.nes_sprites(s);
+        self.give(s.frame, s.ram, s.palette, &insts, &level, frozen, &sprites);
+    }
+
+    /// Takes one arcade frame: its work RAM and the sprites the board drew
+    /// (none with a picture no lifted asset holds is dropped; each counts
+    /// as unresolved). Colour banks 0 to 3 are palettes 4 to 7.
+    pub fn shot_list(&mut self, frame: u64, ram: &[u8], list: &[ListSprite]) {
+        let Some((insts, level, frozen)) = self.entities(ram, &[]) else {
+            return;
+        };
+        let mut sprites: Vec<Sprite> = Vec::new();
+        for o in list {
+            let t = self.bank.sprite_at(o.code);
+            match t {
+                None => self.unresolved += 1,
+                Some((a, n)) => {
+                    let name = {
+                        let asset = &self.bank.assets[a];
+                        asset.slot.clone().unwrap_or_else(|| asset.name.clone())
+                    };
+                    *self
+                        .pattern
+                        .entry(o.code)
+                        .or_default()
+                        .entry((name, n))
+                        .or_default() += 1;
+                }
+            }
+            if t.is_some_and(|t| self.bank.is_blank(t)) {
+                continue;
+            }
+            sprites.push((o.x, o.y, t, 4 + (o.color & 3), o.flip_x, o.flip_y));
+        }
+        self.give(frame, ram, &[], &insts, &level, frozen, &sprites);
+    }
+
+    /// The entities a frame's RAM places, its level and whether a state
+    /// froze the world; None for a frame that gives nothing.
+    fn entities(&mut self, ram: &[u8], palette: &[u8]) -> Option<(Vec<Inst>, String, bool)> {
         self.frames += 1;
-        let ram = s.ram;
         let cam = [
             self.cam[0]
                 .as_ref()
@@ -405,14 +492,14 @@ impl<'a> Observer<'a> {
         ];
         if self.skip_all.as_ref().is_some_and(|c| eval(c, ram, 0)) {
             self.outside += 1;
-            return;
+            return None;
         }
         let found = self.levels.iter().find(|(_, c)| eval(c, ram, 0));
         // A mapping that names its levels and none of them holds: the game
         // is somewhere the model doesn't have (another stage, a menu).
         if found.is_none() && !self.levels.is_empty() {
             self.outside += 1;
-            return;
+            return None;
         }
         let level = found.map(|(l, _)| l.clone()).unwrap_or_else(|| {
             self.model
@@ -422,12 +509,12 @@ impl<'a> Observer<'a> {
                 .or_else(|| self.model.levels.keys().next().cloned())
                 .unwrap_or_default()
         });
-        if s.palette.len() >= 32 {
+        if palette.len() >= 32 {
             *self
                 .level_colors
                 .entry(level.clone())
                 .or_default()
-                .entry(s.palette[16..32].to_vec())
+                .entry(palette[16..32].to_vec())
                 .or_default() += 1;
         }
 
@@ -528,7 +615,7 @@ impl<'a> Observer<'a> {
         }
         insts.retain(|i| i.bx[2] > 0 && i.bx[0] < 256 && i.bx[3] > 0 && i.bx[1] < 240);
         if insts.is_empty() {
-            return;
+            return None;
         }
         // A state that freezes the world (a death) shows sprites the model
         // can't choose by an entity's state yet: they're counted, not kept.
@@ -536,8 +623,11 @@ impl<'a> Observer<'a> {
             Value::Text(t) => states.contains(&t),
             _ => false,
         });
+        Some((insts, level, frozen))
+    }
 
-        // The sprites, 8x16 ones as two tiles.
+    /// The NES sprite table's sprites, 8x16 ones as two tiles.
+    fn nes_sprites(&mut self, s: &Shot<'_>) -> Vec<Sprite> {
         let tall = s.ctrl & 0x20 != 0;
         let base = if s.ctrl & 0x08 != 0 { 0x1000u16 } else { 0 };
         let mut sprites: Vec<Sprite> = Vec::new();
@@ -576,13 +666,29 @@ impl<'a> Observer<'a> {
                 sprites.push((sx, sy + dy, t, 4 + (attr & 3), fx, fy));
             }
         }
+        sprites
+    }
 
+    /// Gives each sprite to an entity and records each entity's frame.
+    #[allow(clippy::too_many_arguments)]
+    fn give(
+        &mut self,
+        frame: u64,
+        ram: &[u8],
+        palette: &[u8],
+        insts: &[Inst],
+        level: &str,
+        frozen: bool,
+        sprites: &[Sprite],
+    ) {
+        let side = self.side();
+        let half = side / 2;
         // Each sprite to the entity whose hitbox it's on, then sprites
         // touching those to the same one.
         let m = self.config.margin;
         let mut owner: Vec<Option<usize>> = vec![None; sprites.len()];
         for (k, sp) in sprites.iter().enumerate() {
-            let (cx, cy) = (sp.0 + 4, sp.1 + 4);
+            let (cx, cy) = (sp.0 + half, sp.1 + half);
             let mut best: Option<(i64, usize)> = None;
             for (j, i) in insts.iter().enumerate() {
                 let b = i.bx;
@@ -606,11 +712,12 @@ impl<'a> Observer<'a> {
                 for q in 0..sprites.len() {
                     let Some(j) = owner[q] else { continue };
                     let b = &sprites[q];
-                    let touch = (a.0 - b.0).abs() <= 8 && (a.1 - b.1).abs() <= 8 && a.3 == b.3;
+                    let touch =
+                        (a.0 - b.0).abs() <= side && (a.1 - b.1).abs() <= side && a.3 == b.3;
                     let bx = insts[j].bx;
-                    let near = a.0 + 8 > bx[0] - 32
+                    let near = a.0 + side > bx[0] - 32
                         && a.0 < bx[2] + 32
-                        && a.1 + 8 > bx[1] - 32
+                        && a.1 + side > bx[1] - 32
                         && a.1 < bx[3] + 32;
                     if touch && near {
                         owner[k] = Some(j);
@@ -688,22 +795,22 @@ impl<'a> Observer<'a> {
             self.last.insert(key, (inst.world, facing_left));
             if facing_left {
                 for p in &mut pieces {
-                    p.x = inst.mirror - p.x - 8;
+                    p.x = inst.mirror - p.x - side;
                     p.flip_x = !p.flip_x;
                 }
             }
             pieces.sort();
             let mut colors: Vec<(u8, [u8; 4])> = Vec::new();
             for p in &pieces {
-                if !colors.iter().any(|(q, _)| *q == p.palette) && s.palette.len() >= 32 {
+                if !colors.iter().any(|(q, _)| *q == p.palette) && palette.len() >= 32 {
                     let at = 16 + usize::from(p.palette - 4) * 4;
                     colors.push((
                         p.palette,
                         [
-                            s.palette[at],
-                            s.palette[at + 1],
-                            s.palette[at + 2],
-                            s.palette[at + 3],
+                            palette[at],
+                            palette[at + 1],
+                            palette[at + 2],
+                            palette[at + 3],
                         ],
                     ));
                 }
@@ -739,10 +846,10 @@ impl<'a> Observer<'a> {
             // Moving and rising over the last few frames, so a speed of a
             // fraction of a pixel a frame still counts as moving.
             let trail = self.trail.entry(key_t.clone()).or_default();
-            if trail.back().is_some_and(|(f, _)| s.frame != f + 1) {
+            if trail.back().is_some_and(|(f, _)| frame != f + 1) {
                 trail.clear();
             }
-            trail.push_back((s.frame, inst.world));
+            trail.push_back((frame, inst.world));
             while trail.len() > TRAIL {
                 trail.pop_front();
             }
@@ -777,7 +884,7 @@ impl<'a> Observer<'a> {
             }
             let layout = self.intern(pieces);
             self.obs.push(Obs {
-                frame: s.frame,
+                frame,
                 instance: inst.instance,
                 entity: inst.entity.clone(),
                 state,
@@ -786,7 +893,7 @@ impl<'a> Observer<'a> {
                 anchor: [x0, y0],
                 facing_left,
                 colors,
-                level: level.clone(),
+                level: level.to_owned(),
                 clock,
             });
         }

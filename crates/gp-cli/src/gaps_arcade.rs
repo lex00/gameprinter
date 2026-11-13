@@ -253,13 +253,17 @@ pub(crate) fn build(args: &GapsArgs, t: &Template, paths: &Paths, opened: Opened
             };
             let f = frame;
             let input = &log.frames[(f - 1) as usize];
-            let play = start.as_ref().is_none_or(|c| eval(c, &mem));
+            // gaps' read and eval index the NES's 2 KB by an address's low
+            // 11 bits: here that is the work RAM, E000-E7FF, where a
+            // mapping's addresses are.
+            let work = &mem[0xe000..0xe800];
+            let play = start.as_ref().is_none_or(|c| eval(c, work));
             let ram_changed: Vec<u16> = (0xe000..0xe800u16)
                 .filter(|&a| mem[usize::from(a)] != pm[usize::from(a)])
                 .collect();
             let mut ents = Vec::new();
             if let (Some(x), Some(y)) = (px, py)
-                && let (Some(x), Some(y)) = (read(x, &mem, 0), read(y, &mem, 0))
+                && let (Some(x), Some(y)) = (read(x, work, 0), read(y, work, 0))
             {
                 ents.push(Ent {
                     kind: player_kind,
@@ -272,7 +276,7 @@ pub(crate) fn build(args: &GapsArgs, t: &Template, paths: &Paths, opened: Opened
             }
             let counters = counters
                 .iter()
-                .map(|c| read(c, &mem, 0).unwrap_or(0))
+                .map(|c| read(c, work, 0).unwrap_or(0))
                 .collect();
             let sprites = crate::track::arcade_sprites(&mem[0xe800..0xea00]);
             let list = gp_arcade::video::sprite_list(&mem[0xe800..0xea00]);
@@ -355,4 +359,241 @@ pub(crate) fn build(args: &GapsArgs, t: &Template, paths: &Paths, opened: Opened
         id: opened.entry.id.to_hex(),
         no_code_why,
     })
+}
+
+/// How the model draws each entity kind (by `kinds`) on an arcade game,
+/// for `gp gaps drawn`: from the arcade lift's map and the sprite-set
+/// `gp sprites capture` wrote there, since the NES box reader
+/// (gp_look::present) reads CHR tiles and an NES map. Each kind's sprite is
+/// the one of the state its lives start in (its machine's `initial`), else
+/// its own: a frame of the set is laid out from the position, each piece a
+/// whole MCR sprite, 16 by 16 in the game's units, so its box is the
+/// pieces' bounds with their top left as the origin; tiles of a pictures
+/// slot are `width` to a row of 16 by 16, stood on the body's bottom edge.
+/// A kind with no sprite isn't drawn by the model and isn't checked.
+pub(crate) fn model_boxes(
+    args: &GapsArgs,
+    t: &Template,
+    kinds: &[String],
+    paths: &Paths,
+) -> Result<Vec<Option<gp_gaps::drawn::ModelBox>>> {
+    let dir = match &args.assets {
+        Some(a) => a.clone(),
+        None => paths.home.join("work/assets").join(&t.source),
+    };
+    boxes_from(&dir, &t.model, kinds)
+}
+
+/// [`model_boxes`] from a lifted folder.
+fn boxes_from(
+    dir: &std::path::Path,
+    model: &gp_model::Model,
+    kinds: &[String],
+) -> Result<Vec<Option<gp_gaps::drawn::ModelBox>>> {
+    const SIDE: i32 = 16;
+    let map_file = dir.join("assets.toml");
+    let text = std::fs::read_to_string(&map_file).with_context(|| {
+        format!(
+            "{} (lift the model's assets with gp assets lift, or name them with --assets)",
+            map_file.display()
+        )
+    })?;
+    if !gp_assets::arcade::is_arcade(&text) {
+        bail!("{} isn't an arcade lift", map_file.display());
+    }
+    let map = gp_assets::arcade::ArcadeMap::parse(&text)
+        .with_context(|| map_file.display().to_string())?;
+    let asset_of = |slot: &str| -> Option<&gp_assets::arcade::ArcadeAsset> {
+        let from = model.assets.get(slot)?.from.as_ref()?;
+        map.assets.iter().find(|a| a.name == from.asset)
+    };
+    let mut sets: BTreeMap<String, gp_assets::sprite_set::SpriteSet> = BTreeMap::new();
+    let mut out = Vec::new();
+    for name in kinds {
+        let Some(e) = model.entities.get(name) else {
+            out.push(None);
+            continue;
+        };
+        let e = e
+            .core
+            .machine
+            .as_ref()
+            .and_then(|m| e.in_state(&m.initial).ok())
+            .unwrap_or_else(|| e.clone());
+        let body = [
+            (e.core.size[0].raw() >> 16) as i32,
+            (e.core.size[1].raw() >> 16) as i32,
+        ];
+        let Some(s) = &e.core.sprite else {
+            out.push(None);
+            continue;
+        };
+        let b = if let Some(f) = &s.frame {
+            let a = asset_of(&f.slot).with_context(|| {
+                format!(
+                    "{name}'s sprite frame names slot `{}`, which no asset of the arcade map fills",
+                    f.slot
+                )
+            })?;
+            if a.format != gp_assets::arcade::Format::SpriteSet {
+                bail!("{name}'s sprite frame names `{}`, not a sprite-set", a.name);
+            }
+            if !sets.contains_key(&a.name) {
+                let file = dir.join(a.file());
+                let st = std::fs::read_to_string(&file).with_context(|| {
+                    format!("{} (write it with gp sprites capture)", file.display())
+                })?;
+                let set = gp_assets::sprite_set::SpriteSet::parse(&st)
+                    .map_err(|e| anyhow::anyhow!("{}: {e}", file.display()))?;
+                sets.insert(a.name.clone(), set);
+            }
+            let Some(fr) = sets[&a.name].frames.get(f.row as usize) else {
+                bail!("{name}'s sprite frame is row {}, past {}", f.row, a.name);
+            };
+            if fr.pieces.is_empty() {
+                out.push(None);
+                continue;
+            }
+            let x0 = fr.pieces.iter().map(|p| p.x).min().unwrap_or(0);
+            let y0 = fr.pieces.iter().map(|p| p.y).min().unwrap_or(0);
+            let x1 = fr.pieces.iter().map(|p| p.x + SIDE).max().unwrap_or(0);
+            let y1 = fr.pieces.iter().map(|p| p.y + SIDE).max().unwrap_or(0);
+            gp_gaps::drawn::ModelBox {
+                body,
+                picture: [x1 - x0, y1 - y0],
+                origin: Some([x0, y0]),
+            }
+        } else {
+            if s.tiles.is_empty() {
+                out.push(None);
+                continue;
+            }
+            let w = s.width.max(1) as i32;
+            let rows = (s.tiles.len() as i32 + w - 1) / w;
+            gp_gaps::drawn::ModelBox {
+                body,
+                picture: [w * SIDE, rows * SIDE],
+                origin: None,
+            }
+        };
+        out.push(Some(b));
+    }
+    Ok(out)
+}
+
+/// The run with each mapped object's position where the MCR board would
+/// draw a sprite with those bytes, `(x - 3, 241 - y)`: the sprite list's
+/// units, which the original's objects are in. A mapping reads a position
+/// in the sprite RAM's own units, as the game's object slots hold it.
+pub(crate) fn on_screen(run: &Run) -> Run {
+    let mut r = run.clone();
+    for f in &mut r.frames {
+        for e in &mut f.ents {
+            e.x -= 3;
+            e.y = 241 - e.y;
+        }
+    }
+    r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A made-up arcade model and lift: a hero drawn from a captured
+    /// frame of two whole sprites, a block drawn from two tiles of the
+    /// pictures slot, and a kind with no sprite. Each box is in the game's
+    /// units, a sprite 16 by 16; positions land where the board draws
+    /// their bytes.
+    #[test]
+    fn arcade_boxes_come_from_the_sprite_set_and_the_map() {
+        let dir = tempfile::tempdir().unwrap();
+        let map = format!(
+            "{}\n[[asset]]\nname = \"set\"\nformat = \"sprite-set\"\n",
+            gp_assets::arcade::mcr_91490_map("made-up", "Made Up", &["madeup"])
+        );
+        std::fs::write(dir.path().join("assets.toml"), map).unwrap();
+        std::fs::write(
+            dir.path().join("set.toml"),
+            "schema = 1\nasset = \"set\"\n\n[[frame]]\n\n[[frame.pieces]]\ntile = 3\nslot = \"sprites\"\nx = -4\ny = -13\npalette = 4\n\n[[frame.pieces]]\ntile = 4\nslot = \"sprites\"\nx = 12\ny = 0\npalette = 4\n",
+        )
+        .unwrap();
+        let model = gp_model::Model::parse(
+            r#"
+[model]
+schema = "0.4.2"
+name = "madeup"
+title = "Made Up"
+source = "made-up"
+view = "side"
+frame_rate = "30"
+systems = ["rules", "entity_states", "counters", "spawn", "platformer.player", "platformer.enemies", "platformer.contact", "exits", "camera"]
+
+[model.extensions]
+platformer = "0.4"
+
+[input]
+device = "arcade"
+
+[input.actions]
+left = "left"
+
+[assets.set]
+kind = "sprite-set"
+role = "graphics"
+from = { source = "made-up", asset = "set" }
+
+[assets.sprites]
+kind = "tiles"
+role = "graphics"
+from = { source = "made-up", asset = "sprites" }
+
+[entities.hero]
+role = "player"
+size = [16, 16]
+hitbox = { x = 0, y = 0, w = 16, h = 16 }
+sprite = { slot = "sprites", width = 1, palette = 4, frame = { slot = "set", row = 0 } }
+
+[entities.block]
+role = "npc"
+size = [32, 16]
+hitbox = { x = 0, y = 0, w = 32, h = 16 }
+sprite = { slot = "sprites", tiles = [1, 2], width = 2, palette = 4 }
+
+[entities.ghost]
+role = "npc"
+size = [8, 8]
+hitbox = { x = 0, y = 0, w = 8, h = 8 }
+
+[levels.main]
+size = [32, 30]
+tile_size = 16
+"#,
+        )
+        .unwrap();
+        let kinds: Vec<String> = ["hero", "block", "ghost"].map(String::from).to_vec();
+        let b = boxes_from(dir.path(), &model, &kinds).unwrap();
+        let hero = b[0].unwrap();
+        assert_eq!(hero.picture, [32, 29]);
+        assert_eq!(hero.top_left(), [-4, -13]);
+        let block = b[1].unwrap();
+        assert_eq!(block.picture, [32, 16]);
+        assert_eq!(block.top_left(), [0, 0]);
+        assert!(b[2].is_none());
+
+        let mut run = Run::default();
+        run.frames.push(FrameFacts {
+            ents: vec![Ent {
+                kind: Some(0),
+                player: true,
+                slot: None,
+                id: None,
+                x: 100,
+                y: 48,
+            }],
+            ..FrameFacts::default()
+        });
+        let e = &on_screen(&run).frames[0].ents[0];
+        assert_eq!((e.x, e.y), (97, 193));
+    }
 }

@@ -17,11 +17,16 @@ pub(crate) use crate::mechanic::paths::{put_path, read_path};
 /// Sprite boxes from a sprite table: each sprite's box, and boxes that
 /// touch merged, as `[x, y, w, h]`.
 pub(crate) fn sprite_boxes(oam: &[u8; 256], tall: i32) -> Vec<[i32; 4]> {
-    let mut b: Vec<[i32; 4]> = oam
-        .chunks(4)
-        .filter(|e| e[0] < 0xEF)
-        .map(|e| [i32::from(e[3]), i32::from(e[0]) + 1, 8, tall])
-        .collect();
+    merge_boxes(
+        oam.chunks(4)
+            .filter(|e| e[0] < 0xEF)
+            .map(|e| [i32::from(e[3]), i32::from(e[0]) + 1, 8, tall])
+            .collect(),
+    )
+}
+
+/// Boxes `[x, y, w, h]` with those that touch merged into one.
+pub(crate) fn merge_boxes(mut b: Vec<[i32; 4]>) -> Vec<[i32; 4]> {
     let touch = |a: &[i32; 4], c: &[i32; 4]| {
         a[0] <= c[0] + c[2] && c[0] <= a[0] + a[2] && a[1] <= c[1] + c[3] && c[1] <= a[1] + a[3]
     };
@@ -121,8 +126,15 @@ pub(crate) fn new_clip(
 // ---- play start (game-printer's rom_extract.rs) --------------------------
 
 /// One run's frames as gp-track reads them: RAM, sprite table, scroll and
-/// pad, a frame behind when the game builds its sprites a frame early.
+/// pad, a frame behind when the game builds its sprites a frame early. On
+/// an arcade romset: the board's work RAM, its sprite list (gp-track's
+/// `sprites`, and as a sprite table of [y, picture, 0, x] entries for the
+/// play-start rule), no scroll, and no lag (the board draws a frame's
+/// sprites from that frame's sprite RAM).
 pub(crate) fn frames_of(rom: &[u8], clip: &crate::reach::ClipInput) -> Result<gp_track::Frames> {
+    if crate::original::Platform::of_file(rom) == crate::original::Platform::Arcade {
+        return arcade_frames(rom, clip);
+    }
     let mut nes = gp_nes::Nes::power_on(rom, clip.power_on)?;
     nes.set_video(false);
     let (mut ram, mut oam, mut scroll, mut pad) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -167,6 +179,39 @@ pub(crate) fn frames_of(rom: &[u8], clip: &crate::reach::ClipInput) -> Result<gp
     })
 }
 
+/// [`frames_of`] on an arcade romset.
+fn arcade_frames(rom: &[u8], clip: &crate::reach::ClipInput) -> Result<gp_track::Frames> {
+    let mut mc = super::machine::Machine::power_on(rom, clip.power_on)?;
+    let (mut ram, mut oam, mut sprites, mut pad) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for input in &clip.inputs {
+        mc.step(*input)?;
+        ram.push(mc.wram().to_vec());
+        let super::machine::Machine::Arcade(t) = &mc else {
+            bail!("an arcade romset runs on the board")
+        };
+        let list = crate::track::arcade_sprites(&t.board.spriteram);
+        let mut table = vec![0xFFu8; 256];
+        for (k, s) in list.iter().take(64).enumerate() {
+            table[k * 4] = s.y.clamp(0, 0xEE) as u8;
+            table[k * 4 + 1] = s.tile as u8;
+            table[k * 4 + 3] = s.x.clamp(0, 255) as u8;
+        }
+        oam.push(table);
+        sprites.push(list);
+        pad.push(input.pads[0]);
+    }
+    let n = ram.len();
+    Ok(gp_track::Frames {
+        first: 1,
+        ram,
+        oam,
+        tall: false,
+        sprites: Some(sprites),
+        scroll_x: vec![0; n],
+        pad,
+    })
+}
+
 /// Where play starts: the first of `clips` in which the pad moves the
 /// player ([`pad_x`]) and the frame it first does; else the first in which
 /// the tracker sees a player, and the frame it appears.
@@ -178,9 +223,19 @@ pub(crate) fn play_start(
     // tracker's player can be a title screen's or an intro's, so it is used
     // only when no run has the first.
     let mut tracked = None;
+    // Right's and Left's bits on the device the ROM's platform has.
+    let lr = if crate::original::Platform::of_file(bytes) == crate::original::Platform::Arcade {
+        let p = super::machine::Pads::of(gp_model::model::Device::Arcade);
+        (p.right, p.left)
+    } else {
+        (0x80, 0x40)
+    };
     for (i, c) in clips.iter().enumerate() {
         let mut f = frames_of(bytes, c)?;
-        if let Some(t) = pad_x(&f).and_then(|x| first_move(&f, x)).filter(|&t| t > 0) {
+        if let Some(t) = pad_x(&f, lr)
+            .and_then(|x| first_move(&f, x, lr))
+            .filter(|&t| t > 0)
+        {
             return Ok(Some((i, t)));
         }
         if tracked.is_none()
@@ -195,10 +250,10 @@ pub(crate) fn play_start(
 }
 
 /// The first frame `x` moves the way the pad says, Left or Right held.
-fn first_move(f: &gp_track::Frames, x: u16) -> Option<usize> {
+fn first_move(f: &gp_track::Frames, x: u16, lr: (u8, u8)) -> Option<usize> {
     let a = usize::from(x);
     (1..f.ram.len().min(f.pad.len())).find(|&t| {
-        let (r, l) = (f.pad[t] & 0x80 != 0, f.pad[t] & 0x40 != 0);
+        let (r, l) = (f.pad[t] & lr.0 != 0, f.pad[t] & lr.1 != 0);
         let d = f.ram[t][a].wrapping_sub(f.ram[t - 1][a]) as i8;
         r != l && d != 0 && (d > 0) == r
     })
@@ -221,7 +276,7 @@ fn first_move(f: &gp_track::Frames, x: u16) -> Option<usize> {
 ///    happens to be held goes one way only);
 /// 5. no other byte passes 1 to 4 as often (a subpixel byte passes 1 and
 ///    fails 2).
-fn pad_x(f: &gp_track::Frames) -> Option<u16> {
+fn pad_x(f: &gp_track::Frames, lr: (u8, u8)) -> Option<u16> {
     let n = f.ram.len().min(f.oam.len()).min(f.pad.len());
     let mut best: Vec<(usize, u16)> = Vec::new();
     for a in 0..0x800usize {
@@ -237,7 +292,7 @@ fn pad_x(f: &gp_track::Frames) -> Option<u16> {
         let (mut seg_len, mut seg_moves) = (0usize, 0usize);
         for t in 1..n {
             let pad = f.pad[t];
-            let (r, l) = (pad & 0x80 != 0, pad & 0x40 != 0);
+            let (r, l) = (pad & lr.0 != 0, pad & lr.1 != 0);
             if r == l || f.pad[t] != f.pad[t - 1] {
                 if seg_moves > 0 {
                     held_in += seg_len;

@@ -124,7 +124,7 @@ fn open_ground(
     d: &crate::farm::blind::Discovery,
     clear: i32,
 ) -> Result<(gp_nes::Nes, Vec<InputFrame>)> {
-    let mut nes = d.nes.clone();
+    let mut nes = d.nes.as_nes()?.clone();
     let mut added = Vec::new();
     let fwd = dpad(d.right, true);
     let y_of = |n: &gp_nes::Nes| n.wram()[usize::from(d.y)];

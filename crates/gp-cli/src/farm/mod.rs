@@ -20,10 +20,12 @@
 //! (`entities.player[0].x` and `.y`, as `gp mechanic demo` reads them) and
 //! observe.toml, and the ROM from its roms.toml. The decision model's
 //! plan and question named Super Mario Bros.' hero; they say "the player"
-//! now. The search reads the NES's RAM and sprite table, so an arcade game
-//! is refused in words.
+//! now. The search over a package reads the NES's RAM and sprite table, so
+//! an arcade game is refused in words; the blind search (`--blind`, and
+//! `gp model blind`) plays an arcade romset too, on gp-arcade (machine.rs).
 
 pub(crate) mod blind;
+pub(crate) mod machine;
 mod support;
 pub(crate) mod topdown;
 

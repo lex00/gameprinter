@@ -38,6 +38,7 @@
 //! |---|---|---|
 //! | `mcr-tiles` | `gfx1` | Background tiles, 8 by 8, 4 bits a pixel. The board draws each pixel twice in both directions, as 16 by 16 |
 //! | `mcr-sprites` | `gfx2` | Sprites, 32 by 32, 4 bits a pixel |
+//! | `sprite-set` | none | Sprite frames as layouts of the `mcr-sprites` pictures (crate::sprite_set): `gp sprites capture` writes it from recordings, so it names no region and lifts nothing, as in an NES map |
 //!
 //! Each asset lifts to one indexed PNG, its tiles or sprites left to right,
 //! `per_row` to a row, each pixel its 4-bit value (0 to 15) with gray
@@ -82,6 +83,9 @@ pub enum Format {
     McrTiles,
     #[serde(rename = "mcr-sprites")]
     McrSprites,
+    /// Written by `gp sprites capture`, not lifted.
+    #[serde(rename = "sprite-set")]
+    SpriteSet,
 }
 
 impl Format {
@@ -89,15 +93,23 @@ impl Format {
         match self {
             Self::McrTiles => "mcr-tiles",
             Self::McrSprites => "mcr-sprites",
+            Self::SpriteSet => "sprite-set",
         }
     }
 
-    /// The region it reads and the size of one of its pictures.
+    /// The region it reads and the size of one of its pictures (none for
+    /// a sprite-set).
     fn region(self) -> (&'static str, u32) {
         match self {
             Self::McrTiles => ("gfx1", 8),
             Self::McrSprites => ("gfx2", 32),
+            Self::SpriteSet => ("", 0),
         }
+    }
+
+    /// Whether the lift writes pictures for it.
+    pub fn lifted(self) -> bool {
+        self != Self::SpriteSet
     }
 }
 
@@ -106,12 +118,17 @@ impl Format {
 pub struct ArcadeAsset {
     pub name: String,
     pub format: Format,
-    /// `gfx1` or `gfx2`, as the format needs.
+    /// `gfx1` or `gfx2`, as the format needs (none for a sprite-set).
+    #[serde(default)]
     pub region: String,
     /// The first tile or sprite, by its index in the region.
     #[serde(default)]
     pub first: u32,
+    #[serde(default)]
     pub count: u32,
+    /// What writes a sprite-set, for people: `gp sprites capture`.
+    #[serde(default)]
+    pub written_by: Option<String>,
     #[serde(default = "default_per_row")]
     pub per_row: u32,
     /// What some of them show, by index in the region, for people.
@@ -125,7 +142,11 @@ fn default_per_row() -> u32 {
 
 impl ArcadeAsset {
     pub fn file(&self) -> String {
-        format!("{}.png", self.name)
+        if self.format == Format::SpriteSet {
+            format!("{}.toml", self.name)
+        } else {
+            format!("{}.png", self.name)
+        }
     }
 
     /// The PNG's size.
@@ -175,6 +196,15 @@ impl ArcadeMap {
                 return Err(Error::Map(format!("asset name {:?} is used twice", a.name)));
             }
             let (region, _) = a.format.region();
+            if a.format == Format::SpriteSet {
+                if !a.region.is_empty() || a.count != 0 {
+                    return Err(Error::Map(format!(
+                        "{}: a sprite-set names no region or count; gp sprites capture writes it",
+                        a.name
+                    )));
+                }
+                continue;
+            }
             if a.region != region {
                 return Err(Error::Map(format!(
                     "{}: {} reads region {region}, not {}",
@@ -221,6 +251,7 @@ impl Decoded {
         match f {
             Format::McrTiles => self.tiles.get(i).map(|t| &t[..]),
             Format::McrSprites => self.sprites.get(i).map(|t| &t[..]),
+            Format::SpriteSet => None,
         }
     }
 
@@ -228,6 +259,7 @@ impl Decoded {
         match f {
             Format::McrTiles => self.tiles.get_mut(i).map(|t| &mut t[..]),
             Format::McrSprites => self.sprites.get_mut(i).map(|t| &mut t[..]),
+            Format::SpriteSet => None,
         }
     }
 }
@@ -299,7 +331,7 @@ pub fn lift(
         },
     ];
     let mut lifted = Vec::new();
-    for a in &map.assets {
+    for a in map.assets.iter().filter(|a| a.format.lifted()) {
         let (w, h) = a.image_size();
         let px = pixels(a, gfx)?;
         let png = write_png(w, h, &px);
@@ -325,7 +357,7 @@ pub fn unpack(
     map: &ArcadeMap,
     read: &dyn Fn(&str) -> std::io::Result<Vec<u8>>,
 ) -> Result<(), Error> {
-    for a in &map.assets {
+    for a in map.assets.iter().filter(|a| a.format.lifted()) {
         let file = a.file();
         let bytes = read(&file).map_err(|e| Error::File {
             file: file.clone(),
@@ -434,6 +466,26 @@ mod tests {
             assert!(back.tiles == d.tiles && back.sprites == d.sprites);
         }
         assert!(lift(&decoded("dkong", 0), &map, &text).is_err());
+    }
+
+    /// A sprite-set entry names no region and lifts nothing; one that
+    /// names a region is refused.
+    #[test]
+    fn a_sprite_set_entry_lifts_nothing() {
+        let text = format!(
+            "{}\n[[asset]]\nname = \"sprite_set\"\nformat = \"sprite-set\"\nwritten_by = \"gp sprites capture\"\n",
+            mcr_91490_map("tapper", "Tapper", &SETS)
+        );
+        let map = ArcadeMap::parse(&text).unwrap();
+        assert_eq!(map.assets[2].file(), "sprite_set.toml");
+        let (files, lifted) = lift(&decoded("tapper", 0), &map, &text).unwrap();
+        assert_eq!(lifted.len(), 2);
+        assert!(!files.iter().any(|f| f.name.starts_with("sprite_set")));
+        let bad = text.replace(
+            "format = \"sprite-set\"",
+            "format = \"sprite-set\"\nregion = \"gfx2\"",
+        );
+        assert!(ArcadeMap::parse(&bad).is_err());
     }
 
     #[test]

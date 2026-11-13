@@ -1,6 +1,6 @@
 # Capturing presentation
 
-Brought from game-printer's docs/capture.md (port wave 4) for `gp sprites capture` and `gp sound capture`; gameprinter's docs/capture.md is the dense and carry clips. What it says of `gp sprites export`, `gp sound decode` and the Bevy generator is game-printer's: those aren't in gameprinter. Both captures read the NES's sprite table, CHR banks, palette and APU, so an arcade game is refused in words until gp-arcade gives its sprite RAM and sound chip's log (wave 6). Links to pages gameprinter doesn't carry yet name game-printer's docs.
+Brought from game-printer's docs/capture.md (port wave 4) for `gp sprites capture` and `gp sound capture`; gameprinter's docs/capture.md is the dense and carry clips. What it says of `gp sprites export`, `gp sound decode` and the Bevy generator is game-printer's: those aren't in gameprinter. `gp sound capture` reads the NES's APU. `gp sprites capture` reads an arcade game too (port wave T): see "An arcade game" below. Links to pages gameprinter doesn't carry yet name game-printer's docs.
 
 A model's presentation is everything a runtime draws ([the model](model.md#presentation)). For each part of it, this page says how capture finds the part for any NES game. It also says what is still written by hand and what would make it automatic. Super Mario Bros. is the worked example; nothing here is particular to it.
 
@@ -56,6 +56,26 @@ Sprites take the second half of their level's set, so the underground's enemies 
 ## Sprites
 
 `gp sprites capture <template> --recording ID...` captures every sprite frame of every entity, by default for any game ([sprites.toml](formats/sprites.md), [the sprite set](formats/sprite-set.md)). It is `crates/gp-sprites`, and nothing in it names a game.
+
+### An arcade game
+
+On a package for Midway's MCR board (Tapper), capture reads each frame of an arcade recording through gp-arcade's sprite list: each sprite's place in the game's units (the screen is 256 by 240 of them), its picture's number in the graphics region `gfx2`, its colour bank and flips. The picture is found by its number among the arcade lift's `mcr-sprites` (32 by 32 pixels, 16 by 16 in the game's units), so a set frame's piece is a whole sprite, and a frame such as Tapper's bartender is several of them. Colour banks 0 to 3 are palettes 4 to 7. A position the state mapping reads is taken in the sprite RAM's own units, as the game's object slots hold them, and placed where the board would draw a sprite with those bytes, `(x - 3, 241 - y)`. The board draws a frame's sprites from that frame's sprite RAM, so `oam_lag` doesn't apply.
+
+The arcade asset map names the set with a `sprite-set` entry and no region, as an NES map does; its pictures are already named `sprites` there, so the set needs another name, given in `sprites.toml` as `asset` and `slot`:
+
+```toml
+# assets/tapper.toml
+[[asset]]
+name = "sprite_set"
+format = "sprite-set"
+
+# sprites.toml
+schema = 1
+asset = "sprite_set"
+slot = "sprite_set"
+```
+
+The board's colours are in its palette RAM, not NES colour numbers, so no palettes are captured. A picture numbered past the lift's sprites (the board wraps those) counts as a sprite with no lifted tile. `--apply` is refused: no model slot takes an arcade lift's pictures yet, so the model is only proposed.
 
 | Part | How it's found for any game |
 |---|---|

@@ -4,6 +4,11 @@
 //! by its place in the CHR data, a CHR RAM tile by its pixels, so a game
 //! that copies tiles from PRG (Mega Man 2) is found as well as one that
 //! switches CHR banks (Super Mario Bros. 2).
+//!
+//! An arcade lift (gp_assets::arcade) holds whole pictures instead: Midway
+//! MCR's `mcr-sprites`, 32 by 32 pixels, one value 0 to 15 each. Its
+//! sprites are found by their number in the graphics region, as the board's
+//! sprite RAM names them ([`TileBank::load_arcade`], [`TileBank::sprite_at`]).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -12,8 +17,9 @@ use gp_assets::map::{Asset, AssetMap, Region};
 use gp_model::Model;
 use gp_model::model::AssetKind;
 
-/// One tile's pixels, 0 to 3, row by row.
-pub type Pixels = [u8; 64];
+/// One tile's pixels, row by row: 8 by 8, 0 to 3, for an NES tile; 32 by
+/// 32, 0 to 15, for an arcade sprite.
+pub type Pixels = Vec<u8>;
 
 /// A lifted tiles asset.
 pub struct TileAsset {
@@ -21,7 +27,11 @@ pub struct TileAsset {
     /// The model's tiles slot filled from it, if it has one.
     pub slot: Option<String>,
     pub region: Region,
+    /// The CHR or PRG byte of its first tile; for an arcade asset, the
+    /// number of its first picture in the graphics region.
     pub offset: u32,
+    /// A tile's side in pixels: 8 for an NES tile, 32 for an MCR sprite.
+    pub side: u32,
     pub tiles: Vec<Pixels>,
 }
 
@@ -37,7 +47,7 @@ pub type TileRef = (usize, u32);
 
 /// Pixels from a tile's 16 bytes of bit planes.
 pub fn pixels(bytes: &[u8]) -> Pixels {
-    let mut px = [0u8; 64];
+    let mut px = vec![0u8; 64];
     for y in 0..8 {
         let (p0, p1) = (bytes[y], bytes[y + 8]);
         for x in 0..8 {
@@ -75,7 +85,7 @@ impl TileBank {
             let mut out = Vec::with_capacity(*tiles as usize);
             for t in 0..*tiles {
                 let (tx, ty) = ((t % tiles_per_row) * 8, (t / tiles_per_row) * 8);
-                let mut p = [0u8; 64];
+                let mut p = vec![0u8; 64];
                 for y in 0..8 {
                     for x in 0..8 {
                         p[(y * 8 + x) as usize] = px[((ty + y) * size.0 + tx + x) as usize];
@@ -95,11 +105,74 @@ impl TileBank {
                 slot,
                 region: *region,
                 offset: *offset,
+                side: 8,
                 tiles: out,
             });
         }
         bank.index();
         Ok(bank)
+    }
+
+    /// Reads the sprite pictures of an arcade lift: each `mcr-sprites`
+    /// asset's PNG, 32 by 32 pixels a sprite, `per_row` to a row. Its
+    /// background tiles aren't sprites and aren't read.
+    pub fn load_arcade(
+        dir: &Path,
+        map: &gp_assets::arcade::ArcadeMap,
+        model: &Model,
+    ) -> Result<Self, String> {
+        let mut bank = TileBank::default();
+        for a in &map.assets {
+            if a.format != gp_assets::arcade::Format::McrSprites {
+                continue;
+            }
+            let file = dir.join(a.file());
+            let Ok(png) = std::fs::read(&file) else {
+                continue;
+            };
+            let size = a.image_size();
+            let px = gp_assets::chr::read_png(&png, size)
+                .map_err(|e| format!("{}: {e}", file.display()))?;
+            let side = 32;
+            let tiles = (0..a.count)
+                .map(|k| {
+                    let (tx, ty) = ((k % a.per_row) * side, (k / a.per_row) * side);
+                    let mut p = vec![0u8; (side * side) as usize];
+                    for y in 0..side {
+                        for x in 0..side {
+                            p[(y * side + x) as usize] = px[((ty + y) * size.0 + tx + x) as usize];
+                        }
+                    }
+                    p
+                })
+                .collect();
+            let slot = model
+                .assets
+                .iter()
+                .find(|(_, s)| {
+                    s.kind == AssetKind::Tiles && s.from.as_ref().is_some_and(|f| f.asset == a.name)
+                })
+                .map(|(n, _)| n.clone());
+            bank.assets.push(TileAsset {
+                name: a.name.clone(),
+                slot,
+                region: Region::Chr,
+                offset: a.first,
+                side,
+                tiles,
+            });
+        }
+        bank.index();
+        Ok(bank)
+    }
+
+    /// The arcade sprite numbered `code` in the graphics region, from the
+    /// lifted asset that holds it.
+    pub fn sprite_at(&self, code: u32) -> Option<TileRef> {
+        self.assets.iter().enumerate().find_map(|(i, a)| {
+            (a.side == 32 && code >= a.offset && code < a.offset + a.tiles.len() as u32)
+                .then(|| (i, code - a.offset))
+        })
     }
 
     /// A bank from tiles in memory, for tests.
@@ -117,7 +190,7 @@ impl TileBank {
         order.sort_by_key(|&i| self.assets[i].slot.is_none());
         for i in order {
             for (t, px) in self.assets[i].tiles.iter().enumerate() {
-                self.by_pixels.entry(*px).or_insert((i, t as u32));
+                self.by_pixels.entry(px.clone()).or_insert((i, t as u32));
             }
         }
     }
@@ -126,14 +199,18 @@ impl TileBank {
         &self.assets[t.0].tiles[t.1 as usize]
     }
 
+    /// Whether the tile draws nothing: all 0, or for an MCR sprite every
+    /// pixel's low three bits 0 (the board draws none of those).
     pub fn is_blank(&self, t: TileRef) -> bool {
-        self.pixels(t).iter().all(|&p| p == 0)
+        let mask = if self.assets[t.0].side == 32 { 7 } else { 0xff };
+        self.pixels(t).iter().all(|&p| p & mask == 0)
     }
 
     /// The tile at CHR byte `offset`, from an asset of the CHR region.
     pub fn at_chr(&self, offset: u32) -> Option<TileRef> {
         self.assets.iter().enumerate().find_map(|(i, a)| {
             (a.region == Region::Chr
+                && a.side == 8
                 && offset >= a.offset
                 && offset < a.offset + a.tiles.len() as u32 * 16
                 && (offset - a.offset).is_multiple_of(16))
@@ -221,19 +298,20 @@ mod tests {
             slot: None,
             region,
             offset,
+            side: 8,
             tiles,
         }
     }
 
     #[test]
     fn chr_rom_tiles_by_bank_and_chr_ram_tiles_by_pixels() {
-        let mut a = [0u8; 64];
+        let mut a = vec![0u8; 64];
         a[0] = 1;
-        let mut b = [0u8; 64];
+        let mut b = vec![0u8; 64];
         b[63] = 3;
         let bank = TileBank::from_assets(vec![
-            asset("low", Region::Chr, 0, vec![[0; 64]; 64]),
-            asset("high", Region::Chr, 0x400, vec![a, b]),
+            asset("low", Region::Chr, 0, vec![vec![0; 64]; 64]),
+            asset("high", Region::Chr, 0x400, vec![a, b.clone()]),
             asset("prg_copy", Region::Prg, 0x9000, vec![b]),
         ]);
         // No mapper: the address is the CHR offset.

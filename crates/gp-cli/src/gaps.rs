@@ -113,10 +113,13 @@ pub(crate) fn run(cmd: &GapsCmd, paths: &Paths) -> Result<Outcome> {
         GapsCmd::Drawn(a) => (a, [false, false, true]),
         GapsCmd::All(a) => (a, [true, true, true]),
     };
+    let opened = Opened::open(paths, &args.recording)?;
+    let arcade = opened.is_arcade();
     Template::check_platform(
         &Template::dir_of(args.dir.as_deref(), &args.template)?,
-        &Opened::open(paths, &args.recording)?,
+        &opened,
     )?;
+    drop(opened);
     let t = Template::open(args.dir.as_deref(), &args.template)?;
     let built = build(args, &t, paths)?;
     let out_dir = args
@@ -182,9 +185,18 @@ pub(crate) fn run(cmd: &GapsCmd, paths: &Paths) -> Result<Outcome> {
         catalog_r = Some(cat);
     }
     if which[2] {
-        match model_boxes(args, &t, &built.run.kinds, paths) {
+        let boxes = if arcade {
+            crate::gaps_arcade::model_boxes(args, &t, &built.run.kinds, paths)
+        } else {
+            model_boxes(args, &t, &built.run.kinds, paths)
+        };
+        match boxes {
             Ok(boxes) => {
-                let r = gp_gaps::drawn::check(&built.run, &boxes);
+                let r = if arcade {
+                    gp_gaps::drawn::check(&crate::gaps_arcade::on_screen(&built.run), &boxes)
+                } else {
+                    gp_gaps::drawn::check(&built.run, &boxes)
+                };
                 drawn_text(&mut text, &r, n);
                 let v = serde_json::to_value(&r)?;
                 save("drawn", &v)?;

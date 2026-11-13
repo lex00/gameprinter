@@ -14,8 +14,14 @@
 //!
 //! Ported from game-printer whole. Blind discovery and the Laya search are
 //! wave 7's (crate::farm::blind), and the jump rule's fit is
-//! crate::rule_refine::fit_traces. It plays gp-nes and reads the NES's RAM
-//! and sprite table, so an arcade romset is refused in words.
+//! crate::rule_refine::fit_traces.
+//!
+//! On an arcade romset (Wave T) discovery and every measure play gp-arcade
+//! through crate::farm::machine: the board's 2 KB of work RAM (E000 on),
+//! its sprite list as 16x16 boxes, and the buttons of the model's `arcade`
+//! device (the stick, and the one button as the action discovery tries for
+//! jump). The routine trace that orders the systems is the NES's
+//! (gp-events' 6502 observer) and is left out there, said so in the output.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -27,6 +33,7 @@ use gp_evidence::input_log::InputFrame;
 use serde_json::{Value, json};
 
 use crate::Outcome;
+use crate::farm::machine::Machine;
 
 /// A model fact the level gives: its path, value, the reason and whether
 /// the asset map alone gives it (false: the contacts decide).
@@ -57,14 +64,15 @@ pub struct BlindArgs {
 /// One frame of a measuring run: the player's bytes and the sprites.
 struct Seen {
     wram: Vec<u8>,
-    oam: [u8; 256],
+    /// Each sprite's box, unmerged ([`Machine::cells`]).
+    cells: Vec<[i64; 4]>,
     pad: u8,
 }
 
 /// A start the measures all begin from: the console at play start, the
 /// frames that led there, and what blind discovery learned.
 struct Start {
-    nes: gp_nes::Nes,
+    nes: Machine,
     snap: Vec<u8>,
     frame: u64,
     held: [u8; 4],
@@ -73,6 +81,9 @@ struct Start {
     jump: u8,
     run: u8,
     forward: u8,
+    /// Right's bit on the device: forward when it is.
+    right: u8,
+    back: u8,
     box_dy: i64,
 }
 
@@ -108,7 +119,7 @@ impl Start {
             })?;
             out.push(Seen {
                 wram: self.nes.wram()[..0x800].to_vec(),
-                oam: self.nes.oam(),
+                cells: self.nes.cells(),
                 pad,
             });
         }
@@ -129,25 +140,12 @@ impl Start {
                 })?;
                 out.push(Seen {
                     wram: self.nes.wram()[..0x800].to_vec(),
-                    oam: self.nes.oam(),
+                    cells: self.nes.cells(),
                     pad,
                 });
             }
         }
         Ok(out)
-    }
-}
-
-fn button_name(bit: u8) -> &'static str {
-    match bit {
-        0x01 => "a",
-        0x02 => "b",
-        0x04 => "select",
-        0x08 => "start",
-        0x10 => "up",
-        0x20 => "down",
-        0x40 => "left",
-        _ => "right",
     }
 }
 
@@ -246,10 +244,11 @@ fn stops_on(
     x: usize,
     hi: Option<usize>,
     dir: u8,
+    right: u8,
     y: Option<usize>,
 ) -> Vec<(usize, i64)> {
     let pos = |s: &Seen| i64::from(s.wram[x]) + hi.map_or(0, |h| 256 * i64::from(s.wram[h]));
-    let sign = if dir == 0x80 { 1 } else { -1 };
+    let sign = if dir == right { 1 } else { -1 };
     let mut out = Vec::new();
     let mut i = 5;
     while i + 4 < seen.len() {
@@ -285,6 +284,7 @@ fn hitbox_of(
     y: usize,
     fwd: u8,
     back: u8,
+    right: u8,
     sz: [i64; 2],
     box_dy: i64,
 ) -> std::result::Result<([i64; 4], i64), String> {
@@ -298,8 +298,16 @@ fn hitbox_of(
                 heads.push(i64::from(r[i].wram[y]));
             }
         }
-        f.extend(stops_on(r, x, hi, fwd, Some(y)).into_iter().map(|s| s.1));
-        b.extend(stops_on(r, x, hi, back, Some(y)).into_iter().map(|s| s.1));
+        f.extend(
+            stops_on(r, x, hi, fwd, right, Some(y))
+                .into_iter()
+                .map(|s| s.1),
+        );
+        b.extend(
+            stops_on(r, x, hi, back, right, Some(y))
+                .into_iter()
+                .map(|s| s.1),
+        );
         // Standing: y still while x moves (walking on the ground, not a
         // jump's top or a frozen death).
         for w in r.windows(8) {
@@ -359,7 +367,7 @@ fn hitbox_of(
     // Moving right, the box's right edge (x + hx + w) meets a tile edge;
     // moving back, its left edge (x + hx) does: the other way round when
     // forward is left.
-    let (front, rear) = if fwd == 0x80 { (rf, rb) } else { (rb, rf) };
+    let (front, rear) = if fwd == right { (rf, rb) } else { (rb, rf) };
     let hx = (-rear).rem_euclid(t);
     let mut w = (-front).rem_euclid(t) - hx;
     while w <= 0 {
@@ -926,8 +934,7 @@ fn path_probes(
     pads: &[u8],
 ) -> Result<Vec<Vec<Seen>>> {
     let log = gp_evidence::input_log::InputLog::parse(text).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let mut nes = gp_nes::Nes::power_on(bytes, power_on)?;
-    nes.set_video(false);
+    let mut nes = Machine::power_on(bytes, power_on)?;
     let mut ys: Vec<u8> = Vec::new();
     let mut starts = Vec::new();
     for (i, f) in log.frames.iter().enumerate() {
@@ -951,7 +958,7 @@ fn path_probes(
                 })?;
                 v.push(Seen {
                     wram: nes.wram()[..0x800].to_vec(),
-                    oam: nes.oam(),
+                    cells: nes.cells(),
                     pad,
                 });
             }
@@ -1152,12 +1159,7 @@ fn jump_of(seen: &[Seen], y: usize) -> Option<(f64, f64, Option<i64>, usize, usi
 /// The box the sprites at the player's place make: its width and height.
 fn size_of(s: &Seen, y: usize, box_dy: i64) -> Option<[i64; 2]> {
     let top = i64::from(s.wram[y]) + box_dy;
-    let mut cells: Vec<[i64; 4]> = s
-        .oam
-        .chunks(4)
-        .filter(|e| e[0] < 0xEF)
-        .map(|e| [i64::from(e[3]), i64::from(e[0]) + 1, 8, 8])
-        .collect();
+    let mut cells: Vec<[i64; 4]> = s.cells.clone();
     // Merge touching cells, then keep the box whose top is the player's.
     loop {
         let mut merged = false;
@@ -1195,15 +1197,10 @@ fn size_of(s: &Seen, y: usize, box_dy: i64) -> Option<[i64; 2]> {
 
 pub fn run(a: &BlindArgs, paths: &Paths) -> Result<Outcome> {
     let bytes = fs::read(&a.rom).with_context(|| format!("no ROM at {}", a.rom.display()))?;
-    // Blind discovery and every measure here play gp-nes and read the NES's
-    // RAM and sprite table; an arcade board's counterparts aren't wired yet.
-    crate::original::nes_only(
-        crate::original::Platform::of_file(&bytes),
-        "gp model blind (discovery plays gp-nes and reads its RAM and sprite table)",
-    )?;
-    let img = gp_evidence::source::identify_nes(&bytes)?;
-    let rom_ref = format!("rom:{}", &img.sha256[..12]);
+    let sha256 = crate::farm::machine::rom_sha256(&bytes)?;
+    let rom_ref = format!("rom:{}", &sha256[..12]);
     let d = crate::farm::blind::discover(&bytes, paths)?;
+    let arcade = d.nes.is_arcade();
     let snap = d.nes.snapshot()?;
     let mut st = Start {
         frame: d.nes.frame(),
@@ -1214,9 +1211,12 @@ pub fn run(a: &BlindArgs, paths: &Paths) -> Result<Outcome> {
         y: usize::from(d.y),
         jump: d.jump,
         run: d.run,
-        forward: if d.right { 0x80 } else { 0x40 },
+        forward: if d.right { d.pads.right } else { d.pads.left },
+        right: d.pads.right,
+        back: if d.right { d.pads.left } else { d.pads.right },
         box_dy: d.box_dy,
     };
+    let pads = d.pads.clone();
     let at = d.log.len();
     let start_x = i64::from(st.nes.wram()[st.x]);
     let start_y = i64::from(st.nes.wram()[st.y]);
@@ -1238,22 +1238,32 @@ pub fn run(a: &BlindArgs, paths: &Paths) -> Result<Outcome> {
     };
     facts.push((
         "input.device".into(),
-        json!("nes-pad"),
-        note("the game reads a standard pad", 0, 0),
+        json!(if arcade { "arcade" } else { "nes-pad" }),
+        note(
+            if arcade {
+                "the board's controls: coin, start, a stick and a button"
+            } else {
+                "the game reads a standard pad"
+            },
+            0,
+            0,
+        ),
         PROBE,
     ));
     facts.push((
         "input.actions.jump".into(),
-        json!(button_name(st.jump)),
+        json!(pads.name(st.jump)),
         note("this button lifts the player", 0, 0),
         PROBE,
     ));
-    facts.push((
-        "input.actions.run".into(),
-        json!(button_name(st.run)),
-        note("this button speeds the player up", 0, 0),
-        PROBE,
-    ));
+    if st.run != 0 {
+        facts.push((
+            "input.actions.run".into(),
+            json!(pads.name(st.run)),
+            note("this button speeds the player up", 0, 0),
+            PROBE,
+        ));
+    }
     facts.push((
         "input.actions.right".into(),
         json!("right"),
@@ -1326,7 +1336,7 @@ pub fn run(a: &BlindArgs, paths: &Paths) -> Result<Outcome> {
 
     let walk = st.play(&[(st.forward, 120)])?;
     if std::env::var_os("GP_TRACE_BLIND").is_some() {
-        let left = st.play(&[(if st.forward == 0x80 { 0x40 } else { 0x80 }, 120)])?;
+        let left = st.play(&[(st.back, 120)])?;
         let ls2: Vec<String> = left.iter().map(|s| s.wram[st.x].to_string()).collect();
         eprintln!("left x: {}", ls2.join(" "));
         let xs: Vec<String> = walk.iter().map(|s| s.wram[st.x].to_string()).collect();
@@ -1488,12 +1498,17 @@ pub fn run(a: &BlindArgs, paths: &Paths) -> Result<Outcome> {
                 }
             }
         }
-        let runs: Vec<Traced> = texts
-            .iter()
-            .filter_map(|t| trace_run(&bytes, power_on, t).ok())
-            .collect();
-        systems_trace = system_trace(&runs, at, &player);
-        systems_trace["runs"] = json!(runs.len());
+        if arcade {
+            // The routine trace reads the 6502's code through gp-events.
+            systems_trace = json!({"open": "the routine trace is the NES's (gp-events' 6502 observer); the board's access log isn't wired into it, so the system order is docs/model.md's"});
+        } else {
+            let runs: Vec<Traced> = texts
+                .iter()
+                .filter_map(|t| trace_run(&bytes, power_on, t).ok())
+                .collect();
+            systems_trace = system_trace(&runs, at, &player);
+            systems_trace["runs"] = json!(runs.len());
+        }
     }
     let mut contacts_left: Vec<Vec<Seen>> = Vec::new();
     let mut hitbox_open: Option<String> = None;
@@ -1512,7 +1527,7 @@ pub fn run(a: &BlindArgs, paths: &Paths) -> Result<Outcome> {
         if !path_seen.is_empty() {
             contacts.push(&path_seen);
         }
-        let back = if st.forward == 0x80 { 0x40 } else { 0x80 };
+        let back = st.back;
         // More contacts: from places along the Laya path where the player
         // stands, walk back, walk forward and jump straight up.
         if !path_text.is_empty() {
@@ -1534,7 +1549,9 @@ pub fn run(a: &BlindArgs, paths: &Paths) -> Result<Outcome> {
         for p in &contacts_left {
             contacts.push(p);
         }
-        match hitbox_of(&contacts, st.x, hi, st.y, st.forward, back, sz, st.box_dy) {
+        match hitbox_of(
+            &contacts, st.x, hi, st.y, st.forward, back, st.right, sz, st.box_dy,
+        ) {
             Ok((hb, grid_t)) => {
                 hitbox = Some((hb, grid_t));
                 facts.push((
@@ -1792,14 +1809,13 @@ pub fn run(a: &BlindArgs, paths: &Paths) -> Result<Outcome> {
 /// Plays an input log from power-on and keeps every frame.
 fn replay(bytes: &[u8], power_on: gp_evidence::manifest::PowerOn, text: &str) -> Result<Vec<Seen>> {
     let log = gp_evidence::input_log::InputLog::parse(text).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let mut nes = gp_nes::Nes::power_on(bytes, power_on)?;
-    nes.set_video(false);
+    let mut nes = Machine::power_on(bytes, power_on)?;
     let mut out = Vec::with_capacity(log.frames.len());
     for f in &log.frames {
         nes.step(*f)?;
         out.push(Seen {
             wram: nes.wram()[..0x800].to_vec(),
-            oam: nes.oam(),
+            cells: nes.cells(),
             pad: f.pads[0],
         });
     }
