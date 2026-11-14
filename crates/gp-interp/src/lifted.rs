@@ -29,6 +29,49 @@ pub struct Lifted {
     pub files: BTreeMap<String, String>,
 }
 
+/// The asset map of a lifted folder's `assets.toml` text, NES or arcade,
+/// as the simulation and the presentation read it. An arcade lift
+/// (gp_assets::arcade) reads as a map of its `byte-rows` tables alone:
+/// its `mcr-tiles` and `mcr-sprites` pictures and its `sprite-set` are
+/// none of an NES map's formats, and no model slot draws from them yet.
+pub fn map_of(text: &str) -> Result<AssetMap, String> {
+    if gp_assets::arcade::is_arcade(text) {
+        // An arcade lift holds nothing the simulation reads: to it, a
+        // map with no assets.
+        let a = gp_assets::arcade::ArcadeMap::parse(text).map_err(|e| e.to_string())?;
+        // Its `byte-rows` tables read as the NES map's: the same file
+        // of rows, so slots and `ext_rows` take either.
+        let assets = a
+            .assets
+            .iter()
+            .filter(|x| x.format == gp_assets::arcade::Format::ByteRows)
+            .map(|x| {
+                Asset::ByteRows(gp_assets::rows::ByteRows {
+                    name: x.name.clone(),
+                    label: None,
+                    end_label: None,
+                    region: gp_assets::map::Region::Prg,
+                    offset: x.offset,
+                    count: x.count,
+                    width: x.width,
+                    names: Vec::new(),
+                    charset: None,
+                })
+            })
+            .collect();
+        return Ok(AssetMap {
+            schema: a.schema,
+            source: a.source,
+            title: a.title,
+            sha256: String::new(),
+            assets,
+            content: Vec::new(),
+            code: None,
+        });
+    }
+    AssetMap::parse(text).map_err(|e| e.to_string())
+}
+
 impl Lifted {
     /// Reads, from a lifted directory, the asset map and the files of the
     /// assets the model's slots name that the simulation reads.
@@ -69,42 +112,7 @@ impl Lifted {
             .files
             .get(MAP_FILE)
             .ok_or(format!("the lifted assets have no {MAP_FILE}"))?;
-        if gp_assets::arcade::is_arcade(text) {
-            // An arcade lift holds nothing the simulation reads: to it, a
-            // map with no assets.
-            let a = gp_assets::arcade::ArcadeMap::parse(text)
-                .map_err(|e| format!("{MAP_FILE}: {e}"))?;
-            // Its `byte-rows` tables read as the NES map's: the same file
-            // of rows, so slots and `ext_rows` take either.
-            let assets = a
-                .assets
-                .iter()
-                .filter(|x| x.format == gp_assets::arcade::Format::ByteRows)
-                .map(|x| {
-                    Asset::ByteRows(gp_assets::rows::ByteRows {
-                        name: x.name.clone(),
-                        label: None,
-                        end_label: None,
-                        region: gp_assets::map::Region::Prg,
-                        offset: x.offset,
-                        count: x.count,
-                        width: x.width,
-                        names: Vec::new(),
-                        charset: None,
-                    })
-                })
-                .collect();
-            return Ok(AssetMap {
-                schema: a.schema,
-                source: a.source,
-                title: a.title,
-                sha256: String::new(),
-                assets,
-                content: Vec::new(),
-                code: None,
-            });
-        }
-        AssetMap::parse(text).map_err(|e| format!("{MAP_FILE}: {e}"))
+        map_of(text).map_err(|e| format!("{MAP_FILE}: {e}"))
     }
 
     /// The bytes each span of `asset` packs to, by part name (`level`,

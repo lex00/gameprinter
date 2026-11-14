@@ -659,7 +659,8 @@ pub fn art_themed(model: &Model, spec: &Spec, dir: &Path, theme: &Resolved) -> R
     let map_file = dir.join("assets.toml");
     let text =
         std::fs::read_to_string(&map_file).map_err(|e| format!("{}: {e}", map_file.display()))?;
-    let map = AssetMap::parse(&text).map_err(|e| format!("{}: {e}", map_file.display()))?;
+    let map =
+        gp_interp::lifted::map_of(&text).map_err(|e| format!("{}: {e}", map_file.display()))?;
     let simulation = gp_interp::lifted::simulation_slots(model);
     let mut tiles_from = BTreeMap::new();
     let mut tiles_from_slot = BTreeMap::new();
@@ -2793,7 +2794,8 @@ pub fn layout_cells(
     let map_file = dir.join("assets.toml");
     let text =
         std::fs::read_to_string(&map_file).map_err(|e| format!("{}: {e}", map_file.display()))?;
-    let map = AssetMap::parse(&text).map_err(|e| format!("{}: {e}", map_file.display()))?;
+    let map =
+        gp_interp::lifted::map_of(&text).map_err(|e| format!("{}: {e}", map_file.display()))?;
     let files = Files {
         dir,
         map,
@@ -2865,6 +2867,84 @@ mod tests {
         // Drawn without the flip, columns 8 to 11 are a hole.
         let unflipped = draw(false);
         assert!(!unflipped[8..12].iter().any(|&o| o), "{unflipped:?}");
+    }
+
+    /// An arcade game's lifted folder, as `gp assets lift` writes it for
+    /// Tapper: its map names `mcr-tiles` and `mcr-sprites` pictures, which
+    /// an NES map hasn't got, beside a `byte-rows` table the model's slot
+    /// reads. The model's pictures are drawn from it (by tile kind, as it
+    /// names no picture slot) instead of the map being refused, so the
+    /// screen measure and the mechanic page's pictures run on it.
+    #[test]
+    fn an_arcade_lift_draws() {
+        let model = Model::parse(
+            r#"
+[model]
+schema = "0.4"
+name = "cab"
+title = "Cab"
+source = "cab"
+view = "side"
+frame_rate = "30"
+systems = ["rules", "entity_states", "counters", "spawn", "platformer.player", "platformer.enemies", "platformer.contact", "exits", "camera"]
+
+[model.extensions]
+platformer = "0.4"
+
+[input]
+device = "arcade"
+
+[input.actions]
+left = "left"
+right = "right"
+
+[assets.steps]
+kind = "rows"
+role = "behavior"
+
+[assets.steps.from]
+source = "cab"
+asset = "steps"
+
+[entities.player]
+role = "player"
+size = [16, 16]
+
+[entities.player.hitbox]
+x = 0
+y = 0
+w = 16
+h = 16
+
+[levels.main]
+empty = true
+size = [32, 30]
+tile_size = 16
+
+[[levels.main.spawn]]
+entity = "player"
+x = 0
+y = 0
+
+[present.screen]
+size = [512, 480]
+"#,
+        )
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("assets.toml"),
+            "schema = 1\nplatform = \"arcade\"\nsource = \"cab\"\nsets = [\"cab\"]\n\n\
+             [[asset]]\nname = \"tiles\"\nformat = \"mcr-tiles\"\nregion = \"gfx1\"\nfirst = 0\ncount = 4\nper_row = 4\n\n\
+             [[asset]]\nname = \"sprites\"\nformat = \"mcr-sprites\"\nregion = \"gfx2\"\nfirst = 0\ncount = 4\nper_row = 4\n\n\
+             [[asset]]\nname = \"steps\"\nformat = \"byte-rows\"\nregion = \"maincpu\"\noffset = 0x100\ncount = 2\nwidth = 1\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("steps.toml"), "rows = [[0x05], [0xFC]]\n").unwrap();
+        let lifted = gp_interp::Lifted::read_dir(dir.path(), &model).unwrap();
+        let spec = gp_interp::compile::compile(&model, &lifted).unwrap();
+        let art = art(&model, &spec, dir.path()).unwrap();
+        assert_eq!(art.present.screen.size, [512, 480]);
     }
 
     #[test]
