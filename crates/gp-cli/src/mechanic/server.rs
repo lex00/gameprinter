@@ -367,6 +367,9 @@ fn restart(srv: &Server, bin: &Path, a: &Start) -> anyhow::Error {
     anyhow::Error::new(c.env(RESTARTED, "1").exec())
 }
 
+/// What the page says beside an arcade game's model on review.
+const ARCADE_ART: &str = "For now an arcade game's model is drawn by tile kind, as blocks of color where the original shows the game's art.";
+
 /// The page's server for a game, ready to answer at `port` (its own, or
 /// `gp serve`'s, which mounts it at /mechanic/GAME/), with the mechanic
 /// `a` asks for open: its session made when new.
@@ -681,20 +684,38 @@ impl Server {
         Ok(s)
     }
 
-    /// What the rebuild needs, or the words for why there is none.
-    fn rebuild(&self) -> std::result::Result<&super::review::Rebuild, Response> {
+    /// What the rebuild played live needs, or the words for why there is
+    /// none: its interpreter preview is the NES build's, so an arcade game
+    /// has none yet (issue #3).
+    fn live(&self) -> std::result::Result<&super::review::Rebuild, Response> {
         if self.platform == Platform::Arcade {
             return Err(Response::error(
                 409,
-                "an arcade game's model draws nothing yet (no model slot takes an arcade board's pictures), so there is nothing to play here",
+                "an arcade game's model draws nothing yet in the browser (its interpreter preview is the NES build's), so there is nothing to play here",
             ));
         }
+        self.rebuild()
+    }
+
+    /// What a clip's review on the model needs, or the words for why there
+    /// is none.
+    fn rebuild(&self) -> std::result::Result<&super::review::Rebuild, Response> {
         self.rebuild.as_ref().ok_or_else(|| {
             Response::error(
                 404,
                 "no games checkout, so no model to play: start the page with --games",
             )
         })
+    }
+
+    /// A review on the model with, on an arcade game, the sentence the page
+    /// shows beside it (`art`): the model's side is drawn by tile kind, so
+    /// no one reads its blocks as the model's art gone wrong.
+    fn art_said(&self, mut v: Value) -> Value {
+        if self.platform == Platform::Arcade {
+            v["art"] = json!(ARCADE_ART);
+        }
+        v
     }
 
     /// A point-and-tell request (the person paused, boxed part of the
@@ -922,12 +943,6 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             if !session.dir.join(format!("clips/{n:03}.toml")).is_file() {
                 return Ok(Response::error(404, "no such clip"));
             }
-            if s.platform == Platform::Arcade {
-                return Ok(Response::error(
-                    409,
-                    "ON THE MODEL plays a clip on the game's model, and an arcade game's model draws nothing yet (no model slot takes an arcade board's pictures)",
-                ));
-            }
             let Some(r) = &s.rebuild else {
                 return Ok(Response::error(
                     404,
@@ -935,7 +950,7 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
                 ));
             };
             match super::review::review(&s.paths, r, &session.dir, n) {
-                Ok(v) => Ok(Response::json(&v)),
+                Ok(v) => Ok(Response::json(&s.art_said(v))),
                 Err(e) => Ok(Response::error(409, &format!("{e:#}"))),
             }
         }
@@ -1075,11 +1090,11 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
                 Err(r) => return Ok(r),
             };
             match super::review::review(&s.paths, rb, &session.dir, n) {
-                Ok(v) => Ok(Response::json(&super::review::as_rebuild(
+                Ok(v) => Ok(Response::json(&s.art_said(super::review::as_rebuild(
                     &v,
                     n,
                     session.mechanic(),
-                ))),
+                )))),
                 Err(e) => Ok(Response::error(409, &format!("{e:#}"))),
             }
         }
@@ -1153,19 +1168,19 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         // The rebuild played live: the interpreter preview of the game's
         // model, built on request into $GP_HOME/work/mechanic-preview/GAME/
         // and driven by the page.
-        ("GET" | "HEAD", "/api/rebuild/status") => match s.rebuild() {
+        ("GET" | "HEAD", "/api/rebuild/status") => match s.live() {
             Ok(rb) => Ok(Response::json(&super::live::status(
                 &s.paths, &s.repo, &s.game, rb,
             ))),
             Err(r) => Ok(r),
         },
-        ("GET" | "HEAD", "/api/rebuild/profiles") => match s.rebuild() {
+        ("GET" | "HEAD", "/api/rebuild/profiles") => match s.live() {
             Ok(rb) => Ok(Response::json(&super::live::profiles(
                 &s.paths, &s.game, rb,
             )?)),
             Err(r) => Ok(r),
         },
-        ("POST", "/api/rebuild/build") => match s.rebuild() {
+        ("POST", "/api/rebuild/build") => match s.live() {
             Ok(rb) => {
                 if let Err(e) = super::live::build(&s.paths, &s.repo, &s.game, rb, &s.rom) {
                     return Ok(Response::error(409, &format!("{e:#}")));
@@ -1176,7 +1191,7 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             }
             Err(r) => Ok(r),
         },
-        ("POST", "/api/rebuild/start") => match s.rebuild() {
+        ("POST", "/api/rebuild/start") => match s.live() {
             Ok(rb) => {
                 let v: Value = serde_json::from_slice(&req.body)?;
                 match super::live::start(
@@ -1750,9 +1765,11 @@ mod tests {
     }
 
     /// An arcade game's page: the player's absence names the arcade build,
-    /// and ON THE MODEL says in words why it can't play a clip yet.
+    /// and ON THE MODEL reviews a clip as on the NES (here, with no games
+    /// checkout, it says so), its review saying the model is drawn by tile
+    /// kind.
     #[test]
-    fn an_arcade_page_names_its_player_and_has_no_model_yet() {
+    fn an_arcade_page_names_its_player_and_reviews_on_the_model() {
         let d = tempfile::tempdir().unwrap();
         let mut srv = server(d.path());
         srv.platform = Platform::Arcade;
@@ -1769,9 +1786,14 @@ mod tests {
             "/api/clips",
             json!({"path": path, "start": 1, "inputs": inputs, "mechanic": "walk"}),
         );
-        let (s, body) = get(&srv, "/api/clips/1/review.json");
-        assert_eq!(s, 409, "{body}");
-        assert!(body.contains("draws nothing yet"), "{body}");
+        for route in ["/api/clips/1/review.json", "/api/clips/1.rebuild.json"] {
+            let (s, body) = get(&srv, route);
+            assert_eq!(s, 404, "{route}: {body}");
+            assert!(body.contains("--games"), "{route}: {body}");
+        }
+        assert_eq!(srv.art_said(json!({}))["art"], json!(ARCADE_ART));
+        srv.platform = Platform::Nes;
+        assert_eq!(srv.art_said(json!({})), json!({}));
         assert!(wasm_path(Path::new("/r"), Platform::Arcade).ends_with("gp_arcade_play.wasm"));
     }
 

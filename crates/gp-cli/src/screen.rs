@@ -28,6 +28,87 @@ pub(crate) struct Art {
     pub(crate) pics: Vec<Option<Image>>,
     /// Each HUD field's name: "the score".
     fields: Vec<String>,
+    /// On an arcade board, where its bodies go on the original's screen.
+    board: Option<Board>,
+}
+
+/// An arcade model's bodies placed on its board's screen. The model's
+/// positions are the game's own units, as the state mapping reads them
+/// from the game's object slots (sprite RAM's bytes; docs/formats/tracks.md,
+/// docs/capture-presentation.md), and the board draws a sprite with those
+/// bytes at `gp_arcade::video::sprite_place`, each unit [`gp_arcade::video::UNIT`]
+/// screen pixels. So a body goes where the board would draw a sprite with
+/// its position as its bytes, its picture scaled by the unit. The NES has
+/// none of this: its model's units are the screen's pixels.
+struct Board {
+    /// Each body picture's copy scaled by the unit, as an index into
+    /// `Art::pics`, by the picture's own index (None for a picture no body
+    /// frame draws).
+    scaled: Vec<Option<u32>>,
+}
+
+impl Board {
+    /// The board's placement for an arcade lift (`assets` holding one),
+    /// with each body frame's picture in `pics` scaled by the unit, its
+    /// copy put at the end of `pics`; None for an NES lift.
+    fn of(assets: &Path, present: &Present, pics: &mut Vec<Option<Image>>) -> Option<Self> {
+        let map = std::fs::read_to_string(assets.join(gp_interp::lifted::MAP_FILE)).ok()?;
+        if !gp_assets::arcade::is_arcade(&map) {
+            return None;
+        }
+        let unit = gp_arcade::video::UNIT as u32;
+        let mut scaled = vec![None; pics.len()];
+        for &pic in present.frames.iter().flatten() {
+            let i = pic as usize;
+            let Some(Some(img)) = pics.get(i) else {
+                continue;
+            };
+            if scaled[i].is_some() {
+                continue;
+            }
+            let (w, h) = (img.w * unit, img.h * unit);
+            let px = (0..h)
+                .flat_map(|y| (0..w).map(move |x| (x / unit, y / unit)))
+                .map(|(x, y)| img.px[(y * img.w + x) as usize])
+                .collect();
+            scaled[i] = Some(pics.len() as u32);
+            pics.push(Some(Image { w, h, px }));
+        }
+        Some(Self { scaled })
+    }
+
+    /// The scene's bodies moved onto the board's screen: each where the
+    /// board draws a sprite with its body's position as its bytes (a draw
+    /// with no body, a copy or an effect, by its own place), keeping the
+    /// picture's offset from the position, all scaled by the unit, with
+    /// the picture's scaled copy. The board doesn't scroll, so the camera
+    /// doesn't move them.
+    fn place(&self, scene: &mut gp_present::Scene, w: &gp_sim::World) {
+        use gp_arcade::video::{UNIT, sprite_place};
+        let unit = i64::from(UNIT);
+        let [cx, cy] = scene.camera;
+        for (i, d) in scene.bodies.iter_mut().enumerate() {
+            let Some(d) = d else { continue };
+            let (bx, by) = w
+                .bodies
+                .get(i)
+                .map_or((d.x, d.y), |b| (b.x.floor(), b.y.floor()));
+            let (px, py) = sprite_place(bx as i32, by as i32);
+            d.x = (i64::from(px) + d.x - bx) * unit + cx;
+            d.y = (i64::from(py) + d.y - by) * unit + cy;
+            if let Some(Some(p)) = self.scaled.get(d.pic as usize) {
+                d.pic = *p;
+            }
+        }
+        for c in scene.cut.iter_mut().flatten() {
+            *c = c.map(|v| v * unit);
+        }
+        for (k, dx, dy) in scene.split.iter_mut().flatten() {
+            *k = k.map(|v| v * unit);
+            *dx *= unit;
+            *dy *= unit;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -38,6 +119,7 @@ impl Art {
             present: Present::default(),
             pics: Vec::new(),
             fields: Vec::new(),
+            board: None,
         }
     }
 }
@@ -91,12 +173,13 @@ pub(crate) fn art(model: &gp_model::Model, spec: &gp_sim::Spec, assets: &Path) -
         .iter()
         .map(|p| (p.file.as_str(), p.png.as_slice()))
         .collect();
-    let pics = art
+    let mut pics = art
         .present
         .pictures
         .iter()
         .map(|p| by_file.get(p.file.as_str()).map(|b| decode(b)).transpose())
         .collect::<Result<Vec<_>>>()?;
+    let board = Board::of(assets, &art.present, &mut pics);
     let fields = art
         .present
         .hud
@@ -119,6 +202,7 @@ pub(crate) fn art(model: &gp_model::Model, spec: &gp_sim::Spec, assets: &Path) -
         present: art.present,
         pics,
         fields,
+        board,
     });
     *lock() = Some((key, a.clone()));
     Ok(a)
@@ -258,11 +342,15 @@ pub(crate) fn model_scene(art: &Art, anim: &Animator, m: &Model) -> gp_present::
     scene
 }
 
-/// The model's frame: its scene drawn with its pictures.
+/// The model's frame: its scene drawn with its pictures, on an arcade
+/// board placed as the board draws its sprites ([`Board`]).
 pub(crate) fn model_frame(art: &Art, anim: &Animator, m: &Model) -> Frame {
     let spec = m.spec();
     let w = m.world();
-    let scene = model_scene(art, anim, m);
+    let mut scene = model_scene(art, anim, m);
+    if let Some(b) = &art.board {
+        b.place(&mut scene, w);
+    }
     let names: Vec<String> = w
         .bodies
         .iter()
@@ -515,4 +603,59 @@ pub(crate) fn lines(
 ) -> Vec<String> {
     let sc = gp_interp::screen::score(s, frames, from);
     sc.says.iter().map(|l| format!("screen: {l}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An arcade model's body goes where the MCR board draws a sprite whose
+    /// bytes are its position, its picture doubled: a 16x16 box at x 53,
+    /// y 191 covers the 32x32 pixels from (100, 100), where gp-arcade's
+    /// own test draws a sprite with those bytes. An NES lift has no board.
+    #[test]
+    fn an_arcade_body_lands_where_the_board_draws_its_sprite() {
+        let dir = tempfile::tempdir().unwrap();
+        let map = dir.path().join(gp_interp::lifted::MAP_FILE);
+        let mut present = Present::default();
+        present.screen.size = [512, 480];
+        present.frames = vec![vec![0]];
+        let pics = vec![Some(Image {
+            w: 16,
+            h: 16,
+            px: vec![[200, 0, 0, 255]; 256],
+        })];
+        std::fs::write(&map, "schema = 1\nsource = \"cart\"\n").unwrap();
+        assert!(Board::of(dir.path(), &present, &mut pics.clone()).is_none());
+        std::fs::write(
+            &map,
+            gp_assets::arcade::mcr_91490_map("cab", "Cab", &["cab"]),
+        )
+        .unwrap();
+        let mut pics = pics;
+        let board = Board::of(dir.path(), &present, &mut pics).expect("an arcade lift");
+        assert_eq!(pics.len(), 2);
+        let mut w = gp_sim::World::default();
+        w.bodies.push(gp_sim::world::Body {
+            x: gp_sim::Fx::from_int(53),
+            y: gp_sim::Fx::from_int(191),
+            ..Default::default()
+        });
+        let mut scene = gp_present::Scene {
+            bodies: vec![Some(gp_present::Draw {
+                pic: 0,
+                x: 53,
+                y: 191,
+                flip_x: false,
+                flip_y: false,
+            })],
+            ..Default::default()
+        };
+        board.place(&mut scene, &w);
+        let f = raster::draw(&present, &w, &pics, &scene, &["hero".into()], &[]);
+        assert_eq!(f.things[0].rect, [100, 100, 32, 32]);
+        let at = |x: usize, y: usize| f.sprite[y * 512 + x];
+        assert!(at(100, 100) && at(131, 131));
+        assert!(!at(99, 100) && !at(100, 99) && !at(132, 131) && !at(131, 132));
+    }
 }

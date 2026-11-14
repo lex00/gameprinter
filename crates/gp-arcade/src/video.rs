@@ -153,6 +153,21 @@ pub fn color_9bit(data: u16) -> u32 {
 /// pixel: the screen measure's sprite mask.
 pub const SPRITE_BIT: u8 = 0x80;
 
+/// Screen pixels to one of the game's own units, each way: [`draw`] puts a
+/// sprite's 32x32 pixels where its RAM counts 16x16, so the 512x480 screen
+/// is 256x240 of the units the game's positions are in.
+pub const UNIT: i32 = 2;
+
+/// Where the board draws a sprite whose sprite RAM holds `x` (byte 3) and
+/// `y` (byte 0): its left and top in the game's units, `x - 3` and
+/// `241 - y` (y counts up the screen), which [`draw`] doubles by [`UNIT`].
+/// The sprite list's places are these. A position a state mapping reads
+/// from the game's object slots, which the video routine copies to sprite
+/// RAM, is placed with it too.
+pub fn sprite_place(x: i32, y: i32) -> (i32, i32) {
+    (x - 3, 241 - y)
+}
+
 /// screen_update_mcr for the 91490 board with the 91464 sprite board:
 /// each pixel's pen (0 to 63) into `pens`, with [`SPRITE_BIT`] set where
 /// a sprite drew it.
@@ -204,8 +219,8 @@ pub fn draw(gfx: &Gfx, videoram: &[u8], spriteram: &[u8], flip: bool, pens: &mut
         let color = ((!s[1] & 3) << 4) & 0x30;
         let mut hflip = if s[1] & 0x10 != 0 { 31 } else { 0 };
         let mut vflip = if s[1] & 0x20 != 0 { 31 } else { 0 };
-        let mut sx = (i32::from(s[3]) - 3) * 2;
-        let mut sy = (241 - i32::from(s[0])) * 2;
+        let (px, py) = sprite_place(i32::from(s[3]), i32::from(s[0]));
+        let (mut sx, mut sy) = (px * UNIT, py * UNIT);
         if flip {
             hflip ^= 31;
             vflip ^= 31;
@@ -269,12 +284,13 @@ pub fn sprite_list(spriteram: &[u8]) -> Vec<SpriteEntry> {
         .iter()
         .enumerate()
         .filter_map(|(i, s)| {
-            let x = i16::from(s[3]) - 3;
-            let y = 241 - i16::from(s[0]);
+            let (x, y) = sprite_place(i32::from(s[3]), i32::from(s[0]));
+            // A byte's place is within -3 to 252 and -14 to 241.
+            let (x, y) = (x as i16, y as i16);
             // draw's rows are (2 * y) & 0x1ff to 32 more, wrapping; it
             // shows a row from 2 to 479.
             let shown = (0..32).any(|r| {
-                let sy = ((i32::from(y) * 2) + r) & 0x1ff;
+                let sy = ((i32::from(y) * UNIT) + r) & 0x1ff;
                 (2..HEIGHT as i32).contains(&sy)
             });
             shown.then_some(SpriteEntry {

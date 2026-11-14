@@ -309,10 +309,11 @@ async function loadRebuildFrom(url, still) {
     rebuild = {
       id: url, frames, byF: new Map(frames.map((f) => [f.f, f.k])), visible: r.visible ?? null,
       note: r.note ?? [], draws: r.draws?.list ?? [], drawsDesync: r.draws?.desync ?? null,
-      same: r.together_count ?? 0,
+      same: r.together_count ?? 0, art: r.art ?? "",
     };
     if (mode === "refine") drawStrip();
-    line.set(`${base} ${mode === "refine" ? `${rebuild.same} of ${frames.length} frames the same. A plays and pauses, left and right step, up and down set the transparency, Select changes the layout.` : "Left and right: side by side, on top, the differences."}${mode === "refine" && rebuild.note.length ? " The model: " + rebuild.note.join("; ") + "." : ""}`.trim());
+    line.set(`${base} ${mode === "refine" ? `${rebuild.same} of ${frames.length} frames the same. A plays and pauses, left and right step, up and down set the transparency, Select changes the layout.` : "Left and right: side by side, on top, the differences."}${mode === "refine" && rebuild.art ? " " + rebuild.art : ""}${mode === "refine" && rebuild.note.length ? " The model: " + rebuild.note.join("; ") + "." : ""}`.trim());
+    if (mode !== "refine" && rebuild.art) $("say").textContent += `\n\n${rebuild.art}`;
     if (mode !== "refine" && rebuild.note.length) $("say").textContent += `\n\nThe model: ${rebuild.note.join("; ")}.`;
     cycleView(0);
   } catch (e) {

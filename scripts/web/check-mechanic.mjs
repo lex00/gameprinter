@@ -27,8 +27,9 @@
 // second with MAME's keys. It drops a coin (5), starts (1), records a clip
 // of moves and taps with a note and hands it off, checks the clip's arcade
 // log and state hash in the session, that gp mechanic say shows, and that
-// REVIEW REBUILD, FREE PLAY and gp mechanic demo say in words why they
-// have nothing to play yet. Without the
+// REVIEW REBUILD plays the clip on the model gp game new wrote, drawn by
+// tile kind and saying so, and that FREE PLAY and gp mechanic demo say in
+// words why they have nothing to play yet. Without the
 // two options the arcade run is skipped, as other ROM checks are.
 //
 // Playwright comes from scripts/web/node_modules (`npm ci --prefix
@@ -582,12 +583,86 @@ async function arcade() {
   await until("the agent's words over the arcade game", async () => (await text(page, "#say")).startsWith(said) && !(await page.isHidden("#overlay")));
   ok("gp mechanic say shows over the arcade game");
   await page.keyboard.press("Enter");
+  // REVIEW REBUILD, as on Moss Hop: the clip played through the original
+  // and the model gp game new wrote, both pictures of a frame kept and
+  // shown in every layout. The model names no picture slot, so its side is
+  // drawn by tile kind, and the page says so in a sentence.
   await page.click("#clips .rv2-open");
-  const says = await until("REVIEW REBUILD's words", async () => {
+  await until("Tapper's REVIEW REBUILD", async () => (await page.evaluate(() => document.getElementById("tab-refine").classList.contains("on"))));
+  const rv = await until("Tapper's review", async () => {
     const t = await text(page, "#busy-text");
-    return t.includes("draws nothing yet") ? t : null;
+    return /\d+ of \d+ frames the same/.test(t) ? t : /couldn't|No clips|draws nothing yet/.test(t) ? fail(t) : null;
+  }, 300000);
+  if (!rv.includes("drawn by tile kind")) fail(`REVIEW REBUILD doesn't say the arcade model is drawn by tile kind: ${rv}`);
+  const reviewed = join(dir, "clips", "001.review", "meta.json");
+  if (!existsSync(reviewed)) fail(`Tapper's review isn't kept in ${reviewed}`);
+  const review = JSON.parse(readFileSync(reviewed, "utf8"));
+  if (!Array.isArray(review.diffs) || !Array.isArray(review.drawn)) fail(`Tapper's review has no diffs or drawn things: ${Object.keys(review)}`);
+  // A frame some way in, where the game is under way, if it has pictures.
+  const have = review.have.map((h, k) => (h ? k : -1)).filter((k) => k >= 0);
+  if (!have.length) fail("Tapper's review kept no pictures");
+  const shown = have[Math.floor(have.length / 2)];
+  // The model's one thing, its player, as the board places a sprite: 32
+  // by 32 pixels for its 16 by 16 of the game's units (drawn as pixels, as
+  // before #28, it was 16 wide). The skeleton maps nothing, so the player
+  // stays at its spawn, 0, 0: bytes the board draws below the screen, as
+  // the model now does (before #28 it was a box at the top left). On any
+  // frame it is drawn, its box is the board's size.
+  const heroes = review.drawn.map((d) => (d.boxes ?? []).find((b) => b[4] === "player") ?? null);
+  const wrong = heroes.find((b) => b && (b[2] !== 32 || b[3] !== 32));
+  if (wrong) fail(`Tapper's player on the model isn't the board's 32 by 32: ${JSON.stringify(wrong)}`);
+  const hero = heroes[shown];
+  // Both pictures of that frame, by the pixels not in its commonest color
+  // (the backdrop): the original's scene (here the attract mode's title)
+  // fills a tenth of the screen at least, 24 sprites' worth, in 4 colors
+  // or more; the model's is exactly the player's box as far
+  // as it is on the screen, or nothing. One lit box can't pass for the
+  // original, nor a stray picture for the model.
+  const heroArea = hero ? Math.max(0, Math.min(512, hero[0] + 32) - Math.max(0, hero[0])) * Math.max(0, Math.min(480, hero[1] + 32) - Math.max(0, hero[1])) : 0;
+  for (const side of ["o", "m"]) {
+    const px = await page.evaluate(async (u) => {
+      const b = await createImageBitmap(await (await fetch(u)).blob());
+      const c = new OffscreenCanvas(b.width, b.height);
+      const x = c.getContext("2d");
+      x.drawImage(b, 0, 0);
+      const d = x.getImageData(0, 0, b.width, b.height).data;
+      const count = new Map();
+      for (let i = 0; i < d.length; i += 4) {
+        const c = (d[i] << 16) | (d[i + 1] << 8) | d[i + 2];
+        count.set(c, (count.get(c) ?? 0) + 1);
+      }
+      const n = d.length / 4;
+      return { n, other: n - Math.max(...count.values()), colors: count.size };
+    }, `api/clips/1/review/${side}-${String(shown).padStart(5, "0")}.png?mechanic=${mech}`);
+    const bad = side === "o" ? px.other < px.n / 10 || px.colors < 4 : px.other !== heroArea;
+    if (bad) fail(`Tapper's ${side === "o" ? "original" : "model"} picture at frame ${shown}: ${JSON.stringify(px)}`);
+  }
+  await until("the badge on Tapper", async () => (await text(page, "#modebadge")) === "REVIEWING THE MODEL");
+  await page.keyboard.press("KeyX"); // A pauses
+  await page.evaluate((k) => { const s = document.getElementById("rv-scrub"); s.value = String(k); s.dispatchEvent(new Event("input")); }, shown);
+  const lit = () => page.evaluate(() => {
+    const c = document.getElementById("game");
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    for (let i = 0; i < d.length; i += 4) if (d[i] || d[i + 1] || d[i + 2]) return true;
+    return false;
   });
-  ok(`REVIEW REBUILD refuses in words: ${says.slice(0, 80)}...`);
+  for (const v of ["side", "top", "diff"]) {
+    await page.selectOption("#rv-layout", v);
+    await until(`Tapper's ${v} layout drawn`, lit);
+    if (shots) {
+      mkdirSync(shots, { recursive: true });
+      await page.screenshot({ path: join(shots, `${game}-review-rebuild-${v}.png`), fullPage: true });
+    }
+  }
+  if ((await page.evaluate(() => document.body.dataset.frameSource)) !== "clip+rebuild") fail("Tapper's REVIEW REBUILD didn't draw the clip beside the rebuild");
+  if (await page.isHidden("#rv-strip")) fail("no strip of the frames that agree on Tapper");
+  if (!/Frame \d+ of \d+/.test(await text(page, "#ctx-frame"))) fail(`Tapper's right margin: ${await text(page, "#ctx-frame")}`);
+  await page.selectOption("#rv-layout", "side");
+  await page.keyboard.press("KeyC");
+  if (!(await page.evaluate(() => document.getElementById("rv-boxes").checked))) fail("C didn't outline Tapper's entities");
+  await page.keyboard.press("ArrowRight");
+  await until("a step on Tapper", async () => /frame \d+ of/.test(await text(page, "#rv-at")));
+  ok(`REVIEW REBUILD shows Tapper's clip 1: ${rv.match(/\d+ of \d+ frames the same/)[0]}, the original's scene and the model's player where the board draws it (on the screen on ${heroes.filter((b) => b).length} of ${heroes.length} frames) at frame ${shown}, in all three layouts, with the strip, the outlines, the frame's measures and "drawn by tile kind"`);
   await page.click("#tab-play");
   const free = await until("FREE PLAY's words", async () => {
     const t = (await text(page, "#toast")) + (await text(page, "#state"));
