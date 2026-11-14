@@ -53,7 +53,9 @@ pub struct ExploreArgs {
     #[arg(long)]
     pub from: Vec<String>,
     /// Routines to aim at, by the harvest's names (`sub_01_8000`; on an
-    /// arcade romset the main Z80's, `sub_5FAC`). Default: as `--aim` says.
+    /// arcade romset the main Z80's, `sub_5FAC`). On an arcade romset also
+    /// an address inside a routine (`0BC3`, a branch way), reached when the
+    /// main CPU runs the instruction there. Default: as `--aim` says.
     #[arg(long = "target")]
     pub targets: Vec<String>,
     /// What to aim at with no `--target`: `unrun`, the routines the code map

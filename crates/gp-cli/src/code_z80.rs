@@ -162,6 +162,76 @@ pub(crate) fn merge(into: &mut Levels, from: Levels) {
     into.watched += from.watched;
 }
 
+/// The MCR main board's CTC, at ports F0 to F3 (gp_arcade::mcr): a
+/// control word to channel 0 (F0) with bit 0 clear is the interrupt vector
+/// of its four channels.
+const CTC_PORTS: std::ops::RangeInclusive<u8> = 0xf0..=0xf3;
+
+/// The interrupt handlers the code in `insns` sets up, read from the code
+/// alone: `im 1` sends every interrupt to 0038; `im 2` reads a handler's
+/// address from the table at I times 256 plus the vector, with I from an
+/// `ld a,n / ld i,a` and, on the main board, the CTC's vector from an
+/// `ld a,n / out (F0),a` with bit 0 clear, so the table's four words (one
+/// a channel) are the handlers. A table address no code sets up this way
+/// (I or the vector from a register) isn't found.
+fn interrupt_handlers(set: &Romset, cpu: usize, insns: &BTreeMap<u16, Insn>) -> Vec<u16> {
+    let (rom, end) = program(set, cpu);
+    let byte = |a: u16| rom.get(usize::from(a)).copied().unwrap_or(0);
+    // The constant an `ld a,n` just before `pc` loads, if one does.
+    let a_before = |pc: u16| {
+        insns
+            .range(..pc)
+            .next_back()
+            .filter(|(at, i)| at.wrapping_add(u16::from(i.len)) == pc && byte(**at) == 0x3e)
+            .map(|(at, _)| byte(at.wrapping_add(1)))
+    };
+    let mut out = Vec::new();
+    let (mut im2, mut i_reg, mut vectors) = (false, Vec::new(), Vec::new());
+    // Whether the last control word to channel 0 said a time constant
+    // follows (bit 2), which isn't a vector whatever its bit 0.
+    let mut constant_next = false;
+    for (&pc, i) in insns {
+        match (byte(pc), byte(pc.wrapping_add(1))) {
+            (0xed, 0x56) => out.push(0x0038),
+            (0xed, 0x5e) => im2 = true,
+            (0xed, 0x47) => i_reg.extend(a_before(pc)),
+            (0xd3, port) if cpu == 0 && CTC_PORTS.contains(&port) && i.len == 2 => {
+                if port != 0xf0 {
+                    continue;
+                }
+                let Some(v) = a_before(pc) else {
+                    constant_next = false;
+                    continue;
+                };
+                if constant_next {
+                    constant_next = false;
+                } else if v & 1 == 0 {
+                    vectors.push(v & 0xf8);
+                } else {
+                    constant_next = v & 4 != 0;
+                }
+            }
+            _ => {}
+        }
+    }
+    if im2 {
+        for &hi in &i_reg {
+            for &v in &vectors {
+                for ch in 0..4u16 {
+                    let at = (u16::from(hi) << 8) | (u16::from(v) + 2 * ch);
+                    let h = u16::from_le_bytes([byte(at), byte(at.wrapping_add(1))]);
+                    if u32::from(h) < end {
+                        out.push(h);
+                    }
+                }
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 /// One CPU's code map.
 pub(crate) struct CodeMap {
     pub cpu: usize,
@@ -197,30 +267,43 @@ impl CodeMap {
         }
         let mut insns = BTreeMap::new();
         let mut seen = BTreeSet::new();
-        while let Some(pc) = todo.pop() {
-            if u32::from(pc) >= end || !seen.insert(pc) {
-                continue;
-            }
-            let Some(i) = insn_at(set, cpu, pc) else {
-                continue;
-            };
-            let next = pc.wrapping_add(u16::from(i.len));
-            match i.flow {
-                Flow::Call(t) | Flow::CallIf(t) => {
-                    routines.entry(t).or_insert("called");
-                    todo.push(t);
+        // The descent, then again from the interrupt handlers the code
+        // read so far sets up, until it finds no more.
+        loop {
+            while let Some(pc) = todo.pop() {
+                if u32::from(pc) >= end || !seen.insert(pc) {
+                    continue;
                 }
-                Flow::Rst(t) => {
-                    routines.entry(t).or_insert("restart");
-                    todo.push(t);
+                let Some(i) = insn_at(set, cpu, pc) else {
+                    continue;
+                };
+                let next = pc.wrapping_add(u16::from(i.len));
+                match i.flow {
+                    Flow::Call(t) | Flow::CallIf(t) => {
+                        routines.entry(t).or_insert("called");
+                        todo.push(t);
+                    }
+                    Flow::Rst(t) => {
+                        routines.entry(t).or_insert("restart");
+                        todo.push(t);
+                    }
+                    Flow::Jump(t) | Flow::JumpIf(t) | Flow::Djnz(t) => todo.push(t),
+                    _ => {}
                 }
-                Flow::Jump(t) | Flow::JumpIf(t) | Flow::Djnz(t) => todo.push(t),
-                _ => {}
+                if i.flow.falls_through() {
+                    todo.push(next);
+                }
+                insns.insert(pc, i);
             }
-            if i.flow.falls_through() {
-                todo.push(next);
+            for h in interrupt_handlers(set, cpu, &insns) {
+                if let std::collections::btree_map::Entry::Vacant(e) = routines.entry(h) {
+                    e.insert("interrupt handler");
+                    todo.push(h);
+                }
             }
-            insns.insert(pc, i);
+            if todo.is_empty() {
+                break;
+            }
         }
         routines.retain(|at, _| insns.contains_key(at));
         Self {
@@ -346,6 +429,92 @@ pub(crate) fn listing(
         }));
     }
     (text, json!({ "set": set.name, "cpus": maps }))
+}
+
+/// `gp code listing --writes`: every instruction that wrote each of
+/// `addrs` in the runs, by CPU, with how many bytes it wrote there, the
+/// routine it is in, and where the runs called that routine from (every
+/// call into it the runs made, not only the calls that wrote this byte).
+/// A block clear or copy (`ldir`, `lddr`) is the instruction that wrote,
+/// once a byte; a push or a call writes the stack.
+pub(crate) fn writes(set: &Romset, ran: &Levels, addrs: &[u16]) -> (String, Value) {
+    let mut text = String::new();
+    let mut rows = Vec::new();
+    for &addr in addrs {
+        for (c, lv) in ran.cpus.iter().enumerate() {
+            let Some(by) = lv.writers.get(&addr) else {
+                if c == 0 {
+                    let _ = writeln!(text, "; {} ${addr:04X}: no run wrote it", CPUS[c]);
+                    rows.push(json!({"cpu": CPUS[c], "addr": format!("{addr:04X}"), "writes": 0, "writers": []}));
+                }
+                continue;
+            };
+            let map = CodeMap::of(set, c, Some(lv));
+            let total: u64 = by.values().sum();
+            // The watcher counts the machine's frames from 0; a clip's
+            // frames count from 1, as `gp reach --detail` numbers them.
+            let first = lv.written.get(&addr).map(|s| s.first + 1);
+            let _ = writeln!(
+                text,
+                "; {} ${addr:04X}: {total} writes by {} instructions{}",
+                CPUS[c],
+                by.len(),
+                first.map_or(String::new(), |f| format!(", first on frame {f}")),
+            );
+            let mut writers = Vec::new();
+            for (&pc, &n) in by {
+                let insn = map
+                    .insns
+                    .get(&pc)
+                    .map(|i| i.text.clone())
+                    .or_else(|| insn_at(set, c, pc).map(|i| i.text))
+                    .unwrap_or_default();
+                let routine = map.routines.range(..=pc).next_back().map(|(a, _)| *a);
+                let callers: Vec<(u16, u64)> = routine
+                    .map(|r| {
+                        lv.edges
+                            .iter()
+                            .filter(|((_, to, k), _)| {
+                                *to == r && matches!(k, EdgeKind::Call | EdgeKind::Rst)
+                            })
+                            .map(|((from, _, _), s)| (*from, s.count))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let mut line = format!("{pc:04X}  {insn:<20} {n:>8}");
+                if let Some(r) = routine {
+                    let _ = write!(line, "  in sub_{r:04X}");
+                }
+                if !callers.is_empty() {
+                    let list: Vec<String> = callers
+                        .iter()
+                        .map(|(f, n)| format!("${f:04X} ({n})"))
+                        .collect();
+                    let _ = write!(line, ", called from {}", list.join(", "));
+                }
+                let _ = writeln!(text, "{line}");
+                writers.push(json!({
+                    "pc": format!("{pc:04X}"),
+                    "insn": insn,
+                    "writes": n,
+                    "routine": routine.map(|r| format!("sub_{r:04X}")),
+                    "called_from": callers
+                        .iter()
+                        .map(|(f, n)| json!({"pc": format!("{f:04X}"), "calls": n}))
+                        .collect::<Vec<_>>(),
+                }));
+            }
+            text.push('\n');
+            rows.push(json!({
+                "cpu": CPUS[c],
+                "addr": format!("{addr:04X}"),
+                "writes": total,
+                "first_frame": first,
+                "writers": writers,
+            }));
+        }
+    }
+    (text, json!({ "writes": rows }))
 }
 
 fn routine_ran(map: &CodeMap, lv: &CpuLevels, at: u16) -> bool {
@@ -625,6 +794,76 @@ mod tests {
         let inputs = vec![InputFrame::default(); frames];
         let lv = run_input(&set, &inputs).unwrap();
         (set, lv)
+    }
+
+    /// `--writes` names every instruction that wrote a byte: a block clear
+    /// through a called routine (`ld (hl),0 / ldir`, made-up bytes) is the
+    /// `ldir`, with the call that reached it.
+    #[test]
+    fn writes_name_a_block_clear_and_its_caller() {
+        let mut main = vec![
+            0x31, 0xf0, 0xe7, // 0000: ld sp,e7f0
+            0x21, 0x10, 0xe0, // 0003: ld hl,e010
+            0x01, 0x04, 0x00, // 0006: ld bc,0004
+            0xcd, 0x10, 0x00, // 0009: call 0010
+            0x18, 0xf5, // 000c: jr 0003
+        ];
+        main.resize(0x10, 0);
+        main.extend([
+            0x54, 0x5d, 0x13, // 0010: ld d,h / ld e,l / inc de
+            0x36, 0x00, // 0013: ld (hl),0
+            0xed, 0xb0, // 0015: ldir
+            0xc9, // 0017: ret
+        ]);
+        let set = gp_arcade::testrom::romset(&main, &[0x18, 0xfe]);
+        let lv = run_input(&set, &[InputFrame::default(); 2]).unwrap();
+        let (text, json) = writes(&set, &lv, &[0xe012, 0xe010, 0xe100]);
+        assert!(
+            text.contains("; main $E012: ") && text.contains("by 1 instructions"),
+            "{text}"
+        );
+        let e012 = &json["writes"][0]["writers"][0];
+        assert_eq!(e012["pc"], "0015");
+        assert_eq!(e012["insn"], "ldir");
+        assert_eq!(e012["routine"], "sub_0010");
+        assert_eq!(e012["called_from"][0]["pc"], "0009");
+        assert_eq!(json["writes"][1]["writers"][0]["pc"], "0013");
+        assert_eq!(json["writes"][2]["writes"], 0);
+        assert!(text.contains("; main $E100: no run wrote it"), "{text}");
+    }
+
+    /// The code alone finds the interrupt handlers it sets up (made-up
+    /// bytes): `ld a,00 / ld i,a`, the CTC's vector 10 to port F0, `im 2`,
+    /// so the table at 0010 names four handlers; and `im 1` on the sound
+    /// CPU sends its interrupts to 0038.
+    #[test]
+    fn the_map_follows_the_interrupt_handlers_the_code_sets_up() {
+        let mut main = vec![
+            0x3e, 0x00, // 0000: ld a,00
+            0xed, 0x47, // 0002: ld i,a
+            0x3e, 0x10, // 0004: ld a,10
+            0xd3, 0xf0, // 0006: out (f0),a
+            0xed, 0x5e, // 0008: im 2
+            0xfb, // 000a: ei
+            0x18, 0xfe, // 000b: jr 000b
+        ];
+        main.resize(0x10, 0);
+        // The table: 0040, 0048, 0050, 0058.
+        main.extend([0x40, 0x00, 0x48, 0x00, 0x50, 0x00, 0x58, 0x00]);
+        main.resize(0x40, 0);
+        for _ in 0..4 {
+            main.extend([0xfb, 0xed, 0x4d, 0, 0, 0, 0, 0]); // ei / reti
+        }
+        let mut sound = vec![0xed, 0x56, 0x18, 0xfe]; // im 1 / jr $
+        sound.resize(0x38, 0);
+        sound.extend([0xfb, 0xed, 0x4d]); // 0038: ei / reti
+        let set = gp_arcade::testrom::romset(&main, &sound);
+        let map = CodeMap::of(&set, 0, None);
+        for h in [0x0040, 0x0048, 0x0050, 0x0058] {
+            assert_eq!(map.routines.get(&h), Some(&"interrupt handler"), "{h:04X}");
+        }
+        let sound_map = CodeMap::of(&set, 1, None);
+        assert_eq!(sound_map.routines.get(&0x0038), Some(&"interrupt handler"));
     }
 
     /// The busy program's map: the descent finds its loop, the run adds

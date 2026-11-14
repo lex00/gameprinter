@@ -384,6 +384,7 @@ pub fn check<O: Runtime, M: Runtime>(
                     until_start: false,
                     sound: false,
                     stop_at_split: false,
+                    watch: Vec::new(),
                 },
             )?;
             let theirs = detect(&ls, Side::Original, clocks);

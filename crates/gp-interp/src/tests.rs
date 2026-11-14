@@ -1124,6 +1124,86 @@ fn an_object_that_holds_its_slot_is_carried_and_not_measured() {
     assert_eq!((carried[0].slot, carried[0].kind), (1, 1));
 }
 
+/// A watched path the run doesn't compare reads on the original: a slot
+/// field of an object that only holds its slot (a hook's state the start
+/// carries, as Tapper's timers), by its entity's order or every one, and a
+/// presentation field. A path the mapping maps nowhere is `None`. The
+/// numbers are made up.
+#[test]
+fn a_watched_path_reads_slot_fields_and_presentation_fields() {
+    let text = SLOT_MAPPING.replace(
+        "moving = \"ram[0x0020] == 0\"\n",
+        "moving = \"ram[0x0020] == 0\"\nstate = 0x14\nends = 0x20\n",
+    ) + "\n[[slots.kind]]\nentity = \"stump\"\nids = [9]\nends = 0\nholds_slot = true\n\n[[slots.kind.field]]\npath = \"ext[0]\"\nram = [0x50]\npresentation = true\n";
+    let text = text.replace("schema = 1\n", "schema = 19\n").replace(
+        "[[field]]\npath = \"entities.hero[0].y\"\nram = [0x41]\n",
+        "[[field]]\npath = \"entities.hero[0].y\"\nram = [0x41]\n\n[[field]]\npath = \"entities.hero[0].ext[1]\"\nram = [0x60]\npresentation = true\n",
+    );
+    let mapping = crate::mapping::Mapping::parse(&text).unwrap();
+    let mut ram = vec![0u8; 0x800];
+    ram[0x11] = 1;
+    ram[0x13] = 9;
+    ram[0x15] = 0x20;
+    ram[0x51] = 42;
+    ram[0x60] = 7;
+    let original = Scripted {
+        ram,
+        frame: 0,
+        defeated_from: None,
+    };
+    // As the run shows a value.
+    let read = |p: &str| {
+        crate::lockstep::watch_original(&original, &mapping, p)
+            .unwrap()
+            .map(|vs| vs.iter().map(crate::mapping::show).collect::<Vec<_>>())
+    };
+    let shown = |v: &[&str]| Some(v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>());
+    assert_eq!(read("entities.stump[0].ext[0]"), shown(&["42"]));
+    assert_eq!(read("bodies.stump[0].ext[0]"), shown(&["42"]));
+    assert_eq!(read("entities.stump[*].ext[0]"), shown(&["42"]));
+    assert_eq!(read("entities.stump[1].ext[0]"), shown(&[]));
+    assert_eq!(read("entities.hero[0].ext[1]"), shown(&["7"]));
+    assert_eq!(read("entities.stump[0].ext[3]"), None);
+    assert_eq!(read("entities.nobody[0].x"), None);
+    assert_eq!(read("lives"), None);
+}
+
+/// A watched entity word the model's view leaves out (no hook or
+/// component of its kind counts in it, as Tapper's timers, which a hook
+/// elsewhere keeps) reads from the model's state. Made-up numbers.
+#[test]
+fn a_watched_word_the_view_leaves_out_reads_from_the_models_state() {
+    use gp_runtime::Runtime as _;
+    let mut interp = edited(
+        "[cameras.main]",
+        "[entities.counter]\nrole = \"npc\"\nsize = [1, 1]\nhitbox = { x = 0, y = 0, w = 1, h = 1 }\n\n[cameras.main]",
+        "",
+    );
+    let spec = interp.spec().clone();
+    let mut w = interp.world().clone();
+    let k = spec.kinds.index_of("counter").unwrap();
+    for word in [42, 7] {
+        let mut b =
+            gp_sim::systems::new_body(&spec, &w, k, gp_sim::Fx::ZERO, gp_sim::Fx::ZERO, false);
+        b.ext[0] = word;
+        w.bodies.push(b);
+    }
+    interp.restore(&w.canonical()).unwrap();
+    assert!(
+        interp.query("entities.counter[0].ext[0]").is_err(),
+        "the view leaves it out"
+    );
+    let read = |p: &str| crate::lockstep::watch_model(&interp, &spec, p);
+    assert_eq!(read("entities.counter[0].ext[0]"), [Value::Int(42)]);
+    assert_eq!(read("bodies.counter[1].ext[0]"), [Value::Int(7)]);
+    assert_eq!(
+        read("entities.counter[*].ext[0]"),
+        [Value::Int(42), Value::Int(7)]
+    );
+    assert_eq!(read("entities.counter[0].x"), [Value::Fixed(0)]);
+    assert!(read("entities.counter[0].ext[9]").is_empty());
+}
+
 /// Mapping schema 5: a carried body takes every slot field the mapping
 /// names, its facing, its x fraction and a path's spawn end, way and wait,
 /// and the model's frame count takes the slots' clock as its low byte, so a
@@ -1953,6 +2033,7 @@ fn run_lockstep(
         until_start: false,
         sound: false,
         stop_at_split: false,
+        watch: Vec::new(),
     };
     crate::lockstep::lockstep(
         &mut AsRam(original),
@@ -1982,6 +2063,7 @@ fn a_lockstep_starts_the_draws_at_the_original_frame_it_starts_on() {
         until_start: false,
         sound: false,
         stop_at_split: false,
+        watch: Vec::new(),
     };
     let ls = crate::lockstep::lockstep(
         &mut AsRam(load()),
@@ -2083,6 +2165,7 @@ fn an_unmeasured_case_leaves_its_field_uncompared() {
         until_start: false,
         sound: false,
         stop_at_split: false,
+        watch: Vec::new(),
     };
     let ls = crate::lockstep::lockstep(
         &mut AsRam(original),
@@ -2166,6 +2249,7 @@ fn resync_puts_the_model_back_and_free_run_drifts() {
         until_start: false,
         sound: false,
         stop_at_split: false,
+        watch: Vec::new(),
     };
     let spec = model.spec().clone();
     let upto = crate::lockstep::lockstep(
@@ -2954,6 +3038,7 @@ fn a_run_told_to_stop_at_its_first_split_splits_where_the_whole_run_does() {
             mode: crate::lockstep::Mode::Free,
             values: true,
             stop_at_split: stop,
+            watch: Vec::new(),
             ..crate::lockstep::Options::default()
         };
         crate::lockstep::lockstep(
@@ -3182,6 +3267,7 @@ fn a_present_path_loads_the_animation_not_the_world() {
         until_start: false,
         sound: false,
         stop_at_split: false,
+        watch: Vec::new(),
     };
     let mut seen = AnimationSeen::default();
     crate::lockstep::lockstep_with(

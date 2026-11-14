@@ -83,6 +83,7 @@ pub(crate) fn whole(
             until_start: false,
             sound: false,
             stop_at_split: false,
+            watch: Vec::new(),
         },
     )
     .map_err(anyhow::Error::msg)

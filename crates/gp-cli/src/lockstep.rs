@@ -120,6 +120,7 @@ pub(crate) fn run_resumed(
         draws,
         resume.map(|(_, p)| p),
         keep,
+        &[],
     )
 }
 
@@ -141,6 +142,7 @@ pub(crate) fn run_resumed_on<O: crate::screen::Shows>(
     draws: Option<gp_sim::DrawScript>,
     resume: Option<lockstep::Prefix>,
     keep: Option<crate::screen::Keep>,
+    watch: &[String],
 ) -> Result<(Lockstep, Json, Vec<String>)> {
     let model = source.parse_model()?;
     // The hooks' APU writes, for the sound measure.
@@ -179,6 +181,7 @@ pub(crate) fn run_resumed_on<O: crate::screen::Shows>(
         until_start: false,
         sound: true,
         stop_at_split: false,
+        watch: if values { watch.to_vec() } else { Vec::new() },
     };
     let screens = probe
         .as_mut()

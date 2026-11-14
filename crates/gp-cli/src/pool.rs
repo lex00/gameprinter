@@ -392,7 +392,18 @@ mod tests {
         assert_eq!(machine::count(d.path(), &own), 2);
         let gone = other.0.clone();
         drop(other);
-        assert_eq!(machine::count(d.path(), &own), 1);
+        // A child another test starts at this moment holds a copy of the
+        // lock until its exec, so the file can read as held for an instant
+        // after the drop. Wait for that to pass; a lock that stays held fails.
+        let mut left = machine::count(d.path(), &own);
+        for _ in 0..200 {
+            if left == 1 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            left = machine::count(d.path(), &own);
+        }
+        assert_eq!(left, 1);
         assert!(!gone.exists());
         assert_eq!(share(1), default_jobs());
         assert!(share(1000) >= 1);

@@ -1465,6 +1465,7 @@ pub fn run_stopping<O: Runtime, M: Runtime>(
         tolerance: tolerance.to_vec(),
         values: true,
         stop_at_split: stop,
+        watch: Vec::new(),
         ..Options::default()
     };
     let ls =

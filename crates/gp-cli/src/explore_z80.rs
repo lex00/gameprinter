@@ -10,7 +10,15 @@
 //! The routines and calls are the main Z80's code map
 //! ([`crate::code_z80::CodeMap`]), read from the ROM and the start clips'
 //! runs, since a run is what finds a `jp (hl)`'s targets. A routine is
-//! named `sub_XXXX` by its entry. `--aim unrun` aims at the routines no
+//! named `sub_XXXX` by its entry.
+//!
+//! A `--target` may also be an address inside a routine (`0BC3`, a branch
+//! way): it is reached when the main CPU starts the instruction there,
+//! which the watched run already records (its instruction starts), so
+//! aiming at one costs no speed. A run nearer it ranks first: inside its
+//! routine, by the fewest conditional branch ways from an instruction the
+//! run started to the address; from elsewhere, by the calls to its routine
+//! plus the branch ways from the routine's entry. `--aim unrun` aims at the routines no
 //! start clip ran; `--aim stops` at the routines a `jp (hl)`, `jp (ix)`
 //! or `jp (iy)` the start clips never took sits in (the Z80's counterpart
 //! of the 6502 reader's stops: places the reading of the code alone can't
@@ -21,7 +29,7 @@
 //! The search runs candidates in batches of eight on threads and judges
 //! them in order, so the same seed gives the same clips on any machine.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use anyhow::{Context as _, Result, bail};
 use gp_arcade::dasm::Flow;
@@ -124,6 +132,128 @@ impl Graph {
     }
 }
 
+/// A `--target` inside a routine: the main CPU's instruction at `pc`.
+#[derive(Debug, Clone)]
+pub(crate) struct Point {
+    pub pc: u16,
+    /// The routine it is in.
+    pub routine: usize,
+    /// Each instruction's fewest conditional branch ways to `pc` without a
+    /// call or a return, by address.
+    pub local: BTreeMap<u16, u32>,
+    /// Each routine's fewest calls to `routine`.
+    pub dist: Vec<Option<u32>>,
+}
+
+impl Point {
+    pub fn of(map: &CodeMap, graph: &Graph, pc: u16) -> Option<Point> {
+        map.insns.get(&pc)?;
+        let routine = graph.at(pc)?;
+        Some(Point {
+            pc,
+            routine,
+            local: branch_ways_to(map, pc),
+            dist: graph.distances_to(&BTreeSet::from([routine])),
+        })
+    }
+
+    /// `$0BC3 in sub_0B63`.
+    pub fn name(&self, g: &Graph) -> String {
+        format!("${:04X} in {}", self.pc, g.name(self.routine))
+    }
+
+    pub fn reached(&self, run: &Levels) -> bool {
+        run.cpus[0].starts.contains_key(&self.pc)
+    }
+
+    /// How far `run` got from it: 0 when it ran it; else the fewest branch
+    /// ways from an instruction the run started (at least 1), or the calls
+    /// from a routine it ran to this one's plus the branch ways from its
+    /// entry.
+    pub fn distance(&self, g: &Graph, run: &Levels) -> u32 {
+        if self.reached(run) {
+            return 0;
+        }
+        let starts = &run.cpus[0].starts;
+        let near = starts
+            .keys()
+            .filter_map(|s| self.local.get(s))
+            .min()
+            .map(|&d| d.max(1));
+        let entry = self
+            .local
+            .get(&g.entries[self.routine])
+            .copied()
+            .unwrap_or(0);
+        let far = ran(g, run)
+            .into_iter()
+            .filter(|&r| r != self.routine)
+            .filter_map(|r| self.dist[r])
+            .min()
+            .map(|d| d + entry.max(1));
+        near.into_iter().chain(far).min().unwrap_or(u32::MAX)
+    }
+}
+
+/// Each instruction's fewest conditional branch ways to `pc` along the
+/// code map's jumps and fall-throughs (a call counts as falling through to
+/// the instruction after it): a 0-1 search backwards from `pc`.
+fn branch_ways_to(map: &CodeMap, pc: u16) -> BTreeMap<u16, u32> {
+    let mut from: BTreeMap<u16, Vec<(u16, u32)>> = BTreeMap::new();
+    for (&at, i) in &map.insns {
+        let w = u32::from(i.flow.conditional());
+        let next = at.wrapping_add(u16::from(i.len));
+        if i.flow.falls_through() {
+            from.entry(next).or_default().push((at, w));
+        }
+        if let Flow::Jump(t) | Flow::JumpIf(t) | Flow::Djnz(t) = i.flow {
+            from.entry(t).or_default().push((at, w));
+        }
+    }
+    let mut dist: BTreeMap<u16, u32> = BTreeMap::from([(pc, 0)]);
+    let mut q = VecDeque::from([pc]);
+    while let Some(x) = q.pop_front() {
+        let dx = dist[&x];
+        for &(p, w) in from.get(&x).map_or(&[][..], |v| v.as_slice()) {
+            let d = dx + w;
+            if dist.get(&p).is_none_or(|&old| d < old) {
+                dist.insert(p, d);
+                if w == 0 {
+                    q.push_front(p);
+                } else {
+                    q.push_back(p);
+                }
+            }
+        }
+    }
+    dist
+}
+
+/// A `--target`: a routine by name or entry, else an instruction inside
+/// one by its address.
+pub(crate) enum Aim {
+    Routine(usize),
+    Point(Point),
+}
+
+pub(crate) fn aim(map: &CodeMap, g: &Graph, t: &str) -> Result<Aim> {
+    if let Some(r) = g.index(t) {
+        return Ok(Aim::Routine(r));
+    }
+    let hex = t
+        .trim_start_matches("sub_")
+        .trim_start_matches("0x")
+        .trim_start_matches('$');
+    let pc = u16::from_str_radix(hex, 16)
+        .ok()
+        .with_context(|| format!("--target {t}: a routine (sub_5FAC) or an address (0BC3)"))?;
+    Point::of(map, g, pc).map(Aim::Point).with_context(|| {
+        format!(
+            "--target {t}: the main Z80's code map has no routine there and no instruction starts at ${pc:04X}"
+        )
+    })
+}
+
 /// What runs have reached: both CPUs' instruction starts, and the
 /// directions the main CPU's conditional branches went.
 #[derive(Debug, Clone, Default)]
@@ -186,6 +316,8 @@ pub(crate) enum Score {
     Toward {
         graph: Graph,
         targets: BTreeSet<usize>,
+        /// Targets inside routines not reached yet.
+        points: Vec<Point>,
         reached: Vec<usize>,
         dist: Vec<Option<u32>>,
         best: u32,
@@ -194,16 +326,25 @@ pub(crate) enum Score {
 }
 
 impl Score {
-    pub fn toward(graph: Graph, targets: BTreeSet<usize>, seen: Seen, known: &Levels) -> Score {
+    /// Toward routines and addresses inside routines.
+    pub fn toward(
+        graph: Graph,
+        targets: BTreeSet<usize>,
+        points: Vec<Point>,
+        seen: Seen,
+        known: &Levels,
+    ) -> Score {
         let dist = graph.distances_to(&targets);
         let best = ran(&graph, known)
             .into_iter()
             .filter_map(|r| dist[r])
+            .chain(points.iter().map(|p| p.distance(&graph, known)))
             .min()
             .unwrap_or(u32::MAX);
         Score::Toward {
             graph,
             targets,
+            points,
             reached: Vec::new(),
             dist,
             best,
@@ -220,6 +361,7 @@ impl Score {
             Score::Toward {
                 graph,
                 targets,
+                points,
                 reached,
                 dist,
                 best,
@@ -227,13 +369,20 @@ impl Score {
             } => {
                 let r = ran(graph, run);
                 let hit: Vec<usize> = targets.iter().copied().filter(|t| r.contains(t)).collect();
-                let d = r.iter().filter_map(|&x| dist[x]).min().unwrap_or(u32::MAX);
+                let d = r
+                    .iter()
+                    .filter_map(|&x| dist[x])
+                    .chain(points.iter().map(|p| p.distance(graph, run)))
+                    .min()
+                    .unwrap_or(u32::MAX);
                 let n = seen.fresh(run);
-                if !hit.is_empty() {
+                let points_hit = points.iter().any(|p| p.reached(run));
+                if !hit.is_empty() || points_hit {
                     for t in &hit {
                         targets.remove(t);
                     }
                     reached.extend(hit);
+                    points.retain(|p| !p.reached(run));
                     *dist = graph.distances_to(targets);
                     *best = u32::MAX;
                     return Some((0, -(n as i64)));
@@ -249,7 +398,7 @@ impl Score {
     }
 
     fn done(&self) -> bool {
-        matches!(self, Score::Toward { targets, .. } if targets.is_empty())
+        matches!(self, Score::Toward { targets, points, .. } if targets.is_empty() && points.is_empty())
     }
 }
 
@@ -415,17 +564,20 @@ pub(crate) fn explore_with(
     anyhow::ensure!(!start_clips.is_empty(), "the start set has no clip");
     let map = CodeMap::of(set, 0, Some(&known.cpus[0]));
     let graph = Graph::of(&map);
+    let mut points: Vec<Point> = Vec::new();
     let targets: BTreeSet<usize> = if a.new_code {
         BTreeSet::new()
     } else if !a.targets.is_empty() {
-        a.targets
-            .iter()
-            .map(|t| {
-                graph
-                    .index(t)
-                    .with_context(|| format!("the main Z80's code map has no routine {t}"))
-            })
-            .collect::<Result<_>>()?
+        let mut routines = BTreeSet::new();
+        for t in &a.targets {
+            match aim(&map, &graph, t)? {
+                Aim::Routine(r) => {
+                    routines.insert(r);
+                }
+                Aim::Point(p) => points.push(p),
+            }
+        }
+        routines
     } else {
         let ran_known = ran(&graph, known);
         match a.aim.as_str() {
@@ -439,7 +591,11 @@ pub(crate) fn explore_with(
             _ => bail!("--aim is unrun, unread or stops"),
         }
     };
-    let target_names: Vec<String> = targets.iter().map(|&i| graph.name(i)).collect();
+    let target_names: Vec<String> = targets
+        .iter()
+        .map(|&i| graph.name(i))
+        .chain(points.iter().map(|p| p.name(&graph)))
+        .collect();
     let starts: Vec<Tapper> = crate::pool::map(
         &start_clips,
         || (),
@@ -449,10 +605,10 @@ pub(crate) fn explore_with(
     .into_iter()
     .collect::<Result<_>>()?;
     let seen = Seen::of(&map, known);
-    let score = if targets.is_empty() {
+    let score = if targets.is_empty() && points.is_empty() {
         Score::New(seen)
     } else {
-        Score::toward(graph.clone(), targets.clone(), seen, known)
+        Score::toward(graph.clone(), targets.clone(), points.clone(), seen, known)
     };
     let mut plan = Ranked {
         score,
@@ -494,6 +650,9 @@ pub(crate) fn explore_with(
                     r.insert(graph.name(t));
                 }
             }
+            for p in points.iter().filter(|p| p.reached(&f.levels)) {
+                r.insert(p.name(&graph));
+            }
         }
         r.into_iter().collect()
     };
@@ -513,10 +672,10 @@ pub(crate) fn why(f: &Found) -> String {
             -f.rank.1
         )
     } else if f.rank.0 == 0 {
-        "runs a target routine".to_owned()
+        "runs a target".to_owned()
     } else {
         format!(
-            "{} calls from a target, {} new instruction starts or branch ways",
+            "{} calls or branch ways from a target, {} new instruction starts or branch ways",
             f.rank.0, -f.rank.1
         )
     }
@@ -608,5 +767,64 @@ mod tests {
             vec![Some(2), Some(1), Some(0)]
         );
         assert_eq!(g.name(1), "sub_0100");
+    }
+
+    /// A made-up program (no game's bytes): `xor a / or a / jr nz,0006 /
+    /// jr 0000`, so the `ld (e010),a` at 0006 inside the reset routine never
+    /// runs, and the `jr 0000` at 0004 runs every time round. An address
+    /// inside a routine is a target of its own, reached only when its
+    /// instruction starts.
+    #[test]
+    fn a_target_inside_a_routine_is_reached_when_its_instruction_runs() {
+        let set = gp_arcade::testrom::romset(
+            &[
+                0xaf, // 0000: xor a
+                0xb7, // 0001: or a
+                0x20, 0x02, // 0002: jr nz,0006
+                0x18, 0xfa, // 0004: jr 0000
+                0x32, 0x10, 0xe0, // 0006: ld (e010),a
+                0x18, 0xf5, // 0009: jr 0000
+            ],
+            &[0x18, 0xfe],
+        );
+        let start = Tapper::power_on(&set);
+        let run = run_from(&start, &[0; 3]);
+        let map = CodeMap::of(&set, 0, Some(&run.cpus[0]));
+        let g = Graph::of(&map);
+        assert!(matches!(
+            aim(&map, &g, "sub_0000").unwrap(),
+            Aim::Routine(0)
+        ));
+        let Aim::Point(never) = aim(&map, &g, "0006").unwrap() else {
+            panic!("0006 is inside the reset routine")
+        };
+        assert_eq!(never.name(&g), "$0006 in sub_0000");
+        // One branch way, `jr nz` taken, from the loop the run ran.
+        assert_eq!(never.local.get(&0x0002), Some(&1));
+        assert_eq!(never.local.get(&0x0000), Some(&1));
+        assert!(!never.reached(&run));
+        assert_eq!(never.distance(&g, &run), 1);
+        let Aim::Point(every) = aim(&map, &g, "$0004").unwrap() else {
+            panic!("0004 is inside the reset routine")
+        };
+        assert_eq!(every.distance(&g, &run), 0);
+        // Not an instruction start: the middle of `jr 0000`.
+        assert!(aim(&map, &g, "0005").is_err());
+
+        // A run that starts 0004 reaches that target and ends the search;
+        // one aimed at 0006 ranks by its branch way and goes on.
+        let seen = Seen::of(&map, &Levels::default());
+        let mut score = Score::toward(
+            g.clone(),
+            BTreeSet::new(),
+            vec![every],
+            seen.clone(),
+            &Levels::default(),
+        );
+        assert_eq!(score.rank(&run).map(|r| r.0), Some(0));
+        assert!(score.done());
+        let mut score = Score::toward(g, BTreeSet::new(), vec![never], seen, &Levels::default());
+        assert_eq!(score.rank(&run).map(|r| r.0), Some(1));
+        assert!(!score.done());
     }
 }

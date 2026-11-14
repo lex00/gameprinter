@@ -175,6 +175,27 @@ fn a_listing_counts_each_instruction_and_each_branch_way() {
     let body = |s: &str| s.lines().skip(1).collect::<Vec<_>>().join("\n");
     assert_eq!(body(&t), body(&again));
 
+    // --writes names every instruction that wrote a RAM byte: the INC at
+    // C011 writes $10 on each frame A is held, through any mirror.
+    let w = json(
+        &home,
+        &[
+            "code", "listing", rom, "--clips", set, "--only", "held", "--writes", "0810",
+        ],
+    );
+    let row = &w["writes"][0];
+    assert_eq!(row["addr"], "0010");
+    assert_eq!(row["writers"][0]["pc"], "C011");
+    assert_eq!(row["writers"][0]["insn"], "inc $10");
+    assert_eq!(row["writes"], at("C011")["count"]);
+    let t = text(
+        &home,
+        &[
+            "code", "listing", rom, "--clips", set, "--only", "idle", "--writes", "$10",
+        ],
+    );
+    assert!(t.contains("; $0010: no run wrote it"), "{t}");
+
     // A listing is never written inside a git work tree.
     let out = gp(&home)
         .args(["code", "listing", rom, "--write"])

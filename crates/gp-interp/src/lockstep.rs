@@ -173,6 +173,12 @@ pub struct Options {
     /// is wanted (`gp capture prune --mutants` on a clip the real model
     /// plays exactly). The frames after it aren't run.
     pub stop_at_split: bool,
+    /// With `values`, paths read on both sides at every compared frame
+    /// besides the compared ones, into [`Lockstep::watched`]: a mapped
+    /// field the run doesn't compare (a presentation one), or a slot
+    /// field of an entity, `entities.timer[10].ext[0]` or
+    /// `entities.timer[*].ext[0]` ([`watch_original`]).
+    pub watch: Vec<String>,
 }
 
 /// One mapped path over the run.
@@ -290,6 +296,121 @@ pub struct Lockstep {
     /// frame before (its lag frames' too), the model's on its step to the
     /// frame. The first compared frame has none.
     pub sound: Vec<(ApuWrites, ApuWrites)>,
+    /// With [`Options::watch`], each compared frame's values of each
+    /// watched path, the original's and the model's (`None` for a path
+    /// the mapping doesn't know). The model's is empty on a frame its
+    /// state has nothing there.
+    pub watched: Vec<Vec<Option<Watched>>>,
+}
+
+/// One watched path on one frame: the original's values and the model's.
+pub type Watched = (Vec<Value>, Vec<Value>);
+
+/// A watched path's parts: `entities.timer[10].ext[0]` is the kind
+/// `timer`, the tenth (`None` for `[*]`, every one) and the field
+/// `ext[0]`. `bodies.` reads as `entities.`.
+fn watch_parts(path: &str) -> Option<(&str, Option<usize>, &str)> {
+    let rest = path
+        .strip_prefix("entities.")
+        .or_else(|| path.strip_prefix("bodies."))?;
+    let (kind, rest) = rest.split_once('[')?;
+    let (index, field) = rest.split_once("].")?;
+    let index = match index {
+        "*" => None,
+        n => Some(n.parse().ok()?),
+    };
+    Some((kind, index, field))
+}
+
+/// The original's values of a watched path ([`Options::watch`]): a mapped
+/// field's value, as a translation reads it, presentation fields too; or
+/// a slot field of an entity, `entities.KIND[N].FIELD`, the N-th object of
+/// that entity in the slots' order (every one with `[*]`), as a start
+/// carries it, objects that only hold their slot too. `None` when the
+/// mapping maps neither.
+pub fn watch_original<O: Runtime>(
+    original: &O,
+    mapping: &Mapping,
+    path: &str,
+) -> Result<Option<Vec<Value>>, String> {
+    if let Some(f) = mapping.fields.iter().find(|f| f.path == path) {
+        let mut query = |sel: &str| -> Result<i64, String> {
+            original
+                .query(sel)?
+                .first()
+                .and_then(|e| e.value.as_int())
+                .ok_or(format!("{sel} isn't a byte"))
+        };
+        return Ok(Some(vec![f.read(&mut query)?.0]));
+    }
+    let Some((kind, index, field)) = watch_parts(path) else {
+        return Ok(None);
+    };
+    let mut known = false;
+    let mut values = Vec::new();
+    for g in mapping.slot_groups() {
+        let mapped = |k: &crate::mapping::SlotKind| {
+            k.entity == kind && g.fields_of(k).iter().any(|f| f.path == field)
+        };
+        if !g.kinds.iter().any(mapped) {
+            continue;
+        }
+        known = true;
+        for o in crate::bodies::carried_slot_objects(original, g)? {
+            if g.kinds[o.kind].entity != kind {
+                continue;
+            }
+            if let Some((_, v)) = o.values.into_iter().find(|(p, _)| p == field) {
+                values.push(v);
+            }
+        }
+    }
+    if !known {
+        return Ok(None);
+    }
+    Ok(Some(match index {
+        None => values,
+        Some(n) => values.into_iter().nth(n).into_iter().collect(),
+    }))
+}
+
+/// The model's values of a watched path: what its state holds there, an
+/// entity path read as `entities.`. An entity's mechanic word
+/// (`ext[0]` to `[3]`) that the state's view leaves out, because no hook
+/// or component of its kind counts in it (a timer a hook elsewhere keeps,
+/// as Tapper's), is read from the model's canonical state: every body of
+/// the kind, in the view's order. None when it holds nothing.
+pub fn watch_model<M: Runtime>(model: &M, spec: &Spec, path: &str) -> Vec<Value> {
+    let path = match path.strip_prefix("bodies.") {
+        Some(rest) => format!("entities.{rest}"),
+        None => path.to_owned(),
+    };
+    if let Ok(es) = model.query(&path) {
+        return es.into_iter().map(|e| e.value).collect();
+    }
+    let word = |field: &str| {
+        field
+            .strip_prefix("ext[")?
+            .strip_suffix(']')?
+            .parse::<usize>()
+            .ok()
+            .filter(|&i| i < 4)
+    };
+    let Some((kind, index, Some(w))) = watch_parts(&path).map(|(k, i, f)| (k, i, word(f))) else {
+        return Vec::new();
+    };
+    let Some(k) = spec.kinds.index_of(kind) else {
+        return Vec::new();
+    };
+    let Ok(world) = World::from_canonical(spec, &model.canonical_state()) else {
+        return Vec::new();
+    };
+    world
+        .of_kind(k)
+        .enumerate()
+        .filter(|(n, _)| index.is_none_or(|i| i == *n))
+        .map(|(_, (_, b))| Value::Int(b.ext[w]))
+        .collect()
 }
 
 /// The APU writes among a step's events: gp-nes's `apu-write` events
@@ -636,6 +757,7 @@ fn run<O: Runtime, M: Runtime>(
         scope_end: None,
         out_of_scope: 0,
         sound: Vec::new(),
+        watched: Vec::new(),
     };
     let scene = Scene::of(full)?;
     let scope = ScopeCheck::of(full)?;
@@ -711,6 +833,16 @@ fn run<O: Runtime, M: Runtime>(
             }
             out.values.push((o, m));
             out.unmeasured.push(quiet.clone());
+            if !opts.watch.is_empty() {
+                let mut row = Vec::with_capacity(opts.watch.len());
+                for p in &opts.watch {
+                    row.push(
+                        watch_original(original, full, p)?
+                            .map(|theirs| (theirs, watch_model(model, spec, p))),
+                    );
+                }
+                out.watched.push(row);
+            }
         }
         if let (Some(sc), Some(screen)) = (screens.as_deref_mut(), out.screen.as_mut()) {
             match sc.shots(original, model)? {
@@ -1759,6 +1891,7 @@ mod track_tests {
             scope_end: None,
             out_of_scope: 0,
             sound: Vec::new(),
+            watched: Vec::new(),
         }
     }
 

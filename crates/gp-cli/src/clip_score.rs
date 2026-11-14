@@ -152,7 +152,11 @@ pub enum ClipCmd {
         out: Option<PathBuf>,
         /// A mapped path whose values on each frame straight through, the
         /// original's and the model's, go into the clip's `values.json`
-        /// with the frame pairing. Repeatable.
+        /// with the frame pairing. Repeatable. A path the run doesn't
+        /// compare reads too: a presentation field, or a slot field of an
+        /// entity (a hook's state the start carries), as
+        /// `entities.timer[10].ext[0]` (the 11th timer in each game's
+        /// order) or `entities.timer[*].ext[0]` (every one).
         #[arg(long = "values")]
         values: Vec<String>,
     },
@@ -621,6 +625,7 @@ pub(crate) fn straight(
             draws.clone(),
             resume.as_ref().map(|(_, p)| *p),
             keep,
+            &[],
         )
     };
     // The caller's `keep`, shared by the replay and the emulator, and how
@@ -849,6 +854,7 @@ pub(crate) fn score_one(
             draws.clone(),
             resume.as_ref().map(|(_, p)| *p),
             None,
+            &ctx.values,
         )
     };
     let ((free, free_j, _), (rs, rs_j, rs_lines)) =
@@ -862,15 +868,38 @@ pub(crate) fn score_one(
         let show =
             |x: Option<&gp_runtime::Value>| x.map(gp_interp::mapping::show).unwrap_or_default();
         let mut by = serde_json::Map::new();
-        for want in &ctx.values {
-            let Some(p) = free.paths.iter().position(|x| &x.path == want) else {
-                bail!("--values {want}: the mapping has no such path");
+        // Several values (`[*]`) show as one text, space-separated.
+        let all = |xs: &[gp_runtime::Value]| {
+            xs.iter()
+                .map(gp_interp::mapping::show)
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        for (w, want) in ctx.values.iter().enumerate() {
+            let rows: Vec<Value> = match free.paths.iter().position(|x| &x.path == want) {
+                Some(p) => free
+                    .values
+                    .iter()
+                    .map(|(o, m)| json!([show(o.get(p)), show(m.get(p))]))
+                    .collect(),
+                // Not compared: read on both sides as the run went.
+                None if free
+                    .watched
+                    .iter()
+                    .any(|row| row.get(w).is_some_and(Option::is_some)) =>
+                {
+                    free.watched
+                        .iter()
+                        .map(|row| match row.get(w).and_then(Option::as_ref) {
+                            Some((o, m)) => json!([all(o), all(m)]),
+                            None => json!(["", ""]),
+                        })
+                        .collect()
+                }
+                None => bail!(
+                    "--values {want}: the run compares no such path and the mapping maps no field there (a mapped field's path, or a slot field as entities.KIND[N].FIELD)"
+                ),
             };
-            let rows: Vec<Value> = free
-                .values
-                .iter()
-                .map(|(o, m)| json!([show(o.get(p)), show(m.get(p))]))
-                .collect();
             by.insert(want.clone(), Value::Array(rows));
         }
         write("values.json", &json!({"frames": free.frames, "values": by}))?;
@@ -1136,6 +1165,7 @@ mod tests {
             scope_end: None,
             out_of_scope: 0,
             sound: Vec::new(),
+            watched: Vec::new(),
         }
     }
 

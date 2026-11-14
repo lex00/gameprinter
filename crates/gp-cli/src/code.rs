@@ -90,6 +90,13 @@ pub struct ListingArgs {
     /// List every routine, not only those that ran.
     #[arg(long)]
     pub all: bool,
+    /// Instead of the code, every instruction the runs saw write this RAM
+    /// byte (`E70F`, `$0770`), block clears and copies (`ldir`) and pushes
+    /// included, with its count, its routine and where the runs called
+    /// that routine from (on an arcade romset). The first frame is the
+    /// earliest over the clips. Needs --clips. Repeat for more.
+    #[arg(long, value_name = "ADDR", requires = "clips")]
+    pub writes: Vec<String>,
     /// Write the listing to this file (outside any git work tree) instead
     /// of standard output.
     #[arg(long)]
@@ -484,6 +491,13 @@ fn listing(a: &ListingArgs, paths: &Paths) -> Result<Outcome> {
         Some(s) => parse_window(s)?,
         None => Window::WHOLE,
     };
+    if !a.writes.is_empty() {
+        let addrs = write_addrs(&a.writes)?;
+        let clips = clips_of(&a.runs, paths)?;
+        let (text, mut doc) = writes_nes(&paths.home, &rom, &clips, window, &addrs)?;
+        doc["window"] = json!(window.text());
+        return Ok(Outcome::ok(doc, text.trim_end().to_owned()));
+    }
     let counted = if a.runs.clips.is_empty() {
         if !a.runs.only.is_empty() || a.runs.frames.is_some() {
             bail!("--only and --frames choose clips of --clips sets; none given");
@@ -653,6 +667,138 @@ fn listing(a: &ListingArgs, paths: &Paths) -> Result<Outcome> {
     Ok(Outcome::ok(doc, text.trim_end().to_owned()))
 }
 
+/// `--writes`' addresses.
+fn write_addrs(given: &[String]) -> Result<Vec<u16>> {
+    given
+        .iter()
+        .map(|r| {
+            u16::from_str_radix(r.trim_start_matches('$').trim_start_matches("0x"), 16)
+                .with_context(|| format!("--writes {r} isn't an address"))
+        })
+        .collect()
+}
+
+/// `gp code listing --writes` on an iNES ROM: each clip's window run with
+/// every instruction watched, and each instruction that wrote one of
+/// `addrs` (a store, a read-modify-write, or a push, `jsr` or `brk` onto
+/// the stack) counted with the first frame it did. Internal RAM is matched
+/// through its mirrors. An interrupt's own pushes have no instruction and
+/// aren't counted.
+fn writes_nes(
+    home: &Path,
+    rom: &[u8],
+    clips: &[ClipInput],
+    window: Window,
+    addrs: &[u16],
+) -> Result<(String, serde_json::Value)> {
+    use std::fmt::Write as _;
+    use tetanes_core::cpu::Cpu;
+    use tetanes_core::cpu::instr::Instr;
+    let norm = |a: u16| if a < 0x2000 { a & 0x7ff } else { a };
+    let want: BTreeSet<u16> = addrs.iter().map(|&a| norm(a)).collect();
+    // By address written, then the instruction's PRG offset and CPU
+    // address: how many bytes, and the first frame.
+    let mut found: BTreeMap<(u16, u32, u16), (u64, u64)> = BTreeMap::new();
+    let feed = |i: &gp_evidence::input_log::InputFrame| gp_evidence::input_log::InputFrame {
+        polled: true,
+        pads: i.pads,
+        reset: i.reset,
+    };
+    for c in clips {
+        let n = c.inputs.len() as u64;
+        let (first, last) = (window.first.max(1), window.last.min(n));
+        if first > last {
+            continue;
+        }
+        let (mut nes, at) =
+            console_before(home, rom, c, first).with_context(|| format!("clip {}", c.id))?;
+        nes.set_video(false);
+        let layout = gp_events::Layout::of(nes.bus())?;
+        for i in &c.inputs[at..(first - 1) as usize] {
+            nes.step(feed(i))?;
+        }
+        for f in first..=last {
+            nes.step_with(feed(&c.inputs[(f - 1) as usize]), |bus| {
+                let pc = bus.cpu.pc;
+                let r = Cpu::INSTR_REF[usize::from(bus.peek(pc))];
+                let pushes = match r.instr {
+                    Instr::PHA | Instr::PHP => 1,
+                    Instr::JSR => 2,
+                    Instr::BRK => 3,
+                    _ => 0,
+                };
+                let mut hit = |a: u16| {
+                    if want.contains(&norm(a)) {
+                        let o = layout
+                            .rom_offset(bus, pc)
+                            .map_or(gp_events::NO_ROM, |o| o as u32);
+                        let e = found.entry((norm(a), o, pc)).or_insert((0, f));
+                        e.0 += 1;
+                    }
+                };
+                for i in 0..pushes {
+                    hit(0x100 | u16::from(bus.cpu.sp.wrapping_sub(i)));
+                }
+                if gp_events::footprint::writes_memory(r.instr, r.addr_mode)
+                    && let Some(a) = gp_events::footprint::target(bus, pc, r.instr, r.addr_mode)
+                {
+                    hit(a);
+                }
+            })?;
+        }
+    }
+    let map = CodeMap::of(rom, &[])?;
+    let mut text = String::new();
+    let mut rows = Vec::new();
+    for &addr in &want {
+        let mine: Vec<_> = found
+            .range((addr, 0, 0)..=(addr, u32::MAX, u16::MAX))
+            .collect();
+        if mine.is_empty() {
+            let _ = writeln!(text, "; ${addr:04X}: no run wrote it");
+            rows.push(json!({"addr": format!("{addr:04X}"), "writes": 0, "writers": []}));
+            continue;
+        }
+        let total: u64 = mine.iter().map(|(_, v)| v.0).sum();
+        let first = mine.iter().map(|(_, v)| v.1).min();
+        let _ = writeln!(
+            text,
+            "; ${addr:04X}: {total} writes by {} instructions{}",
+            mine.len(),
+            first.map_or(String::new(), |f| format!(", first on frame {f}")),
+        );
+        let mut writers = Vec::new();
+        for (&(_, o, pc), &(count, first)) in mine {
+            let va = map.namer.va(o, pc);
+            let name = va.map_or(format!("{pc:04X}"), va_hex);
+            let insn = va
+                .and_then(|v| map.insn_at(v))
+                .map(|i| i.text())
+                .unwrap_or_default();
+            let routine = va
+                .and_then(|v| map.routine_of(v))
+                .map(|i| map.routines[i].name.clone());
+            let mut line = format!("{name}  {insn:<16} {count:>8}  first on frame {first}");
+            if let Some(r) = &routine {
+                let _ = write!(line, "  in {r}");
+            }
+            let _ = writeln!(text, "{line}");
+            writers.push(json!({
+                "pc": name, "insn": insn, "writes": count, "first_frame": first,
+                "routine": routine,
+            }));
+        }
+        text.push('\n');
+        rows.push(json!({
+            "addr": format!("{addr:04X}"),
+            "writes": total,
+            "first_frame": first,
+            "writers": writers,
+        }));
+    }
+    Ok((text, json!({ "writes": rows })))
+}
+
 /// `gp code listing` on an arcade romset (crate::code_z80).
 fn listing_z80(a: &ListingArgs, paths: &Paths, rom: &[u8]) -> Result<Outcome> {
     let set = gp_arcade::Romset::from_zip(rom)?;
@@ -670,6 +816,13 @@ fn listing_z80(a: &ListingArgs, paths: &Paths, rom: &[u8]) -> Result<Outcome> {
             (window.first, window.last),
         )?)
     };
+    if !a.writes.is_empty() {
+        let addrs = write_addrs(&a.writes)?;
+        let ran = ran.context("--writes needs --clips: the runs whose writes are listed")?;
+        let (text, mut doc) = crate::code_z80::writes(&set, &ran, &addrs);
+        doc["window"] = json!(window.text());
+        return Ok(Outcome::ok(doc, text.trim_end().to_owned()));
+    }
     let wanted = a
         .routine
         .iter()
