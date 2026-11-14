@@ -110,12 +110,7 @@ pub fn index_nes_roms(
     files.sort();
     let mut index = std::collections::HashMap::new();
     for path in files {
-        let mut head = [0u8; 4];
-        let is_nes = std::fs::File::open(&path)
-            .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head))
-            .is_ok()
-            && looks_like_nes(&head);
-        if !is_nes {
+        if !file_looks_like_nes(&path) {
             continue;
         }
         if let Ok(image) = identify_nes(&std::fs::read(&path)?) {
@@ -127,6 +122,16 @@ pub fn index_nes_roms(
 
 pub fn looks_like_nes(bytes: &[u8]) -> bool {
     bytes.starts_with(INES_MAGIC)
+}
+
+/// Whether the file at `path` starts as an iNES image does, reading only
+/// its first four bytes; a file that can't be read or is shorter doesn't.
+pub fn file_looks_like_nes(path: &std::path::Path) -> bool {
+    let mut head = [0u8; 4];
+    std::fs::File::open(path)
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head))
+        .is_ok()
+        && looks_like_nes(&head)
 }
 
 pub fn identify_nes(bytes: &[u8]) -> Result<NesImage, SourceError> {
@@ -300,7 +305,7 @@ pub fn diff_ranges(a: &[u8], b: &[u8], gap: usize) -> Vec<ByteRange> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Builds a synthetic image. Tests never use real game data.
@@ -314,7 +319,8 @@ mod tests {
         v
     }
 
-    fn ines(prg16k: u8, chr8k: u8, flags6: u8, flags7: u8) -> [u8; 16] {
+    /// An iNES header for these bank counts and flags.
+    pub(crate) fn ines(prg16k: u8, chr8k: u8, flags6: u8, flags7: u8) -> [u8; 16] {
         let mut h = [0u8; 16];
         h[..4].copy_from_slice(INES_MAGIC);
         h[4] = prg16k;

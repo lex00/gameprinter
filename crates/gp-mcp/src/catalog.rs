@@ -19,7 +19,6 @@ use gp_model::path::Step;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 /// The state file's name, in a directory of assets in the lifted format.
 pub const STATE_FILE: &str = "slots.toml";
@@ -161,13 +160,7 @@ pub fn schema() -> String {
     text
 }
 
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    let d = Sha256::digest(bytes);
-    d.iter().fold(String::new(), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
-        s
-    })
-}
+pub use gp_theme::format::sha256_hex;
 
 /// The digest of a set of files by name: `sha256sum` lines sorted by name,
 /// hashed again, as the template manifest's `lifted_sha256` is.

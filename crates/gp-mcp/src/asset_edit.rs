@@ -1341,6 +1341,56 @@ pub(crate) fn colors_preview(p: &Pic, before: [[u8; 3]; 4], after: [[u8; 3]; 4])
     out
 }
 
+/// The slot's palettes after `a`'s palette ops on palette `pi`, or, with
+/// `same_role`, on every palette the slot gives the same role.
+pub(crate) fn palettes_after(
+    model: &gp_model::Model,
+    slot: &str,
+    old: &[[u8; 4]],
+    pi: usize,
+    a: &EditArgs,
+) -> Result<Vec<[u8; 4]>, String> {
+    let roles = model
+        .assets
+        .get(slot)
+        .map(|s| s.item_roles.clone())
+        .unwrap_or_default();
+    let which: Vec<usize> = match (a.same_role, roles.get(pi)) {
+        (true, Some(role)) => (0..old.len())
+            .filter(|i| roles.get(*i) == Some(role))
+            .collect(),
+        (true, None) => {
+            return Err(format!(
+                "slot `{slot}` gives palette {pi} no role (item_roles), so same_role has nothing to match"
+            ));
+        }
+        (false, _) => vec![pi],
+    };
+    let mut new = old.to_vec();
+    for &i in &which {
+        for (k, op) in a.palette_ops.iter().enumerate() {
+            let other = match op {
+                PaletteOp::CopyFrom { entity: o } => {
+                    let osp = model
+                        .entities
+                        .get(o)
+                        .and_then(|e| e.core.sprite.as_ref())
+                        .ok_or(format!("entity `{o}` has no sprite"))?;
+                    Some(*old.get(osp.palette as usize).ok_or(format!(
+                        "`{o}`'s palette {} is past the slot's {}",
+                        osp.palette,
+                        old.len()
+                    ))?)
+                }
+                _ => None,
+            };
+            new[i] = apply_palette(new[i], op, other)
+                .map_err(|e| format!("palette op {k} ({}): {e}", op.name()))?;
+        }
+    }
+    Ok(new)
+}
+
 fn palette_edit(config: &Config, a: &EditArgs, entity: &str) -> Result<Reply, String> {
     let dir = config.existing_copy(&a.copy)?;
     let text = fs::read_to_string(dir.join(gp_model::MODEL_FILE))
@@ -1363,44 +1413,7 @@ fn palette_edit(config: &Config, a: &EditArgs, entity: &str) -> Result<Reply, St
         Ok(x) => x,
         Err(refused) => return Ok(refused),
     };
-    let roles = model
-        .assets
-        .get(&slot)
-        .map(|s| s.item_roles.clone())
-        .unwrap_or_default();
-    let which: Vec<usize> = match (a.same_role, roles.get(pi)) {
-        (true, Some(role)) => (0..old.len())
-            .filter(|i| roles.get(*i) == Some(role))
-            .collect(),
-        (true, None) => {
-            return Err(format!(
-                "slot `{slot}` gives palette {pi} no role (item_roles), so same_role has nothing to match"
-            ));
-        }
-        (false, _) => vec![pi],
-    };
-    let mut new = old.clone();
-    for &i in &which {
-        for (k, op) in a.palette_ops.iter().enumerate() {
-            let other = match op {
-                PaletteOp::CopyFrom { entity: o } => {
-                    let osp = model
-                        .entities
-                        .get(o)
-                        .and_then(|e| e.core.sprite.as_ref())
-                        .ok_or(format!("entity `{o}` has no sprite"))?;
-                    Some(*old.get(osp.palette as usize).ok_or(format!(
-                        "`{o}`'s palette {} is past the slot's {}",
-                        osp.palette,
-                        old.len()
-                    ))?)
-                }
-                _ => None,
-            };
-            new[i] = apply_palette(new[i], op, other)
-                .map_err(|e| format!("palette op {k} ({}): {e}", op.name()))?;
-        }
-    }
+    let new = palettes_after(&model, &slot, old, pi, a)?;
     let changed: Vec<usize> = (0..old.len()).filter(|&i| old[i] != new[i]).collect();
     let shared_with: Vec<&String> = model
         .entities

@@ -51,6 +51,10 @@ pub enum SelfCmd {
     /// Print the named features this build knows as Markdown (the source
     /// of docs/features.md, which `just docs` writes).
     Features,
+    /// Print every command this gp has, from its own command tree: each
+    /// one's words, help, and arguments and flags with their kinds, for
+    /// `gp mcp`'s gp_commands and gp_run (docs/mcp.md, "Every command").
+    Commands,
     /// Write the runtime shell's generated files (docs/shell.md): the
     /// storage interface's bindings from wit/shell/storage.wit (a Rust
     /// trait in gp-present and the JavaScript host's check) and the web
@@ -69,6 +73,7 @@ pub(crate) fn run(cmd: &SelfCmd, paths: &Paths) -> Result<Outcome> {
         SelfCmd::Publish => self_publish(paths),
         SelfCmd::Docs { file, check } => crate::cli_doc::run(file, *check),
         SelfCmd::Schemas { dir, check } => crate::schemas::run(dir, *check),
+        SelfCmd::Commands => crate::cli_tree::run(),
         SelfCmd::Features => {
             let md = crate::schemas::features_markdown();
             Ok(Outcome::ok(

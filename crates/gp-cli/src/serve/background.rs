@@ -69,6 +69,7 @@ use serde_json::{Value, json};
 use super::game::{Run, read_json, run_dir, run_named, write_json};
 use super::{Ctx, Fail, Params, Route, post_only};
 use crate::mechanic::http::{Request, Response};
+use crate::serve::work::now_ms;
 
 pub(super) fn routes() -> Vec<Route> {
     vec![
@@ -663,12 +664,6 @@ pub(crate) fn rounds(run: &Run) -> Vec<Value> {
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect()
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
 }
 
 /// A refine round on one clip: gameprinter's refinement loop, `gp model

@@ -786,15 +786,8 @@ pub(crate) fn run(a: &Args<'_>, paths: &Paths) -> Result<Outcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_paths as paths;
     use gp_evidence::input_log::generate;
-
-    fn paths(home: &Path) -> Paths {
-        Paths {
-            home: home.to_owned(),
-            store: home.join("store"),
-            roms: home.join("roms"),
-        }
-    }
 
     /// A session clip from power-on (no stored path): `start` frames of
     /// nothing, then the spans.

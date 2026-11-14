@@ -146,22 +146,6 @@ pub fn sources(given: Option<&Path>) -> Result<(Registry, String)> {
     }
 }
 
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    for e in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
-        let e = e?;
-        let path = e.path();
-        if e.file_type()?.is_dir() {
-            // A folder named `sealed` is never opened (roms.rs).
-            if !e.file_name().eq_ignore_ascii_case("sealed") {
-                walk(&path, out)?;
-            }
-        } else if path.is_file() {
-            out.push(path);
-        }
-    }
-    Ok(())
-}
-
 fn known_json(reg: &Registry, sha256: &str) -> Value {
     reg.by_sha256(sha256)
         .map_or(Value::Null, |k| json!({ "id": k.id, "title": k.title }))
@@ -197,7 +181,7 @@ fn scan(paths: &Paths, reg: &Registry, from: &str) -> Result<Outcome> {
         ));
     }
     let mut files = Vec::new();
-    walk(&paths.roms, &mut files)?;
+    crate::files::walk_unsealed(&paths.roms, &mut files)?;
     files.sort();
     let (mut roms, mut romsets, mut problems, mut skipped) =
         (Vec::new(), Vec::new(), Vec::new(), 0u64);
@@ -490,20 +474,13 @@ fn add_romset(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_paths as paths;
 
     /// A made-up NROM image: a header and filler, never a real game's bytes.
     fn image(fill: u8) -> Vec<u8> {
         let mut rom = b"NES\x1a\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00".to_vec();
         rom.extend(vec![fill; 16384 + 8192]);
         rom
-    }
-
-    fn paths(home: &Path) -> Paths {
-        Paths {
-            home: home.to_path_buf(),
-            store: home.join("store"),
-            roms: home.join("roms"),
-        }
     }
 
     fn games_with(dir: &Path, id: &str, rom: &[u8]) {

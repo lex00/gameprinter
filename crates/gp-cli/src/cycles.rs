@@ -138,7 +138,7 @@ pub enum CyclesCmd {
     },
 }
 
-fn hex(s: &str) -> Result<u16> {
+pub(crate) fn hex(s: &str) -> Result<u16> {
     u16::from_str_radix(s.trim_start_matches("0x").trim_start_matches('$'), 16)
         .with_context(|| format!("`{s}` isn't a hex address"))
 }

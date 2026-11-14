@@ -13,8 +13,6 @@
 //! evaluated again, so a line whose object is missing or unreadable is
 //! passed over.
 
-use std::fs::{self, OpenOptions};
-use std::io::Write;
 use std::path::PathBuf;
 
 use gp_evidence::{Hash, Store};
@@ -72,30 +70,14 @@ pub fn log_path(store: &Store) -> PathBuf {
     store.root().join("index").join("validation.jsonl")
 }
 
-/// Line numbers (from 1) and parse errors of index lines that can't be read.
-pub type BadLines = Vec<(usize, String)>;
+pub use gp_evidence::jsonl::BadLines;
 
 /// Every readable line, and the lines that can't be read. `gp store gc`
 /// keeps every object a line names and refuses to run while one can't be
 /// read.
 pub fn lines_checked(store: &Store) -> Result<(Vec<Line>, BadLines), CacheError> {
     let path = log_path(store);
-    let text = match fs::read_to_string(&path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
-        Err(source) => return Err(CacheError::Io { path, source }),
-    };
-    let (mut good, mut bad) = (Vec::new(), Vec::new());
-    for (i, l) in text.lines().enumerate() {
-        if l.trim().is_empty() {
-            continue;
-        }
-        match serde_json::from_str(l) {
-            Ok(line) => good.push(line),
-            Err(e) => bad.push((i + 1, e.to_string())),
-        }
-    }
-    Ok((good, bad))
+    gp_evidence::jsonl::read_checked(&path).map_err(|source| CacheError::Io { path, source })
 }
 
 /// The stored result with this key, if there is one that reads back.
@@ -133,18 +115,7 @@ pub fn save(store: &Store, result: &RecordingResult, at: &str) -> Result<Hash, C
     let mut text = serde_json::to_string(&line).expect("lines serialize");
     text.push('\n');
     let path = log_path(store);
-    let io = |source| CacheError::Io {
-        path: path.clone(),
-        source,
-    };
-    fs::create_dir_all(path.parent().expect("index path has a parent")).map_err(io)?;
-    let mut f = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .map_err(io)?;
-    // One write per line, so concurrent appends can't interleave in a line.
-    f.write_all(text.as_bytes()).map_err(io)?;
+    gp_evidence::jsonl::append(&path, &text).map_err(|source| CacheError::Io { path, source })?;
     Ok(object)
 }
 
@@ -187,9 +158,9 @@ mod tests {
         let (lines, bad) = lines_checked(&store).unwrap();
         assert_eq!((lines.len(), lines[0].object, bad.len()), (1, object, 0));
         // A damaged line is reported, and the good ones still read.
-        let mut log = fs::read_to_string(log_path(&store)).unwrap();
+        let mut log = std::fs::read_to_string(log_path(&store)).unwrap();
         log.push_str("{not json\n");
-        fs::write(log_path(&store), log).unwrap();
+        std::fs::write(log_path(&store), log).unwrap();
         let (lines, bad) = lines_checked(&store).unwrap();
         assert_eq!((lines.len(), bad.len()), (1, 1));
     }

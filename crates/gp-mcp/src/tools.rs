@@ -366,6 +366,24 @@ pub fn list() -> Vec<ToolDef> {
             destructive: false,
             idempotent: false,
         },
+        ToolDef {
+            name: "gp_commands",
+            title: "List every gp command",
+            description: "Every command of the gp this server runs, read from gp's own command tree, so the list is always current. With no arguments: the groups of commands with what each is for, how many commands each holds, its road (journey first; developer and off-target tools last and marked, so don't steer the person to them), and the rules gp_run applies. With path set to a group (corpus) it lists that group's commands with their rules; with a command (corpus score) it gives the command's whole help, its rule in words, and the JSON Schema of the args gp_run takes for it. find searches the commands' help for words. The named tools are the short road for common steps; use this to reach everything else.",
+            input_schema: schema::<crate::run::CommandsArgs>(),
+            read_only: true,
+            destructive: false,
+            idempotent: true,
+        },
+        ToolDef {
+            name: "gp_run",
+            title: "Run a gp command",
+            description: "Run one gp command by its words (command: corpus score) with its arguments and flags by name in args, as gp_commands gives them; a switch takes true, a repeated one a list. The arguments are checked against the command before anything runs, and a wrong name is refused with the nearest ones. It runs this same gp with --json in the games checkout, with the person's home and ROM folder, and returns its exit code (0 done, 1 a check that failed, 2 couldn't run), its output (as JSON when it is JSON) and its errors. Long output is cut, with a note of how much and the file holding all of it. A command stops at its time limit (timeout_s, default 300, at most 1800). Rules: a command that reads, or writes the person's games, copies or home, runs at once. One that publishes, uploads, pushes, lands a change through a gate, spends money, calls a paid service or downloads a lot is refused unless confirmed_by_person is true; you may set that only after the person said yes to that exact action in this conversation, and for spending, give them the cost estimate first (its dry run prints one). Its dry-run flag, where it has one, runs at once. Servers and commands that run until stopped are refused, with what to use instead.",
+            input_schema: schema::<crate::run::RunArgs>(),
+            read_only: false,
+            destructive: true,
+            idempotent: false,
+        },
     ]
     .into_iter()
     .map(|mut t| {
@@ -458,6 +476,8 @@ fn call_tool(config: &Config, name: &str, args: Value) -> Option<Reply> {
         "requests" => with(args, |a| crate::requests::requests(config, a)),
         "moments" => with(args, |a| crate::moments::moments(config, a)),
         "refine_moment" => with(args, |a| crate::moments::refine_moment(config, a)),
+        "gp_commands" => with(args, |a| crate::run::commands(config, a)),
+        "gp_run" => with(args, |a| crate::run::run(config, a)),
         _ => return None,
     })
 }

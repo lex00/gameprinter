@@ -16,7 +16,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 use gp_evidence::input_log::{InputFrame, InputLog};
 use gp_evidence::manifest::PowerOn;
-use sha2::{Digest as _, Sha256};
 
 use crate::clip::cache;
 use crate::original::{OriginalRuntime, Platform};
@@ -39,7 +38,7 @@ pub(crate) fn put_path(home: &Path, text: &str) -> Result<(String, usize)> {
     let log = InputLog::parse(text).map_err(|e| anyhow::anyhow!("the path's input log: {e}"))?;
     // Stored in one spelling, so the same play always gets the same name.
     let text = log.to_text();
-    let sha = hex::encode(Sha256::digest(text.as_bytes()));
+    let sha = crate::template::sha256_hex(text.as_bytes());
     let f = path_file(home, &sha)?;
     if !f.is_file() {
         fs::create_dir_all(paths_dir(home))?;

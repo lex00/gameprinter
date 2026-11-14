@@ -23,6 +23,7 @@ use serde_json::json;
 
 use crate::Outcome;
 use crate::recindex::Index;
+use crate::recordings::warn_index_problems as warn_bad_lines;
 
 #[derive(Subcommand)]
 pub enum StoreCmd {
@@ -146,13 +147,6 @@ pub(crate) fn run(cmd: &StoreCmd, paths: &Paths) -> Result<Outcome> {
         StoreCmd::Unreferenced => unreferenced(&store),
         StoreCmd::Gc { .. } => unreachable!("handled above"),
     }
-}
-
-fn warn_bad_lines(index: &Index) -> Result<()> {
-    for (line, message) in index.bad_lines()? {
-        eprintln!("gp: skipping recordings index line {line}, which can't be read: {message}");
-    }
-    Ok(())
 }
 
 fn reindex(store: &Store) -> Result<Outcome> {

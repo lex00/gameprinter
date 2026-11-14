@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::Outcome;
+use crate::theme::read_model;
 
 /// The kit's format.
 pub const FORMAT: &str = "0.1.0";
@@ -410,21 +411,6 @@ fn example_dir(dir: &Path, name: &str) -> Option<PathBuf> {
         return Some(beside);
     }
     template_dir(Path::new(name)).ok()
-}
-
-/// A template's model, read from its directory or its model file.
-pub(crate) fn read_model(arg: &Path) -> Result<(Model, PathBuf)> {
-    let (file, dir) = if arg.is_dir() {
-        (arg.join(gp_model::MODEL_FILE), arg.to_owned())
-    } else {
-        (
-            arg.to_owned(),
-            arg.parent().map(Path::to_owned).unwrap_or_default(),
-        )
-    };
-    let text = fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?;
-    let m = Model::parse(&text).with_context(|| format!("{}", file.display()))?;
-    Ok((m, dir))
 }
 
 /// The template's id and its asset map, from template.toml.

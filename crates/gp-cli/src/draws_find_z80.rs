@@ -67,7 +67,7 @@ struct Step<'a> {
 /// Runs one frame with the trace and access log on, and gives the main
 /// CPU's instructions in order, each with its accesses, and interrupts as
 /// entries of their own (`insn` unread).
-fn frame(t: &mut Tapper, c: Controls) -> (Vec<Trace>, Vec<Access>) {
+pub(crate) fn frame(t: &mut Tapper, c: Controls) -> (Vec<Trace>, Vec<Access>) {
     t.set_trace(true);
     t.set_accesses(true);
     t.step(c);
@@ -405,7 +405,7 @@ impl Tracker {
 }
 
 /// The registers a memory operand's address comes from.
-fn address_regs(i: &Insn) -> u32 {
+pub(crate) fn address_regs(i: &Insn) -> u32 {
     match i.mem.map(|m| m.addr) {
         Some(Addr::Pair(bits)) => bits,
         Some(Addr::Index(Ptr::Ix, _)) => reg::IX,

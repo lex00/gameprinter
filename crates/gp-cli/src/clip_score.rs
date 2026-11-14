@@ -370,14 +370,18 @@ impl Ctx {
 
     pub(crate) fn open(paths: &Paths, game: &Path, how: &Open) -> Result<Ctx> {
         let model_dir = how.model.unwrap_or(game).to_owned();
-        let (source, assets) = Source::open_dir(&model_dir, how.assets, paths, how.module)?;
+        let rom = rom_of(paths, game, how.rom)?;
+        // The lifted assets as `gp corpus score` finds them: lifted again
+        // when the game's asset map changed.
+        let lifted = crate::corpus_score::assets_of(paths, game, &model_dir, how.assets, &rom)?;
+        let (source, assets) = Source::open_dir(&model_dir, Some(&lifted), paths, how.module)?;
         let mfile = model_dir.join(gp_interp::mapping::MAPPING_FILE);
         let mapping = Mapping::parse(
             &fs::read_to_string(&mfile).with_context(|| format!("reading {}", mfile.display()))?,
         )
         .map_err(|e| anyhow::anyhow!("{}: {e}", mfile.display()))?;
         Ok(Ctx {
-            rom: rom_of(paths, game, how.rom)?,
+            rom,
             model_dir,
             source,
             mapping,

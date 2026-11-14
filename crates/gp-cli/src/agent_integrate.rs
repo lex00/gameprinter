@@ -24,6 +24,7 @@ use serde_json::{Value, json};
 
 use crate::Outcome;
 use crate::serve::work;
+use crate::serve::work::git_ok as git;
 
 pub(crate) struct Args<'a> {
     pub repo: &'a Path,
@@ -99,25 +100,6 @@ fn note_list(v: &str) -> Vec<String> {
         .map(|x| x.trim().trim_matches('`').to_ascii_lowercase())
         .filter(|x| !x.is_empty() && x != "none")
         .collect()
-}
-
-fn git(dir: &Path, args: &[&str]) -> anyhow::Result<String> {
-    let o = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .with_context(|| format!("running git {}", args.join(" ")))?;
-    if !o.status.success() {
-        bail!(
-            "git {} failed: {}{}",
-            args.join(" "),
-            String::from_utf8_lossy(&o.stderr).trim(),
-            String::from_utf8_lossy(&o.stdout).trim()
-        );
-    }
-    Ok(String::from_utf8_lossy(&o.stdout).trim().to_owned())
 }
 
 fn git_succeeds(dir: &Path, args: &[&str]) -> bool {

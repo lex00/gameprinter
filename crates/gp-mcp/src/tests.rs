@@ -201,7 +201,9 @@ fn every_tool_takes_an_object() {
             "watch_explore",
             "watch_point",
             "view_now",
-            "capture_input"
+            "capture_input",
+            "gp_commands",
+            "gp_run"
         ]
     );
     for t in tools::list() {

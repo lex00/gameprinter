@@ -21,12 +21,7 @@ use gp_nes::{Nes, seek, testrom};
 fn running(rom: &[u8], frames: u64) -> Nes {
     let mut nes = Nes::power_on(rom, PowerOn::default()).unwrap();
     for f in 0..frames {
-        nes.step(InputFrame {
-            polled: true,
-            pads: [u8::from(f % 40 < 10), 0, 0, 0],
-            reset: false,
-        })
-        .unwrap();
+        nes.step(InputFrame::held(u8::from(f % 40 < 10))).unwrap();
     }
     nes
 }
@@ -54,12 +49,7 @@ fn chunks(c: &mut Criterion) {
     let (mut states, mut frame_events) = (Vec::new(), Vec::new());
     for f in 0..u64::from(DEFAULT_CHUNK_FRAMES) {
         states.push(nes.canonical_state().unwrap());
-        nes.step(InputFrame {
-            polled: true,
-            pads: [u8::from(f % 16 < 4), 0, 0, 0],
-            reset: false,
-        })
-        .unwrap();
+        nes.step(InputFrame::held(u8::from(f % 16 < 4))).unwrap();
         frame_events.push(nes.take_events());
     }
     let table = gp_nes::canonical::field_table();

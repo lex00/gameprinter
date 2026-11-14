@@ -547,6 +547,90 @@ fn an_agent_asks_next_and_hears_a_hand_off() {
     finish(c);
 }
 
+/// gp_commands and gp_run reach any gp command: the list comes from this
+/// gp's own tree, a read runs for real, a publish waits for the person's
+/// yes, a dry run of a paid command runs, and a wrong flag is refused
+/// with the nearest name before anything runs.
+#[test]
+fn an_agent_lists_and_runs_any_command() {
+    let d = tempfile::tempdir().unwrap();
+    let (home, work, games) = (
+        d.path().join("home"),
+        d.path().join("work"),
+        d.path().join("games"),
+    );
+    fs::create_dir_all(&games).unwrap();
+    let mut cmd = gp(&home);
+    cmd.env("GP_GAMES_DIR", &games);
+    let mut c = connect_cmd(cmd, &work);
+
+    let (v, err) = c.call("gp_commands", json!({}));
+    assert!(!err, "{v}");
+    assert!(v["commands"].as_u64().unwrap() > 200, "{v}");
+    let groups = v["groups"].as_array().unwrap();
+    assert_eq!(groups[0]["road"], "journey", "{v}");
+    assert_eq!(groups.last().unwrap()["road"], "developer", "{v}");
+    assert!(v["rules"]["ask"]["means"].is_string(), "{v}");
+
+    let (v, err) = c.call("gp_commands", json!({"path": "corpus score"}));
+    assert!(!err, "{v}");
+    assert_eq!(v["args"]["required"], json!(["game", "run"]), "{v}");
+
+    // A read, run for real: gp env, with the server's home.
+    let (v, err) = c.call("gp_run", json!({"command": "env"}));
+    assert!(!err, "{v}");
+    assert_eq!(v["exit"], 0, "{v}");
+    assert_eq!(v["command"], "gp --json env");
+    assert_eq!(
+        v["json"]["paths"]["home"].as_str().map(Path::new),
+        Some(home.as_path()),
+        "{v}"
+    );
+
+    // Publishing waits for the person.
+    let (v, err) = c.call("gp_run", json!({"command": "self publish"}));
+    assert!(err, "{v}");
+    assert!(
+        v["refused"]
+            .as_str()
+            .unwrap()
+            .contains("confirmed_by_person"),
+        "{v}"
+    );
+    assert_eq!(v["needs"], "publishes");
+
+    // A paid command's dry run passes the rule and runs (and gp refuses
+    // the game that isn't there).
+    let (v, err) = c.call(
+        "gp_run",
+        json!({"command": "theme generate", "args": {"game": "nosuch", "style": "plain", "dry-run": true}}),
+    );
+    assert!(v.get("refused").is_none(), "{v}");
+    assert_eq!(v["exit"], 2, "{v}");
+    assert!(err, "exit 2 is a command that couldn't run");
+    assert!(v["stderr"].as_str().unwrap().contains("nosuch"), "{v}");
+    let (v, err) = c.call(
+        "gp_run",
+        json!({"command": "theme generate", "args": {"game": "nosuch", "style": "plain"}}),
+    );
+    assert!(err, "{v}");
+    assert_eq!(v["needs"], "spends", "{v}");
+
+    // A server is refused, and a wrong flag names the nearest.
+    let (v, err) = c.call("gp_run", json!({"command": "serve"}));
+    assert!(err, "{v}");
+    let (v, err) = c.call(
+        "gp_run",
+        json!({"command": "corpus score", "args": {"gaem": "x"}}),
+    );
+    assert!(err, "{v}");
+    assert!(
+        v["error"].as_str().unwrap().contains("nearest: game"),
+        "{v}"
+    );
+    finish(c);
+}
+
 /// Starts `gp mcp` on Moss Hop's lifted assets and initializes a session.
 fn connect(home: &Path, work: &Path, rom: &Path, lifted: &Path) -> Client {
     let mut child = gp(home)

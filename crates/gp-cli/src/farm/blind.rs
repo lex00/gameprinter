@@ -33,6 +33,8 @@ use super::{self as farm, A, B, LEFT, Move, RIGHT, Rng};
 use gp_evidence::Paths;
 use gp_evidence::input_log::InputFrame;
 
+use super::topdown::wrap8;
+
 /// Frames a death or a scene change may take before play answers again.
 const RECOVER: usize = 1200;
 /// Progress in pixels a freeze needs before it counts as a level clear.
@@ -210,10 +212,6 @@ struct World {
     probe_hit: Option<(usize, Value)>,
 }
 
-fn wrap8(d: i64) -> i64 {
-    (d + 384).rem_euclid(256) - 128
-}
-
 impl World {
     fn wram(&self) -> &[u8] {
         &self.nes.wram()[..0x800]
@@ -233,11 +231,7 @@ impl World {
     }
 
     fn step(&mut self, pad: u8, log: &mut Vec<InputFrame>) -> Result<()> {
-        let f = InputFrame {
-            polled: true,
-            pads: [pad, 0, 0, 0],
-            reset: false,
-        };
+        let f = InputFrame::held(pad);
         self.nes.step(f)?;
         log.push(f);
         Ok(())
@@ -772,11 +766,7 @@ pub(crate) fn discover(bytes: &[u8], paths: &Paths) -> Result<Discovery> {
     }
     // Settle: nothing held for 4 s, so the player stands.
     for _ in 0..240 {
-        let f = InputFrame {
-            polled: true,
-            pads: [0, 0, 0, 0],
-            reset: false,
-        };
+        let f = InputFrame::held(0);
         nes.step(f)?;
         log.push(f);
     }
@@ -804,11 +794,7 @@ pub(crate) fn discover(bytes: &[u8], paths: &Paths) -> Result<Discovery> {
                 }
                 for (pad, n) in seq {
                     for _ in 0..n {
-                        let f = InputFrame {
-                            polled: true,
-                            pads: [pad, 0, 0, 0],
-                            reset: false,
-                        };
+                        let f = InputFrame::held(pad);
                         nes.step(f)?;
                         log.push(f);
                     }
@@ -932,11 +918,7 @@ fn lane_start(
             for pad in [0, l.pads.right, l.pads.left] {
                 m.restore(&snap, frame, held)?;
                 for _ in 0..8 {
-                    m.step(InputFrame {
-                        polled: true,
-                        pads: [pad, 0, 0, 0],
-                        reset: false,
-                    })?;
+                    m.step(InputFrame::held(pad))?;
                 }
                 ends.push(m.wram()[usize::from(l.x)]);
             }
@@ -1186,11 +1168,7 @@ fn learn_with(nes: &mut Machine, hold: usize) -> Result<Learned> {
     let boxes0 = nes.boxes();
     let fwd = if right { rt } else { lt };
     for _ in 0..12 {
-        nes.step(InputFrame {
-            polled: true,
-            pads: [fwd, 0, 0, 0],
-            reset: false,
-        })?;
+        nes.step(InputFrame::held(fwd))?;
     }
     let y1 = y_sign * i64::from(nes.wram()[y]);
     let boxes1 = nes.boxes();
@@ -1207,11 +1185,7 @@ fn learn_with(nes: &mut Machine, hold: usize) -> Result<Learned> {
     let mut last = (i64::from(nes.wram()[x]), 0i64);
     for i in 0..600 {
         let p = fwd | run_b | if i % 40 < 20 { jump } else { 0 };
-        nes.step(InputFrame {
-            polled: true,
-            pads: [p, 0, 0, 0],
-            reset: false,
-        })?;
+        nes.step(InputFrame::held(p))?;
         let s = nes.scroll();
         let xv = i64::from(nes.wram()[x]);
         if i > 0 && s != last.1 {
@@ -1255,11 +1229,7 @@ fn run_seen(
     let mut vis = vec![seen(nes)];
     for &(p, n) in pads {
         for _ in 0..n {
-            nes.step(InputFrame {
-                polled: true,
-                pads: [p, 0, 0, 0],
-                reset: false,
-            })?;
+            nes.step(InputFrame::held(p))?;
             out.push(nes.wram()[..0x800].to_vec());
             vis.push(seen(nes));
         }
@@ -1286,11 +1256,7 @@ fn still_bytes(nes: &mut Machine, l: &Learned) -> Result<Vec<u16>> {
                 }
             }
         };
-        nes.step(InputFrame {
-            polled: true,
-            pads: [p, 0, 0, 0],
-            reset: false,
-        })?;
+        nes.step(InputFrame::held(p))?;
         for (a, mv) in moved.iter_mut().enumerate() {
             if nes.wram()[a] != w0[a] {
                 *mv = true;

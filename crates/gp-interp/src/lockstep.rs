@@ -375,6 +375,30 @@ fn read_model<M: Runtime>(
         .collect()
 }
 
+/// The mapping's start condition, parsed.
+pub fn start_of(mapping: &Mapping) -> Result<Option<gp_runtime::select::Condition>, String> {
+    mapping
+        .start
+        .as_deref()
+        .map(gp_runtime::select::Condition::parse)
+        .transpose()
+        .map_err(|e| format!("the mapping's start: {e}"))
+}
+
+/// Whether the start condition holds on the original as it stands.
+pub(crate) fn start_holds<O: Runtime>(
+    original: &O,
+    cond: &gp_runtime::select::Condition,
+) -> Result<bool, String> {
+    cond.eval(&mut |sel| {
+        original
+            .query(&sel.to_string())?
+            .first()
+            .and_then(|e| e.value.as_int())
+            .ok_or(format!("{sel} names no number"))
+    })
+}
+
 pub fn polled(events: &[gp_runtime::Event]) -> bool {
     events
         .iter()
@@ -779,21 +803,8 @@ fn run<O: Runtime, M: Runtime>(
         watch(out);
         Ok(())
     };
-    let start = mapping
-        .start
-        .as_deref()
-        .map(gp_runtime::select::Condition::parse)
-        .transpose()
-        .map_err(|e| format!("the mapping's start: {e}"))?;
-    let holds = |original: &O, cond: &gp_runtime::select::Condition| {
-        cond.eval(&mut |sel| {
-            original
-                .query(&sel.to_string())?
-                .first()
-                .and_then(|e| e.value.as_int())
-                .ok_or(format!("{sel} names no number"))
-        })
-    };
+    let start = start_of(mapping)?;
+    let holds = start_holds::<O>;
     // Without a start condition the model's power-on state stands for the
     // frame before the first polled one, so the original is kept one frame
     // behind until then.

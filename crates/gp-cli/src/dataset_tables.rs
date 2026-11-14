@@ -167,11 +167,6 @@ pub(crate) fn write_parquet(
     Ok(())
 }
 
-pub(crate) fn sha256(bytes: &[u8]) -> String {
-    use sha2::Digest as _;
-    hex::encode(sha2::Sha256::digest(bytes))
-}
-
 /// Croissant 1.0 metadata for any set of tables: one FileObject and one
 /// RecordSet a table, each file at `data/<table>.<ext>`.
 pub(crate) fn croissant_for(

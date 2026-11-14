@@ -1215,7 +1215,7 @@ fn trace_instructions_arcade(
 }
 
 /// The store's SQLite index, brought up to date with the recordings log.
-fn warn_index_problems(index: &Index) -> Result<()> {
+pub(crate) fn warn_index_problems(index: &Index) -> Result<()> {
     for (line, message) in index.bad_lines()? {
         eprintln!("gp: skipping recordings index line {line}, which can't be read: {message}");
     }

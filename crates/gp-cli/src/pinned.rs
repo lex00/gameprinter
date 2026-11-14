@@ -14,7 +14,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use gp_model::validate::{RefRoot, pinned};
-use sha2::{Digest, Sha256};
 
 /// One pinned download.
 pub struct Pin {
@@ -96,7 +95,7 @@ impl<'a> Resolver<'a> {
                         missing.push((pin.name, pin.fetch));
                         return Err(String::new());
                     }
-                    Ok(bytes) if hex::encode(Sha256::digest(&bytes)) != *sha => {
+                    Ok(bytes) if crate::template::sha256_hex(&bytes) != *sha => {
                         return Err(format!(
                             "{} doesn't match the pinned hash; download it again ({} after removing it)",
                             path.display(),

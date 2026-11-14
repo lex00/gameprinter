@@ -21,6 +21,7 @@ use super::{
 };
 use crate::mapping::Mapping;
 use crate::mechanics::{Catalog, Mechanic};
+use crate::scenario::params_table;
 
 /// A number the refinement loop can change, as the model sets it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,25 +34,6 @@ pub struct Fitted {
     /// A frame count or a count: whole numbers.
     pub whole: bool,
     pub range: String,
-}
-
-fn table_at<'a>(tree: &'a toml::Value, path: &str) -> Option<&'a toml::Value> {
-    let mut node = tree;
-    for part in path.split('.') {
-        node = node.get(part)?;
-    }
-    Some(node)
-}
-
-/// The table a mechanic's parameters are in for one of its uses.
-fn params_table<'a>(tree: &'a toml::Value, used_by: &str) -> Option<(String, &'a toml::Value)> {
-    match table_at(tree, used_by) {
-        Some(t @ toml::Value::Table(_)) => Some((used_by.to_owned(), t)),
-        _ => {
-            let (base, _) = used_by.rsplit_once('.')?;
-            Some((base.to_owned(), table_at(tree, base)?))
-        }
-    }
 }
 
 /// A number's value: an integer or a fixed-point string.

@@ -25,6 +25,7 @@ use gp_sim::{Fx, Spec};
 
 use crate::lockstep::{self, Lockstep, Mode, Options};
 use crate::mapping::Mapping;
+use crate::translate::raw as num;
 
 /// The kinds of moment, in the order a strip lists them.
 pub const KINDS: [&str; 6] = ["jump", "landing", "death", "life_lost", "counter", "level"];
@@ -61,14 +62,6 @@ pub struct Moment {
 pub enum Side {
     Original,
     Model,
-}
-
-fn num(v: &Value) -> Option<i64> {
-    match v {
-        Value::Fixed(r) => Some(*r),
-        Value::Int(n) => Some(n << 16),
-        _ => None,
-    }
 }
 
 fn flag(v: &Value) -> Option<bool> {

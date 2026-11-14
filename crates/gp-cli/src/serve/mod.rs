@@ -272,13 +272,8 @@ impl Ctx {
 /// The gameprinter checkout: the working folder or one above it that holds
 /// `editor/` and `scripts/web/`, else the checkout gp was built from.
 pub(crate) fn repo_root() -> PathBuf {
-    let is_repo = |d: &Path| d.join("scripts/web/page/preview.js").is_file();
-    if let Ok(here) = std::env::current_dir()
-        && let Some(d) = here.ancestors().find(|d| is_repo(d))
-    {
-        return d.to_path_buf();
-    }
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    crate::repo::find_repo(|d| d.join("scripts/web/page/preview.js").is_file())
+        .unwrap_or_else(crate::repo::built)
 }
 
 /// A request handler: the context, the request and the path's `{name}`

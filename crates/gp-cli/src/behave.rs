@@ -15,7 +15,10 @@ use gp_gaps::{CellChange, Code, FrameFacts, RamWrite, Run};
 use gp_nes::Nes;
 use tetanes_core::memory::Src;
 
+use crate::gaps::vram_cell;
 use crate::reach::ClipInput;
+use crate::solve::arith::ONE;
+use crate::solve::timers::steps;
 
 /// One clip's frames, and what its run left for the run's totals.
 struct Clip {
@@ -507,76 +510,4 @@ pub(crate) fn open_facts(b: &Built) -> Vec<gp_nes::harvest::Open> {
         });
     }
     out
-}
-
-/// The vram address's physical cell under `mirroring` (game-printer's
-/// `gp gaps`' helper; wave 4 brings `gp gaps`).
-fn vram_cell(addr: u16, mirroring: u8, tables: usize) -> Option<(u8, u8, u8)> {
-    if !(0x2000..0x3F00).contains(&addr) {
-        return None;
-    }
-    let a = (addr - 0x2000) & 0xFFF;
-    let logical = (a >> 10) as u8;
-    let within = a & 0x3FF;
-    if within >= 0x3C0 {
-        return None;
-    }
-    let phys = match mirroring {
-        0 => logical & 1,
-        1 => logical >> 1,
-        2 => 0,
-        3 => 1,
-        _ => logical,
-    };
-    if usize::from(phys) >= tables {
-        return None;
-    }
-    let (row, col) = (within / 32, within % 32);
-    Some((phys, (col / 2) as u8, (row / 2) as u8))
-}
-
-/// One in the solver's 16.16 fixed point (game-printer's `solve::arith`).
-const ONE: i64 = 1 << 16;
-
-/// One series' change points, as game-printer's `solve::timers::steps`
-/// reads them.
-struct Steps {
-    changes: Vec<usize>,
-    step: i64,
-    reloads: Vec<(usize, i64)>,
-    period: Option<u64>,
-}
-
-fn steps(v: &[i64]) -> Steps {
-    let changes: Vec<usize> = (1..v.len()).filter(|&i| v[i] != v[i - 1]).collect();
-    let deltas: Vec<i64> = changes.iter().map(|&i| v[i] - v[i - 1]).collect();
-    let up = deltas.iter().filter(|d| **d == ONE).count();
-    let down = deltas.iter().filter(|d| **d == -ONE).count();
-    let step = if up >= down { ONE } else { -ONE };
-    let reloads: Vec<(usize, i64)> = changes
-        .iter()
-        .zip(&deltas)
-        .filter(|(_, d)| **d != step)
-        .map(|(&i, _)| (i, v[i]))
-        .collect();
-    // The gaps between steps that have no reload between them.
-    let regular: Vec<usize> = changes
-        .iter()
-        .zip(&deltas)
-        .filter(|(_, d)| **d == step)
-        .map(|(&i, _)| i)
-        .collect();
-    let mut gaps: Vec<u64> = Vec::new();
-    for w in regular.windows(2) {
-        if !reloads.iter().any(|(r, _)| *r > w[0] && *r <= w[1]) {
-            gaps.push((w[1] - w[0]) as u64);
-        }
-    }
-    let period = (gaps.len() >= 2 && gaps.windows(2).all(|g| g[0] == g[1])).then(|| gaps[0]);
-    Steps {
-        changes,
-        step,
-        reloads,
-        period,
-    }
 }

@@ -23,6 +23,7 @@ use gp_evidence::input_log::{InputFrame, InputLog};
 use serde_json::{Value, json};
 
 use crate::farm::machine::Machine;
+use crate::harvest::nes_pad;
 use crate::mechanic::detect as m;
 
 /// A game's folder in the games checkout and the ROM its package names.
@@ -183,24 +184,6 @@ pub(crate) fn video_of_clip(paths: &Paths, game: &str, session: &str, n: u64) ->
     let hash = gp_evidence::hash::Hash::of(&fs::read(&png)?).to_hex();
     let range = format!("{}..{}", start + 1, parsed.frames.len() + 1);
     Ok(json!({"recording": id, "video": png, "sha256": hash, "frames": range}))
-}
-
-/// An arcade frame's controls as the NES pad's bits the detectors read.
-fn nes_pad(c: u8) -> u8 {
-    use gp_evidence::input_log::button as b;
-    use gp_explore::arcade as a;
-    [
-        (a::COIN, b::SELECT),
-        (a::START, b::START),
-        (a::RIGHT, b::RIGHT),
-        (a::LEFT, b::LEFT),
-        (a::DOWN, b::DOWN),
-        (a::UP, b::UP),
-        (a::TAP, b::A),
-    ]
-    .iter()
-    .filter(|(x, _)| c & x != 0)
-    .fold(0, |p, (_, y)| p | y)
 }
 
 /// The fall off the screen the boxes may not show: the y byte says so.

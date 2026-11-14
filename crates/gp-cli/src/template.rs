@@ -9,22 +9,13 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow};
 use gp_assets::{AssetMap, RomLayout};
 use serde_json::json;
-use sha2::{Digest, Sha256};
 
 use crate::Outcome;
 
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
-}
+pub use gp_theme::format::sha256_hex;
 
 /// The SHA-256 of `sha256sum`'s output for the files, sorted by name.
-pub fn lifted_digest(files: &BTreeMap<String, Vec<u8>>) -> String {
-    let mut lines = String::new();
-    for (name, bytes) in files {
-        let _ = writeln!(lines, "{}  {name}", sha256_hex(bytes));
-    }
-    sha256_hex(lines.as_bytes())
-}
+pub use gp_mcp::catalog::files_digest as lifted_digest;
 
 /// A lifted text line at least this long found in another file means a
 /// lifted asset was copied into it.

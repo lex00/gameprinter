@@ -53,11 +53,7 @@ const AIR: usize = 90;
 
 /// A frame with these buttons held.
 fn press(pad: u8) -> InputFrame {
-    InputFrame {
-        polled: true,
-        pads: [pad, 0, 0, 0],
-        reset: false,
-    }
+    InputFrame::held(pad)
 }
 
 /// The input log bits for the d-pad: right 0x80, left 0x40.
@@ -255,33 +251,18 @@ fn start_at(
     inputs: &[gp_runtime::InputFrame],
 ) -> Result<measure::StartHere> {
     let mut o = gp_nes::protocol::NesRuntime::load(rom, power_on).map_err(anyhow::Error::msg)?;
-    let start = mapping
-        .start
-        .as_deref()
-        .map(gp_runtime::select::Condition::parse)
-        .transpose()
-        .map_err(|e| anyhow::anyhow!("the mapping's start: {e}"))?;
-    let holds =
-        |o: &gp_nes::protocol::NesRuntime, c: &gp_runtime::select::Condition| measure::holds(o, c);
-    let mut model_frame: Option<u64> = match &start {
-        Some(c) if holds(&o, c) => Some(0),
-        _ => None,
-    };
+    let mut model_frame = measure::ModelFrame::new(mapping, &o)?;
     for input in inputs {
         let events = o
             .step(std::slice::from_ref(input))
             .map_err(anyhow::Error::msg)?;
-        let polled = gp_interp::lockstep::polled(&events);
-        match (&start, &mut model_frame) {
-            (_, Some(m)) if polled => *m += 1,
-            (Some(c), None) if holds(&o, c) => model_frame = Some(0),
-            (None, None) if polled => model_frame = Some(1),
-            _ => {}
-        }
+        model_frame.step(&o, gp_interp::lockstep::polled(&events));
     }
     Ok(measure::StartHere {
         frame: o.frame(),
-        model_frame: model_frame.context("the spot is before the mapping's start holds")?,
+        model_frame: model_frame
+            .frame
+            .context("the spot is before the mapping's start holds")?,
         original: crate::original::OriginalRuntime::Nes(o),
     })
 }
@@ -831,10 +812,7 @@ fn along(paths: &Paths, a: &Args, path: &Path) -> Result<Outcome> {
     let t0 = std::time::Instant::now();
     let (_, rom) = game_and_rom(paths, a.game, a.rom)?;
     let path_text = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    let path_sha = {
-        use sha2::Digest as _;
-        hex::encode(sha2::Sha256::digest(&path_text))
-    };
+    let path_sha = crate::template::sha256_hex(&path_text);
     let log = InputLog::parse(
         &fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?,
     )
@@ -1554,10 +1532,7 @@ pub(crate) fn place_clip(
         .to_owned();
     let along = Path::new(strip["along"].as_str().context("the strip names no path")?);
     let text = fs::read(along).with_context(|| format!("reading the path {}", along.display()))?;
-    let found = {
-        use sha2::Digest as _;
-        hex::encode(sha2::Sha256::digest(&text))
-    };
+    let found = crate::template::sha256_hex(&text);
     if found != sha {
         bail!(
             "{} changed since the sweep (sha256 {found}, the strip says {sha})",
@@ -1610,10 +1585,7 @@ mod tests {
         let path = d.path().join("path.log");
         let frames: Vec<InputFrame> = (0..10).map(|k| press(k as u8)).collect();
         fs::write(&path, log_of(&frames).to_text()).unwrap();
-        let sha = {
-            use sha2::Digest as _;
-            hex::encode(sha2::Sha256::digest(fs::read(&path).unwrap()))
-        };
+        let sha = crate::template::sha256_hex(&fs::read(&path).unwrap());
         let strip = json!({
             "along": path.display().to_string(), "path_sha256": sha,
             "strip": [{"column": 3, "y": 176, "path_frame": 4,
@@ -1677,6 +1649,36 @@ pub(crate) mod measure {
         /// frames since the mapping's start.
         pub model_frame: u64,
         pub original: crate::original::OriginalRuntime,
+    }
+
+    /// The model's frame at the original's, as the lockstep counts it: 0
+    /// where the mapping's start first holds (with no start, 1 on the first
+    /// polled frame), then one more each polled frame.
+    pub(crate) struct ModelFrame {
+        start: Option<Condition>,
+        pub frame: Option<u64>,
+    }
+
+    impl ModelFrame {
+        /// With the original `o` at its first frame.
+        pub(crate) fn new<R: Runtime>(mapping: &Mapping, o: &R) -> Result<Self> {
+            let start = gp_interp::lockstep::start_of(mapping).map_err(anyhow::Error::msg)?;
+            let frame = match &start {
+                Some(c) if holds(o, c) => Some(0),
+                _ => None,
+            };
+            Ok(Self { start, frame })
+        }
+
+        /// After the original `o` ran a frame, `polled` or not.
+        pub(crate) fn step<R: Runtime>(&mut self, o: &R, polled: bool) {
+            match (&self.start, &mut self.frame) {
+                (_, Some(m)) if polled => *m += 1,
+                (Some(c), None) if holds(o, c) => self.frame = Some(0),
+                (None, None) if polled => self.frame = Some(1),
+                _ => {}
+            }
+        }
     }
 
     pub(crate) fn holds<R: Runtime>(o: &R, c: &Condition) -> bool {

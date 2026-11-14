@@ -33,7 +33,7 @@ use serde_json::{Value, json};
 
 use crate::asset_edit::{self, COLORS, EditArgs, MAX_OPS, PREVIEW_SCALE};
 use crate::critic;
-use crate::edit_log::{self, EditStatus, Entry, PaletteChange, PaletteOp, TileEdit, apply_palette};
+use crate::edit_log::{self, EditStatus, Entry, PaletteChange, PaletteOp, TileEdit};
 use crate::place::{self, Content, Current, Target};
 use crate::scene::{self, CellsAt};
 use crate::sprite_ops::{self, Pic};
@@ -718,44 +718,7 @@ fn palette_edit(
     if ready["ready"] != json!(true) {
         return Ok(refusal(k, &ready));
     }
-    let roles = model
-        .assets
-        .get(&slot)
-        .map(|s| s.item_roles.clone())
-        .unwrap_or_default();
-    let which: Vec<usize> = match (a.same_role, roles.get(pi)) {
-        (true, Some(role)) => (0..old.len())
-            .filter(|i| roles.get(*i) == Some(role))
-            .collect(),
-        (true, None) => {
-            return Err(format!(
-                "slot `{slot}` gives palette {pi} no role (item_roles), so same_role has nothing to match"
-            ));
-        }
-        (false, _) => vec![pi],
-    };
-    let mut new = old.clone();
-    for &i in &which {
-        for (n, op) in a.palette_ops.iter().enumerate() {
-            let other = match op {
-                PaletteOp::CopyFrom { entity: o } => {
-                    let osp = model
-                        .entities
-                        .get(o)
-                        .and_then(|e| e.core.sprite.as_ref())
-                        .ok_or(format!("entity `{o}` has no sprite"))?;
-                    Some(*old.get(osp.palette as usize).ok_or(format!(
-                        "`{o}`'s palette {} is past the slot's {}",
-                        osp.palette,
-                        old.len()
-                    ))?)
-                }
-                _ => None,
-            };
-            new[i] = apply_palette(new[i], op, other)
-                .map_err(|e| format!("palette op {n} ({}): {e}", op.name()))?;
-        }
-    }
+    let new = asset_edit::palettes_after(model, &slot, old, pi, a)?;
     let changed: Vec<usize> = (0..old.len()).filter(|&i| old[i] != new[i]).collect();
     // Another tile kind changes when its palette changed in a color its
     // pixels use (the sky draws only the backdrop, so a new face color

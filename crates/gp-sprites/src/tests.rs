@@ -406,6 +406,7 @@ fn an_arcade_frame_is_whole_sprites_found_by_number() {
                 s
             })
             .collect(),
+        regions: Default::default(),
     };
     let (files, _) = gp_assets::arcade::lift(&decoded, &map, &map_text).unwrap();
     for f in files {

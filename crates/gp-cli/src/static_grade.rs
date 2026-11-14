@@ -65,7 +65,7 @@ fn routine_va(name: &str) -> Option<u32> {
     va_parse(&t.replacen('_', ":", 1))
 }
 
-fn toml_json(v: &Toml) -> Value {
+pub(crate) fn toml_json(v: &Toml) -> Value {
     serde_json::to_value(v).unwrap_or(Value::Null)
 }
 

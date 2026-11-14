@@ -54,7 +54,9 @@ use gp_sim::Fx;
 use crate::Outcome;
 use crate::clip::cache::Saved;
 use crate::hosted::Source;
+use crate::moments::{mechanic_of, moment_json};
 use crate::original::OriginalRuntime;
+use crate::solve::code_cited;
 use gp_extract::apply::{Fact, apply, at};
 use gp_extract::questions::{Candidate, QUESTIONS_FILE, Question};
 
@@ -2160,48 +2162,6 @@ fn drift_in(
     ))
 }
 
-/// The refs of the fact that sets `path`, when its evidence is the game's
-/// own code: evidence on the path or on a part above it that is stated
-/// and cites a line (`file:line`, or a path in a pinned download). Any
-/// such evidence counts, so an earlier fit's evidence on the number itself
-/// doesn't hide the code's on its part. A fact from the code outranks a
-/// fit from measurement, so the loop never changes it on its own.
-pub(crate) fn code_cited(model: &Model, path: &str) -> Option<Vec<String>> {
-    let mut p = path.to_owned();
-    let mut cites: Vec<String> = Vec::new();
-    loop {
-        if let Some(e) = model.evidence.get(&p)
-            && e.source == gp_model::model::Source::Stated
-        {
-            cites.extend(e.refs.iter().filter_map(code_ref));
-        }
-        // Up one part: `a.b[1].c` -> `a.b[1]` -> `a.b` -> `a`.
-        if let Some(i) = p.rfind('[')
-            && p.ends_with(']')
-        {
-            p.truncate(i);
-        } else if let Some((head, _)) = p.rsplit_once('.') {
-            p = head.to_owned();
-        } else {
-            break;
-        }
-    }
-    (!cites.is_empty()).then_some(cites)
-}
-
-/// A ref to a line of the game's code, in words: `games/mosshop/mosshop.s:31`,
-/// `SMBDIS.ASM:6033 (smbdis@7e8e9777)`.
-fn code_ref(r: &gp_model::model::Ref) -> Option<String> {
-    let line = r.at.rsplit_once(':').is_some_and(|(f, n)| {
-        f.contains('.') && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())
-    });
-    match &r.within {
-        Some(w) => Some(format!("{} ({w})", r.at)),
-        None if line => Some(r.at.clone()),
-        None => None,
-    }
-}
-
 /// The question a fit on a code-cited number asks instead of writing it:
 /// "the code says 1, the fit wants 1.5: check the mapping first". Its
 /// first answer keeps the code's value, its second writes the fit.
@@ -2877,74 +2837,6 @@ fn shape_question(
         "tried": tried,
         "proposal": proposal,
         "question": serde_json::to_value(&question).unwrap_or(Json::Null),
-    })
-}
-
-/// The mapped path a kind of moment is read from, for the mechanic that
-/// owns it: a jump's vertical speed (else its height), a landing's
-/// standing, a death's being alive, a counter's or the level's own path.
-fn owner_path(ls: &Lockstep, m: &Moment) -> String {
-    let has = |f: &str| {
-        let p = format!("{}.{f}", m.part);
-        ls.paths.iter().any(|x| x.path == p).then_some(p)
-    };
-    match m.kind {
-        "jump" => has("vy").or_else(|| has("y")).unwrap_or_default(),
-        "landing" => has("on_ground").unwrap_or_default(),
-        "death" => has("alive").unwrap_or_default(),
-        _ => m.part.clone(),
-    }
-}
-
-/// The mechanic that owns a moment's kind for its part, by the catalog.
-fn mechanic_of(
-    catalog: &gp_interp::mechanics::Catalog,
-    ls: &Lockstep,
-    m: &Moment,
-) -> Option<&'static str> {
-    let p = owner_path(ls, m);
-    if p.is_empty() {
-        return None;
-    }
-    lockstep::owners(catalog, &p).first().copied()
-}
-
-fn px(f: Fx) -> f64 {
-    // Floats only in presentation.
-    f.raw() as f64 / 65536.0
-}
-
-/// A moment as JSON: its kind, number, frames and focus, and the model's
-/// side when it was checked.
-fn moment_json(
-    m: &Moment,
-    a: Option<&Answer>,
-    mechanic: Option<&str>,
-    secs: &dyn Fn(u64) -> f64,
-    first: u64,
-) -> Json {
-    let (from, to) = gp_interp::moments::span(m, gp_interp::moments::LEAD, first);
-    let model = a.and_then(|a| a.model.as_ref()).map(|x| {
-        json!({"from": x.from, "to": x.to, "offset": x.from as i64 - m.from as i64,
-               "peak": x.peak, "height": x.height.map(px), "after": x.after})
-    });
-    json!({
-        "kind": m.kind,
-        "n": m.n,
-        "part": m.part,
-        "mechanic": mechanic,
-        "from": m.from,
-        "to": m.to,
-        "seconds_from": secs(m.from),
-        "seconds_to": secs(m.to),
-        "peak": m.peak,
-        "height": m.height.map(px),
-        "before": m.before,
-        "after": m.after,
-        "focus": {"from": from.max(1), "to": to},
-        "checked": a.is_some(),
-        "start": a.map(|a| a.start),
-        "model": model,
     })
 }
 

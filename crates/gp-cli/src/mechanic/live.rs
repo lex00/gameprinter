@@ -138,7 +138,7 @@ fn content_key(paths: &Paths, repo: &Path, rb: &Rebuild) -> String {
 /// there and its bytes, in a fixed order.
 fn add_dir(h: &mut blake3::Hasher, root: &Path, skip: &[&str]) {
     let mut files = Vec::new();
-    walk(root, &mut files);
+    crate::files::walk_lenient(root, &mut files);
     files.retain(|f| {
         !f.strip_prefix(root)
             .ok()
@@ -151,20 +151,6 @@ fn add_dir(h: &mut blake3::Hasher, root: &Path, skip: &[&str]) {
         if let Ok(rel) = f.strip_prefix(root) {
             h.update(rel.to_string_lossy().as_bytes());
             h.update(&std::fs::read(&f).unwrap_or_default());
-        }
-    }
-}
-
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            walk(&p, out);
-        } else {
-            out.push(p);
         }
     }
 }
@@ -467,14 +453,7 @@ pub(crate) fn file(paths: &Paths, repo: &Path, game: &str, name: &str) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn paths(home: &Path) -> Paths {
-        Paths {
-            home: home.to_path_buf(),
-            store: home.join("store"),
-            roms: home.join("roms"),
-        }
-    }
+    use crate::test_paths as paths;
 
     #[test]
     fn the_slots_take_turns_and_only_a_built_one_is_current() {

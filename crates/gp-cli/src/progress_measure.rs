@@ -43,7 +43,7 @@ use gp_runtime::Runtime;
 use gp_runtime::select::Condition;
 
 use crate::original::OriginalRuntime;
-use crate::sweep::measure::{StartHere, holds};
+use crate::sweep::measure::{ModelFrame, StartHere, holds};
 
 /// What the measure keeps.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -278,12 +278,10 @@ pub(crate) fn playthrough(
         .flat_map(|s| &s.levels)
         .filter_map(|l| Some((l.level.clone(), Condition::parse(&l.when).ok()?)))
         .collect();
-    let start = mapping
-        .start
-        .as_deref()
-        .map(Condition::parse)
-        .transpose()
-        .map_err(|e| anyhow::anyhow!("the mapping's start: {e}"))?;
+    // The model's frame: from the mapping's start (else the frame before
+    // the first polled one), one more each polled frame, as the lockstep
+    // counts it.
+    let mut model_frame = ModelFrame::new(mapping, &o)?;
     let mut prev = ram(&o);
     let mut out = Pass {
         frames: 0,
@@ -297,13 +295,6 @@ pub(crate) fn playthrough(
     };
     let mut tracer = Tracer::new();
     let mut frame = CodeMap::new();
-    // The model's frame: from the mapping's start (else the frame before
-    // the first polled one), one more each polled frame, as the lockstep
-    // counts it.
-    let mut model_frame: Option<u64> = match &start {
-        Some(c) if holds(&o, c) => Some(0),
-        _ => None,
-    };
     // The level whose start is wanted, and a copy of the original at the
     // frame before, when that frame is in play.
     let mut wanted: Option<String> = None;
@@ -313,12 +304,7 @@ pub(crate) fn playthrough(
         frame.clear();
         let polled = step(&mut o, input, &mut frame, &mut tracer)?;
         out.frames += 1;
-        match (&start, &mut model_frame) {
-            (_, Some(m)) if polled => *m += 1,
-            (Some(c), None) if holds(&o, c) => model_frame = Some(0),
-            (None, None) if polled => model_frame = Some(1),
-            _ => {}
-        }
+        model_frame.step(&o, polled);
         let now = ram(&o);
         let in_play = match play {
             Some(c) => holds(&o, c),
@@ -365,7 +351,7 @@ pub(crate) fn playthrough(
         }
         if wanted.is_some()
             && in_play
-            && let Some(mf) = model_frame
+            && let Some(mf) = model_frame.frame
         {
             here = Some((o.clone(), mf));
         }

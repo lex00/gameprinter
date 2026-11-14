@@ -26,7 +26,6 @@ use gp_evidence::Paths;
 use gp_explore::Progress;
 use gp_explore::presses::spans;
 use serde_json::{Value, json};
-use sha2::Digest;
 
 use crate::Outcome;
 use crate::explore::ExploreArgs;
@@ -561,7 +560,7 @@ fn start(a: &WatchStartArgs, paths: &Paths) -> Result<Outcome> {
             })
         })
         .collect::<Result<_>>()?;
-    let rom_sha = hex::encode(sha2::Sha256::digest(&rom));
+    let rom_sha = crate::template::sha256_hex(&rom);
     fs::write(
         dir.join("session.json"),
         serde_json::to_string_pretty(&json!({

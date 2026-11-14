@@ -26,7 +26,6 @@ use gp_events::store::Store as EventStore;
 use gp_evidence::Paths;
 use gp_nes::codemap::{Board, Insn, Mn, Mode, Va, decode, va_add, va_cpu, va_hex, va_parse};
 use serde_json::json;
-use sha2::Digest;
 
 use crate::Outcome;
 use crate::reach::ClipInput;
@@ -204,7 +203,7 @@ pub(crate) fn count(
     store: Option<&EventStore>,
 ) -> Result<Counted> {
     let t0 = Instant::now();
-    let rom_sha = hex::encode(sha2::Sha256::digest(rom));
+    let rom_sha = crate::template::sha256_hex(rom);
     let mut keys = Vec::new();
     for c in clips {
         let n = c.inputs.len() as u64;
@@ -629,7 +628,7 @@ fn listing(a: &ListingArgs, paths: &Paths) -> Result<Outcome> {
         }
     );
     let doc = json!({
-        "rom_sha256": hex::encode(sha2::Sha256::digest(&rom)),
+        "rom_sha256": crate::template::sha256_hex(&rom),
         "window": window.text(),
         "clips": counted.as_ref().map(|c| c.clips.iter().map(|(id, f)| json!({"id": id, "frames": f})).collect::<Vec<_>>()),
         "routines_listed": listed,

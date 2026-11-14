@@ -221,12 +221,7 @@ impl Machine {
     pub(crate) fn boxes(&self) -> Vec<[i32; 4]> {
         match self {
             Machine::Nes(n) => m::sprite_boxes(&n.oam(), if n.tall_sprites() { 16 } else { 8 }),
-            Machine::Arcade(t) => m::merge_boxes(
-                gp_arcade::video::sprite_list(&t.board.spriteram)
-                    .iter()
-                    .map(|s| [i32::from(s.x), i32::from(s.y), 16, 16])
-                    .collect(),
-            ),
+            Machine::Arcade(t) => m::arcade_boxes(&t.board.spriteram),
         }
     }
 

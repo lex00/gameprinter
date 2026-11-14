@@ -35,6 +35,7 @@ use gp_runtime::Runtime as _;
 use serde_json::{Value, json};
 
 use crate::Outcome;
+use crate::mechanic::detect::sprite_boxes;
 use crate::mechanic::http::{Request, Response};
 use crate::original::OriginalRuntime;
 
@@ -566,36 +567,6 @@ fn whole_log(rom: &[u8], base: usize, log: &Path) -> Result<Trace> {
         pads: parsed.frames.iter().map(|f| f.pads[0]).collect(),
         boxes: (0..n).map(|_| Vec::new()).collect(),
     })
-}
-
-/// Sprites that touch, merged into boxes: [x, y, w, h] on the screen.
-fn sprite_boxes(oam: &[u8; 256], tall: i32) -> Vec<[i32; 4]> {
-    let mut b: Vec<[i32; 4]> = oam
-        .chunks(4)
-        .filter(|e| e[0] < 0xEF)
-        .map(|e| [i32::from(e[3]), i32::from(e[0]) + 1, 8, tall])
-        .collect();
-    let touch = |a: &[i32; 4], c: &[i32; 4]| {
-        a[0] <= c[0] + c[2] && c[0] <= a[0] + a[2] && a[1] <= c[1] + c[3] && c[1] <= a[1] + a[3]
-    };
-    'again: loop {
-        for i in 0..b.len() {
-            for k in i + 1..b.len() {
-                if touch(&b[i], &b[k]) {
-                    let (a, c) = (b[i], b[k]);
-                    let (x0, y0) = (a[0].min(c[0]), a[1].min(c[1]));
-                    let (x1, y1) = (
-                        (a[0] + a[2]).max(c[0] + c[2]),
-                        (a[1] + a[3]).max(c[1] + c[3]),
-                    );
-                    b[i] = [x0, y0, x1 - x0, y1 - y0];
-                    b.swap_remove(k);
-                    continue 'again;
-                }
-            }
-        }
-        return b;
-    }
 }
 
 /// The player's box on each frame of a trace from its start: the box whose

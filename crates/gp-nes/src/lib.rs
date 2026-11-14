@@ -523,11 +523,7 @@ mod tests {
     use gp_evidence::input_log::button;
 
     fn input(pad: u8) -> InputFrame {
-        InputFrame {
-            polled: true,
-            pads: [pad, 0, 0, 0],
-            reset: false,
-        }
+        InputFrame::held(pad)
     }
 
     /// Runs the test ROM, pressing A on frames divisible by 7, and returns

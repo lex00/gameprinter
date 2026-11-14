@@ -365,23 +365,7 @@ fn capture(args: &CaptureArgs, paths: &Paths) -> Result<Outcome> {
     let mut refs = Vec::new();
     for r in &args.recordings {
         let opened = Opened::open(paths, r)?;
-        if opened.is_arcade() != arcade {
-            bail!(
-                "{} is {}, and {} is a recording of {}: capture reads a game's own original",
-                dir.display(),
-                if arcade {
-                    "an arcade game"
-                } else {
-                    "an NES game"
-                },
-                opened.short(),
-                if opened.is_arcade() {
-                    "an arcade romset"
-                } else {
-                    "an NES ROM"
-                }
-            );
-        }
+        opened.of_platform(dir, arcade, "capture reads a game's own original")?;
         if !arcade {
             crate::track::nes_recording(&opened, "gp sprites capture")?;
         }

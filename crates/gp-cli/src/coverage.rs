@@ -160,14 +160,7 @@ fn definitions_dir() -> Result<Option<PathBuf>> {
 /// old tool found it beside its sources/ registry, which gameprinter keeps
 /// with each game instead.
 fn repo_root() -> Option<PathBuf> {
-    let is_repo = |d: &Path| d.join("baselines").is_dir() && d.join("coverage").is_dir();
-    if let Ok(here) = std::env::current_dir()
-        && let Some(d) = here.ancestors().find(|d| is_repo(d))
-    {
-        return Some(d.to_path_buf());
-    }
-    let built = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    is_repo(&built).then_some(built)
+    crate::repo::find_repo(|d| d.join("baselines").is_dir() && d.join("coverage").is_dir())
 }
 
 /// The game a ROM hash belongs to: its ROM entry's ID in a game's

@@ -9,6 +9,7 @@ pub mod frame_hashes;
 pub mod guard;
 pub mod hash;
 pub mod input_log;
+pub mod jsonl;
 pub mod manifest;
 pub mod model_events;
 pub mod paths;

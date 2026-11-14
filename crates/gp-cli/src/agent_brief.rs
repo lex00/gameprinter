@@ -61,7 +61,7 @@ fn score_of<'a>(state: &'a Value, id: &str) -> Option<&'a Value> {
 }
 
 fn percent(s: &Value) -> u64 {
-    (s["permille"].as_u64().unwrap_or(0) + 5) / 10
+    work::pct(s["permille"].as_u64().unwrap_or(0))
 }
 
 pub fn run(ctx: &Ctx, paths: &Paths, a: &BriefArgs) -> anyhow::Result<Outcome> {
@@ -186,7 +186,7 @@ pub fn brief(ctx: &Ctx, paths: &Paths, a: &BriefArgs) -> anyhow::Result<Value> {
         .into_iter()
         .filter(|x| x.clip == clip.id || group.contains(&x.clip))
         .map(|x| {
-            let pct = |s: &Option<work::Side>| s.as_ref().map(|s| (s.permille + 5) / 10);
+            let pct = |s: &Option<work::Side>| s.as_ref().map(|s| work::pct(s.permille));
             json!({"n": x.n, "by": x.by, "clip": x.clip, "title": x.title,
                    "before": pct(&x.before), "after": pct(&x.after),
                    "exact_after": x.after.as_ref().is_some_and(|s| s.exact),

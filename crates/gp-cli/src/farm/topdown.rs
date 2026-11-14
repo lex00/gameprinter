@@ -57,11 +57,7 @@ pub(crate) struct TopdownArgs {
 }
 
 fn frame(pad: u8) -> InputFrame {
-    InputFrame {
-        polled: true,
-        pads: [pad, 0, 0, 0],
-        reset: false,
-    }
+    InputFrame::held(pad)
 }
 
 /// The console and the inputs from power-on that reached it.
@@ -96,7 +92,7 @@ impl Run {
     }
 }
 
-fn wrap8(d: i64) -> i64 {
+pub(super) fn wrap8(d: i64) -> i64 {
     (d + 128).rem_euclid(256) - 128
 }
 

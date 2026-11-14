@@ -246,6 +246,30 @@ impl Opened {
         }
     }
 
+    /// Refuses the recording unless it is of the machine of the game at
+    /// `dir` (`arcade_game` says which), saying what the command reads in
+    /// `reads`.
+    pub fn of_platform(&self, dir: &Path, arcade_game: bool, reads: &str) -> Result<()> {
+        if arcade_game != self.is_arcade() {
+            bail!(
+                "{} is {}, and {} is a recording of {}: {reads}",
+                dir.display(),
+                if arcade_game {
+                    "an arcade game"
+                } else {
+                    "an NES game"
+                },
+                self.short(),
+                if self.is_arcade() {
+                    "an arcade romset"
+                } else {
+                    "an NES ROM"
+                }
+            );
+        }
+        Ok(())
+    }
+
     /// Whether this is a recording of an arcade romset.
     pub fn is_arcade(&self) -> bool {
         crate::arcade_rec::is_arcade(&self.manifest)

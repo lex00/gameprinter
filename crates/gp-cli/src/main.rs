@@ -24,6 +24,7 @@ mod capture;
 mod catalog;
 mod chunks;
 mod cli_doc;
+mod cli_tree;
 mod clip;
 mod clip_presses;
 mod clip_score;
@@ -52,6 +53,7 @@ mod element_z80;
 mod explore;
 mod explore_z80;
 mod farm;
+mod files;
 mod findings;
 mod findings_clip;
 mod from_trace;
@@ -92,6 +94,7 @@ mod moments;
 mod movie;
 mod mutants;
 mod next;
+mod observe;
 mod odds;
 mod open;
 mod oracle;
@@ -112,6 +115,7 @@ mod recindex;
 mod recordings;
 mod refine;
 mod registry;
+mod repo;
 mod rom_dataset;
 mod rom_extract;
 mod rom_grade;
@@ -1945,5 +1949,15 @@ fn main() -> ExitCode {
             eprintln!("gp: {e:#}");
             ExitCode::from(2)
         }
+    }
+}
+
+/// A home's paths for tests: its store and ROMs inside it.
+#[cfg(test)]
+pub(crate) fn test_paths(home: &std::path::Path) -> gp_evidence::Paths {
+    gp_evidence::Paths {
+        home: home.to_path_buf(),
+        store: home.join("store"),
+        roms: home.join("roms"),
     }
 }

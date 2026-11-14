@@ -40,14 +40,18 @@ impl Lifted {
         let mut files = BTreeMap::new();
         let map_text = read(MAP_FILE)?;
         if gp_assets::arcade::is_arcade(&map_text) {
-            // An arcade lift is pictures only (gp_assets::arcade): nothing
-            // the simulation reads, and no slot kind takes them yet.
-            if let Some(name) = model.assets.keys().next() {
-                return Err(format!(
-                    "{MAP_FILE} is an arcade lift, whose pictures no model slot takes yet; slot `{name}` can't be filled from it"
-                ));
-            }
+            // An arcade lift (gp_assets::arcade): its pictures are
+            // presentation; the simulation reads only its `byte-rows`
+            // tables, the program's data the hooks read (`ext_rows`).
             files.insert(MAP_FILE.into(), map_text);
+            let lifted = Self { files };
+            let map = lifted.map()?;
+            let mut files = lifted.files;
+            for asset in needed(model, &map)? {
+                for file in asset.files() {
+                    files.insert(file.clone(), read(&file)?);
+                }
+            }
             return Ok(Self { files });
         }
         let map = AssetMap::parse(&map_text).map_err(|e| format!("{MAP_FILE}: {e}"))?;
@@ -70,12 +74,32 @@ impl Lifted {
             // map with no assets.
             let a = gp_assets::arcade::ArcadeMap::parse(text)
                 .map_err(|e| format!("{MAP_FILE}: {e}"))?;
+            // Its `byte-rows` tables read as the NES map's: the same file
+            // of rows, so slots and `ext_rows` take either.
+            let assets = a
+                .assets
+                .iter()
+                .filter(|x| x.format == gp_assets::arcade::Format::ByteRows)
+                .map(|x| {
+                    Asset::ByteRows(gp_assets::rows::ByteRows {
+                        name: x.name.clone(),
+                        label: None,
+                        end_label: None,
+                        region: gp_assets::map::Region::Prg,
+                        offset: x.offset,
+                        count: x.count,
+                        width: x.width,
+                        names: Vec::new(),
+                        charset: None,
+                    })
+                })
+                .collect();
             return Ok(AssetMap {
                 schema: a.schema,
                 source: a.source,
                 title: a.title,
                 sha256: String::new(),
-                assets: Vec::new(),
+                assets,
                 content: Vec::new(),
                 code: None,
             });

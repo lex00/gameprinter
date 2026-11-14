@@ -20,6 +20,8 @@ use gp_runtime::{InputFrame, Runtime};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::scenario::number;
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Search {
@@ -132,14 +134,6 @@ impl Runner<'_> {
                 other => other == self.goal.1,
             });
         Ok(Score(met, best))
-    }
-}
-
-fn number(v: &Value) -> Option<f64> {
-    match v {
-        Value::Number(n) => n.as_f64(),
-        Value::String(s) => s.parse().ok(),
-        _ => None,
     }
 }
 

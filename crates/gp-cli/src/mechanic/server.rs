@@ -35,7 +35,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, anyhow, bail};
 use gp_evidence::Paths;
 use serde_json::{Value, json};
 
@@ -66,17 +66,9 @@ const MAX_BODY: usize = 16 << 20;
 /// The repo holding the page (`mechanic/index.html`): the working folder or
 /// one above it, else the checkout gp was built from.
 fn repo_root() -> Result<PathBuf> {
-    let has_page = |d: &Path| d.join("mechanic/index.html").is_file();
-    if let Ok(here) = std::env::current_dir()
-        && let Some(d) = here.ancestors().find(|d| has_page(d))
-    {
-        return Ok(d.to_path_buf());
-    }
-    let built = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    if has_page(&built) {
-        return Ok(built);
-    }
-    bail!("no mechanic/ page found: run gp mechanic start inside the gameprinter repo")
+    crate::repo::find_repo(|d| d.join("mechanic/index.html").is_file()).ok_or_else(|| {
+        anyhow!("no mechanic/ page found: run gp mechanic start inside the gameprinter repo")
+    })
 }
 
 /// The player module: `$GP_PLAY_WASM`, else the repo's
@@ -713,28 +705,6 @@ impl Server {
             None => self.open_session(),
         }
     }
-
-    /// A POST from another page is refused: only this server's own page
-    /// writes.
-    /// The request was sent to this machine by name: its Host is 127.0.0.1
-    /// or localhost at this port. A page elsewhere that points its own name
-    /// at 127.0.0.1 (DNS rebinding) sends its own name, so it can't read the
-    /// ROM or the sessions.
-    fn own_host(&self, req: &Request) -> bool {
-        req.headers.get("host").is_some_and(|h| {
-            h == &format!("127.0.0.1:{}", self.port) || h == &format!("localhost:{}", self.port)
-        })
-    }
-
-    fn same_origin(&self, req: &Request) -> bool {
-        match req.headers.get("origin") {
-            None => true,
-            Some(o) => {
-                o == &format!("http://127.0.0.1:{}", self.port)
-                    || o == &format!("http://localhost:{}", self.port)
-            }
-        }
-    }
 }
 
 fn serve_one(s: &Server, conn: &TcpStream) -> std::io::Result<()> {
@@ -746,7 +716,7 @@ fn serve_one(s: &Server, conn: &TcpStream) -> std::io::Result<()> {
         Err(http::ReadError::Gone) => return Ok(()),
     };
     // A watch session's event stream (crate::watch_serve) is written as it goes.
-    if s.own_host(&req)
+    if req.own_host(s.port)
         && let Some(done) = crate::watch_serve::stream(&req, conn)
     {
         return done;
@@ -769,14 +739,14 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
     let page = |name: &str, kind: &'static str| -> Result<Response> {
         Ok(Response::bytes(kind, fs::read(s.page.join(name))?))
     };
-    if !s.own_host(req) {
+    if !req.own_host(s.port) {
         return Ok(Response::error(
             403,
             "this page answers only at 127.0.0.1 or localhost on its own port",
         ));
     }
     let post = req.method == "POST";
-    if post && !s.same_origin(req) {
+    if post && !req.same_origin(s.port) {
         return Ok(Response::error(403, "only this server's own page writes"));
     }
     // Watch sessions' routes (crate::watch_serve, docs/watch.md).
@@ -1528,14 +1498,7 @@ fn post_clip(s: &Server, v: &Value) -> Result<Response> {
 mod tests {
     use super::*;
     use crate::mechanic::session::write_queue;
-
-    fn paths(home: &Path) -> Paths {
-        Paths {
-            home: home.to_path_buf(),
-            store: home.join("store"),
-            roms: home.join("roms"),
-        }
-    }
+    use crate::test_paths as paths;
 
     /// A 16KB NROM that loops in place: made up here, no game's bytes.
     fn rom() -> Vec<u8> {

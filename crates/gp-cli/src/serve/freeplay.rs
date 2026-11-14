@@ -58,6 +58,7 @@ use super::game::{Run, is_name, rom_of, run_named};
 use super::{Ctx, Fail, Params, Route, body, post_only};
 use crate::mechanic::http::{Request, Response};
 use crate::roms::Platform;
+use crate::serve::work::now_ms;
 
 /// The session file's version.
 const SCHEMA: u32 = 0;
@@ -230,13 +231,6 @@ pub(crate) const MARKS: &[&str] = &["kept", "skipped", "starred"];
 /// A clip a person played starts starred: it is special beside the clips
 /// the tool makes (docs/show.md, "Clips made by the tool").
 pub(crate) const PLAYED_MARK: &str = "starred";
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
 
 /// The folder free play sessions live in.
 pub(crate) fn root(home: &Path) -> PathBuf {

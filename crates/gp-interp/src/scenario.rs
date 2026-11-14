@@ -196,7 +196,10 @@ fn table_at<'a>(tree: &'a toml::Value, path: &str) -> Option<&'a toml::Value> {
 
 /// The table a mechanic's parameters are in, for one of its uses: the
 /// component's own table, or beside a field such as `tile_collision`.
-fn params_table<'a>(tree: &'a toml::Value, used_by: &str) -> Option<(String, &'a toml::Value)> {
+pub(crate) fn params_table<'a>(
+    tree: &'a toml::Value,
+    used_by: &str,
+) -> Option<(String, &'a toml::Value)> {
     match table_at(tree, used_by) {
         Some(t @ toml::Value::Table(_)) => Some((used_by.to_owned(), t)),
         _ => {

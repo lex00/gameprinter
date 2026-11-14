@@ -6,6 +6,7 @@
 
 use gp_runtime::{Entry, InputFrame, Runtime, Value};
 
+use crate::lockstep::{polled, start_holds, start_of};
 use crate::mapping::{Align, Field, Mapping, agrees};
 
 /// One mapped path's agreement.
@@ -91,14 +92,6 @@ fn read_model<M: Runtime>(model: &M, mapping: &Mapping) -> Result<Vec<Value>, St
             )),
         })
         .collect()
-}
-
-fn polled(events: &[gp_runtime::Event]) -> bool {
-    events
-        .iter()
-        .filter(|e| e.kind == crate::runtime::FRAME_KIND)
-        .flat_map(|e| &e.data)
-        .any(|d| d.path == "polled" && d.value == Value::Flag(true))
 }
 
 /// The hook that starts the model at the first compared frame.
@@ -221,21 +214,8 @@ pub fn compare_with<O: Runtime, M: Runtime>(
         }
         Ok::<_, String>(())
     };
-    let start = mapping
-        .start
-        .as_deref()
-        .map(gp_runtime::select::Condition::parse)
-        .transpose()
-        .map_err(|e| format!("the mapping's start: {e}"))?;
-    let holds = |original: &O, cond: &gp_runtime::select::Condition| {
-        cond.eval(&mut |sel| {
-            original
-                .query(&sel.to_string())?
-                .first()
-                .and_then(|e| e.value.as_int())
-                .ok_or(format!("{sel} names no number"))
-        })
-    };
+    let start = start_of(mapping)?;
+    let holds = start_holds::<O>;
     // Without a start condition the model's power-on state stands for the
     // frame before the first polled one: the original as it stood then.
     let mut before = original.fork();

@@ -857,7 +857,7 @@ pub(crate) fn write(
         let rel = format!("data/{}.parquet", s.name);
         let p = out.join(&rel);
         ds::write_parquet(&t, &p, &meta)?;
-        files.push((rel, ds::sha256(&fs::read(&p)?), t.rows()));
+        files.push((rel, crate::template::sha256_hex(&fs::read(&p)?), t.rows()));
         tables.push(t);
     }
     fs::write(

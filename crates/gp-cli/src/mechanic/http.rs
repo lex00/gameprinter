@@ -39,6 +39,27 @@ impl Request {
     pub fn param(&self, name: &str) -> Option<&str> {
         self.query.get(name).map(String::as_str)
     }
+
+    /// The request was sent to this machine by name: its Host is 127.0.0.1
+    /// or localhost at `port`. A page elsewhere that points its own name
+    /// at 127.0.0.1 (DNS rebinding) sends its own name, so it can't read the
+    /// ROM or the sessions.
+    pub fn own_host(&self, port: u16) -> bool {
+        self.headers
+            .get("host")
+            .is_some_and(|h| h == &format!("127.0.0.1:{port}") || h == &format!("localhost:{port}"))
+    }
+
+    /// No Origin, or this page's own at `port`: the servers refuse a POST
+    /// from another page, so only their own page writes.
+    pub fn same_origin(&self, port: u16) -> bool {
+        match self.headers.get("origin") {
+            None => true,
+            Some(o) => {
+                o == &format!("http://127.0.0.1:{port}") || o == &format!("http://localhost:{port}")
+            }
+        }
+    }
 }
 
 /// A response: a status, a content type and a body.

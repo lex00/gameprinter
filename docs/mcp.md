@@ -127,6 +127,8 @@ The server's instructions tell the agent to call `next` at the start of every co
 | | `watch_explore` | Built: another search in the session, in the background | `gp watch explore` | No |
 | | `watch_point` | Built: the sprites under a box at a frame and the routine that wrote each | `gp watch point` | Yes, besides the point it logs |
 | | `view_now` | Built: what the person's watch page shows and the last point | The session's `inputs.ndjson` | Yes |
+| | `gp_commands` | Built: every gp command by group, with its road and rule; one command's help and the JSON Schema of its arguments; a search of the help ([every command](#every-command)) | `gp self commands` | Yes |
+| | `gp_run` | Built: runs any gp command by its words, with arguments as JSON, under the rules below ([every command](#every-command)) | the gp serving MCP | No |
 
 Every tool also takes an optional `run`, a capture run's name. A call that names one is appended to the run's inputs as the agent's `tool` input (the tool, its arguments and its result, each cut to 200 characters), so the person watching the run sees the agent's calls in the run's log beside the pipeline's stages; `run` is taken out before the tool reads its arguments, and a run that isn't there is said in the reply as `capture_log` without failing the call. A call that carries a `progressToken` in its `_meta` gets `notifications/progress` every second while it runs (`progress` 1, 2, 3, ...), with the capture run's newest stage as the message when the call names a run, else how long it has run.
 
@@ -280,6 +282,25 @@ There is no remote and no hosted runtime, so publishing is local: the directory 
 `build_publish` shrinks the preview module with `wasm-opt` when `$WEB_TOOLS` names the web tools or an earlier fetch left them in `$GP_HOME/work/web-tools/`. With `fetch_tools: true` it fetches them first (binaryen pinned by SHA-256 on macOS arm64; wasm-bindgen-cli built with `cargo install --locked`, which takes minutes the first time). When it can't, it ships the unshrunk module (1.4 MB against 1.2 MB) and says so in `wasm.note`. The `web` target always fetches.
 
 The commercial-original rule (docs/stubs.md) refuses a slot when its license names `LicenseRef-own-copy`, which includes a slot only partly replaced, or when it is an original and the copy isn't from an open-tier template (a `template.toml` with `tier = "open"` in the copy). Presentation slots are replaced with `assets_generate` or `assets_place`. A simulation slot (a level, its tileset, spawn tables) can't be, so a copy of a commercial template needs new levels through `model_edit` before it can be published. This check refuses sharing by accident; it doesn't stop a person who edits `slots.toml` or `template.toml` by hand, and the publish check for others is Milestone 5.
+
+## Every command
+
+The named tools above are the short road for common steps. `gp_commands` and `gp_run` reach every other gp command, so gp-mcp carries no second copy of any.
+
+`gp_commands` reads the command tree from the gp serving MCP (`gp --json self commands`, generated from gp's own clap tree with the walk `gp self docs` uses), once per server. With no arguments it lists the groups, journey first, developer and off-target tools last and marked, with the rules and how many commands each holds. With `path` set to a group it lists that group's commands; with a command it gives the command's help, its rule in words and the JSON Schema of the `args` gp_run takes. `find` searches the help for words.
+
+`gp_run` takes `command` (`corpus score`), `args` (by name: `{"game": "tapper", "run": "trial", "only": ["a", "b"], "dry-run": true}`), `confirmed_by_person` and `timeout_s`. Before anything runs, each name is checked against the command's own arguments and flags (a wrong one is refused with the nearest names), switches must be true or false, a list is taken only where the flag repeats, and choices and numbers are checked. It then runs the same binary with `--json`, in the games checkout (`GP_GAMES_DIR` set to it; the work folder when there is none) and with the server's `GP_HOME`, stdin closed, and returns `command` (what ran), `exit` (0 done, 1 a check that failed, 2 couldn't run; exit 2 or none sets `isError`), `json` (stdout, when it is JSON) or `stdout`, and `stderr`. Stdout over 48 KB and stderr over 8 KB are cut, with `cut` saying how much and the file under `WORK/gp-run/` holding the whole. A command stops after `timeout_s` (default 300, at most 1800), with everything it started, and the reply says so in `timed_out`.
+
+The rules are one table, crates/gp-mcp/src/policy.rs, with a row for every command and its road (journey, port stage, developer, off target, from the product review). A gp-cli test walks the clap tree and fails when a command has no row or a row names no command, so a new command can't reach an agent unclassified. A command missing from the table anyway (a different gp) is judged by its words, and anything that sounds like publishing, a gate, fetching, generating or serving needs a yes or is refused.
+
+| Rule | Commands | What runs |
+|---|---|---|
+| read | 99 | At once. Writes nothing outside the home's work and cache areas |
+| write | 126 | At once. Writes the person's games, working copies or home; `wrote` has what the command reported |
+| ask | 15 | Only with `confirmed_by_person: true`, which the agent sets only after the person said yes to that exact action. Publishing and landing (`registry publish` and `reindex`, `game attest`, `theme publish` and `recheck`, `model gate`, `tool gate`, `agent integrate`, `self publish`), spending or reading a key (`theme generate`, `dataset grade` with a key), large downloads (`game fetch`, `theme fetch`, `testroms fetch` and `run`). A dry-run flag (`--dry-run`, `model gate --score-only`, `testroms run --offline`) runs at once. Any value starting `git:` or `s3://` needs a yes too |
+| refused | 10 | Never: `serve`, `mcp`, `host serve`, `registry serve`, `mechanic start`, `watch` and `wait`, `assets open`, `metrics time` (it runs any program), and `watch events --follow`. The refusal names what to use instead |
+
+A `--port` of 7710 or 7720 is refused. `mechanic demo`, `mechanic say --judge` and `mechanic triage` (not its dry run) ask Laya at 127.0.0.1:7720 for moves and would start it when nothing answers, so gp_run runs them only while Laya or `gp serve` answers.
 
 ## Measurements
 

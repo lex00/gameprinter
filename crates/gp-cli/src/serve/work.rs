@@ -347,7 +347,7 @@ fn claim(run: &Run) -> anyhow::Result<u64> {
 }
 
 /// A percent from thousandths.
-fn pct(permille: u64) -> u64 {
+pub(crate) fn pct(permille: u64) -> u64 {
     (permille + 5) / 10
 }
 

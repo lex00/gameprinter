@@ -47,6 +47,7 @@ use serde_json::{Value, json};
 
 use crate::Outcome;
 use crate::farm::{self, Move, Rng};
+use crate::observe::{Grid, LevelKey};
 use gp_evidence::Paths;
 use gp_evidence::input_log::{InputFrame, InputLog};
 use gp_nes::slice::{self, From, Loc, Recorder};
@@ -232,51 +233,10 @@ fn sources(paths: &Paths, game: &str, sha: &str) -> Result<Vec<Src>> {
     Ok(out)
 }
 
-/// The level key: observe.toml [level] (as gp farm reads it).
-struct LevelKey {
-    ram: Vec<u16>,
-    when: Option<gp_runtime::select::Condition>,
-    names: BTreeMap<Vec<u8>, String>,
-}
-
 impl LevelKey {
-    fn load(game_dir: &Path) -> Result<LevelKey> {
+    fn read(game_dir: &Path) -> Result<LevelKey> {
         let t: toml::Value = toml::from_str(&fs::read_to_string(game_dir.join("observe.toml"))?)?;
-        let l = t
-            .get("level")
-            .context("the game's observe.toml has no [level]")?;
-        let ram = l
-            .get("ram")
-            .and_then(|v| v.as_array())
-            .context("[level] ram")?
-            .iter()
-            .filter_map(|v| v.as_integer().map(|n| n as u16))
-            .collect();
-        let when = l
-            .get("when")
-            .and_then(|w| w.as_str())
-            .and_then(|w| gp_runtime::select::Condition::parse(w).ok());
-        let mut names = BTreeMap::new();
-        for n in l
-            .get("names")
-            .and_then(|v| v.as_array())
-            .into_iter()
-            .flatten()
-        {
-            let Some(a) = n.as_array() else { continue };
-            let (Some(k), Some(v)) = (
-                a.first().and_then(|k| k.as_str()),
-                a.get(1).and_then(|v| v.as_str()),
-            ) else {
-                continue;
-            };
-            let key: Vec<u8> = k
-                .split_whitespace()
-                .filter_map(|h| u8::from_str_radix(h.trim_start_matches("0x"), 16).ok())
-                .collect();
-            names.insert(key, v.to_owned());
-        }
-        Ok(LevelKey { ram, when, names })
+        LevelKey::parse(&t)
     }
 
     /// No level key (a ROM with no template): every frame is in "all".
@@ -287,57 +247,9 @@ impl LevelKey {
             names: BTreeMap::from([(Vec::new(), "all".to_owned())]),
         }
     }
-
-    fn of(&self, w: &[u8]) -> Option<String> {
-        if let Some(c) = &self.when {
-            let ok = c
-                .eval(&mut |sel| match (sel.name().as_str(), sel.last_index()?) {
-                    ("ram", Some(gp_runtime::select::Index::At(n))) if (0..0x800).contains(&n) => {
-                        Ok(i64::from(w[n as usize]))
-                    }
-                    _ => Err("only ram[N]".into()),
-                })
-                .unwrap_or(false);
-            if !ok {
-                return None;
-            }
-        }
-        let key: Vec<u8> = self.ram.iter().map(|a| w[usize::from(*a)]).collect();
-        Some(self.names.get(&key).cloned().unwrap_or_else(|| {
-            key.iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<Vec<_>>()
-                .join("")
-        }))
-    }
-}
-
-/// The level grid: mapping.toml [cells].
-struct Grid {
-    pages: Vec<u16>,
-    cols: usize,
-    rows: usize,
-    top: usize,
 }
 
 impl Grid {
-    fn load(game_dir: &Path) -> Option<Grid> {
-        let t: toml::Value =
-            toml::from_str(&fs::read_to_string(game_dir.join("mapping.toml")).ok()?).ok()?;
-        let c = t.get("cells")?;
-        Some(Grid {
-            pages: c
-                .get("pages")?
-                .as_array()?
-                .iter()
-                .filter_map(|v| v.as_integer().map(|n| n as u16))
-                .collect(),
-            cols: c.get("page_columns")?.as_integer()? as usize,
-            rows: c.get("rows")?.as_integer()? as usize,
-            top: c.get("top").and_then(|v| v.as_integer()).unwrap_or(0) as usize,
-        })
-    }
-
     /// The (page, row, column in the page) of a grid byte.
     fn place(&self, a: u16) -> Option<(usize, usize, usize)> {
         let size = self.cols * self.rows;
@@ -789,7 +701,7 @@ pub(crate) fn run(a: &LocalizeArgs, paths: &Paths) -> Result<Outcome> {
         ..a.clone()
     };
     let level = match templated {
-        Some(d) => LevelKey::load(d)?,
+        Some(d) => LevelKey::read(d)?,
         None => LevelKey::any(),
     };
     let grid = templated.and_then(|d| Grid::load(d));
@@ -1654,11 +1566,7 @@ fn play(
     let total = steps.len() + settle;
     for i in 0..total {
         let pad = steps.get(i).copied().unwrap_or(mv.then);
-        let f = InputFrame {
-            polled: true,
-            pads: [pad, 0, 0, 0],
-            reset: false,
-        };
+        let f = InputFrame::held(pad);
         let mut prev: Option<u16> = None;
         nes.step_with(f, |bus| {
             let pc = bus.cpu.pc;
@@ -1985,26 +1893,19 @@ fn poke_sweep(
                     for _ in 0..24 {
                         let mut prev: Option<u16> = None;
                         let pad = if dir == "side" { farm::RIGHT } else { 0 };
-                        nes.step_with(
-                            InputFrame {
-                                polled: true,
-                                pads: [pad, 0, 0, 0],
-                                reset: false,
-                            },
-                            |bus| {
-                                let pc = bus.cpu.pc;
-                                if !ran(pc) {
-                                    new_code.insert(pc);
-                                }
-                                if let Some(p) = prev
-                                    && let Some(want) = flips.get(&p)
-                                    && went(bus, p, pc) == Some(*want)
-                                {
-                                    flipped.insert(p);
-                                }
-                                prev = Some(pc);
-                            },
-                        )?;
+                        nes.step_with(InputFrame::held(pad), |bus| {
+                            let pc = bus.cpu.pc;
+                            if !ran(pc) {
+                                new_code.insert(pc);
+                            }
+                            if let Some(p) = prev
+                                && let Some(want) = flips.get(&p)
+                                && went(bus, p, pc) == Some(*want)
+                            {
+                                flipped.insert(p);
+                            }
+                            prev = Some(pc);
+                        })?;
                         emulated += 1;
                         sprites_after = sprites_after
                             .max(nes.oam().chunks(4).filter(|e| e[0] < 0xEF).count() as i64);
@@ -2406,11 +2307,7 @@ fn collect(
                 let f = if pad == 0 && k >= total {
                     idle
                 } else {
-                    InputFrame {
-                        polled: true,
-                        pads: [pad, 0, 0, 0],
-                        reset: false,
-                    }
+                    InputFrame::held(pad)
                 };
                 let x_before = player.x(&nes.wram()[..0x800]);
                 nes.step(f)?;

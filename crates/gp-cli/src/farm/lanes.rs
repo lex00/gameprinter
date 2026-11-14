@@ -48,11 +48,7 @@ pub(crate) struct Held {
 }
 
 fn frame(pad: u8) -> InputFrame {
-    InputFrame {
-        polled: true,
-        pads: [pad, 0, 0, 0],
-        reset: false,
-    }
+    InputFrame::held(pad)
 }
 
 /// Each frame's work RAM over `pads`, from the savestate; put back after.

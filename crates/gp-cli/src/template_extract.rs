@@ -27,6 +27,7 @@ use gp_evidence::Paths;
 
 use crate::Outcome;
 use crate::template::{lifted_digest, sha256_hex};
+use crate::template_build::write_plain;
 
 /// The manifest's file name.
 const MANIFEST_FILE: &str = "template.toml";
@@ -171,19 +172,6 @@ fn outside_repo(path: &Path, what: &str) -> Result<PathBuf> {
         );
     }
     Ok(path)
-}
-
-fn write_plain(path: &Path, bytes: &[u8]) -> Result<()> {
-    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
-        bail!(
-            "{} is a symlink; gp template writes only plain files",
-            path.display()
-        );
-    }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-    }
-    fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))
 }
 
 fn toml_str(s: &str) -> String {

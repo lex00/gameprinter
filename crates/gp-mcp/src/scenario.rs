@@ -235,7 +235,8 @@ pub struct ScenarioResult {
     pub error: Option<String>,
 }
 
-fn number(v: &Value) -> Option<f64> {
+/// A JSON number, or a string that reads as one.
+pub fn number(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) => n.as_f64(),
         Value::String(s) => s.parse().ok(),

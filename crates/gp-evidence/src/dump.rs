@@ -588,16 +588,7 @@ pub fn name_tags(name: &str) -> Vec<NameTag> {
 mod tests {
     use super::*;
     use crate::source::TRAINER_LEN;
-
-    fn header(prg16k: u8, chr8k: u8, flags6: u8, flags7: u8) -> [u8; 16] {
-        let mut h = [0u8; 16];
-        h[..4].copy_from_slice(INES_MAGIC);
-        h[4] = prg16k;
-        h[5] = chr8k;
-        h[6] = flags6;
-        h[7] = flags7;
-        h
-    }
+    use crate::source::tests::ines as header;
 
     fn game(h: [u8; 16]) -> Vec<u8> {
         let len = usize::from(h[4]) * 0x4000 + usize::from(h[5]) * 0x2000;

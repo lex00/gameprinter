@@ -33,6 +33,8 @@ use gp_sim::Exts;
 
 use crate::Outcome;
 use crate::corpus_score::build;
+use crate::mechanics::model_file;
+use crate::static_grade::toml_json;
 
 /// The model's hooks, as game-printer's `interp::hooks_for` gave them.
 fn hooks_for(model: &str) -> (std::sync::Arc<Exts>, String) {
@@ -565,14 +567,6 @@ fn feel(expect: Expect, base: &Measures, v: &Measures) -> Check {
     }
 }
 
-fn model_file(base: &Path) -> PathBuf {
-    if base.is_dir() {
-        base.join(gp_model::MODEL_FILE)
-    } else {
-        base.to_owned()
-    }
-}
-
 pub(crate) fn run(a: &AuthorArgs, paths: &Paths) -> Result<Outcome> {
     if !a.dry_run {
         bail!(
@@ -701,10 +695,6 @@ pub(crate) fn run(a: &AuthorArgs, paths: &Paths) -> Result<Outcome> {
         text,
         exit: if kept.is_some() { 0 } else { 1 },
     })
-}
-
-fn toml_json(v: &toml::Value) -> Value {
-    serde_json::to_value(v).unwrap_or(Value::Null)
 }
 
 #[cfg(test)]

@@ -417,11 +417,7 @@ fn replay(paths: &Paths, s: &Session, clip: u64, rom: &[u8]) -> Result<Replay> {
                 let sprites: Vec<u8> = (0xe800..0xea00u16).map(|k| t.peek(k)).collect();
                 let list = gp_arcade::video::sprite_list(&sprites);
                 r.sprites.push(list.len() as i64);
-                r.boxes.push(m::merge_boxes(
-                    list.iter()
-                        .map(|s| [i32::from(s.x), i32::from(s.y), 16, 16])
-                        .collect(),
-                ));
+                r.boxes.push(m::arcade_boxes(&sprites));
                 r.pads.push(crate::harvest::nes_pad(f.buttons_word() as u8));
             }
             _ => {

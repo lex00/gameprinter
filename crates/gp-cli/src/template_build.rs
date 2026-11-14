@@ -14,20 +14,16 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde_json::json;
-use sha2::{Digest, Sha256};
 
 use gp_assets::AssetMap;
 use gp_assets::authored::Authored;
 use gp_evidence::Paths;
 
 use crate::Outcome;
+use crate::template::sha256_hex;
 
 /// The authored file's name in a template directory.
 pub const AUTHORED: &str = gp_assets::authored::AUTHORED_FILE;
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
-}
 
 /// Where an original's data image is written: outside the repo, beside
 /// the other work files.
@@ -54,7 +50,7 @@ fn outside_repo(path: &Path) -> Result<PathBuf> {
 }
 
 /// Writes a file, refusing to follow a symlink there.
-fn write_plain(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_plain(path: &Path, bytes: &[u8]) -> Result<()> {
     if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
         bail!(
             "{} is a symlink; gp template writes only plain files",

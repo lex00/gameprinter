@@ -29,7 +29,6 @@ use gp_evidence::input_log::InputFrame;
 use gp_evidence::manifest::PowerOn;
 use gp_evidence::{InputLog, Paths, Store};
 use serde_json::{Value, json};
-use sha2::Digest;
 
 use crate::Outcome;
 use crate::clipset;
@@ -309,7 +308,7 @@ fn watch_key(w: &std::collections::BTreeSet<u16>) -> String {
 /// distinct input once, so the output is the same for any number of jobs.
 pub(crate) fn run_clips(rom: &[u8], clips: &[ClipInput], keep: &Keep) -> Result<Reached> {
     let t0 = Instant::now();
-    let rom_sha = hex::encode(sha2::Sha256::digest(rom));
+    let rom_sha = crate::template::sha256_hex(rom);
     let wkey = keep.frames.map(watch_key);
     let keys = clips
         .iter()
@@ -462,7 +461,7 @@ pub(crate) fn report(rom: &[u8], r: &Reached) -> Result<Value> {
     let mut doc = json!({
         "schema": SCHEMA,
         "collector_version": COLLECTOR_VERSION,
-        "rom_sha256": hex::encode(sha2::Sha256::digest(rom)),
+        "rom_sha256": crate::template::sha256_hex(rom),
         "prg_bytes": f.executed.len(),
         "clips": r.clips.iter().map(|(set, id, frames, input)| json!({
             "set": set, "id": id, "frames": frames, "input": input,

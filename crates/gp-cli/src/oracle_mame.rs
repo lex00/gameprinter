@@ -67,7 +67,7 @@ fn romset(m: &RecordingManifest, given: Option<&Path>, paths: &Paths) -> Result<
         return Ok((g.to_path_buf(), system.clone()));
     }
     let mut files = Vec::new();
-    walk(&paths.roms, &mut files);
+    crate::files::walk_lenient(&paths.roms, &mut files);
     files.sort();
     files
         .into_iter()
@@ -81,17 +81,6 @@ fn romset(m: &RecordingManifest, given: Option<&Path>, paths: &Paths) -> Result<
                 paths.roms.display()
             )
         })
-}
-
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-    for e in fs::read_dir(dir).into_iter().flatten().flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            walk(&p, out);
-        } else {
-            out.push(p);
-        }
-    }
 }
 
 /// `gp oracle record` on an arcade recording: its input log played on its

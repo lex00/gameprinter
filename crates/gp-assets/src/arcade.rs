@@ -39,6 +39,7 @@
 //! | `mcr-tiles` | `gfx1` | Background tiles, 8 by 8, 4 bits a pixel. The board draws each pixel twice in both directions, as 16 by 16 |
 //! | `mcr-sprites` | `gfx2` | Sprites, 32 by 32, 4 bits a pixel |
 //! | `sprite-set` | none | Sprite frames as layouts of the `mcr-sprites` pictures (crate::sprite_set): `gp sprites capture` writes it from recordings, so it names no region and lifts nothing, as in an NES map |
+//! | `byte-rows` | `maincpu` | A data table of the program: `count` rows of `width` bytes from `offset` (a CPU address), lifted as a TOML file of rows like the NES map's `byte-rows`, which hooks read through an entity's `ext_rows`. `[asset.at]` gives its place in a set whose program keeps it elsewhere (Tapper's `rbtapper`) |
 //!
 //! Each asset lifts to one indexed PNG, its tiles or sprites left to right,
 //! `per_row` to a row, each pixel its 4-bit value (0 to 15) with gray
@@ -86,6 +87,12 @@ pub enum Format {
     /// Written by `gp sprites capture`, not lifted.
     #[serde(rename = "sprite-set")]
     SpriteSet,
+    /// A data table of the program, `count` rows of `width` bytes from
+    /// `offset` in a code region (`maincpu`), lifted as the NES map's
+    /// `byte-rows` are (a TOML file of rows), for hooks to read
+    /// (`ext_rows`) from the player's own romset.
+    #[serde(rename = "byte-rows")]
+    ByteRows,
 }
 
 impl Format {
@@ -94,6 +101,7 @@ impl Format {
             Self::McrTiles => "mcr-tiles",
             Self::McrSprites => "mcr-sprites",
             Self::SpriteSet => "sprite-set",
+            Self::ByteRows => "byte-rows",
         }
     }
 
@@ -104,7 +112,13 @@ impl Format {
             Self::McrTiles => ("gfx1", 8),
             Self::McrSprites => ("gfx2", 32),
             Self::SpriteSet => ("", 0),
+            Self::ByteRows => ("maincpu", 0),
         }
+    }
+
+    /// Whether it is pictures of a graphics region.
+    pub fn picture(self) -> bool {
+        matches!(self, Self::McrTiles | Self::McrSprites)
     }
 
     /// Whether the lift writes pictures for it.
@@ -134,6 +148,17 @@ pub struct ArcadeAsset {
     /// What some of them show, by index in the region, for people.
     #[serde(default)]
     pub names: std::collections::BTreeMap<String, String>,
+    /// A `byte-rows` table's place in its region (a CPU address there).
+    #[serde(default)]
+    pub offset: u32,
+    /// A `byte-rows` table's bytes a row.
+    #[serde(default)]
+    pub width: u32,
+    /// A `byte-rows` table's place in a set whose program keeps it
+    /// elsewhere, by the set's name (`rbtapper = 0xC3F1`): the sets share
+    /// a layout of pictures, not always of code.
+    #[serde(default)]
+    pub at: std::collections::BTreeMap<String, u32>,
 }
 
 fn default_per_row() -> u32 {
@@ -142,7 +167,7 @@ fn default_per_row() -> u32 {
 
 impl ArcadeAsset {
     pub fn file(&self) -> String {
-        if self.format == Format::SpriteSet {
+        if matches!(self.format, Format::SpriteSet | Format::ByteRows) {
             format!("{}.toml", self.name)
         } else {
             format!("{}.png", self.name)
@@ -205,6 +230,15 @@ impl ArcadeMap {
                 }
                 continue;
             }
+            if a.format == Format::ByteRows {
+                if a.region != region || a.count == 0 || a.width == 0 {
+                    return Err(Error::Map(format!(
+                        "{}: a byte-rows table names region {region}, its offset, and count and width of at least 1",
+                        a.name
+                    )));
+                }
+                continue;
+            }
             if a.region != region {
                 return Err(Error::Map(format!(
                     "{}: {} reads region {region}, not {}",
@@ -244,6 +278,8 @@ pub struct Decoded {
     pub identity: String,
     pub tiles: Vec<[u8; 64]>,
     pub sprites: Vec<[u8; 1024]>,
+    /// The program regions by MAME's name (`maincpu`), for `byte-rows`.
+    pub regions: std::collections::BTreeMap<String, Vec<u8>>,
 }
 
 impl Decoded {
@@ -251,7 +287,7 @@ impl Decoded {
         match f {
             Format::McrTiles => self.tiles.get(i).map(|t| &t[..]),
             Format::McrSprites => self.sprites.get(i).map(|t| &t[..]),
-            Format::SpriteSet => None,
+            Format::SpriteSet | Format::ByteRows => None,
         }
     }
 
@@ -259,9 +295,42 @@ impl Decoded {
         match f {
             Format::McrTiles => self.tiles.get_mut(i).map(|t| &mut t[..]),
             Format::McrSprites => self.sprites.get_mut(i).map(|t| &mut t[..]),
-            Format::SpriteSet => None,
+            Format::SpriteSet | Format::ByteRows => None,
         }
     }
+}
+
+/// A `byte-rows` table's lifted file: its rows from the program region,
+/// written as the NES map's `byte-rows` are (crate::rows), so the
+/// interpreter reads either the same way.
+fn rows_file(a: &ArcadeAsset, gfx: &Decoded, source: &str) -> Result<Vec<u8>, Error> {
+    let fail = |msg: String| Error::Decode {
+        asset: a.name.clone(),
+        msg,
+    };
+    let region = gfx
+        .regions
+        .get(&a.region)
+        .ok_or_else(|| fail(format!("the romset has no region {}", a.region)))?;
+    let from = a.at.get(&gfx.set).copied().unwrap_or(a.offset) as usize;
+    let len = (a.count * a.width) as usize;
+    let bytes = region.get(from..from + len).ok_or_else(|| {
+        fail(format!(
+            "{len} bytes from {from:#06x} are past {}",
+            a.region
+        ))
+    })?;
+    let mut out = format!(
+        "# Rows of {} bytes each: asset {:?} of {source}, lifted from the player's romset.
+rows = [\n",
+        a.width, a.name
+    );
+    for (i, row) in bytes.chunks_exact(a.width as usize).enumerate() {
+        let items: Vec<String> = row.iter().map(|b| format!("0x{b:02X}")).collect();
+        out.push_str(&format!("  [{}], # {i}\n", items.join(", ")));
+    }
+    out.push_str("]\n");
+    Ok(out.into_bytes())
 }
 
 /// One asset's pixels from the decoded regions, laid out as its PNG.
@@ -331,7 +400,20 @@ pub fn lift(
         },
     ];
     let mut lifted = Vec::new();
-    for a in map.assets.iter().filter(|a| a.format.lifted()) {
+    for a in map.assets.iter().filter(|a| a.format == Format::ByteRows) {
+        let bytes = rows_file(a, gfx, &map.source)?;
+        lifted.push(Lifted {
+            name: a.name.clone(),
+            format: a.format.name(),
+            file: a.file(),
+            bytes: bytes.len() as u64,
+        });
+        files.push(File {
+            name: a.file(),
+            bytes,
+        });
+    }
+    for a in map.assets.iter().filter(|a| a.format.picture()) {
         let (w, h) = a.image_size();
         let px = pixels(a, gfx)?;
         let png = write_png(w, h, &px);
@@ -357,7 +439,7 @@ pub fn unpack(
     map: &ArcadeMap,
     read: &dyn Fn(&str) -> std::io::Result<Vec<u8>>,
 ) -> Result<(), Error> {
-    for a in map.assets.iter().filter(|a| a.format.lifted()) {
+    for a in map.assets.iter().filter(|a| a.format.picture()) {
         let file = a.file();
         let bytes = read(&file).map_err(|e| Error::File {
             file: file.clone(),
@@ -429,6 +511,7 @@ mod tests {
             sprites: (0..256)
                 .map(|i| std::array::from_fn(|k| ((i * 13 + k * 3) as u8 ^ salt) & 15))
                 .collect(),
+            regions: [("maincpu".to_owned(), (0..64u8).map(|b| b ^ salt).collect())].into(),
         }
     }
 
@@ -466,6 +549,59 @@ mod tests {
             assert!(back.tiles == d.tiles && back.sprites == d.sprites);
         }
         assert!(lift(&decoded("dkong", 0), &map, &text).is_err());
+    }
+
+    /// A byte-rows table lifts its rows from the program region of the
+    /// set the player has, as a TOML file of rows; one past the region or
+    /// naming a graphics region is refused.
+    #[test]
+    fn a_byte_rows_table_lifts_from_the_program() {
+        let text = format!(
+            "{}\n[[asset]]\nname = \"ends\"\nformat = \"byte-rows\"\nregion = \"maincpu\"\noffset = 4\ncount = 2\nwidth = 3\n",
+            mcr_91490_map("tapper", "Tapper", &SETS)
+        );
+        let map = ArcadeMap::parse(&text).unwrap();
+        let (files, lifted) = lift(&decoded("tapper", 0), &map, &text).unwrap();
+        assert_eq!(lifted.len(), 3);
+        let moved = text.replace("width = 3\n", "width = 3\n[asset.at]\ntapperg = 10\n");
+        let (g, _) = lift(
+            &decoded("tapperg", 0),
+            &ArcadeMap::parse(&moved).unwrap(),
+            &moved,
+        )
+        .unwrap();
+        let g = g.iter().find(|f| f.name == "ends.toml").unwrap();
+        assert!(String::from_utf8_lossy(&g.bytes).contains("0x0A, 0x0B, 0x0C"));
+        let f = files.iter().find(|f| f.name == "ends.toml").unwrap();
+        let doc: toml::Table = toml::from_str(std::str::from_utf8(&f.bytes).unwrap()).unwrap();
+        let rows: Vec<Vec<i64>> = doc["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                r.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_integer().unwrap())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(rows, [[4, 5, 6], [7, 8, 9]]);
+        let far = text.replace("offset = 4", "offset = 62");
+        assert!(
+            lift(
+                &decoded("tapper", 0),
+                &ArcadeMap::parse(&far).unwrap(),
+                &far
+            )
+            .is_err()
+        );
+        assert!(
+            ArcadeMap::parse(
+                &text.replace("region = \"maincpu\"\noffset", "region = \"gfx1\"\noffset")
+            )
+            .is_err()
+        );
     }
 
     /// A sprite-set entry names no region and lifts nothing; one that

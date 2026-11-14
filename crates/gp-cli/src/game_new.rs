@@ -38,9 +38,9 @@ use gp_evidence::Paths;
 use gp_evidence::source::NesImage;
 use gp_model::model::Device;
 use serde_json::json;
-use sha2::Digest as _;
 
 use crate::Outcome;
+use crate::template::sha256_hex;
 
 /// What `gp game new` was asked.
 pub struct New<'a> {
@@ -148,10 +148,6 @@ fn q(s: &str) -> String {
     toml::Value::String(s.to_owned()).to_string()
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    hex::encode(sha2::Sha256::digest(bytes))
-}
-
 /// The namespace the other packages in the checkout share, if they agree.
 fn shared_namespace(games: &Path) -> Option<String> {
     let mut seen = std::collections::BTreeSet::new();
@@ -255,7 +251,7 @@ pub fn run(a: &New<'_>, paths: &Paths) -> Result<Outcome> {
         ldir.join(crate::level_kit::RULES_FILE),
         crate::level_kit::stub_rules(game),
     )?;
-    let (m, _) = crate::level_kit::read_model(&dir)?;
+    let (m, _) = crate::theme::read_model(&dir)?;
     crate::level_kit::write(&dir, &m, &ldir)?;
     let (qdir, rows, added) = crate::mechanic::seed_quest_log(paths, game, a.genre, &sha)?;
     let mut text = vec![
@@ -1007,6 +1003,34 @@ pub fn date_of_days(days: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_date_agrees_with_the_truncating_form_sealed_and_corpus_score_used() {
+        // The civil-date arithmetic `gp sealed`'s ledger time and
+        // `gp corpus score`'s date carried before they called this, with
+        // `/` where this has `div_euclid`: equal for every day from 1970.
+        let old = |days: i64| {
+            let z = days + 719_468;
+            let era = z / 146_097;
+            let doe = z - era * 146_097;
+            let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+            let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+            let mp = (5 * doy + 2) / 153;
+            let d = doy - (153 * mp + 2) / 5 + 1;
+            let m = if mp < 10 { mp + 3 } else { mp - 9 };
+            let y = yoe + era * 400 + i64::from(m <= 2);
+            format!("{y:04}-{m:02}-{d:02}")
+        };
+        for days in (0..1_000_000)
+            .step_by(7)
+            .chain([0, 59, 60, 365, 11_016, 20_770])
+        {
+            assert_eq!(date_of_days(days), old(days), "day {days}");
+        }
+        assert_eq!(date_of_days(0), "1970-01-01");
+        assert_eq!(date_of_days(11_016), "2000-02-29");
+        assert_eq!(date_of_days(20_770), "2026-11-13");
+    }
 
     /// A made-up NROM image: a header and filler, never a real game's bytes.
     fn image() -> Vec<u8> {

@@ -177,14 +177,7 @@ pub(crate) fn read(path: &Path) -> Result<LabelsFile> {
 /// above it holding `games/mosshop/labels.toml`, else the checkout gp was
 /// built from.
 fn repo_root() -> Option<PathBuf> {
-    let has = |d: &Path| d.join("games/mosshop").join(FILE).is_file();
-    if let Ok(here) = std::env::current_dir()
-        && let Some(d) = here.ancestors().find(|d| has(d))
-    {
-        return Some(d.to_path_buf());
-    }
-    let built = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    has(&built).then_some(built)
+    crate::repo::find_repo(|d| d.join("games/mosshop").join(FILE).is_file())
 }
 
 /// The folder of the game in the games checkout `games` that is named

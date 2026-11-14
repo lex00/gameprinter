@@ -62,24 +62,12 @@ pub(crate) fn files(dir: &Path) -> Result<Vec<PathBuf>> {
         && src.is_dir()
     {
         let mut rs = Vec::new();
-        walk(&src, &mut rs)?;
+        crate::files::walk(&src, &mut rs)?;
         rs.retain(|p| p.extension().is_some_and(|e| e == "rs"));
         rs.sort();
         out.extend(rs);
     }
     Ok(out)
-}
-
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
-        let path = entry?.path();
-        if path.is_dir() {
-            walk(&path, out)?;
-        } else if path.is_file() {
-            out.push(path);
-        }
-    }
-    Ok(())
 }
 
 /// The addresses of $8000 or more a text writes as `$XXXX` or `0xXXXX`,

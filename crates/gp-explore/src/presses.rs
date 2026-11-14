@@ -343,11 +343,7 @@ pub fn inputs_of(pads: &[u8]) -> Vec<InputFrame> {
 /// A sequence as an input log's frames, as gp-events runs take them.
 pub fn log_frames(pads: &[u8]) -> Vec<gp_evidence::input_log::InputFrame> {
     pads.iter()
-        .map(|&p| gp_evidence::input_log::InputFrame {
-            polled: true,
-            pads: [p, 0, 0, 0],
-            reset: false,
-        })
+        .map(|&p| gp_evidence::input_log::InputFrame::held(p))
         .collect()
 }
 

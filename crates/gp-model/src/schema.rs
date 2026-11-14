@@ -11,7 +11,8 @@ use crate::model::{CORE_VERSION, Model};
 use crate::platformer;
 use crate::topdown;
 
-fn finish(mut schema: schemars::Schema, id: &str) -> String {
+/// A schema's text with its `$id`, pretty and ending in a newline.
+pub fn finish(mut schema: schemars::Schema, id: &str) -> String {
     schema.insert("$id".into(), id.into());
     let mut text = serde_json::to_string_pretty(&schema).expect("schemas serialize");
     text.push('\n');

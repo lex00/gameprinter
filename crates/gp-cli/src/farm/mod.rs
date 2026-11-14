@@ -27,7 +27,7 @@
 pub(crate) mod blind;
 pub(crate) mod lanes;
 pub(crate) mod machine;
-mod support;
+pub(crate) mod support;
 pub(crate) mod topdown;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -41,6 +41,7 @@ use clap::Args;
 use serde_json::{Value, json};
 
 use crate::Outcome;
+use crate::observe::{Grid, LevelKey};
 use gp_evidence::Paths;
 use gp_evidence::input_log::{InputFrame, InputLog};
 use support as m;
@@ -238,108 +239,17 @@ pub(crate) fn moves(hop: usize, mid: usize, full: usize) -> Vec<Move> {
     ]
 }
 
-/// The level key and its names, from the template's observe.toml [level].
-pub(crate) struct LevelKey {
-    ram: Vec<u16>,
-    when: Option<gp_runtime::select::Condition>,
-    names: BTreeMap<Vec<u8>, String>,
-}
-
 impl LevelKey {
     pub(crate) fn load(game_dir: &Path) -> Result<LevelKey> {
         let file = game_dir.join("observe.toml");
         let t: toml::Value = toml::from_str(
             &fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?,
         )?;
-        let l = t
-            .get("level")
-            .context("the game's observe.toml has no [level]")?;
-        let ram = l
-            .get("ram")
-            .and_then(|v| v.as_array())
-            .context("[level] ram")?
-            .iter()
-            .filter_map(|v| v.as_integer().map(|n| n as u16))
-            .collect();
-        let when = l
-            .get("when")
-            .and_then(|w| w.as_str())
-            .and_then(|w| gp_runtime::select::Condition::parse(w).ok());
-        let mut names = BTreeMap::new();
-        for n in l
-            .get("names")
-            .and_then(|v| v.as_array())
-            .into_iter()
-            .flatten()
-        {
-            let Some(a) = n.as_array() else { continue };
-            let (Some(k), Some(v)) = (
-                a.first().and_then(|k| k.as_str()),
-                a.get(1).and_then(|v| v.as_str()),
-            ) else {
-                continue;
-            };
-            let key: Vec<u8> = k
-                .split_whitespace()
-                .filter_map(|h| u8::from_str_radix(h.trim_start_matches("0x"), 16).ok())
-                .collect();
-            names.insert(key, v.to_owned());
-        }
-        Ok(LevelKey { ram, when, names })
+        LevelKey::parse(&t)
     }
-
-    /// The level the RAM is in, or None between levels.
-    pub(crate) fn of(&self, w: &[u8]) -> Option<String> {
-        if let Some(c) = &self.when {
-            let ok = c
-                .eval(&mut |sel| match (sel.name().as_str(), sel.last_index()?) {
-                    ("ram", Some(gp_runtime::select::Index::At(n))) if (0..0x800).contains(&n) => {
-                        Ok(i64::from(w[n as usize]))
-                    }
-                    _ => Err("only ram[N]".into()),
-                })
-                .unwrap_or(false);
-            if !ok {
-                return None;
-            }
-        }
-        let key: Vec<u8> = self.ram.iter().map(|a| w[usize::from(*a)]).collect();
-        Some(self.names.get(&key).cloned().unwrap_or_else(|| {
-            key.iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<Vec<_>>()
-                .join("")
-        }))
-    }
-}
-
-/// The level grid the template's mapping.toml [cells] reads: pages of
-/// columns of rows of tile bytes.
-struct Grid {
-    pages: Vec<u16>,
-    cols: usize,
-    rows: usize,
-    top: usize,
 }
 
 impl Grid {
-    fn load(game_dir: &Path) -> Option<Grid> {
-        let t: toml::Value =
-            toml::from_str(&fs::read_to_string(game_dir.join("mapping.toml")).ok()?).ok()?;
-        let c = t.get("cells")?;
-        Some(Grid {
-            pages: c
-                .get("pages")?
-                .as_array()?
-                .iter()
-                .filter_map(|v| v.as_integer().map(|n| n as u16))
-                .collect(),
-            cols: c.get("page_columns")?.as_integer()? as usize,
-            rows: c.get("rows")?.as_integer()? as usize,
-            top: c.get("top").and_then(|v| v.as_integer()).unwrap_or(0) as usize,
-        })
-    }
-
     /// The tile at a level column and a grid row; None off the grid.
     fn at(&self, w: &[u8], col: i64, row: i64) -> Option<u8> {
         if col < 0 || row < 0 || row as usize >= self.rows || self.pages.is_empty() {
@@ -453,11 +363,7 @@ impl World<'_> {
     }
 
     fn step(&mut self, pad: u8, log: &mut Vec<InputFrame>) -> Result<()> {
-        let f = InputFrame {
-            polled: true,
-            pads: [pad, 0, 0, 0],
-            reset: false,
-        };
+        let f = InputFrame::held(pad);
         self.nes.step(f)?;
         log.push(f);
         Ok(())

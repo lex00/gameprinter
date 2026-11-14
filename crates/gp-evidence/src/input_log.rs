@@ -80,6 +80,16 @@ pub struct InputFrame {
 }
 
 impl InputFrame {
+    /// A polled frame with `pad` held on controller 1 and nothing on the
+    /// others.
+    pub fn held(pad: u8) -> Self {
+        Self {
+            polled: true,
+            pads: [pad, 0, 0, 0],
+            reset: false,
+        }
+    }
+
     /// The runtime protocol's `input-frame.buttons`: port 1 in the low byte.
     pub fn buttons_word(&self) -> u32 {
         u32::from_le_bytes(self.pads)
@@ -259,14 +269,7 @@ impl InputLog {
                     ));
                 }
             }
-            frames.extend(std::iter::repeat_n(
-                InputFrame {
-                    polled: true,
-                    pads: [bits, 0, 0, 0],
-                    reset: false,
-                },
-                count,
-            ));
+            frames.extend(std::iter::repeat_n(InputFrame::held(bits), count));
         }
         Ok(Self {
             controllers: 1,
@@ -617,11 +620,7 @@ mod tests {
     #[test]
     fn round_trip() {
         let mut log = InputLog::new(2);
-        log.frames.push(InputFrame {
-            polled: true,
-            pads: [button::RIGHT | button::A, 0, 0, 0],
-            reset: false,
-        });
+        log.frames.push(InputFrame::held(button::RIGHT | button::A));
         log.frames.push(InputFrame {
             polled: false,
             pads: [button::RIGHT | button::A, button::START, 0, 0],

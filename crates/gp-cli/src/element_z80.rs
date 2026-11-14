@@ -23,12 +23,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, bail};
-use gp_arcade::dasm::{self, Addr, Flow, Insn, Ptr, reg};
+use gp_arcade::dasm::{self, Flow, Insn, reg};
 use gp_arcade::mcr::{Access, AccessKind, Trace};
 use gp_arcade::{Controls, Romset, Tapper};
 use gp_evidence::input_log::InputFrame;
 use serde_json::{Value, json};
 
+use crate::draws_find_z80::address_regs;
 use crate::element::Names;
 
 /// How far back a slice walks.
@@ -45,18 +46,7 @@ struct Ran {
 }
 
 fn run_frame(t: &mut Tapper, c: Controls) -> Ran {
-    t.set_trace(true);
-    t.set_accesses(true);
-    t.step(c);
-    let mut trace: Vec<Trace> = t.take_trace().into_iter().filter(|e| e.cpu == 0).collect();
-    trace.sort_by_key(|e| e.time);
-    let acc: Vec<Access> = t
-        .take_accesses()
-        .into_iter()
-        .filter(|a| a.cpu == 0)
-        .collect();
-    t.set_trace(false);
-    t.set_accesses(false);
+    let (trace, acc) = crate::draws_find_z80::frame(t, c);
     let mut accesses = Vec::with_capacity(trace.len());
     let mut j = 0;
     for (i, _) in trace.iter().enumerate() {
@@ -68,17 +58,6 @@ fn run_frame(t: &mut Tapper, c: Controls) -> Ran {
         accesses.push(acc[from..j].to_vec());
     }
     Ran { trace, accesses }
-}
-
-fn address_regs(i: &Insn) -> u32 {
-    match i.mem.map(|m| m.addr) {
-        Some(Addr::Pair(b)) => b,
-        Some(Addr::Index(Ptr::Ix, _)) => reg::IX,
-        Some(Addr::Index(Ptr::Iy, _)) => reg::IY,
-        Some(Addr::Index(Ptr::Hl, _)) => reg::HL,
-        Some(Addr::Stack) => reg::SP,
-        _ => 0,
-    }
 }
 
 /// The slice of the last write to `addr` in a frame, if it wrote it.

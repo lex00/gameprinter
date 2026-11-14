@@ -44,6 +44,7 @@ use crate::clip::cache::Saved;
 use crate::clip_score::{Ctx, Open};
 use crate::clipset;
 use crate::hosted::Source;
+use gp_derive::derive::value_text;
 use gp_extract::apply::{Fact, apply, at};
 use gp_extract::questions::{QUESTIONS_FILE, Question, Questions};
 
@@ -139,14 +140,6 @@ pub(crate) fn read_model(dir: &Path) -> Result<(String, Model)> {
     let text = fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?;
     let model = Model::parse(&text).with_context(|| file.display().to_string())?;
     Ok((text, model))
-}
-
-/// A model value as the questions' candidates write it.
-fn value_text(v: &toml::Value) -> String {
-    match v {
-        toml::Value::String(s) => s.clone(),
-        other => other.to_string(),
-    }
 }
 
 /// The refs an answer writes into the fact's evidence: the question, then

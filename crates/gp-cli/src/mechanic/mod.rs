@@ -1237,14 +1237,7 @@ pub(crate) fn seed_quest_log(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn paths(home: &std::path::Path) -> Paths {
-        Paths {
-            home: home.to_path_buf(),
-            store: home.join("store"),
-            roms: home.join("roms"),
-        }
-    }
+    use crate::test_paths as paths;
 
     /// Every genre `gp game new` takes has a checklist of plain rows.
     #[test]

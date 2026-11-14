@@ -8,7 +8,7 @@
 
 use std::fs;
 use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
@@ -27,52 +27,26 @@ pub(crate) struct Watch {
     port: u16,
 }
 
-impl Watch {
-    fn own_host(&self, req: &Request) -> bool {
-        req.headers.get("host").is_some_and(|h| {
-            h == &format!("127.0.0.1:{}", self.port) || h == &format!("localhost:{}", self.port)
-        })
-    }
-
-    fn same_origin(&self, req: &Request) -> bool {
-        match req.headers.get("origin") {
-            None => true,
-            Some(o) => {
-                o == &format!("http://127.0.0.1:{}", self.port)
-                    || o == &format!("http://localhost:{}", self.port)
-            }
-        }
-    }
-}
-
 /// The page's folder: `mechanic/` from the current folder upward, else in
 /// the checkout gp was built from.
 fn page_dir() -> Result<PathBuf> {
-    let has = |d: &Path| d.join("mechanic").join("watch.html").is_file();
-    if let Ok(cwd) = std::env::current_dir() {
-        for d in cwd.ancestors() {
-            if has(d) {
-                return Ok(d.join("mechanic"));
-            }
-        }
-    }
-    let built = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    if has(&built) {
-        return Ok(built.join("mechanic"));
-    }
-    anyhow::bail!(
-        "no mechanic/watch.html here or above: run gp mechanic watch inside a gameprinter checkout"
-    )
+    crate::repo::find_repo(|d| d.join("mechanic").join("watch.html").is_file())
+        .map(|d| d.join("mechanic"))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no mechanic/watch.html here or above: run gp mechanic watch inside a gameprinter checkout"
+            )
+        })
 }
 
 fn handle(w: &Watch, req: &Request) -> Result<Response> {
-    if !w.own_host(req) {
+    if !req.own_host(w.port) {
         return Ok(Response::error(
             403,
             "this page answers only at 127.0.0.1 or localhost on its own port",
         ));
     }
-    if req.method == "POST" && !w.same_origin(req) {
+    if req.method == "POST" && !req.same_origin(w.port) {
         return Ok(Response::error(403, "only this server's own page writes"));
     }
     let page = |name: &str, kind: &'static str| -> Result<Response> {
@@ -131,7 +105,7 @@ fn serve_one(w: &Watch, conn: &TcpStream) -> std::io::Result<()> {
         Err(http::ReadError::Gone) => return Ok(()),
     };
     // A watch session's event stream (crate::watch_serve) is written as it goes.
-    if w.own_host(&req)
+    if req.own_host(w.port)
         && let Some(done) = crate::watch_serve::stream(&req, conn)
     {
         return done;
@@ -195,6 +169,7 @@ pub(crate) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     fn watch(d: &Path) -> Watch {
         let paths = Paths {

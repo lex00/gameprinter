@@ -111,7 +111,7 @@ pub(crate) fn template_rom(dir: &Path, t: &Toml, paths: &Paths) -> Result<PathBu
         .unwrap_or_default();
     let mut files = Vec::new();
     if paths.roms.is_dir() {
-        walk(&paths.roms, &mut files)?;
+        crate::files::walk(&paths.roms, &mut files)?;
     }
     files.sort();
     for p in files {
@@ -134,18 +134,6 @@ pub(crate) fn template_rom(dir: &Path, t: &Toml, paths: &Paths) -> Result<PathBu
         paths.roms.display(),
         dir.display()
     );
-}
-
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
-        let path = entry?.path();
-        if path.is_dir() {
-            walk(&path, out)?;
-        } else if path.is_file() {
-            out.push(path);
-        }
-    }
-    Ok(())
 }
 
 /// The asset map's PRG tables, the level's width and the metatiles' names

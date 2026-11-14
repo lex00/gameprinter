@@ -28,6 +28,7 @@ use serde_json::json;
 
 use crate::Outcome;
 use crate::hosted::{self, Source};
+use crate::mechanics::model_file;
 
 #[derive(clap::Args)]
 #[group(required = true, multiple = false)]
@@ -150,14 +151,6 @@ pub struct CompareArgs {
     /// of times (docs/formats/draws.md).
     #[arg(long, value_name = "FILE")]
     pub draws: Option<PathBuf>,
-}
-
-fn model_file(model: &Path) -> PathBuf {
-    if model.is_dir() {
-        model.join(gp_model::MODEL_FILE)
-    } else {
-        model.to_owned()
-    }
 }
 
 fn model_dir(model: &Path) -> PathBuf {

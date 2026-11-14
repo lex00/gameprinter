@@ -1200,12 +1200,7 @@ fn replay_arcade(
                 .collect(),
         );
         let sprites: Vec<u8> = (0xe800..0xea00u16).map(|a| t.peek(a)).collect();
-        out.boxes.push(m::merge_boxes(
-            gp_arcade::video::sprite_list(&sprites)
-                .iter()
-                .map(|s| [i32::from(s.x), i32::from(s.y), 16, 16])
-                .collect(),
-        ));
+        out.boxes.push(m::arcade_boxes(&sprites));
     }
     Ok(out)
 }

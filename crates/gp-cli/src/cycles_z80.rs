@@ -47,6 +47,7 @@ use gp_evidence::{Hash, InputLog};
 use serde_json::json;
 
 use crate::Outcome;
+use crate::cycles::hex as routine_hex;
 
 /// Work RAM on the main CPU.
 const RAM: u16 = 0xe000;
@@ -432,11 +433,6 @@ fn calls(
         Ok(())
     })?;
     Ok(done)
-}
-
-fn routine_hex(s: &str) -> Result<u16> {
-    u16::from_str_radix(s.trim_start_matches("0x").trim_start_matches('$'), 16)
-        .with_context(|| format!("`{s}` isn't a hex address"))
 }
 
 /// `gp cycles slice` on a romset: the main CPU's ROM.

@@ -20,6 +20,7 @@ use super::select::{mapping_in, model_dirs};
 use super::{Ctx, Fail, Params, Route};
 use crate::mechanic::http::{Request, Response};
 use crate::open::Opened;
+use crate::static_grade::toml_json;
 
 /// The most facts a card lists.
 const MAX_FACTS: usize = 80;
@@ -108,10 +109,6 @@ fn under(fact: &str, part: &str) -> bool {
         || fact
             .strip_prefix(part)
             .is_some_and(|rest| rest.starts_with('.') || rest.starts_with('['))
-}
-
-fn toml_json(v: &toml::Value) -> Json {
-    serde_json::to_value(v).unwrap_or(Json::Null)
 }
 
 fn fact_rows(found: &Found, keep: impl Fn(&str) -> bool) -> (Vec<Json>, usize) {

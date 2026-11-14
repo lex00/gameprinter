@@ -410,7 +410,8 @@ pub fn number(v: &toml::Value) -> Option<i64> {
     }
 }
 
-fn value_text(v: &toml::Value) -> String {
+/// A model value as text: a string as itself, anything else as TOML writes it.
+pub fn value_text(v: &toml::Value) -> String {
     match v {
         toml::Value::String(s) => s.clone(),
         other => other.to_string(),

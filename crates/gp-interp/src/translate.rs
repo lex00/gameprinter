@@ -380,7 +380,7 @@ fn carry_slots<O: Runtime>(
     for (gi, g) in groups.iter().enumerate() {
         for o in crate::bodies::carried_slot_objects(original, g)? {
             let k = &g.kinds[o.kind];
-            objects.push((gi, k.entity.as_str(), g.fields_of(k), o));
+            objects.push((gi, k.entity.as_str(), g.fields_of(k), o, k.holds_slot));
         }
     }
     // An object past the end of its life that still has its slot (`held`)
@@ -388,11 +388,17 @@ fn carry_slots<O: Runtime>(
     if let Some(held) = &slots.held {
         for o in crate::bodies::held_objects(original, slots)? {
             if !objects.iter().any(|x| x.0 == 0 && x.3.slot == o.slot) {
-                objects.push((0, held.entity.as_str(), slots.fields_with(&held.fields), o));
+                objects.push((
+                    0,
+                    held.entity.as_str(),
+                    slots.fields_with(&held.fields),
+                    o,
+                    false,
+                ));
             }
         }
     }
-    for (gi, entity, fields, o) in objects {
+    for (gi, entity, fields, o, holds) in objects {
         let Some(kind) = spec.kinds.index_of(entity) else {
             continue;
         };
@@ -403,8 +409,13 @@ fn carry_slots<O: Runtime>(
                 .and_then(|v| raw(&v.1))
                 .map(Fx::from_raw)
         };
-        let (Some(x), Some(y)) = (get("x"), get("y")) else {
-            continue;
+        // An object that only holds its slot (`holds_slot`: a timer, a
+        // record) needs no place: it is carried where the level starts
+        // when its slot maps none.
+        let (x, y) = match (get("x"), get("y")) {
+            (Some(x), Some(y)) => (x, y),
+            _ if holds => (Fx::ZERO, Fx::ZERO),
+            _ => continue,
         };
         let left = player.is_some_and(|p| p < x);
         let mut b = gp_sim::systems::new_body(spec, w, kind, x, y, left);
@@ -763,7 +774,7 @@ fn start_level(spec: &Spec, w: &mut World, i: usize) {
 }
 
 /// A number in the model's units, as raw fixed-point.
-fn raw(v: &Value) -> Option<i64> {
+pub(crate) fn raw(v: &Value) -> Option<i64> {
     match v {
         Value::Fixed(r) => Some(*r),
         Value::Int(n) => Some(n << 16),

@@ -5,7 +5,6 @@
 //! (clip.rs's `new_clip`), the repo root, the file walk, and the game's
 //! folder and ROM from the games checkout (game-printer read templates/).
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
@@ -14,44 +13,7 @@ use gp_evidence::input_log::{InputFrame, InputLog};
 
 pub(crate) use crate::mechanic::paths::{put_path, read_path};
 
-/// Sprite boxes from a sprite table: each sprite's box, and boxes that
-/// touch merged, as `[x, y, w, h]`.
-pub(crate) fn sprite_boxes(oam: &[u8; 256], tall: i32) -> Vec<[i32; 4]> {
-    merge_boxes(
-        oam.chunks(4)
-            .filter(|e| e[0] < 0xEF)
-            .map(|e| [i32::from(e[3]), i32::from(e[0]) + 1, 8, tall])
-            .collect(),
-    )
-}
-
-/// Boxes `[x, y, w, h]` with those that touch merged into one.
-pub(crate) fn merge_boxes(mut b: Vec<[i32; 4]>) -> Vec<[i32; 4]> {
-    let touch = |a: &[i32; 4], c: &[i32; 4]| {
-        a[0] <= c[0] + c[2] && c[0] <= a[0] + a[2] && a[1] <= c[1] + c[3] && c[1] <= a[1] + a[3]
-    };
-    loop {
-        let mut merged = false;
-        'outer: for i in 0..b.len() {
-            for j in i + 1..b.len() {
-                if touch(&b[i], &b[j]) {
-                    let (a, c) = (b[i], b[j]);
-                    let x0 = a[0].min(c[0]);
-                    let y0 = a[1].min(c[1]);
-                    let x1 = (a[0] + a[2]).max(c[0] + c[2]);
-                    let y1 = (a[1] + a[3]).max(c[1] + c[3]);
-                    b[i] = [x0, y0, x1 - x0, y1 - y0];
-                    b.swap_remove(j);
-                    merged = true;
-                    break 'outer;
-                }
-            }
-        }
-        if !merged {
-            return b;
-        }
-    }
-}
+pub(crate) use crate::mechanic::detect::{arcade_boxes, sprite_boxes};
 
 /// The repo this gp was built from (its bench files and docs), or the
 /// current folder when gp runs from elsewhere.
@@ -71,18 +33,7 @@ pub(crate) fn name_ok(s: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// Every file under `dir`.
-pub(crate) fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
-        let path = entry?.path();
-        if path.is_dir() {
-            walk(&path, out)?;
-        } else if path.is_file() {
-            out.push(path);
-        }
-    }
-    Ok(())
-}
+pub(crate) use crate::files::walk;
 
 /// A game's folder in the games checkout and its ROM (the package's
 /// roms.toml, found in $GP_ROM_DIR by hash). game-printer read
@@ -149,6 +100,25 @@ pub(crate) fn frames_of(rom: &[u8], clip: &crate::reach::ClipInput) -> Result<gp
         pad.push(input.pads[0]);
         tall += usize::from(nes.tall_sprites());
     }
+    let lag = sprite_lag(&ram, &oam);
+    let n = ram.len().saturating_sub(lag);
+    ram.truncate(n);
+    pad.truncate(n);
+    Ok(gp_track::Frames {
+        first: 1,
+        ram,
+        oam: oam.split_off(lag.min(oam.len())),
+        tall: tall * 2 > clip.inputs.len(),
+        sprites: None,
+        scroll_x: scroll.split_off(lag.min(scroll.len())),
+        pad,
+    })
+}
+
+/// Whether the sprites drawn from a frame's RAM are that frame's (0) or the
+/// next's (1): the lag at which some RAM page equals the sprite table on
+/// more frames.
+pub(crate) fn sprite_lag(ram: &[Vec<u8>], oam: &[Vec<u8>]) -> usize {
     let equal_at = |lag: usize, p: usize| -> usize {
         (0..ram.len().saturating_sub(lag))
             .filter(|&f| {
@@ -164,19 +134,7 @@ pub(crate) fn frames_of(rom: &[u8], clip: &crate::reach::ClipInput) -> Result<gp
             .unwrap_or((0, 0))
     };
     let (b0, b1) = (best(0), best(1));
-    let lag = if b0.0 > b1.0 { 0 } else { 1 };
-    let n = ram.len().saturating_sub(lag);
-    ram.truncate(n);
-    pad.truncate(n);
-    Ok(gp_track::Frames {
-        first: 1,
-        ram,
-        oam: oam.split_off(lag.min(oam.len())),
-        tall: tall * 2 > clip.inputs.len(),
-        sprites: None,
-        scroll_x: scroll.split_off(lag.min(scroll.len())),
-        pad,
-    })
+    if b0.0 > b1.0 { 0 } else { 1 }
 }
 
 /// [`frames_of`] on an arcade romset.
@@ -219,10 +177,6 @@ pub(crate) fn play_start(
     bytes: &[u8],
     clips: &[crate::reach::ClipInput],
 ) -> Result<Option<(usize, usize)>> {
-    // A run where the pad moves the player is in play at that frame; the
-    // tracker's player can be a title screen's or an intro's, so it is used
-    // only when no run has the first.
-    let mut tracked = None;
     // Right's and Left's bits on the device the ROM's platform has.
     let lr = if crate::original::Platform::of_file(bytes) == crate::original::Platform::Arcade {
         let p = super::machine::Pads::of(gp_model::model::Device::Arcade);
@@ -230,8 +184,23 @@ pub(crate) fn play_start(
     } else {
         (0x80, 0x40)
     };
+    play_start_with(bytes, clips, lr, frames_of)
+}
+
+/// [`play_start`] with Right's and Left's pad bits `lr` and each clip's
+/// frames read by `frames`.
+pub(crate) fn play_start_with(
+    bytes: &[u8],
+    clips: &[crate::reach::ClipInput],
+    lr: (u8, u8),
+    frames: impl Fn(&[u8], &crate::reach::ClipInput) -> Result<gp_track::Frames>,
+) -> Result<Option<(usize, usize)>> {
+    // A run where the pad moves the player is in play at that frame; the
+    // tracker's player can be a title screen's or an intro's, so it is used
+    // only when no run has the first.
+    let mut tracked = None;
     for (i, c) in clips.iter().enumerate() {
-        let mut f = frames_of(bytes, c)?;
+        let mut f = frames(bytes, c)?;
         if let Some(t) = pad_x(&f, lr)
             .and_then(|x| first_move(&f, x, lr))
             .filter(|&t| t > 0)
@@ -250,7 +219,7 @@ pub(crate) fn play_start(
 }
 
 /// The first frame `x` moves the way the pad says, Left or Right held.
-fn first_move(f: &gp_track::Frames, x: u16, lr: (u8, u8)) -> Option<usize> {
+pub(crate) fn first_move(f: &gp_track::Frames, x: u16, lr: (u8, u8)) -> Option<usize> {
     let a = usize::from(x);
     (1..f.ram.len().min(f.pad.len())).find(|&t| {
         let (r, l) = (f.pad[t] & lr.0 != 0, f.pad[t] & lr.1 != 0);
@@ -276,7 +245,7 @@ fn first_move(f: &gp_track::Frames, x: u16, lr: (u8, u8)) -> Option<usize> {
 ///    happens to be held goes one way only);
 /// 5. no other byte passes 1 to 4 as often (a subpixel byte passes 1 and
 ///    fails 2).
-fn pad_x(f: &gp_track::Frames, lr: (u8, u8)) -> Option<u16> {
+pub(crate) fn pad_x(f: &gp_track::Frames, lr: (u8, u8)) -> Option<u16> {
     let n = f.ram.len().min(f.oam.len()).min(f.pad.len());
     let mut best: Vec<(usize, u16)> = Vec::new();
     for a in 0..0x800usize {

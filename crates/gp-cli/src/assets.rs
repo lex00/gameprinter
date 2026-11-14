@@ -59,13 +59,8 @@ pub(crate) fn maps_dirs() -> Vec<PathBuf> {
         return vec![PathBuf::from(dir)];
     }
     let mut dirs = Vec::new();
-    let here = std::env::current_dir().ok();
-    let tool = here
-        .iter()
-        .flat_map(|h| h.ancestors())
-        .find(|d| d.join("assets/mosshop.toml").is_file())
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    let tool = crate::repo::find_repo(|d| d.join("assets/mosshop.toml").is_file())
+        .unwrap_or_else(crate::repo::built);
     dirs.push(tool.join("assets"));
     if let Some(games) = crate::roms_cmd::games_dir(None)
         && let Ok(rd) = fs::read_dir(&games)
@@ -393,6 +388,7 @@ fn decoded(set: &gp_arcade::Romset) -> gp_assets::arcade::Decoded {
         identity: set.identity.clone(),
         tiles: g.tiles,
         sprites: g.sprites,
+        regions: [("maincpu".to_owned(), set.maincpu.clone())].into(),
     }
 }
 

@@ -204,7 +204,9 @@ pub fn level_sets(level_colors: &BTreeMap<String, BTreeMap<Vec<u8>, u32>>) -> Ve
     sets
 }
 
-fn median(v: &mut [u32]) -> Option<u32> {
+/// The middle value once sorted (the upper of the two middles), or None
+/// when there are none.
+pub fn median(v: &mut [u32]) -> Option<u32> {
     if v.is_empty() {
         return None;
     }

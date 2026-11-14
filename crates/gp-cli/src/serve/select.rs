@@ -21,9 +21,7 @@ use serde_json::{Value as Json, json};
 use super::labels::Loaded;
 use super::{Ctx, Fail, Params, Route};
 use crate::mechanic::http::{Request, Response};
-
-/// The picture's size.
-const SCREEN: (i64, i64) = (256, 240);
+use crate::serve::pointing::parse_rect;
 
 pub(super) fn routes() -> Vec<Route> {
     vec![Route {
@@ -167,31 +165,6 @@ fn instance_of(path: &str) -> Option<(String, String)> {
     let kind = &rest[..open];
     rest[open + 1..close].parse::<u32>().ok()?;
     Some((format!("entities.{}", &rest[..=close]), kind.to_owned()))
-}
-
-/// The rectangle `x,y,w,h` of the picture.
-fn parse_rect(text: &str) -> Result<Rect, String> {
-    let parts: Vec<&str> = text.split(',').collect();
-    let n: Vec<i64> = parts
-        .iter()
-        .map(|p| p.trim().parse::<i64>())
-        .collect::<Result<_, _>>()
-        .map_err(|_| format!("rect is x,y,w,h in whole pixels, not {text:?}"))?;
-    let [x, y, w, h] = n[..] else {
-        return Err(format!("rect is x,y,w,h, four numbers, not {text:?}"));
-    };
-    if !(0..SCREEN.0).contains(&x) || !(0..SCREEN.1).contains(&y) || w < 1 || h < 1 {
-        return Err(format!(
-            "rect {text:?} must start on the {}x{} picture and be at least 1x1",
-            SCREEN.0, SCREEN.1
-        ));
-    }
-    Ok(Rect {
-        x,
-        y,
-        w: w.min(SCREEN.0 - x) as u64,
-        h: h.min(SCREEN.1 - y) as u64,
-    })
 }
 
 /// The model directory in `root` (the games checkout, or the repo's

@@ -302,24 +302,7 @@ impl Template {
     pub fn check_platform(dir: &Path, opened: &Opened) -> Result<()> {
         let arcade_game = dir.join("package.toml").is_file()
             && crate::package::Package::load(dir)?.platform()? == crate::roms::Platform::Arcade;
-        if arcade_game != opened.is_arcade() {
-            bail!(
-                "{} is {}, and {} is a recording of {}: gp gaps reads a game's own original",
-                dir.display(),
-                if arcade_game {
-                    "an arcade game"
-                } else {
-                    "an NES game"
-                },
-                opened.short(),
-                if opened.is_arcade() {
-                    "an arcade romset"
-                } else {
-                    "an NES ROM"
-                }
-            );
-        }
-        Ok(())
+        opened.of_platform(dir, arcade_game, "gp gaps reads a game's own original")
     }
 
     /// `name` as a folder, else under `base`, else under `templates` and
@@ -608,13 +591,7 @@ fn labels_file(t: &Template) -> Option<PathBuf> {
     }
     let plain = !t.source.is_empty() && !t.source.contains('/') && !t.source.contains("..");
     let has = |d: &Path| d.join("games").join(&t.source).join(FILE).is_file();
-    let repo = std::env::current_dir()
-        .ok()
-        .and_then(|h| h.ancestors().find(|d| has(d)).map(Path::to_path_buf))
-        .or_else(|| {
-            let built = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-            has(&built).then_some(built)
-        });
+    let repo = crate::repo::find_repo(has);
     if plain && let Some(r) = repo {
         return Some(r.join("games").join(&t.source).join(FILE));
     }

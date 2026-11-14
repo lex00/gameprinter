@@ -12,8 +12,6 @@
 //! The objects can always be measured again from the recordings, so a line
 //! whose object is missing or unreadable is passed over, not an error.
 
-use std::fs::{self, OpenOptions};
-use std::io::Write;
 use std::path::PathBuf;
 
 use gp_evidence::{Hash, Store};
@@ -52,42 +50,17 @@ pub fn log_path(store: &Store) -> PathBuf {
 
 /// Every readable line of the index, in order.
 pub fn lines(store: &Store) -> Result<Vec<Line>, CacheError> {
-    let path = log_path(store);
-    let text = match fs::read_to_string(&path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(source) => return Err(CacheError::Io { path, source }),
-    };
-    Ok(text
-        .lines()
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .collect())
+    lines_checked(store).map(|(good, _)| good)
 }
 
-/// Line numbers (from 1) and parse errors of index lines that can't be read.
-pub type BadLines = Vec<(usize, String)>;
+pub use gp_evidence::jsonl::BadLines;
 
 /// Every line of the index and the lines that can't be read, as line
 /// numbers (from 1) and errors. `gp store gc` keeps every object a line
 /// names, so it refuses to delete anything while a line can't be read.
 pub fn lines_checked(store: &Store) -> Result<(Vec<Line>, BadLines), CacheError> {
     let path = log_path(store);
-    let text = match fs::read_to_string(&path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
-        Err(source) => return Err(CacheError::Io { path, source }),
-    };
-    let (mut good, mut bad) = (Vec::new(), Vec::new());
-    for (i, l) in text.lines().enumerate() {
-        if l.trim().is_empty() {
-            continue;
-        }
-        match serde_json::from_str(l) {
-            Ok(line) => good.push(line),
-            Err(e) => bad.push((i + 1, e.to_string())),
-        }
-    }
-    Ok((good, bad))
+    gp_evidence::jsonl::read_checked(&path).map_err(|source| CacheError::Io { path, source })
 }
 
 /// The stored coverage of `recording` measured with `definition` by this
@@ -134,17 +107,6 @@ pub fn save(store: &Store, coverage: &Coverage, at: &str) -> Result<Hash, CacheE
     let mut text = serde_json::to_string(&line).expect("lines serialize");
     text.push('\n');
     let path = log_path(store);
-    let io = |source| CacheError::Io {
-        path: path.clone(),
-        source,
-    };
-    fs::create_dir_all(path.parent().expect("index path has a parent")).map_err(io)?;
-    let mut f = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .map_err(io)?;
-    // One write per line, so concurrent appends can't interleave in a line.
-    f.write_all(text.as_bytes()).map_err(io)?;
+    gp_evidence::jsonl::append(&path, &text).map_err(|source| CacheError::Io { path, source })?;
     Ok(object)
 }

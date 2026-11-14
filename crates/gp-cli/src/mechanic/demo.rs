@@ -210,11 +210,7 @@ fn step(o: &mut OriginalRuntime, f: InputFrame) -> Result<()> {
 }
 
 fn pad(p: u8) -> InputFrame {
-    InputFrame {
-        polled: true,
-        pads: [p, 0, 0, 0],
-        reset: false,
-    }
+    InputFrame::held(p)
 }
 
 /// The game's folder in the games checkout and its ROM.

@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use gp_evidence::Paths;
-use gp_evidence::source::{identify_nes, looks_like_nes};
+use gp_evidence::source::{file_looks_like_nes, identify_nes};
 use serde::Deserialize;
 
 use crate::Outcome;
@@ -91,17 +91,6 @@ impl Rom {
     }
 }
 
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-    for e in fs::read_dir(dir).into_iter().flatten().flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            walk(&p, out);
-        } else {
-            out.push(p);
-        }
-    }
-}
-
 /// The ROM given, or the first NES image in $GP_ROM_DIR, by path, whose
 /// hash the template accepts. An authored original (`how = "authored"`)
 /// has no ROM here: gameprinter builds those images with `gp template
@@ -114,15 +103,10 @@ pub(crate) fn find_rom(t: &Template, given: Option<&Path>, paths: &Paths) -> Res
         return Ok(None);
     }
     let mut files = Vec::new();
-    walk(&paths.roms, &mut files);
+    crate::files::walk_lenient(&paths.roms, &mut files);
     files.sort();
     for path in files {
-        let mut head = [0u8; 4];
-        let is_nes = fs::File::open(&path)
-            .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head))
-            .is_ok()
-            && looks_like_nes(&head);
-        if !is_nes {
+        if !file_looks_like_nes(&path) {
             continue;
         }
         let Ok(rom) = Rom::read(&path) else { continue };

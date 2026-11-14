@@ -20,13 +20,13 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use gp_evidence::Paths;
 use gp_evidence::manifest::{Mmc3Revision, PowerOn, RamInit, Region};
 use gp_nes::accuracy::{self, Verdict};
 
 use crate::Outcome;
+use crate::template::sha256_hex;
 
 #[derive(clap::Subcommand)]
 pub enum TestromsCmd {
@@ -262,10 +262,6 @@ fn work_dir(paths: &Paths) -> PathBuf {
     paths.home.join("work").join("test-roms")
 }
 
-fn sha256(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
-}
-
 /// Why a suite with `needs_zeroed_ram` is skipped when RAM powers on as ones.
 const ZEROED_RAM_ONLY: &str = "skipped: its expected output was made with RAM powered on as zeros";
 
@@ -285,7 +281,7 @@ fn fetch(m: &Manifest, file: &File, dir: &Path, offline: bool) -> Result<Fetched
     let dest = dir.join(&file.path);
     let cached = fs::read(&dest).ok();
     if let Some(bytes) = &cached
-        && sha256(bytes) == file.sha256
+        && sha256_hex(bytes) == file.sha256
     {
         return Ok(Fetched::Ready(bytes.clone()));
     }
@@ -296,7 +292,7 @@ fn fetch(m: &Manifest, file: &File, dir: &Path, offline: bool) -> Result<Fetched
             Some(bytes) => Fetched::WrongHash(format!(
                 "{} has SHA-256 {}, the manifest pins {}: rebuild it with `just build-testroms`, and if {source} changed, update the pin",
                 dest.display(),
-                sha256(&bytes),
+                sha256_hex(&bytes),
                 file.sha256
             )),
             None => Fetched::Missing(format!(
@@ -310,7 +306,7 @@ fn fetch(m: &Manifest, file: &File, dir: &Path, offline: bool) -> Result<Fetched
             Some(bytes) => Fetched::WrongHash(format!(
                 "{} has SHA-256 {}, the manifest pins {}",
                 dest.display(),
-                sha256(&bytes),
+                sha256_hex(&bytes),
                 file.sha256
             )),
             None => Fetched::Missing("not downloaded, and --offline".into()),
@@ -336,7 +332,7 @@ fn fetch(m: &Manifest, file: &File, dir: &Path, offline: bool) -> Result<Fetched
         Ok(_) => {}
     }
     let bytes = fs::read(&partial).with_context(|| format!("reading {}", partial.display()))?;
-    let got = sha256(&bytes);
+    let got = sha256_hex(&bytes);
     if got != file.sha256 {
         let _ = fs::remove_file(&partial);
         return Ok(Fetched::WrongHash(format!(
@@ -960,7 +956,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = File {
             path: "gp/x.nes".into(),
-            sha256: sha256(b"right"),
+            sha256: sha256_hex(b"right"),
             built_from: Some("test-roms/x/x.s".into()),
         };
         match fetch(&m, &file, dir.path(), false).unwrap() {

@@ -8,6 +8,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
+use gp_model::schema::finish;
 use gp_model::validate::{ENTITY_ROLES, ROLE_GROUPS, WORLD_ROLES};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -736,11 +737,4 @@ pub fn stack_schema() -> String {
         schemars::schema_for!(Stack),
         &format!("game-printer:theme-stack@{FORMAT_VERSION}"),
     )
-}
-
-fn finish(mut schema: schemars::Schema, id: &str) -> String {
-    schema.insert("$id".into(), id.into());
-    let mut text = serde_json::to_string_pretty(&schema).expect("schemas serialize");
-    text.push('\n');
-    text
 }

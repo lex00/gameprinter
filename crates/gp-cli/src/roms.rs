@@ -132,21 +132,6 @@ pub fn sha256_of(bytes: &[u8]) -> Result<String> {
     Ok(Rom::of_bytes(bytes.to_vec())?.sha256)
 }
 
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    for e in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
-        let e = e?;
-        let path = e.path();
-        if e.file_type()?.is_dir() {
-            if !e.file_name().eq_ignore_ascii_case("sealed") {
-                walk(&path, out)?;
-            }
-        } else if path.is_file() {
-            out.push(path);
-        }
-    }
-    Ok(())
-}
-
 /// Whether a file starts as an NES image or a zip does.
 pub fn is_rom_file(path: &Path) -> bool {
     let mut head = [0u8; 4];
@@ -175,7 +160,7 @@ pub fn find(wanted: &[String], given: &[PathBuf], dir: &Path) -> Result<BTreeMap
         return Ok(found);
     }
     let mut files = Vec::new();
-    walk(dir, &mut files)?;
+    crate::files::walk_unsealed(dir, &mut files)?;
     files.sort();
     for path in files {
         if !is_rom_file(&path) {

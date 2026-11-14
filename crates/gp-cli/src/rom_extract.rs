@@ -12,8 +12,10 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context as _, Result};
+use gp_mcp::scenario::number as number_of;
 use serde_json::{Value, json};
 
+use crate::farm::support::pad_x;
 use crate::rom_dataset::{Dataset, tool};
 use gp_nes::codemap::{Va, va_hex, va_parse};
 use gp_nes::harvest::Harvest;
@@ -48,118 +50,6 @@ struct Parts {
     writes: Vec<(String, Vec<Vec<gp_events::activity::Write>>, Option<u16>)>,
 }
 
-/// The byte that is the player's x in one run, read from the RAM, the pad
-/// and the sprites, for games whose drawing the tracker can't bind (a hero
-/// whose sprites shift when it turns, a camera that keeps it still):
-///
-/// 1. it moves the way the pad says (Right up, Left down) on 95% or more of
-///    the 40 or more frames it moves while one of them is held;
-/// 2. on 90% of those frames a sprite is drawn within 24 pixels of the
-///    byte's place on screen (its value less the scroll), at one offset;
-/// 3. on 10% or more of those frames the screen doesn't scroll from the
-///    frame before to the frame after (a camera byte moves only when the
-///    screen does, sometimes a frame ahead of the scroll register);
-/// 4. in the holds it moves in, it moves on half the frames or more (a menu
-///    cursor moves once a press), and a tenth or more of its agreeing moves
-///    are under each of Right and Left (a byte counting down while Left
-///    happens to be held goes one way only);
-/// 5. no other byte passes 1 to 4 as often (a subpixel byte passes 1 and
-///    fails 2).
-fn pad_x(f: &gp_track::Frames) -> Option<u16> {
-    let n = f.ram.len().min(f.oam.len()).min(f.pad.len());
-    let mut best: Vec<(usize, u16)> = Vec::new();
-    for a in 0..0x800usize {
-        let (mut moved, mut agree, mut still) = (0usize, 0usize, 0usize);
-        let mut frames = Vec::new();
-        // Each hold of Left or Right the byte moves in, and the frames of
-        // it the byte moves on: a player held to one side moves on most of
-        // them, a menu cursor once a press.
-        let (mut held_in, mut moved_in) = (0usize, 0usize);
-        // Agreeing moves under each direction: the player goes both ways, a
-        // byte counting down only one.
-        let (mut agree_r, mut agree_l) = (0usize, 0usize);
-        let (mut seg_len, mut seg_moves) = (0usize, 0usize);
-        for t in 1..n {
-            let pad = f.pad[t];
-            let (r, l) = (pad & 0x80 != 0, pad & 0x40 != 0);
-            if r == l || f.pad[t] != f.pad[t - 1] {
-                if seg_moves > 0 {
-                    held_in += seg_len;
-                    moved_in += seg_moves;
-                }
-                seg_len = 0;
-                seg_moves = 0;
-            }
-            if r == l {
-                continue;
-            }
-            seg_len += 1;
-            let d = f.ram[t][a].wrapping_sub(f.ram[t - 1][a]) as i8;
-            if d == 0 {
-                continue;
-            }
-            seg_moves += 1;
-            if (d > 0) == r {
-                if r {
-                    agree_r += 1;
-                } else {
-                    agree_l += 1;
-                }
-            }
-            moved += 1;
-            if (d > 0) == r {
-                agree += 1;
-                frames.push(t);
-            }
-            // The screen still from the frame before to the frame after: a
-            // camera byte can move a frame before the scroll register does.
-            let s0 = f.scroll_x[t - 1];
-            if f.scroll_x[t] == s0 && f.scroll_x.get(t + 1).is_none_or(|&s| s == s0) {
-                still += 1;
-            }
-        }
-        if seg_moves > 0 {
-            held_in += seg_len;
-            moved_in += seg_moves;
-        }
-        if moved < 40
-            || agree * 100 < moved * 95
-            || still * 10 < moved
-            || moved_in * 2 < held_in
-            || agree_r * 10 < agree
-            || agree_l * 10 < agree
-        {
-            continue;
-        }
-        // One window of 24 pixels, at one offset from the byte's place on
-        // screen, must hold a sprite on 90% of the frames.
-        let window = (0..256usize)
-            .map(|o0| {
-                frames
-                    .iter()
-                    .filter(|&&t| {
-                        let place = f.ram[t][a].wrapping_sub(f.scroll_x[t] as u8);
-                        f.oam[t].as_chunks::<4>().0.iter().any(|s| {
-                            s[0] < 0xEF
-                                && usize::from(place.wrapping_sub(s[3]).wrapping_sub(o0 as u8)) < 24
-                        })
-                    })
-                    .count()
-            })
-            .max()
-            .unwrap_or(0);
-        if window * 10 >= frames.len() * 9 {
-            best.push((agree, a as u16));
-        }
-    }
-    best.sort_unstable_by(|x, y| y.cmp(x));
-    match best.as_slice() {
-        [(n0, a), (n1, _), ..] if n0 > n1 => Some(*a),
-        [(_, a)] => Some(*a),
-        _ => None,
-    }
-}
-
 /// Where play starts: the first of `clips` in which the pad moves the
 /// player ([`pad_x`]) and the frame it first does; else the first in which
 /// the tracker sees a player, and the frame it appears.
@@ -167,24 +57,8 @@ pub(crate) fn play_start(
     bytes: &[u8],
     clips: &[crate::reach::ClipInput],
 ) -> Result<Option<(usize, usize)>> {
-    // A run where the pad moves the player is in play at that frame; the
-    // tracker's player can be a title screen's or an intro's, so it is used
-    // only when no run has the first.
-    let mut tracked = None;
-    for (i, c) in clips.iter().enumerate() {
-        let mut f = frames_of(bytes, c)?;
-        if let Some(t) = pad_x(&f).and_then(|x| first_move(&f, x)).filter(|&t| t > 0) {
-            return Ok(Some((i, t)));
-        }
-        if tracked.is_none()
-            && let Ok(r) = gp_track::track(&mut f, &gp_track::Options::default())
-            && let Some(s) = r.tracks.iter().filter(|t| t.player).map(|t| t.spawn).min()
-            && s > 1
-        {
-            tracked = Some((i, (s - 1) as usize));
-        }
-    }
-    Ok(tracked)
+    // NES pad bits, whatever the ROM.
+    crate::farm::support::play_start_with(bytes, clips, (0x80, 0x40), frames_of)
 }
 
 /// Runs branched from play, and each one's seed: the start set's seed
@@ -193,16 +67,6 @@ const BRANCHES: u64 = 4;
 
 fn branch_seed(seed: u64, k: u64) -> u64 {
     seed.wrapping_add(1000 + k)
-}
-
-/// The first frame `x` moves the way the pad says, Left or Right held.
-fn first_move(f: &gp_track::Frames, x: u16) -> Option<usize> {
-    let a = usize::from(x);
-    (1..f.ram.len().min(f.pad.len())).find(|&t| {
-        let (r, l) = (f.pad[t] & 0x80 != 0, f.pad[t] & 0x40 != 0);
-        let d = f.ram[t][a].wrapping_sub(f.ram[t - 1][a]) as i8;
-        r != l && d != 0 && (d > 0) == r
-    })
 }
 
 /// The byte that is the speed of the position byte `pos` in one run, and
@@ -408,24 +272,7 @@ fn snapshots_of(rom: &[u8], clip: &crate::reach::ClipInput) -> Result<Snap> {
         pad.push(input.pads[0]);
         tall += usize::from(nes.tall_sprites());
     }
-    let equal_at = |lag: usize, p: usize| -> usize {
-        (0..ram.len().saturating_sub(lag))
-            .filter(|&f| {
-                let o = &oam[f + lag];
-                o.iter().any(|&b| b != 0) && ram[f][p * 256..p * 256 + 256] == o[..]
-            })
-            .count()
-    };
-    let best = |lag: usize| {
-        (0..8)
-            .map(|p| (equal_at(lag, p), p))
-            .max()
-            .unwrap_or((0, 0))
-    };
-    let (b0, b1) = (best(0), best(1));
-    let lag = if b0.0 > b1.0 { 0 } else { 1 };
-    let (eq, page) = if lag == 0 { b0 } else { b1 };
-    let _ = (eq, page);
+    let lag = crate::farm::support::sprite_lag(&ram, &oam);
     // The page the game copies to the sprite table: the value it writes to
     // $4014 most often, when it writes one on most frames and it is a RAM
     // page.
@@ -535,7 +382,7 @@ fn run_parts(rom: &Path, runs: usize, seed: u64, paths: &gp_evidence::Paths) -> 
         let snap = snapshots_of(&bytes, c)?;
         snaps.push((key.clone(), snap.writes, snap.sprite_page));
         let mut frames = snap.frames;
-        if let Some(x) = pad_x(&frames) {
+        if let Some(x) = pad_x(&frames, (0x80, 0x40)) {
             pads.push((key.clone(), x));
         }
         // A run with nothing to track (no sprite moves long enough) gives
@@ -648,14 +495,6 @@ fn format_of(raw: i64, number: f64) -> Option<&'static str> {
 }
 
 /// A fact's value as one number: `0.25`, `"0.25"` the same.
-fn number_of(v: &Value) -> Option<f64> {
-    match v {
-        Value::Number(n) => n.as_f64(),
-        Value::String(s) => s.parse().ok(),
-        _ => None,
-    }
-}
-
 pub(crate) fn extract(
     rom: &Path,
     runs: usize,
@@ -2184,7 +2023,7 @@ mod tests {
 
     #[test]
     fn the_player_x_is_the_byte_the_pad_moves_with_a_sprite_by_it() {
-        assert_eq!(pad_x(&walk()), Some(0x10));
+        assert_eq!(pad_x(&walk(), (0x80, 0x40)), Some(0x10));
     }
 
     #[test]
@@ -2193,7 +2032,7 @@ mod tests {
         for o in &mut f.oam {
             o[0] = 0xFF;
         }
-        assert_eq!(pad_x(&f), None);
+        assert_eq!(pad_x(&f, (0x80, 0x40)), None);
     }
 
     #[test]

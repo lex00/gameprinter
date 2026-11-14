@@ -114,11 +114,7 @@ impl Start {
             {
                 // Let go of jump in the air so the next press is a new one.
             }
-            self.nes.step(InputFrame {
-                polled: true,
-                pads: [pad, 0, 0, 0],
-                reset: false,
-            })?;
+            self.nes.step(InputFrame::held(pad))?;
             out.push(Seen {
                 wram: self.nes.wram()[..0x800].to_vec(),
                 cells: self.nes.cells(),
@@ -135,11 +131,7 @@ impl Start {
         let mut out = Vec::new();
         for &(pad, n) in pads {
             for _ in 0..n {
-                self.nes.step(InputFrame {
-                    polled: true,
-                    pads: [pad, 0, 0, 0],
-                    reset: false,
-                })?;
+                self.nes.step(InputFrame::held(pad))?;
                 out.push(Seen {
                     wram: self.nes.wram()[..0x800].to_vec(),
                     cells: self.nes.cells(),
@@ -953,11 +945,7 @@ fn path_probes(
             nes.restore(snap, *frame, *held)?;
             let mut v = Vec::new();
             for _ in 0..150 {
-                nes.step(InputFrame {
-                    polled: true,
-                    pads: [pad, 0, 0, 0],
-                    reset: false,
-                })?;
+                nes.step(InputFrame::held(pad))?;
                 v.push(Seen {
                     wram: nes.wram()[..0x800].to_vec(),
                     cells: nes.cells(),

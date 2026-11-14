@@ -110,6 +110,17 @@ pub(crate) fn sprite_boxes(oam: &[u8; 256], tall: i32) -> Vec<[i32; 4]> {
     merge_boxes(b)
 }
 
+/// An arcade board's sprite RAM as boxes: its sprite list's 16x16 sprites,
+/// those that touch merged.
+pub(crate) fn arcade_boxes(sprite_ram: &[u8]) -> Vec<[i32; 4]> {
+    merge_boxes(
+        gp_arcade::video::sprite_list(sprite_ram)
+            .iter()
+            .map(|s| [i32::from(s.x), i32::from(s.y), 16, 16])
+            .collect(),
+    )
+}
+
 /// Sprite rectangles ([x, y, w, h]) that touch, merged into boxes: the
 /// NES's sprite table's ([`sprite_boxes`]) or an arcade sprite list's.
 pub(crate) fn merge_boxes(mut b: Vec<[i32; 4]>) -> Vec<[i32; 4]> {

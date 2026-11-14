@@ -455,14 +455,7 @@ pub(crate) fn show_text(v: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn paths(home: &Path) -> Paths {
-        Paths {
-            home: home.to_path_buf(),
-            store: home.join("store"),
-            roms: home.join("roms"),
-        }
-    }
+    use crate::test_paths as paths;
 
     #[test]
     fn a_session_keeps_its_clips_and_its_talk_in_order() {

@@ -89,21 +89,39 @@ const LAB_VIDEO: &[&str] = &["video"];
 /// of their own as the waves' are.
 const PUBLIC_THEME: &[&str] = &["theme"];
 
-/// A set's table rows: each leaf command's words and first help line.
-fn rows(cmd: &clap::Command, words: &str, out: &mut Vec<(String, String)>) {
+/// Walks the commands under `cmd`, calling `f` with each one's words, the
+/// command, and whether it is a leaf (has no subcommands). The walk
+/// CLI.md and `gp self commands` share.
+pub(crate) fn walk<'a>(
+    cmd: &'a clap::Command,
+    words: &str,
+    f: &mut impl FnMut(&str, &'a clap::Command, bool),
+) {
     let mut subs = cmd
         .get_subcommands()
         .filter(|c| c.get_name() != "help")
         .peekable();
-    if subs.peek().is_none() {
-        let about = cmd.get_about().map(|a| a.to_string()).unwrap_or_default();
-        let first = about.lines().next().unwrap_or("").trim().to_owned();
-        out.push((words.to_owned(), first));
-        return;
-    }
+    let leaf = subs.peek().is_none();
+    f(words, cmd, leaf);
     for c in subs {
-        rows(c, &format!("{words} {}", c.get_name()), out);
+        let w = if words.is_empty() {
+            c.get_name().to_owned()
+        } else {
+            format!("{words} {}", c.get_name())
+        };
+        walk(c, &w, f);
     }
+}
+
+/// A set's table rows: each leaf command's words and first help line.
+fn rows(cmd: &clap::Command, words: &str, out: &mut Vec<(String, String)>) {
+    walk(cmd, words, &mut |w, c, leaf| {
+        if leaf {
+            let about = c.get_about().map(|a| a.to_string()).unwrap_or_default();
+            let first = about.lines().next().unwrap_or("").trim().to_owned();
+            out.push((w.to_owned(), first));
+        }
+    });
 }
 
 fn set_table(cmds: &[(String, String)]) -> String {

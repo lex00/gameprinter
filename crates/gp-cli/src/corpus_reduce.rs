@@ -52,7 +52,6 @@ use gp_events::profile::{COMPARE_CLASSES, Segment, run_segments_on};
 use gp_evidence::Paths;
 use gp_nes::codemap::{Mode, Va, va_hex};
 use serde_json::{Value, json};
-use sha2::Digest;
 
 use crate::Outcome;
 use crate::clipset as cs;
@@ -858,7 +857,7 @@ pub(crate) fn run(a: &ReduceArgs, paths: &Paths) -> Result<Outcome> {
         }
     };
     let rom = fs::read(&rom_path).with_context(|| format!("reading {}", rom_path.display()))?;
-    let rom_sha = hex::encode(sha2::Sha256::digest(&rom));
+    let rom_sha = crate::template::sha256_hex(&rom);
     let arcade = crate::original::Platform::of_file(&rom) == crate::original::Platform::Arcade;
     if arcade && a.values {
         bail!(

@@ -18,6 +18,7 @@ use gp_interp::baseline::{self, Expect, ModelBaseline};
 use gp_interp::stage::{self, Measures};
 use gp_model::Model;
 use gp_sim::Spec;
+use gp_sprites::build::median;
 use serde_json::{Value, json};
 
 use crate::Outcome;
@@ -557,14 +558,6 @@ pub fn level_run(cmd: &LevelCmd, paths: &Paths) -> Result<Outcome> {
         text: text.trim_end().to_owned(),
         exit: if d.cleared { 0 } else { 1 },
     })
-}
-
-fn median(v: &mut [u32]) -> Option<u32> {
-    if v.is_empty() {
-        return None;
-    }
-    v.sort_unstable();
-    Some(v[v.len() / 2])
 }
 
 fn share(a: usize, b: usize) -> f64 {
