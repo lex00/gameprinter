@@ -65,7 +65,7 @@ const MAX_BODY: usize = 16 << 20;
 
 /// The repo holding the page (`mechanic/index.html`): the working folder or
 /// one above it, else the checkout gp was built from.
-fn repo_root() -> Result<PathBuf> {
+pub(crate) fn repo_root() -> Result<PathBuf> {
     crate::repo::find_repo(|d| d.join("mechanic/index.html").is_file()).ok_or_else(|| {
         anyhow!("no mechanic/ page found: run gp mechanic start inside the gameprinter repo")
     })
@@ -695,6 +695,17 @@ impl Server {
                 "no games checkout, so no model to play: start the page with --games",
             )
         })
+    }
+
+    /// A point-and-tell request (the person paused, boxed part of the
+    /// screen and said what is wrong there) as the person's turn in the
+    /// open mechanic's talk, with its `point`: where the agent reads the
+    /// talk already (`gp mechanic show`), and answers with `gp mechanic
+    /// say`. The turn's number and the mechanic.
+    pub(crate) fn point_turn(&self, text: &str, point: Value) -> Result<(usize, String)> {
+        let s = self.open_session()?;
+        let n = s.turn(json!({"by": "player", "text": text, "clips": [], "point": point}))?;
+        Ok((n, s.mechanic().to_owned()))
     }
 
     /// The session a request names with `mechanic` (the row the page had

@@ -521,7 +521,6 @@ fn entry(a: &EditArgs, t: &Target, k: &TileKind, slot: &str) -> Result<Entry, St
         sprite: None,
         status: EditStatus::Placed,
         decided_by: None,
-        run: a.run.clone(),
         tile: Some(k.name.clone()),
     })
 }

@@ -72,7 +72,7 @@ Each observer replays the recording on its own. On Moss Hop's 300-frame `finish-
 
 The clip tools sit behind a capture run (a model with a player, a state mapping, generated starts) because part of their scoring reads mapped measures. Their code-only half needs no model, so stage 0, which has no model yet, can't use any of them, and none ran on Ninja Gaiden.
 
-The agent sees capture events through `gp mcp` (`capture_events`, `capture_input`), never the ROM's.
+The agent saw capture events through `gp mcp` (`capture_events`, `capture_input`, removed on 2026-11-13 with the capture run), never the ROM's.
 
 ## 2. The core: a run is its recipe
 

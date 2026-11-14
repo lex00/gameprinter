@@ -723,6 +723,9 @@ mod arcade_tests {
     /// for a model. Skipped without the romset.
     #[test]
     fn a_lockstep_runs_on_an_arcade_original() {
+        if gp_arcade::skip_slow_test() {
+            return;
+        }
         let Some(zip) = gp_arcade::romset::local_romset("rbtapper") else {
             eprintln!("skipped: no rbtapper romset");
             return;

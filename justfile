@@ -32,43 +32,147 @@ build:
 mosshop:
     scripts/mosshop/build.sh {{quote(mosshop_dir)}}
 
-# Everything this repo holds, on Moss Hop alone. Exits non-zero at the first failure.
+# Everything this repo holds, on Moss Hop alone. Exits non-zero when any
+# step fails. The tool gate sets GP_GATE_RUNS_TESTS=1 and GP_GATE_RUN (its
+# pid) and runs the tests itself, once. After the steps everything else reads (fmt, Moss Hop's
+# assets lifted and packed), the rest runs as lanes at once
+# (scripts/check/parallel.sh): each lane's steps in order, each step timed
+# (scripts/check/step.sh), each lane's output printed whole when it ends,
+# and the first failing lane stops the others. Sub-recipes run with
+# --no-deps: their dependencies (build, mosshop) ran once, here, so no lane
+# rewrites the Moss Hop ROM another reads.
 check: _hook-enabled build mosshop
-    cargo fmt --all --check
-    cargo clippy -q --workspace --all-targets --profile {{profile}} -- -D warnings
-    cargo test -q --workspace --profile {{profile}}
-    {{gp}} self docs --check CLI.md
-    {{gp}} self schemas --check schema
-    {{gp}} baseline check --rom {{quote(mosshop_rom)}} baselines/mosshop
-    {{gp}} baseline check baselines/gp-testrom
+    scripts/check/step.sh fmt cargo fmt --all --check
     mkdir -p {{quote(assets)}}
-    {{gp}} assets lift {{quote(mosshop_rom)}} --map assets/mosshop.toml -o {{quote(assets)}} --force
-    {{gp}} assets pack {{quote(assets)}} --check {{quote(mosshop_rom)}}
-    {{gp}} model check templates/mosshop --assets {{quote(assets)}}
-    {{gp}} model fmt --check templates/mosshop
-    {{gp}} labels check templates/mosshop/mapping.toml
-    just _interp-mosshop
-    just play-web
-    just play-web-arcade
-    just editor
-    just mechanic-page
-    just web-parity
-    {{gp}} template check templates/mosshop --rom {{quote(mosshop_rom)}}
-    just originals
-    scripts/test-hook.sh
-    just check-vendor
-    python3 -I -B -m unittest discover -s scripts/romguard -q
-    just site-prose
-    just check-roms
+    scripts/check/step.sh assets-lift {{gp}} assets lift {{quote(mosshop_rom)}} --map assets/mosshop.toml -o {{quote(assets)}} --force
+    scripts/check/step.sh assets-pack {{gp}} assets pack {{quote(assets)}} --check {{quote(mosshop_rom)}}
+    GP_CHECK_LIFTED=1 scripts/check/parallel.sh {{quote(target / "check-lanes")}} \
+        "rust=just --no-deps _check-rust" \
+        "players=just --no-deps _check-players" \
+        "web=just --no-deps _check-web" \
+        "page=just --no-deps mechanic-page" \
+        "tests=just --no-deps _check-tests"
     @echo "just check: passed"
+
+# check's lanes. The Rust lane: clippy, the generated files, Moss Hop's
+# baselines and model, the originals, and the repo's own script checks.
+_check-rust:
+    scripts/check/step.sh clippy cargo clippy -q --workspace --all-targets --profile {{profile}} -- -D warnings
+    scripts/check/step.sh cli-docs {{gp}} self docs --check CLI.md
+    scripts/check/step.sh schemas {{gp}} self schemas --check schema
+    scripts/check/step.sh baseline-mosshop {{gp}} baseline check --rom {{quote(mosshop_rom)}} baselines/mosshop
+    scripts/check/step.sh baseline-testrom {{gp}} baseline check baselines/gp-testrom
+    scripts/check/step.sh model-check {{gp}} model check templates/mosshop --assets {{quote(assets)}}
+    scripts/check/step.sh model-fmt {{gp}} model fmt --check templates/mosshop
+    scripts/check/step.sh labels {{gp}} labels check templates/mosshop/mapping.toml
+    scripts/check/step.sh interp-mosshop just --no-deps _interp-mosshop
+    scripts/check/step.sh template-check {{gp}} template check templates/mosshop --rom {{quote(mosshop_rom)}}
+    scripts/check/step.sh originals just --no-deps originals
+    scripts/check/step.sh test-hook scripts/test-hook.sh
+    scripts/check/step.sh test-parallel scripts/check/test-parallel.sh {{quote(target / "test-parallel")}}
+    scripts/check/step.sh check-vendor just --no-deps check-vendor
+    scripts/check/step.sh romguard python3 -I -B -m unittest discover -s scripts/romguard -q
+    scripts/check/step.sh site-prose just --no-deps site-prose
+
+# The players' lane: gp_play.wasm and gp_arcade_play.wasm against native
+# replays (both write target/play-web, so one after the other), then the
+# ROM tier.
+_check-players:
+    scripts/check/step.sh play-web just --no-deps play-web
+    scripts/check/step.sh play-web-arcade just --no-deps play-web-arcade
+    scripts/check/step.sh check-roms just --no-deps check-roms
+
+# The web lane: the editor, then web parity on the assets check lifted
+# (GP_CHECK_LIFTED=1: it doesn't lift them again while the Rust lane reads them).
+_check-web:
+    scripts/check/step.sh editor just --no-deps editor
+    scripts/check/step.sh web-parity just --no-deps web-parity
+
+# The tests' lane: `just test`, unless a live tool gate run runs them
+# itself: GP_GATE_RUNS_TESTS=1 with GP_GATE_RUN the pid of a running gate.
+# GP_GATE_RUNS_TESTS=1 alone (left in a shell) is ignored, with a line.
+_check-tests:
+    #!/usr/bin/env bash
+    if [ "${GP_GATE_RUNS_TESTS:-}" = 1 ] && [ -n "${GP_GATE_RUN:-}" ] && kill -0 "$GP_GATE_RUN" 2>/dev/null; then
+        echo "just check: the tests are left to the gate's own run (gate pid $GP_GATE_RUN)"
+        exit 0
+    fi
+    if [ "${GP_GATE_RUNS_TESTS:-}" = 1 ]; then
+        echo "just check: GP_GATE_RUNS_TESTS=1 ignored, since GP_GATE_RUN names no running gate; the tests run here"
+    fi
+    exec scripts/check/step.sh test just --no-deps test
 
 # Formats the Rust code.
 fmt:
     cargo fmt --all
 
-# Runs the Rust tests only.
+# Runs every Rust test, the slow ones too (GP_SLOW_TESTS=1, docs/workers.md).
+# Each slow test (one that starts with `skip_slow_test()`) is one long test
+# on one core, so each gets a run of its own beside one run of the rest.
+# Every run is `--workspace` and runs what the `--no-run` built: a run with
+# `-p`, `--lib` or `--test NAME` resolves other features or units and builds
+# again (tetanes-core, gp-nes and up for `--lib`, syn and gp-arcade for
+# `--test harvest_on_tapper`). A slow run is `--tests`, which builds nothing
+# more and leaves out the doctests, so they compile and run once, in the
+# rest. Each slow test's full path comes from `--tests -- --list` and runs
+# with `--exact`; the rest skips the same paths with `--exact`. A slow test
+# that lists as no test fails, and so does a run that doesn't add up: each
+# slow run must pass exactly its tests, and the rest must filter out exactly
+# those, so every test runs once. Each run's output is in
+# TARGET/test-runs/; a failed run's is printed.
 test:
-    cargo test --workspace --profile {{profile}}
+    #!/usr/bin/env bash
+    set -uo pipefail
+    export GP_SLOW_TESTS=1
+    t() { cargo test -q --workspace --profile {{profile}} "$@"; }
+    t --no-run || exit
+    slow=$(find crates -name '*.rs' -print0 | xargs -0 awk '
+        FNR == 1 { f = "" }
+        match($0, /fn [a-z0-9_]+\(/) { f = substr($0, RSTART + 3, RLENGTH - 4) }
+        /^[ \t]*if ([a-z_]+::)?skip_slow_test\(\)/ && f != "" { print f }' | sort -u)
+    logs={{quote(target / "test-runs")}}
+    mkdir -p "$logs"
+    t --tests -- --list > "$logs/list.log" 2>&1 || { cat "$logs/list.log" >&2; exit 1; }
+    # Sums the numbers before $1 in libtest's `test result:` lines of log $2.
+    sum() { sed -n "s/^test result: .* \([0-9][0-9]*\) $1.*/\1/p" "$2" | awk '{ s += $1 } END { print s + 0 }'; }
+    skips=() total=0
+    for n in $slow; do
+        sed -n 's/: test$//p' "$logs/list.log" | grep -E "(^|::)$n\$" > "$logs/$n.want"
+        count=$(grep -c . "$logs/$n.want")
+        if [ "$count" -lt 1 ]; then
+            echo "tests: the slow test $n is no test of cargo test --workspace --tests (TARGET/test-runs/list.log)" >&2
+            exit 1
+        fi
+        for p in $(cat "$logs/$n.want"); do skips+=(--skip "$p"); done
+        total=$((total + count))
+    done
+    t -- --exact ${skips[@]+"${skips[@]}"} > "$logs/rest.log" 2>&1 &
+    pids=($!) runs=(rest)
+    for n in $slow; do
+        t --tests -- --exact $(cat "$logs/$n.want") > "$logs/$n.log" 2>&1 &
+        pids+=($!) runs+=("$n")
+    done
+    failed=0
+    for i in "${!pids[@]}"; do
+        r=${runs[$i]}
+        if wait "${pids[$i]}"; then
+            if [ "$r" = rest ]; then
+                got=$(sum "filtered out" "$logs/rest.log") want=$total what="filtered out"
+            else
+                got=$(sum passed "$logs/$r.log") want=$(grep -c . "$logs/$r.want") what=passed
+            fi
+            if [ "$got" = "$want" ]; then
+                echo "tests: $r passed ($got $what)"
+                continue
+            fi
+            echo "tests: $r ran, but $got tests $what, not $want; its output:" >&2
+        else
+            echo "tests: $r failed; its output:" >&2
+        fi
+        cat "$logs/$r.log" >&2
+        failed=1
+    done
+    exit "$failed"
 
 # Builds the docs site with its link and contrast checks, then the prose lint.
 site:
@@ -242,10 +346,12 @@ play-web-arcade:
 # player isn't built (scripts/web/check-mechanic.mjs). Then, with the
 # owner's rbtapper romset on this machine, the same on Tapper: coin, start,
 # a clip, gp mechanic say, and ON THE MODEL's refusal; skipped without it.
+# Its players are built into target/play-web-mech, its own folder, so it can
+# run beside play-web, which writes target/play-web.
 mechanic-page: build mosshop
     #!/usr/bin/env bash
     set -euo pipefail
-    scripts/web/build-play.sh {{quote(target / "play-web")}} > /dev/null
+    scripts/web/build-play.sh {{quote(target / "play-web-mech")}} > /dev/null
     if [ -z "${PLAYWRIGHT_FROM:-}" ] && [ ! -d scripts/web/node_modules/playwright-core ]; then
         npm ci --prefix scripts/web --silent --no-audit --no-fund
     fi
@@ -254,8 +360,8 @@ mechanic-page: build mosshop
     arcade=()
     for z in "${GP_ARCADE_RBTAPPER:-}" "${GP_ROM_DIR:+$GP_ROM_DIR/arcade/rbtapper.zip}" "$HOME/Downloads/rbtapper.zip"; do
         if [ -n "$z" ] && [ -f "$z" ]; then
-            scripts/web/build-play.sh --arcade {{quote(target / "play-web")}} > /dev/null
-            arcade=(--arcade-rom "$z" --arcade-wasm {{quote(target / "play-web" / "gp_arcade_play.wasm")}})
+            scripts/web/build-play.sh --arcade {{quote(target / "play-web-mech")}} > /dev/null
+            arcade=(--arcade-rom "$z" --arcade-wasm {{quote(target / "play-web-mech" / "gp_arcade_play.wasm")}})
             # The ROM set picker on Tapper: a games checkout with tapper/.
             for g in "${GP_GAMES_DIR:-}" ../games; do
                 if [ -n "$g" ] && [ -f "$g/tapper/roms.toml" ]; then arcade+=(--arcade-games "$g"); break; fi
@@ -264,7 +370,7 @@ mechanic-page: build mosshop
         fi
     done
     node scripts/web/check-mechanic.mjs --gp {{quote(gp)}} --rom {{quote(mosshop_rom)}} \
-        --wasm {{quote(target / "play-web" / "gp_play.wasm")}} --browser "$browser" ${arcade[@]+"${arcade[@]}"} \
+        --wasm {{quote(target / "play-web-mech" / "gp_play.wasm")}} --browser "$browser" ${arcade[@]+"${arcade[@]}"} \
         --shots {{quote(gp_home / "work" / "mechanic-page")}}
 
 _interp-mosshop:
@@ -478,7 +584,10 @@ web-parity: build mosshop
     set -euo pipefail
     assets={{quote(assets)}}
     mkdir -p "$assets"
-    {{quote(gp)}} assets lift {{quote(mosshop_rom)}} --map assets/mosshop.toml -o "$assets" --force > /dev/null
+    # Under check the assets are lifted once, before the lanes (GP_CHECK_LIFTED=1).
+    if [ -z "${GP_CHECK_LIFTED:-}" ]; then
+        {{quote(gp)}} assets lift {{quote(mosshop_rom)}} --map assets/mosshop.toml -o "$assets" --force > /dev/null
+    fi
     out={{quote(target / "web" / "mosshop")}}
     scripts/web/build-preview.sh "$out" templates/mosshop "$assets" > /dev/null
     scripts/web/parity.sh "$out" templates/mosshop "$assets" scripts/web/parity/mosshop.toml | grep -v '^{'

@@ -6,8 +6,7 @@
 # OUT gets index.html and preview.js (scripts/web/page/), gp_web.wasm (the
 # interpreter, crates/gp-web, for wasm32-unknown-unknown), and what
 # gp-web-prep writes: the model bundle, the generator's pictures,
-# preview.json and each baseline's frames and native hashes. bevy.html comes
-# with the Bevy build, from scripts/web/build-bevy.sh. With no MODEL there
+# preview.json and each baseline's frames and native hashes. With no MODEL there
 # is no gp-web-prep step: the player only, for a page whose game files all
 # come from a ROM lifted in the browser (scripts/web/build-page.sh).
 #

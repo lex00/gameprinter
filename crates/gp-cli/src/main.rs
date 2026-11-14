@@ -721,7 +721,7 @@ enum AssetsCmd {
     /// (docs/sprite-editing.md). It writes the set in the image config's
     /// layout and starts the editor if it's installed (Pixelorama first;
     /// nothing is downloaded), then brings each save back through every edit
-    /// check as a proposal, shown live in a capture run with `--run`.
+    /// check as a proposal in the copy's history (or placed, with `--place`).
     Open(crate::assets_open::OpenArgs),
     /// Write each span's content into the ROM's asset map: its BLAKE3, its
     /// length and a fingerprint of each 16 bytes (hashes, not ROM data),

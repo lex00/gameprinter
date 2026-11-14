@@ -242,33 +242,27 @@ fn every_button_has_its_place_in_the_standard_layout() {
 #[test]
 fn the_table_keeps_each_target_s_keys() {
     // Both: the NES buttons, the settings key, rewind and the practice keys.
-    assert_eq!(keys::keys("a", On::Bevy), ["KeyX", "Space"]);
+    assert_eq!(keys::keys("a", On::Web), ["KeyX", "Space"]);
     assert_eq!(
         keys::keys("settings", On::Web),
         [crate::settings::OPEN_KEY_MAIN, crate::settings::OPEN_KEY]
     );
     assert_eq!(
-        keys::buttons("settings", On::Bevy),
+        keys::buttons("settings", On::Web),
         [crate::settings::OPEN_BUTTON]
     );
     assert_eq!(keys::keys("rewind", On::Web), ["Backspace"]);
     // B is either face button, and rewind is on the left trigger, in both.
     assert_eq!(keys::buttons("b", On::Web), ["West", "East"]);
-    assert_eq!(keys::buttons("b", On::Bevy), ["West", "East"]);
-    assert_eq!(keys::buttons("rewind", On::Bevy), ["LeftTrigger2"]);
     assert_eq!(keys::buttons("rewind", On::Web), ["LeftTrigger2"]);
-    // The pause menu is the generated game's.
-    assert!(keys::keys("menu", On::Web).is_empty());
     // Quick save and load on the bumpers, the preview's, behind their
     // switch.
     assert_eq!(keys::buttons("quick-save", On::Web), ["RightTrigger"]);
     assert_eq!(keys::buttons("quick-load", On::Web), ["LeftTrigger"]);
-    assert!(keys::buttons("quick-save", On::Bevy).is_empty());
     // The quick slots are the preview's: Shift+1 saves, 1 loads.
     let save = keys::of(On::Web).find(|b| b.action == "save-1").unwrap();
     assert!(save.shift && save.keys == ["Digit1"]);
     assert_eq!(keys::keys("load-1", On::Web), ["Digit1"]);
-    assert!(keys::keys("load-1", On::Bevy).is_empty());
     for (i, a) in keys::SCREEN.iter().enumerate() {
         assert!(
             keys::BINDINGS
@@ -278,10 +272,7 @@ fn the_table_keeps_each_target_s_keys() {
         );
     }
     for a in keys::NES.iter().chain(&keys::NES2) {
-        assert!(
-            !keys::keys(a, On::Web).is_empty() && keys::keys(a, On::Web) == keys::keys(a, On::Bevy),
-            "{a}"
-        );
+        assert!(!keys::keys(a, On::Web).is_empty(), "{a}");
     }
 }
 

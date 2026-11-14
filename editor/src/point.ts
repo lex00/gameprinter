@@ -3,7 +3,7 @@
 // plain words ("a brick", "the goomba", "the score") and says what should
 // happen there. Pure, so the tests drive it with made-up events and boxes.
 
-import type { Box, CaptureEvent, CaptureInput } from "./api";
+import type { Box, CaptureInput } from "./api";
 
 export const W = 256;
 export const H = 240;
@@ -115,110 +115,6 @@ export function requestInput(p: PointJson, choice: string | undefined, text: str
       },
     },
   };
-}
-
-/** A reply under a request. */
-export interface RequestReply {
-  reply: number;
-  status: string;
-  text: string;
-  lines: string[];
-  proposal?: { item: string; kind: string };
-  wouldBuild?: Record<string, unknown> | null;
-  /** Set on a progress note from gp serve's local agent: `working`, `failed` or `done`. */
-  agent?: string;
-}
-
-/** A request as the workspace shows it, folded from the run's `request` and `request.reply` events. */
-export interface RequestView {
-  id: number;
-  frame: number;
-  recording: string;
-  label: string;
-  text: string;
-  choice?: string;
-  rect?: Box;
-  status: string;
-  replies: RequestReply[];
-}
-
-const str = (v: unknown): string => (typeof v === "string" ? v : "");
-
-/** Folds `request` and `request.reply` events into requests by number. Other events change nothing. */
-export function foldRequests(s: Record<number, RequestView>, events: CaptureEvent[]): Record<number, RequestView> {
-  let next = s;
-  for (const e of events) {
-    const d = e.data ?? {};
-    if (e.kind === "request") {
-      const id = Number(d.id);
-      if (next[id]) continue;
-      const ctx = (d.context ?? {}) as Record<string, unknown>;
-      next = {
-        ...next,
-        [id]: {
-          id,
-          frame: Number(d.frame),
-          recording: str(d.recording),
-          label: str(d.label) || "this spot",
-          text: str(d.text),
-          choice: typeof d.choice === "string" ? d.choice : undefined,
-          rect: ctx.rect as Box | undefined,
-          status: "open",
-          replies: [],
-        },
-      };
-    } else if (e.kind === "request.reply") {
-      const id = Number(d.request);
-      const r = next[id];
-      if (!r || r.replies.some((x) => x.reply === Number(d.reply))) continue;
-      const data = (d.data ?? {}) as Record<string, unknown>;
-      const reply: RequestReply = {
-        reply: Number(d.reply),
-        status: str(d.status),
-        text: str(d.text),
-        lines: Array.isArray(d.lines) ? (d.lines as string[]) : [],
-        proposal: (data.proposal as RequestReply["proposal"]) ?? undefined,
-        wouldBuild: (data.would_build as Record<string, unknown>) ?? null,
-        agent: typeof data.agent === "string" ? data.agent : undefined,
-      };
-      next = { ...next, [id]: { ...r, status: reply.status, replies: [...r.replies, reply] } };
-    } else if (e.kind === "input") {
-      // A decision on a reply's proposal decides the request.
-      const input = (d.input ?? {}) as { kind?: string; item?: string };
-      if ((input.kind === "accept" || input.kind === "reject") && input.item) {
-        for (const r of Object.values(next)) {
-          if (r.replies.some((x) => x.proposal?.item === input.item) || input.item === `request:${r.id}`) {
-            next = { ...next, [r.id]: { ...r, status: input.kind === "accept" ? "accepted" : "rejected" } };
-          }
-        }
-      }
-    }
-  }
-  return next;
-}
-
-/** A request's status in a few plain words. */
-export function statusWords(status: string, explaining = false, agentWorking = false): string {
-  if (agentWorking) return "an agent is working on this";
-  if (explaining) return "looking at what the original does there...";
-  switch (status) {
-    case "open":
-      return "waiting for an answer";
-    case "waiting":
-      return "explained once the session is recorded";
-    case "explained":
-      return "explained";
-    case "proposed":
-      return "a change to look at";
-    case "needs_mechanic":
-      return "needs a new kind of part in the model (passed on to be built)";
-    case "accepted":
-      return "you took the change";
-    case "rejected":
-      return "you turned the change down";
-    default:
-      return status;
-  }
 }
 
 /** The words a choice key stands for. */

@@ -231,7 +231,7 @@ ROMs and the store are refused inside any git work tree, so nothing made from a 
 | `store/` | `$GP_STORE` by default: the content-addressed store of recordings and other objects (`objects/`, `index/recordings.jsonl`, `lock`, `tmp/`) |
 | `work/` | Everything made from a ROM or a build: lifted assets, module builds, the page's build and release check, oracle captures (`work/oracle/`), cycle slices, worker folders (`work/workers/NAME`) and per-worktree cargo targets (`work/target/BRANCH/HASH`) |
 | `mechanics/` | Mechanic sessions by game: clips, conversation, watch files |
-| `capture/` | Capture runs: `events.ndjson`, `inputs.ndjson`, `writer.lock` |
+| `capture/` | Scratch by run name for `gp corpus score --run`, `gp picture`, `gp solve`, the bench, the gate's canary and the background queue (`generated/` and the like); an event folder's `events.ndjson` and `writer.lock` |
 | `watch/` | `gp watch` sessions and their event streams |
 | `sealed/` | Sealed runs, behind the guard |
 | `gate/` | The gates' home (`$GP_GATE_HOME`): worktrees, the queue of waiting patches, scores, the tool canary's homes |

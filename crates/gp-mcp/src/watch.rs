@@ -58,6 +58,9 @@ fn append(dir: &Path, input: &WatchInput) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// How long a tool's arguments or result may be in a session's log.
+pub const SUMMARY_CHARS: usize = 200;
+
 /// Logs a watch tool's call in its session as the agent's `tool` input.
 pub fn log_call(config: &Config, tool: &str, args: &Value, reply: &Reply) {
     let Some(name) = args.get("name").and_then(Value::as_str) else {
@@ -66,7 +69,7 @@ pub fn log_call(config: &Config, tool: &str, args: &Value, reply: &Reply) {
     let Ok(dir) = existing(config, name) else {
         return;
     };
-    let result = gp_capture::summarize(&reply.json, crate::capture::SUMMARY_CHARS);
+    let result = gp_capture::summarize(&reply.json, SUMMARY_CHARS);
     let _ = append(
         &dir,
         &WatchInput {
@@ -75,7 +78,7 @@ pub fn log_call(config: &Config, tool: &str, args: &Value, reply: &Reply) {
             kind: "tool".into(),
             data: json!({
                 "tool": tool,
-                "args": gp_capture::summarize(args, crate::capture::SUMMARY_CHARS),
+                "args": gp_capture::summarize(args, SUMMARY_CHARS),
                 "result": if reply.is_error { format!("refused: {result}") } else { result },
             }),
         },

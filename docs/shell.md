@@ -60,7 +60,7 @@ The preview calls `persist` on the player's first save of a visit (an autosave d
 
 ## Keys and buttons
 
-One table, `gp_present::shell::keys::BINDINGS`, names every key and button, by action. A key is its `KeyboardEvent.code` (`KeyX`, `Digit1`, `F5`). A button is named as Bevy's `GamepadButton` variant was, placed in the browser's standard gamepad layout by `STANDARD_BUTTONS` (`RightThumb` is button 11). Each binding says when it acts (in play, or while a shell screen is open), which targets have it (`both`, `web` or `bevy`; the preview reads `both` and `web`), and what it needs of the shell's settings (`needs`): `always`, `not-console-only` (saves, loads and rewind, off while Console only is on) or `quick-buttons` (only with Quick save buttons on).
+One table, `gp_present::shell::keys::BINDINGS`, names every key and button, by action. A key is its `KeyboardEvent.code` (`KeyX`, `Digit1`, `F5`). A button is named by its `GamepadButton` name, placed in the browser's standard gamepad layout by `STANDARD_BUTTONS` (`RightThumb` is button 11). Each binding says when it acts (in play, or while a shell screen is open), which targets have it (`both` or `web`; the preview reads both), and what it needs of the shell's settings (`needs`): `always`, `not-console-only` (saves, loads and rewind, off while Console only is on) or `quick-buttons` (only with Quick save buttons on).
 
 The preview reads it as `scripts/web/page/shell-keys.js`, with the rewind policy and the slot names. preview.js takes the NES keys, the gamepad's buttons, the settings screen's keys and every shell key from it.
 
@@ -77,7 +77,6 @@ The preview reads it as `scripts/web/page/shell-keys.js`, with the rewind policy
 | Save slot N, load slot N | Shift+1 to Shift+4, 1 to 4 | | Yes. Off while Console only is on |
 | Quick save, quick load (to the last slot used, slot 1 at first) | | The right bumper (`RightTrigger`), the left bumper (`LeftTrigger`) | Only with Quick save buttons on |
 | A shell screen's up, down, left, right, choose, back | The arrows or W A S D; Enter, Space or X; Esc, Backspace or Z | The D-pad, South, East | Yes |
-| The pause menu, next mode, hitboxes | P (gamepad Mode), F6, F7 | | No: rows marked `bevy`, the dropped generated game's |
 
 The mechanic page's own keys (F5 and F8 for the original's quick save and load) are a tool's and not in the table.
 

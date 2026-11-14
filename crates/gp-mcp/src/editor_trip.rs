@@ -209,7 +209,6 @@ pub fn propose_save(
     config: &Config,
     dir: &Path,
     place: bool,
-    run: Option<&str>,
     author: Option<&str>,
 ) -> Result<Reply, String> {
     let trip = read_trip(dir)?;
@@ -232,7 +231,6 @@ pub fn propose_save(
         "editor": trip.editor,
         "prompt": format!("saved in {}", trip.editor),
         "author": author,
-        "run": run,
     });
     let a: crate::asset_edit::EditArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
     let _lock = crate::CopyLock::take(&trip.copy);

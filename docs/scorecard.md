@@ -37,7 +37,6 @@ Every column's cell carries its source as a tooltip on the page. A cell that has
 | measured | Facts `gp model propose` measured: agree and differ (`facts.compared`, `facts.agree`, `facts.differ`). The latest recorded run, or a run now with `--recording`, which also names the facts that differ | metrics `propose.<id>.compared` and `.agree` |
 | derived | Facts `gp model derive` produced (`facts.derived`). Reads "not built" while the command is not in this build; the scorecard looks for it in the command tree at run time | metric `derive.<id>.derived` |
 | validate | The latest `gp validate` result per runtime: pass, fail or unexercised, with the three counts (`fidelity.<runtime>.passed`, `.failed`, `.unexercised`) | metrics `validate.<id>.checks.*` (interpreter) and `validate.<id>.<runtime>.checks.*` |
-| conform | Frames a generated build differs from the interpreter on, per runtime (`fidelity.conform.<runtime>.differing`, `.frames`) | metrics `conform.<runtime>.<id>.*` from `gp gen conform` |
 | track P/R | The mean precision and recall of `gp track` against the game's mapping, over the recordings scored (`fidelity.track.precision`, `.recall`) | metrics `track.<id>.<recording>.precision` and `.recall` |
 | gaps changes | Items `gp gaps changes` found per place: RAM, sprites (oam), background, sound and code (`gaps.<place>.count`) | metrics `gaps.<id>.<place>.count` from `gp gaps` ([gaps](gaps.md)) |
 | gaps interactive | Interactive element kinds in the catalog (`gaps.interactive.count`) | metric `gaps.<id>.interactive.count` |
@@ -62,7 +61,7 @@ Capture fills the model and the asset map, and the columns follow from the files
 - sound rises as `gp sound capture` runs on more of a game's recordings (`just sound`, ROM tier), and its agreement as capture's note and effect rules improve.
 - gaps falls as the model takes in what `gp gaps` finds (`just gaps`, ROM tier): a labelled byte, routine or sound effect the model cites leaves its list, and a kind drawn where the original draws it leaves the drawn count.
 - chunks grows as `gp chunks` (`just chunks`) reads more of a game's levels, and coverage rises as the catalog explains more of their cells.
-- validate, conform and track rise as `just validate-*`, `just conform-*` and `just track-*` run with `--metrics`, and the commercial games need the ROM tier (`just check-roms`) for those.
+- validate and track rise as `just validate-*` and `just track-*` run with `--metrics`, and the commercial games need the ROM tier (`just check-roms`) for those.
 
 ## Limits
 

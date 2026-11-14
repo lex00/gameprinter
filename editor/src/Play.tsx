@@ -440,8 +440,6 @@ export function PlayPanel({ api, onRecorded }: { api: Api; /** Called once the s
           recording="session"
           frame={frames}
           box={box}
-          onSent={(id) => void api.requestExplain(run, id).catch((e: Error) => setError(e.message))}
-          after="It's explained once you stop and record; the answer shows under the two games."
         />
       )}
       {notePrompt && (

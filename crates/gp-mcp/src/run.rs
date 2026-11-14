@@ -21,6 +21,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+use crate::asks;
 use crate::policy::{self, Decision, Road};
 use crate::{Config, Reply, run_gp};
 
@@ -149,7 +150,7 @@ pub fn tree(config: &Config) -> Result<Arc<Tree>, String> {
 }
 
 /// A path as an agent may write it: `gp corpus score`, `corpus  score`.
-fn clean_path(p: &str) -> String {
+pub(crate) fn clean_path(p: &str) -> String {
     let words: Vec<&str> = p.split_whitespace().collect();
     let words = match words.first() {
         Some(&"gp") => &words[1..],
@@ -201,7 +202,7 @@ fn nearest<'a>(word: &str, names: impl Iterator<Item = &'a str>) -> Vec<String> 
         .collect()
 }
 
-fn first_sentence(s: &str) -> String {
+pub(crate) fn first_sentence(s: &str) -> String {
     let line = s.lines().next().unwrap_or("").trim();
     let end = line
         .char_indices()
@@ -455,9 +456,16 @@ pub struct RunArgs {
     pub args: Map<String, Value>,
     /// Set this only after the person said yes, in this conversation, to
     /// this exact action (publishing, landing, spending, a big download).
-    /// Never set it on your own judgment.
+    /// Never set it on your own judgment. While the person's page is open
+    /// (gp serve runs for this home) it isn't enough: their YES on the
+    /// page's card is, and this call runs only once they pressed it.
     #[serde(default)]
     pub confirmed_by_person: bool,
+    /// The ask a refusal gave (ask_id), when calling again after the
+    /// person answered it on the page. The same command with the same
+    /// arguments finds its answer without it too.
+    #[serde(default)]
+    pub ask_id: Option<String>,
     /// Seconds before the command is stopped: default 300, at most 1800.
     #[serde(default)]
     pub timeout_s: Option<u64>,
@@ -821,6 +829,129 @@ const WROTE_KEYS: &[&str] = &[
     "paths", "into", "session", "copy",
 ];
 
+/// The person's yes for a call that needs one: Ok with a note when it may
+/// run (a yes recorded on the page, now used; or, with no page served for
+/// this home, the agent's confirmed_by_person as before), else the refusal.
+/// A refusal with nothing asked yet writes the ask the page shows.
+fn the_yes(
+    config: &Config,
+    c: &CommandDef,
+    path: &str,
+    built: &Built,
+    ask: policy::Ask,
+    row: &policy::Row,
+    a: &RunArgs,
+) -> Result<String, Value> {
+    let home = &config.home;
+    let k = asks::key(path, &built.argv);
+    let served = asks::page_served(home);
+    let found = asks::find(home, a.ask_id.as_deref(), &k);
+    let refusal = |words: String, ask_v: Option<&Value>| {
+        let mut v = json!({
+            "refused": words,
+            "rule": row.rule.name(),
+            "needs": ask.name(),
+            "page_open": served,
+        });
+        if let Some(x) = ask_v {
+            v["ask_id"] = x["id"].clone();
+            v["ask"] = json!({"says": x["says"], "state": x["state"]});
+        }
+        if let policy::Rule::Ask(_, free) = row.rule
+            && !free.is_empty()
+        {
+            v["runs_at_once_with"] = json!(free);
+        }
+        v
+    };
+    match found {
+        asks::Found::Yes(v) => Ok(format!(
+            "the person said yes to this on the page (ask {}); that yes is used now, so another run needs another yes",
+            v["id"].as_str().unwrap_or("")
+        )),
+        asks::Found::No(v) => Err(refusal(
+            format!(
+                "gp {path}: the person said no to this on the page. Don't run it; ask them what they would like instead."
+            ),
+            Some(&v),
+        )),
+        asks::Found::Open(v) if served => Err(refusal(
+            format!(
+                "gp {path} waits for the person's yes: it is on their page as a card with YES and NO. Tell them in one sentence what it does and that the card is waiting. Then call next with wait_s until waits_for_yes shows this ask (ask_id) answered, and call gp_run again with ask_id. Setting confirmed_by_person doesn't replace their answer while the page is open."
+            ),
+            Some(&v),
+        )),
+        found if !served && a.confirmed_by_person => {
+            let _ = found;
+            Ok("no page is open for this home (gp serve isn't running), so this ran on your word that the person said yes to this exact action, as before; with the page open, their YES on the page's card is needed".to_owned())
+        }
+        found => {
+            let other = matches!(found, asks::Found::Other(_));
+            let cost = (ask == policy::Ask::Spend && c.args.iter().any(|d| d.name == "dry-run"))
+                .then(|| dry_run_cost(config, c, path, &built.argv))
+                .flatten();
+            let made = asks::make(
+                home,
+                &asks::New {
+                    command: path,
+                    argv: &built.argv,
+                    values: &built.values,
+                    about: &c.about,
+                    needs: ask,
+                    cost,
+                },
+            );
+            let lead = if other {
+                "The ask named was for another command or other arguments; a changed argument needs a new yes. "
+            } else {
+                ""
+            };
+            let words = if served {
+                format!(
+                    "{lead}gp {path} needs the person's yes first: {}. It is on their page now as a card with YES and NO. Tell them in one sentence what it does and that the card is waiting; then call next with wait_s until waits_for_yes shows this ask (ask_id) answered, and call gp_run again with ask_id.",
+                    ask.before()
+                )
+            } else {
+                format!(
+                    "{lead}gp {path} needs the person's yes first: {}. No page is open for this home (gp serve isn't running), so there is no card: if they say yes to this exact action, call again with confirmed_by_person: true. The ask is kept (ask_id), so if they open the page they can answer it there.",
+                    ask.before()
+                )
+            };
+            match made {
+                Ok(v) => Err(refusal(words, Some(&v))),
+                Err(e) => Err(refusal(
+                    format!("{words} (The ask couldn't be written: {e})"),
+                    None,
+                )),
+            }
+        }
+    }
+}
+
+/// What a dry run says the command would cost, when it says (theme
+/// generate prints dollars); none when it can't run quickly.
+fn dry_run_cost(config: &Config, c: &CommandDef, path: &str, argv: &[String]) -> Option<String> {
+    let mut cmd = Command::new(&config.gp);
+    if c.json {
+        cmd.arg("--json");
+    }
+    cmd.args(path.split(' ')).arg("--dry-run");
+    // The dry-run flag before any `--` that ends the options.
+    cmd.args(argv.iter().filter(|x| *x != "--yes"));
+    cmd.env("GP_HOME", &config.home);
+    match &config.games {
+        Some(g) => {
+            cmd.env("GP_GAMES_DIR", g).current_dir(g);
+        }
+        None => {
+            cmd.current_dir(&config.work);
+        }
+    }
+    let ran = run_limited(cmd, Duration::from_secs(120)).ok()?;
+    let v: Value = serde_json::from_slice(&ran.stdout).ok()?;
+    asks::cost_of(&v)
+}
+
 /// `gp_run`.
 pub fn run(config: &Config, a: RunArgs) -> Result<Reply, String> {
     let tree = tree(config)?;
@@ -859,6 +990,7 @@ pub fn run_in(
     };
     let row = row_of(c);
     let given = |n: &str| built.given.contains(n);
+    let mut yes_note: Option<String> = None;
     match policy::decide(&row, &given, &built.values) {
         Decision::Refused(why) => {
             return Ok(Reply::refused(json!({
@@ -866,22 +998,10 @@ pub fn run_in(
                 "rule": row.rule.name(),
             })));
         }
-        Decision::NeedsYes(ask) if !a.confirmed_by_person => {
-            let mut v = json!({
-                "refused": format!(
-                    "gp {path} needs the person's yes first: {}. If they say yes to this exact action, call again with confirmed_by_person: true.",
-                    ask.before()
-                ),
-                "rule": row.rule.name(),
-                "needs": ask.name(),
-            });
-            if let policy::Rule::Ask(_, free) = row.rule
-                && !free.is_empty()
-            {
-                v["runs_at_once_with"] = json!(free);
-            }
-            return Ok(Reply::refused(v));
-        }
+        Decision::NeedsYes(ask) => match the_yes(config, c, &path, &built, ask, &row, &a) {
+            Ok(n) => yes_note = Some(n),
+            Err(refused) => return Ok(Reply::refused(refused)),
+        },
         _ => {}
     }
     if policy::may_start_laya(&row, &given) && !answers(7720) && !answers(7710) {
@@ -937,7 +1057,10 @@ pub fn run_in(
     let writes = matches!(
         policy::decide(&row, &given, &built.values),
         Decision::Run { writes: true }
-    ) || a.confirmed_by_person;
+    ) || yes_note.is_some();
+    if let Some(n) = &yes_note {
+        o.insert("yes".into(), json!(n));
+    }
     if writes {
         let wrote: Map<String, Value> = o
             .get("json")
@@ -1129,6 +1252,116 @@ mod tests {
         assert_eq!(r.json["command"], "gp --json registry publish /tmp/r");
     }
 
+    /// gp serve runs for the test's home: this process stands for it.
+    fn serve_page(c: &Config) {
+        crate::asks::mark_page_served(&c.home, 0).unwrap();
+    }
+
+    fn answer(c: &Config, id: &Value, yes: bool) {
+        let a = if yes {
+            crate::asks::Answer::Yes
+        } else {
+            crate::asks::Answer::No
+        };
+        crate::asks::answer(&c.home, id.as_str().unwrap(), a).unwrap();
+    }
+
+    #[test]
+    fn with_the_page_open_a_publish_runs_once_on_the_person_s_yes() {
+        let dir = tempfile::tempdir().unwrap();
+        let gp = fake_gp(dir.path(), "echo '{\"published\": true}'");
+        let c = config(dir.path(), &gp);
+        serve_page(&c);
+        let publish = json!({"command": "registry publish", "args": {"target": "/tmp/r"}, "confirmed_by_person": true});
+        let r = call(&c, publish.clone());
+        assert!(
+            r.is_error,
+            "confirmed_by_person isn't enough with the page open"
+        );
+        let id = r.json["ask_id"].clone();
+        assert!(id.is_string(), "{}", r.json);
+        assert!(r.json["ask"]["says"].as_str().unwrap().contains("/tmp/r"));
+        // Asked again before the answer: the same ask, still waiting.
+        let r = call(&c, publish.clone());
+        assert!(r.is_error);
+        assert_eq!(r.json["ask_id"], id);
+        assert!(
+            r.json["refused"]
+                .as_str()
+                .unwrap()
+                .contains("waits for the person's yes")
+        );
+        assert_eq!(crate::asks::pending(&c.home).len(), 1);
+        answer(&c, &id, true);
+        let r = call(
+            &c,
+            json!({"command": "registry publish", "args": {"target": "/tmp/r"}, "ask_id": id}),
+        );
+        assert!(!r.is_error, "{}", r.json);
+        assert_eq!(r.json["json"]["published"], true);
+        assert!(r.json["yes"].as_str().unwrap().contains("used"));
+        // The yes is used: the next run asks again.
+        let r = call(&c, publish);
+        assert!(r.is_error);
+        assert_ne!(r.json["ask_id"], id);
+    }
+
+    #[test]
+    fn with_the_page_open_a_no_keeps_refusing() {
+        let dir = tempfile::tempdir().unwrap();
+        let gp = fake_gp(dir.path(), "echo '{\"published\": true}'");
+        let c = config(dir.path(), &gp);
+        serve_page(&c);
+        let publish = json!({"command": "registry publish", "args": {"target": "/tmp/r"}});
+        let id = call(&c, publish.clone()).json["ask_id"].clone();
+        answer(&c, &id, false);
+        for v in [
+            json!({"command": "registry publish", "args": {"target": "/tmp/r"}, "ask_id": id}),
+            json!({"command": "registry publish", "args": {"target": "/tmp/r"}, "confirmed_by_person": true}),
+        ] {
+            let r = call(&c, v);
+            assert!(r.is_error);
+            assert!(
+                r.json["refused"].as_str().unwrap().contains("said no"),
+                "{}",
+                r.json
+            );
+        }
+    }
+
+    #[test]
+    fn a_changed_argument_needs_a_new_yes() {
+        let dir = tempfile::tempdir().unwrap();
+        let gp = fake_gp(dir.path(), "echo '{\"published\": true}'");
+        let c = config(dir.path(), &gp);
+        serve_page(&c);
+        let id = call(
+            &c,
+            json!({"command": "registry publish", "args": {"target": "/tmp/r"}}),
+        )
+        .json["ask_id"]
+            .clone();
+        answer(&c, &id, true);
+        let r = call(
+            &c,
+            json!({"command": "registry publish", "args": {"target": "/tmp/elsewhere"}, "ask_id": id}),
+        );
+        assert!(r.is_error);
+        assert!(
+            r.json["refused"]
+                .as_str()
+                .unwrap()
+                .contains("changed argument")
+        );
+        assert_ne!(r.json["ask_id"], id);
+        // The yes given still holds for the call it was for.
+        let r = call(
+            &c,
+            json!({"command": "registry publish", "args": {"target": "/tmp/r"}}),
+        );
+        assert!(!r.is_error, "{}", r.json);
+    }
+
     #[test]
     fn a_dry_run_runs_without_a_yes() {
         let dir = tempfile::tempdir().unwrap();
@@ -1170,20 +1403,58 @@ mod tests {
     #[test]
     fn a_command_past_its_time_limit_is_stopped() {
         let dir = tempfile::tempdir().unwrap();
-        // It starts a child of its own, which must stop with it.
-        let gp = fake_gp(dir.path(), "echo started; sleep 30 & sleep 30");
+        // It starts a child of its own, which must stop with it. Each
+        // writes its process ID first, so the test can look for both after.
+        // The limit (5 s) is far beyond what a shell needs to start even on
+        // a loaded machine, and far short of the sleeps (120 s): a limit of
+        // 1 s once failed when the script hadn't printed yet.
+        let pids = dir.path().join("pids");
+        let gp = fake_gp(
+            dir.path(),
+            &format!(
+                "echo $$ > '{p}'; sleep 120 & echo $! >> '{p}'; echo started; sleep 120",
+                p = pids.display()
+            ),
+        );
         let c = config(dir.path(), &gp);
         let started = Instant::now();
-        let r = call(&c, json!({"command": "env", "timeout_s": 1}));
-        assert!(started.elapsed() < Duration::from_secs(15));
+        let r = call(&c, json!({"command": "env", "timeout_s": 5}));
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "{:?}",
+            started.elapsed()
+        );
         assert!(r.is_error);
         assert!(
-            r.json["timed_out"].as_str().unwrap().contains("after 1 s"),
+            r.json["timed_out"].as_str().unwrap().contains("after 5 s"),
             "{}",
             r.json
         );
         assert_eq!(r.json["stdout"], "started\n");
         assert_eq!(r.json["exit"], Value::Null);
+        // The command and its child are gone (a stopped child may linger a
+        // moment as a zombie until it is reaped).
+        let list = std::fs::read_to_string(&pids).unwrap();
+        let ids: Vec<&str> = list.split_whitespace().collect();
+        assert_eq!(ids.len(), 2, "{list}");
+        let alive = |id: &str| {
+            Command::new("ps")
+                .args(["-o", "stat=", "-p", id])
+                .output()
+                .map(|o| {
+                    let st = String::from_utf8_lossy(&o.stdout).trim().to_owned();
+                    !st.is_empty() && !st.starts_with('Z')
+                })
+                .unwrap_or(false)
+        };
+        let t0 = Instant::now();
+        while ids.iter().any(|id| alive(id)) {
+            assert!(
+                t0.elapsed() < Duration::from_secs(10),
+                "still running: {list}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     #[test]
@@ -1226,6 +1497,7 @@ mod tests {
             command: "mechanic demo".into(),
             args: Map::new(),
             confirmed_by_person: false,
+            ask_id: None,
             timeout_s: None,
         };
         let r = run_in(&c, &t, a(), &|_| false).unwrap();

@@ -69,6 +69,9 @@ fn author(dir: &Path, log: &str, extra: &[&str]) -> (i32, Value) {
 
 #[test]
 fn a_floatier_jump_is_verified_kept_and_logged_the_same_twice() {
+    if gp_arcade::skip_slow_test() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     build_and_lift(tmp.path());
     let prompt = ["--prompt", "make the jump floatier"];

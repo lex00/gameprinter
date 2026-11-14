@@ -148,7 +148,7 @@ There's no music editor in Game Printer. A person asks an agent ("make the bass 
 |---|---|
 | `sound_banks` | The banks and their patches, each with a one-second preview WAV |
 | `sound_describe` | A working copy's songs: channels, instruments with roles and what each plays through, origin and confidence, tempo and loop, bindings, and whether each is ready to edit |
-| `sound_edit` | Deterministic ops (`gp_sound::edit`): remap, role, transpose, tempo, mute, solo, gain, swap. Checked against the NES's limits (nothing is clamped), written to the copy's `sound/<slot>.songs.json` and `sound/banks.toml` (or a theme's layer), with before and after WAV clips, history and undo. With `run`, posted to a live capture run as a `sound_edit` input that the person accepts or rejects (capture inputs `accept`, `reject`) |
+| `sound_edit` | Deterministic ops (`gp_sound::edit`): remap, role, transpose, tempo, mute, solo, gain, swap. Checked against the NES's limits (nothing is clamped), written to the copy's `sound/<slot>.songs.json` and `sound/banks.toml` (or a theme's layer), with before and after WAV clips, history and undo. |
 | `sound_preview` | The copy run in the interpreter on a baseline's input with its music and effects cued as the game cues them, into a WAV |
 
 A song is ready to edit when the model knows it completely (`gp_sound::edit::readiness`). That means at least 80% confidence in the capture of its channels and a role for every instrument. Its loop must be known, and it must be bound to a level or rule state (an effect to an event). An op that names a song that isn't ready is refused with what's missing. Super Mario Bros.' 1-1 capture isn't ready (72%, no loop): capture over a longer run, or swap in the driver-decoded song.

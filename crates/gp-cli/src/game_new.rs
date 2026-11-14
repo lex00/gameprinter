@@ -1122,6 +1122,9 @@ mod tests {
     /// any file written. Skipped without the romset.
     #[test]
     fn a_new_arcade_game_names_its_romset_and_reads_the_arcade_controls() {
+        if gp_arcade::skip_slow_test() {
+            return;
+        }
         let Some(zip) = gp_arcade::romset::local_romset("rbtapper") else {
             eprintln!("skipped: no rbtapper romset");
             return;

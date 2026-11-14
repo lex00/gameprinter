@@ -57,11 +57,6 @@ pub enum HostCmd {
         /// than one mostly waits.
         #[arg(long, default_value_t = 1)]
         build_workers: usize,
-        /// Capture runs to watch from the start, as `capture` jobs: each
-        /// runs a round when an answer or pin arrives, until it's steady
-        /// (docs/capture-live.md).
-        #[arg(long = "capture", value_name = "RUN")]
-        capture: Vec<String>,
     },
     /// Run a working copy's (or a template's) scenarios in parallel.
     Scenarios {
@@ -193,8 +188,7 @@ pub(crate) fn run(cmd: &HostCmd, paths: &Paths) -> Result<Outcome> {
             at,
             port,
             build_workers,
-            capture,
-        } => serve(at, *port, *build_workers, capture, json_out, paths),
+        } => serve(at, *port, *build_workers, json_out, paths),
         HostCmd::Scenarios {
             at,
             name,
@@ -400,7 +394,6 @@ fn serve(
     at: &Where,
     port: u16,
     build_workers: usize,
-    capture: &[String],
     json_out: bool,
     paths: &Paths,
 ) -> Result<Outcome> {
@@ -409,16 +402,6 @@ fn serve(
     hc.build_workers = build_workers;
     let shown = json!({ "repo": hc.mcp.repo, "work": hc.mcp.work, "dir": hc.dir });
     let host = LocalHost::start(hc).map_err(anyhow::Error::msg)?;
-    for run in capture {
-        host.submit(gp_host::JobSpec::Capture {
-            run: run.clone(),
-            start: None,
-            debounce_ms: None,
-            max_rounds: None,
-            idle_s: None,
-        })
-        .map_err(anyhow::Error::msg)?;
-    }
     gp_host::http::serve(host, port, |addr| {
         // The first line is the URL, for a script that started the host.
         if json_out {

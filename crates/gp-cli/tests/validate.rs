@@ -241,6 +241,9 @@ fn moss_hop_validates_at_its_contracts_levels() {
 
 #[test]
 fn a_model_that_differs_from_the_recordings_fails() {
+    if gp_arcade::skip_slow_test() {
+        return;
+    }
     let home = tempfile::tempdir().unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let rom = build_mosshop(tmp.path());

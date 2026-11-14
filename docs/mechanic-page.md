@@ -41,6 +41,51 @@ model with that set's pictures (lifted by the same asset map into
 (`$GP_HOME/mechanics/GAME/rom-set`). `gp mechanic start --rom SET|FILE` and
 `gp serve --rom GAME=SET|FILE` choose it too.
 
+With no game in the games checkout, gp serve's root is a first screen that
+leads into the conversation: what Game Printer does in two sentences (the
+model and the template), what the person needs (their own copy of the
+game, as a file), and what to say to their agent, with the next-step
+loop's own sentences for stages 0 to 2 (crate::next). It looks again every
+5 s and opens the game once the agent has brought one in. Page text names
+what to press or what to ask the agent, never a gp command; commands are
+left only in the standalone /refine page (refine.html, refine.js) and in
+error texts from the server, both for developers.
+
+The first time a game's page is asked for, gp serve makes its server on a
+thread of its own, since that can build the game's hook code (the first
+time after a new gp: 36 s for Donkey Kong). Until it is ready,
+`/mechanic/GAME/` answers at once with a page that says "Getting the game
+ready. This takes about half a minute the first time." in the status line
+and the game pane, asks `GET /api/mechanic/GAME/ready` every second and
+loads the game when it is ready. Two requests start one build. If making
+it fails, the page says so in plain words, with the error to give the
+agent and TRY AGAIN (`?again=1`).
+
+Under the status line, on every tab, a card for each thing the agent waits
+for the person's yes on (YOUR AGENT ASKS, with YES and NO): what it does in
+plain words, and what it costs when its dry run says. It comes from the
+status line's answer (`waits_for_yes`, the asks `gp_run` leaves when it
+refuses a command for want of a yes, docs/mcp.md "Every command"), and a
+press writes the answer (`POST /api/asks/ID`). A yes shows as YOU SAID YES
+until the agent uses it, once.
+
+When the agent changes the game through `gp_run` while the page is open
+(any command that writes, but the talk and the log, which redraw on their
+own), `next` counts it (`changes`) and the status line's poll hears it: the
+game picker is read again, THEMES redraws when it shows, a clip open ON
+THE MODEL is loaded again with the clips' scores, and on PLAY and REFINE
+the line says "Your agent changed the game." with RELOAD.
+
+Point and tell (REFINE's THE CLIP MEASURED: pause, box part of the
+screen, say what is wrong) posts its request as before
+(`POST /api/capture/GAME/input`, kind `request`). With no capture run,
+which is the usual case now, it becomes the person's turn in the talk of
+the mechanic open on the page, with a `point` field (the recording, the
+frame, the box, its label, the choice and what is under it). `gp mechanic
+show` prints it ("[pointing at Mario in walk.001 at frame 412, box
+96,120,24,24: ladder]"), the talk on CLIPS shows "(pointing at Mario,
+frame 412)", and the agent answers with `gp mechanic say` as for any turn.
+
 The agent's log (log, pins, problems) is a panel at the right on every tab,
 from AGENT'S LOG in the header or L. The tab is in the address (`?tab=`).
 REFINE and THEMES take the game's place, and the games hold while they show.
@@ -55,8 +100,8 @@ the page:
 - REFINE, under the background work: THE CLIP MEASURED, a corpus clip,
   free play clip or store recording of the game's ROM on the original and
   on the rebuilt game from the same moment, with the lockstep panel and
-  its curves, the moments, the scenario ladder, pause, point and tell with
-  the requests, and the agent's sprite edits.
+  its curves, the moments, the scenario ladder, and pause, point and tell
+  (what the person says there is their turn in the mechanic's talk).
 - DETAILS in the header, on every tab (`?details=1`): a drawer with the
   trace inspector, a store recording's frames drawn by each view (RAM
   heatmap and watch, box selection and resolution card, OAM, nametables,
@@ -72,7 +117,10 @@ where the port stands, the next step and who does it, with its button
 (PLAY FROM HERE, or the tab it needs), and a clue in its place when the
 person seems lost. It reads `GET /api/next/GAME` every 5 seconds, the same
 answer as `gp progress --next` ([what next](progress.md#what-next)), and
-never covers the game.
+never covers the game. Its sentences wrap onto more lines rather than being
+cut, and when the window is narrow the next step starts on a line of its
+own. It keeps the tallest height it has had at the window's width, so a
+poll doesn't move the game up and down.
 
 The game window is in the middle at the top. Its left margin holds REVIEW
 REBUILD's clip picker (`#rule-card`) and the clip loaded (its row, scores,

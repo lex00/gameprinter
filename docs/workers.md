@@ -36,6 +36,14 @@ A worker changing Rust passes `--rust`. Run it again at the start of each new sh
 
 `$GP_HOME/bin/locked` comes first on `PATH`, so every `cargo` goes through the locked cargo: one compile at a time on the machine, jobs from free memory, and compiled dependencies shared across worktrees through `sccache` when it is installed. Tests run outside the lock.
 
+## Tests
+
+Build with incremental compilation on: never set `CARGO_INCREMENTAL=0` in a worktree. After a one-line edit in gp-cli, build, test compile and clippy took 26 s with it on and 81 s with it off (dev profile). The first build after turning it on is a full rebuild; after that edits are quick.
+
+While working, run the tests of the crate you change: `cargo test -p <crate>`. A few tests take 10 s or more each (the Tapper harvest, the arcade `game new` and lockstep tests, Moss Hop's static model, validate and author runs). They start with `if gp_arcade::skip_slow_test() { return; }`, so without `GP_SLOW_TESTS=1` they print "skipped: slow test, set GP_SLOW_TESTS=1" and pass. That takes `cargo test -p gp-cli` from 218 s to about 60 s. A new test that takes over about 10 s gets the same first line.
+
+`just check` (through `just test`) and `gp tool gate` run every test, the slow ones included: each slow test in a run of its own beside one run of the rest, about two minutes for the whole workspace. Run `just test` yourself before landing a change to code a slow test covers.
+
 ## The rules
 
 `gp worker env NAME` prints these, and `--shell` writes them as comments.

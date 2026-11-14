@@ -6,7 +6,6 @@
 // docs/formats/capture-events.md).
 
 import type { CaptureEvent } from "./api";
-import { foldRequests, type RequestView } from "./point";
 
 export interface StageState {
   status: "running" | "ok" | "fail" | "error" | "cached" | "skipped";
@@ -83,14 +82,12 @@ export interface LiveState {
   found: Record<string, Found>;
   /** Each loop's table (refine, catalog): its rows in order. */
   tables: Record<string, { index: number; round: number; cells: Record<string, unknown> }[]>;
-  /** The person's point-and-tell requests by number, with their replies (docs/point-and-tell.md). */
-  requests: Record<number, RequestView>;
 }
 
 export const LOG_SIZE = 300;
 
 export function emptyLive(): LiveState {
-  return { seq: 0, round: 0, order: [], stages: {}, metrics: {}, rounds: [], questions: {}, log: [], recordings: [], running: false, pins: [], found: {}, tables: {}, requests: {} };
+  return { seq: 0, round: 0, order: [], stages: {}, metrics: {}, rounds: [], questions: {}, log: [], recordings: [], running: false, pins: [], found: {}, tables: {} };
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v : v === undefined || v === null ? "" : JSON.stringify(v));
@@ -192,7 +189,6 @@ export function fold(s: LiveState, events: CaptureEvent[]): LiveState {
     if (e.kind !== "metric") next.log.push(e);
   }
   if (next.log.length > LOG_SIZE) next.log = next.log.slice(next.log.length - LOG_SIZE);
-  next.requests = foldRequests(s.requests ?? {}, events.filter((e) => e.seq > s.seq));
   return next;
 }
 

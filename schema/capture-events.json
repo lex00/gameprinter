@@ -52,89 +52,6 @@
           ],
           "type": "object"
         },
-        "Input": {
-          "additionalProperties": false,
-          "description": "An input from a person or an agent, one a line of `inputs.ndjson`.",
-          "properties": {
-            "actor": {
-              "$ref": "#/$defs/Actor"
-            },
-            "args": {
-              "description": "For `tool`: its arguments, summarized.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "choice": {
-              "description": "The candidate chosen, from 1.",
-              "format": "uint32",
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "data": {
-              "description": "For `asset_edit`: what the live panel shows of the edit (status,\npreviews, shots, checks) and where the agent's server keeps the copy.\nFor `request`: the frame, the region in both games, the things\nthere, the choice and the recording (docs/point-and-tell.md). For\n`reply`: its status, lines and the structured explanation."
-            },
-            "item": {
-              "description": "For `asset_edit`, `accept` and `reject`: the sprite edit,\n`<copy>:<seq>` (docs/sprite-editing.md). For `sound_edit`, and for\n`accept` and `reject` of one: `sound:<seq>` (docs/sound.md).",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "kind": {
-              "description": "`answer` (question, choice), `pin` and `unpin` (path), `note`\n(text), `tool` (tool, args, result: an agent's tool call),\n`request` (item, text, data: a person's point and tell) or `reply`\n(item, text, data: an answer to one).",
-              "type": "string"
-            },
-            "path": {
-              "description": "A model path, question ID or gap ID.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "question": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "result": {
-              "description": "For `tool`: its result, summarized.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "text": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "tool": {
-              "description": "For `tool`: the tool's name.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "v": {
-              "format": "uint32",
-              "minimum": 0,
-              "type": "integer"
-            }
-          },
-          "required": [
-            "v",
-            "actor",
-            "kind"
-          ],
-          "type": "object"
-        },
         "RunState": {
           "description": "A run's state, as the job running its rounds reports it.",
           "oneOf": [
@@ -460,7 +377,7 @@
             "data": {
               "properties": {
                 "input": {
-                  "$ref": "#/$defs/Input"
+                  "description": "The input as it was sent."
                 },
                 "kind": {
                   "type": "string"
@@ -1338,105 +1255,9 @@
       ],
       "title": "Event",
       "type": "object"
-    },
-    "input": {
-      "$defs": {
-        "Actor": {
-          "description": "Who an event or input is from.",
-          "enum": [
-            "pipeline",
-            "person",
-            "agent"
-          ],
-          "type": "string"
-        }
-      },
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "additionalProperties": false,
-      "description": "An input from a person or an agent, one a line of `inputs.ndjson`.",
-      "properties": {
-        "actor": {
-          "$ref": "#/$defs/Actor"
-        },
-        "args": {
-          "description": "For `tool`: its arguments, summarized.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "choice": {
-          "description": "The candidate chosen, from 1.",
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "data": {
-          "description": "For `asset_edit`: what the live panel shows of the edit (status,\npreviews, shots, checks) and where the agent's server keeps the copy.\nFor `request`: the frame, the region in both games, the things\nthere, the choice and the recording (docs/point-and-tell.md). For\n`reply`: its status, lines and the structured explanation."
-        },
-        "item": {
-          "description": "For `asset_edit`, `accept` and `reject`: the sprite edit,\n`<copy>:<seq>` (docs/sprite-editing.md). For `sound_edit`, and for\n`accept` and `reject` of one: `sound:<seq>` (docs/sound.md).",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "kind": {
-          "description": "`answer` (question, choice), `pin` and `unpin` (path), `note`\n(text), `tool` (tool, args, result: an agent's tool call),\n`request` (item, text, data: a person's point and tell) or `reply`\n(item, text, data: an answer to one).",
-          "type": "string"
-        },
-        "path": {
-          "description": "A model path, question ID or gap ID.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "question": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "result": {
-          "description": "For `tool`: its result, summarized.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "text": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "tool": {
-          "description": "For `tool`: the tool's name.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "v": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "v",
-        "actor",
-        "kind"
-      ],
-      "title": "Input",
-      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "One object a line of a capture run's events.ndjson (event) and inputs.ndjson (input). docs/formats/capture-events.md",
+  "description": "One object a line of an events.ndjson. docs/formats/capture-events.md",
   "title": "Game Printer capture events, format 1"
 }

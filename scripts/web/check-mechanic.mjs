@@ -593,8 +593,18 @@ async function arcade() {
   });
   if (!(await page.evaluate(() => document.getElementById("tab-mech").classList.contains("on")))) fail("the arcade page stayed in FREE PLAY with nothing to play");
   ok(`FREE PLAY refuses in words: ${free.slice(0, 80)}...`);
-  const r = spawnSync(gp, ["mechanic", "demo", game, mech, "--hint", "tap", "--games", games], { env, encoding: "utf8" });
-  if (r.status === 0 || !r.stderr.includes("arcade game")) fail(`gp mechanic demo on an arcade game: ${r.status} ${r.stderr}`);
+  // The stand-in decision server, as the Moss Hop run uses: without
+  // --decide, demo asks for Laya at 127.0.0.1:7720 before it reads the
+  // game, and the check would pass only on a machine with Laya running.
+  // Not spawnSync: the stand-in answers from this process.
+  const decide = await fakeDecider();
+  const r = await new Promise((res) => {
+    const p = spawn(gp, ["mechanic", "demo", game, mech, "--hint", "tap", "--games", games, "--decide", decide], { env });
+    let stderr = "";
+    p.stderr.on("data", (d) => { stderr += d; });
+    p.on("exit", (status) => res({ status, stderr }));
+  });
+  if (r.status === 0 || !r.stderr.includes("whose state mapping doesn't name the player")) fail(`gp mechanic demo on an arcade game: ${r.status} ${r.stderr}`);
   ok("gp mechanic demo refuses, in words, an arcade game whose mapping names no player");
   if (errors.length) fail(`the arcade page threw: ${errors.join("; ")}`);
 }
@@ -653,7 +663,7 @@ async function oneServer() {
       const f = document.querySelector("#measured iframe.details-frame");
       const doc = f?.contentDocument;
       if (doc?.querySelector("[data-testid=game-view]")) return "the game view";
-      return /just editor/.test(document.querySelector("#measured")?.textContent ?? "") ? "no editor build" : null;
+      return /editor's build/.test(document.querySelector("#measured")?.textContent ?? "") ? "no editor build" : null;
     });
     return n;
   }, 30000);
@@ -664,7 +674,7 @@ async function oneServer() {
     return page.evaluate(() => {
       const doc = document.querySelector("#details-drawer iframe.details-frame")?.contentDocument;
       if (doc && /Trace inspector/i.test(doc.body?.textContent ?? "")) return "the trace inspector";
-      return /just editor/.test(document.querySelector("#details-drawer")?.textContent ?? "") ? "no editor build" : null;
+      return /editor's build/.test(document.querySelector("#details-drawer")?.textContent ?? "") ? "no editor build" : null;
     });
   }, 30000);
   if (!page.url().includes("details=1")) fail(`the drawer isn't in the URL: ${page.url()}`);
@@ -740,16 +750,176 @@ async function romSets() {
       if (m) { clearTimeout(t); res(m[0]); }
     });
   });
-  const viaServe = await (await fetch(`${base}mechanic/tapper/api/rom`)).json();
+  // As the page does: ask whether the game is ready (asking starts making
+  // it) and wait for it; its routes would wait too, but the page never asks
+  // them before.
+  await until("tapper made ready", async () => {
+    const r = await (await fetch(`${base}api/mechanic/tapper/ready`)).json();
+    if (r.failed) fail(`gp serve couldn't make tapper ready: ${r.failed}`);
+    return r.ready;
+  }, 120000);
+  const romRes = await fetch(`${base}mechanic/tapper/api/rom`);
+  if (!romRes.ok) fail(`gp serve --rom: /api/rom answered ${romRes.status}: ${await romRes.text()}`);
+  const viaServe = await romRes.json();
   if (viaServe.set !== "rbtapper") fail(`gp serve --rom tapper=rbtapper.zip played ${viaServe.set}`);
   ok("gp serve --rom tapper=FILE plays that set");
   if (errors.length) fail(`the set picker's page threw: ${errors.join("; ")}`);
+}
+
+/** A gp serve on a free port with these games; its address. */
+async function gpServe(gamesDir) {
+  const p = spawn(gp, ["serve", "--port", "0", "--games", gamesDir], { env });
+  servers.push(p);
+  return new Promise((res, rej) => {
+    let out = "";
+    const t = setTimeout(() => rej(new Error(`gp serve printed no address: ${out}`)), 20000);
+    p.stdout.on("data", (d) => {
+      out += d;
+      const m = out.match(/http:\/\/127\.0\.0\.1:\d+\//);
+      if (m) { clearTimeout(t); res(m[0]); }
+    });
+  });
+}
+
+/** gp mcp on this home, as an agent talks to it: call(tool, args). */
+function mcpClient() {
+  const p = spawn(gp, ["mcp", "--games", games], { env });
+  servers.push(p);
+  let buf = "", id = 0;
+  const waiting = new Map();
+  p.stdout.on("data", (d) => {
+    buf += d;
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i);
+      buf = buf.slice(i + 1);
+      try { const m = JSON.parse(line); waiting.get(m.id)?.(m); } catch (e) { /* not a reply */ }
+    }
+  });
+  const send = (m) => p.stdin.write(`${JSON.stringify(m)}\n`);
+  const rpc = (method, params) => new Promise((res) => { id += 1; waiting.set(id, res); send({ jsonrpc: "2.0", id, method, params }); });
+  const ready = rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "check-mechanic", version: "0" } })
+    .then(() => send({ jsonrpc: "2.0", method: "notifications/initialized" }));
+  return {
+    call: async (name, args) => {
+      await ready;
+      const r = await rpc("tools/call", { name, arguments: args });
+      return r.result?.structuredContent ?? r.result;
+    },
+  };
+}
+
+/** What the agent does shows on the page (ui-vs-mcp.md items 2 to 5): the
+ * yes card and its one use, the agent's calls in the log, the change note
+ * on PLAY, a point-and-tell turn in the session, and the first screen with
+ * no game. */
+async function agentOnThePage() {
+  const base = await gpServe(games);
+  const ready = await until("the game's page is made", async () => (await (await fetch(`${base}api/mechanic/${GAME}/ready`)).json()).ready, 240000);
+  if (!ready) fail("the game's page never got ready");
+  const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto(`${base}mechanic/${GAME}/?tab=play&log=1`);
+  await until("the page", async () => (await text(page, "#title").catch(() => "")).startsWith(GAME));
+  ok("gp serve answers /api/mechanic/GAME/ready, and the page opens once the game is ready");
+  const agent = mcpClient();
+  const paid = { command: "capture background", args: { run: GAME, agents: 1 } };
+  const asked = await agent.call("gp_run", paid);
+  if (!asked.ask_id || !asked.page_open) fail(`paid clip agents weren't asked for: ${JSON.stringify(asked)}`);
+  const card = await until("the yes card", async () => (await page.isVisible("#asks .ask-card")) && text(page, "#asks .ask-card"), 15000);
+  if (!/clip agent/.test(card) || !/YES/.test(card)) fail(`the card says: ${card}`);
+  ok(`gp_run's ask is a card on the page: ${card.slice(0, 80)}...`);
+  await shot(page, "yes-card");
+  // The status line wraps its sentences rather than cutting them, beside
+  // the card, at a narrow and a wide window; narrow, the next step starts
+  // on a line of its own.
+  for (const width of [700, 1600]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.waitForTimeout(400);
+    const line = await page.evaluate(() => {
+      const spans = [...document.querySelectorAll("#next-line > span")];
+      const top = (c) => document.querySelector(`#next-line .${c}`)?.getBoundingClientRect().top ?? 0;
+      return {
+        cut: spans.filter((x) => getComputedStyle(x).textOverflow === "ellipsis" || x.scrollWidth > x.clientWidth + 1).map((x) => x.className),
+        ownLine: top("nx-next") > (top("nx-stands") || top("nx-clue")),
+        height: document.getElementById("next-line").offsetHeight,
+      };
+    });
+    if (line.cut.length) fail(`the status line cuts ${line.cut.join(", ")} at ${width} px`);
+    if (width === 700 && !line.ownLine) fail("at 700 px the next step doesn't start on a line of its own");
+    await shot(page, `status-${width}`);
+    await page.waitForTimeout(2500);
+    const after = await page.evaluate(() => document.getElementById("next-line").offsetHeight);
+    if (after < line.height) fail(`the status line shrank from ${line.height} to ${after} px between polls at ${width} px`);
+  }
+  ok("the status line wraps its sentences beside the card and holds its height between polls; at 700 px the next step has a line of its own");
+  const early = await agent.call("gp_run", { ...paid, confirmed_by_person: true });
+  if (!early.ask_id || early.exit !== undefined) fail(`confirmed_by_person ran it while the page was open: ${JSON.stringify(early)}`);
+  await page.click("#asks .ask-yes");
+  await until("the yes recorded", async () => /YOU SAID YES/.test(await text(page, "#asks")));
+  const ran = await agent.call("gp_run", { ...paid, ask_id: asked.ask_id });
+  if (ran.exit !== 0 || !ran.yes) fail(`the yes didn't run it: ${JSON.stringify(ran)}`);
+  const again = await agent.call("gp_run", paid);
+  if (!again.ask_id || again.ask_id === asked.ask_id) fail(`a used yes ran it again: ${JSON.stringify(again)}`);
+  ok("YES on the card runs that exact call once; confirmed_by_person alone doesn't, and the next run asks again");
+  await until("the next ask's card", async () => page.isVisible(`#asks .ask-card[data-ask="${again.ask_id}"] .ask-no`));
+  await page.click(`#asks .ask-card[data-ask="${again.ask_id}"] .ask-no`);
+  await until("the no recorded", async () => !(await page.isVisible(`#asks .ask-card[data-ask="${again.ask_id}"]`)));
+  const no = await agent.call("gp_run", { ...paid, ask_id: again.ask_id });
+  if (!/said no/.test(no.refused ?? "")) fail(`a no didn't refuse: ${JSON.stringify(no)}`);
+  ok("NO keeps refusing, and says so to the agent");
+  // Two calls more: one done, one that fails with its reason.
+  await agent.call("gp_run", { command: "progress", args: { template: GAME } });
+  await agent.call("gp_run", { command: "corpus show", args: { dir: join(work, "no-such-game") } });
+  const logged = await until("the agent's calls in the log", async () => {
+    const t = await text(page, "#w-log");
+    return /Asked to start the clip agents: waiting for your yes/.test(t) && /Started the clip agents: done/.test(t) && /Asked to start the clip agents: you said no/.test(t)
+      && /Checked how far the game is: /.test(t) && /Looked up the game's tests: failed/.test(t) && t;
+  });
+  if (/\(capture background\)|corpus show\)|clip agents in the background/.test(logged)) fail(`a log line names the command or its help: ${logged}`);
+  const shownAt = await page.evaluate(() => document.querySelector("#w-log .at")?.textContent ?? "");
+  const local = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  if (shownAt.slice(0, 2) !== local.slice(0, 2)) fail(`the log's clock says ${shownAt}, the person's is ${local}`);
+  ok(`the agent's calls show in the log panel in a few words, at the person's own time: ${logged.replace(/\s+/g, " ").slice(0, 120)}...`);
+  await shot(page, "agent-log");
+  await agent.call("gp_run", { command: "capture background", args: { run: GAME, workers: 1 } });
+  await until("the change note on PLAY", async () => /Your agent changed the game/.test(await text(page, "#next-line")), 20000);
+  ok("a change the agent makes shows on PLAY as \"Your agent changed the game.\" with RELOAD");
+  await shot(page, "changed");
+  const told = await (await fetch(`${base}api/capture/${GAME}/input`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ v: 1, actor: "person", kind: "request", text: "this should bounce", data: { frame: 30, recording: "r1", label: "the player", rect: [10, 20, 16, 16], point: { things: [{ label: "the player" }] } } }),
+  })).json();
+  if (!/^request:\d+$/.test(told.input?.item ?? "")) fail(`point and tell: ${JSON.stringify(told)}`);
+  const shown = gpRun(["mechanic", "show", GAME, told.mechanic]);
+  if (!shown.includes("this should bounce [pointing at the player in r1 at frame 30")) fail(`gp mechanic show: ${shown}`);
+  ok("point and tell is the person's talk turn with its point, as gp mechanic show prints it");
+  if (errors.length) fail(`the page threw: ${errors.join("; ")}`);
+  await page.close();
+  // The first screen with no game: what Game Printer does, what to bring
+  // and what to say, with no terminal command.
+  const empty = join(work, "no-games");
+  mkdirSync(empty, { recursive: true });
+  const first = await gpServe(empty);
+  const fp = await browser.newPage({ viewport: { width: 1000, height: 800 } });
+  await fp.goto(first);
+  const words = await until("the first screen", async () => text(fp, "#first"));
+  for (const w of ["plain-text rules file", "your own copy of the game", "What to say to your agent"]) {
+    if (!words.toLowerCase().includes(w.toLowerCase())) fail(`the first screen doesn't say ${w}: ${words}`);
+  }
+  if (/\bgp [a-z]/.test(words)) fail(`the first screen names a command: ${words}`);
+  ok("with no game, the first screen says what Game Printer does, what to bring and what to say to the agent");
+  await shot(fp, "first-screen");
+  await fp.close();
 }
 
 let code = 0;
 try {
   await main();
   await oneServer();
+  await agentOnThePage();
   await arcade();
   await romSets();
   console.log(`mechanic-page: passed in ${((Date.now() - t0) / 1000).toFixed(1)} s`);

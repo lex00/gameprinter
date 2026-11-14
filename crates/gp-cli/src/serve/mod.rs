@@ -36,6 +36,7 @@ use crate::Outcome;
 use crate::mechanic::http::{self, ReadError, Request, Response};
 
 mod annotations;
+mod asks;
 pub(crate) mod background;
 pub(crate) mod clip_agent;
 mod coverage;
@@ -95,6 +96,7 @@ const MODULES: &[fn() -> Vec<Route>] = &[
     later::routes,
     laya::routes,
     next::routes,
+    asks::routes,
 ];
 
 /// How many connections are served at once; more wait in the listen queue.
@@ -163,6 +165,8 @@ pub(crate) fn run(opts: &ServeOpts, paths: &Paths) -> Result<Outcome> {
     );
     use std::io::Write as _;
     std::io::stdout().flush()?;
+    // The page answers the agent's asks for this home (gp_mcp::asks).
+    let _ = gp_mcp::asks::mark_page_served(&ctx.paths.home, ctx.port);
     background::start_dispatcher(ctx.clone());
     serve(listener, ctx);
     Ok(Outcome::ok(json!({}), String::new()))
@@ -459,17 +463,14 @@ fn landing(ctx: &Ctx, req: &Request) -> Response {
         .filter(|t| t.bytes().all(|b| b.is_ascii_lowercase()))
         .map(|t| format!("?tab={t}"))
         .unwrap_or_default();
-    let head = "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width, initial-scale=1\"><title>Game Printer</title><style>body{margin:0;background:#000;color:#fcfcfc;font:15px/1.45 ui-monospace,\"SF Mono\",Menlo,monospace}header{padding:10px 16px;border-bottom:2px solid #fcfcfc}#logo{color:#f83800;font-weight:700}main{padding:12px 16px}a{color:#fcfcfc}h2{font-size:14px;color:#f8b800}</style>";
+    let head = "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width, initial-scale=1\"><title>Game Printer</title><style>body{margin:0;background:#000;color:#fcfcfc;font:15px/1.45 ui-monospace,\"SF Mono\",Menlo,monospace}header{padding:10px 16px;border-bottom:2px solid #fcfcfc}#logo{color:#f83800;font-weight:700}main{padding:12px 16px}a{color:#fcfcfc}h2{font-size:14px;color:#f8b800}#first{max-width:70ch}q{color:#f8b800;quotes:'\"' '\"'}.muted{color:#bcbcbc}</style>";
     let Some(run) = run else {
         let items: String = runs
             .iter()
             .map(|r| format!("<li><a href=\"/mechanic/{r}/{tab}\">{r}</a></li>"))
             .collect();
         let body = if runs.is_empty() {
-            format!(
-                "<p>No game here yet. Ask your agent to bring in your game, and say where the file is.</p><p style=\"color:#bcbcbc\">The games folder: {}</p>",
-                ctx.games.display()
-            )
+            first_screen(ctx)
         } else {
             format!("<h2>Pick a game</h2><ul id=\"games\">{items}</ul>")
         };
@@ -484,6 +485,47 @@ fn landing(ctx: &Ctx, req: &Request) -> Response {
         "text/html; charset=utf-8",
         format!("{head}<script>location.replace({to:?})</script><p><a href=\"{to}\">{run}</a></p>")
             .into_bytes(),
+    )
+}
+
+/// The first screen for a person with no game yet: what Game Printer does,
+/// what they need, and what to say to their agent (the loop's own words,
+/// crate::next, stages 0 to 2). It looks again every few seconds and opens
+/// the game once the agent has brought one in.
+fn first_screen(ctx: &Ctx) -> String {
+    let esc = |t: &str| {
+        t.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    };
+    let say = crate::next::gather(&ctx.paths, Some(&ctx.games), None, None)
+        .map(|f| crate::next::answer(&f))
+        .ok();
+    // The loop's steps, but the one the paragraph above them says already.
+    let mut steps = String::new();
+    if let Some(a) = &say {
+        for s in std::iter::once(&a.next).chain(&a.also) {
+            if s.says != crate::next::BRING_YOUR_COPY {
+                steps.push_str(&format!("<li>{}</li>", esc(&s.says)));
+            }
+        }
+    }
+    let steps = if steps.is_empty() {
+        steps
+    } else {
+        format!("<ul id=first-next>{steps}</ul>")
+    };
+    format!(
+        "<section id=first>\
+<p>Game Printer writes down how a game plays, as a plain-text rules file called the model, and plays it in your browser with nothing to install. A template is any game's folder you can copy, so a game ported here can be the start of a new one.</p>\
+<h2>What you need</h2>\
+<p>Your own copy of the game, as a file on this computer: a .nes file, or a .zip for an arcade game. It is read on this computer and never sent anywhere.</p>\
+<h2>What to say to your agent</h2>\
+<p>Talk with your agent the way you would with a person. To start, you can say: <q>Let's bring my game into Game Printer. My copy of it is in my Downloads folder.</q> (say where yours is). Your agent asks you for anything else it needs.</p>\
+{steps}\
+<p class=muted>This page opens the game by itself once your agent has brought it in.</p>\
+</section>\
+<script>setInterval(async()=>{{try{{const r=await fetch('/api/capture');const v=await r.json();if((v.runs??[]).length)location.reload();}}catch(e){{}}}},5000);</script>"
     )
 }
 

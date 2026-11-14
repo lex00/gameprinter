@@ -135,7 +135,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "assets_edit",
             title: "Edit an entity's sprite or a level tile's look",
-            description: "Edit an entity's sprite set or palette with deterministic semantic ops. ops run in order on each frame picked (frames: base, clip0.1, state.dead or all; the reply's sprite_set lists them): recolor (pairs of color indices, swapped at once, optionally in a region), flip, mirror, shift, outline, fill, pixels, copy (another entity's sprite or tiles of the sheet), load (a PNG an external editor saved after assets_export), match_style (take another entity's outline), tween (an in-between of two frames). frames also takes a clip's name (clip0) for all its frames; frames that share tiles must agree after the ops or the edit is refused, and also_changes lists other frames a changed tile draws. pictures puts whole frames in by rows; import reads back a folder assets_export wrote that an editor saved into (with the image format's checks), recorded as uploaded from that editor. palette_ops instead change the entity's palette colors (color, swap, hue, brightness, copy_from; same_role for every palette of its role). The model must know the sprite well enough to edit, or it is refused with what's missing. Each picture keeps its size and tiles. The result is reviewed by the consistency critic, checked against the hitbox and standing edge, drawn into the recorded frames it shows in with its readability against the backgrounds there (in_context), and placed with assets_place's checks. place false makes a proposal that accept places. Every edit has a seq in the copy's history: undo (newest, or seq when no later edit touched its tiles) any number of times, redo, accept or reject (seq). run names a live capture run, whose workspace panel shows each edit with accept and reject. tile instead of entity edits a level tile kind (a metatile, by its asset map name such as \"stone block\", <slot>[<index>] or its tiles in hex): ops (recolor, flip, mirror, shift, outline, fill, pixels, pictures) on its 16x16 picture of four tiles, palette_ops on the background palette the level draws it in (same_role for every palette of its role); also_changes names the other tile kinds, and also_changes_sprites the sprites, that draw a changed tile or palette; in_context crops the recorded frames around cells of the kind; proposals, accept, reject, undo and redo are the same.",
+            description: "Edit an entity's sprite set or palette with deterministic semantic ops. ops run in order on each frame picked (frames: base, clip0.1, state.dead or all; the reply's sprite_set lists them): recolor (pairs of color indices, swapped at once, optionally in a region), flip, mirror, shift, outline, fill, pixels, copy (another entity's sprite or tiles of the sheet), load (a PNG an external editor saved after assets_export), match_style (take another entity's outline), tween (an in-between of two frames). frames also takes a clip's name (clip0) for all its frames; frames that share tiles must agree after the ops or the edit is refused, and also_changes lists other frames a changed tile draws. pictures puts whole frames in by rows; import reads back a folder assets_export wrote that an editor saved into (with the image format's checks), recorded as uploaded from that editor. palette_ops instead change the entity's palette colors (color, swap, hue, brightness, copy_from; same_role for every palette of its role). The model must know the sprite well enough to edit, or it is refused with what's missing. Each picture keeps its size and tiles. The result is reviewed by the consistency critic, checked against the hitbox and standing edge, drawn into the recorded frames it shows in with its readability against the backgrounds there (in_context), and placed with assets_place's checks. place false makes a proposal that accept places. Every edit has a seq in the copy's history: undo (newest, or seq when no later edit touched its tiles) any number of times, redo, accept or reject (seq). tile instead of entity edits a level tile kind (a metatile, by its asset map name such as \"stone block\", <slot>[<index>] or its tiles in hex): ops (recolor, flip, mirror, shift, outline, fill, pixels, pictures) on its 16x16 picture of four tiles, palette_ops on the background palette the level draws it in (same_role for every palette of its role); also_changes names the other tile kinds, and also_changes_sprites the sprites, that draw a changed tile or palette; in_context crops the recorded frames around cells of the kind; proposals, accept, reject, undo and redo are the same.",
             input_schema: schema::<crate::asset_edit::EditArgs>(),
             read_only: false,
             destructive: true,
@@ -180,7 +180,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "sound_edit",
             title: "Edit the music and effects",
-            description: "Change how a copy's music and effects sound with deterministic ops, run in order: remap (an instrument or a role, in one song or all, to {kind: apu}, {kind: gm, program} or {kind: bank, bank, preset or program}, with a gain), role, transpose (semitones, a song or one channel), tempo (frames per row), mute and solo (channels), gain (a channel or a role), swap (a song becomes a level's or a rule state's music). A song an op names must be ready (sound_describe's editable): otherwise it is refused with what's missing. Every result is checked against the NES's channels; nothing is clamped. The notes go to the copy's sound/<slot>.songs.json and the mapping to sound/banks.toml, or with theme to that theme's restyled-audio layer, so a theme remasters the music without touching the simulation. Returns before and after WAV clips of the song; each placed edit goes into the copy's history and undo true puts back the last. With run, the edit is posted to a live capture run (kind sound_edit) for the person to accept or reject. place false previews without writing.",
+            description: "Change how a copy's music and effects sound with deterministic ops, run in order: remap (an instrument or a role, in one song or all, to {kind: apu}, {kind: gm, program} or {kind: bank, bank, preset or program}, with a gain), role, transpose (semitones, a song or one channel), tempo (frames per row), mute and solo (channels), gain (a channel or a role), swap (a song becomes a level's or a rule state's music). A song an op names must be ready (sound_describe's editable): otherwise it is refused with what's missing. Every result is checked against the NES's channels; nothing is clamped. The notes go to the copy's sound/<slot>.songs.json and the mapping to sound/banks.toml, or with theme to that theme's restyled-audio layer, so a theme remasters the music without touching the simulation. Returns before and after WAV clips of the song; each placed edit goes into the copy's history and undo true puts back the last. place false previews without writing.",
             input_schema: schema::<crate::sound::EditArgs>(),
             read_only: false,
             destructive: true,
@@ -232,15 +232,6 @@ pub fn list() -> Vec<ToolDef> {
             idempotent: true,
         },
         ToolDef {
-            name: "show_explain",
-            title: "What the person showed",
-            description: "What the person showed you by playing the original in the workspace: each moment they marked (\"hit a brick\"), with what the original did in those frames that the model didn't (cell changes, interactions with their catalog kind, sound requests, counters, sprites, routines and RAM rare elsewhere) and what the model did on the same input. Reads the play session gp serve recorded and explained (default the newest). Detect only: it doesn't change the model; use it to answer the person or to decide what to edit.",
-            input_schema: schema::<crate::show::ShowArgs>(),
-            read_only: true,
-            destructive: false,
-            idempotent: true,
-        },
-        ToolDef {
             name: "build_publish",
             title: "Build for the browser",
             description: "Build the copy for the browser into a local directory that a page on this computer plays (there's no hosted runtime yet). The one target is web-preview, the interpreter preview. Writes manifest.json with the template, the model's digest, every slot's provenance from slots.toml, the licenses and each file's digest. Refused when the model check fails, a slot's files don't match their recorded digest, or any slot still holds an original asset of a commercial source. dry_run runs the checks only.",
@@ -250,40 +241,13 @@ pub fn list() -> Vec<ToolDef> {
             idempotent: true,
         },
         ToolDef {
-            name: "capture_events",
-            title: "Read a capture run",
-            description: "A capture run's events after a sequence number (gp capture, docs/capture-live.md): each stage's end, the numbers that moved, the facts that differ, the failing checks, the questions asked, and the inputs the person and the agent sent, with who sent them. Also the questions still open and the inputs waiting for the next round. Pass the last_seq you have as after to read only what's new.",
-            input_schema: schema::<crate::capture::EventsArgs>(),
-            read_only: true,
-            destructive: false,
-            idempotent: true,
-        },
-        ToolDef {
-            name: "requests",
-            title: "What the person pointed at",
-            description: "The person's point-and-tell requests in a run (docs/point-and-tell.md): they paused both games, boxed part of the screen (\"a brick\", \"the goomba\", \"the score\") and said what should happen there (\"this is missing\", \"wrong look\", \"should react when I hit it\", or their own words). Each comes with its frame, the region in both games, the things resolved there, and every reply so far. explain (N) fails today: it runs gp request explain, which this gp doesn't have. reply answers one yourself: plain words for a person who doesn't read code, with a proposal item from assets_edit (place false) or sound_edit for them to accept or reject, or status needs_mechanic and would_build when no tool can make the change yet.",
-            input_schema: schema::<crate::requests::RequestsArgs>(),
-            read_only: false,
-            destructive: false,
-            idempotent: false,
-        },
-        ToolDef {
             name: "moments",
-            title: "The game's moments in a run",
-            description: "The game's own moments in the recording the person watches in a capture run (docs/point-and-tell.md, \"Moments in words\"): each jump, landing, death, life lost, counter change and level change of the original, numbered by kind, with its frames and what the model does there on the same presses (\"jump 1 at frames 197 to 217 (3.3 s): the original goes up 24 px; the model 23.1 px, on the same frame\"). Give said with the person's words (\"refine the very first jump\", \"the second coin\") to get the moment they mean in found; for \"this jump\" give the request's frame too. Use refine_moment to refine it.",
+            title: "The game's moments in a recording",
+            description: "The game's own moments in a recording the person watches (docs/point-and-tell.md, \"Moments in words\"), by the game (run: its folder name, no capture run needed) and the recording's name as the page gives it: each jump, landing, death, life lost, counter change and level change of the original, numbered by kind, with its frames and what the model does there on the same presses (\"jump 1 at frames 197 to 217 (3.3 s): the original goes up 24 px; the model 23.1 px, on the same frame\"). Give said with the person's words (\"refine the very first jump\", \"the second coin\") to get the moment they mean in found; for \"this jump\" give the request's frame too. To refine it, gp_run model refine with lockstep, one clip and moment (KIND:N, jump:1).",
             input_schema: schema::<crate::moments::MomentsArgs>(),
             read_only: true,
             destructive: false,
             idempotent: true,
-        },
-        ToolDef {
-            name: "refine_moment",
-            title: "Refine one moment",
-            description: "Ask for the refinement loop on one of the game's moments (from moments: its kind and number): the person's workspace starts it beside the two games, with its windows in that moment's frames and only the numbers of the mechanic that owns that kind of moment (a jump's are platformer.jump's), then measures any value it keeps on every other moment of the kind and turns the ones it makes worse into questions. It changes the run's copy only as the loop does; tell the person in plain words what was asked.",
-            input_schema: schema::<crate::moments::RefineMomentArgs>(),
-            read_only: false,
-            destructive: false,
-            idempotent: false,
         },
         ToolDef {
             name: "watch_start",
@@ -358,15 +322,6 @@ pub fn list() -> Vec<ToolDef> {
             idempotent: true,
         },
         ToolDef {
-            name: "capture_input",
-            title: "Send an input to a capture run",
-            description: "Send an answer, a pin (won't model), an unpin or a note to a capture run as the agent. A watched run starts its next round when an answer or pin arrives. Answer only with what the person chose; a note is for telling the person something in the run's log.",
-            input_schema: schema::<crate::capture::InputArgs>(),
-            read_only: false,
-            destructive: false,
-            idempotent: false,
-        },
-        ToolDef {
             name: "gp_commands",
             title: "List every gp command",
             description: "Every command of the gp this server runs, read from gp's own command tree, so the list is always current. With no arguments: the groups of commands with what each is for, how many commands each holds, its road (journey first; developer and off-target tools last and marked, so don't steer the person to them), and the rules gp_run applies. With path set to a group (corpus) it lists that group's commands with their rules; with a command (corpus score) it gives the command's whole help, its rule in words, and the JSON Schema of the args gp_run takes for it. find searches the commands' help for words. The named tools are the short road for common steps; use this to reach everything else.",
@@ -378,54 +333,110 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "gp_run",
             title: "Run a gp command",
-            description: "Run one gp command by its words (command: corpus score) with its arguments and flags by name in args, as gp_commands gives them; a switch takes true, a repeated one a list. The arguments are checked against the command before anything runs, and a wrong name is refused with the nearest ones. It runs this same gp with --json in the games checkout, with the person's home and ROM folder, and returns its exit code (0 done, 1 a check that failed, 2 couldn't run), its output (as JSON when it is JSON) and its errors. Long output is cut, with a note of how much and the file holding all of it. A command stops at its time limit (timeout_s, default 300, at most 1800). Rules: a command that reads, or writes the person's games, copies or home, runs at once. One that publishes, uploads, pushes, lands a change through a gate, spends money, calls a paid service or downloads a lot is refused unless confirmed_by_person is true; you may set that only after the person said yes to that exact action in this conversation, and for spending, give them the cost estimate first (its dry run prints one). Its dry-run flag, where it has one, runs at once. Servers and commands that run until stopped are refused, with what to use instead.",
+            description: "Run one gp command by its words (command: corpus score) with its arguments and flags by name in args, as gp_commands gives them; a switch takes true, a repeated one a list. The arguments are checked against the command before anything runs, and a wrong name is refused with the nearest ones. It runs this same gp with --json in the games checkout, with the person's home and ROM folder, and returns its exit code (0 done, 1 a check that failed, 2 couldn't run), its output (as JSON when it is JSON) and its errors. Long output is cut, with a note of how much and the file holding all of it. A command stops at its time limit (timeout_s, default 300, at most 1800). Rules: a command that reads, or writes the person's games, copies or home, runs at once. One that publishes, uploads, pushes, lands a change through a gate, spends money, calls a paid service or starts paid agents, or downloads a lot needs the person's yes: while their page is open, the refusal puts it on the page as a card with YES and NO and gives its ask_id; wait with next (wait_s) until waits_for_yes shows it answered, then call again with ask_id, and a yes runs that exact call once (a changed argument needs a new yes; a no keeps refusing). With no page open it runs with confirmed_by_person: true, which you may set only after the person said yes to that exact action in this conversation; for spending, give them the cost estimate first (its dry run prints one). Its dry-run flag, where it has one, runs at once. Servers and commands that run until stopped are refused, with what to use instead.",
             input_schema: schema::<crate::run::RunArgs>(),
             read_only: false,
             destructive: true,
             idempotent: false,
         },
     ]
-    .into_iter()
-    .map(|mut t| {
-        t.input_schema = crate::capture::with_run(t.input_schema);
-        t
-    })
-    .collect()
 }
 
 /// Calls a tool. `None` for a tool that doesn't exist; arguments that
 /// don't fit the schema are an error reply, so the agent can correct them.
 pub fn call(config: &Config, name: &str, args: Value) -> Option<Reply> {
-    // A call that names a capture run is logged in it; the capture tools'
-    // own `run` is their argument.
-    let mut args = args;
-    let run = if name.starts_with("capture_")
-        || matches!(name, "requests" | "moments" | "refine_moment")
-    {
-        None
-    } else {
-        crate::capture::split_run(&mut args)
-    };
     let logged_args = args.clone();
-    // assets_edit also tells the run of each edit itself (an asset_edit
-    // input with its previews, docs/sprite-editing.md), so it keeps `run`.
-    if name == "assets_edit"
-        && let (Some(r), Some(o)) = (&run, args.as_object_mut())
-    {
-        o.insert("run".into(), json!(r));
+    // The call shows in the agent's log on the person's page, and the
+    // page's views hear when it changed a game (crate::activity).
+    let game = crate::activity::game_of(&config.home, &args);
+    let args_command = args["command"].as_str().map(crate::run::clean_path);
+    let watch = what_of(name, &args).map(|w| crate::activity::start(&config.home, game.clone(), w));
+    let reply = call_tool(config, name, args)?;
+    if let Some(w) = watch {
+        w.end(&how_it_ended(name, &reply));
     }
-    let mut reply = call_tool(config, name, args)?;
+    // The talk and the log redraw on their own; anything else that writes
+    // may leave a view stale.
+    let own_redraw = args_command.as_deref().is_some_and(|c| {
+        [
+            "mechanic log",
+            "mechanic pin",
+            "mechanic problem",
+            "mechanic say",
+            "mechanic busy",
+        ]
+        .contains(&c)
+    });
+    if name == "gp_run" && !own_redraw && !reply.is_error && reply.json.get("writes").is_some() {
+        crate::activity::bump(&config.home, game.as_deref());
+    }
     // A watch tool's call is logged in its session, for the person's page.
     if name.starts_with("watch_") || name == "view_now" {
         crate::watch::log_call(config, name, &logged_args, &reply);
     }
-    if let Some(run) = run
-        && let Some(why) = crate::capture::log_call(config, &run, name, &logged_args, &reply)
-        && let Some(o) = reply.json.as_object_mut()
-    {
-        o.insert("capture_log".into(), json!(why));
-    }
     Some(reply)
+}
+
+/// What a call is, for the person's log: its command path (gp_run) or its
+/// tool's name, which crate::activity::said puts in words; none for the
+/// calls an agent repeats to follow along (next, gp_commands,
+/// watch_events).
+fn what_of(name: &str, args: &Value) -> Option<String> {
+    match name {
+        "next" | "gp_commands" | "watch_events" => None,
+        "gp_run" => Some(crate::run::clean_path(args["command"].as_str()?)),
+        _ => list()
+            .into_iter()
+            .any(|t| t.name == name)
+            .then(|| name.to_owned()),
+    }
+}
+
+/// How a call ended, in a few words: "done", "failed (no such game)".
+fn how_it_ended(name: &str, r: &Reply) -> crate::activity::Ended {
+    use crate::activity::{Ended, cut, reason};
+    let j = &r.json;
+    let because = |what: &str, why: Option<String>| match why {
+        Some(w) => Ended::As(format!("{what} ({w})")),
+        None => Ended::As(what.to_owned()),
+    };
+    if j["refused"]
+        .as_str()
+        .is_some_and(|r| r.contains("the person said no"))
+    {
+        return Ended::SaidNo;
+    }
+    if j.get("ask_id").is_some() {
+        return Ended::WaitsForYes;
+    }
+    if let Some(why) = j["refused"].as_str() {
+        return because("refused", reason(why));
+    }
+    if j.get("timed_out").is_some() {
+        return Ended::As("stopped at its time limit".to_owned());
+    }
+    if name == "gp_run"
+        && let Some(e) = j["error"].as_str()
+    {
+        return because("refused", reason(e));
+    }
+    if name == "gp_run" {
+        let why = || {
+            j["json"]["error"]
+                .as_str()
+                .map(|e| cut(e, 80))
+                .or_else(|| reason(j["stderr"].as_str().unwrap_or("")))
+        };
+        return match j["exit"].as_i64() {
+            Some(0) => Ended::As("done".to_owned()),
+            Some(1) => Ended::As("done, a check failed".to_owned()),
+            _ => because("failed", why()),
+        };
+    }
+    if r.is_error {
+        return because("failed", reason(j["error"].as_str().unwrap_or("")));
+    }
+    Ended::As("done".to_owned())
 }
 
 fn call_tool(config: &Config, name: &str, args: Value) -> Option<Reply> {
@@ -469,13 +480,8 @@ fn call_tool(config: &Config, name: &str, args: Value) -> Option<Reply> {
         "watch_explore" => with(args, |a| crate::watch::explore(config, a)),
         "watch_point" => with(args, |a| crate::watch::point(config, a)),
         "view_now" => with(args, |a| crate::watch::view_now(config, a)),
-        "capture_events" => with(args, |a| crate::capture::events(config, a)),
-        "capture_input" => with(args, |a| crate::capture::input(config, a)),
 
-        "show_explain" => with(args, |a| crate::show::explain(config, a)),
-        "requests" => with(args, |a| crate::requests::requests(config, a)),
         "moments" => with(args, |a| crate::moments::moments(config, a)),
-        "refine_moment" => with(args, |a| crate::moments::refine_moment(config, a)),
         "gp_commands" => with(args, |a| crate::run::commands(config, a)),
         "gp_run" => with(args, |a| crate::run::run(config, a)),
         _ => return None,

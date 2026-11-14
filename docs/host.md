@@ -23,7 +23,7 @@ gp host speed --plan 2.1 --first-link 40 --tweak 0.4 # hold timings to their bud
 
 The crate came over unchanged, with its 14 tests. The command lost what fed game-printer's run recorder: `host scenarios` and `host speed` record no metrics, and their JSON has no `run_manifest`; otherwise it is the same. Scenarios and the input search live in gp-mcp, as before.
 
-The `capture` job runs `gp capture start` and `gp capture watch`, the capture-run loop the editor port brings back; until it lands, a capture job (and `gp host serve --capture RUN`) fails with gp's error. The `build` job's one target is `web-preview`, the interpreter preview; any other is refused when the job is submitted.
+The `capture` job (and `gp host serve --capture RUN`) ran `gp capture start` and `gp capture watch`, which gameprinter doesn't have, so it could only fail; it was removed on 2026-11-13. The `build` job's one target is `web-preview`, the interpreter preview; any other is refused when the job is submitted.
 
 On 2026-11-12, old binary against new on Moss Hop: `host scenarios mosshop --template` gave the same results but for the timings (`millis`); `host speed`, `host search` (from stomp-then-pit, 20 rounds) and `host record` on a forked copy gave equal JSON; `host serve --port 0` printed its URL line and answered `GET /api/jobs` the same.
 
@@ -94,7 +94,6 @@ Validation against the original keeps running on what the edit doesn't touch (`v
 |---|---|
 | `build` | Copies the working copy to `WORK/.host/snapshots/<job>/`, runs `build_publish` on the snapshot, registers a link for the output and deletes the snapshot |
 | `scenarios` | Runs `run_scenarios`, as a job |
-| `capture` | Watches a capture run ([watching capture live](capture-live.md)): `gp capture start` when `start` is given, then `gp capture watch`, which runs a round each time an answer or pin arrives and ends at a steady state. It runs on a thread of its own rather than a worker, since it mostly waits for a person. `gp host serve --capture RUN` submits one per run at start |
 
 A build is of the copy as it was when the job started, so an agent can keep editing while it runs: the copy is locked only for the time it takes to copy it. The Bevy build's cargo target directory is shared by symlink across snapshots, since a cold build takes minutes. Workers are `--build-workers` (default 1; builds share one cargo lock). A job's view has `state` (`queued`, `running`, `done`, `failed`), `wait_ms`, `run_ms`, its result or its error, and for a build its link.
 
@@ -106,7 +105,7 @@ A link is a published directory served at `/play/<id>/`, where the ID is the fir
 | `POST /api/sessions` `{copy}`, `GET /api/sessions` | Open, list |
 | `POST /api/sessions/ID/step`, `/query`; `DELETE /api/sessions/ID` | Step, read, close |
 | `POST /api/scenarios/run`, `/record`, `/search` | The scenario calls above |
-| `POST /api/jobs` `{kind: "build", copy, target?, fetch_tools?}`, `{kind: "scenarios", copy, ...}` or `{kind: "capture", run, start?: {model, rom?, baselines?, recordings?, preview?, with?}, debounce_ms?, max_rounds?, idle_s?}`; `GET /api/jobs`, `GET /api/jobs/ID` | Queue and watch |
+| `POST /api/jobs` `{kind: "build", copy, target?, fetch_tools?}` or `{kind: "scenarios", copy, ...}`; `GET /api/jobs`, `GET /api/jobs/ID` | Queue and watch |
 | `POST /api/links` `{dir}`, `GET /api/links` | Register a build, list links |
 | `GET /api/speed`, `POST /api/speed` `{name, seconds}` | The speed metrics |
 | `GET /play/ID/...` | A build's files |

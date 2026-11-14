@@ -117,14 +117,13 @@ pub struct Recorded {
 }
 
 impl Recorded {
-    const PREFIXES: [&'static str; 10] = [
+    const PREFIXES: [&'static str; 9] = [
         "chunks.",
         "gaps.",
         "sound.",
         "template.",
         "propose.",
         "validate.",
-        "conform.",
         "track.",
         "derive.",
         "model.",
@@ -830,7 +829,7 @@ fn state_text(state: &str) -> &'static str {
     }
 }
 
-/// Validate, conformance and tracking results from recorded metrics.
+/// Validate and tracking results from recorded metrics.
 fn fidelity(ids: &[&str], ctx: &Ctx, missing: &str, b: &mut Builder) {
     let g = "fidelity";
     let r = ctx.recorded;
@@ -879,40 +878,6 @@ fn fidelity(ids: &[&str], ctx: &Ctx, missing: &str, b: &mut Builder) {
             parts.push(format!("{rt} {verdict} {p:.0}/{f:.0}/{u:.0}"));
         }
         b.sum(g, "validate", parts.join(", "), state, src);
-    }
-
-    // conform.<runtime>.<id>.{differing,frames,runs}
-    let csrc = "gp gen conform (conform.<runtime>.<template>.*)";
-    let mut conf = Vec::new();
-    for id in ids {
-        for name in r.names() {
-            let Some(rest) = name.strip_prefix("conform.") else {
-                continue;
-            };
-            let Some(rt) = rest.strip_suffix(&format!(".{id}.differing")) else {
-                continue;
-            };
-            let d = r.get(name).unwrap_or(0.0);
-            let frames = r.get(&format!("conform.{rt}.{id}.frames")).unwrap_or(0.0);
-            b.num(format!("fidelity.conform.{rt}.differing"), d, "count");
-            b.num(format!("fidelity.conform.{rt}.frames"), frames, "frames");
-            conf.push((format!("{rt} {d:.0} differing in {frames:.0} frames"), d));
-        }
-    }
-    if conf.is_empty() {
-        b.sum(g, "conform", state_text(missing), missing, csrc);
-    } else {
-        let bad = conf.iter().any(|(_, d)| *d > 0.0);
-        b.sum(
-            g,
-            "conform",
-            conf.iter()
-                .map(|(t, _)| t.as_str())
-                .collect::<Vec<_>>()
-                .join(", "),
-            if bad { "fail" } else { "ok" },
-            csrc,
-        );
     }
 
     // track.<id>.<recording>.{precision,recall}: the mean over recordings.
@@ -1630,8 +1595,6 @@ mod tests {
             ("validate.mosshop.checks.unexercised", 1.0),
             ("validate.mosshop.bevy.checks.passed", 3.0),
             ("validate.mosshop.bevy.checks.failed", 2.0),
-            ("conform.bevy.mosshop.differing", 0.0),
-            ("conform.bevy.mosshop.frames", 1200.0),
             ("track.mosshop.a.precision", 1.0),
             ("track.mosshop.a.recall", 0.5),
             ("track.mosshop.b.precision", 0.5),
@@ -1652,10 +1615,6 @@ mod tests {
         let v = summary(&r, "validate");
         assert_eq!(v.text, "bevy fail 3/2/0, interp pass 20/0/1");
         assert_eq!(v.state, "fail");
-        assert_eq!(
-            summary(&r, "conform").text,
-            "bevy 0 differing in 1200 frames"
-        );
         assert_eq!(summary(&r, "track P/R").text, "0.75/0.50");
         assert_eq!(summary(&r, "measured").text, "8 agree, 2 differ of 10");
         assert_eq!(summary(&r, "art").text, "1 original, 2 stub");
@@ -1679,7 +1638,6 @@ mod tests {
         };
         let r = row(&dir, &ctx(&rec, home.path())).unwrap();
         assert_eq!(summary(&r, "validate").text, "needs ROM");
-        assert_eq!(summary(&r, "conform").state, "needs-rom");
         assert_eq!(summary(&r, "sprites").state, "needs-rom");
     }
 

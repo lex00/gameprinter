@@ -16,13 +16,13 @@ use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
 use serde_json::{Value, json};
 
-use crate::{Config, Reply, capture, tools};
+use crate::{Config, Reply, tools};
 
 /// How often a long tool call reports progress.
 pub const PROGRESS_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// What the server tells a client when it connects.
-pub const INSTRUCTIONS: &str = "In Game Printer, a model is a game's rules and numbers as plain text (model.toml), read when the game loads and never compiled, and a template is a game's folder holding a model and nothing from any ROM, ready to copy. What a person makes here plays in a browser with nothing installed; it is never a new ROM. Some games also have custom code (Rust hooks) for what the model text can't say. Every ported game's folder in the games checkout is a template (Donkey Kong is one), and so is each folder under the repo's templates/ (Moss Hop and the games made here). Find a template with registry_search and copy it for the person with template_fork (its reply says whether the copy is ready and, if not, the next step), read the copy with surface_describe, change it with model_edit and contract_edit (model paths, docs/formats/model-path.md), replace its art with assets_generate and assets_place, try it with run_preview, hold it to its contract with validate, measure and correct a ported game's feel with model_refine (asking the person model_questions), and build it for the browser with build_publish. When the person is watching a capture run, pass its name as run to any tool so the call shows in the run's log, read the run with capture_events and send what the person chose with capture_input. When the person points at the screen and says what's wrong, the run has requests: read them with requests and answer each in plain words. Every edit is checked and written in canonical form; a refused edit writes nothing. Call next at the start of every conversation and after each step you take, tell the person where things stand and offer its next step in plain words without being asked, start what it marks for the tools yourself, and stop and ask before anything in waits_for_yes, which costs money or makes something public, until the person says yes to that item. While the person plays, call next with wait_s so you hear when they hand you something. The named tools are the short road for common steps; gp_commands lists every other gp command (porting steps such as roms scan, game new, corpus score and progress among them) and gp_run runs any of them. gp_run runs reads and writes to the person's games, copies and home at once, but anything that publishes, lands a change, spends money or downloads a lot runs only with confirmed_by_person, which you set only after the person said yes to that exact action here.";
+pub const INSTRUCTIONS: &str = "In Game Printer, a model is a game's rules and numbers as plain text (model.toml), read when the game loads and never compiled, and a template is a game's folder holding a model and nothing from any ROM, ready to copy. What a person makes here plays in a browser with nothing installed; it is never a new ROM. Some games also have custom code (Rust hooks) for what the model text can't say. Every ported game's folder in the games checkout is a template (Donkey Kong is one), and so is each folder under the repo's templates/ (Moss Hop and the games made here). Find a template with registry_search and copy it for the person with template_fork (its reply says whether the copy is ready and, if not, the next step), read the copy with surface_describe, change it with model_edit and contract_edit (model paths, docs/formats/model-path.md), replace its art with assets_generate and assets_place, try it with run_preview, hold it to its contract with validate, measure and correct a ported game's feel with model_refine (asking the person model_questions), and build it for the browser with build_publish. When the person points at the screen on their page and says what's wrong, it comes as their turn in the talk of the mechanic open there, with point (the recording, the frame, the box and what is under it): gp mechanic wait GAME (through gp_run) waits for it and gp mechanic show GAME MECHANIC reads it; answer in plain words with gp mechanic say GAME MECHANIC. Every edit is checked and written in canonical form; a refused edit writes nothing. Call next at the start of every conversation and after each step you take, tell the person where things stand and offer its next step in plain words without being asked, start what it marks for the tools yourself, and stop and ask before anything in waits_for_yes, which costs money or makes something public, until the person says yes to that item. While the person plays, call next with wait_s so you hear when they hand you something. The named tools are the short road for common steps; gp_commands lists every other gp command (porting steps such as roms scan, game new, corpus score and progress among them) and gp_run runs any of them. gp_run runs reads and writes to the person's games, copies and home at once, but anything that publishes, lands a change, spends money (paid clip agents too) or downloads a lot runs only with the person's yes. While their page is open, gp_run's refusal puts a card with YES and NO on it (ask_id): tell them what it is, wait with next and wait_s until waits_for_yes shows it answered, then call gp_run again with ask_id; a yes runs that exact call once. With no page open, set confirmed_by_person only after the person said yes to that exact action here.";
 
 /// The tools as MCP tool definitions.
 pub fn tool_list() -> Vec<Tool> {
@@ -97,24 +97,15 @@ impl ServerHandler for Server {
     ) -> Result<CallToolResponse, ErrorData> {
         let name = request.name.to_string();
         let args = Value::Object(request.arguments.unwrap_or_default());
-        let run = args
-            .get("run")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .filter(|_| !name.starts_with("capture_"));
         let config = self.config.clone();
         // Tools block (child processes, the interpreter), so they run off
         // the runtime's thread.
         let tool = name.clone();
         let mut handle = tokio::task::spawn_blocking(move || tools::call(&config, &tool, args));
         // While a tool runs, a client that sent a progress token hears from
-        // it every PROGRESS_EVERY: the run's newest stage when the call
-        // names a capture run, else how long it has run.
+        // it every PROGRESS_EVERY: how long it has run.
         let token = context.meta.get_progress_token();
         let started = std::time::Instant::now();
-        let mut seq = run
-            .as_deref()
-            .map_or(0, |r| capture::last_seq(&self.config, r));
         let mut ticks = 0u32;
         let joined = loop {
             match tokio::time::timeout(PROGRESS_EVERY, &mut handle).await {
@@ -122,14 +113,7 @@ impl ServerHandler for Server {
                 Err(_) => {
                     let Some(token) = token.clone() else { continue };
                     ticks += 1;
-                    let mut message = format!("{name} running, {} s", started.elapsed().as_secs());
-                    if let Some((s, line)) = run
-                        .as_deref()
-                        .and_then(|r| capture::progress_line(&self.config, r, seq))
-                    {
-                        seq = s;
-                        message = line;
-                    }
+                    let message = format!("{name} running, {} s", started.elapsed().as_secs());
                     let _ = context
                         .peer
                         .notify_progress(

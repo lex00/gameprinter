@@ -70,8 +70,6 @@ pub struct LocalHost {
     base: Mutex<Option<String>>,
     next: AtomicU64,
     speed: Mutex<Vec<(String, f64)>>,
-    /// The host itself, for jobs that run on threads of their own.
-    me: Mutex<std::sync::Weak<LocalHost>>,
 }
 
 impl LocalHost {
@@ -94,9 +92,7 @@ impl LocalHost {
             base: Mutex::new(None),
             next: AtomicU64::new(1),
             speed: Mutex::default(),
-            me: Mutex::new(std::sync::Weak::new()),
         });
-        *lock(&host.me) = Arc::downgrade(&host);
         for _ in 0..workers {
             let h = Arc::clone(&host);
             std::thread::spawn(move || h.work());
@@ -180,75 +176,8 @@ impl LocalHost {
         }
     }
 
-    /// Runs a capture job: `gp capture start` when asked, then `gp capture
-    /// watch` until the run is steady, as child processes in the repo with
-    /// the host's `$GP_HOME`. The run's events are the job's progress; its
-    /// result is the watcher's answer.
-    fn capture(
-        &self,
-        run: &str,
-        start: Option<&crate::CaptureStart>,
-        watch: &[String],
-    ) -> Result<(Value, Option<Link>), String> {
-        let gp = |args: &[String]| -> Result<(i32, Value, String), String> {
-            let out = std::process::Command::new(&self.cfg.mcp.gp)
-                .arg("--json")
-                .args(args)
-                .current_dir(&self.cfg.mcp.repo)
-                .env("GP_HOME", &self.cfg.mcp.home)
-                .stdin(std::process::Stdio::null())
-                .output()
-                .map_err(|e| format!("running gp: {e}"))?;
-            Ok((
-                out.status.code().unwrap_or(2),
-                serde_json::from_slice(&out.stdout).unwrap_or(Value::Null),
-                String::from_utf8_lossy(&out.stderr).into_owned(),
-            ))
-        };
-        let mut started = Value::Null;
-        if let Some(s) = start {
-            let (code, j, err) = gp(&s.args(run))?;
-            if code == 2 {
-                return Err(format!(
-                    "gp capture start: {}",
-                    err.lines().last().unwrap_or("")
-                ));
-            }
-            started = j;
-        }
-        let mut args = vec!["capture".to_owned(), "watch".into(), run.into()];
-        args.extend(watch.iter().cloned());
-        let (code, j, err) = gp(&args)?;
-        if code == 2 {
-            return Err(format!(
-                "gp capture watch: {}",
-                err.lines().last().unwrap_or("")
-            ));
-        }
-        Ok((json!({ "run": run, "start": started, "watch": j }), None))
-    }
-
     fn execute(&self, id: &str, spec: &JobSpec) -> Result<(Value, Option<Link>), String> {
         match spec {
-            JobSpec::Capture {
-                run,
-                start,
-                debounce_ms,
-                max_rounds,
-                idle_s,
-            } => {
-                let mut watch = Vec::new();
-                for (flag, v) in [
-                    ("--debounce-ms", debounce_ms.map(|v| v.to_string())),
-                    ("--max-rounds", max_rounds.map(|v| v.to_string())),
-                    ("--idle-s", idle_s.map(|v| v.to_string())),
-                ] {
-                    if let Some(v) = v {
-                        watch.extend([flag.to_owned(), v]);
-                    }
-                }
-                self.capture(run, start.as_ref(), &watch)
-            }
             JobSpec::Scenarios {
                 copy,
                 template,
@@ -424,34 +353,7 @@ impl Host for LocalHost {
                 gp_mcp::publish::check_target(t)?;
             }
         }
-        if let JobSpec::Capture { run, start, .. } = &spec {
-            let ok = !run.is_empty()
-                && run.len() <= 80
-                && run
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-            if !ok {
-                return Err(format!("`{run}` isn't a capture run name"));
-            }
-            let exists = self
-                .cfg
-                .mcp
-                .home
-                .join("capture")
-                .join(run)
-                .join("run.json")
-                .is_file();
-            if start.is_none() && !exists {
-                return Err(format!(
-                    "there's no capture run `{run}`; give `start` to begin one"
-                ));
-            }
-            if start.is_some() && exists {
-                return Err(format!("the capture run `{run}` exists; leave out `start`"));
-            }
-        }
         let id = self.id("j");
-        let own_thread = matches!(spec, JobSpec::Capture { .. });
         let mut q = lock(&self.queue);
         q.jobs.insert(
             id.clone(),
@@ -467,25 +369,6 @@ impl Host for LocalHost {
                 link: None,
             },
         );
-        if own_thread {
-            // A capture job waits on a person for minutes; it doesn't hold
-            // a build worker while it does.
-            let rec = q.jobs.get_mut(&id).expect("just inserted");
-            rec.state = JobState::Running;
-            rec.started = Some(Instant::now());
-            let spec = rec.spec.clone();
-            drop(q);
-            let host = self.me.lock().ok().and_then(|m| m.upgrade());
-            let Some(host) = host else {
-                return Err("the host isn't running".into());
-            };
-            let job = id.clone();
-            std::thread::spawn(move || {
-                let out = host.execute(&job, &spec);
-                host.finish(&job, out);
-            });
-            return Ok(id);
-        }
         q.pending.push_back(id.clone());
         self.wake.notify_one();
         Ok(id)

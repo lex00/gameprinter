@@ -1,15 +1,12 @@
 //! The shell's keys and gamepad buttons: one table every target reads
-//! (docs/shell.md, "Keys and buttons"). The generated game builds its
-//! default controls and its fixed keys from it; the web preview reads it
-//! as scripts/web/page/shell-keys.js, which `gp self shell` writes from
-//! this table.
+//! (docs/shell.md, "Keys and buttons"). The web preview reads it as
+//! scripts/web/page/shell-keys.js, which `gp self shell` writes from this
+//! table.
 //!
-//! A key is named by its `KeyboardEvent.code`, which is also Bevy's
-//! `KeyCode` variant (`KeyX`, `Digit1`, `F5`); a button by Bevy's
-//! `GamepadButton` variant, which [`STANDARD_BUTTONS`] places in the
-//! browser's standard gamepad layout. A binding the two targets don't
-//! share yet says which one has it ([`On`]): the save features make them
-//! the same (docs/shell.md, "Saves on the settings screen"). A binding
+//! A key is named by its `KeyboardEvent.code`, (`KeyX`, `Digit1`, `F5`); a button by its
+//! `GamepadButton` name, which [`STANDARD_BUTTONS`] places in the
+//! browser's standard gamepad layout. A binding says whether the web
+//! preview alone has it or every target ([`On`]). A binding
 //! also says what it needs of the shell's settings ([`Needs`]).
 
 /// Which targets have a binding.
@@ -18,8 +15,6 @@ pub enum On {
     Both,
     /// The web preview only.
     Web,
-    /// The generated Bevy game only.
-    Bevy,
 }
 
 impl On {
@@ -27,11 +22,10 @@ impl On {
         match self {
             On::Both => "both",
             On::Web => "web",
-            On::Bevy => "bevy",
         }
     }
 
-    /// Whether a target named `web` or `bevy` has it.
+    /// Whether a target has it.
     pub fn has(self, target: On) -> bool {
         self == On::Both || self == target
     }
@@ -144,7 +138,7 @@ const fn quick(action: &'static str, buttons: &'static [&'static str]) -> Bindin
     }
 }
 
-use On::{Bevy, Both, Web};
+use On::{Both, Web};
 use When::{Play, Screen};
 
 /// Controller 1's buttons in the bits an input log carries, A, B, Select,
@@ -196,12 +190,9 @@ pub const BINDINGS: &[Binding] = &[
     b("reset", &["F5"], &[], Both, Play),
     b("settings", &["Escape", "F1"], &["RightThumb"], Both, Play),
     extra(b("rewind", &["Backspace"], &["LeftTrigger2"], Both, Play)),
-    b("menu", &["KeyP"], &["Mode"], Bevy, Play),
     b("pause", &["F2"], &[], Both, Play),
     b("frame", &["F3"], &[], Both, Play),
     b("slow", &["F4"], &[], Both, Play),
-    b("next-mode", &["F6"], &[], Bevy, Play),
-    b("hitboxes", &["F7"], &[], Bevy, Play),
     b("scale", &["F8"], &[], Web, Play),
     b("widescreen", &["F9"], &[], Web, Play),
     b("dim-flashes", &["F10"], &[], Web, Play),
@@ -263,7 +254,7 @@ pub const BINDINGS: &[Binding] = &[
     b("nav-open", &["F1"], &["RightThumb"], Both, Screen),
 ];
 
-/// The browser's standard gamepad layout: Bevy's name for each of its
+/// The browser's standard gamepad layout: The name for each of its
 /// buttons, by index.
 pub const STANDARD_BUTTONS: [&str; 17] = [
     "South",
@@ -315,7 +306,7 @@ pub fn buttons(action: &str, target: On) -> Vec<&'static str> {
 /// two actions of one target at the same time. Empty for the standard.
 pub fn clashes() -> Vec<String> {
     let mut out = Vec::new();
-    for target in [Web, Bevy] {
+    for target in [Web] {
         for when in [Play, Screen] {
             let mut seen: Vec<(String, &str)> = Vec::new();
             for b in of(target).filter(|b| b.when == when) {

@@ -17,6 +17,9 @@ fn s(v: &str) -> Option<Value> {
 
 #[test]
 fn tapper_reads_as_found_by_hand() {
+    if gp_arcade::skip_slow_test() {
+        return;
+    }
     let Some(zip) = gp_arcade::romset::local_romset("tapper") else {
         eprintln!("skipped: no tapper romset");
         return;

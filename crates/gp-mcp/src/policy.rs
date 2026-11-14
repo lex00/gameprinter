@@ -10,8 +10,10 @@
 //! - write: writes the person's games, working copies or home.
 //! - ask: publishes, uploads, pushes or lands a change through a gate;
 //!   spends money or reads a secret or answer key; or downloads a lot.
-//!   It runs only when the call carries `confirmed_by_person`, unless one
-//!   of its dry-run flags is given.
+//!   It runs only with the person's yes, unless one of its dry-run flags
+//!   is given: their YES on the page's card (crate::asks) while gp serve
+//!   runs for the home, else the call's `confirmed_by_person`. Starting
+//!   paid agents (`capture background --agents N` above 0) spends.
 //! - refuse: serves until stopped, waits with no bound, opens another
 //!   program for the person, or runs any program it is given.
 //!
@@ -143,7 +145,8 @@ impl Rule {
                 flags(free)
             ),
             Rule::AskWith(a, arg, _) => format!(
-                "Runs at once, but with `{arg}` given it {} and needs the person's yes (confirmed_by_person).",
+                "Runs at once, but with `{arg}` {} it {} and needs the person's yes (confirmed_by_person).",
+                if COUNTS.contains(&arg) { "above 0" } else { "given" },
                 a.name()
             ),
             Rule::Refuse(instead) => format!("Refused from a tool: {instead}"),
@@ -206,6 +209,8 @@ use Rule::{Read, Write};
 const PUBLISH: Rule = Rule::Ask(Ask::Publish, &[]);
 const DOWNLOAD: Rule = Rule::Ask(Ask::Download, &[]);
 const DRY_RUN: &[&str] = &["dry-run"];
+/// Arguments that count something: given as 0 they are not given.
+const COUNTS: &[&str] = &["agents"];
 
 const SERVE: &str = "it serves a page until stopped. The person starts `gp serve` themselves and opens http://127.0.0.1:7710/; for a local preview use build_publish.";
 
@@ -311,7 +316,11 @@ pub const TABLE: &[Row] = &[
     r("bench clips", D, Write),
     r("bench report", D, Read),
     r("bench scratch", D, Write),
-    r("capture background", S, Write),
+    r(
+        "capture background",
+        S,
+        Rule::AskWith(Ask::Spend, "agents", Base::Write),
+    ),
     r("capture carry", S, Read),
     r("capture dense", S, Write),
     r("capture events", S, Read),
@@ -581,7 +590,16 @@ pub fn decide(row: &Row, given: &dyn Fn(&str) -> bool, values: &[(String, String
         Rule::Write => base(Base::Write),
         Rule::Ask(_, free) if free.iter().any(|f| given(f)) => base(Base::Read),
         Rule::Ask(a, _) => Decision::NeedsYes(a),
-        Rule::AskWith(a, arg, _) if given(arg) => Decision::NeedsYes(a),
+        Rule::AskWith(a, arg, _)
+            if given(arg)
+                && !(COUNTS.contains(&arg)
+                    && values
+                        .iter()
+                        .filter(|(n, _)| n == arg)
+                        .all(|(_, v)| v == "0")) =>
+        {
+            Decision::NeedsYes(a)
+        }
         Rule::AskWith(_, _, b) => base(b),
         Rule::Refuse(why) => Decision::Refused(why.to_owned()),
         Rule::RefuseWith(arg, why, _) if given(arg) => Decision::Refused(why.to_owned()),
@@ -625,7 +643,7 @@ pub fn summary() -> Value {
         },
         "ask": {
             "commands": count(&|r| matches!(r, Rule::Ask(..) | Rule::AskWith(..))),
-            "means": "publishes, uploads, pushes or lands a change through a gate; spends money, calls a paid service or reads a secret or answer key; or downloads a lot. Runs only when the call has confirmed_by_person: true, which you may set only after the person said yes to that exact action in this conversation. Its dry-run flag, where it has one, runs at once. Some need a yes only with one argument: their rule says which",
+            "means": "publishes, uploads, pushes or lands a change through a gate; spends money, calls a paid service or reads a secret or answer key; or downloads a lot. A refusal puts the ask on the person's page as a card with YES and NO (ask_id); call again with ask_id once next shows it answered. With no page open, confirmed_by_person: true runs it, which you may set only after the person said yes to that exact action in this conversation. Its dry-run flag, where it has one, runs at once. Some need a yes only with one argument: their rule says which",
         },
         "refused": {
             "commands": count(&|r| matches!(r, Rule::Refuse(_) | Rule::RefuseWith(..))),
@@ -697,6 +715,21 @@ mod tests {
         );
         assert_eq!(
             decide(grade, &given(&["key"]), &[]),
+            Decision::NeedsYes(Ask::Spend)
+        );
+    }
+
+    #[test]
+    fn paid_clip_agents_need_a_yes() {
+        let bg = row("capture background").unwrap();
+        let vals = |n: &str| vec![("agents".to_owned(), n.to_owned())];
+        assert_eq!(decide(bg, &given(&[]), &[]), Decision::Run { writes: true });
+        assert_eq!(
+            decide(bg, &given(&["agents"]), &vals("0")),
+            Decision::Run { writes: true }
+        );
+        assert_eq!(
+            decide(bg, &given(&["agents"]), &vals("2")),
             Decision::NeedsYes(Ask::Spend)
         );
     }

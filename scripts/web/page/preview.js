@@ -1,6 +1,5 @@
 // The interpreter preview: the model running in the browser in gp_web.wasm
-// (crates/gp-web), drawn on a 2D canvas from the pictures `gp gen bevy`
-// draws. It needs no Bevy build. See docs/web.md.
+// (crates/gp-web), drawn on a 2D canvas from the model's own pictures. See docs/web.md.
 //
 // Query parameters: `run=NAME` replays runs/NAME.frames instead of reading
 // the keyboard, with `from=N` running its first N frames at once and
@@ -436,7 +435,7 @@ async function image(src) {
 // The runtime shell's keys and buttons, from the standard's table that
 // every target reads (gp_present::shell::keys, docs/shell.md), as
 // shell-keys.js has it: the ones this preview has.
-const mine = (a) => BINDINGS.filter((b) => b.action === a && b.on !== "bevy");
+const mine = (a) => BINDINGS.filter((b) => b.action === a);
 const webKeys = (a) => mine(a).filter((b) => !b.shift).flatMap((b) => b.keys);
 const webButtons = (a) => mine(a).flatMap((b) => b.standard);
 // The NES buttons from the keyboard: A, B, Select, Start, Up, Down, Left,
@@ -447,7 +446,7 @@ const KEYS2 = NES2.map(webKeys);
 const PAD = NES.map(webButtons);
 // Each shell key's action by its code, with Shift held or not.
 const SHELL_KEY = new Map(
-  BINDINGS.filter((b) => b.on !== "bevy" && b.when === "play").flatMap((b) => b.keys.map((k) => [`${b.shift ? "Shift+" : ""}${k}`, b.action])),
+  BINDINGS.filter((b) => b.when === "play").flatMap((b) => b.keys.map((k) => [`${b.shift ? "Shift+" : ""}${k}`, b.action])),
 );
 const shellAction = (code, shift) => SHELL_KEY.get(`${shift ? "Shift+" : ""}${code}`);
 const down = new Set();
@@ -1758,7 +1757,7 @@ function shell(p, cfg, canvas, profileNow, host) {
   const shellText = (s) => `console_only = ${s.console_only}\nquick_buttons = ${s.quick_buttons}\n`;
   let settings = parseShell("");
   // Each binding's need of those settings, from the table.
-  const needs = new Map(BINDINGS.filter((b) => b.on !== "bevy").map((b) => [b.action, b.needs]));
+  const needs = new Map(BINDINGS.map((b) => [b.action, b.needs]));
   const allowed = (act) => {
     const n = needs.get(act) ?? "always";
     if (n === "not-console-only") return !settings.console_only;
@@ -1961,7 +1960,7 @@ function shell(p, cfg, canvas, profileNow, host) {
       ["quick-save", BINDINGS.find((b) => b.action === "quick-save")?.standard ?? []],
       ["quick-load", BINDINGS.find((b) => b.action === "quick-load")?.standard ?? []],
     ];
-    const rw = BINDINGS.filter((b) => b.action === "rewind" && b.on !== "bevy").flatMap((b) => b.standard);
+    const rw = BINDINGS.filter((b) => b.action === "rewind").flatMap((b) => b.standard);
     for (const g of navigator.getGamepads?.() ?? []) {
       if (!g || !g.connected) continue;
       if (rw.some((i) => g.buttons[i]?.pressed)) rewind = true;

@@ -18,7 +18,7 @@ pub const LOOK_FILE: &str = "look.txt";
 pub const LOOK_HEADER: &str = "gp-look 1";
 
 /// The folder of looks beside a build's bundle (the web preview), beside
-/// its executable or in its data folder (the Bevy build).
+/// its executable or in its data folder.
 pub const THEMES_DIR: &str = "themes";
 
 /// The web build's list of the looks in its `themes/` folder, which a

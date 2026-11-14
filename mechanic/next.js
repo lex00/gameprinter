@@ -41,6 +41,11 @@ export function startNext(page) {
   let clue = null; // {signal, says, until}
   let prevMode = page.mode();
   let answer = null;
+  // The agent's changes to the game (gp_run counts them, answer.changes):
+  // when the count goes up, the views that don't redraw on their own hear
+  // it ("gp-changed"), and on PLAY and REFINE the line offers a reload.
+  let changes = null;
+  let changedNote = false;
 
   window.addEventListener("keydown", () => { lastAct = performance.now(); }, { capture: true });
   window.addEventListener("pointerdown", (e) => {
@@ -104,14 +109,80 @@ export function startNext(page) {
     return b;
   }
 
+  // The cards of what the agent waits for the person's yes on (the asks
+  // gp_run left, gp_mcp::asks), under the line on every tab: what it does
+  // in plain words, with YES and NO. A yes shows until the agent uses it.
+  let asksDrawn = "";
+  function renderAsks() {
+    const list = (answer?.waits_for_yes ?? []).filter((y) => y.id);
+    const key = JSON.stringify(list.map((y) => [y.id, y.state]));
+    if (key === asksDrawn) return;
+    asksDrawn = key;
+    let box = $("asks");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "asks";
+      box.setAttribute("aria-live", "polite");
+      el.after(box);
+    }
+    box.textContent = "";
+    box.hidden = list.length === 0;
+    for (const y of list) {
+      const card = document.createElement("div");
+      card.className = "ask-card";
+      card.dataset.ask = y.id;
+      const head = document.createElement("span");
+      head.className = "ask-head";
+      head.textContent = y.state === "yes" ? "YOU SAID YES" : "YOUR AGENT ASKS";
+      const says = document.createElement("span");
+      says.className = "ask-says";
+      says.textContent = y.game && y.game !== page.game() ? `${y.game}: ${y.says}` : y.says;
+      card.append(head, says);
+      if (y.state === "yes") {
+        const n = document.createElement("span");
+        n.className = "muted";
+        n.textContent = "Your agent can go ahead, once.";
+        card.appendChild(n);
+      } else {
+        for (const [word, val] of [["YES", "yes"], ["NO", "no"]]) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.tabIndex = -1;
+          b.textContent = word;
+          b.className = `ask-${val}`;
+          b.title = val === "yes" ? "Let your agent do this, once" : "Your agent won't do this";
+          b.addEventListener("click", async (e) => {
+            e.currentTarget.blur();
+            for (const x of card.querySelectorAll("button")) x.disabled = true;
+            try {
+              const r = await fetch(`/api/asks/${encodeURIComponent(y.id)}`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ answer: val }),
+              });
+              if (!r.ok) says.textContent = `${y.says} (Your answer didn't save: ${(await r.json().catch(() => ({}))).error ?? r.status}.)`;
+            } catch (err) {
+              says.textContent = `${y.says} (Your answer didn't save. Is the page's server still running?)`;
+            }
+            asksDrawn = "";
+            void tick();
+          });
+          card.appendChild(b);
+        }
+      }
+      box.appendChild(card);
+    }
+  }
+
   let drawn = "";
   function render() {
     if (!answer) return;
+    renderAsks();
     const now = performance.now();
     const c = clue && clue.until > now && !BUSY.includes(page.mode()) ? clue : null;
     // Drawn again only when it changes: a button redrawn under the mouse
     // loses the click.
-    const key = JSON.stringify([c?.says, answer.stands, answer.stage, answer.next, answer.also, page.tab()]);
+    const key = JSON.stringify([c?.says, answer.stands, answer.stage, answer.next, answer.also, answer.running, changedNote, page.tab()]);
     if (key === drawn) return;
     drawn = key;
     el.textContent = "";
@@ -130,8 +201,50 @@ export function startNext(page) {
     el.appendChild(next);
     const b = button(answer.next);
     if (b) el.appendChild(b);
+    if (changedNote && ["play", "refine"].includes(page.tab())) {
+      const n = document.createElement("span");
+      n.className = "nx-changed";
+      n.textContent = "Your agent changed the game.";
+      const rb = document.createElement("button");
+      rb.type = "button";
+      rb.tabIndex = -1;
+      rb.textContent = "RELOAD";
+      rb.title = "Loads the page again, to show the game as it is now";
+      rb.addEventListener("click", () => location.reload());
+      el.append(n, rb);
+    }
+    // What the agent runs now, so the person sees it working.
+    const runs = (answer.running ?? []).filter((r) => r.what.startsWith("your agent"));
+    if (runs.length) {
+      const r = document.createElement("span");
+      r.className = "nx-run";
+      r.textContent = `RUNNING: ${runs.map((x) => x.what.replace(/^your agent: /, "")).join("; ")}`;
+      r.title = runs.map((x) => x.what).join("\n");
+      el.appendChild(r);
+    }
     el.hidden = false;
+    hold();
   }
+
+  // The tallest the line has been at this width: it grows when its words
+  // need more lines and doesn't shrink back on the next poll, so the game
+  // pane under it stays put. A new width starts again.
+  let held = 0;
+  let heldWidth = 0;
+  function hold() {
+    const w = el.clientWidth;
+    if (w !== heldWidth) {
+      heldWidth = w;
+      held = 0;
+      el.style.minHeight = "";
+    }
+    const h = el.offsetHeight;
+    if (h > held) {
+      held = h;
+      el.style.minHeight = `${h}px`;
+    }
+  }
+  window.addEventListener("resize", () => { heldWidth = 0; if (!el.hidden) hold(); });
 
   async function tick() {
     const game = page.game();
@@ -152,6 +265,13 @@ export function startNext(page) {
       answer = await r.json();
     } catch (e) {
       return;
+    }
+    if (typeof answer.changes === "number") {
+      if (changes !== null && answer.changes > changes) {
+        changedNote = true;
+        window.dispatchEvent(new CustomEvent("gp-changed", { detail: { changes: answer.changes } }));
+      }
+      changes = answer.changes;
     }
     const c = answer.clue;
     if (c && !(clue && clue.signal === c.signal && clue.until > now) && ready(c.signal, now) && !BUSY.includes(page.mode())) {

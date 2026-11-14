@@ -27,6 +27,9 @@ fn gp(home: &Path) -> StdCommand {
 
 #[test]
 fn moss_hop_harvests_the_same_bytes_and_grades_with_nothing_wrong() {
+    if gp_arcade::skip_slow_test() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let build = StdCommand::new(repo().join("scripts/mosshop/build.sh"))
         .arg(tmp.path())

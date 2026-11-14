@@ -205,9 +205,6 @@ pub struct Entry {
     /// Who accepted or rejected it: `person` or `agent`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decided_by: Option<String>,
-    /// The live capture run told of it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run: Option<String>,
     /// A level tile kind's look instead of an entity's sprite: the kind's
     /// name (`crate::tile_edit`); `entity` is then empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -219,7 +216,7 @@ fn placed() -> EditStatus {
 }
 
 impl Entry {
-    /// The edit's name in a capture run's stream: `<copy>:<seq>`.
+    /// The edit's name, `<copy>:<seq>`, which assets_history and accept and reject use.
     pub fn item(&self, copy: &str) -> String {
         format!("{copy}:{}", self.seq)
     }
@@ -430,7 +427,6 @@ mod tests {
             sprite: None,
             status: EditStatus::Placed,
             decided_by: None,
-            run: None,
             tile: None,
         }
     }

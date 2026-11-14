@@ -2,13 +2,13 @@
 
 Brought from game-printer's docs/sprite-editing.md. In gameprinter `gp assets open` refuses an arcade game's lift (Tapper's) in words: the editor trip cuts frames into NES tiles (`gp_sprites::chr`), and a Midway MCR sprite is one 32 by 32 picture of sixteen values.
 
-A person tells their agent what to change about a sprite ("give him a red cap", "a bolder outline", "make the slug face the other way"), and Game Printer does it. The agent turns the request into deterministic operations, and Game Printer checks the result against the model and draws it into the recorded frames where the sprite is seen. The workspace's live panel shows it, and the person accepts or rejects it there. There are no painting tools in Game Printer yet. A person who wants to draw by hand uses an external editor, starting with Pixelorama (phase 3, below).
+A person tells their agent what to change about a sprite ("give him a red cap", "a bolder outline", "make the slug face the other way"), and Game Printer does it. The agent turns the request into deterministic operations, and Game Printer checks the result against the model and draws it into the recorded frames where the sprite is seen. The agent shows the person the before and after pictures, and accepts or rejects it with `assets_edit` as the person says. There are no painting tools in Game Printer yet. A person who wants to draw by hand uses an external editor, starting with Pixelorama (phase 3, below).
 
 A person who draws by hand opens the sprite set in Pixelorama with `gp assets open`, and each save comes back the same way as an agent's edit.
 
 The same tool edits a level tile's look ("make the stone blocks orange"): see [Level tiles](#level-tiles).
 
-This page is the product doc. The design and its prior art are in the research report (game-printer's docs/research/agent-sprite-editor.md, not carried here); the tools are `assets_edit` and `assets_history` in [agent tools over MCP](mcp.md), and the live panel is watching capture live (game-printer's docs/capture-live.md, not carried here).
+This page is the product doc. The design and its prior art are in the research report (game-printer's docs/research/agent-sprite-editor.md, not carried here); the tools are `assets_edit` and `assets_history` in [agent tools over MCP](mcp.md). The page has no panel for a proposal yet (see below).
 
 Everything is local and free: deterministic operations in Rust, the interpreter for previews, and no hosted service. If an image model is ever added, it is a free model run locally behind the generator trait. The editor is fully useful without one.
 
@@ -108,13 +108,13 @@ A level tile kind is an item of a metatiles slot: a 16 by 16 cell of four tiles,
 | Readiness | The asset map names it, its tiles are in the level tiles slot, the palettes slot has its palette, a level's grid draws it, and the recorded baselines show it on screen. A missing item refuses with `stage: "model"` and how to fill it |
 | Shared tiles | A kind that draws one tile twice must draw it alike after the ops (`stage: "frames"`). `also_changes` names the other tile kinds, and `also_changes_sprites` the sprites, that draw a changed tile. For palette ops, `also_changes` names the kinds drawn in a changed palette that use a changed color (the sky, drawn only in the backdrop, isn't changed by a new face color) |
 | Previews | The close-up (before, after, changed, in the kind's colors) and, from `gp_mcp::scene::tile_in_context`, the baselines replayed: each cell of the kind is cropped (64 by 64 around it) on the first recorded frame the camera shows it whole, before beside after, up to 3 a baseline and 12 in all. `context.sprites_over_tile` measures the sprites drawn over the kind against it, before and after, as `context.readability` does for a sprite |
-| History | Entries in the copy's history with `tile` set and no entity: proposals, accept, reject, undo, redo and the live run's `asset_edit` inputs work as for sprites, and the game view names the tile ("the stone block's picture") |
+| History | Entries in the copy's history with `tile` set and no entity: proposals, accept, reject, undo and redo work as for sprites |
 
 Nothing in it knows a game: every model whose metatiles slot comes from an asset map has its tile kinds, found from the map's names, the slot's roles and the levels' grids. On Moss Hop, "make it orange" on the stone block is a palette op, `color` index 3 to `$27`: the stone's face and the soil's specks (the same color of the shared terrain palette) turn orange in six crops of the five baselines, and accept places it with every state digest the same (game-printer's `crates/gp-cli/tests/point.rs`, not carried here). Making the stone alone orange needs it in a palette of its own, which needs per-cell background palettes in the model (open-questions rows).
 
-## In the workspace
+## On the page
 
-When an `assets_edit` call names a capture `run`, every edit, proposal and decision, undo and redo included, is appended to the run's inputs as an `asset_edit` input ([capture events](formats/capture-events.md)). The input holds the item `<copy>:<seq>` and a line for the log. Its `data` holds the status and previews, the shots and the checks. It also says where the agent's server keeps the copy. The game view puts the edits still to decide right under the original and the rebuilt game, in plain words ("The agent proposes a change to the player's picture: ..."), with the close-up, the strip of recorded moments, a watch button per moment that plays both games there, and accept and reject. Details keeps every edit with its ids and checks. Both are `editor/src/AssetEdits.tsx`; it asks `GET /api/capture/{run}/edits` for each edit with its status read from the copy now, draws the close-up and the in-context strip, the checks, and accept and reject buttons while it is proposed or placed. A button posts a person's `accept` or `reject` input, which `gp serve` applies at once through `gp_mcp::asset_edit::decide`. The run's writer echoes each edit as an `item` event (`what: "asset_edit"`) with its status, so the event log and the server-sent events carry them too.
+The page has no place yet where a person sees a proposal and presses accept or reject. The agent shows the pictures (the reply's `previews`: the close-up, and the recorded frames before and after) and decides with `assets_edit` (`accept` or `reject` and the edit's number) when the person answers. The agent can pin the pictures in the page's side panel with `gp mechanic pin`. Until 2026-11-13 an edit could be told to a capture run (`run`) and accepted in the old editor's game view; nothing made a capture run any more, so that road was removed (the owner approved it on 2026-11-13). Showing a proposal on the mechanic page with accept and reject is the open step.
 
 ## External editors
 
@@ -126,7 +126,7 @@ When an `assets_edit` call names a capture `run`, every edit, proposal and decis
 | Export | The sprite set through `gp-imagefmt` in the layout the image format config resolves ([image config](formats/image-config.md): defaults, `$GP_HOME/config/image.toml`, `gp.toml`, template and entity overrides, `--config`), into `<copy>/exchange/<entity>/`: `sheet.png` (or a PNG a frame), Pixelorama's `palette.json` (`--editor pixelorama`) or the config's palette file, `sprites.json`, and `gp-edit.json` (the copy, entity and slot, and each frame's name with its frame id) |
 | Launch | The editor on the sheet, when it's installed: `GP_PIXELORAMA` (or `GP_LIBRESPRITE`), the PATH, then the usual application folders. Nothing is downloaded; when it isn't found the command says so and keeps watching |
 | Watch | The images' digest every `--poll-ms` (500): Pixelorama doesn't reload a file changed on disk, so the person saves PNGs over the exported ones |
-| On save | `gp-imagefmt`'s import checks (every pixel a color of its tile's palette, nothing outside the tiles, the tile budget), then `assets_edit` with the frames as `pictures` and every edit check, as a proposal shown in `--run` (or placed at once with `--place`) |
+| On save | `gp-imagefmt`'s import checks (every pixel a color of its tile's palette, nothing outside the tiles, the tile budget), then `assets_edit` with the frames as `pictures` and every edit check, as a proposal in the copy's history (or placed at once with `--place`) |
 | Accept | Placed with `origin = "uploaded"` and the editor in the slot's `generator` (`pixelorama via gp assets open (...)`), undoable like any edit |
 
 `--editor libresprite` writes Aseprite's sheet JSON beside the sheet, which LibreSprite and Aseprite import. `--once` stops after the first save and `--timeout` after a time, for scripts. An agent does the same over MCP: `assets_export` writes the set by the config (`set.dir`), and `assets_edit` with `import` brings the folder back. Pixelorama's `.pxo` project isn't written or read yet (an open question).
@@ -135,21 +135,20 @@ When an `assets_edit` call names a capture `run`, every edit, proposal and decis
 
 ```sh
 just setup
-# Moss Hop's ROM and lift, a capture run, and an agent's MCP server:
-cargo test -p gp-cli --test mcp -- a_person_accepts_an_agents_sprite_edit_live_and_the_agent_undoes_twice
+# Moss Hop's ROM and lift, and an agent's MCP server:
 cargo test -p gp-cli --test mcp -- a_save_in_a_pixel_editor_comes_back_as_a_proposal  # a fake editor process
-GP_EDIT_PREVIEW=/tmp cargo test -p gp-cli --test mcp -- a_person_accepts  # writes mosshop-cap-context.png
+GP_EDIT_PREVIEW=/tmp cargo test -p gp-cli --test mcp -- an_agent_edits_the_player_sprite_from_its_recordings  # writes the preview
 ```
 
-By hand, start a run (`gp capture start mosshop --run live`) and `gp serve`, then open the workspace with `?run=live`. Connect an agent to `gp mcp`, fork Moss Hop (`template_fork`) and ask it to "make his moss cap the color of his eye". It calls `assets_edit` with `ops: [{op: recolor, pairs: [[2,3]], region: {x:0,y:0,w:16,h:5}}]`, `place: false` and `run: "live"`. The game view shows the proposal under the two games with its twelve recorded moments; accept places it, and the agent's `assets_history` shows `accepted` by `person`. To draw by hand instead: `gp assets open mosshop player --run live` (with Pixelorama installed), save in Pixelorama, and the save appears the same way.
+By hand, connect an agent to `gp mcp`, fork Moss Hop (`template_fork`) and ask it to "make his moss cap the color of his eye". It calls `assets_edit` with `ops: [{op: recolor, pairs: [[2,3]], region: {x:0,y:0,w:16,h:5}}]` and `place: false`, shows the previews, and on the person's yes calls `assets_edit` with `accept`; `assets_history` then shows it accepted. To draw by hand instead: `gp assets open mosshop player` (with Pixelorama installed), save in Pixelorama, and the save comes back as a proposal the same way.
 
 ## Phases
 
 | Phase | Builds | State |
 |---|---|---|
-| 1 | The agent command surface and the live preview with accept and reject; undo and redo; sprite sets of tile frames; palette ops, match style, tween, resize; readability against recorded backgrounds | Built (2026-10-29) |
+| 1 | The agent command surface and previews with accept and reject; undo and redo; sprite sets of tile frames; palette ops, match style, tween, resize; readability against recorded backgrounds | Built (2026-10-29) |
 | 2 | Whole sprite sets: frames as piece layouts, sprite-set rows resolved, a clip's frames edited together and held consistent, a row a frame in the close-up; proposals in the game view | Built (2026-10-29) |
-| 3 | `gp assets open`: export by the image format config, launch Pixelorama if installed, watch, check and preview each save live, accept with provenance; LibreSprite through Aseprite's sheet JSON; `assets_export` and `assets_edit import` for agents | Built (2026-10-29), without `.pxo` |
+| 3 | `gp assets open`: export by the image format config, launch Pixelorama if installed, watch, check and preview each save, accept with provenance; LibreSprite through Aseprite's sheet JSON; `assets_export` and `assets_edit import` for agents | Built (2026-10-29), without `.pxo` |
 | 4 | The same ops on a theme's `.pix` restyles | Milestone 4 |
 | 5 | A free local image model behind `Generator` for redraws and in-betweens; agent-driven external editors | Later |
 

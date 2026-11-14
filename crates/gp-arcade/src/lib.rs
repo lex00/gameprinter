@@ -91,3 +91,35 @@ pub use mcr::{Controls, Tapper};
 pub const RUNTIME_VERSION: &str = concat!("gp-arcade ", env!("CARGO_PKG_VERSION"), " mcr 3");
 pub use protocol::ArcadeRuntime;
 pub use romset::Romset;
+
+/// The workspace's slow-test switch, for the few tests that take about
+/// 10 s or more (docs/workers.md, "Tests"). Such a test starts with
+/// `if gp_arcade::skip_slow_test() { return; }`. It runs when
+/// GP_SLOW_TESTS is set to anything but empty or `0`, as `just check` and
+/// `gp tool gate` set it; otherwise it prints that it skipped and passes,
+/// so `cargo test -p CRATE` while working leaves it out. Here because
+/// gp-arcade is the one crate every slow test's crate can reach.
+pub fn skip_slow_test() -> bool {
+    if slow_tests_on(std::env::var_os("GP_SLOW_TESTS").as_deref()) {
+        return false;
+    }
+    eprintln!("skipped: slow test, set GP_SLOW_TESTS=1");
+    true
+}
+
+fn slow_tests_on(v: Option<&std::ffi::OsStr>) -> bool {
+    v.is_some_and(|v| !v.is_empty() && v != "0")
+}
+
+#[cfg(test)]
+mod slow_switch_tests {
+    #[test]
+    fn the_switch_is_on_for_any_value_but_empty_or_zero() {
+        use std::ffi::OsStr;
+        assert!(!super::slow_tests_on(None));
+        assert!(!super::slow_tests_on(Some(OsStr::new(""))));
+        assert!(!super::slow_tests_on(Some(OsStr::new("0"))));
+        assert!(super::slow_tests_on(Some(OsStr::new("1"))));
+        assert!(super::slow_tests_on(Some(OsStr::new("yes"))));
+    }
+}

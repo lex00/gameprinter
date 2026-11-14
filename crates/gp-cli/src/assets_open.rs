@@ -4,8 +4,8 @@
 //! (docs/formats/image-config.md, through `gp-imagefmt`), launches the
 //! editor on it when it's installed (never downloading it), then watches
 //! the files: each save is read back with every import check and proposed
-//! as an `assets_edit` with every edit check, shown live in a capture run
-//! when one is named, and placed with provenance when accepted.
+//! as an `assets_edit` with every edit check, and placed with provenance
+//! when accepted.
 //!
 //! Pixelorama doesn't reload a file changed on disk, and its command line
 //! only exports, so the trip is files: the person saves PNGs over the
@@ -55,9 +55,6 @@ pub struct OpenArgs {
     /// The folder to write (default <copy>/exchange/<entity>).
     #[arg(long)]
     pub out: Option<PathBuf>,
-    /// A capture run to show each save in, for a person to accept there.
-    #[arg(long)]
-    pub run: Option<String>,
     /// Place each save at once (still undoable) instead of proposing it.
     #[arg(long)]
     pub place: bool,
@@ -328,14 +325,8 @@ pub(crate) fn open(a: &OpenArgs, paths: &Paths) -> Result<Outcome> {
             continue;
         }
         last = settled;
-        let r = gp_mcp::editor_trip::propose_save(
-            &config,
-            &out,
-            a.place,
-            a.run.as_deref(),
-            Some("person"),
-        )
-        .map_err(anyhow::Error::msg)?;
+        let r = gp_mcp::editor_trip::propose_save(&config, &out, a.place, Some("person"))
+            .map_err(anyhow::Error::msg)?;
         let mut j = r.json.clone();
         if let Some(o) = j.as_object_mut() {
             for k in ["preview", "in_context", "contexts", "readiness", "after"] {

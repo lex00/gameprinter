@@ -333,7 +333,7 @@ fn js_keys() -> String {
     let mut s = String::new();
     let _ = writeln!(
         s,
-        "// The runtime shell's keys and gamepad buttons and its policy, as every\n// target reads them (docs/shell.md): generated from gp_present::shell by\n// `gp self shell`. Don't edit it; change the table and run `just docs`.\n//\n// A key is its KeyboardEvent.code; `standard` is each button's index in\n// the browser's standard gamepad layout. `on` says which targets have a\n// binding (both, web or bevy); the preview reads the ones it has. `needs`\n// says what of the shell's settings it needs: always, not-console-only (off\n// while Console only is on) or quick-buttons (Quick save buttons on).\n"
+        "// The runtime shell's keys and gamepad buttons and its policy, as every\n// target reads them (docs/shell.md): generated from gp_present::shell by\n// `gp self shell`. Don't edit it; change the table and run `just docs`.\n//\n// A key is its KeyboardEvent.code; `standard` is each button's index in\n// the browser's standard gamepad layout. `on` says which targets have a\n// binding (both or web); the preview reads the ones it has. `needs`\n// says what of the shell's settings it needs: always, not-console-only (off\n// while Console only is on) or quick-buttons (Quick save buttons on).\n"
     );
     let _ = writeln!(s, "export const BINDINGS = [");
     for b in keys::BINDINGS {

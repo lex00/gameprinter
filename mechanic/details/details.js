@@ -5,7 +5,7 @@
 // - REFINE, under the background work: THE CLIP MEASURED, a clip or a
 //   recording of the game against the rebuilt game (the lockstep panel
 //   and its curves, the moments, the scenario ladder, pause, point and
-//   tell with the requests, the agent's sprite edits).
+//   tell).
 // - DETAILS in the header, on every tab: a drawer with the trace
 //   inspector (a recording's RAM, OAM, nametables, tiles, events,
 //   coverage, box selection and cards, annotations, compare two).
@@ -73,7 +73,7 @@ function line(parent, text, cls) {
 }
 
 const NO_EDITOR =
-  "These views come from the editor's build, which gp serve serves when it is built: run `just editor` in the gameprinter checkout, then reload. A page on a server of its own (not gp serve) has none.";
+  "These views need the editor's build, which isn't on this computer yet. Ask your agent to build the editor, then reload the page.";
 
 /** The header's DETAILS button and its drawer of the trace inspector. */
 function drawer(game, ready) {
@@ -121,7 +121,7 @@ function drawer(game, ready) {
       line(body, NO_EDITOR, "muted");
       return;
     }
-    line(body, "Pick a recording of the game (gp record makes one; gp recordings list lists them), scrub to a frame, and each view draws it. A second recording compares the two.", "muted");
+    line(body, "Pick a recording of the game (your agent can make one), move to a frame, and each view draws it. A second recording compares the two.", "muted");
     body.append(frame("inspector", run, "the trace inspector", 480));
   };
   button.addEventListener("click", (e) => {

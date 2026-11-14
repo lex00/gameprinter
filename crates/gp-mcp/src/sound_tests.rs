@@ -1,6 +1,6 @@
 //! The sound tools on the made-up game (crate::testgame) with a made-up
 //! song: describe, the readiness gate, edits with clips, history and undo,
-//! the live run's input, and the in-context preview. No game data.
+//! and the in-context preview. No game data.
 
 use std::fs;
 

@@ -1,14 +1,14 @@
-//! The capture event stream (docs/formats/capture-events.md): the events a
-//! capture run writes and the inputs people and agents send it, as types,
-//! with the reading and appending every party shares. `gp capture` writes
-//! the events; `gp serve` reads them for the workspace and takes a
-//! person's inputs; `gp mcp` appends an agent's tool calls; `gp host` runs
-//! the rounds. Nothing here runs a stage or knows a game.
+//! The capture event stream (docs/formats/capture-events.md): the event
+//! types, with the reading, tailing and writer lock that `gp watch`'s
+//! sessions use, and the run folder names (`$GP_HOME/capture/<run>/`) that
+//! scoring commands keep their scratch in. Nothing here runs a stage or
+//! knows a game.
 //!
-//! A run is a folder `$GP_HOME/capture/<run>/` holding `events.ndjson`
-//! (one [`Event`] a line, written by one writer at a time, which holds
-//! `writer.lock`) and `inputs.ndjson` (one [`Input`] a line, appended by
-//! anyone in a single write).
+//! A folder of events holds `events.ndjson` (one [`Event`] a line, written
+//! by one writer at a time, which holds `writer.lock`). The inputs file a
+//! capture run also held (`inputs.ndjson`, with `run.json` marking the
+//! run) and the point-and-tell requests in it were removed on 2026-11-13:
+//! nothing made a capture run any more.
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -23,9 +23,6 @@ use serde_json::Value;
 /// or a new event or input kind doesn't, and readers skip kinds they don't
 /// know. Version 0 was the research prototype's.
 pub const SCHEMA: u32 = 1;
-
-/// The oldest input version still taken: version 0 inputs mean the same.
-pub const OLDEST_INPUT: u32 = 0;
 
 /// The file the JSON Schema is kept in, under `schema/`.
 pub const SCHEMA_FILE: &str = "capture-events.json";
@@ -43,8 +40,6 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
-
-pub mod requests;
 
 fn err(e: impl std::fmt::Display) -> Error {
     Error(e.to_string())
@@ -184,7 +179,8 @@ pub enum Body {
         /// `applied`, `refused` or `noted`.
         status: String,
         summary: String,
-        input: Input,
+        /// The input as it was sent.
+        input: Value,
     },
     /// One row of a loop's table: a refine round, a catalog round.
     #[serde(rename = "row")]
@@ -424,140 +420,6 @@ pub struct Event {
     pub body: Body,
 }
 
-/// An input from a person or an agent, one a line of `inputs.ndjson`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Input {
-    pub v: u32,
-    pub actor: Actor,
-    /// `answer` (question, choice), `pin` and `unpin` (path), `note`
-    /// (text), `tool` (tool, args, result: an agent's tool call),
-    /// `request` (item, text, data: a person's point and tell) or `reply`
-    /// (item, text, data: an answer to one).
-    pub kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub question: Option<String>,
-    /// The candidate chosen, from 1.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub choice: Option<u32>,
-    /// A model path, question ID or gap ID.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-    /// For `tool`: the tool's name.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool: Option<String>,
-    /// For `tool`: its arguments, summarized.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub args: Option<String>,
-    /// For `tool`: its result, summarized.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result: Option<String>,
-    /// For `asset_edit`, `accept` and `reject`: the sprite edit,
-    /// `<copy>:<seq>` (docs/sprite-editing.md). For `sound_edit`, and for
-    /// `accept` and `reject` of one: `sound:<seq>` (docs/sound.md).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub item: Option<String>,
-    /// For `asset_edit`: what the live panel shows of the edit (status,
-    /// previews, shots, checks) and where the agent's server keeps the copy.
-    /// For `request`: the frame, the region in both games, the things
-    /// there, the choice and the recording (docs/point-and-tell.md). For
-    /// `reply`: its status, lines and the structured explanation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<Value>,
-}
-
-impl Input {
-    /// An input of `kind` from `actor`, every other field empty.
-    pub fn new(actor: Actor, kind: &str) -> Self {
-        Self {
-            v: SCHEMA,
-            actor,
-            kind: kind.into(),
-            question: None,
-            choice: None,
-            path: None,
-            text: None,
-            tool: None,
-            args: None,
-            result: None,
-            item: None,
-            data: None,
-        }
-    }
-
-    /// Whether the input says enough to be applied.
-    pub fn check(&self) -> Result<()> {
-        if !(OLDEST_INPUT..=SCHEMA).contains(&self.v) {
-            return Err(Error(format!(
-                "input version {} isn't {OLDEST_INPUT} to {SCHEMA}",
-                self.v
-            )));
-        }
-        if self.actor == Actor::Pipeline {
-            return Err(Error("an input is from a person or an agent".into()));
-        }
-        let fail = |m: &str| Err(Error(m.into()));
-        match self.kind.as_str() {
-            "answer" if self.question.is_some() && self.choice.is_some_and(|c| c >= 1) => Ok(()),
-            "answer" => fail("an answer needs a question and a choice from 1"),
-            "pin" | "unpin" if self.path.as_deref().is_some_and(|p| !p.is_empty()) => Ok(()),
-            "pin" | "unpin" => fail("a pin needs a path"),
-            "note" if self.text.is_some() => Ok(()),
-            "note" => fail("a note needs text"),
-            "tool" if self.tool.is_some() => Ok(()),
-            "tool" => fail("a tool input names its tool"),
-            "asset_edit" if self.item.is_some() && self.actor == Actor::Agent => Ok(()),
-            "asset_edit" => fail("an asset_edit comes from an agent and names its item"),
-            "sound_edit" if self.item.is_some() && self.actor == Actor::Agent => Ok(()),
-            "sound_edit" => {
-                fail("a sound_edit comes from an agent and names its item (sound:<seq>)")
-            }
-            "accept" | "reject" if self.item.is_some() => Ok(()),
-            "accept" | "reject" => fail("a decision names the edit's item (<copy>:<seq>)"),
-            "request"
-                if request_number(self.item.as_deref()).is_some()
-                    && self.data.as_ref().is_some_and(Value::is_object) =>
-            {
-                Ok(())
-            }
-            "request" => fail(
-                "a request names its item (request:<n>) and holds its frame and region in data",
-            ),
-            "reply"
-                if self.actor == Actor::Agent
-                    && request_number(self.item.as_deref()).is_some()
-                    && self.data.as_ref().is_some_and(Value::is_object) =>
-            {
-                Ok(())
-            }
-            "reply" => fail(
-                "a reply comes from an agent, names the request's item (request:<n>) and holds its status in data",
-            ),
-            k => Err(Error(format!(
-                "unknown input kind {k:?}: answer, pin, unpin, note, tool, asset_edit, sound_edit, accept, reject, request or reply"
-            ))),
-        }
-    }
-
-    /// Whether applying it could change what a round finds. A note or a
-    /// tool call only goes into the log; the agent's edits reach the run
-    /// as answers and pins.
-    pub fn changes_model(&self) -> bool {
-        matches!(self.kind.as_str(), "answer" | "pin" | "unpin")
-    }
-}
-
-/// The number in a request's item, `request:<n>`, from 1.
-pub fn request_number(item: Option<&str>) -> Option<u64> {
-    item?
-        .strip_prefix("request:")?
-        .parse::<u64>()
-        .ok()
-        .filter(|n| *n >= 1)
-}
-
 /// Text cut to at most `max` characters, with `...` when cut: a tool's
 /// arguments or result as a line of the log.
 pub fn summarize(v: &Value, max: usize) -> String {
@@ -684,35 +546,6 @@ pub fn last_seq(dir: &Path) -> Result<u64> {
         .unwrap_or(0))
 }
 
-/// Appends an input to a run's `inputs.ndjson` in one write, so senders in
-/// other processes don't interleave within a line. Returns how many inputs
-/// the run has.
-pub fn append_input(dir: &Path, input: &Input) -> Result<usize> {
-    input.check()?;
-    if !dir.join("run.json").is_file() {
-        return Err(Error(format!("no capture run at {}", dir.display())));
-    }
-    let mut line = serde_json::to_string(input).map_err(err)?;
-    line.push('\n');
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("inputs.ndjson"))
-        .and_then(|mut f| f.write_all(line.as_bytes()))
-        .map_err(err)?;
-    Ok(read_inputs(dir)?.len())
-}
-
-/// Every whole input line that parses, in order.
-pub fn read_inputs(dir: &Path) -> Result<Vec<Input>> {
-    let text = whole_lines(&dir.join("inputs.ndjson"))?;
-    Ok(text
-        .split_inclusive('\n')
-        .filter(|l| l.ends_with('\n'))
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .collect())
-}
-
 /// The run's writer lock: held by the one process writing its events.
 /// Dropping it lets the next writer in. The lock is the operating system's
 /// (released when the process ends), so a crashed writer leaves none.
@@ -793,18 +626,16 @@ pub fn parse_event(v: &Value) -> Result<Event> {
     serde_json::from_value(v.clone()).map_err(|e| Error(format!("{e}: {v}")))
 }
 
-/// The JSON Schema of an event line and an input line, as written to
+/// The JSON Schema of an event line, as written to
 /// `schema/capture-events.json`.
 pub fn schema() -> Value {
     let event = schemars::schema_for!(Event);
-    let input = schemars::schema_for!(Input);
     serde_json::json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "Game Printer capture events, format 1",
-        "description": "One object a line of a capture run's events.ndjson (event) and inputs.ndjson (input). docs/formats/capture-events.md",
+        "description": "One object a line of an events.ndjson. docs/formats/capture-events.md",
         "$defs": {
             "event": event,
-            "input": input,
         },
     })
 }
@@ -844,34 +675,6 @@ mod tests {
         assert_eq!(next[0].0["seq"], 100_001);
         assert_eq!(next[0].1, "{\"seq\":100001}");
         assert_eq!(t.offset(), (text.len() + "{\"seq\":100001}\n".len()) as u64);
-    }
-
-    #[test]
-    fn inputs_say_enough() {
-        let mut a = Input::new(Actor::Person, "answer");
-        assert!(a.check().is_err());
-        a.question = Some("derive:levels.main.kill_below".into());
-        a.choice = Some(0);
-        assert!(a.check().is_err());
-        a.choice = Some(2);
-        a.check().unwrap();
-        let mut p = Input::new(Actor::Person, "pin");
-        assert!(p.check().is_err());
-        p.path = Some("entities.slug.sound".into());
-        p.check().unwrap();
-        let mut t = Input::new(Actor::Agent, "tool");
-        assert!(t.check().is_err());
-        t.tool = Some("model_edit".into());
-        t.check().unwrap();
-        assert!(!t.changes_model());
-        assert!(Input::new(Actor::Pipeline, "note").check().is_err());
-        assert!(Input::new(Actor::Person, "delete").check().is_err());
-        let mut old = Input::new(Actor::Person, "note");
-        old.v = 0;
-        old.text = Some("a prototype's input".into());
-        old.check().unwrap();
-        old.v = 2;
-        assert!(old.check().is_err());
     }
 
     #[test]
@@ -952,24 +755,6 @@ mod tests {
         }
         assert!(parse_event(&ev("play.mark", json!({"id": 1}))).is_err());
         assert!(parse_event(&ev("play.unknown", json!({}))).is_err());
-    }
-
-    #[test]
-    fn inputs_append_and_read_back_and_a_torn_line_waits() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut a = Input::new(Actor::Person, "note");
-        a.text = Some("looks right".into());
-        assert!(append_input(dir.path(), &a).is_err(), "no run there");
-        fs::write(dir.path().join("run.json"), "{}").unwrap();
-        assert_eq!(append_input(dir.path(), &a).unwrap(), 1);
-        assert_eq!(append_input(dir.path(), &a).unwrap(), 2);
-        assert_eq!(read_inputs(dir.path()).unwrap()[1], a);
-        let mut f = OpenOptions::new()
-            .append(true)
-            .open(dir.path().join("inputs.ndjson"))
-            .unwrap();
-        f.write_all(b"{\"v\":1,\"actor\"").unwrap();
-        assert_eq!(read_inputs(dir.path()).unwrap().len(), 2);
     }
 
     #[test]

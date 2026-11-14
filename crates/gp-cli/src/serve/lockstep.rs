@@ -21,7 +21,7 @@
 //! a capture run's baselines and sessions. The model is the run's working
 //! copy once the background work made one, opened with its module as the
 //! mechanic page's rebuild opens it. The moments are kept by recording in
-//! `$GP_HOME/capture/GAME/moments/`, where gp-mcp's `moments` tool reads
+//! `$GP_HOME/work/serve/GAME/moments/`, where gp-mcp's `moments` tool reads
 //! them for an agent working on the game.
 
 use std::fs;
@@ -236,12 +236,10 @@ fn keep(cache: &Path, j: &Value) {
     let _ = fs::write(cache, serde_json::to_vec(j).unwrap_or_default());
 }
 
-/// Where gp-mcp's `moments` tool reads a recording's moments: the game's
-/// run folder under `$GP_HOME/capture/`.
+/// Where gp-mcp's `moments` tool reads a recording's moments: beside the
+/// game's own cache, `$GP_HOME/work/serve/GAME/moments/` (no capture run).
 fn moments_file(ctx: &Ctx, run: &Run, name: &str) -> Option<PathBuf> {
-    gp_capture::run_dir(&ctx.paths.home, &run.name)
-        .ok()
-        .map(|d| d.join("moments").join(format!("{name}.json")))
+    Some(gp_mcp::moments::kept_file(&ctx.paths.home, &run.name, name))
 }
 
 fn moments(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {

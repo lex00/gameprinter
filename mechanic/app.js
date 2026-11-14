@@ -1404,8 +1404,10 @@ async function showAgent(turn) {
 let refineSplit = null; // {frame, what} of the clip shown in refine
 let refineMsg = null; // the busy line while refine loads a clip
 let refineToken = null;
+let refineLast = null; // the clip refineShow showed last, to show again
 async function refineShow(c) {
   if (mode !== "refine") return;
+  refineLast = c;
   endCompare();
   showClip = null;
   rebuild = null;
@@ -1643,10 +1645,24 @@ function wEl(tag, cls, text) {
   return e;
 }
 
-/** A log line: its time, its topic and what it says. */
+/** A log line's time of day in the person's own time zone: the line keeps
+ * it in UTC ("HH:MM:SS"), today's or, when that is still to come, the day
+ * before's. */
+function localAt(at) {
+  const m = /^(\d\d):(\d\d):(\d\d)$/.exec(at ?? "");
+  if (!m) return at ?? "";
+  const now = new Date();
+  let t = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), +m[1], +m[2], +m[3]);
+  if (t > now.getTime() + 60000) t -= 86400000;
+  return new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+/** A log line: its time, its topic and what it says; the command that made
+ * it, if one did, shows when the mouse rests on it. */
 function timed(line, open) {
   const li = wEl("li", line.topic === open ? "mine" : "");
-  li.append(wEl("span", "at", line.at ?? ""), wEl("span", "topic", line.topic ?? ""), document.createTextNode(line.text ?? ""));
+  if (line.command) li.title = line.command;
+  li.append(wEl("span", "at", localAt(line.at)), wEl("span", "topic", line.topic ?? ""), document.createTextNode(line.text ?? ""));
   return li;
 }
 
@@ -1678,7 +1694,7 @@ async function refreshWatch() {
   status.innerHTML = "";
   if (lines.length) {
     status.className = lines[0].topic === open ? "mine" : "";
-    status.append(wEl("span", "at", lines[0].at ?? ""), wEl("span", "topic", lines[0].topic ?? ""), document.createTextNode(lines[0].text ?? ""));
+    status.append(wEl("span", "at", localAt(lines[0].at)), wEl("span", "topic", lines[0].topic ?? ""), document.createTextNode(lines[0].text ?? ""));
   } else {
     status.className = "muted";
     const where = watchTopic ? `in ${watchTopic}` : `in any topic of ${session.game}`;
@@ -1814,7 +1830,9 @@ async function refresh() {
     const li = document.createElement("li");
     li.value = t.n;
     li.className = t.by === "agent" ? "by-agent" : "";
-    li.textContent = `${t.by}: ${t.text}`;
+    // A point-and-tell turn says where the person pointed.
+    const at = t.point ? ` (pointing at ${t.point.label ?? "a spot"}, frame ${t.point.frame ?? "?"})` : "";
+    li.textContent = `${t.by}: ${t.text}${at}`;
     talk.appendChild(li);
   }
   // A new turn from the agent pauses the game and shows over it.
@@ -1849,7 +1867,7 @@ function toolsGroup(n) {
   const d = document.createElement("details");
   const sum = document.createElement("summary");
   sum.textContent = `Done by the tools (${n})`;
-  sum.title = "gp mechanic triage: the tools made a clip of each of these on their own, in its session, scored like any clip";
+  sum.title = "The tools made a clip of each of these on their own, kept with the mechanic and scored like any clip";
   d.appendChild(sum);
   const ol = document.createElement("ol");
   ol.className = "qtools";
@@ -2690,6 +2708,13 @@ async function main() {
     game: () => session?.game ?? null,
   });
   shellRef = shell;
+  // The agent changed the game (next.js's "gp-changed"): the clips' scores
+  // and the clip open on the model are read again, as the model is now.
+  window.addEventListener("gp-changed", () => {
+    if (mode !== "refine") return;
+    void refine.refresh();
+    if (refineLast && showClip) void refineShow(refineLast);
+  });
   // A clip named in REFINE (mechanic/refine/'s "gp-open-clip", a corpus
   // clip's ID such as dk.walk.003): CLIPS, on the model, at that clip of
   // its mechanic's session.

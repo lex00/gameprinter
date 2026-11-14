@@ -4,7 +4,7 @@
 //
 // A key is its KeyboardEvent.code; `standard` is each button's index in
 // the browser's standard gamepad layout. `on` says which targets have a
-// binding (both, web or bevy); the preview reads the ones it has. `needs`
+// binding (both or web); the preview reads the ones it has. `needs`
 // says what of the shell's settings it needs: always, not-console-only (off
 // while Console only is on) or quick-buttons (Quick save buttons on).
 
@@ -29,12 +29,9 @@ export const BINDINGS = [
   { action: "reset", keys: ["F5"], shift: false, buttons: [], standard: [], on: "both", when: "play", needs: "always" },
   { action: "settings", keys: ["Escape", "F1"], shift: false, buttons: ["RightThumb"], standard: [11], on: "both", when: "play", needs: "always" },
   { action: "rewind", keys: ["Backspace"], shift: false, buttons: ["LeftTrigger2"], standard: [6], on: "both", when: "play", needs: "not-console-only" },
-  { action: "menu", keys: ["KeyP"], shift: false, buttons: ["Mode"], standard: [16], on: "bevy", when: "play", needs: "always" },
   { action: "pause", keys: ["F2"], shift: false, buttons: [], standard: [], on: "both", when: "play", needs: "always" },
   { action: "frame", keys: ["F3"], shift: false, buttons: [], standard: [], on: "both", when: "play", needs: "always" },
   { action: "slow", keys: ["F4"], shift: false, buttons: [], standard: [], on: "both", when: "play", needs: "always" },
-  { action: "next-mode", keys: ["F6"], shift: false, buttons: [], standard: [], on: "bevy", when: "play", needs: "always" },
-  { action: "hitboxes", keys: ["F7"], shift: false, buttons: [], standard: [], on: "bevy", when: "play", needs: "always" },
   { action: "scale", keys: ["F8"], shift: false, buttons: [], standard: [], on: "web", when: "play", needs: "always" },
   { action: "widescreen", keys: ["F9"], shift: false, buttons: [], standard: [], on: "web", when: "play", needs: "always" },
   { action: "dim-flashes", keys: ["F10"], shift: false, buttons: [], standard: [], on: "web", when: "play", needs: "always" },

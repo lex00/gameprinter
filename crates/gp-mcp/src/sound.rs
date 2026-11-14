@@ -12,8 +12,7 @@
 //! - `sound_edit`: deterministic ops (`gp_sound::edit`), checked, written
 //!   to the copy's song sets and sound bank mapping (or a theme's
 //!   restyled-audio layer), with before and after clips, history and
-//!   undo, and an event in a live capture run for the person to accept or
-//!   reject.
+//!   undo.
 //! - `sound_preview`: the copy played in the interpreter on a baseline's
 //!   input with its music and effects cued as the game would cue them,
 //!   rendered to a WAV.
@@ -25,7 +24,6 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use gp_model::Model;
@@ -438,10 +436,6 @@ pub struct EditArgs {
     /// layer takes the mapping, instead of the copy's `sound/banks.toml`.
     #[serde(default)]
     pub theme: Option<String>,
-    /// A live capture run to post the edit to, for the person to accept
-    /// or reject.
-    #[serde(default)]
-    pub run: Option<String>,
     /// What the person asked, kept in the history.
     #[serde(default)]
     pub prompt: Option<String>,
@@ -520,9 +514,6 @@ fn theme_audio(dir: &Path, theme: &str) -> Result<(), String> {
 
 pub fn edit(config: &Config, a: EditArgs) -> Result<Reply, String> {
     let dir = config.existing_copy(&a.copy)?;
-    if let Some(run) = &a.run {
-        crate::asset_edit::run_dir(config, run)?;
-    }
     if a.undo {
         return undo(config, &dir, &a);
     }
@@ -626,23 +617,6 @@ pub fn edit(config: &Config, a: EditArgs) -> Result<Reply, String> {
     out["history"] = json!({"seq": seq, "depth": history.len()});
     out["before"] = json!(bf);
     out["after"] = json!(af);
-    if let Some(run) = &a.run {
-        let rd = crate::asset_edit::run_dir(config, run)?;
-        let line = json!({
-            "v": 0, "actor": "agent", "kind": "sound_edit", "item": format!("sound:{seq}"),
-            "text": format!("{}: {}", clip_song, said.join("; ")),
-            "data": {"edit": seq, "before": bf, "after": af},
-        });
-        let p = rd.join("inputs.ndjson");
-        let mut fh = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&p)
-            .map_err(|e| format!("{}: {e}", p.display()))?;
-        fh.write_all(format!("{line}\n").as_bytes())
-            .map_err(|e| e.to_string())?;
-        out["live"] = json!(p);
-    }
     Ok(Reply::ok(out))
 }
 

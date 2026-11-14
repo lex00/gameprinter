@@ -81,9 +81,15 @@ export function startShell(page) {
   new MutationObserver(() => { if ($("log-panel").hidden) toggle.classList.add("news"); })
     .observe($("w-status"), { childList: true, characterData: true, subtree: true });
 
-  void pickers(page, () => phase);
+  const pick = pickers(page, () => phase);
   const work = refineWork(page);
   const themes = themesPane(page);
+  // The agent changed the game (next.js's "gp-changed"): the game list and
+  // the themes are read again; THEMES redraws when it shows.
+  window.addEventListener("gp-changed", () => {
+    void pick.then((f) => f?.());
+    if (phase === "themes") void themes.load();
+  });
   strip(page);
   // The old inspector's views (wave 8): REFINE's THE CLIP MEASURED and the
   // header's DETAILS drawer (mechanic/details/).
@@ -151,7 +157,7 @@ function refineWork(page) {
     const s = await background(page).catch(() => null);
     body.innerHTML = "";
     if (!s) {
-      p(body, "The background work runs in gp serve. Open this page from it: gp mechanic start GAME opens it there, starting gp serve when none runs.", "muted");
+      p(body, "The background work shows only when this page comes from Game Printer's own page server. Ask your agent to open the game's page there.", "muted");
       return;
     }
     p(body, s.says ?? "", "");
@@ -238,8 +244,8 @@ function themesPane(page) {
     if (!(t.themes ?? []).length) p(body, "No theme for this game in the registry yet.", "muted");
     for (const th of t.themes ?? []) p(body, `${th.title ?? th.name}: ${th.name} ${th.latest ?? ""}`, "");
     h(body, "The game's theme kit");
-    if (!(t.kit ?? []).length) p(body, "The game has no theme kit (games/GAME/themes/kit).", "muted");
-    else p(body, `games/${page.game()}/themes/kit: ${t.kit.join(", ")}. gp theme sheet makes a theme's starting grids from it.`, "");
+    if (!(t.kit ?? []).length) p(body, "The game has no theme kit yet. Ask your agent to write one.", "muted");
+    else p(body, `The theme kit has ${t.kit.join(", ")}. Your agent can make a new theme's starting sheets from it.`, "");
   }
   return { load };
 }
@@ -281,9 +287,11 @@ function row(parent, kind, name, k, n, says) {
  * loads the page again. */
 async function pickers(page, phase) {
   const gp = $("game-pick");
-  const r = await fetch("/api/capture").catch(() => null);
-  const runs = r?.ok ? ((await r.json()).runs ?? []).map((x) => x.run) : [];
-  if (runs.length) {
+  const fill = async () => {
+    const r = await fetch("/api/capture").catch(() => null);
+    const runs = r?.ok ? ((await r.json()).runs ?? []).map((x) => x.run) : [];
+    if (!runs.length) return;
+    gp.textContent = "";
     for (const g of runs) {
       const o = document.createElement("option");
       o.value = o.textContent = g;
@@ -291,13 +299,14 @@ async function pickers(page, phase) {
     }
     gp.value = page.game();
     gp.hidden = false;
-    gp.addEventListener("change", () => { location.href = `/mechanic/${encodeURIComponent(gp.value)}/?tab=${phase()}`; });
-  }
+  };
+  await fill();
+  gp.addEventListener("change", () => { location.href = `/mechanic/${encodeURIComponent(gp.value)}/?tab=${phase()}`; });
   const rp = $("rom-pick");
   let sets;
-  try { sets = await page.api("api/rom"); } catch (e) { return; }
+  try { sets = await page.api("api/rom"); } catch (e) { return fill; }
   const here = (sets.sets ?? []).filter((x) => x.here);
-  if (here.length < 2) return;
+  if (here.length < 2) return fill;
   for (const x of here) {
     const o = document.createElement("option");
     o.value = x.id;
@@ -316,4 +325,5 @@ async function pickers(page, phase) {
       rp.value = sets.set;
     }
   });
+  return fill;
 }

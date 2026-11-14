@@ -120,8 +120,16 @@ pub(crate) struct Running {
 /// A step that costs money or makes something public.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct Yes {
-    pub what: &'static str,
+    pub what: String,
     pub says: String,
+    /// The ask `gp_run` left for it (gp_mcp::asks), which the page's card
+    /// answers: its id, and `open` or `yes` (said yes, not used yet).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub game: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -150,6 +158,9 @@ pub(crate) struct Answer {
     pub running: Vec<Running>,
     pub waits_for_yes: Vec<Yes>,
     pub clue: Option<Clue>,
+    /// A count the agent's changes to the game raise, so the page knows
+    /// what it shows may be stale.
+    pub changes: u64,
     pub facts: Value,
 }
 
@@ -226,6 +237,11 @@ pub(crate) struct PageSignal {
     pub shown: u32,
 }
 
+/// Stage 1's step: the person says where their copy of the game is. The
+/// first screen says it in its own words already (serve's first_screen).
+pub(crate) const BRING_YOUR_COPY: &str =
+    "Tell your agent where your copy of the game is: a .nes file, or a .zip for an arcade game.";
+
 /// Everything the answer reads.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Facts {
@@ -257,6 +273,13 @@ pub(crate) struct Facts {
     /// Words the person typed on the page, newest last.
     pub notes: Vec<String>,
     pub page: Option<PageSignal>,
+    /// The asks `gp_run` left that wait for the person's yes, and the
+    /// yeses not used yet (gp_mcp::asks), of every game.
+    pub asks: Vec<Value>,
+    /// The agent's calls running now (gp_mcp::activity): what, in words.
+    pub agent_runs: Vec<(String, u64)>,
+    /// How many times the agent changed the game through gp_run.
+    pub changes: u64,
 }
 
 impl Facts {
@@ -536,6 +559,12 @@ pub(crate) fn answer(f: &Facts) -> Answer {
         .scores
         .as_ref()
         .map_or(0, |s| if s.stale { s.clips.max(1) } else { s.to_score });
+    for (what, _secs) in &f.agent_runs {
+        running.push(Running {
+            what: format!("your agent: {what}"),
+            look_again_s: 30,
+        });
+    }
     let scoring_now = f.background.on && (to_score > 0 || !f.background.jobs.is_empty());
     if scoring_now {
         let k = to_score.max(f.background.jobs.len() as u64);
@@ -567,11 +596,36 @@ pub(crate) fn answer(f: &Facts) -> Answer {
             .act(Act::Tab { tab: "refine" }),
         );
     }
-    // 2. A step that costs money or publishes.
+    // 2. A step that costs money or publishes: the agent's asks first.
+    for a in &f.asks {
+        let s = |k: &str| a[k].as_str().map(str::to_owned);
+        let says = s("says").unwrap_or_default();
+        waits.push(Yes {
+            what: s("needs").unwrap_or_default(),
+            says: says.clone(),
+            id: s("id"),
+            state: s("state"),
+            game: s("game"),
+        });
+        steps.push(if a["state"] == json!("open") {
+            step(
+                Who::Person,
+                format!("Your agent waits for your yes: {says} Press YES or NO on the card."),
+            )
+        } else {
+            step(
+                Who::Agent,
+                format!("You said yes, so your agent can go ahead: {says}"),
+            )
+        });
+    }
     if n == 11 {
         waits.push(Yes {
-            what: "publish",
+            what: "publish".into(),
             says: format!("Puts {t} online as a link. Anyone with the link can open it and play with their own copy of the game."),
+            id: None,
+            state: None,
+            game: None,
         });
         steps.push(step(
             Who::Person,
@@ -691,10 +745,7 @@ pub(crate) fn answer(f: &Facts) -> Answer {
             )
             .cli("gp progress --next --template GAME"),
         ),
-        1 => steps.push(step(
-            Who::Person,
-            "Tell your agent where your copy of the game is: a .nes file, or a .zip for an arcade game.",
-        )),
+        1 => steps.push(step(Who::Person, BRING_YOUR_COPY)),
         2 if f.roms.len() == 1 => steps.push(
             step(
                 Who::Agent,
@@ -763,6 +814,7 @@ pub(crate) fn answer(f: &Facts) -> Answer {
         running,
         waits_for_yes: waits,
         clue,
+        changes: f.changes,
         facts: json!({
             "title": f.title,
             "rom_found": f.rom_found,
@@ -945,7 +997,13 @@ pub(crate) fn text_of(a: &Answer) -> String {
         ));
     }
     for y in &a.waits_for_yes {
-        out.push(format!("Waits for your yes: {}", y.says));
+        match (&y.id, y.state.as_deref()) {
+            (Some(id), Some("yes")) => {
+                out.push(format!("Said yes, not used yet (ask {id}): {}", y.says));
+            }
+            (Some(id), _) => out.push(format!("Waits for your yes (ask {id}): {}", y.says)),
+            _ => out.push(format!("Waits for your yes: {}", y.says)),
+        }
     }
     if let Some(c) = &a.clue {
         out.push(format!("Clue: {}", c.says));
@@ -1140,6 +1198,19 @@ pub(crate) fn gather(
     };
     let mut f = Facts {
         games: all.clone(),
+        asks: gp_mcp::asks::pending(home),
+        agent_runs: gp_mcp::activity::running(home)
+            .iter()
+            .filter(|r| game.is_none_or(|g| r["game"].as_str().is_none_or(|x| x == g)))
+            .map(|r| {
+                (
+                    r["what"].as_str().unwrap_or("").to_owned(),
+                    gp_mcp::asks::now_ms().saturating_sub(r["started_ms"].as_u64().unwrap_or(0))
+                        / 1000,
+                )
+            })
+            .collect(),
+        changes: gp_mcp::activity::changes(home, None),
         ..Facts::default()
     };
     let (Some(g), Some(gd)) = (subject, games_dir) else {
@@ -1150,6 +1221,7 @@ pub(crate) fn gather(
     };
     let gdir = gd.join(&g);
     f.game = Some(g.clone());
+    f.changes = gp_mcp::activity::changes(home, Some(&g));
     let manifest: toml::Value = std::fs::read_to_string(gdir.join("template.toml"))
         .ok()
         .and_then(|t| toml::from_str(&t).ok())

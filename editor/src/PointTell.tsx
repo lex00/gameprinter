@@ -5,8 +5,8 @@
 // proposed change's pictures and accept and reject.
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { Api, Box, CaptureInput } from "./api";
-import { CHOICES, H, W, boxFrom, choiceWords, requestInput, screenPoint, statusWords, where, type PointJson, type RequestView } from "./point";
+import type { Api, Box } from "./api";
+import { CHOICES, H, W, boxFrom, requestInput, screenPoint, where, type PointJson } from "./point";
 
 /** A game screen with the pointing layer over it: active while paused. */
 export function ScreenPointer({ active, box, onBox, children, testid }: { active: boolean; box?: Box; onBox: (b: Box) => void; children: ReactNode; testid?: string }) {
@@ -52,18 +52,12 @@ export function TellPanel({
   recording,
   frame,
   box,
-  onSent,
-  after,
 }: {
   api: Api;
   run: string;
   recording?: string;
   frame: number;
   box?: Box;
-  /** Called with the request's number once it's sent. */
-  onSent?: (id: number) => void;
-  /** What happens after sending, said under the button. */
-  after?: string;
 }) {
   const [point, setPoint] = useState<PointJson>();
   const [error, setError] = useState<string>();
@@ -99,11 +93,9 @@ export function TellPanel({
     setError(undefined);
     try {
       const r = await api.captureInput(run, requestInput(point, choice, text));
-      const id = Number(String(r.input?.item ?? "").replace("request:", ""));
-      setSent(`Sent as request ${id}.`);
+      setSent(r.mechanic ? `Sent to your agent, in the talk on ${r.mechanic}. The answer shows there.` : "Sent to your agent.");
       setText("");
       setChoice(undefined);
-      if (id) onSent?.(id);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -146,99 +138,8 @@ export function TellPanel({
         <button type="button" disabled={!point || sending || (!choice && !text.trim())} onClick={() => void send()} data-testid="tell-send">
           tell the agent
         </button>{" "}
-        {sent && <span className="hint">{sent}</span>} {after && <span className="hint">{after}</span>}
+        {sent && <span className="hint">{sent}</span>}
       </p>
     </section>
-  );
-}
-
-/** The person's requests, newest first, each with its answers. */
-export function RequestList({
-  api,
-  run,
-  requests,
-  explaining,
-  watch,
-  send,
-}: {
-  api: Api;
-  run: string;
-  requests: Record<number, RequestView>;
-  explaining: number[];
-  watch: (recording: string, frame: number) => void;
-  send: (i: Omit<CaptureInput, "v" | "actor">) => void;
-}) {
-  const all = Object.values(requests).sort((a, b) => b.id - a.id);
-  if (!all.length) return null;
-  return (
-    <section className="requests" data-testid="requests">
-      <h2>{all.length === 1 ? "What you asked for" : `What you asked for (${all.length})`}</h2>
-      <ul>
-        {all.map((r) => {
-          const last = r.replies[r.replies.length - 1];
-          const busy = explaining.includes(r.id);
-          return (
-            <li key={r.id} data-testid="request">
-              <p>
-                <b>{r.label}</b> at frame {r.frame}
-                {choiceWords(r.choice) ? `: ${choiceWords(r.choice)}` : ""}
-                {r.text ? ` "${r.text}"` : ""}{" "}
-                <span className={`status ${r.status}`} data-testid="request-status">
-                  {last?.agent === "failed" && r.status === "waiting" ? "no agent is set up to answer" : statusWords(r.status, busy && !last, last?.agent === "working")}
-                </span>{" "}
-                <button className="link" onClick={() => watch(r.recording, r.frame)}>
-                  show me
-                </button>
-              </p>
-              {r.replies.map((x) => (
-                <div key={x.reply} className="reply" data-testid="request-reply">
-                  {(x.lines.length ? x.lines.slice(1) : [x.text]).map((l, i) => (
-                    <p key={i}>{l}</p>
-                  ))}
-                  {x.proposal && <Proposal api={api} run={run} item={x.proposal.item} kind={x.proposal.kind} decided={r.status === "accepted" || r.status === "rejected"} send={send} />}
-                </div>
-              ))}
-            </li>
-          );
-        })}
-      </ul>
-    </section>
-  );
-}
-
-/** A proposed change: the edit's pictures in both games' moments, and the person's decision. */
-function Proposal({ api, run, item, kind, decided, send }: { api: Api; run: string; item: string; kind: string; decided: boolean; send: (i: Omit<CaptureInput, "v" | "actor">) => void }) {
-  const [copy, seq] = item.split(":");
-  return (
-    <div className="proposal" data-testid="proposal">
-      {kind === "asset_edit" && copy && seq && (
-        <>
-          <figure>
-            <img src={api.captureEditPreview(run, copy, seq, "edit")} alt="the picture, before and after" data-testid="proposal-closeup" />
-            <figcaption>the picture, before and after</figcaption>
-          </figure>
-          <figure>
-            <img
-              src={api.captureEditPreview(run, copy, seq, "context")}
-              alt="the proposed look in the recorded moments, before and after"
-              onError={(e) => {
-                // An edit seen on no recorded frame has no such picture.
-                (e.currentTarget.parentElement as HTMLElement).hidden = true;
-              }}
-            />
-            <figcaption>the proposed look where the game shows it, before and after</figcaption>
-          </figure>
-        </>
-      )}
-      {kind === "sound_edit" && <p className="hint">A sound change: listen to it in the run's sound edits.</p>}
-      {!decided && (
-        <p>
-          <button onClick={() => send({ kind: "accept", item })} data-testid="proposal-accept">
-            keep it
-          </button>{" "}
-          <button onClick={() => send({ kind: "reject", item })}>no, undo it</button>
-        </p>
-      )}
-    </div>
   );
 }

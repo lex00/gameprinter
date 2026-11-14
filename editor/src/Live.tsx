@@ -9,7 +9,6 @@
 
 import { useEffect, useState } from "react";
 import { CAPTURE_FORMAT, type Api, type CaptureEvent, type CaptureInput, type CaptureRun, type EventSourceLike } from "./api";
-import { AssetEdits } from "./AssetEdits";
 import { HEADLINE, delta, emptyLive, fmt, fold, logLine, openGaps, openQuestions, wontModel, type LiveState } from "./livefold";
 import { MEANINGS } from "./phrase";
 import { emptyPlay, foldPlay, type PlayState } from "./playfold";
@@ -304,8 +303,6 @@ export function LiveBody({ state, run, api, send, open }: { state: LiveState; ru
           </section>
         );
       })}
-
-      <AssetEdits api={api} run={run} />
 
       {state.previewRound !== undefined && (
         <section className="preview">

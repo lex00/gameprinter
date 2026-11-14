@@ -425,37 +425,15 @@ export const CAPTURE_FORMAT = 1;
 export interface CaptureInput {
   v: 0 | 1;
   actor: "person" | "agent";
-  kind: "answer" | "pin" | "unpin" | "note" | "accept" | "reject" | "request";
+  kind: "answer" | "pin" | "unpin" | "note" | "request";
   question?: string;
   choice?: number;
   path?: string;
   text?: string;
-  /** For accept and reject: the sprite edit, `<copy>:<seq>`. */
+  /** In the reply to a request: `request:N`. */
   item?: string;
   /** For a request: the frame, the region in both games and the things there (docs/point-and-tell.md). */
   data?: Record<string, unknown>;
-}
-
-/** A sprite edit an agent told a run of (`GET /api/capture/{run}/edits`, docs/sprite-editing.md). */
-export interface AssetEdit {
-  item: string;
-  text?: string;
-  data: {
-    status: "proposed" | "placed" | "accepted" | "rejected" | "undone";
-    decided_by?: string | null;
-    entity: string;
-    /** A level tile kind's look instead of an entity's sprite: its name; entity is then empty. */
-    tile?: string | null;
-    slot: string;
-    frames?: string[];
-    ops?: string[];
-    prompt?: string | null;
-    pixels_changed?: number;
-    critic?: number | null;
-    checks?: { name: string; verdict: string; message: string }[];
-    previews?: { edit?: string; context?: string };
-    shots?: { row: number; pose: string; baseline: string; frame: number }[];
-  };
 }
 
 /** What the panel needs of the browser's EventSource; tests pass their own. */
@@ -685,7 +663,7 @@ export class Api {
   captureEvents(run: string, after: number, signal?: AbortSignal): Promise<{ run: string; events: CaptureEvent[] }> {
     return this.json(`/api/capture/${encodeURIComponent(run)}/events?after=${after}`, signal);
   }
-  captureInput(run: string, input: CaptureInput): Promise<{ inputs: number; input?: CaptureInput; decision?: Record<string, unknown>; decision_error?: string }> {
+  captureInput(run: string, input: CaptureInput): Promise<{ inputs?: number; input?: CaptureInput; mechanic?: string; turn?: number }> {
     return this.write("POST", `/api/capture/${encodeURIComponent(run)}/input`, input);
   }
   /** The run's events as server-sent events after `after` (`id` is each event's seq). */
@@ -697,20 +675,6 @@ export class Api {
   capturePoint(run: string, recording: string, frame: number, box: Box, signal?: AbortSignal): Promise<PointJson> {
     const r = `${box.x},${box.y},${box.w},${box.h}`;
     return this.json(`/api/capture/${encodeURIComponent(run)}/point?recording=${encodeURIComponent(recording)}&frame=${frame}&rect=${r}`, signal);
-  }
-  /** Starts `gp request explain` on request `n`; its reply arrives in the run's events. */
-  requestExplain(run: string, n: number): Promise<{ started: boolean }> {
-    return this.write("POST", `/api/capture/${encodeURIComponent(run)}/requests/${n}/explain`, {});
-  }
-  captureRequests(run: string): Promise<{ run: string; explaining: number[] }> {
-    return this.json(`/api/capture/${encodeURIComponent(run)}/requests`);
-  }
-  captureEdits(run: string): Promise<{ run: string; edits: AssetEdit[] }> {
-    return this.json(`/api/capture/${encodeURIComponent(run)}/edits`);
-  }
-  /** The URL of an edit's preview: `edit` (before, after, changed) or `context` (the recorded frames). */
-  captureEditPreview(run: string, copy: string, seq: string, which: "edit" | "context"): string {
-    return `${this.base}/api/capture/${encodeURIComponent(run)}/edits/${encodeURIComponent(copy)}/${encodeURIComponent(seq)}/${which}`;
   }
   capturePreview(run: string, file: string): string {
     // The preview reads its build from beside the page (`files=here`), as
@@ -736,7 +700,7 @@ export class Api {
     return this.json(`/api/capture/${encodeURIComponent(run)}/refine?recording=${encodeURIComponent(recording)}`);
   }
   /** Starts the loop, its first window at the first split at or after the original's frame `from`. */
-  captureRefineStart(run: string, recording: string, from?: number, scope?: { moment?: { kind: string; n: number }; mechanic?: string; window?: number; ask?: boolean }): Promise<{ started: boolean; why?: string }> {
+  captureRefineStart(run: string, recording: string, from?: number, scope?: { moment?: { kind: string; n: number }; mechanic?: string; window?: number }): Promise<{ started: boolean; why?: string }> {
     return this.write("POST", `/api/capture/${encodeURIComponent(run)}/refine`, { recording, from, ...scope });
   }
   captureRefineStop(run: string): Promise<{ stopping: boolean }> {

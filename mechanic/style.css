@@ -42,14 +42,27 @@ header { display: flex; gap: 16px; align-items: baseline; padding: 10px 16px; bo
 #state { color: var(--muted); flex-basis: 100%; }
 #state:empty { display: none; }
 /* The status line (next.js): where the port stands, the next step and its
-   button, or a clue; one line under the header on every tab. */
-#next-line { flex-basis: 100%; display: flex; gap: 12px; align-items: baseline; min-width: 0; font-size: 13px; }
+   button, or a clue, under the header on every tab. Its sentences wrap onto
+   more lines rather than being cut; when the width is short the next step
+   starts on a line of its own. next.js holds the tallest height it has had
+   at this width, so a poll doesn't move the game pane up and down. */
+#next-line { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; min-width: 0; font-size: 13px; line-height: 1.35; }
 #next-line[hidden] { display: none; }
-#next-line .nx-stands, #next-line .nx-clue, #next-line .nx-next { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#next-line .nx-stands { color: var(--muted); flex: 1 1 auto; }
-#next-line .nx-clue { color: var(--nes-28); flex: 1 1 auto; }
-#next-line .nx-next { flex: 0 1 auto; max-width: 60%; }
+#next-line .nx-stands, #next-line .nx-clue, #next-line .nx-next, #next-line .nx-run { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+#next-line .nx-stands { color: var(--muted); flex: 1 1 26ch; }
+#next-line .nx-clue { color: var(--nes-28); flex: 1 1 26ch; }
+#next-line .nx-next { flex: 1 1 34ch; }
+#next-line .nx-run { color: var(--nes-28); flex: 1 1 24ch; }
+#next-line .nx-changed { color: var(--nes-28); flex: 0 0 auto; }
 #next-line .nx-who { color: var(--nes-21); font-weight: 700; }
+#asks { flex-basis: 100%; display: flex; flex-direction: column; gap: 6px; }
+#asks[hidden] { display: none; }
+#asks .ask-card { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; border: 2px solid var(--nes-28); padding: 6px 10px; font-size: 13px; }
+#asks .ask-head { color: var(--nes-28); font-weight: 700; }
+#asks .ask-says { flex: 1 1 30ch; min-width: 0; }
+#asks button { font: bold 12px var(--mono); background: var(--nes-0f, #000); color: var(--fg); border: 2px solid var(--line); padding: 1px 12px; cursor: pointer; }
+#asks button.ask-yes { border-color: var(--nes-2a, #4cdc48); }
+#asks button:disabled { opacity: 0.5; cursor: default; }
 #next-line button { font: bold 12px var(--mono); background: var(--nes-0f, #000); color: var(--fg); border: 2px solid var(--line); padding: 1px 8px; cursor: pointer; flex: 0 0 auto; align-self: center; }
 /* The tabs (from game-printer's refine.css, which held them). */
 #tabs { display: flex; gap: 0; padding: 0 16px 10px; }

@@ -45,67 +45,6 @@ pub enum JobSpec {
         #[serde(default)]
         jobs: Option<usize>,
     },
-    /// Watch a capture run (docs/capture-live.md): start it if `start` is
-    /// given, then run a round each time an answer or pin arrives, until a
-    /// steady state. Runs on a thread of its own, not a build worker, since
-    /// it mostly waits for a person.
-    Capture {
-        /// The run's name under `$GP_HOME/capture/`.
-        run: String,
-        #[serde(default)]
-        start: Option<CaptureStart>,
-        /// Milliseconds without a new input before a round starts.
-        #[serde(default)]
-        debounce_ms: Option<u64>,
-        #[serde(default)]
-        max_rounds: Option<u32>,
-        /// Seconds to wait for an input while questions are open.
-        #[serde(default)]
-        idle_s: Option<u64>,
-    },
-}
-
-/// What a capture job starts its run from, as `gp capture start` takes it.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CaptureStart {
-    /// A template under templates/ or a folder holding model.toml.
-    pub model: String,
-    #[serde(default)]
-    pub rom: Option<std::path::PathBuf>,
-    #[serde(default)]
-    pub baselines: Option<std::path::PathBuf>,
-    #[serde(default)]
-    pub recordings: Vec<String>,
-    #[serde(default)]
-    pub preview: bool,
-    #[serde(default)]
-    pub with: Vec<String>,
-}
-
-impl CaptureStart {
-    /// `gp capture start`'s arguments for run `run`.
-    pub fn args(&self, run: &str) -> Vec<String> {
-        let mut a = vec!["capture".into(), "start".into(), self.model.clone()];
-        if let Some(r) = &self.rom {
-            a.extend(["--rom".into(), r.to_string_lossy().into_owned()]);
-        }
-        if let Some(b) = &self.baselines {
-            a.extend(["--baselines".into(), b.to_string_lossy().into_owned()]);
-        }
-        if !self.recordings.is_empty() {
-            a.push("--recording".into());
-            a.extend(self.recordings.iter().cloned());
-        }
-        if self.preview {
-            a.push("--preview".into());
-        }
-        for w in &self.with {
-            a.extend(["--with".into(), w.clone()]);
-        }
-        a.extend(["--run".into(), run.into()]);
-        a
-    }
 }
 
 impl JobSpec {
@@ -113,13 +52,11 @@ impl JobSpec {
         match self {
             Self::Build { .. } => "build",
             Self::Scenarios { .. } => "scenarios",
-            Self::Capture { .. } => "capture",
         }
     }
     pub fn copy(&self) -> &str {
         match self {
             Self::Build { copy, .. } | Self::Scenarios { copy, .. } => copy,
-            Self::Capture { run, .. } => run,
         }
     }
 }

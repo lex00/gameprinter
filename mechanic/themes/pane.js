@@ -85,7 +85,7 @@ export function mountThemes(body, page) {
     s.id = "th-kit";
     s.append(el("h3", "", "The game's theme kit"));
     if (!k.file) {
-      s.append(el("p", "muted", "No kit yet (games/GAME/themes/kit/kit.toml)."));
+      s.append(el("p", "muted", "No kit yet. Press WRITE THE KIT, or ask your agent to write it."));
     } else {
       s.append(el("p", "", `${k.art.length} art slots, ${k.sound.length} sound roles, from ${k.file}.`));
       if (k.current === false) s.append(el("p", "bad", "The kit's slot fingerprint isn't its model's: the model changed since. WRITE THE KIT writes it again here."));
@@ -112,7 +112,7 @@ export function mountThemes(body, page) {
       d2.append(t2);
       s.append(d2);
     }
-    s.append(btn("WRITE THE KIT", "gp theme kit with your ROM: the kit here, its local part under $GP_HOME/work/theme-kits", () => run("kit")));
+    s.append(btn("WRITE THE KIT", "Writes the game's theme kit from your copy of the game: what each picture is and its size. The parts from your copy stay on this computer", () => run("kit")));
     p.append(s);
   }
 
@@ -152,8 +152,8 @@ export function mountThemes(body, page) {
     s.append(el("p", "muted", "A style card says how a theme looks, apart from any game. SHEETS writes the starting grids and prompts for an image model. GENERATE is a dry run: it lists the calls and their cost and makes none."));
     const r1 = el("p");
     r1.append(el("span", "", "style "), sel, document.createTextNode(" "),
-      btn("SHEETS", "gp theme sheet", () => run("sheet", { style: sel.value })), document.createTextNode(" "),
-      btn("GENERATE (DRY RUN)", "gp theme generate --dry-run: no call, no cost", () => run("generate", { style: sel.value, sheets: src.value || undefined })));
+      btn("SHEETS", "Makes the starting sheets for a new theme in the style chosen", () => run("sheet", { style: sel.value })), document.createTextNode(" "),
+      btn("GENERATE (DRY RUN)", "Says what drawing the pictures would cost. Nothing is drawn and nothing is paid", () => run("generate", { style: sel.value, sheets: src.value || undefined })));
     s.append(r1);
     s.append(el("p", "muted", "Fit art made already: a folder of filled sheets (sheets.json beside them) or of art by slot id. The fitted theme is checked when it's written."));
     const src = el("input");
@@ -167,7 +167,7 @@ export function mountThemes(body, page) {
     nm.value = "fit";
     const r2 = el("p");
     r2.append(kind, document.createTextNode(" "), src, document.createTextNode(" "), nm, document.createTextNode(" "),
-      btn("FIT", "gp theme fit, then gp theme check --original on it", () => run("fit", { [kind.value]: src.value, name: nm.value })));
+      btn("FIT", "Fits the finished pictures to the kit, then checks them", () => run("fit", { [kind.value]: src.value, name: nm.value })));
     s.append(r2);
     const dir = el("input");
     dir.placeholder = "a theme folder (holding theme.toml)";
@@ -228,8 +228,8 @@ export function mountThemes(body, page) {
     s.append(el("p", "muted small", t.dir));
     const bar = el("p");
     bar.append(
-      btn("CHECK", "gp theme check --original: the readability check, the Style checks, the geometry and the originality check", () => run("check", { theme: t.key })), document.createTextNode(" "),
-      btn("PUBLISH (DRY RUN)", "gp theme publish --dry-run: every check and the package scan, then what would be published; nothing is", () => run("publish", { theme: t.key })), document.createTextNode(" "),
+      btn("CHECK", "Checks the theme: that it reads well, keeps to its style, keeps every size and hit box, and holds nothing from the original", () => run("check", { theme: t.key })), document.createTextNode(" "),
+      btn("PUBLISH (DRY RUN)", "Runs every check and says what would be published. Nothing is published", () => run("publish", { theme: t.key })), document.createTextNode(" "),
       btn("ROUND", "A refinement round on this theme's marks: fit again when its art is known, then check", () => round(t)),
     );
     s.append(bar);

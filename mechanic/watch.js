@@ -14,9 +14,22 @@ function el(tag, cls, text) {
   return e;
 }
 
+/** A log line's time of day in the person's own time zone: the line keeps
+ * it in UTC ("HH:MM:SS"), today's or, when that is still to come, the day
+ * before's. */
+function localAt(at) {
+  const m = /^(\d\d):(\d\d):(\d\d)$/.exec(at ?? "");
+  if (!m) return at ?? "";
+  const now = new Date();
+  let t = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), +m[1], +m[2], +m[3]);
+  if (t > now.getTime() + 60000) t -= 86400000;
+  return new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
 function timed(line) {
   const li = el("li");
-  li.append(el("span", "at", line.at ?? ""), document.createTextNode(line.text ?? ""));
+  if (line.command) li.title = line.command;
+  li.append(el("span", "at", localAt(line.at)), document.createTextNode(line.text ?? ""));
   return li;
 }
 
@@ -35,7 +48,7 @@ async function refresh() {
   status.innerHTML = "";
   if (w.status) {
     status.className = "";
-    status.append(el("span", "at", w.status.at ?? ""), document.createTextNode(w.status.text ?? ""));
+    status.append(el("span", "at", localAt(w.status.at)), document.createTextNode(w.status.text ?? ""));
   } else {
     status.className = "muted";
     status.textContent = "Nothing yet. What your agent is doing shows here.";

@@ -1,6 +1,6 @@
 //! `assets_edit` on the made-up game (crate::testgame): ops placed with
-//! assets_place's checks, the history and undo, the recorded-evidence gate
-//! and the note to a live capture run. No game data and no `gp` binary.
+//! assets_place's checks, the history and undo, the recorded-evidence gate.
+//! No game data and no `gp` binary.
 
 use std::fs;
 
@@ -168,39 +168,6 @@ fn a_sprite_the_model_doesnt_know_is_refused_with_what_is_missing() {
     assert_eq!(missing, ["drawn", "evidence"], "{r}");
     assert!(r["error"].as_str().unwrap().contains("gp capture"), "{r}");
     assert!(!f.config.work.join("copy/assets").exists());
-}
-
-#[test]
-fn a_placed_edit_is_told_to_a_live_capture_run() {
-    let f = Fixture::new();
-    let run = f.config.home.join("capture/live");
-    fs::create_dir_all(&run).unwrap();
-    fs::write(run.join("run.json"), "{}").unwrap();
-    let (r, err) = f.call(json!({
-        "copy": "copy", "entity": "hero", "ops": edit_ops(), "run": "live",
-    }));
-    assert!(!err, "{r}");
-    let text = fs::read_to_string(run.join("inputs.ndjson")).unwrap();
-    let line: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
-    assert_eq!(line["actor"], "agent");
-    assert_eq!(line["kind"], "asset_edit");
-    assert_eq!(line["item"], "copy:1");
-    assert_eq!(line["data"]["status"], "placed");
-    assert!(line["data"]["previews"]["edit"].is_string(), "{line}");
-    assert!(
-        line["text"]
-            .as_str()
-            .unwrap()
-            .starts_with("edit 1 placed: hero's sprite (base)"),
-        "{line}"
-    );
-    let (r, err) = f.call(json!({
-        "copy": "copy", "entity": "hero", "ops": edit_ops(), "run": "nope",
-    }));
-    assert!(
-        err && r["error"].as_str().unwrap().contains("no capture run"),
-        "{r}"
-    );
 }
 
 #[test]

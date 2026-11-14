@@ -1,10 +1,9 @@
-//! `moments` and `refine_moment` (docs/point-and-tell.md, "Moments in
-//! words"): the game's own moments in a capture run's recording (jumps,
-//! landings, deaths, lives lost, counter changes, level changes, with what
-//! the model does at each), found by what the person said ("the very first
-//! jump", "this jump" with a box on a paused one), and the refinement loop
-//! scoped to one, asked for so the person's workspace starts it and shows
-//! it beside the two games.
+//! `moments` (docs/point-and-tell.md, "Moments in words"): the game's own
+//! moments in a recording (jumps, landings, deaths, lives lost, counter
+//! changes, level changes, with what the model does at each), found by
+//! what the person said ("the very first jump", "this jump" with a box on
+//! a paused one). `gp model refine --lockstep --clip ID --moment KIND:N`
+//! refines one.
 
 use std::path::{Path, PathBuf};
 
@@ -19,10 +18,11 @@ use crate::{Config, Reply};
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MomentsArgs {
-    /// The capture run the person is working in.
+    /// The game, by its folder's name in the games checkout (donkey-kong).
+    /// No capture run is needed.
     pub run: String,
-    /// The recording they're watching, by the name the request gives it
-    /// (default: the run's first).
+    /// The recording the person is watching, by the name the page gives it
+    /// (a corpus clip, a free play clip or a store recording).
     #[serde(default)]
     pub recording: Option<String>,
     /// What they said, to find the moment it names: "the very first jump",
@@ -38,93 +38,60 @@ pub struct MomentsArgs {
     pub kind: Option<String>,
 }
 
-#[derive(Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RefineMomentArgs {
-    pub run: String,
-    #[serde(default)]
-    pub recording: Option<String>,
-    /// The moment's kind: jump, landing, death, life_lost, counter or level.
-    pub kind: String,
-    /// Its number among the recording's moments of that kind, from 1.
-    pub n: usize,
+/// Where a game's moments are kept by recording: beside the page's own
+/// cache of the game (`$GP_HOME/work/serve/GAME/moments/`), which gp
+/// serve's moments route writes.
+pub fn kept_file(home: &Path, game: &str, recording: &str) -> PathBuf {
+    home.join("work")
+        .join("serve")
+        .join(game)
+        .join("moments")
+        .join(format!("{recording}.json"))
 }
 
-fn run_dir(config: &Config, run: &str) -> Result<PathBuf, String> {
-    let dir = gp_capture::run_dir(&config.home, run).map_err(|e| e.to_string())?;
-    if !dir.join("run.json").is_file() {
-        return Err(format!("there's no capture run `{run}`"));
+/// A game's moments in a recording, with no capture run: the copy the
+/// page keeps, else found by the page's server when gp serve runs for the
+/// home, else found now with `gp interp moments` when the server knows the
+/// ROM (`gp mcp --rom`).
+fn game_moments(config: &Config, game: &str, recording: Option<&str>) -> Result<Value, String> {
+    if !crate::asks::game_ok(game) {
+        return Err(format!("`{game}` isn't a game's folder name"));
     }
-    Ok(dir)
-}
-
-fn run_json(dir: &Path) -> Result<Value, String> {
-    let b = std::fs::read(dir.join("run.json")).map_err(|e| format!("run.json: {e}"))?;
-    serde_json::from_slice(&b).map_err(|e| format!("run.json: {e}"))
-}
-
-fn recording_of(dir: &Path, given: Option<&str>) -> Result<String, String> {
-    if let Some(r) = given {
-        if r.is_empty()
-            || !r
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        {
-            return Err(format!("`{r}` isn't a recording name"));
-        }
-        return Ok(r.to_owned());
+    let recording = recording.ok_or(
+        "name the recording the person is watching (recording): a corpus clip, a free play clip or a store recording",
+    )?;
+    if recording.is_empty()
+        || !recording
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return Err(format!("`{recording}` isn't a recording name"));
     }
-    let rj = run_json(dir)?;
-    rj["recordings"][0]
-        .as_str()
-        .map(str::to_owned)
-        .or_else(|| {
-            dir.join("input.log")
-                .is_file()
-                .then(|| "session".to_owned())
-        })
-        .ok_or_else(|| "name the recording the person is watching".to_owned())
-}
-
-/// The run's moments in the recording: the copy the workspace keeps in
-/// `moments/`, else found now with `gp interp moments` and kept there.
-fn load(config: &Config, dir: &Path, recording: &str) -> Result<Value, String> {
-    let file = dir.join("moments").join(format!("{recording}.json"));
+    let file = kept_file(&config.home, game, recording);
     if let Some(v) = std::fs::read(&file)
         .ok()
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
     {
         return Ok(v);
     }
-    let rj = run_json(dir)?;
-    let model = if dir.join("model").join(gp_model::MODEL_FILE).is_file() {
-        dir.join("model")
-    } else {
-        PathBuf::from(rj["model"].as_str().unwrap_or_default())
+    if let Some(v) = from_page(config, game, recording) {
+        return v;
+    }
+    let (Some(rom), Some(games)) = (&config.rom, &config.games) else {
+        return Err(format!(
+            "no moments are kept for {recording} yet, and the page isn't running to find them: ask the person to open {game}'s page (gp serve), or start gp mcp with --rom"
+        ));
     };
-    let rom = rj["rom"]
-        .as_str()
-        .ok_or("the run was started without a ROM, so it has no moments")?;
-    let mut args: Vec<std::ffi::OsString> = vec![
+    let model = games.join(game);
+    let args: Vec<std::ffi::OsString> = vec![
         "interp".into(),
         "moments".into(),
         model.into(),
         "--rom".into(),
         rom.into(),
+        "--recording".into(),
+        recording.into(),
     ];
-    let log = if recording == "session" {
-        dir.join("input.log")
-    } else {
-        dir.join("inputs").join(format!("{recording}.log"))
-    };
-    if log.is_file() {
-        args.extend(["--input".into(), log.into()]);
-    } else {
-        args.extend(["--recording".into(), recording.into()]);
-    }
-    if dir.join("assets").is_dir() {
-        args.extend(["--assets".into(), dir.join("assets").into()]);
-    }
     let refs: Vec<&std::ffi::OsStr> = args.iter().map(|a| a.as_os_str()).collect();
     let (code, mut j) = crate::run_gp(config, &refs)?;
     if code != 0 {
@@ -136,6 +103,39 @@ fn load(config: &Config, dir: &Path, recording: &str) -> Result<Value, String> {
     }
     let _ = std::fs::write(&file, serde_json::to_vec(&j).unwrap_or_default());
     Ok(j)
+}
+
+/// The moments from gp serve's route, when gp serve runs for the home.
+fn from_page(config: &Config, game: &str, recording: &str) -> Option<Result<Value, String>> {
+    use std::io::{Read as _, Write as _};
+    if !crate::asks::page_served(&config.home) {
+        return None;
+    }
+    let page: Value =
+        serde_json::from_slice(&std::fs::read(crate::asks::page_file(&config.home)).ok()?).ok()?;
+    let port = page["port"].as_u64().filter(|p| *p > 0)?;
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], u16::try_from(port).ok()?));
+    let mut c =
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2)).ok()?;
+    let _ = c.set_read_timeout(Some(std::time::Duration::from_secs(300)));
+    write!(
+        c,
+        "GET /api/capture/{game}/moments?recording={recording} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    )
+    .ok()?;
+    let mut out = Vec::new();
+    c.read_to_end(&mut out).ok()?;
+    let text = String::from_utf8_lossy(&out);
+    let (head, body) = text.split_once("\r\n\r\n")?;
+    let v: Value = serde_json::from_str(body.trim()).ok()?;
+    Some(if head.starts_with("HTTP/1.1 200") {
+        Ok(v)
+    } else {
+        Err(format!(
+            "the page couldn't find the moments: {}",
+            v["error"].as_str().unwrap_or(body)
+        ))
+    })
 }
 
 /// A moment back from its JSON, for [`find`].
@@ -193,9 +193,8 @@ fn line(v: &Value) -> String {
 }
 
 pub fn moments(config: &Config, a: MomentsArgs) -> Result<Reply, String> {
-    let dir = run_dir(config, &a.run)?;
-    let recording = recording_of(&dir, a.recording.as_deref())?;
-    let j = load(config, &dir, &recording)?;
+    let j = game_moments(config, &a.run, a.recording.as_deref())?;
+    let recording = j["recording"].as_str().unwrap_or_default().to_owned();
     let all: Vec<Value> = j["moments"].as_array().cloned().unwrap_or_default();
     let list: Vec<&Value> = all
         .iter()
@@ -236,53 +235,5 @@ pub fn moments(config: &Config, a: MomentsArgs) -> Result<Reply, String> {
         "found": found.as_ref().map(|v| json!({"kind": v["kind"], "n": v["n"], "line": line(v), "moment": v})),
         "lines": lines,
         "more": list.len().saturating_sub(40),
-    })))
-}
-
-pub fn refine_moment(config: &Config, a: RefineMomentArgs) -> Result<Reply, String> {
-    if !KINDS.contains(&a.kind.as_str()) {
-        return Err(format!(
-            "a kind of moment is one of {}, not `{}`",
-            KINDS.join(", "),
-            a.kind
-        ));
-    }
-    if a.n == 0 {
-        return Err("moments are numbered from 1".into());
-    }
-    let dir = run_dir(config, &a.run)?;
-    let recording = recording_of(&dir, a.recording.as_deref())?;
-    let j = load(config, &dir, &recording)?;
-    let m = j["moments"]
-        .as_array()
-        .and_then(|ms| {
-            ms.iter()
-                .find(|v| v["kind"] == a.kind.as_str() && v["n"] == a.n as u64)
-        })
-        .cloned()
-        .ok_or_else(|| format!("the recording has no {} {}", a.kind, a.n))?;
-    if m["mechanic"].is_null() {
-        return Err(format!(
-            "no mechanic owns {} moments, so there are no numbers to refine for it",
-            a.kind
-        ));
-    }
-    // The workspace starts it (POST /api/capture/{run}/refine with ask):
-    // one loop a run at a time, shown beside the two games.
-    let ask =
-        json!({"recording": recording, "moment": {"kind": a.kind, "n": a.n}, "asked_by": "agent"});
-    let file = dir.join("refine").join("ask.json");
-    std::fs::create_dir_all(dir.join("refine")).map_err(|e| e.to_string())?;
-    std::fs::write(&file, serde_json::to_vec_pretty(&ask).unwrap_or_default())
-        .map_err(|e| e.to_string())?;
-    Ok(Reply::ok(json!({
-        "asked": true,
-        "moment": line(&m),
-        "mechanic": m["mechanic"],
-        "frames": m["focus"],
-        "says": format!(
-            "Asked to refine {} {}: the person's workspace starts it and shows it beside the two games, trying only {}'s numbers in frames {} to {}, then checking the value on every other {}.",
-            a.kind, a.n, m["mechanic"].as_str().unwrap_or(""), m["focus"]["from"], m["focus"]["to"], a.kind
-        ),
     })))
 }

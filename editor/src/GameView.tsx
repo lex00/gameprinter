@@ -16,7 +16,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Api, CaptureInput, GameWords, StartState } from "./api";
 import type { LiveState } from "./livefold";
 import { openGaps, openQuestions } from "./livefold";
-import { AssetEdits } from "./AssetEdits";
 import { LockstepPanel } from "./Lockstep";
 import { LockCurve } from "./CurveChart";
 import { ScreenBoxes } from "./ScreenBoxes";
@@ -28,7 +27,7 @@ import { momentRefinePhase } from "./refinefold";
 import { ScenariosSection } from "./Scenarios";
 import { type DriftAt, type Focus, type Lockstep, type StartPhase, driftAt, driftWords, firstFocus, focusMisses, focusWords, missLine, seconds, startPhase } from "./lockfold";
 import type { RefineState } from "./refinefold";
-import { RequestList, ScreenPointer, TellPanel } from "./PointTell";
+import { ScreenPointer, TellPanel } from "./PointTell";
 import { isPauseKey } from "./point";
 import type { Box } from "./api";
 import { NesPlayer } from "./nesplayer";
@@ -147,10 +146,9 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
   const stillQueue = useRef<Promise<unknown>>(Promise.resolve());
   const rec = recording ?? start.recording;
   const total = lines.length;
-  // Pause and point (docs/point-and-tell.md): the box on the paused frame,
-  // and the requests whose explanation was asked for and hasn't come.
+  // Pause and point: the box on the paused frame. What the person says
+  // about it goes to their agent as a turn in the mechanic's talk.
   const [box, setBox] = useState<Box>();
-  const [explainAsked, setExplainAsked] = useState<number[]>([]);
   // Bumped when the refinement loop changes the model, so the lockstep is measured again.
   const [modelRound, setModelRound] = useState(0);
   const paused = !playing && total > 0;
@@ -382,22 +380,6 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
     return () => window.removeEventListener("keydown", kd);
   }, [total]);
   useEffect(() => setBox(undefined), [frame, rec, playing]);
-  const requests = live.requests ?? {};
-  // An agent's reply may have asked for a loop on a moment ("refine the
-  // very first jump"): start what it asked for, and show it.
-  const replies = Object.values(requests).reduce((n, r) => n + r.replies.length, 0);
-  useEffect(() => {
-    if (!replies || !rec) return;
-    api
-      .captureRefineStart(run, rec, undefined, { ask: true })
-      .then((r) => r.started && setRefineKick((n) => n + 1))
-      .catch(() => undefined);
-  }, [replies]); // eslint-disable-line react-hooks/exhaustive-deps
-  const explaining = explainAsked.filter((id) => !requests[id]?.replies.length);
-  const sentRequest = (id: number) => {
-    setExplainAsked((a) => [...a, id]);
-    api.requestExplain(run, id).catch((e: Error) => setError(e.message));
-  };
 
   const watch = (name: string | undefined, from: number, to: number) => {
     if (name && name !== rec) setRecording(name);
@@ -595,23 +577,7 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
       {g?.rom && total > 0 && <LockCurve ls={ls} frame={frame} />}
       {g?.rom && total > 0 && <RefinePanel api={api} run={run} words={g} recording={rec} frame={frame} paused={paused} seek={(f) => (setPlaying(false), setFrame(f))} watch={(f, t) => watch(rec, f, t)} changed={() => setModelRound((n) => n + 1)} send={send} onState={setRefine} kick={refineKick} />}
       {g?.rom && total > 0 && <ScenariosSection api={api} run={run} recording={rec} preview={!!g?.preview} onFocus={(from, to) => setPicked({ from, to })} seek={(f) => (setPlaying(false), setFrame(f))} paused={paused ? frame : undefined} />}
-      {paused && <TellPanel api={api} run={run} recording={rec} frame={frame} box={box} onSent={sentRequest} after="The agent looks at what the original does there; the answer shows below." />}
-      <RequestList
-        api={api}
-        run={run}
-        requests={requests}
-        explaining={explaining}
-        watch={(name, f) => {
-          setPlaying(false);
-          if (name && name !== rec) setRecording(name);
-          setFrame(f);
-        }}
-        send={send}
-      />
-
-      {/* An agent's sprite edits still to decide, beside the two games: each
-          one's recorded moments play both games there (docs/sprite-editing.md). */}
-      <AssetEdits api={api} run={run} plain watch={(baseline, f) => watch(g?.recordings.some((r) => r.name === baseline) ? baseline : rec, f, f)} />
+      {paused && <TellPanel api={api} run={run} recording={rec} frame={frame} box={box} />}
 
       {/* Capture's questions are about the whole run, not the stretch in
           focus, so they wait folded away; the questions about the stretch

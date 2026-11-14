@@ -574,16 +574,6 @@ ul.variants {
 .live .preview-frame { width: 384px; height: 360px; overflow: hidden; }
 .live .preview-frame iframe { border: 0; transform: scale(0.5); transform-origin: 0 0; }
 
-/* Sprite edits in the live panel (AssetEdits.tsx). */
-.asset-edit { border: 1px solid #888; border-radius: 4px; padding: 0.4em; margin: 0.4em 0; }
-.asset-edit.proposed, .asset-edit.placed { border-color: #db3; }
-.asset-edit.accepted { border-color: #3a7; }
-.asset-edit.rejected, .asset-edit.undone { opacity: 0.6; }
-.asset-edit img { image-rendering: pixelated; max-width: 100%; display: block; }
-.asset-edit .shot { display: inline-block; margin-right: 0.6em; font-size: 0.8em; }
-.asset-edit .checks .warn { color: #b80; }
-.asset-edit .checks .fail { color: #d44; }
-
 /* The play panel (docs/show.md). */
 .play-panel {
   border: 1px solid #888;
@@ -712,7 +702,7 @@ button.link { background: none; border: 0; color: var(--accent); padding: 0; cur
 .screen-wrap.pointing .game-screen, .screen-wrap.pointing .play-screen { outline: 2px solid var(--changed); }
 .point-layer { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
 .point-box { fill: rgba(245, 215, 110, 0.18); stroke: var(--changed); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
-.tell, .requests { max-width: 1100px; margin: 10px 0; }
+.tell { max-width: 1100px; margin: 10px 0; }
 .tell { border: 1px solid var(--changed); border-radius: 4px; padding: 8px 10px; background: var(--panel); }
 .tell .pointed { font-size: 15px; margin: 0 0 6px; }
 .tell textarea { width: 100%; box-sizing: border-box; font: inherit; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 6px; }
@@ -720,15 +710,7 @@ button.link { background: none; border: 0; color: var(--accent); padding: 0; cur
 .choice { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 12px; padding: 3px 10px; cursor: pointer; }
 .choice.on { border-color: var(--changed); color: var(--changed); }
 .tell-hint { max-width: 1100px; font-size: 14px; }
-.requests h2 { font-size: 14px; color: var(--text); }
-.requests ul { list-style: none; padding: 0; margin: 0; }
-.requests li { border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; margin: 6px 0; }
-.requests li > p { margin: 0 0 4px; font-size: 14px; }
-.reply { border-left: 3px solid var(--accent); padding-left: 8px; margin: 6px 0 0; }
-.reply p { margin: 0 0 4px; }
 .status { color: var(--muted); }
-.status.needs_mechanic, .status.proposed { color: var(--changed); }
-.proposal img { image-rendering: pixelated; max-width: 100%; }
 .explainer { border: 1px solid var(--accent); border-radius: 4px; padding: 8px 12px; background: var(--panel); }
 .explainer ul { margin: 4px 0 8px; padding-left: 18px; }
 .details { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 8px; }

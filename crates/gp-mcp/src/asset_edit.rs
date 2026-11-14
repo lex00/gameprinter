@@ -17,10 +17,7 @@
 //! sequence number and a status in the history (`crate::edit_log`): undo
 //! goes back any number of steps, or undoes one older edit whose tiles no
 //! later edit touched; redo puts undone edits back; accept and reject
-//! decide a proposal or a placed edit. A call that names a live capture
-//! `run` tells it of each change as an `asset_edit` input, which the
-//! workspace's live panel shows with its previews and its accept and
-//! reject buttons.
+//! decide a proposal or a placed edit.
 //!
 //! Everything here is deterministic and local; an image model would be a
 //! `Generator` behind `assets_generate`, and an op that calls one (redraw a
@@ -160,11 +157,6 @@ pub struct EditArgs {
     pub prompt: Option<String>,
     #[serde(default)]
     pub author: Option<String>,
-    /// A live capture run (`$GP_HOME/capture/<run>/`) to tell: each edit,
-    /// proposal, undo and decision is appended to its inputs as an
-    /// `asset_edit` line, which the workspace's live panel shows.
-    #[serde(default)]
-    pub run: Option<String>,
 }
 
 fn yes() -> bool {
@@ -389,20 +381,6 @@ pub fn frames_png(pairs: &[(&Pic, &Pic)], colors: [[u8; 3]; 4]) -> Vec<u8> {
     out
 }
 
-/// A live capture run's directory, which must exist.
-pub fn run_dir(config: &Config, run: &str) -> Result<std::path::PathBuf, String> {
-    if !crate::is_source_name(run) {
-        return Err(format!("`{run}` isn't a capture run name"));
-    }
-    let dir = config.home.join("capture").join(run);
-    if !dir.join("run.json").is_file() {
-        return Err(format!(
-            "there's no capture run `{run}` under $GP_HOME/capture; start one with gp capture"
-        ));
-    }
-    Ok(dir)
-}
-
 /// One frame of the sprite set as a target the tiles-and-width tools take
 /// (the critic, copy): the entity's, with a grid of the frame's size in
 /// place of the sprite's own. A frame laid out otherwise (flips, places)
@@ -613,66 +591,6 @@ pub(crate) fn write_previews(
     Ok(out)
 }
 
-/// Tells a live capture run of an edit's status, as an agent `asset_edit`
-/// input (docs/formats/capture-events.md): the item, a line for the log,
-/// and in `data` what the live panel shows and what a decision needs to
-/// find the copy (the server's paths).
-pub fn announce(
-    config: &Config,
-    run: &str,
-    copy: &str,
-    e: &Entry,
-    extra: &Value,
-) -> Result<String, String> {
-    let dir = run_dir(config, run)?;
-    let mut data = json!({
-        "copy": copy,
-        "seq": e.seq,
-        "status": e.status.name(),
-        "entity": e.entity,
-        "tile": e.tile,
-        "slot": e.slot,
-        "frames": e.frames,
-        "ops": e.op_names(),
-        "prompt": e.prompt,
-        "decided_by": e.decided_by,
-        "server": {
-            "work": config.work,
-            "repo": config.repo,
-            "home": config.home,
-            "assets": config.assets,
-            "rom": config.rom,
-        },
-    });
-    if let (Some(d), Some(x)) = (data.as_object_mut(), extra.as_object()) {
-        d.extend(x.clone());
-    }
-    let what = match (&e.palettes, e.frames.as_slice()) {
-        (Some(_), _) if e.tile.is_some() => "background colors".to_owned(),
-        (None, _) if e.tile.is_some() => "picture".to_owned(),
-        (Some(_), _) => "palette".to_owned(),
-        (None, [one]) => format!("sprite ({one})"),
-        (None, many) => format!("sprite ({} frames)", many.len()),
-    };
-    let text = format!(
-        "edit {} {}: {}'s {what}, {}{}",
-        e.seq,
-        e.status.name(),
-        e.subject(),
-        e.op_names().join(", "),
-        extra["summary"]
-            .as_str()
-            .map_or(String::new(), |s| format!("; {s}"))
-    );
-    let mut input = gp_capture::Input::new(gp_capture::Actor::Agent, "asset_edit");
-    input.item = Some(e.item(copy));
-    input.text = Some(text);
-    input.data = Some(data);
-    gp_capture::append_input(&dir, &input).map_err(|e| e.to_string())?;
-    let path = dir.join("inputs.ndjson");
-    Ok(path.display().to_string())
-}
-
 pub fn edit(config: &Config, mut a: EditArgs) -> Result<Reply, String> {
     if let Some(dir) = a.import.take() {
         let dir = PathBuf::from(dir);
@@ -698,9 +616,6 @@ pub fn edit(config: &Config, mut a: EditArgs) -> Result<Reply, String> {
         a.slot = Some(trip.slot);
         a.editor = a.editor.or(Some(trip.editor));
     }
-    if let Some(run) = &a.run {
-        run_dir(config, run)?;
-    }
     let modes = [a.undo, a.redo, a.accept.is_some(), a.reject.is_some()]
         .iter()
         .filter(|m| **m)
@@ -719,14 +634,7 @@ pub fn edit(config: &Config, mut a: EditArgs) -> Result<Reply, String> {
     }
     if let Some(seq) = a.accept.or(a.reject) {
         let by = a.author.as_deref().unwrap_or("agent");
-        return decide(
-            config,
-            &a.copy,
-            seq,
-            a.accept.is_some(),
-            by,
-            Tell::Run(a.run.as_deref()),
-        );
+        return decide(config, &a.copy, seq, a.accept.is_some(), by);
     }
     if a.seq.is_some() {
         return Err("seq goes with undo".into());
@@ -760,7 +668,7 @@ pub fn edit(config: &Config, mut a: EditArgs) -> Result<Reply, String> {
     }
 }
 
-/// Keeps or announces a finished edit: a proposal is written to the
+/// Keeps a finished edit: a proposal is written to the
 /// history as proposed; a placed one is pushed on the history and the redo
 /// list is emptied.
 #[allow(clippy::too_many_arguments)]
@@ -774,26 +682,7 @@ pub(crate) fn record(
     context: Option<&[u8]>,
     content: Content,
 ) -> Result<Reply, String> {
-    let summary = format!(
-        "{} pixels; critic {}; readability {}",
-        out["pixels_changed"],
-        out["critic"]["score"]
-            .as_f64()
-            .map_or("off".to_owned(), |s| format!("{s:.2}")),
-        out["in_context"]["readability"]["verdict"]
-            .as_str()
-            .unwrap_or("not measured")
-    );
     let files = write_previews(&t.dir, entry.seq, png, context)?;
-    let extra = json!({
-        "summary": summary,
-        "pixels_changed": out["pixels_changed"],
-        "critic": out["critic"]["score"],
-        "checks": out["checks"],
-        "previews": files,
-        "shots": out["in_context"]["shots"],
-        "readability": out["in_context"]["readability"],
-    });
     out["item"] = json!(entry.item(&a.copy));
     out["seq"] = json!(entry.seq);
     out["previews"] = files.clone();
@@ -807,9 +696,6 @@ pub(crate) fn record(
             "a proposal: accept {} to place it, reject it to drop it",
             entry.seq
         ));
-        if let Some(run) = &a.run {
-            out["live"] = json!(announce(config, run, &a.copy, &entry, &extra)?);
-        }
         return Ok(Reply::ok(out.take()));
     }
     let p = edit_provenance(t, &entry, a.author.as_deref());
@@ -822,9 +708,6 @@ pub(crate) fn record(
         out["status"] = json!("placed");
         out["history"] =
             json!({ "seq": entry.seq, "depth": history.len(), "preview_file": files["edit"] });
-        if let Some(run) = &a.run {
-            out["live"] = json!(announce(config, run, &a.copy, &entry, &extra)?);
-        }
     }
     if let (Some(o), Some(r)) = (out.as_object_mut(), placed.json.as_object()) {
         o.extend(r.clone());
@@ -1109,7 +992,6 @@ fn pixel_edit(config: &Config, a: &EditArgs, entity: &str) -> Result<Reply, Stri
         sprite: None,
         status: EditStatus::Placed,
         decided_by: None,
-        run: a.run.clone(),
         tile: None,
     };
     record(
@@ -1290,7 +1172,6 @@ fn resize_edit(
         }),
         status: EditStatus::Placed,
         decided_by: None,
-        run: a.run.clone(),
         tile: None,
     };
     record(
@@ -1512,7 +1393,6 @@ fn palette_edit(config: &Config, a: &EditArgs, entity: &str) -> Result<Reply, St
         sprite: None,
         status: EditStatus::Placed,
         decided_by: None,
-        run: a.run.clone(),
         tile: None,
     };
     record(
@@ -1661,31 +1541,6 @@ fn place_with_sprite(
     r
 }
 
-/// Where a status change is told: a run given by the call, or the run the
-/// edit was made in, or nowhere (a decision a person sent through the run,
-/// which is its own record).
-pub enum Tell<'a> {
-    Run(Option<&'a str>),
-    Quiet,
-}
-
-fn tell(
-    config: &Config,
-    how: &Tell,
-    copy: &str,
-    e: &Entry,
-    extra: Value,
-) -> Result<Option<String>, String> {
-    let run = match how {
-        Tell::Run(r) => r.map(str::to_owned).or(e.run.clone()),
-        Tell::Quiet => None,
-    };
-    match run {
-        Some(r) => Ok(Some(announce(config, &r, copy, e, &extra)?)),
-        None => Ok(None),
-    }
-}
-
 /// Takes the edit at `idx` out of the history by writing its tiles back.
 /// The newest edit puts back the slot's state exactly; an older one leaves
 /// the slot replaced, with a note. The entry goes to the redo list as
@@ -1821,7 +1676,7 @@ fn undo(config: &Config, a: &EditArgs) -> Result<Reply, String> {
             l.seq, e.seq
         ));
     }
-    let (mut r, done) = revert(
+    let (r, _) = revert(
         config,
         &a.copy,
         &dir,
@@ -1830,17 +1685,6 @@ fn undo(config: &Config, a: &EditArgs) -> Result<Reply, String> {
         EditStatus::Undone,
         None,
     )?;
-    if r.json["written"] == json!(true)
-        && let Some(live) = tell(
-            config,
-            &Tell::Run(a.run.as_deref()),
-            &a.copy,
-            &done,
-            json!({}),
-        )?
-    {
-        r.json["live"] = json!(live);
-    }
     Ok(r)
 }
 
@@ -1870,9 +1714,6 @@ fn redo(config: &Config, a: &EditArgs) -> Result<Reply, String> {
     out["item"] = json!(e.item(&a.copy));
     out["status"] = json!("placed");
     out["history"] = json!({ "depth": history.len(), "redo": redo.len() });
-    if let Some(live) = tell(config, &Tell::Run(a.run.as_deref()), &a.copy, &e, json!({}))? {
-        out["live"] = json!(live);
-    }
     Ok(Reply::ok(out))
 }
 
@@ -1887,7 +1728,6 @@ pub fn decide(
     seq: u64,
     accept: bool,
     by: &str,
-    how: Tell,
 ) -> Result<Reply, String> {
     let dir = config.existing_copy(copy)?;
     let mut history = read_history(&dir)?;
@@ -1904,11 +1744,9 @@ pub fn decide(
             history[idx].decided_by = Some(by.to_owned());
             edit_log::write_history(&dir, &history)?;
             let e = history[idx].clone();
-            let mut out = json!({ "ok": true, "written": false, "item": e.item(copy), "status": "accepted", "decided_by": by });
-            if let Some(live) = tell(config, &how, copy, &e, json!({}))? {
-                out["live"] = json!(live);
-            }
-            return Ok(Reply::ok(out));
+            return Ok(Reply::ok(
+                json!({ "ok": true, "written": false, "item": e.item(copy), "status": "accepted", "decided_by": by }),
+            ));
         }
         if let Some(l) = history[idx + 1..]
             .iter()
@@ -1919,7 +1757,7 @@ pub fn decide(
                 l.seq
             ));
         }
-        let (mut r, done) = revert(
+        let (mut r, _) = revert(
             config,
             copy,
             &dir,
@@ -1929,11 +1767,6 @@ pub fn decide(
             Some(by),
         )?;
         r.json["decided_by"] = json!(by);
-        if r.json["written"] == json!(true)
-            && let Some(live) = tell(config, &how, copy, &done, json!({}))?
-        {
-            r.json["live"] = json!(live);
-        }
         return Ok(r);
     }
     let mut e = match edit_log::read_proposal(&dir, seq)? {
@@ -1953,11 +1786,9 @@ pub fn decide(
         e.status = EditStatus::Rejected;
         e.decided_by = Some(by.to_owned());
         edit_log::write_proposal(&dir, &e)?;
-        let mut out = json!({ "ok": true, "written": false, "item": e.item(copy), "status": "rejected", "decided_by": by });
-        if let Some(live) = tell(config, &how, copy, &e, json!({}))? {
-            out["live"] = json!(live);
-        }
-        return Ok(Reply::ok(out));
+        return Ok(Reply::ok(
+            json!({ "ok": true, "written": false, "item": e.item(copy), "status": "rejected", "decided_by": by }),
+        ));
     }
     let t = place::target(config, copy, &e.slot, e.entity_ref())?;
     let state_before = t.state.clone();
@@ -1984,9 +1815,6 @@ pub fn decide(
         out["status"] = json!("accepted");
         out["decided_by"] = json!(by);
         out["history"] = json!({ "seq": e.seq, "depth": history.len() });
-        if let Some(live) = tell(config, &how, copy, &e, json!({}))? {
-            out["live"] = json!(live);
-        }
     }
     Ok(Reply {
         json: out,
@@ -2019,12 +1847,6 @@ pub fn history(config: &Config, a: HistoryArgs) -> Result<Reply, String> {
         "waiting": open,
         "next_seq": edit_log::next_seq(&dir)?,
     })))
-}
-
-/// An edit's status now, by its sequence number in a copy directory: for
-/// the live panel, which reads it beside the run's inputs.
-pub fn status_in(dir: &Path, seq: u64) -> Result<Option<Entry>, String> {
-    edit_log::find(dir, seq)
 }
 
 #[cfg(test)]

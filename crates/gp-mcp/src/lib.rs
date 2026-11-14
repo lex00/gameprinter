@@ -13,8 +13,9 @@
 //! `gp --json validate` as child processes, so the server gives the same
 //! answers and exit codes as the CLI and records the same runs.
 
+pub mod activity;
+pub mod asks;
 pub mod asset_edit;
-pub mod capture;
 pub mod catalog;
 pub mod contexts;
 pub mod critic;
@@ -33,7 +34,6 @@ pub mod publish;
 pub mod ready;
 pub mod refine;
 pub mod registry;
-pub mod requests;
 pub mod resize;
 pub mod run;
 pub mod scenario;
@@ -44,7 +44,6 @@ pub mod sound;
 pub mod sprite_ops;
 pub mod sprite_set;
 
-pub mod show;
 pub mod testgame;
 pub mod tile_edit;
 pub mod tools;

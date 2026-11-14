@@ -6,8 +6,8 @@
 //
 // - `game`: a recording of the game measured against the rebuilt game
 //   (GameView.tsx): both games at the same moment, the lockstep panel
-//   and its curves, the moments, the scenario ladder, pause, point and
-//   tell with the requests, and the agent's sprite edits.
+//   and its curves, the moments, the scenario ladder, and pause, point
+//   and tell (what is said goes to the agent in the mechanic's talk).
 // - `inspector`: the trace inspector (App.tsx's Workspace with only
 //   "inspector"): a recording's frames and every registered view.
 

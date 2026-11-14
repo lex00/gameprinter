@@ -187,12 +187,8 @@ fn every_tool_takes_an_object() {
             "validate",
             "model_refine",
             "model_questions",
-            "show_explain",
             "build_publish",
-            "capture_events",
-            "requests",
             "moments",
-            "refine_moment",
             "watch_start",
             "watch_events",
             "watch_watch",
@@ -201,139 +197,10 @@ fn every_tool_takes_an_object() {
             "watch_explore",
             "watch_point",
             "view_now",
-            "capture_input",
             "gp_commands",
             "gp_run"
         ]
     );
-    for t in tools::list() {
-        assert!(
-            t.input_schema["properties"]["run"].is_object(),
-            "{} takes a capture run",
-            t.name
-        );
-    }
-}
-
-#[test]
-fn a_call_that_names_a_capture_run_is_logged_in_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let c = config(dir.path());
-    let run = c.home.join("capture/demo");
-    std::fs::create_dir_all(&run).unwrap();
-    std::fs::write(run.join("run.json"), r#"{"inputs_applied": 0}"#).unwrap();
-    std::fs::write(
-        run.join("events.ndjson"),
-        concat!(
-            r#"{"v":1,"seq":1,"at_ms":0,"round":1,"actor":"pipeline","kind":"question","stage":"questions","data":{"id":"derive:levels.main.kill_below","text":"Which?","path":"levels.main.kill_below","candidates":[]}}"#,
-            "\n",
-            r#"{"v":1,"seq":2,"at_ms":5,"round":1,"actor":"pipeline","kind":"stage.end","stage":"validate","data":{"status":"fail","ms":5,"summary":""}}"#,
-            "\n"
-        ),
-    )
-    .unwrap();
-    // A tool's own arguments never see `run`; the call is logged either way.
-    let r = tools::call(
-        &c,
-        "surface_describe",
-        serde_json::json!({"copy": "nope", "run": "demo"}),
-    )
-    .unwrap();
-    assert!(r.is_error);
-    assert!(r.json.get("capture_log").is_none(), "{}", r.json);
-    let inputs = gp_capture::read_inputs(&run).unwrap();
-    assert_eq!(inputs.len(), 1);
-    assert_eq!(inputs[0].actor, gp_capture::Actor::Agent);
-    assert_eq!(inputs[0].tool.as_deref(), Some("surface_describe"));
-    assert_eq!(inputs[0].args.as_deref(), Some(r#"{"copy":"nope"}"#));
-    assert!(
-        inputs[0]
-            .result
-            .as_deref()
-            .unwrap()
-            .starts_with("refused: ")
-    );
-    // A run that isn't there is said, not fatal.
-    let r = tools::call(
-        &c,
-        "surface_describe",
-        serde_json::json!({"copy": "nope", "run": "other"}),
-    )
-    .unwrap();
-    assert!(r.json["capture_log"].is_string(), "{}", r.json);
-
-    let ev = tools::call(
-        &c,
-        "capture_events",
-        serde_json::json!({"run": "demo", "after": 1}),
-    )
-    .unwrap();
-    assert!(!ev.is_error, "{}", ev.json);
-    assert_eq!(ev.json["events"].as_array().unwrap().len(), 1);
-    assert_eq!(ev.json["last_seq"], 2);
-    assert_eq!(
-        ev.json["open_questions"][0]["id"],
-        "derive:levels.main.kill_below"
-    );
-    assert_eq!(ev.json["pending_inputs"], 1);
-    let sent = tools::call(
-        &c,
-        "capture_input",
-        serde_json::json!({"run": "demo", "kind": "answer", "question": "derive:levels.main.kill_below", "choice": 2}),
-    )
-    .unwrap();
-    assert!(!sent.is_error, "{}", sent.json);
-    assert_eq!(sent.json["inputs"], 2);
-    let bad = tools::call(
-        &c,
-        "capture_input",
-        serde_json::json!({"run": "demo", "kind": "answer"}),
-    )
-    .unwrap();
-    assert!(bad.is_error);
-    assert_eq!(
-        crate::capture::progress_line(&c, "demo", 0).unwrap(),
-        (2, "round 1: validate fail".to_owned())
-    );
-}
-
-#[test]
-fn the_requests_tool_lists_and_replies() {
-    let dir = tempfile::tempdir().unwrap();
-    let c = config(dir.path());
-    let run = c.home.join("capture/demo");
-    std::fs::create_dir_all(&run).unwrap();
-    std::fs::write(run.join("run.json"), r#"{"inputs_applied": 0}"#).unwrap();
-    let mut r = gp_capture::Input::new(gp_capture::Actor::Person, "request");
-    r.text = Some("it should break".into());
-    r.data = Some(
-        serde_json::json!({"frame": 300, "recording": "walk", "choice": "react", "label": "a brick"}),
-    );
-    gp_capture::requests::post(&run, r).unwrap();
-    let call = |args: serde_json::Value| tools::call(&c, "requests", args).unwrap();
-    let l = call(serde_json::json!({"run": "demo"}));
-    assert!(!l.is_error, "{}", l.json);
-    assert_eq!(l.json["requests"][0]["data"]["label"], "a brick");
-    assert_eq!(l.json["requests"][0]["status"], "open");
-    // A proposal names its item; a reply without one is refused.
-    let bad = call(
-        serde_json::json!({"run": "demo", "reply": {"id": 1, "text": "x", "status": "proposed"}}),
-    );
-    assert!(bad.is_error);
-    let ok = call(
-        serde_json::json!({"run": "demo", "reply": {"id": 1, "text": "Here's a new look", "status": "proposed", "proposal": "hop:2"}}),
-    );
-    assert!(!ok.is_error, "{}", ok.json);
-    assert_eq!(ok.json["requests"][0]["status"], "proposed");
-    assert_eq!(
-        ok.json["requests"][0]["replies"][0]["data"]["proposal"]["kind"],
-        "asset_edit"
-    );
-    // The run's own argument isn't logged as a tool input.
-    let inputs = gp_capture::read_inputs(&run).unwrap();
-    assert!(inputs.iter().all(|i| i.kind != "tool"));
-    let only = call(serde_json::json!({"run": "demo", "status": "open"}));
-    assert!(only.json["requests"].as_array().unwrap().is_empty());
 }
 
 #[test]

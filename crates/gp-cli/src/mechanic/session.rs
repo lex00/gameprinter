@@ -431,6 +431,35 @@ pub(crate) fn show_text(v: &Value) -> String {
         if let Some(c) = x["choice"].as_u64() {
             let _ = write!(extra, " [picked choice {}]", c + 1);
         }
+        let p = &x["point"];
+        if p.is_object() {
+            let r: Vec<String> = p["rect"]
+                .as_array()
+                .map(|a| a.iter().map(|v| v.to_string()).collect())
+                .unwrap_or_default();
+            let things: Vec<String> = p["things"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|t| t["label"].as_str().or(t["name"].as_str()).or(t.as_str()))
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let _ = write!(
+                extra,
+                " [pointing at {} in {} at frame {}, box {}{}]",
+                p["label"].as_str().unwrap_or("a spot"),
+                p["recording"].as_str().unwrap_or("the recording"),
+                p["frame"],
+                r.join(","),
+                if things.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", things.join(", "))
+                }
+            );
+        }
         let _ = writeln!(
             t,
             "  {} {}: {}{extra}",
@@ -456,6 +485,19 @@ pub(crate) fn show_text(v: &Value) -> String {
 mod tests {
     use super::*;
     use crate::test_paths as paths;
+
+    #[test]
+    fn a_pointed_turn_says_where_in_show() {
+        let v = json!({"game": "dk", "mechanic": "walk", "talk": [{
+            "n": 1, "by": "player", "text": "stop at the top",
+            "point": {"label": "Mario", "recording": "walk.001", "frame": 412,
+                      "rect": [96, 120, 24, 24], "things": [{"label": "ladder"}]}}]});
+        let t = show_text(&v);
+        assert!(
+            t.contains("1 player: stop at the top [pointing at Mario in walk.001 at frame 412, box 96,120,24,24: ladder]"),
+            "{t}"
+        );
+    }
 
     #[test]
     fn a_session_keeps_its_clips_and_its_talk_in_order() {

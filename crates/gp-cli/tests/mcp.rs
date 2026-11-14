@@ -261,12 +261,8 @@ fn an_agent_edits_previews_and_validates_moss_hop() {
             "validate",
             "model_refine",
             "model_questions",
-            "show_explain",
             "build_publish",
-            "capture_events",
-            "requests",
             "moments",
-            "refine_moment",
             "watch_start",
             "watch_events",
             "watch_watch",
@@ -275,7 +271,8 @@ fn an_agent_edits_previews_and_validates_moss_hop() {
             "watch_explore",
             "watch_point",
             "view_now",
-            "capture_input"
+            "gp_commands",
+            "gp_run"
         ]
     );
     let missing = c.request(
@@ -1092,15 +1089,11 @@ fn an_agent_refines_a_wrong_walk_speed_back() {
         json!({ "copy": "fix", "edits": [{ "path": "entities.player.run.walk_speed", "value": 2 }] }),
     );
     assert!(!err, "{r}");
-    // The person watches a capture run; the agent's calls are logged in it,
-    // and the long call reports progress to a client that asks.
-    let run = home.path().join("capture/watching");
-    std::fs::create_dir_all(&run).unwrap();
-    std::fs::write(run.join("run.json"), "{}").unwrap();
+    // The long call reports progress to a client that asks.
     let started = std::time::Instant::now();
     let msg = c.request(
         "tools/call",
-        json!({ "name": "model_refine", "arguments": { "copy": "fix", "run": "watching" }, "_meta": { "progressToken": "refine-1" } }),
+        json!({ "name": "model_refine", "arguments": { "copy": "fix" }, "_meta": { "progressToken": "refine-1" } }),
     );
     let took = started.elapsed();
     let r = msg["result"]["structuredContent"].clone();
@@ -1118,11 +1111,6 @@ fn an_agent_refines_a_wrong_walk_speed_back() {
             "progress increases: {n:?}"
         );
     }
-    let logged = std::fs::read_to_string(run.join("inputs.ndjson")).unwrap();
-    let line: Value = serde_json::from_str(logged.lines().next().unwrap()).unwrap();
-    assert_eq!(line["actor"], "agent");
-    assert_eq!(line["tool"], "model_refine");
-    assert_eq!(line["args"], r#"{"copy":"fix"}"#);
     assert_eq!(
         (&r["ok"], &r["iterations"]),
         (&json!(true), &json!(2)),
@@ -1220,171 +1208,10 @@ fn an_agent_edits_the_player_sprite_from_its_recordings() {
     finish(c);
 }
 
-/// Phase 1 of docs/sprite-editing.md end to end: an agent proposes a
-/// recolor of the player's cap (the moss on his head) in a live capture
-/// run, a person accepts it there with a scripted input, the agent sees the
-/// decision, makes a second edit, and undoes both.
-#[test]
-#[ignore = "needs `gp capture input`, the capture-run loop the editor port brings"]
-fn a_person_accepts_an_agents_sprite_edit_live_and_the_agent_undoes_twice() {
-    use base64::Engine as _;
-    let home = tempfile::tempdir().unwrap();
-    let tmp = tempfile::tempdir().unwrap();
-    let rom = build_mosshop(tmp.path(), home.path());
-    let lifted = tmp.path().join("lifted");
-    let work = tmp.path().join("work");
-    // A capture run for the live panel; its stages aren't needed here.
-    let run = home.path().join("capture/live");
-    fs::create_dir_all(&run).unwrap();
-    fs::write(
-        run.join("run.json"),
-        json!({ "schema": 0, "run": "live", "model": repo().join("templates/mosshop"), "rom": null,
-                "baselines": null, "recordings": [], "preview": false, "started_ms": 0, "round": 0,
-                "inputs_applied": 0 })
-        .to_string(),
-    )
-    .unwrap();
-    let mut c = connect(home.path(), &work, &rom, &lifted);
-    let (fork, err) = c.call(
-        "template_fork",
-        json!({ "template": "mosshop", "copy": "edit" }),
-    );
-    assert!(!err, "{fork}");
-    let original = fs::read(lifted.join("tiles.png")).unwrap();
-
-    // The cap: the top five rows of the 16x16 sprite, moss (index 2) to
-    // the eye's color (index 3). A proposal, shown in the run.
-    let (p, err) = c.call(
-        "assets_edit",
-        json!({ "copy": "edit", "entity": "player", "prompt": "make his moss cap the color of his eye",
-                "ops": [{ "op": "recolor", "pairs": [[2, 3]], "region": { "x": 0, "y": 0, "w": 16, "h": 5 } }],
-                "place": false, "run": "live" }),
-    );
-    assert!(!err, "{p}");
-    assert_eq!(p["status"], "proposed", "{p}");
-    assert_eq!(p["written"], false);
-    assert!(p["pixels_changed"].as_u64().unwrap() > 0, "{p}");
-    let shots = p["in_context"]["shots"].as_array().unwrap();
-    assert!(shots.len() >= 5, "a shot per pose: {shots:?}");
-    assert!(
-        shots.iter().any(|s| {
-            // The death: its event, or the player's dying state.
-            let pose = s["pose"].as_str().unwrap();
-            pose.contains("player.died") || pose.starts_with("dying/")
-        }),
-        "{shots:?}"
-    );
-    let ctx = base64::engine::general_purpose::STANDARD
-        .decode(p["in_context"]["png_base64"].as_str().unwrap())
-        .unwrap();
-    let readability = &p["in_context"]["readability"];
-    assert_eq!(readability["name"], "context.readability", "{p}");
-    assert_eq!(
-        readability["frames"], 2280,
-        "the eight baselines' frames: {readability}"
-    );
-    assert!(
-        readability["after"]["share_readable"].is_number(),
-        "{readability}"
-    );
-    if let Ok(dir) = std::env::var("GP_EDIT_PREVIEW") {
-        fs::write(Path::new(&dir).join("mosshop-cap-context.png"), &ctx).unwrap();
-        fs::write(
-            Path::new(&dir).join("mosshop-cap-proposal.json"),
-            p.to_string(),
-        )
-        .unwrap();
-    }
-    assert_eq!(fs::read(lifted.join("tiles.png")).unwrap(), original);
-    let inputs = fs::read_to_string(run.join("inputs.ndjson")).unwrap();
-    let ann: Value = inputs
-        .lines()
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .find(|l| l["kind"] == "asset_edit")
-        .unwrap();
-    assert_eq!(ann["kind"], "asset_edit", "{ann}");
-    assert_eq!(ann["item"], "edit:1");
-    assert_eq!(ann["data"]["status"], "proposed");
-
-    // The person accepts it in the run, as the live panel's button does.
-    let out = gp(home.path())
-        .args([
-            "--json", "capture", "input", "live", "--kind", "accept", "--item", "edit:1",
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let d: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(d["decision"]["status"], "accepted", "{d}");
-    assert_eq!(d["decision"]["simulation"]["unchanged"], true, "{d}");
-    let accepted = fs::read(work.join("edit/assets/tiles.png")).unwrap();
-    assert_ne!(accepted, original);
-
-    // The agent sees the decision.
-    let (h, err) = c.call("assets_history", json!({ "copy": "edit" }));
-    assert!(!err, "{h}");
-    assert_eq!(h["placed"][0]["status"], "accepted", "{h}");
-    assert_eq!(h["placed"][0]["decided_by"], "person");
-    assert_eq!(h["waiting"], json!([]));
-
-    // A second edit, placed at once, then undone twice: back to the lift.
-    let (e2, err) = c.call(
-        "assets_edit",
-        json!({ "copy": "edit", "entity": "player", "ops": [{ "op": "outline", "index": 1, "corners": true }], "run": "live" }),
-    );
-    assert!(!err, "{e2}");
-    assert_eq!(e2["seq"], 2, "{e2}");
-    let (u, err) = c.call(
-        "assets_edit",
-        json!({ "copy": "edit", "undo": true, "run": "live" }),
-    );
-    assert!(!err, "{u}");
-    assert_eq!(u["undone"]["seq"], 2);
-    assert_eq!(
-        fs::read(work.join("edit/assets/tiles.png")).unwrap(),
-        accepted
-    );
-    let (u, err) = c.call("assets_edit", json!({ "copy": "edit", "undo": true }));
-    assert!(!err, "{u}");
-    assert_eq!(u["undone"]["seq"], 1);
-    assert_eq!(u["state"]["status"], "original", "{u}");
-    assert_eq!(
-        fs::read(work.join("edit/assets/tiles.png")).unwrap(),
-        original
-    );
-    let (h, _) = c.call("assets_history", json!({ "copy": "edit" }));
-    assert_eq!(h["undone"].as_array().unwrap().len(), 2, "{h}");
-    finish(c);
-
-    // The run's next round reports both edits in its events.
-    let ev = gp(home.path())
-        .args(["--json", "capture", "resume", "live"])
-        .output()
-        .unwrap();
-    let _ = ev;
-    let text = fs::read_to_string(run.join("events.ndjson")).unwrap_or_default();
-    let items: Vec<Value> = text
-        .lines()
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .filter(|e| e["kind"] == "item" && e["data"]["what"] == "asset_edit")
-        .collect();
-    assert!(
-        items
-            .iter()
-            .any(|e| e["data"]["id"] == "edit:1" && e["data"]["status"] == "undone"),
-        "{items:?}"
-    );
-}
-
 /// Phase 3 of docs/sprite-editing.md: `gp assets open` writes Moss Hop's
 /// player for Pixelorama by the image config, starts the editor (a fake
 /// one here, named by GP_PIXELORAMA), and a save over the exported sheet
-/// comes back as a proposal in the live run; a person accepts it, and the
-/// slot records it as uploaded from Pixelorama.
+/// comes back as a proposal in the copy's history.
 #[test]
 #[ignore = "needs `gp assets open`, which gameprinter hasn't got"]
 fn a_save_in_a_pixel_editor_comes_back_as_a_proposal() {
@@ -1394,16 +1221,6 @@ fn a_save_in_a_pixel_editor_comes_back_as_a_proposal() {
     let _ = rom;
     let lifted = tmp.path().join("lifted");
     let work = tmp.path().join("work");
-    let run = home.path().join("capture/live");
-    fs::create_dir_all(&run).unwrap();
-    fs::write(
-        run.join("run.json"),
-        json!({ "schema": 1, "run": "live", "model": repo().join("templates/mosshop"), "rom": null,
-                "baselines": null, "recordings": [], "preview": false, "started_ms": 0, "round": 0,
-                "inputs_applied": 0 })
-        .to_string(),
-    )
-    .unwrap();
     // The fake editor writes down the file it was asked to open.
     let opened = tmp.path().join("opened.txt");
     let editor = tmp.path().join("pixelorama");
@@ -1427,8 +1244,6 @@ fn a_save_in_a_pixel_editor_comes_back_as_a_proposal() {
             "player",
             "--editor",
             "pixelorama",
-            "--run",
-            "live",
             "--once",
             "--timeout",
             "120",
@@ -1501,26 +1316,7 @@ fn a_save_in_a_pixel_editor_comes_back_as_a_proposal() {
         save["result"]["pixels_changed"].as_u64().unwrap() > 0,
         "{j}"
     );
-    let item = save["result"]["item"].as_str().unwrap().to_owned();
-
-    // Accepted in the run: placed, with the editor as its provenance.
-    let a = gp(home.path())
-        .args([
-            "--json", "capture", "input", "live", "--kind", "accept", "--item", &item,
-        ])
-        .output()
-        .unwrap();
-    assert!(a.status.success(), "{}", String::from_utf8_lossy(&a.stderr));
-    let d: Value = serde_json::from_slice(&a.stdout).unwrap();
-    assert_eq!(d["decision"]["status"], "accepted", "{d}");
-    assert_eq!(d["decision"]["state"]["origin"], "uploaded", "{d}");
-    assert!(
-        d["decision"]["state"]["generator"]
-            .as_str()
-            .unwrap()
-            .starts_with("pixelorama"),
-        "{d}"
-    );
+    assert!(save["result"]["item"].is_string(), "{j}");
 }
 
 /// An agent drives a watch session on Moss Hop's practice variant with the

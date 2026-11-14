@@ -40,10 +40,7 @@ trace = []
 
 [lib]
 name = "tetanes_core"
-crate-type = [
-    "cdylib",
-    "rlib",
-]
+crate-type = ["rlib"]
 path = "src/lib.rs"
 
 [[bench]]

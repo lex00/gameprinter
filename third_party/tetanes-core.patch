@@ -1,8 +1,20 @@
 diff --git a/Cargo.toml b/Cargo.toml
-index 00036459dc4d9792d3a608c72fc880f8c05e50a3..5ab1efb9de5f2838283afbe93abda902fa034e5f 100644
+index 00036459dc4d9792d3a608c72fc880f8c05e50a3..116a410fb0e9559c9497b3a49289957c29bc4357 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -90,6 +90,12 @@ features = [
+@@ -40,10 +40,7 @@ trace = []
+ 
+ [lib]
+ name = "tetanes_core"
+-crate-type = [
+-    "cdylib",
+-    "rlib",
+-]
++crate-type = ["rlib"]
+ path = "src/lib.rs"
+ 
+ [[bench]]
+@@ -90,6 +87,12 @@ features = [
  ]
  default-features = false
  
@@ -15,7 +27,7 @@ index 00036459dc4d9792d3a608c72fc880f8c05e50a3..5ab1efb9de5f2838283afbe93abda902
  [dev-dependencies.anyhow]
  version = "1.0"
  
-@@ -111,20 +117,20 @@ features = [
+@@ -111,20 +114,20 @@ features = [
  ]
  default-features = false
  
