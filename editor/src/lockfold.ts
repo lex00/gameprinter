@@ -180,6 +180,18 @@ export function missingLine(g: GameWords | undefined, notes: LockNote[]): string
   return `Not carried over, since the state mapping doesn't hold ${uniq.length === 1 ? "it" : "them"} yet: ${list(uniq)}.`;
 }
 
+/**
+ * What a put-back resync couldn't load, said once: empty when the run
+ * isn't put back, has no splits, or its missing list is the one the start's
+ * line already says.
+ */
+export function resyncLine(g: GameWords | undefined, ls: Lockstep): string {
+  if (ls.mode !== "resync" || !ls.splits.length) return "";
+  const line = missingLine(g, ls.resync_notes);
+  const names = (notes: LockNote[]) => [...new Set(notes.filter((n) => n.how === "missing").map((n) => noteName(g, n.path)))].sort().join("\n");
+  return ls.start && names(ls.resync_notes) === names(ls.start.notes) ? "" : line;
+}
+
 export interface Bin {
   /** The bin's distances: over `from` up to `to`; the first bin is from 0 up to `to`, both included. */
   from: number;

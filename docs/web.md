@@ -42,9 +42,10 @@ Wrangler is `4.157.0` from npm and needs `npx wrangler@4.157.0 login` once, whic
 
 | Step | Fails when |
 |---|---|
+| A snapshot of the page's source: a shallow clone of `lex00/gp-registry` at the commit `main` is on, into `<page>.registry`, its commit printed; `check-page.mjs` reads it with `--registry-folder`, so a publish during the run changes nothing | The clone fails (no network, say). The check never reads the live registry instead |
 | `build-page.sh`, ending in `gp template served` | A file holds the ROM's bytes, lifted files, pictures made from them or a game image; or the ROMs aren't in `$GP_ROM_DIR` to compare with |
 | `check-page.mjs` under the page's `_headers` | Any check of the page fails, a policy refusal in any frame among them |
-| `lift.test.mjs` on the page's lift files | Any of the lift's tests fails |
+| `lift.test.mjs` on the page's lift files, and `theme-line.test.mjs` | Any of the lift's tests fails, or the theme line rule passes a page that offers a theme its source doesn't |
 | `gp package scan` on the game's package | It has a needs-rewrite item, or it wasn't compared with the ROMs |
 | The size and files | Over 20000 files or 25 MiB in one file (the Workers static assets limits). It prints every file with its SHA-256 and writes them to `<page>.manifest.txt` |
 

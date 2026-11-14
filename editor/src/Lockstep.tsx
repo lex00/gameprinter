@@ -27,6 +27,7 @@ import {
   measureUnit,
   mechanicName,
   missingLine,
+  resyncLine,
   scaled,
   seconds,
   smallest,
@@ -122,7 +123,11 @@ export function LockstepResult({ g, ls, span, frame, seek, focus, drift }: { g?:
           Both started at {seconds(ls.start.original_frame)} (frame {ls.start.original_frame}) from the original's state. {missingLine(g, ls.start.notes)}
         </p>
       )}
-      {ls.mode === "resync" && ls.splits.length > 0 && <p className="hint">{missingLine(g, ls.resync_notes)}</p>}
+      {resyncLine(g, ls) && (
+        <p className="hint" data-testid="lock-resync-notes">
+          {resyncLine(g, ls)}
+        </p>
+      )}
       <div className="lock-charts">
         {ls.paths.map((p, i) => (
           <MeasureChart key={p.path} g={g} ls={ls} p={p} i={i} span={span} frame={frame} seek={seek} focus={focus} drift={drift} />

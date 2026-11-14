@@ -37,6 +37,7 @@ import { createRequire } from "node:module";
 import { cpus, homedir, loadavg } from "node:os";
 import { dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { offeredIn, themeLineWrong, wanted } from "./theme-line.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../../..");
@@ -68,7 +69,9 @@ const full = true;
 // themselves, at /__check/play/, which the page never asks for.
 const playDir = opt("play") ? resolve(opt("play")) : `${dist}.play`;
 const entry = opt("entry") ?? "index.html";
-// --registry-folder answers the page's source from a folder (a dry run);
+// --registry-folder answers the page's source from a folder (a dry run, or
+// the release check's snapshot of the registry, cloned when it starts, so
+// the page and this check read the same files for the whole run);
 // --registry-stopped installs, then refuses every request to the source.
 const registryFolder = opt("registry-folder") && resolve(opt("registry-folder"));
 // --live URL checks a page already deployed there: the page comes from that
@@ -79,9 +82,10 @@ const live = opt("live")?.replace(/\/$/, "") ?? null;
 const registryStopped = process.argv.includes("--registry-stopped");
 // The themes the source offers for the page's game, by id (a package's name
 // after its namespace), from its by-game list: the registry folder's, or with
-// no folder the one on the source the page reads (the release check's is the
-// live registry, where anyone granted a namespace can publish a theme for the
-// game), read once for the run. Only a source with no list for the game, or
+// no folder the one on the source the page reads (on a live registry anyone
+// granted a namespace can publish a theme for the game, which is why the
+// release check passes a snapshot), read once for the run. theme-line.mjs
+// has the rule the theme line is held to. Only a source with no list for the game, or
 // one that can't be reached, leaves the page's own theme.
 let offeredOnce = null;
 function offeredThemes() {
@@ -97,8 +101,7 @@ function offeredThemes() {
         .catch(() => null);
     }
     if (text === null) return page.content ? [page.content.split("/")[1].split("@")[0]] : [];
-    const names = [...text.matchAll(/^package = "([^"]+)"/gm)].map((m) => m[1].split("/")[1]);
-    return [...new Set(names)];
+    return offeredIn(text);
   })();
   return offeredOnce;
 }
@@ -489,13 +492,7 @@ async function session(browser, name, opts = {}) {
     );
   }
   const isSource = (u) => isSourceUrl(S.origin, u);
-  if (registryFolder && page.source.url !== ".") {
-    await context.route(isSource, (r) => {
-      const f = join(registryFolder, sourceKey(S.origin, new URL(r.request().url())));
-      if (!existsSync(f)) return r.fulfill({ status: 403, headers: { "access-control-allow-origin": "*" }, body: "" });
-      return r.fulfill({ status: 200, headers: { "access-control-allow-origin": "*" }, body: readFileSync(f) });
-    });
-  }
+  if (registryFolder && page.source.url !== ".") await context.route(isSource, (r) => fromFolder(r));
   if (opts.source) await context.route(isSource, opts.source);
   context.on("request", (r) => S.requests.push({ method: r.method(), url: r.url(), body: r.postDataBuffer()?.length ?? 0 }));
   if (registryStopped) {
@@ -1220,7 +1217,8 @@ async function romPlay(S, { name, sha, rom }) {
   const offered = await gp(() => window.__gp.looks?.() ?? null).catch(() => null);
   // Steps along the theme line to one theme: with more themes offered,
   // Original isn't always the next one.
-  const want = ["original", ...(await offeredThemes())].sort();
+  const offeredBySource = await offeredThemes();
+  const want = wanted(offeredBySource);
   const toTheme = async (id, key) => {
     let r;
     for (let i = 0; i < want.length; i++) {
@@ -1253,7 +1251,8 @@ async function romPlay(S, { name, sha, rom }) {
     seen.add(rs.theme);
   }
   const got = [...seen].sort();
-  check(JSON.stringify(got) === JSON.stringify(want), `${name}: the theme line offers Original and each theme the source offers for the game, and nothing else (${got.join(", ")}; the source offers ${want.slice().filter((t) => t !== "original").join(", ")}${offered ? `, offered ${JSON.stringify(offered)}` : ""})`);
+  const wrong = themeLineWrong(got, offeredBySource);
+  check(!wrong, `${name}: ${wrong ? `${wrong}; ` : ""}the theme line offers Original and each theme the source offers for the game, and nothing else (${got.join(", ")}; the source offers ${want.slice().filter((t) => t !== "original").join(", ")}${offered ? `, offered ${JSON.stringify(offered)}` : ""})`);
   const stored = await p.evaluate(async (game) => {
     const { loadStored } = await import("./game/lift.js");
     return (await loadStored(game))?.size ?? 0;
@@ -2022,12 +2021,25 @@ async function registryLinks(S) {
   await refused(`p?g=${page.game}@1.0.0`, /isn't there/i, "a version this source doesn't hold is refused in words");
 }
 
+// A request to a source on the network answered from --registry-folder, the
+// file at its key (`change` applied) or 403 as a repo host answers a file it
+// doesn't have.
+function fromFolder(route, change = (b) => b) {
+  const url = new URL(route.request().url());
+  const f = join(registryFolder, sourceKey(url.origin, url));
+  if (!existsSync(f)) return route.fulfill({ status: 403, headers: { "access-control-allow-origin": "*" }, body: "" });
+  return route.fulfill({ status: 200, headers: { "access-control-allow-origin": "*" }, body: change(readFileSync(f)) });
+}
+
 // What a source can do wrong, each on a first visit. `r` fetches the real
-// answer; each case changes it, and nothing may be installed.
+// answer (from --registry-folder when the source is on the network and the
+// run has one, so the case changes the run's copy, not the live source);
+// each case changes it, and nothing may be installed.
 const broken = (match, change) => async (route) => {
   const url = route.request().url();
   if (!match(url)) return route.fallback();
   try {
+    if (registryFolder && page.source.url !== ".") return await fromFolder(route, change);
     const real = await route.fetch();
     await route.fulfill({ response: real, body: change(await real.body()) });
   } catch {

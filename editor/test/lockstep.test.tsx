@@ -3,7 +3,7 @@
 // chart's points and each measure's histogram. The game and its numbers are made up.
 import { describe, expect, it } from "vitest";
 import type { GameWords } from "../src/api";
-import { binName, columns, firstFocus, focusMisses, focusWords, histogram, missLine, rangeLine, scaled, lockSummary, measureLine, measureName, mechanicName, missingLine, series, startPhase, driftAt, driftWords, driftThreshold, type Lockstep } from "../src/lockfold";
+import { binName, columns, firstFocus, focusMisses, focusWords, histogram, missLine, rangeLine, scaled, lockSummary, measureLine, measureName, mechanicName, missingLine, resyncLine, series, startPhase, driftAt, driftWords, driftThreshold, type Lockstep } from "../src/lockfold";
 
 const g = {
   vocab: {
@@ -63,6 +63,14 @@ describe("the lockstep panel", () => {
     expect(lockSummary(g, { ...ls, mode: "free" })).toMatch(/drift apart\.$/);
     expect(measureLine(ls.paths[1])).toBe("Together on 2 of 3 frames (67%). Farthest apart: 4 px a frame.");
     expect(missingLine(g, ls.resync_notes)).toBe("Not carried over, since the state mapping doesn't hold them yet: the herons and the random numbers.");
+  });
+  it("says what a put-back couldn't load once: not again when the start's line already says it", () => {
+    expect(resyncLine(g, ls)).toBe(missingLine(g, ls.resync_notes));
+    const started = { ...ls, start: { frame: 0, original_frame: 38, notes: [ls.resync_notes[1], ls.resync_notes[0]] } };
+    expect(resyncLine(g, started)).toBe("");
+    expect(resyncLine(g, { ...started, start: { frame: 0, original_frame: 38, notes: [ls.resync_notes[1]] } })).toBe(missingLine(g, ls.resync_notes));
+    expect(resyncLine(g, { ...ls, mode: "free" })).toBe("");
+    expect(resyncLine(g, { ...ls, splits: [] })).toBe("");
   });
   it("puts the points at the original's frames, and a long run in columns of equal time with each one's average, largest and splits", () => {
     expect(series(ls, 1).map((p) => p.frame)).toEqual([346, 347, 348]);

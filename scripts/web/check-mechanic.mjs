@@ -1071,6 +1071,26 @@ async function editorFeatures() {
   const after = await api(`api/next/${GAME}`);
   if ([after.next, ...(after.also ?? [])].some((x) => x.says.includes("what you told it"))) fail("next still has the tell's step once answered");
   ok(`TELL YOUR AGENT on a queue row: "${told}"; in the work record, the conversation and next, and the answer shows under the row`);
+  // THE TWO GAMES, MEASURED APART under THE CLIP MEASURED says what the
+  // state mapping doesn't carry over once: the start's line and the
+  // put-back's line don't both say the same list.
+  const apart = await until("THE TWO GAMES, MEASURED APART", async () =>
+    page.evaluate(() => {
+      const doc = document.querySelector("#measured iframe.details-frame")?.contentDocument;
+      const sec = doc?.querySelector("[data-testid=lockstep]");
+      if (sec?.querySelector("[data-testid=lock-summary]")) return { text: sec.textContent };
+      if (sec?.querySelector(".error")) return { error: sec.querySelector(".error").textContent };
+      return /editor's build/.test(document.querySelector("#measured")?.textContent ?? "") ? { none: true } : null;
+    }),
+  120000);
+  if (apart.error) fail(`THE TWO GAMES, MEASURED APART couldn't measure: ${apart.error}`);
+  if (apart.none) console.log("skip THE TWO GAMES, MEASURED APART: no editor build");
+  else {
+    const said = apart.text.match(/Not carried over[^.]*\./g) ?? [];
+    const twice = said.filter((s, i) => said.indexOf(s) !== i);
+    if (twice.length) fail(`THE TWO GAMES, MEASURED APART says this twice: "${twice[0]}"`);
+    ok(`THE TWO GAMES, MEASURED APART ${said.length === 0 ? "has nothing left out of the state to say" : `says what isn't carried over ${said.length === 1 ? "once" : `${said.length} times, each a different list`}`}`);
+  }
   await shot(page, "tell");
   await page.click("#tab-clips");
   await until("the tell in the conversation column", async () => (await text(page, "#talk")).includes(`About clip ${firstId}: ${words}`));

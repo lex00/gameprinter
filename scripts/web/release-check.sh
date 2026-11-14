@@ -3,6 +3,14 @@
 # public page"): everything that must hold before the page is uploaded.
 #   scripts/web/release-check.sh [--full] [--out DIR] [--game GAME_DIR]
 #
+# 0. Takes a snapshot of the page's source: a shallow clone of its repo
+#    (lex00/gp-registry for the deployed page) at the commit its branch is
+#    on now, into DIR.registry, and prints that commit. The page check reads
+#    the clone for the whole run (--registry-folder), the page's installs and
+#    the check's expectations alike, so a publish during the run changes
+#    nothing. A clone that fails ends the run (exit 2): the check never falls
+#    back to the live registry. A page whose source is its own address
+#    (GP_PAGE_SOURCE=local) has nothing to clone.
 # 1. Builds the page from GAME_DIR (default ../games/donkey-kong, beside
 #    this repo) at this checkout's tip into a folder of its own,
 #    $GP_HOME/work/page-release/<commit>-games-<games commit>, each commit
@@ -12,7 +20,8 @@
 #    no file of the page or of its play files holds the ROM's bytes,
 #    lifted files, pictures made from them, or a game image.
 # 2. The page's headless check (check-page.mjs) under the page's _headers.
-# 3. The lift under Node (lift.test.mjs) on the page's own lift files.
+# 3. The lift under Node (lift.test.mjs) on the page's own lift files, and
+#    the page check's theme line rule (theme-line.test.mjs).
 # 4. `gp package scan` on the game's package: it must have no needs-rewrite
 #    item, and must have been compared with the ROMs.
 # 5. The page's size, its files and their SHA-256, also written to
@@ -90,6 +99,35 @@ step() {
   echo; echo "== $1"
 }
 
+step "a snapshot of the page's source"
+source_name="${GP_PAGE_SOURCE:-registry}"
+source_url="$(python3 -I -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))[sys.argv[2]]["url"])' "$repo/scripts/web/sources.toml" "$source_name" 2>/dev/null)" \
+  || { echo "release-check: scripts/web/sources.toml has no source named $source_name" >&2; exit 2; }
+registry_folder=()
+case "$source_url" in
+  .) echo "ok: the page's source is its own address ($source_name), so there is no registry to clone" ;;
+  https://raw.githubusercontent.com/*/*/*)
+    rest="${source_url#https://raw.githubusercontent.com/}"
+    source_repo="$(echo "$rest" | cut -d/ -f1-2)"
+    source_branch="${rest#*/*/}"
+    mkdir -p "$(dirname "$out")" || exit 2
+    snapshot="$(cd "$(dirname "$out")" && pwd)/$(basename "$out").registry"
+    # An earlier run's snapshot for this build is cleared first, as
+    # build-page.sh clears the folders it makes.
+    rm -rf "$snapshot"
+    if ! GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 --single-branch --branch "$source_branch" "https://github.com/$source_repo.git" "$snapshot"; then
+      echo "FAIL: couldn't clone $source_repo to take a snapshot of the page's source (is the network down?), so the page can't be checked. The check doesn't read the live registry instead."
+      echo "bundle: $out"
+      exit 2
+    fi
+    echo "ok: $source_repo is at commit $(git -C "$snapshot" rev-parse HEAD) on $source_branch; the page and the check read this copy for the whole run ($snapshot)"
+    registry_folder=(--registry-folder "$snapshot") ;;
+  *)
+    echo "FAIL: the page's source $source_url isn't a GitHub repo's raw address, so the check can't take a snapshot of it. The check doesn't read the live registry instead."
+    echo "bundle: $out"
+    exit 2 ;;
+esac
+
 step "build the page and check it for game data ($out)"
 mkdir -p "$out" || exit 2
 GP="$gp" "$repo/scripts/web/build-page.sh" "$game" "$out"
@@ -112,11 +150,11 @@ if [ -z "${PLAYWRIGHT_FROM:-}" ] && [ ! -d "$repo/scripts/web/node_modules/playw
 fi
 page_full=""
 [ $full = 1 ] && page_full="--full"
-node "$repo/scripts/web/public/check-page.mjs" --dist "$out" --browser "$browser" --shots "$out.shots" $page_full
+node "$repo/scripts/web/public/check-page.mjs" --dist "$out" --browser "$browser" --shots "$out.shots" $page_full ${registry_folder[@]+"${registry_folder[@]}"}
 s=$?
 [ $s -eq 0 ] || fail+=("the page's headless check (exit $s; shots in $out.shots)")
 
-step "the lift under Node, on the page's lift files"
+step "the lift under Node, on the page's lift files, and the page check's theme line rule"
 # build-page.sh splits the lift: the module stays with the page, the
 # folder it reads goes to the play files. The test reads them together.
 lift="$out.lift-test"
@@ -125,6 +163,9 @@ cp -R "$out/game/lift/gp-web-lift.wasm" "$out.play/lift/"* "$lift/lift/" || exit
 GP_WEB_LIFT_OUT="$lift" GP_WORKER_OUT="$lift/work" node --test "$repo/scripts/web/public/lift.test.mjs"
 s=$?
 [ $s -eq 0 ] || fail+=("the lift's tests (lift.test.mjs, exit $s)")
+node --test "$repo/scripts/web/public/theme-line.test.mjs"
+s=$?
+[ $s -eq 0 ] || fail+=("the page check's theme line rule (theme-line.test.mjs, exit $s)")
 
 step "gp package scan on the game's package"
 # A scan reads the package's folder, the ROMs in $GP_ROM_DIR and gp. Only
