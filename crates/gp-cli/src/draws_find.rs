@@ -974,7 +974,9 @@ pub(crate) fn against(found: &Found, hand: &[DrawSite]) -> Against {
         } else {
             a.missed.push((d.site.clone(), d.pc));
         }
-        if found.registers.iter().any(|r| r.contains(d.ram)) {
+        if d.ram
+            .is_some_and(|ram| found.registers.iter().any(|r| r.contains(ram)))
+        {
             a.ram_in_register += 1;
         }
     }
@@ -1273,7 +1275,8 @@ mod tests {
         let site = |name: &str, pc| DrawSite {
             site: name.to_owned(),
             pc,
-            ram: 0xE390,
+            ram: Some(0xE390),
+            reg: None,
             note: None,
             soft: false,
         };
@@ -1297,7 +1300,8 @@ mod tests {
         let site = |name: &str, pc, ram| DrawSite {
             site: name.to_owned(),
             pc,
-            ram,
+            ram: Some(ram),
+            reg: None,
             note: None,
             soft: false,
         };

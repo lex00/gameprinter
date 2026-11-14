@@ -66,7 +66,7 @@
       }
     },
     "platform": {
-      "description": "Feature `platform`: the original's machine, `nes` (the default) or\n`arcade`. An arcade mapping's `ignore` may name any of the main\nCPU's addresses, and the NES's own parts (`nametable`, `oam`,\n`oam_tile`, `read_at`) are refused in it. Its `[[draws]]` name main\nZ80 sites (port wave 6): a site that is a call draws the value the\nroutine returns in A, any other the byte it reads.",
+      "description": "Feature `platform`: the original's machine, `nes` (the default) or\n`arcade`. An arcade mapping's `ignore` may name any of the main\nCPU's addresses, and the NES's own parts (`nametable`, `oam`,\n`oam_tile`, `read_at`) are refused in it. Its `[[draws]]` name main\nZ80 sites (port wave 6): a site that is a call draws the value the\nroutine returns in A, one with `reg` the Z80 register it names, any\nother the byte it reads.",
       "type": [
         "string",
         "null"
@@ -344,10 +344,23 @@
           "minimum": 0
         },
         "ram": {
-          "type": "integer",
+          "description": "The random byte the instruction reads. A site has this or `reg`.",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint16",
+          "default": null,
           "maximum": 65535,
           "minimum": 0
+        },
+        "reg": {
+          "description": "Feature `draws.reg`: the random byte is a CPU register the\ninstruction reads, not a RAM byte: on the Z80 `a`, `f`, `b`, `c`,\n`d`, `e`, `h`, `l`, `i` or `r` (for `ld a,r`, R as the instruction\nsees it after its own opcode fetches), on the NES `a`, `x` or `y`.\nA recording takes the register's value at the instruction.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         "site": {
           "type": "string"
@@ -361,8 +374,7 @@
       "additionalProperties": false,
       "required": [
         "site",
-        "pc",
-        "ram"
+        "pc"
       ]
     },
     "Field": {

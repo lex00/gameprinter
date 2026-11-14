@@ -73,7 +73,8 @@ pub struct Mapping {
     /// CPU's addresses, and the NES's own parts (`nametable`, `oam`,
     /// `oam_tile`, `read_at`) are refused in it. Its `[[draws]]` name main
     /// Z80 sites (port wave 6): a site that is a call draws the value the
-    /// routine returns in A, any other the byte it reads.
+    /// routine returns in A, one with `reg` the Z80 register it names, any
+    /// other the byte it reads.
     #[serde(default)]
     pub platform: Option<String>,
     #[serde(default)]
@@ -199,7 +200,16 @@ pub struct NamedState {
 pub struct DrawSite {
     pub site: String,
     pub pc: u16,
-    pub ram: u16,
+    /// The random byte the instruction reads. A site has this or `reg`.
+    #[serde(default)]
+    pub ram: Option<u16>,
+    /// Feature `draws.reg`: the random byte is a CPU register the
+    /// instruction reads, not a RAM byte: on the Z80 `a`, `f`, `b`, `c`,
+    /// `d`, `e`, `h`, `l`, `i` or `r` (for `ld a,r`, R as the instruction
+    /// sees it after its own opcode fetches), on the NES `a`, `x` or `y`.
+    /// A recording takes the register's value at the instruction.
+    #[serde(default)]
+    pub reg: Option<String>,
     /// Feature `draws.soft`: the byte is read only for presentation (a
     /// sound driver's random pitch), so the rebuild takes the draw when it
     /// asks on the same frame and is never out of step for drawing it on
@@ -209,6 +219,12 @@ pub struct DrawSite {
     #[serde(default)]
     pub note: Option<String>,
 }
+
+/// The Z80 registers a `[[draws]]` site's `reg` may name.
+pub const Z80_DRAW_REGS: &[&str] = &["a", "f", "b", "c", "d", "e", "h", "l", "i", "r"];
+
+/// The 6502 registers a `[[draws]]` site's `reg` may name.
+pub const NES_DRAW_REGS: &[&str] = &["a", "x", "y"];
 
 /// RAM bytes the model needs no field for (schema 21): `len` bytes from
 /// `ram`, holding the controller's bits, a frame counter, a scratch value,
@@ -914,6 +930,37 @@ impl Mapping {
             Some("arcade") => true,
             Some(p) => return Err(format!("platform {p:?}: nes or arcade")),
         };
+        for d in &m.draws {
+            match (d.ram, &d.reg) {
+                (Some(_), None) => {}
+                (Some(_), Some(_)) => {
+                    return Err(format!(
+                        "draws `{}`: a site reads a RAM byte (`ram`) or a CPU register (`reg`), not both",
+                        d.site
+                    ));
+                }
+                (None, None) => {
+                    return Err(format!(
+                        "draws `{}`: a site needs `ram`, the RAM byte its instruction reads, or `reg`, the CPU register it reads",
+                        d.site
+                    ));
+                }
+                (None, Some(r)) => {
+                    let (regs, cpu) = if arcade {
+                        (Z80_DRAW_REGS, "the Z80")
+                    } else {
+                        (NES_DRAW_REGS, "the NES's 6502")
+                    };
+                    if !regs.contains(&r.as_str()) {
+                        return Err(format!(
+                            "draws `{}`: reg {r:?} isn't a register of {cpu}: one of {}",
+                            d.site,
+                            regs.join(", ")
+                        ));
+                    }
+                }
+            }
+        }
         if arcade {
             m.check_arcade()?;
         }

@@ -291,6 +291,8 @@ pub struct Trace {
     /// a,r` reads `r & 0x7f | r2 & 0x80`, a random routine's usual source.
     pub r: u8,
     pub r2: u8,
+    /// The interrupt vector register, which `ld a,i` reads.
+    pub i: u8,
     pub bytes: [u8; 4],
     /// The CPU's cycles since power-on at the instruction's start.
     pub cycles: u64,
@@ -406,6 +408,7 @@ impl Board {
             sp: cpu.sp,
             r: cpu.r,
             r2: cpu.r2,
+            i: cpu.i,
             bytes: [0; 4],
             cycles: x.totalcycles + (x.cycles_running - icount).max(0) as u64,
             interrupt: None,

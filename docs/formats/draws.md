@@ -15,7 +15,8 @@ The state mapping's `[[draws]]` (feature `draws`) names the original's draw site
 |---|---|
 | `site` | The site's name, which the hook draws by |
 | `pc` | The address of the instruction that reads the random byte |
-| `ram` | The random byte; an indexed read (`AND $19,X`) reads the byte its index names, and the recording takes that one |
+| `ram` | The random byte; an indexed read (`AND $19,X`) reads the byte its index names, and the recording takes that one. A site has `ram` or `reg`, not both |
+| `reg` | Optional (feature `draws.reg`), in place of `ram`: the random byte is a CPU register the instruction reads. On the Z80 (`platform = "arcade"`) one of `a`, `f`, `b`, `c`, `d`, `e`, `h`, `l`, `i` or `r`; on the NES one of `a`, `x` or `y`. The recording takes the register's value as the instruction at `pc` reads it: the value at the instruction's start, except `r`, which counts the instruction's own opcode fetches, so a site at `ld a,r` records what lands in A |
 | `soft` | Optional (feature `draws.soft`), default false: the byte is read only for presentation, such as a sound driver's random pitch. The script lists the site on a `soft SITE` line; a rebuild takes its draw when it asks on the same frame (`ExtCx::draw_soft`, which gives `None` without a script and takes nothing from the generator), and a draw it doesn't take, or one it asks for that the original didn't make, never desyncs the script. `DrawScript::peek` gives the next frame's soft draw without taking it, for a runtime that plays the next frame's sound ahead (`gp_sim::Ext::apu_peek`) |
 | `note` | Optional, for people |
 
@@ -32,6 +33,20 @@ note = "The ladder choice: AND $19 with C448's $88; 0 goes down"
 Donkey Kong's walk sound picks one of two pitches by bit 3 of $18 at $FC62 (the third site in the table below); its site `sound_buzz` is soft.
 
 A hook draws with `ExtCx::draw(site)`, a byte, and tests it as the original's code does: `cx.draw("ladder") & 0x88 == 0`. The odds are then the original's whatever the byte's source.
+
+### A site that reads a register
+
+Use `reg` when the game takes its random value straight from a CPU register rather than from a RAM byte, so no RAM byte holds the value the code tests. The common case is a Z80 game reading the refresh register with `ld a,r`: R counts the instructions the CPU has run, so the value depends on exactly how much code ran before it, which a model can't reproduce and which only the original gives. Name the `ld a,r` itself as the site, with `reg = "r"`; the hook draws by the site's name as for any other site and tests the bit the game tests. A value that goes through a RAM byte first (a generator that mixes R into a byte it keeps) is a `ram` site at the read of that byte, as before. On the NES, `reg = "a"`, `"x"` or `"y"` names a value a routine left in a register (a site after a `JSR` to a random routine, say). Tapper's level end, for instance, reads R at $467E and runs its end script a second time when bit 0 is 0:
+
+```toml
+[[draws]]
+site = "end_twice"
+pc = 0x467E
+reg = "r"
+note = "ld a,r; bit 0 at $4680 decides whether $4742 runs again"
+```
+
+and a hook takes it as `cx.draw("end_twice") & 1 == 0`.
 
 ## Finding draw sites
 
@@ -120,6 +135,6 @@ The report names each branch by the bits of the byte it reads: `byte & 0x88: 0x0
 
 ### Recording an arcade game's draws
 
-An arcade mapping (`platform = "arcade"`) takes `[[draws]]` like an NES one, and `gp clip score`, `gp corpus score`, the scenarios and `gp interp draws MODEL --rom ROM` record them from gp-arcade's trace and access log on the main Z80 (`record_draws_arcade` in crates/gp-cli/src/lockstep.rs). A Z80 game's random routine returns its number in A, so a site may name the call (`pc = 0x258A`, `call $5fac`, as `--find` proposes it) or the instruction just after it (`pc = 0x258D`); either way the draw is A when control comes back from the routine, which may be a frame later, and the draw is in that frame. A site after a `call nn` that wasn't taken (a conditional call falling through) draws nothing. Any other site draws the byte its instruction reads, as on the NES.
+An arcade mapping (`platform = "arcade"`) takes `[[draws]]` like an NES one, and `gp clip score`, `gp corpus score`, the scenarios and `gp interp draws MODEL --rom ROM` record them from gp-arcade's trace and access log on the main Z80 (`record_draws_arcade` in crates/gp-cli/src/lockstep.rs). A Z80 game's random routine returns its number in A, so a site may name the call (`pc = 0x258A`, `call $5fac`, as `--find` proposes it) or the instruction just after it (`pc = 0x258D`); either way the draw is A when control comes back from the routine, which may be a frame later, and the draw is in that frame. A site after a `call nn` that wasn't taken (a conditional call falling through) draws nothing. A site with `reg` draws the register (above), whether or not it is a call. Any other site draws the byte its instruction reads, as on the NES.
 
 On Tapper with the eleven sites of games branch tapper-2's mapping (each the instruction after a call of $5FAC) and the five-level autoplay: 427 draws (arrival_wait 131, attract_pick 35, bonus_shake 15, customer_wait_start 153, game_start 1, move_picture 8, pushed_drink 43, throw_wait 41), which is every one of the 427 numbers $5FAC took from $5FBD in that run by `--find`'s count. `--find` itself now follows a number up through a routine that passes it on in A, so it proposes the calls of $5FAC ($258A, $4F35) and lists the others that store their number for later ($09DE, $10C6, $1B6C, $213B, $4AFA) for review.

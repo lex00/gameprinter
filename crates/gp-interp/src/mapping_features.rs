@@ -328,6 +328,12 @@ pub const FEATURES: &[Feature] = &[
         &["draws.soft"],
     ),
     mapping(
+        "draws.reg",
+        "",
+        "A `[[draws]]` site's `reg` in place of `ram`: the random byte is a CPU register the instruction reads (the Z80's `r` for `ld a,r`, or a, f, b, c, d, e, h, l, i; the NES's a, x or y), recorded at the instruction",
+        &["draws.reg"],
+    ),
+    mapping(
         "draws.score",
         "",
         "`score_draws`: a clip's score gives the rebuild the original's random draws over the clip, recorded at the `[[draws]]` sites, as `gp interp compare --draws` does",
@@ -467,7 +473,7 @@ pub const FEATURES: &[Feature] = &[
     mapping(
         "platform",
         "",
-        "The original's machine: `arcade` for a romset, whose `ignore` may name any of the main CPU's addresses and which has none of the NES's own parts (`nametable`, `oam`, `oam_tile`, `read_at`, `[[draws]]`)",
+        "The original's machine: `arcade` for a romset, whose `ignore` may name any of the main CPU's addresses and which has none of the NES's own parts (`nametable`, `oam`, `oam_tile`, `read_at`)",
         &["platform"],
     ),
 ];

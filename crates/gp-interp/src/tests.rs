@@ -3398,8 +3398,43 @@ fn draw_sites_parse_and_a_site_name_is_one_word() {
     );
     let m = crate::mapping::Mapping::parse(&base).unwrap();
     assert_eq!(m.draws[0].site, "ladder");
-    assert_eq!((m.draws[0].pc, m.draws[0].ram), (0xDB7B, 0x19));
+    assert_eq!((m.draws[0].pc, m.draws[0].ram), (0xDB7B, Some(0x19)));
+    assert_eq!(m.draws[0].reg, None);
     assert!(crate::mapping::Mapping::parse(&base.replace("\"ladder\"", "\"two words\"")).is_err());
+}
+
+/// Feature `draws.reg`: a site reads a CPU register in place of a RAM
+/// byte, one of its platform's, and has one or the other, never both.
+#[test]
+fn a_draw_site_reads_a_register_or_a_ram_byte() {
+    use crate::mapping::Mapping;
+    let nes = |site: &str| {
+        Mapping::parse(&SLOT_MAPPING.replace(
+            "[slots]",
+            &format!("[[draws]]\nsite = \"pick\"\npc = 0xC010\n{site}\n\n[slots]"),
+        ))
+    };
+    let m = nes("reg = \"x\"").unwrap();
+    assert_eq!(
+        (m.draws[0].ram, m.draws[0].reg.as_deref()),
+        (None, Some("x"))
+    );
+    let err = nes("reg = \"r\"").unwrap_err();
+    assert!(err.contains("isn't a register of the NES's 6502"), "{err}");
+    let err = nes("ram = 0x19\nreg = \"a\"").unwrap_err();
+    assert!(err.contains("not both"), "{err}");
+    let err = nes("").unwrap_err();
+    assert!(err.contains("needs `ram`"), "{err}");
+    let arcade = |reg: &str| {
+        Mapping::parse(&format!(
+            "schema = 1\nmodel = \"m\"\nsource = \"s\"\nplatform = \"arcade\"\nalign = \"polled\"\n\n[[field]]\npath = \"entities.hero[0].x\"\nram = [0xE010]\n\n[[draws]]\nsite = \"twice\"\npc = 0x0100\nreg = \"{reg}\"\n"
+        ))
+    };
+    for r in crate::mapping::Z80_DRAW_REGS {
+        assert_eq!(arcade(r).unwrap().draws[0].reg.as_deref(), Some(*r));
+    }
+    let err = arcade("x").unwrap_err();
+    assert!(err.contains("isn't a register of the Z80"), "{err}");
 }
 
 /// Features `field.nametable`, `field.oam` and `field.oam_tile`: a field

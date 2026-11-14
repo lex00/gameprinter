@@ -300,9 +300,10 @@ pub(crate) fn record_draws_saved(
 /// instruction after it (where A holds the draw): either way the draw is A
 /// when control comes back from the routine, which may be a frame later.
 /// Any other site draws the first byte its instruction reads, as the NES
-/// path takes its operand's byte (the mapping's `ram` when it reads none).
-/// A draw is in the frame it completes in. Frames are counted on from the
-/// machine's own count.
+/// path takes its operand's byte (the mapping's `ram` when it reads none),
+/// and a site with `reg` the register as its instruction reads it
+/// ([`z80_reg`]). A draw is in the frame it completes in. Frames are
+/// counted on from the machine's own count.
 pub(crate) fn record_draws_arcade(
     mut t: gp_arcade::Tapper,
     mapping: &Mapping,
@@ -330,6 +331,7 @@ pub(crate) fn record_draws_arcade(
     let after_call: std::collections::BTreeMap<u16, u16> = mapping
         .draws
         .iter()
+        .filter(|d| d.reg.is_none())
         .filter_map(|d| {
             let decode = |at: u16| {
                 let bytes: Vec<u8> = (0..4).map(|k| t.peek(at.wrapping_add(k))).collect();
@@ -390,6 +392,14 @@ pub(crate) fn record_draws_arcade(
             let Some(d) = mapping.draws.iter().find(|d| d.pc == e.pc) else {
                 continue;
             };
+            if let Some(r) = &d.reg {
+                script.draws.push(gp_sim::draws::Draw {
+                    frame,
+                    site: d.site.clone(),
+                    value: z80_reg(e, r)?,
+                });
+                continue;
+            }
             if let Some(&call) = after_call.get(&e.pc) {
                 // Back from the routine, not a conditional call that fell
                 // through without calling.
@@ -412,7 +422,7 @@ pub(crate) fn record_draws_arcade(
                 _ => {
                     let value = acc[from_j..j]
                         .first()
-                        .map_or_else(|| t.peek(d.ram), |a| a.value);
+                        .map_or_else(|| d.ram.map_or(0, |at| t.peek(at)), |a| a.value);
                     script.draws.push(gp_sim::draws::Draw {
                         frame,
                         site: d.site.clone(),
@@ -423,6 +433,36 @@ pub(crate) fn record_draws_arcade(
         }
     }
     Ok(script)
+}
+
+/// The value a Z80 register site (`reg`) draws: the register as the
+/// instruction traced at `e` reads it. Every register but R is as it was
+/// at the instruction's start. R counts opcode fetches, the instruction's
+/// own as well (two with a prefix byte), so `ld a,r` loads R two past its
+/// count at the start, with bit 7 the one `ld r,a` set last.
+pub(crate) fn z80_reg(e: &gp_arcade::mcr::Trace, reg: &str) -> Result<u8> {
+    let hi = |w: u16| (w >> 8) as u8;
+    let lo = |w: u16| w as u8;
+    Ok(match reg {
+        "a" => hi(e.af),
+        "f" => lo(e.af),
+        "b" => hi(e.bc),
+        "c" => lo(e.bc),
+        "d" => hi(e.de),
+        "e" => lo(e.de),
+        "h" => hi(e.hl),
+        "l" => lo(e.hl),
+        "i" => e.i,
+        "r" => {
+            let fetches = if matches!(e.bytes[0], 0xcb | 0xdd | 0xed | 0xfd) {
+                2
+            } else {
+                1
+            };
+            (e.r.wrapping_add(fetches) & 0x7f) | (e.r2 & 0x80)
+        }
+        _ => bail!("draw site register {reg:?} isn't one of the Z80's"),
+    })
 }
 
 /// [`record_draws`] on a console already running: its frames are counted
@@ -457,13 +497,23 @@ pub(crate) fn record_draws_on(
         nes.step_with(frame_in, |bus| {
             let pc = bus.cpu.pc;
             if let Some(d) = mapping.draws.iter().find(|d| d.pc == pc) {
-                // The byte the instruction reads: its operand's address
-                // with any index, so `AND $19,X` reads each slot's byte.
-                let at = gp_nes::footprint::operand_read(bus, pc).unwrap_or(d.ram);
+                let value = match d.reg.as_deref() {
+                    // A register site: the register as the instruction
+                    // starts (the mapping refuses any but these).
+                    Some("x") => bus.cpu.x,
+                    Some("y") => bus.cpu.y,
+                    Some(_) => bus.cpu.acc,
+                    // The byte the instruction reads: its operand's
+                    // address with any index, so `AND $19,X` reads each
+                    // slot's byte.
+                    None => gp_nes::footprint::operand_read(bus, pc)
+                        .or(d.ram)
+                        .map_or(0, |at| bus.peek(at)),
+                };
                 script.draws.push(gp_sim::draws::Draw {
                     frame,
                     site: d.site.clone(),
-                    value: bus.peek(at),
+                    value,
                 });
             }
         })
@@ -916,5 +966,130 @@ mod arcade_tests {
         want.sort();
         assert!(have.len() > 100, "{}", have.len());
         assert_eq!(have, want);
+    }
+
+    /// Register sites (`reg`): a made-up loop reads R with `ld a,r` at
+    /// 0009 and branches on its bit 0, as a game picks one of two ways
+    /// (the two ways run 9 and 11 opcode fetches, so the bit changes).
+    /// The draw at 0009 is the byte `ld a,r` loads, which is A at 000b
+    /// where the trace sees it land; B and I are as the loop set them.
+    #[test]
+    fn arcade_register_sites_draw_what_the_instruction_reads() {
+        let main: &[u8] = &[
+            // 0000: ld sp,e7f0 ; ld a,5a ; ld i,a ; ld b,33
+            0x31, 0xf0, 0xe7, 0x3e, 0x5a, 0xed, 0x47, 0x06, 0x33,
+            // 0009: ld a,r ; bit 0,a ; jr z,+4 ; ld (e010),a ; nop
+            0xed, 0x5f, 0xcb, 0x47, 0x28, 0x04, 0x32, 0x10, 0xe0, 0x00,
+            // 0013: ld a,b ; ld a,i ; jr 0009
+            0x78, 0xed, 0x57, 0x18, 0xf1,
+        ];
+        let set = gp_arcade::testrom::romset(main, &[0x18, 0xfe]);
+        let mapping = gp_interp::mapping::Mapping::parse(
+            "schema = 1\nmodel = \"m\"\nsource = \"s\"\nplatform = \"arcade\"\nalign = \"polled\"\n\n[[field]]\npath = \"entities.hero[0].x\"\nram = [0xE010]\n\n[[draws]]\nsite = \"twice\"\npc = 0x0009\nreg = \"r\"\n\n[[draws]]\nsite = \"held\"\npc = 0x000B\nreg = \"a\"\n\n[[draws]]\nsite = \"b\"\npc = 0x0013\nreg = \"b\"\n\n[[draws]]\nsite = \"vec\"\npc = 0x0014\nreg = \"i\"\n",
+        )
+        .unwrap();
+        let inputs = vec![gp_evidence::input_log::InputFrame::default(); 3];
+        let script = crate::lockstep::record_draws_arcade(
+            gp_arcade::Tapper::power_on(&set),
+            &mapping,
+            &inputs,
+            1,
+        )
+        .unwrap();
+        let mut t = gp_arcade::Tapper::power_on(&set);
+        t.step(gp_arcade::Controls::default());
+        let mut want = Vec::new();
+        for f in 2..=3 {
+            t.set_trace(true);
+            t.step(gp_arcade::Controls::default());
+            let mut tr: Vec<_> = t.take_trace().into_iter().filter(|e| e.cpu == 0).collect();
+            tr.sort_by_key(|e| e.time);
+            for (n, e) in tr.iter().enumerate() {
+                if e.interrupt.is_some() {
+                    continue;
+                }
+                match e.pc {
+                    // What `ld a,r` loaded: A at the next instruction.
+                    0x0009 => {
+                        if let Some(next) = tr[n + 1..].iter().find(|x| x.interrupt.is_none()) {
+                            assert_eq!(next.pc, 0x000b);
+                            want.push((f, "twice".to_owned(), (next.af >> 8) as u8));
+                        }
+                    }
+                    0x000b => want.push((f, "held".to_owned(), (e.af >> 8) as u8)),
+                    0x0013 => want.push((f, "b".to_owned(), 0x33)),
+                    0x0014 => want.push((f, "vec".to_owned(), 0x5a)),
+                    _ => {}
+                }
+            }
+        }
+        let mut have: Vec<_> = script
+            .draws
+            .iter()
+            .map(|d| (d.frame, d.site.clone(), d.value))
+            .collect();
+        // A frame's last `ld a,r` lands in the next frame's trace.
+        let last_frame_r = have
+            .iter()
+            .rposition(|d| d.1 == "twice")
+            .filter(|&i| !want.contains(&have[i]));
+        if let Some(i) = last_frame_r {
+            have.remove(i);
+        }
+        have.sort();
+        want.sort();
+        assert!(have.len() > 100, "{}", have.len());
+        assert_eq!(have, want);
+        // Both ways are taken: bit 0 of R is the loop's coin.
+        let twice: Vec<u8> = have
+            .iter()
+            .filter(|d| d.1 == "twice")
+            .map(|d| d.2)
+            .collect();
+        assert!(twice.iter().any(|v| v & 1 == 0) && twice.iter().any(|v| v & 1 == 1));
+    }
+
+    /// Register sites on the NES: a made-up loop counts X and Y up from 7
+    /// and 9 with A held at $2A; a site's draw is its register as the
+    /// instruction starts.
+    #[test]
+    fn nes_register_sites_draw_the_register() {
+        let mut rom = vec![0u8; 16 + 0x4000 + 0x2000];
+        rom[..6].copy_from_slice(b"NES\x1A\x01\x01");
+        #[rustfmt::skip]
+        let code: &[u8] = &[
+            0xA2, 0x07,       // C000 LDX #$07
+            0xA0, 0x09,       // C002 LDY #$09
+            0xA9, 0x2A,       // C004 LDA #$2A
+            0xE8,             // C006 INX
+            0xC8,             // C007 INY
+            0xEA,             // C008 NOP
+            0x4C, 0x06, 0xC0, // C009 JMP $C006
+        ];
+        rom[16..16 + code.len()].copy_from_slice(code);
+        rom[16 + 0x3FFC..16 + 0x3FFE].copy_from_slice(&0xC000u16.to_le_bytes());
+        let mapping = gp_interp::mapping::Mapping::parse(
+            "schema = 1\nmodel = \"m\"\nsource = \"s\"\nalign = \"polled\"\n\n[[field]]\npath = \"entities.hero[0].x\"\nram = [0x10]\n\n[[draws]]\nsite = \"x\"\npc = 0xC006\nreg = \"x\"\n\n[[draws]]\nsite = \"y\"\npc = 0xC007\nreg = \"y\"\n\n[[draws]]\nsite = \"a\"\npc = 0xC008\nreg = \"a\"\n",
+        )
+        .unwrap();
+        let inputs = vec![gp_evidence::input_log::InputFrame::default(); 2];
+        let script = crate::lockstep::record_draws(&rom, &mapping, &inputs, 0).unwrap();
+        let of = |site: &str| -> Vec<u8> {
+            script
+                .draws
+                .iter()
+                .filter(|d| d.site == site)
+                .map(|d| d.value)
+                .collect()
+        };
+        let (x, y, a) = (of("x"), of("y"), of("a"));
+        assert!(x.len() > 100, "{}", x.len());
+        // The last frame may end inside the loop.
+        assert!(x.len() - a.len() <= 1, "{} {}", x.len(), a.len());
+        for (n, (&x, &y)) in x.iter().zip(&y).enumerate() {
+            assert_eq!(x, 7u8.wrapping_add(n as u8));
+            assert_eq!(y, 9u8.wrapping_add(n as u8));
+        }
+        assert!(a.iter().all(|&a| a == 0x2A));
     }
 }

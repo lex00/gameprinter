@@ -282,7 +282,7 @@ A feature is an optional part of a format with a name. A model lists the ones it
 
 ## State mapping
 
-64 features.
+65 features.
 
 | Feature | Since | What | Paths |
 |---|---|---|---|
@@ -329,6 +329,7 @@ A feature is an optional part of a format with a name. A model lists the ones it
 | `slots.vacant_from` |  | A condition under which the slots from a given one on read free, for a stage that uses fewer of a group's slots and the rest's bytes for something else | `slots.vacant_from`, `slots.group.vacant_from` |
 | `draws` |  | `[[draws]]`, the original's random draw sites: the code address that reads a random byte, the byte, and the site's name, from which `gp interp draws` records a clip's random draws script | `draws` |
 | `draws.soft` |  | A `[[draws]]` site's `soft`: a byte read only for presentation, such as a sound driver's random pitch, whose draws the rebuild takes when it asks on the same frame and which never desync the script | `draws.soft` |
+| `draws.reg` |  | A `[[draws]]` site's `reg` in place of `ram`: the random byte is a CPU register the instruction reads (the Z80's `r` for `ld a,r`, or a, f, b, c, d, e, h, l, i; the NES's a, x or y), recorded at the instruction | `draws.reg` |
 | `draws.score` |  | `score_draws`: a clip's score gives the rebuild the original's random draws over the clip, recorded at the `[[draws]]` sites, as `gp interp compare --draws` does | `score_draws` |
 | `stretches.play` |  | `[stretches] play`: a condition over the original's state outside which a frame isn't play, so it ends a long run's exact stretch and isn't counted | `stretches.play` |
 | `stretches.state` |  | `[[stretches.state]]`: the original's states by name and condition, by which a lockstep lists its splits | `stretches.state` |
@@ -349,7 +350,7 @@ A feature is an optional part of a format with a name. A model lists the ones it
 | `field.oam_tile` |  | A field's `oam_tile`: a byte of the first sprite in OAM whose tile is one of a list, or a number of its own when none is | `field.oam_tile` |
 | `field.machine` |  | A field's `machine`: a selector of the original's runtime protocol whose number is the field's, for state the console keeps outside memory, such as gp-nes's `nmi.` selectors (where the code the next NMI stops goes on, its entry's CPU cycle and PPU dot) | `field.machine` |
 | `slots.group.name` |  | A slot group's name, by which a derived template's delta merges its groups over its base's | `slots.group.name` |
-| `platform` |  | The original's machine: `arcade` for a romset, whose `ignore` may name any of the main CPU's addresses and which has none of the NES's own parts (`nametable`, `oam`, `oam_tile`, `read_at`, `[[draws]]`) | `platform` |
+| `platform` |  | The original's machine: `arcade` for a romset, whose `ignore` may name any of the main CPU's addresses and which has none of the NES's own parts (`nametable`, `oam`, `oam_tile`, `read_at`) | `platform` |
 
 ## Fidelity contract
 

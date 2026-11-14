@@ -230,7 +230,7 @@ A launcher table (the cannons a game has drawn, from which it picks one to fire)
 
 ## Random draw sites
 
-`[[draws]]` (feature `draws`) names the original's random draw sites. Each has a `site` name and the `pc` of the instruction that reads a random byte, and gives that byte as `ram`. A site with `soft = true` (feature `draws.soft`) is a byte read only for presentation, such as a sound driver's random pitch: the rebuild takes its draws when it asks on the same frame, and they never desync the script. `gp interp draws` records a clip's draws at them, which `gp interp compare --draws` gives the rebuild ([random draws script](draws.md)). With `score_draws = true` (feature `draws.score`) every score of a clip takes them with no script file. `gp game new` proposes a new game's sites from a minute of no input.
+`[[draws]]` (feature `draws`) names the original's random draw sites. Each has a `site` name and the `pc` of the instruction that reads a random byte, and gives that byte as `ram`, or, with `reg` in place of `ram` (feature `draws.reg`), a CPU register the instruction reads, such as the Z80's `r` at an `ld a,r` (one or the other, never both). A site with `soft = true` (feature `draws.soft`) is a byte read only for presentation, such as a sound driver's random pitch: the rebuild takes its draws when it asks on the same frame, and they never desync the script. `gp interp draws` records a clip's draws at them, which `gp interp compare --draws` gives the rebuild ([random draws script](draws.md)). With `score_draws = true` (feature `draws.score`) every score of a clip takes them with no script file. `gp game new` proposes a new game's sites from a minute of no input.
 
 ## Stretches
 
@@ -328,7 +328,7 @@ A byte the mapping names is never in it. No translation or comparison reads the 
 
 ## An arcade original
 
-`platform = "arcade"` (feature `platform`) marks a mapping of a MAME romset's game. Its `ram[...]` reads the main CPU's addresses: Tapper's work RAM is at `0xE000`, and its mapping reads the bartender's place from his object slot at `0xE2E6`. The NES's own parts are refused in it: `nametable`, `oam`, `oam_tile` and `read_at`. Its `ignore` may name any of the main CPU's addresses. Its `[[draws]]` name the main Z80's sites: a site that is a call draws the value the routine returns in A, any other the byte it reads.
+`platform = "arcade"` (feature `platform`) marks a mapping of a MAME romset's game. Its `ram[...]` reads the main CPU's addresses: Tapper's work RAM is at `0xE000`, and its mapping reads the bartender's place from his object slot at `0xE2E6`. The NES's own parts are refused in it: `nametable`, `oam`, `oam_tile` and `read_at`. Its `ignore` may name any of the main CPU's addresses. Its `[[draws]]` name the main Z80's sites: a site that is a call draws the value the routine returns in A, a site with `reg` the register it names, any other the byte it reads.
 
 ```toml
 platform = "arcade"
@@ -396,7 +396,7 @@ Without the list they're derived from the fields the mapping sets. With it, each
 | 21 | `[[ignore]]` (`ignore`) |
 | 22 | A slot rest's `word` (`slot.rest_word`) |
 
-Each step read every earlier mapping as before and refused one that used what it added, and a build that read only up to the step before refused it. The features added after 22 have no schema note: `cells.becomes`, `slots.field.stride`, `slots.no_id`, `slots.no_clock`, `slots.active_stride`, `slots.field.index`, `slots.free`, `slots.vacant`, `slots.vacant_from`, `draws`, `draws.soft`, `draws.score`, `stretches.play`, `stretches.state`, `scope.while`, `scope.leaves`, `field.bcd`, `field.case.unmeasured`, `slots.resync`, `field.lookup`, `field.case.ram`, `field.case.oam`, `field.case.nametable`, `field.case.number`, `field.case_flag`, `entity.jumping`, `field.whole_64`, `align.read_at_nmi`, `field.nametable`, `field.oam`, `field.oam_tile`, `field.machine`, `slots.group.name` and `platform`.
+Each step read every earlier mapping as before and refused one that used what it added, and a build that read only up to the step before refused it. The features added after 22 have no schema note: `cells.becomes`, `slots.field.stride`, `slots.no_id`, `slots.no_clock`, `slots.active_stride`, `slots.field.index`, `slots.free`, `slots.vacant`, `slots.vacant_from`, `draws`, `draws.soft`, `draws.reg`, `draws.score`, `stretches.play`, `stretches.state`, `scope.while`, `scope.leaves`, `field.bcd`, `field.case.unmeasured`, `slots.resync`, `field.lookup`, `field.case.ram`, `field.case.oam`, `field.case.nametable`, `field.case.number`, `field.case_flag`, `entity.jumping`, `field.whole_64`, `align.read_at_nmi`, `field.nametable`, `field.oam`, `field.oam_tile`, `field.machine`, `slots.group.name` and `platform`.
 
 ## Decisions
 
