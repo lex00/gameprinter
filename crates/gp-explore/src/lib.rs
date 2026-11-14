@@ -19,7 +19,7 @@ pub mod presses;
 pub mod search;
 pub mod start;
 
-pub use graph::CallGraph;
+pub use graph::{CallGraph, Point};
 pub use search::{
     Drive, Found, NewCode, Opts, Plan, Progress, Score, Toward, drive, drive_with, search,
     search_watched,

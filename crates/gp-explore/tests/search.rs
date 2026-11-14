@@ -7,7 +7,9 @@ use std::collections::BTreeSet;
 
 use gp_evidence::input_log::InputFrame;
 use gp_evidence::manifest::PowerOn;
-use gp_explore::{CallGraph, NewCode, Opts, Progress, Start, Toward, search, search_watched};
+use gp_explore::{
+    CallGraph, NewCode, Opts, Point, Progress, Start, Toward, search, search_watched,
+};
 use gp_nes::codemap::Board;
 
 #[rustfmt::skip]
@@ -180,4 +182,51 @@ fn a_kept_candidate_replays_from_power_on() {
             );
         }
     }
+}
+
+/// A target inside a routine: the `JSR $C100` at $C021 in the NMI
+/// routine runs only while A is held. Idle runs start the `BEQ` before
+/// it, one branch way away; the search, aimed at the address, finds
+/// presses that start it and stops there.
+#[test]
+fn a_target_inside_a_routine_is_reached_when_its_instruction_starts() {
+    let rom = rom();
+    let idle = vec![InputFrame::default(); 30];
+    let known = gp_events::Levels::of(
+        &gp_events::run(&rom, PowerOn::default(), &idle, true)
+            .unwrap()
+            .collector,
+        30,
+    );
+    let (prg, mapper) = gp_nes::harvest::ines_prg(&rom).unwrap();
+    let board = Board::of(prg, mapper);
+    let h = gp_nes::harvest::harvest_board(&board, &gp_nes::harvest::Input::default());
+    let graph = CallGraph::of(&board, &h);
+
+    let jsr = Point::of(&board, &graph, 0xC021).expect("an instruction of the NMI routine");
+    assert_eq!(jsr.name(&graph), "$C021 in sub_C010");
+    assert_eq!(jsr.local.get(&0x1F), Some(&1), "the BEQ falls to it");
+    assert_eq!(jsr.local.get(&0x10), Some(&1), "from the entry");
+    assert!(!jsr.reached(&known));
+    let ran = graph.ran(&known);
+    assert_eq!(jsr.distance(&ran, &known), 1);
+    let read = Point::of(&board, &graph, 0xC01A).unwrap();
+    assert_eq!(read.distance(&ran, &known), 0);
+    assert!(
+        Point::of(&board, &graph, 0xC022).is_none(),
+        "the middle of the JSR"
+    );
+
+    let start = Start::of(&rom, PowerOn::default(), &idle).unwrap();
+    let opts = Opts {
+        seed: 3,
+        budget: 200,
+        min_frames: 10,
+        max_frames: 40,
+    };
+    let mut s = Toward::with_points(graph.clone(), BTreeSet::new(), vec![jsr], &known);
+    let found = search(&rom, std::slice::from_ref(&start), &mut s, &opts).unwrap();
+    assert!(s.points.is_empty(), "reached");
+    assert_eq!(found[0].rank.0, 0);
+    assert!(found[0].levels.footprint.starts.contains(0x21));
 }

@@ -5,7 +5,7 @@
 
 use gp_events::{Bits, Levels, RunError};
 
-use crate::graph::CallGraph;
+use crate::graph::{CallGraph, Point};
 use crate::presses::{NES, Palette, Rng, mutate_with};
 use crate::start::{Start, run_from};
 
@@ -352,15 +352,18 @@ impl Score for NewCode {
     }
 }
 
-/// Toward routines no run reached: a run ranks by the fewest calls from a
-/// routine it ran to a target still unreached, then by new code. A target a
-/// run reaches is dropped and the distances worked out again; the search
-/// is done when every target ran.
+/// Toward routines no run reached, and instructions inside routines
+/// ([`Point`]): a run ranks by the fewest calls from a routine it ran to a
+/// target still unreached (for a point, or the fewest branch ways to it),
+/// then by new code. A target a run reaches is dropped and the distances
+/// worked out again; the search is done when every target ran.
 #[derive(Debug, Clone)]
 pub struct Toward {
     pub graph: CallGraph,
     /// Targets not reached yet.
     pub targets: std::collections::BTreeSet<usize>,
+    /// Targets inside routines not reached yet.
+    pub points: Vec<Point>,
     /// Targets reached, in the order runs reached them.
     pub reached: Vec<usize>,
     dist: Vec<Option<u32>>,
@@ -374,10 +377,21 @@ impl Toward {
         targets: std::collections::BTreeSet<usize>,
         known: &Levels,
     ) -> Toward {
+        Toward::with_points(graph, targets, Vec::new(), known)
+    }
+
+    /// Toward routines and instructions inside routines.
+    pub fn with_points(
+        graph: CallGraph,
+        targets: std::collections::BTreeSet<usize>,
+        points: Vec<Point>,
+        known: &Levels,
+    ) -> Toward {
         let dist = graph.distances_to(&targets);
         let mut t = Toward {
             graph,
             targets,
+            points,
             reached: Vec::new(),
             dist,
             best: u32::MAX,
@@ -387,27 +401,13 @@ impl Toward {
         t
     }
 
-    /// The routines `run` ran.
-    fn ran(&self, run: &Levels) -> std::collections::BTreeSet<usize> {
-        let mut out = std::collections::BTreeSet::new();
-        for (w, &word) in run.footprint.starts.words().iter().enumerate() {
-            let mut bits = word;
-            while bits != 0 {
-                let o = w * 64 + bits.trailing_zeros() as usize;
-                bits &= bits - 1;
-                if let Some(r) = self.graph.at(o) {
-                    out.insert(r);
-                }
-            }
-        }
-        out
-    }
-
-    /// The fewest calls from a routine `run` ran to a target not reached.
+    /// The fewest calls from a routine `run` ran to a target not reached,
+    /// or branch ways to a point not reached.
     pub fn distance(&self, run: &Levels) -> u32 {
-        self.ran(run)
-            .into_iter()
-            .filter_map(|r| self.dist[r])
+        let ran = self.graph.ran(run);
+        ran.iter()
+            .filter_map(|&r| self.dist[r])
+            .chain(self.points.iter().map(|p| p.distance(&ran, run)))
             .min()
             .unwrap_or(u32::MAX)
     }
@@ -415,7 +415,7 @@ impl Toward {
 
 impl Score for Toward {
     fn rank(&mut self, run: &Levels) -> Option<(u32, i64)> {
-        let ran = self.ran(run);
+        let ran = self.graph.ran(run);
         let hit: Vec<usize> = self
             .targets
             .iter()
@@ -425,14 +425,17 @@ impl Score for Toward {
         let d = ran
             .iter()
             .filter_map(|&r| self.dist[r])
+            .chain(self.points.iter().map(|p| p.distance(&ran, run)))
             .min()
             .unwrap_or(u32::MAX);
         let n = fresh(&mut self.seen, run);
-        if !hit.is_empty() {
+        let points_hit = self.points.iter().any(|p| p.reached(run));
+        if !hit.is_empty() || points_hit {
             for t in &hit {
                 self.targets.remove(t);
             }
             self.reached.extend(hit);
+            self.points.retain(|p| !p.reached(run));
             self.dist = self.graph.distances_to(&self.targets);
             self.best = u32::MAX;
             return Some((0, -(n as i64)));
@@ -446,6 +449,6 @@ impl Score for Toward {
     }
 
     fn done(&self) -> bool {
-        self.targets.is_empty()
+        self.targets.is_empty() && self.points.is_empty()
     }
 }

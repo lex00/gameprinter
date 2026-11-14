@@ -4,9 +4,13 @@
 //! The start is a clip from power-on (its whole input is the prefix). The
 //! start clips' runs seed the static harvest's code map (as `gp model
 //! static --clips` does), and the targets are the routines it has that no
-//! run reached, or the routines named. The search ranks each candidate by
-//! the fewest calls from a routine it ran to a target, then by the code it
-//! ran first; with no target, by new code alone. What it keeps is written
+//! run reached, or the routines named, or instructions inside routines
+//! named by address (reached when a run starts the instruction: the run's
+//! instruction starts, which every watched run already records). The
+//! search ranks each candidate by the fewest calls from a routine it ran
+//! to a target (for an address, or the fewest branch ways to it inside its
+//! routine, as on an arcade romset), then by the code it ran first; with
+//! no target, by new code alone. What it keeps is written
 //! as clips from power-on, so `gp reach` and `gp model static --clips` run
 //! them as any other.
 
@@ -19,7 +23,9 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use gp_evidence::Paths;
 use gp_explore::presses::spans;
-use gp_explore::{CallGraph, Found, NewCode, Opts, Progress, Score, Start, Toward, search_watched};
+use gp_explore::{
+    CallGraph, Found, NewCode, Opts, Point, Progress, Score, Start, Toward, search_watched,
+};
 use serde_json::json;
 
 use crate::Outcome;
@@ -53,9 +59,10 @@ pub struct ExploreArgs {
     #[arg(long)]
     pub from: Vec<String>,
     /// Routines to aim at, by the harvest's names (`sub_01_8000`; on an
-    /// arcade romset the main Z80's, `sub_5FAC`). On an arcade romset also
-    /// an address inside a routine (`0BC3`, a branch way), reached when the
-    /// main CPU runs the instruction there. Default: as `--aim` says.
+    /// arcade romset the main Z80's, `sub_5FAC`), or an address inside a
+    /// routine (`C123`, `03:8123` in a switched bank; `0BC3` on an arcade
+    /// romset), reached when the CPU starts the instruction there.
+    /// Default: as `--aim` says.
     #[arg(long = "target")]
     pub targets: Vec<String>,
     /// What to aim at with no `--target`: `unrun`, the routines the code map
@@ -131,6 +138,37 @@ pub(crate) fn stop_targets(
     names.iter().filter_map(|n| graph.index(n)).collect()
 }
 
+/// A `--target`: a routine by name, else an instruction inside one by its
+/// address (`C123`, or `03:8123` in a switched region).
+pub(crate) enum Aim {
+    Routine(usize),
+    Point(Point),
+}
+
+pub(crate) fn aim(board: &gp_nes::codemap::Board, g: &CallGraph, t: &str) -> Result<Aim> {
+    if let Some(r) = g.index(t) {
+        return Ok(Aim::Routine(r));
+    }
+    let text = t.trim_start_matches("0x").trim_start_matches('$');
+    let at = gp_nes::codemap::va_parse(text).with_context(|| {
+        format!(
+            "--target {t}: the code map has no routine {t}, and it isn't an address (C123, 03:8123)"
+        )
+    })?;
+    let cpu = gp_nes::codemap::va_cpu(at);
+    if gp_nes::codemap::va_tag(at) == 0 && board.region(cpu).is_some() {
+        bail!(
+            "--target {t}: ${cpu:04X} is in a region the board switches; name the bank (03:{cpu:04X})"
+        );
+    }
+    Point::of(board, g, at).map(Aim::Point).with_context(|| {
+        format!(
+            "--target {t}: the code map has no routine {t}, and no instruction of a routine starts at ${}",
+            gp_nes::codemap::va_hex(at)
+        )
+    })
+}
+
 /// The search `a` asks for, from `clips` whose merged runs are `known`,
 /// telling `on` as it goes.
 pub(crate) fn explore_with(
@@ -168,17 +206,20 @@ pub(crate) fn explore_with(
         matches!(a.aim.as_str(), "unrun" | "unread" | "stops"),
         "--aim is unrun, unread or stops"
     );
+    let mut points: Vec<Point> = Vec::new();
     let targets: BTreeSet<usize> = if a.new_code {
         BTreeSet::new()
     } else if !a.targets.is_empty() {
-        a.targets
-            .iter()
-            .map(|t| {
-                graph
-                    .index(t)
-                    .with_context(|| format!("the code map has no routine {t}"))
-            })
-            .collect::<Result<_>>()?
+        let mut routines = BTreeSet::new();
+        for t in &a.targets {
+            match aim(&board, &graph, t)? {
+                Aim::Routine(r) => {
+                    routines.insert(r);
+                }
+                Aim::Point(p) => points.push(p),
+            }
+        }
+        routines
     } else if a.aim == "stops" {
         unread
             .iter()
@@ -211,6 +252,7 @@ pub(crate) fn explore_with(
     let target_names: Vec<String> = targets
         .iter()
         .map(|&i| graph.routines[i].0.clone())
+        .chain(points.iter().map(|p| p.name(&graph)))
         .collect();
     let starts: Vec<Start> = start_clips
         .iter()
@@ -224,11 +266,11 @@ pub(crate) fn explore_with(
     };
     let mut toward;
     let mut new_code;
-    let score: &mut dyn Score = if targets.is_empty() {
+    let score: &mut dyn Score = if targets.is_empty() && points.is_empty() {
         new_code = NewCode::new(known);
         &mut new_code
     } else {
-        toward = Toward::new(graph.clone(), targets.clone(), known);
+        toward = Toward::with_points(graph.clone(), targets.clone(), points.clone(), known);
         &mut toward
     };
     let mut found = search_watched(rom, &starts, score, &opts, on)?;
@@ -242,6 +284,9 @@ pub(crate) fn explore_with(
                 if (*o..o + n).any(|x| f.levels.footprint.starts.contains(x)) {
                     r.insert(graph.routines[t].0.clone());
                 }
+            }
+            for p in points.iter().filter(|p| p.reached(&f.levels)) {
+                r.insert(p.name(&graph));
             }
         }
         r.into_iter().collect()

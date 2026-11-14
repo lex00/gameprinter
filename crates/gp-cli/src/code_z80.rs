@@ -6,11 +6,13 @@
 //! The code map is a recursive descent from each CPU's reset at 0000 (a
 //! restart vector or the NMI's at 66 is code only once something reaches
 //! it: an `rst`, or a run's interrupt) and from every instruction a run
-//! started, every interrupt handler and every target a
-//! `jp (hl)`, `jp (ix)` or `jp (iy)` went to in a run, which no reading of
-//! the code alone can find. A routine is a call's or restart's target, an
-//! interrupt handler, or an entry; each instruction belongs to the nearest
-//! routine at or below it.
+//! started, every interrupt handler, every entry of a jump table handed to
+//! an indexed-jump helper (a routine that jumps to the word at HL plus
+//! twice A, found by running it alone: [`jump_helper`]), and every target
+//! a `jp (hl)`, `jp (ix)` or `jp (iy)` went to in a run, which no reading
+//! of the code alone otherwise finds. A routine is a call's or restart's
+//! target, an interrupt handler, a jump table's entry, or an entry; each
+//! instruction belongs to the nearest routine at or below it.
 //!
 //! Tapper's main CPU sees 56 KB of ROM at 0000-DFFF with no banking (the
 //! board has no bank switch: mcr.rs maps it whole), so an address is a
@@ -232,6 +234,202 @@ fn interrupt_handlers(set: &Romset, cpu: usize, insns: &BTreeMap<u16, Insn>) -> 
     out
 }
 
+/// Where the table probe of [`jump_helper`] lives in the probe's memory:
+/// its bytes, its stack and the return address a call pushes. The table's
+/// bytes are E0, E1, E2 and so on, so a word read from it at offset `o` is
+/// (E1 + o) * 256 + E0 + o, an address past the ROM, and from a landing
+/// there the offset follows; the return address (the ROM's end) has a low
+/// byte of 00, which no word of the table has.
+const PROBE_TABLE: u16 = 0xf000;
+const PROBE_STACK: u16 = 0xfff0;
+const PROBE_BYTES: u16 = 0x20;
+/// Instructions a helper may take from its entry to the jump.
+const PROBE_STEPS: u32 = 64;
+
+/// The flat machine a probe runs on: the ROM below `end` (writes there
+/// do nothing), RAM above it, no interrupts, ports reading FF. Before each
+/// instruction it notes where the CPU is; once it has left the ROM, or
+/// taken too many steps, the run is over.
+struct Probe {
+    mem: Vec<u8>,
+    end: u16,
+    steps: u32,
+    left: Option<u16>,
+}
+
+impl Probe {
+    fn stop(&self, icount: &mut i32) {
+        if self.left.is_some() || self.steps > PROBE_STEPS {
+            *icount = 0;
+        }
+    }
+}
+
+impl gp_arcade::z80::Z80Bus for Probe {
+    fn read(&mut self, addr: u16, icount: &mut i32) -> u8 {
+        self.stop(icount);
+        self.mem[usize::from(addr)]
+    }
+    fn write(&mut self, addr: u16, value: u8, icount: &mut i32) {
+        self.stop(icount);
+        if addr >= self.end {
+            self.mem[usize::from(addr)] = value;
+        }
+    }
+    fn fetch(&mut self, addr: u16) -> u8 {
+        self.mem[usize::from(addr)]
+    }
+    fn io_read(&mut self, _port: u16, icount: &mut i32) -> u8 {
+        self.stop(icount);
+        0xff
+    }
+    fn io_write(&mut self, _port: u16, _value: u8, icount: &mut i32) {
+        self.stop(icount);
+    }
+    fn irq_ack(&mut self, _icount: &mut i32) -> i32 {
+        0xff
+    }
+    fn reti(&mut self, _icount: &mut i32) {}
+    fn instruction(&mut self, cpu: &gp_arcade::z80::Z80) {
+        if self.left.is_none() && cpu.pc >= self.end {
+            self.left = Some(cpu.pc);
+        }
+        self.steps += 1;
+    }
+}
+
+/// Whether the code at `at` is an indexed-jump helper, read from what its
+/// instructions do: run alone from `at` with HL at a made-up table and A
+/// at 0, 1 and 2, it must jump to the word at HL + 2A + c each time, for
+/// one small c, within [`PROBE_STEPS`] instructions and without returning.
+/// The answer is c: the helper's table starts c bytes past HL. A helper
+/// that reads its table from another register, scales A otherwise, or
+/// checks A against a bound below 3 isn't found.
+fn jump_helper(rom: &[u8], end: u32, at: u16) -> Option<u16> {
+    if end > u32::from(PROBE_TABLE) || u32::from(at) >= end {
+        return None;
+    }
+    let end = end as u16;
+    let mut base = vec![0u8; 0x1_0000];
+    base[..usize::from(end)].copy_from_slice(&rom[..usize::from(end).min(rom.len())]);
+    for o in 0..PROBE_BYTES {
+        base[usize::from(PROBE_TABLE + o)] = 0xe0 + o as u8;
+    }
+    let ret = end.to_le_bytes();
+    base[usize::from(PROBE_STACK)] = ret[0];
+    base[usize::from(PROBE_STACK) + 1] = ret[1];
+    let mut c = None;
+    for k in 0..3u16 {
+        let mut bus = Probe {
+            mem: base.clone(),
+            end,
+            steps: 0,
+            left: None,
+        };
+        let mut cpu = gp_arcade::z80::Z80::new();
+        cpu.pc = at;
+        cpu.sp = PROBE_STACK;
+        cpu.af = k << 8;
+        cpu.hl = PROBE_TABLE;
+        cpu.icount = 4 * PROBE_STEPS as i32 * 23;
+        cpu.execute_run(&mut bus);
+        let to = bus.left?;
+        let [lo, hi] = to.to_le_bytes();
+        if lo < 0xe0 || hi != lo.wrapping_add(1) {
+            return None;
+        }
+        let o = u16::from(lo - 0xe0);
+        let ck = o.checked_sub(2 * k)?;
+        if c.is_some_and(|c| c != ck) {
+            return None;
+        }
+        c = Some(ck);
+    }
+    c
+}
+
+/// The constant HL holds at `pc`, when the straight run of instructions
+/// before it sets it with `ld hl,nn` and nothing after that writes H or L.
+fn hl_before(insns: &BTreeMap<u16, Insn>, rom: &[u8], pc: u16) -> Option<u16> {
+    let mut at = pc;
+    for _ in 0..8 {
+        let (&p, i) = insns
+            .range(..at)
+            .next_back()
+            .filter(|(p, i)| p.wrapping_add(u16::from(i.len)) == at)?;
+        if !matches!(i.flow, Flow::Next) {
+            return None;
+        }
+        if i.writes & (dasm::reg::HL | dasm::reg::ALT) != 0 {
+            let b = |k: u16| rom.get(usize::from(p.wrapping_add(k))).copied();
+            return (b(0)? == 0x21)
+                .then(|| u16::from_le_bytes([b(1).unwrap_or(0), b(2).unwrap_or(0)]));
+        }
+        at = p;
+    }
+    None
+}
+
+/// Entries a jump table may hold at most.
+const TABLE_MAX: u16 = 128;
+
+/// A jump table behind an indexed-jump helper: where it starts, and how
+/// many of its entries the map has taken so far (`None` once it has
+/// ended).
+struct JumpTable {
+    from: u16,
+    taken: Option<u16>,
+}
+
+/// The next entry of `t`, if it is still one. The table ends at the
+/// first slot that isn't in the ROM, overlaps an instruction the map
+/// holds, lies at or past code a taken entry points to, or holds a word
+/// that isn't a plausible code address: past the ROM, inside the table,
+/// or inside an instruction rather than at its start, or at an
+/// instruction the map holds that nothing else enters (no call, jump,
+/// handler or earlier entry of the table names it: a word that lands in
+/// the middle of known code is more likely data). The map takes one
+/// entry a round and descends from it before looking at the next, so
+/// code an earlier entry reaches can end the table: a wrong entry would
+/// make the map lie, a missed one only leaves a routine out.
+fn next_entry(
+    t: &JumpTable,
+    targets: &[u16],
+    insns: &BTreeMap<u16, Insn>,
+    entered: &BTreeSet<u16>,
+    rom: &[u8],
+    end: u32,
+) -> Option<u16> {
+    let i = t.taken?;
+    if i >= TABLE_MAX {
+        return None;
+    }
+    let slot = t.from.checked_add(2 * i)?;
+    if u32::from(slot) + 2 > end {
+        return None;
+    }
+    let covered = |a: u16| {
+        insns
+            .range(..=a)
+            .next_back()
+            .is_some_and(|(p, i)| u32::from(*p) + u32::from(i.len) > u32::from(a))
+    };
+    if covered(slot) || covered(slot + 1) {
+        return None;
+    }
+    if targets.iter().any(|&to| to >= t.from && to <= slot + 1) {
+        return None;
+    }
+    let w = u16::from_le_bytes([rom[usize::from(slot)], rom[usize::from(slot) + 1]]);
+    if w == 0 || u32::from(w) >= end || (t.from..=slot + 1).contains(&w) {
+        return None;
+    }
+    if covered(w) && !(entered.contains(&w) || targets.contains(&w)) {
+        return None;
+    }
+    Some(w)
+}
+
 /// One CPU's code map.
 pub(crate) struct CodeMap {
     pub cpu: usize,
@@ -243,73 +441,207 @@ pub(crate) struct CodeMap {
     pub rom: Vec<u8>,
 }
 
+/// What one descent found: the instructions, the routines and the jump
+/// tables' entries it took, by table.
+struct Descent {
+    insns: BTreeMap<u16, Insn>,
+    routines: BTreeMap<u16, &'static str>,
+    tables: BTreeMap<u16, Vec<u16>>,
+}
+
+/// The descent from the entries and what `ran` saw, taking at most
+/// `limits[t]` entries of the jump table at `t`.
+fn descend(
+    set: &Romset,
+    cpu: usize,
+    ran: Option<&CpuLevels>,
+    limits: &BTreeMap<u16, u16>,
+) -> Descent {
+    let (rom, end) = program(set, cpu);
+    let mut routines: BTreeMap<u16, &'static str> = BTreeMap::new();
+    routines.insert(0, "reset");
+    let mut todo: Vec<u16> = vec![0];
+    if let Some(r) = ran {
+        todo.extend(r.starts.keys());
+        for (_, to, kind) in r.edges.keys() {
+            match kind {
+                EdgeKind::Interrupt => {
+                    routines.entry(*to).or_insert("interrupt handler");
+                }
+                EdgeKind::Indirect => {
+                    routines.entry(*to).or_insert("jp (..) target");
+                }
+                _ => {}
+            }
+            todo.push(*to);
+        }
+    }
+    let mut insns = BTreeMap::new();
+    let mut seen = BTreeSet::new();
+    // Indexed-jump helpers by entry (None: not one), and the tables their
+    // callers hand them, by start.
+    let mut helpers: BTreeMap<u16, Option<u16>> = BTreeMap::new();
+    let mut tables: BTreeMap<u16, JumpTable> = BTreeMap::new();
+    let mut taken: BTreeMap<u16, Vec<u16>> = BTreeMap::new();
+    // The descent, then again from the interrupt handlers the code read
+    // so far sets up, then from one more entry of each jump table, until
+    // it finds no more.
+    loop {
+        while let Some(pc) = todo.pop() {
+            if u32::from(pc) >= end || !seen.insert(pc) {
+                continue;
+            }
+            let Some(i) = insn_at(set, cpu, pc) else {
+                continue;
+            };
+            let next = pc.wrapping_add(u16::from(i.len));
+            match i.flow {
+                Flow::Call(t) | Flow::CallIf(t) => {
+                    routines.entry(t).or_insert("called");
+                    todo.push(t);
+                }
+                Flow::Rst(t) => {
+                    routines.entry(t).or_insert("restart");
+                    todo.push(t);
+                }
+                Flow::Jump(t) | Flow::JumpIf(t) | Flow::Djnz(t) => todo.push(t),
+                _ => {}
+            }
+            if i.flow.falls_through() {
+                todo.push(next);
+            }
+            insns.insert(pc, i);
+        }
+        for h in interrupt_handlers(set, cpu, &insns) {
+            if let std::collections::btree_map::Entry::Vacant(e) = routines.entry(h) {
+                e.insert("interrupt handler");
+                todo.push(h);
+            }
+        }
+        if !todo.is_empty() {
+            continue;
+        }
+        // Calls and jumps to an indexed-jump helper with HL set just
+        // before: each names a table.
+        for (&pc, i) in &insns {
+            let (Flow::Call(t) | Flow::CallIf(t) | Flow::Jump(t) | Flow::JumpIf(t)) = i.flow else {
+                continue;
+            };
+            let Some(hl) = hl_before(&insns, rom, pc) else {
+                continue;
+            };
+            let Some(c) = *helpers.entry(t).or_insert_with(|| jump_helper(rom, end, t)) else {
+                continue;
+            };
+            let from = hl.wrapping_add(c);
+            tables.entry(from).or_insert(JumpTable {
+                from,
+                taken: Some(0),
+            });
+        }
+        let entered = entered(&insns, &routines);
+        for t in tables.values_mut() {
+            let took = taken.entry(t.from).or_default();
+            let limit = limits.get(&t.from).copied().unwrap_or(TABLE_MAX);
+            let next = t
+                .taken
+                .filter(|&n| n < limit)
+                .and_then(|_| next_entry(t, took, &insns, &entered, rom, end));
+            match next {
+                Some(w) => {
+                    took.push(w);
+                    t.taken = t.taken.map(|n| n + 1);
+                    routines.entry(w).or_insert(TABLE_ENTRY);
+                    todo.push(w);
+                }
+                None => t.taken = None,
+            }
+        }
+        if todo.is_empty() {
+            break;
+        }
+    }
+    routines.retain(|at, _| insns.contains_key(at));
+    Descent {
+        insns,
+        routines,
+        tables: taken,
+    }
+}
+
+/// Why a routine is one when only a jump table names it.
+const TABLE_ENTRY: &str = "jump table entry";
+
+/// The addresses something other than a jump table enters: routines for
+/// another reason and the targets of calls, restarts and jumps.
+fn entered(insns: &BTreeMap<u16, Insn>, routines: &BTreeMap<u16, &'static str>) -> BTreeSet<u16> {
+    let mut out: BTreeSet<u16> = routines
+        .iter()
+        .filter(|(_, why)| **why != TABLE_ENTRY)
+        .map(|(at, _)| *at)
+        .collect();
+    out.extend(insns.values().filter_map(|i| i.flow.target()));
+    out
+}
+
+/// How many entries of the table at `from` (its entries `took`, in order)
+/// still hold once the descent is over: the first that fails ends it.
+/// An entry fails when its slot overlaps code, or its word lands inside
+/// an instruction, or on one the instruction before it falls into while
+/// nothing but a jump table enters it (the middle of known code, so more
+/// likely data than a table's word). An entry the same table named
+/// before holds.
+fn entries_that_hold(d: &Descent, from: u16, took: &[u16], entered: &BTreeSet<u16>) -> u16 {
+    let covered = |a: u16| {
+        d.insns
+            .range(..=a)
+            .next_back()
+            .is_some_and(|(p, i)| u32::from(*p) + u32::from(i.len) > u32::from(a))
+    };
+    for (n, &w) in took.iter().enumerate() {
+        let slot = from.wrapping_add(2 * n as u16);
+        let before = &took[..n];
+        let fallen_into =
+            d.insns.range(..w).next_back().is_some_and(|(p, i)| {
+                p.wrapping_add(u16::from(i.len)) == w && i.flow.falls_through()
+            });
+        let bad = covered(slot)
+            || covered(slot.wrapping_add(1))
+            || (covered(w) && !d.insns.contains_key(&w))
+            || (fallen_into && !entered.contains(&w) && !before.contains(&w));
+        if bad {
+            return n as u16;
+        }
+    }
+    took.len() as u16
+}
+
 impl CodeMap {
-    /// The descent from the entries and what `ran` saw.
+    /// The descent from the entries and what `ran` saw. A jump table's
+    /// entries are taken one at a time, then checked again against the
+    /// whole map; when an entry fails, the descent runs again with the
+    /// table cut before it, until every entry taken holds.
     pub fn of(set: &Romset, cpu: usize, ran: Option<&CpuLevels>) -> Self {
-        let end = program(set, cpu).1;
-        let mut routines: BTreeMap<u16, &'static str> = BTreeMap::new();
-        routines.insert(0, "reset");
-        let mut todo: Vec<u16> = vec![0];
-        if let Some(r) = ran {
-            todo.extend(r.starts.keys());
-            for (_, to, kind) in r.edges.keys() {
-                match kind {
-                    EdgeKind::Interrupt => {
-                        routines.entry(*to).or_insert("interrupt handler");
-                    }
-                    EdgeKind::Indirect => {
-                        routines.entry(*to).or_insert("jp (..) target");
-                    }
-                    _ => {}
-                }
-                todo.push(*to);
-            }
-        }
-        let mut insns = BTreeMap::new();
-        let mut seen = BTreeSet::new();
-        // The descent, then again from the interrupt handlers the code
-        // read so far sets up, until it finds no more.
-        loop {
-            while let Some(pc) = todo.pop() {
-                if u32::from(pc) >= end || !seen.insert(pc) {
-                    continue;
-                }
-                let Some(i) = insn_at(set, cpu, pc) else {
-                    continue;
-                };
-                let next = pc.wrapping_add(u16::from(i.len));
-                match i.flow {
-                    Flow::Call(t) | Flow::CallIf(t) => {
-                        routines.entry(t).or_insert("called");
-                        todo.push(t);
-                    }
-                    Flow::Rst(t) => {
-                        routines.entry(t).or_insert("restart");
-                        todo.push(t);
-                    }
-                    Flow::Jump(t) | Flow::JumpIf(t) | Flow::Djnz(t) => todo.push(t),
-                    _ => {}
-                }
-                if i.flow.falls_through() {
-                    todo.push(next);
-                }
-                insns.insert(pc, i);
-            }
-            for h in interrupt_handlers(set, cpu, &insns) {
-                if let std::collections::btree_map::Entry::Vacant(e) = routines.entry(h) {
-                    e.insert("interrupt handler");
-                    todo.push(h);
+        let mut limits: BTreeMap<u16, u16> = BTreeMap::new();
+        let d = loop {
+            let d = descend(set, cpu, ran, &limits);
+            let entered = entered(&d.insns, &d.routines);
+            let mut cut = false;
+            for (&from, took) in &d.tables {
+                let hold = entries_that_hold(&d, from, took, &entered);
+                if hold < took.len() as u16 {
+                    limits.insert(from, hold);
+                    cut = true;
                 }
             }
-            if todo.is_empty() {
-                break;
+            if !cut {
+                break d;
             }
-        }
-        routines.retain(|at, _| insns.contains_key(at));
+        };
         Self {
             cpu,
-            insns,
-            routines,
+            insns: d.insns,
+            routines: d.routines,
             chips: chips(set, cpu),
             rom: program(set, cpu).0.to_vec(),
         }
@@ -864,6 +1196,54 @@ mod tests {
         }
         let sound_map = CodeMap::of(&set, 1, None);
         assert_eq!(sound_map.routines.get(&0x0038), Some(&"interrupt handler"));
+    }
+
+    /// The code alone follows a jump table behind an indexed-jump helper
+    /// (made-up bytes): `ld hl,0040 / ld a,(e000) / jp 0020`, where 0020
+    /// doubles A, adds it to HL in a called routine and jumps to the word
+    /// there. The table's third word lands on an instruction the code
+    /// before it falls into, so the table ends with two entries. A
+    /// routine called with a constant HL that returns (0030) isn't a
+    /// helper, so the words at the HL it is given (0070) aren't code.
+    #[test]
+    fn the_map_follows_a_jump_table_behind_an_indexed_jump_helper() {
+        let mut main = vec![
+            0x31, 0xf0, 0xe7, // 0000: ld sp,e7f0
+            0x21, 0x70, 0x00, // 0003: ld hl,0070
+            0xcd, 0x30, 0x00, // 0006: call 0030
+            0x21, 0x40, 0x00, // 0009: ld hl,0040
+            0x3a, 0x00, 0xe0, // 000c: ld a,(e000)
+            0xc3, 0x20, 0x00, // 000f: jp 0020
+        ];
+        main.resize(0x20, 0);
+        // 0020: rlca / call 0030 / ld a,(hl) / inc hl / ld h,(hl) /
+        // ld l,a / jp (hl)
+        main.extend([0x07, 0xcd, 0x30, 0x00, 0x7e, 0x23, 0x66, 0x6f, 0xe9]);
+        main.resize(0x30, 0);
+        // 0030: add a,l / ld l,a / ret nc / inc h / ret
+        main.extend([0x85, 0x6f, 0xd0, 0x24, 0xc9]);
+        main.resize(0x40, 0);
+        // The table: 0050, 0058, then 0055 (inside 0050's code), 0058.
+        main.extend([0x50, 0x00, 0x58, 0x00, 0x55, 0x00, 0x58, 0x00]);
+        main.resize(0x50, 0);
+        for v in [1, 2] {
+            // ld a,v / ld (e003),a / jp 0003
+            main.extend([0x3e, v, 0x32, 0x03, 0xe0, 0xc3, 0x03, 0x00]);
+        }
+        main.resize(0x68, 0);
+        main.extend([0x3e, 0x05, 0xc9]); // 0068: ld a,5 / ret
+        main.resize(0x70, 0);
+        main.extend([0x68, 0x00, 0x68, 0x00]);
+        let set = gp_arcade::testrom::romset(&main, &[0x18, 0xfe]);
+        assert_eq!(jump_helper(&set.maincpu, 0xe000, 0x0020), Some(0));
+        assert_eq!(jump_helper(&set.maincpu, 0xe000, 0x0030), None);
+        let map = CodeMap::of(&set, 0, None);
+        for e in [0x0050, 0x0058] {
+            assert_eq!(map.routines.get(&e), Some(&TABLE_ENTRY), "{e:04X}");
+        }
+        assert!(map.insns.contains_key(&0x0055));
+        assert!(!map.routines.contains_key(&0x0055), "inside 0050's code");
+        assert!(!map.insns.contains_key(&0x0068), "0030 isn't a helper");
     }
 
     /// The busy program's map: the descent finds its loop, the run adds
