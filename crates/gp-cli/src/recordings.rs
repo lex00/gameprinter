@@ -104,8 +104,16 @@ pub struct QueryArgs {
     /// The recording's ID, or a unique prefix of at least 4 characters.
     id: String,
     /// The frame: the state after this many frames, 0 for power-on.
-    #[arg(long)]
-    frame: u64,
+    #[arg(long, required_unless_present = "frames", conflicts_with = "frames")]
+    frame: Option<u64>,
+    /// A range of frames instead of one, read in one call with one row per
+    /// frame: `N`, `A..B` (B excluded), `A..=B` or `A..` (to the last).
+    #[arg(long, value_name = "RANGE")]
+    frames: Option<String>,
+    /// With --frames, print only the frames whose values differ from the
+    /// frame before (the first frame always).
+    #[arg(long, requires = "frames")]
+    changed: bool,
     /// What to read: `ram[0x0770]`, `ram[0x0700..0x0710]`, `oam[*]`,
     /// `cpu.pc`, `cpu` (every CPU field), `bus[0xfffc]`, `frame`. Quote
     /// each one: zsh treats an unquoted `ram[0x0770]` as a glob pattern.
@@ -298,9 +306,19 @@ pub fn replay_cmd(a: &ReplayArgs, paths: &Paths) -> Result<Outcome> {
 }
 
 pub fn query_cmd(a: &QueryArgs, paths: &Paths) -> Result<Outcome> {
+    if let Some(spec) = &a.frames {
+        return query_frames(
+            &a.id,
+            spec,
+            &a.selectors,
+            a.changed,
+            (a.rom.as_deref(), a.replay),
+            paths,
+        );
+    }
     query(
         &a.id,
-        a.frame,
+        a.frame.context("gp query needs --frame or --frames")?,
         &a.selectors,
         (a.rom.as_deref(), a.replay),
         paths,
@@ -892,6 +910,175 @@ fn query(
         text: text.join("\n"),
         exit: u8::from(note.is_some()),
     })
+}
+
+/// One frame's answers in a `gp query --frames` table.
+pub(crate) struct Row {
+    pub frame: u64,
+    pub entries: Vec<gp_runtime::Entry>,
+}
+
+/// `gp query --frames`: the selectors read at every frame of a range, from
+/// the trace when it holds them, else by one replay from the first frame's
+/// checkpoint.
+fn query_frames(
+    id: &str,
+    spec: &str,
+    selectors: &[String],
+    changed: bool,
+    (rom, replay): (Option<&Path>, bool),
+    paths: &Paths,
+) -> Result<Outcome> {
+    use gp_runtime::Runtime as _;
+    let opened = Opened::open(paths, id)?;
+    refuse_model(&opened)?;
+    let range = parse_frames(spec, opened.manifest.frames)?;
+    let given = rom.map(|_| opened.rom(rom, paths)).transpose()?;
+    let traced = if replay {
+        None
+    } else {
+        crate::from_trace::query_frames(&opened, range.clone(), selectors)?
+    };
+    let read_from = if traced.is_some() { "trace" } else { "replay" };
+    // Each row, and the first frame that isn't the recorded state.
+    let (rows, diverged, checkpoint, stale) = if let Some(rows) = traced {
+        (rows, None, None, false)
+    } else if opened.is_arcade() {
+        let (cursor, _) = seek_arcade(&opened, rom, paths, range.start)?;
+        let (checkpoint, stale) = (cursor.checkpoint, cursor.stale);
+        let inputs: Vec<gp_runtime::InputFrame> = (range.start..range.end - 1)
+            .map(|f| {
+                cursor
+                    .input(f)
+                    .map(|f| gp_runtime::InputFrame::pads(f.pads))
+                    .context("the input log ends before the range")
+            })
+            .collect::<Result<_>>()?;
+        let hashes = cursor.hashes().to_vec();
+        let mut runtime = gp_arcade::ArcadeRuntime::new(cursor.into_tapper());
+        let mut rows = Vec::new();
+        let mut diverged = None;
+        for (i, frame) in range.clone().enumerate() {
+            if i > 0 {
+                runtime
+                    .step(&inputs[i - 1..i])
+                    .map_err(anyhow::Error::msg)?;
+            }
+            if diverged.is_none()
+                && crate::arcade_rec::matches(runtime.tapper(), &hashes) == Some(false)
+            {
+                diverged = Some(frame);
+            }
+            rows.push(Row {
+                frame,
+                entries: read_all(selectors, |s| runtime.query(s))?,
+            });
+        }
+        (rows, diverged, checkpoint, stale)
+    } else {
+        let rom = match given {
+            Some(found) => found.bytes,
+            None => opened.rom(None, paths)?.bytes,
+        };
+        let cursor = seek(&opened, &rom, range.start)?;
+        let (checkpoint, stale) = (cursor.checkpoint, cursor.stale);
+        let inputs: Vec<gp_runtime::InputFrame> = (range.start..range.end - 1)
+            .map(|f| {
+                cursor
+                    .input(f)
+                    .map(|f| gp_runtime::InputFrame {
+                        reset: f.reset,
+                        ..gp_runtime::InputFrame::pads(f.pads)
+                    })
+                    .context("the input log ends before the range")
+            })
+            .collect::<Result<_>>()?;
+        let hashes = cursor.hashes().to_vec();
+        let mut runtime = gp_nes::protocol::NesRuntime::new(cursor.into_nes())?;
+        let mut rows = Vec::new();
+        let mut diverged = None;
+        for (i, frame) in range.clone().enumerate() {
+            if i > 0 {
+                runtime
+                    .step(&inputs[i - 1..i])
+                    .map_err(anyhow::Error::msg)?;
+            }
+            if diverged.is_none() && gp_nes::seek::matches(runtime.nes(), &hashes)? == Some(false) {
+                diverged = Some(frame);
+            }
+            rows.push(Row {
+                frame,
+                entries: read_all(selectors, |s| runtime.query(s))?,
+            });
+        }
+        (rows, diverged, checkpoint, stale)
+    };
+    let note = diverged.and_then(|f| {
+        if opened.is_arcade() {
+            note_unless_arcade(false, f, stale, &opened)
+        } else {
+            note_unless(false, f, stale, &opened)
+        }
+    });
+    let shown = if changed { changed_rows(rows) } else { rows };
+    let mut text: Vec<String> = shown
+        .iter()
+        .map(|r| {
+            let cells: Vec<String> = r.entries.iter().map(entry_line).collect();
+            format!("frame {}: {}", r.frame, cells.join(", "))
+        })
+        .collect();
+    if let Some(note) = &note {
+        text.push(format!("note: {note}"));
+    }
+    Ok(Outcome {
+        json: json!({
+            "id": opened.entry.id,
+            "from": range.start,
+            "to": range.end - 1,
+            "changed_only": changed,
+            "read_from": read_from,
+            "checkpoint": checkpoint,
+            "stale": stale,
+            "matches_recording": note.is_none(),
+            "first_mismatch": diverged,
+            "rows": shown
+                .iter()
+                .map(|r| json!({
+                    "frame": r.frame,
+                    "entries": r.entries.iter().map(entry_json).collect::<Vec<_>>(),
+                }))
+                .collect::<Vec<_>>(),
+        }),
+        text: text.join("\n"),
+        exit: u8::from(note.is_some()),
+    })
+}
+
+/// Every selector's entries, in order.
+fn read_all(
+    selectors: &[String],
+    mut read: impl FnMut(&str) -> Result<Vec<gp_runtime::Entry>, String>,
+) -> Result<Vec<gp_runtime::Entry>> {
+    let mut entries = Vec::new();
+    for s in selectors {
+        entries.extend(read(s).map_err(anyhow::Error::msg)?);
+    }
+    Ok(entries)
+}
+
+/// The rows whose values differ from the row before, and the first.
+fn changed_rows(rows: Vec<Row>) -> Vec<Row> {
+    let mut kept: Vec<Row> = Vec::new();
+    let mut last: Option<Vec<gp_runtime::Value>> = None;
+    for r in rows {
+        let values: Vec<gp_runtime::Value> = r.entries.iter().map(|e| e.value.clone()).collect();
+        if last.as_ref() != Some(&values) {
+            kept.push(r);
+        }
+        last = Some(values);
+    }
+    kept
 }
 
 fn run_until(

@@ -94,6 +94,47 @@ fn record_replay_query_and_trace_with_the_test_rom() {
     assert_eq!(from_trace["read_from"], "trace");
     assert_eq!(replayed["read_from"], "replay");
     assert_eq!(from_trace["entries"], replayed["entries"]);
+
+    // A range reads one row per frame, from the trace and by one replay
+    // alike, each row what --frame reads at its frame; bus[...] needs the
+    // console, so it replays.
+    let sels = ["ram[0..16]", "frame"];
+    let range = |extra: &[&str]| {
+        let mut args = vec!["query", short, "--frames", "48..=51"];
+        args.extend(sels);
+        args.extend(extra);
+        json(home, &args)
+    };
+    let traced = range(&[]);
+    let replayed = range(&["--replay"]);
+    assert_eq!(traced["read_from"], "trace");
+    assert_eq!(replayed["read_from"], "replay");
+    assert_eq!(traced["rows"], replayed["rows"]);
+    let rows = traced["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 4);
+    for (i, row) in rows.iter().enumerate() {
+        let f = (48 + i).to_string();
+        assert_eq!(row["frame"], 48 + i);
+        let one = json(home, &["query", short, "--frame", &f, sels[0], sels[1]]);
+        assert_eq!(row["entries"], one["entries"], "frame {f}");
+    }
+    let bus = json(home, &["query", short, "--frames", "1..4", "bus[0xfffc]"]);
+    assert_eq!(bus["read_from"], "replay");
+    assert_eq!(bus["rows"].as_array().unwrap().len(), 3);
+    // --changed keeps the first row and the rows that differ from the one
+    // before: the reset vector never changes.
+    let same = json(
+        home,
+        &[
+            "query",
+            short,
+            "--frames",
+            "1..4",
+            "bus[0xfffc]",
+            "--changed",
+        ],
+    );
+    assert_eq!(same["rows"].as_array().unwrap().len(), 1);
     let until = json(home, &["run-until", short, "frame >= 10"]);
     assert_eq!(until["met"], true);
     assert_eq!(until["frame"], 10);

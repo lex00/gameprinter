@@ -146,6 +146,7 @@ blank = ["climb_tops_50m", "conveyor_pattern"]   # ... the assets only 50m uses
 | What | How |
 |---|---|
 | Loading one | The ROM is lifted through its own asset map. Each of the model's slots takes the ROM's assets, and an asset the model names that the map lacks takes the one `assets` names. Each `without` is something of the model's the ROM's game hasn't: its levels are passed over (`stages.skip`), its parts taken out of the model, and the assets only it uses left blank. Nothing is filled from anywhere else, so a JU ROM plays JU's game: 25m, 75m, 100m |
+| Its pictures' names | The lifted pictures are named as the played model's are (`gp_look::present::art_named`): the sprite frames (`frame-N`) are numbered by the whole model's kinds and the palette sets (`frame-N-S`, `hud-S`, `glyph-S-...`) by all its levels, those the ROM hasn't too, whose pictures are drawn from the assets the lift left blank and never shown. A large-art theme made on Original Edition's pictures so draws the same things on JU's (issue 13). `lift.test.mjs` holds the two lifts to it |
 | What refuses one | It is not in `source.accepts`, so every tool that finds or checks the template's ROM by those hashes passes over it or refuses it |
 | The check | The gate's loads guard (`gate::loads_problems`) fails a patch when `template.toml`'s `[source]` id or `accepts`, or `corpus.toml`'s `[target]` game or ROM, names a ROM the package loads only to play |
 

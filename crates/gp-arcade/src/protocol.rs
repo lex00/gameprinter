@@ -12,6 +12,7 @@
 //! |---|---|
 //! | `frame` | Frames run since power-on |
 //! | `ram[A]` | The main CPU's address space at `A` (0 to 0xFFFF) as the CPU reads it, without side effects: work RAM at 0xE000, sprite RAM at 0xE800, video RAM at 0xF000, the program below |
+//! | `bus[A]` | The same read as `ram[A]`, under the name the NES gives its CPU's address space |
 //! | `sound_ram[A]` | The SSIO board's 1 KB of RAM, by offset (its Z80 sees it at 0x8000) |
 //! | `palette[A]` | The 128 bytes of palette RAM, which the main CPU only writes (at 0xF800) |
 //! | `ports[N]` | The five input ports as the game read them in the last frame |
@@ -142,19 +143,26 @@ impl ArcadeRuntime {
         let t = &self.tapper;
         match (name.as_str(), index) {
             ("frame", None) => Ok(vec![int(name, t.frame() as i64)]),
-            ("ram", Some(index)) => Ok(range(&name, index, 0x1_0000)?
-                .map(|a| int(format!("ram[{}]", hex(a as i64)), t.peek(a as u16).into()))
+            // The board has no mapper: the main CPU's address space is the
+            // one read, by either name.
+            ("ram" | "bus", Some(index)) => Ok(range(&name, index, 0x1_0000)?
+                .map(|a| {
+                    int(
+                        format!("{name}[{}]", hex(a as i64)),
+                        t.peek(a as u16).into(),
+                    )
+                })
                 .collect()),
             ("sound_ram", Some(index)) => indexed(&name, index, t.sound_ram()),
             ("palette", Some(index)) => indexed(&name, index, t.palette_ram()),
             ("ports", Some(index)) => indexed(&name, index, &t.ports()),
             ("cpu.pc", None) => Ok(vec![int(name, t.main.pc.into())]),
             ("sound_cpu.pc", None) => Ok(vec![int(name, t.ssio.pc.into())]),
-            ("ram" | "sound_ram" | "palette" | "ports", None) => Err(format!(
+            ("ram" | "bus" | "sound_ram" | "palette" | "ports", None) => Err(format!(
                 "{name} takes an index: one ({name}[0x10]), a range ({name}[0..16]) or all ({name}[*])"
             )),
             _ => Err(format!(
-                "no selector {sel} on the arcade board: frame, ram[...], sound_ram[...], palette[...], ports[...], cpu.pc and sound_cpu.pc"
+                "no selector {sel} on the arcade board: frame, ram[...] (or bus[...], the same read), sound_ram[...], palette[...], ports[...], cpu.pc and sound_cpu.pc"
             )),
         }
     }
@@ -178,7 +186,7 @@ impl ArcadeRuntime {
 
 /// Answers `sel` from a RAM record (the oracle's layout, [`Tapper::ram_record`])
 /// alone, as [`ArcadeRuntime::read`] would on the machine that made it:
-/// `ram[...]` from 0xE000 up, `sound_ram[...]` and `palette[...]`. `None`
+/// `ram[...]` (or `bus[...]`) from 0xE000 up, `sound_ram[...]` and `palette[...]`. `None`
 /// for a selector the record can't answer (the program below 0xE000, the
 /// ports, the CPUs), which a score tape keeps by selector instead.
 pub fn read_record(record: &[u8], sel: &Selector) -> Option<Result<Vec<Entry>, String>> {
@@ -190,11 +198,12 @@ pub fn read_record(record: &[u8], sel: &Selector) -> Option<Result<Vec<Entry>, S
         Ok(None) => return None,
         Ok(Some(i)) => i,
     };
-    match sel.name().as_str() {
+    let name = sel.name();
+    match name.as_str() {
         "sound_ram" => Some(indexed("sound_ram", index, &record[4736..])),
         "palette" => Some(indexed("palette", index, &record[4608..4736])),
-        "ram" => {
-            let r = match range("ram", index, 0x1_0000) {
+        "ram" | "bus" => {
+            let r = match range(&name, index, 0x1_0000) {
                 Ok(r) => r,
                 Err(e) => return Some(Err(e)),
             };
@@ -210,7 +219,7 @@ pub fn read_record(record: &[u8], sel: &Selector) -> Option<Result<Vec<Entry>, S
             };
             Some(Ok(r
                 .map(|a| Entry {
-                    path: format!("ram[{}]", hex(a as i64)),
+                    path: format!("{name}[{}]", hex(a as i64)),
                     value: Value::Int(byte(a).into()),
                 })
                 .collect()))
@@ -406,6 +415,26 @@ mod tests {
         assert_eq!(rt.frame(), 5);
     }
 
+    /// `bus[...]` reads the main CPU's address space, as `ram[...]` does on
+    /// this board, so a selector written for the NES reads the same here.
+    #[test]
+    fn bus_reads_the_address_space_as_ram_does() {
+        let mut rt = ArcadeRuntime::load(&looping());
+        rt.step(&vec![InputFrame::default(); 3]).unwrap();
+        let bus = rt.query("bus[0..4]").unwrap();
+        let ram = rt.query("ram[0..4]").unwrap();
+        assert_eq!(bus.len(), 4);
+        assert_eq!(bus[0].path, "bus[0x0000]");
+        assert_eq!(bus[0].value, Value::Int(0x18));
+        let values = |e: &[Entry]| e.iter().map(|e| e.value.clone()).collect::<Vec<_>>();
+        assert_eq!(values(&bus), values(&ram));
+        assert_eq!(
+            rt.query("bus[0xe000..0xe004]").unwrap().len(),
+            rt.query("ram[0xe000..0xe004]").unwrap().len()
+        );
+        assert!(rt.query("bus").is_err());
+    }
+
     #[test]
     fn refuses_what_the_board_has_not() {
         let mut rt = ArcadeRuntime::load(&looping());
@@ -456,7 +485,13 @@ mod tests {
             let s = Selector::parse(sel).unwrap();
             assert_eq!(read_record(&rec, &s).unwrap(), rt.read(&s), "{sel}");
         }
-        for sel in ["ram[0x100]", "ports[0]", "cpu.pc", "frame"] {
+        let bus = Selector::parse("bus[0xe000..0xe010]").unwrap();
+        assert_eq!(
+            read_record(&rec, &bus).unwrap(),
+            rt.read(&bus),
+            "bus[0xe000..0xe010]"
+        );
+        for sel in ["ram[0x100]", "bus[0x100]", "ports[0]", "cpu.pc", "frame"] {
             assert!(
                 read_record(&rec, &Selector::parse(sel).unwrap()).is_none(),
                 "{sel}"

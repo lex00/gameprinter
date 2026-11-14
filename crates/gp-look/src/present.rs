@@ -656,6 +656,26 @@ pub fn art(model: &Model, spec: &Spec, dir: &Path) -> Result<Art, String> {
 /// themed; the colors they're tinted with are, by the `sky` role's rules
 /// for a level and the `hud` role's for the HUD.
 pub fn art_themed(model: &Model, spec: &Spec, dir: &Path, theme: &Resolved) -> Result<Art, String> {
+    art_named(model, spec, dir, theme, None)
+}
+
+/// [`art_themed`] with the pictures named as `names` names them: a model,
+/// and a spec of it (which may lack levels: only its kinds' order is
+/// read), for a model that is `names`' with levels and entity kinds taken
+/// out: a ROM loaded only to play another template's model
+/// (Donkey Kong (JU) plays Original Edition's without 50m and the
+/// stage-clear scene). The sprite palette sets and the HUD's (`frame-N-S`,
+/// `hud-S`, `glyph-S-...`) are numbered by `names`' levels and the sprite
+/// frames (`frame-N`) by `names`' kinds, so a large-art look made on
+/// `names`' pictures fits these too. What `names` has and the model hasn't
+/// is drawn as well, under its own name, and nothing draws it.
+pub fn art_named(
+    model: &Model,
+    spec: &Spec,
+    dir: &Path,
+    theme: &Resolved,
+    names: Option<(&Model, &Spec)>,
+) -> Result<Art, String> {
     let map_file = dir.join("assets.toml");
     let text =
         std::fs::read_to_string(&map_file).map_err(|e| format!("{}: {e}", map_file.display()))?;
@@ -781,7 +801,7 @@ pub fn art_themed(model: &Model, spec: &Spec, dir: &Path, theme: &Resolved) -> R
         None => set_palettes(""),
     };
     let (base, base_roles) = (base_set.bytes, base_set.roles);
-    let level_palettes = |name: &str| -> Result<Palettes, String> {
+    let level_palettes = |model: &Model, name: &str| -> Result<Palettes, String> {
         if own_sets.is_some() {
             return Ok(set_palettes(name));
         }
@@ -801,14 +821,34 @@ pub fn art_themed(model: &Model, spec: &Spec, dir: &Path, theme: &Resolved) -> R
     };
 
     // Palette sets, by the spec's levels: sprites use the second half,
-    // the HUD the first.
+    // the HUD the first. With `names`, its levels' sets come first, in
+    // its order, so each set has the number it has there.
     let mut level_pals = Vec::new();
     let mut sprite_sets: Vec<Palettes> = Vec::new();
     let mut hud_sets: Vec<Palettes> = Vec::new();
     let mut set_of = Vec::new();
     let mut hud_set_of = Vec::new();
+    if let Some((nm, _)) = names {
+        // Every level of `names`' (a spec orders its levels by name, as
+        // the model keeps them), those the model hasn't too.
+        for name in nm.levels.keys() {
+            let p = level_palettes(nm, name)?;
+            if !sprite_sets
+                .iter()
+                .any(|s| s.bytes.get(16..) == p.bytes.get(16..))
+            {
+                sprite_sets.push(p.clone());
+            }
+            if !hud_sets
+                .iter()
+                .any(|s| s.bytes.get(..16) == p.bytes.get(..16))
+            {
+                hud_sets.push(p);
+            }
+        }
+    }
     for l in &spec.levels {
-        let p = level_palettes(&l.name)?;
+        let p = level_palettes(model, &l.name)?;
         let i = match sprite_sets
             .iter()
             .position(|s| s.bytes.get(16..) == p.bytes.get(16..))
@@ -1073,13 +1113,26 @@ pub fn art_themed(model: &Model, spec: &Spec, dir: &Path, theme: &Resolved) -> R
     // Each kind's own frame and each state's, for EntityArt and the
     // Style checks: (kind, state or none, frame, size, part).
     let mut owns: Vec<Own> = Vec::new();
-    for kind in &spec.kinds {
-        let Some(entity) = model.entities.get(&kind.name) else {
-            art.present.kinds.push(vec![None]);
+    // With `names`, its kinds' frames are numbered first, in its order
+    // (`keep` false: only their numbers are kept), so each frame the model
+    // shares with it has the number it has there.
+    let seeds = names
+        .iter()
+        .flat_map(|(nm, ns)| ns.kinds.iter().map(move |k| (k, *nm, false)));
+    let kinds: Vec<_> = seeds
+        .chain(spec.kinds.iter().map(|k| (k, model, true)))
+        .collect();
+    for (kind, from, keep) in kinds {
+        let Some(entity) = from.entities.get(&kind.name) else {
+            if keep {
+                art.present.kinds.push(vec![None]);
+            }
             continue;
         };
-        art.roles
-            .insert(kind.name.clone(), entity.core.role.clone());
+        if keep {
+            art.roles
+                .insert(kind.name.clone(), entity.core.role.clone());
+        }
         let base_sprite = entity.core.sprite.clone();
         let mut states = Vec::new();
         let names: Vec<Option<String>> = match &kind.machine {
@@ -1161,7 +1214,7 @@ pub fn art_themed(model: &Model, spec: &Spec, dir: &Path, theme: &Resolved) -> R
                 Some(k) => k,
                 None => key(base_nums.clone(), &sprite.cells, None, None),
             });
-            if st.is_none() || Some(sprite) != base_sprite.as_ref() {
+            if keep && (st.is_none() || Some(sprite) != base_sprite.as_ref()) {
                 let size = e.core.size.map(|v| (v.raw().max(0) >> 16) as u32);
                 owns.push((
                     kind.name.clone(),
@@ -1305,7 +1358,9 @@ pub fn art_themed(model: &Model, spec: &Spec, dir: &Path, theme: &Resolved) -> R
                 in_place: sprite.flip_in_place,
             }));
         }
-        art.present.kinds.push(states);
+        if keep {
+            art.present.kinds.push(states);
+        }
     }
     // Effects: each phase's pictures as sprite frames, and how it moves.
     let motion = |m: &gp_model::model::MotionPresent| gp_present::Motion {

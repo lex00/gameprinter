@@ -176,6 +176,48 @@ test(
   },
 );
 
+// The lifted pictures (assets/*.png) of a run, as name -> SHA-256.
+function pictures(run) {
+  const out = new Map();
+  for (const f of run.result.files) {
+    const m = /^assets\/([^/]+\.png)$/.exec(f);
+    if (m) out.set(m[1], createHash("sha256").update(run.mem.readFile(`/out/${f}`)).digest("hex"));
+  }
+  return out;
+}
+
+// A large-art look (a theme's look.txt and art.txt) replaces the game's
+// pictures by name (frame-N-S.png, hud-S.png, glyph-S-...), and a theme is
+// made on one ROM's pictures. JU plays Original Edition's model without
+// 50m and the stage-clear scene, so its sprite frames and palette sets
+// must be numbered as Original Edition's are, or a theme draws another
+// thing in their place (issue 13: a ladder piece for the hero, a carrying
+// pose for the lady). So both lifts name the same sprite frames and sets,
+// and a picture JU draws as Original Edition does under one name isn't
+// JU's under another (left-out kinds' frames are blank in JU; a blank
+// picture both have under one name doesn't count). The pictures' bytes
+// are only compared here, never kept.
+test(
+  "Donkey Kong (JU) names its pictures as Original Edition does, so one theme fits both",
+  { skip: skip || (rom && oe ? false : "the Donkey Kong (JU) and Original Edition ROMs aren't both in $GP_ROM_DIR/nes") },
+  async () => {
+    const [a, b] = [pictures(await lift(oe)), pictures(await lift(rom))];
+    const sprites = (m) => [...m.keys()].filter((n) => /^(frame|hud)-/.test(n)).sort();
+    assert.deepEqual(sprites(b), sprites(a), "the same sprite frames and HUD sets, by name");
+    const named = new Map();
+    for (const [n, h] of a) named.set(h, [...(named.get(h) ?? []), n]);
+    const moved = [];
+    for (const [n, h] of b) {
+      if (a.get(n) === h) continue;
+      const elsewhere = (named.get(h) ?? []).filter((x) => b.get(x) !== h);
+      if (elsewhere.length) moved.push(`${n} (Original Edition's ${elsewhere.join(", ")})`);
+    }
+    assert.deepEqual(moved, [], "a picture JU draws as Original Edition does has the same name in both");
+    const same = [...b].filter(([n, h]) => a.get(n) === h).length;
+    console.log(`JU's pictures by Original Edition's names: ${same} of ${b.size} the same picture`);
+  },
+);
+
 test(
   "a Donkey Kong (JU) dump with its sprite tiles gone is refused, as nothing fills them",
   { skip: skip || (rom ? false : "the Donkey Kong (JU) ROM isn't in $GP_ROM_DIR/nes") },

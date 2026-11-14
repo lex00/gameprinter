@@ -15,7 +15,7 @@ use serde_json::json;
 
 use crate::Outcome;
 use crate::open::Opened;
-use crate::recordings::{entry_json, entry_line};
+use crate::recordings::{Row, entry_json, entry_line};
 
 /// Whether the recording has a trace this runtime can read states from in
 /// place of replaying: one this runtime made, in its field table.
@@ -69,6 +69,48 @@ pub(crate) fn query(opened: &Opened, frame: u64, selectors: &[String]) -> Result
             .collect::<Vec<_>>()
             .join("\n"),
     )))
+}
+
+/// `gp query --frames` from the trace: every frame's entries, or `None` if
+/// it needs replay.
+pub(crate) fn query_frames(
+    opened: &Opened,
+    frames: std::ops::Range<u64>,
+    selectors: &[String],
+) -> Result<Option<Vec<Row>>> {
+    let parsed = parse_all(selectors)?;
+    if frames.end > opened.manifest.frames + 1
+        || parsed.iter().any(reads_console)
+        || !readable_trace(opened)?
+    {
+        return Ok(None);
+    }
+    let mut rows = Vec::new();
+    let mut failed = None;
+    gp_nes::recording::scan_trace(
+        &opened.store,
+        &opened.manifest,
+        frames.start..=frames.end - 1,
+        |frame, state| {
+            let mut entries = Vec::new();
+            for s in &parsed {
+                match read_state(state, frame, s) {
+                    Ok(e) => entries.extend(e),
+                    Err(e) => {
+                        failed = Some(e);
+                        return false;
+                    }
+                }
+            }
+            rows.push(Row { frame, entries });
+            true
+        },
+    )?;
+    if let Some(e) = failed {
+        return Err(anyhow::Error::msg(e));
+    }
+    // A trace short of a frame replays instead.
+    Ok((rows.len() as u64 == frames.end - frames.start).then_some(rows))
 }
 
 /// `gp run-until` from the trace, or `None` if it needs replay: when the

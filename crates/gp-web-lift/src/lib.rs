@@ -226,11 +226,16 @@ pub fn prep(
     let text = read(model_file)?;
     let model = Model::parse(&text).map_err(|e| format!("{}: {e}", model_file.display()))?;
     let model_dir = model_file.parent().unwrap_or(Path::new("."));
-    prep_model(model, model_dir, assets, out, theme, home, looks, lifted)
+    prep_model(
+        model, model_dir, assets, out, theme, home, looks, lifted, None,
+    )
 }
 
 /// [`prep`] with the model already read; `model_dir` is the folder its
-/// `profiles.toml` is in.
+/// `profiles.toml` is in. `names` is the model whose picture names the
+/// pictures take, when `model` is it with levels and parts taken out (a
+/// ROM loaded only to play, [`Load::apply`]): a large-art look made on
+/// that model's pictures names them so (`gp_look::present::art_named`).
 #[allow(clippy::too_many_arguments)]
 pub fn prep_model(
     model: Model,
@@ -241,10 +246,28 @@ pub fn prep_model(
     home: Option<&Path>,
     looks: &[gp_look::looks::LookSpec],
     lifted: bool,
+    names: Option<&Model>,
 ) -> Result<Prepped, String> {
     let bundle: Bundle = gp_look::bundle(&model, assets)?;
     let spec = gp_interp::compile::compile(&model, &bundle.assets)?;
-    let art = gp_look::present::art_themed(&model, &spec, assets, theme)?;
+    // `names`' kinds in its spec's order: a spec of it with only the
+    // levels `model` has (a level left blank doesn't build), which orders
+    // the kinds as its own does.
+    let names_spec = match names {
+        Some(m) => {
+            let mut kinds = m.clone();
+            kinds.levels.retain(|n, _| model.levels.contains_key(n));
+            kinds.stages.clone_from(&model.stages);
+            let assets = gp_look::bundle(&kinds, assets)?.assets;
+            Some(
+                gp_interp::compile::compile(&kinds, &assets)
+                    .map_err(|e| format!("the model whose picture names the pictures take: {e}"))?,
+            )
+        }
+        None => None,
+    };
+    let art =
+        gp_look::present::art_named(&model, &spec, assets, theme, names.zip(names_spec.as_ref()))?;
     if !theme.is_empty() {
         let r = gp_theme::readability::check(&art.theme.samples, theme);
         eprint!("{}", r.text());
@@ -1104,6 +1127,11 @@ pub fn lift_game(rom: &[u8], dir: &Path, out: &Path) -> Result<Outcome, String> 
         &t.dir.join(gp_present::looks::THEMES_DIR),
         &model.model.name,
     );
+    // A ROM loaded only to play draws the played model's pictures under
+    // the names they have there, so a large-art look made on them fits it
+    // (issue 13: Donkey Kong (JU) without Original Edition's 50m and
+    // stage-clear scene numbered its frames and palette sets apart).
+    let names = load.as_ref().map(|_| model.clone());
     if let Some(l) = &load {
         l.apply(&mut model)?;
     }
@@ -1119,6 +1147,7 @@ pub fn lift_game(rom: &[u8], dir: &Path, out: &Path) -> Result<Outcome, String> 
         None,
         &looks,
         true,
+        names.as_ref(),
     )?;
     looks_skipped.extend(prepped.skipped);
     add_ready_looks(

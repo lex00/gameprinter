@@ -57,3 +57,21 @@ moment oe-ending-turnips
   state   level m100, player at 165,53
   size    1536x1344
   sha256  f0a76f81d9403236db1889c83e593cf2b26b9666c7617752e4e42090ed1afa3c
+
+moment ju-turnips-25m
+  section pictures-rom-aa408f5a
+  frame   1200
+  look    turnips
+  shows   Donkey Kong (JU)'s 25m in the Turnips look: the hero walking on girder 4, the friend at the top, the thrower at the top left, barrels rolling (issue 13: on JU the theme drew a ladder piece for the hero and a carrying pose for the friend)
+  state   level main, player at 114,112
+  size    1536x1344
+  sha256  2b9b1482056e43d7ec452a8f9dc597c1987c25a9b1fe8cd199697d7f5e0d220b
+
+moment ju-turnips-75m
+  section pictures-rom-aa408f5a
+  frame   2478
+  look    turnips
+  shows   Donkey Kong (JU)'s 75m in the Turnips look: the hero climbing by the left lift, the friend at the top, the thrower, springs and lifts in 75m's own colors (issue 13: on JU 75m took Original Edition's 50m palette set's pictures)
+  state   level m75, player at 45,136
+  size    1536x1344
+  sha256  92d258d9c2c3e7e730b3df98e3fe8c26281c89a4143976ee772e5975a78cf971

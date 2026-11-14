@@ -118,6 +118,7 @@ An arcade recording's trace prints both Z80s in time order; [recording.md](recor
 |---|---|
 | `frame` | Frames run since power-on |
 | `ram[A]` | The main CPU's address space at `A` (0 to 0xFFFF) as the CPU reads it, without side effects: work RAM at 0xE000, sprite RAM at 0xE800, video RAM at 0xF000, the program below |
+| `bus[A]` | The same read as `ram[A]`, under the name the NES gives its CPU's address space, so a selector written for one platform reads on the other |
 | `sound_ram[A]` | The SSIO board's 1 KB of RAM, by offset (its Z80 sees it at 0x8000) |
 | `palette[A]` | The 128 bytes of palette RAM, which the main CPU only writes (at 0xF800) |
 | `ports[N]` | The five input ports as the game read them in the last frame |
