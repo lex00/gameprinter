@@ -112,7 +112,7 @@ fn run_reads(m: &mut crate::hosted::Model, names: &SpecNames) -> Result<Option<R
     Ok(m.take_reads()?.map(|r| ReadSet::of(&r, names)))
 }
 
-fn key(parts: &[&[u8]]) -> String {
+pub(crate) fn key(parts: &[&[u8]]) -> String {
     let mut k = Vec::new();
     for p in parts {
         k.extend_from_slice(&(p.len() as u64).to_le_bytes());
@@ -640,7 +640,7 @@ fn tape_file(b: &Bench, sb: &Bench, st: &Started, s: &Scenario) -> Result<PathBu
 
 /// What a tape's key holds of the ROM: an NES image's bytes, or an
 /// arcade romset's identity, so any zip of the same chips shares tapes.
-fn rom_key(rom: &[u8]) -> Vec<u8> {
+pub(crate) fn rom_key(rom: &[u8]) -> Vec<u8> {
     if gp_arcade::romset::looks_like_zip(rom)
         && let Ok(sha) = crate::roms::sha256_of(rom)
     {

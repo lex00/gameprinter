@@ -619,6 +619,139 @@ pub(crate) fn straight(
     Ok((ls, report, draws))
 }
 
+/// A lockstep's result as [`crate::lockstep::run_resumed`] gives it.
+type Ran = (Lockstep, Value, Vec<String>);
+
+/// The clip's start from the start cache, as [`resume_of`] gives it.
+type Resume = (crate::clip::cache::Saved, gp_interp::lockstep::Prefix);
+
+/// The file of a clip's tape for its score: the original's side of its
+/// two locksteps (`crate::tape`), in the machine's tape folder. Keyed by
+/// the emulator ([`crate::tape::key_parts`]), the ROM, the clip's input
+/// from power-on, its start, and the start cache's snapshot and prefix it
+/// goes on from: everything the original's frames depend on. None without
+/// a tape folder.
+fn tape_file(
+    ctx: &Ctx,
+    log: &InputLog,
+    start: usize,
+    resume: Option<&Resume>,
+) -> Result<Option<PathBuf>> {
+    let Some(dir) = crate::tape::dir() else {
+        return Ok(None);
+    };
+    let (snap, at) = match resume {
+        Some((saved, p)) => (
+            [
+                saved.snap.as_slice(),
+                &saved.frame.to_le_bytes(),
+                &saved.held,
+            ]
+            .concat(),
+            serde_json::to_vec(p)?,
+        ),
+        None => (Vec::new(), Vec::new()),
+    };
+    Ok(Some(dir.join(format!(
+        "clip-{}.lz4",
+        crate::scenario::key(&[
+            b"clip score tape 1",
+            &crate::tape::key_parts(),
+            &crate::scenario::rom_key(&ctx.rom),
+            log.to_text().as_bytes(),
+            start.to_string().as_bytes(),
+            &snap,
+            &at,
+        ])
+    ))))
+}
+
+/// The original's random draws over a clip from its start (mapping
+/// feature `draws.score`), kept beside the clip's tape by the mapping's
+/// draw sites as well: a site added later needs a script that has it.
+fn draws_of(
+    ctx: &Ctx,
+    log: &InputLog,
+    from: u64,
+    resume: Option<&Resume>,
+    tape: Option<&Path>,
+) -> Result<gp_sim::DrawScript> {
+    let file = tape.map(|t| {
+        let sites = crate::scenario::key(&[format!("{:?}", ctx.mapping.draws).as_bytes()]);
+        t.with_extension(format!("{sites}.draws"))
+    });
+    if let Some(f) = &file
+        && let Ok(t) = fs::read_to_string(f)
+        && let Ok(d) = gp_sim::DrawScript::parse(&t)
+    {
+        crate::tape::touch(f);
+        return Ok(d);
+    }
+    let d = match resume {
+        Some((saved, p)) => crate::lockstep::record_draws_saved(
+            &ctx.rom,
+            saved,
+            &ctx.mapping,
+            &log.frames[p.inputs..],
+            from,
+        )?,
+        None => crate::lockstep::record_draws(&ctx.rom, &ctx.mapping, &log.frames, from)?,
+    };
+    if let Some(f) = &file {
+        // Whole or not at all: another process may read it as it lands.
+        crate::tape::put(f, d.text().as_bytes());
+    }
+    Ok(d)
+}
+
+/// The clip's two locksteps, straight through (keeping each frame's
+/// values) and with resync, as `run` plays one on an original. With a
+/// tape, each plays its own replay of it, on helper threads when two are
+/// free, so only the model runs. Else, or when a replay is asked anything
+/// its tape doesn't hold (a frame, a selector, a picture), the emulator
+/// runs from the clip's start, the two one after the other on one
+/// recording, which writes the tape.
+fn taped(
+    ctx: &Ctx,
+    resume: Option<&Resume>,
+    tape: Option<&Path>,
+    run: impl Fn(&mut crate::tape::Original, Mode, bool) -> Result<Ran> + Sync,
+) -> Result<(Ran, Ran)> {
+    use crate::tape::Original;
+    let modes = [(Mode::Free, true), (Mode::Resync, false)];
+    if let Some(file) = tape
+        && let Some(t) = crate::tape::load(file)
+    {
+        let mut both = crate::pool::map(
+            &modes,
+            || (),
+            |_, _, &(mode, values)| {
+                let mut o = Original::replay(t.clone());
+                let r = run(&mut o, mode, values);
+                (!o.missed()).then_some(r)
+            },
+            &mut |_| {},
+        );
+        if let (Some(rs), Some(free)) = (both.pop().flatten(), both.pop().flatten()) {
+            return Ok((free?, rs?));
+        }
+    }
+    let live = match resume {
+        Some((saved, _)) => crate::original::OriginalRuntime::from_saved(&ctx.rom, saved)?,
+        None => crate::original::OriginalRuntime::of_rom(&ctx.rom)?,
+    };
+    let o = Original::recording(live);
+    let go = |(mode, values): (Mode, bool)| run(&mut gp_runtime::Runtime::fork(&o), mode, values);
+    let both = (go(modes[0])?, go(modes[1])?);
+    if let Some(file) = tape
+        && !o.missed()
+        && let Some(t) = o.into_tape()
+    {
+        crate::tape::save(file, &t);
+    }
+    Ok(both)
+}
+
 /// Scores one clip, given as its full log from power-on and its start,
 /// and writes its files into `out`.
 pub(crate) fn score_one(
@@ -633,24 +766,17 @@ pub(crate) fn score_one(
     let from = start as u64;
     let inputs = crate::run::frames(log);
     let resume = resume_of(ctx, log, &inputs, start)?;
+    let tape = tape_file(ctx, log, start, resume.as_ref())?;
     let draws = if ctx.mapping.score_draws {
-        let d = match &resume {
-            Some((saved, p)) => crate::lockstep::record_draws_saved(
-                &ctx.rom,
-                saved,
-                &ctx.mapping,
-                &log.frames[p.inputs..],
-                from,
-            )?,
-            None => crate::lockstep::record_draws(&ctx.rom, &ctx.mapping, &log.frames, from)?,
-        };
+        let d = draws_of(ctx, log, from, resume.as_ref(), tape.as_deref())?;
         fs::write(out.join("draws.txt"), d.text())?;
         Some(d)
     } else {
         None
     };
-    let run = |mode: Mode, values: bool| {
-        crate::lockstep::run_resumed(
+    let run = |o: &mut crate::tape::Original, mode: Mode, values: bool| {
+        crate::lockstep::run_resumed_on(
+            o,
             &ctx.source,
             &ctx.model_dir,
             &ctx.mapping,
@@ -661,12 +787,12 @@ pub(crate) fn score_one(
             values,
             ctx.assets.as_deref(),
             draws.clone(),
-            resume.as_ref().map(|(s, p)| (s, *p)),
+            resume.as_ref().map(|(_, p)| *p),
             None,
         )
     };
-    let (free, free_j, _) = run(Mode::Free, true)?;
-    let (rs, rs_j, rs_lines) = run(Mode::Resync, false)?;
+    let ((free, free_j, _), (rs, rs_j, rs_lines)) =
+        taped(ctx, resume.as_ref(), tape.as_deref(), run)?;
     let write = |f: &str, v: &Value| -> Result<()> {
         fs::write(out.join(f), serde_json::to_string(v)?)?;
         Ok(())

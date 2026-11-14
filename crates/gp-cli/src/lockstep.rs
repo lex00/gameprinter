@@ -102,11 +102,47 @@ pub(crate) fn run_resumed(
     resume: Option<(&crate::clip::cache::Saved, lockstep::Prefix)>,
     keep: Option<crate::screen::Keep>,
 ) -> Result<(Lockstep, Json, Vec<String>)> {
-    let model = source.parse_model()?;
     let mut original = match resume {
         Some((saved, _)) => OriginalRuntime::from_saved(rom, saved)?,
         None => OriginalRuntime::of_rom(rom)?,
     };
+    run_resumed_on(
+        &mut original,
+        source,
+        model_dir,
+        mapping,
+        rom,
+        inputs,
+        mode,
+        from,
+        values,
+        assets,
+        draws,
+        resume.map(|(_, p)| p),
+        keep,
+    )
+}
+
+/// [`run_resumed`] on an original the caller gives: the emulator, or the
+/// clip's tape played back (`crate::tape::Original`). The original stands
+/// at the start `resume` names, or at power-on without one.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_resumed_on<O: crate::screen::Shows>(
+    original: &mut O,
+    source: &Source,
+    model_dir: &Path,
+    mapping: &Mapping,
+    rom: &[u8],
+    inputs: &[gp_runtime::InputFrame],
+    mode: Mode,
+    from: Option<u64>,
+    values: bool,
+    assets: Option<&Path>,
+    draws: Option<gp_sim::DrawScript>,
+    resume: Option<lockstep::Prefix>,
+    keep: Option<crate::screen::Keep>,
+) -> Result<(Lockstep, Json, Vec<String>)> {
+    let model = source.parse_model()?;
     // The hooks' APU writes, for the sound measure.
     let mut interp = source.open()?.with_apu_events()?;
     if let Some(mut d) = draws {
@@ -117,8 +153,10 @@ pub(crate) fn run_resumed(
     let mut no_screen = None;
     let mut probe = match assets.map(|a| crate::screen::art(&model, &spec, a)) {
         Some(Ok(art)) => {
-            let mut p =
-                crate::screen::Probe::new(art, crate::screen::options_for(original.platform()));
+            let mut p = crate::screen::Probe::new(
+                art,
+                crate::screen::options_for(crate::original::Platform::of_file(rom)),
+            );
             // Drawn from the frame before the start: the mapping's start
             // can come later, which only draws a few frames more.
             p.video_from = from.unwrap_or(0).saturating_sub(1);
@@ -146,8 +184,8 @@ pub(crate) fn run_resumed(
         .as_mut()
         .map(|p| p as &mut dyn lockstep::Screens<_, _>);
     let ls = match resume {
-        Some((_, at)) => lockstep::lockstep_resumed(
-            &mut original,
+        Some(at) => lockstep::lockstep_resumed(
+            original,
             &mut interp,
             &spec,
             mapping,
@@ -157,7 +195,7 @@ pub(crate) fn run_resumed(
             at,
         ),
         None => lockstep::lockstep_with(
-            &mut original,
+            original,
             &mut interp,
             &spec,
             mapping,

@@ -60,7 +60,7 @@ fn unpack(s: &str) -> Option<Vec<u8>> {
 pub(crate) const TAPE_VERSION: &str = "tape 3";
 
 /// What the lockstep read from the original.
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct Tape {
     /// The original's frame at the clip's start.
     start: u64,
@@ -348,8 +348,8 @@ pub(crate) struct Original {
     missed: Rc<Cell<bool>>,
     /// A replay's `read_at_nmi`, which must be the tape's for its RAM.
     at_nmi: bool,
-    /// A replay's RAM on the frame it read last, unpacked once: a
-    /// comparison reads RAM many times a frame.
+    /// A replay's RAM (an arcade board's RAM record) on the frame it read
+    /// last, unpacked once: a comparison reads RAM many times a frame.
     ram_at: RefCell<Option<(u64, Rc<Vec<u8>>)>>,
 }
 
@@ -660,11 +660,26 @@ impl Runtime for Original {
             return r;
         }
         let t = self.tape.borrow();
+        // The frame's RAM (an arcade board's RAM record), unpacked once.
+        let ram = |t: &Tape| -> Option<Rc<Vec<u8>>> {
+            let cached = self
+                .ram_at
+                .borrow()
+                .as_ref()
+                .filter(|(f, _)| *f == self.frame)
+                .map(|(_, r)| Rc::clone(r));
+            if cached.is_some() {
+                return cached;
+            }
+            let r = Rc::new(t.ram.get(&self.frame).and_then(|b| unpack(b))?);
+            *self.ram_at.borrow_mut() = Some((self.frame, Rc::clone(&r)));
+            Some(r)
+        };
         if t.arcade
             && let Ok(sel) = &parsed
             && arcade_record(sel)
         {
-            let Some(rec) = t.ram.get(&self.frame).and_then(|b| unpack(b)) else {
+            let Some(rec) = ram(&t) else {
                 drop(t);
                 return self.miss(&format!("RAM at frame {}", self.frame));
             };
@@ -679,23 +694,9 @@ impl Runtime for Original {
                 drop(t);
                 return self.miss("RAM read the same way");
             }
-            let cached = self
-                .ram_at
-                .borrow()
-                .as_ref()
-                .filter(|(f, _)| *f == self.frame)
-                .map(|(_, r)| Rc::clone(r));
-            let ram = match cached {
-                Some(r) => r,
-                None => {
-                    let Some(r) = t.ram.get(&self.frame).and_then(|b| unpack(b)) else {
-                        drop(t);
-                        return self.miss(&format!("RAM at frame {}", self.frame));
-                    };
-                    let r = Rc::new(r);
-                    *self.ram_at.borrow_mut() = Some((self.frame, Rc::clone(&r)));
-                    r
-                }
+            let Some(ram) = ram(&t) else {
+                drop(t);
+                return self.miss(&format!("RAM at frame {}", self.frame));
             };
             return gp_nes::protocol::read_ram(&ram, sel).unwrap_or_else(|| self.miss("RAM read"));
         }
