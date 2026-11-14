@@ -10,10 +10,6 @@ use crate::mechanic::http::{Request, Response};
 /// Each route and why it isn't here yet.
 const LATER: &[(&str, &str)] = &[
     (
-        "/api/capture/{run}/clips/{clip}/tell",
-        "telling an agent about a clip isn't in gameprinter's gp serve yet; gp mechanic say is the agent's side of the mechanic page's talk",
-    ),
-    (
         "/api/capture/{run}/refine",
         "the game view's refine panel (game-printer's serve/refine.rs) isn't in gameprinter's gp serve: the background work on the REFINE tab runs the same loop (gp model refine --lockstep) on a clip",
     ),

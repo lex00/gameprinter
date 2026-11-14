@@ -48,12 +48,14 @@ header { display: flex; gap: 16px; align-items: baseline; padding: 10px 16px; bo
    at this width, so a poll doesn't move the game pane up and down. */
 #next-line { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; min-width: 0; font-size: 13px; line-height: 1.35; }
 #next-line[hidden] { display: none; }
-#next-line .nx-stands, #next-line .nx-clue, #next-line .nx-next, #next-line .nx-run { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+#next-line .nx-stands, #next-line .nx-clue, #next-line .nx-next, #next-line .nx-run, #next-line .nx-tools { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 #next-line .nx-stands { color: var(--muted); flex: 1 1 26ch; }
 #next-line .nx-clue { color: var(--nes-28); flex: 1 1 26ch; }
 #next-line .nx-next { flex: 1 1 34ch; }
 #next-line .nx-run { color: var(--nes-28); flex: 1 1 24ch; }
 #next-line .nx-changed { color: var(--nes-28); flex: 0 0 auto; }
+#next-line .nx-tools { color: var(--nes-2a, #58d854); flex: 1 1 30ch; }
+#next-line .nx-tools.nx-failed { color: var(--nes-27, #fca044); }
 #next-line .nx-who { color: var(--nes-21); font-weight: 700; }
 #asks { flex-basis: 100%; display: flex; flex-direction: column; gap: 6px; }
 #asks[hidden] { display: none; }

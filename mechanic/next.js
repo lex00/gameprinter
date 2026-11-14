@@ -28,6 +28,20 @@ const AWAY_MS = 300000;
 const BUSY = ["recording", "review", "sealed", "sending"];
 const WHO = { tools: "THE TOOLS", agent: "YOUR AGENT", person: "YOU" };
 
+/** What LET THE TOOLS TRY's record says, in words, or null: a result
+ * shows for ten minutes after it ended. */
+function toolsWords(t) {
+  if (!t || !["done", "failed"].includes(t.state)) return null;
+  if (t.ended_ms && Date.now() - t.ended_ms > 600000) return null;
+  const first = String(t.error ?? "").split("\n")[0].trim().replace(/[.:;]+$/, "");
+  if (t.state === "failed") return `The tools couldn't start: ${first || "no reason given"}. Your agent can look at why.`;
+  const made = t.json?.made?.length ?? 0;
+  const you = t.json?.needs_you?.length ?? 0;
+  const items = (n) => (n === 1 ? "1 quest item" : `${n} quest items`);
+  const got = made ? `they got ${items(made)} on their own` : "they got none on their own";
+  return `The tools tried the quest log: ${got}, and ${items(you)} ${you === 1 ? "needs" : "need"} you.`;
+}
+
 /** Starts the line. `page` is app.js's: {game(), mode(), tab(), target(),
  * waiting(), idleMs(), playFrom(row), show(tab)}. */
 export function startNext(page) {
@@ -45,7 +59,10 @@ export function startNext(page) {
   // when the count goes up, the views that don't redraw on their own hear
   // it ("gp-changed"), and on PLAY and REFINE the line offers a reload.
   let changes = null;
+  let pageChanges = null;
   let changedNote = false;
+  // LET THE TOOLS TRY's record (serve/jobs.rs), read with each answer.
+  let tools = null;
 
   window.addEventListener("keydown", () => { lastAct = performance.now(); }, { capture: true });
   window.addEventListener("pointerdown", (e) => {
@@ -98,6 +115,28 @@ export function startNext(page) {
       b.textContent = "PLAY FROM HERE";
       b.title = `Opens ${a.row} at its start point and records`;
       b.addEventListener("click", (e) => { e.currentTarget.blur(); void page.playFrom(a.row); });
+    } else if (a.do === "start" && a.action === "triage") {
+      // LET THE TOOLS TRY: gp mechanic triage through gp serve's page
+      // actions (serve/jobs.rs), the agent's gp_run underneath; free, so
+      // no yes card. While it runs the line's RUNNING part says so.
+      const busy = tools?.state === "running";
+      b.textContent = busy ? "THE TOOLS ARE TRYING" : "LET THE TOOLS TRY";
+      b.disabled = busy;
+      b.dataset.testid = "tools-try";
+      b.title = "The tools play each quest item themselves and save a clip when one works. Items they can't get stay for you.";
+      b.addEventListener("click", async (e) => {
+        e.currentTarget.blur();
+        e.currentTarget.disabled = true;
+        try {
+          const r = await fetch(`/api/capture/${encodeURIComponent(page.game())}/do/triage`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+          const v = await r.json().catch(() => ({}));
+          tools = r.ok ? v : { state: "failed", error: v.error ?? `the page's server answered ${r.status}` };
+        } catch (err) {
+          tools = { state: "failed", error: "the page's server didn't answer" };
+        }
+        drawn = "";
+        render();
+      });
     } else if (a.do === "tab") {
       if (page.tab() === a.tab) return null;
       b.textContent = a.tab.toUpperCase();
@@ -182,7 +221,7 @@ export function startNext(page) {
     const c = clue && clue.until > now && !BUSY.includes(page.mode()) ? clue : null;
     // Drawn again only when it changes: a button redrawn under the mouse
     // loses the click.
-    const key = JSON.stringify([c?.says, answer.stands, answer.stage, answer.next, answer.also, answer.running, changedNote, page.tab()]);
+    const key = JSON.stringify([c?.says, answer.stands, answer.stage, answer.next, answer.also, answer.running, changedNote, page.tab(), tools?.state, tools?.ended_ms]);
     if (key === drawn) return;
     drawn = key;
     el.textContent = "";
@@ -201,6 +240,11 @@ export function startNext(page) {
     el.appendChild(next);
     const b = button(answer.next);
     if (b) el.appendChild(b);
+    // LET THE TOOLS TRY is free work the person may start whenever the
+    // tools' step is among the others too, not only when it is next.
+    const start = !answer.next.act || answer.next.act.do !== "start" ? (answer.also ?? []).find((x) => x.act?.do === "start") : null;
+    const sb = start && button(start);
+    if (sb) el.appendChild(sb);
     if (changedNote && ["play", "refine"].includes(page.tab())) {
       const n = document.createElement("span");
       n.className = "nx-changed";
@@ -213,12 +257,23 @@ export function startNext(page) {
       rb.addEventListener("click", () => location.reload());
       el.append(n, rb);
     }
-    // What the agent runs now, so the person sees it working.
-    const runs = (answer.running ?? []).filter((r) => r.what.startsWith("your agent"));
+    // What LET THE TOOLS TRY found, for ten minutes after, or why it
+    // couldn't start.
+    const tw = toolsWords(tools);
+    if (tw) {
+      const n = document.createElement("span");
+      n.className = tools.state === "failed" ? "nx-tools nx-failed" : "nx-tools";
+      n.dataset.testid = "tools-said";
+      n.textContent = tw;
+      el.appendChild(n);
+    }
+    // What the agent runs now, and what a button on the page started, so
+    // the person sees it working.
+    const runs = (answer.running ?? []).filter((r) => /^(your agent|started on the page): /.test(r.what));
     if (runs.length) {
       const r = document.createElement("span");
       r.className = "nx-run";
-      r.textContent = `RUNNING: ${runs.map((x) => x.what.replace(/^your agent: /, "")).join("; ")}`;
+      r.textContent = `RUNNING: ${runs.map((x) => x.what.replace(/^(your agent|started on the page): /, "")).join("; ")}`;
       r.title = runs.map((x) => x.what).join("\n");
       el.appendChild(r);
     }
@@ -268,6 +323,18 @@ export function startNext(page) {
       window.dispatchEvent(new CustomEvent("gp-next", { detail: answer }));
     } catch (e) {
       return;
+    }
+    try {
+      const r = await fetch(`/api/capture/${encodeURIComponent(game)}/do/triage`);
+      if (r.ok) tools = await r.json();
+    } catch (e) { /* no page actions here */ }
+    // A change the person made with a button on the page (LET THE TOOLS
+    // TRY): the views refresh, with no note that the agent did anything.
+    if (typeof answer.page_changes === "number") {
+      if (pageChanges !== null && answer.page_changes > pageChanges) {
+        window.dispatchEvent(new CustomEvent("gp-changed", { detail: { changes: answer.changes, page: true } }));
+      }
+      pageChanges = answer.page_changes;
     }
     if (typeof answer.changes === "number") {
       if (changes !== null && answer.changes > changes) {

@@ -182,6 +182,101 @@ export function fidelityShort(s, nx) {
   return `Clips: ${Math.round(f.permille / 10)}% the same as the original, ${f.exact} of ${f.scored} all the way${f.older ? ", on an older model" : ""}.`;
 }
 
+// ------------------------------------------------------------ the buttons
+
+/**
+ * A work button's record (gp serve's /api/capture/RUN/do/WHICH,
+ * serve/jobs.rs): the page names one of a fixed few actions, the server
+ * runs its gp command through the agent's gp_run.
+ */
+export async function jobRecord(api, run, which) {
+  return api(`/api/capture/${enc(run)}/do/${enc(which)}`);
+}
+
+/** Starts a work button's action; its record. */
+export async function startJob(api, run, which) {
+  return api(`/api/capture/${enc(run)}/do/${enc(which)}`, {});
+}
+
+/** "14:02", the person's own clock. */
+export function clock(ms) {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/** The first line of some words, without a trailing stop. */
+export function firstLine(t) {
+  return String(t ?? "").split("\n")[0].trim().replace(/[.:;]+$/, "");
+}
+
+/** "a, b and 5 more", as parts: the names are clips to open. */
+function named(ids) {
+  const shown = ids.length > 3 ? ids.slice(0, 2) : ids;
+  const out = [];
+  shown.forEach((id, i) => {
+    if (i > 0) out.push(i === shown.length - 1 && ids.length <= 3 ? " and " : ", ");
+    out.push({ clip: id });
+  });
+  if (ids.length > 3) out.push(` and ${ids.length - 2} more`);
+  return out;
+}
+
+/** What CHECK THE TESTS says (`gp corpus verify`'s JSON), as parts: text,
+ * and {clip} for a clip's name the person can open. On today's plan-style
+ * tests a clip's curves are derived, so the check can only say each clip
+ * can be made again; it says that and no more. */
+export function verifyWords(rec) {
+  const st = rec?.state ?? "never";
+  if (st === "never") return ["Not checked yet."];
+  if (st === "running") return ["Checking the tests: making each clip again. This takes a few minutes. You can keep working."];
+  if (st === "waits") return ["The check waits for your yes, on the card at the top."];
+  if (st === "failed") return [`The check couldn't run: ${firstLine(rec.error) || "no reason given"}.`];
+  const v = rec.json ?? {};
+  const rows = v.clips ?? [];
+  const at = `Checked at ${clock(rec.ended_ms ?? Date.now())}: `;
+  const n = rows.length;
+  const of = (k) => (k === 1 ? "1 clip" : `${k} clips`);
+  const ids = (state) => rows.filter((r) => r.state === state).map((r) => r.id);
+  const differ = ids("differ");
+  const failed = ids("failed");
+  const measured = ids("measured");
+  const out = [];
+  if (!differ.length && !failed.length && !measured.length) {
+    const plan = n > 0 && rows.every((r) => r.says === "made");
+    if (!n) return [`${at}the game's tests have no clip yet.`];
+    const all = plan ? `all ${n} clips can be made again from your copy of the game` : `all ${n} clips come out the same`;
+    // A problem with no clip to name: the tests themselves changed since
+    // their version was recorded (gp corpus verify's content hash).
+    if (!v.ok && v.problems?.length) return [`${at}${all}, but the game's tests changed since their last version was recorded. Your agent can look at why.`];
+    return [`${at}${all}.`];
+  }
+  out.push(at);
+  if (differ.length) out.push(`${differ.length} of ${n} clips come out different: `, ...named(differ), ". ");
+  if (failed.length) out.push(`${of(failed.length)} couldn't be made again: `, ...named(failed), ". ");
+  if (measured.length) out.push(`${of(measured.length)} had nothing saved to compare with, so ${measured.length === 1 ? "it was" : "they were"} only measured: `, ...named(measured), ". ");
+  out.push("Your agent can look at why.");
+  return out;
+}
+
+// ------------------------------------------------------------ telling
+
+/** What the person told the agent about a clip (serve/tell.rs), newest
+ * last, in words: [{text, state}], state "answered", "sent" or "waiting". */
+export function tellLines(tells, clip) {
+  const q = (t) => `"${String(t).trim()}"`;
+  return (tells ?? []).filter((t) => t.clip === clip).slice(-2).flatMap((t) => {
+    const reply = t.replies?.[t.replies.length - 1];
+    if (reply) return [{ text: `You told your agent: ${q(t.text)}`, state: "told" }, { text: `Your agent answered: ${q(reply.text)}`, state: "answered" }];
+    return [{ text: `You told your agent: ${q(t.text)}. ${t.agent ? "Sent to the agent working on this clip." : "Waiting for your agent."}`, state: t.agent ? "sent" : "waiting" }];
+  });
+}
+
+/** Tells the agent something about a clip: the work record and, echoed,
+ * the conversation. */
+export async function tellAbout(api, run, clip, text) {
+  return api(`/api/capture/${enc(run)}/clips/${enc(clip)}/tell`, { text, echo: true });
+}
+
 // ------------------------------------------------------------ the queue
 
 /** A clip's state from its score: waiting, can't start, matches, fixed, not matching. */
@@ -342,10 +437,28 @@ export function pictureOf(run, clip) {
   return `/api/capture/${enc(run)}/generated/starts/${enc(clip)}/picture.png`;
 }
 
+/** A clip's picture as an image, 128 across, as game-printer's NES cards
+ * were, at the machine's own shape (Tapper's 512 by 480 as much as the
+ * NES's 256 by 240); loaded when it scrolls into view. */
+export function clipPicture(x, clip) {
+  const { width, height } = x.screen;
+  const img = document.createElement("img");
+  img.className = "rf-pic";
+  img.alt = "";
+  img.width = 128;
+  img.height = Math.round((128 * height) / width);
+  img.style.aspectRatio = `${width} / ${height}`;
+  img.loading = "lazy";
+  img.src = pictureOf(x.run, clip);
+  // No picture (the start can't be replayed): a black frame of the same size.
+  img.addEventListener("error", () => { img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"; img.classList.add("rf-nopic"); });
+  return img;
+}
+
 const hubs = new Map();
 
 /**
- * The run's hub: {state, record, history, screen, next, api, run, subscribe(fn),
+ * The run's hub: {state, record, tells, history, screen, next, api, run, subscribe(fn),
  * refresh(), post(path, body)}. One per run however many parts mount;
  * it lets go of the stream when the last part stops.
  */
@@ -360,6 +473,7 @@ export function hub(o) {
     api: o.api,
     state: null,
     record: null,
+    tells: [],
     history: [],
     screen: { width: 256, height: 240, fps: 60, buttons: [] },
     subs: new Set(),
@@ -370,9 +484,10 @@ export function hub(o) {
   let pending = null;
   async function refresh() {
     try {
-      const [s, rec] = await Promise.all([o.api(`${base}/background`), o.api(`${base}/agent`).catch(() => null)]);
+      const [s, rec, tells] = await Promise.all([o.api(`${base}/background`), o.api(`${base}/agent`).catch(() => null), o.api(`${base}/tells`).catch(() => null)]);
       x.state = s;
       if (rec) x.record = rec;
+      if (tells) x.tells = tells.tells ?? [];
       if ((s.rounds ?? 0) !== x.history.length) x.history = (await o.api(`${base}/background/history`).catch(() => ({ rounds: [] }))).rounds ?? [];
       tell("state");
     } catch (e) {

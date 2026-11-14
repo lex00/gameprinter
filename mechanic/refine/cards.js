@@ -9,7 +9,7 @@
 // The user asked for it on 2026-10-30: "a live render of stats of the ones
 // in progress with bars showing moving toward the goal".
 
-import { bar, css, doneLine, h, hub, jobBars, liveCards, openClip, opts, pictureOf } from "./fold.js";
+import { bar, clipPicture, css, doneLine, h, hub, jobBars, liveCards, openClip, opts } from "./fold.js";
 
 function stepper(label, value, min, max, set, title) {
   const w = h("span", "rf-stepper");
@@ -24,23 +24,6 @@ function stepper(label, value, min, max, set, title) {
   return w;
 }
 
-function picture(x, clip) {
-  // 128 across, as game-printer's NES cards were, at the machine's own
-  // shape (Tapper's 512 by 480 as much as the NES's 256 by 240).
-  const { width, height } = x.screen;
-  const img = document.createElement("img");
-  img.className = "rf-pic";
-  img.alt = "";
-  img.width = 128;
-  img.height = Math.round((128 * height) / width);
-  img.style.aspectRatio = `${width} / ${height}`;
-  img.loading = "lazy";
-  img.src = pictureOf(x.run, clip);
-  // No picture (the start can't be replayed): a black frame of the same size.
-  img.addEventListener("error", () => { img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"; img.classList.add("rf-nopic"); });
-  return img;
-}
-
 function card(x, c, pics) {
   const b = h("button", `rf-card ${c.state === "running" ? c.job.kind : "done"}`);
   b.dataset.testid = "live-card";
@@ -50,7 +33,7 @@ function card(x, c, pics) {
   b.addEventListener("click", () => openClip(x.run, c.clip));
   // The picture is made once a clip, so a card redrawn each second keeps it.
   let pic = pics.get(c.clip);
-  if (!pic) { pic = picture(x, c.clip); pics.set(c.clip, pic); }
+  if (!pic) { pic = clipPicture(x, c.clip); pics.set(c.clip, pic); }
   b.append(pic, h("span", "rf-name", c.name ?? c.clip));
   if (c.state === "running") {
     const j = c.job;

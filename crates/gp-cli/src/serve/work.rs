@@ -34,9 +34,9 @@
 //!   the numbers the queue tuned stay.
 //! - The trial preview is built with the worktree's
 //!   `scripts/web/build-preview.sh`, gameprinter's preview of the model.
-//! - The person's tells (game-printer's serve/tell.rs) aren't here: the
-//!   mechanic page's talk (`gp mechanic say`) is where a person tells an
-//!   agent about a clip.
+//! - The person's tells about a clip are entries of this record, written
+//!   by serve/tell.rs (REFINE's queue, `gp agent tell`) and answered with
+//!   `gp agent note --reply-to`.
 //!
 //! | Endpoint | What |
 //! |---|---|

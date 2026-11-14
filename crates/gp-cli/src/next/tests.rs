@@ -260,6 +260,17 @@ fn p4_no_clips_sends_the_tools_first() {
     assert_eq!(a.stage.n, 4);
     assert_eq!(a.next.who, Who::Tools);
     assert_eq!(a.next.how.cli.as_deref(), Some("gp mechanic triage t"));
+    // The page's LET THE TOOLS TRY starts it (serve/jobs.rs).
+    assert_eq!(a.next.act, Some(Act::Start { action: "triage" }));
+    assert_eq!(
+        json_of(&a)["next"]["act"],
+        json!({"do": "start", "action": "triage"})
+    );
+    assert!(
+        crate::serve::jobs::ACTIONS
+            .iter()
+            .any(|x| x.name == "triage" && x.command == "mechanic triage")
+    );
     assert_eq!(
         a.stands,
         "The tools know where the player is in Test Game. No play is recorded yet."
@@ -526,4 +537,52 @@ fn words_are_cut_at_a_space() {
         few(&["a", "b", "c", "d"].map(String::from)),
         "a, b and 2 more"
     );
+}
+
+#[test]
+fn a_tell_about_a_clip_waits_for_the_agent_until_it_answers() {
+    let fx = Fx::new();
+    fx.game("t", &["t.walk.001", "t.walk.002"]);
+    fx.gate("t", &["t.walk.001", "t.walk.002"], 1, false);
+    let run = crate::serve::game::Run {
+        name: "t".into(),
+        game: fx.games().join("t"),
+        dir: fx.home().join("work/serve/t"),
+    };
+    let (t, _) = crate::serve::tell::add(
+        &run,
+        crate::serve::tell::New {
+            clip: "t.walk.002".into(),
+            text: "the jump is too floaty at the top".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let a = fx.answer(Some("t"));
+    assert_eq!(a.next.who, Who::Agent);
+    assert_eq!(
+        a.next.says,
+        "Your agent can answer what you told it about t.walk.002: \"the jump is too floaty at the top\" If it hasn't yet, ask it to read your note."
+    );
+    assert_eq!(
+        a.next.how.cli.as_deref(),
+        Some(
+            "gp agent tells --run t --open, then gp agent note --run t --clip t.walk.002 --reply-to 1 WORDS"
+        )
+    );
+    assert_eq!(json_of(&a)["facts"]["tells"][0]["clip"], "t.walk.002");
+    // Answered: the step goes.
+    crate::serve::work::append(
+        &run,
+        crate::serve::work::Entry {
+            kind: "note".into(),
+            by: "driver".into(),
+            reply_to: t.id,
+            text: "lowered the gravity at the top".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let a = fx.answer(Some("t"));
+    assert!(!a.next.says.contains("told it"), "{}", a.next.says);
 }

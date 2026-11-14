@@ -19,7 +19,7 @@
 //!
 //! | Endpoint | What |
 //! |---|---|
-//! | `POST /api/capture/{run}/clips/{clip}/tell` | `{text, frame?, orig_frame?, at?, region?}`: adds a tell |
+//! | `POST /api/capture/{run}/clips/{clip}/tell` | `{text, frame?, orig_frame?, at?, region?, echo?}`: adds a tell; with `echo: true` (the page's REFINE queue) it is also the person's turn in the open mechanic's talk |
 //! | `GET /api/capture/{run}/tells` | The tells, each with its replies; `?open=1` for those without a reply |
 
 use std::fs;
@@ -268,10 +268,25 @@ fn post_tell(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail
         },
     )
     .map_err(|e| Fail::bad_request(format!("{e:#}")))?;
+    // One inbox: the work record holds the tell, and the open mechanic's
+    // talk echoes it, so the conversation column shows what was said.
+    let echoed = if v["echo"] == json!(true) {
+        super::pages::made(&run.name).and_then(|s| {
+            let clip = e.clip.clone().unwrap_or_default();
+            s.tell_turn(
+                &format!("About clip {clip}: {}", e.text),
+                json!({"clip": clip, "id": e.id}),
+            )
+            .ok()
+        })
+    } else {
+        None
+    };
     let es = work::entries(&run);
     Ok(Response::json(&json!({
         "tell": one_json(&es, &e, &run),
         "delivered": inbox.is_some(),
+        "echoed": echoed.map(|(n, m)| json!({"mechanic": m, "turn": n})),
         "run": run.name,
     })))
 }

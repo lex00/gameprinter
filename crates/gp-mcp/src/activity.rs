@@ -6,8 +6,9 @@
 //! | File | What |
 //! |---|---|
 //! | `$GP_HOME/mechanics/GAME/TOPIC/watch/log.ndjson` | The log the side panel reads (gp-cli's mechanic/watch.rs): TOPIC is the mechanic open on the page (`mechanics/GAME/current`), else `agent` |
-//! | `$GP_HOME/work/runs/ID.json` | `{what, command, game, started_ms, pid}`: a call still running after a few seconds; gone when it ends |
+//! | `$GP_HOME/work/runs/ID.json` | `{what, command, game, started_ms, pid, by}`: a call still running after a few seconds; gone when it ends. `by` is `agent`, or `page` for a button the person pressed on the page (gp serve's serve/jobs.rs) |
 //! | `$GP_HOME/work/serve/GAME/changes` | How many times the agent changed GAME through gp_run (a number) |
+//! | `$GP_HOME/work/serve/GAME/page-changes` | How many times a button the person pressed changed GAME: the page's views refresh quietly on it, with no note that the agent changed anything |
 //!
 //! No arguments' values but the game's name and no output go in a line, so
 //! no secret or long output reaches the page.
@@ -122,7 +123,27 @@ pub fn changes(home: &Path, game: Option<&str>) -> u64 {
 
 /// Counts a change to a game, or to no game in particular.
 pub fn bump(home: &Path, game: Option<&str>) {
-    let f = changes_file(home, game);
+    bump_file(changes_file(home, game));
+}
+
+fn page_changes_file(home: &Path, game: Option<&str>) -> PathBuf {
+    changes_file(home, game).with_file_name("page-changes")
+}
+
+/// How many times a button the person pressed on the page changed a game.
+pub fn page_changes(home: &Path, game: Option<&str>) -> u64 {
+    std::fs::read_to_string(page_changes_file(home, game))
+        .ok()
+        .and_then(|t| t.trim().parse::<u64>().ok())
+        .unwrap_or(0)
+}
+
+/// Counts a change the person made with a button on the page.
+pub fn bump_page(home: &Path, game: Option<&str>) {
+    bump_file(page_changes_file(home, game));
+}
+
+fn bump_file(f: PathBuf) {
     let n = std::fs::read_to_string(&f)
         .ok()
         .and_then(|t| t.trim().parse::<u64>().ok())
@@ -306,6 +327,40 @@ pub enum Ended {
     SaidNo,
 }
 
+/// Who started a call: the agent, or the person with a button on their
+/// page (gp serve's serve/jobs.rs), whose calls read as their own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum By {
+    Agent,
+    Page,
+}
+
+impl By {
+    fn word(self) -> &'static str {
+        match self {
+            By::Agent => "agent",
+            By::Page => "page",
+        }
+    }
+}
+
+/// The line a call leaves, as the person started it: "You checked the
+/// game's tests: done, 12 s".
+pub fn line_by(said: &Said, how: &Ended, took: Duration, by: By) -> String {
+    let l = line(said, how, took);
+    match by {
+        By::Agent => l,
+        By::Page => {
+            let mut c = l.chars();
+            let first: String = c
+                .next()
+                .map(|f| f.to_lowercase().collect())
+                .unwrap_or_default();
+            format!("You {first}{}", c.as_str())
+        }
+    }
+}
+
 /// The line a call leaves: "Scored the game's tests: done, 41 s".
 pub fn line(said: &Said, how: &Ended, took: Duration) -> String {
     match how {
@@ -330,6 +385,7 @@ pub struct Watch {
     said: Said,
     cmd: String,
     started: Instant,
+    by: By,
     stop: Option<mpsc::Sender<()>>,
     timer: Option<std::thread::JoinHandle<()>>,
     record: PathBuf,
@@ -338,6 +394,11 @@ pub struct Watch {
 /// Starts watching a call, `cmd` its command path or tool name: after
 /// [`RUNNING_AFTER`] the page hears it runs.
 pub fn start(home: &Path, game: Option<String>, cmd: String) -> Watch {
+    start_by(home, game, cmd, By::Agent)
+}
+
+/// [`start`], for a call `by` the agent or a button on the page.
+pub fn start_by(home: &Path, game: Option<String>, cmd: String, by: By) -> Watch {
     let said = said(&cmd);
     let started_ms = now_ms();
     let record = runs_dir(home).join(format!("{started_ms}-{}.json", std::process::id()));
@@ -354,7 +415,7 @@ pub fn start(home: &Path, game: Option<String>, cmd: String) -> Watch {
             return;
         }
         let _ = std::fs::create_dir_all(runs_dir(&h));
-        let rec = json!({"what": s.doing, "command": c, "game": g, "started_ms": started_ms, "pid": std::process::id()});
+        let rec = json!({"what": s.doing, "command": c, "game": g, "started_ms": started_ms, "pid": std::process::id(), "by": by.word()});
         let _ = std::fs::write(&r, rec.to_string());
         if let Some(g) = &g {
             let mut d = s.doing.clone();
@@ -370,6 +431,7 @@ pub fn start(home: &Path, game: Option<String>, cmd: String) -> Watch {
         said,
         cmd,
         started: Instant::now(),
+        by,
         stop: Some(tx),
         timer: Some(timer),
         record,
@@ -387,7 +449,7 @@ impl Watch {
         }
         let _ = std::fs::remove_file(&self.record);
         if let Some(g) = &self.game {
-            let text = line(&self.said, how, self.started.elapsed());
+            let text = line_by(&self.said, how, self.started.elapsed(), self.by);
             log_cmd(&self.home, g, &text, Some(&self.cmd));
         }
     }
@@ -440,6 +502,25 @@ pub fn cut(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_call_from_the_page_reads_as_the_person_s_and_counts_apart() {
+        let s = said("corpus verify");
+        let took = Duration::from_secs(12);
+        let how = Ended::As("done".into());
+        assert_eq!(
+            line_by(&s, &how, took, By::Agent),
+            "Checked the game's tests: done, 12 s"
+        );
+        assert_eq!(
+            line_by(&s, &how, took, By::Page),
+            "You checked the game's tests: done, 12 s"
+        );
+        let d = tempfile::tempdir().unwrap();
+        bump_page(d.path(), Some("dk"));
+        assert_eq!(page_changes(d.path(), Some("dk")), 1);
+        assert_eq!(changes(d.path(), Some("dk")), 0);
+    }
 
     #[test]
     fn a_call_leaves_a_line_in_the_open_mechanic_s_log() {

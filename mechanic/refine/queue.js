@@ -5,11 +5,15 @@
 // changed, then those that don't match yet. Each clip has its score in
 // words, a small line of its score over time, "fix this clip" (the queue
 // on, that clip first; on a clip no numbers fix, the clip agent takes
-// it), "add to the queue", "let the agent fix it", and the clip agent's
+// it), "add to the queue", "let the agent fix it", "tell your agent" (a
+// line about the clip for the agent: serve/tell.rs, echoed into the
+// conversation, with the agent's answer under it), and the clip agent's
 // line and attempts with keep. Above them, a clip can be added to the
-// queue by name.
+// queue by name. AS PICTURES shows every clip of the tests as a picture
+// instead (pictures.js).
 
-import { addScores, cardLine, clipState, css, h, hub, inProgress, openClip, opts, readTrends, sparkline } from "./fold.js";
+import { drawPictures } from "./pictures.js";
+import { addScores, cardLine, clipState, css, h, hub, inProgress, openClip, opts, readTrends, sparkline, tellAbout, tellLines } from "./fold.js";
 
 const SHOWN = 40;
 
@@ -22,6 +26,15 @@ export function refineQueue(el, a, b, c) {
   const changed = {};
   let note = "";
   let all = false;
+  // TELL YOUR AGENT: the clip being told about, what is typed so far, and
+  // why the last send failed.
+  let telling = null;
+  let draft = "";
+  let tellError = "";
+  // AS A LIST or AS PICTURES (pictures.js), kept for the next visit.
+  let view = "list";
+  try { if (localStorage.getItem("gp.refine.view") === "pictures") view = "pictures"; } catch { /* a list */ }
+  const pics = new Map();
   const act = async (f) => {
     try {
       const r = await f();
@@ -36,7 +49,7 @@ export function refineQueue(el, a, b, c) {
   const draw = (_, why) => {
     if (why === "progress") return;
     // Not while a clip is being picked from the list.
-    if (el.contains(document.activeElement) && document.activeElement.tagName === "SELECT") return;
+    if (el.contains(document.activeElement) && ["SELECT", "INPUT"].includes(document.activeElement.tagName)) return;
     const s = x.state;
     if (why === "state" && s) {
       const r = addScores(trends, s.scores);
@@ -46,8 +59,23 @@ export function refineQueue(el, a, b, c) {
     el.textContent = "";
     const head = h("div", "rf-head");
     head.append(h("h3", "", "The queue"));
+    const sw = h("span", "rf-switch");
+    for (const [v, words, title] of [["list", "as a list", "The clips in progress, with what each needs"], ["pictures", "as pictures", "Every clip of the game's tests as a picture of its start"]]) {
+      const b = h("button", `rf-btn${view === v ? " on" : ""}`, words);
+      b.dataset.testid = `view-${v}`;
+      b.title = title;
+      b.setAttribute("aria-pressed", String(view === v));
+      b.addEventListener("click", () => {
+        view = v;
+        try { localStorage.setItem("gp.refine.view", v); } catch { /* not kept */ }
+        draw();
+      });
+      sw.append(b);
+    }
+    head.append(sw);
     el.append(head);
     if (!s) { el.append(h("p", "rf-muted", "Checking the background work.")); return; }
+    if (view === "pictures") { drawPictures(el, x, pics); return; }
     const queued = s.queued ?? [];
     const rec = x.record ?? {};
     const agents = s.clip_agents ?? [];
@@ -118,6 +146,16 @@ export function refineQueue(el, a, b, c) {
         }
         li.append(ar);
       }
+      for (const t of tellLines(x.tells, id)) {
+        const tl = h("div", `rf-told ${t.state}`, t.text);
+        tl.dataset.testid = "told";
+        li.append(tl);
+      }
+      if (telling === id) {
+        li.append(tellForm(id));
+        list.append(li);
+        continue;
+      }
       const btns = h("div", "rf-btns");
       if (clipState(sc) !== "matches" && clipState(sc) !== "fixed") {
         const fix = h("button", "rf-btn", "fix this clip");
@@ -134,6 +172,11 @@ export function refineQueue(el, a, b, c) {
         ag.addEventListener("click", () => void act(() => x.post(`/clips/${enc(id)}/agent`, {})));
         btns.append(ag);
       }
+      const tb = h("button", "rf-btn", "tell your agent");
+      tb.dataset.testid = "tell-agent";
+      tb.title = "Write what is wrong with this clip. Your agent gets it, and its answer shows here.";
+      tb.addEventListener("click", () => { telling = id; draft = ""; tellError = ""; draw(); el.querySelector("[data-testid=tell-text]")?.focus(); });
+      btns.append(tb);
       li.append(btns);
       list.append(li);
     }
@@ -144,6 +187,44 @@ export function refineQueue(el, a, b, c) {
       el.append(more);
     }
   };
+  /** The one-line box that takes a button row's place. */
+  function tellForm(id) {
+    const f = h("form", "rf-tell");
+    f.dataset.testid = "tell-form";
+    const box = h("input");
+    box.dataset.testid = "tell-text";
+    box.placeholder = "What is wrong with this clip?";
+    box.value = draft;
+    box.setAttribute("aria-label", `What is wrong with ${id}`);
+    const send = h("button", "rf-btn", "send");
+    send.type = "submit";
+    send.dataset.testid = "tell-send";
+    send.disabled = !draft.trim();
+    box.addEventListener("input", () => { draft = box.value; send.disabled = !draft.trim(); });
+    box.addEventListener("keydown", (e) => { if (e.key === "Escape") { telling = null; box.blur(); draw(); } });
+    const no = h("button", "rf-link", "cancel");
+    no.type = "button";
+    no.addEventListener("click", () => { telling = null; draw(); });
+    f.append(box, send, no);
+    if (tellError) f.append(h("span", "rf-error", tellError));
+    f.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!draft.trim()) return;
+      send.disabled = true;
+      try {
+        await tellAbout(x.api, x.run, id, draft.trim());
+        telling = null;
+        draft = "";
+        tellError = "";
+      } catch (err) {
+        tellError = `Couldn't send: ${String(err.message ?? err).replace(/\.$/, "")}.`;
+      }
+      box.blur();
+      await x.refresh();
+      draw();
+    });
+    return f;
+  }
   const off = x.subscribe(draw);
   draw();
   return { stop() { off(); x.stop(); el.textContent = ""; } };

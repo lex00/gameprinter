@@ -953,7 +953,8 @@ async function agentOnThePage() {
 /** The old editor's five features on the page (BRIEF-editor-features.md,
  * issue #2), on Moss Hop with main()'s clip in the game's tests: the
  * fidelity number in REFINE's first line and on CLIPS's strip, the same
- * number `next` gives. */
+ * number `next` gives; CHECK THE TESTS on REFINE; TELL YOUR AGENT on a
+ * queue row; the queue AS PICTURES; LET THE TOOLS TRY on the status line. */
 async function editorFeatures() {
   gpRun(["corpus", "import", GAME, "--write"]);
   const base = await gpServe(games);
@@ -994,6 +995,151 @@ async function editorFeatures() {
   });
   ok(`CLIPS's strip says it short: "${strip}"`);
   await page.click("#tab-work");
+
+  // CHECK THE TESTS on REFINE: gp corpus verify through gp_run (gp serve's
+  // fixed table of actions, serve/jobs.rs), what it found in words, and
+  // the agent's log line its call leaves.
+  await page.click("[data-testid=check-tests]");
+  await until("the check running", async () => /Checking the tests: making each clip again/.test(await text(page, "[data-testid=check-says]")));
+  const checked = await until("the check's result", async () => {
+    const t = await text(page, "[data-testid=check-says]");
+    return /^Checked at \d\d:\d\d: all \d+ clips (can be made again from your copy of the game|come out the same)\.$/.test(t) && t;
+  }, 300000);
+  const rec = await api(`api/capture/${GAME}/do/verify`);
+  // The person pressed it: the log says so, and a check that only reads
+  // changes nothing, so no note says the agent changed the game.
+  if (rec.state !== "done" || rec.command !== "corpus verify") fail(`the check's record: ${JSON.stringify(rec).slice(0, 300)}`);
+  await page.click("#log-toggle");
+  const before = await api(`api/next/${GAME}`);
+  await until("the check in the agent's log, as the person's", async () => /You checked the game's tests: done/.test(await text(page, "#w-log")));
+  if (/Checked the game's tests/.test(await text(page, "#w-log"))) fail("the check's log line reads as the agent's");
+  await page.click("#log-toggle");
+  await page.waitForTimeout(6000); // a poll of the status line or more
+  const nowNx = await api(`api/next/${GAME}`);
+  if (nowNx.changes !== before.changes || nowNx.page_changes !== before.page_changes) fail(`the check counted a change: ${before.changes}/${before.page_changes} then ${nowNx.changes}/${nowNx.page_changes}`);
+  if (/Your agent changed the game/.test(await text(page, "#next-line"))) fail("after the person's check the status line says the agent changed the game");
+  ok(`CHECK THE TESTS runs gp corpus verify through gp_run and says what it found: "${checked}"; the log says "You checked the game's tests: done", and no change is counted`);
+  await shot(page, "check-tests");
+  const nope = await fetch(`${base}api/capture/${GAME}/do/shell`, { method: "POST", body: "{}" });
+  if (nope.status !== 404) fail(`an action outside the table answered ${nope.status}`);
+  ok("an action outside the page's fixed table is refused");
+  // One clip's presses changed under the tests: the check says the tests
+  // changed. On plan-style tests a clip's curves are derived, so no clip
+  // can come out different; the corpus's content hash is what moves.
+  const plan = readFileSync(join(games, GAME, "corpus.toml"), "utf8");
+  const first = plan.match(/presses = "([^"]+)"/)?.[1];
+  const firstId = plan.match(/id = "([^"]+)"/)?.[1];
+  if (!first || !firstId) fail(`no clip's presses in corpus.toml: ${plan.slice(0, 300)}`);
+  const pressFile = join(games, GAME, first);
+  const kept = readFileSync(pressFile, "utf8");
+  if (!kept.includes("right")) fail(`clip 1's presses hold no right to change: ${kept}`);
+  writeFileSync(pressFile, kept.replace(/right/g, "left"));
+  await page.click("[data-testid=check-tests]");
+  await until("the check running again", async () => (await page.getAttribute("[data-testid=check-says]", "data-state")) === "running");
+  const bad = await until("the check's finding", async () => {
+    const t = await text(page, "[data-testid=check-says]");
+    return /^Checked at \d\d:\d\d: all \d+ clips can be made again from your copy of the game, but the game's tests changed since their last version was recorded\. Your agent can look at why\.$/.test(t) && t;
+  }, 300000);
+  if ((await api(`api/capture/${GAME}/do/verify`)).exit !== 1) fail("the check's record doesn't say a check failed");
+  ok(`a clip's presses changed under the tests: "${bad}"`);
+  writeFileSync(pressFile, kept);
+
+  // TELL YOUR AGENT on a row of REFINE's queue: the work record (gp agent
+  // tells lists it), the conversation (the open mechanic's talk), a step in
+  // next for the agent, and the agent's answer under the row.
+  const row = `[data-testid=queue] li[data-clip="${firstId}"]`;
+  await until("the clip's row in the queue", async () => page.isVisible(`${row} [data-testid=tell-agent]`));
+  await page.click(`${row} [data-testid=tell-agent]`);
+  if (!(await page.isDisabled(`${row} [data-testid=tell-send]`))) fail("SEND can be pressed with nothing written");
+  const words = "the hop is too floaty at the top";
+  await page.fill(`${row} [data-testid=tell-text]`, words);
+  await page.click(`${row} [data-testid=tell-send]`);
+  const told = await until("the tell under the row", async () => {
+    const t = await text(page, `${row} [data-testid=told]`);
+    return t.includes(`You told your agent: "${words}". Waiting for your agent.`) && t;
+  });
+  const open = JSON.parse(gpRun(["--json", "agent", "tells", "--run", GAME, "--open"]));
+  const tell = (open.tells ?? []).find((t) => t.clip === firstId && t.text === words);
+  if (!tell) fail(`gp agent tells --open: ${JSON.stringify(open).slice(0, 400)}`);
+  const talk = readFileSync(join(session, "talk.ndjson"), "utf8").trim().split("\n").map((l) => JSON.parse(l)).pop();
+  if (talk.by !== "player" || talk.text !== `About clip ${firstId}: ${words}` || talk.tell?.clip !== firstId) fail(`the conversation's last turn: ${JSON.stringify(talk)}`);
+  const asks = await api(`api/next/${GAME}`);
+  const step = [asks.next, ...(asks.also ?? [])].find((x) => x.says.includes(`what you told it about ${firstId}`));
+  if (!step || step.who !== "agent" || !step.how.cli.includes(`--reply-to ${tell.id}`)) fail(`next has no step for the tell: ${JSON.stringify(asks.next)} ${JSON.stringify(asks.also)}`);
+  gpRun(["agent", "note", "--run", GAME, "--clip", firstId, "--reply-to", String(tell.id), "lowered the gravity at the top of the hop"]);
+  await until("the agent's answer under the row", async () => (await text(page, `${row}`)).includes('Your agent answered: "lowered the gravity at the top of the hop"'));
+  const after = await api(`api/next/${GAME}`);
+  if ([after.next, ...(after.also ?? [])].some((x) => x.says.includes("what you told it"))) fail("next still has the tell's step once answered");
+  ok(`TELL YOUR AGENT on a queue row: "${told}"; in the work record, the conversation and next, and the answer shows under the row`);
+  await shot(page, "tell");
+  await page.click("#tab-clips");
+  await until("the tell in the conversation column", async () => (await text(page, "#talk")).includes(`About clip ${firstId}: ${words}`));
+  ok("the tell is echoed into the conversation column on CLIPS");
+  await page.click("#tab-work");
+
+  // AS PICTURES: every clip of the tests as a picture, grouped by its
+  // mechanic, a state word on each, and a click opens it on CLIPS.
+  await until("the queue's switch", async () => page.isVisible("[data-testid=view-pictures]"));
+  await page.click("[data-testid=view-pictures]");
+  const cards = await until("the pictures", async () => {
+    const c = await page.$$eval("[data-testid=picture-card]", (cs) => cs.map((x) => [x.dataset.clip, x.querySelector(".rf-state")?.textContent, x.querySelector("img")?.getAttribute("src")]));
+    return c.length === n && c;
+  });
+  if (cards.some((c) => !c[1] || !c[2]?.includes("/picture.png"))) fail(`a picture card without its state or picture: ${JSON.stringify(cards)}`);
+  const says = await text(page, "[data-testid=pictures-says]");
+  if (!says.startsWith(`${n} clips.`) || !says.includes("Click a picture to open the clip")) fail(`the pictures' count: ${says}`);
+  await until("the pictures loaded", async () => page.$$eval("[data-testid=picture-card] img", (is) => is.every((i) => i.complete && i.naturalWidth > 0)), 60000);
+  await shot(page, "pictures");
+  await page.click(`[data-testid=picture-card][data-clip="${firstId}"]`);
+  await until("the clip opened on CLIPS", async () => !(await page.isHidden("main")) && (await page.getAttribute("#tab-clips", "class"))?.includes("on") && (await page.getAttribute("#tab-refine", "class"))?.includes("on"));
+  ok(`AS PICTURES shows the ${n} clips, a state word on each (${cards.map((c) => c[1]).join(", ")}): "${says}"; a click opens the clip on CLIPS, on the model`);
+  await page.click("#tab-work");
+  await page.click("[data-testid=view-list]");
+
+  // LET THE TOOLS TRY on the status line: gp mechanic triage through the
+  // same fixed table, free, so no yes card; while it runs the line says
+  // so, and after, what it found (or why it couldn't start).
+  // A quest item for the tools to try: Moss Hop's player x (its mapping's
+  // PLAYER_X) past 120, on a quest log row gp game new made.
+  writeFileSync(join(games, GAME, "triage.toml"), '[watch]\npx = 0x10\n\n[[item]]\nrow = "climb"\ngoal = "px >= 120"\ndo = "Walk right along the ground"\nstop = "After a few steps"\n');
+  const tn = await until("the tools' step in next", async () => {
+    const r = await api(`api/next/${GAME}`);
+    return [r.next, ...(r.also ?? [])].some((x) => x.act?.do === "start") && r;
+  });
+  const triage = [tn.next, ...(tn.also ?? [])].find((x) => x.act?.do === "start");
+  if (!triage || triage.act.action !== "triage" || !/LET THE TOOLS TRY/.test(triage.says)) fail(`next has no LET THE TOOLS TRY step: ${JSON.stringify(tn.next)}`);
+  if (tn.next.act?.do === "start") {
+    await until("LET THE TOOLS TRY on the status line", async () => page.isVisible("[data-testid=tools-try]"));
+    await page.click("[data-testid=tools-try]");
+  } else {
+    // Not the next step here: started as the button starts it.
+    await api(`api/capture/${GAME}/do/triage`, {});
+  }
+  if (await page.isVisible("#asks .ask-card")) fail("LET THE TOOLS TRY asked for a yes");
+  const atStart = tn;
+  const tried = await until("what the tools found", async () => {
+    const r = await api(`api/capture/${GAME}/do/triage`);
+    return r.state !== "running" && r;
+  }, 900000);
+  const shown = await until("the status line says it", async () => text(page, "[data-testid=tools-said]"), 20000);
+  if (tried.state === "done" ? !/^The tools tried the quest log: they got (none|\d+ quest items?) on their own, and \d+ quest items? needs? you\.$/.test(shown) : !/^The tools couldn't start: .+\. Your agent can look at why\.$/.test(shown)) fail(`the status line says: ${shown}`);
+  if (/\bgp [a-z]/.test(shown)) fail(`the status line names a command: ${shown}`);
+  await page.click("#log-toggle");
+  if (tried.state === "done") {
+    await until("the triage in the agent's log, as the person's", async () => /You sorted the quest log: /.test(await text(page, "#w-log")));
+    // The tools changed the quest log at the person's press: the views
+    // refresh quietly, with no note that the agent changed the game.
+    const after = await until("the person's change counted", async () => {
+      const r = await api(`api/next/${GAME}`);
+      return r.page_changes > atStart.page_changes && r;
+    });
+    if (after.changes !== atStart.changes) fail(`the person's triage counted as the agent's change: ${atStart.changes} then ${after.changes}`);
+    await page.waitForTimeout(6000);
+    if (/Your agent changed the game/.test(await text(page, "#next-line"))) fail("after the person's LET THE TOOLS TRY the status line says the agent changed the game");
+  }
+  await page.click("#log-toggle");
+  ok(`LET THE TOOLS TRY runs gp mechanic triage through gp_run with no yes card, and the status line says: "${shown}"`);
+  await shot(page, "tools-try");
   if (errors.length) fail(`the page threw: ${errors.join("; ")}`);
   await page.close();
 }

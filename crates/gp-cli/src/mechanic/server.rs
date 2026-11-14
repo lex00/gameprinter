@@ -708,6 +708,16 @@ impl Server {
         Ok((n, s.mechanic().to_owned()))
     }
 
+    /// A tell about a clip (serve/tell.rs) echoed as the person's turn in
+    /// the open mechanic's talk, with a `tell` field naming the clip and
+    /// the tell's number, so the page's conversation column shows it. The
+    /// turn's number and the mechanic.
+    pub(crate) fn tell_turn(&self, text: &str, tell: Value) -> Result<(usize, String)> {
+        let s = self.open_session()?;
+        let n = s.turn(json!({"by": "player", "text": text, "clips": [], "tell": tell}))?;
+        Ok((n, s.mechanic().to_owned()))
+    }
+
     /// The session a request names with `mechanic` (the row the page had
     /// open when the person pressed A), else the one open now.
     fn target(&self, m: Option<&str>) -> Result<Arc<Session>> {

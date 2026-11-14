@@ -345,12 +345,35 @@ pub fn list() -> Vec<ToolDef> {
 /// Calls a tool. `None` for a tool that doesn't exist; arguments that
 /// don't fit the schema are an error reply, so the agent can correct them.
 pub fn call(config: &Config, name: &str, args: Value) -> Option<Reply> {
+    call_by(config, name, args, Started::Agent)
+}
+
+/// Who started a call, for its log line and the change it counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Started {
+    /// The agent: its changes raise the count the page's "Your agent
+    /// changed the game" note reads.
+    Agent,
+    /// A button the person pressed on the page (gp serve's serve/jobs.rs):
+    /// the log line is theirs ("You checked ..."), a change refreshes the
+    /// page's views quietly, and one that only reads (`reads_only`, a
+    /// check whose writes are its own scratch) counts nothing.
+    Page { reads_only: bool },
+}
+
+/// [`call`], started by the agent or by a button on the person's page.
+pub fn call_by(config: &Config, name: &str, args: Value, started: Started) -> Option<Reply> {
     let logged_args = args.clone();
     // The call shows in the agent's log on the person's page, and the
     // page's views hear when it changed a game (crate::activity).
     let game = crate::activity::game_of(&config.home, &args);
     let args_command = args["command"].as_str().map(crate::run::clean_path);
-    let watch = what_of(name, &args).map(|w| crate::activity::start(&config.home, game.clone(), w));
+    let by = match started {
+        Started::Agent => crate::activity::By::Agent,
+        Started::Page { .. } => crate::activity::By::Page,
+    };
+    let watch =
+        what_of(name, &args).map(|w| crate::activity::start_by(&config.home, game.clone(), w, by));
     let reply = call_tool(config, name, args)?;
     if let Some(w) = watch {
         w.end(&how_it_ended(name, &reply));
@@ -368,7 +391,13 @@ pub fn call(config: &Config, name: &str, args: Value) -> Option<Reply> {
         .contains(&c)
     });
     if name == "gp_run" && !own_redraw && !reply.is_error && reply.json.get("writes").is_some() {
-        crate::activity::bump(&config.home, game.as_deref());
+        match started {
+            Started::Agent => crate::activity::bump(&config.home, game.as_deref()),
+            Started::Page { reads_only: false } => {
+                crate::activity::bump_page(&config.home, game.as_deref())
+            }
+            Started::Page { reads_only: true } => {}
+        }
     }
     // A watch tool's call is logged in its session, for the person's page.
     if name.starts_with("watch_") || name == "view_now" {

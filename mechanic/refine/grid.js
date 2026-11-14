@@ -2,9 +2,7 @@
 // gridfold.ts; game-printer's docs/show.md, "The grid"): every cell of
 // mechanics by contexts as one small square colored by its state, the
 // needs-you ones amber. The pointer on a cell shows one line; a click
-// opens its clip on CLIPS, or says "empty: next up". The "clips in flight"
-// stepper sets how many clips the grid keeps in flight
-// (/api/capture/{run}/grid/in-flight). The grid comes from gp serve
+// opens its clip on CLIPS, or says "empty: next up". The grid comes from gp serve
 // (crates/gp-cli/src/serve/grid.rs), read again every 5 seconds; the
 // background work's state adds what it sees live, as the cards do: a job
 // on one of a cell's clips makes it "being fixed".
@@ -100,10 +98,12 @@ export function shownRows(g, cols) {
   return (g.rows ?? []).filter((r) => has.has(r.id));
 }
 
-/** The counts beside the title: "40 of 580 cells filled; 0 in flight, at most 3." */
+/** The counts beside the title: "40 of 580 cells filled." The grid makes
+ * no clips (the clips come from the mechanic sessions), so it has none in
+ * flight to count. */
 export function gridSays(g) {
   const n = (x) => x.toLocaleString("en-US");
-  return `${n(g.filled ?? 0)} of ${n(g.cell_count ?? 0)} cells filled; ${g.flight?.length ?? 0} in flight, at most ${g.in_flight}.`;
+  return `${n(g.filled ?? 0)} of ${n(g.cell_count ?? 0)} cells filled.`;
 }
 
 const CELL = 7;
@@ -121,7 +121,6 @@ export function refineGrid(el, a, b, c) {
   el.dataset.testid = "grid-heat";
   const base = `/api/capture/${enc(o.run)}/grid`;
   let grid = null;
-  let flight = null;
   let all = false;
   let line = null;
 
@@ -130,14 +129,6 @@ export function refineGrid(el, a, b, c) {
       grid = await o.api(base);
     } catch (e) {
       grid = { error: String(e.message ?? e) };
-    }
-    draw();
-  };
-  const loadFlight = async (body) => {
-    try {
-      flight = await o.api(`${base}/in-flight`, body);
-    } catch {
-      flight = null;
     }
     draw();
   };
@@ -179,7 +170,7 @@ export function refineGrid(el, a, b, c) {
     box.dataset.testid = "grid-all";
     box.addEventListener("change", () => { all = box.checked; draw(); });
     lab.append(box, document.createTextNode(" places with no clip"));
-    head.append(lab, stepper());
+    head.append(lab);
 
     if (!rows.length || !cols.length) {
       el.append(h("p", "rf-muted", grid.says ?? "No cell yet: the game's tests have no clip."));
@@ -257,26 +248,8 @@ export function refineGrid(el, a, b, c) {
     el.append(foot);
   }
 
-  /** "clips in flight [-] N [+]": kept with the run. */
-  function stepper() {
-    const w = h("span", "rf-stepper");
-    w.dataset.testid = "ctl-in-flight";
-    w.title = "How many clips the grid keeps in flight. gameprinter's grid picks the next cell and says it; the clips themselves come from the mechanic sessions";
-    const n = flight?.in_flight ?? grid?.in_flight ?? 3;
-    const max = flight?.max ?? grid?.max_in_flight ?? n;
-    const minus = h("button", "", "-");
-    const plus = h("button", "", "+");
-    minus.disabled = !flight || n <= 1;
-    plus.disabled = !flight || n >= max;
-    minus.addEventListener("click", () => void loadFlight({ in_flight: n - 1 }));
-    plus.addEventListener("click", () => void loadFlight({ in_flight: n + 1 }));
-    w.append(h("span", "rf-muted", "clips in flight "), minus, h("span", "rf-n", String(n)), plus);
-    return w;
-  }
-
   const off = x.subscribe((_, why) => { if (why === "state") draw(); });
   void load();
-  void loadFlight();
   const t = setInterval(() => void load(), 5000);
   return {
     stop() {

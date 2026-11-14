@@ -76,6 +76,9 @@ pub(crate) enum Act {
     PlayFrom { row: String },
     /// Open a tab.
     Tab { tab: &'static str },
+    /// Start one of gp serve's page actions (serve/jobs.rs) by its name:
+    /// LET THE TOOLS TRY is `triage`.
+    Start { action: &'static str },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -161,6 +164,9 @@ pub(crate) struct Answer {
     /// A count the agent's changes to the game raise, so the page knows
     /// what it shows may be stale.
     pub changes: u64,
+    /// The same for a button the person pressed (LET THE TOOLS TRY): the
+    /// page refreshes its views with no note.
+    pub page_changes: u64,
     pub facts: Value,
 }
 
@@ -282,6 +288,10 @@ pub(crate) struct Facts {
     pub questions: Vec<Question>,
     /// Rows the person handed to the agent that it hasn't answered.
     pub handoffs: Vec<String>,
+    /// What the person told the agent about a clip on REFINE that it
+    /// hasn't answered (serve/tell.rs): (tell number, clip, words), oldest
+    /// first.
+    pub tells: Vec<(u64, String, String)>,
     /// Rows where the agent asked the person and waits: (row, words).
     pub asked: Vec<(String, String)>,
     pub whole: Whole,
@@ -295,8 +305,14 @@ pub(crate) struct Facts {
     pub asks: Vec<Value>,
     /// The agent's calls running now (gp_mcp::activity): what, in words.
     pub agent_runs: Vec<(String, u64)>,
+    /// The same calls started by a button on the page (serve/jobs.rs),
+    /// which run in gp serve's own process.
+    pub page_runs: Vec<String>,
     /// How many times the agent changed the game through gp_run.
     pub changes: u64,
+    /// How many times a button the person pressed changed it (the page
+    /// refreshes quietly on these).
+    pub page_changes: u64,
 }
 
 impl Facts {
@@ -519,6 +535,18 @@ fn play_step(f: &Facts, r: &Row) -> Step {
         })
 }
 
+/// The tools' quest-log step: free, so the page's LET THE TOOLS TRY starts
+/// it (serve/jobs.rs, `triage`) and the agent may start it unasked.
+fn triage_step(g: &str, what: &str) -> Step {
+    step(
+        Who::Tools,
+        format!("{what} Press LET THE TOOLS TRY, or your agent can start it."),
+    )
+    .page("LET THE TOOLS TRY on the status line")
+    .cli(format!("gp mechanic triage {g}"))
+    .act(Act::Start { action: "triage" })
+}
+
 /// Words as a sentence: a capital first and a stop at the end.
 fn sentence(s: &str) -> String {
     let s = s.trim();
@@ -581,6 +609,12 @@ pub(crate) fn answer(f: &Facts) -> Answer {
     for (what, _secs) in &f.agent_runs {
         running.push(Running {
             what: format!("your agent: {what}"),
+            look_again_s: 30,
+        });
+    }
+    for what in &f.page_runs {
+        running.push(Running {
+            what: format!("started on the page: {what}"),
             look_again_s: 30,
         });
     }
@@ -669,16 +703,36 @@ pub(crate) fn answer(f: &Facts) -> Answer {
             )),
         );
     }
+    // 3c. What the person told the agent about a clip, not answered.
+    if let Some((id, clip, words)) = f.tells.first() {
+        let more = f.tells.len() - 1;
+        steps.push(
+            step(
+                Who::Agent,
+                if more == 0 {
+                    format!(
+                        "Your agent can answer what you told it about {clip}: \"{}\" If it hasn't yet, ask it to read your note.",
+                        cut(words, 120)
+                    )
+                } else {
+                    format!(
+                        "Your agent can answer what you told it about {clip} and {}. If it hasn't yet, ask it to read your notes.",
+                        n_of(more as u64, "other clip", "other clips")
+                    )
+                },
+            )
+            .cli(format!(
+                "gp agent tells --run {g} --open, then gp agent note --run {g} --clip {clip} --reply-to {id} WORDS"
+            )),
+        );
+    }
     // 4. Free work for the tools that isn't running.
     if f.game.is_some() && f.player_mapped {
         if f.triage_plan && !f.rows.iter().any(|r| r.triaged) {
-            steps.push(
-                step(
-                    Who::Tools,
-                    "Your agent can start this now. The tools try to get each quest item on their own, then list the few they can't.",
-                )
-                .cli(format!("gp mechanic triage {g}")),
-            );
+            steps.push(triage_step(
+                &g,
+                "The tools can try to get each quest item on their own, then list the few they can't.",
+            ));
         }
         if n == 6 && !scoring_now && (to_score > 0 || f.corpus_clips > 0) {
             let k = if to_score > 0 {
@@ -776,13 +830,10 @@ pub(crate) fn answer(f: &Facts) -> Answer {
             Who::Person,
             format!("Say which of them to bring over: {}.", few(&f.roms)),
         )),
-        4 => steps.push(
-            step(
-                Who::Tools,
-                "Your agent can start this now. The tools try to record each quest item on their own, then list the few they can't.",
-            )
-            .cli(format!("gp mechanic triage {g}")),
-        ),
+        4 => steps.push(triage_step(
+            &g,
+            "The tools can try to record each quest item on their own, then list the few they can't.",
+        )),
         6 if scoring_now => steps.push(step(
             Who::Tools,
             format!(
@@ -834,6 +885,7 @@ pub(crate) fn answer(f: &Facts) -> Answer {
         waits_for_yes: waits,
         clue,
         changes: f.changes,
+        page_changes: f.page_changes,
         facts: json!({
             "title": f.title,
             "rom_found": f.rom_found,
@@ -842,6 +894,7 @@ pub(crate) fn answer(f: &Facts) -> Answer {
             "rows_done": f.rows.iter().filter(|r| r.done).count(),
             "needs_you": you.iter().map(|r| r.mechanic.clone()).collect::<Vec<_>>(),
             "handoffs": f.handoffs,
+            "tells": f.tells.iter().map(|t| json!({"id": t.0, "clip": t.1})).collect::<Vec<_>>(),
             "asked": f.asked.iter().map(|a| a.0.clone()).collect::<Vec<_>>(),
             "session_clips": f.session_clips,
             "corpus_clips": f.corpus_clips,
@@ -1110,10 +1163,16 @@ fn alive(pid: u64) -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// The last turn of a session's talk: who and the words.
+/// The last turn of a session's talk: who and the words. A tell about a
+/// clip echoed there (serve/tell.rs) is skipped: its own step says it.
 fn last_turn(dir: &Path) -> Option<(String, String)> {
     let t = std::fs::read_to_string(dir.join("talk.ndjson")).ok()?;
-    let v: Value = serde_json::from_str(t.lines().rev().find(|l| !l.trim().is_empty())?).ok()?;
+    let v: Value = t
+        .lines()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find(|v| v.get("tell").is_none())?;
     Some((
         v["by"].as_str()?.to_owned(),
         v["text"].as_str().unwrap_or("").to_owned(),
@@ -1231,12 +1290,19 @@ pub(crate) fn gather(
         ),
         None => last.or_else(|| (all.len() == 1).then(|| all[0].clone())),
     };
+    // A call a button on the page started (serve/jobs.rs) is the
+    // person's; the others are the agent's.
+    let runs: Vec<Value> = gp_mcp::activity::running(home)
+        .into_iter()
+        .filter(|r| game.is_none_or(|g| r["game"].as_str().is_none_or(|x| x == g)))
+        .collect();
+    let by_page = |r: &Value| r["by"] == json!("page");
     let mut f = Facts {
         games: all.clone(),
         asks: gp_mcp::asks::pending(home),
-        agent_runs: gp_mcp::activity::running(home)
+        agent_runs: runs
             .iter()
-            .filter(|r| game.is_none_or(|g| r["game"].as_str().is_none_or(|x| x == g)))
+            .filter(|r| !by_page(r))
             .map(|r| {
                 (
                     r["what"].as_str().unwrap_or("").to_owned(),
@@ -1244,6 +1310,11 @@ pub(crate) fn gather(
                         / 1000,
                 )
             })
+            .collect(),
+        page_runs: runs
+            .iter()
+            .filter(|r| by_page(r))
+            .map(|r| r["what"].as_str().unwrap_or("").to_owned())
             .collect(),
         changes: gp_mcp::activity::changes(home, None),
         ..Facts::default()
@@ -1257,6 +1328,7 @@ pub(crate) fn gather(
     let gdir = gd.join(&g);
     f.game = Some(g.clone());
     f.changes = gp_mcp::activity::changes(home, Some(&g));
+    f.page_changes = gp_mcp::activity::page_changes(home, Some(&g));
     let manifest: toml::Value = std::fs::read_to_string(gdir.join("template.toml"))
         .ok()
         .and_then(|t| toml::from_str(&t).ok())
@@ -1420,6 +1492,10 @@ pub(crate) fn gather(
         game: gdir.clone(),
         dir: rdir.clone(),
     };
+    f.tells = crate::serve::tell::open(&run)
+        .into_iter()
+        .filter_map(|t| Some((t.id?, t.clip?, t.text)))
+        .collect();
     let qage = age_s(&run.copy_dir().join("questions.toml"));
     f.questions = crate::serve::background::open_questions(&run)
         .into_iter()

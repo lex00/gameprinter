@@ -45,6 +45,7 @@ pub(crate) mod freeplay;
 pub(crate) mod game;
 pub(crate) mod generated;
 mod grid;
+pub(crate) mod jobs;
 mod labels;
 mod ladder;
 mod later;
@@ -97,6 +98,7 @@ const MODULES: &[fn() -> Vec<Route>] = &[
     laya::routes,
     next::routes,
     asks::routes,
+    jobs::routes,
 ];
 
 /// How many connections are served at once; more wait in the listen queue.
