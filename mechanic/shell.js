@@ -68,6 +68,7 @@ export function startShell(page) {
     try { localStorage.setItem("gp-log-open", on ? "1" : ""); } catch (e) { /* not kept */ }
   };
   toggle.addEventListener("click", (e) => { setLog($("log-panel").hidden); e.currentTarget.blur(); });
+  $("log-close").addEventListener("click", (e) => { setLog(false); e.currentTarget.blur(); });
   window.addEventListener("keydown", (e) => {
     if (e.code !== "KeyL" || e.ctrlKey || e.metaKey || e.altKey || document.activeElement?.tagName === "INPUT") return;
     if (page.mode() === "review") return; // the note may be typed

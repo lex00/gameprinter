@@ -60,10 +60,10 @@ p.rf-fidelity { margin: 6px 0 2px; font-size: 14px; }
 
 /* The queue. */
 .rf-add { display: flex; gap: 6px; margin: 4px 0 8px; flex-wrap: wrap; }
-.rf-add select { font: 12px var(--mono, monospace); background: var(--nes-0f, #000); color: var(--fg, #fcfcfc); border: 2px solid var(--line, #fcfcfc); max-width: 520px; }
+.rf-add select { font: 12px var(--mono, monospace); background: var(--nes-0f, #000); color: var(--fg, #fcfcfc); border: 2px solid var(--line, #fcfcfc); max-width: min(520px, 100%); min-width: 0; }
 .rf-agent { display: flex; gap: 8px; align-items: baseline; padding: 4px 8px; margin: 4px 0; border: 2px solid var(--accent, #3cbcfc); }
 .rf-who { color: var(--accent, #3cbcfc); font-weight: bold; white-space: nowrap; }
-.rf-list { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 6px; }
+.rf-list { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr)); gap: 6px; }
 .rf-clip { padding: 6px 8px; background: var(--panel, #1c1c1c); border-left: 4px solid var(--nes-00, #7c7c7c); }
 .rf-clip.not-matching { border-left-color: var(--nes-27, #fca044); }
 .rf-clip.matches, .rf-clip.fixed { border-left-color: var(--nes-2a, #58d854); }

@@ -89,12 +89,14 @@ footer { padding: 8px 16px; color: var(--muted); font-size: 13px; border-top: 2p
 /* The game centered at the top, the clip's context in the margins beside
    it, and the quest log, the clips and the conversation beneath. */
 html, body { overflow-x: hidden; }
-main { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 16px; padding: 12px 16px; align-items: start; }
+main { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 16px; padding: 12px 16px; align-items: start; container-type: inline-size; }
 /* The left margin: REVIEW REBUILD's clip picker (so a clip is always in
    reach beside the game), then the clip loaded. */
 #side-l { grid-column: 1; justify-self: end; width: 100%; max-width: 360px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 #side-l #rule-card { margin: 0; max-height: calc(100vh - 140px); overflow-y: auto; }
-#left { grid-column: 2; width: min(768px, calc((100vh - 230px) * 256 / 240)); }
+/* The game pane is never wider than main's width (100cqi), so on a phone
+   the game fits the screen instead of running past its right edge. */
+#left { grid-column: 2; width: min(768px, calc((100vh - 230px) * 256 / 240), 100cqi); min-width: 0; }
 #ctx-frame { grid-column: 3; justify-self: start; }
 .ctx { width: 100%; max-width: 360px; min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
 .ctx:empty { visibility: hidden; }
@@ -113,11 +115,24 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   .ctx { display: none; }
 }
 #screen { position: relative; width: fit-content; border: 2px solid var(--line); box-shadow: 4px 4px 0 var(--nes-2d); }
-#game { height: min(720px, calc(100vh - 230px)); width: auto; aspect-ratio: 256 / 240; image-rendering: pixelated; background: #000; display: block; }
-#game2 { image-rendering: pixelated; background: #000; aspect-ratio: 256 / 240; height: min(720px, calc(100vh - 230px)); }
+#game { height: min(720px, calc(100vh - 230px), calc((100cqi - 8px) * 240 / 256)); width: auto; aspect-ratio: 256 / 240; image-rendering: pixelated; background: #000; display: block; }
+#game2 { image-rendering: pixelated; background: #000; aspect-ratio: 256 / 240; height: min(720px, calc(100vh - 230px), calc((100cqi - 8px) * 240 / 256)); }
 #game2[hidden] { display: none; }
 #screen.side { display: flex; gap: 4px; }
-#screen.side #game, #screen.side #game2 { height: min(360px, calc((100vh - 230px) / 2)); }
+/* Side by side, app.js (fitPair) works out each picture's size: the
+   largest whole scale at which both fit the window, or, when they don't
+   fit at full size side by side, one over the other (.stack). */
+#screen.side #game, #screen.side #game2 { width: var(--pair-cw, auto); height: var(--pair-ch, min(360px, calc((100vh - 230px) / 2))); }
+#screen.side.stack { flex-direction: column; }
+#left:has(> #screen.side) { width: var(--pair-w, auto); }
+/* A pair too wide for the margins beside it: the game pane takes the
+   whole width and the margins go under it, side by side. */
+@media (min-width: 1200px) {
+  main.pair-wide:has(#screen.side) { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  main.pair-wide:has(#screen.side) #left { grid-column: 1 / -1; grid-row: 1; justify-self: center; }
+  main.pair-wide:has(#screen.side) #side-l { grid-column: 1; grid-row: 2; }
+  main.pair-wide:has(#screen.side) #ctx-frame { grid-column: 2; grid-row: 2; }
+}
 
 #rec { position: absolute; top: 12px; left: 12px; background: var(--nes-0f); border: 2px solid var(--rec); padding: 2px 10px; display: flex; gap: 8px; align-items: center; color: var(--rec); text-transform: uppercase; }
 #rec .dot { width: 10px; height: 10px; background: var(--rec); animation: blink 1s steps(1) infinite; }
@@ -154,7 +169,7 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
 #hint { margin: 0; color: var(--muted); font-size: 13px; }
 #overlay[hidden], #to[hidden], #toast[hidden], #rec[hidden], #note-row[hidden], #busy[hidden], #bar[hidden], #watch[hidden], #findings[hidden] { display: none; }
 
-aside { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; border-top: 2px solid var(--nes-2d); padding-top: 12px; }
+aside { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 16px; border-top: 2px solid var(--nes-2d); padding-top: 12px; }
 
 aside h2 { font-size: 14px; color: var(--nes-28); margin: 0 0 8px; }
 #queue { list-style: none; margin: 0 0 6px; padding: 0; }
@@ -273,6 +288,10 @@ body.embedded #logo, body.embedded #editor, body.embedded #tabs { display: none;
 body.log-open header, body.log-open #tabs, body.log-open main, body.log-open .pane, body.log-open footer { margin-right: 380px; }
 #log-panel { position: fixed; right: 0; top: 0; bottom: 0; width: 360px; display: block; overflow-y: auto; padding: 12px 14px; background: var(--bg); border-left: 2px solid var(--nes-2d); border-top: 0; z-index: 10; }
 #log-panel[hidden] { display: none; }
+/* Its head stays at the top while the log scrolls, with CLOSE in reach. */
+#log-panel .log-head { display: flex; gap: 12px; align-items: baseline; justify-content: space-between; position: sticky; top: -12px; z-index: 1; background: var(--bg); padding: 4px 0; }
+#log-panel .log-head h2 { margin: 0; }
+#log-close { font: bold 12px var(--mono); background: var(--nes-0f, #000); color: var(--fg); border: 2px solid var(--line); padding: 2px 10px; cursor: pointer; }
 @media (max-width: 900px) {
   body.log-open header, body.log-open #tabs, body.log-open main, body.log-open .pane, body.log-open footer { margin-right: 0; }
   #log-panel { width: auto; left: 0; top: auto; height: 50vh; border-left: 0; border-top: 2px solid var(--nes-2d); }
@@ -282,6 +301,17 @@ body.log-open header, body.log-open #tabs, body.log-open main, body.log-open .pa
   #asks { position: relative; z-index: 11; background: var(--bg); }
   /* Narrow, the next step starts on a line of its own. */
   #next-line .nx-next { flex-basis: 100%; }
+  /* The problem table, one problem to a block: the topic, its number,
+     where and its state on the first line, what is wrong and the change
+     under them, so no column squeezes to a word a line. */
+  #w-problems thead { display: none; }
+  #w-problems, #w-problems tbody { display: block; }
+  #w-problems tr { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; column-gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--nes-2d); }
+  #w-problems td { border: 0; padding: 0; overflow-wrap: anywhere; }
+  #w-problems td:nth-child(4), #w-problems td:nth-child(5) { grid-column: 1 / -1; }
+  #w-problems td:nth-child(5):empty { display: none; }
+  #w-problems td:nth-child(5)::before { content: "Change: "; color: var(--muted); }
+  #w-problems td:nth-child(6) { grid-column: 4; grid-row: 1; }
 }
 
 /* REFINE and THEMES: a pane in the game's place. */

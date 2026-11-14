@@ -18,7 +18,10 @@
 // Then `gp mechanic demo` against a stand-in decision server made here,
 // watched in the page, and `say --judge`. Last, a second server with no
 // player built: the page must say so, in the server's words, instead of
-// failing to compile the 404 as wasm. Any error the page throws fails the
+// failing to compile the 404 as wasm. Every tab is checked at 360 px
+// wide too: nothing past the right edge, every control in the window, the
+// agent's log a full-width panel that closes, REVIEW REBUILD's two
+// pictures one over the other. Any error the page throws fails the
 // check. With --shots DIR a screenshot of each mode goes to DIR.
 //
 // With --arcade-rom ZIP (the owner's rbtapper romset) and --arcade-wasm
@@ -168,6 +171,19 @@ function fakeDecider() {
 
 const frame = (page) => page.evaluate(() => Number(document.body.dataset.frame ?? -1));
 const text = (page, sel) => page.evaluate((s) => document.querySelector(s)?.textContent ?? "", sel);
+
+/** REVIEW REBUILD's two pictures side by side (#game, #game2): their
+ * size and place, whether both are inside the window, and the picture's
+ * own size. */
+const pair = (page) => page.evaluate(() => {
+  const r = (id) => document.getElementById(id).getBoundingClientRect();
+  const a = r("game"), b = r("game2");
+  return {
+    w: [a.width, b.width], h: [a.height, b.height], native: [document.getElementById("game").width, document.getElementById("game").height],
+    inside: [a, b].every((q) => q.left >= -1 && q.right <= innerWidth + 1), stacked: b.top >= a.bottom - 1,
+    window: [innerWidth, innerHeight],
+  };
+});
 const session = join(home, "mechanics", GAME, MECH);
 
 async function main() {
@@ -404,6 +420,13 @@ async function main() {
   if (!/Frame \d+ of \d+/.test(await text(page, "#ctx-frame"))) fail(`the right margin: ${await text(page, "#ctx-frame")}`);
   if (!(await text(page, "#rule-card")).includes("moss-hop") && !(await text(page, "#rule-card")).includes(`${MECH} 1`)) fail(`the clip picker: ${await text(page, "#rule-card")}`);
   await page.selectOption("#rv-layout", "side");
+  // Side by side at 1280x720, both pictures at a whole scale of the
+  // game's 256x240, the same size, inside the window (issue #28: they
+  // were shown at about half the height the window has room for).
+  const sbs = await until("the pair fitted", async () => { const q = await pair(page); return q.w[1] > 0 ? q : null; });
+  const k = sbs.w[0] / sbs.native[0];
+  if (sbs.w[0] !== sbs.w[1] || sbs.h[0] !== sbs.h[1] || k < 2 || k !== Math.round(k) || sbs.h[0] !== sbs.native[1] * k || !sbs.inside || sbs.stacked) fail(`the pictures side by side at 1280x720: ${JSON.stringify(sbs)}`);
+  ok(`side by side at 1280x720, each picture is ${sbs.w[0]}x${sbs.h[0]}, ${k} times the game's, both in the window`);
   await page.keyboard.press("KeyC");
   if (!(await page.evaluate(() => document.getElementById("rv-boxes").checked))) fail("C didn't outline the entities");
   await page.keyboard.press("ArrowRight");
@@ -658,6 +681,10 @@ async function arcade() {
   if (await page.isHidden("#rv-strip")) fail("no strip of the frames that agree on Tapper");
   if (!/Frame \d+ of \d+/.test(await text(page, "#ctx-frame"))) fail(`Tapper's right margin: ${await text(page, "#ctx-frame")}`);
   await page.selectOption("#rv-layout", "side");
+  // Tapper's 512x480 pictures side by side at full size in 1280x720.
+  const tsb = await until("Tapper's pair fitted", async () => { const q = await pair(page); return q.w[1] > 0 ? q : null; });
+  if (tsb.w.some((w) => w !== 512) || tsb.h.some((h) => h !== 480) || !tsb.inside || tsb.stacked) fail(`Tapper's pictures side by side at 1280x720 aren't both 512x480 in the window: ${JSON.stringify(tsb)}`);
+  ok("Tapper's two 512x480 pictures show side by side at full size in 1280x720");
   await page.keyboard.press("KeyC");
   if (!(await page.evaluate(() => document.getElementById("rv-boxes").checked))) fail("C didn't outline Tapper's entities");
   await page.keyboard.press("ArrowRight");
@@ -1239,12 +1266,101 @@ async function editorFeatures() {
   await page.close();
 }
 
+/** Every tab at 360 px wide (issue #17), on a gp serve page with
+ * main()'s clip: nothing runs past the window's right edge, the tabs and
+ * every visible button, picker and field are inside the window, the game
+ * fits the screen, the editor's views in REFINE fit their frame, the
+ * agent's log is a full-width panel whose CLOSE closes it, and
+ * REVIEW REBUILD's two pictures go one over the other, whole. */
+async function narrow() {
+  const base = await gpServe(games);
+  const page = await browser.newPage({ viewport: { width: 360, height: 780 } });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto(`${base}mechanic/${GAME}/?tab=clips`);
+  await until("the page at 360 px", async () => (await text(page, "#title").catch(() => "")).startsWith(GAME));
+  const fits = () => page.evaluate(() => {
+    const W = innerWidth;
+    // What sticks out past the window: the outermost element that does,
+    // leaving out the hidden player frame (kept off screen on purpose)
+    // and what a scrolling box holds.
+    const out = [];
+    const clipped = (el) => { for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) { const o = getComputedStyle(p).overflowX; if (o === "auto" || o === "scroll" || o === "hidden") return true; } return false; };
+    for (const el of document.body.querySelectorAll("*")) {
+      if (el.id === "rb-frame" || el.closest("#rb-frame") || !el.getClientRects().length) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0 || (r.right <= W + 1 && r.left >= -1) || clipped(el)) continue;
+      const q = el.parentElement.getBoundingClientRect();
+      if (el.parentElement !== document.body && (q.right > W + 1 || q.left < -1)) continue;
+      out.push(`${el.tagName.toLowerCase()}${el.id ? "#" + el.id : ""}${typeof el.className === "string" && el.className ? "." + el.className.split(" ")[0] : ""} ${Math.round(r.left)}..${Math.round(r.right)}`);
+    }
+    const shown = (el) => el.getClientRects().length && getComputedStyle(el).visibility !== "hidden";
+    const off = [...document.querySelectorAll("#tabs button, header button, header select, main button, main select, main input, .pane button, .pane select, .pane input, #log-panel button, #log-panel select")]
+      .filter(shown).filter((el) => !el.closest("#rb-frame")).filter((el) => { const r = el.getBoundingClientRect(); return r.left < -1 || r.right > W + 1; })
+      .map((el) => `${el.tagName.toLowerCase()} ${el.id || el.textContent.trim().slice(0, 24)}`);
+    const frames = [...document.querySelectorAll("iframe.details-frame")].filter(shown).map((f) => {
+      const d = f.contentDocument?.documentElement;
+      return d && d.scrollWidth > f.clientWidth + 1 ? `${f.dataset.view} ${d.scrollWidth} in ${f.clientWidth}` : null;
+    }).filter(Boolean);
+    const g = document.getElementById("game");
+    const game = shown(g) && !g.closest("main[hidden]") ? Math.round(g.getBoundingClientRect().right) : 0;
+    return { out: out.slice(0, 8), off: off.slice(0, 8), frames, game, W };
+  });
+  const tabs = {
+    clips: async () => !(await page.isHidden("main")) && (await page.evaluate(() => document.getElementById("game").getBoundingClientRect().width > 0)),
+    work: async () => !(await page.isHidden("#pane-work")) && /workers/.test(await text(page, "#work-body")),
+    play: async () => (await page.evaluate(() => document.getElementById("tab-play").classList.contains("on"))) && !(await page.isHidden("main")),
+    themes: async () => !(await page.isHidden("#pane-themes")) && (await text(page, "#themes-body")).includes("Theme work comes once"),
+  };
+  const seen = [];
+  for (const [tab, ready] of Object.entries(tabs)) {
+    await page.click(`#tab-${tab}`);
+    await until(`${tab} at 360 px`, ready, 30000);
+    await page.waitForTimeout(tab === "work" ? 3000 : 1000);
+    const f = await fits();
+    if (f.out.length || f.off.length || f.frames.length || f.game > f.W + 1) fail(`${tab} at 360 px wide: ${JSON.stringify(f)}`);
+    seen.push(tab === "work" ? "REFINE" : tab.toUpperCase());
+    await shot(page, `narrow-${tab}-360`);
+  }
+  ok(`at 360 px wide, ${seen.join(", ")} run past no edge, with every tab, button, picker and field inside the window, the game within the screen and REFINE's editor views within their frame`);
+  await page.click("#tab-clips");
+  await until("CLIPS again at 360 px", tabs.clips);
+  await page.click("#log-toggle");
+  await until("the log at 360 px", async () => !(await page.isHidden("#log-panel")));
+  const log = await page.evaluate(() => {
+    const r = document.getElementById("log-panel").getBoundingClientRect();
+    const c = document.getElementById("log-close").getBoundingClientRect();
+    const at = document.elementFromPoint(c.left + c.width / 2, c.top + c.height / 2);
+    return { left: r.left, right: r.right, W: innerWidth, close: at?.id === "log-close" && c.right <= innerWidth && c.left >= 0 };
+  });
+  if (Math.abs(log.left) > 1 || Math.abs(log.right - log.W) > 1 || !log.close) fail(`the agent's log at 360 px: ${JSON.stringify(log)}`);
+  const lf = await fits();
+  if (lf.out.length || lf.off.length) fail(`the agent's log at 360 px runs past the edge: ${JSON.stringify(lf)}`);
+  await shot(page, "narrow-log-360", false);
+  await page.click("#log-close");
+  if (!(await page.isHidden("#log-panel")) || (await page.evaluate(() => document.body.classList.contains("log-open")))) fail("CLOSE didn't close the agent's log");
+  ok("at 360 px the agent's log is a panel the full width of the window, and its CLOSE closes it");
+  await page.click("#clips .rv2-open");
+  await until("REVIEW REBUILD at 360 px", async () => /\d+ of \d+ frames the same/.test(await text(page, "#busy-text")), 180000);
+  await page.keyboard.press("KeyX");
+  await page.selectOption("#rv-layout", "side");
+  const two = await until("the pair at 360 px", async () => { const q = await pair(page); return q.w[0] > 0 && q.stacked ? q : null; });
+  if (!two.inside || two.w[0] !== two.w[1] || two.w[0] < two.native[0]) fail(`the two pictures at 360 px: ${JSON.stringify(two)}`);
+  const rf = await fits();
+  if (rf.out.length || rf.off.length) fail(`REVIEW REBUILD at 360 px runs past the edge: ${JSON.stringify(rf)}`);
+  await shot(page, "narrow-review-360");
+  ok(`at 360 px REVIEW REBUILD shows the two pictures one over the other at ${two.w[0]}x${two.h[0]} each, with its bar inside the window`);
+  if (errors.length) fail(`the page at 360 px threw: ${errors.join("; ")}`);
+  await page.close();
+}
+
 let code = 0;
 try {
   await main();
   await oneServer();
   await agentOnThePage();
   await editorFeatures();
+  await narrow();
   await arcade();
   await romSets();
   console.log(`mechanic-page: passed in ${((Date.now() - t0) / 1000).toFixed(1)} s`);

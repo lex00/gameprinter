@@ -220,6 +220,44 @@ function drawCompare() {
   drawPair(player.rgba(0), player.rgba(1));
 }
 
+/** The size of the two pictures side by side (style.css reads it while
+ * #screen is .side): the largest whole scale at which both fit beside
+ * each other in main's width and the window's height, or one over the
+ * other (each picture whole in the window's height) when that gives a
+ * larger whole scale, as when full size doesn't fit side by side; on a
+ * phone, one over the other at the screen's width. A pair wider than the margins leave room for puts
+ * the margins under the game (main.pair-wide). Only redone when the
+ * window, the panel beside it or the picture's size changes. */
+let pairKey = "";
+function fitPair() {
+  const main = document.querySelector("main");
+  const cs = getComputedStyle(main);
+  const width = main.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const key = `${width} ${innerWidth} ${innerHeight} ${W} ${H}`;
+  if (key === pairKey) return;
+  pairKey = key;
+  const border = 8, gap = 4;
+  const room = width - border, high = innerHeight - 230;
+  const side = Math.min((room - gap) / (2 * W), high / H);
+  const one = Math.min(room / W, high / H);
+  let s, stack = false;
+  if (one >= 1 && Math.floor(one) > Math.floor(side)) { s = Math.floor(one); stack = true; }
+  else if (side >= 1) s = Math.floor(side);
+  else if (one > side) { s = room / W; stack = true; }
+  else s = side;
+  const cw = Math.floor(W * s), ch = Math.floor(H * s);
+  const pairW = (stack ? cw : 2 * cw + gap) + border;
+  main.style.setProperty("--pair-cw", `${cw}px`);
+  main.style.setProperty("--pair-ch", `${ch}px`);
+  main.style.setProperty("--pair-w", `${pairW}px`);
+  $("screen").classList.toggle("stack", stack);
+  // The margins beside the game keep at least 300 px each, or go under it.
+  main.classList.toggle("pair-wide", pairW > width - 2 * (300 + 16));
+}
+// Paused, no frame is drawn: a window resized or the log opened refits.
+new ResizeObserver(() => { if ($("screen").classList.contains("side")) fitPair(); }).observe(document.querySelector("main"));
+window.addEventListener("resize", () => { if ($("screen").classList.contains("side")) fitPair(); });
+
 /** Two pictures in the chosen view: side by side (a left), `b` over `a` at
  * the chosen transparency, or their difference. `marks`, when given, draws
  * over `b` in every view. With `visible` (left, top, width, height: the
@@ -231,6 +269,7 @@ let pixelsDiffer = null;
 function drawPair(a, b, marks, visible) {
   $("screen").classList.toggle("side", view === "side");
   $("game2").hidden = view !== "side";
+  if (view === "side") fitPair();
   pixelsDiffer = null;
   if (view === "side") {
     ctx.putImageData(new ImageData(a, W, H), 0, 0);
