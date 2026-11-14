@@ -78,13 +78,29 @@ const registryFolder = opt("registry-folder") && resolve(opt("registry-folder"))
 const live = opt("live")?.replace(/\/$/, "") ?? null;
 const registryStopped = process.argv.includes("--registry-stopped");
 // The themes the source offers for the page's game, by id (a package's name
-// after its namespace), from the registry folder's by-game list; with no
-// folder, the page's own theme.
+// after its namespace), from its by-game list: the registry folder's, or with
+// no folder the one on the source the page reads (the release check's is the
+// live registry, where anyone granted a namespace can publish a theme for the
+// game), read once for the run. Only a source with no list for the game, or
+// one that can't be reached, leaves the page's own theme.
+let offeredOnce = null;
 function offeredThemes() {
-  const f = registryFolder && join(registryFolder, "by-game", `${page.game}.toml`);
-  if (!f || !existsSync(f)) return page.content ? [page.content.split("/")[1].split("@")[0]] : [];
-  const names = [...readFileSync(f, "utf8").matchAll(/^package = "([^"]+)"/gm)].map((m) => m[1].split("/")[1]);
-  return [...new Set(names)];
+  offeredOnce ??= (async () => {
+    const key = `by-game/${page.game}.toml`;
+    let text = null;
+    if (registryFolder) text = existsSync(join(registryFolder, key)) ? readFileSync(join(registryFolder, key), "utf8") : null;
+    else if (page.source.url === "." && !live) text = existsSync(join(dist, key)) ? readFileSync(join(dist, key), "utf8") : null;
+    else {
+      const base = page.source.url === "." ? live : page.source.url.replace(/\/$/, "");
+      text = await fetch(`${base}/${key}`, { cache: "no-store" })
+        .then((r) => (r.ok ? r.text() : null))
+        .catch(() => null);
+    }
+    if (text === null) return page.content ? [page.content.split("/")[1].split("@")[0]] : [];
+    const names = [...text.matchAll(/^package = "([^"]+)"/gm)].map((m) => m[1].split("/")[1]);
+    return [...new Set(names)];
+  })();
+  return offeredOnce;
 }
 // A request to the page's source. A source of "." is on the page's own
 // address, so only the registry's own keys count.
@@ -1204,7 +1220,7 @@ async function romPlay(S, { name, sha, rom }) {
   const offered = await gp(() => window.__gp.looks?.() ?? null).catch(() => null);
   // Steps along the theme line to one theme: with more themes offered,
   // Original isn't always the next one.
-  const want = ["original", ...offeredThemes()].sort();
+  const want = ["original", ...(await offeredThemes())].sort();
   const toTheme = async (id, key) => {
     let r;
     for (let i = 0; i < want.length; i++) {
@@ -2054,7 +2070,12 @@ async function registryLocalChange(S) {
   check(await S.installed(), "installed");
   await p.evaluate(async () => {
     const db = await new Promise((ok) => (indexedDB.open("gp-installs").onsuccess = (e) => ok(e.target.result)));
-    const rec = await new Promise((ok) => (db.transaction("games").objectStore("games").getAll().onsuccess = (e) => ok(e.target.result.find((v) => v.files))));
+    // The game's own record, the one under `current`: the store holds a
+    // record for each theme installed with it too, and one from a namespace
+    // that sorts before the game's (ddmoney420/ before lex00/) comes first.
+    const games = db.transaction("games").objectStore("games");
+    const get = (k) => new Promise((ok) => (games.get(k).onsuccess = (e) => ok(e.target.result)));
+    const rec = await get(await get("current"));
     const f = rec.files.find((x) => x.path === "play/lift/index.json");
     const tx = db.transaction("blobs", "readwrite");
     tx.objectStore("blobs").put(new TextEncoder().encode("{}").buffer, f.hash);
