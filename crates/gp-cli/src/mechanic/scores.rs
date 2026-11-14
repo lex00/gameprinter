@@ -30,6 +30,7 @@ pub(crate) fn scored_queue(home: &Path, game: &str) -> Vec<Value> {
     .ok()
     .and_then(|b| serde_json::from_slice(&b).ok())
     .unwrap_or(Value::Null);
+    let fps = fps_milli(game);
     for r in &mut q {
         let Some(m) = r["mechanic"].as_str().map(str::to_owned) else {
             continue;
@@ -54,7 +55,7 @@ pub(crate) fn scored_queue(home: &Path, game: &str) -> Vec<Value> {
             })
             .unwrap_or(0);
         r["typed_status"] = r["status"].clone();
-        let (line, all) = scores_line(&status, &m, &clips, in_session);
+        let (line, all) = scores_line(&status, &m, &clips, in_session, fps);
         r["scores"] = json!(line);
         r["status"] = json!(if all {
             "done"
@@ -66,6 +67,22 @@ pub(crate) fn scored_queue(home: &Path, game: &str) -> Vec<Value> {
     }
     q
 }
+
+/// The game's frame rate, in frames a second times 1000, from its model's
+/// `frame_rate` in the games checkout, for seconds of its play. With no
+/// checkout or model to read, the NES's (60099), as the line said before
+/// it read the model.
+fn fps_milli(game: &str) -> u64 {
+    crate::roms_cmd::games_dir(None)
+        .and_then(|g| crate::labels::game_folder(&g, game))
+        .and_then(|d| fs::read_to_string(d.join(gp_model::MODEL_FILE)).ok())
+        .and_then(|t| gp_model::Model::parse(&t).ok())
+        .map_or(NES_FPS_MILLI, |m| m.model.frame_rate.milli())
+}
+
+/// The NES's frame rate, 39375000/655171, times 1000: only for a game
+/// whose model can't be read.
+const NES_FPS_MILLI: u64 = 60_099;
 
 /// Whether a clip of the status file meets the bars: those the contract
 /// set, else 100% of its frames together straight through.
@@ -79,7 +96,13 @@ pub(crate) fn meets(c: &Value) -> bool {
 
 /// A row's line from the gate's scores, and whether every clip meets the
 /// bars.
-fn scores_line(status: &Value, m: &str, clips: &[&Value], in_session: usize) -> (String, bool) {
+fn scores_line(
+    status: &Value,
+    m: &str,
+    clips: &[&Value],
+    in_session: usize,
+    fps_milli: u64,
+) -> (String, bool) {
     let met = clips.iter().filter(|c| meets(c)).count();
     let row = status["rows"]
         .as_array()
@@ -98,7 +121,7 @@ fn scores_line(status: &Value, m: &str, clips: &[&Value], in_session: usize) -> 
         if let Some(l) = r["longest_exact"]["frames"].as_u64() {
             parts.push(format!(
                 "longest exact stretch {} s",
-                gp_interp::lockstep::seconds(l)
+                gp_interp::lockstep::seconds(l, fps_milli)
             ));
         }
     }
@@ -117,15 +140,16 @@ fn scores_line(status: &Value, m: &str, clips: &[&Value], in_session: usize) -> 
     if in_session > clips.len() {
         let n = in_session - clips.len();
         parts.push(format!(
-            "{n} clip{} not in the corpus yet",
+            "{n} clip{} not in the game's tests yet",
             if n == 1 { "" } else { "s" }
         ));
     }
-    let model = status["model"]["commit"].as_str().unwrap_or("");
-    (
-        format!("{} (gate, model {model})", parts.join("; ")),
-        met == clips.len(),
-    )
+    // Which model was scored, when the scores say: the person can tell
+    // an old score from a new one.
+    if let Some(m) = status["model"]["commit"].as_str().filter(|m| !m.is_empty()) {
+        parts.push(format!("scored on model version {}", &m[..m.len().min(8)]));
+    }
+    (parts.join("; "), met == clips.len())
 }
 
 #[cfg(test)]
@@ -180,7 +204,7 @@ mod tests {
         assert_eq!(q[0]["note"], "typed: 4 of 4");
         assert_eq!(
             q[0]["scores"],
-            "1 of 1 clips meet the bars; 100.0% straight through (gate, model 07701d77)"
+            "1 of 1 clips meet the bars; 100.0% straight through; scored on model version 07701d77"
         );
         // Typed done, but below the bars: back in the queue.
         assert_eq!(q[1]["status"], "next");
@@ -193,7 +217,7 @@ mod tests {
             s.contains("first split: clip 1 at frame 3446 (the clip's 3000), mario.x apart"),
             "{s}"
         );
-        assert!(s.contains("1 clip not in the corpus yet"), "{s}");
+        assert!(s.contains("1 clip not in the game's tests yet"), "{s}");
         assert_eq!(q[1]["note"], "typed: waits on the hammer");
         assert!(q[2]["scores"].is_null() && q[2]["status"] == "next");
         assert!(q[3]["scores"].is_null() && q[3]["status"] == "next");

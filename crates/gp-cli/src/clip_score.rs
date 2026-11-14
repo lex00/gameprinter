@@ -352,6 +352,9 @@ pub(crate) struct Ctx {
     /// Mapped paths whose values, the original's and the model's on each
     /// frame straight through, go into each clip's `values.json`.
     pub values: Vec<String>,
+    /// The model's frame rate, in frames a second times 1000: seconds
+    /// printed for a clip are the game's own.
+    pub fps_milli: u64,
 }
 
 /// What a tool was told about the model and the ROM.
@@ -380,7 +383,9 @@ impl Ctx {
             &fs::read_to_string(&mfile).with_context(|| format!("reading {}", mfile.display()))?,
         )
         .map_err(|e| anyhow::anyhow!("{}: {e}", mfile.display()))?;
+        let fps_milli = source.parse_model()?.model.frame_rate.milli();
         Ok(Ctx {
+            fps_milli,
             rom,
             model_dir,
             source,
@@ -766,7 +771,7 @@ pub(crate) fn score_one(
     let st = &rs_j["stretches"];
     lines.push(format!(
         "  longest stretch with resync: {} s",
-        seconds(st["longest_any"].as_u64().unwrap_or(0))
+        seconds(st["longest_any"].as_u64().unwrap_or(0), ctx.fps_milli)
     ));
     // The sound straight through, when the model makes its own.
     let sound = crate::lockstep::sound_report(&free);

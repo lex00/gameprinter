@@ -337,3 +337,24 @@ fn tied_rules_take_tolerances_from_the_first_like_the_level() {
     assert_eq!(r.rule, Some(2));
     assert_eq!(r.tolerance["speed"].to_string(), "1%");
 }
+
+#[test]
+fn the_longest_stretch_bar_is_that_many_seconds_of_the_games_own_frames() {
+    let bars = |t: &str| CorpusBars {
+        together: None,
+        longest_stretch: Some(t.into()),
+        note: None,
+    };
+    let rate = |t: &str| gp_model::model::Ratio::parse(t).unwrap().milli();
+    let (nes, sixty, thirty) = (rate("39375000/655171"), rate("60"), rate("30"));
+    for n in [1u64, 5, 10, 30] {
+        let b = bars(&format!("{n}s"));
+        assert_eq!(b.longest_frames(sixty), Ok(Some(n * 60)));
+        assert_eq!(b.longest_frames(thirty), Ok(Some(n * 30)));
+        // The NES's as the old constant, 60099, gave it: rounded up.
+        assert_eq!(b.longest_frames(nes), Ok(Some((n * 60_099).div_ceil(1000))));
+    }
+    assert_eq!(bars("10s").longest_frames(nes), Ok(Some(601)));
+    assert_eq!(bars("2.5s").longest_frames(thirty), Ok(Some(75)));
+    assert!(bars("ten").longest_frames(thirty).is_err());
+}

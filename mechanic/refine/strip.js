@@ -1,9 +1,10 @@
 // CLIPS's slim strip under the game (game-printer's editor/src/Background.tsx
-// status line, slimmed): the background work in one line, and a small bar
-// for each job running now, moving with the run's events, so the work
-// shows while the person records and reviews clips. REFINE has all of it.
+// status line, slimmed): the fidelity number, the background work in one
+// line, and a small bar for each job running now, moving with the run's
+// events, so the work shows while the person records and reviews clips.
+// REFINE has all of it.
 
-import { bar, css, h, hub, jobBars, opts, statusSentence } from "./fold.js";
+import { bar, css, FIDELITY_MEANS, fidelityShort, h, hub, jobBars, opts, statusSentence } from "./fold.js";
 
 /** Mounts the strip on `el`; returns {stop()}. */
 export function refineStrip(el, a, b, c) {
@@ -13,6 +14,12 @@ export function refineStrip(el, a, b, c) {
   const draw = () => {
     const s = x.state;
     el.textContent = "";
+    if (s) {
+      const fid = h("span", "rf-fidelity", fidelityShort(s, x.next));
+      fid.dataset.testid = "strip-fidelity";
+      fid.title = FIDELITY_MEANS;
+      el.append(fid);
+    }
     const jobs = s?.jobs ?? [];
     if (!jobs.length) {
       el.append(h("span", "rf-says", statusSentence(s, x.history, Date.now())));

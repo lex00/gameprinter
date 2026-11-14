@@ -337,8 +337,10 @@ fn p7_and_p8_some_clips_differ() {
     assert_eq!(a.stage.n, 7);
     assert_eq!(
         a.stands,
-        "1 of 2 clips of Test Game play the same on the model as on the original."
+        "On average, 70% of a clip of Test Game plays the same on the model as on the original. 1 of 2 clips play the same all the way."
     );
+    // The same number in the facts, for the page and the agent.
+    assert_eq!(json_of(&a)["facts"]["scores"]["fidelity_permille"], 700);
     assert_eq!(a.next.who, Who::Agent);
     assert!(
         a.next.says.contains("t.walk.002 (at its frame 4)"),

@@ -263,6 +263,9 @@ export function startNext(page) {
       const r = await fetch(`/api/next/${encodeURIComponent(game)}${s ? `?${q}` : ""}`);
       if (!r.ok) { el.hidden = true; return; }
       answer = await r.json();
+      // REFINE's fidelity number reads the same scores (refine/fold.js).
+      window.gpNext = answer;
+      window.dispatchEvent(new CustomEvent("gp-next", { detail: answer }));
     } catch (e) {
       return;
     }

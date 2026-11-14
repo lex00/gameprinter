@@ -811,7 +811,7 @@ fn score(
         &model_hash[..model_hash.len().min(12)],
         crate::clip_score::percent(&s.json["straight"]),
         crate::clip_score::percent(&s.json["resync"]),
-        gp_interp::lockstep::seconds(st["longest_any"].as_u64().unwrap_or(0)),
+        gp_interp::lockstep::seconds(st["longest_any"].as_u64().unwrap_or(0), ctx.fps_milli),
     );
     let ledger = top.join(LEDGER);
     let mut f = fs::OpenOptions::new()

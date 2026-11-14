@@ -91,8 +91,11 @@ impl CorpusBars {
         Ok(Some((n.raw() as u64 * 10) >> 16))
     }
 
-    /// `longest_stretch` in NTSC frames (60.0988 a second), rounded up.
-    pub fn longest_frames(&self) -> Result<Option<u64>, String> {
+    /// `longest_stretch` in the game's frames, rounded up, at `fps_milli`
+    /// frames a second times 1000 (the model's `frame_rate`, as
+    /// [`gp_model::model::Ratio::milli`] gives it: 60099 on the NES, 30000 on a
+    /// 30 Hz board).
+    pub fn longest_frames(&self, fps_milli: u64) -> Result<Option<u64>, String> {
         let Some(t) = &self.longest_stretch else {
             return Ok(None);
         };
@@ -101,8 +104,8 @@ impl CorpusBars {
             .and_then(|n| Fixed::parse(n.trim()).ok())
             .filter(|f| f.raw() >= 0)
             .ok_or_else(|| format!("longest_stretch `{t}` isn't seconds, such as \"10s\""))?;
-        // Seconds times 60.0988, from 16.16 fixed point, rounded up.
-        let milli = (n.raw() as u128 * 60_099) >> 16;
+        // Seconds times the frame rate, from 16.16 fixed point, rounded up.
+        let milli = (n.raw() as u128 * fps_milli as u128) >> 16;
         Ok(Some(milli.div_ceil(1000) as u64))
     }
 }
@@ -356,7 +359,7 @@ impl Contract {
             if let Err(e) = c.together_permille() {
                 add("corpus.together".into(), e);
             }
-            if let Err(e) = c.longest_frames() {
+            if let Err(e) = c.longest_frames(model.model.frame_rate.milli()) {
                 add("corpus.longest_stretch".into(), e);
             }
         }

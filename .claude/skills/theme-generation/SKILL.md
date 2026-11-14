@@ -29,7 +29,7 @@ Work in a folder of your own outside every repo (`WORK` below, such as `~/.gamep
 | 5. Stage pieces | gen4_image_turbo or gpt_image_2: a plank, a ladder rail, a rope, a wheel; built into stages by the rules | a few calls |
 | 6. Lettering and logo | gpt_image_2 medium; it spells words right | 5 credits a sheet |
 | 7. Key, crop and fit | Your scripts: key the backdrop out, crop to the figure, one scale per sprite group, write `art.txt` lines | 0 calls |
-| 8. Check and play | `gp template served`, then the page | 0 calls |
+| 8. Check and play | `gp theme look check`, then the page | 0 calls |
 
 Credits are Runway's API credits at $0.01. The person pays: say the estimate and get a yes before the first call. ~/.gameprinter/notes/clay/RUNWAY-NOTES.md has what each model did well and badly in the clay run, with costs; read it before spending anything, and add to it what you learn.
 
@@ -72,10 +72,12 @@ Sound: game-printer's themes carried `.tune` files (music as notes written by yo
 ## 8. Check and play
 
 ```sh
-gp template served GAME --folder THEME/theme
+gp theme look check THEME --game GAME
 ```
 
-checks every file of the theme against the ROMs the game names: no file may hold their bytes. Then play it: publish it to a registry on this machine (`gp registry init`, `gp registry publish`, served with `gp registry serve`; site/src/content/docs/registry.md, and `just local-registry` and `just local-play` in the tool repo) and open the page with `&c=YOUR/THEME`. Look at every stage, every body's poses at game size, the deaths and the HUD. The readability, originality and geometry checks (`gp theme check --original`) and the video (`gp theme video`) are back with wave 8, but they read a model's theme stack, not a look: compare each body's art with its touch box and feet row by eye, frame by frame, and say so in the theme's README.
+reads the theme with the page's own rules reader and lists, by file and line: what the page would refuse, missing and unused pictures, every kit slot and pose still to draw (with the game's picture names for the `pic` lines), names the game hasn't got, each pose against its touch box and feet row beside the game's own picture, the kit's denied names where players see them, and the ROM-data check of `gp template served` (no file may hold the ROM's bytes). Run it after every change until it reports no problems; read the warnings. Start a theme with `gp theme look new THEME --game GAME --name NS/NAME --title "..."`, which writes the repo in the Turnips shape with a TO DRAW line per kit slot.
+
+Then play it: the check's last lines print the commands (`scripts/web/local-registry.sh GAMES_DIR THEME` builds a registry on this machine and the page, publishing the theme under its own package name; `gp registry serve` serves it; open the page with `&c=YOUR/THEME`). Look at every stage, every body's poses at game size, the deaths and the HUD. The fit check is a first pass from the files: it can't see how a picture reads at game size or how poses flow, so look frame by frame too.
 
 If you used an AI tool to make any of it, name the tool in the README, and make sure its terms let the person share the result.
 

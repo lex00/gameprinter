@@ -2,7 +2,7 @@
 title: Themes and levels
 description: Give a game new pictures, in a repo of your own, or make a new stage.
 prompt: |
-  Read this page. Then help me make a large-art theme for Donkey Kong in its own repo, using lex00/turnips as the pattern, in the style I describe next. Use no art, music or names from any existing game, and check the result with gp template served before I publish it.
+  Read this page. Then help me make a large-art theme for Donkey Kong in its own repo, using lex00/turnips as the pattern, in the style I describe next. Start it with gp theme look new, use no art, music or names from any existing game, and run gp theme look check on it after every change until it reports no problems, before I publish it.
 ---
 
 A theme is new pictures and sounds for a game. It changes how the game looks and nothing about how it plays: the game's model, the text file of its rules ([what a model and a template are](../)), stays as it was, so every body keeps its place and its hit box. A player picks a theme under Settings, Theme, and can go back to the original art at any time. On a ported game such as Donkey Kong the levels and the rules' tables still come from the player's own ROM, so the game with your theme plays in a browser only for someone who has that ROM.
@@ -42,15 +42,42 @@ A stage is never a picture in the theme. The `stage`, `stage_piece` and `level` 
 
 Lettering is part of a theme too: draw your own letters and use `pic` lines for the HUD, the score pop-ups and the title screens.
 
-### Check it holds nothing from a ROM
-
-No file may hold bytes from the ROM, and no picture may be traced from the original's art. Check every file against the ROMs the game names:
+### Start it
 
 ```sh
-gp template served ~/games/donkey-kong --folder my-theme/theme
+gp theme look new my-theme --game donkey-kong --name YOUR-NAME/my-theme --title "My Theme"
 ```
 
-Your work has to be your own. If you used an AI tool to make any of it, name the tool in your README, and make sure its terms let you share the result.
+writes an empty theme in the Turnips shape: `package.toml`, `theme/look.txt`, a README, and a `theme/art.txt` with one line for each picture the game's theme kit lists, marked TO DRAW with its size, its boxes and its feet row. It writes nothing from a ROM.
+
+### Check it
+
+```sh
+gp theme look check my-theme --game donkey-kong
+```
+
+reads the theme with the page's own rules reader and lists what is wrong by file and line:
+
+- Files: `package.toml` (name, version, `kind = "content"`, title, licence), `look.txt` and `art.txt` as the page reads them, every picture a rule names there and loadable, pictures no rule uses.
+- What the game needs drawn: each pose of each slot in the game's theme kit that has no picture yet, by its label and pose words, with the game's own picture name to put in its `pic` line. A rule that names a picture the game hasn't got is a problem, since the page passes over it.
+- Fit: each pose against its body's touch box and feet row, beside the game's own picture, in game pixels. It is a first pass from the files alone; play it and look.
+- Names: the original's names (the kit's `deny` list) in the package and the look, where players see them.
+- ROM data: the same check as `gp template served`: no file may hold bytes from the ROM.
+
+It needs your ROM on this machine (in `$GP_ROM_DIR`, or `--rom FILE`) to name the game's pictures and to compare your files with the ROM, and says so when it hasn't got one. It exits 0 when there are no problems; warnings are worth a look. Its last line says what to do next.
+
+No picture may be traced from the original's art, and your work has to be your own. If an AI tool made any of it, name the tool in your README and make sure its terms let you share the result.
+
+### See it in the game
+
+The check's output ends with the commands that play your theme on this machine, from a registry in a folder and a page built to install from it. Run them in the gameprinter checkout.
+
+```sh
+scripts/web/local-registry.sh ~/games my-theme
+target/debug/gp registry serve "$GP_HOME/registry" --page target/page-local
+```
+
+then open `http://127.0.0.1:8377/p?g=lex00/donkey-kong&c=YOUR-NAME/my-theme` and play every stage, looking at each pose at game size.
 
 ## Get it in the game
 

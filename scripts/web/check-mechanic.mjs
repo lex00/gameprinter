@@ -125,11 +125,12 @@ async function until(what, f, ms = 15000) {
   }
 }
 
-/** A screenshot of the page into --shots, when given. */
-async function shot(page, name) {
+/** A screenshot of the page into --shots, when given: the whole page, or
+ * what the window shows (`fullPage` false), where fixed panels are. */
+async function shot(page, name, fullPage = true) {
   if (!shots) return;
   mkdirSync(shots, { recursive: true });
-  await page.screenshot({ path: join(shots, `${GAME}-${name}.png`), fullPage: true });
+  await page.screenshot({ path: join(shots, `${GAME}-${name}.png`), fullPage });
 }
 
 /** A stand-in decision server on a free port, as Jev's wire format has
@@ -361,6 +362,7 @@ async function main() {
     const r = await page.evaluate((m) => document.querySelector(`#queue li[data-mechanic="${m}"]`)?.textContent ?? "", MECH);
     return r.startsWith("MEASURED") && r.includes("1 of 1 clips meet the bars") ? r : null;
   });
+  if (/corpus|\(gate/.test(row)) fail(`the quest log says corpus or a tool's note to the person: ${row}`);
   const measured = await text(page, "#score");
   if (!/^1 \/ \d+ MEASURED$/.test(measured)) fail(`the header's score: ${measured}`);
   ok(`the quest log takes the gate's scores: "${row.slice(0, 80)}", ${measured}`);
@@ -831,6 +833,39 @@ async function agentOnThePage() {
   if (!/clip agent/.test(card) || !/YES/.test(card)) fail(`the card says: ${card}`);
   ok(`gp_run's ask is a card on the page: ${card.slice(0, 80)}...`);
   await shot(page, "yes-card");
+  // The card is whole at every width from 360 px, with the log open: its
+  // words not cut, YES and NO on the screen and not under the log panel.
+  for (const width of [360, 700, 1400]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.waitForTimeout(400);
+    await page.evaluate(() => document.querySelector("#asks .ask-card").scrollIntoView({ block: "start" }));
+    await page.waitForTimeout(200);
+    const seen = await page.evaluate(() => {
+      const card = document.querySelector("#asks .ask-card");
+      const says = card.querySelector(".ask-says");
+      const r = card.getBoundingClientRect();
+      const hit = (b) => {
+        const q = b.getBoundingClientRect();
+        const at = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2);
+        return at === b || b.contains(at);
+      };
+      return {
+        inside: r.left >= -1 && r.right <= innerWidth + 1 && r.top >= -1 && r.bottom <= innerHeight + 1,
+        cut: says.scrollWidth > says.clientWidth + 1 || says.scrollHeight > says.clientHeight + 1,
+        buttons: [...card.querySelectorAll("button")].map(hit),
+        logOpen: document.body.classList.contains("log-open"),
+        rect: [r.left, r.top, r.right, r.bottom].map(Math.round),
+        window: [innerWidth, innerHeight],
+      };
+    });
+    await shot(page, `yes-card-${width}`, false);
+    if (!seen.logOpen) fail(`the log isn't open at ${width} px`);
+    if (!seen.inside || seen.cut) fail(`the yes card isn't whole at ${width} px: ${JSON.stringify(seen)}`);
+    if (seen.buttons.length !== 2 || seen.buttons.includes(false)) fail(`YES or NO can't be pressed at ${width} px: ${JSON.stringify(seen)}`);
+    await page.evaluate(() => scrollTo(0, 0));
+    await shot(page, `top-${width}`, false);
+  }
+  ok("the yes card is whole with YES and NO pressable at 360, 700 and 1400 px, with the log open");
   // The status line wraps its sentences rather than cutting them, beside
   // the card, at a narrow and a wide window; narrow, the next step starts
   // on a line of its own.
@@ -915,11 +950,60 @@ async function agentOnThePage() {
   await fp.close();
 }
 
+/** The old editor's five features on the page (BRIEF-editor-features.md,
+ * issue #2), on Moss Hop with main()'s clip in the game's tests: the
+ * fidelity number in REFINE's first line and on CLIPS's strip, the same
+ * number `next` gives. */
+async function editorFeatures() {
+  gpRun(["corpus", "import", GAME, "--write"]);
+  const base = await gpServe(games);
+  const api = async (path, body) => {
+    const r = await fetch(`${base}${path}`, body === undefined ? {} : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    return r.json();
+  };
+  const bg = await api(`api/capture/${GAME}/background`);
+  if (!bg.active?.length) fail(`the game's tests have no clip after corpus import: ${JSON.stringify(bg).slice(0, 200)}`);
+  // Scores as the background work leaves them: the first clip 62% together
+  // on the model as it stands, the others exact.
+  const scores = Object.fromEntries(bg.active.map((id, i) => [id, i === 0
+    ? { permille: 620, exact: false, model: bg.model }
+    : { permille: 1000, exact: true, model: bg.model }]));
+  const stateFile = join(home, "work", "serve", GAME, "background", "state.json");
+  const saved = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : {};
+  writeFileSync(stateFile, JSON.stringify({ ...saved, scores }));
+  const n = bg.active.length;
+  const pct = Math.round(Math.floor((620 + 1000 * (n - 1)) / n) / 10);
+  const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto(`${base}mechanic/${GAME}/?tab=work`);
+  const said = await until("the fidelity number on REFINE", async () => {
+    const t = await text(page, "[data-testid=fidelity]");
+    return t.startsWith(`On average, ${pct}% of a clip plays the same`) && t.includes(`${n - 1} of ${n} clips play the same all the way`) && t;
+  }, 30000);
+  const hover = await page.getAttribute("[data-testid=fidelity]", "title");
+  if (!/Pictures and sound are not measured/.test(hover ?? "")) fail(`the number's hover: ${hover}`);
+  const nx = await api(`api/next/${GAME}`);
+  if (nx.facts?.scores?.fidelity_permille !== Math.floor((620 + 1000 * (n - 1)) / n)) fail(`next's fidelity_permille: ${JSON.stringify(nx.facts?.scores)}`);
+  ok(`REFINE's first line says the fidelity number, as next has it (${nx.facts.scores.fidelity_permille} permille): "${said}"`);
+  await shot(page, "fidelity");
+  await page.click("#tab-clips");
+  const strip = await until("the number on CLIPS's strip", async () => {
+    const t = await text(page, "[data-testid=strip-fidelity]");
+    return t.startsWith(`Clips: ${pct}% the same as the original`) && t;
+  });
+  ok(`CLIPS's strip says it short: "${strip}"`);
+  await page.click("#tab-work");
+  if (errors.length) fail(`the page threw: ${errors.join("; ")}`);
+  await page.close();
+}
+
 let code = 0;
 try {
   await main();
   await oneServer();
   await agentOnThePage();
+  await editorFeatures();
   await arcade();
   await romSets();
   console.log(`mechanic-page: passed in ${((Date.now() - t0) / 1000).toFixed(1)} s`);

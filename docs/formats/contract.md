@@ -58,7 +58,7 @@ speed = "3%"
 | Key | Meaning |
 |---|---|
 | `corpus.together` | A percentage, `"100%"`: each clip's frames on which every measure is within its tolerance, run straight through from its start (free mode, with the original's draws when the state mapping has `score_draws`) |
-| `corpus.longest_stretch` | Seconds, `"10s"`: each long run's (a clip of more than 600 frames) longest exact stretch in resync mode from the same start, counting the one the clip's end cuts off. A long run with fewer play frames than that (a game over, a clear scene) isn't held to it |
+| `corpus.longest_stretch` | Seconds of the game's own play, `"10s"`, turned into frames at the model's `frame_rate` (601 frames on the NES, 300 on a 30 Hz board): each long run's (a clip of more than 600 frames) longest exact stretch in resync mode from the same start, counting the one the clip's end cuts off. A long run with fewer play frames than that (a game over, a clear scene) isn't held to it |
 | `corpus.note` | Optional, for people |
 
 Donkey Kong's (`fidelity.toml` in the games checkout's `donkey-kong` package):

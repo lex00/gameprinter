@@ -234,6 +234,8 @@ const PHRASES: &[(&str, &str, &str)] = &[
     // Themes.
     ("theme generate", "make", "the theme's pictures"),
     ("theme check", "check", "the theme"),
+    ("theme look check", "check", "the theme"),
+    ("theme look new", "start", "a new theme"),
     ("theme kit", "write", "the game's theme kit"),
     ("theme fit", "fit", "the pictures to the game"),
     ("theme sheet", "write", "the prompts for the pictures"),
@@ -506,6 +508,8 @@ mod tests {
         assert_eq!(said("rule lane").did, "Found the rule behind a mechanic");
         assert_eq!(said("template_fork").did, "Copied a template");
         assert_eq!(said("corpus score").doing, "scoring the game's tests");
+        assert_eq!(said("theme look check").did, "Checked the theme");
+        assert_eq!(said("theme look new").did, "Started a new theme");
         // Anything else: the command path, never its help.
         assert_eq!(
             t("corpus reduce", Ended::As("failed".into()), 0),

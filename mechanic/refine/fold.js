@@ -126,6 +126,62 @@ export function statusSentence(s, history, now) {
   return `Background: ${parts.join("; ")}`;
 }
 
+// ------------------------------------------------------------ the number
+
+/** What the fidelity number means, for its hover. */
+export const FIDELITY_MEANS = "The average, over the clips scored, of how much of each clip plays the same as the original. Pictures and sound are not measured yet.";
+
+/**
+ * The fidelity number, as the agent's `next` has it (crates/gp-cli/src/
+ * next.rs, Scores.fidelity_permille), so the status line, this page and
+ * the agent say the same: over the active clips scored on the model as it
+ * stands, the mean of how much of each plays the same as the original, an
+ * exact clip counting 1000, rounded down. Where the background work has no
+ * score on this model, `next` reads the gate's scores, and so does this
+ * (`nx`, the status line's last answer, which next.js passes on as
+ * "gp-next"); then the background's older scores, marked so.
+ * {permille, scored, exact, active, older}, or null with no score at all.
+ */
+export function fidelity(s, nx) {
+  const active = s?.active ?? Object.keys(s?.scores ?? {});
+  const all = active.map((id) => s?.scores?.[id]).filter((x) => x && !x.error);
+  const now = all.filter((x) => !s.model || x.model === s.model);
+  const pm = (x) => (x.exact ? 1000 : Math.min(1000, x.permille ?? 0));
+  const of = (use, older) => ({
+    permille: Math.floor(use.reduce((a, x) => a + pm(x), 0) / use.length),
+    scored: use.length,
+    exact: use.filter((x) => x.exact).length,
+    active: active.length,
+    older,
+  });
+  if (now.length) return of(now, false);
+  const g = nx?.facts?.scores;
+  if (g?.clips && typeof g.fidelity_permille === "number") {
+    return { permille: g.fidelity_permille, scored: g.clips, exact: g.exact ?? 0, active: g.clips + (g.to_score ?? 0), older: !!g.stale };
+  }
+  return all.length ? of(all, true) : null;
+}
+
+/** REFINE's first sentence: "On average, 78% of a clip plays the same on
+ * the model as on the original. 35 of 52 clips play the same all the way." */
+export function fidelitySentence(s, nx) {
+  if (!s) return "";
+  const f = fidelity(s, nx);
+  if (!f) return "Not measured yet: no clip is scored.";
+  let t = `On average, ${Math.round(f.permille / 10)}% of a clip plays the same on the model as on the original${f.older ? " (scored on an older model)" : ""}. ${f.exact} of ${f.scored} clips play the same all the way.`;
+  if (!f.older && f.scored < f.active) t += ` Only ${f.scored} of ${f.active} clips are scored so far.`;
+  return t;
+}
+
+/** The same, short, for CLIPS's strip: "Clips: 78% the same as the
+ * original, 35 of 52 all the way." */
+export function fidelityShort(s, nx) {
+  if (!s) return "";
+  const f = fidelity(s, nx);
+  if (!f) return "Clips: not measured yet.";
+  return `Clips: ${Math.round(f.permille / 10)}% the same as the original, ${f.exact} of ${f.scored} all the way${f.older ? ", on an older model" : ""}.`;
+}
+
 // ------------------------------------------------------------ the queue
 
 /** A clip's state from its score: waiting, can't start, matches, fixed, not matching. */
@@ -289,7 +345,7 @@ export function pictureOf(run, clip) {
 const hubs = new Map();
 
 /**
- * The run's hub: {state, record, history, screen, api, run, subscribe(fn),
+ * The run's hub: {state, record, history, screen, next, api, run, subscribe(fn),
  * refresh(), post(path, body)}. One per run however many parts mount;
  * it lets go of the stream when the last part stops.
  */
@@ -332,6 +388,15 @@ export function hub(o) {
     return r;
   };
   x.subscribe = (f) => { x.subs.add(f); if (x.state) f(x, "state"); return () => x.subs.delete(f); };
+  // The status line's answer (next.js), for the fidelity number's scores
+  // when the background work has none: heard when its scores change.
+  x.next = typeof window !== "undefined" ? window.gpNext ?? null : null;
+  const onNext = (e) => {
+    const was = JSON.stringify(x.next?.facts?.scores ?? null);
+    x.next = e.detail;
+    if (JSON.stringify(x.next?.facts?.scores ?? null) !== was) tell("next");
+  };
+  if (typeof window !== "undefined") window.addEventListener("gp-next", onNext);
   // An event: a refine round's progress moves its card's bars at once;
   // anything else asks for the state again.
   const onEvent = (e) => {
@@ -371,6 +436,7 @@ export function hub(o) {
     if (x.users > 0) return;
     clearTimeout(x.timer);
     clearTimeout(pending);
+    if (typeof window !== "undefined") window.removeEventListener("gp-next", onNext);
     x.ownStream?.close();
     hubs.delete(key);
   };

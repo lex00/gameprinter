@@ -640,7 +640,7 @@ pub(crate) fn next(grid: &Grid, cells: &[Cell], seed: u64) -> Option<Value> {
         "col": best.col,
         "why": why,
         "says": format!(
-            "record a clip of {} at {} {} ({around}), and bring it in with gp corpus import",
+            "record a clip of {} at {} {} ({around}), and ask your agent to add it to the game's tests",
             row.label, col.level_name, col.place
         ),
         "clip": Value::Null,

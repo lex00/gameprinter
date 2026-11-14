@@ -192,6 +192,13 @@ impl Ratio {
             den: r.den / a,
         })
     }
+
+    /// As a frame rate, in frames a second times 1000, rounded to the
+    /// nearest: 60099 for the NES's 39375000/655171, 30000 for a 30 Hz
+    /// board. The tools turn seconds into a game's frames with it.
+    pub fn milli(&self) -> u64 {
+        ((self.num as u128 * 1000 + self.den as u128 / 2) / self.den.max(1) as u128) as u64
+    }
 }
 
 impl fmt::Display for Ratio {

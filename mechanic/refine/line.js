@@ -1,9 +1,10 @@
 // REFINE's background line (game-printer's editor/src/Background.tsx and
-// backfold.ts; docs/show.md, "The background work"): one sentence for the
+// backfold.ts; docs/show.md, "The background work"): the fidelity number
+// in a sentence (fold.js, fidelitySentence), one sentence for the
 // background queue, start and pause, the questions the loop asked with
 // their choices, and its rounds in words when asked for.
 
-import { css, h, hub, openQuestions, opts, roundWords, statusSentence } from "./fold.js";
+import { css, FIDELITY_MEANS, fidelitySentence, h, hub, openQuestions, opts, roundWords, statusSentence } from "./fold.js";
 
 /** Mounts the line on `el`; returns {stop()}. */
 export function refineLine(el, a, b, c) {
@@ -22,6 +23,13 @@ export function refineLine(el, a, b, c) {
     if (why === "progress") return;
     const s = x.state;
     el.textContent = "";
+    // The fidelity number first: how close the model is, in one sentence.
+    if (s) {
+      const fid = h("p", "rf-fidelity", fidelitySentence(s, x.next));
+      fid.dataset.testid = "fidelity";
+      fid.title = FIDELITY_MEANS;
+      el.append(fid);
+    }
     const top = h("div", "rf-line-top");
     const says = h("span", "rf-says", statusSentence(s, x.history, Date.now()));
     says.dataset.testid = "bg-says";

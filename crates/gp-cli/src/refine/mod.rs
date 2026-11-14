@@ -97,8 +97,8 @@ pub struct RefineArgs {
     #[arg(long)]
     pub rom: Option<PathBuf>,
     /// A window's length: frames (300) or seconds (5s).
-    #[arg(long, default_value_t = lockstep::DEFAULT_WINDOW, value_parser = lockstep::parse_window)]
-    pub window: u64,
+    #[arg(long, default_value_t = lockstep::WindowLen::Frames(lockstep::DEFAULT_WINDOW), value_parser = lockstep::parse_window)]
+    pub window: lockstep::WindowLen,
     /// The most rounds on each clip (default 32); without `--lockstep`,
     /// the most rounds of the loop (default 4).
     #[arg(long)]
@@ -501,6 +501,10 @@ pub(crate) fn run(a: &RefineArgs, paths: &Paths) -> Result<Outcome> {
     let assets = crate::corpus_score::assets_of(paths, &game, &dir, a.assets.as_deref(), &rom)?;
     let (source, _) = Source::open_dir(&dir, Some(&assets), paths, a.module.as_deref())?;
     let source = Arc::new(source);
+    // A window in seconds is the game's own seconds.
+    let window = a
+        .window
+        .frames(source.parse_model()?.model.frame_rate.milli());
     let mapping_file = dir.join(MAPPING_FILE);
     let mapping = Mapping::parse(
         &fs::read_to_string(&mapping_file)
@@ -708,7 +712,7 @@ pub(crate) fn run(a: &RefineArgs, paths: &Paths) -> Result<Outcome> {
                 resume: c.resume.as_ref().map(|(s, p)| (s, *p)),
                 draws: c.draws.clone(),
                 rounds: a.rounds.unwrap_or(lockstep::DEFAULT_ROUNDS),
-                window: a.window,
+                window,
                 from: Some(c.start),
             },
             &scope,

@@ -192,6 +192,23 @@ pub(crate) struct Scores {
     pub to_score: u64,
     /// The scores are from an older model.
     pub stale: bool,
+    /// The fidelity number: over the clips scored, the mean of how much of
+    /// each plays the same as the original (an exact clip counts 1000).
+    /// Behaviour only; pictures and sound aren't measured. The page's
+    /// REFINE line computes the same from the same scores (refine/fold.js,
+    /// fidelitySentence).
+    pub fidelity_permille: u64,
+}
+
+/// The mean of some clips' permilles, rounded down (as the page does).
+fn mean_permille(each: impl Iterator<Item = u64>) -> u64 {
+    let (sum, n) = each.fold((0u64, 0u64), |(s, n), p| (s + p.min(1000), n + 1));
+    sum.checked_div(n).unwrap_or(0)
+}
+
+/// A permille as a whole percent, rounded half up (as the page does).
+fn percent(permille: u64) -> u64 {
+    (permille + 5) / 10
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -436,8 +453,10 @@ fn stands(f: &Facts, n: u8) -> String {
         7 | 8 => {
             let s = f.scores.clone().unwrap_or_default();
             format!(
-                "{} of {} clips of {t} play the same on the model as on the original.",
-                s.exact, s.clips
+                "On average, {}% of a clip of {t} plays the same on the model as on the original. {} of {} clips play the same all the way.",
+                percent(s.fidelity_permille),
+                s.exact,
+                s.clips
             )
         }
         9 => format!(
@@ -829,7 +848,8 @@ pub(crate) fn answer(f: &Facts) -> Answer {
             "not_kept": f.not_kept,
             "scores": f.scores.as_ref().map(|_| json!({
                 "clips": s.clips, "exact": s.exact, "to_score": s.to_score,
-                "stale": s.stale, "first_wrong": s.first_wrong})),
+                "stale": s.stale, "first_wrong": s.first_wrong,
+                "fidelity_permille": s.fidelity_permille})),
             "questions": f.questions.len(),
             "whole": match &f.whole {
                 Whole::NotMeasured => json!("not measured"),
@@ -1129,12 +1149,20 @@ fn gate_scores(home: &Path, game: &str, gdir: &Path) -> Option<Scores> {
     b.extend(std::fs::read(gdir.join(gp_interp::mapping::MAPPING_FILE)).unwrap_or_default());
     let now = gp_evidence::Hash::of(&b).to_string();
     let stale = st["model"]["hash"].as_str().is_some_and(|h| h != now);
+    let fidelity_permille = mean_permille(clips.iter().map(|c| {
+        let s = &c["straight"];
+        match (s["together"].as_u64(), s["of"].as_u64()) {
+            (Some(t), Some(of)) if of > 0 => t * 1000 / of,
+            _ => 0,
+        }
+    }));
     Some(Scores {
         clips: clips.len() as u64,
         exact,
         first_wrong,
         to_score: 0,
         stale,
+        fidelity_permille,
     })
 }
 
@@ -1167,6 +1195,13 @@ fn background_scores(paths: &gp_evidence::Paths, games: &Path, game: &str) -> Op
             .map(|s| s.0.to_owned()),
         to_score: (active.len() - on_model.len()) as u64,
         stale: false,
+        fidelity_permille: mean_permille(on_model.iter().map(|s| {
+            if s.1["exact"] == json!(true) {
+                1000
+            } else {
+                s.1["permille"].as_u64().unwrap_or(0)
+            }
+        })),
     })
 }
 

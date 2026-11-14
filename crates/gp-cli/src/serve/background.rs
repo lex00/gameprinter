@@ -1222,7 +1222,7 @@ fn queue(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
         let remove = v["remove"] == json!(true);
         if !remove && !active_now(ctx, &run).iter().any(|a| a.id == clip) {
             return Err(Fail::not_found(format!(
-                "{clip} isn't one of the run's active clips (played, or the corpus's, and not skipped)"
+                "{clip} isn't one of the run's active clips (played, or one of the game's tests, and not skipped)"
             )));
         }
         update_saved(&run, |s| {

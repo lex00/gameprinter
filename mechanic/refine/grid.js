@@ -182,7 +182,7 @@ export function refineGrid(el, a, b, c) {
     head.append(lab, stepper());
 
     if (!rows.length || !cols.length) {
-      el.append(h("p", "rf-muted", grid.says ?? "No cell yet: the game's corpus has no clip."));
+      el.append(h("p", "rf-muted", grid.says ?? "No cell yet: the game's tests have no clip."));
       return;
     }
     // Each column's x, a little apart at each new level.

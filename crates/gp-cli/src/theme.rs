@@ -231,6 +231,14 @@ pub enum ThemeCmd {
         #[arg(long, value_delimiter = ',', value_name = "CELLS")]
         retry: Vec<String>,
     },
+    /// Large-art themes, in a repo of their own (package.toml, theme/look.txt,
+    /// theme/art.txt and the pictures; lex00/turnips is the pattern): check
+    /// one against a game the way the page reads it, or start one from the
+    /// game's kit.
+    Look {
+        #[command(subcommand)]
+        cmd: crate::theme_look::LookCmd,
+    },
     /// Style cards (docs/theme-kit.md, "Style cards"): how a theme looks,
     /// apart from any game.
     Style {
@@ -480,6 +488,7 @@ pub(crate) fn run(cmd: &ThemeCmd, paths: &Paths, rec: &mut RunRecorder) -> Resul
                 model, out, id, title, *seed, &logo, credit, also_for, *force, paths, rec,
             )
         }
+        ThemeCmd::Look { cmd } => crate::theme_look::run(cmd, paths),
         ThemeCmd::Kit {
             game,
             rom,

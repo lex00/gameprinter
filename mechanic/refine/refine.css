@@ -47,6 +47,8 @@
 @keyframes rf-blink { 50% { opacity: 0.2; } }
 
 /* The line. */
+.rf-fidelity { font-weight: bold; color: var(--fg, #fcfcfc); }
+p.rf-fidelity { margin: 6px 0 2px; font-size: 14px; }
 .rf-line-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
 .rf-line .rf-says { flex: 1 1 320px; }
 .rf-questions .rf-q { border-left: 3px solid var(--nes-28, #f8b800); padding: 2px 8px; margin: 6px 0; }

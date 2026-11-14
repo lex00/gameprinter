@@ -1488,9 +1488,14 @@ fn score(
         .transpose()
         .map_err(anyhow::Error::msg)?
         .flatten();
+    // Seconds are the game's own: its model's frame rate.
+    let fps_milli = gp_model::Model::parse(&g.model_text)?
+        .model
+        .frame_rate
+        .milli();
     let bar_longest = bars
         .as_ref()
-        .map(|c| c.longest_frames())
+        .map(|c| c.longest_frames(fps_milli))
         .transpose()
         .map_err(anyhow::Error::msg)?
         .flatten();
@@ -1540,8 +1545,8 @@ fn score(
                         "longest": st.longest(), "longest_any": st.longest_any(),
                         "median": st.median(), "p10": st.percentile(10),
                         "shortest": st.whole.first().copied().unwrap_or(0),
-                        "at_least_5s": st.at_least(5), "at_least_10s": st.at_least(10),
-                        "at_least_30s": st.at_least(30),
+                        "at_least_5s": st.at_least(5, fps_milli), "at_least_10s": st.at_least(10, fps_milli),
+                        "at_least_30s": st.at_least(30, fps_milli),
                     });
                 }
                 // The screen measure, for the gate's picture lane.
@@ -1596,7 +1601,7 @@ fn score(
                 if let Some(l) = row["stretches"]["longest_any"].as_u64() {
                     why.push(format!(
                         "longest stretch {} s",
-                        gp_interp::lockstep::seconds(l)
+                        gp_interp::lockstep::seconds(l, fps_milli)
                     ));
                 }
                 bar_lines.push(format!("  below the bars: {id} ({})", why.join(", ")));
@@ -1671,7 +1676,7 @@ fn score(
             bar_longest
                 .map(|f| format!(
                     ", a longest stretch of {} s on a long run",
-                    gp_interp::lockstep::seconds(f)
+                    gp_interp::lockstep::seconds(f, fps_milli)
                 ))
                 .unwrap_or_default(),
         ));

@@ -184,7 +184,7 @@ pub(crate) fn run_resumed(
         j["sound"] = sj;
         lines.extend(sl);
     }
-    let (sj, sl) = stretches_report(&ls, mapping);
+    let (sj, sl) = stretches_report(&ls, mapping, model.model.frame_rate.milli());
     j["stretches"] = sj;
     lines.extend(sl);
     if let Some(d) = interp.draws_report()? {
@@ -498,7 +498,13 @@ pub(crate) fn sound_report(ls: &Lockstep) -> Option<(Json, Vec<String>)> {
 
 /// A run's exact stretches and its splits by cause (docs/benchmarks.md,
 /// "Long runs"), as JSON and lines for people.
-pub(crate) fn stretches_report(ls: &Lockstep, mapping: &Mapping) -> (Json, Vec<String>) {
+/// Seconds are the game's own, at `fps_milli` frames a second times 1000
+/// (the model's `frame_rate`).
+pub(crate) fn stretches_report(
+    ls: &Lockstep,
+    mapping: &Mapping,
+    fps_milli: u64,
+) -> (Json, Vec<String>) {
     use gp_interp::lockstep::{seconds, split_causes, stretches};
     let st = stretches(ls);
     let names: Vec<String> = mapping
@@ -523,14 +529,14 @@ pub(crate) fn stretches_report(ls: &Lockstep, mapping: &Mapping) -> (Json, Vec<S
         "median": st.median(),
         "longest": st.longest(),
         "longest_any": st.longest_any(),
-        "at_least_5s": st.at_least(5),
-        "at_least_10s": st.at_least(10),
-        "at_least_30s": st.at_least(30),
+        "at_least_5s": st.at_least(5, fps_milli),
+        "at_least_10s": st.at_least(10, fps_milli),
+        "at_least_30s": st.at_least(30, fps_milli),
         "play_from_mapping": mapping.stretches.as_ref().is_some_and(|s| s.play.is_some()),
         "splits_by_state": by_state.iter().map(|(k, n)| json!({"state": k, "splits": n})).collect::<Vec<_>>(),
         "splits_by_measure": by_measure.iter().map(|(k, n)| json!({"path": k, "splits": n})).collect::<Vec<_>>(),
     });
-    let s = |f: u64| format!("{} s", seconds(f));
+    let s = |f: u64| format!("{} s", seconds(f, fps_milli));
     let mut lines = vec![format!(
         "stretches ({} mode): {}/{} frames together ({}.{}%), {} play frames, {} split events",
         ls.mode.name(),
@@ -556,9 +562,9 @@ pub(crate) fn stretches_report(ls: &Lockstep, mapping: &Mapping) -> (Json, Vec<S
             s(st.median()),
             s(st.longest()),
             s(st.open_end),
-            st.at_least(5),
-            st.at_least(10),
-            st.at_least(30)
+            st.at_least(5, fps_milli),
+            st.at_least(10, fps_milli),
+            st.at_least(30, fps_milli)
         ));
     }
     if !ls.splits.is_empty() {

@@ -134,9 +134,13 @@ pub(crate) fn written(m: &Model) -> BTreeMap<char, String> {
 
 /// The lifted files of a template, written into a fresh folder: an
 /// original's built from its authored.toml, a ROM template's lifted from
-/// the ROM it accepts. None when there is no ROM.
-fn lifted_dir(t: &Template, paths: &Paths) -> Result<Result<tempfile::TempDir, String>> {
-    let Some((rom_path, _)) = crate::template_extract::find_rom(t, None, paths)? else {
+/// the ROM it accepts (or `given`). None when there is no ROM.
+pub(crate) fn lifted_dir(
+    t: &Template,
+    given: Option<&Path>,
+    paths: &Paths,
+) -> Result<Result<tempfile::TempDir, String>> {
+    let Some((rom_path, _)) = crate::template_extract::find_rom(t, given, paths)? else {
         return Ok(Err(
             "no lifted files (no ROM the template accepts in $GP_ROM_DIR)".into(),
         ));
@@ -207,7 +211,7 @@ pub(crate) fn check(t: &Template, paths: &Paths) -> Result<Option<FontReport>> {
         );
     }
     let map = AssetMap::parse(&map_text).map_err(anyhow::Error::msg)?;
-    let lifted = lifted_dir(t, paths)?;
+    let lifted = lifted_dir(t, None, paths)?;
     Ok(Some(check_with(
         &m,
         &map,

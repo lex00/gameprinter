@@ -1135,9 +1135,6 @@ impl Scene {
 /// stretches in resync mode as well (docs/benchmarks.md, "Long runs").
 pub const LONG_RUN: u64 = 600;
 
-/// Frames a second, NTSC, for stretches in seconds.
-pub const NTSC_FPS_MILLI: u64 = 60_099;
-
 /// A run's exact stretches (docs/benchmarks.md, "Long runs"): runs of
 /// play frames on which every measure is within its tolerance, each ended
 /// by a split event (one or more split frames in a row). A frame outside
@@ -1207,18 +1204,22 @@ impl Stretches {
         self.longest().max(self.open_end).max(self.cut_by_scene)
     }
 
-    /// Whole stretches of `secs` seconds or more.
-    pub fn at_least(&self, secs: u64) -> usize {
+    /// Whole stretches of `secs` seconds or more, at `fps_milli` frames a
+    /// second times 1000: the game's own rate, its model's `frame_rate` as
+    /// [`gp_model::model::Ratio::milli`] gives it.
+    pub fn at_least(&self, secs: u64, fps_milli: u64) -> usize {
         self.whole
             .iter()
-            .filter(|f| **f * 1000 >= secs * NTSC_FPS_MILLI)
+            .filter(|f| **f * 1000 >= secs * fps_milli)
             .count()
     }
 }
 
-/// Frames as seconds, to a tenth, for people.
-pub fn seconds(frames: u64) -> String {
-    let tenths = (frames * 10_000 + NTSC_FPS_MILLI / 2) / NTSC_FPS_MILLI;
+/// Frames as seconds, to a tenth, for people, at `fps_milli` frames a
+/// second times 1000 (the game's own rate, as for [`Stretches::at_least`]).
+pub fn seconds(frames: u64, fps_milli: u64) -> String {
+    let fps_milli = fps_milli.max(1);
+    let tenths = (frames * 10_000 + fps_milli / 2) / fps_milli;
     format!("{}.{}", tenths / 10, tenths % 10)
 }
 
@@ -1836,7 +1837,52 @@ mod track_tests {
         assert_eq!(st.median(), 11 * 61);
         assert_eq!(st.low_mean(), (61 + 122) / 2);
         // 61 frames is just over a second: 5 s is 301 frames.
-        assert_eq!(st.at_least(5), 16);
-        assert_eq!(seconds(601), "10.0");
+        assert_eq!(st.at_least(5, NES), 16);
+        assert_eq!(seconds(601, NES), "10.0");
+    }
+
+    /// The NES's rate as Donkey Kong's model gives it.
+    const NES: u64 = 60_099;
+
+    fn rate(text: &str) -> u64 {
+        gp_model::model::Ratio::parse(text).unwrap().milli()
+    }
+
+    #[test]
+    fn a_stretch_bar_in_seconds_is_that_many_seconds_of_the_games_own_frames() {
+        let (nes, sixty, thirty) = (rate("39375000/655171"), rate("60"), rate("30"));
+        assert_eq!((nes, sixty, thirty), (NES, 60_000, 30_000));
+        // Stretches of every length from 1 to 2000 frames.
+        let st = Stretches {
+            whole: (1..=2000).collect(),
+            ..Stretches::default()
+        };
+        // N seconds is N times the rate: 600 frames at 60 Hz, 300 at 30 Hz.
+        for n in [1u64, 5, 10, 30] {
+            assert_eq!(st.at_least(n, sixty), 2000 - (n * 60) as usize + 1);
+            assert_eq!(st.at_least(n, thirty), 2000 - (n * 30) as usize + 1);
+        }
+        assert_eq!(seconds(600, sixty), "10.0");
+        assert_eq!(seconds(300, thirty), "10.0");
+        assert_eq!(seconds(533, thirty), "17.8");
+        // On the NES nothing moves: the old constant, 60099, for every
+        // length and every bar.
+        let old_at_least = |secs: u64| {
+            st.whole
+                .iter()
+                .filter(|f| **f * 1000 >= secs * 60_099)
+                .count()
+        };
+        let old_seconds = |f: u64| {
+            let t = (f * 10_000 + 60_099 / 2) / 60_099;
+            format!("{}.{}", t / 10, t % 10)
+        };
+        for n in [5, 10, 30] {
+            assert_eq!(st.at_least(n, nes), old_at_least(n));
+        }
+        for f in 0..100_000 {
+            assert_eq!(seconds(f, nes), old_seconds(f));
+        }
+        assert_eq!(st.at_least(10, nes), 2000 - 601 + 1);
     }
 }

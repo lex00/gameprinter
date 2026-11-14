@@ -77,7 +77,7 @@ The list of mechanics beside the game is the quest log (`$GP_HOME/mechanics/GAME
 Donkey Kong's log on 2026-11-02, in game-printer, from the gate's status after c610add3 (two rows):
 
 ```text
-hammer: done. 4 of 4 clips meet the bars; 100.0% straight through; 100.0% with resync; longest exact stretch 12.1 s; 2 clips not in the corpus yet (gate, model c610add3)
+hammer: done. 4 of 4 clips meet the bars; 100.0% straight through; 100.0% with resync; longest exact stretch 12.1 s; 2 clips not in the game's tests yet; scored on model version c610add3
     hammer: measured (819 frames, smash 500, no jump or climb), not yet in the rebuild: clips score 0 to 8%, clip 4 91% resync; worker A
 clear-25m: agent working. 0 of 1 clips meet the bars; 89.3% straight through; 94.9% with resync; longest exact stretch 27.3 s; first split: clip 1 at frame 3447 (the clip's 1915), entities.player[0].x apart (gate, model c610add3)
     clear-25m: the 25m part scores 92.3% resync, 48.3% straight through; longest exact stretch 11.4 s; waits on the hammer and barrel drift

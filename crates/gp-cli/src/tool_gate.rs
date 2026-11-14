@@ -1966,6 +1966,17 @@ mod tests {
         let (ctl, times) = (root.join("ctl"), root.join("times"));
         fs::create_dir_all(&ctl).unwrap();
         fs::create_dir_all(&times).unwrap();
+        // `ctl/meet`: each lane, once started, waits until all three have
+        // started (just check, a cargo test run, the patched canary), so
+        // the lanes end only if they ran at once. One that waits 30 s
+        // without the others leaves NAME.alone and goes on.
+        let meet = |me: &str| {
+            format!(
+                "if [ -f '{ctl}/meet' ]; then n=0; while [ ! -f '{times}/just.start' ] || [ ! -f '{times}/test.start' ] || [ ! -f '{times}/gp.start' ]; do n=$((n+1)); if [ $n -gt 300 ]; then : > '{times}/{me}.alone'; break; fi; sleep 0.1; done; fi",
+                ctl = ctl.display(),
+                times = times.display()
+            )
+        };
         fs::write(
             &gp_body,
             format!(
@@ -1983,6 +1994,7 @@ echo "$side" >> "$times/gp-runs"
 if [ "$side" = patch ]; then
   echo $$ > "$times/gp.pid"
   date +%s > "$times/gp.start"
+  {meet_gp}
   if [ -f "$ctl/gp-fails" ]; then echo "error: the kit doesn't match" >&2; exit 1; fi
   [ -f "$ctl/gp-sleep" ] && sleep "$(cat "$ctl/gp-sleep")"
 fi
@@ -2003,7 +2015,8 @@ if [ "$(cat "$kit/step")" = right ]; then t=10; else t=5; fi
 printf '{{"clips":[{{"id":"c1","frames":10,"frames_together":%s}}]}}\n' "$t"
 "#,
                 ctl = ctl.display(),
-                times = times.display()
+                times = times.display(),
+                meet_gp = meet("gp")
             ),
         )
         .unwrap();
@@ -2017,6 +2030,7 @@ if [ "$1" = test ]; then
   echo "$* | GP_SLOW_TESTS=${{GP_SLOW_TESTS:-}}" >> "$CARGO_TARGET_DIR/cargo-test-seen"
   case " $* " in *" --no-run "*) exit 0 ;; esac
   date +%s > '{times}/test.start'
+  {meet_test}
   [ -f '{ctl}/test-sleep' ] && sleep "$(cat '{ctl}/test-sleep')"
   if grep -q 'a failing test' README.md; then echo 'test fails ... FAILED'; exit 101; fi
   exit 0
@@ -2031,7 +2045,8 @@ mv "$out.new" "$out"
 "#,
                 gp_body.display(),
                 ctl = ctl.display(),
-                times = times.display()
+                times = times.display(),
+                meet_test = meet("test")
             ),
         );
         // just check: `ctl/just-fails` fails it after 0.2 s, `ctl/just-sleep`
@@ -2043,6 +2058,7 @@ mv "$out.new" "$out"
                 r#"#!/bin/sh
 printf 'GP_GATE_RUNS_TESTS=%s\nGP_GATE_RUN=%s\n' "${{GP_GATE_RUNS_TESTS:-}}" "${{GP_GATE_RUN:-}}" > "$CARGO_TARGET_DIR/just-seen"
 date +%s > '{times}/just.start'
+{meet_just}
 [ -f '{ctl}/just-writes' ] && echo 'fn x() {{}}' > crates/gp-sim/gen.rs
 if [ -f '{ctl}/just-flips' ]; then echo wrong > crates/gp-sim/step; sleep 2; echo right > crates/gp-sim/step; fi
 if [ -f '{ctl}/just-fails' ]; then sleep 0.2; echo 'check-step: clippy 0.2 s (failed)'; exit 1; fi
@@ -2055,7 +2071,8 @@ echo 'check-step: fmt 0.4 s'
 date +%s > '{times}/just.end'
 "#,
                 ctl = ctl.display(),
-                times = times.display()
+                times = times.display(),
+                meet_just = meet("just")
             ),
         );
         c
@@ -2068,17 +2085,6 @@ date +%s > '{times}/just.end'
 
     fn stamp(c: &Cx, name: &str) -> Option<String> {
         fs::read_to_string(c.repo.parent().unwrap().join("times").join(name)).ok()
-    }
-
-    /// The seconds of the step `name` in the rig's steps.jsonl, the last
-    /// time it ran.
-    fn step_secs(c: &Cx, name: &str) -> f64 {
-        let text = fs::read_to_string(c.repo.parent().unwrap().join("steps.jsonl")).unwrap();
-        text.lines()
-            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-            .rfind(|v| v["step"] == name)
-            .and_then(|v| v["secs"].as_f64())
-            .unwrap_or_else(|| panic!("no step {name}: {text}"))
     }
 
     /// A patch to `file` in the rig's repo, written as `git diff` writes it.
@@ -2431,24 +2437,26 @@ date +%s > '{times}/just.end'
             .count()
     }
 
-    /// just check, the tests and the patched canary start together: each
-    /// takes 2 s, and the three take about 2 s, not 6.
+    /// just check, the tests and the patched canary run at once: each
+    /// lane waits for the other two to start (`ctl/meet`), so run one
+    /// after another the first would wait alone and say so. No clock
+    /// bound: a loaded machine makes them slower, not apart.
     #[test]
     fn lanes_run_at_the_same_time() {
         let dir = tempfile::tempdir().unwrap();
         let c = gate_rig(dir.path());
-        for s in ["just-sleep", "test-sleep", "gp-sleep"] {
-            switch(&c, s, "3");
-        }
+        switch(&c, "meet", "");
         let (patch, hash) = patch_of(&c, "README.md", "the tool, said again\n");
         let o = dry_run(&c, &patch, &hash);
         assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
-        let lanes = step_secs(&c, "lanes");
-        // One after another they take 9 s; at once, 3 and the machine's
-        // load.
-        assert!(lanes < 7.5, "the lanes took {lanes} s");
-        for n in ["just.start", "test.start", "gp.start"] {
-            assert!(stamp(&c, n).is_some(), "{n}: the lane didn't run");
+        for n in ["just.start", "test.start", "gp.start", "just.end", "gp.end"] {
+            assert!(stamp(&c, n).is_some(), "{n}: the lane didn't run through");
+        }
+        for n in ["just", "test", "gp"] {
+            assert!(
+                stamp(&c, &format!("{n}.alone")).is_none(),
+                "{n} waited 30 s and the other lanes didn't start: they ran one after another"
+            );
         }
     }
 
@@ -2464,7 +2472,8 @@ date +%s > '{times}/just.end'
         let o = dry_run(&c, &patch, &hash);
         assert_eq!(o.json["verdict"], "FAIL", "{}", o.text);
         assert_eq!(o.json["phase"], "just check", "{}", o.text);
-        assert!(step_secs(&c, "lanes") < 15.0, "the canary would take 30 s");
+        // Not stopped, the canary would have slept its 30 s and written
+        // gp.end before the gate ended; no clock bound is needed.
         assert!(stamp(&c, "gp.end").is_none(), "the canary was stopped");
         let pid = stamp(&c, "gp.pid").unwrap();
         let alive = Command::new("kill")
@@ -2486,7 +2495,8 @@ date +%s > '{times}/just.end'
         let o = dry_run(&c, &patch, &hash);
         assert_eq!(o.json["phase"], "canary", "{}", o.text);
         assert!(o.text.contains("the kit doesn't match"), "{}", o.text);
-        assert!(step_secs(&c, "lanes") < 15.0, "just check would take 30 s");
+        // Not stopped, just check would have slept its 30 s and written
+        // just.end before the gate ended.
         assert!(stamp(&c, "just.end").is_none(), "just check was stopped");
     }
 

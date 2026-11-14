@@ -65,24 +65,57 @@ use gp_extract::questions::{Candidate, QUESTIONS_FILE, Question};
 /// 5 seconds" over 10 frames).
 pub const DEFAULT_WINDOW: u64 = 300;
 
-/// A window's length as given: frames ("300") or seconds ("5s", "2.5s") at
-/// the NES's frame rate.
-pub fn parse_window(s: &str) -> Result<u64, String> {
-    let n = if let Some(secs) = s.strip_suffix('s') {
+/// A window's length as given: frames ("300") or seconds ("5s", "2.5s"),
+/// which become the game's frames at its model's frame rate
+/// ([`WindowLen::frames`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WindowLen {
+    Frames(u64),
+    Seconds(f64),
+}
+
+impl WindowLen {
+    /// In frames, at `fps_milli` frames a second times 1000 (the model's
+    /// `frame_rate`, [`gp_model::model::Ratio::milli`]); at least one.
+    pub fn frames(self, fps_milli: u64) -> u64 {
+        match self {
+            WindowLen::Frames(n) => n,
+            WindowLen::Seconds(s) => ((s * fps_milli as f64 / 1000.0).round() as u64).max(1),
+        }
+    }
+}
+
+impl std::fmt::Display for WindowLen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WindowLen::Frames(n) => write!(f, "{n}"),
+            WindowLen::Seconds(s) => write!(f, "{s}s"),
+        }
+    }
+}
+
+/// A window's length as given: frames ("300") or seconds ("5s", "2.5s").
+pub fn parse_window(s: &str) -> Result<WindowLen, String> {
+    let w = if let Some(secs) = s.strip_suffix('s') {
         let secs: f64 = secs
             .trim()
             .parse()
             .map_err(|_| format!("not a number of seconds: {s}"))?;
-        (secs * 60.0988).round() as u64
+        if !(secs > 0.0 && secs.is_finite()) {
+            return Err("the window must be at least one frame".into());
+        }
+        WindowLen::Seconds(secs)
     } else {
-        s.trim()
+        let n: u64 = s
+            .trim()
             .parse()
-            .map_err(|_| format!("not a number of frames or seconds (5s): {s}"))?
+            .map_err(|_| format!("not a number of frames or seconds (5s): {s}"))?;
+        if n == 0 {
+            return Err("the window must be at least one frame".into());
+        }
+        WindowLen::Frames(n)
     };
-    if n == 0 {
-        return Err("the window must be at least one frame".into());
-    }
-    Ok(n)
+    Ok(w)
 }
 /// The most rounds on a clip, unless told otherwise.
 pub const DEFAULT_ROUNDS: u32 = 32;
@@ -2965,10 +2998,17 @@ at = "game.s:11"
 
     #[test]
     fn a_window_is_given_in_frames_or_seconds() {
-        assert_eq!(parse_window("10"), Ok(10));
-        assert_eq!(parse_window("5s"), Ok(DEFAULT_WINDOW));
-        assert_eq!(parse_window("2.5s"), Ok(150));
+        let (nes, thirty) = (60_099, 30_000);
+        let at = |s: &str, fps: u64| parse_window(s).map(|w| w.frames(fps));
+        assert_eq!(at("10", nes), Ok(10));
+        assert_eq!(at("10", thirty), Ok(10));
+        assert_eq!(at("5s", nes), Ok(DEFAULT_WINDOW));
+        assert_eq!(at("2.5s", nes), Ok(150));
+        // Seconds are the game's own: 5 s of a 30 Hz board is 150 frames.
+        assert_eq!(at("5s", thirty), Ok(150));
+        assert_eq!(at("2.5s", thirty), Ok(75));
         assert!(parse_window("0").is_err());
+        assert!(parse_window("0s").is_err());
         assert!(parse_window("five").is_err());
     }
 

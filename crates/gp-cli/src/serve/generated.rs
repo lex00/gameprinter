@@ -157,7 +157,7 @@ fn view(run: &Run) -> Value {
         "requested": false,
         "finished": true,
         "says": format!(
-            "{} clips from {}'s corpus (corpus.toml), each from its own start. New ones come from the mechanic sessions with gp corpus import.",
+            "{} clips from {}'s tests, each from its own start. New ones come from the clips you record on the mechanic page, once your agent adds them to the game's tests.",
             clips.len(),
             run.name
         ),
@@ -178,7 +178,7 @@ fn start(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
     let run = run_dir(ctx, params)?;
     let mut v = view(&run);
     v["error"] = json!(
-        "Making clips from a capture run's recordings isn't in gameprinter: a game's clips are its corpus. Play clips in free play here, or record them on the mechanic page and bring them in with gp corpus import."
+        "Making clips from a capture run's recordings isn't in gameprinter: a game's clips are its tests' clips. Play clips in free play here, or record them on the mechanic page and ask your agent to add them to the game's tests."
     );
     Ok(Response::json(&v))
 }

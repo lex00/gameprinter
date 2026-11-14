@@ -132,7 +132,7 @@ pub(crate) fn input_of(ctx: &Ctx, run: &Run, name: &str) -> Result<Vec<u8>, Fail
         return Ok(bytes);
     }
     Err(Fail::not_found(format!(
-        "no input log {name} in the run: not a corpus clip, a free play clip or a store recording of the game's ROM"
+        "no input log {name} in the run: not a clip of the game's tests, a free play clip or a store recording of the game's ROM"
     )))
 }
 

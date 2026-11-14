@@ -288,6 +288,8 @@ pub const TABLE: &[Row] = &[
     r("theme generate", J, Rule::Ask(Ask::Spend, DRY_RUN)),
     r("theme kit", J, Write),
     r("theme list", O, Read),
+    r("theme look check", J, Read),
+    r("theme look new", J, Write),
     r("theme paint", J, Write),
     r("theme publish", O, Rule::Ask(Ask::Publish, DRY_RUN)),
     r("theme recheck", O, Rule::Ask(Ask::Publish, DRY_RUN)),
