@@ -50,7 +50,6 @@ The card shows it as `Attempt 2: the barrel rolls off the edge. Clip: 62% -> 81%
 |---|---|
 | `GET /api/capture/{run}/agent` | The record: `working`, `attempts` (each with `line` and `keepable`), the latest entries, `clip_agent`, `clip_agents` and `fix_ready` |
 | `GET /api/capture/{run}/agent/attempts/{n}` | One attempt, with every clip's score before and after |
-| `GET /api/capture/{run}/agent/attempts/{n}/curve` | The attempt's first wrong measures, the one before the change as `before` |
 | `GET /api/capture/{run}/agent/attempts/{n}/preview/{file}` | The trial preview |
 | `POST /api/capture/{run}/agent/approve` | `{attempt}`: keep |
 

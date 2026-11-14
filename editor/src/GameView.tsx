@@ -34,8 +34,6 @@ import { NesPlayer } from "./nesplayer";
 import { ModelPreview as Model } from "./modelpreview";
 import { FreePlay } from "./FreePlay";
 import {
-  EXPLAINER,
-  EXPLAINER_PLAYING,
   checkSentence,
   checkWhere,
   failingChecks,
@@ -862,44 +860,4 @@ function QuestionCard({
       </p>
     </div>
   );
-}
-
-/** The first-run explainer: what each area is, a line each. Dismissed once, it stays closed in this browser. */
-export function Explainer({ open, onClose, playing = false }: { open: boolean; onClose: () => void; /** The live play panel is up and no run is shown beside it. */ playing?: boolean }) {
-  if (!open) return null;
-  const lines = playing ? EXPLAINER_PLAYING : EXPLAINER;
-  return (
-    <section className="explainer" data-testid="explainer">
-      <h2>What am I looking at?</h2>
-      <ul>
-        {lines.map((e) => (
-          <li key={e.area}>
-            {e.area}: {e.line}
-          </li>
-        ))}
-      </ul>
-      <button onClick={onClose} data-testid="explainer-close">
-        got it
-      </button>
-    </section>
-  );
-}
-
-const EXPLAINED_KEY = "gp.explainer.dismissed";
-
-/** Whether the explainer was dismissed in this browser; storage can be missing or refuse. */
-export function explainerDismissed(): boolean {
-  try {
-    return typeof localStorage !== "undefined" && localStorage.getItem(EXPLAINED_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-export function dismissExplainer(): void {
-  try {
-    localStorage.setItem(EXPLAINED_KEY, "1");
-  } catch {
-    // Not kept; it shows again next time.
-  }
 }

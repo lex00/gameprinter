@@ -1,15 +1,11 @@
-// The curve chart (docs/show.md, "The background work"): one measure,
-// the original's and the rebuilt game's values frame by frame, as two
-// lines with the playhead, the first wrong frame and the drift point. In
-// the clip card it follows the measure the background work is on and
-// shows the value being tried as a third, fainter line; in the game view
-// it reads the lockstep; in "what it did" it shows a round's before and
-// after.
+// The curve chart: one measure, the original's and the rebuilt game's
+// values frame by frame, as two lines with the playhead, the first wrong
+// frame and the drift point. The game view (GameView.tsx) draws it from
+// the lockstep.
 
-import { useEffect, useMemo, useState } from "react";
-import type { Api } from "./api";
+import { useState } from "react";
 import type { Lockstep } from "./lockfold";
-import { type ClipCurves, type CurveJob, type Points, bounds, defaultMeasure, points, polyline, sameEntity, tryingLine, workingOn, xAt } from "./curvefold";
+import { type Points, bounds, points, polyline, xAt } from "./curvefold";
 
 const W = 320;
 const H = 90;
@@ -75,58 +71,6 @@ export function CurveLines({ title, original, rebuilt, third, rebuiltLabel = "mo
   );
 }
 
-/** The clip card's chart: the clip's curves from the background work, following what it is working on. */
-export function ClipCurve({ api, run, clip, at, job, model, attempt }: { api: Api; run: string; clip: string; at: number; job?: CurveJob | null; model?: string; attempt?: { n: number; path: string } }) {
-  const [c, setC] = useState<ClipCurves & { before?: ClipCurves | null }>();
-  const [picked, setPicked] = useState<{ path: string; following?: string }>();
-  useEffect(() => {
-    let live = true;
-    api
-      .json<ClipCurves>(attempt?.path ?? `/api/capture/${encodeURIComponent(run)}/background/curve?clip=${encodeURIComponent(clip)}`)
-      .then((v) => live && setC(v))
-      .catch(() => live && setC(undefined));
-    return () => {
-      live = false;
-    };
-  }, [api, run, clip, model, attempt?.path]);
-  const working = workingOn(job, clip);
-  // The person's pick holds until the work moves on to another measure.
-  const path = picked && picked.following === working ? picked.path : defaultMeasure(c, job);
-  const list = useMemo(() => sameEntity(c, path), [c, path]);
-  const m = c?.measures.find((x) => x.path === path);
-  if (!c || !m) return null;
-  const off = c.offset ?? 1;
-  const picker =
-    list.length > 1 ? (
-      <select value={m.path} onChange={(e) => setPicked({ path: e.target.value, following: working })} data-testid="curve-pick">
-        {list.map((x) => (
-          <option key={x.path} value={x.path}>
-            {fieldWords(x.path, x.words)}
-          </option>
-        ))}
-      </select>
-    ) : null;
-  const who = m.words.split("'s ")[0];
-  // An attempt's curve: the attempt as the rebuilt line, the game as it is now as the third.
-  const was = attempt ? c.before?.measures.find((x) => x.path === m.path) : undefined;
-  const third = attempt ? (was ? { points: points(was.model, c.before?.offset ?? off), says: "as it is now" } : undefined) : tryingLine(job, clip, m.path);
-  return (
-    <CurveLines
-      title={`${who}'s ${fieldWords(m.path, m.words)}, original vs rebuilt, frame by frame `}
-      original={points(m.original, off)}
-      rebuilt={points(m.model, off)}
-      third={third}
-      rebuiltLabel={attempt ? `attempt ${attempt.n}` : undefined}
-      from={off}
-      to={off + Math.max(m.original.length, 1) - 1}
-      playhead={at}
-      firstWrong={m.first_wrong}
-      drift={c.drift?.path === m.path || !m.first_wrong ? c.drift?.frame : undefined}
-      picker={picker}
-    />
-  );
-}
-
 /** The game view's chart: one measure of its lockstep around the playhead. */
 export function LockCurve({ ls, frame, span = 300 }: { ls?: Lockstep; frame: number; span?: number }) {
   type P = Lockstep["paths"][number] & { original?: (number | null)[]; model?: (number | null)[] };
@@ -163,32 +107,5 @@ export function LockCurve({ ls, frame, span = 300 }: { ls?: Lockstep; frame: num
         ) : null
       }
     />
-  );
-}
-
-/** A round's curve in "what it did": the measure it worked on, before and after. */
-export function RoundCurve({ curve }: { curve?: { path: string; words: string; original?: string[] | null; before?: string[] | null; after?: string[] | null } | null }) {
-  const [open, setOpen] = useState(false);
-  if (!curve?.original?.length) return null;
-  const num = (v?: string[] | null) => (v ?? []).map((x) => (x === "" ? null : Number(x)));
-  const o = num(curve.original);
-  return (
-    <>
-      {" "}
-      <button className="link" onClick={() => setOpen(!open)} data-testid="round-curve-toggle">
-        {open ? "hide curve" : "curve"}
-      </button>
-      {open && (
-        <CurveLines
-          title={`${curve.words}, before and after `}
-          original={points(o, 1)}
-          rebuilt={points(num(curve.after), 1)}
-          rebuiltLabel="after"
-          third={{ points: points(num(curve.before), 1), says: "before" }}
-          from={1}
-          to={o.length}
-        />
-      )}
-    </>
   );
 }

@@ -1,12 +1,11 @@
 //! A run's clips as scenarios (the parts of game-printer's
-//! serve/scenarios.rs the main screen uses): saving a clip played in free
-//! play, and a clip's input with the rebuilt game's start, for both games
-//! to loop it.
+//! serve/scenarios.rs the game view uses): saving a clip played in free
+//! play, and a clip's input from power-on ([`clip_input`]), which the
+//! background work, the clip agent and the lockstep read.
 //!
 //! | Endpoint | What |
 //! |---|---|
 //! | `POST /api/capture/{run}/scenarios/played` | `{save, log, branch, from, cut, ended, replace?}`: a clip from a free play save point, kept in its session ([`super::freeplay::save_clip`]) |
-//! | `GET /api/capture/{run}/scenarios/input?scenario=ID` | The clip's input from power-on, where it starts, and the rebuilt game's state there (the original's, translated through the game's mapping) |
 //!
 //! game-printer's scenario ladder on the run (`/scenarios`, its refine and
 //! score) is not here yet.
@@ -18,18 +17,11 @@ use super::{Ctx, Fail, Params, Route, post_only};
 use crate::mechanic::http::{Request, Response};
 
 pub(super) fn routes() -> Vec<Route> {
-    vec![
-        Route {
-            path: "/api/capture/{run}/scenarios/played",
-            about: "Saves a clip played from a free play save point",
-            handler: played,
-        },
-        Route {
-            path: "/api/capture/{run}/scenarios/input",
-            about: "A clip's input from power-on, its start and the rebuilt game's state there",
-            handler: input,
-        },
-    ]
+    vec![Route {
+        path: "/api/capture/{run}/scenarios/played",
+        about: "Saves a clip played from a free play save point",
+        handler: played,
+    }]
 }
 
 fn played(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
@@ -137,36 +129,4 @@ pub(crate) fn clip_input(
     let (log, at) = super::generated::clip_log(run, id)?;
     let frames = (log.frames.len() - at) as u64;
     Ok((log, at, frames, json!({"id": id, "frames": frames})))
-}
-
-fn input(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
-    let run = run_dir(ctx, params)?;
-    let id = req
-        .param("scenario")
-        .ok_or_else(|| Fail::bad_request("name a clip with ?scenario="))?;
-    let (log, at, frames, scenario) = clip_input(ctx, &run, id)?;
-    let rom = rom_of(ctx, &run)?;
-    let (sha, _) = crate::mechanic::paths::put_path(&ctx.paths.home, &log.to_text())?;
-    // The rebuilt game's start: the original's state at the clip's start,
-    // translated. A start it can't take (a title screen) leaves the state
-    // empty, and the page plays the original alone.
-    let (start_frame, model_frame, state, why) =
-        match crate::mechanic::live::start(&ctx.paths, &run.rebuild(ctx), &rom, &sha, at as u64) {
-            Ok(s) => (
-                s["original_frame"].as_u64().unwrap_or(at as u64),
-                s["frame"].clone(),
-                s["state"].clone(),
-                Value::Null,
-            ),
-            Err(e) => (at as u64, Value::Null, json!(""), json!(format!("{e:#}"))),
-        };
-    Ok(Response::json(&json!({
-        "scenario": scenario,
-        "start_frame": start_frame,
-        "model_frame": model_frame,
-        "frames": frames,
-        "log": log.to_text(),
-        "state": state,
-        "cant": why,
-    })))
 }

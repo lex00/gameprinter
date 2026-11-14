@@ -42,7 +42,6 @@
 //! |---|---|
 //! | `GET /api/capture/{run}/agent` | The record: who is working on what, the notes and the attempts |
 //! | `GET /api/capture/{run}/agent/attempts/{n}` | One attempt in full: each clip's score before and after |
-//! | `GET /api/capture/{run}/agent/attempts/{n}/curve` | The attempt's curves, before and after |
 //! | `GET /api/capture/{run}/agent/attempts/{n}/preview/{*file}` | A file of the attempt's trial preview |
 //! | `POST /api/capture/{run}/agent/approve` | `{attempt}`: keep this change |
 //!
@@ -70,11 +69,6 @@ pub(super) fn routes() -> Vec<Route> {
             path: "/api/capture/{run}/agent/approve",
             about: "POST {attempt}: keep an attempt that made its clip better and no active clip worse; written to $GP_HOME/work/agents/approved.json for the driver to merge",
             handler: approve,
-        },
-        Route {
-            path: "/api/capture/{run}/agent/attempts/{n}/curve",
-            about: "An attempt's curves: the first wrong measure's original and rebuilt values, before and after the change",
-            handler: curve,
         },
         Route {
             path: "/api/capture/{run}/agent/attempts/{n}/preview/{*file}",
@@ -1324,21 +1318,6 @@ fn attempt(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail>
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or(Value::Null);
     Ok(Response::json(&v))
-}
-
-fn curve(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> {
-    let run = run_dir(ctx, params)?;
-    let n = number(params)?;
-    let v: Value = fs::read(attempt_dir(&run, n).join("curve.json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .ok_or_else(|| Fail::not_found(format!("attempt {n} has no curve yet")))?;
-    let mut after = v["after"].clone();
-    if after.is_null() {
-        return Err(Fail::not_found(format!("attempt {n} has no curve")));
-    }
-    after["before"] = v["before"].clone();
-    Ok(Response::json(&after))
 }
 
 fn preview(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> {

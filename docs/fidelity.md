@@ -9,8 +9,7 @@ It is a different thing from the fidelity contract (`fidelity.toml`, [formats/co
 | Where | What |
 |---|---|
 | `gp corpus score GAME --run NAME` | Prints "On corpus NAME VERSION (HASH): E of N clips exact, fidelity P%, X couldn't be scored. Model HASH." The fidelity is the mean of every clip's frames together (`permille`), a clip that couldn't be scored counting as 0. With `--json` the score record holds it as `results.fidelity_permille`, beside the clips exact, the errors and the [corpus bars](formats/contract.md#corpus-bars) held and met ([scoring corpus](formats/scoring-corpus.md)) |
-| `GET /api/capture/{run}/fidelity` in `gp serve` | Behaviour alone: the mean of the scored active clips' frames together, as a score out of 100, with the clips scored and exact. Coverage and picture are 0 and null, the confidence is always `low`, and there is no history or trend. Its version is `serve-behaviour-0`. The code is `fidelity` in `crates/gp-cli/src/serve/background.rs` |
-| The editor | `editor/src/Fidelity.tsx` draws the line from the endpoint's JSON, in the shape game-printer's full score had |
+| `gp next GAME` and the page | Behaviour alone: `facts.scores.fidelity_permille`, the mean of the scored active clips' frames together, from the background work's scores. The page's REFINE first line and the CLIPS strip say it as a percentage (`mechanic/refine/fold.js`, `fidelity`) |
 
 Donkey Kong's last gate score record ([evaluation](evaluation.md)) was 111 of 111 clips exact, fidelity 1000 per mille.
 

@@ -12,4 +12,3 @@ import "./Tiles";
 import "./Pair";
 import "./Card";
 import "./Variants";
-import "./Themes";

@@ -3,10 +3,9 @@
 // stream it follows and the polling it falls back to; the requests it
 // sends; and that it draws what it's given.
 import { describe, expect, it } from "vitest";
-import { renderToString } from "react-dom/server";
 import { Api, type CaptureEvent, type EventSourceLike } from "../src/api";
-import { delta, emptyLive, fold, logLine, openGaps, openQuestions, wontModel } from "../src/livefold";
-import { LiveBody, personInput, subscribe, type Transport } from "../src/Live";
+import { delta, emptyLive, fold, openGaps, openQuestions } from "../src/livefold";
+import { personInput, subscribe, type Transport } from "../src/Live";
 import { readUrl, writeUrl } from "../src/App";
 
 let seq = 0;
@@ -76,34 +75,15 @@ describe("folding a run's events", () => {
     expect(fold(s1, round1)).toEqual(s1);
   });
 
-  it("writes deltas and log lines", () => {
+  it("writes deltas", () => {
     expect(delta({ value: 0, prev: 2 })).toBe("-2");
     expect(delta({ value: 0.5, prev: 0.25 })).toBe("+0.250");
     expect(delta({ value: 3, prev: null })).toBe("new");
     expect(delta({ value: 3, prev: 3 })).toBe("");
-    expect(logLine(round1[4])).toBe("lift ok in 58 ms: 5 assets");
   });
 });
 
 describe("the live panel", () => {
-  it("draws the stages, the numbers, the rounds and the open question", () => {
-    const api = new Api("");
-    const html = renderToString(<LiveBody state={fold(emptyLive(), round1)} run="demo" api={api} send={() => {}} />).replace(/<!-- -->/g, "");
-    expect(html).toContain("demo: round 1, idle");
-    expect(html).toContain("validate</b> fail");
-    expect(html).toContain("fidelity.interp.failed");
-    expect(html).toContain("208 (gp model derive --from evidence)");
-    expect(html).toContain("pin levels.main.kill_below");
-    expect(html).not.toContain("<iframe");
-  });
-
-  it("draws the preview once a round built one", () => {
-    const api = new Api("");
-    const s = fold(emptyLive(), [ev(1, "stage.end", "preview", { status: "ok", ms: 900 })]);
-    const html = renderToString(<LiveBody state={s} run="demo" api={api} send={() => {}} />);
-    expect(html).toContain('src="/api/capture/demo/preview/index.html?files=here"');
-  });
-
   it("asks for events after the last one and posts inputs as JSON", async () => {
     const calls: { url: string; init?: RequestInit }[] = [];
     const api = new Api("", (input, init) => {
@@ -118,12 +98,9 @@ describe("the live panel", () => {
     expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({ kind: "answer", choice: 2 });
   });
 
-  it("offers the run's recordings to open beside it", () => {
-    const api = new Api("");
+  it("keeps the run's recordings", () => {
     const s = fold(emptyLive(), [ev(1, "item", "record", { what: "recording", id: "8ffbc92bf6f8c09f", status: "recorded", text: "300 frames" })]);
     expect(s.recordings).toEqual([{ id: "8ffbc92bf6f8c09f", text: "300 frames" }]);
-    const html = renderToString(<LiveBody state={s} run="demo" api={api} send={() => {}} open={() => {}} />).replace(/<!-- -->/g, "");
-    expect(html).toContain("8ffbc92b (300 frames)");
   });
 
   it("keeps the run in the URL", () => {
@@ -212,7 +189,7 @@ describe("pins", () => {
   ];
   const pin = (path: string, kind = "pin") => ev(4, "input", undefined, { kind, status: "applied", summary: `${path} pinned`, input: { v: 1, actor: "person", kind, path } }, "person");
 
-  it("a pinned question or gap leaves the open lists and is shown as won't model", () => {
+  it("a pinned question or gap leaves the open lists", () => {
     const s = fold(emptyLive(), [...round1, ...gapEvents]);
     expect(openQuestions(s)).toHaveLength(1);
     expect(openGaps(s).map((g) => g.id)).toEqual(["ram:0x0400", "ram:0x0401"]);
@@ -220,11 +197,6 @@ describe("pins", () => {
     expect(p.pins).toEqual(["levels.main.kill_below", "ram:0x0400"]);
     expect(openQuestions(p)).toHaveLength(0);
     expect(openGaps(p).map((g) => g.id)).toEqual(["ram:0x0401"]);
-    expect(wontModel(p).map((w) => w.id)).toEqual([question.id, "ram:0x0400"]);
-    const html = renderToString(<LiveBody state={p} run="demo" api={new Api("")} send={() => {}} />).replace(/<!-- -->/g, "");
-    expect(html).toContain("Won&#x27;t model (2)");
-    expect(html).toContain("unpin");
-    expect(html).not.toContain("pin levels.main.kill_below");
     const u = fold(p, [pin("ram:0x0400", "unpin")]);
     expect(openGaps(u).map((g) => g.id)).toEqual(["ram:0x0400", "ram:0x0401"]);
   });
@@ -248,12 +220,5 @@ describe("the watcher and the loops", () => {
     expect(s.tables.refine.map((r) => r.cells.failed)).toEqual([2, 0]);
     expect(s.watch).toEqual({ state: "waiting", reason: "1 open" });
     expect(s.metrics["speed.rom_to_preview_s"].budget).toBe(60);
-    const html = renderToString(<LiveBody state={s} run="demo" api={new Api("")} send={() => {}} />).replace(/<!-- -->/g, "");
-    expect(html).toContain("demo: round 1, waiting");
-    expect(html).toContain("validate</b> cached (fail)");
-    expect(html).toContain("refine rounds");
-    expect(html).toMatch(/class="[^"]*\bover\b/);
-    expect(html).toContain("budget 60");
-    expect(logLine(s.log[s.log.length - 1])).toBe("run waiting: 1 open");
   });
 });

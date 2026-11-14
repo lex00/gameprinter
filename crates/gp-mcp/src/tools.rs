@@ -252,7 +252,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "watch_start",
             title: "Watch stage 0 on a ROM",
-            description: "Start a watch session (gp watch start, docs/watch.md) on an iNES ROM: stage 0 reads the ROM, runs its own start clips writing each frame's novelty (code first run, the first code in each switched bank, edges, pointer values, the places the static reader stopped that a run went past), reads again with the runs, then searches for presses that reach code no run reached, writing each clip it keeps. It runs in the background; follow it with watch_events. The person can watch the same session in the page at ?watch=NAME.",
+            description: "Start a watch session (gp watch start, docs/watch.md) on an iNES ROM: stage 0 reads the ROM, runs its own start clips writing each frame's novelty (code first run, the first code in each switched bank, edges, pointer values, the places the static reader stopped that a run went past), reads again with the runs, then searches for presses that reach code no run reached, writing each clip it keeps. It runs in the background; follow it with watch_events.",
             input_schema: schema::<crate::watch::StartArgs>(),
             read_only: false,
             destructive: false,

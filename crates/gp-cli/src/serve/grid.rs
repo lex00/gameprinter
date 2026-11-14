@@ -41,7 +41,6 @@
 //! | Endpoint | What |
 //! |---|---|
 //! | `GET /api/capture/{run}/grid` | The rows, the columns, each cell with its state, clips and doubt, the clips in flight (none) and the next pick |
-//! | `GET`, `POST /api/capture/{run}/grid/in-flight` | `{in_flight, max}`; POST `{in_flight}` sets it |
 //! | `GET`, `POST /api/capture/{run}/grid/mode` | `{mode}`; POST `{mode}`: `grid` or `batch` |
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -84,11 +83,6 @@ pub(super) fn routes() -> Vec<Route> {
             path: "/api/capture/{run}/grid",
             about: "The grid of mechanics by contexts: each cell's state, clips and doubt, and the next cell to fill",
             handler: state_route,
-        },
-        Route {
-            path: "/api/capture/{run}/grid/in-flight",
-            about: "{in_flight, max}: how many clips the grid keeps in flight; POST {in_flight} sets it",
-            handler: in_flight_route,
         },
         Route {
             path: "/api/capture/{run}/grid/mode",
@@ -769,24 +763,6 @@ fn update(run: &Run, f: impl FnOnce(&mut Value)) -> Result<Value, Fail> {
 fn state_route(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> {
     let run = run_dir(ctx, params)?;
     Ok(Response::json(&state_json(ctx, &run)))
-}
-
-fn in_flight_route(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
-    let run = run_dir(ctx, params)?;
-    if req.method == "POST" {
-        let b: Value = super::body(req)?;
-        let n = b["in_flight"]
-            .as_u64()
-            .ok_or_else(|| Fail::bad_request("give {in_flight}"))?
-            .min(MAX_IN_FLIGHT);
-        update(&run, |v| v["in_flight"] = json!(n))?;
-    }
-    let n = read_json(&file(&run))["in_flight"]
-        .as_u64()
-        .unwrap_or(DEFAULT_IN_FLIGHT);
-    Ok(Response::json(
-        &json!({"in_flight": n, "max": MAX_IN_FLIGHT}),
-    ))
 }
 
 fn mode_route(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {

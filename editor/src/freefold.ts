@@ -6,8 +6,20 @@
 
 import type { Api, StartState } from "./api";
 import type { Scenario } from "./scenariofold";
-import type { ClipMeta, Mark } from "./stripfold";
 import { NES_FPS } from "./playfold";
+
+/** A clip's place and the person's mark on it, as the session keeps them. */
+export interface ClipMeta {
+  save: number;
+  branch: number | null;
+  from: number;
+  frames: number;
+  cut: "auto" | "manual";
+  ended: "save" | "load" | "cap" | "stop";
+  mark: Mark;
+}
+
+export type Mark = "kept" | "skipped" | "starred";
 
 export interface FreeBranch {
   id: number;

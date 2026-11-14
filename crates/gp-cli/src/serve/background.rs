@@ -46,7 +46,7 @@
 //! The grid of mechanics by contexts over these clips and scores is
 //! serve/grid.rs. What game-printer's queue also did and this doesn't yet:
 //! the grid's own clips, rescoring by what a change touches, the ledger and its verify, and the
-//! curves. Their routes answer in words.
+//! curves. The fidelity number is next's (`Scores.fidelity_permille`).
 //!
 //! | Endpoint | What |
 //! |---|---|
@@ -57,7 +57,6 @@
 //! | `GET`, `POST /api/capture/{run}/background/queue` | `{queued}`; POST `{clip}` adds a clip to the queue, `{clip, remove: true}` takes it out |
 //! | `POST /api/capture/{run}/background/rescore` | Scores every clip again |
 //! | `GET /api/capture/{run}/background/history` | The rounds: none, since no refine runs yet |
-//! | `GET /api/capture/{run}/fidelity` | The fidelity line, behaviour alone: the mean of the active clips' frames together. Coverage and the picture aren't measured here yet |
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -114,24 +113,9 @@ pub(super) fn routes() -> Vec<Route> {
             handler: answer,
         },
         Route {
-            path: "/api/capture/{run}/background/verify",
-            about: "Replays the run's ledger: not here yet",
-            handler: verify,
-        },
-        Route {
             path: "/api/capture/{run}/background/queue",
             about: "The clips put in the queue by hand, worked first in order: {queued}; POST {clip} adds one (with remove: true, takes it out)",
             handler: queue,
-        },
-        Route {
-            path: "/api/capture/{run}/fidelity",
-            about: "The fidelity line: behaviour alone, from the active clips' scores",
-            handler: fidelity,
-        },
-        Route {
-            path: "/api/capture/{run}/background/curve",
-            about: "One clip's curves for the drawer's chart: not here yet",
-            handler: curve,
         },
     ]
 }
@@ -1309,59 +1293,4 @@ fn answer(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
             )
         });
     Ok(Response::json(&view(ctx, &run)))
-}
-
-fn verify(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
-    post_only(req)?;
-    run_dir(ctx, params)?;
-    Err(Fail::conflict(
-        "verifying the ledger isn't in gameprinter's gp serve yet; gp corpus score scores every clip again from the ROM",
-    ))
-}
-
-fn curve(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> {
-    run_dir(ctx, params)?;
-    Err(Fail::not_found(
-        "a clip's curves aren't in gameprinter's gp serve yet",
-    ))
-}
-
-/// The fidelity line from the scores alone: behaviour is the mean of the
-/// scored active clips' frames together. game-printer's fidelity also
-/// weighed coverage and the picture (its serve/fidelity.rs), which aren't
-/// measured here yet, so they stay at nothing and the line says so.
-fn fidelity(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> {
-    let run = run_dir(ctx, params)?;
-    let v = saved(&run);
-    let active = active_now(ctx, &run);
-    let scored: Vec<&Value> = active
-        .iter()
-        .filter_map(|a| v["scores"].get(&a.id))
-        .filter(|s| s["error"].is_null())
-        .collect();
-    let n = scored.len() as u64;
-    let exact = scored.iter().filter(|s| s["exact"] == json!(true)).count();
-    let ppm = scored
-        .iter()
-        .map(|s| s["permille"].as_u64().unwrap_or(0) * 1000)
-        .sum::<u64>()
-        .checked_div(n)
-        .unwrap_or(0);
-    let score = ppm / 10_000;
-    let says = format!(
-        "Behaviour {score} / 100 from {n} of {} clips scored, {exact} exact. Coverage and the picture aren't measured in gameprinter's gp serve yet.",
-        active.len()
-    );
-    Ok(Response::json(&json!({
-        "version": "serve-behaviour-0",
-        "score": score,
-        "behaviour": {"score": score, "ppm": ppm, "clips": n, "exact": exact},
-        "coverage": {"score": 0, "ppm": 0},
-        "picture": Value::Null,
-        "confidence": {"level": "low", "says": "behaviour alone, from the clips scored so far"},
-        "holding": [],
-        "says": says,
-        "trend": "",
-        "history": [],
-    })))
 }

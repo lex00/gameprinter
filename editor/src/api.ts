@@ -299,96 +299,6 @@ export class ApiError extends Error {
   }
 }
 
-/** One layer of a theme stack (docs/formats/theme.md). */
-export interface Layer {
-  theme: string;
-  scope: "baked" | "personal";
-  enabled?: boolean;
-}
-
-/** A palette rule: color changes for a role, a group or `*`. */
-export interface PaletteRule {
-  target: string;
-  replace?: [string, string][];
-  ramp?: string[];
-  hue?: number;
-  saturation?: number;
-  lightness?: number;
-  tint?: string;
-  tint_amount?: number;
-}
-
-/** A live effect, by `kind`. */
-export type Effect =
-  | { kind: "gradient"; target: string; colors: string[] }
-  | { kind: "glow"; target: string; color: string; radius?: number }
-  | { kind: "particles"; target?: string; style: "fireflies" | "snow" | "rain" | "sparks"; color: string; count: number; seed?: number }
-  | { kind: "scanlines"; strength: number }
-  | { kind: "vignette"; strength: number }
-  | { kind: "tint"; color: string; amount: number };
-
-/** A theme's file as JSON. Restyles are kept as they are. */
-export interface ThemeDoc {
-  format: string;
-  id: string;
-  title: string;
-  description?: string;
-  author?: string;
-  license: string;
-  for?: string[];
-  palette?: PaletteRule[];
-  effect?: Effect[];
-  restyle?: unknown[];
-  style?: unknown;
-}
-
-/** A template's themes (`GET /api/themes/{model}`). */
-export interface ThemesJson {
-  model: string;
-  title: string;
-  themes: { id: string; scope: "baked" | "personal"; theme: ThemeDoc | null; problem: string | null }[];
-  stack: Layer[];
-  baselines: string[];
-  entity_roles: Record<string, string>;
-  roles: string[];
-  groups: string[];
-}
-
-export interface ReadabilityGroup {
-  group: string;
-  pixels: number;
-  distinct: number;
-  contrast: number;
-  verdict: "ok" | "warn" | "refuse";
-  why: string | null;
-}
-
-export interface Readability {
-  verdict: "ok" | "warn" | "refuse";
-  background: string[];
-  groups: ReadabilityGroup[];
-  pairs: { a: string; b: string; delta_e: number; verdict: "ok" | "warn" | "refuse" }[];
-  absent: string[];
-}
-
-export interface PreviewRequest {
-  layers: Layer[];
-  drafts?: Record<string, ThemeDoc>;
-  baseline?: string;
-  recording?: string;
-  frames: number[];
-}
-
-/** A themed preview (`POST /api/themes/{model}/preview`). */
-export interface PreviewJson {
-  model: string;
-  frames: { frame: number; png: string }[];
-  length: number;
-  digest: string;
-  readability: Readability;
-  style: { part: string; metric: string; value: number; bound: string; pass: boolean }[] | null;
-}
-
 /** How the inspector reaches the server; tests pass their own `fetch`. */
 /** One event of a capture run (`gp capture`, docs/formats/capture-events.md, format 1). */
 export interface CaptureEvent {
@@ -449,14 +359,6 @@ export type EventSourceFactory = (url: string) => EventSourceLike;
 const browserEventSource: EventSourceFactory | undefined =
   typeof EventSource === "undefined" ? undefined : (url) => new EventSource(url) as unknown as EventSourceLike;
 
-/** A ROM a play session can play (`GET /api/play/roms`, docs/show.md). */
-export interface PlayRom {
-  sha256: string;
-  name: string;
-  source: string | null;
-  template: string | null;
-}
-
 /** A mark on a play session: frames `from` to `to`, both included. */
 export interface PlayMark {
   id: number;
@@ -465,27 +367,6 @@ export interface PlayMark {
   note: string;
   by: "key" | "timeline";
   annotation?: number;
-}
-
-/** A play session (`play.json`). */
-export interface PlaySession {
-  run: string;
-  rom: string;
-  source: string | null;
-  template: string | null;
-  notes: string;
-  real_store: boolean;
-  store: string;
-  preview: boolean;
-  started_ms: number;
-  state: "playing" | "recording" | "explaining" | "done" | "failed";
-  frames: number;
-  digest: string | null;
-  recording: string | null;
-  digest_matches: boolean | null;
-  marks: PlayMark[];
-  explanations: Record<string, unknown>;
-  error?: string | null;
 }
 
 /** A mechanic as the game view phrases it (`GET /api/capture/{run}/game`, from `gp model mechanics`). */
@@ -651,12 +532,6 @@ export class Api {
   deleteNote(id: string, n: number): Promise<{ deleted: number }> {
     return this.write("DELETE", `/api/recordings/${id}/annotations/${n}`);
   }
-  themes(model: string): Promise<ThemesJson> {
-    return this.json(`/api/themes/${encodeURIComponent(model)}`);
-  }
-  themePreview(model: string, req: PreviewRequest): Promise<PreviewJson> {
-    return this.write("POST", `/api/themes/${encodeURIComponent(model)}/preview`, req);
-  }
   captureRuns(): Promise<{ runs: CaptureRun[] }> {
     return this.json("/api/capture");
   }
@@ -718,38 +593,11 @@ export class Api {
   captureInputLog(run: string, name: string): Promise<string> {
     return this.text(`/api/capture/${encodeURIComponent(run)}/inputs/${encodeURIComponent(name)}`);
   }
-  playRoms(): Promise<{ roms: PlayRom[]; wasm: boolean; scratch_store: string; real_store: string }> {
-    return this.json("/api/play/roms");
-  }
-  /** A ROM's bytes, for the player; kept in memory only. */
-  playRom(sha256: string): Promise<Uint8Array> {
-    return this.bytes(`/api/play/roms/${sha256}`);
-  }
   /** The live player module's URL. */
   playWasm(): string {
     return `${this.base}/api/play/gp_play.wasm`;
   }
-  playStart(body: { rom: string; template?: string; notes: string; real_store: boolean; preview?: boolean }): Promise<{ session: PlaySession }> {
-    return this.write("POST", "/api/play/sessions", body);
-  }
-  playSession(run: string): Promise<{ session: PlaySession }> {
-    return this.json(`/api/play/sessions/${encodeURIComponent(run)}`);
-  }
-  playLog(run: string, offset: number, lines: string): Promise<{ frames: number }> {
-    return this.write("POST", `/api/play/sessions/${encodeURIComponent(run)}/log`, { offset, lines });
-  }
-  playMark(run: string, mark: { from: number; to?: number; note: string; by: "key" | "timeline" }): Promise<{ mark: PlayMark }> {
-    return this.write("POST", `/api/play/sessions/${encodeURIComponent(run)}/marks`, mark);
-  }
-  playStop(run: string, frames: number, digest: string): Promise<{ session: PlaySession }> {
-    return this.write("POST", `/api/play/sessions/${encodeURIComponent(run)}/stop`, { frames, digest });
-  }
-  playInputLog(run: string): Promise<string> {
-    return this.text(`/api/play/sessions/${encodeURIComponent(run)}/input.log`);
-  }
-  saveTheme(model: string, body: { theme?: ThemeDoc; layers?: Layer[] }): Promise<{ wrote: string[] }> {
-    return this.write("POST", `/api/themes/${encodeURIComponent(model)}/save`, body);
-  }  /** A POST to gp serve, for the clients in their own files (freefold.ts). */
+  /** A POST to gp serve, for the clients in their own files (freefold.ts). */
   post<T>(path: string, body: unknown): Promise<T> {
     return this.write("POST", path, body);
   }

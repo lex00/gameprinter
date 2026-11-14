@@ -94,7 +94,9 @@ REFINE and THEMES take the game's place, and the games hold while they show.
 The old inspector's views (wave 8) are drawn by the editor's build, which
 gp serve serves at `/index.html` (`just editor`): `?embed=game&run=GAME`
 or `?embed=inspector&run=GAME` draws one view with no header, in the
-page's colors (`editor/src/Embed.tsx`). `mechanic/details/` puts them on
+page's colors (`editor/src/Embed.tsx`, `editor/src/App.tsx`). Those two
+are all that is left of the old editor: `/index.html` with no `?embed=`
+sends the visitor to the page at `/`. `mechanic/details/` puts them on
 the page:
 
 - REFINE, under the background work: THE CLIP MEASURED, a corpus clip,

@@ -379,20 +379,3 @@ export function headline(metrics: Record<string, Metric>): { key: string; value:
     return { key: k, value: m.value, label: MEANINGS[k].label, means: MEANINGS[k].means, changed: m.prev !== null && m.prev !== m.value };
   });
 }
-
-/** The explainer while the original is being played live: there is one picture until the session is recorded. */
-export const EXPLAINER_PLAYING: { area: string; line: string }[] = [
-  { area: "The picture", line: "The original game, playing now with your keys. The game rebuilt from the model isn't shown while you play." },
-  { area: "Mark", line: "Press M when the game does something the model should know about (\"hit a brick\") and say what happened." },
-  { area: "Stop and record", line: "Ends the session and records it. The original and the rebuilt game then show side by side, with the marked moments explained under them." },
-  { area: "For agents", line: "At the bottom: the raw data under all of this, for agents and power users." },
-];
-
-/** The first-run explainer: each area of the page in a line. */
-export const EXPLAINER: { area: string; line: string }[] = [
-  { area: "The screen", line: "The original game, played live with your keys or a gamepad. Tick \"rebuilt game\" to show the game rebuilt from the model on top of it, or the differences, or side by side." },
-  { area: "Save and load", line: "F5 saves, F8 loads the save state chosen in the strip. With clips on, each save or load starts a short clip that ends at the next save or load, or after 8 seconds." },
-  { area: "The filmstrip", line: "Every save state, the newest on the right. Click one to load it. Its small mark is its clip: click the mark to watch the clip on both games and keep, skip or star it." },
-  { area: "The background line", line: "What the background work is doing with your clips: scoring them, fixing numbers, and a question for you when it has one." },
-  { area: "Details", line: "At the bottom, closed: the recording measured against the rebuilt game (charts, the scenario ladder, moments) and the raw data, for agents and power users." },
-];

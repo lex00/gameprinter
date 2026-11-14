@@ -9,9 +9,6 @@ import type { CaptureEvent, PlayMark } from "./api";
 /** The NES's frame rate, NTSC: the page paces frames at it. */
 export const NES_FPS = 60.0988;
 
-/** Frames per upload while playing; each piece stays under the server's body limit. */
-export const UPLOAD_FRAMES = 2000;
-
 /**
  * The keys for each button, A, B, Select, Start, Up, Down, Left, Right
  * from bit 0 (the input log's bits), as the interpreter preview maps them.
@@ -26,9 +23,6 @@ export const KEYS: string[][] = [
   ["ArrowLeft", "KeyA"],
   ["ArrowRight", "KeyD"],
 ];
-
-/** The key that drops a mark while playing. */
-export const MARK_KEY = "KeyM";
 
 /** The buttons held, from the keys down. */
 export function padFromKeys(down: Set<string>): number {
@@ -209,23 +203,6 @@ export function foldPlay(s: PlayState, events: CaptureEvent[]): PlayState {
   }
   if (next.log.length > 300) next.log = next.log.slice(next.log.length - 300);
   return next;
-}
-
-/** A mark's place on a timeline of `frames` frames, as percentages. */
-export function markBox(m: { from: number; to: number }, frames: number): { left: number; width: number } {
-  const n = Math.max(1, frames + 1);
-  return { left: (m.from / n) * 100, width: Math.max(0.5, ((m.to - m.from + 1) / n) * 100) };
-}
-
-/** The frame a click at `x` of a timeline `width` wide points at. */
-export function frameAt(x: number, width: number, frames: number): number {
-  if (width <= 0) return 0;
-  return Math.max(0, Math.min(frames, Math.round((x / width) * frames)));
-}
-
-/** The window a replay of a mark plays: a second before it to a second after, inside the session. */
-export function replayWindow(m: { from: number; to: number }, frames: number, lead = 60): { from: number; to: number } {
-  return { from: Math.max(0, m.from - lead), to: Math.min(frames, m.to + lead) };
 }
 
 /**

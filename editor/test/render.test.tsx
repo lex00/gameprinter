@@ -55,7 +55,7 @@ describe("views", () => {
     const watch = registeredViews().find((v) => v.id === "ram-watch")!;
     expect(renderToString(<watch.component api={api} frame={5} a={pane("aaaa", 0x2a)} setFrame={() => {}} />)).toContain("$2a (42)");
   });
-  it("the shell renders before anything loads", () => {
-    expect(renderToString(<App api={api} />)).toContain("Trace inspector");
+  it("with no ?embed= it sends the visitor to the page", () => {
+    expect(renderToString(<App api={api} />)).toContain('<a href="/">open it</a>');
   });
 });

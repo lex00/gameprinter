@@ -17,35 +17,6 @@ export interface ScreenBox {
 
 export type ScreenLayer = "sprites" | "background";
 
-/** Frames in a row with the same boxes, counted from the clip's start. */
-export interface ScreenSpan {
-  from: number;
-  to: number;
-  layer: ScreenLayer;
-  boxes: [number, number, number, number][];
-}
-
-export interface ScreenLayerScore {
-  name: string;
-  owner: string;
-  same: number;
-  total: number;
-  first?: number | null;
-  boxes?: ScreenBox[];
-  more?: number;
-  drift?: number | null;
-  shift?: [number, number] | null;
-}
-
-/** A clip's screen score, as the background work keeps it. */
-export interface ScreenScore {
-  background: ScreenLayerScore;
-  sprites: ScreenLayerScore;
-  /** "Characters: ...", "Background: ...". */
-  says: string[];
-  spans?: ScreenSpan[];
-}
-
 /** A box to draw, with its layer. */
 export interface Drawn {
   layer: ScreenLayer;
@@ -53,16 +24,6 @@ export interface Drawn {
   y: number;
   w: number;
   h: number;
-}
-
-/** The boxes of the clip's frame `at`, both layers. */
-export function boxesAt(score: ScreenScore | undefined, at: number): Drawn[] {
-  const out: Drawn[] = [];
-  for (const s of score?.spans ?? []) {
-    if (at < s.from || at > s.to) continue;
-    for (const [x, y, w, h] of s.boxes) out.push({ layer: s.layer, x, y, w, h });
-  }
-  return out;
 }
 
 /** A lockstep's screen (`gp interp compare --json`, under `screen`). */
@@ -87,9 +48,4 @@ export function lockBoxes(s: LockScreen | undefined, k: number): Drawn[] {
     for (const b of s[layer].frames[k]?.boxes ?? []) out.push({ layer, x: b.x, y: b.y, w: b.w, h: b.h });
   }
   return out;
-}
-
-/** The clip card's lines: one for the characters, one for the background. */
-export function screenLines(score: ScreenScore | undefined): string[] {
-  return score?.says ?? [];
 }

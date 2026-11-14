@@ -12,7 +12,6 @@
 //! | `GET`, `POST /mechanic/{run}/...` | The mechanic page for the game and its routes (HELP WITH MECHANICS, REVIEW REBUILD, FREE PLAY on the model, the quest log, clips handed off, talk) |
 //! | `GET /api/mechanic/{run}/ready` | `{ready, seconds?, failed?}`: whether the game's page is made; asking starts making it, on a thread of its own, since the first time after a new gp it builds the game's code. Until then `/mechanic/{run}/` answers at once with a page that says so and loads the game when it is ready |
 //! | `POST /api/mechanic/{run}/open` | `{mechanic?, prompt?}`: opens a mechanic in the page, its session made when new |
-//! | `GET /api/mechanic/{run}` | The mechanic open now and its session folder |
 //! | `GET`, `POST /watch/{run}/{name}/...` | The watch panel of the session `name`: the agent's log, pins and problem rows, and notes to the agent |
 
 use std::collections::HashMap;
@@ -41,11 +40,6 @@ pub(super) fn routes() -> Vec<Route> {
             path: "/api/mechanic/{run}/open",
             about: "Opens a mechanic in the game's mechanic page: {mechanic?, prompt?}",
             handler: open,
-        },
-        Route {
-            path: "/api/mechanic/{run}",
-            about: "The mechanic open now in the game's mechanic page",
-            handler: current,
         },
         Route {
             path: "/watch/{run}/{name}/{*file}",
@@ -333,12 +327,6 @@ fn open(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
         }
     }
     let s = server(ctx, game, m.filter(|x| !x.is_empty()), p)?;
-    say(&s)
-}
-
-fn current(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> {
-    let game = params.get("run").map(String::as_str).unwrap_or("");
-    let s = server(ctx, game, None, None)?;
     say(&s)
 }
 

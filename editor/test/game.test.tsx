@@ -7,12 +7,9 @@
 import { describe, expect, it } from "vitest";
 import { renderToString } from "react-dom/server";
 import { Api, type CaptureEvent, type GameWords } from "../src/api";
-import { App } from "../src/App";
-import { Explainer, GameView, clipAround, startAt } from "../src/GameView";
+import { GameView, clipAround, startAt } from "../src/GameView";
 import { emptyLive, fold } from "../src/livefold";
 import {
-  EXPLAINER,
-  EXPLAINER_PLAYING,
   checkSentence,
   eventWords,
   failingChecks,
@@ -230,20 +227,4 @@ describe("the game view", () => {
     expect(html).toContain("watch it");
   });
 
-  it("explains each area in a line, and can be closed", () => {
-    const html = renderToString(<Explainer open onClose={() => {}} />);
-    expect(html).toContain("What am I looking at?");
-    for (const e of EXPLAINER) expect(html).toContain(e.area);
-    expect(renderToString(<Explainer open={false} onClose={() => {}} />)).toBe("");
-    const playing = renderToString(<Explainer open playing onClose={() => {}} />);
-    for (const e of EXPLAINER_PLAYING) expect(playing).toContain(e.area);
-    expect(playing).not.toContain("The two pictures");
-  });
-
-  it("keeps the inspector one click away in the details, open when no game is shown", () => {
-    const api = new Api("", () => Promise.resolve(new Response("{}", { status: 200 })));
-    const html = renderToString(<App api={api} />);
-    expect(html).toContain("Trace inspector");
-    expect(html).toMatch(/<details[^>]*open=""[^>]*data-testid="details"/);
-  });
 });

@@ -1,74 +1,9 @@
-// The curve chart's side of the page (docs/show.md, "The background
-// work"): one measure of a clip, the original's and the rebuilt game's
-// values frame by frame, with the first wrong frame, the drift point and
-// the value the background work is trying. Pure, so the tests run it on
-// made-up curves.
-
-/** One measure's values in a clip, from `GET .../background/curve`. */
-export interface CurveMeasure {
-  path: string;
-  words: string;
-  track: string;
-  original: (number | null)[];
-  model: (number | null)[];
-  first_wrong?: number | null;
-}
-
-export interface ClipCurves {
-  clip: string;
-  model: string;
-  /** The clip's frame of the first value. */
-  offset: number;
-  frames: number;
-  tracks: { track: string; frame: number; path: string; says: string }[];
-  drift?: { frame: number; path: string } | null;
-  measures: CurveMeasure[];
-}
-
-/** The background job's parts the chart reads. */
-export interface CurveJob {
-  clip?: string;
-  target?: { frame?: number; measures?: { path: string }[] } | null;
-  trying?: { param?: string; value?: string; words?: string; pass?: string; curve?: { path?: string | null; frames?: number[]; values?: (number | null)[] } } | null;
-}
+// The curve chart's pure side (CurveChart.tsx): a measure's values as
+// points at the clip's frames, the chart's bounds and its lines. Pure, so
+// the tests run it on made-up curves.
 
 /** A line's points: the clip's frame and the value. */
 export type Points = [number, number][];
-
-/** The measure the background work is working on in this clip, if it is. */
-export function workingOn(job: CurveJob | null | undefined, clip: string): string | undefined {
-  if (!job || job.clip !== clip) return undefined;
-  return job.target?.measures?.[0]?.path ?? undefined;
-}
-
-/**
- * The measure to show: the one the background work is on in this clip,
- * else the first wrong track's measure, else the first that has numbers.
- */
-export function defaultMeasure(c: ClipCurves | undefined, job: CurveJob | null | undefined): string | undefined {
-  if (!c) return undefined;
-  const has = (p: string) => c.measures.some((m) => m.path === p);
-  const w = workingOn(job, c.clip);
-  if (w && has(w)) return w;
-  const t = c.tracks.find((x) => has(x.path));
-  if (t) return t.path;
-  return c.measures.find((m) => m.original.some((v) => v != null))?.path;
-}
-
-const ORDER = ["vx", "vy", "y", "x", "stage_x", "stage_y", "on_ground"];
-
-/** The measures of the same entity (or the camera) as `path`, for the short list. */
-export function sameEntity(c: ClipCurves | undefined, path: string | undefined): CurveMeasure[] {
-  if (!c || !path) return [];
-  const track = c.measures.find((m) => m.path === path)?.track;
-  const rank = (p: string) => {
-    const i = ORDER.indexOf(p.split(".").pop() ?? "");
-    return i < 0 ? ORDER.length : i;
-  };
-  return c.measures
-    .filter((m) => m.track === track && m.original.some((v) => v != null))
-    .sort((a, b) => rank(a.path) - rank(b.path));
-}
 
 /** A series of values as points at the clip's frames, skipping the missing. */
 export function points(values: (number | null)[] | undefined, offset: number, frames?: number[]): Points {
@@ -77,14 +12,6 @@ export function points(values: (number | null)[] | undefined, offset: number, fr
     if (v != null) out.push([frames?.[k] ?? k + offset, v]);
   });
   return out;
-}
-
-/** The trial line for `path` in this clip, while the work is trying a value. */
-export function tryingLine(job: CurveJob | null | undefined, clip: string, path: string | undefined): { points: Points; says: string } | undefined {
-  const t = job?.trying;
-  if (!job || job.clip !== clip || !t?.curve || !path || t.curve.path !== path || !t.curve.frames) return undefined;
-  const pass = t.pass === "impact" ? " (finding which numbers matter)" : "";
-  return { points: points(t.curve.values, 0, t.curve.frames), says: `trying ${t.words ?? t.param ?? "a number"} = ${t.value ?? "?"}${pass}` };
 }
 
 /** The bounds every line fits in, with a little room. */

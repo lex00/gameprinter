@@ -1,39 +1,28 @@
-// The workspace's shell. With a capture run open (?run=NAME), the page is
-// the main screen (Unified.tsx, docs/show.md): the original played live,
-// one row of controls, the line about the background work and the save
-// state filmstrip. The run is chosen once: opening the page without one
-// opens the run last played in this browser. Everything else is in one
-// drawer, Details, closed by default: the recording measured against the
-// rebuilt game (GameView.tsx, with its charts, ladder and moments), the
-// run's stages, numbers and log, and the trace inspector (pick a
-// recording, and a second one to compare, scrub to a frame, and every
-// registered view draws that frame). With no run the drawer is open. The
-// URL holds the state (?a=ID&b=ID&frame=N&run=NAME), so a link opens the
-// same view.
+// The editor's build inside gp serve's one page (the page at /mechanic/GAME/,
+// mechanic/details/details.js). It draws one view with no header of its
+// own: ?embed=inspector&run=GAME the trace inspector (pick a recording,
+// and a second one to compare, scrub to a frame, and every registered view
+// draws that frame), any other ?embed=VIEW Embed.tsx's view. With no
+// ?embed= it sends the visitor to the page at /. The URL holds the
+// inspector's state (?a=ID&b=ID&frame=N), so a link opens the same view.
 
-import { WatchPanel } from "./Watch";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Annotations } from "./Annotations";
-import { Explainer, GameView, dismissExplainer, explainerDismissed } from "./GameView";
-import { LivePanel, personInput, sendInput, useLive } from "./Live";
-import { Unified } from "./Unified";
 import { Embed } from "./Embed";
-import { PlayPanel } from "./Play";
-import { Api, type CaptureRun, type DiffJson, type GameWords, type PairJson, type RecordingEntry } from "./api";
+import { Api, type DiffJson, type PairJson, type RecordingEntry } from "./api";
 import { heldNames } from "./decode/input";
 import { FrameCache, loadRecording, type Pane } from "./pane";
 import { recordSeek, seekStats } from "./seek";
 import { modelFrameAt } from "./views/pairing";
 import { registeredViews } from "./views/registry";
 import "./views/index";
-import { LogPanel, MechanicView, type View, ViewTabs, readView, useMechanic, writeView } from "./Views";
 
 interface Selection {
   a?: string;
   b?: string;
   /** A run of the recording's model, shown beside it. */
   m?: string;
-  /** A capture run, shown in the live panel. */
+  /** The game (?run=GAME), kept in the URL. */
   run?: string;
   frame: number;
 }
@@ -97,54 +86,35 @@ function FrameInput({ frame, max, onCommit }: { frame: number; max: number; onCo
   );
 }
 
-const LAST_RUN = "gp.lastRun";
-
-/** The run last opened in this browser; storage can be missing or refuse. */
-function lastRun(): string | undefined {
-  try {
-    return localStorage.getItem(LAST_RUN) ?? undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function rememberRun(run: string): void {
-  try {
-    localStorage.setItem(LAST_RUN, run);
-  } catch {
-    // Not kept; the picker asks again next time.
-  }
-}
-
-/** The page: a watch session's view with ?watch=NAME (docs/watch.md), one
- * view inside gp serve's one page with ?embed=VIEW&run=GAME (Embed.tsx),
- * else the workspace. */
+/** The editor's one page: ?embed=inspector the trace inspector,
+ * ?embed=VIEW Embed.tsx's view, else a step over to gp serve's page. */
 export function App({ api = defaultApi }: { api?: Api }) {
   const q = new URLSearchParams(typeof location === "undefined" ? "" : location.search);
   const embed = q.get("embed");
-  if (embed === "inspector") return <Workspace api={api} only="inspector" />;
+  if (embed === "inspector") return <Inspector api={api} />;
   if (embed) return <Embed api={api} view={embed} run={q.get("run") ?? undefined} />;
-  // A watch panel with no game to play (gp mechanic watch GAME TOPIC).
-  if (q.get("view") === "watch" && q.get("game") && q.get("topic")) return <LogPanel api={api} game={q.get("game")!} topic={q.get("topic")!} />;
-  const watch = q.get("watch");
-  return watch ? <WatchPanel api={api} name={watch} /> : <Workspace api={api} />;
+  return <ToPage />;
 }
 
-/** The workspace; `only` "inspector" draws the trace inspector alone, for
- * the Details drawer of gp serve's one page (?embed=inspector). */
-function Workspace({ api = defaultApi, only }: { api?: Api; only?: "inspector" }) {
+/** The old editor's own screens are gone: /index.html with no ?embed=
+ * opens gp serve's page at /, which opens the last game. */
+function ToPage() {
   useEffect(() => {
-    if (only) document.documentElement.classList.add("embed");
-  }, [only]);
-  // The one header's tabs (Views.tsx): the view and the agent's log beside it.
-  const [view, setViewState] = useState<View>(() => readView(typeof location === "undefined" ? "" : location.search));
-  const viewRef = useRef(view);
-  viewRef.current = view;
-  const setView = (v: View) => {
-    setViewState(v);
-    if (typeof history !== "undefined") history.replaceState(null, "", writeView(location.search, v));
-  };
-  const [log, setLog] = useState(false);
+    if (typeof location !== "undefined") location.replace("/");
+  }, []);
+  return (
+    <p className="hint">
+      The editor's screens moved to the page: <a href="/">open it</a>.
+    </p>
+  );
+}
+
+/** The trace inspector alone, for the Details drawer of gp serve's one
+ * page (?embed=inspector). */
+function Inspector({ api = defaultApi }: { api?: Api }) {
+  useEffect(() => {
+    document.documentElement.classList.add("embed");
+  }, []);
   const [list, setList] = useState<RecordingEntry[]>([]);
   const [listError, setListError] = useState<string>();
   const [sel, setSel] = useState<Selection>(() => readUrl(typeof location === "undefined" ? "" : location.search));
@@ -158,43 +128,6 @@ function Workspace({ api = defaultApi, only }: { api?: Api; only?: "inspector" }
   const [frameError, setFrameError] = useState<string>();
   const seekStart = useRef<{ frame: number; t: number } | undefined>(undefined);
   const [lastSeek, setLastSeek] = useState<number>();
-  // The play panel (docs/show.md), open with ?play in the URL or the button.
-  const [play, setPlay] = useState(() => typeof location !== "undefined" && new URLSearchParams(location.search).has("play"));
-  // The run's events, folded for the game view and the details alike.
-  const events = useLive(api, sel.run);
-  const mechanic = useMechanic(api, log ? sel.run : undefined);
-  const [game, setGame] = useState<GameWords>();
-  const [runs, setRuns] = useState<CaptureRun[]>([]);
-  const [said, setSaid] = useState<string>();
-  const [explain, setExplain] = useState(() => !explainerDismissed());
-  const [details, setDetails] = useState(() => typeof location !== "undefined" && new URLSearchParams(location.search).has("details"));
-  useEffect(() => {
-    setGame(undefined);
-    if (!sel.run) return;
-    let live = true;
-    api
-      .captureGame(sel.run)
-      .then((g) => live && setGame(g))
-      .catch(() => live && setGame(undefined));
-    return () => {
-      live = false;
-    };
-  }, [api, sel.run]);
-  useEffect(() => {
-    api
-      .captureRuns()
-      .then((r) => {
-        setRuns(r.runs);
-        // The run is chosen once: the last one played opens by itself.
-        const last = lastRun();
-        if (!sel.run && !sel.a && last && r.runs.some((x) => x.run === last)) setSel((s) => (s.run ? s : { ...s, run: last }));
-      })
-      .catch(() => setRuns([]));
-  }, [api, sel.run]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (sel.run) rememberRun(sel.run);
-  }, [sel.run]);
-  const gameShown = !!sel.run;
 
   useEffect(() => {
     api
@@ -217,9 +150,8 @@ function Workspace({ api = defaultApi, only }: { api?: Api; only?: "inspector" }
   // Keep the URL in step.
   useEffect(() => {
     if (typeof history === "undefined") return;
-    const url = writeView(writeUrl(sel), viewRef.current);
-    history.replaceState(null, "", only ? `${url}&embed=${only}` : url);
-  }, [sel, only]);
+    history.replaceState(null, "", `${writeUrl(sel)}&embed=inspector`);
+  }, [sel]);
 
   // In diff mode, find the first difference and go there.
   useEffect(() => {
@@ -332,64 +264,6 @@ function Workspace({ api = defaultApi, only }: { api?: Api; only?: "inspector" }
   const input = a && a.frame > 0 ? a.input[a.frame - 1] : undefined;
   const stats = seekStats();
 
-  const send = sendInput(api, sel.run, runs, events.state, setSaid);
-  const title = game?.vocab.title;
-
-  // The page's bar, the explainer and the play panel: at the top when no
-  // run is open, under the two games' controls when one is, so the two
-  // games are the first thing on the page.
-  const bar = (
-    <>
-      <header className="top">
-        <h1>{title ? `${title} in Game Printer` : "Game Printer"}</h1>
-        <label>
-          run{" "}
-          <select data-testid="pick-game" value={sel.run ?? ""} onChange={(e) => setSel((s) => ({ ...s, run: e.target.value || undefined }))}>
-            <option value="">none</option>
-            {runs.map((r) => (
-              <option key={r.run} value={r.run}>
-                {r.run}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button data-testid="toggle-play" onClick={() => setPlay(!play)}>
-          {play ? "hide the play panel" : "play the original"}
-        </button>
-        {(() => {
-          // The rebuilt game, playable: the chosen run's, else the first
-          // run that has one. Always here, so it doesn't hide behind a run.
-          const r = runs.find((x) => x.run === sel.run && x.preview) ?? runs.find((x) => x.preview);
-          return (
-            <a
-              className={`button${r ? "" : " disabled"}`}
-              data-testid="top-play-rebuild"
-              href={r ? api.capturePreview(r.run, "index.html") : undefined}
-              target="_blank"
-              rel="noopener"
-              aria-disabled={!r}
-              title={r ? `Play ${r.run}'s model in a new tab: arrows move, Z jumps, X runs, Enter starts` : "No run has a playable model yet"}
-            >
-              play the rebuild
-            </a>
-          );
-        })()}
-        <button data-testid="explainer-open" onClick={() => setExplain(true)}>
-          What am I looking at?
-        </button>
-      </header>
-      <Explainer
-        open={explain}
-        playing={play && !sel.run}
-        onClose={() => {
-          setExplain(false);
-          dismissExplainer();
-        }}
-      />
-      {play && <PlayPanel api={api} onRecorded={(run) => setSel((s) => ({ ...s, run }))} />}
-    </>
-  );
-
   // The trace inspector: pick a recording, and a second one to compare,
   // scrub to a frame, and every registered view draws that frame.
   const inspector = (
@@ -492,38 +366,5 @@ function Workspace({ api = defaultApi, only }: { api?: Api; only?: "inspector" }
     </div>
   );
 
-  if (only === "inspector") return <div className="app embed">{inspector}</div>;
-
-  return (
-    <div className={gameShown ? "app with-game" : "app"}>
-      {sel.run ? (
-        <>
-          <ViewTabs view={view} setView={setView} log={log} setLog={setLog} />
-          <div className={log ? "views-row with-log" : "views-row"}>
-            <div className="view-main">{view === "clips" ? <Unified key={sel.run} api={api} run={sel.run} words={game} /> : <MechanicView key={sel.run} api={api} run={sel.run} view={view} />}</div>
-            {log && <LogPanel api={api} game={sel.run} topic={mechanic} />}
-          </div>
-          {bar}
-        </>
-      ) : (
-        bar
-      )}
-      {said && <p className="hint">{said}</p>}
-      {!sel.run && !play && <p className="hint">Choose a run above to play it, or press "play the original".</p>}
-
-      <details className="details" open={!gameShown || details} onToggle={(e) => setDetails((e.target as HTMLDetailsElement).open)} data-testid="details">
-        <summary>Details: the recording measured against the model (charts, the scenario ladder, moments), the run's stages and log, and the trace inspector</summary>
-        {sel.run && details && (
-          <div className="details-recording">
-            <h2>The recording, measured</h2>
-            <GameView api={api} run={sel.run} words={game} live={events.state} play={events.play} send={(i) => send(personInput(i))} />
-          </div>
-        )}
-        <div className={sel.run ? "details-body has-run" : "details-body"}>
-          <LivePanel api={api} run={sel.run} events={events} setRun={(run: string | undefined) => setSel((s) => ({ ...s, run }))} open={(a) => setSel((s) => ({ ...s, a, frame: 0 }))} />
-          {inspector}
-        </div>
-      </details>
-    </div>
-  );
+  return <div className="app embed">{inspector}</div>;
 }

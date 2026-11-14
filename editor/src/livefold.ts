@@ -207,43 +207,12 @@ export function openQuestions(s: LiveState): Question[] {
     .sort((a, b) => a.round - b.round || a.id.localeCompare(b.id));
 }
 
-/** The questions and items pinned as won't model. */
-export function wontModel(s: LiveState): { id: string; pin: string; text: string }[] {
-  const out: { id: string; pin: string; text: string }[] = [];
-  for (const q of Object.values(s.questions)) {
-    const pin = s.pins.find((p) => p === q.id || p === q.path);
-    if (pin && !q.answered) out.push({ id: q.id, pin, text: q.text });
-  }
-  for (const f of Object.values(s.found)) {
-    if (s.pins.includes(f.id) && !out.some((o) => o.pin === f.id)) out.push({ id: f.id, pin: f.id, text: `${f.what} ${f.text}` });
-  }
-  for (const p of s.pins) if (!out.some((o) => o.pin === p)) out.push({ id: p, pin: p, text: "" });
-  return out;
-}
-
 /** The gaps the last round that ran the gaps stage found, less the pinned ones. */
 export function openGaps(s: LiveState): Found[] {
   const gaps = Object.values(s.found).filter((f) => f.what === "gap");
   const last = Math.max(0, ...gaps.map((g) => g.round));
   return gaps.filter((g) => g.round === last && !s.pins.includes(g.id)).sort((a, b) => a.id.localeCompare(b.id));
 }
-
-/** The numbers the strip shows first: the scorecard's headline columns. */
-export const HEADLINE = [
-  "assets.count",
-  "facts.total",
-  "facts.derived",
-  "facts.derived_differ",
-  "facts.agree",
-  "facts.compared",
-  "questions.open",
-  "gaps.open",
-  "fidelity.interp.passed",
-  "fidelity.interp.failed",
-  "fidelity.track.recall",
-  "mechanics.debt",
-  "speed.rom_to_preview_s",
-];
 
 /** A number for the strip: whole numbers as they are, shares to three places. */
 export function fmt(v: number | null | undefined): string {
@@ -258,49 +227,4 @@ export function delta(m: { value: number; prev: number | null }): string {
   if (d === 0) return "";
   const t = Number.isInteger(d) ? String(d) : d.toFixed(3);
   return d > 0 ? `+${t}` : t;
-}
-
-/** An event as one line of the log. */
-export function logLine(e: CaptureEvent): string {
-  const d = e.data ?? {};
-  switch (e.kind) {
-    case "stage.start":
-      return `${e.stage} started`;
-    case "stage.end":
-      return `${e.stage} ${str(d.status)}${d.result && d.result !== "ok" ? ` (${str(d.result)})` : ""}${d.from_run ? ` from ${str(d.from_run)}` : ""}${num(d.ms) ? ` in ${num(d.ms)} ms` : ""}${d.summary ? `: ${str(d.summary)}` : ""}`;
-    case "item":
-      return `${str(d.what)} ${str(d.id)} ${str(d.status)}${d.text ? `: ${str(d.text)}` : ""}${d.pinned ? " (won't model)" : ""}`;
-    case "question":
-      return `question ${str(d.id)}`;
-    case "input":
-      return `${str(d.kind)} ${str(d.status)}: ${str(d.summary)}`;
-    case "round.start":
-      return `round ${e.round} started`;
-    case "round.end":
-      return `round ${e.round} ended: ${str(d.summary)}`;
-    case "run.state":
-      return `run ${str(d.state)}${d.reason ? `: ${str(d.reason)}` : ""}`;
-    case "row":
-      return `${str(d.table)} row ${num(d.index)}`;
-    case "run.start":
-      return `run ${str(d.run)} started on ${str(d.model)}`;
-    // A play session's events (docs/show.md).
-    case "play.start":
-      return `play session ${str(d.run)} started on ${str(d.name)}`;
-    case "play.mark":
-      return `mark ${str(d.id)} on frames ${str(d.from)} to ${str(d.to)}${d.note ? `: ${str(d.note)}` : ""}`;
-    case "play.stop":
-      return `stopped after ${str(d.frames)} frames`;
-    case "play.recorded":
-      return `recorded ${str(d.id).slice(0, 12)} (${str(d.frames)} frames, hashes ${d.digest_matches ? "agree" : "differ"})`;
-    case "show.mark":
-      return `mark ${str(d.mark)}: ${str(d.summary)}`;
-    // Point and tell (docs/point-and-tell.md).
-    case "request":
-      return `request ${str(d.id)} at frame ${str(d.frame)}: ${str(d.label)}${d.text ? `: ${str(d.text)}` : ""}`;
-    case "request.reply":
-      return `reply to request ${str(d.request)} (${str(d.status)}): ${str(d.text)}`;
-    default:
-      return `${e.kind} ${JSON.stringify(d)}`;
-  }
 }
