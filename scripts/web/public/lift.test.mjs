@@ -21,6 +21,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { MemFs, runWasi } from "./wasi.js";
+import { themesInOrder } from "./lift.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "../../..");
@@ -63,6 +64,21 @@ function findRom(sha) {
   }
   return null;
 }
+
+// The themes the page gives the lift are listed in Settings, Theme in the
+// order given (page.js puts the game's own namespace first), not in the
+// lift's folder-name order; a theme the ROM's game ships keeps its place.
+test("the themes given are listed in the order given", () => {
+  const index = JSON.stringify({
+    themes: [
+      { id: "clay", title: "Clay" },
+      { id: "orangutan-arcade", title: "Orangutan Arcade" },
+      { id: "turnips", title: "Turnips" },
+    ],
+  });
+  const got = JSON.parse(themesInOrder(index, ["turnips", "orangutan-arcade"]));
+  assert.deepEqual(got.themes.map((t) => t.id), ["clay", "turnips", "orangutan-arcade"]);
+});
 
 test("a ROM of no Donkey Kong is refused, naming the ones the page knows", { skip }, async () => {
   // A made-up NROM image: 16KB of PRG and 8KB of CHR counting up.

@@ -98,11 +98,17 @@ const installing = ready.then(async () => {
     });
     if (!c) continue;
     if (c.notice) notices.push(c.notice);
-    const t = { id: c.record.name.split("/")[1], files: await x.filesOf(c.record, "theme") };
+    const [ns, id] = c.record.name.split("/");
+    const t = { id, own: ns === g.record.name.split("/")[0], files: await x.filesOf(c.record, "theme") };
     if (themes.some((x) => x.id === t.id)) continue;
     themes.push(t);
     if (a.linked) theme = t;
   }
+  // Settings, Theme lists them in this order after Original: the themes
+  // from the game's own namespace first (for lex00/donkey-kong,
+  // lex00/turnips before a theme someone else made), then the rest as the
+  // source offered them. The games site orders a game's themes the same way.
+  themes.sort((a, b) => b.own - a.own);
   say("");
   return { game: g.record, theme, themes, files: await x.filesOf(g.record, "play") };
 });

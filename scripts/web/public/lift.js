@@ -103,6 +103,16 @@ async function compileModule(url) {
   return WebAssembly.compile(await r.arrayBuffer());
 }
 
+// themes/index.json's text ({ themes: [{ id, title }] }) with the themes
+// named in `ids` in that order, after any it lists that `ids` doesn't name.
+export function themesInOrder(text, ids) {
+  const index = JSON.parse(text);
+  const at = (t) => ids.indexOf(t.id);
+  const rest = index.themes.filter((t) => at(t) < 0);
+  const given = index.themes.filter((t) => at(t) >= 0).sort((a, b) => at(a) - at(b));
+  return JSON.stringify({ ...index, themes: [...rest, ...given] }) + "\n";
+}
+
 // Lifts `file` (a File, Blob, ArrayBuffer or Uint8Array). `templateFiles`
 // is the installed game's play files under lift/: index.json
 // (`{ game, files: [...], alias: { path: url } }`) and those files.
@@ -151,6 +161,14 @@ export async function liftRom(file, { moduleUrl, templateFiles, extraThemes = []
     : { ok: false, error: run.stderr.trim() || `the lift stopped (exit ${run.code})` };
   result.ms = Math.round(performance.now() - t0);
   if (!result.ok) return result;
+  // The lift lists the themes it was given by folder name; the settings
+  // list them in themes/index.json's order, so put them in the order given.
+  const indexFile = "/out/themes/index.json";
+  const listed = extraThemes.length && result.files.includes("themes/index.json") ? fs.readFile(indexFile) : null;
+  if (listed) {
+    const text = themesInOrder(new TextDecoder().decode(listed), extraThemes.map((t) => t.id));
+    fs.writeFile(indexFile, new TextEncoder().encode(text));
+  }
   await clearStored(game);
   const db = await openDb();
   try {
