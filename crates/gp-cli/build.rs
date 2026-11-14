@@ -1,7 +1,11 @@
 //! Hashes the sources the original's side of a clip depends on (gp-nes
 //! and gp-arcade, and what they build on), so a tape
 //! (`src/tape.rs`) is reused only for the same emulator. Sets
-//! `GP_ORIGINAL_SOURCES`.
+//! `GP_ORIGINAL_SOURCES`. Tapes are shared by every run on the machine
+//! (the gate's canary homes too), so the code that starts the original for
+//! a clip (scenario.rs, original.rs) and records its random draws
+//! (lockstep.rs, gp-sim's draws.rs) is in the hash as well: a patch to
+//! any of them is scored on the emulator, not on tapes an older gp wrote.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,8 +17,12 @@ const SOURCES: &[&str] = &[
     "../gp-evidence",
     "../../third_party/tetanes-core",
     "../../Cargo.lock",
+    "../gp-sim/src/draws.rs",
     "src/tape.rs",
     "src/screen.rs",
+    "src/scenario.rs",
+    "src/original.rs",
+    "src/lockstep.rs",
 ];
 
 fn walk(path: &Path, out: &mut Vec<PathBuf>) {

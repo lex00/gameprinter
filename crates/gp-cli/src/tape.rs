@@ -23,11 +23,18 @@
 //! ([`key_parts`]), so a change to either emulator never reads an old one. The mapping isn't in the
 //! key: RAM answers any selector, and a selector the tape never saw is a
 //! miss.
+//!
+//! The key holds the clip's start files by their bytes, not their paths
+//! (which name the run and its home), so tapes are kept in one folder for
+//! the machine ([`dir`], `~/.gameprinter/work/tapes`, held to a size cap):
+//! a new run name, or the gate's canary in a home of its own, reads the
+//! tapes an earlier run of the same clips on the same emulator wrote.
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::original::OriginalRuntime;
 use base64::Engine as _;
@@ -197,23 +204,117 @@ impl Tape {
     }
 }
 
-/// Reads a tape, none when it isn't there or can't be read.
-pub(crate) fn load(file: &Path) -> Option<Tape> {
-    Tape::from_bytes(&std::fs::read(file).ok()?)
+/// Where tapes and the draws beside them are kept: `$GP_TAPE_DIR`, else
+/// `~/.gameprinter/work/tapes` from `$HOME`. One folder for every run and
+/// every home on the machine (the gate's canary homes among them): a
+/// tape's key holds everything its run depends on, so any run of the same
+/// clip on the same emulator reads it. `None` without either, and the
+/// caller keeps tapes in its own folder.
+pub(crate) fn dir() -> Option<PathBuf> {
+    if let Some(d) = std::env::var_os("GP_TAPE_DIR").filter(|d| !d.is_empty()) {
+        return Some(PathBuf::from(d));
+    }
+    let home = std::env::var_os("HOME").filter(|d| !d.is_empty())?;
+    Some(
+        PathBuf::from(home)
+            .join(".gameprinter")
+            .join("work")
+            .join("tapes"),
+    )
 }
 
-/// Writes a tape through a temporary file of the thread's own, as the
-/// scenario cache does. A tape that can't be written is only slower next
+/// The tape folder's size cap: `$GP_TAPE_CAP_MB` megabytes, else 8 GB.
+/// Donkey Kong's 114 tapes are about 350 MB.
+fn cap_bytes() -> u64 {
+    std::env::var("GP_TAPE_CAP_MB")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(8192)
+        * 1024
+        * 1024
+}
+
+/// Reads a tape, none when it isn't there or can't be read. A tape read is
+/// marked used, so the cap removes it last.
+pub(crate) fn load(file: &Path) -> Option<Tape> {
+    let t = Tape::from_bytes(&std::fs::read(file).ok()?)?;
+    touch(file);
+    Some(t)
+}
+
+/// Marks a file used now, for the cap's least recently used order.
+pub(crate) fn touch(file: &Path) {
+    if let Ok(f) = std::fs::File::options().append(true).open(file) {
+        let _ = f.set_modified(std::time::SystemTime::now());
+    }
+}
+
+/// Writes a tape through a temporary file of the process's and thread's
+/// own, so two scorers writing the same tape never mix their bytes; the
+/// rename is atomic. A tape that can't be written is only slower next
 /// time.
 pub(crate) fn save(file: &Path, t: &Tape) {
-    if let Some(p) = file.parent() {
-        let _ = std::fs::create_dir_all(p);
-    }
-    let tmp = file.with_extension(
-        format!("tape.tmp-{:?}", std::thread::current().id()).replace(['(', ')'], ""),
+    put(file, &t.to_bytes());
+}
+
+/// [`save`] for any file kept in the tape folder (the draws beside a
+/// tape): written whole or not at all, then the folder held to its cap.
+pub(crate) fn put(file: &Path, bytes: &[u8]) {
+    static WRITES: AtomicUsize = AtomicUsize::new(0);
+    let Some(parent) = file.parent() else { return };
+    let _ = std::fs::create_dir_all(parent);
+    let name = file
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp = parent.join(
+        format!(
+            ".{name}.tmp-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        )
+        .replace(['(', ')'], ""),
     );
-    if std::fs::write(&tmp, t.to_bytes()).is_ok() {
+    if std::fs::write(&tmp, bytes).is_ok() {
         let _ = std::fs::rename(&tmp, file);
+    }
+    if Some(parent) == dir().as_deref() && WRITES.fetch_add(1, Ordering::Relaxed).is_multiple_of(32)
+    {
+        evict(parent, cap_bytes());
+    }
+}
+
+/// Removes the least recently used files in `dir` until it is under `cap`
+/// bytes. Temporary files are left to the writer that renames them.
+pub(crate) fn evict(dir: &Path, cap: u64) {
+    let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        .filter_map(|e| {
+            let m = e.metadata().ok()?;
+            m.is_file().then(|| {
+                (
+                    m.modified().unwrap_or(std::time::UNIX_EPOCH),
+                    m.len(),
+                    e.path(),
+                )
+            })
+        })
+        .collect();
+    let mut total: u64 = files.iter().map(|f| f.1).sum();
+    if total <= cap {
+        return;
+    }
+    files.sort();
+    for (_, len, p) in files {
+        if total <= cap {
+            break;
+        }
+        if std::fs::remove_file(&p).is_ok() {
+            total -= len;
+        }
     }
 }
 
@@ -777,5 +878,36 @@ mod tests {
         let mut again = Original::replay(tape);
         assert_eq!(run(&mut again), seen);
         assert!(!again.missed());
+    }
+
+    /// A tape put in a folder reads back the same; past the cap the least
+    /// recently used files go first, and a file being written (a dot
+    /// file) stays.
+    #[test]
+    fn tapes_read_back_and_the_cap_removes_the_least_recently_used() {
+        let d = tempfile::tempdir().unwrap();
+        let mut live = Original::recording(nes());
+        play(&mut live);
+        let t = live.into_tape().unwrap();
+        let f = d.path().join("tape-a.lz4");
+        save(&f, &t);
+        assert_eq!(load(&f).unwrap().to_bytes(), t.to_bytes());
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        for (name, age) in [("old", old), ("new", std::time::SystemTime::now())] {
+            let p = d.path().join(name);
+            std::fs::write(&p, [0u8; 1000]).unwrap();
+            std::fs::File::options()
+                .append(true)
+                .open(&p)
+                .unwrap()
+                .set_modified(age)
+                .unwrap();
+        }
+        std::fs::write(d.path().join(".new.tmp-1-1"), [0u8; 1000]).unwrap();
+        touch(&f);
+        evict(d.path(), 1500 + std::fs::metadata(&f).unwrap().len());
+        assert!(!d.path().join("old").exists());
+        assert!(d.path().join("new").exists() && f.exists());
+        assert!(d.path().join(".new.tmp-1-1").exists());
     }
 }

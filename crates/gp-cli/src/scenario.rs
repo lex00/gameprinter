@@ -608,7 +608,10 @@ fn score_one(
 /// The file of a scenario's tape: the original's side of its lockstep
 /// (`crate::tape`), keyed by the ROM, the input played to its start, the
 /// scenario (its start, snapshot and presses), the original's frame there
-/// and the emulator's sources.
+/// and the emulator's sources. The start's snapshot and input log are in
+/// the key by their bytes, not their paths, which name the run and its
+/// home: the tape is kept in the machine's tape folder
+/// ([`crate::tape::dir`]) for any run of the clip to read.
 fn tape_file(b: &Bench, sb: &Bench, st: &Started, s: &Scenario) -> Result<PathBuf> {
     let snap = s
         .start
@@ -616,13 +619,19 @@ fn tape_file(b: &Bench, sb: &Bench, st: &Started, s: &Scenario) -> Result<PathBu
         .and_then(|x| x.snapshot.as_deref())
         .and_then(|p| fs::read(p).ok())
         .unwrap_or_default();
-    Ok(b.cache.join(format!(
+    let mut s = s.clone();
+    if let Some(start) = s.start.as_mut() {
+        start.snapshot = None;
+        start.log = None;
+    }
+    let dir = crate::tape::dir().unwrap_or_else(|| b.cache.clone());
+    Ok(dir.join(format!(
         "tape-{}.lz4",
         key(&[
             &crate::tape::key_parts(),
             &rom_key(&b.rom),
             sb.log_text.as_bytes(),
-            &serde_json::to_vec(s)?,
+            &serde_json::to_vec(&s)?,
             &snap,
             st.original_frame.to_string().as_bytes(),
         ])
@@ -662,6 +671,7 @@ fn draws_of(
         && let Ok(t) = fs::read_to_string(&file)
         && let Ok(d) = gp_sim::DrawScript::parse(&t)
     {
+        crate::tape::touch(&file);
         return Ok(with_base(d, st.original_frame));
     }
     let at = (sb.input.clone(), st.original_frame);
@@ -697,7 +707,8 @@ fn draws_of(
         )?,
     };
     if cache {
-        let _ = fs::write(&file, d.text());
+        // Whole or not at all: another process may read it as it lands.
+        crate::tape::put(&file, d.text().as_bytes());
     }
     Ok(with_base(d, st.original_frame))
 }
