@@ -2,8 +2,11 @@
 //! against itself, the check that a measure, its sprite mask and a score
 //! tape agree with the emulator before any model is held to them.
 //!
-//! The clip's start is played on the original, then the clip twice: once
-//! live, writing a score tape (crate::tape), and once from that tape. Each
+//! The original is put at the clip's start (from the start cache `gp clip
+//! score` keeps, made here when it isn't there), then plays the clip
+//! twice: once live, writing a score tape (crate::tape), and once from
+//! that tape. The live run is what this checks, so it never comes from a
+//! kept tape. Each
 //! frame's two pictures go through the screen measure
 //! (gp_interp::screen) with the platform's options, and every frame must
 //! measure 0 on both layers. It also counts the pixels the sprite mask
@@ -35,8 +38,7 @@ pub(crate) fn run(
     let (log, start) = c.log()?;
     let bytes = crate::clip_score::rom_of(paths, game, rom)?;
     let inputs = crate::run::frames(&log);
-    let mut o = OriginalRuntime::of_rom(&bytes)?;
-    o.step(&inputs[..start]).map_err(anyhow::Error::msg)?;
+    let mut o = to_start(paths, &bytes, &log, &inputs, start)?;
     o.set_video(true);
     let opts = crate::screen::options_for(o.platform());
     let own = &inputs[start..];
@@ -133,6 +135,41 @@ pub(crate) fn run(
         text: lines.join("\n"),
         exit: u8::from(!perfect),
     })
+}
+
+/// The original at the clip's start, video off. Played from the start
+/// cache (`clip::cache`, the snapshot `gp clip score` keeps
+/// [`crate::clip::cache::START_LEAD`] frames before a clip's start, made
+/// here when it isn't there), then those last frames: the run up to the
+/// clip isn't what this checks, the clip is. From power-on with the cache
+/// off (`GP_START_CACHE=off`) or for a clip that starts too early.
+fn to_start(
+    paths: &Paths,
+    rom: &[u8],
+    log: &gp_evidence::InputLog,
+    inputs: &[gp_runtime::InputFrame],
+    start: usize,
+) -> Result<OriginalRuntime> {
+    use crate::clip::cache;
+    use gp_evidence::manifest::PowerOn;
+    let k = start.saturating_sub(cache::START_LEAD);
+    // The original stands after `at` of the clip's inputs.
+    let (mut o, at) = if cache::starts_on() && k > 0 && k <= log.frames.len() {
+        let key = cache::start_key(rom, &PowerOn::default(), &log.frames, k);
+        match cache::read_start(&paths.home, &key, rom, PowerOn::default()) {
+            Some(saved) => (OriginalRuntime::from_saved(rom, &saved)?, k),
+            None => {
+                let mut o = OriginalRuntime::of_rom(rom)?;
+                o.step(&inputs[..k]).map_err(anyhow::Error::msg)?;
+                cache::write_start_of(&paths.home, &key, &o)?;
+                (o, k)
+            }
+        }
+    } else {
+        (OriginalRuntime::of_rom(rom)?, 0)
+    };
+    o.step(&inputs[at..start]).map_err(anyhow::Error::msg)?;
+    Ok(o)
 }
 
 /// The picture on the left, the same with its sprite pixels in red on the

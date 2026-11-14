@@ -1056,7 +1056,16 @@ fn names_check(rules: &ArtRules, text: &str, art_rel: &str, b: &Built, r: &mut R
                 .push(n);
         }
     }
+    let known: Vec<String> = have.iter().map(|s| (*s).to_owned()).collect();
     for (line, names) in &unknown {
+        // Each name with the game's nearest, the likely typo's fix.
+        let said: Vec<String> = names
+            .iter()
+            .map(|n| match gp_theme::slots::nearest(n, known.iter()) {
+                Some(near) => format!("{n}, nearest {near}"),
+                None => (*n).to_owned(),
+            })
+            .collect();
         r.add(
             Group::Kit,
             Level::Problem,
@@ -1065,7 +1074,7 @@ fn names_check(rules: &ArtRules, text: &str, art_rel: &str, b: &Built, r: &mut R
             format!(
                 "names {} this game doesn't have ({}), and the page passes over {}. Use the game's own picture names (frame-N-K.png, glyph-..., level-NAME.png, as the lines for the kit's slots give them)",
                 if names.len() == 1 { "a picture" } else { "pictures" },
-                names.join(", "),
+                said.join("; "),
                 if names.len() == 1 { "it" } else { "them" },
             ),
         );
@@ -2190,7 +2199,7 @@ mod tests {
             "package.toml 4 kind is `game`",
             "package.toml null has no license",
             "theme/art.txt 4 names the picture art/gone.png, which isn't in the theme folder",
-            "theme/art.txt 5 names a picture this game doesn't have (frame-7-0.png)",
+            "theme/art.txt 5 names a picture this game doesn't have (frame-7-0.png, nearest frame-0-0.png)",
             "theme/art.txt 8 `put nope` names a piece",
             "package.toml null the title `Zorp Land` uses zorp",
         ] {
@@ -2225,6 +2234,41 @@ mod tests {
             "{}",
             o.text
         );
+    }
+
+    /// A pose named by a picture the game hasn't got is said with the
+    /// game's nearest name beside it, each on its own when one line names
+    /// several (issue 23).
+    #[test]
+    fn an_unknown_pose_name_comes_with_the_nearest_the_game_has() {
+        let g = tempfile::tempdir().unwrap();
+        let game = game(g.path());
+        let t = tempfile::tempdir().unwrap();
+        theme(
+            t.path(),
+            GOOD_PACKAGE,
+            GOOD_LOOK,
+            concat!(
+                "gp-art 1\n",
+                "scale 4\n",
+                "pic frame-0-0.png art/roll.png 16 16 0 0\n",
+                // Line 4: a typo'd pose.
+                "pic frame-1-O.png art/squash.png 16 16 0 0\n",
+                // Line 5: two names on one line, one of them known.
+                "held frame-0-0.png frame-00-0.png frame-1-0\n",
+            ),
+        );
+        for f in ["theme/art/roll.png", "theme/art/squash.png"] {
+            put(t.path(), f, &picture(64, 64, [8, 8, 56, 64]).png());
+        }
+        let o = report(t.path(), &game, Ok(built()), None).unwrap();
+        let problems = levels(&o, "problem").join("\n");
+        for want in [
+            "theme/art.txt 4 names a picture this game doesn't have (frame-1-O.png, nearest frame-1-0.png)",
+            "theme/art.txt 5 names pictures this game doesn't have (frame-00-0.png, nearest frame-0-0.png; frame-1-0, nearest frame-1-0.png)",
+        ] {
+            assert!(problems.contains(want), "no `{want}` in:\n{problems}");
+        }
     }
 
     #[test]

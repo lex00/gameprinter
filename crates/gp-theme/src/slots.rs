@@ -200,8 +200,9 @@ fn hint(nearest: &Option<String>) -> String {
 }
 
 /// The candidate with the fewest edits from `name`, the first in name
-/// order on a tie.
-fn nearest<'a>(name: &str, candidates: impl Iterator<Item = &'a String>) -> Option<String> {
+/// order on a tie. `gp theme look check` says it beside a picture name
+/// the game hasn't got.
+pub fn nearest<'a>(name: &str, candidates: impl Iterator<Item = &'a String>) -> Option<String> {
     let set: BTreeSet<&String> = candidates.collect();
     set.into_iter()
         .min_by_key(|c| edits(name, c))

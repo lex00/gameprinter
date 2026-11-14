@@ -1506,7 +1506,9 @@ dependencies = [
 name = "gp-module"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "gp-runtime",
+ "tempfile",
  "wasmtime",
  "wat",
 ]

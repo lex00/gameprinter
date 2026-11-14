@@ -17,6 +17,7 @@ use clap::Subcommand;
 use gp_evidence::{InputLog, Paths};
 use gp_interp::lockstep::{Lockstep, Mode, seconds, together};
 use gp_interp::mapping::Mapping;
+use gp_present::raster::Frame;
 use serde_json::{Value, json};
 
 use crate::Outcome;
@@ -578,6 +579,15 @@ pub(crate) fn pictures(
 /// values. Returns the lockstep, its report and the draws the model was
 /// given. `gp element inputs` reads its first wrong frames and its bodies'
 /// slots.
+///
+/// The original's side is played from the clip's score tape when there is
+/// one (`gp clip score` writes it), and its draws read from beside it, so
+/// only the model runs. A replay asked anything its tape doesn't hold (a
+/// picture the score didn't take, a frame, a selector) is dropped and the
+/// emulator plays the clip: `keep` has then had only the pictures the
+/// replay gave before the miss, which are the emulator's own, and gets the
+/// rest from the emulator. A tape is never written here: one with the
+/// straight-through side alone would stand in for the score's.
 pub(crate) fn straight(
     ctx: &Ctx,
     log: &InputLog,
@@ -585,23 +595,73 @@ pub(crate) fn straight(
     keep: Option<crate::screen::Keep>,
     values: bool,
 ) -> Result<(Lockstep, Value, Option<gp_sim::DrawScript>)> {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
     let from = start as u64;
     let inputs = crate::run::frames(log);
     let resume = resume_of(ctx, log, &inputs, start)?;
+    let tape = tape_file(ctx, log, start, resume.as_ref())?;
     let draws = if ctx.mapping.score_draws {
-        Some(match &resume {
-            Some((saved, p)) => crate::lockstep::record_draws_saved(
-                &ctx.rom,
-                saved,
-                &ctx.mapping,
-                &log.frames[p.inputs..],
-                from,
-            )?,
-            None => crate::lockstep::record_draws(&ctx.rom, &ctx.mapping, &log.frames, from)?,
-        })
+        Some(draws_of(ctx, log, from, resume.as_ref(), tape.as_deref())?)
     } else {
         None
     };
+    let replay = |o: &mut crate::tape::Original, keep: Option<crate::screen::Keep>| {
+        crate::lockstep::run_resumed_on(
+            o,
+            &ctx.source,
+            &ctx.model_dir,
+            &ctx.mapping,
+            &ctx.rom,
+            &inputs,
+            Mode::Free,
+            Some(from),
+            values,
+            ctx.assets.as_deref(),
+            draws.clone(),
+            resume.as_ref().map(|(_, p)| *p),
+            keep,
+        )
+    };
+    // The caller's `keep`, shared by the replay and the emulator, and how
+    // many pictures it has had.
+    let keep = keep.map(|k| Rc::new(RefCell::new(k)));
+    let given = Rc::new(Cell::new(0usize));
+    if let Some(file) = &tape
+        && let Some(t) = crate::tape::load(file)
+    {
+        let mut o = crate::tape::Original::replay(t);
+        let missed = o.missed_mark();
+        // Pictures go on to `keep` until the replay misses: those after a
+        // miss may be the tape's blanks.
+        let fwd = keep.as_ref().map(|k| {
+            let (k, given, missed) = (Rc::clone(k), Rc::clone(&given), Rc::clone(&missed));
+            Box::new(move |pair: Option<(&Frame, &Frame)>| {
+                if !missed.get() {
+                    given.set(given.get() + 1);
+                    (k.borrow_mut())(pair);
+                }
+            }) as crate::screen::Keep
+        });
+        let r = replay(&mut o, fwd);
+        if !o.missed() {
+            let (ls, report, _) = r?;
+            return Ok((ls, report, draws));
+        }
+    }
+    // The emulator from the clip's start; pictures the replay gave aren't
+    // given again.
+    let rest = keep.map(|k| {
+        let (mut skip, given) = (given.get(), Rc::clone(&given));
+        Box::new(move |pair: Option<(&Frame, &Frame)>| {
+            if skip > 0 {
+                skip -= 1;
+            } else {
+                given.set(given.get() + 1);
+                (k.borrow_mut())(pair);
+            }
+        }) as crate::screen::Keep
+    });
     let (ls, report, _) = crate::lockstep::run_resumed(
         &ctx.source,
         &ctx.model_dir,
@@ -614,7 +674,7 @@ pub(crate) fn straight(
         ctx.assets.as_deref(),
         draws.clone(),
         resume.as_ref().map(|(s, p)| (s, *p)),
-        keep,
+        rest,
     )?;
     Ok((ls, report, draws))
 }

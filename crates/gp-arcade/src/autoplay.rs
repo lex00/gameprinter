@@ -673,6 +673,29 @@ fn bonus_choice(t: &Tapper) -> Vec<Controls> {
     best.map(|b| b.1).unwrap_or_default()
 }
 
+/// What `--help` prints: the player's own flags, as `main_with` reads them.
+const USAGE: &str = "\
+Tapper's auto-player: plays the romset from power-on and writes NAME.input
+(an oracle input log) and NAME.phases.
+
+Usage: gp mechanic autoplay --rom FILE --out NAME [FLAGS]
+
+  --rom FILE            The Tapper romset (a .zip)
+  --out NAME            Where to write NAME.input and NAME.phases (default play)
+  --frames N            Stop when the log holds N frames (default 200000)
+  --levels N            Stop after the N-th level's end sequence
+  --tries N             Tries at each life lost before keeping the loss (default 24)
+  --idle                Coin up, start, then press nothing until the game is over
+  --search              After a life lost, back up and search for a way past it
+  --jobs N              Threads that value the search's moves (default 4)
+  --horizon N           Frames each searched position is played on for (default 150)
+  --width N             The search's beam, times the try (default 4)
+  --back N              Frames to back up on the first loss, more after (default 150)
+  --from LOG            Go on from an earlier play's input log
+  --trace LOG FROM TO   Print what the player sees on frames FROM to TO of LOG, and stop
+  -h, --help            Print this
+";
+
 /// Runs the player with command-line style arguments (without the
 /// program's name): `--rom FILE --out NAME` and the flags above.
 pub fn main_with(args: impl IntoIterator<Item = String>) {
@@ -704,6 +727,10 @@ pub fn main_with(args: impl IntoIterator<Item = String>) {
             "--width" => width0 = args.next().unwrap().parse().unwrap(),
             "--back" => back_step = args.next().unwrap().parse().unwrap(),
             "--from" => from = Some(PathBuf::from(args.next().unwrap())),
+            "--help" | "-h" => {
+                print!("{USAGE}");
+                return;
+            }
             "--trace" => {
                 trace = Some((
                     PathBuf::from(args.next().unwrap()),
@@ -1067,4 +1094,34 @@ fn write_log(out: &std::path::Path, log: &[Controls], notes: &str) {
         i = j;
     }
     std::fs::write(out.with_extension("input"), s).unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `--help` (as `gp mechanic autoplay --help` passes it) prints the flags
+    /// and returns, before any ROM is read; it used to panic as an unknown flag.
+    #[test]
+    fn help_returns_without_a_rom() {
+        main_with(["--help".to_string()]);
+        main_with(["-h".to_string()]);
+        for flag in [
+            "--rom",
+            "--out",
+            "--frames",
+            "--levels",
+            "--tries",
+            "--idle",
+            "--search",
+            "--jobs",
+            "--horizon",
+            "--width",
+            "--back",
+            "--from",
+            "--trace",
+        ] {
+            assert!(USAGE.contains(flag), "the help leaves out {flag}");
+        }
+    }
 }

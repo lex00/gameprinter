@@ -8,11 +8,19 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+blake3 = "1.8.7"
 gp-runtime = { version = "0.1.0", path = "../gp-runtime" }
 wasmtime = { version = "48.0.7", default-features = false, features = ["cranelift", "runtime", "parallel-compilation", "std"] }
 
 [dev-dependencies]
+tempfile = "3"
 wat = "1"
 
-[lints]
-workspace = true
+# The workspace forbids unsafe code. This crate denies it instead, so the
+# compiled-module cache (`cache`) can allow it for `Module::deserialize`
+# alone, as gp-play and gp-web do for their exports.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

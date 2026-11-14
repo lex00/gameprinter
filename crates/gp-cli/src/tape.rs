@@ -391,6 +391,12 @@ impl Original {
         self.missed.get()
     }
 
+    /// The mark [`Self::missed`] reads, shared, for a caller that must
+    /// know of a miss while the original is lent out.
+    pub(crate) fn missed_mark(&self) -> Rc<Cell<bool>> {
+        Rc::clone(&self.missed)
+    }
+
     /// The tape as it stands.
     pub(crate) fn into_tape(self) -> Option<Tape> {
         drop(self.live);

@@ -5,7 +5,13 @@
 //! One Wasm instance holds a game's sessions. [`ModuleRuntime::fork`] makes
 //! another inside it, so forks of one runtime share that instance and take
 //! turns running.
+//!
+//! A compiled module is kept on disk ([`cache`]), so a gp call opens a
+//! module it has compiled before without compiling it again.
 
+mod cache;
+
+use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -61,9 +67,29 @@ pub struct ModuleCode {
 }
 
 impl ModuleCode {
+    /// The module compiled, read from the machine's cache of compiled
+    /// modules when it is there and sound, else compiled and kept there.
     pub fn compile(wasm: &[u8]) -> Result<Self, String> {
-        let module =
-            Module::new(engine(), wasm).map_err(|e| format!("the module doesn't compile: {e}"))?;
+        Self::compile_in(wasm, cache::dir().as_deref())
+    }
+
+    /// [`Self::compile`] with the cache in `dir`, or none.
+    pub fn compile_in(wasm: &[u8], dir: Option<&Path>) -> Result<Self, String> {
+        let key = dir.map(|d| (d, cache::key(engine(), wasm)));
+        let kept = key
+            .as_ref()
+            .and_then(|(d, k)| cache::read(engine(), &cache::file(d, k), k));
+        let module = match kept {
+            Some(m) => m,
+            None => {
+                let m = Module::new(engine(), wasm)
+                    .map_err(|e| format!("the module doesn't compile: {e}"))?;
+                if let Some((d, k)) = &key {
+                    cache::write(d, k, &m);
+                }
+                m
+            }
+        };
         if module.imports().len() != 0 {
             return Err("the module imports something, so gp won't run it".into());
         }
@@ -80,7 +106,7 @@ impl Host {
     /// The module's first instance, compiling it first.
     #[cfg(test)]
     fn open(wasm: &[u8]) -> Result<Self, String> {
-        Self::start(&ModuleCode::compile(wasm)?.module)
+        Self::start(&ModuleCode::compile_in(wasm, None)?.module)
     }
 
     fn start(module: &Module) -> Result<Self, String> {
@@ -520,6 +546,95 @@ mod tests {
         let wasm = wat::parse_str(r#"(module (import "x" "y" (func)))"#).unwrap();
         assert!(Host::open(&wasm).err().unwrap().contains("imports"));
     }
+
+    /// A module compiled once is read back from the cache and runs the
+    /// same; an entry that is cut short, has a byte changed, is of another
+    /// key or of another module is never used, and the module is compiled
+    /// and its entry written again.
+    #[test]
+    fn the_cache_reads_back_sound_entries_and_compiles_past_any_other() {
+        let d = tempfile::tempdir().unwrap();
+        let wasm = module("i32.const 1", "1");
+        let key = cache::key(engine(), &wasm);
+        let file = cache::file(d.path(), &key);
+        let run = |code: &ModuleCode| {
+            let mut h = Host::start(&code.module).unwrap();
+            h.call(wire::STEP, &[], CALL_TICKS).unwrap_err()
+        };
+        let first = ModuleCode::compile_in(&wasm, Some(d.path())).unwrap();
+        let sound = std::fs::read(&file).unwrap();
+        assert!(cache::read(engine(), &file, &key).is_some());
+        assert_eq!(
+            run(&ModuleCode::compile_in(&wasm, Some(d.path())).unwrap()),
+            run(&first)
+        );
+
+        let mut flipped = sound.clone();
+        let last = flipped.len() - 1;
+        flipped[last] ^= 1;
+        let mut wrong_key = sound.clone();
+        wrong_key[MAGIC_LEN] ^= 1;
+        for bad in [
+            sound[..sound.len() / 2].to_vec(),
+            flipped,
+            wrong_key,
+            Vec::new(),
+            b"not a module".to_vec(),
+        ] {
+            std::fs::write(&file, &bad).unwrap();
+            assert!(cache::read(engine(), &file, &key).is_none());
+            let again = ModuleCode::compile_in(&wasm, Some(d.path())).unwrap();
+            assert_eq!(run(&again), run(&first));
+            assert!(cache::read(engine(), &file, &key).is_some());
+        }
+
+        // Another module's sound entry, put under this key, is refused.
+        let other = module("i32.const 2", "1");
+        let other_key = cache::key(engine(), &other);
+        ModuleCode::compile_in(&other, Some(d.path())).unwrap();
+        std::fs::copy(cache::file(d.path(), &other_key), &file).unwrap();
+        assert!(cache::read(engine(), &file, &key).is_none());
+        assert_ne!(key, other_key);
+
+        // An import is refused on the cached path too.
+        let imports = wat::parse_str(r#"(module (import "x" "y" (func)))"#).unwrap();
+        for _ in 0..2 {
+            let e = ModuleCode::compile_in(&imports, Some(d.path())).err();
+            assert!(e.unwrap().contains("imports"));
+        }
+    }
+
+    /// Past the cap the least recently used entries go first; a temporary
+    /// file stays unless it is stale.
+    #[test]
+    fn the_cache_cap_removes_the_least_recently_used() {
+        let d = tempfile::tempdir().unwrap();
+        let now = std::time::SystemTime::now();
+        let ago = |s| now - Duration::from_secs(s);
+        for (name, at) in [
+            ("old.cwasm", ago(60)),
+            ("new.cwasm", now),
+            (".new.cwasm.tmp-1-1", now),
+            (".old.cwasm.tmp-1-1", ago(7200)),
+        ] {
+            let p = d.path().join(name);
+            std::fs::write(&p, [0u8; 1000]).unwrap();
+            std::fs::File::options()
+                .append(true)
+                .open(&p)
+                .unwrap()
+                .set_modified(at)
+                .unwrap();
+        }
+        cache::evict(d.path(), 1500);
+        assert!(!d.path().join("old.cwasm").exists());
+        assert!(d.path().join("new.cwasm").exists());
+        assert!(d.path().join(".new.cwasm.tmp-1-1").exists());
+        assert!(!d.path().join(".old.cwasm.tmp-1-1").exists());
+    }
+
+    /// Where the key starts in an entry: after the magic line.
+    const MAGIC_LEN: usize = b"gp compiled module 1\n".len();
 
     #[test]
     fn a_failing_call_gives_its_words() {
