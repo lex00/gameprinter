@@ -9,6 +9,10 @@ jobs:
     timeout-minutes: 120
     env:
       CARGO_TERM_COLOR: never
+      # The page check's waits for a build, three times a Mac's: the runner
+      # has four cores, shared by every lane of just check at once
+      # (scripts/web/check-mechanic.mjs).
+      GP_CHECK_BUILD_WAIT: 3
     steps:
       - uses: actions/checkout@v4
       # The build sandbox, which gp game build and its test need, and cc65
@@ -48,6 +52,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-all-crates: true
+          # Kept when the check fails too, so the next push doesn't build
+          # everything again.
+          cache-on-failure: true
       # The pinned Chrome Headless Shell the page checks drive
       # (scripts/inspector/fetch-browser.sh checks its SHA-256).
       - uses: actions/cache@v4

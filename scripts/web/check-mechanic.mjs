@@ -123,7 +123,7 @@ function serve(extra = {}, game = GAME, mech = MECH, gamesDir = games, more = []
     let out = "";
     // A fresh home builds the game's module from the kit first (about a
     // minute for Tapper's hook crate), so the address can be slow to come.
-    const t = setTimeout(() => rej(new Error(`gp mechanic start printed no address: ${out}${err}`)), 240000);
+    const t = setTimeout(() => rej(new Error(`gp mechanic start printed no address: ${out}${err}`)), 240000 * buildWait);
     p.stdout.on("data", (d) => {
       out += d;
       const m = out.match(/http:\/\/127\.0\.0\.1:\d+\//);
@@ -133,9 +133,17 @@ function serve(extra = {}, game = GAME, mech = MECH, gamesDir = games, more = []
   });
 }
 
+/** How many times longer the waits for a build (those of two minutes or
+ * more: the players, the preview, a game's module) may take on this
+ * machine: GP_CHECK_BUILD_WAIT, default 1. The numbers below are a Mac's,
+ * where every lane of just check has many cores; CI's four-core runner
+ * builds the same wasm while the other lanes compile too, and sets 3.
+ * Only how long the check waits changes, never what it checks. */
+const buildWait = Math.max(1, Number(process.env.GP_CHECK_BUILD_WAIT) || 1);
+
 /** Polls `f` until it gives something truthy; that, or a failure naming `what`. */
 async function until(what, f, ms = 15000) {
-  const end = Date.now() + ms;
+  const end = Date.now() + (ms >= 120000 ? ms * buildWait : ms);
   for (;;) {
     const v = await f();
     if (v) return v;
