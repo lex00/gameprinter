@@ -144,6 +144,15 @@ async function until(what, f, ms = 15000) {
   }
 }
 
+/** Whether `page` shows the game's own mechanic page, open: its #title
+ * names the game and it has the tabs. gp serve's waiting page has the same
+ * #title but no tabs, and reloads itself once the game is ready, so a look
+ * made then would land in that reload (as on CI's slower machines). */
+async function gamePageOpen(page) {
+  if (!(await text(page, "#title").catch(() => "")).startsWith(GAME)) return false;
+  return Boolean(await page.$("#tabs").catch(() => null)) && !(await page.$("#wait").catch(() => true));
+}
+
 /** A screenshot of the page into --shots, when given: the whole page, or
  * what the window shows (`fullPage` false), where fixed panels are. */
 async function shot(page, name, fullPage = true) {
@@ -1099,7 +1108,7 @@ async function agentOnThePage() {
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.goto(`${base}mechanic/${GAME}/?tab=play&log=1`);
-  await until("the page", async () => (await text(page, "#title").catch(() => "")).startsWith(GAME));
+  await until("the page", () => gamePageOpen(page), 60000);
   ok("gp serve answers /api/mechanic/GAME/ready, and the page opens once the game is ready");
   const agent = mcpClient();
   const paid = { command: "capture background", args: { run: GAME, agents: 1 } };
@@ -1589,7 +1598,7 @@ async function pictureProposals() {
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.goto(`${base}mechanic/${GAME}/?tab=themes`);
-  await until("the page", async () => (await text(page, "#title").catch(() => "")).startsWith(GAME));
+  await until("the page", () => gamePageOpen(page), 60000);
   const agent = mcpClient();
   const propose = (png, why) => agent.call("gp_run", { command: "theme picture propose", args: { dir: theme, game: GAME, picture: "art/hero.png", png, why } });
   const bad = await propose(wide, "Wider.");
@@ -1694,7 +1703,7 @@ async function soundProposals() {
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.goto(`${base}mechanic/${GAME}/?tab=clips`);
-  await until("the page", async () => (await text(page, "#title").catch(() => "")).startsWith(GAME));
+  await until("the page", () => gamePageOpen(page), 60000);
   const lower = [{ op: "transpose", song: "theme", semitones: -12 }];
   const direct = await agent.call("sound_edit", { copy: "check_tune", ops: lower, write: true, confirmed_by_person: true });
   if (!/ACCEPT/.test(direct?.refused ?? "") || existsSync(own)) fail(`a direct write with the page open: ${JSON.stringify(direct).slice(0, 300)}`);
@@ -1804,7 +1813,7 @@ async function roleSoundProposals() {
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.goto(`${base}mechanic/${GAME}/?tab=themes`);
-  await until("the page", async () => (await text(page, "#title").catch(() => "")).startsWith(GAME));
+  await until("the page", () => gamePageOpen(page), 60000);
   const agent = mcpClient();
   const propose = (take, wav, why) => agent.call("gp_run", { command: "theme sound propose", args: { copy: theme, game: GAME, role: "hop", take, wav: join(work, wav), why } });
   const gap = await propose(3, "hop-2.wav", "A third hop.");
@@ -2228,8 +2237,8 @@ async function copyTabs() {
 
   // A port: the four tabs, as before.
   await page.selectOption("#copy-pick", `port:${GAME}`);
-  await until("the picker opens the port", async () => page.url().includes(`/mechanic/${GAME}/`) && (await text(page, "#title").catch(() => "")).startsWith(GAME), 240000);
-  const portTabs = await until("the port's tabs", async () => { const t = await shown(); return t.split(" ").length === 4 ? t : null; });
+  await until("the picker opens the port", async () => page.url().includes(`/mechanic/${GAME}/`) && (await gamePageOpen(page)), 240000);
+  const portTabs = await until("the port's tabs", async () => { const t = await shown().catch(() => ""); return t.split(" ").length === 4 ? t : null; });
   if (portTabs !== "CLIPS* REFINE PLAY THEMES") fail(`the port's tabs: ${portTabs}`);
   const picks = await until("the port's picker lists the copies", async () => {
     const v = await page.evaluate(() => [...document.querySelectorAll("#game-pick option")].map((o) => o.value));
@@ -2326,7 +2335,7 @@ async function narrow() {
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.goto(`${base}mechanic/${GAME}/?tab=clips`);
-  await until("the page at 360 px", async () => (await text(page, "#title").catch(() => "")).startsWith(GAME));
+  await until("the page at 360 px", () => gamePageOpen(page), 60000);
   const fits = () => page.evaluate(() => {
     const W = innerWidth;
     // What sticks out past the window: the outermost element that does,
