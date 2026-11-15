@@ -60,7 +60,9 @@ exe=""
 host_exe=""
 case "$target" in *windows*) exe=".exe" ;; esac
 case "$host" in *windows*) host_exe=".exe" ;; esac
-version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/Cargo.toml" | head -1)"
+# gp's own version (crates/gp-cli), else the workspace's.
+version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/crates/gp-cli/Cargo.toml" | head -1)"
+[ -n "$version" ] || version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/Cargo.toml" | head -1)"
 commit="$(git -C "$repo" rev-parse --short=12 HEAD)"
 if [ -n "$(git -C "$repo" status --porcelain --untracked-files=no)" ]; then
   commit="$commit-dirty"

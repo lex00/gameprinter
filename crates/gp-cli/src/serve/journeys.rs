@@ -937,7 +937,16 @@ mod tests {
         let port = l.local_addr().unwrap().port();
         assert!(answers(&format!("http://127.0.0.1:{port}/p?g=a/b")));
         drop(l);
-        assert!(!answers(&format!("http://127.0.0.1:{port}/p?g=a/b")));
+        // A port freed here can be taken at once by another test running in
+        // parallel, so a closed port is one that stays unanswered on some
+        // try out of a few, each a fresh free port.
+        let closed_port_is_silent = (0..5).any(|_| {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = l.local_addr().unwrap().port();
+            drop(l);
+            !answers(&format!("http://127.0.0.1:{port}/p?g=a/b"))
+        });
+        assert!(closed_port_is_silent);
         assert!(!answers("http://example.com:80/p"));
         assert!(!answers("not a link"));
     }
