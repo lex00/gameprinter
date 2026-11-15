@@ -97,6 +97,7 @@ The server's instructions tell the agent to call `next` at the start of every co
 | Roadmap name | MCP name | Status | Backed by | Read-only |
 |---|---|---|---|---|
 | | `next` | Built: where the port of a game stands, the one next step and who does it, other steps, what runs and anything waiting for the person's yes, with `wait_s` (at most 30 s) to hear a hand-off ([what next](progress.md#what-next)) | `gp progress --next` | Yes |
+| | `host_your_own` | Built: the road to a registry and a page of the person's own, step by step (a repo, the registry, their namespace, their theme, the check from outside, the public page with `r=`, which adds their themes to its own registry's games, a page of their own), each step's commands for `gp_run` and whether it writes to the outside world, which `gp_run` asks the person's yes for ([host your own](host-your-own.md)) | `gp registry host` | Yes |
 | `registry.search` | `registry_search` | Built, the repo's `templates/` and `sources/` | `sources/*.toml`, each `template.toml` and model, `gp roms scan`, and the mechanic index (`gp_mcp::registry::mechanics`, [originals](originals.md#the-mechanic-index)) | Yes |
 | `template.fork` | `template_fork` | Built, local templates only | Copies `templates/<name>/` | No |
 | `surface.describe` | `surface_describe` | Built, the whole model | `gp-model` (facts, evidence), `gp-contract` (levels) | Yes |
@@ -303,7 +304,7 @@ The rules are one table, crates/gp-mcp/src/policy.rs, with a row for every comma
 
 | Rule | Commands | What runs |
 |---|---|---|
-| read | 113 | At once. Writes nothing outside the home's work and cache areas |
+| read | 114 | At once. Writes nothing outside the home's work and cache areas |
 | write | 131 | At once. Writes the person's games, working copies or home; `wrote` has what the command reported |
 | ask | 19 | Only with the person's yes (below). Publishing and landing (`registry publish`, `reindex`, `grant`, `yank` and `submit`, `game attest`, `theme publish` and `recheck`, `model gate`, `tool gate`, `agent integrate`, `self publish`), spending or reading a key (`theme generate`, `dataset grade` with a key, `capture background` with `--agents` above 0, which lets gp serve start paid Claude clip agents), large downloads (`game fetch`, `theme fetch`, `testroms fetch` and `run`). A dry-run flag (`--dry-run`, `model gate --score-only`, `testroms run --offline`) runs at once. Any value starting `git:` or `s3://` needs a yes too |
 | refused | 20 | Never: `serve`, `mcp`, `host serve`, `registry serve`, `mechanic start`, `watch` and `wait`, `assets open`, `metrics time` (it runs any program), `watch events --follow`, and `theme look play` in the foreground (with `--background` or `--shots` it is a write). Nor `theme picture`, `theme sound` and `assets proposal`'s `accept`, `reject` and `undo`: only the person decides a proposal, on their page or in their own terminal (and `assets_edit` refuses to accept or reject a sprite proposal, or an edit the person decided). The refusal names what to use instead. A test (`policy::tests::the_docs_count_the_commands_of_each_rule`) counts each rule's commands from the table, so these numbers fail it when they go stale |

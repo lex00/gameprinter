@@ -69,7 +69,7 @@ Its `[page]` table may give `about` (what the game is, a line of up to 600 chara
 
 ## Submitting to a registry you can't write to
 
-`gp registry submit DIR --name NS/NAME --version V --title T [--kind game] [--for GAME]` offers a game or theme to a registry in a GitHub repo, `lex00/gp-registry` unless `--to OWNER/REPO` names another, as a pull request (issue #9). The owner still decides: nothing reaches the registry until they merge.
+`gp registry submit DIR --name NS/NAME --version V --title T --to OWNER/REPO [--kind game] [--for GAME]` offers a game or theme to the registry in the GitHub repo `--to` names (required; `lex00/gp-registry` takes no one else's themes), as a pull request (issue #9). The owner still decides: nothing reaches the registry until they merge.
 
 | Step | What happens |
 |---|---|

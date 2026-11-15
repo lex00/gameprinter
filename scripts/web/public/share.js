@@ -17,9 +17,59 @@ const NAME = /^[a-z0-9][a-z0-9.-]{0,63}\/[a-z0-9][a-z0-9.-]{0,63}$/;
 const VERSION = /^\d{1,6}\.\d{1,6}\.\d{1,6}$/;
 // A mode, a switch or a look's id.
 const WORD = /^[A-Za-z0-9_-]{1,64}$/;
-// The keys a link may have; any other is left out.
-export const LINK_KEYS = ["g", "c", "look", "mode", "on"];
+// The keys a link may have; any other is left out. `r` is a registry by its
+// address and `rk` that registry's root key (docs/host-your-own.md).
+export const LINK_KEYS = ["g", "c", "look", "mode", "on", "r", "rk"];
 const MAX_SWITCHES = 64;
+// An ssh-ed25519 public key's base64 body: the 51 bytes of its wire form are
+// always 68 characters, the first 25 of them the same for every key.
+const ROOT_KEY = /^AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}$/;
+
+/** A registry's address from a link's `r`: an https address with no
+ * user, password, query or fragment, at most 400 characters, as its href
+ * with no trailing slash; null for anything else. Only https: a page on
+ * https can't read plain http anyway, and nothing on the page asks for
+ * any other scheme. */
+export function registryAddress(v) {
+  if (typeof v !== "string" || v.length === 0 || v.length > 400) return null;
+  let u;
+  try {
+    u = new URL(v);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "https:" || !u.hostname || u.username || u.password || u.search || u.hash || v.includes("\\")) return null;
+  return u.href.replace(/\/+$/, "");
+}
+
+/** A root key from a link's `rk`: the base64 body of an ssh-ed25519
+ * public key, as the `ssh-ed25519 BODY` line a source's root holds; null
+ * for anything else. A `+` in the body reaches the page as a space when
+ * the link didn't escape it (%2B), so a space is read as `+`. */
+export function rootKey(v) {
+  if (typeof v !== "string") return null;
+  const body = v.replace(/ /g, "+");
+  return ROOT_KEY.test(body) ? `ssh-ed25519 ${body}` : null;
+}
+
+/** The registry the page also takes themes from, besides its own source
+ * (page.json's `source`), which games always come from: the link's
+ * (`link.registry`, from `r` and `rk`), else the page's own second one
+ * (page.json's `themes`, set when it was built), else none. One with the
+ * same address as the page's own source is none: that source already
+ * offers its themes. It is read with its root key when there is one (the
+ * link's `rk`, or page.json's), else with none: every file is still
+ * checked against its hash, and signatures only against a key the page
+ * or the link holds. `byLink` says the link named it. Returns { name,
+ * url, root, byLink } or null. */
+export function themesSource(own, link, built = null) {
+  const ownUrl = String(own?.url ?? "").replace(/\/+$/, "");
+  const r = link?.registry;
+  if (r) return r.url === ownUrl ? null : { name: r.url, url: r.url, root: r.root ?? null, byLink: true };
+  const b = built && typeof built.url === "string" ? registryAddress(built.url) : null;
+  if (!b || b === ownUrl) return null;
+  return { name: typeof built.name === "string" ? built.name : b, url: b, root: typeof built.root === "string" ? built.root : null, byLink: false };
+}
 
 /** NAME or NAME@VERSION, checked, as { name, version }; null if it isn't one. */
 export function packageRef(v) {
@@ -38,7 +88,8 @@ export function packageRef(v) {
  * their values. */
 export function readLink(search) {
   const q = new URLSearchParams(search);
-  const out = { game: null, content: null, look: null, mode: null, on: null, ignored: [] };
+  const out = { game: null, content: null, look: null, mode: null, on: null, registry: null, ignored: [] };
+  let root = null;
   const seen = new Set();
   for (const key of q.keys()) {
     if (seen.has(key)) continue;
@@ -59,8 +110,18 @@ export function readLink(search) {
       const parts = v.split(",").filter((s) => s !== "");
       if (parts.length <= MAX_SWITCHES && parts.every((s) => WORD.test(s))) out.on = [...new Set(parts)];
       else out.ignored.push(key);
+    } else if (key === "r") {
+      const url = registryAddress(v);
+      if (url) out.registry = { url, root: null };
+      else out.ignored.push(key);
+    } else if (key === "rk") {
+      root = rootKey(v);
+      if (!root) out.ignored.push(key);
     }
   }
+  // A root key is a registry's, so one with no registry is left out.
+  if (root && out.registry) out.registry.root = root;
+  else if (root) out.ignored.push("rk");
   out.ignored = [...new Set(out.ignored)];
   return out;
 }
@@ -112,10 +173,12 @@ export function linkSettings(link, names) {
 
 /** A link to `base` (the page's /p) for what is playing: the game, the
  * theme package (`content`, NS/NAME) or another look's id (`look`, such as
- * `original`), and the profile the player runs (a mode, or switches joined
- * by `+`), each held to its shape and to the game's names first. Nothing
- * else goes in it: no ROM, no save, nothing of the player. */
-export function shareLink(base, { game, content = null, look = null, profile = null, names = null }) {
+ * `original`), the profile the player runs (a mode, or switches joined
+ * by `+`), and the registry by address it came from (`registry`, { url,
+ * root }, null for the page's own), each held to its shape and to the
+ * game's names first. Nothing else goes in it: no ROM, no save, nothing of
+ * the player. */
+export function shareLink(base, { game, content = null, look = null, profile = null, names = null, registry = null }) {
   const g = packageRef(game);
   if (!g || g.version) throw new Error("a share link needs the game's name");
   const u = new URL(base);
@@ -135,8 +198,15 @@ export function shareLink(base, { game, content = null, look = null, profile = n
       else q.set("mode", "retro");
     }
   }
-  // Commas and slashes are kept as they are, so a link reads plainly.
-  u.search = q.toString().replace(/%2F/gi, "/").replace(/%2C/gi, ",");
+  const r = registry ? registryAddress(registry.url) : null;
+  if (r) {
+    q.set("r", r);
+    const key = registry.root ? rootKey(String(registry.root).replace(/^ssh-ed25519 /, "")) : null;
+    if (key) q.set("rk", key.slice("ssh-ed25519 ".length));
+  }
+  // Commas, slashes and colons are kept as they are, so a link reads
+  // plainly; a key's `+` stays %2B, which a link must keep.
+  u.search = q.toString().replace(/%2F/gi, "/").replace(/%2C/gi, ",").replace(/%3A/gi, ":");
   return u.href;
 }
 

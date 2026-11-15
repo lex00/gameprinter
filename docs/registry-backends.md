@@ -28,6 +28,8 @@ GitHub's raw host answers with `Access-Control-Allow-Origin: *` and `Cross-Origi
 
 The root key works as on any other target: the page trusts the key, wherever the files are.
 
+The public page also offers the themes of such a registry, beside its own registry's, when its link names it: `r=` with the raw address, and `rk=` with the root key for a signed one. Games still come from the page's own registry, so a registry of themes holds no game. `gp registry host CHECKOUT` prints the address. [host-your-own.md](host-your-own.md) takes a person from an empty repo to a link that plays their theme, and to a page of their own.
+
 ## Signing is opt-in
 
 A reader checks signatures only for a source it holds a root key for. For the page that is the `root` line of the source in `scripts/web/sources.toml`. For `gp` it is `--root`. The choice belongs to the reader, so a registry can't turn its own checks off.

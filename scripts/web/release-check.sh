@@ -1,7 +1,17 @@
 #!/bin/bash
 # The release check for the public page (docs/web.md, "Deploying the
 # public page"): everything that must hold before the page is uploaded.
-#   scripts/web/release-check.sh [--full] [--out DIR] [--game GAME_DIR]
+#   scripts/web/release-check.sh [--full] [--no-roms] [--out DIR] [--game GAME_DIR]
+#
+# --no-roms is for someone with no ROMs, deploying a copy of the page
+# (docs/host-your-own.md): GP_ROM_DIR is an empty folder of its own, so
+# every check that needs a ROM is skipped and says so (the page check's ROM
+# sections, the lift's ROM tests, Moss Hop's sections), and the two steps
+# that can't pass without one are skipped with a line each instead of
+# failing: the build's comparison of the page with the game's ROMs (gp
+# template served's NOT COMPARED) and gp package scan. A pass is recorded
+# as one made without ROMs ("roms none"), and deploy.sh says so before it
+# uploads; the upload is still held to the page's digest.
 #
 # 0. Takes a snapshot of the page's source: a shallow clone of its repo
 #    (lex00/gp-registry for the deployed page) at the commit its branch is
@@ -63,14 +73,16 @@ home="${GP_HOME:-$HOME/.gameprinter}"
 gp="${GP:-$repo/target/debug/gp}"
 
 full=0
+no_roms=0
 out=""
 game="$repo/../games/donkey-kong"
 while [ $# -gt 0 ]; do
   case "$1" in
     --full) full=1; shift ;;
+    --no-roms) no_roms=1; shift ;;
     --out) [ -n "${2:-}" ] || { echo "release-check: --out needs a folder" >&2; exit 2; }; out="$2"; shift 2 ;;
     --game) [ -n "${2:-}" ] || { echo "release-check: --game needs a folder" >&2; exit 2; }; game="$2"; shift 2 ;;
-    *) echo "usage: scripts/web/release-check.sh [--full] [--out DIR] [--game GAME_DIR]" >&2; exit 2 ;;
+    *) echo "usage: scripts/web/release-check.sh [--full] [--no-roms] [--out DIR] [--game GAME_DIR]" >&2; exit 2 ;;
   esac
 done
 [ -f "$game/package.toml" ] || { echo "release-check: $game is no game package (no package.toml)" >&2; exit 2; }
@@ -88,6 +100,16 @@ version() {
 }
 games_repo="$(git -C "$game" rev-parse --show-toplevel)" || { echo "release-check: $game isn't in a git checkout" >&2; exit 2; }
 id="$(version "$repo")-games-$(version "$games_repo")" || exit 2
+if [ $no_roms = 1 ]; then
+  id="$id-no-roms"
+  export GP_ROM_DIR="$home/work/page-release/no-roms"
+  mkdir -p "$GP_ROM_DIR" || exit 2
+  if [ -n "$(ls -A "$GP_ROM_DIR")" ]; then
+    echo "release-check: --no-roms reads $GP_ROM_DIR as an empty ROM folder, but it holds files; move them out first" >&2
+    exit 2
+  fi
+  echo "note: --no-roms: GP_ROM_DIR is $GP_ROM_DIR, empty, so every check that needs a ROM is skipped and says so"
+fi
 [ -n "$out" ] || out="$home/work/page-release/$id"
 if [ $full = 1 ]; then export GP_WEB_REUSE=save; else export GP_WEB_REUSE=1; fi
 # The theme the page installs with the game: the deployed page's, Turnips,
@@ -109,8 +131,13 @@ step() {
 
 step "a snapshot of the page's source"
 source_name="${GP_PAGE_SOURCE:-registry}"
-source_url="$(python3 -I -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))[sys.argv[2]]["url"])' "$repo/scripts/web/sources.toml" "$source_name" 2>/dev/null)" \
-  || { echo "release-check: scripts/web/sources.toml has no source named $source_name" >&2; exit 2; }
+if [ -n "${GP_PAGE_SOURCE_URL:-}" ]; then
+  source_url="${GP_PAGE_SOURCE_URL%/}"
+  source_name="$source_url"
+else
+  source_url="$(python3 -I -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))[sys.argv[2]]["url"])' "$repo/scripts/web/sources.toml" "$source_name" 2>/dev/null)" \
+    || { echo "release-check: scripts/web/sources.toml has no source named $source_name" >&2; exit 2; }
+fi
 registry_folder=()
 case "$source_url" in
   .) echo "ok: the page's source is its own address ($source_name), so there is no registry to clone" ;;
@@ -131,7 +158,10 @@ case "$source_url" in
     echo "ok: $source_repo is at commit $(git -C "$snapshot" rev-parse HEAD) on $source_branch; the page and the check read this copy for the whole run ($snapshot)"
     # A copy of it with a made-up second game (test/made-up) and its theme,
     # for the sections about a game named in the address (game-*,
-    # share-link). The page's own game reads the same files in both.
+    # share-link), and two made-up themes for the page's own game
+    # (acme/harbor-lights, test/paper-moon), so the theme sections never
+    # hang on what people publish. The page's own game reads the same files
+    # in both. deploy.sh's check of the uploaded page reads this copy too.
     if any="$(GP="$gp" "$repo/scripts/web/test-registry.sh" "$snapshot" "$snapshot.any" | tail -1)" && [ -d "$any/index/test/made-up" ]; then
       echo "ok: the check reads a copy with a made-up second game added ($any)"
       snapshot="$any"
@@ -149,10 +179,18 @@ esac
 
 step "build the page and check it for game data ($out)"
 mkdir -p "$out" || exit 2
+rm -f "$out.served.txt"
 GP="$gp" "$repo/scripts/web/build-page.sh" "$game" "$out"
 s=$?
+# Without ROMs, gp template served can't compare (its exit 2, with a NOT
+# COMPARED line and its verdict "not checked against every ROM", which it
+# gives only when nothing was found): said, and not a failure.
+if [ $s = 2 ] && [ $no_roms = 1 ] && [ -f "$out/index.html" ] && grep -q '^NOT COMPARED' "$out.served.txt" 2>/dev/null && grep -q ': not checked against every ROM$' "$out.served.txt"; then
+  echo "skip: built; with no ROMs (--no-roms) the page and its play files weren't compared with the game's ROMs (gp template served: NOT COMPARED)"
+  s=0
+fi
 case $s in
-  0) echo "ok: built; no file holds a ROM's bytes, lifted files or pictures made from them" ;;
+  0) [ $no_roms = 1 ] || echo "ok: built; no file holds a ROM's bytes, lifted files or pictures made from them" ;;
   1) fail+=("the page holds game data (gp template served)") ;;
   *) fail+=("the page could not be built or checked (build-page.sh exit $s; gp template served needs the ROMs in GP_ROM_DIR)") ;;
 esac
@@ -222,7 +260,9 @@ step "gp package scan on the game's package"
 gp_bin="$(cd "$(dirname "$gp")" && pwd)/$(basename "$gp")"
 name="$(basename "$game")"
 scan_in=(--file "$gp_bin" --listing "${GP_ROM_DIR:-$home/roms}" --tree "$game")
-if [ $full = 0 ] && from="$(python3 -I "$reuse" find "package-scan-$name" --extra "$name")"; then
+if [ $no_roms = 1 ]; then
+  echo "skip  $name: gp package scan compares the package with its ROMs, and --no-roms has none"
+elif [ $full = 0 ] && from="$(python3 -I "$reuse" find "package-scan-$name" --extra "$name")"; then
   json="$(cat "$from"/out/*.json)"
   echo "kept  $name: the scan of $(sed -n 's/.*"made": "\([^"]*\)".*/\1/p' "$from/inputs.json"), none of the files it read changed"
 else
@@ -232,7 +272,7 @@ else
     python3 -I "$reuse" save "package-scan-$name" --extra "$name" "${scan_in[@]}" --out "$out.scan-$name.json" >/dev/null
   fi
 fi
-python3 -I - "$name" "$json" <<'PY' || fail+=("package scan: $name has needs-rewrite items or wasn't compared with its ROMs (above)")
+[ $no_roms = 1 ] || python3 -I - "$name" "$json" <<'PY' || fail+=("package scan: $name has needs-rewrite items or wasn't compared with its ROMs (above)")
 import json, sys
 t, raw = sys.argv[1:]
 try:
@@ -283,8 +323,14 @@ echo
 if [ ${#fail[@]} -eq 0 ]; then
   passed="$home/work/page-release/passed"
   mkdir -p "$passed" || exit 2
-  printf 'bundle %s\nid %s\ngame %s\nfull %s\nwhen %s\n' "$out" "$id" "$game" "$full" "$(date '+%Y-%m-%dT%H:%M:%S')" > "$passed/$checked"
-  echo "PASS: the page can be deployed (digest $checked, recorded in $passed)"
+  roms=some
+  [ $no_roms = 1 ] && roms=none
+  printf 'bundle %s\nid %s\ngame %s\nfull %s\nroms %s\nwhen %s\n' "$out" "$id" "$game" "$full" "$roms" "$(date '+%Y-%m-%dT%H:%M:%S')" > "$passed/$checked"
+  if [ $no_roms = 1 ]; then
+    echo "PASS without ROMs: every check that needs a ROM was skipped (above); the page can be deployed (digest $checked, recorded in $passed as made without ROMs)"
+  else
+    echo "PASS: the page can be deployed (digest $checked, recorded in $passed)"
+  fi
   echo "bundle: $out"
   exit 0
 fi

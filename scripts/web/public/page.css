@@ -27,6 +27,7 @@ header {
 h1 { font-size: 20px; margin: 0; letter-spacing: 0.02em; }
 #mode { color: var(--muted); }
 #skipped { flex-basis: 100%; color: #f0d080; font-size: 14px; }
+#registry-line { margin: 0; padding: 6px 16px; color: #f0d080; font-size: 14px; overflow-wrap: anywhere; }
 .spacer { flex: 1; }
 button, label.button {
   font: inherit;

@@ -5,8 +5,12 @@
 #
 # script-src: the page's own files, and WebAssembly (the interpreter and
 # the lift module). Nothing inline: styles are in page.css and preview.css.
-# connect-src: its own files, and any https source a game comes from. No
-# package script runs on the page. worker-src: the page's own loader of a
+# connect-src: its own files, and any https source a game comes from:
+# page.json's source, and a second registry of themes (a link's r=, which
+# the page takes only as https; docs/host-your-own.md). `https:` rather
+# than a list of hosts, so a registry on GitHub's raw host, a github.io
+# site, S3 or any other https host works; plain http, ws: and every other
+# scheme stay refused. No package script runs on the page. worker-src: the page's own loader of a
 # game's module (page/module-host.js), whose shared buffer is why the page
 # is cross-origin isolated (the two Cross-Origin headers). frame-src and
 # frame-ancestors 'self': the game runs in a frame of the same site.

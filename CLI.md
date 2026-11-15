@@ -53,11 +53,12 @@ For making and playing games: what a person installing gp uses.
 | `gp registry check` | Test a registry from outside, against its root if --root is given |
 | `gp registry grant` | Grant a namespace in a registry that exists, so packages named NAMESPACE/... can be installed from it |
 | `gp registry grants` | List the namespaces a registry has granted, with each one's status and number of keys |
+| `gp registry host` | Where hosting your own registry on GitHub stands, step by step, and its raw address for a page |
 | `gp registry init` | Make a registry in a folder or s3://BUCKET |
 | `gp registry publish` | Publish a folder of files as one exact version |
 | `gp registry reindex` | Rewrite the list files from these name@version entries, signed if --key is given |
 | `gp registry serve` | Serve a folder registry and a built page on this machine only |
-| `gp registry submit` | Offer a game or theme to a registry you can't write to, such as lex00/gp-registry, as a pull request its owner merges or not |
+| `gp registry submit` | Offer a game or theme to a registry you can't write to that takes submissions, as a pull request its owner merges or not. Name its repo with --to; lex00/gp-registry takes no one else's themes (host your own: docs/host-your-own.md) |
 | `gp registry yank` | Withdraw a published version: add it to yanks.toml with a reason and a severity, or take it back out with --undo |
 | `gp roms add` | Copy ROM files you own into $GP_ROM_DIR/nes/, or a romset (a MAME zip) into $GP_ROM_DIR/arcade/, identifying each one. A ROM no game names yet is added too, as unknown: `gp game new` starts a game for it |
 | `gp roms clean` | Write a cleaned copy of a NES image: header from the game's roms.toml (or the file's, by the header rules), no trainer, no trailing bytes. Never changes the input. Exits 1 when the cleaned data matches no game's roms.toml |

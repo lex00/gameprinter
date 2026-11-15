@@ -7,6 +7,8 @@ prompt: |
 
 A theme is new pictures and sounds for a game. It changes how the game looks and nothing about how it plays: the game's model, the text file of its rules ([what a model and a template are](../)), stays as it was, so every body keeps its place and its hit box. A player picks a theme under Settings, Theme, and can go back to the original art at any time. On a ported game such as Donkey Kong the levels and the rules' tables still come from the player's own ROM, so the game with your theme plays in a browser only for someone who has that ROM.
 
+When your theme is ready, you host it yourself: [Host your theme](../host-your-own/) takes you from your theme folder to a registry of your own and a link that plays your theme on the public page. Your AI agent can walk you through it.
+
 ## A theme with large art
 
 The way to make a theme today is a large-art theme: pictures drawn bigger than the game's own, at the place and size of the picture each one stands for, and a rules file that says how to draw them. [`lex00/turnips`](https://github.com/lex00/turnips) is one, a clay theme for Donkey Kong, and the one to copy.
@@ -146,19 +148,21 @@ When you ask your agent for a different picture in your theme, a sound for your 
 
 ## Get it in the game
 
-Keep your theme in a repo of your own, with its pictures in Git LFS. Players get themes from the registry the page reads, [`lex00/gp-registry`](https://github.com/lex00/gp-registry). You can't write to it, but you can send your theme to it: `gp registry submit DIR --name NS/NAME --version V --title T --for lex00/donkey-kong` runs every check a publish runs on your machine, then opens a pull request from your fork ([Run a registry](../registry/#send-a-theme-or-game-to-someone-elses-registry)). The pull request carries your theme and its lines in the lists, and grants your namespace when it's new. If a check fails, nothing is sent and it says which check and why. The owner reads the pull request and merges it or not; merging does what they would otherwise run by hand (`gp registry grant`, `gp registry publish ... --for lex00/donkey-kong`, `gp registry reindex ... --keep NAME@VERSION`). Without gp, open an issue there with your repo's link, as its README says today. The page at [gameprinter.intentius.workers.dev](https://gameprinter.intentius.workers.dev) then installs it with the game and offers it under Settings, Theme, beside Original (the ROM's own art) and Turnips. Nothing on the page changes for that: the page asks the registry what it offers for the game each time it loads. `gp registry grants` lists the namespaces granted, and the owner can withdraw a version with `gp registry yank`.
+Keep your theme in a repo of your own, with its pictures in Git LFS, and publish it to a registry of your own: a public GitHub repo of static files that `gp registry` writes. The project's registry, [`lex00/gp-registry`](https://github.com/lex00/gp-registry), holds the project's own games and themes and doesn't take others' themes. [Host your theme](../host-your-own/) is the whole road, step by step, up to the link you share. Ask your AI agent to host your theme yourself and it walks you through it over `gp mcp`, asking before each step that writes to GitHub.
+
+The link names your registry with `r=`, and the page at [gameprinter.intentius.workers.dev](https://gameprinter.intentius.workers.dev) then offers your theme under Settings, Theme, beside Original (the ROM's own art) and Turnips. The game itself still comes from the project's registry, so yours holds only your theme:
+
+    https://gameprinter.intentius.workers.dev/p?g=lex00/donkey-kong&c=YOUR-NAME/my-theme&r=https://raw.githubusercontent.com/YOUR-NAME/YOUR-REGISTRY/main
 
 To ask whether the page offers it, and if not why:
 
 ```sh
-gp registry check https://raw.githubusercontent.com/lex00/gp-registry/main --for lex00/donkey-kong --theme YOUR-NAME/my-theme
+gp registry check https://raw.githubusercontent.com/YOUR-NAME/YOUR-REGISTRY/main --for lex00/donkey-kong --theme YOUR-NAME/my-theme
 ```
 
 It reads the game's theme list as the page does and prints `OFFERED`, or `NOT OFFERED` and why. The reasons it knows are these: not published, published for another game, withdrawn, a name the page can't list or that another theme there already has, an install that fails, and (with your ROM and the game's folder here) files the page's ROM reader leaves out. Without `--theme` it lists each one the page offers for the game and each one it leaves out. Players see the same reasons on the page, in About and, while a ROM plays, in the line under the header.
 
 The page opens in its own theme, Turnips. A link with `&c=YOUR/THEME` opens it in yours instead.
-
-You can also [publish it to a registry of your own](../registry/), but the game page only reads its one registry, so players wouldn't see it there.
 
 ## A theme from the game's theme kit
 

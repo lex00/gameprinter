@@ -23,7 +23,7 @@
 // before this file runs, so a lift.js that fails to load is reported as
 // the ROM's message rather than stopping the page with no word.
 
-import { gamePageOf, linkSettings, profileNames, readLink, shareLink } from "./share.js";
+import { gamePageOf, linkSettings, profileNames, readLink, shareLink, themesSource } from "./share.js";
 import { whatIsThis } from "./what-is-this.js";
 
 const $ = (id) => document.getElementById(id);
@@ -93,18 +93,48 @@ let facts = null;
 let rom = null;
 let link = null;
 let player = null;
+// The source games and themes are installed from (page.json's), and a
+// second registry themes also come from (`extra`): the one the link names
+// by its address (`r`, an https address, and its root key `rk`), else the
+// one the page was built with (page.json's `themes`), else none
+// (share.js themesSource). Games always come from `source`. The install
+// checks are the same for both: every file against its hash, and
+// signatures against a root key when the page or the link holds one.
+let source = null;
+let extra = null;
 // What the address asked for, each value held to its shape (share.js):
 // the game `g` and theme `c`, each NAME or NAME@VERSION, a look `look`,
-// and the settings `mode` and `on`. With no `g`, the page's own game in
-// its own content (page.json's `content`, a theme installed with the
-// game); `look=original` opens in the original's look instead. The page
-// has one source, its own.
+// the settings `mode` and `on`, and a registry by its address `r` (with
+// its root key `rk`). With no `g`, the page's own game in its own content
+// (page.json's `content`, a theme installed with the game);
+// `look=original` opens in the original's look instead. With no `r`, the
+// page's own source.
 function gameLink(p) {
   const l = readLink(location.search);
   const game = l.game ?? { name: p.game, version: null };
   const own = game.name === p.game;
   const content = l.look ? null : (l.content ?? (own && p.content ? readLink(`?c=${encodeURIComponent(p.content)}`).content : null));
   return { ...l, game, own, content, linkedContent: !!l.content && !l.look, direct: !!l.game };
+}
+// The line under the header naming the second registry themes come from,
+// when there is one: where it came from, that games don't, and how its
+// files are checked, as text. A link's `r` that isn't an https address is
+// said in words, and no second registry is read for it.
+function showSource(e, l) {
+  const line = $("registry-line");
+  if (!line) return;
+  if (e) {
+    const by = e.byLink ? "the link gives" : "this page holds";
+    const checks = e.root
+      ? `Each of its files is checked against its hash, and each signature against the root key ${by}.`
+      : `Each of its files is checked against its hash. ${e.byLink ? "The link gives" : "This page holds"} no root key for it, so its signatures aren't checked.`;
+    line.textContent = `Themes on this page also come from the registry at ${e.url}, which ${e.byLink ? "the link names" : "this page was built with"}, besides this page's own registry. Games come only from this page's own registry. ${checks}`;
+    line.hidden = false;
+  } else {
+    line.textContent = "";
+    line.hidden = true;
+  }
+  if (l.ignored.includes("r")) notices.push("The link's registry (r=) isn't an https address, so no themes are read from it.");
 }
 // The game's facts shown on the page: its title, the ROM line, and for a
 // game that isn't the page's own its how-to-play lines and its About
@@ -184,6 +214,9 @@ function bringLine(r) {
 const ready = pageFile.then((p) => {
   page = p;
   link = gameLink(p);
+  source = p.source;
+  extra = themesSource(p.source, link, p.themes ?? null);
+  showSource(extra, link);
   if (link.own) {
     facts = { title: p.title, player: p.player ?? "nes", rom: { kind: "nes", ...p.rom }, howto: p.howto ?? [], trademark: p.trademark ?? null, madeBy: p.made_by ?? null, about: p.about ?? null };
     showFacts(facts);
@@ -214,7 +247,7 @@ let notices = [];
 const installing = ready.then(async () => {
   const x = await install();
   const progress = (n, of) => say(`Getting the game: ${n} of ${of} files. It stays in this browser so it plays offline.`);
-  const g = await x.ensure(page.source, { name: link.game.name, version: link.game.version }, progress);
+  const g = await x.ensure(source, { name: link.game.name, version: link.game.version }, progress);
   if (g.record.kind !== "game") throw new Error(`${g.record.name} isn't a game on this page's source`);
   if (!g.record.files.some((f) => f.path.startsWith("play/"))) throw new Error(`${g.record.name}@${g.record.version} has no files this player can run`);
   const files = await x.filesOf(g.record, "play");
@@ -234,7 +267,9 @@ const installing = ready.then(async () => {
   if (accept) $("rom").setAttribute("accept", accept);
   await x.setCurrent(g.record);
   if (g.notice) notices.push(g.notice);
-  if (link.ignored.length) notices.push(`The link's ${link.ignored.join(", ")} ${link.ignored.length === 1 ? "wasn't" : "weren't"} understood and ${link.ignored.length === 1 ? "was" : "were"} left out.`);
+  // A registry left out is said on its own (showSource).
+  const ignored = link.ignored.filter((k) => k !== "r");
+  if (ignored.length) notices.push(`The link's ${ignored.join(", ")} ${ignored.length === 1 ? "wasn't" : "weren't"} understood and ${ignored.length === 1 ? "was" : "were"} left out.`);
   // The settings the link asks for, held to the modes and switches the
   // game's own profiles.toml files offer (each template's in its lift).
   const names = { presets: new Set(), switches: new Set() };
@@ -256,14 +291,31 @@ const installing = ready.then(async () => {
   // kept with why (`notOffered`: { name, title, reason, detail }, the
   // reason written to follow "because"), shown in the line under the
   // header while a ROM plays and in About, with the detail in the log.
-  const asked = link.content ? [{ ...link.content, linked: true }] : [];
-  const offer = await x.offer(page.source, g.record.name).then(
+  // With a second registry (`extra`), its list for the game is read too:
+  // each theme it offers that the page's own source doesn't is offered,
+  // installed from it (`src`). A name both offer is the own source's.
+  const asked = link.content ? [{ ...link.content, linked: true, src: source }] : [];
+  const offer = await x.offer(source, g.record.name).then(
     (o) => o,
     () => null,
   );
-  const listed = offer?.offered ?? null;
-  const notOffered = (offer?.leftOut ?? []).map((l) => ({ name: l.name, title: l.title, reason: l.reason, detail: l.detail }));
-  const list = listed ?? [];
+  const more = extra
+    ? await x.offer(extra, g.record.name).then(
+        (o) => o,
+        (err) => {
+          notices.push(`The registry at ${extra.url} couldn't be read for themes: ${err.message ?? err}.`);
+          return null;
+        },
+      )
+    : null;
+  const own = (offer?.offered ?? []).map((o) => ({ ...o, src: source }));
+  const added = (more?.offered ?? []).filter((o) => !own.some((m) => m.name === o.name)).map((o) => ({ ...o, src: extra }));
+  // A linked theme is left out only when every list could be read.
+  const listed = offer && (!extra || more) ? [...own, ...added] : null;
+  const found = [...own, ...added].find((o) => o.name === link.content?.name);
+  if (found && asked[0]) asked[0].src = found.src;
+  const notOffered = [...(offer?.leftOut ?? []), ...(more?.leftOut ?? [])].map((l) => ({ name: l.name, title: l.title, reason: l.reason, detail: l.detail }));
+  const list = listed ?? [...own, ...added];
   // A theme offered whose last recheck failed (its by-game line's
   // `recheck`, passed on by gp-registry.wasm only when it failed) is still
   // offered, and says when and why in the same line and in About.
@@ -277,7 +329,7 @@ const installing = ready.then(async () => {
     );
     asked.shift();
   }
-  for (const o of list) if (!asked.some((a) => a.name === o.name)) asked.push({ name: o.name, version: null, title: o.title });
+  for (const o of list) if (!asked.some((a) => a.name === o.name)) asked.push({ name: o.name, version: null, title: o.title, src: o.src });
   // A game that plays from its own files offers the looks its package
   // holds (play/themes/); a theme from the source would reach the frame
   // only through a ROM's lift, so each is named and left out.
@@ -290,7 +342,7 @@ const installing = ready.then(async () => {
   let theme = null;
   const themes = [];
   for (const a of asked) {
-    const c = await x.ensure(page.source, { name: a.name, version: a.version ?? null, for_game: g.record.name }).catch((err) => {
+    const c = await x.ensure(a.src ?? source, { name: a.name, version: a.version ?? null, for_game: g.record.name }).catch((err) => {
       notices.push(
         a.linked
           ? `${a.name} couldn't be used: ${err.message ?? err}. Playing in the game's own look.`
@@ -403,7 +455,8 @@ function currentShare() {
     if (t) content = t.name;
     else look = theme;
   }
-  return shareLink(new URL("p", document.baseURI).href, { game: linked?.game?.name ?? link.game.name, content, look, profile, names: linked?.names ?? null });
+  const registry = extra?.byLink ? { url: extra.url, root: extra.root } : null;
+  return shareLink(new URL("p", document.baseURI).href, { game: linked?.game?.name ?? link.game.name, content, look, profile, names: linked?.names ?? null, registry });
 }
 $("share").addEventListener("click", async () => {
   $("share").blur();

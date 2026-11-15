@@ -3,7 +3,7 @@
 // page facts from its package. No browser and no ROM.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { gamePageOf, linkSettings, packageRef, profileNames, readLink, shareLink, sourcesOf } from "./share.js";
+import { gamePageOf, linkSettings, packageRef, profileNames, readLink, registryAddress, rootKey, shareLink, sourcesOf, themesSource } from "./share.js";
 
 const PROFILES = `format = "0.2.0"
 # A comment with name = "not_a_switch"
@@ -89,7 +89,80 @@ test("a share link carries the game, the theme or look and the settings, and rea
   }
   assert.throws(() => shareLink(base, { game: "not a name" }));
   // Only these keys: nothing of the player.
-  for (const url of [a, b, c]) assert.ok([...new URL(url).searchParams.keys()].every((k) => ["g", "c", "look", "mode", "on"].includes(k)), url);
+  for (const url of [a, b, c]) assert.ok([...new URL(url).searchParams.keys()].every((k) => ["g", "c", "look", "mode", "on", "r", "rk"].includes(k)), url);
+});
+
+// A made-up key body of the right shape (not anyone's key).
+const RK = "AAAAC3NzaC1lZDI1NTE5AAAAI" + "Ab+/".repeat(10) + "xyz";
+const REG = "https://raw.githubusercontent.com/acme/harbor-registry/main";
+
+test("a registry by address: https only, held to its shape", () => {
+  assert.equal(registryAddress(REG), REG);
+  assert.equal(registryAddress(`${REG}/`), REG, "a trailing slash is taken off");
+  assert.equal(registryAddress("https://acme.github.io/harbor"), "https://acme.github.io/harbor");
+  for (const bad of [
+    "http://raw.githubusercontent.com/acme/r/main",
+    "http://127.0.0.1:8377",
+    "ftp://acme.example/r",
+    "javascript:alert(1)",
+    "data:text/plain,x",
+    "//acme.example/r",
+    "acme.example/r",
+    "https://user:pw@acme.example/r",
+    "https://acme.example/r?x=1",
+    "https://acme.example/r#x",
+    "https://" + "a".repeat(400) + ".example",
+    "",
+  ]) {
+    assert.equal(registryAddress(bad), null, bad);
+  }
+});
+
+test("a root key in a link is an ssh-ed25519 key's body, a + read back from a space", () => {
+  assert.equal(RK.length, 68);
+  assert.equal(rootKey(RK), `ssh-ed25519 ${RK}`);
+  assert.equal(rootKey(RK.replace(/\+/g, " ")), `ssh-ed25519 ${RK}`);
+  for (const bad of ["", "ssh-ed25519 " + RK, RK.slice(1), RK + "A", "AAAAB3NzaC1yc2EAAAADAQABAAABAQ" + "A".repeat(38), RK.replace("x", "<")]) assert.equal(rootKey(bad), null, bad);
+});
+
+test("a link's registry: read, carried by a share link, and left out when it isn't one", () => {
+  const l = readLink(`?g=lex00/donkey-kong&c=acme/harbor-lights&r=${REG}`);
+  assert.deepEqual(l.registry, { url: REG, root: null });
+  assert.deepEqual(l.ignored, []);
+  const signed = readLink(`?g=lex00/donkey-kong&r=${encodeURIComponent(REG)}&rk=${encodeURIComponent(RK)}`);
+  assert.deepEqual(signed.registry, { url: REG, root: `ssh-ed25519 ${RK}` });
+  // A + not escaped arrives as a space, and is read back.
+  assert.equal(readLink(`?r=${REG}&rk=${RK}`).registry.root, `ssh-ed25519 ${RK}`);
+  const http = readLink("?g=lex00/donkey-kong&r=http://raw.githubusercontent.com/acme/r/main");
+  assert.equal(http.registry, null);
+  assert.deepEqual(http.ignored, ["r"]);
+  assert.deepEqual(readLink(`?rk=${encodeURIComponent(RK)}`).ignored, ["rk"], "a key with no registry is left out");
+  assert.deepEqual(readLink(`?r=${REG}&rk=nope`).registry, { url: REG, root: null });
+  assert.deepEqual(readLink(`?r=${REG}&rk=nope`).ignored, ["rk"]);
+  assert.deepEqual(readLink(`?r=${REG}&r=https://other.example`).ignored, ["r"], "a registry given twice is not guessed at");
+
+  const base = "https://play.example/p";
+  const a = shareLink(base, { game: "lex00/donkey-kong", content: "acme/harbor-lights", registry: l.registry });
+  assert.equal(a, `https://play.example/p?g=lex00/donkey-kong&c=acme/harbor-lights&r=${REG}`);
+  assert.deepEqual(readLink(new URL(a).search).registry, l.registry);
+  const b = shareLink(base, { game: "lex00/donkey-kong", registry: signed.registry });
+  assert.ok(b.includes("%2B"), "a key's + stays escaped");
+  assert.deepEqual(readLink(new URL(b).search).registry, signed.registry);
+  assert.equal(shareLink(base, { game: "lex00/donkey-kong", registry: { url: "http://x.example" } }), "https://play.example/p?g=lex00/donkey-kong");
+  assert.equal(shareLink(base, { game: "lex00/donkey-kong" }), "https://play.example/p?g=lex00/donkey-kong");
+});
+
+test("the registry the page also takes themes from: the link's, else the one it was built with, never its own again", () => {
+  const own = { name: "gp-registry", url: "https://raw.githubusercontent.com/lex00/gp-registry/main", root: "ssh-ed25519 OWN" };
+  assert.equal(themesSource(own, readLink("?g=a/b")), null);
+  assert.equal(themesSource(own, readLink(`?r=${own.url}/`)), null, "the page's own registry isn't a second one");
+  assert.deepEqual(themesSource(own, readLink(`?r=${REG}`)), { name: REG, url: REG, root: null, byLink: true });
+  assert.equal(themesSource(own, readLink(`?r=${REG}&rk=${encodeURIComponent(RK)}`)).root, `ssh-ed25519 ${RK}`);
+  assert.equal(themesSource(own, readLink("?r=http://evil.example")), null);
+  const built = { name: "harbor-registry", url: REG, root: null };
+  assert.deepEqual(themesSource(own, readLink("?g=a/b"), built), { name: "harbor-registry", url: REG, root: null, byLink: false });
+  assert.equal(themesSource(own, readLink("?r=https://other.example/r"), built).url, "https://other.example/r", "the link's wins");
+  assert.equal(themesSource(own, readLink(""), { url: "http://x.example" }), null);
 });
 
 const enc = (o) => new TextEncoder().encode(typeof o === "string" ? o : JSON.stringify(o));

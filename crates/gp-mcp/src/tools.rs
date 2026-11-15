@@ -70,6 +70,15 @@ pub fn list() -> Vec<ToolDef> {
             idempotent: true,
         },
         ToolDef {
+            name: "host_your_own",
+            title: "Host your own registry and page",
+            description: "The road to a registry and a page of the person's own, the way the owner hosts lex00/gp-registry and the public page (docs/host-your-own.md), step by step from gp registry host: 1 make a public GitHub repo for the registry and clone it (the person, or you with gh and their yes), 2 make it a registry (registry init git:DIR), 3 grant their namespace (registry grant), 4 publish their theme and list it (registry publish and reindex), 5 check it from outside as a browser reads it (registry check on the raw address), 6 open the public page with their registry as r= (link): the page installs the game from its own registry as always and offers the themes their registry lists for it beside its own, so their registry holds no game, 7 optionally build and deploy a page of their own with their registry as its second registry of themes (scripts/web/release-check.sh --no-roms with GP_PAGE_THEMES_URL, then deploy.sh, or pages.sh for GitHub Pages, where games with a module can't run). Gives stage (which step is now), stands (one sentence), next, steps (each with done, who, says, the commands in cli, and asks_first), raw (the registry's raw address, for r= and for a page's GP_PAGE_THEMES_URL) and link. Reads only: run each step's commands through gp_run and call this again after each. Every step with asks_first writes to the outside world (a public repo, a commit pushed, an upload): tell the person exactly what and where and ask first; gp_run asks for their yes too. registry is the checkout's folder; leave it out before there is one.",
+            input_schema: schema::<crate::host::HostArgs>(),
+            read_only: true,
+            destructive: false,
+            idempotent: true,
+        },
+        ToolDef {
             name: "registry_search",
             title: "Search templates and sources",
             description: "Search the templates (game folders holding a model and no ROM data, ready to copy) under the repo's templates/ and in the games checkout ($GP_GAMES_DIR, or a games folder at, above or beside the folder the server started in), and the sources registered in sources/*.toml by words, platform, genre (a model extension such as platformer), entity roles (boss), systems (platformer.enemies) and mechanics from the mechanic index (enemy:contact.kick, or jump.coyote for any role), or ask for the templates inspired by one (inspired_by) or most like one (like, ranked by the share of mechanics in common). Each result lists its mechanics, its inspired_by provenance and the templates that took from it. Each template says what it needs before it can be copied and played: its lifted assets, lifted from the person's own ROM of the source (found by hash in $GP_ROM_DIR or given to the server) for a ported game, or built from its authored.toml for a game made here. template_fork does that step itself when it can.",
@@ -484,6 +493,7 @@ fn call_tool(config: &Config, name: &str, args: Value) -> Option<Reply> {
     Some(match name {
         "next" => with(args, |a| crate::next::next(config, a)),
         "registry_search" => with(args, |a| crate::registry::search(config, a)),
+        "host_your_own" => with(args, |a| crate::host::host(config, a)),
         "template_fork" => with(args, |a| crate::fork::fork(config, a)),
         "surface_describe" => with(args, |a| describe(config, a)),
         "model_edit" => with(args, |a| model_edit(config, a)),

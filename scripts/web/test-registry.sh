@@ -1,13 +1,14 @@
 #!/bin/bash
 # A scratch copy of a folder registry with a made-up second game in it, for
 # the page check's sections about a game named in the address
-# (check-page.mjs, game-*; docs/web.md "One page, any game"):
+# (check-page.mjs, game-*; docs/web.md "One page, any game"), and two
+# made-up themes for the page's own game:
 #   scripts/web/test-registry.sh FROM OUT
 #
 # FROM is a folder registry with no root (the release check's snapshot of
 # lex00/gp-registry, say). OUT gets a copy of it (APFS clones, so it costs
-# no disk) with the namespace `test` granted and two packages published in
-# it, unsigned:
+# no disk) with the namespaces `test` and `acme` granted and these
+# packages published in it, unsigned:
 #   test/made-up       a game: its play/page.json (title "Made Up Game",
 #                      the NES player) and a lift folder whose templates
 #                      are named made-up-a and made-up-b. Their model and
@@ -17,6 +18,12 @@
 #                      made-up ROM naming "Made Up Game". It has no module
 #                      and plays nothing: no ROM is its.
 #   test/made-up-look  a theme package offered for test/made-up only.
+#   acme/harbor-lights, test/paper-moon  two made-up large-art themes
+#                      offered for lex00/donkey-kong, drawn from plain
+#                      shapes by scripts/web/test-themes.py: with the
+#                      page's own theme the game is offered three, from
+#                      namespaces before and after lex00/ (check-page.mjs,
+#                      the overlapping theme picks and the theme line).
 #   test/own-hop       a game with its own pictures and no ROM: a copy of
 #                      the Moss Hop template (the project's own test game)
 #                      with a made-up large-art theme of its own (hopglow,
@@ -151,6 +158,16 @@ PY
 "$gp" registry publish "$out" "$stage/game" --name test/made-up --version 0.1.0 --kind game --title "Made Up Game" >/dev/null
 "$gp" registry publish "$out" "$stage/look" --name test/made-up-look --version 0.1.0 --kind content --title "Made Up Look" --for test/made-up >/dev/null
 added=(test/made-up@0.1.0 test/made-up-look@0.1.0)
+# Two made-up large-art themes offered for lex00/donkey-kong, one in a
+# namespace before lex00/ and one after, so the page offers the game more
+# than its own theme whatever the real registry holds.
+python3 -I "$real/scripts/web/test-themes.py" "$stage/themes" >/dev/null
+"$gp" registry grant "$out" acme >/dev/null
+for t in acme/harbor-lights:"Harbor Lights" test/paper-moon:"Paper Moon"; do
+  name="${t%%:*}"
+  "$gp" registry publish "$out" "$stage/themes/${name#*/}" --name "$name" --version 0.1.0 --kind content --title "${t#*:}" --for lex00/donkey-kong >/dev/null
+  added+=("$name@0.1.0")
+done
 # The game with its own pictures, made from Moss Hop's template and the
 # pictures lifted from the ROM its source builds.
 if [ -f "$home/work/assets/mosshop/assets.toml" ]; then

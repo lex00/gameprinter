@@ -102,6 +102,7 @@ _check-rust:
     scripts/check/step.sh originals just --no-deps originals
     scripts/check/step.sh test-hook scripts/test-hook.sh
     scripts/check/step.sh test-parallel scripts/check/test-parallel.sh {{quote(target / "test-parallel")}}
+    scripts/check/step.sh test-deploy scripts/web/test-deploy.sh {{quote(target / "test-deploy")}}
     scripts/check/step.sh check-vendor just --no-deps check-vendor
     scripts/check/step.sh romguard python3 -I -B -m unittest discover -s scripts/romguard -q
     scripts/check/step.sh site-prose just --no-deps site-prose
@@ -599,7 +600,7 @@ web-page *args: build
 web-page-release *args: build
     #!/usr/bin/env bash
     set -euo pipefail
-    case "{{args}}" in ""|--full) ;; *) echo "web-page-release: give nothing or --full" >&2; exit 2 ;; esac
+    case "{{args}}" in ""|--full|--no-roms|"--full --no-roms"|"--no-roms --full") ;; *) echo "web-page-release: give nothing, --full or --no-roms" >&2; exit 2 ;; esac
     WEB_TOOLS=$(scripts/web/fetch-tools.sh {{quote(gp_home)}})
     export WEB_TOOLS
     GP={{quote(gp)}} scripts/web/release-check.sh {{args}}

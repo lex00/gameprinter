@@ -298,8 +298,54 @@ pub enum RegistryCmd {
         #[arg(long, requires = "theme")]
         rom: Option<PathBuf>,
     },
-    /// Offer a game or theme to a registry you can't write to, such as
-    /// lex00/gp-registry, as a pull request its owner merges or not.
+    /// Where hosting your own registry on GitHub stands, step by step, and
+    /// its raw address for a page.
+    ///
+    /// Reads the registry's checkout (DIR, a clone of a public GitHub repo)
+    /// and says, as next does for a port, which steps of the road are done
+    /// and which is now: the repo, the registry in it (gp registry init), your
+    /// namespace (grant), your theme (publish and reindex), the check from
+    /// outside (gp registry check), the public page with r= and a page of
+    /// your own. A page installs games from its own registry and takes only
+    /// themes from yours, so yours holds no game. Prints the repo's raw
+    /// address (https://raw.githubusercontent.com/OWNER/REPO/BRANCH), which
+    /// the public page takes as r= and your own page as its second registry
+    /// of themes (GP_PAGE_THEMES_URL), and says whether the checkout has
+    /// commits GitHub doesn't have yet. Writes nothing; asks git what origin
+    /// holds. Without DIR it gives the first step. docs/host-your-own.md.
+    ///
+    /// Example: gp registry host ~/acme-registry --theme acme/harbor-lights
+    /// --game lex00/donkey-kong
+    Host {
+        /// The registry's checkout: a clone of its GitHub repo. Example:
+        /// ~/acme-registry
+        dir: Option<PathBuf>,
+        /// The theme to publish, NAMESPACE/NAME; its namespace is the one to
+        /// grant. Example: --theme acme/harbor-lights
+        #[arg(long)]
+        theme: Option<String>,
+        /// The theme's folder, for the publish command it shows. Example:
+        /// --theme-dir ~/.gameprinter/work/themes/harbor-lights
+        #[arg(long)]
+        theme_dir: Option<PathBuf>,
+        /// The game the theme is for, NAMESPACE/NAME (default: the first
+        /// game the published theme names). Example: --game
+        /// lex00/donkey-kong
+        #[arg(long)]
+        game: Option<String>,
+        /// The GitHub repo, OWNER/REPO, when the checkout's origin isn't a
+        /// GitHub address. Example: --github acme/harbor-registry
+        #[arg(long)]
+        github: Option<String>,
+        /// The page to try it on, with r=. Example: --page
+        /// https://gameprinter.intentius.workers.dev
+        #[arg(long, default_value = crate::journeys::PUBLIC_PAGE)]
+        page: String,
+    },
+    /// Offer a game or theme to a registry you can't write to that takes
+    /// submissions, as a pull request its owner merges or not. Name its repo
+    /// with --to; lex00/gp-registry takes no one else's themes (host your
+    /// own: docs/host-your-own.md).
     ///
     /// Stages DIR without its hidden files (.git, .gitignore), clones the
     /// registry, and on a branch of its own runs what the owner would run:
@@ -316,7 +362,8 @@ pub enum RegistryCmd {
     /// and keeps its pull request. Needs gh logged in to GitHub.
     ///
     /// Example: gp registry submit ./my-theme --name friend/night --version
-    /// 0.9.0 --title "Night" --for lex00/donkey-kong --dry-run
+    /// 0.9.0 --title "Night" --for lex00/donkey-kong --to acme/harbor-registry
+    /// --dry-run
     Submit {
         /// The folder to submit, as it should arrive. Example: ./my-theme
         dir: PathBuf,
@@ -338,9 +385,9 @@ pub enum RegistryCmd {
         /// Example: --for lex00/donkey-kong
         #[arg(long = "for")]
         for_games: Vec<String>,
-        /// The registry's GitHub repo, OWNER/REPO. Example: --to
-        /// lex00/gp-registry
-        #[arg(long, default_value = crate::registry_submit::UPSTREAM)]
+        /// The registry's GitHub repo, OWNER/REPO; required. Example: --to
+        /// acme/harbor-registry
+        #[arg(long)]
         to: String,
         /// Your fork to push to, OWNER/REPO (default: YOUR-LOGIN/REPO,
         /// made when it isn't there). Example: --fork friend/gp-registry
@@ -480,6 +527,21 @@ pub fn run(cmd: &RegistryCmd) -> Result<Outcome> {
             }
             Ok(o)
         }
+        RegistryCmd::Host {
+            dir,
+            theme,
+            theme_dir,
+            game,
+            github,
+            page,
+        } => crate::registry_host::host(&crate::registry_host::HostArgs {
+            dir: dir.as_deref(),
+            github: github.as_deref(),
+            theme: theme.as_deref(),
+            theme_dir: theme_dir.as_deref(),
+            game: game.as_deref(),
+            page,
+        }),
         RegistryCmd::Submit {
             dir,
             name,

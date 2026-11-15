@@ -2,8 +2,25 @@
 # Puts a built page on its address, a Cloudflare Worker that serves a folder
 # (docs/web.md, "Deploying the public page"). A new version goes up hidden,
 # is checked at its own preview address, and only then is made live:
-#   scripts/web/deploy.sh [PAGE_DIR] [--list]
-#   scripts/web/deploy.sh --first
+#   scripts/web/deploy.sh [PAGE_DIR] [--list] [--no-roms] [WHERE]
+#   scripts/web/deploy.sh --first [WHERE]
+#
+# WHERE is the worker and its address, for someone deploying their own copy
+# of the page with no edit to the repo (docs/host-your-own.md):
+#   --worker NAME      the worker's name (GP_PAGE_WORKER; default the name
+#                      in scripts/web/deploy/wrangler.toml, gameprinter)
+#   --subdomain SUB    the account's workers.dev subdomain (GP_PAGE_SUBDOMAIN;
+#                      default intentius, the owner's), so the address is
+#                      https://NAME.SUB.workers.dev
+#   --address URL      the page's whole address instead (GP_PAGE_ADDRESS),
+#                      for a worker on a domain of its own
+# Every wrangler command is given --name NAME, so wrangler.toml's other
+# settings (compatibility_date, workers_dev, preview_urls) apply to any
+# worker. A flag wins over its variable. --no-roms runs the release check
+# as release-check.sh --no-roms (GP_PAGE_NO_ROMS=1 does the same): for
+# someone with no ROMs, each check that needs one is skipped and says so,
+# the pass is recorded as made without ROMs, and the upload is held to the
+# page's digest as always.
 #
 # 1. With no PAGE_DIR, runs the full release check (release-check.sh
 #    --full: every product made and every check run again, nothing
@@ -52,26 +69,48 @@ set -uo pipefail
 repo="$(cd "$(dirname "$0")/../.." && pwd)"
 wrangler_version="4.157.0"
 read -r -a wrangler <<< "${GP_WRANGLER:-npx --yes wrangler@$wrangler_version}"
-project="$(sed -n 's/^name = "\(.*\)"$/\1/p' "$repo/scripts/web/deploy/wrangler.toml")"
-[ -n "$project" ] || { echo "deploy: scripts/web/deploy/wrangler.toml names no worker" >&2; exit 2; }
-# The account's workers.dev subdomain is intentius.
-address="${GP_PAGE_ADDRESS:-https://$project.intentius.workers.dev}"
+toml_name="$(sed -n 's/^name = "\(.*\)"$/\1/p' "$repo/scripts/web/deploy/wrangler.toml")"
+[ -n "$toml_name" ] || { echo "deploy: scripts/web/deploy/wrangler.toml names no worker" >&2; exit 2; }
 home="${GP_HOME:-$HOME/.gameprinter}"
 passed="$home/work/page-release/passed"
-usage="usage: scripts/web/deploy.sh [PAGE_DIR] [--list] | --first"
+usage="usage: scripts/web/deploy.sh [PAGE_DIR] [--list] [--no-roms] [--worker NAME] [--subdomain SUB | --address URL] | --first [--worker NAME] [--subdomain SUB | --address URL]"
 
 list=0
 first=0
+no_roms="${GP_PAGE_NO_ROMS:-0}"
 page=""
-for a in "$@"; do
-  case "$a" in
-    --list) list=1 ;;
-    --first) first=1 ;;
+project="${GP_PAGE_WORKER:-$toml_name}"
+# The owner's account's workers.dev subdomain is intentius.
+subdomain="${GP_PAGE_SUBDOMAIN:-intentius}"
+address="${GP_PAGE_ADDRESS:-}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --list) list=1; shift ;;
+    --first) first=1; shift ;;
+    --no-roms) no_roms=1; shift ;;
+    --worker|--subdomain|--address)
+      [ -n "${2:-}" ] || { echo "deploy: $1 needs a value" >&2; echo "$usage" >&2; exit 2; }
+      case "$1" in
+        --worker) project="$2" ;;
+        --subdomain) subdomain="$2" ;;
+        --address) address="$2" ;;
+      esac
+      shift 2 ;;
     -*) echo "$usage" >&2; exit 2 ;;
-    *) [ -z "$page" ] || { echo "$usage" >&2; exit 2; }; page="$a" ;;
+    *) [ -z "$page" ] || { echo "$usage" >&2; exit 2; }; page="$1"; shift ;;
   esac
 done
 [ $first = 0 ] || { [ -z "$page" ] && [ $list = 0 ]; } || { echo "$usage" >&2; exit 2; }
+[ "$no_roms" = 0 ] || [ "$no_roms" = 1 ] || { echo "deploy: GP_PAGE_NO_ROMS is 1 or unset, not $no_roms" >&2; exit 2; }
+# Cloudflare's rule for a worker's name and a subdomain: lower-case letters,
+# digits and dashes, at most 63, not starting or ending with a dash.
+label='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+[[ "$project" =~ $label ]] || { echo "deploy: $project isn't a worker name (lower-case letters, digits and dashes)" >&2; exit 2; }
+[[ "$subdomain" =~ $label ]] || { echo "deploy: $subdomain isn't a workers.dev subdomain (lower-case letters, digits and dashes)" >&2; exit 2; }
+[ -n "$address" ] || address="https://$project.$subdomain.workers.dev"
+address="${address%/}"
+[[ "$address" =~ ^https://[^/?#[:space:]]+(/[^?#[:space:]]*)?$ ]] || { echo "deploy: the address must be https://HOST, not $address" >&2; exit 2; }
+named=(--name "$project")
 
 confirm() {
   printf 'Type the worker name (%s) to %s, anything else to stop: ' "$project" "$1"
@@ -96,11 +135,11 @@ if [ $first = 1 ]; then
 EOF
   echo "The worker $project gets a placeholder page, live at $address:"
   echo "  folder    $holder (index.html alone)"
-  echo "  command   ${wrangler[*]} deploy --assets $holder --message \"placeholder before the first page\""
+  echo "  command   ${wrangler[*]} deploy ${named[*]} --assets $holder --message \"placeholder before the first page\""
   echo "($address/page.json answered $code.)"
   confirm "put the placeholder live" || { echo "Stopped; nothing uploaded."; exit 1; }
   cd "$repo/scripts/web/deploy" || exit 2
-  "${wrangler[@]}" deploy --assets "$holder" --message "placeholder before the first page" || exit 2
+  "${wrangler[@]}" deploy "${named[@]}" --assets "$holder" --message "placeholder before the first page" || exit 2
   echo "The worker exists now; deploy the page with scripts/web/deploy.sh (just web-page-deploy)."
   exit 0
 fi
@@ -108,7 +147,9 @@ fi
 if [ -z "$page" ]; then
   log="$home/work/page-release/last-release-check.log"
   mkdir -p "$home/work/page-release" || exit 2
-  "$repo/scripts/web/release-check.sh" --full | tee "$log"
+  check_flags=(--full)
+  [ "$no_roms" = 1 ] && check_flags+=(--no-roms)
+  "$repo/scripts/web/release-check.sh" "${check_flags[@]}" | tee "$log"
   status=${PIPESTATUS[0]}
   page="$(sed -n 's/^bundle: //p' "$log" | tail -n 1)"
   if [ "$status" -ne 0 ] || [ -z "$page" ]; then
@@ -129,6 +170,9 @@ if [ ! -f "$passed/$digest" ]; then
 fi
 record_id="$(sed -n 's/^id //p' "$passed/$digest")"
 record_when="$(sed -n 's/^when //p' "$passed/$digest")"
+record_roms="$(sed -n 's/^roms //p' "$passed/$digest")"
+roms_note=""
+[ "$record_roms" = none ] && roms_note=", made without ROMs (--no-roms): the checks that need a ROM were skipped"
 
 files="$(find "$page" -type f | wc -l | tr -d ' ')"
 size="$(du -sk "$page" | cut -f1)"
@@ -139,14 +183,14 @@ echo "Would upload to Cloudflare Workers (static assets), hidden until checked:"
 echo "  worker    $project ($address)"
 echo "  folder    $page"
 echo "  files     $files, about $((size / 1024)) MiB (the list and hashes: $page.manifest.txt)"
-echo "  passed    the release check on $record_id at $record_when (digest $digest)"
+echo "  passed    the release check on $record_id at $record_when (digest $digest)$roms_note"
 echo "  commit    $commit"
-echo "  upload    ${wrangler[*]} versions upload --assets $page --message \"$message\""
+echo "  upload    ${wrangler[*]} versions upload ${named[*]} --assets $page --message \"$message\""
 echo "  check     check-page.mjs --live PREVIEW_URL, on the version's own address"
-echo "  go live   ${wrangler[*]} versions deploy VERSION_ID@100% --message \"$message\" --yes, after the typed name"
+echo "  go live   ${wrangler[*]} versions deploy ${named[*]} VERSION_ID@100% --message \"$message\" --yes, after the typed name"
 if [ $list = 1 ]; then
   # wrangler's own dry run: reads the folder and runs its checks, uploads nothing.
-  (cd "$repo/scripts/web/deploy" && "${wrangler[@]}" versions upload --assets "$page" --dry-run) || exit 2
+  (cd "$repo/scripts/web/deploy" && "${wrangler[@]}" versions upload "${named[@]}" --assets "$page" --dry-run) || exit 2
   echo "(--list: nothing uploaded)"
   exit 0
 fi
@@ -162,7 +206,7 @@ fi
 work="$(mktemp -d "${TMPDIR:-/tmp}/gp-deploy.XXXXXX")" || exit 2
 echo
 echo "Uploading a version that is not live:"
-(cd "$repo/scripts/web/deploy" && WRANGLER_OUTPUT_FILE_PATH="$work/out.ndjson" "${wrangler[@]}" versions upload --assets "$page" --message "$message") 2>&1 | tee "$work/upload.log"
+(cd "$repo/scripts/web/deploy" && WRANGLER_OUTPUT_FILE_PATH="$work/out.ndjson" "${wrangler[@]}" versions upload "${named[@]}" --assets "$page" --message "$message") 2>&1 | tee "$work/upload.log"
 [ "${PIPESTATUS[0]}" -eq 0 ] || {
   echo "deploy: wrangler versions upload failed; nothing is live that wasn't before. A worker that doesn't exist yet needs scripts/web/deploy.sh --first once." >&2
   exit 2
@@ -173,7 +217,7 @@ if [ -z "${version:-}" ] || [ "$version" = - ]; then
   exit 2
 fi
 if [ "$preview" = - ]; then
-  echo "deploy: version $version is uploaded and not live, but wrangler gave it no preview address, so it can't be checked; nothing made live. Preview addresses are off for $project: run \`${wrangler[*]} triggers deploy\` once from scripts/web/deploy (it applies workers_dev and preview_urls from wrangler.toml and changes nothing the address serves), then deploy again." >&2
+  echo "deploy: version $version is uploaded and not live, but wrangler gave it no preview address, so it can't be checked; nothing made live. Preview addresses are off for $project: run \`${wrangler[*]} triggers deploy ${named[*]}\` once from scripts/web/deploy (it applies workers_dev and preview_urls from wrangler.toml and changes nothing the address serves), then deploy again." >&2
   exit 1
 fi
 echo "  version   $version"
@@ -203,8 +247,8 @@ echo
 echo "Version $version passed the page check at $preview."
 confirm "make it live at $address" || { echo "Stopped; version $version is uploaded and not live."; exit 1; }
 cd "$repo/scripts/web/deploy" || exit 2
-"${wrangler[@]}" versions deploy "$version@100%" --message "$message" --yes || {
-  echo "deploy: wrangler versions deploy failed; check what is live with \`${wrangler[*]} deployments list\` from scripts/web/deploy." >&2
+"${wrangler[@]}" versions deploy "${named[@]}" "$version@100%" --message "$message" --yes || {
+  echo "deploy: wrangler versions deploy failed; check what is live with \`${wrangler[*]} deployments list ${named[*]}\` from scripts/web/deploy." >&2
   exit 2
 }
-echo "Live at $address: version $version. To go back: \`${wrangler[*]} rollback\` from scripts/web/deploy."
+echo "Live at $address: version $version. To go back: \`${wrangler[*]} rollback ${named[*]}\` from scripts/web/deploy."

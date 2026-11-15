@@ -48,25 +48,19 @@ Signing is off unless you opt in. Every file is still checked against its hash, 
 
 ## Send a theme or game to someone else's registry
 
-You can't write to `lex00/gp-registry`, but you can ask for your theme or game to go in:
+`lex00/gp-registry` holds the project's own games and themes and doesn't take others'. To share a theme, [host it yourself](../host-your-own/). Another registry that takes submissions can be sent one with `gp registry submit`, naming its repo with `--to`:
 
 ```sh
 gp registry submit path/to/my-theme --name me/my-theme --version 1.0.0 \
-  --title "My Theme" --for lex00/donkey-kong --dry-run
+  --title "My Theme" --for lex00/donkey-kong --to OWNER/REGISTRY --dry-run
 gp registry submit path/to/my-theme --name me/my-theme --version 1.0.0 \
-  --title "My Theme" --for lex00/donkey-kong
+  --title "My Theme" --for lex00/donkey-kong --to OWNER/REGISTRY
 ```
 
-`gp registry submit` copies your folder without its hidden files, clones the registry, and on a branch of its own runs what the owner would run: it grants your namespace if the registry doesn't have it yet, publishes your package with every check `gp registry publish` runs, and lists it. Then it pushes the branch to your fork of the registry (it makes the fork if you have none) and opens a pull request. The owner reads it and merges it or not; once merged, the page offers your theme. You need the GitHub command line, `gh`, logged in. `--to OWNER/REPO` sends to another registry's repo, and `--fork OWNER/REPO` names your fork.
+`gp registry submit` copies your folder without its hidden files, clones the registry, and on a branch of its own runs what the owner would run: it grants your namespace if the registry doesn't have it yet, publishes your package with every check `gp registry publish` runs, and lists it. Then it pushes the branch to your fork of the registry (it makes the fork if you have none) and opens a pull request. That registry's owner reads it and merges it or not. You need the GitHub command line, `gh`, logged in. `--fork OWNER/REPO` names your fork.
 
 If a check fails, it stops there and tells you which check and why, in the check's own words. Nothing is pushed to your fork and no pull request is opened, so nothing changes anywhere but your own machine. Fix what it names and run it again with the same version: the version was never published, so it is still free. Sending the same version again later replaces the branch, and the pull request already open for it stays.
 
-### The registry's README
+## Your theme on the public page
 
-The words `lex00/gp-registry`'s README should carry for submissions, replacing "open an issue with a link to its repo":
-
-> To have a theme or game of yours published here, run Game Printer's `gp registry submit` on its folder, with your package's name, version, title and the game it is for. It runs every check a publish runs on your machine and opens a pull request from your fork. Whether it goes in is the owner's decision. If you can't run gp, open an issue with a link to your repo instead.
-
-## Not built yet
-
-The player page reads one registry and can't yet add another, so a registry of your own is mainly for your own use today.
+The public page also offers the themes of another registry when its link names that registry with `r=`. [Host your theme](../host-your-own/) is the whole road.

@@ -242,6 +242,7 @@ fn an_agent_edits_previews_and_validates_moss_hop() {
         listed,
         [
             "next",
+            "host_your_own",
             "registry_search",
             "template_fork",
             "surface_describe",

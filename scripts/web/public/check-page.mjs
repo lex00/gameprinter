@@ -1625,7 +1625,7 @@ async function themePicks(S, { name, sha, rom }) {
   const titles = new Map([["original", "Original"], ...index.map((x) => [x.id, x.title])]);
   const others = index.map((x) => x.id).filter((id) => id !== "turnips");
   if (others.length < 2) {
-    S.lines.push(`skip  ${name}: overlapping theme picks need two themes besides Turnips; the lift offers ${[...titles.keys()].join(", ")}`);
+    S.lines.push(`skip  ${name}: overlapping theme picks need two themes besides Turnips; the lift offers ${[...titles.keys()].join(", ")} (scripts/web/test-registry.sh adds two made-up ones to the registry folder)`);
     return;
   }
   const [late, slow] = others.slice(-2);
@@ -2224,7 +2224,9 @@ async function registryLocalChange(S) {
     const db = await new Promise((ok) => (indexedDB.open("gp-installs").onsuccess = (e) => ok(e.target.result)));
     // The game's own record, the one under `current`: the store holds a
     // record for each theme installed with it too, and one from a namespace
-    // that sorts before the game's (acme/ before lex00/) comes first.
+    // that sorts before the game's (acme/ before lex00/) comes first, as
+    // acme/harbor-lights does in the release check's registry folder
+    // (scripts/web/test-registry.sh).
     const games = db.transaction("games").objectStore("games");
     const get = (k) => new Promise((ok) => (games.get(k).onsuccess = (e) => ok(e.target.result)));
     const rec = await get(await get("current"));
@@ -2238,6 +2240,130 @@ async function registryLocalChange(S) {
   await p.waitForFunction(() => document.getElementById("message").dataset.kind === "error", null, { timeout: 30000 }).catch(() => {});
   const said = await p.locator("#message").innerText();
   check(/changed in this browser/.test(said), `a play file changed in this browser is refused (${said})`);
+}
+
+// ---- A registry of themes by its address (`r=`; docs/host-your-own.md) ----
+
+// The page pointed by the link at a second registry it also takes themes
+// from: a copy of the run's registry with the page's game taken out (its
+// index answers 404), served on a free port of this machine with the
+// headers a repo host sends (CORS and Cross-Origin-Resource-Policy), and
+// reached at an https address the browser's requests to are answered from
+// that server, so the page's https-only rule and its policy (connect-src)
+// are the ones a visitor gets. The page's own source offers no theme for
+// the game in this section (its by-game list answers 404), so the theme
+// can come only from the second registry. The game comes from the page's
+// own source and nothing of it from the second; the line under the header
+// names it; a share link carries it; an http address is refused in words
+// and nothing asked of it; a root key in the link that didn't sign it, and
+// a changed file, refuse the theme and leave the game playing.
+const BY_ADDRESS = "https://registry.check.example/acme/harbor-registry/main";
+const byAddressFolder = registryFolder ?? (page.source.url === "." ? dist : null);
+async function registryByAddress(S) {
+  const { p, check } = S;
+  const asked = [];
+  let change = null;
+  const server = createServer((req, res) => {
+    const url = new URL(req.url, "http://x");
+    const rel = decodeURIComponent(url.pathname).replace(/^\/+/, "");
+    res.setHeader("access-control-allow-origin", "*");
+    res.setHeader("cross-origin-resource-policy", "cross-origin");
+    const f = join(byAddressFolder, rel);
+    const noGame = url.pathname.startsWith(`/index/${page.game}/`);
+    if (noGame || !REGISTRY_KEY.test(url.pathname) || rel.split("/").includes("..") || !existsSync(f) || statSync(f).isDirectory()) {
+      res.statusCode = 404;
+      return res.end();
+    }
+    const b = readFileSync(f);
+    res.end(change ? change(url.pathname, b) : b);
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const local = `http://127.0.0.1:${server.address().port}`;
+  S.alsoSources = [BY_ADDRESS];
+  const base = new URL(BY_ADDRESS).pathname;
+  // The second registry at its https address, and the page's own source
+  // with no theme list for the game.
+  const prepare = async (ctx, log = null) => {
+    if (ctx !== S.context && registryFolder && page.source.url !== ".") await ctx.route((u) => isSourceUrl(S.origin, u), (r) => fromFolder(r));
+    await ctx.route(
+      (u) => isSourceUrl(S.origin, u) && sourceKey(S.origin, u) === `/by-game/${page.game}.toml`,
+      (r) => r.fulfill({ status: 404, headers: { "access-control-allow-origin": "*" }, body: "" }).catch(() => {}),
+    );
+    await ctx.route((u) => u.href.startsWith(`${BY_ADDRESS}/`), async (route) => {
+      const key = new URL(route.request().url()).pathname.slice(base.length);
+      log?.push(key);
+      const r = await fetch(`${local}${key}`).catch(() => null);
+      if (!r) return route.abort().catch(() => {});
+      await route.fulfill({ status: r.status, headers: Object.fromEntries(r.headers), body: Buffer.from(await r.arrayBuffer()) }).catch(() => {});
+    });
+  };
+  const fresh = async () => {
+    const ctx = await p.context().browser().newContext({ viewport: { width: 1366, height: 768 } });
+    await prepare(ctx);
+    return { ctx, page: await ctx.newPage() };
+  };
+  try {
+    await prepare(S.context, asked);
+    const ownSource = (r) => isSourceUrl(S.origin, r.url);
+    await p.goto(`${S.origin}/p?g=${page.game}&c=${ART_THEME}&r=${BY_ADDRESS}`);
+    check(await S.installed(), `with r= naming a second registry, ${page.game} is installed`);
+    const gameBlobs = S.requests.filter((r) => ownSource(r) && r.url.includes("/blobs/")).length;
+    check(gameBlobs > 0, `the game came from the page's own source (${gameBlobs} files)`);
+    check(!asked.some((k) => k.startsWith(`/index/${page.game}/`)), "and nothing of the game was asked of the second registry");
+    const theme = await installedOf(p, ART_THEME);
+    const themeBlobs = asked.filter((k) => k.startsWith("/blobs/")).length;
+    check(theme?.kind === "content" && themeBlobs > 0 && asked.includes(`/by-game/${page.game}.toml`), `the theme ${ART_THEME} came from the second registry's list for the game (${asked.length} requests, ${themeBlobs} files)`);
+    const line = p.locator("#registry-line");
+    const said = (await line.isVisible()) ? await line.innerText() : "";
+    check(said.includes(BY_ADDRESS) && /Themes on this page also come from/.test(said) && /Games come only from this page's own registry/.test(said) && /signatures aren't checked/.test(said), `the page says which registry its themes also come from (${said})`);
+    // The link is read from the page's line, not the clipboard, which the
+    // share-link section running at the same time uses.
+    await p.evaluate(() => {
+      delete document.getElementById("message").dataset.share;
+      navigator.clipboard.writeText = () => Promise.reject(new Error("not used in this section"));
+    });
+    await p.locator("#share").click();
+    await p.waitForFunction(() => document.getElementById("message").dataset.share, null, { timeout: 30000 }).catch(() => {});
+    const shared = await p.evaluate(() => document.getElementById("message").dataset.share ?? null);
+    check(!!shared && new URL(shared).searchParams.get("r") === BY_ADDRESS, `its share link carries the registry (${shared})`);
+    await S.shot("registry-by-address.png");
+
+    // A plain http address is refused in words, and nothing asked of it.
+    const ctx = await p.context().browser().newContext({ viewport: { width: 1366, height: 768 } });
+    const q = await ctx.newPage();
+    const qRequests = [];
+    ctx.on("request", (r) => qRequests.push(r.url()));
+    if (registryFolder && page.source.url !== ".") await ctx.route((u) => isSourceUrl(S.origin, u), (r) => fromFolder(r));
+    await q.goto(`${S.origin}/p?g=${page.game}&r=${local}`);
+    await q.waitForFunction(() => window.__page !== undefined, null, { timeout: 60000 }).catch(() => {});
+    const warned = await q.locator("#message").innerText();
+    check(/isn't an https address, so no themes are read from it/.test(warned) && !(await q.locator("#registry-line").isVisible()), `an http registry is refused in words (${warned})`);
+    check(!qRequests.some((u) => u.startsWith(local)) && (await installedOf(q)) !== null, "nothing is asked of it, and the game installs from the page's own source");
+    await ctx.close();
+
+    // A root key in the link that didn't sign the second registry: its
+    // theme is refused, the game still installs.
+    const a = await fresh();
+    const madeUpKey = "AAAAC3NzaC1lZDI1NTE5AAAAI" + "A".repeat(43);
+    await a.page.goto(`${S.origin}/p?g=${page.game}&c=${ART_THEME}&r=${BY_ADDRESS}&rk=${madeUpKey}`);
+    await a.page.waitForFunction(() => window.__page !== undefined, null, { timeout: 60000 }).catch(() => {});
+    const keyed = await messageOf(a.page, ["warn", "error"], 30000);
+    check(/couldn't be (used|read for themes)/.test(keyed) && /each signature against the root key the link gives/.test(await a.page.locator("#registry-line").innerText()), `with a root key in the link that didn't sign it, its theme is refused (${keyed})`);
+    check((await installedOf(a.page)) !== null && (await installedOf(a.page, ART_THEME)) === null, "the game is installed and the theme isn't");
+    await a.ctx.close();
+
+    // A file of the second registry changed: its theme is refused.
+    change = (key, b) => (key.startsWith("/blobs/") ? flip(b) : b);
+    const c = await fresh();
+    await c.page.goto(`${S.origin}/p?g=${page.game}&c=${ART_THEME}&r=${BY_ADDRESS}`);
+    await c.page.waitForFunction(() => window.__page !== undefined, null, { timeout: 60000 }).catch(() => {});
+    const bad = await messageOf(c.page, ["warn", "error"], 30000);
+    check(/doesn't match what its maker signed/i.test(bad) && (await installedOf(c.page)) !== null && (await installedOf(c.page, ART_THEME)) === null, `a file changed on that registry refuses its theme, and the game still installs (${bad})`);
+    change = null;
+    await c.ctx.close();
+  } finally {
+    server.close();
+  }
 }
 
 // ---- Any game by its name, and the share link (docs/web.md, "One page, any game") ----
@@ -3421,6 +3547,8 @@ if (!registryStopped) {
     add("game-tampered-manifest", 10, (S) => gameTampered(S, "manifest"), { source: broken((u) => new URL(u).pathname.endsWith(`/packages/${id}`), flip) });
   } else skips.push(`skip  no ${MADE_UP} in the registry folder (scripts/web/test-registry.sh makes one): a tampered second game isn't checked`);
 }
+if (byAddressFolder && !registryStopped) add("registry-by-address", 25, registryByAddress);
+else if (!registryStopped) skips.push("skip  registry-by-address: no registry folder to serve as a registry by its address (give --registry-folder DIR)");
 add("share-link", 25, (S) => shareSection(S, roms[0] ?? null), roms.length ? { rom: roms[0].sha } : {});
 // The game with its own pictures (own-game*): it plays with no ROM, and a
 // tampered play/ file or manifest is refused.
@@ -3581,7 +3709,10 @@ try {
           await sec.run(S);
           // The network log of every frame of the section.
           const origin = S.origin;
-          const off = S.requests.filter((r) => !(r.url.startsWith(origin) || isSourceUrl(origin, r.url) || r.url.startsWith("blob:") || r.url.startsWith("data:")));
+          // A section that points the page at a registry of its own by the
+          // link (registry-by-address) names it in S.alsoSources.
+          const also = (u) => (S.alsoSources ?? []).some((a) => u.startsWith(`${a}/`));
+          const off = S.requests.filter((r) => !(r.url.startsWith(origin) || isSourceUrl(origin, r.url) || also(r.url) || r.url.startsWith("blob:") || r.url.startsWith("data:")));
           const posts = S.requests.filter((r) => r.method !== "GET" || r.body > 0);
           S.check(off.length === 0, `every request is to the page's own server or its source (${S.requests.length} requests; others: ${off.map((r) => r.url).join(", ")})`);
           S.check(posts.length === 0, `every request is a GET with no body (${posts.map((r) => `${r.method} ${r.url}`).join(", ")})`);

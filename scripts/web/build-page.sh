@@ -6,7 +6,13 @@
 # files, which are published as `play/` in the game's package
 # (scripts/web/publish-game.sh) and which the page installs from its source.
 # GP_PAGE_SOURCE names the source in scripts/web/sources.toml (default registry,
-# lex00/gp-registry).
+# lex00/gp-registry). GP_PAGE_SOURCE_URL gives one by its https address
+# instead, with no edit to the repo (someone's own registry, say:
+# docs/host-your-own.md), and GP_PAGE_SOURCE_ROOT its root key line
+# ("ssh-ed25519 ...") for a signed one. GP_PAGE_THEMES_URL names a second
+# registry the page also takes themes from (page.json's `themes`; games
+# still come from the source), with GP_PAGE_THEMES_ROOT its root key line:
+# someone's own registry of themes on their own page.
 #
 # Last it runs `gp template served` on the game: the files of both folders
 # against each ROM the game names (result also in OUT.served.txt).
@@ -159,6 +165,27 @@ taken = json.load(open(taken_file))
 pkg = tomllib.load(open(package, "rb"))
 said = pkg.get("page", {})
 source = tomllib.load(open(sources_file, "rb"))[source_name]
+by_url = os.environ.get("GP_PAGE_SOURCE_URL", "")
+if by_url:
+    if not re.fullmatch(r"https://[^\s?#]+", by_url):
+        sys.exit(f"build-page.sh: GP_PAGE_SOURCE_URL must be an https address with no query, not {by_url}")
+    source = {"name": by_url.rstrip("/"), "url": by_url.rstrip("/")}
+    root = os.environ.get("GP_PAGE_SOURCE_ROOT", "")
+    if root:
+        if not re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/]{68}( \S+)?", root):
+            sys.exit("build-page.sh: GP_PAGE_SOURCE_ROOT must be an ssh-ed25519 public key line")
+        source["root"] = root
+themes = None
+themes_url = os.environ.get("GP_PAGE_THEMES_URL", "")
+if themes_url:
+    if not re.fullmatch(r"https://[^\s?#]+", themes_url):
+        sys.exit(f"build-page.sh: GP_PAGE_THEMES_URL must be an https address with no query, not {themes_url}")
+    themes = {"name": themes_url.rstrip("/"), "url": themes_url.rstrip("/")}
+    troot = os.environ.get("GP_PAGE_THEMES_ROOT", "")
+    if troot:
+        if not re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/]{68}( \S+)?", troot):
+            sys.exit("build-page.sh: GP_PAGE_THEMES_ROOT must be an ssh-ed25519 public key line")
+        themes["root"] = troot
 if kind == "none":
     # A game with its own pictures: no ROM to name. Its facts are what it
     # is and who made it, from the package's [page] (`about`, `made_by`,
@@ -176,6 +203,8 @@ if kind == "none":
     for k in ("made_by", "about"):
         if k in facts:
             page[k] = facts[k]
+    if themes:
+        page["themes"] = themes
     open(f"{out}/page.json", "w").write(json.dumps(page, indent=1) + "\n")
     os.makedirs(f"{out}.facts", exist_ok=True)
     open(f"{out}.facts/page.json", "w").write(json.dumps(facts, indent=1) + "\n")
@@ -255,6 +284,8 @@ if platform == "arcade":
 if platform == "arcade":
     page["howto"] = howto
     page["trademark"] = trademark
+if themes:
+    page["themes"] = themes
 open(f"{out}/page.json", "w").write(json.dumps(page, indent=1) + "\n")
 r = page["rom"]
 facts = {

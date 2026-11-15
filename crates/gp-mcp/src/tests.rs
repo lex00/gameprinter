@@ -169,6 +169,7 @@ fn every_tool_takes_an_object() {
         names,
         [
             "next",
+            "host_your_own",
             "registry_search",
             "template_fork",
             "surface_describe",

@@ -61,6 +61,7 @@ export default defineConfig({
 						{ label: 'Improve a game', slug: 'improve' },
 						{ label: 'Make your own game', slug: 'make' },
 						{ label: 'Themes and levels', slug: 'themes' },
+						{ label: 'Host your theme', slug: 'host-your-own' },
 						{ label: 'Bring in a game', slug: 'bring' },
 					],
 				},

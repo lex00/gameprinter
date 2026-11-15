@@ -32,8 +32,10 @@ use serde_json::{Value, json};
 use crate::Outcome;
 use crate::registry::{Writing, grant_cmd, publish_cmd, reindex_cmd};
 
-/// The registry submissions go to when none is named.
-pub const UPSTREAM: &str = "lex00/gp-registry";
+/// The registry the tests submit to (a stand-in served from a local bare
+/// repo). gp registry submit has no default: --to names the registry.
+#[cfg(test)]
+const UPSTREAM: &str = "lex00/gp-registry";
 
 /// What a submission is: the folder and how it is published.
 pub struct Submission<'a> {

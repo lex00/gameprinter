@@ -57,6 +57,7 @@ The docs site's pages, in `site/src/content/docs/`, are for people using the too
 | [make.md](site/src/content/docs/make.md) | Making your own game from Moss Hop |
 | [themes.md](site/src/content/docs/themes.md) | Themes and levels |
 | [registry.md](site/src/content/docs/registry.md) | Running a registry of your own |
+| [host-your-own.md](site/src/content/docs/host-your-own.md) | Hosting your own registry on GitHub and your own copy of the page ([docs/host-your-own.md](docs/host-your-own.md) has the details) |
 | [contribute.md](site/src/content/docs/contribute.md) | Changing the tool |
 | [rom-rules.md](site/src/content/docs/rom-rules.md) | What may and may not happen with a ROM |
 

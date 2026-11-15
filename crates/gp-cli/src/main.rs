@@ -130,6 +130,7 @@ mod recindex;
 mod recordings;
 mod refine;
 mod registry;
+mod registry_host;
 mod registry_recheck;
 mod registry_submit;
 mod repo;

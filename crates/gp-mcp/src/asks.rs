@@ -311,7 +311,7 @@ pub fn says(n: &New) -> String {
             v(&["name", "dir"])
                 .map(|d| format!(" {d}"))
                 .unwrap_or_default(),
-            v(&["to"]).unwrap_or("lex00/gp-registry")
+            v(&["to"]).unwrap_or("named with --to")
         ),
         "registry yank" => format!(
             "Withdraw{} in the registry{to}. Players are told it was withdrawn.",

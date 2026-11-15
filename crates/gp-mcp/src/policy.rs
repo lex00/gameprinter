@@ -308,6 +308,8 @@ pub const TABLE: &[Row] = &[
     r("registry check", J, Read),
     r("registry grant", J, Rule::Ask(Ask::Publish, DRY_RUN)),
     r("registry grants", J, Read),
+    // Reads the checkout and asks git what origin holds; writes nothing.
+    r("registry host", J, Read),
     r("registry init", J, Write),
     r("registry publish", J, Rule::Ask(Ask::Publish, DRY_RUN)),
     r("registry reindex", J, Rule::Ask(Ask::Publish, DRY_RUN)),
@@ -1032,6 +1034,35 @@ mod tests {
             panic!("--follow runs until stopped")
         };
         assert!(why.contains("watch_events"), "{why}");
+    }
+
+    #[test]
+    fn hosting_your_own_asks_before_each_write_to_the_outside_world() {
+        // host_your_own's road (docs/host-your-own.md): host reads, and every
+        // command that writes the person's registry repo needs their yes.
+        let host = row("registry host").unwrap();
+        assert_eq!(host.rule, Rule::Read);
+        let dir = [("dir".to_owned(), "/home/acme/acme-registry".to_owned())];
+        assert_eq!(
+            decide(host, &given(&["dir", "theme"]), &dir),
+            Decision::Run { writes: false }
+        );
+        let git = [(
+            "target".to_owned(),
+            "git:/home/acme/acme-registry".to_owned(),
+        )];
+        for p in [
+            "registry init",
+            "registry grant",
+            "registry publish",
+            "registry reindex",
+        ] {
+            assert_eq!(
+                decide(row(p).unwrap(), &given(&["dry-run"]), &git),
+                Decision::NeedsYes(Ask::Publish),
+                "{p} on a git: target"
+            );
+        }
     }
 
     #[test]
