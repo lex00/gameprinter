@@ -13,6 +13,8 @@ gp video a85abf91 --no-overlay --scale 1           # only the picture, 256x240
 
 `--theme DIR` draws the picture with a theme ([themes](formats/theme.md)), repeatable, bottom first. A recording's pixels carry no roles, so a theme's role rules don't apply there; the rest of it does. Each frame is still checked against the recording before the theme draws, so a themed video matches as an unthemed one does. To see role rules on a game, draw the model's run instead: `gp theme video MODEL --baseline FILE --themes -o OUT`.
 
+`gp theme video` runs a model with hooks through its game's module: `--module FILE`, else the package's module built from this gp's kit (or reused) as `gp game build` makes it. A model whose hooks would not run is refused in words, where it used to draw a run without them. An arcade model that names board art (docs/formats/board-art.md) is drawn as the screen measure draws it, with the board's own pictures of each level and of the bodies that are its sprites, at the board's 512 by 480; a theme over board art isn't drawn yet, so `--theme`, `--stack` and `--themes` are refused there. On Tapper's tapper-2 model and the tapper-l1-set recording it writes 1434 frames whose digest is `gp interp run --module`'s.
+
 `--frames` takes `N`, `A..B` (B left out), `A..=B` or `A..`, like `gp events`. Frame 0 is power-on and has no picture, so a range starts at 1 or later. To start later than frame 1, the replay restores the nearest checkpoint before the window and runs headless up to it, then turns video on. `--scale` (1 to 4, default 2) repeats each NES pixel that many times both ways. A recording whose ROM isn't in `$GP_ROM_DIR` needs `--rom`.
 
 ## What the overlay shows

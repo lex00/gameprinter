@@ -125,14 +125,14 @@ export class FreePlayClient {
 }
 
 /** Minutes and seconds of play at a frame: "0:41". */
-export function clock(frame: number): string {
-  const s = Math.floor(frame / NES_FPS);
+export function clock(frame: number, fps = NES_FPS): string {
+  const s = Math.floor(frame / fps);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
 /** Seconds, one decimal: "6.2 s". */
-export function secs(frames: number): string {
-  return `${(frames / NES_FPS).toFixed(1)} s`;
+export function secs(frames: number, fps = NES_FPS): string {
+  return `${(frames / fps).toFixed(1)} s`;
 }
 
 /** A frames file line for the rebuilt game: the pad's bits (the input log's bits are the frames file's) and a reset. */
@@ -170,14 +170,14 @@ export function clipLength(v: number): number {
 export type TakePhase = "count" | "recording" | "saving" | "saved";
 
 /** The sentence while a clip is made. */
-export function takeSays(phase: TakePhase, count: number, n: number, max: number): string {
-  if (phase === "count") return `Get ready: ${count}. Then play; the clip records your presses for up to ${secs(max)}.`;
-  if (phase === "recording") return `Recording the clip: ${secs(n)} of ${secs(max)}. Press stop to end it early.`;
+export function takeSays(phase: TakePhase, count: number, n: number, max: number, fps = NES_FPS): string {
+  if (phase === "count") return `Get ready: ${count}. Then play; the clip records your presses for up to ${secs(max, fps)}.`;
+  if (phase === "recording") return `Recording the clip: ${secs(n, fps)} of ${secs(max, fps)}. Press stop to end it early.`;
   if (phase === "saving") return "Saving the clip.";
   return "Clip saved.";
 }
 
 /** The card after a take: what was saved and from where. */
-export function clipCard(frames: number, save: number, at: number, level?: string): string {
-  return `Clip saved: ${secs(frames)} from ${level ? `${level} at ${clock(at)}` : `save point ${save} at ${clock(at)}`}. Watch it on both games, refine the rebuilt game on it, or record it again from the same start.`;
+export function clipCard(frames: number, save: number, at: number, level?: string, fps = NES_FPS): string {
+  return `Clip saved: ${secs(frames, fps)} from ${level ? `${level} at ${clock(at, fps)}` : `save point ${save} at ${clock(at, fps)}`}. Watch it on both games, refine the rebuilt game on it, or record it again from the same start.`;
 }

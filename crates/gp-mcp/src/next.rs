@@ -1,5 +1,5 @@
-//! The tool `next`: where the port of a game stands, the one next step and
-//! who does it, from `gp --json progress --next` (the same answer as the
+//! The tool `next`: where the port of a game (or one of the person's
+//! copies: a theme, a new game) stands, the one next step and who does it, from `gp --json progress --next` (the same answer as the
 //! terminal and the page's status line, crates/gp-cli/src/next.rs). It
 //! reads files only and starts nothing.
 //!
@@ -27,6 +27,14 @@ pub struct NextArgs {
     /// Default: the game whose page was opened last, or the only game.
     #[serde(default)]
     pub game: Option<String>,
+    /// One of the person's copies instead of a port: a theme they are
+    /// making (a folder under $GP_HOME/work/themes) or a new game (a copy
+    /// under $GP_HOME/work/mcp), by its name, or theme/NAME or new/NAME.
+    /// Every answer lists the copies in `copies`. Without game or copy, the
+    /// copy opened last on the page answers when that was after the last
+    /// game.
+    #[serde(default)]
+    pub copy: Option<String>,
     /// Seconds to wait for the answer to change (a hand-off or an answer
     /// from the page, a score), at most 30. 0 answers at once.
     #[serde(default)]
@@ -72,6 +80,22 @@ pub fn next(config: &Config, a: NextArgs) -> Result<Reply, String> {
         }
         args.push("--template".as_ref());
         args.push(g.as_ref());
+    }
+    if let Some(c) = &a.copy {
+        let name = c
+            .strip_prefix("theme/")
+            .or_else(|| c.strip_prefix("new/"))
+            .unwrap_or(c);
+        if !game_ok(name) {
+            return Err(format!(
+                "a copy is its name (letters, digits, - and _), or theme/NAME or new/NAME (got {c:?})"
+            ));
+        }
+        if a.game.is_some() {
+            return Err("give game or copy, not both".into());
+        }
+        args.push("--copy".as_ref());
+        args.push(c.as_ref());
     }
     let ask = || -> Result<Value, String> {
         let (code, v) = run_gp(config, &args)?;
@@ -156,7 +180,7 @@ mod tests {
         let gp = d.path().join("gp");
         std::fs::write(
             &gp,
-            "#!/bin/sh\necho \"$@\" > \"$(dirname \"$0\")/args\"\necho '{\"version\": \"next 1\", \"stands\": \"No game file is on this computer yet.\", \"next\": {\"who\": \"person\"}}'\n",
+            "#!/bin/sh\necho \"$@\" > \"$(dirname \"$0\")/args\"\necho '{\"version\": \"next 2\", \"stands\": \"No game file is on this computer yet.\", \"next\": {\"who\": \"person\"}}'\n",
         )
         .unwrap();
         #[cfg(unix)]
@@ -177,6 +201,7 @@ mod tests {
             &config,
             NextArgs {
                 game: Some("tapper".into()),
+                copy: None,
                 wait_s: 0,
             },
         )
@@ -191,10 +216,35 @@ mod tests {
                 &config,
                 NextArgs {
                     game: Some("../x".into()),
+                    copy: None,
                     wait_s: 0
                 }
             )
             .is_err()
         );
+        // A copy: a theme or a new game, by name or KIND/NAME.
+        let r = next(
+            &config,
+            NextArgs {
+                game: None,
+                copy: Some("theme/clay".into()),
+                wait_s: 0,
+            },
+        )
+        .unwrap();
+        assert!(!r.is_error);
+        let args = std::fs::read_to_string(d.path().join("args")).unwrap();
+        assert_eq!(args.trim(), "--json progress --next --copy theme/clay");
+        for bad in ["../x", "theme/../x", "a b"] {
+            let r = next(
+                &config,
+                NextArgs {
+                    game: None,
+                    copy: Some(bad.into()),
+                    wait_s: 0,
+                },
+            );
+            assert!(r.is_err(), "{bad}");
+        }
     }
 }

@@ -35,6 +35,17 @@ pub fn hash(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
 
+/// A theme id as the theme format and the runtimes take it: lowercase
+/// letters, digits, `-` and `_`, starting with a letter. The one rule for
+/// it: `gp_present::looks::valid_id` is this, and the page's theme list
+/// (gp-web-registry) holds a content package's name to it.
+pub fn theme_id_ok(id: &str) -> bool {
+    id.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
 /// Whether a string is a hash as packages write them.
 pub fn is_hash(s: &str) -> bool {
     s.len() == 64

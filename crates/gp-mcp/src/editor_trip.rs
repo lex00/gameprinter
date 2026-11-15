@@ -78,6 +78,15 @@ pub fn export(
     cfg: &ImageConfig,
     out: &Path,
 ) -> Result<(Trip, Vec<PathBuf>), String> {
+    // An arcade copy's board sprites (crate::board_trip).
+    if let Ok(dir) = config.existing_copy(copy)
+        && let Ok(text) = fs::read_to_string(dir.join(gp_model::MODEL_FILE))
+        && let Ok(model) = gp_model::Model::parse(&text)
+        && crate::board_trip::arcade_lift(config, &dir, &model)?.is_some()
+    {
+        let editor = format!("{:?}", cfg.editor).to_lowercase();
+        return crate::board_trip::export(config, copy, entity, &editor, out);
+    }
     let t = place::target(config, copy, slot, Some(entity))?;
     let Current::Tiles {
         per_row,
@@ -212,6 +221,9 @@ pub fn propose_save(
     author: Option<&str>,
 ) -> Result<Reply, String> {
     let trip = read_trip(dir)?;
+    if crate::board_trip::is_board_trip(&trip) {
+        return crate::board_trip::propose_save(config, dir);
+    }
     let pics = match import(dir)? {
         Ok(p) => p,
         Err(problems) => {

@@ -44,6 +44,10 @@ use gp_nes::slice::{self, FrameTrace, From, Gap, How, Loc, Recorder, Step};
 use serde_json::{Value, json};
 
 use crate::Outcome;
+
+/// `gp element explain` (issue #10), in a file of its own.
+#[path = "element_explain.rs"]
+pub(crate) mod explain;
 use crate::clip_score::{Ctx, Open};
 use labelfile::LabelsFile;
 
@@ -57,6 +61,17 @@ pub enum ElementCmd {
     /// each with its label and role: the element-extraction skill's steps
     /// 2 and 3, from the original's trace. Read-only.
     Inputs(InputsArgs),
+    /// What is at a spot of the screen on one frame of a clip, from
+    /// evidence: the sprite or background tile drawn there (its slot or
+    /// cell and picture number), the game object the state mapping says it
+    /// is with its values, the routine that drew it and the one that moves
+    /// it with every input that code reads, what the model draws there and
+    /// whether the two games agree on it, and what the tools could not
+    /// determine. Read-only. Answers a person's "what is this?" from the
+    /// page (docs/element.md, "What is at a spot").
+    ///
+    /// Example: gp element explain --run games/donkey-kong --clip dk.walk.001 --frame 120 --at 100,180
+    Explain(explain::ExplainArgs),
 }
 
 #[derive(Args, Clone, Default)]
@@ -122,6 +137,11 @@ pub(crate) fn run(cmd: &ElementCmd, paths: &Paths) -> Result<Outcome> {
         ElementCmd::Inputs(a) => {
             let v = inputs(paths, a)?;
             let text = text_of(&v);
+            Ok(Outcome::ok(v, text))
+        }
+        ElementCmd::Explain(a) => {
+            let v = explain::explain(paths, a)?;
+            let text = v["words"].as_str().unwrap_or("").to_owned();
             Ok(Outcome::ok(v, text))
         }
     }
@@ -1123,7 +1143,10 @@ fn body_slots(ls: &gp_interp::lockstep::Lockstep) -> BTreeMap<String, u16> {
 
 /// The game's labels (its folder's `labels.toml`), or `file`; the file used
 /// and why there are none.
-fn names_for(game: &Path, file: Option<&Path>) -> (Names, Option<PathBuf>, Option<String>) {
+pub(crate) fn names_for(
+    game: &Path,
+    file: Option<&Path>,
+) -> (Names, Option<PathBuf>, Option<String>) {
     let p = match file {
         Some(f) => f.to_path_buf(),
         None => {

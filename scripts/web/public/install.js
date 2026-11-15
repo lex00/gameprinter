@@ -138,12 +138,19 @@ async function download(source, r, progress) {
   await askToKeep();
   const got = new Map();
   let next = 0;
+  // Once one file is refused the others stop, and none says how far the
+  // download got after it: a game of many files went on saying "Getting
+  // the game: 88 of 89 files" over the refusal (check-page, own-game-tampered-blob).
+  let failed = false;
   const worker = async () => {
-    while (next < missing.length) {
+    while (next < missing.length && !failed) {
       const f = missing[next++];
       const b = await get(source, `blobs/${f.hash}`);
-      if (b === null) throw new Error(`${f.path} isn't on the source`);
-      if (b.length !== f.size || !x.blobOk(f.hash, b)) throw new Error(`the file ${f.path} doesn't match what its maker signed`);
+      if (failed) return;
+      if (b === null || b.length !== f.size || !x.blobOk(f.hash, b)) {
+        failed = true;
+        throw new Error(b === null ? `${f.path} isn't on the source` : `the file ${f.path} doesn't match what its maker signed`);
+      }
       got.set(f.hash, b);
       progress?.(got.size, missing.length);
     }
@@ -191,9 +198,17 @@ export async function ensure(source, what, progress) {
 // A source that can't be reached offers nothing new: the page then plays
 // with what it was linked to.
 export async function offered(source, game) {
+  return (await offer(source, game)).offered;
+}
+
+// What the source offers for a game, and what of its list the page leaves
+// out with why (gp-registry.wasm's list question, gp_web_registry::choose):
+// { offered: [{ name, version, id, title }], leftOut: [{ name, version,
+// title, reason, detail }] }, `reason` written to follow "because".
+export async function offer(source, game) {
   const a = await ask(source, { name: "", list: true, for_game: game });
   if (a.error) throw new Error(a.error);
-  return a.ok;
+  return { offered: a.ok, leftOut: a.left_out ?? [] };
 }
 
 export async function setCurrent(rec) {

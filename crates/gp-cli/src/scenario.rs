@@ -762,7 +762,9 @@ fn taped_one(
         let art = gp_sim::reads::paused(|| {
             shared
                 .art
-                .get_or_init(|| crate::screen::art(model, &spec, &b.assets).ok())
+                .get_or_init(|| {
+                    crate::screen::art(model, &spec, &b.assets, b.mapping.board_units).ok()
+                })
                 .clone()
         });
         let opts = crate::screen::options_for(crate::roms::Platform::of_file(&b.rom));
@@ -981,7 +983,7 @@ where
     // left out.
     let art = shared
         .art
-        .get_or_init(|| crate::screen::art(model, &spec, &b.assets).ok())
+        .get_or_init(|| crate::screen::art(model, &spec, &b.assets, b.mapping.board_units).ok())
         .clone();
     let mut probe = make(art);
     let (r, _) = scenario::run_with(

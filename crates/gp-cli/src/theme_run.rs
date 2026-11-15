@@ -6,8 +6,10 @@
 //! ([`crate::hosted`]). This is the one place that changes: a run opens
 //! through the module at `$GP_HOME/work/modules/GAME.wasm` (GAME is the
 //! template's `game`, else its folder's name), or `GP_THEME_MODULE` when
-//! set, and falls back to the built-in interpreter on the model's
-//! components alone when there is none, saying so. Each step gives the
+//! set, else a game package's module built from this gp's kit as every
+//! tool that opens a model builds it ([`crate::module::built_for`]), and
+//! falls back to the built-in interpreter on the model's components alone
+//! when there is none, naming the hooks that don't run ([`Run::not_run`]). Each step gives the
 //! simulation's events, as the interpreter's `advance` did, and the APU
 //! writes of the game's sound driver, as `gp_sim::ext::hook_apu` did.
 
@@ -56,7 +58,11 @@ pub(crate) fn game_of(dir: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// The module a model folder's game runs through, if there is one.
+/// The module a model folder's game runs through, if there is one:
+/// `GP_THEME_MODULE`, the game's module by name in
+/// `$GP_HOME/work/modules`, else, for a game package with hook code, its
+/// module built from this gp's kit (or reused). A package whose module
+/// fails to build has none here, and its hooks are named as not run.
 pub(crate) fn module_for(dir: &Path, paths: &Paths) -> Option<PathBuf> {
     if let Some(m) = std::env::var_os("GP_THEME_MODULE").filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(m));
@@ -66,7 +72,19 @@ pub(crate) fn module_for(dir: &Path, paths: &Paths) -> Option<PathBuf> {
         .join("work")
         .join("modules")
         .join(format!("{}.wasm", game_of(dir)));
-    f.is_file().then_some(f)
+    if f.is_file() {
+        return Some(f);
+    }
+    if !dir.join("package.toml").is_file() {
+        return None;
+    }
+    match crate::module::built_for(&paths.home, dir) {
+        Ok(found) => found.map(|m| m.0),
+        Err(e) => {
+            eprintln!("warning: the game's module didn't build: {e:#}");
+            None
+        }
+    }
 }
 
 /// What one frame gave: the simulation's events and the sound driver's
@@ -84,7 +102,21 @@ pub(crate) struct Run {
 impl Run {
     /// Opens a run of `bundle`, the model in `dir`.
     pub(crate) fn open(bundle: &Bundle, dir: &Path, paths: &Paths) -> Result<Self> {
-        let module = module_for(dir, paths);
+        Self::open_with(bundle, dir, paths, None)
+    }
+
+    /// [`Self::open`] through `module` when one is named, else the one
+    /// [`module_for`] finds.
+    pub(crate) fn open_with(
+        bundle: &Bundle,
+        dir: &Path,
+        paths: &Paths,
+        module: Option<&Path>,
+    ) -> Result<Self> {
+        let module = match module {
+            Some(m) => Some(m.to_owned()),
+            None => module_for(dir, paths),
+        };
         let source = Source::new_allowing(bundle.clone(), module.as_deref(), true)?;
         let rt = source.open()?;
         let not_run = match &rt {
@@ -101,6 +133,12 @@ impl Run {
 
     pub(crate) fn world(&self) -> &World {
         self.rt.world()
+    }
+
+    /// The model as the tools run it, for drawing it as the screen
+    /// measure draws it (crate::screen::model_frame).
+    pub(crate) fn model(&self) -> &hosted::Model {
+        &self.rt
     }
 
     /// One frame: the simulation's events, and the APU writes the game's
@@ -132,5 +170,44 @@ impl Run {
     pub(crate) fn frame_hash(&self) -> gp_evidence::frame_hashes::FrameHash {
         let h = gp_evidence::Hash::from_bytes(self.rt.world().hash());
         gp_evidence::frame_hashes::FrameHash { state: h, ram: h }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A made-up model with a hooked entity, in a folder that is no game
+    /// package and with no module anywhere: the run names the hook as not
+    /// run, which gp theme video refuses rather than draw another game.
+    #[test]
+    fn a_hook_with_no_module_is_named_as_not_run() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let text = "[model]\nschema = \"0.4\"\nname = \"cab\"\ntitle = \"Cab\"\n\
+                    description = \"A made-up game\"\nview = \"side\"\nframe_rate = \"30\"\n\
+                    systems = [\"rules\", \"entity_states\", \"counters\", \"spawn\", \"platformer.player\", \"platformer.enemies\", \"platformer.contact\", \"exits\", \"camera\"]\n\
+                    start_level = \"main\"\n\n[model.extensions]\nplatformer = \"0.4\"\n\n\
+                    [entities.player]\nrole = \"player\"\nsize = [16, 16]\n\
+                    hitbox = { x = 0, y = 0, w = 16, h = 16 }\n\n\
+                    [entities.bird]\nrole = \"npc\"\next = \"bird\"\nsize = [16, 16]\n\
+                    hitbox = { x = 0, y = 0, w = 16, h = 16 }\n\n\
+                    [levels.main]\nempty = true\nsize = [32, 30]\ntile_size = 16\n";
+        let m = Model::parse(text).unwrap();
+        let mut lifted = Lifted::default();
+        lifted.files.insert(
+            "assets.toml".into(),
+            "schema = 1\nplatform = \"arcade\"\nsource = \"cab\"\nsets = [\"cab\"]\n\n\
+             [[asset]]\nname = \"tiles\"\nformat = \"mcr-tiles\"\nregion = \"gfx1\"\ncount = 1\nper_row = 1\n"
+                .into(),
+        );
+        let bundle = Bundle::new(&m, lifted);
+        let paths = crate::test_paths(home.path());
+        if std::env::var_os("GP_THEME_MODULE").is_some() {
+            return;
+        }
+        assert_eq!(module_for(dir.path(), &paths), None);
+        let run = Run::open_with(&bundle, dir.path(), &paths, None).unwrap();
+        assert_eq!(run.not_run, vec!["bird".to_owned()]);
     }
 }

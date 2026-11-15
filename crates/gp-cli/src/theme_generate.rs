@@ -1565,12 +1565,12 @@ pub fn run(a: &GenerateArgs, paths: &Paths) -> Result<Outcome> {
             errs.join("\n  ")
         );
     }
-    // A paid run from here on.
-    if !a.yes && !std::io::stdin().is_terminal() {
-        bail!(
-            "a paid run needs --yes when not run from a terminal. Run with --dry-run first, show the estimate to the person paying, and pass --yes only after they say yes"
-        );
-    }
+    // A paid run from here on. Without --yes it asks on the terminal, so
+    // never when an agent runs it: an agent's shell may have a terminal,
+    // and nobody would answer.
+    may_ask(a.yes, std::io::stdin().is_terminal(), &|k| {
+        std::env::var_os(k)
+    })?;
     let key = rw::load_key(&paths.home)?;
     let client = Client::new(&a.api, key);
     let res = paid_run(
@@ -1578,6 +1578,31 @@ pub fn run(a: &GenerateArgs, paths: &Paths) -> Result<Outcome> {
     );
     unlock(&run);
     res.map_err(|e| anyhow!("{}", client.redact(&format!("{e:#}"))))
+}
+
+/// Why a paid run without --yes is refused rather than asked on stdin.
+const NEEDS_YES: &str = "a paid run asks for its yes on a terminal, never from an agent or with no terminal, so it needs --yes, and the person paying must agree to the cost first: run with --dry-run, show them the estimate, and pass --yes only after they say yes";
+
+/// The environment variable that says an agent is running gp, and its
+/// value when there is one: `GP_CALLER`, which gp mcp sets on every gp it
+/// runs, or `AI_AGENT` or `CLAUDECODE`, which agents' shells set.
+fn agent_caller(var: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Option<&'static str> {
+    ["GP_CALLER", "AI_AGENT", "CLAUDECODE"]
+        .into_iter()
+        .find(|k| var(k).is_some_and(|v| !v.is_empty() && v != "0"))
+}
+
+/// Ok when a paid run may go on: with --yes, or to ask for the yes on a
+/// terminal a person is at; else the refusal that names --yes.
+fn may_ask(
+    yes: bool,
+    terminal: bool,
+    var: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+) -> Result<()> {
+    if !yes && (!terminal || agent_caller(var).is_some()) {
+        bail!("{NEEDS_YES}");
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1919,6 +1944,31 @@ mod tests {
             ["ref:style-board", "ref:turn-hero", "cell:A01"]
         );
         assert!(select(&m, &["nothing".into()]).is_err());
+    }
+
+    #[test]
+    fn a_paid_run_never_waits_for_a_yes_an_agent_would_have_to_type() {
+        let none = |_: &str| None;
+        assert!(
+            may_ask(false, true, &none).is_ok(),
+            "a person at a terminal is asked"
+        );
+        assert!(may_ask(true, false, &none).is_ok());
+        let e = may_ask(false, false, &none).unwrap_err().to_string();
+        assert_eq!(e, NEEDS_YES);
+        // An agent's shell can have a terminal; nobody would answer it.
+        for k in ["GP_CALLER", "AI_AGENT", "CLAUDECODE"] {
+            let agent = |v: &str| (v == k).then(|| std::ffi::OsString::from("1"));
+            assert_eq!(agent_caller(&agent), Some(k));
+            let e = may_ask(false, true, &agent).unwrap_err().to_string();
+            assert!(
+                e.contains("--yes") && e.contains("the person paying must agree to the cost"),
+                "{e}"
+            );
+            assert!(may_ask(true, true, &agent).is_ok(), "--yes still runs");
+        }
+        let off = |v: &str| (v == "AI_AGENT").then(|| std::ffi::OsString::from("0"));
+        assert_eq!(agent_caller(&off), None);
     }
 
     #[test]

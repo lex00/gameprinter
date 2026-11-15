@@ -394,10 +394,7 @@ fn object_gaps<O: Runtime>(
         gp_sim::systems::new_body(spec, &base, kind, gp_sim::Fx::ZERO, gp_sim::Fx::ZERO, false);
     let fields = g.fields_of(sk);
     for f in &fields {
-        let mut bytes = Vec::new();
-        for sel in f.slot_selectors(slot) {
-            bytes.push(crate::bodies::read_sel(o, &sel)?);
-        }
+        let bytes = crate::bodies::read_bytes(o, &f.slot_addresses(slot))?;
         let v = f.slot_value(slot, &bytes);
         if let Value::Text(t) = &v
             && t.starts_with("(unnamed value")

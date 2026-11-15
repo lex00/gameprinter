@@ -30,16 +30,13 @@
 //! discovery and the blind run are wave 7's (crate::farm::blind); clips are
 //! read through crate::mechanic::paths. It reads the NES's 6502: each
 //! conditional branch's direction from tetanes-core's bus and the writer
-//! slice (gp_nes::slice). An arcade game is refused in words; it needs the
-//! same over the main Z80 (each conditional jump's direction is in
-//! gp-arcade's instruction trace, as crate::covered reads it, and
-//! crate::element_z80 has a writer slice back from a write, which would
-//! have to slice back from a jump's flags instead), and a level grid in
-//! the mapping, which Tapper's hasn't.
+//! slice (gp_nes::slice). An arcade romset runs steps 1 and 2 over the
+//! main Z80 instead (crate::localize_z80), and step 3 for a model in the
+//! board's own units; step 4 stops there in words (localize_z80::PROBE_STOP).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 use clap::Args;
@@ -69,7 +66,14 @@ pub(crate) struct LocalizeArgs {
     #[arg(long, default_value = "main")]
     pub level: String,
     /// The decision server for the probes.
-    #[arg(long, default_value = "http://127.0.0.1:7720")]
+    /// Default: $GP_LAYA_URL when it is set (the address gp serve and gp_run
+    /// keep Laya at), else http://127.0.0.1:7720.
+    #[arg(
+        long,
+        env = "GP_LAYA_URL",
+        hide_env_values = true,
+        default_value = "http://127.0.0.1:7720"
+    )]
     pub decide: String,
     /// How many of the best-placed leads to probe.
     #[arg(long, default_value_t = 3)]
@@ -116,6 +120,31 @@ pub(crate) struct LocalizeArgs {
     /// With --grade, a RAM byte to report before and after (hex).
     #[arg(long, value_parser = parse_hex)]
     pub watch: Option<u16>,
+    /// The folder to write the leads (LEVEL.json) and a probe's or a
+    /// collect's runs (runs/) into, instead of $GP_HOME/work/localize/GAME
+    /// and $GP_HOME/work/localize/runs: a trial run that leaves the home's
+    /// leads as they were. Example: --out /tmp/localize-trial
+    #[arg(long)]
+    pub out: Option<std::path::PathBuf>,
+}
+
+impl LocalizeArgs {
+    /// Where the leads of `name` are written: --out, else
+    /// $GP_HOME/work/localize/NAME.
+    pub(crate) fn leads_dir(&self, home: &Path, name: &str) -> PathBuf {
+        self.out
+            .clone()
+            .unwrap_or_else(|| home.join("work/localize").join(name))
+    }
+
+    /// Where a probe's or a collect's run is written: --out's runs/, else
+    /// $GP_HOME/work/localize/runs.
+    fn runs_dir(&self) -> PathBuf {
+        self.out.as_ref().map_or_else(
+            || paths_home().join("work/localize/runs"),
+            |o| o.join("runs"),
+        )
+    }
 }
 
 fn parse_hex(s: &str) -> std::result::Result<u16, String> {
@@ -144,15 +173,17 @@ fn parse_branch(s: &str) -> std::result::Result<(u16, bool), String> {
 }
 
 /// A replayable input log from power-on.
-struct Src {
-    name: String,
-    frames: Vec<InputFrame>,
+pub(crate) struct Src {
+    pub(crate) name: String,
+    pub(crate) frames: Vec<InputFrame>,
 }
 
 /// Every clip of the game's mechanic sessions except those cut from a
 /// recording (harvest-*) or generated (jumpathon), and the blind runs of
-/// this ROM.
-fn sources(paths: &Paths, game: &str, sha: &str) -> Result<Vec<Src>> {
+/// this ROM. With `same_rom`, a session whose session.toml names another
+/// ROM's hash is left out (an arcade game's sessions may be of any of its
+/// romsets, whose programs differ).
+pub(crate) fn sources(paths: &Paths, game: &str, sha: &str, same_rom: bool) -> Result<Vec<Src>> {
     let mut out = Vec::new();
     let root = paths.home.join("mechanics").join(game);
     let mut dirs: Vec<_> = fs::read_dir(&root)
@@ -170,6 +201,14 @@ fn sources(paths: &Paths, game: &str, sha: &str) -> Result<Vec<Src>> {
             .unwrap_or("")
             .to_owned();
         if name.starts_with("harvest") || name.starts_with("jumpathon") {
+            continue;
+        }
+        if same_rom
+            && let Ok(t) = fs::read_to_string(d.join("session.toml"))
+            && let Ok(t) = t.parse::<toml::Table>()
+            && let Some(r) = t.get("rom").and_then(|r| r.as_str())
+            && r != sha
+        {
             continue;
         }
         let mut logs: Vec<_> = fs::read_dir(d.join("clips"))?
@@ -234,13 +273,13 @@ fn sources(paths: &Paths, game: &str, sha: &str) -> Result<Vec<Src>> {
 }
 
 impl LevelKey {
-    fn read(game_dir: &Path) -> Result<LevelKey> {
+    pub(crate) fn read(game_dir: &Path) -> Result<LevelKey> {
         let t: toml::Value = toml::from_str(&fs::read_to_string(game_dir.join("observe.toml"))?)?;
         LevelKey::parse(&t)
     }
 
     /// No level key (a ROM with no template): every frame is in "all".
-    fn any() -> LevelKey {
+    pub(crate) fn any() -> LevelKey {
         LevelKey {
             ram: Vec::new(),
             when: None,
@@ -251,7 +290,7 @@ impl LevelKey {
 
 impl Grid {
     /// The (page, row, column in the page) of a grid byte.
-    fn place(&self, a: u16) -> Option<(usize, usize, usize)> {
+    pub(crate) fn place(&self, a: u16) -> Option<(usize, usize, usize)> {
         let size = self.cols * self.rows;
         for (p, &base) in self.pages.iter().enumerate() {
             if a >= base && usize::from(a - base) < size {
@@ -266,7 +305,7 @@ impl Grid {
     fn level_col(&self, page: usize, col: usize, near_x: i64) -> i64 {
         let span = (self.cols * self.pages.len()) as i64;
         let base = (page * self.cols + col) as i64;
-        let near = near_x.div_euclid(16);
+        let near = near_x.div_euclid(self.cell);
         let k = (near - base).div_euclid(span);
         // The nearest of the two candidates around `near`.
         let a = base + k * span;
@@ -279,8 +318,8 @@ impl Grid {
     }
 
     /// A cell's top y on the screen.
-    fn row_y(&self, row: usize) -> i64 {
-        ((row + self.top) * 16) as i64
+    pub(crate) fn row_y(&self, row: usize) -> i64 {
+        (row + self.top) as i64 * self.cell
     }
 }
 
@@ -678,9 +717,7 @@ pub(crate) fn run(a: &LocalizeArgs, paths: &Paths) -> Result<Outcome> {
         (None, None, None) => bail!("give a game or --rom"),
     };
     if crate::original::Platform::of_file(&rom) == crate::original::Platform::Arcade {
-        bail!(
-            "gp localize reads the NES's 6502: each branch's direction and the writer slice back from it. An arcade romset needs the same over the main Z80 (the conditional jumps' directions are in gp-arcade's instruction trace; a slice back from a jump's flags, as gp element inputs slices back from a write) and a level grid in the mapping"
-        );
+        return crate::localize_z80::run(a, paths, &rom, game_dir.as_deref(), t0);
     }
     let sha = gp_evidence::source::identify_nes(&rom)?.sha256;
     // A game with observe.toml, or the ROM alone (keyed by its hash).
@@ -706,7 +743,7 @@ pub(crate) fn run(a: &LocalizeArgs, paths: &Paths) -> Result<Outcome> {
     };
     let grid = templated.and_then(|d| Grid::load(d));
     let dataset = paths.home.join("work/datasets").join(&name);
-    let mut srcs = sources(paths, &name, &sha)?;
+    let mut srcs = sources(paths, &name, &sha, false)?;
     if srcs.is_empty() && templated.is_none() {
         // Nothing has played this ROM: a blind run first.
         let o = crate::farm::blind::Opts {
@@ -725,7 +762,7 @@ pub(crate) fn run(a: &LocalizeArgs, paths: &Paths) -> Result<Outcome> {
         let rom_file = tempfile::Builder::new().suffix(".nes").tempfile()?;
         fs::write(rom_file.path(), &rom)?;
         crate::farm::blind::farm_run(rom_file.path(), &o, paths, &dir)?;
-        srcs = sources(paths, &name, &sha)?;
+        srcs = sources(paths, &name, &sha, false)?;
     }
     let player = if dataset.join("data").is_dir() {
         player_of(&dataset)?
@@ -750,6 +787,7 @@ pub(crate) fn run(a: &LocalizeArgs, paths: &Paths) -> Result<Outcome> {
                 way,
                 a.budget,
                 &a.decide,
+                &a.runs_dir(),
             )?;
             text.push_str(&format!(
                 "{way}: {} in {} moves, {} frames, {} calls, {:.1} s{}\n",
@@ -969,7 +1007,7 @@ pub(crate) fn run(a: &LocalizeArgs, paths: &Paths) -> Result<Outcome> {
                     {
                         let lc = gr.level_col(page, col, *px + 128);
                         cells.push(
-                            json!({"addr": format!("{ad:04X}"), "value": v, "level_x": lc * 16,
+                            json!({"addr": format!("{ad:04X}"), "value": v, "level_x": lc * gr.cell,
                             "y": gr.row_y(row), "first": [srcs[*si].name, fi]}),
                         );
                     }
@@ -1019,7 +1057,7 @@ pub(crate) fn run(a: &LocalizeArgs, paths: &Paths) -> Result<Outcome> {
                             continue;
                         };
                         let lc = gr.level_col(page, col, px);
-                        let o = (lc * 16 - px, gr.row_y(row) - py);
+                        let o = (lc * gr.cell - px, gr.row_y(row) - py);
                         if best.is_none_or(|b| o.0.abs() + o.1.abs() < b.0.abs() + b.1.abs()) {
                             best = Some(o);
                         }
@@ -1107,7 +1145,16 @@ pub(crate) fn run(a: &LocalizeArgs, paths: &Paths) -> Result<Outcome> {
                 };
                 for way in ["laya", "uniform", "undirected"] {
                     let r = probe(
-                        &rom, &start, &goal, &player, &level, &a.level, way, a.budget, &a.decide,
+                        &rom,
+                        &start,
+                        &goal,
+                        &player,
+                        &level,
+                        &a.level,
+                        way,
+                        a.budget,
+                        &a.decide,
+                        &a.runs_dir(),
                     )?;
                     let mut r = r;
                     r["branch"] = json!(format!("{pc:04X}"));
@@ -1166,7 +1213,7 @@ pub(crate) fn run(a: &LocalizeArgs, paths: &Paths) -> Result<Outcome> {
         "by_code": by_code.iter().take(20).map(|(p, n)| json!({"branch": format!("{p:04X}"), "unrun_behind": n})).collect::<Vec<_>>(), "probes": probes, "pokes": pokes, "graded": graded,
         "seconds": (t0.elapsed().as_secs_f64() * 10.0).round() / 10.0,
     });
-    let out = paths.home.join("work/localize").join(&name);
+    let out = a.leads_dir(&paths.home, &name);
     fs::create_dir_all(&out)?;
     fs::write(
         out.join(format!("{}.json", a.level)),
@@ -1348,6 +1395,7 @@ fn probe(
     way: &str,
     budget: usize,
     decide: &str,
+    runs: &Path,
 ) -> Result<Value> {
     let t0 = std::time::Instant::now();
     let moves = probe_moves();
@@ -1474,13 +1522,7 @@ fn probe(
                 // The run that did it, from power-on, for the clip.
                 let mut log = InputLog::new(1);
                 log.frames = l.clone();
-                let dir = std::env::var_os("GP_HOME")
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|| {
-                        std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
-                            .join(".gameprinter")
-                    })
-                    .join("work/localize/runs");
+                let dir = runs.to_owned();
                 let _ = fs::create_dir_all(&dir);
                 let f = dir.join(format!("{:04X}-{way}-{}.log", goal.branch, l.len()));
                 let _ = fs::write(&f, log.to_text());
@@ -1807,6 +1849,7 @@ fn poke_sweep(
         cols: 16,
         rows: 15,
         top: 0,
+        cell: 16,
     };
     let gr = grid.unwrap_or(&lattice);
     // The path, with a savestate a screen (256 px of x), standing.
@@ -2010,7 +2053,16 @@ fn poke_sweep(
             continue;
         };
         let r = probe(
-            rom, &start, &goal, player, level, name, "laya", a.budget, &a.decide,
+            rom,
+            &start,
+            &goal,
+            player,
+            level,
+            name,
+            "laya",
+            a.budget,
+            &a.decide,
+            &a.runs_dir(),
         )?;
         confirmed.push(
             json!({"branch": h["branch"], "cell_x": h["cell_x"], "cell_y": h["cell_y"],
@@ -2147,6 +2199,7 @@ fn collect(
     way: &str,
     budget: usize,
     decide: &str,
+    runs: &Path,
 ) -> Result<Value> {
     let t0 = std::time::Instant::now();
     let mut nes = gp_nes::Nes::power_on(rom, gp_evidence::manifest::PowerOn::default())?;
@@ -2461,7 +2514,7 @@ fn collect(
                 if !gained.is_empty() {
                     let mut out = InputLog::new(1);
                     out.frames = l.clone();
-                    let dir = paths_home().join("work/localize/runs");
+                    let dir = runs.to_owned();
                     let _ = fs::create_dir_all(&dir);
                     let f = dir.join(format!("collect-{way}-{}.log", l.len()));
                     fs::write(&f, out.to_text())?;
@@ -2575,4 +2628,35 @@ fn unrun_behind(nes: &gp_nes::Nes, start: u16, ran: &dyn Fn(u16) -> bool) -> usi
         }
     }
     seen.len()
+}
+
+#[cfg(test)]
+mod out_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Cli {
+        #[command(flatten)]
+        a: LocalizeArgs,
+    }
+
+    /// `--out` keeps a trial run's leads and runs out of the home: the
+    /// leads go in it as LEVEL.json and a probe's runs in its runs/; with
+    /// none they go where they always have.
+    #[test]
+    fn out_takes_the_leads_and_runs_out_of_the_home() {
+        let home = Path::new("/made/up/home");
+        let a = Cli::try_parse_from(["gp", "tapper", "--out", "/made/up/trial"])
+            .unwrap()
+            .a;
+        assert_eq!(a.leads_dir(home, "tapper"), Path::new("/made/up/trial"));
+        assert_eq!(a.runs_dir(), Path::new("/made/up/trial/runs"));
+        let a = Cli::try_parse_from(["gp", "tapper"]).unwrap().a;
+        assert_eq!(
+            a.leads_dir(home, "tapper"),
+            home.join("work/localize/tapper")
+        );
+        assert!(a.runs_dir().ends_with("work/localize/runs"));
+    }
 }

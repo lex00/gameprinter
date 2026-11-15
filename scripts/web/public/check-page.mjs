@@ -1599,6 +1599,144 @@ async function keptLook(S, { name, rom }) {
   check(theme === "turnips", `${name}: with Paper kept from an earlier visit, a ROM picked opens in the page's theme, Turnips (theme ${JSON.stringify(theme)}, kept-look.png)`);
 }
 
+// Theme picks that overlap. A look's pictures are decoded before it is
+// drawn, and the player can pick again, or a new mode can restart the
+// game, in that wait. On the live page (2026-11-14) Diaper Tantrum picked
+// with the JU ROM ended twice in 14 runs in Original, the bar saying
+// "Theme not changed: no large-art look loaded": a second pick cleared the
+// first one's art in the module while its pictures were decoded. Here the
+// game frame's picture decoding (createImageBitmap) waits until the check
+// lets it go, batch by batch, so each overlap happens every run: a pick
+// made while another loads, a restart while one loads, and an older pick
+// whose pictures come in after a newer one is drawn. The newest pick is
+// drawn each time, no pick says it failed, and the settings screen always
+// opens on the theme drawn.
+async function themePicks(S, { name, sha, rom }) {
+  const { p, check, gp, key, until } = S;
+  await p.goto(`${S.origin}/${entry}`);
+  await S.loadRom(rom);
+  check((await S.waitFrames(30)) && (await gp(() => window.__gp.theme)) === "turnips", `${name}: the ROM opens in Turnips`);
+  const index = await p.evaluate(async (game) => {
+    const t = (await (await import("./game/lift.js")).loadStored(game))?.get("themes/index.json");
+    return t ? JSON.parse(new TextDecoder().decode(t)).themes : [];
+  }, page.rom.game);
+  const titles = new Map([["original", "Original"], ...index.map((x) => [x.id, x.title])]);
+  const others = index.map((x) => x.id).filter((id) => id !== "turnips");
+  if (others.length < 2) {
+    S.lines.push(`skip  ${name}: overlapping theme picks need two themes besides Turnips; the lift offers ${[...titles.keys()].join(", ")}`);
+    return;
+  }
+  const [late, slow] = others.slice(-2);
+  await gp(() => {
+    const decode = window.createImageBitmap;
+    const gate = (window.__artGate = []);
+    window.createImageBitmap = (...a) => {
+      const b = gate.at(-1);
+      if (!b || b.open) return decode.apply(window, a);
+      b.held++;
+      return b.wait.then(() => decode.apply(window, a));
+    };
+    // Every message the bar shows, in order.
+    const bar = document.getElementById("game").nextElementSibling;
+    window.__said = [];
+    new MutationObserver(() => window.__said.at(-1) !== bar.textContent && window.__said.push(bar.textContent)).observe(bar, { childList: true, characterData: true, subtree: true });
+  });
+  const hold = () =>
+    gp(() => {
+      const b = { held: 0, open: false };
+      b.wait = new Promise((ok) => (b.go = ok));
+      return window.__artGate.push(b) - 1;
+    });
+  const holding = (n) => until((n) => window.__artGate[n].held > 0, n);
+  const release = (n) => gp((n) => ((window.__artGate[n].open = true), window.__artGate[n].go()), n);
+  const turns = () => gp(() => new Promise((ok) => (requestAnimationFrame(() => requestAnimationFrame(() => ok(true))), setTimeout(() => ok(false), 15000)))).catch(() => false);
+  const lines = async () => (await gp(() => window.__gp.settingsLines?.() ?? null)) ?? [];
+  const cursor = async () => (await lines()).find((l) => l.startsWith("> ")) ?? "";
+  const themeLine = async () => ((await lines()).find((l) => /^(> | {2})Theme /.test(l)) ?? "").replace(/^(> | {2})Theme\s+<\s*/, "").replace(/\s*>\s*$/, "");
+  const step = async (k) => {
+    await key(k);
+    await turns();
+  };
+  const cursorTo = async (start) => {
+    for (let i = 0; i < 40 && !(await cursor()).slice(2).startsWith(start); i++) await step("ArrowDown");
+  };
+  // The screen opened, the Theme line set to `id` (and the Mode line to
+  // `mode`), closed: what the screen opened on and what was drawn then.
+  // The pick itself isn't waited for.
+  const pick = async (id, mode = null) => {
+    const drawn = await gp(() => window.__gp.theme);
+    await key("Escape");
+    await until(() => window.__gp.settingsOpen === true);
+    const shown = await themeLine();
+    if (mode) {
+      await cursorTo("Mode");
+      for (let i = 0; i < 6 && !(await cursor()).includes(`< ${mode} >`); i++) await step("ArrowRight");
+    }
+    await cursorTo("Theme");
+    for (let i = 0; i <= titles.size && (await themeLine()) !== titles.get(id); i++) await step("ArrowRight");
+    const set = (await themeLine()) === titles.get(id);
+    await key("Escape");
+    await until(() => !window.__gp.settingsOpen);
+    return { drawn, shown, set };
+  };
+  const opened = [];
+  const picked = async (id, mode) => {
+    const r = await pick(id, mode);
+    opened.push(r);
+    return r.set;
+  };
+  const now = () => gp(() => ({ theme: window.__gp.theme, profile: window.__gp.profile, restarting: window.__gp.restarting, scale: document.getElementById("game").gpScale ?? 1, said: window.__said.slice() }));
+  const failed = (said) => said.filter((x) => /not changed|not applied/i.test(x));
+  const told = (said) => JSON.stringify(said.filter((x) => /^(Theme|Settings: \w+\.)/.test(x)));
+  const settle = async (id) => {
+    await until((id) => window.__gp.theme === id && !window.__gp.restarting, id);
+    for (let i = 0; i < 10; i++) await turns();
+    return now();
+  };
+
+  // 1. A pick while another's pictures are decoded.
+  let b = await hold();
+  let ok = await picked(late);
+  check(ok && (await holding(b)), `${name}: ${titles.get(late)} picked, its pictures held`);
+  ok = await picked("original");
+  await release(b);
+  let n = await settle("original");
+  check(ok && n.theme === "original" && n.scale === 1 && !failed(n.said).length, `${name}: Original picked while ${titles.get(late)} loads is drawn, and neither pick says it failed (theme ${n.theme}, scale ${n.scale}, the bar said ${told(n.said)})`);
+
+  // 2. A new mode's restart while a pick's pictures are decoded.
+  b = await hold();
+  ok = await picked(late, "normal");
+  check(ok && (await holding(b)), `${name}: ${titles.get(late)} and Normal picked together, its pictures held`);
+  await until(() => window.__gp.profile === "normal" && !window.__gp.restarting);
+  await release(b);
+  n = await settle(late);
+  check(n.theme === late && n.profile === "normal" && n.scale > 1 && !failed(n.said).length, `${name}: the game restarts in Normal while ${titles.get(late)} loads, and it is drawn after (theme ${n.theme}, ${n.profile}, scale ${n.scale}, the bar said ${told(n.said)})`);
+
+  // 3. An older pick whose pictures come in after a newer one is drawn.
+  const first = await hold();
+  ok = await picked(slow);
+  check(ok && (await holding(first)), `${name}: ${titles.get(slow)} picked, its pictures held`);
+  const second = await hold();
+  ok = await picked("turnips");
+  check(ok && (await holding(second)), `${name}: then Turnips, its pictures held too`);
+  await release(second);
+  n = await settle("turnips");
+  check(n.theme === "turnips", `${name}: Turnips, picked last, is drawn first (theme ${n.theme})`);
+  await release(first);
+  for (let i = 0; i < 20; i++) await turns();
+  n = await now();
+  await S.shot(`theme-picks-${sha.slice(0, 8)}.png`);
+  check(n.theme === "turnips" && n.scale > 1 && !failed(n.said).length, `${name}: and stays drawn when ${titles.get(slow)}'s pictures come in after it (theme ${n.theme}, scale ${n.scale}, the bar said ${told(n.said)}, theme-picks-${sha.slice(0, 8)}.png)`);
+
+  // The screen opened each time on the theme drawn.
+  const off = opened.filter((o) => o.shown !== titles.get(o.drawn));
+  await key("Escape");
+  await until(() => window.__gp.settingsOpen === true);
+  const last = await themeLine();
+  check(!off.length && last === titles.get(n.theme), `${name}: the settings screen opens on the theme drawn, each of ${opened.length + 1} times (${off.map((o) => `"${o.shown}" over ${o.drawn}`).join(", ") || `last "${last}"`})`);
+  await key("Escape");
+}
+
 async function laterVisit(S, { rom }) {
   const { p, check, waitFrames } = S;
   await p.goto(`${S.origin}/${entry}`);
@@ -2015,7 +2153,7 @@ async function registryLinks(S) {
     const said = await p.locator("#message").innerText();
     check(re.test(said) && !(await p.locator("#game").getAttribute("src")), `${what} (${said})`);
   };
-  await refused("p?g=someone/else", /this page plays/i, "a link to a game this player doesn't have is refused in words");
+  await refused("p?g=someone/else", /isn't in this source's catalog/i, "a link to a game the source doesn't have is refused in words");
   await refused(`p?g=${page.game}@9.9.9`, /couldn't be installed/i, "a link to a version that doesn't exist is refused in words");
   // Neither registry holds 1.0.0.
   await refused(`p?g=${page.game}@1.0.0`, /isn't there/i, "a version this source doesn't hold is refused in words");
@@ -2100,6 +2238,927 @@ async function registryLocalChange(S) {
   check(/changed in this browser/.test(said), `a play file changed in this browser is refused (${said})`);
 }
 
+// ---- Any game by its name, and the share link (docs/web.md, "One page, any game") ----
+
+// A made-up second game in the registry folder (scripts/web/test-registry.sh
+// puts test/made-up and its theme test/made-up-look there): its sections run
+// only when --registry-folder holds it.
+const MADE_UP = "test/made-up";
+const MADE_UP_LOOK = "test/made-up-look";
+const madeUpHere = !!registryFolder && existsSync(join(registryFolder, "index", MADE_UP));
+// The made-up game's manifest id and a blob of its, from the folder.
+function madeUpFiles() {
+  const cat = readFileSync(join(registryFolder, "catalog.toml"), "utf8");
+  const id = new RegExp(`name = "${MADE_UP}"[^\\[]*?id = "([0-9a-f]{64})"`).exec(cat)[1];
+  const hashes = new Map();
+  for (const l of readFileSync(join(registryFolder, "packages", id), "utf8").split("\n")) {
+    const m = /^file ([0-9a-f]{64}) \d+ (.+)$/.exec(l);
+    if (m) hashes.set(m[2], m[1]);
+  }
+  return { id, hashes };
+}
+// The page's message once it says something of `kinds`, at most `ms`.
+const messageOf = async (p, kinds = ["error"], ms = 60000) => {
+  await p.waitForFunction((k) => k.includes(document.getElementById("message").dataset.kind), kinds, { timeout: ms }).catch(() => {});
+  return p.locator("#message").innerText();
+};
+const madeUpRom = (S) => {
+  const fake = S.file("made-up-game.nes");
+  const body = Buffer.alloc(16 + 16384 + 8192);
+  body.set([0x4e, 0x45, 0x53, 0x1a, 1, 1]);
+  for (let i = 16; i < body.length; i++) body[i] = (i * 104729) & 0xff;
+  writeFileSync(fake, body);
+  return fake;
+};
+
+// The page's own game by its registry name, and a second game by its name:
+// each is installed from the source, and the page takes its title, its ROM
+// line, its how-to-play lines and its About line from the game, as text.
+async function gameByName(S) {
+  const { p, check, errors } = S;
+  await p.goto(`${S.origin}/p?g=${page.game}`);
+  check(await S.installed(), `${page.game} by its name is installed`);
+  check((await p.title()) === page.title && (await p.locator("#rom-help").innerText()).includes(page.rom.name), `and the page is its own: ${page.title}, the ROM line naming ${page.rom.name}`);
+  check(/arrows move, X jumps, Enter starts/.test(await p.locator("#howto").innerText()), "with the page's own how-to-play lines");
+  if (!madeUpHere) {
+    S.lines.push(`skip  no ${MADE_UP} in the registry folder (scripts/web/test-registry.sh makes one): a second game isn't checked`);
+    return;
+  }
+  await p.goto(`${S.origin}/p?g=${MADE_UP}`);
+  check(await S.installed(), `${MADE_UP} by its name is installed with no click`);
+  const rec = await installedOf(p, MADE_UP);
+  check(rec?.kind === "game" && rec.files.some((f) => f.path === "play/page.json"), `from its package (${rec?.name}@${rec?.version}, ${rec?.files.length} files, play/page.json among them)`);
+  check((await p.title()) === "Made Up Game" && (await p.locator("#title").innerText()) === "Made Up Game", `the page is titled for it (${await p.title()})`);
+  const help = await p.locator("#rom-help").innerText();
+  check(help.includes("Made Up Game") && help.includes("(A) or (B)") && !/Donkey Kong/.test(help), `the ROM line is its package's (${help.slice(0, 90)}...)`);
+  const howto = p.locator("#howto");
+  check(/Made-up controls: the page check reads this line/.test(await howto.innerText()), "the how-to-play lines are its package's");
+  check((await howto.innerText()).includes("<b>Not HTML</b>") && (await howto.locator("b").count()) === 0, "and its text is shown as text, never read as HTML");
+  check((await p.locator("#about-mark").textContent()) === "Made Up Game is made up for the page check." && !/Nintendo|Donkey/.test(await p.locator("#about").textContent()), "the About lines are its own and name no other game");
+  check((await p.evaluate(() => window.__page !== undefined)) && !(await p.locator("#game").getAttribute("src")), "nothing plays until a ROM is loaded");
+  await S.shot("game-made-up.png");
+  // A ROM that isn't its: refused by the lift, naming the game.
+  await p.setInputFiles("#rom", madeUpRom(S));
+  const said = await messageOf(p);
+  check(/Made Up Game/.test(said) && !(await p.locator("#game").getAttribute("src")), `a ROM that isn't its is refused naming it, and no game starts (${said.slice(0, 120)})`);
+  // Its theme by the link, and one offered for another game refused.
+  await p.goto(`${S.origin}/p?g=${MADE_UP}&c=${MADE_UP_LOOK}`);
+  check(await S.installed(), "with its own theme the link opens");
+  check((await installedOf(p, MADE_UP_LOOK))?.kind === "content", `and the theme is installed (${MADE_UP_LOOK})`);
+  await p.goto(`${S.origin}/p?g=${MADE_UP}&c=${ART_THEME}`);
+  check(await S.installed(), "with another game's theme the link still opens");
+  const warned = await messageOf(p, ["warn", "error"], 10000);
+  check(new RegExp(`${ART_THEME}.*isn't a theme the source offers for Made Up Game`).test(warned), `and that theme is left out in words (${warned})`);
+  // The page's own game, after another: its own facts again.
+  await p.goto(`${S.origin}/${entry}`);
+  check(await S.installed(), "the plain address installs the page's own game again");
+  check((await p.title()) === page.title && /arrows move, X jumps/.test(await p.locator("#howto").innerText()), "with its own title and how-to-play lines");
+  check(errors.length === 0, `no page errors (${errors.join("; ")})`);
+}
+
+// Names that aren't games, or aren't names: each refused in words before
+// anything of them is fetched, or left out with the page's own game playing.
+async function gameBadName(S) {
+  const { p, check } = S;
+  const refused = async (link, re, what) => {
+    await p.goto(`${S.origin}/${link}`);
+    const said = await messageOf(p, ["error"], 30000);
+    check(re.test(said) && !(await p.locator("#game").getAttribute("src")), `${what} (${said})`);
+  };
+  await refused("p?g=nobody/nothing", /nobody\/nothing couldn't be installed: .*isn't in this source's catalog/, "a game the source doesn't have is refused in words");
+  await refused(`p?g=${ART_THEME}`, /isn't a game on this page's source/, "a theme named as the game is refused in words");
+  const before = S.requests.length;
+  for (const bad of ["p?g=../../registry", "p?g=lex00/%3Cimg%20src%3Dx%3E", "p?g=lex00/donkey-kong@latest", "p?g=a/b&g=c/d"]) {
+    await p.goto(`${S.origin}/${bad}`);
+    check(await S.installed(), `${decodeURIComponent(bad)}: not a name, so the page's own game plays`);
+    const said = await messageOf(p, ["warn"], 10000);
+    check(/The link's g wasn't understood and was left out/.test(said), `and says the link's g was left out (${said})`);
+    check((await p.title()) === page.title && (await p.locator("img").count()) === 0, "with its own title, and nothing of the address made into the page");
+  }
+  const asked = S.requests.slice(before).filter((r) => isSourceUrl(S.origin, r.url)).map((r) => r.url);
+  check(!asked.some((u) => /\.\.|%3C|<|\/c\/d|@latest/i.test(u)), `no request named what the address said (${asked.length} requests to the source)`);
+  await p.goto(`${S.origin}/p?g=${page.game}&mode=turbo&on=smooth_walk,not_a_switch&rom=x`);
+  check(await S.installed(), "a link with settings the game hasn't opens");
+  const said = await messageOf(p, ["warn"], 10000);
+  check(/link's an unknown key wasn't understood/.test(said) && /no setting not_a_switch, turbo/.test(said), `and names the settings and keys it left out (${said})`);
+}
+
+// A tampered package of the second game: a changed file, or a changed
+// manifest (its content id no longer its hash), and nothing is installed.
+async function gameTampered(S, which) {
+  const { p, check } = S;
+  await p.goto(`${S.origin}/p?g=${MADE_UP}`);
+  const said = await messageOf(p, ["error"], 60000);
+  const re = which === "blob" ? /doesn't match what its maker signed/ : /couldn't be installed/;
+  check(re.test(said), `${which === "blob" ? "its play/page.json's bytes changed" : "its manifest changed"}: the page says so (${said})`);
+  check(!(await p.locator("#game").getAttribute("src")), "no game starts");
+  check((await installedOf(p, MADE_UP)) === null, "nothing is installed");
+}
+
+// The share link: made from what plays, read back, and opened in a fresh
+// browser, where it asks for the ROM and then starts in those choices. It
+// carries the game, the theme and the settings and nothing else.
+async function shareSection(S, withRom) {
+  const { p, check, gp } = S;
+  await S.context.grantPermissions(["clipboard-read", "clipboard-write"]).catch(() => {});
+  const shared = async () => {
+    await p.evaluate(() => delete document.getElementById("message").dataset.share);
+    await p.locator("#share").click();
+    await p.waitForFunction(() => document.getElementById("message").dataset.share, null, { timeout: 30000 }).catch(() => {});
+    return p.evaluate(() => document.getElementById("message").dataset.share ?? null);
+  };
+  const keys = (u) => [...new URL(u).searchParams.keys()];
+  await p.goto(`${S.origin}/p?g=${page.game}&c=${ART_THEME}&on=smooth_walk,not_a_switch&evil=1`);
+  check(await S.installed(), "a link with a theme and switches opens");
+  check(await p.locator("#share").isVisible(), "the Share button is there");
+  let link = await shared();
+  const q = link ? new URL(link).searchParams : new URLSearchParams();
+  check(link?.startsWith(`${S.origin}/p?`) && q.get("g") === page.game && q.get("c") === ART_THEME && q.get("on") === "smooth_walk" && keys(link).length === 3, `with no ROM, the link is the game, the theme and the switches the game has (${link})`);
+  const clip = await p.evaluate(() => navigator.clipboard.readText()).catch(() => null);
+  check(clip === null || clip === link, `and it is what was copied (${clip === null ? "the clipboard can't be read here" : "the same"})`);
+  if (madeUpHere) {
+    await p.goto(`${S.origin}/p?g=${MADE_UP}&c=${MADE_UP_LOOK}&mode=retro`);
+    check(await S.installed(), `${MADE_UP} with its theme and a mode opens`);
+    link = await shared();
+    check(link === `${S.origin}/p?g=${MADE_UP}&c=${MADE_UP_LOOK}&mode=retro`, `its share link reads back the same (${link})`);
+  }
+  if (!withRom) {
+    S.lines.push("skip  no ROM in $GP_ROM_DIR: the share link isn't played");
+    return;
+  }
+  // Played: the settings and theme the game runs in go in the link.
+  await p.goto(`${S.origin}/p?g=${page.game}&c=${ART_THEME}&mode=normal`);
+  await S.loadRom(withRom.rom);
+  check(await S.waitFrames(30), "the ROM plays from the link");
+  check((await gp(() => window.__gp.profile)) === "normal" && (await gp(() => window.__gp.theme)) === ART_THEME.split("/")[1], "in the link's mode and theme");
+  link = await shared();
+  check(keys(link).join(",") === "g,c,mode" && new URL(link).searchParams.get("mode") === "normal", `the share link carries them (${link})`);
+  check(!/rom|save|sha|idb|blob/i.test(new URL(link).search), "and nothing of the ROM, the saves or the player");
+  // A fresh browser: nothing kept, so the ROM is asked for, then the game
+  // starts in the shared choices.
+  const fresh = await p.context().browser().newContext({ viewport: { width: 1366, height: 768 } });
+  try {
+    fresh.on("request", (r) => S.requests.push({ method: r.method(), url: r.url(), body: r.postDataBuffer()?.length ?? 0 }));
+    if (registryFolder && page.source.url !== ".") await fresh.route((u) => isSourceUrl(S.origin, u), (r) => fromFolder(r));
+    const q2 = await fresh.newPage();
+    await q2.goto(link);
+    await q2.waitForFunction(() => window.__page !== undefined, null, { timeout: 60000 });
+    check((await q2.locator("#load-label").isVisible()) && !(await q2.locator("#game").getAttribute("src")), "the shared link in a fresh browser asks for the ROM");
+    await q2.setInputFiles("#rom", withRom.rom);
+    await q2.waitForFunction(() => document.getElementById("game").src.includes("files=idb:"), null, { timeout: 60000 });
+    const fr = () => q2.frame({ url: /\/game\/(index\.html)?(\?|$)/ });
+    const t0 = Date.now();
+    let got = null;
+    while (Date.now() - t0 < 30000) {
+      got = await fr()?.evaluate(() => (window.__gp?.hashes?.length > 30 ? { profile: window.__gp.profile, theme: window.__gp.theme } : null)).catch(() => null);
+      if (got) break;
+      await q2.waitForTimeout(200);
+    }
+    check(got?.profile === "normal" && got?.theme === ART_THEME.split("/")[1], `then starts in the shared mode and theme (${JSON.stringify(got)})`);
+  } finally {
+    await fresh.close();
+  }
+}
+
+// Themes the source lists that the page leaves out are named with why
+// (gp_web_registry::choose; page.js notOffered): in About from the start,
+// in the line under the header while a ROM plays, and the details in the
+// log. The game's list gets three made-up lines here, which the page
+// leaves out before it installs them: one whose name can't name a theme
+// (`zz/8bit`), one withdrawn for safety (yanks.toml gets its line too), and
+// one whose name ends as the first listed theme's does. A link to a theme
+// left out says why. And a theme drawn in part is named too (a made-up
+// looks_partial, since a real one needs a theme that names a picture the
+// game hasn't got: gp-web-lift's own test makes one). Kept apart from the
+// theme-picks sections. Only on an unsigned source: a signed list changed
+// here would be refused whole.
+const madeUpId = (n) => createHash("sha256").update(n).digest("hex");
+let firstListed = null;
+const notOfferedSource = async (route) => {
+  const url = new URL(route.request().url());
+  const key = sourceKey(url.origin, url);
+  const byGame = `/by-game/${page.game}.toml`;
+  if (key !== byGame && key !== "/yanks.toml") return route.fallback();
+  try {
+    let body;
+    if (registryFolder && page.source.url !== ".") {
+      const f = join(registryFolder, key);
+      body = existsSync(f) ? readFileSync(f, "utf8") : null;
+    } else {
+      const real = await route.fetch();
+      body = real.ok() ? (await real.body()).toString() : null;
+    }
+    if (body === null) return route.fulfill({ status: 403, headers: { "access-control-allow-origin": "*" }, body: "" });
+    if (key === byGame) {
+      const m = /^package = "([^"]+)"[\s\S]*?^title = "([^"]*)"/m.exec(body);
+      firstListed = m ? { name: m[1], title: m[2] } : null;
+      const line = (pkg, title) => `\n[[line]]\npackage = "${pkg}"\nversion = "1.0.0"\nid = "${madeUpId(pkg)}"\ntitle = "${title}"\n`;
+      if (firstListed) body += line(`zz/${firstListed.name.split("/")[1]}`, "A Copy");
+      body += line("zz/8bit", "Eight Bit") + line("zz/unsafe", "Unsafe");
+    } else {
+      body = body.replace(/^yank = \[\]\n?/m, "");
+      body += `\n[[yank]]\nname = "zz/unsafe"\nversion = "1.0.0"\nid = "${madeUpId("zz/unsafe")}"\nreason = "made up for the page check"\nseverity = "security"\n`;
+    }
+    await route.fulfill({ status: 200, headers: { "access-control-allow-origin": "*" }, body });
+  } catch {
+    // The section ended while this file was on its way.
+  }
+};
+async function themesNotOffered(S) {
+  const { p, check } = S;
+  const logged = [];
+  p.on("console", (m) => logged.push(m.text()));
+  await p.goto(`${S.origin}/${LINK}`);
+  check(await S.installed(), "installed, with three made-up lines on the game's theme list");
+  await p.evaluate(() => window.__page.installing);
+  const about = p.locator("#about-themes");
+  const said = (await about.textContent()) ?? "";
+  const parts = ["Eight Bit, because its name isn't one this page can list", "Unsafe, because it was withdrawn for safety: made up for the page check"];
+  if (firstListed) parts.push(`A Copy, because another theme, ${firstListed.title}, has the same name here, and Settings, Theme lists one of each name`);
+  check(said.startsWith("Themes not offered: ") && parts.every((x) => said.includes(x)), `About names each theme left out with why: "${said}"`);
+  check(!(await about.isVisible()), "in About, shut until it is opened");
+  await p.locator("#about-box summary").click();
+  check(await about.isVisible(), "and there when About is opened");
+  check(!(await p.locator("#skipped").isVisible()), "with no ROM, the line under the header stays hidden");
+  check(
+    logged.some((l) => l.startsWith("gp: theme zz/8bit not offered: its name isn't one this page can list (zz/8bit: the page names a theme by the part of its package name after the namespace")),
+    `the log has the detail (${logged.filter((l) => l.startsWith("gp: theme")).join(" | ")})`,
+  );
+  const settings = await p.evaluate(() => window.__page.installing.then((x) => x.themes.map((t) => t.name)));
+  check(!settings.some((n) => n.startsWith("zz/")), `none of them is installed or offered (${settings.join(", ")})`);
+  // While a ROM plays: the same in the line under the header, with a
+  // theme drawn in part (looks_partial's shape) after it.
+  await p.evaluate(() =>
+    window.__page.showSkipped(
+      [],
+      [{ id: "gappy", title: "Gappy", reason: "some of its pictures are for parts of the game this version hasn't got, so they aren't drawn", detail: "art.txt names frame-999-9.png this build hasn't got" }],
+    ),
+  );
+  const line = (await p.locator("#skipped").innerText()) ?? "";
+  check(
+    (await p.locator("#skipped").isVisible()) && line.startsWith("Themes not offered: ") && line.endsWith("Theme drawn in part: Gappy, because some of its pictures are for parts of the game this version hasn't got, so they aren't drawn."),
+    `the line under the header names them, and a theme drawn in part: "${line}"`,
+  );
+  check(!/frame-|\.txt|zz\//.test(line), "in plain words, with no file or package names");
+  await S.shot("themes-not-offered.png");
+  // A link to a theme left out says why, and the game plays in its own look.
+  await p.goto(`${S.origin}/${LINK}&c=zz/8bit`);
+  await S.installed();
+  await p.evaluate(() => window.__page.installing.catch(() => {}));
+  const msg = await p.locator("#message").innerText();
+  check(msg.includes("zz/8bit isn't offered for ") && msg.includes(", because its name isn't one this page can list. Playing in the game's own look."), `a link to one says why: "${msg}"`);
+  check(S.errors.length === 0, `no page errors (${S.errors.join("; ")})`);
+}
+
+// ---- A theme's HUD drawn over the bodies (gp_present::art, `#+ hud_over`) ----
+
+// Moss Hop (the project's own game, from its own ROM) with its HUD's
+// counters in the background and two made-up large-art themes, as
+// scripts/web/mosshop-hud.sh writes it (--mosshop DIR, default DIST.mosshop).
+// Its files are served beside the page's own player files (game/index.html,
+// preview.js, gp_web.wasm), so the page's own code draws the frame: `tall`
+// draws the hero 200 pixels tall, standing across the HUD's row, and
+// `tallover` is the same theme with the line `#+ hud_over`. With the line
+// the HUD's text is painted over the hero, where without it the hero's
+// picture covers it, and nothing else in the frame differs.
+const mosshopDir = resolve(opt("mosshop") ?? `${dist}.mosshop`);
+const mosshopHere = existsSync(join(mosshopDir, "bundle.json")) && existsSync(join(mosshopDir, "themes", "tallover", "art.txt"));
+// The made-up Moss Hop build's files, served beside the page's own player
+// files; the page's own files, and the runs a section plays, come from its
+// server.
+async function serveMosshop(S) {
+  const own = (u) => existsSync(join(dist, decodeURIComponent(u.pathname))) || /^\/game\/runs\/.+\.frames$/.test(u.pathname);
+  await S.context.route(
+    (u) => u.origin === S.origin && u.pathname.startsWith("/game/") && !own(u),
+    (route) => {
+      const path = new URL(route.request().url()).pathname;
+      const f = join(mosshopDir, decodeURIComponent(path.slice("/game/".length)));
+      if (!f.startsWith(mosshopDir) || !existsSync(f) || statSync(f).isDirectory()) return route.fulfill({ status: 404, body: "" });
+      const headers = Object.fromEntries(headersFor(path));
+      headers["content-type"] = types[extname(f)] ?? "application/octet-stream";
+      return route.fulfill({ status: 200, headers, body: readFileSync(f) });
+    },
+  );
+}
+async function themeHudOver(S) {
+  const { p, check } = S;
+  await serveMosshop(S);
+  // The game in a theme, held 60 frames in (a run of no buttons, which
+  // stops there): the canvas's pixels.
+  S.runs.set("hud-over", framesOf([], 60));
+  const drawn = async (theme) => {
+    await p.goto(`${S.origin}/game/index.html?files=here&run=hud-over&theme=${theme}`);
+    check(await S.waitFrames(61), `Moss Hop plays 60 frames in the made-up theme ${theme}`);
+    await p.waitForTimeout(300);
+    check((await S.gp(() => window.__gp.theme ?? null).catch(() => null)) === theme, `and is drawn in it (${theme})`);
+    await S.shot(`theme-hud-over-${theme}.png`);
+    const got = await S.gp(() => {
+      const c = document.getElementById("game");
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let bin = "";
+      for (let i = 0; i < d.length; i += 0x8000) bin += String.fromCharCode(...d.subarray(i, i + 0x8000));
+      return { w: c.width, h: c.height, rgba: btoa(bin) };
+    });
+    return { ...got, rgba: Buffer.from(got.rgba, "base64") };
+  };
+  const under = await drawn("tall");
+  const over = await drawn("tallover");
+  check(under.w === over.w && under.h === over.h, `the two themes draw the same canvas (${under.w} by ${under.h})`);
+  const hero = [200, 40, 160];
+  const at = (img, x, y) => [...img.rgba.subarray((y * img.w + x) * 4, (y * img.w + x) * 4 + 3)];
+  const isHero = (img, x, y) => at(img, x, y).every((v, i) => Math.abs(v - hero[i]) <= 2);
+  // Where the pictures differ: the HUD's text, painted over the hero.
+  const diff = [];
+  for (let y = 0; y < under.h; y++) for (let x = 0; x < under.w; x++) if (!at(under, x, y).every((v, i) => v === at(over, x, y)[i])) diff.push([x, y]);
+  const box = diff.reduce((b, [x, y]) => [Math.min(b[0], x), Math.min(b[1], y), Math.max(b[2], x + 1), Math.max(b[3], y + 1)], [Infinity, Infinity, -Infinity, -Infinity]);
+  check(diff.length > 0, `with #+ hud_over the frame differs where the hero stands across the HUD's row (${diff.length} canvas pixels, in x ${box[0]} to ${box[2]}, y ${box[1]} to ${box[3]})`);
+  if (diff.length) {
+    check(diff.every(([x, y]) => isHero(under, x, y)), "without it, the hero's picture covers every one of those pixels (the HUD's text can't be read)");
+    check(diff.every(([x, y]) => !isHero(over, x, y)), "with it, the HUD's text is painted there instead, over the hero (readable)");
+    // The hero's picture spans the HUD's text box: the text is within it.
+    const heroCols = [];
+    for (let x = 0; x < under.w; x++) if (isHero(under, x, box[1])) heroCols.push(x);
+    check(box[0] >= heroCols[0] && box[2] <= heroCols.at(-1) + 1, `and all of it is inside the hero's picture (its columns ${heroCols[0]} to ${heroCols.at(-1) + 1} on that row)`);
+  }
+  check(S.errors.length === 0, `no page errors (${S.errors.join("; ")})`);
+}
+
+// ---- A theme's picture in a region of the stage (gp_present::art, `#+ in REGION`) ----
+
+// Moss Hop's level kit names one region, `start` (where the hero starts:
+// templates/mosshop/level-kit/rules.toml), which gp-web-prep writes into
+// preview.json and preview.js gives the module (gp_set_regions). The
+// made-up theme `instart` (scripts/web/mosshop-hud.sh) draws the standing
+// hero 200 pixels tall in one colour, and in `start` 16 pixels tall in
+// another (`#+ in start pic ...`): standing at the start the short picture
+// is drawn and the tall one isn't; walked right out of it and standing
+// again, the tall one is and the short one isn't.
+const mosshopRegionHere = mosshopHere && existsSync(join(mosshopDir, "themes", "instart", "art.txt"));
+async function themeInRegion(S) {
+  const { p, check } = S;
+  await serveMosshop(S);
+  const cfg = JSON.parse(readFileSync(join(mosshopDir, "preview.json"), "utf8"));
+  check(JSON.stringify(cfg.regions) === JSON.stringify([["start", "level-main.png", 0, 160, 64, 32]]), `the build's preview.json gives Moss Hop's one region from its level kit (${JSON.stringify(cfg.regions)})`);
+  S.runs.set("in-start", framesOf([], 60));
+  S.runs.set("off-start", framesOf(["right@0-40"], 120));
+  const tall = [200, 40, 160];
+  const short = [40, 200, 220];
+  const counts = async (run, frames) => {
+    await p.goto(`${S.origin}/game/index.html?files=here&run=${run}&theme=instart`);
+    check(await S.waitFrames(frames + 1), `Moss Hop plays the run ${run} (${frames} frames) in the made-up theme instart`);
+    await p.waitForTimeout(300);
+    check((await S.gp(() => window.__gp.theme ?? null).catch(() => null)) === "instart" && (await S.gp(() => window.__gp.regions ?? null)) === true, "drawn in it, the module given the regions");
+    await S.shot(`theme-in-region-${run}.png`);
+    return S.gp(
+      ([a, b]) => {
+        const c = document.getElementById("game");
+        const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+        const near = (i, k) => k.every((v, j) => Math.abs(d[i + j] - v) <= 2);
+        let n = [0, 0];
+        for (let i = 0; i < d.length; i += 4) {
+          if (near(i, a)) n[0]++;
+          else if (near(i, b)) n[1]++;
+        }
+        return { tall: n[0], short: n[1] };
+      },
+      [tall, short],
+    );
+  };
+  const at = await counts("in-start", 60);
+  check(at.short > 0 && at.tall === 0, `standing at the start, in the region, the hero is drawn in the region's shorter picture only (${at.short} pixels of it, ${at.tall} of the tall one)`);
+  const off = await counts("off-start", 120);
+  check(off.tall > 0 && off.short === 0, `walked right out of it, the hero is drawn in its full picture only (${off.tall} pixels of it, ${off.short} of the region's)`);
+  check(S.errors.length === 0, `no page errors (${S.errors.join("; ")})`);
+}
+
+// ---- A sound role's takes (issue #30) ----
+
+// Moss Hop with a made-up sound role, `tick`, cued every 40 frames, and a
+// made-up large-art theme `takes` that gives it three files
+// (sound/roles/tick.wav, sound/takes/tick.2.wav and tick.3.wav), as
+// scripts/web/mosshop-takes.sh writes them (--mosshop-takes DIR, default
+// DIST.mosshop-takes), served beside the page's own player files. A run of
+// 400 frames in the theme: the page reads all three, each start of the role
+// plays the next take (1, 2, 3, 1, ...), and the same run played again
+// starts the same takes at the same frames.
+const takesDir = resolve(opt("mosshop-takes") ?? `${dist}.mosshop-takes`);
+const takesHere = existsSync(join(takesDir, "bundle.json")) && existsSync(join(takesDir, "themes", "takes", "look.txt"));
+async function themeSoundTakes(S) {
+  const { p, check } = S;
+  const own = (u) => existsSync(join(dist, decodeURIComponent(u.pathname))) || /^\/game\/runs\/.+\.frames$/.test(u.pathname);
+  await S.context.route(
+    (u) => u.origin === S.origin && u.pathname.startsWith("/game/") && !own(u),
+    (route) => {
+      const path = new URL(route.request().url()).pathname;
+      const f = join(takesDir, decodeURIComponent(path.slice("/game/".length)));
+      if (!f.startsWith(takesDir) || !existsSync(f) || statSync(f).isDirectory()) return route.fulfill({ status: 404, body: "" });
+      const headers = Object.fromEntries(headersFor(path));
+      headers["content-type"] = types[extname(f)] ?? "application/octet-stream";
+      return route.fulfill({ status: 200, headers, body: readFileSync(f) });
+    },
+  );
+  S.runs.set("takes", framesOf([], 400));
+  const files = ["sound/roles/tick.wav", "sound/takes/tick.2.wav", "sound/takes/tick.3.wav"];
+  const played = async (n) => {
+    const before = S.requests.length;
+    await p.goto(`${S.origin}/game/index.html?files=here&run=takes&theme=takes`);
+    check(await S.waitFrames(401, 40000), `run ${n}: Moss Hop plays the 400 frames in the made-up theme`);
+    await p.waitForTimeout(300);
+    const asked = S.requests.slice(before).map((r) => new URL(r.url).pathname);
+    const log = await S.gp(() => window.__gp.soundRoleLog?.() ?? null).catch(() => null);
+    return { log, asked };
+  };
+  const one = await played(1);
+  check(files.every((f) => one.asked.includes(`/game/themes/takes/${f}`)), `the page read the role's three files (${files.join(", ")})`);
+  const log = one.log ?? [];
+  check(one.log !== null, "the page's module says which take each start played (gp_sound_role_log)");
+  const takes = log.map(([, , k]) => k);
+  check(log.length >= 9 && log.every(([, r]) => r === "tick"), `the role started ${log.length} times in the run (every 40 frames)`);
+  check(
+    [1, 2, 3].every((k) => takes.includes(k)) && takes.every((k, i) => k === (i % 3) + 1),
+    `each start played the next take, all three over the run (${takes.join(" ")})`,
+  );
+  const gaps = log.slice(1).map(([f], i) => f - log[i][0]);
+  check(gaps.length > 0 && gaps.every((g) => g === 40), `40 frames apart (${[...new Set(gaps)].join(", ")})`);
+  const two = await played(2);
+  const same = JSON.stringify(two.log) === JSON.stringify(one.log);
+  check(same, `played again, the same run starts the same takes at the same frames (${(two.log ?? []).map(([f, , k]) => `${f}:${k}`).slice(0, 6).join(" ")} ...)`);
+  check(S.errors.length === 0, `no page errors (${S.errors.join("; ")})`);
+}
+
+// ---- A game with its own pictures, by its name: no ROM (docs/web.md, "A game with its own pictures") ----
+
+// A made-up game that plays from its own files (scripts/web/test-registry.sh
+// puts test/own-hop there: a copy of the Moss Hop template, built by
+// build-page.sh's road for such a game): its sections run only when
+// --registry-folder holds it.
+const OWN = "test/own-hop";
+const ownHere = !!registryFolder && existsSync(join(registryFolder, "index", OWN));
+function ownFiles() {
+  const cat = readFileSync(join(registryFolder, "catalog.toml"), "utf8");
+  const id = new RegExp(`name = "${OWN}"[^\\[]*?id = "([0-9a-f]{64})"`).exec(cat)[1];
+  const hashes = new Map();
+  for (const l of readFileSync(join(registryFolder, "packages", id), "utf8").split("\n")) {
+    const m = /^file ([0-9a-f]{64}) \d+ (.+)$/.exec(l);
+    if (m) hashes.set(m[2], m[1]);
+  }
+  return { id, hashes };
+}
+// The lift's files: a game that plays from its own files fetches none.
+const liftFetched = (S) => S.requests.some((r) => /\/game\/lift(\.js|\/)/.test(r.url));
+
+// It installs by its name and plays at once, with no ROM asked for and
+// nothing lifted: the frame reads the package's own play/ files. The page
+// says what the game is and who made it from the package's page facts, as
+// text, and its share link reads back.
+async function ownGame(S) {
+  const { p, check, errors } = S;
+  await S.context.grantPermissions(["clipboard-read", "clipboard-write"]).catch(() => {});
+  const installed = async () => {
+    await p.waitForFunction(() => window.__page !== undefined, null, { timeout: 60000 }).catch(() => {});
+    return (await installedOf(p, OWN)) !== null;
+  };
+  await p.goto(`${S.origin}/p?g=${OWN}`);
+  check(await installed(), `${OWN} by its name is installed with no click`);
+  const rec = await installedOf(p, OWN);
+  const paths = rec?.files.map((f) => f.path) ?? [];
+  check(
+    rec?.kind === "game" && ["play/page.json", "play/bundle.json", "play/preview.json"].every((f) => paths.includes(f)) && !paths.some((f) => f.startsWith("play/lift/")),
+    `from its package (${rec?.name}@${rec?.version}, ${paths.length} files: play/page.json, bundle.json and preview.json, and no lift)`,
+  );
+  const frameSrc = async () => {
+    await p.waitForFunction(() => document.getElementById("game").getAttribute("src"), null, { timeout: 30000 }).catch(() => {});
+    return p.locator("#game").getAttribute("src");
+  };
+  const src = await frameSrc();
+  check(!!src && !/files=/.test(src), `it plays at once, the frame reading the installed package (${src})`);
+  check(await S.waitFrames(60), "the game runs (60 frames)");
+  // Its own large-art theme (gp game share puts a person's in): in the
+  // package's play/themes and offered in Settings, the game opening in its
+  // own pictures with no look asked for.
+  check(["play/themes/index.json", "play/themes/hopglow/look.txt", "play/themes/hopglow/art/glow.png"].every((f) => paths.includes(f)), "its own theme, Hop Glow, is in the package's play/themes");
+  const offeredOwn = await S.gp(() => window.__gp.looks?.() ?? null);
+  check(Array.isArray(offeredOwn) && offeredOwn.includes("hopglow") && (await S.gp(() => window.__gp.theme)) !== "hopglow", `Settings offers it (${JSON.stringify(offeredOwn)}), and with no look asked for the game opens in its own pictures`);
+  check(!(await p.locator("#start").isVisible()) && !(await p.locator("#load-label").isVisible()) && !(await p.locator("#back").isVisible()), "no ROM is asked for: no picker, no Unload ROM");
+  check(!liftFetched(S), "nothing is lifted (no request for the lift)");
+  check((await S.gp(() => window.__gp?.module)) === "page", "it runs in the page's own interpreter (it has no module of its own)");
+  const mode = await p.locator("#mode").innerText();
+  check(mode === "Playing Own Hop, made by the page check: it plays from its own files, with no ROM", `the line under the title says what plays ("${mode}")`);
+  check((await p.title()) === "Own Hop" && (await p.locator("#title").innerText()) === "Own Hop", `the page is titled for it (${await p.title()})`);
+  const howto = await p.locator("#howto").innerText();
+  check(/X is the A button/.test(howto) && !/Load your own ROM|ROM/.test(howto), `the how-to-play lines name its keys and no ROM ("${howto.replace(/\n+/g, " / ")}")`);
+  const about = await p.locator("#about").textContent();
+  check(
+    about.includes("Own Hop is made up for the page check: a copy of the Moss Hop template, with its pictures and no ROM. It plays from its own pictures, so there is no ROM to load. Made by the page check.") && !/Nintendo|Donkey|accepts a/.test(about),
+    "About says what it is and who made it, from its package, and names no ROM",
+  );
+  await S.shot("own-game.png");
+  // A file dropped on the page is no ROM to it.
+  await p.evaluate(() => window.__gpBoot?.take?.(new File([new Uint8Array(4)], "x.nes"), "x.nes"));
+  const said = await messageOf(p, ["warn", "error"], 5000);
+  check(/Own Hop plays from its own files: there is no ROM to load/.test(said), `a file given to it anyway isn't read ("${said}")`);
+  // The share link: the game by its name, read back.
+  await p.evaluate(() => delete document.getElementById("message").dataset.share);
+  await p.locator("#share").click();
+  await p.waitForFunction(() => document.getElementById("message").dataset.share, null, { timeout: 30000 }).catch(() => {});
+  const link = await p.evaluate(() => document.getElementById("message").dataset.share ?? null);
+  const q = link ? new URL(link).searchParams : new URLSearchParams();
+  check(!!link && q.get("g") === OWN && new URL(link).pathname === "/p" && [...q.keys()].every((k) => ["g", "look", "mode"].includes(k)), `its share link names the game, its look and its mode and nothing else (${link})`);
+  if (link) {
+    await p.goto(link);
+    check(await installed(), "and opened, the link installs it again");
+    const again = await frameSrc();
+    check(!!again && !/files=/.test(again) && (await S.reframe(again, 30)), "and it plays at once again");
+    await p.evaluate(() => delete document.getElementById("message").dataset.share);
+    await p.locator("#share").click();
+    await p.waitForFunction(() => document.getElementById("message").dataset.share, null, { timeout: 30000 }).catch(() => {});
+    const second = await p.evaluate(() => document.getElementById("message").dataset.share ?? null);
+    check(second === link, `and its share link reads back the same (${second})`);
+  }
+  // In a fresh browser, nothing kept: the link alone plays it.
+  const fresh = await p.context().browser().newContext({ viewport: { width: 1366, height: 768 } });
+  try {
+    fresh.on("request", (r) => S.requests.push({ method: r.method(), url: r.url(), body: r.postDataBuffer()?.length ?? 0 }));
+    if (registryFolder && page.source.url !== ".") await fresh.route((u) => isSourceUrl(S.origin, u), (r) => fromFolder(r));
+    const q2 = await fresh.newPage();
+    await q2.goto(link ?? `${S.origin}/p?g=${OWN}`);
+    await q2.waitForFunction(() => window.__page !== undefined, null, { timeout: 60000 });
+    await q2.waitForFunction(() => document.getElementById("game").getAttribute("src"), null, { timeout: 30000 }).catch(() => {});
+    const fr = () => q2.frame({ url: /\/game\/(index\.html)?(\?|$)/ });
+    const t0 = Date.now();
+    let n = 0;
+    while (Date.now() - t0 < 30000 && n < 30) {
+      n = (await fr()?.evaluate(() => window.__gp?.hashes?.length ?? 0).catch(() => 0)) ?? 0;
+      await q2.waitForTimeout(200);
+    }
+    check(n >= 30 && !(await q2.locator("#load-label").isVisible()), `the shared link in a fresh browser plays it with no ROM asked for (${n} frames)`);
+    // A link that names its theme (gp game share's names the look the
+    // person chose) opens in it.
+    await q2.goto(`${S.origin}/p?g=${OWN}&look=hopglow`);
+    await q2.waitForFunction(() => document.getElementById("game").getAttribute("src"), null, { timeout: 30000 }).catch(() => {});
+    let drawn = null;
+    const t1 = Date.now();
+    while (Date.now() - t1 < 30000 && !drawn) {
+      drawn = (await fr()?.evaluate(() => (window.__gp?.hashes?.length > 30 ? window.__gp.theme : null)).catch(() => null)) ?? null;
+      if (!drawn) await q2.waitForTimeout(200);
+    }
+    check(drawn === "hopglow", `and ?g=${OWN}&look=hopglow opens it in its own theme, Hop Glow (${drawn})`);
+  } finally {
+    await fresh.close();
+  }
+  check(errors.length === 0, `no page errors (${errors.join("; ")})`);
+}
+
+// A tampered package of it: a changed play/ file (its bundle), or a changed
+// manifest, and nothing is installed or played.
+async function ownGameTampered(S, which) {
+  const { p, check } = S;
+  await p.goto(`${S.origin}/p?g=${OWN}`);
+  const said = await messageOf(p, ["error"], 60000);
+  const re = which === "blob" ? /doesn't match what its maker signed/ : /couldn't be installed/;
+  check(re.test(said), `${which === "blob" ? "its play/bundle.json's bytes changed" : "its manifest changed"}: the page says so (${said})`);
+  check(!(await p.locator("#game").getAttribute("src")), "no game starts");
+  check((await installedOf(p, OWN)) === null, "nothing is installed");
+}
+
+// ---- A theme on an arcade game's board (gp_board.wasm, gp_present::art) ----
+
+// Tapper's preview from the player's own romset with one made-up theme,
+// `flat`, as scripts/web/tapper-theme.sh writes it (--tapper-theme DIR,
+// default DIST.tapper-theme): the bartender's sprite (every code of the
+// entity `player`) as a flat square of one colour, nothing else named. Its
+// files are served beside the page's own player files (game/index.html,
+// preview.js, gp_web.wasm, gp_board.wasm), so the page's own code draws the
+// frame. The same run in the board's own look and in the theme: the square
+// is drawn where the bartender's sprite was, 32 by 32, and every pixel
+// outside it is the board's as before (the customers, the bars, the
+// screen).
+const tapperThemeDir = resolve(opt("tapper-theme") ?? `${dist}.tapper-theme`);
+const tapperThemeHere = existsSync(join(tapperThemeDir, "bundle.json")) && existsSync(join(tapperThemeDir, "themes", "flat", "art.txt"));
+async function arcadeTheme(S) {
+  const { p, check } = S;
+  const own = (u) => existsSync(join(dist, decodeURIComponent(u.pathname))) || /^\/game\/runs\/.+\.frames$/.test(u.pathname);
+  await S.context.route(
+    (u) => u.origin === S.origin && u.pathname.startsWith("/game/") && !own(u),
+    (route) => {
+      const path = new URL(route.request().url()).pathname;
+      const f = join(tapperThemeDir, decodeURIComponent(path.slice("/game/".length)));
+      if (!f.startsWith(tapperThemeDir) || !existsSync(f) || statSync(f).isDirectory()) return route.fulfill({ status: 404, body: "" });
+      const headers = Object.fromEntries(headersFor(path));
+      headers["content-type"] = types[extname(f)] ?? "application/octet-stream";
+      return route.fulfill({ status: 200, headers, body: readFileSync(f) });
+    },
+  );
+  // A coin and the start (the cabinet's columns: coin is bit 0, start bit
+  // 1), as the corpus's start of play has them, then 500 frames of play.
+  const n = 700;
+  const pad = new Array(n).fill(0);
+  for (let f = 124; f <= 134; f++) pad[f] |= 1;
+  for (let f = 195; f <= 201; f++) pad[f] |= 2;
+  S.runs.set("arcade-theme", "gp-frames 1\n" + pad.map((v) => v.toString(16).padStart(2, "0")).join("\n") + "\n");
+  const drawn = async (theme) => {
+    await p.goto(`${S.origin}/game/index.html?files=here&run=arcade-theme${theme ? `&theme=${theme}` : ""}`);
+    // The run plays in time (about 23 s at 30 frames a second) and stops
+    // at its end, so both pictures are of the same frame.
+    check(await S.waitFrames(n + 1, 120000), `Tapper plays ${n} frames from a coin and the start ${theme ? `in the made-up theme ${theme}` : "in the board's own look"}`);
+    await p.waitForTimeout(300);
+    const t = await S.gp(() => ({ theme: window.__gp.theme ?? null, board: window.__gp.board, error: window.__gp.error, frames: window.__gp.hashes.length }));
+    check(t.frames === n + 1, `and stops at the run's end (${t.frames - 1} frames)`);
+    check(t.board === true && t.error === null, `drawn by the board's art (gp_board.wasm), with no error (${t.error})`);
+    if (theme) check(t.theme === theme, `and in the theme (${t.theme})`);
+    await S.shot(`arcade-theme-${theme || "original"}.png`);
+    const got = await S.gp(() => {
+      const c = document.getElementById("game");
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let bin = "";
+      for (let i = 0; i < d.length; i += 0x8000) bin += String.fromCharCode(...d.subarray(i, i + 0x8000));
+      // The bartender (the entity `player`) where the board puts his
+      // sprite: x - 3 and 241 - y in the game's units, two pixels each.
+      const b = window.__gp.state().bodies.find(([k, , , , alive]) => k === "player" && alive);
+      const rect = b && [(((b[1] % 256) + 256) % 256 - 3) * 2, (241 - (((b[2] % 256) + 256) % 256)) * 2];
+      return { w: c.width, h: c.height, rgba: btoa(bin), rect };
+    });
+    return { ...got, rgba: Buffer.from(got.rgba, "base64") };
+  };
+  const plain = await drawn(null);
+  const themed = await drawn("flat");
+  check(plain.w === 512 && plain.h === 480 && themed.w === 512 && themed.h === 480, `both are the board's 512 by 480 picture (${plain.w} by ${plain.h}, ${themed.w} by ${themed.h})`);
+  const at = (img, x, y) => [...img.rgba.subarray((y * img.w + x) * 4, (y * img.w + x) * 4 + 3)];
+  const same = (a, b) => a.every((v, i) => v === b[i]);
+  const square = [200, 40, 160];
+  const box = [Infinity, Infinity, -Infinity, -Infinity];
+  let ink = 0;
+  for (let y = 0; y < themed.h; y++)
+    for (let x = 0; x < themed.w; x++)
+      if (same(at(themed, x, y), square)) {
+        ink++;
+        box[0] = Math.min(box[0], x);
+        box[1] = Math.min(box[1], y);
+        box[2] = Math.max(box[2], x + 1);
+        box[3] = Math.max(box[3], y + 1);
+      }
+  const [bw, bh] = [box[2] - box[0], box[3] - box[1]];
+  check(ink === 32 * 32 && bw === 32 && bh === 32, `the theme's square is drawn once, 32 by 32 of the board's pixels (${ink} pixels in ${bw} by ${bh} at ${box[0]}, ${box[1]})`);
+  const inBox = (x, y) => x >= box[0] && x < box[2] && y >= box[1] && y < box[3];
+  let outside = 0;
+  let was = 0;
+  for (let y = 0; y < plain.h; y++)
+    for (let x = 0; x < plain.w; x++) {
+      const differ = !same(at(plain, x, y), at(themed, x, y));
+      if (differ && !inBox(x, y)) outside++;
+      if (differ && inBox(x, y)) was++;
+    }
+  check(outside === 0, `every pixel outside the square is the board's own look's: the unthemed sprites (customers, mugs, the bartender's other parts) and the screen are unchanged (${outside} differ)`);
+  check(!!plain.rect && plain.rect[0] === box[0] && plain.rect[1] === box[1], `and it stands where the board draws the bartender's sprite, from his place in the game (${plain.rect?.join(", ")})`);
+  let his = 0;
+  for (let y = box[1]; y < box[3]; y++) for (let x = box[0]; x < box[2]; x++) if (!same(at(plain, x, y), at(plain, box[0], box[3] - 1))) his++;
+  check(was > 0 && his > 64, `where the board's own look has his picture (${his} of its pixels differ from the box's corner; ${was} differ from the theme's)`);
+  // The theme's three files and the page's player, nothing else of it.
+  const asked = S.requests.map((r) => new URL(r.url).pathname).filter((u) => u.startsWith("/game/themes/"));
+  const want = ["/game/themes/index.json", "/game/themes/flat/look.txt", "/game/themes/flat/art.txt", "/game/themes/flat/art/square.png"];
+  check(asked.every((u) => want.includes(u)) && want.slice(1).every((u) => asked.includes(u)), `the page fetched the theme's look, rules and one picture and nothing else of it (${[...new Set(asked)].join(", ")})`);
+  check(S.requests.every((r) => r.url.startsWith(`${S.origin}/game/`) || r.url.startsWith("blob:") || r.url.startsWith("data:")), "and every request is for the game's own files on the page's server");
+  check(S.errors.length === 0, `no page errors (${S.errors.join("; ")})`);
+}
+
+// ---- An arcade game by its name: played from the visitor's romset zip ----
+
+// The arcade game the sections play (--arcade-game, default lex00/tapper)
+// from the registry folder, and its romsets in $GP_ROM_DIR by their MAME
+// names: the zips are read by the browser where they lie, never copied, and
+// a zip with a chip left out is made in memory and handed to the picker as
+// bytes, never written to disk.
+const ARCADE = opt("arcade-game") ?? "lex00/tapper";
+const arcadeHere = !!registryFolder && existsSync(join(registryFolder, "index", ARCADE));
+const ARCADE_LINK = `p?g=${ARCADE}`;
+// A copy of the arcade game whose maps record no place of the Root Beer
+// set's tables (scripts/web/test-registry.sh makes it from the game's
+// package): the set the lift refuses as not drawn right yet.
+const UNPLACED = "test/tapper-unplaced";
+const unplacedHere = !!registryFolder && existsSync(join(registryFolder, "index", UNPLACED));
+// The arcade game named in the link, installed (page.js sets __page once
+// it is, or couldn't be).
+const arcadeInstalled = async (p, name = ARCADE) => {
+  await p.waitForFunction(() => window.__page !== undefined, null, { timeout: 60000 }).catch(() => {});
+  return (await installedOf(p, name)) !== null;
+};
+function findZip(name) {
+  const root = process.env.GP_ROM_DIR ?? join(homedir(), ".gameprinter", "roms");
+  for (const p of [join(root, "arcade", `${name}.zip`), join(root, `${name}.zip`)]) if (existsSync(p) && statSync(p).isFile()) return p;
+  return null;
+}
+// A zip's entries as stored, from its central directory: each entry's
+// local header and data copied as they are.
+function zipWithout(bytes, drop) {
+  const b = Buffer.from(bytes);
+  let end = b.length - 22;
+  while (end >= 0 && b.readUInt32LE(end) !== 0x06054b50) end--;
+  if (end < 0) throw new Error("not a zip");
+  const count = b.readUInt16LE(end + 10);
+  let at = b.readUInt32LE(end + 16);
+  const locals = [];
+  const centrals = [];
+  const names = [];
+  for (let i = 0; i < count; i++) {
+    const nameLen = b.readUInt16LE(at + 28);
+    const len = 46 + nameLen + b.readUInt16LE(at + 30) + b.readUInt16LE(at + 32);
+    const name = b.toString("latin1", at + 46, at + 46 + nameLen);
+    const off = b.readUInt32LE(at + 42);
+    const size = b.readUInt32LE(at + 20);
+    const localLen = 30 + b.readUInt16LE(off + 26) + b.readUInt16LE(off + 28) + size;
+    if (name !== drop) {
+      names.push(name);
+      locals.push(b.subarray(off, off + localLen));
+      centrals.push(Buffer.from(b.subarray(at, at + len)));
+    }
+    at += len;
+  }
+  let o = 0;
+  for (let i = 0; i < locals.length; i++) {
+    centrals[i].writeUInt32LE(o, 42);
+    o += locals[i].length;
+  }
+  const cd = Buffer.concat(centrals);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(locals.length, 8);
+  eocd.writeUInt16LE(locals.length, 10);
+  eocd.writeUInt32LE(cd.length, 12);
+  eocd.writeUInt32LE(o, 16);
+  return { zip: Buffer.concat([...locals, cd, eocd]), names };
+}
+function zipNames(bytes) {
+  return zipWithout(bytes, null).names;
+}
+// A zip of made-up files (stored, no compression): no chip of any game.
+function madeUpZip(files) {
+  const crcTable = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (d) => {
+    let c = 0xffffffff;
+    for (const x of d) c = crcTable[(c ^ x) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const locals = [];
+  const centrals = [];
+  let o = 0;
+  for (const [name, data] of files) {
+    const n = Buffer.from(name, "latin1");
+    const h = Buffer.alloc(30);
+    h.writeUInt32LE(0x04034b50, 0);
+    h.writeUInt16LE(20, 4);
+    h.writeUInt32LE(crc(data), 14);
+    h.writeUInt32LE(data.length, 18);
+    h.writeUInt32LE(data.length, 22);
+    h.writeUInt16LE(n.length, 26);
+    const c = Buffer.alloc(46);
+    c.writeUInt32LE(0x02014b50, 0);
+    c.writeUInt16LE(20, 4);
+    c.writeUInt16LE(20, 6);
+    c.writeUInt32LE(crc(data), 16);
+    c.writeUInt32LE(data.length, 20);
+    c.writeUInt32LE(data.length, 24);
+    c.writeUInt16LE(n.length, 28);
+    c.writeUInt32LE(o, 42);
+    locals.push(h, n, data);
+    centrals.push(c, n);
+    o += 30 + n.length + data.length;
+  }
+  const cd = Buffer.concat(centrals);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(files.length, 8);
+  eocd.writeUInt16LE(files.length, 10);
+  eocd.writeUInt32LE(cd.length, 12);
+  eocd.writeUInt32LE(o, 16);
+  return Buffer.concat([...locals, cd, eocd]);
+}
+// A file handed to the picker as bytes, then the page's message once it
+// says something of `kinds`.
+const pickBytes = async (p, name, buffer, kinds = ["error"]) => {
+  await p.evaluate(() => (document.getElementById("message").dataset.kind = ""));
+  await p.setInputFiles("#rom", { name, mimeType: "application/zip", buffer });
+  return messageOf(p, kinds);
+};
+const boardFetched = (S) => S.requests.some((r) => /\/gp_board\.wasm(\?|$)/.test(r.url));
+
+// The arcade game by its name, played from the visitor's own zip: its
+// facts from its package (the romset line, the cabinet's keys and the line
+// that it plays silent), the picker taking a zip, the lift, and the game in
+// the page's frame: the board's 512 by 480 picture from gp_board.wasm, the
+// coin and the start taken. Shots of it at 1400 and at 360 pixels wide.
+async function arcadePlay(S, { zip }) {
+  const { p, check, gp, waitFrames, errors } = S;
+  await p.goto(`${S.origin}/${ARCADE_LINK}`);
+  check(await arcadeInstalled(p), `${ARCADE} by its name is installed with no click`);
+  const rec = await installedOf(p, ARCADE);
+  check(rec?.kind === "game" && rec.files.some((f) => f.path === "play/page.json"), `from its package (${rec?.name}@${rec?.version}, ${rec?.files.length} files)`);
+  const title = await p.title();
+  check(title === "Tapper" && !/Donkey|Nintendo/.test(await p.locator("#about").textContent()), `the page is titled for it (${title}) and names no other game`);
+  const help = await p.locator("#rom-help").innerText();
+  check(/romset/.test(help) && /zip/.test(help) && !/\.nes/.test(help) && /never uploaded/.test(help), `the line under Load names a romset zip, not an .nes file ("${help}")`);
+  check(/\.zip/.test((await p.locator("#rom").getAttribute("accept")) ?? ""), `the picker takes a zip (accept ${await p.locator("#rom").getAttribute("accept")})`);
+  const howto = await p.locator("#howto").innerText();
+  check(/5 drops a coin and 1 starts/.test(howto), "the how-to-play lines give the cabinet's keys");
+  const silent = (await p.locator("#howto p").allInnerTexts()).filter((t) => /plays silent/.test(t));
+  check(silent.length === 1 && silent[0] === "Sound: This game plays silent for now: the page doesn't play an arcade board's sound yet.", `and one plain line says it plays silent ("${silent.join(" | ")}")`);
+  check(!boardFetched(S), "no gp_board.wasm is fetched before a game plays");
+  await p.setViewportSize({ width: 1400, height: 900 });
+  const said = await S.loadRom(zip);
+  check(/Tapper \(Budweiser, 1\/27\/84\)/.test(said) && (await p.locator("#message").getAttribute("data-kind")) === "ok", `the zip is lifted and named ("${said}")`);
+  const mode = await p.locator("#mode").innerText();
+  check(/^Playing your own Tapper \(Budweiser, 1\/27\/84\) romset: all \d+ of its assets found/.test(mode), `the header says what plays ("${mode}")`);
+  check(await waitFrames(30), "the game plays in the page's frame");
+  check(await S.until(() => window.__gp.board === true), "with the board's art (gp_board.wasm loaded the lifted files)");
+  check(boardFetched(S), "gp_board.wasm was fetched for it");
+  const size = await gp(() => [document.getElementById("game").width, document.getElementById("game").height]);
+  check(size[0] === 512 && size[1] === 480, `the canvas is the board's size (${size.join(" by ")})`);
+  // The key hint under the game comes from the cabinet's layout: 5 and 1
+  // are the coin and the start, so the slots load on 2-4 and the mute keys
+  // are 6-9, and the NES hint's keys aren't named.
+  const hint = await gp(() => window.__gp.keyHint?.() ?? null);
+  check(
+    !!hint && hint.startsWith("5 coin, 1 start, ") && /\b2-4 load\b/.test(hint) && !/\b1-4 load\b|\b5-9\b/.test(hint) && (!/mute a channel/.test(hint) || /\b6-9 mute a channel\b/.test(hint)),
+    `the key hint under the game is the cabinet's ("${hint}")`,
+  );
+  const shown = await S.until(() => [...document.querySelectorAll("div")].some((d) => d.textContent === window.__gp.keyHint()));
+  check(shown, "and it is the line shown under the game");
+  // A coin and the start: the frames go on and the picture changes.
+  const before = await gp(() => window.__gp.hashes.length);
+  await S.key("Digit5", 200);
+  await p.waitForTimeout(800);
+  await S.key("Digit1", 200);
+  await p.waitForTimeout(3000);
+  const after = await gp(() => window.__gp.hashes.length);
+  check(after - before > 30, `after a coin and a start it plays on (${after - before} frames)`);
+  check((await gp(() => window.__gp.error)) === null, `with no error in the frame (silence is not one): ${await gp(() => window.__gp.error)}`);
+  const lit = await gp(() => {
+    const c = document.getElementById("game");
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    const seen = new Set();
+    for (let i = 0; i < d.length; i += 4 * 7) seen.add((d[i] << 16) | (d[i + 1] << 8) | d[i + 2]);
+    return seen.size;
+  });
+  check(lit >= 8, `and the board's picture has colours in it (${lit} seen)`);
+  // The shots a few seconds into the first bar, the bartender and the
+  // customers out.
+  await p.waitForTimeout(5000);
+  await S.shot("arcade-play-1400.png");
+  await p.setViewportSize({ width: 360, height: 760 });
+  await p.waitForTimeout(800);
+  const wide = await p.evaluate(() => document.documentElement.scrollWidth);
+  const box = await p.locator("#game").boundingBox();
+  check(wide <= 360 && box && box.width <= 360, `at 360 pixels wide the page doesn't scroll sideways (page ${wide}, game ${Math.round(box?.width ?? 0)} wide)`);
+  await S.shot("arcade-play-360.png");
+  check(errors.length === 0, `no page errors (${errors.join("; ")})`);
+}
+
+// Zips the arcade game's lift refuses, each in words on the page with no
+// game started: a file that isn't a zip, a zip of made-up files and a zip
+// of the set with a chip left out (made in memory).
+async function arcadeRefused(S, { zip }) {
+  const { p, check, errors } = S;
+  await p.goto(`${S.origin}/${ARCADE_LINK}`);
+  check(await arcadeInstalled(p), `${ARCADE} by its name is installed`);
+  const none = async () => !(await p.locator("#game").getAttribute("src"));
+  let said = await pickBytes(p, "tapper.zip", Buffer.from("This is not a zip, only some words.\n"));
+  check(/^This file isn't a zip\. This page takes a MAME romset zip of Tapper: tapper/.test(said) && (await none()), `a file that isn't a zip is refused in words ("${said}")`);
+  said = await pickBytes(p, "tapper.zip", madeUpZip([["made-up.bin", Buffer.from(Array.from({ length: 4096 }, (_, i) => (i * 31) & 0xff))]]));
+  check(/^This zip holds no chip of a Tapper romset\./.test(said) && (await none()), `a zip of no chip of the game is refused in words ("${said}")`);
+  if (zip) {
+    const bytes = readFileSync(zip);
+    const first = zipNames(bytes)[0];
+    said = await pickBytes(p, "tapper.zip", zipWithout(bytes, first).zip);
+    check(new RegExp(`^This zip isn't a whole Tapper romset: it has \\d+ of the \\d+ chips of tapper .*lacks ${first.replace(/[.]/g, "\\.")}`).test(said) && (await none()), `a zip with a chip left out is refused naming it ("${said}")`);
+  } else S.lines.push("skip  no tapper.zip in $GP_ROM_DIR: a zip with a chip left out isn't checked");
+  check(!boardFetched(S), "nothing of a refused zip is drawn (no gp_board.wasm fetched)");
+  await S.shot("arcade-refused.png");
+  check(errors.length === 0, `no page errors (${errors.join("; ")})`);
+}
+
+// A set whose tables the game's maps record no place for (the owner's
+// decision: refused in words, never offered and never hidden): the Root
+// Beer set, rbtapper.zip, on the copy of the game with its places taken
+// out. Refused by name, saying it isn't drawn right yet; nothing plays.
+async function arcadeUnplaced(S, { garbled }) {
+  const { p, check, errors } = S;
+  await p.goto(`${S.origin}/p?g=${UNPLACED}`);
+  check(await arcadeInstalled(p, UNPLACED), `${UNPLACED} by its name is installed`);
+  await p.evaluate(() => (document.getElementById("message").dataset.kind = ""));
+  await p.setInputFiles("#rom", garbled);
+  const said = await messageOf(p);
+  check(
+    /^This is rbtapper \(Tapper \(Root Beer\)\), which this page doesn't draw right yet/.test(said) && !(await p.locator("#game").getAttribute("src")),
+    `rbtapper.zip is refused in words naming the set and saying it isn't drawn right yet, and nothing plays ("${said}")`,
+  );
+  check(!boardFetched(S), "nothing of it is drawn (no gp_board.wasm fetched)");
+  await S.shot("arcade-unplaced.png");
+  check(errors.length === 0, `no page errors (${errors.join("; ")})`);
+}
+
 const SECTIONS = [];
 const add = (name, est, run, extra = {}) => SECTIONS.push({ name, est, run, ...extra });
 add("no-rom", 15, noRomPage);
@@ -2129,9 +3188,20 @@ if (roms.length) {
   }
   add("later-visit", 6, (S) => laterVisit(S, first), { rom: first.sha });
   add("kept-look", 8, (S) => keptLook(S, first), { rom: first.sha });
+  for (const r of roms) add(`theme-picks-${r.sha.slice(0, 8)}`, 20, (S) => themePicks(S, r), { rom: r.sha });
 }
 
 add("registry-link", 15, registryLink);
+if (!page.source.root) add("themes-not-offered", 10, themesNotOffered, { source: notOfferedSource });
+else skips.push("skip  themes-not-offered: the page's source is signed, so its theme list can't be changed for the check");
+if (mosshopHere) add("theme-hud-over", 10, themeHudOver);
+else skips.push(`skip  theme-hud-over: no Moss Hop build with the made-up themes at ${mosshopDir} (scripts/web/mosshop-hud.sh DIR makes one; give it with --mosshop DIR)`);
+if (mosshopRegionHere) add("theme-in-region", 10, themeInRegion);
+else skips.push(`skip  theme-in-region: no Moss Hop build with the made-up theme instart at ${mosshopDir} (scripts/web/mosshop-hud.sh DIR makes one; give it with --mosshop DIR)`);
+if (takesHere) add("theme-sound-takes", 10, themeSoundTakes);
+else skips.push(`skip  theme-sound-takes: no Moss Hop build with the made-up sound role at ${takesDir} (scripts/web/mosshop-takes.sh DIR makes one; give it with --mosshop-takes DIR)`);
+if (tapperThemeHere) add("arcade-theme", 20, arcadeTheme, { arcade: true });
+else skips.push(`skip  arcade-theme: no Tapper build with the made-up theme at ${tapperThemeDir} (scripts/web/tapper-theme.sh DIR makes one from $GP_ROM_DIR/arcade/tapper.zip; give it with --tapper-theme DIR)`);
 if (roms.length) add("module", 15, (S) => moduleSection(S, roms[0]), { rom: roms[0].sha });
 for (const r of roms) {
   const tag = r.sha.slice(0, 8);
@@ -2153,6 +3223,38 @@ if (!registryStopped) {
   }
   bad("manifest", "the manifest changed", /couldn't be installed/i, (u) => /\/packages\/[0-9a-f]{64}$/.test(u), flip);
   bad("blob", "one file's bytes changed", /doesn't match what its maker signed/i, (u) => /\/blobs\//.test(u), flip);
+  add("game-by-name", 20, gameByName);
+  add("game-bad-name", 20, gameBadName);
+  if (madeUpHere) {
+    const { id, hashes } = madeUpFiles();
+    add("game-tampered-blob", 10, (S) => gameTampered(S, "blob"), { source: broken((u) => new URL(u).pathname.endsWith(`/blobs/${hashes.get("play/page.json")}`), flip) });
+    add("game-tampered-manifest", 10, (S) => gameTampered(S, "manifest"), { source: broken((u) => new URL(u).pathname.endsWith(`/packages/${id}`), flip) });
+  } else skips.push(`skip  no ${MADE_UP} in the registry folder (scripts/web/test-registry.sh makes one): a tampered second game isn't checked`);
+}
+add("share-link", 25, (S) => shareSection(S, roms[0] ?? null), roms.length ? { rom: roms[0].sha } : {});
+// The game with its own pictures (own-game*): it plays with no ROM, and a
+// tampered play/ file or manifest is refused.
+if (ownHere && !registryStopped) {
+  const { id, hashes } = ownFiles();
+  add("own-game", 25, ownGame);
+  add("own-game-tampered-blob", 10, (S) => ownGameTampered(S, "blob"), { source: broken((u) => new URL(u).pathname.endsWith(`/blobs/${hashes.get("play/bundle.json")}`), flip) });
+  add("own-game-tampered-manifest", 10, (S) => ownGameTampered(S, "manifest"), { source: broken((u) => new URL(u).pathname.endsWith(`/packages/${id}`), flip) });
+} else if (!ownHere) skips.push(`skip  own-game: no ${OWN} in the registry folder (scripts/web/test-registry.sh makes one when Moss Hop's pictures are lifted): a game with its own pictures isn't checked`);
+// The arcade game by its name (arcade-*), each in its own section: it plays
+// from its zip, and the zips its lift refuses are refused in words. Left out
+// with a line without the game in the registry folder or its zip.
+{
+  const zip = findZip("tapper");
+  const garbled = findZip("rbtapper");
+  if (!arcadeHere) skips.push(`skip  arcade-play, arcade-refused: no ${ARCADE} in the registry folder (publish one into a copy of the registry; docs/web.md, "Arcade games")`);
+  else {
+    if (zip) add("arcade-play", 30, (S) => arcadePlay(S, { zip }), { arcade: true, rom: "tapper.zip" });
+    else skips.push("skip  arcade-play: no tapper.zip in $GP_ROM_DIR/arcade: the arcade game isn't played");
+    add("arcade-refused", 20, (S) => arcadeRefused(S, { zip }), { arcade: true, rom: "tapper.zip" });
+  }
+  if (!unplacedHere) skips.push(`skip  arcade-unplaced: no ${UNPLACED} in the registry folder (scripts/web/test-registry.sh makes one when the registry has ${ARCADE})`);
+  else if (!garbled) skips.push("skip  arcade-unplaced: no rbtapper.zip in $GP_ROM_DIR/arcade: the refusal of a set not drawn right yet isn't checked");
+  else add("arcade-unplaced", 15, (S) => arcadeUnplaced(S, { garbled }), { arcade: true, rom: "rbtapper.zip" });
 }
 
 if (opt("only") || acceptPictures) {
@@ -2291,6 +3393,8 @@ try {
           S.check(off.length === 0, `every request is to the page's own server or its source (${S.requests.length} requests; others: ${off.map((r) => r.url).join(", ")})`);
           S.check(posts.length === 0, `every request is a GET with no body (${posts.map((r) => `${r.method} ${r.url}`).join(", ")})`);
           S.check(S.sockets.length === 0, "no WebSocket opens");
+          // An arcade model's drawing (2.4 MB) is fetched for an arcade game only.
+          if (!sec.arcade) S.check(!boardFetched(S), "no request for gp_board.wasm (only an arcade game's board art needs it)");
           if (rules.length) S.check(S.violations.length === 0, `the policy refused nothing (${S.violations.length}${S.violations[0] ? ": " + S.violations[0].slice(0, 200) : ""})`);
           writeFileSync(S.file(`requests-${sec.name}.txt`), S.requests.map((r) => `${r.method} ${r.body} ${r.url.replace(origin, "")}`).join("\n") + "\n");
         } catch (e) {

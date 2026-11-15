@@ -16,10 +16,11 @@
 //! built-in interpreter; blind discovery is wave 7's (crate::farm::blind);
 //! and the part of game-printer's progress_measure.rs the sweep plays
 //! (a start the rebuilt game takes, the lockstep from it) is [`measure`]
-//! below. It plays gp-nes and reads the NES's RAM and sprite table, as
-//! blind discovery's `Discovery` (a gp-nes machine at the spot) does, so
-//! an arcade game is refused in words that say why: the sweep needs blind
-//! discovery on the arcade board first, and a jump (Tapper has none).
+//! below. It plays gp-nes and reads the NES's RAM and sprite table past
+//! discovery. On an arcade game blind discovery runs on the board (it plays
+//! either, crate::farm::machine) and the sweep stops after it, saying what
+//! it found and why it stops: Tapper's player changes lanes and has no
+//! jump, and the method's changes for such a player wait for the owner.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1605,8 +1606,9 @@ mod tests {
 }
 
 /// The game's package folder in the games checkout and its ROM (`rom`, or
-/// the one its roms.toml names in $GP_ROM_DIR). Refuses an arcade game:
-/// the sweep plays gp-nes.
+/// the one its roms.toml names in $GP_ROM_DIR). On an arcade game it runs
+/// blind discovery on the board and stops after it, in words
+/// (crate::farm::blind::stop_on_arcade).
 fn game_and_rom(paths: &Paths, game: &str, rom: Option<&Path>) -> Result<(PathBuf, Vec<u8>)> {
     let games =
         crate::roms_cmd::games_dir(None).context("no games checkout found: set GP_GAMES_DIR")?;
@@ -1616,11 +1618,12 @@ fn game_and_rom(paths: &Paths, game: &str, rom: Option<&Path>) -> Result<(PathBu
         Some(r) => fs::read(r).with_context(|| format!("reading {}", r.display()))?,
         None => crate::clip_score::rom_of(paths, &dir, None)?,
     };
-    if crate::original::Platform::of_file(&rom) == crate::original::Platform::Arcade {
-        bail!(
-            "gp mechanic sweep jump is a grid of jumps (run-up speed, how long the jump button is held, steering in the air) from a spot blind discovery finds; blind discovery (crate::farm::blind) runs on gp-nes and learns the jump as the button that sends the player's y up and back down, so it has no arcade form yet, and {game} is an arcade game. An arcade sweep needs blind discovery on OriginalRuntime, and a game with a jump button"
-        );
-    }
+    crate::farm::blind::stop_on_arcade(
+        &rom,
+        paths,
+        "gp mechanic sweep jump",
+        "The sweep is a grid of jumps (run-up speed, how long the jump button is held, steering in the air) from open ground near play start",
+    )?;
     Ok((dir, rom))
 }
 

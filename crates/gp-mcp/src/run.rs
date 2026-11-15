@@ -8,7 +8,8 @@
 //! name is refused with the nearest ones), applies the rule, then runs the
 //! same gp with `--json` in the games checkout, with the server's home,
 //! under a time limit, and returns its exit code, stdout (as JSON when it
-//! is JSON) and stderr. Long output is cut, and the whole of it saved.
+//! is JSON) and stderr. Long output is cut in the middle, keeping its start
+//! and its end, and the whole of it saved.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read as _;
@@ -25,11 +26,45 @@ use crate::asks;
 use crate::policy::{self, Decision, Road};
 use crate::{Config, Reply, run_gp};
 
-/// How long a command runs when the call doesn't say.
+/// How long a command runs when the call doesn't say and the command
+/// isn't one known to run long (`policy::LONG`).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
-/// The longest a call may ask for.
-pub const MAX_TIMEOUT: Duration = Duration::from_secs(1800);
-/// The most stdout a reply carries; the rest is saved to a file.
+/// The longest a call may ask for: a gate runs 30 to 60 minutes.
+pub const MAX_TIMEOUT: Duration = Duration::from_secs(3600);
+
+/// The limit a call of `path` runs under when it gives no `timeout_s`.
+pub fn default_timeout(path: &str) -> Duration {
+    policy::long_timeout_s(path).map_or(DEFAULT_TIMEOUT, Duration::from_secs)
+}
+
+/// What a reply says of a command stopped at its time limit: that it
+/// timed out and after how long, that it may have been fine and slow,
+/// and how to ask for longer (or, at the most a call may ask, what else).
+fn timed_out_words(path: &str, limit: Duration, asked: Option<u64>) -> String {
+    let secs = limit.as_secs();
+    let whose = match asked {
+        Some(_) => "the timeout_s this call gave".to_owned(),
+        None if policy::long_timeout_s(path).is_some() => {
+            format!("gp_run's default for gp {path}, a command known to run long")
+        }
+        None => "gp_run's default for a command".to_owned(),
+    };
+    let longer = if limit < MAX_TIMEOUT {
+        let more = (secs * 2).clamp(secs + 1, MAX_TIMEOUT.as_secs());
+        format!(
+            "To give it longer, call gp_run again with the same command and args and timeout_s set higher, {more} for example (at most {}).",
+            MAX_TIMEOUT.as_secs()
+        )
+    } else {
+        "That is the longest gp_run gives a command: narrow it with its flags (fewer clips, one level), or ask the person to run it in a terminal, where it has no limit.".to_owned()
+    };
+    format!(
+        "Timed out: gp {path} was stopped after {secs} s, {whose}, with everything it started, before it finished. It may have been working and only slow (a debug build is slower), so this is not a failure of the command; what it printed so far is here. {longer}"
+    )
+}
+/// The most stdout a reply carries whole. Past it the reply keeps the
+/// start and the end ([`STDOUT_HEAD`], [`STDOUT_TAIL`]) and says it was cut,
+/// and the whole of it is saved to a file.
 pub const MAX_STDOUT: usize = 48 * 1024;
 /// The most stderr a reply carries (its end, where errors are).
 pub const MAX_STDERR: usize = 8 * 1024;
@@ -367,6 +402,7 @@ pub fn commands_in(tree: &Tree, a: CommandsArgs) -> Result<Reply, String> {
         if let Some(m) = row.road.mark() {
             v["mark"] = json!(m);
         }
+        v["timeout_s"] = json!(default_timeout(&c.path).as_secs());
         if row.laya != policy::Laya::No {
             v["laya"] = json!(
                 "it may ask Laya, the decision server on 127.0.0.1:7720, for moves; it runs only while Laya or gp serve already answers, since a tool never starts a server"
@@ -466,7 +502,9 @@ pub struct RunArgs {
     /// arguments finds its answer without it too.
     #[serde(default)]
     pub ask_id: Option<String>,
-    /// Seconds before the command is stopped: default 300, at most 1800.
+    /// Seconds before the command is stopped: at most 3600. Left out, 300,
+    /// or for a command known to run long (corpus score, model refine,
+    /// the gates) the longer default gp_commands shows as timeout_s.
     #[serde(default)]
     pub timeout_s: Option<u64>,
 }
@@ -722,6 +760,20 @@ fn stop_group(pid: u32) {
     }
 }
 
+/// The port of the address in $`var` when it is on 127.0.0.1 (as gp
+/// serve reads $GP_LAYA_URL and a tool $GP_SERVE_URL), else `default`.
+fn local_port(var: &str, default: u16) -> u16 {
+    std::env::var(var)
+        .ok()
+        .and_then(|u| {
+            u.trim_end_matches('/')
+                .strip_prefix("http://127.0.0.1:")?
+                .parse()
+                .ok()
+        })
+        .unwrap_or(default)
+}
+
 /// Whether something answers on 127.0.0.1:`port`.
 fn answers(port: u16) -> bool {
     std::net::TcpStream::connect_timeout(
@@ -750,6 +802,24 @@ fn cut_at(s: &str, mut n: usize) -> &str {
     &s[..n]
 }
 
+/// The last `n` bytes of `s` or fewer, from a character's start.
+fn last(s: &str, n: usize) -> &str {
+    let mut from = s.len().saturating_sub(n);
+    while !s.is_char_boundary(from) {
+        from += 1;
+    }
+    &s[from..]
+}
+
+/// Of a cut stdout, how much of its start the reply carries...
+pub const STDOUT_HEAD: usize = 32 * 1024;
+/// ...and of its end, where a command prints its result.
+pub const STDOUT_TAIL: usize = 12 * 1024;
+/// The most a cut JSON reply's small top-level values take, whole.
+const SMALL_VALUES: usize = 4 * 1024;
+/// A top-level value this size or smaller is small.
+const SMALL_VALUE: usize = 1024;
+
 /// The keys of a JSON object with how many bytes each holds, for a reply
 /// too large to carry whole.
 fn key_sizes(v: &Value) -> Value {
@@ -764,33 +834,77 @@ fn key_sizes(v: &Value) -> Value {
     }
 }
 
+/// A JSON object's small top-level values, whole (`ok`, counts, a
+/// summary), smallest first until [`SMALL_VALUES`] bytes.
+fn small_values(v: &Value) -> Option<Map<String, Value>> {
+    let o = v.as_object()?;
+    let mut sized: Vec<(usize, &String, &Value)> = o
+        .iter()
+        .map(|(k, v)| (v.to_string().len(), k, v))
+        .filter(|(n, _, _)| *n <= SMALL_VALUE)
+        .collect();
+    sized.sort_by_key(|(n, k, _)| (*n, (*k).clone()));
+    let mut out = Map::new();
+    let mut used = 0;
+    for (n, k, v) in sized {
+        if used + n > SMALL_VALUES {
+            break;
+        }
+        used += n;
+        out.insert(k.clone(), v.clone());
+    }
+    Some(out)
+}
+
 /// The output's part of a reply: stdout as JSON or text, stderr, and
-/// what was cut and where it is whole.
-pub fn output(ran: &Ran, dir: &Path, stem: &str) -> Result<Map<String, Value>, String> {
+/// what was cut and where it is whole; and stdout parsed, when it is JSON.
+/// A stdout past [`MAX_STDOUT`] is cut in the middle: the reply keeps its
+/// first [`STDOUT_HEAD`] and last [`STDOUT_TAIL`] bytes (and for a JSON
+/// object, its small top-level values whole), says so in `cut`, and the
+/// whole of it is saved to a file.
+pub fn output(
+    ran: &Ran,
+    dir: &Path,
+    stem: &str,
+) -> Result<(Map<String, Value>, Option<Value>), String> {
     let mut o = Map::new();
     let stdout = String::from_utf8_lossy(&ran.stdout);
     let parsed: Option<Value> = serde_json::from_str(stdout.trim()).ok();
     if stdout.len() <= MAX_STDOUT {
-        match parsed {
-            Some(v) => o.insert("json".into(), v),
+        match &parsed {
+            Some(v) => o.insert("json".into(), v.clone()),
             None => o.insert("stdout".into(), json!(stdout)),
         };
     } else {
         let ext = if parsed.is_some() { "json" } else { "txt" };
         let file = save(dir, &format!("{stem}.stdout.{ext}"), &ran.stdout)?;
-        o.insert("stdout".into(), json!(cut_at(&stdout, MAX_STDOUT)));
+        let head = cut_at(&stdout, STDOUT_HEAD);
+        let tail = last(&stdout, STDOUT_TAIL);
+        let left_out = stdout.len() - head.len() - tail.len();
+        o.insert("stdout".into(), json!(head));
+        o.insert("stdout_end".into(), json!(tail));
         let mut cut = json!({
-            "stdout_shown_bytes": MAX_STDOUT,
             "stdout_bytes": stdout.len(),
+            "stdout_shown_bytes": head.len() + tail.len(),
+            "stdout_left_out_bytes": left_out,
             "stdout_saved": file,
             "note": format!(
-                "stdout was {} bytes, so only its first {} are here; the whole of it is in the file named in stdout_saved. Narrow the command (its flags) for a shorter answer.",
+                "stdout was cut: it was {} bytes, more than a reply carries ({MAX_STDOUT}), so stdout holds its first {} bytes and stdout_end its last {}, and the {left_out} bytes between are left out{}. The whole of it is in the file named in stdout_saved: read that file for the rest, or narrow the command with its flags for a shorter answer.",
                 stdout.len(),
-                MAX_STDOUT
+                head.len(),
+                tail.len(),
+                if parsed.is_some() {
+                    " (neither part is JSON on its own; json_small has the small top-level values whole, json_keys every key's size)"
+                } else {
+                    ""
+                },
             ),
         });
         if let Some(v) = &parsed {
             cut["json_keys"] = key_sizes(v);
+            if let Some(small) = small_values(v) {
+                o.insert("json_small".into(), json!(small));
+            }
         }
         o.insert("cut".into(), cut);
     }
@@ -802,11 +916,7 @@ pub fn output(ran: &Ran, dir: &Path, stem: &str) -> Result<Map<String, Value>, S
         }
     } else {
         let file = save(dir, &format!("{stem}.stderr.txt"), &ran.stderr)?;
-        let mut from = stderr.len() - MAX_STDERR;
-        while !stderr.is_char_boundary(from) {
-            from += 1;
-        }
-        o.insert("stderr".into(), json!(&stderr[from..]));
+        o.insert("stderr".into(), json!(last(stderr, MAX_STDERR)));
         let cut = o
             .entry("cut")
             .or_insert_with(|| json!({}))
@@ -817,10 +927,13 @@ pub fn output(ran: &Ran, dir: &Path, stem: &str) -> Result<Map<String, Value>, S
         cut.insert("stderr_saved".into(), json!(file));
         cut.insert(
             "stderr_note".into(),
-            json!("stderr was long, so only its end is here; the whole of it is in the file named in stderr_saved"),
+            json!(format!(
+                "stderr was cut: it was {} bytes, so only its last {MAX_STDERR} are here; the whole of it is in the file named in stderr_saved",
+                stderr.len()
+            )),
         );
     }
-    Ok(o)
+    Ok((o, parsed))
 }
 
 /// The keys under which commands report what they wrote.
@@ -932,6 +1045,7 @@ fn the_yes(
 /// generate prints dollars); none when it can't run quickly.
 fn dry_run_cost(config: &Config, c: &CommandDef, path: &str, argv: &[String]) -> Option<String> {
     let mut cmd = Command::new(&config.gp);
+    cmd.env(crate::CALLER_ENV, "mcp");
     if c.json {
         cmd.arg("--json");
     }
@@ -1004,24 +1118,35 @@ pub fn run_in(
         },
         _ => {}
     }
-    if policy::may_start_laya(&row, &given) && !answers(7720) && !answers(7710) {
+    let (laya, serve) = (
+        local_port("GP_LAYA_URL", 7720),
+        local_port("GP_SERVE_URL", 7710),
+    );
+    if policy::may_start_laya(&row, &given) && !answers(laya) && !answers(serve) {
         return Ok(Reply::refused(json!({
             "refused": format!(
-                "gp {path} asks Laya, the decision server, for moves, and with neither Laya (127.0.0.1:7720) nor gp serve (127.0.0.1:7710) answering it would start a server on port 7720, which a tool never does. Ask the person to start gp serve, then call again."
+                "gp {path} asks Laya, the decision server, for moves, and with neither Laya (127.0.0.1:{laya}) nor gp serve (127.0.0.1:{serve}) answering it would start a server on port {laya}, which a tool never does. Ask the person to start gp serve, then call again."
             ),
+            "needs": "laya",
             "rule": row.rule.name(),
         })));
     }
     let limit = a
         .timeout_s
-        .map_or(DEFAULT_TIMEOUT, Duration::from_secs)
+        .map_or_else(|| default_timeout(&path), Duration::from_secs)
         .min(MAX_TIMEOUT);
     let mut cmd = Command::new(&config.gp);
+    cmd.env(crate::CALLER_ENV, "mcp");
     if c.json {
         cmd.arg("--json");
     }
     cmd.args(path.split(' ')).args(&built.argv);
     cmd.env("GP_HOME", &config.home);
+    // The addresses checked above, so the command asks Laya where gp_run
+    // looked for it (a --decide left out reads $GP_LAYA_URL) and finds gp
+    // serve there too: one variable decides everywhere.
+    cmd.env("GP_LAYA_URL", format!("http://127.0.0.1:{laya}"));
+    cmd.env("GP_SERVE_URL", format!("http://127.0.0.1:{serve}"));
     match &config.games {
         Some(g) => {
             cmd.env("GP_GAMES_DIR", g).current_dir(g);
@@ -1051,7 +1176,8 @@ pub fn run_in(
         "seconds": (ran.seconds * 10.0).round() / 10.0,
     });
     let o = reply.as_object_mut().expect("an object");
-    for (k, v) in output(&ran, &saved_dir(config), &stem)? {
+    let (out, parsed) = output(&ran, &saved_dir(config), &stem)?;
+    for (k, v) in out {
         o.insert(k, v);
     }
     let writes = matches!(
@@ -1062,8 +1188,9 @@ pub fn run_in(
         o.insert("yes".into(), json!(n));
     }
     if writes {
-        let wrote: Map<String, Value> = o
-            .get("json")
+        // Read from the whole output, so a cut one still says what it wrote.
+        let wrote: Map<String, Value> = parsed
+            .as_ref()
             .and_then(Value::as_object)
             .map(|j| {
                 j.iter()
@@ -1090,12 +1217,9 @@ pub fn run_in(
     if ran.timed_out {
         o.insert(
             "timed_out".into(),
-            json!(format!(
-                "stopped after {} s, the time limit, with everything it started; what it printed so far is here. Give it longer with timeout_s (at most {} s), or narrow it with its flags.",
-                limit.as_secs(),
-                MAX_TIMEOUT.as_secs()
-            )),
+            json!(timed_out_words(&path, limit, a.timeout_s)),
         );
+        o.insert("timeout_s".into(), json!(limit.as_secs()));
         return Ok(Reply::refused(reply));
     }
     // Exit 1 is a check that ran and failed, which isn't an error; exit 2
@@ -1430,6 +1554,7 @@ mod tests {
             "{}",
             r.json
         );
+        assert_eq!(r.json["timeout_s"], 5);
         assert_eq!(r.json["stdout"], "started\n");
         assert_eq!(r.json["exit"], Value::Null);
         // The command and its child are gone (a stopped child may linger a
@@ -1470,14 +1595,67 @@ mod tests {
         assert_eq!(r.json["exit"], 1);
         assert_eq!(r.json["stderr"], "oops");
         let cut = &r.json["cut"];
-        assert_eq!(cut["stdout_shown_bytes"], MAX_STDOUT);
         let total = cut["stdout_bytes"].as_u64().unwrap() as usize;
         assert!(total > MAX_STDOUT);
+        assert_eq!(cut["stdout_shown_bytes"], STDOUT_HEAD + STDOUT_TAIL);
+        assert_eq!(
+            cut["stdout_left_out_bytes"],
+            total - STDOUT_HEAD - STDOUT_TAIL
+        );
         let saved = PathBuf::from(cut["stdout_saved"].as_str().unwrap());
-        assert_eq!(std::fs::read(&saved).unwrap().len(), total);
+        let whole = std::fs::read_to_string(&saved).unwrap();
+        assert_eq!(whole.len(), total);
         assert!(saved.starts_with(dir.path().join("work").join("gp-run")));
-        assert_eq!(r.json["stdout"].as_str().unwrap().len(), MAX_STDOUT);
-        assert!(cut["note"].as_str().unwrap().contains("first"));
+        // The start and the end, where the result is.
+        let head = r.json["stdout"].as_str().unwrap();
+        let end = r.json["stdout_end"].as_str().unwrap();
+        assert_eq!(head.len(), STDOUT_HEAD);
+        assert!(whole.starts_with(head) && whole.ends_with(end));
+        assert!(end.ends_with("line 3999 of the output, padded to be long enough\n"));
+        let note = cut["note"].as_str().unwrap();
+        assert!(
+            note.starts_with("stdout was cut")
+                && note.contains(&format!("{total} bytes"))
+                && note.contains("stdout_saved"),
+            "{note}"
+        );
+    }
+
+    #[test]
+    fn a_long_json_answer_keeps_its_end_and_its_small_values() {
+        let dir = tempfile::tempdir().unwrap();
+        // A score's shape: a long list of rows, then the result.
+        let gp = fake_gp(
+            dir.path(),
+            "printf '{\\n  \"rows\": ['; i=0; while [ $i -lt 3000 ]; do printf '{\"clip\": \"clip.%04d\", \"exact\": true},' $i; i=$((i+1)); done; printf '{}],\\n  \"ok\": false,\\n  \"written\": \"/made/up/score.json\",\\n  \"summary\": \"2999 of 3000 clips exact\"\\n}\\n'",
+        );
+        let c = config(dir.path(), &gp);
+        let r = call(
+            &c,
+            json!({"command": "model gate", "args": {"game": "x", "dry-run": true}}),
+        );
+        assert!(!r.is_error, "{}", r.json);
+        assert!(r.json.get("json").is_none(), "too long to carry whole");
+        let cut = &r.json["cut"];
+        assert!(
+            cut["stdout_bytes"].as_u64().unwrap() as usize > MAX_STDOUT,
+            "{cut}"
+        );
+        let end = r.json["stdout_end"].as_str().unwrap();
+        assert!(
+            end.contains("\"summary\": \"2999 of 3000 clips exact\""),
+            "{end}"
+        );
+        assert_eq!(
+            r.json["json_small"],
+            json!({"ok": false, "written": "/made/up/score.json", "summary": "2999 of 3000 clips exact"})
+        );
+        assert!(cut["json_keys"]["rows"].as_u64().unwrap() > 40_000, "{cut}");
+        assert!(cut["note"].as_str().unwrap().contains("json_small"));
+        let saved: Value =
+            serde_json::from_slice(&std::fs::read(cut["stdout_saved"].as_str().unwrap()).unwrap())
+                .unwrap();
+        assert_eq!(saved["rows"].as_array().unwrap().len(), 3001);
     }
 
     #[test]
@@ -1505,6 +1683,48 @@ mod tests {
         assert!(r.json["refused"].as_str().unwrap().contains("7720"));
         let r = run_in(&c, &t, a(), &|p| p == 7720).unwrap();
         assert!(!r.is_error, "{}", r.json);
+    }
+
+    /// The command runs with the addresses gp_run checked for Laya and gp
+    /// serve, so a `--decide` left out asks Laya where gp_run looked.
+    #[test]
+    fn a_command_is_given_the_addresses_it_was_checked_against() {
+        let dir = tempfile::tempdir().unwrap();
+        let gp = fake_gp(
+            dir.path(),
+            r#"echo "{\"laya\": \"$GP_LAYA_URL\", \"serve\": \"$GP_SERVE_URL\"}""#,
+        );
+        let c = config(dir.path(), &gp);
+        let mut t = tree();
+        t.commands.push(CommandDef {
+            path: "mechanic demo".into(),
+            about: String::new(),
+            help: String::new(),
+            args: vec![],
+            json: true,
+        });
+        let r = run_in(
+            &c,
+            &t,
+            RunArgs {
+                command: "mechanic demo".into(),
+                args: Map::new(),
+                confirmed_by_person: false,
+                ask_id: None,
+                timeout_s: None,
+            },
+            &|p| p == local_port("GP_LAYA_URL", 7720),
+        )
+        .unwrap();
+        assert!(!r.is_error, "{}", r.json);
+        let (laya, serve) = (
+            local_port("GP_LAYA_URL", 7720),
+            local_port("GP_SERVE_URL", 7710),
+        );
+        assert_eq!(
+            r.json["json"],
+            json!({"laya": format!("http://127.0.0.1:{laya}"), "serve": format!("http://127.0.0.1:{serve}")})
+        );
     }
 
     #[test]
@@ -1556,5 +1776,66 @@ mod tests {
         )
         .unwrap();
         assert_eq!(found.json["found"], 1);
+        // A command known to run long shows its own limit; others 300 s.
+        assert_eq!(one.json["timeout_s"], 3600);
+        let env = commands_in(
+            &t,
+            CommandsArgs {
+                path: Some("env".into()),
+                find: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(env.json["timeout_s"], 300);
+    }
+
+    /// Each command known to run long is a command of the table, gets
+    /// longer than the usual limit, and no more than a call may ask; the
+    /// ones measured past 300 s are among them.
+    #[test]
+    fn long_commands_get_a_longer_limit_of_their_own() {
+        for (path, s) in policy::LONG {
+            assert!(policy::row(path).is_some(), "{path} has no row");
+            let d = Duration::from_secs(*s);
+            assert!(d > DEFAULT_TIMEOUT && d <= MAX_TIMEOUT, "{path}: {s}");
+        }
+        for path in [
+            "corpus score",
+            "model refine",
+            "model static",
+            "model gate",
+            "tool gate",
+        ] {
+            assert!(default_timeout(path) > DEFAULT_TIMEOUT, "{path}");
+        }
+        // Tapper's corpus score took 444 s in a debug build.
+        assert!(default_timeout("corpus score") >= Duration::from_secs(900));
+        assert_eq!(default_timeout("env"), DEFAULT_TIMEOUT);
+    }
+
+    /// A reply stopped at its limit says it timed out, after how long, that
+    /// the command may have been fine and slow, and how to ask for longer;
+    /// at the most a call may ask, what to do instead.
+    #[test]
+    fn a_timed_out_reply_says_so_and_how_to_ask_for_longer() {
+        let w = timed_out_words("corpus score", Duration::from_secs(1800), None);
+        assert!(
+            w.starts_with("Timed out: gp corpus score was stopped after 1800 s"),
+            "{w}"
+        );
+        assert!(
+            w.contains("known to run long") && w.contains("only slow"),
+            "{w}"
+        );
+        assert!(w.contains("timeout_s set higher, 3600 for example"), "{w}");
+        let w = timed_out_words("env", Duration::from_secs(5), Some(5));
+        assert!(w.contains("after 5 s, the timeout_s this call gave"), "{w}");
+        assert!(w.contains("10 for example"), "{w}");
+        let w = timed_out_words("tool gate", MAX_TIMEOUT, Some(9999));
+        assert!(
+            w.contains("longest gp_run gives") && w.contains("terminal"),
+            "{w}"
+        );
+        assert!(!w.contains("set higher"), "{w}");
     }
 }

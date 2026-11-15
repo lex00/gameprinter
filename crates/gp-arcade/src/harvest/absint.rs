@@ -22,6 +22,7 @@
 //! reads of the R register. The rules in [`super::rules`] read the events.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
 
 use super::board::Board;
 use super::sem::{self, Alu, Block, Cc, Dst, Mem, R8, R16, Rot, Sem, Src};
@@ -90,8 +91,10 @@ pub enum K {
     Lo(Box<Val>),
     /// The high byte of a 16-bit value, plus a constant.
     Hi(Box<Val>, i8),
-    /// Unknown, from these places.
-    Top(BTreeSet<Loc>),
+    /// Unknown, from these places. The set is shared by the values made
+    /// from one another (a copy, a join that adds nothing), so cloning one
+    /// is a count and comparing two the same is comparing pointers.
+    Top(Arc<BTreeSet<Loc>>),
 }
 
 /// A value, and the place it was last loaded from unchanged.
@@ -116,11 +119,15 @@ impl Val {
         }
     }
     pub fn top() -> Val {
-        Val::taint(BTreeSet::new())
+        static NONE: std::sync::OnceLock<Arc<BTreeSet<Loc>>> = std::sync::OnceLock::new();
+        Val {
+            k: K::Top(NONE.get_or_init(Arc::default).clone()),
+            from: None,
+        }
     }
     pub fn taint(t: BTreeSet<Loc>) -> Val {
         Val {
-            k: K::Top(t),
+            k: K::Top(Arc::new(t)),
             from: None,
         }
     }
@@ -183,7 +190,7 @@ impl Val {
             K::Pair(h, l) => h.places().union(&l.places()).copied().collect(),
             K::Lo(v) | K::Hi(v, _) => v.places(),
             K::Str { .. } => BTreeSet::new(),
-            K::Top(t) => t.clone(),
+            K::Top(t) => (**t).clone(),
         };
         s.extend(self.from);
         s
@@ -223,8 +230,30 @@ impl Val {
                 return Val::of(K::Str { base, stride });
             }
         }
-        let mut t = self.places();
-        t.extend(o.places());
+        // Every place either depends on: two unknowns' sets merged in one
+        // pass, as the sets are in order.
+        let t: BTreeSet<Loc> = match (&self.k, &o.k) {
+            (K::Top(a), K::Top(b)) => {
+                let mut t: BTreeSet<Loc> = a.union(b).copied().collect();
+                t.extend(self.from);
+                t.extend(o.from);
+                t
+            }
+            _ => {
+                let mut t = self.places();
+                t.extend(o.places());
+                t
+            }
+        };
+        // Either side's own set, when the join adds nothing to it: `t`
+        // holds it, so it is that set when it is as long.
+        for side in [self, o] {
+            if let K::Top(s) = &side.k
+                && s.len() == t.len()
+            {
+                return Val::of(K::Top(s.clone())).with_from(from);
+            }
+        }
         Val::taint(t).with_from(from)
     }
     /// The value plus a constant (16-bit arithmetic).
@@ -305,7 +334,7 @@ impl Val {
                     (**l).clone()
                 }
             }
-            K::Top(t) => Val::taint(t.clone()),
+            K::Top(t) => Val::of(K::Top(t.clone())),
             // A byte a table gave: its high half is not known.
             K::Tab { .. } if hi => Val::taint(self.places()),
             K::Tab { .. } => self.clone(),
@@ -364,7 +393,7 @@ impl Val {
             K::Pair(h, l) => K::Pair(Box::new(h.map_locs(f)), Box::new(l.map_locs(f))),
             K::Lo(v) => K::Lo(Box::new(v.map_locs(f))),
             K::Hi(v, a) => K::Hi(Box::new(v.map_locs(f)), *a),
-            K::Top(t) => K::Top(t.iter().map(|l| f(*l)).collect()),
+            K::Top(t) => K::Top(Arc::new(t.iter().map(|l| f(*l)).collect())),
         };
         Val {
             k,
@@ -578,14 +607,34 @@ pub struct St {
     pub iy: Val,
     /// The second set: A', F', BC', DE', HL'.
     pub alt: (Val, Flags, Val, Val, Val),
-    pub mem: BTreeMap<Loc, Val>,
+    /// What the paths know of memory, shared between states until one
+    /// writes (most instructions don't).
+    pub mem: Arc<BTreeMap<Loc, Val>>,
     pub stack: Vec<Val>,
     pub guards: BTreeSet<Guard>,
-    /// Places every path to here has written.
-    pub wrote: BTreeSet<Loc>,
+    /// Places every path to here has written. Shared between the states
+    /// that have the same: a join of two paths that wrote the same places
+    /// keeps one set, and comparing it is comparing two pointers.
+    pub wrote: Arc<BTreeSet<Loc>>,
     /// Reads of places this activation hasn't written read as unknown (a
     /// routine read out of context).
     pub general: bool,
+}
+
+/// The places both of two paths wrote: one of the two sets when it is
+/// that, so states that agree keep sharing it.
+fn both_wrote(a: &Arc<BTreeSet<Loc>>, b: &Arc<BTreeSet<Loc>>) -> Arc<BTreeSet<Loc>> {
+    if Arc::ptr_eq(a, b) || a == b {
+        return a.clone();
+    }
+    let both: BTreeSet<Loc> = a.intersection(b).copied().collect();
+    if both.len() == a.len() {
+        a.clone()
+    } else if both.len() == b.len() {
+        b.clone()
+    } else {
+        Arc::new(both)
+    }
 }
 
 impl St {
@@ -605,10 +654,10 @@ impl St {
                 Val::top(),
                 Val::top(),
             ),
-            mem: BTreeMap::new(),
+            mem: Arc::default(),
             stack: Vec::new(),
             guards: BTreeSet::new(),
-            wrote: BTreeSet::new(),
+            wrote: Arc::default(),
             general: false,
         }
     }
@@ -622,14 +671,31 @@ impl St {
 
     fn join(&self, o: &St) -> St {
         let mut mem = BTreeMap::new();
-        let keys: BTreeSet<Loc> = self.mem.keys().chain(o.mem.keys()).copied().collect();
-        for k in keys {
-            let a = self
-                .mem
-                .get(&k)
-                .cloned()
-                .unwrap_or_else(|| self.unwritten(k));
-            let b = o.mem.get(&k).cloned().unwrap_or_else(|| o.unwritten(k));
+        // Both maps' places in order, each with what each side holds there.
+        let (mut x, mut y) = (self.mem.iter().peekable(), o.mem.iter().peekable());
+        loop {
+            let kx = x.peek().map(|(k, _)| **k);
+            let ky = y.peek().map(|(k, _)| **k);
+            let (k, a, b) = match (kx, ky) {
+                (None, None) => break,
+                (Some(kx), Some(ky)) if kx == ky => {
+                    let (_, a) = x.next().expect("peeked");
+                    let (_, b) = y.next().expect("peeked");
+                    (kx, a.clone(), b.clone())
+                }
+                (Some(kx), Some(ky)) if kx < ky => {
+                    let (_, a) = x.next().expect("peeked");
+                    (kx, a.clone(), o.unwritten(kx))
+                }
+                (Some(kx), None) => {
+                    let (_, a) = x.next().expect("peeked");
+                    (kx, a.clone(), o.unwritten(kx))
+                }
+                (_, Some(ky)) => {
+                    let (_, b) = y.next().expect("peeked");
+                    (ky, self.unwritten(ky), b.clone())
+                }
+            };
             // Two contents of one place meet as the place's own symbol:
             // what it holds now, whichever way the code came.
             let j = if a.k == b.k {
@@ -641,7 +707,8 @@ impl St {
             };
             // The place's own symbol is what a read of it gives anyway:
             // the map keeps only what the paths know.
-            if j.k == Val::entry(k).k || (j.k == K::Top([k].into())) {
+            if j.k == Val::entry(k).k || matches!(&j.k, K::Top(t) if t.len() == 1 && t.contains(&k))
+            {
                 continue;
             }
             mem.insert(k, j);
@@ -656,6 +723,7 @@ impl St {
             Vec::new()
         };
         let fj = |a: &Flags, b: &Flags| if a == b { a.clone() } else { Flags::Unknown };
+        let mem = Arc::new(mem);
         St {
             a: self.a.join(&o.a),
             f: fj(&self.f, &o.f),
@@ -674,7 +742,7 @@ impl St {
             mem,
             stack,
             guards: self.guards.intersection(&o.guards).cloned().collect(),
-            wrote: self.wrote.intersection(&o.wrote).copied().collect(),
+            wrote: both_wrote(&self.wrote, &o.wrote),
             general: self.general || o.general,
         }
     }
@@ -696,7 +764,7 @@ impl St {
                 *v = Val::taint(v.places());
             }
         }
-        for (k, v) in j.mem.iter_mut() {
+        for (k, v) in Arc::make_mut(&mut j.mem).iter_mut() {
             if self.mem.get(k) != o.mem.get(k) && !matches!(v.k, K::Top(_)) && !v.names(*k) {
                 *v = Val::taint(v.places());
             }
@@ -726,9 +794,16 @@ impl St {
         } else {
             Val::entry(loc).with_from(copied)
         };
-        self.mem.insert(loc, stored.clone());
-        self.wrote.insert(loc);
+        Arc::make_mut(&mut self.mem).insert(loc, stored.clone());
+        self.mark(loc);
         stored
+    }
+
+    /// Notes that every path to here wrote `loc`.
+    fn mark(&mut self, loc: Loc) {
+        if !self.wrote.contains(&loc) {
+            Arc::make_mut(&mut self.wrote).insert(loc);
+        }
     }
 
     /// The place changes: values that name its old content don't any more,
@@ -744,7 +819,9 @@ impl St {
             gone.push(Loc::At(a.wrapping_add(1)));
         }
         for g in &gone[1..] {
-            self.mem.remove(g);
+            if self.mem.contains_key(g) {
+                Arc::make_mut(&mut self.mem).remove(g);
+            }
         }
         let fix = |v: &mut Val| {
             for g in &gone {
@@ -765,7 +842,14 @@ impl St {
         ] {
             fix(v);
         }
-        self.mem.values_mut().for_each(fix);
+        // Only a value `fix` changes makes the map this state's own.
+        if self
+            .mem
+            .values()
+            .any(|v| gone.iter().any(|g| v.names(*g) || v.from == Some(*g)))
+        {
+            Arc::make_mut(&mut self.mem).values_mut().for_each(fix);
+        }
         self.stack.iter_mut().for_each(fix);
         match &mut self.f {
             Flags::Cmp { lhs, rhs } => {
@@ -1152,8 +1236,8 @@ impl<'a> Reader<'a> {
         // exit is the caller's state with its registers.
         if self.pure.contains(&start) && !entry.general {
             let mut regs = entry.clone();
-            regs.mem.clear();
-            regs.wrote.clear();
+            regs.mem = Arc::default();
+            regs.wrote = Arc::default();
             regs.guards.clear();
             regs.stack.clear();
             let (id, exit) = self.call_keyed(start, regs, caller);
@@ -1718,10 +1802,11 @@ impl<'a> Reader<'a> {
                     self.hints.entry(n).or_default().insert(c);
                 }
                 self.store(id, pc, Loc::Word(n), &mut st, v.clone());
-                st.mem.insert(Loc::At(n), v.half(false));
-                st.mem.insert(Loc::At(n.wrapping_add(1)), v.half(true));
-                st.wrote.insert(Loc::At(n));
-                st.wrote.insert(Loc::At(n.wrapping_add(1)));
+                let mem = Arc::make_mut(&mut st.mem);
+                mem.insert(Loc::At(n), v.half(false));
+                mem.insert(Loc::At(n.wrapping_add(1)), v.half(true));
+                st.mark(Loc::At(n));
+                st.mark(Loc::At(n.wrapping_add(1)));
             }
             Sem::LdSp(_) => st.stack.clear(),
             Sem::Alu(op, s) => self.alu(id, pc, op, s, &mut st),
@@ -1872,7 +1957,9 @@ impl<'a> Reader<'a> {
                             .collect();
                         for l in gone {
                             st.forget(l);
-                            st.mem.remove(&l);
+                            if st.mem.contains_key(&l) {
+                                Arc::make_mut(&mut st.mem).remove(&l);
+                            }
                         }
                         let n = len.konst().map(i32::from);
                         let mv = |v: Val| match n {
@@ -2182,7 +2269,7 @@ fn over(caller: &St, e: St) -> St {
     n.ix = keep(&caller.ix, e.ix);
     n.iy = keep(&caller.iy, e.iy);
     n.alt = e.alt;
-    for (k, v) in e.mem {
+    for (k, v) in Arc::unwrap_or_clone(e.mem) {
         n.forget(k);
         // What a general read left unknown is the place's own symbol to
         // the caller: what it holds now.
@@ -2191,8 +2278,8 @@ fn over(caller: &St, e: St) -> St {
         } else {
             v
         };
-        n.mem.insert(k, v);
-        n.wrote.insert(k);
+        Arc::make_mut(&mut n.mem).insert(k, v);
+        n.mark(k);
     }
     n
 }

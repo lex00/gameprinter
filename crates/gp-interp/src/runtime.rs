@@ -292,6 +292,28 @@ impl Interp {
     }
 }
 
+/// A path a mapping compares (one leaf, or a field of a kind's bodies) is
+/// read from the world as it stands ([`crate::state::Leaves`]); any other
+/// from the frame's view, as [`Runtime::query`] reads it. The values are
+/// the same either way. A run noting its reads of the spec
+/// (`gp_sim::reads`) builds the view all the same, once a frame, so it
+/// notes what reading the view noted.
+impl gp_runtime::QueryValues for Interp {
+    fn query_values(&self, selectors: &[String]) -> Vec<Result<Vec<Value>, String>> {
+        if gp_sim::reads::on() {
+            self.view.get_or_init(|| self.view());
+        }
+        let leaves = crate::state::Leaves::new(&self.spec, &self.world);
+        selectors
+            .iter()
+            .map(|s| match leaves.values(s) {
+                Some(read) => read,
+                None => Ok(self.query(s)?.into_iter().map(|e| e.value).collect()),
+            })
+            .collect()
+    }
+}
+
 impl Runtime for Interp {
     fn capabilities(&self) -> Capabilities {
         Capabilities::SNAPSHOT

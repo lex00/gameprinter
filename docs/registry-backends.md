@@ -1,6 +1,6 @@
 # Where a registry can live
 
-A registry is static files, so the same format works on four kinds of target. `gp registry init`, `publish` and `reindex` take any of them.
+A registry is static files, so the same format works on four kinds of target. `gp registry init`, `publish`, `reindex`, `grant` and `yank` take any of them, and all but `init` take `--dry-run`, which prints what would change and writes nothing.
 
 | Target | Named | Write-once |
 |---|---|---|
@@ -11,7 +11,7 @@ A registry is static files, so the same format works on four kinds of target. `g
 
 ## A registry in a git repo
 
-Make a repo, clone it, and point the commands at the checkout. Each command that writes makes one commit, and pushes when the repo has an `origin`. It refuses a checkout with uncommitted changes, and a command that fails commits nothing.
+Make a repo, clone it, and point the commands at the checkout. Each command that writes makes one commit, and pushes when the repo has an `origin`. It refuses a checkout with uncommitted changes, and a command that fails commits nothing. After a push it says what it pushed where. With `--no-push` it commits and stops, and prints how to look at the commit and push it; the next command without the flag pushes it along with its own.
 
 A repo's history keeps everything it's given, so before a package goes in, `gp` compares every one of its files with each ROM the package names. Thirty-two matching bytes stop the publish, and so does a ROM it can't find in `$GP_ROM_DIR`.
 
@@ -35,3 +35,11 @@ A reader checks signatures only for a source it holds a root key for. For the pa
 With no root, signatures and expiries aren't looked at, and the list files never need refreshing. Every package manifest and file is still checked against its hash. That catches damage. It doesn't catch someone who can write to the repo, who could publish a new version, so with no signing the repo's write access is the protection.
 
 To make a registry with no signing, leave out `--root-key`, `--signing-key` and `--key`, and give `--namespace NS` with no key file. To opt in later, make keys, run `scripts/root-ceremony.sh`, sign every file again and add `root` to the source.
+
+## Adding a publisher, adding versions, withdrawing one
+
+A namespace that wasn't given to `init` is added with `gp registry grant TARGET NS`: it writes `namespaces/NS.toml` and the name's place in `registry.toml`, as `init` would have, and refuses a namespace already granted. `gp registry grants TARGET` lists them. Without the grant the page lists a package in that namespace and then fails to install it.
+
+`gp registry reindex TARGET --keep NAME@VERSION` adds a published version to the list files and keeps what they list now. Given versions without `--keep`, reindex rebuilds the lists from exactly those, and refuses when that would leave out a version the lists name now unless each one is named with `--drop`.
+
+A published version is never deleted. `gp registry yank TARGET NAME@VERSION --severity security --reason TEXT` withdraws it in `yanks.toml`: the page leaves a `security` yank out of its theme list and refuses to install it, and installs a `notice` yank with the reason shown. `--undo` takes the entry back out.

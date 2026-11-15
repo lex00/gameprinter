@@ -508,6 +508,7 @@ pub(crate) fn verify_checkpoints(
 }
 
 /// A machine positioned in an arcade recording, as gp-nes's seek cursor.
+#[derive(Clone)]
 pub(crate) struct Cursor {
     tapper: Tapper,
     input: InputLog,
@@ -535,6 +536,25 @@ pub(crate) fn open(
         );
     }
     let (input, hashes) = load(store, manifest)?;
+    open_with(store, manifest, set, frame, input, hashes)
+}
+
+/// [`open`] with the recording's input log and frame hashes already read
+/// (a long-lived session keeps them).
+pub(crate) fn open_with(
+    store: &Store,
+    manifest: &RecordingManifest,
+    set: &Romset,
+    frame: u64,
+    input: InputLog,
+    hashes: Vec<FrameHash>,
+) -> Result<Cursor> {
+    if frame > manifest.frames {
+        bail!(
+            "frame {frame} is past the end of the recording, which has {} frames",
+            manifest.frames
+        );
+    }
     let mut tapper = Tapper::power_on(set);
     let usable = made_by_this_runtime(manifest);
     let checkpoint = manifest
@@ -582,6 +602,11 @@ impl Cursor {
 
     pub fn hashes(&self) -> &[FrameHash] {
         &self.hashes
+    }
+
+    /// The input log.
+    pub fn input_log(&self) -> &InputLog {
+        &self.input
     }
 
     /// Runs the next frame of the recording.

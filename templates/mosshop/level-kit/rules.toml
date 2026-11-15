@@ -82,3 +82,13 @@ how = "gp host scenarios on a copy (templates/mosshop/AGENTS.md): a scenario tha
 [[verify]]
 step = "3. The ROM"
 how = "Moss Hop builds from its source with cc65; a new level is written in games/mosshop/mosshop.s's level_row lines and the build's asset test checks the offsets"
+
+# Regions of the stage a large-art theme may draw a body by
+# (`#+ in REGION pic ...`, docs/formats/theme.md): coarse boxes in the
+# level's pixels, drawn by hand around a part of the level.
+[[region]]
+name = "start"
+level = "main"
+box = [0, 160, 64, 32]
+what = "Where the hero starts: the two rows of cells over the first four cells of the moss row, so a body standing there has its feet inside. A theme may draw a calmer pose there"
+source = "games/mosshop/mosshop.s, level rows 11 and 12; the model's spawn (x 24, y 176)"

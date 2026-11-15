@@ -366,25 +366,28 @@ impl Screens<OriginalRuntime, Model> for Watch {
         let Some((o, m)) = shots else {
             return Ok(None);
         };
-        // An arcade original's sprites aren't read yet: no sprite table,
-        // and its picture's first pixel as the backdrop.
-        let (oam, tall) = match original.nes() {
-            Some(n) => {
+        // The original's sprites: the NES's sprite table, eight a line at
+        // most; an arcade board's sprite list (gp_arcade::video), with no
+        // line limit, and its picture's first pixel as the backdrop.
+        let (sprites, line_limit) = match original {
+            OriginalRuntime::Nes(n) => {
                 let nes = n.nes();
                 shown.backdrop = crate::screen::nes_palette()[usize::from(nes.backdrop() & 0x3f)];
-                (nes.oam(), nes.tall_sprites())
+                (sprites_of(&nes.oam(), nes.tall_sprites()), Some(8))
             }
-            None => {
+            OriginalRuntime::Arcade(a) => {
                 shown.backdrop = o.rgb.first().copied().unwrap_or_default();
-                ([0xff; 256], false)
+                let t = a.tapper();
+                let ram: Vec<u8> = (0..0x200u16).map(|i| t.peek(0xe800 + i)).collect();
+                (arcade_sprites(&ram), None)
             }
         };
         let found = classify(
             &o,
             &m,
             &shown,
-            &oam,
-            tall,
+            &sprites,
+            line_limit,
             &self.looks,
             self.before.as_deref(),
             self.probe.art(),
@@ -426,8 +429,29 @@ fn rect_of(r: &Region) -> [i64; 4] {
 /// An original's sprite: its rect on the screen, tile and attributes.
 struct Oam {
     rect: [i64; 4],
-    tile: u8,
+    tile: u16,
     attr: u8,
+}
+
+/// An arcade board's sprites from its sprite RAM (Midway MCR's, E800 to
+/// E9FF), as its picture shows them: each 32 by 32 screen pixels at
+/// twice its place in the game's units (gp_arcade::video::sprite_list),
+/// with no priority bit (attr 0).
+fn arcade_sprites(sprite_ram: &[u8]) -> Vec<Oam> {
+    let unit = i64::from(gp_arcade::video::UNIT);
+    gp_arcade::video::sprite_list(sprite_ram)
+        .into_iter()
+        .map(|s| Oam {
+            rect: [
+                i64::from(s.x) * unit,
+                i64::from(s.y) * unit,
+                16 * unit,
+                16 * unit,
+            ],
+            tile: s.code,
+            attr: 0,
+        })
+        .collect()
 }
 
 fn sprites_of(oam: &[u8; 256], tall: bool) -> Vec<Oam> {
@@ -436,7 +460,7 @@ fn sprites_of(oam: &[u8; 256], tall: bool) -> Vec<Oam> {
         .filter(|s| s[0] < 0xEF)
         .map(|s| Oam {
             rect: [i64::from(s[3]), i64::from(s[0]) + 1, 8, h],
-            tile: s[1],
+            tile: u16::from(s[1]),
             attr: s[2],
         })
         .collect()
@@ -512,8 +536,8 @@ fn classify(
     o: &Frame,
     m: &Frame,
     shown: &Shown,
-    oam: &[u8; 256],
-    tall: bool,
+    sprites: &[Oam],
+    line_limit: Option<u32>,
     looks: &Looks,
     before: Option<&[bool]>,
     art: &Art,
@@ -530,7 +554,6 @@ fn classify(
             pixels: r.pixels,
         });
     };
-    let sprites = sprites_of(oam, tall);
     // The sprites' boxes are in the model's frame moved by the
     // background's shift when that was the nearer.
     let d = match (bg.shift, sp.shifted) {
@@ -585,7 +608,7 @@ fn classify(
                 );
                 continue;
             }
-            let tiles: BTreeSet<u8> = theirs.iter().map(|s| s.tile).collect();
+            let tiles: BTreeSet<u16> = theirs.iter().map(|s| s.tile).collect();
             let t: Vec<String> = tiles.iter().take(4).map(|t| format!("{t:02x}")).collect();
             push(
                 "drawn in one game only",
@@ -598,12 +621,14 @@ fn classify(
         if sprite_pixels(o, br) == 0 {
             // Past the eight sprites a line, or shown on the frame before.
             let mut lines = BTreeMap::new();
-            for s in &sprites {
+            for s in sprites {
                 for y in s.rect[1]..s.rect[1] + s.rect[3] {
                     *lines.entry(y).or_insert(0u32) += 1;
                 }
             }
-            let full = (br[1]..br[1] + br[3]).any(|y| lines.get(&y).is_some_and(|n| *n > 8));
+            let full = line_limit.is_some_and(|limit| {
+                (br[1]..br[1] + br[3]).any(|y| lines.get(&y).is_some_and(|n| *n > limit))
+            });
             let was = before.is_some_and(|bf| {
                 let f = Frame {
                     w: o.w,
@@ -1195,8 +1220,8 @@ mod tests {
             o,
             m,
             &shown,
-            &oam(at),
-            false,
+            &sprites_of(&oam(at), false),
+            Some(8),
             &Looks::default(),
             None,
             &Art::empty(),
@@ -1263,6 +1288,43 @@ mod tests {
         assert_eq!(
             got,
             vec![("drawn in one game only".into(), "rebuilt only: hero".into())]
+        );
+    }
+
+    /// A made-up arcade sprite RAM with one sprite (picture 0x2A) placed
+    /// over the original's sprite pixels: the box is the board's sprite,
+    /// named by its picture, where an arcade original had no sprite table
+    /// and every box fell to "the model draws a sprite no body owns".
+    #[test]
+    fn an_arcade_board_s_sprite_list_names_the_original_s_sprites() {
+        let mut ram = [0u8; 0x200];
+        // y, flags, picture, x: placed at (7 - 3, 241 - 235) = (4, 6) in
+        // the game's units, (8, 12) on the screen.
+        ram[..4].copy_from_slice(&[235, 0, 0x2a, 7]);
+        let sprites = arcade_sprites(&ram);
+        assert_eq!(sprites.len(), 1);
+        assert_eq!((sprites[0].rect, sprites[0].tile), ([8, 12, 32, 32], 0x2a));
+        let o = frame(&[(10, 12, false)], 0);
+        let m = frame(&[], 0);
+        let got: Vec<(String, String)> = classify(
+            &o,
+            &m,
+            &Shown::default(),
+            &sprites,
+            None,
+            &Looks::default(),
+            None,
+            &Art::empty(),
+        )
+        .into_iter()
+        .map(|f| (f.group.to_owned(), f.detail))
+        .collect();
+        assert_eq!(
+            got,
+            vec![(
+                "drawn in one game only".into(),
+                "original only: tiles 2a".into()
+            )]
         );
     }
 

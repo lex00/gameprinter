@@ -4,7 +4,8 @@
 root opens it (crates/gp-cli/src/serve/pages.rs mounts the page's server,
 crates/gp-cli/src/mechanic/server.rs). `gp mechanic start GAME [MECHANIC]`
 opens its CLIPS tab, starting `gp serve` when none answers; `--own-server`
-serves the page alone on 127.0.0.1:7712 as before. The page is `mechanic/`
+serves the page alone on 127.0.0.1:7712 as before (the first screen at
+`/start/` is gp serve's, so there the logo opens the game's page). The page is `mechanic/`
 in this repo, plain HTML, CSS and JavaScript, game-printer's page
 (docs/contributing-mechanics.md there) with its tabs by phase:
 
@@ -32,8 +33,8 @@ in this repo, plain HTML, CSS and JavaScript, game-printer's page
 - THEMES: the game's themes in the person's registry and its theme kit.
 
 The header picks the game (every game gp serve has; gp serve's root opens
-the one opened last, kept in `$GP_HOME/work/serve/last-game`, else lists
-them) and, for a game whose roms.toml names several sets (Tapper's tapper,
+the one opened last, kept in `$GP_HOME/work/serve/last-game`, else
+[the first screen](#the-first-screen), which lists them) and, for a game whose roms.toml names several sets (Tapper's tapper,
 rbtapper, tapperg, sutapper and tappera; Donkey Kong's OE and JU), the set:
 the ones in `$GP_ROM_DIR` are listed, and choosing one plays it, draws the
 model with that set's pictures (lifted by the same asset map into
@@ -41,9 +42,8 @@ model with that set's pictures (lifted by the same asset map into
 (`$GP_HOME/mechanics/GAME/rom-set`). `gp mechanic start --rom SET|FILE` and
 `gp serve --rom GAME=SET|FILE` choose it too.
 
-With no game in the games checkout, gp serve's root is a first screen that
-leads into the conversation: what Game Printer does in two sentences (the
-model and the template), what the person needs (their own copy of the
+With no game in the games checkout, the first screen's PORT A GAME I OWN
+leads into the conversation: what the person needs (their own copy of the
 game, as a file), and what to say to their agent, with the next-step
 loop's own sentences for stages 0 to 2 (crate::next). It looks again every
 5 s and opens the game once the agent has brought one in. Page text names
@@ -68,6 +68,22 @@ status line's answer (`waits_for_yes`, the asks `gp_run` leaves when it
 refuses a command for want of a yes, docs/mcp.md "Every command"), and a
 press writes the answer (`POST /api/asks/ID`). A yes shows as YOU SAID YES
 until the agent uses it, once.
+
+The agent's proposals are cards there too, one at a time with how many
+wait, each with a box for words, ACCEPT and REJECT, and PUT THE OLD ONE
+BACK once accepted (docs/mcp.md "Every command"). A picture for the
+person's theme (YOUR AGENT PROPOSES A PICTURE, `mechanic/picture-card.js`)
+shows the picture now and the new one. A change to how the person's copy
+sounds (YOUR AGENT PROPOSES A NEW SOUND, `mechanic/sound-card.js`, in the
+picture card's look) has PLAY WHAT YOU HAVE and PLAY THE NEW ONE, which
+play the first seconds of the song as it is and with the change, one at a
+time (`GET /api/sounds/ID/old.wav`, `new.wav`); the answer goes to
+`POST /api/sounds/ID`. The same card takes a sound for one role of the
+person's large-art theme (a proposal of kind `role`, from `gp theme sound
+propose DIR --role ROLE --wav FILE`, issue #30): it names the theme, the
+role and its take, plays the role's sound as it is and the new one whole,
+and says NO SOUND THERE YET, with the button off, when the theme has no
+file there (a new take, or a role with no sound yet).
 
 When the agent changes the game through `gp_run` while the page is open
 (any command that writes, but the talk and the log, which redraw on their
@@ -104,6 +120,15 @@ the page:
   on the rebuilt game from the same moment, with the lockstep panel and
   its curves, the moments, the scenario ladder, and pause, point and tell
   (what the person says there is their turn in the mechanic's talk).
+  Its free play button plays the original yourself, with save points (F5,
+  F8) and clips from them: on an NES game in `gp_play.wasm`, on an arcade
+  game on its board in `gp_arcade_play.wasm` (gp serve's
+  `/api/play/gp_arcade_play.wasm`, or `$GP_ARCADE_PLAY_WASM`) at the
+  board's 512 by 480 and 30 frames a second, keyed as a cabinet (5 a
+  coin, 1 the start). The server rebuilds each save point natively on the
+  same player (`serve/freeplay.rs`'s `Live`) and checks its hashes
+  against the page's; an arcade clip's log is the board's
+  (`gp-arcade-input 0`).
 - DETAILS in the header, on every tab (`?details=1`): a drawer with the
   trace inspector, a store recording's frames drawn by each view (RAM
   heatmap and watch, box selection and resolution card, OAM, nametables,
@@ -111,6 +136,70 @@ the page:
 
 With no editor build, or on a server of the page's own, each says so.
 The sections below keep the old names for CLIPS's two views and PLAY.
+
+## The first screen
+
+`/start/` (and gp serve's root when no game or copy was opened yet) asks
+what the person wants to do (issue #5). It is `mechanic/start.html` with
+`mechanic/journeys/` (start.js, journey.js, journeys.css), served by
+`crates/gp-cli/src/serve/journeys.rs`. The game page's GAME PRINTER logo
+opens it. It says once, at the top, what the model is (the game's rules
+as a plain-text file) and what a template is (a game's rules without its
+pictures, that a new game is built on), then offers three choices:
+
+- PORT A GAME I OWN: what to bring and what to say to the agent (above),
+  or the games under way to carry on with.
+- MAKE A THEME FOR A GAME: the game (a game here, or one of the person's
+  new games), a name and the style in words; MAKE MY THEME runs
+  `gp theme look new` into `$GP_HOME/work/themes/NAME/`, named
+  `local/NAME` (NAME from the title: lowercase letters, digits and `-`).
+- MAKE A NEW GAME: the templates (the open ones), and a name; MAKE MY GAME
+  runs `template_fork` into `$GP_HOME/work/mcp/NAME/`.
+
+Under them, CARRY ON lists every copy (a theme or a new game: its name,
+the game or template it came from, when it last changed, its step and
+whose turn it is) with CARRY ON, and every game being ported with a link
+to its page. There is no delete: a copy deleted is work lost, and the
+folders stay where the tools made them.
+
+A copy opens on the same page at `/start/?copy=KIND/NAME`, at its step:
+where it stands and the one next step with whose turn it is (YOU, YOUR
+AGENT, THE TOOLS), the agent's cards (YES and NO, and the pictures and
+sound changes it proposes with ACCEPT and REJECT), and its six steps, the
+one now open.
+The steps, what each needs and when each is the step are in
+[progress.md](progress.md#copies-and-the-other-journeys); the answer is
+the same one `gp progress --next --copy` and the MCP tool `next` give, so
+the page and the agent agree on whose turn it is. gp serve's root opens
+the copy opened last when it was opened after the last game.
+
+Each button runs a gp command through the agent's own `gp_run` (or
+`template_fork` and `build_publish`), marked as the person's, so the
+policy, the agent's log and the running record are the same as for the
+agent. None spends money, publishes or deletes. SEE IT IN THE GAME runs
+`gp theme look play --background` on the theme's game, whichever it is: a
+ported game opens in the page that plays any game by name, where the
+person loads their ROM, and a new game made from a template opens from its
+own files with no ROM; an arcade game is refused in words, since the page
+plays an arcade game but can't show a theme on one yet. The theme's share step
+shows the share link and the words of the publish request to send by
+hand. A new game's last step, Play and share, has MAKE A SHARE LINK:
+`gp game share` makes the copy a package (`local/NAME`, a new version each
+time), builds it with its own pictures and no ROM (build-page.sh), and
+publishes it into the person's own registry on this computer
+(`$GP_HOME/work/share/registry`), after `gp registry publish` has compared
+it with every ROM in `$GP_ROM_DIR`; the page goes beside it
+(`$GP_HOME/work/share/page`). gp serve serves the two at `/share/`, so the
+step's link, `/share/p?g=local/NAME&look=ID`, plays the game with no ROM asked for.
+Every theme made for the game in its look step goes in the package, offered
+in Settings, and the link opens in the one changed last (`gp game share
+--look` names another, or `own` for the game's own pictures); with no theme
+the link has no `look`.
+The step says in one sentence what it takes for other people to open it:
+the page and the registry put online together, on a host that sends the
+page's own headers. Nothing is sent anywhere from the page. The THEMES tab of a game stays where a ported game's themes are
+fitted and reviewed; the theme journey reuses its picture cards
+(`mechanic/picture-card.js`).
 
 ## Layout
 
@@ -174,10 +263,15 @@ built again in the background when the model, its mapping, profiles, hooks,
 module or lifted assets, or the preview's crates, change. A game with hooks
 plays its module (`--module`, or `$GP_HOME/work/modules/GAME.wasm`). The
 server's pages are cross-origin isolated, since the module runs in a Worker
-with a shared buffer.
+with a shared buffer. The game's frame itself (the rebuild's preview, a
+new game built to play, and `/share/`) goes out under the public page's
+own headers, its Content-Security-Policy among them
+(scripts/web/public/_headers, read by `gp_mcp::page_headers`), so a game
+plays here under the same rules as on the public page.
 
-An arcade game has no model yet: REVIEW REBUILD and FREE PLAY say so in
-words and nothing plays.
+An arcade game's model plays the same way (issue #3), keyed as a cabinet,
+its bodies drawn by tile kind or, where the model names them, with its
+board's own art (docs/formats/board-art.md).
 
 ## States and keys
 
@@ -272,6 +366,13 @@ as before.
 
 | Route | What |
 |---|---|
+| `GET /start/`, `/start/FILE` | The first screen and its files |
+| `GET /api/journeys` | The games, the templates, every copy with its step, and the copy opened last |
+| `POST /api/journeys/start` | `{journey: "theme", game, game_kind?, title, style}` or `{journey: "new", template, name}`: makes the copy |
+| `GET /api/journeys/KIND/NAME` | A copy's answer (steps, whose turn), its buttons' last runs and its pictures |
+| `POST /api/journeys/KIND/NAME/set` | `{style}`, or `{step, done}` for a step only the person finishes |
+| `GET`, `POST /api/journeys/KIND/NAME/do/WHICH` | A button's last run, or starts it: `look-check`, `look-play`, `shots`; `build`, `render`, `verify`, `undo`. `verify` (CHECK THE STAGE) runs `gp level verify` on the copy's stage, a girder or tile stage alike (Moss Hop's is one); when it refused a stage, the page says what the tools said and keeps the button, so a later gp can check it |
+| `GET /api/journeys/KIND/NAME/file/...` | `stage.png`, `shots/...`, and `play/...` (the new game built to play) |
 | `GET /api/clips/N.rebuild.json` | REVIEW REBUILD's clip: each compared frame's pictures, agreement, entities and differing measures, and the draws |
 | `GET /api/clips/N/review.json`, `/api/clips/N/review/NAME.png` | The same review as kept |
 | `GET /api/rebuild/scores` | The scoring status, `$GP_HOME/work/refine/GAME/status.json`, for the clip picker |

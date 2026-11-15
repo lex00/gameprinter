@@ -88,13 +88,12 @@ A clip no number fixes can go to a clip agent: Claude, in a worktree of gameprin
 `gp game fetch` puts a published version in a folder of its own. The folder has to be outside any git repo.
 
 ```sh
-curl -s https://raw.githubusercontent.com/lex00/gp-registry/main/catalog.toml
-gp game fetch lex00/donkey-kong@1.0.9 --id THE_ID_FROM_THE_CATALOG \
+gp game fetch lex00/donkey-kong@1.0.9 \
   --from https://raw.githubusercontent.com/lex00/gp-registry/main \
   --into ~/my-donkey-kong --rom-dir "$GP_ROM_DIR"
 ```
 
-It checks every file against its hash and lifts the art from your ROM into the folder. That folder stays on your machine.
+With no `--id`, it takes the id the registry's index lists for that version and prints it, saying it came from the index. With no `@VERSION` either, it takes the newest version that isn't yanked (from a registry folder on your machine) or the catalog's latest (over https). A version yanked for security is fetched only with `--id`. It checks every file against its hash and lifts the art from your ROM into the folder. That folder stays on your machine.
 
 `gp model gate ~/my-donkey-kong -m "what you changed"` then gates your edits in place, keeping its history in a private repo of its own. To send the work back, make the same change in a fork as above.
 

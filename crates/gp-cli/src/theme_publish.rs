@@ -1514,7 +1514,12 @@ pub(crate) fn recheck(a: &RecheckArgs, paths: &Paths, rec: &mut RunRecorder) -> 
         }
     );
     let mut problems: Vec<String> = Vec::new();
+    // Each model's result and why, as the index would record them if it
+    // had a key for them (docs/theme-publishing.md, "Recheck"); kept in
+    // the recheck's work folder meanwhile.
+    let mut kept: BTreeMap<String, (String, String)> = BTreeMap::new();
     for (m, why) in &not_checked {
+        kept.insert(m.clone(), ("unchecked".into(), why.clone()));
         let _ = writeln!(text, "{m} not checked: {why}");
         if named.is_some() {
             problems.push(format!("{m} not checked: {why}"));
@@ -1533,6 +1538,17 @@ pub(crate) fn recheck(a: &RecheckArgs, paths: &Paths, rec: &mut RunRecorder) -> 
             r.template,
             f.join(", ")
         ));
+        kept.insert(
+            r.model.clone(),
+            (
+                "fail".into(),
+                format!(
+                    "refused by its {} check (template {})",
+                    f.join(", "),
+                    r.template
+                ),
+            ),
+        );
         results.insert(
             r.model.clone(),
             json!({ "result": "fail", "template": r.template, "rom_sha256": r.rom_hash, "failed": f }),
@@ -1567,12 +1583,18 @@ pub(crate) fn recheck(a: &RecheckArgs, paths: &Paths, rec: &mut RunRecorder) -> 
                     ),
                     _ => String::new(),
                 };
+                let why = format!(
+                    "the look drawn here differs from the maker's: the maker's ROM or gp differs (recorded {}, drawn here {}{roms})",
+                    short(h),
+                    short(&look.hash)
+                );
                 problems.push(format!(
                     "the look drawn here differs from the maker's for {}: the maker's ROM or gp differs (recorded {}, drawn here {}{roms}); not added",
                     r.model,
                     short(h),
                     short(&look.hash)
                 ));
+                kept.insert(r.model.clone(), ("differs".into(), why));
                 results.insert(
                     r.model.clone(),
                     json!({
@@ -1585,6 +1607,13 @@ pub(crate) fn recheck(a: &RecheckArgs, paths: &Paths, rec: &mut RunRecorder) -> 
         };
         let (record, _, _) = passed(r, &rb.lines)?;
         let _ = writeln!(text, "{}", checks_text(&r.model, &record));
+        kept.insert(
+            r.model.clone(),
+            match rb.fails.get(&r.model) {
+                Some(_) => ("fail".into(), "refused by the ROM-bytes check".into()),
+                None => ("pass".into(), checks_text(&r.model, &record)),
+            },
+        );
         let rom_name = r
             .rom
             .as_ref()
@@ -1607,15 +1636,17 @@ pub(crate) fn recheck(a: &RecheckArgs, paths: &Paths, rec: &mut RunRecorder) -> 
     for l in &lines {
         let _ = writeln!(text, "{l}");
     }
+    let record = keep_recheck(&work, (&game, &e), a.dry_run, problems.is_empty(), &kept)?;
     if !problems.is_empty() {
         return Ok(Outcome {
             json: json!({
                 "rechecked": false, "game": game, "theme": e.id, "package": e.package,
-                "models": results, "problems": problems,
+                "models": results, "problems": problems, "record": record,
             }),
             text: format!(
-                "{text}{}\nnothing added to the index of {game}",
-                problems.join("\n")
+                "{text}{}\nnothing added to the index of {game}; each model's result and why are kept in {} (the index has no key for a recheck's reasons yet)",
+                problems.join("\n"),
+                record.display()
             ),
             exit: 1,
         });
@@ -1641,7 +1672,7 @@ pub(crate) fn recheck(a: &RecheckArgs, paths: &Paths, rec: &mut RunRecorder) -> 
     let mut j = json!({
         "rechecked": true, "dry_run": a.dry_run, "game": game, "theme": e.id,
         "package": e.package, "models": results, "entry": entry_json(&entry),
-        "index": ipath, "index_line": line,
+        "index": ipath, "index_line": line, "record": record,
     });
     if a.dry_run {
         let _ = writeln!(text, "index line it would write in {}:", ipath.display());
@@ -1691,6 +1722,41 @@ pub(crate) fn recheck(a: &RecheckArgs, paths: &Paths, rec: &mut RunRecorder) -> 
         text,
         exit: u8::from(!landed),
     })
+}
+
+/// The file a recheck keeps each model's result and why in, in its work
+/// folder ($GP_HOME/work/theme-recheck/GAME/THEME/), written by every
+/// recheck that checked or passed over a model, refused or not.
+pub(crate) const RECHECK_RECORD: &str = "last-recheck.json";
+
+/// Writes [`RECHECK_RECORD`]: when, the theme and package, whether the
+/// recheck added its models, and each model's result (`pass`, `fail`,
+/// `differs` or `unchecked`) with why. `index_text` is the value a theme
+/// line's `rechecks` key would hold (the addition proposed in
+/// docs/theme-publishing.md, "Recheck"): a line a model, `MODEL RESULT:
+/// WHY`. The index itself is left as it is.
+fn keep_recheck(
+    work: &Path,
+    (game, e): (&str, &gp_package::index::Theme),
+    dry_run: bool,
+    added: bool,
+    kept: &BTreeMap<String, (String, String)>,
+) -> Result<PathBuf> {
+    let at = crate::registry::utc(0)?;
+    let index_text: Vec<String> = kept
+        .iter()
+        .map(|(m, (r, why))| format!("{m} {r}: {}", why.replace('\n', " ")))
+        .collect();
+    let v = json!({
+        "at": at, "game": game, "theme": e.id, "package": e.package,
+        "dry_run": dry_run, "added": added && !dry_run,
+        "models": kept.iter().map(|(m, (r, why))| (m.clone(), json!({ "result": r, "why": why }))).collect::<serde_json::Map<_, _>>(),
+        "index_text": index_text.join("\n"),
+    });
+    let f = work.join(RECHECK_RECORD);
+    fs::write(&f, serde_json::to_string_pretty(&v)? + "\n")
+        .with_context(|| f.display().to_string())?;
+    Ok(f)
 }
 
 /// The geometry check's line (docs/theme-kit.md, "Gameplay geometry"),
@@ -1961,6 +2027,43 @@ pub(crate) fn list(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A recheck's record holds each model's result and why, refused or
+    /// not, and the text a `rechecks` key would hold: made-up results.
+    #[test]
+    fn a_recheck_keeps_each_models_result_and_why() {
+        let d = tempfile::tempdir().unwrap();
+        let e = gp_package::index::Theme {
+            id: "paper".into(),
+            package: "ab".repeat(32),
+            ..Default::default()
+        };
+        let mut kept = BTreeMap::new();
+        kept.insert(
+            "moss_b".to_owned(),
+            (
+                "fail".to_owned(),
+                "refused by its readability check (template moss-b)".to_owned(),
+            ),
+        );
+        kept.insert(
+            "moss".to_owned(),
+            (
+                "unchecked".to_owned(),
+                "no moss ROM on this machine".to_owned(),
+            ),
+        );
+        let f = keep_recheck(d.path(), ("moss", &e), false, false, &kept).unwrap();
+        assert_eq!(f, d.path().join(RECHECK_RECORD));
+        let v: Value = serde_json::from_str(&fs::read_to_string(&f).unwrap()).unwrap();
+        assert_eq!(v["theme"], "paper");
+        assert_eq!(v["added"], false);
+        assert_eq!(v["models"]["moss_b"]["result"], "fail");
+        assert_eq!(
+            v["index_text"],
+            "moss unchecked: no moss ROM on this machine\nmoss_b fail: refused by its readability check (template moss-b)"
+        );
+    }
 
     #[test]
     fn the_scan_refuses_what_a_package_may_not_hold() {

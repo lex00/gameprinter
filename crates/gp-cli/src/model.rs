@@ -117,11 +117,19 @@ pub fn check_in(
         }
     }
     let mapping_path = dir.join(gp_interp::mapping::MAPPING_FILE);
-    if let Ok(mt) = fs::read_to_string(&mapping_path)
-        && let Ok(mapping) = gp_interp::mapping::Mapping::parse(&mt)
-    {
-        for (path, message) in screen_copies(&model, &mapping) {
-            problems.push(problem(MODEL_FILE, &path, &message));
+    if let Ok(mt) = fs::read_to_string(&mapping_path) {
+        // The mapping beside the model is checked too: a mapping that
+        // doesn't parse is a problem in its own file, in its own words.
+        match gp_interp::mapping::Mapping::parse(&mt) {
+            Ok(mapping) => {
+                for (path, message) in screen_copies(&model, &mapping) {
+                    problems.push(problem(MODEL_FILE, &path, &message));
+                }
+                for (path, message) in presentation_groups(&model, &mapping) {
+                    problems.push(problem(gp_interp::mapping::MAPPING_FILE, &path, &message));
+                }
+            }
+            Err(e) => problems.push(problem(gp_interp::mapping::MAPPING_FILE, "", &e)),
         }
     }
     let mut checked_slots = Vec::new();
@@ -129,8 +137,9 @@ pub fn check_in(
         let map_text = read(&adir.join(MAP_FILE))?;
         let found = if gp_assets::arcade::is_arcade(&map_text) {
             // An arcade lift: its slots name assets by the board's regions,
-            // and no slot kind has an arcade format yet, so a slot is held
-            // to the asset being there.
+            // each held to the asset being there in a format its kind
+            // takes (`rows` takes `byte-rows`, a board slot its `mcr-`
+            // format).
             let map = gp_assets::arcade::ArcadeMap::parse(&map_text)
                 .with_context(|| adir.join(MAP_FILE).display().to_string())?;
             check_arcade_slots(&model, &map, &mut checked_slots)
@@ -294,7 +303,8 @@ pub fn fmt(dir: &Path, check: bool) -> Result<Outcome> {
     })
 }
 
-/// Each slot filled from an arcade map's source names an asset the map has.
+/// Each slot filled from an arcade map's source names an asset the map has,
+/// in a format the slot's kind takes.
 fn check_arcade_slots(
     model: &Model,
     map: &gp_assets::arcade::ArcadeMap,
@@ -305,13 +315,22 @@ fn check_arcade_slots(
         let Some(from) = slot.from.as_ref().filter(|f| f.source == map.source) else {
             continue;
         };
-        if map.assets.iter().any(|a| a.name == from.asset) {
-            checked.push(name.clone());
-        } else {
-            out.push((
+        match map.assets.iter().find(|a| a.name == from.asset) {
+            Some(a) if !slot.kind.map_formats().contains(&a.format.name()) => out.push((
+                format!("assets.{name}.from"),
+                format!(
+                    "`{}` is {}, but a {} slot holds {}",
+                    from.asset,
+                    a.format.name(),
+                    slot.kind.name(),
+                    slot.kind.map_formats().join(" or ")
+                ),
+            )),
+            Some(_) => checked.push(name.clone()),
+            None => out.push((
                 format!("assets.{name}.from"),
                 format!("{} has no asset named `{}`", map.source, from.asset),
-            ));
+            )),
         }
     }
     out
@@ -320,6 +339,59 @@ fn check_arcade_slots(
 /// Sprite clips and blinks keyed on a counter the state mapping reads from
 /// the screen (the name table or OAM): the screen shows a frame after the
 /// game's RAM, so the model's picture would show a frame late.
+/// A slot group that is only drawn (`presentation = true`, feature
+/// `slots.group.presentation`) is loaded from the original's state at a
+/// clip's start and never compared. In free play nothing loads it, so the
+/// model must make its bodies itself: each of its kinds' entities is in
+/// the model and has a hook of its own (`ext`), whose rules keep it, or is
+/// placed by a level's `spawn`, for a thing that stands still.
+fn presentation_groups(
+    model: &Model,
+    mapping: &gp_interp::mapping::Mapping,
+) -> Vec<(String, String)> {
+    let Some(slots) = &mapping.slots else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (gi, g) in slots.groups.iter().enumerate() {
+        if !g.presentation {
+            continue;
+        }
+        let at = format!(
+            "slots.group[{gi}]{}",
+            g.name.as_ref().map_or(String::new(), |n| format!(" ({n})"))
+        );
+        for k in &g.kinds {
+            if k.refuse.is_some() || k.leave.is_some() {
+                continue;
+            }
+            let name = &k.entity;
+            let Some(e) = model.entities.get(name) else {
+                out.push((
+                    at.clone(),
+                    format!(
+                        "the group is drawn from the model's `{name}` bodies, and the model has no entity `{name}`"
+                    ),
+                ));
+                continue;
+            };
+            let placed = model
+                .levels
+                .values()
+                .any(|l| l.core.spawn.iter().any(|s| &s.entity == name));
+            if e.core.ext.is_none() && !placed {
+                out.push((
+                    at.clone(),
+                    format!(
+                        "the group is presentation only: a clip's start loads its `{name}` bodies from the original and no run compares them, but in free play there is no original, so nothing would make them. Keep the model the source of truth: give the entity `{name}` a hook (`ext`) whose rules keep it, or place it in a level's `spawn` list if it stands still. A thing the model plays and can't keep that way belongs in a group that is compared"
+                    ),
+                ));
+            }
+        }
+    }
+    out
+}
+
 fn screen_copies(model: &Model, mapping: &gp_interp::mapping::Mapping) -> Vec<(String, String)> {
     let screen: BTreeMap<&str, &str> = mapping
         .fields
@@ -477,4 +549,97 @@ fn check_slots(model: &Model, map: &AssetMap, checked: &mut Vec<String>) -> Vec<
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A made-up model: a player, a still `post` placed by the level, a
+    /// `bird` with a hook, and a `cloud` with neither.
+    const MODEL: &str = r#"
+[model]
+schema = "0.4"
+name = "cab"
+title = "Cab"
+description = "A made-up arcade game"
+source = "cab"
+view = "side"
+frame_rate = "30"
+systems = ["rules", "spawn", "platformer.player", "platformer.enemies"]
+start_level = "main"
+
+[model.extensions]
+platformer = "0.4"
+
+[input]
+device = "arcade"
+
+[input.actions]
+left = "left"
+
+[entities.player]
+role = "player"
+size = [16, 16]
+hitbox = { x = 0, y = 0, w = 16, h = 16 }
+
+[entities.post]
+role = "npc"
+size = [16, 16]
+hitbox = { x = 0, y = 0, w = 16, h = 16 }
+
+[entities.bird]
+role = "npc"
+ext = "bird"
+size = [16, 16]
+hitbox = { x = 0, y = 0, w = 16, h = 16 }
+
+[entities.cloud]
+role = "npc"
+size = [16, 16]
+hitbox = { x = 0, y = 0, w = 16, h = 16 }
+
+[levels.main]
+empty = true
+size = [32, 30]
+tile_size = 16
+
+[[levels.main.spawn]]
+entity = "post"
+x = 8
+y = 8
+"#;
+
+    fn mapping(entity: &str) -> gp_interp::mapping::Mapping {
+        gp_interp::mapping::Mapping::parse(&format!(
+            "schema = 22\nmodel = \"cab\"\nsource = \"cab\"\nalign = \"polled\"\n\n\
+             [[field]]\npath = \"entities.player[0].x\"\nram = [0x40]\n\n\
+             [slots]\ncount = 1\nactive = 0x10\n\n[[slots.level]]\nlevel = \"main\"\nwhen = \"ram[0x0021] == 0\"\n\n\
+             [[slots.field]]\npath = \"x\"\nram = [0x30]\n\n[[slots.kind]]\nentity = \"player\"\nids = [0]\n\n\
+             [[slots.group]]\nname = \"ends\"\ncount = 2\nactive = 0x40\npresentation = true\n\n\
+             [[slots.group.field]]\npath = \"x\"\nram = [0x50]\n\n\
+             [[slots.group.kind]]\nentity = \"{entity}\"\nids = [0]\n"
+        ))
+        .unwrap()
+    }
+
+    /// A presentation group is allowed where the model makes its bodies
+    /// itself (a still thing a level places, or an entity with a hook), and
+    /// a person is told in words why one the model can't make is refused.
+    #[test]
+    fn a_presentation_group_needs_the_model_to_make_its_bodies() {
+        let model = Model::parse(MODEL).unwrap();
+        assert!(presentation_groups(&model, &mapping("post")).is_empty());
+        assert!(presentation_groups(&model, &mapping("bird")).is_empty());
+        let got = presentation_groups(&model, &mapping("cloud"));
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].0, "slots.group[0] (ends)");
+        assert!(
+            got[0].1.contains("in free play there is no original"),
+            "{}",
+            got[0].1
+        );
+        let got = presentation_groups(&model, &mapping("ghost"));
+        assert!(got[0].1.contains("no entity `ghost`"), "{got:?}");
+    }
 }

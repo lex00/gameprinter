@@ -80,4 +80,4 @@ A game you make can't use another game's art, music, levels, characters or name.
 
 ## Not built yet
 
-A way to start a new game from nothing, a catalogue of game mechanics to build from, and publishing your game on a page others can open.
+A way to start a new game from nothing, a catalogue of game mechanics to build from, and a link to your game that people on other computers can open without your help. Your game's last step, Play and share, makes a share link today: it puts the game in a registry of your own on your computer, with a page that plays it by its name and asks for no ROM. For anyone else to open it, that page and your registry have to be put online together; the public page's own list of games takes a game only when its keepers add it.

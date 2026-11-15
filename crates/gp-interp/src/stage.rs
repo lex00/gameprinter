@@ -437,20 +437,28 @@ pub struct Measures {
     pub route_plan: u32,
     pub route_frames: Option<u32>,
     pub route_holds: Vec<Hold>,
+    /// Whether a direct route to the top girder was found (an empty
+    /// [`Measures::route`] is one when play starts on the top girder).
+    pub routed: bool,
     /// Pixels walked on each girder by the route.
     pub route_walk: BTreeMap<usize, i64>,
+    /// The level measured, an index into `Spec::levels`.
+    pub level: usize,
+    /// The stages ended at their goals on the way to it ([`enter`]): none
+    /// when play starts on it.
+    pub entered: Vec<String>,
     pub lives: Vec<Life>,
     pub windows: Vec<Window>,
     pub notes: Vec<String>,
 }
 
-fn player(spec: &Spec, w: &World) -> Option<usize> {
+pub(crate) fn player(spec: &Spec, w: &World) -> Option<usize> {
     w.bodies
         .iter()
         .position(|b| spec.kinds[b.kind].role == Role::Player)
 }
 
-fn masks(spec: &Spec, kind: usize) -> (u8, u8, u8, u8) {
+pub(crate) fn masks(spec: &Spec, kind: usize) -> (u8, u8, u8, u8) {
     let k = &spec.kinds[kind];
     let m = |a: usize| spec.actions[a].mask;
     let (left, right) = k
@@ -470,7 +478,7 @@ fn put_away(w: &mut World, enemies: &[usize]) {
     }
 }
 
-fn playing(w: &World, o: &Options) -> bool {
+pub(crate) fn playing(w: &World, o: &Options) -> bool {
     o.playing
         .is_none_or(|(m, s)| w.machines.get(m).is_some_and(|x| x.state == s))
 }
@@ -508,6 +516,130 @@ fn ready(spec: &Variant, o: &Options, start: u64) -> Result<World, String> {
         spec.step(&mut w, pad);
     }
     Err("the player never moved in 4000 frames from power-on".into())
+}
+
+/// Whether a held direction moves the living player now: play can start.
+fn moves_now(spec: &Variant, w: &World, o: &Options) -> bool {
+    if !playing(w, o) {
+        return false;
+    }
+    let mut t = w.clone();
+    let Some(p) = player(spec, &t) else {
+        return false;
+    };
+    let (_, right, _, _) = masks(spec, t.bodies[p].kind);
+    let x0 = t.bodies[p].x;
+    for _ in 0..6 {
+        spec.step(&mut t, right);
+    }
+    player(spec, &t).is_some_and(|q| t.bodies[q].x != x0 && t.bodies[q].alive)
+}
+
+/// The world on the first frame play can start on `level`, reached as the
+/// game reaches it: power-on and Start pressed at `start` as [`ready`]
+/// plays, then, while another stage plays, that stage ended at its goal
+/// (the hero put where the level's goal is, so the model's own goal rule,
+/// its clear and the next stage's setup run, in the model's stage order),
+/// until `level` plays. With the world, the stages ended on the way, in
+/// order; none when play starts on `level`.
+///
+/// Nothing here is read from a ROM or a recording: the stages before are
+/// passed by the model's own rules from the place of its goal. A stage
+/// with no goal (one ended some other way, as Donkey Kong's 100m by its
+/// rivets) can't be passed, and is said to be the reason.
+pub fn enter(
+    spec: &Variant,
+    o: &Options,
+    level: usize,
+    start: u64,
+) -> Result<(World, Vec<String>), String> {
+    let mut w = ready(spec, o, start)?;
+    let mut passed: Vec<String> = Vec::new();
+    let name = |l: usize| spec.levels[l].name.clone();
+    // Each stage at most once, and once more for a stage order that
+    // starts on a stand-in.
+    for _ in 0..=spec.levels.len() {
+        if w.level == level {
+            return Ok((w, passed));
+        }
+        let here = w.level;
+        end_at_goal(spec, &mut w).map_err(|e| {
+            format!(
+                "level {} is reached only by finishing {} first, and {e}",
+                name(level),
+                name(here)
+            )
+        })?;
+        passed.push(name(here));
+        let mut started = false;
+        for _ in 0..6000 {
+            if w.level != here && w.frame % 4 == 0 && moves_now(spec, &w, o) {
+                started = true;
+                break;
+            }
+            spec.step(&mut w, 0);
+        }
+        if !started {
+            return Err(format!(
+                "after {} was ended at its goal, no stage started in 6000 frames",
+                name(here)
+            ));
+        }
+    }
+    Err(format!(
+        "the model's stage order never comes to level {} from power-on (it played {})",
+        name(level),
+        passed.join(", ")
+    ))
+}
+
+/// Ends the stage being played the way a player does: the hero where the
+/// level's goal is, until the goal is reached (`goal.reached`).
+fn end_at_goal(spec: &Variant, w: &mut World) -> Result<(), String> {
+    let l = &spec.levels[w.level];
+    let (gx, under) = (l.goal_x, l.goal_under);
+    if gx.is_none() && under.is_none() {
+        return Err(format!(
+            "{} has no goal to reach (it ends some other way), so this check can't play past it",
+            l.name
+        ));
+    }
+    let p = player(spec, w).ok_or("there is no player")?;
+    let h = spec.kinds[w.bodies[p].kind].size[1];
+    for _ in 0..8 {
+        let b = &mut w.bodies[p];
+        if let Some(g) = gx
+            && b.x < g
+        {
+            b.x = g;
+        }
+        if let Some(u) = under {
+            let above = u.sub(h).max(Fx::ZERO);
+            if b.y > above {
+                b.y = above;
+            }
+        }
+        b.vx = Fx::ZERO;
+        b.vy = Fx::ZERO;
+        let ev = spec.step(w, 0);
+        if ev.iter().any(|e| e.kind == EventKind::GOAL_REACHED) {
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "the hero put at {}'s goal didn't reach it (the game's code keeps the hero's place), so this check can't play past it",
+        l.name
+    ))
+}
+
+/// Whether the player stands where the level's goal is reached, as the
+/// simulation's bounds test it: at or past its x, above its `under`.
+fn at_goal(spec: &Spec, w: &World, p: usize) -> bool {
+    let l = &spec.levels[w.level];
+    let b = &w.bodies[p];
+    (l.goal_x.is_some() || l.goal_under.is_some())
+        && l.goal_x.is_none_or(|g| b.x >= g)
+        && l.goal_under.is_none_or(|u| b.y < u)
 }
 
 /// Sets the player standing at `x` (its box's middle) on `girder`.
@@ -700,7 +832,9 @@ pub fn measure(
             lay.girders.len()
         ));
     }
-    let base = ready(spec, o, 40)?;
+    let (base, passed) = enter(spec, o, level, 40)?;
+    m.level = level;
+    m.entered = passed;
     m.ready = base.frame;
     let p = player(spec, &base).ok_or("no player")?;
     let (_, right, _, jump) = masks(spec, base.bodies[p].kind);
@@ -760,6 +894,7 @@ pub fn measure(
         }
     }
     if let Some((plan, path)) = done {
+        m.routed = true;
         m.route_plan = plan;
         m.route = path.clone();
         // Played: walk to each ladder, climb it, coming back to it from
@@ -829,7 +964,7 @@ pub fn measure(
         let rh = spec.kinds[roller].size[1].floor();
         let rw = spec.kinds[roller].size[0].floor();
         for run in 0..o.runs {
-            let mut w = ready(spec, o, 40 + u64::from(run) * 37)?;
+            let (mut w, _) = enter(spec, o, level, 40 + u64::from(run) * 37)?;
             let mut live: BTreeMap<usize, Life> = BTreeMap::new();
             for _ in 0..o.run_frames {
                 let ev = safe.step(&mut w, 0);
@@ -984,6 +1119,13 @@ pub fn measure(
 /// next one through. The holds from power-on, the frames each stage was cleared on, and
 /// the frame the next stage after the last starts on. For a model
 /// baseline of an authored stage.
+///
+/// The stage is the one measured ([`Measures::level`]), entered as
+/// [`enter`] enters it; for a stage play doesn't start on, the holds are
+/// from the frame it was entered (no buttons replay the stages ended at
+/// their goals before it). A stage is cleared when play ends with the
+/// player at the level's goal, not by a death; a level with no goal, or no
+/// route up its ladders, is refused in words.
 pub fn clears(
     sim: &dyn Sim,
     base_spec: &Spec,
@@ -998,21 +1140,40 @@ pub fn clears(
         enemies: Vec::new(),
         ..o.clone()
     };
-    let mut w = World::power_on(spec);
-    let p = player(spec, &w).ok_or("no player")?;
-    let mut holds: Vec<Hold> = Vec::new();
-    let start = 40u64;
-    while w.frame < start + 5 {
-        let pad = if w.frame >= start { START } else { 0 };
-        if pad != 0 {
-            let f = w.frame as u32 + 1;
-            match holds.last_mut() {
-                Some(h) if h.0 == pad && h.2 + 1 == f => h.2 = f,
-                _ => holds.push((pad, f, f)),
-            }
-        }
-        spec.step(&mut w, pad);
+    let level = m.level;
+    let name = &spec.levels[level].name;
+    if spec.levels[level].goal_x.is_none() && spec.levels[level].goal_under.is_none() {
+        return Err(format!(
+            "level {name} has no goal to reach (it ends some other way), and this check plays a route to a goal"
+        ));
     }
+    if !m.routed {
+        return Err(format!(
+            "level {name}: no route to the top girder by walking and climbing its ladders, so there is no route to play"
+        ));
+    }
+    let mut holds: Vec<Hold> = Vec::new();
+    let mut w = if m.entered.is_empty() {
+        let mut w = World::power_on(spec);
+        let start = 40u64;
+        while w.frame < start + 5 {
+            let pad = if w.frame >= start { START } else { 0 };
+            if pad != 0 {
+                let f = w.frame as u32 + 1;
+                match holds.last_mut() {
+                    Some(h) if h.0 == pad && h.2 + 1 == f => h.2 = f,
+                    _ => holds.push((pad, f, f)),
+                }
+            }
+            spec.step(&mut w, pad);
+        }
+        w
+    } else {
+        // Reached past the stages before it, which no buttons replay:
+        // the holds are from this world on.
+        enter(spec, o, level, 40)?.0
+    };
+    let p = player(spec, &w).ok_or("no player")?;
     let mut cleared = Vec::new();
     let wait_ready = |w: &mut World| -> Result<(), String> {
         let (_, right, _, _) = masks(spec, w.bodies[p].kind);
@@ -1089,6 +1250,13 @@ pub fn clears(
         };
     for k in 0..n {
         wait_ready(&mut w)?;
+        if w.level != level {
+            return Err(format!(
+                "stage {} plays level {}, not {name}, whose route this is",
+                k + 1,
+                spec.levels[w.level].name
+            ));
+        }
         // Depth first over the route's walks, each tried after each wait,
         // going back a walk when none of the next one's waits lives.
         let route: Vec<(usize, usize)> = {
@@ -1140,12 +1308,32 @@ pub fn clears(
         let (t, h) = found.ok_or(format!("stage {}: no waits get the player up ({tries} tries, {deepest} of {} ladders the most)", k + 1, route.len()))?;
         w = t;
         holds = h;
-        // On to the clear.
+        // On to the clear: play ends with the player at the goal, and
+        // not by a death.
         for _ in 0..600 {
             if !playing(&w, o) {
                 break;
             }
-            spec.step(&mut w, 0);
+            if died(&spec.step(&mut w, 0)) {
+                return Err(format!(
+                    "stage {}: the player climbed the route and then died before reaching the goal",
+                    k + 1
+                ));
+            }
+        }
+        if playing(&w, o) {
+            return Err(format!(
+                "stage {}: the route was climbed, and play went on 600 frames more without the goal reached",
+                k + 1
+            ));
+        }
+        if w.level != level || !at_goal(spec, &w, p) {
+            return Err(format!(
+                "stage {}: play ended with the player at x {}, y {}, which isn't level {name}'s goal",
+                k + 1,
+                w.bodies[p].x.floor(),
+                w.bodies[p].y.floor()
+            ));
         }
         cleared.push(w.frame);
     }
@@ -1224,6 +1412,124 @@ mod tests {
             },
             lay,
         )
+    }
+
+    /// Moss Hop (our own game) on made-up levels, made two stages long:
+    /// its clear state goes on to the next level after 30 frames, and the
+    /// second level is the first's copy, with no goal unless `goal`.
+    fn two_stages(goal: bool) -> Spec {
+        use gp_sim::spec::Do;
+        let mut s = crate::reach::tests::spec(crate::reach::tests::level(0, &[]));
+        let mut second = s.levels[0].clone();
+        second.name = "second".into();
+        if !goal {
+            second.goal_x = None;
+            second.goal_under = None;
+        }
+        s.levels.push(second);
+        s.levels.get_mut(0).unwrap().next = Some(1);
+        let g = s.machines.index_of("game").unwrap();
+        let m = s.machines.get_mut(g).unwrap();
+        let state = |n: &str| m.states.iter().position(|x| x.name == n).unwrap();
+        let (clear, play, dying) = (state("clear"), state("playing"), state("dying"));
+        let mut t = m.states[dying].transitions[0].clone();
+        t.to = play;
+        t.after = Some(30);
+        t.guard = None;
+        t.actions = vec![Do::NextLevel];
+        m.states[clear].transitions.push(t);
+        s
+    }
+
+    fn moss_options(s: &Spec) -> Options {
+        let g = s.machines.index_of("game").unwrap();
+        let play = s.machines[g]
+            .states
+            .iter()
+            .position(|x| x.name == "playing")
+            .unwrap();
+        Options {
+            playing: Some((g, play)),
+            ..Options::default()
+        }
+    }
+
+    #[test]
+    fn a_later_stage_is_entered_past_the_one_before_by_its_goal() {
+        let exts = gp_sim::Exts::new();
+        let sim = crate::variant::NativeSim(&exts);
+        let base = two_stages(true);
+        let v = sim.open(&base, &Edit::Full).unwrap();
+        let o = moss_options(&v);
+        // Play starts on the first: nothing is ended on the way.
+        let (w, passed) = enter(&v, &o, 0, 40).unwrap();
+        assert_eq!((w.level, passed.len()), (0, 0));
+        // The second: the first ended at its goal, then the model's own
+        // clear and next-level bring the second in, its player at its
+        // spawn and playing.
+        let (w, passed) = enter(&v, &o, 1, 40).unwrap();
+        assert_eq!(w.level, 1);
+        assert_eq!(passed, vec!["main".to_owned()]);
+        let p = player(&v, &w).unwrap();
+        assert_eq!(w.bodies[p].x.floor(), 24, "at the second's spawn");
+        assert!(playing(&w, &o));
+    }
+
+    #[test]
+    fn a_stage_with_no_goal_is_neither_passed_nor_played() {
+        let exts = gp_sim::Exts::new();
+        let sim = crate::variant::NativeSim(&exts);
+        let mut base = two_stages(false);
+        // A third stage after the goalless second.
+        let mut third = base.levels[0].clone();
+        third.name = "third".into();
+        third.next = None;
+        base.levels.push(third);
+        base.levels.get_mut(1).unwrap().next = Some(2);
+        let v = sim.open(&base, &Edit::Full).unwrap();
+        let o = moss_options(&v);
+        let e = enter(&v, &o, 2, 40).unwrap_err();
+        assert!(
+            e.contains("level third is reached only by finishing second first"),
+            "{e}"
+        );
+        assert!(e.contains("second has no goal to reach"), "{e}");
+        // The goalless stage itself is refused by the clears in words,
+        // where an empty route used to count the end of play as a clear.
+        let m = Measures {
+            layout: Some(layout(&v, 1)),
+            level: 1,
+            routed: true,
+            entered: vec!["main".into()],
+            ..Measures::default()
+        };
+        let e = clears(&sim, &base, &o, &m, 1).unwrap_err();
+        assert!(e.contains("level second has no goal to reach"), "{e}");
+        let m = Measures {
+            layout: Some(layout(&v, 0)),
+            level: 0,
+            ..Measures::default()
+        };
+        let e = clears(&sim, &base, &o, &m, 1).unwrap_err();
+        assert!(e.contains("no route to the top girder"), "{e}");
+    }
+
+    #[test]
+    fn the_goal_is_where_the_bounds_test_it() {
+        let base = two_stages(true);
+        let mut w = World::power_on(&base);
+        let p = player(&base, &w).unwrap();
+        assert!(!at_goal(&base, &w, p), "the spawn isn't the goal");
+        let gx = base.levels[0].goal_x.unwrap();
+        w.bodies[p].x = gx;
+        assert!(at_goal(&base, &w, p));
+        w.level = 1;
+        let mut nogoal = base.clone();
+        nogoal.levels.get_mut(1).unwrap().goal_x = None;
+        assert!(
+            !at_goal(&nogoal, &w, p),
+            "a level with no goal has no place for it"
+        );
     }
 
     #[test]

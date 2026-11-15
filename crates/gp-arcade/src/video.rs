@@ -168,6 +168,18 @@ pub fn sprite_place(x: i32, y: i32) -> (i32, i32) {
     (x - 3, 241 - y)
 }
 
+/// [`sprite_place`] the other way: the sprite RAM bytes x (byte 3) and y
+/// (byte 0) that draw a sprite with its left and top at `x` and `y` of
+/// the game's units, `x + 3` and `241 - y`, each wrapped to a byte. A
+/// model in the board's own units (a state mapping's `board_units`)
+/// writes a body's sprite entry with these.
+pub fn sprite_bytes(x: i32, y: i32) -> (u8, u8) {
+    (
+        (x + 3).rem_euclid(256) as u8,
+        (241 - y).rem_euclid(256) as u8,
+    )
+}
+
 /// screen_update_mcr for the 91490 board with the 91464 sprite board:
 /// each pixel's pen (0 to 63) into `pens`, with [`SPRITE_BIT`] set where
 /// a sprite drew it.
@@ -346,6 +358,20 @@ pub fn picture_hash(rgb: impl IntoIterator<Item = u32>) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bytes that draw a sprite at a place are placed there, for
+    /// every pair of bytes.
+    #[test]
+    fn sprite_bytes_undo_sprite_place() {
+        for x in 0..=255u8 {
+            for y in 0..=255u8 {
+                let (px, py) = sprite_place(i32::from(x), i32::from(y));
+                assert_eq!(sprite_bytes(px, py), (x, y));
+            }
+        }
+        assert_eq!(sprite_bytes(50, 50), (53, 191));
+        assert_eq!(sprite_bytes(-3, 241), (0, 0));
+    }
 
     #[test]
     fn decodes_a_made_up_tile() {

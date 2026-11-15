@@ -14,6 +14,34 @@ With no `--runtime`, the subject is the model, run through its game's module (`-
 gp validate games/donkey-kong --against RECORDING --module dk.wasm
 ```
 
+## The check that fits a game
+
+With neither `--against` nor `--store`, `gp validate GAME` runs the check that fits what the game's folder holds, and its first line says which and why (issue #7). GAME is a folder, a copy's name (`$GP_HOME/work/mcp/NAME`), a name under templates/ or a game of the games checkout. `--which` says which check fits and runs none. The code is `crates/gp-cli/src/validate_fit.rs`.
+
+| The folder | The check | `check` in the JSON |
+|---|---|---|
+| Its source has recordings of the original in the checkout's `baselines/<source>` (only Moss Hop today) | The fidelity contract against them, exactly as `--against baselines/<source>` runs it, with that run's JSON at the top level. A person's copy (a folder in no git work tree) also gets the changed-game check, under `changed`, and that check decides `ok` and the exit code (`decided_by` is `changed`): the contract's result is beside it under `contract` (`ok`, `exit`, `passed`, `failed` and `says`, "differs from the original, as you changed it" when the change shows; its checks stay at the top level). For the original in the checkout nothing changes: `ok` and the exit are the contract's | `contract` (`also` is `changed` for a copy) |
+| It holds a corpus (`corpus.toml`) and is an original: in a git work tree, or a published package as `gp game fetch` writes one | A port's: the corpus scored on the model as `gp game score` scores it (the game's module built from this gp's kit when it has hooks, the ROM from `$GP_ROM_DIR`), NES or arcade. It passes when every clip is exact; the clips that aren't are named. The score record is kept in `$GP_HOME/work/validate/GAME/score.json`. Of the flags it takes only `--module` | `port` |
+| Anything else: a person's copy (a copy of a port too, since it holds the port's corpus but was changed on purpose), or a game made here | A changed or new game's: the model is well formed (`gp model check`, its evidence read against the checkout for a copy of a template), then every stage is reached and finished | `changed` |
+
+Recordings of an original read a change made on purpose (a higher jump, a faster barrel) as a failure, so a changed game is held to what the person can still do in it instead. Each stage is checked by the tool that already checks one of its kind:
+
+| The stage | The tool | It passes when |
+|---|---|---|
+| Girders and ladders, or tiles, in a game with a level kit (Donkey Kong's four stages, Moss Hop's) | `gp level verify` | The stage played with the enemies in, as the game reaches it (each stage before it ended at its goal by the model's own rules), is finished, and the kit's rules hold where the kit covers the stage. By kind (docs/level-kit.md, "Editing a stage"): the direct route up the ladders; a search of walks, jumps, climbs and waits that rides carriers (75m's elevators) or, on a stage with no goal, plays until the stage ends (100m, its rivets); on tiles the reach search and the playthrough |
+| A stage verify couldn't play to its end (its search stopped at its limit, or no way to tell the stage's end) | None | Not checked, with `gp level verify`'s words. Where the kit covers the stage, a broken rule still fails it |
+| Any stage of a game with no level kit | `gp interp reach` and its playthrough (`gp_interp::reach`) | The goal is reachable by the player alone, and a run with every enemy in reaches it |
+
+How far a stage's layout is from the original's is said and not held: `gp level verify` refuses a new stage too close to the original's, and a stage the person left as it was still plays. A stage none of these can search (the reach search moves a platformer's player by its walk and jump, so a Tapper bar can't be searched) is named under `changed.unchecked` with the reason, `changed.complete` is false, and the last line says the check is not a full one; nothing failing still exits 0. The JSON's `changed` has `ok`, `complete`, `well_formed` (`ok`, `problems`), `stages` (each `level`, `ok`, `how`, `said` and `detail`), `failed` and `unchecked`; `port` has `ok`, `clips`, `exact`, `errors`, `fidelity_permille`, `not_exact`, `problems` and `record_file`.
+
+```sh
+gp validate templates/mosshop            # the contract against baselines/mosshop
+gp validate mine                         # a copy of Moss Hop: the changed-game check decides, the contract says how far it is from the original
+gp validate tapper --which               # says a port's corpus score fits, and runs nothing
+```
+
+The MCP tool `validate` runs the same command on a copy, unless `baselines` names some, and returns `check`, `also`, `why`, `decided_by`, `contract`, `changed` and `port` with the contract's fields.
+
 ## What is compared
 
 Every check compares two pairs:
@@ -198,10 +226,14 @@ Broken copies of the model fail the check that covers what was broken (`crates/g
 
 On 2026-11-12 `games/donkey-kong`, with its module, held to its contract on the corpus clip dk.clear-25m.001 (3674 frames, recorded with `gp record`): 162 checks pass, none fails and 287 are unexercised, over 449 checks and 3671 model frames, the same as game-printer's validate on its template. The barrel's slot checks are unexercised: its hook draws random bytes, and here also because its hooks run in the module (below).
 
+## Tapper
+
+On 2026-11-14 `games/tapper` with its module, against tapper-l1-set (a recording of the tapper set, 1434 frames): 2 checks pass, none fails and 11 are unexercised. Its counters are presentation fields of the mapping, read and not compared, so their checks say the mapping has none; the mug's slot checks are unexercised because its hooks run in the module.
+
 ## What changed from game-printer
 
 - The model runs as gameprinter's tools run it: through its game's module (`--module`) or the built-in interpreter. `--allow-missing-ext` is gone, since gp runs a model's hooks only in its module.
 - `--runtime bevy`, `--project` and `--target-dir` are gone with the Bevy generator, and so is the conformance check.
 - `--metrics` is gone with the run recorder; the JSON has no `run_manifest`.
 - The slot checks step the bodies by the hooks gp has itself; a model whose hooks are only in its module leaves its slot checks unexercised and says why, until they step through the module (wave 2's `compare_slots_with`).
-- Recordings and baselines name an NES ROM. An arcade romset given with `--rom` is refused in words: an arcade recording's source comes with wave 6.
+- A recording of an arcade romset (`gp record --rom SET.zip`) runs on gp-arcade, found in `$GP_ROM_DIR` by the set's identity or given with `--rom SET.zip`, and the original's random draws are read on the board's main Z80 as `gp clip score` reads them. A baseline whose hash the registry names as an arcade source runs there too. One run names one original: recordings of an NES ROM and of a romset together are refused. With no `--against`, an arcade game with a corpus is still validated as a port, its corpus scored (above, "The check that fits a game").

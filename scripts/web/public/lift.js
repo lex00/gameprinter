@@ -119,8 +119,10 @@ export function themesInOrder(text, ids) {
 // Resolves to gp-web-lift's result.json: { ok: true, sha256, files, found,
 // looks_skipped } once stored, where looks_skipped lists each theme the
 // lift couldn't offer as { id, title, reason, detail }, or { ok: false,
-// error, expected, got }.
-export async function liftRom(file, { moduleUrl, templateFiles, extraThemes = [] }) {
+// error, expected, got }. `romPath` is where the lift module reads the file
+// in its memory file system: /rom.nes for the NES player's lift, which a
+// player for another kind of file (a .zip romset) changes (page.js PLAYERS).
+export async function liftRom(file, { moduleUrl, templateFiles, extraThemes = [], romPath = "/rom.nes" }) {
   const read = (name) => {
     const b = templateFiles.get(name);
     if (!b) throw new Error(`the installed game has no lift/${name}`);
@@ -130,7 +132,7 @@ export async function liftRom(file, { moduleUrl, templateFiles, extraThemes = []
   const game = index.game;
   const fs = new MemFs();
   const bytes = await toBytes(file);
-  fs.writeFile("/rom.nes", bytes);
+  fs.writeFile(romPath, bytes);
   // `alias` maps a path the lift reads to one beside the lift folder.
   const here = (from) => new URL(from, "http://x/lift/").pathname.slice(1);
   const put = new Map(index.files.map((n) => [n, read(n)]));
@@ -154,7 +156,7 @@ export async function liftRom(file, { moduleUrl, templateFiles, extraThemes = []
   fs.mkdirp("/out");
   const module = await compileModule(new URL(moduleUrl, document.baseURI));
   const t0 = performance.now();
-  const run = await runWasi(module, ["gp-web-lift", "/rom.nes", "/template", "/out"], fs);
+  const run = await runWasi(module, ["gp-web-lift", romPath, "/template", "/out"], fs);
   const raw = fs.readFile("/out/result.json");
   const result = raw
     ? JSON.parse(new TextDecoder().decode(raw))

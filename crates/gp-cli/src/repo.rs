@@ -1,5 +1,6 @@
 //! Finding the gameprinter checkout: the working folder or one above it
-//! that `has` says is it, else the checkout gp was built from. Each caller
+//! that `has` says is it, else the checkout gp was built from, else the
+//! files a released gp carries, unpacked (src/bundle.rs). Each caller
 //! names its own marker file and its own sentence when there is none.
 
 use std::path::{Path, PathBuf};
@@ -10,7 +11,8 @@ pub(crate) fn built() -> PathBuf {
 }
 
 /// The working folder or the nearest one above it that `has` accepts,
-/// else the checkout gp was built from if `has` accepts that.
+/// else the checkout gp was built from if `has` accepts that, else the
+/// carried files' folder if `has` accepts that.
 pub(crate) fn find_repo(has: impl Fn(&Path) -> bool) -> Option<PathBuf> {
     if let Ok(here) = std::env::current_dir()
         && let Some(d) = here.ancestors().find(|d| has(d))
@@ -18,5 +20,8 @@ pub(crate) fn find_repo(has: impl Fn(&Path) -> bool) -> Option<PathBuf> {
         return Some(d.to_path_buf());
     }
     let built = built();
-    has(&built).then_some(built)
+    if has(&built) {
+        return Some(built);
+    }
+    crate::bundle::root().filter(|r| has(r))
 }

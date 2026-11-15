@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+pub mod arcade;
 pub mod found;
 
 use gp_interp::lifted::Bundle;
@@ -18,6 +19,9 @@ pub struct Prepped {
     pub bundle: Bundle,
     /// The looks that couldn't be drawn, so the settings don't offer them.
     pub skipped: Vec<Skipped>,
+    /// The looks offered with some of their lines passed over (a restyle of
+    /// a slot this model hasn't got), with why.
+    pub partial: Vec<Skipped>,
 }
 
 /// A theme the settings don't offer, with why: `reason` in words a player
@@ -47,6 +51,115 @@ fn not_drawn(lifted: bool) -> String {
             "this game's art"
         }
     )
+}
+
+/// The reason for a look offered with some of its lines passed over: it
+/// names a slot or a picture this game's build hasn't got. The public page
+/// shows "Drawn in part: TITLE, because REASON."
+pub const IN_PART: &str =
+    "some of its pictures are for parts of the game this version hasn't got, so they aren't drawn";
+
+/// The reason for a look whose folder name can't name a theme in the
+/// settings (`gp_present::looks::valid_id`), or is `original`.
+fn not_named(id: &str) -> String {
+    if id == gp_present::looks::ORIGINAL {
+        "its name is the one the settings give the game's own art".into()
+    } else {
+        "its name isn't one the settings can list".into()
+    }
+}
+
+/// What the settings make of a finished (large-art) look in `src`, named
+/// `id`, for a build whose presentation text is `build_present` (its
+/// `assets/present.txt`): `Err((reason, detail))` when they leave it out,
+/// else the lines the runtime passes over, in words (none when it draws
+/// every one). It reads the look as the runtime does when the look is
+/// chosen (gp-web's `load_present` and `load_art`): look.txt, the look's
+/// own present.txt over the build's, its rules, each art file they name,
+/// and `gp_present::art::Art::new`. `gp theme look check` asks the same.
+/// For a build an arcade model's board draws, `board` is the board's named
+/// pictures ([`board_present`]), which the rules name instead.
+pub fn ready_look_offer(
+    id: &str,
+    src: &Path,
+    build_present: &str,
+    board: Option<&gp_present::Present>,
+    lifted: bool,
+) -> Result<Vec<String>, (String, String)> {
+    if !gp_present::looks::valid_id(id) || id == gp_present::looks::ORIGINAL {
+        return Err((
+            not_named(id),
+            format!(
+                "a theme's name starts with a lowercase letter and holds only lowercase letters, digits, - and _, and isn't `original`; `{id}` doesn't"
+            ),
+        ));
+    }
+    let not_read = |e: String| (NOT_READ.to_owned(), e);
+    let look_file = src.join(gp_present::looks::LOOK_FILE);
+    let look = std::fs::read_to_string(&look_file)
+        .map_err(|e| format!("{}: {e}", gp_present::looks::LOOK_FILE))
+        .and_then(|t| gp_present::looks::Look::read(&t))
+        .map_err(not_read)?;
+    // An arcade game drawn by its board: the rules name the board's
+    // pictures (gp_look::board, docs/formats/board-art.md, "Themes").
+    let present = match board {
+        Some(b) => b.clone(),
+        None => {
+            let own_present = src.join("present.txt");
+            let present_text = match std::fs::read_to_string(&own_present) {
+                Ok(t) => t,
+                Err(_) => build_present.to_owned(),
+            };
+            gp_present::text::read(&present_text)
+                .map_err(|e| not_read(format!("present.txt: {e}")))?
+        }
+    };
+    let Some(art_name) = look.art else {
+        return Ok(Vec::new());
+    };
+    let art_text = std::fs::read_to_string(src.join(&art_name))
+        .map_err(|e| not_read(format!("{art_name}, the rules look.txt names: {e}")))?;
+    let rules = gp_present::art::ArtRules::read(&art_text)
+        .map_err(|e| not_read(format!("{art_name}: {e}")))?;
+    if let Some(f) = rules.files().iter().find(|f| !src.join(f).is_file()) {
+        return Err(not_read(format!(
+            "{art_name} names the picture {f}, which isn't in the theme, so the look can't be drawn"
+        )));
+    }
+    let pictures: Vec<&str> = present.pictures.iter().map(|p| p.file.as_str()).collect();
+    let passed: Vec<String> = rules
+        .passed_over(&pictures)
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    gp_present::art::Art::new(rules, &present).map_err(|e| (not_drawn(lifted), e))?;
+    Ok(if passed.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!(
+            "{art_name} names {} this build hasn't got ({}), and the lines naming {} are passed over",
+            if passed.len() == 1 {
+                "a picture"
+            } else {
+                "pictures"
+            },
+            passed.join(", "),
+            if passed.len() == 1 { "it" } else { "them" },
+        )]
+    })
+}
+
+/// The lines of a theme stack's restyles that name a slot `model` hasn't
+/// got, in words (`gp_theme::slots::check`): the runtime passes over each.
+pub fn restyles_passed_over(theme: &gp_theme::Resolved, model: &Model) -> Vec<String> {
+    let slots = [gp_theme::slots::ModelSlots::of(model)];
+    theme
+        .layers
+        .iter()
+        .flat_map(|l| gp_theme::slots::check(&l.theme, &slots))
+        .filter(|f| f.refused)
+        .map(|f| format!("{}, so the runtime passes over it", f.message))
+        .collect()
 }
 
 /// The themes in `themes_dir` (each folder with a theme.toml, or with a
@@ -122,20 +235,43 @@ fn ready_look(dir: &Path) -> Option<PathBuf> {
     has_look(&target).then_some(target)
 }
 
+/// The board's named pictures of the build in `out` when an arcade
+/// model's board draws it (preview.json's `board` lists its lifted files,
+/// under board/): what a look's rules name there. None for any other.
+pub fn board_present(out: &Path) -> Result<Option<gp_present::Present>, String> {
+    let cfg: serde_json::Value = serde_json::from_str(&read(&out.join("preview.json"))?)
+        .map_err(|e| format!("preview.json: {e}"))?;
+    if cfg["board"].as_array().is_none_or(Vec::is_empty) {
+        return Ok(None);
+    }
+    let bundle = std::fs::read(out.join("bundle.json")).map_err(|e| format!("bundle.json: {e}"))?;
+    gp_look::board::present_of(&bundle, &|n: &str| {
+        std::fs::read(out.join("board").join(n)).map_err(|e| format!("board/{n}: {e}"))
+    })
+}
+
 /// Copies each finished look in `themes_dir` ([`ready_look`]) into
 /// `out/themes/<id>/` as it is, lists it in `themes/index.json` beside the
 /// looks drawn there, and marks `preview.json` as offering looks. A look
-/// whose `look.txt` doesn't read is named in `skipped`.
-fn add_ready_looks(
+/// the settings leave out ([`ready_look_offer`]: a name that can't name a
+/// theme, files that don't read, rules the build refuses) is named in
+/// `skipped`, and one drawn with lines passed over in `partial` when the
+/// build is the whole model (`full`): a ROM loaded only to play lacks parts
+/// of the game, and a look's lines for them aren't the look's mistake.
+pub fn add_ready_looks(
     themes_dir: &Path,
     out: &Path,
+    (lifted, full): (bool, bool),
     skipped: &mut Vec<Skipped>,
+    partial: &mut Vec<Skipped>,
 ) -> Result<(), String> {
     let Ok(rd) = std::fs::read_dir(themes_dir) else {
         return Ok(());
     };
     let mut dirs: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path())).collect();
     dirs.sort();
+    let mut build_present: Option<String> = None;
+    let mut board: Option<gp_present::Present> = None;
     let mut added = Vec::new();
     for d in dirs {
         let Some(src) = ready_look(&d) else { continue };
@@ -143,22 +279,45 @@ fn add_ready_looks(
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
+        // The title as look.txt gives it, when it reads.
         let look = std::fs::read_to_string(src.join(gp_present::looks::LOOK_FILE))
             .map_err(|e| e.to_string())
             .and_then(|t| gp_present::looks::Look::read(&t));
-        let look = match look {
-            Ok(l) if gp_present::looks::valid_id(&id) && id != gp_present::looks::ORIGINAL => l,
-            Ok(_) => continue,
-            Err(e) => {
+        let title = look
+            .as_ref()
+            .map_or_else(|_| id.clone(), |l| l.title.clone());
+        if build_present.is_none() {
+            build_present = Some(
+                std::fs::read_to_string(out.join("assets").join("present.txt"))
+                    .map_err(|e| format!("assets/present.txt: {e}"))?,
+            );
+            board = board_present(out)?;
+        }
+        match ready_look_offer(
+            &id,
+            &src,
+            build_present.as_deref().unwrap_or(""),
+            board.as_ref(),
+            lifted,
+        ) {
+            Err((reason, detail)) => {
                 skipped.push(Skipped {
-                    title: id.clone(),
+                    title,
                     id,
-                    reason: NOT_READ.into(),
-                    detail: e,
+                    reason,
+                    detail,
                 });
                 continue;
             }
-        };
+            Ok(lines) if full && !lines.is_empty() => partial.push(Skipped {
+                id: id.clone(),
+                title: title.clone(),
+                reason: IN_PART.into(),
+                detail: lines.join("; "),
+            }),
+            Ok(_) => {}
+        }
+        let look = look.map_err(|e| format!("{id}: {e}"))?;
         let mut files = Vec::new();
         list(&src, &src, &mut files)?;
         let to = out.join(gp_present::looks::THEMES_DIR).join(&id);
@@ -201,6 +360,60 @@ fn add_ready_looks(
         serde_json::from_str(&read(&cfg_file)?).map_err(|e| format!("preview.json: {e}"))?;
     cfg["looks"] = serde_json::Value::Bool(true);
     write(&cfg_file, cfg.to_string().as_bytes())
+}
+
+/// The game's level kit, beside its model (docs/level-kit.md).
+pub const LEVEL_KIT: &str = "level-kit/kit.toml";
+
+/// The regions of the stage the game's level kit names (its kit.toml's
+/// `[[levels.regions]]`, which `gp level kit` copies from the rules file's
+/// `[[region]]`), each with its level by the build's picture of it
+/// (`level-NAME.png`) and its box in the level's pixels. None when the
+/// game has no kit, or its kit names none.
+pub fn regions(model_dir: &Path) -> Result<Vec<gp_present::art::Region>, String> {
+    let file = model_dir.join(LEVEL_KIT);
+    let Ok(text) = std::fs::read_to_string(&file) else {
+        return Ok(Vec::new());
+    };
+    let kit: toml::Table = toml::from_str(&text).map_err(|e| format!("{LEVEL_KIT}: {e}"))?;
+    let mut out = Vec::new();
+    for l in kit
+        .get("levels")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+    {
+        let Some(level) = l.get("name").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        for r in l
+            .get("regions")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
+            let name = r
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("{LEVEL_KIT}: a region of {level} has no name"))?;
+            let b: Vec<i64> = r
+                .get("box")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(toml::Value::as_integer).collect())
+                .unwrap_or_default();
+            let [x, y, w, h] = b[..] else {
+                return Err(format!(
+                    "{LEVEL_KIT}: the region {name}'s box isn't [x, y, w, h]"
+                ));
+            };
+            out.push(gp_present::art::Region {
+                name: name.to_owned(),
+                level: format!("level-{level}.png"),
+                rect: [x, y, w, h],
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// Writes `bundle.json`, `profiles.toml`, `profiles/<preset>.json`,
@@ -317,7 +530,14 @@ pub fn prep_model(
     // them with when it binds no sound of its own.
     let bound = model.present.as_ref().is_some_and(|p| p.sound.is_some());
     let mut cues = gp_present::sound::Cues::default();
-    let hooked = spec.kinds.iter().any(|k| k.ext.is_some());
+    // An arcade model's hooks give no NES APU writes (the board's sound is
+    // its own CPU and AY chips, which the model doesn't drive yet): a model
+    // of a cabinet has sound only when it binds some.
+    let arcade = model
+        .input
+        .as_ref()
+        .is_some_and(|i| i.device == gp_model::model::Device::Arcade);
+    let hooked = !arcade && spec.kinds.iter().any(|k| k.ext.is_some());
     let has_sound = bound || hooked;
     if !bound && hooked {
         write(
@@ -352,6 +572,7 @@ pub fn prep_model(
     let own_look = gp_look::looks::own_look((!theme.is_empty()).then_some(theme));
     let mut index = Vec::new();
     let mut skipped = Vec::new();
+    let mut partial = Vec::new();
     if !looks.is_empty() {
         let own_names: Vec<String> = art
             .present
@@ -375,6 +596,27 @@ pub fn prep_model(
                         write(&out.join(rel), &bytes)?;
                     }
                     index.push((l.id.clone(), l.title.clone()));
+                    // A ROM loaded only to play (`names`) has less than the
+                    // model the themes were made for: what it lacks isn't
+                    // the theme's to draw, so only a full build says so.
+                    let passed = if names.is_none() {
+                        restyles_passed_over(&l.theme, &model)
+                    } else {
+                        Vec::new()
+                    };
+                    if !passed.is_empty() {
+                        notes.push(format!(
+                            "look `{}` drawn in part: {}",
+                            l.id,
+                            passed.join("; ")
+                        ));
+                        partial.push(Skipped {
+                            id: l.id.clone(),
+                            title: l.title.clone(),
+                            reason: IN_PART.into(),
+                            detail: passed.join("; "),
+                        });
+                    }
                 }
                 Err(e) => {
                     notes.push(format!("look `{}` not offered: {e}", l.id));
@@ -395,6 +637,23 @@ pub fn prep_model(
                 .join(gp_present::looks::INDEX_FILE),
             gp_present::looks::write_index(&index).as_bytes(),
         )?;
+    }
+    // An arcade model's board art (gp_look::board, docs/formats/
+    // board-art.md): the lifted files it reads, copied into board/ beside
+    // the bundle, which the player hands to the module (gp_board_load).
+    // preview.json's `board` lists them; none for a model naming none.
+    let board = gp_look::board::BoardArt::files(&model, &spec, assets)?;
+    // An arcade model in the board's own units (its state mapping's
+    // `board_units`): the screen pixels to a unit, which the page scales
+    // its scene by and tells the board's drawing. None for any other.
+    // The page plays a model whatever its mapping holds, so a mapping it
+    // can't read draws as an unmarked one rather than refusing the game.
+    let board_unit = (gp_interp::mapping::board_units_in(model_dir).unwrap_or(false)
+        && gp_assets::arcade::is_arcade(&read(&assets.join(gp_interp::lifted::MAP_FILE))?))
+    .then_some(gp_arcade::video::UNIT);
+    for f in &board {
+        let bytes = std::fs::read(assets.join(f)).map_err(|e| format!("{f}: {e}"))?;
+        write(&out.join("board").join(f), &bytes)?;
     }
     let screen = &art.present.screen;
     let pictures: Vec<&str> = art
@@ -446,6 +705,14 @@ pub fn prep_model(
         })).collect::<Vec<_>>(),
         "profile_digests": profile_digests,
         "frame_rate": [model.model.frame_rate.num, model.model.frame_rate.den],
+        // The controls the model reads (`nes-pad` or `arcade`), so the
+        // player keys and reads a gamepad by them.
+        "device": model.input.as_ref().map_or(gp_model::model::Device::NesPad, |i| i.device),
+        // The lifted files of the model's board art, under board/.
+        "board": board,
+        // Screen pixels to one of an arcade model's units when its
+        // positions are the board's own (null otherwise).
+        "board_unit": board_unit,
         "view": view,
         "visible": screen.visible(),
         "window": screen.window(2),
@@ -469,11 +736,27 @@ pub fn prep_model(
             })).collect::<Vec<_>>(),
         },
     });
+    let mut preview = preview;
+    // The regions of the stage the game's level kit names, which a
+    // large-art look's `#+ in REGION` lines are drawn by (preview.js gives
+    // them to the module); left out for a game whose kit names none.
+    let regions = regions(model_dir)?;
+    if !regions.is_empty() {
+        preview["regions"] = serde_json::json!(
+            regions
+                .iter()
+                .map(|r| serde_json::json!([
+                    r.name, r.level, r.rect[0], r.rect[1], r.rect[2], r.rect[3]
+                ]))
+                .collect::<Vec<_>>()
+        );
+    }
     write(&out.join("preview.json"), preview.to_string().as_bytes())?;
     Ok(Prepped {
         model,
         bundle,
         skipped,
+        partial,
     })
 }
 
@@ -506,6 +789,8 @@ pub enum Outcome {
         files: Vec<String>,
         found: Option<serde_json::Value>,
         looks_skipped: Vec<Skipped>,
+        /// The looks offered with some of their lines passed over, with why.
+        looks_partial: Vec<Skipped>,
     },
     Refused(Refused),
 }
@@ -661,10 +946,13 @@ pub fn lift_rom(rom: &[u8], template: &Path, out: &Path) -> Result<Outcome, Stri
         true,
     )?;
     looks_skipped.extend(prepped.skipped);
+    let mut looks_partial = prepped.partial;
     add_ready_looks(
         &template.join(gp_present::looks::THEMES_DIR),
         out,
+        (true, true),
         &mut looks_skipped,
+        &mut looks_partial,
     )?;
     let mut written = Vec::new();
     list(out, out, &mut written)?;
@@ -675,6 +963,7 @@ pub fn lift_rom(rom: &[u8], template: &Path, out: &Path) -> Result<Outcome, Stri
         files: written,
         found: None,
         looks_skipped,
+        looks_partial,
     })
 }
 
@@ -946,6 +1235,19 @@ fn screen_text_in_font(text: &str, map: &gp_assets::AssetMap) -> Result<String, 
     toml::to_string(&t).map_err(|e| e.to_string())
 }
 
+/// The game folder's registry of the ROMs it names: `sources.toml`, else
+/// `sources-nes.toml` (its name before arcade games), else none.
+fn read_registry(dir: &Path) -> Result<Vec<Entry>, String> {
+    for name in ["sources.toml", "sources-nes.toml"] {
+        if let Ok(t) = std::fs::read_to_string(dir.join(name)) {
+            return Ok(toml::from_str::<Registry>(&t)
+                .map_err(|e| format!("{name}: {e}"))?
+                .source);
+        }
+    }
+    Ok(Vec::new())
+}
+
 /// The template folder's [`LOAD_FILE`], if it has one.
 fn read_load(dir: &Path) -> Result<Option<Load>, String> {
     let p = dir.join(LOAD_FILE);
@@ -965,14 +1267,11 @@ fn read_load(dir: &Path) -> Result<Option<Load>, String> {
 pub fn lift_game(rom: &[u8], dir: &Path, out: &Path) -> Result<Outcome, String> {
     let game: GameFile = serde_json::from_str(&read(&dir.join(GAME_FILE))?)
         .map_err(|e| format!("{GAME_FILE}: {e}"))?;
-    let registry: Vec<Entry> = match std::fs::read_to_string(dir.join("sources-nes.toml")) {
-        Ok(t) => {
-            toml::from_str::<Registry>(&t)
-                .map_err(|e| format!("sources-nes.toml: {e}"))?
-                .source
-        }
-        Err(_) => Vec::new(),
-    };
+    let registry = read_registry(dir)?;
+    // An arcade game's templates take a romset zip, known by its chips.
+    if arcade::is_arcade_game(dir, &game) {
+        return arcade::lift_game(rom, dir, out, &game, &registry);
+    }
     let mut templates = Vec::new();
     for id in &game.templates {
         let tdir = dir.join(id);
@@ -1132,6 +1431,9 @@ pub fn lift_game(rom: &[u8], dir: &Path, out: &Path) -> Result<Outcome, String> 
     // (issue 13: Donkey Kong (JU) without Original Edition's 50m and
     // stage-clear scene numbered its frames and palette sets apart).
     let names = load.as_ref().map(|_| model.clone());
+    // The whole model, so a look's line for a picture it hasn't got is the
+    // look's to fix (add_ready_looks).
+    let full = load.is_none();
     if let Some(l) = &load {
         l.apply(&mut model)?;
     }
@@ -1150,10 +1452,13 @@ pub fn lift_game(rom: &[u8], dir: &Path, out: &Path) -> Result<Outcome, String> 
         names.as_ref(),
     )?;
     looks_skipped.extend(prepped.skipped);
+    let mut looks_partial = prepped.partial;
     add_ready_looks(
         &t.dir.join(gp_present::looks::THEMES_DIR),
         out,
+        (true, full),
         &mut looks_skipped,
+        &mut looks_partial,
     )?;
     let mut written = Vec::new();
     list(out, out, &mut written)?;
@@ -1193,13 +1498,16 @@ pub fn lift_game(rom: &[u8], dir: &Path, out: &Path) -> Result<Outcome, String> 
         files: written,
         found: Some(info),
         looks_skipped,
+        looks_partial,
     })
 }
 
 /// What `gp-web-lift` writes to `OUT/result.json` for `result`, and its
 /// exit code: 0 lifted, 3 the ROM isn't one the template accepts, 2
 /// couldn't run. A lifted result's `looks_skipped` lists each theme the
-/// settings don't offer, `{ id, title, reason, detail }` ([`Skipped`]).
+/// settings don't offer, `{ id, title, reason, detail }` ([`Skipped`]), and
+/// `looks_partial` each one they offer with some of its lines passed over,
+/// in the same shape ([`IN_PART`]).
 pub fn result_json(result: Result<Outcome, String>) -> (serde_json::Value, i32) {
     match result {
         Ok(Outcome::Lifted {
@@ -1207,6 +1515,7 @@ pub fn result_json(result: Result<Outcome, String>) -> (serde_json::Value, i32) 
             files,
             found,
             looks_skipped,
+            looks_partial,
         }) => (
             serde_json::json!({
                 "ok": true,
@@ -1214,6 +1523,7 @@ pub fn result_json(result: Result<Outcome, String>) -> (serde_json::Value, i32) 
                 "files": files,
                 "found": found,
                 "looks_skipped": looks_skipped,
+                "looks_partial": looks_partial,
             }),
             0,
         ),
@@ -1404,6 +1714,114 @@ mod tests {
         assert!(index.contains("\"paper\""), "{index}");
         assert!(
             !index.contains("small") && !index.contains("unread"),
+            "{index}"
+        );
+    }
+
+    /// Every look the settings leave out is named with why, and every look
+    /// they offer with lines passed over is named in `looks_partial`: a
+    /// large-art look whose folder name can't name a theme (`8bit`), one
+    /// whose rules name a picture it doesn't hold, one whose rules name a
+    /// picture this build hasn't got as well as one it has (offered, in
+    /// part), and a theme.toml theme whose only restyle names a slot the
+    /// model hasn't got (offered, in part). Made-up themes on Moss Hop.
+    #[test]
+    #[ignore = "needs Moss Hop's ROM (just mosshop)"]
+    fn looks_left_out_or_drawn_in_part_are_named_with_why() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = dir.path().join("template");
+        std::fs::create_dir_all(&t).unwrap();
+        let rom = mosshop_with_broken_themes(&t);
+        // The build's own picture names, from a first lift.
+        let first = dir.path().join("first");
+        let (json, code) = result_json(lift_rom(&rom, &t, &first));
+        assert_eq!(code, 0, "{json}");
+        assert_eq!(json["looks_partial"], serde_json::json!([]), "{json}");
+        let cfg: serde_json::Value =
+            serde_json::from_str(&read(&first.join("preview.json")).unwrap()).unwrap();
+        let pic = cfg["pictures"][0].as_str().unwrap().to_owned();
+        let look = |id: &str, art: &str, files: &[&str]| {
+            let d = t.join("themes").join(id);
+            write(
+                &d.join("look.txt"),
+                format!("gp-look 1\nid look\ntitle Look {id}\nart art.txt\n").as_bytes(),
+            )
+            .unwrap();
+            write(
+                &d.join("art.txt"),
+                format!("gp-art 1\nscale 6\n{art}").as_bytes(),
+            )
+            .unwrap();
+            for f in files {
+                write(&d.join(f), b"a picture").unwrap();
+            }
+        };
+        // look.txt's own id is a good one: the page names a look by its
+        // folder, the package name's last part.
+        look("8bit", "", &[]);
+        look("lost", &format!("pic {pic} art/gone.png 8 8 0 0\n"), &[]);
+        look(
+            "gappy",
+            &format!("pic {pic} art/a.png 8 8 0 0\npic frame-999-9.png art/a.png 8 8 0 0\n"),
+            &["art/a.png"],
+        );
+        let ghost = t.join("themes/ghost");
+        std::fs::create_dir_all(&ghost).unwrap();
+        let pix =
+            "pix 1\nsize 8 8\n. transparent\n1 #555555\n".to_owned() + &"1.1.1.1.\n".repeat(8);
+        std::fs::write(ghost.join("ghost.pix"), &pix).unwrap();
+        std::fs::write(
+            ghost.join(gp_theme::format::THEME_FILE),
+            format!(
+                "format = \"0.1.3\"\nid = \"ghost\"\ntitle = \"Ghost\"\nlicense = \"CC0-1.0\"\n\
+                 for = [\"mosshop\"]\n\n[[restyle]]\nslot = \"no_such_slot\"\nfile = \"ghost.pix\"\n\
+                 origin = \"drawn\"\nlicense = \"CC0-1.0\"\nsha256 = \"{}\"\n",
+                gp_theme::format::sha256_hex(pix.as_bytes())
+            ),
+        )
+        .unwrap();
+        let out = dir.path().join("out");
+        let (json, code) = result_json(lift_rom(&rom, &t, &out));
+        assert_eq!(code, 0, "{json}");
+        let by = |k: &str, id: &str| -> serde_json::Value {
+            json[k]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|s| s["id"] == id)
+                .unwrap_or_else(|| panic!("{id} not in {k}: {json}"))
+                .clone()
+        };
+        let eight = by("looks_skipped", "8bit");
+        assert_eq!(eight["reason"], "its name isn't one the settings can list");
+        assert_eq!(eight["title"], "Look 8bit");
+        let lost = by("looks_skipped", "lost");
+        assert_eq!(lost["reason"], NOT_READ);
+        assert!(
+            lost["detail"].as_str().unwrap().contains("art/gone.png"),
+            "{lost}"
+        );
+        let gappy = by("looks_partial", "gappy");
+        assert_eq!(gappy["reason"], IN_PART);
+        assert!(
+            gappy["detail"]
+                .as_str()
+                .unwrap()
+                .contains("frame-999-9.png"),
+            "{gappy}"
+        );
+        let ghost = by("looks_partial", "ghost");
+        assert!(
+            ghost["detail"].as_str().unwrap().contains("no_such_slot"),
+            "{ghost}"
+        );
+        let index = read(&out.join("themes/index.json")).unwrap();
+        assert!(
+            index.contains("\"gappy\"") && index.contains("\"ghost\""),
+            "{index}"
+        );
+        assert!(
+            !index.contains("8bit") && !index.contains("\"lost\""),
             "{index}"
         );
     }
@@ -1867,5 +2285,48 @@ refs = [{ at = "notes.txt:4" }]
         assert_eq!(st.skip, ["m50"]);
         assert!(model.levels.contains_key("m50"));
         assert!(gp_model::validate::validate(&model).is_empty());
+    }
+
+    /// A finished look for an arcade game names the board's pictures: it
+    /// is offered against the board's names, and one naming only the
+    /// build's NES-style pictures is left out with why.
+    #[test]
+    fn a_look_over_a_board_is_read_against_the_boards_names() {
+        let d = tempfile::tempdir().unwrap();
+        let look = d.path().join("flat");
+        std::fs::create_dir_all(look.join("art")).unwrap();
+        std::fs::write(
+            look.join("look.txt"),
+            "gp-look 1\nid flat\ntitle Flat\nart art.txt\n",
+        )
+        .unwrap();
+        std::fs::write(look.join("art/a.png"), b"made up").unwrap();
+        let board = gp_present::Present {
+            pictures: ["stage", "sprite-player-02"]
+                .iter()
+                .map(|f| gp_present::Picture {
+                    file: (*f).to_owned(),
+                    size: [32, 32],
+                })
+                .collect(),
+            ..gp_present::Present::default()
+        };
+        // The build's own presentation isn't read for a board's look.
+        let build = "";
+        std::fs::write(look.join("art.txt"), "gp-art 1\npic sprite-player-02 art/a.png 32 32 0 0\npic sprite-player-ff art/a.png 32 32 0 0\n").unwrap();
+        let said = ready_look_offer("flat", &look, build, Some(&board), true).unwrap();
+        assert_eq!(said.len(), 1);
+        assert!(said[0].contains("sprite-player-ff"), "{said:?}");
+        std::fs::write(
+            look.join("art.txt"),
+            "gp-art 1\npic frame-1-0.png art/a.png 16 16 0 0\n",
+        )
+        .unwrap();
+        let (reason, detail) =
+            ready_look_offer("flat", &look, build, Some(&board), true).unwrap_err();
+        assert!(
+            detail.contains("none of the pictures"),
+            "{reason}: {detail}"
+        );
     }
 }

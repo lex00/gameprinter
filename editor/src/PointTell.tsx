@@ -6,7 +6,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Api, Box } from "./api";
-import { CHOICES, H, W, boxFrom, requestInput, screenPoint, where, type PointJson } from "./point";
+import { ASK_WORDS, CHOICES, H, W, answersAfter, boxFrom, questionInput, requestInput, screenPoint, where, type PointJson, type Side, type TalkTurn } from "./point";
 
 /** A game screen with the pointing layer over it: active while paused. */
 export function ScreenPointer({ active, box, onBox, children, testid }: { active: boolean; box?: Box; onBox: (b: Box) => void; children: ReactNode; testid?: string }) {
@@ -52,12 +52,15 @@ export function TellPanel({
   recording,
   frame,
   box,
+  side = "original",
 }: {
   api: Api;
   run: string;
   recording?: string;
   frame: number;
   box?: Box;
+  /** Which game's picture the box is on. */
+  side?: Side;
 }) {
   const [point, setPoint] = useState<PointJson>();
   const [error, setError] = useState<string>();
@@ -65,6 +68,25 @@ export function TellPanel({
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<string>();
+  // "What is this?": the question's turn in the talk, and the agent's
+  // answer to it, read from the talk until it comes.
+  const [asked, setAsked] = useState<number>();
+  const [answers, setAnswers] = useState<TalkTurn[]>([]);
+  useEffect(() => {
+    if (asked === undefined) return;
+    let live = true;
+    const read = () =>
+      api
+        .mechanicTalk(run)
+        .then((s) => live && setAnswers(answersAfter(s.talk, asked)))
+        .catch(() => {});
+    void read();
+    const t = setInterval(read, 2000);
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
+  }, [api, run, asked]);
 
   useEffect(() => {
     setPoint(undefined);
@@ -87,6 +109,21 @@ export function TellPanel({
       </p>
     );
   }
+  const ask = async () => {
+    if (!box || !recording) return;
+    setSending(true);
+    setError(undefined);
+    setAnswers([]);
+    try {
+      const r = await api.captureInput(run, questionInput(recording, frame, box, side, point));
+      setAsked(r.turn);
+      setSent(r.mechanic ? `Asked your agent what this is, in the talk on ${r.mechanic}. The answer shows here and there.` : "Asked your agent what this is.");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSending(false);
+    }
+  };
   const send = async () => {
     if (!point) return;
     setSending(true);
@@ -138,8 +175,16 @@ export function TellPanel({
         <button type="button" disabled={!point || sending || (!choice && !text.trim())} onClick={() => void send()} data-testid="tell-send">
           tell the agent
         </button>{" "}
+        <button type="button" disabled={!recording || sending} onClick={() => void ask()} data-testid="tell-ask" title="Ask your agent what this is and what drives it; it answers from the game's code">
+          {ASK_WORDS}
+        </button>{" "}
         {sent && <span className="hint">{sent}</span>}
       </p>
+      {asked !== undefined && (
+        <div className="tell-answer" data-testid="tell-answer" aria-live="polite">
+          {answers.length ? answers.map((a) => <p key={a.n} className="answer">{a.text}</p>) : <p className="hint">Waiting for your agent's answer...</p>}
+        </div>
+      )}
     </section>
   );
 }

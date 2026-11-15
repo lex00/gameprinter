@@ -52,7 +52,27 @@ pub enum Index {
 }
 
 impl Selector {
+    /// `ram[addr]`, as [`Selector::parse`] reads `format!("ram[{addr:#06x}]")`.
+    pub fn ram(addr: u16) -> Self {
+        Self {
+            segments: vec![Segment {
+                name: "ram".to_owned(),
+                index: Some(Index::At(addr.into())),
+            }],
+        }
+    }
+
     pub fn parse(text: &str) -> Result<Self, String> {
+        // The form callers write most, once a byte (`ram[0x00a0]`, as
+        // `format!("ram[{addr:#06x}]")` and [`ram_text`] write it), read
+        // without the lexer: the same selector.
+        if let Some(addr) = canonical_ram(text) {
+            return Ok(Self::ram(addr));
+        }
+        Self::lexed(text)
+    }
+
+    fn lexed(text: &str) -> Result<Self, String> {
         let mut lexer = Lexer::new(text);
         let sel = lexer.selector()?;
         lexer.skip_space();
@@ -99,6 +119,41 @@ impl fmt::Display for Selector {
 }
 
 /// An index as entry paths write it: `0x` and four hex digits.
+/// `ram[addr]`'s text, `format!("ram[{addr:#06x}]")`, written into a
+/// buffer with nothing allocated: `ram[0x` and four lowercase hex digits.
+pub fn ram_text(addr: u16) -> RamText {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut b = *b"ram[0x0000]";
+    for i in 0..4 {
+        b[6 + i] = DIGITS[usize::from(addr >> (12 - 4 * i) & 0xf)];
+    }
+    RamText(b)
+}
+
+/// The text [`ram_text`] writes.
+#[derive(Clone, Copy)]
+pub struct RamText([u8; 11]);
+
+impl std::ops::Deref for RamText {
+    type Target = str;
+    fn deref(&self) -> &str {
+        std::str::from_utf8(&self.0).expect("ram_text writes ASCII")
+    }
+}
+
+/// The address of a selector written as [`ram_text`] writes it.
+fn canonical_ram(text: &str) -> Option<u16> {
+    let digits = text.strip_prefix("ram[0x")?.strip_suffix(']')?;
+    if digits.len() != 4
+        || !digits
+            .bytes()
+            .all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return None;
+    }
+    u16::from_str_radix(digits, 16).ok()
+}
+
 pub fn hex(n: i64) -> String {
     if n < 0 {
         format!("-{:#06x}", n.unsigned_abs())
@@ -531,6 +586,32 @@ mod tests {
             .unwrap()
             .eval(&mut |_: &Selector| Err("no such field".to_owned()));
         assert_eq!(missing, Err("no such field".to_owned()));
+    }
+
+    #[test]
+    fn a_ram_byte_reads_the_same_without_the_lexer() {
+        for addr in 0..=u16::MAX {
+            let text = format!("ram[{addr:#06x}]");
+            assert_eq!(&*ram_text(addr), text);
+            assert_eq!(canonical_ram(&text), Some(addr));
+            let lexed = Selector::lexed(&text).unwrap();
+            assert_eq!(Selector::ram(addr), lexed);
+            assert_eq!(sel(&text), lexed);
+            assert_eq!(Selector::ram(addr).to_string(), text);
+        }
+        // Other spellings go to the lexer, which reads them as before.
+        for text in [
+            "ram[0xA0]",
+            "ram[0x00A0]",
+            "ram[0x0a0]",
+            "ram[160]",
+            "ram[ 0x00a0]",
+            "ram[0x00a0] ",
+            "ram[0x000a0]",
+        ] {
+            assert_eq!(canonical_ram(text), None, "{text}");
+            assert_eq!(Selector::parse(text), Selector::lexed(text), "{text}");
+        }
     }
 
     #[test]

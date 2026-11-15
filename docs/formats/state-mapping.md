@@ -42,6 +42,7 @@ note = "STATE"
 | `model` | The model's `model.name`; `gp interp compare` refuses a mapping of another model |
 | `source` | The original's source ID, as its asset map and baselines name it |
 | `platform` | Optional (feature `platform`): `nes` (the default) or `arcade` ([an arcade original](#an-arcade-original)) |
+| `board_units` | Optional (feature `platform.board_units`), an arcade mapping's: `true` says the model's positions are the board's own units, top left with y down, which the fields' `scale` and `offset` make of the RAM's bytes ([an arcade original](#an-arcade-original)) |
 | `description` | Optional, for people |
 | `align` | How the two runs' frames line up (below). `polled` is the only alignment so far |
 | `read_at` | Optional (feature `align.read_at_nmi`): `nmi` reads the original's RAM as the CPU takes the NMI after the frame's end, instead of at the end (below) |
@@ -211,6 +212,52 @@ entity = "barrel"
 ids = [0]
 ```
 
+A group with `presentation = true` (feature `slots.group.presentation`) is only drawn, never compared: a start carries each of its objects as a body of its kind's entity, with every field loaded from the original's state at the clip's start, and no run pairs or measures them, as if every kind of the group had `holds_slot`. Its fields need no `presentation = true` of their own, and it has no `rest` or `turn`. `[slots]` itself can't be one: the objects that are only drawn go in a group of their own. Use it for objects the model draws (with a board sprite, say) but doesn't play the way the original does at every moment, so measuring them would split clips that the model plays right: Tapper's bars' end pieces, the objects from E356 to E375, which the end scripts move and the model doesn't.
+
+In free play there is no original to load such a group from, so the model has to make those bodies itself. `gp model check` holds it to that: each kind's entity must be in the model and either have a hook of its own (`ext`), whose rules keep it, or be placed by a level's `spawn` list, for a thing that stands still. A group whose entity has neither is refused, saying why. What the model plays and can't keep that way belongs in a group that is compared.
+
+```toml
+[[slots.group]]
+name = "bar_ends"
+active = 0xE356
+active_stride = 4
+count = 8
+presentation = true
+vacant = "ram[0xE3BD] != 0"
+
+[[slots.group.field]]
+path = "x"
+ram = [0xE359]
+stride = 4
+
+[[slots.group.field]]
+path = "y"
+ram = [0xE356]
+stride = 4
+
+[[slots.group.field]]
+path = "ext[0]"
+ram = [0xE357, 0xE358]
+stride = 4
+
+[[slots.group.kind]]
+entity = "bar_end"
+ids = [0]
+```
+
+A slot field's `strides` (feature `slots.field.strides`) gives each byte it reads its own step from one slot to the next, in the order `ram` lists them (then `frac`), in place of `stride`: for a value made of bytes from two records that repeat at different steps. Give one step for each byte, each at least 1, and not with `stride`, `shared` or `index`; a field outside `[slots]` is refused with one. Tapper keeps a customer's record every 32 bytes from E4B2 and its object (y, flags, picture, x) every 8 from E262, and its board sprite reads its flags and picture from the same word as its state and facing:
+
+```toml
+[[slots.group.field]]
+path = "ext[0]"
+presentation = true
+ram = [0xE4B2, 0xE4BF, 0xE263, 0xE264]
+strides = [32, 32, 8, 8]
+note = "Its state (+0) and facing (+0D) from its record, then its object's flags and picture"
+```
+
+Slot `k` reads E4B2 + 32k, E4BF + 32k, E263 + 8k and E264 + 8k, low byte first as ever, so the flags are byte 2 of the word and the picture byte 3.
+
 A slot kind's `up_down` (feature `slot_kind.up_down`) makes the body's direction up and down a measure too, `bodies.<kind>[n].moving_y` (`up`, `down`, or `none` before it has moved), with a change as a turn event ("turns up"): a fireball's bounce off the ground. A slot field with `presentation = true` loads into a carried body and is no measure: speeds a start needs that the directions already measure.
 
 A slot life starts when a slot's flag is set with an ID a kind lists (and a flag value it lists, and no state bit that ends it), and ends when that stops holding or the ID changes. Each life is matched to exactly one body in a world of its own. That world is the model's, in the life's level, and holds the player and one body of the life's entity, placed where the slot is when the life starts. The body steps once there, so its hook sets itself up as the game's init routine has. Then it takes the slot's values: its position, and any `ext` words the kind maps, which can start where the slot's last occupant left them. After that:
@@ -330,6 +377,8 @@ A byte the mapping names is never in it. No translation or comparison reads the 
 
 `platform = "arcade"` (feature `platform`) marks a mapping of a MAME romset's game. Its `ram[...]` reads the main CPU's addresses: Tapper's work RAM is at `0xE000`, and its mapping reads the bartender's place from his object slot at `0xE2E6`. The NES's own parts are refused in it: `nametable`, `oam`, `oam_tile` and `read_at`. Its `ignore` may name any of the main CPU's addresses. Its `[[draws]]` name the main Z80's sites: a site that is a call draws the value the routine returns in A, a site with `reg` the register it names, any other the byte it reads.
 
+`board_units = true` (feature `platform.board_units`, an arcade mapping's only) says the model's positions are the board's own units: from the screen's top left with y down, half a screen pixel each way on Midway's MCR (256 by 240, tiles of 8, the NES's geometry; [model.md](../model.md)). The fields turn the RAM's bytes into them with `scale` and `offset`, which may be negative. On MCR an object slot holds the bytes the board's sprite RAM gets, and the board draws a sprite with them at `(x - 3, 241 - y)`, so the place's fields are x with `offset = -3` and y with `scale = -1` and `offset = 241`. The drawers then only multiply by the board's unit, 2 screen pixels; `gp localize` and the level commands read the model's grid in the same units. Without it an arcade model holds the RAM's bytes as they are, and the drawers place a body where the board draws a sprite with them: Tapper's model is so today. `gp game new` writes it for an arcade board.
+
 ```toml
 platform = "arcade"
 schema = 22
@@ -396,7 +445,7 @@ Without the list they're derived from the fields the mapping sets. With it, each
 | 21 | `[[ignore]]` (`ignore`) |
 | 22 | A slot rest's `word` (`slot.rest_word`) |
 
-Each step read every earlier mapping as before and refused one that used what it added, and a build that read only up to the step before refused it. The features added after 22 have no schema note: `cells.becomes`, `slots.field.stride`, `slots.no_id`, `slots.no_clock`, `slots.active_stride`, `slots.field.index`, `slots.free`, `slots.vacant`, `slots.vacant_from`, `draws`, `draws.soft`, `draws.reg`, `draws.score`, `stretches.play`, `stretches.state`, `scope.while`, `scope.leaves`, `field.bcd`, `field.case.unmeasured`, `slots.resync`, `field.lookup`, `field.case.ram`, `field.case.oam`, `field.case.nametable`, `field.case.number`, `field.case_flag`, `entity.jumping`, `field.whole_64`, `align.read_at_nmi`, `field.nametable`, `field.oam`, `field.oam_tile`, `field.machine`, `slots.group.name` and `platform`.
+Each step read every earlier mapping as before and refused one that used what it added, and a build that read only up to the step before refused it. The features added after 22 have no schema note: `cells.becomes`, `slots.field.stride`, `slots.no_id`, `slots.no_clock`, `slots.active_stride`, `slots.field.index`, `slots.free`, `slots.vacant`, `slots.vacant_from`, `draws`, `draws.soft`, `draws.reg`, `draws.score`, `stretches.play`, `stretches.state`, `scope.while`, `scope.leaves`, `field.bcd`, `field.case.unmeasured`, `slots.resync`, `field.lookup`, `field.case.ram`, `field.case.oam`, `field.case.nametable`, `field.case.number`, `field.case_flag`, `entity.jumping`, `field.whole_64`, `align.read_at_nmi`, `field.nametable`, `field.oam`, `field.oam_tile`, `field.machine`, `slots.group.name`, `platform` and `platform.board_units`.
 
 ## Decisions
 

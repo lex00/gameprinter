@@ -92,8 +92,11 @@ per_row = 32
 |---|---|---|
 | `mcr-tiles` | `gfx1` | Background tiles, 8 by 8, 4 bits a pixel. The board draws each pixel twice in both directions, as 16 by 16 |
 | `mcr-sprites` | `gfx2` | Sprites, 32 by 32, 4 bits a pixel |
+| `byte-rows` | `maincpu` | A data table of the program, `count` rows of `width` bytes from `offset` |
+| `mcr-screen` | `maincpu` | A whole screen of the background tile layer the program copies into video RAM, 30 rows of 32 two-byte cells from `offset` ([board art](formats/board-art.md)) |
+| `mcr-palette` | `maincpu` | The 64 colours the program loads into palette RAM, two bytes each from `offset`, lifted as the board's 9-bit colours ([board art](formats/board-art.md)) |
 
-`gp assets lift` reads the regions from whichever listed set the zip is, found by its chips' hashes, so the same model loads `tapper`'s art or `tapperg`'s, and writes each asset as an indexed PNG of 4-bit values with gray previews, by default to `$GP_HOME/work/assets/<set>/`. The lifted folder's `source.toml` says which set it was. `gp assets pack DIR --check ZIP` packs the pictures back into the graphics chips and compares them with the set's, byte for byte. The colours aren't in the chips: the board looks them up in its palette RAM, which the game writes as it runs, so a model does the same.
+`gp assets lift` reads the regions from whichever listed set the zip is, found by its chips' hashes, so the same model loads `tapper`'s art or `tapperg`'s, and writes each asset as an indexed PNG of 4-bit values with gray previews, by default to `$GP_HOME/work/assets/<set>/`. The lifted folder's `source.toml` says which set it was. `gp assets pack DIR --check ZIP` packs the pictures back into the graphics chips and compares them with the set's, byte for byte. The colours aren't in the chips: the board looks them up in its palette RAM, which the game writes from its program's tables as it runs, so a model lifts those tables (`mcr-palette`) and draws with them ([board art](formats/board-art.md)).
 
 ## The lifted directory
 

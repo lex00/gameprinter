@@ -24,18 +24,52 @@ export const KEYS: string[][] = [
   ["ArrowRight", "KeyD"],
 ];
 
-/** The buttons held, from the keys down. */
-export function padFromKeys(down: Set<string>): number {
-  return KEYS.reduce((acc, ks, bit) => (ks.some((k) => down.has(k)) ? acc | (1 << bit) : acc), 0);
+/**
+ * An arcade cabinet's keys, as MAME keys it and the mechanic page does: 5
+ * drops a coin, 1 is the one-player start. Coin, start, right, left,
+ * down, up and the button from bit 0 (gp-arcade-play's columns CSRLDUT).
+ */
+export const ARCADE_KEYS: string[][] = [["Digit5"], ["Digit1"], ["ArrowRight", "KeyD"], ["ArrowLeft", "KeyA"], ["ArrowDown", "KeyS"], ["ArrowUp", "KeyW"], ["KeyX", "Space"]];
+
+/** The machine a player plays: its picture's size, its frame rate and its keys. */
+export interface Machine {
+  platform: "nes" | "arcade";
+  width: number;
+  height: number;
+  fps: number;
+  keys: string[][];
 }
 
-/** What a gamepad holds, in the standard mapping (buttons 0 and 2 are A and B, 8 and 9 Select and Start, 12 to 15 the d-pad; the left stick also steers). */
-export function padFromGamepad(g: { readonly buttons: readonly { pressed: boolean }[]; readonly axes: readonly number[] } | null | undefined): number {
+export const NES_MACHINE: Machine = { platform: "nes", width: 256, height: 240, fps: NES_FPS, keys: KEYS };
+
+/** The machine a player's `gp_play_info` describes (an arcade board's), or the NES. */
+export function machineOf(info: { platform?: string; width?: number; height?: number; fps?: [number, number] } | undefined): Machine {
+  if (info?.platform !== "arcade") return NES_MACHINE;
+  return { platform: "arcade", width: info.width ?? 512, height: info.height ?? 480, fps: info.fps ? info.fps[0] / info.fps[1] : 30, keys: ARCADE_KEYS };
+}
+
+/** The buttons held, from the keys down. */
+export function padFromKeys(down: Set<string>, keys: string[][] = KEYS): number {
+  return keys.reduce((acc, ks, bit) => (ks.some((k) => down.has(k)) ? acc | (1 << bit) : acc), 0);
+}
+
+/** What a gamepad holds, in the standard mapping (buttons 0 and 2 are A and B, 8 and 9 Select and Start, 12 to 15 the d-pad; the left stick also steers). On an arcade board Select is the coin, Start the start and A the button. */
+export function padFromGamepad(g: { readonly buttons: readonly { pressed: boolean }[]; readonly axes: readonly number[] } | null | undefined, platform: Machine["platform"] = "nes"): number {
   if (!g) return 0;
   const b = (i: number) => g.buttons[i]?.pressed === true;
   const ax = g.axes[0] ?? 0;
   const ay = g.axes[1] ?? 0;
   let pad = 0;
+  if (platform === "arcade") {
+    if (b(8)) pad |= 1;
+    if (b(9)) pad |= 2;
+    if (b(15) || ax > 0.5) pad |= 4;
+    if (b(14) || ax < -0.5) pad |= 8;
+    if (b(13) || ay > 0.5) pad |= 16;
+    if (b(12) || ay < -0.5) pad |= 32;
+    if (b(0) || b(1) || b(2) || b(3)) pad |= 64;
+    return pad;
+  }
   if (b(0) || b(1)) pad |= 1;
   if (b(2) || b(3)) pad |= 2;
   if (b(8)) pad |= 4;
@@ -69,9 +103,31 @@ export function triggerPresses(
   return { save: now.save && !held.save, load: now.load && !held.load, held: now };
 }
 
-/** The frame lines of an input log's text, without its two header lines. */
+/** An arcade input log's first line (gp-evidence's `gp-arcade-input 0`). */
+const ARCADE_LOG = "gp-arcade-input 0";
+
+/**
+ * The frame lines of an input log's text, without its header: an NES
+ * log's lines after its two header lines, or an arcade log's runs (a count
+ * of frames and the buttons held) spelt out a frame a line, `1 C......`,
+ * which reads back the same.
+ */
 export function frameLines(log: string): string[] {
-  return log.split("\n").slice(2).filter((l) => l.length > 0);
+  const lines = log.split("\n").filter((l) => l.length > 0);
+  if (lines[0] !== ARCADE_LOG) return lines.slice(2);
+  const out: string[] = [];
+  for (const l of lines) {
+    const m = /^(\d+)\s+(\S+)$/.exec(l.split("#")[0].trim());
+    if (m) for (let k = 0; k < Number(m[1]); k++) out.push(`1 ${m[2]}`);
+  }
+  return out;
+}
+
+/** An input log's header lines, with a newline after each: an NES log's two, an arcade log's three (its set and its columns). */
+export function logHead(log: string): string {
+  const lines = log.split("\n");
+  const head = lines[0] === ARCADE_LOG ? lines.filter((l) => /^(gp-arcade-input|system|columns) /.test(l)) : lines.slice(0, 2);
+  return head.map((l) => `${l}\n`).join("");
 }
 
 /**
@@ -80,8 +136,8 @@ export function frameLines(log: string): string[] {
  * what it does. A long pause runs at most `max` frames, so the page never
  * races to catch up.
  */
-export function framesDue(acc: number, elapsed: number, max = 4): { frames: number; acc: number } {
-  const tick = 1000 / NES_FPS;
+export function framesDue(acc: number, elapsed: number, max = 4, fps = NES_FPS): { frames: number; acc: number } {
+  const tick = 1000 / fps;
   let a = Math.min(acc + elapsed, tick * max);
   let n = 0;
   while (a >= tick) {

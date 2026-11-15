@@ -1,6 +1,6 @@
 # ROM dataset
 
-What stage 0 extracts from one ROM, as tables a data scientist loads with pandas, DuckDB or Hugging Face `datasets`. `gp dataset rom ROM --out DIR` writes it from the ROM alone: the ROM is run in gp-nes under the recipes the tool makes and its code is read. The same ROM gives the same bytes. Format version 0.1.0; the row schemas are `schema/rom-dataset.json`, made from `TABLES` in `crates/gp-cli/src/rom_dataset.rs`.
+What stage 0 extracts from one ROM, as tables a data scientist loads with pandas, DuckDB or Hugging Face `datasets`. `gp dataset rom ROM --out DIR` writes it from the ROM alone: the ROM is run under the recipes the tool makes and its code is read, an NES ROM in gp-nes and an arcade romset on gp-arcade's board (see [On an arcade romset](#on-an-arcade-romset)). The same ROM gives the same bytes. Format version 0.1.0; the row schemas are `schema/rom-dataset.json`, made from `TABLES` in `crates/gp-cli/src/rom_dataset.rs`.
 
 ## Layout
 
@@ -49,6 +49,20 @@ A wrong row is worse than an open one. Where the tool can't settle a value (a RA
 | `constants.mechanic`, `mechanics.mechanic` | The mechanic parts of docs/mechanics.md (`platformer.jump`) |
 | `open.settle_by` | run, trace, bank, name |
 | `runs.kind` | idle, start, random, clip, explore |
+
+## On an arcade romset
+
+The tables and columns are the same; the board's dataset fills them from the main Z80. The `rom` row's `mapper` is 0 and its `board` names the arcade board (`midway-mcr (tapper)`); `rom` is the set's identity (the SHA-256 of its chips' SHA-1s sorted). A routine, an instruction or a `pc` is a Z80 address with no bank (`5FAC`), `ram.addr` is a byte of the board's work RAM (E000 to E7FF on Midway MCR), and `constants.op` and `branches.op` are Z80 mnemonics (`cp`, `ld`, `and`; `jr nz`, `ret c`). The sound Z80's code isn't in the tables.
+
+`routines`, `branches`, `ram` and `runs` come from the main Z80's code map and the runs, as on the NES. `elements`, `states`, `transitions`, `constants`, `facts`, `mechanics` and the harvest's `open` rows come from the main Z80's static harvest (`gp model static` on the set) through the same rules as the NES's: a record table the code walks is an element of `slots`, a byte the code tests by value and writes a machine, and each immediate operand a constant at its own instruction. A RAM byte the harvest places (a record's state byte, slot by slot) has its element, slot and quantity, and a routine its element.
+
+What differs, each said in an `open` row:
+
+| Open row | Why |
+|---|---|
+| `ram:$XXXX` | No RAM role is stated: the role the runs suggest is in the row's `why`. On the NES only the classifier's input role is stated; on the board stage 0's runs give hundreds of bytes that rule, most of them filled by the power-on RAM test |
+| `arcade: elements the screen shows, links, estimates, units` | The NES finds the player and the groups of slots the screen shows, `links`, `estimates` and a constant's unit by following its runs' sprites (gp-track on the NES's sprite table and pad); stage 0 doesn't track the board's sprites, so those tables are empty and a constant's `number` is set only where a harvest fact cites it |
+| `arcade: mechanics` | A `mechanics` row is a harvest fact on a part of docs/mechanics.md, whose parts are the platformer's; the Z80's harvest has the rules an arcade game shares with an NES one (record tables, state bytes, counters, timers, input, random), not the platformer's |
 
 ## Tables
 

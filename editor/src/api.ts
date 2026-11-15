@@ -546,6 +546,10 @@ export class Api {
     return this.eventSource?.(`${this.base}/api/capture/${encodeURIComponent(run)}/stream?after=${after}`);
   }
   /** The URL of a file of the interpreter preview a run built. */
+  /** The talk of the mechanic open on the game's page (its session), where the agent answers a question. */
+  mechanicTalk(run: string, signal?: AbortSignal): Promise<{ talk?: { n: number; by: string; text: string }[] }> {
+    return this.json(`/mechanic/${encodeURIComponent(run)}/api/session`, signal);
+  }
   /** What's under a box of the screen at a frame, in both games (docs/point-and-tell.md). */
   capturePoint(run: string, recording: string, frame: number, box: Box, signal?: AbortSignal): Promise<PointJson> {
     const r = `${box.x},${box.y},${box.w},${box.h}`;
@@ -570,17 +574,6 @@ export class Api {
   captureMoments(run: string, recording: string): Promise<import("./momentfold").Moments> {
     return this.json(`/api/capture/${encodeURIComponent(run)}/moments?recording=${encodeURIComponent(recording)}`);
   }
-  /** The refinement loop on a run's working copy: its state and rounds so far (docs/interpreter.md, "Refining from the lockstep"). */
-  captureRefine(run: string, recording: string): Promise<import("./refinefold").RefineState> {
-    return this.json(`/api/capture/${encodeURIComponent(run)}/refine?recording=${encodeURIComponent(recording)}`);
-  }
-  /** Starts the loop, its first window at the first split at or after the original's frame `from`. */
-  captureRefineStart(run: string, recording: string, from?: number, scope?: { moment?: { kind: string; n: number }; mechanic?: string; window?: number }): Promise<{ started: boolean; why?: string }> {
-    return this.write("POST", `/api/capture/${encodeURIComponent(run)}/refine`, { recording, from, ...scope });
-  }
-  captureRefineStop(run: string): Promise<{ stopping: boolean }> {
-    return this.write("POST", `/api/capture/${encodeURIComponent(run)}/refine/stop`, {});
-  }
   /** A run's game in its own words, for the game view. */
   captureGame(run: string): Promise<GameWords> {
     return this.json(`/api/capture/${encodeURIComponent(run)}/game`);
@@ -593,9 +586,10 @@ export class Api {
   captureInputLog(run: string, name: string): Promise<string> {
     return this.text(`/api/capture/${encodeURIComponent(run)}/inputs/${encodeURIComponent(name)}`);
   }
-  /** The live player module's URL. */
-  playWasm(): string {
-    return `${this.base}/api/play/gp_play.wasm`;
+  /** The live player module's URL: the NES's, or for a MAME zip (`PK`) the arcade board's. */
+  playWasm(rom?: Uint8Array): string {
+    const zip = rom !== undefined && rom[0] === 0x50 && rom[1] === 0x4b;
+    return `${this.base}/api/play/${zip ? "gp_arcade_play.wasm" : "gp_play.wasm"}`;
   }
   /** A POST to gp serve, for the clients in their own files (freefold.ts). */
   post<T>(path: string, body: unknown): Promise<T> {

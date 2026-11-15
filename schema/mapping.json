@@ -8,6 +8,11 @@
       "description": "How the model's frames line up with the original's.",
       "$ref": "#/$defs/Align"
     },
+    "board_units": {
+      "description": "Feature `platform.board_units`: an arcade model's positions are the\nboard's own units, from the screen's top left with y down (half a\nscreen pixel on Midway's MCR: 256 by 240, the NES's geometry), and\nthe fields' `scale` and `offset` turn the RAM's bytes into them.\nThe drawers then only multiply by the board's unit\n(`gp_arcade::video::UNIT`). Without it an arcade model holds the\nbytes as the RAM has them and the drawers place a body where the\nboard draws a sprite with those bytes (`gp_arcade::video::sprite_place`).\nOnly an arcade mapping may say it.",
+      "type": "boolean",
+      "default": false
+    },
     "cells": {
       "description": "Where the original keeps its level grid, so a translation knows\nwhich cells have been taken (schema 14).",
       "anyOf": [
@@ -598,6 +603,17 @@
           "maximum": 65535,
           "minimum": 0
         },
+        "strides": {
+          "description": "Feature `slots.field.strides`: a stride for each byte the field\nreads (`ram`, then `frac`), in place of `stride`, for a value made\nof bytes from records that repeat at different steps. Tapper keeps\na customer's record every 32 bytes from E4B2 and its object (its\nflags and picture) every 8 from E262, and one word holds bytes of\nboth: `ram = [0xE4B2, 0xE4BF, 0xE263, 0xE264]`,\n`strides = [32, 32, 8, 8]`.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "integer",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0
+          }
+        },
         "values": {
           "description": "The number names one of these, by position.",
           "type": "array",
@@ -1116,7 +1132,7 @@
           "minimum": 0
         },
         "presentation": {
-          "description": "A presentation value (schema 4): a translation loads it, but no\nrun compares it, so it is no measure and counts for nothing in a\nscore. Super Mario Bros.' color rotation is one.",
+          "description": "Feature `slots.group.presentation`, a group's only: its objects\nare drawn, never compared. A start carries each of them as a body,\nits fields loaded from the original's state at the clip's start,\nand no run pairs or measures them, as a kind's `holds_slot` does\nfor every kind of the group. In free play nothing loads them, so\n`gp model check` holds the model to making them itself: each kind's\nentity has a hook of its own (`ext`) or is placed by a level's\n`spawn`. Tapper's bars' end pieces, objects the model doesn't run\nduring the end scripts.",
           "type": "boolean",
           "default": false
         },

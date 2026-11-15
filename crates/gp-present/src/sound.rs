@@ -267,12 +267,17 @@ pub const ROLE_RATE: u32 = 44_100;
 /// Samples a frame at [`ROLE_RATE`] and 60 frames a second.
 pub const ROLE_FRAME: usize = 735;
 
-/// A sound role playing: its role's index and where in its samples it is.
+/// A sound role playing: its role's index, which of the role's takes, and
+/// where in its samples it is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Voice {
     role: usize,
+    take: usize,
     at: usize,
 }
+
+/// The most starts [`RolePlayer::log`] keeps; later ones aren't logged.
+pub const LOG_MAX: usize = 100_000;
 
 /// A theme's sound per role, played on the roles' cues (theme format
 /// 0.1.3, `[[sound]]`; docs/sound.md, "A theme's sound per role"). Every
@@ -288,18 +293,29 @@ struct Voice {
 /// role replaces the music role playing; an effect starts again from its
 /// beginning when it starts while it plays; a looping role (`loops`)
 /// repeats while it plays. Samples are added and clipped to 16 bits.
+///
+/// A role may have several takes (a large-art look's
+/// `sound/roles/<role>.wav` and `sound/takes/<role>.<n>.wav`, issue #30):
+/// each start plays the next one, in the order of their numbers, and after
+/// the last the first again. The turn is counted by this player from its
+/// first frame (and afresh after [`RolePlayer::clear`]), never from a clock
+/// or a random draw of its own, so a run played again from power-on plays
+/// the same takes at the same frames.
 #[derive(Debug, Clone, Default)]
 pub struct RolePlayer {
-    /// Each cue role's samples at [`ROLE_RATE`], by the cues' order; empty
-    /// for a role with no file.
-    sounds: Vec<Vec<i16>>,
+    /// Each cue role's takes, by the cues' order: (take number, samples at
+    /// [`ROLE_RATE`]), in number order; empty for a role with no file.
+    sounds: Vec<Vec<(u32, Vec<i16>)>>,
+    /// How many times each role has started.
+    started: Vec<u64>,
     director: Director,
     /// The cues the last frame read, which start and stop on this one.
     pending: (Vec<String>, Vec<String>),
     music: Option<Voice>,
     sfx: Vec<Voice>,
-    /// Every role started so far: (frame, role name), for a report.
-    pub log: Vec<(u64, String)>,
+    /// Every role started so far: (frame, role name, take number), for a
+    /// report; at most [`LOG_MAX`].
+    pub log: Vec<(u64, String, u32)>,
     /// Whether to keep [`RolePlayer::log`].
     pub keep_log: bool,
 }
@@ -309,29 +325,70 @@ impl RolePlayer {
     pub fn new(cues: &Cues) -> Self {
         Self {
             sounds: vec![Vec::new(); cues.roles.len()],
+            started: vec![0; cues.roles.len()],
             ..Self::default()
         }
     }
 
-    /// Sets a role's samples, at [`ROLE_RATE`]; false when `cues` has no
-    /// such role.
+    fn index(&mut self, cues: &Cues, role: &str) -> Option<usize> {
+        let i = cues.roles.iter().position(|r| r.name == role)?;
+        self.sounds.resize(cues.roles.len(), Vec::new());
+        self.started.resize(cues.roles.len(), 0);
+        Some(i)
+    }
+
+    /// Sets a role's samples, at [`ROLE_RATE`], as its one take; false
+    /// when `cues` has no such role.
     pub fn set(&mut self, cues: &Cues, role: &str, samples: Vec<i16>) -> bool {
-        let Some(i) = cues.roles.iter().position(|r| r.name == role) else {
+        let Some(i) = self.index(cues, role) else {
             return false;
         };
-        self.sounds.resize(cues.roles.len(), Vec::new());
-        self.sounds[i] = samples;
+        self.sounds[i] = if samples.is_empty() {
+            Vec::new()
+        } else {
+            vec![(1, samples)]
+        };
         true
+    }
+
+    /// Sets take `take` (1 is the role's own file) of a role, keeping its
+    /// other takes; empty samples take that take away. False when `cues`
+    /// has no such role or `take` is 0.
+    pub fn set_take(&mut self, cues: &Cues, role: &str, take: u32, samples: Vec<i16>) -> bool {
+        if take == 0 {
+            return false;
+        }
+        let Some(i) = self.index(cues, role) else {
+            return false;
+        };
+        let t = &mut self.sounds[i];
+        t.retain(|(n, _)| *n != take);
+        if !samples.is_empty() {
+            let at = t.partition_point(|(n, _)| *n < take);
+            t.insert(at, (take, samples));
+        }
+        true
+    }
+
+    /// How many takes a role has.
+    pub fn takes(&self, cues: &Cues, role: &str) -> usize {
+        cues.roles
+            .iter()
+            .position(|r| r.name == role)
+            .and_then(|i| self.sounds.get(i))
+            .map_or(0, Vec::len)
     }
 
     /// Takes every role's sound away and stops what plays: the model's own
     /// sound plays again. The cues start afresh, so a held role (a stage's
     /// loop) starts on the next frame its request holds, as when a look
-    /// changes mid-game.
+    /// changes mid-game, and each role's turn of takes starts again at its
+    /// first.
     pub fn clear(&mut self) {
         for s in &mut self.sounds {
             s.clear();
         }
+        self.started.fill(0);
         self.music = None;
         self.sfx.clear();
         self.director = Director::new();
@@ -352,6 +409,15 @@ impl RolePlayer {
             .map(|(r, _)| r.name.as_str())
     }
 
+    /// The log as text, a start a line: `FRAME ROLE TAKE`.
+    pub fn log_text(&self) -> String {
+        let mut s = String::new();
+        for (f, r, t) in &self.log {
+            s.push_str(&format!("{f} {r} {t}\n"));
+        }
+        s
+    }
+
     /// Steps after a tick: reads the roles' cues from the world and gives
     /// the frame's `n` samples.
     pub fn frame(&mut self, cues: &Cues, world: &World, n: usize) -> Vec<i16> {
@@ -369,6 +435,8 @@ impl RolePlayer {
             self.pending = (Vec::new(), Vec::new());
             return vec![0; n];
         }
+        self.sounds.resize(cues.roles.len(), Vec::new());
+        self.started.resize(cues.roles.len(), 0);
         let index = |name: &str| cues.roles.iter().position(|r| r.name == name);
         for name in &stops {
             if let Some(i) = index(name) {
@@ -380,10 +448,25 @@ impl RolePlayer {
         }
         for name in &starts {
             let Some(i) = index(name) else { continue };
-            if self.keep_log {
-                self.log.push((world.frame, name.clone()));
+            // The next take in turn; a role with none plays nothing, and
+            // its turn doesn't move.
+            let takes = self.sounds[i].len();
+            let take = if takes == 0 {
+                0
+            } else {
+                let k = (self.started[i] % takes as u64) as usize;
+                self.started[i] += 1;
+                k
+            };
+            if self.keep_log && self.log.len() < LOG_MAX {
+                let number = self.sounds[i].get(take).map_or(0, |t| t.0);
+                self.log.push((world.frame, name.clone(), number));
             }
-            let v = Voice { role: i, at: 0 };
+            let v = Voice {
+                role: i,
+                take,
+                at: 0,
+            };
             if cues.roles[i].music {
                 self.music = Some(v);
             } else {
@@ -394,7 +477,7 @@ impl RolePlayer {
         let mut mix = vec![0i32; n];
         let sounds = &self.sounds;
         let mut play = |v: &mut Voice| -> bool {
-            let s = &sounds[v.role];
+            let s: &[i16] = sounds[v.role].get(v.take).map_or(&[], |t| &t.1);
             let loops = cues.roles[v.role].loops;
             for m in &mut mix {
                 if v.at >= s.len() {
@@ -601,7 +684,7 @@ mod tests {
         assert_eq!(p.frame(&c, &w, 3), vec![100, 100, 0]);
         assert_eq!(
             p.log,
-            vec![(2, "stage".to_string()), (3, "jump".to_string())]
+            vec![(2, "stage".to_string(), 1), (3, "jump".to_string(), 1)]
         );
         // While a silent test holds, nothing plays.
         let mut quiet = c.clone();
@@ -634,5 +717,70 @@ mod tests {
             b
         };
         assert_eq!(read_wav(&wav).unwrap(), vec![7, 7, -7, -7]);
+    }
+
+    /// A role with three takes (issue #30): each start plays the next, in
+    /// the order of their numbers whatever order they were set in, each
+    /// take's own samples; a second player over the same frames plays the
+    /// same takes at the same frames; `set` and `clear` leave one take and
+    /// start the turn again.
+    #[test]
+    fn a_role_with_takes_plays_each_in_turn_and_the_same_again() {
+        let c = Cues {
+            roles: vec![RoleCue {
+                name: "hop".into(),
+                music: false,
+                counter: 0,
+                mask: -1,
+                equals: Some(1),
+                held: false,
+                loops: false,
+            }],
+            ..Cues::default()
+        };
+        let run = || {
+            let mut p = RolePlayer::new(&c);
+            p.keep_log = true;
+            // Set out of order: the turn goes by number.
+            assert!(p.set_take(&c, "hop", 3, vec![30; 2]));
+            assert!(p.set(&c, "hop", vec![10; 2]));
+            assert!(p.takes(&c, "hop") == 1);
+            assert!(p.set_take(&c, "hop", 3, vec![30; 2]));
+            assert!(p.set_take(&c, "hop", 2, vec![20; 2]));
+            assert!(!p.set_take(&c, "hop", 0, vec![1]));
+            assert!(!p.set_take(&c, "nope", 2, vec![1]));
+            assert_eq!(p.takes(&c, "hop"), 3);
+            let mut heard = Vec::new();
+            for f in 1..=40u64 {
+                let w = World {
+                    counters: vec![i64::from(f % 8 == 0)],
+                    frame: f,
+                    ..World::default()
+                };
+                let s = p.frame(&c, &w, 2);
+                if s[0] != 0 {
+                    heard.push((f, s[0]));
+                }
+            }
+            (p, heard)
+        };
+        let (mut p, heard) = run();
+        // Asked on frames 8, 16, 24, 32 and 40; each sounds from the next.
+        assert_eq!(heard, vec![(9, 10), (17, 20), (25, 30), (33, 10)]);
+        assert_eq!(
+            p.log.iter().map(|x| (x.0, x.2)).collect::<Vec<_>>(),
+            vec![(9, 1), (17, 2), (25, 3), (33, 1)]
+        );
+        assert_eq!(p.log_text().lines().next(), Some("9 hop 1"));
+        let (again, heard_again) = run();
+        assert_eq!(heard_again, heard);
+        assert_eq!(again.log, p.log);
+        // An empty take takes it away; clear starts the turn again.
+        assert!(p.set_take(&c, "hop", 2, Vec::new()));
+        assert_eq!(p.takes(&c, "hop"), 2);
+        p.clear();
+        assert!(!p.is_on());
+        assert!(p.set(&c, "hop", vec![5; 2]));
+        assert_eq!(p.takes(&c, "hop"), 1);
     }
 }

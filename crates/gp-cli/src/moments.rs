@@ -300,7 +300,7 @@ pub struct MomentsArgs {
 /// `gp interp moments` from its arguments.
 pub(crate) fn run(a: &MomentsArgs, paths: &gp_evidence::Paths) -> Result<crate::Outcome> {
     use crate::interp_args as ia;
-    let log = a.input.read()?;
+    let log = a.input.read(paths)?;
     let (source, _) = ia::source(&a.model, a.assets.as_deref(), a.module.as_deref(), paths)?;
     let (_, mapping) = ia::load_mapping(&a.model, a.mapping.as_deref())?;
     let rom = ia::read_rom(&a.rom)?;

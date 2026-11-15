@@ -15,6 +15,8 @@ license.workspace = true
 # page under scripts/web/public/wasi.js, an in-memory file system, so the
 # ROM never leaves the browser.
 [dependencies]
+# An arcade romset zip read and its graphics decoded (src/arcade.rs).
+gp-arcade = { version = "0.1.0", path = "../gp-arcade" }
 gp-assets = { version = "0.1.0", path = "../gp-assets" }
 gp-evidence = { version = "0.1.0", path = "../gp-evidence" }
 gp-look = { version = "0.1.0", path = "../gp-look" }

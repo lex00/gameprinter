@@ -147,13 +147,22 @@ pub(crate) fn run_resumed_on<O: crate::screen::Shows>(
     let model = source.parse_model()?;
     // The hooks' APU writes, for the sound measure.
     let mut interp = source.open()?.with_apu_events()?;
+    // From the model's own power-on, a draws script starts at the first
+    // compared frame: the run starts there with the model's power-on state
+    // loaded as it stands, which starts the script with its base at the
+    // original's frame there, so the model takes the original's draws from
+    // its first frame. A script only starts on a load, so without this the
+    // model drew from its own generator for the whole run.
+    let power_on =
+        (from.is_none() && draws.is_some()).then(|| gp_runtime::Runtime::canonical_state(&interp));
     if let Some(mut d) = draws {
         d.base = from.unwrap_or(0);
         interp = interp.with_draws(d)?;
     }
     let spec = source.spec.clone();
     let mut no_screen = None;
-    let mut probe = match assets.map(|a| crate::screen::art(&model, &spec, a)) {
+    let mut probe = match assets.map(|a| crate::screen::art(&model, &spec, a, mapping.board_units))
+    {
         Some(Ok(art)) => {
             let mut p = crate::screen::Probe::new(
                 art,
@@ -175,8 +184,8 @@ pub(crate) fn run_resumed_on<O: crate::screen::Shows>(
     let opts = Options {
         mode,
         tolerance,
-        from,
-        start_state: None,
+        from: if power_on.is_some() { Some(0) } else { from },
+        start_state: power_on,
         values,
         until_start: false,
         sound: true,

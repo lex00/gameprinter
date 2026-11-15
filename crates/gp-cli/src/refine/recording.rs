@@ -298,6 +298,7 @@ fn validate(a: &RefineArgs<'_>, paths: &gp_evidence::Paths) -> Result<Value> {
         // The loop proposes facts from what the model does on its own,
         // its start values too.
         power_on: true,
+        which: false,
     };
     let out = crate::validate::run(&args, paths)?;
     if out.exit == 2 {

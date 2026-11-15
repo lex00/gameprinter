@@ -1,0 +1,73 @@
+name: release
+# Builds gp release archives (scripts/release/build.sh, docs: site/src/content/docs/install.md)
+# on each platform's own runner, and keeps them as this run's artifacts.
+#
+# NOT ENABLED TO PUBLISH. It runs only when someone starts it by hand
+# (Actions, release, Run workflow). It makes no GitHub release, pushes no
+# tag and uploads nothing outside the run. Turning it on for tags is the
+# owner's call: uncomment the `push: tags` lines, and add a job that makes
+# the release from the artifacts (gh release create, with `contents: write`).
+# It needs no secrets. Signing and notarizing the macOS builds would need the
+# owner's Apple developer secrets; see install.md, "What a Mac says".
+on:
+  workflow_dispatch:
+  # push:
+  #   tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-15, target: aarch64-apple-darwin }
+          - { os: macos-13, target: x86_64-apple-darwin }
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          # Windows is left out: gp doesn't compile there yet (std::os::unix
+          # in publish.rs, gate_copy.rs, tool_gate.rs, mechanic/server.rs and
+          # serve/clip_agent.rs; install.md lists the rest).
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: editor/package-lock.json
+      - name: Tools
+        run: |
+          rustup show
+          rustup target add wasm32-unknown-unknown
+          cargo install --locked cargo-about --version 0.9.2
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get -o Acquire::Retries=5 update -qq
+            sudo apt-get -o Acquire::Retries=5 install -y -qq zip rsync
+          fi
+      - name: Editor
+        working-directory: editor
+        run: npm ci --silent --no-audit --no-fund && npm run --silent build
+      # The runner has no page that passed the release check, so this gp
+      # carries none; gp theme look play then needs --page. The owner's
+      # local `just release` carries the page.
+      - name: Build
+        env:
+          GP_RELEASE_TARGET: ${{ matrix.target }}
+          GP_HOME: ${{ runner.temp }}/gp-home
+        run: scripts/release/build.sh "$RUNNER_TEMP/release"
+      - name: Try it outside the checkout
+        run: |
+          set -euo pipefail
+          dir="$(ls -d "$RUNNER_TEMP"/release/gp-*/ | head -1)"
+          cd "$RUNNER_TEMP"
+          mkdir -p empty-home
+          HOME="$RUNNER_TEMP/empty-home" GP_HOME="$RUNNER_TEMP/empty-home/.gameprinter" "$dir/gp" --version
+          HOME="$RUNNER_TEMP/empty-home" GP_HOME="$RUNNER_TEMP/empty-home/.gameprinter" "$dir/gp" self check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gp-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/release/*.tar.gz
+            ${{ runner.temp }}/release/*.tar.gz.sha256
+          if-no-files-found: error

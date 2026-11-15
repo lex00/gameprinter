@@ -16,7 +16,18 @@ gp registry reindex ~/my-registry me/my-theme@1.0.0
 gp registry check ~/my-registry
 ```
 
-`reindex` rewrites the lists readers use to find things, so name every version that should be listed. The last version of a package you name becomes its latest.
+`reindex` rewrites the lists readers use to find things. Given `--keep` (or no versions at all) it starts from what is listed now and adds the versions you name. Without `--keep` you name every version that should stay listed; one left out is refused unless `--drop` names it. The last version of a package becomes its latest.
+
+## Namespaces, withdrawals and what the page offers
+
+| Command | What it does |
+|---|---|
+| `gp registry grant TARGET NAMESPACE` | Lets packages named `NAMESPACE/...` install from the registry. Without it the page lists such a theme and its install fails |
+| `gp registry grants TARGET` | Lists the namespaces granted |
+| `gp registry yank TARGET NAME@VERSION --severity security --reason TEXT` | Withdraws a version: the page leaves a `security` one out and refuses to install it, and still offers a `notice` one with the reason shown. `--undo` takes it back |
+| `gp registry check TARGET --for GAME [--theme NAME]` | Reads the game's theme list as the page does: each theme it offers, installed as it installs it, and each it leaves out with why. With `--theme`, whether that one is offered and if not why, exiting 1 when it isn't |
+
+The page names a theme by the part of its package name after the namespace, so that part must start with a lowercase letter, hold only lowercase letters, digits, `-` and `_`, and not be `original`. Of two themes whose names end the same, only the one from the game's own namespace is listed (else the first by title). `gp registry publish` says, for each game a theme is for, whether the page will offer it once it is reindexed.
 
 ## Where it can live
 
@@ -36,4 +47,4 @@ Signing is off unless you opt in. Every file is still checked against its hash, 
 
 ## Not built yet
 
-Taking submissions from other people: an inbox, review, accepting and refusing. The player page reads one registry and can't yet add another, so a registry of your own is mainly for your own use today.
+Taking submissions from other people: an inbox, review, accepting and refusing. Today someone asks the registry's owner (for `lex00/gp-registry`, by opening an issue there), and the owner publishes the theme by hand with the commands above. The player page reads one registry and can't yet add another, so a registry of your own is mainly for your own use today.

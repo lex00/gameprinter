@@ -1667,6 +1667,33 @@ fn score(
         fidelity % 10,
         short(&model_hash),
     )];
+    // The clips made and scored a second time because the first try
+    // couldn't make or score them, and how each second try went.
+    let reran: Vec<Value> = g
+        .reran
+        .iter()
+        .map(|r| match &r.now {
+            Ok(()) => json!({"id": r.id, "first": r.first, "ok": true}),
+            Err(e) => json!({"id": r.id, "first": r.first, "ok": false, "error": e}),
+        })
+        .collect();
+    if !g.reran.is_empty() {
+        let again = g.reran.iter().filter(|r| r.now.is_err()).count();
+        text.push(format!(
+            "Run once more, as the first try couldn't make or score them: {} clips, {} made and scored the second time, {again} not, which count as couldn't be made:",
+            g.reran.len(),
+            g.reran.len() - again,
+        ));
+        for r in &g.reran {
+            text.push(match &r.now {
+                Ok(()) => format!(
+                    "  {}: made and scored the second time (the first try: {})",
+                    r.id, r.first
+                ),
+                Err(e) => format!("  {}: failed again: {e} (the first try: {})", r.id, r.first),
+            });
+        }
+    }
     if held > 0 {
         text.push(format!(
             "The contract's corpus bars{}{}: {met} of {held} clips meet them.",
@@ -1773,9 +1800,10 @@ fn score(
         None => Value::Null,
     };
     let v = json!({"ok": problems.is_empty(), "record": record, "written": written,
-        "problems": problems, "remeasured": remeasured,
+        "problems": problems, "remeasured": remeasured, "reran": reran,
         "scored_against_from": caught_up["from"],
-        "fingerprint": fingerprint, "reads": reads, "affected": affected});
+        "fingerprint": fingerprint, "reads": reads, "affected": affected,
+        "model_reads": source.model_reads()});
     let mut out = Outcome::ok(v, text.join("\n"));
     if !problems.is_empty() {
         out.exit = 1;

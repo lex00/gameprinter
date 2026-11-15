@@ -77,6 +77,17 @@ pub struct Mapping {
     /// other the byte it reads.
     #[serde(default)]
     pub platform: Option<String>,
+    /// Feature `platform.board_units`: an arcade model's positions are the
+    /// board's own units, from the screen's top left with y down (half a
+    /// screen pixel on Midway's MCR: 256 by 240, the NES's geometry), and
+    /// the fields' `scale` and `offset` turn the RAM's bytes into them.
+    /// The drawers then only multiply by the board's unit
+    /// (`gp_arcade::video::UNIT`). Without it an arcade model holds the
+    /// bytes as the RAM has them and the drawers place a body where the
+    /// board draws a sprite with those bytes (`gp_arcade::video::sprite_place`).
+    /// Only an arcade mapping may say it.
+    #[serde(default)]
+    pub board_units: bool,
     #[serde(default)]
     pub description: Option<String>,
     /// How the model's frames line up with the original's.
@@ -419,9 +430,15 @@ pub struct Slots {
     /// taken until it leaves. No run compares it.
     #[serde(default)]
     pub held: Option<SlotHeld>,
-    /// A presentation value (schema 4): a translation loads it, but no
-    /// run compares it, so it is no measure and counts for nothing in a
-    /// score. Super Mario Bros.' color rotation is one.
+    /// Feature `slots.group.presentation`, a group's only: its objects
+    /// are drawn, never compared. A start carries each of them as a body,
+    /// its fields loaded from the original's state at the clip's start,
+    /// and no run pairs or measures them, as a kind's `holds_slot` does
+    /// for every kind of the group. In free play nothing loads them, so
+    /// `gp model check` holds the model to making them itself: each kind's
+    /// entity has a hook of its own (`ext`) or is placed by a level's
+    /// `spawn`. Tapper's bars' end pieces, objects the model doesn't run
+    /// during the end scripts.
     #[serde(default)]
     pub presentation: bool,
     /// A group's (schema 11): the byte whose value is the model's
@@ -703,6 +720,15 @@ pub struct Field {
     /// places.
     #[serde(default)]
     pub stride: Option<u16>,
+    /// Feature `slots.field.strides`: a stride for each byte the field
+    /// reads (`ram`, then `frac`), in place of `stride`, for a value made
+    /// of bytes from records that repeat at different steps. Tapper keeps
+    /// a customer's record every 32 bytes from E4B2 and its object (its
+    /// flags and picture) every 8 from E262, and one word holds bytes of
+    /// both: `ram = [0xE4B2, 0xE4BF, 0xE263, 0xE264]`,
+    /// `strides = [32, 32, 8, 8]`.
+    #[serde(default)]
+    pub strides: Vec<u16>,
     /// A slot field whose value is the slot's own number, plus `offset`
     /// (feature `slots.field.index`), with `ram = []`: for a hook that
     /// keeps which slot it is in a word, as Donkey Kong's oil-drum fires,
@@ -800,6 +826,20 @@ pub struct Case {
     pub nametable: Option<Vec<u16>>,
     #[serde(default)]
     pub note: Option<String>,
+}
+
+/// Whether the state mapping in the package folder `dir` says its model's
+/// positions are the board's own units (feature `platform.board_units`,
+/// [`Mapping::board_units`]): false when the folder has no mapping.
+pub fn board_units_in(dir: &std::path::Path) -> Result<bool, String> {
+    let file = dir.join(MAPPING_FILE);
+    match std::fs::read_to_string(&file) {
+        Ok(text) => Mapping::parse(&text)
+            .map(|m| m.board_units)
+            .map_err(|e| format!("{}: {e}", file.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(format!("{}: {e}", file.display())),
+    }
 }
 
 impl Mapping {
@@ -961,6 +1001,11 @@ impl Mapping {
                 }
             }
         }
+        if m.board_units && !arcade {
+            return Err(
+                "`board_units` is an arcade mapping's (platform = \"arcade\"): an NES model's units are already the screen's pixels".into(),
+            );
+        }
         if arcade {
             m.check_arcade()?;
         }
@@ -1004,6 +1049,12 @@ impl Mapping {
             }
             if f.stride.is_some() {
                 return Err(format!("{}: `stride` is for a slot field", f.path));
+            }
+            if !f.strides.is_empty() {
+                return Err(format!(
+                    "{}: `strides` is for a slot field: a field outside `[slots]` reads its bytes where `ram` says",
+                    f.path
+                ));
             }
             if f.index {
                 return Err(format!("{}: `index` is for a slot field", f.path));
@@ -1110,6 +1161,9 @@ impl Mapping {
             if slots.turn.is_some() {
                 return Err("slots: only a group has a turn".into());
             }
+            if slots.presentation {
+                return Err("slots: `presentation` is a group's: the first slots hold the levels every group takes, so put the objects that are only drawn in a `[[slots.group]]` of their own with `presentation = true`".into());
+            }
             if !slots.groups.is_empty() && m.schema < 9 {
                 return Err("slots: a group needs schema 9".into());
             }
@@ -1122,6 +1176,12 @@ impl Mapping {
             }
             for g in &slots.groups {
                 g.check(m.schema, &SHOT_REST_PATHS)?;
+                if g.presentation && (!g.rest.is_empty() || g.turn.is_some()) {
+                    return Err(format!(
+                        "slots: the group {}is presentation only, so nothing the model plays reads its `rest` or `turn`: leave them out, or make it a group that is compared",
+                        g.name.as_ref().map_or(String::new(), |n| format!("`{n}` "))
+                    ));
+                }
                 if !g.groups.is_empty() || !g.levels.is_empty() || g.held.is_some() {
                     return Err("slots: a group has no groups, levels or held of its own".into());
                 }
@@ -1147,6 +1207,15 @@ impl Mapping {
         paths.sort_unstable();
         if let Some(w) = paths.windows(2).find(|w| w[0] == w[1]) {
             return Err(format!("{} is mapped twice", w[0]));
+        }
+        // A presentation group's objects are carried and never compared:
+        // every kind of it holds its slot, as `holds_slot` says.
+        if let Some(s) = m.slots.as_mut() {
+            for g in s.groups.iter_mut().filter(|g| g.presentation) {
+                for k in &mut g.kinds {
+                    k.holds_slot = true;
+                }
+            }
         }
         Ok(m)
     }
@@ -1237,6 +1306,36 @@ impl Slots {
                     "slots: {}: a stride is at least 1, and a shared field has none",
                     f.path
                 ));
+            }
+            if !f.strides.is_empty() {
+                let bytes = f.ram.len() + usize::from(f.frac.is_some());
+                let why = if f.stride.is_some() {
+                    Some("give `stride` (one step for every byte) or `strides` (a step for each), not both".to_owned())
+                } else if f.shared {
+                    Some(
+                        "a shared field reads the same bytes for every slot, so it has no strides"
+                            .to_owned(),
+                    )
+                } else if f.index {
+                    Some("an `index` field reads no bytes, so it has no strides".to_owned())
+                } else if f.strides.len() != bytes {
+                    Some(format!(
+                        "`strides` has {} steps and the field reads {bytes} bytes (`ram`{}): give one step for each byte, in the same order",
+                        f.strides.len(),
+                        if f.frac.is_some() {
+                            ", then `frac`"
+                        } else {
+                            ""
+                        }
+                    ))
+                } else if f.strides.contains(&0) {
+                    Some("each stride is at least 1: a byte at the same address for every slot is a `shared` field's".to_owned())
+                } else {
+                    None
+                };
+                if let Some(why) = why {
+                    return Err(format!("slots: {}: {why}", f.path));
+                }
             }
             let named = matches!(p, "facing" | "state");
             if f.digits
@@ -1784,6 +1883,15 @@ impl Field {
     /// The RAM addresses for slot `slot`: each one `slot` strides past the
     /// field's, or the field's own when it is `shared`.
     pub fn slot_addresses(&self, slot: u16) -> Vec<u16> {
+        if !self.strides.is_empty() {
+            return self
+                .ram
+                .iter()
+                .chain(&self.frac)
+                .zip(&self.strides)
+                .map(|(a, s)| a + slot * s)
+                .collect();
+        }
         let step = if self.shared {
             0
         } else {

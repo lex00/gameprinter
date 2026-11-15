@@ -10,6 +10,12 @@
 //                    and read, never copied
 //   GP_WORKER_OUT    where the comparison writes its files (else the
 //                    system's temp folder)
+//   GP_WEB_LIFT_ARCADE_OUT  a folder like GP_WEB_LIFT_OUT's for an arcade
+//                    game (Tapper's: lift/ with gp-web-lift.wasm and the
+//                    play/lift/ files build-page.sh writes for it); the
+//                    arcade tests skip without it. They lift made-up zips
+//                    only: a set is known by its chips' real hashes, so
+//                    what a made-up zip can show is the refusals.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -30,16 +36,16 @@ const skip = out ? false : "GP_WEB_LIFT_OUT isn't set (run scripts/web/build-lif
 const DK = "aa408f5a6b97c0d738e7e8b489a5617ad4a9ecdee2b05c4ee504210ce31b2825";
 const OE = "45440d8ef512b4660dce0c753e110004aef96fa30f2967f9260e946d808db07d";
 
-async function lift(rom) {
-  const dir = path.join(out, "lift");
+async function lift(rom, from = out, romPath = "/rom.nes") {
+  const dir = path.join(from, "lift");
   const index = JSON.parse(fs.readFileSync(path.join(dir, "index.json"), "utf8"));
   const mem = new MemFs();
-  mem.writeFile("/rom.nes", rom);
+  mem.writeFile(romPath, rom);
   for (const f of index.files) mem.writeFile(`/template/${f}`, fs.readFileSync(path.join(dir, f)));
   mem.mkdirp("/out");
   const module = new WebAssembly.Module(fs.readFileSync(path.join(dir, "gp-web-lift.wasm")));
   const t0 = performance.now();
-  const run = await runWasi(module, ["gp-web-lift", "/rom.nes", "/template", "/out"], mem);
+  const run = await runWasi(module, ["gp-web-lift", romPath, "/template", "/out"], mem);
   run.ms = performance.now() - t0;
   run.result = JSON.parse(new TextDecoder().decode(mem.readFile("/out/result.json")));
   run.mem = mem;
@@ -260,3 +266,85 @@ test(
     assert.deepEqual(index.files.filter((f) => f.includes("/themes/")), []);
   },
 );
+
+// ---- An arcade game's lift: the refusals a made-up zip can show ----
+
+const arcadeOut = process.env.GP_WEB_LIFT_ARCADE_OUT;
+const arcadeSkip = arcadeOut ? false : "GP_WEB_LIFT_ARCADE_OUT isn't set (an arcade game's lift folder, as build-page.sh writes it)";
+const liftZip = (bytes) => lift(bytes, arcadeOut, "/rom.zip");
+const onlyResult = (run) => [...run.mem.files.keys()].filter((f) => f.startsWith("/out/")).length === 1;
+// A zip of stored entries, made here from made-up bytes.
+function madeUpZip(files) {
+  const table = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (d) => {
+    let c = 0xffffffff;
+    for (const x of d) c = table[(c ^ x) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const locals = [];
+  const centrals = [];
+  let o = 0;
+  for (const [name, data] of files) {
+    const n = Buffer.from(name, "latin1");
+    const h = Buffer.alloc(30);
+    h.writeUInt32LE(0x04034b50, 0);
+    h.writeUInt16LE(20, 4);
+    h.writeUInt32LE(crc(data), 14);
+    h.writeUInt32LE(data.length, 18);
+    h.writeUInt32LE(data.length, 22);
+    h.writeUInt16LE(n.length, 26);
+    const c = Buffer.alloc(46);
+    c.writeUInt32LE(0x02014b50, 0);
+    c.writeUInt16LE(20, 4);
+    c.writeUInt16LE(20, 6);
+    c.writeUInt32LE(crc(data), 16);
+    c.writeUInt32LE(data.length, 20);
+    c.writeUInt32LE(data.length, 24);
+    c.writeUInt16LE(n.length, 28);
+    c.writeUInt32LE(o, 42);
+    locals.push(h, n, data);
+    centrals.push(c, n);
+    o += 30 + n.length + data.length;
+  }
+  const cd = Buffer.concat(centrals);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(files.length, 8);
+  end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(cd.length, 12);
+  end.writeUInt32LE(o, 16);
+  return Buffer.concat([...locals, cd, end]);
+}
+const arcadeTitle = () => JSON.parse(fs.readFileSync(path.join(arcadeOut, "lift", "game.json"), "utf8")).title;
+
+test("an arcade game: a file that isn't a zip is refused, naming the game and the sets it takes", { skip: arcadeSkip }, async () => {
+  const run = await liftZip(new TextEncoder().encode("NES\x1a not a romset"));
+  assert.equal(run.code, 3, run.stderr);
+  assert.equal(run.result.ok, false);
+  const title = arcadeTitle();
+  assert.match(run.result.error, new RegExp(`^This file isn't a zip\\. This page takes a MAME romset zip of ${title}: [a-z0-9]+(, [a-z0-9]+)*( or [a-z0-9]+)?( \\([a-z0-9, ]+ (isn't|aren't) drawn right yet\\))?\\.$`));
+  assert.ok(run.result.expected.length >= 1, "the sets it takes are listed");
+  assert.ok(onlyResult(run), "only result.json");
+});
+
+test("an arcade game: a zip of made-up files is refused as holding no chip of the game", { skip: arcadeSkip }, async () => {
+  const bytes = Buffer.from(Array.from({ length: 4096 }, (_, i) => (i * 131) & 0xff));
+  const run = await liftZip(madeUpZip([["readme.txt", Buffer.from("made up")], ["made-up.bin", bytes]]));
+  assert.equal(run.code, 3, run.stderr);
+  assert.match(run.result.error, new RegExp(`^This zip holds no chip of a ${arcadeTitle()} romset\\.`));
+  assert.ok(onlyResult(run), "only result.json");
+});
+
+test("an arcade game: a zip that can't be read is refused", { skip: arcadeSkip }, async () => {
+  const z = madeUpZip([["a.bin", Buffer.alloc(16, 1)]]);
+  // The central directory's entry no longer starts as one.
+  z[z.indexOf(Buffer.from("PK\x01\x02", "latin1")) + 2] = 9;
+  const run = await liftZip(z);
+  assert.equal(run.code, 3, run.stderr);
+  assert.match(run.result.error, /^This zip can't be read/);
+  assert.ok(onlyResult(run), "only result.json");
+});

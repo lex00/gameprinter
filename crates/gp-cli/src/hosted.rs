@@ -40,6 +40,9 @@ pub(crate) struct Source {
     /// What the hooks are, for caches: the module file's hash, else
     /// `gp`'s own label for them.
     pub hooks: String,
+    /// With a module, whether it reads a frame's paths in one call
+    /// (`query-values`, game-printer:game@0.2.0 on).
+    batch: Option<bool>,
 }
 
 impl Source {
@@ -109,12 +112,14 @@ impl Source {
         let bytes = bundle.to_bytes();
         let mut module_hash = String::new();
         let mut described = None;
+        let mut batch = None;
         let module = match module {
             Some(p) => {
                 let wasm = fs::read(p).with_context(|| p.display().to_string())?;
                 module_hash = blake3::hash(&wasm).to_hex().to_string();
                 let code = ModuleCode::compile(&wasm).map_err(|e| anyhow!("{e}"))?;
                 let first = code.load(&bytes).map_err(|e| anyhow!("{e}"))?;
+                batch = Some(first.batch_reads());
                 described = Some(
                     gp_interp::describe::read_exts(&first.describe().map_err(|e| anyhow!("{e}"))?)
                         .map_err(|e| anyhow!("{e}"))?,
@@ -147,7 +152,20 @@ impl Source {
             exts,
             module,
             hooks,
+            batch,
         })
+    }
+
+    /// How a run reads the model's values on each frame, for `--json`:
+    /// `native` (the built-in interpreter), `query-values` (the module's one
+    /// call for them all) or `query` (one call a path: a module built
+    /// before game-printer:game@0.2.0).
+    pub(crate) fn model_reads(&self) -> &'static str {
+        match self.batch {
+            None => "native",
+            Some(true) => "query-values",
+            Some(false) => "query",
+        }
     }
 
     /// A run of this source's model edited to `m`, started at power-on:
@@ -182,6 +200,7 @@ impl Source {
             exts: self.exts.clone(),
             module: self.module.clone(),
             hooks: self.hooks.clone(),
+            batch: self.batch,
         })
     }
 
@@ -415,6 +434,15 @@ impl gp_interp::baseline::Runs for Model {
     }
     fn run_world(&self) -> World {
         self.world().clone()
+    }
+}
+
+impl gp_runtime::QueryValues for Model {
+    fn query_values(&self, selectors: &[String]) -> Vec<Result<Vec<Value>, String>> {
+        match self {
+            Self::Native(i) => i.query_values(selectors),
+            Self::Module(h) => h.rt.query_values(selectors),
+        }
     }
 }
 

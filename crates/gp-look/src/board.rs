@@ -1,0 +1,2018 @@
+//! An arcade model drawn as its board draws its picture
+//! (docs/formats/board-art.md): a level's `present.board` gives the
+//! background tile layer (a whole screen of the board's tiles) and the
+//! board's 64 colours, and each body whose entity has a `board_sprite` is
+//! an entry of the board's sprite RAM, its picture and flags read from the
+//! body's words or fixed by the model, placed where the board draws an
+//! entry whose bytes are the body's position. The picture is then made by
+//! the board's own drawing, `gp_arcade::video::draw`, with the tiles and
+//! sprites the player's lift holds: its layering, priorities, colour banks
+//! and placement are the board's, and nothing here decodes a pixel again.
+//!
+//! Everything comes from the model and the lifted folder; nothing is read
+//! from the original's RAM. A model that names none of this draws as
+//! before (by tile kind on an arcade lift).
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use gp_arcade::video::{self, Gfx};
+use gp_assets::arcade::{ArcadeAsset, ArcadeMap, Format};
+use gp_model::Model;
+use gp_model::model::{AssetKind, BoardByte};
+use gp_sim::{Spec, World};
+
+/// The sprite RAM's entries on the 91490 board's sprite board (0x200
+/// bytes of four).
+pub const ENTRIES: usize = 128;
+
+/// The board's picture's size: [`Picture::pens`] is this wide and high.
+pub const WIDTH: usize = video::WIDTH;
+pub const HEIGHT: usize = video::HEIGHT;
+
+/// A model's board art, read once from its lifted folder.
+#[derive(Clone)]
+pub struct BoardArt {
+    gfx: Gfx,
+    /// By the spec's level index: its look, or None for a level with no
+    /// `present.board` (drawn as before).
+    levels: Vec<Option<LevelBoard>>,
+    /// By the spec's kind index: its board sprite, or None.
+    kinds: Vec<Option<KindSprite>>,
+    /// The spec's kind names, by index.
+    kind_names: Vec<String>,
+    /// Whether the model's positions are the board's own units (its state
+    /// mapping's `board_units`): top left, y down, each unit
+    /// [`video::UNIT`] screen pixels, so a body's sprite entry holds the
+    /// bytes that draw it there ([`video::sprite_bytes`]). Otherwise they
+    /// are the sprite RAM's bytes as they are.
+    board_units: bool,
+}
+
+#[derive(Clone)]
+struct LevelBoard {
+    /// The level's own look.
+    base: Look,
+    /// Its other looks (`looks`), each with the counter tests that choose
+    /// it: the first whose tests all hold is drawn.
+    looks: Vec<(Vec<Test>, Look)>,
+    /// Counters drawn as digits (`counters`).
+    numbers: Vec<Number>,
+    /// Counters drawn as one tile repeated (`repeats`).
+    repeats: Vec<Repeat>,
+}
+
+/// A screen and its colours.
+#[derive(Clone)]
+struct Look {
+    /// The `board-screen` slot its screen is, None for a look with none.
+    screen: Option<String>,
+    /// Video RAM as the board reads it: 960 cells of two bytes, low first.
+    videoram: Vec<u8>,
+    /// The 64 colours as 0xRRGGBB.
+    palette: [u32; 64],
+}
+
+/// A counter test (a `Guard`), its counter by its index in the spec.
+#[derive(Clone, Copy)]
+struct Test {
+    counter: usize,
+    cmp: gp_model::model::Cmp,
+    value: i64,
+}
+
+impl Test {
+    fn all(tests: &[Test], w: &World) -> bool {
+        tests.iter().all(|t| {
+            w.counters
+                .get(t.counter)
+                .is_some_and(|v| t.cmp.holds(*v, t.value))
+        })
+    }
+}
+
+/// A counter drawn as digits: the cell of its first digit, each digit's
+/// tile code and the cells' high byte, lifted.
+#[derive(Clone)]
+struct Number {
+    counter: usize,
+    /// The counter's name, as a theme names its digits.
+    name: String,
+    plus: i64,
+    cell: usize,
+    digits: usize,
+    codes: [u8; 10],
+    high: u8,
+    zeros: bool,
+    when: Vec<Test>,
+}
+
+/// A counter drawn as a tile repeated: the cells it takes, in order.
+#[derive(Clone)]
+struct Repeat {
+    counter: usize,
+    /// The counter's name, as a theme names its tile.
+    name: String,
+    plus: i64,
+    cells: Vec<usize>,
+    word: [u8; 2],
+    when: Vec<Test>,
+}
+
+#[derive(Clone, Copy)]
+enum Byte {
+    /// A byte of a body's `ext` word: (word, byte).
+    Word(usize, u32),
+    Number(u8),
+}
+
+impl Byte {
+    fn of(b: &BoardByte) -> Self {
+        match (b.word, b.number) {
+            (Some(w), _) => Byte::Word(w as usize, b.byte),
+            (None, n) => Byte::Number(n.unwrap_or(0) as u8),
+        }
+    }
+
+    fn read(self, body: &gp_sim::world::Body) -> u8 {
+        match self {
+            Byte::Word(w, k) => body
+                .ext
+                .get(w)
+                .map_or(0, |v| ((*v >> (8 * k.min(7))) & 0xff) as u8),
+            Byte::Number(n) => n,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct KindSprite {
+    picture: Byte,
+    flags: Option<Byte>,
+    flip_when_facing_left: bool,
+}
+
+impl LevelBoard {
+    /// The look the world's counters choose: the first of `looks` whose
+    /// tests all hold, else the level's own.
+    fn look(&self, w: &World) -> &Look {
+        self.looks
+            .iter()
+            .find(|(t, _)| Test::all(t, w))
+            .map_or(&self.base, |(_, l)| l)
+    }
+
+    /// The look's video RAM with the counters drawn into it: the screen's
+    /// own cells where a counter draws nothing.
+    #[cfg(test)]
+    fn cells<'a>(&self, videoram: &'a [u8], w: &World) -> std::borrow::Cow<'a, [u8]> {
+        self.cells_with(videoram, w, None).0
+    }
+
+    /// [`LevelBoard::cells`], and each cell a counter drew, in order: those
+    /// `omit` names (by that order) left as the screen has them.
+    fn cells_with<'a>(
+        &self,
+        videoram: &'a [u8],
+        w: &World,
+        omit: Option<&[bool]>,
+    ) -> (std::borrow::Cow<'a, [u8]>, Vec<CellDrawn>) {
+        if self.numbers.is_empty() && self.repeats.is_empty() {
+            return (std::borrow::Cow::Borrowed(videoram), Vec::new());
+        }
+        let mut v = videoram.to_vec();
+        let mut drawn = Vec::new();
+        let mut put = |cell: usize, word: [u8; 2], name: String| {
+            let left = omit.is_some_and(|o| o.get(drawn.len()).copied().unwrap_or(false));
+            if !left && let Some(c) = v.get_mut(cell * 2..cell * 2 + 2) {
+                c.copy_from_slice(&word);
+            }
+            if cell < 960 {
+                drawn.push(CellDrawn { name, cell });
+            }
+        };
+        let value = |counter: usize, plus: i64| {
+            w.counters
+                .get(counter)
+                .copied()
+                .unwrap_or(0)
+                .saturating_add(plus)
+                .max(0)
+        };
+        for n in self.numbers.iter().filter(|n| Test::all(&n.when, w)) {
+            let mut x = value(n.counter, n.plus) as u64;
+            // The last digits, least first.
+            let mut digits = vec![0u8; n.digits];
+            for d in digits.iter_mut().rev() {
+                *d = (x % 10) as u8;
+                x /= 10;
+            }
+            let first = if n.zeros {
+                0
+            } else {
+                digits[..n.digits - 1]
+                    .iter()
+                    .position(|d| *d != 0)
+                    .unwrap_or(n.digits - 1)
+            };
+            for (k, d) in digits.iter().enumerate().skip(first) {
+                put(
+                    n.cell + k,
+                    [n.codes[*d as usize], n.high],
+                    counter_name(&n.name, Some(*d)),
+                );
+            }
+        }
+        for r in self.repeats.iter().filter(|r| Test::all(&r.when, w)) {
+            let count = value(r.counter, r.plus) as usize;
+            for &cell in r.cells.iter().take(count) {
+                put(cell, r.word, counter_name(&r.name, None));
+            }
+        }
+        (std::borrow::Cow::Owned(v), drawn)
+    }
+}
+
+/// A counter's cell drawn this frame: the name a theme gives its picture
+/// ([`counter_name`]) and the cell (row times 32 plus column).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CellDrawn {
+    pub name: String,
+    pub cell: usize,
+}
+
+/// The name a theme gives a sprite of the board: its entity and its
+/// picture code (0 to 511) in hex, `sprite-mug-4d`.
+#[must_use]
+pub fn sprite_name(entity: &str, code: u16) -> String {
+    format!("sprite-{entity}-{code:02x}")
+}
+
+/// The name a theme gives a counter's cell: `counter-score-7` for a digit
+/// of a counter drawn as digits, `counter-lives` for the tile a counter
+/// drawn as a tile repeated repeats.
+#[must_use]
+pub fn counter_name(counter: &str, digit: Option<u8>) -> String {
+    match digit {
+        Some(d) => format!("counter-{counter}-{d}"),
+        None => format!("counter-{counter}"),
+    }
+}
+
+/// A screen's, a sprite's and a counter cell's size in the board's
+/// picture's pixels: what a theme's sizes and places are in.
+pub const SCREEN_SIZE: [u32; 2] = [WIDTH as u32, HEIGHT as u32];
+pub const SPRITE_SIZE: [u32; 2] = [32, 32];
+pub const CELL_SIZE: [u32; 2] = [16, 16];
+
+/// One body the board draws: its index, its kind (the spec's index), its
+/// rectangle on the screen (left, top, width, height), the picture code
+/// its sprite entry draws (0 to 511: byte 2, and bit 3 of byte 1) and the
+/// entry's flags (byte 1: colour bank, flips), and the entry of sprite
+/// RAM it takes (0 to 127: a later entry is drawn over an earlier one).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Drawn {
+    pub body: usize,
+    pub kind: usize,
+    pub entry: usize,
+    pub rect: [i64; 4],
+    pub code: u16,
+    pub flags: u8,
+}
+
+/// The board's picture of a frame: each pixel's pen (0 to 63, with
+/// `gp_arcade::video::SPRITE_BIT` where a sprite drew it, or
+/// [`TRANSPARENT`] where a theme draws the screen), the 64 colours, the
+/// bodies drawn, the look's screen slot and the counters' cells drawn.
+pub struct Picture {
+    pub pens: Vec<u8>,
+    pub palette: [u32; 64],
+    pub drawn: Vec<Drawn>,
+    pub screen: Option<String>,
+    pub cells: Vec<CellDrawn>,
+}
+
+/// A pen in [`Picture::pens`] that draws nothing: the screen's pixels
+/// where a theme draws the screen itself (no board pen is 0x40).
+pub const TRANSPARENT: u8 = 0x40;
+
+/// What a theme draws itself, which the board then leaves out of its
+/// picture: bodies by index, the screen, the counters' cells by their
+/// order in [`Picture::cells`].
+#[derive(Debug, Clone, Default)]
+pub struct Omit {
+    pub bodies: Vec<bool>,
+    pub screen: bool,
+    pub cells: Vec<bool>,
+}
+
+/// Whether the model names any board art: a level's `present.board` or an
+/// entity's `board_sprite`.
+pub fn names_board(model: &Model) -> bool {
+    model
+        .entities
+        .values()
+        .any(|e| e.core.board_sprite.is_some())
+        || model
+            .levels
+            .values()
+            .any(|l| l.core.present.as_ref().is_some_and(|p| p.board.is_some()))
+}
+
+/// The lifted arcade asset a slot of `kind` names, from the map.
+fn slot_asset<'a>(
+    model: &Model,
+    map: &'a ArcadeMap,
+    slot: &str,
+    kind: AssetKind,
+) -> Result<&'a ArcadeAsset, String> {
+    let s = model
+        .assets
+        .get(slot)
+        .ok_or(format!("the model has no asset slot `{slot}`"))?;
+    if s.kind != kind {
+        return Err(format!("asset slot `{slot}` isn't of kind {}", kind.name()));
+    }
+    let from = s.from.as_ref().ok_or(format!(
+        "asset slot `{slot}` has no `from`, so nothing fills it"
+    ))?;
+    if from.source != map.source {
+        return Err(format!(
+            "asset slot `{slot}` is filled from `{}`, but the lifted assets are `{}`'s",
+            from.source, map.source
+        ));
+    }
+    let a = map
+        .assets
+        .iter()
+        .find(|a| a.name == from.asset)
+        .ok_or(format!(
+            "asset slot `{slot}` names `{}`, which the asset map doesn't have",
+            from.asset
+        ))?;
+    if !kind.map_formats().contains(&a.format.name()) {
+        return Err(format!(
+            "asset slot `{slot}` names `{}`, which is {}, not {}",
+            from.asset,
+            a.format.name(),
+            kind.map_format()
+        ));
+    }
+    Ok(a)
+}
+
+/// A `byte-rows` table's lifted file read back: its rows.
+fn read_rows(text: &str) -> Result<Vec<Vec<u8>>, String> {
+    let t: toml::Table = toml::from_str(text).map_err(|e| e.to_string())?;
+    let bad = || "`rows` isn't a list of rows of bytes".to_owned();
+    t.get("rows")
+        .and_then(toml::Value::as_array)
+        .ok_or_else(bad)?
+        .iter()
+        .map(|r| {
+            r.as_array()
+                .ok_or_else(bad)?
+                .iter()
+                .map(|b| {
+                    b.as_integer()
+                        .and_then(|b| u8::try_from(b).ok())
+                        .ok_or_else(bad)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Keeps the one slot of a board region the model names: a second
+/// differing one is refused.
+fn one(have: &mut Option<String>, slot: &str, what: &str) -> Result<(), String> {
+    match have {
+        Some(s) if s != slot => Err(format!(
+            "the board has one {what} region, and the model names two {what} slots, `{s}` and `{slot}`"
+        )),
+        _ => {
+            *have = Some(slot.to_owned());
+            Ok(())
+        }
+    }
+}
+
+/// Reads a lifted file by its name in the lifted folder: its bytes, or
+/// why not. [`BoardArt::load`] reads the folder on disk; the page's player
+/// hands over the files the lift stored in the browser
+/// ([`BoardArt::load_with`]).
+pub type Read<'a> = &'a dyn Fn(&str) -> Result<Vec<u8>, String>;
+
+/// An `mcr-tiles` or `mcr-sprites` asset's pictures, by their index in
+/// the board's region (those before `first` blank), at least `at_least`
+/// of them.
+fn pictures<const N: usize>(
+    read: Read,
+    a: &ArcadeAsset,
+    side: u32,
+    at_least: usize,
+) -> Result<Vec<[u8; N]>, String> {
+    let file = a.file();
+    let bytes = read(&file)?;
+    let (w, _) = a.image_size();
+    let px =
+        gp_assets::chr::read_png(&bytes, a.image_size()).map_err(|e| format!("{file}: {e}"))?;
+    let first = a.first as usize;
+    let mut out = vec![[0u8; N]; (first + a.count as usize).max(at_least)];
+    for k in 0..a.count {
+        let (cx, cy) = ((k % a.per_row) * side, (k / a.per_row) * side);
+        let pic = &mut out[first + k as usize];
+        for y in 0..side {
+            for x in 0..side {
+                pic[(y * side + x) as usize] = px[((cy + y) * w + cx + x) as usize] & 0x0f;
+            }
+        }
+    }
+    Ok(out)
+}
+
+impl BoardArt {
+    /// The board art of `model` from the lifted folder `dir`, or None
+    /// when the model names none or the folder isn't an arcade lift.
+    pub fn load(model: &Model, spec: &Spec, dir: &Path) -> Result<Option<Self>, String> {
+        Self::load_with(model, spec, &|name: &str| {
+            let f = dir.join(name);
+            std::fs::read(&f).map_err(|e| format!("{}: {e}", f.display()))
+        })
+    }
+
+    /// The lifted files the board art of `model` reads, by their names in
+    /// the lifted folder `dir` (the map first): what a player that has no
+    /// folder (the page's) is handed for [`BoardArt::load_with`]. Empty
+    /// when the model names no board art.
+    pub fn files(model: &Model, spec: &Spec, dir: &Path) -> Result<Vec<String>, String> {
+        let names = std::cell::RefCell::new(Vec::<String>::new());
+        Self::load_with(model, spec, &|name: &str| {
+            let f = dir.join(name);
+            let bytes = std::fs::read(&f).map_err(|e| format!("{}: {e}", f.display()))?;
+            let mut n = names.borrow_mut();
+            if !n.iter().any(|x| x == name) {
+                n.push(name.to_owned());
+            }
+            Ok(bytes)
+        })?;
+        Ok(names.into_inner())
+    }
+
+    /// [`BoardArt::load`] with the lifted files read by `read`, by their
+    /// names in the lifted folder.
+    pub fn load_with(model: &Model, spec: &Spec, read_file: Read) -> Result<Option<Self>, String> {
+        if !names_board(model) {
+            return Ok(None);
+        }
+        let map_file = gp_interp::lifted::MAP_FILE;
+        let text =
+            String::from_utf8(read_file(map_file)?).map_err(|e| format!("{map_file}: {e}"))?;
+        if !gp_assets::arcade::is_arcade(&text) {
+            return Err(format!(
+                "{map_file}: board art is drawn from an arcade lift, and this one is an NES map"
+            ));
+        }
+        let map = ArcadeMap::parse(&text).map_err(|e| format!("{map_file}: {e}"))?;
+        let read = |a: &ArcadeAsset| {
+            let file = a.file();
+            String::from_utf8(read_file(&file)?).map_err(|e| format!("{file}: {e}"))
+        };
+
+        // One tiles slot and one sprites slot draw everything: the board
+        // has one of each region.
+        let (mut ts, mut ss) = (None::<String>, None::<String>);
+        let mut levels = Vec::with_capacity(spec.levels.len());
+        let mut screens: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        let mut rows_of: BTreeMap<String, Vec<Vec<u8>>> = BTreeMap::new();
+        // A `rows` slot's byte, read once a slot.
+        let mut row_byte = |slot: &str, row: u32, column: u32| -> Result<u8, String> {
+            if !rows_of.contains_key(slot) {
+                let a = slot_asset(model, &map, slot, AssetKind::Rows)?;
+                let rows = read_rows(&read(a)?).map_err(|e| format!("{}: {e}", a.file()))?;
+                rows_of.insert(slot.to_owned(), rows);
+            }
+            rows_of[slot]
+                .get(row as usize)
+                .and_then(|r| r.get(column as usize))
+                .copied()
+                .ok_or_else(|| format!("`{slot}` has no byte {column} in row {row}"))
+        };
+        let mut screen_of = |sc: &str| -> Result<Vec<u8>, String> {
+            if let Some(v) = screens.get(sc) {
+                return Ok(v.clone());
+            }
+            let a = slot_asset(model, &map, sc, AssetKind::BoardScreen)?;
+            let cells = gp_assets::arcade::read_screen(&read(a)?)
+                .map_err(|e| format!("{}: {e}", a.file()))?;
+            let mut v: Vec<u8> = cells.iter().flat_map(|c| c.to_le_bytes()).collect();
+            v.resize(0x800, 0);
+            screens.insert(sc.to_owned(), v.clone());
+            Ok(v)
+        };
+        let counter = |name: &str| {
+            spec.counters
+                .index_of(name)
+                .ok_or_else(|| format!("no counter named `{name}`"))
+        };
+        let tests = |when: &[gp_model::model::Guard]| -> Result<Vec<Test>, String> {
+            when.iter()
+                .map(|g| {
+                    Ok(Test {
+                        counter: counter(&g.counter)?,
+                        cmp: g.cmp,
+                        value: g.value,
+                    })
+                })
+                .collect()
+        };
+        for l in &spec.levels {
+            let look = model
+                .levels
+                .get(&l.name)
+                .and_then(|m| m.core.present.as_ref())
+                .and_then(|p| p.board.as_ref());
+            let Some(look) = look else {
+                levels.push(None);
+                continue;
+            };
+            let at = |e: String| format!("levels.{}.present.board: {e}", l.name);
+            if let Some(t) = &look.tiles {
+                one(&mut ts, t, "tiles").map_err(at)?;
+            }
+            // A look: the palette and the writes over it, in order, and
+            // the screen.
+            let mut make = |palette: &str,
+                            writes: &[&[gp_model::model::PaletteWrite]],
+                            screen: Option<&str>|
+             -> Result<Look, String> {
+                let pal = slot_asset(model, &map, palette, AssetKind::BoardPalette)?;
+                let mut nine: Vec<u16> = gp_assets::arcade::read_palette(&read(pal)?)
+                    .map_err(|e| format!("{}: {e}", pal.file()))?;
+                for (i, pw) in writes.iter().flat_map(|w| w.iter()).enumerate() {
+                    let v = row_byte(&pw.slot, pw.row, pw.column)
+                        .map_err(|e| format!("palette_writes[{i}]: {e}"))?;
+                    // mcr_paletteram9_w: the byte, and the address's low
+                    // bit as the ninth.
+                    if let Some(c) = nine.get_mut(pw.at as usize / 2) {
+                        *c = u16::from(v) | (u16::from(pw.at as u8 & 1) << 8);
+                    }
+                }
+                let mut colors = [0u32; 64];
+                for (p, c) in colors.iter_mut().zip(&nine) {
+                    *p = video::color_9bit(*c);
+                }
+                let videoram = match screen {
+                    Some(sc) => screen_of(sc)?,
+                    None => vec![0; 0x800],
+                };
+                Ok(Look {
+                    screen: screen.map(str::to_owned),
+                    videoram,
+                    palette: colors,
+                })
+            };
+            let base = make(
+                &look.palette,
+                &[&look.palette_writes],
+                look.screen.as_deref(),
+            )
+            .map_err(at)?;
+            let mut looks = Vec::with_capacity(look.looks.len());
+            for (i, o) in look.looks.iter().enumerate() {
+                let at_o = |e: String| at(format!("looks[{i}]: {e}"));
+                // A look with a palette of its own loads it afresh, as a
+                // program that loads its colours again: only its own
+                // writes go over it.
+                let writes: &[&[gp_model::model::PaletteWrite]] = match &o.palette {
+                    Some(_) => &[&o.palette_writes],
+                    None => &[&look.palette_writes, &o.palette_writes],
+                };
+                let made = make(
+                    o.palette.as_deref().unwrap_or(&look.palette),
+                    writes,
+                    o.screen.as_deref().or(look.screen.as_deref()),
+                )
+                .map_err(at_o)?;
+                looks.push((tests(&o.when).map_err(at_o)?, made));
+            }
+            let mut numbers = Vec::with_capacity(look.counters.len());
+            for (i, n) in look.counters.iter().enumerate() {
+                let at_n = |e: String| at(format!("counters[{i}]: {e}"));
+                let mut codes = [0u8; 10];
+                for (d, c) in codes.iter_mut().enumerate() {
+                    *c = if n.table {
+                        row_byte(&n.tile.slot, n.tile.row, n.tile.column + d as u32)
+                            .map_err(at_n)?
+                    } else {
+                        row_byte(&n.tile.slot, n.tile.row, n.tile.column)
+                            .map_err(at_n)?
+                            .wrapping_add(d as u8)
+                    };
+                }
+                numbers.push(Number {
+                    counter: counter(&n.counter).map_err(at_n)?,
+                    name: n.counter.clone(),
+                    plus: n.plus,
+                    cell: (n.at[1] * 32 + n.at[0]) as usize,
+                    digits: n.digits.clamp(1, 10) as usize,
+                    codes,
+                    high: row_byte(&n.high.slot, n.high.row, n.high.column).map_err(at_n)?,
+                    zeros: n.zeros,
+                    when: tests(&n.when).map_err(at_n)?,
+                });
+            }
+            let mut repeats = Vec::with_capacity(look.repeats.len());
+            for (i, r) in look.repeats.iter().enumerate() {
+                let at_r = |e: String| at(format!("repeats[{i}]: {e}"));
+                let [sx, sy] = r.step.unwrap_or([1, 0]);
+                let cells = (0..i64::from(r.most))
+                    .map(|k| {
+                        (
+                            i64::from(r.at[0]) + i64::from(sx) * k,
+                            i64::from(r.at[1]) + i64::from(sy) * k,
+                        )
+                    })
+                    .filter(|(x, y)| (0..32).contains(x) && (0..30).contains(y))
+                    .map(|(x, y)| (y * 32 + x) as usize)
+                    .collect();
+                repeats.push(Repeat {
+                    counter: counter(&r.counter).map_err(at_r)?,
+                    name: r.counter.clone(),
+                    plus: r.plus,
+                    cells,
+                    word: [
+                        row_byte(&r.tile.slot, r.tile.row, r.tile.column).map_err(at_r)?,
+                        row_byte(&r.high.slot, r.high.row, r.high.column).map_err(at_r)?,
+                    ],
+                    when: tests(&r.when).map_err(at_r)?,
+                });
+            }
+            levels.push(Some(LevelBoard {
+                base,
+                looks,
+                numbers,
+                repeats,
+            }));
+        }
+        let kinds = spec
+            .kinds
+            .iter()
+            .map(|k| {
+                let Some(b) = model
+                    .entities
+                    .get(&k.name)
+                    .and_then(|e| e.core.board_sprite.as_ref())
+                else {
+                    return Ok(None);
+                };
+                one(&mut ss, &b.slot, "sprites")
+                    .map_err(|e| format!("entities.{}.board_sprite: {e}", k.name))?;
+                Ok(Some(KindSprite {
+                    picture: Byte::of(&b.picture),
+                    flags: b.flags.as_ref().map(Byte::of),
+                    flip_when_facing_left: b.flip_when_facing_left,
+                }))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        // The board indexes 1024 tiles; a sprite's number wraps at the
+        // region's sprites.
+        let tiles = match ts.as_deref() {
+            Some(t) => {
+                let a = slot_asset(model, &map, t, AssetKind::BoardTiles)?;
+                if a.format != Format::McrTiles {
+                    return Err(format!("slot `{t}` isn't mcr-tiles"));
+                }
+                pictures::<64>(read_file, a, 8, 1024)?
+            }
+            None => vec![[0; 64]; 1024],
+        };
+        let sprites = match ss.as_deref() {
+            Some(s) => {
+                let a = slot_asset(model, &map, s, AssetKind::BoardSprites)?;
+                pictures::<1024>(read_file, a, 32, 1)?
+            }
+            None => vec![[0; 1024]; 1],
+        };
+        Ok(Some(Self {
+            gfx: Gfx { tiles, sprites },
+            levels,
+            kinds,
+            kind_names: spec.kinds.iter().map(|k| k.name.clone()).collect(),
+            board_units: false,
+        }))
+    }
+
+    /// The art for a model whose positions are the board's own units
+    /// (`on`, its state mapping's `board_units`) or the sprite RAM's bytes.
+    #[must_use]
+    pub fn in_board_units(mut self, on: bool) -> Self {
+        self.board_units = on;
+        self
+    }
+
+    /// Whether it reads positions as the board's own units.
+    #[must_use]
+    pub fn board_units(&self) -> bool {
+        self.board_units
+    }
+
+    /// Whether the board draws level `level` (the spec's index).
+    pub fn draws_level(&self, level: usize) -> bool {
+        self.levels.get(level).is_some_and(Option::is_some)
+    }
+
+    /// Whether bodies of kind `kind` are the board's sprites.
+    pub fn draws_kind(&self, kind: usize) -> bool {
+        self.kinds.get(kind).is_some_and(Option::is_some)
+    }
+
+    /// The board's picture of the world's frame, or None when its level
+    /// has no board look. `shown` says by body whether the body is drawn
+    /// this frame (alive and in the level, as the scene has it); `rank`
+    /// gives each body's entry of sprite RAM (`present.sprite_order`, as
+    /// the scene ranks it; `u32::MAX` for none). A body with no entry, or
+    /// whose entry another body has, takes the lowest free one, so it is
+    /// drawn under the others.
+    pub fn draw(&self, w: &World, shown: &[bool], rank: &[u32]) -> Option<Picture> {
+        self.draw_omitting(w, shown, rank, &Omit::default())
+    }
+
+    /// [`BoardArt::draw`] with what a theme draws itself left out
+    /// (`omit`): those bodies' sprite entries, the counters' cells (the
+    /// screen's own words there), and with the screen every pixel no
+    /// sprite drew as [`TRANSPARENT`], but for the counters' cells still
+    /// drawn, whose pixels of colour 0 in their bank are transparent and
+    /// the rest kept. `drawn` and `cells` still list everything, as the
+    /// frame would draw it whole. Omitting nothing draws [`BoardArt::draw`]'s
+    /// picture, pen for pen.
+    pub fn draw_omitting(
+        &self,
+        w: &World,
+        shown: &[bool],
+        rank: &[u32],
+        omit: &Omit,
+    ) -> Option<Picture> {
+        self.make(w, shown, rank, omit, true)
+    }
+
+    /// What [`BoardArt::draw`] would draw, without its pixels: `pens` is
+    /// empty, and `drawn`, `screen` and `cells` are the frame's. For a tool
+    /// that only asks which pictures a frame shows.
+    pub fn layout(&self, w: &World, shown: &[bool], rank: &[u32]) -> Option<Picture> {
+        self.make(w, shown, rank, &Omit::default(), false)
+    }
+
+    fn make(
+        &self,
+        w: &World,
+        shown: &[bool],
+        rank: &[u32],
+        omit: &Omit,
+        paint: bool,
+    ) -> Option<Picture> {
+        let level = self.levels.get(w.level)?.as_ref()?;
+        let look = level.look(w);
+        let mut ram = vec![0u8; ENTRIES * 4];
+        let mut taken = [false; ENTRIES];
+        let mut at: Vec<(usize, usize)> = Vec::new();
+        let mut later = Vec::new();
+        for (i, b) in w.bodies.iter().enumerate() {
+            if !shown.get(i).copied().unwrap_or(false) || !self.draws_kind(b.kind) {
+                continue;
+            }
+            match rank.get(i).copied().map(|r| r as usize) {
+                Some(r) if r < ENTRIES && !taken[r] => {
+                    taken[r] = true;
+                    at.push((i, r));
+                }
+                _ => later.push(i),
+            }
+        }
+        for i in later {
+            if let Some(r) = taken.iter().position(|t| !t) {
+                taken[r] = true;
+                at.push((i, r));
+            }
+        }
+        let mut drawn = Vec::new();
+        for (i, r) in at {
+            let b = &w.bodies[i];
+            let Some(Some(k)) = self.kinds.get(b.kind) else {
+                continue;
+            };
+            // The entry's bytes: the position's own, or in the board's
+            // units those that draw the sprite there.
+            let (x, y) = if self.board_units {
+                let (x, y) = video::sprite_bytes(b.x.floor() as i32, b.y.floor() as i32);
+                (i64::from(x), i64::from(y))
+            } else {
+                (b.x.floor().rem_euclid(256), b.y.floor().rem_euclid(256))
+            };
+            let mut flags = k.flags.map_or(0, |f| f.read(b));
+            if k.flip_when_facing_left && b.facing_left {
+                flags ^= 0x10;
+            }
+            let picture = k.picture.read(b);
+            if !omit.bodies.get(i).copied().unwrap_or(false) {
+                ram[r * 4..r * 4 + 4].copy_from_slice(&[y as u8, flags, picture, x as u8]);
+            }
+            let (px, py) = video::sprite_place(x as i32, y as i32);
+            let u = i64::from(video::UNIT);
+            let code = (u16::from(picture) + 256 * u16::from((flags >> 3) & 1))
+                % self.gfx.sprites.len().max(1) as u16;
+            drawn.push(Drawn {
+                body: i,
+                kind: b.kind,
+                entry: r,
+                rect: [i64::from(px) * u, i64::from(py) * u, 32, 32],
+                code,
+                flags,
+            });
+        }
+        drawn.sort_by_key(|d| d.body);
+        let omit_cells = (!omit.cells.is_empty()).then_some(omit.cells.as_slice());
+        let (videoram, cells) = level.cells_with(&look.videoram, w, omit_cells);
+        if !paint {
+            return Some(Picture {
+                pens: Vec::new(),
+                palette: look.palette,
+                drawn,
+                screen: look.screen.clone(),
+                cells,
+            });
+        }
+        let mut pens = vec![0u8; video::WIDTH * video::HEIGHT];
+        video::draw(&self.gfx, &videoram, &ram, false, &mut pens);
+        if omit.screen {
+            let mut kept = vec![false; 960];
+            for (k, c) in cells.iter().enumerate() {
+                if !omit.cells.get(k).copied().unwrap_or(false) {
+                    kept[c.cell] = true;
+                }
+            }
+            for (i, p) in pens.iter_mut().enumerate() {
+                if *p & video::SPRITE_BIT != 0 {
+                    continue;
+                }
+                let cell = (i / video::WIDTH / 16) * 32 + (i % video::WIDTH) / 16;
+                if !(kept.get(cell).copied().unwrap_or(false) && *p & 0x0f != 0) {
+                    *p = TRANSPARENT;
+                }
+            }
+        }
+        Some(Picture {
+            pens,
+            palette: look.palette,
+            drawn,
+            screen: look.screen.clone(),
+            cells,
+        })
+    }
+
+    /// Every name a theme may give a picture the board draws, each with
+    /// its size in the board's picture's pixels: each `board-screen` slot
+    /// a level's look shows (by its slot name), each board-drawn entity's
+    /// sprite at every picture code the lift's sprites hold
+    /// ([`sprite_name`]), and each counter's digits or tile
+    /// ([`counter_name`]). The names come from the model and the count of
+    /// the lift's sprites only: nothing of a picture.
+    #[must_use]
+    pub fn names(&self) -> Vec<(String, [u32; 2])> {
+        let mut out: Vec<(String, [u32; 2])> = Vec::new();
+        let add = |n: String, size: [u32; 2], out: &mut Vec<(String, [u32; 2])>| {
+            if !out.iter().any(|(x, _)| *x == n) {
+                out.push((n, size));
+            }
+        };
+        for l in self.levels.iter().flatten() {
+            let looks = std::iter::once(&l.base).chain(l.looks.iter().map(|(_, x)| x));
+            for x in looks {
+                if let Some(sc) = &x.screen {
+                    add(sc.clone(), SCREEN_SIZE, &mut out);
+                }
+            }
+        }
+        let codes = self.gfx.sprites.len() as u16;
+        for (k, ks) in self.kinds.iter().enumerate() {
+            if ks.is_none() {
+                continue;
+            }
+            for c in 0..codes {
+                add(sprite_name(&self.kind_names[k], c), SPRITE_SIZE, &mut out);
+            }
+        }
+        for l in self.levels.iter().flatten() {
+            for n in &l.numbers {
+                for d in 0..10 {
+                    add(counter_name(&n.name, Some(d)), CELL_SIZE, &mut out);
+                }
+            }
+            for r in &l.repeats {
+                add(counter_name(&r.name, None), CELL_SIZE, &mut out);
+            }
+        }
+        out
+    }
+
+    /// The board's named pictures as a presentation a large-art look
+    /// resolves its rules against ([`gp_present::art::Art::new`]): the
+    /// pictures [`BoardArt::names`] gives, in its order, on a screen the
+    /// size of the board's picture.
+    #[must_use]
+    pub fn present(&self) -> gp_present::Present {
+        gp_present::Present {
+            screen: gp_present::Screen {
+                size: SCREEN_SIZE,
+                aspect: [1, 1],
+                overscan: [0; 4],
+                sprite_limit: None,
+                x_wraps: false,
+            },
+            pictures: self
+                .names()
+                .into_iter()
+                .map(|(file, size)| gp_present::Picture { file, size })
+                .collect(),
+            ..gp_present::Present::default()
+        }
+    }
+
+    /// A picture of the board's, as the frame's sprite of `kind` with
+    /// `code` and `flags` draws it on its own, 32 by 32 RGBA: for a
+    /// person's own contact sheet of the codes an entity shows, from their
+    /// own lift. Its colours are the level's first look's.
+    #[must_use]
+    pub fn sprite_rgba(&self, level: usize, code: u16, flags: u8) -> Option<Vec<[u8; 4]>> {
+        let l = self.levels.get(level)?.as_ref()?;
+        let sprite = self
+            .gfx
+            .sprites
+            .get(code as usize % self.gfx.sprites.len())?;
+        let color = ((!flags & 3) << 4) & 0x30;
+        Some(
+            sprite
+                .iter()
+                .map(|&v| {
+                    let pix = color | v;
+                    if pix & 0x07 == 0 {
+                        [0, 0, 0, 0]
+                    } else {
+                        let c = l.base.palette[(pix & 0x3f) as usize];
+                        [(c >> 16) as u8, (c >> 8) as u8, c as u8, 255]
+                    }
+                })
+                .collect(),
+        )
+    }
+}
+
+/// The board's named pictures ([`BoardArt::present`]) of the model a
+/// bundle's bytes hold (as `gp_load` takes them), its lifted files read by
+/// `read`: what a large-art theme for an arcade game names. None for a
+/// model that names no board art.
+pub fn present_of(bundle: &[u8], read: Read) -> Result<Option<gp_present::Present>, String> {
+    let b = gp_interp::lifted::Bundle::from_bytes(bundle)?;
+    let model = b.parse_model()?;
+    let spec = gp_interp::compile::compile(&model, &b.assets)?;
+    Ok(BoardArt::load_with(&model, &spec, read)?.map(|a| a.present()))
+}
+
+/// An arcade model's board art and what drawing a frame needs besides the
+/// world: for a player whose game runs somewhere else (the page's game
+/// module, in its Worker) and hands over each frame's canonical state and
+/// which bodies it shows. Each body's sprite entry comes from the
+/// presentation (`present.sprite_order`) as the scene ranks it, the
+/// world's own data, so it is the game's; whether a body shows this frame
+/// depends on its animation, which only the game's player holds, so the
+/// caller says.
+pub struct Companion {
+    spec: Spec,
+    present: gp_present::Present,
+    art: BoardArt,
+}
+
+impl Companion {
+    /// From the model bundle the game was loaded from (its bytes, as
+    /// `gp_load` takes them, profile switches and all), the presentation
+    /// text (`assets/present.txt`) and the lifted files `read` gives by
+    /// name. None for a model that names no board art.
+    pub fn open(bundle: &[u8], present_text: &str, read: Read) -> Result<Option<Self>, String> {
+        let b = gp_interp::lifted::Bundle::from_bytes(bundle)?;
+        let model = b.parse_model()?;
+        let spec = gp_interp::compile::compile(&model, &b.assets)?;
+        let present = gp_present::text::read(present_text)?;
+        Ok(BoardArt::load_with(&model, &spec, read)?.map(|art| Self { spec, present, art }))
+    }
+
+    /// The board's picture of the frame whose canonical state is `state`
+    /// (`gp_sim::World::canonical`), the bodies `shown` by body (the game's
+    /// scene: those it draws this frame). None on a level without board
+    /// art.
+    pub fn frame(&self, state: &[u8], shown: &[bool]) -> Result<Option<Picture>, String> {
+        let w = World::from_canonical(&self.spec, state)?;
+        let scene = gp_present::Animator::new().scene(&self.present, &self.spec, &w);
+        Ok(self.art.draw(&w, shown, &scene.rank))
+    }
+
+    /// The board's art, for its names and themes.
+    #[must_use]
+    pub fn art(&self) -> &BoardArt {
+        &self.art
+    }
+
+    /// Reads the model's positions as the board's own units (`on`, its
+    /// state mapping's `board_units`) or as the sprite RAM's bytes, which
+    /// is how it opens.
+    pub fn set_board_units(&mut self, on: bool) {
+        self.art.board_units = on;
+    }
+
+    /// [`Companion::frame`] drawn in `theme` ([`BoardArt::themed`]).
+    pub fn themed(
+        &self,
+        theme: &mut BoardTheme,
+        state: &[u8],
+        shown: &[bool],
+    ) -> Result<Option<Themed>, String> {
+        let w = World::from_canonical(&self.spec, state)?;
+        let scene = gp_present::Animator::new().scene(&self.present, &self.spec, &w);
+        Ok(self.art.themed(theme, &w, shown, &scene.rank))
+    }
+}
+
+/// A large-art theme over the board's pictures (docs/formats/board-art.md,
+/// "Themes"): the rules of `gp_present::art`, the same reader and painter
+/// an NES game's theme is drawn with, resolved against the board's named
+/// pictures ([`BoardArt::present`]). It keeps the painter's memory from
+/// frame to frame (a picture's age for `timed`, the props' bursts).
+pub struct BoardTheme {
+    pub art: gp_present::art::Art,
+    present: gp_present::Present,
+    index: BTreeMap<String, u32>,
+    painter: gp_present::art::Painter,
+    /// The game frame the painter last stepped on.
+    last: Option<u64>,
+}
+
+/// A frame drawn in a theme: the board's picture with what the theme
+/// draws itself left out ([`BoardArt::draw_omitting`]), and the theme's
+/// draws, in the board's picture's pixels (in sixteenths, as
+/// [`gp_present::art::ArtDraw`] has them). The board's picture is painted
+/// before `frame.draws[board_at..]`: over the theme's screen, under its
+/// sprites.
+pub struct Themed {
+    pub picture: Picture,
+    pub frame: gp_present::art::ArtFrame,
+    pub board_at: usize,
+}
+
+impl BoardArt {
+    /// A large-art theme's rules (`gp-art 1`) read and resolved against the
+    /// board's named pictures. A rule naming a picture the board hasn't
+    /// got is passed over, as on the NES; rules that draw none of them are
+    /// refused, as a theme made for another game.
+    pub fn theme(&self, text: &str) -> Result<BoardTheme, String> {
+        let rules = gp_present::art::ArtRules::read(text)?;
+        let present = self.present();
+        let art = gp_present::art::Art::new(rules, &present)?;
+        let index = present
+            .pictures
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (p.file.clone(), i as u32))
+            .collect();
+        Ok(BoardTheme {
+            art,
+            present,
+            index,
+            painter: gp_present::art::Painter::new(),
+            last: None,
+        })
+    }
+
+    /// The frame drawn in `theme`, or None when its level has no board
+    /// look. A frame whose pictures the theme draws none of is
+    /// [`BoardArt::draw`]'s picture as it is, with `board_at` 0 and the
+    /// theme's other draws (props, drift) after it. The painter steps once
+    /// for each new game frame (`w.frame`), and starts over when the
+    /// frame goes anywhere but one on (a seek, a load).
+    pub fn themed(
+        &self,
+        theme: &mut BoardTheme,
+        w: &World,
+        shown: &[bool],
+        rank: &[u32],
+    ) -> Option<Themed> {
+        use gp_present::art::{ArtDraw, Of, Src};
+        let full = self.draw(w, shown, rank)?;
+        let n = w.bodies.len();
+        let pic = |name: &str| theme.index.get(name).copied();
+        let mut bodies = vec![None; n];
+        let mut order = vec![u32::MAX; n];
+        for d in &full.drawn {
+            if let (Some(p), Some(b)) = (
+                pic(&sprite_name(&self.kind_names[d.kind], d.code)),
+                bodies.get_mut(d.body),
+            ) {
+                *b = Some(gp_present::Draw {
+                    pic: p,
+                    x: d.rect[0],
+                    y: d.rect[1],
+                    flip_x: d.flags & 0x10 != 0,
+                    flip_y: d.flags & 0x20 != 0,
+                });
+                // A later entry is drawn over an earlier one: the scene's
+                // paint order puts the lower rank last.
+                order[d.body] = (ENTRIES - d.entry) as u32;
+            }
+        }
+        // Every counter cell by its name; one the names lack (none do) is
+        // drawn by the board.
+        let mut cells = Vec::new();
+        let mut cell_of = Vec::new();
+        for (k, c) in full.cells.iter().enumerate() {
+            if let Some(p) = pic(&c.name) {
+                cells.push(gp_present::Draw {
+                    pic: p,
+                    x: (c.cell % 32) as i64 * 16,
+                    y: (c.cell / 32) as i64 * 16,
+                    flip_x: false,
+                    flip_y: false,
+                });
+                cell_of.push(k);
+            }
+        }
+        let level = full.screen.as_deref().and_then(pic);
+        let scene = gp_present::Scene {
+            level,
+            cells,
+            behind: vec![false; n],
+            front: vec![false; n],
+            name_table: vec![false; n],
+            bodies,
+            rank: order,
+            ..gp_present::Scene::default()
+        };
+        let one_on = theme.last.is_some_and(|l| l + 1 == w.frame);
+        if theme.last != Some(w.frame) {
+            if !one_on {
+                theme.painter = gp_present::art::Painter::new();
+            }
+            theme.painter.step(&theme.art, &scene);
+            theme.last = Some(w.frame);
+        }
+        let framed = gp_present::view::Framed {
+            scene,
+            window: gp_present::view::Window {
+                x: 0,
+                y: 0,
+                w: SCREEN_SIZE[0],
+                h: SCREEN_SIZE[1],
+                view_x: 0,
+                wall: 0,
+                hud: [0, 0],
+            },
+            alpha: vec![255; n],
+            ..gp_present::view::Framed::default()
+        };
+        let f = theme
+            .painter
+            .frame(&theme.art, &theme.present, &framed, SCREEN_SIZE[1]);
+        // What the board still draws: what the theme left as the game's own.
+        let mut keep_body = vec![false; n];
+        let mut keep_cell = vec![false; full.cells.len()];
+        let mut keep_screen = false;
+        for d in &f.draws {
+            if !matches!(d.src, Src::Own(_)) {
+                continue;
+            }
+            match d.of {
+                Of::Body(i) => keep_body[i] = true,
+                Of::Cell(k) => keep_cell[cell_of[k]] = true,
+                Of::Level => keep_screen = true,
+                Of::Other => {}
+            }
+        }
+        let mut omit = Omit {
+            bodies: vec![false; n],
+            screen: level.is_some() && !keep_screen,
+            cells: keep_cell.iter().map(|k| !k).collect(),
+        };
+        // A body the theme names no picture for stays the board's.
+        for d in &full.drawn {
+            let themed = framed_named(&framed.scene, d.body);
+            omit.bodies[d.body] = themed && !keep_body[d.body];
+        }
+        let mut draws: Vec<ArtDraw> = Vec::with_capacity(f.draws.len());
+        let mut board_at = 0;
+        for d in f.draws.iter() {
+            match (d.of, d.src) {
+                (Of::Level, Src::Own(_)) => board_at = draws.len(),
+                (Of::Level, _) => {
+                    draws.push(d.clone());
+                    board_at = draws.len();
+                }
+                // The board's own pictures are in its picture.
+                (_, Src::Own(_) | Src::Tint(..) | Src::Stage(_) | Src::Backdrop) => {}
+                _ => draws.push(d.clone()),
+            }
+        }
+        let picture =
+            if omit.screen || omit.bodies.iter().any(|b| *b) || omit.cells.iter().any(|c| *c) {
+                self.draw_omitting(w, shown, rank, &omit)?
+            } else {
+                full
+            };
+        Some(Themed {
+            picture,
+            frame: gp_present::art::ArtFrame { draws, ..f },
+            board_at,
+        })
+    }
+}
+
+/// Whether the scene has a picture for body `i` (its sprite named).
+fn framed_named(s: &gp_present::Scene, i: usize) -> bool {
+    s.bodies.get(i).is_some_and(Option::is_some)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A made-up arcade lift: 1024 tiles, tile 1 all value 5; 4 sprites,
+    /// sprite 2 all value 3, sprite 3 all value 2; a screen of tile 1 in colour bank 1; a
+    /// palette whose entry n is n. No game's bytes.
+    fn lift(dir: &Path) {
+        let map = "schema = 1\nplatform = \"arcade\"\nsource = \"cab\"\nsets = [\"cab\"]\n\n\
+                   [[asset]]\nname = \"tiles\"\nformat = \"mcr-tiles\"\nregion = \"gfx1\"\ncount = 1024\nper_row = 32\n\n\
+                   [[asset]]\nname = \"sprites\"\nformat = \"mcr-sprites\"\nregion = \"gfx2\"\ncount = 4\nper_row = 4\n\n\
+                   [[asset]]\nname = \"stage\"\nformat = \"mcr-screen\"\nregion = \"maincpu\"\noffset = 0\n\n\
+                   [[asset]]\nname = \"colors\"\nformat = \"mcr-palette\"\nregion = \"maincpu\"\noffset = 0\n";
+        std::fs::write(dir.join("assets.toml"), map).unwrap();
+        let png = |w: u32, h: u32, px: &[u8]| {
+            let mut out = Vec::new();
+            let mut e = png::Encoder::new(&mut out, w, h);
+            e.set_color(png::ColorType::Indexed);
+            e.set_depth(png::BitDepth::Eight);
+            e.set_palette((0..=255u8).flat_map(|i| [i; 3]).collect::<Vec<_>>());
+            let mut wr = e.write_header().unwrap();
+            wr.write_image_data(px).unwrap();
+            wr.finish().unwrap();
+            out
+        };
+        let (tw, th) = (32 * 8, 32 * 8);
+        let mut t = vec![0u8; (tw * th) as usize];
+        for y in 0..8 {
+            for x in 8..16 {
+                t[y * tw as usize + x] = 5;
+            }
+        }
+        std::fs::write(dir.join("tiles.png"), png(tw, th, &t)).unwrap();
+        let (sw, sh) = (4 * 32, 32);
+        let mut s = vec![0u8; (sw * sh) as usize];
+        for y in 0..32 {
+            for x in 64..96 {
+                s[y * sw as usize + x] = 3;
+            }
+            // Sprite 3: value 2, for a second body.
+            for x in 96..128 {
+                s[y * sw as usize + x] = 2;
+            }
+        }
+        std::fs::write(dir.join("sprites.png"), png(sw, sh, &s)).unwrap();
+        let row = vec!["0x1001"; 32].join(", ");
+        let rows = vec![format!("[{row}]"); 30].join(",\n");
+        std::fs::write(dir.join("stage.toml"), format!("rows = [{rows}]\n")).unwrap();
+        let colors: Vec<String> = (0..64).map(|n| n.to_string()).collect();
+        std::fs::write(
+            dir.join("colors.toml"),
+            format!("colors = [{}]\n", colors.join(", ")),
+        )
+        .unwrap();
+    }
+
+    const MODEL: &str = r#"
+[model]
+schema = "0.4"
+name = "cab"
+title = "Cab"
+description = "A made-up arcade game"
+source = "cab"
+view = "side"
+frame_rate = "30"
+systems = ["rules", "entity_states", "counters", "spawn", "platformer.player", "platformer.enemies", "platformer.contact", "exits", "camera"]
+start_level = "main"
+
+[model.extensions]
+platformer = "0.4"
+
+[input]
+device = "arcade"
+
+[input.actions]
+left = "left"
+
+[assets.tiles]
+kind = "board-tiles"
+role = "graphics"
+[assets.tiles.from]
+source = "cab"
+asset = "tiles"
+
+[assets.sprites]
+kind = "board-sprites"
+role = "graphics"
+[assets.sprites.from]
+source = "cab"
+asset = "sprites"
+
+[assets.stage]
+kind = "board-screen"
+role = "layout"
+[assets.stage.from]
+source = "cab"
+asset = "stage"
+
+[assets.colors]
+kind = "board-palette"
+role = "palettes"
+[assets.colors.from]
+source = "cab"
+asset = "colors"
+
+[entities.player]
+role = "player"
+size = [16, 16]
+
+[entities.player.hitbox]
+x = 0
+y = 0
+w = 16
+h = 16
+
+[entities.player.board_sprite]
+slot = "sprites"
+picture = { word = 1, byte = 1 }
+flags = { word = 1 }
+
+[levels.main]
+description = "A screen"
+empty = true
+size = [32, 30]
+tile_size = 16
+
+[levels.main.present.board]
+palette = "colors"
+tiles = "tiles"
+screen = "stage"
+
+[[levels.main.spawn]]
+entity = "player"
+x = 53
+y = 191
+"#;
+
+    /// The board's own drawing makes the picture: the screen's tiles in
+    /// their colour bank, and the body as a sprite entry (its picture and
+    /// flags from its word) where gp-arcade's test draws one with these
+    /// bytes, over the tiles, in the board's colour bank.
+    #[test]
+    fn a_body_and_its_stage_are_the_boards() {
+        let dir = tempfile::tempdir().unwrap();
+        lift(dir.path());
+        let model = Model::parse(MODEL).unwrap();
+        // Every check but evidence, which a made-up model hasn't got.
+        let errs: Vec<_> = gp_model::validate::validate(&model)
+            .into_iter()
+            .filter(|p| p.message != "no evidence covers this fact")
+            .collect();
+        assert!(errs.is_empty(), "{errs:?}");
+        assert!(names_board(&model));
+        let lifted = gp_interp::Lifted::read_dir(dir.path(), &model).unwrap();
+        let spec = gp_interp::compile::compile(&model, &lifted).unwrap();
+        let art = BoardArt::load(&model, &spec, dir.path())
+            .unwrap()
+            .expect("the model names board art");
+        let mut w = World::default();
+        // Flags 0x03 (colour bank !3 & 3 = 0, pens 0x00 to 0x0f),
+        // picture 2: ext[1] = flags | picture << 8.
+        w.bodies.push(gp_sim::world::Body {
+            x: gp_sim::Fx::from_int(53),
+            y: gp_sim::Fx::from_int(191),
+            alive: true,
+            ext: [0, 0x0203, 0, 0],
+            ..Default::default()
+        });
+        assert!(art.draws_kind(0) && art.draws_level(0));
+        let p = art.draw(&w, &[true], &[u32::MAX]).unwrap();
+        assert_eq!(
+            p.drawn,
+            vec![Drawn {
+                body: 0,
+                kind: 0,
+                entry: 0,
+                rect: [100, 100, 32, 32],
+                code: 2,
+                flags: 3,
+            }]
+        );
+        let at = |x: usize, y: usize| p.pens[y * video::WIDTH + x];
+        // The tile layer: tile 1, value 5, colour bank 1.
+        assert_eq!(at(0, 0), 16 + 5);
+        // The sprite: value 3 in colour bank 0 (flags 3: !3 & 3 = 0).
+        assert_eq!(at(100, 100), 0x03 | video::SPRITE_BIT);
+        assert_eq!(at(99, 100), 16 + 5);
+        assert_eq!(p.palette[21], video::color_9bit(21));
+        // Not shown: only the tiles.
+        let p = art.draw(&w, &[false], &[u32::MAX]).unwrap();
+        assert_eq!(at_of(&p, 100, 100), 16 + 5);
+    }
+
+    /// The files the art reads are named, and the art read from them in
+    /// memory (as the page's player hands them over) draws the same.
+    #[test]
+    fn the_art_read_from_its_files_in_memory_draws_the_same() {
+        let dir = tempfile::tempdir().unwrap();
+        lift(dir.path());
+        let model = Model::parse(MODEL).unwrap();
+        let lifted = gp_interp::Lifted::read_dir(dir.path(), &model).unwrap();
+        let spec = gp_interp::compile::compile(&model, &lifted).unwrap();
+        let files = BoardArt::files(&model, &spec, dir.path()).unwrap();
+        assert_eq!(
+            files,
+            [
+                "assets.toml",
+                "colors.toml",
+                "stage.toml",
+                "tiles.png",
+                "sprites.png"
+            ]
+        );
+        let held: BTreeMap<String, Vec<u8>> = files
+            .iter()
+            .map(|f| (f.clone(), std::fs::read(dir.path().join(f)).unwrap()))
+            .collect();
+        let mem = BoardArt::load_with(&model, &spec, &|n: &str| {
+            held.get(n).cloned().ok_or(format!("{n}: not handed over"))
+        })
+        .unwrap()
+        .unwrap();
+        let disk = BoardArt::load(&model, &spec, dir.path()).unwrap().unwrap();
+        let mut w = World::default();
+        w.bodies.push(gp_sim::world::Body {
+            x: gp_sim::Fx::from_int(53),
+            y: gp_sim::Fx::from_int(191),
+            alive: true,
+            ext: [0, 0x0203, 0, 0],
+            ..Default::default()
+        });
+        let (a, b) = (
+            mem.draw(&w, &[true], &[u32::MAX]).unwrap(),
+            disk.draw(&w, &[true], &[u32::MAX]).unwrap(),
+        );
+        assert!(a.pens == b.pens && a.palette == b.palette);
+        // A file not handed over is named.
+        let e = BoardArt::load_with(&model, &spec, &|n: &str| {
+            if n == "tiles.png" {
+                Err(format!("{n}: not handed over"))
+            } else {
+                Ok(held[n].clone())
+            }
+        })
+        .err()
+        .unwrap();
+        assert!(e.contains("tiles.png"), "{e}");
+    }
+
+    /// The companion draws from the bundle, the presentation and a
+    /// world's canonical state what the art draws from the world.
+    #[test]
+    fn the_companion_draws_a_frame_from_its_state_as_the_art_does() {
+        let dir = tempfile::tempdir().unwrap();
+        lift(dir.path());
+        let model = Model::parse(MODEL).unwrap();
+        let lifted = gp_interp::Lifted::read_dir(dir.path(), &model).unwrap();
+        let spec = gp_interp::compile::compile(&model, &lifted).unwrap();
+        let bundle = gp_interp::lifted::Bundle::new(&model, lifted).to_bytes();
+        let present = crate::present::art(&model, &spec, dir.path())
+            .unwrap()
+            .present_text();
+        let read = |n: &str| std::fs::read(dir.path().join(n)).map_err(|e| e.to_string());
+        let c = Companion::open(&bundle, &present, &read).unwrap().unwrap();
+        let mut w = World::power_on(&spec);
+        w.bodies.push(gp_sim::world::Body {
+            x: gp_sim::Fx::from_int(53),
+            y: gp_sim::Fx::from_int(191),
+            alive: true,
+            ext: [0, 0x0203, 0, 0],
+            ..Default::default()
+        });
+        let shown = vec![true; w.bodies.len()];
+        let art = BoardArt::load(&model, &spec, dir.path()).unwrap().unwrap();
+        let want = art.draw(&w, &shown, &vec![u32::MAX; shown.len()]).unwrap();
+        let got = c.frame(&w.canonical(), &shown).unwrap().unwrap();
+        assert!(got.pens == want.pens && got.palette == want.palette);
+        assert_eq!(got.drawn, want.drawn);
+        // Not shown by the game: not drawn.
+        let none = c
+            .frame(&w.canonical(), &vec![false; shown.len()])
+            .unwrap()
+            .unwrap();
+        assert!(none.drawn.is_empty());
+        // In the board's units, the same body at (50, 50) draws the same
+        // frame once the companion is told so.
+        let mut c = c;
+        c.set_board_units(true);
+        for b in &mut w.bodies {
+            (b.x, b.y) = (gp_sim::Fx::from_int(50), gp_sim::Fx::from_int(50));
+        }
+        let marked = c.frame(&w.canonical(), &shown).unwrap().unwrap();
+        assert!(marked.pens == want.pens && marked.drawn == want.drawn);
+    }
+
+    /// The same made-up scene drawn twice: once with its positions the
+    /// sprite RAM's bytes (an unmarked model, as Tapper's is today), once
+    /// in the board's own units (a mapping's `board_units`), top left and
+    /// y down. The board's picture, what it lists as drawn and a theme's
+    /// draw of a sprite are the same, pen for pen and pixel for pixel.
+    #[test]
+    fn a_scene_in_board_units_draws_as_the_same_scene_in_the_rams_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, raw, raw_w) = two_bodies(dir.path());
+        assert!(!raw.board_units(), "unmarked: the RAM's bytes");
+        let units = raw.clone().in_board_units(true);
+        // The bytes (53, 191) and (153, 191) are the board's (50, 50) and
+        // (150, 50): x - 3 and 241 - y.
+        let mut w = raw_w.clone();
+        for (b, x) in w.bodies.iter_mut().zip([50, 150]) {
+            b.x = gp_sim::Fx::from_int(x);
+            b.y = gp_sim::Fx::from_int(50);
+        }
+        let (shown, rank) = (&[true, true], &[u32::MAX; 2]);
+        let a = raw.draw(&raw_w, shown, rank).unwrap();
+        let b = units.draw(&w, shown, rank).unwrap();
+        assert!(
+            a.pens == b.pens && a.palette == b.palette,
+            "the same picture"
+        );
+        assert_eq!(a.drawn, b.drawn);
+        assert_eq!(b.drawn[0].rect, [100, 100, 32, 32]);
+        assert_eq!(b.drawn[1].rect, [300, 100, 32, 32]);
+        // Each unit is two screen pixels: the body's place doubled.
+        assert_eq!(at_of(&b, 100, 100), 0x03 | video::SPRITE_BIT);
+        let rules = "gp-art 1\npic sprite-player-02 mug.png 40 40 -4 -4\n";
+        let (mut ta, mut tb) = (raw.theme(rules).unwrap(), units.theme(rules).unwrap());
+        let ta = raw.themed(&mut ta, &raw_w, shown, rank).unwrap();
+        let tb = units.themed(&mut tb, &w, shown, rank).unwrap();
+        assert!(ta.picture.pens == tb.picture.pens);
+        assert_eq!(ta.frame.draws.len(), 1);
+        let (da, db) = (&ta.frame.draws[0], &tb.frame.draws[0]);
+        assert_eq!([da.x, da.y, da.w, da.h], [db.x, db.y, db.w, db.h]);
+        // A body at the board's edges wraps as the entry's bytes do: (-3,
+        // 241) is the bytes (0, 0), as the bytes (0, 0) are placed.
+        let mut edge = w.clone();
+        edge.bodies[0].x = gp_sim::Fx::from_int(-3);
+        edge.bodies[0].y = gp_sim::Fx::from_int(241);
+        let mut edge_raw = raw_w.clone();
+        edge_raw.bodies[0].x = gp_sim::Fx::from_int(0);
+        edge_raw.bodies[0].y = gp_sim::Fx::from_int(0);
+        let (a, b) = (
+            raw.draw(&edge_raw, shown, rank).unwrap(),
+            units.draw(&edge, shown, rank).unwrap(),
+        );
+        assert!(a.pens == b.pens && a.drawn == b.drawn);
+    }
+
+    fn at_of(p: &Picture, x: usize, y: usize) -> u8 {
+        p.pens[y * video::WIDTH + x]
+    }
+
+    /// The made-up model with another look chosen by a counter and three
+    /// counters drawn as tiles, and the lift with the `rows` table they
+    /// read: digit 0's code 0x30, the high byte 0x30, a colour byte 0x77
+    /// and the lives' tile 0x10. No game's bytes.
+    fn with_looks_and_counters(dir: &Path) -> (Model, Spec, BoardArt) {
+        lift(dir);
+        let map = std::fs::read_to_string(dir.join("assets.toml")).unwrap()
+            + "\n[[asset]]\nname = \"codes\"\nformat = \"byte-rows\"\nregion = \"maincpu\"\noffset = 0\ncount = 1\nwidth = 4\n\n\
+               [[asset]]\nname = \"stage2\"\nformat = \"mcr-screen\"\nregion = \"maincpu\"\noffset = 0\n";
+        std::fs::write(dir.join("assets.toml"), map).unwrap();
+        std::fs::write(dir.join("codes.toml"), "rows = [[48, 48, 119, 16]]\n").unwrap();
+        let row = vec!["0x0001"; 32].join(", ");
+        let rows = vec![format!("[{row}]"); 30].join(",\n");
+        std::fs::write(dir.join("stage2.toml"), format!("rows = [{rows}]\n")).unwrap();
+        let text = MODEL.replace(
+            "[[levels.main.spawn]]",
+            r#"[[levels.main.present.board.looks]]
+when = [{ counter = "bar", cmp = "==", value = 1 }]
+screen = "stage2"
+palette_writes = [{ at = 0x2A, slot = "codes", column = 2 }]
+
+[[levels.main.present.board.counters]]
+counter = "score"
+at = [2, 1]
+digits = 4
+tile = { slot = "codes" }
+high = { slot = "codes", column = 1 }
+
+[[levels.main.present.board.counters]]
+counter = "cleared"
+plus = 1
+at = [29, 27]
+digits = 2
+zeros = true
+tile = { slot = "codes" }
+high = { slot = "codes", column = 1 }
+when = [{ counter = "bar", cmp = "<", value = 3 }]
+
+[[levels.main.present.board.repeats]]
+counter = "lives"
+plus = -1
+at = [8, 2]
+step = [-1, 0]
+most = 3
+tile = { slot = "codes", column = 3 }
+high = { slot = "codes", column = 1 }
+
+[[levels.main.spawn]]"#,
+        ) + r#"
+[assets.codes]
+kind = "rows"
+role = "graphics"
+[assets.codes.from]
+source = "cab"
+asset = "codes"
+
+[assets.stage2]
+kind = "board-screen"
+role = "layout"
+[assets.stage2.from]
+source = "cab"
+asset = "stage2"
+
+[counters.bar]
+[counters.score]
+[counters.cleared]
+[counters.lives]
+"#;
+        let model = Model::parse(&text).unwrap();
+        let errs: Vec<_> = gp_model::validate::validate(&model)
+            .into_iter()
+            .filter(|p| p.message != "no evidence covers this fact")
+            .collect();
+        assert!(errs.is_empty(), "{errs:?}");
+        let used = model.features_used();
+        assert!(used.contains("level.board.looks") && used.contains("level.board.counters"));
+        let lifted = gp_interp::Lifted::read_dir(dir, &model).unwrap();
+        let spec = gp_interp::compile::compile(&model, &lifted).unwrap();
+        let art = BoardArt::load(&model, &spec, dir).unwrap().unwrap();
+        (model, spec, art)
+    }
+
+    /// A look is chosen by the counters as each frame is drawn: the level
+    /// stays and its bodies with it.
+    #[test]
+    fn a_counter_chooses_the_screen_and_colours_each_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, spec, art) = with_looks_and_counters(dir.path());
+        let bar = spec.counters.index_of("bar").unwrap();
+        let mut w = World {
+            counters: vec![0; spec.counters.len()],
+            ..Default::default()
+        };
+        let p = art.draw(&w, &[], &[]).unwrap();
+        // The level's own: tile 1 in colour bank 1, colour 21 as loaded.
+        assert_eq!(at_of(&p, 0, 0), 16 + 5);
+        assert_eq!(p.palette[21], video::color_9bit(21));
+        w.counters[bar] = 1;
+        let p = art.draw(&w, &[], &[]).unwrap();
+        // The other look: its screen's tile 1 in colour bank 0, and the
+        // byte 0x77 written at 0x2A (colour 21, ninth bit 0).
+        assert_eq!(at_of(&p, 0, 0), 5);
+        assert_eq!(p.palette[21], video::color_9bit(0x77));
+        w.counters[bar] = 2;
+        assert_eq!(at_of(&art.draw(&w, &[], &[]).unwrap(), 0, 0), 16 + 5);
+    }
+
+    /// Counters drawn as digits and as a tile repeated, over the screen's
+    /// own cells, as a game's vblank writes its score and lives.
+    #[test]
+    fn counters_are_drawn_as_tiles_over_the_screen() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, spec, art) = with_looks_and_counters(dir.path());
+        let c = |n: &str| spec.counters.index_of(n).unwrap();
+        let mut w = World {
+            counters: vec![0; spec.counters.len()],
+            ..Default::default()
+        };
+        w.counters[c("score")] = 120;
+        w.counters[c("cleared")] = 0;
+        w.counters[c("lives")] = 3;
+        let level = art.levels[0].as_ref().unwrap();
+        let cell = |v: &[u8], x: usize, y: usize| {
+            let i = (y * 32 + x) * 2;
+            u16::from_le_bytes([v[i], v[i + 1]])
+        };
+        let v = level.cells(&level.look(&w).videoram, &w).into_owned();
+        // " 120": the leading zero left as the screen has it.
+        assert_eq!(cell(&v, 2, 1), 0x1001);
+        assert_eq!(
+            [cell(&v, 3, 1), cell(&v, 4, 1), cell(&v, 5, 1)],
+            [0x3031, 0x3032, 0x3030]
+        );
+        // The level number: cleared plus 1, with its zero.
+        assert_eq!([cell(&v, 29, 27), cell(&v, 30, 27)], [0x3030, 0x3031]);
+        // Two lives besides the one in play, leftward from (8, 2).
+        assert_eq!(
+            [cell(&v, 8, 2), cell(&v, 7, 2), cell(&v, 6, 2)],
+            [0x3010, 0x3010, 0x1001]
+        );
+        // A score of 0 draws its last digit; too many digits shows the last.
+        w.counters[c("score")] = 0;
+        w.counters[c("bar")] = 3;
+        let v = level.cells(&level.look(&w).videoram, &w).into_owned();
+        assert_eq!([cell(&v, 4, 1), cell(&v, 5, 1)], [0x1001, 0x3030]);
+        // `when` no longer holds: the level number isn't drawn.
+        assert_eq!(cell(&v, 30, 27), 0x1001);
+        w.counters[c("score")] = 123_456;
+        let v = level.cells(&level.look(&w).videoram, &w).into_owned();
+        assert_eq!(cell(&v, 2, 1), 0x3033);
+        // No counters drawn: the screen as it is, not copied.
+        let mut bare = level.clone();
+        bare.numbers.clear();
+        bare.repeats.clear();
+        assert!(matches!(
+            bare.cells(&bare.base.videoram, &w),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
+
+    /// Wrong uses are named in plain words by the model's check.
+    #[test]
+    fn a_look_or_counter_used_wrongly_is_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let (model, _, _) = with_looks_and_counters(dir.path());
+        let mut bad = model.clone();
+        let b = bad
+            .levels
+            .get_mut("main")
+            .unwrap()
+            .core
+            .present
+            .as_mut()
+            .unwrap();
+        let b = b.board.as_mut().unwrap();
+        b.looks[0].when.clear();
+        b.looks.push(gp_model::model::BoardLookWhen {
+            when: vec![gp_model::model::Guard {
+                counter: "nope".into(),
+                cmp: gp_model::model::Cmp::Eq,
+                value: 0,
+            }],
+            palette: None,
+            screen: None,
+            palette_writes: Vec::new(),
+        });
+        b.counters[0].at = [30, 1];
+        b.repeats[0].step = Some([-5, 0]);
+        let said: Vec<String> = gp_model::validate::validate(&bad)
+            .into_iter()
+            .filter(|p| p.message != "no evidence covers this fact")
+            .map(|p| format!("{}: {}", p.path, p.message))
+            .collect();
+        let has = |s: &str| said.iter().any(|m| m.contains(s));
+        assert!(
+            has("looks[0].when: a look is chosen by its counter tests"),
+            "{said:?}"
+        );
+        assert!(has("looks[1].when: no counter named `nope`"), "{said:?}");
+        assert!(has("looks[1]: the look changes nothing"), "{said:?}");
+        assert!(
+            has("counters[0].digits: cell (33, 1) is off the board"),
+            "{said:?}"
+        );
+        assert!(
+            has("repeats[0].most: cell (-2, 2) is off the board"),
+            "{said:?}"
+        );
+    }
+
+    /// The made-up model's art and a world of two bodies: picture 2 at
+    /// (53, 191) and picture 3 at (153, 191), both in colour bank 0.
+    fn two_bodies(dir: &Path) -> (Spec, BoardArt, World) {
+        lift(dir);
+        let model = Model::parse(MODEL).unwrap();
+        let lifted = gp_interp::Lifted::read_dir(dir, &model).unwrap();
+        let spec = gp_interp::compile::compile(&model, &lifted).unwrap();
+        let art = BoardArt::load(&model, &spec, dir).unwrap().unwrap();
+        let mut w = World::default();
+        for (x, ext) in [(53, 0x0203), (153, 0x0303)] {
+            w.bodies.push(gp_sim::world::Body {
+                x: gp_sim::Fx::from_int(x),
+                y: gp_sim::Fx::from_int(191),
+                alive: true,
+                ext: [0, ext, 0, 0],
+                ..Default::default()
+            });
+        }
+        (spec, art, w)
+    }
+
+    /// The names a theme may use: the screen by its slot, each sprite
+    /// code of the board-drawn entity, each counter's digits and tile.
+    #[test]
+    fn a_theme_names_the_boards_pictures_from_the_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, art, _) = two_bodies(dir.path());
+        let names: Vec<String> = art.names().into_iter().map(|(n, _)| n).collect();
+        assert_eq!(
+            names,
+            [
+                "stage",
+                "sprite-player-00",
+                "sprite-player-01",
+                "sprite-player-02",
+                "sprite-player-03"
+            ]
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let (_, _, art) = with_looks_and_counters(dir.path());
+        let names = art.names();
+        let has = |n: &str, size: [u32; 2]| names.iter().any(|(x, s)| x == n && *s == size);
+        assert!(has("stage", SCREEN_SIZE) && has("stage2", SCREEN_SIZE));
+        assert!(has("sprite-player-03", SPRITE_SIZE));
+        assert!(has("counter-score-0", CELL_SIZE) && has("counter-score-9", CELL_SIZE));
+        assert!(has("counter-cleared-5", CELL_SIZE) && has("counter-lives", CELL_SIZE));
+        assert!(!names.iter().any(|(n, _)| n == "counter-lives-0"));
+        assert_eq!(sprite_name("mug", 0x4d), "sprite-mug-4d");
+        assert_eq!(sprite_name("mug", 0x14d), "sprite-mug-14d");
+    }
+
+    /// A theme that replaces nothing the frame shows draws the board's
+    /// picture as it is, pen for pen, and only that.
+    #[test]
+    fn a_theme_that_replaces_nothing_draws_the_board_as_it_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, art, w) = two_bodies(dir.path());
+        let plain = art.draw(&w, &[true, true], &[u32::MAX; 2]).unwrap();
+        // It names a code no body shows, and the other screen.
+        let mut theme = art
+            .theme("gp-art 1\npic sprite-player-01 a.png 32 32 0 0\n")
+            .unwrap();
+        let t = art
+            .themed(&mut theme, &w, &[true, true], &[u32::MAX; 2])
+            .unwrap();
+        assert!(t.picture.pens == plain.pens && t.picture.palette == plain.palette);
+        assert_eq!(t.picture.drawn, plain.drawn);
+        assert!(t.frame.draws.is_empty() && t.board_at == 0);
+        assert_eq!(t.frame.size, SCREEN_SIZE);
+        // A theme for another game's pictures is refused, as on the NES.
+        assert!(
+            art.theme("gp-art 1\npic frame-1-0.png a.png 8 8 0 0\n")
+                .is_err()
+        );
+    }
+
+    /// A themed sprite is drawn by the theme where the board drew it, and
+    /// left out of the board's picture; an unthemed one is unchanged.
+    #[test]
+    fn a_themed_sprite_is_the_themes_where_the_boards_was() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, art, w) = two_bodies(dir.path());
+        let plain = art.draw(&w, &[true, true], &[u32::MAX; 2]).unwrap();
+        let mut theme = art
+            .theme("gp-art 1\npic sprite-player-02 mug.png 40 40 -4 -4\n")
+            .unwrap();
+        let t = art
+            .themed(&mut theme, &w, &[true, true], &[u32::MAX; 2])
+            .unwrap();
+        let u = gp_present::art::ART_SUB;
+        // The board's picture first (the screen is the board's), then the art
+        // at the first body's rectangle (100, 100), moved and sized.
+        assert_eq!(t.board_at, 0);
+        assert_eq!(t.frame.draws.len(), 1);
+        let d = &t.frame.draws[0];
+        assert_eq!(d.src, gp_present::art::Src::Art(0));
+        assert_eq!([d.x, d.y, d.w, d.h], [96 * u, 96 * u, 40 * u, 40 * u]);
+        let at = |p: &Picture, x: usize, y: usize| p.pens[y * video::WIDTH + x];
+        // Where the first sprite was, the screen's tile.
+        assert_eq!(at(&plain, 100, 100), 0x03 | video::SPRITE_BIT);
+        assert_eq!(at(&t.picture, 100, 100), 16 + 5);
+        // The second body (picture 3, at 300) is the board's, unchanged.
+        let second = plain.drawn[1].rect;
+        assert_eq!(second, [300, 100, 32, 32]);
+        assert_eq!(at(&t.picture, 300, 100), 0x02 | video::SPRITE_BIT);
+        for y in 0..video::HEIGHT {
+            for x in 0..video::WIDTH {
+                if !(100..132).contains(&x) || !(100..132).contains(&y) {
+                    assert_eq!(at(&t.picture, x, y), at(&plain, x, y), "{x},{y}");
+                }
+            }
+        }
+        // `drawn` still lists both, as the frame has them.
+        assert_eq!(t.picture.drawn, plain.drawn);
+    }
+
+    /// A themed screen: the board's picture keeps only its sprites, over
+    /// the theme's screen, and a body the theme names nothing for stays.
+    #[test]
+    fn a_themed_screen_is_drawn_under_the_boards_sprites() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, art, w) = two_bodies(dir.path());
+        let mut theme = art
+            .theme("gp-art 1\nscale 2\npic stage saloon.png 512 480 0 0\n")
+            .unwrap();
+        let t = art
+            .themed(&mut theme, &w, &[true, true], &[u32::MAX; 2])
+            .unwrap();
+        assert_eq!(t.frame.scale, 2);
+        assert_eq!(t.frame.draws.len(), 1);
+        assert_eq!(t.frame.draws[0].of, gp_present::art::Of::Level);
+        assert_eq!(t.board_at, 1);
+        let at = |x: usize, y: usize| t.picture.pens[y * video::WIDTH + x];
+        assert_eq!(at(0, 0), TRANSPARENT);
+        assert_eq!(at(100, 100), 0x03 | video::SPRITE_BIT);
+        assert_eq!(at(300, 100), 0x02 | video::SPRITE_BIT);
+    }
+
+    /// A counter's digit drawn by the theme: the cell is the screen's own
+    /// in the board's picture, and the theme's digit goes there.
+    #[test]
+    fn a_themed_counter_digit_is_drawn_in_its_cell() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, spec, art) = with_looks_and_counters(dir.path());
+        let c = |n: &str| spec.counters.index_of(n).unwrap();
+        let mut w = World {
+            counters: vec![0; spec.counters.len()],
+            ..Default::default()
+        };
+        w.counters[c("score")] = 120;
+        let plain = art.draw(&w, &[], &[]).unwrap();
+        assert!(
+            plain
+                .cells
+                .iter()
+                .any(|x| x.name == "counter-score-2" && x.cell == 32 + 4)
+        );
+        let mut theme = art
+            .theme("gp-art 1\npic counter-score-2 two.png 16 16 0 0\n")
+            .unwrap();
+        let t = art.themed(&mut theme, &w, &[], &[]).unwrap();
+        let u = gp_present::art::ART_SUB;
+        assert_eq!(t.frame.draws.len(), 1);
+        let d = &t.frame.draws[0];
+        assert_eq!([d.x, d.y], [4 * 16 * u, 16 * u]);
+        // The digit 2's cell (4, 1): the screen's tile 1 in bank 1 now, the
+        // digit 1 beside it still the board's.
+        let at = |p: &Picture, x: usize, y: usize| p.pens[y * video::WIDTH + x];
+        assert_eq!(at(&t.picture, 4 * 16, 16), 16 + 5);
+        assert_eq!(at(&t.picture, 3 * 16, 16), at(&plain, 3 * 16, 16));
+    }
+
+    /// A `timed` rule counts the frames a body has shown its picture, one
+    /// step a game frame however often the frame is drawn, and a seek
+    /// starts it over.
+    #[test]
+    fn a_timed_rule_counts_game_frames() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, art, mut w) = two_bodies(dir.path());
+        let mut theme = art
+            .theme("gp-art 1\npic sprite-player-02 b.png 32 32 0 0\ntimed sprite-player-02 0 2 a.png 32 32 0 0\n")
+            .unwrap();
+        let file = |theme: &mut BoardTheme, w: &World| {
+            let t = art.themed(theme, w, &[true, true], &[u32::MAX; 2]).unwrap();
+            match t.frame.draws[0].src {
+                gp_present::art::Src::Art(f) => theme.art.files[f as usize].clone(),
+                s => panic!("{s:?}"),
+            }
+        };
+        let mut seen = Vec::new();
+        for f in 0..4 {
+            w.frame = f;
+            seen.push(file(&mut theme, &w));
+            // Drawn twice: the same frame.
+            assert_eq!(file(&mut theme, &w), *seen.last().unwrap());
+        }
+        assert_eq!(seen, ["a.png", "a.png", "b.png", "b.png"]);
+        w.frame = 40;
+        assert_eq!(file(&mut theme, &w), "a.png");
+    }
+
+    #[test]
+    fn a_model_with_no_board_art_has_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = Model::parse(
+            &MODEL
+                .replace("[entities.player.board_sprite]\nslot = \"sprites\"\npicture = { word = 1, byte = 1 }\nflags = { word = 1 }\n", "")
+                .replace("[levels.main.present.board]\npalette = \"colors\"\ntiles = \"tiles\"\nscreen = \"stage\"\n", ""),
+        )
+        .unwrap();
+        assert!(!names_board(&model));
+        lift(dir.path());
+        let lifted = gp_interp::Lifted::read_dir(dir.path(), &model).unwrap();
+        let spec = gp_interp::compile::compile(&model, &lifted).unwrap();
+        assert!(BoardArt::load(&model, &spec, dir.path()).unwrap().is_none());
+    }
+}

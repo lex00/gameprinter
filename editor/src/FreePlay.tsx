@@ -22,24 +22,28 @@ import { useEffect, useRef, useState } from "react";
 import type { Api } from "./api";
 import { NesPlayer } from "./nesplayer";
 import type { ModelPreview } from "./modelpreview";
-import { KEYS, frameLines, framesDue, padFromGamepad, padFromKeys, triggerPresses } from "./playfold";
+import { ARCADE_KEYS, KEYS, NES_MACHINE, frameLines, framesDue, logHead, padFromGamepad, padFromKeys, triggerPresses, type Machine } from "./playfold";
 import type { Scenario } from "./scenariofold";
 import { CLIP_SECONDS, FOLLOW_AFTER, FreePlayClient, UPLOAD_LINES, checkWords, clipCard, clipLength, clock, freeSays, latest, modelLine, takeSays, type FreeSave, type TakePhase } from "./freefold";
 
-const W = 256;
-const H = 240;
-
-/** The keys free play takes for itself while it's on. */
+/** The keys free play takes for itself while it's on: the NES's and an arcade cabinet's. */
 export const SAVE_KEY = "F5";
 export const LOAD_KEY = "F8";
 const PAUSE = "KeyP";
-const OWN = new Set([...KEYS.flat(), SAVE_KEY, LOAD_KEY, PAUSE]);
+const OWN = new Set([...KEYS.flat(), ...ARCADE_KEYS.flat(), SAVE_KEY, LOAD_KEY, PAUSE]);
+
+/** How to play, for the machine. */
+function keysHint(m: Machine): string {
+  return m.platform === "arcade"
+    ? "5 drops a coin and 1 starts, as in MAME; arrows move, X or Space is the button; a gamepad works too (Select the coin, Start, A the button), its left trigger saving and its right trigger going back."
+    : "Arrows move, X jumps, Z runs, Enter is Start; a gamepad works too, its left trigger saving and its right trigger going back.";
+}
 
 /** Tries at asking for the rebuilt game's start before saying it can't start there. */
 const FOLLOW_TRIES = 8;
 
 /** A save point's picture, half size, as a PNG data URL. */
-function thumbnail(rgba: Uint8ClampedArray<ArrayBuffer>): string {
+function thumbnail(rgba: Uint8ClampedArray<ArrayBuffer>, W: number, H: number): string {
   const full = document.createElement("canvas");
   full.width = W;
   full.height = H;
@@ -95,6 +99,11 @@ export function FreePlay({ api, run, recording, frame: startFrame, canvas, model
   const [take, setTakeState] = useState<Take>();
   const [watching, setWatching] = useState(false);
   const [refineSays, setRefineSays] = useState<string>();
+  // The machine the original plays on: the NES until the player says otherwise.
+  const [machine, setMachine] = useState<Machine>(NES_MACHINE);
+  const mach = useRef<Machine>(NES_MACHINE);
+  const W = machine.width;
+  const H = machine.height;
 
   const player = useRef<NesPlayer>(undefined);
   const rom = useRef<Uint8Array>(undefined);
@@ -114,7 +123,8 @@ export function FreePlay({ api, run, recording, frame: startFrame, canvas, model
 
   const draw = () => {
     const p = player.current;
-    if (p) canvas.current?.getContext("2d")?.putImageData(new ImageData(p.rgba(0), W, H), 0, 0);
+    const m = mach.current;
+    if (p) canvas.current?.getContext("2d")?.putImageData(new ImageData(p.rgba(0), m.width, m.height), 0, 0);
   };
 
   // Sends the branch's frames played since the last upload, in pieces.
@@ -138,10 +148,17 @@ export function FreePlay({ api, run, recording, frame: startFrame, canvas, model
   useEffect(() => {
     let live = true;
     (async () => {
-      const [p, r] = await Promise.all([NesPlayer.load(api.playWasm()), api.captureRom(run)]);
+      const r = await api.captureRom(run);
+      const p = await NesPlayer.forRom(api, r);
       if (!live) return;
       player.current = p;
       rom.current = r;
+      mach.current = p.machine;
+      setMachine(p.machine);
+      if (canvas.current) {
+        canvas.current.width = p.machine.width;
+        canvas.current.height = p.machine.height;
+      }
       const at = recording ? startFrame : 0;
       if (recording && at > 0) {
         p.replay(0, r, await api.captureInputLog(run, recording));
@@ -175,7 +192,7 @@ export function FreePlay({ api, run, recording, frame: startFrame, canvas, model
       if (fol.current !== f) return;
       if (!s.ready) {
         f.tries += 1;
-        f.askAt = (player.current?.frame(0) ?? 0) + 60;
+        f.askAt = (player.current?.frame(0) ?? 0) + Math.round(mach.current.fps);
         f.none = f.tries >= FOLLOW_TRIES;
         setFollowState(f.none ? "none" : "waiting");
         return;
@@ -207,7 +224,7 @@ export function FreePlay({ api, run, recording, frame: startFrame, canvas, model
     let last = performance.now();
     let raf = 0;
     const loop = (now: number) => {
-      const due = framesDue(acc, now - last);
+      const due = framesDue(acc, now - last, 4, mach.current.fps);
       acc = due.acc;
       last = now;
       try {
@@ -218,7 +235,7 @@ export function FreePlay({ api, run, recording, frame: startFrame, canvas, model
         if (tp.load) void keys.current.load();
         if (!busy.current) {
           for (let i = 0; i < due.frames; i++) {
-            const pad = padFromKeys(down.current) | padFromGamepad(navigator.getGamepads?.()[0]);
+            const pad = padFromKeys(down.current, mach.current.keys) | padFromGamepad(navigator.getGamepads?.()[0], mach.current.platform);
             const f = p.frame(0);
             const polled = p.step(0, pad);
             played.current.push({ f, pad, polled });
@@ -265,7 +282,7 @@ export function FreePlay({ api, run, recording, frame: startFrame, canvas, model
       const state = p.save(0);
       const hash = p.hash(0);
       const digest = p.digest(0);
-      const picture = thumbnail(p.rgba(0));
+      const picture = thumbnail(p.rgba(0), mach.current.width, mach.current.height);
       const b = branch.current.id;
       await upload(true);
       const r = await client.current.save(id, { branch: b, frame: n, hash, digest, picture });
@@ -317,7 +334,7 @@ export function FreePlay({ api, run, recording, frame: startFrame, canvas, model
     setRefineSays(undefined);
     setPaused(true);
     await load(k, true);
-    const t: Take = { save: k, frame: sp.frame, phase: "count", count: 3, n: 0, max: Math.round(seconds * 60), replace, presses: [] };
+    const t: Take = { save: k, frame: sp.frame, phase: "count", count: 3, n: 0, max: Math.round(seconds * mach.current.fps), replace, presses: [] };
     setTake(t);
     for (let c = 3; c > 0; c--) {
       t.count = c;
@@ -347,9 +364,8 @@ export function FreePlay({ api, run, recording, frame: startFrame, canvas, model
     try {
       if (t.n === 0) throw new Error("nothing was recorded");
       const text = p.inputLog(0);
-      const head = text.split("\n").slice(0, 2).join("\n");
       const lines = frameLines(text).slice(t.frame, t.frame + t.n);
-      const r = await client.current.clip(run, `${id}/${t.save}`, `${head}\n${lines.join("\n")}\n`, t.replace);
+      const r = await client.current.clip(run, `${id}/${t.save}`, `${logHead(text)}${lines.join("\n")}\n`, t.replace);
       t.clip = r.scenario;
       t.phase = "saved";
       setTake(t);
@@ -388,7 +404,7 @@ export function FreePlay({ api, run, recording, frame: startFrame, canvas, model
     let last = performance.now();
     const loop = (now: number) => {
       if (!live) return;
-      const due = framesDue(acc, now - last);
+      const due = framesDue(acc, now - last, 4, mach.current.fps);
       acc = due.acc;
       last = now;
       for (let k = 0; k < due.frames && i < t.presses.length; k++, i++) {
@@ -397,7 +413,7 @@ export function FreePlay({ api, run, recording, frame: startFrame, canvas, model
         if (x.polled && t.start && x.f >= t.start.at) steps += 1;
       }
       if (due.frames) {
-        canvas.current?.getContext("2d")?.putImageData(new ImageData(p.rgba(1), W, H), 0, 0);
+        canvas.current?.getContext("2d")?.putImageData(new ImageData(p.rgba(1), mach.current.width, mach.current.height), 0, 0);
         if (model && t.start) model.seek(steps);
       }
       if (i >= t.presses.length) {
@@ -515,8 +531,8 @@ export function FreePlay({ api, run, recording, frame: startFrame, canvas, model
           ? "Starting the original here."
           : take
             ? take.phase === "saved" && take.clip
-              ? clipCard(take.n, take.save, take.frame)
-              : takeSays(take.phase, take.count, take.n, take.max)
+              ? clipCard(take.n, take.save, take.frame, undefined, machine.fps)
+              : takeSays(take.phase, take.count, take.n, take.max, machine.fps)
             : freeSays({ saves: saves.length, follow, paused, model: !!model })}
       </p>
       {take && take.phase === "recording" && (
@@ -552,7 +568,7 @@ export function FreePlay({ api, run, recording, frame: startFrame, canvas, model
           {paused ? "go on playing" : "pause"}
         </button>
         <span className="hint">
-          {clock(frame)}. Arrows move, X jumps, Z runs, Enter is Start; a gamepad works too, its left trigger saving and its right trigger going back.
+          {clock(frame, machine.fps)}. {keysHint(machine)}
         </span>
         <label className="hint">
           clips run up to{" "}
@@ -583,7 +599,7 @@ export function FreePlay({ api, run, recording, frame: startFrame, canvas, model
               <button onClick={() => void load(s.id)} title="load this save point and play on from it">
                 <img src={pictures[s.id] ?? (s.picture && session ? client.current.picture(session, s.id) : "")} width={W / 2} height={H / 2} alt={`save point ${s.id}`} />
                 <span>
-                  {s.id}. {clock(s.frame)}
+                  {s.id}. {clock(s.frame, machine.fps)}
                 </span>
                 <span className={s.native && !s.native.matches ? "error" : "hint"}>{checkWords(s)}</span>
               </button>

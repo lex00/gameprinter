@@ -148,8 +148,14 @@ pub extern "C" fn gp_profile_bundle(
 #[unsafe(no_mangle)]
 pub extern "C" fn gp_load(ptr: *mut u8, len: usize) -> i32 {
     let bytes = input(ptr, len);
-    PREVIEW.with(|c| *c.borrow_mut() = None);
-    result(Preview::load(&bytes).map(|p| {
+    // The game's regions (gp_set_regions) are the build's, not the load's:
+    // a restart in new settings keeps them.
+    let regions = PREVIEW
+        .with(|c| c.borrow_mut().take())
+        .map(|mut p| p.take_regions())
+        .unwrap_or_default();
+    result(Preview::load(&bytes).map(|mut p| {
+        p.keep_regions(regions);
         let hooks = p.hooks().to_owned();
         PREVIEW.with(|c| *c.borrow_mut() = Some(p));
         hooks
@@ -345,6 +351,20 @@ pub extern "C" fn gp_load_art(ptr: *mut u8, len: usize) -> i32 {
     )
 }
 
+/// Gives the regions of the stage the game's level kit names
+/// (`Preview::set_regions`: preview.json's `regions` as UTF-8 JSON), which
+/// a large-art look's `#+ in REGION` lines are drawn by.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_set_regions(ptr: *mut u8, len: usize) -> i32 {
+    let bytes = input(ptr, len);
+    result(
+        String::from_utf8(bytes.into_vec())
+            .map_err(|e| e.to_string())
+            .and_then(|text| with_preview(|p| p.set_regions(&text)))
+            .map(|()| String::new()),
+    )
+}
+
 /// Builds the large-art look's stage over a level picture
 /// (`Preview::art_stage`): the input is the picture's number, width and
 /// height (three little-endian u32s), then its pixels, RGBA row by row.
@@ -490,6 +510,39 @@ pub extern "C" fn gp_sound_role(
             Err(format!("the model has no sound role `{n}`"))
         }
     })())
+}
+
+/// Sets a further take of a sound role (issue #30): its name, the take's
+/// number (2 and up; 1 is `gp_sound_role`'s file) and a 16-bit PCM WAV
+/// file, the name and the file from `gp_alloc`. Each start of the role
+/// plays its next take in turn. 0 when set, 1 with the reason in the
+/// output buffer.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_sound_role_take(
+    name: *mut u8,
+    name_len: usize,
+    take: u32,
+    wav: *mut u8,
+    wav_len: usize,
+) -> i32 {
+    let (n, w) = (input(name, name_len), input(wav, wav_len));
+    result((|| {
+        let n = std::str::from_utf8(&n).map_err(|e| e.to_string())?;
+        if with_preview(|p| p.set_sound_role_take(n, take, &w))? {
+            Ok(String::new())
+        } else {
+            Err(format!(
+                "the model has no sound role `{n}`, or {take} isn't a take"
+            ))
+        }
+    })())
+}
+
+/// Each start of a sound role so far in the output buffer, a line each:
+/// `FRAME ROLE TAKE`. 0, or 1 with no model loaded.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_sound_role_log() -> i32 {
+    result(with_preview(|p| Ok(p.sound_role_log())))
 }
 
 /// Takes every role's sound away: the model's own sound plays again.
@@ -728,8 +781,10 @@ pub extern "C" fn gp_blake3(ptr: *mut u8, len: usize) -> i32 {
 
 /// The themes of a game's index (its text) that this build can draw, by
 /// its picture file names (a line each, in order): a line a theme in the
-/// output buffer, `id<TAB>title<TAB>author<TAB>package<TAB>size<TAB>preview`.
-/// 1 with the reason when the index doesn't read.
+/// output buffer, `id<TAB>title<TAB>author<TAB>package<TAB>size<TAB>preview`,
+/// then a line for each theme it leaves out, `-<TAB>id<TAB>title<TAB>why`
+/// (`gp_present::catalogue::offer`). 1 with the reason when the index
+/// doesn't read.
 #[unsafe(no_mangle)]
 pub extern "C" fn gp_catalogue(
     index: *mut u8,
@@ -742,7 +797,7 @@ pub extern "C" fn gp_catalogue(
         let ix = std::str::from_utf8(&ix).map_err(|e| e.to_string())?;
         let pics = std::str::from_utf8(&pics).map_err(|e| e.to_string())?;
         let names: Vec<&str> = pics.lines().collect();
-        let themes = gp_present::catalogue::offered(ix, &names)?;
+        let (themes, left) = gp_present::catalogue::offer(ix, &names)?;
         let clean = |s: &str| s.replace(['\t', '\n'], " ");
         Ok(themes
             .iter()
@@ -757,6 +812,9 @@ pub extern "C" fn gp_catalogue(
                     t.preview
                 )
             })
+            .chain(left.iter().map(|(t, why)| {
+                format!("-\t{}\t{}\t{}", clean(&t.id), clean(&t.title), clean(why))
+            }))
             .collect::<Vec<_>>()
             .join("\n"))
     })())

@@ -13,8 +13,9 @@
 //! observe::Screen::Mcr). The sprite-set goes in the arcade map as a
 //! `sprite-set` entry, as in an NES map. The board's colours are in its
 //! palette RAM, not NES colour numbers, so no palettes are captured, and
-//! `--apply` is refused: no model slot takes an arcade lift's pictures yet
-//! (gp_interp::Lifted), so the model is only proposed.
+//! `--apply` is refused: an arcade model draws its bodies as the board's
+//! own sprites (`board_sprite`, docs/formats/board-art.md), not from a
+//! sprite-set, so the model is only proposed.
 //!
 //! `sprites schema` prints the image format config's schema
 //! (docs/formats/image-config.md), from `gp-imagefmt`.
@@ -251,7 +252,7 @@ fn capture(args: &CaptureArgs, paths: &Paths) -> Result<Outcome> {
     let arcade = arcade_package(dir)?;
     if arcade && args.apply {
         bail!(
-            "{} is an arcade game: no model slot takes an arcade lift's pictures yet (gp_interp::Lifted refuses them), so capture only proposes the model; leave out --apply",
+            "{} is an arcade game: its model draws its bodies as the board's own sprites (board_sprite, docs/formats/board-art.md), not from a sprite-set, so capture only proposes the model; leave out --apply",
             dir.display()
         );
     }

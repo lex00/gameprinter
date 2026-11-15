@@ -8,7 +8,9 @@
 //! it: an `rst`, or a run's interrupt) and from every instruction a run
 //! started, every interrupt handler, every entry of a jump table handed to
 //! an indexed-jump helper (a routine that jumps to the word at HL plus
-//! twice A, found by running it alone: [`jump_helper`]), and every target
+//! twice A, found by running it alone: [`jump_helper`]), with HL a
+//! constant or a word read from a table of tables ([`table_of_tables`]:
+//! each of its words starts a jump table), and every target
 //! a `jp (hl)`, `jp (ix)` or `jp (iy)` went to in a run, which no reading
 //! of the code alone otherwise finds. A routine is a call's or restart's
 //! target, an interrupt handler, a jump table's entry, or an entry; each
@@ -107,10 +109,21 @@ pub(crate) fn run_clips(set: &Romset, clips: &[ClipInput], window: (u64, u64)) -
 
 /// Runs one input from power-on, watching every frame.
 pub(crate) fn run_input(set: &Romset, inputs: &[InputFrame]) -> Result<Levels> {
+    run_input_with(set, inputs, &mut |_, _| {})
+}
+
+/// [`run_input`], giving each watched frame's logs and the machine after
+/// it to `each` (the RAM roles' trace, the reads by address).
+pub(crate) fn run_input_with(
+    set: &Romset,
+    inputs: &[InputFrame],
+    each: &mut dyn FnMut(&gp_arcade::levels::Watched, &Tapper),
+) -> Result<Levels> {
     let mut t = Tapper::power_on(set);
     let mut w = Watcher::new(false);
     for f in inputs {
-        w.step_quiet(&mut t, controls(f)?);
+        let seen = w.step_quiet(&mut t, controls(f)?);
+        each(&seen, &t);
     }
     Ok(w.finish())
 }
@@ -370,6 +383,174 @@ fn hl_before(insns: &BTreeMap<u16, Insn>, rom: &[u8], pc: u16) -> Option<u16> {
     None
 }
 
+/// Runs the routine at `at` alone on the probe machine with HL and A
+/// set, until it returns: HL as it returns, or None when it doesn't
+/// return within [`PROBE_STEPS`] instructions or jumps out of the ROM.
+fn hl_after(rom: &[u8], end: u32, at: u16, hl: u16, a: u8) -> Option<u16> {
+    if end > u32::from(PROBE_TABLE) || u32::from(at) >= end {
+        return None;
+    }
+    let end = end as u16;
+    let mut mem = vec![0u8; 0x1_0000];
+    mem[..usize::from(end)].copy_from_slice(&rom[..usize::from(end).min(rom.len())]);
+    let ret = end.to_le_bytes();
+    mem[usize::from(PROBE_STACK)] = ret[0];
+    mem[usize::from(PROBE_STACK) + 1] = ret[1];
+    let mut bus = Probe {
+        mem,
+        end,
+        steps: 0,
+        left: None,
+    };
+    let mut cpu = gp_arcade::z80::Z80::new();
+    cpu.pc = at;
+    cpu.sp = PROBE_STACK;
+    cpu.af = u16::from(a) << 8;
+    cpu.hl = hl;
+    // A count or divisor in B, C, D or E isn't zero, so a loop on one ends.
+    cpu.bc = 0x0303;
+    cpu.de = 0x0303;
+    cpu.icount = 4 * PROBE_STEPS as i32 * 23;
+    cpu.execute_run(&mut bus);
+    (bus.left == Some(end) && cpu.sp == PROBE_STACK.wrapping_add(2)).then_some(cpu.hl)
+}
+
+/// What a call does to HL, by running it alone: leaves it (`Keeps`), adds
+/// A to it (`AddsA`, the indexing helpers games have), or something else.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum HlCall {
+    Keeps,
+    AddsA,
+    Other,
+}
+
+fn hl_call(rom: &[u8], end: u32, at: u16) -> HlCall {
+    let probe = |hl: u16, a: u8| hl_after(rom, end, at, hl, a);
+    let base = PROBE_TABLE;
+    let runs = [
+        (0u8, probe(base, 0)),
+        (3, probe(base, 3)),
+        (5, probe(base + 0xf0, 5)),
+    ];
+    if runs
+        .iter()
+        .enumerate()
+        .all(|(k, (_, r))| *r == Some(if k == 2 { base + 0xf0 } else { base }))
+    {
+        return HlCall::Keeps;
+    }
+    if runs.iter().enumerate().all(|(k, (a, r))| {
+        let from = if k == 2 { base + 0xf0 } else { base };
+        *r == Some(from.wrapping_add(u16::from(*a)))
+    }) {
+        return HlCall::AddsA;
+    }
+    HlCall::Other
+}
+
+/// A table of jump tables: at `pc`, a call or jump to an indexed-jump
+/// helper whose HL is a word read from another table, `ld a,(hl) / inc hl
+/// / ld h,(hl) / ld l,a` (or the same through E and D, then `ex de,hl`),
+/// with HL before it a constant `ld hl,nn` indexed only by calls that add
+/// A to HL. Between the word's load and `pc`, and between `ld hl,nn` and
+/// the load, nothing may write H or L but those calls, and a call there
+/// must leave HL as it was (each call's effect on HL is read by running
+/// it alone, as [`jump_helper`] is). The answer is the outer table's
+/// address: each of its words starts a jump table.
+fn table_of_tables(
+    insns: &BTreeMap<u16, Insn>,
+    rom: &[u8],
+    end: u32,
+    pc: u16,
+    calls: &mut BTreeMap<u16, HlCall>,
+) -> Option<u16> {
+    use dasm::reg;
+    // The straight run of instructions before `pc`, latest first.
+    let mut run: Vec<(u16, &Insn)> = Vec::new();
+    let mut at = pc;
+    for _ in 0..24 {
+        let Some((&p, i)) = insns
+            .range(..at)
+            .next_back()
+            .filter(|(p, i)| p.wrapping_add(u16::from(i.len)) == at)
+        else {
+            break;
+        };
+        if !matches!(i.flow, Flow::Next | Flow::Call(_)) {
+            break;
+        }
+        run.push((p, i));
+        at = p;
+    }
+    let texts: Vec<&str> = run.iter().map(|(_, i)| i.text.as_str()).collect();
+    let mut call_does = |t: u16| *calls.entry(t).or_insert_with(|| hl_call(rom, end, t));
+    // Up to the word's load: nothing writes H or L, a call keeps HL.
+    let mut k = 0;
+    let load = loop {
+        let (_, i) = run.get(k)?;
+        let tail = &texts[k..];
+        let through_a = tail.starts_with(&["ld l,a", "ld h,(hl)", "inc hl", "ld a,(hl)"]);
+        let through_de = tail.starts_with(&["ex de,hl", "ld d,(hl)", "inc hl", "ld e,(hl)"]);
+        if through_a || through_de {
+            break k + 4;
+        }
+        match i.flow {
+            Flow::Call(t) if call_does(t) == HlCall::Keeps => {}
+            Flow::Call(_) => return None,
+            _ if i.writes & (reg::HL | reg::ALT) != 0 => return None,
+            _ => {}
+        }
+        k += 1;
+    };
+    // Before the load: `ld hl,nn`, indexed by calls that add A to HL.
+    for (p, i) in run.iter().skip(load) {
+        match i.flow {
+            Flow::Call(t) if call_does(t) == HlCall::AddsA => continue,
+            Flow::Call(_) => return None,
+            _ => {}
+        }
+        if i.writes & (reg::HL | reg::ALT) != 0 {
+            let b = |k: u16| rom.get(usize::from(p.wrapping_add(k))).copied();
+            return (b(0)? == 0x21)
+                .then(|| u16::from_le_bytes([b(1).unwrap_or(0), b(2).unwrap_or(0)]));
+        }
+    }
+    None
+}
+
+/// The jump tables a table of tables at `from` names: its words, in
+/// order, to the first that can't start one (past the ROM, zero, inside
+/// the outer table, or inside code the map holds: a jump table is data),
+/// or whose own slot is code or a table it named.
+fn tables_named(from: u16, insns: &BTreeMap<u16, Insn>, rom: &[u8], end: u32) -> Vec<u16> {
+    let covered = |a: u16| {
+        insns
+            .range(..=a)
+            .next_back()
+            .is_some_and(|(p, i)| u32::from(*p) + u32::from(i.len) > u32::from(a))
+    };
+    let mut out: Vec<u16> = Vec::new();
+    for n in 0..TABLE_MAX {
+        let Some(slot) = from.checked_add(2 * n) else {
+            break;
+        };
+        // The outer table ends where the first table it names starts.
+        if u32::from(slot) + 2 > end
+            || covered(slot)
+            || covered(slot + 1)
+            || out.iter().any(|&t| t <= slot + 1 && t >= from)
+        {
+            break;
+        }
+        let w = u16::from_le_bytes([rom[usize::from(slot)], rom[usize::from(slot) + 1]]);
+        if w == 0 || u32::from(w) >= end || (from..=slot + 1).contains(&w) || covered(w) {
+            break;
+        }
+        out.push(w);
+    }
+    out
+}
+
 /// Entries a jump table may hold at most.
 const TABLE_MAX: u16 = 128;
 
@@ -481,6 +662,8 @@ fn descend(
     // Indexed-jump helpers by entry (None: not one), and the tables their
     // callers hand them, by start.
     let mut helpers: BTreeMap<u16, Option<u16>> = BTreeMap::new();
+    // What each call before a helper does to HL.
+    let mut hl_calls: BTreeMap<u16, HlCall> = BTreeMap::new();
     let mut tables: BTreeMap<u16, JumpTable> = BTreeMap::new();
     let mut taken: BTreeMap<u16, Vec<u16>> = BTreeMap::new();
     // The descent, then again from the interrupt handlers the code read
@@ -522,22 +705,28 @@ fn descend(
             continue;
         }
         // Calls and jumps to an indexed-jump helper with HL set just
-        // before: each names a table.
+        // before: each names a table; with HL read from a table of
+        // tables, each of its words names one.
         for (&pc, i) in &insns {
             let (Flow::Call(t) | Flow::CallIf(t) | Flow::Jump(t) | Flow::JumpIf(t)) = i.flow else {
-                continue;
-            };
-            let Some(hl) = hl_before(&insns, rom, pc) else {
                 continue;
             };
             let Some(c) = *helpers.entry(t).or_insert_with(|| jump_helper(rom, end, t)) else {
                 continue;
             };
-            let from = hl.wrapping_add(c);
-            tables.entry(from).or_insert(JumpTable {
-                from,
-                taken: Some(0),
-            });
+            let starts = match hl_before(&insns, rom, pc) {
+                Some(hl) => vec![hl],
+                None => table_of_tables(&insns, rom, end, pc, &mut hl_calls)
+                    .map(|outer| tables_named(outer, &insns, rom, end))
+                    .unwrap_or_default(),
+            };
+            for hl in starts {
+                let from = hl.wrapping_add(c);
+                tables.entry(from).or_insert(JumpTable {
+                    from,
+                    taken: Some(0),
+                });
+            }
         }
         let entered = entered(&insns, &routines);
         for t in tables.values_mut() {
@@ -1120,6 +1309,59 @@ pub(crate) fn tables(set: &Romset, inputs: &[InputFrame], index: u16) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A made-up program whose jump table's address is read from another
+    /// table: HL is the word at 0040 plus A (by a call that adds A to HL,
+    /// found by running it), and the helper at 0020 jumps to the word at
+    /// HL + 2A. Both tables the outer one names are followed, to their
+    /// four routines, and each call's effect on HL is read by running it.
+    #[test]
+    fn a_jump_table_read_from_a_table_of_tables_is_followed() {
+        let mut main = vec![
+            0x31, 0xf0, 0xe7, // 0000: ld sp,e7f0
+            0x21, 0x40, 0x00, // 0003: ld hl,0040
+            0xaf, // 0006: xor a
+            0xcd, 0x30, 0x00, // 0007: call 0030
+            0x7e, 0x23, 0x66, 0x6f, // 000a: ld a,(hl) ; inc hl ; ld h,(hl) ; ld l,a
+            0xcd, 0x38, 0x00, // 000e: call 0038 (keeps HL)
+            0xc3, 0x20, 0x00, // 0011: jp 0020
+        ];
+        main.resize(0x20, 0);
+        // 0020: add a,a ; add a,l ; ld l,a ; jr nc,+1 ; inc h ;
+        //       ld a,(hl) ; inc hl ; ld h,(hl) ; ld l,a ; jp (hl)
+        main.extend([
+            0x87, 0x85, 0x6f, 0x30, 0x01, 0x24, 0x7e, 0x23, 0x66, 0x6f, 0xe9,
+        ]);
+        main.resize(0x30, 0);
+        main.extend([0x85, 0x6f, 0xd0, 0x24, 0xc9]); // 0030: add a,l ; ld l,a ; ret nc ; inc h ; ret
+        main.resize(0x38, 0);
+        main.extend([0x3e, 0x00, 0xc9]); // 0038: ld a,0 ; ret
+        main.resize(0x40, 0);
+        main.extend([0x50, 0x00, 0x60, 0x00]); // 0040: the outer table
+        main.resize(0x50, 0);
+        main.extend([0x70, 0x00, 0x78, 0x00]); // 0050: a jump table
+        main.resize(0x60, 0);
+        main.extend([0x80, 0x00, 0x88, 0x00]); // 0060: another
+        for at in [0x70, 0x78, 0x80, 0x88] {
+            main.resize(at, 0);
+            main.extend([0x3e, 0x01, 0x32, 0x01, 0xe0, 0x18, 0xfe]); // ld a,1 ; ld (e001),a ; jr $
+        }
+        let set = gp_arcade::testrom::romset(&main, &[0x18, 0xfe]);
+        let (rom, end) = program(&set, 0);
+        assert_eq!(hl_call(rom, end, 0x30), HlCall::AddsA);
+        assert_eq!(hl_call(rom, end, 0x38), HlCall::Keeps);
+        assert_eq!(jump_helper(rom, end, 0x20), Some(0));
+        let m = CodeMap::of(&set, 0, None);
+        let mut calls = BTreeMap::new();
+        assert_eq!(
+            table_of_tables(&m.insns, rom, end, 0x11, &mut calls),
+            Some(0x40)
+        );
+        assert_eq!(tables_named(0x40, &m.insns, rom, end), vec![0x50, 0x60]);
+        for at in [0x70u16, 0x78, 0x80, 0x88] {
+            assert_eq!(m.routines.get(&at), Some(&TABLE_ENTRY), "{at:04X}");
+        }
+    }
 
     fn busy_levels(frames: usize) -> (Romset, Levels) {
         let set = gp_arcade::testrom::busy();

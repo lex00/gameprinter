@@ -625,6 +625,48 @@ value = "1000"
     assert_eq!(r["scenarios"]["ok"], true, "{r}");
 }
 
+#[test]
+fn validate_lets_gp_validate_pick_the_check_unless_baselines_are_named() {
+    let f = Fixture::new();
+    // A stand-in gp that keeps its arguments and answers as gp validate
+    // does when it picked the check for a changed game.
+    let log = f.gp.with_file_name("args");
+    fs::write(
+        &f.gp,
+        format!(
+            "#!/bin/sh\necho \"$*\" >> {}\necho '{{\"ok\":true,\"check\":\"changed\",\"why\":\"a copy\",\"changed\":{{\"ok\":true,\"complete\":false}}}}'\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    let (r, err) = f.call("validate", json!({ "copy": "copy" }));
+    assert!(!err, "{r}");
+    assert_eq!(r["check"], "changed", "{r}");
+    assert_eq!(r["why"], "a copy");
+    assert_eq!(r["changed"]["complete"], false);
+    let args = fs::read_to_string(&log).unwrap();
+    let validate = args
+        .lines()
+        .find(|l| l.starts_with("--json validate"))
+        .unwrap();
+    assert!(!validate.contains("--against"), "{validate}");
+    let (r, err) = f.call(
+        "validate",
+        json!({ "copy": "copy", "baselines": ["jump-height"] }),
+    );
+    assert!(!err, "{r}");
+    let args = fs::read_to_string(&log).unwrap();
+    let validate = args
+        .lines()
+        .filter(|l| l.starts_with("--json validate"))
+        .nth(1)
+        .unwrap();
+    assert!(
+        validate.contains("--against") && validate.contains("baselines/tiny/jump-height.toml"),
+        "{validate}"
+    );
+}
+
 /// An editor that saves RGBA: the four preview grays read as indices
 /// (gp-imagefmt), and any other color is refused.
 #[test]

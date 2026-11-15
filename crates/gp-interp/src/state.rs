@@ -155,7 +155,31 @@ pub fn follows_path(kind: &gp_sim::spec::Kind) -> bool {
 pub fn leaves(spec: &Spec, w: &World) -> Vec<(Vec<Step>, Value)> {
     let key = |k: &str| Step::Key(k.to_owned());
     let mut out = Vec::new();
-    let fixed = |f: Fx| Value::Fixed(f.raw());
+    head_leaves(spec, w, &mut out);
+    let origin = spec.levels[w.level].origin;
+    // Only the kinds with bodies are read.
+    for k in 0..spec.kinds.len() {
+        if w.of_kind(k).next().is_none() {
+            continue;
+        }
+        let kind = &spec.kinds[k];
+        for (n, (id, b)) in w.of_kind(k).enumerate() {
+            body_leaves(kind, id, b, origin, &mut |field, item, value| {
+                let mut p = vec![key("entities"), key(&kind.name), Step::Item(n), key(field)];
+                if let Some(i) = item {
+                    p.push(Step::Item(i));
+                }
+                out.push((p, value));
+            });
+        }
+    }
+    tail_leaves(spec, w, &mut out);
+    out
+}
+
+/// The leaves before the entities: the frame, level, generator and input.
+fn head_leaves(spec: &Spec, w: &World, out: &mut Vec<(Vec<Step>, Value)>) {
+    let key = |k: &str| Step::Key(k.to_owned());
     out.push((vec![key("frame")], Value::Int(w.frame as i64)));
     out.push((
         vec![key("level")],
@@ -168,75 +192,80 @@ pub fn leaves(spec: &Spec, w: &World) -> Vec<(Vec<Step>, Value)> {
             Value::Flag(w.held & a.mask != 0),
         ));
     }
-    let origin = spec.levels[w.level].origin;
-    // Only the kinds with bodies are read.
-    for k in 0..spec.kinds.len() {
-        if w.of_kind(k).next().is_none() {
-            continue;
-        }
-        let kind = &spec.kinds[k];
-        for (n, (id, b)) in w.of_kind(k).enumerate() {
-            let at =
-                |field: &str| vec![key("entities"), key(&kind.name), Step::Item(n), key(field)];
-            out.push((at("id"), Value::Entity(id as u64)));
-            out.push((at("x"), fixed(b.x)));
-            out.push((at("y"), fixed(b.y)));
-            out.push((at("stage_x"), fixed(b.x.add(origin[0]))));
-            out.push((at("stage_y"), fixed(b.y.add(origin[1]))));
-            out.push((at("hp"), Value::Int(b.hp)));
-            out.push((at("climbing"), Value::Flag(b.climbing)));
-            let carrying = i64::from(b.carrying) - 1;
-            out.push((at("carrying"), Value::Int(carrying)));
-            out.push((at("vx"), fixed(b.vx)));
-            out.push((at("vy"), fixed(b.vy)));
-            out.push((at("on_ground"), Value::Flag(b.on_ground)));
-            if kind.jump.is_some() {
-                out.push((at("jumping"), Value::Flag(b.air == u32::MAX)));
-            }
-            let facing = match (b.faced_both, b.facing_left) {
-                (true, _) => "both",
-                (false, true) => "left",
-                (false, false) => "right",
-            };
-            out.push((at("facing"), Value::Text(facing.into())));
-            if runs(kind) {
-                out.push((at("vx_frac"), fixed(b.vx_frac)));
-                let moved = MOVED.get(usize::from(b.moved)).copied().unwrap_or("none");
-                out.push((at("moved"), Value::Text(moved.into())));
-                out.push((at("run_hold"), Value::Int(i64::from(b.run_hold))));
-                out.push((at("decel_hold"), Value::Flag(b.decel_hold)));
-            }
-            if masks_pushes(kind) {
-                let pushed = MOVED.get(usize::from(b.pushed)).copied().unwrap_or("none");
-                out.push((at("pushed"), Value::Text(pushed.into())));
-            }
-            if keeps_fall_gravity(kind) {
-                out.push((at("fall_gravity"), fixed(b.fall_gravity)));
-            }
-            if sees_speed_before_walls(kind) {
-                out.push((at("seen_speed"), fixed(b.seen_speed)));
-            }
-            if keeps_words(kind) {
-                for (i, word) in b.ext.iter().enumerate() {
-                    let mut p = at("ext");
-                    p.push(Step::Item(i));
-                    out.push((p, Value::Int(*word)));
-                }
-            }
-            if follows_path(kind) {
-                out.push((at("home_x"), fixed(b.home[0])));
-                out.push((at("home_y"), fixed(b.home[1])));
-                out.push((at("path_back"), Value::Flag(b.path_back)));
-                out.push((at("wait"), Value::Int(i64::from(b.wait))));
-            }
-            out.push((at("alive"), Value::Flag(b.alive)));
-            out.push((at("waiting"), Value::Flag(b.waiting)));
-            if let Some(m) = &kind.machine {
-                out.push((at("state"), Value::Text(m.states[b.state].name.clone())));
-                out.push((at("time"), Value::Int(i64::from(b.time))));
-            }
+}
+
+/// One body's leaves, in path order: each field's name, its position for
+/// a list field (`ext[0]` to `[3]`) and its value.
+fn body_leaves(
+    kind: &gp_sim::spec::Kind,
+    id: usize,
+    b: &gp_sim::world::Body,
+    origin: [Fx; 2],
+    out: &mut impl FnMut(&str, Option<usize>, Value),
+) {
+    let fixed = |f: Fx| Value::Fixed(f.raw());
+    out("id", None, Value::Entity(id as u64));
+    out("x", None, fixed(b.x));
+    out("y", None, fixed(b.y));
+    out("stage_x", None, fixed(b.x.add(origin[0])));
+    out("stage_y", None, fixed(b.y.add(origin[1])));
+    out("hp", None, Value::Int(b.hp));
+    out("climbing", None, Value::Flag(b.climbing));
+    let carrying = i64::from(b.carrying) - 1;
+    out("carrying", None, Value::Int(carrying));
+    out("vx", None, fixed(b.vx));
+    out("vy", None, fixed(b.vy));
+    out("on_ground", None, Value::Flag(b.on_ground));
+    if kind.jump.is_some() {
+        out("jumping", None, Value::Flag(b.air == u32::MAX));
+    }
+    let facing = match (b.faced_both, b.facing_left) {
+        (true, _) => "both",
+        (false, true) => "left",
+        (false, false) => "right",
+    };
+    out("facing", None, Value::Text(facing.into()));
+    if runs(kind) {
+        out("vx_frac", None, fixed(b.vx_frac));
+        let moved = MOVED.get(usize::from(b.moved)).copied().unwrap_or("none");
+        out("moved", None, Value::Text(moved.into()));
+        out("run_hold", None, Value::Int(i64::from(b.run_hold)));
+        out("decel_hold", None, Value::Flag(b.decel_hold));
+    }
+    if masks_pushes(kind) {
+        let pushed = MOVED.get(usize::from(b.pushed)).copied().unwrap_or("none");
+        out("pushed", None, Value::Text(pushed.into()));
+    }
+    if keeps_fall_gravity(kind) {
+        out("fall_gravity", None, fixed(b.fall_gravity));
+    }
+    if sees_speed_before_walls(kind) {
+        out("seen_speed", None, fixed(b.seen_speed));
+    }
+    if keeps_words(kind) {
+        for (i, word) in b.ext.iter().enumerate() {
+            out("ext", Some(i), Value::Int(*word));
         }
     }
+    if follows_path(kind) {
+        out("home_x", None, fixed(b.home[0]));
+        out("home_y", None, fixed(b.home[1]));
+        out("path_back", None, Value::Flag(b.path_back));
+        out("wait", None, Value::Int(i64::from(b.wait)));
+    }
+    out("alive", None, Value::Flag(b.alive));
+    out("waiting", None, Value::Flag(b.waiting));
+    if let Some(m) = &kind.machine {
+        out("state", None, Value::Text(m.states[b.state].name.clone()));
+        out("time", None, Value::Int(i64::from(b.time)));
+    }
+}
+
+/// The leaves after the entities: cameras, rules, counters and ticks.
+fn tail_leaves(spec: &Spec, w: &World, out: &mut Vec<(Vec<Step>, Value)>) {
+    let key = |k: &str| Step::Key(k.to_owned());
+    let fixed = |f: Fx| Value::Fixed(f.raw());
+    let origin = spec.levels[w.level].origin;
     for (k, (c, pos)) in spec.cameras.iter().zip(&w.cameras).enumerate() {
         for (i, axis) in ["x", "y"].into_iter().enumerate() {
             out.push((vec![key("cameras"), key(&c.name), key(axis)], fixed(pos[i])));
@@ -291,7 +320,6 @@ pub fn leaves(spec: &Spec, w: &World) -> Vec<(Vec<Step>, Value)> {
             tick += 1;
         }
     }
-    out
 }
 
 /// How many `every` changes a counter has: its `ticks.<name>` list's
@@ -434,5 +462,114 @@ impl View {
                 entries.len()
             )),
         }
+    }
+}
+
+/// Reads paths of one frame's state from the world itself, without the
+/// [`View`]: what a batch read (`query-values` in wit/game/game.wit) does
+/// for the paths it can. A path it reads gets the values [`View::query`]
+/// gives for it, from the same leaves.
+pub struct Leaves<'a> {
+    spec: &'a Spec,
+    w: &'a World,
+    /// The leaves but the entities', by path, made on the first read of one.
+    others: std::cell::OnceCell<BTreeMap<String, Value>>,
+}
+
+impl<'a> Leaves<'a> {
+    pub fn new(spec: &'a Spec, w: &'a World) -> Self {
+        Self {
+            spec,
+            w,
+            others: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// What [`View::query`] gives for `text` when it is one leaf, or one
+    /// field of one body or of every body of a kind
+    /// (`entities.KIND[*].FIELD`), or names a body or kind that isn't
+    /// there, or doesn't parse; `None` for any other path, which the view
+    /// reads.
+    pub fn values(&self, text: &str) -> Option<Result<Vec<Value>, String>> {
+        let p = match gp_model::Path::parse(text) {
+            Ok(p) => p,
+            Err(e) => return Some(Err(e)),
+        };
+        let segs = &p.segments;
+        if let [first, kind, field] = segs.as_slice()
+            && first.name == "entities"
+            && first.index.is_none()
+        {
+            let nothing = || Err(format!("`{text}` names nothing in the model's state"));
+            return match self.body_field(kind, field)? {
+                Some(values) => Some(Ok(values)),
+                None => Some(nothing()),
+            };
+        }
+        if !p.is_concrete() {
+            return None;
+        }
+        let mut steps = Vec::new();
+        for s in segs {
+            steps.push(Step::Key(s.name.clone()));
+            if let Some(path::Index::At(n)) = s.index {
+                steps.push(Step::Item(usize::try_from(n).ok()?));
+            }
+        }
+        let others = self.others.get_or_init(|| {
+            let mut out = Vec::new();
+            head_leaves(self.spec, self.w, &mut out);
+            tail_leaves(self.spec, self.w, &mut out);
+            out.into_iter()
+                .map(|(p, v)| (path::display(&p), v))
+                .collect()
+        });
+        others
+            .get(&path::display(&steps))
+            .map(|v| Ok(vec![v.clone()]))
+    }
+
+    /// `entities.KIND[N].FIELD` or `entities.KIND[*].FIELD`: `Some` of
+    /// the values when FIELD is a leaf of every body named (`ext[i]` with
+    /// its position), `Some(None)` when the kind or the body isn't there
+    /// (the path names nothing), `None` for any other.
+    fn body_field(
+        &self,
+        kind: &path::Segment,
+        field: &path::Segment,
+    ) -> Option<Option<Vec<Value>>> {
+        let item = match field.index {
+            None => None,
+            Some(path::Index::At(i)) => Some(usize::try_from(i).ok()?),
+            Some(_) => return None,
+        };
+        let Some(k) = self.spec.kinds.index_of(&kind.name) else {
+            // The kind's name is no key of `entities`, whatever follows.
+            return Some(None);
+        };
+        let bodies: Vec<(usize, &gp_sim::world::Body)> = match kind.index {
+            Some(path::Index::At(n)) => match usize::try_from(n) {
+                Ok(n) => self.w.of_kind(k).nth(n).into_iter().collect(),
+                Err(_) => Vec::new(),
+            },
+            Some(path::Index::All) => self.w.of_kind(k).collect(),
+            _ => return None,
+        };
+        if bodies.is_empty() {
+            return Some(None);
+        }
+        let spec_kind = &self.spec.kinds[k];
+        let origin = self.spec.levels[self.w.level].origin;
+        let mut out = Vec::with_capacity(bodies.len());
+        for (id, b) in bodies {
+            let mut found = None;
+            body_leaves(spec_kind, id, b, origin, &mut |f, i, v| {
+                if found.is_none() && f == field.name && i == item {
+                    found = Some(v);
+                }
+            });
+            out.push(found?);
+        }
+        Some(Some(out))
     }
 }

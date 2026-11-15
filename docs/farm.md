@@ -4,7 +4,7 @@
 
 The decision model is Laya, served on 127.0.0.1:7720 by `just laya` (the server `gp mechanic demo` uses). `--decide uniform` (farm) or `--uniform` (farm-topdown) orders the moves at random from `--seed` instead, as the baseline, and needs no server.
 
-The commands came from game-printer (farm.rs, blind.rs, blind_topdown.rs) with their flags and outputs. Its research write-ups (docs/research/laya-level-play.md, topdown-extension.md there) are about other games and stay there. Both read the NES's RAM and sprite table, so an arcade game is refused in words.
+The commands came from game-printer (farm.rs, blind.rs, blind_topdown.rs) with their flags and outputs. Its research write-ups (docs/research/laya-level-play.md, topdown-extension.md there) are about other games and stay there. Both read the NES's RAM and sprite table past blind discovery. On an arcade romset each runs blind discovery on the board (`farm::blind::discover`, which plays gp-nes or gp-arcade, `farm/machine.rs`) and stops after it, saying what it found and why it stops (`farm::blind::stop_on_arcade`); `gp mechanic sweep jump` does the same. On Tapper on 2026-11-14 all three found play start at frame 321, the bartender's x at $E2E9 and y at $E2E6, lanes 48 apart with the lane at $E6F9, the tap held 5 frames and the score at $E3F5 to $E3FA, and stopped there: the player changes lanes, and the method's changes for such a player (ROADMAP.md, Wave T) wait for the owner.
 
 ## On a game's package
 

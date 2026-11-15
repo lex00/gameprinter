@@ -151,6 +151,14 @@ pub struct CompareArgs {
     /// of times (docs/formats/draws.md).
     #[arg(long, value_name = "FILE")]
     pub draws: Option<PathBuf>,
+    /// A path whose values on each compared frame, the original's and the
+    /// model's, are printed where either changes (and all of them in the
+    /// JSON's `values`): a mapped path, or one the run doesn't compare (a
+    /// presentation field, or a hook's word as `entities.flow[0].ext[3]`),
+    /// so a hook's own state can be seen on a run from power-on.
+    /// Repeatable.
+    #[arg(long = "values", value_name = "PATH")]
+    pub values: Vec<String>,
 }
 
 fn model_dir(model: &Path) -> PathBuf {
@@ -394,8 +402,7 @@ pub(crate) fn compare(a: &CompareArgs, paths: &Paths) -> Result<Outcome> {
     )?;
     let (mapping_file, mapping) = load_mapping(&a.model, a.mapping.as_deref())?;
     let rom = fs::read(&a.rom).with_context(|| format!("reading {}", a.rom.display()))?;
-    let mut original = crate::original::OriginalRuntime::of_rom(&rom)?;
-    let mut interp = l.source.open()?;
+    let interp = l.source.open()?;
     if mapping.model != interp.spec().name {
         bail!(
             "{} is the state mapping of `{}`, not of `{}`",
@@ -405,24 +412,53 @@ pub(crate) fn compare(a: &CompareArgs, paths: &Paths) -> Result<Outcome> {
         );
     }
     let inputs = crate::run::frames(&input);
-    let report = gp_interp::compare::compare(&mut original, &mut interp, &mapping, &inputs)
-        .map_err(|e| anyhow!("{e}"))?;
-    let agreeing = report.fields.iter().filter(|f| f.first.is_none()).count();
+    // A mapping with `score_draws` scores with the original's draws: with
+    // no script given, the run records one from the input. From the
+    // model's own power-on (no --from) it takes them from its first
+    // compared frame (crate::lockstep::run_resumed_on).
+    let draws = match draws {
+        None if mapping.score_draws => Some(crate::lockstep::record_draws(
+            &rom,
+            &mapping,
+            &input.frames,
+            a.from.unwrap_or(0),
+        )?),
+        d => d,
+    };
+    // One run: the agreement by path is the lockstep's own, in its mode,
+    // from its start and with its draws, so the lines below and its
+    // summary say the same thing.
+    let mut original = crate::original::OriginalRuntime::of_rom(&rom)?;
+    let (ls, mut lockstep, ls_lines) = crate::lockstep::run_resumed_on(
+        &mut original,
+        &l.source,
+        &model_dir(&a.model),
+        &mapping,
+        &rom,
+        &inputs,
+        mode,
+        a.from,
+        !a.values.is_empty(),
+        Some(&l.assets),
+        draws,
+        None,
+        None,
+        &a.values,
+    )?;
+    let (values_json, values_lines) =
+        values_of(&ls.paths, &ls.values, &ls.watched, &ls.frames, &a.values)?;
+    let fields = agreement(&ls.paths, &ls.splits, &ls.frames);
     let mut lines = vec![format!(
-        "compared {} model frames with {} frames of the original ({} before the model starts, {} lag frames skipped)",
-        report.model_frames + 1,
-        report.original_frames + 1,
-        report.before_start,
-        report.lag_frames
+        "compared {} model frames with {} frames of the original ({} before the model starts, {} lag frames skipped), {} mode",
+        ls.frames.len(),
+        ls.original_frames + 1,
+        ls.before_start,
+        ls.lag_frames,
+        a.mode
     )];
-    let width = report
-        .fields
-        .iter()
-        .map(|f| f.path.len())
-        .max()
-        .unwrap_or(0);
-    let mut fields = Vec::new();
-    for f in &report.fields {
+    let width = fields.iter().map(|f| f.path.len()).max().unwrap_or(0);
+    let mut fields_json = Vec::new();
+    for f in &fields {
         let mut j = json!({
             "path": f.path,
             "compared": f.compared,
@@ -434,88 +470,258 @@ pub(crate) fn compare(a: &CompareArgs, paths: &Paths) -> Result<Outcome> {
                 "agrees   {:width$}  {} of {} frames",
                 f.path, f.agreed, f.compared
             )),
-            Some(d) => {
+            Some((frame, original_frame, theirs, ours)) => {
                 lines.push(format!(
-                    "DIFFERS  {:width$}  {} of {} frames; first at model frame {} (original frame {}): original {}, model {}",
-                    f.path,
-                    f.agreed,
-                    f.compared,
-                    d.frame,
-                    d.original_frame,
-                    show(&d.original),
-                    show(&d.model)
+                    "DIFFERS  {:width$}  {} of {} frames; first at model frame {frame} (original frame {original_frame}): original {theirs}, model {ours}",
+                    f.path, f.agreed, f.compared,
                 ));
                 j["first"] = json!({
-                    "frame": d.frame,
-                    "original_frame": d.original_frame,
-                    "original": show(&d.original),
-                    "model": show(&d.model),
+                    "frame": frame,
+                    "original_frame": original_frame,
+                    "original": theirs,
+                    "model": ours,
                 });
             }
         }
-        fields.push(j);
+        fields_json.push(j);
     }
-    lines.push(format!(
-        "{agreeing} of {} mapped paths agree on every frame",
-        report.fields.len()
-    ));
+    let agreeing = fields.iter().filter(|f| f.first.is_none()).count();
+    lines.extend(ls_lines);
+    lines.extend(values_lines);
+    if !a.values.is_empty() {
+        lockstep["values"] = values_json;
+    }
     if let Some(line) = not_run_line(&l.not_run) {
         lines.push(line);
     }
     if !l.source.hooks.is_empty() {
         lines.push(format!("ext hooks: {}", l.source.hooks));
     }
-    // A mapping with `score_draws` scores with the original's draws: with
-    // no script given, the run records one from the input.
-    let draws = match draws {
-        None if mapping.score_draws => Some(crate::lockstep::record_draws(
-            &rom,
-            &mapping,
-            &input.frames,
-            a.from.unwrap_or(0),
-        )?),
-        d => d,
-    };
-    let (_, lockstep, ls_lines) = crate::lockstep::run_resumed(
-        &l.source,
-        &model_dir(&a.model),
-        &mapping,
-        &rom,
-        &inputs,
-        mode,
-        a.from,
-        false,
-        Some(&l.assets),
-        draws,
-        None,
-        None,
-    )?;
-    // Before the agreement's summary line, which scripts read last.
-    let at = lines
-        .iter()
-        .position(|l| l.ends_with("mapped paths agree on every frame"))
-        .unwrap_or(lines.len());
-    lines.splice(at..at, ls_lines);
+    // Last, which scripts read last.
+    lines.push(format!(
+        "{agreeing} of {} mapped paths agree on every frame",
+        fields.len()
+    ));
+    let agrees = agreeing == fields.len();
     Ok(Outcome {
         json: json!({
             "lockstep": lockstep,
             "model": interp.spec().name,
-            "model_frames": report.model_frames + 1,
-            "original_frames": report.original_frames + 1,
-            "before_start": report.before_start,
-            "lag_frames": report.lag_frames,
-            "agrees": report.agrees(),
+            "model_frames": ls.frames.len(),
+            "original_frames": ls.original_frames + 1,
+            "before_start": ls.before_start,
+            "lag_frames": ls.lag_frames,
+            "agrees": agrees,
             "ext_not_run": l.not_run,
             "ext_hooks": l.source.hooks,
-            "fields": fields,
+            "fields": fields_json,
         }),
         text: lines.join("\n"),
-        exit: u8::from(!report.agrees()),
+        exit: u8::from(!agrees),
     })
+}
+
+/// `--values`: each path's two values on every compared frame, as
+/// `gp clip score --values` reads them (a compared path from the run's
+/// values, any other from its watched values), in JSON as
+/// `{path: [[original, model], ...]}` beside the frames; as text, the
+/// frames where either value changes.
+fn values_of(
+    paths: &[gp_interp::lockstep::PathSeries],
+    values: &[(Vec<gp_runtime::Value>, Vec<gp_runtime::Value>)],
+    watched: &[Vec<Option<gp_interp::lockstep::Watched>>],
+    frames: &[(u64, u64)],
+    want: &[String],
+) -> Result<(serde_json::Value, Vec<String>)> {
+    let all = |xs: &[gp_runtime::Value]| xs.iter().map(show).collect::<Vec<_>>().join(" ");
+    let mut by = serde_json::Map::new();
+    let mut lines = Vec::new();
+    for (w, path) in want.iter().enumerate() {
+        let rows: Vec<(String, String)> = match paths.iter().position(|x| &x.path == path) {
+            Some(p) => values
+                .iter()
+                .map(|(o, m)| {
+                    let one = |v: &[gp_runtime::Value]| v.get(p).map_or_else(String::new, show);
+                    (one(o), one(m))
+                })
+                .collect(),
+            None if watched
+                .iter()
+                .any(|row| row.get(w).is_some_and(Option::is_some)) =>
+            {
+                watched
+                    .iter()
+                    .map(|row| match row.get(w).and_then(Option::as_ref) {
+                        Some((o, m)) => (all(o), all(m)),
+                        None => (String::new(), String::new()),
+                    })
+                    .collect()
+            }
+            None => bail!(
+                "--values {path}: the run compares no such path and the mapping maps no field there (a mapped field's path, or a slot field as entities.KIND[N].FIELD)"
+            ),
+        };
+        let mut last: Option<&(String, String)> = None;
+        for (i, r) in rows.iter().enumerate() {
+            if last != Some(r) {
+                let (m, o) = frames.get(i).copied().unwrap_or_default();
+                lines.push(format!(
+                    "values {path} at model frame {m} (original frame {o}): original {}, model {}",
+                    r.0, r.1
+                ));
+            }
+            last = Some(r);
+        }
+        by.insert(
+            path.clone(),
+            serde_json::Value::Array(rows.iter().map(|(o, m)| json!([o, m])).collect()),
+        );
+    }
+    Ok((json!({"frames": frames, "values": by}), lines))
+}
+
+/// One mapped path's agreement in a lockstep: the frames compared, those
+/// within its tolerance, and its first split (the model's and the
+/// original's frame, and both values there, as they stood before any
+/// resync).
+struct Agreement {
+    path: String,
+    compared: usize,
+    agreed: u64,
+    first: Option<(u64, u64, String, String)>,
+}
+
+/// Each path's [`Agreement`], read from a lockstep's own series, splits
+/// and compared frames.
+fn agreement(
+    paths: &[gp_interp::lockstep::PathSeries],
+    splits: &[gp_interp::lockstep::Split],
+    frames: &[(u64, u64)],
+) -> Vec<Agreement> {
+    paths
+        .iter()
+        .map(|p| {
+            let first = p.first_split.and_then(|at| {
+                let split = splits.iter().find(|s| s.at == at)?;
+                let sp = split.paths.iter().find(|x| x.path == p.path)?;
+                Some((
+                    split.frame,
+                    split.original_frame,
+                    show(&sp.original),
+                    show(&sp.model),
+                ))
+            });
+            // A split this path's series has but the split list doesn't
+            // name (it never should) still differs, at its frame.
+            let first = first.or_else(|| {
+                p.first_split.map(|at| {
+                    let (m, o) = frames.get(at).copied().unwrap_or_default();
+                    (m, o, "?".to_owned(), "?".to_owned())
+                })
+            });
+            Agreement {
+                path: p.path.clone(),
+                compared: p.distance.len(),
+                agreed: p.within,
+                first,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
+    /// `--values` on a made-up run of three frames: a compared path read
+    /// from the run's values, a hook's word from its watched values, each
+    /// printed where it changes; a path neither has is refused in words.
+    #[test]
+    fn values_are_printed_where_they_change() {
+        use gp_runtime::Value;
+        let series = gp_interp::lockstep::PathSeries {
+            path: "counters.fare".into(),
+            tolerance: gp_sim::Fx::ZERO,
+            distance: vec![gp_sim::Fx::ZERO; 3],
+            within: 3,
+            max: gp_sim::Fx::ZERO,
+            first_split: None,
+        };
+        let int = |n: i64| vec![Value::Int(n)];
+        let values = vec![(int(1), int(1)), (int(1), int(1)), (int(2), int(2))];
+        let watched = vec![
+            vec![None, Some((int(7), int(7)))],
+            vec![None, Some((int(8), int(7)))],
+            vec![None, Some((int(8), int(7)))],
+        ];
+        let frames = [(0, 94), (1, 95), (2, 96)];
+        let want = [
+            "counters.fare".to_owned(),
+            "entities.cab[0].ext[3]".to_owned(),
+        ];
+        let (j, lines) = super::values_of(
+            std::slice::from_ref(&series),
+            &values,
+            &watched,
+            &frames,
+            &want,
+        )
+        .unwrap();
+        assert_eq!(
+            lines,
+            vec![
+                "values counters.fare at model frame 0 (original frame 94): original 1, model 1",
+                "values counters.fare at model frame 2 (original frame 96): original 2, model 2",
+                "values entities.cab[0].ext[3] at model frame 0 (original frame 94): original 7, model 7",
+                "values entities.cab[0].ext[3] at model frame 1 (original frame 95): original 8, model 7",
+            ]
+        );
+        assert_eq!(j["values"]["entities.cab[0].ext[3]"][2][0], "8");
+        let e = super::values_of(&[series], &values, &watched, &frames, &["nope".to_owned()])
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("--values nope"), "{e}");
+    }
+
+    /// A made-up lockstep of three frames: a path that stays within its
+    /// tolerance agrees, and one that splits on the second frame differs
+    /// there with the split's own values, so the lines and the lockstep's
+    /// splits say the same thing.
+    #[test]
+    fn the_agreement_is_the_lockstep_s_own() {
+        use gp_interp::lockstep::{PathSeries, Split, SplitPath};
+        use gp_runtime::Value;
+        let series = |path: &str, within: u64, first_split: Option<usize>| PathSeries {
+            path: path.into(),
+            tolerance: gp_sim::Fx::ZERO,
+            distance: vec![gp_sim::Fx::ZERO; 3],
+            within,
+            max: gp_sim::Fx::ZERO,
+            first_split,
+        };
+        let paths = [
+            series("entities.cab[0].x", 3, None),
+            series("counters.fare", 2, Some(1)),
+        ];
+        let splits = [Split {
+            at: 1,
+            frame: 11,
+            original_frame: 105,
+            paths: vec![SplitPath {
+                path: "counters.fare".into(),
+                original: Value::Int(4),
+                model: Value::Int(5),
+                distance: gp_sim::Fx::from_int(1),
+            }],
+        }];
+        let frames = [(10, 104), (11, 105), (12, 106)];
+        let a = super::agreement(&paths, &splits, &frames);
+        assert_eq!(
+            (a[0].compared, a[0].agreed, a[0].first.is_none()),
+            (3, 3, true)
+        );
+        assert_eq!(a[1].agreed, 2);
+        assert_eq!(a[1].first, Some((11, 105, "4".to_owned(), "5".to_owned())));
+    }
+
     #[test]
     fn a_frames_file_has_a_line_a_frame_and_marks_resets() {
         let f = |buttons, reset| gp_runtime::InputFrame {

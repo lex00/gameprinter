@@ -410,6 +410,40 @@ mod tests {
         assert!((speed - 0.5).abs() < 0.05, "{speed}");
     }
 
+    /// A y byte that counts up the screen, as an arcade board's sprite
+    /// bytes do (241 less the top): the binder reads it from the box's top
+    /// counting up, and the slots' proposal turns the bytes into the
+    /// board's own units with `scale = -1` and `offset = 241`. The NES's
+    /// made-up game, whose y counts down, gets no such proposal.
+    #[test]
+    fn a_y_that_counts_up_is_proposed_in_the_boards_units() {
+        let plain = track(&mut synth::game(2400), &Options::default()).unwrap();
+        assert!(plain.groups[0].place.is_none());
+        let mut up = synth::game(2400);
+        for ram in &mut up.ram {
+            for i in 0..synth::SLOTS {
+                ram[synth::Y + i] = 241u8.wrapping_sub(ram[synth::Y + i]);
+            }
+        }
+        let report = track(&mut up, &Options::default()).unwrap();
+        let g = &report.groups[0];
+        assert_eq!(g.y.as_ref().map(|p| p.ram), Some(synth::Y as u16));
+        assert_eq!(
+            g.place,
+            Some(slots::Place {
+                x_offset: 0,
+                y_scale: -1,
+                y_offset: 241
+            })
+        );
+        let draft = slots::draft(&report.groups, None, None, "a test");
+        assert!(
+            draft.contains("path = \"y\"\nram = [0x0320]")
+                && draft.contains("scale = -1\noffset = 241"),
+            "{draft}"
+        );
+    }
+
     /// A board other than the NES gives its sprites as a list; the same
     /// sprites given that way track exactly as from the 256-byte table.
     #[test]

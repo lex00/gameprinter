@@ -176,7 +176,6 @@ fn names(checks: &Value) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "needs `gp validate`, which gameprinter hasn't got yet (wave 5)"]
 fn an_agent_edits_previews_and_validates_moss_hop() {
     let home = tempfile::tempdir().unwrap();
     let tmp = tempfile::tempdir().unwrap();
@@ -393,10 +392,22 @@ fn an_agent_edits_previews_and_validates_moss_hop() {
     // numbers, and nothing else there. Against the original the jump fails
     // too, and so do parts the higher jump knocks on: in finish-level the
     // player now dies, so the state, the counters and the level graph part
-    // from the original's.
+    // from the original's. The copy is a person's (in no git work tree), so
+    // the check for a changed game decides, and the higher jump passes it:
+    // the model is well formed and its stage is still reached and finished.
     let (v, err) = c.call("validate", json!({ "copy": "hop" }));
     assert!(!err, "a failed check is a result, not a tool error: {v}");
-    assert_eq!(v["ok"], false, "{v}");
+    assert_eq!(v["decided_by"], "changed", "{v}");
+    assert_eq!(v["contract"]["ok"], false, "{v}");
+    assert_eq!(
+        v["contract"]["says"], "differs from the original, as you changed it",
+        "{v}"
+    );
+    assert_eq!(
+        (&v["ok"], &v["changed"]["ok"]),
+        (&json!(true), &json!(true)),
+        "{v}"
+    );
     let failing = names(&v["failing"]);
     let against_model: Vec<&String> = failing.iter().filter(|f| f.ends_with(" model")).collect();
     assert_eq!(
@@ -1025,11 +1036,14 @@ fn an_agent_finds_moss_hop_generates_art_and_checks_a_publish() {
 }
 
 /// A real build into a directory, the interpreter preview: needs the
-/// wasm32-unknown-unknown target. Run by `just
-/// check-cycle` as the step `publish-mosshop`.
+/// wasm32-unknown-unknown target, and builds gp_web.wasm in release (about
+/// 20 s with the module already built in the target folder, minutes from
+/// cold), so it runs in `just test`'s slow lane (GP_SLOW_TESTS=1).
 #[test]
-#[ignore = "builds the wasm module: minutes; game-printer ran it in just check-cycle, which gameprinter hasn't got"]
 fn build_publish_builds_moss_hops_preview() {
+    if gp_arcade::skip_slow_test() {
+        return;
+    }
     let home = tempfile::tempdir().unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let rom = build_mosshop(tmp.path(), home.path());
@@ -1072,7 +1086,6 @@ fn build_publish_builds_moss_hops_preview() {
 /// An agent makes Moss Hop's walk wrong, and model_refine measures it back
 /// from the baselines in two rounds; nothing is left to ask.
 #[test]
-#[ignore = "needs `gp input-log generate` and `gp model refine`, which gameprinter hasn't got yet"]
 fn an_agent_refines_a_wrong_walk_speed_back() {
     let home = tempfile::tempdir().unwrap();
     let tmp = tempfile::tempdir().unwrap();
@@ -1208,68 +1221,52 @@ fn an_agent_edits_the_player_sprite_from_its_recordings() {
     finish(c);
 }
 
-/// Phase 3 of docs/sprite-editing.md: `gp assets open` writes Moss Hop's
-/// player for Pixelorama by the image config, starts the editor (a fake
-/// one here, named by GP_PIXELORAMA), and a save over the exported sheet
-/// comes back as a proposal in the copy's history.
+/// Phase 3 of docs/sprite-editing.md over MCP: `gp assets open` (which
+/// opens an editor on the person's screen and waits for its saves) is
+/// refused through gp_run with the tools to use instead, and those tools
+/// make the same trip: assets_export writes Moss Hop's player for
+/// Pixelorama by the image config, the person recolors the cap and saves
+/// over the exported sheet, and assets_edit import brings the save back as
+/// a proposal in the copy's history.
 #[test]
-#[ignore = "needs `gp assets open`, which gameprinter hasn't got"]
 fn a_save_in_a_pixel_editor_comes_back_as_a_proposal() {
     let home = tempfile::tempdir().unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let rom = build_mosshop(tmp.path(), home.path());
-    let _ = rom;
     let lifted = tmp.path().join("lifted");
     let work = tmp.path().join("work");
-    // The fake editor writes down the file it was asked to open.
-    let opened = tmp.path().join("opened.txt");
-    let editor = tmp.path().join("pixelorama");
-    fs::write(
-        &editor,
-        format!("#!/bin/sh\necho \"$1\" > '{}'\n", opened.display()),
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    let child = gp(home.path())
-        .env("GP_PIXELORAMA", &editor)
-        .args([
-            "--json",
-            "assets",
-            "open",
-            "mosshop",
-            "player",
-            "--editor",
-            "pixelorama",
-            "--once",
-            "--timeout",
-            "120",
-            "--poll-ms",
-            "100",
-        ])
-        .arg("--work")
-        .arg(&work)
-        .arg("--assets")
-        .arg(&lifted)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let out_dir = work.join("mosshop/exchange/player");
-    let t0 = std::time::Instant::now();
-    while !(out_dir.join("gp-edit.json").is_file() && opened.is_file()) {
-        assert!(t0.elapsed().as_secs() < 60, "no export");
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    let sheet = fs::read_to_string(&opened).unwrap();
-    assert!(sheet.trim().ends_with("sheet.png"), "{sheet}");
+    let mut c = connect(home.path(), &work, &rom, &lifted);
+    let (r, err) = c.call(
+        "template_fork",
+        json!({ "template": "mosshop", "copy": "px" }),
+    );
+    assert!(!err, "{r}");
+
+    let (v, err) = c.call(
+        "gp_run",
+        json!({"command": "assets open", "args": {"copy": "px", "entity": "player"}}),
+    );
+    assert!(err, "{v}");
+    let why = v["refused"].as_str().unwrap_or_default();
+    assert!(
+        why.contains("pixel editor")
+            && why.contains("assets_export")
+            && why.contains("assets_edit"),
+        "{v}"
+    );
+
+    let (x, err) = c.call(
+        "assets_export",
+        json!({ "copy": "px", "entity": "player", "editor": "pixelorama" }),
+    );
+    assert!(!err, "{x}");
+    let out_dir = PathBuf::from(x["set"]["dir"].as_str().unwrap());
+    assert!(out_dir.starts_with(work.join("px/exchange/player")), "{x}");
     assert!(
         out_dir.join("palette.json").is_file(),
-        "Pixelorama's palette"
+        "Pixelorama's palette: {x}"
     );
+    assert_eq!(x["set"]["import"]["tool"], "assets_edit", "{x}");
 
     // The person recolors the cap in the editor and saves the sheet.
     let side: gp_imagefmt::sheet::Sidecar =
@@ -1296,27 +1293,20 @@ fn a_save_in_a_pixel_editor_comes_back_as_a_proposal() {
             }
         }
     }
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    for (name, bytes) in gp_imagefmt::sheet::write(&side.config, "mosshop", &frames, &palette) {
+    for (name, bytes) in gp_imagefmt::sheet::write(&side.config, "px", &frames, &palette) {
         if name.ends_with(".png") {
             fs::write(out_dir.join(name), bytes).unwrap();
         }
     }
-    let out = child.wait_with_output().unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
+    let (r, err) = c.call(
+        "assets_edit",
+        json!({ "copy": "px", "import": out_dir, "place": false }),
     );
-    let j: Value = serde_json::from_slice(&out.stdout).unwrap();
-    let save = &j["saves"][0];
-    assert_eq!(save["refused"], false, "{j}");
-    assert_eq!(save["result"]["status"], "proposed", "{j}");
-    assert!(
-        save["result"]["pixels_changed"].as_u64().unwrap() > 0,
-        "{j}"
-    );
-    assert!(save["result"]["item"].is_string(), "{j}");
+    assert!(!err, "{r}");
+    assert_eq!(r["status"], "proposed", "{r}");
+    assert!(r["pixels_changed"].as_u64().unwrap() > 0, "{r}");
+    assert!(r["item"].is_string(), "{r}");
+    finish(c);
 }
 
 /// An agent drives a watch session on Moss Hop's practice variant with the
@@ -1327,9 +1317,13 @@ fn a_save_in_a_pixel_editor_comes_back_as_a_proposal() {
 /// and gets what `gp reach --detail` gives for the same window, hooks
 /// `01:8000` and sees the hook's calls, points at the screen, and finds
 /// each of its calls logged in the session for the person's page.
+///
+/// About 70 s, so it runs in `just test`'s slow lane (GP_SLOW_TESTS=1).
 #[test]
-#[ignore = "needs `gp reach`, which comes with wave 3b"]
 fn an_agent_follows_a_watch_session_to_bank_one() {
+    if gp_arcade::skip_slow_test() {
+        return;
+    }
     let home = tempfile::tempdir().unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let variant = tmp.path().join("pv-bump");

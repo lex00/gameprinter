@@ -124,21 +124,13 @@ pub(crate) fn find_map(given: Option<&Path>, sha256: &str) -> Result<(PathBuf, S
 
 /// Lifts `rom` (an NES image's or a romset zip's bytes) with the map's
 /// text, whichever platform the map is for: the files and what each asset
-/// gave.
+/// gave. The page's lift in the browser runs the same function
+/// (`gp_web_lift::arcade::lift_files`).
 pub(crate) fn lift_files(
     rom: &[u8],
     map_text: &str,
 ) -> Result<(Vec<gp_assets::File>, Vec<gp_assets::Lifted>)> {
-    if gp_assets::arcade::is_arcade(map_text) {
-        let map = gp_assets::arcade::ArcadeMap::parse(map_text)?;
-        if !gp_arcade::romset::looks_like_zip(rom) {
-            bail!("an arcade asset map lifts a romset zip, and this ROM isn't one");
-        }
-        let set = gp_arcade::Romset::from_zip(rom).map_err(anyhow::Error::msg)?;
-        return Ok(gp_assets::arcade::lift(&decoded(&set), &map, map_text)?);
-    }
-    let map = AssetMap::parse(map_text)?;
-    Ok(gp_assets::lift(rom, &map, map_text)?)
+    gp_web_lift::arcade::lift_files(rom, map_text).map_err(anyhow::Error::msg)
 }
 
 pub fn lift(
@@ -380,16 +372,10 @@ pub fn check_dir(dir: &Path, rom_path: &Path, metrics: Option<&str>) -> Result<O
     })
 }
 
-/// A set's graphics regions decoded, for the arcade lift.
+/// A set's graphics regions decoded, for the arcade lift (the page's
+/// lift decodes with the same function).
 fn decoded(set: &gp_arcade::Romset) -> gp_assets::arcade::Decoded {
-    let g = gp_arcade::video::Gfx::decode(&set.gfx1, &set.gfx2);
-    gp_assets::arcade::Decoded {
-        set: set.name.to_owned(),
-        identity: set.identity.clone(),
-        tiles: g.tiles,
-        sprites: g.sprites,
-        regions: [("maincpu".to_owned(), set.maincpu.clone())].into(),
-    }
+    gp_web_lift::arcade::decoded(set)
 }
 
 /// [`check_dir`] for an arcade lift: its pictures packed back into the

@@ -1067,8 +1067,10 @@ mod tests {
 
     #[test]
     fn two_attempts_appending_at_one_place_in_the_roadmap_integrate() {
-        let dir = std::env::temp_dir().join(format!("gp-union-{}", std::process::id()));
-        let _ = fs::create_dir_all(&dir);
+        // A folder of this run's own: one named by the process id alone is
+        // found again, with its branches, when a later run gets the same id.
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path().to_path_buf();
         let g = |a: &[&str]| git(&dir, a).unwrap();
         g(&["init", "-q", "-b", "main"]);
         g(&["config", "user.email", "t@t"]);

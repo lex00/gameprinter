@@ -495,10 +495,7 @@ fn carry_slots<O: Runtime>(
                 continue;
             }
             for f in &g.rest {
-                let mut bytes = Vec::new();
-                for sel in f.slot_selectors(slot) {
-                    bytes.push(crate::bodies::read_sel(original, &sel)?);
-                }
+                let bytes = crate::bodies::read_bytes(original, &f.slot_addresses(slot))?;
                 let Some(v) = raw(&f.value(&bytes)).map(Fx::from_raw) else {
                     continue;
                 };
@@ -526,10 +523,7 @@ fn carry_slots<O: Runtime>(
                 if taken && f.path != "word" {
                     continue;
                 }
-                let mut bytes = Vec::new();
-                for sel in f.slot_selectors(slot) {
-                    bytes.push(crate::bodies::read_sel(original, &sel)?);
-                }
+                let bytes = crate::bodies::read_bytes(original, &f.slot_addresses(slot))?;
                 let Some(v) = raw(&f.value(&bytes)).map(Fx::from_raw) else {
                     continue;
                 };

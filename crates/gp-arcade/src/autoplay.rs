@@ -22,10 +22,17 @@
 //! order and ties keep that order, so a run is the same every time.
 //! `--jobs` (4) threads value the moves. Only the input log is kept.
 //!
-//! It writes NAME.input and NAME.phases. `--from LOG` goes on from an
-//! earlier play's log, its presses kept as they were. `--levels N` stops after the
-//! N-th level's end sequence; `--idle` coins up, starts and then presses
-//! nothing until the game is over (a game-over play).
+//! It writes NAME.input and NAME.phases when it ends, and the log so far
+//! as NAME-partial.input as it goes (after the `--from` log, every 600
+//! frames and after each search), so a run that is stopped keeps its work.
+//! `--from LOG` goes on from an earlier play's log, its presses kept as
+//! they were. `--levels N` stops after the N-th level's end sequence;
+//! `--idle` coins up, starts and then presses nothing until the game is
+//! over (a game-over play). `--until COND` plays to a goal: a condition on
+//! the board as `gp query` and `run_until` read it (`ram[0xE70F] == 0 &&
+//! ram[0xE397] == 10`), checked after every frame. The player stops on the
+//! frame it first holds, a search values a way that reaches it above any
+//! other and stops there, and the log's notes say whether it held.
 //!
 //! What it reads, all in the main CPU's work RAM (found by experiment on
 //! the `tapper` set, which shares its code with tapperg):
@@ -48,6 +55,8 @@
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
+
+use gp_runtime::select::Condition;
 
 use crate::{Controls, Romset, Tapper};
 
@@ -100,9 +109,12 @@ fn see(t: &Tapper) -> Seen {
     let mut s = Seen::default();
     let objs = objects(t);
     for &(a, o) in &objs {
+        // In u16: a slot's y can be near 255 (a made-up board's or an
+        // object off the screen), and y + 9 would overflow a u8.
+        let y = u16::from(o.y);
         let bar = BAR_Y
             .iter()
-            .position(|&b| o.y == b || o.y + 4 == b || o.y + 5 == b || o.y + 9 == b);
+            .position(|&b| [0, 4, 5, 9].iter().any(|d| y + d == u16::from(b)));
         match bar {
             Some(k) if o.y == BAR_Y[k] && a < 0xe2e2 => s.customers[k].push(o.x),
             Some(k) if o.y + 4 == BAR_Y[k] && a < 0xe2e2 => s.drinking[k].push(o.x),
@@ -201,11 +213,14 @@ fn decide(t: &Tapper, m: &mut Mind, rng: &mut Rng, wild: u64, deep: bool) -> Con
     while a < 0xe346 {
         let y = peek(t, a);
         let x = peek(t, a + 3);
-        if let Some(k) = BAR_Y.iter().position(|&b| y != 0 && y + 5 == b) {
+        if let Some(k) = BAR_Y
+            .iter()
+            .position(|&b| y != 0 && u16::from(y) + 5 == u16::from(b))
+        {
             fulls[k] += 1;
         } else if let Some(k) = BAR_Y
             .iter()
-            .position(|&b| y != 0 && y + 3 == b && peek(t, a + 2) == 0x17)
+            .position(|&b| y != 0 && u16::from(y) + 3 == u16::from(b) && peek(t, a + 2) == 0x17)
         {
             now_x.push((a, x));
             let before = m.mug_x.iter().find(|(s, _)| *s == a).map(|p| p.1);
@@ -425,17 +440,28 @@ fn lost(t: &Tapper, lives: u8) -> bool {
 
 /// Plays `act` on `t`, keeping its controls in `log`. False when a life is
 /// lost on the way.
-fn play_act(t: &mut Tapper, log: &mut Vec<Controls>, act: Act, lives: u8) -> bool {
+/// With a goal, the act stops (alive) on the frame the goal first holds.
+fn play_act(
+    t: &mut Tapper,
+    log: &mut Vec<Controls>,
+    act: Act,
+    lives: u8,
+    goal: Option<&Condition>,
+) -> bool {
     let none = Controls::default();
+    let mut at_goal = false;
+    // Whether to go on: no life lost and the goal not reached.
     let mut step = |t: &mut Tapper, c: Controls| {
         t.step(c);
         log.push(c);
-        !lost(t, lives)
+        at_goal = at_goal || reached(t, goal);
+        !lost(t, lives) && !at_goal
     };
     // Between plays (a level's start or end, the bonus round) the
     // bartender isn't at the bars: a frame of nothing.
     let Some((bar, _)) = see(t).bart else {
-        return step(t, none);
+        step(t, none);
+        return !lost(t, lives);
     };
     match act {
         Act::Pour => {
@@ -446,10 +472,10 @@ fn play_act(t: &mut Tapper, log: &mut Vec<Controls>, act: Act, lives: u8) -> boo
                     none
                 };
                 if !step(t, c) {
-                    return false;
+                    return !lost(t, lives);
                 }
             }
-            true
+            !lost(t, lives)
         }
         Act::Up | Act::Down => {
             let c = if act == Act::Up {
@@ -458,17 +484,17 @@ fn play_act(t: &mut Tapper, log: &mut Vec<Controls>, act: Act, lives: u8) -> boo
                 Controls { down: true, ..none }
             };
             if !step(t, c) {
-                return false;
+                return !lost(t, lives);
             }
             for _ in 0..12 {
                 if see(t).bart.is_some_and(|(b, _)| b != bar) {
                     break;
                 }
                 if !step(t, none) {
-                    return false;
+                    return !lost(t, lives);
                 }
             }
-            true
+            !lost(t, lives)
         }
         Act::Wait | Act::Left | Act::Right => {
             let c = match act {
@@ -479,10 +505,21 @@ fn play_act(t: &mut Tapper, log: &mut Vec<Controls>, act: Act, lives: u8) -> boo
                 },
                 _ => none,
             };
-            (0..6).all(|_| step(t, c))
+            let _ = (0..6).all(|_| step(t, c));
+            !lost(t, lives)
         }
     }
 }
+
+/// Whether the goal holds on the board now; never without one. A goal
+/// that can't be read (checked at the start) counts as not held.
+fn reached(t: &Tapper, goal: Option<&Condition>) -> bool {
+    goal.is_some_and(|g| crate::protocol::holds_on(t, g).unwrap_or(false))
+}
+
+/// What a goal reached is worth to the search: more than any number of
+/// frames survived, less the frames it took.
+const GOAL_VALUE: i64 = 1 << 40;
 
 /// Customers left to serve in the level (E711).
 fn customers_left(t: &Tapper) -> u32 {
@@ -491,8 +528,12 @@ fn customers_left(t: &Tapper) -> u32 {
 
 /// How good a position is: the heuristic player ([`decide`]) plays on
 /// from it for `horizon` frames; frames survived count most, then the
-/// customers served and the levels cleared, then the score.
-fn value(t: &Tapper, horizon: u32) -> i64 {
+/// customers served and the levels cleared, then the score. A goal that
+/// holds on the way is worth more than all of it, the sooner the better.
+fn value(t: &Tapper, horizon: u32, goal: Option<&Condition>) -> i64 {
+    if reached(t, goal) {
+        return GOAL_VALUE;
+    }
     let mut u = t.clone();
     let lives = peek(&u, 0xe4a7);
     let mut m = Mind::default();
@@ -501,6 +542,9 @@ fn value(t: &Tapper, horizon: u32) -> i64 {
     while survived < horizon {
         let c = decide(&u, &mut m, &mut r, 0, false);
         u.step(c);
+        if reached(&u, goal) {
+            return GOAL_VALUE - i64::from(survived) - 1;
+        }
         if lost(&u, lives) {
             break;
         }
@@ -528,13 +572,15 @@ struct Node {
 /// once. The controls from `start` to the first position at `until`, and
 /// whether it got there: when every way loses a life, the controls to the
 /// furthest position any way reached, so the next search starts from
-/// further on.
+/// further on. With a goal, the first position where it holds ends the
+/// search as one that got there.
 fn search(
     start: &Tapper,
     until: u64,
     width: usize,
     horizon: u32,
     jobs: usize,
+    goal: Option<&Condition>,
 ) -> (Vec<Controls>, bool) {
     let lives = peek(start, 0xe4a7);
     let mut beam = vec![Node {
@@ -563,8 +609,8 @@ fn search(
                 sc.spawn(move || {
                     for (&(i, a), o) in part.iter().zip(out.iter_mut()) {
                         let mut n = beam[i].clone();
-                        if play_act(&mut n.t, &mut n.log, a, lives) {
-                            n.value = value(&n.t, horizon);
+                        if play_act(&mut n.t, &mut n.log, a, lives, goal) {
+                            n.value = value(&n.t, horizon, goal);
                             *o = Some(n);
                         }
                     }
@@ -572,6 +618,9 @@ fn search(
             }
         });
         let mut kids: Vec<Node> = kids.into_iter().flatten().collect();
+        if let Some(done) = kids.iter().find(|n| reached(&n.t, goal)) {
+            return (done.log.clone(), true);
+        }
         if kids.is_empty() {
             return (furthest, false);
         }
@@ -676,7 +725,8 @@ fn bonus_choice(t: &Tapper) -> Vec<Controls> {
 /// What `--help` prints: the player's own flags, as `main_with` reads them.
 const USAGE: &str = "\
 Tapper's auto-player: plays the romset from power-on and writes NAME.input
-(an oracle input log) and NAME.phases.
+(an oracle input log) and NAME.phases when it ends, and the log so far as
+NAME-partial.input as it goes (every 600 frames and after each search).
 
 Usage: gp mechanic autoplay --rom FILE --out NAME [FLAGS]
 
@@ -692,6 +742,10 @@ Usage: gp mechanic autoplay --rom FILE --out NAME [FLAGS]
   --width N             The search's beam, times the try (default 4)
   --back N              Frames to back up on the first loss, more after (default 150)
   --from LOG            Go on from an earlier play's input log
+  --until COND          Play to a goal and stop on the frame it first holds: a
+                        condition on the board as gp query reads it, such as
+                        'ram[0xE70F] == 0 && ram[0xE397] == 10'; the search
+                        values a way that reaches it above all others
   --trace LOG FROM TO   Print what the player sees on frames FROM to TO of LOG, and stop
   -h, --help            Print this
 ";
@@ -713,6 +767,7 @@ pub fn main_with(args: impl IntoIterator<Item = String>) {
     let mut horizon = 150u32;
     let mut width0 = 4usize;
     let mut back_step = 150u64;
+    let mut until: Option<String> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--rom" => rom = args.next().unwrap().into(),
@@ -727,6 +782,7 @@ pub fn main_with(args: impl IntoIterator<Item = String>) {
             "--width" => width0 = args.next().unwrap().parse().unwrap(),
             "--back" => back_step = args.next().unwrap().parse().unwrap(),
             "--from" => from = Some(PathBuf::from(args.next().unwrap())),
+            "--until" => until = Some(args.next().unwrap()),
             "--help" | "-h" => {
                 print!("{USAGE}");
                 return;
@@ -741,12 +797,28 @@ pub fn main_with(args: impl IntoIterator<Item = String>) {
             _ => panic!("unknown {a}"),
         }
     }
+    let goal = match until.as_deref().map(Condition::parse).transpose() {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("--until {}: {e}", until.unwrap_or_default());
+            return;
+        }
+    };
     let set = Romset::load_zip(&rom).unwrap();
     if let Some((file, from, to)) = trace {
         print_trace(&set, &file, from, to);
         return;
     }
     let mut t = Tapper::power_on(&set);
+    // A goal that names nothing the board has is refused before any play.
+    if let Some(g) = &goal
+        && let Err(e) = crate::protocol::holds_on(&t, g)
+    {
+        eprintln!("--until {}: {e}", until.unwrap_or_default());
+        return;
+    }
+    let goal = goal.as_ref();
+    let partial = PathBuf::from(format!("{}-partial", out.display()));
     let none = Controls::default();
     let mut log: Vec<Controls> = Vec::new();
     let push = |t: &mut Tapper, log: &mut Vec<Controls>, c: Controls, n: usize| {
@@ -776,12 +848,17 @@ pub fn main_with(args: impl IntoIterator<Item = String>) {
             6,
         );
     }
+    // The log so far, written as it goes so a run that is stopped keeps
+    // its work: after the start, every 600 frames and after each search.
+    let mut notes = String::new();
+    write_log(&partial, &log, &notes);
+    let mut written = log.len();
+    let mut goal_at = reached(&t, goal).then(|| t.frame());
     let mut mind = Mind::default();
     let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
     let mut points: Vec<Point> = Vec::new();
     let mut lives = peek(&t, 0xe4a7);
     let mut fails_at: Option<(u64, u32)> = None;
-    let mut notes = String::new();
     let mut plan: std::collections::VecDeque<Controls> = Default::default();
     let mut chose_at = 0u64;
     let mut cleared_at: Option<u64> = None;
@@ -790,7 +867,7 @@ pub fn main_with(args: impl IntoIterator<Item = String>) {
     let mut seen_level = level(&t);
     let debug = std::env::var_os("AUTOPLAY_DEBUG").is_some();
     let mut recent: std::collections::VecDeque<String> = Default::default();
-    while log.len() < frames {
+    while log.len() < frames && goal_at.is_none() {
         let f = t.frame();
         if f.is_multiple_of(20) && points.last().is_none_or(|p| p.t.frame() < f) {
             points.push(Point {
@@ -836,6 +913,10 @@ pub fn main_with(args: impl IntoIterator<Item = String>) {
         }
         t.step(c);
         log.push(c);
+        if reached(&t, goal) {
+            goal_at = Some(t.frame());
+            break;
+        }
         if level(&t) != seen_level && mode(&t) == Mode::Play {
             seen_level = level(&t);
             level_start = t.frame();
@@ -871,7 +952,7 @@ pub fn main_with(args: impl IntoIterator<Item = String>) {
                     t.frame(),
                     p.t.frame()
                 );
-                let (cs, whole) = search(&p.t, until, width, horizon, jobs);
+                let (cs, whole) = search(&p.t, until, width, horizon, jobs, goal);
                 t = p.t;
                 log.truncate(p.log_len);
                 plan.clear();
@@ -886,6 +967,10 @@ pub fn main_with(args: impl IntoIterator<Item = String>) {
                 for c in cs {
                     t.step(c);
                     log.push(c);
+                    if reached(&t, goal) {
+                        goal_at = Some(t.frame());
+                        break;
+                    }
                     // Points along the way found, so a loss soon after
                     // backs up a little, not to before this search.
                     if t.frame().is_multiple_of(20) {
@@ -901,11 +986,15 @@ pub fn main_with(args: impl IntoIterator<Item = String>) {
                 }
                 mind = Mind::default();
                 lives = peek(&t, 0xe4a7);
-                if whole {
+                if goal_at.is_some() {
+                    eprintln!("  found a way to the goal at frame {}", t.frame());
+                } else if whole {
                     eprintln!("  found a way to frame {}", t.frame());
                 } else {
                     eprintln!("  no way past frame {}; playing on from there", t.frame());
                 }
+                write_log(&partial, &log, &notes);
+                written = log.len();
                 continue;
             }
             if n <= tries {
@@ -974,13 +1063,11 @@ pub fn main_with(args: impl IntoIterator<Item = String>) {
             push(&mut t, &mut log, none, 30);
             break;
         }
+        if log.len() >= written + 600 {
+            write_log(&partial, &log, &notes);
+            written = log.len();
+        }
         if t.frame().is_multiple_of(600) {
-            // The log so far, so a long run that is stopped keeps its work.
-            write_log(
-                &PathBuf::from(format!("{}-partial", out.display())),
-                &log,
-                &notes,
-            );
             eprintln!(
                 "frame {} lives {} cleared {:?} score {} mode {:?}",
                 t.frame(),
@@ -990,6 +1077,16 @@ pub fn main_with(args: impl IntoIterator<Item = String>) {
                 mode(&t)
             );
         }
+    }
+    if let Some(text) = &until {
+        let _ = match goal_at {
+            Some(f) => writeln!(notes, "# the goal {text} held at frame {f}"),
+            None => writeln!(
+                notes,
+                "# the goal {text} never held: stopped at frame {}",
+                t.frame()
+            ),
+        };
     }
     eprint!("{notes}");
     write_log(&out, &log, &notes);
@@ -1100,6 +1197,31 @@ fn write_log(out: &std::path::Path, log: &[Controls], notes: &str) {
 mod tests {
     use super::*;
 
+    /// A goal on the made-up busy program (no game's bytes): the search
+    /// stops on the frame it first holds and says it got there, a position
+    /// that reaches it outvalues any other, and a goal that names nothing
+    /// on the board isn't held.
+    #[test]
+    fn a_search_plays_to_its_goal() {
+        let set = crate::testrom::busy();
+        let t = Tapper::power_on(&set);
+        let goal = Condition::parse("frame >= 7").unwrap();
+        let (log, whole) = search(&t, 1000, 2, 5, 1, Some(&goal));
+        assert!(whole);
+        let mut u = t.clone();
+        for c in &log {
+            u.step(*c);
+        }
+        assert_eq!(u.frame(), 7);
+        assert!(reached(&u, Some(&goal)));
+        assert!(!reached(&t, Some(&goal)));
+        assert!(!reached(&u, None));
+        assert!(value(&t, 10, Some(&goal)) > GOAL_VALUE - 100);
+        assert!(value(&t, 3, Some(&goal)) < GOAL_VALUE / 2);
+        let wrong = Condition::parse("nothing[0] == 1").unwrap();
+        assert!(!reached(&u, Some(&wrong)));
+    }
+
     /// `--help` (as `gp mechanic autoplay --help` passes it) prints the flags
     /// and returns, before any ROM is read; it used to panic as an unknown flag.
     #[test]
@@ -1119,6 +1241,7 @@ mod tests {
             "--width",
             "--back",
             "--from",
+            "--until",
             "--trace",
         ] {
             assert!(USAGE.contains(flag), "the help leaves out {flag}");

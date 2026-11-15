@@ -234,7 +234,15 @@ fn read_request(stream: &mut TcpStream) -> Result<(String, String, Vec<u8>), Str
     Ok((method, target, body))
 }
 
+/// Writes `r`. A playable link's file (`game`) goes out under the public
+/// page's own headers (gp_mcp::page_headers: its Content-Security-Policy
+/// and the isolation a game's module needs), Cache-Control left as
+/// no-store, so a build plays here as it does on the public page.
 fn write_response(stream: &mut TcpStream, r: &Response, head_only: bool) {
+    write_answer(stream, r, head_only, false);
+}
+
+fn write_answer(stream: &mut TcpStream, r: &Response, head_only: bool, game: bool) {
     let reason = match r.status {
         200 => "OK",
         301 => "Moved Permanently",
@@ -248,17 +256,32 @@ fn write_response(stream: &mut TcpStream, r: &Response, head_only: bool) {
     } else {
         String::new()
     };
-    let head = format!(
-        "HTTP/1.1 {} {reason}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{location}Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+    let mut head = format!(
+        "HTTP/1.1 {} {reason}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{location}Cache-Control: no-store\r\n",
         r.status,
         r.content_type,
         r.body.len()
     );
+    head.push_str(&answer_headers(game));
+    head.push_str("Connection: close\r\n\r\n");
     let _ = stream.write_all(head.as_bytes());
     if !head_only {
         let _ = stream.write_all(&r.body);
     }
     let _ = stream.flush();
+}
+
+/// The header lines a playable link's file gets beyond Cache-Control (the
+/// public page's, its own Cache-Control left out); none for the API.
+pub fn answer_headers(game: bool) -> String {
+    if !game {
+        return String::new();
+    }
+    gp_mcp::page_headers::public_for("/")
+        .iter()
+        .filter(|(k, _)| !k.eq_ignore_ascii_case("cache-control"))
+        .map(|(k, v)| format!("{k}: {v}\r\n"))
+        .collect()
 }
 
 /// Listens on a loopback address and serves until the process ends. Returns
@@ -287,7 +310,12 @@ pub fn serve(
             match read_request(&mut stream) {
                 Ok((method, target, body)) => {
                     let r = handle(&host, &method, &target, &body);
-                    write_response(&mut stream, &r, method == "HEAD");
+                    write_answer(
+                        &mut stream,
+                        &r,
+                        method == "HEAD",
+                        target.starts_with("/play/"),
+                    );
                 }
                 Err(e) => write_response(&mut stream, &Response::err(400, e), false),
             }
@@ -295,4 +323,22 @@ pub fn serve(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod header_tests {
+    #[test]
+    fn a_playable_links_files_carry_the_public_pages_policy_and_the_api_doesnt() {
+        let g = super::answer_headers(true);
+        assert!(
+            g.contains("Content-Security-Policy: default-src 'none';"),
+            "{g}"
+        );
+        assert!(
+            g.contains("Cross-Origin-Embedder-Policy: require-corp\r\n"),
+            "{g}"
+        );
+        assert!(!g.contains("Cache-Control"), "{g}");
+        assert_eq!(super::answer_headers(false), "");
+    }
 }

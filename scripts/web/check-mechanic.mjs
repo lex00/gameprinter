@@ -18,7 +18,14 @@
 // Then `gp mechanic demo` against a stand-in decision server made here,
 // watched in the page, and `say --judge`. Last, a second server with no
 // player built: the page must say so, in the server's words, instead of
-// failing to compile the 404 as wasm. Every tab is checked at 360 px
+// failing to compile the 404 as wasm. A picture the agent proposes for
+// a made-up theme of the person's is accepted, put back and rejected on
+// the page (issue #4). "What is this?" on the player in REFINE's game
+// view: the question's turn names the gp element explain call, the
+// check answers from it as the agent, and the answer shows under the box
+// in plain words and fits at 360 px (issue #10). The first screen's three choices, a made-up theme
+// and a new game from the Moss Hop template made there, each at its step
+// with whose turn it is, and the copies with CARRY ON (issue #5). Every tab is checked at 360 px
 // wide too: nothing past the right edge, every control in the window, the
 // agent's log a full-width panel that closes, REVIEW REBUILD's two
 // pictures one over the other. Any error the page throws fails the
@@ -31,8 +38,9 @@
 // of moves and taps with a note and hands it off, checks the clip's arcade
 // log and state hash in the session, that gp mechanic say shows, and that
 // REVIEW REBUILD plays the clip on the model gp game new wrote, drawn by
-// tile kind and saying so, and that FREE PLAY and gp mechanic demo say in
-// words why they have nothing to play yet. Without the
+// tile kind and saying so, that FREE PLAY plays the model at 512x480, and
+// that gp mechanic demo says in words why it has nothing to play yet.
+// Without the
 // two options the arcade run is skipped, as other ROM checks are.
 //
 // Playwright comes from scripts/web/node_modules (`npm ci --prefix
@@ -48,6 +56,7 @@ import { tmpdir } from "node:os";
 import { createServer } from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { crc32 as zlibCrc32, deflateSync } from "node:zlib";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const opt = (n) => {
@@ -56,6 +65,8 @@ const opt = (n) => {
 };
 const gp = opt("gp"), romFile = opt("rom"), wasm = opt("wasm"), browserPath = opt("browser");
 const arcadeRom = opt("arcade-rom"), arcadeWasm = opt("arcade-wasm");
+// --only arcade: the arcade run alone (it needs no Moss Hop run before it).
+const only = process.argv.includes("--only") ? process.argv[process.argv.indexOf("--only") + 1] : null;
 // --arcade-games DIR: a games checkout with tapper/ (its roms.toml names
 // tapper, rbtapper and the rest), for the ROM set picker, with the sets
 // beside --arcade-rom.
@@ -202,6 +213,12 @@ async function main() {
   await until("the page shows the session", async () => (await text(page, "#title")) === `${GAME} / ${MECH}`);
   const f0 = await until("the game plays 60 frames", async () => ((await frame(page)) > 60 ? frame(page) : 0));
   ok(`the page loaded ${GAME} / ${MECH} and plays (frame ${f0})`);
+  // The logo opens a page this server has: here, a server of the page's
+  // own, that is the game's page, not gp serve's first screen.
+  const logo = await page.evaluate(() => document.getElementById("logo").href);
+  const logoAt = await fetch(logo);
+  if (logoAt.status !== 200 || new URL(logo).pathname !== "/") fail(`the logo on gp mechanic start --own-server opens ${logo}: ${logoAt.status}`);
+  ok(`the logo on gp mechanic start --own-server opens ${new URL(logo).pathname}, which this server answers (${logoAt.status})`);
 
   // Start the game, then record a walk to the right with a jump.
   await page.keyboard.press("Enter");
@@ -567,7 +584,11 @@ async function arcade() {
   if (a1 - a0 < 20 || a1 - a0 > 40) fail(`the arcade page played ${a1 - a0} frames in a second, not about 30`);
   ok(`the arcade page is 512x480 at ${a1 - a0} frames a second, with MAME's keys in the footer`);
 
-  // A coin, start, then a recording of moves and taps.
+  // A coin, start, then a recording of moves and taps in play (issue
+  // #28: the clip was the title screen). The board boots for about 146
+  // frames and drops a coin put in before then, so the coin waits for
+  // that; a game's first bar is set up about 140 frames after start.
+  await until("the board booted", async () => (await frame(page)) >= 180, 30000);
   await page.keyboard.down("Digit5");
   await page.waitForTimeout(250);
   await page.keyboard.up("Digit5");
@@ -575,7 +596,8 @@ async function arcade() {
   await page.keyboard.down("Digit1");
   await page.waitForTimeout(250);
   await page.keyboard.up("Digit1");
-  await page.waitForTimeout(3000);
+  const started = await frame(page);
+  await until("play under way", async () => (await frame(page)) >= started + 200, 30000);
   await page.keyboard.press("KeyR");
   await until("recording", async () => (await text(page, "#modebadge")) === "RECORDING");
   for (const k of ["ArrowDown", "KeyX", "ArrowUp", "KeyX", "ArrowLeft"]) {
@@ -600,6 +622,19 @@ async function arcade() {
   const log = readFileSync(join(dir, "clips", "001.log"), "utf8");
   if (!log.startsWith("gp-arcade-input 0\nsystem rbtapper\ncolumns CSRLDUT\n") || !/T\n/.test(log)) fail(`the arcade clip's log: ${log}`);
   ok("the arcade clip is in the session: an arcade input log with taps, its note, path and state hash");
+  // The clip is play, read from the board's RAM: the clip's whole log
+  // from power-on recorded in the run's store, and on every frame of the
+  // clip the game's mode byte says a game is on and the bartender's bar
+  // moves with the presses. The addresses are rbtapper's (games/tapper's
+  // labels.toml: mode E3BD, 0 in a game; bar E6F9, the bartender's bar).
+  const clipAt = { start: Number(meta.match(/^start = (\d+)/m)?.[1]), frames: Number(meta.match(/^frames = (\d+)/m)?.[1]) };
+  const full = join(work, "tapper-clip-1.log");
+  writeFileSync(full, Buffer.from(await (await page.request.get(`${url}api/clips/1.log`)).body()));
+  const recorded = JSON.parse(gpRun(["--json", "record", "--rom", zip, "--input", full, "--name", "check-tapper-clip-1", "--no-trace", "--no-events"]));
+  const rows = JSON.parse(gpRun(["--json", "query", recorded.id, "ram[0xE3BD]", "ram[0xE6F9]", "--frames", `${clipAt.start}..${clipAt.start + clipAt.frames}`, "--rom", zip])).rows;
+  const modes = new Set(rows.map((r) => r.entries[0].value)), bars = new Set(rows.map((r) => r.entries[1].value));
+  if (!(clipAt.start > 0) || rows.length !== clipAt.frames || modes.size !== 1 || !modes.has(0) || bars.size < 2 || [...bars].some((b) => b > 3)) fail(`Tapper's clip 1 isn't play: frames ${clipAt.start} to ${clipAt.start + clipAt.frames}, mode ${[...modes]}, bar ${[...bars]}`);
+  ok(`Tapper's clip 1 is play: on its ${rows.length} frames from frame ${clipAt.start} the board's mode is a game's and the bartender moves between bars ${[...bars].sort().join(", ")}`);
   await until("the arcade hand-off in the conversation", async () => (await text(page, "#talk")).includes(`player: ${note}`));
   const said = "Got it. Which bar was that?";
   gpRun(["mechanic", "say", game, mech, said]);
@@ -636,8 +671,8 @@ async function arcade() {
   if (wrong) fail(`Tapper's player on the model isn't the board's 32 by 32: ${JSON.stringify(wrong)}`);
   const hero = heroes[shown];
   // Both pictures of that frame, by the pixels not in its commonest color
-  // (the backdrop): the original's scene (here the attract mode's title)
-  // fills a tenth of the screen at least, 24 sprites' worth, in 4 colors
+  // (the backdrop): the original's scene (here a bar in play) fills a
+  // tenth of the screen at least, 24 sprites' worth, in 4 colors
   // or more; the model's is exactly the player's box as far
   // as it is on the screen, or nothing. One lit box can't pass for the
   // original, nor a stray picture for the model.
@@ -690,13 +725,36 @@ async function arcade() {
   await page.keyboard.press("ArrowRight");
   await until("a step on Tapper", async () => /frame \d+ of/.test(await text(page, "#rv-at")));
   ok(`REVIEW REBUILD shows Tapper's clip 1: ${rv.match(/\d+ of \d+ frames the same/)[0]}, the original's scene and the model's player where the board draws it (on the screen on ${heroes.filter((b) => b).length} of ${heroes.length} frames) at frame ${shown}, in all three layouts, with the strip, the outlines, the frame's measures and "drawn by tile kind"`);
+  // FREE PLAY plays the arcade game's model in the interpreter preview,
+  // keyed as a cabinet (issue #3): the rebuild's frame loads the model,
+  // reads the arcade layout and draws a 512x480 picture, never the
+  // original. The skeleton names no board art, so the frame draws its
+  // scene; a model that names some is drawn by gp_board.wasm.
   await page.click("#tab-play");
-  const free = await until("FREE PLAY's words", async () => {
+  await until("Tapper's FREE PLAY", async () => {
     const t = (await text(page, "#toast")) + (await text(page, "#state"));
-    return t.includes("draws nothing yet") ? t : null;
-  });
-  if (!(await page.evaluate(() => document.getElementById("tab-mech").classList.contains("on")))) fail("the arcade page stayed in FREE PLAY with nothing to play");
-  ok(`FREE PLAY refuses in words: ${free.slice(0, 80)}...`);
+    if (/draws nothing yet|couldn't start/.test(t)) fail(`Tapper's FREE PLAY: ${t}`);
+    return (await text(page, "#modebadge")) === "FREE PLAY: THE MODEL";
+  }, 600000);
+  const rb = await until("the arcade model's first frame", async () => {
+    const f = page.frames().find((x) => x.url().includes("/rebuild/"));
+    const g = f && (await f.evaluate(() => {
+      const t = window.__gp;
+      if (!t) return null;
+      if (t.error) return { error: t.error };
+      const c = document.getElementById("game");
+      return t.marks["first-frame"] ? { w: c.width, h: c.height, board: t.board ?? null, frame: t.state().frame } : null;
+    }).catch(() => null));
+    return g;
+  }, 120000);
+  if (rb.error) fail(`Tapper's model in FREE PLAY: ${rb.error}`);
+  if (rb.w !== 512 || rb.h !== 480) fail(`Tapper's model in FREE PLAY draws ${rb.w}x${rb.h}, not 512x480`);
+  const fsrc = await page.evaluate(() => document.body.dataset.frameSource);
+  if (fsrc === "original") fail("Tapper's FREE PLAY showed the original");
+  await shot(page, "tapper-free-play");
+  ok(`FREE PLAY plays Tapper's model: a 512x480 picture from the preview (board art ${rb.board ? "drawn" : "not named"}), never the original`);
+  await page.keyboard.press("Escape");
+  await until("CLIPS after Tapper's FREE PLAY", async () => page.evaluate(() => document.getElementById("tab-mech").classList.contains("on")));
   // The stand-in decision server, as the Moss Hop run uses: without
   // --decide, demo asks for Laya at 127.0.0.1:7720 before it reads the
   // game, and the check would pass only on a machine with Laya running.
@@ -711,6 +769,73 @@ async function arcade() {
   if (r.status === 0 || !r.stderr.includes("whose state mapping doesn't name the player")) fail(`gp mechanic demo on an arcade game: ${r.status} ${r.stderr}`);
   ok("gp mechanic demo refuses, in words, an arcade game whose mapping names no player");
   if (errors.length) fail(`the arcade page threw: ${errors.join("; ")}`);
+  await arcadeOriginalFreePlay(game);
+}
+
+/** FREE PLAY of the original on an arcade game, in REFINE's game view
+ * (gp serve's editor view, /index.html?embed=game): the board in
+ * gp_arcade_play.wasm at 512x480, a coin and a start, a save point the
+ * server rebuilds natively to the same hashes, back to it with F8 (a new
+ * branch), and a clip from it whose log is the board's. Needs the
+ * editor's build (`just editor`); without it the step says so. */
+async function arcadeOriginalFreePlay(game) {
+  const base = await gpServe(games);
+  const index = await fetch(`${base}index.html`);
+  if (!index.ok || !(index.headers.get("content-type") ?? "").includes("text/html")) {
+    console.log("skip FREE PLAY of the arcade original: no editor build (just editor)");
+    return;
+  }
+  const page = await browser.newPage({ viewport: { width: 1400, height: 1100 } });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto(`${base}index.html?embed=game&run=${game}`);
+  await until("the game view's free play button", async () => page.isEnabled("[data-testid=game-free]").catch(() => false), 120000);
+  await page.click("[data-testid=game-free]");
+  await until("the arcade original in free play", async () => !/Starting the original/.test(await text(page, "[data-testid=free-says]")), 60000);
+  const size = await page.evaluate(() => { const c = document.querySelector("[data-testid=game-original]"); return [c.width, c.height]; });
+  if (size[0] !== 512 || size[1] !== 480) fail(`the arcade original in free play is ${size.join("x")}, not 512x480`);
+  const hint = await text(page, ".free-play");
+  if (!hint.includes("5 drops a coin")) fail(`free play on the arcade original doesn't name the cabinet's keys: ${hint}`);
+  // The board boots for about 146 of its 30 frames a second before a coin counts.
+  await page.waitForTimeout(6500);
+  for (const k of ["Digit5", "Digit1"]) {
+    await page.keyboard.down(k);
+    await page.waitForTimeout(250);
+    await page.keyboard.up(k);
+    await page.waitForTimeout(1500);
+  }
+  await page.waitForTimeout(3000);
+  await page.keyboard.press("F5");
+  const sessions = async () => (await (await fetch(`${base}api/play/free?run=${game}`)).json()).sessions;
+  const saved = await until("the arcade save point rebuilt natively", async () => {
+    const s = (await sessions())[0];
+    const sp = s?.saves?.[0];
+    if (sp?.error) fail(`the arcade save point couldn't be rebuilt: ${sp.error}`);
+    return sp?.native ? { s, sp } : null;
+  }, 120000);
+  if (!saved.sp.native.matches) fail(`the arcade save point rebuilt to other hashes: ${JSON.stringify(saved.sp)}`);
+  await until("the save point's words on the page", async () => /rebuilt the same/.test(await text(page, "[data-testid=save-points]")), 15000);
+  ok(`FREE PLAY of the arcade original: 512x480 with the cabinet's keys, a coin and a start, and save point 1 at frame ${saved.sp.frame} rebuilt natively to the page's hashes`);
+  await shot(page, "tapper-free-play-original");
+  await page.waitForTimeout(1500);
+  await page.keyboard.press("F8");
+  await until("a branch from the save point", async () => ((await sessions())[0]?.branches?.length ?? 0) >= 2, 30000);
+  await page.click("[data-testid=clip-make]");
+  await until("the take recording", async () => /Recording the clip/.test(await text(page, "[data-testid=free-says]")), 15000);
+  for (const k of ["ArrowDown", "KeyX", "ArrowUp", "KeyX"]) {
+    await page.keyboard.down(k);
+    await page.waitForTimeout(300);
+    await page.keyboard.up(k);
+    await page.waitForTimeout(150);
+  }
+  await page.click("[data-testid=clip-stop]");
+  await until("the arcade clip saved", async () => page.isVisible("[data-testid=clip-saved]"), 30000);
+  const clip = JSON.parse(readFileSync(join(home, "play", "free", saved.s.id, "clips", "0001.json"), "utf8"));
+  if (!clip.log?.startsWith("gp-arcade-input 0\nsystem rbtapper\ncolumns CSRLDUT\n") || !/T\n/.test(clip.log)) fail(`the arcade free play clip's log: ${clip.log}`);
+  if (clip.start?.frame !== saved.sp.frame) fail(`the arcade clip doesn't start at its save point: ${JSON.stringify(clip.start)}`);
+  ok(`F8 went back to the save point on a new branch, and a clip from it (${clip.frames} frames) holds the board's log with taps from frame ${clip.start.frame}`);
+  if (errors.length) fail(`free play on the arcade original threw: ${errors.join("; ")}`);
+  await page.close();
 }
 
 /** One server: gp serve hosts the page at /mechanic/GAME/ (its root
@@ -746,6 +871,10 @@ async function oneServer() {
   await page.goto(base[0]);
   await until("gp serve's root opens the last game", async () => page.url().includes(`/mechanic/${GAME}/`) && (await text(page, "#title").catch(() => "")) === `${GAME} / ${MECH}`);
   ok(`gp serve's root lists the games (${listed.join(", ")}), then opens the last one opened: ${page.url()}`);
+  const logo = await page.evaluate(() => document.getElementById("logo").href);
+  const logoAt = await fetch(logo);
+  if (logoAt.status !== 200 || new URL(logo).pathname !== "/start/") fail(`the logo on gp serve opens ${logo}: ${logoAt.status}`);
+  ok(`the logo on gp serve opens the first screen, ${new URL(logo).pathname} (${logoAt.status})`);
   const picks = await until("the game picker", async () => (!(await page.isHidden("#game-pick")) ? page.evaluate(() => [...document.querySelectorAll("#game-pick option")].map((o) => o.value)) : null));
   if (!picks.includes(GAME)) fail(`the game picker: ${picks}`);
   const last = readFileSync(join(home, "work", "serve", "last-game"), "utf8").trim();
@@ -871,8 +1000,15 @@ async function romSets() {
 }
 
 /** A gp serve on a free port with these games; its address. */
+/** gp serve on a port of its own, with a stand-in decision server as its
+ * Laya ($GP_LAYA_URL), so what asks for Laya (LET THE TOOLS TRY through
+ * gp_run) doesn't depend on the person's own Laya at 127.0.0.1:7720.
+ * CHECK_LAYA_URL (an address where nothing listens, with GP_SERVE_URL one
+ * too) shows instead what the page says when no Laya runs. */
+let standInLaya;
 async function gpServe(gamesDir) {
-  const p = spawn(gp, ["serve", "--port", "0", "--games", gamesDir], { env });
+  standInLaya ??= await fakeDecider();
+  const p = spawn(gp, ["serve", "--port", "0", "--games", gamesDir], { env: { ...env, GP_LAYA_URL: process.env.CHECK_LAYA_URL ?? standInLaya } });
   servers.push(p);
   return new Promise((res, rej) => {
     let out = "";
@@ -883,6 +1019,15 @@ async function gpServe(gamesDir) {
       if (m) { clearTimeout(t); res(m[0]); }
     });
   });
+}
+
+/** Opens the game's page on gp serve at `base` once the game is ready.
+ * Before then gp serve answers with a waiting page that reloads itself when
+ * the game is ready, and a read of the page in that reload fails with
+ * "Execution context was destroyed". */
+async function openGame(page, base, query) {
+  await until("the game's page is made", async () => (await (await fetch(`${base}api/mechanic/${GAME}/ready`)).json()).ready, 240000);
+  await page.goto(`${base}mechanic/${GAME}/${query}`);
 }
 
 /** gp mcp on this home, as an agent talks to it: call(tool, args). */
@@ -1079,7 +1224,7 @@ async function editorFeatures() {
   const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
-  await page.goto(`${base}mechanic/${GAME}/?tab=work`);
+  await openGame(page, base, "?tab=work");
   const said = await until("the fidelity number on REFINE", async () => {
     const t = await text(page, "[data-testid=fidelity]");
     return t.startsWith(`On average, ${pct}% of a clip plays the same`) && t.includes(`${n - 1} of ${n} clips play the same all the way`) && t;
@@ -1266,6 +1411,689 @@ async function editorFeatures() {
   await page.close();
 }
 
+/** "What is this?" (issue #10) in REFINE's game view (THE CLIP MEASURED),
+ * on main()'s clip in the game's tests: paused, a box dragged round the
+ * player on the original says what it is, and "what is this?" sends the
+ * question to the open mechanic's talk with the gp element explain call
+ * that answers it. The check, as the agent, runs that call and says what
+ * it found with gp mechanic say. The answer shows under the box in plain
+ * words naming the element pointed at, and still fits at 360 px. */
+async function whatIsThis() {
+  const base = await gpServe(games);
+  const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await openGame(page, base, "?tab=work");
+  const view = await until("the game view in THE CLIP MEASURED", async () => {
+    const h = await page.$("#measured iframe.details-frame");
+    const f = h && (await h.contentFrame());
+    if (f && (await f.$("[data-testid=point-original]"))) return f;
+    return /editor's build/.test(await text(page, "#measured")) ? "none" : null;
+  }, 60000);
+  if (view === "none") {
+    console.log("skip WHAT IS THIS?: no editor build");
+    await page.close();
+    return;
+  }
+  // The clip in the view, and the frame it is paused on.
+  // (The picker shows with two clips or more; with one, it is the tests'.)
+  const picker = await view.$("[data-testid=game-recording]");
+  const rec = picker ? await picker.inputValue() : (await (await fetch(`${base}api/capture/${GAME}/background`)).json()).active?.[0];
+  // A frame near the clip's end, where the player has walked in (at its
+  // first frames the game hasn't placed it yet).
+  const at = await view.evaluate(() => {
+    const s = document.querySelector("[data-testid=game-scrubber]");
+    const f = Math.max(1, Number(s.max) - 10);
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(s, String(f));
+    s.dispatchEvent(new Event("input", { bubbles: true }));
+    return f;
+  });
+  if (!rec || !(at > 1)) fail(`the game view's clip and frame: ${rec} ${at}`);
+  await until("the view on the frame", async () => Number(await view.inputValue("[data-testid=game-scrubber]")) === at);
+  // Where the player is on that frame, as the pointer itself asks: what
+  // the whole screen holds, and the original's object the model names.
+  const whole = await (await fetch(`${base}api/capture/${GAME}/point?recording=${encodeURIComponent(rec)}&frame=${at}&rect=0,0,256,240`)).json();
+  const obj = (whole.original?.entities ?? []).find((e) => e.box && e.box.w > 0 && (e.box.x > 0 || e.box.y > 0));
+  const thing = obj && (whole.things ?? []).find((t) => t.what === "entity" && t.kind === obj.kind);
+  if (!thing) fail(`nothing of the model's on the screen at frame ${at} of ${rec}: ${JSON.stringify(whole.original?.entities ?? whole).slice(0, 300)}`);
+  const { x: bx, y: by, w: bw, h: bh } = obj.box;
+  // Drag the box on the original's picture, in its own 256x240 pixels.
+  const layer = await view.$("[data-testid=point-original]");
+  await layer.scrollIntoViewIfNeeded();
+  const r = await layer.boundingBox();
+  const px = (x, y) => [r.x + ((x + 0.5) * r.width) / 256, r.y + ((y + 0.5) * r.height) / 240];
+  await page.mouse.move(...px(bx, by));
+  await page.mouse.down();
+  await page.mouse.move(...px(bx + bw - 1, by + bh - 1), { steps: 4 });
+  await page.mouse.up();
+  const pointed = await until("what the box covers", async () => {
+    const t = await view.textContent("[data-testid=tell-pointed]", { timeout: 1000 }).catch(() => "");
+    return /^You pointed at /.test(t) ? t : /error|couldn't|can't/i.test(t) ? fail(`the box round the ${thing.label}: ${t}`) : null;
+  }, 60000);
+  if (!pointed.includes(thing.label)) fail(`the box round ${thing.label} says: ${pointed}`);
+  // The question: the person's turn in the open mechanic's talk, with the
+  // call that answers it.
+  const talkFile = join(session, "talk.ndjson");
+  // (A line being written as it is read is left for the next read.)
+  const turns = () => readFileSync(talkFile, "utf8").split("\n").flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } });
+  const before = turns().length;
+  await view.click("[data-testid=tell-ask]");
+  const q = await until("the question in the talk", () => turns().slice(before).find((t) => t.by === "player" && t.text === "what is this?"));
+  const call = q.point?.explain;
+  if (q.point?.ask !== "explain" || !/^gp element explain --run \S+ --clip \S+ --log-frame \d+ --box \d+,\d+,\d+,\d+ --side original$/.test(call ?? "")) fail(`the question's turn: ${JSON.stringify(q)}`);
+  await until("the wait for the answer under the box", async () => /Waiting for your agent's answer/.test(await view.textContent("[data-testid=tell-answer]").catch(() => "")));
+  // The agent answers from the call, as `gp mechanic show` hands it over.
+  const found = JSON.parse(gpRun(["--json", ...call.split(" ").slice(1)]));
+  const name = found.object?.label ?? found.model?.things?.[0]?.name;
+  if (!name) fail(`gp element explain named nothing under the box: ${JSON.stringify(found).slice(0, 400)}`);
+  const sprites = found.drawn?.sprites?.length ?? 0;
+  const said = `That is ${thing.label}: the model's ${name}, drawn with ${sprites} sprite${sprites === 1 ? "" : "s"} there on this frame.`;
+  gpRun(["mechanic", "say", GAME, MECH, said]);
+  const answer = await until("the answer under the box", async () => {
+    const t = await view.textContent("[data-testid=tell-answer]").catch(() => "");
+    return t.includes(said) && t;
+  }, 20000);
+  if (/\$[0-9A-Fa-f]{2}|0x[0-9a-f]|ram\[|\bgp [a-z]/.test(answer)) fail(`the answer isn't in plain words: ${answer}`);
+  ok(`WHAT IS THIS? on ${thing.label} at frame ${at} of ${rec}: the box says "${pointed.trim()}", the question's turn carries ${call.split(" --")[0]}, and the answer shows under the box: "${said}"`);
+  await shot(page, "what-is-this");
+  // At 360 px wide the answer is whole inside the game view's frame.
+  await page.setViewportSize({ width: 360, height: 780 });
+  await page.waitForTimeout(1000);
+  const fit = await page.evaluate(() => {
+    const f = document.querySelector("#measured iframe.details-frame");
+    const d = f.contentDocument;
+    const a = d.querySelector("[data-testid=tell-answer]");
+    const ar = a.getBoundingClientRect(), fr = f.getBoundingClientRect();
+    return { frame: [Math.round(fr.left), Math.round(fr.right)], doc: d.documentElement.scrollWidth, inner: f.clientWidth, answer: [Math.round(ar.left), Math.round(ar.right)], shown: ar.width > 0 && ar.height > 0, W: innerWidth };
+  });
+  if (!fit.shown || fit.frame[0] < -1 || fit.frame[1] > fit.W + 1 || fit.doc > fit.inner + 1 || fit.answer[0] < -1 || fit.answer[1] > fit.inner + 1) fail(`the answer at 360 px: ${JSON.stringify(fit)}`);
+  await shot(page, "what-is-this-360");
+  ok(`at 360 px the answer is whole inside the game view (${fit.answer[1] - fit.answer[0]} px wide in its ${fit.inner} px frame)`);
+  if (errors.length) fail(`the page threw: ${errors.join("; ")}`);
+  await page.close();
+}
+
+/** A PNG of a disc of one colour on a clear ground, w by h, made here
+ * (nothing from a ROM): for the made-up theme of pictureProposals(). */
+function discPng(w, h, rgb) {
+  const raw = Buffer.alloc((w * 4 + 1) * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const at = y * (w * 4 + 1) + 1 + x * 4;
+      if ((x - w / 2) ** 2 + (y - h / 2) ** 2 < (w * 0.4) ** 2) raw.set([...rgb, 255], at);
+    }
+  }
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(zlibCrc32(Buffer.concat([Buffer.from(type), data])));
+    return Buffer.concat([len, Buffer.from(type), data, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr.set([8, 6, 0, 0, 0], 8);
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
+}
+
+/** A picture the agent proposes for the person's own theme (issue #4):
+ * on Moss Hop with a made-up large-art theme under the home's
+ * work/themes/, the agent proposes over MCP (a wrong shape is refused
+ * and never reaches the page; applying is refused to it), the card shows
+ * the picture now and the new one at game size and enlarged with square
+ * pixels, two proposals queue, ACCEPT changes the file, PUT THE OLD ONE
+ * BACK puts it back, REJECT with words returns the words to the agent,
+ * and the card is whole at 360 px. */
+async function pictureProposals() {
+  const theme = join(home, "work", "themes", "check-look");
+  mkdirSync(join(theme, "theme", "art"), { recursive: true });
+  writeFileSync(join(theme, "package.toml"), '[package]\nname = "check/check-look"\nkind = "content"\nversion = "0.1.0"\ntitle = "Check Look"\nlicense = "CC0-1.0"\n');
+  writeFileSync(join(theme, "theme", "look.txt"), "gp-look 1\nid check-look\ntitle Check Look\nart art.txt\n");
+  writeFileSync(join(theme, "theme", "art.txt"), "gp-art 1\nscale 4\nlimit off\npic frame-0.png art/hero.png 16 16 0 0\n");
+  const hero = join(theme, "theme", "art", "hero.png");
+  const green = discPng(64, 64, [40, 160, 60]);
+  writeFileSync(hero, green);
+  const red = join(work, "hero-red.png"), blue = join(work, "hero-blue.png"), wide = join(work, "hero-wide.png");
+  writeFileSync(red, discPng(64, 64, [220, 40, 40]));
+  writeFileSync(blue, discPng(64, 64, [40, 80, 220]));
+  writeFileSync(wide, discPng(128, 64, [220, 40, 40]));
+  const base = await gpServe(games);
+  await until("the game's page is made", async () => (await (await fetch(`${base}api/mechanic/${GAME}/ready`)).json()).ready, 240000);
+  const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto(`${base}mechanic/${GAME}/?tab=themes`);
+  await until("the page", async () => (await text(page, "#title").catch(() => "")).startsWith(GAME));
+  const agent = mcpClient();
+  const propose = (png, why) => agent.call("gp_run", { command: "theme picture propose", args: { dir: theme, game: GAME, picture: "art/hero.png", png, why } });
+  const bad = await propose(wide, "Wider.");
+  if (bad.exit !== 1 || !/stretched/.test(bad.json?.refused ?? "")) fail(`a picture of the wrong shape wasn't refused: ${JSON.stringify(bad)}`);
+  const one = await propose(red, "A red hero, as you asked.");
+  if (one.exit !== 0 || !one.json?.id) fail(`the proposal wasn't made: ${JSON.stringify(one)}`);
+  const id1 = one.json.id;
+  if (!readFileSync(hero).equals(green)) fail("proposing changed the theme");
+  ok(`the agent proposes over gp_run, checked first: a picture of the wrong shape is refused in words (${bad.json.refused.slice(0, 60)}...), and the theme is unchanged until the person answers`);
+  const card = `#asks .pic-card[data-picture="${id1}"]`;
+  await until("the picture card", async () => page.isVisible(card), 15000);
+  const seen = await until("both pictures drawn", () => page.evaluate((sel) => {
+    const imgs = [...document.querySelectorAll(`${sel} img`)];
+    if (imgs.length !== 4 || imgs.some((i) => !i.complete || !i.naturalWidth)) return null;
+    return imgs.map((i) => ({ src: i.src.split("/").pop(), w: i.getBoundingClientRect().width, natural: i.naturalWidth, look: getComputedStyle(i).imageRendering, cls: i.className }));
+  }, card));
+  const big = seen.filter((i) => i.cls === "pic-big"), small = seen.filter((i) => i.cls === "pic-small");
+  if (big.map((i) => i.src).join() !== "old.png,new.png" || small.some((i) => i.w !== 16) || big.some((i) => i.w <= 16 || i.w % 16)) fail(`the pictures on the card: ${JSON.stringify(seen)}`);
+  if (seen.some((i) => !/pixelated|crisp-edges/.test(i.look))) fail(`the pictures are smoothed: ${JSON.stringify(seen)}`);
+  const words = await text(page, card);
+  if (!/YOUR AGENT PROPOSES A PICTURE/.test(words) || !/A red hero, as you asked/.test(words) || !/ACCEPT/.test(words) || !/REJECT/.test(words)) fail(`the card says: ${words}`);
+  await until("THEMES lists it", async () => page.isVisible(`#th-pictures .pic-item[data-picture="${id1}"]`));
+  ok(`the proposal is a card on the page and on THEMES: now and new, ${small[0].w} px at game size and ${big[0].w} px enlarged with square pixels, the agent's sentence, ACCEPT and REJECT`);
+  await shot(page, "picture-card");
+  const refusedApply = await agent.call("gp_run", { command: "theme picture accept", args: { id: id1 } });
+  if (!/only the person decides/.test(refusedApply.refused ?? "") || !readFileSync(hero).equals(green)) fail(`the agent could apply it: ${JSON.stringify(refusedApply)}`);
+  ok("an agent call that applies a proposal is refused: only the person decides");
+  const two = await propose(blue, "A blue hero instead.");
+  const id2 = two.json?.id;
+  if (!id2) fail(`the second proposal: ${JSON.stringify(two)}`);
+  await until("the queue count", async () => /1 of 2 waiting/.test(await text(page, card)));
+  if (await page.isVisible(`#asks .pic-card[data-picture="${id2}"]`)) fail("the second proposal shows before the first is answered");
+  ok("two proposals queue: the card says 1 of 2 waiting and shows the first");
+  await page.click(`${card} .pic-accept`);
+  await until("ACCEPT applied", async () => readFileSync(hero).equals(readFileSync(red)));
+  await until("YOU ACCEPTED", async () => /YOU ACCEPTED/.test(await text(page, card)));
+  const heard = await agent.call("next", { game: GAME });
+  if (!heard.waits_for_yes?.some((y) => y.id === id1 && y.state === "accepted")) fail(`next doesn't carry the answer: ${JSON.stringify(heard.waits_for_yes)}`);
+  ok("ACCEPT puts the new picture in the theme's file, and next carries the answer to the agent");
+  await shot(page, "picture-accepted");
+  await page.click(`${card} .pic-undo`);
+  await until("the old one back", async () => readFileSync(hero).equals(green));
+  ok("PUT THE OLD ONE BACK puts the old picture back in the file");
+  const card2 = `#asks .pic-card[data-picture="${id2}"]`;
+  await until("the second card", async () => page.isVisible(card2));
+  for (const width of [360, 1400]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.waitForTimeout(300);
+    await page.evaluate((sel) => document.querySelector(sel).scrollIntoView({ block: "start" }), card2);
+    const fit = await page.evaluate((sel) => {
+      const c = document.querySelector(sel);
+      const r = c.getBoundingClientRect();
+      const out = [...c.querySelectorAll("*")].filter((e) => { const q = e.getBoundingClientRect(); return q.width && (q.left < -1 || q.right > innerWidth + 1); }).map((e) => e.className || e.tagName);
+      const hit = (b) => { const q = b.getBoundingClientRect(); const at = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2); return at === b || b.contains(at); };
+      return { inside: r.left >= -1 && r.right <= innerWidth + 1, out, press: [...c.querySelectorAll("button, input")].map(hit), page: document.documentElement.scrollWidth <= innerWidth + 1 };
+    }, card2);
+    await shot(page, `picture-card-${width}`, false);
+    if (!fit.inside || fit.out.length || fit.press.includes(false) || !fit.page) fail(`the picture card at ${width} px: ${JSON.stringify(fit)}`);
+  }
+  ok("the picture card is whole at 360 and 1400 px, with its box, ACCEPT and REJECT pressable and nothing past the edge");
+  await page.fill(`${card2} .pic-words`, "Keep him green, but give him a hat.");
+  await page.click(`${card2} .pic-reject`);
+  await until("YOU REJECTED", async () => /YOU REJECTED/.test(await text(page, card2)));
+  if (!readFileSync(hero).equals(green)) fail("REJECT changed the theme");
+  const told = await agent.call("gp_run", { command: "theme picture list", args: {} });
+  const back = told.json?.answered?.find((p) => p.id === id2);
+  if (back?.state !== "rejected" || back.words !== "Keep him green, but give him a hat.") fail(`the agent didn't get the words: ${JSON.stringify(told)}`);
+  ok(`REJECT keeps the theme, and the person's words reach the agent: "${back.words}"`);
+  await until("the read answers leave the cards", async () => !(await page.isVisible("#asks .pic-card")), 15000);
+  await shot(page, "picture-themes");
+  if (errors.length) fail(`the page threw: ${errors.join("; ")}`);
+  await page.close();
+}
+
+/** A sound change the agent proposes for the person's copy (issue #4), on
+ * a copy of Moss Hop with a made-up tune (one held note, written here,
+ * nothing from a ROM): sound_edit proposes by default and its direct
+ * write is refused while the page is open, gp progress --next and next
+ * list it as waiting for the person, the card plays the tune now and the
+ * new one, ACCEPT writes it into the copy, PUT THE OLD ONE BACK puts it
+ * back, REJECT leaves the sound as it was with the words reaching the
+ * agent, and the card is whole at 360 px. */
+async function soundProposals() {
+  const agent = mcpClient();
+  const forked = await agent.call("template_fork", { template: "mosshop", copy: "check_tune" });
+  const copy = join(home, "work", "mcp", "check_tune"), model = join(copy, "model.toml");
+  if (!existsSync(model)) fail(`template_fork made no copy: ${JSON.stringify(forked).slice(0, 300)}`);
+  writeFileSync(model, readFileSync(model, "utf8").replace("[assets.font]\n", '[assets.music]\nkind = "songs"\nrole = "music.level"\ncapture = { recording = "made", frames = "1..", name = "tune" }\n\n[assets.font]\n'));
+  const tune = join(home, "work", "sound", "made0000", "tune");
+  mkdirSync(tune, { recursive: true });
+  writeFileSync(join(tune, "songs.json"), JSON.stringify({
+    format: "gp-songs", version: "0.1.0", region: "ntsc", samples: [],
+    instruments: [{ name: "lead", voice: "pulse", role: "lead", volume: [12, 10, 8], duty: [2], pitch: [], notes: 0 }],
+    songs: [{ name: "theme", kind: "music", origin: "log", confidence: 0.95, frames: 32, loop_frame: 0, level: "main", notes: [],
+      tempo: { frames_per_row: 8, rows_per_pattern: 4 },
+      tracks: [{ channel: "pulse1", order: [0], patterns: [{ notes: [{ at: 0, len: 30, pitch: 72, fine: 0, instrument: 0 }] }] }] }],
+  }));
+  const own = join(copy, "sound", "music.songs.json");
+  const base = await gpServe(games);
+  await until("the game's page is made", async () => (await (await fetch(`${base}api/mechanic/${GAME}/ready`)).json()).ready, 240000);
+  const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto(`${base}mechanic/${GAME}/?tab=clips`);
+  await until("the page", async () => (await text(page, "#title").catch(() => "")).startsWith(GAME));
+  const lower = [{ op: "transpose", song: "theme", semitones: -12 }];
+  const direct = await agent.call("sound_edit", { copy: "check_tune", ops: lower, write: true, confirmed_by_person: true });
+  if (!/ACCEPT/.test(direct?.refused ?? "") || existsSync(own)) fail(`a direct write with the page open: ${JSON.stringify(direct).slice(0, 300)}`);
+  const one = await agent.call("sound_edit", { copy: "check_tune", ops: lower, why: "A lower tune, as you asked." });
+  const id1 = one?.id;
+  if (!id1 || one.proposed !== true || existsSync(own)) fail(`the proposal: ${JSON.stringify(one).slice(0, 300)}`);
+  ok("sound_edit proposes by default and the copy is unchanged; its direct write is refused while the page is open, even with confirmed_by_person");
+  for (const at of [["--template", GAME], ["--copy", "check_tune"]]) {
+    const line = gpRun(["progress", "--next", ...at]);
+    if (!line.includes(`Waits for your ACCEPT or REJECT (sound ${id1})`)) fail(`gp progress --next ${at.join(" ")}: ${line}`);
+  }
+  const told = await agent.call("next", { game: GAME });
+  if (!told.waits_for_yes?.some((y) => y.what === "sound" && y.id === id1 && y.state === "open")) fail(`next: ${JSON.stringify(told.waits_for_yes)}`);
+  ok("gp progress --next, for the port and for the copy, and the MCP tool next list it as waiting for the person (what: sound)");
+  const card = `#asks .snd-card[data-sound="${id1}"]`;
+  await until("the sound card", async () => page.isVisible(card), 15000);
+  const words = await text(page, card);
+  if (!/YOUR AGENT PROPOSES A NEW SOUND/.test(words) || !/A lower tune, as you asked/.test(words) || !/ACCEPT/.test(words) || !/REJECT/.test(words)) fail(`the card says: ${words}`);
+  const clips = {};
+  for (const which of ["old", "new"]) {
+    const r = await fetch(`${base}api/sounds/${id1}/${which}.wav`);
+    const b = Buffer.from(await r.arrayBuffer());
+    if (r.status !== 200 || r.headers.get("content-type") !== "audio/wav" || b.subarray(0, 4).toString() !== "RIFF") fail(`the ${which} clip: ${r.status} ${r.headers.get("content-type")}`);
+    clips[which] = b;
+    await page.click(`${card} .snd-play-${which}`);
+    await until(`the ${which} clip plays`, () => page.evaluate(([sel, w]) => { const a = document.querySelector(`${sel} audio.snd-${w}`); return a && !a.paused && a.currentTime > 0.05; }, [card, which]), 10000);
+  }
+  if (clips.old.equals(clips.new)) fail("the two clips are the same");
+  const playing = await page.evaluate((sel) => [...document.querySelectorAll(`${sel} audio`)].filter((a) => !a.paused).length, card);
+  if (playing !== 1) fail(`${playing} clips play at once`);
+  ok("the card plays the tune as it is now and with the change, one at a time, with the agent's sentence, ACCEPT and REJECT");
+  await shot(page, "sound-card");
+  await page.click(`${card} .pic-accept`);
+  await until("ACCEPT applied", async () => existsSync(own) && readFileSync(own, "utf8").includes('"pitch": 60'));
+  await until("YOU ACCEPTED", async () => /YOU ACCEPTED/.test(await text(page, card)));
+  const heard = await agent.call("next", { game: GAME });
+  if (!heard.waits_for_yes?.some((y) => y.id === id1 && y.state === "accepted")) fail(`next doesn't carry the answer: ${JSON.stringify(heard.waits_for_yes)}`);
+  ok("ACCEPT writes the lower tune into the copy's songs, and next carries the answer to the agent");
+  await page.click(`${card} .pic-undo`);
+  await until("the old tune back", async () => !existsSync(own));
+  ok("PUT THE OLD ONE BACK puts the copy's tune back as it was");
+  const two = await agent.call("sound_edit", { copy: "check_tune", ops: [{ op: "tempo", song: "theme", frames_per_row: 4 }], why: "Twice as fast." });
+  const card2 = `#asks .snd-card[data-sound="${two?.id}"]`;
+  await until("the second card", async () => page.isVisible(card2), 15000);
+  for (const width of [360, 1400]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.waitForTimeout(300);
+    await page.evaluate((sel) => document.querySelector(sel).scrollIntoView({ block: "start" }), card2);
+    const fit = await page.evaluate((sel) => {
+      const c = document.querySelector(sel);
+      const r = c.getBoundingClientRect();
+      const out = [...c.querySelectorAll("*")].filter((e) => { const q = e.getBoundingClientRect(); return q.width && (q.left < -1 || q.right > innerWidth + 1); }).map((e) => e.className || e.tagName);
+      const hit = (b) => { const q = b.getBoundingClientRect(); const at = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2); return at === b || b.contains(at); };
+      return { inside: r.left >= -1 && r.right <= innerWidth + 1, out, press: [...c.querySelectorAll("button, input")].map(hit), page: document.documentElement.scrollWidth <= innerWidth + 1 };
+    }, card2);
+    await shot(page, `sound-card-${width}`, false);
+    if (!fit.inside || fit.out.length || fit.press.includes(false) || !fit.page) fail(`the sound card at ${width} px: ${JSON.stringify(fit)}`);
+  }
+  ok("the sound card is whole at 360 and 1400 px, its two players, box, ACCEPT and REJECT pressable and nothing past the edge");
+  await page.fill(`${card2} .pic-words`, "Keep it at the speed it was.");
+  await page.click(`${card2} .pic-reject`);
+  await until("YOU REJECTED", async () => /YOU REJECTED/.test(await text(page, card2)));
+  if (existsSync(own)) fail("REJECT changed the copy's sound");
+  const refused = await agent.call("gp_run", { command: "theme sound accept", args: { id: two.id } });
+  if (!/only the person decides/.test(refused?.refused ?? "")) fail(`the agent could answer for the person: ${JSON.stringify(refused)}`);
+  const back = (await agent.call("gp_run", { command: "theme sound list", args: {} })).json?.answered?.find((p) => p.id === two.id);
+  if (back?.state !== "rejected" || back.words !== "Keep it at the speed it was.") fail(`the agent didn't get the words: ${JSON.stringify(back)}`);
+  ok(`REJECT leaves the copy's sound as it was, the agent can't answer for the person, and the words reach it: "${back.words}"`);
+  if (errors.length) fail(`the page threw: ${errors.join("; ")}`);
+  await page.close();
+}
+
+/** A role's sound for a made-up large-art theme of the person's (issue
+ * #30), on Moss Hop with one made-up sound role, `hop`, written into its
+ * theme kit (Moss Hop has no sound of its own), and made-up square tones:
+ * a second take proposed over gp_run is a card that says there is no
+ * sound there yet and plays the new one, ACCEPT writes the take and its
+ * look.txt line, PUT THE OLD ONE BACK takes both away; a new first file's
+ * card plays the sound as it is and the new one, and REJECT's words reach
+ * the agent. */
+async function roleSoundProposals() {
+  const tone = (period) => {
+    const n = 8820, b = Buffer.alloc(44 + n * 2);
+    b.write("RIFF", 0); b.writeUInt32LE(36 + n * 2, 4); b.write("WAVEfmt ", 8);
+    b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22); b.writeUInt32LE(44100, 24); b.writeUInt32LE(88200, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34);
+    b.write("data", 36); b.writeUInt32LE(n * 2, 40);
+    for (let i = 0; i < n; i++) b.writeInt16LE(Math.floor(i / period) % 2 ? -3000 : 3000, 44 + i * 2);
+    return b;
+  };
+  const kitDir = join(games, GAME, "themes", "kit");
+  mkdirSync(kitDir, { recursive: true });
+  const kitFile = join(kitDir, "kit.toml");
+  const kit = existsSync(kitFile) ? readFileSync(kitFile, "utf8").replace("\nsound = []\n", "\n") : 'format = "0.1.0"\ngame = "moss-hop"\nmodel = "mosshop"\nscreen = [256, 240]\npixel_aspect = "1"\n';
+  writeFileSync(kitFile, `${kit}\n[[sound]]\nrole = "hop"\nkind = "sfx"\ncue = "made up"\nloops = false\ndescription = "a made-up hop"\n`);
+  const theme = join(home, "work", "themes", "check-tick"), look = join(theme, "theme", "look.txt");
+  mkdirSync(join(theme, "theme", "sound", "roles"), { recursive: true });
+  writeFileSync(join(theme, "package.toml"), '[package]\nname = "check/check-tick"\nkind = "content"\nversion = "0.1.0"\ntitle = "Check Tick"\nlicense = "CC0-1.0"\n');
+  const lookText = "gp-look 1\nid check-tick\ntitle Check Tick\nart art.txt\nfile sound/roles/hop.wav\n";
+  writeFileSync(look, lookText);
+  writeFileSync(join(theme, "theme", "art.txt"), "gp-art 1\nscale 4\n");
+  const first = join(theme, "theme", "sound", "roles", "hop.wav"), second = join(theme, "theme", "sound", "takes", "hop.2.wav");
+  writeFileSync(first, tone(20));
+  for (const [f, p] of [["hop-2.wav", 30], ["hop-soft.wav", 45]]) writeFileSync(join(work, f), tone(p));
+  const base = await gpServe(games);
+  await until("the game's page is made", async () => (await (await fetch(`${base}api/mechanic/${GAME}/ready`)).json()).ready, 240000);
+  const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto(`${base}mechanic/${GAME}/?tab=themes`);
+  await until("the page", async () => (await text(page, "#title").catch(() => "")).startsWith(GAME));
+  const agent = mcpClient();
+  const propose = (take, wav, why) => agent.call("gp_run", { command: "theme sound propose", args: { copy: theme, game: GAME, role: "hop", take, wav: join(work, wav), why } });
+  const gap = await propose(3, "hop-2.wav", "A third hop.");
+  if (gap.exit !== 1 || !/has no take 2 yet/.test(gap.json?.refused ?? "")) fail(`a take past a gap wasn't refused: ${JSON.stringify(gap).slice(0, 300)}`);
+  const one = await propose(2, "hop-2.wav", "A second hop, so it varies.");
+  const id1 = one.json?.id;
+  if (one.exit !== 0 || !id1 || existsSync(second) || readFileSync(look, "utf8") !== lookText) fail(`the proposal: ${JSON.stringify(one).slice(0, 300)}`);
+  ok("the agent proposes a role's second take over gp_run, checked first (a take past a gap refused), and the theme is unchanged until the person answers");
+  const card = `#asks .snd-card[data-sound="${id1}"]`;
+  await until("the role's card", async () => page.isVisible(card), 15000);
+  const words = await text(page, card);
+  if (!/Check Tick, the sound "hop" \(take 2\)/.test(words) || !/NO SOUND THERE YET/.test(words) || !/A second hop, so it varies/.test(words)) fail(`the card says: ${words}`);
+  if (!(await page.isDisabled(`${card} .snd-play-old`))) fail("the card offers to play a sound the theme hasn't got");
+  const clip = await fetch(`${base}api/sounds/${id1}/new.wav`);
+  if (clip.status !== 200 || !Buffer.from(await clip.arrayBuffer()).equals(tone(30)) || (await fetch(`${base}api/sounds/${id1}/old.wav`)).status !== 404) fail("the card's clips aren't the take proposed and none");
+  await page.click(`${card} .snd-play-new`);
+  await until("the new take plays", () => page.evaluate((sel) => { const a = document.querySelector(`${sel} audio.snd-new`); return a && !a.paused && a.currentTime > 0.02; }, card), 10000);
+  ok(`the card names the theme and the role's take, says there is no sound there yet, and plays the new take ("${words.slice(0, 80)}...")`);
+  await shot(page, "sound-card-role");
+  await page.click(`${card} .pic-accept`);
+  await until("ACCEPT applied", async () => existsSync(second) && readFileSync(look, "utf8").endsWith("file sound/takes/hop.2.wav\n"));
+  await until("YOU ACCEPTED", async () => /YOU ACCEPTED/.test(await text(page, card)));
+  await page.click(`${card} .pic-undo`);
+  await until("the take taken away", async () => !existsSync(second) && readFileSync(look, "utf8") === lookText);
+  ok("ACCEPT writes the take and its look.txt line, PUT THE OLD ONE BACK takes both away");
+  const two = await propose(1, "hop-soft.wav", "A softer hop.");
+  const card2 = `#asks .snd-card[data-sound="${two.json?.id}"]`;
+  await until("the second card", async () => page.isVisible(card2), 15000);
+  for (const which of ["old", "new"]) {
+    await page.click(`${card2} .snd-play-${which}`);
+    await until(`the ${which} sound plays`, () => page.evaluate(([sel, w]) => { const a = document.querySelector(`${sel} audio.snd-${w}`); return a && !a.paused && a.currentTime > 0.02; }, [card2, which]), 10000);
+  }
+  await page.fill(`${card2} .pic-words`, "Keep the sharp one.");
+  await page.click(`${card2} .pic-reject`);
+  await until("YOU REJECTED", async () => /YOU REJECTED/.test(await text(page, card2)));
+  const back = (await agent.call("gp_run", { command: "theme sound list", args: {} })).json?.answered?.find((p) => p.id === two.json.id);
+  if (!readFileSync(first).equals(tone(20)) || back?.words !== "Keep the sharp one.") fail(`REJECT: ${JSON.stringify(back)}`);
+  ok(`a new first file's card plays the sound as it is and the new one; REJECT keeps it and the words reach the agent: "${back.words}"`);
+  if (errors.length) fail(`the page threw: ${errors.join("; ")}`);
+  await page.close();
+}
+
+/** The first screen and the two journeys besides porting (issue #5), on
+ * Moss Hop: the three choices show; MAKE A THEME makes a made-up theme
+ * of Moss Hop from the page and opens it at its step with whose turn it
+ * is; a picture put in it and CHECK MY THEME move it to SEE IT IN THE
+ * GAME, the person's turn; MAKE A NEW GAME copies the Moss Hop template
+ * and opens it at BUILD IT TO PLAY, the tools' turn, and SHOW THE STAGE
+ * draws its stage; gp progress --next --copy and the MCP tool next give
+ * the same steps; the first screen lists both copies, and CARRY ON opens
+ * one at its step; all of it fits at 360 px. */
+async function journeys() {
+  const base = await gpServe(games);
+  const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto(`${base}start/`);
+  const choices = await until("the three choices", async () => {
+    const t = await page.evaluate(() => [...document.querySelectorAll("#start-choices button b")].map((b) => b.textContent));
+    return t.length === 3 ? t : null;
+  });
+  if (choices.join() !== "PORT A GAME I OWN,MAKE A THEME FOR A GAME,MAKE A NEW GAME") fail(`the three choices: ${choices}`);
+  const intro = await text(page, "#intro");
+  if (!/called the model/.test(intro) || !/A template is a game's rules without its pictures/.test(intro)) fail(`the first screen doesn't say what the model and a template are: ${intro}`);
+  ok(`the first screen asks what the person wants to do: ${choices.join(", ")}, and says what the model and a template are`);
+  await shot(page, "start-1400");
+  const fitsHere = () => page.evaluate(() => {
+    const W = innerWidth;
+    const off = [...document.querySelectorAll("body *")].filter((e) => e.getClientRects().length && !e.closest("details:not([open]) > :not(summary)"))
+      .filter((e) => { const r = e.getBoundingClientRect(); return r.width && (r.left < -1 || r.right > W + 1); })
+      .map((e) => `${e.tagName.toLowerCase()}${e.id ? "#" + e.id : ""}.${String(e.className).split(" ")[0]}`);
+    return { off: off.slice(0, 8), page: document.documentElement.scrollWidth <= W + 1 };
+  });
+  const narrowToo = async (what, name) => {
+    await page.setViewportSize({ width: 360, height: 780 });
+    await page.waitForTimeout(400);
+    const f = await fitsHere();
+    if (f.off.length || !f.page) fail(`${what} at 360 px runs past the edge: ${JSON.stringify(f)}`);
+    await shot(page, `${name}-360`);
+    await page.setViewportSize({ width: 1400, height: 900 });
+    await page.waitForTimeout(200);
+  };
+  await narrowToo("the first screen", "start");
+
+  // A theme, made on the page.
+  await page.click('#start-choices button[data-journey="theme"]');
+  await page.selectOption("#theme-game", `game:${GAME}`);
+  await page.fill("#theme-title", "Moss Night");
+  await page.fill("#theme-style", "night time, neon");
+  await narrowToo("MAKE A THEME's form", "start-theme-form");
+  await page.click("#theme-go");
+  await until("the theme's journey", async () => page.url().includes("copy=theme/moss-night") && page.isVisible('#journey li[data-step="T2"]'), 30000);
+  const steps = (prefix) => page.evaluate((p) => [...document.querySelectorAll(`#journey ol.jr-steps > li[data-step^="${p}"]`)].map((li) => [li.dataset.step, li.dataset.state, li.dataset.who]), prefix);
+  const t2 = await steps("T");
+  if (JSON.stringify(t2) !== JSON.stringify([["T1", "done", "person"], ["T2", "now", "agent"], ["T3", "later", "tools"], ["T4", "later", "person"], ["T5", "later", "person"], ["T6", "later", "person"]])) fail(`the theme's steps: ${JSON.stringify(t2)}`);
+  if (!/NEXT, YOUR AGENT/.test(await text(page, "#jr-next"))) fail(`the theme's next step: ${await text(page, "#jr-next")}`);
+  ok("MAKE A THEME makes Moss Night for Moss Hop and opens it at step 2 of 6, Make the pictures, your agent's turn");
+  const theme = join(home, "work", "themes", "moss-night", "theme");
+  mkdirSync(join(theme, "art"), { recursive: true });
+  writeFileSync(join(theme, "art", "hero.png"), discPng(64, 64, [60, 40, 200]));
+  writeFileSync(join(theme, "art.txt"), `${readFileSync(join(theme, "art.txt"), "utf8")}pic frame-0.png art/hero.png 16 16 0 0\n`);
+  await until("the look check is next", async () => page.isVisible('#journey li[data-step="T3"][data-state="now"]'), 15000);
+  await page.click('#journey [data-act="look-check"] button');
+  await until("SEE IT IN THE GAME is next", async () => page.isVisible('#journey li[data-step="T4"][data-state="now"]'), 60000);
+  const t4 = await steps("T");
+  if (t4[3][2] !== "person" || !/NEXT, YOU/.test(await text(page, "#jr-next")) || !/SEE IT IN THE GAME/.test(await text(page, "#jr-next"))) fail(`after the look check: ${JSON.stringify(t4)} ${await text(page, "#jr-next")}`);
+  await page.click('#journey li[data-step="T3"] .jr-step-head');
+  if (!/no problems/.test(await text(page, '#journey li[data-step="T3"]'))) fail(`the look check's words: ${await text(page, '#journey li[data-step="T3"]')}`);
+  ok("with a picture in it, CHECK MY THEME finds no problems and the theme moves to step 4, See it in the game, the person's turn");
+  await shot(page, "journey-theme-1400");
+  await narrowToo("the theme's journey", "journey-theme");
+  const cliTheme = gpRun(["progress", "--next", "--copy", "moss-night"]);
+  if (!/step 4 of 6: See it in the game/.test(cliTheme) || !/Next \(you\)/.test(cliTheme)) fail(`gp progress --next --copy moss-night: ${cliTheme}`);
+  ok("gp progress --next --copy moss-night says the same step and turn");
+
+  // A new game from the Moss Hop template.
+  await page.click("#journey .jr-head button");
+  await until("the first screen again", async () => !(await page.isHidden("#first")));
+  await page.click('#start-choices button[data-journey="new"]');
+  await page.check('#new-start input[name="template"][value="mosshop"]');
+  await page.fill("#new-name", "check_hop");
+  await narrowToo("MAKE A NEW GAME's form", "start-new-form");
+  await page.click("#new-go");
+  await until("the new game's journey", async () => page.url().includes("copy=new/check_hop") && page.isVisible('#journey li[data-step="N3"]'), 120000);
+  const n3 = await steps("N");
+  if (JSON.stringify(n3.map((s) => s[1])) !== JSON.stringify(["done", "done", "now", "later", "later", "later"]) || n3[2][2] !== "tools") fail(`the new game's steps: ${JSON.stringify(n3)}`);
+  if (!/NEXT, THE TOOLS/.test(await text(page, "#jr-next")) || !(await page.isVisible('#jr-next button:text("BUILD IT TO PLAY")'))) fail(`the new game's next step: ${await text(page, "#jr-next")}`);
+  ok("MAKE A NEW GAME copies the Moss Hop template as check_hop and opens it at step 3 of 6, See it play, the tools' turn, with BUILD IT TO PLAY");
+  await page.click('#journey li[data-step="N4"] .jr-step-head');
+  await page.click('#journey [data-act="render"] button');
+  const stage = await until("the stage drawn", () => page.evaluate(() => { const i = document.querySelector("#journey img.jr-stage"); return i?.complete && i.naturalWidth ? i.naturalWidth : 0; }), 60000);
+  ok(`SHOW THE STAGE draws check_hop's stage by kind (${stage} px wide)`);
+  // CHECK THE STAGE on Moss Hop's tile stage: gp level verify plays it to
+  // the burrow with the slugs in (the reach search and the playthrough).
+  await page.click('#journey [data-act="verify"] button');
+  const checked = await until("CHECK THE STAGE's answer", async () => {
+    const t = await text(page, '#journey li[data-step="N4"] .jr-body');
+    return /The last check/.test(t) ? t : null;
+  }, 180000);
+  if (!/the stage follows the rules and can be finished/.test(checked) || /couldn't check this stage/.test(checked)) fail(`CHECK THE STAGE on check_hop: ${checked}`);
+  ok("CHECK THE STAGE checks check_hop's tile stage: it follows the rules and can be finished");
+  await shot(page, "journey-new-1400");
+  await narrowToo("the new game's journey", "journey-new");
+  const agent = mcpClient();
+  const told = await agent.call("next", { copy: "check_hop" });
+  if (told.stage?.id !== "N3" || told.next?.who !== "tools" || told.steps?.length !== 6 || !told.copies?.some((c) => c.name === "moss-night")) fail(`the MCP next tool for the copy: ${JSON.stringify(told).slice(0, 400)}`);
+  ok("the MCP tool next on the copy gives step N3, the tools' turn, the six steps and the person's copies");
+
+  // The copies, and CARRY ON.
+  await page.click("#journey .jr-head button");
+  const listed = await until("the copies listed", () => page.evaluate(() => [...document.querySelectorAll("#copies li")].map((li) => li.dataset.copy)));
+  if (!listed.includes("theme/moss-night") || !listed.includes("new/check_hop")) fail(`the copies: ${listed}`);
+  const line = await text(page, '#copies li[data-copy="theme/moss-night"]');
+  if (!/for moss-hop/.test(line) || !/changed/.test(line) || !/Step 4 of 6/.test(line)) fail(`the theme's line: ${line}`);
+  if (await page.evaluate(() => [...document.querySelectorAll("#carry button, #carry a")].some((b) => /DELETE|REMOVE/i.test(b.textContent)))) fail("the copies list has a way to delete");
+  await shot(page, "copies-1400");
+  await narrowToo("the copies list", "copies");
+  await page.click('#copies li[data-copy="theme/moss-night"] button');
+  await until("CARRY ON opens the theme at its step", async () => page.url().includes("copy=theme/moss-night") && page.isVisible('#journey li[data-step="T4"][data-state="now"] .jr-body'), 15000);
+  ok(`the first screen lists the copies (${listed.join(", ")}) with where each came from, when it changed and its step, nothing to delete, and CARRY ON opens one at its step`);
+  // The root opens the copy opened last, at its step.
+  await page.goto(base);
+  await until("the root opens the copy opened last", async () => page.url().includes("copy=theme/moss-night"), 15000);
+  ok("gp serve's root opens the copy opened last, at its step");
+  if (errors.length) fail(`the first screen threw: ${errors.join("; ")}`);
+  await page.close();
+}
+
+/** SEE IT IN THE GAME on both journeys (issue #6), after journeys():
+ * Moss Night (a theme of Moss Hop, a game gp game new made, played from
+ * its ROM) opens in the page that plays any game by name with the theme
+ * chosen, and the theme moves on to step 5; then check_hop's look step:
+ * BUILD IT TO PLAY, DONE WITH THE STAGE, MAKE A THEME FOR IT, a picture,
+ * CHECK MY THEME and SEE IT IN THE GAME (a copy of the Moss Hop template,
+ * played from its own files with no ROM), and DONE WITH THE LOOK finishes
+ * the step. Each server SEE IT IN THE GAME starts is stopped here. */
+async function seeItInTheGame() {
+  const base = await gpServe(games);
+  const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  const now = (step) => page.isVisible(`#journey li[data-step="${step}"][data-state="now"]`);
+  // Presses SEE IT IN THE GAME on the open theme: its link, once served.
+  const seeIt = async (what) => {
+    await page.click('#journey [data-act="look-play"] button');
+    const api = `${base}api/journeys/${new URL(page.url()).searchParams.get("copy")}`;
+    const job = await until(`${what}: SEE IT IN THE GAME's run`, async () => {
+      const j = await page.evaluate(async (u) => (await (await fetch(u)).json()).jobs?.["look-play"] ?? null, api);
+      return j && j.state !== "running" ? j : null;
+    }, 900000);
+    if (job.state !== "done") fail(`${what}: SEE IT IN THE GAME ${job.state}: ${job.error ?? JSON.stringify(job).slice(0, 300)}`);
+    const href = await until(`${what}: OPEN THE GAME`, () => page.evaluate(() => document.querySelector("#journey a.jr-link")?.href ?? null), 30000);
+    return { href, pid: job.json?.pid ?? null };
+  };
+  const stop = (pid) => { try { if (pid) process.kill(pid); } catch { /* gone already */ } };
+
+  // Moss Night: the page that plays any game by name, the ROM loaded.
+  await page.goto(`${base}start/?copy=theme/moss-night`);
+  await until("Moss Night at SEE IT IN THE GAME", () => now("T4"), 30000);
+  const t = await seeIt("Moss Night");
+  const game = await browser.newPage();
+  game.on("pageerror", (e) => errors.push(`the game: ${e}`));
+  try {
+    await game.goto(t.href);
+    if (!/\/p\?g=check\/moss-hop&c=local\/moss-night$/.test(t.href)) fail(`SEE IT IN THE GAME's link: ${t.href}`);
+    await game.setInputFiles("#rom", romFile);
+    await until("the page takes the ROM", () => game.evaluate(() => ["ok", "warn", "error"].includes(document.getElementById("message")?.dataset.kind)), 120000);
+    if ((await game.evaluate(() => document.getElementById("message").dataset.kind)) === "error") fail(`the page refused Moss Hop's ROM: ${await text(game, "#message")}`);
+    const frameOf = () => game.frame({ url: /\/game\/(index\.html)?(\?|$)/ });
+    const st = await until("Moss Hop plays in Moss Night", async () => {
+      const g = frameOf();
+      const s = g ? await g.evaluate(() => ({ theme: window.__gp?.theme ?? null, frame: window.__gp?.state?.()?.frame ?? 0 })).catch(() => null) : null;
+      return s && s.frame > 30 ? s : null;
+    }, 120000);
+    if (st.theme !== "moss-night") fail(`the game opened in look ${st.theme}, not moss-night`);
+    ok(`SEE IT IN THE GAME serves Moss Hop (a game gp game new made) in the page that plays any game by name: ${t.href.replace(/^http:\/\/[^/]+/, "")}, the ROM loaded, playing in Moss Night (frame ${st.frame})`);
+  } finally {
+    await game.close();
+    stop(t.pid);
+  }
+  await page.reload();
+  await until("Moss Night moves on to step 5", () => now("T5"), 30000);
+  ok("seen in the game, Moss Night moves on to step 5, Change pictures");
+
+  // check_hop's look step: a theme of a copy of the Moss Hop template.
+  await page.goto(`${base}start/?copy=new/check_hop`);
+  await until("check_hop at BUILD IT TO PLAY", () => now("N3"), 30000);
+  await page.click('#journey [data-act="build"] button');
+  await until("check_hop built to play", () => now("N4"), 900000);
+  await page.click('#journey [data-done="stage"]');
+  await until("check_hop's look step", () => now("N5"), 30000);
+  await page.fill("#jr-look-title", "Hop Night");
+  await page.click('#journey button:text("MAKE A THEME FOR IT")');
+  await until("Hop Night's journey", async () => page.url().includes("copy=theme/hop-night") && page.isVisible('#journey li[data-step="T1"]'), 30000);
+  const said = await page.evaluate(async (u) => (await fetch(u, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ style: "night, moss" }) })).status, `${base}api/journeys/theme/hop-night/set`);
+  if (said !== 200) fail(`Hop Night's style: HTTP ${said}`);
+  const look = join(home, "work", "themes", "hop-night", "theme");
+  writeFileSync(join(look, "art", "hero.png"), discPng(96, 96, [60, 40, 200]));
+  writeFileSync(join(look, "art.txt"), `${readFileSync(join(look, "art.txt"), "utf8")}pic frame-0-0.png art/hero.png 16 16 0 0\npic frame-1-0.png art/hero.png 16 16 0 0\n`);
+  await page.reload();
+  await until("Hop Night's look check is next", () => now("T3"), 30000);
+  await page.click('#journey [data-act="look-check"] button');
+  await until("Hop Night at SEE IT IN THE GAME", () => now("T4"), 120000);
+  const h = await seeIt("Hop Night");
+  const hop = await browser.newPage();
+  hop.on("pageerror", (e) => errors.push(`check_hop: ${e}`));
+  try {
+    if (!/\/index\.html\?files=here&theme=hop-night$/.test(h.href)) fail(`check_hop's SEE IT IN THE GAME link: ${h.href}`);
+    await hop.goto(h.href);
+    const st = await until("check_hop plays in Hop Night", async () => {
+      const s = await hop.evaluate(() => ({ theme: window.__gp?.theme ?? null, frame: window.__gp?.state?.()?.frame ?? 0, error: window.__gp?.error ? String(window.__gp.error) : null })).catch(() => null);
+      if (s?.error) fail(`check_hop's game: ${s.error}`);
+      return s && s.frame > 30 ? s : null;
+    }, 120000);
+    if (st.theme !== "hop-night") fail(`check_hop opened in look ${st.theme}, not hop-night`);
+    ok(`SEE IT IN THE GAME serves check_hop (a copy of the Moss Hop template) from its own files, no ROM asked for, playing in Hop Night (frame ${st.frame})`);
+  } finally {
+    await hop.close();
+    stop(h.pid);
+  }
+  await page.goto(`${base}start/?copy=new/check_hop`);
+  await until("check_hop back at its look step", () => now("N5"), 30000);
+  await page.click('#journey [data-done="look"]');
+  await until("check_hop's look step finished", () => now("N6"), 30000);
+  ok("DONE WITH THE LOOK finishes check_hop's look step: step 6, Play and share");
+
+  // Play and share: MAKE A SHARE LINK publishes check_hop into the
+  // person's own registry here (gp game share, which compares it with
+  // every ROM in $GP_ROM_DIR first) and shows the link; the link plays it
+  // with no ROM asked for, from gp serve's /share/, under the public
+  // page's own headers.
+  const said6 = await text(page, "#journey");
+  if (!/MAKE A SHARE LINK/.test(said6) || /isn't built yet/.test(said6)) fail(`step 6 doesn't offer a share link: ${said6.slice(0, 300)}`);
+  await page.click('#journey [data-act="share"] button');
+  const shareApi = `${base}api/journeys/new/check_hop`;
+  const sj = await until("MAKE A SHARE LINK's run", async () => {
+    const j = await page.evaluate(async (u) => (await (await fetch(u)).json()).jobs?.share ?? null, shareApi);
+    return j && j.state !== "running" ? j : null;
+  }, 1500000);
+  if (sj.state !== "done") fail(`MAKE A SHARE LINK ${sj.state}: ${sj.error ?? JSON.stringify(sj).slice(0, 400)}`);
+  await page.reload();
+  const shareHref = await until("the share link on the page", () => page.evaluate(() => document.querySelector("#jr-share-link a")?.href ?? null), 30000);
+  // Hop Night, the theme made in the look step, goes in the package and
+  // the link opens in it.
+  if (shareHref !== `${base}share/p?g=local/check-hop&look=hop-night`) fail(`the share link: ${shareHref}`);
+  const others = await text(page, "#journey");
+  if (!/for other people to open it, the page and your registry .* have to be put online together/.test(others)) fail(`step 6 doesn't say what it takes for other people: ${others.slice(0, 400)}`);
+  const shared = await browser.newPage();
+  shared.on("pageerror", (e) => errors.push(`the shared link: ${e}`));
+  const violations = [];
+  shared.on("console", (m) => /Content Security Policy|Refused to/i.test(m.text()) && violations.push(m.text()));
+  try {
+    const res = await shared.goto(shareHref);
+    const csp = res.headers()["content-security-policy"] ?? "";
+    if (!/default-src 'none'/.test(csp) || res.headers()["cross-origin-embedder-policy"] !== "require-corp") fail(`the shared page isn't served under the public page's headers: ${JSON.stringify(res.headers())}`);
+    const frameOf = () => shared.frame({ url: /\/game\/(index\.html)?(\?|$)/ });
+    const st = await until("check_hop plays from the share link", async () => {
+      const g = frameOf();
+      const s = g ? await g.evaluate(() => ({ frames: window.__gp?.hashes?.length ?? 0, theme: window.__gp?.theme ?? null, looks: window.__gp?.looks?.() ?? null, error: window.__gp?.error ? String(window.__gp.error) : null })).catch(() => null) : null;
+      if (s?.error) fail(`check_hop from the share link: ${s.error}`);
+      return s && s.frames > 30 ? s : null;
+    }, 120000);
+    if (st.theme !== "hop-night") fail(`the share link opened check_hop in look ${st.theme}, not Hop Night (hop-night)`);
+    if (!st.looks?.includes("hop-night")) fail(`the shared game's Settings don't offer Hop Night: ${JSON.stringify(st.looks)}`);
+    const fcsp = (await (await shared.request.get(new URL("game/index.html", shareHref).href)).headers())["content-security-policy"] ?? "";
+    if (!/default-src 'none'/.test(fcsp)) fail("the shared game's frame isn't served under the public page's policy");
+    if (await shared.isVisible("#load-label")) fail("the share link asks for a ROM");
+    const mode = await text(shared, "#mode");
+    if (!/it plays from its own files, with no ROM/.test(mode)) fail(`the share link's page says: ${mode}`);
+    if (violations.length) fail(`the policy refused something on the shared page: ${violations[0]}`);
+    ok(`MAKE A SHARE LINK puts check_hop in the person's own registry and shows ${shareHref.replace(base, "/")}, which plays it with no ROM asked for in Hop Night, the theme made for it, offered in Settings with ${st.looks.filter((l) => l !== "hop-night").join(", ")} (${st.frames} frames; "${mode}"), page and frame under the public page's Content-Security-Policy, and step 6 says what it takes for other people to open it`);
+  } finally {
+    await shared.close();
+  }
+  if (errors.length) fail(`SEE IT IN THE GAME threw: ${errors.join("; ")}`);
+  await page.close();
+}
+
 /** Every tab at 360 px wide (issue #17), on a gp serve page with
  * main()'s clip: nothing runs past the window's right edge, the tabs and
  * every visible button, picker and field are inside the window, the game
@@ -1356,13 +2184,10 @@ async function narrow() {
 
 let code = 0;
 try {
-  await main();
-  await oneServer();
-  await agentOnThePage();
-  await editorFeatures();
-  await narrow();
-  await arcade();
-  await romSets();
+  if (only === "arcade") {
+    browser = await chromium.launch({ executablePath: browserPath, args: ["--no-sandbox"] });
+    await arcade();
+  } else await whole();
   console.log(`mechanic-page: passed in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
 } catch (e) {
   console.error(`FAIL ${e.message}`);
@@ -1373,3 +2198,20 @@ try {
   rmSync(work, { recursive: true, force: true });
 }
 process.exit(code);
+
+/** Every run, in order. */
+async function whole() {
+  await main();
+  await oneServer();
+  await agentOnThePage();
+  await editorFeatures();
+  await whatIsThis();
+  await pictureProposals();
+  await soundProposals();
+  await roleSoundProposals();
+  await journeys();
+  await seeItInTheGame();
+  await narrow();
+  await arcade();
+  await romSets();
+}

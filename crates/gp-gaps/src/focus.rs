@@ -255,7 +255,6 @@ pub fn window(run: &Run, found: &Found<'_>, from: u64, to: u64) -> Focus {
     // Routines and RAM, by rarity outside the window.
     let mut routine_ids: BTreeMap<u32, ()> = BTreeMap::new();
     let mut ram_groups: BTreeMap<String, Vec<u16>> = BTreeMap::new();
-    let oam_lo = u16::from(k.oam_page) << 8;
     for f in frames {
         if let Some(c) = &f.code {
             for (r, _) in &c.entered {
@@ -266,10 +265,7 @@ pub fn window(run: &Run, found: &Found<'_>, from: u64, to: u64) -> Focus {
         }
         for &addr in &f.ram_changed {
             let addr = (addr & 0x7FF) | run.ram_base;
-            if (0x100..0x200).contains(&addr)
-                || (oam_lo..oam_lo + 0x100).contains(&addr)
-                || k.explains_ram(addr)
-            {
+            if k.left_out(addr & 0x7FF) || k.explains_ram(addr) {
                 continue;
             }
             let (name, _) = k.ram_name(addr);

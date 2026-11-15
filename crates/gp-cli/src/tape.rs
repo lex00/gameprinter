@@ -479,14 +479,7 @@ impl Original {
             };
         };
         let colors = crate::screen::nes_palette();
-        Frame {
-            w: WIDTH as u32,
-            h: HEIGHT as u32,
-            rgb: px.iter().map(|c| colors[usize::from(c & 0x3f)]).collect(),
-            sprite: px.iter().map(|c| c & 0x80 != 0).collect(),
-            visible: [0, 0, WIDTH as u32, HEIGHT as u32],
-            things: Vec::new(),
-        }
+        Frame::indexed(WIDTH as u32, HEIGHT as u32, &px, colors, 0x80)
     }
 
     /// Turns the emulator's drawing on; a replay's pictures are drawn.

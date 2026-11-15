@@ -1,6 +1,6 @@
 # Gaps
 
-Brought from game-printer's docs/gaps.md (port wave 4). In gameprinter a template is a game's package folder in the games checkout (`games/donkey-kong`) or a folder of `templates/` (`templates/mosshop`); `--dir` names where to look, by default `templates/` then `$GP_GAMES_DIR`. No metrics are recorded. The detectors read the NES's sprite table, nametables, APU and 6502 code, and an arcade recording's facts come from gp-arcade (wave 6b, the last section).
+Brought from game-printer's docs/gaps.md (port wave 4). In gameprinter a template is a game's package folder in the games checkout (`games/donkey-kong`) or a folder of `templates/` (`templates/mosshop`); `--dir` names where to look, by default `templates/` then `$GP_GAMES_DIR`. Each run records its counts and scores as `gaps.<template>.*` metrics ([Metrics](#metrics)). The detectors read the NES's sprite table, nametables, APU and 6502 code, and an arcade recording's facts come from gp-arcade (wave 6b, the last section).
 
 `gp gaps` finds what a recording of the original game shows that the model doesn't account for, and catalogs it. The question behind it comes from playing the regenerated game and finding things missing: which parts of the original change, react or make a sound with nothing in the model behind them. The command detects and catalogs only. Nothing it does changes a model; a later step turns its findings into model kinds and facts. The work belongs to Milestone 2, part of step 7 ([the roadmap](../ROADMAP.md)).
 
@@ -16,12 +16,12 @@ gp gaps all mosshop --recording ab5050be --listing target/mosshop/mosshop.dbg
 | Option | Meaning |
 |---|---|
 | `--recording` | The recording of the original, by ID prefix. It needs a frame trace; its event stream is read when it has one |
-| `--frames` | Frames to read, as for `gp track` (default all) |
+| `--frames` | Frames to read, as for `gp track` (default all). A run over part of the recording records no metrics and writes its reports under `partial/ID-FIRST-LAST/` in the reports folder, so the scorecard, which reads the latest `gaps.<template>.*` metrics and the reports at the folder's top, never takes a part's counts for the game's |
 | `--focus` | A window to explain (repeat for more): what the detectors found in those frames, with the routines and RAM rare elsewhere, written as `focus.json` |
-| `--labels` | The game's labels file ([labels](formats/labels.md)), instead of `labels.toml` in the template's folder, this repo's `games/<source>/labels.toml` (Moss Hop's), or the one beside the games checkout's roms.toml that lists the source |
+| `--labels` | The game's labels file ([labels](formats/labels.md)), instead of `truth/labels.toml` in the template's folder (the names its truth set uses), `labels.toml` there, this repo's `games/<source>/labels.toml` (Moss Hop's), or the one beside the games checkout's roms.toml that lists the source |
 | `--listing` | An ld65 debug file. Its constants name sound effects; its code labels name routines for a board with 32KB of PRG or less when the labels file has none |
 | `--dir` | The folder holding the templates (default `templates/`, then the games checkout) |
-| `--truth` | A labelled reference set to score against, instead of the template's in `crates/gp-gaps/truth/` |
+| `--truth` | A labelled reference set to score against, instead of the game's own `truth/gaps.toml` or the template's in `crates/gp-gaps/truth/` |
 | `--oam-lag` | Frames the sprite table lags RAM, as for `gp track` (default 1) |
 | `--assets` | The model's lifted assets, for `drawn` (default `$GP_HOME/work/assets/<source>`) |
 | `--no-code` | Skip the replay with the code observer |
@@ -29,7 +29,7 @@ gp gaps all mosshop --recording ab5050be --listing target/mosshop/mosshop.dbg
 | `--top` | Items printed per place (default 10); the reports keep all |
 | `--out` | Where to write the reports, instead of `$GP_HOME/reports/gaps/<template>/` |
 
-Each run writes `changes.json`, `interactive.json` (the catalog, [interactive elements](formats/interactive.md)), `interactions.json` and `drawn.json` to `$GP_HOME/reports/gaps/<template>/`, and a copy under `<template>/<recording>/` (the ID's first 12 hex digits), so the latest run is what the scorecard shows and each recording's results stay. `gp scorecard` reads the top items from these reports; it reads the counts from `gaps.<template>.*` metrics, which `gp gaps` here doesn't record.
+Each run writes `changes.json`, `interactive.json` (the catalog, [interactive elements](formats/interactive.md)), `interactions.json` and `drawn.json` to `$GP_HOME/reports/gaps/<template>/`, and a copy under `<template>/<recording>/` (the ID's first 12 hex digits), so the latest run is what the scorecard shows and each recording's results stay. `gp scorecard` reads the top items from these reports, and the counts and scores from the run's `gaps.<template>.*` metrics ([Metrics](#metrics)).
 
 ## What it reads
 
@@ -148,7 +148,7 @@ The rules are thresholds on what any NES game does: a frame boundary, a sprite t
 
 ## Scoring
 
-Each detector is held to a labelled reference set per game: `crates/gp-gaps/truth/<template>.toml`, built from the pinned disassembly and what is known about the game. A set holds names and the IDs of the disassembly's constants only, never game data:
+Each detector is held to a labelled reference set per game: `truth/gaps.toml` in the game's folder, or for a game with none, `crates/gp-gaps/truth/<template>.toml` kept with the crate. A set names RAM and routines by the game's labels; when those aren't the package's `labels.toml`, the game keeps them beside it as `truth/labels.toml`, which `gp gaps` reads when `--labels` isn't given (Donkey Kong's, so `gp gaps all donkey-kong --recording ID` scores with no flags; it says which labels file it read). `gp scorecard` reads no labels file: its detection quality is the scores `gp gaps` records. A set is built from the pinned disassembly and what is known about the game. A set holds names and the IDs of the disassembly's constants only, never game data:
 
 | Section | What it names |
 |---|---|
@@ -156,7 +156,7 @@ Each detector is held to a labelled reference set per game: `crates/gp-gaps/trut
 | `[[element]]` | Each interactive element and game event: the routines that handle it and the sounds it asks for |
 | `[ram]` | The RAM variables that carry behaviour (`matter`), and the per-frame bookkeeping and sound-engine internals that don't |
 
-`gp gaps all` scores a run against the template's set (or `--truth FILE`) when it has the code signals, writes `score.json` next to the other reports. (game-printer also kept each precision and recall as a metric for its scorecard.)
+A run scores the detectors it ran against the template's set (or `--truth FILE`) when it has the code signals: `gp gaps changes` scores sound, effects and ram, `gp gaps interactive` scores interactive and handlers, and `gp gaps all` scores all five and writes `score.json` next to the other reports. A template with no set prints "no truth set" and records no score; a zero would read as a detector that found nothing right. Moss Hop has the only set in gameprinter; a game in the games checkout keeps its own in its folder.
 
 | Detector | Found items | Precision | Recall |
 |---|---|---|---|
@@ -169,6 +169,21 @@ Each detector is held to a labelled reference set per game: `crates/gp-gaps/trut
 A found routine belongs to a set routine when it is the routine or lies in its code. The code is followed by control flow from the routine's entry (`gp_gaps::code::body`): branches and the instruction after them, a `JMP` within the routine's 8KB window that isn't another routine's entry, and the instruction after a `JSR` unless the callee pulls its return address (a jump table follows). Labels at every branch target, as the Mega Man 2 and Super Mario Bros. 2 disassemblies have, don't split a routine.
 
 What the recording exercised is read from the code signals, not from the detector being scored, so a detector that finds nothing scores a recall of 0, not 1. Names in a set that no label has are listed in the report (`unknown`).
+
+## Metrics
+
+Each run records, in the run's row of `$GP_HOME/metrics.sqlite` (gp-metrics, as every `gp` command records), the measures of the parts it ran, under the names game-printer used and `gp scorecard` reads:
+
+| Metric | Unit | Recorded by | What |
+|---|---|---|---|
+| `gaps.<template>.<place>.count` | count | `changes`, `all` | Items in each place: `ram` (groups), `oam` (sprite kinds), `background` (cell kinds), `sound` (effects, or APU channels when no sound interface was found) and `code` (routines) |
+| `gaps.<template>.interactive.count`, `.events`, `.scenery` | count | `interactive`, `all` | The catalog's kinds, its interactions and its scenery kinds |
+| `gaps.<template>.drawn.count`, `.drawn.kinds` | count | `drawn`, `all` | Kinds with a systematic difference, and the kinds checked |
+| `gaps.<template>.<detector>.precision`, `.recall` | ratio | each detector scored ([Scoring](#scoring)) | The detector's precision and recall against the truth set |
+| `gaps.<template>.effects.named`, `.effects.classed` | ratio | when effects is scored | The share of found effects the set names whose name, and class, are the set's |
+| `gaps.<template>.ram.bookkeeping` | count | when ram is scored | Bookkeeping items in the RAM place's top 25 |
+
+`drawn` records nothing when it can't build the model's boxes. A template with no truth set records no precision or recall.
 
 ## Rounds
 
@@ -215,6 +230,6 @@ The model's player leaves the original's path within seconds of the same input, 
 
 ## On an arcade recording
 
-`gp gaps changes|interactive|all` read an arcade recording too (port wave 6b, `crates/gp-cli/src/gaps_arcade.rs`): the frame facts come from gp-arcade. RAM is the main CPU's address space (a mapping's addresses read as they are; changes are the work RAM, E000-E7FF, named from there: gp-gaps' `Run::ram_base`); objects are the sprite list clustered as gp-track clusters it; background cells are video RAM's 32x30 tiles, with the routines that wrote them; sound is the AY-8910 writes; code is a replay on the main Z80 with the access log (routines entered, RAM writes with their instruction and routine, and the routines that write the sound board's latch as the engine). `gp gaps drawn` reads an arcade game's boxes from its arcade lift (port wave T, `gaps_arcade::model_boxes`), since the NES box reader reads CHR tiles and an NES map: each kind's sprite in the state its lives start in, a captured frame of the map's `sprite-set` (from `gp sprites capture`) laid out from the position with each piece a whole MCR sprite, 16 by 16 in the game's units, or tiles of an `mcr-sprites` slot `width` to a row, stood on the body's bottom edge. The mapped positions are placed where the board draws a sprite with those bytes, `(x - 3, 241 - y)`, the sprite list's units. A kind with no sprite isn't checked, so a model with no captured sprites checks no kind.
+`gp gaps changes|interactive|all` read an arcade recording too (port wave 6b, `crates/gp-cli/src/gaps_arcade.rs`): the frame facts come from gp-arcade. RAM is the main CPU's address space (a mapping's addresses read as they are; changes are the work RAM, E000-E7FF, named from there: gp-gaps' `Run::ram_base`); objects are the sprite list clustered as gp-track clusters it; background cells are video RAM's 32x30 tiles, with the routines that wrote them; sound is the AY-8910 writes; code is a replay on the main Z80 with the access log (routines entered, RAM writes with their instruction and routine, and the routines that write the sound board's latch as the engine). Sound requests on a board come through the sound board's latch (ports 1C to 1F), not a RAM queue or a play-sound routine: the latch the main CPU writes the most values to, three or more, is the interface, and each write to it is a request with the value as the effect's ID; a frame that writes one value to every latch (the board's test, or a silence) is left out, and the other latches are named in the interface's evidence. On Tapper's tapper-l1-set that is latch 1 (port 1D): 50 requests of 18 effects, all from the routine at $0379. `gp gaps drawn` reads an arcade game's boxes from its arcade lift (port wave T, `gaps_arcade::model_boxes`), since the NES box reader reads CHR tiles and an NES map: each kind's sprite in the state its lives start in, a captured frame of the map's `sprite-set` (from `gp sprites capture`) laid out from the position with each piece a whole MCR sprite, 16 by 16 in the game's units, or tiles of an `mcr-sprites` slot `width` to a row, stood on the body's bottom edge. The mapped positions are placed where the board draws a sprite with those bytes, `(x - 3, 241 - y)`, the sprite list's units. A kind with no sprite isn't checked, so a model with no captured sprites checks no kind.
 
 On Tapper (a five-level play, frames 1000 to 2500, with games branch tapper-2's model, mapping and labels): 36 RAM groups, 39 sprite kinds, 9 background changes and 90 routines the model doesn't cite, in 5.5 s; the labels name what they cover (`level_ram`, `customer_records`) and the rest by address (`$E7Ex`, written by the frame interrupt's handler $00D8 and others); the background changes are one tile column redrawn by $05D5.

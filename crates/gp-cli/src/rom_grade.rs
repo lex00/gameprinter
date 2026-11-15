@@ -14,8 +14,9 @@
 //! the work RAM bytes (E000-E7FF) whose value changed, and the `cp n` and
 //! `ld r,n` instructions run, named as the arcade dataset names them
 //! (`5FAC`). The dataset is found by its romset identity. A key's ROM
-//! check reads 6502 code, so a key for a romset is refused for now; no
-//! arcade game has a key yet.
+//! check reads the main Z80's program there ([`check_key_z80`]): a
+//! constant's `pc` is a Z80 address, its immediate operand or a table's
+//! byte. No arcade game has a key yet.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -1439,6 +1440,21 @@ const IMMEDIATE_OPS: [u8; 11] = [
 /// table whose byte at `entry` (two bytes, low first, for a `raw` over
 /// 255) must be `raw`. Returns how many were checked and each that wasn't
 /// (its path and pc).
+/// Whether a table at a constant's `pc` (its bytes from there by `byte`)
+/// holds `raw` at `entry`: one byte, or two, low first, for a `raw` over
+/// $FF. Both platforms' checks read a table this way.
+fn table_holds(byte: &dyn Fn(usize) -> Option<u8>, entry: Option<i64>, raw: i64) -> bool {
+    let e = usize::try_from(entry.unwrap_or(0)).unwrap_or(usize::MAX / 2);
+    if raw > 0xFF {
+        match (byte(e), byte(e + 1)) {
+            (Some(lo), Some(hi)) => i64::from(lo) | (i64::from(hi) << 8) == raw,
+            _ => false,
+        }
+    } else {
+        byte(e).map(i64::from) == Some(raw)
+    }
+}
+
 pub(crate) fn check_key(key: &Key, rom: &[u8]) -> Result<(usize, Vec<String>)> {
     let (prg, mapper) = gp_nes::harvest::ines_prg(rom).context("not an iNES ROM")?;
     let board = gp_nes::codemap::Board::of(prg, mapper);
@@ -1455,17 +1471,7 @@ pub(crate) fn check_key(key: &Key, rom: &[u8]) -> Result<(usize, Vec<String>)> {
                 (Some(op), None) if IMMEDIATE_OPS.contains(&op) => {
                     byte(1).map(i64::from) == Some(raw & 0xFF)
                 }
-                (Some(_), e) => {
-                    let e = usize::try_from(e.unwrap_or(0)).unwrap_or(usize::MAX / 2);
-                    if raw > 0xFF {
-                        match (byte(e), byte(e + 1)) {
-                            (Some(lo), Some(hi)) => i64::from(lo) | (i64::from(hi) << 8) == raw,
-                            _ => false,
-                        }
-                    } else {
-                        byte(e).map(i64::from) == Some(raw)
-                    }
-                }
+                (Some(_), e) => table_holds(&byte, e, raw),
                 (None, _) => false,
             };
             if !ok {
@@ -1474,6 +1480,55 @@ pub(crate) fn check_key(key: &Key, rom: &[u8]) -> Result<(usize, Vec<String>)> {
         }
     }
     Ok((checked, bad))
+}
+
+/// [`check_key`] on an arcade romset: each constant's `pc` read on the
+/// main Z80's program. An instruction with an immediate operand (`ld a,n`,
+/// `cp n`, `ld hl,nn`, `ld (ix+d),n` and the rest: one whose last operand
+/// is a number, not an address in brackets, and which doesn't jump) must
+/// hold `raw` as that operand, its low byte for an eight-bit one; any
+/// other place, or a constant with an `entry`, is a table whose byte at
+/// `entry` (two bytes, low first, for a `raw` over $FF) holds it, as on
+/// the NES. A `pc` with a bank (`03:8123`) names no Z80 address.
+pub(crate) fn check_key_z80(key: &Key, set: &gp_arcade::Romset) -> (usize, Vec<String>) {
+    let prog = &set.maincpu;
+    let byte = |a: usize| prog.get(a).copied();
+    let mut checked = 0;
+    let mut bad = Vec::new();
+    for c in &key.constants {
+        let Some(raw) = c.raw else { continue };
+        for pc in &c.pc {
+            checked += 1;
+            let at = gp_nes::codemap::va_parse(&pc.to_ascii_uppercase())
+                .filter(|v| *v <= 0xFFFF)
+                .map(|v| v as usize);
+            let ok = match at {
+                None => false,
+                Some(a) => {
+                    let mut b = [0u8; 4];
+                    for (k, x) in b.iter_mut().enumerate() {
+                        *x = byte(a + k).unwrap_or(0);
+                    }
+                    let i = gp_arcade::dasm::decode(&b, a as u16);
+                    let imm = (i.flow == gp_arcade::dasm::Flow::Next)
+                        .then(|| i.text.rsplit([' ', ',']).next())
+                        .flatten()
+                        .and_then(|t| t.strip_prefix('$'))
+                        .filter(|h| h.len() == 2 || h.len() == 4)
+                        .and_then(|h| u16::from_str_radix(h, 16).ok().map(|v| (v, h.len())));
+                    match (imm, c.entry) {
+                        (Some((v, 2)), None) => i64::from(v) == raw & 0xFF,
+                        (Some((v, _)), None) => i64::from(v) == raw & 0xFFFF,
+                        (_, e) => table_holds(&|k| byte(a + k), e, raw),
+                    }
+                }
+            };
+            if !ok {
+                bad.push(format!("{} at {pc}", c.path));
+            }
+        }
+    }
+    (checked, bad)
 }
 
 // ---------------------------------------------------------------------------
@@ -1703,17 +1758,17 @@ pub(crate) fn cli(
         bail!("the ROM given isn't the dataset's");
     }
     let arcade = crate::original::Platform::of_file(&bytes) == crate::original::Platform::Arcade;
-    if arcade && key.is_some() {
-        bail!(
-            "a key is checked against 6502 code; a romset's key needs a Z80 reading of its constants, which this gp hasn't got yet: grade {} without the key",
-            dataset.display()
-        );
-    }
-    let checked = key.as_ref().map(|k| check_key(k, &bytes)).transpose()?;
-    let ran = if arcade {
-        run_romset(&gp_arcade::Romset::from_zip(&bytes)?, paths)?
-    } else {
-        run_rom(&bytes, paths)?
+    let romset = arcade
+        .then(|| gp_arcade::Romset::from_zip(&bytes))
+        .transpose()?;
+    let checked = match (&key, &romset) {
+        (Some(k), Some(set)) => Some(check_key_z80(k, set)),
+        (Some(k), None) => Some(check_key(k, &bytes)?),
+        (None, _) => None,
+    };
+    let ran = match &romset {
+        Some(set) => run_romset(set, paths)?,
+        None => run_rom(&bytes, paths)?,
     };
     let cov = coverage(&d, &ran);
     let keyed = key.as_ref().map(|k| grade_keyed(k, &d));
@@ -1765,6 +1820,61 @@ pub(crate) fn cli(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A made-up Z80 program and a key of its constants: `ld a,$05` holds
+    /// 5, `cp $20` 32, `ld hl,$0123` 0x123, `ld (ix+$02),$07` 7, a table
+    /// at 0010 holds 9 at entry 1 and 0x0302 at entry 2, and `ld a,($e000)`
+    /// holds no immediate, so 0xE000 there is read as a table (and
+    /// mismatches); a wrong number and a banked pc mismatch too.
+    #[test]
+    fn a_romsets_key_is_checked_on_the_z80() {
+        let set = gp_arcade::testrom::romset(
+            &[
+                0x3e, 0x05, // 0000: ld a,$05
+                0xfe, 0x20, // 0002: cp $20
+                0x21, 0x23, 0x01, // 0004: ld hl,$0123
+                0xdd, 0x36, 0x02, 0x07, // 0007: ld (ix+$02),$07
+                0x3a, 0x00, 0xe0, // 000b: ld a,($e000)
+                0x00, 0x00, // 000e: nop ; nop
+                0x00, 0x09, 0x02, 0x03, // 0010: a table
+            ],
+            &[0x18, 0xfe],
+        );
+        let c = |path: &str, raw: i64, pc: &str, entry: Option<i64>| {
+            format!(
+                "[[constant]]\npath = \"{path}\"\nvalue = {raw}\nraw = {raw}\npc = [\"{pc}\"]\n{}class = \"rom\"\n\n",
+                entry.map_or(String::new(), |e| format!("entry = {e}\n"))
+            )
+        };
+        let mut text = format!(
+            "[key]\nformat = \"{KEY_FORMAT}\"\ngame = \"made-up\"\nrom = \"{}\"\n\n",
+            set.identity
+        );
+        for (p, raw, pc, e) in [
+            ("a.load", 5, "0000", None),
+            ("a.compare", 32, "0002", None),
+            ("a.pair", 0x123, "0004", None),
+            ("a.indexed", 7, "0007", None),
+            ("a.table", 9, "0010", Some(1)),
+            ("a.word", 0x0302, "0010", Some(2)),
+            ("a.address", 0xE000, "000B", None),
+            ("a.wrong", 6, "0000", None),
+            ("a.banked", 5, "01:0000", None),
+        ] {
+            text += &c(p, raw, pc, e);
+        }
+        let key = Key::parse(&text).unwrap();
+        let (n, bad) = check_key_z80(&key, &set);
+        assert_eq!(n, 9);
+        assert_eq!(
+            bad,
+            vec![
+                "a.address at 000B",
+                "a.wrong at 0000",
+                "a.banked at 01:0000"
+            ]
+        );
+    }
 
     /// gp-cli's folder: its tests/keys hold game-printer's Moss Hop key, a
     /// key of that tool's own homebrew game, as the grader's fixture.

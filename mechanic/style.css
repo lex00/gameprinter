@@ -30,6 +30,7 @@ h2, h3, summary, #logo, #score, .st { font-family: var(--mono); text-transform: 
 #editor { color: inherit; }
 header { display: flex; gap: 16px; align-items: baseline; padding: 10px 16px; border-bottom: 2px solid var(--line); flex-wrap: wrap; }
 #logo { color: var(--nes-16); font-weight: 700; text-shadow: 2px 2px 0 var(--nes-28); }
+a#logo { text-decoration: none; }
 #title { color: var(--fg); font-weight: 700; }
 #score { color: var(--nes-28); margin-left: auto; }
 #sound { font: bold 12px var(--mono); background: var(--nes-0f, #000); color: var(--fg); border: 2px solid var(--line); padding: 2px 8px; cursor: pointer; align-self: center; }

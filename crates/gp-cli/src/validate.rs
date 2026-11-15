@@ -8,7 +8,7 @@
 //! changed: the model runs through its game's module (`--module`) or the
 //! built-in interpreter ([`crate::hosted::Source`]), and the original
 //! through [`OriginalRuntime`], the NES's for an NES recording or
-//! baseline. The Bevy subject (`--runtime bevy`, `--project`,
+//! baseline, the arcade board's for a recording of a romset. The Bevy subject (`--runtime bevy`, `--project`,
 //! `--target-dir`) is gone with the Bevy generator, and with it the
 //! conformance check. `--allow-missing-ext` is gone: a model naming hooks
 //! runs only through its module. The run recorder's metrics (`--metrics`)
@@ -41,16 +41,20 @@ use gp_validate::{RecordingResult, Summary};
 use crate::Outcome;
 use crate::hosted::{self, Source};
 use crate::open::{RomFolder, now_rfc3339};
-use crate::original::OriginalRuntime;
+use crate::original::{OriginalRuntime, Platform};
 
 #[derive(Args)]
 pub struct ValidateArgs {
-    /// The model directory, holding model.toml and fidelity.toml.
+    /// The model directory, holding model.toml and fidelity.toml. Without
+    /// `--against` or `--store`, a game's folder or name (a copy, a
+    /// template, a game in the games checkout), and gp validate runs the
+    /// check that fits it and says which (docs/validation.md, "The check
+    /// that fits a game").
     pub model: PathBuf,
     /// Recordings of the original to validate against: recording IDs (or
     /// unique prefixes of at least 4 characters), baseline files, or
     /// directories of baselines.
-    #[arg(long, num_args = 1.., required_unless_present = "store")]
+    #[arg(long, num_args = 1..)]
     pub against: Vec<String>,
     /// Validate against all of the store's recordings of the model's source
     /// ROM (the registry's, or `--rom`'s).
@@ -58,8 +62,8 @@ pub struct ValidateArgs {
     pub store: bool,
     /// The runtime held against the original: `interp` runs the model
     /// (through its game's module with `--module`, else in the built-in
-    /// interpreter); `nes` runs the original itself, which tests the
-    /// engine; `none` holds only the original against the model's numbers.
+    /// interpreter); `nes` runs the original itself (on gp-nes, or
+    /// gp-arcade for a romset's recording), which tests the engine; `none` holds only the original against the model's numbers.
     #[arg(long, value_enum, default_value_t = RuntimeArg::Interp)]
     pub runtime: RuntimeArg,
     /// The game's built module, which runs the model's hooks. Needed for a
@@ -87,6 +91,11 @@ pub struct ValidateArgs {
     /// mapping sets `score_draws`, as a clip's score does (gp clip score).
     #[arg(long)]
     pub power_on: bool,
+    /// Say which check fits the game and why, and run none: the contract
+    /// against recordings of the original, a port's corpus score, or the
+    /// check for a game changed on purpose or made new.
+    #[arg(long, conflicts_with_all = ["against", "store"])]
+    pub which: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -103,7 +112,11 @@ struct Run {
     id: String,
     /// What identifies the run's content, for the result's key.
     content: String,
+    /// An NES ROM's headerless SHA-256, or an arcade romset's identity.
     sha256: String,
+    /// Which emulator runs the original: an NES recording or baseline on
+    /// gp-nes, a romset's recording on gp-arcade.
+    platform: Platform,
     power_on: PowerOn,
     inputs: Vec<InputFrame>,
     /// The input log's frames, for recording the original's draws.
@@ -214,13 +227,14 @@ pub(crate) fn run(args: &ValidateArgs, paths: &Paths) -> Result<Outcome> {
     let given = match &args.rom {
         Some(p) => {
             let bytes = fs::read(p).with_context(|| format!("reading {}", p.display()))?;
-            if crate::original::Platform::of_file(&bytes) == crate::original::Platform::Arcade {
-                bail!(
-                    "{} is an arcade romset; gp validate runs NES recordings and baselines, and an arcade recording's source (a romset, wave 6 of the port) isn't read here yet",
-                    p.display()
-                );
-            }
-            let sha = identify_nes(&bytes)?.sha256;
+            // A romset is known by its identity, as its recordings name it.
+            let sha = match Platform::of_file(&bytes) {
+                Platform::Arcade => gp_arcade::Romset::from_zip(&bytes)
+                    .with_context(|| p.display().to_string())?
+                    .identity
+                    .clone(),
+                Platform::Nes => identify_nes(&bytes)?.sha256,
+            };
             Some((sha, bytes))
         }
         None => None,
@@ -232,7 +246,18 @@ pub(crate) fn run(args: &ValidateArgs, paths: &Paths) -> Result<Outcome> {
         given.as_ref().map(|g| g.0.as_str()),
     )?;
 
-    let original_id = gp_nes::recording::describe_runtime(&gp_nes::runtime_ref());
+    // One model is of one platform, so its runs are all of one emulator.
+    let platform = match runs.first().map(|r| r.platform) {
+        Some(p) if runs.iter().any(|r| r.platform != p) => bail!(
+            "the runs named are of an NES ROM and of an arcade romset; a model is held against recordings of one original"
+        ),
+        Some(p) => p,
+        None => Platform::Nes,
+    };
+    let original_id = match platform {
+        Platform::Nes => gp_nes::recording::describe_runtime(&gp_nes::runtime_ref()),
+        Platform::Arcade => gp_nes::recording::describe_runtime(&crate::arcade_rec::runtime_ref()),
+    };
     // The model as the tools run it: through its game's module, or the
     // built-in interpreter for a model with no hooks (crate::hosted).
     let subject: Option<Source> = match args.runtime {
@@ -312,7 +337,15 @@ pub(crate) fn run(args: &ValidateArgs, paths: &Paths) -> Result<Outcome> {
             _ => match read.get(&r.sha256) {
                 Some(rom) => rom.clone(),
                 None => {
-                    let rom = roms.read(&r.sha256)?.map(std::sync::Arc::new);
+                    let rom = match r.platform {
+                        Platform::Nes => roms.read(&r.sha256)?,
+                        Platform::Arcade => {
+                            crate::roms::find(std::slice::from_ref(&r.sha256), &[], &paths.roms)?
+                                .remove(&r.sha256)
+                                .map(|rom| rom.bytes)
+                        }
+                    }
+                    .map(std::sync::Arc::new);
                     read.insert(r.sha256.clone(), rom.clone());
                     rom
                 }
@@ -327,11 +360,7 @@ pub(crate) fn run(args: &ValidateArgs, paths: &Paths) -> Result<Outcome> {
     // (crate::pool); the results come back in the runs' order.
     let one = |r: &Run, key: Hash, rom: &[u8]| -> Result<(RecordingResult, String)> {
         let runs = {
-            let load = || {
-                NesRuntime::load(rom, r.power_on)
-                    .map(OriginalRuntime::Nes)
-                    .map_err(|e| e.to_string())
-            };
+            let load = || original_of(r, rom).map_err(|e| format!("{e:#}"));
             match &subject {
                 Some(src) => {
                     // A clip's score takes the original's draws over the
@@ -339,9 +368,16 @@ pub(crate) fn run(args: &ValidateArgs, paths: &Paths) -> Result<Outcome> {
                     // first compared frame, where the model takes the
                     // original's state.
                     let draws = if mapping.score_draws && !args.power_on {
-                        let nes =
-                            gp_nes::Nes::power_on(rom, r.power_on).map_err(anyhow::Error::msg)?;
-                        Some(crate::lockstep::record_draws_on(nes, &mapping, &r.log, 0)?)
+                        Some(match r.platform {
+                            Platform::Nes => {
+                                let nes = gp_nes::Nes::power_on(rom, r.power_on)
+                                    .map_err(anyhow::Error::msg)?;
+                                crate::lockstep::record_draws_on(nes, &mapping, &r.log, 0)?
+                            }
+                            Platform::Arcade => {
+                                crate::lockstep::record_draws(rom, &mapping, &r.log, 0)?
+                            }
+                        })
                     } else {
                         None
                     };
@@ -596,7 +632,11 @@ fn runs(
                 m => m?,
             };
             // Model recordings aren't recordings of the original.
-            let SourceRef::NesRom { sha256, .. } = &m.source else {
+            let (SourceRef::NesRom { sha256, .. }
+            | SourceRef::Romset {
+                identity: sha256, ..
+            }) = &m.source
+            else {
                 continue;
             };
             if want.as_deref().is_some_and(|w| w != sha256) {
@@ -637,6 +677,15 @@ fn baseline_run(file: &Path) -> Result<Run> {
             .map_or_else(|| "baseline".into(), |s| s.to_string_lossy().into_owned()),
         id: file.display().to_string(),
         content: format!("baseline blake3:{}", Hash::of(text.as_bytes())),
+        // A baseline names its ROM by hash; the registry says whether that
+        // is an arcade romset's identity.
+        platform: match crate::open::load_registry()
+            .ok()
+            .and_then(|reg| reg.by_sha256(&b.sha256).map(|k| k.platform.clone()))
+        {
+            Some(p) if p == "arcade" => Platform::Arcade,
+            _ => Platform::Nes,
+        },
         sha256: b.sha256,
         power_on: PowerOn::default(),
         inputs: inputs_of(&log),
@@ -651,20 +700,34 @@ fn recording_run(
 ) -> Result<Run> {
     let text = String::from_utf8(store.get(&m.input_log)?).context("the input log isn't text")?;
     let log = InputLog::parse(&text)?;
-    let SourceRef::NesRom { sha256, .. } = m.source else {
-        bail!(
-            "{} isn't a recording of an NES ROM (a model's run, or an arcade romset's, which gp validate doesn't read yet)",
+    let (sha256, platform) = match m.source {
+        SourceRef::NesRom { sha256, .. } => (sha256, Platform::Nes),
+        SourceRef::Romset { identity, .. } => (identity, Platform::Arcade),
+        SourceRef::Model { .. } => bail!(
+            "{} is a model's run, not a recording of the original",
             e.name
-        );
+        ),
     };
     Ok(Run {
         name: e.name,
         id: e.id.to_hex(),
         content: format!("recording blake3:{}", e.id),
         sha256,
+        platform,
         power_on: m.power_on,
         inputs: inputs_of(&log),
         log: log.frames.clone(),
+    })
+}
+
+/// The original a run plays on, powered on: gp-nes with the run's
+/// power-on for an NES ROM, gp-arcade for a romset.
+fn original_of(r: &Run, rom: &[u8]) -> Result<OriginalRuntime> {
+    Ok(match r.platform {
+        Platform::Nes => {
+            OriginalRuntime::Nes(NesRuntime::load(rom, r.power_on).map_err(anyhow::Error::msg)?)
+        }
+        Platform::Arcade => OriginalRuntime::load(Platform::Arcade, rom)?,
     })
 }
 
@@ -769,11 +832,11 @@ fn slot_outcomes(
     if mapping.slots.is_none() || !plan.checks.iter().any(|c| c.kind == compile::Kind::Slots) {
         return Ok(Vec::new());
     }
-    let mut nes = NesRuntime::load(rom, r.power_on).map_err(anyhow::Error::msg)?;
+    let mut original = original_of(r, rom)?;
     let mut rows = gp_validate::slots::Rows::default();
     let reports = match src.native_exts() {
         Some(exts) => gp_interp::compare::compare_slots(
-            &mut nes,
+            &mut original,
             mapping,
             &r.inputs,
             &src.spec,
@@ -790,4 +853,54 @@ fn slot_outcomes(
         }
     };
     Ok(gp_validate::slots::evaluate(plan, model, &reports, &rows))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A made-up arcade program's recording (gp_arcade::testrom::busy,
+    /// no game's bytes) is a run gp validate plays on gp-arcade, known by
+    /// the romset's identity, with its log's frames as the inputs; a
+    /// model's run is still not a recording of the original.
+    #[test]
+    fn an_arcade_recording_is_a_run_on_the_board() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("store")).unwrap();
+        let set = gp_arcade::testrom::busy();
+        let input = InputLog::parse(
+            "gp-arcade-input 0\nsystem test\ncolumns CSRLDUT\n10 .......\n9 ......T\n1 C......\n",
+        )
+        .unwrap();
+        let rec = crate::arcade_rec::record(
+            &store,
+            crate::arcade_rec::Request {
+                set: &set,
+                source_id: None,
+                input: &input,
+                checkpoint_interval: 10,
+                capture: gp_nes::recording::Capture::ALL,
+                provenance: gp_evidence::manifest::Provenance::Scripted,
+                name: "busy".into(),
+                created_at: "2026-11-14T00:00:00Z".into(),
+                notes: None,
+            },
+        )
+        .unwrap();
+        let e = recordings::resolve(&store, &rec.id.to_hex()).unwrap();
+        let r = recording_run(&store, e.clone(), rec.manifest.clone()).unwrap();
+        assert!(r.platform == Platform::Arcade);
+        assert_eq!(r.sha256, set.identity);
+        assert_eq!(r.inputs.len(), 20);
+        assert_eq!(r.inputs[10].buttons, inputs_of(&input)[10].buttons);
+        assert_ne!(r.inputs[10].buttons, 0);
+
+        let mut model = rec.manifest.clone();
+        model.source = SourceRef::Model {
+            name: "made-up".into(),
+            bundle: Hash::of(b"made-up"),
+        };
+        let err = recording_run(&store, e, model).err().unwrap().to_string();
+        assert!(err.contains("a model's run"), "{err}");
+    }
 }

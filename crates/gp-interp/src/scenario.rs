@@ -1408,7 +1408,7 @@ fn measures(ls: &Lockstep, start: &Start, catalog: &Catalog) -> (Vec<MeasureScor
 /// is forked, not moved), `model` is fresh. Free run, so the distances are
 /// the model's own.
 #[allow(clippy::too_many_arguments)]
-pub fn run<O: Runtime, M: Runtime>(
+pub fn run<O: Runtime, M: gp_runtime::QueryValues>(
     original: &O,
     model: &mut M,
     spec: &Spec,
@@ -1425,7 +1425,7 @@ pub fn run<O: Runtime, M: Runtime>(
 
 /// [`run`] with the screen measure, when `screens` draws the pictures.
 #[allow(clippy::too_many_arguments)]
-pub fn run_with<O: Runtime, M: Runtime>(
+pub fn run_with<O: Runtime, M: gp_runtime::QueryValues>(
     original: &O,
     model: &mut M,
     spec: &Spec,
@@ -1446,7 +1446,7 @@ pub fn run_with<O: Runtime, M: Runtime>(
 /// its counts cover the frames to the split. A run that doesn't split is
 /// the whole run either way.
 #[allow(clippy::too_many_arguments)]
-pub fn run_stopping<O: Runtime, M: Runtime>(
+pub fn run_stopping<O: Runtime, M: gp_runtime::QueryValues>(
     original: &O,
     model: &mut M,
     spec: &Spec,

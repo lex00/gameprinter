@@ -225,6 +225,12 @@ fn split_name(name: &str) -> Result<(&str, &str), String> {
     Ok((ns, n))
 }
 
+/// Whether a registry takes `name` as a package's name: NAMESPACE/NAME,
+/// each part lowercase letters, digits, `-` and `.`.
+pub fn name_ok(name: &str) -> bool {
+    split_name(name).is_ok()
+}
+
 fn version_key(name: &str, version: &str) -> Result<String, String> {
     let (ns, n) = split_name(name)?;
     if version.is_empty() || version.contains('/') {
@@ -390,6 +396,9 @@ pub fn reindex(
     expires: &str,
 ) -> Result<(), String> {
     let reg = read_registry_unchecked(t)?;
+    // Read before anything is written, so a yanks.toml that doesn't parse
+    // stops the reindex with nothing half done.
+    let existing = read_yanks(t)?;
     let mut catalog: BTreeMap<String, CatalogEntry> = BTreeMap::new();
     let mut by_game: BTreeMap<String, Vec<ByGameLine>> = BTreeMap::new();
     for (name, version) in versions {
@@ -442,18 +451,287 @@ pub fn reindex(
             s,
         )?;
     }
-    let existing: Vec<Yank> = match t.read("yanks.toml")? {
+    write_yanks(t, &reg, existing, s, signed, expires)
+}
+
+/// The withdrawn versions `yanks.toml` lists now, none when it isn't there.
+fn read_yanks(t: &dyn Target) -> Result<Vec<Yank>, String> {
+    Ok(match t.read("yanks.toml")? {
         Some(b) => parse::<Yanks>("yanks.toml", &b)?.yank,
         None => Vec::new(),
-    };
+    })
+}
+
+/// Writes an empty `yanks.toml` when the registry has none, signed by `s`
+/// as `reindex` signs it, so a reader can tell that nothing is withdrawn.
+/// Returns whether it wrote one; a yank list already there is kept.
+pub fn start_yanks(
+    t: &dyn Target,
+    s: &Signer,
+    signed: &str,
+    expires: &str,
+) -> Result<bool, String> {
+    if t.read("yanks.toml")?.is_some() {
+        return Ok(false);
+    }
+    let reg = read_registry_unchecked(t)?;
+    list_signer(&reg, s)?;
+    write_yanks(t, &reg, Vec::new(), s, signed, expires)?;
+    Ok(true)
+}
+
+fn write_yanks(
+    t: &dyn Target,
+    reg: &RegistryFile,
+    yank: Vec<Yank>,
+    s: &Signer,
+    signed: &str,
+    expires: &str,
+) -> Result<(), String> {
     let y = Yanks {
         format: FORMAT.into(),
-        registry: reg.name,
+        registry: reg.name.clone(),
         signed: signed.into(),
         expires: expires.into(),
-        yank: existing,
+        yank,
     };
     replace_signed(t, "yanks.toml", to_text(&y)?.as_bytes(), s)
+}
+
+/// A version the list files name: in a by-game file, or only as the
+/// catalog's latest of its package.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Listed {
+    pub name: String,
+    pub version: String,
+    pub by_game: bool,
+}
+
+fn add_listed(out: &mut Vec<Listed>, name: &str, version: &str, by_game: bool) {
+    if !out.iter().any(|l| l.name == name && l.version == version) {
+        out.push(Listed {
+            name: name.to_owned(),
+            version: version.to_owned(),
+            by_game,
+        });
+    }
+}
+
+/// Every `name@version` the list files name now: each line of the by-game
+/// files of the games the catalog's packages are for, in their order, then
+/// each catalog entry not among them. Reindexing exactly these rewrites the
+/// same lists.
+pub fn listed(t: &dyn Target) -> Result<Vec<Listed>, String> {
+    let Some(bytes) = t.read("catalog.toml")? else {
+        return Ok(Vec::new());
+    };
+    let c: Catalog = parse("catalog.toml", &bytes)?;
+    let mut games: Vec<&str> = Vec::new();
+    for p in &c.package {
+        for g in &p.for_games {
+            if !games.contains(&g.as_str()) {
+                games.push(g);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for g in games {
+        let (ns, n) = split_name(g)?;
+        let key = format!("by-game/{ns}/{n}.toml");
+        if let Some(b) = t.read(&key)? {
+            for l in parse::<ByGame>(&key, &b)?.line {
+                add_listed(&mut out, &l.package, &l.version, true);
+            }
+        }
+    }
+    for p in &c.package {
+        add_listed(&mut out, &p.name, &p.latest, false);
+    }
+    Ok(out)
+}
+
+/// What [`listed`] would give after [`reindex`] of `versions`, without
+/// writing: a version for a game is in a by-game file, and the last of each
+/// package's versions is the catalog's.
+pub fn would_list(t: &dyn Target, versions: &[(String, String)]) -> Result<Vec<Listed>, String> {
+    let mut latest: BTreeMap<&str, &str> = BTreeMap::new();
+    let mut out = Vec::new();
+    for (name, version) in versions {
+        let key = version_key(name, version)?;
+        let bytes = t
+            .read(&key)?
+            .ok_or_else(|| format!("{name}@{version} isn't published"))?;
+        let v: VersionFile = parse(&key, &bytes)?;
+        if !v.for_games.is_empty() {
+            add_listed(&mut out, name, version, true);
+        }
+        latest.insert(name, version);
+    }
+    for (name, version) in latest {
+        add_listed(&mut out, name, version, false);
+    }
+    Ok(out)
+}
+
+/// A namespace name: the same letters a package name's parts may use.
+fn namespace_ok(ns: &str) -> Result<(), String> {
+    split_name(&format!("{ns}/x")).map(|_| ()).map_err(|_| {
+        format!("{ns:?} isn't a namespace: lowercase letters, digits, '-' and '.' only")
+    })
+}
+
+/// Grants a namespace in a registry that exists: writes
+/// `namespaces/<ns>.toml` as `init` does (status "granted", these keys) and
+/// adds the name to registry.toml's list, both signed by `root` when the
+/// registry has a root. Refuses a namespace already granted.
+pub fn grant(
+    t: &dyn Target,
+    ns: &str,
+    keys: &[String],
+    root: &Signer,
+    today: &str,
+) -> Result<(), String> {
+    namespace_ok(ns)?;
+    let mut reg = read_registry_unchecked(t)?;
+    match (reg.root.is_empty(), root.signs()) {
+        (true, true) => {
+            return Err("this registry has no root key, so none is used to grant".into());
+        }
+        (false, false) => {
+            return Err("this registry is signed: give its root key with --root-key".into());
+        }
+        (false, true) => {
+            if crate::sig::key_blob(&reg.root)? != crate::sig::key_blob(&root.public)? {
+                return Err("that root key isn't the one registry.toml names".into());
+            }
+            if keys.is_empty() {
+                return Err(format!(
+                    "a signed registry's namespace needs a key to sign with: give {ns}'s public key with --key"
+                ));
+            }
+        }
+        (true, false) => {}
+    }
+    let key = format!("namespaces/{ns}.toml");
+    if let Some(b) = t.read(&key)? {
+        let held = parse::<NamespaceFile>(&key, &b)
+            .map(|f| f.status)
+            .unwrap_or_else(|_| "there".into());
+        return Err(format!(
+            "the namespace {ns} is already {held} ({key}): nothing was changed"
+        ));
+    }
+    let f = NamespaceFile {
+        format: FORMAT.into(),
+        namespace: ns.into(),
+        status: "granted".into(),
+        keys: keys
+            .iter()
+            .map(|k| NamespaceKey {
+                key: k.clone(),
+                added: today.into(),
+            })
+            .collect(),
+    };
+    put_signed(t, &key, to_text(&f)?.as_bytes(), root)?;
+    if !reg.namespaces.iter().any(|n| n == ns) {
+        reg.namespaces.push(ns.into());
+        replace_signed(t, "registry.toml", to_text(&reg)?.as_bytes(), root)?;
+    }
+    Ok(())
+}
+
+/// A namespace registry.toml lists, with its file or why it can't be read.
+pub type Grant = (String, Result<NamespaceFile, String>);
+
+/// Each namespace registry.toml lists, with its file, or why it can't be read.
+pub fn grants(t: &dyn Target) -> Result<Vec<Grant>, String> {
+    let reg = read_registry_unchecked(t)?;
+    Ok(reg
+        .namespaces
+        .iter()
+        .map(|ns| {
+            let key = format!("namespaces/{ns}.toml");
+            let f = t
+                .read(&key)
+                .and_then(|b| b.ok_or_else(|| format!("{key} isn't there")))
+                .and_then(|b| parse::<NamespaceFile>(&key, &b));
+            (ns.clone(), f)
+        })
+        .collect())
+}
+
+/// Adds a published version to `yanks.toml` with its id, a reason and a
+/// severity, keeping every entry there, and re-signs the file. Refuses a
+/// version already yanked.
+#[allow(clippy::too_many_arguments)]
+pub fn yank(
+    t: &dyn Target,
+    name: &str,
+    version: &str,
+    reason: &str,
+    severity: &str,
+    s: &Signer,
+    signed: &str,
+    expires: &str,
+) -> Result<Yank, String> {
+    let reg = read_registry_unchecked(t)?;
+    list_signer(&reg, s)?;
+    let key = version_key(name, version)?;
+    let v: VersionFile = parse(
+        &key,
+        &t.read(&key)?
+            .ok_or_else(|| format!("{name}@{version} isn't published"))?,
+    )?;
+    let mut list = read_yanks(t)?;
+    if let Some(y) = list.iter().find(|y| y.id == v.id) {
+        return Err(format!(
+            "{name}@{version} is already yanked ({}: {})",
+            y.severity, y.reason
+        ));
+    }
+    let y = Yank {
+        name: name.into(),
+        version: version.into(),
+        id: v.id,
+        reason: reason.into(),
+        severity: severity.into(),
+    };
+    list.push(y.clone());
+    write_yanks(t, &reg, list, s, signed, expires)?;
+    Ok(y)
+}
+
+/// Takes a version's entry out of `yanks.toml` and re-signs the file.
+pub fn unyank(
+    t: &dyn Target,
+    name: &str,
+    version: &str,
+    s: &Signer,
+    signed: &str,
+    expires: &str,
+) -> Result<Yank, String> {
+    let reg = read_registry_unchecked(t)?;
+    list_signer(&reg, s)?;
+    let mut list = read_yanks(t)?;
+    let at = list
+        .iter()
+        .position(|y| y.name == name && y.version == version)
+        .ok_or_else(|| format!("{name}@{version} isn't yanked"))?;
+    let y = list.remove(at);
+    write_yanks(t, &reg, list, s, signed, expires)?;
+    Ok(y)
+}
+
+/// Refuses to rewrite a list file of a registry with signing keys without
+/// a key: the file would no longer match its signature.
+fn list_signer(reg: &RegistryFile, s: &Signer) -> Result<(), String> {
+    if !reg.signing.is_empty() && !s.signs() {
+        return Err(
+            "this registry's list files are signed: give the signing key with --key".into(),
+        );
+    }
+    Ok(())
 }
 
 fn parse<'a, T: Deserialize<'a>>(key: &str, bytes: &'a [u8]) -> Result<T, String> {

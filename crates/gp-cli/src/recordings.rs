@@ -101,7 +101,10 @@ pub struct ReplayArgs {
 /// `gp query`'s arguments.
 #[derive(clap::Args)]
 pub struct QueryArgs {
-    /// The recording's ID, or a unique prefix of at least 4 characters.
+    /// The recording's ID, or a unique prefix of at least 4 characters; or
+    /// a corpus clip's play as clip:GAME:CLIP (clip:tapper:tapper.gameover.002,
+    /// GAME a package folder or a game's name), played from power-on on the
+    /// original with no recording made.
     id: String,
     /// The frame: the state after this many frames, 0 for power-on.
     #[arg(long, required_unless_present = "frames", conflicts_with = "frames")]
@@ -306,6 +309,35 @@ pub fn replay_cmd(a: &ReplayArgs, paths: &Paths) -> Result<Outcome> {
 }
 
 pub fn query_cmd(a: &QueryArgs, paths: &Paths) -> Result<Outcome> {
+    // A running gp mcp or gp serve keeps the recording open (crate::session);
+    // with none, or a --rom given, it's opened here.
+    if a.rom.is_none()
+        && !a.id.starts_with(crate::query_clip::PREFIX)
+        && let Some(answer) = crate::session::ask(
+            paths,
+            &crate::session::Query {
+                id: a.id.clone(),
+                frame: a.frame,
+                frames: a.frames.clone(),
+                selectors: a.selectors.clone(),
+                changed: a.changed,
+                replay: a.replay,
+            },
+        )
+    {
+        return answer;
+    }
+    if a.id.starts_with(crate::query_clip::PREFIX) {
+        return crate::query_clip::query(
+            &a.id,
+            a.frame,
+            a.frames.as_deref(),
+            &a.selectors,
+            a.changed,
+            a.rom.as_deref(),
+            paths,
+        );
+    }
     if let Some(spec) = &a.frames {
         return query_frames(
             &a.id,
@@ -853,6 +885,78 @@ pub(crate) fn entry_json(e: &gp_runtime::Entry) -> Value {
     json!({ "path": e.path, "value": value })
 }
 
+/// Where a query's console comes from: the cold path opens the recording
+/// again ([`Cold`]); a long-lived session (crate::session) keeps consoles
+/// from earlier queries. Either gives the same cursor for a frame: the
+/// recording's nearest checkpoint restored and replayed to it.
+pub(crate) trait Seek {
+    fn opened(&self) -> &Opened;
+    /// Checks the `--rom` given, if any, as the cold path does before the
+    /// trace answers.
+    fn check_given(&mut self) -> Result<()>;
+    /// An NES recording at `frame`.
+    fn nes(&mut self, frame: u64) -> Result<gp_nes::seek::Cursor>;
+    /// An arcade recording at `frame`.
+    fn arcade(&mut self, frame: u64) -> Result<crate::arcade_rec::Cursor>;
+}
+
+/// A recording opened for one command.
+pub(crate) struct Cold<'a> {
+    pub opened: Opened,
+    rom: Option<&'a Path>,
+    paths: &'a Paths,
+    given: Option<crate::open::FoundRom>,
+}
+
+impl<'a> Cold<'a> {
+    pub fn open(id: &str, rom: Option<&'a Path>, paths: &'a Paths) -> Result<Self> {
+        Ok(Self {
+            opened: Opened::open(paths, id)?,
+            rom,
+            paths,
+            given: None,
+        })
+    }
+}
+
+impl Seek for Cold<'_> {
+    fn opened(&self) -> &Opened {
+        &self.opened
+    }
+
+    fn check_given(&mut self) -> Result<()> {
+        // A --rom given is checked even when the trace answers.
+        self.given = self
+            .rom
+            .map(|_| self.opened.rom(self.rom, self.paths))
+            .transpose()?;
+        Ok(())
+    }
+
+    fn nes(&mut self, frame: u64) -> Result<gp_nes::seek::Cursor> {
+        let rom = match self.given.take() {
+            Some(found) => found.bytes,
+            None => self.opened.rom(None, self.paths)?.bytes,
+        };
+        seek(&self.opened, &rom, frame)
+    }
+
+    fn arcade(&mut self, frame: u64) -> Result<crate::arcade_rec::Cursor> {
+        let set = self.opened.romset(self.rom, self.paths)?;
+        crate::arcade_rec::open(&self.opened.store, &self.opened.manifest, &set, frame)
+    }
+}
+
+/// The note for an arcade cursor whose state isn't the recorded one.
+fn arcade_note(cursor: &crate::arcade_rec::Cursor, opened: &Opened) -> Option<String> {
+    note_unless_arcade(
+        cursor.matches_recording(),
+        cursor.frame(),
+        cursor.stale,
+        opened,
+    )
+}
+
 fn query(
     id: &str,
     frame: u64,
@@ -860,16 +964,25 @@ fn query(
     (rom, replay): (Option<&Path>, bool),
     paths: &Paths,
 ) -> Result<Outcome> {
+    query_on(&mut Cold::open(id, rom, paths)?, frame, selectors, replay)
+}
+
+/// `gp query --frame` on a recording, however it was opened.
+pub(crate) fn query_on(
+    s: &mut impl Seek,
+    frame: u64,
+    selectors: &[String],
+    replay: bool,
+) -> Result<Outcome> {
     use gp_runtime::Runtime as _;
-    let opened = Opened::open(paths, id)?;
-    refuse_model(&opened)?;
-    // A --rom given is checked even when the trace answers.
-    let given = rom.map(|_| opened.rom(rom, paths)).transpose()?;
-    if !replay && let Some(out) = crate::from_trace::query(&opened, frame, selectors)? {
+    refuse_model(s.opened())?;
+    s.check_given()?;
+    if !replay && let Some(out) = crate::from_trace::query(s.opened(), frame, selectors)? {
         return Ok(out);
     }
-    let (entries, note, checkpoint, replayed, stale) = if opened.is_arcade() {
-        let (cursor, note) = seek_arcade(&opened, rom, paths, frame)?;
+    let (entries, note, checkpoint, replayed, stale) = if s.opened().is_arcade() {
+        let cursor = s.arcade(frame)?;
+        let note = arcade_note(&cursor, s.opened());
         let (checkpoint, replayed, stale) = (cursor.checkpoint, cursor.replayed, cursor.stale);
         let runtime = gp_arcade::ArcadeRuntime::new(cursor.into_tapper());
         let mut entries = Vec::new();
@@ -878,12 +991,8 @@ fn query(
         }
         (entries, note, checkpoint, replayed, stale)
     } else {
-        let rom = match given {
-            Some(found) => found.bytes,
-            None => opened.rom(None, paths)?.bytes,
-        };
-        let cursor = seek(&opened, &rom, frame)?;
-        let note = mismatch_note(&cursor, &opened)?;
+        let cursor = s.nes(frame)?;
+        let note = mismatch_note(&cursor, s.opened())?;
         let (checkpoint, replayed, stale) = (cursor.checkpoint, cursor.replayed, cursor.stale);
         let runtime = gp_nes::protocol::NesRuntime::new(cursor.into_nes())?;
         let mut entries = Vec::new();
@@ -892,6 +1001,7 @@ fn query(
         }
         (entries, note, checkpoint, replayed, stale)
     };
+    let opened = s.opened();
     let mut text: Vec<String> = entries.iter().map(entry_line).collect();
     if let Some(note) = &note {
         text.push(format!("note: {note}"));
@@ -929,22 +1039,38 @@ fn query_frames(
     (rom, replay): (Option<&Path>, bool),
     paths: &Paths,
 ) -> Result<Outcome> {
+    query_frames_on(
+        &mut Cold::open(id, rom, paths)?,
+        spec,
+        selectors,
+        changed,
+        replay,
+    )
+}
+
+/// `gp query --frames` on a recording, however it was opened.
+pub(crate) fn query_frames_on(
+    s: &mut impl Seek,
+    spec: &str,
+    selectors: &[String],
+    changed: bool,
+    replay: bool,
+) -> Result<Outcome> {
     use gp_runtime::Runtime as _;
-    let opened = Opened::open(paths, id)?;
-    refuse_model(&opened)?;
-    let range = parse_frames(spec, opened.manifest.frames)?;
-    let given = rom.map(|_| opened.rom(rom, paths)).transpose()?;
+    refuse_model(s.opened())?;
+    let range = parse_frames(spec, s.opened().manifest.frames)?;
+    s.check_given()?;
     let traced = if replay {
         None
     } else {
-        crate::from_trace::query_frames(&opened, range.clone(), selectors)?
+        crate::from_trace::query_frames(s.opened(), range.clone(), selectors)?
     };
     let read_from = if traced.is_some() { "trace" } else { "replay" };
     // Each row, and the first frame that isn't the recorded state.
     let (rows, diverged, checkpoint, stale) = if let Some(rows) = traced {
         (rows, None, None, false)
-    } else if opened.is_arcade() {
-        let (cursor, _) = seek_arcade(&opened, rom, paths, range.start)?;
+    } else if s.opened().is_arcade() {
+        let cursor = s.arcade(range.start)?;
         let (checkpoint, stale) = (cursor.checkpoint, cursor.stale);
         let inputs: Vec<gp_runtime::InputFrame> = (range.start..range.end - 1)
             .map(|f| {
@@ -976,11 +1102,7 @@ fn query_frames(
         }
         (rows, diverged, checkpoint, stale)
     } else {
-        let rom = match given {
-            Some(found) => found.bytes,
-            None => opened.rom(None, paths)?.bytes,
-        };
-        let cursor = seek(&opened, &rom, range.start)?;
+        let cursor = s.nes(range.start)?;
         let (checkpoint, stale) = (cursor.checkpoint, cursor.stale);
         let inputs: Vec<gp_runtime::InputFrame> = (range.start..range.end - 1)
             .map(|f| {
@@ -1013,11 +1135,12 @@ fn query_frames(
         }
         (rows, diverged, checkpoint, stale)
     };
+    let opened = s.opened();
     let note = diverged.and_then(|f| {
         if opened.is_arcade() {
-            note_unless_arcade(false, f, stale, &opened)
+            note_unless_arcade(false, f, stale, opened)
         } else {
-            note_unless(false, f, stale, &opened)
+            note_unless(false, f, stale, opened)
         }
     });
     let shown = if changed { changed_rows(rows) } else { rows };
@@ -1068,7 +1191,7 @@ fn read_all(
 }
 
 /// The rows whose values differ from the row before, and the first.
-fn changed_rows(rows: Vec<Row>) -> Vec<Row> {
+pub(crate) fn changed_rows(rows: Vec<Row>) -> Vec<Row> {
     let mut kept: Vec<Row> = Vec::new();
     let mut last: Option<Vec<gp_runtime::Value>> = None;
     for r in rows {

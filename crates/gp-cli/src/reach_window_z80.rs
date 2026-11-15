@@ -206,6 +206,37 @@ struct Row {
 
 type Rows = BTreeMap<(usize, u16), (Row, &'static str)>;
 
+/// The addresses the templates cite, by the main CPU's routine that holds
+/// them (one of its instructions covers the address).
+type Cites = BTreeMap<At, Vec<u16>>;
+
+/// The templates' cites placed in the main CPU's code map: the sound CPU's
+/// program has its own addresses, which a template's `$XXXX` can't tell
+/// from the main CPU's, so only the main CPU's routines are cited.
+fn cites_in(maps: &Maps, idx: &crate::template_cites::Index) -> Cites {
+    let m = &maps.maps[0];
+    let mut out = Cites::new();
+    for &a in idx.keys() {
+        let Some((&at, _)) = m.routines.range(..=a).next_back() else {
+            continue;
+        };
+        let covered = m
+            .insns
+            .range(..=a)
+            .next_back()
+            .is_some_and(|(pc, i)| u32::from(a) < u32::from(*pc) + u32::from(i.len));
+        let end = m
+            .routines
+            .range(at.saturating_add(1)..)
+            .next()
+            .map_or(0x1_0000, |(n, _)| u32::from(*n));
+        if covered && u32::from(a) < end {
+            out.entry((0, at)).or_default().push(a);
+        }
+    }
+    out
+}
+
 fn rows(maps: &Maps, ran: &BTreeMap<At, Stat>) -> (Rows, Vec<At>) {
     let mut out = Rows::new();
     for (c, at, why) in maps.routines() {
@@ -236,11 +267,11 @@ fn rows(maps: &Maps, ran: &BTreeMap<At, Stat>) -> (Rows, Vec<At>) {
     (out, outside)
 }
 
-fn summary(s: &Side, rows: &Rows, outside: &[At]) -> Value {
+fn summary(s: &Side, rows: &Rows, outside: &[At], cites: Option<&Cites>) -> Value {
     let both: usize = rows.values().map(|r| r.0.both).sum();
     let one: usize = rows.values().map(|r| r.0.one_way.len()).sum();
     let none: usize = rows.values().map(|r| r.0.not_run).sum();
-    json!({
+    let mut v = json!({
         "label": s.label,
         "counted": true,
         "frames": s.frames,
@@ -248,7 +279,11 @@ fn summary(s: &Side, rows: &Rows, outside: &[At]) -> Value {
         "instructions_run": s.ran.len(),
         "branches": {"both": both, "one_way": one, "not_run": none},
         "outside_code_map": outside.len(),
-    })
+    });
+    if let Some(c) = cites {
+        v["routines_cited"] = json!(rows.keys().filter(|i| c.contains_key(i)).count());
+    }
+    v
 }
 
 fn summary_line(v: &Value) -> String {
@@ -260,6 +295,13 @@ fn summary_line(v: &Value) -> String {
         v["branches"]["one_way"],
         v["branches"]["not_run"],
     );
+    if let Some(c) = v.get("routines_cited") {
+        let _ = write!(
+            s,
+            "; {c} of the {} hold an address the templates cite",
+            v["routines_run"]
+        );
+    }
     if v["outside_code_map"].as_u64().unwrap_or(0) > 0 {
         let _ = write!(
             s,
@@ -270,31 +312,42 @@ fn summary_line(v: &Value) -> String {
     s
 }
 
-fn report(maps: &Maps, s: &Side) -> (String, Value) {
+fn report(maps: &Maps, s: &Side, cites: Option<&Cites>) -> (String, Value) {
     let (rows, outside) = rows(maps, &s.ran);
-    let sum = summary(s, &rows, &outside);
+    let sum = summary(s, &rows, &outside, cites);
     let mut text = format!("{}\n{}\n", s.label, summary_line(&sum));
     let _ = writeln!(
         text,
-        "\n{:<12} {:<18} {:>9} {:>5} {:>7}  branches one way",
-        "routine", "element", "run/insns", "both", "not run",
+        "\n{:<12} {:<18} {:>9} {:>5} {:>7}{}  branches one way",
+        "routine",
+        "element",
+        "run/insns",
+        "both",
+        "not run",
+        if cites.is_some() { "  cited" } else { "" }
     );
     let mut list = Vec::new();
     for ((c, at), (r, why)) in &rows {
         let n = name((*c, *at));
+        let k = cites.and_then(|m| m.get(&(*c, *at))).map_or(0, Vec::len);
         let _ = writeln!(
             text,
-            "{:<12} {:<18} {:>9} {:>5} {:>7}  {}",
+            "{:<12} {:<18} {:>9} {:>5} {:>7}{}  {}",
             n,
             why,
             format!("{}/{}", r.run, r.insns),
             r.both,
             r.not_run,
+            if cites.is_some() {
+                format!("  {k:>5}")
+            } else {
+                String::new()
+            },
             r.one_way.join(", ")
         );
         list.push(json!({
             "routine": n, "element": why, "run": r.run, "instructions": r.insns,
-            "both": r.both, "one_way": r.one_way, "not_run": r.not_run, "cited": 0,
+            "both": r.both, "one_way": r.one_way, "not_run": r.not_run, "cited": k,
         }));
     }
     if !outside.is_empty() {
@@ -306,11 +359,11 @@ fn report(maps: &Maps, s: &Side) -> (String, Value) {
     )
 }
 
-fn diff_report(maps: &Maps, a: &Side, b: &Side) -> (String, Value) {
+fn diff_report(maps: &Maps, a: &Side, b: &Side, cites: Option<&Cites>) -> (String, Value) {
     let (ra, oa) = rows(maps, &a.ran);
     let (rb, ob) = rows(maps, &b.ran);
-    let sa = summary(a, &ra, &oa);
-    let sb = summary(b, &rb, &ob);
+    let sa = summary(a, &ra, &oa, cites);
+    let sb = summary(b, &rb, &ob, cites);
     let mut text = format!(
         "A: {}\n   {}\nB: {}\n   {}\n",
         a.label,
@@ -437,11 +490,6 @@ pub(crate) fn run(rom: &[u8], a: &ReachArgs, paths: &Paths) -> Result<Outcome> {
             "--diff-reach reads an NES gp reach's instruction starts; an arcade gp reach --write holds counts by chip, so diff two sets of clips with --diff-clip or --diff-window"
         );
     }
-    if !a.cites.is_empty() {
-        bail!(
-            "--cites indexes the templates' addresses from $8000 up, the NES's program; an arcade CPU's code (Tapper's at 0000-DFFF) isn't in that index"
-        );
-    }
     let set = Romset::from_zip(rom).map_err(|e| anyhow::anyhow!("{e}"))?;
     let w_a = match &a.window {
         Some(s) => parse_window(s)?,
@@ -470,9 +518,15 @@ pub(crate) fn run(rom: &[u8], a: &ReachArgs, paths: &Paths) -> Result<Outcome> {
         .chain(b.as_ref().map(|(_, l)| l))
         .collect();
     let maps = Maps::of(&set, &all);
+    let cites = if a.cites.is_empty() {
+        None
+    } else {
+        let idx = crate::template_cites::index_romset(&a.cites, &set)?;
+        Some(cites_in(&maps, &idx))
+    };
     let (text, doc) = match &b {
-        None => report(&maps, &side_a),
-        Some((side_b, _)) => diff_report(&maps, &side_a, side_b),
+        None => report(&maps, &side_a, cites.as_ref()),
+        Some((side_b, _)) => diff_report(&maps, &side_a, side_b, cites.as_ref()),
     };
     Ok(Outcome::ok(doc, text))
 }
@@ -481,6 +535,27 @@ pub(crate) fn run(rom: &[u8], a: &ReachArgs, paths: &Paths) -> Result<Outcome> {
 mod tests {
     use super::*;
     use crate::reach::ClipInput;
+
+    /// The templates' cites on a made-up program (gp_arcade::testrom::busy,
+    /// no game's bytes): an address inside the reset routine's code is
+    /// cited there; one in RAM, or past the code, is in no routine.
+    #[test]
+    fn a_cite_is_placed_in_the_main_cpu_s_routine() {
+        let set = gp_arcade::testrom::busy();
+        let maps = Maps {
+            maps: (0..2).map(|c| CodeMap::of(&set, c, None)).collect(),
+        };
+        let mut idx = crate::template_cites::Index::new();
+        for a in [0x0009u16, 0xe001, 0x7000] {
+            idx.entry(a)
+                .or_default()
+                .insert(("cab/ext/src/lib.rs".into(), 1));
+        }
+        let c = cites_in(&maps, &idx);
+        let all: Vec<u16> = c.values().flatten().copied().collect();
+        assert_eq!(all, vec![0x0009], "{c:?}");
+        assert_eq!(c.keys().next().map(|k| k.0), Some(0));
+    }
 
     /// With the rbtapper romset: an idle run's later frames, by routine,
     /// hold the interrupt handler, and against its first frames the diff
@@ -515,7 +590,7 @@ mod tests {
             rows.keys().any(|(c, _)| *c == 1),
             "the sound CPU's routines"
         );
-        let (text, doc) = diff_report(&maps, &side(&late), &side(&early));
+        let (text, doc) = diff_report(&maps, &side(&late), &side(&early), None);
         assert!(text.starts_with("A: "), "{text}");
         assert!(
             !doc["a_not_b"]["routines_only"]

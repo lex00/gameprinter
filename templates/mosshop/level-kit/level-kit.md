@@ -10,6 +10,12 @@ A stage is one level two screens wide (32 by 15 cells of 16 px). The hero runs a
 |---|---|---|---|
 | `main`: Two screens wide, ending at the burrow, with a ? block and five coins | 32 by 15 cells of 16 px | the level is 512 by 240 px; the screen 256 by 240; a body below row 208 is out | the hero's left edge at x 468 or past |
 
+The regions of the stage, which a large-art theme may draw a body by (`#+ in REGION pic ...`, docs/formats/theme.md): a body is in one while the middle of its picture's bottom row is inside the box.
+
+| Region | Level | Box (x, y, w, h in the level's pixels) | What |
+|---|---|---|---|
+| `start` | `main` | 0, 160, 64, 32 | Where the hero starts: the two rows of cells over the first four cells of the moss row, so a body standing there has its feet inside. A theme may draw a calmer pose there |
+
 What `main` starts with (the model's spawns, places in pixels from the level's top left):
 
 | Thing | Role | x | y |

@@ -564,7 +564,7 @@ pub(crate) fn run(a: &StaticArgs, paths: &Paths) -> Result<Outcome> {
 
 /// Where the reader stopped, as text: counts, then the stops that hide the
 /// most routines.
-fn unread_text(u: &harvest::unread::Unread) -> String {
+pub(crate) fn unread_text(u: &harvest::unread::Unread) -> String {
     use std::fmt::Write as _;
     let mut s = String::new();
     let _ = writeln!(

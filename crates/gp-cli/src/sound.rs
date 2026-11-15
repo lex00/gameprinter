@@ -11,7 +11,8 @@
 //! An arcade recording (Tapper's two AY-8910s, port wave 6) is captured,
 //! held to its notes and compared through crate::sound_ay instead: an
 //! `ay.log` from the recording's `ay-write` events, and notes per
-//! channel. `decode` reads songs with a registered driver's decoder
+//! channel, with `--template` the sound requests gp gaps finds at the
+//! sound board's latch. `decode` reads songs with a registered driver's decoder
 //! (gp_sound::drivers); Tapper's driver decodes the AY log. `render`
 //! writes WAV files and `banks` lists the sound banks found; AY logs and
 //! songs render through the arcade board's sound (crate::sound_ay_render).
@@ -75,7 +76,10 @@ pub struct CaptureArgs {
     pub name: String,
     /// The template whose model the songs bind to; with it, the game's
     /// sound requests (gp gaps, which replays with the code observer)
-    /// split music from effects.
+    /// split music from effects. On an arcade recording the requests (at
+    /// the sound board's latch) are written to requests.json; its notes
+    /// stay in songs.json (gp-ay-songs), which a model's songs slot
+    /// (gp-songs, the NES's five channels) can't hold, so none is bound.
     #[arg(long)]
     pub template: Option<String>,
     /// The model level the captured music plays in.
@@ -285,13 +289,13 @@ fn model_names(t: &crate::gaps::Template) -> (Vec<String>, Vec<String>, Vec<Stri
 }
 
 /// `gp sound capture` of an arcade recording: its AY register log and
-/// notes (crate::sound_ay).
+/// notes (crate::sound_ay), and with `--template` the sound requests gp
+/// gaps finds at the sound board's latch in the frames, in requests.json.
+/// The notes stay in the AY's own file (`gp-ay-songs 0`): a model's songs
+/// slot holds `gp-songs`, whose channels, voices and clock are the NES
+/// APU's, so none is bound to the model (docs/sound.md says what the
+/// format would need).
 fn capture_ay(a: &CaptureArgs, opened: &Opened, paths: &Paths) -> Result<Outcome> {
-    if a.template.is_some() {
-        bail!(
-            "--template binds songs to a model through gp gaps' NES sound requests; an arcade capture writes the AY log and its notes only"
-        );
-    }
     let range = parse_frames(&a.frames, opened.manifest.frames)?;
     let range = range.start.max(1)..range.end.min(opened.manifest.frames + 1);
     if range.is_empty() {
@@ -328,6 +332,46 @@ fn capture_ay(a: &CaptureArgs, opened: &Opened, paths: &Paths) -> Result<Outcome
         &dir.join("songs.json"),
         serde_json::to_string_pretty(&songs)?.as_bytes(),
     )?;
+    // The requests, from gp gaps' detector over the whole recording (an
+    // interface is known by how often it is used, which one level may
+    // not show), kept in the frames captured.
+    let mut asked = Vec::new();
+    let mut said = String::new();
+    if let Some(tn) = &a.template {
+        let t = crate::gaps::Template::open(a.dir.as_deref(), tn)?;
+        let ga = crate::gaps::GapsArgs::for_sound(
+            tn,
+            &a.recording,
+            "1..",
+            a.dir.as_deref(),
+            a.listing.clone(),
+        );
+        let (run, why) = crate::gaps::build_run(&ga, &t, paths)?;
+        let (ifaces, found) = gp_gaps::sound::detect(&run);
+        asked = found
+            .into_iter()
+            .filter(|r| range.contains(&r.frame))
+            .map(|r| json!({"frame": r.frame, "via": r.via, "id": r.id, "name": r.name, "requester": r.requester}))
+            .collect();
+        write(
+            &dir.join("requests.json"),
+            serde_json::to_string_pretty(&json!({"interfaces": ifaces, "requests": asked}))?
+                .as_bytes(),
+        )?;
+        let via: Vec<String> = ifaces.iter().map(|i| i.name.clone()).collect();
+        said = format!(
+            "\n{} sound requests in the frames via {}; none is bound to the model: a model's songs slot holds gp-songs, whose channels are the NES's five, and the AY's six channels' notes stay in songs.json (gp-ay-songs)",
+            asked.len(),
+            if via.is_empty() {
+                "no interface found".to_owned()
+            } else {
+                via.join(", ")
+            }
+        );
+        if !why.is_empty() {
+            said.push_str(&format!("\nnote: no code signals: {why}"));
+        }
+    }
     let writes: usize = log.frames.values().map(Vec::len).sum();
     let notes: Vec<String> = songs["channels"]
         .as_array()
@@ -342,9 +386,9 @@ fn capture_ay(a: &CaptureArgs, opened: &Opened, paths: &Paths) -> Result<Outcome
         })
         .collect();
     Ok(Outcome::ok(
-        json!({"dir": dir, "from": from, "writes": writes, "frames": [range.start, range.end - 1], "songs": songs}),
+        json!({"dir": dir, "from": from, "writes": writes, "frames": [range.start, range.end - 1], "songs": songs, "requests": asked}),
         format!(
-            "{} AY writes in frames {} to {} of {} (from the {from}); notes by channel: {}\nwritten to {}",
+            "{} AY writes in frames {} to {} of {} (from the {from}); notes by channel: {}{said}\nwritten to {}",
             writes,
             range.start,
             range.end - 1,

@@ -19,9 +19,16 @@
 #    build). build-page.sh's last step, `gp template served`, checks that
 #    no file of the page or of its play files holds the ROM's bytes,
 #    lifted files, pictures made from them, or a game image.
-# 2. The page's headless check (check-page.mjs) under the page's _headers.
+# 2. The page's headless check (check-page.mjs) under the page's _headers,
+#    with Moss Hop and three made-up themes in DIR.mosshop for its
+#    theme-hud-over and theme-in-region sections (scripts/web/mosshop-hud.sh;
+#    with no Moss Hop ROM they are skipped with a note, and a run of the
+#    script that fails fails the release check).
+#    Moss Hop with a made-up sound role in DIR.mosshop-takes for its
+#    theme-sound-takes section (scripts/web/mosshop-takes.sh, the same way).
 # 3. The lift under Node (lift.test.mjs) on the page's own lift files, and
-#    the page check's theme line rule (theme-line.test.mjs).
+#    the page check's theme line rule (theme-line.test.mjs), and the
+#    page's address and share link rules (share.test.mjs).
 # 4. `gp package scan` on the game's package: it must have no needs-rewrite
 #    item, and must have been compared with the ROMs.
 # 5. The page's size, its files and their SHA-256, also written to
@@ -121,6 +128,17 @@ case "$source_url" in
       exit 2
     fi
     echo "ok: $source_repo is at commit $(git -C "$snapshot" rev-parse HEAD) on $source_branch; the page and the check read this copy for the whole run ($snapshot)"
+    # A copy of it with a made-up second game (test/made-up) and its theme,
+    # for the sections about a game named in the address (game-*,
+    # share-link). The page's own game reads the same files in both.
+    if any="$(GP="$gp" "$repo/scripts/web/test-registry.sh" "$snapshot" "$snapshot.any" | tail -1)" && [ -d "$any/index/test/made-up" ]; then
+      echo "ok: the check reads a copy with a made-up second game added ($any)"
+      snapshot="$any"
+    else
+      echo "FAIL: scripts/web/test-registry.sh couldn't add the made-up second game, so the page can't be checked with a game named in its address"
+      echo "bundle: $out"
+      exit 2
+    fi
     registry_folder=(--registry-folder "$snapshot") ;;
   *)
     echo "FAIL: the page's source $source_url isn't a GitHub repo's raw address, so the check can't take a snapshot of it. The check doesn't read the live registry instead."
@@ -142,6 +160,30 @@ if [ ! -f "$out/index.html" ]; then
 fi
 out="$(cd "$out" && pwd)"
 built="$(python3 -I "$repo/scripts/web/page-digest.py" "$out")" || exit 2
+
+step "Moss Hop with two made-up themes, for the page check's theme-hud-over section"
+# The page's own player draws them (check-page.mjs serves DIR.mosshop beside
+# its files). Moss Hop's art is its own ROM's (`just mosshop`); without it
+# (mosshop-hud.sh's exit 3) the sections are skipped and say so. A script
+# that runs and fails fails the release check: its sections would be
+# skipped and the check pass with them unrun.
+GP="$gp" "$repo/scripts/web/mosshop-hud.sh" "$out.mosshop" >/dev/null
+s=$?
+case $s in
+  0) echo "ok: $out.mosshop" ;;
+  3) echo "note: no Moss Hop ROM to lift its art from (just mosshop builds it), so the page check skips theme-hud-over and theme-in-region" ;;
+  *) fail+=("scripts/web/mosshop-hud.sh failed (exit $s), so theme-hud-over and theme-in-region couldn't run")
+     echo "FAIL: scripts/web/mosshop-hud.sh exited $s making $out.mosshop" ;;
+esac
+step "Moss Hop with a made-up sound role and a theme of three takes, for the page check's theme-sound-takes section"
+GP="$gp" "$repo/scripts/web/mosshop-takes.sh" "$out.mosshop-takes" >/dev/null
+s=$?
+case $s in
+  0) echo "ok: $out.mosshop-takes" ;;
+  3) echo "note: no Moss Hop ROM to lift its art from (just mosshop builds it), so the page check skips theme-sound-takes" ;;
+  *) fail+=("scripts/web/mosshop-takes.sh failed (exit $s), so theme-sound-takes couldn't run")
+     echo "FAIL: scripts/web/mosshop-takes.sh exited $s making $out.mosshop-takes" ;;
+esac
 
 step "the page in a headless browser, under the page's _headers"
 browser="$("$repo/scripts/inspector/fetch-browser.sh" "$home")" || { echo "no headless browser"; exit 2; }
@@ -166,6 +208,9 @@ s=$?
 node --test "$repo/scripts/web/public/theme-line.test.mjs"
 s=$?
 [ $s -eq 0 ] || fail+=("the page check's theme line rule (theme-line.test.mjs, exit $s)")
+node --test "$repo/scripts/web/public/share.test.mjs"
+s=$?
+[ $s -eq 0 ] || fail+=("the page's address and share link rules (share.test.mjs, exit $s)")
 
 step "gp package scan on the game's package"
 # A scan reads the package's folder, the ROMs in $GP_ROM_DIR and gp. Only

@@ -210,7 +210,7 @@ pub fn detect(run: &Run) -> (Vec<Interface>, Vec<Request>) {
     for (addr, b) in &mut bytes {
         // Only the game's own sets ask; the engine's take a request off.
         b.sets.retain(|s| !s.4 && !engine_pc(s.2));
-        if b.sets.is_empty() || (0x100..0x200).contains(addr) {
+        if b.sets.is_empty() || (addr & !0x7FF == run.ram_base && k.stack.has(addr & 0x7FF)) {
             continue;
         }
         let (name, _) = k.ram_name(*addr);
@@ -475,8 +475,93 @@ pub fn detect(run: &Run) -> (Vec<Interface>, Vec<Request>) {
             }
         }
     }
+    latch(run, &mut ifaces, &mut reqs);
     reqs.sort_by_key(|r| (r.at, r.via.clone()));
     (ifaces, reqs)
+}
+
+/// A sound board's latch as the way the game asks for sound (an arcade
+/// board, whose sound CPU plays what the main CPU writes to its latches):
+/// the latch the game writes the most values to, three or more over three
+/// or more writes, every write to it a request with the value as the
+/// effect's ID. A game that writes all its latches at once (Tapper) asks
+/// once a write group, so one latch is the interface; the others are named
+/// in its evidence. A frame that writes one value to every latch it
+/// writes, two or more, is the board's test or a silence, not a request,
+/// and is left out.
+fn latch(run: &Run, ifaces: &mut Vec<Interface>, reqs: &mut Vec<Request>) {
+    let k = &run.known;
+    let mut by_frame: BTreeMap<usize, Vec<&crate::LatchWrite>> = BTreeMap::new();
+    for w in &run.latch {
+        by_frame.entry(w.at).or_default().push(w);
+    }
+    let mut kept: Vec<&crate::LatchWrite> = Vec::new();
+    let mut left_out = 0usize;
+    for ws in by_frame.values() {
+        let latches: BTreeSet<u8> = ws.iter().map(|w| w.latch).collect();
+        let values: BTreeSet<u8> = ws.iter().map(|w| w.value).collect();
+        if latches.len() >= 2 && values.len() == 1 {
+            left_out += 1;
+            continue;
+        }
+        kept.extend(ws.iter().copied());
+    }
+    let mut per: BTreeMap<u8, (BTreeSet<u8>, usize)> = BTreeMap::new();
+    for w in &kept {
+        let e = per.entry(w.latch).or_default();
+        e.0.insert(w.value);
+        e.1 += 1;
+    }
+    let written = per.len();
+    // Most distinct values first; a tie goes to the lower latch.
+    let mut asked: Vec<(u8, usize, usize)> = per
+        .iter()
+        .filter(|(_, (v, n))| v.len() >= 3 && *n >= 3)
+        .map(|(&l, (v, n))| (l, v.len(), *n))
+        .collect();
+    asked.sort_by_key(|&(l, v, _)| (std::cmp::Reverse(v), l));
+    let others: Vec<String> = per
+        .iter()
+        .filter(|(l, _)| asked.first().is_none_or(|a| a.0 != **l))
+        .map(|(l, (v, _))| format!("latch {l} {} values", v.len()))
+        .collect();
+    for (chosen, values, writes) in asked.into_iter().take(1) {
+        let mine: Vec<&&crate::LatchWrite> = kept.iter().filter(|w| w.latch == chosen).collect();
+        let port = mine.first().map_or(0, |w| w.port);
+        let name = format!("sound latch {chosen}");
+        let setters: BTreeSet<u32> = mine.iter().map(|w| w.pc).collect();
+        ifaces.push(Interface {
+            kind: "latch".into(),
+            name: name.clone(),
+            addr: Some(u16::from(port)),
+            prg: None,
+            setters: setters.len(),
+            requests: mine.len() as u64,
+            why: format!(
+                "the sound board's latch {chosen} (port {port:#04x}), written {writes} times with {values} values, the most of the {written} latches written{}{}",
+                if others.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", others.join(", "))
+                },
+                if left_out > 0 {
+                    format!("; {left_out} frames writing one value to every latch (a test or a silence) left out")
+                } else {
+                    String::new()
+                }
+            ),
+        });
+        for w in mine {
+            reqs.push(Request {
+                at: w.at,
+                frame: run.frames.get(w.at).map_or(0, |f| f.frame),
+                via: name.clone(),
+                id: w.value,
+                name: effect_name(run, &name, w.value),
+                requester: k.writer_name(w.pc, w.routine),
+            });
+        }
+    }
 }
 
 /// Names for effect IDs from the sound engine's pointer table: a table of

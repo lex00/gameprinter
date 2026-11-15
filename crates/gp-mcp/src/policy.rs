@@ -116,6 +116,8 @@ pub enum Rule {
     Refuse(&'static str),
     /// Refused when the argument is given; else the base.
     RefuseWith(&'static str, &'static str, Base),
+    /// Refused unless one of the flags is given; else the base.
+    RefuseUnless(&'static [&'static str], &'static str, Base),
 }
 
 impl Rule {
@@ -130,6 +132,19 @@ impl Rule {
             Rule::Refuse(_) => "refused",
             Rule::RefuseWith(_, _, Base::Read) => "read; refused with an argument",
             Rule::RefuseWith(_, _, Base::Write) => "write; refused with an argument",
+            Rule::RefuseUnless(_, _, Base::Read) => "read; refused without an argument",
+            Rule::RefuseUnless(_, _, Base::Write) => "write; refused without an argument",
+        }
+    }
+
+    /// Its row in docs/mcp.md's table of rules ("Every command"): `ask` and
+    /// `refused` take the rules that ask or refuse only with an argument.
+    pub fn kind(self) -> &'static str {
+        match self {
+            Rule::Read => "read",
+            Rule::Write => "write",
+            Rule::Ask(..) | Rule::AskWith(..) => "ask",
+            Rule::Refuse(_) | Rule::RefuseWith(..) | Rule::RefuseUnless(..) => "refused",
         }
     }
 
@@ -152,6 +167,9 @@ impl Rule {
             Rule::Refuse(instead) => format!("Refused from a tool: {instead}"),
             Rule::RefuseWith(arg, instead, _) => {
                 format!("Runs at once, but refused with `{arg}`: {instead}")
+            }
+            Rule::RefuseUnless(free, instead, _) => {
+                format!("Runs at once with {}; refused without: {instead}", flags(free))
             }
         }
     }
@@ -212,6 +230,10 @@ const DRY_RUN: &[&str] = &["dry-run"];
 /// Arguments that count something: given as 0 they are not given.
 const COUNTS: &[&str] = &["agents"];
 
+/// Only the person decides a picture the agent proposes for their theme.
+const PERSON_DECIDES: &str = "only the person decides a proposed picture, with ACCEPT, REJECT or PUT THE OLD ONE BACK on their page. Propose with theme picture propose, wait with next (wait_s) until waits_for_yes shows it answered, and read their answer with theme picture list.";
+/// Only the person decides a sound change the agent proposes for their copy.
+const PERSON_DECIDES_SOUND: &str = "only the person decides a proposed sound change, with ACCEPT, REJECT or PUT THE OLD ONE BACK on their page. Propose with sound_edit (or theme sound propose), wait with next (wait_s) until waits_for_yes shows it answered, and read their answer with theme sound list.";
 const SERVE: &str = "it serves a page until stopped. The person starts `gp serve` themselves and opens http://127.0.0.1:7710/; for a local preview use build_publish.";
 
 /// Every gp command, with its road and rule. Sorted by path.
@@ -244,6 +266,7 @@ pub const TABLE: &[Row] = &[
     r("game kit", J, Write),
     r("game new", J, Write),
     r("game score", J, Write),
+    r("game share", J, Write),
     r("game test", J, Read),
     r("model blind", S, Write),
     r("model check", J, Read),
@@ -265,10 +288,13 @@ pub const TABLE: &[Row] = &[
     r("package hooks", D, Read),
     r("package scan", J, Read),
     r("registry check", J, Read),
+    r("registry grant", J, Rule::Ask(Ask::Publish, DRY_RUN)),
+    r("registry grants", J, Read),
     r("registry init", J, Write),
-    r("registry publish", J, PUBLISH),
-    r("registry reindex", J, PUBLISH),
+    r("registry publish", J, Rule::Ask(Ask::Publish, DRY_RUN)),
+    r("registry reindex", J, Rule::Ask(Ask::Publish, DRY_RUN)),
     r("registry serve", J, Rule::Refuse(SERVE)),
+    r("registry yank", J, Rule::Ask(Ask::Publish, DRY_RUN)),
     r("roms add", J, Write),
     r("roms clean", J, Write),
     r("roms diff", J, Read),
@@ -290,11 +316,31 @@ pub const TABLE: &[Row] = &[
     r("theme list", O, Read),
     r("theme look check", J, Read),
     r("theme look new", J, Write),
+    r(
+        "theme look play",
+        J,
+        Rule::RefuseUnless(
+            &["background", "shots"],
+            "without --background or --shots it serves until stopped. Give --background (it serves from a process of its own for --minutes, 60 by default, and returns the link and the PID) or --shots DIR (pictures in a folder the person named).",
+            Base::Write,
+        ),
+    ),
+    r("theme look sheet", J, Write),
     r("theme paint", J, Write),
+    r("theme picture accept", J, Rule::Refuse(PERSON_DECIDES)),
+    r("theme picture list", J, Read),
+    r("theme picture propose", J, Read),
+    r("theme picture reject", J, Rule::Refuse(PERSON_DECIDES)),
+    r("theme picture undo", J, Rule::Refuse(PERSON_DECIDES)),
     r("theme publish", O, Rule::Ask(Ask::Publish, DRY_RUN)),
     r("theme recheck", O, Rule::Ask(Ask::Publish, DRY_RUN)),
     r("theme schema", D, Read),
     r("theme sheet", J, Write),
+    r("theme sound accept", J, Rule::Refuse(PERSON_DECIDES_SOUND)),
+    r("theme sound list", J, Read),
+    r("theme sound propose", J, Read),
+    r("theme sound reject", J, Rule::Refuse(PERSON_DECIDES_SOUND)),
+    r("theme sound undo", J, Rule::Refuse(PERSON_DECIDES_SOUND)),
     r("theme style list", J, Read),
     r("theme style new", J, Write),
     r("theme style show", J, Read),
@@ -354,6 +400,7 @@ pub const TABLE: &[Row] = &[
         Rule::AskWith(Ask::Spend, "key", Base::Read),
     ),
     r("dataset rom", S, Write),
+    r("element explain", S, Read),
     r("element inputs", S, Read),
     r("env", D, Read),
     r("events", S, Read),
@@ -374,6 +421,7 @@ pub const TABLE: &[Row] = &[
     r("host serve", J, Rule::Refuse(SERVE)),
     r("host speed", D, Read),
     r("input-log check", S, Read),
+    r("input-log fork", S, Write),
     r("input-log generate", S, Write),
     r("interp baselines", J, Write),
     r("interp compare", S, Read),
@@ -390,8 +438,17 @@ pub const TABLE: &[Row] = &[
     r("labels propose", S, Write),
     r("labels show", S, Read),
     r("level difficulty", J, Read),
+    // A level edit writes only a copy in the home's work area: the command
+    // itself refuses a games checkout's original, a folder in a git work
+    // tree and a published package, so the refusal holds by hand too.
+    r("level edit", J, Write),
     r("level kit", J, Write),
+    r("level list", J, Read),
     r("level measure", J, Read),
+    r("level render", J, Read),
+    r("level show", J, Read),
+    r("level undo", J, Write),
+    r("level verify", J, Read),
     r("localize", S, Write),
     r(
         "mcp",
@@ -470,6 +527,7 @@ pub const TABLE: &[Row] = &[
     r("scorecard", D, Read),
     r("sealed leaks", J, Read),
     r("sealed score", J, Write),
+    r("self check", J, Read),
     r("self commands", D, Read),
     r("self docs", D, Write),
     r("self features", D, Read),
@@ -523,6 +581,42 @@ pub const TABLE: &[Row] = &[
     r("watch start", S, Write),
     r("worker env", D, Read),
 ];
+
+/// The commands known to run longer than gp_run's usual limit
+/// (`run::DEFAULT_TIMEOUT`, 300 s), with the seconds a call that gives no
+/// `timeout_s` gets instead. Measured on 2026-11-14: `corpus score` on
+/// Tapper took 444 s in a debug build; a gate runs a whole check and a
+/// corpus, 30 to 60 minutes. Every path is a row of [`TABLE`] (a test
+/// holds it), and none is past `run::MAX_TIMEOUT`.
+pub const LONG: &[(&str, u64)] = &[
+    // Whole corpora: every clip through the module, or the ROM again.
+    ("baseline check", 1800),
+    ("capture verify", 1800),
+    ("corpus score", 1800),
+    ("corpus verify", 1800),
+    ("game score", 1800),
+    ("interp baselines", 1800),
+    ("sealed score", 1800),
+    ("agent score", 1800),
+    // The model's stages, clip by clip against the original.
+    ("model refine", 1800),
+    ("model static", 1800),
+    ("mechanic triage", 1800),
+    // Builds: a module in the sandbox, a worktree's gp and preview.
+    ("game build", 900),
+    ("game share", 1800),
+    ("game test", 900),
+    ("agent attempt", 1800),
+    // The gates (their dry runs and score-only runs are free).
+    ("model gate", 3600),
+    ("tool gate", 3600),
+];
+
+/// The seconds a call of `path` runs when it gives no `timeout_s`: its
+/// [`LONG`] entry, or None for gp_run's usual limit.
+pub fn long_timeout_s(path: &str) -> Option<u64> {
+    LONG.iter().find(|(p, _)| *p == path).map(|(_, s)| *s)
+}
 
 /// A command's row in the table.
 pub fn row(path: &str) -> Option<&'static Row> {
@@ -606,6 +700,8 @@ pub fn decide(row: &Row, given: &dyn Fn(&str) -> bool, values: &[(String, String
         Rule::Refuse(why) => Decision::Refused(why.to_owned()),
         Rule::RefuseWith(arg, why, _) if given(arg) => Decision::Refused(why.to_owned()),
         Rule::RefuseWith(_, _, b) => base(b),
+        Rule::RefuseUnless(free, _, b) if free.iter().any(|f| given(f)) => base(b),
+        Rule::RefuseUnless(_, why, _) => Decision::Refused(why.to_owned()),
     };
     // A target in git or a bucket publishes, whatever the command.
     if let Decision::Run { .. } = decision
@@ -616,6 +712,23 @@ pub fn decide(row: &Row, given: &dyn Fn(&str) -> bool, values: &[(String, String
         return Decision::NeedsYes(Ask::Publish);
     }
     decision
+}
+
+/// The rule for the `sound_edit` tool's direct changes (`write` or
+/// `undo`), which change the person's sound without a proposal: their
+/// yes. While their page is open the yes is their ACCEPT on a proposal's
+/// card, so a direct change is refused there and the agent proposes; with
+/// no page open it runs on the agent's confirmed_by_person, as gp_run's
+/// asks do. A proposal (the tool's default) is free, as
+/// `theme sound propose` is.
+pub fn direct_sound_edit(page_open: bool, confirmed_by_person: bool) -> Decision {
+    if page_open {
+        Decision::Refused("a direct change to the person's sound needs their yes, and with their page open that is their ACCEPT on a proposal's card. Leave write and undo out: sound_edit then proposes the change, the page shows it with the sound now and the new one, ACCEPT and REJECT, and next (wait_s) tells you their answer. To put back a change they accepted, they press PUT THE OLD ONE BACK; or propose the change back.".into())
+    } else if confirmed_by_person {
+        Decision::Run { writes: true }
+    } else {
+        Decision::Refused("a direct change to the person's sound needs their yes. Leave write and undo out to propose it instead (it waits on their page, gp serve, with ACCEPT and REJECT). No page is open for this home, so if they say yes to this exact change here, call again with confirmed_by_person: true.".into())
+    }
 }
 
 /// Whether a call of `row`'s command may start Laya.
@@ -648,7 +761,7 @@ pub fn summary() -> Value {
             "means": "publishes, uploads, pushes or lands a change through a gate; spends money, calls a paid service or reads a secret or answer key; or downloads a lot. A refusal puts the ask on the person's page as a card with YES and NO (ask_id); call again with ask_id once next shows it answered. With no page open, confirmed_by_person: true runs it, which you may set only after the person said yes to that exact action in this conversation. Its dry-run flag, where it has one, runs at once. Some need a yes only with one argument: their rule says which",
         },
         "refused": {
-            "commands": count(&|r| matches!(r, Rule::Refuse(_) | Rule::RefuseWith(..))),
+            "commands": count(&|r| matches!(r, Rule::Refuse(_) | Rule::RefuseWith(..) | Rule::RefuseUnless(..))),
             "means": "serves until stopped, waits with no bound, opens a program on the person's screen, or runs any program: refused from a tool, and the refusal names what to use instead. Some are refused only with one argument: their rule says which. Ports 7710 and 7720 are never bound from a tool",
         },
     })
@@ -657,6 +770,33 @@ pub fn summary() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// docs/mcp.md's table of rules gives how many commands each rule has,
+    /// counted from this table, so it can't go stale.
+    #[test]
+    fn the_docs_count_the_commands_of_each_rule() {
+        let doc = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/mcp.md"),
+        )
+        .unwrap();
+        let mut wrong = Vec::new();
+        for kind in ["read", "write", "ask", "refused"] {
+            let rows: Vec<&str> = TABLE
+                .iter()
+                .filter(|r| r.rule.kind() == kind)
+                .map(|r| r.path)
+                .collect();
+            let line = format!("| {kind} | {} |", rows.len());
+            if !doc.lines().any(|l| l.starts_with(&line)) {
+                wrong.push(format!("`{line}` ({})", rows.join(", ")));
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "docs/mcp.md's table under \"Every command\" should have rows starting:\n{}",
+            wrong.join("\n")
+        );
+    }
 
     fn given<'a>(names: &'a [&'a str]) -> impl Fn(&str) -> bool + 'a {
         move |n| names.contains(&n)
@@ -706,6 +846,110 @@ mod tests {
                 "{p}"
             );
         }
+    }
+
+    #[test]
+    fn a_theme_plays_in_the_background_or_as_pictures_and_never_publishes() {
+        let play = row("theme look play").unwrap();
+        assert_eq!(play.road, Road::Journey);
+        // In the foreground it serves until stopped.
+        assert!(matches!(
+            decide(play, &given(&[]), &[]),
+            Decision::Refused(why) if why.contains("--background")
+        ));
+        // Serving on a local port for a while, or pictures in a folder the
+        // person named: runs at once, with no yes, as a write.
+        for f in ["background", "shots"] {
+            assert_eq!(
+                decide(play, &given(&[f]), &[]),
+                Decision::Run { writes: true },
+                "{f}"
+            );
+        }
+        // The person's own ports stay theirs.
+        let port = [("port".to_owned(), "7710".to_owned())];
+        assert!(matches!(
+            decide(play, &given(&["background", "port"]), &port),
+            Decision::Refused(_)
+        ));
+    }
+
+    #[test]
+    fn a_proposed_picture_is_proposed_freely_and_decided_only_by_the_person() {
+        // Proposing writes only a pending file in the home's work area,
+        // and listing reads the answers: both run at once.
+        for p in ["theme picture propose", "theme picture list"] {
+            assert_eq!(
+                decide(row(p).unwrap(), &given(&[]), &[]),
+                Decision::Run { writes: false },
+                "{p}"
+            );
+        }
+        // Applying is the person's ACCEPT on the page, never the agent's.
+        for p in [
+            "theme picture accept",
+            "theme picture reject",
+            "theme picture undo",
+        ] {
+            match decide(row(p).unwrap(), &given(&[]), &[]) {
+                Decision::Refused(why) => {
+                    assert!(why.contains("only the person decides"), "{p}: {why}")
+                }
+                d => panic!("{p} isn't refused: {d:?}"),
+            }
+            // A yes from the conversation doesn't change it.
+            assert!(matches!(
+                decide(row(p).unwrap(), &given(&["words"]), &[]),
+                Decision::Refused(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn a_proposed_sound_is_proposed_freely_and_decided_only_by_the_person() {
+        // Proposing writes only a pending file in the home's work area,
+        // and listing reads the answers: both run at once.
+        for p in ["theme sound propose", "theme sound list"] {
+            assert_eq!(
+                decide(row(p).unwrap(), &given(&[]), &[]),
+                Decision::Run { writes: false },
+                "{p}"
+            );
+        }
+        // Applying is the person's ACCEPT on the page, never the agent's.
+        for p in [
+            "theme sound accept",
+            "theme sound reject",
+            "theme sound undo",
+        ] {
+            match decide(row(p).unwrap(), &given(&[]), &[]) {
+                Decision::Refused(why) => {
+                    assert!(why.contains("only the person decides"), "{p}: {why}")
+                }
+                d => panic!("{p} isn't refused: {d:?}"),
+            }
+            assert!(matches!(
+                decide(row(p).unwrap(), &given(&["words"]), &[]),
+                Decision::Refused(_)
+            ));
+        }
+        // sound_edit's direct write (and undo) stays for callers that
+        // had it, with the person's yes: never while their page is open,
+        // where the card is the yes, and with no page only on their word.
+        for confirmed in [false, true] {
+            assert!(matches!(
+                direct_sound_edit(true, confirmed),
+                Decision::Refused(why) if why.contains("ACCEPT")
+            ));
+        }
+        assert!(matches!(
+            direct_sound_edit(false, false),
+            Decision::Refused(why) if why.contains("confirmed_by_person")
+        ));
+        assert_eq!(
+            direct_sound_edit(false, true),
+            Decision::Run { writes: true }
+        );
     }
 
     #[test]
@@ -793,6 +1037,18 @@ mod tests {
     }
 
     #[test]
+    fn explaining_a_spot_runs_freely() {
+        // A person's "what is this?" on the page: the agent answers it at
+        // once, with nothing written but the home's caches.
+        let r = row("element explain").unwrap();
+        assert_eq!(r.rule, Rule::Read);
+        assert_eq!(
+            decide(r, &given(&["run", "clip", "frame", "at"]), &[]),
+            Decision::Run { writes: false }
+        );
+    }
+
+    #[test]
     fn an_unknown_command_fails_safe() {
         for (path, help) in [
             ("theme push", "Push a theme"),
@@ -811,5 +1067,39 @@ mod tests {
             assert_eq!(row.road, Road::Developer);
         }
         assert_eq!(row_or_guess("model look", "Show it").rule, Rule::Write);
+    }
+
+    #[test]
+    fn a_level_is_read_freely_and_edited_as_a_write_to_the_copy() {
+        for p in ["level list", "level show", "level render", "level verify"] {
+            let r = row(p).unwrap();
+            assert_eq!(r.road, Road::Journey, "{p}");
+            assert_eq!(
+                decide(r, &given(&[]), &[]),
+                Decision::Run { writes: false },
+                "{p}"
+            );
+        }
+        for p in ["level edit", "level undo"] {
+            let r = row(p).unwrap();
+            assert_eq!(r.road, Road::Journey, "{p}");
+            assert_eq!(
+                decide(r, &given(&[]), &[]),
+                Decision::Run { writes: true },
+                "{p}"
+            );
+        }
+        // A copy in git or a bucket would publish: that needs a yes.
+        let git = [("game".to_owned(), "git:../games".to_owned())];
+        assert_eq!(
+            decide(row("level edit").unwrap(), &given(&["game"]), &git),
+            Decision::NeedsYes(Ask::Publish)
+        );
+        // The person's own ports stay theirs, even for a read.
+        let port = [("port".to_owned(), "7710".to_owned())];
+        assert!(matches!(
+            decide(row("level render").unwrap(), &given(&["port"]), &port),
+            Decision::Refused(_)
+        ));
     }
 }

@@ -878,6 +878,102 @@ pub(crate) fn discover(bytes: &[u8], paths: &Paths) -> Result<Discovery> {
     })
 }
 
+impl Discovery {
+    /// What blind discovery found, in a sentence a command that stops
+    /// after it can say: play start, the player's bytes and controls, and
+    /// for a lane player its lanes, held button and score.
+    pub(crate) fn found(&self) -> String {
+        let b = self.nes.ram_base();
+        let at = |a: usize| format!("${:04X}", a + b);
+        let mut out = format!(
+            "blind discovery on the {} found play start at frame {} ({}), the player's x at {} and y at {}",
+            if self.nes.is_arcade() {
+                "board"
+            } else {
+                "console"
+            },
+            self.log.len(),
+            self.start_run,
+            at(usize::from(self.x)),
+            at(usize::from(self.y)),
+        );
+        if let Some(l) = &self.lanes {
+            out.push_str(&format!(
+                ", and a player who changes lanes ({} and {} move it a lane, y by {} a lane{})",
+                self.pads.name(l.up),
+                self.pads.name(l.down),
+                l.step,
+                l.lane
+                    .map(|n| format!(", the lane at {}", at(n)))
+                    .unwrap_or_default()
+            ));
+            if let Some(h) = &self.held {
+                out.push_str(&format!(
+                    ", a button that acts after {} frames held ({}, counting at {})",
+                    h.frames,
+                    self.pads.name(h.button),
+                    at(h.timer)
+                ));
+            }
+            if let Some(sc) = &self.score {
+                let bytes: Vec<String> = sc.iter().map(|a| at(*a)).collect();
+                out.push_str(&format!(", the score at {}", bytes.join(" ")));
+            }
+        }
+        if self.jump == 0 {
+            out.push_str(", and no jump: no button sent the player's y up and back down");
+        } else {
+            out.push_str(&format!(", and the jump on {}", self.pads.name(self.jump)));
+        }
+        out
+    }
+
+    /// Whether discovery found a player that jumps: a jump button and no
+    /// lanes.
+    pub(crate) fn jumps(&self) -> bool {
+        self.jump != 0 && self.lanes.is_none()
+    }
+}
+
+/// Where the method stops for a lane player or one with no jump: the
+/// seven method changes the roadmap's Wave T lists wait for the owner's
+/// answer (ROADMAP.md, `gp model blind` on an arcade board).
+pub(crate) const METHOD_STOPS: &str = "the method's changes for a player like this (ties between objects that move together, lanes, held actions, moves from what discovery found, progress from a rising counter, the drawn check, system order from the access log) wait for the owner's answer (ROADMAP.md, Wave T)";
+
+/// For a command that plays an NES platformer's method past blind
+/// discovery (the jump sweep, the farm, the top-down farm): on an arcade
+/// romset it runs discovery on the board and stops after it, saying in
+/// plain words what discovery found, what `command` needs next (`needs`)
+/// and why it stops there. Ok on the NES, where the command goes on.
+pub(crate) fn stop_on_arcade(
+    bytes: &[u8],
+    paths: &Paths,
+    command: &str,
+    needs: &str,
+) -> Result<()> {
+    if crate::original::Platform::of_file(bytes) != crate::original::Platform::Arcade {
+        return Ok(());
+    }
+    let d = discover(bytes, paths).with_context(|| {
+        format!("{command} runs blind discovery on the board first, and it stopped")
+    })?;
+    if d.jumps() {
+        bail!(
+            "{command}: {}. {needs}; past discovery it reads the NES's RAM and sprite table through gp-nes, and its board form isn't built, since no arcade game here jumps",
+            d.found()
+        );
+    }
+    let what = if d.lanes.is_some() {
+        "a player who changes lanes"
+    } else {
+        "no jump"
+    };
+    bail!(
+        "{command}: {}. {needs}, and discovery found {what}, so {command} stops here: {METHOD_STOPS}",
+        d.found()
+    )
+}
+
 /// A picture of the next frame, for looking by hand (GP_BLIND_SHOTS).
 fn shot(nes: &mut Machine, to: &Path) -> Result<()> {
     nes.shot(to)
@@ -2443,4 +2539,71 @@ pub(crate) fn check_rom(rom: &Path) -> Result<()> {
         bail!("no ROM at {}", rom.display());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gp_model::model::Device;
+
+    /// What discovery found, as the commands that stop after it say it: a
+    /// lane player's lanes, held button and score in the cabinet's button
+    /// names, no jump, and that it doesn't count as a player that jumps.
+    /// The machine is the made-up NES test ROM; the findings are made up.
+    #[test]
+    fn a_lane_players_discovery_reads_in_words() {
+        let rom = gp_nes::testrom::build();
+        let nes = Machine::power_on(&rom, gp_evidence::manifest::PowerOn::default()).unwrap();
+        let mut d = Discovery {
+            nes,
+            log: vec![InputFrame::held(0); 30],
+            x: 0x10,
+            y: 0x11,
+            screen_x: false,
+            right: true,
+            jump: 0,
+            run: 0,
+            box_dy: 0,
+            pads: Pads::of(Device::Arcade),
+            lanes: Some(Lanes {
+                y: 0x11,
+                lane: Some(0x12),
+                step: 48,
+                y_up: false,
+                up: 0x20,
+                down: 0x10,
+            }),
+            held: Some(Held {
+                button: 0x40,
+                timer: 0x13,
+                done: None,
+                frames: 5,
+            }),
+            score: Some(vec![0x20, 0x21]),
+            power_on: gp_evidence::manifest::PowerOn::default(),
+            start_run: "rand1".into(),
+        };
+        let w = d.found();
+        assert!(w.starts_with("blind discovery on the console found play start at frame 30 (rand1), the player's x at $0010 and y at $0011"), "{w}");
+        assert!(
+            w.contains("(up and down move it a lane, y by 48 a lane, the lane at $0012)"),
+            "{w}"
+        );
+        assert!(
+            w.contains("acts after 5 frames held (button1, counting at $0013)"),
+            "{w}"
+        );
+        assert!(
+            w.contains("the score at $0020 $0021")
+                && w.ends_with("and no jump: no button sent the player's y up and back down"),
+            "{w}"
+        );
+        assert!(!d.jumps());
+        d.lanes = None;
+        d.jump = 0x40;
+        assert!(d.jumps() && d.found().ends_with("and the jump on button1"));
+        // An NES image goes on past it.
+        let paths = Paths::resolve(Some("/nowhere".into()), None, None).unwrap();
+        assert!(stop_on_arcade(&rom, &paths, "x", "y").is_ok());
+    }
 }

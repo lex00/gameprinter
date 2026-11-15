@@ -376,3 +376,200 @@ fn walk(dir: &Path) -> Vec<String> {
     }
     out
 }
+
+#[test]
+fn a_namespace_is_granted_as_init_writes_it_and_only_once() {
+    let (d, _) = unsigned_fixture();
+    let t = Folder(d.path().to_owned());
+    let none = Signer::none();
+    grant(&t, "friend", &[], &none, "2026-11-14").unwrap();
+    // The same two files init writes for a registry made with both names.
+    let made = tempfile::tempdir().unwrap();
+    let m = Folder(made.path().to_owned());
+    let ns = [
+        ("lex00".to_owned(), Vec::new()),
+        ("friend".to_owned(), Vec::new()),
+    ];
+    init(&m, "open", &none, &[], &ns, "2026-11-14").unwrap();
+    for key in ["registry.toml", "namespaces/friend.toml"] {
+        assert_eq!(t.read(key).unwrap(), m.read(key).unwrap(), "{key}");
+    }
+    let text = String::from_utf8(t.read("namespaces/friend.toml").unwrap().unwrap()).unwrap();
+    assert_eq!(
+        text,
+        "format = \"1\"\nnamespace = \"friend\"\nstatus = \"granted\"\nkeys = []\n"
+    );
+    let before = t.read("registry.toml").unwrap();
+    let e = grant(&t, "friend", &[], &none, "2026-11-14").unwrap_err();
+    assert!(e.contains("already granted"), "{e}");
+    let e = grant(&t, "lex00", &[], &none, "2026-11-14").unwrap_err();
+    assert!(e.contains("already granted"), "{e}");
+    assert_eq!(t.read("registry.toml").unwrap(), before);
+    assert!(grant(&t, "Not/Ok", &[], &none, "2026-11-14").is_err());
+    let names: Vec<String> = grants(&t).unwrap().into_iter().map(|(n, _)| n).collect();
+    assert_eq!(names, ["lex00", "friend"]);
+    // A reader now accepts a package in the namespace.
+    let r = Reader::unsigned(&t).unwrap();
+    assert_eq!(r.namespace("friend").unwrap().status, "granted");
+}
+
+#[test]
+fn a_signed_registry_grants_only_with_its_root_and_a_key() {
+    let f = fixture();
+    let t = f.target();
+    let none = Signer::none();
+    let e = grant(
+        &t,
+        "friend",
+        std::slice::from_ref(&f.other.public),
+        &none,
+        "2026-11-14",
+    )
+    .unwrap_err();
+    assert!(e.contains("--root-key"), "{e}");
+    let e = with(&f.other, |s| {
+        grant(
+            &t,
+            "friend",
+            std::slice::from_ref(&f.other.public),
+            s,
+            "2026-11-14",
+        )
+    })
+    .unwrap_err();
+    assert!(e.contains("isn't the one"), "{e}");
+    let e = with(&f.root, |s| grant(&t, "friend", &[], s, "2026-11-14")).unwrap_err();
+    assert!(e.contains("--key"), "{e}");
+    with(&f.root, |s| {
+        grant(
+            &t,
+            "friend",
+            std::slice::from_ref(&f.other.public),
+            s,
+            "2026-11-14",
+        )
+    })
+    .unwrap();
+    let r = Reader::open(&t, &f.root.public).unwrap();
+    assert_eq!(r.file.namespaces, ["lex00", "friend"]);
+    assert_eq!(r.namespace("friend").unwrap().keys[0].key, f.other.public);
+}
+
+#[test]
+fn a_yank_is_added_to_yanks_toml_once_and_can_be_taken_back() {
+    let (d, id) = unsigned_fixture();
+    let t = Folder(d.path().to_owned());
+    let none = Signer::none();
+    let y = yank(
+        &t,
+        "lex00/game",
+        "1.0.0",
+        "made up for a test",
+        "security",
+        &none,
+        NOW,
+        LATER,
+    )
+    .unwrap();
+    assert_eq!(y.id, id);
+    let text = String::from_utf8(t.read("yanks.toml").unwrap().unwrap()).unwrap();
+    assert_eq!(
+        text,
+        format!(
+            "format = \"1\"\nregistry = \"open\"\nsigned = \"{NOW}\"\nexpires = \"{LATER}\"\n\n[[yank]]\nname = \"lex00/game\"\nversion = \"1.0.0\"\nid = \"{id}\"\nreason = \"made up for a test\"\nseverity = \"security\"\n"
+        )
+    );
+    let r = Reader::unsigned(&t).unwrap();
+    assert_eq!(r.yanks(NOW).unwrap().yank, std::slice::from_ref(&y));
+    let e = yank(
+        &t,
+        "lex00/game",
+        "1.0.0",
+        "again",
+        "notice",
+        &none,
+        NOW,
+        LATER,
+    )
+    .unwrap_err();
+    assert!(e.contains("already yanked"), "{e}");
+    let e = yank(&t, "lex00/game", "9.9.9", "r", "notice", &none, NOW, LATER).unwrap_err();
+    assert!(e.contains("isn't published"), "{e}");
+    // A reindex keeps what yanks.toml lists.
+    let versions = [("lex00/game".to_owned(), "1.0.0".to_owned())];
+    reindex(&t, &versions, &none, NOW, LATER).unwrap();
+    assert_eq!(r.yanks(NOW).unwrap().yank, std::slice::from_ref(&y));
+    assert_eq!(
+        unyank(&t, "lex00/game", "1.0.0", &none, NOW, LATER).unwrap(),
+        y
+    );
+    let text = String::from_utf8(t.read("yanks.toml").unwrap().unwrap()).unwrap();
+    assert!(text.ends_with("yank = []\n"), "{text}");
+    assert!(unyank(&t, "lex00/game", "1.0.0", &none, NOW, LATER).is_err());
+}
+
+#[test]
+fn a_signed_registry_yanks_only_with_a_key() {
+    let f = fixture();
+    let t = f.target();
+    let e = yank(
+        &t,
+        "lex00/game",
+        "1.0.0",
+        "r",
+        "security",
+        &Signer::none(),
+        NOW,
+        LATER,
+    )
+    .unwrap_err();
+    assert!(e.contains("--key"), "{e}");
+}
+
+#[test]
+fn listed_names_what_the_lists_hold_and_would_list_agrees_with_reindex() {
+    let (d, _) = unsigned_fixture();
+    let t = Folder(d.path().to_owned());
+    let none = Signer::none();
+    let games = ["lex00/game".to_owned()];
+    for v in ["0.1.0", "0.2.0"] {
+        let p = Publish {
+            name: "lex00/night",
+            version: v,
+            kind: "content",
+            title: "Night",
+            for_games: &games,
+            published: NOW,
+        };
+        publish(&t, &p, &files(), &none).unwrap();
+    }
+    let versions = [
+        ("lex00/game".to_owned(), "1.0.0".to_owned()),
+        ("lex00/night".to_owned(), "0.1.0".to_owned()),
+        ("lex00/night".to_owned(), "0.2.0".to_owned()),
+    ];
+    let would = would_list(&t, &versions).unwrap();
+    reindex(&t, &versions, &none, NOW, LATER).unwrap();
+    let now = listed(&t).unwrap();
+    assert_eq!(now, would);
+    let pairs: Vec<(String, bool)> = now
+        .iter()
+        .map(|l| (format!("{}@{}", l.name, l.version), l.by_game))
+        .collect();
+    assert_eq!(
+        pairs,
+        [
+            ("lex00/night@0.1.0".to_owned(), true),
+            ("lex00/night@0.2.0".to_owned(), true),
+            ("lex00/game@1.0.0".to_owned(), false),
+        ]
+    );
+    // Reindexing what is listed rewrites the same lists.
+    let again: Vec<(String, String)> = now
+        .iter()
+        .map(|l| (l.name.clone(), l.version.clone()))
+        .collect();
+    let before = t.read("by-game/lex00/game.toml").unwrap();
+    reindex(&t, &again, &none, NOW, LATER).unwrap();
+    assert_eq!(t.read("by-game/lex00/game.toml").unwrap(), before);
+}

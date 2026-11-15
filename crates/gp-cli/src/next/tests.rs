@@ -586,3 +586,49 @@ fn a_tell_about_a_clip_waits_for_the_agent_until_it_answers() {
     let a = fx.answer(Some("t"));
     assert!(!a.next.says.contains("told it"), "{}", a.next.says);
 }
+
+#[test]
+fn a_proposed_sound_waits_for_the_person_then_its_answer_for_the_agent() {
+    let fx = Fx::new();
+    fx.game("t", &["t.walk.001"]);
+    fx.gate("t", &["t.walk.001"], 0, false);
+    let f = fx
+        .home()
+        .join("work/proposals/sounds/1-abcdef01/proposal.json");
+    let mut p = json!({"id": "1-abcdef01", "copy": "my_hop", "title": "My Hop", "clip_song": "theme",
+        "why": "A lower tune, as you asked.", "made_ms": 1, "state": "open"});
+    write(&f, &p.to_string());
+    let a = fx.answer(Some("t"));
+    let y = a
+        .waits_for_yes
+        .iter()
+        .find(|y| y.what == "sound")
+        .expect("the sound card");
+    assert_eq!(y.state.as_deref(), Some("open"));
+    assert_eq!(y.sound.as_ref().unwrap()["place"], 1);
+    assert_eq!(a.next.who, Who::Person);
+    assert_eq!(
+        a.next.says,
+        "Your agent proposes a change to the sound: A new sound for \"theme\" in my_hop: A lower tune, as you asked. Listen to both and press ACCEPT or REJECT on the card."
+    );
+    p["state"] = json!("rejected");
+    p["answered_ms"] = json!(gp_mcp::asks::now_ms());
+    write(&f, &p.to_string());
+    let a = fx.answer(Some("t"));
+    let y = a
+        .waits_for_yes
+        .iter()
+        .find(|y| y.what == "sound")
+        .expect("the answer");
+    assert_eq!(
+        y.says,
+        "You rejected the new sound for \"theme\" in my_hop."
+    );
+    assert!(
+        std::iter::once(&a.next)
+            .chain(&a.also)
+            .any(|s| s.who == Who::Agent && s.says.contains("gp theme sound list")),
+        "{:?}",
+        a.also
+    );
+}

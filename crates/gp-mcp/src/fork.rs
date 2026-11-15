@@ -352,7 +352,7 @@ fn make_assets(
 fn notes(m: Option<&toml::Table>, tier: Option<&str>) -> Vec<String> {
     let mut out = Vec::new();
     if tier == Some("commercial") {
-        out.push("This is a commercial game's template: its art, sound and levels come from the person's own ROM and stay on this computer. build_publish refuses the copy while any slot still holds the original's art. assets_generate and assets_place replace art, but they and validate need recorded runs in the repo's baselines/<source>, which only Moss Hop has today.".to_owned());
+        out.push("This is a commercial game's template: its art, sound and levels come from the person's own ROM and stay on this computer. build_publish refuses the copy while any slot still holds the original's art. assets_generate and assets_place replace art, but they need recorded runs in the repo's baselines/<source>, which only Moss Hop has today. validate checks a changed copy as a changed game: its model well formed and every stage reached and finished.".to_owned());
     }
     let hooks: Vec<&str> = m
         .and_then(|m| m.get("ext")?.get("hooks")?.as_array())
@@ -367,7 +367,7 @@ fn notes(m: Option<&toml::Table>, tier: Option<&str>) -> Vec<String> {
         ));
     }
     if get(m, "source", "platform") == Some("arcade") {
-        out.push("An arcade game's model draws nothing yet (no model slot takes an arcade board's pictures), so the copy has no picture to show or replace.".to_owned());
+        out.push("An arcade game's model draws its board's own pictures only through its board slots (a level's present.board and an entity's board_sprite, docs/formats/board-art.md), filled from the player's romset, so the copy has no picture of its own to show or replace.".to_owned());
     }
     out
 }

@@ -115,14 +115,6 @@ impl OriginalRuntime {
     }
 }
 
-/// Refuses an arcade original for what only the NES has, naming it.
-pub(crate) fn nes_only(platform: Platform, what: &str) -> Result<()> {
-    if platform == Platform::Arcade {
-        bail!("{what} is read from the NES's 6502 code: gp has no arcade counterpart yet");
-    }
-    Ok(())
-}
-
 macro_rules! each {
     ($self:expr, $o:ident => $e:expr) => {
         match $self {
@@ -208,8 +200,6 @@ mod tests {
         assert!(o.nes().is_some());
         let e = OriginalRuntime::load(Platform::Arcade, &rom).err().unwrap();
         assert!(e.to_string().contains("romset zip"), "{e}");
-        assert!(nes_only(Platform::Arcade, "random draws").is_err());
-        assert!(nes_only(Platform::Nes, "random draws").is_ok());
     }
 
     /// With the owner's rbtapper romset on this machine: the arcade

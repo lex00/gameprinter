@@ -40,6 +40,11 @@ pub const DRAW_CALLS: u32 = 27;
 /// does (gp_interp::compare::step_hooks): the world's canonical state in,
 /// whether a hook drew and the stepped state out.
 pub const STEP_HOOKS: u32 = 28;
+/// Several paths of the session's frame read at once (`query-values` in
+/// wit/game/game.wit, game-printer:game@0.2.0): the selectors in, and for
+/// each its values without their paths or its error out
+/// ([`Writer::value_rows`]). A module built before 0.2.0 has no such call.
+pub const QUERY_VALUES: u32 = 29;
 
 #[derive(Default)]
 pub struct Writer(pub Vec<u8>);
@@ -108,6 +113,26 @@ impl Writer {
                 self.u8(5);
                 self.i64(*x);
                 self.i64(*y);
+            }
+        }
+    }
+    /// Each selector's answer to a `QUERY_VALUES`: 0 and its values, or 1
+    /// and its error.
+    pub fn value_rows(&mut self, rows: &[Result<Vec<Value>, String>]) {
+        self.count(rows.len());
+        for row in rows {
+            match row {
+                Ok(values) => {
+                    self.u8(0);
+                    self.count(values.len());
+                    for v in values {
+                        self.value(v);
+                    }
+                }
+                Err(e) => {
+                    self.u8(1);
+                    self.str(e);
+                }
             }
         }
     }
@@ -241,6 +266,19 @@ impl<'a> Reader<'a> {
             k => return Err(format!("a value of kind {k}")),
         })
     }
+    pub fn value_rows(&mut self) -> R<Vec<Result<Vec<Value>, String>>> {
+        (0..self.count()?)
+            .map(|_| {
+                Ok(match self.u8()? {
+                    0 => Ok((0..self.count()?)
+                        .map(|_| self.value())
+                        .collect::<R<Vec<Value>>>()?),
+                    1 => Err(self.str()?),
+                    k => return Err(format!("a query-values row of kind {k}")),
+                })
+            })
+            .collect()
+    }
     pub fn entry(&mut self) -> R<Entry> {
         Ok(Entry {
             path: self.str()?,
@@ -368,11 +406,18 @@ mod tests {
             met: true,
             events: vec![],
         });
+        let rows = vec![
+            Ok(vec![Value::Fixed(-5), Value::Text("t".into())]),
+            Err("e".into()),
+            Ok(vec![]),
+        ];
+        w.value_rows(&rows);
         let mut r = Reader::new(&w.0);
         assert_eq!(r.events().unwrap(), vec![event]);
         assert_eq!(r.inputs().unwrap(), vec![input]);
         assert_eq!(r.notes().unwrap(), vec![note]);
         assert!(r.until().unwrap().met);
+        assert_eq!(r.value_rows().unwrap(), rows);
     }
 
     #[test]

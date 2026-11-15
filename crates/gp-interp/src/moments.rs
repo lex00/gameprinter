@@ -331,7 +331,7 @@ type Trial = ((u64, u64), Lockstep, Vec<Moment>, Vec<Moment>);
 /// on the same presses to `lead` after it. `mapping` is the run's; its
 /// start condition is left out, since every check starts from a frame the
 /// model stands for.
-pub fn check<O: Runtime, M: Runtime>(
+pub fn check<O: Runtime, M: gp_runtime::QueryValues>(
     original: &mut O,
     make: &mut dyn FnMut() -> Result<M, String>,
     spec: &Spec,

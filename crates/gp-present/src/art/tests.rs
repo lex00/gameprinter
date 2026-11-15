@@ -394,3 +394,228 @@ fn a_screen_in_place_of_the_level_draws_as_the_looks_picture() {
     assert_eq!(out.draws[0].src, Src::Art(0));
     assert_eq!(out.draws[0].y, -8 * ART_SUB);
 }
+
+/// Moss Hop's shape of HUD, made up: a layer picture over the screen, a
+/// glyph in the background at row 3 (y 24) and one at row 5, and a HUD
+/// sprite; with a body standing across row 3.
+fn hud_present() -> Present {
+    let mut p = present();
+    p.pictures.push(Picture {
+        file: "hud.png".into(),
+        size: [256, 240],
+    });
+    p.pictures.push(Picture {
+        file: "glyph-1.png".into(),
+        size: [8, 8],
+    });
+    p.levels = vec![crate::LevelLook {
+        picture: Some(0),
+        hud_layer: Some(8),
+        ..Default::default()
+    }];
+    p
+}
+
+fn hud_scene() -> Scene {
+    Scene {
+        level: Some(0),
+        bodies: vec![draw(1, 40, 16)],
+        hud: vec![
+            draw(8, 0, 0).unwrap(),
+            draw(9, 40, 24).unwrap(),
+            draw(9, 48, 40).unwrap(),
+            draw(5, 200, 16).unwrap(),
+        ],
+        hud_sprites: 1,
+        hud_tints: vec![(8, [1, 2, 3])],
+        ..Scene::default()
+    }
+}
+
+fn hud_art(text: &str) -> Art {
+    Art::new(
+        ArtRules::read(&format!(
+            "gp-art 1\npic hero.png a/hero.png 16 32 0 -8\n{text}"
+        ))
+        .unwrap(),
+        &hud_present(),
+    )
+    .unwrap()
+}
+
+/// The frame's draws as (what, clip's top and height in pixels).
+fn order(f: &ArtFrame) -> Vec<(String, Option<(i64, i64)>)> {
+    f.draws
+        .iter()
+        .map(|d| {
+            let what = match d.src {
+                Src::Own(8) => "layer".to_owned(),
+                Src::Tint(8, _) => "tint".to_owned(),
+                Src::Own(9) => format!("glyph@{}", d.y / ART_SUB),
+                Src::Own(5) => "hud-sprite".to_owned(),
+                Src::Own(0) => "level".to_owned(),
+                Src::Art(0) => "hero".to_owned(),
+                other => format!("{other:?}"),
+            };
+            (what, d.clip.map(|c| (c[1] / ART_SUB, c[3] / ART_SUB)))
+        })
+        .collect()
+}
+
+#[test]
+fn added_lines_read_and_an_older_reader_passes_over_them() {
+    let plain = "gp-art 1\npic hero.png a/hero.png 16 18 0 -2\n";
+    let added = format!(
+        "{plain}#+ hud_over 3 1 3\n#+ in top-ledge pic hero.png a/short.png 16 12 0 4\n\
+         #+ in top-ledge timed hero.png 0 8 a/blink.png 16 12 0 4 every=60\n\
+         #+ sparkle 3\n#+ hud_over x\n#+ in Top! pic hero.png a/x.png 1 1 0 0\n"
+    );
+    let r = ArtRules::read(&added).unwrap();
+    assert_eq!(r.hud_over, Some(vec![1, 3]));
+    assert_eq!(r.regions(), ["top-ledge"]);
+    assert_eq!(r.region_pics[0].1.art.size, [16, 12]);
+    assert_eq!(r.region_timed[0].1.every, 60);
+    // Lines this reader can't read are passed over, with their numbers.
+    let skipped: Vec<usize> = r.skipped.iter().map(|x| x.0).collect();
+    assert_eq!(skipped, [6, 7, 8]);
+    // The new art comes after the rest, so the others keep their numbers.
+    assert_eq!(r.files(), ["a/hero.png", "a/short.png", "a/blink.png"]);
+    // An older reader (gp-art 1 before these lines) reads `#+` as a note:
+    // the same rules as the look without them.
+    let old = ArtRules::read(plain).unwrap();
+    let without = ArtRules {
+        hud_over: None,
+        region_pics: Vec::new(),
+        region_timed: Vec::new(),
+        skipped: Vec::new(),
+        ..r.clone()
+    };
+    assert_eq!(without, old);
+    // A whole-HUD line wins over rows, in either order.
+    for t in ["#+ hud_over\n#+ hud_over 2", "#+ hud_over 2\n#+ hud_over"] {
+        let r = ArtRules::read(&format!("gp-art 1\n{t}")).unwrap();
+        assert_eq!(r.hud_over, Some(vec![]), "{t}");
+    }
+}
+
+#[test]
+fn the_hud_is_under_the_bodies_unless_a_line_says_it_is_over() {
+    let p = hud_present();
+    let f = framed(hud_scene());
+    let names = |v: Vec<(String, Option<(i64, i64)>)>| -> Vec<String> {
+        v.into_iter()
+            .map(|(w, c)| match c {
+                None => w,
+                Some((y, h)) => format!("{w}[{y}+{h}]"),
+            })
+            .collect()
+    };
+    // The default, as every look before the line: the HUD's layer, its
+    // tints and its text, then the bodies, then the HUD's sprites.
+    let a = hud_art("");
+    let fr = Painter::new().frame(&a, &p, &f, 224);
+    assert_eq!(
+        names(order(&fr)),
+        [
+            "level",
+            "layer",
+            "tint",
+            "glyph@24",
+            "glyph@40",
+            "hero",
+            "hud-sprite"
+        ]
+    );
+    // Over: the bodies first, then the HUD whole.
+    let a = hud_art("#+ hud_over");
+    let fr = Painter::new().frame(&a, &p, &f, 224);
+    assert_eq!(
+        names(order(&fr)),
+        [
+            "level",
+            "hero",
+            "layer",
+            "tint",
+            "glyph@24",
+            "glyph@40",
+            "hud-sprite"
+        ]
+    );
+    // Row 3 only (y 24 to 32 on the screen, and in this window): the layer
+    // and its tints in two bands under the bodies and one over them, the
+    // text by its row.
+    let a = hud_art("#+ hud_over 3");
+    let fr = Painter::new().frame(&a, &p, &f, 224);
+    let far = FAR;
+    assert_eq!(
+        names(order(&fr)),
+        [
+            "level".to_owned(),
+            format!("layer[{}+{}]", -far, far + 24),
+            format!("layer[32+{}]", far - 32),
+            format!("tint[{}+{}]", -far, far + 24),
+            format!("tint[32+{}]", far - 32),
+            "glyph@40".to_owned(),
+            "hero".to_owned(),
+            "layer[24+8]".to_owned(),
+            "tint[24+8]".to_owned(),
+            "glyph@24".to_owned(),
+            "hud-sprite".to_owned(),
+        ]
+    );
+    // Rows next to each other make one band.
+    assert_eq!(hud_bands(Some(&[2, 3, 6])).0, [(16, 32), (48, 56)]);
+    assert_eq!(
+        hud_bands(Some(&[2, 3, 6])).1,
+        [(-FAR, 16), (32, 48), (56, FAR)]
+    );
+}
+
+#[test]
+fn a_pose_by_place_shows_only_in_its_region() {
+    let p = present();
+    let rules = "pic hero.png a/hero.png 16 32 0 -16\n\
+         #+ in top-ledge pic hero.png a/short.png 16 12 0 4\n\
+         #+ in top-ledge timed hero.png 0 4 a/blink.png 16 12 0 4\n";
+    let mut a = art(rules);
+    let at = |a: &Art, painter: &Painter, x: i64, y: i64, level: u32| {
+        let f = framed(Scene {
+            level: Some(level),
+            bodies: vec![draw(1, x, y)],
+            ..Scene::default()
+        });
+        let fr = painter.frame(a, &p, &f, 224);
+        arts(&fr)[0].0
+    };
+    let mut painter = Painter::new();
+    // Before the kit's regions are given, no `in` line holds.
+    assert_eq!(at(&a, &painter, 40, 20, 0), 0);
+    a.set_regions(
+        &p,
+        &[Region {
+            name: "top-ledge".into(),
+            level: "level.png".into(),
+            rect: [32, 16, 64, 24],
+        }],
+    );
+    // The body's feet (x 48, y 35) on the ledge: its first four frames
+    // the timed pose, then the region's picture.
+    let s = Scene {
+        level: Some(0),
+        bodies: vec![draw(1, 40, 20)],
+        ..Scene::default()
+    };
+    painter.step(&a, &s);
+    assert_eq!(at(&a, &painter, 40, 20, 0), 2);
+    for _ in 0..4 {
+        painter.step(&a, &s);
+    }
+    assert_eq!(at(&a, &painter, 40, 20, 0), 1);
+    // Off it, below it, or on another level: the full picture.
+    assert_eq!(at(&a, &painter, 120, 20, 0), 0);
+    assert_eq!(at(&a, &painter, 40, 40, 0), 0);
+    assert_eq!(at(&a, &painter, 40, 20, 6), 0);
+    // A region the kit doesn't name: never.
+    a.set_regions(&p, &[]);
+    assert_eq!(at(&a, &painter, 40, 20, 0), 0);
+}

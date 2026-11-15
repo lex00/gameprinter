@@ -335,11 +335,15 @@ fn toolchain_dir(kit: &Path) -> Result<PathBuf> {
     let out = Command::new("rustup")
         .args(["which", "--toolchain", &channel, "cargo"])
         .output()
-        .context("starting rustup")?;
+        .with_context(|| {
+            format!(
+                "building a game's code needs Rust, and rustup isn't on PATH: install it from https://rustup.rs, then run `rustup toolchain install {channel} --target {TARGET}` (gp self check says what else is missing)"
+            )
+        })?;
     if !out.status.success() {
         bail!(
-            "toolchain {channel} isn't installed: {}",
-            String::from_utf8_lossy(&out.stderr)
+            "toolchain {channel} isn't installed: run `rustup toolchain install {channel} --target {TARGET}`. rustup said: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
         );
     }
     let cargo = PathBuf::from(String::from_utf8(out.stdout)?.trim());
@@ -742,7 +746,18 @@ pub(crate) fn own_kit(home: &Path) -> Result<PathBuf> {
         return Ok(dir);
     }
     let tmp = dir.with_extension(format!("tmp{}", std::process::id()));
-    kit(&tmp).context("making this gp's module kit")?;
+    // A released gp carries its kit (src/bundle.rs); one built in a
+    // checkout makes it from the sources it was built from.
+    let from_source = tool_src()
+        .join("crates")
+        .join(TOP)
+        .join("Cargo.toml")
+        .is_file();
+    if !from_source && crate::bundle::has_kit() {
+        crate::bundle::unpack_kit(&tmp).context("unpacking this gp's module kit")?;
+    } else {
+        kit(&tmp).context("making this gp's module kit")?;
+    }
     // Another gp may have made it meanwhile; theirs is the same.
     if fs::rename(&tmp, &dir).is_err() && !dir.join("Cargo.lock").is_file() {
         bail!("couldn't move the kit to {}", dir.display());

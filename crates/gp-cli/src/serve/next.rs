@@ -37,6 +37,12 @@ fn of_game(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> 
 }
 
 fn answer(ctx: &Ctx, req: &Request, game: Option<&str>) -> Result<Response, Fail> {
+    // With no game named, a copy opened after the last game answers.
+    if game.is_none()
+        && let Some(a) = crate::next::copy_answer(&ctx.paths, Some(&ctx.games), None, None)?
+    {
+        return Ok(Response::json(&crate::next::json_of(&a)));
+    }
     let live = game
         .and_then(|g| super::game::run_named(ctx, g).ok())
         .map(|run| {

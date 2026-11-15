@@ -289,6 +289,9 @@ impl TraceRuntime {
 
 const CANT: &str = "an external runtime runs only from its own level start and its trace";
 
+/// Each path read in turn.
+impl gp_runtime::QueryValues for TraceRuntime {}
+
 impl Runtime for TraceRuntime {
     fn capabilities(&self) -> Capabilities {
         Capabilities::FORK.union(Capabilities::SNAPSHOT)

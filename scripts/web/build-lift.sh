@@ -6,12 +6,15 @@
 # OUT gets wasi.js and lift.js (scripts/web/public/), beside the preview's
 # preview.js, which imports lift.js for `files=idb:GAME`, and OUT/lift/:
 # gp-web-lift.wasm (crates/gp-web-lift, release, for wasm32-wasip1) and the
-# game folder it reads (gp_web_lift::GAME_FILE): game.json, sources/nes.toml
-# as sources-nes.toml, and a folder for each template whose template.game
+# game folder it reads (gp_web_lift::GAME_FILE): game.json, the game's
+# list of ROMs (sources/nes.toml as sources-nes.toml for an NES game, or
+# sources/arcade.toml as sources.toml when the templates' source.platform
+# is arcade, whose romsets the lift knows by their chips), and a folder for each template whose template.game
 # is GAME (default donkey-kong) and whose source is a ROM, with its
 # model.toml, profiles.toml, template.toml, its asset map as
 # asset-map.toml (with the map's content hashes, which the lift finds the
-# assets of any dump by) and its themes, and a folder for each ROM a
+# assets of any dump by), its themes and its level kit's kit.toml when the
+# kit names regions of the stage, and a folder for each ROM a
 # template lists under [[loads]] (its model, the ROM's asset map and
 # load.json, with what the ROM's game does without, `[[loads.without]]`,
 # which must agree with the package.toml entry of the same id when the
@@ -104,6 +107,13 @@ for name, m in bundled.items():
     for f in ["model.toml", "profiles.toml", "template.toml"]:
         put(os.path.join(t, f), f"{tid}/{f}")
     put(os.path.join(t, m["recipe"]["asset_map"]), f"{tid}/asset-map.toml")
+    # The level kit when it names regions of the stage, which a large-art
+    # look's `#+ in REGION` lines are drawn by (gp_web_lift::regions puts
+    # them in preview.json). It is the game's own text.
+    kit = os.path.join(t, "level-kit", "kit.toml")
+    has_regions = os.path.isfile(kit) and any(l.get("regions") for l in tomllib.load(open(kit, "rb")).get("levels", []))
+    if has_regions:
+        put(kit, f"{tid}/level-kit/kit.toml")
     # The template's themes (each folder with theme.toml): the lift draws
     # each on the visitor's lifted art as a look the settings offer beside
     # the original (gp_gen_bevy::looks). They are the template's own text.
@@ -146,6 +156,8 @@ for name, m in bundled.items():
         for f in ["model.toml", "profiles.toml", "template.toml"]:
             put(os.path.join(t, f), f"{lid}/{f}")
         put(os.path.join(t, load["asset_map"]), f"{lid}/asset-map.toml")
+        if has_regions:
+            put(kit, f"{lid}/level-kit/kit.toml")
         said = {k: load.get(k, d) for k, d in [("levels", []), ("assets", {}), ("without", [])]}
         for e in entries:
             if e.get("id") == lid and said != {k: e.get(k, d) for k, d in [("levels", []), ("assets", {}), ("without", [])]}:
@@ -157,7 +169,11 @@ for name, m in bundled.items():
                     write(f"{lid}/themes/{d}/same_as.toml", f'theme = "../../../{tid}/themes/{d}"\n')
 if not ids:
     sys.exit(f"no template's template.game is {game}")
-put(os.path.join(repo, "sources", "nes.toml"), "sources-nes.toml")
+# The ROMs' names and hashes, which the lift names a ROM by: an arcade
+# game's as sources.toml (the lift reads it first), an NES game's as
+# sources-nes.toml, the name packages have always had.
+arcade = any(m.get("source", {}).get("platform") == "arcade" for m in bundled.values())
+put(os.path.join(repo, "sources", "arcade.toml" if arcade else "nes.toml"), "sources.toml" if arcade else "sources-nes.toml")
 gamefile = {"game": game, "title": title, "templates": ids}
 if levels:
     gamefile["levels"] = [l for l in levels.split(",") if l]

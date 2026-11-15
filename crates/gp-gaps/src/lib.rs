@@ -185,8 +185,11 @@ pub struct Known {
     /// Data labels in PRG ROM (tables, music and sound data), for naming
     /// what a pointer table points at.
     pub data: Vec<RomLabel>,
-    /// The RAM page the sprite table is copied from.
+    /// The RAM page the sprite table is copied from; 0 for a board whose
+    /// sprite RAM isn't a copy in work RAM (an arcade board's).
     pub oam_page: u8,
+    /// The CPU's stack, left out of the RAM facts as no game state.
+    pub stack: Stack,
     /// Mechanisms of the model that change level cells at run time.
     pub tile_mechanics: Vec<String>,
     /// Whether the model has any sound.
@@ -197,7 +200,51 @@ pub struct Known {
     pub hud_rows: u8,
 }
 
+/// The CPU's stack, by the RAM facts' offsets (an address's low 11 bits,
+/// from [`Run::ram_base`]): the NES's page 1 by default; an arcade
+/// board's is where its stack pointer ran ([`Stack::of_sp`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stack(pub std::ops::Range<u16>);
+
+impl Default for Stack {
+    fn default() -> Self {
+        Self(0x100..0x200)
+    }
+}
+
+impl Stack {
+    /// The bytes from the lowest stack pointer seen up to the highest
+    /// (the stack's top, where nothing has been pushed), as offsets from
+    /// `base`. Pointers outside the 2 KB from `base` are not the stack.
+    /// None seen: nothing.
+    pub fn of_sp(base: u16, sps: impl IntoIterator<Item = u16>) -> Self {
+        let end = u32::from(base) + 0x800;
+        let (mut lo, mut hi) = (u32::MAX, 0u32);
+        for sp in sps.into_iter().map(u32::from) {
+            if sp > u32::from(base) && sp <= end {
+                lo = lo.min(sp);
+                hi = hi.max(sp);
+            }
+        }
+        if lo >= hi {
+            return Self(0..0);
+        }
+        Self((lo - u32::from(base)) as u16..(hi - u32::from(base)) as u16)
+    }
+
+    pub fn has(&self, offset: u16) -> bool {
+        self.0.contains(&offset)
+    }
+}
+
 impl Known {
+    /// Whether the RAM byte at `offset` (an address's low 11 bits) is left
+    /// out of the facts: the stack, or the sprite table's page.
+    pub fn left_out(&self, offset: u16) -> bool {
+        let oam = u16::from(self.oam_page) << 8;
+        self.stack.has(offset) || (self.oam_page != 0 && (oam..oam + 0x100).contains(&offset))
+    }
+
     /// The RAM label covering `addr`, or the nearest one at most 8 bytes
     /// before it, as `Name` or `Name+n`.
     pub fn ram_name(&self, addr: u16) -> (String, Option<&RamLabel>) {
@@ -299,6 +346,24 @@ pub struct Run {
     pub constants: Vec<Constant>,
     /// Routines whose calls were watched (play-sound candidates).
     pub watched: Vec<u32>,
+    /// The main CPU's writes to a sound board's latch, in order (an arcade
+    /// board; empty on the NES, whose game code writes the APU itself).
+    pub latch: Vec<LatchWrite>,
+}
+
+/// One write to a sound board's latch by the main CPU.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LatchWrite {
+    /// Index into [`Run::frames`].
+    pub at: usize,
+    /// Which latch (0 to 3 on Midway's MCR boards).
+    pub latch: u8,
+    /// The port written (0x1C to 0x1F on the MCR boards).
+    pub port: u8,
+    pub value: u8,
+    /// The instruction that wrote it and its routine.
+    pub pc: u32,
+    pub routine: u32,
 }
 
 impl Run {
@@ -452,8 +517,35 @@ pub fn cell_on_screen(
     None
 }
 
-/// The APU channel a register belongs to.
+/// An arcade board's AY-8910 channels, as [`channel`] names them: tone
+/// channels A to C and each chip's noise and envelope, chip 0 then chip 1.
+const AY: [[&str; 5]; 2] = [
+    ["ay0.a", "ay0.b", "ay0.c", "ay0.noise", "ay0.envelope"],
+    ["ay1.a", "ay1.b", "ay1.c", "ay1.noise", "ay1.envelope"],
+];
+
+/// The channel of an AY-8910 write, `chip * 256 + register` as an arcade
+/// recording's `ay-write` events give it (registers 0 to 15): a tone
+/// channel's period (0 to 5) and amplitude (8 to 10), the noise period
+/// (6), the envelope (11 to 13); the mixer (7) and the ports (14, 15)
+/// are control.
+fn ay_channel(reg: u16) -> Option<&'static str> {
+    let chip = AY.get(usize::from(reg >> 8))?;
+    Some(match reg & 0xff {
+        r @ 0..=5 => chip[usize::from(r / 2)],
+        6 => chip[3],
+        r @ 8..=10 => chip[usize::from(r - 8)],
+        11..=13 => chip[4],
+        _ => "control",
+    })
+}
+
+/// The APU channel a register belongs to: the NES's ($4000 on), or an
+/// arcade board's AY-8910s ([`ay_channel`]).
 pub fn channel(reg: u16) -> &'static str {
+    if reg < 0x4000 {
+        return ay_channel(reg).unwrap_or("control");
+    }
     match reg {
         0x4000..=0x4003 => "pulse1",
         0x4004..=0x4007 => "pulse2",
@@ -467,7 +559,18 @@ pub fn channel(reg: u16) -> &'static str {
 /// The channel a write starts a note on: a length counter load (the
 /// fourth register of a tone channel) or a $4015 write that starts the
 /// DMC.
+///
+/// On an AY-8910 a note starts where a tone channel's amplitude is set to
+/// something heard (a level above 0, or the envelope's), or where the
+/// envelope's shape is written, which restarts it.
 pub fn trigger(reg: u16, value: u8) -> Option<&'static str> {
+    if reg < 0x4000 {
+        return match reg & 0xff {
+            8..=10 if value & 0x1f != 0 => ay_channel(reg),
+            13 => ay_channel(reg),
+            _ => None,
+        };
+    }
     match reg {
         0x4003 | 0x4007 | 0x400B | 0x400F => Some(channel(reg)),
         0x4015 if value & 0x10 != 0 => Some("dmc"),
@@ -475,7 +578,24 @@ pub fn trigger(reg: u16, value: u8) -> Option<&'static str> {
     }
 }
 
-pub const CHANNELS: [&str; 5] = ["pulse1", "pulse2", "triangle", "noise", "dmc"];
+/// Every channel [`trigger`] names, the NES's first.
+pub const CHANNELS: [&str; 15] = [
+    "pulse1",
+    "pulse2",
+    "triangle",
+    "noise",
+    "dmc",
+    "ay0.a",
+    "ay0.b",
+    "ay0.c",
+    "ay0.noise",
+    "ay0.envelope",
+    "ay1.a",
+    "ay1.b",
+    "ay1.c",
+    "ay1.noise",
+    "ay1.envelope",
+];
 
 /// Signature text of a 2x2 tile block.
 pub fn sig(t: &[u8; 4]) -> String {

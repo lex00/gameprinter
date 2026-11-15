@@ -11,11 +11,17 @@ license.workspace = true
 name = "gp"
 path = "src/main.rs"
 
+[features]
+# A released gp: carries the built files it reads at run time (the editor,
+# the game's page, the players, the public page, the module kit), from the
+# folder GP_BUNDLE_DIR names (`just release` fills it). Off for dev builds.
+bundle = []
+
 [dependencies]
 anyhow = "1.0.104"
 base64 = "0.23.1"
 blake3 = "1.8.7"
-clap = { version = "4.6.7", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive", "env"] }
 gp-arcade = { version = "0.1.0", path = "../gp-arcade" }
 gp-arcade-play = { version = "0.1.0", path = "../gp-arcade-play" }
 gp-capture = { version = "0.1.0", path = "../gp-capture" }
@@ -41,6 +47,7 @@ gp-mcp = { version = "0.1.0", path = "../gp-mcp" }
 gp-model = { version = "0.1.0", path = "../gp-model" }
 gp-theme = { version = "0.1.0", path = "../gp-theme" }
 gp-web-lift = { version = "0.1.0", path = "../gp-web-lift" }
+gp-web-registry = { version = "0.1.0", path = "../gp-web-registry" }
 gp-module = { version = "0.1.0", path = "../gp-module" }
 gp-nes = { version = "0.1.0", path = "../gp-nes" }
 gp-play = { version = "0.1.0", path = "../gp-play" }

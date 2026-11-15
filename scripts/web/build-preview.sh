@@ -4,7 +4,8 @@
 #   scripts/web/build-preview.sh OUT [MODEL ASSETS [BASELINE...]]
 #
 # OUT gets index.html and preview.js (scripts/web/page/), gp_web.wasm (the
-# interpreter, crates/gp-web, for wasm32-unknown-unknown), and what
+# interpreter, crates/gp-web, for wasm32-unknown-unknown), gp_board.wasm
+# (an arcade model's board art, crates/gp-web-board), and what
 # gp-web-prep writes: the model bundle, the generator's pictures,
 # preview.json and each baseline's frames and native hashes. With no MODEL there
 # is no gp-web-prep step: the player only, for a page whose game files all
@@ -100,9 +101,33 @@ else
   fi
   keep web-preview-wasm --extra "$wasm_extra" --depinfo "${wasm%.wasm}.d" --out "$out/gp_web.wasm"
 fi
+# gp_board.wasm (crates/gp-web-board): an arcade model's board art drawn
+# beside the game's module (docs/web.md, "Arcade games"), the same sized
+# build and the same reuse.
+t0=$(now)
+board_args=()
+for a in "${cargo_args[@]}"; do
+  [ "$a" = gp-web ] && a=gp-web-board
+  board_args+=("$a")
+done
+board_extra="${board_args[*]//$target/TARGET} wasm-opt ${WEB_TOOLS:-none} $features $rustc_v"
+if from="$(kept web-board-wasm --extra "$board_extra")"; then
+  cp "$from/out/gp_board.wasm" "$out/gp_board.wasm"
+  echo "board wasm kept ($from)"
+else
+  (cd "$repo" && cargo "${board_args[@]}") || exit 2
+  wasm="$target/web-preview/wasm32-unknown-unknown/release/gp_web_board.wasm"
+  if [ -n "${WEB_TOOLS:-}" ]; then
+    "$WEB_TOOLS/wasm-opt" -Oz $features --strip-debug --strip-producers "$wasm" -o "$out/gp_board.wasm" || exit 2
+  else
+    cp "$wasm" "$out/gp_board.wasm"
+  fi
+  echo "board wasm $(lap "$t0") s"
+  keep web-board-wasm --extra "$board_extra" --depinfo "${wasm%.wasm}.d" --out "$out/gp_board.wasm"
+fi
 # The page and the scripts preview.js imports (crates/gp-cli/src/mechanic.rs,
 # PAGE_SCRIPTS, lists the same).
-for f in index.html preview.js level.js shell-keys.js storage.js storage-wit.js module-host.js module-worker.js; do
+for f in index.html preview.css preview.js level.js shell-keys.js storage.js storage-wit.js module-host.js module-worker.js; do
   cp "$repo/scripts/web/page/$f" "$out/" || exit 2
 done
-echo "gp_web.wasm $(wc -c < "$out/gp_web.wasm" | tr -d ' ') bytes"
+echo "gp_web.wasm $(wc -c < "$out/gp_web.wasm" | tr -d ' ') bytes, gp_board.wasm $(wc -c < "$out/gp_board.wasm" | tr -d ' ') bytes"

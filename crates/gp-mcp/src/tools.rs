@@ -63,7 +63,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "next",
             title: "Where the port stands and what's next",
-            description: "Where the port of a game stands (stands, one sentence for the person), the one next step and who does it (next.who: tools, agent or person; next.how says the page's button and the command), up to two other steps (also), what runs in the background and when to look again (running), anything that costs money or makes something public (waits_for_yes), and a clue when the person seems lost (clue). text is all of it as the terminal prints it. Read from files only, the same answer as `gp progress --next` and the status line on the page; it never starts work. Works before any game exists (it asks for the game's file) and on a finished port. With wait_s (at most 30) it waits for the answer to change, so a hand-off or an answer the person gives on the page reaches you: changed says whether it did.",
+            description: "Where the port of a game stands (stands, one sentence for the person), the one next step and who does it (next.who: tools, agent or person; next.how says the page's button and the command), up to two other steps (also), what runs in the background and when to look again (running), anything that costs money or makes something public (waits_for_yes), and a clue when the person seems lost (clue). text is all of it as the terminal prints it. Read from files only, the same answer as `gp progress --next` and the status line on the page; it never starts work. Works before any game exists (it asks for the game's file) and on a finished port. The person's copies (a theme they are making, a new game from a template) have their own steps: copies lists each with where it stands and whose turn it is, and copy (a copy's name) answers for one, with steps (each step, whose turn and which is now) and the same next, also and waits_for_yes. With wait_s (at most 30) it waits for the answer to change, so a hand-off or an answer the person gives on the page reaches you: changed says whether it did.",
             input_schema: schema::<crate::next::NextArgs>(),
             read_only: true,
             destructive: false,
@@ -179,8 +179,8 @@ pub fn list() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "sound_edit",
-            title: "Edit the music and effects",
-            description: "Change how a copy's music and effects sound with deterministic ops, run in order: remap (an instrument or a role, in one song or all, to {kind: apu}, {kind: gm, program} or {kind: bank, bank, preset or program}, with a gain), role, transpose (semitones, a song or one channel), tempo (frames per row), mute and solo (channels), gain (a channel or a role), swap (a song becomes a level's or a rule state's music). A song an op names must be ready (sound_describe's editable): otherwise it is refused with what's missing. Every result is checked against the NES's channels; nothing is clamped. The notes go to the copy's sound/<slot>.songs.json and the mapping to sound/banks.toml, or with theme to that theme's restyled-audio layer, so a theme remasters the music without touching the simulation. Returns before and after WAV clips of the song; each placed edit goes into the copy's history and undo true puts back the last. place false previews without writing.",
+            title: "Propose a change to the music and effects",
+            description: "Change how a copy's music and effects sound with deterministic ops, run in order: remap (an instrument or a role, in one song or all, to {kind: apu}, {kind: gm, program} or {kind: bank, bank, preset or program}, with a gain), role, transpose (semitones, a song or one channel), tempo (frames per row), mute and solo (channels), gain (a channel or a role), swap (a song becomes a level's or a rule state's music). A song an op names must be ready (sound_describe's editable): otherwise it is refused with what's missing. Every result is checked against the NES's channels; nothing is clamped. By default the change is proposed, with why (one sentence for the person): nothing in the copy changes, and it waits on the person's page as a card that plays the song as it sounds now and with the change, with ACCEPT and REJECT. Their ACCEPT writes the notes to the copy's sound/<slot>.songs.json and the mapping to sound/banks.toml, or with theme to that theme's restyled-audio layer, so a theme remasters the music without touching the simulation. Hear their answer with next (wait_s; waits_for_yes, what sound) and read it with gp_run theme sound list. Returns the proposal's id and the before and after WAV clips. place false previews without keeping anything. write true writes at once and undo true puts back the last change written; both change the person's sound without their ACCEPT, so they are refused while the page is open and need confirmed_by_person when it isn't.",
             input_schema: schema::<crate::sound::EditArgs>(),
             read_only: false,
             destructive: true,
@@ -207,7 +207,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "validate",
             title: "Validate against the original",
-            description: "Check the model, then hold it to its fidelity contract with gp validate, the interpreter as the subject, against the original game's recorded runs in the repo's baselines/<source> (only Moss Hop has them today, so on another copy this step finds nothing to run). ok is false when a check fails; each check gives its measured and expected values. With scenarios true it also runs the copy's scenario tests (scenarios.toml) in parallel and returns the failing expectations under scenarios.",
+            description: "Check the model, then run the check gp validate picks for the copy from what its folder holds, and say which (check, with the reason in why): the fidelity contract against the original game's recorded runs in the repo's baselines/<source> when there are some (Moss Hop; each check gives its measured and expected values), and for a person's copy (a folder in no git work tree) also the check for a game changed on purpose, under changed, which then decides ok (decided_by: changed), with the contract's own result under contract (contract.says: \"differs from the original, as you changed it\" when the change shows); a port's corpus score (gp corpus score, NES or arcade, under port, every clip exact) for a port's original; and for a game changed on purpose or made new (under changed) its model well formed and every stage reached and finished (gp level verify, gp interp reach and its playthrough), with any stage no tool can search named under changed.unchecked. ok is false when the check that decides fails: on a changed copy tell the person whether it still works (ok) and how far it now is from the original (contract.says and the failing checks). baselines names baselines of the original to hold the contract to instead. With scenarios true it also runs the copy's scenario tests (scenarios.toml) in parallel and returns the failing expectations under scenarios.",
             input_schema: schema::<ValidateArgs>(),
             read_only: true,
             destructive: false,
@@ -333,7 +333,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "gp_run",
             title: "Run a gp command",
-            description: "Run one gp command by its words (command: corpus score) with its arguments and flags by name in args, as gp_commands gives them; a switch takes true, a repeated one a list. The arguments are checked against the command before anything runs, and a wrong name is refused with the nearest ones. It runs this same gp with --json in the games checkout, with the person's home and ROM folder, and returns its exit code (0 done, 1 a check that failed, 2 couldn't run), its output (as JSON when it is JSON) and its errors. Long output is cut, with a note of how much and the file holding all of it. A command stops at its time limit (timeout_s, default 300, at most 1800). Rules: a command that reads, or writes the person's games, copies or home, runs at once. One that publishes, uploads, pushes, lands a change through a gate, spends money, calls a paid service or starts paid agents, or downloads a lot needs the person's yes: while their page is open, the refusal puts it on the page as a card with YES and NO and gives its ask_id; wait with next (wait_s) until waits_for_yes shows it answered, then call again with ask_id, and a yes runs that exact call once (a changed argument needs a new yes; a no keeps refusing). With no page open it runs with confirmed_by_person: true, which you may set only after the person said yes to that exact action in this conversation; for spending, give them the cost estimate first (its dry run prints one). Its dry-run flag, where it has one, runs at once. Servers and commands that run until stopped are refused, with what to use instead.",
+            description: "Run one gp command by its words (command: corpus score) with its arguments and flags by name in args, as gp_commands gives them; a switch takes true, a repeated one a list. The arguments are checked against the command before anything runs, and a wrong name is refused with the nearest ones. It runs this same gp with --json in the games checkout, with the person's home and ROM folder, and returns its exit code (0 done, 1 a check that failed, 2 couldn't run), its output (as JSON when it is JSON) and its errors. Long output is cut in the middle (its start in stdout, its end, where the result usually is, in stdout_end, and a JSON object's small values whole in json_small), with a note of how much and the file holding all of it. A command stops at its time limit (timeout_s, at most 3600; left out, 300, or longer for a command known to run long, such as 1800 for corpus score and model refine and 3600 for a gate: gp_commands shows a command's as timeout_s), and a reply that timed out says so in timed_out, with how to ask for longer. Rules: a command that reads, or writes the person's games, copies or home, runs at once. One that publishes, uploads, pushes, lands a change through a gate, spends money, calls a paid service or starts paid agents, or downloads a lot needs the person's yes: while their page is open, the refusal puts it on the page as a card with YES and NO and gives its ask_id; wait with next (wait_s) until waits_for_yes shows it answered, then call again with ask_id, and a yes runs that exact call once (a changed argument needs a new yes; a no keeps refusing). With no page open it runs with confirmed_by_person: true, which you may set only after the person said yes to that exact action in this conversation; for spending, give them the cost estimate first (its dry run prints one). Its dry-run flag, where it has one, runs at once. Servers and commands that run until stopped are refused, with what to use instead.",
             input_schema: schema::<crate::run::RunArgs>(),
             read_only: false,
             destructive: true,
@@ -1037,7 +1037,8 @@ fn preview(config: &Config, a: PreviewArgs) -> Result<Reply, String> {
 pub struct ValidateArgs {
     pub copy: String,
     /// Baselines of the model's source to validate against, by name.
-    /// Default: all of baselines/<source>/.
+    /// Default: the check gp validate picks for the copy (all of
+    /// baselines/<source>/ when the repo has them).
     #[serde(default)]
     pub baselines: Vec<String>,
     /// Also run the copy's scenario tests (scenarios.toml, the template's
@@ -1061,12 +1062,17 @@ fn validate(config: &Config, a: ValidateArgs) -> Result<Reply, String> {
             "problems": report["problems"],
         })));
     }
-    let source =
-        source.ok_or("the model names no source, so there's nothing to validate against")?;
-    let base = config.repo.join("baselines").join(source);
+    // Baselines named: the contract against those. Else gp validate picks
+    // the check that fits the copy and says which (issue #7): the contract
+    // against the repo's baselines/<source> when there are some (Moss
+    // Hop), a port's corpus score, or the check for a game changed on
+    // purpose or made new.
     let against: Vec<std::path::PathBuf> = if a.baselines.is_empty() {
-        vec![base]
+        Vec::new()
     } else {
+        let source = source
+            .ok_or("the model names no source, so it has no baselines of an original to name")?;
+        let base = config.repo.join("baselines").join(source);
         a.baselines
             .iter()
             .map(|b| {
@@ -1083,14 +1089,16 @@ fn validate(config: &Config, a: ValidateArgs) -> Result<Reply, String> {
         dir.as_os_str(),
         "--runtime".as_ref(),
         "interp".as_ref(),
-        "--against".as_ref(),
     ];
-    args.extend(against.iter().map(|p| p.as_os_str()));
+    if !against.is_empty() {
+        args.push("--against".as_ref());
+        args.extend(against.iter().map(|p| p.as_os_str()));
+    }
     if let Some(r) = &config.rom {
         args.push("--rom".as_ref());
         args.push(r.as_os_str());
     }
-    let assets = config.assets_of(&dir, Some(source));
+    let assets = config.assets_of(&dir, source);
     if let Some(a) = &assets {
         args.push("--assets".as_ref());
         args.push(a.as_os_str());
@@ -1136,6 +1144,13 @@ fn validate(config: &Config, a: ValidateArgs) -> Result<Reply, String> {
         "scenarios": scenarios,
         "ok": v["ok"],
         "stage": "validate",
+        "check": v["check"],
+        "also": v["also"],
+        "why": v["why"],
+        "decided_by": v["decided_by"],
+        "contract": v["contract"],
+        "changed": v["changed"],
+        "port": v["port"],
         "passed": v["passed"],
         "failed": v["failed"],
         "unexercised": v["unexercised"],

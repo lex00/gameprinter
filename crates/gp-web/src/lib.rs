@@ -43,6 +43,10 @@ pub struct Preview {
     stage_px: Vec<(u32, usize, usize, Vec<[u8; 4]>)>,
     /// What the large-art look keeps from frame to frame.
     painter: gp_present::art::Painter,
+    /// The regions of the stage the game's level kit names (preview.json's
+    /// `regions`), given to every large-art look as it is resolved
+    /// ([`Preview::set_regions`]).
+    regions: Vec<gp_present::art::Region>,
 }
 
 /// The model's sound, played live: the cues say what plays when, gp-sound's
@@ -89,8 +93,12 @@ impl Sound {
             gp_sound::synth::SAMPLE_RATE,
             set.samples.clone(),
         );
+        let mut roles = gp_present::sound::RolePlayer::new(&cues);
+        // Which take of each role started when, for the page's checks
+        // (`gp_sound_role_log`).
+        roles.keep_log = true;
         Ok(Self {
-            roles: gp_present::sound::RolePlayer::new(&cues),
+            roles,
             cues,
             director: gp_present::sound::Director::new(),
             player: gp_sound::player::Player::new(set),
@@ -105,6 +113,15 @@ impl Sound {
     pub fn set_role(&mut self, role: &str, wav: &[u8]) -> Result<bool, String> {
         let s = gp_present::sound::read_wav(wav)?;
         Ok(self.roles.set(&self.cues, role, s))
+    }
+
+    /// Sets take `take` of a sound role (1 is its own file, `set_role`'s;
+    /// a large-art look's `sound/takes/<role>.<take>.wav` the others):
+    /// each start of the role plays its next take in turn. False when the
+    /// cues have no such role.
+    pub fn set_role_take(&mut self, role: &str, take: u32, wav: &[u8]) -> Result<bool, String> {
+        let s = gp_present::sound::read_wav(wav)?;
+        Ok(self.roles.set_take(&self.cues, role, take, s))
     }
 
     /// Steps after a tick with its events and the hooks' APU writes for
@@ -238,6 +255,7 @@ impl Preview {
             art: None,
             stage_px: Vec::new(),
             painter: gp_present::art::Painter::new(),
+            regions: Vec::new(),
         })
     }
 
@@ -317,6 +335,28 @@ impl Preview {
         }
     }
 
+    /// Sets a further take of a sound role ([`Sound::set_role_take`]).
+    pub fn set_sound_role_take(
+        &mut self,
+        role: &str,
+        take: u32,
+        wav: &[u8],
+    ) -> Result<bool, String> {
+        match &mut self.sound {
+            Some(s) => s.set_role_take(role, take, wav),
+            None => Err("no sound is loaded".into()),
+        }
+    }
+
+    /// Each start of a sound role so far, a line each: `FRAME ROLE TAKE`
+    /// (`gp_present::sound::RolePlayer::log_text`).
+    pub fn sound_role_log(&self) -> String {
+        self.sound
+            .as_ref()
+            .map(|s| s.roles.log_text())
+            .unwrap_or_default()
+    }
+
     /// Takes every role's sound away: the model's own sound plays again.
     pub fn clear_sound_roles(&mut self) {
         if let Some(s) = &mut self.sound {
@@ -343,6 +383,7 @@ impl Preview {
             None => None,
         };
         if let Some(a) = &mut art {
+            a.set_regions(&p, &self.regions);
             for (pic, w, h, px) in &self.stage_px {
                 a.build_stage(&p, *pic, *w, *h, px)?;
             }
@@ -366,13 +407,48 @@ impl Preview {
             return Ok(r#"{"files": [], "stages": []}"#.into());
         }
         let p = self.present.as_ref().ok_or("no presentation loaded")?;
-        let art = gp_present::art::Art::new(gp_present::art::ArtRules::read(text)?, p)?;
+        let mut art = gp_present::art::Art::new(gp_present::art::ArtRules::read(text)?, p)?;
+        art.set_regions(p, &self.regions);
         let out =
             serde_json::json!({"files": art.files, "stages": art.stage_levels(p)}).to_string();
         self.art_text = Some(text.to_owned());
         self.art = Some(art);
         self.painter = gp_present::art::Painter::new();
         Ok(out)
+    }
+
+    /// Gives the regions of the stage the game's level kit names, as
+    /// preview.json's `regions` holds them: JSON `[[name, level picture,
+    /// x, y, w, h], ...]`, the box in the level's pixels and the level by
+    /// its picture's file name (`level-main.png`). A large-art look's
+    /// `#+ in REGION` lines hold only in a region given here
+    /// (`gp_present::art::Art::set_regions`); the regions stay for every
+    /// look loaded after, and `[]` takes them away.
+    pub fn set_regions(&mut self, json: &str) -> Result<(), String> {
+        let rows: Vec<(String, String, i64, i64, i64, i64)> =
+            serde_json::from_str(json).map_err(|e| format!("regions: {e}"))?;
+        self.regions = rows
+            .into_iter()
+            .map(|(name, level, x, y, w, h)| gp_present::art::Region {
+                name,
+                level,
+                rect: [x, y, w, h],
+            })
+            .collect();
+        if let (Some(a), Some(p)) = (&mut self.art, &self.present) {
+            a.set_regions(p, &self.regions);
+        }
+        Ok(())
+    }
+
+    /// The regions given, for a module loaded afresh (`gp_load`).
+    pub fn take_regions(&mut self) -> Vec<gp_present::art::Region> {
+        std::mem::take(&mut self.regions)
+    }
+
+    /// Puts back regions taken from the module this one replaces.
+    pub fn keep_regions(&mut self, regions: Vec<gp_present::art::Region>) {
+        self.regions = regions;
     }
 
     /// Builds the large-art look's stage over level picture `pic` from its
@@ -1062,6 +1138,203 @@ mod tests {
         );
         for bad in ["wide=4:3", "side=left", "mute=bell", "sharp"] {
             assert!(wide.set_view(bad).is_err(), "{bad}");
+        }
+    }
+
+    /// A made-up presentation of Moss Hop: the level picture, one 16 by
+    /// 16 picture every body shows, a HUD layer, and the text "12" in the
+    /// HUD's background at row 2 (y 16 to 24), across the hero's x.
+    fn hud_present(spec: &gp_sim::spec::Spec) -> gp_present::Present {
+        use gp_present::{Field, Frame, Glyph, Hud, LevelLook, Look, Picture, Present, Source};
+        let pic = |f: &str, w, h| Picture {
+            file: f.into(),
+            size: [w, h],
+        };
+        let look = Look {
+            base: Frame::default(),
+            ..Look::default()
+        };
+        Present {
+            pictures: vec![
+                pic("level-main.png", 512, 240),
+                pic("frame-0-0.png", 16, 16),
+                pic("hud-0.png", 256, 240),
+                pic("glyph-0-0-31.png", 8, 8),
+                pic("glyph-0-0-32.png", 8, 8),
+            ],
+            frames: vec![vec![1]],
+            kinds: spec
+                .kinds
+                .iter()
+                .map(|_| vec![Some(look.clone()); 8])
+                .collect(),
+            levels: spec
+                .levels
+                .iter()
+                .map(|_| LevelLook {
+                    picture: Some(0),
+                    hud_layer: Some(2),
+                    ..LevelLook::default()
+                })
+                .collect(),
+            hud: Some(Hud {
+                fields: vec![Field {
+                    at: [3, 2],
+                    source: Source::Text("12".into()),
+                    digits: 0,
+                    divide: 1,
+                    pad: ' ',
+                    palette: 0,
+                    when: Vec::new(),
+                }],
+                glyphs: vec![
+                    Glyph {
+                        set: 0,
+                        palette: 0,
+                        ch: '1',
+                        pic: 3,
+                    },
+                    Glyph {
+                        set: 0,
+                        palette: 0,
+                        ch: '2',
+                        pic: 4,
+                    },
+                ],
+                sprites: Vec::new(),
+                sets: Vec::new(),
+            }),
+            ..Present::default()
+        }
+    }
+
+    /// The game's regions (preview.json's `regions`, given once with
+    /// `set_regions`) hold a large-art look's `#+ in` line: the hero
+    /// standing at Moss Hop's start is drawn in the region's picture while
+    /// its box holds the hero's feet, in its full picture when the region
+    /// is elsewhere or none is given, and a look loaded after keeps them.
+    #[test]
+    fn the_games_regions_hold_a_looks_in_lines() {
+        let bundle = mosshop_bundle();
+        let rules = "gp-art 1\nscale 2\npic frame-0-0.png art/tall.png 16 200 0 -184\n#+ in start pic frame-0-0.png art/short.png 16 16 0 0\n";
+        let drawn = |regions: &str, after: bool| {
+            let mut page = Preview::load(&bundle).unwrap();
+            let present = hud_present(page.interp.spec());
+            page.load_present(&gp_present::text::write(&present))
+                .unwrap();
+            if after {
+                page.set_regions(regions).unwrap();
+            }
+            let files: serde_json::Value =
+                serde_json::from_str(&page.load_art(rules).unwrap()).unwrap();
+            assert_eq!(
+                files["files"],
+                serde_json::json!(["art/tall.png", "art/short.png"])
+            );
+            if !after {
+                page.set_regions(regions).unwrap();
+            }
+            for _ in 0..30 {
+                page.step(0x80, false).unwrap();
+            }
+            let json: serde_json::Value = serde_json::from_str(&page.art_frame().unwrap()).unwrap();
+            let arts: Vec<i64> = json["draws"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|d| d[0][0] == "art")
+                .map(|d| d[0][1].as_i64().unwrap())
+                .collect();
+            arts
+        };
+        // Every body is drawn with frame-0-0 here: the hero and the two
+        // slugs, which patrol away from the start.
+        let start = r#"[["start", "level-main.png", 0, 160, 64, 32]]"#;
+        assert_eq!(drawn(start, false), [1, 0, 0]);
+        assert_eq!(drawn(start, true), [1, 0, 0]);
+        assert_eq!(
+            drawn(r#"[["start", "level-main.png", 200, 160, 64, 32]]"#, false),
+            [0, 0, 0]
+        );
+        assert_eq!(drawn("[]", false), [0, 0, 0]);
+        assert!(Preview::load(&bundle).unwrap().set_regions("{}").is_err());
+    }
+
+    /// The page's module (this crate, which gp_web.wasm is) and a native
+    /// runtime that drives gp_present itself draw the same large-art frame
+    /// of Moss Hop: with a made-up theme whose hero is drawn tall enough
+    /// to stand across the HUD's row, the text under the hero by default,
+    /// and over it with `#+ hud_over` or `#+ hud_over 2`.
+    #[test]
+    fn the_page_and_a_native_runtime_draw_the_same_frame_with_the_hud_over() {
+        let bundle = mosshop_bundle();
+        let input = |f: u32| if f % 40 < 8 { 0x81 } else { 0x80 };
+        for (extra, over) in [
+            ("", false),
+            ("#+ hud_over\n", true),
+            ("#+ hud_over 2\n", true),
+        ] {
+            let rules =
+                format!("gp-art 1\nscale 2\npic frame-0-0.png art/tall.png 16 200 0 -184\n{extra}");
+            let mut page = Preview::load(&bundle).unwrap();
+            let present = hud_present(page.interp.spec());
+            page.load_present(&gp_present::text::write(&present))
+                .unwrap();
+            page.load_art(&rules).unwrap();
+            // The native side: its own interpreter, animation, view and
+            // painter, from gp_present alone.
+            let b = Bundle::from_bytes(&bundle).unwrap();
+            let mut interp = Interp::from_bundle(&b).unwrap();
+            let art = gp_present::art::Art::new(
+                gp_present::art::ArtRules::read(&rules).unwrap(),
+                &present,
+            )
+            .unwrap();
+            let mut anim = gp_present::Animator::new();
+            let mut viewer = gp_present::view::Viewer::default();
+            let mut painter = gp_present::art::Painter::new();
+            for f in 0..90 {
+                page.step(input(f), false).unwrap();
+                let events = interp
+                    .advance(&InputFrame {
+                        buttons: input(f).into(),
+                        axes: Vec::new(),
+                        reset: false,
+                    })
+                    .unwrap();
+                let (spec, world) = (interp.spec(), interp.world());
+                anim.step(&present, spec, world);
+                anim.fired(&present, spec, world, &events);
+                let scene = anim.scene(&present, spec, world);
+                viewer.step(&present, world, &scene);
+                painter.step(&art, &scene);
+            }
+            let (spec, world) = (interp.spec(), interp.world());
+            let scene = anim.scene(&present, spec, world);
+            let fr = viewer.frame(&present, spec, world, &scene, gp_present::view::SUB);
+            let native = painter.frame(&art, &present, &fr, present.screen.visible()[3]);
+            let json: serde_json::Value = serde_json::from_str(&page.art_frame().unwrap()).unwrap();
+            let draws = json["draws"].as_array().unwrap();
+            assert_eq!(draws.len(), native.draws.len(), "{extra}");
+            for (j, d) in draws.iter().zip(&native.draws) {
+                let want = serde_json::json!([d.x, d.y, d.w, d.h, d.alpha, d.clip]);
+                let got = serde_json::json!([j[1], j[2], j[3], j[4], j[7], j[9]]);
+                assert_eq!(got, want, "{extra}");
+            }
+            // The hero's art, the text's first glyph: which is painted later.
+            let at = |src: serde_json::Value| draws.iter().position(|d| d[0] == src).unwrap();
+            let (hero, text) = (
+                at(serde_json::json!(["art", 0])),
+                at(serde_json::json!(["own", 3])),
+            );
+            assert_eq!(text > hero, over, "{extra}: hero at {hero}, text at {text}");
+            // The hero stands across the text's row: its art spans y 16 to 24.
+            let y = |v: &serde_json::Value| v.as_i64().unwrap() / gp_present::art::ART_SUB;
+            let (h, t) = (&draws[hero], &draws[text]);
+            assert!(
+                y(&h[2]) <= y(&t[2]) && y(&h[2]) + y(&h[4]) >= y(&t[2]) + 8,
+                "{h} {t}"
+            );
         }
     }
 

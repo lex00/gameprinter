@@ -112,9 +112,9 @@ pub fn refine(config: &Config, a: RefineArgs) -> Result<Reply, String> {
         rounds.as_ref(),
         "--recording".as_ref(),
     ];
+    // Validated against those same recordings (refine's default): its
+    // --against takes one score or folder, not a list of baselines.
     args.extend(ids.iter().map(OsStr::new));
-    args.push("--against".as_ref());
-    args.extend(files.iter().map(|f| f.as_os_str()));
     args.push("--rom".as_ref());
     args.push(rom.as_os_str());
     let assets = config.assets_of(&dir, Some(&source));

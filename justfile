@@ -5,7 +5,11 @@ target := env_var_or_default("CARGO_TARGET_DIR", justfile_directory() / "target"
 # Default dev, the checks' profile; the gate and a --rust worker set GP_PROFILE=fastdev.
 profile := env_var_or_default("GP_PROFILE", "dev")
 profile_dir := if profile == "dev" { "debug" } else { profile }
-gp := target / profile_dir / "gp"
+# GP_CHECK_BIN: the copy of gp that just check's lanes run, made once its
+# builds are done, so a lane's cargo build or test (which writes another gp
+# to target/, its features unified otherwise) never replaces the binary
+# another lane is running.
+gp := env_var_or_default("GP_CHECK_BIN", target / profile_dir / "gp")
 mosshop_dir := target / "mosshop"
 mosshop_rom := mosshop_dir / "mosshop.nes"
 assets := gp_home / "work" / "assets" / "mosshop"
@@ -29,6 +33,15 @@ publish:
 build:
     cargo build -q --profile {{profile}} -p gp-cli
 
+# A released gp for this machine (or GP_RELEASE_TARGET): one binary that
+# carries the files it reads at run time, so a maker needs no checkout,
+# archived with its SHA-256 in OUT, which must be new or empty
+# (scripts/release/build.sh; site/src/content/docs/install.md). PAGE is the
+# built public page to carry, default the newest that passed the release
+# check. Publishes nothing: no tag, no upload, no push.
+release OUT *PAGE:
+    scripts/release/build.sh {{quote(OUT)}} {{PAGE}}
+
 mosshop:
     scripts/mosshop/build.sh {{quote(mosshop_dir)}}
 
@@ -40,19 +53,33 @@ mosshop:
 # (scripts/check/step.sh), each lane's output printed whole when it ends,
 # and the first failing lane stops the others. Sub-recipes run with
 # --no-deps: their dependencies (build, mosshop) ran once, here, so no lane
-# rewrites the Moss Hop ROM another reads.
+# rewrites the Moss Hop ROM another reads. The lanes run gp from a copy
+# (target/check-bin/gp, as GP_CHECK_BIN), since the tests' cargo builds
+# write a different gp to target/ while other lanes run it.
 check: _hook-enabled build mosshop
     scripts/check/step.sh fmt cargo fmt --all --check
     mkdir -p {{quote(assets)}}
     scripts/check/step.sh assets-lift {{gp}} assets lift {{quote(mosshop_rom)}} --map assets/mosshop.toml -o {{quote(assets)}} --force
     scripts/check/step.sh assets-pack {{gp}} assets pack {{quote(assets)}} --check {{quote(mosshop_rom)}}
-    GP_CHECK_LIFTED=1 scripts/check/parallel.sh {{quote(target / "check-lanes")}} \
+    mkdir -p {{quote(target / "check-bin")}}
+    cp {{gp}} {{quote(target / "check-bin" / "gp.new")}}
+    mv {{quote(target / "check-bin" / "gp.new")}} {{quote(target / "check-bin" / "gp")}}
+    GP_CHECK_BIN={{quote(target / "check-bin" / "gp")}} GP_CHECK_LIFTED=1 scripts/check/parallel.sh {{quote(target / "check-lanes")}} \
         "rust=just --no-deps _check-rust" \
         "players=just --no-deps _check-players" \
         "web=just --no-deps _check-web" \
         "page=just --no-deps mechanic-page" \
         "tests=just --no-deps _check-tests"
     @echo "just check: passed"
+
+# `just check`, then the checks that ran only by hand, each when what it
+# needs is here (scripts/check/all.sh): Tapper's web parity, the public
+# page's check and its share and theme-line tests, gp corpus score on
+# Donkey Kong and Tapper (every clip exact), Tapper against MAME's capture
+# and gp baseline check. Each it can't run is one line saying what is
+# missing; it fails only when a check that ran fails. Most of an hour.
+check-all:
+    scripts/check/all.sh {{quote(gp)}}
 
 # check's lanes. The Rust lane: clippy, the generated files, Moss Hop's
 # baselines and model, the originals, and the repo's own script checks.
@@ -197,7 +224,7 @@ site-prose:
 # Original Edition in $GP_ROM_DIR and the games checkout beside the repo
 # ($GP_GAMES_DIR), Donkey Kong's module built from this tool's kit, and
 # profiles_dk and clip_agree on it. CI has no ROM, so there it checks nothing.
-check-roms:
+check-roms: build
     #!/usr/bin/env bash
     set -euo pipefail
     roms="${GP_ROM_DIR:-{{gp_home / "roms"}}}"
@@ -223,7 +250,7 @@ check-roms:
         echo "check-roms: profiles_dk and clip_agree skipped, no Donkey Kong: Original Edition in $roms"
         exit 0
     fi
-    just _dk-module "$games"
+    just --no-deps _dk-module "$games"
     export GP_DK_MODULE={{quote(target / "modules" / "donkey-kong.wasm")}}
     tier cargo test -q -p gp-cli --profile {{profile}} --test profiles_dk --test clip_agree
     echo "check-roms: passed"
@@ -592,6 +619,34 @@ web-parity: build mosshop
     scripts/web/build-preview.sh "$out" templates/mosshop "$assets" > /dev/null
     scripts/web/parity.sh "$out" templates/mosshop "$assets" scripts/web/parity/mosshop.toml | grep -v '^{'
 
+# An arcade game's model in the page's player against the native run, on
+# Tapper (docs/web.md, "Parity"): from the original's state at each clip's
+# start, its module under Node through the page's exports and gp interp run
+# through the same module must give the same state hash on every frame.
+# CLIPS are corpus clip IDs (default three). Needs the games checkout's
+# tapper/ (GP_GAMES_DIR or ../games) and tapper.zip in $GP_ROM_DIR/arcade;
+# skipped without them.
+web-parity-arcade *CLIPS: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    game="${GP_GAMES_DIR:-{{justfile_directory() / ".." / "games"}}}/tapper"
+    zip="${GP_ROM_DIR:-}/arcade/tapper.zip"
+    if [ ! -f "$game/model.toml" ] || [ ! -f "$zip" ]; then
+        echo "skip web-parity-arcade: no $game/model.toml or no $zip"
+        exit 0
+    fi
+    out={{quote(target / "web" / "tapper")}}
+    # Lifted outside the work tree, as gp assets lift requires.
+    assets={{quote(gp_home / "work" / "web-parity-arcade" / "assets")}}
+    mkdir -p "$assets"
+    {{quote(gp)}} assets lift "$zip" --map "$game/assets/tapper.toml" -o "$assets" --force > /dev/null
+    {{quote(gp)}} game kit -o {{quote(target / "module-kit")}} > /dev/null
+    {{quote(gp)}} game build "$game" --kit {{quote(target / "module-kit")}} -o {{quote(target / "modules" / "tapper.wasm")}} > /dev/null
+    scripts/web/build-preview.sh "$out" "$game" "$assets" > /dev/null
+    clips="{{CLIPS}}"
+    GP={{quote(gp)}} scripts/web/parity-arcade.sh "$out" "$game" "$assets" {{quote(target / "modules" / "tapper.wasm")}} "$zip" \
+        ${clips:-tapper.l1.001 tapper.die.001 tapper.clear.001} | grep -v '^{'
+
 # Build a registry in a folder on this machine and the page that installs from it.
 local-registry:
     GP_HOME={{quote(gp_home)}} scripts/web/local-registry.sh
@@ -755,3 +810,31 @@ build-timings: build
     done
     python3 -I -B scripts/build-timings.py --summary "$dir/cargo-timings/cargo-timing.html"
     echo "clean build and incremental gp-nes rebuild recorded; cargo's report: {{gp_home / "reports" / "cargo-timing.html"}}"
+
+# A tree per agent, for when two or more agents edit and build at once
+# (docs/agents.md, "A tree per agent"; scripts/trees/, macOS only).
+# tree-new clones this checkout and its target into $GP_HOME/trees/NAME on
+# branch tree/NAME, without the checkout's uncommitted changes.
+tree-new NAME:
+    scripts/trees/new.sh {{quote(NAME)}}
+
+# Cherry-picks tree NAME's commits onto work here, in order, stopping at
+# the first conflict with work left as it was before that pick.
+tree-take NAME:
+    scripts/trees/take.sh {{quote(NAME)}}
+
+# Each tree: branch, base, commits ahead, clean or not, its own disk use,
+# age; then what .done holds and the command that clears it.
+tree-list:
+    scripts/trees/list.sh
+
+# Moves the stale incremental sessions of this checkout's target (or
+# TARGET) into $GP_HOME/trees/.done, keeping the newest of each crate and
+# any a build holds; --dry-run says what it would move. Deletes nothing.
+tree-prune *ARGS:
+    scripts/trees/prune.sh {{ARGS}}
+
+# Moves a taken tree to $GP_HOME/trees/.done and deletes its branch, once
+# every one of its commits' patches is on work.
+tree-done NAME:
+    scripts/trees/done.sh {{quote(NAME)}}

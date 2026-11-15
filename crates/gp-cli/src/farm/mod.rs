@@ -20,9 +20,11 @@
 //! (`entities.player[0].x` and `.y`, as `gp mechanic demo` reads them) and
 //! observe.toml, and the ROM from its roms.toml. The decision model's
 //! plan and question named Super Mario Bros.' hero; they say "the player"
-//! now. The search over a package reads the NES's RAM and sprite table, so
-//! an arcade game is refused in words; the blind search (`--blind`, and
-//! `gp model blind`) plays an arcade romset too, on gp-arcade (machine.rs).
+//! now. The search over a package reads the NES's RAM and sprite table; on
+//! an arcade game it runs blind discovery on the board and stops after it,
+//! saying what it found and why (blind::stop_on_arcade). The blind search
+//! (`--blind`, and `gp model blind`) plays an arcade romset too, on
+//! gp-arcade (machine.rs).
 
 pub(crate) mod blind;
 pub(crate) mod lanes;
@@ -88,7 +90,14 @@ pub(crate) struct FarmArgs {
     pub level: String,
     /// The decision server; "uniform" tries moves in a seeded random order
     /// instead, as the baseline.
-    #[arg(long, default_value = "http://127.0.0.1:7720")]
+    /// Default: $GP_LAYA_URL when it is set (the address gp serve and gp_run
+    /// keep Laya at), else http://127.0.0.1:7720.
+    #[arg(
+        long,
+        env = "GP_LAYA_URL",
+        hide_env_values = true,
+        default_value = "http://127.0.0.1:7720"
+    )]
     pub decide: String,
     /// The most rounds before it stops.
     #[arg(long, default_value_t = 2000)]

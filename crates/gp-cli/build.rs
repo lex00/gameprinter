@@ -7,7 +7,13 @@
 //! cache) and records its random draws (lockstep.rs, gp-sim's draws.rs)
 //! is in the hash as well: a patch to any of them is scored on the
 //! emulator, not on tapes an older gp wrote.
+//!
+//! With the `bundle` feature it also writes the table of files a released
+//! gp carries (src/bundle.rs): every file under `$GP_BUNDLE_DIR`, which
+//! `just release` fills. Without it the table is empty and nothing more is
+//! read, so a dev build costs what it did.
 
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -48,7 +54,72 @@ fn walk(path: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// `$OUT_DIR/bundle.rs`: `FILES`, each carried file's path under the
+/// bundle and its bytes, and `ID`, a hash of them all.
+fn bundle() {
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR")).join("bundle.rs");
+    let version = std::env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION");
+    if std::env::var_os("CARGO_FEATURE_BUNDLE").is_none() {
+        println!("cargo:rustc-env=GP_VERSION_LINE={version}");
+        fs::write(
+            &out,
+            "pub(crate) static FILES: &[(&str, &[u8])] = &[];\npub(crate) const ID: &str = \"\";\n",
+        )
+        .expect("writing bundle.rs");
+        return;
+    }
+    println!("cargo:rerun-if-env-changed=GP_BUNDLE_DIR");
+    let dir = std::env::var_os("GP_BUNDLE_DIR")
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .expect("the bundle feature needs GP_BUNDLE_DIR, the folder `just release` fills");
+    let dir = dir.canonicalize().expect("GP_BUNDLE_DIR doesn't exist");
+    println!("cargo:rerun-if-changed={}", dir.display());
+    // Every file, `target/` folders too (the players sit in target/play-web).
+    let mut files = Vec::new();
+    let mut todo = vec![dir.clone()];
+    while let Some(d) = todo.pop() {
+        for e in fs::read_dir(&d).expect("reading GP_BUNDLE_DIR").flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                todo.push(p);
+            } else {
+                files.push(p);
+            }
+        }
+    }
+    files.sort();
+    let mut h = blake3::Hasher::new();
+    let mut table = String::from("pub(crate) static FILES: &[(&str, &[u8])] = &[\n");
+    for f in &files {
+        let rel = f
+            .strip_prefix(&dir)
+            .expect("under the bundle")
+            .to_string_lossy()
+            .replace('\\', "/");
+        h.update(rel.as_bytes());
+        h.update(&[0]);
+        h.update(&fs::read(f).expect("reading a bundle file"));
+        h.update(&[0]);
+        writeln!(
+            table,
+            "    ({rel:?}, include_bytes!({:?})),",
+            f.display().to_string()
+        )
+        .unwrap();
+    }
+    table.push_str("];\n");
+    let id = h.finalize().to_hex()[..16].to_owned();
+    writeln!(table, "pub(crate) const ID: &str = {id:?};").unwrap();
+    fs::write(&out, table).expect("writing bundle.rs");
+    // `gp --version` names the commit a released gp was built from.
+    println!("cargo:rerun-if-env-changed=GP_RELEASE_COMMIT");
+    let commit = std::env::var("GP_RELEASE_COMMIT").unwrap_or_else(|_| "unknown commit".into());
+    println!("cargo:rustc-env=GP_VERSION_LINE={version} (commit {commit}, bundle {id})");
+}
+
 fn main() {
+    bundle();
     let mut files = Vec::new();
     for s in SOURCES {
         println!("cargo:rerun-if-changed={s}");

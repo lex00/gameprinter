@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use std::process::Command;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -489,5 +489,138 @@ fn a_model_naming_missing_hooks_is_refused() {
             .contains("run only in its game's module (--module): nope"),
         "{}",
         String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// With nothing named to validate against, gp validate picks the check
+/// that fits the folder (docs/validation.md, "The check that fits a
+/// game"): Moss Hop has recordings of its original, so its contract runs
+/// as `--against baselines/mosshop` runs it; a person's copy with a higher
+/// jump passes the check for a changed game, which decides its result,
+/// and the contract it fails says it differs from the original.
+#[test]
+fn the_check_that_fits_is_moss_hop_s_contract_and_a_changed_copy_s_own() {
+    if gp_arcade::skip_slow_test() {
+        return;
+    }
+    let home = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let rom = build_mosshop(tmp.path());
+    let fit = |model: &Path| -> (i32, Value) {
+        let out = gp(home.path())
+            .args(["--json", "validate"])
+            .arg(model)
+            .arg("--rom")
+            .arg(&rom)
+            .arg("--assets")
+            .arg(assets(&rom))
+            .output()
+            .unwrap();
+        let json = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| {
+            panic!(
+                "no JSON: {}\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            )
+        });
+        (out.status.code().unwrap(), json)
+    };
+    let model = repo().join("templates/mosshop");
+    let (code, json) = fit(&model);
+    assert_eq!(code, 0, "{json:#}");
+    assert_eq!(json["check"], "contract", "{json:#}");
+    assert!(json["also"].is_null(), "an original in the checkout");
+    assert!(json["why"].as_str().unwrap().contains("baselines"));
+    let (_, against) = validate(home.path(), &model, &rom, &[]);
+    assert_eq!(statuses(&json), statuses(&against), "the same checks");
+    assert_eq!(json["passed"], against["passed"]);
+
+    // A person's copy (outside any git work tree) with a higher jump.
+    let copy = broken_copy(tmp.path(), "model.toml", "speed = -5", "speed = -6");
+    let (code, json) = fit(&copy);
+    assert_eq!(
+        code, 0,
+        "the changed game's check decides a copy's: {json:#}"
+    );
+    assert_eq!(json["check"], "contract");
+    assert_eq!(json["also"], "changed");
+    assert_eq!(json["decided_by"], "changed");
+    assert_eq!(json["ok"], true);
+    let k = &json["contract"];
+    assert_eq!(
+        (&k["ok"], &k["exit"], &k["says"]),
+        (
+            &json!(false),
+            &json!(1),
+            &json!("differs from the original, as you changed it")
+        ),
+        "the contract reads the change as a failure: {k:#}"
+    );
+    assert!(k["failed"].as_u64().unwrap() > 0, "{k:#}");
+    assert_eq!(
+        json["failed"], k["failed"],
+        "its checks stay at the top level"
+    );
+    let c = &json["changed"];
+    assert_eq!(c["ok"], true, "{c:#}");
+    assert_eq!(c["complete"], true, "{c:#}");
+    assert_eq!(c["well_formed"]["ok"], true);
+    assert_eq!(c["stages"][0]["level"], "main");
+    assert_eq!(c["stages"][0]["how"], "reach and playthrough");
+    assert_eq!(c["stages"][0]["detail"]["finished"], true, "{c:#}");
+}
+
+/// `--which` says which check fits and runs none: a folder in a git work
+/// tree holding a corpus is a port; the same folder outside one is a
+/// person's copy of a port, changed on purpose. Made-up folders.
+#[test]
+fn which_names_a_port_and_a_copy_of_one() {
+    let home = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let model = std::fs::read_to_string(repo().join("templates/mosshop/model.toml"))
+        .unwrap()
+        .replace("source = \"mosshop\"", "source = \"made-up\"");
+    assert!(model.contains("source = \"made-up\""));
+    let game = tmp.path().join("checkout").join("madeup");
+    std::fs::create_dir_all(&game).unwrap();
+    std::fs::create_dir_all(tmp.path().join("checkout/.git")).unwrap();
+    std::fs::write(game.join("model.toml"), &model).unwrap();
+    std::fs::write(game.join("corpus.toml"), "").unwrap();
+    let which = |dir: &Path| -> Value {
+        let out = gp(home.path())
+            .args(["--json", "validate"])
+            .arg(dir)
+            .arg("--which")
+            .output()
+            .unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    let j = which(&game);
+    assert_eq!(j["check"], "port", "{j:#}");
+    assert!(j["why"].as_str().unwrap().contains("gp corpus score"));
+    let copy = tmp.path().join("mine");
+    std::fs::create_dir_all(&copy).unwrap();
+    std::fs::write(copy.join("model.toml"), &model).unwrap();
+    std::fs::write(copy.join("corpus.toml"), "").unwrap();
+    let j = which(&copy);
+    assert_eq!(j["check"], "changed", "{j:#}");
+    assert!(j["why"].as_str().unwrap().contains("copy of a port"));
+    // --which runs nothing, and names no recordings.
+    let out = gp(home.path())
+        .args(["validate"])
+        .arg(&copy)
+        .args(["--which", "--against", "baselines/mosshop"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "--which with --against is refused"
     );
 }

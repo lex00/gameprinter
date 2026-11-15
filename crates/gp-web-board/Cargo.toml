@@ -1,0 +1,30 @@
+[package]
+name = "gp-web-board"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# An arcade model's board art drawn in the browser (issue 3): the page's own
+# small module, gp_board.wasm, beside gp_web.wasm. The game's module runs the
+# game; each frame the page hands this one the game's canonical state and
+# the bodies its scene shows, and it draws the board's picture with
+# gp_look::board and gp_arcade::video. It is the page's, not the game's, so
+# a game package's module (and its Cargo.lock) needs nothing new to be
+# drawn this way. Built by scripts/web/build-preview.sh with
+# `cargo rustc --lib --crate-type cdylib --target wasm32-unknown-unknown`.
+[dependencies]
+gp-look = { version = "0.1.0", path = "../gp-look" }
+# The theme engine an NES game's theme is drawn with (gp_present::art),
+# already linked through gp-look.
+gp-present = { version = "0.1.0", path = "../gp-present" }
+
+# The workspace forbids unsafe code. This crate denies it instead, so the
+# one module that exports functions to JavaScript (`abi`, wasm32 only) can
+# allow it, as gp-web does.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

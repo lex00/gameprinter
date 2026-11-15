@@ -90,6 +90,7 @@ pub fn log_call(config: &Config, tool: &str, args: &Value, reply: &Reply) {
 fn spawn(config: &Config, args: &[String], ready: impl Fn() -> bool) -> Result<(), String> {
     let mut child = std::process::Command::new(&config.gp)
         .args(args)
+        .env(crate::CALLER_ENV, "mcp")
         .env("GP_STORE", config.store())
         .env("GP_HOME", &config.home)
         .stdin(std::process::Stdio::null())
@@ -175,8 +176,11 @@ pub fn start(config: &Config, a: StartArgs) -> Result<Reply, String> {
     if a.replace {
         args.push("--replace".into());
     }
-    let events = dir.join("events.ndjson");
-    spawn(config, &args, || events.is_file())?;
+    // `gp watch start` opens events.ndjson first and writes session.json
+    // after reading the ROM and its start clips; every other watch tool
+    // looks for session.json, so the session is ready once that is there.
+    let session = dir.join("session.json");
+    spawn(config, &args, || session.is_file())?;
     Ok(Reply::ok(json!({
         "name": a.name, "started": true, "dir": dir,
         "follow": "watch_events with after set to the last seq read",

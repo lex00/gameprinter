@@ -30,6 +30,7 @@ pub enum SeekError {
 }
 
 /// A console positioned in a recording, with its input log.
+#[derive(Clone)]
 pub struct Cursor {
     nes: Nes,
     input: InputLog,
@@ -58,6 +59,25 @@ pub fn open(
         });
     }
     let (input, hashes) = recording::load(store, manifest)?;
+    open_with(store, manifest, rom, frame, input, hashes)
+}
+
+/// [`open`] with the recording's input log and frame hashes already read
+/// (a long-lived session keeps them).
+pub fn open_with(
+    store: &Store,
+    manifest: &RecordingManifest,
+    rom: &[u8],
+    frame: u64,
+    input: InputLog,
+    hashes: Vec<FrameHash>,
+) -> Result<Cursor, SeekError> {
+    if frame > manifest.frames {
+        return Err(SeekError::PastEnd {
+            frame,
+            frames: manifest.frames,
+        });
+    }
     let mut nes = Nes::power_on(rom, manifest.power_on)?;
     let mut checkpoint = manifest
         .checkpoints
@@ -150,6 +170,11 @@ impl Cursor {
     /// The recorded frame hashes, frames 0 to the last.
     pub fn hashes(&self) -> &[FrameHash] {
         &self.hashes
+    }
+
+    /// The input log.
+    pub fn input_log(&self) -> &InputLog {
+        &self.input
     }
 }
 

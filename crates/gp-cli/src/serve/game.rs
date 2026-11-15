@@ -175,7 +175,7 @@ fn runs(ctx: &Ctx, _req: &Request, _params: &Params) -> Result<Response, Fail> {
                 "watched": false,
                 "pending_inputs": 0,
                 "started_ms": 0,
-                "preview": r.has_model() && r.platform() == Platform::Nes,
+                "preview": r.has_model(),
                 "pins": [],
             })
         })
@@ -294,7 +294,7 @@ fn game(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> {
         .and_then(|t| toml::from_str(&t).ok())
         .unwrap_or(toml::Value::Table(Default::default()));
     let platform = run.platform();
-    let preview = run.has_model() && platform == Platform::Nes;
+    let preview = run.has_model();
     if preview && !crate::mechanic::live::is_built(&ctx.paths, &run.name) {
         // The first ask builds it, in the background.
         if let Ok(rom) = rom_of(ctx, &run) {
@@ -372,9 +372,8 @@ const WAITING: &str = "<!doctype html><meta charset=utf-8><body style=\"backgrou
 
 fn preview(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> {
     let run = run_dir(ctx, params)?;
-    if run.platform() != Platform::Nes {
-        return Err(Fail::conflict("an arcade game's model draws nothing yet"));
-    }
+    // An arcade game's model builds and plays in the same preview, keyed as
+    // a cabinet, its board art drawn by the page's gp_board.wasm (#3).
     let file = params.get("file").map(String::as_str).unwrap_or("");
     let built = crate::mechanic::live::is_built(&ctx.paths, &run.name);
     if !built && (file == "index.html" || file.is_empty()) {

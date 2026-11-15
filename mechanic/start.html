@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Game Printer</title>
+  <link rel="stylesheet" href="/start/style.css">
+  <link rel="stylesheet" href="/start/journeys/journeys.css">
+</head>
+<body class="start">
+  <header>
+    <a id="logo" href="/start/" title="The first screen: what you want to do, and your copies">GAME PRINTER</a>
+    <span id="title">What do you want to do?</span>
+  </header>
+  <main id="start">
+    <section id="first">
+      <p id="intro">Game Printer writes down how a game plays, as a plain-text rules file called the model, and plays it in your browser with nothing to install. A template is a game's rules without its pictures, that a new game is built on: every game here can be one.</p>
+      <h2>What do you want to do?</h2>
+      <div id="start-choices" role="group" aria-label="What you want to do">
+        <button type="button" data-journey="port"><b>PORT A GAME I OWN</b><span>Bring a game you have a copy of, and the tools write down its rules until it plays the same here.</span></button>
+        <button type="button" data-journey="theme"><b>MAKE A THEME FOR A GAME</b><span>New pictures for a game in a style you describe. It changes how the game looks, never how it plays.</span></button>
+        <button type="button" data-journey="new"><b>MAKE A NEW GAME</b><span>Start from a template, then change its stage and give it a look of its own.</span></button>
+      </div>
+      <section id="port-start" class="jr-box" hidden>
+        <h2>Port a game you own</h2>
+        <p id="port-have" class="muted" hidden>Carry on with a game below, or bring another: tell your agent where your copy of it is, a .nes file or a .zip for an arcade game.</p>
+        <!--PORT-->
+      </section>
+    </section>
+    <section id="theme-start" class="jr-box" hidden></section>
+    <section id="new-start" class="jr-box" hidden></section>
+    <section id="carry" hidden>
+      <h2>Carry on</h2>
+      <ul id="copies" aria-label="Your copies"></ul>
+      <ul id="games" aria-label="The games you are porting"></ul>
+    </section>
+    <section id="journey" hidden aria-live="polite"></section>
+  </main>
+  <script type="module" src="/start/journeys/start.js"></script>
+</body>
+</html>

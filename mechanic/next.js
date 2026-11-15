@@ -14,6 +14,9 @@
 // once in 10 minutes; after the third time on one signal its words offer
 // another way in.
 
+import { pictureCard } from "./picture-card.js";
+import { soundCard } from "./sound-card.js";
+
 const $ = (id) => document.getElementById(id);
 
 const POLL_MS = 5000;
@@ -152,9 +155,13 @@ export function startNext(page) {
   // gp_run left, gp_mcp::asks), under the line on every tab: what it does
   // in plain words, with YES and NO. A yes shows until the agent uses it.
   let asksDrawn = "";
+  // A picture the agent proposes for the person's theme is a card here
+  // too (picture-card.js): the oldest open one, with how many wait, and
+  // answers the agent hasn't read yet. A sound change it proposes for the
+  // person's copy is the same (sound-card.js).
   function renderAsks() {
-    const list = (answer?.waits_for_yes ?? []).filter((y) => y.id);
-    const key = JSON.stringify(list.map((y) => [y.id, y.state]));
+    const list = (answer?.waits_for_yes ?? []).filter((y) => y.id && (!["picture", "sound"].includes(y.what) || y.state !== "open" || ((y.picture ?? y.sound)?.place ?? 1) === 1));
+    const key = JSON.stringify(list.map((y) => [y.id, y.state, (y.picture ?? y.sound)?.of]));
     if (key === asksDrawn) return;
     asksDrawn = key;
     let box = $("asks");
@@ -167,6 +174,14 @@ export function startNext(page) {
     box.textContent = "";
     box.hidden = list.length === 0;
     for (const y of list) {
+      if (y.what === "picture" && y.picture) {
+        box.appendChild(pictureCard({ ...y.picture, game: y.game && y.game !== page.game() ? y.game : null }, () => { asksDrawn = ""; void tick(); }));
+        continue;
+      }
+      if (y.what === "sound" && y.sound) {
+        box.appendChild(soundCard(y.sound, () => { asksDrawn = ""; void tick(); }));
+        continue;
+      }
       const card = document.createElement("div");
       card.className = "ask-card";
       card.dataset.ask = y.id;
@@ -354,6 +369,8 @@ export function startNext(page) {
     render();
   }
 
+  window.addEventListener("gp-pictures", () => { asksDrawn = ""; void tick(); });
+  window.addEventListener("gp-sounds", () => { asksDrawn = ""; void tick(); });
   void tick();
   setInterval(() => void tick(), POLL_MS);
   setInterval(render, 1000);

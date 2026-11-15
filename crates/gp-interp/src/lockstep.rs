@@ -19,7 +19,7 @@
 //! [`Lockstep::paths`]. A resync keeps the model's own bodies, so a body's
 //! split is noted but puts nothing back.
 
-use gp_runtime::{Entry, InputFrame, LoadNote, Runtime, Value};
+use gp_runtime::{InputFrame, LoadNote, QueryValues, Runtime, Value};
 use gp_sim::{Fx, Spec, World};
 
 use crate::mapping::{Align, Field, Mapping};
@@ -380,7 +380,7 @@ pub fn watch_original<O: Runtime>(
 /// or component of its kind counts in it (a timer a hook elsewhere keeps,
 /// as Tapper's), is read from the model's canonical state: every body of
 /// the kind, in the view's order. None when it holds nothing.
-pub fn watch_model<M: Runtime>(model: &M, spec: &Spec, path: &str) -> Vec<Value> {
+pub fn watch_model<M: QueryValues>(model: &M, spec: &Spec, path: &str) -> Vec<Value> {
     let path = match path.strip_prefix("bodies.") {
         Some(rest) => format!("entities.{rest}"),
         None => path.to_owned(),
@@ -468,30 +468,31 @@ pub fn distance_of(whole: bool, original: &Value, model: &Value) -> Fx {
     }
 }
 
-/// The model's value of each field. A field a case leaves unmeasured on
+/// The model's value of each field, read in one batch
+/// ([`gp_runtime::QueryValues`]). A field a case leaves unmeasured on
 /// this frame (`quiet`) whose path names nothing in the model's state
 /// (a body of a kind the level has none of, such as Donkey Kong's hammers
 /// on 75m) reads as false: it isn't compared.
-fn read_model<M: Runtime>(
+fn read_model<M: QueryValues>(
     model: &M,
     mapping: &Mapping,
     quiet: &[bool],
 ) -> Result<Vec<Value>, String> {
+    let paths: Vec<String> = mapping.fields.iter().map(|f| f.path.clone()).collect();
     mapping
         .fields
         .iter()
         .zip(quiet)
-        .map(|(f, q)| match model.query(&f.path) {
+        .zip(model.query_values(&paths))
+        .map(|((f, q), found)| match found {
             Err(_) if *q => Ok(Value::Flag(false)),
             Err(e) => Err(e),
-            Ok(found) => match found.as_slice() {
-                [Entry { value, .. }] => Ok(value.clone()),
-                other => Err(format!(
-                    "{} names {} values in the model's state, not one",
-                    f.path,
-                    other.len()
-                )),
-            },
+            Ok(mut found) if found.len() == 1 => Ok(found.remove(0)),
+            Ok(other) => Err(format!(
+                "{} names {} values in the model's state, not one",
+                f.path,
+                other.len()
+            )),
         })
         .collect()
 }
@@ -531,7 +532,7 @@ pub fn polled(events: &[gp_runtime::Event]) -> bool {
 /// Loads the original's state, translated through `mapping` (the whole
 /// mapping, presentation fields too) onto `base`, into the model: a
 /// lockstep's start (`resync` false) or a resync.
-pub fn load<O: Runtime, M: Runtime>(
+pub fn load<O: Runtime, M: QueryValues>(
     original: &O,
     model: &mut M,
     spec: &Spec,
@@ -555,7 +556,7 @@ pub fn load<O: Runtime, M: Runtime>(
 
 /// Runs both from power-on through `inputs`, measuring every aligned
 /// frame. `spec` is the model's, to read and build its canonical states.
-pub fn lockstep<O: Runtime, M: Runtime>(
+pub fn lockstep<O: Runtime, M: QueryValues>(
     original: &mut O,
     model: &mut M,
     spec: &Spec,
@@ -568,7 +569,7 @@ pub fn lockstep<O: Runtime, M: Runtime>(
 
 /// [`lockstep`], with the screen measure when `screens` draws the two
 /// games' pictures.
-pub fn lockstep_with<O: Runtime, M: Runtime>(
+pub fn lockstep_with<O: Runtime, M: QueryValues>(
     original: &mut O,
     model: &mut M,
     spec: &Spec,
@@ -625,7 +626,7 @@ impl Prefix {
 /// run stands ([`Prefix`]); `original` is left after those frames. An
 /// error when the start comes before frame `n`, or when the model's frame
 /// isn't one a step.
-pub fn prefix<O: Runtime, M: Runtime>(
+pub fn prefix<O: Runtime, M: QueryValues>(
     original: &mut O,
     model: &mut M,
     spec: &Spec,
@@ -665,7 +666,7 @@ pub fn prefix<O: Runtime, M: Runtime>(
 /// there), and the model is put at a power-on world at the frame those
 /// frames' steps left it at. Gives the same run as from power-on.
 #[allow(clippy::too_many_arguments)]
-pub fn lockstep_resumed<O: Runtime, M: Runtime>(
+pub fn lockstep_resumed<O: Runtime, M: QueryValues>(
     original: &mut O,
     model: &mut M,
     spec: &Spec,
@@ -702,8 +703,85 @@ pub fn lockstep_resumed<O: Runtime, M: Runtime>(
     .map(|r| r.0)
 }
 
+/// The screen measure of a run, on a thread of its own: the lockstep hands
+/// it each compared frame's two pictures in order and goes on, and takes the
+/// finished [`crate::screen::Screen`] back at the end. Nothing in the run
+/// reads the measure before then, so the result is the one measured in line,
+/// frame for frame; only a watcher ([`watching`]) sees the lockstep as it
+/// goes, so with one the measure stays in line. A few frames wait at most,
+/// which bounds the pictures held.
+struct Measure {
+    inline: Option<crate::screen::Screen>,
+    tx: Option<std::sync::mpsc::SyncSender<Shot>>,
+    worker: Option<std::thread::JoinHandle<crate::screen::Screen>>,
+}
+
+/// One compared frame's pictures, the original's first, or none to skip.
+type Shot = Option<(gp_present::raster::Frame, gp_present::raster::Frame)>;
+
+impl Measure {
+    fn new(screen: Option<crate::screen::Screen>) -> Self {
+        let watched = WATCH.with(|w| w.try_borrow().map_or(true, |w| w.is_some()));
+        match screen {
+            Some(mut screen) if !watched => {
+                let (tx, rx) = std::sync::mpsc::sync_channel::<Shot>(4);
+                let worker = std::thread::spawn(move || {
+                    for shot in rx {
+                        match shot {
+                            Some((theirs, ours)) => screen.push(&theirs, &ours),
+                            None => screen.skip(),
+                        }
+                    }
+                    screen
+                });
+                Self {
+                    inline: None,
+                    tx: Some(tx),
+                    worker: Some(worker),
+                }
+            }
+            screen => Self {
+                inline: screen,
+                tx: None,
+                worker: None,
+            },
+        }
+    }
+
+    /// Whether the run is measured.
+    fn on(&self) -> bool {
+        self.inline.is_some() || self.tx.is_some()
+    }
+
+    fn push(&mut self, shot: Shot) {
+        if let Some(screen) = self.inline.as_mut() {
+            match shot {
+                Some((theirs, ours)) => screen.push(&theirs, &ours),
+                None => screen.skip(),
+            }
+        } else if let Some(tx) = &self.tx
+            && tx.send(shot).is_err()
+        {
+            // The worker is gone: it panicked, and finish says so.
+            self.tx = None;
+        }
+    }
+
+    /// The measure of every frame pushed.
+    fn finish(&mut self) -> Option<crate::screen::Screen> {
+        self.tx = None;
+        match self.worker.take() {
+            Some(w) => match w.join() {
+                Ok(screen) => Some(screen),
+                Err(panic) => std::panic::resume_unwind(panic),
+            },
+            None => self.inline.take(),
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-fn run<O: Runtime, M: Runtime>(
+fn run<O: Runtime, M: QueryValues>(
     original: &mut O,
     model: &mut M,
     spec: &Spec,
@@ -768,11 +846,13 @@ fn run<O: Runtime, M: Runtime>(
     // mode's splits, and each body measure's.
     let mut apart = vec![false; mapping.fields.len()];
     let mut body_apart: Vec<bool> = Vec::new();
+    let mut measure = Measure::new(out.screen.take());
     let mut check = |out: &mut Lockstep,
                      original: &O,
                      model: &mut M,
                      events: Vec<String>,
-                     screens: &mut Option<&mut dyn Screens<O, M>>|
+                     screens: &mut Option<&mut dyn Screens<O, M>>,
+                     measure: &mut Measure|
      -> Result<(), String> {
         let of = original.frame();
         if let Some(from) = opts.from {
@@ -820,7 +900,8 @@ fn run<O: Runtime, M: Runtime>(
         }
         if opts.values {
             let theirs = translate::level_of(original, mapping, &orig)?.map(|(l, _)| l);
-            let ours = match model.query("level")?.first().map(|e| &e.value) {
+            let level = model.query_values(&["level".to_owned()]).remove(0)?;
+            let ours = match level.first() {
                 Some(Value::Text(l)) => l.clone(),
                 _ => String::new(),
             };
@@ -844,11 +925,10 @@ fn run<O: Runtime, M: Runtime>(
                 out.watched.push(row);
             }
         }
-        if let (Some(sc), Some(screen)) = (screens.as_deref_mut(), out.screen.as_mut()) {
-            match sc.shots(original, model)? {
-                Some((theirs, ours)) => screen.push(&theirs, &ours),
-                None => screen.skip(),
-            }
+        if let Some(sc) = screens.as_deref_mut()
+            && measure.on()
+        {
+            measure.push(sc.shots(original, model)?);
         }
         let mut split = Vec::new();
         for (i, f) in mapping.fields.iter().enumerate() {
@@ -965,12 +1045,20 @@ fn run<O: Runtime, M: Runtime>(
         && holds(original, cond)?
     {
         started = true;
-        check(&mut out, original, model, Vec::new(), &mut screens)?;
+        check(
+            &mut out,
+            original,
+            model,
+            Vec::new(),
+            &mut screens,
+            &mut measure,
+        )?;
         hear(&mut out, &mut heard, &mut said);
     }
     let skip = resume.map_or(0, |p| p.inputs);
     for (i, input) in inputs.iter().enumerate().skip(skip) {
         if pause == Some(i) {
+            out.screen = measure.finish();
             if out.start.is_some() {
                 return Ok((out, None));
             }
@@ -1010,7 +1098,14 @@ fn run<O: Runtime, M: Runtime>(
         {
             if holds(original, cond)? {
                 started = true;
-                check(&mut out, original, model, Vec::new(), &mut screens)?;
+                check(
+                    &mut out,
+                    original,
+                    model,
+                    Vec::new(),
+                    &mut screens,
+                    &mut measure,
+                )?;
                 hear(&mut out, &mut heard, &mut said);
             } else {
                 out.before_start += 1;
@@ -1029,7 +1124,14 @@ fn run<O: Runtime, M: Runtime>(
         }
         if !started {
             started = true;
-            check(&mut out, &before, model, Vec::new(), &mut screens)?;
+            check(
+                &mut out,
+                &before,
+                model,
+                Vec::new(),
+                &mut screens,
+                &mut measure,
+            )?;
             hear(&mut out, &mut heard, &mut said);
         }
         let mut events = model
@@ -1049,9 +1151,10 @@ fn run<O: Runtime, M: Runtime>(
         } else {
             Vec::new()
         };
-        check(&mut out, original, model, kinds, &mut screens)?;
+        check(&mut out, original, model, kinds, &mut screens, &mut measure)?;
         hear(&mut out, &mut heard, &mut said);
     }
+    out.screen = measure.finish();
     if pause == Some(inputs.len()) && out.start.is_none() {
         let p = Prefix::of(&out, inputs.len(), started);
         return Ok((out, Some(p)));
@@ -1546,7 +1649,7 @@ pub fn by_mechanic(
 /// takes it. Returns the original standing at that frame, ready for
 /// [`lockstep_from`], and the start. `original` and `model` are at
 /// power-on.
-pub fn start_at<O: Runtime, M: Runtime>(
+pub fn start_at<O: Runtime, M: QueryValues>(
     original: &O,
     model: &mut M,
     spec: &Spec,
@@ -1585,7 +1688,7 @@ pub fn start_at<O: Runtime, M: Runtime>(
 /// aligned frame from the start on. The mapping's start condition is not
 /// waited for, since the start is past it. A scenario's few presses and a
 /// trial of the refinement loop both run this way.
-pub fn lockstep_from<O: Runtime, M: Runtime>(
+pub fn lockstep_from<O: Runtime, M: QueryValues>(
     original: &mut O,
     model: &mut M,
     spec: &Spec,
@@ -1599,7 +1702,7 @@ pub fn lockstep_from<O: Runtime, M: Runtime>(
 
 /// [`lockstep_from`] with the screen measure ([`lockstep_with`]).
 #[allow(clippy::too_many_arguments)]
-pub fn lockstep_from_with<O: Runtime, M: Runtime>(
+pub fn lockstep_from_with<O: Runtime, M: QueryValues>(
     original: &mut O,
     model: &mut M,
     spec: &Spec,
@@ -2017,5 +2120,74 @@ mod track_tests {
             assert_eq!(seconds(f, nes), old_seconds(f));
         }
         assert_eq!(st.at_least(10, nes), 2000 - 601 + 1);
+    }
+}
+
+#[cfg(test)]
+mod measure_tests {
+    use super::*;
+    use gp_present::raster::Frame;
+
+    /// Made-up pictures: a pattern that scrolls, with a sprite that moves
+    /// and a frame now and then the model draws apart.
+    fn frames(n: u32) -> Vec<Shot> {
+        let colors: Vec<[u8; 3]> = (0..64u8).map(|i| [i * 4, 255 - i * 4, i ^ 0x2a]).collect();
+        (0..n)
+            .map(|k| {
+                if k % 7 == 3 {
+                    return None;
+                }
+                let pic = |shift: u32, odd: bool| {
+                    let px: Vec<u8> = (0..64 * 48u32)
+                        .map(|i| {
+                            let (x, y) = (i % 64, i / 64);
+                            let sprite = x / 8 == (k % 8) && y / 8 == 2;
+                            let c =
+                                (((x + shift) / 4 + y / 6) % 13) as u8 + u8::from(odd && x > 40);
+                            c | if sprite { 0x80 } else { 0 }
+                        })
+                        .collect();
+                    Frame::indexed(64, 48, &px, &colors, 0x80)
+                };
+                Some((pic(k, false), pic(k + u32::from(k % 5 == 1), k % 3 == 0)))
+            })
+            .collect()
+    }
+
+    /// The measure on its own thread is the measure in line, frame for frame.
+    #[test]
+    fn the_measure_off_the_thread_is_the_measure_in_line() {
+        let opts = crate::screen::Options {
+            color: 2,
+            tolerance: [10, 5],
+            lag: 0,
+        };
+        let mut inline = crate::screen::Screen::new(&opts);
+        for shot in frames(60) {
+            match shot {
+                Some((o, m)) => inline.push(&o, &m),
+                None => inline.skip(),
+            }
+        }
+        let mut off = Measure::new(Some(crate::screen::Screen::new(&opts)));
+        assert!(off.worker.is_some(), "on its own thread");
+        for shot in frames(60) {
+            off.push(shot);
+        }
+        assert_eq!(off.finish(), Some(inline.clone()));
+        // A watched run measures in line, the same.
+        let watched = watching(
+            |_| {},
+            || {
+                let mut m = Measure::new(Some(crate::screen::Screen::new(&opts)));
+                assert!(m.worker.is_none());
+                for shot in frames(60) {
+                    m.push(shot);
+                }
+                m.finish()
+            },
+        );
+        assert_eq!(watched, Some(inline));
+        assert!(!Measure::new(None).on());
     }
 }

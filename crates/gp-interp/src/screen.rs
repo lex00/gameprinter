@@ -229,10 +229,6 @@ impl Screen {
     }
 }
 
-fn differs(a: [u8; 3], b: [u8; 3], tol: u8) -> bool {
-    a.iter().zip(b).any(|(x, y)| x.abs_diff(y) > tol)
-}
-
 /// The visible part of the model's frame that the original's frame also
 /// has: left, top, right, bottom (exclusive).
 fn bounds(original: &Frame, model: &Frame) -> [i64; 4] {
@@ -245,63 +241,208 @@ fn bounds(original: &Frame, model: &Frame) -> [i64; 4] {
     ]
 }
 
+/// A pixel as one number: its colour as 0xRRGGBB, and [`SPRITE_KEY`] when
+/// a sprite drew it. Comparing two of these is one instruction where
+/// comparing the colours and the masks apart is several, and the shift
+/// search below compares about two million pairs a frame on an arcade
+/// board's 512 by 480 picture.
+const SPRITE_KEY: u32 = 1 << 24;
+const RGB_KEY: u32 = 0x00ff_ffff;
+
+#[inline(always)]
+fn key(rgb: [u8; 3], sprite: bool) -> u32 {
+    (u32::from(rgb[0]) << 16)
+        | (u32::from(rgb[1]) << 8)
+        | u32::from(rgb[2])
+        | if sprite { SPRITE_KEY } else { 0 }
+}
+
+/// Whether two keys' colours differ by more than `tol` on any channel.
+#[inline(always)]
+fn keys_differ(a: u32, b: u32, tol: u8) -> bool {
+    if tol == 0 {
+        (a ^ b) & RGB_KEY != 0
+    } else {
+        [16, 8, 0]
+            .into_iter()
+            .any(|s| ((a >> s) as u8).abs_diff((b >> s) as u8) > tol)
+    }
+}
+
+/// A grid of keys, `w` by `h`, row by row.
+struct Grid {
+    px: Vec<u32>,
+    w: usize,
+    h: usize,
+}
+
+impl Grid {
+    /// A frame's keys over the area `[l, r)` by `[t, b)`.
+    fn of(f: &Frame, [l, t, r, b]: [i64; 4]) -> Self {
+        let (w, h) = ((r - l).max(0) as usize, (b - t).max(0) as usize);
+        let fw = f.w as usize;
+        let mut px = Vec::with_capacity(w * h);
+        for y in 0..h {
+            let at = (t as usize + y) * fw + l as usize;
+            px.extend(
+                f.rgb[at..at + w]
+                    .iter()
+                    .zip(&f.sprite[at..at + w])
+                    .map(|(c, s)| key(*c, *s)),
+            );
+        }
+        Self { px, w, h }
+    }
+
+    /// Every `step`th key each way from `(x0, y0)`: the keys at
+    /// `(x0 + step * i, y0 + step * j)`.
+    fn every(&self, step: usize, x0: usize, y0: usize) -> Self {
+        let w = self.w.saturating_sub(x0).div_ceil(step);
+        let h = self.h.saturating_sub(y0).div_ceil(step);
+        let mut px = Vec::with_capacity(w * h);
+        for j in 0..h {
+            let row = &self.px[(y0 + step * j) * self.w..][..self.w];
+            px.extend(row[x0..].iter().step_by(step));
+        }
+        Self { px, w, h }
+    }
+}
+
+/// The background's differing pixels and those compared between `o` and
+/// `m` with `m` moved by `(qx, qy)` cells: `o`'s cell `(i, j)` against
+/// `m`'s `(i + qx, j + qy)`, where `m` has one, and neither a sprite.
+fn background_counts(o: &Grid, m: &Grid, qx: i64, qy: i64, tol: u8) -> (u64, u64) {
+    let (mut n, mut c) = (0u64, 0u64);
+    let i0 = (-qx).max(0);
+    let i1 = (o.w as i64).min(m.w as i64 - qx);
+    if i1 <= i0 {
+        return (0, 0);
+    }
+    let (i0, i1) = (i0 as usize, i1 as usize);
+    let mi0 = (i0 as i64 + qx) as usize;
+    for j in 0..o.h {
+        let mj = j as i64 + qy;
+        if mj < 0 || mj >= m.h as i64 {
+            continue;
+        }
+        let orow = &o.px[j * o.w + i0..j * o.w + i1];
+        let mrow = &m.px[mj as usize * m.w + mi0..][..i1 - i0];
+        let (rn, rc) = row_counts(orow, mrow, tol);
+        n += rn;
+        c += rc;
+    }
+    (n, c)
+}
+
+/// One row's [`background_counts`]: the pairs that differ and those
+/// compared, neither a sprite. Exact colours are a row of plain
+/// comparisons, which the compiler does several pixels at a time.
+#[inline(always)]
+fn row_counts(o: &[u32], m: &[u32], tol: u8) -> (u64, u64) {
+    let (mut n, mut c) = (0u32, 0u32);
+    if tol == 0 {
+        for (&a, &b) in o.iter().zip(m) {
+            // Neither a sprite: the keys are their colours.
+            let both = u32::from((a | b) & SPRITE_KEY == 0);
+            c += both;
+            n += both & u32::from(a != b);
+        }
+    } else {
+        for (&a, &b) in o.iter().zip(m) {
+            let both = (a | b) & SPRITE_KEY == 0;
+            c += u32::from(both);
+            n += u32::from(both && keys_differ(a, b, tol));
+        }
+    }
+    (u64::from(n), u64::from(c))
+}
+
+/// The sprite layer between `o` and `m` with `m` moved by `(dx, dy)`: the
+/// pixels either covers with a sprite, those that differ (also those
+/// whose model pixel is off the area) set in the returned bits, and the
+/// counts of both.
+fn sprite_counts(o: &Grid, m: &Grid, dx: i64, dy: i64, tol: u8) -> (Vec<bool>, u64, u64) {
+    let (w, h) = (o.w, o.h);
+    let mut d = vec![false; w * h];
+    let (mut n, mut c) = (0u64, 0u64);
+    // The columns whose moved pixel is on the area.
+    let x0 = (-dx).clamp(0, w as i64) as usize;
+    let x1 = (w as i64 - dx).clamp(x0 as i64, w as i64) as usize;
+    for y in 0..h {
+        let row = &o.px[y * w..(y + 1) * w];
+        let bits = &mut d[y * w..(y + 1) * w];
+        let my = y as i64 + dy;
+        let (lo, hi) = if my < 0 || my >= h as i64 {
+            (0, 0)
+        } else {
+            (x0, x1)
+        };
+        // Off the area: only the original's sprites count, all apart.
+        for x in (0..lo).chain(hi.max(lo)..w) {
+            if row[x] & SPRITE_KEY != 0 {
+                c += 1;
+                n += 1;
+                bits[x] = true;
+            }
+        }
+        if hi > lo {
+            let mrow = &m.px[my as usize * w..][..w];
+            for x in lo..hi {
+                let (a, b) = (row[x], mrow[(x as i64 + dx) as usize]);
+                if (a | b) & SPRITE_KEY == 0 {
+                    continue;
+                }
+                c += 1;
+                if keys_differ(a, b, tol) {
+                    bits[x] = true;
+                    n += 1;
+                }
+            }
+        }
+    }
+    (d, n, c)
+}
+
 /// Both layers on one frame.
 pub fn measure(original: &Frame, model: &Frame, tol: u8) -> (LayerFrame, LayerFrame) {
-    let [l, t, r, b] = bounds(original, model);
-    let ow = i64::from(original.w);
-    let mw = i64::from(model.w);
-    let oi = |x: i64, y: i64| (y * ow + x) as usize;
-    let mi = |x: i64, y: i64| (y * mw + x) as usize;
-    let inside = |x: i64, y: i64| x >= l && y >= t && x < r && y < b;
-    let w = (r - l).max(0) as usize;
-    let h = (b - t).max(0) as usize;
+    let area = bounds(original, model);
+    let [l, t, _, _] = area;
+    // Each side's keys over the compared area: every read below is inside it.
+    let o = Grid::of(original, area);
+    let m = Grid::of(model, area);
+    let (w, h) = (o.w, o.h);
 
     // The background, in the frame's own space.
     let mut bg = vec![false; w * h];
     let mut bg_n = 0u64;
     let mut bg_compared = 0u64;
-    for y in t..b {
-        for x in l..r {
-            let (o, m) = (oi(x, y), mi(x, y));
-            if original.sprite[o] || model.sprite[m] {
-                continue;
-            }
-            bg_compared += 1;
-            if differs(original.rgb[o], model.rgb[m], tol) {
-                bg[((y - t) as usize) * w + (x - l) as usize] = true;
-                bg_n += 1;
-            }
-        }
+    for ((&a, &b), bit) in o.px.iter().zip(&m.px).zip(bg.iter_mut()) {
+        let both = (a | b) & SPRITE_KEY == 0;
+        let apart = both && keys_differ(a, b, tol);
+        bg_compared += u64::from(both);
+        bg_n += u64::from(apart);
+        *bit = apart;
     }
-    // Moved by an offset: the background's differing pixels, on every
-    // `step`th pixel each way, as a share of those compared.
-    let moved = |dx: i64, dy: i64, step: i64| -> (u64, u64) {
-        let (mut n, mut c) = (0u64, 0u64);
-        let mut y = t;
-        while y < b {
-            let mut x = l;
-            while x < r {
-                let (mx, my) = (x + dx, y + dy);
-                if inside(mx, my) {
-                    let (o, m) = (oi(x, y), mi(mx, my));
-                    if !original.sprite[o] && !model.sprite[m] {
-                        c += 1;
-                        n += u64::from(differs(original.rgb[o], model.rgb[m], tol));
-                    }
-                }
-                x += step;
-            }
-            y += step;
-        }
-        (n, c)
-    };
-    let rate = |(n, c): (u64, u64)| (n * 65536).checked_div(c).unwrap_or(u64::MAX);
     let mut shift = None;
     let mut shifted = None;
     // Looked for only when much of the layer differs (past the drift
     // share): a few tiles apart are not a shift.
     if bg_n * 1000 > bg_compared * 5 {
-        let mut best = (rate(moved(0, 0, 4)), 0i64, 0i64);
+        // Moved by an offset: the background's differing pixels, on every
+        // 4th pixel each way, as a share of those compared. The model's
+        // pixels at an offset are its every-4th grid from the offset's
+        // remainder, made once, moved by the offset's quotient.
+        const STEP: i64 = 4;
+        let o4 = o.every(STEP as usize, 0, 0);
+        let mut m4: [Option<Grid>; 16] = Default::default();
+        let mut moved4 = |dx: i64, dy: i64| {
+            let (px, py) = (dx.rem_euclid(STEP), dy.rem_euclid(STEP));
+            let g = m4[(py * STEP + px) as usize]
+                .get_or_insert_with(|| m.every(STEP as usize, px as usize, py as usize));
+            background_counts(&o4, g, dx.div_euclid(STEP), dy.div_euclid(STEP), tol)
+        };
+        let rate = |(n, c): (u64, u64)| (n * 65536).checked_div(c).unwrap_or(u64::MAX);
+        let mut best = (rate(moved4(0, 0)), 0i64, 0i64);
         let better = |cand: (u64, i64, i64), best: (u64, i64, i64)| {
             cand.0 < best.0
                 || (cand.0 == best.0 && cand.1.abs() + cand.2.abs() < best.1.abs() + best.2.abs())
@@ -316,14 +457,14 @@ pub fn measure(original: &Frame, model: &Frame, tol: u8) -> (LayerFrame, LayerFr
             };
             for d in -range..=range {
                 let (dx, dy) = if pass == 1 { (best.1, d) } else { (d, best.2) };
-                let cand = (rate(moved(dx, dy, 4)), dx, dy);
+                let cand = (rate(moved4(dx, dy)), dx, dy);
                 if better(cand, best) {
                     best = cand;
                 }
             }
         }
         if (best.1, best.2) != (0, 0) {
-            let (n, _) = moved(best.1, best.2, 1);
+            let (n, _) = background_counts(&o, &m, best.1, best.2, tol);
             if n * 2 <= bg_n {
                 shift = Some([best.1, best.2]);
                 shifted = Some(n);
@@ -339,30 +480,7 @@ pub fn measure(original: &Frame, model: &Frame, tol: u8) -> (LayerFrame, LayerFr
     };
 
     // The sprites, in the frame's own space and relative to the background.
-    let sprites_at = |dx: i64, dy: i64| -> (Vec<bool>, u64, u64) {
-        let mut d = vec![false; w * h];
-        let (mut n, mut c) = (0u64, 0u64);
-        for y in t..b {
-            for x in l..r {
-                let (mx, my) = (x + dx, y + dy);
-                let o = oi(x, y);
-                let m = inside(mx, my).then(|| mi(mx, my));
-                let theirs = original.sprite[o];
-                let ours = m.is_some_and(|m| model.sprite[m]);
-                if !theirs && !ours {
-                    continue;
-                }
-                c += 1;
-                let apart = m.is_none_or(|m| differs(original.rgb[o], model.rgb[m], tol));
-                if apart {
-                    d[((y - t) as usize) * w + (x - l) as usize] = true;
-                    n += 1;
-                }
-            }
-        }
-        (d, n, c)
-    };
-    let (sp, sp_n, sp_compared) = sprites_at(0, 0);
+    let (sp, sp_n, sp_compared) = sprite_counts(&o, &m, 0, 0, tol);
     let mut sprites = LayerFrame {
         pixels: sp_n,
         compared: sp_compared,
@@ -370,7 +488,7 @@ pub fn measure(original: &Frame, model: &Frame, tol: u8) -> (LayerFrame, LayerFr
     };
     let mut sprite_bits = sp;
     if let Some([dx, dy]) = shift {
-        let (rel, rel_n, _) = sprites_at(dx, dy);
+        let (rel, rel_n, _) = sprite_counts(&o, &m, dx, dy, tol);
         sprites.shifted = Some(rel_n);
         if rel_n < sp_n {
             sprite_bits = rel;
@@ -398,15 +516,20 @@ pub fn regions_of(bits: &[bool], w: usize, h: usize, l: i64, t: i64) -> (Vec<Reg
     let (tw, th) = (w.div_ceil(8), h.div_ceil(8));
     // Each tile's box and count, by tile.
     let mut tiles: Vec<Option<TileBox>> = vec![None; tw * th];
+    // A tile's row at a time: its first and last pixel and how many.
     for y in 0..h {
-        for x in 0..w {
-            if !bits[y * w + x] {
+        let row = &bits[y * w..(y + 1) * w];
+        for (tx, cells) in row.chunks(8).enumerate() {
+            let Some(first) = cells.iter().position(|b| *b) else {
                 continue;
-            }
-            let e = &mut tiles[(y / 8) * tw + x / 8];
+            };
+            let last = cells.iter().rposition(|b| *b).unwrap_or(first);
+            let k = cells[first..=last].iter().filter(|b| **b).count() as u64;
+            let (a, z) = (tx * 8 + first, tx * 8 + last);
+            let e = &mut tiles[(y / 8) * tw + tx];
             *e = Some(match *e {
-                None => (x, y, x, y, 1),
-                Some((x0, y0, x1, y1, n)) => (x0.min(x), y0.min(y), x1.max(x), y1.max(y), n + 1),
+                None => (a, y, z, y, k),
+                Some((x0, y0, x1, y1, n)) => (x0.min(a), y0.min(y), x1.max(z), y1.max(y), n + k),
             });
         }
     }
@@ -670,6 +793,233 @@ pub fn score(screen: &Screen, frames: &[(u64, u64)], from: u64) -> Score {
     }
 }
 
+/// The measure as it was before it compared keys by rows (kept for the
+/// tests, which hold the two to the same answers on made-up frames).
+#[cfg(test)]
+mod reference {
+    use super::{BOX_CAP, LayerFrame, Region, SHIFT_RANGE, SHIFT_RANGE_Y, TileBox, bounds, name};
+    use gp_present::raster::Frame;
+
+    fn differs(a: [u8; 3], b: [u8; 3], tol: u8) -> bool {
+        a.iter().zip(b).any(|(x, y)| x.abs_diff(y) > tol)
+    }
+
+    pub(super) fn measure(original: &Frame, model: &Frame, tol: u8) -> (LayerFrame, LayerFrame) {
+        let [l, t, r, b] = bounds(original, model);
+        let ow = i64::from(original.w);
+        let mw = i64::from(model.w);
+        let oi = |x: i64, y: i64| (y * ow + x) as usize;
+        let mi = |x: i64, y: i64| (y * mw + x) as usize;
+        let inside = |x: i64, y: i64| x >= l && y >= t && x < r && y < b;
+        let w = (r - l).max(0) as usize;
+        let h = (b - t).max(0) as usize;
+
+        // The background, in the frame's own space.
+        let mut bg = vec![false; w * h];
+        let mut bg_n = 0u64;
+        let mut bg_compared = 0u64;
+        for y in t..b {
+            for x in l..r {
+                let (o, m) = (oi(x, y), mi(x, y));
+                if original.sprite[o] || model.sprite[m] {
+                    continue;
+                }
+                bg_compared += 1;
+                if differs(original.rgb[o], model.rgb[m], tol) {
+                    bg[((y - t) as usize) * w + (x - l) as usize] = true;
+                    bg_n += 1;
+                }
+            }
+        }
+        // Moved by an offset: the background's differing pixels, on every
+        // `step`th pixel each way, as a share of those compared.
+        let moved = |dx: i64, dy: i64, step: i64| -> (u64, u64) {
+            let (mut n, mut c) = (0u64, 0u64);
+            let mut y = t;
+            while y < b {
+                let mut x = l;
+                while x < r {
+                    let (mx, my) = (x + dx, y + dy);
+                    if inside(mx, my) {
+                        let (o, m) = (oi(x, y), mi(mx, my));
+                        if !original.sprite[o] && !model.sprite[m] {
+                            c += 1;
+                            n += u64::from(differs(original.rgb[o], model.rgb[m], tol));
+                        }
+                    }
+                    x += step;
+                }
+                y += step;
+            }
+            (n, c)
+        };
+        let rate = |(n, c): (u64, u64)| (n * 65536).checked_div(c).unwrap_or(u64::MAX);
+        let mut shift = None;
+        let mut shifted = None;
+        // Looked for only when much of the layer differs (past the drift
+        // share): a few tiles apart are not a shift.
+        if bg_n * 1000 > bg_compared * 5 {
+            let mut best = (rate(moved(0, 0, 4)), 0i64, 0i64);
+            let better = |cand: (u64, i64, i64), best: (u64, i64, i64)| {
+                cand.0 < best.0
+                    || (cand.0 == best.0
+                        && cand.1.abs() + cand.2.abs() < best.1.abs() + best.2.abs())
+            };
+            // Across first, the way a side-scroller's camera drifts, then
+            // down at the best offset across.
+            for pass in 0..2 {
+                let range = if pass == 0 {
+                    SHIFT_RANGE
+                } else {
+                    SHIFT_RANGE_Y
+                };
+                for d in -range..=range {
+                    let (dx, dy) = if pass == 1 { (best.1, d) } else { (d, best.2) };
+                    let cand = (rate(moved(dx, dy, 4)), dx, dy);
+                    if better(cand, best) {
+                        best = cand;
+                    }
+                }
+            }
+            if (best.1, best.2) != (0, 0) {
+                let (n, _) = moved(best.1, best.2, 1);
+                if n * 2 <= bg_n {
+                    shift = Some([best.1, best.2]);
+                    shifted = Some(n);
+                }
+            }
+        }
+        let background = LayerFrame {
+            pixels: bg_n,
+            compared: bg_compared,
+            shift,
+            shifted,
+            ..LayerFrame::default()
+        };
+
+        // The sprites, in the frame's own space and relative to the background.
+        let sprites_at = |dx: i64, dy: i64| -> (Vec<bool>, u64, u64) {
+            let mut d = vec![false; w * h];
+            let (mut n, mut c) = (0u64, 0u64);
+            for y in t..b {
+                for x in l..r {
+                    let (mx, my) = (x + dx, y + dy);
+                    let o = oi(x, y);
+                    let m = inside(mx, my).then(|| mi(mx, my));
+                    let theirs = original.sprite[o];
+                    let ours = m.is_some_and(|m| model.sprite[m]);
+                    if !theirs && !ours {
+                        continue;
+                    }
+                    c += 1;
+                    let apart = m.is_none_or(|m| differs(original.rgb[o], model.rgb[m], tol));
+                    if apart {
+                        d[((y - t) as usize) * w + (x - l) as usize] = true;
+                        n += 1;
+                    }
+                }
+            }
+            (d, n, c)
+        };
+        let (sp, sp_n, sp_compared) = sprites_at(0, 0);
+        let mut sprites = LayerFrame {
+            pixels: sp_n,
+            compared: sp_compared,
+            ..LayerFrame::default()
+        };
+        let mut sprite_bits = sp;
+        if let Some([dx, dy]) = shift {
+            let (rel, rel_n, _) = sprites_at(dx, dy);
+            sprites.shifted = Some(rel_n);
+            if rel_n < sp_n {
+                sprite_bits = rel;
+            }
+        }
+
+        let mut background = background;
+        let (regions, more) = regions_of_ref(&bg, w, h, l, t);
+        background.regions = name(regions, model, false);
+        background.more = more;
+        let (regions, more) = regions_of_ref(&sprite_bits, w, h, l, t);
+        sprites.regions = name(regions, model, true);
+        sprites.more = more;
+        (background, sprites)
+    }
+
+    pub(super) fn regions_of_ref(
+        bits: &[bool],
+        w: usize,
+        h: usize,
+        l: i64,
+        t: i64,
+    ) -> (Vec<Region>, usize) {
+        let (tw, th) = (w.div_ceil(8), h.div_ceil(8));
+        // Each tile's box and count, by tile.
+        let mut tiles: Vec<Option<TileBox>> = vec![None; tw * th];
+        for y in 0..h {
+            for x in 0..w {
+                if !bits[y * w + x] {
+                    continue;
+                }
+                let e = &mut tiles[(y / 8) * tw + x / 8];
+                *e = Some(match *e {
+                    None => (x, y, x, y, 1),
+                    Some((x0, y0, x1, y1, n)) => {
+                        (x0.min(x), y0.min(y), x1.max(x), y1.max(y), n + 1)
+                    }
+                });
+            }
+        }
+        let mut seen = vec![false; tw * th];
+        let mut out = Vec::new();
+        for start in 0..tw * th {
+            if seen[start] || tiles[start].is_none() {
+                continue;
+            }
+            seen[start] = true;
+            let mut stack = vec![start];
+            let (mut x0, mut y0, mut x1, mut y1, mut n) = (usize::MAX, usize::MAX, 0, 0, 0u64);
+            while let Some(k) = stack.pop() {
+                let (a, b, c, d, m) = tiles[k].expect("a tile in a group has pixels");
+                (x0, y0, x1, y1, n) = (x0.min(a), y0.min(b), x1.max(c), y1.max(d), n + m);
+                let (tx, ty) = ((k % tw) as i64, (k / tw) as i64);
+                for (ox, oy) in [
+                    (-1, -1),
+                    (0, -1),
+                    (1, -1),
+                    (-1, 0),
+                    (1, 0),
+                    (-1, 1),
+                    (0, 1),
+                    (1, 1),
+                ] {
+                    let (nx, ny) = (tx + ox, ty + oy);
+                    if nx < 0 || ny < 0 || nx >= tw as i64 || ny >= th as i64 {
+                        continue;
+                    }
+                    let j = ny as usize * tw + nx as usize;
+                    if !seen[j] && tiles[j].is_some() {
+                        seen[j] = true;
+                        stack.push(j);
+                    }
+                }
+            }
+            out.push(Region {
+                x: l + x0 as i64,
+                y: t + y0 as i64,
+                w: (x1 - x0 + 1) as i64,
+                h: (y1 - y0 + 1) as i64,
+                pixels: n,
+                what: Vec::new(),
+            });
+        }
+        out.sort_by_key(|r| (std::cmp::Reverse(r.pixels), r.y, r.x));
+        let more = out.len().saturating_sub(BOX_CAP);
+        out.truncate(BOX_CAP);
+        (out, more)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -882,5 +1232,149 @@ mod tests {
         let sprites: Vec<_> = s.spans.iter().filter(|x| x.layer == "sprites").collect();
         assert_eq!((sprites[0].from, sprites[0].to), (2, 3));
         assert_eq!(sprites[0].boxes, vec![[10, 12, 5, 4]]);
+    }
+
+    /// A made-up frame from a seed: a few colours in runs, so pixels of
+    /// the two sides often match, sprite blobs, and a size and visible
+    /// part that vary.
+    fn noise(seed: u64, w: u32, h: u32, sprites: u32) -> Frame {
+        let mut x = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407)
+            | 1;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let palette = [
+            [0, 0, 80],
+            [0, 160, 0],
+            [255, 200, 0],
+            [250, 40, 40],
+            [1, 0, 80],
+        ];
+        let mut f = Frame {
+            w,
+            h,
+            rgb: Vec::with_capacity((w * h) as usize),
+            sprite: vec![false; (w * h) as usize],
+            visible: [0, 0, w, h],
+            things: vec![Thing {
+                name: "hero".into(),
+                rect: [3, 4, 10, 10],
+                sprite: true,
+            }],
+        };
+        let mut c = palette[0];
+        for _ in 0..w * h {
+            if next() % 7 == 0 {
+                c = palette[(next() % 5) as usize];
+            }
+            f.rgb.push(c);
+        }
+        for _ in 0..sprites {
+            let (sx, sy) = (
+                (next() % u64::from(w)) as u32,
+                (next() % u64::from(h)) as u32,
+            );
+            let (sw, sh) = (1 + (next() % 9) as u32, 1 + (next() % 9) as u32);
+            for y in sy..(sy + sh).min(h) {
+                for x in sx..(sx + sw).min(w) {
+                    let i = (y * w + x) as usize;
+                    f.sprite[i] = true;
+                    f.rgb[i] = palette[2 + (next() % 3) as usize];
+                }
+            }
+        }
+        f
+    }
+
+    /// `f` moved by `(dx, dy)`, the pixels moved in from off the frame
+    /// left as they were, and some pixels changed.
+    fn moved_noise(f: &Frame, dx: i64, dy: i64, seed: u64) -> Frame {
+        let mut m = f.clone();
+        let (w, h) = (i64::from(f.w), i64::from(f.h));
+        for y in 0..h {
+            for x in 0..w {
+                let (sx, sy) = (x - dx, y - dy);
+                if sx >= 0 && sy >= 0 && sx < w && sy < h {
+                    let (to, from) = ((y * w + x) as usize, (sy * w + sx) as usize);
+                    m.rgb[to] = f.rgb[from];
+                    m.sprite[to] = f.sprite[from];
+                }
+            }
+        }
+        let other = noise(seed, f.w, f.h, 3);
+        for i in (seed as usize % 11..m.rgb.len()).step_by(37) {
+            m.rgb[i] = other.rgb[i];
+            m.sprite[i] = other.sprite[i];
+        }
+        m
+    }
+
+    /// The keyed measure gives the old measure's answers, field for
+    /// field, on made-up frames: equal and different sizes, a visible
+    /// part off the corner, shifted backgrounds both ways (so the shift
+    /// search runs and finds one), sprites everywhere and a colour
+    /// tolerance.
+    #[test]
+    fn the_keyed_measure_is_the_old_measure() {
+        let mut shifted = 0;
+        for seed in 0..240u64 {
+            let (w, h) = (24 + (seed % 5) as u32 * 13, 20 + (seed % 3) as u32 * 11);
+            let o = noise(seed, w, h, (seed % 9) as u32);
+            let (dx, dy) = ((seed % 13) as i64 - 6, (seed % 7) as i64 - 3);
+            let mut m = match seed % 4 {
+                0 => noise(seed + 1000, w, h, 4),
+                1 => moved_noise(&o, dx, dy, seed),
+                2 => moved_noise(&o, dx * 3, 0, seed),
+                _ => {
+                    // A bigger model whose visible part sits off the corner.
+                    let mut big = noise(seed + 2000, w + 9, h + 5, 6);
+                    big.visible = [2, 3, w + 1, h - 1];
+                    big
+                }
+            };
+            if seed % 6 == 5 {
+                m.visible = [1, 2, w.saturating_sub(5), h.saturating_sub(4)];
+            }
+            for tol in [0u8, 1, 40] {
+                let new = measure(&o, &m, tol);
+                let old = reference::measure(&o, &m, tol);
+                assert_eq!(new, old, "seed {seed} tolerance {tol}");
+                shifted += usize::from(new.0.shift.is_some());
+            }
+        }
+        assert!(
+            shifted > 20,
+            "the shift search found a shift {shifted} times"
+        );
+        // Nothing to compare: a visible part off the original's frame.
+        let o = noise(1, 20, 20, 2);
+        let mut m = noise(2, 40, 40, 2);
+        m.visible = [25, 25, 10, 10];
+        assert_eq!(measure(&o, &m, 0), reference::measure(&o, &m, 0));
+    }
+
+    /// The boxes by a tile's row at a time are the boxes by pixel.
+    #[test]
+    fn the_boxes_by_rows_are_the_boxes_by_pixel() {
+        for seed in 0..200u64 {
+            let (w, h) = (1 + (seed % 37) as usize, 1 + (seed * 7 % 29) as usize);
+            let f = noise(seed, w as u32, h as u32, 5);
+            let bits: Vec<bool> = f
+                .rgb
+                .iter()
+                .zip(&f.sprite)
+                .map(|(c, s)| *s || c[1] == 160)
+                .collect();
+            assert_eq!(
+                regions_of(&bits, w, h, 5, 7),
+                reference::regions_of_ref(&bits, w, h, 5, 7),
+                "seed {seed}"
+            );
+        }
     }
 }

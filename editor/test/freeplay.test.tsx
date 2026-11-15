@@ -6,7 +6,7 @@ import { renderToString } from "react-dom/server";
 import { Api } from "../src/api";
 import { FreePlay } from "../src/FreePlay";
 import { CLIP_SECONDS, FreePlayClient, checkWords, clipCard, clipLength, clock, freeSays, latest, modelLine, secs, takeSays } from "../src/freefold";
-import { framesScript } from "../src/playfold";
+import { NES_MACHINE, frameLines, framesScript, logHead, machineOf, padFromGamepad, padFromKeys } from "../src/playfold";
 
 describe("the words", () => {
   it("tells the next thing to do", () => {
@@ -95,5 +95,31 @@ describe("the panel", () => {
     expect(html).toContain("Starting the original here.");
     expect(html).toContain("make a save point (F5)");
     expect(html).toContain('data-testid="clip-seconds"');
+  });
+});
+
+describe("an arcade board", () => {
+  it("is the machine its player's info names, with a cabinet's keys", () => {
+    const m = machineOf({ platform: "arcade", width: 512, height: 480, fps: [30, 1] });
+    expect([m.platform, m.width, m.height, m.fps]).toEqual(["arcade", 512, 480, 30]);
+    expect(machineOf(undefined)).toBe(NES_MACHINE);
+    // Coin, start, right, left, down, up, the button: bits 0 to 6.
+    expect(padFromKeys(new Set(["Digit5", "ArrowUp", "KeyX"]), m.keys)).toBe(1 | 32 | 64);
+    expect(padFromGamepad({ buttons: [{ pressed: true }, ...Array(8).fill({ pressed: false }), { pressed: true }], axes: [0.9, 0] }, "arcade")).toBe(64 | 2 | 4);
+  });
+  it("spells an arcade log's runs a frame a line and keeps its three header lines", () => {
+    const log = "gp-arcade-input 0\nsystem test\ncolumns CSRLDUT\n2 C......\n1 .....UT\n";
+    expect(frameLines(log)).toEqual(["1 C......", "1 C......", "1 .....UT"]);
+    expect(logHead(log)).toBe("gp-arcade-input 0\nsystem test\ncolumns CSRLDUT\n");
+    expect(logHead("gp-input-log 1\ncontrollers 1\nP ........\n")).toBe("gp-input-log 1\ncontrollers 1\n");
+    expect(frameLines("gp-input-log 1\ncontrollers 1\nP ........\n- R.......\n")).toEqual(["P ........", "- R......."]);
+  });
+  it("loads the arcade player for a MAME zip and times its clips at 30 frames a second", () => {
+    const api = new Api("");
+    expect(api.playWasm(new Uint8Array([0x50, 0x4b, 3, 4]))).toBe("/api/play/gp_arcade_play.wasm");
+    expect(api.playWasm(new Uint8Array([0x4e, 0x45, 0x53, 0x1a]))).toBe("/api/play/gp_play.wasm");
+    expect(secs(240, 30)).toBe("8.0 s");
+    expect(clock(1830, 30)).toBe("1:01");
+    expect(takeSays("recording", 0, 60, 240, 30)).toBe("Recording the clip: 2.0 s of 8.0 s. Press stop to end it early.");
   });
 });

@@ -702,6 +702,33 @@ pub fn validate(model: &Model) -> Vec<Problem> {
                 "width and height must be above zero",
             );
         }
+        // Feature `sprite.board`.
+        if let Some(b) = &e.core.board_sprite {
+            let bat = format!("{at}.board_sprite");
+            want_slot(
+                &mut c,
+                format!("{bat}.slot"),
+                &b.slot,
+                AssetKind::BoardSprites,
+            );
+            let bytes = std::iter::once(("picture", &b.picture))
+                .chain(b.flags.as_ref().map(|f| ("flags", f)));
+            for (part, v) in bytes {
+                let here = format!("{bat}.{part}");
+                match (v.word, v.number) {
+                    (Some(_), Some(_)) | (None, None) => {
+                        c.add(here, "give `word` or `number`, one of them")
+                    }
+                    (Some(w), None) if w > 3 => c.add(here, "`word` is 0 to 3"),
+                    (Some(_), None) if v.byte > 7 => c.add(here, "`byte` is 0 to 7"),
+                    (None, Some(n)) if n > 255 => c.add(here, "`number` is 0 to 255"),
+                    (None, Some(_)) if v.byte != 0 => {
+                        c.add(here, "`byte` picks a byte of `word`; a `number` has none")
+                    }
+                    _ => {}
+                }
+            }
+        }
         if let Some(s) = &e.core.sprite {
             want_slot(
                 &mut c,
@@ -1231,6 +1258,146 @@ pub fn validate(model: &Model) -> Vec<Problem> {
                         format!("{at}.present.effect_order.{event}"),
                         format!("no effect starts on `{event}`"),
                     );
+                }
+            }
+            // Feature `level.board`.
+            if let Some(b) = &pr.board {
+                let bat = format!("{at}.present.board");
+                want_slot(
+                    &mut c,
+                    format!("{bat}.palette"),
+                    &b.palette,
+                    AssetKind::BoardPalette,
+                );
+                if let Some(t) = &b.tiles {
+                    want_slot(&mut c, format!("{bat}.tiles"), t, AssetKind::BoardTiles);
+                }
+                if let Some(sc) = &b.screen {
+                    want_slot(&mut c, format!("{bat}.screen"), sc, AssetKind::BoardScreen);
+                    if b.tiles.is_none() {
+                        c.add(format!("{bat}.screen"), "a screen is drawn with `tiles`");
+                    }
+                }
+                let writes = |c: &mut Checker, at: &str, ws: &[crate::model::PaletteWrite]| {
+                    for (i, w) in ws.iter().enumerate() {
+                        let wat = format!("{at}.palette_writes[{i}]");
+                        want_slot(c, format!("{wat}.slot"), &w.slot, AssetKind::Rows);
+                        if w.at > 127 {
+                            c.add(format!("{wat}.at"), "palette RAM's bytes are 0 to 127");
+                        }
+                    }
+                };
+                writes(&mut c, &bat, &b.palette_writes);
+                let guards = |c: &mut Checker, at: String, when: &[crate::model::Guard]| {
+                    for g in when {
+                        if !model.counters.contains_key(&g.counter) {
+                            c.add(
+                                at.clone(),
+                                format!(
+                                    "no counter named `{}`: a board look is chosen by the model's own counters, which its hooks or rules keep",
+                                    g.counter
+                                ),
+                            );
+                        }
+                    }
+                };
+                // Feature `level.board.looks`.
+                for (i, l) in b.looks.iter().enumerate() {
+                    let lat = format!("{bat}.looks[{i}]");
+                    if l.when.is_empty() {
+                        c.add(
+                            format!("{lat}.when"),
+                            "a look is chosen by its counter tests, and this one has none, so it would always be chosen: put its screen and colours in the level's look itself, or give it `when`",
+                        );
+                    }
+                    guards(&mut c, format!("{lat}.when"), &l.when);
+                    if let Some(p) = &l.palette {
+                        want_slot(&mut c, format!("{lat}.palette"), p, AssetKind::BoardPalette);
+                    }
+                    if let Some(sc) = &l.screen {
+                        want_slot(&mut c, format!("{lat}.screen"), sc, AssetKind::BoardScreen);
+                        if b.tiles.is_none() {
+                            c.add(
+                                format!("{lat}.screen"),
+                                "a screen is drawn with the level's `tiles`, and its look has none",
+                            );
+                        }
+                    }
+                    if l.palette.is_none() && l.screen.is_none() && l.palette_writes.is_empty() {
+                        c.add(
+                            lat.clone(),
+                            "the look changes nothing: give it a `screen`, a `palette` or `palette_writes`",
+                        );
+                    }
+                    writes(&mut c, &lat, &l.palette_writes);
+                }
+                // Feature `level.board.counters`.
+                let cell = |c: &mut Checker, at: String, x: i64, y: i64| {
+                    if !(0..32).contains(&x) || !(0..30).contains(&y) {
+                        c.add(
+                            at,
+                            format!(
+                                "cell ({x}, {y}) is off the board's tile layer, whose columns are 0 to 31 and rows 0 to 29"
+                            ),
+                        );
+                    }
+                };
+                let byte = |c: &mut Checker, at: String, r: &crate::model::RowByte| {
+                    want_slot(c, format!("{at}.slot"), &r.slot, AssetKind::Rows);
+                };
+                for (i, n) in b.counters.iter().enumerate() {
+                    let nat = format!("{bat}.counters[{i}]");
+                    if !model.counters.contains_key(&n.counter) {
+                        c.add(
+                            format!("{nat}.counter"),
+                            format!("no counter named `{}`", n.counter),
+                        );
+                    }
+                    if !(1..=10).contains(&n.digits) {
+                        c.add(format!("{nat}.digits"), "1 to 10 digits");
+                    }
+                    let (x, y) = (i64::from(n.at[0]), i64::from(n.at[1]));
+                    cell(&mut c, format!("{nat}.at"), x, y);
+                    cell(
+                        &mut c,
+                        format!("{nat}.digits"),
+                        x + i64::from(n.digits.max(1)) - 1,
+                        y,
+                    );
+                    byte(&mut c, format!("{nat}.tile"), &n.tile);
+                    byte(&mut c, format!("{nat}.high"), &n.high);
+                    guards(&mut c, format!("{nat}.when"), &n.when);
+                }
+                for (i, r) in b.repeats.iter().enumerate() {
+                    let rat = format!("{bat}.repeats[{i}]");
+                    if !model.counters.contains_key(&r.counter) {
+                        c.add(
+                            format!("{rat}.counter"),
+                            format!("no counter named `{}`", r.counter),
+                        );
+                    }
+                    if r.most == 0 {
+                        c.add(format!("{rat}.most"), "must be above zero: the most drawn");
+                    }
+                    let [sx, sy] = r.step.unwrap_or([1, 0]);
+                    let (x, y) = (i64::from(r.at[0]), i64::from(r.at[1]));
+                    let k = i64::from(r.most.max(1)) - 1;
+                    cell(&mut c, format!("{rat}.at"), x, y);
+                    cell(
+                        &mut c,
+                        format!("{rat}.most"),
+                        x + i64::from(sx) * k,
+                        y + i64::from(sy) * k,
+                    );
+                    if r.step == Some([0, 0]) {
+                        c.add(
+                            format!("{rat}.step"),
+                            "a step of [0, 0] draws every one in the same cell",
+                        );
+                    }
+                    byte(&mut c, format!("{rat}.tile"), &r.tile);
+                    byte(&mut c, format!("{rat}.high"), &r.high);
+                    guards(&mut c, format!("{rat}.when"), &r.when);
                 }
             }
             // Feature `present.sprite_order`.

@@ -11,7 +11,12 @@
 // empty for the model's own start, which the bundle gets as the page's
 // `level=` gives it (parity.sh writes it empty: the native run can't
 // start at another level now). index.txt, when there, lists the names.
+// NAME.state, when there, is a canonical model state the run starts from
+// (gp_load_state after gp_load), as `gp interp run --state` starts the
+// native run (scripts/web/parity-arcade.sh).
 // OUT is a build of scripts/web/build-preview.sh: gp_web.wasm, bundle.json.
+// With --wasm FILE the build's bundle runs in FILE instead: a game's own
+// module (`gp game build`), the page's gp_web.wasm with the game's hooks.
 // Prints one line per input and a JSON summary last.
 // Exit codes: 0 every frame agreed, 1 a hash, digest or label differs,
 // 2 couldn't run.
@@ -29,12 +34,14 @@ const arg = (n) => {
 };
 const dist = arg("dist");
 const runs = arg("runs");
+const own = process.argv.includes("--wasm");
+const wasm = own ? arg("wasm") : join(dist, "gp_web.wasm");
 
 let x;
 try {
-  x = new WebAssembly.Instance(new WebAssembly.Module(readFileSync(join(dist, "gp_web.wasm"))), {}).exports;
+  x = new WebAssembly.Instance(new WebAssembly.Module(readFileSync(wasm)), {}).exports;
 } catch (e) {
-  console.error(`parity: ${join(dist, "gp_web.wasm")}: ${e.message}`);
+  console.error(`parity: ${wasm}: ${e.message}`);
   process.exit(2);
 }
 const mem = () => new Uint8Array(x.memory.buffer);
@@ -50,6 +57,13 @@ const check = (code) => {
 };
 
 const bundle = readFileSync(join(dist, "bundle.json"));
+// A game's module ran natively too, and `gp interp run` names its hooks by
+// the module's BLAKE3: the native label must be this file's.
+let moduleHash = null;
+if (own) {
+  const m = readFileSync(wasm);
+  moduleHash = check(x.gp_blake3(put(m), m.length));
+}
 // index.txt (scripts/web/parity.sh writes it) names the inputs; without
 // it, every .frames file is one.
 const index = join(runs, "index.txt");
@@ -78,6 +92,11 @@ for (const name of names) {
     results.push({ name, ok: false, error: e.message });
     continue;
   }
+  const stateFile = join(runs, `${name}.state`);
+  if (existsSync(stateFile)) {
+    const st = readFileSync(stateFile);
+    check(x.gp_load_state(put(st), st.length));
+  }
   const digest = check(x.gp_spec_digest());
   const frames = new TextEncoder().encode(readFileSync(join(runs, `${name}.frames`), "utf8"));
   const got = check(x.gp_run_frames(put(frames), frames.length)).trim().split("\n");
@@ -86,7 +105,7 @@ for (const name of names) {
     name,
     frames: want.length - 1,
     hooks,
-    hooks_ok: hooks === native.ext_hooks,
+    hooks_ok: own ? native.ext_hooks === moduleHash : hooks === native.ext_hooks,
     digest_ok: digest === native.spec_digest,
     lengths_ok: got.length === want.length,
     // The first state that differs: 0 is power-on, N the state after frame N.
@@ -95,7 +114,7 @@ for (const name of names) {
   r.ok = r.hooks_ok && r.digest_ok && r.lengths_ok && r.first_difference === null;
   results.push(r);
   const why = [
-    r.hooks_ok ? "" : `hooks "${hooks}" against native "${native.ext_hooks}"`,
+    r.hooks_ok ? "" : own ? `the native run's module "${native.ext_hooks}" isn't this one (${moduleHash})` : `hooks "${hooks}" against native "${native.ext_hooks}"`,
     r.digest_ok ? "" : `spec digest ${digest} against native ${native.spec_digest}`,
     r.lengths_ok ? "" : `${got.length} hashes against ${want.length}`,
     r.first_difference === null ? "" : `state ${first} differs`,

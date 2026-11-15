@@ -549,6 +549,81 @@ pub fn arcade_spans_of(frames: &[InputFrame], layout: &ArcadeLayout) -> Option<V
 }
 
 /// A span's `FROM-TO` or `FROM-` within `frames` frames.
+/// A fork of `source` at log frame `at`: its frames before `at` as they
+/// were, then `frames - at` frames holding only the presses `spans` give
+/// ([`generate`]'s for an NES log, [`generate_arcade`]'s in the source's
+/// layout for an arcade one), counted from the log's start as `generate`
+/// counts them. Without `frames`, the log ends with the last span's last
+/// frame. A span reaching back before `at`, a fork past the source's end,
+/// or no way to tell the length (no span, or one held to the end with no
+/// `frames`) is refused.
+pub fn fork(
+    source: &InputLog,
+    at: usize,
+    frames: Option<usize>,
+    spans: &[&str],
+) -> Result<InputLog, InputLogError> {
+    if at > source.frames.len() {
+        return Err(err(
+            0,
+            format!(
+                "the fork's frame {at} is past the source's {} frames",
+                source.frames.len()
+            ),
+        ));
+    }
+    let mut ends = Vec::with_capacity(spans.len());
+    for (i, spec) in spans.iter().enumerate() {
+        let bad = |message: String| err(i + 1, format!("span {spec:?}: {message}"));
+        let range = spec
+            .rsplit_once('@')
+            .map(|r| r.1)
+            .ok_or_else(|| bad("expected BUTTONS@FROM-TO, e.g. left@100-130".into()))?;
+        let (from, to) = range
+            .split_once('-')
+            .ok_or_else(|| bad("expected a frame range FROM-TO or FROM-".into()))?;
+        let from: usize = from
+            .parse()
+            .map_err(|_| bad(format!("bad frame {from:?}")))?;
+        if from < at {
+            return Err(bad(format!(
+                "it starts at {from}, before the fork's frame {at}: the frames before it are the source's"
+            )));
+        }
+        ends.push(if to.is_empty() {
+            None
+        } else {
+            Some(
+                to.parse::<usize>()
+                    .map_err(|_| bad(format!("bad frame {to:?}")))?,
+            )
+        });
+    }
+    let total = match frames {
+        Some(n) => n,
+        None if ends.is_empty() || ends.iter().any(Option::is_none) => {
+            return Err(err(
+                0,
+                "say how many frames the fork has (--frames): no span ends it".to_owned(),
+            ));
+        }
+        None => ends.iter().flatten().max().map_or(at, |e| e + 1),
+    };
+    if total < at {
+        return Err(err(
+            0,
+            format!("the fork has {total} frames, fewer than the {at} it keeps"),
+        ));
+    }
+    let mut log = match &source.arcade {
+        Some(layout) => generate_arcade(total, layout, spans)?,
+        None => generate(total, spans)?,
+    };
+    log.frames[..at].copy_from_slice(&source.frames[..at]);
+    log.controllers = log.controllers.max(source.controllers);
+    Ok(log)
+}
+
 fn span_range(range: &str, frames: usize) -> Result<(usize, usize), String> {
     let (from, to) = range
         .split_once('-')
@@ -587,6 +662,45 @@ fn parse_pad(field: &str) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A made-up arcade run forked at frame 6: its first six frames kept
+    /// (the coin and the tap), then left held for 3 frames and nothing
+    /// after, to the last span's end or to --frames; spans reaching back
+    /// before the fork, or a fork with no end, refused in words. An NES log
+    /// forks the same way.
+    #[test]
+    fn a_run_forks_at_a_frame_with_new_presses() {
+        let layout = ArcadeLayout {
+            system: "cab".into(),
+            columns: "CSRLDUT".into(),
+        };
+        let source = generate_arcade(20, &layout, &["coin@0-1", "tap@4-5", "right@6-19"]).unwrap();
+        let f = fork(&source, 6, None, &["left@7-9"]).unwrap();
+        assert_eq!(f.arcade, source.arcade);
+        assert_eq!(f.frames.len(), 10);
+        assert_eq!(f.frames[..6], source.frames[..6]);
+        let left = 1 << 3;
+        assert_eq!(f.frames[6].pads[0], 0);
+        assert!(f.frames[7..10].iter().all(|x| x.pads[0] == left));
+        let f = fork(&source, 6, Some(30), &["left@7-"]).unwrap();
+        assert_eq!(f.frames.len(), 30);
+        assert_eq!(f.frames[29].pads[0], left);
+        assert!(fork(&source, 6, Some(6), &[]).unwrap().frames == source.frames[..6]);
+
+        let e = fork(&source, 6, None, &["left@5-9"]).unwrap_err();
+        assert!(e.message.contains("before the fork's frame 6"), "{e}");
+        let e = fork(&source, 6, None, &["left@7-"]).unwrap_err();
+        assert!(e.message.contains("--frames"), "{e}");
+        let e = fork(&source, 21, Some(30), &[]).unwrap_err();
+        assert!(e.message.contains("past the source's 20 frames"), "{e}");
+
+        let nes = generate(10, &["start@2-3"]).unwrap();
+        let f = fork(&nes, 4, None, &["a+right@5-6"]).unwrap();
+        assert!(f.arcade.is_none());
+        assert_eq!(f.frames.len(), 7);
+        assert_eq!(f.frames[2].pads[0], button::START);
+        assert_eq!(f.frames[5].pads[0], button::A | button::RIGHT);
+    }
 
     /// An arcade log reads as the oracle writes it and is written back in
     /// one spelling: runs merged, comments gone.

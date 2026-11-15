@@ -109,13 +109,78 @@ impl Look {
     }
 }
 
+/// Where a look's sound for a role is: its first take, the file every page
+/// plays (`sound/roles/<role>.wav`).
+pub const ROLES_DIR: &str = "sound/roles/";
+
+/// Where a look's further takes of a role are (issue #30):
+/// `sound/takes/<role>.<n>.wav`, n from 2. A page from before takes plays
+/// only `sound/roles/`, whose every file it takes for a role of its own
+/// name, so the takes are kept out of that folder.
+pub const TAKES_DIR: &str = "sound/takes/";
+
+/// Whether a role's name is one a model gives (lowercase letters, digits
+/// and `_`, gp_model's `SoundRole::name`).
+pub fn role_name_ok(role: &str) -> bool {
+    !role.is_empty()
+        && role
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
+/// The file of take `take` of a role in a look's folder: take 1 is
+/// `sound/roles/<role>.wav`, the others `sound/takes/<role>.<take>.wav`.
+pub fn take_file(role: &str, take: u32) -> String {
+    if take <= 1 {
+        format!("{ROLES_DIR}{role}.wav")
+    } else {
+        format!("{TAKES_DIR}{role}.{take}.wav")
+    }
+}
+
+/// The role and take a look's file is, by its path: `Some` for
+/// `sound/roles/<role>.wav` (take 1) and `sound/takes/<role>.<n>.wav`
+/// (n of 2 or more, no leading 0), `None` for any other path.
+pub fn role_take(file: &str) -> Option<(&str, u32)> {
+    if let Some(role) = file
+        .strip_prefix(ROLES_DIR)
+        .and_then(|f| f.strip_suffix(".wav"))
+    {
+        return role_name_ok(role).then_some((role, 1));
+    }
+    let rest = file.strip_prefix(TAKES_DIR)?.strip_suffix(".wav")?;
+    let (role, n) = rest.rsplit_once('.')?;
+    if !role_name_ok(role) || n.starts_with('0') || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n: u32 = n.parse().ok()?;
+    (n >= 2).then_some((role, n))
+}
+
+impl Look {
+    /// The look's sound files by role: each role's takes (number, file) in
+    /// number order, from its `file` lines.
+    pub fn role_sounds(&self) -> std::collections::BTreeMap<String, Vec<(u32, String)>> {
+        let mut out: std::collections::BTreeMap<String, Vec<(u32, String)>> = Default::default();
+        for f in &self.files {
+            if let Some((role, take)) = role_take(f) {
+                out.entry(role.to_owned())
+                    .or_default()
+                    .push((take, f.clone()));
+            }
+        }
+        for t in out.values_mut() {
+            t.sort();
+            t.dedup_by_key(|x| x.0);
+        }
+        out
+    }
+}
+
 /// A theme id as the theme format takes it: lowercase letters, digits,
-/// `-` and `_`, starting with a letter.
+/// `-` and `_`, starting with a letter (`gp_package::theme_id_ok`).
 pub fn valid_id(id: &str) -> bool {
-    id.chars().next().is_some_and(|c| c.is_ascii_lowercase())
-        && id
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+    gp_package::theme_id_ok(id)
 }
 
 /// The index a static host serves (`themes/index.json`): each look's id
@@ -192,5 +257,40 @@ mod tests {
         let found = [l.clone(), orig.clone(), l.clone()];
         assert_eq!(choices(("own", "Own"), &found, false).len(), 2);
         assert_eq!(choices(("own", "Own"), &found, true).len(), 3);
+    }
+
+    #[test]
+    fn a_roles_takes_are_named_apart_from_its_first_file() {
+        assert_eq!(take_file("jump", 1), "sound/roles/jump.wav");
+        assert_eq!(take_file("jump", 3), "sound/takes/jump.3.wav");
+        assert_eq!(role_take("sound/roles/jump.wav"), Some(("jump", 1)));
+        assert_eq!(
+            role_take("sound/takes/jump_over.12.wav"),
+            Some(("jump_over", 12))
+        );
+        for no in [
+            "sound/takes/jump.1.wav",
+            "sound/takes/jump.02.wav",
+            "sound/takes/jump.wav",
+            "sound/takes/Jump.2.wav",
+            "sound/roles/jump.2.wav",
+            "sound/roles/jump.ogg",
+            "art/jump.wav",
+        ] {
+            assert_eq!(role_take(no), None, "{no}");
+        }
+        let l = Look::read(
+            "gp-look 1\nid x\nfile sound/takes/hop.3.wav\nfile sound/roles/hop.wav\nfile sound/takes/hop.2.wav\nfile art/a.png\n",
+        )
+        .unwrap();
+        let r = l.role_sounds();
+        assert_eq!(
+            r["hop"],
+            vec![
+                (1, "sound/roles/hop.wav".to_owned()),
+                (2, "sound/takes/hop.2.wav".to_owned()),
+                (3, "sound/takes/hop.3.wav".to_owned())
+            ]
+        );
     }
 }

@@ -312,6 +312,16 @@ pub fn says(n: &New) -> String {
                 .unwrap_or_default()
         ),
         "registry reindex" => format!("Rewrite the public index of the registry{to}."),
+        "registry yank" => format!(
+            "Withdraw{} in the registry{to}. Players are told it was withdrawn.",
+            v(&["version"]).map(|d| format!(" {d}")).unwrap_or_default()
+        ),
+        "registry grant" => format!(
+            "Grant the namespace{} in the registry{to}, so packages under that name can be installed from it.",
+            v(&["namespace"])
+                .map(|d| format!(" {d}"))
+                .unwrap_or_default()
+        ),
         "theme publish" | "theme recheck" => format!(
             "Publish the theme{} to the public list of themes{to}.",
             v(&["theme", "dir", "name"])

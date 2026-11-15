@@ -40,8 +40,15 @@
 //! Ported from game-printer's serve/freeplay.rs. A session's run is a game
 //! of the games checkout; the rebuilt game's start is translated through
 //! the game's mapping and module as the mechanic page translates it
-//! ([`crate::mechanic::live::start`]). Free play is the NES's today: on an
-//! arcade game it says so.
+//! ([`crate::mechanic::live::start`]).
+//!
+//! An arcade game plays the same way on its board: the page runs
+//! `gp_arcade_play.wasm` (served at `/api/play/gp_arcade_play.wasm`) on the
+//! romset, and the server rebuilds each save point with gp-arcade-play's
+//! player ([`Live`]). A branch's file then holds an arcade input log's
+//! frames one a line (`1 C......`), so a branch is cut by its lines as an
+//! NES one is; the log's header (the set and its button columns) is the
+//! romset's, read from the run's ROM.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write as _;
@@ -57,7 +64,6 @@ use serde_json::{Value, json};
 use super::game::{Run, is_name, rom_of, run_named};
 use super::{Ctx, Fail, Params, Route, body, post_only};
 use crate::mechanic::http::{Request, Response};
-use crate::roms::Platform;
 use crate::serve::work::now_ms;
 
 /// The session file's version.
@@ -283,13 +289,45 @@ fn save_file(dir: &Path, k: u64, ext: &str) -> PathBuf {
 }
 
 /// Frame lines under a header, as an input log.
-fn parse_lines(lines: &str) -> Result<InputLog, String> {
-    InputLog::parse(&format!("gp-input-log 1\ncontrollers 1\n{lines}")).map_err(|e| e.to_string())
+fn parse_lines(head: &str, lines: &str) -> Result<InputLog, String> {
+    InputLog::parse(&format!("{head}{lines}")).map_err(|e| e.to_string())
 }
 
-/// The input log's frame lines, without its header.
+/// The NES's log header, which frame lines follow.
+const NES_HEAD: &str = "gp-input-log 1\ncontrollers 1\n";
+
+/// The header a run's frame lines follow: the NES's, or an arcade log's
+/// for the romset the run plays (its set and the board's button columns).
+fn head_of(rom: &[u8]) -> Result<String, Fail> {
+    if !gp_arcade::romset::looks_like_zip(rom) {
+        return Ok(NES_HEAD.to_owned());
+    }
+    let set = gp_arcade::Romset::from_zip(rom).map_err(|e| Fail::bad_request(e.to_string()))?;
+    Ok(arcade_head(set.name))
+}
+
+fn arcade_head(system: &str) -> String {
+    format!(
+        "{}\nsystem {system}\ncolumns {}\n",
+        gp_evidence::input_log::ARCADE_HEADER,
+        gp_arcade_play::COLUMNS
+    )
+}
+
+/// The input log's frame lines, without its header: an arcade log's runs
+/// spelt a frame a line (`1 C......`), as the page uploads them.
 fn lines_of(log: &InputLog) -> String {
     let text = log.to_text();
+    if log.arcade.is_some() {
+        return text
+            .lines()
+            .filter_map(|l| {
+                let (n, held) = l.split_once(' ')?;
+                let n: usize = n.parse().ok()?;
+                Some(format!("1 {held}\n").repeat(n))
+            })
+            .collect();
+    }
     text.lines()
         .skip_while(|l| !l.starts_with("controllers"))
         .skip(1)
@@ -298,9 +336,9 @@ fn lines_of(log: &InputLog) -> String {
 }
 
 /// The first `frames` frames of a branch, as an input log.
-fn branch_prefix(dir: &Path, b: u64, frames: u64) -> Result<InputLog, Fail> {
+fn branch_prefix(dir: &Path, head: &str, b: u64, frames: u64) -> Result<InputLog, Fail> {
     let text = fs::read_to_string(branch_file(dir, b)).unwrap_or_default();
-    let mut log = parse_lines(&text).map_err(Fail::bad_request)?;
+    let mut log = parse_lines(head, &text).map_err(Fail::bad_request)?;
     if (log.frames.len() as u64) < frames {
         return Err(Fail {
             status: 409,
@@ -359,12 +397,6 @@ fn sessions(ctx: &Ctx, req: &Request, _params: &Params) -> Result<Response, Fail
     post_only(req)?;
     let st: Start = body(req)?;
     let rdir = run_named(ctx, &st.run)?;
-    if rdir.platform() != Platform::Nes {
-        return Err(Fail::conflict(format!(
-            "free play on {} isn't here yet: the editor's player is the NES's (gp_play.wasm), and {} is an arcade game",
-            st.run, st.run
-        )));
-    }
     if let Some(repo) = gp_evidence::paths::enclosing_git_work_tree(home) {
         return Err(Fail {
             status: 500,
@@ -377,10 +409,19 @@ fn sessions(ctx: &Ctx, req: &Request, _params: &Params) -> Result<Response, Fail
     // The first branch's frames come from the page, from power-on: its
     // player's log, with the game's own polled frames, even where it
     // replayed the recording to the start.
+    // A start in one of the run's recordings (a corpus clip, a free play
+    // clip, a store recording of its ROM): the page replays it to the
+    // frame, and the session's first branch is its log from power-on.
     if let Some(name) = &st.recording {
-        return Err(Fail::not_found(format!(
-            "free play from a recording ({name}) isn't here yet: a game has no capture run's recordings; start from power-on"
-        )));
+        let known = super::lockstep::recordings(ctx, &rdir)
+            .iter()
+            .any(|r| r["name"].as_str() == Some(name.as_str()));
+        if !known {
+            return Err(Fail::not_found(format!(
+                "{} has no recording {name} to start free play in",
+                st.run
+            )));
+        }
     } else if st.frame != 0 {
         return Err(Fail::bad_request(
             "a start frame needs the recording it's in",
@@ -433,6 +474,7 @@ fn branches(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail>
     post_only(req)?;
     let dir = session_dir(ctx, params)?;
     let nb: NewBranch = body(req)?;
+    let head = head_of(&rom_of(ctx, &run_dir_of(ctx, &dir)?)?)?;
     let b = update(&dir, |s| {
         let (lines, from_frame) = match nb.from_save {
             Some(k) => {
@@ -448,7 +490,7 @@ fn branches(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail>
             }
             None => {
                 let first = s.branches.first().map_or(1, |b| b.id);
-                let log = branch_prefix(&dir, first, s.frame)?;
+                let log = branch_prefix(&dir, &head, first, s.frame)?;
                 (lines_of(&log), s.frame)
             }
         };
@@ -481,7 +523,8 @@ fn branch_log(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fai
         .and_then(|b| b.parse().ok())
         .ok_or_else(|| Fail::not_found("no such branch"))?;
     let l: Lines = body(req)?;
-    let n = parse_lines(&l.lines)
+    let head = head_of(&rom_of(ctx, &run_dir_of(ctx, &dir)?)?)?;
+    let n = parse_lines(&head, &l.lines)
         .map_err(Fail::bad_request)?
         .frames
         .len() as u64;
@@ -533,7 +576,8 @@ fn saves(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
     post_only(req)?;
     let dir = session_dir(ctx, params)?;
     let ns: NewSave = body(req)?;
-    let log = branch_prefix(&dir, ns.branch, ns.frame)?;
+    let rom = rom_of(ctx, &run_dir_of(ctx, &dir)?)?;
+    let log = branch_prefix(&dir, &head_of(&rom)?, ns.branch, ns.frame)?;
     let picture = ns
         .picture
         .as_deref()
@@ -575,7 +619,6 @@ fn saves(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
         Ok(sp)
     })?;
     // Rebuilt natively in the background, so the page's F5 doesn't wait.
-    let rom = rom_of(ctx, &run_dir_of(ctx, &dir)?)?;
     let (dir2, k, sid) = (dir.clone(), sp.id, session_id(&dir));
     std::thread::spawn(move || {
         let r = rebuild_saved(&rom, &log, &sid, k).map(|(h, d, _)| (h, d));
@@ -605,6 +648,73 @@ fn rebuild(rom: &[u8], log: &InputLog) -> Result<(String, String), String> {
     let mut p = gp_play::Player::replay(rom, &log.to_text())?;
     p.run_to(log.frames.len() as u64)?;
     Ok((p.state_hash().to_hex(), p.digest().to_hex()))
+}
+
+/// The original played natively: the NES's player (gp-play) or an arcade
+/// board's (gp-arcade-play), as the page runs one or the other in wasm.
+pub(crate) enum Live {
+    /// The player and the ROM, for a replay from power-on.
+    Nes(Box<gp_play::Player>, Vec<u8>),
+    Arcade(Box<gp_arcade_play::Player>),
+}
+
+impl Live {
+    /// Powers the run's ROM on: a MAME zip on its board, else the NES.
+    pub(crate) fn power(rom: &[u8]) -> Result<Self, String> {
+        Ok(if gp_arcade::romset::looks_like_zip(rom) {
+            Self::Arcade(Box::new(gp_arcade_play::Player::new(rom)?))
+        } else {
+            Self::Nes(Box::new(gp_play::Player::new(rom)?), rom.to_vec())
+        })
+    }
+
+    fn restore(&mut self, bytes: &[u8]) -> Result<(), String> {
+        match self {
+            Self::Nes(p, _) => p.restore(bytes),
+            Self::Arcade(p) => p.restore(bytes),
+        }
+    }
+
+    fn save(&self) -> Result<Vec<u8>, String> {
+        match self {
+            Self::Nes(p, _) => p.save(),
+            Self::Arcade(p) => p.save(),
+        }
+    }
+
+    fn frames(&self) -> &[gp_evidence::input_log::InputFrame] {
+        match self {
+            Self::Nes(p, _) => &p.log().frames,
+            Self::Arcade(p) => &p.log().frames,
+        }
+    }
+
+    /// Plays `log`'s frames from the frame the player is at to its end.
+    fn play_on(&mut self, log: &InputLog) -> Result<(), String> {
+        match self {
+            Self::Nes(p, _) => {
+                let m = p.log().frames.len();
+                for f in &log.frames[m..] {
+                    p.step(f.pads[0], f.reset)?;
+                }
+            }
+            // The log holds what reached the board, past the joystick's
+            // filter, so it is replayed as it is.
+            Self::Arcade(p) => {
+                p.script(&log.to_text())?;
+                p.run_to(log.frames.len() as u64)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The state hash and the picture digest, in hex.
+    fn hashes(&self) -> (String, String) {
+        match self {
+            Self::Nes(p, _) => (p.state_hash().to_hex(), p.digest().to_hex()),
+            Self::Arcade(p) => (p.state_hash().to_hex(), p.digest().to_hex()),
+        }
+    }
 }
 
 /// Save points' rebuilt states kept in memory, newest last: the base a
@@ -639,12 +749,41 @@ pub(crate) fn rebuild_saved(
     sid: &str,
     k: u64,
 ) -> Result<(String, String, std::sync::Arc<Vec<u8>>), String> {
+    rebuild_from(&|| Live::power(rom), log, sid, k)
+}
+
+impl Live {
+    /// Powered on and played to the end of `log`: the NES's player replays
+    /// it without drawing, an arcade board plays it as a script.
+    fn replayed(self, log: &InputLog) -> Result<Self, String> {
+        match self {
+            Self::Nes(_, rom) => {
+                let mut p = gp_play::Player::replay(&rom, &log.to_text())?;
+                p.run_to(log.frames.len() as u64)?;
+                Ok(Self::Nes(Box::new(p), rom))
+            }
+            mut a @ Self::Arcade(_) => {
+                a.play_on(log)?;
+                Ok(a)
+            }
+        }
+    }
+}
+
+/// [`rebuild_saved`] with the player powered on by `power`.
+fn rebuild_from(
+    power: &dyn Fn() -> Result<Live, String>,
+    log: &InputLog,
+    sid: &str,
+    k: u64,
+) -> Result<(String, String, std::sync::Arc<Vec<u8>>), String> {
     let _g = REBUILD.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(bytes) = kept_state(sid, k) {
-        let mut p = gp_play::Player::new(rom)?;
+        let mut p = power()?;
         p.restore(&bytes)?;
-        if p.log().frames == log.frames {
-            return Ok((p.state_hash().to_hex(), p.digest().to_hex(), bytes));
+        if p.frames() == log.frames {
+            let (h, d) = p.hashes();
+            return Ok((h, d, bytes));
         }
     }
     let n = log.frames.len();
@@ -658,29 +797,22 @@ pub(crate) fn rebuild_saved(
         .collect();
     let mut player = None;
     for b in bases {
-        let mut p = gp_play::Player::new(rom)?;
+        let mut p = power()?;
         if p.restore(&b).is_err() {
             continue;
         }
-        let m = p.log().frames.len();
-        if m <= n && p.log().frames[..] == log.frames[..m] {
+        let m = p.frames().len();
+        if m <= n && p.frames()[..] == log.frames[..m] {
             player = Some(p);
             break;
         }
     }
     let p = match player {
         Some(mut p) => {
-            let m = p.log().frames.len();
-            for f in &log.frames[m..] {
-                p.step(f.pads[0], f.reset)?;
-            }
+            p.play_on(log)?;
             p
         }
-        None => {
-            let mut p = gp_play::Player::replay(rom, &log.to_text())?;
-            p.run_to(n as u64)?;
-            p
-        }
+        None => power()?.replayed(log)?,
     };
     let bytes = std::sync::Arc::new(p.save()?);
     {
@@ -690,7 +822,8 @@ pub(crate) fn rebuild_saved(
         let over = kept.len().saturating_sub(KEPT_STATES);
         kept.drain(..over);
     }
-    Ok((p.state_hash().to_hex(), p.digest().to_hex(), bytes))
+    let (h, d) = p.hashes();
+    Ok((h, d, bytes))
 }
 
 fn kept_state(sid: &str, k: u64) -> Option<std::sync::Arc<Vec<u8>>> {
@@ -775,8 +908,8 @@ fn start_state(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fa
         .find(|b| b.id == si.branch)
         .map(|b| b.frames)
         .ok_or_else(|| Fail::not_found(format!("no branch {}", si.branch)))?;
-    let log = branch_prefix(&dir, si.branch, frames)?;
     let run = run_dir_of(ctx, &dir)?;
+    let log = branch_prefix(&dir, &head_of(&rom_of(ctx, &run)?)?, si.branch, frames)?;
     if !run.game.join(gp_interp::mapping::MAPPING_FILE).is_file() {
         return Err(Fail::not_found(
             "the game has no state mapping (mapping.toml)",
@@ -982,14 +1115,19 @@ pub(super) fn save_clip(
         }
     };
     let rel = save_file(Path::new("play/free").join(sid).as_path(), k, "log");
-    let secs = n as f64 / NTSC_FPS;
+    let fps = if presses.arcade.is_some() {
+        30.0
+    } else {
+        NTSC_FPS
+    };
+    let secs = n as f64 / fps;
     let scenario = Scenario {
         id,
         name: name.map_or_else(
             || {
                 format!(
                     "Clip from save point {k} at {}, {secs:.1} s",
-                    clock(sp.frame)
+                    clock(sp.frame, fps)
                 )
             },
             str::to_owned,
@@ -1061,8 +1199,8 @@ fn short(session: &str) -> &str {
 }
 
 /// Minutes and seconds of play at a frame: `0:41`.
-fn clock(frame: u64) -> String {
-    let s = (frame as f64 / NTSC_FPS) as u64;
+fn clock(frame: u64, fps: f64) -> String {
+    let s = (frame as f64 / fps) as u64;
     format!("{}:{:02}", s / 60, s % 60)
 }
 
@@ -1083,7 +1221,7 @@ mod tests {
         }
         let lines = lines_of(&log);
         assert!(!lines.contains("gp-input-log"));
-        assert_eq!(parse_lines(&lines).unwrap(), log);
+        assert_eq!(parse_lines(NES_HEAD, &lines).unwrap(), log);
     }
 
     #[test]
@@ -1125,10 +1263,62 @@ mod tests {
         assert_eq!(h, rebuild(&rom, &other).unwrap().0);
     }
 
+    /// An arcade branch's lines are its frames one a line, read back with
+    /// the set's header, and a save point on a made-up board
+    /// (gp_arcade::testrom) rebuilds to the player's hashes, from power-on
+    /// and from a kept save point before it.
+    #[test]
+    fn an_arcade_save_point_rebuilds_to_the_boards_hashes() {
+        let power = || {
+            Ok(Live::Arcade(Box::new(gp_arcade_play::Player::from_romset(
+                &gp_arcade::testrom::busy(),
+            ))))
+        };
+        let Ok(Live::Arcade(mut p)) = power() else {
+            unreachable!()
+        };
+        for i in 0..60u32 {
+            // Coin, then up and the tap in turns.
+            p.step(
+                if i < 4 {
+                    1
+                } else if i % 6 < 3 {
+                    0x20
+                } else {
+                    0x40
+                },
+                false,
+            )
+            .unwrap();
+        }
+        let saved = p.save().unwrap();
+        for _ in 0..20 {
+            p.step(0x08, false).unwrap();
+        }
+        let log = InputLog::parse(&p.input_log()).unwrap();
+        let lines = lines_of(&log);
+        assert_eq!(lines.lines().count(), 80);
+        assert!(lines.starts_with("1 C......\n"), "{lines}");
+        assert_eq!(parse_lines(&arcade_head("test"), &lines).unwrap(), log);
+        let want = (p.state_hash().to_hex(), p.digest().to_hex());
+        let mut first = log.clone();
+        first.frames.truncate(60);
+        let (h, _, b60) = rebuild_from(&power, &first, "test-arcade", 1).unwrap();
+        let mut q = gp_arcade_play::Player::from_romset(&gp_arcade::testrom::busy());
+        q.restore(&saved).unwrap();
+        assert_eq!(h, q.state_hash().to_hex());
+        assert_eq!(*b60, saved);
+        let (h, d, _) = rebuild_from(&power, &log, "test-arcade", 2).unwrap();
+        assert_eq!((h, d), want);
+        let (h, d, _) = rebuild_from(&power, &log, "test-arcade-cold", 1).unwrap();
+        assert_eq!((h, d), want);
+    }
+
     #[test]
     fn clocks_read_as_minutes_and_seconds() {
-        assert_eq!(clock(0), "0:00");
-        assert_eq!(clock(2470), "0:41");
-        assert_eq!(clock(3700), "1:01");
+        assert_eq!(clock(0, NTSC_FPS), "0:00");
+        assert_eq!(clock(2470, NTSC_FPS), "0:41");
+        assert_eq!(clock(3700, NTSC_FPS), "1:01");
+        assert_eq!(clock(1830, 30.0), "1:01");
     }
 }

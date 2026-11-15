@@ -16,6 +16,7 @@
 pub mod activity;
 pub mod asks;
 pub mod asset_edit;
+pub mod board_trip;
 pub mod catalog;
 pub mod contexts;
 pub mod critic;
@@ -27,6 +28,7 @@ pub mod fork;
 pub mod generate;
 pub mod moments;
 pub mod next;
+pub mod page_headers;
 pub mod place;
 pub mod policy;
 pub mod progressive;
@@ -41,6 +43,7 @@ pub mod scene;
 pub mod search;
 pub mod server;
 pub mod sound;
+pub mod sound_proposal;
 pub mod sprite_ops;
 pub mod sprite_set;
 
@@ -206,10 +209,15 @@ impl Reply {
 /// Runs `gp --json ARGS` with the server's store, and returns its exit code
 /// and JSON. Exit 2, or output that isn't JSON, is an error carrying gp's
 /// message. Its stdin is closed: the server's stdin is the MCP channel.
+/// Set on every gp this server runs (to `mcp`), so a command that would
+/// ask on a terminal knows no person is there to answer.
+pub const CALLER_ENV: &str = "GP_CALLER";
+
 pub fn run_gp(config: &Config, args: &[&std::ffi::OsStr]) -> Result<(i32, Value), String> {
     let out = std::process::Command::new(&config.gp)
         .arg("--json")
         .args(args)
+        .env(CALLER_ENV, "mcp")
         .env("GP_STORE", config.store())
         .stdin(std::process::Stdio::null())
         .output()

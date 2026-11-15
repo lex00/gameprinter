@@ -49,6 +49,16 @@ A frame is 16.7 ms. Phones haven't been measured (P4).
 
 `gp interp reach`, `gp level measure` and `gp level difficulty` run a game's hooks through its module with the world held on the host: `load-state`, `step` and `canonical-state` each frame, and each spec variant loaded as edited model text. The measure's flat floor is the one spec change model text can't say, so it is `run.flat-level`, a call that puts one session's level on the flat floor after `load`. See [docs/inventory.md](inventory.md).
 
+## Reading a frame's values
+
+A lockstep (`gp clip score`, `gp corpus score`, the mechanic page's review) reads the model's mapped values and its tracked bodies on every compared frame. `gp` calls a module through one export, `gp_rt`, with an op number and bytes (`gp_runtime::wire`). Before game-printer:game 0.2.0 each mapped path was a `query` of its own: Donkey Kong's mapping is about 160 of them a frame, and the body tracker read `entities` whole, every leaf with its path as text (about 56 KB a frame on Tapper). The first `query` of a frame also built the frame's whole view, every leaf of the state as text and a TOML tree, which took about 1 ms a frame on Tapper and 0.35 ms on Donkey Kong.
+
+`run.query-values` in `wit/game/game.wit` (op 29) takes a list of selectors and answers, for each, its values without their paths or its error, in one call. The module reads a leaf, or one field of a kind's bodies (`entities.KIND[*].x`), from the world itself, with the same code that builds the view (`gp_interp::state::Leaves`), and builds the view only for any other path. A lockstep now makes two or three of these calls a frame: the mapping's fields, the bodies' fields, and with `--values` the level.
+
+A module answers `info` (op 2) with the runtime protocol's package and, from 0.2.0 on, `game-printer:game@0.2.0` after it. `gp` reads that when it opens a module, and with a module that names no 0.2.0, one built before, it reads each path with `query` as before, with the same results. `gp --json clip score` and `gp --json corpus score` say which in `model_reads`: `query-values`, `query` (a module built before) or `native` (no module).
+
+The page doesn't read values this way: it plays a module through the preview's exports, so the browser players are unchanged.
+
 ## Not done yet
 
 - The official client's scan of a module on fetch waits for 3.3, when `gp` runs modules.

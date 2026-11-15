@@ -1,5 +1,7 @@
 // The live player: gp_play.wasm (crates/gp-play, gp-nes for the browser)
-// over its plain exports, as preview.js drives gp_web.wasm. One module
+// over its plain exports, as preview.js drives gp_web.wasm, or an arcade
+// board's gp_arcade_play.wasm (crates/gp-arcade-play), which has the same
+// exports and `gp_play_info`, the board's screen, frame rate and buttons. One module
 // holds two consoles: slot 0 for playing, slot 1 for a replay. Nothing
 // here reads a clock; the panel decides when to step. A slot's whole state
 // saves to bytes and restores from them (free play's save points,
@@ -9,6 +11,8 @@
 // The module carries wasm-bindgen imports from tetanes-core's web code
 // (local storage, time) that gp-nes never calls, so each is given a stub
 // that throws if it ever is.
+
+import { machineOf, type Machine } from "./playfold";
 
 const text = new TextDecoder();
 const enc = new TextEncoder();
@@ -30,6 +34,7 @@ interface Exports {
   gp_play_hash(slot: number): number;
   gp_play_save(slot: number): number;
   gp_play_restore(slot: number, ptr: number, len: number): number;
+  gp_play_info?(slot: number): number;
 }
 
 /** Stubs for every import the module names. */
@@ -44,13 +49,32 @@ export function stubImports(module: WebAssembly.Module): WebAssembly.Imports {
 }
 
 export class NesPlayer {
-  private constructor(private readonly x: Exports) {}
+  /** The machine it plays: the NES, or the arcade board its `gp_play_info` names. */
+  readonly machine: Machine;
+  private constructor(private readonly x: Exports) {
+    let info: Parameters<typeof machineOf>[0];
+    if (x.gp_play_info && x.gp_play_info(0) === 0) {
+      try {
+        info = JSON.parse(this.out()) as Parameters<typeof machineOf>[0];
+      } catch {
+        info = undefined;
+      }
+    }
+    this.machine = machineOf(info);
+  }
 
   static async load(url: string): Promise<NesPlayer> {
-    const bytes = await (await fetch(url)).arrayBuffer();
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`the player ${url}: ${res.status} ${await res.text()}`);
+    const bytes = await res.arrayBuffer();
     const module = await WebAssembly.compile(bytes);
     const instance = await WebAssembly.instantiate(module, stubImports(module));
     return new NesPlayer(instance.exports as unknown as Exports);
+  }
+
+  /** The player for a ROM: gp_play.wasm, or gp_arcade_play.wasm for a MAME zip. */
+  static async forRom(api: { playWasm(rom?: Uint8Array): string }, rom: Uint8Array): Promise<NesPlayer> {
+    return NesPlayer.load(api.playWasm(rom));
   }
 
   private mem(): Uint8Array {
@@ -102,10 +126,11 @@ export class NesPlayer {
   frame(slot: number): number {
     return this.x.gp_play_frame(slot);
   }
-  /** The last frame as 256x240 RGBA, copied out. */
+  /** The last frame as RGBA at the machine's size (256x240 on the NES), copied out. */
   rgba(slot: number): Uint8ClampedArray<ArrayBuffer> {
     const p = this.x.gp_play_rgba(slot);
-    return new Uint8ClampedArray(this.x.memory.buffer.slice(p, p + 256 * 240 * 4) as ArrayBuffer);
+    const n = this.machine.width * this.machine.height * 4;
+    return new Uint8ClampedArray(this.x.memory.buffer.slice(p, p + n) as ArrayBuffer);
   }
   inputLog(slot: number): string {
     return this.check(this.x.gp_play_input_log(slot));

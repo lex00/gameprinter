@@ -50,7 +50,7 @@ pub struct SlotsArgs {
 }
 
 pub(crate) fn run(a: &SlotsArgs, paths: &Paths) -> Result<Outcome> {
-    let mut input = a.input.read()?;
+    let mut input = a.input.read(paths)?;
     if let Some(n) = a.frames {
         input.frames.truncate(n);
     }

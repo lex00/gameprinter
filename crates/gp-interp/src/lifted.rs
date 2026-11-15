@@ -32,8 +32,9 @@ pub struct Lifted {
 /// The asset map of a lifted folder's `assets.toml` text, NES or arcade,
 /// as the simulation and the presentation read it. An arcade lift
 /// (gp_assets::arcade) reads as a map of its `byte-rows` tables alone:
-/// its `mcr-tiles` and `mcr-sprites` pictures and its `sprite-set` are
-/// none of an NES map's formats, and no model slot draws from them yet.
+/// its `mcr-tiles` and `mcr-sprites` pictures, `mcr-screen` and
+/// `mcr-palette` tables and its `sprite-set` are none of an NES map's
+/// formats. The model's board slots read them through gp_look::board.
 pub fn map_of(text: &str) -> Result<AssetMap, String> {
     if gp_assets::arcade::is_arcade(text) {
         // An arcade lift holds nothing the simulation reads: to it, a

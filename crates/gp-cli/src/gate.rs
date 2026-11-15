@@ -174,8 +174,37 @@ fn assets_for(c: &Ctx, game: &Path, rom: &[u8]) -> Result<PathBuf> {
     Ok(out)
 }
 
+/// The lines saying which clips a corpus score ran a second time because
+/// the first try couldn't make or score them, and how each went (`reran`
+/// in gp corpus score's JSON). None when it ran none again.
+pub(crate) fn reran_lines(v: &Value, side: &str) -> Vec<String> {
+    let Some(all) = v["reran"].as_array().filter(|a| !a.is_empty()) else {
+        return Vec::new();
+    };
+    let mut out = vec![format!(
+        "{side}: {} clips couldn't be made or scored at first and were run once more:",
+        all.len()
+    )];
+    for r in all {
+        let (id, first) = (
+            r["id"].as_str().unwrap_or(""),
+            r["first"].as_str().unwrap_or(""),
+        );
+        out.push(if r["ok"] == true {
+            format!("  {id}: made and scored the second time (the first try: {first})")
+        } else {
+            format!(
+                "  {id}: failed again: {} (the first try: {first})",
+                r["error"].as_str().unwrap_or("")
+            )
+        });
+    }
+    out
+}
+
 /// A score's rows, in the corpus's order, and the file holding its whole
-/// JSON.
+/// JSON. The clips it ran a second time are said in `lines`.
+#[allow(clippy::too_many_arguments)]
 fn score(
     c: &Ctx,
     game: &Path,
@@ -184,6 +213,7 @@ fn score(
     reuse: Option<&Path>,
     remeasure: bool,
     name: &str,
+    lines: &mut Vec<String>,
 ) -> Result<(Rows, PathBuf)> {
     let cmd = CorpusCmd::Score {
         game: game.to_owned(),
@@ -199,6 +229,7 @@ fn score(
         remeasure: remeasure.then(|| game.to_owned()),
     };
     let o = crate::corpus_score::run(&cmd, &c.paths)?;
+    lines.extend(reran_lines(&o.json, name));
     let dir = c.home.join("scores");
     fs::create_dir_all(&dir)?;
     let f = dir.join(format!("{name}-{}.json", c.run));
@@ -897,6 +928,7 @@ fn trial(
         (!first).then_some(base.json.as_path()),
         true,
         "patched",
+        lines,
     ) {
         Ok(x) => x,
         Err(e) => return fail(format!("gp corpus score: {e:#}"), "corpus"),
@@ -1226,6 +1258,7 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
                     None,
                     false,
                     "tip",
+                    &mut lines,
                 )?;
                 lines.push(format!(
                     "tip {}: {} clips scored in {} s",
@@ -1690,6 +1723,7 @@ fn score_only(c: &Ctx, rom: &[u8]) -> Result<Outcome> {
         None,
         false,
         "tip",
+        &mut lines,
     )?;
     lines.push(format!(
         "tip {}: {} clips scored in {} s",
@@ -1698,8 +1732,12 @@ fn score_only(c: &Ctx, rom: &[u8]) -> Result<Outcome> {
         started.elapsed().as_secs()
     ));
     let clips: Vec<Value> = tip_rows.iter().map(|(_, r)| r.raw.clone()).collect();
+    let reran = fs::read(&tip_json)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .map_or(Value::Null, |v| v["reran"].clone());
     Ok(Outcome::ok(
-        json!({"verdict": "SCORED", "tip": tip, "tip_score": tip_json, "clips": clips}),
+        json!({"verdict": "SCORED", "tip": tip, "tip_score": tip_json, "clips": clips, "reran": reran}),
         lines.join("\n"),
     ))
 }

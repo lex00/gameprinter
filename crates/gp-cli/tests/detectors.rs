@@ -459,7 +459,8 @@ fn sprites_capture_on_moss_hop() {
 
 /// An arcade game is captured (gp-sprites' own tests hold the capture on
 /// a made-up MCR lift), but its model only proposed: `--apply` is refused
-/// in words, since no model slot takes an arcade lift's pictures yet.
+/// in words, since an arcade model draws its bodies as the board's own
+/// sprites (`board_sprite`), not from a sprite-set.
 #[test]
 fn sprites_capture_refuses_apply_on_an_arcade_game_in_words() {
     let dir = tempfile::tempdir().unwrap();

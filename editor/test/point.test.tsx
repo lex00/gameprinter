@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { renderToString } from "react-dom/server";
 import { Api } from "../src/api";
 import { ScreenPointer, TellPanel } from "../src/PointTell";
-import { CHOICES, CLICK, boxFrom, choiceWords, isPauseKey, requestInput, screenPoint, where, type PointJson } from "../src/point";
+import { ASK_WORDS, CHOICES, CLICK, answersAfter, boxFrom, choiceWords, isPauseKey, questionInput, requestInput, screenPoint, where, type PointJson } from "../src/point";
 
 const pointed: PointJson = {
   run: "pond",
@@ -77,6 +77,34 @@ describe("tell", () => {
     expect(requestInput(pointed, undefined, "x").data?.choice).toBeNull();
   });
 
+  it("asks what a spot is, with the side, at once or with what is under it", () => {
+    const box = { x: 4, y: 5, w: 16, h: 16 };
+    const q = questionInput("dk.walk.001", 412, box, "model");
+    expect(q.kind).toBe("request");
+    expect(q.text).toBe(ASK_WORDS);
+    const d = q.data as Record<string, any>;
+    expect(d.ask).toBe("explain");
+    expect(d.side).toBe("model");
+    expect(d.frame).toBe(412);
+    expect(d.recording).toBe("dk.walk.001");
+    expect(d.rect).toEqual(box);
+    expect(d.point.things).toEqual([]);
+    const withPoint = questionInput("session", 300, box, "original", pointed).data as Record<string, any>;
+    expect(withPoint.label).toBe("a lily pad");
+    expect(withPoint.point.things).toHaveLength(2);
+  });
+
+  it("reads the agent's answer from the talk after the question", () => {
+    const talk = [
+      { n: 3, by: "agent", text: "earlier" },
+      { n: 4, by: "player", text: "what is this?" },
+      { n: 5, by: "agent", text: "It is the barrel in slot 2." },
+    ];
+    expect(answersAfter(talk, 4).map((t) => t.text)).toEqual(["It is the barrel in slot 2."]);
+    expect(answersAfter(talk, undefined)).toEqual([]);
+    expect(answersAfter(undefined, 4)).toEqual([]);
+  });
+
   it("has the five quick choices, worded for a person", () => {
     expect(CHOICES.map((c) => c.key)).toEqual(["missing", "position", "look", "sound", "react"]);
     expect(choiceWords("react")).toBe("should react when I hit it");
@@ -93,6 +121,9 @@ describe("tell", () => {
     for (const c of CHOICES) expect(html).toContain(c.words);
     // Nothing to send until the box is resolved and something is said.
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*data-testid="tell-send"/);
+    // The question can be asked at once.
+    expect(html).toContain(ASK_WORDS);
+    expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*data-testid="tell-ask"/);
   });
 
   it("draws the pointing layer only while paused, with the box", () => {

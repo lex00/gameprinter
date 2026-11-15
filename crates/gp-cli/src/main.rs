@@ -20,6 +20,7 @@ mod bench;
 mod bench_clips;
 mod bench_grade;
 mod bench_scratch;
+mod bundle;
 mod capture;
 mod catalog;
 mod chunks;
@@ -59,6 +60,7 @@ mod findings_clip;
 mod from_trace;
 mod game;
 mod game_new;
+mod game_share;
 mod gaps;
 mod gaps_arcade;
 mod gate;
@@ -72,12 +74,16 @@ mod hosted;
 mod interp;
 mod interp_args;
 mod interp_draws;
+mod journeys;
 mod labels;
 mod labels_propose;
 mod laya;
 mod leads;
+mod level_edit;
 mod level_kit;
+mod level_picture;
 mod localize;
+mod localize_z80;
 mod lockstep;
 mod mcp;
 mod mechanic;
@@ -108,6 +114,8 @@ mod pool;
 mod progress;
 mod progress_measure;
 mod publish;
+mod query_clip;
+mod ramrole_z80;
 mod reach;
 mod reach_window;
 mod reach_window_z80;
@@ -135,8 +143,10 @@ mod scorecard;
 mod screen;
 mod sealed;
 mod search;
+mod self_check;
 mod serve;
 mod served;
+mod session;
 mod slots;
 mod solve;
 mod sound;
@@ -157,6 +167,7 @@ mod template_original;
 mod testroms;
 mod theme;
 mod theme_apng;
+mod theme_board;
 mod theme_fit;
 mod theme_generate;
 mod theme_geometry;
@@ -165,12 +176,15 @@ mod theme_look;
 mod theme_mirror;
 mod theme_original;
 mod theme_paper;
+mod theme_picture;
+mod theme_play;
 mod theme_publish;
 mod theme_run;
 mod theme_runway;
 mod theme_serve;
 mod theme_sheet;
 mod theme_slots;
+mod theme_sound;
 mod theme_style;
 mod theme_template;
 mod theme_words;
@@ -178,6 +192,7 @@ mod tool_gate;
 mod track;
 mod translate;
 mod validate;
+mod validate_fit;
 mod video;
 mod watch;
 mod watch_serve;
@@ -210,7 +225,7 @@ impl Outcome {
 }
 
 #[derive(Parser)]
-#[command(name = "gp", version, about = "Game Printer")]
+#[command(name = "gp", version = env!("GP_VERSION_LINE"), about = "Game Printer")]
 pub struct Cli {
     /// Print machine-readable JSON on stdout.
     #[arg(long, global = true)]
@@ -332,8 +347,14 @@ enum Cmd {
     /// Hold a model to its fidelity contract against recordings of the
     /// original (docs/validation.md): the contract's rules compiled into
     /// checks, each recording's input run on the original (read through the
-    /// state mapping) and on the model, and compared. Exits 1 when a check
-    /// fails, 2 when no recording could be run.
+    /// state mapping) and on the model, and compared. With neither
+    /// `--against` nor `--store`, the check that fits the game, chosen from
+    /// what its folder holds and said in words: that contract against the
+    /// checkout's recordings of its original when there are some, a port's
+    /// corpus score (NES or arcade), or, for a game changed on purpose or
+    /// made new, its model well formed and every stage reached and
+    /// finished. Exits 1 when a check fails, 2 when no recording could be
+    /// run.
     Validate(validate::ValidateArgs),
     /// Report what recordings exercised, given recordings or the whole
     /// store (docs/coverage.md).
@@ -483,7 +504,7 @@ enum Cmd {
     /// Make, publish to and test registries.
     Registry {
         #[command(subcommand)]
-        cmd: RegistryCmd,
+        cmd: registry::RegistryCmd,
     },
     /// Ask about a package folder.
     Package {
@@ -1083,10 +1104,18 @@ enum GameCmd {
     },
     /// Fetch NAME@VERSION by id into a folder, checking every signature (with --root) and
     /// hash, and lift every ROM entry it finds in the ROM folder.
+    ///
+    /// Without --id, the id is the one the registry's index lists for that version, and
+    /// the output says so. Without @VERSION too, the version is the newest one the index
+    /// lists that isn't yanked (over s3:// or https, the catalog's latest). A version
+    /// yanked for security is fetched only with --id, and so is any version of a
+    /// registry with no yank list (yanks.toml, which gp registry reindex writes).
     Fetch {
+        /// NAME@VERSION, or NAME alone with no --id. Example: lex00/donkey-kong@1.0.9
         name: String,
+        /// The package's exact id. Without it, the id comes from the registry's index.
         #[arg(long)]
-        id: String,
+        id: Option<String>,
         /// The registry: a folder, s3://BUCKET or an https address.
         #[arg(long)]
         from: String,
@@ -1144,6 +1173,32 @@ enum GameCmd {
         #[arg(long)]
         key: Option<PathBuf>,
     },
+    /// Share a game with its own pictures (a new game, made from a template
+    /// such as Moss Hop, whose template says how = "build" or "authored"):
+    /// built for the page and published into your own registry on this
+    /// computer ($GP_HOME/work/share/registry, namespace local), with the
+    /// page beside it. gp registry publish compares it with every ROM in
+    /// $GP_ROM_DIR first and refuses it if it holds anything of one. Each
+    /// share is a new version. It prints the link gp serve plays it at
+    /// (/share/p?g=local/NAME) and what it takes for other people to open
+    /// it. Every theme made for the game ($GP_HOME/work/themes/, the new-game
+    /// journey's "Give it a look") goes in the package, offered in Settings,
+    /// and the link opens in one of them. Nothing is sent anywhere
+    Share {
+        /// The game's folder (a copy template_fork made). Example:
+        /// $GP_HOME/work/mcp/my_hop
+        dir: PathBuf,
+        /// Its title on the page (default: the folder's name in words).
+        /// Example: --title "My Hop"
+        #[arg(long)]
+        title: Option<String>,
+        /// The look the link opens in: a theme made for the game, by its
+        /// name or its look's id, or `own` for the game's own pictures
+        /// (default: the theme of it changed last, else its own pictures).
+        /// Example: --look hop-night
+        #[arg(long)]
+        look: Option<String>,
+    },
     /// Build a game's module from its package folder and the kit, in a
     /// sandbox that reads nothing else and has no network. Exits 1 when the
     /// hook crate breaks the rules, 2 when the build fails. With no
@@ -1171,64 +1226,6 @@ enum GameCmd {
         /// The module kit (default: this gp's, made once with gp game kit).
         #[arg(long)]
         kit: Option<PathBuf>,
-    },
-}
-
-#[derive(Subcommand)]
-enum RegistryCmd {
-    /// Serve a folder registry and a built page on this machine only.
-    Serve {
-        dir: std::path::PathBuf,
-        /// The built page, served beside the registry.
-        #[arg(long)]
-        page: std::path::PathBuf,
-        #[arg(long, default_value_t = 8377)]
-        port: u16,
-    },
-    /// Make a registry in a folder or s3://BUCKET.
-    Init {
-        target: String,
-        #[arg(long)]
-        name: String,
-        #[arg(long)]
-        root_key: Option<PathBuf>,
-        #[arg(long)]
-        signing_key: Option<PathBuf>,
-        /// NS=KEY_FILE, repeated.
-        #[arg(long)]
-        namespace: Vec<String>,
-    },
-    /// Publish a folder of files as one exact version.
-    Publish {
-        target: String,
-        dir: PathBuf,
-        #[arg(long)]
-        name: String,
-        #[arg(long)]
-        version: String,
-        #[arg(long, default_value = "content")]
-        kind: String,
-        #[arg(long)]
-        title: String,
-        #[arg(long = "for")]
-        for_games: Vec<String>,
-        #[arg(long)]
-        key: Option<PathBuf>,
-    },
-    /// Rewrite the list files from these name@version entries, signed if
-    /// --key is given.
-    Reindex {
-        target: String,
-        versions: Vec<String>,
-        #[arg(long)]
-        key: Option<PathBuf>,
-    },
-    /// Test a registry from outside, against its root if --root is given.
-    Check {
-        url: String,
-        /// A file holding the root's public key.
-        #[arg(long)]
-        root: Option<PathBuf>,
     },
 }
 
@@ -1577,6 +1574,10 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
         Cmd::Oracle { cmd } => oracle::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Progress(a) => progress::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Catalog(a) => catalog::run(a, &gp_evidence::Paths::from_env()?),
+        // Nothing named to validate against: the check that fits the game.
+        Cmd::Validate(a) if a.against.is_empty() && !a.store => {
+            validate_fit::run(a, &gp_evidence::Paths::from_env()?, a.which)
+        }
         Cmd::Validate(a) => validate::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Coverage(a) => coverage::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Gaps { cmd } => gaps::run(cmd, &gp_evidence::Paths::from_env()?),
@@ -1624,6 +1625,14 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             &gp_evidence::Paths::from_env()?,
         ),
         Cmd::Game {
+            cmd: GameCmd::Share { dir, title, look },
+        } => game_share::run(
+            dir,
+            title.as_deref(),
+            look.as_deref(),
+            &gp_evidence::Paths::from_env()?,
+        ),
+        Cmd::Game {
             cmd:
                 GameCmd::Fetch {
                     name,
@@ -1633,7 +1642,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                     into,
                     rom_dir,
                 },
-        } => game::fetch(name, id, from, root.as_deref(), into, rom_dir),
+        } => game::fetch(name, id.as_deref(), from, root.as_deref(), into, rom_dir),
         Cmd::Game {
             cmd:
                 GameCmd::New {
@@ -1759,45 +1768,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                 baseline: Some(b),
             } => package::scan::run_against(dir, rom, wasm, b, &gp_evidence::Paths::from_env()?),
         },
-        Cmd::Registry { cmd } => match cmd {
-            RegistryCmd::Serve { dir, page, port } => registry::serve(dir, page, *port),
-            RegistryCmd::Init {
-                target,
-                name,
-                root_key,
-                signing_key,
-                namespace,
-            } => registry::init_cmd(
-                target,
-                name,
-                root_key.as_deref(),
-                signing_key.as_deref(),
-                namespace,
-            ),
-            RegistryCmd::Publish {
-                target,
-                dir,
-                name,
-                version,
-                kind,
-                title,
-                for_games,
-                key,
-            } => registry::publish_cmd(
-                target,
-                dir,
-                (name, version),
-                (kind, title),
-                for_games,
-                key.as_deref(),
-            ),
-            RegistryCmd::Reindex {
-                target,
-                versions,
-                key,
-            } => registry::reindex_cmd(target, versions, key.as_deref()),
-            RegistryCmd::Check { url, root } => registry::check_cmd(url, root.as_deref()),
-        },
+        Cmd::Registry { cmd } => registry::run(cmd),
         Cmd::Explore(a) => explore::run(a, &gp_evidence::Paths::from_env()?),
         Cmd::Watch { cmd } => watch::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Capture { cmd } => capture::run(cmd, &gp_evidence::Paths::from_env()?),

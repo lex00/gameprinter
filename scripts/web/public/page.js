@@ -23,12 +23,55 @@
 // before this file runs, so a lift.js that fails to load is reported as
 // the ROM's message rather than stopping the page with no word.
 
+import { gamePageOf, linkSettings, profileNames, readLink, shareLink } from "./share.js";
+
 const $ = (id) => document.getElementById(id);
 const frame = $("game");
 const say = (text, kind = "") => {
   $("message").textContent = text;
   $("message").dataset.kind = kind;
 };
+
+// The files this page takes, by a game's ROM kind (its play/page.json's
+// rom.kind; docs/web.md, "Players"): the picker's file types (null for
+// any, as the NES picker always was), where the lift reads the file in its
+// memory, and the word the page's lines call it by. One lift module reads
+// both (it knows a zip by its bytes) and one frame plays both: an arcade
+// model is keyed as a cabinet and drawn by game/gp_board.wasm, which the
+// frame fetches only for a model with board art.
+const KINDS = {
+  nes: { accept: null, romPath: "/rom.nes", noun: "ROM", file: "ROM file" },
+  zip: { accept: ".zip,application/zip,application/x-zip-compressed", romPath: "/rom.zip", noun: "romset", file: "romset zip" },
+  // A game that plays from its own files (a new game, made with pictures
+  // of its own): no file is asked for, nothing is lifted, and the frame
+  // opens on the installed package's play/ files.
+  none: { own: true },
+};
+// The players by the name a package gives (`player`, kept for packages
+// already published: lex00/donkey-kong@1.0.9 names `nes`), each with the
+// ROM kinds it takes. An arcade game plays silent: the board's sound chips
+// aren't driven by the model yet (docs/web.md, "Arcade games").
+const PLAYERS = {
+  nes: { kinds: ["nes"] },
+  arcade: { kinds: ["zip"], silent: "This game plays silent for now: the page doesn't play an arcade board's sound yet." },
+  own: { kinds: ["none"] },
+};
+const LIFT_MODULE = "game/lift/gp-web-lift.wasm";
+const FRAME = "game/index.html";
+// The kind of file the game being played takes (an NES ROM until a
+// game's facts say otherwise).
+const kindOf = () => KINDS[rom?.kind] ?? KINDS.nes;
+// Whether the game being played plays from its own files.
+const ownFiles = () => !!kindOf().own;
+// An own game's lines: how to play it when its package says nothing (the
+// NES keys, preview.js's NES_LAYOUT; the settings screen), and the About
+// line saying what it is and who made it, from its package's page facts.
+const OWN_HOWTO = [
+  "Controls: the arrows move, X is the A button, Z the B button and Enter is Start. A controller works too.",
+  "Settings: press Esc or the Settings button (top right) to switch theme and mode.",
+];
+const ownAbout = (f) =>
+  `${f.about ?? `${f.title} is a game made with Game Printer.`} It plays from its own pictures, so there is no ROM to load.${f.madeBy ? ` Made by ${f.madeBy}.` : ""}`;
 
 // The page's files, each fetched once; a step that needs one awaits it.
 let liftModule = null;
@@ -37,32 +80,92 @@ const pageFile = fetch("page.json").then((r) => {
   if (!r.ok) throw new Error(`page.json didn't load (${r.status})`);
   return r.json();
 });
+// `page` is the bundle's page.json (its source, its own game and theme);
+// `facts` the game being played's title, player, ROM and help text: the
+// bundle's for the page's own game, its package's for any other. `rom` is
+// facts.rom.
 let page = null;
+let facts = null;
 let rom = null;
 let link = null;
-// A play link's game and content: `g` and `c`, each NAME or NAME@VERSION.
-// With no link, the page's own game and its own content (page.json's
-// `content`, a theme installed with the game). The page has one source,
-// its own.
+let player = null;
+// What the address asked for, each value held to its shape (share.js):
+// the game `g` and theme `c`, each NAME or NAME@VERSION, a look `look`,
+// and the settings `mode` and `on`. With no `g`, the page's own game in
+// its own content (page.json's `content`, a theme installed with the
+// game); `look=original` opens in the original's look instead. The page
+// has one source, its own.
 function gameLink(p) {
-  const q = new URLSearchParams(location.search);
-  const part = (v) => {
-    if (!v) return null;
-    const [name, version = null] = v.split("@");
-    return { name, version };
-  };
-  const game = part(q.get("g")) ?? { name: p.game, version: null };
-  if (game.name !== p.game) throw new Error(`this page plays ${p.game}, not ${game.name}`);
-  return { game, content: part(q.get("c")) ?? part(p.content), direct: q.has("g") };
+  const l = readLink(location.search);
+  const game = l.game ?? { name: p.game, version: null };
+  const own = game.name === p.game;
+  const content = l.look ? null : (l.content ?? (own && p.content ? readLink(`?c=${encodeURIComponent(p.content)}`).content : null));
+  return { ...l, game, own, content, linkedContent: !!l.content && !l.look, direct: !!l.game };
 }
-// page.json read into `page` and `rom`: what a ROM needs before it can
-// play. A file picked earlier waits for it in liftAndPlay.
+// The game's facts shown on the page: its title, the ROM line, and for a
+// game that isn't the page's own its how-to-play lines and its About
+// lines, each as text.
+function showFacts(f) {
+  rom = f.rom;
+  const k = kindOf();
+  if (k.own) {
+    // Nothing to load: the picker is never shown, and the lines say what
+    // the game is and who made it, as text.
+    $("rom-help").textContent = "";
+    $("start").hidden = true;
+    $("title").textContent = f.title;
+    document.title = f.title;
+    const lines = f.howto?.length ? f.howto : OWN_HOWTO;
+    $("howto").replaceChildren(...lines.map((t) => Object.assign(document.createElement("p"), { textContent: t })));
+    $("about-what").textContent = "This page plays a game made playable in the browser with Game Printer. This one was made with pictures of its own.";
+    $("about-rom").textContent = ownAbout(f);
+    $("about-mark").textContent = "";
+    return;
+  }
+  $("rom-help").textContent =
+    `Load your own ${rom.name} ${k.noun} (${rom.file}) to play. ` + "It is checked and read in this browser and never uploaded.";
+  $("title").textContent = f.title;
+  document.title = f.title;
+  // The how-to-play lines, and for a player with no sound a line saying
+  // so, as text.
+  const silent = PLAYERS[f.player]?.silent;
+  const lines = f.howto?.length ? [...f.howto] : silent ? [...$("howto").children].map((p) => p.textContent) : [];
+  if (silent) lines.push(`Sound: ${silent}`);
+  if (lines.length) $("howto").replaceChildren(...lines.map((t) => Object.assign(document.createElement("p"), { textContent: t })));
+  if (!link.own || rom.kind !== "nes") {
+    $("about-rom").textContent = `"Load your own ROM" accepts a ${rom.name} ${k.file} that you own. The page checks and reads it in your browser. It is never uploaded.`;
+  }
+  if (!link.own || f.trademark) {
+    $("about-mark").textContent =
+      f.trademark ?? `This page is not affiliated with or endorsed by the makers of ${f.title}, which is named here only to say which file is accepted.`;
+  }
+}
+// page.json read into `page`, and for the page's own game into `facts`
+// and `rom`: what a ROM needs before it can play. Another game's facts
+// come with its package (installing, below). A file picked earlier waits
+// for them in liftAndPlay.
 const ready = pageFile.then((p) => {
   page = p;
-  rom = p.rom;
   link = gameLink(p);
-  $("rom-help").textContent =
-    `Load your own ${rom.name} ROM (${rom.file}) to play. ` + "It is checked and read in this browser and never uploaded.";
+  if (link.own) {
+    facts = { title: p.title, player: p.player ?? "nes", rom: { kind: "nes", ...p.rom }, howto: p.howto ?? [], trademark: p.trademark ?? null, madeBy: p.made_by ?? null, about: p.about ?? null };
+    showFacts(facts);
+  } else {
+    // Nothing of the page's own game shows for another: its name from the
+    // link (held to a package name's shape) until its package says more,
+    // and help that names no game's keys.
+    $("title").textContent = link.game.name;
+    document.title = link.game.name;
+    $("rom-help").textContent = `Getting ${link.game.name} from the page's source...`;
+    $("about-rom").textContent = '"Load your own ROM" accepts a ROM file of the game that you own. The page checks and reads it in your browser. It is never uploaded.';
+    $("about-mark").textContent = "This page is not affiliated with or endorsed by the makers of the games it plays.";
+    $("howto").replaceChildren(
+      ...[
+        "Settings: press Esc or the Settings button (top right) to switch theme and mode.",
+        "Load your own ROM to play. Under Settings, Theme switches between the original's art and a theme.",
+      ].map((t) => Object.assign(document.createElement("p"), { textContent: t })),
+    );
+  }
 });
 ready.catch(() => {});
 
@@ -74,17 +177,75 @@ let notices = [];
 const installing = ready.then(async () => {
   const x = await install();
   const progress = (n, of) => say(`Getting the game: ${n} of ${of} files. It stays in this browser so it plays offline.`);
-  const g = await x.ensure(page.source, link.game, progress);
+  const g = await x.ensure(page.source, { name: link.game.name, version: link.game.version }, progress);
+  if (g.record.kind !== "game") throw new Error(`${g.record.name} isn't a game on this page's source`);
   if (!g.record.files.some((f) => f.path.startsWith("play/"))) throw new Error(`${g.record.name}@${g.record.version} has no files this player can run`);
+  const files = await x.filesOf(g.record, "play");
+  // Another game's facts are its package's, checked before anything of
+  // it runs: a player this page hasn't, or a ROM kind that player doesn't
+  // take, is refused here, before a ROM is asked for.
+  if (!link.own) facts = gamePageOf(files, g.record.title);
+  player = PLAYERS[facts.player];
+  if (!player) throw new Error(`${g.record.name} needs the ${facts.player} player, which this page doesn't have yet`);
+  if (!player.kinds.includes(facts.rom.kind) || !KINDS[facts.rom.kind]) throw new Error(`${g.record.name} takes a ${facts.rom.kind} file, which the ${facts.player} player doesn't read`);
+  if (!link.own) showFacts(facts);
+  const accept = KINDS[facts.rom.kind].accept;
+  // A game that plays from its own files has no lift, so its package's
+  // own play/ files are the frame's (preview.js reads the installed game's
+  // when it is opened with no `files`): they must hold what it plays.
+  if (KINDS[facts.rom.kind].own && !["bundle.json", "preview.json"].every((n) => files.has(n))) throw new Error(`${g.record.name} has no bundle.json and preview.json to play`);
+  if (accept) $("rom").setAttribute("accept", accept);
   await x.setCurrent(g.record);
   if (g.notice) notices.push(g.notice);
+  if (link.ignored.length) notices.push(`The link's ${link.ignored.join(", ")} ${link.ignored.length === 1 ? "wasn't" : "weren't"} understood and ${link.ignored.length === 1 ? "was" : "were"} left out.`);
+  // The settings the link asks for, held to the modes and switches the
+  // game's own profiles.toml files offer (each template's in its lift).
+  const names = { presets: new Set(), switches: new Set() };
+  for (const [k, v] of files) {
+    if (!/^lift\/[^/]+\/profiles\.toml$/.test(k) && k !== "profiles.toml") continue;
+    const n = profileNames(new TextDecoder().decode(v));
+    n.presets.forEach((s) => names.presets.add(s));
+    n.switches.forEach((s) => names.switches.add(s));
+  }
+  const settings = linkSettings(link, names);
+  if (settings.dropped.length) notices.push(`This game has no setting ${settings.dropped.join(", ")}, so the link's ${settings.dropped.length === 1 ? "is" : "are"} left out.`);
   // The themes: the link's (the page's own, Turnips say), which the game
   // opens in, and every other theme the source offers for the game, each
   // a choice in Settings, Theme. A theme that won't install is named and
-  // left out; the rest still play.
+  // left out; the rest still play. A theme the link names must be on the
+  // source's list for the game when the list can be read (gp-registry.wasm
+  // checks it again as it installs).
+  // Every theme the source lists for the game and the page leaves out is
+  // kept with why (`notOffered`: { name, title, reason, detail }, the
+  // reason written to follow "because"), shown in the line under the
+  // header while a ROM plays and in About, with the detail in the log.
   const asked = link.content ? [{ ...link.content, linked: true }] : [];
-  const list = await x.offered(page.source, g.record.name).catch(() => []);
-  for (const o of list) if (!asked.some((a) => a.name === o.name)) asked.push({ name: o.name, version: null });
+  const offer = await x.offer(page.source, g.record.name).then(
+    (o) => o,
+    () => null,
+  );
+  const listed = offer?.offered ?? null;
+  const notOffered = (offer?.leftOut ?? []).map((l) => ({ name: l.name, title: l.title, reason: l.reason, detail: l.detail }));
+  const list = listed ?? [];
+  if (listed && link.content && !listed.some((o) => o.name === link.content.name)) {
+    const left = notOffered.find((l) => l.name === link.content.name);
+    notices.push(
+      left
+        ? `${link.content.name} isn't offered for ${g.record.title}, because ${left.reason}. Playing in the game's own look.`
+        : `${link.content.name} isn't a theme the source offers for ${g.record.title}. Playing in the game's own look.`,
+    );
+    asked.shift();
+  }
+  for (const o of list) if (!asked.some((a) => a.name === o.name)) asked.push({ name: o.name, version: null, title: o.title });
+  // A game that plays from its own files offers the looks its package
+  // holds (play/themes/); a theme from the source would reach the frame
+  // only through a ROM's lift, so each is named and left out.
+  if (KINDS[facts.rom.kind].own) {
+    for (const a of asked.splice(0)) {
+      if (a.linked) notices.push(`${a.name} can't be shown on ${g.record.title} yet: a theme from the source reaches only a game played from a ROM. Playing in the game's own look.`);
+      else notOffered.push({ name: a.name, title: a.title ?? a.name, reason: "the page shows a theme from the source only on a game played from a ROM, and this one plays from its own files", detail: `${a.name} is listed for ${g.record.name}` });
+    }
+  }
   let theme = null;
   const themes = [];
   for (const a of asked) {
@@ -94,23 +255,35 @@ const installing = ready.then(async () => {
           ? `${a.name} couldn't be used: ${err.message ?? err}. Playing in the game's own look.`
           : `The theme ${a.name} couldn't be installed: ${err.message ?? err}.`,
       );
+      if (!a.linked) notOffered.push({ name: a.name, title: a.title ?? a.name, reason: "it couldn't be installed", detail: String(err.message ?? err) });
       return null;
     });
     if (!c) continue;
     if (c.notice) notices.push(c.notice);
     const [ns, id] = c.record.name.split("/");
-    const t = { id, own: ns === g.record.name.split("/")[0], files: await x.filesOf(c.record, "theme") };
-    if (themes.some((x) => x.id === t.id)) continue;
+    const title = c.record.title || c.record.name;
+    const t = { id, name: c.record.name, title, own: ns === g.record.name.split("/")[0], files: await x.filesOf(c.record, "theme") };
+    if (!t.files.size) {
+      notOffered.push({ name: t.name, title, reason: "its package holds no theme", detail: `${c.record.name}@${c.record.version} holds no file under theme/, where the page reads a theme's look.txt` });
+      continue;
+    }
+    const same = themes.find((x) => x.id === t.id);
+    if (same) {
+      notOffered.push({ name: t.name, title, reason: `another theme, ${same.title}, has the same name here, and Settings, Theme lists one of each name`, detail: `${t.name} and ${same.name} both end in \`${t.id}\`` });
+      continue;
+    }
     themes.push(t);
     if (a.linked) theme = t;
   }
+  for (const l of notOffered) console.info(`gp: theme ${l.name} not offered: ${l.reason} (${l.detail})`);
+  showAboutThemes(notOffered);
   // Settings, Theme lists them in this order after Original: the themes
   // from the game's own namespace first (for lex00/donkey-kong,
   // lex00/turnips before a theme someone else made), then the rest as the
   // source offered them. The games site orders a game's themes the same way.
   themes.sort((a, b) => b.own - a.own);
   say("");
-  return { game: g.record, theme, themes, files: await x.filesOf(g.record, "play") };
+  return { game: g.record, theme, themes, files, names, profile: settings.profile, notOffered };
 });
 installing.catch(() => {});
 
@@ -154,6 +327,57 @@ addEventListener("keydown", (e) => {
 $("settings").addEventListener("click", () => {
   frame.contentWindow?.postMessage({ gp: "settings", key: "open" }, location.origin);
   $("settings").blur();
+  focusGame();
+});
+
+// Share: a link to this page with the game, the theme or look, and the
+// mode or switches being played (read from the game's frame, same origin),
+// else the ones the link asked for. Nothing else: never the ROM, a save,
+// or anything of the player. Copied when the browser lets the page, and
+// shown in the message line either way.
+function currentShare() {
+  let theme = null;
+  let profile = linked?.profile ?? null;
+  try {
+    const gp = frame.getAttribute("src") ? frame.contentWindow?.__gp : null;
+    if (gp) {
+      theme = typeof gp.theme === "string" ? gp.theme : null;
+      profile = typeof gp.profile === "string" ? gp.profile : profile;
+    }
+  } catch {
+    // The frame isn't readable yet.
+  }
+  let content = null;
+  let look = null;
+  if (theme === null) {
+    content = linked?.theme?.name ?? null;
+    look = !content && link?.look ? link.look : null;
+  } else {
+    const t = linked?.themes?.find((x) => x.id === theme);
+    if (t) content = t.name;
+    else look = theme;
+  }
+  return shareLink(new URL("p", document.baseURI).href, { game: linked?.game?.name ?? link.game.name, content, look, profile, names: linked?.names ?? null });
+}
+$("share").addEventListener("click", async () => {
+  $("share").blur();
+  let url;
+  try {
+    await installing;
+    url = currentShare();
+  } catch (err) {
+    say(`No link to share: ${err.message ?? err}`, "error");
+    return;
+  }
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(url);
+    copied = true;
+  } catch {
+    // Not allowed here: the link is shown to copy by hand.
+  }
+  say(`${copied ? "Link copied" : "Link to share"}: ${url} (it holds the game, the theme and the settings, never your ROM or saves)`, "ok");
+  $("message").dataset.share = url;
   focusGame();
 });
 
@@ -210,42 +434,100 @@ function romName(found) {
   return found?.rom_name ?? (found?.template_name ? `${rom.title} (like ${found.template_name})` : rom.name);
 }
 
-// The ROM themes the lift couldn't offer (result.json's looks_skipped,
-// crates/gp-web-lift), in a line under the mode line: each theme's title
-// and the lift's reason, which is written to follow "because". Without
-// it a theme the visitor's ROM can't take is missing from the settings
-// with no word. Hidden when there are none and when no ROM plays.
-function showSkipped(skipped = []) {
+// The themes the page doesn't offer, in sentences: the ROM themes the
+// lift couldn't offer (result.json's looks_skipped, crates/gp-web-lift),
+// the themes the source lists that the page left out (`notOffered`:
+// gp-registry.wasm's left_out and the installs that failed), and the
+// themes offered with some of their lines passed over (looks_partial).
+// Each names the theme's title and the reason, written to follow
+// "because". Without them a theme is missing from the settings, or drawn
+// in part, with no word.
+function notOfferedText(skipped = [], left = [], partial = []) {
+  const one = (list, single, many) =>
+    list.length ? `${list.length === 1 ? single : many}: ` + list.map((s) => `${s.title}, because ${s.reason}`).join("; ") + "." : "";
+  return [one(skipped, "ROM theme not offered", "ROM themes not offered"), one(left, "Theme not offered", "Themes not offered"), one(partial, "Theme drawn in part", "Themes drawn in part")]
+    .filter(Boolean)
+    .join(" ");
+}
+
+// In a line under the mode line while a ROM plays; hidden when there is
+// nothing to say and when no ROM plays. The details go to the log.
+function showSkipped(skipped = [], partial = []) {
   const el = $("skipped");
-  el.hidden = !skipped.length;
-  el.textContent = skipped.length
-    ? `${skipped.length === 1 ? "ROM theme" : "ROM themes"} not offered: ` +
-      skipped.map((s) => `${s.title}, because ${s.reason}`).join("; ") +
-      "."
-    : "";
+  const text = notOfferedText(skipped, linked?.notOffered ?? [], partial);
+  el.hidden = !text;
+  el.textContent = text;
+  for (const s of [...skipped, ...partial]) console.info(`gp: theme ${s.id} (${s.title}): ${s.reason} (${s.detail})`);
+  showAboutThemes(linked?.notOffered ?? [], skipped, partial);
+}
+
+// The same in About, so it can be found with or without a ROM: what the
+// source's list leaves out from the start, and what the ROM's lift adds.
+function showAboutThemes(left = [], skipped = [], partial = []) {
+  const el = $("about-themes");
+  if (!el) return;
+  const text = notOfferedText(skipped, left, partial);
+  el.hidden = !text;
+  el.textContent = text;
 }
 
 let linked = null;
 // `rom` plays the lifted ROM; `none` shows no game and asks for a ROM.
-function play(mode, found = null, skipped = []) {
+function play(mode, found = null, skipped = [], partial = []) {
+  if (mode === "own") return playOwn();
   const romMode = mode === "rom";
   // A linked theme (the page's own, Turnips say) opens the game in it; a
   // ROM with none starts in its own art (own-look), whatever look an
   // earlier visit kept.
-  const wanted = romMode && linked?.theme && !skipped.some((t) => t.id === linked.theme.id) ? `theme=${linked.theme.id}` : "own-look";
-  if (romMode) frame.src = `game/index.html?files=idb:${rom.game}&${wanted}&scale=fit`;
-  else frame.removeAttribute("src");
+  // A look the link names (`look=`, the original's or one of the ROM's own
+  // themes) is asked of the player, which opens it only if it has one of
+  // that id. The settings the link asks for, held to the game's names, go
+  // as `profile=`. Every value is one share.js checked, and the address is
+  // built by URLSearchParams.
+  if (romMode) {
+    const q = new URLSearchParams({ files: `idb:${rom.game}` });
+    if (link?.look && link.look !== "original") q.set("theme", link.look);
+    else if (linked?.theme && !skipped.some((t) => t.id === linked.theme.id)) q.set("theme", linked.theme.id);
+    else q.set("own-look", "");
+    if (linked?.profile) q.set("profile", linked.profile);
+    q.set("scale", "fit");
+    frame.src = `${FRAME}?${q.toString().replace(/%3A/gi, ":").replace(/own-look=(&|$)/, "own-look$1")}`;
+  } else frame.removeAttribute("src");
   frame.hidden = !romMode;
-  if (page) {
-    $("title").textContent = page.title;
-    document.title = page.title;
+  if (facts) {
+    $("title").textContent = facts.title;
+    document.title = facts.title;
   }
   $("mode").textContent = romMode
-    ? `Playing your own ${romName(found)} ROM: ${foundText(found)}, kept in this browser only`
+    ? `Playing your own ${romName(found)} ${kindOf().noun}: ${foundText(found)}, kept in this browser only`
     : "No ROM loaded";
   $("back").hidden = !romMode;
   $("start").hidden = romMode;
-  showSkipped(romMode ? skipped : []);
+  if (romMode) showSkipped(skipped, partial);
+  else {
+    $("skipped").hidden = true;
+    $("skipped").textContent = "";
+    showAboutThemes(linked?.notOffered ?? []);
+  }
+}
+
+// A game that plays from its own files, in the frame: no `files`, so the
+// frame reads the installed package's play/ files; the link's look and
+// settings as for a ROM. The picker and "Unload ROM" are never shown.
+function playOwn() {
+  const q = new URLSearchParams();
+  if (link?.look && link.look !== "original") q.set("theme", link.look);
+  else q.set("own-look", "");
+  if (linked?.profile) q.set("profile", linked.profile);
+  q.set("scale", "fit");
+  frame.src = `${FRAME}?${q.toString().replace(/own-look=(&|$)/, "own-look$1")}`;
+  frame.hidden = false;
+  $("title").textContent = facts.title;
+  document.title = facts.title;
+  $("mode").textContent = `Playing ${facts.title}${facts.madeBy ? `, made by ${facts.madeBy}` : ""}: it plays from its own files, with no ROM`;
+  $("back").hidden = true;
+  $("start").hidden = true;
+  showSkipped();
 }
 
 // The play files the lift reads: those under lift/, by their path there,
@@ -262,6 +544,10 @@ function playTemplates(files) {
 // plays it, saying what was found. `name` is the file's name for the first
 // message. Every way it can fail ends in a message in words.
 async function liftAndPlay(file, name) {
+  if (ownFiles()) {
+    say(`${facts.title} plays from its own files: there is no ROM to load.`, "warn");
+    return;
+  }
   say(`Checking ${name}...`);
   try {
     await ready.catch((err) => {
@@ -272,7 +558,8 @@ async function liftAndPlay(file, name) {
     });
     linked = await installing;
     const r = await liftRom(file, {
-      moduleUrl: "game/lift/gp-web-lift.wasm",
+      moduleUrl: LIFT_MODULE,
+      romPath: kindOf().romPath,
       templateFiles: playTemplates(linked.files),
       extraThemes: linked.themes ?? (linked.theme ? [linked.theme] : []),
     });
@@ -287,7 +574,7 @@ async function liftAndPlay(file, name) {
         (f?.warning ? ` ${f.warning}` : ""),
       f?.warning ? "warn" : "ok",
     );
-    play("rom", f, r.looks_skipped ?? []);
+    play("rom", f, r.looks_skipped ?? [], r.looks_partial ?? []);
   } catch (err) {
     say(`The ROM couldn't be read: ${err.message ?? err}`, "error");
   }
@@ -337,11 +624,15 @@ try {
   started = true;
   if (notices.length) say(notices.join(" "), "warn");
 } catch (err) {
-  say(`${page?.title ?? "The game"} couldn't be installed: ${err.message ?? err}.`, "error");
+  const what = link && !link.own ? link.game.name : (page?.title ?? "The game");
+  if (link && !link.own) $("rom-help").textContent = "";
+  say(`${what} couldn't be installed: ${err.message ?? err}.`, "error");
 }
 window.__page = { play, liftRom: async (...a) => (await lift()).liftRom(...a), showSkipped, installing };
-// No game until a ROM: unless one picked while the page loaded already plays.
-if (!frame.getAttribute("src")) play("none");
+// A game that plays from its own files plays at once; any other, no game
+// until a ROM, unless one picked while the page loaded already plays.
+if (started && ownFiles()) play("own");
+else if (!frame.getAttribute("src")) play("none");
 
 // Kept from an earlier visit: the ROM plays at once, lifted again, so it
 // plays with this page's themes and fixes, not the ones of the page that
@@ -350,7 +641,7 @@ if (!frame.getAttribute("src")) play("none");
 // more. IndexedDB can be refused (some private windows) or, in some Safari
 // versions, never answer; either way the page waits for a ROM without the
 // buttons, and nothing here holds up the picker.
-const { storedRom, loadStored, clearStored } = started ? await lift().catch(() => ({})) : {};
+const { storedRom, loadStored, clearStored } = started && !ownFiles() ? await lift().catch(() => ({})) : {};
 const keptRom = storedRom ? await storedRom(rom.game).catch(() => null) : null;
 if (!keptRom && loadStored && (await loadStored(rom.game).catch(() => null))) await clearStored(rom.game).catch(() => {});
 if (keptRom) liftAndPlay(keptRom, "your ROM");

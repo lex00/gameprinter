@@ -1,0 +1,21 @@
+# Third-party licences
+
+gp is built from these crates. Each is listed under its licence, with the licence's text as the crate ships it.
+
+{{#each overview}}
+- {{{name}}}: {{count}} crate(s)
+{{/each}}
+
+{{#each licenses}}
+## {{{name}}}
+
+Used by:
+{{#each used_by}}
+- {{crate.name}} {{crate.version}}{{#if crate.repository}} ({{crate.repository}}){{/if}}
+{{/each}}
+
+```
+{{{text}}}
+```
+
+{{/each}}

@@ -11,11 +11,21 @@
 //! routines that wrote them. The tables are the NES dataset's, so datasets
 //! of both platforms union. A column with no arcade meaning is null where
 //! the schema allows it; the `rom` row's `mapper` (an iNES number, never
-//! null) is 0 and its `board` names the arcade board. The NES's other
-//! readers (elements, state machines, constants, mechanics, facts, links,
-//! estimates) read 6502 code, so those tables are empty and one `open` row
-//! says so. The sound Z80's code isn't in the tables: its routines would
-//! share addresses with the main CPU's.
+//! null) is 0 and its `board` names the arcade board. Each RAM byte's
+//! readers come from the runs' access log, and the role the main CPU's
+//! trace suggests (crate::ramrole_z80, gp_nes::ramrole's rules) goes into
+//! its open row, unstated. The elements, state machines, constants, facts
+//! and mechanics come from the main Z80's static harvest
+//! ([`crate::model_static_z80::harvest_of`], the NES harvest's shape)
+//! through the NES dataset's own rows code
+//! ([`crate::rom_extract::harvest_claims`] and
+//! [`crate::rom_extract::harvest_rows`]), and the RAM bytes the harvest
+//! places carry their element, slot and quantity as on the NES. What the
+//! NES reads from its runs' tracks (the player and slot groups the screen
+//! shows, links, estimates, a byte's unit) isn't read on the board, and
+//! the Z80 harvest names no mechanic part: `open` rows say so. The sound
+//! Z80's code isn't in the tables: its routines would share addresses with
+//! the main CPU's.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -69,13 +79,45 @@ pub(crate) fn extract(set: &Romset, runs: usize, seed: u64) -> Result<Dataset> {
     let clips = starts.with_platform(&[], &gp_evidence::Paths::from_env()?, true)?;
     let mut merged = Levels::default();
     let mut each = Vec::new();
+    // One RAM trace across the runs, as the NES's behave keeps one, and
+    // each work RAM byte's readers by instruction.
+    let mut roles = crate::ramrole_z80::Z80Roles::new();
+    let mut read_by: BTreeMap<u16, BTreeSet<u16>> = BTreeMap::new();
     for c in &clips {
-        let l = crate::code_z80::run_input(set, &c.inputs)?;
+        roles.next_run();
+        let l = crate::code_z80::run_input_with(set, &c.inputs, &mut |w, t| {
+            roles.feed(&w.trace, &w.accesses);
+            let ram: Vec<u8> = (RAM_BASE..RAM_END).map(|a| t.peek(a)).collect();
+            roles.frame_end(&ram);
+            for a in w.accesses.iter().filter(|a| {
+                a.cpu == 0
+                    && a.kind == gp_arcade::mcr::AccessKind::Read
+                    && (RAM_BASE..RAM_END).contains(&a.addr)
+            }) {
+                read_by.entry(a.addr).or_default().insert(a.pc);
+            }
+        })?;
         crate::code_z80::merge(&mut merged, l.clone());
         each.push((c.id.clone(), c.key()?, c.inputs.len(), l));
     }
+    let class: BTreeMap<u16, gp_nes::ramrole::RamRole> = roles
+        .classify()
+        .roles
+        .into_iter()
+        .map(|r| (r.addr + RAM_BASE, r))
+        .collect();
     let map = code_map(set, Some(&merged));
     let lv = &merged.cpus[0];
+    // The main Z80's static harvest and the RAM bytes it places, by the
+    // NES's rules 1 to 3 (crate::rom_extract::harvest_claims); a byte two
+    // elements claim is left out, as on the NES.
+    let h = crate::model_static_z80::harvest_of(set);
+    let mut owner = crate::rom_extract::Owner::new();
+    let mut ambiguous = BTreeSet::new();
+    crate::rom_extract::harvest_claims(&h, &mut owner, &mut ambiguous);
+    for a in &ambiguous {
+        owner.remove(a);
+    }
     let mut d = Dataset::default();
     let frames: usize = each.iter().map(|e| e.2).sum();
     let main_bytes: usize = crate::code_z80::chips(set, 0)
@@ -123,6 +165,13 @@ pub(crate) fn extract(set: &Romset, runs: usize, seed: u64) -> Result<Dataset> {
             callers.entry(*to).or_default().insert(*from);
         }
     }
+    // Each routine's element, as the harvest groups them.
+    let element_of: BTreeMap<String, String> = h
+        .routines
+        .iter()
+        .filter(|r| !r.element.is_empty())
+        .map(|r| (r.addr.clone(), r.element.clone()))
+        .collect();
     let entries: Vec<u16> = map.routines.keys().copied().collect();
     for (k, &at) in entries.iter().enumerate() {
         let end = entries.get(k + 1).map_or(0x1_0000, |e| u32::from(*e));
@@ -144,7 +193,8 @@ pub(crate) fn extract(set: &Romset, runs: usize, seed: u64) -> Result<Dataset> {
         d.push(
             "routines",
             json!({"rom": sha, "routine": name(at), "bank": null, "addr": at,
-                   "size": last - u32::from(at), "element": null, "read": true, "ran": ran,
+                   "size": last - u32::from(at), "element": element_of.get(&name(at)),
+                   "read": true, "ran": ran,
                    "callers": list(callers.get(&at))?, "callees": list(callees.get(&at))?,
                    "src": format!("read:{}", name(at)),
                    "rule": format!("the main Z80's code map: {}", map.routines[&at]), "tool": tool}),
@@ -194,9 +244,23 @@ pub(crate) fn extract(set: &Romset, runs: usize, seed: u64) -> Result<Dataset> {
         prev = Some(i);
     }
 
-    // RAM: every work RAM byte (E000-E7FF) the runs wrote, with its
-    // writers' routines. Sprite, video and palette RAM are the picture's.
-    for (&a, _) in lv.written.range(RAM_BASE..RAM_END) {
+    // RAM: every work RAM byte (E000-E7FF) the runs wrote or the harvest
+    // places, with its writers' and readers' routines, the element, slot
+    // and quantity the harvest's rules give it (as on the NES), and the
+    // role the main Z80's trace suggests (crate::ramrole_z80,
+    // gp_nes::ramrole's rules) in its open row. The NES states the
+    // classifier's input role, graded exact on its games; on the board it
+    // isn't: stage 0's idle and Start runs give Tapper 383 bytes by the
+    // mask rule, most of them filled by the power-on RAM test, so no role
+    // is stated. Sprite, video and palette RAM are the picture's.
+    let mut bytes: BTreeSet<u16> = lv
+        .written
+        .range(RAM_BASE..RAM_END)
+        .map(|(a, _)| *a)
+        .collect();
+    bytes.extend(owner.range(RAM_BASE..RAM_END).map(|(a, _)| *a));
+    for &a in &bytes {
+        let written = lv.written.contains_key(&a);
         let writers: BTreeSet<String> = lv
             .writers
             .get(&a)
@@ -204,27 +268,88 @@ pub(crate) fn extract(set: &Romset, runs: usize, seed: u64) -> Result<Dataset> {
             .flatten()
             .filter_map(|(pc, _)| routine_of(&map, *pc).map(name))
             .collect();
+        let readers: BTreeSet<String> = read_by
+            .get(&a)
+            .into_iter()
+            .flatten()
+            .filter_map(|pc| routine_of(&map, *pc).map(name))
+            .collect();
+        let placed = owner.get(&a);
+        let mut src: Vec<String> = placed
+            .map(|o| o.3.clone())
+            .filter(|s| !s.is_empty())
+            .into_iter()
+            .collect();
+        if written {
+            src.push("run".to_owned());
+        }
+        let rule = match placed {
+            Some(o) => o.4.clone(),
+            None => "written and read by a run (the main Z80's access log)".to_owned(),
+        };
         d.push(
             "ram",
-            json!({"rom": sha, "addr": a, "written": true, "readers": "[]",
-                   "writers": serde_json::to_string(&writers)?, "src": "run",
-                   "rule": "written by a run (the main Z80's access log); readers aren't kept", "tool": tool}),
+            json!({"rom": sha, "addr": a, "written": written,
+                   "element": placed.map(|o| &o.0), "slot": placed.and_then(|o| o.1),
+                   "quantity": placed.and_then(|o| o.2.as_ref()),
+                   "readers": serde_json::to_string(&readers)?,
+                   "writers": serde_json::to_string(&writers)?,
+                   "src": if src.len() == 1 { json!(src[0]) } else { json!(serde_json::to_string(&src)?) },
+                   "rule": rule, "tool": tool}),
         )?;
+        let what = if placed.is_some() {
+            "no rule gives its role"
+        } else {
+            "no rule gives its role or its element"
+        };
+        let why = match class.get(&a) {
+            Some(c) => format!(
+                "{what}; the runs suggest {} ({}), a class not exact enough to state",
+                c.role.name(),
+                c.why
+            ),
+            None => what.to_owned(),
+        };
         d.push(
             "open",
-            json!({"rom": sha, "what": format!("ram:${a:04X}"), "routine": writers.iter().next(),
+            json!({"rom": sha, "what": format!("ram:${a:04X}"), "element": placed.map(|o| &o.0),
+                   "routine": writers.iter().next(),
                    "pc": "", "bytes": serde_json::to_string(&[format!("${a:04X}")])?,
-                   "why": "no rule gives its role or its element", "settle_by": "trace",
+                   "why": why, "settle_by": "trace",
                    "src": "run", "rule": "every written byte has a row", "tool": tool}),
         )?;
     }
+    // Elements, states, transitions, constants, facts and mechanics: the
+    // NES dataset's rows of a harvest. The board's runs aren't tracked, so
+    // nothing but the harvest places a byte or gives one a unit.
+    crate::rom_extract::harvest_rows(
+        &mut d,
+        &sha,
+        &h,
+        &crate::rom_extract::Placed {
+            owner: &owner,
+            part_of: &BTreeMap::new(),
+            speed_scale: &BTreeMap::new(),
+        },
+    )?;
+    // What the NES reads from its runs' tracks and the board's dataset
+    // doesn't, in words.
     d.push(
         "open",
-        json!({"rom": sha, "what": "arcade: elements, state machines, constants, mechanics, facts",
+        json!({"rom": sha, "what": "arcade: elements the screen shows, links, estimates, units",
                "pc": "", "bytes": "[]",
-               "why": "stage 0's readers of these read 6502 code; the main Z80's code map gives routines, branches, RAM writers and runs only",
-               "settle_by": "reader", "src": "run", "rule": "what the arcade dataset leaves out", "tool": tool}),
+               "why": "the NES dataset finds the player and the groups of slots the screen shows, the routines that draw and update them (links), what the runs measure (estimates) and the unit of a byte a constant is stored in or compared with, by following the runs' sprites (gp-track on the NES's sprite table and pad); stage 0 on the board doesn't track its sprites, so only the main Z80's harvest places bytes here",
+               "settle_by": "trace", "src": "run", "rule": "what the arcade dataset leaves out", "tool": tool}),
     )?;
+    if d.rows("mechanics").is_empty() {
+        d.push(
+            "open",
+            json!({"rom": sha, "what": "arcade: mechanics",
+                   "pc": "", "bytes": "[]",
+                   "why": "a mechanics row is a harvest fact on a part of the catalogue (docs/mechanics.md), and the catalogue's parts are the platformer's; the main Z80's harvest has the rules an arcade game shares with an NES one (record tables, state bytes, counters, timers, input, random), not the platformer's, so none of its facts names a part",
+                   "settle_by": "name", "src": "run", "rule": "what the arcade dataset leaves out", "tool": tool}),
+        )?;
+    }
 
     // Runs.
     for (id, key, n, l) in &each {
@@ -334,5 +459,109 @@ mod tests {
         let mut t = gp_arcade::Tapper::power_on(&set);
         let trace = crate::covered::frame_trace(&mut t, gp_arcade::Controls::default());
         assert!(!entries(&trace, &dataset_routines(Some(&d))).is_empty());
+    }
+
+    /// The made-up records program (gp_arcade::testrom::RECORDS) read
+    /// through the NES's rows of a harvest: its record tables are elements
+    /// of slots, the state byte of the 32-byte records a machine with its
+    /// transitions, each slot's state byte a RAM row of its element, the
+    /// compare at 0629 a constant, and the reset's constants named by its
+    /// address. What the board's dataset lacks is said in open rows.
+    #[test]
+    fn an_arcade_dataset_has_the_harvests_rows() {
+        use crate::rom_dataset::Cell;
+        let d = extract(&gp_arcade::testrom::records(), 0, 1).unwrap();
+        let find = |t: &str, col: &str, v: Cell| {
+            d.rows(t)
+                .iter()
+                .find(|r| r[col] == v)
+                .cloned()
+                .unwrap_or_else(|| panic!("no {t} row with {col} {v:?}"))
+        };
+        let s = |v: &str| Cell::S(Some(v.into()));
+        let el = find("elements", "element", s("slots_E200"));
+        assert_eq!(el["kind"], s("slots"));
+        assert_eq!(el["slots"], Cell::OI(Some(4)));
+        assert_eq!(el["ram"], Cell::I(4), "the state byte of each slot");
+        let st = find("states", "state", s("s1"));
+        assert_eq!(st["byte"], Cell::I(0xe200));
+        assert_eq!(st["element"], s("slots_E200"));
+        let moves: Vec<(String, String, String)> = d
+            .rows("transitions")
+            .iter()
+            .map(|r| {
+                let t = |c: &str| match &r[c] {
+                    Cell::S(Some(v)) => v.clone(),
+                    _ => String::new(),
+                };
+                (t("from_state"), t("to_state"), t("routine"))
+            })
+            .collect();
+        assert!(
+            moves.contains(&("s0".into(), "s1".into(), "0600".into())),
+            "{moves:?}"
+        );
+        let ram = find("ram", "addr", Cell::I(0xe220));
+        assert_eq!(ram["element"], s("slots_E200"));
+        assert_eq!(ram["slot"], Cell::OI(Some(1)));
+        assert_eq!(ram["quantity"], s("state"));
+        assert_eq!(
+            ram["role"],
+            Cell::S(None),
+            "a role stays the runs' suggestion"
+        );
+        let c = find("constants", "pc", s("0629"));
+        assert_eq!(
+            (c["op"].clone(), c["raw"].clone()),
+            (s("cp"), Cell::I(0x80))
+        );
+        assert_eq!(c["routine"], s("0620"));
+        assert_eq!(find("constants", "pc", s("0004"))["routine"], s("0000"));
+        assert!(!d.rows("facts").is_empty());
+        for what in [
+            "arcade: mechanics",
+            "arcade: elements the screen shows, links, estimates, units",
+        ] {
+            find("open", "what", s(what));
+        }
+    }
+
+    /// A made-up program (crate::ramrole_z80's test's): the byte the
+    /// routine at 0040 writes from the controller has its writer, and the
+    /// runs' suggestion of input in its open row; the main loop's byte its
+    /// reader and the suggestion of state. No role is stated.
+    #[test]
+    fn an_arcade_datasets_ram_rows_have_roles_and_readers() {
+        let set = crate::ramrole_z80::tests::program();
+        let d = extract(&set, 0, 1).unwrap();
+        let ram = |a: i64| {
+            d.rows("ram")
+                .iter()
+                .find(|r| r["addr"] == crate::rom_dataset::Cell::I(a))
+                .cloned()
+                .unwrap_or_else(|| panic!("no row for {a:04X}"))
+        };
+        let input = ram(0xe000);
+        assert_eq!(input["role"], crate::rom_dataset::Cell::S(None));
+        assert_eq!(
+            input["writers"],
+            crate::rom_dataset::Cell::S(Some("[\"0040\"]".into()))
+        );
+        let state = ram(0xe030);
+        assert_eq!(state["role"], crate::rom_dataset::Cell::S(None));
+        assert_eq!(
+            state["readers"],
+            crate::rom_dataset::Cell::S(Some("[\"0000\"]".into()))
+        );
+        let open = d
+            .rows("open")
+            .iter()
+            .find(|r| r["what"] == crate::rom_dataset::Cell::S(Some("ram:$E030".into())))
+            .cloned()
+            .unwrap();
+        let crate::rom_dataset::Cell::S(Some(why)) = &open["why"] else {
+            panic!("{open:?}")
+        };
+        assert!(why.contains("the runs suggest state"), "{why}");
     }
 }

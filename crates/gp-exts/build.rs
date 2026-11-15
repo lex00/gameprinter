@@ -22,15 +22,14 @@ fn main() {
     // crate: watch the root manifest and each template directory. Cargo
     // scans a watched directory's files, so editing a template's model.toml
     // reruns this script too; that's the cost of noticing a new ext crate.
-    println!(
-        "cargo:rerun-if-changed={}",
-        root.join("Cargo.toml").display()
-    );
+    // Every watched path is relative to this crate, so a copy of the
+    // checkout at another path (a tree, docs/agents.md) doesn't rerun it.
+    println!("cargo:rerun-if-changed=../../Cargo.toml");
     println!("cargo:rerun-if-changed=src/hashing.rs");
     let mut rows = Vec::new();
     // The demo hook, in this crate.
     let demo = here.join("src/demo.rs");
-    println!("cargo:rerun-if-changed={}", demo.display());
+    println!("cargo:rerun-if-changed=src/demo.rs");
     rows.push(format!(
         "(\"demo\", \"gp-exts demo\", {:?}, {:?})",
         env!("CARGO_PKG_VERSION"),
@@ -41,7 +40,8 @@ fn main() {
         let ext = root.join("crates/gp-ext-game");
         let files = hook_files(&ext);
         for f in &files {
-            println!("cargo:rerun-if-changed={}", f.display());
+            let rel = f.strip_prefix(&here).unwrap_or(f);
+            println!("cargo:rerun-if-changed={}", rel.display());
         }
         let text = fs::read_to_string(ext.join("Cargo.toml")).expect("the hook crate's Cargo.toml");
         rows.push(format!(

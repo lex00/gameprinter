@@ -2,7 +2,7 @@
 
 A package is a published version of a folder, a game's (kind `game`) or a theme's (kind `content`), in one format for both: its files, each stored once as a blob named by the BLAKE3 hash of its bytes, and a manifest that names them. The package id is the BLAKE3 hash of the manifest's bytes, so one id pins every byte of every file. The code is `crates/gp-package`, which depends on `blake3` alone, so `gp`, the web player and the registry reader in the page read packages with the same code. It came from game-printer's docs/packages.md; the format is the same, and game-printer's local package store, its mirrors (`mirrors.toml`) and `gp theme publish` are replaced by registries ([Run a registry](../site/src/content/docs/registry.md)).
 
-A game's package starts as its folder in the games checkout (`games/donkey-kong`, which is also the game's template), with `package.toml` at its root. `gp registry publish` turns a folder into a package and writes it to a registry; `gp game fetch` reads one back into a working copy and lifts each ROM entry it finds in the ROM folder.
+A game's package starts as its folder in the games checkout (`games/donkey-kong`, which is also the game's template), with `package.toml` at its root. `gp registry publish` turns a folder into a package and writes it to a registry; `gp game fetch` reads one back into a working copy and lifts each ROM entry it finds in the ROM folder. Given `--id`, it fetches that exact package; without it, it reads the id from the registry's index (`index/NS/NAME/VERSION.toml`) for the version named, or for the newest version not yanked when none is named, and says in its output which id it used and that it came from the index.
 
 ## The manifest
 
@@ -41,6 +41,8 @@ A registry holds the same keys on every target it can live on (a folder, a git r
 
 Every key but the list files (`catalog.toml`, `by-game/` and `yanks.toml`, which `gp registry reindex` rewrites) is written once: a key that is there holds the same bytes, since its name is their hash. A publish writes the blobs first, then the manifest, then the version file, so a reader never sees a version with parts missing. Every read is checked: a blob against its hash and its size in the manifest, a manifest against the id it was asked for by. A mismatch stops the read.
 
+A reader refuses a registry with no `yanks.toml`, since it can't tell which versions were withdrawn, so `gp registry init` writes an empty one (signed by the signing key when the registry is signed, with the same seven-day expiry a reindex gives it). A publish onto an older registry that has none writes one when its key may sign the list files, and otherwise says that `gp registry reindex TARGET --key SIGNING_KEY` writes it.
+
 Blobs are stored as they are, not compressed: a theme is mostly PNG and WAV files, which are compressed already, and a plain blob is checked against its key with no decoder, which the browser needs.
 
 [Where a registry can live](registry-backends.md) has each target and what makes a key write-once on it.
@@ -57,6 +59,13 @@ A game's package holds no byte of the game's ROM. Two commands check that before
 - `gp template served DIR` checks the files a page serves: no line of 24 characters or more of the lifted files, and no run of 32 of the ROM's bytes, raw or written as numbers.
 
 A registry in a git repo also compares every file of a package with each ROM it names before it commits, and refuses on 32 matching bytes or a ROM it can't find.
+
+A game made with pictures of its own (a new game, from a template whose `source.how` is `build` or `authored`) names no ROM, so there is none of its own to compare it with; until now both checks passed such a package unread. Its `play/page.json` says so (`rom.kind = "none"`, [the page's format](web.md#a-game-with-its-own-pictures)), and then:
+
+- `gp registry publish`, on any target, refuses it when it names a ROM (`[[rom.entry]]`), has a `roms.toml` or a lift (`play/lift/`), or when any file of it starts with an iNES header, holds a run of 32 bytes of any ROM in `$GP_ROM_DIR` (raw or written as numbers), or is a file lifted into `$GP_HOME/work/assets/` byte for byte. The game's own build is left out: a ROM its template builds from source (`how = "build"`, its hash in `accepts`, Moss Hop's) and that ROM's lifted folder are its own. A publish it takes says what it was compared with.
+- `gp template served` compares such a package the same way.
+
+Its `[page]` table may give `about` (what the game is, a line of up to 600 characters) and `made_by` (who made it, up to 120), which the page shows as text.
 
 ## Tests
 

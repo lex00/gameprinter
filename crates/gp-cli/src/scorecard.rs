@@ -33,7 +33,16 @@ use crate::Outcome;
 /// The prefix of the metrics `--record` writes.
 pub const PREFIX: &str = "scorecard";
 
+/// What the gaps columns mean, for `gp scorecard --help`.
+const GAPS_HELP: &str = "\
+The gaps columns come from the latest `gp gaps` run on the game (metrics gaps.<template>.*):
+  changes            what changes in play that the model doesn't account for, by place: RAM groups, sprite kinds, background cell kinds, sound effects (APU channels with no code signals) and routines (counts)
+  interactive        interactive element kinds `gp gaps interactive` cataloged (count)
+  drawn              entity kinds whose model sprite box is off the original's, of the kinds checked (counts)
+  detection quality  each detector's precision/recall (ratios, 0 to 1) against the game's truth set (its own truth/gaps.toml, else crates/gp-gaps/truth/<template>.toml); \"no truth set\" when the game has none";
+
 #[derive(Args)]
+#[command(after_help = GAPS_HELP)]
 pub struct ScorecardArgs {
     /// Templates to show: a name under templates/ or a directory holding
     /// model.toml. Default: every template.
@@ -326,7 +335,7 @@ fn row(dir: &Path, ctx: &Ctx) -> Result<Row> {
     let catalog = mechanics(dir, &model, ctx, &mut b);
     facts(dir, &model, &ids, ctx, missing, &mut b);
     fidelity(&ids, ctx, missing, &mut b);
-    gaps(&ids, ctx, missing, &mut b);
+    gaps(dir, &ids, ctx, missing, &mut b);
     chunks(&ids, ctx, missing, &mut b);
     sprites(&ids, ctx, missing, &mut b);
     sound(&ids, ctx, missing, &mut b);
@@ -908,7 +917,7 @@ fn fidelity(ids: &[&str], ctx: &Ctx, missing: &str, b: &mut Builder) {
 /// What `gp gaps` found: the counts from its metrics
 /// (`gaps.<template>.<place>.count`), and the top items from the reports
 /// it writes under `$GP_HOME/reports/gaps/<template>/`.
-fn gaps(ids: &[&str], ctx: &Ctx, missing: &str, b: &mut Builder) {
+fn gaps(dir: &Path, ids: &[&str], ctx: &Ctx, missing: &str, b: &mut Builder) {
     let g = "gaps";
     let r = ctx.recorded;
     let Some(id) = ids
@@ -927,12 +936,21 @@ fn gaps(ids: &[&str], ctx: &Ctx, missing: &str, b: &mut Builder) {
         return;
     };
     let get = |place: &str| r.get(&format!("gaps.{id}.{place}.count"));
-    let places = ["ram", "oam", "background", "sound", "code"];
+    // Each place's count with what it counts: RAM groups, sprite object
+    // kinds, background cell kinds, sound effects (or APU channels when no
+    // sound interface was found) and routines.
+    let places = [
+        ("ram", " groups"),
+        ("oam", " sprite kinds"),
+        ("background", " cell kinds"),
+        ("sound", ""),
+        ("code", " routines"),
+    ];
     let mut parts = Vec::new();
-    for p in places {
+    for (p, unit) in places {
         if let Some(v) = get(p) {
             b.num(format!("gaps.{p}.count"), v, "count");
-            parts.push(format!("{p} {v:.0}"));
+            parts.push(format!("{p} {v:.0}{unit}"));
         }
     }
     let src = "gp gaps changes (gaps.<template>.<place>.count)";
@@ -967,8 +985,7 @@ fn gaps(ids: &[&str], ctx: &Ctx, missing: &str, b: &mut Builder) {
     // Detection quality: each detector's precision and recall against the
     // game's labelled reference set (gaps.<template>.<detector>.precision
     // and .recall).
-    let qsrc =
-        "gp gaps all against crates/gp-gaps/truth (gaps.<template>.<detector>.precision, .recall)";
+    let qsrc = "gp gaps all against the game's truth/gaps.toml or crates/gp-gaps/truth (gaps.<template>.<detector>.precision, .recall)";
     let mut q = Vec::new();
     for d in ["sound", "effects", "interactive", "handlers", "ram"] {
         let p = r.get(&format!("gaps.{id}.{d}.precision"));
@@ -980,12 +997,24 @@ fn gaps(ids: &[&str], ctx: &Ctx, missing: &str, b: &mut Builder) {
         }
     }
     if q.is_empty() {
-        b.sum(g, "detection quality", "no reference set", "n/a", qsrc);
+        // Nothing scored: say why in words, never as a zero.
+        let why = if ids.iter().any(|i| crate::gaps::has_truth(dir, i)) {
+            "not scored yet (gp gaps all, with the ROM)"
+        } else {
+            "no truth set"
+        };
+        b.sum(g, "detection quality", why, "n/a", qsrc);
     } else {
         if let Some(n) = r.get(&format!("gaps.{id}.effects.named")) {
             q.push(format!("named {n:.2}"));
         }
-        b.sum(g, "detection quality", q.join(", "), "ok", qsrc);
+        b.sum(
+            g,
+            "detection quality",
+            format!("precision/recall {}", q.join(", ")),
+            "ok",
+            qsrc,
+        );
     }
     b.detail.gaps = gap_items(&ctx.home.join("reports/gaps").join(id), 5);
 }
@@ -1535,8 +1564,11 @@ mod tests {
             ("gaps.mosshop.sound.recall", 0.5),
         ]);
         let r = row(&mosshop(), &ctx(&rec, home.path())).unwrap();
-        assert_eq!(summary(&r, "detection quality").text, "sound 1.00/0.50");
-        assert_eq!(summary(&r, "changes").text, "ram 12, sound 1");
+        assert_eq!(
+            summary(&r, "detection quality").text,
+            "precision/recall sound 1.00/0.50"
+        );
+        assert_eq!(summary(&r, "changes").text, "ram 12 groups, sound 1");
         assert_eq!(summary(&r, "interactive").text, "3 kinds");
         assert_eq!(summary(&r, "drawn").text, "1 of 2 kinds off");
         assert!(
@@ -1555,6 +1587,73 @@ mod tests {
         // A game nobody ran gp gaps on says so.
         let r = row(&mosshop(), &ctx(&Recorded::from_pairs(&[]), home.path())).unwrap();
         assert_eq!(summary(&r, "changes").state, "no-run");
+    }
+
+    #[test]
+    fn what_gp_gaps_records_is_what_the_scorecard_reads() {
+        let home = tempfile::tempdir().unwrap();
+        let changes = gp_gaps::changes::Report::default();
+        let cat = gp_gaps::interactive::Catalog::default();
+        let score = gp_gaps::score::Score {
+            detectors: vec![gp_gaps::score::DetectorScore {
+                detector: "ram".into(),
+                precision: 0.5,
+                recall: 0.25,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let pairs = |id: &str, score: Option<&gp_gaps::score::Score>| {
+            crate::gaps::gap_metrics(id, Some(&changes), Some(&cat), None, score)
+        };
+        let to_rec = |m: Vec<(String, f64, &'static str)>| Recorded {
+            latest: m.into_iter().map(|(n, v, _)| (n, v)).collect(),
+        };
+        let r = row(
+            &mosshop(),
+            &ctx(&to_rec(pairs("mosshop", Some(&score))), home.path()),
+        )
+        .unwrap();
+        assert_eq!(
+            summary(&r, "changes").text,
+            "ram 0 groups, oam 0 sprite kinds, background 0 cell kinds, sound 0, code 0 routines"
+        );
+        assert_eq!(summary(&r, "interactive").text, "0 kinds");
+        assert_eq!(
+            summary(&r, "detection quality").text,
+            "precision/recall ram 0.50/0.25"
+        );
+        // Moss Hop has a truth set: a run that wasn't scored says so.
+        let r = row(
+            &mosshop(),
+            &ctx(&to_rec(pairs("mosshop", None)), home.path()),
+        )
+        .unwrap();
+        assert_eq!(
+            summary(&r, "detection quality").text,
+            "not scored yet (gp gaps all, with the ROM)"
+        );
+        // A game with no truth set says that in words, not as a zero.
+        let badge = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../templates/badge-in");
+        let r = row(&badge, &ctx(&to_rec(pairs("badge-in", None)), home.path())).unwrap();
+        let q = summary(&r, "detection quality");
+        assert_eq!((q.text.as_str(), q.state.as_str()), ("no truth set", "n/a"));
+        assert!(!r.cells.iter().any(|c| c.key.ends_with(".precision")));
+        // The same game with a truth/gaps.toml of its own has a set.
+        let games = tempfile::tempdir().unwrap();
+        let own = games.path().join("badge-in");
+        crate::bench_clips::copy_dir(&badge, &own).unwrap();
+        std::fs::create_dir_all(own.join("truth")).unwrap();
+        std::fs::write(
+            own.join(crate::gaps::TRUTH_FILE),
+            "schema = 0\ntemplate = \"badge-in\"\n[ram]\nmatter = [\"Alpha\"]\n",
+        )
+        .unwrap();
+        let r = row(&own, &ctx(&to_rec(pairs("badge-in", None)), home.path())).unwrap();
+        assert_eq!(
+            summary(&r, "detection quality").text,
+            "not scored yet (gp gaps all, with the ROM)"
+        );
     }
 
     #[test]

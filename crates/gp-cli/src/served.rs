@@ -362,6 +362,155 @@ impl Original {
     }
 }
 
+/// What a package that plays from its own pictures holds of its own: the
+/// ROM images its template builds from source (`[source] how = "build"`,
+/// their headerless SHA-256s in `accepts`), which aren't anyone else's
+/// game, and the model's source id, whose lifted folder under
+/// `$GP_HOME/work/assets/` is that build's. Empty for any other template.
+pub(crate) fn own_builds(dir: &Path) -> (Vec<String>, Option<String>) {
+    let read = |f: &str| {
+        fs::read_to_string(dir.join(f))
+            .ok()
+            .and_then(|t| t.parse::<toml::Table>().ok())
+    };
+    let Some(t) = read("template.toml") else {
+        return (Vec::new(), None);
+    };
+    let src = t.get("source");
+    let how = src.and_then(|s| s.get("how")).and_then(toml::Value::as_str);
+    if !matches!(how, Some("build" | "authored")) {
+        return (Vec::new(), None);
+    }
+    let accepts = src
+        .and_then(|s| s.get("accepts"))
+        .and_then(toml::Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    let source = read(gp_model::MODEL_FILE)
+        .and_then(|m| m.get("model")?.get("source")?.as_str().map(str::to_owned))
+        .or_else(|| src.and_then(|s| s.get("id")?.as_str().map(str::to_owned)));
+    (
+        if how == Some("build") {
+            accepts
+        } else {
+            Vec::new()
+        },
+        source,
+    )
+}
+
+/// Whether a package claims to play from its own pictures: its template
+/// builds its assets (`how = "build"` or `"authored"`) and it names no
+/// ROM, or a page facts file among `files` (`page.json`) says its ROM kind
+/// is `none`.
+pub(crate) fn claims_own_pictures(dir: &Path, pkg: &Package, files: &[(String, Vec<u8>)]) -> bool {
+    let facts = files.iter().any(|(rel, b)| {
+        rel.rsplit('/').next() == Some("page.json")
+            && serde_json::from_slice::<Value>(b).is_ok_and(|v| v["rom"]["kind"] == "none")
+    });
+    facts || (pkg.entries.is_empty() && own_builds(dir).1.is_some())
+}
+
+/// A package that plays from its own pictures names no ROM, so nothing
+/// above compares it with one. It is compared instead with every ROM in
+/// `roms` (the person's ROM folder) but its own builds (`own`), for an iNES
+/// header and for runs of a ROM's bytes, raw or written as numbers, and
+/// with every file lifted into `home`'s work/assets/ but its own source's
+/// folder (`own_source`), whole. Returns the problems and the ROMs and
+/// lifted folders it was compared with, by name.
+pub(crate) fn own_pictures(
+    files: &[(String, Vec<u8>)],
+    (own, own_source): (&[String], Option<&str>),
+    roms: &Path,
+    home: &Path,
+) -> Result<(Vec<Value>, Vec<String>)> {
+    let mut problems = Vec::new();
+    let mut compared = Vec::new();
+    for (rel, bytes) in files {
+        if bytes.len() >= 4 && looks_like_nes(&bytes[..4]) {
+            problems.push(problem(rel, "starts with an iNES header: a game image"));
+        }
+    }
+    let mut paths = Vec::new();
+    if roms.is_dir() {
+        crate::files::walk_unsealed(roms, &mut paths)?;
+    }
+    paths.sort();
+    let mut seen = BTreeSet::new();
+    for path in paths {
+        if !crate::roms::is_rom_file(&path) {
+            continue;
+        }
+        let Ok(rom) = crate::roms::Rom::read(&path) else {
+            continue;
+        };
+        if own.contains(&rom.sha256) || !seen.insert(rom.sha256.clone()) {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let id = rom.label(&name);
+        let data = rom.data();
+        let windows = rom_windows(data);
+        for (rel, bytes) in files {
+            let mut shared = Vec::new();
+            let pos: Vec<usize> = (0..bytes.len()).collect();
+            shared_runs(bytes, &pos, data, &windows, "raw", &mut shared);
+            if let Ok(t) = std::str::from_utf8(bytes) {
+                shared.extend(shared_in_text(t, data, &windows));
+            }
+            for sh in shared {
+                problems.push(problem(
+                    rel,
+                    format!(
+                        "{} bytes of {id} from offset {:#x} are here in order ({}), from byte {}",
+                        sh.len, sh.rom_offset, sh.how, sh.at
+                    ),
+                ));
+            }
+        }
+        compared.push(id);
+    }
+    // Whole files lifted from a ROM on this machine (its pictures among
+    // them), by hash: a picture lifted from another game holds no run of
+    // its ROM's bytes (it is compressed), but it is the same file.
+    let lifted = home.join("work").join("assets");
+    let mut made: HashMap<String, String> = HashMap::new();
+    for e in fs::read_dir(&lifted).into_iter().flatten().flatten() {
+        let src = e.file_name().to_string_lossy().into_owned();
+        if Some(src.as_str()) == own_source
+            || src.split('@').next() == own_source
+            || !e.path().is_dir()
+        {
+            continue;
+        }
+        let mut found = Vec::new();
+        crate::files::walk_unsealed(&e.path(), &mut found)?;
+        for f in found {
+            if f.file_name().is_some_and(|n| n == gp_assets::MAP_FILE) {
+                continue;
+            }
+            if let Ok(b) = fs::read(&f) {
+                let rel = f.strip_prefix(e.path()).unwrap_or(&f).display().to_string();
+                made.entry(sha256_hex(&b))
+                    .or_insert(format!("the lifted file {rel} of {src}"));
+            }
+        }
+        compared.push(format!("the files lifted into work/assets/{src}"));
+    }
+    for (rel, bytes) in files {
+        if let Some(what) = made.get(&sha256_hex(bytes)) {
+            problems.push(problem(rel, format!("identical to {what}")));
+        }
+    }
+    Ok((problems, compared))
+}
+
 pub fn served(
     dir: &Path,
     folders: &[PathBuf],
@@ -392,8 +541,10 @@ pub fn served(
         };
         let map_text = fs::read_to_string(pkg.dir.join(&e.asset_map))
             .with_context(|| format!("{}: reading its asset map", e.id))?;
-        let map = AssetMap::parse(&map_text)?;
-        let (lifted, _) = gp_assets::lift(&rom.bytes, &map, &map_text)?;
+        // An NES image's map or an arcade romset's, lifted as gp assets
+        // lift lifts it.
+        let (lifted, _) = crate::assets::lift_files(&rom.bytes, &map_text)
+            .with_context(|| format!("{}: lifting with its asset map", e.id))?;
         let mut original = Original {
             id: e.id.clone(),
             lifted: lifted.len(),
@@ -436,6 +587,30 @@ pub fn served(
             text,
             "NOT COMPARED with {}: no ROM with its hash under $GP_ROM_DIR, so nothing here says these files are free of its data",
             missing.join(", ")
+        );
+    }
+    // A game that plays from its own pictures names no ROM to compare
+    // with, so it is compared with every ROM here instead.
+    let own = pkg.entries.is_empty() && claims_own_pictures(dir, &pkg, &files);
+    if own {
+        let (builds, source) = own_builds(dir);
+        let (found, compared) = own_pictures(
+            &files,
+            (&builds, source.as_deref()),
+            &paths.roms,
+            &paths.home,
+        )?;
+        problems.extend(found);
+        let _ = writeln!(
+            text,
+            "plays from its own pictures: {} files, {bytes_total} bytes, against every ROM in $GP_ROM_DIR but its own build{} and every lifted folder but its own: {}",
+            files.len(),
+            if builds.is_empty() { "s (none)" } else { "" },
+            if compared.is_empty() {
+                "nothing here to compare with".to_owned()
+            } else {
+                compared.join(", ")
+            }
         );
     }
     let mut out = String::new();

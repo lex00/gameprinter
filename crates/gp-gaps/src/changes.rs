@@ -404,7 +404,9 @@ pub fn detect(run: &Run) -> Report {
         })
         .collect();
     let oam_lo = u16::from(k.oam_page) << 8;
-    let skip = |a: u16| (0x100..0x200).contains(&a) || (oam_lo..oam_lo + 0x100).contains(&a);
+    // An address of the RAM the facts cover (from Run::ram_base) that is
+    // the stack or the sprite page.
+    let skip = |a: u16| a & !0x7FF == run.ram_base && k.left_out(a & 0x7FF);
     let mut changed_before = vec![false; 0x800];
     for (i, f) in run.frames.iter().enumerate() {
         if f.play && pad_changed[i] {

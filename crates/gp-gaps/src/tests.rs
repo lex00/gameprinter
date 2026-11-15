@@ -160,6 +160,40 @@ fn sound_run() -> Run {
     r
 }
 
+/// A made-up arcade run's latch writes: a frame of 0x55 to all four
+/// latches (a test), latch 1 asked 5, 9, 9 and 12, latch 3 always 0.
+/// Latch 1 is the interface, its four writes the requests; the test frame
+/// and the latch with one value are left out.
+#[test]
+fn a_sound_board_s_latch_is_the_way_an_arcade_game_asks() {
+    let mut r = run(40);
+    let w = |at: usize, latch: u8, value: u8| LatchWrite {
+        at,
+        latch,
+        port: 0x1c + latch,
+        value,
+        pc: 0x300 + u32::from(latch),
+        routine: 0x300,
+    };
+    r.latch = (0..4).map(|l| w(2, l, 0x55)).collect();
+    for (at, id) in [(10, 5), (20, 9), (25, 9), (30, 12)] {
+        r.latch.push(w(at, 1, id));
+        r.latch.push(w(at, 3, 0));
+    }
+    let (ifaces, reqs) = sound::detect(&r);
+    assert_eq!(ifaces.len(), 1, "{ifaces:?}");
+    assert_eq!(ifaces[0].kind, "latch");
+    assert_eq!(ifaces[0].addr, Some(0x1d));
+    assert!(
+        ifaces[0].why.contains("1 frames writing one value"),
+        "{}",
+        ifaces[0].why
+    );
+    let got: Vec<(u64, u8)> = reqs.iter().map(|q| (q.frame, q.id)).collect();
+    assert_eq!(got, vec![(10, 5), (20, 9), (25, 9), (30, 12)]);
+    assert!(sound::detect(&run(40)).0.is_empty());
+}
+
 #[test]
 fn a_sound_queue_is_found_and_its_requests_named() {
     let r = sound_run();
@@ -836,4 +870,55 @@ fn screens_where_the_player_code_doesnt_run_are_not_play() {
     let out = r.refine_play(&[0x86]);
     assert_eq!(r.play_frames(), 630, "took {out}");
     assert!(!r.frames[700].play && r.frames[100].play);
+}
+
+/// An arcade run (work RAM from E000, the sprites in RAM of their own):
+/// its stack, where the stack pointer ran, is left out, and its pages 1
+/// and 2, which the NES's stack and sprite page would be, are reported.
+#[test]
+fn an_arcade_run_leaves_out_its_own_stack() {
+    let mut r = run(20);
+    r.ram_base = 0xe000;
+    r.known.oam_page = 0;
+    r.known.stack = Stack::of_sp(0xe000, [0xe7f8, 0xe800, 0xe7e2, 0x1234]);
+    assert_eq!(r.known.stack, Stack(0x7e2..0x800));
+    for f in &mut r.frames {
+        f.ram_changed = vec![0xe130, 0xe230, 0xe7f0];
+    }
+    let rep = changes::detect(&r);
+    let addrs: Vec<u16> = rep.ram.iter().flat_map(|i| i.addrs.clone()).collect();
+    assert_eq!(addrs, vec![0xe130, 0xe230], "{:?}", rep.ram);
+    // No pointer in the 2 KB: no stack.
+    assert_eq!(Stack::of_sp(0xe000, [0x0100]), Stack(0..0));
+}
+
+/// AY-8910 writes, as an arcade recording gives them (chip x 256 +
+/// register): an amplitude heard starts a note on its channel, silence
+/// doesn't, and an envelope shape write restarts the envelope.
+#[test]
+fn ay_writes_start_notes_on_their_channels() {
+    assert_eq!(trigger(0x0008, 0x0f), Some("ay0.a"));
+    assert_eq!(trigger(0x010a, 0x10), Some("ay1.c"));
+    assert_eq!(trigger(0x0009, 0x00), None);
+    assert_eq!(trigger(0x000d, 0x00), Some("ay0.envelope"));
+    assert_eq!(trigger(0x0007, 0x38), None);
+    assert_eq!(channel(0x0103), "ay1.b");
+    assert_eq!(channel(0x0007), "control");
+    // The NES's stay as they were.
+    assert_eq!(trigger(0x4003, 0x08), Some("pulse1"));
+    assert_eq!(channel(0x4015), "control");
+    let mut r = run(60);
+    for (i, f) in r.frames.iter_mut().enumerate() {
+        f.apu.push((0x0000, 0x40));
+        if i % 10 == 0 {
+            f.apu.push((0x0008, 0x0c));
+        }
+    }
+    let rep = changes::detect(&r);
+    let a = rep
+        .apu
+        .iter()
+        .find(|s| s.channel == "ay0.a")
+        .expect("ay0.a");
+    assert_eq!((a.writes, a.triggers), (66, 6));
 }

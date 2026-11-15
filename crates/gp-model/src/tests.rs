@@ -242,6 +242,80 @@ fn type_errors_are_refused_at_parse() {
     assert!(has(&p, "above zero"), "{p:?}");
 }
 
+/// Board art (docs/formats/board-art.md): its slots must be of their
+/// kinds, a byte is a word's or a number, and a screen needs tiles.
+#[test]
+fn board_art_is_checked() {
+    let slots = "[assets.sprites]\nkind = \"board-sprites\"\nrole = \"graphics\"\n\n\
+                 [assets.colors]\nkind = \"board-palette\"\nrole = \"palettes\"\n\n\
+                 [assets.stage]\nkind = \"board-screen\"\nrole = \"layout\"\n\n\
+                 [assets.pokes]\nkind = \"rows\"\nrole = \"palettes\"\n\n\
+                 [assets.blocks]";
+    let board = |sprite: &str, look: &str| {
+        edit("[assets.blocks]", slots)
+            .replace(
+                "[entities.hero.run]",
+                &format!("[entities.hero.board_sprite]\n{sprite}\n\n[entities.hero.run]"),
+            )
+            .replace(
+                "[[levels.one.spawn]]\nentity = \"hero\"",
+                &format!(
+                    "[levels.one.present.board]\n{look}\n\n[[levels.one.spawn]]\nentity = \"hero\""
+                ),
+            )
+    };
+    let good = board(
+        "slot = \"sprites\"\npicture = { word = 1, byte = 1 }\nflags = { number = 3 }",
+        "palette = \"colors\"\n\n[[levels.one.present.board.palette_writes]]\nat = 0x60\nslot = \"pokes\"",
+    );
+    let p = problems(&good);
+    assert!(!p.iter().any(|x| x.contains("board")), "{p:?}");
+    let m = Model::parse(&good).unwrap();
+    assert!(m.features_used().contains("sprite.board"));
+    assert!(m.features_used().contains("level.board"));
+    assert!(m.features_used().contains("asset.board"));
+    for (sprite, look, want) in [
+        (
+            "slot = \"tiles\"\npicture = { number = 1 }",
+            "palette = \"colors\"",
+            "entities.hero.board_sprite.slot",
+        ),
+        (
+            "slot = \"sprites\"\npicture = { word = 1, number = 1 }",
+            "palette = \"colors\"",
+            "entities.hero.board_sprite.picture",
+        ),
+        (
+            "slot = \"sprites\"\npicture = { word = 4 }",
+            "palette = \"colors\"",
+            "entities.hero.board_sprite.picture",
+        ),
+        (
+            "slot = \"sprites\"\npicture = { number = 1 }\nflags = { number = 256 }",
+            "palette = \"colors\"",
+            "entities.hero.board_sprite.flags",
+        ),
+        (
+            "slot = \"sprites\"\npicture = { number = 1 }",
+            "palette = \"stage\"",
+            "levels.one.present.board.palette",
+        ),
+        (
+            "slot = \"sprites\"\npicture = { number = 1 }",
+            "palette = \"colors\"\nscreen = \"stage\"",
+            "levels.one.present.board.screen",
+        ),
+        (
+            "slot = \"sprites\"\npicture = { number = 1 }",
+            "palette = \"colors\"\n\n[[levels.one.present.board.palette_writes]]\nat = 128\nslot = \"pokes\"",
+            "levels.one.present.board.palette_writes[0].at",
+        ),
+    ] {
+        let p = problems(&board(sprite, look));
+        assert!(has(&p, want), "{want}: {p:?}");
+    }
+}
+
 #[test]
 fn validation_finds_broken_references() {
     let cases = [

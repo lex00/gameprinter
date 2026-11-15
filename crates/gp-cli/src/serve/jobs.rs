@@ -21,7 +21,7 @@
 //!
 //! | File | What |
 //! |---|---|
-//! | `$GP_HOME/work/serve/GAME/jobs/WHICH.json` | `{action, command, state, started_ms, ended_ms?, exit?, json?, error?, ask_id?}` |
+//! | `$GP_HOME/work/serve/GAME/jobs/WHICH.json` | `{action, command, state, started_ms, ended_ms?, exit?, json?, error?, detail?, ask_id?}`; `error` is shown to the person, and `detail` keeps gp_run's own words when they name commands |
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -117,7 +117,7 @@ pub(crate) fn read(run: &Run, action: &'static str) -> Value {
 }
 
 /// The agent's MCP config for this server: the same gp, home and games.
-fn config(ctx: &Ctx) -> Result<gp_mcp::Config, Fail> {
+pub(crate) fn config(ctx: &Ctx) -> Result<gp_mcp::Config, Fail> {
     let work = ctx.paths.home.join("work").join("mcp");
     std::fs::create_dir_all(&work)?;
     Ok(gp_mcp::Config {
@@ -137,6 +137,14 @@ pub(crate) fn ended(reply: &gp_mcp::Reply) -> Value {
     if let Some(id) = j["ask_id"].as_str() {
         return json!({"state": "waits", "ask_id": id,
             "error": j["refused"].as_str().unwrap_or("it waits for your yes")});
+    }
+    // The page shows `error` to the person; gp_run's own words, for an
+    // agent, name commands, so a refusal for want of Laya is said plainly
+    // and its words kept as `detail`.
+    if j["needs"] == "laya" {
+        return json!({"state": "failed",
+            "error": "Laya, the helper that picks the moves, isn't running on this computer",
+            "detail": j["refused"]});
     }
     if let Some(why) = j["refused"].as_str().or(j["error"].as_str()) {
         return json!({"state": "failed", "error": why});
@@ -281,5 +289,13 @@ mod tests {
         assert_eq!(waits["state"], "waits");
         let refused = ended(&reply(json!({"refused": "Laya isn't answering"})));
         assert_eq!(refused["state"], "failed");
+        // gp_run's refusal for want of Laya names gp commands; the person
+        // is told in plain words, and the agent's words are kept.
+        let laya = ended(&reply(json!({"needs": "laya",
+            "refused": "gp mechanic triage asks Laya ... Ask the person to start gp serve, then call again."})));
+        assert_eq!(laya["state"], "failed");
+        let said = laya["error"].as_str().unwrap();
+        assert!(said.contains("Laya") && !said.contains("gp "), "{said}");
+        assert!(laya["detail"].as_str().unwrap().contains("gp serve"));
     }
 }

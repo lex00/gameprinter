@@ -1,0 +1,100 @@
+/* The first screen and a copy's journey (start.js, journey.js), on the
+   page's own look (style.css): black, monospace, the NES colours, square
+   boxes. Everything wraps; nothing is wider than the window from 360 px. */
+body.start main { display: block; max-width: 1100px; margin: 0 auto; padding: 12px 16px 40px; }
+body.start #logo { text-decoration: none; }
+a#logo { cursor: pointer; }
+body.start h2 { font-size: 14px; color: var(--nes-28); margin: 18px 0 8px; }
+body.start h3 { font-size: 13px; color: var(--nes-28); margin: 12px 0 6px; }
+body.start p { margin: 0 0 8px; overflow-wrap: anywhere; }
+body.start .muted { color: var(--muted); }
+body.start a { color: var(--fg); }
+body.start q { color: var(--nes-28); quotes: '"' '"'; }
+#intro { max-width: 76ch; }
+#first ul, #journey ul { padding-left: 20px; }
+
+/* The three choices. */
+#start-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 10px; }
+#start-choices button { display: flex; flex-direction: column; gap: 6px; text-align: left; font: 13px/1.4 var(--mono); background: var(--nes-0f); color: var(--fg); border: 2px solid var(--line); box-shadow: 4px 4px 0 var(--nes-2d); padding: 10px 12px; cursor: pointer; min-width: 0; }
+#start-choices button b { font-size: 15px; letter-spacing: 0.06em; color: var(--nes-28); }
+#start-choices button span { color: var(--muted); overflow-wrap: anywhere; }
+#start-choices button.on { border-color: var(--nes-28); background: var(--panel); }
+
+.jr-box { margin-top: 14px; background: var(--panel); border: 2px solid var(--line); box-shadow: 4px 4px 0 var(--nes-2d); padding: 8px 12px 12px; min-width: 0; }
+.jr-box[hidden], #carry[hidden], #journey[hidden], #port-have[hidden] { display: none; }
+.jr-box > h2:first-child { margin-top: 4px; }
+
+/* Buttons and fields, as the rest of the page has them. */
+body.start button.jr-btn, body.start a.jr-btn { display: inline-block; font: bold 13px var(--mono); letter-spacing: 0.04em; background: var(--nes-0f); color: var(--fg); border: 2px solid var(--line); padding: 4px 12px; cursor: pointer; text-decoration: none; margin: 4px 8px 4px 0; }
+body.start .jr-btn.go { border-color: var(--nes-2a); }
+body.start .jr-btn:disabled { opacity: 0.5; cursor: default; }
+.jr-field { display: flex; flex-direction: column; gap: 4px; margin: 0 0 10px; max-width: 60ch; }
+.jr-field span { color: var(--muted); font-size: 13px; }
+.jr-field input, .jr-field select, .jr-field textarea { font: 14px var(--mono); background: var(--nes-0f); color: var(--fg); border: 2px solid var(--nes-00); padding: 4px 6px; min-width: 0; max-width: 100%; }
+.jr-field textarea { min-height: 3.2em; resize: vertical; }
+.jr-templates { display: flex; flex-direction: column; gap: 4px; margin: 0 0 10px; }
+.jr-template { display: block; overflow-wrap: anywhere; }
+.jr-err { color: var(--nes-26); }
+.jr-err:empty { display: none; }
+.jr-ok { color: var(--nes-2a); }
+
+/* Whose turn: you in yellow, your agent in blue, the tools in green. */
+.jr-who { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; padding: 0 6px; border: 2px solid; white-space: nowrap; }
+.who-person { color: var(--nes-28); border-color: var(--nes-28); }
+.who-agent { color: var(--nes-21); border-color: var(--nes-21); }
+.who-tools { color: var(--nes-2a); border-color: var(--nes-2a); }
+
+/* A journey's steps. */
+ol.jr-steps { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+ol.jr-steps > li { border: 2px solid var(--nes-2d); min-width: 0; }
+ol.jr-steps > li[data-state="now"] { border-color: var(--nes-28); }
+ol.jr-steps > li[data-state="done"] .jr-name { color: var(--muted); }
+.jr-step-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; width: 100%; text-align: left; font: 14px var(--mono); background: transparent; color: var(--fg); border: 0; padding: 6px 10px; cursor: pointer; }
+.jr-n { color: var(--nes-28); font-weight: 700; }
+.jr-name { font-weight: 700; flex: 1 1 18ch; min-width: 0; overflow-wrap: anywhere; }
+.jr-state { font-size: 11px; letter-spacing: 0.06em; color: var(--muted); }
+li[data-state="now"] .jr-state { color: var(--nes-0f); background: var(--nes-28); padding: 0 6px; }
+.jr-body { padding: 4px 12px 10px; border-top: 1px solid var(--nes-2d); font-size: 14px; min-width: 0; overflow-wrap: anywhere; }
+.jr-body[hidden] { display: none; }
+ol.jr-preview { margin: 6px 0 12px; padding-left: 0; list-style: none; }
+ol.jr-preview li { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; padding: 2px 0; }
+
+/* The status line of a copy: where it stands and the next step. */
+.jr-line { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; font-size: 13px; margin: 8px 0; padding: 6px 10px; border: 2px solid var(--nes-2d); }
+.jr-line .nx-stands { color: var(--muted); flex: 1 1 26ch; min-width: 0; overflow-wrap: anywhere; }
+.jr-line .nx-next { flex: 1 1 34ch; min-width: 0; overflow-wrap: anywhere; }
+.jr-line .nx-who { color: var(--nes-21); font-weight: 700; }
+.jr-line .nx-run { color: var(--nes-28); flex-basis: 100%; overflow-wrap: anywhere; }
+#journey #asks { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+#journey #asks:empty { display: none; }
+
+/* What the look check found. */
+ul.jr-findings { list-style: none; padding: 0; margin: 6px 0; font-size: 13px; }
+ul.jr-findings li { padding: 2px 0; border-top: 1px solid var(--nes-2d); overflow-wrap: anywhere; }
+ul.jr-findings .lv { font-weight: 700; margin-right: 6px; }
+ul.jr-findings .lv-problem { color: var(--nes-26); }
+ul.jr-findings .lv-warning { color: var(--nes-27); }
+pre.jr-said, textarea.jr-request { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.4 var(--mono); background: var(--nes-0f); color: var(--fg); border: 2px solid var(--nes-2d); padding: 6px 8px; margin: 6px 0; max-width: 100%; }
+textarea.jr-request { width: 100%; min-height: 9em; }
+.jr-pics { display: flex; flex-wrap: wrap; gap: 8px; }
+.jr-pics figure { margin: 0; max-width: 100%; }
+.jr-pics img, img.jr-stage { display: block; max-width: 100%; height: auto; image-rendering: pixelated; border: 2px solid var(--nes-2d); }
+img.jr-stage { max-width: min(100%, 768px); }
+.jr-pics figcaption { font-size: 11px; color: var(--muted); }
+.jr-link { overflow-wrap: anywhere; }
+
+/* Carry on: each copy and each game being ported. */
+#carry ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+#carry ul:empty { display: none; }
+#carry li { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; border: 2px solid var(--nes-2d); padding: 6px 10px; min-width: 0; }
+#carry li .cp-name { font-weight: 700; }
+#carry li .cp-from { color: var(--muted); flex: 1 1 20ch; min-width: 0; overflow-wrap: anywhere; }
+#carry li .cp-at { flex: 1 1 100%; font-size: 13px; overflow-wrap: anywhere; }
+#carry li .cp-when { flex: 1 1 auto; color: var(--muted); font-size: 12px; }
+#carry li button { margin: 2px 0; }
+#games li a { font-weight: 700; }
+
+@media (max-width: 560px) {
+  body.start button.jr-btn, body.start a.jr-btn { padding: 6px 14px; }
+  .jr-line .nx-next { flex-basis: 100%; }
+}

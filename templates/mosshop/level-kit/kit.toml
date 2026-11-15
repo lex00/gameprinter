@@ -38,6 +38,11 @@ y = 176
 coin = 1
 coin_block = 1
 
+[[levels.regions]]
+name = "start"
+box = [0, 160, 64, 32]
+what = "Where the hero starts: the two rows of cells over the first four cells of the moss row, so a body standing there has its feet inside. A theme may draw a calmer pose there"
+
 [hero]
 fall = "at most 4 px a frame"
 jump = "up at 5 px a frame, gravity 0.25 px a frame each frame: about 50 px high and 40 frames in the air on flat ground (v*v/2g and 2v/g)"

@@ -1,6 +1,6 @@
 //! Large-art looks: a look whose pictures are drawn bigger than the game's
 //! own, at the place and size of the picture each stands for, with a few
-//! drawing rules (docs/formats/theme.md, "Large art"). The game never sees
+//! drawing rules (docs/formats/theme.md, "Large-art rules"). The game never sees
 //! any of it: bodies keep their places and boxes, and only how each is
 //! drawn changes.
 //!
@@ -43,6 +43,24 @@
 //!   of a rise): on `LEVEL`, the arts rise `RISE` pixels from `Y` at each
 //!   `X`, one rise every `EVERY` frames, fading in and out, swaying.
 //!
+//! Lines added since `gp-art 1` began start with `#+`, which a reader from
+//! before them takes for a note: a page built before a line draws the look
+//! without it rather than refusing the look. A `#+` line this reader can't
+//! read is passed over the same way ([`ArtRules::skipped`]).
+//!
+//! - `#+ hud_over [ROW...]`: the HUD's layer and the text in its background
+//!   are drawn after the bodies (after their ghosts, before the dimmed wall
+//!   and the props), in those rows of 8 pixels from the screen's top, or
+//!   all of them with no row named. Without it they are drawn under the
+//!   bodies, as before. The HUD's sprites are drawn last either way.
+//! - `#+ in REGION pic ...` and `#+ in REGION timed ...`: a `pic` or
+//!   `timed` rule that holds only while the body's picture has the middle
+//!   of its bottom row in the named region of the stage. In a region, its
+//!   `in` rules come first (its timed ones that hold, then its picture);
+//!   elsewhere the picture's other rules, as before. The regions are named
+//!   in the game's kit and given with [`Art::set_regions`]; until then no
+//!   `in` rule holds.
+//!
 //! A [`Painter`] steps once after each game frame, keeping what the rules
 //! need from frame to frame. [`Painter::frame`] turns a framed scene into
 //! an [`ArtFrame`]: every picture to paint, in order, placed in the window.
@@ -57,6 +75,11 @@ use stage::{Stage, StageRules, StageSrc};
 
 /// The rules file's first line.
 pub const ART_HEADER: &str = "gp-art 1";
+
+/// What starts a line an older reader passes over as a note (`#+
+/// hud_over`, `#+ in REGION pic ...`): a rule added since, which a page
+/// built before it draws without.
+pub const ADDED: &str = "#+";
 
 /// Parts of a game pixel in an [`ArtDraw`]'s place and size.
 pub const ART_SUB: i64 = 16;
@@ -144,6 +167,19 @@ pub struct ArtRules {
     pub drift: Option<Drift>,
     /// The stages built from pieces (`stage`), or None.
     pub stage: Option<StageRules>,
+    /// `#+ hud_over [ROW...]`: the HUD's layer and the text in its
+    /// background drawn after the bodies, in those rows of 8 pixels from
+    /// the screen's top (all of them with none named). None, the default,
+    /// draws them under the bodies.
+    pub hud_over: Option<Vec<i64>>,
+    /// `#+ in REGION pic ...`: a picture drawn only while the body is in a
+    /// named region of the stage.
+    pub region_pics: Vec<(String, ArtPic)>,
+    /// `#+ in REGION timed ...`, likewise.
+    pub region_timed: Vec<(String, Timed)>,
+    /// The `#+` lines this reader can't read, by line number, passed over
+    /// as an older reader passes over every `#+` line.
+    pub skipped: Vec<(usize, String)>,
 }
 
 impl Default for ArtRules {
@@ -161,12 +197,25 @@ impl Default for ArtRules {
             props: Vec::new(),
             drift: None,
             stage: None,
+            hud_over: None,
+            region_pics: Vec::new(),
+            region_timed: Vec::new(),
+            skipped: Vec::new(),
         }
     }
 }
 
 fn inside(f: &str) -> bool {
     !f.is_empty() && !f.starts_with('/') && !f.split('/').any(|p| p == "..")
+}
+
+/// A region's name as an `in` line gives it: lowercase letters, digits,
+/// `-` and `_`.
+#[must_use]
+pub fn region_name(n: &str) -> bool {
+    !n.is_empty()
+        && n.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
 }
 
 fn names(v: &[&str]) -> Vec<String> {
@@ -182,126 +231,245 @@ impl ArtRules {
         let mut r = ArtRules::default();
         for (n, line) in lines.enumerate() {
             let line = line.trim();
-            let bad = || format!("art rules line {}: `{line}`", n + 2);
-            let int = |s: &str| s.parse::<i64>().map_err(|_| bad());
-            let count = |s: &str| s.parse::<u64>().map_err(|_| bad());
-            let art = |a: &str, w: &str, h: &str, dx: &str, dy: &str| -> Result<Sized, String> {
-                let size = [int(w)?, int(h)?];
-                if size[0] <= 0 || size[1] <= 0 || !inside(a) {
-                    return Err(bad());
+            // A line an older reader passes over as a note: one this reader
+            // can't read is passed over too, so the look still draws.
+            if let Some(rest) = line.strip_prefix(ADDED) {
+                let w: Vec<&str> = rest.split_whitespace().collect();
+                if r.added(&w).is_err() {
+                    r.skipped.push((n + 2, line.to_owned()));
                 }
-                Ok(Sized {
-                    art: a.to_owned(),
-                    size,
-                    offset: [int(dx)?, int(dy)?],
-                })
-            };
+                continue;
+            }
             let w: Vec<&str> = line.split_whitespace().collect();
-            match w.as_slice() {
-                [] => {}
-                [c, ..] if c.starts_with('#') => {}
-                ["scale", s] => {
-                    r.scale = s
-                        .parse()
-                        .ok()
-                        .filter(|s| (1..=16).contains(s))
-                        .ok_or_else(bad)?;
+            r.rule(&w)
+                .map_err(|()| format!("art rules line {}: `{line}`", n + 2))?;
+        }
+        Ok(r)
+    }
+
+    /// A `#+` line's words: `hud_over [ROW...]`, or `in REGION` and a `pic`
+    /// or `timed` line.
+    fn added(&mut self, w: &[&str]) -> Result<(), ()> {
+        match w {
+            ["hud_over"] => self.hud_over = Some(Vec::new()),
+            ["hud_over", rows @ ..] => {
+                let mut v = Vec::new();
+                for x in rows {
+                    v.push(
+                        x.parse::<i64>()
+                            .ok()
+                            .filter(|r| (0..64).contains(r))
+                            .ok_or(())?,
+                    );
                 }
-                ["limit", "on"] => r.limit = true,
-                ["limit", "off"] => r.limit = false,
-                ["pic", b, a, ww, h, dx, dy] => r.pics.push(ArtPic {
+                match &mut self.hud_over {
+                    Some(all) if all.is_empty() => {}
+                    Some(had) => had.extend(v),
+                    None => self.hud_over = Some(v),
+                }
+                if let Some(rows) = &mut self.hud_over {
+                    rows.sort_unstable();
+                    rows.dedup();
+                }
+            }
+            ["in", region, rest @ ..] if region_name(region) => {
+                let mut one = ArtRules::default();
+                match rest.first() {
+                    Some(&"pic") => {
+                        one.rule(rest)?;
+                        let p = one.pics.pop().ok_or(())?;
+                        self.region_pics.push(((*region).to_owned(), p));
+                    }
+                    Some(&"timed") => {
+                        one.rule(rest)?;
+                        let t = one.timed.pop().ok_or(())?;
+                        self.region_timed.push(((*region).to_owned(), t));
+                    }
+                    _ => return Err(()),
+                }
+            }
+            _ => return Err(()),
+        }
+        Ok(())
+    }
+
+    /// One line's words, read into the rules.
+    fn rule(&mut self, w: &[&str]) -> Result<(), ()> {
+        let r = self;
+        let int = |s: &str| s.parse::<i64>().map_err(|_| ());
+        let count = |s: &str| s.parse::<u64>().map_err(|_| ());
+        let art = |a: &str, w: &str, h: &str, dx: &str, dy: &str| -> Result<Sized, ()> {
+            let size = [int(w)?, int(h)?];
+            if size[0] <= 0 || size[1] <= 0 || !inside(a) {
+                return Err(());
+            }
+            Ok(Sized {
+                art: a.to_owned(),
+                size,
+                offset: [int(dx)?, int(dy)?],
+            })
+        };
+        match w {
+            [] => {}
+            [c, ..] if c.starts_with('#') => {}
+            ["scale", s] => {
+                r.scale = s.parse().ok().filter(|s| (1..=16).contains(s)).ok_or(())?;
+            }
+            ["limit", "on"] => r.limit = true,
+            ["limit", "off"] => r.limit = false,
+            ["pic", b, a, ww, h, dx, dy] => r.pics.push(ArtPic {
+                build: (*b).to_owned(),
+                art: art(a, ww, h, dx, dy)?,
+            }),
+            ["timed", b, from, to, a, ww, h, dx, dy, rest @ ..] => {
+                let mut t = Timed {
                     build: (*b).to_owned(),
+                    from: count(from)?,
+                    to: count(to)?,
                     art: art(a, ww, h, dx, dy)?,
-                }),
-                ["timed", b, from, to, a, ww, h, dx, dy, rest @ ..] => {
-                    let mut t = Timed {
-                        build: (*b).to_owned(),
-                        from: count(from)?,
-                        to: count(to)?,
-                        art: art(a, ww, h, dx, dy)?,
-                        every: 0,
-                        after: None,
-                        wait: 0,
-                        hide: false,
-                    };
-                    for x in rest {
-                        match x.split_once('=') {
-                            Some(("every", v)) => t.every = count(v)?,
-                            Some(("after", v)) => t.after = Some(v.to_owned()),
-                            Some(("wait", v)) => t.wait = count(v)?,
-                            None if *x == "hide" => t.hide = true,
-                            _ => return Err(bad()),
-                        }
+                    every: 0,
+                    after: None,
+                    wait: 0,
+                    hide: false,
+                };
+                for x in rest {
+                    match x.split_once('=') {
+                        Some(("every", v)) => t.every = count(v)?,
+                        Some(("after", v)) => t.after = Some(v.to_owned()),
+                        Some(("wait", v)) => t.wait = count(v)?,
+                        None if *x == "hide" => t.hide = true,
+                        _ => return Err(()),
                     }
-                    r.timed.push(t);
                 }
-                ["held", b @ ..] => r.held.extend(names(b)),
-                ["face", b @ ..] => r.face.extend(names(b)),
-                ["face_turn", v] => r.face_turn = int(v)?.max(1),
-                ["near", a, ww, h, dx, dy] => {
-                    r.near = Some(Near {
-                        art: art(a, ww, h, dx, dy)?,
-                        when: Vec::new(),
-                        other: Vec::new(),
-                    });
+                r.timed.push(t);
+            }
+            ["held", b @ ..] => r.held.extend(names(b)),
+            ["face", b @ ..] => r.face.extend(names(b)),
+            ["face_turn", v] => r.face_turn = int(v)?.max(1),
+            ["near", a, ww, h, dx, dy] => {
+                r.near = Some(Near {
+                    art: art(a, ww, h, dx, dy)?,
+                    when: Vec::new(),
+                    other: Vec::new(),
+                });
+            }
+            ["near_when", b @ ..] => r.near.as_mut().ok_or(())?.when.extend(names(b)),
+            ["near_other", b @ ..] => r.near.as_mut().ok_or(())?.other.extend(names(b)),
+            ["elsewhere", level, dx, dy, b @ ..] => r.elsewhere.push(Elsewhere {
+                level: (*level).to_owned(),
+                offset: [int(dx)?, int(dy)?],
+                builds: names(b),
+            }),
+            ["prop", level, a, x, y, ww, h] => {
+                if !inside(a) {
+                    return Err(());
                 }
-                ["near_when", b @ ..] => r.near.as_mut().ok_or_else(bad)?.when.extend(names(b)),
-                ["near_other", b @ ..] => r.near.as_mut().ok_or_else(bad)?.other.extend(names(b)),
-                ["elsewhere", level, dx, dy, b @ ..] => r.elsewhere.push(Elsewhere {
+                r.props.push(Prop {
                     level: (*level).to_owned(),
-                    offset: [int(dx)?, int(dy)?],
-                    builds: names(b),
-                }),
-                ["prop", level, a, x, y, ww, h] => {
-                    if !inside(a) {
-                        return Err(bad());
-                    }
-                    r.props.push(Prop {
-                        level: (*level).to_owned(),
-                        art: (*a).to_owned(),
-                        rect: [int(x)?, int(y)?, int(ww)?, int(h)?],
-                        over: Vec::new(),
-                        burst: Vec::new(),
-                    });
+                    art: (*a).to_owned(),
+                    rect: [int(x)?, int(y)?, int(ww)?, int(h)?],
+                    over: Vec::new(),
+                    burst: Vec::new(),
+                });
+            }
+            ["prop_over", b @ ..] => r.props.last_mut().ok_or(())?.over.extend(names(b)),
+            ["prop_burst", b @ ..] => r.props.last_mut().ok_or(())?.burst.extend(names(b)),
+            ["drift", level, y, rise, every] => {
+                r.drift = Some(Drift {
+                    level: (*level).to_owned(),
+                    y: int(y)?,
+                    rise: int(rise)?,
+                    every: count(every)?.max(1),
+                    arts: Vec::new(),
+                    at: Vec::new(),
+                });
+            }
+            ["drift_art", a, ww, h] => {
+                if !inside(a) {
+                    return Err(());
                 }
-                ["prop_over", b @ ..] => r.props.last_mut().ok_or_else(bad)?.over.extend(names(b)),
-                ["prop_burst", b @ ..] => {
-                    r.props.last_mut().ok_or_else(bad)?.burst.extend(names(b))
-                }
-                ["drift", level, y, rise, every] => {
-                    r.drift = Some(Drift {
-                        level: (*level).to_owned(),
-                        y: int(y)?,
-                        rise: int(rise)?,
-                        every: count(every)?.max(1),
-                        arts: Vec::new(),
-                        at: Vec::new(),
-                    });
-                }
-                ["drift_art", a, ww, h] => {
-                    if !inside(a) {
-                        return Err(bad());
-                    }
-                    r.drift
-                        .as_mut()
-                        .ok_or_else(bad)?
-                        .arts
-                        .push(((*a).to_owned(), [int(ww)?, int(h)?]));
-                }
-                ["drift_at", x, phase] => r
-                    .drift
+                r.drift
                     .as_mut()
-                    .ok_or_else(bad)?
-                    .at
-                    .push((int(x)?, int(phase)?)),
-                w => {
-                    if !StageRules::line(&mut r.stage, w).map_err(|()| bad())? {
-                        return Err(bad());
-                    }
+                    .ok_or(())?
+                    .arts
+                    .push(((*a).to_owned(), [int(ww)?, int(h)?]));
+            }
+            ["drift_at", x, phase] => r.drift.as_mut().ok_or(())?.at.push((int(x)?, int(phase)?)),
+            w => {
+                if !StageRules::line(&mut r.stage, w)? {
+                    return Err(());
                 }
             }
         }
-        Ok(r)
+        Ok(())
+    }
+
+    /// The regions the `in` lines name, each once, in the order given.
+    #[must_use]
+    pub fn regions(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = Vec::new();
+        let names = self.region_pics.iter().map(|(r, _)| r.as_str());
+        for r in names.chain(self.region_timed.iter().map(|(r, _)| r.as_str())) {
+            if !out.contains(&r) {
+                out.push(r);
+            }
+        }
+        out
+    }
+
+    /// Every name of a game's picture or level the rules give, each once,
+    /// in the order the rules give them: what [`Art::new`] looks up in the
+    /// build's pictures.
+    #[must_use]
+    pub fn game_names(&self) -> Vec<&str> {
+        let mut named: Vec<&str> = Vec::new();
+        named.extend(self.pics.iter().map(|p| p.build.as_str()));
+        named.extend(self.region_pics.iter().map(|(_, p)| p.build.as_str()));
+        for t in self
+            .timed
+            .iter()
+            .chain(self.region_timed.iter().map(|(_, t)| t))
+        {
+            named.push(&t.build);
+            if let Some(a) = &t.after {
+                named.push(a);
+            }
+        }
+        named.extend(self.held.iter().map(String::as_str));
+        named.extend(self.face.iter().map(String::as_str));
+        if let Some(n) = &self.near {
+            named.extend(n.when.iter().map(String::as_str));
+            named.extend(n.other.iter().map(String::as_str));
+        }
+        for e in &self.elsewhere {
+            named.push(&e.level);
+            named.extend(e.builds.iter().map(String::as_str));
+        }
+        for p in &self.props {
+            named.push(&p.level);
+            named.extend(p.over.iter().map(String::as_str));
+            named.extend(p.burst.iter().map(String::as_str));
+        }
+        if let Some(d) = &self.drift {
+            named.push(&d.level);
+        }
+        if let Some(st) = &self.stage {
+            named.extend(st.levels.iter().map(|l| l.level.as_str()));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        named.retain(|n| seen.insert(*n));
+        named
+    }
+
+    /// The names the rules give that a build whose pictures are `pictures`
+    /// hasn't got: [`Art::new`] passes over each rule naming one, and the
+    /// look is drawn without it.
+    #[must_use]
+    pub fn passed_over<'a>(&'a self, pictures: &[&str]) -> Vec<&'a str> {
+        self.game_names()
+            .into_iter()
+            .filter(|n| !pictures.contains(n))
+            .collect()
     }
 
     /// The art files, each once, in the order [`Src::Art`] numbers them.
@@ -325,6 +493,9 @@ impl ArtRules {
         if let Some(st) = &self.stage {
             st.pieces.iter().for_each(|(_, a, _)| add(a));
         }
+        // Last, so a look without them numbers its files as before.
+        self.region_pics.iter().for_each(|(_, p)| add(&p.art.art));
+        self.region_timed.iter().for_each(|(_, t)| add(&t.art.art));
         out
     }
 }
@@ -357,6 +528,30 @@ struct PropAt {
     burst: Vec<u32>,
 }
 
+/// A region of a stage a `#+ in` line names: its level, by the level
+/// picture's file name, and its box in the level's pixels. The game's kit
+/// names it; the runtime gets it with [`Art::set_regions`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Region {
+    pub name: String,
+    pub level: String,
+    /// x, y, w, h.
+    pub rect: [i64; 4],
+}
+
+/// A region's level picture and box, once the kit's regions are given.
+type RegionAt = Option<(Option<u32>, [i64; 4])>;
+
+/// A band of the HUD's rows, its top and bottom in screen pixels.
+type Band = (i64, i64);
+
+/// A rule that holds only in a region, by its number in [`Art::regions`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InRegion {
+    Pic(Placed),
+    Timed(TimedAt),
+}
+
 /// A look's rules resolved against a presentation: pictures and levels by
 /// the presentation's numbers, art by [`Art::files`] numbers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -377,6 +572,17 @@ pub struct Art {
     stages: Vec<Option<Stage>>,
     /// By the build's picture: a changed cell drawn as the backdrop.
     holes: Vec<bool>,
+    /// By the build's picture: a level's HUD layer.
+    hud_layers: Vec<bool>,
+    /// By the build's picture: its size in pixels.
+    sizes: Vec<[i64; 2]>,
+    /// By the build's picture: its `#+ in` rules, each with its region's
+    /// number, in the order given.
+    in_region: Vec<Vec<(usize, InRegion)>>,
+    /// The regions the rules name, by number: each one's level and box
+    /// once [`Art::set_regions`] gives it, else None (its rules never
+    /// hold).
+    regions: Vec<(String, RegionAt)>,
 }
 
 /// The drift's level and each art's number and size.
@@ -463,6 +669,45 @@ impl Art {
             level: level(&d.level),
             arts: d.arts.iter().map(|(a, s)| (file(a), *s)).collect(),
         });
+        let regions: Vec<(String, RegionAt)> = rules
+            .regions()
+            .into_iter()
+            .map(|r| (r.to_owned(), None))
+            .collect();
+        let region = |r: &str| regions.iter().position(|x| x.0 == r).unwrap_or(0);
+        let mut in_region = vec![Vec::new(); n];
+        for (r, t) in &rules.region_timed {
+            let Some(i) = pic(&t.build) else { continue };
+            let after = t.after.as_ref().map(|a| pic(a).unwrap_or(u32::MAX));
+            in_region[i as usize].push((
+                region(r),
+                InRegion::Timed(TimedAt {
+                    from: t.from,
+                    to: t.to,
+                    every: t.every,
+                    after,
+                    wait: t.wait,
+                    hide: t.hide,
+                    art: placed(&t.art),
+                }),
+            ));
+        }
+        for (r, a) in &rules.region_pics {
+            if let Some(i) = pic(&a.build) {
+                in_region[i as usize].push((region(r), InRegion::Pic(placed(&a.art))));
+            }
+        }
+        let mut hud_layers = vec![false; n];
+        for l in p.levels.iter().filter_map(|l| l.hud_layer) {
+            if let Some(v) = hud_layers.get_mut(l as usize) {
+                *v = true;
+            }
+        }
+        let sizes = p
+            .pictures
+            .iter()
+            .map(|x| [i64::from(x.size[0]), i64::from(x.size[1])])
+            .collect();
         let holes = p
             .pictures
             .iter()
@@ -486,8 +731,38 @@ impl Art {
             elsewhere,
             props,
             drift,
+            hud_layers,
+            sizes,
+            in_region,
+            regions,
             rules,
         })
+    }
+
+    /// Gives the regions the game's kit names: a `#+ in` line whose region
+    /// isn't among them never holds, so the body shows its other pictures.
+    pub fn set_regions(&mut self, p: &Present, regions: &[Region]) {
+        for (name, at) in &mut self.regions {
+            *at = regions.iter().find(|r| r.name == *name).map(|r| {
+                let level = p
+                    .pictures
+                    .iter()
+                    .position(|x| x.file == r.level)
+                    .map(|i| i as u32);
+                (level, r.rect)
+            });
+        }
+    }
+
+    /// Whether body `d` is in region `k` on level `level`: the middle of
+    /// its picture's bottom row inside the region's box.
+    fn in_region(&self, k: usize, d: &Draw, level: Option<u32>) -> bool {
+        let Some((Some(l), [x, y, w, h])) = self.regions.get(k).and_then(|r| r.1) else {
+            return false;
+        };
+        let [pw, ph] = self.sizes.get(d.pic as usize).copied().unwrap_or([16, 16]);
+        let (cx, by) = (d.x + pw / 2, d.y + ph - 1);
+        level == Some(l) && cx >= x && cx < x + w && by >= y && by < y + h
     }
 
     fn is(v: &[bool], pic: u32) -> bool {
@@ -593,6 +868,24 @@ pub struct ArtDraw {
     pub cut: Vec<[i64; 4]>,
     /// Painted only inside this box, `[x, y, w, h]` like the place.
     pub clip: Option<[i64; 4]>,
+    /// What of the scene the draw stands for: a runtime that draws the
+    /// game's own pictures itself (the board's, gp_look::board) leaves out
+    /// those the look draws as art, or not at all.
+    pub of: Of,
+}
+
+/// What of the scene an [`ArtDraw`] stands for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Of {
+    /// Anything else: a tint, the HUD, a prop, the drift, the wall.
+    #[default]
+    Other,
+    /// The level's picture, or the stage built over it.
+    Level,
+    /// The body of that number in the scene, as it shows this frame.
+    Body(usize),
+    /// The changed cell of that number in the scene's `cells`.
+    Cell(usize),
 }
 
 impl ArtDraw {
@@ -608,6 +901,7 @@ impl ArtDraw {
             alpha: 255,
             cut: Vec::new(),
             clip: None,
+            of: Of::Other,
         }
     }
 }
@@ -725,28 +1019,43 @@ impl Painter {
         });
     }
 
-    /// The picture body `i` shows this frame: a timed one, or its own.
-    fn shown(&self, art: &Art, i: usize, pic: u32) -> (Option<Placed>, bool) {
+    /// The picture body `i` shows this frame, `d` on level `level`: in a
+    /// region, the first of its `#+ in` rules there that holds (a timed
+    /// one that holds now, or a picture); else a timed one, or its own.
+    fn shown(&self, art: &Art, i: usize, d: &Draw, level: Option<u32>) -> (Option<Placed>, bool) {
+        let pic = d.pic;
         let base = art.pics.get(pic as usize).copied().flatten();
-        let Some(rules) = art.timed.get(pic as usize).filter(|r| !r.is_empty()) else {
+        let timed = art.timed.get(pic as usize).filter(|r| !r.is_empty());
+        let here = art.in_region.get(pic as usize).filter(|r| !r.is_empty());
+        if timed.is_none() && here.is_none() {
             return (base, false);
-        };
+        }
         let a = self.ages.get(i).filter(|a| a.pic == Some(pic));
         let age = a.map_or(0, |a| self.clock - a.since);
         let before = a.and_then(|a| a.before.iter().rev().nth(1).copied().flatten());
-        for r in rules {
-            if r.wait > 0 && age < r.wait {
-                continue;
-            }
-            if r.after.is_some() && r.after != before {
-                continue;
+        let holds = |r: &TimedAt| {
+            if (r.wait > 0 && age < r.wait) || (r.after.is_some() && r.after != before) {
+                return false;
             }
             let g = if r.every > 0 {
                 self.clock % r.every
             } else {
                 age
             };
-            if g >= r.from && g < r.to {
+            g >= r.from && g < r.to
+        };
+        for (k, rule) in here.into_iter().flatten() {
+            if !art.in_region(*k, d, level) {
+                continue;
+            }
+            match rule {
+                InRegion::Timed(r) if holds(r) => return (Some(r.art), r.hide),
+                InRegion::Pic(a) => return (Some(*a), false),
+                InRegion::Timed(_) => {}
+            }
+        }
+        for r in timed.into_iter().flatten() {
+            if holds(r) {
                 return (Some(r.art), r.hide);
             }
         }
@@ -811,7 +1120,7 @@ impl Painter {
         let mut hold = None;
         for (i, b) in s.bodies.iter().enumerate() {
             if let Some(d) = b
-                && self.shown(art, i, d.pic).1
+                && self.shown(art, i, d, s.level).1
             {
                 hold = Some([d.x, d.y]);
             }
@@ -837,7 +1146,7 @@ impl Painter {
             {
                 return;
             }
-            let (mut src, _) = self.shown(art, i, d.pic);
+            let (mut src, _) = self.shown(art, i, d, s.level);
             let mut flip_x = d.flip_x;
             if let Some((n, when, other)) = &art.near
                 && Art::is(when, d.pic)
@@ -868,6 +1177,7 @@ impl Painter {
             if a.src == Src::Own(d.pic) {
                 a.cut = s.cut.get(i).cloned().unwrap_or_default();
             }
+            a.of = Of::Body(i);
             out.draws.push(a);
         };
         let order = s.paint_order();
@@ -887,7 +1197,7 @@ impl Painter {
                 }
                 (None, a) => placed(a, l, ox, oy),
             };
-            out.draws.push(d);
+            out.draws.push(ArtDraw { of: Of::Level, ..d });
         }
         self.drift(art, s, ox, oy, &mut out);
         for &(m, c) in &s.tints {
@@ -895,7 +1205,7 @@ impl Painter {
             out.draws
                 .push(ArtDraw::new(Src::Tint(m, c), ox * u, oy * u, w * u, h * u));
         }
-        for d in &s.cells {
+        for (k, d) in s.cells.iter().enumerate() {
             // A taken rivet: the backdrop, wider beside a ladder.
             if let Some(st) = stage.filter(|_| Art::is(&art.holes, d.pic)) {
                 let (x, y) = (d.x, d.y);
@@ -914,8 +1224,46 @@ impl Painter {
                 continue;
             }
             plain(&mut out, d, d.x + ox, d.y + oy, 255);
+            out.draws.last_mut().expect("just drawn").of = Of::Cell(k);
         }
         let hud_bg = s.hud.len() - s.hud_sprites.min(s.hud.len());
+        // The HUD's layer and background text: under the bodies, or (`#+
+        // hud_over`) after them, whole or in rows. A layer and its tints
+        // are cut into bands of rows by clips; text goes by its row.
+        let (top, rest) = hud_bands(art.rules.hud_over.as_deref());
+        let on_top = |d: &Draw| match art.rules.hud_over.as_deref() {
+            None => false,
+            Some([]) => true,
+            Some(rows) => rows.contains(&d.y.div_euclid(8)),
+        };
+        let band = |(y0, y1): (i64, i64)| {
+            (y0 > -FAR || y1 < FAR).then(|| [-FAR * u, (hy + y0) * u, 2 * FAR * u, (y1 - y0) * u])
+        };
+        let hud_bg_part = |out: &mut ArtFrame, over: bool| {
+            let bands = if over { &top } else { &rest };
+            for (j, d) in s.hud[..hud_bg].iter().enumerate() {
+                if Art::is(&art.hud_layers, d.pic) {
+                    for &b in bands {
+                        plain(out, d, d.x + hx, d.y + hy, 255);
+                        out.draws.last_mut().expect("just drawn").clip = band(b);
+                    }
+                } else if on_top(d) == over {
+                    plain(out, d, d.x + hx, d.y + hy, 255);
+                }
+                if j == 0 {
+                    for &(m, c) in &s.hud_tints {
+                        let [w, h] = own(m);
+                        for &b in bands {
+                            let mut t = ArtDraw::new(Src::Tint(m, c), hx * u, hy * u, w * u, h * u);
+                            t.clip = band(b);
+                            out.draws.push(t);
+                        }
+                    }
+                }
+            }
+        };
+        // The HUD's sprites, last. With no layer or background text, the
+        // tints follow the first, as they always have.
         let hud = |out: &mut ArtFrame, from: usize, to: usize| {
             for (j, d) in s.hud[from..to].iter().enumerate() {
                 plain(out, d, d.x + hx, d.y + hy, 255);
@@ -928,7 +1276,7 @@ impl Painter {
                 }
             }
         };
-        hud(&mut out, 0, hud_bg);
+        hud_bg_part(&mut out, false);
         for &i in &order {
             if !at(&s.behind, i) && !at(&s.front, i) {
                 body(&mut out, i);
@@ -942,6 +1290,7 @@ impl Painter {
         for (d, a) in &f.ghosts {
             plain(&mut out, d, d.x + ox, d.y + oy, *a);
         }
+        hud_bg_part(&mut out, true);
         if win.wall > 0 {
             let mut d = ArtDraw::new(
                 Src::Fill([0, 0, 0]),
@@ -1032,6 +1381,37 @@ impl Painter {
             }
         }
     }
+}
+
+/// Far past any screen, in pixels: a band of the HUD open at an end.
+const FAR: i64 = 4096;
+
+/// The bands of the HUD's rows (top and bottom, in screen pixels) drawn
+/// over the bodies, and those drawn under them, for `hud_over`'s rows.
+fn hud_bands(over: Option<&[i64]>) -> (Vec<Band>, Vec<Band>) {
+    let whole = vec![(-FAR, FAR)];
+    let rows = match over {
+        None => return (Vec::new(), whole),
+        Some([]) => return (whole, Vec::new()),
+        Some(rows) => rows,
+    };
+    let mut top: Vec<Band> = Vec::new();
+    for &r in rows {
+        match top.last_mut() {
+            Some(b) if b.1 == r * 8 => b.1 = r * 8 + 8,
+            _ => top.push((r * 8, r * 8 + 8)),
+        }
+    }
+    let mut rest = Vec::new();
+    let mut from = -FAR;
+    for &(y0, y1) in &top {
+        if y0 > from {
+            rest.push((from, y0));
+        }
+        from = y1;
+    }
+    rest.push((from, FAR));
+    (top, rest)
 }
 
 /// Whether a body stands on a prop: its feet in the box's top, its middle

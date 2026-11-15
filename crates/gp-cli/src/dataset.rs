@@ -20,7 +20,8 @@ pub enum DatasetCmd {
     /// facts, and open questions and runs. Two runs on one ROM write identical
     /// bytes. Fails if a written file holds bytes of the ROM.
     Rom {
-        /// The iNES ROM.
+        /// The iNES ROM, or an arcade romset (a MAME zip), whose main Z80's
+        /// code map the dataset is read from.
         rom: PathBuf,
         /// The directory to write; made if missing.
         #[arg(long, value_name = "DIR")]
@@ -51,7 +52,8 @@ pub enum DatasetCmd {
     /// (docs/formats/rom-dataset-key.md) and print the stage 0 scorecard's
     /// column for the ROM. The coverage rows run the ROM with stage 0's
     /// starts, so their denominators never come from the dataset; they
-    /// apply with no key too, and on an arcade romset. The ROM is found by
+    /// apply with no key too. On an arcade romset a key's constants are
+    /// checked on the main Z80's program. The ROM is found by
     /// the dataset's hash (the key's `rom_file`, $GP_ROM_DIR,
     /// $GP_HOME/work/sealed) unless given. `--counts` prints counts only,
     /// nothing of the key.

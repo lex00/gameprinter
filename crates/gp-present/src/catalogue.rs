@@ -28,12 +28,61 @@ pub fn offered(index: &str, pictures: &[impl AsRef<str>]) -> Result<Vec<Theme>, 
 /// The themes of an index drawn against the picture list whose digest is
 /// `fits` (a build that knows its digest, as the Bevy build does).
 pub fn offered_fits(index: &str, fits: &str) -> Result<Vec<Theme>, String> {
+    Ok(offer_fits(index, fits)?.0)
+}
+
+/// A theme of an index a build doesn't offer, and why, in words a player
+/// reads, written to follow "because".
+pub type LeftOut = (Theme, String);
+
+/// The themes of an index a build whose picture list's digest is `fits`
+/// offers ([`offered_fits`]), and each one it leaves out with why: a
+/// source package (drawn over each player's own ROM art, which no runtime
+/// does yet), a look drawn for other pictures, or an id a look can't have.
+pub fn offer_fits(index: &str, fits: &str) -> Result<(Vec<Theme>, Vec<LeftOut>), String> {
     let ix = Index::read(index)?;
-    Ok(ix
-        .themes
-        .into_iter()
-        .filter(|t| t.fits == fits && crate::looks::valid_id(&t.id))
-        .collect())
+    let mut offered = Vec::new();
+    let mut left = Vec::new();
+    for t in ix.themes {
+        let why = if !crate::looks::valid_id(&t.id) {
+            Some(format!(
+                "its id, `{}`, can't name a theme in the settings",
+                t.id
+            ))
+        } else if t.kind == "source" {
+            Some("it is drawn over each player's own ROM art, which this build can't do yet".into())
+        } else if t.fits != fits {
+            Some(format!(
+                "it was drawn for another version of this game's pictures (it fits {}, this build is {})",
+                short(&t.fits),
+                short(fits)
+            ))
+        } else {
+            None
+        };
+        match why {
+            Some(w) => left.push((t, w)),
+            None => offered.push(t),
+        }
+    }
+    Ok((offered, left))
+}
+
+/// A digest's first 12 digits, or "none" for an empty one.
+fn short(h: &str) -> &str {
+    if h.is_empty() {
+        "none"
+    } else {
+        &h[..h.len().min(12)]
+    }
+}
+
+/// [`offer_fits`] for a build's picture names.
+pub fn offer(
+    index: &str,
+    pictures: &[impl AsRef<str>],
+) -> Result<(Vec<Theme>, Vec<LeftOut>), String> {
+    offer_fits(index, &pictures_digest(pictures))
 }
 
 /// A package's look files, by their path in the look's folder, from its
@@ -147,6 +196,42 @@ mod tests {
             ..Theme::default()
         });
         (keys, ix)
+    }
+
+    /// Each theme of the index a build doesn't offer comes back with why:
+    /// a look drawn for other pictures, a source package, a bad id.
+    #[test]
+    fn a_theme_the_build_does_not_offer_is_named_with_why() {
+        let pics = ["frame-0-0.png"];
+        let (_, mut ix) = mirror(&pics);
+        let package = ix.themes[0].package.clone();
+        ix.put(Theme {
+            id: "rom".into(),
+            kind: "source".into(),
+            package: package.clone(),
+            ..Theme::default()
+        });
+        ix.put(Theme {
+            id: "9lives".into(),
+            fits: pictures_digest(&pics),
+            package,
+            ..Theme::default()
+        });
+        let (offered, left) = offer(&ix.write(), &pics).unwrap();
+        assert_eq!(
+            offered.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            ["night"]
+        );
+        let why = |id: &str| left.iter().find(|(t, _)| t.id == id).unwrap().1.clone();
+        assert!(
+            why("other").starts_with("it was drawn for another version of this game's pictures"),
+            "{left:?}"
+        );
+        assert!(why("rom").contains("own ROM art"), "{left:?}");
+        assert_eq!(
+            why("9lives"),
+            "its id, `9lives`, can't name a theme in the settings"
+        );
     }
 
     #[test]

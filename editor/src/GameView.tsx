@@ -20,13 +20,10 @@ import { LockstepPanel } from "./Lockstep";
 import { LockCurve } from "./CurveChart";
 import { ScreenBoxes } from "./ScreenBoxes";
 import { lockBoxes, lockIndex } from "./screenfold";
-import { RefinePanel } from "./Refine";
-import { MomentsInFocus, MomentsStrip, RefineThisMoment } from "./Moments";
-import { type Moment, type Moments, inFocus, momentName, momentsPhase } from "./momentfold";
-import { momentRefinePhase } from "./refinefold";
+import { MomentsInFocus, MomentsStrip } from "./Moments";
+import { type Moment, type Moments, inFocus, momentsPhase } from "./momentfold";
 import { ScenariosSection } from "./Scenarios";
-import { type DriftAt, type Focus, type Lockstep, type StartPhase, driftAt, driftWords, firstFocus, focusMisses, focusWords, missLine, seconds, startPhase } from "./lockfold";
-import type { RefineState } from "./refinefold";
+import { type Focus, type Lockstep, type StartPhase, driftAt, driftWords, firstFocus, focusMisses, focusWords, missLine, seconds, startPhase } from "./lockfold";
 import { ScreenPointer, TellPanel } from "./PointTell";
 import { isPauseKey } from "./point";
 import type { Box } from "./api";
@@ -47,8 +44,10 @@ import {
 } from "./phrase";
 import { frameLines, framesDue, modelSteps, playStep, pressedWords, scriptFrom, type PlayState } from "./playfold";
 
-const W = 256;
-const H = 240;
+// The original's picture: the NES's 256x240 until the player opened for
+// the run says its machine's (an arcade board's 512x480). One run a page.
+let W = 256;
+let H = 240;
 
 /** A clip around a moment: a second before it to half a second after. */
 export function clipAround(from: number, to: number, frames: number): { from: number; to: number } {
@@ -67,7 +66,7 @@ export function startAt(words: GameWords | undefined, live: LiveState, play?: Pl
   return { recording: words?.recordings.find((r) => r.input)?.name, frame: 1 };
 }
 
-/** The original side: the run's ROM in gp_play.wasm, replaying one input log per slot. */
+/** The original side: the run's ROM in gp_play.wasm (or gp_arcade_play.wasm for a MAME zip), replaying one input log per slot. */
 class Original {
   private logs = new Map<string, string>();
   private loaded: (string | undefined)[] = [];
@@ -78,7 +77,10 @@ class Original {
     private readonly rom: Uint8Array,
   ) {}
   static async open(api: Api, run: string): Promise<Original> {
-    const [p, rom] = await Promise.all([NesPlayer.load(api.playWasm()), api.captureRom(run)]);
+    const rom = await api.captureRom(run);
+    const p = await NesPlayer.forRom(api, rom);
+    W = p.machine.width;
+    H = p.machine.height;
     return new Original(api, run, p, rom);
   }
   async log(name: string): Promise<string> {
@@ -147,8 +149,8 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
   // Pause and point: the box on the paused frame. What the person says
   // about it goes to their agent as a turn in the mechanic's talk.
   const [box, setBox] = useState<Box>();
-  // Bumped when the refinement loop changes the model, so the lockstep is measured again.
-  const [modelRound, setModelRound] = useState(0);
+  // Which game's picture the box is on, for "what is this?".
+  const [side, setSide] = useState<"original" | "model">("original");
   const paused = !playing && total > 0;
   // Side by side, or the rebuilt game drawn over the original with a
   // transparency slider, or their difference (where they match is black).
@@ -157,11 +159,10 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
   const [opacity, setOpacity] = useState(() => readLayout().opacity);
   useEffect(() => saveLayout(layout, opacity), [layout, opacity]);
   // The stretch the two games are compared over (docs/inspector.md, "The
-  // focus"): the refinement loop's window while it works, a stretch the
-  // person picks, or a second before the first split. Both games loop it,
+  // focus"): a stretch the person picks, or a second before the first
+  // split. Both games loop it,
   // the slider covers it and the charts zoom to it.
   const [ls, setLs] = useState<Lockstep>();
-  const [refine, setRefine] = useState<RefineState>();
   const [picked, setPicked] = useState<Focus | null>();
   // The whole run measured from the start, for where the view looks first.
   const [whole, setWhole] = useState<Lockstep>();
@@ -174,17 +175,11 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
   const [moment, setMoment] = useState<Moment>();
   // Where the two drift apart from the view's start, run free as the
   // picture is (docs/inspector.md, "Where they drift apart"): play stops
-  // there, and with "fix on its own" the scoped loop starts there.
+  // there.
   const [freeLs, setFreeLs] = useState<Lockstep>();
-  const [driftStopped, setDriftStopped] = useState<DriftAt>();
   // Outlines where the two pictures differ, from the free run's screen measure.
   const [showBoxes, setShowBoxes] = useState(true);
-  const [autoFix, setAutoFix] = useState(false);
-  // Bumped when a loop is started outside the Refining section, so it reads it.
-  const [refineKick, setRefineKick] = useState(0);
-  const loopWindow = refine?.current?.window ?? (refine?.state === "stuck" ? refine.result?.questions[0]?.window : undefined);
-  const focus: Focus | undefined =
-    refine?.running && loopWindow ? { from: loopWindow.original_from, to: loopWindow.original_to } : picked === null ? undefined : (picked ?? (loopWindow ? { from: loopWindow.original_from, to: loopWindow.original_to } : whole ? firstFocus(whole, FOCUS_LEN) : undefined));
+  const focus: Focus | undefined = picked === null ? undefined : (picked ?? (whole ? firstFocus(whole, FOCUS_LEN) : undefined));
   // Where both games start: the focus's first frame, or the run's start.
   const viewFrom = focus?.from ?? 1;
   const drift = freeLs ? driftAt(freeLs, viewFrom, focus?.to) : undefined;
@@ -205,9 +200,14 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
     if (recording === undefined && start.recording) setFrameState(start.frame);
   }, [start.recording, start.frame, recording]);
 
+  // Bumped when the original's player is open, so the screens take its size.
+  const [, setScreen] = useState("");
   const opened = useCallback(() => {
     if (!g?.rom) return Promise.reject(new Error("the run has no ROM to play the original from"));
-    opening.current ??= Original.open(api, run).then((o) => (original.current = o));
+    opening.current ??= Original.open(api, run).then((o) => {
+      setScreen(`${W}x${H}`);
+      return (original.current = o);
+    });
     return opening.current;
   }, [api, run, g?.rom]);
 
@@ -246,14 +246,13 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
     return () => {
       live = false;
     };
-  }, [api, run, rec, g?.rom, modelRound]);
+  }, [api, run, rec, g?.rom]);
 
   // The free run from the view's start, for where the two drift apart.
   useEffect(() => {
     if (!rec || !g?.rom) return;
     let live = true;
     setFreeLs(undefined);
-    setDriftStopped(undefined);
     api
       .captureLockstep(run, rec, "free", viewFrom)
       .then((j) => live && setFreeLs(j))
@@ -261,18 +260,7 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
     return () => {
       live = false;
     };
-  }, [api, run, rec, g?.rom, viewFrom, modelRound]);
-  const fixFromDrift = () => {
-    if (moment && focus && moment.to >= focus.from && moment.from <= focus.to) return refineMoment(moment);
-    if (!rec) return;
-    api
-      .captureRefineStart(run, rec, viewFrom)
-      .then((r) => (r.started ? setRefineKick((n) => n + 1) : setError(r.why ?? "the loop didn't start")))
-      .catch((e: Error) => setError(e.message));
-  };
-  useEffect(() => {
-    if (driftStopped && autoFix && !refine?.running) fixFromDrift();
-  }, [driftStopped]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [api, run, rec, g?.rom, viewFrom]);
 
   // The moments: found once a recording and the model are there.
   useEffect(() => {
@@ -287,19 +275,12 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
     return () => {
       live = false;
     };
-  }, [api, run, rec, g?.rom, modelRound]);
+  }, [api, run, rec, g?.rom]);
   useEffect(() => setMoment(undefined), [rec]);
   const pickMoment = (m: Moment) => {
     setPlaying(false);
     setMoment(m);
     setPicked({ from: m.focus.from, to: Math.min(total || m.focus.to, m.focus.to) });
-  };
-  const refineMoment = (m: Moment) => {
-    if (!rec) return;
-    api
-      .captureRefineStart(run, rec, undefined, { moment: { kind: m.kind, n: m.n } })
-      .then((r) => (r.started ? setRefineKick((n) => n + 1) : setError(r.why ?? "the loop didn't start")))
-      .catch((e: Error) => setError(e.message));
   };
 
   // The start: the original's state at the view's start, translated, and
@@ -316,7 +297,7 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
     return () => {
       live = false;
     };
-  }, [api, run, rec, g?.rom, g?.preview, viewFrom, modelRound]);
+  }, [api, run, rec, g?.rom, g?.preview, viewFrom]);
   useEffect(() => {
     if (!st || !lines.length || free) return;
     model.current.loadState(st.state, scriptFrom(lines, st.original_frame), modelSteps(lines, st.original_frame, frame));
@@ -346,7 +327,7 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
     let last = performance.now();
     let raf = 0;
     const loop = (now: number) => {
-      const due = framesDue(acc, now - last, 2);
+      const due = framesDue(acc, now - last, 2, original.current?.p.machine.fps);
       acc = due.acc;
       last = now;
       if (due.frames) {
@@ -356,7 +337,6 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
           if (s.stop) {
             clipEnd.current = undefined;
             setPlaying(false);
-            if (s.frame === driftRef.current?.frame) setDriftStopped(driftRef.current);
           }
           return s.frame;
         });
@@ -430,14 +410,14 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
     <section className="game-view" data-testid="game-view">
       <div className={`games ${layout}`} data-layout={layout}>
         <figure>
-          <ScreenPointer active={paused} box={box} onBox={setBox} testid="point-original">
+          <ScreenPointer active={paused} box={box} onBox={(b) => (setBox(b), setSide("original"))} testid="point-original">
             <canvas ref={canvas} width={W} height={H} className="game-screen" data-testid="game-original" />
             {showBoxes && freeLs?.screen && !free && <ScreenBoxes boxes={lockBoxes(freeLs.screen, lockIndex(freeLs.frames, frame))} w={W} h={H} />}
           </ScreenPointer>
           <figcaption>The original{g?.vocab.title ? `: ${g.vocab.title}` : ""}</figcaption>
         </figure>
         <figure className="model-side" style={layout === "top" ? { opacity } : undefined}>
-          <ScreenPointer active={paused} box={box} onBox={setBox} testid="point-model">
+          <ScreenPointer active={paused} box={box} onBox={(b) => (setBox(b), setSide("model"))} testid="point-model">
             {g?.preview ? (
               <iframe ref={iframe} title="the game played from its model" src={api.capturePreview(run, "index.html?control=1")} className="game-screen" data-testid="game-model" />
             ) : (
@@ -516,7 +496,6 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
         focus={focus}
         ls={ls}
         total={total}
-        loop={refine?.running ? refineStatusWords(refine) : undefined}
         playing={playing}
         play={() => (focus && setFrameState(focus.from), setPlaying(true))}
         pick={(f) => (setPlaying(false), setPicked(f))}
@@ -526,24 +505,8 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
       >
         {drift && (
           <p className="drift-line" data-testid="drift-line">
-            {driftWords(g, drift)}. <button onClick={() => (setPlaying(false), setFrame(drift.frame))}>go there</button>{" "}
-            <button onClick={fixFromDrift} disabled={refine?.running} data-testid="fix-from-here">
-              fix from here
-            </button>{" "}
-            <label title="When both games stop where they drift apart, start the refinement loop there by itself">
-              <input type="checkbox" checked={autoFix} onChange={(e) => setAutoFix(e.target.checked)} /> fix on its own
-            </label>
+            {driftWords(g, drift)}. <button onClick={() => (setPlaying(false), setFrame(drift.frame))}>go there</button>
           </p>
-        )}
-        {moment && focus && moment.to >= focus.from && moment.from <= focus.to && (
-          <RefineThisMoment
-            moment={moment}
-            phase={momentRefinePhase(refine?.moment ? refine : undefined, momentName(moment), moment.mechanic)}
-            state={refine}
-            start={refineMoment}
-            stop={() => api.captureRefineStop(run).then(() => setRefineKick((n) => n + 1))}
-            seek={(f) => (setPlaying(false), setFrame(f))}
-          />
         )}
       </FocusBar>
       {toolbar}
@@ -553,7 +516,6 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
       {error && <p className="error">{error}</p>}
       {g?.rom && total > 0 && (
         <LockstepPanel
-          key={modelRound}
           from={viewFrom}
           drift={drift?.frame}
           startHere={(f) => setPicked({ from: f, to: Math.min(total, f + FOCUS_LEN - 1) })}
@@ -573,13 +535,11 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
         />
       )}
       {g?.rom && total > 0 && <LockCurve ls={ls} frame={frame} />}
-      {g?.rom && total > 0 && <RefinePanel api={api} run={run} words={g} recording={rec} frame={frame} paused={paused} seek={(f) => (setPlaying(false), setFrame(f))} watch={(f, t) => watch(rec, f, t)} changed={() => setModelRound((n) => n + 1)} send={send} onState={setRefine} kick={refineKick} />}
       {g?.rom && total > 0 && <ScenariosSection api={api} run={run} recording={rec} preview={!!g?.preview} onFocus={(from, to) => setPicked({ from, to })} seek={(f) => (setPlaying(false), setFrame(f))} paused={paused ? frame : undefined} />}
-      {paused && <TellPanel api={api} run={run} recording={rec} frame={frame} box={box} />}
+      {paused && <TellPanel api={api} run={run} recording={rec} frame={frame} box={box} side={side} />}
 
       {/* Capture's questions are about the whole run, not the stretch in
-          focus, so they wait folded away; the questions about the stretch
-          are the refinement loop's, above. */}
+          focus, so they wait folded away. */}
       {questions.length > 0 && (
         <details className="whole-run-questions">
           <summary>{questions.length === 1 ? "1 question" : `${questions.length} questions`} about the whole run, not the stretch above (mostly for agents)</summary>
@@ -692,11 +652,6 @@ function saveLayout(layout: Layout, opacity: number): void {
 
 /** The stretch the view compares, in the original's frames: 5 seconds. */
 const FOCUS_LEN = 300;
-
-function refineStatusWords(r: RefineState): string {
-  const w = r.current?.window;
-  return w ? `The refinement loop is working on this stretch (round ${r.current!.round}).` : "The refinement loop is running.";
-}
 
 /**
  * The stretch the two games are compared over, said first and large:

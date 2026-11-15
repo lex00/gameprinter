@@ -9,9 +9,10 @@ gp progress --template donkey-kong --run donkey-kong [--measure --module donkey-
 | Where | What |
 |---|---|
 | `gp progress --template GAME [--run RUN] [--json]` | The ladder from what exists: the game's folder in the games checkout (or a folder holding model.toml), the run's model and scores, and the last measure. Reads only. A run is gp serve's: a game by its folder's name, whose model is its working copy (`$GP_HOME/work/serve/GAME/model/`) once there is one |
-| `gp progress ... --measure` | Also measures the heavy stages (below) and keeps the result in `$GP_HOME/work/progress/<game>/<run>.json`. `--playthrough ID` picks the full-game recording (or a baseline file); without it, the longest store recording of the game's ROMs. `--no-clips` and `--no-whole` leave parts out and keep what the last measure had. `--module` gives the game's module, for a model with hooks |
+| `gp progress ... --measure` | Also measures the heavy stages (below) and keeps the result in `$GP_HOME/work/progress/<game>/<run>.json`. `--playthrough ID` picks the full-game recording (or a baseline file); without it, the longest store recording of the game's ROMs. `--no-clips` and `--no-whole` leave parts out and keep what the last measure had. `--module` gives the game's module, for a model with hooks. `--no-save` shows the ladder with this measure and keeps nothing, so a trial (a short `--playthrough`, say) leaves the kept measure as it was |
 | `gp progress ... --write-ignore MAPPING` | Writes the last measure's RAM roles into a mapping file as its `[[ignore]]` list ([the ignore list](#the-memory-maps-ignore-list)). NES only: the roles come from a trace of the 6502 |
 | `gp progress --next [--template GAME] [--json]` | [What next](#what-next): where the port stands and the one next step, for the person and their agent |
+| `gp progress --next --copy NAME [--json]` | The same for one of the person's [copies](#copies-and-the-other-journeys): a theme they are making or a new game, by its name, or `theme/NAME` or `new/NAME` |
 
 The code is `crates/gp-cli/src/progress.rs` (the ladder, from its facts alone, so the tests give it made-up inputs) and `crates/gp-cli/src/progress_measure.rs` (the measure). The start and the lockstep from it are the jumpathon's (`crates/gp-cli/src/sweep.rs`, `measure`).
 
@@ -21,7 +22,7 @@ The code is `crates/gp-cli/src/progress.rs` (the ladder, from its facts alone, s
 
 It reads files and records only: the game's folder, the quest log and its sessions, the gate's scores (`$GP_HOME/work/refine/GAME/status.json`) or gp serve's background scores, the last `--measure`, and a published record (`$GP_HOME/work/published/GAME.json`, with its `link`; nothing writes it yet). It runs no score, ROM or build, so it answers in well under a second and a new conversation gets the same answer. It suggests and never starts work. Without `--template` it takes the game whose page was opened last, or the only game; with no game at all it reads the ROM folder and asks which file to bring over.
 
-The answer (`version` "next 1"):
+The answer (`version` "next 2"; 2 added `steps` and `copies`):
 
 | Field | What |
 |---|---|
@@ -30,9 +31,12 @@ The answer (`version` "next 1"):
 | `next` | The one next step: `who` (`tools`, free and unattended, which the agent starts without asking; `agent`; or `person`), `says`, `how` (the page's button, the command) and `act` (what the page's button does) |
 | `also` | Up to two other steps, the person's first when `next` isn't theirs |
 | `running` | What the background is doing and when to look again |
-| `waits_for_yes` | Steps that cost money or make something public (putting the game online), which wait for the person's own yes |
+| `waits_for_yes` | Steps that cost money or make something public (putting the game online), which wait for the person's own yes; and a picture the agent proposes for the person's theme (`what: "picture"`), open or answered and not yet read by the agent ([sprite-editing.md](sprite-editing.md#a-picture-of-your-own-theme)) |
 | `clue` | A clue when the person seems lost, or null |
 | `facts`, `text` | The counts it read, and all of it as the terminal prints it |
+| `journey`, `subject` | `port`, `theme` or `new`, and the game or copy the answer is about |
+| `steps` | For a copy: its six steps, each `{n, id, name, who, state}` with `state` `done`, `now` or `later`. Empty for a port, whose stages are above |
+| `copies` | Every copy the person has, each `{journey, name, from, touched_ms, stage, who, says}`, newest first, so an agent arriving cold sees all of them |
 
 The next step is the first of these that applies: something that stops all work (the game's file isn't found, the background stopped on an error); a step waiting for a yes; a question only the person can answer (the agent's question on CLIPS, a question on REFINE); a hand-off the agent hasn't answered; free work for the tools that isn't running (triage when no row was tried, scoring, the full-run measure); the agent's work (map the player, add new clips to the game's tests, the clip that goes wrong first, why a full run parts); play only the person can give (the first NEEDS YOU row, with its request); the stage's own step.
 
@@ -49,6 +53,41 @@ The clues, at most one at a time, never while recording or reviewing, and each a
 | `words` | The files | A note typed on the page that expects a download, an install, an emulator or a new ROM: the answer is what Game Printer makes |
 
 Not yet: a handed-off clip that fails its row's goal (needs the triage's test on the server), times on turns and clips (an unanswered question's age), the person's words in the conversation (the agent sees those), and a LATER button. gp serve keeps whether its background is on in the state file's `live` (with its process), so the terminal and the agent see it too.
+
+## Copies and the other journeys
+
+Porting a game is one of three journeys. The other two make a copy: a theme for a game, or a new game from a template (issue #5). The page's first screen (`/start/` on gp serve, [mechanic-page.md](mechanic-page.md#the-first-screen)) starts both and lists every copy with CARRY ON; `gp progress --next --copy NAME` and the MCP tool `next` with `copy` give the same answer as for a port, with the copy's six steps and whose turn each is. The code is `crates/gp-cli/src/journeys.rs` (the copies, the facts and the answer, from files only) and its tests in `journeys/tests.rs`.
+
+| Copy | Where it is | Made by |
+|---|---|---|
+| A theme | `$GP_HOME/work/themes/NAME/`, holding `theme/look.txt` | `gp theme look new`, from the page's MAKE A THEME FOR A GAME or by the agent |
+| A new game | `$GP_HOME/work/mcp/NAME/`, holding `model.toml` | `template_fork`, from the page's MAKE A NEW GAME or by the agent |
+
+What a journey keeps of its own is under `$GP_HOME/work/journeys/KIND/NAME/` (KIND `theme` or `new`), never in the copy: `journey.json` (where it came from, the person's style words, the steps the person marked done), `check.json` (the last `gp theme look check` of the theme), `play.json` (the theme last seen in the game), `verify.json` (the last `gp level verify` of the new game's stage), and `do-WHICH.json` (a page button's last run). The commands write their part whoever runs them, the page or the agent, so the answer is the same either way. Without `--template` or `--copy`, the copy opened last on the page answers when it was opened after the last game.
+
+A theme's steps:
+
+| Step | Whose turn | It is the step while | The page has |
+|---|---|---|---|
+| T1 Pick the game and a style | You | The theme doesn't say which game, or has no style words | The style box |
+| T2 Make the pictures | Your agent | It has no pictures | What to say; the folder for the person's own pictures |
+| T3 The look check | The tools | It changed since its last check, or the check found problems | CHECK MY THEME and the findings in words |
+| T4 See it in the game | You | It passes and wasn't played since | SEE IT IN THE GAME (`gp theme look play --background`), PICTURES OF IT IN THE GAME (`--shots`) when the ROM is here or the game has pictures of its own |
+| T5 Change pictures | You | Until the person presses READY TO SHARE | The pictures the agent proposes, on their cards |
+| T6 Share it | You | Then | The share link and the publish request, shown to send by hand: nothing is published from the page |
+
+A new game's steps:
+
+| Step | Whose turn | It is the step while | The page has |
+|---|---|---|---|
+| N1 Start from a template | You | (done once the copy exists) | What a template is |
+| N2 Name it | You | (done once the copy exists) | Its folder |
+| N3 See it play | The tools | Its pictures and levels aren't there, or it was never built to play | BUILD IT TO PLAY (`build_publish`) and PLAY IT |
+| N4 Change a stage | You | Until the person presses DONE WITH THE STAGE | SHOW THE STAGE (`gp level render`), CHECK THE STAGE (`gp level verify`), UNDO THE LAST CHANGE (`gp level undo`) |
+| N5 Give it a look | You | Until DONE WITH THE LOOK or SKIP | MAKE A THEME FOR IT: the theme journey on the new game |
+| N6 Play and share | You | Then | PLAY IT, and MAKE A SHARE LINK (`gp game share`): the game in the person's own registry on this computer, with the themes made for it, and the link that plays it, `/share/p?g=local/NAME&look=ID` |
+
+Not there yet, and said so on the page: a new game's share link opens on this computer only, until the person puts the page and their registry online together (the page says so in one sentence); and CHECK THE STAGE on a stage `gp level verify` can't play to its end answers NOT CHECKED with the reason (docs/level-kit.md, "Editing a stage", says which kinds it plays; Moss Hop's tile stage is one). SEE IT IN THE GAME on an arcade game shows the tool's refusal: the page plays an arcade game but can't show a theme on one yet.
 
 ## The ladder
 
@@ -70,7 +109,7 @@ A stage that can't be computed from what exists says "not measured" and gives th
 
 ## On an arcade romset
 
-The original is gp-arcade's board, through the platform seam (`OriginalRuntime`), and every stage reads the game's own mapping. The RAM counted is the board's 2 KB of work RAM at `E000`, by its index from there (a mapping or label address `E123` is byte `$0123` of the count); nothing is left out of it. The code is the main Z80's instruction addresses from gp-arcade's trace (the features `gp coverage` reads, `crates/gp-cli/src/covered.rs`). The RAM roles, and so `--write-ignore`, are the NES's alone: `gp_nes::ramrole` reads a 6502 trace and there is no Z80 counterpart yet, so an arcade game's ignore list is written by hand.
+The original is gp-arcade's board, through the platform seam (`OriginalRuntime`), and every stage reads the game's own mapping. The RAM counted is the board's 2 KB of work RAM at `E000`, by its index from there (a mapping or label address `E123` is byte `$0123` of the count); nothing is left out of it. The code is the main Z80's instruction addresses from gp-arcade's trace (the features `gp coverage` reads, `crates/gp-cli/src/covered.rs`). The RAM roles come from the main Z80's trace and access log (`crates/gp-cli/src/ramrole_z80.rs`), classified by `gp_nes::ramrole`'s own rules: a call is a `call`, `rst` or an interrupt's handler, returned once the stack pointer is back; the controller is read by an `in` from ports 00 to 02 (the coin and start and the sticks, not the dip switches at 03 and 04); a sound write is an `out` to the sound board's latches (1C to 1F); a picture write is one to sprite, video or palette RAM (E800 on); the stack's own accesses aren't counted. `--write-ignore` writes each entry at its E000 address.
 
 ## The memory map's ignore list
 

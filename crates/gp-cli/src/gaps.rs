@@ -66,7 +66,8 @@ pub struct GapsArgs {
     /// the whole recording (docs/show.md).
     #[arg(long)]
     pub focus: Vec<String>,
-    /// The game's labels file (docs/formats/labels.md), instead of the one
+    /// The game's labels file (docs/formats/labels.md), instead of the
+    /// game's truth/labels.toml (the names its truth set uses) or the one
     /// for the mapping's source.
     #[arg(long)]
     pub labels: Option<PathBuf>,
@@ -80,9 +81,10 @@ pub struct GapsArgs {
     #[arg(long)]
     pub assets: Option<PathBuf>,
     /// A labelled reference set to score the detectors against
-    /// (docs/gaps.md, "Scoring"), instead of the one kept for the
-    /// template in crates/gp-gaps/truth/. Scoring needs `gaps all` and the
-    /// code signals.
+    /// (docs/gaps.md, "Scoring"), instead of the game's own
+    /// truth/gaps.toml or, when it has none, the one kept for the template
+    /// in crates/gp-gaps/truth/. Scoring needs `gaps all` and the code
+    /// signals.
     #[arg(long)]
     pub truth: Option<PathBuf>,
     /// Skip the replay with the code observer, which needs the ROM.
@@ -122,10 +124,21 @@ pub(crate) fn run(cmd: &GapsCmd, paths: &Paths) -> Result<Outcome> {
     drop(opened);
     let t = Template::open(args.dir.as_deref(), &args.template)?;
     let built = build(args, &t, paths)?;
-    let out_dir = args
-        .out
-        .clone()
-        .unwrap_or_else(|| paths.reports_dir().join("gaps").join(&t.id));
+    // A run over part of the recording (`--frames`) writes its reports
+    // apart, under partial/, and records no metrics: the scorecard reads the
+    // latest `gaps.<template>.*` metrics and the reports at the folder's
+    // top as the game's, and a part's counts would stand for the whole.
+    let latest = paths.reports_dir().join("gaps").join(&t.id);
+    let out_dir = match (&args.out, built.whole) {
+        (Some(o), _) => o.clone(),
+        (None, true) => latest,
+        (None, false) => latest.join("partial").join(format!(
+            "{}-{}-{}",
+            &built.id[..12],
+            built.range.start,
+            built.range.end - 1
+        )),
+    };
     std::fs::create_dir_all(&out_dir).with_context(|| out_dir.display().to_string())?;
     let mut text = String::new();
     let mut js = serde_json::Map::new();
@@ -155,7 +168,7 @@ pub(crate) fn run(cmd: &GapsCmd, paths: &Paths) -> Result<Outcome> {
         std::fs::write(&f, &text).with_context(|| f.display().to_string())?;
         // Each recording's reports are also kept apart, so a later run on
         // another recording doesn't hide them.
-        if args.out.is_none() {
+        if args.out.is_none() && built.whole {
             let own = out_dir.join(&built.id[..12]);
             std::fs::create_dir_all(&own)?;
             std::fs::write(own.join(format!("{name}.json")), &text)?;
@@ -164,6 +177,7 @@ pub(crate) fn run(cmd: &GapsCmd, paths: &Paths) -> Result<Outcome> {
     };
     let mut changes_r = None;
     let mut catalog_r = None;
+    let mut drawn_r = None;
     if which[0] {
         let r = gp_gaps::changes::detect(&built.run);
         changes_text(&mut text, &r, n);
@@ -201,6 +215,7 @@ pub(crate) fn run(cmd: &GapsCmd, paths: &Paths) -> Result<Outcome> {
                 let v = serde_json::to_value(&r)?;
                 save("drawn", &v)?;
                 js.insert("drawn".into(), v);
+                drawn_r = Some(r);
             }
             Err(e) => {
                 let _ = writeln!(text, "\ndrawn: can't build the model's boxes: {e:#}");
@@ -210,28 +225,75 @@ pub(crate) fn run(cmd: &GapsCmd, paths: &Paths) -> Result<Outcome> {
     }
     // Detection quality: the findings against the game's labelled
     // reference set, when it has one.
+    // `changes` scores the detectors its report holds (sound, effects, ram),
+    // `interactive` those of its catalog (interactive, handlers), `all`
+    // every one; `drawn` has nothing to score.
+    let scored = scored_detectors(which);
     let truth_text = match &args.truth {
         Some(p) => Some(std::fs::read_to_string(p).with_context(|| p.display().to_string())?),
-        None => gp_gaps::score::builtin(&t.id).map(str::to_owned),
+        None => truth_text(&t.dir, &t.id)?,
     };
-    if let Some(tt) = truth_text
-        && which[0]
-        && which[1]
-        && built.run.has_code()
-    {
-        let truth = gp_gaps::score::Truth::parse(&tt).map_err(anyhow::Error::msg)?;
-        let r = changes_r
-            .take()
-            .unwrap_or_else(|| gp_gaps::changes::detect(&built.run));
-        let cat = match catalog_r.take() {
-            Some(c) => c,
-            None => gp_gaps::interactive::catalog(&built.run).0,
-        };
-        let sc = gp_gaps::score::score(&built.run, &truth, &r, &cat);
-        score_text(&mut text, &sc);
-        let v = serde_json::to_value(&sc)?;
-        save("score", &v)?;
-        js.insert("score".into(), v);
+    let mut score_r = None;
+    if !scored.is_empty() {
+        match truth_text {
+            None => {
+                let why = format!(
+                    "no truth set for {} ({TRUTH_FILE} in its folder, crates/gp-gaps/truth/{}.toml, or --truth FILE)",
+                    t.id, t.id
+                );
+                let _ = writeln!(text, "\ndetection quality: {why}");
+                js.insert("score".into(), json!({ "note": why }));
+            }
+            Some(_) if !built.run.has_code() => {
+                let why = format!("not scored: no code signals ({})", built.no_code_why);
+                let _ = writeln!(text, "\ndetection quality: {why}");
+                js.insert("score".into(), json!({ "note": why }));
+            }
+            Some(tt) => {
+                let truth = gp_gaps::score::Truth::parse(&tt).map_err(anyhow::Error::msg)?;
+                // A detector this subcommand didn't run is scored against an
+                // empty report and dropped from the score.
+                let no_changes = gp_gaps::changes::Report::default();
+                let no_catalog = gp_gaps::interactive::Catalog::default();
+                let mut sc = gp_gaps::score::score(
+                    &built.run,
+                    &truth,
+                    changes_r.as_ref().unwrap_or(&no_changes),
+                    catalog_r.as_ref().unwrap_or(&no_catalog),
+                );
+                sc.detectors
+                    .retain(|d| scored.contains(&d.detector.as_str()));
+                score_text(&mut text, &sc);
+                let v = serde_json::to_value(&sc)?;
+                // score.json holds every detector: only `all` writes it.
+                if which[0] && which[1] {
+                    save("score", &v)?;
+                }
+                js.insert("score".into(), v);
+                score_r = Some(sc);
+            }
+        }
+    }
+    // The measures the scorecard reads, as `gaps.<template>.*` metrics of
+    // this run (docs/gaps.md, "Metrics"): a run over the whole recording
+    // only.
+    if built.whole {
+        for (name, value, unit) in gap_metrics(
+            &t.id,
+            changes_r.as_ref(),
+            catalog_r.as_ref(),
+            drawn_r.as_ref(),
+            score_r.as_ref(),
+        ) {
+            crate::runrec::metric(name, value, unit);
+        }
+    } else {
+        let _ = writeln!(
+            text,
+            "\nframes {}..{} are part of the recording: no gaps metrics are recorded for this run, and the game's latest ones and its reports (what the scorecard reads) are left as they were",
+            built.range.start, built.range.end
+        );
+        js.insert("partial".into(), json!(true));
     }
     if !args.focus.is_empty() {
         let mut windows = Vec::new();
@@ -336,6 +398,9 @@ impl Template {
 pub(crate) struct Built {
     pub run: Run,
     pub range: std::ops::Range<u64>,
+    /// Whether `range` is the whole recording: a run that reads part of it
+    /// (`--frames`) isn't kept as the game's latest metrics and reports.
+    pub whole: bool,
     pub short: String,
     pub id: String,
     pub no_code_why: String,
@@ -578,13 +643,46 @@ fn parse_labels(text: &str) -> Result<LabelsFile> {
     Ok(file)
 }
 
-/// The template's labels file: `labels.toml` in its folder, else the one
-/// this repo keeps for its source (`games/<source>/labels.toml`, Moss
-/// Hop's), else the one beside the roms.toml in the games checkout that
-/// lists the source. The old tool kept a table of files per game,
-/// generated under $GP_HOME for the games gameprinter doesn't carry.
+/// A game's own labelled reference set, in its folder (docs/gaps.md,
+/// "Scoring").
+pub(crate) const TRUTH_FILE: &str = "truth/gaps.toml";
+
+/// Whether the game in `dir` has a reference set: its own
+/// [`TRUTH_FILE`], or one kept with gp-gaps for `id`.
+pub(crate) fn has_truth(dir: &Path, id: &str) -> bool {
+    dir.join(TRUTH_FILE).is_file() || gp_gaps::score::builtin(id).is_some()
+}
+
+/// The reference set for the game in `dir`: its own [`TRUTH_FILE`] when it
+/// has one, else the one kept with gp-gaps for `id`, else none.
+pub(crate) fn truth_text(dir: &Path, id: &str) -> Result<Option<String>> {
+    let own = dir.join(TRUTH_FILE);
+    if own.is_file() {
+        return std::fs::read_to_string(&own)
+            .map(Some)
+            .with_context(|| own.display().to_string());
+    }
+    Ok(gp_gaps::score::builtin(id).map(str::to_owned))
+}
+
+/// A game's own labels for its truth set, in its folder: the names its
+/// [`TRUTH_FILE`] uses when they aren't the package's labels.toml's
+/// (docs/gaps.md, "Scoring").
+pub(crate) const TRUTH_LABELS: &str = "truth/labels.toml";
+
+/// The template's labels file: its truth set's [`TRUTH_LABELS`] when it
+/// has one, else `labels.toml` in its folder, else the one this repo keeps
+/// for its source (`games/<source>/labels.toml`, Moss Hop's), else the one
+/// beside the roms.toml in the games checkout that lists the source. The
+/// old tool kept a table of files per game, generated under $GP_HOME for
+/// the games gameprinter doesn't carry. `--labels` comes before all of
+/// them.
 fn labels_file(t: &Template) -> Option<PathBuf> {
     const FILE: &str = "labels.toml";
+    let truth = t.dir.join(TRUTH_LABELS);
+    if truth.is_file() {
+        return Some(truth);
+    }
     let own = t.dir.join(FILE);
     if own.is_file() {
         return Some(own);
@@ -630,6 +728,14 @@ pub(crate) fn labels(
         Some(f) => Some(f.clone()),
         None => labels_file(t),
     };
+    if args.labels.is_none()
+        && let Some(f) = file.as_ref().filter(|f| f.ends_with(TRUTH_LABELS))
+    {
+        notes.push(format!(
+            "labels {}: the game's truth set's names (--labels FILE for others)",
+            f.display()
+        ));
+    }
     let labels_dir = file
         .as_ref()
         .filter(|f| f.is_file())
@@ -939,13 +1045,12 @@ pub(crate) fn build(args: &GapsArgs, t: &Template, paths: &Paths) -> Result<Buil
         );
     }
     let range = parse_frames(&args.frames, manifest.frames)?;
-    let range = range.start.max(1)
-        ..range
-            .end
-            .min(manifest.frames.saturating_sub(args.oam_lag) + 1);
+    let last = manifest.frames.saturating_sub(args.oam_lag) + 1;
+    let range = range.start.max(1)..range.end.min(last);
     if range.is_empty() {
         bail!("--frames {} leaves no frame", args.frames);
     }
+    let whole = range == (1..last);
     let mut run = Run {
         known: known(t),
         ..Run::default()
@@ -1408,6 +1513,7 @@ pub(crate) fn build(args: &GapsArgs, t: &Template, paths: &Paths) -> Result<Buil
     Ok(Built {
         run,
         range,
+        whole,
         short: opened.short(),
         id: opened.entry.id.to_hex(),
         no_code_why,
@@ -1691,10 +1797,75 @@ fn interactive_text(t: &mut String, c: &gp_gaps::interactive::Catalog, n: usize)
     );
 }
 
+/// The detectors a subcommand scores, by which of changes, interactive and
+/// drawn it ran: the changes report holds sound, effects and ram, the
+/// catalog interactive and handlers.
+fn scored_detectors(which: [bool; 3]) -> Vec<&'static str> {
+    let mut v = Vec::new();
+    if which[0] {
+        v.extend(["sound", "effects", "ram"]);
+    }
+    if which[1] {
+        v.extend(["interactive", "handlers"]);
+    }
+    v
+}
+
+/// The `gaps.<template>.*` metrics of one run, as (name, value, unit), for
+/// the parts it ran: each changes place's item count, the catalog's kinds,
+/// interactions and scenery, the drawn kinds and those off, and each
+/// scored detector's precision and recall (with the effects' naming and
+/// classing when effects was scored, and the bookkeeping items in the RAM
+/// top when ram was). The names are the ones game-printer recorded and
+/// `gp scorecard` reads.
+pub(crate) fn gap_metrics(
+    id: &str,
+    changes: Option<&gp_gaps::changes::Report>,
+    catalog: Option<&gp_gaps::interactive::Catalog>,
+    drawn: Option<&gp_gaps::drawn::Report>,
+    score: Option<&gp_gaps::score::Score>,
+) -> Vec<(String, f64, &'static str)> {
+    let mut m = Vec::new();
+    let mut put =
+        |k: String, v: f64, unit: &'static str| m.push((format!("gaps.{id}.{k}"), v, unit));
+    if let Some(r) = changes {
+        for (place, c) in r.counts() {
+            put(format!("{place}.count"), c as f64, "count");
+        }
+    }
+    if let Some(c) = catalog {
+        put("interactive.count".into(), c.kinds.len() as f64, "count");
+        put("interactive.events".into(), c.interactions as f64, "count");
+        put(
+            "interactive.scenery".into(),
+            c.scenery.len() as f64,
+            "count",
+        );
+    }
+    if let Some(d) = drawn {
+        put("drawn.count".into(), d.off() as f64, "count");
+        put("drawn.kinds".into(), d.kinds.len() as f64, "count");
+    }
+    if let Some(s) = score {
+        for d in &s.detectors {
+            put(format!("{}.precision", d.detector), d.precision, "ratio");
+            put(format!("{}.recall", d.detector), d.recall, "ratio");
+        }
+        if s.get("effects").is_some() {
+            put("effects.named".into(), s.effects_named, "ratio");
+            put("effects.classed".into(), s.effects_classed, "ratio");
+        }
+        if s.get("ram").is_some() {
+            put("ram.bookkeeping".into(), s.ram_bookkeeping as f64, "count");
+        }
+    }
+    m
+}
+
 fn score_text(t: &mut String, s: &gp_gaps::score::Score) {
     let _ = writeln!(
         t,
-        "\ndetection quality (precision/recall against the reference set):"
+        "\ndetection quality (precision/recall against the truth set):"
     );
     for d in &s.detectors {
         let _ = writeln!(
@@ -1718,14 +1889,16 @@ fn score_text(t: &mut String, s: &gp_gaps::score::Score) {
             },
         );
     }
-    let _ = writeln!(
-        t,
-        "  effects named {:.2}, classed {:.2}; RAM bookkeeping in the top {}: {}",
-        s.effects_named,
-        s.effects_classed,
-        gp_gaps::score::RAM_TOP,
-        s.ram_bookkeeping
-    );
+    if s.get("effects").is_some() {
+        let _ = writeln!(
+            t,
+            "  effects named {:.2}, classed {:.2}; RAM bookkeeping in the top {}: {}",
+            s.effects_named,
+            s.effects_classed,
+            gp_gaps::score::RAM_TOP,
+            s.ram_bookkeeping
+        );
+    }
     if !s.unknown.is_empty() {
         let _ = writeln!(t, "  names the labels don't have: {}", s.unknown.join(", "));
     }
@@ -1830,6 +2003,166 @@ mod tests {
         assert_eq!(vram_cell(0x23C0, 1, 2), None);
     }
 
+    /// A RAM item of a made-up changes report.
+    fn ram_item(name: &str) -> gp_gaps::changes::RamItem {
+        gp_gaps::changes::RamItem {
+            name: name.into(),
+            addrs: vec![0x10],
+            play_changes: 5,
+            changes: 5,
+            play_share: 1.0,
+            input_lift: 1.0,
+            labelled: true,
+            score: 0.0,
+            event_lift: 1.0,
+            per_frame: 0.0,
+            engine_share: 0.0,
+            writers: vec![],
+            samples: vec![],
+        }
+    }
+
+    /// A made-up game's truth set and a run of `n` play frames.
+    fn made_up() -> (gp_gaps::score::Truth, Run) {
+        let truth = gp_gaps::score::Truth::parse(
+            r#"
+schema = 0
+template = "made-up"
+[ram]
+matter = ["Alpha", "Beta", "Gamma"]
+bookkeeping = ["Frame"]
+"#,
+        )
+        .unwrap();
+        let run = Run {
+            frames: (0..8)
+                .map(|i| FrameFacts {
+                    frame: i,
+                    play: true,
+                    code: Some(Code::default()),
+                    ..FrameFacts::default()
+                })
+                .collect(),
+            ..Run::default()
+        };
+        (truth, run)
+    }
+
+    fn metric<'a>(m: &'a [(String, f64, &'static str)], name: &str) -> Option<(f64, &'a str)> {
+        m.iter().find(|x| x.0 == name).map(|x| (x.1, x.2))
+    }
+
+    #[test]
+    fn changes_records_its_counts_and_scores_its_own_detectors() {
+        // The RAM place: Alpha and Beta matter, Frame is bookkeeping, 22
+        // more matter to nobody, and Gamma comes 26th, past the top 25.
+        let mut ram = vec![ram_item("Alpha"), ram_item("Beta"), ram_item("Frame")];
+        ram.extend((0..22).map(|i| ram_item(&format!("Other{i}"))));
+        ram.push(ram_item("Gamma"));
+        let changes = gp_gaps::changes::Report {
+            ram,
+            ..Default::default()
+        };
+        let (truth, run) = made_up();
+        let mut sc = gp_gaps::score::score(
+            &run,
+            &truth,
+            &changes,
+            &gp_gaps::interactive::Catalog::default(),
+        );
+        let scored = scored_detectors([true, false, false]);
+        sc.detectors
+            .retain(|d| scored.contains(&d.detector.as_str()));
+        let m = gap_metrics("made-up", Some(&changes), None, None, Some(&sc));
+        // 2 of the top 25 matter: precision 2/25. 3 that matter are in the
+        // place and 2 made the top: recall 2/3.
+        assert_eq!(
+            metric(&m, "gaps.made-up.ram.precision"),
+            Some((0.08, "ratio"))
+        );
+        assert_eq!(metric(&m, "gaps.made-up.ram.recall"), Some((0.67, "ratio")));
+        assert_eq!(
+            metric(&m, "gaps.made-up.ram.bookkeeping"),
+            Some((1.0, "count"))
+        );
+        assert_eq!(metric(&m, "gaps.made-up.ram.count"), Some((26.0, "count")));
+        assert_eq!(metric(&m, "gaps.made-up.code.count"), Some((0.0, "count")));
+        // Nothing asked for sound and nothing was found: an empty
+        // denominator scores 1, as gp-gaps' ratio has it.
+        assert_eq!(
+            metric(&m, "gaps.made-up.sound.precision"),
+            Some((1.0, "ratio"))
+        );
+        assert!(metric(&m, "gaps.made-up.effects.named").is_some());
+        // `changes` ran no catalog: neither its counts nor its scores.
+        assert!(
+            m.iter()
+                .all(|x| !x.0.contains(".interactive.") && !x.0.contains(".handlers."))
+        );
+    }
+
+    #[test]
+    fn interactive_and_drawn_record_only_their_own_parts() {
+        let (truth, run) = made_up();
+        let cat = gp_gaps::interactive::Catalog {
+            interactions: 7,
+            ..Default::default()
+        };
+        let mut sc =
+            gp_gaps::score::score(&run, &truth, &gp_gaps::changes::Report::default(), &cat);
+        let scored = scored_detectors([false, true, false]);
+        sc.detectors
+            .retain(|d| scored.contains(&d.detector.as_str()));
+        let m = gap_metrics("made-up", None, Some(&cat), None, Some(&sc));
+        let names: Vec<&str> = m.iter().map(|x| x.0.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "gaps.made-up.interactive.count",
+                "gaps.made-up.interactive.events",
+                "gaps.made-up.interactive.scenery",
+                "gaps.made-up.interactive.precision",
+                "gaps.made-up.interactive.recall",
+                "gaps.made-up.handlers.precision",
+                "gaps.made-up.handlers.recall",
+            ]
+        );
+        assert_eq!(
+            metric(&m, "gaps.made-up.interactive.events"),
+            Some((7.0, "count"))
+        );
+
+        // drawn: two kinds checked, one off; it scores nothing.
+        assert!(scored_detectors([false, false, true]).is_empty());
+        let kind = |name: &str, off: &[&str]| gp_gaps::drawn::KindReport {
+            kind: name.into(),
+            frames: 10,
+            matched: 10,
+            dx: [0.0; 2],
+            dy: [0.0; 2],
+            dw: [0.0; 2],
+            dh: [0.0; 2],
+            median: [0.0; 4],
+            at_median: [1.0; 4],
+            systematic: off.iter().map(|s| (*s).to_owned()).collect(),
+            model: None,
+            samples: vec![],
+            composite_frames: 0,
+            offset: [0.0; 2],
+            offset_share: 1.0,
+        };
+        let drawn = gp_gaps::drawn::Report {
+            kinds: vec![kind("walker", &["dy -9"]), kind("hero", &[])],
+            ..Default::default()
+        };
+        let m = gap_metrics("made-up", None, None, Some(&drawn), None);
+        assert_eq!(metric(&m, "gaps.made-up.drawn.count"), Some((1.0, "count")));
+        assert_eq!(metric(&m, "gaps.made-up.drawn.kinds"), Some((2.0, "count")));
+        assert_eq!(m.len(), 2);
+        // `all` scores all five.
+        assert_eq!(scored_detectors([true, true, true]).len(), 5);
+    }
+
     #[test]
     fn identifiers_are_tokens() {
         let mut s = BTreeSet::new();
@@ -1840,5 +2173,79 @@ mod tests {
         assert!(s.contains("Enemy_X_Position"));
         assert!(s.contains("SMBDIS"));
         assert!(!s.contains("12"));
+    }
+
+    #[test]
+    fn a_games_truth_labels_name_things_unless_labels_is_given() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            home: home.path().to_owned(),
+            store: home.path().join("store"),
+            roms: home.path().join("roms"),
+        };
+        let games = tempfile::tempdir().unwrap();
+        let dir = games.path().join("made-up");
+        let mosshop = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../templates/mosshop");
+        crate::bench_clips::copy_dir(&mosshop, &dir).unwrap();
+        // Made-up names: one in the folder's labels.toml, one in the truth
+        // set's, and one in a file given with --labels.
+        let file = |name: &str| {
+            format!("schema = 0\n[[label]]\nname = \"{name}\"\naddr = 0x0300\nsize = 1\n")
+        };
+        std::fs::write(dir.join("labels.toml"), file("folder_name")).unwrap();
+        let t = Template::open(None, dir.to_str().unwrap()).unwrap();
+        let names = |args: &GapsArgs| {
+            let mut k = Known::default();
+            let notes = labels(args, &t, &paths, 0, &mut k, &mut Vec::new());
+            (
+                k.ram.iter().map(|l| l.name.clone()).collect::<Vec<_>>(),
+                notes,
+            )
+        };
+        let mut args = GapsArgs::for_sound("made-up", "x", "0..1", None, None);
+        assert_eq!(names(&args).0, vec!["folder_name".to_owned()]);
+        // The truth set's labels come first, and say so.
+        std::fs::create_dir_all(dir.join("truth")).unwrap();
+        std::fs::write(dir.join(TRUTH_LABELS), file("truth_name")).unwrap();
+        let (got, notes) = names(&args);
+        assert_eq!(got, vec!["truth_name".to_owned()]);
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("truth/labels.toml") && n.contains("truth set")),
+            "{notes:?}"
+        );
+        // --labels still wins.
+        let given = games.path().join("given.toml");
+        std::fs::write(&given, file("given_name")).unwrap();
+        args.labels = Some(given);
+        let (got, notes) = names(&args);
+        assert_eq!(got, vec!["given_name".to_owned()]);
+        assert!(!notes.iter().any(|n| n.contains("truth set")), "{notes:?}");
+    }
+
+    #[test]
+    fn a_games_own_truth_set_comes_before_the_built_in_one() {
+        let game = tempfile::tempdir().unwrap();
+        // No file of its own and no built-in set: none.
+        assert!(!has_truth(game.path(), "made-up"));
+        assert_eq!(truth_text(game.path(), "made-up").unwrap(), None);
+        // No file of its own: the built-in one for its id.
+        let built_in = gp_gaps::score::builtin("mosshop").unwrap();
+        assert!(has_truth(game.path(), "mosshop"));
+        assert_eq!(
+            truth_text(game.path(), "mosshop").unwrap().as_deref(),
+            Some(built_in)
+        );
+        // Its own file, read whatever the id.
+        let own = "schema = 0\ntemplate = \"made-up\"\n[ram]\nmatter = [\"Alpha\"]\n";
+        std::fs::create_dir_all(game.path().join("truth")).unwrap();
+        std::fs::write(game.path().join(TRUTH_FILE), own).unwrap();
+        for id in ["made-up", "mosshop"] {
+            assert!(has_truth(game.path(), id));
+            assert_eq!(truth_text(game.path(), id).unwrap().as_deref(), Some(own));
+        }
+        let t = gp_gaps::score::Truth::parse(own).unwrap();
+        assert_eq!(t.ram.matter, vec!["Alpha".to_owned()]);
     }
 }

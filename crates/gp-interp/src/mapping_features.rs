@@ -269,6 +269,23 @@ pub const FEATURES: &[Feature] = &[
         &["slots.field.stride", "slots.group.field.stride"],
     ),
     mapping(
+        "slots.group.presentation",
+        "",
+        "A slot group that is presentation only: its objects are carried into a start and drawn, and no run pairs or measures them",
+        &["slots.group.presentation"],
+    ),
+    mapping(
+        "slots.field.strides",
+        "",
+        "A slot field's `strides`, a step from one slot to the next for each byte it reads, for a value made of bytes from records that repeat at different steps",
+        &[
+            "slots.field.strides",
+            "slots.group.field.strides",
+            "slots.kind.field.strides",
+            "slots.group.kind.field.strides",
+        ],
+    ),
+    mapping(
         "slots.no_id",
         "",
         "Slots with no `id`: every slot's ID is 0, for slots that hold one kind of object. Found only by being listed, as `ticks` is",
@@ -476,6 +493,12 @@ pub const FEATURES: &[Feature] = &[
         "The original's machine: `arcade` for a romset, whose `ignore` may name any of the main CPU's addresses and which has none of the NES's own parts (`nametable`, `oam`, `oam_tile`, `read_at`)",
         &["platform"],
     ),
+    mapping(
+        "platform.board_units",
+        "",
+        "`board_units = true`: an arcade model's positions are the board's own units from the screen's top left with y down (half-pixels on Midway's MCR, 256 by 240), the fields' `scale` and `offset` turning the RAM's bytes into them, so the drawers only multiply by the board's unit. Without it an arcade model holds the RAM's bytes as they are",
+        &["board_units"],
+    ),
 ];
 
 #[cfg(test)]
@@ -544,6 +567,42 @@ mod tests {
         assert!(e.contains("the NES's"), "{e}");
         let e = Mapping::parse(&format!("platform = \"sega\"\n{base}")).unwrap_err();
         assert!(e.contains("nes or arcade"), "{e}");
+    }
+
+    /// `board_units` marks an arcade model in the board's units; an NES
+    /// mapping may not say it. A field's `scale` may be negative, for a y
+    /// the RAM counts up the screen: the board's place, 241 less the byte.
+    #[test]
+    fn an_arcade_mapping_may_say_its_model_is_in_board_units() {
+        let base = BASE.replace("ram = [0x10]", "ram = [0xE000]");
+        let raw = Mapping::parse(&format!("platform = \"arcade\"\n{base}")).unwrap();
+        assert!(!raw.board_units, "unmarked: the RAM's bytes");
+        let y = "\n[[field]]\npath = \"entities.player[0].y\"\nram = [0xE2E6]\nscale = -1\noffset = 241\n";
+        let marked = Mapping::parse(&format!(
+            "platform = \"arcade\"\nboard_units = true\n{base}{y}"
+        ))
+        .unwrap();
+        assert!(marked.board_units);
+        let f = marked
+            .fields
+            .iter()
+            .find(|f| f.path.ends_with(".y"))
+            .unwrap();
+        // A sprite byte of 48 (Tapper's bottom bar) is 193 units down.
+        assert_eq!(f.value(&[48]), gp_runtime::Value::Fixed(193 << 16));
+        assert_eq!(f.value(&[241]), gp_runtime::Value::Fixed(0));
+        let listed = format!(
+            "platform = \"arcade\"\nboard_units = true\n{}",
+            base.replace("align", "features = [\"platform\"]\nalign")
+        );
+        let e = Mapping::parse(&listed).unwrap_err();
+        assert!(e.contains("`platform.board_units`"), "{e}");
+        Mapping::parse(
+            &listed.replace("[\"platform\"]", "[\"platform\", \"platform.board_units\"]"),
+        )
+        .unwrap();
+        let e = Mapping::parse(&format!("board_units = true\n{BASE}")).unwrap_err();
+        assert!(e.contains("arcade mapping's"), "{e}");
     }
 
     #[test]

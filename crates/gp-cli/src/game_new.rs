@@ -809,12 +809,11 @@ fn model_toml(
         }
     }
     s += "\n[entities.player]\ndescription = \"The player, not measured yet\"\nrole = \"player\"\nsize = [16, 16]\nhitbox = { x = 0, y = 0, w = 16, h = 16 }\n";
-    // A screen of 32 by 30 tiles: 8 pixels on the NES (256 by 240), 16 on
-    // Midway's MCR (512 by 480).
-    let tile = match device {
-        Device::NesPad => 8,
-        Device::Arcade => 16,
-    };
+    // A screen of 32 by 30 tiles of 8 units: the NES's pixels (256 by
+    // 240), and on Midway's MCR the board's own units, half a screen pixel
+    // each way (its 512 by 480 screen), which the mapping's board_units
+    // says the model is in. A sprite there is 16 by 16 units.
+    let tile = 8;
     let _ = write!(
         s,
         "\n[levels.main]\ndescription = \"The first level, not lifted yet: no tiles\"\nempty = true\nsize = [32, 30]\ntile_size = {tile}\n\n[[levels.main.spawn]]\nentity = \"player\"\nx = 0\ny = 0\n"
@@ -845,7 +844,24 @@ fn mapping_toml(name: &str, source: &str, device: Device, draws: Option<Option<&
         Device::NesPad => ("", "ram[0x0000]"),
         Device::Arcade => (
             "# An arcade original: ram[...] reads the main CPU's addresses (work RAM\n\
-             # at 0xE000 on Midway MCR).\nplatform = \"arcade\"\n",
+             # at 0xE000 on Midway MCR).\nplatform = \"arcade\"\n\
+             # The model's positions are the board's own units (feature\n\
+             # platform.board_units): from the screen's top left with y down, half a\n\
+             # screen pixel each way, 256 by 240 with tiles of 8. An object slot holds\n\
+             # the bytes the board's sprite RAM gets, which it draws at x - 3 and\n\
+             # 241 - y, so the place's fields turn those bytes into units, as:\n\
+             # [[field]]\n\
+             # path = \"entities.player[0].x\"\n\
+             # ram = [0xE000]\n\
+             # offset = -3\n\
+             #\n\
+             # [[field]]\n\
+             # path = \"entities.player[0].y\"\n\
+             # ram = [0xE001]\n\
+             # scale = -1\n\
+             # offset = 241\n\
+             # (`gp track` proposes them when it sees a y that counts up the screen.)\n\
+             board_units = true\n",
             "ram[0xE000]",
         ),
     };
@@ -1172,6 +1188,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(mapping.platform.as_deref(), Some("arcade"));
+        // In the board's own units: a grid of 8, a sprite's hitbox of 16.
+        assert!(mapping.board_units);
+        assert_eq!(m.levels["main"].core.tile_size, 8);
         assert_eq!(pkg.entries[0].system.as_deref(), Some("rbtapper"));
         assert!(pkg.roms_toml_disagreements().unwrap().is_empty());
         let t = crate::template::check(&dir, &rom).unwrap();
@@ -1215,6 +1234,9 @@ mod tests {
             .unwrap();
             assert_eq!(m.draws.len(), usize::from(d == Some(Some(found))));
             assert_eq!(m.score_draws, d == Some(Some(found)));
+            // An arcade skeleton is in the board's units; an NES one in
+            // the screen's pixels, which need no marker.
+            assert_eq!(m.board_units, device == Device::Arcade);
         }
     }
 

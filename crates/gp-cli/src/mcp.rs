@@ -49,8 +49,16 @@ pub(crate) fn run(args: &McpArgs, paths: &Paths) -> Result<Outcome> {
     let cwd = std::env::current_dir()?;
     let repo = match &args.repo {
         Some(r) => absolute(r)?,
-        None => gp_evidence::paths::enclosing_git_work_tree(&cwd)
-            .ok_or_else(|| anyhow!("not in a git work tree; give the repo with --repo"))?,
+        // A released gp's own templates when the folder it runs in has
+        // none (a theme's repo, or no repo at all).
+        None => match gp_evidence::paths::enclosing_git_work_tree(&cwd) {
+            Some(t) if t.join("templates").is_dir() => t,
+            found => match crate::bundle::root().filter(|r| r.join("templates").is_dir()) {
+                Some(r) => r,
+                None => found
+                    .ok_or_else(|| anyhow!("not in a git work tree; give the repo with --repo"))?,
+            },
+        },
     };
     if !repo.join("templates").is_dir() {
         bail!("{} has no templates/", repo.display());
@@ -85,6 +93,9 @@ pub(crate) fn run(args: &McpArgs, paths: &Paths) -> Result<Outcome> {
             .transpose()?,
     };
     let shown = json!({ "repo": config.repo, "work": config.work, "games": config.games });
+    // The tools' `gp query` children ask this process, which keeps the
+    // recordings open between them (crate::session).
+    let _sessions = crate::session::serve_in_background(paths);
     gp_mcp::server::serve_stdio(config).map_err(anyhow::Error::msg)?;
     // stdout was the MCP channel, so nothing more is printed there.
     Ok(Outcome::ok(shown, String::new()))

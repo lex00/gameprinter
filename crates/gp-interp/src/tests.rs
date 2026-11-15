@@ -771,6 +771,109 @@ orbit = { spin = "0.5", parts = 3, part = "spark", place = [4, 4] }
     assert_eq!(rt.query("entities.spark[*].x").unwrap().len(), 3);
 }
 
+/// The batch read gives what `query` gives for every path a run reads
+/// (each leaf, each field of every body of a kind) and for paths it leaves
+/// to the view (a body whole, a body or kind that isn't there, a bad path),
+/// errors too, frame after frame.
+#[test]
+fn query_values_reads_what_query_reads() {
+    use gp_runtime::QueryValues as _;
+    let extra = r#"
+[entities.flier]
+role = "enemy"
+size = [16, 16]
+hitbox = { x = 0, y = 0, w = 16, h = 16 }
+shuttle = { axis = "x", step = 1, every = 2, turn_after = 3, sway = { step = 1, half = 4 } }
+
+[entities.spark]
+role = "enemy"
+size = [8, 8]
+hitbox = { x = 0, y = 0, w = 8, h = 8 }
+
+[entities.pivot]
+role = "enemy"
+size = [8, 8]
+hitbox = { x = 0, y = 0, w = 8, h = 8 }
+orbit = { spin = "0.5", parts = 3, part = "spark", place = [4, 4] }
+"#;
+    let spawns = "[[levels.one.spawn]]\nentity = \"flier\"\nx = 100\ny = 64\n\n[[levels.one.spawn]]\nentity = \"pivot\"\nx = 150\ny = 64\n\n[[levels.one.spawn]]";
+    let mut rt = edited("[[levels.one.spawn]]", spawns, extra);
+    for frame in 0..40 {
+        // Runs of this frame that have read nothing yet.
+        let fresh = [(rt.fork(), rt.fork()), (rt.fork(), rt.fork())];
+        let leaves = crate::state::leaves(rt.spec(), rt.world());
+        let mut paths: Vec<String> = leaves
+            .iter()
+            .map(|(p, _)| gp_model::path::display(p))
+            .collect();
+        let fields: std::collections::BTreeSet<String> = paths
+            .iter()
+            .filter_map(|p| {
+                let rest = p.strip_prefix("entities.")?;
+                let (kind, rest) = rest.split_once('[')?;
+                let (_, field) = rest.split_once("].")?;
+                Some(format!("entities.{kind}[*].{field}"))
+            })
+            .collect();
+        // Each of these is read from the world, not the view.
+        let direct = crate::state::Leaves::new(rt.spec(), rt.world());
+        for p in paths.iter().chain(&fields) {
+            assert!(direct.values(p).is_some_and(|r| r.is_ok()), "{p}");
+        }
+        paths.extend(fields);
+        for name in rt.spec().kinds.names() {
+            paths.push(format!("entities.{name}[*].x"));
+            paths.push(format!("entities.{name}[0]"));
+            paths.push(format!("entities.{name}[99].x"));
+            paths.push(format!("entities.{name}[0].ext"));
+            paths.push(format!("entities.{name}[0].nothing"));
+        }
+        paths.extend(
+            [
+                "entities",
+                "entities.nobody[*].x",
+                "rules",
+                "level",
+                "frame",
+                "counters",
+                "cameras",
+                "input",
+                "ticks",
+                "no.such.path",
+                "entities[*][*].alive",
+                "entities.flier[0..1].x",
+                "entities.flier.x",
+                "][",
+            ]
+            .map(String::from),
+        );
+        let one_by_one: Vec<Result<Vec<Value>, String>> = paths
+            .iter()
+            .map(|p| Ok(rt.query(p)?.into_iter().map(|e| e.value).collect()))
+            .collect();
+        assert_eq!(rt.query_values(&paths), one_by_one, "frame {frame}");
+        // A run noting its reads of the spec notes the same either way,
+        // for a mapping's paths alone too (none that builds the view).
+        let leaf_paths: Vec<String> = paths
+            .iter()
+            .filter(|p| p.contains('[') && p.starts_with("entities.") && !p.contains(".."))
+            .take(3)
+            .cloned()
+            .collect();
+        for (asked, (fresh_a, fresh_b)) in [&paths, &leaf_paths].into_iter().zip(&fresh) {
+            let (_, batch) = gp_sim::reads::recording(|| fresh_a.query_values(asked));
+            let (_, each) = gp_sim::reads::recording(|| {
+                for p in asked.iter() {
+                    let _ = fresh_b.query(p);
+                }
+            });
+            assert_eq!(batch, each, "frame {frame}");
+        }
+        rt.step(&pads(if frame % 7 < 3 { RIGHT | A } else { LEFT }, 1))
+            .unwrap();
+    }
+}
+
 #[test]
 fn become_replaces_the_instance() {
     let mut rt = edited(
@@ -3326,6 +3429,115 @@ fn slots_with_a_stride_and_no_id_or_clock_read_each_slot_a_record_apart() {
 
     let zero = text.replace("stride = 16", "stride = 0");
     assert!(crate::mapping::Mapping::parse(&zero).is_err());
+}
+
+/// A word made of bytes from two records that repeat at different steps
+/// (feature `slots.field.strides`): each byte steps by its own stride, and
+/// a person who gives the wrong number of steps, both kinds of stride, or a
+/// zero step is told why.
+#[test]
+fn a_slot_field_with_a_stride_for_each_byte_reads_each_from_its_own_record() {
+    let text = SLOT_MAPPING.replace(
+        "path = \"y\"\nram = [0x34]\n",
+        "path = \"y\"\nram = [0x34]\n\n[[slots.field]]\npath = \"ext[0]\"\nram = [0x100, 0x101, 0x200, 0x201]\nstrides = [32, 32, 8, 8]\n",
+    );
+    let mapping = crate::mapping::Mapping::parse(&text).unwrap();
+    let slots = mapping.slots.as_ref().unwrap();
+    let w = slots.fields.iter().find(|f| f.path == "ext[0]").unwrap();
+    assert_eq!(
+        w.slot_selectors(0),
+        ["ram[0x0100]", "ram[0x0101]", "ram[0x0200]", "ram[0x0201]"]
+    );
+    assert_eq!(
+        w.slot_selectors(2),
+        ["ram[0x0140]", "ram[0x0141]", "ram[0x0210]", "ram[0x0211]"]
+    );
+    let used = gp_model::features::used(
+        &toml::Value::Table(text.parse().unwrap()),
+        crate::mapping_features::FEATURES,
+    );
+    assert!(used.contains("slots.field.strides"), "{used:?}");
+    // The bytes read are carried into the slot's word, low byte first.
+    let mut ram = vec![0u8; 0x800];
+    ram[0x11] = 1; // slot 1 is taken
+    ram[0x13] = 9; // with the drifter's ID
+    ram[0x31] = 5;
+    ram[0x35] = 6;
+    (ram[0x120], ram[0x121], ram[0x208], ram[0x209]) = (1, 2, 3, 4);
+    let original = Scripted {
+        ram,
+        frame: 0,
+        defeated_from: None,
+    };
+    let got = crate::bodies::carried_slot_objects(&original, slots).unwrap();
+    let v = got[0].values.iter().find(|(p, _)| p == "ext[0]").unwrap();
+    assert_eq!(
+        format!("{:?}", v.1),
+        format!("{:?}", w.value(&[1, 2, 3, 4]))
+    );
+
+    for (bad, says) in [
+        (
+            "strides = [32, 32, 8]",
+            "has 3 steps and the field reads 4 bytes",
+        ),
+        ("strides = [32, 32, 8, 0]", "each stride is at least 1"),
+        ("strides = [32, 32, 8, 8]\nstride = 8", "not both"),
+    ] {
+        let e = crate::mapping::Mapping::parse(&text.replace("strides = [32, 32, 8, 8]", bad))
+            .unwrap_err();
+        assert!(e.contains(says), "{bad}: {e}");
+    }
+    let outside = text.replace(
+        "path = \"entities.hero[0].y\"\nram = [0x41]\n",
+        "path = \"entities.hero[0].y\"\nram = [0x41]\nstrides = [8]\n",
+    );
+    let e = crate::mapping::Mapping::parse(&outside).unwrap_err();
+    assert!(e.contains("`strides` is for a slot field"), "{e}");
+}
+
+/// A slot group that is presentation only (feature
+/// `slots.group.presentation`): its objects are carried into a start, and
+/// none is among the objects a run pairs and measures. `[slots]` itself
+/// can't be one, and a person is told so.
+#[test]
+fn a_presentation_group_is_carried_and_never_measured() {
+    let text = format!(
+        "{SLOT_MAPPING}\n[[slots.group]]\nname = \"ends\"\ncount = 2\nactive = 0x60\npresentation = true\n\n\
+         [[slots.group.field]]\npath = \"x\"\nram = [0x70]\n\n[[slots.group.field]]\npath = \"y\"\nram = [0x72]\n\n\
+         [[slots.group.kind]]\nentity = \"end\"\nids = [0]\n"
+    )
+    .replace("schema = 1\n", "schema = 22\n");
+    let mapping = crate::mapping::Mapping::parse(&text).unwrap();
+    let used = gp_model::features::used(
+        &toml::Value::Table(text.parse().unwrap()),
+        crate::mapping_features::FEATURES,
+    );
+    assert!(used.contains("slots.group.presentation"), "{used:?}");
+    let g = &mapping.slots.as_ref().unwrap().groups[0];
+    assert!(g.presentation && g.kinds[0].holds_slot && !g.kinds[0].bodied());
+    let mut ram = vec![0u8; 0x800];
+    (ram[0x60], ram[0x61], ram[0x70], ram[0x71]) = (1, 1, 40, 80);
+    let original = Scripted {
+        ram,
+        frame: 0,
+        defeated_from: None,
+    };
+    assert_eq!(
+        crate::bodies::carried_slot_objects(&original, g)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(
+        crate::bodies::slot_objects(&original, g)
+            .unwrap()
+            .is_empty()
+    );
+
+    let first = text.replace("moving = ", "presentation = true\nmoving = ");
+    let e = crate::mapping::Mapping::parse(&first).unwrap_err();
+    assert!(e.contains("`presentation` is a group's"), "{e}");
 }
 
 #[test]

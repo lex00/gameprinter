@@ -9,6 +9,7 @@
 //! | cells | 16x16 nametable cells | video RAM's 32x30 tiles of 16x16 (`nt` 0), each tile's two bytes as `before`/`after` [low, high, 0, 0]; writers are the routines that wrote its video RAM bytes |
 //! | sound | APU writes | the AY-8910 writes (`ay-write` events), as chip x 256 + register |
 //! | code | the code observer's replay | a replay with the trace and access log on the main Z80: routines entered (call, restart and interrupt targets), RAM writes with their instruction and routine, and the routines that wrote the sound board's latch (the "engine") |
+//! | sound requests | a RAM queue or a play-sound routine | the main CPU's writes to the sound board's latch (ports 1C to 1F), [`Run::latch`]: gp-gaps takes the latch written with the most values as the interface |
 //!
 //! Addresses of code are the main CPU's (there is no banking), used as
 //! the "PRG offset" gp-gaps keys code by.
@@ -20,7 +21,7 @@ use gp_arcade::Tapper;
 use gp_arcade::dasm::{self, Flow};
 use gp_arcade::mcr::AccessKind;
 use gp_evidence::Paths;
-use gp_gaps::{CellChange, Code, Ent, FrameFacts, Object, RamWrite, Run};
+use gp_gaps::{CellChange, Code, Ent, FrameFacts, LatchWrite, Object, RamWrite, Run};
 use gp_runtime::select::Condition;
 
 use crate::gaps::{Built, GapsArgs, Template, eval, hud_digits, known, labels, read};
@@ -44,8 +45,13 @@ fn space(fields: &[(&str, &[u8])]) -> Vec<u8> {
     m
 }
 
-/// One frame's code facts from a replay of it.
-fn code_of(w: &gp_arcade::levels::Watched, routines: &BTreeSet<u16>) -> (Code, Vec<(u16, u32)>) {
+/// A frame's code facts, its video RAM writes (address, routine) and its
+/// sound latch writes, from a replay of it.
+type FrameCode = (Code, Vec<(u16, u32)>, Vec<LatchWrite>);
+
+/// One frame's code facts from a replay of it: with the video RAM's
+/// writers and the sound board's latch writes (each's `at` left 0).
+fn code_of(w: &gp_arcade::levels::Watched, routines: &BTreeSet<u16>) -> FrameCode {
     let routine_of = |pc: u16| -> u32 {
         routines
             .range(..=pc)
@@ -74,6 +80,7 @@ fn code_of(w: &gp_arcade::levels::Watched, routines: &BTreeSet<u16>) -> (Code, V
     let mut engine: BTreeSet<u32> = BTreeSet::new();
     let mut engine_pc: BTreeSet<u32> = BTreeSet::new();
     let mut vram = Vec::new();
+    let mut latch = Vec::new();
     for a in w.accesses.iter().filter(|a| a.cpu == 0) {
         match a.kind {
             AccessKind::Write if (0xe000..0xe800).contains(&a.addr) => ram.push(RamWrite {
@@ -89,6 +96,15 @@ fn code_of(w: &gp_arcade::levels::Watched, routines: &BTreeSet<u16>) -> (Code, V
             AccessKind::Out if (0x1c..=0x1f).contains(&(a.addr & 0xff)) => {
                 engine.insert(routine_of(a.pc));
                 engine_pc.insert(u32::from(a.pc));
+                let port = (a.addr & 0xff) as u8;
+                latch.push(LatchWrite {
+                    at: 0,
+                    latch: port - 0x1c,
+                    port,
+                    value: a.value,
+                    pc: u32::from(a.pc),
+                    routine: routine_of(a.pc),
+                });
             }
             _ => {}
         }
@@ -105,6 +121,7 @@ fn code_of(w: &gp_arcade::levels::Watched, routines: &BTreeSet<u16>) -> (Code, V
             calls: Vec::new(),
         },
         vram,
+        latch,
     )
 }
 
@@ -118,6 +135,7 @@ pub(crate) fn build(args: &GapsArgs, t: &Template, paths: &Paths, opened: Opened
     }
     let range = parse_frames(&args.frames, manifest.frames)?;
     let range = range.start.max(1)..range.end.min(manifest.frames + 1);
+    let whole = range == (1..manifest.frames + 1);
     if range.is_empty() {
         bail!("--frames {} leaves no frame", args.frames);
     }
@@ -130,6 +148,11 @@ pub(crate) fn build(args: &GapsArgs, t: &Template, paths: &Paths, opened: Opened
     for n in labels(args, t, paths, 0xe000, &mut known_, &mut run.constants) {
         eprintln!("gp: {n}");
     }
+    // The board's sprite RAM (E800) is no copy in work RAM, as the NES's
+    // page 2 is; the stack is where the main CPU's stack pointer ran,
+    // from the replay below (nothing is left out without one).
+    known_.oam_page = 0;
+    known_.stack = gp_gaps::Stack(0..0);
     run.known = known_;
 
     // The replay with the code facts, unless --no-code or no romset.
@@ -150,7 +173,7 @@ pub(crate) fn build(args: &GapsArgs, t: &Template, paths: &Paths, opened: Opened
         &String::from_utf8(opened.store.get(&manifest.input_log)?)
             .context("the recording's input log isn't text")?,
     )?;
-    let mut code_by_frame: BTreeMap<u64, (Code, Vec<(u16, u32)>)> = BTreeMap::new();
+    let mut code_by_frame: BTreeMap<u64, FrameCode> = BTreeMap::new();
     if let Some(set) = &set {
         run.prg = set.maincpu[..0xe000].to_vec();
         // The routines: the code map of a watched run of these frames.
@@ -166,6 +189,11 @@ pub(crate) fn build(args: &GapsArgs, t: &Template, paths: &Paths, opened: Opened
                 kept.push((frame, w.step_quiet(&mut t0, c)));
             }
         }
+        run.known.stack = gp_gaps::Stack::of_sp(
+            0xe000,
+            kept.iter()
+                .flat_map(|(_, w)| w.trace.iter().filter(|e| e.cpu == 0).map(|e| e.sp)),
+        );
         let levels = w.finish();
         let map = crate::code_z80::CodeMap::of(set, 0, Some(&levels.cpus[0]));
         let routines: BTreeSet<u16> = map.routines.keys().copied().collect();
@@ -293,9 +321,12 @@ pub(crate) fn build(args: &GapsArgs, t: &Template, paths: &Paths, opened: Opened
                     Object { c, sprites: inside }
                 })
                 .collect();
-            let (code, vram) = code_by_frame
+            let (code, vram, latch) = code_by_frame
                 .remove(&f)
-                .map_or((None, Vec::new()), |(c, v)| (Some(c), v));
+                .map_or((None, Vec::new(), Vec::new()), |(c, v, l)| (Some(c), v, l));
+            let at = run.frames.len();
+            run.latch
+                .extend(latch.into_iter().map(|w| LatchWrite { at, ..w }));
             let mut writers: BTreeMap<(u8, u8), BTreeSet<u32>> = BTreeMap::new();
             for (addr, r) in vram {
                 let tile = usize::from(addr - 0xf000) / 2;
@@ -355,6 +386,7 @@ pub(crate) fn build(args: &GapsArgs, t: &Template, paths: &Paths, opened: Opened
     Ok(Built {
         run,
         range,
+        whole,
         short: opened.short(),
         id: opened.entry.id.to_hex(),
         no_code_why,

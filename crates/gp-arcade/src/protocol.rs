@@ -134,13 +134,42 @@ impl ArcadeRuntime {
 
     /// Reads a parsed selector.
     pub fn read(&self, sel: &Selector) -> Result<Vec<Entry>, String> {
+        read_board(&self.tapper, sel)
+    }
+
+    fn holds(&self, cond: &Condition) -> Result<bool, String> {
+        holds_on(&self.tapper, cond)
+    }
+}
+
+/// Whether `cond` holds on the board as it stands, its selectors read as
+/// [`read_board`] reads them: what `run_until` stops on, and the goal
+/// `gp mechanic autoplay --until` plays to.
+pub fn holds_on(t: &Tapper, cond: &Condition) -> Result<bool, String> {
+    cond.eval(&mut |sel| read_one(t, sel))
+}
+
+fn read_one(t: &Tapper, sel: &Selector) -> Result<i64, String> {
+    match read_board(t, sel)?.as_slice() {
+        [Entry { value, .. }] => value
+            .as_int()
+            .ok_or_else(|| format!("{sel} isn't a number")),
+        many => Err(format!(
+            "{sel} names {} values; a condition needs exactly one",
+            many.len()
+        )),
+    }
+}
+
+/// Reads a parsed selector on the board ([`ArcadeRuntime::read`]).
+pub fn read_board(t: &Tapper, sel: &Selector) -> Result<Vec<Entry>, String> {
+    {
         let name = sel.name();
         let index = sel.last_index()?;
         let int = |path: String, v: i64| Entry {
             path,
             value: Value::Int(v),
         };
-        let t = &self.tapper;
         match (name.as_str(), index) {
             ("frame", None) => Ok(vec![int(name, t.frame() as i64)]),
             // The board has no mapper: the main CPU's address space is the
@@ -165,22 +194,6 @@ impl ArcadeRuntime {
                 "no selector {sel} on the arcade board: frame, ram[...] (or bus[...], the same read), sound_ram[...], palette[...], ports[...], cpu.pc and sound_cpu.pc"
             )),
         }
-    }
-
-    fn read_one(&self, sel: &Selector) -> Result<i64, String> {
-        match self.read(sel)?.as_slice() {
-            [Entry { value, .. }] => value
-                .as_int()
-                .ok_or_else(|| format!("{sel} isn't a number")),
-            many => Err(format!(
-                "{sel} names {} values; a condition needs exactly one",
-                many.len()
-            )),
-        }
-    }
-
-    fn holds(&self, cond: &Condition) -> Result<bool, String> {
-        cond.eval(&mut |sel| self.read_one(sel))
     }
 }
 

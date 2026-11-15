@@ -62,12 +62,15 @@ impl Request {
     }
 }
 
-/// A response: a status, a content type and a body.
+/// A response: a status, a content type and a body, and whether it is a
+/// file of a game's frame (the preview), which goes out under the public
+/// page's own headers.
 #[derive(Debug, Clone)]
 pub(crate) struct Response {
     pub status: u16,
     pub content_type: &'static str,
     pub body: Vec<u8>,
+    pub game: bool,
 }
 
 impl Response {
@@ -76,6 +79,7 @@ impl Response {
             status: 200,
             content_type: "application/json",
             body: serde_json::to_vec(value).expect("json"),
+            game: false,
         }
     }
 
@@ -84,6 +88,17 @@ impl Response {
             status: 200,
             content_type,
             body,
+            game: false,
+        }
+    }
+
+    /// A file of a game's frame, served as the public page serves its own
+    /// (scripts/web/public/_headers: its Content-Security-Policy and the
+    /// isolation headers), so the game plays here as it does there.
+    pub fn game_file(content_type: &'static str, body: Vec<u8>) -> Self {
+        Self {
+            game: true,
+            ..Self::bytes(content_type, body)
         }
     }
 
@@ -93,6 +108,7 @@ impl Response {
             status,
             content_type: "application/json",
             body: serde_json::to_vec(&serde_json::json!({ "error": message })).expect("json"),
+            game: false,
         }
     }
 }
@@ -285,19 +301,23 @@ pub(crate) fn percent_decode(s: &str) -> Option<String> {
 /// cross-origin isolated (the two Cross-Origin headers, as the public page
 /// is): the playable rebuild runs a game's module in a Worker with a shared
 /// buffer, which a browser allows only then. Everything the pages load is
-/// their own server's.
+/// their own server's. A file of a game's frame goes out under the public
+/// page's own headers instead (gp_mcp::page_headers, its policy among
+/// them), with no-store kept, since a build changes under the same names.
 pub(crate) fn write_response(
     mut stream: &TcpStream,
     response: &Response,
     head_only: bool,
 ) -> std::io::Result<()> {
-    let head = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Opener-Policy: same-origin\r\nCross-Origin-Embedder-Policy: require-corp\r\nConnection: close\r\n\r\n",
+    let mut head = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\n",
         response.status,
         reason(response.status),
         response.content_type,
         response.body.len()
     );
+    head.push_str(&extra_headers(response.game));
+    head.push_str("Connection: close\r\n\r\n");
     stream.write_all(head.as_bytes())?;
     if !head_only {
         stream.write_all(&response.body)?;
@@ -305,9 +325,72 @@ pub(crate) fn write_response(
     stream.flush()
 }
 
+/// The header lines after Cache-Control: a game file's from the public
+/// page's `_headers` (less its Cache-Control), else isolation and nosniff.
+pub(crate) fn extra_headers(game: bool) -> String {
+    if !game {
+        return "X-Content-Type-Options: nosniff\r\nCross-Origin-Opener-Policy: same-origin\r\nCross-Origin-Embedder-Policy: require-corp\r\n".to_owned();
+    }
+    gp_mcp::page_headers::public_for("/")
+        .iter()
+        .filter(|(k, _)| !k.eq_ignore_ascii_case("cache-control"))
+        .map(|(k, v)| format!("{k}: {v}\r\n"))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The written answer to one response, as text.
+    fn written(r: &Response) -> String {
+        use std::io::Read as _;
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let mut c = std::net::TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        let (s, _) = l.accept().unwrap();
+        write_response(&s, r, false).unwrap();
+        drop(s);
+        let mut out = String::new();
+        c.read_to_string(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn a_game_file_goes_out_under_the_public_pages_headers() {
+        let g = written(&Response::game_file(
+            "text/html; charset=utf-8",
+            b"<p>x".to_vec(),
+        ));
+        let head = g.split("\r\n\r\n").next().unwrap();
+        assert!(
+            head.contains(
+                "Content-Security-Policy: default-src 'none'; script-src 'self' 'wasm-unsafe-eval';"
+            ),
+            "{head}"
+        );
+        assert!(
+            head.contains("Cross-Origin-Opener-Policy: same-origin"),
+            "{head}"
+        );
+        assert!(
+            head.contains("Cross-Origin-Embedder-Policy: require-corp"),
+            "{head}"
+        );
+        assert!(
+            head.contains("Permissions-Policy: gamepad=(self)"),
+            "{head}"
+        );
+        // One Cache-Control, this server's: a build changes under its names.
+        assert_eq!(head.matches("Cache-Control").count(), 1, "{head}");
+        assert!(head.contains("Cache-Control: no-store"), "{head}");
+        // The page's own answers keep their isolation and no policy.
+        let a = written(&Response::json(&serde_json::json!({})));
+        assert!(
+            a.contains("Cross-Origin-Embedder-Policy: require-corp")
+                && !a.contains("Content-Security-Policy"),
+            "{a}"
+        );
+    }
 
     fn head(lines: &[&str]) -> Result<Request, ReadError> {
         parse_head(&lines.iter().map(|l| (*l).to_owned()).collect::<Vec<_>>())

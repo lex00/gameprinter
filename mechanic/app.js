@@ -2694,6 +2694,14 @@ function statusLine() {
 }
 
 async function main() {
+  // On a server of the page's own (gp mechanic start --own-server) the
+  // page is all there is: the first screen is gp serve's, so the logo
+  // opens this game's page there instead of a /start/ that isn't served.
+  if (!/\/mechanic\/[^/]+\//.test(location.pathname)) {
+    const logo = $("logo");
+    logo.href = "/";
+    logo.title = "This game's page. The first screen (port a game, make a theme, make a new game) is on gp serve: gp mechanic start without --own-server opens it";
+  }
   statusLine();
   player = await NesPlayer.load("gp_play.wasm");
   const r = await fetch("rom");

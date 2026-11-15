@@ -50,7 +50,12 @@ pub(crate) fn game_and_rom(
         bail!("no game {game} in {}", games.display());
     }
     let rom = crate::clip_score::rom_of(paths, &dir, None)?;
-    crate::original::nes_only(crate::roms::Platform::of_file(&rom), "the farm's search")?;
+    crate::farm::blind::stop_on_arcade(
+        &rom,
+        paths,
+        "gp farm",
+        "The farm searches a level from play start with a platformer's moves (walks, runs and jumps of A held from a hop to a full jump), in cells of the player's x and whether it stands",
+    )?;
     Ok((dir, rom))
 }
 

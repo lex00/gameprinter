@@ -39,8 +39,9 @@
 //! branch way is a conditional's edge, taken or fallen. The stage byte is a
 //! main CPU address; a game whose model has no `[stages] counter` (Tapper's
 //! has none yet) is counted as one stage. Arcade windows are not kept in the
-//! events store (it holds 6502 counts), and `--values` reads the NES's
-//! compare classes, so it is refused on a romset.
+//! events store (it holds 6502 counts). `--values` reads the NES's compare
+//! classes from gp_events::profile and a romset's from the Z80 compare log
+//! ([`Z80Flips`]) kept while its runs are watched.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -421,43 +422,222 @@ fn hit(pattern: &str, id: &str) -> bool {
 /// sub_E2B6@1`. The far classes and the frame loop's own compares part
 /// every clip from every other, so they are left out.
 fn near_classes(
-    map: &CodeMap,
-    segs: &[Segment],
+    reader: &Reader,
+    flips: impl Iterator<Item = (u8, Va, u16)>,
     vn: &mut Names,
     v_at: &mut Vec<(Va, usize)>,
 ) -> BTreeSet<usize> {
+    let routines = reader.routines();
     let mut out = BTreeSet::new();
-    for s in segs {
-        for (va, stat) in &map.by_address(&s.profile) {
-            if stat.flips == 0 || !map.insn_at(*va).is_some_and(|i| i.mode == Mode::Rel) {
-                continue;
-            }
-            let Some(ri) = map.routine_of(*va) else {
-                continue;
-            };
-            let r = &map.routines[ri];
-            if r.element == "system" || r.element == "unknown" {
-                continue;
-            }
-            for bit in 0..10u16 {
-                if stat.flips & (1 << bit) != 0 && matches!(bit % 5, 1..=3) {
-                    let w = if bit < 5 { "T" } else { "F" };
-                    let c = COMPARE_CLASSES[usize::from(bit % 5)];
-                    let v = vn.id(format!("V {} {w} {c} {}@{}", va_hex(*va), r.name, s.value));
-                    if v == v_at.len() {
-                        v_at.push((*va, ri));
-                    }
-                    out.insert(v);
+    for (stage, va, fl) in flips {
+        if fl == 0 || !reader.is_branch(va) {
+            continue;
+        }
+        let Some(ri) = reader.routine_of(va) else {
+            continue;
+        };
+        let r = &routines[ri];
+        if r.element == "system" || r.element == "unknown" {
+            continue;
+        }
+        for bit in 0..10u16 {
+            if fl & (1 << bit) != 0 && matches!(bit % 5, 1..=3) {
+                let w = if bit < 5 { "T" } else { "F" };
+                let c = COMPARE_CLASSES[usize::from(bit % 5)];
+                let v = vn.id(format!("V {} {w} {c} {}@{stage}", reader.hex(va), r.name));
+                if v == v_at.len() {
+                    v_at.push((va, ri));
                 }
+                out.insert(v);
             }
         }
     }
     out
 }
 
+/// An NES run's stretches as [`near_classes`] reads them: each branch's
+/// flips with its stage.
+fn nes_flips<'a>(
+    map: &'a CodeMap,
+    segs: &'a [Segment],
+) -> impl Iterator<Item = (u8, Va, u16)> + 'a {
+    segs.iter().flat_map(move |s| {
+        map.by_address(&s.profile)
+            .into_iter()
+            .map(move |(va, st)| (s.value, va, st.flips))
+    })
+}
+
+/// The Z80's compare log, gp_events::profile's flips over a romset's runs:
+/// for each conditional jump, call or return that comes straight after a
+/// `cp` on the same CPU, the compare's class (A minus the operand, as
+/// [`COMPARE_CLASSES`] has them) each time it went the other way from its
+/// last run, a bit for each way and class (`5 * way + class`, way 0 taken
+/// and 1 fell). One an interrupt cut into counts no way, as
+/// crate::covered counts it; the last way is carried across frames and
+/// stretches.
+#[derive(Default)]
+struct Z80Flips {
+    /// Per CPU: the class of the last instruction when it was a `cp`, and
+    /// the conditional waiting for its next instruction (its address, the
+    /// address after it, and the class of the `cp` before it).
+    cmp: [Option<u8>; 2],
+    pending: [Option<(Va, u16, Option<u8>)>; 2],
+    /// Each conditional's last way: 1 taken, 2 fell.
+    last_way: std::collections::HashMap<Va, u8>,
+    /// Each address's decoded kind, by CPU (the bytes it was decoded from).
+    kinds: [std::collections::HashMap<u16, ([u8; 4], Kind)>; 2],
+}
+
+/// What [`Z80Flips`] needs of an instruction.
+#[derive(Clone, Copy)]
+enum Kind {
+    /// `cp n`, `cp r` (A's bit for `cp a`), `cp (hl)` and `cp (ix+d)`.
+    CpImm(u8),
+    CpReg(u32),
+    CpMem,
+    /// A conditional, with its length.
+    Cond(u8),
+    Other,
+}
+
+fn kind_of(e: &gp_arcade::mcr::Trace) -> Kind {
+    use gp_arcade::dasm::{self, Alu, Op};
+    let i = dasm::decode(&e.bytes, e.pc);
+    if i.flow.conditional() {
+        return Kind::Cond(i.len);
+    }
+    if i.op != Op::Alu(Alu::Cp) {
+        return Kind::Other;
+    }
+    let arg = i.text.split_whitespace().nth(1).unwrap_or("");
+    if let Some(h) = arg.strip_prefix('$')
+        && let Ok(n) = u8::from_str_radix(h, 16)
+    {
+        return Kind::CpImm(n);
+    }
+    if arg.starts_with('(') {
+        return Kind::CpMem;
+    }
+    use gp_arcade::dasm::reg;
+    let r = match arg {
+        "a" => reg::A,
+        "b" => reg::B,
+        "c" => reg::C,
+        "d" => reg::D,
+        "e" => reg::E,
+        "h" => reg::H,
+        "l" => reg::L,
+        "ixh" => reg::IXH,
+        "ixl" => reg::IXL,
+        "iyh" => reg::IYH,
+        "iyl" => reg::IYL,
+        _ => return Kind::Other,
+    };
+    Kind::CpReg(r)
+}
+
+/// An eight-bit register's value before `e` ran.
+fn z80_reg(e: &gp_arcade::mcr::Trace, r: u32) -> u8 {
+    use gp_arcade::dasm::reg;
+    let w = match r {
+        reg::A => return (e.af >> 8) as u8,
+        reg::B | reg::C => e.bc,
+        reg::D | reg::E => e.de,
+        reg::H | reg::L => e.hl,
+        reg::IXH | reg::IXL => e.ix,
+        _ => e.iy,
+    };
+    if matches!(r, reg::B | reg::D | reg::H | reg::IXH | reg::IYH) {
+        (w >> 8) as u8
+    } else {
+        w as u8
+    }
+}
+
+/// [`COMPARE_CLASSES`]'s class of A minus `m`.
+fn class_of(a: u8, m: u8) -> u8 {
+    match i16::from(a) - i16::from(m) {
+        ..=-2 => 0,
+        -1 => 1,
+        0 => 2,
+        1 => 3,
+        _ => 4,
+    }
+}
+
+impl Z80Flips {
+    /// Adds a watched frame's flips to `out`.
+    fn frame(&mut self, w: &gp_arcade::levels::Watched, out: &mut BTreeMap<Va, u16>) {
+        for c in 0..2u8 {
+            let cu = usize::from(c);
+            let trace: Vec<&gp_arcade::mcr::Trace> =
+                w.trace.iter().filter(|e| e.cpu == c).collect();
+            let acc: Vec<&gp_arcade::mcr::Access> = w
+                .accesses
+                .iter()
+                .filter(|a| a.cpu == c && a.kind == gp_arcade::mcr::AccessKind::Read)
+                .collect();
+            let mut j = 0;
+            for (i, e) in trace.iter().enumerate() {
+                if e.interrupt.is_some() {
+                    self.pending[cu] = None;
+                    self.cmp[cu] = None;
+                    continue;
+                }
+                if let Some((va, fall, class)) = self.pending[cu].take() {
+                    let way = if e.pc == fall { 2 } else { 1 };
+                    let last = self.last_way.insert(va, way).unwrap_or(0);
+                    if last != 0
+                        && last != way
+                        && let Some(k) = class
+                    {
+                        *out.entry(va).or_default() |=
+                            1 << (5 * (u16::from(way) - 1) + u16::from(k));
+                    }
+                }
+                let class_before = self.cmp[cu].take();
+                let kind = match self.kinds[cu].get(&e.pc) {
+                    Some((b, k)) if *b == e.bytes => *k,
+                    _ => {
+                        let k = kind_of(e);
+                        self.kinds[cu].insert(e.pc, (e.bytes, k));
+                        k
+                    }
+                };
+                let a = (e.af >> 8) as u8;
+                match kind {
+                    Kind::Cond(len) => {
+                        self.pending[cu] = Some((
+                            z80_va(cu, e.pc),
+                            e.pc.wrapping_add(u16::from(len)),
+                            class_before,
+                        ));
+                    }
+                    Kind::CpImm(n) => self.cmp[cu] = Some(class_of(a, n)),
+                    Kind::CpReg(r) => self.cmp[cu] = Some(class_of(a, z80_reg(e, r))),
+                    Kind::CpMem => {
+                        let end = trace.get(i + 1).map(|n| n.time);
+                        while j < acc.len() && acc[j].time < e.time {
+                            j += 1;
+                        }
+                        self.cmp[cu] = acc[j..]
+                            .iter()
+                            .take_while(|x| end.is_none_or(|t| x.time < t))
+                            .find(|x| x.pc == e.pc)
+                            .map(|x| class_of(a, x.value));
+                    }
+                    Kind::Other => {}
+                }
+            }
+        }
+    }
+}
+
 /// Frames counted after the last frame where a sweep family's presses
-/// differ: one second.
+/// differ: one second, at the NES's 60 frames or the MCR board's 30.
 const AFTER_PRESSES: u64 = 60;
+const AFTER_PRESSES_ARCADE: u64 = 30;
 
 /// A decision is an event when its window takes the rarer way at most
 /// this often (a take-off, a landing, an edge), not a test made every
@@ -473,6 +653,24 @@ struct Window {
     ways: BTreeMap<Va, (u64, u64)>,
     /// The routines it ran.
     ran: BTreeSet<usize>,
+}
+
+impl Window {
+    /// A stretch's instructions run: their routines, and each branch's
+    /// ways.
+    fn add(&mut self, reader: &Reader, stats: impl IntoIterator<Item = (Va, (u64, u64))>) {
+        for (va, (t, f)) in stats {
+            let Some(ri) = reader.routine_of(va) else {
+                continue;
+            };
+            self.ran.insert(ri);
+            if reader.is_branch(va) {
+                let e = self.ways.entry(va).or_default();
+                e.0 += t;
+                e.1 += f;
+            }
+        }
+    }
 }
 
 /// What a clip starts from: its power-on and every frame before its own,
@@ -735,28 +933,28 @@ struct Seg {
 
 /// A romset's runs counted on gp-arcade, each cut by the stage byte's value
 /// as each frame begins (every frame one stage without a byte): per run, a
-/// stretch per stage value with its levels, and all the runs' levels merged
-/// for the code maps.
+/// stretch per stage value with its levels (and with `values` its compare
+/// log), and all the runs' levels merged for the code maps.
 #[allow(clippy::type_complexity)]
 fn count_arcade(
     set: &gp_arcade::Romset,
     inputs: &[crate::reach::ClipInput],
     runs: &[(String, u64, u64, usize)],
     stage: Option<u16>,
-) -> Result<(
-    Vec<Vec<(u8, gp_arcade::levels::Levels)>>,
-    gp_arcade::levels::Levels,
-)> {
+    values: bool,
+) -> Result<(Vec<Vec<ArcadeSeg>>, gp_arcade::levels::Levels)> {
     use gp_arcade::levels::{Levels, Watcher};
     let order: Vec<usize> = (0..runs.len()).collect();
     let done = crate::pool::map(
         &order,
         || (),
-        |_, _, &k| -> std::result::Result<Vec<(u8, Levels)>, String> {
+        |_, _, &k| -> std::result::Result<Vec<ArcadeSeg>, String> {
             let (_, first, last, i) = &runs[k];
             let c = &inputs[*i];
             let mut t = gp_arcade::Tapper::power_on(set);
             let mut by: BTreeMap<u8, Watcher> = BTreeMap::new();
+            let mut log = Z80Flips::default();
+            let mut flips: BTreeMap<u8, BTreeMap<Va, u16>> = BTreeMap::new();
             for (n, f) in c.inputs.iter().enumerate() {
                 let frame = n as u64 + 1;
                 if frame > *last {
@@ -774,12 +972,23 @@ fn count_arcade(
                     t.step(ctl);
                 } else {
                     let v = stage.map_or(0, |a| t.peek(a));
-                    by.entry(v)
+                    let w = by
+                        .entry(v)
                         .or_insert_with(|| Watcher::new(false))
                         .step_quiet(&mut t, ctl);
+                    if values {
+                        log.frame(&w, flips.entry(v).or_default());
+                    }
                 }
             }
-            Ok(by.into_iter().map(|(v, w)| (v, w.finish())).collect())
+            Ok(by
+                .into_iter()
+                .map(|(v, w)| ArcadeSeg {
+                    value: v,
+                    levels: w.finish(),
+                    flips: flips.remove(&v).unwrap_or_default(),
+                })
+                .collect())
         },
         &mut |_| {},
     );
@@ -787,12 +996,26 @@ fn count_arcade(
     let mut out = Vec::new();
     for r in done {
         let segs = r.map_err(anyhow::Error::msg)?;
-        for (_, l) in &segs {
-            crate::code_z80::merge(&mut all, l.clone());
+        for sg in &segs {
+            crate::code_z80::merge(&mut all, sg.levels.clone());
         }
         out.push(segs);
     }
     Ok((out, all))
+}
+
+/// One stretch of an arcade run on one stage value: its levels and, with
+/// `--values`, its compare log's flips ([`Z80Flips`]).
+struct ArcadeSeg {
+    value: u8,
+    levels: gp_arcade::levels::Levels,
+    flips: BTreeMap<Va, u16>,
+}
+
+/// An arcade run's stretches as [`near_classes`] reads them.
+fn arcade_flips(segs: &[ArcadeSeg]) -> impl Iterator<Item = (u8, Va, u16)> + '_ {
+    segs.iter()
+        .flat_map(|s| s.flips.iter().map(move |(va, f)| (s.value, *va, *f)))
 }
 
 /// What a stretch of arcade levels ran: every instruction start, and each
@@ -859,12 +1082,6 @@ pub(crate) fn run(a: &ReduceArgs, paths: &Paths) -> Result<Outcome> {
     let rom = fs::read(&rom_path).with_context(|| format!("reading {}", rom_path.display()))?;
     let rom_sha = crate::template::sha256_hex(&rom);
     let arcade = crate::original::Platform::of_file(&rom) == crate::original::Platform::Arcade;
-    if arcade && a.values {
-        bail!(
-            "--values reads the 6502's compare classes (gp_events::profile); a romset's Z80 runs have no compare log yet, so give no --values on {}",
-            rom_path.display()
-        );
-    }
     let sb = stage_byte(t, a.stage_byte.as_deref(), arcade)?;
 
     // Each clip's own window, and the runs: one for clips that are the
@@ -898,25 +1115,30 @@ pub(crate) fn run(a: &ReduceArgs, paths: &Paths) -> Result<Outcome> {
         event_store(&a.store, a.no_store, paths)
     };
     let mut counted_now = 0;
-    // NES: the 6502 segments, kept for the values.
+    // NES: the 6502 segments, kept for the values; arcade: the stretches
+    // with their compare logs.
     let mut segs: Vec<Vec<Segment>> = Vec::new();
-    let (reader, run_segs): (Reader, Vec<Vec<Seg>>) = if arcade {
-        let set = gp_arcade::Romset::from_zip(&rom)?;
-        let (by_run, all) = count_arcade(&set, &inputs, &runs, sb.addr)?;
+    let mut arcade_segs: Vec<Vec<ArcadeSeg>> = Vec::new();
+    let arcade_set = arcade
+        .then(|| gp_arcade::Romset::from_zip(&rom))
+        .transpose()?;
+    let (reader, run_segs): (Reader, Vec<Vec<Seg>>) = if let Some(set) = &arcade_set {
+        let (by_run, all) = count_arcade(set, &inputs, &runs, sb.addr, a.values)?;
         counted_now = runs.len();
-        let reader = Reader::arcade(&set, &all);
+        let reader = Reader::arcade(set, &all);
         let run_segs = by_run
             .iter()
             .map(|rs| {
                 rs.iter()
-                    .map(|(v, l)| Seg {
-                        value: *v,
-                        empty: l.cpus.iter().all(|c| c.starts.is_empty()),
-                        stats: arcade_stats(l),
+                    .map(|sg| Seg {
+                        value: sg.value,
+                        empty: sg.levels.cpus.iter().all(|c| c.starts.is_empty()),
+                        stats: arcade_stats(&sg.levels),
                     })
                     .collect()
             })
             .collect();
+        arcade_segs = by_run;
         (reader, run_segs)
     } else {
         let addr = sb.addr.context("an NES stage byte")?;
@@ -989,7 +1211,12 @@ pub(crate) fn run(a: &ReduceArgs, paths: &Paths) -> Result<Outcome> {
     for (k, rs) in run_segs.iter().enumerate() {
         let (mut q, mut p) = (BTreeSet::new(), BTreeSet::new());
         let vs = match &reader {
-            Reader::Nes(map) if a.values => near_classes(map, &segs[k], &mut vn, &mut v_at),
+            Reader::Nes(map) if a.values => {
+                near_classes(&reader, nes_flips(map, &segs[k]), &mut vn, &mut v_at)
+            }
+            Reader::Arcade { .. } if a.values => {
+                near_classes(&reader, arcade_flips(&arcade_segs[k]), &mut vn, &mut v_at)
+            }
             _ => BTreeSet::new(),
         };
         let mut st = BTreeSet::new();
@@ -1156,11 +1383,9 @@ pub(crate) fn run(a: &ReduceArgs, paths: &Paths) -> Result<Outcome> {
     // near-boundary compare classes differ from the kept members'.
     let mut fam_rows: Vec<Value> = Vec::new();
     let mut fam_text = String::new();
-    if a.values
-        && let Reader::Nes(map) = &reader
-        && let Some(addr) = sb.addr
-    {
-        let is_rel = |v: Va| map.insn_at(v).is_some_and(|i| i.mode == Mode::Rel);
+    // An NES reduce cuts by its stage byte; an arcade one without a byte
+    // counts each window as one stage, as its runs are.
+    if a.values && (arcade || sb.addr.is_some()) {
         let starts: Vec<String> = runs
             .iter()
             .map(|(_, first, _, i)| start_key(&inputs[*i], *first))
@@ -1197,66 +1422,90 @@ pub(crate) fn run(a: &ReduceArgs, paths: &Paths) -> Result<Outcome> {
             else {
                 continue;
             };
-            let n = len.min(last_diff + 1 + AFTER_PRESSES);
+            let after = if arcade {
+                AFTER_PRESSES_ARCADE
+            } else {
+                AFTER_PRESSES
+            };
+            let n = len.min(last_diff + 1 + after);
             for &k in fam {
                 wins.push((k, runs[k].1, runs[k].1 + n - 1));
             }
         }
-        let order: Vec<usize> = (0..wins.len()).collect();
-        let done = crate::pool::map(
-            &order,
-            || (),
-            |_, _, &w| -> std::result::Result<(Vec<Segment>, bool), String> {
-                let (k, first, last) = wins[w];
-                let (key, _, _, i) = &runs[k];
-                if let Some(s) = store
-                    .as_ref()
-                    .and_then(|s| s.segments(&rom_sha, key, first, last, addr))
-                {
-                    return Ok((s, false));
-                }
-                let c = &inputs[*i];
-                let (nes, at) = crate::code::console_before(&paths.home, &rom, c, first)
-                    .map_err(|e| format!("clip {}: {e:#}", c.id))?;
-                let s = run_segments_on(nes, at, &c.inputs, first, last, addr)
-                    .map_err(|e| format!("clip {}: {e}", c.id))?;
-                if let Some(st) = &store {
-                    st.put_segments(&rom_sha, key, first, last, addr, &s)
-                        .map_err(|e| e.to_string())?;
-                }
-                Ok((s, true))
-            },
-            &mut |_| {},
-        );
         let mut win: BTreeMap<usize, Window> = BTreeMap::new();
-        for (w, r) in done.into_iter().enumerate() {
-            let (s, fresh) = r.map_err(anyhow::Error::msg)?;
-            counted_now += usize::from(fresh);
-            let mut x = Window {
-                v: near_classes(map, &s, &mut vn, &mut v_at),
-                ..Window::default()
-            };
-            for sg in &s {
-                for (va, st) in &map.by_address(&sg.profile) {
-                    let Some(ri) = map.routine_of(*va) else {
-                        continue;
+        match (&reader, &arcade_set) {
+            (Reader::Arcade { .. }, Some(set)) => {
+                let wruns: Vec<(String, u64, u64, usize)> = wins
+                    .iter()
+                    .map(|&(k, first, last)| (runs[k].0.clone(), first, last, runs[k].3))
+                    .collect();
+                let (by_win, _) = count_arcade(set, &inputs, &wruns, sb.addr, true)?;
+                counted_now += wins.len();
+                for (w, sgs) in by_win.iter().enumerate() {
+                    let mut x = Window {
+                        v: near_classes(&reader, arcade_flips(sgs), &mut vn, &mut v_at),
+                        ..Window::default()
                     };
-                    x.ran.insert(ri);
-                    if is_rel(*va) {
-                        let e = x.ways.entry(*va).or_default();
-                        e.0 += st.taken;
-                        e.1 += st.fell;
+                    for sg in sgs {
+                        x.add(&reader, arcade_stats(&sg.levels));
                     }
+                    win.insert(wins[w].0, x);
                 }
             }
-            win.insert(wins[w].0, x);
+            (Reader::Nes(map), _) => {
+                let addr = sb.addr.context("an NES stage byte")?;
+                let order: Vec<usize> = (0..wins.len()).collect();
+                let done = crate::pool::map(
+                    &order,
+                    || (),
+                    |_, _, &w| -> std::result::Result<(Vec<Segment>, bool), String> {
+                        let (k, first, last) = wins[w];
+                        let (key, _, _, i) = &runs[k];
+                        if let Some(s) = store
+                            .as_ref()
+                            .and_then(|s| s.segments(&rom_sha, key, first, last, addr))
+                        {
+                            return Ok((s, false));
+                        }
+                        let c = &inputs[*i];
+                        let (nes, at) = crate::code::console_before(&paths.home, &rom, c, first)
+                            .map_err(|e| format!("clip {}: {e:#}", c.id))?;
+                        let s = run_segments_on(nes, at, &c.inputs, first, last, addr)
+                            .map_err(|e| format!("clip {}: {e}", c.id))?;
+                        if let Some(st) = &store {
+                            st.put_segments(&rom_sha, key, first, last, addr, &s)
+                                .map_err(|e| e.to_string())?;
+                        }
+                        Ok((s, true))
+                    },
+                    &mut |_| {},
+                );
+                for (w, r) in done.into_iter().enumerate() {
+                    let (s, fresh) = r.map_err(anyhow::Error::msg)?;
+                    counted_now += usize::from(fresh);
+                    let mut x = Window {
+                        v: near_classes(&reader, nes_flips(map, &s), &mut vn, &mut v_at),
+                        ..Window::default()
+                    };
+                    for sg in &s {
+                        x.add(
+                            &reader,
+                            map.by_address(&sg.profile)
+                                .into_iter()
+                                .map(|(va, st)| (va, (st.taken, st.fell))),
+                        );
+                    }
+                    win.insert(wins[w].0, x);
+                }
+            }
+            (Reader::Arcade { .. }, None) => unreachable!("an arcade reader has its romset"),
         }
         for fam in &families {
             let empty = Window::default();
             let ws: Vec<&Window> = fam.iter().map(|&k| win.get(&k).unwrap_or(&empty)).collect();
             let decides = |v: usize| -> bool {
                 let (at, ri) = v_at[v];
-                let r = &map.routines[ri];
+                let r = &routines[ri];
                 let in_r = |x: &Window| -> BTreeSet<(Va, bool, bool)> {
                     x.ways
                         .range(r.at..r.at + r.size)
@@ -1612,15 +1861,77 @@ mod tests {
             inputs: vec![gp_evidence::input_log::InputFrame::default(); 200],
         };
         let runs = vec![(String::new(), 101, 200, 0)];
-        let (by_run, all) = count_arcade(&set, &[clip], &runs, None).expect("counted");
+        let (by_run, all) = count_arcade(&set, &[clip], &runs, None, false).expect("counted");
         assert_eq!(by_run.len(), 1);
         assert_eq!(by_run[0].len(), 1);
-        assert_eq!(by_run[0][0].1.watched, 100);
+        assert_eq!(by_run[0][0].levels.watched, 100);
         let r = Reader::arcade(&set, &all);
-        let stats = arcade_stats(&by_run[0][0].1);
+        let stats = arcade_stats(&by_run[0][0].levels);
         assert!(r.routines().iter().any(|x| x.name == "main:0000"));
         assert!(stats.keys().any(|v| r.is_branch(*v)));
         assert!(stats.keys().all(|v| r.routine_of(*v).is_some()));
+    }
+
+    /// A made-up program's compare log: port 1 (tap held reads $EF, else
+    /// $FF) compared with a byte through (hl) holding $F0 and then with
+    /// $EF, each followed by a jump. Tap held on every other frame flips
+    /// both jumps, and each flip is logged with the class of the compare
+    /// just before it: one below ($EF against $F0) or on ($EF against
+    /// $EF) taken, far above ($FF) fallen. The value features keep only
+    /// the near classes.
+    #[test]
+    fn the_z80_compare_log_keeps_each_flips_class() {
+        let set = gp_arcade::testrom::romset(
+            &[
+                0x31, 0xf0, 0xe7, // 0000: ld sp,e7f0
+                0xdb, 0x01, // 0003: in a,(01)
+                0x21, 0x10, 0xe0, // 0005: ld hl,e010
+                0x36, 0xf0, // 0008: ld (hl),$f0
+                0xbe, // 000a: cp (hl)
+                0x38, 0x02, // 000b: jr c,000f
+                0x00, 0x00, // 000d: nop ; nop
+                0xfe, 0xef, // 000f: cp $ef
+                0x28, 0x03, // 0011: jr z,0016
+                0x32, 0x00, 0xe0, // 0013: ld (e000),a
+                0x18, 0xeb, // 0016: jr 0003
+            ],
+            &[0x18, 0xfe],
+        );
+        let frame = |tap: bool| gp_evidence::input_log::InputFrame {
+            polled: true,
+            pads: [if tap { 1 << 6 } else { 0 }, 0, 0, 0],
+            reset: false,
+        };
+        let clip = crate::reach::ClipInput {
+            set: String::new(),
+            id: "made-up".into(),
+            power_on: gp_evidence::manifest::PowerOn::default(),
+            inputs: (0..8).map(|n| frame(n % 2 == 1)).collect(),
+        };
+        let runs = vec![(String::new(), 1, 8, 0)];
+        let (by_run, all) = count_arcade(&set, &[clip], &runs, None, true).expect("counted");
+        let f = &by_run[0][0].flips;
+        let at = |pc: u16| f.get(&z80_va(0, pc)).copied().unwrap_or(0);
+        // Bit 5 * way + class: taken at class 1 (-1) and fallen at class 4.
+        assert_eq!(at(0x000b), 1 << 1 | 1 << (5 + 4), "{f:?}");
+        // Taken on its boundary (class 2), fallen far above.
+        assert_eq!(at(0x0011), 1 << 2 | 1 << (5 + 4), "{f:?}");
+        let r = Reader::arcade(&set, &all);
+        let (mut vn, mut v_at) = (Names::default(), Vec::new());
+        let v = near_classes(&r, arcade_flips(&by_run[0]), &mut vn, &mut v_at);
+        assert_eq!(v.len(), 2);
+        let names: Vec<&str> = vn.list.iter().map(String::as_str).collect();
+        assert!(names.contains(&"V main:000B T -1 main:0000@0"), "{names:?}");
+        assert!(names.contains(&"V main:0011 T 0 main:0000@0"), "{names:?}");
+        // Without --values nothing is logged.
+        let clip2 = crate::reach::ClipInput {
+            set: String::new(),
+            id: "made-up".into(),
+            power_on: gp_evidence::manifest::PowerOn::default(),
+            inputs: (0..8).map(|n| frame(n % 2 == 1)).collect(),
+        };
+        let (quiet, _) = count_arcade(&set, &[clip2], &runs, None, false).expect("counted");
+        assert!(quiet[0][0].flips.is_empty());
     }
 
     #[test]

@@ -253,6 +253,41 @@ const PASSES: usize = 6;
 
 /// The harvest of a board's program.
 pub fn harvest(board: &Board) -> Harvest {
+    harvest_stops(board).0
+}
+
+/// Where reading the code alone stopped on a Z80 program. The reader runs
+/// every routine of the code map from its own start, so no routine the map
+/// has goes unread (the 6502 reader's `--unread` counts those); what stops
+/// it is a `jp (hl)`, `jp (ix)` or `jp (iy)` whose targets it can't tell,
+/// and the code behind such a jump isn't in the map at all, so how much is
+/// behind it can't be counted.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Stops {
+    /// The code map's routines and the bytes its instructions cover.
+    pub routines: usize,
+    pub code_bytes: usize,
+    /// The program ROM's bytes.
+    pub rom_bytes: usize,
+    /// Every indirect jump with no target known, by address.
+    pub stops: Vec<JumpStop>,
+}
+
+/// One indirect jump the reader couldn't follow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JumpStop {
+    pub pc: u16,
+    /// The routine it is in.
+    pub routine: u16,
+    /// Whether any path the reader ran got to it (else the site is in the
+    /// map but no path reached it with what it knew).
+    pub reached: bool,
+    /// The places its target was made from, as [`Loc::hex`] writes them.
+    pub places: Vec<String>,
+}
+
+/// [`harvest`], and where its last pass's reading stopped ([`Stops`]).
+pub fn harvest_stops(board: &Board) -> (Harvest, Stops) {
     let mut handlers: Vec<(u16, u8)> = Vec::new();
     let mut tables: BTreeSet<(u16, u16)> = BTreeSet::new();
     let mut called: BTreeSet<u16> = BTreeSet::new();
@@ -294,11 +329,12 @@ pub fn harvest(board: &Board) -> Harvest {
             || pass == PASSES - 1
         {
             let map = CodeMap::walk(board, &hs, &tables, &called);
+            let stops = stops_of(board, &map, &r);
             let mut h = rules::H::new(board, &map, &r, &handlers);
             rules::run(&mut h);
             let mut out = h.out;
             out.schema = SCHEMA.into();
-            return out;
+            return (out, stops);
         }
         handlers = next_handlers;
         tables = next_tables;
@@ -307,6 +343,45 @@ pub fn harvest(board: &Board) -> Harvest {
         hints = next_hints;
     }
     unreachable!("the last pass returns")
+}
+
+/// The indirect jumps in `map` with no target the reader or a table gave.
+fn stops_of(board: &Board, map: &CodeMap, r: &Reader) -> Stops {
+    let mut seen: BTreeMap<u16, (bool, BTreeSet<String>)> = BTreeMap::new();
+    for a in &r.acts {
+        for e in &a.events {
+            if let absint::Ev::Indirect { pc, target, to } = e {
+                let s = seen.entry(*pc).or_default();
+                s.0 |= !to.is_empty();
+                s.1.extend(target.places().iter().map(Loc::hex));
+            }
+        }
+    }
+    let mut stops = Vec::new();
+    for &pc in map.insns.keys() {
+        if !matches!(sem::decode(&board.bytes(pc), pc), Sem::JpInd(_)) {
+            continue;
+        }
+        if r.tables.iter().any(|&(at, _)| at == pc) {
+            continue;
+        }
+        let (resolved, places) = seen.get(&pc).cloned().unwrap_or_default();
+        if resolved {
+            continue;
+        }
+        stops.push(JumpStop {
+            pc,
+            routine: map.routine_of(pc).unwrap_or(pc),
+            reached: seen.contains_key(&pc),
+            places: places.into_iter().collect(),
+        });
+    }
+    Stops {
+        routines: map.routines.len(),
+        code_bytes: map.insns.values().map(|&l| usize::from(l)).sum(),
+        rom_bytes: board.rom_end as usize,
+        stops,
+    }
 }
 
 #[cfg(test)]

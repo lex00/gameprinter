@@ -16,11 +16,27 @@ pub struct Field {
     pub score: f64,
 }
 
+/// The state mapping's `scale` and `offset` that turn a place's bytes into
+/// the board's own units (top left, y down: feature
+/// `platform.board_units`), proposed when the y byte counts up the screen
+/// ([`crate::bind::Anchor::TopUp`]), as an arcade board's sprite bytes do:
+/// the x is the byte plus `x_offset`, the y the byte times `y_scale` plus
+/// `y_offset`. On Midway's MCR: -3, -1 and 241.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Place {
+    pub x_offset: i64,
+    pub y_scale: i64,
+    pub y_offset: i64,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Player {
     pub x: Field,
     pub page: Option<Field>,
     pub y: Option<Field>,
+    /// How its bytes become the board's units, for a y that counts up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub place: Option<Place>,
     /// The share of frames its x moved the way the controller said.
     pub input: f64,
     pub tracks: usize,
@@ -44,6 +60,9 @@ pub struct Group {
     pub x: Field,
     pub x_page: Option<Field>,
     pub y: Option<Field>,
+    /// How its bytes become the board's units, for a y that counts up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub place: Option<Place>,
     pub active: Option<Field>,
     pub id: Option<IdField>,
     pub tracks: usize,
@@ -262,6 +281,7 @@ pub fn find(
             x: Field { ram: a, score },
             page: pick_page(&[a], &pages, bound, opts, &taken_now),
             y: y_of(&[a], 1, seen, bound),
+            place: place_of(&[a], seen, bound),
             input,
             tracks,
             frames,
@@ -429,6 +449,7 @@ fn group(
         },
         x_page: None,
         y,
+        place: place_of(run, seen, bound),
         active,
         id,
         tracks: members.len(),
@@ -461,6 +482,61 @@ fn y_of(run: &[u16], stride: usize, seen: &Seen, bound: &Bound) -> Option<Field>
     Some(Field {
         ram: (i32::from(run[0]) + off) as u16,
         score: score / w as f64 * w as f64 / total as f64,
+    })
+}
+
+/// The place's `scale` and `offset` for the tracks whose x binds to one of
+/// `run`: the ones most of their frames give, when the y counts up the
+/// screen ([`crate::bind::Anchor::TopUp`], or `BottomUp` less the box's
+/// height). The top's place is the residual less the byte, and the left's
+/// the byte less its residual (less the width, read from the right).
+/// None for a y that counts down, as the NES's does.
+fn place_of(run: &[u16], seen: &Seen, bound: &Bound) -> Option<Place> {
+    use crate::bind::Anchor;
+    let mut votes: BTreeMap<Option<(i64, i64)>, usize> = BTreeMap::new();
+    for t in 0..seen.tracks.len() {
+        let (Some(x), Some(y)) = (&bound.x[t], &bound.y[t]) else {
+            continue;
+        };
+        if !run.contains(&x.ram) {
+            continue;
+        }
+        let obs = &seen.tracks[t].obs;
+        // The box's usual width and height on this track.
+        let usual = |d: fn(&crate::sprites::Obs) -> i64| {
+            let mut n: BTreeMap<i64, usize> = BTreeMap::new();
+            for o in obs {
+                *n.entry(d(o)).or_default() += 1;
+            }
+            n.into_iter()
+                .max_by_key(|(v, c)| (*c, -*v))
+                .map_or(0, |(v, _)| v)
+        };
+        let x_off = -i64::from(x.residual as i8)
+            - match x.anchor {
+                Anchor::Right => usual(|o| i64::from(o.x1 - o.x0)),
+                _ => 0,
+            };
+        let y_off = match y.anchor {
+            Anchor::TopUp => Some(i64::from(y.residual)),
+            Anchor::BottomUp => {
+                Some((i64::from(y.residual) - usual(|o| i64::from(o.y1 - o.y0))).rem_euclid(256))
+            }
+            _ => None,
+        };
+        let key = match x.anchor {
+            Anchor::Left | Anchor::Right => y_off.map(|y| (x_off, y)),
+            _ => None,
+        };
+        *votes.entry(key).or_default() += obs.len();
+    }
+    let (key, _) = votes
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))?;
+    key.map(|(x_offset, y_offset)| Place {
+        x_offset,
+        y_scale: -1,
+        y_offset,
     })
 }
 
@@ -866,6 +942,12 @@ pub fn draft(
             out.push_str(&format!(", y 0x{:04X} ({:.2})", y.ram, y.score));
         }
         out.push('\n');
+        if let Some(pl) = &p.place {
+            out.push_str(&format!(
+                "# Its y counts up the screen: in the board's units (board_units = true), x offset = {}, y scale = {} and offset = {}\n",
+                pl.x_offset, pl.y_scale, pl.y_offset
+            ));
+        }
     }
     for (n, g) in groups.iter().enumerate() {
         let mut s = String::new();
@@ -917,11 +999,25 @@ pub fn draft(
                 g.x.ram, g.x.score
             )),
         }
+        // A y that counts up the screen: the bytes made the board's own
+        // units, for a mapping with `board_units = true`.
+        if let Some(pl) = g.place.filter(|p| p.x_offset != 0) {
+            s.push_str(&format!(
+                "offset = {} # in the board's units (board_units = true): the box's left\n",
+                pl.x_offset
+            ));
+        }
         if let Some(y) = &g.y {
             s.push_str(&format!(
                 "\n[[slots.field]]\npath = \"y\"\nram = [0x{:04X}] # score {:.2}\n",
                 y.ram, y.score
             ));
+            if let Some(pl) = &g.place {
+                s.push_str(&format!(
+                    "scale = {}\noffset = {} # the byte counts up the screen; in the board's units, the box's top\n",
+                    pl.y_scale, pl.y_offset
+                ));
+            }
         }
         if n == 0 {
             out.push_str(&s);

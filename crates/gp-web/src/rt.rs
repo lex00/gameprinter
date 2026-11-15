@@ -57,6 +57,7 @@ impl Sessions {
         }
         if op == wire::INFO {
             w.str(gp_runtime::WIT_PACKAGE);
+            w.str(gp_runtime::GAME_WIT_PACKAGE);
             return Ok(());
         }
         let mut r = Reader::new(input);
@@ -94,6 +95,13 @@ impl Sessions {
             wire::QUERY => {
                 let selector = r.str()?;
                 w.entries(&self.get(id)?.query(&selector)?);
+            }
+            wire::QUERY_VALUES => {
+                let selectors = r.strs()?;
+                w.value_rows(&gp_runtime::QueryValues::query_values(
+                    self.get(id)?,
+                    &selectors,
+                ));
             }
             wire::SAMPLE => {
                 let selectors = r.strs()?;

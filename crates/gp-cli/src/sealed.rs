@@ -590,6 +590,16 @@ impl Guard {
         }
     }
 
+    /// The guard with the registry of the games checkout `games` (what
+    /// [`quiet_registry`] finds where a process runs) read now.
+    fn with_games(home: &Path, games: Option<PathBuf>) -> Self {
+        let g = Self::new(home);
+        let _ = g
+            .registry
+            .set(games.and_then(|d| Registry::load_games(&d).ok()));
+        g
+    }
+
     fn registry(&self) -> Option<&Registry> {
         self.registry.get_or_init(quiet_registry).as_ref()
     }
@@ -668,6 +678,96 @@ pub(crate) fn read_baseline_input(file: &Path) -> Result<InputLog> {
 /// over the whole store leaves out and counts.
 pub(crate) fn is_refusal(e: &gp_evidence::recordings::RecordingsError) -> bool {
     matches!(e, gp_evidence::recordings::RecordingsError::Refused(_))
+}
+
+/// The sealed-run guard as a new process would make it, for a long-lived
+/// one (the runtime session, crate::session): that process's own guard read
+/// the sealed runs and the games' registry when it first needed them. This
+/// one is made again whenever the files it reads change: every file under
+/// `$GP_HOME/sealed` and every game's roms.toml, by size and time. The
+/// verdict on a recording, which never changes, is kept with it.
+pub(crate) struct FreshGuard {
+    home: PathBuf,
+    games: Option<PathBuf>,
+    seen: Vec<(PathBuf, u64, Option<std::time::SystemTime>)>,
+    guard: Guard,
+    verdicts: std::collections::HashMap<gp_evidence::Hash, bool>,
+}
+
+impl FreshGuard {
+    /// For `home`, with the games checkout a new process would find
+    /// (`crate::roms_cmd::games_dir(None)` where it runs).
+    pub(crate) fn new(home: &Path, games: Option<PathBuf>) -> Self {
+        Self {
+            home: home.to_owned(),
+            guard: Guard::with_games(home, games.clone()),
+            games,
+            seen: Vec::new(),
+            verdicts: Default::default(),
+        }
+    }
+
+    pub(crate) fn is_for(&self, home: &Path, games: Option<&Path>) -> bool {
+        self.home == home && self.games.as_deref() == games
+    }
+
+    fn files(&self) -> Vec<(PathBuf, u64, Option<std::time::SystemTime>)> {
+        fn walk(dir: &Path, out: &mut Vec<(PathBuf, u64, Option<std::time::SystemTime>)>) {
+            let Ok(rd) = fs::read_dir(dir) else { return };
+            for e in rd.flatten() {
+                let p = e.path();
+                let Ok(m) = e.metadata() else { continue };
+                out.push((p.clone(), m.len(), m.modified().ok()));
+                if m.is_dir() {
+                    walk(&p, out);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&sealed_root(&self.home), &mut out);
+        if let Some(g) = &self.games
+            && let Ok(rd) = fs::read_dir(g)
+        {
+            for e in rd.flatten() {
+                let t = e.path().join("roms.toml");
+                if let Ok(m) = fs::metadata(&t) {
+                    out.push((t, m.len(), m.modified().ok()));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// Whether a new process's guard refuses the recording `id` names.
+    /// `false` when it can't be found: the query says so itself.
+    pub(crate) fn refuses(&mut self, paths: &gp_evidence::Paths, id: &str) -> bool {
+        use gp_evidence::guard::Guard as _;
+        let files = self.files();
+        if files != self.seen {
+            self.guard = Guard::with_games(&self.home, self.games.clone());
+            self.verdicts.clear();
+            self.seen = files;
+        }
+        if games(&self.home).is_empty() {
+            return false;
+        }
+        let Ok(store) = gp_evidence::Store::open(&paths.store) else {
+            return false;
+        };
+        let Ok(entry) = gp_evidence::recordings::resolve(&store, id) else {
+            return false;
+        };
+        if let Some(v) = self.verdicts.get(&entry.id) {
+            return *v;
+        }
+        let Ok(m) = gp_evidence::recordings::load_manifest_unguarded(&store, &entry.id) else {
+            return false;
+        };
+        let v = self.guard.recording(&store, &entry.id, &m).is_err();
+        self.verdicts.insert(entry.id, v);
+        v
+    }
 }
 
 /// Installs the guard for this process (`main` does, before any command).

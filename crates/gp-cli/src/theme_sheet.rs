@@ -371,7 +371,7 @@ fn line(img: &mut Rgba, a: (f32, f32), b: (f32, f32), r: f32, c: [u8; 4]) {
 
 /// Text in the 5 by 7 font, `z` pixels a font pixel; letters it lacks are
 /// spaces. Returns the width drawn.
-fn text(img: &mut Rgba, x: u32, y: u32, s: &str, z: u32, c: [u8; 4], max_w: u32) {
+pub(crate) fn text(img: &mut Rgba, x: u32, y: u32, s: &str, z: u32, c: [u8; 4], max_w: u32) {
     let mut cx = x;
     for ch in s.chars() {
         if cx + 5 * z > x + max_w {

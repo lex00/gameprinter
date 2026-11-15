@@ -4,10 +4,13 @@
 //! NES harvest's output (gp_nes::harvest::Harvest), so static.json, the
 //! text, `--model` and `--grade` are the same shape.
 //!
-//! The romset version reads the code without running it: `--clips`, a
-//! run's starts and `--unread` are the NES's still and are refused in
-//! words, and the asset map isn't read (an MCR asset map places graphics in
-//! the GFX chips, not in program ROM).
+//! The romset version reads the code without running it: `--clips` and a
+//! run's starts are the NES's still and are refused in words, and the
+//! asset map isn't read (an MCR asset map places graphics in the GFX
+//! chips, not in program ROM). `--unread` reports where the Z80 reading
+//! stopped ([`unread`]): the reader runs every routine of the code map, so
+//! no routine is unread; its stops are the indirect jumps it couldn't
+//! follow.
 
 use std::fs;
 use std::path::Path;
@@ -148,11 +151,63 @@ pub(crate) fn to_nes(h: z::Harvest) -> n::Harvest {
     }
 }
 
-/// The harvest of a romset's main CPU.
-pub(crate) fn harvest_romset(bytes: &[u8]) -> Result<n::Harvest> {
+/// The harvest of a romset's main CPU, in the NES harvest's types: what
+/// `gp dataset rom` turns into rows (crate::rom_extract::harvest_rows).
+pub(crate) fn harvest_of(set: &gp_arcade::Romset) -> n::Harvest {
+    to_nes(z::harvest(&z::Board::mcr_main(&set.maincpu)))
+}
+
+/// The harvest of a romset's main CPU, and where its reading stopped.
+fn harvest_romset_stops(bytes: &[u8]) -> Result<(n::Harvest, z::Stops)> {
     let set = gp_arcade::Romset::from_zip(bytes)?;
     let board = z::Board::mcr_main(&set.maincpu);
-    Ok(to_nes(z::harvest(&board)))
+    let (h, st) = z::harvest_stops(&board);
+    Ok((to_nes(h), st))
+}
+
+/// The Z80's stops in the 6502 report's shape (unread.json, the same
+/// text): every routine read, each `jp (..)` with no target known a stop
+/// (`pointer not known` where a path reached it, `site not reached` where
+/// none did), with the RAM places its target was made from; `behind` is 0,
+/// since the code past such a jump isn't in the code map to count.
+pub(crate) fn unread(st: &z::Stops) -> n::unread::Unread {
+    let hex = |a: u16| format!("{a:04X}");
+    let stops: Vec<n::unread::Stop> = st
+        .stops
+        .iter()
+        .map(|s| {
+            let reason = if s.reached {
+                n::unread::POINTER
+            } else {
+                n::unread::NOT_REACHED
+            };
+            n::unread::Stop {
+                id: format!("{reason}@{}", hex(s.pc)),
+                reason: reason.into(),
+                pc: hex(s.pc),
+                routine: format!("Z80_{}", hex(s.routine)),
+                target: String::new(),
+                bytes: s.places.clone(),
+                behind: 0,
+                examples: Vec::new(),
+            }
+        })
+        .collect();
+    let mut by_reason: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
+    for s in &stops {
+        by_reason.entry(s.reason.clone()).or_default().0 += 1;
+    }
+    n::unread::Unread {
+        schema: n::unread::SCHEMA.into(),
+        prg_bytes: st.rom_bytes,
+        code_bytes: st.code_bytes,
+        routines: st.routines,
+        read: st.routines,
+        unread: 0,
+        by_reason,
+        stops,
+        unread_routines: Vec::new(),
+    }
 }
 
 pub(crate) fn run(a: &StaticArgs, rom: &Path, bytes: &[u8], t0: Instant) -> Result<Outcome> {
@@ -161,10 +216,8 @@ pub(crate) fn run(a: &StaticArgs, rom: &Path, bytes: &[u8], t0: Instant) -> Resu
             "gp model static on an arcade romset reads the code alone: --clips is the NES's (gp code listing and gp reach run a romset's clips)"
         );
     }
-    if a.unread {
-        bail!("gp model static --unread is the NES's; on an arcade romset it isn't written yet");
-    }
-    let h = harvest_romset(bytes)?;
+    let (h, stops) = harvest_romset_stops(bytes)?;
+    let unread = a.unread.then(|| unread(&stops));
     let secs = t0.elapsed().as_secs_f64();
     let doc = serde_json::to_value(&h)?;
     if let Some(d) = &a.write {
@@ -173,6 +226,12 @@ pub(crate) fn run(a: &StaticArgs, rom: &Path, bytes: &[u8], t0: Instant) -> Resu
             d.join("static.json"),
             serde_json::to_string_pretty(&doc)? + "\n",
         )?;
+        if let Some(u) = &unread {
+            fs::write(
+                d.join("unread.json"),
+                serde_json::to_string_pretty(u)? + "\n",
+            )?;
+        }
     }
     if let Some(d) = &a.model {
         fs::create_dir_all(d)?;
@@ -202,5 +261,10 @@ pub(crate) fn run(a: &StaticArgs, rom: &Path, bytes: &[u8], t0: Instant) -> Resu
     }
     let mut text = crate::model_static::summary(&h, rom, secs, grade.as_ref());
     text += "\nRead from the main CPU's code alone (no runs).\n";
+    if let Some(u) = &unread {
+        out["unread"] = serde_json::to_value(u)?;
+        text += &crate::model_static::unread_text(u);
+        text += "  (the Z80 reader runs every routine of the code map; its stops are the jp (..) it couldn't follow, and the code past one isn't in the map to count)\n";
+    }
     Ok(Outcome::ok(out, text))
 }

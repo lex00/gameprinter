@@ -884,11 +884,112 @@ pub(crate) struct Regen {
     pub stopped: usize,
     /// Each clip's curve as measured now, by ID.
     pub curves: BTreeMap<String, String>,
-    /// Each clip's score on the model, by ID.
+    /// Each clip's score on the model, by ID, or why it couldn't be made
+    /// or scored.
     pub outcomes: BTreeMap<String, Result<Ran, String>>,
+    /// The clips that couldn't be made or scored at first, each made and
+    /// scored once more, in the set's order.
+    pub reran: Vec<Rerun>,
     /// The bench the clips were scored on, and the model's text.
     pub bench: crate::scenario::Bench,
     pub model_text: String,
+}
+
+/// A clip [`regen_with`] made and scored a second time because the first
+/// try couldn't make or score it: why the first failed, and the second's
+/// result (`Ok` when it was made and scored).
+pub(crate) struct Rerun {
+    pub id: String,
+    pub first: String,
+    pub now: Result<(), String>,
+}
+
+/// Whether each clip was made, and each one's score or why it has none, by
+/// ID.
+type Tried<T> = (Vec<bool>, BTreeMap<String, Result<T, String>>);
+
+/// The clips of `recipes` made into scenarios and scored: each one's score,
+/// or why it couldn't be made or scored, by ID, and whether each was made.
+fn make_and_score(
+    w: &Work,
+    set_dir: &Path,
+    mapping: &Mapping,
+    recipes: &[Recipe],
+    b: &crate::scenario::Bench,
+    m: &gp_model::Model,
+    text: &str,
+) -> anyhow::Result<Tried<Ran>> {
+    let made = make(&w.paths.home, w.run_dir, set_dir, &w.rom, mapping, recipes)?;
+    let mut list: Vec<Scenario> = made
+        .iter()
+        .filter_map(|m| m.as_ref().ok().map(|m| m.scenario.clone()))
+        .collect();
+    crate::scenario::resolve_logs(&mut list, &w.paths.home);
+    let ran = crate::scenario::score_each(
+        b,
+        m,
+        text,
+        &crate::scenario::Started::none(),
+        &list,
+        true,
+        &mut |_, _, _| {},
+    )?;
+    let mut outcomes: BTreeMap<String, Result<Ran, String>> = list
+        .iter()
+        .zip(ran)
+        .map(|(s, r)| (s.id.clone(), r.map_err(|e| format!("{e:#}"))))
+        .collect();
+    for (r, mr) in recipes.iter().zip(&made) {
+        if let Err(e) = mr {
+            outcomes.insert(r.id.clone(), Err(e.clone()));
+        }
+    }
+    Ok((made.iter().map(Result::is_ok).collect(), outcomes))
+}
+
+/// The clips of `ids` with no score in `outcomes` (not made, or made and
+/// not scored) made and scored once more by `again`, which takes their
+/// indexes and gives, for those clips in that order, whether each was made
+/// and each one's result by ID. Each second result replaces the first. A
+/// clip that has a score, exact or not, isn't run again, and one that
+/// fails twice keeps its second failure.
+fn rerun_failed<T>(
+    ids: &[String],
+    made: &mut [bool],
+    outcomes: &mut BTreeMap<String, Result<T, String>>,
+    again: impl FnOnce(&[usize]) -> anyhow::Result<Tried<T>>,
+) -> anyhow::Result<Vec<Rerun>> {
+    let which: Vec<usize> = (0..ids.len())
+        .filter(|&i| !matches!(outcomes.get(&ids[i]), Some(Ok(_))))
+        .collect();
+    if which.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (made2, mut outcomes2) = again(&which)?;
+    let mut out = Vec::new();
+    for (k, &i) in which.iter().enumerate() {
+        let id = &ids[i];
+        let first = match outcomes.remove(id) {
+            Some(Err(e)) => e,
+            _ => "not made".to_owned(),
+        };
+        made[i] = made2[k];
+        let got = outcomes2.remove(id);
+        let now = match &got {
+            Some(Ok(_)) => Ok(()),
+            Some(Err(e)) => Err(e.clone()),
+            None => Err("not made".to_owned()),
+        };
+        if let Some(g) = got {
+            outcomes.insert(id.clone(), g);
+        }
+        out.push(Rerun {
+            id: id.clone(),
+            first,
+            now,
+        });
+    }
+    Ok(out)
 }
 
 /// How [`regen_with`] scores: whether each clip's reads are recorded, and
@@ -961,38 +1062,20 @@ pub(crate) fn regen_with(
             .context("reading the model's state mapping (mapping.toml)")?,
     )
     .map_err(anyhow::Error::msg)?;
-    let made = make(
-        &w.paths.home,
-        w.run_dir,
-        set_dir,
-        &w.rom,
-        &mapping_parsed,
-        &recipes,
-    )?;
-    let mut list: Vec<Scenario> = made
-        .iter()
-        .filter_map(|m| m.as_ref().ok().map(|m| m.scenario.clone()))
-        .collect();
-    crate::scenario::resolve_logs(&mut list, &w.paths.home);
-    let b = bench_for(w)?;
-    let mut b = b;
+    let mut b = bench_for(w)?;
     b.reads = how.reads;
     b.stop.clone_from(&how.stop);
     let (m, text) = b.model()?;
-    let ran = crate::scenario::score_each(
-        &b,
-        &m,
-        &text,
-        &crate::scenario::Started::none(),
-        &list,
-        true,
-        &mut |_, _, _| {},
-    )?;
-    let outcomes: BTreeMap<String, Result<Ran, String>> = list
-        .iter()
-        .zip(ran)
-        .map(|(s, r)| (s.id.clone(), r.map_err(|e| format!("{e:#}"))))
-        .collect();
+    let (mut made, mut outcomes) =
+        make_and_score(w, set_dir, &mapping_parsed, &recipes, &b, &m, &text)?;
+    // A clip that couldn't be made or scored (a module call past its
+    // deadline on a loaded machine, say) is made and scored once more
+    // before it counts.
+    let ids: Vec<String> = recipes.iter().map(|r| r.id.clone()).collect();
+    let reran = rerun_failed(&ids, &mut made, &mut outcomes, |again| {
+        let these: Vec<Recipe> = again.iter().map(|&i| recipes[i].clone()).collect();
+        make_and_score(w, set_dir, &mapping_parsed, &these, &b, &m, &text)
+    })?;
     let (mut differ, mut measured, mut failed, mut stopped) = (0, 0, 0, 0);
     let mut curves = BTreeMap::new();
     for (r, mr) in recipes.iter().zip(&made) {
@@ -1002,18 +1085,18 @@ pub(crate) fn regen_with(
         if let Some(Ok(c)) = &curve {
             curves.insert(r.id.clone(), c.clone());
         }
-        match (mr, &curve) {
-            (Err(_), _) => failed += 1,
-            (Ok(_), Some(Err(_))) | (Ok(_), None) => failed += 1,
-            (Ok(_), Some(Ok(_))) if matches!(outcomes.get(&r.id), Some(Ok(o)) if o.stopped) => {
+        match (*mr, &curve) {
+            (false, _) => failed += 1,
+            (true, Some(Err(_)) | None) => failed += 1,
+            (true, Some(Ok(_))) if matches!(outcomes.get(&r.id), Some(Ok(o)) if o.stopped) => {
                 stopped += 1;
             }
             // A plan's curves are derived here, so there is nothing to compare.
-            (Ok(_), Some(Ok(_))) if set.plan => {}
-            (Ok(_), Some(Ok(_))) if !same_mapping => measured += 1,
-            (Ok(_), Some(Ok(_))) if r.curve.is_empty() => measured += 1,
-            (Ok(_), Some(Ok(c))) if *c != r.curve => differ += 1,
-            (Ok(_), Some(Ok(_))) => {}
+            (true, Some(Ok(_))) if set.plan => {}
+            (true, Some(Ok(_))) if !same_mapping => measured += 1,
+            (true, Some(Ok(_))) if r.curve.is_empty() => measured += 1,
+            (true, Some(Ok(c))) if *c != r.curve => differ += 1,
+            (true, Some(Ok(_))) => {}
         }
     }
     Ok(Regen {
@@ -1025,7 +1108,93 @@ pub(crate) fn regen_with(
         stopped,
         curves,
         outcomes,
+        reran,
         bench: b,
         model_text: text,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ids(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn only_clips_with_no_score_run_again_and_a_second_failure_stays() {
+        // a ran (its curve may differ: it isn't run again), b timed out,
+        // c wasn't made, d timed out and times out again.
+        let all = ids(&["a", "b", "c", "d"]);
+        let mut made = vec![true, true, false, true];
+        let mut outcomes: BTreeMap<String, Result<u32, String>> = BTreeMap::from([
+            ("a".to_owned(), Ok(1)),
+            ("b".to_owned(), Err("past its deadline".to_owned())),
+            ("c".to_owned(), Err("no start".to_owned())),
+            ("d".to_owned(), Err("past its deadline".to_owned())),
+        ]);
+        let mut asked = Vec::new();
+        let reran = rerun_failed(&all, &mut made, &mut outcomes, |again| {
+            asked = again.to_vec();
+            Ok((
+                vec![true, true, true],
+                BTreeMap::from([
+                    ("b".to_owned(), Ok(2)),
+                    ("c".to_owned(), Ok(3)),
+                    ("d".to_owned(), Err("past its deadline again".to_owned())),
+                ]),
+            ))
+        })
+        .unwrap();
+        assert_eq!(asked, [1, 2, 3]);
+        assert_eq!(made, [true; 4]);
+        assert_eq!(outcomes["a"], Ok(1));
+        assert_eq!(outcomes["b"], Ok(2));
+        assert_eq!(outcomes["c"], Ok(3));
+        assert_eq!(outcomes["d"], Err("past its deadline again".to_owned()));
+        let said: Vec<(&str, &str, Result<(), String>)> = reran
+            .iter()
+            .map(|r| (r.id.as_str(), r.first.as_str(), r.now.clone()))
+            .collect();
+        assert_eq!(
+            said,
+            [
+                ("b", "past its deadline", Ok(())),
+                ("c", "no start", Ok(())),
+                (
+                    "d",
+                    "past its deadline",
+                    Err("past its deadline again".to_owned())
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_clip_not_made_twice_has_no_score_and_says_so() {
+        let all = ids(&["a"]);
+        let mut made = vec![false];
+        let mut outcomes: BTreeMap<String, Result<u32, String>> = BTreeMap::new();
+        let reran = rerun_failed(&all, &mut made, &mut outcomes, |_| {
+            Ok((vec![false], BTreeMap::new()))
+        })
+        .unwrap();
+        assert_eq!(made, [false]);
+        assert!(outcomes.is_empty());
+        assert_eq!(reran[0].first, "not made");
+        assert_eq!(reran[0].now, Err("not made".to_owned()));
+    }
+
+    #[test]
+    fn nothing_runs_again_when_every_clip_has_a_score() {
+        let all = ids(&["a"]);
+        let mut outcomes: BTreeMap<String, Result<u32, String>> =
+            BTreeMap::from([("a".to_owned(), Ok(0))]);
+        let reran = rerun_failed(&all, &mut [true], &mut outcomes, |_| {
+            panic!("nothing to run again")
+        })
+        .unwrap();
+        assert!(reran.is_empty());
+    }
 }

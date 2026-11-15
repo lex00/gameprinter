@@ -602,6 +602,9 @@ pub fn edit(config: &Config, mut a: EditArgs) -> Result<Reply, String> {
                 trip.copy
             ));
         }
+        if crate::board_trip::is_board_trip(&trip) {
+            return crate::board_trip::propose_save(config, &dir);
+        }
         match crate::editor_trip::import(&dir)? {
             Ok(pics) => {
                 a.pictures = pics.into_iter().map(|(id, p)| (id, p.rows())).collect();

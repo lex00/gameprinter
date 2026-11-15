@@ -598,6 +598,10 @@ button.link { background: none; border: 0; color: var(--accent); padding: 0; cur
 .choice { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 12px; padding: 3px 10px; cursor: pointer; }
 .choice.on { border-color: var(--changed); color: var(--changed); }
 .tell-hint { max-width: 1100px; font-size: 14px; }
+/* "What is this?": the agent's answer under the box, its words as sent
+   (gp element explain's lines), wrapped to fit a phone. */
+.tell-answer { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 6px; }
+.tell-answer .answer { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 6px; font-size: 14px; }
 .status { color: var(--muted); }
 
 /* The lockstep panel under the two games: a small chart a measure. */
@@ -690,8 +694,7 @@ button.link { background: none; border: 0; color: var(--accent); padding: 0; cur
 .moment-tick.picked {
   outline: 2px solid var(--text);
 }
-.focus-moments ul,
-.refine-also ul {
+.focus-moments ul {
   margin: 4px 0;
 }
 

@@ -9,6 +9,7 @@ use gp_interp::{Bundle, Lifted};
 use gp_model::Model;
 use gp_sim::Spec;
 
+pub mod board;
 pub mod looks;
 pub mod present;
 pub mod sound;

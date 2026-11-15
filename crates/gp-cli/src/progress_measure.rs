@@ -4,8 +4,8 @@
 //!
 //! | Measure | How |
 //! |---|---|
-//! | RAM the game changes in play | Each byte that differs from the frame before, on frames the player controls (`observe.toml`'s `control`, else the mapping's `start`, else every polled frame). On the NES the stack page and the sprite page are left out; on an arcade board the 2 KB of work RAM at E000, by its index from there |
-//! | Each RAM byte's role | On the NES, from a trace of every instruction of the pass ([`gp_nes::ramrole`]): input, a counter, scratch, sound, a pointer, or game state. Not on an arcade board yet |
+//! | RAM the game changes in play | Each byte that differs from the frame before, on frames the player controls (`observe.toml`'s `control`, else the mapping's `start`, else every polled frame). On the NES the stack page and the sprite page are left out; on an arcade board the 2 KB of work RAM at E000, by its index from there, less the stack where the main CPU's stack pointer ran |
+//! | Each RAM byte's role | From a trace of every instruction of the pass: input, a counter, scratch, sound, a pointer, or game state, by [`gp_nes::ramrole`]'s rules, fed by the 6502's bus on the NES and by the main Z80's trace and access log on an arcade board ([`crate::ramrole_z80`]), each byte by its index from E000 there |
 //! | Object kinds | Each slot table's ID byte in every live slot, on the same frames |
 //! | Code | The CPU addresses an instruction runs at, on the same frames: gp-nes's covered step, or the main Z80's from gp-arcade's trace ([`crate::covered`]) |
 //! | The clips' code | Each of the game's corpus clips run on the original from its start |
@@ -149,6 +149,8 @@ pub(crate) struct Opts<'a> {
     pub whole: bool,
     /// The game's built module, for a model with hooks.
     pub module: Option<&'a Path>,
+    /// Keep the measure in $GP_HOME/work/progress (false: `--no-save`).
+    pub save: bool,
 }
 
 /// The model's hash in a model folder, as the queue keys its scores.
@@ -239,26 +241,47 @@ pub(crate) struct Pass {
     pub roles: Classified,
 }
 
-/// One frame of the playthrough: the NES traced for the RAM roles and its
-/// code, an arcade board with its code from the instruction trace.
+/// One frame of the playthrough traced for the RAM roles and its code:
+/// the NES through `tracer`, an arcade board's main Z80 through `z80`.
+/// On an arcade board, the main CPU's stack pointer into work RAM is kept
+/// in `sps` (its lowest and highest), for the stack's bytes.
 fn step(
     o: &mut OriginalRuntime,
     input: &gp_runtime::InputFrame,
     frame: &mut CodeMap,
     tracer: &mut Tracer,
+    z80: &mut crate::ramrole_z80::Z80Roles,
+    sps: &mut Vec<u16>,
 ) -> Result<bool> {
     match o {
         OriginalRuntime::Nes(n) => n
             .step_traced(input, frame, tracer)
             .map_err(anyhow::Error::msg),
-        OriginalRuntime::Arcade(_) => {
-            crate::covered::step_covered(o, input, frame).map_err(anyhow::Error::msg)
+        OriginalRuntime::Arcade(a) => {
+            // advance()'s checks, then the frame with the trace on.
+            if input.reset || !input.axes.is_empty() || input.buttons > 0x7f {
+                return a.advance(input).map_err(anyhow::Error::msg);
+            }
+            let t = a.tapper_mut();
+            let trace =
+                crate::ramrole_z80::step(t, gp_arcade::Controls::from_bits(input.buttons), z80);
+            crate::covered::add_trace(&trace, frame);
+            // Only pointers into work RAM can be the stack.
+            let in_ram = |sp: u16| sp > ARCADE_RAM && sp <= ARCADE_RAM + 0x800;
+            for e in trace.iter().filter(|e| e.cpu == 0 && in_ram(e.sp)) {
+                if sps.is_empty() {
+                    sps.extend([e.sp, e.sp]);
+                }
+                sps[0] = sps[0].min(e.sp);
+                sps[1] = sps[1].max(e.sp);
+            }
+            Ok(t.polled())
         }
     }
 }
 
 /// Plays `inputs` on the original, counting what the game does in play
-/// and, on the NES, tracing each instruction for the RAM bytes' roles.
+/// and tracing each instruction for the RAM bytes' roles.
 pub(crate) fn playthrough(
     rom: &[u8],
     mapping: &Mapping,
@@ -294,7 +317,9 @@ pub(crate) fn playthrough(
         roles: Classified::default(),
     };
     let mut tracer = Tracer::new();
+    let mut z80 = crate::ramrole_z80::Z80Roles::new();
     let mut frame = CodeMap::new();
+    let mut sps = Vec::new();
     // The level whose start is wanted, and a copy of the original at the
     // frame before, when that frame is in play.
     let mut wanted: Option<String> = None;
@@ -302,7 +327,7 @@ pub(crate) fn playthrough(
     for input in inputs {
         let before = here.take();
         frame.clear();
-        let polled = step(&mut o, input, &mut frame, &mut tracer)?;
+        let polled = step(&mut o, input, &mut frame, &mut tracer, &mut z80, &mut sps)?;
         out.frames += 1;
         model_frame.step(&o, polled);
         let now = ram(&o);
@@ -359,6 +384,12 @@ pub(crate) fn playthrough(
     }
     if nes {
         out.roles = tracer.trace.classify();
+    } else {
+        // The main CPU's stack, where its pointer ran, is no game state.
+        let stack = gp_gaps::Stack::of_sp(ARCADE_RAM, sps);
+        out.ram.retain(|&a| !stack.has(a));
+        out.roles = z80.classify();
+        out.roles.roles.retain(|r| !stack.has(r.addr));
     }
     Ok(out)
 }
@@ -676,10 +707,12 @@ pub(crate) fn measure(
         model: model_key(mdir),
         seconds: t0.elapsed().as_secs_f64(),
     };
-    let file = file_of(paths, game, run);
-    std::fs::create_dir_all(file.parent().unwrap_or(Path::new(".")))?;
-    std::fs::write(&file, serde_json::to_vec_pretty(&m)?)
-        .with_context(|| format!("writing {}", file.display()))?;
+    if o.save {
+        let file = file_of(paths, game, run);
+        std::fs::create_dir_all(file.parent().unwrap_or(Path::new(".")))?;
+        std::fs::write(&file, serde_json::to_vec_pretty(&m)?)
+            .with_context(|| format!("writing {}", file.display()))?;
+    }
     Ok(m)
 }
 
@@ -694,6 +727,34 @@ mod tests {
         assert_eq!(level_at(&l, 10), "w1_1");
         assert_eq!(level_at(&l, 499), "w1_1");
         assert_eq!(level_at(&l, 900), "w1_2");
+    }
+
+    /// An arcade board's stack is where its stack pointer ran: a made-up
+    /// set that sets it to E800 and calls a routine every pass of its loop
+    /// pushes E7FE and E7FF, and nothing else.
+    #[test]
+    fn an_arcade_boards_stack_is_where_its_pointer_ran() {
+        let set = gp_arcade::testrom::romset(
+            // ld sp,e800 ; call 0008 ; jr 0003 ; ret
+            &[0x31, 0x00, 0xe8, 0xcd, 0x08, 0x00, 0x18, 0xfb, 0xc9],
+            &[0x18, 0xfe],
+        );
+        let mut o = OriginalRuntime::Arcade(gp_arcade::protocol::ArcadeRuntime::load(&set));
+        let (mut frame, mut tracer, mut sps) = (CodeMap::new(), Tracer::new(), Vec::new());
+        let mut z80 = crate::ramrole_z80::Z80Roles::new();
+        step(
+            &mut o,
+            &gp_runtime::InputFrame::default(),
+            &mut frame,
+            &mut tracer,
+            &mut z80,
+            &mut sps,
+        )
+        .unwrap();
+        assert_eq!(
+            gp_gaps::Stack::of_sp(ARCADE_RAM, sps),
+            gp_gaps::Stack(0x7fe..0x800)
+        );
     }
 
     #[test]

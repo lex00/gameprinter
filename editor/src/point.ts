@@ -121,3 +121,48 @@ export function requestInput(p: PointJson, choice: string | undefined, text: str
 export function choiceWords(key?: string): string | undefined {
   return CHOICES.find((c) => c.key === key)?.words;
 }
+
+/** Which game's picture the person pointed at. */
+export type Side = "original" | "model";
+
+/** The words of the third choice beside telling the agent what is wrong. */
+export const ASK_WORDS = "what is this?";
+
+/**
+ * The question "what is this?" about a box: the same turn as a Tell, with
+ * `ask: "explain"`, which the server answers with the `gp element explain`
+ * call the agent runs (serve/edits.rs). It needs no resolved point, so it
+ * can be asked at once; what is under the box goes along when known.
+ */
+export function questionInput(recording: string, frame: number, box: Box, side: Side, point?: PointJson): CaptureInput {
+  return {
+    v: 1,
+    actor: "person",
+    kind: "request",
+    text: ASK_WORDS,
+    data: {
+      ask: "explain",
+      side,
+      frame,
+      recording,
+      recording_id: point?.recording_id ?? null,
+      choice: null,
+      label: point?.label ?? null,
+      rect: box,
+      point: point ? { label: point.label, rect: point.rect, things: point.things, model_frame: point.model_frame } : { rect: box, things: [] },
+    },
+  };
+}
+
+/** One turn of the mechanic's talk, as `/mechanic/GAME/api/session` gives it. */
+export interface TalkTurn {
+  n: number;
+  by: string;
+  text: string;
+}
+
+/** The agent's turns after the person's question (turn `n`): its answer. */
+export function answersAfter(talk: TalkTurn[] | undefined, n: number | undefined): TalkTurn[] {
+  if (!talk || n === undefined) return [];
+  return talk.filter((t) => t.n > n && t.by === "agent");
+}

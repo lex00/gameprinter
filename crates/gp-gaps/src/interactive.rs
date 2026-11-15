@@ -305,7 +305,9 @@ fn context(
         if let (Some(a), Some(b)) = (frames[lo].counters.get(n), frames[hi].counters.get(n))
             && a != b
         {
-            counters.insert(name.clone(), b - a);
+            // Wrapping, as changes.rs takes a counter's change: a mapped
+            // "counter" may be eight bytes (Donkey Kong's random register).
+            counters.insert(name.clone(), b.wrapping_sub(*a));
         }
     }
     let mut spawned = BTreeSet::new();
@@ -386,7 +388,7 @@ fn context(
     for g in &frames[at.saturating_sub(1)..=at] {
         for &a in &g.ram_changed {
             let a = a & 0x7FF;
-            if (s.ram[usize::from(a)] as f64) < 0.02 * play && !(0x100..0x200).contains(&a) {
+            if (s.ram[usize::from(a)] as f64) < 0.02 * play && !run.known.stack.has(a) {
                 ram.insert(k.ram_name(a).0);
             }
         }

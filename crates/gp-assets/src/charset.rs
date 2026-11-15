@@ -52,6 +52,13 @@ impl Charset {
         })
     }
 
+    /// Every tile number the charset gives a character.
+    pub fn tiles(&self) -> impl Iterator<Item = u8> + '_ {
+        self.0.iter().flat_map(|(first, run)| {
+            (0..run.chars().count()).map(move |i| first.wrapping_add(i as u8))
+        })
+    }
+
     /// The tile number that stands for a character.
     pub fn tile(&self, c: char) -> Option<u8> {
         self.tile_of(c)

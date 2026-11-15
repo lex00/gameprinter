@@ -11,7 +11,7 @@
 //! | `script` | Plays the row's `try` steps (`gp mechanic probe`'s steps) from its `from` start |
 //! | `autoplay` | Runs Tapper's auto-player, `gp mechanic autoplay --search` (gp_arcade::autoplay, inside gp), from power-on once, and from each row's near point (a save point) on, and looks in its logs (arcade only) |
 //! | `search` | Seeded presses from the row's near points, as `gp capture dense`'s generator makes them, kept when the test holds |
-//! | `demo` | `gp mechanic demo` with Laya (NES only, when Laya answers) |
+//! | `demo` | `gp mechanic demo` with Laya, when Laya answers (it has no row's test yet, so it only says so) |
 //!
 //! A run that shows the row is cut around the frame the test holds and
 //! saved into the row's session as a clip made by the tools (`by =
@@ -322,6 +322,27 @@ fn step_seeing(
         .map_err(anyhow::Error::msg)?;
         return Ok(());
     }
+    // An arcade board's main CPU, from its instruction trace.
+    if !targets.is_empty()
+        && let OriginalRuntime::Arcade(a) = o
+    {
+        a.tapper_mut().set_trace(true);
+        let stepped = a.advance(&gp_runtime::InputFrame {
+            buttons: f.buttons_word(),
+            axes: Vec::new(),
+            reset: f.reset,
+        });
+        let trace = a.tapper_mut().take_trace();
+        a.tapper_mut().set_trace(false);
+        stepped.map_err(anyhow::Error::msg)?;
+        ran.extend(
+            trace
+                .iter()
+                .filter(|e| e.cpu == 0 && e.interrupt.is_none() && targets.contains(&e.pc))
+                .map(|e| e.pc),
+        );
+        return Ok(());
+    }
     probe::step(o, f)
 }
 
@@ -394,7 +415,7 @@ pub(crate) struct Args<'a> {
     pub rows: &'a [String],
     /// Seconds each tool may spend on a row.
     pub budget: u64,
-    /// How many of the leads to triage (NES only).
+    /// How many of the leads to triage.
     pub leads: usize,
     /// An auto-player to run instead of gp's own `gp mechanic autoplay`.
     pub autoplay: Option<&'a Path>,
@@ -687,82 +708,77 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
     };
     let set = crate::clipset::read_game(&game_dir)?;
 
-    // The leads, as items whose test is a change of the RAM bytes no clip
-    // wrote (the NES only: they come from stage 0's ROM dataset).
+    // The leads, as items whose test is a routine no clip ran or a change
+    // of the RAM bytes no clip wrote: from stage 0's ROM dataset, the
+    // NES's or an arcade romset's.
     let mut lead_note = String::new();
     if a.leads > 0 {
-        if platform == Platform::Nes {
-            match crate::leads::leads(home, &rom.bytes, a.game) {
-                Ok((all, _)) => {
-                    let mut skipped = 0;
-                    for (i, l) in all
-                        .iter()
-                        .filter(|l| l["kind"] == json!("code"))
-                        .take(a.leads)
-                        .enumerate()
-                    {
-                        let ram: Vec<String> = l["ram"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|x| {
-                                x.as_str()
-                                    .map(|s| format!("0x{}", s.trim_start_matches('$')))
-                            })
-                            .collect();
-                        // The lead's routines (CPU addresses): any of them
-                        // running shows it.
-                        let routines: Vec<String> = l["routines"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|x| x.as_str())
-                            .filter(|r| u16::from_str_radix(r, 16).is_ok())
-                            .map(str::to_owned)
-                            .collect();
-                        if ram.is_empty() && routines.is_empty() {
-                            skipped += 1;
-                            continue;
-                        }
-                        let gate = l["gate"].as_str().unwrap_or("").to_lowercase();
-                        let row = format!(
-                            "lead-{}",
-                            gate.trim_start_matches('~')
-                                .replace(|c: char| !c.is_ascii_alphanumeric(), "")
-                        );
-                        let row = if row == "lead-" {
-                            format!("lead-{}", i + 1)
-                        } else {
-                            row
-                        };
-                        plan.item.push(Item {
-                            row,
-                            note: l["lead"].as_str().unwrap_or("").to_owned(),
-                            changes: if routines.is_empty() { ram } else { Vec::new() },
-                            routines,
-                            hold: 1,
-                            before: 90,
-                            // Stage 0 reached these with seeded presses from
-                            // power-on, 3600 frames a run: the search does the same.
-                            after: 1710,
-                            from: Some("power-on".into()),
-                            todo: "Play on from here and do what the game hasn't been seen to do yet: a new place, a new enemy, a new way to lose or score".into(),
-                            stop: "After a few seconds of anything new, or after 30 seconds".into(),
-                            ..Item::default()
-                        });
+        match crate::leads::leads(home, &rom.bytes, a.game) {
+            Ok((all, _)) => {
+                let mut skipped = 0;
+                for (i, l) in all
+                    .iter()
+                    .filter(|l| l["kind"] == json!("code"))
+                    .take(a.leads)
+                    .enumerate()
+                {
+                    let ram: Vec<String> = l["ram"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|x| {
+                            x.as_str()
+                                .map(|s| format!("0x{}", s.trim_start_matches('$')))
+                        })
+                        .collect();
+                    // The lead's routines (CPU addresses): any of them
+                    // running shows it.
+                    let routines: Vec<String> = l["routines"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|x| x.as_str())
+                        .filter(|r| u16::from_str_radix(r, 16).is_ok())
+                        .map(str::to_owned)
+                        .collect();
+                    if ram.is_empty() && routines.is_empty() {
+                        skipped += 1;
+                        continue;
                     }
-                    if skipped > 0 {
-                        lead_note = format!(
-                            "{skipped} lead(s) name no routine or RAM byte, so no tool can tell when a run shows them; left out. "
-                        );
-                    }
+                    let gate = l["gate"].as_str().unwrap_or("").to_lowercase();
+                    let row = format!(
+                        "lead-{}",
+                        gate.trim_start_matches('~')
+                            .replace(|c: char| !c.is_ascii_alphanumeric(), "")
+                    );
+                    let row = if row == "lead-" {
+                        format!("lead-{}", i + 1)
+                    } else {
+                        row
+                    };
+                    plan.item.push(Item {
+                        row,
+                        note: l["lead"].as_str().unwrap_or("").to_owned(),
+                        changes: if routines.is_empty() { ram } else { Vec::new() },
+                        routines,
+                        hold: 1,
+                        before: 90,
+                        // Stage 0 reached these with seeded presses from
+                        // power-on, 3600 frames a run: the search does the same.
+                        after: 1710,
+                        from: Some("power-on".into()),
+                        todo: "Play on from here and do what the game hasn't been seen to do yet: a new place, a new enemy, a new way to lose or score".into(),
+                        stop: "After a few seconds of anything new, or after 30 seconds".into(),
+                        ..Item::default()
+                    });
                 }
-                Err(e) => lead_note = format!("No leads: {e:#}. "),
+                if skipped > 0 {
+                    lead_note = format!(
+                        "{skipped} lead(s) name no routine or RAM byte, so no tool can tell when a run shows them; left out. "
+                    );
+                }
             }
-        } else {
-            lead_note =
-                "No leads: they come from stage 0's ROM dataset, which only an NES game has. "
-                    .into();
+            Err(e) => lead_note = format!("No leads: {e:#}. "),
         }
     }
     let items: Vec<Item> = plan
@@ -1101,18 +1117,14 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
         tried[k].push(json!({"tool": "search", "said": said}));
     }
 
-    // 5. The decision model, NES only.
-    if platform == Platform::Nes {
-        let up = answers(a.decide);
-        for k in 0..items.len() {
-            if hits[k].is_some() || !uses(&items[k], "demo") {
-                continue;
-            }
-            tried[k].push(json!({"tool": "demo", "said": if up {
-                "Laya answers, but gp mechanic demo starts from a clip of the session and measures jumps: it has no test for this row".to_owned()
-            } else {
-                format!("Laya isn't answering at {} (just laya serves it)", a.decide)
-            }}));
+    // 5. The decision model.
+    let demo_rows: Vec<usize> = (0..items.len())
+        .filter(|&k| hits[k].is_none() && uses(&items[k], "demo"))
+        .collect();
+    if !demo_rows.is_empty() {
+        let said = demo_said(platform, answers(a.decide), a.decide);
+        for k in demo_rows {
+            tried[k].push(json!({"tool": "demo", "said": said}));
         }
     }
 
@@ -1242,6 +1254,18 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
     ))
 }
 
+/// What the demo step says of a row: gp mechanic demo has no row's test
+/// to play to, on either platform.
+fn demo_said(platform: Platform, up: bool, decide: &str) -> String {
+    if !up {
+        return format!("Laya isn't answering at {decide} (just laya serves it)");
+    }
+    match platform {
+        Platform::Nes => "Laya answers, but gp mechanic demo starts from a clip of the session and measures jumps: it has no test for this row".to_owned(),
+        Platform::Arcade => "Laya answers, but gp mechanic demo starts from a clip of the session and plays the board's chords for its frames: it has no test for this row".to_owned(),
+    }
+}
+
 fn fps(p: Platform) -> f64 {
     match p {
         Platform::Nes => 60.0988,
@@ -1287,6 +1311,35 @@ fn save_clip(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A lead's routines are seen run on an arcade board, from its main
+    /// CPU's trace, as on the NES: the made-up set's loop at 0003 runs
+    /// every frame, and nothing is at 1234.
+    #[test]
+    fn an_arcade_run_sees_the_routines_it_runs() {
+        let mut o = OriginalRuntime::Arcade(gp_arcade::protocol::ArcadeRuntime::load(
+            &gp_arcade::testrom::busy(),
+        ));
+        let targets: BTreeSet<u16> = [0x0003, 0x1234].into();
+        let mut ran = BTreeSet::new();
+        step_seeing(&mut o, &InputFrame::default(), &targets, &mut ran).unwrap();
+        assert_eq!(ran, [0x0003].into());
+        assert_eq!(gp_runtime::Runtime::frame(&o), 1);
+    }
+
+    /// The demo step says what it did on an arcade game as on the NES,
+    /// where it said nothing.
+    #[test]
+    fn the_demo_step_speaks_on_both_platforms() {
+        let nes = demo_said(Platform::Nes, true, "http://x");
+        assert!(nes.contains("measures jumps"), "{nes}");
+        let arcade = demo_said(Platform::Arcade, true, "http://x");
+        assert!(
+            arcade.contains("chords") && arcade.contains("no test"),
+            "{arcade}"
+        );
+        assert!(demo_said(Platform::Arcade, false, "http://x").contains("isn't answering"));
+    }
 
     fn names() -> Names {
         Names {

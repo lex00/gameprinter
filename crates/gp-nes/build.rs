@@ -8,7 +8,11 @@
 use std::path::Path;
 
 fn main() {
-    let third_party = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../third_party");
+    // Relative to this crate, the build script's working folder: an
+    // absolute path (or env!("CARGO_MANIFEST_DIR")) would rebuild gp-nes and
+    // everything after it in a copy of the checkout at another path (a tree,
+    // docs/agents.md).
+    let third_party = Path::new("../../third_party");
     let upstream = third_party.join("tetanes-core.upstream.sha256");
     let patch = third_party.join("tetanes-core.patch");
     for path in [&upstream, &patch] {

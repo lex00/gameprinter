@@ -2,7 +2,8 @@
 //! main.rs had them (wave 9 of the port). `input-log generate` also writes
 //! an arcade log (`--arcade SYSTEM --columns COLUMNS`, the layout a game's
 //! presses files name), and `input-log check` reads one, so both work for
-//! Tapper as for an NES game.
+//! Tapper as for an NES game. `input-log fork` cuts a run at a frame and
+//! goes on with new presses, on either platform.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -44,6 +45,30 @@ pub enum InputLogCmd {
         /// Tapper), as the game's presses files name them.
         #[arg(long, requires = "arcade")]
         columns: Option<String>,
+        /// Write here instead of stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Fork a run at a frame with new presses: the run's input as it was up
+    /// to the frame, then only the presses given. For a clip that takes a
+    /// branch the corpus doesn't, from a run that already gets close to it
+    /// (`gp record --input OUT`, then `gp clip presses`). An NES or an arcade
+    /// log, in the run's own layout.
+    Fork {
+        #[command(flatten)]
+        input: crate::interp::InputArgs,
+        /// The log frame the fork starts at, as `--hold` counts frames: the
+        /// run's frames before it are kept as they were.
+        #[arg(long)]
+        at: usize,
+        /// Buttons held over a frame range from `--at` on, as `generate`
+        /// takes them (`left@15100-15129`, `right+tap@15200-`); frames no
+        /// span holds hold nothing. Repeat for more spans.
+        #[arg(long = "hold")]
+        holds: Vec<String>,
+        /// The fork's length in frames (default: to the last span's end).
+        #[arg(long)]
+        frames: Option<usize>,
         /// Write here instead of stdout.
         #[arg(long)]
         out: Option<PathBuf>,
@@ -117,6 +142,55 @@ pub(crate) fn input_log(cmd: &InputLogCmd) -> Result<Outcome> {
                 out.as_deref(),
             ),
         },
+        InputLogCmd::Fork {
+            input,
+            at,
+            holds,
+            frames,
+            out,
+        } => fork(input, *at, holds, *frames, out.as_deref()),
+    }
+}
+
+/// `gp input-log fork`: the run's log cut at `at`, then the spans.
+fn fork(
+    input: &crate::interp::InputArgs,
+    at: usize,
+    holds: &[String],
+    frames: Option<usize>,
+    out: Option<&Path>,
+) -> Result<Outcome> {
+    let source = input.read(&Paths::from_env()?)?;
+    let spans: Vec<&str> = holds.iter().map(String::as_str).collect();
+    let log = gp_evidence::input_log::fork(&source, at, frames, &spans)?;
+    let n = log.frames.len();
+    let text = log.to_text();
+    runrec::output(
+        "input log",
+        format!("blake3:{}", Hash::of(text.as_bytes())),
+        Some(text.len() as u64),
+    );
+    let said = format!(
+        "{n} frames: the run's first {at} of {}, then {} span{} from frame {at}",
+        source.frames.len(),
+        spans.len(),
+        if spans.len() == 1 { "" } else { "s" }
+    );
+    match out {
+        Some(path) => {
+            fs::write(path, &text).with_context(|| format!("writing {}", path.display()))?;
+            Ok(Outcome::ok(
+                json!({ "frames": n, "kept": at, "source_frames": source.frames.len(), "out": path }),
+                format!("wrote {said} to {}", path.display()),
+            ))
+        }
+        None => {
+            print!("{text}");
+            Ok(Outcome::ok(
+                json!({ "frames": n, "kept": at, "source_frames": source.frames.len() }),
+                String::new(),
+            ))
+        }
     }
 }
 

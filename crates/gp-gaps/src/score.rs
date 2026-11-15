@@ -3,8 +3,9 @@
 //! should find: the sound interfaces and effects, the interactive elements
 //! with their handler routines and sounds, and the RAM variables that matter
 //! (and the per-frame bookkeeping that doesn't). It holds names and the IDs
-//! of the disassembly's constants only, never game data, and lives in
-//! `crates/gp-gaps/truth/<template>.toml`.
+//! of the disassembly's constants only, never game data, and lives in the
+//! game's folder as `truth/gaps.toml` (gp gaps reads it there first), or
+//! for a game kept with this crate, in `crates/gp-gaps/truth/<template>.toml`.
 //!
 //! Each detector gets a precision (the share of what it found that the set
 //! names) and a recall (the share of what the set names, and the recording

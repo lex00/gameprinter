@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::absint::{Ev, Flags, Guard, K, Loc, Reader};
 use super::board::Board;
 use super::cond::{self, Cond, Rel, Subj};
-use super::sem::Sem;
+use super::sem::{Alu, Dst, R8, Sem, Src};
 use super::{
     CodeMap, Constant, Dispatch, Element, Evidence, Fact, Harvest, Machine, MapRow, Open,
     RoutineRow, State, Transition, Value,
@@ -42,11 +42,19 @@ struct Table {
     count: Option<u8>,
     fields: BTreeSet<u16>,
     walks: Vec<u16>,
+    /// Another table starts at the same byte with another stride.
+    shared: bool,
 }
 
 impl Table {
+    /// `slots_E262`; `slots_E1AE_4` and `slots_E1AE_8` when two tables of
+    /// different strides start at one byte, so no two share a name.
     fn name(&self) -> String {
-        format!("slots_{:04X}", self.start)
+        if self.shared {
+            format!("slots_{:04X}_{:X}", self.start, self.stride)
+        } else {
+            format!("slots_{:04X}", self.start)
+        }
     }
     fn holds(&self, l: &Loc) -> bool {
         matches!(*l, Loc::Field { addr, stride } if stride == self.stride
@@ -599,6 +607,7 @@ fn find_tables(board: &Board, r: &Reader) -> Vec<Table> {
             },
             fields: BTreeSet::new(),
             walks: g.iter().map(|w| w.0).collect(),
+            shared: false,
         });
     }
     // Its fields: the places of that stride near it, by offset in a record
@@ -617,6 +626,10 @@ fn find_tables(board: &Board, r: &Reader) -> Vec<Table> {
     }
     out.retain(|t| !t.fields.is_empty());
     out.sort_by_key(|t| (t.start, t.stride));
+    let starts: Vec<u16> = out.iter().map(|t| t.start).collect();
+    for t in &mut out {
+        t.shared = starts.iter().filter(|&&s| s == t.start).count() > 1;
+    }
     out
 }
 
@@ -1360,8 +1373,15 @@ fn open(h: &mut H) {
     h.out.open = rows;
 }
 
-/// Constants: thresholds, masks and stored values, and whether a fact
-/// cites each.
+/// Constants, as gp-nes's rule reads them: each instruction of the code
+/// map with an immediate byte operand, at its own address. What it is
+/// comes from the instruction: `cp n` a threshold, `and n` a mask, `add`,
+/// `adc`, `sub` and `sbc n` an offset, `ld r,n` followed by a store of `r`
+/// (`ld (nn),a`, `ld (hl),r`, `ld (ix+d),r`) stored, and `ld (hl),n` or `ld
+/// (ix+d),n` stored by itself; any other `ld r,n` loaded, `or` and `xor n`
+/// an operand. A stored constant's `then` is the store's text. A fact cites
+/// it when its evidence names the instruction or the one after it.
+/// `ld rr,nn` is two bytes and not a row (the NES has no such operand).
 fn constants(h: &mut H) {
     let cited: BTreeSet<String> = h
         .out
@@ -1369,42 +1389,46 @@ fn constants(h: &mut H) {
         .iter()
         .flat_map(|f| f.evidence.iter().map(|e| e.pc.clone()))
         .collect();
-    let mut rows: BTreeMap<u16, Constant> = BTreeMap::new();
-    for (_, e) in h.events() {
-        let (pc, value, what, then) = match e {
-            Ev::Branch {
-                pc,
-                test: Flags::Cmp { rhs, .. },
-                ..
-            } => match rhs.k8() {
-                Some(k) => (*pc, k, "threshold", String::new()),
-                None => continue,
-            },
-            Ev::Branch {
-                pc,
-                test: Flags::Res { mask: Some(m), .. },
-                ..
-            } => (*pc, *m, "mask", String::new()),
-            Ev::Write { pc, loc, val, .. } => match val.k8() {
-                Some(k) if matches!(loc, Loc::At(_) | Loc::Field { .. }) => {
-                    (*pc, k, "stored", loc.hex())
-                }
-                _ => continue,
+    let stores = |s: &Sem, r: R8| matches!(s, Sem::Ld(Dst::M(_), Src::R(x)) if *x == r);
+    let mut rows = Vec::new();
+    for (&pc, &len) in &h.map.insns {
+        let ins = h.r.insn(pc);
+        let next_pc = pc.wrapping_add(u16::from(len));
+        let next = h
+            .map
+            .insns
+            .contains_key(&next_pc)
+            .then(|| h.r.insn(next_pc));
+        let (value, what, then) = match ins.sem {
+            Sem::Alu(op, Src::N(n)) => (
+                n,
+                match op {
+                    Alu::Cp => "threshold",
+                    Alu::And => "mask",
+                    Alu::Add | Alu::Adc | Alu::Sub | Alu::Sbc => "offset",
+                    Alu::Or | Alu::Xor => "operand",
+                },
+                String::new(),
+            ),
+            Sem::Ld(Dst::M(_), Src::N(n)) => (n, "stored", ins.text.clone()),
+            Sem::Ld(Dst::R(r), Src::N(n)) => match &next {
+                Some(x) if stores(&x.sem, r) => (n, "stored", x.text.clone()),
+                _ => (n, "loaded", String::new()),
             },
             _ => continue,
         };
-        // The instruction that holds the constant: the branch's compare is
-        // before it; take the branch's own pc for the row.
         let p = format!("{pc:04X}");
-        rows.entry(pc).or_insert_with(|| Constant {
+        let cited =
+            cited.contains(&p) || (next.is_some() && cited.contains(&format!("{next_pc:04X}")));
+        rows.push(Constant {
             routine: h.rname(pc),
-            pc: p.clone(),
-            insn: h.r.insn(pc).text,
+            pc: p,
+            insn: ins.text,
             value,
             what: what.into(),
             then,
-            cited: cited.contains(&p),
+            cited,
         });
     }
-    h.out.constants = rows.into_values().collect();
+    h.out.constants = rows;
 }

@@ -75,7 +75,7 @@ asset = "sprite_set"
 slot = "sprite_set"
 ```
 
-The board's colours are in its palette RAM, not NES colour numbers, so no palettes are captured. A picture numbered past the lift's sprites (the board wraps those) counts as a sprite with no lifted tile. `--apply` is refused: no model slot takes an arcade lift's pictures yet, so the model is only proposed.
+The board's colours are in its palette RAM, not NES colour numbers, so no palettes are captured. A picture numbered past the lift's sprites (the board wraps those) counts as a sprite with no lifted tile. `--apply` is refused: an arcade model draws its bodies as the board's own sprites (`board_sprite`, [board art](formats/board-art.md)), not from a sprite-set, so the model is only proposed.
 
 | Part | How it's found for any game |
 |---|---|

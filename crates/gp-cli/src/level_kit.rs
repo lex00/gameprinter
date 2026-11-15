@@ -70,6 +70,37 @@ pub struct Rules {
     /// What isn't known yet.
     #[serde(default)]
     pub open: Vec<String>,
+    /// Regions of the stage a large-art theme may draw a body by
+    /// (`#+ in REGION pic ...`, docs/formats/theme.md).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub region: Vec<RegionRule>,
+}
+
+/// A region of a stage, written by hand: a coarse box around a part of a
+/// level the model already describes (a band of rows, a ledge), never a
+/// table copied from the ROM.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegionRule {
+    /// Lowercase letters, digits, `-` and `_`, unique in the game.
+    pub name: String,
+    /// The level's name, as the kit's levels give it.
+    pub level: String,
+    /// `[x, y, w, h]` in the level's pixels.
+    #[serde(rename = "box")]
+    pub rect: [i64; 4],
+    pub what: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+}
+
+/// A region as the kit gives it, under its level.
+#[derive(Debug, Clone, Serialize)]
+pub struct KitRegion {
+    pub name: String,
+    #[serde(rename = "box")]
+    pub rect: [i64; 4],
+    pub what: String,
 }
 
 /// One rule: what it is about and the rule, with where it comes from.
@@ -146,6 +177,9 @@ pub struct LevelInfo {
     pub slots: Vec<String>,
     /// Tile kinds by kind, how many tile values are each.
     pub tile_kinds: BTreeMap<String, usize>,
+    /// The regions of this level the rules file names.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub regions: Vec<KitRegion>,
 }
 
 /// A spawn: what starts where.
@@ -524,8 +558,10 @@ pub fn kit_of(dir: &Path, m: &Model, rules: &Rules) -> Result<LevelKit> {
             spawns,
             slots,
             tile_kinds: kinds,
+            regions: Vec::new(),
         });
     }
+    place_regions(&rules.region, &mut levels)?;
     for p in rules.data.iter().chain(&rules.code) {
         if !p.slot.is_empty() {
             read.insert(p.slot.clone());
@@ -654,6 +690,53 @@ pub fn kit_of(dir: &Path, m: &Model, rules: &Rules) -> Result<LevelKit> {
     })
 }
 
+/// Puts each of the rules file's regions under its level, refusing a name
+/// that isn't lowercase letters, digits, `-` and `_`, a name given twice,
+/// a level the model hasn't got, and a box that is empty or not inside
+/// the level.
+fn place_regions(rules: &[RegionRule], levels: &mut [LevelInfo]) -> Result<()> {
+    let mut seen = BTreeSet::new();
+    for r in rules {
+        let at = format!("{RULES_FILE}'s region {:?}", r.name);
+        if r.name.is_empty()
+            || !r
+                .name
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+        {
+            anyhow::bail!("{at}: a region's name is lowercase letters, digits, - and _");
+        }
+        if !seen.insert(r.name.clone()) {
+            anyhow::bail!("{at}: named twice; a region's name is unique in the game");
+        }
+        let names: Vec<String> = levels.iter().map(|l| l.name.clone()).collect();
+        let Some(l) = levels.iter_mut().find(|l| l.name == r.level) else {
+            anyhow::bail!(
+                "{at}: the model has no level {:?} (its levels: {})",
+                r.level,
+                names.join(", ")
+            );
+        };
+        let [x, y, w, h] = r.rect;
+        let [lw, lh] = l.pixels.map(i64::from);
+        if w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > lw || y + h > lh {
+            anyhow::bail!(
+                "{at}: its box [{x}, {y}, {w}, {h}] isn't inside the level {} ({lw} by {lh} px)",
+                l.name
+            );
+        }
+        if r.what.trim().is_empty() {
+            anyhow::bail!("{at}: say in `what` which part of the stage it is");
+        }
+        l.regions.push(KitRegion {
+            name: r.name.clone(),
+            rect: r.rect,
+            what: r.what.clone(),
+        });
+    }
+    Ok(())
+}
+
 /// A table row: cells joined by `|`, with any `|` in them escaped.
 fn row(cells: &[String]) -> String {
     format!(
@@ -696,6 +779,19 @@ pub fn doc(k: &LevelKit) -> String {
             l.bounds.join("; "),
             l.goal.clone(),
         ]));
+    }
+    if k.levels.iter().any(|l| !l.regions.is_empty()) {
+        s.push_str("\nThe regions of the stage, which a large-art theme may draw a body by (`#+ in REGION pic ...`, docs/formats/theme.md): a body is in one while the middle of its picture's bottom row is inside the box.\n\n| Region | Level | Box (x, y, w, h in the level's pixels) | What |\n|---|---|---|---|\n");
+        for l in &k.levels {
+            for r in &l.regions {
+                s.push_str(&row(&[
+                    format!("`{}`", r.name),
+                    format!("`{}`", l.name),
+                    format!("{}, {}, {}, {}", r.rect[0], r.rect[1], r.rect[2], r.rect[3]),
+                    r.what.clone(),
+                ]));
+            }
+        }
     }
     for l in &k.levels {
         if l.spawns.is_empty() {
@@ -987,6 +1083,67 @@ mod tests {
             }
         }
         assert!(seen >= 1, "Moss Hop's kit at least");
+    }
+
+    /// A rules file's regions go under their level in the kit (kit.toml's
+    /// `[[levels.regions]]`, which gp_web_lift::regions reads back for the
+    /// build), and one with a bad name, a level the model hasn't got, a
+    /// box outside the level or an unknown key is refused.
+    #[test]
+    fn a_rules_files_regions_go_under_their_level_and_bad_ones_are_refused() {
+        let dir = repo().join("templates/mosshop");
+        let (m, _) = read_model(&dir).unwrap();
+        let rules = |extra: &str| -> Result<Rules> {
+            Ok(toml::from_str(&format!("format = \"{FORMAT}\"\n{extra}"))?)
+        };
+        let region = |name: &str, level: &str, b: &str| {
+            format!(
+                "[[region]]\nname = \"{name}\"\nlevel = \"{level}\"\nbox = {b}\nwhat = \"made up\"\n"
+            )
+        };
+        let r = rules(&region("top-ledge", "main", "[16, 32, 64, 16]")).unwrap();
+        let k = kit_of(&dir, &m, &r).unwrap();
+        let main = k.levels.iter().find(|l| l.name == "main").unwrap();
+        assert_eq!(main.regions.len(), 1);
+        assert_eq!(main.regions[0].rect, [16, 32, 64, 16]);
+        let text = kit_text(&k).unwrap();
+        assert!(text.contains("[[levels.regions]]"), "{text}");
+        assert!(doc(&k).contains("| `top-ledge` | `main` | 16, 32, 64, 16 | made up |"));
+        let d = tempfile::tempdir().unwrap();
+        fs::create_dir_all(d.path().join(DIR)).unwrap();
+        fs::write(d.path().join(DIR).join(KIT_FILE), &text).unwrap();
+        let back = gp_web_lift::regions(d.path()).unwrap();
+        assert_eq!(
+            back,
+            [gp_present::art::Region {
+                name: "top-ledge".into(),
+                level: "level-main.png".into(),
+                rect: [16, 32, 64, 16],
+            }]
+        );
+        for (extra, says) in [
+            (region("Top", "main", "[0, 0, 8, 8]"), "lowercase"),
+            (
+                region("a", "main", "[0, 0, 8, 8]") + &region("a", "main", "[8, 0, 8, 8]"),
+                "named twice",
+            ),
+            (
+                region("a", "nowhere", "[0, 0, 8, 8]"),
+                "no level \"nowhere\"",
+            ),
+            (
+                region("a", "main", "[500, 0, 64, 8]"),
+                "isn't inside the level main (512 by 240 px)",
+            ),
+            (region("a", "main", "[0, 0, 0, 8]"), "isn't inside"),
+        ] {
+            let e = kit_of(&dir, &m, &rules(&extra).unwrap())
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains(says), "{e}");
+        }
+        // An unknown key in a region, as an older gp refuses [[region]].
+        assert!(rules(&(region("a", "main", "[0, 0, 8, 8]") + "colour = \"red\"\n")).is_err());
     }
 
     #[test]

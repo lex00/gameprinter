@@ -4,12 +4,11 @@
 // click sets the focus to its own frames. The list of the moments inside
 // the focus, and "refine this" on one with the check on every other moment
 // of its kind. Each piece takes props and assumes no layout, so a guided
-// page can drive them. The words come from momentfold.ts and refinefold.ts.
+// page can drive them. The words come from momentfold.ts.
 
 import { useState } from "react";
 import type { GameWords } from "./api";
 import { type Moment, type MomentKind, type MomentsPhase, KIND_WORDS, momentLine, momentName, tick } from "./momentfold";
-import { type MomentRefinePhase, type RefineState, alsoLine, worseLine } from "./refinefold";
 
 const KINDS: MomentKind[] = ["jump", "landing", "death", "life_lost", "counter", "level"];
 
@@ -80,51 +79,6 @@ export function MomentsInFocus({ g, moments, pick }: { g?: GameWords; moments: M
           </li>
         ))}
       </ul>
-    </div>
-  );
-}
-
-export interface RefineThisMomentProps {
-  moment: Moment;
-  phase: MomentRefinePhase;
-  state?: RefineState;
-  start: (m: Moment) => void;
-  stop: () => void;
-  /** Both games to a frame of the original. */
-  seek: (frame: number) => void;
-}
-
-/** "Refine this jump" on a focused moment, what it is doing, and the check on the others of its kind. */
-export function RefineThisMoment({ moment, phase, state, start, stop, seek }: RefineThisMomentProps) {
-  const also = state?.result?.also;
-  const running = phase.state === "refining";
-  const kind = KIND_WORDS[moment.kind].name.toLowerCase();
-  return (
-    <div className="refine-moment" data-testid="refine-moment">
-      <p>
-        {phase.says} <span className="hint">{phase.next}</span>
-      </p>
-      {running ? (
-        <button onClick={stop}>stop</button>
-      ) : (
-        <button onClick={() => start(moment)} disabled={!moment.mechanic} data-testid="refine-this" title={moment.mechanic ? `Only ${moment.mechanic}'s numbers, in these frames` : "No mechanic owns this kind of moment"}>
-          {`refine this ${moment.kind === "counter" ? "change" : kind}`}
-        </button>
-      )}
-      {also && phase.state === "done" && (
-        <div className="refine-also" data-testid="refine-also">
-          <p>{alsoLine(also)}</p>
-          {also.worse_moments.length > 0 && (
-            <ul>
-              {also.worse_moments.map((w) => (
-                <li key={w.n}>
-                  {worseLine(also.kind, w)} <button onClick={() => seek(w.from)}>go there</button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
     </div>
   );
 }

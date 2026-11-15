@@ -74,6 +74,24 @@ fn run() -> Result<(), String> {
     }
     let prepped = gp_web_lift::prep(&file, assets, out, &theme, home.as_deref(), &looks, lifted)?;
     let bundle = prepped.bundle;
+    // A finished large-art look beside the model (a folder of `themes/`
+    // with look.txt: a person's own theme of a new game, which
+    // `gp game share` and `gp theme look play` put there) is offered as
+    // it is, as the public page's lift offers one (gp_web_lift).
+    let (mut skipped, mut partial) = (Vec::new(), Vec::new());
+    gp_web_lift::add_ready_looks(
+        &model_dir.join("themes"),
+        out,
+        (lifted, true),
+        &mut skipped,
+        &mut partial,
+    )?;
+    for s in skipped.iter().chain(&partial) {
+        eprintln!(
+            "gp-web-prep: the look {} ({}): {}: {}",
+            s.id, s.title, s.reason, s.detail
+        );
+    }
     catalogue(model_dir, out, home.as_deref())?;
 
     let mut names = Vec::new();

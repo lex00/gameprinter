@@ -32,7 +32,7 @@ use serde_json::{Value, json};
 use crate::Outcome;
 
 /// The answer's version: a change to its shape or stages bumps it.
-pub(crate) const VERSION: &str = "next 1";
+pub(crate) const VERSION: &str = "next 2";
 /// The porting stages.
 const STAGES: u8 = 12;
 /// How old a question on REFINE is (seconds) before it earns a clue.
@@ -51,7 +51,7 @@ pub(crate) enum Who {
 }
 
 impl Who {
-    fn words(self) -> &'static str {
+    pub(crate) fn words(self) -> &'static str {
         match self {
             Who::Tools => "the tools",
             Who::Agent => "your agent",
@@ -90,7 +90,7 @@ pub(crate) struct Step {
     pub act: Option<Act>,
 }
 
-fn step(who: Who, says: impl Into<String>) -> Step {
+pub(crate) fn step(who: Who, says: impl Into<String>) -> Step {
     Step {
         who,
         says: says.into(),
@@ -100,15 +100,15 @@ fn step(who: Who, says: impl Into<String>) -> Step {
 }
 
 impl Step {
-    fn page(mut self, p: impl Into<String>) -> Self {
+    pub(crate) fn page(mut self, p: impl Into<String>) -> Self {
         self.how.page = Some(p.into());
         self
     }
-    fn cli(mut self, c: impl Into<String>) -> Self {
+    pub(crate) fn cli(mut self, c: impl Into<String>) -> Self {
         self.how.cli = Some(c.into());
         self
     }
-    fn act(mut self, a: Act) -> Self {
+    pub(crate) fn act(mut self, a: Act) -> Self {
         self.act = Some(a);
         self
     }
@@ -133,6 +133,88 @@ pub(crate) struct Yes {
     pub state: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub game: Option<String>,
+    /// A picture the agent proposes for the person's theme
+    /// (crate::theme_picture), with `what` "picture": the proposal as
+    /// stored, with its place in the queue when open. The page's card
+    /// shows the old and new pictures with ACCEPT and REJECT.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub picture: Option<Value>,
+    /// A sound change the agent proposes for the person's copy
+    /// (gp_mcp::sound_proposal), with `what` "sound": the proposal as
+    /// stored, with its place in the queue when open. The page's card
+    /// plays the sound now and the new one, with ACCEPT and REJECT.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sound: Option<Value>,
+}
+
+/// The status line's entry for a sound change the agent proposes
+/// (gp_mcp::sound_proposal), and the person's step when it is the card
+/// to answer, or the agent's when an answer waits to be read.
+pub(crate) fn sound_wait(p: &Value) -> (Yes, Option<Step>) {
+    let s = |k: &str| p[k].as_str().map(str::to_owned);
+    let role = p["kind"] == json!("role");
+    let song = if role {
+        // A role's sound in a large-art theme (issue #30).
+        format!(
+            "\"{}\"{}",
+            s("role").unwrap_or_default(),
+            match p["take"].as_u64() {
+                Some(t) if t > 1 => format!(" (take {t})"),
+                _ => String::new(),
+            }
+        )
+    } else {
+        s("clip_song").map_or_else(|| "the sound".into(), |x| format!("\"{x}\""))
+    };
+    // The person's name for the game is the copy's; a theme's is its title.
+    let title = if role {
+        s("title").or_else(|| s("copy"))
+    } else {
+        s("copy").or_else(|| s("title"))
+    }
+    .filter(|t| !t.is_empty())
+    .unwrap_or_else(|| "your game".into());
+    let state = s("state").unwrap_or_default();
+    let says = match state.as_str() {
+        "open" => format!(
+            "A new sound for {song} in {title}: {}",
+            s("why").unwrap_or_default()
+        ),
+        "accepted" => format!("You accepted the new sound for {song} in {title}."),
+        "rejected" => format!("You rejected the new sound for {song} in {title}."),
+        "undone" => format!("You put the old sound for {song} back in {title}."),
+        _ => format!("The new sound for {song} in {title} wasn't used: the sound changed first."),
+    };
+    let step = if state == "open" {
+        (p["place"] == json!(1)).then(|| {
+            step(
+                Who::Person,
+                format!(
+                    "Your agent proposes a change to the sound: {says} Listen to both and press ACCEPT or REJECT on the card."
+                ),
+            )
+        })
+    } else {
+        Some(
+            step(
+                Who::Agent,
+                format!("{says} Your agent reads your answer with gp theme sound list."),
+            )
+            .cli("gp theme sound list"),
+        )
+    };
+    (
+        Yes {
+            what: "sound".into(),
+            says,
+            id: s("id"),
+            state: Some(state),
+            game: None,
+            picture: None,
+            sound: Some(p.clone()),
+        },
+        step,
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -168,6 +250,14 @@ pub(crate) struct Answer {
     /// page refreshes its views with no note.
     pub page_changes: u64,
     pub facts: Value,
+    /// A theme's or a new game's steps as the page lists them, with whose
+    /// turn each is and which is now (crate::journeys); empty for a port,
+    /// whose twelve stages are `stage`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<crate::journeys::JourneyStep>,
+    /// Every copy the person has (a theme, a new game), where each stands
+    /// and whose turn it is, so an agent arriving cold sees them all.
+    pub copies: Vec<crate::journeys::Line>,
 }
 
 /// A quest log row as the loop reads it.
@@ -303,6 +393,13 @@ pub(crate) struct Facts {
     /// The asks `gp_run` left that wait for the person's yes, and the
     /// yeses not used yet (gp_mcp::asks), of every game.
     pub asks: Vec<Value>,
+    /// The pictures the agent proposes for the person's themes, waiting
+    /// for their answer, and answers the agent hasn't read
+    /// (crate::theme_picture::for_next).
+    pub pictures: Vec<Value>,
+    /// The sound changes the agent proposes for the person's copies, the
+    /// same way (gp_mcp::sound_proposal::for_next).
+    pub sounds: Vec<Value>,
     /// The agent's calls running now (gp_mcp::activity): what, in words.
     pub agent_runs: Vec<(String, u64)>,
     /// The same calls started by a button on the page (serve/jobs.rs),
@@ -659,6 +756,8 @@ pub(crate) fn answer(f: &Facts) -> Answer {
             id: s("id"),
             state: s("state"),
             game: s("game"),
+            picture: None,
+            sound: None,
         });
         steps.push(if a["state"] == json!("open") {
             step(
@@ -672,6 +771,55 @@ pub(crate) fn answer(f: &Facts) -> Answer {
             )
         });
     }
+    // 2b. A picture the agent proposes for the person's theme: the oldest
+    // open one is the card; an answer the agent hasn't read is its step.
+    for p in &f.pictures {
+        let s = |k: &str| p[k].as_str().map(str::to_owned);
+        let pic = s("picture").unwrap_or_default();
+        let title = s("title").unwrap_or_else(|| "your theme".into());
+        let state = s("state").unwrap_or_default();
+        let says = match state.as_str() {
+            "open" => format!("A new {pic} for {title}: {}", s("why").unwrap_or_default()),
+            "accepted" => format!("You accepted the new {pic} for {title}."),
+            "rejected" => format!("You rejected the new {pic} for {title}."),
+            "undone" => format!("You put the old {pic} back in {title}."),
+            _ => format!("The new {pic} for {title} wasn't used: the picture changed first."),
+        };
+        waits.push(Yes {
+            what: "picture".into(),
+            says: says.clone(),
+            id: s("id"),
+            state: Some(state.clone()),
+            game: s("game"),
+            picture: Some(p.clone()),
+            sound: None,
+        });
+        if state == "open" {
+            if p["place"] == json!(1) {
+                steps.push(step(
+                    Who::Person,
+                    format!(
+                        "Your agent proposes a picture: {says} Press ACCEPT or REJECT on the card."
+                    ),
+                ));
+            }
+        } else {
+            steps.push(
+                step(
+                    Who::Agent,
+                    format!("{says} Your agent reads your answer with gp theme picture list."),
+                )
+                .cli("gp theme picture list"),
+            );
+        }
+    }
+    // 2c. A sound change the agent proposes for the person's copy, the
+    // same way.
+    for p in &f.sounds {
+        let (y, st) = sound_wait(p);
+        waits.push(y);
+        steps.extend(st);
+    }
     if n == 11 {
         waits.push(Yes {
             what: "publish".into(),
@@ -679,6 +827,8 @@ pub(crate) fn answer(f: &Facts) -> Answer {
             id: None,
             state: None,
             game: None,
+            picture: None,
+            sound: None,
         });
         steps.push(step(
             Who::Person,
@@ -886,6 +1036,8 @@ pub(crate) fn answer(f: &Facts) -> Answer {
         clue,
         changes: f.changes,
         page_changes: f.page_changes,
+        steps: Vec::new(),
+        copies: Vec::new(),
         facts: json!({
             "title": f.title,
             "rom_found": f.rom_found,
@@ -1037,13 +1189,19 @@ fn clue(f: &Facts, n: u8, next: &Step) -> Option<Clue> {
 
 /// The answer as text, for a terminal.
 pub(crate) fn text_of(a: &Answer) -> String {
+    let lead = match a.journey {
+        "theme" => "your theme ",
+        "new" => "your new game ",
+        _ => "",
+    };
     let mut out = vec![
         format!(
-            "{}stage {} of {}: {}",
+            "{lead}{}{} {} of {}: {}",
             a.subject
                 .as_deref()
                 .map(|s| format!("{s}, "))
                 .unwrap_or_default(),
+            if a.journey == "port" { "stage" } else { "step" },
             a.stage.n,
             a.stage.of,
             a.stage.name
@@ -1070,6 +1228,20 @@ pub(crate) fn text_of(a: &Answer) -> String {
         ));
     }
     for y in &a.waits_for_yes {
+        if y.what == "picture" || y.what == "sound" {
+            let id = y.id.as_deref().unwrap_or("?");
+            let what = &y.what;
+            out.push(match y.state.as_deref() {
+                Some("open") => {
+                    format!("Waits for your ACCEPT or REJECT ({what} {id}): {}", y.says)
+                }
+                _ => format!(
+                    "Answered, not read by your agent yet ({what} {id}): {}",
+                    y.says
+                ),
+            });
+            continue;
+        }
         match (&y.id, y.state.as_deref()) {
             (Some(id), Some("yes")) => {
                 out.push(format!("Said yes, not used yet (ask {id}): {}", y.says));
@@ -1080,6 +1252,43 @@ pub(crate) fn text_of(a: &Answer) -> String {
     }
     if let Some(c) = &a.clue {
         out.push(format!("Clue: {}", c.says));
+    }
+    if !a.steps.is_empty() {
+        out.push(String::new());
+        out.push("The steps:".into());
+        for s in &a.steps {
+            out.push(format!(
+                "  {}. {} ({}): {}",
+                s.n,
+                s.name,
+                s.who.words(),
+                s.state
+            ));
+        }
+    }
+    if !a.copies.is_empty() {
+        out.push(String::new());
+        out.push("Your copies (gp progress --next --copy NAME for one):".into());
+        for c in &a.copies {
+            out.push(format!(
+                "  {} {}{}: step {} of {}, {}; next ({}): {}",
+                if c.journey == "theme" {
+                    "theme"
+                } else {
+                    "new game"
+                },
+                c.name,
+                c.from
+                    .as_ref()
+                    .map(|f| format!(" (from {})", f.title))
+                    .unwrap_or_default(),
+                c.stage.n,
+                c.stage.of,
+                c.stage.name,
+                c.who.words(),
+                c.says
+            ));
+        }
     }
     out.join("\n")
 }
@@ -1300,6 +1509,8 @@ pub(crate) fn gather(
     let mut f = Facts {
         games: all.clone(),
         asks: gp_mcp::asks::pending(home),
+        pictures: crate::theme_picture::for_next(home),
+        sounds: gp_mcp::sound_proposal::for_next(home),
         agent_runs: runs
             .iter()
             .filter(|r| !by_page(r))
@@ -1546,10 +1757,50 @@ pub(crate) fn gather(
     Ok(f)
 }
 
-/// `gp progress --next`.
-pub(crate) fn run(paths: &gp_evidence::Paths, game: Option<&str>) -> Result<Outcome> {
-    let f = gather(paths, None, game, None)?;
-    let a = answer(&f);
+/// The answer for one of the person's copies (a theme, a new game:
+/// crate::journeys): the one `copy` names, else, when no game is named
+/// either, the copy opened last on the page if that was after the last
+/// game. None when the answer is a port's.
+pub(crate) fn copy_answer(
+    paths: &gp_evidence::Paths,
+    games: Option<&Path>,
+    game: Option<&str>,
+    copy: Option<&str>,
+) -> Result<Option<Answer>> {
+    use crate::journeys as j;
+    let name = match (copy, game) {
+        (Some(c), _) => c.to_owned(),
+        (None, None) => match j::last_copy(&paths.home) {
+            Some(c) => c,
+            None => return Ok(None),
+        },
+        _ => return Ok(None),
+    };
+    let c = match j::find(&paths.home, games, &name) {
+        Ok(c) => c,
+        Err(e) if copy.is_some() => return Err(e),
+        Err(_) => return Ok(None),
+    };
+    let all = j::list(&paths.home, games);
+    let mut a = j::answer(&j::gather(paths, &all, &c), &j::around(&paths.home, &c));
+    a.copies = j::lines(paths, &all);
+    Ok(Some(a))
+}
+
+/// `gp progress --next [--template GAME | --copy NAME]`.
+pub(crate) fn run(
+    paths: &gp_evidence::Paths,
+    game: Option<&str>,
+    copy: Option<&str>,
+) -> Result<Outcome> {
+    let a = match copy_answer(paths, None, game, copy)? {
+        Some(a) => a,
+        None => {
+            let mut a = answer(&gather(paths, None, game, None)?);
+            a.copies = crate::journeys::lines(paths, &crate::journeys::list(&paths.home, None));
+            a
+        }
+    };
     Ok(Outcome::ok(json_of(&a), text_of(&a)))
 }
 

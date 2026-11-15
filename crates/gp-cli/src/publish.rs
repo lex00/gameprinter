@@ -65,10 +65,19 @@ pub enum SelfCmd {
         #[arg(long)]
         check: bool,
     },
+    /// Say what works on this machine and what doesn't, in plain words:
+    /// gp's home, the page's files (carried in a released gp, or read from
+    /// a checkout), your ROMs, a games folder, curl, git, Rust, the build
+    /// sandbox, Node, a headless browser and MAME, each with what needs it
+    /// and how to get it, then whether this machine is ready to make a
+    /// theme, make a game, or port one. Changes nothing. Exits 1 only when
+    /// gp can't write its home folder. Example: gp self check
+    Check,
 }
 
 pub(crate) fn run(cmd: &SelfCmd, paths: &Paths) -> Result<Outcome> {
     match cmd {
+        SelfCmd::Check => crate::self_check::run(paths),
         SelfCmd::Path => self_path(paths),
         SelfCmd::Publish => self_publish(paths),
         SelfCmd::Docs { file, check } => crate::cli_doc::run(file, *check),

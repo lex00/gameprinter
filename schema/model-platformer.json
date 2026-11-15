@@ -66,6 +66,31 @@
           "const": "sound-effects",
           "description": "Sound effects in the same form, each tied to the model event it\nmarks. Presentation only. Since core 0.4.3.",
           "type": "string"
+        },
+        {
+          "const": "board-tiles",
+          "description": "An arcade board's background tiles, as its graphics chips hold\nthem (`mcr-tiles`, lifted from the player's romset): what a level's\n`present.board.screen` is drawn with. Presentation only. Feature\n`asset.board` (docs/formats/board-art.md).",
+          "type": "string"
+        },
+        {
+          "const": "board-sprites",
+          "description": "An arcade board's sprites (`mcr-sprites`): what an entity's\n`board_sprite` is drawn with. Presentation only. Feature\n`asset.board`.",
+          "type": "string"
+        },
+        {
+          "const": "board-screen",
+          "description": "A whole screen of the board's background tile layer, each cell its\ntile, flips, colour bank and priority as the board's video RAM\nholds them (`mcr-screen`, a table of the program lifted from the\nplayer's romset): a level's stage. Presentation only. Feature\n`asset.board`.",
+          "type": "string"
+        },
+        {
+          "const": "board-palette",
+          "description": "The board's 64 colours as its palette RAM holds them (`mcr-palette`,\na table of the program lifted from the player's romset).\nPresentation only. Feature `asset.board`.",
+          "type": "string"
+        },
+        {
+          "const": "board-font",
+          "description": "Background tiles of the board that draw text, with the tile for\neach character (`mcr-font`, its `charset` counted from the asset's\nfirst tile): the letters a theme or a new game draws text with on\nthe board, as an NES model's `font` slot. Presentation only.\nFeature `asset.board`.",
+          "type": "string"
         }
       ]
     },
@@ -183,6 +208,296 @@
       },
       "required": [
         "every"
+      ],
+      "type": "object"
+    },
+    "BoardByte": {
+      "additionalProperties": false,
+      "description": "One byte of a board sprite's entry: a byte of one of the body's `ext`\nwords, or a number the model fixes. Give `word` or `number`.",
+      "properties": {
+        "byte": {
+          "description": "Which byte of the word, 0 the lowest: a mapping that reads two\nbytes into one word (`ram = [flags, picture]`) puts the first at\nbyte 0 and the second at byte 1. Default 0.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "number": {
+          "description": "The byte itself, when the model fixes it.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "word": {
+          "description": "The `ext` word (0 to 3) that holds it.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "BoardCounter": {
+      "additionalProperties": false,
+      "description": "A counter drawn as digits in an arcade board's tile layer (feature\n`level.board.counters`): each digit a cell of video RAM, its low byte\nthe digit's tile code and its high byte `high`, over the screen's.",
+      "properties": {
+        "at": {
+          "description": "Column and row of the first (leftmost) digit's cell, 0 to 31 and\n0 to 29.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "counter": {
+          "description": "The counter, by name.",
+          "type": "string"
+        },
+        "digits": {
+          "description": "How many digits, 1 to 10. A number too long for them shows its\nlast digits; one below zero is drawn as zero.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "high": {
+          "$ref": "#/$defs/RowByte",
+          "description": "The cells' high byte (tile bits 8 and 9, the flips, the colour bank\nand the priority), lifted."
+        },
+        "plus": {
+          "description": "Added to the counter before it is drawn: 1 for a level number\nkept as the levels cleared. Default 0.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "table": {
+          "description": "`tile` is a table of the ten digits' codes, digit d's at `column +\nd`, for a game that keeps one.",
+          "type": "boolean"
+        },
+        "tile": {
+          "$ref": "#/$defs/RowByte",
+          "description": "The tile code (bits 0 to 7 of the cell) of the digit 0, lifted:\ndigit d's is this plus d, as a game's code adds the digit to a\ncode (`add a,$30`). With `table`, the first of ten codes."
+        },
+        "when": {
+          "description": "Drawn only while every one of these counter tests holds, as a HUD\nfield's `when`.",
+          "items": {
+            "$ref": "#/$defs/Guard"
+          },
+          "type": "array"
+        },
+        "zeros": {
+          "description": "Leading zeros are drawn as `0`. Without it, they are left out and\nthose cells show the screen's own tiles, as a game that skips them\nleaves them; the last digit is always drawn.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "counter",
+        "at",
+        "digits",
+        "tile",
+        "high"
+      ],
+      "type": "object"
+    },
+    "BoardLook": {
+      "additionalProperties": false,
+      "description": "Feature `level.board`: a level drawn as an arcade board draws its\npicture: the board's background tile layer from a whole screen, and\nthe board's colours, which the bodies' board sprites are drawn in too\n(docs/formats/board-art.md). Presentation only.",
+      "properties": {
+        "counters": {
+          "description": "Feature `level.board.counters`: counters drawn as digits in the\ntile layer, as a game's vblank writes its score into video RAM.",
+          "items": {
+            "$ref": "#/$defs/BoardCounter"
+          },
+          "type": "array"
+        },
+        "looks": {
+          "description": "Feature `level.board.looks`: the level's other looks, each chosen\nwhile its counter tests hold (the first that does), as the game\npicks a stage and its colours by its own counters. Each frame is\ndrawn with the look its counters choose then, so a hook that\nchanges a counter changes the look with no new level and nothing\nplaced again. With none holding, the look above.",
+          "items": {
+            "$ref": "#/$defs/BoardLookWhen"
+          },
+          "type": "array"
+        },
+        "palette": {
+          "description": "A slot of kind `board-palette`: the 64 colours.",
+          "type": "string"
+        },
+        "palette_writes": {
+          "description": "Bytes the program writes into palette RAM after loading `palette`,\nin order, each from a byte of a `rows` slot: a colour it pokes on\nits own, or a level's colours from a table.",
+          "items": {
+            "$ref": "#/$defs/PaletteWrite"
+          },
+          "type": "array"
+        },
+        "repeats": {
+          "description": "Feature `level.board.counters`: counters drawn as one tile\nrepeated, as lives are shown as a row of pictures.",
+          "items": {
+            "$ref": "#/$defs/BoardRepeat"
+          },
+          "type": "array"
+        },
+        "screen": {
+          "description": "A slot of kind `board-screen`: the stage. Without it the tile layer\nis tile 0 everywhere, in colour bank 0.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tiles": {
+          "description": "A slot of kind `board-tiles`, which `screen` is drawn with.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "palette"
+      ],
+      "type": "object"
+    },
+    "BoardLookWhen": {
+      "additionalProperties": false,
+      "description": "Another look of a level drawn by its arcade board (feature\n`level.board.looks`): what it changes from the level's own look while\nevery test of `when` holds.",
+      "properties": {
+        "palette": {
+          "description": "A slot of kind `board-palette`, loaded in place of the level's: the\nlevel's `palette_writes` aren't written over it then, only this\nlook's, as a program that loads its colours again.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "palette_writes": {
+          "description": "More bytes written into palette RAM, after the level's own\n`palette_writes` (or, with `palette`, after loading it): a bar's\ncolours by the bar shown.",
+          "items": {
+            "$ref": "#/$defs/PaletteWrite"
+          },
+          "type": "array"
+        },
+        "screen": {
+          "description": "A slot of kind `board-screen`, in place of the level's.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "when": {
+          "description": "The model's counters this look is chosen by, as a HUD field's\n`when`: every test must hold.",
+          "items": {
+            "$ref": "#/$defs/Guard"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "when"
+      ],
+      "type": "object"
+    },
+    "BoardRepeat": {
+      "additionalProperties": false,
+      "description": "A counter drawn as one tile repeated in an arcade board's tile layer\n(feature `level.board.counters`), as a row of lives.",
+      "properties": {
+        "at": {
+          "description": "Column and row of the first one's cell.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "counter": {
+          "description": "The counter, by name: how many are drawn.",
+          "type": "string"
+        },
+        "high": {
+          "$ref": "#/$defs/RowByte",
+          "description": "The cells' high byte, lifted."
+        },
+        "most": {
+          "description": "The most drawn.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "plus": {
+          "description": "Added to the counter first: -1 for the lives left besides the one\nin play. Default 0.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "step": {
+          "description": "Columns and rows from one to the next: `[-1, 0]` for a row drawn\nleftward. Default `[1, 0]`.",
+          "items": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "tile": {
+          "$ref": "#/$defs/RowByte",
+          "description": "The tile code (bits 0 to 7 of the cell), lifted."
+        },
+        "when": {
+          "description": "Drawn only while every one of these counter tests holds.",
+          "items": {
+            "$ref": "#/$defs/Guard"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "counter",
+        "at",
+        "most",
+        "tile",
+        "high"
+      ],
+      "type": "object"
+    },
+    "BoardSprite": {
+      "additionalProperties": false,
+      "description": "Feature `sprite.board`: a body drawn as one of an arcade board's\nsprites. The board draws a sprite from four bytes of its sprite RAM (y,\nflags, picture, x); the body's position stands for y and x, and this\nsays where the other two come from: the body's words, which a state\nmapping loads from the game's object slots (the program copies those\nbytes to sprite RAM), or numbers the model fixes. Presentation only.",
+      "properties": {
+        "flags": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BoardByte"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The flags byte (byte 1 of the entry), as the board reads it: bit 3\nthe picture's ninth bit, bits 0 and 1 the colour bank inverted,\nbit 4 a flip left to right, bit 5 a flip top to bottom. Without\nit, 0."
+        },
+        "flip_when_facing_left": {
+          "description": "Mirrored left to right, on top of the flags' flip, while the body\nfaces left.",
+          "type": "boolean"
+        },
+        "picture": {
+          "$ref": "#/$defs/BoardByte",
+          "description": "The picture byte (byte 2 of the entry): the sprite's number, its\nninth bit in the flags."
+        },
+        "slot": {
+          "description": "A slot of kind `board-sprites`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "slot",
+        "picture"
       ],
       "type": "object"
     },
@@ -1674,6 +1989,17 @@
       "additionalProperties": false,
       "description": "Core entity fields. Other keys are components of the genre extensions the model declares, each checked against its extension's schema.",
       "properties": {
+        "board_sprite": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BoardSprite"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Feature `sprite.board`: on an arcade board, the body is one of the\nboard's own sprites, its picture and flags read as the board reads\na sprite RAM entry, drawn by the board's sprite layer where the\nboard draws an entry whose bytes are the body's position\n(docs/formats/board-art.md). Presentation only."
+        },
         "bounce": {
           "anyOf": [
             {
@@ -4308,6 +4634,17 @@
           ],
           "description": "The background color: a row of a `table` slot whose first column is\na color number."
         },
+        "board": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BoardLook"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Feature `level.board`: the level drawn as an arcade board draws its\npicture, its stage and its colours. Presentation only."
+        },
         "cycles": {
           "description": "Palette colors that change over time in this level, instead of the\nmodel's `present.cycles`.",
           "items": {
@@ -4675,6 +5012,39 @@
       "required": [
         "slot",
         "palette"
+      ],
+      "type": "object"
+    },
+    "PaletteWrite": {
+      "additionalProperties": false,
+      "description": "One byte written into an arcade board's palette RAM (`level.board`):\nthe board's colour `at / 2` takes the byte as its low 8 bits, and as\nits ninth bit 1 when `at` is odd, 0 when even, as the board's palette\nRAM does.",
+      "properties": {
+        "at": {
+          "description": "The byte of palette RAM written, 0 to 127.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "column": {
+          "description": "Its byte in the row (default 0).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "row": {
+          "description": "Its row (default 0).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "slot": {
+          "description": "A slot of kind `rows` holding the byte.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "slot"
       ],
       "type": "object"
     },
@@ -5111,6 +5481,32 @@
           "type": "integer"
         }
       },
+      "type": "object"
+    },
+    "RowByte": {
+      "additionalProperties": false,
+      "description": "A byte of a `rows` slot lifted from the player's romset, such as the\ntile code a game's code adds a digit to: byte `column` of row `row`.",
+      "properties": {
+        "column": {
+          "description": "Its byte in the row (default 0).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "row": {
+          "description": "Its row (default 0).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "slot": {
+          "description": "A slot of kind `rows`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "slot"
+      ],
       "type": "object"
     },
     "RowRef": {
@@ -6401,7 +6797,7 @@
       "description": "Feature `present.sprite_order`: body k of an entity takes the table's\nsprites from `at + step * k`, k being its slot (its `ext` word `word`\nless one, for a hook that keeps the slot there, when set; else the\nlevel's numbered spawn slot it is in) or else its count among the\nentity's drawn bodies before it. Donkey Kong's 25m keeps Mario at 0,\nthe fires from 4, the barrels from 12 ($0230 + 16 * X), the hammers\nat 52, the drum's flame at 56 and Pauline at 58. Original Edition's 50m\nlays its table out as Mario 0, the fires from 4 ($0210, 16 bytes a\nslot, $EFE7), the pies from 12 ($0230 + 16 * $5D, $EFD5), the moving\nladders from 48 ($02C0 + 16 * X, $8899) and the hammers at 60.",
       "properties": {
         "at": {
-          "description": "The first hardware sprite's number in the table (0 to 63).",
+          "description": "The first hardware sprite's number in the table (0 to 63 on the\nNES; on an arcade board drawn with `level.board`, its sprite RAM's\nentry, 0 to 127).",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"

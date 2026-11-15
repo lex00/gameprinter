@@ -29,7 +29,7 @@ Work in a folder of your own outside every repo (`WORK` below, such as `~/.gamep
 | 5. Stage pieces | gen4_image_turbo or gpt_image_2: a plank, a ladder rail, a rope, a wheel; built into stages by the rules | a few calls |
 | 6. Lettering and logo | gpt_image_2 medium; it spells words right | 5 credits a sheet |
 | 7. Key, crop and fit | Your scripts: key the backdrop out, crop to the figure, one scale per sprite group, write `art.txt` lines | 0 calls |
-| 8. Check and play | `gp theme look check`, then the page | 0 calls |
+| 8. Check and play | `gp theme look check`, then `gp theme look play` | 0 calls |
 
 Credits are Runway's API credits at $0.01. The person pays: say the estimate and get a yes before the first call. ~/.gameprinter/notes/clay/RUNWAY-NOTES.md has what each model did well and badly in the clay run, with costs; read it before spending anything, and add to it what you learn.
 
@@ -67,7 +67,7 @@ For each picture: key the backdrop out, crop to the figure, keep one scale for a
 
 Lettering is part of a theme: draw your own letters and use `pic` lines for the HUD, the score pop-ups and the title screens.
 
-Sound: game-printer's themes carried `.tune` files (music as notes written by you, never transcribed; effects as notes or an `sfx` line). A large-art theme has no sound lines yet, so a theme keeps the game's own sound for now.
+Sound: a large-art theme gives a sound role (the kit's `[[sound]]`) a file as `theme/sound/roles/ROLE.wav`, a 16-bit PCM WAV listed in look.txt as `file sound/roles/ROLE.wav`; with any such file the game's own sound is silent, so give every role one. An effect that fires often (a jump, a step) can have more takes, `theme/sound/takes/ROLE.2.wav`, `ROLE.3.wav` and on, each listed too: each time the role starts the page plays the next take. Make every sound yourself (notes written by you or a generator you run, never transcribed or recorded from the game). In the person's own copy, propose a new or changed sound with `gp theme sound propose DIR --game GAME --role ROLE --wav FILE --why "..."` (`--take N` for a take) and wait for their ACCEPT.
 
 ## 8. Check and play
 
@@ -77,13 +77,13 @@ gp theme look check THEME --game GAME
 
 reads the theme with the page's own rules reader and lists, by file and line: what the page would refuse, missing and unused pictures, every kit slot and pose still to draw (with the game's picture names for the `pic` lines), names the game hasn't got, each pose against its touch box and feet row beside the game's own picture, the kit's denied names where players see them, and the ROM-data check of `gp template served` (no file may hold the ROM's bytes). Run it after every change until it reports no problems; read the warnings. Start a theme with `gp theme look new THEME --game GAME --name NS/NAME --title "..."`, which writes the repo in the Turnips shape with a TO DRAW line per kit slot.
 
-Then play it: the check's last lines print the commands (`scripts/web/local-registry.sh GAMES_DIR THEME` builds a registry on this machine and the page, publishing the theme under its own package name; `gp registry serve` serves it; open the page with `&c=YOUR/THEME`). Look at every stage, every body's poses at game size, the deaths and the HUD. The fit check is a first pass from the files: it can't see how a picture reads at game size or how poses flow, so look frame by frame too.
+Then play it: `gp theme look play THEME --game GAME --background` checks it again and serves the game's page with the theme chosen, from a registry in a temp folder (nothing is published), and prints the link for the person to open with their ROM. `gp theme look play THEME --game GAME --shots DIR` saves the game at its named moments on each ROM here instead (`--against NAME@VERSION` adds side-by-side pairs with another theme); look at them yourself, and never commit them. Look at every stage, every body's poses at game size, the deaths and the HUD. The fit check is a first pass from the files: it can't see how a picture reads at game size or how poses flow, so look frame by frame too.
 
 If you used an AI tool to make any of it, name the tool in the README, and make sure its terms let the person share the result.
 
 ## 9. Ship it
 
-The theme lives in a repo of its own, with its pictures in Git LFS. Players get themes from the registry the page reads, `lex00/gp-registry`: the person opens an issue there with the repo's link, and once it is published for the game (`gp registry publish ... --for lex00/donkey-kong`) the page offers it under Settings, Theme. site/src/content/docs/themes.md and registry.md have the rest.
+The theme lives in a repo of its own, with its pictures in Git LFS. Players get themes from the registry the page reads, `lex00/gp-registry`. Nobody but its owner can publish there: the person opens an issue there with the repo's link, and the owner grants the namespace if it is new (`gp registry grant`), publishes it for the game (`gp registry publish ... --for lex00/donkey-kong`) and reindexes. Before that, `gp theme look check`'s "On the page" lines say whether the page would offer it; after, `gp registry check https://raw.githubusercontent.com/lex00/gp-registry/main --for lex00/donkey-kong --theme NAME` says whether it is offered and, if not, why. site/src/content/docs/themes.md and registry.md have the rest.
 
 ## From game-printer
 

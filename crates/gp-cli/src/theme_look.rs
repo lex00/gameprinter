@@ -27,6 +27,8 @@ use serde_json::{Value, json};
 use crate::Outcome;
 use crate::theme_kit::{ArtSlot, Kit};
 
+mod sound;
+
 #[derive(Subcommand)]
 pub enum LookCmd {
     /// Check a large-art theme folder against a game, the way the page reads
@@ -68,6 +70,54 @@ pub enum LookCmd {
         #[arg(long, default_value = "CC-BY-4.0")]
         license: String,
     },
+    /// Play a large-art theme folder in the game without publishing it. It
+    /// runs the check first (problems stop it unless --anyway; warnings are
+    /// printed), then serves the game on 127.0.0.1 with your theme chosen.
+    /// A game played from a ROM gets the page that plays any game by name,
+    /// from a registry made in a temp folder: the game (read from the real
+    /// registry, or built here when it isn't there) and its published
+    /// themes, and your folder as a theme only this page sees. You load your
+    /// own ROM in the page. A game with pictures of its own (a template, or
+    /// a copy of one) is built for the browser with your theme added and
+    /// needs no ROM. An arcade game plays from your romset zip on that
+    /// page, your theme drawn over its board's pictures. With --shots DIR
+    /// it plays the game's route in headless Chrome instead, on each ROM of
+    /// the game that is here, and saves the
+    /// game at named moments (the game's theme-shots.toml, else the page
+    /// check's route, else the title and the first stage); with --against
+    /// it does the same for a second theme and writes the pairs side by
+    /// side. Nothing is published.
+    ///
+    /// Example: gp theme look play ~/my-theme --game donkey-kong --open
+    ///
+    /// Example: gp theme look play ~/my-theme --game donkey-kong --shots
+    /// ~/theme-shots --against friend/night@0.9.2
+    Play(crate::theme_play::PlayArgs),
+    /// For an arcade game drawn by its board's art: the names a theme may
+    /// give the board's pictures that the game shows, and a contact sheet
+    /// of each entity's sprite codes, from your own romset and the game's
+    /// recorded plays (its inputs/). A theme names a screen by its slot
+    /// (screen_saloon), a sprite by its entity and code (sprite-mug-4d), a
+    /// counter's digits as counter-score-7. Written under
+    /// $GP_HOME/work/theme-kits/MODEL/board, or a folder you name outside
+    /// any repo: they are pictures of your ROM's game, never to commit.
+    /// `gp theme look check` then warns of a sprite code the game wasn't
+    /// seen to show.
+    ///
+    /// Example: gp theme look sheet --game tapper
+    Sheet {
+        /// The game: its folder, or its name in the games checkout.
+        #[arg(long)]
+        game: PathBuf,
+        /// Your romset of the game (default: one under $GP_ROM_DIR the game
+        /// accepts).
+        #[arg(long)]
+        rom: Option<PathBuf>,
+        /// The folder to write (default
+        /// $GP_HOME/work/theme-kits/MODEL/board). Refused inside a repo.
+        #[arg(long, short)]
+        out: Option<PathBuf>,
+    },
 }
 
 pub(crate) fn run(cmd: &LookCmd, paths: &Paths) -> Result<Outcome> {
@@ -79,7 +129,11 @@ pub(crate) fn run(cmd: &LookCmd, paths: &Paths) -> Result<Outcome> {
             name,
             title,
             license,
-        } => new(dir, game, name, title, license),
+        } => new(dir, game, name, title, license, &paths.home),
+        LookCmd::Play(a) => crate::theme_play::run(a, paths),
+        LookCmd::Sheet { game, rom, out } => {
+            crate::theme_board::sheet(game, rom.as_deref(), out.as_deref(), paths)
+        }
     }
 }
 
@@ -89,7 +143,9 @@ pub(crate) fn run(cmd: &LookCmd, paths: &Paths) -> Result<Outcome> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Group {
     Files,
+    Offered,
     Kit,
+    Sound,
     Fit,
     Words,
     Rom,
@@ -99,7 +155,9 @@ impl Group {
     fn title(self) -> &'static str {
         match self {
             Group::Files => "Files",
+            Group::Offered => "On the page (Settings, Theme)",
             Group::Kit => "What the game needs drawn",
+            Group::Sound => "Sound (each role's files, as the page plays them)",
             Group::Fit => "Fit (a first pass from the files alone: look at it in the game too)",
             Group::Words => "Names",
             Group::Rom => "ROM data",
@@ -108,7 +166,9 @@ impl Group {
     fn key(self) -> &'static str {
         match self {
             Group::Files => "files",
+            Group::Offered => "offered",
             Group::Kit => "kit",
+            Group::Sound => "sound",
             Group::Fit => "fit",
             Group::Words => "names",
             Group::Rom => "rom_data",
@@ -252,7 +312,8 @@ fn line_of(text: &str, word: &str) -> Option<usize> {
     text.lines()
         .position(|l| {
             let l = l.trim();
-            !l.starts_with('#') && l.split_whitespace().any(|w| w == word)
+            (!l.starts_with('#') || l.starts_with(gp_present::art::ADDED))
+                && l.split_whitespace().any(|w| w == word)
         })
         .map(|i| i + 1)
 }
@@ -291,10 +352,13 @@ fn ink_box(img: &Rgba) -> Option<[u32; 4]> {
 struct Game {
     dir: PathBuf,
     title: String,
-    /// Its package name (lex00/donkey-kong), for the page's address.
-    package: Option<String>,
     kit: Option<Kit>,
     deny: Vec<String>,
+    /// The regions of the stage the game's level kit names
+    /// (`level-kit/kit.toml`'s `[[levels.regions]]`, docs/level-kit.md),
+    /// which a `#+ in REGION` line may name; None for a game with no
+    /// level kit.
+    regions: Option<Vec<String>>,
 }
 
 fn game_of(arg: &Path) -> Result<Game> {
@@ -325,12 +389,23 @@ fn game_of(arg: &Path) -> Result<Game> {
     let deny = crate::theme_words::load(&dir)?
         .map(|w| w.deny)
         .unwrap_or_default();
+    let regions = if dir.join(gp_web_lift::LEVEL_KIT).is_file() {
+        Some(
+            gp_web_lift::regions(&dir)
+                .map_err(|e| anyhow::anyhow!("{}: {e}", dir.display()))?
+                .into_iter()
+                .map(|r| r.name)
+                .collect(),
+        )
+    } else {
+        None
+    };
     Ok(Game {
         dir,
         title,
-        package: field("name"),
         kit,
         deny,
+        regions,
     })
 }
 
@@ -341,13 +416,26 @@ struct Built {
     art: gp_look::present::Art,
     /// The spec's kind names, in the order the presentation keeps them.
     kinds: Vec<String>,
+    /// Each kind's state a body starts in (its machine's initial state,
+    /// 0 without one): the look a body is drawn with in play, by the
+    /// presentation's per-state looks.
+    initial: Vec<usize>,
+    /// An arcade game drawn by its board's art: the names its rules give
+    /// instead of the build's pictures (crate::theme_board).
+    board: Option<crate::theme_board::BoardKit>,
     _lifted: Option<tempfile::TempDir>,
 }
 
 impl Built {
+    /// The pictures a theme's rules name: the board's for a game its board
+    /// draws, else the build's.
+    fn present(&self) -> &gp_present::Present {
+        self.board
+            .as_ref()
+            .map_or(&self.art.present, |b| &b.present)
+    }
     fn names(&self) -> BTreeSet<&str> {
-        self.art
-            .present
+        self.present()
             .pictures
             .iter()
             .map(|p| p.file.as_str())
@@ -387,14 +475,19 @@ fn build(game: &Game, rom: Option<&Path>, paths: &Paths) -> Result<Built, String
     let bundle = gp_look::bundle(&model, &dir)?;
     let spec = gp_interp::compile::compile(&model, &bundle.assets)?;
     let art = gp_look::present::art(&model, &spec, &dir)?;
+    let board = crate::theme_board::kit(&model, &spec, &dir, &paths.home)?;
     let mut kinds = Vec::new();
+    let mut initial = Vec::new();
     for k in &spec.kinds {
         kinds.push(k.name.clone());
+        initial.push(k.machine.as_ref().map_or(0, |m| m.initial));
     }
     Ok(Built {
         model,
         art,
         kinds,
+        initial,
+        board,
         _lifted: keep,
     })
 }
@@ -418,8 +511,17 @@ fn slot_pictures(kit: &Kit, slot: &ArtSlot, b: &Built) -> Option<Vec<Vec<u32>>> 
         });
         let name = name.or_else(|| m.entities.contains_key(rest).then(|| rest.to_owned()))?;
         let k = b.kinds.iter().position(|x| *x == name)?;
-        let looks: Vec<&gp_present::Look> = p.kinds.get(k)?.iter().flatten().collect();
-        let first = looks.first()?;
+        let states = p.kinds.get(k)?;
+        let looks: Vec<&gp_present::Look> = states.iter().flatten().collect();
+        // A pose is the look of the state a body starts in, as play draws
+        // it: the first state's look is another state's (Moss Hop's hero:
+        // dying sorts before normal).
+        let first = b
+            .initial
+            .get(k)
+            .and_then(|&i| states.get(i))
+            .and_then(Option::as_ref)
+            .or_else(|| looks.first().copied())?;
         let mut out = Vec::new();
         for f in names {
             let id = if f == "base" {
@@ -549,7 +651,10 @@ pub(crate) fn check(
 ) -> Result<Outcome> {
     let game = game_of(game_arg)?;
     let built = build(&game, rom, paths);
-    report(dir, &game, built, Some((rom, paths)))
+    let out = report(dir, &game, built, Some((rom, paths)))?;
+    // A theme copy's journey keeps its last check (crate::journeys).
+    crate::journeys::note_check(&paths.home, dir, &out.json);
+    Ok(out)
 }
 
 /// The check on a theme folder with the game's build (or why there is
@@ -769,9 +874,20 @@ fn report(
         names_check(rules, text, &art_rel, b, &mut r);
     }
 
+    // The lines added since gp-art 1 began (`#+`).
+    if let (Some(rules), Some(text)) = (&rules, &art_text) {
+        added_checks(rules, text, &art_rel, game, built.as_ref().ok(), &mut r);
+    }
+
+    // Whether the page would offer it, by the page's own rules.
+    offered(&folder, pkg.as_ref(), game, built.as_ref().ok(), &mut r);
+
     // Coverage against the kit, then the fit.
     let ruled = rules.as_ref().map(ruled_names).unwrap_or_default();
     match &game.kit {
+        // An arcade game drawn by its board: the board's names are what a
+        // theme draws, and its sheet what the game shows (above).
+        None if built.as_ref().is_ok_and(|b| b.board.is_some()) => {}
         None => r.add(
             Group::Kit,
             Level::Note,
@@ -794,6 +910,11 @@ fn report(
         stretch(rules, text, &art_rel, &images, &mut r);
     }
 
+    // The sound: each role's files, as the page plays them.
+    if let Some(l) = &look {
+        sound::check(&folder, l, &on_disk, game, &mut r);
+    }
+
     // Names the kit denies.
     words(
         &folder,
@@ -813,6 +934,86 @@ fn report(
     Ok(finish(&folder, game, pkg.as_ref(), r))
 }
 
+/// Whether the page would offer the theme in Settings, Theme, by the code
+/// the page runs: its name by the theme list's rule
+/// (`gp_web_registry::theme_id_problem`), and its folder as the lift reads
+/// a finished look over the game's build (`gp_web_lift::ready_look_offer`).
+/// What only the registry knows (that it is published for the game, its
+/// namespace granted, no other theme of its name there) is
+/// `gp registry check --for`'s.
+fn offered(folder: &Folder, pkg: Option<&Pkg>, game: &Game, built: Option<&Built>, r: &mut Report) {
+    let Some(name) = pkg.and_then(|p| p.name.as_deref()) else {
+        r.add(
+            Group::Offered,
+            Level::Note,
+            None,
+            None,
+            "package.toml has no name yet, so this check can't say whether the page would offer it: the page names a theme by its package name",
+        );
+        return;
+    };
+    let rel = folder.rel(&folder.root.join("package.toml"));
+    let id = gp_web_registry::theme_id(name);
+    if let Some((reason, detail)) = gp_web_registry::theme_id_problem(name) {
+        r.add(
+            Group::Offered,
+            Level::Problem,
+            Some(&rel),
+            None,
+            format!("the page would leave it out of Settings, Theme, because {reason}. {detail}"),
+        );
+        return;
+    }
+    if game.dir.join("themes").join(id).is_dir() {
+        r.add(
+            Group::Offered,
+            Level::Warning,
+            Some(&rel),
+            None,
+            format!("{} ships a theme in themes/{id}, and on the page yours, named `{id}` by its package name, takes that theme's place. Give it a name of its own unless it is meant to replace it", game.title),
+        );
+    }
+    let Some(b) = built else {
+        r.add(
+            Group::Offered,
+            Level::Note,
+            None,
+            None,
+            format!("without the game's build (your ROM) this check can't say whether the page draws it; its name, `{id}`, is one the page can list"),
+        );
+        return;
+    };
+    match gp_web_lift::ready_look_offer(
+        id,
+        &folder.theme,
+        &b.art.present_text(),
+        b.board.as_ref().map(|k| &k.present),
+        true,
+    ) {
+        Err((reason, detail)) => r.add(
+            Group::Offered,
+            Level::Problem,
+            None,
+            None,
+            format!("the page would leave it out of Settings, Theme for {}, because {reason} ({detail})", game.title),
+        ),
+        Ok(lines) if !lines.is_empty() => r.add(
+            Group::Offered,
+            Level::Warning,
+            None,
+            None,
+            format!("the page would offer it as `{id}`, drawn in part: {}", lines.join("; ")),
+        ),
+        Ok(_) => r.add(
+            Group::Offered,
+            Level::Ok,
+            None,
+            None,
+            format!("the page would offer it in Settings, Theme for {} as `{id}`, once it is published for the game; after publishing, `gp registry check REGISTRY --for GAME --theme {name}` asks the registry", game.title),
+        ),
+    }
+}
+
 /// The theme's package fields, when package.toml reads.
 struct Pkg {
     name: Option<String>,
@@ -828,6 +1029,44 @@ fn valid_package_name(n: &str) -> bool {
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
     };
     n.split_once('/').is_some_and(|(a, b)| part(a) && part(b))
+}
+
+/// A name `gp theme look new` gives a theme: one a registry takes
+/// (`gp_package::registry::name_ok`) whose last part is a look id
+/// (`gp_package::theme_id_ok`) with no `_`, so the look id is that part.
+/// A copy made before with an `_` still reads ([`valid_package_name`]).
+pub(crate) fn new_theme_name_ok(n: &str) -> bool {
+    gp_package::registry::name_ok(n)
+        && n.split_once('/')
+            .is_some_and(|(_, last)| gp_package::theme_id_ok(last) && !last.contains('_'))
+}
+
+/// The nearest name [`new_theme_name_ok`] takes: lowercase, every other
+/// character a `-`, `local/` when there is no namespace, and a last part
+/// starting with a letter.
+pub(crate) fn fixed_theme_name(n: &str) -> String {
+    let fix = |s: &str| -> String {
+        let s: String = s
+            .chars()
+            .map(|c| match c.to_ascii_lowercase() {
+                c @ ('a'..='z' | '0'..='9' | '-') => c,
+                _ => '-',
+            })
+            .collect();
+        s.trim_matches('-').to_owned()
+    };
+    let (ns, last) = n.split_once('/').unwrap_or(("local", n));
+    let ns = match fix(ns) {
+        s if s.is_empty() => "local".to_owned(),
+        s => s,
+    };
+    let last = fix(&last.replace('/', "-"));
+    let last = if last.starts_with(|c: char| c.is_ascii_lowercase()) {
+        last
+    } else {
+        format!("t-{last}").trim_end_matches('-').to_owned()
+    };
+    format!("{ns}/{last}")
 }
 
 fn valid_version(v: &str) -> bool {
@@ -1002,6 +1241,117 @@ fn twice(text: &str, art_rel: &str, r: &mut Report) {
     );
 }
 
+/// The `#+` lines: one the page can't read (passed over, so the theme
+/// draws without it), a region the game's level kit doesn't name, a
+/// `hud_over` row with no HUD text in the background, and what a page
+/// built before the lines does with them.
+fn added_checks(
+    rules: &ArtRules,
+    text: &str,
+    art_rel: &str,
+    game: &Game,
+    b: Option<&Built>,
+    r: &mut Report,
+) {
+    for (line, said) in &rules.skipped {
+        let word = said
+            .strip_prefix(gp_present::art::ADDED)
+            .and_then(|x| x.split_whitespace().next())
+            .unwrap_or("");
+        let why = match word {
+            "hud_over" => "`#+ hud_over` takes no row or rows of the HUD, each a number from 0 to 63 (8 pixels each from the screen's top)".to_owned(),
+            "in" => "`#+ in` takes a region's name (lowercase letters, digits, - and _) and then a whole `pic` or `timed` line".to_owned(),
+            "" => "it says nothing after `#+`".to_owned(),
+            w => format!("no page knows `#+ {w}`; the lines are `#+ hud_over` and `#+ in`"),
+        };
+        r.add(
+            Group::Files,
+            Level::Problem,
+            Some(art_rel),
+            Some(*line),
+            format!("the page can't read this line ({why}), and passes over it, so the theme is drawn without it. Fix the line and check again"),
+        );
+    }
+    for region in rules.regions() {
+        let line = line_of(text, region);
+        match &game.regions {
+            Some(named) if named.iter().any(|n| n == region) => {}
+            Some(named) => r.add(
+                Group::Kit,
+                Level::Problem,
+                Some(art_rel),
+                line,
+                format!(
+                    "names the region `{region}`, which {}'s level kit doesn't name, so the page never draws these lines. The kit names {}",
+                    game.title,
+                    if named.is_empty() { "none".to_owned() } else { named.join(", ") }
+                ),
+            ),
+            None => r.add(
+                Group::Kit,
+                Level::Problem,
+                Some(art_rel),
+                line,
+                format!(
+                    "names the region `{region}`, but {} has no level kit to name regions of its stage, so the page never draws these lines. Leave them out, or name the region in its level-kit/rules.toml and run gp level kit",
+                    game.title
+                ),
+            ),
+        }
+    }
+    if let (Some(over), Some(b)) = (&rules.hud_over, b) {
+        let present = &b.art.present;
+        let line = line_of(text, "hud_over");
+        let layer = present.levels.iter().any(|l| l.hud_layer.is_some());
+        let rows: BTreeSet<i64> = present
+            .hud
+            .iter()
+            .flat_map(|h| h.fields.iter())
+            .filter(|f| f.palette < 4)
+            .map(|f| i64::from(f.at[1]))
+            .collect();
+        if !layer && rows.is_empty() {
+            r.add(
+                Group::Kit,
+                Level::Warning,
+                Some(art_rel),
+                line,
+                format!("{} has no HUD layer and no HUD text in the background (a HUD drawn as sprites is over the bodies already), so `#+ hud_over` changes nothing", game.title),
+            );
+        } else if !layer {
+            let empty: Vec<String> = over
+                .iter()
+                .filter(|x| !rows.contains(x))
+                .map(i64::to_string)
+                .collect();
+            if !empty.is_empty() {
+                r.add(
+                    Group::Kit,
+                    Level::Warning,
+                    Some(art_rel),
+                    line,
+                    format!(
+                        "`#+ hud_over` names row {} where {} draws no HUD text in the background (its rows: {}), so it changes nothing there",
+                        empty.join(", "),
+                        game.title,
+                        rows.iter().map(i64::to_string).collect::<Vec<_>>().join(", ")
+                    ),
+                );
+            }
+        }
+    }
+    let used = rules.hud_over.is_some() || !rules.regions().is_empty();
+    if used {
+        r.add(
+            Group::Files,
+            Level::Note,
+            Some(art_rel),
+            line_of(text, gp_present::art::ADDED),
+            "uses `#+` lines, which a page built before them takes for notes: there the theme is still offered, with the HUD's text under the bodies and each body's full picture everywhere",
+        );
+    }
+}
+
 /// The game's pictures a rule draws: `pic` and `timed` pictures.
 fn ruled_names(rules: &ArtRules) -> BTreeSet<String> {
     let mut s: BTreeSet<String> = rules.pics.iter().map(|p| p.build.clone()).collect();
@@ -1017,44 +1367,14 @@ fn ruled_names(rules: &ArtRules) -> BTreeSet<String> {
 /// page's own resolution of the rules.
 fn names_check(rules: &ArtRules, text: &str, art_rel: &str, b: &Built, r: &mut Report) {
     let have = b.names();
-    let mut named: Vec<&str> = Vec::new();
-    named.extend(rules.pics.iter().map(|p| p.build.as_str()));
-    for t in &rules.timed {
-        named.push(&t.build);
-        if let Some(a) = &t.after {
-            named.push(a);
-        }
-    }
-    named.extend(rules.held.iter().map(String::as_str));
-    named.extend(rules.face.iter().map(String::as_str));
-    if let Some(n) = &rules.near {
-        named.extend(n.when.iter().map(String::as_str));
-        named.extend(n.other.iter().map(String::as_str));
-    }
-    for e in &rules.elsewhere {
-        named.push(&e.level);
-        named.extend(e.builds.iter().map(String::as_str));
-    }
-    for p in &rules.props {
-        named.push(&p.level);
-        named.extend(p.over.iter().map(String::as_str));
-        named.extend(p.burst.iter().map(String::as_str));
-    }
-    if let Some(d) = &rules.drift {
-        named.push(&d.level);
-    }
-    if let Some(st) = &rules.stage {
-        named.extend(st.levels.iter().map(|l| l.level.as_str()));
-    }
+    // The page's own lookup: the names gp_present::art passes over.
+    let pictures: Vec<&str> = have.iter().copied().collect();
     let mut unknown: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
-    let mut seen = BTreeSet::new();
-    for n in named {
-        if !have.contains(n) && seen.insert(n) {
-            unknown
-                .entry(line_of(text, n).unwrap_or(0))
-                .or_default()
-                .push(n);
-        }
+    for n in rules.passed_over(&pictures) {
+        unknown
+            .entry(line_of(text, n).unwrap_or(0))
+            .or_default()
+            .push(n);
     }
     let known: Vec<String> = have.iter().map(|s| (*s).to_owned()).collect();
     for (line, names) in &unknown {
@@ -1066,22 +1386,100 @@ fn names_check(rules: &ArtRules, text: &str, art_rel: &str, b: &Built, r: &mut R
                 None => (*n).to_owned(),
             })
             .collect();
+        let how = if b.board.is_some() {
+            "Use the names of the pictures its board draws: a screen by its slot (as the game's model names it), a sprite as sprite-ENTITY-CODE with the picture code in hex, a counter's digits as counter-NAME-D and its repeated tile as counter-NAME (`gp theme look sheet` lists those the game shows)"
+        } else {
+            "Use the game's own picture names (frame-N-K.png, glyph-..., level-NAME.png, as the lines for the kit's slots give them)"
+        };
         r.add(
             Group::Kit,
             Level::Problem,
             Some(art_rel),
             (*line > 0).then_some(*line),
             format!(
-                "names {} this game doesn't have ({}), and the page passes over {}. Use the game's own picture names (frame-N-K.png, glyph-..., level-NAME.png, as the lines for the kit's slots give them)",
-                if names.len() == 1 { "a picture" } else { "pictures" },
+                "names {} this game doesn't have ({}), and the page passes over {}. {how}",
+                if names.len() == 1 {
+                    "a picture"
+                } else {
+                    "pictures"
+                },
                 said.join("; "),
                 if names.len() == 1 { "it" } else { "them" },
             ),
         );
     }
-    if let Err(e) = gp_present::art::Art::new(rules.clone(), &b.art.present) {
+    if let Some(k) = &b.board {
+        board_seen(rules, text, art_rel, k, r);
+    }
+    if let Err(e) = gp_present::art::Art::new(rules.clone(), b.present()) {
         r.add(Group::Kit, Level::Problem, Some(art_rel), None, format!("the page refuses these rules for this game: {e}. Check the picture names against the game's"));
     }
+}
+
+/// An arcade game's board names against what the person's sheet saw the
+/// game show (`gp theme look sheet`): a sprite code it never showed is
+/// drawn only if the game shows it, so a warning; without a sheet, a note
+/// saying how to make one.
+fn board_seen(
+    rules: &ArtRules,
+    text: &str,
+    art_rel: &str,
+    k: &crate::theme_board::BoardKit,
+    r: &mut Report,
+) {
+    let Some(seen) = &k.seen else {
+        r.add(
+            Group::Kit,
+            Level::Note,
+            None,
+            None,
+            format!(
+                "the game is drawn by its board, whose {} pictures a theme may name; `gp theme look sheet --game GAME` plays its recorded inputs on your own romset and lists the sprite codes each entity shows, with a contact sheet ({}), and this check then says which of yours it never showed",
+                k.names.len(),
+                k.sheet.display()
+            ),
+        );
+        return;
+    };
+    let have: BTreeSet<&str> = k.names.iter().map(|(n, _)| n.as_str()).collect();
+    let mut never: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
+    let ruled = ruled_names(rules);
+    for n in &ruled {
+        if n.starts_with("sprite-") && have.contains(n.as_str()) && !seen.contains_key(n) {
+            never
+                .entry(line_of(text, n).unwrap_or(0))
+                .or_default()
+                .push(n);
+        }
+    }
+    let total = never.values().map(Vec::len).sum::<usize>();
+    let drawn = ruled.iter().filter(|n| seen.contains_key(*n)).count();
+    if total > 0 {
+        let first: Vec<&str> = never.values().flatten().take(8).copied().collect();
+        r.add(
+            Group::Kit,
+            Level::Warning,
+            Some(art_rel),
+            never.keys().next().copied().filter(|l| *l > 0),
+            format!(
+                "{total} sprite name{} the game wasn't seen to show in its recorded plays ({}{}): each is drawn only if the game shows that code. The sheet in {} lists the codes it showed",
+                if total == 1 { "" } else { "s" },
+                first.join(", "),
+                if total > first.len() { ", ..." } else { "" },
+                k.sheet.display()
+            ),
+        );
+    }
+    r.add(
+        Group::Kit,
+        Level::Ok,
+        None,
+        None,
+        format!(
+            "{drawn} of the {} board pictures the game showed in its recorded plays are drawn by the theme",
+            seen.len()
+        ),
+    );
 }
 
 /// Every kit slot drawn: each pose of each body, the stages, the screens
@@ -1240,15 +1638,6 @@ fn coverage(
                 "{drawn} of the kit's {} art slots drawn in every pose",
                 kit.art.len()
             ),
-        );
-    }
-    if !kit.sound.is_empty() {
-        r.add(
-            Group::Kit,
-            Level::Note,
-            None,
-            None,
-            format!("a large-art theme has no sound lines yet, so the game keeps its own sound ({} sound roles in the kit)", kit.sound.len()),
         );
     }
 }
@@ -1685,23 +2074,20 @@ fn rom_data(folder: &Folder, game: &Game, rom: Option<&Path>, paths: &Paths, r: 
     }
 }
 
-/// The road to see a theme in the game today, in commands.
-fn play_road(folder: &Folder, game: &Game, name: Option<&str>) -> Vec<String> {
-    let gp_games = game
-        .dir
-        .parent()
-        .map_or_else(|| ".".into(), |p| p.display().to_string());
-    let pkg = game.package.as_deref().unwrap_or("NAMESPACE/GAME");
+/// The road to see a theme in the game, in commands.
+fn play_road(folder: &Folder, game: &Game) -> Vec<String> {
+    let g = game.dir.file_name().map_or_else(
+        || game.dir.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
     vec![
-        "in the gameprinter checkout, with your ROM in $GP_ROM_DIR:".into(),
         format!(
-            "  scripts/web/local-registry.sh {gp_games} {}",
+            "gp theme look play {} --game {g} --open",
             folder.root.display()
         ),
-        "  target/debug/gp registry serve \"$GP_HOME/registry\" --page target/page-local".into(),
         format!(
-            "  then open http://127.0.0.1:8377/p?g={pkg}&c={}",
-            name.unwrap_or("NAMESPACE/NAME")
+            "gp theme look play {} --game {g} --shots DIR   (pictures at the game's moments)",
+            folder.root.display()
         ),
     ]
 }
@@ -1710,7 +2096,7 @@ fn finish(folder: &Folder, game: &Game, pkg: Option<&Pkg>, r: Report) -> Outcome
     let problems = r.count(Level::Problem);
     let warnings = r.count(Level::Warning);
     let name = pkg.and_then(|p| p.name.as_deref());
-    let road = play_road(folder, game, name);
+    let road = play_road(folder, game);
     let first = r.found.iter().find(|f| f.level == Level::Problem);
     let to_draw = r
         .found
@@ -1785,6 +2171,7 @@ fn finish(folder: &Folder, game: &Game, pkg: Option<&Pkg>, r: Report) -> Outcome
         json: json!({
             "ok": problems == 0,
             "theme": folder.root.display().to_string(),
+            "name": name,
             "game": game.dir.display().to_string(),
             "problems": problems,
             "warnings": warnings,
@@ -1800,7 +2187,14 @@ fn finish(folder: &Folder, game: &Game, pkg: Option<&Pkg>, r: Report) -> Outcome
 // ---------------------------------------------------------------------
 // A new theme.
 
-fn new(dir: &Path, game_arg: &Path, name: &str, title: &str, license: &str) -> Result<Outcome> {
+fn new(
+    dir: &Path,
+    game_arg: &Path,
+    name: &str,
+    title: &str,
+    license: &str,
+    home: &Path,
+) -> Result<Outcome> {
     if dir.exists() {
         let busy = fs::read_dir(dir)
             .with_context(|| format!("reading {}", dir.display()))?
@@ -1813,9 +2207,10 @@ fn new(dir: &Path, game_arg: &Path, name: &str, title: &str, license: &str) -> R
             );
         }
     }
-    if !valid_package_name(name) {
+    if !new_theme_name_ok(name) {
         bail!(
-            "`{name}` isn't NAMESPACE/NAME in lowercase letters, digits, - and _ (like lex00/turnips): your GitHub name, a slash and the theme's"
+            "`{name}` isn't a theme name a registry takes; use `{}`: NAMESPACE/NAME in lowercase letters, digits and -, the part after the slash starting with a letter (like lex00/turnips)",
+            fixed_theme_name(name)
         );
     }
     let title = title.trim();
@@ -1832,27 +2227,32 @@ fn new(dir: &Path, game_arg: &Path, name: &str, title: &str, license: &str) -> R
             );
         }
     }
-    let short = name.split_once('/').map_or(name, |x| x.1);
-    let id: String = short
-        .chars()
-        .map(|c| if c == '_' { '-' } else { c })
-        .collect();
-    let id = if gp_present::looks::valid_id(&id) {
-        id
-    } else {
-        format!("t-{id}")
-    };
+    // The look's id is the name's last part, as the page names a theme.
+    let id = name.split_once('/').map_or(name, |x| x.1).to_owned();
     let folder = Folder {
         root: dir.to_owned(),
         theme: dir.join("theme"),
     };
-    let scale = 6u32;
+    // An arcade game drawn by its board: the board's names, from its model
+    // (and the codes the person's own sheet saw, when there is one). Its
+    // picture is already 512 by 480, so the art is drawn at twice that.
+    let board = crate::theme::read_model(&game.dir)
+        .ok()
+        .and_then(|(m, _)| Some((crate::theme_board::model_names(&m)?, m.model.name)));
+    let scale = if board.is_some() { 2u32 } else { 6u32 };
     let mut art = format!(
         "gp-art 1\n# {title}: the rules for a large-art theme of {} (site docs, themes.md, lists every rule).\n# Each picture the game's theme kit lists is below, marked TO DRAW. Draw it into art/,\n# then write its `pic` lines (`gp theme look check` names the game's pictures for each pose).\nscale {scale}\nlimit off\n",
         game.title
     );
     let mut slots = 0;
+    if let Some((names, model)) = &board {
+        let seen = crate::theme_board::read_seen(&crate::theme_board::sheet_dir(home, model));
+        let (lines, n) = crate::theme_board::new_lines(names, seen.as_ref(), &game.title);
+        art.push_str(&lines);
+        slots += n;
+    }
     match &game.kit {
+        None if board.is_some() => {}
         None => {
             let _ = writeln!(
                 art,
@@ -1920,7 +2320,7 @@ fn new(dir: &Path, game_arg: &Path, name: &str, title: &str, license: &str) -> R
         )
     };
     let game_arg_s = game_arg.display();
-    let road = play_road(&folder, &game, Some(name));
+    let road = play_road(&folder, &game);
     let readme = format!(
         "# {title}\n\nA theme for {} on Game Printer: new pictures, drawn by you, for every body, stage and screen. The game plays as it always does; every body keeps its place and its hit box, and only the pictures change. A player picks it under Settings, Theme.\n\n## What's here\n\n- `package.toml` names the package, `{name}`, and its licence ({license}).\n- `theme/look.txt` names the look and its rules file.\n- `theme/art.txt` holds the rules (`gp-art 1`): which of the game's pictures each of yours replaces, and at what size. Each line marked TO DRAW is a picture still to make.\n- `theme/art/` holds your pictures, as PNG, at {scale} times the game's pixel size.\n\n## The rules\n\n- Your own art only: no character's likeness, name or logo from the original, and nothing traced.\n- Nothing from the ROM: no picture, sound or data read from it. A stage is never a picture here; the rules build it from your pieces over the level picture the player's own ROM gives.\n- No names from the original.{deny}\n- If an AI tool made any of it, name the tool here, and make sure its terms let you share the result.\n\n## Check it\n\n```sh\ngp theme look check . --game {game_arg_s}\n```\n\nIt reads the theme the way the page does and lists what is wrong and where, what is still to draw, how each picture sits on its body's box and feet row, names the theme may not use, and whether any file holds data from your ROM. Fix the problems first; warnings are worth a look.\n\n## See it in the game\n\n{}\n\nLook at every stage, every pose at game size, the deaths and the score display.\n\nKeep the pictures in Git LFS (`.gitattributes` does that once you run `git lfs install`).\n",
         game.title,
@@ -1964,7 +2364,7 @@ mod tests {
 
     /// A made-up picture: `w` by `h`, drawn (opaque) in the box x0, y0 to
     /// x1, y1 (past the last), clear elsewhere.
-    fn picture(w: u32, h: u32, ink: [u32; 4]) -> Rgba {
+    pub(super) fn picture(w: u32, h: u32, ink: [u32; 4]) -> Rgba {
         let mut img = Rgba::new(w, h);
         for y in ink[1]..ink[3] {
             for x in ink[0]..ink[2] {
@@ -1974,7 +2374,7 @@ mod tests {
         img
     }
 
-    fn put(dir: &Path, rel: &str, bytes: &[u8]) {
+    pub(super) fn put(dir: &Path, rel: &str, bytes: &[u8]) {
         let p = dir.join(rel);
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::write(p, bytes).unwrap();
@@ -1985,6 +2385,27 @@ mod tests {
     /// A made-up game: a model with one body, a kit with its slot (two
     /// poses, a touch box, a feet row) and a words file denying `zorp`.
     fn game(dir: &Path) -> Game {
+        game_kit(dir, Vec::new())
+    }
+
+    /// [`game`] with two sound roles in its kit: an effect `hop` and a
+    /// looping tune `tune`.
+    pub(super) fn game_with_sound(dir: &Path) -> Game {
+        let role = |role: &str, kind: &str, loops: bool| crate::theme_kit::SoundSlot {
+            role: role.into(),
+            kind: kind.into(),
+            cue: "made up".into(),
+            frames: None,
+            loops,
+            description: "made up".into(),
+        };
+        game_kit(
+            dir,
+            vec![role("hop", "sfx", false), role("tune", "music", true)],
+        )
+    }
+
+    fn game_kit(dir: &Path, sound: Vec<crate::theme_kit::SoundSlot>) -> Game {
         put(dir, "template.toml", b"[template]\nid = \"made-up\"\n");
         put(
             dir,
@@ -2031,7 +2452,7 @@ mod tests {
                     ..Geometry::default()
                 }),
             }],
-            sound: Vec::new(),
+            sound,
             tolerance: Tolerance::default(),
             surfaces: Vec::new(),
         };
@@ -2053,7 +2474,7 @@ mod tests {
     /// The game's build, made up: the body's two poses are pictures
     /// frame-0-0.png and frame-1-0.png, each filling its 16 by 16 picture
     /// down to the feet row.
-    fn built() -> Built {
+    pub(super) fn built() -> Built {
         let mut art = gp_look::present::Art::default();
         for (i, f) in ["frame-0-0.png", "frame-1-0.png"].into_iter().enumerate() {
             let img = picture(16, 16, [2, 2, 14, 16]);
@@ -2088,20 +2509,22 @@ mod tests {
             model: model(),
             art,
             kinds: vec![ENTITY.into()],
+            initial: vec![0],
+            board: None,
             _lifted: None,
         }
     }
 
-    fn theme(dir: &Path, package: &str, look: &str, art: &str) {
+    pub(super) fn theme(dir: &Path, package: &str, look: &str, art: &str) {
         put(dir, "package.toml", package.as_bytes());
         put(dir, "theme/look.txt", look.as_bytes());
         put(dir, "theme/art.txt", art.as_bytes());
     }
 
-    const GOOD_PACKAGE: &str = "[package]\nname = \"someone/bright\"\nversion = \"0.1.0\"\nkind = \"content\"\ntitle = \"Bright\"\nlicense = \"CC-BY-4.0\"\n";
+    pub(super) const GOOD_PACKAGE: &str = "[package]\nname = \"someone/bright\"\nversion = \"0.1.0\"\nkind = \"content\"\ntitle = \"Bright\"\nlicense = \"CC-BY-4.0\"\n";
     const GOOD_LOOK: &str = "gp-look 1\nid bright\ntitle Bright\nart art.txt\n";
 
-    fn levels(o: &Outcome, level: &str) -> Vec<String> {
+    pub(super) fn levels(o: &Outcome, level: &str) -> Vec<String> {
         o.json["findings"]
             .as_array()
             .unwrap()
@@ -2150,6 +2573,185 @@ mod tests {
             o.text
         );
         assert!(o.text.ends_with("Next: play it in the game and look at every stage, every pose at game size, the deaths and the score display."), "{}", o.text);
+    }
+
+    /// The `#+` lines: read and drawn on the page, a page from before
+    /// them offers the theme anyway, a line the page can't read is a
+    /// problem (passed over), and a region must be one the game's level
+    /// kit names (Moss Hop's names `start`).
+    #[test]
+    fn the_check_knows_the_added_lines_and_the_kits_regions() {
+        let g = tempfile::tempdir().unwrap();
+        let mut game = game(g.path());
+        let t = tempfile::tempdir().unwrap();
+        let art = "gp-art 1\nscale 4\npic frame-0-0.png art/roll.png 16 16 0 0\npic frame-1-0.png art/roll.png 16 16 0 0\n\
+                   #+ hud_over\n#+ in top-ledge pic frame-0-0.png art/short.png 16 12 0 4\n";
+        let check = |game: &Game, art: &str| {
+            theme(t.path(), GOOD_PACKAGE, GOOD_LOOK, art);
+            for f in ["roll", "short"] {
+                put(
+                    t.path(),
+                    &format!("theme/art/{f}.png"),
+                    &picture(64, 64, [8, 8, 56, 64]).png(),
+                );
+            }
+            report(t.path(), game, Ok(built()), None).unwrap()
+        };
+        // No region in the kit: refused, by its line.
+        let o = check(&game, art);
+        let problems = levels(&o, "problem");
+        assert_eq!(problems.len(), 1, "{}", o.text);
+        assert!(
+            problems[0].starts_with("theme/art.txt 6 names the region `top-ledge`, but Made Up has no level kit to name regions of its stage"),
+            "{}",
+            o.text
+        );
+        assert!(
+            o.text
+                .contains("uses `#+` lines, which a page built before them takes for notes"),
+            "{}",
+            o.text
+        );
+        // The game has no HUD to draw over the bodies: a warning.
+        assert!(
+            levels(&o, "warning")
+                .iter()
+                .any(|w| w.contains("so `#+ hud_over` changes nothing")),
+            "{}",
+            o.text
+        );
+        // A kit naming it: no problem. One naming others: refused, with
+        // the names it has.
+        game.regions = Some(vec!["top-ledge".into()]);
+        let o = check(&game, art);
+        assert!(levels(&o, "problem").is_empty(), "{}", o.text);
+        game.regions = Some(vec!["bottom".into()]);
+        let o = check(&game, art);
+        assert!(
+            levels(&o, "problem")[0].contains("which Made Up's level kit doesn't name, so the page never draws these lines. The kit names bottom"),
+            "{}",
+            o.text
+        );
+        // Moss Hop's kit, read as the check reads a game's: its region.
+        let mosshop =
+            game_of(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../templates/mosshop"))
+                .unwrap();
+        assert_eq!(mosshop.regions, Some(vec!["start".to_owned()]));
+        // Lines the page can't read: each a problem, by line, and the rest
+        // of the theme still read.
+        game.regions = Some(vec!["top-ledge".into()]);
+        let o = check(&game, &format!("{art}#+ hud_over x\n#+ sparkle 3\n"));
+        let problems = levels(&o, "problem");
+        assert_eq!(problems.len(), 2, "{}", o.text);
+        assert!(
+            problems[0].starts_with(
+                "theme/art.txt 7 the page can't read this line (`#+ hud_over` takes no row"
+            ),
+            "{}",
+            o.text
+        );
+        assert!(
+            problems[1].starts_with(
+                "theme/art.txt 8 the page can't read this line (no page knows `#+ sparkle`"
+            ),
+            "{}",
+            o.text
+        );
+        // The page today reads every one of them (the old reader takes
+        // them for notes, which the art module's own test shows).
+        assert!(
+            o.text
+                .contains("read as the page reads them; 2 pictures named, all there"),
+            "{}",
+            o.text
+        );
+    }
+
+    /// The check says whether the page would offer the theme, by the code
+    /// the page runs: offered as its package name's last part; left out
+    /// with why for a name the page can't list and for rules the page
+    /// can't draw (a picture the theme lacks); a name the game's own theme
+    /// has is a warning, since on the page it takes that theme's place.
+    #[test]
+    fn the_check_says_whether_the_page_would_offer_it() {
+        let g = tempfile::tempdir().unwrap();
+        let game = game(g.path());
+        put(g.path(), "themes/paper/theme.toml", b"id = \"paper\"\n");
+        let art = "gp-art 1\nscale 4\npic frame-0-0.png art/roll.png 16 16 0 0\npic frame-1-0.png art/roll.png 16 16 0 0\n";
+        let offered = |package_name: &str, art: &str, with_picture: bool| {
+            let t = tempfile::tempdir().unwrap();
+            theme(
+                t.path(),
+                &GOOD_PACKAGE.replace("someone/bright", package_name),
+                GOOD_LOOK,
+                art,
+            );
+            if with_picture {
+                put(
+                    t.path(),
+                    "theme/art/roll.png",
+                    &picture(64, 64, [8, 8, 56, 64]).png(),
+                );
+            }
+            let o = report(t.path(), &game, Ok(built()), None).unwrap();
+            let lines: Vec<(String, String)> = o.json["findings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|f| f["group"] == "offered")
+                .map(|f| {
+                    (
+                        f["level"].as_str().unwrap().to_owned(),
+                        f["message"].as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect();
+            (o, lines)
+        };
+        let (o, lines) = offered("someone/bright", art, true);
+        assert_eq!(lines.len(), 1, "{}", o.text);
+        assert_eq!(lines[0].0, "ok");
+        assert!(
+            lines[0]
+                .1
+                .starts_with("the page would offer it in Settings, Theme for Made Up as `bright`"),
+            "{}",
+            o.text
+        );
+        assert!(
+            o.text.contains("On the page (Settings, Theme)"),
+            "{}",
+            o.text
+        );
+
+        let (o, lines) = offered("someone/8bit", art, true);
+        assert_eq!(o.exit, 1, "{}", o.text);
+        assert_eq!(lines[0].0, "problem");
+        assert!(
+            lines[0].1.starts_with("the page would leave it out of Settings, Theme, because its name isn't one this page can list."),
+            "{}",
+            o.text
+        );
+
+        let (o, lines) = offered("someone/bright", art, false);
+        assert_eq!(o.exit, 1, "{}", o.text);
+        let left = lines.iter().find(|l| l.0 == "problem").unwrap();
+        assert!(
+            left.1.contains("because its files have a mistake in them")
+                && left.1.contains("art/roll.png"),
+            "{}",
+            o.text
+        );
+
+        let (o, lines) = offered("someone/paper", art, true);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.0 == "warning" && l.1.contains("ships a theme in themes/paper")),
+            "{}",
+            o.text
+        );
+        assert!(lines.iter().any(|l| l.0 == "ok"), "{}", o.text);
     }
 
     #[test]
@@ -2277,7 +2879,15 @@ mod tests {
         let game = game(g.path());
         let t = tempfile::tempdir().unwrap();
         let dir = t.path().join("bright");
-        new(&dir, g.path(), "someone/bright", "Bright", "CC-BY-4.0").unwrap();
+        new(
+            &dir,
+            g.path(),
+            "someone/bright",
+            "Bright",
+            "CC-BY-4.0",
+            Path::new("/no-gp-home"),
+        )
+        .unwrap();
         for f in [
             "package.toml",
             "theme/look.txt",
@@ -2291,14 +2901,25 @@ mod tests {
         assert!(art.contains("# TO DRAW rolling thing"), "{art}");
         assert!(art.contains("feet on row 16"), "{art}");
         // A folder with files is refused, and a denied name.
-        assert!(new(&dir, g.path(), "someone/other", "Other", "CC0-1.0").is_err());
+        assert!(
+            new(
+                &dir,
+                g.path(),
+                "someone/other",
+                "Other",
+                "CC0-1.0",
+                Path::new("/no-gp-home")
+            )
+            .is_err()
+        );
         assert!(
             new(
                 &t.path().join("z"),
                 g.path(),
                 "someone/zorp",
                 "Z",
-                "CC0-1.0"
+                "CC0-1.0",
+                Path::new("/no-gp-home")
             )
             .is_err()
         );
@@ -2323,6 +2944,55 @@ mod tests {
                 o.text
             );
         }
+    }
+
+    /// `look new` gives a theme a name a registry takes, its look id the
+    /// name's last part; a name that breaks the rule is refused in one
+    /// sentence offering the fixed name. A copy made before with an `_`
+    /// still checks.
+    #[test]
+    fn a_new_theme_gets_a_name_a_registry_takes() {
+        let g = tempfile::tempdir().unwrap();
+        game(g.path());
+        let t = tempfile::tempdir().unwrap();
+        let dir = t.path().join("night");
+        new(
+            &dir,
+            g.path(),
+            "local/moss-night",
+            "Night",
+            "CC0-1.0",
+            Path::new("/no-gp-home"),
+        )
+        .unwrap();
+        let look = fs::read_to_string(dir.join("theme/look.txt")).unwrap();
+        assert!(look.contains("\nid moss-night\n"), "{look}");
+        let pkg = fs::read_to_string(dir.join("package.toml")).unwrap();
+        assert!(pkg.contains("name = \"local/moss-night\""), "{pkg}");
+        for (bad, fixed) in [
+            ("local/moss_night", "local/moss-night"),
+            ("Me/My_Theme", "me/my-theme"),
+            ("someone/9lives", "someone/t-9lives"),
+            ("solo", "local/solo"),
+            ("a.b/c.d", "a-b/c-d"),
+        ] {
+            let e = new(
+                &t.path().join("x"),
+                g.path(),
+                bad,
+                "X",
+                "CC0-1.0",
+                Path::new("/no-gp-home"),
+            )
+            .err()
+            .unwrap()
+            .to_string();
+            assert!(e.contains(&format!("use `{fixed}`")), "{bad}: {e}");
+            assert!(!e.contains('\n'), "{e}");
+            assert_eq!(fixed_theme_name(bad), fixed);
+            assert!(new_theme_name_ok(fixed), "{fixed}");
+        }
+        assert!(valid_package_name("local/moss_night"));
     }
 
     #[test]

@@ -110,7 +110,6 @@ pub struct TranslateArgs {
     #[arg(long)]
     pub baseline: Option<std::path::PathBuf>,
     /// A recording in the store (an ID prefix) whose input log to play.
-    /// Not in gameprinter yet: recordings come back with `gp record`.
     #[arg(long, value_name = "ID")]
     pub recording: Option<String>,
     /// The original's frame: the first frame the model stands for at or
@@ -146,6 +145,7 @@ pub(crate) fn run(a: &TranslateArgs, paths: &gp_evidence::Paths) -> Result<crate
             a.input.as_deref(),
             a.baseline.as_deref(),
             a.recording.as_deref(),
+            paths,
         )?),
     };
     let (source, _) = ia::source(&a.model, a.assets.as_deref(), a.module.as_deref(), paths)?;

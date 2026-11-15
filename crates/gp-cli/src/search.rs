@@ -49,7 +49,7 @@ fn source(
 /// a name under templates/ (Moss Hop), else a game's package folder in the
 /// games checkout (donkey-kong), as game-printer took a name under its
 /// templates/.
-fn template_dir(t: &Path) -> PathBuf {
+pub(crate) fn template_dir(t: &Path) -> PathBuf {
     if t.exists() || t.components().count() != 1 {
         return t.to_owned();
     }
@@ -423,11 +423,209 @@ pub enum LevelCmd {
         #[arg(short, long, value_name = "DIR")]
         out: Option<PathBuf>,
     },
+    /// List a game's levels: each one's name, what it is, its size in
+    /// cells, its starts and the slots its pieces are in, whether the level
+    /// kit's rules cover it, and whether the folder is a copy an edit may
+    /// change. A game with no level kit says so in words.
+    ///
+    /// Example: gp level list dk_mine
+    List {
+        /// The game: a copy's name (template_fork's, under
+        /// $GP_HOME/work/mcp), a folder holding model.toml, a name under
+        /// templates/ or a game in the games checkout (donkey-kong).
+        game: PathBuf,
+    },
+    /// One level as data, in the level kit's terms: its girders (the
+    /// ground's runs, by row), ladders (with the girders each joins, whether
+    /// it reaches the one above, its top or stop), each thing's start, the
+    /// rows of every slot the kit names as the stage's data (under `data`,
+    /// the shape `gp level edit --from` takes back), the kit's rules,
+    /// limits and play measures, and any rule the level breaks now.
+    ///
+    /// Example: gp --json level show dk_mine --level main
+    Show {
+        /// The game, as for gp level list.
+        game: PathBuf,
+        /// The level, by its name in the model (default: the one the kit
+        /// covers, else main).
+        #[arg(long)]
+        level: Option<String>,
+        /// Also give the level's whole data under `data`: every slot's rows
+        /// and each start, the shape gp level edit --from takes back.
+        #[arg(long)]
+        data: bool,
+    },
+    /// Draw a level as a PNG. By default by what each piece is, with no
+    /// ROM art: girders red, full ladders cyan and broken ones dim, tops
+    /// and stops, each start as a box by its role, the goal's row, and the
+    /// numbers gp level edit names pieces by. That picture can be shown
+    /// anywhere. With --art, the model's own picture at the start of play
+    /// from the person's lift, with the pieces outlined: it stays on this
+    /// computer, outside any repo.
+    ///
+    /// Example: gp level render dk_mine -o /tmp/stage.png
+    Render {
+        /// The game, as for gp level list.
+        game: PathBuf,
+        /// The level (default: the one the kit covers, else main).
+        #[arg(long)]
+        level: Option<String>,
+        /// The PNG to write (default:
+        /// $GP_HOME/work/level-pictures/<game>-<level>.png).
+        #[arg(short, long, value_name = "FILE")]
+        out: Option<PathBuf>,
+        /// Draw the model's own picture from the person's lift under the
+        /// pieces.
+        #[arg(long)]
+        art: bool,
+        /// The game's built module (default: built from this gp's kit).
+        #[arg(long, value_name = "FILE")]
+        module: Option<PathBuf>,
+    },
+    /// Change a level of a copy, checked against the level kit before
+    /// anything is written. Each --op is one named operation, run in
+    /// order: `move girder N x=.. y=.. shape=.. step=.. count=.. dx=..
+    /// dy=..`, `move ladder N x=.. y=.. shape=.. dx=.. dy=..` (its top or
+    /// stop moves with it), `move spawn ENTITY[#K] x=.. y=..`, `make ladder
+    /// N full|broken`, `set row SLOT ROW V,V,..`. --from replaces the
+    /// level's data whole (the `data` gp level show gives, as JSON or
+    /// TOML). A change that breaks a rule is refused with the rule and the
+    /// piece, and nothing is written (exit 1). Only a copy in this home is
+    /// edited, never a games checkout's original or a published package.
+    /// Each edit is kept in the copy's level-edits.jsonl for gp level undo,
+    /// and returns the picture by kind and the play measures against the
+    /// kit's tolerances.
+    ///
+    /// Example: gp level edit dk_mine --op "move ladder 6 x=136" --op "move spawn hammer#0 x=40"
+    Edit {
+        /// The copy, as for gp level list.
+        game: PathBuf,
+        /// The level (default: the one the kit covers, else main).
+        #[arg(long)]
+        level: Option<String>,
+        /// One operation; give --op again for more.
+        #[arg(long = "op", value_name = "OPERATION")]
+        ops: Vec<String>,
+        /// A file holding the level's whole data (gp level show's `data`),
+        /// to replace it; any --op runs after.
+        #[arg(long, value_name = "FILE")]
+        from: Option<PathBuf>,
+        /// Check and draw it, and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip the play measures (the walk, each climb and the route).
+        #[arg(long)]
+        no_measures: bool,
+        /// The game's built module (default: built from this gp's kit).
+        #[arg(long, value_name = "FILE")]
+        module: Option<PathBuf>,
+    },
+    /// Put back a copy's newest level edit, as it was before it, from the
+    /// copy's level-edits.jsonl. Run it again for the one before.
+    ///
+    /// Example: gp level undo dk_mine
+    Undo {
+        /// The copy, as for gp level list.
+        game: PathBuf,
+    },
+    /// Verify a level on the model, in plain words: the kit's rules, whether
+    /// the stage can be finished with the enemies in, every play measure
+    /// against the kit's tolerance (the barrels' routes and jump windows
+    /// too), and how far the layout is from the original's (by the person's
+    /// own lift, in memory). A girder stage plays its direct route up the
+    /// ladders, or, when that can't finish it, a search of walks, jumps,
+    /// climbs and waits that rides the bodies its ground carries the player
+    /// on and plays a stage with no goal until it ends; a tile stage plays
+    /// the reach search and the playthrough. It plays the level named,
+    /// reached as the game reaches it: each stage before it ended at its
+    /// goal by the model's own rules. Exits 1 when a rule breaks, it can't
+    /// be finished, it is too close to the original's layout, or it
+    /// couldn't be played to its end (NOT CHECKED, never a pass).
+    ///
+    /// Example: gp level verify dk_mine
+    Verify {
+        /// The game, as for gp level list.
+        game: PathBuf,
+        /// The level (default: the one the kit covers, else main).
+        #[arg(long)]
+        level: Option<String>,
+        /// Runs of the game for the barrels' routes.
+        #[arg(long, default_value_t = 6)]
+        runs: u32,
+        /// Frames each run lasts.
+        #[arg(long, default_value_t = 3000)]
+        frames: u32,
+        /// The game's built module (default: built from this gp's kit).
+        #[arg(long, value_name = "FILE")]
+        module: Option<PathBuf>,
+    },
 }
 
 pub fn level_run(cmd: &LevelCmd, paths: &Paths) -> Result<Outcome> {
-    if let LevelCmd::Kit { game, out } = cmd {
-        return crate::level_kit::kit_cmd(game, out.as_deref());
+    use crate::level_edit as le;
+    match cmd {
+        LevelCmd::Kit { game, out } => return crate::level_kit::kit_cmd(game, out.as_deref()),
+        LevelCmd::List { game } => return le::list_cmd(game, paths),
+        LevelCmd::Show { game, level, data } => {
+            return le::show_cmd(game, level.as_deref(), *data, paths);
+        }
+        LevelCmd::Render {
+            game,
+            level,
+            out,
+            art,
+            module,
+        } => {
+            return le::render_cmd(
+                game,
+                level.as_deref(),
+                out.as_deref(),
+                *art,
+                module.as_deref(),
+                paths,
+            );
+        }
+        LevelCmd::Edit {
+            game,
+            level,
+            ops,
+            from,
+            dry_run,
+            no_measures,
+            module,
+        } => {
+            return le::edit_cmd(
+                game,
+                level.as_deref(),
+                ops,
+                from.as_deref(),
+                *dry_run,
+                !*no_measures,
+                module.as_deref(),
+                paths,
+            );
+        }
+        LevelCmd::Undo { game } => return le::undo_cmd(game, paths),
+        LevelCmd::Verify {
+            game,
+            level,
+            runs,
+            frames,
+            module,
+        } => {
+            let r = le::verify_cmd(
+                game,
+                level.as_deref(),
+                *runs,
+                *frames,
+                module.as_deref(),
+                paths,
+            );
+            // A new game's journey keeps its last stage check.
+            crate::journeys::note_verify(paths, game, &r);
+            return r;
+        }
+        _ => {}
     }
     if let LevelCmd::Measure {
         template,
@@ -458,7 +656,7 @@ pub fn level_run(cmd: &LevelCmd, paths: &Paths) -> Result<Outcome> {
         module,
     } = cmd
     else {
-        unreachable!("the measure and the kit are above")
+        unreachable!("the other commands are above")
     };
     let src = source(
         &template_dir(template),
@@ -823,6 +1021,13 @@ fn measure(
     for n in &m.notes {
         let _ = writeln!(text, "note: {n}");
     }
+    if !m.entered.is_empty() {
+        let _ = writeln!(
+            text,
+            "note: played where the game starts {level}, after {} ended at the goal by the model's own rules; no buttons replay that from power-on, so the holds below are from that run only",
+            m.entered.join(", then ")
+        );
+    }
     let holds: Vec<String> = m
         .route_holds
         .iter()
@@ -849,7 +1054,7 @@ fn measure(
         run = json!({"holds": h, "cleared": cleared, "next": next});
     }
     Ok(Outcome {
-        json: json!({"ok": true, "model": spec.name, "level": level, "ready": m.ready,
+        json: json!({"ok": true, "model": spec.name, "level": level, "ready": m.ready, "entered_after": m.entered,
                      "measures": s, "route_holds": holds, "notes": m.notes, "clears": run}),
         text: text.trim_end().to_owned(),
         exit: 0,

@@ -1114,6 +1114,7 @@ fn tip_score(
     let label = score_label(&format!("tip-{}", &tip[..12]), &parts);
     make_kit(c, tip_gp, &parts, &c.canary_dir.join(&label))?;
     let v = scored(c, tip_gp, &label)?;
+    lines.extend(gate::reran_lines(&v, "canary, the tip's gp"));
     if let Some(k) = kept {
         let (a, b) = (rows_of(&k), rows_of(&v));
         let same = a.len() == b.len()
@@ -1145,12 +1146,18 @@ fn compare(base: &Value, new: &Value) -> std::result::Result<String, String> {
             return Err(format!("{id}: no row through the patched gp"));
         }
     }
+    let reran = gate::reran_lines(new, "canary, the patched gp").join("\n");
     if let Some(why) = gate::worse(&base_rows, &new_rows) {
-        return Err(why);
+        return Err(if reran.is_empty() {
+            why
+        } else {
+            format!("{why}\n{reran}")
+        });
     }
     Ok(format!(
-        "canary: {} clips of {CANARY} held through the patched gp",
-        base_rows.len()
+        "canary: {} clips of {CANARY} held through the patched gp{}{reran}",
+        base_rows.len(),
+        if reran.is_empty() { "" } else { "\n" }
     ))
 }
 
@@ -2875,5 +2882,37 @@ date +%s > '{times}/just.end'
             ]
         );
         assert_eq!(test_runs(&[]), [("rest".to_owned(), vec![])]);
+    }
+
+    #[test]
+    fn the_canary_says_which_clips_ran_again_and_a_second_failure_still_fails() {
+        let row = |id: &str| json!({"id": id, "frames": 10, "frames_together": 10});
+        let base = json!({"clips": [row("a"), row("b")]});
+        let held = json!({"clips": [row("a"), row("b")],
+            "reran": [{"id": "b", "first": "past its deadline", "ok": true}]});
+        let line = compare(&base, &held).unwrap();
+        assert_eq!(
+            line,
+            "canary: 2 clips of donkey-kong held through the patched gp\n\
+             canary, the patched gp: 1 clips couldn't be made or scored at first and were run once more:\n  \
+             b: made and scored the second time (the first try: past its deadline)"
+        );
+        let failed = json!({"clips": [row("a"), {"id": "b", "error": "past its deadline again"}],
+            "reran": [{"id": "b", "first": "past its deadline", "ok": false, "error": "past its deadline again"}]});
+        let why = compare(&base, &failed).unwrap_err();
+        assert!(
+            why.starts_with("b: scored before, now can't be: past its deadline again\n"),
+            "{why}"
+        );
+        assert!(
+            why.ends_with(
+                "b: failed again: past its deadline again (the first try: past its deadline)"
+            ),
+            "{why}"
+        );
+        assert_eq!(
+            compare(&base, &base).unwrap(),
+            "canary: 2 clips of donkey-kong held through the patched gp"
+        );
     }
 }

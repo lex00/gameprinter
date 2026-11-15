@@ -4,7 +4,7 @@ A model refers to its assets through slots (docs/model.md, "Asset slots"). The s
 
 This is Milestone 3 work ([the roadmap](../ROADMAP.md)), adopted by the user on 2026-10-28 from a research spike whose snapshot, with the prior art and the measurements on the stubbed ROM, is game-printer's docs/research/asset-stubs.md (history, not carried here).
 
-Brought from game-printer's docs/stubs.md. In gameprinter `gp assets stub` refuses an arcade lift (Tapper's) in words: no model slot names an arcade lift's pictures yet (`gp_interp::Lifted` reads NES maps), so there are no presentation slots to stub.
+Brought from game-printer's docs/stubs.md. In gameprinter `gp assets stub` refuses an arcade lift (Tapper's) in words: its pictures are the board's regions, which a model's board slots take whole from the player's romset ([board art](formats/board-art.md)), and stubs are made for an NES map's slots only.
 
 ## Run it
 

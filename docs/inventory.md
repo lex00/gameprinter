@@ -107,6 +107,8 @@ The old `gp serve` and route modules aren't in this repo yet (side track T1); th
 
 `wit/game/game.wit`, package `game-printer:game@0.1.0`, with the world `game-module`. It includes `game-printer:runtime/full-runtime@0.4.0` and exports two more interfaces, `module` (`info`, `describe`) and `run` (`spec-digest`, `set-draws`, `report-draws`, `set-apu-events`, `start-reads`, `take-reads`). `wit/runtime/runtime.wit` is unchanged at 0.4.0 and `wit/game/deps/runtime` is a symlink to it, so there is one copy.
 
+Calls were added to `run` since, and the package is at 0.2.0 now: 0.2.0 added `query-values`, a frame's paths read in one call, and `info` names the game package so `gp` can tell a module built before it ([modules.md](modules.md#reading-a-frames-values)). The parse results below are 0.1.0's.
+
 It is a world beside the runtime protocol and not `0.5.0` of it because nothing else implements these calls. gp-nes has no hooks, the hookless interpreter has no use for `describe`, and bumping `game-printer:runtime` would make `gp-nes` and the Go and Godot hosts change for calls they never carry. `gp-runtime`'s test that keeps the Rust trait and `runtime.wit` in step is untouched.
 
 Parse results, with the `wit-parser` crate at 0.262.0 (the version `gp-runtime`'s test uses), through a small binary in scratch that calls `Resolve::push_path`:

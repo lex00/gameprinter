@@ -1,0 +1,40 @@
+/* A picture the agent proposes (picture-card.js): the card in the asks
+   on every tab, and the list on THEMES. */
+.pic-card { display: flex; gap: 8px 12px; align-items: baseline; flex-wrap: wrap; border: 2px solid var(--nes-28); padding: 6px 10px; font-size: 13px; min-width: 0; }
+.pic-list .pic-card { margin: 6px 0; border-color: var(--nes-2d); }
+.pic-card .ask-head { color: var(--nes-28); font-weight: 700; }
+.pic-card .ask-says { flex: 1 1 30ch; min-width: 0; overflow-wrap: anywhere; }
+.pic-card .pic-count { color: var(--nes-21); font-weight: 700; }
+.pic-pair { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: flex-start; min-width: 0; }
+.pic-side { margin: 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; max-width: 100%; }
+.pic-side figcaption { font-weight: 700; letter-spacing: 0.08em; color: var(--muted); font-size: 12px; }
+/* A checkerboard behind the pictures, so what is see-through shows. */
+.pic-frame { line-height: 0; max-width: 100%; border: 2px solid var(--nes-2d);
+  background-color: #3c3c3c; background-image: linear-gradient(45deg, #5c5c5c 25%, transparent 25%, transparent 75%, #5c5c5c 75%), linear-gradient(45deg, #5c5c5c 25%, transparent 25%, transparent 75%, #5c5c5c 75%);
+  background-size: 12px 12px; background-position: 0 0, 6px 6px; align-self: flex-start; }
+.pic-side img { image-rendering: pixelated; image-rendering: crisp-edges; display: block; max-width: 100%; height: auto; }
+.pic-at { display: flex; gap: 6px; align-items: center; font-size: 11px; }
+.pic-at img { background: #3c3c3c; }
+.pic-row { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; min-width: 0; }
+.pic-words { flex: 1 1 22ch; min-width: 0; font: 13px var(--mono); background: var(--nes-0f, #000); color: var(--fg); border: 2px solid var(--nes-2d); padding: 3px 6px; }
+.pic-card button { font: bold 12px var(--mono); background: var(--nes-0f, #000); color: var(--fg); border: 2px solid var(--line); padding: 1px 12px; cursor: pointer; }
+.pic-card button.pic-accept { border-color: var(--nes-2a, #4cdc48); }
+.pic-card button:disabled, .pic-words:disabled { opacity: 0.5; cursor: default; }
+.pic-card .pic-err:empty { display: none; }
+.pic-card .pic-err { color: var(--nes-26); flex-basis: 100%; }
+.pic-card .muted { color: var(--muted); }
+.pic-item { border-top: 1px solid var(--nes-2d); padding: 6px 0; }
+.pic-item p { margin: 0 0 4px; }
+@media (max-width: 560px) {
+  .pic-card .ask-says { flex-basis: 100%; }
+  .pic-words { flex-basis: 100%; }
+  .pic-card button { padding: 6px 18px; }
+}
+/* A sound change the agent proposes (sound-card.js), in the same look:
+   two buttons that play the sound now and the new one. */
+.snd-pair { align-items: center; }
+.snd-side { display: inline-flex; }
+.snd-side audio { display: none; }
+.pic-card button.snd-play { padding: 4px 14px; }
+.pic-card button.snd-play.on { border-color: var(--nes-21, #3cbcfc); color: var(--nes-21, #3cbcfc); }
+.snd-about { font-size: 12px; flex-basis: 100%; }

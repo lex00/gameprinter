@@ -69,6 +69,10 @@ fn built(dir: &Path) -> bool {
 /// or drawn makes the build stale as a model change does.
 const PREVIEW_CRATES: &[&str] = &[
     "gp-web",
+    "gp-web-board",
+    "gp-look",
+    "gp-arcade",
+    "gp-assets",
     "gp-exts",
     "gp-interp",
     "gp-model",
@@ -83,6 +87,7 @@ const PREVIEW_CRATES: &[&str] = &[
 /// copies the same list.
 pub(crate) const PAGE_SCRIPTS: &[&str] = &[
     "index.html",
+    "preview.css",
     "preview.js",
     "level.js",
     "shell-keys.js",
@@ -174,7 +179,8 @@ pub(crate) fn building() -> bool {
         .is_some_and(|b| b.started.is_some())
 }
 
-/// Whether the game has a model to play: an arcade game has none yet.
+/// Whether the game has a model to play: its package holds a model.toml,
+/// on either platform (an arcade game's model plays too, issue #3).
 fn has_model(rb: &Rebuild) -> bool {
     rb.game.join(gp_model::MODEL_FILE).is_file()
 }
@@ -439,13 +445,14 @@ pub(crate) fn file(paths: &Paths, repo: &Path, game: &str, name: &str) -> Result
     let kind = match f.extension().and_then(|x| x.to_str()) {
         Some("html") => "text/html; charset=utf-8",
         Some("js") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
         Some("json") => "application/json",
         Some("wasm") => "application/wasm",
         Some("png") => "image/png",
         _ => "text/plain; charset=utf-8",
     };
     match std::fs::read(&f) {
-        Ok(b) => Ok(Response::bytes(kind, b)),
+        Ok(b) => Ok(Response::game_file(kind, b)),
         Err(_) => Ok(Response::error(404, "not in the preview: build it first")),
     }
 }

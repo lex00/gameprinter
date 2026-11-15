@@ -5,9 +5,8 @@
 import { describe, expect, it } from "vitest";
 import { renderToString } from "react-dom/server";
 import type { GameWords } from "../src/api";
-import { MomentsStrip, RefineThisMoment } from "../src/Moments";
+import { MomentsStrip } from "../src/Moments";
 import { type Moment, type Moments, findMoment, inFocus, momentLine, momentName, momentsPhase, tick } from "../src/momentfold";
-import { type AlsoCheck, type RefineState, alsoLine, momentRefinePhase, worseLine } from "../src/refinefold";
 
 const g = {
   preview: true,
@@ -82,37 +81,5 @@ describe("moments", () => {
     expect(momentsPhase(undefined, true).state).toBe("loading");
     expect(momentsPhase(ms, false).says).toBe("5 moments found. 2 jumps, and the model does 1 of them.");
     expect(momentsPhase(undefined, false, "no mapping").state).toBe("failed");
-  });
-  it("refines one moment and reports the other moments of its kind, listing the ones made worse", () => {
-    const also: AlsoCheck = {
-      kind: "jump",
-      others: 312,
-      better: 280,
-      worse: 1,
-      same: 31,
-      line: "",
-      moment: null,
-      worse_moments: [
-        {
-          n: 17,
-          from: 4021,
-          to: 4060,
-          seconds: 66.9,
-          original_height: 66,
-          before: { apart: 3, found: true, offset: 0, height: 60, measures: [] },
-          after: { apart: 12, found: true, offset: 0, height: 40, measures: [] },
-        },
-      ],
-    };
-    expect(alsoLine(also)).toBe("Also better on 280 of 312 other jumps, worse on 1.");
-    expect(worseLine("jump", also.worse_moments[0])).toBe("Jump 17, 66.9 s: further from the original there (12 measure-frames apart, was 3); the model goes up 40 px, was 60 px, the original 66 px");
-    const done = { recording: "r", state: "done", running: false, rounds: [{}], moment: { kind: "jump", n: 1 }, result: { also, stop: "", questions: [], first_split: {}, together: { before: 0, after: 0, measured: 0 } } } as unknown as RefineState;
-    const phase = momentRefinePhase(done, "Jump 1", "platformer.jump");
-    expect(phase.state).toBe("done");
-    expect(phase.says).toBe("Done with jump 1: 1 number changed. Also better on 280 of 312 other jumps, worse on 1.");
-    expect(momentRefinePhase(undefined, "Jump 1", "platformer.jump").says).toBe("Jump 1: refine tries jump's numbers in its frames only.");
-    const html = renderToString(<RefineThisMoment moment={jump1} phase={phase} state={done} start={() => undefined} stop={() => undefined} seek={() => undefined} />);
-    expect(html).toContain("refine this jump");
-    expect(html).toContain("Jump 17, 66.9 s");
   });
 });

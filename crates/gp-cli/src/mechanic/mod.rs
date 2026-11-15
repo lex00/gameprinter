@@ -227,7 +227,14 @@ pub enum MechanicCmd {
         #[arg(long, requires = "show")]
         measure: bool,
         /// The decision server for `--judge` (Laya; gp serve starts it here when none answers).
-        #[arg(long, default_value = "http://127.0.0.1:7720")]
+        /// Default: $GP_LAYA_URL when it is set (the address gp serve and gp_run
+        /// keep Laya at), else http://127.0.0.1:7720.
+        #[arg(
+            long,
+            env = "GP_LAYA_URL",
+            hide_env_values = true,
+            default_value = "http://127.0.0.1:7720"
+        )]
         decide: String,
         /// The games checkout, for `--judge` (default $GP_GAMES_DIR).
         #[arg(long)]
@@ -244,8 +251,9 @@ pub enum MechanicCmd {
     /// the mechanic shows (for a jump, `--times` jumps up and back down) or
     /// the frames run out. The page shows it as it plays. The clip goes
     /// into the session, made by the model, with each decision's
-    /// probabilities beside it. NES games only: the player's place is read
-    /// from the game's state mapping.
+    /// probabilities beside it. The player's place is read from the game's
+    /// state mapping; on an arcade game the model picks among the board's
+    /// chords and plays its frames without counting jumps.
     Demo {
         game: String,
         mechanic: String,
@@ -253,7 +261,14 @@ pub enum MechanicCmd {
         #[arg(long)]
         hint: String,
         /// A Jev-compatible decision server (Laya; gp serve starts it here when none answers).
-        #[arg(long, default_value = "http://127.0.0.1:7720")]
+        /// Default: $GP_LAYA_URL when it is set (the address gp serve and gp_run
+        /// keep Laya at), else http://127.0.0.1:7720.
+        #[arg(
+            long,
+            env = "GP_LAYA_URL",
+            hide_env_values = true,
+            default_value = "http://127.0.0.1:7720"
+        )]
         decide: String,
         /// How many times the mechanic should show before the clip ends.
         #[arg(long, default_value_t = 2)]
@@ -441,7 +456,7 @@ pub enum MechanicCmd {
         /// Seconds each tool may spend on a row.
         #[arg(long, default_value_t = 60)]
         budget: u64,
-        /// How many leads (gp mechanic leads, NES only) to triage too.
+        /// How many leads (gp mechanic leads) to triage too.
         #[arg(long, default_value_t = 5)]
         leads: usize,
         /// An autoplay binary to run instead of gp's own (default:
@@ -452,7 +467,14 @@ pub enum MechanicCmd {
         #[arg(long, default_value_t = 12000)]
         autoplay_frames: usize,
         /// The decision server for the demo.
-        #[arg(long, default_value = "http://127.0.0.1:7720")]
+        /// Default: $GP_LAYA_URL when it is set (the address gp serve and gp_run
+        /// keep Laya at), else http://127.0.0.1:7720.
+        #[arg(
+            long,
+            env = "GP_LAYA_URL",
+            hide_env_values = true,
+            default_value = "http://127.0.0.1:7720"
+        )]
         decide: String,
         /// The games checkout (default $GP_GAMES_DIR).
         #[arg(long)]
@@ -463,9 +485,12 @@ pub enum MechanicCmd {
     },
     /// Tapper's auto-player (gp_arcade::autoplay): plays the romset from
     /// power-on, searching past each life lost, and writes NAME.input (an
-    /// oracle input log) and NAME.phases. The flags are the player's own:
+    /// oracle input log) and NAME.phases, and the log so far as
+    /// NAME-partial.input as it goes. The flags are the player's own:
     /// `--rom FILE --out NAME [--search] [--frames N] [--levels N]
-    /// [--idle] [--from LOG] [--jobs N]`. `gp mechanic triage` runs it.
+    /// [--idle] [--from LOG] [--until COND] [--jobs N]`; `--until` plays to a
+    /// goal on the board (`ram[0xE70F] == 0`) and stops where it holds.
+    /// `gp mechanic triage` runs it.
     #[command(disable_help_flag = true)]
     Autoplay {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]

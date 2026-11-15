@@ -40,12 +40,12 @@ fn controls(f: &InputFrame) -> Controls {
 }
 
 /// The main CPU's instructions of one frame with their accesses.
-struct Ran {
-    trace: Vec<Trace>,
-    accesses: Vec<Vec<Access>>,
+pub(crate) struct Ran {
+    pub(crate) trace: Vec<Trace>,
+    pub(crate) accesses: Vec<Vec<Access>>,
 }
 
-fn run_frame(t: &mut Tapper, c: Controls) -> Ran {
+pub(crate) fn run_frame(t: &mut Tapper, c: Controls) -> Ran {
     let (trace, acc) = crate::draws_find_z80::frame(t, c);
     let mut accesses = Vec::with_capacity(trace.len());
     let mut j = 0;
@@ -100,61 +100,65 @@ fn slice(ran: &Ran, addr: u16, names: &Names) -> Option<Value> {
     let routine = stack.last().copied();
     let w_insn = insns[w_at].as_ref()?;
     let w = &ran.trace[w_at];
-    // Walk back from the write.
-    let mut wanted = w_insn.reads & !address_regs(w_insn) & !reg::F;
-    let mut index = address_regs(w_insn) & !reg::SP;
-    let mut reads: Vec<Value> = Vec::new();
-    let mut steps: Vec<Value> = Vec::new();
-    let mut first_input = w_at;
-    let written_before: BTreeSet<u16> = ran.accesses[..w_at]
-        .iter()
-        .flatten()
-        .filter(|a| a.kind == AccessKind::Write)
-        .map(|a| a.addr)
-        .collect();
-    let mut seen_reads: BTreeMap<(u16, u16), bool> = BTreeMap::new();
-    for i in (0..w_at).rev().take(STEPS) {
-        if wanted == 0 && index == 0 {
-            break;
-        }
-        let Some(insn) = &insns[i] else { continue };
-        let hit_value = insn.writes & wanted & !reg::F != 0;
-        let hit_index = insn.writes & index != 0;
-        if !hit_value && !hit_index {
-            continue;
-        }
-        let e = &ran.trace[i];
-        first_input = i;
-        steps.push(json!({"pc": e.pc, "text": insn.text}));
-        let srcs = if insn.constant {
-            0
-        } else {
-            insn.reads & !address_regs(insn) & !reg::F
-        };
-        if hit_value {
-            wanted = (wanted & !insn.writes) | srcs;
-        }
-        if hit_index {
-            index = (index & !insn.writes) | srcs;
-        }
-        let a_regs = address_regs(insn) & !reg::SP;
-        index |= a_regs;
-        for a in ran.accesses[i]
+    // A block transfer (ldi, ldd, ldir, lddr) moves the byte its own step
+    // read: that read is the value, not every byte the loop read before.
+    if is_block(&w_insn.text) {
+        let routine_name = routine.map_or_else(|| "?".to_owned(), |r| names.routine(r));
+        let written_before: BTreeSet<u16> = ran.accesses[..w_at]
             .iter()
-            .filter(|a| a.kind == AccessKind::Read)
-        {
-            let how = if hit_value { "value" } else { "index" };
-            if seen_reads.insert((e.pc, a.addr), true).is_none() {
-                reads.push(json!({
-                    "pc": e.pc, "addr": a.addr, "name": names.ram(a.addr), "value": a.value,
-                    "how": how,
+            .flatten()
+            .filter(|a| a.kind == AccessKind::Write)
+            .map(|a| a.addr)
+            .collect();
+        let reads: Vec<Value> = ran.accesses[w_at]
+            .iter()
+            .filter(|a| a.kind == AccessKind::Read && a.time <= write.time)
+            .filter(|a| a.addr != w.pc && a.addr != w.pc.wrapping_add(1))
+            .map(|a| {
+                json!({
+                    "pc": w.pc, "addr": a.addr, "name": names.ram(a.addr), "value": a.value, "how": "value",
                     "from": if written_before.contains(&a.addr) { "frame" } else { "before" },
-                }));
+                })
+            })
+            .collect();
+        let from: Vec<String> = reads
+            .iter()
+            .filter_map(|r| r["name"].as_str().map(str::to_owned))
+            .collect();
+        let sentence = format!(
+            "{routine_name} wrote {} at ${:04X} (`{}`) {}",
+            names.ram(addr),
+            w.pc,
+            w_insn.text,
+            if from.is_empty() {
+                "from a byte the step's access log doesn't show".to_owned()
+            } else {
+                format!("copying {}", from.join(", "))
             }
-        }
+        );
+        return Some(json!({
+            "writer": {"pc": w.pc, "text": w_insn.text, "routine": routine, "routine_name": routine_name},
+            "value": write.value,
+            "reads": reads,
+            "steps": [json!({"pc": w.pc, "text": w_insn.text})],
+            "branches": [],
+            "sentence": sentence,
+        }));
     }
-    reads.reverse();
-    steps.reverse();
+    // Walk back from the write.
+    let Walk {
+        reads,
+        steps,
+        first_input,
+    } = walk_back(
+        ran,
+        &insns,
+        w_at,
+        w_insn.reads & !address_regs(w_insn) & !reg::F,
+        address_regs(w_insn) & !reg::SP,
+        names,
+        &|_| true,
+    );
     // The conditional branches run from the first input to the write.
     let mut branches: BTreeMap<u16, (u64, u64)> = BTreeMap::new();
     #[allow(clippy::needless_range_loop)] // i reads the trace past itself
@@ -202,6 +206,98 @@ fn slice(ran: &Ran, addr: u16, names: &Names) -> Option<Value> {
         "branches": branches.iter().map(|(pc, (t, f))| json!({"pc": pc, "taken": t, "fell": f})).collect::<Vec<_>>(),
         "sentence": sentence,
     }))
+}
+
+/// What a walk back from an instruction found: the memory reads on the
+/// way (oldest first, each `value` or `index` and `frame` or `before`), the
+/// instructions it went through, and the earliest of them.
+pub(crate) struct Walk {
+    pub(crate) reads: Vec<Value>,
+    pub(crate) steps: Vec<Value>,
+    pub(crate) first_input: usize,
+}
+
+/// Walks back from step `at` of a frame: the instructions before it that
+/// set the registers in `wanted` (the value) or `index` (an address), and
+/// those that set theirs, for at most [`STEPS`] instructions. A step
+/// `keep` refuses is passed over (an interrupt's handler, for a walk that
+/// stays in the code it started in). The step at `at` itself isn't read:
+/// its own accesses are the caller's.
+pub(crate) fn walk_back(
+    ran: &Ran,
+    insns: &[Option<Insn>],
+    at: usize,
+    mut wanted: u32,
+    mut index: u32,
+    names: &Names,
+    keep: &dyn Fn(usize) -> bool,
+) -> Walk {
+    let mut reads: Vec<Value> = Vec::new();
+    let mut steps: Vec<Value> = Vec::new();
+    let mut first_input = at;
+    let written_before: BTreeSet<u16> = ran.accesses[..at]
+        .iter()
+        .flatten()
+        .filter(|a| a.kind == AccessKind::Write)
+        .map(|a| a.addr)
+        .collect();
+    let mut seen_reads: BTreeMap<(u16, u16), bool> = BTreeMap::new();
+    for i in (0..at).rev().filter(|&i| keep(i)).take(STEPS) {
+        if wanted == 0 && index == 0 {
+            break;
+        }
+        let Some(insn) = &insns[i] else { continue };
+        let hit_value = insn.writes & wanted & !reg::F != 0;
+        let hit_index = insn.writes & index != 0;
+        if !hit_value && !hit_index {
+            continue;
+        }
+        let e = &ran.trace[i];
+        first_input = i;
+        steps.push(json!({"pc": e.pc, "text": insn.text}));
+        let srcs = if insn.constant {
+            0
+        } else {
+            insn.reads & !address_regs(insn) & !reg::F
+        };
+        if hit_value {
+            wanted = (wanted & !insn.writes) | srcs;
+        }
+        if hit_index {
+            index = (index & !insn.writes) | srcs;
+        }
+        let a_regs = address_regs(insn) & !reg::SP;
+        index |= a_regs;
+        for a in ran.accesses[i]
+            .iter()
+            .filter(|a| a.kind == AccessKind::Read)
+        {
+            let how = if hit_value { "value" } else { "index" };
+            if seen_reads.insert((e.pc, a.addr), true).is_none() {
+                reads.push(json!({
+                    "pc": e.pc, "addr": a.addr, "name": names.ram(a.addr), "value": a.value,
+                    "how": how,
+                    "from": if written_before.contains(&a.addr) { "frame" } else { "before" },
+                }));
+            }
+        }
+    }
+    reads.reverse();
+    steps.reverse();
+    Walk {
+        reads,
+        steps,
+        first_input,
+    }
+}
+
+/// Whether an instruction is a block transfer, which reads the byte it
+/// writes in its own step.
+fn is_block(text: &str) -> bool {
+    matches!(
+        text.split_whitespace().next(),
+        Some("ldi" | "ldd" | "ldir" | "lddr")
+    )
 }
 
 /// The bytes' slices on clip frame `frame` (counted from the clip's start
@@ -328,6 +424,14 @@ mod tests {
     /// The busy program writes e002 from A, which came from e002 itself
     /// through `rlca` and `xor`: the slice names the read of e002 at 000c
     /// as its value, read from the frame before on the first loop.
+    #[test]
+    fn a_block_transfer_is_told_by_its_text() {
+        assert!(is_block("ldir"));
+        assert!(is_block("ldd"));
+        assert!(!is_block("ld (hl),a"));
+        assert!(!is_block("lddx"));
+    }
+
     #[test]
     fn slices_the_busy_programs_step() {
         let set = gp_arcade::testrom::busy();

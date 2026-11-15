@@ -57,6 +57,13 @@ pub enum HostCmd {
         /// than one mostly waits.
         #[arg(long, default_value_t = 1)]
         build_workers: usize,
+        /// A build `build_publish` wrote (a folder holding manifest.json and
+        /// index.html), made a playable link before the host serves, its
+        /// address printed. Served under the public page's own headers
+        /// (scripts/web/public/_headers), so it plays here as it would
+        /// there. Example: --play $GP_HOME/work/mcp/.publish/my_hop/web-preview
+        #[arg(long, value_name = "DIR")]
+        play: Vec<PathBuf>,
     },
     /// Run a working copy's (or a template's) scenarios in parallel.
     Scenarios {
@@ -188,7 +195,8 @@ pub(crate) fn run(cmd: &HostCmd, paths: &Paths) -> Result<Outcome> {
             at,
             port,
             build_workers,
-        } => serve(at, *port, *build_workers, json_out, paths),
+            play,
+        } => serve(at, (*port, play), *build_workers, json_out, paths),
         HostCmd::Scenarios {
             at,
             name,
@@ -392,7 +400,7 @@ pub(crate) fn run(cmd: &HostCmd, paths: &Paths) -> Result<Outcome> {
 
 fn serve(
     at: &Where,
-    port: u16,
+    (port, play): (u16, &[PathBuf]),
     build_workers: usize,
     json_out: bool,
     paths: &Paths,
@@ -402,15 +410,27 @@ fn serve(
     hc.build_workers = build_workers;
     let shown = json!({ "repo": hc.mcp.repo, "work": hc.mcp.work, "dir": hc.dir });
     let host = LocalHost::start(hc).map_err(anyhow::Error::msg)?;
+    let mut links = Vec::new();
+    for dir in play {
+        links.push(host.register_link(dir).map_err(anyhow::Error::msg)?);
+    }
     gp_host::http::serve(host, port, |addr| {
-        // The first line is the URL, for a script that started the host.
+        // The first line is the URL, for a script that started the host;
+        // then each build's address, opened from its own files.
+        let games: Vec<String> = links
+            .iter()
+            .map(|l| format!("http://{addr}{}index.html?files=here", l.path))
+            .collect();
         if json_out {
             println!(
                 "{}",
-                json!({ "url": format!("http://{addr}"), "listening": true })
+                json!({ "url": format!("http://{addr}"), "listening": true, "play": games })
             );
         } else {
             println!("gp host listening on http://{addr}/");
+            for (l, g) in links.iter().zip(&games) {
+                println!("playing {} at {g}", l.dir.display());
+            }
         }
         let _ = std::io::Write::flush(&mut std::io::stdout());
     })

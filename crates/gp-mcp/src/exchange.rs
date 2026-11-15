@@ -201,6 +201,9 @@ pub fn read_image(path: &Path, want: (u32, u32), colors: [[u8; 3]; 4]) -> Result
 }
 
 pub fn export(config: &Config, a: ExportArgs) -> Result<Reply, String> {
+    if let Some(r) = export_board(config, &a)? {
+        return Ok(r);
+    }
     let slot = a.slot.clone().unwrap_or_else(|| "tiles".to_owned());
     let t = place::target(config, &a.copy, &slot, Some(&a.entity))?;
     let (assets, _) = place::current_assets(config, &t.dir, &t.model)?;
@@ -300,6 +303,37 @@ pub fn export(config: &Config, a: ExportArgs) -> Result<Reply, String> {
         "import": sidecar["import"],
         "set": set,
     })))
+}
+
+/// An arcade copy's export: the entity's board sprites, one PNG a picture
+/// code (crate::board_trip). None for a copy that isn't arcade.
+fn export_board(config: &Config, a: &ExportArgs) -> Result<Option<Reply>, String> {
+    let dir = config.existing_copy(&a.copy)?;
+    let Ok(model) = fs::read_to_string(dir.join(gp_model::MODEL_FILE))
+        .map_err(|e| e.to_string())
+        .and_then(|t| gp_model::Model::parse(&t).map_err(|e| e.to_string()))
+    else {
+        return Ok(None);
+    };
+    if crate::board_trip::arcade_lift(config, &dir, &model)?.is_none() {
+        return Ok(None);
+    }
+    let editor = a.editor.clone().unwrap_or_else(|| "pixelorama".to_owned());
+    let set_dir = dir.join(EXCHANGE_DIR).join(&a.entity).join("set");
+    let (trip, files) = crate::board_trip::export(config, &a.copy, &a.entity, &editor, &set_dir)?;
+    let import = json!({ "tool": "assets_edit", "args": { "copy": a.copy, "import": set_dir } });
+    Ok(Some(Reply::ok(json!({
+        "ok": true,
+        "set": { "dir": set_dir, "files": files, "frames": trip.frames, "import": import },
+        "open_with": trip.images.iter().map(|i| format!("{editor} {}", set_dir.join(i).display())).collect::<Vec<_>>(),
+        "rules": [
+            "keep each picture 32 by 32 in the 16 colours of the palette file",
+            "values 0 and 8 are transparent: the board draws nothing where a value's low three bits are 0",
+            "save as PNG over the file, indexed or RGB(A)",
+        ],
+        "import": import,
+        "proposal": crate::board_trip::NO_PROPOSAL,
+    }))))
 }
 
 #[cfg(test)]

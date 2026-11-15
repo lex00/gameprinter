@@ -5,7 +5,7 @@ description: Design a new stage for a game in Game Printer by hand from its leve
 
 # Level design
 
-A stage is data the game's model reads: floors, ladders, things and where they start. The level kit says, for one game, what is data and what the game's code fixes, the limits with numbers, the play measures a stage of its kind should land near, the originality rules and how to verify. [docs/level-kit.md](../../../docs/level-kit.md) is the reference. Everything here works by hand; the tools only check.
+A stage is data the game's model reads: floors, ladders, things and where they start. The level kit says, for one game, what is data and what the game's code fixes, the limits with numbers, the play measures a stage of its kind should land near, the originality rules and how to verify. [docs/level-kit.md](../../../docs/level-kit.md) is the reference. Everything here works by hand, and the `gp level` commands below do the same on a person's copy: read a stage, change it a named operation at a time with the kit's rules checked before anything is written, draw it and verify it.
 
 This skill came from game-printer. GAME below is a game's folder in the games checkout (`$GP_GAMES_DIR`, or `games` beside the tool repo), such as `games/donkey-kong`. That folder is the game's template: `template.toml`, the model (the game's rules and numbers as text, `model.toml`, where the stages live) and no ROM data, and T is the folder of your stage's game. Moss Hop's kit is in this repo, `templates/mosshop/level-kit/`. Tapper has no kit yet.
 
@@ -36,6 +36,21 @@ Read `level-kit.md` top to bottom. Note:
 
 If the game has no kit (a new game), read the game's code for each data slot first (.claude/skills/element-extraction/SKILL.md) and write what you find into `GAME/level-kit/rules.toml`, with its source, in the shape docs/level-kit.md gives.
 
+## The commands, on a person's copy
+
+For a person (over MCP, through `gp_run`) work on their copy, never the game's own folder: `template_fork` makes one (`$GP_HOME/work/mcp/<copy>`), and an edit of the games checkout's original or a published package is refused. Each command takes the copy's name.
+
+```sh
+gp level list COPY                                  # the levels, which the kit covers, whether it is editable
+gp --json level show COPY --level main              # girders by row, ladders, starts, the kit's rules and limits
+gp level render COPY                                # a picture by kind, no ROM art: show it to the person
+gp level edit COPY --op "move ladder 9 x=176" --op "move girder 4 count=4"
+gp level undo COPY                                  # the newest edit back
+gp level verify COPY                                # rules, can it be finished, the measures, apart from the original
+```
+
+The operations are `move girder N ...`, `move ladder N ...` (moved across only, it is fitted to its girders, and its top or stop moves with it), `move spawn ENTITY[#K] x=.. y=..`, `make ladder N full|broken` and `set row SLOT ROW V,V,..`; `--from FILE` replaces the level's data whole (`gp level show --data` gives it). Several operations in one edit are checked and written together, so move a girder and the ladders that stand on it in one edit. A refusal names the kit's rule and the piece, and nothing is written. The ladders and runs are fixed-size lists, so a stage keeps their number: "remove that ladder" is a move. An edit that moves pieces redraws the stage picture's play tiles, since the model climbs by them. A game with no kit (Tapper) is answered in words.
+
 ## 2. Lay the stage out on a grid
 
 Draw the screen at the level's tile size (Donkey Kong: 32 by 30 cells of 8 px). Place, in this order:
@@ -55,7 +70,7 @@ For each floor, the hero must reach the next by a full ladder, and every jump th
 
 ## 4. Verify
 
-Run these in order and keep the output:
+On a copy, `gp level verify COPY` runs the rules, the route with the enemies in, every measure against its tolerance and the originality check in one go. For a derived template, run these in order and keep the output:
 
 ```sh
 gp model check T

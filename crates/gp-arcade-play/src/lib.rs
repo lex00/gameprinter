@@ -75,9 +75,15 @@ impl Player {
     /// Powers on the set in a MAME zip.
     pub fn new(zip: &[u8]) -> Result<Self, String> {
         let rom = Romset::from_zip(zip).map_err(text)?;
-        let tapper = Tapper::power_on(&rom);
+        Ok(Self::from_romset(&rom))
+    }
+
+    /// Powers on a set already read (a test's made-up one,
+    /// gp_arcade::testrom).
+    pub fn from_romset(rom: &Romset) -> Self {
+        let tapper = Tapper::power_on(rom);
         let pictures = vec![tapper.picture_hash()];
-        Ok(Self {
+        Self {
             tapper,
             log: InputLog::new_arcade(rom.name, COLUMNS),
             pictures,
@@ -85,27 +91,40 @@ impl Player {
             rgba: vec![0; RGBA_BYTES],
             audio: Vec::new(),
             stick: FourWay::default(),
-        })
+        }
     }
 
     /// Powers on to replay `log`, an arcade log of the same set.
     pub fn replay(zip: &[u8], log: &str) -> Result<Self, String> {
-        let script = InputLog::parse(log).map_err(text)?;
         let mut p = Self::new(zip)?;
+        p.script(log)?;
+        Ok(p)
+    }
+
+    /// Takes `log`, an arcade log of the same set, as the log
+    /// [`Player::advance`] and [`Player::run_to`] play: from the frame the
+    /// player is at, so after a [`Player::restore`] it plays on from there.
+    pub fn script(&mut self, log: &str) -> Result<(), String> {
+        let script = InputLog::parse(log).map_err(text)?;
         match &script.arcade {
-            Some(a) if Some(a) == p.log.arcade.as_ref() => {}
+            Some(a) if Some(a) == self.log.arcade.as_ref() => {}
             Some(a) => {
                 return Err(format!(
                     "the log is of {} with columns {}; this is {} with {COLUMNS}",
                     a.system,
                     a.columns,
-                    p.system()
+                    self.system()
                 ));
             }
             None => return Err("an NES input log can't play on an arcade board".into()),
         }
-        p.script = Some(script);
-        Ok(p)
+        self.script = Some(script);
+        Ok(())
+    }
+
+    /// What was played, as an input log.
+    pub fn log(&self) -> &InputLog {
+        &self.log
     }
 
     /// The MAME set being played.

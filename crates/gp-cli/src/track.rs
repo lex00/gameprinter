@@ -501,21 +501,15 @@ pub(crate) fn ids_from_slots(t: &mut Tracked, slots: &SlotIds) -> Result<usize> 
         .map(|tr| tr.positions.iter().map(|p| p[0] as u64).collect())
         .collect();
     let mut counts: BTreeMap<usize, BTreeMap<u8, usize>> = BTreeMap::new();
-    let table = gp_nes::recording::field_table(&t.opened.store, &t.opened.manifest)?;
-    let mut source = TraceSource {
-        opened: &t.opened,
-        table,
-        range: t.range.clone(),
-        pads: t.pads.clone(),
-        lag: 0,
-    };
+    let base = ram_base(t);
+    let mut source = ram_source(t)?;
     source
         .scan(&mut |f| {
             for (&track, &slot) in &want {
                 if !frames[track].contains(&f.frame) {
                     continue;
                 }
-                let at = |a: u16| f.ram.get(usize::from(a + slot)).copied().unwrap_or(0);
+                let at = |a: u16| ram_at(f.ram, base, a + slot);
                 if at(slots.active) != 0 {
                     *counts
                         .entry(track)
@@ -526,6 +520,7 @@ pub(crate) fn ids_from_slots(t: &mut Tracked, slots: &SlotIds) -> Result<usize> 
             }
         })
         .map_err(anyhow::Error::msg)?;
+    drop(source);
     let mut filled = 0;
     for (track, c) in counts {
         if let Some((&id, _)) = c.iter().max_by_key(|&(id, n)| (*n, std::cmp::Reverse(*id))) {
@@ -560,6 +555,42 @@ impl PlayerAt {
     }
 }
 
+/// Where the RAM a tracked recording's frames give starts: 0 on the NES,
+/// E000 (the work RAM) on an arcade board, whose mapping names its bytes
+/// by the main CPU's addresses.
+fn ram_base(t: &Tracked) -> u16 {
+    if t.opened.is_arcade() { 0xe000 } else { 0 }
+}
+
+/// The byte at address `a` of RAM that starts at `base`; 0 outside it.
+fn ram_at(ram: &[u8], base: u16, a: u16) -> u8 {
+    a.checked_sub(base)
+        .and_then(|i| ram.get(usize::from(i)))
+        .copied()
+        .unwrap_or(0)
+}
+
+/// The tracked frames again, for reading their RAM: from a gp-nes trace,
+/// or an arcade recording's.
+fn ram_source(t: &Tracked) -> Result<Box<dyn Source + '_>> {
+    Ok(if t.opened.is_arcade() {
+        Box::new(ArcadeSource {
+            opened: &t.opened,
+            table: crate::arcade_rec::field_table_of(&t.opened.store, &t.opened.manifest)?,
+            range: t.range.clone(),
+            pads: t.pads.clone(),
+        })
+    } else {
+        Box::new(TraceSource {
+            opened: &t.opened,
+            table: gp_nes::recording::field_table(&t.opened.store, &t.opened.manifest)?,
+            range: t.range.clone(),
+            pads: t.pads.clone(),
+            lag: 0,
+        })
+    })
+}
+
 /// When the tracker found no player, adds one from the mapping's player
 /// fields: its position each frame read from RAM, so the feel of a game
 /// whose player the sprite tracker can't pick out (one drawn in pieces
@@ -568,20 +599,14 @@ pub(crate) fn player_from_mapping(t: &mut Tracked, at: &PlayerAt) -> Result<bool
     if t.report.tracks.iter().any(|tr| tr.player) {
         return Ok(false);
     }
-    let table = gp_nes::recording::field_table(&t.opened.store, &t.opened.manifest)?;
     let mut positions = Vec::new();
-    let mut source = TraceSource {
-        opened: &t.opened,
-        table,
-        range: t.range.clone(),
-        pads: t.pads.clone(),
-        lag: 0,
-    };
+    let base = ram_base(t);
+    let mut source = ram_source(t)?;
     let read = |ram: &[u8], bytes: &[u16]| -> i64 {
         bytes
             .iter()
             .enumerate()
-            .map(|(i, &a)| i64::from(ram.get(usize::from(a)).copied().unwrap_or(0)) << (8 * i))
+            .map(|(i, &a)| i64::from(ram_at(ram, base, a)) << (8 * i))
             .sum()
     };
     source
@@ -589,6 +614,7 @@ pub(crate) fn player_from_mapping(t: &mut Tracked, at: &PlayerAt) -> Result<bool
             positions.push([f.frame as i64, read(f.ram, &at.x), read(f.ram, &at.y)]);
         })
         .map_err(anyhow::Error::msg)?;
+    drop(source);
     if positions.is_empty() {
         return Ok(false);
     }
@@ -609,4 +635,62 @@ pub(crate) fn player_from_mapping(t: &mut Tracked, at: &PlayerAt) -> Result<bool
         positions,
     });
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gp_runtime::Runtime as _;
+
+    /// An arcade recording's player read from the mapping's bytes, by the
+    /// main CPU's addresses: a made-up set that copies input port 1 into
+    /// E000 each frame, recorded with the stick pushed now and then, and
+    /// its "player" x the byte at E000. The rows are what the board reads.
+    #[test]
+    fn an_arcade_player_is_read_from_the_mapping() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = crate::test_paths(home.path());
+        let store = gp_evidence::Store::open(&paths.store).unwrap();
+        let set = gp_arcade::testrom::busy();
+        let text =
+            "gp-arcade-input 0\nsystem test\ncolumns CSRLDUT\n5 .......\n5 ..R....\n5 ...L...\n";
+        let input = gp_evidence::InputLog::parse(text).unwrap();
+        let rec = crate::arcade_rec::record(
+            &store,
+            crate::arcade_rec::Request {
+                set: &set,
+                source_id: None,
+                input: &input,
+                checkpoint_interval: 5,
+                capture: gp_nes::recording::Capture::ALL,
+                provenance: gp_evidence::manifest::Provenance::Scripted,
+                name: "busy".into(),
+                created_at: "2026-11-14T00:00:00Z".into(),
+                notes: None,
+            },
+        )
+        .unwrap();
+        let entry: gp_evidence::recordings::IndexEntry = serde_json::from_value(json!({
+            "id": rec.id, "created_at": "2026-11-14T00:00:00Z", "frames": 15, "name": "busy",
+        }))
+        .unwrap();
+        gp_evidence::recordings::append(&store, &entry).unwrap();
+        let mut t = tracked(&paths, &rec.id.to_hex(), "1..", 0).unwrap();
+        let at = PlayerAt {
+            x: vec![0xe000],
+            y: vec![0xe003],
+        };
+        assert!(player_from_mapping(&mut t, &at).unwrap());
+        let player = t.report.tracks.iter().find(|tr| tr.player).unwrap();
+        let mut o = gp_arcade::protocol::ArcadeRuntime::load(&set);
+        let mut want = Vec::new();
+        for f in crate::run::frames(&input) {
+            o.step(&[f]).unwrap();
+            let e = o.query("ram[0xe000]").unwrap();
+            want.push(e[0].value.as_int().unwrap());
+        }
+        let got: Vec<i64> = player.positions.iter().map(|p| p[1]).collect();
+        assert_eq!(got, want);
+        assert!(got.iter().any(|&x| x != got[0]), "{got:?}");
+    }
 }

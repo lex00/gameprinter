@@ -21,6 +21,12 @@ pub mod wire;
 /// The WIT package this crate mirrors.
 pub const WIT_PACKAGE: &str = "game-printer:runtime@0.4.0";
 
+/// The package of wit/game/game.wit a game's module built from this tool's
+/// kit exports. A module answers `info` (`wire::INFO`) with
+/// [`WIT_PACKAGE`] and, from 0.2.0 on, this after it; a module built
+/// before says only the first.
+pub const GAME_WIT_PACKAGE: &str = "game-printer:game@0.2.0";
+
 /// A selector or model path, such as `ram[0x0770]` or `cpu.pc` ([`select`]).
 pub type Path = String;
 
@@ -266,6 +272,21 @@ pub trait Runtime: Sized {
     // Explain: the model rule, generated code or original routine behind a value.
 
     fn explain(&self, p: &str) -> Vec<String>;
+}
+
+/// Several paths of one frame read at once: each selector's values as
+/// [`Runtime::query`] gives them, without their paths, or its error. A
+/// game's module answers with one call (`query-values` in
+/// wit/game/game.wit); any other runtime reads each path in turn, which is
+/// what the provided method does. Not part of [`Runtime`], which mirrors
+/// the runtime protocol and nothing else.
+pub trait QueryValues: Runtime {
+    fn query_values(&self, selectors: &[String]) -> Vec<Result<Vec<Value>, String>> {
+        selectors
+            .iter()
+            .map(|s| Ok(self.query(s)?.into_iter().map(|e| e.value).collect()))
+            .collect()
+    }
 }
 
 /// The input for the `i`th frame of a run, holding the last one given past

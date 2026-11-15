@@ -153,7 +153,7 @@ A game with hooks ships one Wasm module: gp-sim, the interpreter core, gp-presen
 | `gp-package` | (above) The format and the local store | none |
 | `gp-web-registry` | What the page asks of a registry, answered by the code gp uses: it says which key it needs next, the page fetches it and asks again, so no check is written twice | gp-package |
 
-A registry is static files: a folder, a git repo (`git:PATH`), an S3 bucket, or an `https://` address read for checking ([docs/registry-backends.md](docs/registry-backends.md)). `gp registry init`, `publish`, `reindex`, `check` and `serve` work it. Publishing compares every file with each ROM the package names, and 32 matching bytes stop it. Signing is off unless a source opts in with a root key in `scripts/web/sources.toml`; hashes are always checked. The public registry is `lex00/gp-registry`, unsigned, read at its raw GitHub address.
+A registry is static files: a folder, a git repo (`git:PATH`), an S3 bucket, or an `https://` address read for checking ([docs/registry-backends.md](docs/registry-backends.md)). `gp registry init`, `publish`, `reindex`, `grant`, `grants`, `yank`, `check` and `serve` work it. Publishing compares every file with each ROM the package names, and 32 matching bytes stop it. Signing is off unless a source opts in with a root key in `scripts/web/sources.toml`; hashes are always checked. The public registry is `lex00/gp-registry`, unsigned, read at its raw GitHub address.
 
 ### The page
 

@@ -55,7 +55,14 @@ pub struct BlindArgs {
     #[arg(long, default_value_t = 600)]
     pub play_rounds: usize,
     /// The decision server for the search.
-    #[arg(long, default_value = "http://127.0.0.1:7720")]
+    /// Default: $GP_LAYA_URL when it is set (the address gp serve and gp_run
+    /// keep Laya at), else http://127.0.0.1:7720.
+    #[arg(
+        long,
+        env = "GP_LAYA_URL",
+        hide_env_values = true,
+        default_value = "http://127.0.0.1:7720"
+    )]
     pub decide: String,
     /// The asset map, for the level: its grid and tileset are lifted from
     /// the ROM and tested against the measured contacts.

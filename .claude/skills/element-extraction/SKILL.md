@@ -28,6 +28,9 @@ Most of the code-reading tools read the NES's 6502 code. On an arcade game (Tapp
 
 `gp agent brief --run GAME --clip ID` carries step 3's table into an agent's brief: what the original's code read to write the first wrong measure.
 
+When a person points at something on the page and asks what it is, or reports something wrong about a spot, start with `gp element explain --run GAME --clip ID --frame F --at X,Y` (the turn names the exact call): it gives steps 1 to 3 for that spot at once, the sprite or tile drawn there, the mapping's object, the routine that drew it and the one that moves it with every input it read, and whether the model agrees on that frame ([docs/element.md](../../../docs/element.md), "What is at a spot").
+Where it says "Not determined", that is the step to do by hand or the tool to fix; don't fill the gap with a guess.
+
 ## Rules
 
 - Code before clips. Start from steps 1 to 4. A clip that wasn't chosen to vary an input or take a branch is a sample, not a check.

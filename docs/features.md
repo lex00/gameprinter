@@ -6,7 +6,7 @@ A feature is an optional part of a format with a name. A model lists the ones it
 
 ## Core
 
-140 features.
+145 features.
 
 | Feature | Since | What | Paths |
 |---|---|---|---|
@@ -64,6 +64,11 @@ A feature is an optional part of a format with a name. A model lists the ones it
 | `present.screens` |  | Whole screens shown in place of the level while a rule state holds, from update strings, with sprites a counter moves | `present.screens` |
 | `present.screens_when` |  | A screen shown in place of the level only while counters are in ranges | `present.screens.when` |
 | `present.sprite_order` |  | Each entity's place in the console's sprite table in a level, which decides the sprites the sprite limit drops on a crowded line | `levels.*.present.sprite_order` |
+| `asset.board` |  | The asset kinds of an arcade board's own pictures (`board-tiles`, `board-sprites`, `board-screen`, `board-palette`, `board-font`), lifted from the player's romset | `assets.*.kind=board-tiles`, `assets.*.kind=board-sprites`, `assets.*.kind=board-screen`, `assets.*.kind=board-palette`, `assets.*.kind=board-font` |
+| `sprite.board` |  | A body drawn as one of an arcade board's sprites, its picture and flags read from its words or fixed | `entities.*.board_sprite` |
+| `level.board` |  | A level drawn as an arcade board draws its picture: its background tile layer from a whole screen, in the board's colours | `levels.*.present.board` |
+| `level.board.looks` |  | A level drawn by an arcade board with other looks, a screen and colours each, chosen by the model's counters as the frame is drawn | `levels.*.present.board.looks` |
+| `level.board.counters` |  | Counters drawn into an arcade board's tile layer, as digits or as one tile repeated, with tile codes lifted from the player's romset | `levels.*.present.board.counters`, `levels.*.present.board.repeats` |
 | `present.effect_order` |  | Each effect's place in the console's sprite table in a level, by the event that starts it, which decides what it is painted over and under | `levels.*.present.effect_order` |
 | `present.sprites_off` |  | Rule states in which the console's sprite layer is off: no sprite shows | `present.screen.sprites_off` |
 | `present.hidden` |  | Bodies not drawn while a rule state holds and counters are in ranges: given entity types, the whole sprite layer, or the HUD | `present.hidden` |
@@ -282,7 +287,7 @@ A feature is an optional part of a format with a name. A model lists the ones it
 
 ## State mapping
 
-65 features.
+68 features.
 
 | Feature | Since | What | Paths |
 |---|---|---|---|
@@ -320,6 +325,8 @@ A feature is an optional part of a format with a name. A model lists the ones it
 | `slot.rest_word` | schema 22 | A slot rest's `word`, the slot's own word, read for a taken slot too | `slots.rest.path=word`, `slots.group.rest.path=word` |
 | `cells.becomes` |  | The kind each byte of the level grid gives a cell of `[cells]`'s kinds: a used block's byte is a solid cell | `cells.becomes` |
 | `slots.field.stride` |  | A slot field's `stride`, its bytes from one slot to the next, for a game that keeps an object's values a record apart, as a sprite buffer does | `slots.field.stride`, `slots.group.field.stride` |
+| `slots.group.presentation` |  | A slot group that is presentation only: its objects are carried into a start and drawn, and no run pairs or measures them | `slots.group.presentation` |
+| `slots.field.strides` |  | A slot field's `strides`, a step from one slot to the next for each byte it reads, for a value made of bytes from records that repeat at different steps | `slots.field.strides`, `slots.group.field.strides`, `slots.kind.field.strides`, `slots.group.kind.field.strides` |
 | `slots.no_id` |  | Slots with no `id`: every slot's ID is 0, for slots that hold one kind of object. Found only by being listed, as `ticks` is |  |
 | `slots.no_clock` |  | Slots with no `clock`: their bodies step once a frame, and a start leaves the model's frame count as it is, for a game that keeps no frame counter. Found only by being listed, as `ticks` is |  |
 | `slots.active_stride` |  | The slots' flag bytes a stride apart, as a slot field's | `slots.active_stride`, `slots.group.active_stride` |
@@ -351,6 +358,7 @@ A feature is an optional part of a format with a name. A model lists the ones it
 | `field.machine` |  | A field's `machine`: a selector of the original's runtime protocol whose number is the field's, for state the console keeps outside memory, such as gp-nes's `nmi.` selectors (where the code the next NMI stops goes on, its entry's CPU cycle and PPU dot) | `field.machine` |
 | `slots.group.name` |  | A slot group's name, by which a derived template's delta merges its groups over its base's | `slots.group.name` |
 | `platform` |  | The original's machine: `arcade` for a romset, whose `ignore` may name any of the main CPU's addresses and which has none of the NES's own parts (`nametable`, `oam`, `oam_tile`, `read_at`) | `platform` |
+| `platform.board_units` |  | `board_units = true`: an arcade model's positions are the board's own units from the screen's top left with y down (half-pixels on Midway's MCR, 256 by 240), the fields' `scale` and `offset` turning the RAM's bytes into them, so the drawers only multiply by the board's unit. Without it an arcade model holds the RAM's bytes as they are | `board_units` |
 
 ## Fidelity contract
 

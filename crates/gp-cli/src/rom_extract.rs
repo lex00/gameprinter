@@ -6,6 +6,15 @@
 //!
 //! A value no rule settles is left null, and an `open` row says what
 //! decides it: a wrong row is worse than an open one.
+//!
+//! [`extract`] is two halves. The NES half runs the ROM ([`run_parts`]:
+//! the 6502 runs, the harvest seeded by them, gp behave and gp-track) and
+//! makes the rows only runs give (runs, RAM, links, estimates, routines,
+//! branches). The harvest half is any CPU's: [`harvest_claims`] places the
+//! RAM bytes the harvest names, and [`harvest_rows`] turns a harvest and
+//! what was placed into elements, states, transitions, constants, facts,
+//! mechanics and the harvest's open rows. The arcade dataset
+//! (crate::arcade_stage0) calls the harvest half with the Z80's harvest.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -22,7 +31,7 @@ use gp_nes::harvest::Harvest;
 
 /// Each RAM byte a rule places: its element, slot, quantity, source and
 /// rule.
-type Owner = BTreeMap<u16, (String, Option<i64>, Option<String>, String, String)>;
+pub(crate) type Owner = BTreeMap<u16, (String, Option<i64>, Option<String>, String, String)>;
 
 /// A `links` row: element, routine, link, pc, bytes, source.
 type LinkRow = (String, String, &'static str, Option<String>, String, String);
@@ -310,15 +319,52 @@ fn rname(harvest_name: &str) -> String {
     }
 }
 
+/// A harvest routine's name in the dataset. The 6502's are all `sub_`
+/// names ([`rname`]); the Z80's reset and interrupt handlers have their
+/// own (`reset`, `irq_0144`), named by the address the harvest gives them.
+fn routine_name(h: &Harvest, harvest_name: &str) -> String {
+    if !harvest_name.starts_with("sub_")
+        && let Some(r) = h.routines.iter().find(|r| r.name == harvest_name)
+    {
+        return r.addr.clone();
+    }
+    rname(harvest_name)
+}
+
 /// `read:` provenance for an instruction address as the harvest writes it.
 fn read_src(pc: &str) -> Option<String> {
     (!pc.is_empty()).then(|| format!("read:{pc}"))
 }
 
-/// A RAM place's base address (`$20,x` -> 0x20).
+/// A RAM place's base address (`$20,x` -> 0x20; the Z80's `E4B2+20k` ->
+/// 0xE4B2).
 fn place_addr(p: &str) -> Option<u16> {
+    place_of(p).map(|(a, _)| a)
+}
+
+/// A RAM place as the harvest writes it: its address, and the step from
+/// one slot's byte to the next's, 0 for a single place. The 6502's are
+/// `$20` and `$20,x` (a slot array, step 1); the Z80's are `E0A0`, `E0A0w`
+/// (a word) and `E4B2+20k` (a record table's field, step 0x20).
+fn place_of(p: &str) -> Option<(u16, u16)> {
+    if p.starts_with('+') {
+        return None;
+    }
     let t = p.trim_start_matches('$');
-    u16::from_str_radix(t.split(',').next()?, 16).ok()
+    let mut parts = t.split(',');
+    if let Ok(a) = u16::from_str_radix(parts.next()?, 16) {
+        return Some((a, u16::from(parts.next().is_some())));
+    }
+    let hex = |s: &str| {
+        (s.len() == 4)
+            .then(|| u16::from_str_radix(s, 16).ok())
+            .flatten()
+    };
+    if let Some(w) = t.strip_suffix('w') {
+        return Some((hex(w)?, 0));
+    }
+    let (a, k) = t.strip_suffix('k')?.split_once('+')?;
+    Some((hex(a)?, u16::from_str_radix(k, 16).ok().filter(|k| *k > 0)?))
 }
 
 fn run_parts(rom: &Path, runs: usize, seed: u64, paths: &gp_evidence::Paths) -> Result<Parts> {
@@ -422,6 +468,8 @@ fn element_kind(name: &str, kind: &str) -> &'static str {
     match (kind, name) {
         ("player", _) => "player",
         ("entity kind", _) => "slots",
+        // The Z80's record tables: a slot a record.
+        (k, _) if k.starts_with("record table") => "slots",
         ("camera", _) => "camera",
         ("hud", _) => "hud",
         ("game rules", _) => "game",
@@ -494,6 +542,467 @@ fn format_of(raw: i64, number: f64) -> Option<&'static str> {
         })
 }
 
+/// Claims a RAM byte for an element: the first claim stands, and a byte two
+/// elements claim is ambiguous (left out once every rule has claimed).
+#[allow(clippy::too_many_arguments)]
+fn claim(
+    a: u16,
+    el: &str,
+    slot: Option<i64>,
+    q: Option<&str>,
+    src: String,
+    rule: &str,
+    owner: &mut Owner,
+    amb: &mut BTreeSet<u16>,
+) {
+    match owner.get(&a) {
+        None => {
+            owner.insert(
+                a,
+                (
+                    el.to_owned(),
+                    slot,
+                    q.map(str::to_owned),
+                    src,
+                    rule.to_owned(),
+                ),
+            );
+        }
+        Some((e, ..)) if e == el => {}
+        Some(_) => {
+            amb.insert(a);
+        }
+    }
+}
+
+/// A fact's number by its path, when the fact is an integer.
+fn fact_num(h: &Harvest, path: &str) -> Option<i64> {
+    h.facts
+        .iter()
+        .find(|f| f.path == path)
+        .and_then(|f| f.value.as_i64())
+}
+
+/// The RAM bytes the harvest alone places in its elements (rules 1 to 3):
+/// the bytes a fact names, a machine's state byte, and a slot element's
+/// indexed bytes. The runs' rules claim after these.
+pub(crate) fn harvest_claims(h: &Harvest, owner: &mut Owner, ambiguous: &mut BTreeSet<u16>) {
+    let element_names: BTreeSet<String> = h.elements.iter().map(|e| e.name.clone()).collect();
+    let fact_num = |path: &str| fact_num(h, path);
+    // 1. Facts that name an element's bytes (`entities.player.bytes.x`).
+    for f in &h.facts {
+        let segs: Vec<&str> = f.path.split('.').collect();
+        let (el, q) = match segs.as_slice() {
+            ["entities", e, "bytes", q] => ((*e).to_owned(), Some(*q)),
+            ["cameras", _, "bytes", q] => ("camera".to_owned(), Some(*q)),
+            _ => continue,
+        };
+        if !element_names.contains(&el) {
+            continue;
+        }
+        let q = q.filter(|q| matches!(*q, "x" | "y" | "count"));
+        let src = f
+            .evidence
+            .first()
+            .and_then(|e| read_src(&e.pc))
+            .unwrap_or_default();
+        let vals: Vec<String> = match &f.value {
+            Value::String(s) => vec![s.clone()],
+            Value::Array(a) => a
+                .iter()
+                .filter_map(|x| x.as_str().map(str::to_owned))
+                .collect(),
+            _ => continue,
+        };
+        let n = fact_num(&format!("entities.{el}.count"));
+        for v in vals {
+            let Some((a, step)) = place_of(&v) else {
+                continue;
+            };
+            if step > 0 {
+                for s in 0..n.unwrap_or(0) {
+                    claim(
+                        a + s as u16 * step,
+                        &el,
+                        Some(s),
+                        q,
+                        src.clone(),
+                        "a fact names the element's bytes",
+                        owner,
+                        ambiguous,
+                    );
+                }
+            } else {
+                claim(
+                    a,
+                    &el,
+                    None,
+                    q,
+                    src.clone(),
+                    "a fact names the element's bytes",
+                    owner,
+                    ambiguous,
+                );
+            }
+        }
+    }
+    // 2. Machines: the byte that holds the state.
+    for m in &h.machines {
+        if let (Some((a, step)), Some(el)) = (place_of(&m.byte), machine_element(&m.path))
+            && element_names.contains(&el)
+        {
+            let src = m
+                .transitions
+                .first()
+                .and_then(|t| read_src(&t.at))
+                .unwrap_or_default();
+            if step > 0 {
+                let n = fact_num(&format!("entities.{el}.count")).unwrap_or(0);
+                for s in 0..n {
+                    claim(
+                        a + s as u16 * step,
+                        &el,
+                        Some(s),
+                        Some("state"),
+                        src.clone(),
+                        "a machine's state byte",
+                        owner,
+                        ambiguous,
+                    );
+                }
+            } else {
+                claim(
+                    a,
+                    &el,
+                    None,
+                    Some("state"),
+                    src,
+                    "a machine's state byte",
+                    owner,
+                    ambiguous,
+                );
+            }
+        }
+    }
+    // 3. A slot element's indexed bytes, one a slot.
+    for e in &h.elements {
+        if e.kind != "entity kind" {
+            continue;
+        }
+        let Some(n) = fact_num(&format!("entities.{}.count", e.name)) else {
+            continue;
+        };
+        for r in &e.mapping {
+            if !r.byte.contains(',') || r.role == "frame counter" {
+                continue;
+            }
+            let Some(a) = place_addr(&r.byte) else {
+                continue;
+            };
+            // Only the slot arrays the element's own facts start at or
+            // after: a sprite table or a level row indexed by the same
+            // register isn't a slot.
+            let base = h
+                .facts
+                .iter()
+                .filter(|f| f.path == format!("entities.{}.bytes.x", e.name))
+                .filter_map(|f| f.value.as_str().and_then(place_addr))
+                .next();
+            let Some(base) = base else { continue };
+            if a < base || a >= base + 0x20 {
+                continue;
+            }
+            for s in 0..n {
+                claim(
+                    a + s as u16,
+                    &e.name,
+                    Some(s),
+                    None,
+                    String::new(),
+                    "a slot array of the element",
+                    owner,
+                    ambiguous,
+                );
+            }
+        }
+    }
+}
+
+/// What the runs placed in RAM, with the harvest's own claims: each byte's
+/// element and quantity, the part of a wider value it is, and a speed
+/// byte's scale. The harvest's rows read it for an element's RAM and a
+/// constant's unit.
+pub(crate) struct Placed<'a> {
+    pub owner: &'a Owner,
+    pub part_of: &'a BTreeMap<u16, &'static str>,
+    pub speed_scale: &'a BTreeMap<u16, u8>,
+}
+
+/// The rows a static harvest gives, whatever CPU it read: elements, state
+/// machines and their transitions, constants, facts, mechanics, and the
+/// harvest's open facts. `placed` is what the runs placed in RAM, with the
+/// harvest's claims ([`harvest_claims`]).
+pub(crate) fn harvest_rows(d: &mut Dataset, sha: &str, h: &Harvest, placed: &Placed) -> Result<()> {
+    let tool = tool();
+    let element_names: BTreeSet<String> = h.elements.iter().map(|e| e.name.clone()).collect();
+    let fact_num = |path: &str| fact_num(h, path);
+    let (owner, part_of, speed_scale) = (placed.owner, placed.part_of, placed.speed_scale);
+    // Each element's RAM bytes: those a rule placed in it.
+    let mut ram_element: BTreeMap<String, usize> = BTreeMap::new();
+    for (e, ..) in owner.values() {
+        *ram_element.entry(e.clone()).or_default() += 1;
+    }
+    for e in &h.elements {
+        let tiles: Vec<Value> = h
+            .facts
+            .iter()
+            .filter(|f| f.path.starts_with(&format!("entities.{}.tile", e.name)))
+            .map(|f| f.value.clone())
+            .collect();
+        d.push(
+            "elements",
+            json!({"rom": sha, "element": e.name, "kind": element_kind(&e.name, &e.kind),
+                   "slots": fact_num(&format!("entities.{}.count", e.name)),
+                   "routines": e.routines.len(), "ram": ram_element.get(&e.name).copied().unwrap_or(0),
+                   "tile_kinds": if tiles.is_empty() { Value::Null } else { json!(serde_json::to_string(&tiles)?) },
+                   "src": e.routines.first().map(|r| format!("read:{}", routine_name(h, r))),
+                   "rule": "routines grouped by the bytes they share", "tool": tool}),
+        )?;
+    }
+
+    // States and transitions.
+    for m in &h.machines {
+        // The machine's element, when the harvest has it as one (the Z80's
+        // has no `rules` element).
+        let el = machine_element(&m.path).filter(|e| element_names.contains(e));
+        let byte = place_addr(&m.byte).unwrap_or(0);
+        for s in &m.states {
+            d.push(
+                "states",
+                json!({"rom": sha, "machine": m.name, "byte": byte, "element": el, "value": s.value,
+                       "state": s.name, "initial": m.initial.as_deref() == Some(s.name.as_str()),
+                       "src": m.transitions.first().and_then(|t| read_src(&t.at)),
+                       "rule": "the values a state byte is compared with and set to", "tool": tool}),
+            )?;
+        }
+        for t in &m.transitions {
+            d.push(
+                "transitions",
+                json!({"rom": sha, "machine": m.name, "from_state": t.from, "to_state": t.to, "pc": t.at,
+                       "routine": routine_name(h, &t.routine), "guards": serde_json::to_string(&t.guards)?,
+                       "after": t.after, "src": read_src(&t.at),
+                       "rule": "a write of the state byte on a path from the other state", "tool": tool}),
+            )?;
+        }
+    }
+
+    // Constants: each read from an instruction, with what a fact says it
+    // is. A fact cites a constant when the instruction the fact's evidence
+    // names is the one that uses the constant (`lda #$D0` then the `sta`
+    // the fact cites) and the constant decodes to the fact's number: one
+    // byte in one of the schema's formats, or two such constants as the
+    // two bytes of an 8.8 number.
+    let mut cited: BTreeMap<String, (&gp_nes::harvest::Fact, f64, &'static str)> = BTreeMap::new();
+    for f in &h.facts {
+        let Some(n) = number_of(&f.value) else {
+            continue;
+        };
+        let used: Vec<&gp_nes::harvest::Constant> = f
+            .evidence
+            .iter()
+            .flat_map(|e| {
+                h.constants
+                    .iter()
+                    .filter(move |c| c.routine == e.routine && c.then == e.insn)
+            })
+            .collect();
+        if let [a, b] = used.as_slice() {
+            let pairs = [(a, b), (b, a)];
+            let fits: Vec<_> = pairs
+                .iter()
+                .filter(|(hi, lo)| {
+                    let raw = i64::from(hi.value) << 8 | i64::from(lo.value);
+                    let s16 = if raw >= 0x8000 { raw - 0x10000 } else { raw };
+                    (s16 as f64 / 256.0 - n).abs() < 1e-9
+                })
+                .collect();
+            if let [(hi, lo)] = fits.as_slice() {
+                cited.entry(hi.pc.clone()).or_insert((f, n, "8.8 hi"));
+                cited.entry(lo.pc.clone()).or_insert((f, n, "8.8 lo"));
+                continue;
+            }
+        }
+        let singles: Vec<_> = used
+            .iter()
+            .filter_map(|c| Some((c, format_of(i64::from(c.value), n)?)))
+            .collect();
+        if let [(c, fm)] = singles.as_slice() {
+            cited.entry(c.pc.clone()).or_insert((f, n, fm));
+        }
+    }
+    // The RAM place each instruction's constant is compared with, from the
+    // harvest's open facts (`bytes`), and the unit each placed byte holds.
+    let compared_at: BTreeMap<String, String> = h
+        .open
+        .iter()
+        .filter(|o| !o.pc.is_empty() && o.bytes.len() == 1)
+        .map(|o| (o.pc.clone(), o.bytes[0].clone()))
+        .collect();
+    let unit_of = |place: &str| -> Option<(&'static str, String)> {
+        if place.contains(',') {
+            return None;
+        }
+        let a = place_addr(place)?;
+        let (el, _, q, _, _) = owner.get(&a)?;
+        // A byte that is a whole value or the low byte of a position, or a
+        // whole speed: its unit is pixels, signed for a speed.
+        let part = part_of.get(&a).copied();
+        match (q.as_deref()?, part) {
+            ("x" | "y", None | Some("lo")) => Some(("u8", el.clone())),
+            ("speed_x" | "speed_y", None | Some("whole")) => {
+                let fm = match speed_scale.get(&a).copied().unwrap_or(1) {
+                    2 => "7.1",
+                    4 => "6.2",
+                    8 => "5.3",
+                    16 => "4.4",
+                    _ => "s8",
+                };
+                Some((fm, el.clone()))
+            }
+            _ => None,
+        }
+    };
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for c in &h.constants {
+        if !seen.insert(c.pc.clone()) {
+            continue;
+        }
+        let op = c.insn.split(' ').next().unwrap_or("").to_owned();
+        let (mut format, mut number, mut quantity, mut mechanic, mut parameter, mut element) =
+            (None, None, None, None, None, None);
+        let mut rule = format!("a constant {} ({})", c.what, c.then);
+        if let Some((f, n, fm)) = cited.get(&c.pc) {
+            format = Some(fm.split(' ').next().unwrap_or(fm));
+            number = Some(*n);
+            element = fact_element(&f.path, &element_names);
+            if let Some((m, prm)) = mechanic_of(&f.path) {
+                quantity = quantity_of_param(&prm);
+                mechanic = Some(m);
+                parameter = Some(prm);
+            }
+            rule = format!("{} ({})", f.rule, f.path);
+        }
+        // A constant stored into a byte whose unit the runs gave, or
+        // compared with one: the number in that unit.
+        if number.is_none() {
+            let place = if c.what == "stored" {
+                c.then
+                    .split_once(' ')
+                    .filter(|(m, _)| m.starts_with("st"))
+                    .map(|(_, a)| a.to_owned())
+            } else if op.starts_with("cp") || op == "cmp" {
+                compared_at.get(&c.pc).cloned()
+            } else {
+                None
+            };
+            // The element isn't the byte's: comparing the player's y with
+            // a kill line is the level's fact.
+            if let Some((fm, _)) = place.as_deref().and_then(unit_of) {
+                let raw = i64::from(c.value);
+                let signed = if fm != "u8" && raw >= 128 {
+                    raw - 256
+                } else {
+                    raw
+                } as f64;
+                let scale = match fm {
+                    "7.1" => 2.0,
+                    "6.2" => 4.0,
+                    "5.3" => 8.0,
+                    "4.4" => 16.0,
+                    _ => 1.0,
+                };
+                number = Some(signed / scale);
+                format = Some(fm);
+                rule = format!(
+                    "a constant {} with {}, a byte the runs give a unit",
+                    if c.what == "stored" {
+                        "stored"
+                    } else {
+                        "compared"
+                    },
+                    place.unwrap_or_default()
+                );
+            }
+        }
+        let compared = (op.starts_with("cp") || op == "cmp")
+            .then(|| c.then.split_once(' ').map(|x| x.1.to_owned()))
+            .flatten();
+        d.push(
+            "constants",
+            json!({"rom": sha, "pc": c.pc, "entry": 0, "routine": routine_name(h, &c.routine), "op": op,
+                   "raw": c.value, "format": format, "number": number, "quantity": quantity,
+                   "element": element, "mechanic": mechanic, "parameter": parameter,
+                   "compared": compared.filter(|s| s.starts_with('$')),
+                   "src": read_src(&c.pc), "rule": rule, "tool": tool}),
+        )?;
+    }
+
+    // Facts and mechanics.
+    let mut mech_rows: BTreeSet<(String, String, String, String)> = BTreeSet::new();
+    for f in &h.facts {
+        let number = number_of(&f.value);
+        let src: Vec<String> = f.evidence.iter().filter_map(|e| read_src(&e.pc)).collect();
+        d.push(
+            "facts",
+            json!({"rom": sha, "path": f.path, "value": f.value.to_string(), "number": number,
+                   "element": fact_element(&f.path, &element_names), "settled_by": "read",
+                   "src": serde_json::to_string(&src)?, "rule": f.rule, "tool": tool}),
+        )?;
+        if let Some((m, prm)) = mechanic_of(&f.path)
+            && let Some(el) = fact_element(&f.path, &element_names)
+        {
+            mech_rows.insert((el, m, prm, f.value.to_string()));
+        }
+    }
+    let mut parts: BTreeSet<(String, String)> = BTreeSet::new();
+    for (el, m, prm, v) in &mech_rows {
+        parts.insert((el.clone(), m.clone()));
+        d.push(
+            "mechanics",
+            json!({"rom": sha, "element": el, "mechanic": m, "option": prm, "value": v,
+                   "src": null, "rule": "a fact of the part", "tool": tool}),
+        )?;
+    }
+    for (el, m) in parts {
+        d.push(
+            "mechanics",
+            json!({"rom": sha, "element": el, "mechanic": m, "option": "*", "value": null,
+                   "src": null, "rule": "the element has facts of the part", "tool": tool}),
+        )?;
+    }
+
+    // Open facts the harvest and the runs left.
+    for o in &h.open {
+        let settle = if o.why.contains("gp behave") {
+            "trace"
+        } else if o.why.contains("bank") {
+            "bank"
+        } else {
+            "trace"
+        };
+        d.push(
+            "open",
+            json!({"rom": sha, "what": o.what, "element": null,
+                   "routine": (!o.routine.is_empty()).then(|| routine_name(h, &o.routine)),
+                   "pc": o.pc, "bytes": serde_json::to_string(&o.bytes)?, "why": o.why,
+                   "settle_by": settle,
+                   "src": read_src(&o.pc).unwrap_or_else(|| "run".into()),
+                   "rule": "a fact no rule settles", "tool": tool}),
+        )?;
+    }
+    Ok(())
+}
+
 /// A fact's value as one number: `0.25`, `"0.25"` the same.
 pub(crate) fn extract(
     rom: &Path,
@@ -558,12 +1067,6 @@ pub(crate) fn extract(
 
     // Elements.
     let element_names: BTreeSet<String> = p.h.elements.iter().map(|e| e.name.clone()).collect();
-    let fact_num = |path: &str| -> Option<i64> {
-        p.h.facts
-            .iter()
-            .find(|f| f.path == path)
-            .and_then(|f| f.value.as_i64())
-    };
 
     // RAM: which element and quantity each byte is, where a rule says so.
     // owner: byte -> (element, slot, quantity, src, rule)
@@ -571,168 +1074,8 @@ pub(crate) fn extract(
     // links rows: element, routine, link, pc, bytes, src.
     let mut link_rows: Vec<LinkRow> = Vec::new();
     let mut ambiguous: BTreeSet<u16> = BTreeSet::new();
-    let claim = |a: u16,
-                 el: &str,
-                 slot: Option<i64>,
-                 q: Option<&str>,
-                 src: String,
-                 rule: &str,
-                 owner: &mut Owner,
-                 amb: &mut BTreeSet<u16>| {
-        match owner.get(&a) {
-            None => {
-                owner.insert(
-                    a,
-                    (
-                        el.to_owned(),
-                        slot,
-                        q.map(str::to_owned),
-                        src,
-                        rule.to_owned(),
-                    ),
-                );
-            }
-            Some((e, ..)) if e == el => {}
-            Some(_) => {
-                amb.insert(a);
-            }
-        }
-    };
-    // 1. Facts that name an element's bytes (`entities.player.bytes.x`).
-    for f in &p.h.facts {
-        let segs: Vec<&str> = f.path.split('.').collect();
-        let (el, q) = match segs.as_slice() {
-            ["entities", e, "bytes", q] => ((*e).to_owned(), Some(*q)),
-            ["cameras", _, "bytes", q] => ("camera".to_owned(), Some(*q)),
-            _ => continue,
-        };
-        if !element_names.contains(&el) {
-            continue;
-        }
-        let q = q.filter(|q| matches!(*q, "x" | "y" | "count"));
-        let src = f
-            .evidence
-            .first()
-            .and_then(|e| read_src(&e.pc))
-            .unwrap_or_default();
-        let vals: Vec<String> = match &f.value {
-            Value::String(s) => vec![s.clone()],
-            Value::Array(a) => a
-                .iter()
-                .filter_map(|x| x.as_str().map(str::to_owned))
-                .collect(),
-            _ => continue,
-        };
-        let n = fact_num(&format!("entities.{el}.count"));
-        for v in vals {
-            let Some(a) = place_addr(&v) else { continue };
-            if v.contains(',') {
-                for s in 0..n.unwrap_or(0) {
-                    claim(
-                        a + s as u16,
-                        &el,
-                        Some(s),
-                        q,
-                        src.clone(),
-                        "a fact names the element's bytes",
-                        &mut owner,
-                        &mut ambiguous,
-                    );
-                }
-            } else {
-                claim(
-                    a,
-                    &el,
-                    None,
-                    q,
-                    src.clone(),
-                    "a fact names the element's bytes",
-                    &mut owner,
-                    &mut ambiguous,
-                );
-            }
-        }
-    }
-    // 2. Machines: the byte that holds the state.
-    for m in &p.h.machines {
-        if let (Some(a), Some(el)) = (place_addr(&m.byte), machine_element(&m.path))
-            && element_names.contains(&el)
-        {
-            let src = m
-                .transitions
-                .first()
-                .and_then(|t| read_src(&t.at))
-                .unwrap_or_default();
-            if m.byte.contains(',') {
-                let n = fact_num(&format!("entities.{el}.count")).unwrap_or(0);
-                for s in 0..n {
-                    claim(
-                        a + s as u16,
-                        &el,
-                        Some(s),
-                        Some("state"),
-                        src.clone(),
-                        "a machine's state byte",
-                        &mut owner,
-                        &mut ambiguous,
-                    );
-                }
-            } else {
-                claim(
-                    a,
-                    &el,
-                    None,
-                    Some("state"),
-                    src,
-                    "a machine's state byte",
-                    &mut owner,
-                    &mut ambiguous,
-                );
-            }
-        }
-    }
-    // 3. A slot element's indexed bytes, one a slot.
-    for e in &p.h.elements {
-        if e.kind != "entity kind" {
-            continue;
-        }
-        let Some(n) = fact_num(&format!("entities.{}.count", e.name)) else {
-            continue;
-        };
-        for r in &e.mapping {
-            if !r.byte.contains(',') || r.role == "frame counter" {
-                continue;
-            }
-            let Some(a) = place_addr(&r.byte) else {
-                continue;
-            };
-            // Only the slot arrays the element's own facts start at or
-            // after: a sprite table or a level row indexed by the same
-            // register isn't a slot.
-            let base =
-                p.h.facts
-                    .iter()
-                    .filter(|f| f.path == format!("entities.{}.bytes.x", e.name))
-                    .filter_map(|f| f.value.as_str().and_then(place_addr))
-                    .next();
-            let Some(base) = base else { continue };
-            if a < base || a >= base + 0x20 {
-                continue;
-            }
-            for s in 0..n {
-                claim(
-                    a + s as u16,
-                    &e.name,
-                    Some(s),
-                    None,
-                    String::new(),
-                    "a slot array of the element",
-                    &mut owner,
-                    &mut ambiguous,
-                );
-            }
-        }
-    }
+    // 1 to 3: what the harvest alone places.
+    harvest_claims(&p.h, &mut owner, &mut ambiguous);
     // 4. What moves on screen (gp-track over each run's frames): the
     // object the controller moves is the player; objects whose bytes sit
     // at one stride are a group of slots, named by their x array as the
@@ -1336,23 +1679,6 @@ pub(crate) fn extract(
         }
     }
 
-    for e in &p.h.elements {
-        let tiles: Vec<Value> =
-            p.h.facts
-                .iter()
-                .filter(|f| f.path.starts_with(&format!("entities.{}.tile", e.name)))
-                .map(|f| f.value.clone())
-                .collect();
-        d.push(
-            "elements",
-            json!({"rom": sha, "element": e.name, "kind": element_kind(&e.name, &e.kind),
-                   "slots": fact_num(&format!("entities.{}.count", e.name)),
-                   "routines": e.routines.len(), "ram": ram_element.get(&e.name).copied().unwrap_or(0),
-                   "tile_kinds": if tiles.is_empty() { Value::Null } else { json!(serde_json::to_string(&tiles)?) },
-                   "src": e.routines.first().map(|r| format!("read:{}", rname(r))),
-                   "rule": "routines grouped by the bytes they share", "tool": tool}),
-        )?;
-    }
     // Estimates: values the runs measure close but not exactly, to be
     // refined by later stages. Each is the median of its samples, with
     // their spread.
@@ -1721,235 +2047,16 @@ pub(crate) fn extract(
         }
         prev = Some(ins);
     }
-
-    // States and transitions.
-    for m in &p.h.machines {
-        let el = machine_element(&m.path);
-        let byte = place_addr(&m.byte).unwrap_or(0);
-        for s in &m.states {
-            d.push(
-                "states",
-                json!({"rom": sha, "machine": m.name, "byte": byte, "element": el, "value": s.value,
-                       "state": s.name, "initial": m.initial.as_deref() == Some(s.name.as_str()),
-                       "src": m.transitions.first().and_then(|t| read_src(&t.at)),
-                       "rule": "the values a state byte is compared with and set to", "tool": tool}),
-            )?;
-        }
-        for t in &m.transitions {
-            d.push(
-                "transitions",
-                json!({"rom": sha, "machine": m.name, "from_state": t.from, "to_state": t.to, "pc": t.at,
-                       "routine": rname(&t.routine), "guards": serde_json::to_string(&t.guards)?,
-                       "after": t.after, "src": read_src(&t.at),
-                       "rule": "a write of the state byte on a path from the other state", "tool": tool}),
-            )?;
-        }
-    }
-
-    // Constants: each read from an instruction, with what a fact says it
-    // is. A fact cites a constant when the instruction the fact's evidence
-    // names is the one that uses the constant (`lda #$D0` then the `sta`
-    // the fact cites) and the constant decodes to the fact's number: one
-    // byte in one of the schema's formats, or two such constants as the
-    // two bytes of an 8.8 number.
-    let mut cited: BTreeMap<String, (&gp_nes::harvest::Fact, f64, &'static str)> = BTreeMap::new();
-    for f in &p.h.facts {
-        let Some(n) = number_of(&f.value) else {
-            continue;
-        };
-        let used: Vec<&gp_nes::harvest::Constant> = f
-            .evidence
-            .iter()
-            .flat_map(|e| {
-                p.h.constants
-                    .iter()
-                    .filter(move |c| c.routine == e.routine && c.then == e.insn)
-            })
-            .collect();
-        if let [a, b] = used.as_slice() {
-            let pairs = [(a, b), (b, a)];
-            let fits: Vec<_> = pairs
-                .iter()
-                .filter(|(hi, lo)| {
-                    let raw = i64::from(hi.value) << 8 | i64::from(lo.value);
-                    let s16 = if raw >= 0x8000 { raw - 0x10000 } else { raw };
-                    (s16 as f64 / 256.0 - n).abs() < 1e-9
-                })
-                .collect();
-            if let [(hi, lo)] = fits.as_slice() {
-                cited.entry(hi.pc.clone()).or_insert((f, n, "8.8 hi"));
-                cited.entry(lo.pc.clone()).or_insert((f, n, "8.8 lo"));
-                continue;
-            }
-        }
-        let singles: Vec<_> = used
-            .iter()
-            .filter_map(|c| Some((c, format_of(i64::from(c.value), n)?)))
-            .collect();
-        if let [(c, fm)] = singles.as_slice() {
-            cited.entry(c.pc.clone()).or_insert((f, n, fm));
-        }
-    }
-    // The RAM place each instruction's constant is compared with, from the
-    // harvest's open facts (`bytes`), and the unit each placed byte holds.
-    let compared_at: BTreeMap<String, String> =
-        p.h.open
-            .iter()
-            .filter(|o| !o.pc.is_empty() && o.bytes.len() == 1)
-            .map(|o| (o.pc.clone(), o.bytes[0].clone()))
-            .collect();
-    let unit_of = |place: &str| -> Option<(&'static str, String)> {
-        if place.contains(',') {
-            return None;
-        }
-        let a = place_addr(place)?;
-        let (el, _, q, _, _) = owner.get(&a)?;
-        // A byte that is a whole value or the low byte of a position, or a
-        // whole speed: its unit is pixels, signed for a speed.
-        let part = part_of.get(&a).copied();
-        match (q.as_deref()?, part) {
-            ("x" | "y", None | Some("lo")) => Some(("u8", el.clone())),
-            ("speed_x" | "speed_y", None | Some("whole")) => {
-                let fm = match speed_scale.get(&a).copied().unwrap_or(1) {
-                    2 => "7.1",
-                    4 => "6.2",
-                    8 => "5.3",
-                    16 => "4.4",
-                    _ => "s8",
-                };
-                Some((fm, el.clone()))
-            }
-            _ => None,
-        }
-    };
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-    for c in &p.h.constants {
-        if !seen.insert(c.pc.clone()) {
-            continue;
-        }
-        let op = c.insn.split(' ').next().unwrap_or("").to_owned();
-        let (mut format, mut number, mut quantity, mut mechanic, mut parameter, mut element) =
-            (None, None, None, None, None, None);
-        let mut rule = format!("a constant {} ({})", c.what, c.then);
-        if let Some((f, n, fm)) = cited.get(&c.pc) {
-            format = Some(fm.split(' ').next().unwrap_or(fm));
-            number = Some(*n);
-            element = fact_element(&f.path, &element_names);
-            if let Some((m, prm)) = mechanic_of(&f.path) {
-                quantity = quantity_of_param(&prm);
-                mechanic = Some(m);
-                parameter = Some(prm);
-            }
-            rule = format!("{} ({})", f.rule, f.path);
-        }
-        // A constant stored into a byte whose unit the runs gave, or
-        // compared with one: the number in that unit.
-        if number.is_none() {
-            let place = if c.what == "stored" {
-                c.then
-                    .split_once(' ')
-                    .filter(|(m, _)| m.starts_with("st"))
-                    .map(|(_, a)| a.to_owned())
-            } else if op.starts_with("cp") || op == "cmp" {
-                compared_at.get(&c.pc).cloned()
-            } else {
-                None
-            };
-            // The element isn't the byte's: comparing the player's y with
-            // a kill line is the level's fact.
-            if let Some((fm, _)) = place.as_deref().and_then(unit_of) {
-                let raw = i64::from(c.value);
-                let signed = if fm != "u8" && raw >= 128 {
-                    raw - 256
-                } else {
-                    raw
-                } as f64;
-                let scale = match fm {
-                    "7.1" => 2.0,
-                    "6.2" => 4.0,
-                    "5.3" => 8.0,
-                    "4.4" => 16.0,
-                    _ => 1.0,
-                };
-                number = Some(signed / scale);
-                format = Some(fm);
-                rule = format!(
-                    "a constant {} with {}, a byte the runs give a unit",
-                    if c.what == "stored" {
-                        "stored"
-                    } else {
-                        "compared"
-                    },
-                    place.unwrap_or_default()
-                );
-            }
-        }
-        let compared = (op.starts_with("cp") || op == "cmp")
-            .then(|| c.then.split_once(' ').map(|x| x.1.to_owned()))
-            .flatten();
-        d.push(
-            "constants",
-            json!({"rom": sha, "pc": c.pc, "entry": 0, "routine": rname(&c.routine), "op": op,
-                   "raw": c.value, "format": format, "number": number, "quantity": quantity,
-                   "element": element, "mechanic": mechanic, "parameter": parameter,
-                   "compared": compared.filter(|s| s.starts_with('$')),
-                   "src": read_src(&c.pc), "rule": rule, "tool": tool}),
-        )?;
-    }
-
-    // Facts and mechanics.
-    let mut mech_rows: BTreeSet<(String, String, String, String)> = BTreeSet::new();
-    for f in &p.h.facts {
-        let number = number_of(&f.value);
-        let src: Vec<String> = f.evidence.iter().filter_map(|e| read_src(&e.pc)).collect();
-        d.push(
-            "facts",
-            json!({"rom": sha, "path": f.path, "value": f.value.to_string(), "number": number,
-                   "element": fact_element(&f.path, &element_names), "settled_by": "read",
-                   "src": serde_json::to_string(&src)?, "rule": f.rule, "tool": tool}),
-        )?;
-        if let Some((m, prm)) = mechanic_of(&f.path)
-            && let Some(el) = fact_element(&f.path, &element_names)
-        {
-            mech_rows.insert((el, m, prm, f.value.to_string()));
-        }
-    }
-    let mut parts: BTreeSet<(String, String)> = BTreeSet::new();
-    for (el, m, prm, v) in &mech_rows {
-        parts.insert((el.clone(), m.clone()));
-        d.push(
-            "mechanics",
-            json!({"rom": sha, "element": el, "mechanic": m, "option": prm, "value": v,
-                   "src": null, "rule": "a fact of the part", "tool": tool}),
-        )?;
-    }
-    for (el, m) in parts {
-        d.push(
-            "mechanics",
-            json!({"rom": sha, "element": el, "mechanic": m, "option": "*", "value": null,
-                   "src": null, "rule": "the element has facts of the part", "tool": tool}),
-        )?;
-    }
-
-    // Open facts the harvest and the runs left.
-    for o in &p.h.open {
-        let settle = if o.why.contains("gp behave") {
-            "trace"
-        } else if o.why.contains("bank") {
-            "bank"
-        } else {
-            "trace"
-        };
-        d.push(
-            "open",
-            json!({"rom": sha, "what": o.what, "element": null,
-                   "routine": (!o.routine.is_empty()).then(|| rname(&o.routine)),
-                   "pc": o.pc, "bytes": serde_json::to_string(&o.bytes)?, "why": o.why,
-                   "settle_by": settle,
-                   "src": read_src(&o.pc).unwrap_or_else(|| "run".into()),
-                   "rule": "a fact no rule settles", "tool": tool}),
-        )?;
-    }
+    harvest_rows(
+        &mut d,
+        &sha,
+        &p.h,
+        &Placed {
+            owner: &owner,
+            part_of: &part_of,
+            speed_scale: &speed_scale,
+        },
+    )?;
     d.sort();
     Ok(d)
 }
@@ -1964,6 +2071,14 @@ mod tests {
         assert_eq!(rname("sub_03_8123"), "03:8123");
         assert_eq!(place_addr("$20,x"), Some(0x20));
         assert_eq!(place_addr("$0200,y"), Some(0x200));
+        assert_eq!(place_of("$20,x"), Some((0x20, 1)));
+        assert_eq!(place_of("$05"), Some((0x05, 0)));
+        assert_eq!(place_of("E4B2+20k"), Some((0xE4B2, 0x20)));
+        assert_eq!(place_of("E0A0w"), Some((0xE0A0, 0)));
+        assert_eq!(place_of("E0A0"), Some((0xE0A0, 0)));
+        // A record's field by its offset names no address.
+        assert_eq!(place_of("+0A"), None);
+        assert_eq!(place_of("(ix+3)"), None);
     }
 
     #[test]

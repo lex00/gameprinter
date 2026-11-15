@@ -191,6 +191,15 @@ class Preview {
     if (!this.has("gp_load_art")) throw new Error("this preview's gp_web.wasm can't draw large art; rebuild it");
     return JSON.parse(this.check(this.run("gp_load_art", enc.encode(text))));
   }
+  // The regions of the stage the game's level kit names (preview.json's
+  // `regions`, [[name, level picture, x, y, w, h], ...]), which a look's
+  // `#+ in REGION` lines are drawn by; the module keeps them for every
+  // look and every restart. False from a module built before them.
+  setRegions(regions) {
+    if (!this.has("gp_set_regions")) return false;
+    this.check(this.run("gp_set_regions", enc.encode(JSON.stringify(regions))));
+    return true;
+  }
   // The look's stage over level picture `pic`, built by the module from
   // the picture's pixels (gp_present::art::stage).
   artStage(pic, w, h, rgba) {
@@ -313,6 +322,25 @@ class Preview {
     this.check(this.run("gp_sound_role", n, wav));
     return true;
   }
+  // A further take of a role (sound/takes/<role>.<n>.wav, issue #30): each
+  // start plays the role's next take. False from a module built before
+  // takes, which plays the role's own file every time.
+  soundRoleTake(name, take, wav) {
+    if (!this.has("gp_sound_role_take")) return false;
+    const n = enc.encode(name);
+    this.check(this.run("gp_sound_role_take", n, take, wav));
+    return true;
+  }
+  // Each start of a role so far, as [frame, role, take]; null from a
+  // module built before takes.
+  soundRoleLog() {
+    if (!this.has("gp_sound_role_log") || this.run("gp_sound_role_log") !== 0) return null;
+    return this.out()
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => l.split(" "))
+      .map(([f, r, k]) => [Number(f), r, Number(k)]);
+  }
   clearSoundRoles() {
     if (this.has("gp_sound_roles_clear")) this.run("gp_sound_roles_clear");
   }
@@ -330,17 +358,25 @@ class Preview {
     this.check(this.run("gp_blake3", bytes));
     return this.out();
   }
-  // The themes of an index this build can draw.
+  // The themes of an index this build can draw, and those it leaves out
+  // with why (gp_present::catalogue::offer): { entries, leftOut }.
   catalogue(index, pictures) {
     const [a, b] = [enc.encode(index), enc.encode(pictures.join("\n"))];
     const out = this.check(this.run("gp_catalogue", a, b));
-    return out
-      .split("\n")
-      .filter((l) => l)
+    const lines = out.split("\n").filter((l) => l);
+    const leftOut = lines
+      .filter((l) => l.startsWith("-\t"))
+      .map((l) => {
+        const [, id, title, reason] = l.split("\t");
+        return { id, title, reason };
+      });
+    const entries = lines
+      .filter((l) => !l.startsWith("-\t"))
       .map((l) => {
         const [id, title, author, pkg, size, preview] = l.split("\t");
         return { id, title, author, package: pkg, size: Number(size), preview };
       });
+    return { entries, leftOut };
   }
   // A package's look files from its manifest, checked against its id.
   packageLook(id, manifest) {
@@ -360,6 +396,114 @@ class Preview {
     return this.check(this.run("gp_run_frames", b));
   }
 }
+
+// An arcade model's board art drawn in the page's own gp_board.wasm
+// (crates/gp-web-board, gp_look::board): the game's module runs the game,
+// and each frame this draws the board's picture from the game's canonical
+// state (gp_state) and the bodies its scene shows, with the lifted files
+// preview.json's `board` lists (under board/). The game's module needs
+// nothing for it.
+class BoardDraw {
+  static async open(bytes) {
+    const { instance } = await WebAssembly.instantiate(bytes, {});
+    return new BoardDraw(instance.exports);
+  }
+  constructor(x) {
+    this.x = x;
+    this.on = false;
+    this.bundle = null;
+    this.art = false;
+  }
+  put(bytes) {
+    const p = this.x.gp_alloc(bytes.length);
+    new Uint8Array(this.x.memory.buffer, p, bytes.length).set(bytes);
+    return [p, bytes.length];
+  }
+  out() {
+    return new Uint8Array(this.x.memory.buffer, this.x.gp_out_ptr(), this.x.gp_out_len());
+  }
+  // The board art of the model in `bundle` (the bytes the game was loaded
+  // from), its presentation text and its files (a Map of name to bytes):
+  // true when the model draws with it. Opened again only for another bundle.
+  load(bundle, presentText, files) {
+    if (bundle === this.bundle) return this.on;
+    const parts = [];
+    for (const [name, bytes] of files) parts.push(enc.encode(name), bytes);
+    const packed = new Uint8Array(parts.reduce((n, b) => n + 4 + b.length, 0));
+    const v = new DataView(packed.buffer);
+    let at = 0;
+    for (const b of parts) {
+      v.setUint32(at, b.length, true);
+      packed.set(b, at + 4);
+      at += 4 + b.length;
+    }
+    const code = this.x.gp_board_open(...this.put(bundle), ...this.put(enc.encode(presentText)), ...this.put(packed));
+    // Opened again, it holds no theme until one is loaded again.
+    this.art = false;
+    if (code !== 0) throw new Error(`the board art didn't load: ${text.decode(this.out())}`);
+    this.on = text.decode(this.out()) === "1";
+    this.bundle = bundle;
+    return this.on;
+  }
+  // The board's picture of the frame with canonical state `state`, the
+  // scene's `shown` bodies (1 drawn, 0 not), as ImageData; null on a level
+  // without board art.
+  frame(state, shown) {
+    const code = this.x.gp_board_frame(...this.put(state), ...this.put(Uint8Array.from(shown)));
+    if (code === 2) return null;
+    if (code !== 0) throw new Error(text.decode(this.out()));
+    return BoardDraw.image(this.out());
+  }
+  // A picture's bytes as ImageData: its size, its pens and its 64 colours;
+  // pen 64 (left to a theme) draws nothing.
+  static image(b) {
+    const [w, h] = [b[0] | (b[1] << 8), b[2] | (b[3] << 8)];
+    const colors = new Uint32Array(65);
+    const pal = 4 + w * h;
+    for (let i = 0; i < 64; i++) colors[i] = (b[pal + i * 4] | (b[pal + i * 4 + 1] << 8) | (b[pal + i * 4 + 2] << 16) | (0xff << 24)) >>> 0;
+    const img = new ImageData(w, h);
+    const px = new Uint32Array(img.data.buffer);
+    for (let i = 0; i < w * h; i++) px[i] = colors[b[4 + i]];
+    return img;
+  }
+  // A large-art theme's rules over the board's named pictures
+  // (docs/formats/board-art.md, "Themes"), as the game module's loadArt
+  // takes them: { files, stages } ("" takes them away). A gp_board.wasm
+  // built before themes can't: an error, so the look isn't offered as drawn.
+  loadArt(artText) {
+    if (!this.x.gp_board_load_art) throw new Error("this page's gp_board.wasm can't draw a theme on an arcade game; rebuild it");
+    const code = this.x.gp_board_load_art(...this.put(enc.encode(artText)));
+    if (code !== 0) throw new Error(text.decode(this.out()));
+    this.art = artText.trim() !== "";
+    return JSON.parse(text.decode(this.out()));
+  }
+  // The frame drawn in the theme: { image, frame }, the board's picture
+  // with what the theme draws left out, and the draws (gp_art_frame's
+  // shape, the picture as ["board"]); null with no theme or no board look.
+  artFrame(state, shown) {
+    const code = this.x.gp_board_art_frame(...this.put(state), ...this.put(Uint8Array.from(shown)));
+    if (code === 2) return null;
+    if (code !== 0) throw new Error(text.decode(this.out()));
+    const b = this.out();
+    const n = b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24);
+    const image = BoardDraw.image(b.subarray(4, 4 + n));
+    return { image, frame: JSON.parse(text.decode(b.subarray(4 + n))) };
+  }
+}
+let boardDraw = null;
+let boardPresent = "";
+const boardFiles = new Map();
+// An arcade model in the board's own units (preview.json's `board_unit`)
+// tells the board's drawing so once it opens.
+let boardUnits = false;
+const loadBoard = (bundle) => {
+  const on = !!boardDraw && boardDraw.load(bundle, boardPresent, boardFiles);
+  if (on && boardUnits) boardDraw.x.gp_board_units(1);
+  return on;
+};
+// Who draws a large-art look: an arcade game's board (gp_board.wasm) when
+// its art is open, else the game's module.
+const artHost = (p) => (boardDraw?.on ? boardDraw : p);
 
 function parseFrames(s) {
   const lines = s.trim().split("\n");
@@ -441,14 +585,54 @@ const webButtons = (a) => mine(a).flatMap((b) => b.standard);
 // The NES buttons from the keyboard: A, B, Select, Start, Up, Down, Left,
 // Right from bit 0, as the Bevy build maps them. Controller 2: M and N for
 // A and B, H Select, Y Start, I J K L the d-pad.
-const KEYS = NES.map(webKeys);
-const KEYS2 = NES2.map(webKeys);
-const PAD = NES.map(webButtons);
+// `stick` is the bits of up, down, left and right, which a gamepad's left
+// stick sets too; `taken` the keys the game has that the shell's table
+// gives an action without Shift (the game's press wins).
+const NES_LAYOUT = { keys: NES.map(webKeys), keys2: NES2.map(webKeys), pad: NES.map(webButtons), stick: [4, 5, 6, 7], taken: new Set() };
+// An arcade cabinet (the model's input device `arcade`, gp_model::Device):
+// coin, start, right, left, down, up and the button from bit 0, the
+// runtime protocol's order. 5 drops a coin and 1 starts, as MAME keys
+// them, and the NES layout's Select and Start keys do too; the stick is the
+// arrows or WASD and the button the NES A keys (X, Space). On a gamepad,
+// Select is the coin, Start starts and A is the button, as on the mechanic
+// page. The mute keys and slot loads on 1 and 5 give way to the game.
+const ARCADE_KEYS = [[...webKeys("select"), "Digit5"], [...webKeys("start"), "Digit1"], webKeys("right"), webKeys("left"), webKeys("down"), webKeys("up"), webKeys("a")];
+const ARCADE_LAYOUT = {
+  keys: ARCADE_KEYS,
+  keys2: [],
+  pad: ["select", "start", "right", "left", "down", "up", "a"].map(webButtons),
+  stick: [5, 4, 3, 2],
+  taken: new Set(["Digit5", "Digit1"]),
+  // What each bit is, for the key hint under the game.
+  names: ["coin", "start", "right", "left", "down", "up", "button"],
+};
+let LAYOUT = NES_LAYOUT;
+// The key hint under the game, from the layout in use, so it can't name a
+// key the game takes: a key as a person reads it ("1", "Shift+1"), the
+// keys the shell's table gives a run of actions as one ("1-4", "2-4"),
+// and the game's own keys that the shell gives way to ("5 coin, 1 start").
+const keyName = (k) => k.replace(/^Digit/, "").replace(/^Key/, "");
+const usableKeys = (action) =>
+  mine(action).flatMap((b) => b.keys.filter((k) => b.shift || !LAYOUT.taken.has(k)).map((k) => `${b.shift ? "Shift+" : ""}${keyName(k)}`));
+function keySpan(actions) {
+  const ks = actions.flatMap(usableKeys);
+  if (!ks.length) return null;
+  const pre = ks[0].startsWith("Shift+") ? "Shift+" : "";
+  const n = ks.map((k) => Number(k.slice(pre.length)));
+  const run = ks.every((k) => k.startsWith(pre)) && n.every((v, i) => Number.isInteger(v) && (i === 0 || v === n[i - 1] + 1));
+  if (run && n.length > 1) return `${pre}${n[0]}-${n.at(-1)}`;
+  return ks.join(", ");
+}
+const takenKeys = () =>
+  [...LAYOUT.taken].map((k) => {
+    const bit = LAYOUT.keys.findIndex((ks) => ks.includes(k));
+    return `${keyName(k)} ${LAYOUT.names?.[bit] ?? "the game's"}`;
+  });
 // Each shell key's action by its code, with Shift held or not.
 const SHELL_KEY = new Map(
   BINDINGS.filter((b) => b.when === "play").flatMap((b) => b.keys.map((k) => [`${b.shift ? "Shift+" : ""}${k}`, b.action])),
 );
-const shellAction = (code, shift) => SHELL_KEY.get(`${shift ? "Shift+" : ""}${code}`);
+const shellAction = (code, shift) => (!shift && LAYOUT.taken.has(code) ? undefined : SHELL_KEY.get(`${shift ? "Shift+" : ""}${code}`));
 const down = new Set();
 let resetPressed = false;
 // Keys pressed since the shell last looked, for the slot and scale keys.
@@ -472,8 +656,9 @@ const padBits = () => {
     const shift = n++ === 0 ? 0 : 8;
     const on = (i) => !!g.buttons[i]?.pressed;
     const [ax, ay] = [g.axes[0] ?? 0, g.axes[1] ?? 0];
-    const stick = [false, false, false, false, ay < -0.5, ay > 0.5, ax < -0.5, ax > 0.5];
-    const set = PAD.map((bs, bit) => bs.some(on) || stick[bit]);
+    const stick = [];
+    [ay < -0.5, ay > 0.5, ax < -0.5, ax > 0.5].forEach((v, i) => (stick[LAYOUT.stick[i]] = v));
+    const set = LAYOUT.pad.map((bs, bit) => bs.some(on) || !!stick[bit]);
     set.forEach((v, bit) => {
       if (v) bits |= 1 << (bit + shift);
     });
@@ -501,6 +686,8 @@ function settingsScreen(p, canvas, ctx, profilesText, looks) {
     },
     show(profile) {
       p.settingsOpen(profilesText, profile);
+      // The look drawn as it opens: a close on another one picks it.
+      this.shown = looks?.current;
       if (looks) p.settingsThemes(looks.choices(), looks.current);
       // The shell's lines and the Saves line, from the page's shell.
       this.fill?.();
@@ -572,7 +759,7 @@ const settingsStore = (model, kind = "settings") => {
 };
 
 const held = (keys) => keys.reduce((acc, ks, bit) => (ks.some((k) => down.has(k)) ? acc | (1 << bit) : acc), 0);
-const buttons = () => held(KEYS) | (held(KEYS2) << 8) | padBits();
+const buttons = () => held(LAYOUT.keys) | (held(LAYOUT.keys2) << 8) | padBits();
 
 // A theme's particles (docs/formats/theme.md): a pure function of the
 // frame, the same formulas as crates/gp-theme/src/particles.rs.
@@ -694,7 +881,7 @@ function themeCache() {
 async function themeCatalogue(cfg, p, q) {
   const game = cfg.catalogue?.game;
   const mirrors = q.getAll("mirror").length ? q.getAll("mirror") : cfg.catalogue?.mirrors ?? [];
-  const out = { entries: [], source: "none", mirrors, downloaded: new Set(), cache: null };
+  const out = { entries: [], leftOut: [], source: "none", mirrors, downloaded: new Set(), cache: null };
   if (!game || !p.hasCatalogue() || q.has("test") || q.has("run") || q.has("control")) return out;
   let cache;
   try {
@@ -727,7 +914,10 @@ async function themeCatalogue(cfg, p, q) {
   }
   if (index === null) return out;
   try {
-    out.entries = p.catalogue(index, cfg.pictures);
+    ({ entries: out.entries, leftOut: out.leftOut } = p.catalogue(index, cfg.pictures));
+    // A published theme this build doesn't offer is named, not dropped:
+    // in the log with why, and in the shell's line once the game runs.
+    for (const l of out.leftOut) console.info(`gp: theme ${l.title || l.id} (${l.id}) not offered: ${l.reason}`);
   } catch (e) {
     console.warn(`the themes index of ${game} doesn't read: ${e.message}`);
     return out;
@@ -914,6 +1104,8 @@ async function main() {
     if (cfg.levels && !cfg.levels.includes(wanted)) throw new Error(`no level \`${wanted}\`; this model has ${cfg.levels.join(", ")}`);
     startLevel = wanted;
   }
+  // An arcade cabinet's controls when the model reads them.
+  if (cfg.device === "arcade") LAYOUT = ARCADE_LAYOUT;
   const host = await openHost(gameModule);
   host.frameLimit = (10000 * cfg.frame_rate[1]) / cfg.frame_rate[0];
   // Which module runs, and each frame's times, for the checks.
@@ -953,12 +1145,28 @@ async function main() {
 
   // The hooks the module runs the model with, for the checks.
   t.hooks = p.load(bundle);
+  // The game's regions, given once: the module keeps them.
+  t.regions = cfg.regions?.length ? p.setRegions(cfg.regions) : null;
   // The frame, the level and the bodies being played, for the checks.
   t.state = () => p.state();
   // What the frame draws (the module's scene, gp_web::Preview::scene), for
   // the page check's layer order: the bodies against the HUD.
   t.scene = () => p.scene();
   p.loadPresent(presentText);
+  // An arcade model's board art: its lifted files (preview.json's
+  // `board`, under board/) and the page's gp_board.wasm, which draws each
+  // frame's stage and sprites as the board draws them.
+  if (cfg.board?.length) {
+    for (const f of cfg.board) {
+      const r = await load(`board/${f}`);
+      if (!r.ok) throw new Error(`board/${f}: this build hasn't got it`);
+      boardFiles.set(f, new Uint8Array(await r.arrayBuffer()));
+    }
+    boardPresent = presentText;
+    boardUnits = !!cfg.board_unit;
+    boardDraw = await BoardDraw.open(await fetch("gp_board.wasm").then((r) => r.arrayBuffer()));
+  }
+  t.board = loadBoard(bundle);
   // The model's sound (docs/sound.md): played by the same synthesizer as
   // the Bevy build, through WebAudio once a key is pressed.
   // preview.json says whether there is one; a page built before it asks.
@@ -1063,6 +1271,7 @@ async function main() {
     source: catalogue.source,
     store: catalogue.cache?.kind ?? null,
     themes: catalogue.entries.map((e) => ({ ...e, downloaded: catalogue.downloaded.has(e.id) })),
+    left_out: catalogue.leftOut,
   });
   const lookStore = settingsStore(cfg.model ?? cfg.title, "theme");
   let lookPresent = presentText;
@@ -1125,21 +1334,53 @@ async function main() {
     return c;
   };
   const tinted = new Map();
-  // The look's sound per role, or the build's own role files.
+  // The look's sound per role, or the build's own role files: every file
+  // read, then handed to the module at once, and only by the newest call.
+  // A role's further takes (sound/takes/<role>.<n>.wav, issue #30) follow
+  // its own file, each start playing the next; a role the model hasn't
+  // got is passed over, so the look's other sounds still play.
+  let rolesAsked = 0;
   const applyRoles = async (look) => {
     if (!soundText) return;
-    p.clearSoundRoles();
+    const ask = ++rolesAsked;
     const roles = look
       ? look.own_sound
         ? []
-        : look.files.filter((f) => /^sound\/roles\/.+\.wav$/.test(f)).map((f) => [f.slice(12, -4), look.src(f)])
-      : (JSON.parse(soundText).roles ?? []).map((r) => [r, `assets/sound/roles/${r}.wav`]);
-    for (const [r, url] of roles) {
-      const b = await load(url).then((x) => (x.ok ? x.arrayBuffer() : null));
-      if (b) p.soundRole(r, new Uint8Array(b));
+        : look.files.filter((f) => /^sound\/roles\/.+\.wav$/.test(f)).map((f) => [f.slice(12, -4), look.src(f), 1])
+      : (JSON.parse(soundText).roles ?? []).map((r) => [r, `assets/sound/roles/${r}.wav`, 1]);
+    if (look && !look.own_sound) {
+      for (const f of look.files) {
+        const m = /^sound\/takes\/([a-z0-9_]+)\.([1-9][0-9]*)\.wav$/.exec(f);
+        if (m && Number(m[2]) >= 2) roles.push([m[1], look.src(f), Number(m[2])]);
+      }
+    }
+    const got = await Promise.all(roles.map(([r, url, k]) => load(url).then((x) => (x.ok ? x.arrayBuffer() : null)).then((b) => [r, b, k])));
+    if (ask !== rolesAsked) return;
+    p.clearSoundRoles();
+    for (const [r, b, k] of got) {
+      if (!b) continue;
+      try {
+        if (k === 1) p.soundRole(r, new Uint8Array(b));
+        else p.soundRoleTake(r, k, new Uint8Array(b));
+      } catch (e) {
+        console.warn(`sound ${r}${k > 1 ? ` take ${k}` : ""} not played: ${e.message}`);
+      }
     }
   };
+  t.soundRoleLog = () => p.soundRoleLog();
+  // Looks reach the module one at a time and the newest pick wins: each apply
+  // reads every file it needs first, drops out if a newer pick came in
+  // meanwhile, and only then hands the look to the module and the page in
+  // one go, with no wait between. Before (2026-11-14), the module took a
+  // look's rules before its pictures were read, so a second pick (or a
+  // restart) in that wait cleared them ("Theme not changed: no large-art
+  // look loaded"), and an older pick that finished last drew its pictures
+  // over the newer one's rules while the settings screen named it.
+  let lookAsked = 0;
+  // True once the look is drawn, false when a newer pick took its place.
   const applyLook = async (id) => {
+    const ask = ++lookAsked;
+    if (id === looks.current) return true;
     // A published theme: downloaded first when it isn't, then drawn from
     // the cache.
     const e = catalogue.entries.find((x) => x.id === id);
@@ -1151,9 +1392,6 @@ async function main() {
       looks.found.push(l);
     }
     const look = looks.found.find((l) => l.id === id && id !== looks.own[0]) ?? null;
-    // Every file read first, then the module takes the present text, and
-    // only then is the look the page's: a look that fails to load leaves
-    // the one before whole.
     const next = [];
     for (let i = 0; i < pics.length; i++) {
       const f = cfg.pictures[i];
@@ -1166,22 +1404,42 @@ async function main() {
     // "present text doesn't start with `gp-present 15`", 2026-11-04).
     const text = look?.files.includes("present.txt") ? await load(look.src("present.txt")).then((r) => r.text()) : presentText;
     const artText = look?.art ? await load(look.src(look.art)).then((r) => r.text()) : null;
-    p.loadPresent(text);
+    // The art files: each picture the rules name that the look holds
+    // (some names are the build's own pictures), read before the module
+    // says which of them it numbers.
+    const named = new Set(artText?.split(/\s+/).filter((w) => /\.(png|jpe?g|webp)$/i.test(w)));
+    const read = await Promise.all([...named].map((f) => image(look.src(f)).then((img) => [f, img], () => null)));
+    const art = new Map(read.filter(Boolean));
+    if (ask !== lookAsked) return false;
     let nextArt = [];
     const nextStages = new Map();
-    if (artText) {
-      const { files, stages } = p.loadArt(artText);
-      nextArt = await Promise.all(files.map((f) => image(look.src(f))));
-      // Built over the build's own level pictures (lifted from the
-      // player's ROM for a ROM build): the look holds no layout.
-      for (const pic of stages) {
-        const img = ownPics[pic];
-        const rgba = pixelsOf(img);
-        const st = p.artStage(pic, img.width, img.height, rgba);
-        nextStages.set(pic, { canvas: paintStage(st, nextArt), rgba, w: img.width, h: img.height });
+    try {
+      p.loadPresent(text);
+      if (artText) {
+        const { files, stages } = artHost(p).loadArt(artText);
+        const missing = files.find((f) => !art.has(f));
+        if (missing) throw new Error(`${missing}: not in the look`);
+        nextArt = files.map((f) => art.get(f));
+        // Built over the build's own level pictures (lifted from the
+        // player's ROM for a ROM build): the look holds no layout.
+        for (const pic of stages) {
+          const img = ownPics[pic];
+          const rgba = pixelsOf(img);
+          const st = p.artStage(pic, img.width, img.height, rgba);
+          nextStages.set(pic, { canvas: paintStage(st, nextArt), rgba, w: img.width, h: img.height });
+        }
+      } else if (lookArt) {
+        artHost(p).loadArt("");
       }
-    } else if (lookArt) {
-      p.loadArt("");
+    } catch (err) {
+      // A look that fails leaves the one before whole, in the module too.
+      if (artText) artHost(p).loadArt("");
+      p.loadPresent(lookPresent);
+      if (lookArt) {
+        artHost(p).loadArt(lookArt);
+        for (const [pic, st] of artStages) p.artStage(pic, st.w, st.h, st.rgba);
+      }
+      throw err;
     }
     // Kept only once the module takes it: a restart in new settings loads
     // the model afresh and then this text, so a look that failed here made
@@ -1193,11 +1451,14 @@ async function main() {
     artStages = nextStages;
     pics.splice(0, pics.length, ...next);
     looks.current = look ? look.id : looks.own[0];
+    t.theme = looks.current;
     tinted.clear();
     await applyRoles(look);
-    t.theme = looks.current;
+    return true;
   };
   looks.apply = applyLook;
+  // The ids the settings screen's theme line offers, for the page check.
+  t.looks = () => looks.choices().map(([id]) => id);
   await applyRoles(null);
   // `own-look` (the public page, when a person's ROM starts) opens in the
   // build's own look whatever look was kept from an earlier visit: a kept
@@ -1262,7 +1523,10 @@ async function main() {
 
   // A large-art look's frame: every picture in order, placed by the module
   // in sixteenths of a game pixel, on a canvas `scale` pixels to each.
-  const drawArt = (a) => {
+  // `board` is an arcade game's board picture (ImageData), painted where
+  // the draws hold ["board"].
+  const boardCanvas = document.createElement("canvas");
+  const drawArt = (a, board = null) => {
     const k = a.scale;
     const [W, H] = [a.size[0] * k, a.size[1] * k];
     if (canvas.width !== W || canvas.height !== H) {
@@ -1281,6 +1545,18 @@ async function main() {
       if (src[0] === "fill" || src[0] === "backdrop") {
         ctx.fillStyle = src[0] === "fill" ? `rgb(${src[1].join(",")})` : gradient(ctx, a.backdrop.slice(0, 2), a.backdrop[2] * u, a.backdrop[3] * u);
         ctx.fillRect(x * u, y * u, w * u, h * u);
+        continue;
+      }
+      if (src[0] === "board") {
+        if (board) {
+          if (boardCanvas.width !== board.width || boardCanvas.height !== board.height) {
+            boardCanvas.width = board.width;
+            boardCanvas.height = board.height;
+          }
+          boardCanvas.getContext("2d").putImageData(board, 0, 0);
+          ctx.imageSmoothingEnabled = false;
+          ctx.drawImage(boardCanvas, x * u, y * u, w * u, h * u);
+        }
         continue;
       }
       if (src[0] === "stage") {
@@ -1323,6 +1599,37 @@ async function main() {
       drawArt(a);
       return;
     }
+    // An arcade model's level with board art: the board's own picture,
+    // of the game's state and the bodies its scene shows, in the theme
+    // when one is loaded (its pictures over the board's, by name). The
+    // theme's particles and overlay go over it, in the game's units.
+    const bs = boardDraw?.on ? pl.scene() : null;
+    const shown = bs?.bodies.map((b) => (b ? 1 : 0));
+    const ba = bs && boardDraw.art && pl === p ? boardDraw.artFrame(pl.stateBytes(), shown) : null;
+    const bi = bs && !ba ? boardDraw.frame(pl.stateBytes(), shown) : null;
+    if (ba || bi) {
+      if (ba) {
+        drawArt(ba.frame, ba.image);
+      } else {
+        if (canvas.gpScale) {
+          canvas.gpScale = undefined;
+          canvas.style.imageRendering = "pixelated";
+        }
+        if (canvas.width !== bi.width || canvas.height !== bi.height) {
+          canvas.width = bi.width;
+          canvas.height = bi.height;
+          canvas.dispatchEvent(new Event("gp-resize"));
+        }
+        ctx.putImageData(bi, 0, 0);
+      }
+      if (theme.particles.length || overlay) {
+        const [cx, cy] = bs.camera;
+        ctx.setTransform(canvas.width / cfg.view[0], 0, 0, canvas.height / cfg.view[1], 0, 0);
+        extras(pl, cx, cy, 0, 0, 0, [0, 0, cfg.view[0], cfg.view[1]]);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+      }
+      return;
+    }
     if (canvas.gpScale) {
       canvas.gpScale = undefined;
       canvas.height = vh;
@@ -1347,6 +1654,12 @@ async function main() {
     const hy = win.hud[1] - win.y;
     ctx.fillStyle = `rgb(${s.clear.join(",")})`;
     ctx.fillRect(0, 0, win.w, vh);
+    // An arcade model in the board's own units (preview.json's
+    // `board_unit`): its world is drawn that many screen pixels to a unit,
+    // its HUD as it is. Any other draws at 1.
+    const u = cfg.board_unit ?? 1;
+    const inUnits = (on) => u !== 1 && ctx.setTransform(on ? u : 1, 0, 0, on ? u : 1, 0, 0);
+    inUnits(true);
     // Bodies behind the level first, so it covers them where it draws.
     const body = (b, i) => {
       if (!b) return;
@@ -1395,7 +1708,9 @@ async function main() {
         // The layer's cycling colors go over it, under the fields.
         if (from + j === 0) for (const [m, color] of s.hud_tints) ctx.drawImage(tint(m, color), hx, hy);
       });
+    inUnits(false);
     hud(0, hudBg);
+    inUnits(true);
     // Then the rest, and last the bodies in front of every other.
     pass((i) => !s.behind?.[i] && !s.front?.[i]);
     pass((i) => !s.behind?.[i] && s.front?.[i]);
@@ -1404,31 +1719,34 @@ async function main() {
       put(pics[pic], x + ox, y + oy, fx, fy);
     }
     ctx.globalAlpha = 1;
+    inUnits(false);
     if (win.wall > 0) {
       ctx.fillStyle = "rgba(0,0,0,0.45)";
       ctx.fillRect(0, 0, win.wall, vh);
     }
     // The HUD's sprites over the bodies.
     hud(hudBg, s.hud.length);
-    // The theme's particles and overlay, over the camera's view: drawn
-    // from the state, never written to it.
-    if (theme.particles.length || overlay) {
-      const st = pl.state();
-      for (const e of theme.particles) {
-        const bodies = st.bodies
-          .filter(([kind, , , , alive]) => alive && cfg.kinds[kind]?.role === e.role)
-          .map(([kind, x, y]) => [x - cx, y - cy, ...cfg.kinds[kind].size]);
-        ctx.fillStyle = `rgb(${e.color.join(",")})`;
-        // Over the game's view, where it is in the window.
-        for (const d of dots(e, st.frame, cfg.view, bodies)) {
-          ctx.globalAlpha = Math.max(0, Math.min(1, d.a));
-          ctx.fillRect(Math.floor(d.x) - vl + win.view_x, Math.floor(d.y) - vt, d.w, d.h);
-        }
-        ctx.globalAlpha = 1;
+    // Stretched across the window: the overlay is the view's size.
+    if (theme.particles.length || overlay) extras(pl, cx, cy, vl, vt, win.view_x, [-vl, -vt, win.w + cfg.view[0] - vw, cfg.view[1]]);
+  };
+  // The theme's particles and overlay, over the camera's view: drawn from
+  // the state, never written to it. The view's left and top (`l`, `t`) and
+  // where it is in the window (`vx`) place the dots; `box` the overlay.
+  const extras = (pl, cx, cy, l, t, vx, box) => {
+    const st = pl.state();
+    for (const e of theme.particles) {
+      const bodies = st.bodies
+        .filter(([kind, , , , alive]) => alive && cfg.kinds[kind]?.role === e.role)
+        .map(([kind, x, y]) => [x - cx, y - cy, ...cfg.kinds[kind].size]);
+      ctx.fillStyle = `rgb(${e.color.join(",")})`;
+      // Over the game's view, where it is in the window.
+      for (const d of dots(e, st.frame, cfg.view, bodies)) {
+        ctx.globalAlpha = Math.max(0, Math.min(1, d.a));
+        ctx.fillRect(Math.floor(d.x) - l + vx, Math.floor(d.y) - t, d.w, d.h);
       }
-      // Stretched across the window: the overlay is the view's size.
-      if (overlay) ctx.drawImage(overlay, -vl, -vt, win.w + cfg.view[0] - vw, cfg.view[1]);
+      ctx.globalAlpha = 1;
     }
+    if (overlay) ctx.drawImage(overlay, ...box);
   };
 
   const st = p.hasSettings() ? settingsScreen(p, canvas, ctx, profilesText, looks) : null;
@@ -1447,7 +1765,7 @@ async function main() {
     // A second model for still pictures, so asking for one never moves the
     // one being watched (seeking back starts a model over from power-on).
     const stills = new Preview(await openHost(gameModule));
-    control(p, stills, bundle, presentText, canvas, draw, profile, st);
+    control(p, stills, bundle, presentText, canvas, draw, profile, st, cfg.regions);
     placeInView(canvas, cfg.visible, cfg.view);
     return;
   }
@@ -1470,6 +1788,10 @@ async function main() {
     },
   };
   const sh = script ? null : shell(p, cfg, canvas, () => profile, shellHost);
+  if (catalogue.leftOut.length) {
+    const n = catalogue.leftOut.length;
+    sh?.say(`${n === 1 ? "A published theme isn't" : `${n} published themes aren't`} offered: ` + catalogue.leftOut.map((l) => `${l.title || l.id}, because ${l.reason}`).join("; "));
+  }
   if (st && sh) st.fill = () => sh.fillScreen();
   // Buttons held as the settings screen closed, kept from the game until
   // let go, so the Enter that closed it isn't Start.
@@ -1489,8 +1811,9 @@ async function main() {
       profile = name;
       t.hooks = p.load(bundle);
       p.loadPresent(lookPresent);
+      loadBoard(bundle);
       if (lookArt) {
-        p.loadArt(lookArt);
+        artHost(p).loadArt(lookArt);
         for (const [pic, st] of artStages) p.artStage(pic, st.w, st.h, st.rgba);
       }
       if (soundText) {
@@ -1556,12 +1879,13 @@ async function main() {
   // mode for this play, so the mode kept stays as it was and isn't played.
   function onClosed(r, loaded = false) {
     store.set(r.profile);
-    if (r.theme && r.theme !== looks.current) {
+    if (r.theme && r.theme !== st.shown) {
       const title = looks.choices().find(([id]) => id === r.theme)?.[1] ?? r.theme;
       const fetching = catalogue.entries.some((e) => e.id === r.theme) && !catalogue.downloaded.has(r.theme);
       if (fetching) sh?.say(`Downloading ${title}...`);
       applyLook(r.theme).then(
-        () => {
+        (drawn) => {
+          if (!drawn) return;
           lookStore.set(r.theme);
           sh?.say(`Theme: ${title}${fetching ? ", downloaded and checked" : ""}`);
         },
@@ -1826,15 +2150,23 @@ function shell(p, cfg, canvas, profileNow, host) {
   Object.assign(bar.style, { font: "12px monospace", color: "#ccc", textAlign: "center", padding: "6px" });
   canvas.after(bar);
   const canView = p.view("");
+  const slots = [1, 2, 3, 4];
+  const saveKeys = keySpan(slots.map((n) => `save-${n}`));
+  const loadKeys = keySpan(slots.map((n) => `load-${n}`));
+  const muteKeys = keySpan(["pulse1", "pulse2", "triangle", "noise", "dmc"].map((c) => `mute-${c}`));
+  const gameKeys = takenKeys();
   const help = () =>
+    (gameKeys.length ? `${gameKeys.join(", ")}, ` : "") +
     (!can
       ? "F8 scale (this gp_web.wasm has no gp_state; rebuild it for saves and rewind)"
       : settings.console_only
         ? "Console only: no saves or rewind, F8 scale"
-        : `${canSave ? "Shift+1-4 save, 1-4 load, " : ""}hold Backspace to rewind, F8 scale${settings.quick_buttons && canSave ? ", RB quick save, LB quick load" : ""}`) +
-    (canView ? ", F9 widescreen, F10 dim flashes, 5-9 mute a channel" : "") +
+        : `${canSave ? [saveKeys && `${saveKeys} save`, loadKeys && `${loadKeys} load`].filter(Boolean).map((x) => `${x}, `).join("") : ""}hold Backspace to rewind, F8 scale${settings.quick_buttons && canSave ? ", RB quick save, LB quick load" : ""}`) +
+    (canView ? `, F9 widescreen, F10 dim flashes${muteKeys ? `, ${muteKeys} mute a channel` : ""}` : "") +
     ", F2 pause, F3 one frame, F4 slow motion" +
     (p.hasSettings() ? ", Esc settings" : "");
+  // The hint, for the checks.
+  t.keyHint = help;
   // Picture and sound options, kept per game.
   const wides = ["off", "16:10", "16:9"];
   const channels = ["pulse1", "pulse2", "triangle", "noise", "dmc"];
@@ -2157,7 +2489,7 @@ function placeInView(canvas, visible, view) {
   });
 }
 
-function control(p, stills, bundle, presentText, canvas, drawGame, profile, st) {
+function control(p, stills, bundle, presentText, canvas, drawGame, profile, st, regions) {
   // The settings screen over the picture while the parent has it open.
   const draw = (pl = p) => {
     drawGame(pl);
@@ -2175,7 +2507,10 @@ function control(p, stills, bundle, presentText, canvas, drawGame, profile, st) 
   const still = { p: stills, at: 0 };
   const reset = (m) => {
     m.p.load(bundle);
+    // The game's regions, which the module keeps from load to load.
+    if (m.p !== p && regions?.length && !m.regionsGiven) m.regionsGiven = m.p.setRegions(regions);
     m.p.loadPresent(presentText);
+    loadBoard(bundle);
     if (start) m.p.loadState(start);
     m.at = 0;
   };
@@ -2245,7 +2580,7 @@ function control(p, stills, bundle, presentText, canvas, drawGame, profile, st) 
         } else {
           const r = st.key(code);
           if (r?.closed) {
-            if (r.theme && r.theme !== st.looks?.current) void st.looks?.apply(r.theme);
+            if (r.theme && r.theme !== st.shown) void st.looks?.apply(r.theme);
             tell({ gp: "settings", open: false, profile: r.profile, restart: r.restart, theme: r.theme });
           }
         }

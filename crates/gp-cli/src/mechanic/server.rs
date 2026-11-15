@@ -685,15 +685,10 @@ impl Server {
     }
 
     /// What the rebuild played live needs, or the words for why there is
-    /// none: its interpreter preview is the NES build's, so an arcade game
-    /// has none yet (issue #3).
+    /// none. An arcade game's model plays in the same interpreter preview,
+    /// keyed as a cabinet, its board art drawn by the page's gp_board.wasm
+    /// (issue #3).
     fn live(&self) -> std::result::Result<&super::review::Rebuild, Response> {
-        if self.platform == Platform::Arcade {
-            return Err(Response::error(
-                409,
-                "an arcade game's model draws nothing yet in the browser (its interpreter preview is the NES build's), so there is nothing to play here",
-            ));
-        }
         self.rebuild()
     }
 
@@ -708,14 +703,26 @@ impl Server {
         })
     }
 
-    /// A review on the model with, on an arcade game, the sentence the page
-    /// shows beside it (`art`): the model's side is drawn by tile kind, so
-    /// no one reads its blocks as the model's art gone wrong.
+    /// A review on the model with, on an arcade game whose model names
+    /// none of its board's art, the sentence the page shows beside it
+    /// (`art`): the model's side is drawn by tile kind, so no one reads
+    /// its blocks as the model's art gone wrong.
     fn art_said(&self, mut v: Value) -> Value {
-        if self.platform == Platform::Arcade {
+        if self.platform == Platform::Arcade && !self.board_art() {
             v["art"] = json!(ARCADE_ART);
         }
         v
+    }
+
+    /// Whether the game's model names its board's own art (a level's
+    /// `present.board` or an entity's `board_sprite`,
+    /// docs/formats/board-art.md), so its side isn't drawn by tile kind.
+    fn board_art(&self) -> bool {
+        self.rebuild
+            .as_ref()
+            .and_then(|r| std::fs::read_to_string(r.game.join("model.toml")).ok())
+            .and_then(|t| gp_model::Model::parse(&t).ok())
+            .is_some_and(|m| gp_look::board::names_board(&m))
     }
 
     /// A point-and-tell request (the person paused, boxed part of the
@@ -819,6 +826,18 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         ("GET" | "HEAD", "/shell.js") => page("shell.js", "text/javascript; charset=utf-8"),
         // The status line: where the port stands and the next step.
         ("GET" | "HEAD", "/next.js") => page("next.js", "text/javascript; charset=utf-8"),
+        // A picture the agent proposes for the person's theme (issue #4).
+        ("GET" | "HEAD", "/picture-card.js") => {
+            page("picture-card.js", "text/javascript; charset=utf-8")
+        }
+        ("GET" | "HEAD", "/picture-card.css") => {
+            page("picture-card.css", "text/css; charset=utf-8")
+        }
+        // A sound change the agent proposes for the person's copy, in the
+        // picture card's look.
+        ("GET" | "HEAD", "/sound-card.js") => {
+            page("sound-card.js", "text/javascript; charset=utf-8")
+        }
         // The old inspector's views on the page (mechanic/details/).
         ("GET" | "HEAD", p) if part_in(p, "/details/").is_some() => {
             let (name, kind) = part_in(p, "/details/").unwrap_or_default();
@@ -1245,8 +1264,8 @@ fn scores(s: &Server) -> Result<Response> {
 
 /// Whether a clip spans a stage: the stage the game's observe.toml
 /// `[level]` reads (its RAM byte and the names of its values) moves from
-/// one to another during it, as a clear does. NES only: an arcade game's
-/// observe.toml names no stage yet.
+/// one to another during it, as a clear does. On an arcade game the byte
+/// is the main CPU's, read from gp-arcade at each frame of the clip.
 fn stage_span(
     s: &Server,
     path: &str,
@@ -1256,12 +1275,13 @@ fn stage_span(
     let Some(games) = s.rebuild.as_ref().map(|r| r.game.clone()) else {
         return Ok(json!({"spans": false, "why": "no games checkout"}));
     };
-    if s.platform == Platform::Arcade {
-        return Ok(json!({"spans": false, "why": "an arcade game's stage isn't read yet"}));
-    }
     let Some((addr, names)) = level_key(&games.join("observe.toml")) else {
         return Ok(json!({"spans": false, "why": "the game's observe.toml names no stage"}));
     };
+    if s.platform == Platform::Arcade {
+        let mut o = clip_paths::original_at(&s.paths.home, &s.rom, path, start)?;
+        return Ok(spans_of(&stages_on(&mut o, addr, &names, inputs)?));
+    }
     let mut nes = clip_paths::nes_at(&s.paths.home, &s.rom, path, start)?;
     // Only RAM is read: no pictures.
     nes.set_video(false);
@@ -1279,10 +1299,49 @@ fn stage_span(
         nes.step(*f)?;
         note(&nes, i + 1);
     }
-    Ok(json!({
+    Ok(spans_of(&seen))
+}
+
+/// The stages a clip passes through, each with the frame it starts on.
+fn spans_of(seen: &[(String, usize)]) -> Value {
+    json!({
         "spans": seen.len() >= 2,
         "stages": seen.iter().map(|(l, f)| json!({"stage": l, "from": f})).collect::<Vec<_>>(),
-    }))
+    })
+}
+
+/// The stages the original passes through over `inputs`, read from its
+/// `ram[addr]` before the first frame and after each: on either platform,
+/// through the runtime's own selector.
+fn stages_on(
+    o: &mut crate::original::OriginalRuntime,
+    addr: u16,
+    names: &std::collections::HashMap<u8, String>,
+    inputs: &gp_evidence::InputLog,
+) -> Result<Vec<(String, usize)>> {
+    use gp_runtime::Runtime as _;
+    let sel = format!("ram[{addr:#06x}]");
+    let mut seen: Vec<(String, usize)> = Vec::new();
+    let mut note = |o: &crate::original::OriginalRuntime, at: usize| -> Result<()> {
+        let v = o
+            .query(&sel)
+            .map_err(anyhow::Error::msg)?
+            .first()
+            .and_then(|e| e.value.as_int())
+            .with_context(|| format!("{sel} reads no number"))?;
+        if let Some(l) = names.get(&(v as u8))
+            && seen.last().is_none_or(|(p, _)| p != l)
+        {
+            seen.push((l.clone(), at));
+        }
+        Ok(())
+    };
+    note(o, 0)?;
+    for (i, f) in crate::run::frames(inputs).into_iter().enumerate() {
+        o.step(&[f]).map_err(anyhow::Error::msg)?;
+        note(o, i + 1)?;
+    }
+    Ok(seen)
 }
 
 /// An observe.toml's `[level]`: the RAM byte and each value's name.
@@ -1536,6 +1595,30 @@ mod tests {
     use crate::mechanic::session::write_queue;
     use crate::test_paths as paths;
 
+    /// An arcade original's stage is read from its RAM as the clip plays:
+    /// a made-up set whose loop copies input port 1 into E000, each value
+    /// a stage, and the stick pushed on the second of three frames.
+    #[test]
+    fn an_arcade_clip_spans_the_stages_its_ram_byte_names() {
+        let mut o = crate::original::OriginalRuntime::Arcade(
+            gp_arcade::protocol::ArcadeRuntime::load(&gp_arcade::testrom::busy()),
+        );
+        let names: std::collections::HashMap<u8, String> =
+            (0..=255u8).map(|v| (v, format!("v{v:02x}"))).collect();
+        let mut inputs = gp_evidence::InputLog::new_arcade("test", "CSRLDUT");
+        let pushed = gp_evidence::input_log::InputFrame::held(0x3c);
+        inputs.frames = vec![
+            gp_evidence::input_log::InputFrame::default(),
+            pushed,
+            gp_evidence::input_log::InputFrame::default(),
+        ];
+        let seen = stages_on(&mut o, 0xe000, &names, &inputs).unwrap();
+        let v = spans_of(&seen);
+        assert_eq!(v["spans"], json!(true), "{v}");
+        let from: Vec<usize> = seen.iter().map(|(_, f)| *f).collect();
+        assert!(from.contains(&2) && from.contains(&3), "{v}");
+    }
+
     /// A 16KB NROM that loops in place: made up here, no game's bytes.
     fn rom() -> Vec<u8> {
         let mut rom = b"NES\x1a\x01\x01\x00\x00".to_vec();
@@ -1745,23 +1828,24 @@ mod tests {
         assert!(level_key(&d.path().join("none.toml")).is_none());
     }
 
-    /// The rebuild on an arcade game, and without a games checkout: each
-    /// route says in words why there is nothing to play.
+    /// The rebuild without a games checkout: each route says in words why
+    /// there is nothing to play, on an arcade game the same as on the NES
+    /// (an arcade game's model plays in the browser too, issue #3).
     #[test]
     fn no_rebuild_says_why() {
         let d = tempfile::tempdir().unwrap();
         let mut srv = server(d.path());
-        let (s, body) = get(&srv, "/api/rebuild/status");
-        assert_eq!(s, 404);
-        assert!(body.contains("--games"), "{body}");
-        srv.platform = Platform::Arcade;
-        for route in ["/api/rebuild/status", "/api/rebuild/profiles"] {
-            let (s, body) = get(&srv, route);
-            assert_eq!(s, 409, "{route}");
-            assert!(body.contains("draws nothing yet"), "{body}");
+        for platform in [Platform::Nes, Platform::Arcade] {
+            srv.platform = platform;
+            for route in ["/api/rebuild/status", "/api/rebuild/profiles"] {
+                let (s, body) = get(&srv, route);
+                assert_eq!(s, 404, "{route}");
+                assert!(body.contains("--games"), "{body}");
+                assert!(!body.contains("draws nothing yet"), "{body}");
+            }
+            let (s, v) = post(&srv, "/api/rebuild/build", json!({}));
+            assert_eq!(s, 404, "{v}");
         }
-        let (s, v) = post(&srv, "/api/rebuild/build", json!({}));
-        assert_eq!(s, 409, "{v}");
     }
 
     /// An arcade game's page: the player's absence names the arcade build,
@@ -1792,6 +1876,29 @@ mod tests {
             assert!(body.contains("--games"), "{route}: {body}");
         }
         assert_eq!(srv.art_said(json!({}))["art"], json!(ARCADE_ART));
+        // A model that names its board's art isn't drawn by tile kind.
+        let game = d.path().join("cab");
+        std::fs::create_dir_all(&game).unwrap();
+        let model = "[model]\nschema = \"0.4\"\nname = \"cab\"\ntitle = \"Cab\"\nsource = \"cab\"\n\
+                     view = \"side\"\nframe_rate = \"30\"\nsystems = []\n\n\
+                     [input]\ndevice = \"arcade\"\n\n[input.actions]\nleft = \"left\"\n\n\
+                     [entities.player]\nrole = \"player\"\nsize = [16, 16]\n\n\
+                     [entities.player.hitbox]\nx = 0\ny = 0\nw = 16\nh = 16\n";
+        std::fs::write(game.join("model.toml"), model).unwrap();
+        srv.rebuild = Some(super::super::review::Rebuild {
+            game: game.clone(),
+            module: None,
+            rom: None,
+            assets: None,
+        });
+        assert!(gp_model::Model::parse(model).is_ok());
+        assert_eq!(srv.art_said(json!({}))["art"], json!(ARCADE_ART));
+        let board = format!(
+            "{model}\n[entities.player.board_sprite]\nslot = \"sprites\"\npicture = {{ number = 1 }}\n"
+        );
+        assert!(gp_model::Model::parse(&board).is_ok());
+        std::fs::write(game.join("model.toml"), board).unwrap();
+        assert_eq!(srv.art_said(json!({})), json!({}));
         srv.platform = Platform::Nes;
         assert_eq!(srv.art_said(json!({})), json!({}));
         assert!(wasm_path(Path::new("/r"), Platform::Arcade).ends_with("gp_arcade_play.wasm"));

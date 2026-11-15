@@ -57,6 +57,28 @@ pub struct Frame {
     pub things: Vec<Thing>,
 }
 
+impl Frame {
+    /// A whole `w` by `h` frame, all of it visible and nothing named, from
+    /// a colour index a pixel (`px`, row by row) and up to 64 colours: a
+    /// pixel's colour is `colors[index & 0x3f]`, black past the end, and
+    /// it is a sprite's where `index & sprite_bit` isn't 0. An NES tape's
+    /// pictures and an arcade board's pens are drawn this way.
+    pub fn indexed(w: u32, h: u32, px: &[u8], colors: &[[u8; 3]], sprite_bit: u8) -> Self {
+        let mut table = [[0u8; 3]; 64];
+        for (t, c) in table.iter_mut().zip(colors) {
+            *t = *c;
+        }
+        Frame {
+            w,
+            h,
+            rgb: px.iter().map(|p| table[usize::from(p & 0x3f)]).collect(),
+            sprite: px.iter().map(|p| p & sprite_bit != 0).collect(),
+            visible: [0, 0, w, h],
+            things: Vec::new(),
+        }
+    }
+}
+
 /// Draws `scene`, the scene of `world`, with `pics` (by the presentation's picture numbers; a
 /// missing one draws nothing). `names` names each body's kind for
 /// [`Frame::things`], by body; `fields` names each HUD field.
@@ -83,20 +105,22 @@ pub fn draw(
     let inside = |x: i64, y: i64| x >= vl && y >= vt && x < vl + vw && y < vt + vh;
     let idx = |x: i64, y: i64| (y as u32 * w + x as u32) as usize;
     let [cx, cy] = s.camera;
+    // The level and the tints with a picture, looked up once.
+    let level = s.level.and_then(pic);
+    let tints: Vec<(&Image, [u8; 3])> = s
+        .tints
+        .iter()
+        .filter_map(|(m, color)| pic(*m).map(|m| (m, *color)))
+        .collect();
     for y in vt..vt + vh {
         for x in vl..vl + vw {
             let i = idx(x, y);
             let mut c = s.clear;
-            if let Some(l) = s.level.and_then(pic)
-                && let Some(px) = l.at(x + cx, y + cy, false, false)
-            {
+            if let Some(px) = level.and_then(|l| l.at(x + cx, y + cy, false, false)) {
                 c = [px[0], px[1], px[2]];
             }
-            for (m, color) in &s.tints {
-                if pic(*m)
-                    .and_then(|m| m.at(x + cx, y + cy, false, false))
-                    .is_some()
-                {
+            for (m, color) in &tints {
+                if m.at(x + cx, y + cy, false, false).is_some() {
                     c = *color;
                 }
             }
@@ -319,4 +343,24 @@ pub fn draw(
         }
     }
     f
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each index's colour is the table's at its low six bits, black past
+    /// the colours given, and the sprite bit marks a sprite's pixel.
+    #[test]
+    fn an_indexed_frame_reads_its_colours_and_sprite_bit() {
+        let colors = [[1, 2, 3], [40, 50, 60]];
+        let f = Frame::indexed(2, 2, &[0, 0x81, 0x41, 0x05], &colors, 0x80);
+        assert_eq!(
+            f.rgb,
+            vec![[1, 2, 3], [40, 50, 60], [40, 50, 60], [0, 0, 0]]
+        );
+        assert_eq!(f.sprite, vec![false, true, false, false]);
+        assert_eq!((f.w, f.h, f.visible), (2, 2, [0, 0, 2, 2]));
+        assert!(f.things.is_empty());
+    }
 }

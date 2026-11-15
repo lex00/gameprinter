@@ -427,6 +427,45 @@ pub const FEATURES: &[Feature] = &[
         &["levels.*.present.sprite_order"],
     ),
     core(
+        "asset.board",
+        "",
+        "The asset kinds of an arcade board's own pictures (`board-tiles`, `board-sprites`, `board-screen`, `board-palette`, `board-font`), lifted from the player's romset",
+        &[
+            "assets.*.kind=board-tiles",
+            "assets.*.kind=board-sprites",
+            "assets.*.kind=board-screen",
+            "assets.*.kind=board-palette",
+            "assets.*.kind=board-font",
+        ],
+    ),
+    core(
+        "sprite.board",
+        "",
+        "A body drawn as one of an arcade board's sprites, its picture and flags read from its words or fixed",
+        &["entities.*.board_sprite"],
+    ),
+    core(
+        "level.board",
+        "",
+        "A level drawn as an arcade board draws its picture: its background tile layer from a whole screen, in the board's colours",
+        &["levels.*.present.board"],
+    ),
+    core(
+        "level.board.looks",
+        "",
+        "A level drawn by an arcade board with other looks, a screen and colours each, chosen by the model's counters as the frame is drawn",
+        &["levels.*.present.board.looks"],
+    ),
+    core(
+        "level.board.counters",
+        "",
+        "Counters drawn into an arcade board's tile layer, as digits or as one tile repeated, with tile codes lifted from the player's romset",
+        &[
+            "levels.*.present.board.counters",
+            "levels.*.present.board.repeats",
+        ],
+    ),
+    core(
         "present.effect_order",
         "",
         "Each effect's place in the console's sprite table in a level, by the event that starts it, which decides what it is painted over and under",

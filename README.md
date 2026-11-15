@@ -31,12 +31,17 @@ You need rustup (the repo pins Rust 1.99.1 and installs it on the first build), 
 ```sh
 just setup     # once per clone: the ROM-blocking git hook and the locked cargo
 just check     # what every change has to pass; needs no ROM
+just check-all # just check, then the checks that need ROMs, the games checkout or the network
 just publish   # an optimized gp in ~/.gameprinter/bin
 export PATH="$HOME/.gameprinter/bin:$PATH"
 gp --help
 ```
 
-`just check` builds gp, assembles Moss Hop and runs formatting, clippy, the tests and the Moss Hop checks. Changes land on `main` only through `gp tool gate` ([docs/gate.md](docs/gate.md)).
+`just check` builds gp, assembles Moss Hop and runs formatting, clippy, the tests and the Moss Hop checks.
+
+`just check-all` (scripts/check/all.sh, most of an hour) runs `just check` and then, each when what it needs is on the machine: Tapper's model in the page's player against the native run (`just web-parity-arcade`), the public page built and played headless with its lift's tests (`just web-page check`, which needs the games checkout beside the repo and the network) and its `share.test.mjs` and `theme-line.test.mjs`, `gp corpus score` on Donkey Kong and on Tapper with every clip exact, Tapper against MAME's capture `tapper-m3b-cycle` on every frame (gp-arcade's compare example, built in release), and `gp baseline check`. A check it can't run is one line naming what is missing (`check-all: skipped score-dk: no Donkey Kong ROM ...`). It exits 1 only when a check that ran failed; each check's output is in `target/check-all/`, and `CHECK_ALL_DRY=1` prints what it would run.
+
+Changes land on `main` only through `gp tool gate` ([docs/gate.md](docs/gate.md)).
 
 ROMs never go in a repo. They live in `$GP_ROM_DIR` (default `~/.gameprinter/roms`), and the git hook refuses them. Read the [ROM rules](site/src/content/docs/rom-rules.md) before you use one.
 

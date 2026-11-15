@@ -481,6 +481,31 @@ pub enum AssetKind {
     /// Sound effects in the same form, each tied to the model event it
     /// marks. Presentation only. Since core 0.4.3.
     SoundEffects,
+    /// An arcade board's background tiles, as its graphics chips hold
+    /// them (`mcr-tiles`, lifted from the player's romset): what a level's
+    /// `present.board.screen` is drawn with. Presentation only. Feature
+    /// `asset.board` (docs/formats/board-art.md).
+    BoardTiles,
+    /// An arcade board's sprites (`mcr-sprites`): what an entity's
+    /// `board_sprite` is drawn with. Presentation only. Feature
+    /// `asset.board`.
+    BoardSprites,
+    /// A whole screen of the board's background tile layer, each cell its
+    /// tile, flips, colour bank and priority as the board's video RAM
+    /// holds them (`mcr-screen`, a table of the program lifted from the
+    /// player's romset): a level's stage. Presentation only. Feature
+    /// `asset.board`.
+    BoardScreen,
+    /// The board's 64 colours as its palette RAM holds them (`mcr-palette`,
+    /// a table of the program lifted from the player's romset).
+    /// Presentation only. Feature `asset.board`.
+    BoardPalette,
+    /// Background tiles of the board that draw text, with the tile for
+    /// each character (`mcr-font`, its `charset` counted from the asset's
+    /// first tile): the letters a theme or a new game draws text with on
+    /// the board, as an NES model's `font` slot. Presentation only.
+    /// Feature `asset.board`.
+    BoardFont,
 }
 
 impl AssetKind {
@@ -507,6 +532,11 @@ impl AssetKind {
             Self::ScreenText => &["ppu-strings"],
             Self::SpriteSet => &["sprite-set"],
             Self::Songs | Self::SoundEffects => &["gp-songs", "smb-music"],
+            Self::BoardTiles => &["mcr-tiles"],
+            Self::BoardSprites => &["mcr-sprites"],
+            Self::BoardScreen => &["mcr-screen"],
+            Self::BoardPalette => &["mcr-palette"],
+            Self::BoardFont => &["mcr-font"],
         }
     }
 
@@ -531,6 +561,11 @@ impl AssetKind {
             Self::SpriteSet => "sprite-set",
             Self::Songs => "songs",
             Self::SoundEffects => "sound-effects",
+            Self::BoardTiles => "board-tiles",
+            Self::BoardSprites => "board-sprites",
+            Self::BoardScreen => "board-screen",
+            Self::BoardPalette => "board-palette",
+            Self::BoardFont => "board-font",
         }
     }
 }
@@ -572,6 +607,13 @@ pub struct EntityCore {
     pub tile_hitbox: Option<Rect>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sprite: Option<Sprite>,
+    /// Feature `sprite.board`: on an arcade board, the body is one of the
+    /// board's own sprites, its picture and flags read as the board reads
+    /// a sprite RAM entry, drawn by the board's sprite layer where the
+    /// board draws an entry whose bytes are the body's position
+    /// (docs/formats/board-art.md). Presentation only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_sprite: Option<BoardSprite>,
     /// The entity's own state machine (small and big, walking and in its
     /// shell). Each instance runs its own copy. A state's `set` changes
     /// the entity's fields while in it.
@@ -746,6 +788,7 @@ pub const ENTITY_CORE_FIELDS: &[&str] = &[
     "tile_collision",
     "tile_hitbox",
     "sprite",
+    "board_sprite",
     "machine",
     "ext",
     "ext_params",
@@ -892,6 +935,215 @@ pub struct Sprite {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<serde_json::Value>")]
     pub leaves: Option<Box<Sprite>>,
+}
+
+/// Feature `sprite.board`: a body drawn as one of an arcade board's
+/// sprites. The board draws a sprite from four bytes of its sprite RAM (y,
+/// flags, picture, x); the body's position stands for y and x, and this
+/// says where the other two come from: the body's words, which a state
+/// mapping loads from the game's object slots (the program copies those
+/// bytes to sprite RAM), or numbers the model fixes. Presentation only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoardSprite {
+    /// A slot of kind `board-sprites`.
+    pub slot: String,
+    /// The picture byte (byte 2 of the entry): the sprite's number, its
+    /// ninth bit in the flags.
+    pub picture: BoardByte,
+    /// The flags byte (byte 1 of the entry), as the board reads it: bit 3
+    /// the picture's ninth bit, bits 0 and 1 the colour bank inverted,
+    /// bit 4 a flip left to right, bit 5 a flip top to bottom. Without
+    /// it, 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flags: Option<BoardByte>,
+    /// Mirrored left to right, on top of the flags' flip, while the body
+    /// faces left.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flip_when_facing_left: bool,
+}
+
+/// One byte of a board sprite's entry: a byte of one of the body's `ext`
+/// words, or a number the model fixes. Give `word` or `number`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoardByte {
+    /// The `ext` word (0 to 3) that holds it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub word: Option<u32>,
+    /// Which byte of the word, 0 the lowest: a mapping that reads two
+    /// bytes into one word (`ram = [flags, picture]`) puts the first at
+    /// byte 0 and the second at byte 1. Default 0.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub byte: u32,
+    /// The byte itself, when the model fixes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<u32>,
+}
+
+/// Feature `level.board`: a level drawn as an arcade board draws its
+/// picture: the board's background tile layer from a whole screen, and
+/// the board's colours, which the bodies' board sprites are drawn in too
+/// (docs/formats/board-art.md). Presentation only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoardLook {
+    /// A slot of kind `board-palette`: the 64 colours.
+    pub palette: String,
+    /// A slot of kind `board-tiles`, which `screen` is drawn with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tiles: Option<String>,
+    /// A slot of kind `board-screen`: the stage. Without it the tile layer
+    /// is tile 0 everywhere, in colour bank 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screen: Option<String>,
+    /// Bytes the program writes into palette RAM after loading `palette`,
+    /// in order, each from a byte of a `rows` slot: a colour it pokes on
+    /// its own, or a level's colours from a table.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub palette_writes: Vec<PaletteWrite>,
+    /// Feature `level.board.looks`: the level's other looks, each chosen
+    /// while its counter tests hold (the first that does), as the game
+    /// picks a stage and its colours by its own counters. Each frame is
+    /// drawn with the look its counters choose then, so a hook that
+    /// changes a counter changes the look with no new level and nothing
+    /// placed again. With none holding, the look above.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub looks: Vec<BoardLookWhen>,
+    /// Feature `level.board.counters`: counters drawn as digits in the
+    /// tile layer, as a game's vblank writes its score into video RAM.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub counters: Vec<BoardCounter>,
+    /// Feature `level.board.counters`: counters drawn as one tile
+    /// repeated, as lives are shown as a row of pictures.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repeats: Vec<BoardRepeat>,
+}
+
+/// Another look of a level drawn by its arcade board (feature
+/// `level.board.looks`): what it changes from the level's own look while
+/// every test of `when` holds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoardLookWhen {
+    /// The model's counters this look is chosen by, as a HUD field's
+    /// `when`: every test must hold.
+    pub when: Vec<Guard>,
+    /// A slot of kind `board-palette`, loaded in place of the level's: the
+    /// level's `palette_writes` aren't written over it then, only this
+    /// look's, as a program that loads its colours again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub palette: Option<String>,
+    /// A slot of kind `board-screen`, in place of the level's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screen: Option<String>,
+    /// More bytes written into palette RAM, after the level's own
+    /// `palette_writes` (or, with `palette`, after loading it): a bar's
+    /// colours by the bar shown.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub palette_writes: Vec<PaletteWrite>,
+}
+
+/// A byte of a `rows` slot lifted from the player's romset, such as the
+/// tile code a game's code adds a digit to: byte `column` of row `row`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RowByte {
+    /// A slot of kind `rows`.
+    pub slot: String,
+    /// Its row (default 0).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub row: u32,
+    /// Its byte in the row (default 0).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub column: u32,
+}
+
+/// A counter drawn as digits in an arcade board's tile layer (feature
+/// `level.board.counters`): each digit a cell of video RAM, its low byte
+/// the digit's tile code and its high byte `high`, over the screen's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoardCounter {
+    /// The counter, by name.
+    pub counter: String,
+    /// Added to the counter before it is drawn: 1 for a level number
+    /// kept as the levels cleared. Default 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub plus: i64,
+    /// Column and row of the first (leftmost) digit's cell, 0 to 31 and
+    /// 0 to 29.
+    pub at: [u32; 2],
+    /// How many digits, 1 to 10. A number too long for them shows its
+    /// last digits; one below zero is drawn as zero.
+    pub digits: u32,
+    /// The tile code (bits 0 to 7 of the cell) of the digit 0, lifted:
+    /// digit d's is this plus d, as a game's code adds the digit to a
+    /// code (`add a,$30`). With `table`, the first of ten codes.
+    pub tile: RowByte,
+    /// `tile` is a table of the ten digits' codes, digit d's at `column +
+    /// d`, for a game that keeps one.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub table: bool,
+    /// The cells' high byte (tile bits 8 and 9, the flips, the colour bank
+    /// and the priority), lifted.
+    pub high: RowByte,
+    /// Leading zeros are drawn as `0`. Without it, they are left out and
+    /// those cells show the screen's own tiles, as a game that skips them
+    /// leaves them; the last digit is always drawn.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub zeros: bool,
+    /// Drawn only while every one of these counter tests holds, as a HUD
+    /// field's `when`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub when: Vec<Guard>,
+}
+
+/// A counter drawn as one tile repeated in an arcade board's tile layer
+/// (feature `level.board.counters`), as a row of lives.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoardRepeat {
+    /// The counter, by name: how many are drawn.
+    pub counter: String,
+    /// Added to the counter first: -1 for the lives left besides the one
+    /// in play. Default 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub plus: i64,
+    /// Column and row of the first one's cell.
+    pub at: [u32; 2],
+    /// Columns and rows from one to the next: `[-1, 0]` for a row drawn
+    /// leftward. Default `[1, 0]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<[i32; 2]>,
+    /// The most drawn.
+    pub most: u32,
+    /// The tile code (bits 0 to 7 of the cell), lifted.
+    pub tile: RowByte,
+    /// The cells' high byte, lifted.
+    pub high: RowByte,
+    /// Drawn only while every one of these counter tests holds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub when: Vec<Guard>,
+}
+
+/// One byte written into an arcade board's palette RAM (`level.board`):
+/// the board's colour `at / 2` takes the byte as its low 8 bits, and as
+/// its ninth bit 1 when `at` is odd, 0 when even, as the board's palette
+/// RAM does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PaletteWrite {
+    /// The byte of palette RAM written, 0 to 127.
+    pub at: u32,
+    /// A slot of kind `rows` holding the byte.
+    pub slot: String,
+    /// Its row (default 0).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub row: u32,
+    /// Its byte in the row (default 0).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub column: u32,
 }
 
 /// How a body draws the picture of the body it replaced. Presentation
@@ -1222,6 +1474,10 @@ pub struct LevelPresent {
     /// 52 and under the barrels' 12 on. Presentation only.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub effect_order: BTreeMap<String, EffectOrder>,
+    /// Feature `level.board`: the level drawn as an arcade board draws its
+    /// picture, its stage and its colours. Presentation only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board: Option<BoardLook>,
 }
 
 /// Feature `present.effect_order`: an effect takes the table's sprites
@@ -1251,7 +1507,9 @@ pub struct EffectOrder {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SpriteOrder {
-    /// The first hardware sprite's number in the table (0 to 63).
+    /// The first hardware sprite's number in the table (0 to 63 on the
+    /// NES; on an arcade board drawn with `level.board`, its sprite RAM's
+    /// entry, 0 to 127).
     pub at: u32,
     /// Hardware sprites a body takes (default 4).
     #[serde(default = "four")]

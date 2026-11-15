@@ -258,6 +258,22 @@ file sound/roles/jump.wav
 | `own_sound` | The game's own sound plays (the look replaces no sound role) |
 | `file` | A file the look holds, relative to its folder; never absolute or with `..` |
 
+#### A sound role's takes
+
+A look gives a sound role its sound as `sound/roles/<role>.wav`, a 16-bit PCM WAV listed as a `file` line (a role is named in the model's `[[present.sound.roles]]` and the game's theme kit). Since 2026-11-14 (issue #30) a role can have more takes: `sound/takes/<role>.2.wav`, `<role>.3.wav` and on, each listed as a `file` line too. Each time the role starts the runtime plays its next take, in the order of their numbers, then the first again (`gp_present::sound::RolePlayer`, which counts the role's starts from the first frame, so a run played again from power-on plays the same takes at the same frames). `gp_present::looks::role_take` reads a file's role and take from its path.
+
+```text
+gp-look 1
+id clay
+title Clay
+art art.txt
+file sound/roles/jump.wav
+file sound/takes/jump.2.wav
+file sound/takes/jump.3.wav
+```
+
+The takes are in a folder of their own because of what a page from before them does: it plays every listed file under `sound/roles/` as the role of the file's name and stops loading the look's sounds at a name the game hasn't got, so `sound/roles/jump.2.wav` there would cost the roles listed after it their sound. It never reads `sound/takes/`, so it plays `sound/roles/jump.wav` every time and the rest of the look as before. A role needs its `sound/roles/` file for that reason: with only takes, a page from before plays nothing for it. No line of the manifest is new, so every reader of `look.txt` takes such a look as it is. `gp theme look check` lists each role's files and refuses the files a page can't play ("Sound" in its report).
+
 | Runtime | Where it looks | What it writes |
 |---|---|---|
 | Bevy build | `assets/themes/<id>/` (the build's own), `themes/<id>/` beside the executable, and `themes/<id>/` in its data folder (docs/generator.md) | `gp gen bevy` draws each theme in the template's `themes/` as a look, and `original` when the assets were lifted from a ROM (`[source] how = "rom"`) and the stack draws a theme |
@@ -288,6 +304,27 @@ The path is relative to the pointing folder and must name `TEMPLATE/themes/ID` i
 | `gp template pack`, `gp package scan`, the asset-free scan | Read the target's files under the pointer's folder name, so a packed template stands alone |
 
 A missing target is refused with the file and the reason, and so is a target that is itself a pointer (a chain or a loop). An absolute path and a path outside the templates folder are refused the same way. From 2026-11-04 to 2026-11-06 Donkey Kong's paper theme was kept once, in `templates/donkey-kong-ju/themes/paper/`, painted from Original Edition (the model with more slots) with `gp theme paint templates/donkey-kong-oe --for donkey_kong`; JU passes over the two restyles of slots it lacks. `templates/donkey-kong-oe/themes/paper/` held only `same_as.toml`. Since 2026-11-06 it is in `templates/donkey-kong-oe/themes/paper/` and for `donkey_kong_oe` alone, and the public page's lift ships a pointer to it for the Donkey Kong (JU) ROM the template loads to play (scripts/web/build-lift.sh). The tests are `gp_theme::same_as::tests` (made-up folders) and `gp_web_lift::tests::a_shared_theme_is_offered_on_both_models` (two made-up versions of Rivet Rodeo's template sharing one paper theme, each lifted, the two looks byte for byte the same).
+
+## Large-art rules
+
+A look's `look.txt` may name a rules file with `art FILE`: a large-art look, whose pictures are drawn bigger than the game's own (lex00/turnips is one). The rules are text, `gp-art 1` on the first line and one rule a line, read by `gp_present::art` in the game's module, so the page and any runtime built on gp_present draw the same frame; site/src/content/docs/themes.md lists every rule for theme makers, and the module's own comment holds the details. The rules a page reads changed over time in one way only: lines added since `gp-art 1` began start with `#+`.
+
+A reader takes a line whose first word starts with `#` for a note. So a page built before a `#+` line passes over it and draws the look without it, where an unknown line of any other kind makes the page leave the whole look out ("its rules don't read"). A reader that knows `#+` lines passes over one it can't read the same way and keeps it in `ArtRules::skipped`, and `gp theme look check` names it as a problem by its line. New rules go in as `#+` lines, so a look that uses one stays offered on every page.
+
+| Line | Means | Default |
+|---|---|---|
+| `#+ hud_over` | The HUD's layer and the text in its background are drawn after the bodies (after their fading ghosts, before the dimmed wall, the props and the HUD's sprites), so a body standing on a HUD row doesn't cover its text | Without the line they are drawn under the bodies, as every look before it |
+| `#+ hud_over ROW...` | Only those rows of the HUD, each 8 pixels from the screen's top (row 2 is y 16 to 24, as a HUD field's `at` numbers it); the layer is cut into bands of rows by clips, the text goes by its row. Several lines add up; one with no row takes the whole HUD | |
+| `#+ in REGION pic BUILD ART W H DX DY` | A `pic` rule that holds only while the body is in the named region of the stage: the middle of its picture's bottom row inside the region's box, on the region's level | A body shows its other pictures |
+| `#+ in REGION timed BUILD FROM TO ART W H DX DY ...` | A `timed` rule likewise, with the same options | |
+
+In a region a body's `in` rules come first, its timed ones that hold now and then its picture, before its other `timed` rules and its `pic`. A region's name is lowercase letters, digits, `-` and `_`; the regions are named in the game's level kit (docs/level-kit.md, "Regions of a stage"), never by coordinates in the theme. `gp theme look check` refuses an `in` line whose region the kit doesn't name; the build carries the kit's regions in `preview.json` and the page gives them to the module (`Art::set_regions`). Moss Hop's kit names one, `start`; Donkey Kong's and Tapper's name none yet. The art an `in` line names is numbered after every other art file, so a look without the lines numbers its files as before.
+
+The HUD's sprites (a field drawn in a sprite palette, a HUD sprite) are drawn last in every look, over the bodies, so `#+ hud_over` changes nothing in a game whose HUD is all sprites (Moss Hop's); `gp theme look check` warns of that.
+
+### On an arcade game
+
+An arcade game drawn by its board's art (docs/formats/board-art.md, "Themes") takes the same rules, read and painted by the same `gp_present::art`, in the page's `gp_board.wasm` instead of the game's module. A rule names the board's pictures in place of the build's: a screen by its `board-screen` slot (`screen_saloon`), a sprite as `sprite-ENTITY-CODE` with the picture code in hex (`sprite-mug-4d`), a counter's digit as `counter-COUNTER-D` and a repeated tile as `counter-COUNTER`. Sizes and places are the board's picture's pixels (512 by 480). No rule line is new; the names are new values in the lines there were. A page built before them doesn't draw such a theme and draws nothing wrong: its arcade lift offered no finished theme, and its game's module refuses rules that name none of its pictures. A page with the board's names offers the theme in Settings, Theme and draws it.
 
 ## Stacks
 

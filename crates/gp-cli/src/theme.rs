@@ -239,6 +239,22 @@ pub enum ThemeCmd {
         #[command(subcommand)]
         cmd: crate::theme_look::LookCmd,
     },
+    /// A new picture for the person's own copy of a large-art theme,
+    /// proposed by the agent and accepted or rejected by the person on
+    /// their page: propose one (checked first), list the proposals and the
+    /// person's answers, and the person's accept, reject and undo.
+    Picture {
+        #[command(subcommand)]
+        cmd: crate::theme_picture::PictureCmd,
+    },
+    /// A change to how the person's copy sounds, proposed by the agent
+    /// (sound_edit's ops) and accepted or rejected by the person on their
+    /// page: propose one (checked first), list the proposals and the
+    /// person's answers, and the person's accept, reject and undo.
+    Sound {
+        #[command(subcommand)]
+        cmd: crate::theme_sound::SoundCmd,
+    },
     /// Style cards (docs/theme-kit.md, "Style cards"): how a theme looks,
     /// apart from any game.
     Style {
@@ -307,8 +323,10 @@ pub enum ThemeCmd {
         #[arg(long)]
         mirror: bool,
     },
-    /// Run a model in the interpreter on an input and write its frames, drawn
-    /// with a theme stack, as an animated PNG. Prints the digest of the
+    /// Run a model on an input, through its game's module when it has hooks,
+    /// and write its frames, drawn with a theme stack, as an animated PNG. An
+    /// arcade model that names board art is drawn as the screen measure
+    /// draws it, with its board's own pictures. Prints the digest of the
     /// per-frame state hashes, which is `gp interp run`'s for the same input
     /// with any theme: the presentation reads the world and never writes it.
     Video {
@@ -321,6 +339,11 @@ pub enum ThemeCmd {
         /// The model's lifted or stub assets.
         #[arg(long, value_name = "DIR")]
         assets: Option<PathBuf>,
+        /// The game's built module, which runs the model's hooks (default:
+        /// the game package's module, built from this gp's kit or reused,
+        /// as gp game build makes it).
+        #[arg(long, value_name = "FILE")]
+        module: Option<PathBuf>,
         /// The video, outside any git work tree.
         #[arg(short, long, value_name = "FILE")]
         out: PathBuf,
@@ -489,6 +512,8 @@ pub(crate) fn run(cmd: &ThemeCmd, paths: &Paths, rec: &mut RunRecorder) -> Resul
             )
         }
         ThemeCmd::Look { cmd } => crate::theme_look::run(cmd, paths),
+        ThemeCmd::Picture { cmd } => crate::theme_picture::run(cmd, paths),
+        ThemeCmd::Sound { cmd } => crate::theme_sound::run(cmd, paths),
         ThemeCmd::Kit {
             game,
             rom,
@@ -559,6 +584,7 @@ pub(crate) fn run(cmd: &ThemeCmd, paths: &Paths, rec: &mut RunRecorder) -> Resul
             input,
             theme,
             assets,
+            module,
             out,
             scale,
             force,
@@ -568,6 +594,7 @@ pub(crate) fn run(cmd: &ThemeCmd, paths: &Paths, rec: &mut RunRecorder) -> Resul
             input,
             theme,
             assets.as_deref(),
+            module.as_deref(),
             out,
             *scale,
             *force,
@@ -1485,6 +1512,63 @@ impl Shown {
     }
 }
 
+/// An arcade model's frames as the screen measure draws them
+/// (crate::screen::model_frame): its levels' board art and the bodies that
+/// are the board's sprites drawn by the board's own drawing, the rest by
+/// their pictures, placed as the board places them.
+struct BoardVideo {
+    art: std::sync::Arc<crate::screen::Art>,
+    anim: gp_present::Animator,
+}
+
+impl BoardVideo {
+    fn new(art: std::sync::Arc<crate::screen::Art>) -> Self {
+        Self {
+            art,
+            anim: gp_present::Animator::new(),
+        }
+    }
+
+    /// The size of its pictures: the first one's visible part.
+    fn size(&self, rt: &crate::theme_run::Run) -> [u32; 2] {
+        let f = crate::screen::model_frame(&self.art, &self.anim, rt.model());
+        [f.visible[2], f.visible[3]]
+    }
+
+    fn step(&mut self, rt: &crate::theme_run::Run, events: &[gp_sim::Event]) {
+        let present = &self.art.present;
+        self.anim.step(present, rt.spec(), rt.world());
+        if !events.is_empty() {
+            self.anim.fired(present, rt.spec(), rt.world(), events);
+        }
+    }
+
+    /// The model's picture now, its visible part cut or filled with black
+    /// to `size`.
+    fn frame(&self, rt: &crate::theme_run::Run, size: [u32; 2]) -> Rgba {
+        let f = crate::screen::model_frame(&self.art, &self.anim, rt.model());
+        frame_rgba(&f, size)
+    }
+}
+
+/// A drawn frame's visible part as a `size` picture, cut or filled with
+/// black where the two differ.
+fn frame_rgba(f: &gp_present::raster::Frame, size: [u32; 2]) -> Rgba {
+    let [vl, vt, vw, vh] = f.visible;
+    let mut out = Rgba::new(size[0], size[1]);
+    for y in 0..size[1] {
+        for x in 0..size[0] {
+            let c = if x < vw && y < vh {
+                f.rgb[((y + vt) * f.w + x + vl) as usize]
+            } else {
+                [0; 3]
+            };
+            out.set(x, y, [c[0], c[1], c[2], 255]);
+        }
+    }
+    out
+}
+
 /// A frame's pixels as RGB, each repeated `s` times both ways.
 fn scaled_rgb(frame: &Rgba, s: usize, out: &mut Vec<u8>) {
     let (vw, vh) = (frame.width as usize, frame.height as usize);
@@ -1546,6 +1630,7 @@ fn video(
     input: &InputArgs,
     args: &ThemeArgs,
     assets: Option<&Path>,
+    module: Option<&Path>,
     out: &Path,
     scale: u8,
     force: bool,
@@ -1570,11 +1655,44 @@ fn video(
     let (m, theme, art, bundle) = themed(model, args, assets, paths, rec)?;
     let report = readable(&art, &theme, args.allow_unreadable)?;
     let log = input.read(paths)?;
-    let mut rt = crate::theme_run::Run::open(&bundle, &read_model(model)?.1, paths)?;
+    let mut rt = crate::theme_run::Run::open_with(&bundle, &read_model(model)?.1, paths, module)?;
+    // A video of a model without its hooks would show another game.
+    if !rt.not_run.is_empty() {
+        bail!(
+            "{}'s hooks {} run only in its game's module, and none was found: name it with --module (gp game build makes it)",
+            m.model.name,
+            rt.not_run.join(", ")
+        );
+    }
+    // An arcade model with board art is drawn as the screen measure draws
+    // it: the board's own pictures, which a theme stack doesn't hold.
+    let mut board = if gp_look::board::names_board(&m) {
+        if !theme.layers.is_empty() {
+            bail!(
+                "{} is drawn with its arcade board's own art, and a theme over board art isn't drawn yet: leave out --theme, --stack and --themes",
+                m.model.name
+            );
+        }
+        let adir = assets_dir(&m, assets, paths)?;
+        let units = gp_interp::mapping::board_units_in(&read_model(model)?.1)
+            .map_err(anyhow::Error::msg)?;
+        Some(BoardVideo::new(crate::screen::art(
+            &m,
+            rt.spec(),
+            &adir,
+            units,
+        )?))
+    } else {
+        None
+    };
     let renderer = Renderer::new(&m, &art, rt.spec())?;
     let mut shown = Shown::new(&art)?;
     let s = usize::from(scale);
-    let [vw, vh] = shown.size().map(|v| v as usize);
+    let [vw, vh] = match &board {
+        Some(b) => b.size(&rt),
+        None => shown.size(),
+    }
+    .map(|v| v as usize);
     let frames = crate::run::frames(&log);
     if let Some(d) = out.parent() {
         fs::create_dir_all(d).with_context(|| format!("creating {}", d.display()))?;
@@ -1598,14 +1716,25 @@ fn video(
     };
     let mut samples: Vec<i16> = Vec::new();
     shown.step(&rt, &[]);
+    if let Some(b) = &mut board {
+        b.step(&rt, &[]);
+    }
     for f in &frames {
         let (events, _) = rt.advance(f).map_err(anyhow::Error::msg)?;
         hashes.push(frame_hash(&rt));
         if let Some((cues, player)) = &mut sound {
             samples.extend(player.frame(cues, rt.world(), gp_present::sound::ROLE_FRAME));
         }
-        shown.step(&rt, &events);
-        let frame = shown.frame(&renderer, &rt);
+        let frame = match &mut board {
+            Some(b) => {
+                b.step(&rt, &events);
+                b.frame(&rt, [vw as u32, vh as u32])
+            }
+            None => {
+                shown.step(&rt, &events);
+                shown.frame(&renderer, &rt)
+            }
+        };
         scaled_rgb(&frame, s, &mut rgb);
         apng.frame(&rgb)?;
     }
@@ -1627,7 +1756,7 @@ fn video(
             samples.len() as f64 / f64::from(gp_present::sound::ROLE_RATE),
             w.display()
         );
-        for (frame, role) in &player.log {
+        for (frame, role, _) in &player.log {
             cue_lines.push_str(&format!("  {frame} {role}\n"));
             cues_json.push(json!([frame, role]));
         }
@@ -1656,4 +1785,30 @@ fn video(
         }),
         text.trim_end().to_owned(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A made-up 4 by 3 frame whose visible part is its middle 2 by 2: cut
+    /// to that part, and filled with black where the size asked is larger.
+    #[test]
+    fn a_board_frame_is_its_visible_part() {
+        let rgb: Vec<[u8; 3]> = (0..12u8).map(|i| [i, i + 1, i + 2]).collect();
+        let f = gp_present::raster::Frame {
+            w: 4,
+            h: 3,
+            sprite: vec![false; rgb.len()],
+            rgb,
+            visible: [1, 1, 2, 2],
+            things: Vec::new(),
+        };
+        let out = frame_rgba(&f, [3, 2]);
+        assert_eq!((out.width, out.height), (3, 2));
+        let px = |x: usize, y: usize| out.pixels[y * 3 + x];
+        assert_eq!(px(0, 0), [5, 6, 7, 255]);
+        assert_eq!(px(1, 1), [10, 11, 12, 255]);
+        assert_eq!(px(2, 0), [0, 0, 0, 255]);
+    }
 }

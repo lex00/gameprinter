@@ -8,7 +8,10 @@
 //
 // The server side is crates/gp-cli/src/theme_serve.rs (api/themes/...).
 // Every command runs as background work there; none makes a paid call
-// (generate and publish are dry runs).
+// (generate and publish are dry runs). Pictures the agent proposes for
+// the person's own theme are listed first (../picture-card.js).
+
+import { picturesSection } from "../picture-card.js";
 
 const el = (tag, cls, text) => {
   const e = document.createElement(tag);
@@ -33,6 +36,8 @@ export function mountThemes(body, page) {
     document.head.append(l);
   }
   const st = { all: null, pick: null, job: null, review: null, at: 0, playing: null, marks: [] };
+  // Kept across redraws, so it keeps its own state; it draws itself.
+  const pictures = picturesSection();
   let timer = null;
 
   const say = (t) => page.toast?.(String(t));
@@ -48,6 +53,7 @@ export function mountThemes(body, page) {
   async function load() {
     try { st.all = await page.api("api/themes/all"); } catch (e) {
       body.textContent = `THEMES can't read this game: ${e.message ?? e}`;
+      body.prepend(pictures);
       return;
     }
     if (!st.pick && st.all.themes.length) st.pick = st.all.themes[0].key;
@@ -66,7 +72,7 @@ export function mountThemes(body, page) {
     const a = st.all;
     body.innerHTML = "";
     const top = el("p", "muted", `${a.title} (${a.model}). Theme work comes once the game plays right with the original's pictures. Everything here is written under ${a.work}; nothing goes into the games checkout, and nothing here pays for a call.`);
-    body.append(top);
+    body.append(top, pictures);
     const grid = el("div", "th-grid");
     const left = el("div", "th-col");
     const right = el("div", "th-col th-main");

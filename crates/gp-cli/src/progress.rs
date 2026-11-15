@@ -52,6 +52,13 @@ pub struct ProgressArgs {
     /// "What next").
     #[arg(long, conflicts_with_all = ["run", "measure", "write_ignore"])]
     pub next: bool,
+    /// With --next: the answer for one of your copies instead of a port: a
+    /// theme (a folder under $GP_HOME/work/themes) or a new game (a copy
+    /// under $GP_HOME/work/mcp), by its name, or theme/NAME or new/NAME.
+    /// Without it and without --template, the copy opened last on the page
+    /// when that was after the last game. Example: --copy clay
+    #[arg(long, requires = "next", conflicts_with = "template")]
+    pub copy: Option<String>,
     /// The gp serve run whose model, clips and scores to read: a run is a
     /// game of the games checkout, by its folder's name. Without it only
     /// the game's folder is read.
@@ -85,6 +92,12 @@ pub struct ProgressArgs {
     /// (gameprinter's hooks live in each game's module).
     #[arg(long)]
     pub module: Option<PathBuf>,
+    /// With `--measure`, show the ladder with this measure but don't keep
+    /// it: the measure kept in $GP_HOME/work/progress (what the ladder and
+    /// --write-ignore read later) stays as it was. For a trial run, such
+    /// as one on a short --playthrough.
+    #[arg(long, requires = "measure", conflicts_with = "write_ignore")]
+    pub no_save: bool,
 }
 
 /// One stage of the ladder.
@@ -1406,12 +1419,15 @@ const IGNORE_MARK: &str = "# The RAM bytes the model needs no field for";
 
 /// The ignore list from a measure's roles: every byte the playthrough
 /// changes in play that isn't game state by the trace and that `mapping`
-/// doesn't name, runs of one role and reason as one entry, as TOML.
+/// doesn't name, runs of one role and reason as one entry, as TOML. The
+/// measure counts RAM by its index; `base` is where the CPU sees index 0
+/// (0 on the NES, E000 on an arcade board), the address the entry names.
 pub(crate) fn ignore_list(
     m: &Measured,
     named: &BTreeSet<u16>,
     labels: &BTreeMap<u16, String>,
     code_labels: &BTreeMap<u16, String>,
+    base: u16,
 ) -> (String, usize) {
     let changed: BTreeSet<u16> = m.ram.iter().copied().collect();
     let rows: Vec<&gp_nes::ramrole::RamRole> = m
@@ -1461,7 +1477,7 @@ pub(crate) fn ignore_list(
             .filter(|l| !l.contains('+'))
             .collect();
         out.push_str("\n[[ignore]]\n");
-        out.push_str(&format!("ram = 0x{:04X}", r.addr));
+        out.push_str(&format!("ram = 0x{:04X}", base + r.addr));
         if !names.is_empty() {
             out.push_str(&format!("  # {}", names.join(", ")));
         }
@@ -1509,7 +1525,12 @@ fn write_ignore(file: &Path, m: &Measured, f: &Facts) -> Result<usize> {
         keep = keep.replacen(&line, "schema = 21\n", 1);
     }
     let code_labels = code_labels(f.source.labels.as_deref());
-    let (list, n) = ignore_list(m, &named_ram(&mapping), &f.labels, &code_labels);
+    let base = if mapping.platform.as_deref() == Some("arcade") {
+        0xE000
+    } else {
+        0
+    };
+    let (list, n) = ignore_list(m, &named_ram(&mapping), &f.labels, &code_labels, base);
     keep.push_str(&list);
     gp_interp::mapping::Mapping::parse(&keep)
         .map_err(|e| anyhow::anyhow!("the mapping with its ignore list: {e}"))?;
@@ -1541,13 +1562,14 @@ fn code_labels(path: Option<&Path>) -> BTreeMap<u16, String> {
 /// `gp progress`.
 pub(crate) fn run(args: &ProgressArgs, paths: &gp_evidence::Paths) -> Result<Outcome> {
     if args.next {
-        return crate::next::run(paths, args.template.as_deref());
+        return crate::next::run(paths, args.template.as_deref(), args.copy.as_deref());
     }
     let template = args
         .template
         .as_deref()
         .context("--template names the game")?;
     let mut notes = Vec::new();
+    let mut trial = None;
     if args.measure {
         let run = args
             .run
@@ -1568,11 +1590,23 @@ pub(crate) fn run(args: &ProgressArgs, paths: &gp_evidence::Paths) -> Result<Out
                 clips: !args.no_clips,
                 whole: !args.no_whole,
                 module: args.module.as_deref(),
+                save: !args.no_save,
             },
         )?;
-        notes.push(format!("measured in {:.0} s", m.seconds));
+        notes.push(if args.no_save {
+            format!(
+                "measured in {:.0} s, not kept (--no-save): the measure kept before is unchanged",
+                m.seconds
+            )
+        } else {
+            format!("measured in {:.0} s", m.seconds)
+        });
+        trial = Some(m);
     }
-    let f = gather(paths, template, args.run.as_deref())?;
+    let mut f = gather(paths, template, args.run.as_deref())?;
+    if let Some(m) = trial {
+        f.measured = Some(m);
+    }
     if let Some(file) = &args.write_ignore {
         let m = f
             .measured
@@ -1580,7 +1614,7 @@ pub(crate) fn run(args: &ProgressArgs, paths: &gp_evidence::Paths) -> Result<Out
             .context("--write-ignore needs a measure: run with --measure first")?;
         anyhow::ensure!(
             m.roles != gp_nes::ramrole::Classified::default() || m.ram.is_empty(),
-            "--write-ignore needs the RAM roles from a trace of the 6502: gp has no Z80 counterpart of gp_nes::ramrole yet, so an arcade game's ignore list is written by hand"
+            "--write-ignore needs the RAM roles from a trace of the original, which this measure hasn't got (a measure older than the Z80's trace of the roles): run with --measure again"
         );
         let n = write_ignore(file, m, &f)?;
         notes.push(format!(
@@ -1850,8 +1884,15 @@ mod tests {
         ]);
         let labels = [(0x10, "SfxTimer".to_owned()), (0x13, "Pad".to_owned())].into();
         let code = [(0x9000, "SoundEngine".to_owned())].into();
-        let (text, n) = ignore_list(&m, &[0x12].into(), &labels, &code);
+        let (text, n) = ignore_list(&m, &[0x12].into(), &labels, &code, 0);
         assert_eq!(n, 3, "{text}");
+        // On an arcade board the measure's index 0x10 is the CPU's E010.
+        let (arcade, _) = ignore_list(&m, &[0x12].into(), &labels, &code, 0xE000);
+        assert!(
+            arcade.contains("ram = 0xE010  # SfxTimer\nlen = 2\n"),
+            "{arcade}"
+        );
+        assert!(arcade.contains("ram = 0xE014\n"), "{arcade}");
         assert!(
             text.contains("# Sound routines from: SoundEngine ($9000)."),
             "{text}"

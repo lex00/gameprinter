@@ -17,7 +17,8 @@ use std::time::Duration;
 
 use gp_runtime::wire::{self, Reader, Writer};
 use gp_runtime::{
-    Capabilities, Entry, Event, InputFrame, LoadNote, PatchResult, Rect, Runtime, Until, Value,
+    Capabilities, Entry, Event, InputFrame, LoadNote, PatchResult, QueryValues, Rect, Runtime,
+    Until, Value,
 };
 use wasmtime::{
     Config, Engine, Instance, Memory, Module, Store, StoreLimits, StoreLimitsBuilder, TypedFunc,
@@ -201,6 +202,10 @@ pub struct DrawsReport {
 pub struct ModuleRuntime {
     host: Arc<Mutex<Host>>,
     id: u32,
+    /// Whether the module has `query-values` (game-printer:game@0.2.0 on):
+    /// [`QueryValues::query_values`] is then one call, else a `query` for
+    /// each path.
+    batch: bool,
     /// The hooks' label, as a recording stores it.
     pub label: String,
     /// The hooks the module has.
@@ -214,9 +219,16 @@ impl ModuleRuntime {
     }
 
     fn start(mut host: Host, bundle: &[u8]) -> Result<Self, String> {
+        // A module built before game-printer:game@0.2.0 says only its
+        // runtime protocol.
+        let batch = host.call(wire::INFO, &[], CALL_TICKS).is_ok_and(|info| {
+            let mut r = Reader::new(&info);
+            r.str().is_ok() && r.str().is_ok_and(|game| answers_query_values(&game))
+        });
         let out = host.call(wire::LOAD, bundle, CALL_TICKS)?;
         let mut r = Reader::new(&out);
         Ok(Self {
+            batch,
             id: r.u32()?,
             label: r.str()?,
             hooks: r.strs()?,
@@ -245,6 +257,14 @@ impl ModuleRuntime {
         } else {
             Self::frames_deadline(frames)
         }
+    }
+
+    /// Whether [`QueryValues::query_values`] reads with one call across
+    /// (`query-values`), true for a module built from a kit of
+    /// game-printer:game@0.2.0 on; false for one built before, read a
+    /// `query` for each path.
+    pub fn batch_reads(&self) -> bool {
+        self.batch
     }
 
     /// The hash recordings store for this frame.
@@ -373,6 +393,45 @@ impl ModuleRuntime {
     }
 }
 
+/// Whether a module whose game package is `game` (`game-printer:game@X.Y.Z`)
+/// has `query-values`: 0.2.0 on.
+fn answers_query_values(game: &str) -> bool {
+    let Some(v) = game.strip_prefix("game-printer:game@") else {
+        return false;
+    };
+    let mut parts = v.split('.').map(str::parse::<u32>);
+    match (parts.next(), parts.next()) {
+        (Some(Ok(major)), Some(Ok(minor))) => (major, minor) >= (0, 2),
+        _ => false,
+    }
+}
+
+impl QueryValues for ModuleRuntime {
+    fn query_values(&self, selectors: &[String]) -> Vec<Result<Vec<Value>, String>> {
+        if !self.batch {
+            return selectors
+                .iter()
+                .map(|s| Ok(self.query(s)?.into_iter().map(|e| e.value).collect()))
+                .collect();
+        }
+        match self
+            .call(wire::QUERY_VALUES, CALL_TICKS, |w| w.strs(selectors))
+            .and_then(|out| Reader::new(&out).value_rows())
+        {
+            Ok(rows) if rows.len() == selectors.len() => rows,
+            Ok(rows) => vec![
+                Err(format!(
+                    "the module answered {} of {} paths",
+                    rows.len(),
+                    selectors.len()
+                ));
+                selectors.len()
+            ],
+            Err(e) => vec![Err(e); selectors.len()],
+        }
+    }
+}
+
 impl Drop for ModuleRuntime {
     fn drop(&mut self) {
         let _ = self.call(wire::DROP, CALL_TICKS, |_| {});
@@ -438,6 +497,7 @@ impl Runtime for ModuleRuntime {
         Self {
             host: Arc::clone(&self.host),
             id: must(Reader::new(&out).u32()),
+            batch: self.batch,
             label: self.label.clone(),
             hooks: self.hooks.clone(),
         }
@@ -635,6 +695,16 @@ mod tests {
 
     /// Where the key starts in an entry: after the magic line.
     const MAGIC_LEN: usize = b"gp compiled module 1\n".len();
+
+    #[test]
+    fn query_values_is_from_game_0_2_on() {
+        assert!(!answers_query_values("game-printer:game@0.1.0"));
+        assert!(answers_query_values("game-printer:game@0.2.0"));
+        assert!(answers_query_values("game-printer:game@1.0.0"));
+        assert!(answers_query_values(gp_runtime::GAME_WIT_PACKAGE));
+        assert!(!answers_query_values("game-printer:runtime@0.4.0"));
+        assert!(!answers_query_values(""));
+    }
 
     #[test]
     fn a_failing_call_gives_its_words() {

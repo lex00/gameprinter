@@ -12,8 +12,10 @@
 //! exported ones, and this command notices by their digest.
 //!
 //! Ported from game-printer's assets_open.rs, with `image_layers` (the
-//! image config's layers) moved here from its sprites.rs. An arcade game's lift is refused in
-//! words: the editor trip cuts frames into NES tiles (gp_sprites::chr).
+//! image config's layers) moved here from its sprites.rs. On an arcade
+//! lift the trip is an entity's board sprites, one PNG a picture code
+//! (gp_mcp::board_trip): each save is read back with its checks and
+//! reported, and a proposal waits on the art history holding 16 values.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -228,22 +230,29 @@ pub(crate) fn open(a: &OpenArgs, paths: &Paths) -> Result<Outcome> {
             .join("assets")
             .join(model.model.source.as_deref().unwrap_or(&model.model.name)),
     };
-    if std::fs::read_to_string(lifted.join(gp_assets::MAP_FILE))
-        .is_ok_and(|t| gp_assets::arcade::is_arcade(&t))
-    {
-        bail!(
-            "{} is an arcade lift; the editor trip cuts frames into NES tiles (gp_sprites::chr), so an arcade game's sprites aren't opened yet",
-            lifted.display()
-        );
-    }
+    // An arcade lift's trip is the entity's board sprites, one PNG a
+    // picture code (gp_mcp::board_trip).
+    let arcade = std::fs::read_to_string(lifted.join(gp_assets::MAP_FILE))
+        .is_ok_and(|t| gp_assets::arcade::is_arcade(&t));
     let slot = match &a.slot {
         Some(s) => s.clone(),
         None => model
             .entities
             .get(&a.entity)
-            .and_then(|e| e.core.sprite.as_ref())
-            .map(|s| s.slot.clone())
-            .ok_or_else(|| anyhow!("`{}` has no sprite", a.entity))?,
+            .and_then(|e| {
+                if arcade {
+                    e.core.board_sprite.as_ref().map(|b| b.slot.clone())
+                } else {
+                    e.core.sprite.as_ref().map(|s| s.slot.clone())
+                }
+            })
+            .ok_or_else(|| {
+                anyhow!(
+                    "`{}` has no {}",
+                    a.entity,
+                    if arcade { "board_sprite" } else { "sprite" }
+                )
+            })?,
     };
     let layers = image_layers(paths, a.config.as_deref())?;
     let mut cfg = gp_imagefmt::config::resolve(&layers, Some(&template), Some(&a.entity))

@@ -25,7 +25,7 @@
 
 use std::collections::BTreeMap;
 
-use gp_runtime::{Runtime, Value};
+use gp_runtime::{QueryValues, Runtime, Value};
 use gp_sim::Spec;
 
 use crate::lockstep::{Lockstep, PathSeries};
@@ -196,23 +196,33 @@ pub struct SlotObject {
     pub values: Vec<(String, Value)>,
 }
 
-/// The original's RAM byte at `addr`.
+/// The original's RAM byte at `addr`: what `ram[0x....]` names, its
+/// text written with nothing allocated (and read by the runtime's parse
+/// without its lexer).
 pub fn read_byte<O: Runtime>(original: &O, addr: u16) -> Result<u8, String> {
-    byte_at(original, &format!("ram[{addr:#06x}]"))
+    let sel = gp_runtime::select::ram_text(addr);
+    byte_of(&original.query(&sel)?, || sel.to_string())
 }
 
 /// The original's byte a selector such as `ram[0x00a0]` names.
 pub fn read_sel<O: Runtime>(original: &O, sel: &str) -> Result<u8, String> {
-    byte_at(original, sel)
+    byte_of(&original.query(sel)?, || sel.to_owned())
 }
 
-fn byte_at<O: Runtime>(original: &O, sel: &str) -> Result<u8, String> {
-    original
-        .query(sel)?
+/// The original's RAM bytes at `addrs`, in order (a field's
+/// `slot_addresses`).
+pub fn read_bytes<O: Runtime>(original: &O, addrs: &[u16]) -> Result<Vec<u8>, String> {
+    addrs.iter().map(|&a| read_byte(original, a)).collect()
+}
+
+/// The first entry's value as a byte; the selector's text only for the
+/// error.
+fn byte_of(entries: &[gp_runtime::Entry], sel: impl FnOnce() -> String) -> Result<u8, String> {
+    entries
         .first()
         .and_then(|e| e.value.as_int())
         .map(|v| v as u8)
-        .ok_or(format!("{sel} isn't a byte"))
+        .ok_or_else(|| format!("{} isn't a byte", sel()))
 }
 
 /// The original's living slot objects of the kinds the slots name: a slot
@@ -232,7 +242,6 @@ pub fn carried_slot_objects<O: Runtime>(
     original: &O,
     slots: &Slots,
 ) -> Result<Vec<SlotObject>, String> {
-    let byte = |sel: String| -> Result<u8, String> { byte_at(original, &sel) };
     let mut out = Vec::new();
     let holds = |c: &str, what: &str| -> Result<bool, String> {
         let cond = gp_runtime::select::Condition::parse(c).map_err(|e| format!("{what}: {e}"))?;
@@ -241,7 +250,7 @@ pub fn carried_slot_objects<O: Runtime>(
                 .query(&sel.to_string())?
                 .first()
                 .and_then(|e| e.value.as_int())
-                .ok_or(format!("{sel} names no number"))
+                .ok_or_else(|| format!("{sel} names no number"))
         })
     };
     if let Some(c) = &slots.vacant
@@ -261,7 +270,7 @@ pub fn carried_slot_objects<O: Runtime>(
         }
         let id = slots.id_of(slot, |a| read_byte(original, a))?;
         let state = match slots.state {
-            Some(at) => byte(format!("ram[{:#06x}]", at + slot))?,
+            Some(at) => read_byte(original, at + slot)?,
             None => 0,
         };
         let Some(kind) = slots.kinds.iter().position(|k| {
@@ -274,10 +283,7 @@ pub fn carried_slot_objects<O: Runtime>(
         };
         let mut values = Vec::new();
         for f in slots.fields_of(&slots.kinds[kind]) {
-            let mut bytes = Vec::new();
-            for sel in f.slot_selectors(slot) {
-                bytes.push(byte(sel)?);
-            }
+            let bytes = read_bytes(original, &f.slot_addresses(slot))?;
             values.push((f.path.clone(), f.slot_value(slot, &bytes)));
         }
         out.push(SlotObject { slot, kind, values });
@@ -305,10 +311,7 @@ pub fn held_objects<O: Runtime>(original: &O, slots: &Slots) -> Result<Vec<SlotO
         }
         let mut values = Vec::new();
         for f in slots.fields_with(&held.fields) {
-            let mut bytes = Vec::new();
-            for sel in f.slot_selectors(slot) {
-                bytes.push(byte_at(original, &sel)?);
-            }
+            let bytes = read_bytes(original, &f.slot_addresses(slot))?;
             values.push((f.path.clone(), f.slot_value(slot, &bytes)));
         }
         out.push(SlotObject {
@@ -333,58 +336,63 @@ struct ModelBody {
     waiting: bool,
 }
 
-/// The model's bodies of the kinds in `wanted`, by ID.
-fn model_bodies<M: Runtime>(
+/// The fields of a model body [`model_bodies`] reads, in the order it
+/// asks for them.
+const BODY_FIELDS: [&str; 7] = ["id", "x", "y", "vx", "vy", "alive", "waiting"];
+
+/// The model's bodies of the kinds in `wanted`, by ID: each wanted kind's
+/// fields read for every body in one batch (`entities.KIND[*].FIELD`).
+fn model_bodies<M: QueryValues>(
     model: &M,
     spec: &Spec,
     wanted: &[bool],
 ) -> Result<Vec<ModelBody>, String> {
-    let entries = match model.query("entities") {
-        Ok(e) => e,
-        Err(_) => return Ok(Vec::new()),
-    };
-    let mut by: BTreeMap<(usize, usize), ModelBody> = BTreeMap::new();
-    for e in entries {
-        let Some(rest) = e.path.strip_prefix("entities.") else {
-            continue;
-        };
-        let Some((name, rest)) = rest.split_once('[') else {
-            continue;
-        };
-        let Some((n, field)) = rest.split_once("].") else {
-            continue;
-        };
-        let (Some(kind), Ok(n)) = (spec.kinds.index_of(name), n.parse::<usize>()) else {
-            continue;
-        };
-        if !wanted.get(kind).copied().unwrap_or(false) {
-            continue;
-        }
-        let b = by.entry((kind, n)).or_insert(ModelBody {
-            kind,
-            ..ModelBody::default()
-        });
-        let num = |v: &Value| match v {
-            Value::Fixed(r) => *r,
-            Value::Int(n) => n << 16,
-            _ => 0,
-        };
-        match field {
-            "id" => {
-                if let Value::Entity(id) = e.value {
-                    b.id = id;
-                }
-            }
-            "x" => b.x = num(&e.value),
-            "y" => b.y = num(&e.value),
-            "vx" => b.vx = num(&e.value),
-            "vy" => b.vy = num(&e.value),
-            "alive" => b.alive = e.value == Value::Flag(true),
-            "waiting" => b.waiting = e.value == Value::Flag(true),
-            _ => {}
+    // By name alone, so a run that notes its reads of the spec notes none
+    // here, as reading `entities` didn't.
+    let (kinds, names): (Vec<usize>, Vec<&str>) = spec
+        .kinds
+        .names()
+        .enumerate()
+        .filter(|(k, _)| wanted.get(*k).copied().unwrap_or(false))
+        .unzip();
+    let mut selectors = Vec::with_capacity(kinds.len() * BODY_FIELDS.len());
+    for name in names {
+        for field in BODY_FIELDS {
+            selectors.push(format!("entities.{name}[*].{field}"));
         }
     }
-    let mut out: Vec<ModelBody> = by.into_values().collect();
+    let mut rows = model.query_values(&selectors).into_iter();
+    let num = |v: &Value| match v {
+        Value::Fixed(r) => *r,
+        Value::Int(n) => n << 16,
+        _ => 0,
+    };
+    let mut out = Vec::new();
+    for &kind in &kinds {
+        // A kind with no bodies names nothing: none of it.
+        let fields: Vec<Vec<Value>> = rows
+            .by_ref()
+            .take(BODY_FIELDS.len())
+            .map(Result::unwrap_or_default)
+            .collect();
+        let n = fields.iter().map(Vec::len).max().unwrap_or(0);
+        for i in 0..n {
+            let at = |f: usize| fields[f].get(i);
+            out.push(ModelBody {
+                kind,
+                id: match at(0) {
+                    Some(Value::Entity(id)) => *id,
+                    _ => 0,
+                },
+                x: at(1).map_or(0, num),
+                y: at(2).map_or(0, num),
+                vx: at(3).map_or(0, num),
+                vy: at(4).map_or(0, num),
+                alive: at(5) == Some(&Value::Flag(true)),
+                waiting: at(6) == Some(&Value::Flag(true)),
+            });
+        }
+    }
     out.sort_by_key(|b| b.id);
     Ok(out)
 }
@@ -638,7 +646,7 @@ impl Tracker {
     /// `values`, to every earlier frame's values) as within on the frames
     /// before.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn frame<O: Runtime, M: Runtime>(
+    pub(crate) fn frame<O: Runtime, M: QueryValues>(
         &mut self,
         out: &mut Lockstep,
         spec: &Spec,

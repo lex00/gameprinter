@@ -48,7 +48,7 @@ pub(crate) fn stub(
     })?;
     if gp_assets::arcade::is_arcade(&map_text) {
         bail!(
-            "{} is an arcade lift: no model slot takes an arcade lift's pictures yet (gp_interp::Lifted reads NES maps), so there are no presentation slots to stub",
+            "{} is an arcade lift: its pictures are the board's regions, which a model's board slots take whole from the player's romset (docs/formats/board-art.md), and stubs are made for an NES map's slots only",
             lifted.display()
         );
     }

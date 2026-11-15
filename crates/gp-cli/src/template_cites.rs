@@ -119,6 +119,16 @@ pub(crate) fn index(dirs: &[PathBuf]) -> Result<(Index, Vec<String>)> {
     index_from(dirs, 0x8000)
 }
 
+/// The index of every template in `dirs` for an arcade romset: every
+/// 4-digit address below the main CPU's program's end (its code starts at
+/// 0000), as `gp template cites` reads a romset's.
+pub(crate) fn index_romset(dirs: &[PathBuf], set: &gp_arcade::Romset) -> Result<Index> {
+    let (mut idx, _) = index_from(dirs, 0)?;
+    let end = crate::code_z80::program(set, 0).1;
+    idx.retain(|a, _| u32::from(*a) < end);
+    Ok(idx)
+}
+
 /// The index of every template in `dirs`, of addresses from `lo`.
 fn index_from(dirs: &[PathBuf], lo: u16) -> Result<(Index, Vec<String>)> {
     let mut idx = Index::new();

@@ -10,7 +10,13 @@
 //
 // Any change a hook can see (Ext, ExtCx, Body, World, Spec) is a major bump
 // of the sim-api the module declares, not a version of this file.
-package game-printer:game@0.1.0;
+//
+// 0.2.0 added `run.query-values`. A call is only ever added here, so a module
+// built before still loads and runs: `info` (op 2 of gp_runtime::wire)
+// answers the runtime protocol's package and, from 0.2.0 on, this package
+// after it, and the host reads a frame's values a `query` at a time from a
+// module that names no 0.2.0.
+package game-printer:game@0.2.0;
 
 interface module {
   // What the module is, read once when it is opened. The host refuses a
@@ -90,7 +96,16 @@ interface module {
 
 // Per-run controls a scorer sets on a runtime before stepping it.
 interface run {
+  use game-printer:runtime/types@0.4.0.{value};
   use game-printer:runtime/session@0.4.0.{runtime};
+
+  // Several paths of the session's frame read in one call, since 0.2.0: each
+  // selector's values as `query` gives them, without their paths, or its
+  // error, in the order asked. A lockstep reads the mapping's fields and the
+  // tracked bodies' (`entities.KIND[*].x` and the like) this way each frame.
+  // The module reads a leaf, or a field of a kind's bodies, from the world
+  // itself, and any other path from the frame's whole view, as `query` does.
+  query-values: func(rt: borrow<runtime>, selectors: list<string>) -> list<result<list<value>, string>>;
 
   // The digest of the spec the module compiled from the bytes `load` was
   // given (gp_sim::save::spec_digest). Tools read `Spec` on the host from

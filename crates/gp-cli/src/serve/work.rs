@@ -1079,11 +1079,6 @@ pub(crate) fn run_attempt(ctx: &Ctx, a: &AttemptArgs) -> anyhow::Result<Attempt>
         write_attempt(&run, &att)?;
         if a.preview {
             let r = (|| -> anyhow::Result<()> {
-                if run.platform() == crate::roms::Platform::Arcade {
-                    bail!(
-                        "an arcade game's preview of the model isn't built here yet; play the attempt's model in the mechanic page"
-                    );
-                }
                 let rom = super::game::rom_of(ctx, &run).map_err(|f| anyhow::anyhow!(f.message))?;
                 let assets =
                     crate::corpus_score::assets_of(&ctx.paths, &run.game, &run.game, None, &rom)?;

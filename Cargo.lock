@@ -1233,6 +1233,7 @@ dependencies = [
  "gp-track",
  "gp-validate",
  "gp-web-lift",
+ "gp-web-registry",
  "hex",
  "jsonschema",
  "lz4_flex",
@@ -1430,6 +1431,7 @@ name = "gp-look"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "gp-arcade",
  "gp-assets",
  "gp-interp",
  "gp-model",
@@ -1692,9 +1694,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gp-web-board"
+version = "0.1.0"
+dependencies = [
+ "gp-look",
+ "gp-present",
+]
+
+[[package]]
 name = "gp-web-lift"
 version = "0.1.0"
 dependencies = [
+ "gp-arcade",
  "gp-assets",
  "gp-evidence",
  "gp-interp",

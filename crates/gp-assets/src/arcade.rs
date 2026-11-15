@@ -38,8 +38,11 @@
 //! |---|---|---|
 //! | `mcr-tiles` | `gfx1` | Background tiles, 8 by 8, 4 bits a pixel. The board draws each pixel twice in both directions, as 16 by 16 |
 //! | `mcr-sprites` | `gfx2` | Sprites, 32 by 32, 4 bits a pixel |
+//! | `mcr-font` | `gfx1` | Background tiles that draw text, lifted as `mcr-tiles` are, with a `charset` (crate::charset) whose numbers count from the asset's `first`: the tile a character is drawn with is `first` plus its number. A model's `board-font` slot, the letters a theme or a new game draws text with |
 //! | `sprite-set` | none | Sprite frames as layouts of the `mcr-sprites` pictures (crate::sprite_set): `gp sprites capture` writes it from recordings, so it names no region and lifts nothing, as in an NES map |
 //! | `byte-rows` | `maincpu` | A data table of the program: `count` rows of `width` bytes from `offset` (a CPU address), lifted as a TOML file of rows like the NES map's `byte-rows`, which hooks read through an entity's `ext_rows`. `[asset.at]` gives its place in a set whose program keeps it elsewhere (Tapper's `rbtapper`) |
+//! | `mcr-screen` | `maincpu` | A whole screen of the background tile layer as the program keeps it to copy into video RAM: 30 rows of 32 cells from `offset`, two bytes a cell (low byte first: the tile's number in bits 0 to 9, flip x 10, flip y 11, colour bank 12 and 13, priority 14 and 15). Lifted as a TOML file of 30 rows of 32 cell words. A model's `board-screen` slot |
+//! | `mcr-palette` | `maincpu` | The board's 64 colours as the program keeps them to copy into palette RAM, two bytes a colour from `offset`, unpacked as Tapper's loader ($600F) unpacks them into the board's 9 bits (red, blue, green, 3 each). Lifted as a TOML file of 64 colours. A model's `board-palette` slot |
 //!
 //! Each asset lifts to one indexed PNG, its tiles or sprites left to right,
 //! `per_row` to a row, each pixel its 4-bit value (0 to 15) with gray
@@ -93,6 +96,20 @@ pub enum Format {
     /// (`ext_rows`) from the player's own romset.
     #[serde(rename = "byte-rows")]
     ByteRows,
+    /// A whole screen of the background tile layer, 30 rows of 32 cells
+    /// of two bytes from `offset` in `maincpu`: what the program copies
+    /// into video RAM. A model's `board-screen` slot.
+    #[serde(rename = "mcr-screen")]
+    McrScreen,
+    /// The board's 64 colours, two bytes each from `offset` in `maincpu`,
+    /// as the program copies them into palette RAM. A model's
+    /// `board-palette` slot.
+    #[serde(rename = "mcr-palette")]
+    McrPalette,
+    /// Background tiles that draw text (`gfx1`, as `mcr-tiles`), with a
+    /// `charset` counted from `first`. A model's `board-font` slot.
+    #[serde(rename = "mcr-font")]
+    McrFont,
 }
 
 impl Format {
@@ -102,6 +119,9 @@ impl Format {
             Self::McrSprites => "mcr-sprites",
             Self::SpriteSet => "sprite-set",
             Self::ByteRows => "byte-rows",
+            Self::McrScreen => "mcr-screen",
+            Self::McrPalette => "mcr-palette",
+            Self::McrFont => "mcr-font",
         }
     }
 
@@ -109,16 +129,21 @@ impl Format {
     /// a sprite-set).
     fn region(self) -> (&'static str, u32) {
         match self {
-            Self::McrTiles => ("gfx1", 8),
+            Self::McrTiles | Self::McrFont => ("gfx1", 8),
             Self::McrSprites => ("gfx2", 32),
             Self::SpriteSet => ("", 0),
-            Self::ByteRows => ("maincpu", 0),
+            Self::ByteRows | Self::McrScreen | Self::McrPalette => ("maincpu", 0),
         }
+    }
+
+    /// Whether it is a table of the program, lifted as a TOML file.
+    pub fn table(self) -> bool {
+        matches!(self, Self::ByteRows | Self::McrScreen | Self::McrPalette)
     }
 
     /// Whether it is pictures of a graphics region.
     pub fn picture(self) -> bool {
-        matches!(self, Self::McrTiles | Self::McrSprites)
+        matches!(self, Self::McrTiles | Self::McrSprites | Self::McrFont)
     }
 
     /// Whether the lift writes pictures for it.
@@ -156,9 +181,16 @@ pub struct ArcadeAsset {
     pub width: u32,
     /// A `byte-rows` table's place in a set whose program keeps it
     /// elsewhere, by the set's name (`rbtapper = 0xC3F1`): the sets share
-    /// a layout of pictures, not always of code.
+    /// a layout of pictures, not always of code. The public page's lift
+    /// takes a set of another program only when every program table names
+    /// it here, one kept at the same place with `offset` again
+    /// (gp_web_lift::arcade::tables_unplaced).
     #[serde(default)]
     pub at: std::collections::BTreeMap<String, u32>,
+    /// An `mcr-font`'s text encoding: each character's tile, counted from
+    /// `first` (crate::charset's runs, `[[0x30, "0123456789"]]`).
+    #[serde(default)]
+    pub charset: Option<crate::charset::Charset>,
 }
 
 fn default_per_row() -> u32 {
@@ -166,8 +198,17 @@ fn default_per_row() -> u32 {
 }
 
 impl ArcadeAsset {
+    /// An `mcr-font`'s tile in its region for a character: `first` plus
+    /// the charset's number.
+    pub fn glyph(&self, c: char) -> Option<u32> {
+        self.charset
+            .as_ref()
+            .and_then(|cs| cs.tile(c))
+            .map(|t| self.first + u32::from(t))
+    }
+
     pub fn file(&self) -> String {
-        if matches!(self.format, Format::SpriteSet | Format::ByteRows) {
+        if self.format == Format::SpriteSet || self.format.table() {
             format!("{}.toml", self.name)
         } else {
             format!("{}.png", self.name)
@@ -221,11 +262,41 @@ impl ArcadeMap {
                 return Err(Error::Map(format!("asset name {:?} is used twice", a.name)));
             }
             let (region, _) = a.format.region();
+            if (a.format == Format::McrFont) != a.charset.is_some() {
+                return Err(Error::Map(format!(
+                    "{}: {}",
+                    a.name,
+                    if a.format == Format::McrFont {
+                        "an mcr-font names its charset"
+                    } else {
+                        "only an mcr-font has a charset"
+                    }
+                )));
+            }
+            if let Some(cs) = &a.charset {
+                cs.validate(&a.name).map_err(Error::Map)?;
+                if let Some(past) = cs.tiles().find(|t| u32::from(*t) >= a.count) {
+                    return Err(Error::Map(format!(
+                        "{}: the charset's tile {past:#04x} is past the font's {} tiles",
+                        a.name, a.count
+                    )));
+                }
+            }
             if a.format == Format::SpriteSet {
                 if !a.region.is_empty() || a.count != 0 {
                     return Err(Error::Map(format!(
                         "{}: a sprite-set names no region or count; gp sprites capture writes it",
                         a.name
+                    )));
+                }
+                continue;
+            }
+            if matches!(a.format, Format::McrScreen | Format::McrPalette) {
+                if a.region != region || a.count != 0 || a.width != 0 {
+                    return Err(Error::Map(format!(
+                        "{}: {} names region {region} and its offset, and no count or width (its size is the board's)",
+                        a.name,
+                        a.format.name()
                     )));
                 }
                 continue;
@@ -285,17 +356,17 @@ pub struct Decoded {
 impl Decoded {
     fn picture(&self, f: Format, i: usize) -> Option<&[u8]> {
         match f {
-            Format::McrTiles => self.tiles.get(i).map(|t| &t[..]),
+            Format::McrTiles | Format::McrFont => self.tiles.get(i).map(|t| &t[..]),
             Format::McrSprites => self.sprites.get(i).map(|t| &t[..]),
-            Format::SpriteSet | Format::ByteRows => None,
+            _ => None,
         }
     }
 
     fn picture_mut(&mut self, f: Format, i: usize) -> Option<&mut [u8]> {
         match f {
-            Format::McrTiles => self.tiles.get_mut(i).map(|t| &mut t[..]),
+            Format::McrTiles | Format::McrFont => self.tiles.get_mut(i).map(|t| &mut t[..]),
             Format::McrSprites => self.sprites.get_mut(i).map(|t| &mut t[..]),
-            Format::SpriteSet | Format::ByteRows => None,
+            _ => None,
         }
     }
 }
@@ -331,6 +402,121 @@ rows = [\n",
     }
     out.push_str("]\n");
     Ok(out.into_bytes())
+}
+
+/// A table's `len` bytes from its region, at its place in the set.
+fn table_bytes<'a>(a: &ArcadeAsset, gfx: &'a Decoded, len: usize) -> Result<&'a [u8], Error> {
+    let fail = |msg: String| Error::Decode {
+        asset: a.name.clone(),
+        msg,
+    };
+    let region = gfx
+        .regions
+        .get(&a.region)
+        .ok_or_else(|| fail(format!("the romset has no region {}", a.region)))?;
+    let from = a.at.get(&gfx.set).copied().unwrap_or(a.offset) as usize;
+    region.get(from..from + len).ok_or_else(|| {
+        fail(format!(
+            "{len} bytes from {from:#06x} are past {}",
+            a.region
+        ))
+    })
+}
+
+/// The board's screen: 30 rows of 32 cells.
+pub const SCREEN_ROWS: usize = 30;
+pub const SCREEN_COLUMNS: usize = 32;
+
+/// An `mcr-screen`'s lifted file: its 960 cells as words, row by row.
+fn screen_file(a: &ArcadeAsset, gfx: &Decoded, source: &str) -> Result<Vec<u8>, Error> {
+    let bytes = table_bytes(a, gfx, SCREEN_ROWS * SCREEN_COLUMNS * 2)?;
+    let mut out = format!(
+        "# A screen of the board's background tile layer, 30 rows of 32 cells as video\n\
+         # RAM holds them (tile bits 0 to 9, flip x 10, flip y 11, colour bank 12 and 13,\n\
+         # priority 14 and 15): asset {:?} of {source}, lifted from the player's romset.\n\
+         rows = [\n",
+        a.name
+    );
+    for (i, row) in bytes
+        .as_chunks::<{ SCREEN_COLUMNS * 2 }>()
+        .0
+        .iter()
+        .enumerate()
+    {
+        let cells: Vec<String> = row
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| format!("0x{:04X}", u16::from_le_bytes(*c)))
+            .collect();
+        out.push_str(&format!("  [{}], # {i}\n", cells.join(", ")));
+    }
+    out.push_str("]\n");
+    Ok(out.into_bytes())
+}
+
+/// One colour of an `mcr-palette` table, two bytes, unpacked as Tapper's
+/// loader ($600F) does: the first byte's nibbles go to bits 0 to 3 and 3
+/// to 6 (or'd), the second byte turned right twice is or'd in less its
+/// low bit, and that low bit is the ninth bit (the loader writes the
+/// colour's odd byte of palette RAM for it).
+pub fn palette_color(lo: u8, hi: u8) -> u16 {
+    let c = hi.rotate_right(2);
+    let a = ((lo & 0xf0) >> 1) | (lo & 0x0f) | (c & 0xfe);
+    u16::from(a) | (u16::from(c & 1) << 8)
+}
+
+/// The board's colours.
+pub const PALETTE_COLORS: usize = 64;
+
+/// An `mcr-palette`'s lifted file: 64 colours of 9 bits.
+fn palette_file(a: &ArcadeAsset, gfx: &Decoded, source: &str) -> Result<Vec<u8>, Error> {
+    let bytes = table_bytes(a, gfx, PALETTE_COLORS * 2)?;
+    let colors: Vec<String> = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| format!("0x{:03X}", palette_color(c[0], c[1])))
+        .collect();
+    let mut out = format!(
+        "# The board's 64 colours, 9 bits each (red 6 to 8, blue 3 to 5, green 0 to 2):\n\
+         # asset {:?} of {source}, lifted from the player's romset.\n\
+         colors = [\n",
+        a.name
+    );
+    for (i, row) in colors.chunks(16).enumerate() {
+        out.push_str(&format!("  {}, # {}\n", row.join(", "), i * 16));
+    }
+    out.push_str("]\n");
+    Ok(out.into_bytes())
+}
+
+/// An `mcr-screen`'s lifted file read back: 960 cell words, row by row.
+pub fn read_screen(text: &str) -> Result<Vec<u16>, String> {
+    #[derive(Deserialize)]
+    struct F {
+        rows: Vec<Vec<u16>>,
+    }
+    let f: F = toml::from_str(text).map_err(|e| e.to_string())?;
+    if f.rows.len() != SCREEN_ROWS || f.rows.iter().any(|r| r.len() != SCREEN_COLUMNS) {
+        return Err(format!(
+            "a screen is {SCREEN_ROWS} rows of {SCREEN_COLUMNS} cells"
+        ));
+    }
+    Ok(f.rows.concat())
+}
+
+/// An `mcr-palette`'s lifted file read back: 64 colours of 9 bits.
+pub fn read_palette(text: &str) -> Result<Vec<u16>, String> {
+    #[derive(Deserialize)]
+    struct F {
+        colors: Vec<u16>,
+    }
+    let f: F = toml::from_str(text).map_err(|e| e.to_string())?;
+    if f.colors.len() != PALETTE_COLORS || f.colors.iter().any(|c| *c > 0x1ff) {
+        return Err(format!("a palette is {PALETTE_COLORS} colours of 9 bits"));
+    }
+    Ok(f.colors)
 }
 
 /// One asset's pixels from the decoded regions, laid out as its PNG.
@@ -400,8 +586,12 @@ pub fn lift(
         },
     ];
     let mut lifted = Vec::new();
-    for a in map.assets.iter().filter(|a| a.format == Format::ByteRows) {
-        let bytes = rows_file(a, gfx, &map.source)?;
+    for a in map.assets.iter().filter(|a| a.format.table()) {
+        let bytes = match a.format {
+            Format::McrScreen => screen_file(a, gfx, &map.source)?,
+            Format::McrPalette => palette_file(a, gfx, &map.source)?,
+            _ => rows_file(a, gfx, &map.source)?,
+        };
         lifted.push(Lifted {
             name: a.name.clone(),
             format: a.format.name(),
@@ -622,6 +812,118 @@ mod tests {
             "format = \"sprite-set\"\nregion = \"gfx2\"",
         );
         assert!(ArcadeMap::parse(&bad).is_err());
+    }
+
+    /// A screen and a palette are tables of the program: made-up bytes
+    /// lift to a screen's cell words and the board's 9-bit colours, read
+    /// back as they were written, from another place in a set that names
+    /// one.
+    #[test]
+    fn a_screen_and_a_palette_lift_from_the_program() {
+        let text = format!(
+            "{}\n[[asset]]\nname = \"stage\"\nformat = \"mcr-screen\"\nregion = \"maincpu\"\noffset = 0x10\n\n\
+             [[asset]]\nname = \"colors\"\nformat = \"mcr-palette\"\nregion = \"maincpu\"\noffset = 0x800\n\n\
+             [asset.at]\ntapperg = 0x900\n",
+            mcr_91490_map("tapper", "Tapper", &SETS)
+        );
+        let map = ArcadeMap::parse(&text).unwrap();
+        let mut gfx = decoded("tapper", 0);
+        let program: Vec<u8> = (0..0xA00u32).map(|i| (i * 7 % 251) as u8).collect();
+        gfx.regions.insert("maincpu".into(), program.clone());
+        let (files, lifted) = lift(&gfx, &map, &text).unwrap();
+        assert_eq!(lifted.len(), 4);
+        let file = |n: &str| {
+            let f = files.iter().find(|f| f.name == n).unwrap();
+            String::from_utf8(f.bytes.clone()).unwrap()
+        };
+        let cells = read_screen(&file("stage.toml")).unwrap();
+        assert_eq!(cells.len(), 960);
+        assert_eq!(cells[0], u16::from_le_bytes([program[0x10], program[0x11]]));
+        assert_eq!(
+            cells[959],
+            u16::from_le_bytes([program[0x10 + 1918], program[0x10 + 1919]])
+        );
+        let colors = read_palette(&file("colors.toml")).unwrap();
+        assert_eq!(colors[1], palette_color(program[0x802], program[0x803]));
+        // Tapper's loader: the first byte's high nibble goes a bit down
+        // and its low nibble stays ($FF $00 is 0x07F); the second byte
+        // turned right twice gives bit 7 up ($00 $02 is 0x080) and, from
+        // its low bit, the ninth ($00 $04 is 0x100); $12 $08 is 0x08 or
+        // 0x02 or 0x02, 0x00A.
+        assert_eq!(palette_color(0xFF, 0x00), 0x07F);
+        assert_eq!(palette_color(0x00, 0x02), 0x080);
+        assert_eq!(palette_color(0x00, 0x04), 0x100);
+        assert_eq!(palette_color(0x12, 0x08), 0x00A);
+        // tapperg's table is elsewhere.
+        let mut g = gfx;
+        g.set = "tapperg".into();
+        let (files, _) = lift(&g, &map, &text).unwrap();
+        let f = files.iter().find(|f| f.name == "colors.toml").unwrap();
+        let colors = read_palette(std::str::from_utf8(&f.bytes).unwrap()).unwrap();
+        assert_eq!(colors[0], palette_color(program[0x900], program[0x901]));
+        // Their size is the board's: a count is refused.
+        assert!(
+            ArcadeMap::parse(&text.replace("offset = 0x10\n", "offset = 0x10\ncount = 2\n"))
+                .is_err()
+        );
+        assert!(read_screen("rows = [[1, 2]]").is_err());
+        assert!(read_palette("colors = [0x200]").is_err());
+    }
+
+    /// An mcr-font lifts its tiles as mcr-tiles do, from its `first`, and
+    /// its charset counts from there; one with no charset, a charset on
+    /// another format, or a glyph past its tiles is refused.
+    #[test]
+    fn a_font_lifts_its_tiles_and_names_its_glyphs() {
+        let text = format!(
+            "{}\n[[asset]]\nname = \"font\"\nformat = \"mcr-font\"\nregion = \"gfx1\"\nfirst = 0x100\ncount = 16\nper_row = 16\ncharset = [[0, \"0123456789\"], [12, \"AB\"]]\n",
+            mcr_91490_map("tapper", "Tapper", &SETS)
+        );
+        let map = ArcadeMap::parse(&text).unwrap();
+        let font = map.assets.iter().find(|a| a.name == "font").unwrap();
+        assert_eq!(font.glyph('7'), Some(0x107));
+        assert_eq!(font.glyph('B'), Some(0x10D));
+        assert_eq!(font.glyph('C'), None);
+        assert_eq!(font.image_size(), (128, 8));
+        let gfx = decoded("tapper", 3);
+        let (files, lifted) = lift(&gfx, &map, &text).unwrap();
+        assert_eq!(lifted.len(), 3);
+        let f = files.iter().find(|f| f.name == "font.png").unwrap();
+        let px = crate::chr::read_png(&f.bytes, (128, 8)).unwrap();
+        // Glyph 7's tile is the region's 0x107.
+        assert_eq!(px[7 * 8 + 1], gfx.tiles[0x107][1]);
+        let read = |n: &str| {
+            files
+                .iter()
+                .find(|f| f.name == n)
+                .map(|f| f.bytes.clone())
+                .ok_or_else(|| std::io::Error::other("missing"))
+        };
+        let mut back = decoded("tapper", 9);
+        unpack(&mut back, &map, &read).unwrap();
+        assert!(back.tiles == gfx.tiles);
+        let no_charset = text.replace("charset = [[0, \"0123456789\"], [12, \"AB\"]]\n", "");
+        assert!(
+            ArcadeMap::parse(&no_charset)
+                .unwrap_err()
+                .to_string()
+                .contains("names its charset")
+        );
+        let past = text.replace("[12, \"AB\"]", "[15, \"AB\"]");
+        assert!(
+            ArcadeMap::parse(&past)
+                .unwrap_err()
+                .to_string()
+                .contains("past")
+        );
+        let on_tiles = mcr_91490_map("tapper", "Tapper", &SETS)
+            .replace("per_row = 32\n", "per_row = 32\ncharset = [[0, \"0\"]]\n");
+        assert!(
+            ArcadeMap::parse(&on_tiles)
+                .unwrap_err()
+                .to_string()
+                .contains("only an mcr-font")
+        );
     }
 
     #[test]

@@ -17,6 +17,8 @@ The way to make a theme today is a large-art theme: pictures drawn bigger than t
 | `theme/look.txt` | `gp-look 1`, the theme's id and title, and `art art.txt` |
 | `theme/art.txt` | The rules, `gp-art 1`, one per line |
 | `theme/art/` | The pictures |
+| `theme/sound/roles/` | A sound for each of the game's sound roles, if you give the theme sound (below) |
+| `theme/sound/takes/` | More takes of a role's sound, played in turn |
 
 The game reads the rules in Rust (`gp_present::art` in gameprinter), so the web page and the native player draw the same frame. The page only loads the pictures and paints what the game returns.
 
@@ -37,10 +39,54 @@ Pictures are named by the build's own file names (`frame-82-0.png`, `hud-0.png`)
 | `prop LEVEL ART X Y W H`, `prop_over`, `prop_burst` | A picture in front of the bodies that pass behind it, with a burst where one lands |
 | `drift LEVEL Y RISE EVERY`, `drift_art`, `drift_at` | Pictures that rise and fade, like smoke |
 | `stage SCALE R G B R G B` | Stages built from pieces over a gradient backdrop |
+| `#+ hud_over` | The HUD's text is drawn over the bodies, so a body standing on a HUD row doesn't cover it. Without the line it is drawn under them, as before |
+| `#+ hud_over ROW...` | The same for those rows of the HUD only, 8 pixels each from the screen's top (row 2 is y 16 to 24) |
+| `#+ in REGION pic ...`, `#+ in REGION timed ...` | A `pic` or `timed` line that holds only while the body stands in a region of the stage the game's level kit names, such as a shorter picture on a low ledge. Moss Hop's kit names one, `start`, where the hero starts; Donkey Kong's and Tapper's name none yet |
 
 A stage is never a picture in the theme. The `stage`, `stage_piece` and `level` lines say how to build each one from pieces (a plank, a ladder rail, a rope, a wheel) over the level picture the player's own ROM gives, finding floors, ladders and ropes by colour. So a theme holds no layout from the original.
 
+The lines that start with `#+` are newer than the rest. A page built before them takes them for notes and still offers your theme, drawn without them: the HUD's text under the bodies, and each body's full picture everywhere. Any other line a page doesn't know makes it leave the whole theme out, so use only the lines on this page. A game whose HUD is drawn as sprites (Moss Hop's) has its text over the bodies already, and `gp theme look check` says so.
+
 Lettering is part of a theme too: draw your own letters and use `pic` lines for the HUD, the score pop-ups and the title screens.
+
+### Sound
+
+A game names its sounds by role: Donkey Kong has `jump`, `walk`, `smash`, `stage_music` and ten more, each with a line in its theme kit (`themes/kit/kit.toml`) saying when it plays. Give a role a sound of your own as `theme/sound/roles/ROLE.wav`, a 16-bit PCM WAV, and list it in `theme/look.txt`:
+
+```text
+gp-look 1
+id my-theme
+title My Theme
+art art.txt
+file sound/roles/jump.wav
+file sound/takes/jump.2.wav
+file sound/takes/jump.3.wav
+```
+
+Once your theme gives any role a sound, the game's own sound is silent, so give every role one. A sound that plays often, such as a jump or a step, gets tiring when it is the same every time. You can give it more takes in `theme/sound/takes/` (`jump.2.wav`, `jump.3.wav` and on), each listed in `look.txt`. Each time the role plays, the game plays its next take, and after the last the first again. Which take comes next is counted from the start of the game, so a recording played back sounds the same as when it was played.
+
+A page from before takes (built before 2026-11-14) plays your theme too, with `jump.wav` every time: it never reads `theme/sound/takes/`. That is why the takes have their own folder, and why every role needs its file in `theme/sound/roles/` even when it has takes. Don't put a take in `sound/roles/` as `jump.2.wav`: an older page takes that for a role named `jump.2`, and stops loading your sounds there.
+
+Make every sound yourself, or with a tool whose terms let you share what it makes. Nothing may be recorded or copied from the game.
+
+### An arcade game
+
+An arcade game such as Tapper is drawn by its board, and its theme uses the same lines with the board's names in place of the build's file names:
+
+| Picture | Name | Size |
+|---|---|---|
+| A screen | its slot in the game's model, such as `screen_saloon` | 512 by 480 |
+| A sprite | `sprite-ENTITY-CODE`, the entity and the picture code it shows in hex, such as `sprite-mug-4d` | 32 by 32 |
+| A counter's digit | `counter-NAME-D`, such as `counter-score-7` | 16 by 16 |
+| A repeated counter tile | `counter-NAME`, such as `counter-lives` | 16 by 16 |
+
+Sizes and places are the board's picture's pixels, 512 by 480; `scale 2` draws the art at twice that. Which codes each entity shows comes from your own romset, never from the theme or the game's package:
+
+```sh
+gp theme look sheet --game tapper
+```
+
+plays the game's recorded inputs on your romset. It writes `names.toml` with each name the game showed, and a contact sheet of the codes and screens it saw, under `$GP_HOME/work/theme-kits/tapper/board`; `--out DIR` picks another folder, though never one inside a repo. They are pictures of your ROM's game: keep them to yourself. `gp theme look new` then lists those codes in `art.txt`, and `gp theme look check` refuses a name the game hasn't got and warns of a code it never showed.
 
 ### Start it
 
@@ -49,6 +95,8 @@ gp theme look new my-theme --game donkey-kong --name YOUR-NAME/my-theme --title 
 ```
 
 writes an empty theme in the Turnips shape: `package.toml`, `theme/look.txt`, a README, and a `theme/art.txt` with one line for each picture the game's theme kit lists, marked TO DRAW with its size, its boxes and its feet row. It writes nothing from a ROM.
+
+The name has to be one a registry takes. Write it in lowercase with `-` between words. The part after the slash starts with a letter and is the look's id (`my-theme`). Any other name is refused with the nearest one that works.
 
 ### Check it
 
@@ -59,10 +107,14 @@ gp theme look check my-theme --game donkey-kong
 reads the theme with the page's own rules reader and lists what is wrong by file and line:
 
 - Files: `package.toml` (name, version, `kind = "content"`, title, licence), `look.txt` and `art.txt` as the page reads them, every picture a rule names there and loadable, pictures no rule uses.
+- The `#+` lines: one the page can't read (it passes over it), a region the game's level kit doesn't name, and `hud_over` in a game with no HUD text under its bodies.
 - What the game needs drawn: each pose of each slot in the game's theme kit that has no picture yet, by its label and pose words, with the game's own picture name to put in its `pic` line. A rule that names a picture the game hasn't got is a problem, since the page passes over it.
 - Fit: each pose against its body's touch box and feet row, beside the game's own picture, in game pixels. It is a first pass from the files alone; play it and look.
 - Names: the original's names (the kit's `deny` list) in the package and the look, where players see them.
+- Sound: each role's files, in the order the game plays them. A problem: a file that isn't a 16-bit PCM WAV, is missing, or names a role the game hasn't got, a take put in `sound/roles/`, or a role with takes and no `sound/roles/` file. A warning: an effect with only one file. A note: a sound file in the folder that `look.txt` doesn't list.
 - ROM data: the same check as `gp template served`: no file may hold bytes from the ROM.
+
+- On the page: whether the page would offer the theme under Settings, Theme, read by the page's own code. The page names a theme by the part of its package name after the namespace (`turnips` for `lex00/turnips`), which must start with a lowercase letter and hold only lowercase letters, digits, `-` and `_`, and can't be `original`. Its folder is read as the page's ROM reader reads it, over the game's pictures, and a theme the page would leave out is named with why.
 
 It needs your ROM on this machine (in `$GP_ROM_DIR`, or `--rom FILE`) to name the game's pictures and to compare your files with the ROM, and says so when it hasn't got one. It exits 0 when there are no problems; warnings are worth a look. Its last line says what to do next.
 
@@ -70,18 +122,39 @@ No picture may be traced from the original's art, and your work has to be your o
 
 ### See it in the game
 
-The check's output ends with the commands that play your theme on this machine, from a registry in a folder and a page built to install from it. Run them in the gameprinter checkout.
-
 ```sh
-scripts/web/local-registry.sh ~/games my-theme
-target/debug/gp registry serve "$GP_HOME/registry" --page target/page-local
+gp theme look play my-theme --game donkey-kong --open
 ```
 
-then open `http://127.0.0.1:8377/p?g=lex00/donkey-kong&c=YOUR-NAME/my-theme` and play every stage, looking at each pose at game size.
+runs the check first (a problem stops it unless you give `--anyway`; warnings are printed), then serves the game on this machine with your theme chosen. `--game` is any game you can play here: a ported game such as Donkey Kong or one you started with `gp game new`, and Moss Hop or another of the repo's templates or your own copy of one (a folder under `$GP_HOME/work/mcp/`). Nothing is published.
+
+A game played from a ROM (a ported game) is served in the page that plays any game by name: it installs the game and its published themes from a registry made in a temp folder, with your folder as one more theme only this page sees. A game the registry hasn't got (one you started with `gp game new`) is built here and put in that registry alone. Load your own ROM in the page and play every stage to see each pose at game size, the deaths and the score line among them. A game with pictures of its own (a template of the repo's, or your copy of one) needs no ROM: it is built for the browser as `build_publish` builds it, with your theme added, and opens playing.
+
+`--port` picks the port (any free one by default); ctrl-C stops it, or `--minutes 30` after half an hour. An agent adds `--background`, which serves from a process of its own for `--minutes` (60 by default) and prints the link and its PID. An arcade game plays the same way from your romset zip, your theme drawn over its board's pictures.
+
+```sh
+gp theme look play my-theme --game donkey-kong --shots ~/theme-shots
+```
+
+plays the game's route in a headless browser instead, on each ROM of the game in `$GP_ROM_DIR` (or the one `--rom` names; a game with pictures of its own needs none), and saves the game at named moments. The moments come from the game's `theme-shots.toml` when it has one (Donkey Kong's names walking, climbing, the hammer and the rest), else from the page check's route where it has one for the game's ROM (each stage at its start with the score line, in play and won, and the ending), else the title screen and the first stage 4 and 9 seconds after Start (on an arcade game, a coin and the start, then the attract mode and the first level 8 and 18 seconds in), and the output says which. `--against friend/night@0.9.2` (a published version, or another folder) takes the same pictures of a second theme and writes each pair side by side, yours on the left; a game with pictures of its own takes only a folder there. Pictures of a ROM's game show your theme over it: keep them to yourself and never commit them (the folder gets a `.gitignore` that keeps git out).
+
+For a game played from a ROM it plays the page that passed the release check in `$GP_HOME/work/page-release`, or the one `--page DIR` names, and in the gameprinter checkout it can build one (`scripts/web/build-page.sh`, a few minutes). Building a game the registry hasn't got, or a game with pictures of its own, needs the checkout. `--shots` also needs node with playwright-core (`npm ci` in the checkout's `scripts/web`) and Chrome Headless Shell (`scripts/inspector/fetch-browser.sh "$GP_HOME"`).
+
+### Changes your agent proposes
+
+When you ask your agent for a different picture in your theme, a sound for your theme, or a different sound in a game you made, it doesn't change it straight away. It proposes the change, and your page (`gp serve`) shows it as a card at the top of every tab: a picture with the one you have beside it, or a sound with two buttons that play what you have and the new one. A new take of a role says there is no sound there yet, since the role plays its other takes until you accept it. Press ACCEPT to take it or REJECT to keep what you have, and write in the box what you'd like instead; your agent reads your answer. After ACCEPT, PUT THE OLD ONE BACK undoes it. In a terminal the same proposals are `gp theme picture` and `gp theme sound` (`list`, `accept`, `reject`, `undo`).
 
 ## Get it in the game
 
-Keep your theme in a repo of your own, with its pictures in Git LFS. Players get themes from the registry the page reads, [`lex00/gp-registry`](https://github.com/lex00/gp-registry): open an issue there with your repo's link. Once it's published for the game (`gp registry publish ... --for lex00/donkey-kong`), the page at [nes-donkey-kong.intentius.workers.dev](https://nes-donkey-kong.intentius.workers.dev) installs it with the game and offers it under Settings, Theme, beside Original (the ROM's own art) and Turnips. Nothing on the page changes for that: the page asks the registry what it offers for the game each time it loads.
+Keep your theme in a repo of your own, with its pictures in Git LFS. Players get themes from the registry the page reads, [`lex00/gp-registry`](https://github.com/lex00/gp-registry). There is no way yet to put a theme there yourself: its owner publishes each one. Its README asks you to open an issue there with your repo's link, and a person reads it. The owner then grants your namespace if it's new (`gp registry grant`), publishes your theme for the game (`gp registry publish ... --for lex00/donkey-kong`, which says whether the page will offer it) and lists it (`gp registry reindex ... --keep NAME@VERSION`). The page at [nes-donkey-kong.intentius.workers.dev](https://nes-donkey-kong.intentius.workers.dev) then installs it with the game and offers it under Settings, Theme, beside Original (the ROM's own art) and Turnips. Nothing on the page changes for that: the page asks the registry what it offers for the game each time it loads. `gp registry grants` lists the namespaces granted, and the owner can withdraw a version with `gp registry yank`.
+
+To ask whether the page offers it, and if not why:
+
+```sh
+gp registry check https://raw.githubusercontent.com/lex00/gp-registry/main --for lex00/donkey-kong --theme YOUR-NAME/my-theme
+```
+
+It reads the game's theme list as the page does and prints `OFFERED`, or `NOT OFFERED` and why. The reasons it knows are these: not published, published for another game, withdrawn, a name the page can't list or that another theme there already has, an install that fails, and (with your ROM and the game's folder here) files the page's ROM reader leaves out. Without `--theme` it lists each one the page offers for the game and each one it leaves out. Players see the same reasons on the page, in About and, while a ROM plays, in the line under the header.
 
 The page opens in its own theme, Turnips. A link with `&c=YOUR/THEME` opens it in yours instead.
 
@@ -121,4 +194,4 @@ A new stage should be your own layout, not a copy of the original game's. The `m
 
 ## Not built yet
 
-A large-art theme (like Turnips) in the THEMES tab's clip review, a way to put a theme in the page's registry yourself (today you open an issue there; `gp registry publish` works only on a registry you run), and new levels a player can pick.
+A large-art theme (like Turnips) in the THEMES tab's clip review, a way to put a theme in the page's registry yourself (today you open an issue there and its owner publishes it; `gp registry publish` works only on a registry you can write to), and new levels a player can pick.

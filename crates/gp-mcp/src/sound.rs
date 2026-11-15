@@ -9,10 +9,12 @@
 //!   their roles and what each plays through now, where the notes came
 //!   from and how sure capture is, what they're bound to, and whether each
 //!   is ready to edit.
-//! - `sound_edit`: deterministic ops (`gp_sound::edit`), checked, written
-//!   to the copy's song sets and sound bank mapping (or a theme's
-//!   restyled-audio layer), with before and after clips, history and
-//!   undo.
+//! - `sound_edit`: deterministic ops (`gp_sound::edit`), checked, with
+//!   before and after clips, proposed to the person by default
+//!   (crate::sound_proposal): their ACCEPT on the page writes them to the
+//!   copy's song sets and sound bank mapping (or a theme's restyled-audio
+//!   layer), with history and undo. A direct write needs their yes
+//!   (crate::policy::direct_sound_edit).
 //! - `sound_preview`: the copy played in the interpreter on a baseline's
 //!   input with its music and effects cued as the game would cue them,
 //!   rendered to a WAV.
@@ -419,10 +421,12 @@ pub struct EditArgs {
     /// program}), role, transpose, tempo, mute, solo, gain, swap.
     #[serde(default)]
     pub ops: Vec<Op>,
-    /// Put back the last edit instead.
+    /// Put back the last edit written instead. It changes the person's
+    /// sound at once, so it needs their yes, as `write` does.
     #[serde(default)]
     pub undo: bool,
-    /// Write the result (default true); false previews only.
+    /// Propose the result (default true); false previews only and keeps
+    /// nothing.
     #[serde(default = "yes")]
     pub place: bool,
     /// The song the before and after clips play (default: the first song
@@ -439,6 +443,21 @@ pub struct EditArgs {
     /// What the person asked, kept in the history.
     #[serde(default)]
     pub prompt: Option<String>,
+    /// One sentence for the person: why this change. The proposal's card
+    /// shows it (default: prompt).
+    #[serde(default)]
+    pub why: Option<String>,
+    /// Write the change into the copy at once instead of proposing it.
+    /// That changes the person's sound without their ACCEPT, so it needs
+    /// their yes (gp_mcp::policy::direct_sound_edit): refused while their
+    /// page is open, where a proposal's card is their yes; with no page
+    /// open it runs only with confirmed_by_person.
+    #[serde(default)]
+    pub write: bool,
+    /// With write or undo and no page open: set only after the person said
+    /// yes to this exact change in this conversation.
+    #[serde(default)]
+    pub confirmed_by_person: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -512,18 +531,39 @@ fn theme_audio(dir: &Path, theme: &str) -> Result<(), String> {
     fs::write(&f, t.to_text()).map_err(|e| format!("{}: {e}", f.display()))
 }
 
-pub fn edit(config: &Config, a: EditArgs) -> Result<Reply, String> {
-    let dir = config.existing_copy(&a.copy)?;
-    if a.undo {
-        return undo(config, &dir, &a);
-    }
+/// An edit worked out and checked, with its clips, and nothing written.
+pub struct Worked {
+    pub dir: PathBuf,
+    /// The copy's title, as its model names it.
+    pub title: String,
+    pub slot: String,
+    /// The copy's own song set file and the mapping file, inside `dir`.
+    pub set_file: PathBuf,
+    pub map_file: PathBuf,
+    /// Their text now (None: there is none) and with the edit.
+    pub set_before: Option<String>,
+    pub set_after: String,
+    pub map_before: Option<String>,
+    pub map_after: String,
+    /// The ops in words.
+    pub said: Vec<String>,
+    pub clip_song: String,
+    pub seconds: f64,
+    /// The clip song as it sounds now and with the edit.
+    pub before: Vec<i16>,
+    pub after: Vec<i16>,
+}
+
+/// Works an edit out: the readiness gate, the ops and the clips. A
+/// refusal in the tool's words is the inner Err.
+fn work_out(config: &Config, dir: &Path, a: &EditArgs) -> Result<Result<Worked, Reply>, String> {
     if a.ops.is_empty() {
         return Err("give at least one op".into());
     }
     if a.ops.len() > 32 {
         return Err("at most 32 ops a call".into());
     }
-    let model = read_model(&dir)?;
+    let model = read_model(dir)?;
     let slot = match &a.slot {
         Some(s) => s.clone(),
         None => sound_slots(&model)
@@ -531,8 +571,8 @@ pub fn edit(config: &Config, a: EditArgs) -> Result<Reply, String> {
             .next()
             .ok_or("the model has no sound slot")?,
     };
-    let set = slot_set(config, &dir, &model, &slot)?;
-    let mfile = map_file(&dir, a.theme.as_deref())?;
+    let set = slot_set(config, dir, &model, &slot)?;
+    let mfile = map_file(dir, a.theme.as_deref())?;
     let map_before = fs::read_to_string(&mfile).ok();
     let map = match &map_before {
         Some(t) => Mapping::parse(t)?,
@@ -553,10 +593,10 @@ pub fn edit(config: &Config, a: EditArgs) -> Result<Reply, String> {
     for s in &named {
         let missing = gp_sound::edit::readiness(&set, s);
         if !missing.is_empty() {
-            return Ok(Reply::refused(json!({
+            return Ok(Err(Reply::refused(json!({
                 "ok": false, "stage": "readiness", "song": s, "missing": missing,
                 "hint": "sound_describe says what each song lacks; capture it again over more frames, or bind it in the model",
-            })));
+            }))));
         }
     }
     let (new_set, new_map, said) = gp_sound::edit::apply(&set, &map, &a.ops)?;
@@ -572,49 +612,157 @@ pub fn edit(config: &Config, a: EditArgs) -> Result<Reply, String> {
         })
         .ok_or("the slot has no song to play")?;
     let seconds = a.seconds.unwrap_or(CLIP_SECONDS).clamp(0.5, MAX_SECONDS);
-    let f = folders(config, &dir);
+    let f = folders(config, dir);
     let before = clip(&set, &clip_song, &map, &f, seconds)?;
     let after = clip(&new_set, &clip_song, &new_map, &f, seconds)?;
-    let mut out = json!({"ok": true, "said": said, "clip_song": clip_song, "seconds": seconds});
-    if !a.place {
-        out["written"] = json!(false);
-        return Ok(Reply::ok(out));
-    }
-    // Write: the copy's set and the mapping, then the history and clips.
+    let set_file = dir.join(SOUND_DIR).join(format!("{slot}.songs.json"));
+    Ok(Ok(Worked {
+        dir: dir.to_owned(),
+        title: model.model.title.clone(),
+        slot,
+        set_before: fs::read_to_string(&set_file).ok(),
+        set_file,
+        set_after: new_set.to_text(),
+        map_file: mfile,
+        map_before,
+        map_after: new_map.to_text(),
+        said,
+        clip_song,
+        seconds,
+        before,
+        after,
+    }))
+}
+
+/// Writes an edit's song set and mapping into the copy, with its history
+/// entry so `undo` can put it back: sound_edit's direct write, and the
+/// person's ACCEPT on a proposal (crate::sound_proposal). The entry's seq.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn put_in(
+    dir: &Path,
+    slot: &str,
+    ops: &[Op],
+    prompt: Option<String>,
+    set_after: &str,
+    mfile: &Path,
+    map_after: &str,
+    theme: Option<&str>,
+) -> Result<u32, String> {
     let set_file = dir.join(SOUND_DIR).join(format!("{slot}.songs.json"));
     let set_before = fs::read_to_string(&set_file).ok();
+    let map_before = fs::read_to_string(mfile).ok();
     fs::create_dir_all(dir.join(SOUND_DIR)).map_err(|e| e.to_string())?;
-    fs::write(&set_file, new_set.to_text()).map_err(|e| format!("{}: {e}", set_file.display()))?;
+    fs::write(&set_file, set_after).map_err(|e| format!("{}: {e}", set_file.display()))?;
     if let Some(d) = mfile.parent() {
         fs::create_dir_all(d).map_err(|e| e.to_string())?;
     }
-    fs::write(&mfile, new_map.to_text()).map_err(|e| format!("{}: {e}", mfile.display()))?;
-    if let Some(t) = &a.theme {
-        theme_audio(&dir, t)?;
+    fs::write(mfile, map_after).map_err(|e| format!("{}: {e}", mfile.display()))?;
+    if let Some(t) = theme {
+        theme_audio(dir, t)?;
     }
-    let mut history = read_history(&dir)?;
+    let mut history = read_history(dir)?;
     let seq = history.last().map_or(1, |e| e.seq + 1);
     history.push(Entry {
         seq,
-        slot: slot.clone(),
-        ops: a.ops.clone(),
-        prompt: a.prompt.clone(),
+        slot: slot.to_owned(),
+        ops: ops.to_vec(),
+        prompt,
         set_before,
         map_file: mfile
-            .strip_prefix(&dir)
-            .unwrap_or(&mfile)
+            .strip_prefix(dir)
+            .unwrap_or(mfile)
             .display()
             .to_string(),
         map_before,
     });
-    write_history(&dir, &history)?;
+    write_history(dir, &history)?;
+    Ok(seq)
+}
+
+/// Puts a file back as it was: its old text, or, when there was none,
+/// the file moved aside (an empty one would differ, so the copy's own
+/// set goes back to the capture's).
+fn restore(p: &Path, v: Option<&str>) -> Result<(), String> {
+    match v {
+        Some(t) => fs::write(p, t).map_err(|e| format!("{}: {e}", p.display())),
+        None if p.exists() => fs::rename(p, p.with_extension("undone")).map_err(|e| e.to_string()),
+        None => Ok(()),
+    }
+}
+
+/// The person's PUT THE OLD ONE BACK on an accepted proposal: the set and
+/// mapping as they were, and the history entry `seq` dropped when it is
+/// still the last.
+pub(crate) fn take_back(
+    dir: &Path,
+    slot: &str,
+    set_before: Option<&str>,
+    mfile: &Path,
+    map_before: Option<&str>,
+    seq: Option<u32>,
+) -> Result<(), String> {
+    restore(
+        &dir.join(SOUND_DIR).join(format!("{slot}.songs.json")),
+        set_before,
+    )?;
+    restore(mfile, map_before)?;
+    let mut history = read_history(dir)?;
+    if seq.is_some() && history.last().map(|e| e.seq) == seq {
+        history.pop();
+        write_history(dir, &history)?;
+    }
+    Ok(())
+}
+
+pub fn edit(config: &Config, a: EditArgs) -> Result<Reply, String> {
+    let dir = config.existing_copy(&a.copy)?;
+    if a.undo || (a.place && a.write) {
+        let open = crate::asks::page_served(&config.home);
+        if let crate::policy::Decision::Refused(why) =
+            crate::policy::direct_sound_edit(open, a.confirmed_by_person)
+        {
+            return Ok(Reply::refused(json!({
+                "ok": false, "refused": why, "page_open": open,
+                "rule": "a direct change to the person's sound needs their yes",
+            })));
+        }
+    }
+    if a.undo {
+        return undo(config, &dir, &a);
+    }
+    let w = match work_out(config, &dir, &a)? {
+        Ok(w) => w,
+        Err(refused) => return Ok(refused),
+    };
+    let mut out =
+        json!({"ok": true, "said": w.said, "clip_song": w.clip_song, "seconds": w.seconds});
+    if !a.place {
+        out["written"] = json!(false);
+        return Ok(Reply::ok(out));
+    }
+    if !a.write {
+        return crate::sound_proposal::propose(config, &a, w);
+    }
+    // Written at once, with the person's yes: the set and the mapping,
+    // then the history and clips.
+    let seq = put_in(
+        &dir,
+        &w.slot,
+        &a.ops,
+        a.prompt.clone(),
+        &w.set_after,
+        &w.map_file,
+        &w.map_after,
+        a.theme.as_deref(),
+    )?;
+    let depth = read_history(&dir)?.len();
     let pv = dir.join(crate::asset_edit::PREVIEW_DIR);
     let bf = pv.join(format!("sound-{seq}-before.wav"));
     let af = pv.join(format!("sound-{seq}-after.wav"));
-    wav_file(&bf, &before)?;
-    wav_file(&af, &after)?;
+    wav_file(&bf, &w.before)?;
+    wav_file(&af, &w.after)?;
     out["written"] = json!(true);
-    out["history"] = json!({"seq": seq, "depth": history.len()});
+    out["history"] = json!({"seq": seq, "depth": depth});
     out["before"] = json!(bf);
     out["after"] = json!(af);
     Ok(Reply::ok(out))
@@ -629,23 +777,17 @@ fn undo(_config: &Config, dir: &Path, a: &EditArgs) -> Result<Reply, String> {
     let set_file = dir
         .join(SOUND_DIR)
         .join(format!("{}.songs.json", last.slot));
-    let put = |p: &Path, v: &Option<String>| -> Result<(), String> {
-        match v {
-            Some(t) => fs::write(p, t).map_err(|e| format!("{}: {e}", p.display())),
-            // There was no file: an empty one would differ, so the copy's
-            // own file goes back to the capture's by renaming it aside.
-            None if p.exists() => {
-                fs::rename(p, p.with_extension("undone")).map_err(|e| e.to_string())
-            }
-            None => Ok(()),
-        }
-    };
-    put(&set_file, &last.set_before)?;
-    put(&dir.join(&last.map_file), &last.map_before)?;
+    restore(&set_file, last.set_before.as_deref())?;
+    restore(&dir.join(&last.map_file), last.map_before.as_deref())?;
     write_history(dir, &history)?;
     Ok(Reply::ok(
         json!({"ok": true, "undone": last.seq, "ops": last.ops, "depth": history.len()}),
     ))
+}
+
+/// A clip as a WAV file's bytes.
+pub(crate) fn wav_bytes(samples: &[i16]) -> Vec<u8> {
+    gp_sound::synth::wav(samples, gp_sound::synth::SAMPLE_RATE)
 }
 
 // -------------------------------------------------------------- preview

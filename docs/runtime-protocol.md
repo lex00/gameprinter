@@ -25,6 +25,8 @@ gp run-until 76c9 'ram[0x0053] == 3' --show 'ram[0x0055]'
 
 These read a Donkey Kong (JU) recording, such as the 5658S run of [corpus.md](corpus.md). In Donkey Kong `$0053` is the stage (1 for 25m, 3 for 75m, 4 for 100m) and `$0055` the lives. `gp query` prints one line per value, its path, the value and the value in hex (`ram[0x0053] = 1 (0x01)`). `gp run-until` prints the frame where the condition first holds, then each `--show` value at that frame. `run-until` checks the condition at the starting frame (`--from`, default 0) and after each frame, up to `--max-frames` or the end of the recording. Past the end of the input log, the last input stays held. A frame ends just as the NMI is taken, so `cpu.pc` is often the NMI handler's first address.
 
+`gp query clip:GAME:CLIP` reads a corpus clip's play with no recording made: the clip's input from power-on (as `gp clip log` writes it) is played on the original from power-on, NES or arcade, and `--frame` or `--frames` (with `--changed`) count frames from power-on as a recording does. GAME is a package folder or a game's name in the games checkout. It replays every time, so a frame late in a long clip takes a few seconds: `gp query clip:tapper:tapper.gameover.002 --frames 9000..10334 --changed 'ram[0xE397]'` takes about 8 s and prints the same rows as the same query on the stored recording of that play.
+
 ```sh
 gp trace instructions 76c9 --frames 100..102 --out trace.log
 ```
@@ -207,7 +209,16 @@ The trace path decodes one 64-frame chunk and hashes the state (about 10 us) for
 
 With checkpoints every 60 frames, the worst-case seek is about 40 ms and the whole command 60 to 65 ms, well inside a second, so the interval could grow tenfold before jumping to any frame took a second.
 
+## Sessions
+
+A long-lived `gp mcp` or `gp serve` keeps recordings open between queries (crates/gp-cli/src/session.rs). Each `gp query` is a process of its own: it first asks a running server for its home over a local socket (in the system's temporary folder, `gp-sessions/`), and opens the recording itself when none answers, with no error. The MCP tools' `gp query` children ask the `gp mcp` that started them. `GP_SESSION=off` skips the ask.
+
+A session keeps the recording's ROM, its input log and frame hashes, and for each checkpoint it has used the console as restored and the one furthest along. A query at or after that frame continues it; an earlier one starts again from the restored copy. The console for a frame is always the cold path's (the nearest checkpoint restored and replayed to the frame), so the answer, its `checkpoint`, `replayed` and notes are the same byte for byte; a test runs the same queries both ways on made-up NES and arcade recordings and compares what gp would print.
+
+What goes the cold way: a `--rom` given, a `clip:` play, a client that is another gp binary (path, size and time) or another home, a recording the sealed-run guard refuses (a guard made as a new process would make it, again whenever a file under `$GP_HOME/sealed` or a game's roms.toml changes), and any query that fails, so its error is the cold path's. A server keeps at most 4 recordings and an estimated 256 MiB of consoles, least recently used first out, and drops a recording unused for 10 minutes. A ROM removed from `$GP_ROM_DIR` while its recording is open is still read from memory.
+
+Measured on 2026-11-14 (fastdev build, from a checkout as the working folder, machine load 8 to 10): 50 `gp query --frame` calls at scattered frames, `ram[...]` and `cpu.pc`, took 4.3 to 5.6 s opened each time and 2.3 to 3.8 s with a session, for a Tapper recording of 10,933 frames and a Donkey Kong one of 3,674. About 40 ms of each call is the process and its run record (`gp noop`), which a session doesn't change.
+
 ## Not done yet
 
-- A long-lived session that keeps a console open between queries. Each command now opens the recording again.
 - The component build of the protocol, described above.

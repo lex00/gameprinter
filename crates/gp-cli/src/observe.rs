@@ -56,12 +56,16 @@ impl LevelKey {
         Ok(LevelKey { ram, when, names })
     }
 
-    /// The level the RAM is in, or None between levels.
+    /// The level the RAM is in, or None between levels. `w` is read by
+    /// the CPU's addresses: the NES's 2 KB, or an arcade board's whole
+    /// address space.
     pub(crate) fn of(&self, w: &[u8]) -> Option<String> {
         if let Some(c) = &self.when {
             let ok = c
                 .eval(&mut |sel| match (sel.name().as_str(), sel.last_index()?) {
-                    ("ram", Some(gp_runtime::select::Index::At(n))) if (0..0x800).contains(&n) => {
+                    ("ram", Some(gp_runtime::select::Index::At(n)))
+                        if (0..w.len() as i64).contains(&n) =>
+                    {
                         Ok(i64::from(w[n as usize]))
                     }
                     _ => Err("only ram[N]".into()),
@@ -88,6 +92,10 @@ pub(crate) struct Grid {
     pub(crate) cols: usize,
     pub(crate) rows: usize,
     pub(crate) top: usize,
+    /// A cell's side in the player's units: 16 on the NES (a metatile of
+    /// the screen's pixels), the model's `tile_size` on an arcade board in
+    /// its own units (`gp localize`).
+    pub(crate) cell: i64,
 }
 
 impl Grid {
@@ -106,6 +114,7 @@ impl Grid {
             cols: c.get("page_columns")?.as_integer()? as usize,
             rows: c.get("rows")?.as_integer()? as usize,
             top: c.get("top").and_then(|v| v.as_integer()).unwrap_or(0) as usize,
+            cell: 16,
         })
     }
 }

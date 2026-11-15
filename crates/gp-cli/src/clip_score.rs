@@ -1109,7 +1109,9 @@ fn score_cmd(
             }
         }
     }
-    let mut j = json!({"clips": rows, "out": out});
+    // How the model's values were read: `query-values` in one call a
+    // frame, `query` one call a path (a module built before it), or `native`.
+    let mut j = json!({"clips": rows, "out": out, "model_reads": ctx.source.model_reads()});
     if all {
         if left_out + sealed_sessions > 0 {
             text.push(format!(

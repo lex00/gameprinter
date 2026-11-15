@@ -36,7 +36,14 @@ pub(crate) struct TopdownArgs {
     /// The ROM to play.
     pub rom: PathBuf,
     /// The decision server (Laya).
-    #[arg(long, default_value = "http://127.0.0.1:7720")]
+    /// Default: $GP_LAYA_URL when it is set (the address gp serve and gp_run
+    /// keep Laya at), else http://127.0.0.1:7720.
+    #[arg(
+        long,
+        env = "GP_LAYA_URL",
+        hide_env_values = true,
+        default_value = "http://127.0.0.1:7720"
+    )]
     pub decide: String,
     /// Order the moves at random instead of asking the decision model.
     #[arg(long)]
@@ -702,9 +709,11 @@ fn high_bytes(
 pub(crate) fn run(a: &TopdownArgs, paths: &Paths) -> Result<Outcome> {
     let t0 = std::time::Instant::now();
     let bytes = fs::read(&a.rom).with_context(|| format!("reading {}", a.rom.display()))?;
-    crate::original::nes_only(
-        crate::roms::Platform::of_file(&bytes),
-        "the top-down farm's search",
+    crate::farm::blind::stop_on_arcade(
+        &bytes,
+        paths,
+        "gp farm-topdown",
+        "The top-down farm learns the player's x and y from the d-pad on both axes, a health byte that drains, and searches eight-way moves for new 16 px cells",
     )?;
     let name = a
         .rom

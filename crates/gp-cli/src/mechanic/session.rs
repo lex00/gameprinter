@@ -459,6 +459,21 @@ pub(crate) fn show_text(v: &Value) -> String {
                     format!(": {}", things.join(", "))
                 }
             );
+            // "What is this?" (issue #10): the call that answers it.
+            if p["ask"] == "explain" {
+                match p["explain"].as_str() {
+                    Some(c) => {
+                        let _ = write!(extra, " [asks what this is: answer from `{c}`]");
+                    }
+                    None => {
+                        let _ = write!(
+                            extra,
+                            " [asks what this is; no gp element explain call: {}]",
+                            p["explain_missing"].as_str().unwrap_or("unknown")
+                        );
+                    }
+                }
+            }
         }
         let _ = writeln!(
             t,
@@ -495,6 +510,19 @@ mod tests {
         let t = show_text(&v);
         assert!(
             t.contains("1 player: stop at the top [pointing at Mario in walk.001 at frame 412, box 96,120,24,24: ladder]"),
+            "{t}"
+        );
+    }
+
+    #[test]
+    fn a_question_says_the_call_that_answers_it_in_show() {
+        let v = json!({"game": "dk", "mechanic": "walk", "talk": [{
+            "n": 2, "by": "player", "text": "what is this?",
+            "point": {"label": "a spot", "recording": "dk.walk.001", "frame": 412, "rect": [96, 120, 16, 16],
+                      "ask": "explain", "explain": "gp element explain --run g --clip dk.walk.001 --log-frame 412 --box 96,120,16,16 --side original"}}]});
+        let t = show_text(&v);
+        assert!(
+            t.contains("[asks what this is: answer from `gp element explain --run g --clip dk.walk.001 --log-frame 412 --box 96,120,16,16 --side original`]"),
             "{t}"
         );
     }

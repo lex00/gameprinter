@@ -488,6 +488,11 @@ pub fn publish(config: &Config, a: PublishArgs) -> Result<Reply, String> {
         "out": out,
         "index": out.join("index.html"),
         "manifest": manifest,
-        "serve": format!("python3 -I -m http.server --bind 127.0.0.1 --directory {} 8765", out.display()),
+        // A plain file server (python's http.server, say) sends none of the
+        // public page's headers, and the page then refuses to run the game
+        // (module-host.js needs the isolation headers for its shared
+        // buffer), so the build is named to the host, which serves it as
+        // the public page is served (crate::page_headers).
+        "serve": format!("gp host serve --port 0 --play {}", out.display()),
     })))
 }

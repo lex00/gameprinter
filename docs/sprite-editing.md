@@ -1,6 +1,6 @@
 # Editing sprites with an agent
 
-Brought from game-printer's docs/sprite-editing.md. In gameprinter `gp assets open` refuses an arcade game's lift (Tapper's) in words: the editor trip cuts frames into NES tiles (`gp_sprites::chr`), and a Midway MCR sprite is one 32 by 32 picture of sixteen values.
+Brought from game-printer's docs/sprite-editing.md. On an arcade game's lift (Tapper's) the external editor trip is the board's own sprites, and it stops before the proposal ([Arcade boards](#arcade-boards)).
 
 A person tells their agent what to change about a sprite ("give him a red cap", "a bolder outline", "make the slug face the other way"), and Game Printer does it. The agent turns the request into deterministic operations, and Game Printer checks the result against the model and draws it into the recorded frames where the sprite is seen. The agent shows the person the before and after pictures, and accepts or rejects it with `assets_edit` as the person says. There are no painting tools in Game Printer yet. A person who wants to draw by hand uses an external editor, starting with Pixelorama (phase 3, below).
 
@@ -8,7 +8,7 @@ A person who draws by hand opens the sprite set in Pixelorama with `gp assets op
 
 The same tool edits a level tile's look ("make the stone blocks orange"): see [Level tiles](#level-tiles).
 
-This page is the product doc. The design and its prior art are in the research report (game-printer's docs/research/agent-sprite-editor.md, not carried here); the tools are `assets_edit` and `assets_history` in [agent tools over MCP](mcp.md). The page has no panel for a proposal yet (see below).
+This page is the product doc. The design and its prior art are in the research report (game-printer's docs/research/agent-sprite-editor.md, not carried here); the tools are `assets_edit` and `assets_history` in [agent tools over MCP](mcp.md). The page has no panel for an `assets_edit` proposal yet; a picture of a large-art theme is proposed with `gp theme picture` and answered on the page ([A picture of your own theme](#a-picture-of-your-own-theme)).
 
 Everything is local and free: deterministic operations in Rust, the interpreter for previews, and no hosted service. If an image model is ever added, it is a free model run locally behind the generator trait. The editor is fully useful without one.
 
@@ -114,7 +114,22 @@ Nothing in it knows a game: every model whose metatiles slot comes from an asset
 
 ## On the page
 
-The page has no place yet where a person sees a proposal and presses accept or reject. The agent shows the pictures (the reply's `previews`: the close-up, and the recorded frames before and after) and decides with `assets_edit` (`accept` or `reject` and the edit's number) when the person answers. The agent can pin the pictures in the page's side panel with `gp mechanic pin`. Until 2026-11-13 an edit could be told to a capture run (`run`) and accepted in the old editor's game view; nothing made a capture run any more, so that road was removed (the owner approved it on 2026-11-13). Showing a proposal on the mechanic page with accept and reject is the open step.
+The page has no place yet where a person sees an `assets_edit` proposal (a sprite of a model's own art) and presses accept or reject. The agent shows the pictures (the reply's `previews`: the close-up, and the recorded frames before and after) and decides with `assets_edit` (`accept` or `reject` and the edit's number) when the person answers. The agent can pin the pictures in the page's side panel with `gp mechanic pin`. Until 2026-11-13 an edit could be told to a capture run (`run`) and accepted in the old editor's game view; nothing made a capture run any more, so that road was removed (the owner approved it on 2026-11-13).
+
+A picture of a large-art theme does go through the page: see the next section.
+
+## A picture of your own theme
+
+The large-art themes the page plays (`theme/look.txt`, `theme/art.txt` and PNGs, lex00/turnips is the pattern) change one picture at a time through `gp theme picture` (crates/gp-cli/src/theme_picture.rs, issue #4). The agent proposes, the person decides on their page, and nothing in the theme changes before their ACCEPT.
+
+| Step | Who | What happens |
+|---|---|---|
+| Propose | The agent, `gp theme picture propose DIR --game GAME --picture art/hero.png --png NEW.png --why "..."` through `gp_run` | Refused in words, and never shown to the person, unless: DIR is the person's own copy (a theme folder under `$GP_HOME/work/themes/`); the picture is one `art.txt` names (by its path, or the game picture a `pic` line draws with it) and is in the theme already; the new file is a PNG of at most 4096 pixels a side whose shape is within 15% of every rule that draws it; and `gp theme look check` on a copy of the theme with the picture in place finds no problem the theme didn't have, the ROM-data check among them. A proposal that passes is kept under `$GP_HOME/work/proposals/pictures/ID/` (`proposal.json`, `new.png`, and `old.png`, the picture as it was) |
+| Show | The page | The oldest open proposal is a card under the status line on every tab, with how many wait ("1 of 2 waiting"): the picture the theme has now beside the new one, each enlarged with square pixels and at game size (the rule's size in game pixels), on a checkerboard so what is see-through shows, the agent's sentence, a box "tell your agent what to change", ACCEPT and REJECT. THEMES lists every open proposal and the last answered |
+| Decide | The person | ACCEPT writes the new picture over the theme's (refused, and the proposal marked not used, when the file changed since it was proposed). REJECT keeps the theme and records the words. After an ACCEPT, PUT THE OLD ONE BACK writes the old picture back (one level). In a terminal, `gp theme picture accept`, `reject --words` and `undo` do the same; `gp_run` refuses those three, so only the person decides |
+| Hear | The agent | `next` lists an open proposal and an answer the agent hasn't read in `waits_for_yes` (`what: "picture"`), so `next` with `wait_s` returns when the person answers; `gp theme picture list` gives the answers with the person's words and marks them read |
+
+Not built yet: the picture placed on a still of the game (the stage drawn by tile kind, or with the lifted art when a ROM is here); the card shows the pictures on their own. A proposal is a whole PNG the agent wrote; the deterministic operations above (`recolor`, `flip` and the rest) work on a model's tiles, not on a theme's PNGs.
 
 ## External editors
 
@@ -130,6 +145,20 @@ The page has no place yet where a person sees a proposal and presses accept or r
 | Accept | Placed with `origin = "uploaded"` and the editor in the slot's `generator` (`pixelorama via gp assets open (...)`), undoable like any edit |
 
 `--editor libresprite` writes Aseprite's sheet JSON beside the sheet, which LibreSprite and Aseprite import. `--once` stops after the first save and `--timeout` after a time, for scripts. An agent does the same over MCP: `assets_export` writes the set by the config (`set.dir`), and `assets_edit` with `import` brings the folder back. Pixelorama's `.pxo` project isn't written or read yet (an open question).
+
+### Arcade boards
+
+On a copy whose lift is an arcade one (`gp_assets::arcade`, docs/formats/board-art.md), `gp assets open`, `assets_export` and `assets_edit`'s `import` take the entity's board sprites (`gp_mcp::board_trip`). A Midway MCR sprite is one 32 by 32 picture of 16 values in the `board-sprites` slot's sheet, so it isn't cut into tiles or laid out by the image config:
+
+| Step | What happens |
+|---|---|
+| Export | One PNG for each picture code the entity's `board_sprite` draws, `ENTITY-CODE.png` (`tip-4d.png`): 8-bit indexed in the 16 colours of its colour bits from the level's lifted `board-palette` (the program's writes over it aren't applied), values 0 and 8 clear since the board draws nothing where a value's low three bits are 0. A fixed `picture = { number = N }` is one code; a picture read from the body's words takes the codes `gp theme look sheet` saw (its `names.toml`), and without that sheet the export says to run it. Beside them `ENTITY.gpl` and `gp-edit.json`, whose frame ids are `board-sprite.CODE`. A folder inside a git work tree is refused: the pictures are the person's ROM's |
+| On save | Each PNG is read back held to 32 by 32 and values 0 to 15 (an indexed PNG's indices, or an RGB(A) one's colours matched exactly to the exported 16), and compared with the lift |
+| Proposal | Not kept yet: the reply says how many pixels of which codes changed, at the `proposal` stage, and nothing is written over the lift |
+
+The proposal waits on the art history: `asset-edits.jsonl` and `asset-proposals/` keep a picture as rows of the digits 0 to 9 (`Pic::rows`) and the slot's state from an NES asset map (`catalog::slot_assets`), and a board sprite has 16 values and an arcade map. The smallest addition is rows written in hex digits (0 to 9, then a to f, so every NES row reads as before) and the slot catalog reading an arcade map's slots; accept would then write the sprite back into the copy's own lifted `sprites.png`, and `gp_assets::arcade::unpack` puts a lifted folder back into the chips' layout. The board's tiles (`board-tiles`, `board-font`) have no editor trip yet: no entity draws with them, and `assets_edit`'s `tile` names an NES level tile kind.
+
+On a copy of Tapper on 2026-11-14: `gp assets open COPY tip --editor png --no-launch --once` wrote `tip-4d.png`, `tip.gpl` and `gp-edit.json`; a save with four pixels set to value 7 came back as "save 1: refused: a proposal can't be kept for an arcade board's sprites yet".
 
 ## A demo
 

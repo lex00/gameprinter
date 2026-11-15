@@ -55,6 +55,7 @@ pub mod corpus;
 pub mod describe;
 pub mod difficulty;
 pub mod external;
+pub mod finish;
 pub mod lifted;
 pub mod lockstep;
 pub mod mapping;
