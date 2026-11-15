@@ -24,11 +24,11 @@ jobs:
           - { os: macos-15, target: aarch64-apple-darwin }
           # macos-13 is retired; macos-15-intel is GitHub's Intel Mac now.
           - { os: macos-15-intel, target: x86_64-apple-darwin }
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
           # Git Bash runs the scripts; MSVC's linker is on the runner. The
           # archive is a .zip with gp.exe in it.
-          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: windows-2025, target: x86_64-pc-windows-msvc }
     runs-on: ${{ matrix.os }}
     # Every step in bash, Git Bash on Windows, so build.sh runs as it is.
     defaults:
@@ -42,11 +42,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 24.13.1
           cache: npm
           cache-dependency-path: editor/package-lock.json
       - name: Tools
         run: |
+          # rustup 1.28 and later install the toolchain file's Rust only
+          # when asked.
+          rustup toolchain install
           rustup show
           rustup target add wasm32-unknown-unknown ${{ matrix.target }}
           cargo install --locked cargo-about --version 0.9.2
