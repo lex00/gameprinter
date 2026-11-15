@@ -6,27 +6,53 @@ jobs:
   check:
     # Hosted, so it holds no ROM. Everything here runs on Moss Hop, built from source.
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: never
     steps:
       - uses: actions/checkout@v4
-      # The build sandbox, which gp game build and its test need, and the tools.
-      - name: Tools
+      # The build sandbox, which gp game build and its test need, and cc65
+      # 2.19 for Moss Hop (the baselines pin the ROM's SHA-256, so other
+      # bytes fail there).
+      - name: System packages
         run: |
           # The runner's package mirror sometimes can't be reached for a minute
           # ("Temporary failure resolving"): apt retries each download, and
           # the install is tried three times before the job fails.
           for try in 1 2 3; do
-            sudo apt-get -o Acquire::Retries=5 update -qq && sudo apt-get -o Acquire::Retries=5 install -y -qq bubblewrap cc65 just && break
+            sudo apt-get -o Acquire::Retries=5 update -qq && sudo apt-get -o Acquire::Retries=5 install -y -qq bubblewrap cc65 && break
             [ "$try" = 3 ] && exit 1
             sleep 30
           done
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # The just the justfile is written for (Ubuntu's is too old for
+      # [positional-arguments]), from its release, checked by the action.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just@1.46.0
+      # The Node the owner's machine runs; the npm caches are keyed by the
+      # three lock files.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.1
+          cache: npm
+          cache-dependency-path: |
+            editor/package-lock.json
+            scripts/web/package-lock.json
+            site/package-lock.json
+      # The toolchain rust-toolchain.toml names, with its targets.
+      - name: Rust
+        run: |
+          rustup toolchain install
           rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+      # The pinned Chrome Headless Shell the page checks drive
+      # (scripts/inspector/fetch-browser.sh checks its SHA-256).
       - uses: actions/cache@v4
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          path: ~/.gameprinter/work/chrome-headless-shell
+          key: chrome-headless-shell-${{ runner.os }}-${{ hashFiles('scripts/inspector/fetch-browser.sh') }}
       - run: just setup
       - run: just check
