@@ -10,7 +10,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -58,12 +57,7 @@ pub(crate) struct Ticket {
 }
 
 fn alive(pid: u32) -> bool {
-    pid == std::process::id()
-        || Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
+    gp_mcp::proc::alive(u64::from(pid))
 }
 
 /// The pid at the end of a ticket's name, or in a claim's text.

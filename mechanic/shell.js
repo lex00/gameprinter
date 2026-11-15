@@ -281,8 +281,10 @@ function row(parent, kind, name, k, n, says) {
 }
 
 /** The header's two pickers. The game: every game gp serve has (its
- * /api/capture), which opens that game's page; hidden on a server of the
- * page's own. The ROM set: the sets of the game's roms.toml that are in
+ * /api/capture), which opens that game's page, and the person's copies
+ * (gp serve's /api/journeys: a theme, a new game), which open on the first
+ * screen's page in their own tabs (mechanic/journeys/tabs.js: the tabs
+ * follow the open copy); hidden on a server of the page's own. The ROM set: the sets of the game's roms.toml that are in
  * $GP_ROM_DIR (api/rom), shown when there are two or more; choosing one
  * plays it, draws the model with its art, keeps it for the game, and
  * loads the page again. */
@@ -298,11 +300,26 @@ async function pickers(page, phase) {
       o.value = o.textContent = g;
       gp.append(o);
     }
+    const j = await fetch("/api/journeys").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    if (j?.copies?.length) {
+      const og = document.createElement("optgroup");
+      og.label = "Your copies";
+      for (const c of j.copies) {
+        const o = document.createElement("option");
+        o.value = `copy:${c.journey}/${c.name}`;
+        o.textContent = `${c.journey === "theme" ? "THEME" : "NEW GAME"} ${c.name}`;
+        og.append(o);
+      }
+      gp.append(og);
+    }
     gp.value = page.game();
     gp.hidden = false;
   };
   await fill();
-  gp.addEventListener("change", () => { location.href = `/mechanic/${encodeURIComponent(gp.value)}/?tab=${phase()}`; });
+  gp.addEventListener("change", () => {
+    if (gp.value.startsWith("copy:")) location.href = `/start/?copy=${gp.value.slice(5)}`;
+    else location.href = `/mechanic/${encodeURIComponent(gp.value)}/?tab=${phase()}`;
+  });
   const rp = $("rom-pick");
   let sets;
   try { sets = await page.api("api/rom"); } catch (e) { return fill; }

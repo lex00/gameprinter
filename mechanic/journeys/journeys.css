@@ -83,6 +83,25 @@ img.jr-stage { max-width: min(100%, 768px); }
 .jr-pics figcaption { font-size: 11px; color: var(--muted); }
 .jr-link { overflow-wrap: anywhere; }
 
+/* Your theme beside the original: one moment's pair, the theme on the
+   left, with a bar to step through the route's moments. */
+.jr-beside { margin: 10px 0; padding: 8px 10px; border: 2px solid var(--nes-2d); min-width: 0; }
+.jr-beside h3 { margin-top: 2px; }
+.jr-pair-bar { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin: 4px 0 6px; }
+.jr-pair-bar select { font: 13px var(--mono); background: var(--nes-0f); color: var(--fg); border: 2px solid var(--nes-00); padding: 3px 4px; min-width: 0; max-width: 100%; flex: 1 1 18ch; }
+.jr-pair { margin: 0; max-width: 100%; }
+.jr-pair-heads { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; color: var(--nes-28); max-width: min(100%, 1100px); }
+.jr-pair img { display: block; width: 100%; max-width: min(100%, 1100px); height: auto; image-rendering: pixelated; border: 2px solid var(--nes-2d); }
+.jr-pair figcaption { font-size: 12px; color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }
+
+/* The open copy's tabs (tabs.js): the game page's tab bar, with only the
+   copy's own tabs showing, and what is open in the header's picker. */
+body.start #tabs { margin-top: 10px; }
+body.start #tabs[hidden], body.start #tabs button[hidden], #pane-play[hidden], #copy-pick[hidden] { display: none; }
+#copy-pick { font: bold 12px var(--mono); background: var(--nes-0f, #000); color: var(--fg); border: 2px solid var(--line); padding: 1px 4px; align-self: center; min-width: 0; max-width: 100%; }
+#pane-play { min-width: 0; }
+iframe.cp-game { display: block; width: 100%; height: min(86vh, 900px); border: 2px solid var(--nes-2d); background: #000; margin: 6px 0; }
+
 /* Carry on: each copy and each game being ported. */
 #carry ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 #carry ul:empty { display: none; }

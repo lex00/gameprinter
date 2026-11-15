@@ -41,7 +41,10 @@ pub(crate) fn dir() -> Option<PathBuf> {
     if let Some(d) = std::env::var_os("GP_MODULE_CACHE_DIR").filter(|d| !d.is_empty()) {
         return Some(PathBuf::from(d));
     }
-    let home = std::env::var_os("HOME").filter(|d| !d.is_empty())?;
+    // USERPROFILE: Windows has no HOME outside Git Bash.
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .filter(|d| !d.is_empty())?;
     Some(
         PathBuf::from(home)
             .join(".gameprinter")

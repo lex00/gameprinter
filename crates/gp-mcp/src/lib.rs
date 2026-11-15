@@ -31,6 +31,7 @@ pub mod next;
 pub mod page_headers;
 pub mod place;
 pub mod policy;
+pub mod proc;
 pub mod progressive;
 pub mod publish;
 pub mod ready;
@@ -45,6 +46,7 @@ pub mod server;
 pub mod sound;
 pub mod sound_proposal;
 pub mod sprite_ops;
+pub mod sprite_proposal;
 pub mod sprite_set;
 
 pub mod testgame;

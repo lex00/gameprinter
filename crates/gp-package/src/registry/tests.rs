@@ -573,3 +573,195 @@ fn listed_names_what_the_lists_hold_and_would_list_agrees_with_reindex() {
     reindex(&t, &again, &none, NOW, LATER).unwrap();
     assert_eq!(t.read("by-game/lex00/game.toml").unwrap(), before);
 }
+
+/// The by-game line of the made-up content package, as a reader reads it.
+fn night_line(t: &Folder) -> ByGameLine {
+    let r = Reader::unsigned(t).unwrap();
+    r.by_game("lex00/game", NOW).unwrap().line.remove(0)
+}
+
+fn unsigned_with_content() -> tempfile::TempDir {
+    let (d, _) = unsigned_fixture();
+    let t = Folder(d.path().to_owned());
+    let none = Signer::none();
+    publish(
+        &t,
+        &Publish {
+            name: "lex00/night",
+            version: "0.1.0",
+            kind: "content",
+            title: "Night",
+            for_games: &["lex00/game".to_owned()],
+            published: NOW,
+        },
+        &files(),
+        &none,
+    )
+    .unwrap();
+    let versions = [
+        ("lex00/game".to_owned(), "1.0.0".to_owned()),
+        ("lex00/night".to_owned(), "0.1.0".to_owned()),
+    ];
+    reindex(&t, &versions, &none, NOW, LATER).unwrap();
+    d
+}
+
+#[test]
+fn a_recheck_is_recorded_in_the_by_game_line_and_a_reindex_keeps_it() {
+    let d = unsigned_with_content();
+    let t = Folder(d.path().to_owned());
+    let none = Signer::none();
+    assert_eq!(night_line(&t).recheck, None);
+    let text = String::from_utf8(t.read("by-game/lex00/game.toml").unwrap().unwrap()).unwrap();
+    assert!(!text.contains("recheck"), "no key until a recheck: {text}");
+    let failed = Recheck {
+        date: "2026-11-14".into(),
+        result: "fail".into(),
+        reason: "made up: its pictures don't fit".into(),
+    };
+    let l = record_recheck(
+        &t,
+        "lex00/game",
+        "lex00/night",
+        "0.1.0",
+        failed.clone(),
+        &none,
+        NOW,
+        LATER,
+    )
+    .unwrap();
+    assert_eq!(l.recheck.as_ref(), Some(&failed));
+    assert!(failed.failed());
+    let text = String::from_utf8(t.read("by-game/lex00/game.toml").unwrap().unwrap()).unwrap();
+    assert!(
+        text.contains(
+            "[line.recheck]\ndate = \"2026-11-14\"\nresult = \"fail\"\nreason = \"made up: its pictures don't fit\"\n"
+        ),
+        "{text}"
+    );
+    assert_eq!(night_line(&t).recheck, Some(failed.clone()));
+    // A reindex of the same versions keeps it.
+    let versions = [
+        ("lex00/game".to_owned(), "1.0.0".to_owned()),
+        ("lex00/night".to_owned(), "0.1.0".to_owned()),
+    ];
+    reindex(&t, &versions, &none, NOW, LATER).unwrap();
+    assert_eq!(night_line(&t).recheck, Some(failed));
+    // A later pass replaces it.
+    let passed = Recheck {
+        date: "2026-11-15".into(),
+        result: "pass".into(),
+        reason: "made up".into(),
+    };
+    record_recheck(
+        &t,
+        "lex00/game",
+        "lex00/night",
+        "0.1.0",
+        passed.clone(),
+        &none,
+        NOW,
+        LATER,
+    )
+    .unwrap();
+    assert_eq!(night_line(&t).recheck, Some(passed.clone()));
+    // Only pass or fail, and only a version the list names.
+    let odd = Recheck {
+        result: "maybe".into(),
+        ..passed.clone()
+    };
+    let e = record_recheck(
+        &t,
+        "lex00/game",
+        "lex00/night",
+        "0.1.0",
+        odd,
+        &none,
+        NOW,
+        LATER,
+    )
+    .unwrap_err();
+    assert!(e.contains("pass or fail"), "{e}");
+    let e = record_recheck(
+        &t,
+        "lex00/game",
+        "lex00/night",
+        "9.0.0",
+        passed,
+        &none,
+        NOW,
+        LATER,
+    )
+    .unwrap_err();
+    assert!(e.contains("doesn't list lex00/night@9.0.0"), "{e}");
+}
+
+#[test]
+fn a_recheck_on_a_signed_registry_needs_the_signing_key_and_is_signed() {
+    let f = fixture();
+    let t = f.target();
+    let failed = Recheck {
+        date: "2026-11-14".into(),
+        result: "fail".into(),
+        reason: "made up".into(),
+    };
+    let e = record_recheck(
+        &t,
+        "lex00/game",
+        "lex00/night",
+        "0.1.0",
+        failed.clone(),
+        &Signer::none(),
+        NOW,
+        LATER,
+    )
+    .unwrap_err();
+    assert!(e.contains("--key"), "{e}");
+    // Signed by another key than the registry's signing key: the reader
+    // with the pinned root refuses the file, so the field is covered.
+    with(&f.other, |s| {
+        record_recheck(
+            &t,
+            "lex00/game",
+            "lex00/night",
+            "0.1.0",
+            failed.clone(),
+            s,
+            NOW,
+            LATER,
+        )
+    })
+    .unwrap();
+    let r = Reader::open(&t, &f.root.public).unwrap();
+    assert!(r.by_game("lex00/game", NOW).is_err());
+}
+
+/// A reader from before the key (a by-game line with only the four keys it
+/// knew) reads a line that has a recheck, and today's reader passes over a
+/// key it doesn't know.
+#[test]
+fn an_older_reader_passes_over_the_recheck() {
+    #[derive(Deserialize)]
+    #[allow(dead_code)]
+    struct OldLine {
+        package: String,
+        version: String,
+        id: String,
+        title: String,
+    }
+    #[derive(Deserialize)]
+    #[allow(dead_code)]
+    struct OldByGame {
+        format: String,
+        registry: String,
+        signed: String,
+        expires: String,
+        line: Vec<OldLine>,
+    }
+    let text = "format = \"1\"\nregistry = \"r\"\nsigned = \"a\"\nexpires = \"b\"\n\n[[line]]\npackage = \"x/y\"\nversion = \"1\"\nid = \"i\"\ntitle = \"Y\"\n\n[line.recheck]\ndate = \"2026-11-14\"\nresult = \"fail\"\nreason = \"r\"\nlater = 1\n";
+    let old: OldByGame = toml::from_str(text).unwrap();
+    assert_eq!(old.line[0].package, "x/y");
+    let now: ByGame = toml::from_str(&format!("{text}\n[[line]]\npackage = \"x/z\"\nversion = \"1\"\nid = \"j\"\ntitle = \"Z\"\nfrom_a_newer_gp = true\n")).unwrap();
+    assert_eq!(now.line[0].recheck.as_ref().unwrap().result, "fail");
+    assert_eq!(now.line[1].recheck, None);
+}

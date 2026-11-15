@@ -203,8 +203,10 @@ export async function offered(source, game) {
 
 // What the source offers for a game, and what of its list the page leaves
 // out with why (gp-registry.wasm's list question, gp_web_registry::choose):
-// { offered: [{ name, version, id, title }], leftOut: [{ name, version,
-// title, reason, detail }] }, `reason` written to follow "because".
+// { offered: [{ name, version, id, title, recheck? }], leftOut: [{ name,
+// version, title, reason, detail }] }, `reason` written to follow
+// "because". `recheck` ({ date, result, reason }) is there only when the
+// theme's last recheck failed.
 export async function offer(source, game) {
   const a = await ask(source, { name: "", list: true, for_game: game });
   if (a.error) throw new Error(a.error);

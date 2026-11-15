@@ -161,6 +161,10 @@ impl Sessions {
                 let i = self.live.remove(&id).ok_or("no such session")?;
                 self.live.insert(id, i.with_apu_events());
             }
+            wire::SET_SOUND_EVENTS => {
+                let i = self.live.remove(&id).ok_or("no such session")?;
+                self.live.insert(id, i.with_sound_events());
+            }
             wire::DESCRIBE => gp_interp::describe::write_exts(self.get(id)?.exts(), w),
             wire::START_READS => {
                 self.get(id)?;

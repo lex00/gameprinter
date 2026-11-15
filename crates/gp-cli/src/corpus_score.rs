@@ -26,7 +26,9 @@ pub(crate) const EVIDENCE_DIR: &str = "evidence";
 /// The manifest beside a clip set.
 pub(crate) const FILE: &str = "corpus.toml";
 /// The score record's own format.
-pub(crate) const RECORD_FORMAT: &str = "0.1.0";
+/// 0.2.0 added `module`, the hooks module the clips were scored through;
+/// 0.3.0 added `results.picture`, the screen frames apart from the state.
+pub(crate) const RECORD_FORMAT: &str = "0.3.0";
 /// The record's predicate type.
 pub(crate) const PREDICATE: &str = "urn:game-printer:score-record:0";
 
@@ -1074,6 +1076,53 @@ pub(crate) fn accept_curves(dir: &Path, g: &cs::Regen) -> Result<usize> {
     Ok(changed)
 }
 
+/// The summary's picture line, apart from the state's: "exact" there is on
+/// state alone.
+fn picture_line(clips_same: usize, n: usize, same: u64, frames: u64) -> String {
+    format!(
+        "On picture: {same} of {frames} screen frames the same, {clips_same} of {n} clips the same on every screen frame compared{}.",
+        if frames == 0 {
+            " (no screen frames were compared)"
+        } else {
+            ""
+        }
+    )
+}
+
+/// A clip row's picture, from its `screen` counts: of the screen frames
+/// compared, how many are the same. A frame is the same only when both
+/// layers (sprites and background) are, so the count is the lower of the
+/// two layers' and the frames the higher of their totals; a row with no
+/// `screen`, or an error, compared none.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Picture {
+    pub same: u64,
+    pub frames: u64,
+}
+
+impl Picture {
+    pub(crate) fn of(row: &Value) -> Self {
+        let layers: Vec<&Value> = ["sprites", "background"]
+            .iter()
+            .map(|l| &row["screen"][*l])
+            .filter(|l| l["total"].is_u64())
+            .collect();
+        if layers.is_empty() {
+            return Self::default();
+        }
+        let num = |l: &Value, k: &str| l[k].as_u64().unwrap_or(0);
+        Self {
+            same: layers.iter().map(|l| num(l, "same")).min().unwrap_or(0),
+            frames: layers.iter().map(|l| num(l, "total")).max().unwrap_or(0),
+        }
+    }
+
+    /// Every screen frame compared is the same, and some were compared.
+    pub(crate) fn exact(&self) -> bool {
+        self.frames > 0 && self.same == self.frames
+    }
+}
+
 pub(crate) fn record_path(template: &Path, model_hash: &str, corpus_hash: &str) -> PathBuf {
     template
         .join(EVIDENCE_DIR)
@@ -1571,11 +1620,20 @@ fn score(
     let mut pair_lines: Vec<String> = Vec::new();
     let (mut met, mut held) = (0usize, 0usize);
     let (mut exact, mut errors, mut permille_sum) = (0usize, 0usize, 0u64);
+    // The picture apart from the state: clips whose every compared screen
+    // frame is the same, and the frames.
+    let (mut pic_clips, mut pic_same, mut pic_frames) = (0usize, 0u64, 0u64);
     for row in &clips {
         let id = row["id"].as_str().unwrap_or("");
         if row.get("error").is_some_and(|e| !e.is_null()) {
             errors += 1;
             continue;
+        }
+        let pic = Picture::of(row);
+        pic_same += pic.same;
+        pic_frames += pic.frames;
+        if pic.exact() {
+            pic_clips += 1;
         }
         if row["exact"] == true {
             exact += 1;
@@ -1636,6 +1694,11 @@ fn score(
         .unwrap_or_default();
     let contract = fs::read(b.dir.join(gp_contract::CONTRACT_FILE)).unwrap_or_default();
     let h = |x: &[u8]| gp_evidence::Hash::of(x).to_string();
+    // The hooks module the clips were played through (named, or built for
+    // the game), by its hash: null for a model with gp's own hooks alone.
+    let module = source
+        .module_hash()
+        .map_or(Value::Null, |m| json!({"hash": m}));
     let record = json!({
         "_type": "https://in-toto.io/Statement/v1",
         "subject": [
@@ -1650,23 +1713,28 @@ fn score(
             "model": {"hash": model_hash, "short": crate::scenario::model_hash(&g.model_text), "name": model_name},
             "mapping": {"hash": h(b.mapping_text.as_bytes()), "schema": g.mapping},
             "contract": h(&contract),
+            "module": module,
             "profile": Value::Null,
             "runtime": {"name": "gp-interp", "scenario": gp_interp::scenario::SCENARIO_VERSION},
             "gp": {"version": env!("CARGO_PKG_VERSION"), "build": build()},
             "results": {"clips": n, "exact": exact, "errors": errors, "fidelity_permille": fidelity,
-                "bars": if held > 0 { json!({"held": held, "met": met}) } else { Value::Null }},
+                "bars": if held > 0 { json!({"held": held, "met": met}) } else { Value::Null },
+                "picture": {"clips_same": pic_clips, "frames_same": pic_same, "frames": pic_frames}},
             "clips": clips,
         },
     });
-    let mut text = vec![format!(
-        "On corpus {} {} ({}): {exact} of {n} clips exact, fidelity {}.{}%, {errors} couldn't be scored. Model {}.",
-        m.corpus.name,
-        m.corpus.version,
-        short(&m.corpus.hash),
-        fidelity / 10,
-        fidelity % 10,
-        short(&model_hash),
-    )];
+    let mut text = vec![
+        format!(
+            "On corpus {} {} ({}), on state: {exact} of {n} clips exact, fidelity {}.{}%, {errors} couldn't be scored. Model {}.",
+            m.corpus.name,
+            m.corpus.version,
+            short(&m.corpus.hash),
+            fidelity / 10,
+            fidelity % 10,
+            short(&model_hash),
+        ),
+        picture_line(pic_clips, n, pic_same, pic_frames),
+    ];
     // The clips made and scored a second time because the first try
     // couldn't make or score them, and how each second try went.
     let reran: Vec<Value> = g

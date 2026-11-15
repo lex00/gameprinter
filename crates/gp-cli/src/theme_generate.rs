@@ -1380,11 +1380,7 @@ fn lock(run: &Path) -> Result<()> {
         if !pid.is_empty()
             && pid != "free"
             && pid != std::process::id().to_string()
-            && Command::new("kill")
-                .args(["-0", pid])
-                .stderr(std::process::Stdio::null())
-                .status()
-                .is_ok_and(|s| s.success())
+            && pid.parse::<u64>().is_ok_and(gp_mcp::proc::alive)
         {
             bail!(
                 "another gp theme generate (process {pid}) is using {}; wait for it",

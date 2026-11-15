@@ -25,7 +25,10 @@
 // check answers from it as the agent, and the answer shows under the box
 // in plain words and fits at 360 px (issue #10). The first screen's three choices, a made-up theme
 // and a new game from the Moss Hop template made there, each at its step
-// with whose turn it is, and the copies with CARRY ON (issue #5). Every tab is checked at 360 px
+// with whose turn it is, and the copies with CARRY ON (issue #5); a theme
+// beside the original, moment by moment along the game's route (issue #5,
+// BESIDE THE ORIGINAL); the tabs following the open copy, on a theme, a
+// game from nothing and a port (issue #5). Every tab is checked at 360 px
 // wide too: nothing past the right edge, every control in the window, the
 // agent's log a full-width panel that closes, REVIEW REBUILD's two
 // pictures one over the other. Any error the page throws fails the
@@ -50,7 +53,7 @@
 //
 // Exit codes: 0 passed, 1 a check failed, 2 couldn't run.
 import { spawn, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
@@ -66,6 +69,7 @@ const opt = (n) => {
 const gp = opt("gp"), romFile = opt("rom"), wasm = opt("wasm"), browserPath = opt("browser");
 const arcadeRom = opt("arcade-rom"), arcadeWasm = opt("arcade-wasm");
 // --only arcade: the arcade run alone (it needs no Moss Hop run before it).
+// --only journeys: the first screen, the copies and their tabs alone.
 const only = process.argv.includes("--only") ? process.argv[process.argv.indexOf("--only") + 1] : null;
 // --arcade-games DIR: a games checkout with tapper/ (its roms.toml names
 // tapper, rbtapper and the rest), for the ROM set picker, with the sets
@@ -573,6 +577,24 @@ async function arcade() {
   const page = await browser.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
+  // Counts the sound the page starts: every buffer source started on an
+  // AudioContext, with its channels and rate.
+  await page.addInitScript(() => {
+    window.__gpSound = { started: 0, channels: 0, rate: 0 };
+    const make = BaseAudioContext.prototype.createBufferSource;
+    BaseAudioContext.prototype.createBufferSource = function () {
+      const src = make.call(this);
+      const start = src.start.bind(src);
+      src.start = (...a) => {
+        const s = window.__gpSound;
+        s.started++;
+        s.channels = src.buffer?.numberOfChannels ?? 0;
+        s.rate = src.buffer?.sampleRate ?? 0;
+        return start(...a);
+      };
+      return src;
+    };
+  });
   await page.goto(url);
   await until("the arcade page shows the session", async () => (await text(page, "#title")) === `${game} / ${mech}`);
   const shape = await page.evaluate(() => ({ p: document.body.dataset.platform, w: document.getElementById("game").width, h: document.getElementById("game").height }));
@@ -598,6 +620,13 @@ async function arcade() {
   await page.keyboard.up("Digit1");
   const started = await frame(page);
   await until("play under way", async () => (await frame(page)) >= started + 200, 30000);
+  // The coin's key started the board's sound (the browser lets a page's
+  // audio start on a key): stereo frames at 48 kHz, from the two AYs, and
+  // nothing went wrong on the page.
+  const snd = await page.evaluate(() => window.__gpSound);
+  if (!(snd.started > 30) || snd.channels !== 2 || snd.rate !== 48000) fail(`the arcade page's sound didn't start: ${JSON.stringify(snd)}`);
+  if (errors.length) fail(`the arcade page's errors with the sound on: ${errors.join("; ")}`);
+  ok(`the arcade page's sound started on the coin's key: ${snd.started} frames of stereo at 48 kHz queued, no page errors`);
   await page.keyboard.press("KeyR");
   await until("recording", async () => (await text(page, "#modebadge")) === "RECORDING");
   for (const k of ["ArrowDown", "KeyX", "ArrowUp", "KeyX", "ArrowLeft"]) {
@@ -2094,6 +2123,197 @@ async function seeItInTheGame() {
   await page.close();
 }
 
+/** The tabs follow the open copy (issue #5, the owner's decision), after
+ * seeItInTheGame(): a theme copy (Moss Night) opens from CARRY ON at
+ * THEMES, its journey with BESIDE THE ORIGINAL, and PLAY plays Moss Hop in
+ * Moss Night in a frame of the page, the ROM loaded there; a game from
+ * nothing, made on the page, opens at STEPS, and its PLAY offers BUILD IT
+ * TO PLAY; check_hop, built, plays in PLAY with no ROM; CLIPS and REFINE
+ * hide for all three; a port (Moss Hop, from the header's picker) has its
+ * four tabs as before at CLIPS, and its picker opens a copy at that copy's
+ * tab. Each copy kind fits at 360 px; with --shots each is kept at 1400 and
+ * 360 px. */
+async function copyTabs() {
+  const base = await gpServe(games);
+  const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  const shown = () => page.evaluate(() => [...document.querySelectorAll("#tabs button")].filter((b) => b.getClientRects().length).map((b) => `${b.textContent}${b.classList.contains("on") ? "*" : ""}`).join(" "));
+  const fitsHere = () => page.evaluate(() => {
+    const W = innerWidth;
+    const off = [...document.querySelectorAll("header *, #tabs *, #journey *, #pane-play *")].filter((e) => e.getClientRects().length && !e.closest("details:not([open]) > :not(summary)"))
+      .filter((e) => { const r = e.getBoundingClientRect(); return r.width && (r.left < -1 || r.right > W + 1); })
+      .map((e) => `${e.tagName.toLowerCase()}${e.id ? "#" + e.id : ""}.${String(e.className).split(" ")[0]}`);
+    return { off: off.slice(0, 8), page: document.documentElement.scrollWidth <= W + 1 };
+  });
+  // At 1400 and at 360 px: kept, and nothing past the edge at 360.
+  const both = async (what, name) => {
+    await shot(page, `${name}-1400`, false);
+    await page.setViewportSize({ width: 360, height: 780 });
+    await page.waitForTimeout(500);
+    const f = await fitsHere();
+    if (f.off.length || !f.page) fail(`${what} at 360 px runs past the edge: ${JSON.stringify(f)}`);
+    await shot(page, `${name}-360`, false);
+    await page.setViewportSize({ width: 1400, height: 900 });
+    await page.waitForTimeout(200);
+  };
+  const tabIs = (t) => new URL(page.url()).searchParams.get("tab") === t;
+  const playing = async (what, f) => until(what, async () => {
+    const g = f.childFrames().find((c) => /\/game\/(index\.html)?(\?|$)/.test(c.url())) ?? f;
+    const s = await g.evaluate(() => ({ theme: window.__gp?.theme ?? null, frame: window.__gp?.state?.()?.frame ?? window.__gp?.hashes?.length ?? 0, error: window.__gp?.error ? String(window.__gp.error) : null })).catch(() => null);
+    if (s?.error) fail(`${what}: ${s.error}`);
+    return s && s.frame > 30 ? s : null;
+  }, 180000);
+
+  // A theme copy: CARRY ON leads into THEMES, the theme's journey.
+  await page.goto(`${base}start/`);
+  await until("the copies listed", () => page.isVisible('#copies li[data-copy="theme/moss-night"] button'));
+  await page.click('#copies li[data-copy="theme/moss-night"] button');
+  await until("CARRY ON opens Moss Night at THEMES", async () => tabIs("themes") && page.isVisible('#journey li[data-step="T5"][data-state="now"] #jr-beside'), 30000);
+  const themeTabs = await shown();
+  if (themeTabs !== "PLAY THEMES*") fail(`Moss Night's tabs: ${themeTabs}`);
+  if (!(await page.isHidden("#tab-clips")) || !(await page.isHidden("#tab-work"))) fail("CLIPS or REFINE shows for a theme");
+  if ((await page.inputValue("#copy-pick")) !== "copy:theme/moss-night") fail(`the header's picker names ${await page.inputValue("#copy-pick")}`);
+  ok(`CARRY ON opens Moss Night at THEMES, its journey with BESIDE THE ORIGINAL at step 5; the tabs are ${themeTabs} (CLIPS and REFINE hidden) and the header's picker names it`);
+  await both("a theme's THEMES", "tabs-theme-themes");
+
+  // PLAY: Moss Hop in Moss Night, in a frame of the page.
+  await page.click("#tab-play");
+  await until("Moss Night's PLAY", async () => tabIs("play") && (await page.isHidden("#journey")) && page.isVisible('#pane-play [data-act="look-play"] button, #pane-play #cp-game'), 30000);
+  if (await page.isVisible('#pane-play [data-act="look-play"] button')) await page.click('#pane-play [data-act="look-play"] button');
+  const ifr = await until("Moss Night's game in PLAY", () => page.$("#pane-play iframe#cp-game"), 900000);
+  const pid = await page.evaluate(async (u) => (await (await fetch(u)).json()).jobs?.["look-play"]?.json?.pid ?? null, `${base}api/journeys/theme/moss-night`);
+  try {
+    const f = await ifr.contentFrame();
+    await until("the any-game page in PLAY", () => f.$("#rom"), 60000);
+    await f.setInputFiles("#rom", romFile);
+    const st = await playing("Moss Hop plays in Moss Night in PLAY", f);
+    if (st.theme !== "moss-night") fail(`PLAY opened Moss Hop in look ${st.theme}, not moss-night`);
+    ok(`PLAY on Moss Night plays Moss Hop in Moss Night in the page, the ROM loaded there (frame ${st.frame})`);
+    if (!(await page.isHidden("#carry")) || !(await page.isHidden("#first"))) fail("the first screen's lists show under a copy's PLAY");
+    await both("a theme's PLAY", "tabs-theme-play");
+    await page.click("#tab-themes");
+    await until("THEMES again, the game stopped", async () => tabIs("themes") && !(await page.$("#cp-game")) && page.isVisible("#journey"));
+    ok("leaving PLAY stops the game; THEMES shows the journey again");
+  } finally {
+    try { if (pid) process.kill(pid); } catch { /* gone already */ }
+  }
+
+  // A game from nothing, made on the page: STEPS, and PLAY to build it.
+  await page.goto(`${base}start/`);
+  await page.click('#start-choices button[data-journey="new"]');
+  await page.check('#new-start input[name="template"][data-empty="1"]');
+  await page.fill("#new-name", "check_blank");
+  await page.click("#new-go");
+  await until("check_blank at STEPS", async () => page.url().includes("copy=new/check_blank") && tabIs("steps") && page.isVisible('#journey li[data-step="N1"]'), 120000);
+  const newTabs = await shown();
+  if (newTabs !== "PLAY STEPS*") fail(`check_blank's tabs: ${newTabs}`);
+  if (!/started from nothing/.test(await text(page, "#journey h2"))) fail(`check_blank's heading: ${await text(page, "#journey h2")}`);
+  ok(`MAKE A NEW GAME from nothing opens check_blank at STEPS; the tabs are ${newTabs} (CLIPS, REFINE and THEMES hidden)`);
+  await both("a new game's STEPS", "tabs-new-steps");
+  await page.click("#tab-play");
+  await until("check_blank's PLAY", async () => tabIs("play") && page.isVisible('#pane-play [data-act="build"] button'), 30000);
+  if (!/isn't built to play yet/.test(await text(page, "#pane-play"))) fail(`check_blank's PLAY: ${await text(page, "#pane-play")}`);
+  ok("PLAY on check_blank, not built yet, says so and offers BUILD IT TO PLAY");
+  await both("a new game's PLAY", "tabs-new-play");
+
+  // check_hop, built by seeItInTheGame: PLAY plays it, no ROM asked for.
+  await page.selectOption("#copy-pick", "copy:new/check_hop");
+  await until("the picker opens check_hop at STEPS", async () => page.url().includes("copy=new/check_hop") && tabIs("steps") && page.isVisible('#journey li[data-step="N6"]'), 30000);
+  await page.click("#tab-play");
+  const hop = await until("check_hop's game in PLAY", () => page.$("#pane-play iframe#cp-game"), 30000);
+  const hs = await playing("check_hop plays in PLAY", await hop.contentFrame());
+  ok(`the header's picker opens check_hop at STEPS, and PLAY plays it from its own files, no ROM asked for (frame ${hs.frame})`);
+  await both("a built new game's PLAY", "tabs-new-built-play");
+
+  // A port: the four tabs, as before.
+  await page.selectOption("#copy-pick", `port:${GAME}`);
+  await until("the picker opens the port", async () => page.url().includes(`/mechanic/${GAME}/`) && (await text(page, "#title").catch(() => "")).startsWith(GAME), 240000);
+  const portTabs = await until("the port's tabs", async () => { const t = await shown(); return t.split(" ").length === 4 ? t : null; });
+  if (portTabs !== "CLIPS* REFINE PLAY THEMES") fail(`the port's tabs: ${portTabs}`);
+  const picks = await until("the port's picker lists the copies", async () => {
+    const v = await page.evaluate(() => [...document.querySelectorAll("#game-pick option")].map((o) => o.value));
+    return v.includes("copy:theme/moss-night") ? v : null;
+  });
+  if (!picks.includes(GAME) || (await page.inputValue("#game-pick")) !== GAME) fail(`the port's picker: ${picks}`);
+  ok(`a port (${GAME}) keeps its four tabs at CLIPS (${portTabs}), and its header's picker lists the copies too: ${picks.join(", ")}`);
+  await shot(page, "tabs-port-1400", false);
+  await page.setViewportSize({ width: 360, height: 780 });
+  await page.waitForTimeout(500);
+  if (!(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1))) fail("the port's page at 360 px runs past the edge");
+  await shot(page, "tabs-port-360", false);
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await page.selectOption("#game-pick", "copy:theme/moss-night");
+  await until("the port's picker opens Moss Night at THEMES", async () => page.url().includes("copy=theme/moss-night") && tabIs("themes") && page.isVisible("#journey li"), 30000);
+  ok("the port's picker opens Moss Night at its THEMES tab");
+  // The root opens the copy opened last, at its first tab.
+  await page.goto(base);
+  await until("the root opens the copy opened last at its tab", async () => page.url().includes("copy=theme/moss-night") && tabIs("themes"), 15000);
+  ok("gp serve's root opens the copy opened last at its THEMES tab");
+  if (errors.length) fail(`the copies' tabs threw: ${errors.join("; ")}`);
+  await page.close();
+}
+
+/** BESIDE THE ORIGINAL on Moss Night's step 5 (issue #5), after
+ * seeItInTheGame(): gp theme look play --shots --against original plays
+ * the game's route twice in headless Chrome, once in the theme and once
+ * in the game's own pictures, and the step shows each moment's pair with
+ * YOUR THEME and THE ORIGINAL over it, its words, and BEFORE and NEXT to
+ * step through them; it fits at 360 px. */
+async function besideTheOriginal() {
+  // The run's Chrome, where gp looks for it in the home
+  // (scripts/inspector/fetch-browser.sh's layout).
+  const shell = join(home, "work", "chrome-headless-shell", "check");
+  if (!existsSync(join(shell, "bin"))) {
+    mkdirSync(shell, { recursive: true });
+    symlinkSync(dirname(browserPath), join(shell, "bin"));
+  }
+  const base = await gpServe(games);
+  const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto(`${base}start/?copy=theme/moss-night`);
+  await until("Moss Night at step 5", () => page.isVisible('#journey li[data-step="T5"][data-state="now"] #jr-beside'), 30000);
+  await page.click('#journey [data-act="compare"] button');
+  const api = `${base}api/journeys/theme/moss-night`;
+  const job = await until("BESIDE THE ORIGINAL's run", async () => {
+    const j = await page.evaluate(async (u) => (await (await fetch(u)).json()).jobs?.compare ?? null, api);
+    return j && j.state !== "running" ? j : null;
+  }, 1500000);
+  if (job.state !== "done") fail(`BESIDE THE ORIGINAL ${job.state}: ${job.error ?? JSON.stringify(job).slice(0, 400)}`);
+  const sides = job.json?.sides ?? [];
+  if (!/the original/.test(sides[1] ?? "")) fail(`BESIDE THE ORIGINAL's sides: ${JSON.stringify(sides)}`);
+  const pair = await until("the first pair shown", () => page.evaluate(() => {
+    const i = document.getElementById("jr-pair-img");
+    return i?.complete && i.naturalWidth ? { w: i.naturalWidth, h: i.naturalHeight, cap: document.querySelector("#jr-beside figcaption")?.textContent ?? "", heads: document.querySelector("#jr-beside .jr-pair-heads")?.textContent ?? "", n: document.querySelectorAll("#jr-moment option").length } : null;
+  }), 30000);
+  if (!/^1 of \d+: /.test(pair.cap) || pair.heads !== "YOUR THEMETHE ORIGINAL") fail(`the pair's words: ${JSON.stringify(pair)}`);
+  if (pair.n > 1) {
+    await page.click('#jr-beside button:text("NEXT")');
+    const cap = await text(page, "#jr-beside figcaption");
+    if (!/^2 of /.test(cap)) fail(`NEXT didn't step to the second moment: ${cap}`);
+    await page.click('#jr-beside button:text("BEFORE")');
+  }
+  ok(`BESIDE THE ORIGINAL plays Moss Hop's route in Moss Night and in its own pictures and shows ${pair.n} moments side by side (${pair.w}x${pair.h}, "${pair.cap}"), with BEFORE and NEXT`);
+  await page.evaluate(() => document.getElementById("jr-beside").scrollIntoView());
+  await shot(page, "beside-original-1400", false);
+  await page.setViewportSize({ width: 360, height: 780 });
+  await page.waitForTimeout(400);
+  const f = await page.evaluate(() => {
+    const W = innerWidth;
+    const off = [...document.querySelectorAll("#jr-beside, #jr-beside *")].filter((e) => e.getClientRects().length)
+      .filter((e) => { const r = e.getBoundingClientRect(); return r.width && (r.left < -1 || r.right > W + 1); })
+      .map((e) => `${e.tagName.toLowerCase()}${e.id ? "#" + e.id : ""}.${String(e.className).split(" ")[0]}`);
+    return { off: off.slice(0, 8), page: document.documentElement.scrollWidth <= W + 1 };
+  });
+  if (f.off.length || !f.page) fail(`BESIDE THE ORIGINAL at 360 px runs past the edge: ${JSON.stringify(f)}`);
+  await page.evaluate(() => document.getElementById("jr-beside").scrollIntoView());
+  await shot(page, "beside-original-360", false);
+  ok("at 360 px the pair, its words and BEFORE and NEXT fit the window");
+  if (errors.length) fail(`BESIDE THE ORIGINAL threw: ${errors.join("; ")}`);
+  await page.close();
+}
+
 /** Every tab at 360 px wide (issue #17), on a gp serve page with
  * main()'s clip: nothing runs past the window's right edge, the tabs and
  * every visible button, picker and field are inside the window, the game
@@ -2187,7 +2407,8 @@ try {
   if (only === "arcade") {
     browser = await chromium.launch({ executablePath: browserPath, args: ["--no-sandbox"] });
     await arcade();
-  } else await whole();
+  } else if (only === "journeys") await journeysOnly();
+  else await whole();
   console.log(`mechanic-page: passed in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
 } catch (e) {
   console.error(`FAIL ${e.message}`);
@@ -2198,6 +2419,17 @@ try {
   rmSync(work, { recursive: true, force: true });
 }
 process.exit(code);
+
+/** --only journeys: the first screen, the copies and their tabs, on Moss
+ * Hop made here as main() makes it, without main()'s clip. */
+async function journeysOnly() {
+  gpRun(["roms", "add", romFile, "--games", games]);
+  gpRun(["game", "new", GAME, "--rom", join(home, "roms", "nes", "mosshop.nes"), "--genre", "platformer", "--namespace", "check", "--games", games]);
+  browser = await chromium.launch({ executablePath: browserPath, args: ["--no-sandbox"] });
+  await journeys();
+  await seeItInTheGame();
+  await copyTabs();
+}
 
 /** Every run, in order. */
 async function whole() {
@@ -2211,6 +2443,8 @@ async function whole() {
   await roleSoundProposals();
   await journeys();
   await seeItInTheGame();
+  await besideTheOriginal();
+  await copyTabs();
   await narrow();
   await arcade();
   await romSets();

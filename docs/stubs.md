@@ -44,7 +44,7 @@ A commercial template can have stub art with no ROM, but its simulation slots st
 
 ## The catalog
 
-Each record is worked out from the model, the contract and the asset map when it's asked for. So it can't go stale, and it holds no game data. The status and provenance come from `slots.toml` beside the assets.
+Each record is worked out from the model, the contract and the asset map when it's asked for. So it can't go stale, and it holds no game data. The status and provenance come from `slots.toml` beside the assets. The map is an NES one or an arcade board's ([board art](formats/board-art.md)): `gp_mcp::catalog::slots_of` reads the slots of either, and an arcade slot's `shape` is its pictures' size, count, `per_row`, `image_size` and 16 colours (a palette's 64 colours of 9 bits, a screen's 32 by 30 cells), with `used_by` the entities whose `board_sprite` draws from a `board-sprites` slot.
 
 | Field | Meaning |
 |---|---|

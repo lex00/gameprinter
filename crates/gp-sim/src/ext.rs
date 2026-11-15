@@ -71,6 +71,33 @@ pub trait Ext: Send + Sync {
     ) -> Vec<(u8, u8)> {
         self.apu(spec, world, id)
     }
+
+    /// The sound requests this instance's hook made on the frame that led
+    /// to `world`, in the order made: for an arcade game, each the latch of
+    /// the sound board the main CPU wrote (0 to 3) and the byte, as the
+    /// original's `latch-write` events give them (gp_arcade::protocol). A
+    /// hook keeps them in its body's words as it steps and reads them back
+    /// here. It's for presentation, a page playing the board's own sound
+    /// from the requests ([`hook_sound_requests`]); it never changes the
+    /// world. The default makes none.
+    fn sound_requests(&self, _spec: &Spec, _world: &World, _id: usize) -> Vec<(u8, u8)> {
+        Vec::new()
+    }
+}
+
+/// The sound requests every hooked instance made on the frame that led to
+/// `world` ([`Ext::sound_requests`]), in body order.
+pub fn hook_sound_requests(spec: &Spec, world: &World, exts: &Exts) -> Vec<(u8, u8)> {
+    let mut out = Vec::new();
+    for (i, b) in world.bodies.iter().enumerate() {
+        if !b.active() {
+            continue;
+        }
+        if let Some(h) = spec.kind(b).ext.as_ref().and_then(|n| exts.get(n)) {
+            out.extend(h.sound_requests(spec, world, i));
+        }
+    }
+    out
 }
 
 /// The APU writes every hooked instance makes on the frame after `world`

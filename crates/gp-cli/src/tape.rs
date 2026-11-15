@@ -214,7 +214,10 @@ pub(crate) fn dir() -> Option<PathBuf> {
     if let Some(d) = std::env::var_os("GP_TAPE_DIR").filter(|d| !d.is_empty()) {
         return Some(PathBuf::from(d));
     }
-    let home = std::env::var_os("HOME").filter(|d| !d.is_empty())?;
+    // USERPROFILE: Windows has no HOME outside Git Bash.
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .filter(|d| !d.is_empty())?;
     Some(
         PathBuf::from(home)
             .join(".gameprinter")
@@ -482,6 +485,85 @@ impl Original {
         Frame::indexed(WIDTH as u32, HEIGHT as u32, &px, colors, 0x80)
     }
 
+    /// A replay's RAM on its frame (an arcade board's RAM record),
+    /// unpacked once.
+    fn replay_ram(&self, t: &Tape) -> Option<Rc<Vec<u8>>> {
+        let cached = self
+            .ram_at
+            .borrow()
+            .as_ref()
+            .filter(|(f, _)| *f == self.frame)
+            .map(|(_, r)| Rc::clone(r));
+        if cached.is_some() {
+            return cached;
+        }
+        let r = Rc::new(t.ram.get(&self.frame).and_then(|b| unpack(b))?);
+        *self.ram_at.borrow_mut() = Some((self.frame, Rc::clone(&r)));
+        Some(r)
+    }
+
+    /// `query` of one RAM byte (`selector` is [`ram_text`]'s text for
+    /// `addr`), answered and taped as `query` does, without a parsed
+    /// selector. None where it would take the rest of `query`'s path: a
+    /// byte the tape keeps by its selector (an arcade address below
+    /// 0xE000), the NES's first RAM read of a frame being taped, or an
+    /// address past a replayed NES's RAM.
+    ///
+    /// [`ram_text`]: gp_runtime::select::ram_text
+    fn ram_query(&self, selector: &str, addr: u16) -> Option<Result<Vec<Entry>, String>> {
+        let entry = |b: u8| {
+            Ok(vec![Entry {
+                path: selector.to_owned(),
+                value: Value::Int(b.into()),
+            }])
+        };
+        if let Some(nes) = &self.live {
+            if !self.record {
+                return Some(nes.query(selector));
+            }
+            if let OriginalRuntime::Arcade(a) = nes {
+                // What `arcade_record` says of `ram[addr]`.
+                if addr < 0xe000 {
+                    return None;
+                }
+                let r = nes.query(selector);
+                self.tape
+                    .borrow_mut()
+                    .ram
+                    .entry(nes.frame())
+                    .or_insert_with(|| pack(&a.tapper().ram_record()));
+                return Some(r);
+            }
+            if self.tape.borrow().ram.contains_key(&nes.frame()) {
+                return Some(nes.query(selector));
+            }
+            return None;
+        }
+        let t = self.tape.borrow();
+        if t.arcade {
+            if addr < 0xe000 {
+                return None;
+            }
+            let Some(rec) = self.replay_ram(&t) else {
+                drop(t);
+                return Some(self.miss(&format!("RAM at frame {}", self.frame)));
+            };
+            return Some(match gp_arcade::protocol::record_byte(&rec, addr) {
+                Some(b) => entry(b),
+                None => self.miss("RAM read"),
+            });
+        }
+        if t.read_at_nmi != self.at_nmi {
+            drop(t);
+            return Some(self.miss("RAM read the same way"));
+        }
+        let Some(ram) = self.replay_ram(&t) else {
+            drop(t);
+            return Some(self.miss(&format!("RAM at frame {}", self.frame)));
+        };
+        ram.get(usize::from(addr)).map(|b| entry(*b))
+    }
+
     /// Turns the emulator's drawing on; a replay's pictures are drawn.
     pub(crate) fn draw(&mut self) {
         if let Some(nes) = &mut self.live {
@@ -603,6 +685,11 @@ impl Runtime for Original {
     }
 
     fn query(&self, selector: &str) -> Result<Vec<Entry>, String> {
+        if let Some(addr) = gp_runtime::select::canonical_ram(selector)
+            && let Some(r) = self.ram_query(selector, addr)
+        {
+            return r;
+        }
         let parsed = Selector::parse(selector);
         if let Some(nes) = &self.live {
             let r = nes.query(selector);
@@ -659,21 +746,7 @@ impl Runtime for Original {
             return r;
         }
         let t = self.tape.borrow();
-        // The frame's RAM (an arcade board's RAM record), unpacked once.
-        let ram = |t: &Tape| -> Option<Rc<Vec<u8>>> {
-            let cached = self
-                .ram_at
-                .borrow()
-                .as_ref()
-                .filter(|(f, _)| *f == self.frame)
-                .map(|(_, r)| Rc::clone(r));
-            if cached.is_some() {
-                return cached;
-            }
-            let r = Rc::new(t.ram.get(&self.frame).and_then(|b| unpack(b))?);
-            *self.ram_at.borrow_mut() = Some((self.frame, Rc::clone(&r)));
-            Some(r)
-        };
+        let ram = |t: &Tape| self.replay_ram(t);
         if t.arcade
             && let Ok(sel) = &parsed
             && arcade_record(sel)
@@ -831,6 +904,54 @@ mod tests {
         assert_ne!(play(&mut a), play(&mut b));
     }
 
+    /// One RAM byte at a time, live, taped and replayed, read at the
+    /// frame's end and at the NMI: each answers as that byte of the whole
+    /// RAM's read does, the first byte of a frame tapes the frame's RAM as
+    /// a range read does, and a byte past the RAM is refused the same way
+    /// each time.
+    #[test]
+    fn a_ram_byte_reads_as_the_whole_rams_read_live_and_replayed() {
+        let bytes = |o: &mut Original| {
+            let mut out = Vec::new();
+            for k in 0..20u8 {
+                // `play`'s presses.
+                o.step(&[InputFrame::pads([
+                    if k % 7 < 3 { 0x80 } else { 0 },
+                    0,
+                    0,
+                    0,
+                ])])
+                .unwrap();
+                for addr in (0..0x800u16).step_by(3).chain([0x7ff, 0x800, 0x1234]) {
+                    out.push(o.query(&gp_runtime::select::ram_text(addr)));
+                }
+            }
+            out
+        };
+        for at_nmi in [false, true] {
+            let mut whole = Original::recording(nes());
+            whole.set("read_at_nmi", Value::Flag(at_nmi)).unwrap();
+            let all = play(&mut whole);
+            let mut live = Original::recording(nes());
+            live.set("read_at_nmi", Value::Flag(at_nmi)).unwrap();
+            let seen = bytes(&mut live);
+            assert!(!live.missed());
+            for (k, frame) in all.iter().take(20).enumerate() {
+                let got = &seen[k * 686..(k + 1) * 686];
+                for (i, addr) in (0..0x800usize).step_by(3).enumerate() {
+                    assert_eq!(got[i].as_ref().unwrap(), &vec![frame[addr].clone()]);
+                }
+                assert_eq!(got[683].as_ref().unwrap(), &vec![frame[0x7ff].clone()]);
+                assert!(got[684].is_err() && got[685].is_err());
+            }
+            let tape = Tape::from_bytes(&live.into_tape().unwrap().to_bytes()).unwrap();
+            let mut again = Original::replay(tape);
+            again.set("read_at_nmi", Value::Flag(at_nmi)).unwrap();
+            assert_eq!(bytes(&mut again), seen);
+            assert!(!again.missed());
+        }
+    }
+
     /// An arcade original's tape: its RAM record answers the RAM
     /// selectors, the other selectors are kept as asked, and its pictures
     /// come back as they were drawn, sprite mask included. Needs the
@@ -850,6 +971,13 @@ mod tests {
             "palette[0..4]",
             "ports[*]",
             "ram[0x100]",
+            // One byte as `ram_text` writes it: from the record at 0xE000
+            // up, kept by its selector below.
+            "ram[0x0100]",
+            "ram[0xe012]",
+            "ram[0xe9ff]",
+            "ram[0xf3a0]",
+            "ram[0xfc00]",
         ];
         let run = |o: &mut Original| {
             let mut out = Vec::new();

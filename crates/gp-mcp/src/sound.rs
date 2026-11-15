@@ -268,6 +268,7 @@ fn apu_preview(i: usize) -> Vec<i16> {
                 pitch: if c == Channel::Noise { 8 + k as u8 } else { m },
                 fine: 0,
                 instrument: 0,
+                period: None,
             },
         })
         .collect();

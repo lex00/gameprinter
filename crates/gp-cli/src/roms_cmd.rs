@@ -69,6 +69,14 @@ pub enum RomsCmd {
     /// Compare the PRG and CHR data of two NES images. Either side may be a
     /// raw PRG binary, such as a disassembly build.
     Diff(crate::romdiff::DiffArgs),
+    /// The arcade romsets the board knows, by MAME's names: each one's
+    /// title, its identity (the sha256 a game's roms.toml gives it) and the
+    /// files its zip must hold, each with its size and SHA-1, from MAME's
+    /// own list. Reads no ROM: this is what to bring, not what you have.
+    Sets {
+        /// Only these sets, by MAME's name (tapper). Default: every one.
+        names: Vec<String>,
+    },
 }
 
 pub fn run(cmd: &RomsCmd, paths: &Paths) -> Result<Outcome> {
@@ -96,7 +104,51 @@ pub fn run(cmd: &RomsCmd, paths: &Paths) -> Result<Outcome> {
             romclean::clean(file, out, *force, &reg)
         }
         RomsCmd::Diff(a) => crate::romdiff::run(a),
+        RomsCmd::Sets { names } => sets(names),
     }
+}
+
+/// `gp roms sets`: each set's name, title, identity and files, in the
+/// order of MAME's list. A name the board doesn't know is an error naming
+/// the ones it does.
+fn sets(names: &[String]) -> Result<Outcome> {
+    let all = &gp_arcade::romset::SETS;
+    let mut chosen = Vec::new();
+    for n in names {
+        match gp_arcade::romset::set(n) {
+            Some(s) => chosen.push(s),
+            None => bail!(
+                "no arcade set {n}: the board knows {}",
+                all.iter().map(|s| s.name).collect::<Vec<_>>().join(", ")
+            ),
+        }
+    }
+    if names.is_empty() {
+        chosen.extend(all.iter());
+    }
+    let mut text = Vec::new();
+    let mut out = Vec::new();
+    for s in chosen {
+        let identity = s.identity();
+        text.push(format!(
+            "{} ({}, {}): {} files, identity {identity}",
+            s.name,
+            s.title,
+            s.year,
+            s.chips.len()
+        ));
+        for c in s.chips {
+            text.push(format!("  {}  {} bytes  sha1 {}", c.name, c.size, c.sha1));
+        }
+        out.push(json!({
+            "name": s.name,
+            "title": s.title,
+            "year": s.year,
+            "sha256": identity,
+            "files": s.chips.iter().map(|c| json!({"name": c.name, "size": c.size, "sha1": c.sha1})).collect::<Vec<_>>(),
+        }));
+    }
+    Ok(Outcome::ok(json!({ "sets": out }), text.join("\n")))
 }
 
 /// The games checkout, if there is one: `--games`, $GP_GAMES_DIR, the
@@ -590,5 +642,33 @@ mod tests {
         let s = scan(&paths(d.path()), &Registry::default(), "").unwrap();
         assert_eq!(s.json["exists"], false);
         assert!(s.text.contains("gp roms add"));
+    }
+
+    /// `gp roms sets` names each set's files from MAME's list, with an
+    /// identity that is the set's, and refuses a name the board doesn't
+    /// know, naming the ones it does.
+    #[test]
+    fn sets_lists_each_sets_files_and_identity() {
+        let o = sets(&["tapper".to_owned()]).unwrap();
+        let s = &o.json["sets"][0];
+        let info = gp_arcade::romset::set("tapper").unwrap();
+        assert_eq!(s["name"], "tapper");
+        assert_eq!(s["sha256"], info.identity());
+        assert_eq!(s["files"].as_array().unwrap().len(), info.chips.len());
+        assert_eq!(s["files"][0]["name"], info.chips[0].name);
+        assert!(
+            o.text.starts_with("tapper (Tapper (Budweiser"),
+            "{}",
+            o.text
+        );
+        assert_eq!(
+            sets(&[]).unwrap().json["sets"].as_array().unwrap().len(),
+            gp_arcade::romset::SETS.len()
+        );
+        let e = sets(&["dkong".to_owned()]).err().unwrap().to_string();
+        assert!(
+            e.contains("no arcade set dkong") && e.contains("tapper"),
+            "{e}"
+        );
     }
 }

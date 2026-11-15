@@ -272,3 +272,83 @@ pub extern "C" fn gp_play_pictures(slot: u32) -> i32 {
         Ok(p.pictures().iter().map(|h| format!("{h:016x}\n")).collect())
     }))
 }
+
+thread_local! {
+    static SOUND: RefCell<Option<crate::SoundPlayer>> = const { RefCell::new(None) };
+}
+
+fn with_sound<T>(
+    f: impl FnOnce(&mut crate::SoundPlayer) -> Result<T, String>,
+) -> Result<T, String> {
+    SOUND.with(|s| match s.borrow_mut().as_mut() {
+        Some(p) => f(p),
+        None => Err("no sound board: call gp_sound_load first".into()),
+    })
+}
+
+/// Powers on the sound board alone ([`crate::SoundPlayer`]) from a MAME
+/// zip's bytes: for a page whose game is a model, which writes the latches
+/// itself.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_sound_load(ptr: *mut u8, len: usize) -> i32 {
+    let rom = input(ptr, len);
+    result(crate::SoundPlayer::new(&rom).map(|p| {
+        SOUND.with(|s| *s.borrow_mut() = Some(p));
+        String::new()
+    }))
+}
+
+/// Runs the sound board one frame with the latch writes in the buffer
+/// ([`crate::LATCH_RECORD`] bytes each; `len` 0 for none, with any `ptr`).
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_sound_frame(ptr: *mut u8, len: usize) -> i32 {
+    let records = if len == 0 {
+        Box::default()
+    } else {
+        input(ptr, len)
+    };
+    result(with_sound(|p| p.frame(&records).map(|()| String::new())))
+}
+
+/// Runs the sound board one frame with a model's sound requests, two bytes
+/// each (the latch, then the byte; `len` 0 for none, with any `ptr`),
+/// timed as Tapper's interrupt sends them ([`crate::REQUEST_AT`]).
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_sound_requests_frame(ptr: *mut u8, len: usize) -> i32 {
+    let bytes = if len == 0 {
+        Box::default()
+    } else {
+        input(ptr, len)
+    };
+    let requests: Vec<(u8, u8)> = bytes.chunks_exact(2).map(|r| (r[0], r[1])).collect();
+    if bytes.len() % 2 != 0 {
+        return result(Err(format!(
+            "{} bytes of requests: 2 a request",
+            bytes.len()
+        )));
+    }
+    result(with_sound(|p| {
+        p.requests(&requests).map(|()| String::new())
+    }))
+}
+
+/// The sound board's last frame in the output buffer, as `gp_play_audio`
+/// gives a player's: f32, little endian, left and right interleaved.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_sound_audio() -> *const u8 {
+    match with_sound(|p| {
+        Ok(p.audio()
+            .iter()
+            .flat_map(|s| s.to_le_bytes())
+            .collect::<Vec<u8>>())
+    }) {
+        Ok(bytes) => {
+            set_out(&bytes);
+            gp_out_ptr()
+        }
+        Err(e) => {
+            set_out(e.as_bytes());
+            std::ptr::null()
+        }
+    }
+}

@@ -369,6 +369,17 @@ impl Preview {
         self.sound.as_ref().map_or(&[], |s| &s.samples)
     }
 
+    /// The sound requests the hooks made on the last frame, each the latch
+    /// and the byte ([`gp_sim::ext::hook_sound_requests`]): what an arcade
+    /// game's page feeds the board's sound CPU.
+    pub fn sound_requests(&self) -> Vec<(u8, u8)> {
+        gp_sim::ext::hook_sound_requests(
+            self.interp.spec(),
+            self.interp.world(),
+            self.interp.exts(),
+        )
+    }
+
     /// Loads the presentation `gp gen bevy` and `gp-web-prep` write
     /// (`assets/present.txt`), for [`Preview::scene`].
     pub fn load_present(&mut self, text: &str) -> Result<(), String> {
@@ -1412,6 +1423,7 @@ mod tests {
                 pitch: 69,
                 fine: 0,
                 instrument: 0,
+                period: None,
             },
         };
         set.songs.push(gp_sound::song::Song {

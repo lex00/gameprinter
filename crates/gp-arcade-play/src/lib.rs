@@ -21,6 +21,8 @@
 //! and right interleaved, at 48 kHz, as MAME makes it (gp-arcade's sound
 //! module). Sound is presentation only, as drawing is.
 
+use gp_arcade::attotime::Attotime;
+use gp_arcade::ssio::{FRAME, SoundBoard};
 use gp_arcade::video::{HEIGHT, WIDTH};
 use gp_arcade::{Controls, FourWay, Romset, Tapper};
 use gp_evidence::Hash;
@@ -48,6 +50,15 @@ pub fn info(system: &str) -> String {
     format!(
         "{{\"platform\":\"arcade\",\"system\":\"{system}\",\"width\":{WIDTH},\"height\":{HEIGHT},\"fps\":[30,1],\"columns\":\"{COLUMNS}\",\"buttons\":[\"coin\",\"start1\",\"right\",\"left\",\"down\",\"up\",\"button1\"],\"sound\":true,\"channels\":{AUDIO_CHANNELS}}}"
     )
+}
+
+/// The 32-bit FNV-1a hash of `bytes`: what the sound checks compare a
+/// frame's samples by, since the page's JavaScript makes the same one
+/// with nothing but `Math.imul` (scripts/web/check-play-arcade.mjs).
+pub fn fnv1a(bytes: &[u8]) -> u32 {
+    bytes.iter().fold(0x811c_9dc5u32, |h, &b| {
+        (h ^ u32::from(b)).wrapping_mul(0x0100_0193)
+    })
 }
 
 fn text<E: std::fmt::Display>(e: E) -> String {
@@ -284,6 +295,23 @@ impl Player {
         self.log.frames.len() as u64
     }
 
+    /// Keeps each frame's latch writes as they reached the sound board
+    /// ([`Player::take_latches`]), or stops.
+    pub fn set_latch_log(&mut self, on: bool) {
+        self.tapper.set_latch_log(on);
+    }
+
+    /// The last frames' latch writes as [`SoundPlayer::frame`] takes them,
+    /// timed from the start of the frame that began at `frame_start`.
+    pub fn take_latches(&mut self, frame_start: Attotime) -> Vec<u8> {
+        latch_records(frame_start, &self.tapper.take_latch_log())
+    }
+
+    /// The emulated time.
+    pub fn time(&self) -> Attotime {
+        self.tapper.time()
+    }
+
     /// What was played, as an arcade input log's text.
     pub fn input_log(&self) -> String {
         self.log.to_text()
@@ -322,12 +350,195 @@ impl Player {
     }
 }
 
+/// Bytes of one latch write as [`SoundPlayer::frame`] takes it: the
+/// attoseconds from the frame's start (i64, little endian), the latch (0
+/// to 3) and the byte.
+pub const LATCH_RECORD: usize = 10;
+
+/// Latch writes at absolute times as [`SoundPlayer::frame`]'s records,
+/// timed from `frame_start`.
+pub fn latch_records(frame_start: Attotime, writes: &[(Attotime, u8, u8)]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(writes.len() * LATCH_RECORD);
+    for &(at, latch, value) in writes {
+        let off = if at > frame_start {
+            (at - frame_start).as_attoseconds()
+        } else {
+            0
+        };
+        out.extend_from_slice(&off.to_le_bytes());
+        out.push(latch);
+        out.push(value);
+    }
+    out
+}
+
+/// When a frame's sound requests reach the board, for a model that gives
+/// only each latch and byte (gp_sim::Ext::sound_requests): Tapper's
+/// interrupt sends the queue early in the frame, a write about every 10
+/// microseconds (gp-arcade's latch log on tapper-first: from 1.26 to 1.43
+/// ms in). Timed from 1.30 ms on, 10 microseconds apart, the board alone
+/// makes the whole machine's sound on every frame of tapper-first in the
+/// tapper, tapperg, sutapper and tappera sets; at the frame's start it
+/// differs on a quarter of them. Root Beer Tapper's own sound program
+/// (rbtapper) hears the times closer: its AY writes are the machine's on
+/// all but a few frames, its samples on three quarters.
+pub const REQUEST_AT: i64 = 1_300_000_000_000_000;
+/// The time between two requests of a frame ([`REQUEST_AT`]).
+pub const REQUEST_STEP: i64 = 10_000_000_000_000;
+
+/// A frame's sound requests, each a latch and a byte in order, as
+/// [`SoundPlayer::frame`]'s records timed as [`REQUEST_AT`] says.
+pub fn request_records(requests: &[(u8, u8)]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(requests.len() * LATCH_RECORD);
+    for (i, &(latch, value)) in requests.iter().enumerate() {
+        let at = REQUEST_AT + REQUEST_STEP * i as i64;
+        out.extend_from_slice(&at.to_le_bytes());
+        out.push(latch);
+        out.push(value);
+    }
+    out
+}
+
+/// An arcade board's sound alone, for a page whose game is a model: the
+/// board's own sound CPU and AY-8910s from the player's own romset
+/// (gp_arcade::ssio), fed the latch writes the game makes, a 30 Hz frame
+/// at a time. The samples are [`Player::audio`]'s: stereo at
+/// [`AUDIO_RATE`], left and right interleaved.
+pub struct SoundPlayer {
+    board: SoundBoard,
+    audio: Vec<f32>,
+}
+
+impl SoundPlayer {
+    /// The sound board of the set in a MAME zip, at power-on.
+    pub fn new(zip: &[u8]) -> Result<Self, String> {
+        let rom = Romset::from_zip(zip).map_err(text)?;
+        Ok(Self::from_romset(&rom))
+    }
+
+    pub fn from_romset(rom: &Romset) -> Self {
+        let mut board = SoundBoard::power_on(rom);
+        board.set_audio(true);
+        Self {
+            board,
+            audio: Vec::new(),
+        }
+    }
+
+    /// One frame with these latch writes ([`LATCH_RECORD`] bytes each, in
+    /// time order); a write timed past the frame's end lands at its end.
+    pub fn frame(&mut self, records: &[u8]) -> Result<(), String> {
+        let (whole, rest) = records.as_chunks::<LATCH_RECORD>();
+        if !rest.is_empty() {
+            return Err(format!(
+                "{} bytes of latch writes: {LATCH_RECORD} a write",
+                records.len()
+            ));
+        }
+        let writes: Vec<(Attotime, u8, u8)> = whole
+            .iter()
+            .map(|r| {
+                let off = i64::from_le_bytes(r[..8].try_into().expect("8 bytes"));
+                let off = off.clamp(0, FRAME.attoseconds);
+                (Attotime::new(0, off), r[8] & 3, r[9])
+            })
+            .collect();
+        self.board.frame(&writes);
+        self.audio.clear();
+        self.audio
+            .extend(self.board.take_audio().iter().flat_map(|s| [s[0], s[1]]));
+        Ok(())
+    }
+
+    /// One frame with a model's sound requests, each a latch and a byte,
+    /// timed as [`REQUEST_AT`] says.
+    pub fn requests(&mut self, requests: &[(u8, u8)]) -> Result<(), String> {
+        self.frame(&request_records(requests))
+    }
+
+    /// The last frame's sound, left and right interleaved.
+    pub fn audio(&self) -> &[f32] {
+        &self.audio
+    }
+
+    /// The AY registers the last frame wrote: chip, register, value.
+    pub fn ay_registers_written(&self) -> &[(u8, u8, u8)] {
+        self.board.ay_registers_written()
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 pub mod abi;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The sound board alone, fed the whole machine's latch writes as
+    /// records, makes the whole machine's sound on every frame (a made-up
+    /// set, gp_arcade::testrom::sounding).
+    #[test]
+    fn the_sound_player_sounds_as_the_whole_player() {
+        let rom = gp_arcade::testrom::sounding();
+        let mut whole = Player::from_romset(&rom);
+        whole.set_audio(true);
+        whole.set_latch_log(true);
+        let mut alone = SoundPlayer::from_romset(&rom);
+        let mut loud = 0;
+        for f in 0..60 {
+            let start = whole.time();
+            whole.step(0, false).unwrap();
+            let records = whole.take_latches(start);
+            assert_eq!(records.len() % LATCH_RECORD, 0);
+            alone.frame(&records).unwrap();
+            assert_eq!(alone.audio(), whole.audio(), "frame {f}");
+            loud += whole.audio().iter().filter(|v| v.abs() > 0.01).count();
+        }
+        assert!(loud > 0);
+        assert!(alone.frame(&[0; 3]).is_err());
+    }
+
+    /// A model's requests, the latch and the byte alone, timed by
+    /// [`REQUEST_AT`]: the board alone fed the whole machine's latch
+    /// writes so makes its sound on every frame of tapper-first (the MAME
+    /// capture's input), with the owner's tapper set. Skipped without it.
+    #[test]
+    fn requests_without_their_times_sound_as_the_whole_machine() {
+        let Some(path) = gp_arcade::romset::local_romset("tapper") else {
+            eprintln!("skipped: no tapper romset");
+            return;
+        };
+        let zip = std::fs::read(path).unwrap();
+        let log = include_str!("../../../scripts/oracle/inputs/tapper-first.input")
+            .replace("system rbtapper", "system tapper");
+        let log = log.as_str();
+        let mut whole = Player::replay(&zip, log).unwrap();
+        whole.set_audio(true);
+        whole.set_latch_log(true);
+        let mut alone = SoundPlayer::new(&zip).unwrap();
+        let (mut frames, mut asked) = (0, 0);
+        loop {
+            let start = whole.time();
+            if !whole.advance().unwrap() {
+                break;
+            }
+            let records = whole.take_latches(start);
+            let requests: Vec<(u8, u8)> =
+                records.chunks(LATCH_RECORD).map(|r| (r[8], r[9])).collect();
+            asked += requests.len();
+            alone.requests(&requests).unwrap();
+            assert_eq!(alone.audio(), whole.audio(), "frame {}", frames + 1);
+            frames += 1;
+        }
+        assert!(
+            frames > 1000 && asked > 100,
+            "{frames} frames, {asked} requests"
+        );
+        assert_eq!(
+            request_records(&[(1, 0x38), (0, 0x80)]).len(),
+            2 * LATCH_RECORD
+        );
+    }
 
     fn zip() -> Option<Vec<u8>> {
         let Some(p) = gp_arcade::romset::local_romset("rbtapper") else {

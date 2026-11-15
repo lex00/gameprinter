@@ -1439,6 +1439,9 @@ fn an_agent_follows_a_watch_session_to_bank_one() {
     );
     let first = &hooks["events"][0];
     assert_eq!(first["data"]["at"], "01:8000");
+    assert_eq!(first["data"]["cpu"], "6502", "{first}");
+    assert!(first["data"]["s"].is_u64(), "{first}");
+    assert_eq!(first["v"], 2, "{first}");
     assert_eq!(first["run"], run.as_str());
     assert_eq!(first["frame"], frame);
 

@@ -3,9 +3,11 @@
 // three choices (port a game they own, make a theme for a game, make a new
 // game), and "carry on" with each copy they have and each game they are
 // porting. A copy opens here at its step (journey.js), at /start/?copy=
-// KIND/NAME. Nothing here deletes or publishes.
+// KIND/NAME, in its own tabs (tabs.js): the tabs follow the open copy, which
+// the header's picker names. Nothing here deletes or publishes.
 
-import { mountJourney, WHO, when } from "./journey.js";
+import { WHO, when } from "./journey.js";
+import { mountCopy, FIRST_TAB } from "./tabs.js";
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
@@ -28,10 +30,12 @@ async function api(path, body) {
 
 let all = null;
 let stopJourney = null;
+let shownKey = null;
 
 function fromWords(f) {
   if (!f) return "";
   if (f.kind === "template") return `from the template ${f.title}`;
+  if (f.kind === "empty") return "started from nothing";
   if (f.kind === "new") return `for your new game ${f.title}`;
   return `for ${f.title}`;
 }
@@ -53,7 +57,7 @@ function copyItem(c) {
   at.append(`Step ${c.stage.n} of ${c.stage.of}, ${c.stage.name}. Next: `, who, ` ${c.says}`);
   const b = el("button", "jr-btn go", "CARRY ON");
   b.type = "button";
-  b.title = `Open ${c.name} at its step`;
+  b.title = `Open ${c.name} at its step, in its ${(FIRST_TAB[c.journey] ?? "").toUpperCase()} tab`;
   b.addEventListener("click", () => openCopy(`${c.journey}/${c.name}`));
   li.append(at, b);
   return li;
@@ -71,6 +75,29 @@ function gameItem(g) {
     li.append(el("span", "cp-when", g.touched_ms ? `changed ${when(g.touched_ms)}` : ""), at);
   }
   return li;
+}
+
+/** The header's picker: what is open, a game being ported or a copy. A
+ * port opens the game's page (its four tabs); a copy opens here in its
+ * own tabs. */
+function drawPick(open) {
+  const p = $("copy-pick");
+  p.textContent = "";
+  const group = (label, items) => {
+    if (!items.length) return;
+    const g = el("optgroup");
+    g.label = label;
+    for (const [value, text] of items) {
+      const o = el("option", "", text);
+      o.value = value;
+      g.append(o);
+    }
+    p.append(g);
+  };
+  group("Games you are porting", all.games.filter((g) => g.port).map((g) => [`port:${g.name}`, `PORT ${g.name}`]));
+  group("Your copies", all.copies.map((c) => [`copy:${c.journey}/${c.name}`, `${c.journey === "theme" ? "THEME" : "NEW GAME"} ${c.name}`]));
+  p.value = open ? `copy:${open}` : "";
+  p.hidden = !open || !p.options.length;
 }
 
 function drawCarry() {
@@ -143,44 +170,55 @@ function themeForm(box) {
 function newForm(box) {
   box.textContent = "";
   box.append(el("h2", "", "Make a new game"));
-  box.append(el("p", "", "A new game starts from a template: a game's rules without its pictures, that a new game is built on. You get a copy of your own to change. The template stays as it is."));
+  box.append(el("p", "", "A new game starts from nothing, or from a template: a game's rules without its pictures, that a new game is built on. Either way you get a game of your own to change. A template stays as it is."));
   const list = el("div", "jr-templates");
   list.setAttribute("role", "radiogroup");
-  list.setAttribute("aria-label", "The template");
+  list.setAttribute("aria-label", "Where your game starts");
+  // The first choice: a game from nothing (gp game new NAME --empty).
+  const none = el("label", "jr-template");
+  const nr = el("input");
+  nr.type = "radio";
+  nr.name = "template";
+  nr.value = "";
+  nr.dataset.empty = "1";
+  nr.checked = true;
+  none.append(nr, " Nothing", el("span", "muted", " (one stage of floor, a square that walks and jumps, a goal, plain pictures and no sound; its stage can be changed here)"));
+  list.append(none);
   const open = all.templates.filter((t) => t.open);
   const shown = open.length ? open : all.templates;
-  shown.forEach((t, i) => {
+  shown.forEach((t) => {
     const l = el("label", "jr-template");
     const r = el("input");
     r.type = "radio";
     r.name = "template";
     r.value = t.name;
-    r.checked = i === 0;
-    l.append(r, ` ${t.title}`, el("span", "muted", t.kit ? " (its stages can be changed here)" : " (its stages can't be changed here yet)"));
+    l.append(r, ` The template ${t.title}`, el("span", "muted", t.kit ? " (its stages can be changed here)" : " (its stages can't be changed here yet)"));
     list.append(l);
   });
   const name = el("input");
   name.id = "new-name";
   name.maxLength = 40;
   name.placeholder = "like my_hop";
-  box.append(el("h3", "", "Start from a template"), list, field("A name for your game: letters, digits and _, starting with a letter", name));
+  box.append(el("h3", "", "Start from nothing or a template"), list, field("A name for your game: letters, digits and _, starting with a letter", name));
   const err = el("p", "jr-err");
   const go = el("button", "jr-btn go", "MAKE MY GAME");
   go.type = "button";
   go.id = "new-go";
   go.addEventListener("click", async () => {
-    const template = list.querySelector("input:checked")?.value;
+    const picked = list.querySelector("input:checked");
     go.disabled = true;
     err.textContent = "";
     try {
-      const v = await api("/api/journeys/start", { journey: "new", template, name: name.value.trim() });
+      const v = picked?.dataset.empty
+        ? await api("/api/journeys/start", { journey: "new", empty: true, name: name.value.trim() })
+        : await api("/api/journeys/start", { journey: "new", template: picked?.value, name: name.value.trim() });
       await openCopy(`new/${v.name}`);
     } catch (e) {
       err.textContent = `It wasn't made: ${e.message ?? e}`;
     }
     go.disabled = false;
   });
-  box.append(go, err, el("p", "muted", `Your game's folder goes under ${all.copies_dir}. Copying is free and takes a few seconds.`));
+  box.append(go, err, el("p", "muted", `Your game's folder goes under ${all.copies_dir}. Starting it is free and takes a few seconds.`));
 }
 
 function choose(which) {
@@ -198,9 +236,10 @@ function choose(which) {
 // ---------------------------------------------------------------------
 // One copy.
 
-async function openCopy(key) {
-  // KIND/NAME is letters, digits, - and _ with one /, kept as it is.
-  history.pushState({ copy: key }, "", `/start/?copy=${key}`);
+async function openCopy(key, tab) {
+  // KIND/NAME is letters, digits, - and _ with one /, kept as it is. With
+  // no tab, the copy opens at its first one (tabs.js's FIRST_TAB).
+  history.pushState({ copy: key }, "", `/start/?copy=${key}${tab ? `&tab=${tab}` : ""}`);
   await show();
 }
 
@@ -216,18 +255,21 @@ async function show() {
     $("title").textContent = `The first screen can't read its server: ${e.message ?? e}`;
     return;
   }
-  const key = new URL(location.href).searchParams.get("copy");
+  const url = new URL(location.href);
+  const key = url.searchParams.get("copy");
   const [kind, name] = (key ?? "").split("/");
   const inJourney = Boolean(kind && name);
+  shownKey = inJourney ? key : null;
   $("first").hidden = inJourney;
   $("theme-start").hidden = true;
   $("new-start").hidden = true;
   $("journey").hidden = !inJourney;
   drawCarry();
+  drawPick(inJourney ? key : null);
   if (inJourney) {
     $("carry").hidden = true;
     $("title").textContent = name;
-    stopJourney = mountJourney($("journey"), kind, name, { open: openCopy, home, api });
+    stopJourney = mountCopy(kind, name, url.searchParams.get("tab"), { open: openCopy, home, api });
     window.scrollTo(0, 0);
     return;
   }
@@ -239,6 +281,11 @@ async function show() {
 for (const b of document.querySelectorAll("#start-choices button")) {
   b.addEventListener("click", () => choose(b.dataset.journey));
 }
+$("copy-pick").addEventListener("change", (e) => {
+  const [what, which] = e.target.value.split(/:(.*)/s);
+  if (what === "port") location.href = `/mechanic/${encodeURIComponent(which)}/`;
+  else if (what === "copy" && which !== shownKey) void openCopy(which);
+});
 $("logo").addEventListener("click", (e) => {
   if (new URL(location.href).searchParams.has("copy")) {
     e.preventDefault();
@@ -248,7 +295,8 @@ $("logo").addEventListener("click", (e) => {
 window.addEventListener("popstate", () => void show());
 // The copies list keeps up with the agent while the first screen shows.
 setInterval(async () => {
-  if (!$("journey").hidden || document.hidden) return;
+  // Not while a copy is open: its PLAY tab hides the journey too.
+  if (shownKey || document.hidden) return;
   try { all = await api("/api/journeys"); drawCarry(); } catch (e) { /* the next look */ }
 }, 8000);
 void show();

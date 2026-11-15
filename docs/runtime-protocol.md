@@ -126,7 +126,7 @@ An arcade recording's trace prints both Z80s in time order; [recording.md](recor
 | `ports[N]` | The five input ports as the game read them in the last frame |
 | `cpu.pc`, `sound_cpu.pc` | The two Z80s' program counters |
 
-The canonical state is the machine's snapshot: both CPUs, the timers, every RAM and the last frame's picture. Each frame stepped gives one `frame` event with a `polled` flag, false on a frame where the game didn't read its inputs. With `set("ay_events", true)` it also gives an `ay-write` event for each AY register the sound CPU wrote in the frame, with `chip`, `reg` and `value`. Its capabilities are `snapshot` and `fork`, as `gp-nes`'s.
+The canonical state is the machine's snapshot: both CPUs, the timers, every RAM and the last frame's picture. Each frame stepped gives one `frame` event with a `polled` flag, false on a frame where the game didn't read its inputs. With `set("ay_events", true)` it also gives an `ay-write` event for each AY register the sound CPU wrote in the frame, with `chip`, `reg` and `value`. With `set("latch_events", true)` it gives a `latch-write` event for each byte the main CPU wrote to the sound board's latches, in order, with `latch` (0 to 3) and `value`: the sound requests, which `gp interp compare` holds to a model's own `sound-request` events (docs/modules.md, "Sound requests") and reports in its `sound requests` line. Its capabilities are `snapshot` and `fork`, as `gp-nes`'s.
 
 ## The protocol in Rust
 

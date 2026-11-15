@@ -136,6 +136,21 @@ test("a game's page facts from its play/page.json, each field held to its shape"
   assert.throws(() => gamePageOf(new Map([["page.json", enc(facts)]]), "x"), /lift\/index.json/);
 });
 
+test("an arcade game's MAME sets from its play/page.json, each with the files its zip must hold", () => {
+  const set = { name: "cab", title: "Cab (made up)", sha256: "ab".repeat(32), files: [{ name: "cab.1c", size: 4096, sha1: "cd".repeat(20) }] };
+  const facts = { format: 1, title: "Cab", player: "arcade", rom: { kind: "zip", game: "cab", name: "Cab", file: "a zip", known: [], known_sha256: {}, sets: [set] }, howto: [] };
+  const files = new Map([["lift/index.json", enc({ game: "cab", files: [] })], ["page.json", enc(facts)]]);
+  assert.deepEqual(gamePageOf(files, "Cab").rom.sets, [set]);
+  const without = structuredClone(facts);
+  delete without.rom.sets;
+  assert.equal(gamePageOf(new Map([...files, ["page.json", enc(without)]]), "Cab").rom.sets, undefined);
+  for (const change of [(s) => (s.sha256 = "zz"), (s) => (s.files = []), (s) => (s.files[0].sha1 = "x"), (s) => (s.name = "<b>")]) {
+    const j = structuredClone(facts);
+    change(j.rom.sets[0]);
+    assert.throws(() => gamePageOf(new Map([...files, ["page.json", enc(j)]]), "Cab"), /rom\.sets/);
+  }
+});
+
 test("a game that plays from its own files: no lift, no ROM, who made it and what it is", () => {
   const facts = { format: 1, title: "Own Hop", player: "own", rom: { kind: "none", game: "own-hop" }, made_by: "A. Maker", about: "A hop of my own.", howto: ["Controls: arrows move."] };
   const files = new Map([["page.json", enc(facts)], ["bundle.json", enc({})], ["preview.json", enc({})]]);

@@ -229,6 +229,14 @@ class Preview {
     const b = enc.encode(text);
     this.check(this.run("gp_load_sound", b));
   }
+  // The sound requests the hooks made on the last frame, two bytes each
+  // (the latch, then the byte), or null from a module built before them
+  // (gp_sound_requests).
+  soundRequests() {
+    if (!this.has("gp_sound_requests")) return null;
+    const n = this.run("gp_sound_requests");
+    return n < 0 ? null : this.last.slice(0, 2 * n);
+  }
   // The last frame's samples as floats, from the wasm synthesizer.
   audio() {
     const n = this.run("gp_audio");
@@ -490,6 +498,55 @@ class BoardDraw {
     return { image, frame: JSON.parse(text.decode(b.subarray(4 + n))) };
   }
 }
+// An arcade game's own sound: the board's sound CPU and AY-8910s alone in
+// the page's gp_arcade_play.wasm (crates/gp-arcade-play, gp_arcade::ssio),
+// powered on from the person's own romset and fed, each frame, the sound
+// requests the game's module made (Preview.soundRequests): what the main
+// CPU writes to the board's latches. Its samples are stereo at 48 kHz.
+class BoardSound {
+  static RATE = 48000;
+  static async open(bytes, zip) {
+    const module = await WebAssembly.compile(bytes);
+    const imports = {};
+    for (const i of WebAssembly.Module.imports(module)) {
+      (imports[i.module] ??= {})[i.name] = () => {
+        throw new Error(`gp_arcade_play.wasm called ${i.module}.${i.name}`);
+      };
+    }
+    const s = new BoardSound((await WebAssembly.instantiate(module, imports)).exports);
+    s.load(zip);
+    return s;
+  }
+  constructor(x) {
+    this.x = x;
+  }
+  put(bytes) {
+    const p = this.x.gp_alloc(bytes.length);
+    new Uint8Array(this.x.memory.buffer, p, bytes.length).set(bytes);
+    return [p, bytes.length];
+  }
+  error() {
+    return text.decode(new Uint8Array(this.x.memory.buffer, this.x.gp_out_ptr(), this.x.gp_out_len()));
+  }
+  // The board at power-on, from the romset zip's bytes.
+  load(zip) {
+    if (this.x.gp_sound_load(...this.put(zip))) throw new Error(`the board's sound didn't load: ${this.error()}`);
+  }
+  // One frame with these requests (latch, byte pairs, as the game's module
+  // gives them), each reaching the board when Tapper's interrupt sends it
+  // (gp_sound_requests_frame, gp_arcade_play::REQUEST_AT); its samples,
+  // left and right interleaved.
+  frame(requests) {
+    const ok = requests?.length ? this.x.gp_sound_requests_frame(...this.put(requests)) : this.x.gp_sound_requests_frame(0, 0);
+    if (ok) throw new Error(this.error());
+    const at = this.x.gp_sound_audio();
+    if (!at) throw new Error(this.error());
+    return new Float32Array(this.x.memory.buffer.slice(at, at + this.x.gp_out_len()));
+  }
+}
+let boardSound = null;
+// The romset's bytes the board's sound was powered on from, for a restart.
+let boardZip = null;
 let boardDraw = null;
 let boardPresent = "";
 const boardFiles = new Map();
@@ -1171,6 +1228,27 @@ async function main() {
   // the Bevy build, through WebAudio once a key is pressed.
   // preview.json says whether there is one; a page built before it asks.
   const soundText = cfg.sound === false ? null : await load("assets/sound.json").then((r) => (r.ok ? r.text() : null)).catch(() => null);
+  // An arcade game whose module makes sound requests sounds through the
+  // board's own sound CPU (BoardSound), from the romset the page around
+  // the frame keeps (page.js `__gpRom`). Without either it plays silent,
+  // as before, and says why in the log.
+  if (cfg.device === "arcade" && p.has("gp_sound_requests")) {
+    try {
+      const zip = parent !== window && typeof parent.__gpRom === "function" ? await parent.__gpRom() : null;
+      if (zip) boardZip = new Uint8Array(zip);
+      if (zip) boardSound = await BoardSound.open(await fetch("gp_arcade_play.wasm").then((r) => {
+        if (!r.ok) throw new Error(`gp_arcade_play.wasm: ${r.status}`);
+        return r.arrayBuffer();
+      }), boardZip);
+      else console.info("gp: the arcade game plays silent: the page around it keeps no romset");
+    } catch (e) {
+      boardSound = null;
+      console.warn(`gp: the arcade game plays silent: ${e.message ?? e}`);
+    }
+  }
+  t.boardSound = !!boardSound;
+  // The game has sound to play: the model's own or the board's.
+  const hasSound = !!soundText || !!boardSound;
   let audio = null;
   let audioAt = 0;
   let audioAsked = 0;
@@ -1200,11 +1278,11 @@ async function main() {
     }
   };
   const sound = () => {
-    if (!audio && soundText) audio = shared(false) ?? null;
+    if (!audio && hasSound) audio = shared(false) ?? null;
     return audio;
   };
   const unlock = () => {
-    if (!soundText) return;
+    if (!hasSound) return;
     audioAsked = performance.now();
     try {
       const s = shared(true);
@@ -1220,8 +1298,8 @@ async function main() {
   };
   t.unlockAudio = unlock;
   t.audioState = () => sound()?.state ?? "none";
-  if (soundText) {
-    p.loadSound(soundText);
+  if (soundText) p.loadSound(soundText);
+  if (hasSound) {
     for (const e of ["keydown", "keyup", "pointerdown", "pointerup", "mousedown", "click", "touchend"]) addEventListener(e, unlock, true);
     const acted = (w) => {
       try {
@@ -1232,6 +1310,42 @@ async function main() {
     };
     if (!sound() && (acted(window) || (parent !== window && acted(parent)))) unlock();
   }
+  // The board's sound runs every frame the game steps, heard or not, so
+  // the sound CPU is where the game is when the sound starts. Its samples
+  // are queued as the model's are, two channels at 48 kHz.
+  let boardFrames = 0;
+  let boardHeard = 0;
+  t.boardSoundFrames = () => ({ frames: boardFrames, heard: boardHeard });
+  // `heard` unset steps the board without queueing its sound (slow motion).
+  const playBoard = (heard = true) => {
+    let f;
+    try {
+      f = boardSound.frame(p.soundRequests());
+    } catch (e) {
+      console.warn(`gp: the board's sound stopped: ${e.message ?? e}`);
+      boardSound = null;
+      return;
+    }
+    boardFrames += 1;
+    const audio = sound();
+    if (!heard || !audio || !f.length || audio.state !== "running") return;
+    const now = audio.currentTime;
+    audioAt = Math.max(audioAt, now + 0.05);
+    if (audioAt > now + 0.25) return;
+    const n = f.length / 2;
+    const b = audio.createBuffer(2, n, BoardSound.RATE);
+    for (let c = 0; c < 2; c++) {
+      const one = new Float32Array(n);
+      for (let i = 0; i < n; i++) one[i] = f[2 * i + c];
+      b.copyToChannel(one, c);
+    }
+    const src = audio.createBufferSource();
+    src.buffer = b;
+    src.connect(audio.destination);
+    src.start(audioAt);
+    audioAt += n / BoardSound.RATE;
+    boardHeard += 1;
+  };
   const play = () => {
     const f = p.audio();
     const audio = sound();
@@ -1749,6 +1863,8 @@ async function main() {
     if (overlay) ctx.drawImage(overlay, ...box);
   };
 
+  t.spot = (fx, fy, slop) => spotAt(p, pics, cfg, fx, fy, slop);
+
   const st = p.hasSettings() ? settingsScreen(p, canvas, ctx, profilesText, looks) : null;
   // For the checks: the screen as text, and the state hash now.
   t.settingsLines = () => (st?.open ? p.settingsLines() : null);
@@ -1812,6 +1928,8 @@ async function main() {
       t.hooks = p.load(bundle);
       p.loadPresent(lookPresent);
       loadBoard(bundle);
+      // The game starts again from power-on, and so does its board's sound.
+      if (boardSound) boardSound.load(boardZip);
       if (lookArt) {
         artHost(p).loadArt(lookArt);
         for (const [pic, st] of artStages) p.artStage(pic, st.w, st.h, st.rgba);
@@ -1967,13 +2085,13 @@ async function main() {
         const b = buttons();
         // Half a second after the sound was last asked for, so a context
         // still starting isn't taken for one held.
-        if (!prompted && soundText && padBits() && sound()?.state !== "running" && performance.now() - audioAsked > 500) {
+        if (!prompted && hasSound && padBits() && sound()?.state !== "running" && performance.now() - audioAsked > 500) {
           askForSound();
           break;
         }
         // Played from a gamepad while the browser holds the sound: say
         // what starts it, as no button of a gamepad can.
-        if (soundText && padBits() && sound()?.state !== "running" && performance.now() > soundNoteAt) {
+        if (hasSound && padBits() && sound()?.state !== "running" && performance.now() > soundNoteAt) {
           soundNoteAt = performance.now() + 5000;
           sh?.say("Sound starts once you press a key or click the game (a browser rule)");
         }
@@ -1982,7 +2100,8 @@ async function main() {
         resetPressed = false;
       }
       frame += 1;
-      if (slow === 1) play();
+      if (boardSound) playBoard(slow === 1);
+      else if (slow === 1) play();
       t.hashes.push(p.hash());
       sh?.after();
     }
@@ -2008,6 +2127,57 @@ async function main() {
 // `host` is the page's: `restartIn(name)` starts the game again from
 // power-on in another mode, and `closeLoaded()` closes the settings screen
 // after a load from it.
+// "What is this?" on the public page (scripts/web/public/what-is-this.js):
+// what the model draws at a spot of the game's picture, given as fractions
+// of the canvas (0 at its left or top, 1 at its right or bottom), from the
+// module's scene and state of the frame shown. Every way of drawing (the
+// pixel look, a large-art look, an arcade board's picture) covers the
+// scene's window with the canvas, so a fraction is a place in the window.
+// `slop` is how far in game pixels a body's picture may be from the spot
+// and still count, for a finger. It answers the spot in the world's pixels
+// and in the HUD's, and each body drawn there, nearest and then topmost
+// first: its kind, its place and facing from the state, and its picture's
+// box in the same fractions, for the page to draw around it.
+function spotAt(p, pics, cfg, fx, fy, slop = 0) {
+  const s = p.scene();
+  const st = p.state();
+  const [vl, vt, vw, vh] = cfg.visible;
+  const [cx, cy] = s.camera;
+  const win = s.window ?? { x: cx + vl, y: cy + vt, w: vw, h: vh, hud: [cx, cy] };
+  // The pixel look's canvas is the window's width by the view's height,
+  // its world drawn `u` screen pixels to a unit and its HUD at 1.
+  const u = cfg.board_unit ?? 1;
+  const [px, py] = [fx * win.w, fy * vh];
+  const [wx, wy] = [px / u + win.x, py / u + win.y];
+  const layer = (i) => (s.behind?.[i] ? 0 : s.front?.[i] ? 2 : 1);
+  const order = s.order ?? s.bodies.map((_, i) => i);
+  const hits = [];
+  order.forEach((i, at) => {
+    const d = s.bodies[i];
+    const b = st.bodies[i];
+    const img = d && pics[d[0]];
+    if (!b || !img) return;
+    const [, x, y] = d;
+    const [w, h] = [img.width, img.height];
+    const off = Math.hypot(Math.max(x - wx, 0, wx - (x + w)), Math.max(y - wy, 0, wy - (y + h)));
+    if (off > slop) return;
+    const [kind, bx, by, left, alive] = b;
+    hits.push({
+      body: i,
+      kind,
+      x: bx,
+      y: by,
+      facing: left ? "left" : "right",
+      alive,
+      off,
+      top: layer(i) * 1e6 + at,
+      box: [((x - win.x) * u) / win.w, ((y - win.y) * u) / vh, (w * u) / win.w, (h * u) / vh],
+    });
+  });
+  hits.sort((a, b) => a.off - b.off || b.top - a.top);
+  return { frame: st.frame, level: st.level, camera: st.camera, world: [Math.floor(wx), Math.floor(wy)], hud: [Math.floor(px - (win.hud[0] - win.x)), Math.floor(py - (win.hud[1] - win.y))], hits };
+}
+
 function shell(p, cfg, canvas, profileNow, host) {
   const ls = (() => {
     try {
@@ -2192,6 +2362,14 @@ function shell(p, cfg, canvas, profileNow, host) {
     note = m;
     noteUntil = performance.now() + 2500;
   };
+  // The page that embeds this holds the game while its "what is this?" is
+  // asked ({gp: "hold", on}, of its own origin only), as F2 does.
+  addEventListener("message", (e) => {
+    const m = e.data;
+    if (e.origin !== location.origin || !m || m.gp !== "hold") return;
+    halted = !!m.on;
+    say(halted ? "Paused" : "Playing");
+  });
   const show = () => {
     bar.textContent = note && performance.now() < noteUntil ? note : help();
   };

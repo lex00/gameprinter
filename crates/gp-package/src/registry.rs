@@ -167,6 +167,30 @@ pub struct ByGameLine {
     pub version: String,
     pub id: String,
     pub title: String,
+    /// The last recheck of this version for the game, when one was
+    /// recorded (`gp theme recheck --registry`). In the by-game file, so
+    /// the file's signature covers it. A reader that doesn't know the key
+    /// passes over it: serde reads a table with keys it has no field for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recheck: Option<Recheck>,
+}
+
+/// A recheck's outcome, as a by-game line records it: `[line.recheck]`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Recheck {
+    /// The day it ran, UTC, `YYYY-MM-DD`.
+    pub date: String,
+    /// `pass` or `fail`.
+    pub result: String,
+    /// Why, in words a player reads: for a failure, what failed.
+    pub reason: String,
+}
+
+impl Recheck {
+    /// Whether the recheck failed.
+    pub fn failed(&self) -> bool {
+        self.result != "pass"
+    }
 }
 
 /// `by-game/<ns>/<game>.toml`, signed by a signing key, with an expiry.
@@ -401,6 +425,7 @@ pub fn reindex(
     let existing = read_yanks(t)?;
     let mut catalog: BTreeMap<String, CatalogEntry> = BTreeMap::new();
     let mut by_game: BTreeMap<String, Vec<ByGameLine>> = BTreeMap::new();
+    let mut rechecks = Rechecks::default();
     for (name, version) in versions {
         let key = version_key(name, version)?;
         let bytes = t
@@ -424,6 +449,7 @@ pub fn reindex(
                 version: v.version.clone(),
                 id: v.id.clone(),
                 title: v.title.clone(),
+                recheck: rechecks.of(t, g, name, &v.id)?,
             });
         }
     }
@@ -452,6 +478,85 @@ pub fn reindex(
         )?;
     }
     write_yanks(t, &reg, existing, s, signed, expires)
+}
+
+/// Each game's by-game lines as they are now, read once a game, so a
+/// reindex keeps the recheck each line carries.
+#[derive(Default)]
+struct Rechecks(BTreeMap<String, Vec<ByGameLine>>);
+
+impl Rechecks {
+    /// The recheck the game's list records now for this package and id.
+    fn of(
+        &mut self,
+        t: &dyn Target,
+        game: &str,
+        name: &str,
+        id: &str,
+    ) -> Result<Option<Recheck>, String> {
+        if !self.0.contains_key(game) {
+            self.0.insert(game.to_owned(), read_by_game(t, game)?);
+        }
+        Ok(self.0[game]
+            .iter()
+            .find(|l| l.package == name && l.id == id)
+            .and_then(|l| l.recheck.clone()))
+    }
+}
+
+/// A game's by-game lines as the file holds them now, none when it isn't
+/// there. Read with no signature check: the writer re-signs what it writes.
+fn read_by_game(t: &dyn Target, game: &str) -> Result<Vec<ByGameLine>, String> {
+    let (ns, n) = split_name(game)?;
+    let key = format!("by-game/{ns}/{n}.toml");
+    Ok(match t.read(&key)? {
+        Some(b) => parse::<ByGame>(&key, &b)?.line,
+        None => Vec::new(),
+    })
+}
+
+/// Records a recheck of `name@version` for `game` in the game's by-game
+/// line, replacing any earlier one, and re-signs the file with `s` (new
+/// `signed` and `expires`). Refuses a version the game's list doesn't name:
+/// a recheck is of what the page offers. Returns the line as written.
+#[allow(clippy::too_many_arguments)]
+pub fn record_recheck(
+    t: &dyn Target,
+    game: &str,
+    name: &str,
+    version: &str,
+    recheck: Recheck,
+    s: &Signer,
+    signed: &str,
+    expires: &str,
+) -> Result<ByGameLine, String> {
+    let reg = read_registry_unchecked(t)?;
+    list_signer(&reg, s)?;
+    if recheck.result != "pass" && recheck.result != "fail" {
+        return Err(format!("{:?} isn't pass or fail", recheck.result));
+    }
+    let (ns, n) = split_name(game)?;
+    let key = format!("by-game/{ns}/{n}.toml");
+    let mut line = read_by_game(t, game)?;
+    let l = line
+        .iter_mut()
+        .find(|l| l.package == name && l.version == version)
+        .ok_or_else(|| {
+            format!(
+                "{key} doesn't list {name}@{version}, so there is no line to record a recheck in"
+            )
+        })?;
+    l.recheck = Some(recheck);
+    let out = l.clone();
+    let f = ByGame {
+        format: FORMAT.into(),
+        registry: reg.name.clone(),
+        signed: signed.into(),
+        expires: expires.into(),
+        line,
+    };
+    replace_signed(t, &key, to_text(&f)?.as_bytes(), s)?;
+    Ok(out)
 }
 
 /// The withdrawn versions `yanks.toml` lists now, none when it isn't there.

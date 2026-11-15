@@ -222,7 +222,8 @@ pub fn propose_save(
 ) -> Result<Reply, String> {
     let trip = read_trip(dir)?;
     if crate::board_trip::is_board_trip(&trip) {
-        return crate::board_trip::propose_save(config, dir);
+        let _lock = crate::CopyLock::take(&trip.copy);
+        return crate::board_trip::propose_save(config, dir, place, author);
     }
     let pics = match import(dir)? {
         Ok(p) => p,

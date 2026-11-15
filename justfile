@@ -33,14 +33,19 @@ publish:
 build:
     cargo build -q --profile {{profile}} -p gp-cli
 
-# A released gp for this machine (or GP_RELEASE_TARGET): one binary that
-# carries the files it reads at run time, so a maker needs no checkout,
-# archived with its SHA-256 in OUT, which must be new or empty
+# A released gp for this machine, or for `--target TARGET` (a Rust target
+# such as x86_64-unknown-linux-gnu or x86_64-pc-windows-msvc; default
+# GP_RELEASE_TARGET, else this machine's): one binary that carries the files
+# it reads at run time, so a maker needs no checkout, archived with its
+# SHA-256 in OUT, which must be new or empty, as
+# gp-VERSION-COMMIT-TARGET.tar.gz (.zip for Windows)
 # (scripts/release/build.sh; site/src/content/docs/install.md). PAGE is the
 # built public page to carry, default the newest that passed the release
-# check. Publishes nothing: no tag, no upload, no push.
-release OUT *PAGE:
-    scripts/release/build.sh {{quote(OUT)}} {{PAGE}}
+# check. Another system's target needs its linker, so the release workflow
+# builds each on its own runner. Publishes nothing: no tag, no upload, no push.
+#   just release OUT [--target TARGET] [PAGE]
+release OUT *ARGS:
+    scripts/release/build.sh {{quote(OUT)}} {{ARGS}}
 
 mosshop:
     scripts/mosshop/build.sh {{quote(mosshop_dir)}}
@@ -328,7 +333,11 @@ play-web: mosshop
 # played in it under node, drawing every frame, with a save point restored
 # on the way, then the same log replayed natively; every frame's picture
 # hash must agree, and with the MAME capture of that log on this machine
-# ($GP_HOME/work/oracle/tapper-first-a), MAME's too. Needs the owner's
+# ($GP_HOME/work/oracle/tapper-first-a), MAME's too. So must every frame's
+# sound, the AYs' samples at the speakers (its count and hash), and the
+# module's sound board alone, fed the latch writes the whole machine made,
+# must sound the same on every frame (what a page whose game is a model
+# runs). Needs the owner's
 # romset ($GP_ARCADE_RBTAPPER, $GP_ROM_DIR/arcade/rbtapper.zip or
 # ~/Downloads/rbtapper.zip) and skips without it, so it can't run in CI.
 play-web-arcade:
@@ -346,15 +355,23 @@ play-web-arcade:
     scripts/web/build-play.sh --arcade {{quote(target / "play-web")}} > /dev/null
     work={{quote(gp_home / "work" / "play-web")}}
     mkdir -p "$work"
-    node scripts/web/check-play-arcade.mjs {{quote(target / "play-web" / "gp_arcade_play.wasm")}} "$zip" "$log" "$work/arcade-web.txt" > /dev/null
-    cargo build -q --profile {{profile}} -p gp-arcade-play --example pictures
+    cargo build -q --profile {{profile}} -p gp-arcade-play --example pictures --example sounds --example latches
+    {{quote(target / profile_dir / "examples" / "latches")}} "$zip" "$log" "$work/arcade-latches.bin"
+    node scripts/web/check-play-arcade.mjs {{quote(target / "play-web" / "gp_arcade_play.wasm")}} "$zip" "$log" "$work/arcade-web.txt" "$work/arcade-web-sound.txt" "$work/arcade-latches.bin" > /dev/null
     {{quote(target / profile_dir / "examples" / "pictures")}} "$zip" "$log" > "$work/arcade-native.txt"
+    {{quote(target / profile_dir / "examples" / "sounds")}} "$zip" "$log" > "$work/arcade-native-sound.txt"
     frames=$(wc -l < "$work/arcade-web.txt" | tr -d ' ')
     if ! cmp -s "$work/arcade-web.txt" "$work/arcade-native.txt"; then
         first=$(diff <(cat -n "$work/arcade-web.txt") <(cat -n "$work/arcade-native.txt") | sed -n 2p)
         echo "play-web-arcade: gp_arcade_play.wasm's picture hashes differ from the native replay's, first at: $first" >&2
         exit 1
     fi
+    if ! cmp -s "$work/arcade-web-sound.txt" "$work/arcade-native-sound.txt"; then
+        first=$(diff <(cat -n "$work/arcade-web-sound.txt") <(cat -n "$work/arcade-native-sound.txt") | sed -n 2p)
+        echo "play-web-arcade: gp_arcade_play.wasm's sound differs from the native replay's, first at frame: $first" >&2
+        exit 1
+    fi
+    samples=$(awk '{ n += $1 } END { print n / 2 }' "$work/arcade-web-sound.txt")
     mame="no MAME capture of it here"
     tsv={{quote(gp_home / "work" / "oracle" / "tapper-first-a" / "frames.tsv")}}
     if [ -f "$tsv" ]; then
@@ -365,7 +382,7 @@ play-web-arcade:
             exit 1
         fi
     fi
-    echo "play-web-arcade: tapper-first ($frames frames) played in gp_arcade_play.wasm and replayed natively: every frame's picture hash agrees, $mame"
+    echo "play-web-arcade: tapper-first ($frames frames) played in gp_arcade_play.wasm and replayed natively: every frame's picture hash agrees, $mame; so does every frame's sound ($samples samples a speaker), and the sound board alone's"
 
 # The mechanic page in a headless browser on Moss Hop, in a GP_HOME made
 # for the run: play, record a clip with a note and hand it off, the agent's
@@ -588,18 +605,35 @@ web-page-release *args: build
     GP={{quote(gp)}} scripts/web/release-check.sh {{args}}
 
 # Runs the full release check (`--full`: nothing reused), shows what would
-# upload, asks for the worker name, then runs `npx wrangler deploy --assets`
-# (needs `npx wrangler login` once; docs/web.md). `just web-page-deploy list`
-# stops before the upload, with wrangler's dry run.
-# Deploys the page after the full release check and a typed confirmation.
+# upload, uploads the page as a version that isn't live (`npx wrangler
+# versions upload --assets`), runs the page check on that version's preview
+# address, asks for the worker name, then makes it live (`npx wrangler
+# versions deploy`). Needs `npx wrangler login` once; docs/web.md.
+# `just web-page-deploy list` stops before the upload, with wrangler's dry
+# run; `just web-page-deploy first` puts a placeholder live once, for a
+# Worker that doesn't exist yet.
+# Deploys the page hidden first, then live after its check and a typed confirmation.
 web-page-deploy *args: build
     #!/usr/bin/env bash
     set -euo pipefail
-    case "{{args}}" in ""|list) ;; *) echo "web-page-deploy: give nothing or list" >&2; exit 2 ;; esac
+    case "{{args}}" in ""|list|first) ;; *) echo "web-page-deploy: give nothing, list or first" >&2; exit 2 ;; esac
     WEB_TOOLS=$(scripts/web/fetch-tools.sh {{quote(gp_home)}})
     export WEB_TOOLS
-    flag=""; [ "{{args}}" = list ] && flag="--list"
+    flag=""; [ "{{args}}" = list ] && flag="--list"; [ "{{args}}" = first ] && flag="--first"
     GP={{quote(gp)}} scripts/web/deploy.sh $flag
+
+# The old address's Worker (nes-donkey-kong): builds its folder, a
+# _redirects sending every path to the same path on the new address with a
+# 301, and runs wrangler's dry run; `upload` puts it up hidden, checks the
+# preview's redirects, asks for the worker name and makes it live
+# (docs/web.md, "The old address").
+# Builds, and with upload deploys, the old address's redirect.
+web-page-deploy-old *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{args}}" in ""|upload) ;; *) echo "web-page-deploy-old: give nothing or upload" >&2; exit 2 ;; esac
+    flag=""; [ "{{args}}" = upload ] && flag="--upload"
+    scripts/web/deploy-old.sh $flag
 
 # The web build against the native interpreter on Moss Hop's baselines
 # (docs/web.md, "Parity"): gp_web.wasm under Node and the interpreter built

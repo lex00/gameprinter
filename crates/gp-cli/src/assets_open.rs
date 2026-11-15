@@ -15,7 +15,7 @@
 //! image config's layers) moved here from its sprites.rs. On an arcade
 //! lift the trip is an entity's board sprites, one PNG a picture code
 //! (gp_mcp::board_trip): each save is read back with its checks and
-//! reported, and a proposal waits on the art history holding 16 values.
+//! proposed in the art history as an NES save is.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};

@@ -454,7 +454,11 @@ fn which(name: &str) -> bool {
 /// output for what didn't change.
 fn work_dir(name: &str) -> Result<PathBuf> {
     let home = std::env::var_os("GP_HOME").map_or_else(
-        || std::env::var_os("HOME").map(|h| Path::new(&h).join(".gameprinter")),
+        || {
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|h| Path::new(&h).join(".gameprinter"))
+        },
         |h| Some(PathBuf::from(h)),
     );
     let work = home

@@ -1,13 +1,13 @@
 //! The person's copies, and the two journeys besides porting a game: making
-//! a theme for a game, and making a new game from a template (issue #5;
-//! docs/progress.md, "Copies and the other journeys").
+//! a theme for a game, and making a new game from nothing or from a
+//! template (issue #5; docs/progress.md, "Copies and the other journeys").
 //!
 //! A copy is one of these, found where the tools make them:
 //!
 //! | Copy | Where | Made by |
 //! |---|---|---|
 //! | A theme | `$GP_HOME/work/themes/NAME/`, holding `theme/look.txt` (or `look.txt`) | `gp theme look new`, from the page's MAKE A THEME or the agent |
-//! | A new game | `$GP_HOME/work/mcp/NAME/`, holding `model.toml` | `template_fork`, from the page's MAKE A NEW GAME or the agent |
+//! | A new game | `$GP_HOME/work/mcp/NAME/`, holding `model.toml` | `template_fork`, or `gp game new NAME --empty` for one from nothing, from the page's MAKE A NEW GAME or the agent |
 //!
 //! What the journeys keep of their own is under `$GP_HOME/work/journeys/
 //! KIND/NAME/` (KIND `theme` or `new`), never in the copy:
@@ -36,7 +36,7 @@ use crate::next::{Act, Answer, Running, StageId, Step, VERSION, Who, Yes, step};
 
 /// The public page that plays a published game and its published themes
 /// (docs/web.md: `/p?g=NS/NAME&c=NS/THEME`).
-pub(crate) const PUBLIC_PAGE: &str = "https://nes-donkey-kong.intentius.workers.dev";
+pub(crate) const PUBLIC_PAGE: &str = "https://gameprinter.intentius.workers.dev";
 /// Where a theme is asked to be published today: an issue on the registry
 /// the public page reads (site docs, themes.md, "Get it in the game").
 pub(crate) const REGISTRY_ISSUES: &str = "https://github.com/lex00/gp-registry/issues/new";
@@ -67,13 +67,14 @@ impl Kind {
 }
 
 /// What a copy came from: a game of the games checkout, a person's new
-/// game (for a theme of it), or a template (for a new game).
+/// game (for a theme of it), or a template or nothing (for a new game).
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub(crate) struct Origin {
     pub name: String,
     pub title: String,
-    /// `game` (the games checkout), `new` (a person's new game) or
-    /// `template`.
+    /// `game` (the games checkout), `new` (a person's new game),
+    /// `template`, or `empty` (a new game started from nothing, `gp game
+    /// new --empty`).
     pub kind: &'static str,
     #[serde(skip)]
     pub dir: Option<PathBuf>,
@@ -283,6 +284,14 @@ fn theme_from(home: &Path, gs: &[(String, PathBuf)], dir: &Path, record: &Value)
 
 /// Where a new game came from: the journey record, else its template.toml.
 fn new_from(dir: &Path, record: &Value) -> Option<Origin> {
+    if record["from_kind"] == json!("empty") {
+        return Some(Origin {
+            name: "nothing".into(),
+            title: "nothing".into(),
+            kind: "empty",
+            dir: None,
+        });
+    }
     let name = record["from"]
         .as_str()
         .map(str::to_owned)
@@ -562,6 +571,9 @@ pub(crate) struct Around {
     /// The sound changes the agent proposes for this copy
     /// (gp_mcp::sound_proposal::for_next).
     pub sounds: Vec<Value>,
+    /// The sprite edits the agent proposes for this copy
+    /// (gp_mcp::sprite_proposal::for_next).
+    pub sprites: Vec<Value>,
     pub agent_runs: Vec<String>,
     pub page_runs: Vec<String>,
 }
@@ -770,6 +782,19 @@ pub(crate) fn around(home: &Path, c: &Copy) -> Around {
                 .filter(same)
                 .collect()
         },
+        sprites: if c.kind == Kind::New {
+            gp_mcp::sprite_proposal::for_next(home)
+                .into_iter()
+                .filter(|p| {
+                    p["copy"].as_str().is_some_and(|n| {
+                        let d = gp_mcp::sprite_proposal::copies_root(home).join(n);
+                        d.canonicalize().unwrap_or(d) == here
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
         agent_runs: runs
             .iter()
             .filter(|r| !by_page(r))
@@ -808,7 +833,7 @@ pub(crate) const THEME_STEPS: [(&str, Who); 6] = [
 ];
 
 pub(crate) const NEW_STEPS: [(&str, Who); 6] = [
-    ("Start from a template", Who::Person),
+    ("Start from nothing or a template", Who::Person),
     ("Name it", Who::Person),
     ("See it play", Who::Tools),
     ("Change a stage", Who::Person),
@@ -1013,13 +1038,20 @@ fn new_answer(f: &NewFacts) -> (u8, String, Vec<Step>) {
     let n = new_stage(f);
     let name = &f.name;
     let from = f.from.as_ref().map_or("a template", |t| t.title.as_str());
+    // A game started from nothing is the person's own, not a copy.
+    let empty = f.from.as_ref().is_some_and(|t| t.kind == "empty");
+    let is = if empty {
+        format!("{name} is your new game, started from nothing")
+    } else {
+        format!("{name} is your copy of {from}")
+    };
     let mut steps = Vec::new();
     let stands = match n {
         3 if !f.assets => {
-            format!("{name} is your copy of {from}. Its pictures and levels aren't ready yet.")
+            format!("{is}. Its pictures and levels aren't ready yet.")
         }
         3 => {
-            format!("{name} is your copy of {from}. It hasn't been built to play in a browser yet.")
+            format!("{is}. It hasn't been built to play in a browser yet.")
         }
         4 => match &f.verify {
             Some((at, false, _)) if *at >= f.edited_ms => {
@@ -1030,6 +1062,9 @@ fn new_answer(f: &NewFacts) -> (u8, String, Vec<Step>) {
             _ if f.edits > 0 => format!(
                 "{name} plays in your browser. You changed its stage {}.",
                 n_of(f.edits, "time", "times")
+            ),
+            _ if empty => format!(
+                "{name} plays in your browser: a floor, a player that walks and jumps, and a goal to reach."
             ),
             _ => format!("{name} plays in your browser, the same as {from}."),
         },
@@ -1103,7 +1138,9 @@ fn new_answer(f: &NewFacts) -> (u8, String, Vec<Step>) {
         5 => steps.push(
             step(
                 Who::Person,
-                if f.themes.is_empty() {
+                if f.themes.is_empty() && empty {
+                    "Press MAKE A THEME FOR IT to give your game a look of its own, or SKIP to keep its plain shapes.".to_owned()
+                } else if f.themes.is_empty() {
                     "Press MAKE A THEME FOR IT to give your game pictures of its own, or SKIP to keep the template's.".to_owned()
                 } else {
                     format!("Carry on with the theme {}, or press DONE when you like the look.", f.themes[0])
@@ -1157,6 +1194,7 @@ pub(crate) fn answer(facts: &Facts, ar: &Around) -> Answer {
             game: s("game"),
             picture: None,
             sound: None,
+            sprite: None,
         });
         if a["state"] == json!("open") {
             first.push(step(
@@ -1192,10 +1230,18 @@ pub(crate) fn answer(facts: &Facts, ar: &Around) -> Answer {
             game: s("game"),
             picture: Some(p.clone()),
             sound: None,
+            sprite: None,
         });
     }
     for p in &ar.sounds {
         let (y, st) = crate::next::sound_wait(p);
+        if y.state.as_deref() == Some("open") {
+            first.extend(st);
+        }
+        waits.push(y);
+    }
+    for p in &ar.sprites {
+        let (y, st) = crate::next::sprite_wait(p);
         if y.state.as_deref() == Some("open") {
             first.extend(st);
         }

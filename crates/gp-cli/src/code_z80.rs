@@ -10,7 +10,9 @@
 //! an indexed-jump helper (a routine that jumps to the word at HL plus
 //! twice A, found by running it alone: [`jump_helper`]), with HL a
 //! constant or a word read from a table of tables ([`table_of_tables`]:
-//! each of its words starts a jump table), and every target
+//! each of its words starts a jump table), every routine handed to a
+//! list of records a `jp (hl)` runs later (a timer's routine:
+//! [`callback_fields`]), and every target
 //! a `jp (hl)`, `jp (ix)` or `jp (iy)` went to in a run, which no reading
 //! of the code alone otherwise finds. A routine is a call's or restart's
 //! target, an interrupt handler, a jump table's entry, or an entry; each
@@ -554,6 +556,152 @@ fn tables_named(from: u16, insns: &BTreeMap<u16, Insn>, rom: &[u8], end: u32) ->
 /// Entries a jump table may hold at most.
 const TABLE_MAX: u16 = 128;
 
+/// A word field of a list of records in RAM that code jumps through: the
+/// list's base (`ld ix,nn` or `ld iy,nn` in the routine that holds the
+/// jump) and the offsets of the word's high and low bytes in a record.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+struct CallbackField {
+    index: char,
+    base: u16,
+    hi: u8,
+    lo: u8,
+}
+
+/// The instructions of the routine that holds `pc`: from the nearest
+/// routine entry at or below it to the next one.
+fn routine_of<'a>(
+    insns: &'a BTreeMap<u16, Insn>,
+    routines: &BTreeMap<u16, &'static str>,
+    pc: u16,
+) -> impl Iterator<Item = &'a Insn> {
+    let from = routines.range(..=pc).next_back().map_or(0, |(a, _)| *a);
+    let to = routines
+        .range(pc.wrapping_add(1)..)
+        .next()
+        .map_or(u32::from(u16::MAX) + 1, |(a, _)| u32::from(*a));
+    insns
+        .range(from..)
+        .take_while(move |(a, _)| u32::from(**a) < to)
+        .map(|(_, i)| i)
+}
+
+/// The bases `ld ix,nn` / `ld iy,nn` load in the instructions `it`, by
+/// index register.
+fn index_bases<'a>(it: impl Iterator<Item = &'a Insn>) -> BTreeSet<(char, u16)> {
+    let mut out = BTreeSet::new();
+    for i in it {
+        for x in ['x', 'y'] {
+            if let Some(n) = i.text.strip_prefix(&format!("ld i{x},$"))
+                && let Ok(v) = u16::from_str_radix(n, 16)
+            {
+                out.insert((x, v));
+            }
+        }
+    }
+    out
+}
+
+/// The offset `d` of an operand `(ix+$dd)` (or iy) at the start of `s`.
+fn index_offset(s: &str, x: char) -> Option<u8> {
+    let rest = s.strip_prefix(&format!("(i{x}+$"))?;
+    u8::from_str_radix(rest.get(..2)?, 16).ok()
+}
+
+/// The callback fields the `jp (hl)` at `pc` jumps through: in the
+/// straight run before it, H and L loaded from one record (`ld h,(ix+a)`,
+/// `ld l,(ix+b)`) with nothing after them writing H or L, in a routine
+/// that loads the list's base into that index register. Tapper's timers
+/// (a list of records, each a count and the routine to run when it ends)
+/// are run this way.
+fn callback_fields(
+    insns: &BTreeMap<u16, Insn>,
+    routines: &BTreeMap<u16, &'static str>,
+    pc: u16,
+) -> Vec<CallbackField> {
+    let mut hi: Option<(char, u8)> = None;
+    let mut lo: Option<(char, u8)> = None;
+    let mut at = pc;
+    for _ in 0..12 {
+        let Some((&p, i)) = insns
+            .range(..at)
+            .next_back()
+            .filter(|(p, i)| p.wrapping_add(u16::from(i.len)) == at)
+        else {
+            break;
+        };
+        if !matches!(i.flow, Flow::Next) {
+            break;
+        }
+        if i.writes & (dasm::reg::HL | dasm::reg::ALT) != 0 {
+            let mut got = false;
+            for x in ['x', 'y'] {
+                if let Some(s) = i.text.strip_prefix("ld h,")
+                    && let Some(d) = index_offset(s, x)
+                    && hi.is_none()
+                {
+                    hi = Some((x, d));
+                    got = true;
+                }
+                if let Some(s) = i.text.strip_prefix("ld l,")
+                    && let Some(d) = index_offset(s, x)
+                    && lo.is_none()
+                {
+                    lo = Some((x, d));
+                    got = true;
+                }
+            }
+            if !got {
+                break;
+            }
+        }
+        if hi.is_some() && lo.is_some() {
+            break;
+        }
+        at = p;
+    }
+    let (Some((x, h)), Some((y, l))) = (hi, lo) else {
+        return Vec::new();
+    };
+    if x != y || h == l {
+        return Vec::new();
+    }
+    index_bases(routine_of(insns, routines, pc))
+        .into_iter()
+        .filter(|(r, _)| *r == x)
+        .map(|(_, base)| CallbackField {
+            index: x,
+            base,
+            hi: h,
+            lo: l,
+        })
+        .collect()
+}
+
+/// Whether the routine at `entry` stores HL into the callback field `f`:
+/// it loads the same base into the same index register and writes H and
+/// L at the field's offsets (`ld (ix+a),h`, `ld (ix+b),l`).
+fn stores_callback(
+    insns: &BTreeMap<u16, Insn>,
+    routines: &BTreeMap<u16, &'static str>,
+    entry: u16,
+    f: &CallbackField,
+) -> bool {
+    let body: Vec<&Insn> = routine_of(insns, routines, entry).collect();
+    if !index_bases(body.iter().copied()).contains(&(f.index, f.base)) {
+        return false;
+    }
+    let writes = |r: char, d: u8| {
+        body.iter().any(|i| {
+            i.text
+                .strip_prefix("ld ")
+                .and_then(|s| s.strip_suffix(&format!(",{r}")))
+                .and_then(|s| index_offset(s, f.index))
+                == Some(d)
+        })
+    };
+    writes('h', f.hi) && writes('l', f.lo)
+}
+
 /// A jump table behind an indexed-jump helper: where it starts, and how
 /// many of its entries the map has taken so far (`None` once it has
 /// ended).
@@ -728,6 +876,55 @@ fn descend(
                 });
             }
         }
+        // Routines handed to a list of records that a `jp (hl)` runs
+        // later (a timer's routine): a call to a routine that stores HL
+        // into the field the jump reads, with HL a constant just before
+        // (a routine) or a word read from a table (each of its words is
+        // one, taken as a jump table's are).
+        let fields: BTreeSet<CallbackField> = insns
+            .iter()
+            .filter(|(_, i)| matches!(i.flow, Flow::Indirect(dasm::Ptr::Hl)))
+            .flat_map(|(&pc, _)| callback_fields(&insns, &routines, pc))
+            .collect();
+        if !fields.is_empty() {
+            let mut registrars: BTreeMap<u16, bool> = BTreeMap::new();
+            let mut found: Vec<u16> = Vec::new();
+            for (&pc, i) in &insns {
+                let (Flow::Call(t) | Flow::CallIf(t) | Flow::Jump(t)) = i.flow else {
+                    continue;
+                };
+                let stores = *registrars.entry(t).or_insert_with(|| {
+                    fields
+                        .iter()
+                        .any(|f| stores_callback(&insns, &routines, t, f))
+                });
+                if !stores {
+                    continue;
+                }
+                match hl_before(&insns, rom, pc) {
+                    Some(hl) => found.push(hl),
+                    None => {
+                        if let Some(outer) = table_of_tables(&insns, rom, end, pc, &mut hl_calls) {
+                            tables.entry(outer).or_insert(JumpTable {
+                                from: outer,
+                                taken: Some(0),
+                            });
+                        }
+                    }
+                }
+            }
+            for hl in found {
+                // Not inside an instruction the map holds.
+                let inside = insns
+                    .range(..hl)
+                    .next_back()
+                    .is_some_and(|(p, i)| u32::from(*p) + u32::from(i.len) > u32::from(hl));
+                if u32::from(hl) < end && !inside && !routines.contains_key(&hl) {
+                    routines.insert(hl, CALLBACK);
+                    todo.push(hl);
+                }
+            }
+        }
         let entered = entered(&insns, &routines);
         for t in tables.values_mut() {
             let took = taken.entry(t.from).or_default();
@@ -760,6 +957,10 @@ fn descend(
 
 /// Why a routine is one when only a jump table names it.
 const TABLE_ENTRY: &str = "jump table entry";
+
+/// Why a routine is one when it is handed, as a constant, to a routine
+/// that stores it in a list of records a `jp (hl)` runs.
+const CALLBACK: &str = "callback";
 
 /// The addresses something other than a jump table enters: routines for
 /// another reason and the targets of calls, restarts and jumps.
@@ -1361,6 +1562,54 @@ mod tests {
         for at in [0x70u16, 0x78, 0x80, 0x88] {
             assert_eq!(m.routines.get(&at), Some(&TABLE_ENTRY), "{at:04X}");
         }
+    }
+
+    /// A made-up program with a list of records whose routine a `jp (hl)`
+    /// runs (a timer list): 0030 stores HL at (ix+4) and (ix+3) of the list
+    /// at E100, and 0020 jumps through the same field. The routine handed
+    /// as a constant (0070) and both words of the table read at 0010
+    /// (0078, 0080) are routines from the code alone.
+    #[test]
+    fn routines_handed_to_a_list_a_jump_runs_are_followed() {
+        let mut main = vec![
+            0x31, 0xf0, 0xe7, // 0000: ld sp,e7f0
+            0x21, 0x70, 0x00, // 0003: ld hl,0070
+            0xcd, 0x30, 0x00, // 0006: call 0030
+            0x21, 0x60, 0x00, // 0009: ld hl,0060
+            0xaf, // 000c: xor a
+            0xcd, 0x40, 0x00, // 000d: call 0040 (adds A to HL)
+            0x7e, 0x23, 0x66, 0x6f, // 0010: ld a,(hl) ; inc hl ; ld h,(hl) ; ld l,a
+            0xcd, 0x30, 0x00, // 0014: call 0030
+            0xcd, 0x20, 0x00, // 0017: call 0020
+            0x18, 0xfe, // 001a: jr $
+        ];
+        main.resize(0x20, 0);
+        // 0020: ld ix,e100 ; ld h,(ix+4) ; ld l,(ix+3) ; jp (hl)
+        main.extend([
+            0xdd, 0x21, 0x00, 0xe1, 0xdd, 0x66, 0x04, 0xdd, 0x6e, 0x03, 0xe9,
+        ]);
+        main.resize(0x30, 0);
+        // 0030: ld ix,e100 ; ld (ix+4),h ; ld (ix+3),l ; ret
+        main.extend([
+            0xdd, 0x21, 0x00, 0xe1, 0xdd, 0x74, 0x04, 0xdd, 0x75, 0x03, 0xc9,
+        ]);
+        main.resize(0x40, 0);
+        main.extend([0x85, 0x6f, 0xd0, 0x24, 0xc9]); // 0040: add a,l ; ld l,a ; ret nc ; inc h ; ret
+        main.resize(0x60, 0);
+        main.extend([0x78, 0x00, 0x80, 0x00]); // 0060: the table of routines
+        for at in [0x70, 0x78, 0x80] {
+            main.resize(at, 0);
+            main.extend([0x3e, 0x01, 0x32, 0x01, 0xe0, 0xc9]); // ld a,1 ; ld (e001),a ; ret
+        }
+        main.resize(0x90, 0);
+        let set = gp_arcade::testrom::romset(&main, &[0x18, 0xfe]);
+        let m = CodeMap::of(&set, 0, None);
+        assert_eq!(m.routines.get(&0x70), Some(&CALLBACK));
+        for at in [0x78u16, 0x80] {
+            assert_eq!(m.routines.get(&at), Some(&TABLE_ENTRY), "{at:04X}");
+        }
+        // The table ends at its first zero word.
+        assert_eq!(m.routines.len(), 7, "{:?}", m.routines);
     }
 
     fn busy_levels(frames: usize) -> (Romset, Levels) {

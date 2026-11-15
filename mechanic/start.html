@@ -11,7 +11,9 @@
   <header>
     <a id="logo" href="/start/" title="The first screen: what you want to do, and your copies">GAME PRINTER</a>
     <span id="title">What do you want to do?</span>
+    <select id="copy-pick" hidden title="What is open: a game you are porting, or one of your copies. The tabs follow it" aria-label="What is open"></select>
   </header>
+  <nav id="tabs" hidden aria-label="The open copy's tabs"><button id="tab-clips" type="button" hidden title="Record clips of the original: only for a game you are porting">CLIPS</button><button id="tab-work" type="button" hidden title="The background work on a port: only for a game you are porting">REFINE</button><button id="tab-play" type="button" title="Play it">PLAY</button><button id="tab-themes" type="button" hidden title="Your theme, step by step, and your theme beside the original">THEMES</button><button id="tab-steps" type="button" hidden title="Your new game, step by step">STEPS</button></nav>
   <main id="start">
     <section id="first">
       <p id="intro">Game Printer writes down how a game plays, as a plain-text rules file called the model, and plays it in your browser with nothing to install. A template is a game's rules without its pictures, that a new game is built on: every game here can be one.</p>
@@ -19,7 +21,7 @@
       <div id="start-choices" role="group" aria-label="What you want to do">
         <button type="button" data-journey="port"><b>PORT A GAME I OWN</b><span>Bring a game you have a copy of, and the tools write down its rules until it plays the same here.</span></button>
         <button type="button" data-journey="theme"><b>MAKE A THEME FOR A GAME</b><span>New pictures for a game in a style you describe. It changes how the game looks, never how it plays.</span></button>
-        <button type="button" data-journey="new"><b>MAKE A NEW GAME</b><span>Start from a template, then change its stage and give it a look of its own.</span></button>
+        <button type="button" data-journey="new"><b>MAKE A NEW GAME</b><span>Start from nothing or from a template, then change its stage and give it a look of its own.</span></button>
       </div>
       <section id="port-start" class="jr-box" hidden>
         <h2>Port a game you own</h2>
@@ -35,6 +37,7 @@
       <ul id="games" aria-label="The games you are porting"></ul>
     </section>
     <section id="journey" hidden aria-live="polite"></section>
+    <section id="pane-play" hidden aria-label="PLAY"></section>
   </main>
   <script type="module" src="/start/journeys/start.js"></script>
 </body>

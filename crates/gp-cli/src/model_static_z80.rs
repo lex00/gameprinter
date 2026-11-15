@@ -233,6 +233,7 @@ pub(crate) fn run(a: &StaticArgs, rom: &Path, bytes: &[u8], t0: Instant) -> Resu
             )?;
         }
     }
+    let mut left_out = None;
     if let Some(d) = &a.model {
         fs::create_dir_all(d)?;
         let facts: Vec<(String, Value)> = match &a.names {
@@ -246,10 +247,24 @@ pub(crate) fn run(a: &StaticArgs, rom: &Path, bytes: &[u8], t0: Instant) -> Resu
                 .map(|f| (f.path.clone(), f.value.clone()))
                 .collect(),
         };
-        fs::write(
-            d.join(gp_model::MODEL_FILE),
-            crate::model_static::model_text(&facts, "static")?,
+        let f = crate::model_static::model_text(
+            &facts,
+            "static",
+            crate::model_static_fit::Console::Arcade,
+            d,
         )?;
+        fs::write(d.join(gp_model::MODEL_FILE), &f.text)?;
+        // The original's source ID: MAME's name for the set.
+        let source = gp_arcade::Romset::from_zip(bytes)?.name;
+        let m = crate::model_static::write_mapping(
+            d,
+            &facts,
+            &doc,
+            &f,
+            source,
+            crate::model_static_fit::Console::Arcade,
+        )?;
+        left_out = Some((d.clone(), f, m));
     }
     let grade = match &a.grade {
         Some(k) => Some(crate::static_grade::grade(&h, k)?),
@@ -261,6 +276,10 @@ pub(crate) fn run(a: &StaticArgs, rom: &Path, bytes: &[u8], t0: Instant) -> Resu
     }
     let mut text = crate::model_static::summary(&h, rom, secs, grade.as_ref());
     text += "\nRead from the main CPU's code alone (no runs).\n";
+    if let Some((d, f, m)) = &left_out {
+        text += &crate::model_static::model_note(d, f, &mut out)?;
+        text += &crate::model_static::mapping_note(d, m.as_ref(), &mut out);
+    }
     if let Some(u) = &unread {
         out["unread"] = serde_json::to_value(u)?;
         text += &crate::model_static::unread_text(u);

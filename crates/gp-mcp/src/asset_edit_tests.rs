@@ -268,14 +268,27 @@ fn a_proposal_is_placed_by_accept_and_dropped_by_reject() {
     );
     assert_eq!(h["waiting"], json!([1]), "{h}");
 
-    let (a, err) = f.call(json!({ "copy": "copy", "accept": 1, "author": "person" }));
-    assert!(!err, "{a}");
+    // Only the person answers a proposal: the agent's accept and reject
+    // are refused, whoever it says it is.
+    for args in [
+        json!({ "copy": "copy", "accept": 1, "author": "person" }),
+        json!({ "copy": "copy", "reject": 1 }),
+    ] {
+        let (r, err) = f.call(args);
+        assert!(err, "{r}");
+        assert!(
+            r["refused"].as_str().unwrap().contains("only the person"),
+            "{r}"
+        );
+    }
+    assert!(!f.config.work.join("copy/assets").exists());
+    let a = person(&f, 1, true);
     assert_eq!(a["status"], "accepted", "{a}");
     assert_eq!(a["written"], true);
     assert_eq!(hero_rows(&f)[1], "3333333333333333");
-    // Accepting it again changes nothing (a double click in the panel).
-    let (again, err) = f.call(json!({ "copy": "copy", "accept": 1 }));
-    assert!(!err && again["written"] == false, "{again}");
+    // Accepting it again changes nothing (a double click on the card).
+    let again = person(&f, 1, true);
+    assert_eq!(again["written"], false, "{again}");
 
     // A second proposal, rejected: nothing changes.
     let edited = f.sheet();
@@ -283,8 +296,7 @@ fn a_proposal_is_placed_by_accept_and_dropped_by_reject() {
         "copy": "copy", "entity": "hero", "ops": [{ "op": "flip", "axis": "y" }], "place": false,
     }));
     assert_eq!(p2["seq"], 2, "{p2}");
-    let (r, err) = f.call(json!({ "copy": "copy", "reject": 2 }));
-    assert!(!err, "{r}");
+    let r = person(&f, 2, false);
     assert_eq!(r["status"], "rejected");
     assert_eq!(f.sheet(), edited);
     let h = tools::call(&f.config, "assets_history", json!({ "copy": "copy" }))
@@ -294,10 +306,32 @@ fn a_proposal_is_placed_by_accept_and_dropped_by_reject() {
     assert_eq!(h["placed"][0]["decided_by"], "person");
     assert_eq!(h["proposals"][1]["status"], "rejected");
 
+    // The person's accepted edit is theirs to put back, not the agent's.
+    let (r, err) = f.call(json!({ "copy": "copy", "reject": 1 }));
+    assert!(err, "{r}");
     // Rejecting a placed edit undoes it.
+    person(&f, 1, false);
+    assert_eq!(hero_rows(&f), original);
+}
+
+/// The agent may still keep or turn down an edit it placed itself.
+#[test]
+fn the_agent_accepts_or_rejects_an_edit_it_placed() {
+    let f = Fixture::new();
+    let original = hero_rows(&f);
+    let (p, err) = f.call(json!({ "copy": "copy", "entity": "hero", "ops": edit_ops() }));
+    assert!(!err && p["written"] == true, "{p}");
     let (r, err) = f.call(json!({ "copy": "copy", "reject": 1 }));
     assert!(!err, "{r}");
+    assert_eq!(r["decided_by"], "agent");
     assert_eq!(hero_rows(&f), original);
+}
+
+/// The person's answer, as the page's card and gp assets proposal give it.
+fn person(f: &Fixture, seq: u64, accept: bool) -> Value {
+    let r = crate::asset_edit::decide(&f.config, "copy", seq, accept, "person").unwrap();
+    assert!(!r.is_error, "{}", r.json);
+    r.json
 }
 
 #[test]
@@ -660,8 +694,7 @@ fn a_level_tile_kinds_look_is_proposed_accepted_and_undone() {
         "a proposal writes no art"
     );
 
-    let (a, err) = f.call(json!({ "copy": "copy", "accept": 1, "author": "person" }));
-    assert!(!err, "{a}");
+    let a = person(&f, 1, true);
     assert_eq!(a["status"], "accepted", "{a}");
     assert_eq!(a["written"], true, "{a}");
     assert_ne!(ground_rows(&f), original);
@@ -686,4 +719,93 @@ fn a_level_tile_kinds_look_is_proposed_accepted_and_undone() {
     assert_eq!(c["colors"]["after"], json!([0x0F, 0x27, 0x11, 0x21]), "{c}");
     assert_eq!(c["also_changes"], json!(["sky"]), "{c}");
     assert_eq!(c["written"], true, "{c}");
+}
+
+/// A proposal is a card on the person's page (crate::sprite_proposal):
+/// listed with its pictures, ACCEPT places it as the person's, the agent
+/// reads the answer and the words once, PUT THE OLD ONE BACK undoes it,
+/// and REJECT drops a second one.
+#[test]
+fn a_proposal_is_a_card_the_person_answers_on_their_page() {
+    use crate::sprite_proposal::{self as card, Answer};
+    let mut f = Fixture::new();
+    // The page reads the copies under $GP_HOME/work/mcp.
+    let home = f._dir.path().join("home");
+    fs::create_dir_all(home.join("work")).unwrap();
+    std::os::unix::fs::symlink(&f.config.work, home.join("work/mcp")).unwrap();
+    f.config.home = home.clone();
+    let original = hero_rows(&f);
+    let (p, err) = f.call(json!({
+        "copy": "copy", "entity": "hero", "ops": edit_ops(), "place": false, "prompt": "a cap",
+    }));
+    assert!(!err, "{p}");
+    assert!(p["note"].as_str().unwrap().contains("card"), "{p}");
+    let q = card::queue(&home);
+    assert_eq!(q.len(), 1, "{q:?}");
+    assert_eq!(q[0]["id"], "copy-1");
+    assert_eq!(q[0]["state"], "open");
+    assert_eq!(q[0]["subject"], "hero");
+    assert_eq!(q[0]["why"], "a cap");
+    assert_eq!(q[0]["board"], false);
+    assert_eq!(
+        (q[0]["preview"].clone(), q[0]["context"].clone()),
+        (json!(true), json!(true))
+    );
+    assert!(card::png(&home, "copy-1", "edit").is_some_and(|b| b.starts_with(b"\x89PNG")));
+    assert!(card::png(&home, "copy-1", "context").is_some());
+    assert!(card::png(&home, "copy-1", "../x").is_none());
+    let n = card::for_next(&home);
+    assert_eq!(
+        (n[0]["place"].clone(), n[0]["of"].clone()),
+        (json!(1), json!(1))
+    );
+
+    let a = card::decide(&f.config, "copy-1", Answer::Accept, Some("  nice cap ")).unwrap();
+    assert_eq!(a["state"], "accepted", "{a}");
+    assert_eq!(a["words"], "nice cap");
+    assert_eq!(hero_rows(&f)[1], "3333333333333333");
+    assert!(card::queue(&home).is_empty());
+    let e = crate::edit_log::find(&f.config.work.join("copy"), 1)
+        .unwrap()
+        .unwrap();
+    assert_eq!(e.decided_by.as_deref(), Some("person"));
+    // Answered twice is refused in words.
+    assert!(card::decide(&f.config, "copy-1", Answer::Reject, None).is_err());
+    // The agent hears it in next, reads it once in assets_history.
+    assert_eq!(card::unread(&home).len(), 1);
+    let h = tools::call(&f.config, "assets_history", json!({ "copy": "copy" }))
+        .unwrap()
+        .json;
+    assert_eq!(h["answers"][0]["words"], "nice cap", "{h}");
+    assert_eq!(h["answers"][0]["new"], true);
+    assert!(card::unread(&home).is_empty());
+    let h = tools::call(&f.config, "assets_history", json!({ "copy": "copy" }))
+        .unwrap()
+        .json;
+    assert_eq!(h["answers"][0]["new"], false);
+
+    let u = card::decide(&f.config, "copy-1", Answer::Undo, None).unwrap();
+    assert_eq!(u["state"], "undone", "{u}");
+    assert_eq!(u["words"], "nice cap", "the words stay");
+    assert_eq!(hero_rows(&f), original);
+    assert!(card::decide(&f.config, "copy-1", Answer::Undo, None).is_err());
+
+    let (p, err) = f.call(json!({
+        "copy": "copy", "entity": "hero", "ops": [{ "op": "fill", "region": { "x": 0, "y": 0, "w": 4, "h": 4 }, "index": 2 }], "place": false,
+    }));
+    assert!(!err, "{p}");
+    let seq: u64 = p["item"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{p}"))
+        .rsplit(':')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let id = card::id_of("copy", seq);
+    let r = card::decide(&f.config, &id, Answer::Reject, Some("make it blue")).unwrap();
+    assert_eq!(r["state"], "rejected");
+    assert_eq!(hero_rows(&f), original);
+    assert_eq!(card::answered(&home)[0]["id"], json!(id), "newest first");
+    assert!(card::decide(&f.config, "nocopy-1", Answer::Accept, None).is_err());
 }

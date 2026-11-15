@@ -17,8 +17,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::edges::EdgeKind;
 
-/// The format's version. A breaking change to a kind bumps it.
-pub const SCHEMA: u32 = 1;
+/// The format's version. A breaking change to a kind bumps it. Format 2
+/// tags a `hook` event's registers with their CPU (`cpu`: `6502` or
+/// `z80`); a format 1 `hook` event, which has no `cpu`, reads as the
+/// 6502's (docs/formats/watch-events.md).
+pub const SCHEMA: u32 = 2;
 
 /// One line of a session's `events.ndjson`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -162,15 +165,13 @@ pub enum WatchBody {
         value: u8,
         writer: String,
     },
-    /// A hooked instruction about to run in a rerun, with its registers.
+    /// A hooked instruction about to run in a rerun, with its CPU's
+    /// registers, tagged by the CPU (`cpu`).
     #[serde(rename = "hook")]
     Hook {
         at: String,
-        a: u8,
-        x: u8,
-        y: u8,
-        s: u8,
-        p: u8,
+        #[serde(flatten)]
+        regs: HookRegs,
     },
     /// A rerun ended: hits seen and written (at most a cap a recipe, each
     /// address or hook).
@@ -189,6 +190,66 @@ pub enum WatchBody {
         read: usize,
         routines: usize,
     },
+}
+
+/// A hooked instruction's registers, as they were before it ran, tagged by
+/// the CPU that ran it: `"cpu": "6502"` with `a`, `x`, `y`, `s` and `p`,
+/// or `"cpu": "z80"` with the register pairs. A `hook` event of format 1
+/// has no `cpu` and the 6502's fields, and reads as [`HookRegs::Mos6502`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(tag = "cpu")]
+pub enum HookRegs {
+    #[serde(rename = "6502")]
+    Mos6502(Regs6502),
+    #[serde(rename = "z80")]
+    Z80(RegsZ80),
+}
+
+/// The 6502's registers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Regs6502 {
+    pub a: u8,
+    pub x: u8,
+    pub y: u8,
+    pub s: u8,
+    pub p: u8,
+}
+
+/// The Z80's main registers, as 16-bit pairs (`af` holds A in its high
+/// byte and F in its low byte).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RegsZ80 {
+    pub af: u16,
+    pub bc: u16,
+    pub de: u16,
+    pub hl: u16,
+    pub ix: u16,
+    pub iy: u16,
+    pub sp: u16,
+}
+
+impl<'de> Deserialize<'de> for HookRegs {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let mut m = serde_json::Map::<String, serde_json::Value>::deserialize(d)?;
+        // Format 1 wrote the 6502's registers with no tag.
+        let cpu = match m.remove("cpu") {
+            None => "6502".to_owned(),
+            Some(serde_json::Value::String(c)) => c,
+            Some(v) => return Err(D::Error::custom(format!("a hook's cpu is a name, not {v}"))),
+        };
+        let v = serde_json::Value::Object(m);
+        match cpu.as_str() {
+            "6502" => Regs6502::deserialize(v).map(Self::Mos6502),
+            "z80" => RegsZ80::deserialize(v).map(Self::Z80),
+            other => {
+                return Err(D::Error::custom(format!(
+                    "a hook's cpu is 6502 or z80, not {other:?}"
+                )));
+            }
+        }
+        .map_err(D::Error::custom)
+    }
 }
 
 /// One line of a session's `inputs.ndjson`: what a page or an agent did,
@@ -245,8 +306,8 @@ pub struct Stop {
 pub fn schema() -> serde_json::Value {
     serde_json::json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "Game Printer watch events, format 1",
-        "description": "One object a line of a watch session's events.ndjson (event) and inputs.ndjson (input). docs/watch.md",
+        "title": "Game Printer watch events, format 2",
+        "description": "One object a line of a watch session's events.ndjson (event, format 2) and inputs.ndjson (input, format 1). docs/formats/watch-events.md",
         "$defs": {
             "event": schemars::schema_for!(WatchEvent),
             "input": schemars::schema_for!(WatchInput),
@@ -281,10 +342,61 @@ mod tests {
         let line = serde_json::to_string(&e).unwrap();
         assert_eq!(
             line,
-            r#"{"v":1,"seq":7,"run":"ab","frame":489,"level":2,"kind":"stop.reached","data":{"stop":"followed, not read@C27D","routine":"sub_01_8000"}}"#
+            r#"{"v":2,"seq":7,"run":"ab","frame":489,"level":2,"kind":"stop.reached","data":{"stop":"followed, not read@C27D","routine":"sub_01_8000"}}"#
         );
         assert_eq!(serde_json::from_str::<WatchEvent>(&line).unwrap(), e);
         let start = r#"{"v":1,"seq":1,"kind":"explore.progress","data":{"ran":1,"budget":2,"kept":0,"best":null}}"#;
         assert!(serde_json::from_str::<WatchEvent>(start).is_ok());
+    }
+
+    #[test]
+    fn a_hook_carries_its_cpus_registers() {
+        let z80 = WatchEvent {
+            v: SCHEMA,
+            seq: 3,
+            run: Some("ab".into()),
+            frame: Some(12),
+            level: Some(2),
+            body: WatchBody::Hook {
+                at: "0158".into(),
+                regs: HookRegs::Z80(RegsZ80 {
+                    af: 0x1234,
+                    bc: 1,
+                    de: 2,
+                    hl: 0xe000,
+                    ix: 3,
+                    iy: 4,
+                    sp: 0xe7f0,
+                }),
+            },
+        };
+        let line = serde_json::to_string(&z80).unwrap();
+        assert_eq!(
+            line,
+            r#"{"v":2,"seq":3,"run":"ab","frame":12,"level":2,"kind":"hook","data":{"at":"0158","cpu":"z80","af":4660,"bc":1,"de":2,"hl":57344,"ix":3,"iy":4,"sp":59376}}"#
+        );
+        assert_eq!(serde_json::from_str::<WatchEvent>(&line).unwrap(), z80);
+
+        let nes = WatchBody::Hook {
+            at: "01:8000".into(),
+            regs: HookRegs::Mos6502(Regs6502 {
+                a: 1,
+                x: 2,
+                y: 3,
+                s: 0xfd,
+                p: 0x24,
+            }),
+        };
+        let v2 = r#"{"v":2,"seq":4,"kind":"hook","data":{"at":"01:8000","cpu":"6502","a":1,"x":2,"y":3,"s":253,"p":36}}"#;
+        let e: WatchEvent = serde_json::from_str(v2).unwrap();
+        assert_eq!(e.body, nes);
+        assert_eq!(serde_json::to_string(&e).unwrap(), v2);
+        // A format 1 line, with no cpu, reads as the 6502's.
+        let v1 = r#"{"v":1,"seq":4,"kind":"hook","data":{"at":"01:8000","a":1,"x":2,"y":3,"s":253,"p":36}}"#;
+        assert_eq!(serde_json::from_str::<WatchEvent>(v1).unwrap().body, nes);
+        let bad = r#"{"v":2,"seq":4,"kind":"hook","data":{"at":"0158","cpu":"m68k","a":1}}"#;
+        assert!(serde_json::from_str::<WatchEvent>(bad).is_err());
+        let short = r#"{"v":2,"seq":4,"kind":"hook","data":{"at":"0158","cpu":"z80","af":1}}"#;
+        assert!(serde_json::from_str::<WatchEvent>(short).is_err());
     }
 }

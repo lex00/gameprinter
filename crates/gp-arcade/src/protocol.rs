@@ -26,7 +26,12 @@
 //! for each AY register the sound CPU wrote in the frame, in order, with
 //! `chip`, `reg` and `value`: the original's side of a sound measure, as
 //! gp-nes's `apu-write` events are for the NES. A model has no AY hook
-//! yet, so nothing compares them.
+//! yet, so nothing compares them. With `set("latch_events", true)` it gives
+//! a `latch-write` event for each byte the main CPU wrote to the sound
+//! board's latches in the frame, in order, with `latch` (0 to 3) and
+//! `value`: the sound requests, which a model's hooks make as
+//! `sound-request` events (gp_sim::Ext::sound_requests) and the lockstep
+//! holds to these.
 
 use gp_runtime::select::{Condition, Index, Selector, hex};
 use gp_runtime::{
@@ -39,12 +44,17 @@ use crate::{Controls, Romset, Tapper};
 /// The kind of the events that carry the AY writes.
 pub const AY_KIND: &str = "ay-write";
 
+/// The kind of the events that carry the main CPU's sound latch writes.
+pub const LATCH_KIND: &str = "latch-write";
+
 /// Tapper behind the runtime protocol.
 #[derive(Clone)]
 pub struct ArcadeRuntime {
     tapper: Tapper,
     /// Whether a step gives `ay-write` events.
     ay_events: bool,
+    /// Whether a step gives `latch-write` events.
+    latch_events: bool,
 }
 
 impl ArcadeRuntime {
@@ -65,6 +75,7 @@ impl ArcadeRuntime {
         Self {
             tapper,
             ay_events: false,
+            latch_events: false,
         }
     }
 
@@ -126,6 +137,23 @@ impl ArcadeRuntime {
                         kind: AY_KIND.into(),
                         entity: None,
                         data: vec![int("chip", chip), int("reg", reg), int("value", value)],
+                    }),
+            );
+        }
+        if self.latch_events {
+            let int = |path: &str, v: u8| Entry {
+                path: path.into(),
+                value: Value::Int(i64::from(v)),
+            };
+            events.extend(
+                self.tapper
+                    .take_latch_log()
+                    .into_iter()
+                    .map(|(_, latch, value)| Event {
+                        frame,
+                        kind: LATCH_KIND.into(),
+                        entity: None,
+                        data: vec![int("latch", latch), int("value", value)],
                     }),
             );
         }
@@ -223,21 +251,32 @@ pub fn read_record(record: &[u8], sel: &Selector) -> Option<Result<Vec<Entry>, S
             if r.start < 0xe000 {
                 return None;
             }
-            // Board::main_read for 0xE000 up.
-            let byte = |a: usize| match a {
-                0xe000..=0xe7ff => record[a & 0x7ff],
-                0xe800..=0xebff => record[2048 + (a & 0x1ff)],
-                0xf000..=0xf7ff => record[2560 + (a & 0x7ff)],
-                _ => 0xff,
-            };
             Some(Ok(r
                 .map(|a| Entry {
                     path: format!("{name}[{}]", hex(a as i64)),
-                    value: Value::Int(byte(a).into()),
+                    value: Value::Int(record_main_read(record, a).into()),
                 })
                 .collect()))
         }
         _ => None,
+    }
+}
+
+/// `ram[addr]` read from a RAM record as [`read_record`] reads it, without
+/// a selector: None where `read_record` gives None (a record of the wrong
+/// size, or an address below 0xE000, which the record doesn't hold).
+pub fn record_byte(record: &[u8], addr: u16) -> Option<u8> {
+    (record.len() == crate::mcr::RAM_RECORD && addr >= 0xe000)
+        .then(|| record_main_read(record, usize::from(addr)))
+}
+
+/// Board::main_read for 0xE000 up, from a RAM record.
+fn record_main_read(record: &[u8], a: usize) -> u8 {
+    match a {
+        0xe000..=0xe7ff => record[a & 0x7ff],
+        0xe800..=0xebff => record[2048 + (a & 0x1ff)],
+        0xf000..=0xf7ff => record[2560 + (a & 0x7ff)],
+        _ => 0xff,
     }
 }
 
@@ -342,6 +381,14 @@ impl Runtime for ArcadeRuntime {
     }
 
     fn query(&self, selector: &str) -> Result<Vec<Entry>, String> {
+        // One RAM byte, the read a comparison makes most, answered without
+        // a parsed selector: the same entry `read_board` gives.
+        if let Some(addr) = gp_runtime::select::canonical_ram(selector) {
+            return Ok(vec![Entry {
+                path: selector.to_owned(),
+                value: Value::Int(self.tapper.peek(addr).into()),
+            }]);
+        }
         self.read(&Selector::parse(selector)?)
     }
 
@@ -382,8 +429,13 @@ impl Runtime for ArcadeRuntime {
                 self.ay_events = on;
                 Ok(())
             }
+            ("latch_events", Value::Flag(on)) => {
+                self.latch_events = on;
+                self.tapper.set_latch_log(on);
+                Ok(())
+            }
             _ => Err(format!(
-                "{p}: gp-arcade sets only ay_events (on or off); the original runs as it is"
+                "{p}: gp-arcade sets only ay_events and latch_events (on or off); the original runs as it is"
             )),
         }
     }
@@ -481,6 +533,44 @@ mod tests {
         assert_eq!(ay[0].data[0].path, "chip");
     }
 
+    /// `latch_events` gives the main CPU's latch writes as events, as the
+    /// latch log has them (a made-up set that asks for sounds).
+    #[test]
+    fn latch_events_carry_the_main_cpus_latch_writes() {
+        let rom = crate::testrom::sounding();
+        let mut logged = Tapper::power_on(&rom);
+        logged.set_latch_log(true);
+        let mut rt = ArcadeRuntime::load(&rom);
+        rt.set("latch_events", Value::Flag(true)).unwrap();
+        let mut seen = 0;
+        for _ in 0..30 {
+            logged.step(Controls::default());
+            let want: Vec<(i64, i64)> = logged
+                .take_latch_log()
+                .into_iter()
+                .map(|(_, l, v)| (l.into(), v.into()))
+                .collect();
+            let ev = rt.step(&[InputFrame::default()]).unwrap();
+            let got: Vec<(i64, i64)> = ev
+                .iter()
+                .filter(|e| e.kind == LATCH_KIND)
+                .map(|e| {
+                    assert_eq!(e.data[0].path, "latch");
+                    (
+                        e.data[0].value.as_int().unwrap(),
+                        e.data[1].value.as_int().unwrap(),
+                    )
+                })
+                .collect();
+            assert_eq!(got, want);
+            seen += got.len();
+        }
+        assert!(seen > 0);
+        rt.set("latch_events", Value::Flag(false)).unwrap();
+        let ev = rt.step(&vec![InputFrame::default(); 10]).unwrap();
+        assert!(ev.iter().all(|e| e.kind != LATCH_KIND));
+    }
+
     /// A RAM record answers what the machine answers, for the parts it
     /// holds, and nothing else.
     #[test]
@@ -510,5 +600,26 @@ mod tests {
                 "{sel}"
             );
         }
+    }
+
+    /// A RAM byte asked as `ram_text` writes it answers as the parsed
+    /// selector does, at every address; and a RAM record's byte reads as
+    /// `read_record` reads it.
+    #[test]
+    fn a_ram_byte_answers_as_the_parsed_selector_does() {
+        let mut rt = ArcadeRuntime::load(&looping());
+        rt.step(&vec![InputFrame::default(); 3]).unwrap();
+        for addr in 0..=u16::MAX {
+            let text = gp_runtime::select::ram_text(addr);
+            assert_eq!(rt.query(&text), rt.read(&Selector::ram(addr)), "{}", &*text);
+        }
+        // A made-up record: each byte its offset's low bits.
+        let record: Vec<u8> = (0..crate::mcr::RAM_RECORD).map(|i| (i * 7) as u8).collect();
+        for addr in 0..=u16::MAX {
+            let by_sel = read_record(&record, &Selector::ram(addr))
+                .map(|r| r.map(|e| e[0].value.as_int().unwrap() as u8));
+            assert_eq!(record_byte(&record, addr).map(Ok), by_sel, "{addr:#06x}");
+        }
+        assert_eq!(record_byte(&record[1..], 0xe000), None);
     }
 }

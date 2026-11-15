@@ -96,6 +96,11 @@ pub fn render(
     // Which channels go to which bank target: the target most of the
     // channel's notes' instruments map to.
     let mut bank_of: BTreeMap<Channel, BankTarget> = BTreeMap::new();
+    if set.has_ay() {
+        return Err(format!(
+            "`{song}`'s set has AY-8910 channels, which a sound bank doesn't play"
+        ));
+    }
     for t in &s.tracks {
         let mut votes: BTreeMap<String, (usize, BankTarget)> = BTreeMap::new();
         let placed = t.placed(s.tempo);
@@ -437,6 +442,7 @@ mod tests {
                 pitch,
                 fine: 0,
                 instrument: i,
+                period: None,
             },
         };
         set.songs.push(Song {

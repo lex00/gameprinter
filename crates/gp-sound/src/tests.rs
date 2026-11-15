@@ -261,6 +261,125 @@ fn names_bind_to_events_and_states() {
     assert_eq!(capture::words("Sfx_EnemyStomp"), vec!["enemy", "stomp"]);
 }
 
+/// A made-up 0.1 file, as an older gp wrote one: an NES pulse note.
+const SONGS_01: &str = r#"{
+  "format": "gp-songs", "version": "0.1.0", "region": "ntsc",
+  "instruments": [{"name": "lead", "voice": "pulse", "volume": [15, 12], "duty": [2]}],
+  "songs": [{"name": "tune", "kind": "music", "origin": "edited", "confidence": 1,
+    "frames": 16, "tempo": {"frames_per_row": 4, "rows_per_pattern": 4},
+    "tracks": [{"channel": "pulse1", "patterns": [{"notes": [{"at": 0, "len": 8, "pitch": 69, "instrument": 0}]}], "order": [0]}]}]
+}"#;
+
+/// A made-up 0.2 set for an arcade board: a tone, its chip's noise and
+/// envelope.
+fn ay_set() -> crate::song::SongSet {
+    let text = r#"{
+  "format": "gp-songs", "version": "0.2.0", "region": "ntsc", "clock": 2000000,
+  "instruments": [
+    {"name": "buzz", "voice": "tone", "volume": [16], "duty": [3]},
+    {"name": "hiss", "voice": "ay-noise", "volume": [15]},
+    {"name": "saw", "voice": "envelope", "volume": [15]}],
+  "songs": [{"name": "tune", "kind": "music", "origin": "edited", "confidence": 1,
+    "frames": 16, "tempo": {"frames_per_row": 4, "rows_per_pattern": 4},
+    "tracks": [
+      {"channel": "ay1.b", "patterns": [{"notes": [{"at": 0, "len": 8, "pitch": 69, "fine": 2, "instrument": 0}]}], "order": [0]},
+      {"channel": "ay1.noise", "patterns": [{"notes": [{"at": 0, "len": 8, "pitch": 31, "instrument": 1}]}], "order": [0]},
+      {"channel": "ay1.envelope", "patterns": [{"notes": [{"at": 0, "len": 8, "pitch": 8, "period": 40000, "instrument": 2}]}], "order": [0]}]}]
+}"#;
+    crate::song::SongSet::parse(text).unwrap()
+}
+
+#[test]
+fn songs_0_1_still_read_and_write_as_0_1() {
+    use crate::song::SongSet;
+    let set = SongSet::parse(SONGS_01).unwrap();
+    assert_eq!(set.version, "0.1.0");
+    assert!(!set.has_ay());
+    let back = SongSet::parse(&set.to_text()).unwrap();
+    assert_eq!(back, set);
+    assert!(set.to_text().contains("\"version\": \"0.1.0\""));
+    // A new set with nothing of 0.2 says 0.1.0, so older readers take it.
+    assert_eq!(SongSet::new(Region::Ntsc).version, "0.1.0");
+    // Other versions: a 0.2 patch reads, 0.3 and 1.0 don't.
+    for (v, ok) in [
+        ("0.1.7", true),
+        ("0.2.4", true),
+        ("0.3.0", false),
+        ("1.0.0", false),
+        ("0.0.1", false),
+    ] {
+        let t = SONGS_01.replace("\"0.1.0\"", &format!("\"{v}\""));
+        assert_eq!(SongSet::parse(&t).is_ok(), ok, "{v}");
+    }
+}
+
+#[test]
+fn songs_0_2_hold_ay_channels() {
+    use crate::apu::{AyPart, Channel};
+    use crate::song::{SongSet, Voice, ay_pitch};
+    let set = ay_set();
+    assert!(set.has_ay());
+    let song = set.song("tune").unwrap();
+    assert_eq!(
+        song.channels(),
+        vec![Channel::Ay1B, Channel::Ay1Noise, Channel::Ay1Envelope]
+    );
+    assert_eq!(Channel::Ay1B.ay(), Some((1, AyPart::Tone(1))));
+    assert_eq!(Channel::Ay0Envelope.ay(), Some((0, AyPart::Envelope)));
+    assert_eq!(Channel::Pulse2.ay(), None);
+    assert_eq!(Voice::of(Channel::Ay0Noise), Voice::AyNoise);
+    assert_eq!(Channel::parse_any("ay1.noise"), Some(Channel::Ay1Noise));
+    assert_eq!(Channel::parse("ay1.noise"), None);
+    // A440 on a 2 MHz AY: 2e6 / 16 / 440 = 284.09, so 284, then the fine
+    // offset.
+    let tone = &song.track(Channel::Ay1B).unwrap().patterns[0].notes[0];
+    assert_eq!(set.period(Channel::Ay1B, tone), 286);
+    assert!((ay_pitch(284, None).unwrap() - 69.0).abs() < 0.01);
+    let noise = &song.track(Channel::Ay1Noise).unwrap().patterns[0].notes[0];
+    assert_eq!(set.period(Channel::Ay1Noise, noise), 31);
+    let env = &song.track(Channel::Ay1Envelope).unwrap().patterns[0].notes[0];
+    assert_eq!(set.period(Channel::Ay1Envelope, env), 40000);
+    // It writes and reads back the same, as 0.2.0.
+    let text = set.to_text();
+    assert!(text.contains("\"ay1.envelope\"") && text.contains("\"ay-noise\""));
+    assert_eq!(SongSet::parse(&text).unwrap(), set);
+    // A set read as 0.1 that gained an AY track writes 0.2.0.
+    let mut old = SongSet::parse(SONGS_01).unwrap();
+    old.instruments.extend(set.instruments.clone());
+    let mut s = set.songs[0].clone();
+    s.name = "arcade".into();
+    for t in &mut s.tracks {
+        for p in &mut t.patterns {
+            for n in &mut p.notes {
+                n.instrument += 1;
+            }
+        }
+    }
+    old.songs.push(s);
+    let text = old.to_text();
+    assert!(text.contains("\"version\": \"0.2.0\""));
+    assert!(SongSet::parse(&text).is_ok());
+    // A file that says 0.1 can't hold them.
+    let t = set.to_text().replace("\"0.2.0\"", "\"0.1.0\"");
+    assert!(SongSet::parse(&t).unwrap_err().contains("came in 0.2.0"));
+    // An APU instrument on an AY channel is refused.
+    let t = set
+        .to_text()
+        .replace("\"voice\": \"tone\"", "\"voice\": \"pulse\"");
+    assert!(SongSet::parse(&t).is_err());
+}
+
+#[test]
+fn the_apu_player_leaves_ay_tracks_alone() {
+    let mut p = crate::player::Player::new(ay_set());
+    p.play_music(Some("tune"));
+    for _ in 0..20 {
+        let w = p.frame();
+        // Only the silencing writes of the APU's channels, never a note.
+        assert!(w.iter().all(|&(_, r, v)| r != 0x02 || v == 0), "{w:?}");
+    }
+}
+
 /// Prints a captured song's frames beside its log's (GP_SOUND_DEBUG=dir:song).
 #[test]
 #[ignore]

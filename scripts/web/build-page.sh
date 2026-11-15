@@ -109,6 +109,13 @@ else
   "$repo/scripts/web/build-lift.sh" "$out/game" "$rom_game"
   lap "build-lift.sh"
 fi
+# An arcade game's board sound: gp_arcade_play.wasm (crates/gp-arcade-play,
+# the board alone, no game data) beside the player, as gp_board.wasm is:
+# every page can play an arcade game by its name, and the game frame fetches
+# it only for one, powers it on from the visitor's romset and feeds it the
+# requests the game's module makes (docs/web.md, "Arcade games").
+"$repo/scripts/web/build-play.sh" --arcade "$out/game"
+lap "gp_arcade_play.wasm"
 # The sets an arcade game's lift takes, asked of the lift itself (it is the
 # one that refuses a set it doesn't draw right yet, gp_web_lift::arcade):
 # its refusal of a file that isn't a zip lists them in `expected`. The page's
@@ -145,9 +152,9 @@ title="${GP_PAGE_TITLE:-$(python3 -I -c 'import sys, tomllib; print(tomllib.load
 # package's play/, which a page reads to play the game by its name. The
 # how-to-play lines and the About line are the package's [page] `howto` and
 # `trademark` when it has them, else the page's own (index.html).
-python3 -I - "$out" "$title" "$out/game/lift/game.json" "$sources" "$repo/scripts/web/sources.toml" "${GP_PAGE_SOURCE:-registry}" "$game/package.toml" "${GP_PAGE_CONTENT:-}" "$repo/scripts/web/public/index.html" "$player" "$kind" "$platform" "$taken" <<'EOF'
-import html, json, os, re, sys, tomllib
-out, title, game_file, registry, sources_file, source_name, package, content, index, player, kind, platform, taken_file = sys.argv[1:]
+python3 -I - "$out" "$title" "$out/game/lift/game.json" "$sources" "$repo/scripts/web/sources.toml" "${GP_PAGE_SOURCE:-registry}" "$game/package.toml" "${GP_PAGE_CONTENT:-}" "$repo/scripts/web/public/index.html" "$player" "$kind" "$platform" "$taken" "$gp" <<'EOF'
+import html, json, os, re, subprocess, sys, tomllib
+out, title, game_file, registry, sources_file, source_name, package, content, index, player, kind, platform, taken_file, gp = sys.argv[1:]
 taken = json.load(open(taken_file))
 pkg = tomllib.load(open(package, "rb"))
 said = pkg.get("page", {})
@@ -186,7 +193,8 @@ if platform == "arcade":
         "Settings: press Esc or the Settings button (top right) to switch mode.",
         "Load your own romset zip to play.",
     ]
-    own_mark = f"This page is not affiliated with or endorsed by the makers of {title}, which is named here only to say which file is accepted."
+    # The owner's notice for an arcade game (#3): one short line.
+    own_mark = f"You need your own {title} romset to play; {title}'s names and trademarks belong to their owners."
 else:
     own_howto = [plain(p) for p in re.findall(r"<p>(.*?)</p>", re.search(r'<section id="howto"[^>]*>(.*?)</section>', shell, re.S).group(1), re.S)]
     own_mark = plain(re.search(r'<p id="about-mark">(.*?)</p>', shell, re.S).group(1))
@@ -214,6 +222,13 @@ if platform == "arcade":
     file = f"a MAME romset zip of {sentence(took, 'or')}, known by its chips whatever the files in it are named"
     if apart:
         file += f" ({sentence(apart, 'and')} {'is' if len(apart) == 1 else 'are'} refused: not drawn right yet)"
+    # The MAME sets the page takes, each with the files its zip must hold
+    # (`gp roms sets`, from MAME's list: names, sizes and SHA-1s, nothing of
+    # a ROM), so the page can say which set to bring.
+    said_sets = subprocess.run([gp, "--json", "roms", "sets", *took], capture_output=True, text=True) if took else None
+    if said_sets and said_sets.returncode != 0:
+        sys.exit(f"build-page.sh: {gp} roms sets {' '.join(took)} failed (a gp from before `gp roms sets`?): {said_sets.stderr.strip()}")
+    rom_sets = [{"name": x["name"], "title": x["title"], "sha256": x["sha256"], "files": [{"name": f["name"], "size": f["size"], "sha1": f["sha1"]} for f in x["files"]]} for x in (json.loads(said_sets.stdout)["sets"] if said_sets else [])]
 else:
     file = "an .nes file of any dump: " + ", ".join(names) + ", or another revision"
 page = {
@@ -233,6 +248,8 @@ page = {
         "known_sha256": known,
     },
 }
+if platform == "arcade":
+    page["rom"]["sets"] = rom_sets
 # An arcade page's own game shows its own help and About line, not the
 # page's NES ones (page.js reads them from here for the page's own game).
 if platform == "arcade":
@@ -248,12 +265,14 @@ facts = {
     "howto": howto,
     "trademark": trademark,
 }
+if "sets" in r:
+    facts["rom"]["sets"] = r["sets"]
 os.makedirs(f"{out}.facts", exist_ok=True)
 open(f"{out}.facts/page.json", "w").write(json.dumps(facts, indent=1) + "\n")
 EOF
 sed "s|<title>Game Printer</title>|<title>$title</title>|; s|<h1 id=\"title\">Game Printer</h1>|<h1 id=\"title\">$title</h1>|" \
   "$repo/scripts/web/public/index.html" > "$out/index.html"
-cp "$repo/scripts/web/public/page.js" "$repo/scripts/web/public/share.js" "$repo/scripts/web/public/boot.js" "$repo/scripts/web/public/page.css" "$repo/scripts/web/public/_headers" "$out/"
+cp "$repo/scripts/web/public/page.js" "$repo/scripts/web/public/share.js" "$repo/scripts/web/public/explain.js" "$repo/scripts/web/public/what-is-this.js" "$repo/scripts/web/public/what-is-this.css" "$repo/scripts/web/public/boot.js" "$repo/scripts/web/public/page.css" "$repo/scripts/web/public/_headers" "$out/"
 printf '/p /index.html 200\n' > "$out/_redirects"
 cp "$repo/scripts/web/public/install.js" "$out/game/"
 (cd "$repo" && cargo rustc -q --locked -p gp-web-registry --lib --release --target wasm32-unknown-unknown \

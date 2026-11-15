@@ -16,6 +16,7 @@
 
 import { pictureCard } from "./picture-card.js";
 import { soundCard } from "./sound-card.js";
+import { spriteCard } from "./sprite-card.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -158,10 +159,11 @@ export function startNext(page) {
   // A picture the agent proposes for the person's theme is a card here
   // too (picture-card.js): the oldest open one, with how many wait, and
   // answers the agent hasn't read yet. A sound change it proposes for the
-  // person's copy is the same (sound-card.js).
+  // person's copy is the same (sound-card.js), and so is a sprite edit
+  // (sprite-card.js).
   function renderAsks() {
-    const list = (answer?.waits_for_yes ?? []).filter((y) => y.id && (!["picture", "sound"].includes(y.what) || y.state !== "open" || ((y.picture ?? y.sound)?.place ?? 1) === 1));
-    const key = JSON.stringify(list.map((y) => [y.id, y.state, (y.picture ?? y.sound)?.of]));
+    const list = (answer?.waits_for_yes ?? []).filter((y) => y.id && (!["picture", "sound", "sprite"].includes(y.what) || y.state !== "open" || ((y.picture ?? y.sound ?? y.sprite)?.place ?? 1) === 1));
+    const key = JSON.stringify(list.map((y) => [y.id, y.state, (y.picture ?? y.sound ?? y.sprite)?.of]));
     if (key === asksDrawn) return;
     asksDrawn = key;
     let box = $("asks");
@@ -180,6 +182,10 @@ export function startNext(page) {
       }
       if (y.what === "sound" && y.sound) {
         box.appendChild(soundCard(y.sound, () => { asksDrawn = ""; void tick(); }));
+        continue;
+      }
+      if (y.what === "sprite" && y.sprite) {
+        box.appendChild(spriteCard(y.sprite, () => { asksDrawn = ""; void tick(); }));
         continue;
       }
       const card = document.createElement("div");
@@ -371,6 +377,7 @@ export function startNext(page) {
 
   window.addEventListener("gp-pictures", () => { asksDrawn = ""; void tick(); });
   window.addEventListener("gp-sounds", () => { asksDrawn = ""; void tick(); });
+  window.addEventListener("gp-sprites", () => { asksDrawn = ""; void tick(); });
   void tick();
   setInterval(() => void tick(), POLL_MS);
   setInterval(render, 1000);

@@ -136,7 +136,7 @@ fn a_theme_walks_its_six_steps_with_whose_turn_each_is() {
     );
     assert_eq!(
         a.facts["share"]["link"],
-        "https://nes-donkey-kong.intentius.workers.dev/p?g=lex00/moss-hop&c=local/neon"
+        "https://gameprinter.intentius.workers.dev/p?g=lex00/moss-hop&c=local/neon"
     );
     assert!(
         a.facts["share"]["request"]["where"]
@@ -410,4 +410,62 @@ fn a_command_on_a_folder_elsewhere_leaves_no_record() {
     put(&elsewhere.join("theme/look.txt"), "gp-look 1\n");
     note_check(&home, &elsewhere, &json!({"ok": true, "problems": 0}));
     assert!(!home.join("work/journeys").exists());
+}
+
+#[test]
+fn a_game_from_nothing_is_a_new_game_at_see_it_play() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().join("home");
+    let paths = gp_evidence::Paths {
+        home: home.clone(),
+        store: home.join("store"),
+        roms: d.path().join("roms"),
+    };
+    let made = crate::game_empty::run(
+        &crate::game_empty::Empty {
+            name: "blank_slate",
+            title: None,
+        },
+        &paths,
+    )
+    .unwrap();
+    assert_eq!(made.json["from"], json!("nothing"));
+    // Written over nothing.
+    let again = crate::game_empty::run(
+        &crate::game_empty::Empty {
+            name: "blank_slate",
+            title: None,
+        },
+        &paths,
+    );
+    assert!(
+        again
+            .err()
+            .is_some_and(|e| e.to_string().contains("writes over nothing"))
+    );
+    let all = list(&home, None);
+    let c = find(&home, None, "new/blank_slate").unwrap();
+    assert_eq!(c.from.as_ref().map(|f| f.kind), Some("empty"));
+    // Its pictures and levels are built, so the next step is the tools'
+    // BUILD IT TO PLAY, and it reads as the person's own game.
+    let a = answer(&gather(&paths, &all, &c), &Around::default());
+    assert_eq!((a.stage.id.as_str(), a.next.who), ("N3", Who::Tools));
+    assert_eq!(a.next.act, Some(Act::Start { action: "build" }));
+    assert!(
+        a.stands
+            .contains("blank_slate is your new game, started from nothing"),
+        "{}",
+        a.stands
+    );
+    assert_eq!(a.steps[0].name, "Start from nothing or a template");
+    // At its look, SKIP keeps its plain shapes.
+    let mut f = new_game();
+    f.from = c.from.clone();
+    f.done = vec!["stage".into()];
+    let a = of(Facts::New(f));
+    assert!(
+        a.next.says.contains("keep its plain shapes"),
+        "{}",
+        a.next.says
+    );
 }

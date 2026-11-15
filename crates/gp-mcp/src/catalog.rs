@@ -6,11 +6,16 @@
 //! the asset map whenever it's asked for, so it can't go stale and holds
 //! no game data. The state (status and provenance) belongs to one set of
 //! assets and is kept beside them in `slots.toml`.
+//!
+//! A slot is filled from an NES asset map ([`AssetMap`]) or an arcade
+//! board's ([`ArcadeMap`]); [`MapRef`] is either, and [`slots_of`] reads
+//! the slots of both the same way.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
+use gp_assets::arcade::{ArcadeAsset, ArcadeMap};
 use gp_assets::{Asset, AssetMap};
 use gp_contract::Contract;
 use gp_model::Model;
@@ -206,6 +211,232 @@ pub fn slot_assets<'a>(
     Ok(out)
 }
 
+/// A lifted folder's asset map: an NES one or an arcade board's.
+#[derive(Debug, Clone, Copy)]
+pub enum MapRef<'a> {
+    Nes(&'a AssetMap),
+    Arcade(&'a ArcadeMap),
+}
+
+/// A map read from its text, either kind.
+#[derive(Debug, Clone)]
+pub enum Map {
+    Nes(AssetMap),
+    Arcade(ArcadeMap),
+}
+
+impl Map {
+    pub fn parse(text: &str) -> Result<Self, String> {
+        if gp_assets::arcade::is_arcade(text) {
+            ArcadeMap::parse(text)
+                .map(Map::Arcade)
+                .map_err(|e| format!("{}: {e}", gp_assets::MAP_FILE))
+        } else {
+            AssetMap::parse(text)
+                .map(Map::Nes)
+                .map_err(|e| format!("{}: {e}", gp_assets::MAP_FILE))
+        }
+    }
+
+    /// The map in a lifted folder.
+    pub fn read(dir: &Path) -> Result<Self, String> {
+        let path = dir.join(gp_assets::MAP_FILE);
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("reading {}: {e}", path.display()))?;
+        Self::parse(&text)
+    }
+
+    pub fn as_ref(&self) -> MapRef<'_> {
+        match self {
+            Map::Nes(m) => MapRef::Nes(m),
+            Map::Arcade(m) => MapRef::Arcade(m),
+        }
+    }
+}
+
+impl MapRef<'_> {
+    pub fn source(&self) -> &str {
+        match self {
+            MapRef::Nes(m) => &m.source,
+            MapRef::Arcade(m) => &m.source,
+        }
+    }
+}
+
+/// One slot's asset, in either kind of map.
+#[derive(Debug, Clone, Copy)]
+pub enum SlotAsset<'a> {
+    Nes(&'a Asset),
+    Arcade(&'a ArcadeAsset),
+}
+
+impl SlotAsset<'_> {
+    pub fn name(&self) -> &str {
+        match self {
+            SlotAsset::Nes(a) => a.name(),
+            SlotAsset::Arcade(a) => &a.name,
+        }
+    }
+
+    pub fn format(&self) -> &'static str {
+        match self {
+            SlotAsset::Nes(a) => a.format(),
+            SlotAsset::Arcade(a) => a.format.name(),
+        }
+    }
+
+    /// The files it lifts to, in the lifted folder.
+    pub fn files(&self) -> Vec<String> {
+        match self {
+            SlotAsset::Nes(a) => a.files(),
+            SlotAsset::Arcade(a) => vec![a.file()],
+        }
+    }
+
+    /// The digest of its files in a directory, as [`asset_digest`].
+    pub fn digest(&self, dir: &Path) -> Result<String, String> {
+        let mut files = BTreeMap::new();
+        for f in self.files() {
+            let bytes = std::fs::read(dir.join(&f)).map_err(|e| format!("reading {f}: {e}"))?;
+            files.insert(f, bytes);
+        }
+        Ok(files_digest(&files))
+    }
+}
+
+/// Which asset of an arcade map each slot is filled from, checked as
+/// [`slot_assets`] checks an NES map's.
+pub fn arcade_slot_assets<'a>(
+    model: &'a Model,
+    map: &'a ArcadeMap,
+) -> Result<BTreeMap<&'a str, &'a ArcadeAsset>, String> {
+    let mut out = BTreeMap::new();
+    for (name, slot) in &model.assets {
+        let Some(from) = &slot.from else { continue };
+        if from.source != map.source {
+            return Err(format!(
+                "asset slot `{name}` is filled from `{}`, but the assets are `{}`'s",
+                from.source, map.source
+            ));
+        }
+        let asset = map
+            .assets
+            .iter()
+            .find(|a| a.name == from.asset)
+            .ok_or(format!(
+                "asset slot `{name}` names `{}`, which the arcade map doesn't have",
+                from.asset
+            ))?;
+        out.insert(name.as_str(), asset);
+    }
+    Ok(out)
+}
+
+/// Which asset each slot is filled from, in either kind of map.
+pub fn slots_of<'a>(
+    model: &'a Model,
+    map: MapRef<'a>,
+) -> Result<BTreeMap<&'a str, SlotAsset<'a>>, String> {
+    Ok(match map {
+        MapRef::Nes(m) => slot_assets(model, m)?
+            .into_iter()
+            .map(|(k, a)| (k, SlotAsset::Nes(a)))
+            .collect(),
+        MapRef::Arcade(m) => arcade_slot_assets(model, m)?
+            .into_iter()
+            .map(|(k, a)| (k, SlotAsset::Arcade(a)))
+            .collect(),
+    })
+}
+
+/// One slot's asset in a map, unchecked: None when the slot has no
+/// `from`, names another source, or an asset the map doesn't have.
+fn slot_asset<'a>(model: &Model, map: MapRef<'a>, slot: &str) -> Option<SlotAsset<'a>> {
+    let from = model.assets.get(slot)?.from.as_ref()?;
+    if from.source != map.source() {
+        return None;
+    }
+    match map {
+        MapRef::Nes(m) => m.asset(&from.asset).map(SlotAsset::Nes),
+        MapRef::Arcade(m) => m
+            .assets
+            .iter()
+            .find(|a| a.name == from.asset)
+            .map(SlotAsset::Arcade),
+    }
+}
+
+/// A slot of an arcade lift as lifted: original, from the source, with
+/// the set `source.toml` names when it is there.
+pub fn arcade_original(
+    map: &ArcadeMap,
+    dir: &Path,
+    asset: &ArcadeAsset,
+    license: &str,
+) -> Result<SlotState, String> {
+    let set = std::fs::read_to_string(dir.join(gp_assets::arcade::SOURCE_FILE))
+        .ok()
+        .and_then(|t| t.parse::<toml::Table>().ok())
+        .and_then(|t| t.get("set")?.as_str().map(str::to_owned));
+    Ok(SlotState {
+        status: Status::Original,
+        origin: Origin::Source,
+        license: license.into(),
+        sha256: SlotAsset::Arcade(asset).digest(dir)?,
+        generator: None,
+        author: None,
+        note: Some(match set {
+            Some(s) => format!("lifted from {} (set {s})", map.source),
+            None => format!("lifted from {}", map.source),
+        }),
+    })
+}
+
+/// What a replacement of an arcade asset must keep.
+pub fn arcade_shape(asset: &ArcadeAsset) -> Value {
+    use gp_assets::arcade::Format;
+    match asset.format {
+        Format::McrTiles | Format::McrFont | Format::McrSprites => {
+            let side = if asset.format == Format::McrSprites {
+                32
+            } else {
+                8
+            };
+            json!({
+                "picture_size": [side, side],
+                "pictures": asset.count,
+                "per_row": asset.per_row,
+                "image_size": asset.image_size(),
+                "colors": 16,
+                "pixels": "indexed PNG, value 0 to 15; a sprite draws nothing where the value's low three bits are 0",
+            })
+        }
+        Format::McrPalette => json!({
+            "colors": 64,
+            "color_space": "9 bits: red 6 to 8, blue 3 to 5, green 0 to 2",
+        }),
+        Format::McrScreen => json!({ "size": [32, 30], "cell": "a 16-bit word" }),
+        Format::ByteRows => json!({ "rows": asset.count, "width": asset.width }),
+        Format::SpriteSet => json!({}),
+    }
+}
+
+/// The checks a replacement of an arcade asset must pass.
+pub fn arcade_accept(asset: &ArcadeAsset, reads_simulation: bool) -> Vec<&'static str> {
+    let mut out = vec![
+        "format: the file parses and packs back into the chips' layout (gp_assets::arcade::unpack)",
+    ];
+    if asset.format.picture() {
+        out.push("shape: the image size and picture count are unchanged and every pixel is a value 0 to 15");
+    }
+    out.push(if reads_simulation {
+        "simulation: the simulation reads this slot, so a replacement is a model change held to the contract"
+    } else {
+        "simulation: the board draws it; the simulation doesn't read it"
+    });
+    out
+}
+
 /// The roles whose sprites use each palette, by palette number.
 pub fn palette_roles(model: &Model) -> BTreeMap<u32, Vec<&str>> {
     let mut out: BTreeMap<u32, Vec<&str>> = BTreeMap::new();
@@ -350,6 +581,21 @@ pub fn used_by(model: &Model, slot: &str, kind: AssetKind) -> Vec<Value> {
         v["palette"] = json!(sp.palette);
         out.push(v);
     }
+    if kind == AssetKind::BoardSprites {
+        for (name, e) in &model.entities {
+            let Some(b) = &e.core.board_sprite else {
+                continue;
+            };
+            if b.slot != slot {
+                continue;
+            }
+            let mut v = json!({ "entity": name, "role": e.core.role });
+            if let Some(n) = b.picture.number {
+                v["picture"] = json!(n);
+            }
+            out.push(v);
+        }
+    }
     out
 }
 
@@ -384,7 +630,7 @@ pub fn accept(asset: &Asset, reads_simulation: bool) -> Vec<&'static str> {
 pub fn record(
     model: &Model,
     contract: Option<&Contract>,
-    map: Option<&AssetMap>,
+    map: Option<MapRef<'_>>,
     state: Option<&State>,
     dir: Option<&Path>,
     name: &str,
@@ -410,17 +656,20 @@ pub fn record(
         let path = [Step::Key("assets".into()), Step::Key(name.into())];
         v["contract_level"] = json!(c.bind(model).resolve(&path, None).level.name());
     }
-    let asset = map.and_then(|m| {
-        slot.from
-            .as_ref()
-            .filter(|f| f.source == m.source)
-            .and_then(|f| m.asset(&f.asset))
-    });
+    let asset = map.and_then(|m| slot_asset(model, m, name));
     if let Some(a) = asset {
         v["format"] = json!(a.format());
         v["files"] = json!(a.files());
-        v["shape"] = shape(a, model, name);
-        v["accept"] = json!(accept(a, reads_sim));
+        match a {
+            SlotAsset::Nes(a) => {
+                v["shape"] = shape(a, model, name);
+                v["accept"] = json!(accept(a, reads_sim));
+            }
+            SlotAsset::Arcade(a) => {
+                v["shape"] = arcade_shape(a);
+                v["accept"] = json!(arcade_accept(a, reads_sim));
+            }
+        }
     }
     let users = used_by(model, name, slot.kind);
     if !users.is_empty() {
@@ -434,7 +683,7 @@ pub fn record(
                 p.remove("status");
             }
             if let (Some(a), Some(d)) = (asset, dir) {
-                match asset_digest(d, a) {
+                match a.digest(d) {
                     Ok(now) if now == s.sha256 => {}
                     Ok(now) => {
                         v["status"] = json!(MODIFIED);
@@ -458,7 +707,7 @@ pub fn record(
 pub fn records(
     model: &Model,
     contract: Option<&Contract>,
-    map: Option<&AssetMap>,
+    map: Option<MapRef<'_>>,
     state: Option<&State>,
     dir: Option<&Path>,
 ) -> Vec<Value> {

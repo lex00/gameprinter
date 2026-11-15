@@ -54,7 +54,7 @@ A mutant is caught when a clip scores worse on it than on the real model: exact 
 
 | Stage | game-printer | Here |
 |---|---|---|
-| 0. Static harvest | The bench file's `static_command` | The same (Donkey Kong's and Tapper's: `gp model static {rom} --model {model}`); `gp model derive` and source or labels files refused |
+| 0. Static harvest | The bench file's `static_command` | The same (Donkey Kong's and Tapper's: `gp model static {rom} --model {model}`, which writes the stage's mapping.toml too, with the addresses the harvest names); `gp model derive` and source or labels files refused |
 | 1. Clip generation | The capture run and `gp clips matrix` | `gp capture dense` on the stage's package |
 | 2. Trace harvest | `gp model propose` on the run's recordings | `gp model propose` on recordings of the first `recordings` corpus clips (`gp clip log`, then `gp record`) |
 | 3. Refinement | `gp solve --check` and `gp model refine --lockstep` on each baseline | Rounds of `gp solve --check` and `gp model refine --lockstep` on the corpus |

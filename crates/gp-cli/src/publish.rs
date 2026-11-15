@@ -186,9 +186,7 @@ pub(crate) fn publish(
         }
     };
     let line = if ahead {
-        let tmp = bin.join(format!("gp.new{}", std::process::id()));
-        std::os::unix::fs::symlink(format!("gp-{short}"), &tmp)?;
-        fs::rename(&tmp, &link)?;
+        point_at(&bin, &link, short)?;
         format!("published {short} as {}", link.display())
     } else {
         format!(
@@ -200,6 +198,28 @@ pub(crate) fn publish(
     lines.push(line.clone());
     prune(&bin, &link);
     Ok(line)
+}
+
+/// Points `link` (bin/gp) at bin/gp-<short>: a symlink, renamed into
+/// place so the swap is whole.
+#[cfg(unix)]
+fn point_at(bin: &Path, link: &Path, short: &str) -> Result<()> {
+    let tmp = bin.join(format!("gp.new{}", std::process::id()));
+    std::os::unix::fs::symlink(format!("gp-{short}"), &tmp)?;
+    fs::rename(&tmp, link)?;
+    Ok(())
+}
+
+/// On Windows a symlink needs developer mode or an administrator, so
+/// bin/gp.exe is a copy of the build. The copy holds no commit, so the
+/// next publish always moves it.
+#[cfg(not(unix))]
+fn point_at(bin: &Path, _link: &Path, short: &str) -> Result<()> {
+    let tmp = bin.join(format!("gp.new{}.exe", std::process::id()));
+    fs::copy(bin.join(format!("gp-{short}")), &tmp)?;
+    fs::rename(&tmp, bin.join("gp.exe"))
+        .context("replacing bin/gp.exe (is a gp from it still running?)")?;
+    Ok(())
 }
 
 /// Keeps the newest [`KEEP`] builds and the linked one.
@@ -292,6 +312,7 @@ mod tests {
         assert_eq!(self_path(&paths).unwrap().exit, 0);
     }
 
+    #[cfg(unix)]
     #[test]
     fn prune_keeps_the_linked_build() {
         let dir = tempfile::tempdir().unwrap();

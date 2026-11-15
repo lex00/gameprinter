@@ -8,7 +8,8 @@
 //! ROM in the page. With `--shots` it drives headless Chrome through the
 //! game's route instead and saves the game's canvas at named moments on
 //! each ROM of the game that is here; `--against` does the same for a
-//! second theme and writes the pairs side by side.
+//! second theme, or for the game in its own pictures (`--against
+//! original`), and writes the pairs side by side.
 //!
 //! This replaces the hand recipe of 2026-11-13 and 14 (copy the registry,
 //! publish into the copy, reindex, copy the page with its source set to
@@ -26,15 +27,14 @@
 //! - The moments: `--moments`, else the game's `theme-shots.toml`, else the
 //!   page check's own route and pictures (`ROUTES` in
 //!   scripts/web/public/check-page.mjs and scripts/web/public/pictures.txt).
-//! - The browser: playwright-core from the checkout's scripts/web (or
-//!   PLAYWRIGHT_FROM) driving Chrome Headless Shell from
-//!   `$GP_HOME/work/chrome-headless-shell` (scripts/inspector/fetch-browser.sh)
-//!   or `--browser`.
+//! - The browser: Chrome Headless Shell, driven from gp itself
+//!   (src/chrome.rs): `--browser`, else the one in
+//!   `$GP_HOME/work/chrome-headless-shell`, else the pinned build gp
+//!   downloads there the first time. No checkout and no Node.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
-use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -52,9 +52,6 @@ use crate::Outcome;
 
 /// Ports a theme's server never takes: gp serve's, Laya's and the lead's.
 const TAKEN_PORTS: [u16; 3] = [7710, 7720, 7796];
-
-/// The driver run in node for `--shots`.
-const DRIVER: &str = include_str!("theme_play.mjs");
 
 /// The moments file a game may hold in its folder.
 pub(crate) const MOMENTS_FILE: &str = "theme-shots.toml";
@@ -89,11 +86,12 @@ pub struct PlayArgs {
     /// $GP_ROM_DIR the game takes). Example: --rom ~/roms/dk.nes
     #[arg(long)]
     pub rom: Option<PathBuf>,
-    /// A second theme to set beside yours: a folder, or a published
-    /// NAME@VERSION. Its pictures are taken too, and each pair is written
-    /// side by side (yours on the left). Example: --against
-    /// friend/night@0.9.2
-    #[arg(long, value_name = "DIR_OR_NAME@VERSION")]
+    /// A second theme to set beside yours: a folder, a published
+    /// NAME@VERSION, or `original`, the game in its own pictures (a folder
+    /// named original is ./original). Its pictures are taken too, and each
+    /// pair is written side by side (yours on the left). Example: --against
+    /// friend/night@0.9.2, or --against original
+    #[arg(long, value_name = "DIR_OR_NAME@VERSION_OR_original")]
     pub against: Option<String>,
     /// The moments to picture, a TOML file of [[run]] and [[shot]] tables
     /// (default: the game's theme-shots.toml, else the page check's route
@@ -112,8 +110,9 @@ pub struct PlayArgs {
     /// is written to it. Example: --registry ~/gp-registry
     #[arg(long)]
     pub registry: Option<String>,
-    /// Chrome Headless Shell for --shots (default: the one
-    /// scripts/inspector/fetch-browser.sh put in $GP_HOME). Example:
+    /// Chrome Headless Shell for --shots (default: the one in
+    /// $GP_HOME/work/chrome-headless-shell, downloaded there the first
+    /// time, about 100 MB). Example:
     /// --browser /opt/chrome-headless-shell
     #[arg(long)]
     pub browser: Option<PathBuf>,
@@ -210,11 +209,13 @@ fn theme_pkg(dir: &Path) -> Result<ThemePkg> {
     })
 }
 
-/// One side of a comparison: the folder, or a theme already published.
+/// One side of a comparison: the folder, a theme already published, or
+/// the game in its own pictures (`--against original`).
 #[derive(Debug, Clone)]
 enum Side {
     Folder(ThemePkg),
     Published { name: String, version: String },
+    Original,
 }
 
 impl Side {
@@ -222,23 +223,36 @@ impl Side {
         match self {
             Side::Folder(p) => &p.name,
             Side::Published { name, .. } => name,
+            Side::Original => gp_present::looks::ORIGINAL,
         }
     }
     fn version(&self) -> &str {
         match self {
             Side::Folder(p) => &p.version,
             Side::Published { version, .. } => version,
+            Side::Original => "",
         }
     }
     /// The page's id for the theme: the package name's last part.
     fn look_id(&self) -> &str {
         match self {
             Side::Folder(ThemePkg { look: Some(l), .. }) => l,
+            Side::Original => gp_present::looks::ORIGINAL,
             _ => self.name().rsplit('/').next().unwrap_or(""),
         }
     }
     fn tag(&self) -> String {
-        format!("{}-{}", self.look_id(), self.version())
+        match self {
+            Side::Original => gp_present::looks::ORIGINAL.to_owned(),
+            _ => format!("{}-{}", self.look_id(), self.version()),
+        }
+    }
+    /// The page link's theme part: none for the game's own pictures.
+    fn content_param(&self) -> String {
+        match self {
+            Side::Original => String::new(),
+            _ => format!("&c={}", self.name()),
+        }
     }
     fn words(&self) -> String {
         match self {
@@ -249,11 +263,16 @@ impl Side {
                 p.root.display()
             ),
             Side::Published { name, version } => format!("{name}@{version} as published"),
+            Side::Original => "the game in its own pictures (the original)".to_owned(),
         }
     }
 }
 
 fn against_side(arg: &str) -> Result<Side> {
+    // The word, not a folder of that name (./original names one).
+    if arg == gp_present::looks::ORIGINAL {
+        return Ok(Side::Original);
+    }
     let p = Path::new(arg);
     if p.is_dir() {
         return Ok(Side::Folder(theme_pkg(p)?));
@@ -263,7 +282,9 @@ fn against_side(arg: &str) -> Result<Side> {
             name: n.to_owned(),
             version: v.to_owned(),
         }),
-        _ => bail!("--against {arg}: not a folder, and not a published NAME@VERSION"),
+        _ => bail!(
+            "--against {arg}: not a folder, not a published NAME@VERSION, and not the word original"
+        ),
     }
 }
 
@@ -715,7 +736,9 @@ fn build_registry(
     let ns = |n: &str| n.split('/').next().unwrap_or("").to_owned();
     let mut namespaces: BTreeSet<String> = BTreeSet::new();
     namespaces.insert(ns(game));
-    namespaces.insert(ns(side.name()));
+    if !matches!(side, Side::Original) {
+        namespaces.insert(ns(side.name()));
+    }
     namespaces.extend(newest.keys().map(|n| ns(n)));
     fs::create_dir_all(out)?;
     let to = Folder(out.to_owned());
@@ -744,7 +767,10 @@ fn build_registry(
         (None, None) => unreachable!("a source that can't be read was refused above"),
     }
     let mut listed = vec![(game.to_owned(), latest.clone())];
-    let mut themes = vec![format!("{}@{}", side.name(), side.version())];
+    let mut themes = vec![match side {
+        Side::Original => "the game's own look".to_owned(),
+        _ => format!("{}@{}", side.name(), side.version()),
+    }];
     match side {
         Side::Folder(p) => {
             let files = theme_files(&p.root)?;
@@ -765,8 +791,11 @@ fn build_registry(
             })?;
             copy_version(r, &to, name, version)?;
         }
+        Side::Original => {}
     }
-    listed.push((side.name().to_owned(), side.version().to_owned()));
+    if !matches!(side, Side::Original) {
+        listed.push((side.name().to_owned(), side.version().to_owned()));
+    }
     for (n, v) in &newest {
         // Listed only by a source that could be read.
         let Some(r) = &reader else { break };
@@ -1367,7 +1396,15 @@ fn overlay(dir: &Path, page: &Path, side: &Side, runs: &BTreeMap<String, String>
     pj["source"]["url"] = json!(".");
     // The name alone: the side's registry lists one version of it, and the
     // page takes a version only in the 1.2.3 shape.
-    pj["content"] = json!(side.name());
+    match side {
+        // No theme chosen: the page plays the game's own look.
+        Side::Original => {
+            if let Some(o) = pj.as_object_mut() {
+                o.remove("content");
+            }
+        }
+        _ => pj["content"] = json!(side.name()),
+    }
     fs::create_dir_all(dir.join("game").join("runs"))?;
     fs::write(
         dir.join("page.json"),
@@ -1388,12 +1425,17 @@ fn answers(port: u16) -> bool {
 }
 
 fn open_link(link: &str) {
-    let opener = if cfg!(target_os = "macos") {
-        "open"
+    let mut cmd = if cfg!(target_os = "macos") {
+        Command::new("open")
+    } else if cfg!(windows) {
+        // start's first quoted argument is the window's title.
+        let mut c = Command::new("cmd");
+        c.args(["/C", "start", "\"\""]);
+        c
     } else {
-        "xdg-open"
+        Command::new("xdg-open")
     };
-    let _ = Command::new(opener)
+    let _ = cmd
         .arg(link)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1444,48 +1486,34 @@ fn check_lines(o: &Outcome) -> (Vec<String>, u64, u64) {
 // ---------------------------------------------------------------------
 // The pictures.
 
-fn playwright_from() -> Result<PathBuf> {
-    if let Some(p) = std::env::var_os("PLAYWRIGHT_FROM") {
-        return Ok(PathBuf::from(p));
-    }
-    if let Some(repo) = checkout() {
-        let web = repo.join("scripts/web");
-        if web.join("node_modules/playwright-core").is_dir() {
-            return Ok(web.join("package.json"));
-        }
-        bail!(
-            "--shots needs playwright-core: run `npm ci --prefix {}` once",
-            web.display()
-        );
-    }
-    bail!(
-        "--shots needs node with playwright-core, which comes with the gameprinter checkout's scripts/web (npm ci there), or set PLAYWRIGHT_FROM to a package.json beside a node_modules that holds it"
+/// What the page says once a game frame has reached `frame`: the game's
+/// `__gp.state()` from `win` (a JavaScript expression for its window),
+/// or null.
+fn state_js(win: &str, frame: u32) -> String {
+    format!(
+        "(() => {{ const w = {win}; const st = w && !w.__checkOld && w.__gp?.state?.(); return st && st.frame >= {frame} ? st : null; }})()"
     )
 }
 
-fn find_browser(given: Option<&Path>, home: &Path) -> Result<PathBuf> {
-    if let Some(b) = given {
-        return Ok(b.to_owned());
-    }
-    let base = home.join("work").join("chrome-headless-shell");
-    let mut found: Vec<PathBuf> = Vec::new();
-    for v in fs::read_dir(&base).into_iter().flatten().flatten() {
-        for d in fs::read_dir(v.path()).into_iter().flatten().flatten() {
-            let exe = d.path().join("chrome-headless-shell");
-            if exe.is_file() {
-                found.push(exe);
-            }
-        }
-    }
-    found.sort();
-    found.pop().ok_or_else(|| {
-        anyhow!(
-            "--shots needs Chrome Headless Shell: run scripts/inspector/fetch-browser.sh \"$GP_HOME\" in the gameprinter checkout (it downloads about 100 MB), or give one with --browser"
-        )
-    })
+/// The game's state, its canvas as a PNG data address and its theme, all
+/// from the window `win` once its frame has reached `frame`, or null.
+fn snap_js(win: &str, frame: u32) -> String {
+    format!(
+        "(() => {{ const w = {win}; if (!w || w.__checkOld) return null; const st = w.__gp?.state?.(); if (!st || st.frame < {frame}) return null; const c = w.document.getElementById('game'); if (!c) return null; return {{ st, png: c.toDataURL('image/png'), theme: w.__gp?.theme ?? null }}; }})()"
+    )
 }
 
-/// One side's pictures on one ROM: the driver's lines.
+/// The game frame's window in the page that plays any game by name.
+const GAME_WIN: &str = "document.getElementById('game')?.contentWindow";
+
+/// One side's pictures on one ROM, in headless Chrome driven from here
+/// (src/chrome.rs): a line for each picture (`shot`, `file`, `frame`,
+/// `level`, `theme`), and a last one (`done`, `console_lines`,
+/// `console_errors`). The console goes to PREFIX-console.txt. With no ROM
+/// the game plays from its own files and `link` is the player itself (the
+/// interpreter preview, runs/ beside it), opened at each moment with
+/// `run`, `from` and `to`. These are the ways of the page the page check
+/// (check-page.mjs, playTo) plays it by.
 #[allow(clippy::too_many_arguments)]
 fn shoot(
     work: &Path,
@@ -1493,74 +1521,155 @@ fn shoot(
     link: &str,
     rom: Option<&Path>,
     browser: &Path,
-    playwright: &Path,
     out: &Path,
     prefix: &str,
     shots: &[&ShotDef],
 ) -> Result<Vec<Value>> {
-    let driver = work.join("theme_play.mjs");
-    fs::write(&driver, DRIVER)?;
-    let cfg = work.join(format!("{prefix}.json"));
-    let list: Vec<Value> = shots
-        .iter()
-        .map(|s| json!({ "name": s.name, "run": s.run, "frame": s.frame }))
-        .collect();
-    fs::write(
-        &cfg,
-        serde_json::to_string(&json!({
-            "origin": origin,
-            "link": link,
-            "rom": rom,
-            "browser": browser,
-            "playwright": playwright,
-            "out": out,
-            "prefix": prefix,
-            "shots": list,
-        }))?,
-    )?;
-    let mut child = Command::new("node")
-        .arg(&driver)
-        .arg(&cfg)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("running node (--shots needs node)")?;
+    let mut p = crate::chrome::Page::launch(browser, work, 1366, 1100)?;
     let mut lines = Vec::new();
-    let stdout = child.stdout.take().expect("piped");
-    for line in std::io::BufReader::new(stdout).lines() {
-        let line = line?;
-        if let Ok(v) = serde_json::from_str::<Value>(&line) {
-            if let Some(n) = v["shot"].as_str() {
-                eprintln!(
-                    "  {prefix}-{n}: frame {}, {}",
-                    v["frame"],
-                    if v["file"].is_null() {
-                        "no picture"
-                    } else {
-                        "saved"
-                    }
-                );
-            }
-            lines.push(v);
-        }
-    }
-    let o = child.wait_with_output()?;
-    if !o.status.success() && lines.iter().all(|v| v["done"].is_null()) {
-        bail!(
-            "the browser run for {prefix} failed: {}",
-            String::from_utf8_lossy(&o.stderr)
-                .lines()
-                .rev()
-                .take(8)
-                .collect::<Vec<_>>()
-                .join(" / ")
-        );
+    let r = shoot_in(&mut p, origin, link, rom, out, prefix, shots, &mut lines);
+    let mut console = p.console.join("\n");
+    console.push('\n');
+    fs::write(out.join(format!("{prefix}-console.txt")), console)?;
+    lines.push(json!({
+        "done": true,
+        "console_lines": p.console.len(),
+        "console_errors": p.errors,
+    }));
+    p.close();
+    if let Err(e) = r {
+        lines.push(json!({ "failed": format!("{e:#}") }));
     }
     Ok(lines)
 }
 
-/// Two pictures side by side, `a` on the left, on a dark ground.
+#[allow(clippy::too_many_arguments)]
+fn shoot_in(
+    p: &mut crate::chrome::Page,
+    origin: &str,
+    link: &str,
+    rom: Option<&Path>,
+    out: &Path,
+    prefix: &str,
+    shots: &[&ShotDef],
+    lines: &mut Vec<Value>,
+) -> Result<()> {
+    // The game reached the frame, then, a moment later, its state, canvas
+    // and theme read in one go from the same window: the game frame can be
+    // replaced while it loads (a run's file fetch aborted and started
+    // again), and a read across two windows gives a blank canvas.
+    let save = |p: &mut crate::chrome::Page, s: &ShotDef, win: &str| -> Result<Value> {
+        let t0 = Instant::now();
+        let mut got: Option<Value> = None;
+        while got.is_none() && t0.elapsed() < Duration::from_secs(120) {
+            if p.wait_for(&state_js(win, s.frame), 120).is_none() {
+                break;
+            }
+            p.pause(250);
+            got = p.eval(&snap_js(win, s.frame)).ok().filter(|v| !v.is_null());
+        }
+        let st = got.as_ref().map(|v| v["st"].clone());
+        let png = got
+            .as_ref()
+            .and_then(|v| v["png"].as_str().map(str::to_owned));
+        let theme = got.as_ref().map_or(Value::Null, |v| v["theme"].clone());
+        let mut file = Value::Null;
+        if let (Some(png), Some(_)) = (&png, &st) {
+            use base64::Engine as _;
+            let b64 = png.split_once(',').map_or("", |x| x.1);
+            let bytes = base64::engine::general_purpose::STANDARD.decode(b64)?;
+            let f = out.join(format!("{prefix}-{}.png", s.name));
+            fs::write(&f, bytes)?;
+            file = json!(f);
+        }
+        let frame = st.as_ref().map_or(Value::Null, |v| v["frame"].clone());
+        let level = st.as_ref().map_or(Value::Null, |v| v["level"].clone());
+        eprintln!(
+            "  {prefix}-{}: frame {frame}, {}",
+            s.name,
+            if file.is_null() {
+                "no picture"
+            } else {
+                "saved"
+            }
+        );
+        Ok(json!({ "shot": s.name, "file": file, "frame": frame, "level": level, "theme": theme }))
+    };
+    let Some(rom) = rom else {
+        for s in shots {
+            p.goto(&format!(
+                "{origin}{link}&run={}&from={}&to={}",
+                s.run, s.frame, s.frame
+            ))?;
+            lines.push(save(p, s, "window")?);
+        }
+        return Ok(());
+    };
+    p.goto(&format!("{origin}{link}"))?;
+    p.wait_for("window.__page !== undefined", 300);
+    p.set_file("#rom", rom)?;
+    let kind = p
+        .wait_for(
+            "(() => { const k = document.getElementById('message')?.dataset.kind; return ['ok', 'warn', 'error'].includes(k) ? k : null; })()",
+            300,
+        )
+        .ok_or_else(|| anyhow!("the page said nothing of the ROM in five minutes"))?;
+    let message = p
+        .eval("document.getElementById('message').innerText")?
+        .as_str()
+        .unwrap_or("")
+        .to_owned();
+    if kind == "error" {
+        bail!("the page refused the ROM: {message}");
+    }
+    p.wait_for(
+        "document.getElementById('game').src.includes('files=idb:')",
+        60,
+    )
+    .ok_or_else(|| anyhow!("the page didn't start the game from the ROM in a minute"))?;
+    p.pause(2000);
+    let src = p
+        .eval("document.getElementById('game').getAttribute('src')")?
+        .as_str()
+        .unwrap_or("")
+        .to_owned();
+    lines.push(json!({ "message": message, "src": src }));
+    for s in shots {
+        let _ = p.eval(&format!("{GAME_WIN}.__checkOld = true"));
+        let to = format!("{src}&run={}&from={}&to={}", s.run, s.frame, s.frame);
+        p.eval(&format!(
+            "document.getElementById('game').src = {}",
+            json!(to)
+        ))?;
+        p.wait_for("document.getElementById('game').src.includes('run=')", 5);
+        lines.push(save(p, s, GAME_WIN)?);
+    }
+    Ok(())
+}
+
+/// A picture made `k` times bigger, each pixel a k by k square.
+fn bigger(img: &Rgba, k: u32) -> Rgba {
+    let mut out = Rgba::new(img.width * k, img.height * k);
+    for y in 0..out.height {
+        for x in 0..out.width {
+            out.set(x, y, img.get(x / k, y / k));
+        }
+    }
+    out
+}
+
+/// Two pictures side by side, `a` on the left, on a dark ground. The
+/// shorter is made a whole number of times bigger, up to the taller's
+/// height, so a large-art look (drawn at its `scale`) and the game in its
+/// own pictures (at the console's size) show at about the same size.
 pub(crate) fn pair(a: &Rgba, b: &Rgba) -> Rgba {
+    let k = |s: &Rgba, t: &Rgba| (t.height / s.height.max(1)).max(1);
+    let (a, b) = match (k(a, b), k(b, a)) {
+        (ka, _) if ka > 1 => (bigger(a, ka), b.clone()),
+        (_, kb) if kb > 1 => (a.clone(), bigger(b, kb)),
+        _ => (a.clone(), b.clone()),
+    };
+    let (a, b) = (&a, &b);
     let gap = 16;
     let mut out = Rgba::new(a.width + gap + b.width, a.height.max(b.height));
     for y in 0..out.height {
@@ -1771,7 +1880,11 @@ pub(crate) fn run(a: &PlayArgs, paths: &Paths) -> Result<Outcome> {
         overlay(&dir.join("overlay"), &page, s, &BTreeMap::new())?;
         let l = bind(if i == 0 { a.port } else { 0 })?;
         let port = l.local_addr()?.port();
-        let link = format!("http://127.0.0.1:{port}/p?g={}&c={}", pkg.name, s.name());
+        let link = format!(
+            "http://127.0.0.1:{port}/p?g={}{}",
+            pkg.name,
+            s.content_param()
+        );
         served.push(Served {
             label: s.words(),
             registry: dir.join("registry"),
@@ -1872,8 +1985,7 @@ fn serve_sides(
             .stdin(Stdio::null())
             .stdout(log.try_clone()?)
             .stderr(log);
-        #[cfg(unix)]
-        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+        gp_mcp::proc::own_group(&mut cmd);
         let child = cmd.spawn().context("starting the server")?;
         let t0 = Instant::now();
         while !served.iter().all(|s| answers(s.port)) {
@@ -1992,7 +2104,7 @@ fn shots(
             registry: dir.join("registry"),
             overlay: dir.join("overlay"),
             port,
-            link: format!("/p?g={}&c={}", pkg.name, s.name()),
+            link: format!("/p?g={}{}", pkg.name, s.content_param()),
         };
         serve_on(l, page, &sv);
         origins.push(sv);
@@ -2067,14 +2179,15 @@ impl Pictured<'_> {
         mut text: String,
     ) -> Result<Outcome> {
         let (sides, tags, origins, work) = (self.sides, self.tags, self.origins, self.work);
-        let playwright = playwright_from()?;
-        let browser = find_browser(browser, &paths.home)?;
+        let browser = crate::chrome::browser(browser, &paths.home)?;
         fs::create_dir_all(out).with_context(|| format!("making {}", out.display()))?;
         let out = out.canonicalize()?;
         // Git leaves the folder alone even inside a checkout.
         fs::write(out.join(".gitignore"), "*\n")?;
         let mut report: Vec<Value> = Vec::new();
         let mut pairs = Vec::new();
+        // Each pair with its moment, for a page that steps through them.
+        let mut paired = Vec::new();
         let mut shot_count = 0;
         for play in plays {
             let list = &play.shots;
@@ -2093,7 +2206,6 @@ impl Pictured<'_> {
                     &origins[i].link,
                     play.rom.as_deref(),
                     &browser,
-                    &playwright,
                     &out,
                     &prefix,
                     list,
@@ -2106,7 +2218,8 @@ impl Pictured<'_> {
                     }
                     if let (Some(n), Some(file)) = (v["shot"].as_str(), v["file"].as_str()) {
                         got.insert(n.to_owned(), PathBuf::from(file));
-                        if v["theme"].as_str() != Some(s.look_id()) {
+                        if !matches!(s, Side::Original) && v["theme"].as_str() != Some(s.look_id())
+                        {
                             let _ = writeln!(
                                 text,
                                 "warning: {prefix}-{n} was drawn in look {}, not {}",
@@ -2140,7 +2253,10 @@ impl Pictured<'_> {
                 );
                 report.push(json!({
                     "rom": play.id,
-                    "theme": format!("{}@{}", s.name(), s.version()),
+                    "theme": match s {
+                        Side::Original => gp_present::looks::ORIGINAL.to_owned(),
+                        _ => format!("{}@{}", s.name(), s.version()),
+                    },
                     "pictures": got,
                     "missing": missing,
                     "console_errors": errors,
@@ -2158,6 +2274,10 @@ impl Pictured<'_> {
                     );
                     let p = out.join(format!("pair-{}-{}.png", play.id, s.name));
                     fs::write(&p, pair(&l, &r).png())?;
+                    paired.push(json!({
+                        "rom": play.id, "moment": s.name, "run": s.run, "frame": s.frame,
+                        "shows": s.shows, "file": p,
+                    }));
                     pairs.push(p);
                 }
             }
@@ -2191,6 +2311,8 @@ impl Pictured<'_> {
                 "moments": self.moments,
                 "runs": report,
                 "pairs": pairs,
+                "paired": paired,
+                "sides": sides.iter().map(Side::words).collect::<Vec<_>>(),
                 "pictures": shot_count,
             }),
             text,

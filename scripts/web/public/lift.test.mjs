@@ -78,12 +78,12 @@ test("the themes given are listed in the order given", () => {
   const index = JSON.stringify({
     themes: [
       { id: "clay", title: "Clay" },
-      { id: "orangutan-arcade", title: "Orangutan Arcade" },
+      { id: "harbor-lights", title: "Harbor Lights" },
       { id: "turnips", title: "Turnips" },
     ],
   });
-  const got = JSON.parse(themesInOrder(index, ["turnips", "orangutan-arcade"]));
-  assert.deepEqual(got.themes.map((t) => t.id), ["clay", "turnips", "orangutan-arcade"]);
+  const got = JSON.parse(themesInOrder(index, ["turnips", "harbor-lights"]));
+  assert.deepEqual(got.themes.map((t) => t.id), ["clay", "turnips", "harbor-lights"]);
 });
 
 test("a ROM of no Donkey Kong is refused, naming the ones the page knows", { skip }, async () => {

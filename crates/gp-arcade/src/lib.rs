@@ -76,6 +76,7 @@ pub mod romset;
 pub mod sched;
 pub mod sha1;
 pub mod sound;
+pub mod ssio;
 pub mod state;
 pub mod testrom;
 pub mod video;

@@ -453,31 +453,57 @@ impl Drop for Served {
     }
 }
 
+/// The end of a server's file in [`socket_dir`]: the socket itself on
+/// unix; on Windows, where std has no local socket, a file holding the
+/// loopback port the server listens on and the key a client must send.
+#[cfg(unix)]
+const SERVED_EXT: &str = ".sock";
+#[cfg(not(unix))]
+const SERVED_EXT: &str = ".port";
+
+/// A connection to a server, by the path of its file in [`socket_dir`].
+#[cfg(unix)]
+fn connect(p: &Path) -> Option<std::os::unix::net::UnixStream> {
+    std::os::unix::net::UnixStream::connect(p).ok()
+}
+
+/// On Windows: the port file's port, connected on 127.0.0.1, with its key
+/// sent first. The file is in the user's own temporary folder, so only
+/// this user's processes can read the key; a process of another user that
+/// connects to the port without it is answered nothing.
+#[cfg(not(unix))]
+fn connect(p: &Path) -> Option<std::net::TcpStream> {
+    let text = std::fs::read_to_string(p).ok()?;
+    let (port, key) = text.trim().split_once(' ')?;
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port.parse().ok()?));
+    let mut s = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2)).ok()?;
+    s.write_all(format!("{key}\n").as_bytes()).ok()?;
+    Some(s)
+}
+
 /// Starts answering queries on a local socket for `paths`' home, on a
 /// thread of its own, until the process ends. `None` (and nothing served)
 /// when the socket can't be made; the server works without it.
-#[cfg(unix)]
 pub(crate) fn serve_in_background(paths: &Paths) -> Option<Served> {
-    use std::os::unix::net::{UnixListener, UnixStream};
     let dir = socket_dir();
     std::fs::create_dir_all(&dir).ok()?;
     let tag = home_tag(&paths.home);
-    // Sockets of servers that are gone: nothing answers on them.
+    // Servers that are gone: nothing answers on their files.
     if let Ok(rd) = std::fs::read_dir(&dir) {
         for e in rd.flatten() {
             let p = e.path();
             let ours = p
                 .file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with(&tag) && n.ends_with(".sock"));
-            if ours && UnixStream::connect(&p).is_err() {
+                .is_some_and(|n| n.starts_with(&tag) && n.ends_with(SERVED_EXT));
+            if ours && connect(&p).is_none() {
                 let _ = std::fs::remove_file(&p);
             }
         }
     }
-    let path = dir.join(format!("{tag}-{}.sock", std::process::id()));
+    let path = dir.join(format!("{tag}-{}{SERVED_EXT}", std::process::id()));
     let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path).ok()?;
+    let incoming = listen(&path)?;
     let home = paths.home.clone();
     let exe = exe_identity()?;
     let sessions = Arc::new(Mutex::new(Sessions::new(Limits::default())));
@@ -491,7 +517,7 @@ pub(crate) fn serve_in_background(paths: &Paths) -> Option<Served> {
         }
     });
     std::thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
+        for stream in incoming {
             let sessions = sessions.clone();
             let guard = guard.clone();
             let home = home.clone();
@@ -502,20 +528,63 @@ pub(crate) fn serve_in_background(paths: &Paths) -> Option<Served> {
     Some(Served { path })
 }
 
-#[cfg(not(unix))]
-pub(crate) fn serve_in_background(_paths: &Paths) -> Option<Served> {
-    None
+/// The connections to a server listening at `path`.
+#[cfg(unix)]
+fn listen(path: &Path) -> Option<impl Iterator<Item = Conn> + Send + 'static> {
+    let listener = std::os::unix::net::UnixListener::bind(path).ok()?;
+    Some(
+        std::iter::repeat_with(move || listener.accept())
+            .filter_map(|r| r.ok())
+            .map(|(s, _)| Conn(s)),
+    )
 }
 
-/// Reads one request from `stream` and writes its reply.
+/// On Windows: a loopback port of the system's choosing, written with a
+/// fresh key into `path`. A connection that doesn't send the key first is
+/// closed unanswered.
+#[cfg(not(unix))]
+fn listen(path: &Path) -> Option<impl Iterator<Item = Conn> + Send + 'static> {
+    use std::hash::{BuildHasher as _, Hasher as _};
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).ok()?;
+    let port = listener.local_addr().ok()?.port();
+    // RandomState is seeded from the system's random source.
+    let word = || {
+        std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish()
+    };
+    let key = format!("{:016x}{:016x}", word(), word());
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, format!("{port} {key}\n")).ok()?;
+    std::fs::rename(&tmp, path).ok()?;
+    let accepted = std::iter::repeat_with(move || listener.accept()).filter_map(|r| r.ok());
+    Some(accepted.filter_map(move |(mut s, _)| {
+        let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+        // A byte at a time up to the newline, so nothing of the request
+        // that follows the key is read here.
+        let mut line = Vec::new();
+        let mut b = [0u8; 1];
+        while line.len() <= key.len() {
+            match std::io::Read::read(&mut s, &mut b) {
+                Ok(1) if b[0] == b'\n' => break,
+                Ok(1) => line.push(b[0]),
+                _ => return None,
+            }
+        }
+        let _ = s.set_read_timeout(None);
+        (line == key.as_bytes()).then_some(Conn(s))
+    }))
+}
+
+/// A connection a request comes on.
 #[cfg(unix)]
-fn answer(
-    stream: std::os::unix::net::UnixStream,
-    sessions: &Mutex<Sessions>,
-    guard: &GuardSlot,
-    home: &Path,
-    exe: &str,
-) {
+struct Conn(std::os::unix::net::UnixStream);
+#[cfg(not(unix))]
+struct Conn(std::net::TcpStream);
+
+/// Reads one request from `stream` and writes its reply.
+fn answer(stream: Conn, sessions: &Mutex<Sessions>, guard: &GuardSlot, home: &Path, exe: &str) {
+    let mut stream = stream.0;
     let mut line = String::new();
     let Ok(read) = stream.try_clone() else { return };
     if BufReader::new(read).read_line(&mut line).is_err() {
@@ -525,7 +594,6 @@ fn answer(
         Ok(r) => reply_to(r, sessions, guard, home, exe),
         Err(e) => Reply::Declined(format!("not a request: {e}")),
     };
-    let mut stream = stream;
     if let Ok(mut text) = serde_json::to_string(&reply) {
         text.push('\n');
         let _ = stream.write_all(text.as_bytes());
@@ -584,9 +652,7 @@ fn reply_to(
 
 /// Asks a running server for `q`'s answer: `None` when none answers it, and
 /// the caller opens the recording itself.
-#[cfg(unix)]
 pub(crate) fn ask(paths: &Paths, q: &Query) -> Option<Result<Outcome>> {
-    use std::os::unix::net::UnixStream;
     if std::env::var("GP_SESSION").is_ok_and(|v| v == "off") {
         return None;
     }
@@ -598,7 +664,7 @@ pub(crate) fn ask(paths: &Paths, q: &Query) -> Option<Result<Outcome>> {
         .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with(&tag) && n.ends_with(".sock"))
+                .is_some_and(|n| n.starts_with(&tag) && n.ends_with(SERVED_EXT))
         })
         .collect();
     if socks.is_empty() {
@@ -617,7 +683,7 @@ pub(crate) fn ask(paths: &Paths, q: &Query) -> Option<Result<Outcome>> {
     let mut text = serde_json::to_string(&request).ok()?;
     text.push('\n');
     for sock in socks {
-        let Ok(mut stream) = UnixStream::connect(&sock) else {
+        let Some(mut stream) = connect(&sock) else {
             continue;
         };
         let _ = stream.set_read_timeout(Some(Duration::from_secs(600)));
@@ -636,11 +702,6 @@ pub(crate) fn ask(paths: &Paths, q: &Query) -> Option<Result<Outcome>> {
             Ok(Reply::Declined(_)) | Err(_) => continue,
         }
     }
-    None
-}
-
-#[cfg(not(unix))]
-pub(crate) fn ask(_paths: &Paths, _q: &Query) -> Option<Result<Outcome>> {
     None
 }
 

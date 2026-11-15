@@ -2,13 +2,13 @@
 
 Brought from game-printer's docs/sprite-editing.md. On an arcade game's lift (Tapper's) the external editor trip is the board's own sprites, and it stops before the proposal ([Arcade boards](#arcade-boards)).
 
-A person tells their agent what to change about a sprite ("give him a red cap", "a bolder outline", "make the slug face the other way"), and Game Printer does it. The agent turns the request into deterministic operations, and Game Printer checks the result against the model and draws it into the recorded frames where the sprite is seen. The agent shows the person the before and after pictures, and accepts or rejects it with `assets_edit` as the person says. There are no painting tools in Game Printer yet. A person who wants to draw by hand uses an external editor, starting with Pixelorama (phase 3, below).
+A person tells their agent what to change about a sprite ("give him a red cap", "a bolder outline", "make the slug face the other way"), and Game Printer does it. The agent turns the request into deterministic operations, and Game Printer checks the result against the model and draws it into the recorded frames where the sprite is seen. The person sees the before and after pictures on their page and accepts or rejects it there (or with `gp assets proposal` in their terminal); the agent can't answer for them. There are no painting tools in Game Printer yet. A person who wants to draw by hand uses an external editor, starting with Pixelorama (phase 3, below).
 
 A person who draws by hand opens the sprite set in Pixelorama with `gp assets open`, and each save comes back the same way as an agent's edit.
 
 The same tool edits a level tile's look ("make the stone blocks orange"): see [Level tiles](#level-tiles).
 
-This page is the product doc. The design and its prior art are in the research report (game-printer's docs/research/agent-sprite-editor.md, not carried here); the tools are `assets_edit` and `assets_history` in [agent tools over MCP](mcp.md). The page has no panel for an `assets_edit` proposal yet; a picture of a large-art theme is proposed with `gp theme picture` and answered on the page ([A picture of your own theme](#a-picture-of-your-own-theme)).
+This page is the product doc. The design and its prior art are in the research report (game-printer's docs/research/agent-sprite-editor.md, not carried here); the tools are `assets_edit` and `assets_history` in [agent tools over MCP](mcp.md). The person answers an `assets_edit` proposal on their page ([On the page](#on-the-page)); a picture of a large-art theme is proposed with `gp theme picture` and answered there too ([A picture of your own theme](#a-picture-of-your-own-theme)).
 
 Everything is local and free: deterministic operations in Rust, the interpreter for previews, and no hosted service. If an image model is ever added, it is a free model run locally behind the generator trait. The editor is fully useful without one.
 
@@ -77,17 +77,17 @@ Each edit also gets the close-up preview: before, after, after facing left (when
 
 ## Proposals, decisions and history
 
-With `place: false` an edit is a proposal: checked and previewed, kept in the history, and written only when accepted. With `place: true` (the default) it's written at once, and a person may still accept it (keep it) or reject it (undo it).
+With `place: false` an edit is a proposal: checked and previewed, kept in the history, and written only when the person accepts it ([On the page](#on-the-page)). With `place: true` (the default) it's written at once, and it may still be accepted (kept) or rejected (undone). `assets_edit` refuses to accept or reject a proposal, or an edit the person decided: only the person answers those, on the card or with `gp assets proposal accept`, `reject` and `undo`, which `gp_run` refuses to an agent. The agent may still accept or reject an edit it placed itself that the person hasn't decided, and undo and redo work as before.
 
 | Status | Meaning |
 |---|---|
-| `proposed` | Shown, not written; accept places it with every check |
+| `proposed` | Shown, not written; the person's accept places it with every check |
 | `placed` | Written by the agent |
-| `accepted` | Kept, by a person or the agent (`decided_by`) |
+| `accepted` | Kept: a proposal by the person, a placed edit by the person or the agent (`decided_by`) |
 | `rejected` | A proposal dropped, or a placed edit undone on a person's say |
 | `undone` | Undone; redo puts it back |
 
-The history is in the working copy (`gp_mcp::edit_log`). Placed edits are in `asset-edits.jsonl` and undone ones in `asset-redo.jsonl`. Proposals and rejections are in `asset-proposals/<seq>.json`. Each edit keeps what it changed: every 8 by 8 tile before and after as 64 digits, the slot's palettes, or for a resize the sprite's tile list and width. So:
+The history is in the working copy (`gp_mcp::edit_log`). Placed edits are in `asset-edits.jsonl` and undone ones in `asset-redo.jsonl`. Proposals and rejections are in `asset-proposals/<seq>.json`. Each edit keeps what it changed: every 8 by 8 tile before and after as 64 hex digits (an arcade board sprite as 1024), the slot's palettes, or for a resize the sprite's tile list and width ([the art history](formats/art-history.md)). So:
 
 - undo goes back any number of steps, the newest edit first, and the newest puts the slot's state back exactly (status, origin, license);
 - `undo` with `seq` undoes an older edit alone when no later edit touched its tiles;
@@ -114,7 +114,16 @@ Nothing in it knows a game: every model whose metatiles slot comes from an asset
 
 ## On the page
 
-The page has no place yet where a person sees an `assets_edit` proposal (a sprite of a model's own art) and presses accept or reject. The agent shows the pictures (the reply's `previews`: the close-up, and the recorded frames before and after) and decides with `assets_edit` (`accept` or `reject` and the edit's number) when the person answers. The agent can pin the pictures in the page's side panel with `gp mechanic pin`. Until 2026-11-13 an edit could be told to a capture run (`run`) and accepted in the old editor's game view; nothing made a capture run any more, so that road was removed (the owner approved it on 2026-11-13).
+An `assets_edit` proposal (`place: false`, or an external editor's save through `gp assets open`) on a copy under `$GP_HOME/work/mcp/` is a card on the person's page (`mechanic/sprite-card.js`, issue #4), on an NES copy's tiles and an arcade copy's board sprites alike. The card is under the status line on every tab and on the copy's journey page, the oldest open one with how many wait ("1 of 2 waiting"). It shows the edit's own pictures with square pixels: the sprite before and after close up (`previews/edit-SEQ.png`) and, when the edit has them, the recorded frames before and after (`edit-SEQ-context.png`). It also has the agent's words (the edit's `prompt`), a box "tell your agent what to change", ACCEPT and REJECT, and PUT THE OLD ONE BACK after an ACCEPT.
+
+| Step | Who | What happens |
+|---|---|---|
+| Propose | The agent | `assets_edit` with `place: false`, or a save in a pixel editor; the reply's `note` says the card waits |
+| Show | The page | `next` lists each open proposal of every copy in `waits_for_yes` with `what: "sprite"` (its `sprite` the proposal, with `place` and `of`), and the copy's journey lists its own |
+| Decide | The person | On the card, or in their terminal with `gp assets proposal accept ID`, `reject ID --words S` and `undo ID` (`gp assets proposal list` lists them; `gp_run` refuses the three, and `assets_edit` refuses to accept or reject a proposal). ACCEPT is the art history's accept with `decided_by` `person`: placed with every check, or refused in words when the art changed since. REJECT drops it. PUT THE OLD ONE BACK rejects the placed edit, which undoes it when no later edit changed its tiles. The history (`asset-proposals/`, `asset-edits.jsonl`) holds the answer as it does an agent's |
+| Hear | The agent | `assets_history` gives `answers`: each answer the person gave on the page, with what they wrote, which marks it read; until then `next` lists it, so `next` with `wait_s` returns when the person answers |
+
+The person's words and whether the agent has read them are kept beside the history, one file an answer, at `$GP_HOME/work/proposals/sprites/COPY-SEQ.json` (`gp_mcp::sprite_proposal`). gp serve's routes are `GET /api/sprites` (`{open, recent}`), `GET /api/sprites/ID/edit.png` and `context.png`, and `POST /api/sprites/ID` with `{answer: accept|reject|undo, words?}`, where ID is `COPY-SEQ`. When the person answers in the talk instead, the agent tells them to press the card's button; it can't answer for them. Until 2026-11-13 an edit could be told to a capture run (`run`) and accepted in the old editor's game view; nothing made a capture run any more, so that road was removed (the owner approved it on 2026-11-13).
 
 A picture of a large-art theme does go through the page: see the next section.
 
@@ -154,11 +163,12 @@ On a copy whose lift is an arcade one (`gp_assets::arcade`, docs/formats/board-a
 |---|---|
 | Export | One PNG for each picture code the entity's `board_sprite` draws, `ENTITY-CODE.png` (`tip-4d.png`): 8-bit indexed in the 16 colours of its colour bits from the level's lifted `board-palette` (the program's writes over it aren't applied), values 0 and 8 clear since the board draws nothing where a value's low three bits are 0. A fixed `picture = { number = N }` is one code; a picture read from the body's words takes the codes `gp theme look sheet` saw (its `names.toml`), and without that sheet the export says to run it. Beside them `ENTITY.gpl` and `gp-edit.json`, whose frame ids are `board-sprite.CODE`. A folder inside a git work tree is refused: the pictures are the person's ROM's |
 | On save | Each PNG is read back held to 32 by 32 and values 0 to 15 (an indexed PNG's indices, or an RGB(A) one's colours matched exactly to the exported 16), and compared with the lift |
-| Proposal | Not kept yet: the reply says how many pixels of which codes changed, at the `proposal` stage, and nothing is written over the lift |
+| Proposal | A save that changed pixels is kept in the art history as the NES trip's is: proposed, or placed with `--place` (`place: true`). Each changed sprite is a `tiles` item, its index in the slot's sheet with its 1024 values before and after in hex digits ([the art history](formats/art-history.md)), and the slot's state comes from the slot catalog reading the arcade map (`catalog::arcade_slot_assets`). The reply counts the pixels of each code that changed, and `edit-SEQ.png` in the previews shows each sprite before and after in its colours. A save that changed nothing is reported and kept nowhere |
+| Accept, undo, redo, reject | Write the sprites into the copy's own lifted folder (`<copy>/assets/`, made from the lift on first use, map last), never the shared lift, once the sheet holds what the edit found (or left); the slot becomes `replaced` from `uploaded` with the editor as its generator, and undo of the newest puts its state back. `gp_assets::arcade::unpack` puts that folder back into the chips' layout. No baseline is run: the board draws these sprites, and a slot the simulation reads is refused |
 
-The proposal waits on the art history: `asset-edits.jsonl` and `asset-proposals/` keep a picture as rows of the digits 0 to 9 (`Pic::rows`) and the slot's state from an NES asset map (`catalog::slot_assets`), and a board sprite has 16 values and an arcade map. The smallest addition is rows written in hex digits (0 to 9, then a to f, so every NES row reads as before) and the slot catalog reading an arcade map's slots; accept would then write the sprite back into the copy's own lifted `sprites.png`, and `gp_assets::arcade::unpack` puts a lifted folder back into the chips' layout. The board's tiles (`board-tiles`, `board-font`) have no editor trip yet: no entity draws with them, and `assets_edit`'s `tile` names an NES level tile kind.
+The board's tiles (`board-tiles`, `board-font`) have no editor trip yet: no entity draws with them, and `assets_edit`'s `tile` names an NES level tile kind.
 
-On a copy of Tapper on 2026-11-14: `gp assets open COPY tip --editor png --no-launch --once` wrote `tip-4d.png`, `tip.gpl` and `gp-edit.json`; a save with four pixels set to value 7 came back as "save 1: refused: a proposal can't be kept for an arcade board's sprites yet".
+On a scratch copy of Tapper on 2026-11-14, lifted with its own map: `gp assets open COPY tip --editor png --no-launch --once` wrote `tip-4d.png`, `tip.gpl` and `gp-edit.json`; four pixels changed to values 12 to 15 came back as "save 1: edit 1 proposed (4 pixels)", its rows holding `c` to `f`. `assets_edit` with `accept: 1` wrote `sprites.png` in the copy's own folder, whose sprite 0x4d differs from the lift's in exactly those four pixels and nowhere else, and `surface_describe` listed `board_sprites` as replaced from uploaded, every one of the copy's 56 slots with its arcade format and shape.
 
 ## A demo
 
@@ -169,7 +179,7 @@ cargo test -p gp-cli --test mcp -- a_save_in_a_pixel_editor_comes_back_as_a_prop
 GP_EDIT_PREVIEW=/tmp cargo test -p gp-cli --test mcp -- an_agent_edits_the_player_sprite_from_its_recordings  # writes the preview
 ```
 
-By hand, connect an agent to `gp mcp`, fork Moss Hop (`template_fork`) and ask it to "make his moss cap the color of his eye". It calls `assets_edit` with `ops: [{op: recolor, pairs: [[2,3]], region: {x:0,y:0,w:16,h:5}}]` and `place: false`, shows the previews, and on the person's yes calls `assets_edit` with `accept`; `assets_history` then shows it accepted. To draw by hand instead: `gp assets open mosshop player` (with Pixelorama installed), save in Pixelorama, and the save comes back as a proposal the same way.
+By hand, connect an agent to `gp mcp`, fork Moss Hop (`template_fork`) and ask it to "make his moss cap the color of his eye". It calls `assets_edit` with `ops: [{op: recolor, pairs: [[2,3]], region: {x:0,y:0,w:16,h:5}}]` and `place: false`, and the proposal waits on the person's page as a card; on their ACCEPT, `assets_history` shows it accepted by the person. To draw by hand instead: `gp assets open mosshop player` (with Pixelorama installed), save in Pixelorama, and the save comes back as a proposal the same way.
 
 ## Phases
 

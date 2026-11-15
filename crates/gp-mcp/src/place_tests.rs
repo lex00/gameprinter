@@ -665,6 +665,29 @@ fn validate_lets_gp_validate_pick_the_check_unless_baselines_are_named() {
         validate.contains("--against") && validate.contains("baselines/tiny/jump-height.toml"),
         "{validate}"
     );
+    // Targets go to gp validate as --target, one each, and only to the
+    // check for a changed game.
+    let (r, err) = f.call(
+        "validate",
+        json!({ "copy": "copy", "targets": ["run_frames=300+-10%", "airtime=40"] }),
+    );
+    assert!(!err, "{r}");
+    let args = fs::read_to_string(&log).unwrap();
+    let validate = args
+        .lines()
+        .filter(|l| l.starts_with("--json validate"))
+        .nth(2)
+        .unwrap();
+    assert!(
+        validate.contains("--target run_frames=300+-10% --target airtime=40")
+            && !validate.contains("--against"),
+        "{validate}"
+    );
+    let (r, err) = f.call(
+        "validate",
+        json!({ "copy": "copy", "baselines": ["jump-height"], "targets": ["airtime=40"] }),
+    );
+    assert!(err, "{r}");
 }
 
 /// An editor that saves RGBA: the four preview grays read as indices

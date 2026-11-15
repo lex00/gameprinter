@@ -51,7 +51,16 @@ pub struct Interp {
     /// Whether each step also gives the APU writes the hooks make on it
     /// ([`APU_KIND`] events), for the lockstep's sound measure.
     apu_events: bool,
+    /// Whether each step also gives the sound requests the hooks made on
+    /// it ([`SOUND_KIND`] events).
+    sound_events: bool,
 }
+
+/// The event kind of a sound request a hook makes
+/// ([`Interp::with_sound_events`], [`gp_sim::Ext::sound_requests`]), with
+/// `latch` and `value`, in order. The original's are gp-arcade's
+/// `latch-write` events, with the same entries.
+pub const SOUND_KIND: &str = "sound-request";
 
 /// The event kind of an APU write a hook makes ([`Interp::with_apu_events`]),
 /// with `reg` (the register's offset from $4000) and `value`, in order. The
@@ -87,6 +96,7 @@ impl Interp {
             view: std::sync::OnceLock::new(),
             draws: None,
             apu_events: false,
+            sound_events: false,
         }
     }
 
@@ -110,6 +120,14 @@ impl Interp {
     /// out before it runs, as a runtime that plays them takes them.
     pub fn with_apu_events(mut self) -> Self {
         self.apu_events = true;
+        self
+    }
+
+    /// Gives each frame's sound requests as events from now on: what
+    /// [`gp_sim::ext::hook_sound_requests`] says the hooks asked for on the
+    /// frame, read after it runs.
+    pub fn with_sound_events(mut self) -> Self {
+        self.sound_events = true;
         self
     }
 
@@ -239,6 +257,24 @@ impl Interp {
             ],
         });
         let mut out: Vec<Event> = apu.collect();
+        if self.sound_events {
+            let asked = gp_sim::ext::hook_sound_requests(&self.spec, &self.world, &self.exts);
+            out.extend(asked.into_iter().map(|(latch, value)| Event {
+                frame,
+                kind: SOUND_KIND.into(),
+                entity: None,
+                data: vec![
+                    Entry {
+                        path: "latch".into(),
+                        value: Value::Int(latch.into()),
+                    },
+                    Entry {
+                        path: "value".into(),
+                        value: Value::Int(value.into()),
+                    },
+                ],
+            }));
+        }
         out.extend(events.into_iter().map(|e| Event {
             frame: e.frame,
             kind: self.spec.events[e.kind.0].clone(),

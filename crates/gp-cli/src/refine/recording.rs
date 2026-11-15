@@ -299,6 +299,7 @@ fn validate(a: &RefineArgs<'_>, paths: &gp_evidence::Paths) -> Result<Value> {
         // its start values too.
         power_on: true,
         which: false,
+        targets: Vec::new(),
     };
     let out = crate::validate::run(&args, paths)?;
     if out.exit == 2 {

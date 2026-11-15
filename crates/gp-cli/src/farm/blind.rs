@@ -750,13 +750,23 @@ pub(crate) fn discover(bytes: &[u8], paths: &Paths) -> Result<Discovery> {
         ),
         None => {
             let clips = starts.with_platform(&[], paths, arcade)?;
-            let (ci, t_start) =
-                m::play_start(bytes, &clips)?.context("play start: no start run reaches play")?;
-            (
-                clips[ci].inputs[..t_start].to_vec(),
-                clips[ci].power_on,
-                clips[ci].id.clone(),
-            )
+            match m::play_start(bytes, &clips)? {
+                Some((ci, t_start)) => (
+                    clips[ci].inputs[..t_start].to_vec(),
+                    clips[ci].power_on,
+                    clips[ci].id.clone(),
+                ),
+                // No start run moves the player (Donkey Kong: its start
+                // run taps Start and then stands, and its random runs
+                // pause the game with Start): from power-on, the presses
+                // below (Start, then the first action, until the pad moves
+                // a player) look for play instead.
+                None => (
+                    Vec::new(),
+                    gp_evidence::manifest::PowerOn::default(),
+                    "power-on (no start run reaches play)".to_owned(),
+                ),
+            }
         }
     };
     let mut nes = Machine::power_on(bytes, power_on)?;

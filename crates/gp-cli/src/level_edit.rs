@@ -248,6 +248,31 @@ enum Format {
     Rows,
     /// `table`: `[[row]]` entries, these columns each.
     Table(Vec<String>),
+    /// `level-grid`: `rows = ["..", ..]`, one character a cell, each the
+    /// metatile of its place in the legend (the file's `#   C  N` lines,
+    /// as gp_assets::text::write_level writes them). A row's values are
+    /// the metatiles' numbers.
+    Grid(Vec<char>),
+}
+
+/// The legend a lifted level grid's header lists: `#   C  N name` lines,
+/// the character of metatile N, in order.
+fn grid_legend(header: &str) -> Vec<char> {
+    let mut legend = Vec::new();
+    for line in header.lines() {
+        let Some(rest) = line.strip_prefix("#   ") else {
+            continue;
+        };
+        let mut chars = rest.chars();
+        let (Some(c), Some(' '), Some(' ')) = (chars.next(), chars.next(), chars.next()) else {
+            continue;
+        };
+        let n: String = chars.take_while(char::is_ascii_digit).collect();
+        if n.parse::<usize>().ok() == Some(legend.len()) {
+            legend.push(c);
+        }
+    }
+    legend
 }
 
 /// One slot's rows, as its lifted file holds them.
@@ -268,6 +293,36 @@ impl SlotData {
                 .ok_or(format!("{file}: row {i} holds something not a number"))
         };
         if let Some(rows) = doc.get("rows").and_then(toml::Value::as_array) {
+            let header = text
+                .split_once("\nrows = [")
+                .map(|(h, _)| format!("{h}\n"))
+                .unwrap_or_default();
+            if !rows.is_empty() && rows.iter().all(toml::Value::is_str) {
+                let legend = grid_legend(&header);
+                let rows = rows
+                    .iter()
+                    .enumerate()
+                    .map(|(i, r)| {
+                        r.as_str()
+                            .unwrap_or_default()
+                            .chars()
+                            .map(|c| {
+                                legend.iter().position(|&l| l == c).map(|p| p as i64).ok_or(
+                                    format!(
+                                        "{file}: row {i} has `{c}`, which its legend doesn't list"
+                                    ),
+                                )
+                            })
+                            .collect()
+                    })
+                    .collect::<Result<_, _>>()?;
+                return Ok(Self {
+                    file: file.to_owned(),
+                    format: Format::Grid(legend),
+                    rows,
+                    header,
+                });
+            }
             let rows = rows
                 .iter()
                 .enumerate()
@@ -278,10 +333,6 @@ impl SlotData {
                     )),
                 })
                 .collect::<Result<_, _>>()?;
-            let header = text
-                .split_once("\nrows = [")
-                .map(|(h, _)| format!("{h}\n"))
-                .unwrap_or_default();
             return Ok(Self {
                 file: file.to_owned(),
                 format: Format::Rows,
@@ -361,6 +412,23 @@ impl SlotData {
                 }
                 out.push_str("]\n");
             }
+            Format::Grid(legend) => {
+                out.push_str("rows = [\n");
+                for (i, r) in self.rows.iter().enumerate() {
+                    let text: String = r
+                        .iter()
+                        .map(|&v| {
+                            usize::try_from(v)
+                                .ok()
+                                .and_then(|v| legend.get(v))
+                                .copied()
+                                .unwrap_or('?')
+                        })
+                        .collect();
+                    let _ = writeln!(out, "  \"{text}\", # {i}");
+                }
+                out.push_str("]\n");
+            }
             Format::Table(cols) => {
                 if !out.ends_with("\n\n") {
                     out.push('\n');
@@ -377,10 +445,24 @@ impl SlotData {
         out
     }
 
+    /// Refuses a value a row of this slot can't hold: in a level grid,
+    /// a number its legend has no metatile for.
+    fn holds(&self, v: i64, what: &str) -> Result<(), String> {
+        match &self.format {
+            Format::Grid(legend) if usize::try_from(v).map_or(true, |v| v >= legend.len()) => {
+                Err(format!(
+                    "{what} is {v}: a cell of this grid is a metatile from 0 to {}",
+                    legend.len().saturating_sub(1)
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+
     fn column(&self, name: &str) -> Option<usize> {
         match &self.format {
             Format::Table(cols) => cols.iter().position(|c| c == name),
-            Format::Rows => None,
+            Format::Rows | Format::Grid(_) => None,
         }
     }
 }
@@ -1254,6 +1336,9 @@ fn apply_one(
                 byte(*v, &format!("a value of row {row}"))?;
             }
             let s = data.load(g.at(), slot)?;
+            for v in values {
+                s.holds(*v, &format!("a value of row {row}"))?;
+            }
             let n = s.rows.len();
             let one_col = matches!(&s.format, Format::Table(c) if c.len() == 1);
             if one_col {
@@ -1338,6 +1423,7 @@ fn apply_whole(
             }
             for v in new {
                 byte(*v, &format!("{slot} row {i}"))?;
+                s.holds(*v, &format!("{slot} row {i}"))?;
             }
         }
         if *rows != s.rows {
@@ -2941,7 +3027,7 @@ fn describe_level(
         if let Ok(d) = data.load(g.at(), &s) {
             slots.insert(
                 s.clone(),
-                json!({"file": d.file, "format": match &d.format { Format::Rows => json!("rows"), Format::Table(c) => json!({"table": c}) }, "rows": d.rows.len()}),
+                json!({"file": d.file, "format": match &d.format { Format::Rows => json!("rows"), Format::Table(c) => json!({"table": c}), Format::Grid(l) => json!({"grid": l.iter().collect::<String>()}) }, "rows": d.rows.len()}),
             );
             whole.slots.insert(s, d.rows.clone());
         }
@@ -3839,6 +3925,27 @@ mod tests {
     // Made-up bytes, in the two formats a lift writes.
     const ROWS: &str = "# Rows of 3 bytes each.\n# Lifted from a made-up game.\nschema = 1\nasset = \"lads\"\nrows = [\n  [0x10, 0x20, 0x00], # 0\n  [0x30, 0x40, 0x04], # 1\n]\n";
     const TABLE: &str = "# A table, one entry per row.\nschema = 1\nasset = \"tab\"\n\n# 0\n[[row]]\nbyte = 5\n\n# 1\n[[row]]\nbyte = 6\n\n# 2\n[[row]]\nbyte = 254\n\n# 3\n[[row]]\nbyte = 0\n\n# 4\n[[row]]\nbyte = 9\n";
+
+    // A made-up level grid, as gp_assets::text::write_level writes one.
+    const GRID: &str = "# A level, one character per metatile.\nschema = 1\nasset = \"level\"\n# 4 metatiles wide and 2 high. The characters, from the map's legend:\n#   .  0 air\n#   #  1 ground\n#   G  2 goal\nrows = [\n  \"..G.\", # 0\n  \"####\", # 1\n]\n";
+
+    #[test]
+    fn a_level_grid_reads_as_metatile_numbers_and_writes_back_the_same() {
+        let mut g = SlotData::parse("level.toml", GRID).unwrap();
+        assert_eq!(g.format, Format::Grid(vec!['.', '#', 'G']));
+        assert_eq!(g.rows, vec![vec![0, 0, 2, 0], vec![1, 1, 1, 1]]);
+        assert_eq!(g.text(), GRID);
+        g.rows[0] = vec![1, 0, 0, 2];
+        assert!(g.text().contains("\"#..G\", # 0"));
+        assert!(g.holds(2, "a value").is_ok());
+        assert!(g.holds(3, "a value").unwrap_err().contains("from 0 to 2"));
+        let bad = GRID.replace("..G.", "..X.");
+        assert!(
+            SlotData::parse("level.toml", &bad)
+                .unwrap_err()
+                .contains("`X`")
+        );
+    }
 
     #[test]
     fn a_slot_reads_and_writes_back_the_same() {

@@ -17,11 +17,12 @@
 //! | `GET /start/` | The first screen (also `/` when no game or copy was opened last) |
 //! | `GET /start/{file}` | Its files: start.html's scripts and styles, from mechanic/ |
 //! | `GET /api/journeys` | The games (with a theme kit or not), the templates, every copy with where it stands, and the copy opened last |
-//! | `POST /api/journeys/start` | `{journey: "theme", game, game_kind?, title, style}` or `{journey: "new", template, name}`: makes the copy (`gp theme look new` under `$GP_HOME/work/themes/`, or `template_fork` under `$GP_HOME/work/mcp/`) and its journey record |
+//! | `POST /api/journeys/start` | `{journey: "theme", game, game_kind?, title, style}`, `{journey: "new", template, name}` or `{journey: "new", empty: true, name}`: makes the copy (`gp theme look new` under `$GP_HOME/work/themes/`, `template_fork` under `$GP_HOME/work/mcp/`, or for a game from nothing `gp game new NAME --empty` there) and its journey record |
 //! | `GET /api/journeys/{kind}/{name}` | A copy: its `next` answer (steps, whose turn, facts), its buttons' last runs, and its files; opening it makes it the copy opened last |
 //! | `POST /api/journeys/{kind}/{name}/set` | `{style?}` or `{step, done}`: the person's style words, or a step only they can finish marked done or not |
-//! | `GET`, `POST /api/journeys/{kind}/{name}/do/{which}` | A button's last run, or starts it: a theme's `look-check`, `look-play`, `shots`; a new game's `build`, `render`, `verify`, `undo` |
-//! | `GET /api/journeys/{kind}/{name}/file/{*file}` | `stage.png` (the stage by what each piece is), `shots/...` (the theme in the game), `play/...` (the new game built to play) |
+//! | `GET`, `POST /api/journeys/{kind}/{name}/do/{which}` | A button's last run, or starts it: a theme's `look-check`, `look-play`, `shots`, `compare`; a new game's `build`, `render`, `verify`, `undo` |
+//! | `GET /api/journeys/theme/{name}/look/{*file}` | The theme's game as SEE IT IN THE GAME serves it (`gp theme look play`, on 127.0.0.1 at a port of its own), passed through here so PLAY can hold it in a frame of this page: its headers allow only a frame of its own origin |
+//! | `GET /api/journeys/{kind}/{name}/file/{*file}` | `stage.png` (the stage by what each piece is), `shots/...` (the theme in the game), `compare/...` (the theme beside the game's own pictures, moment by moment), `play/...` (the new game built to play) |
 //! | `GET /share/{*file}` | The page and the person's own registry together (`gp game share`'s, `$GP_HOME/work/share/`), under the public page's headers: `/share/p?g=local/NAME` plays a new game they shared |
 
 use std::collections::BTreeSet;
@@ -48,7 +49,7 @@ pub(super) fn routes() -> Vec<Route> {
         },
         Route {
             path: "/api/journeys/start",
-            about: "Makes a copy: {journey: theme, game, title, style} or {journey: new, template, name}",
+            about: "Makes a copy: {journey: theme, game, title, style}, {journey: new, template, name}, or {journey: new, empty: true, name} for a game from nothing",
             handler: start,
         },
         Route {
@@ -63,8 +64,13 @@ pub(super) fn routes() -> Vec<Route> {
         },
         Route {
             path: "/api/journeys/{kind}/{name}/do/{which}",
-            about: "A copy's button: GET its last run, POST starts it (look-check, look-play, shots; build, render, verify, undo)",
+            about: "A copy's button: GET its last run, POST starts it (look-check, look-play, shots, compare; build, render, verify, undo)",
             handler: act,
+        },
+        Route {
+            path: "/api/journeys/{kind}/{name}/look/{*file}",
+            about: "A theme's game as SEE IT IN THE GAME serves it, passed through for PLAY's frame",
+            handler: look,
         },
         Route {
             path: "/share/{*file}",
@@ -73,7 +79,7 @@ pub(super) fn routes() -> Vec<Route> {
         },
         Route {
             path: "/api/journeys/{kind}/{name}/file/{*file}",
-            about: "A copy's pictures: stage.png, shots/..., and play/... (the new game built to play)",
+            about: "A copy's pictures: stage.png, shots/..., compare/... (the theme beside the original), and play/... (the new game built to play)",
             handler: file,
         },
     ]
@@ -90,8 +96,10 @@ const FILES: &[&str] = &[
     "picture-card.js",
     "picture-card.css",
     "sound-card.js",
+    "sprite-card.js",
     "journeys/start.js",
     "journeys/journey.js",
+    "journeys/tabs.js",
     "journeys/journeys.css",
 ];
 
@@ -318,6 +326,27 @@ fn start(ctx: &Ctx, req: &Request, _params: &Params) -> Result<Response, Fail> {
             j::remember(home, Kind::Theme, &name);
             Ok(Response::json(&json!({"journey": "theme", "name": name})))
         }
+        "new" if b["empty"] == json!(true) => {
+            // A game from nothing: gp game new NAME --empty, through the
+            // agent's own gp_run, writes the game and its journey record.
+            let name = s("name");
+            if !gp_model::path::is_name(&name) {
+                return Err(Fail::bad_request(
+                    "a new game's name is letters, digits and _, starting with a letter (like my_hop)",
+                ));
+            }
+            if j::copies_root(home).join(&name).exists() {
+                return Err(Fail::conflict(format!(
+                    "you have a game called {name} already: pick another name"
+                )));
+            }
+            let args = json!({"command": "game new", "args": {"game": name, "empty": true}});
+            let made = reply_or_words(gp_mcp::tools::call_by(&config, "gp_run", args, page), true)?;
+            j::remember(home, Kind::New, &name);
+            Ok(Response::json(
+                &json!({"journey": "new", "name": name, "from": "nothing", "made": made}),
+            ))
+        }
         "new" => {
             let (template, name) = (s("template"), s("name"));
             if !gp_model::path::is_name(&name) {
@@ -375,7 +404,7 @@ fn the_copy(ctx: &Ctx, params: &Params) -> Result<j::Copy, Fail> {
 /// The buttons each journey has.
 fn actions(kind: Kind) -> &'static [&'static str] {
     match kind {
-        Kind::Theme => &["look-check", "look-play", "shots"],
+        Kind::Theme => &["look-check", "look-play", "shots", "compare"],
         Kind::New => &["build", "render", "verify", "undo", "share"],
     }
 }
@@ -387,10 +416,20 @@ fn detail(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> 
     let all = j::list(home, Some(&ctx.games));
     let mut a = j::answer(&j::gather(&ctx.paths, &all, &c), &j::around(home, &c));
     a.copies = j::lines(&ctx.paths, &all);
-    let jobs: serde_json::Map<String, Value> = actions(c.kind)
+    let mut jobs: serde_json::Map<String, Value> = actions(c.kind)
         .iter()
         .map(|w| (w.to_string(), job(home, &c, w)))
         .collect();
+    // SEE IT IN THE GAME's server lives for an hour in a process of its
+    // own: whether its link still answers, so PLAY can show the game or
+    // offer to open it again (a page can't tell: the game's headers keep
+    // another origin's look out).
+    if let Some(j) = jobs.get_mut("look-play")
+        && j["state"] == "done"
+    {
+        let serving = j["json"]["links"][0].as_str().is_some_and(answers);
+        j["serving"] = json!(serving);
+    }
     let rd = j::record_dir(home, c.kind, &c.name);
     let base = format!("/api/journeys/{}/{}/file", c.kind.word(), c.name);
     let mut files = json!({});
@@ -402,6 +441,7 @@ fn detail(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> 
                 .collect();
             shots.sort();
             files["shots"] = json!(shots);
+            files["compare"] = compared(&jobs, &base);
             files["check"] = j::read(home, c.kind, &c.name, "check.json");
             files["play"] = j::read(home, c.kind, &c.name, "play.json");
         }
@@ -412,7 +452,7 @@ fn detail(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> 
                 files["stage_current"] = json!(mtime(&png) >= j::newest(&c.dir));
             }
             if play_dir(home, &c.name).join("index.html").is_file() {
-                files["play"] = json!(format!("{base}/play/index.html"));
+                files["play"] = json!(format!("{base}/play/index.html?files=here"));
             }
             files["verify"] = j::read(home, c.kind, &c.name, "verify.json");
         }
@@ -423,6 +463,45 @@ fn detail(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> 
         "jobs": jobs,
         "files": files,
     })))
+}
+
+/// Whether something listens at a link's address on this computer.
+fn answers(link: &str) -> bool {
+    let Some(rest) = link.strip_prefix("http://") else {
+        return false;
+    };
+    let host = rest.split('/').next().unwrap_or("");
+    if !host.starts_with("127.0.0.1:") {
+        return false;
+    }
+    host.parse::<std::net::SocketAddr>().is_ok_and(|a| {
+        std::net::TcpStream::connect_timeout(&a, std::time::Duration::from_millis(300)).is_ok()
+    })
+}
+
+/// The theme beside the game's own pictures, from the last `compare` run:
+/// each moment's pair, with its words, in the route's order. The run's
+/// pairs are `pair-ROM-MOMENT.png` in the copy's `compare/` folder.
+fn compared(jobs: &serde_json::Map<String, Value>, base: &str) -> Value {
+    let j = &jobs.get("compare").cloned().unwrap_or(Value::Null);
+    if j["state"] != "done" {
+        return json!([]);
+    }
+    let stamp = j["ended_ms"].as_u64().unwrap_or(0);
+    let list: Vec<Value> = j["json"]["paired"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| {
+            let file = Path::new(p["file"].as_str()?).file_name()?.to_str()?;
+            Some(json!({
+                "rom": p["rom"], "moment": p["moment"], "shows": p["shows"],
+                "frame": p["frame"],
+                "src": format!("{base}/compare/{file}?t={stamp}"),
+            }))
+        })
+        .collect();
+    json!(list)
 }
 
 fn mtime(p: &Path) -> u64 {
@@ -568,6 +647,17 @@ fn call_of(home: &Path, c: &j::Copy, which: &str) -> Result<(&'static str, Value
             ),
             true,
         ),
+        // The theme beside the game in its own pictures, moment by moment
+        // along the game's route: the review against the original.
+        (Kind::Theme, "compare") => (
+            "gp_run",
+            run(
+                "theme look play",
+                json!({"dir": dir, "game": game()?, "shots": rd.join("compare"), "against": "original"}),
+                2400,
+            ),
+            true,
+        ),
         (Kind::New, "build") => ("build_publish", json!({"copy": c.name}), false),
         (Kind::New, "render") => (
             "gp_run",
@@ -658,6 +748,108 @@ fn act(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
     Ok(Response::json(&running))
 }
 
+/// The theme's game, as the server SEE IT IN THE GAME started serves it,
+/// passed through under the public page's headers (Response::game_file):
+/// PLAY holds it in a frame, and the page's `frame-ancestors 'self'` lets
+/// only its own origin do that. Only the address the copy's last
+/// `look-play` printed is asked, and only on this computer.
+fn look(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
+    let c = the_copy(ctx, params)?;
+    if c.kind != Kind::Theme {
+        return Err(Fail::not_found("only a theme has a game to see"));
+    }
+    let f = params.get("file").map(String::as_str).unwrap_or("");
+    if f.split('/').any(|p| p == ".." || p.starts_with('.')) {
+        return Err(Fail::not_found("not here"));
+    }
+    let j = job(&ctx.paths.home, &c, "look-play");
+    let addr = j["json"]["links"][0]
+        .as_str()
+        .and_then(|l| l.strip_prefix("http://127.0.0.1:"))
+        .and_then(|r| r.split('/').next())
+        .and_then(|p| p.parse::<u16>().ok())
+        .map(|p| std::net::SocketAddr::from(([127, 0, 0, 1], p)))
+        .ok_or_else(|| Fail::not_found("SEE IT IN THE GAME hasn't opened the game yet"))?;
+    let query: Vec<String> = req
+        .query
+        .iter()
+        .map(|(k, v)| format!("{}={}", encode(k), encode(v)))
+        .collect();
+    let path = if query.is_empty() {
+        format!("/{f}")
+    } else {
+        format!("/{f}?{}", query.join("&"))
+    };
+    let (status, kind, b) = get_local(addr, &path).map_err(|_| {
+        Fail::not_found("the game SEE IT IN THE GAME opened has stopped: open it again")
+    })?;
+    let mut r = Response::game_file(kind, b);
+    r.status = status;
+    Ok(r)
+}
+
+/// A query value as a URL carries it.
+fn encode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' | b'@' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// One GET to a server on this computer: its status, content type and body.
+fn get_local(
+    addr: std::net::SocketAddr,
+    path: &str,
+) -> std::io::Result<(u16, &'static str, Vec<u8>)> {
+    use std::io::{Read as _, Write as _};
+    let mut s = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2))?;
+    s.set_read_timeout(Some(std::time::Duration::from_secs(60)))?;
+    write!(
+        s,
+        "GET {path} HTTP/1.0\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+    )?;
+    let mut all = Vec::new();
+    s.read_to_end(&mut all)?;
+    let at = all
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .ok_or_else(|| std::io::Error::other("no head"))?;
+    let head = String::from_utf8_lossy(&all[..at]).into_owned();
+    let status = head
+        .split_whitespace()
+        .nth(1)
+        .and_then(|x| x.parse().ok())
+        .unwrap_or(502);
+    let ct = head
+        .lines()
+        .find_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            k.trim()
+                .eq_ignore_ascii_case("content-type")
+                .then(|| v.trim().to_ascii_lowercase())
+        })
+        .unwrap_or_default();
+    let kind = [
+        ("text/html", "text/html; charset=utf-8"),
+        ("text/javascript", "text/javascript; charset=utf-8"),
+        ("application/javascript", "text/javascript; charset=utf-8"),
+        ("text/css", "text/css; charset=utf-8"),
+        ("application/json", "application/json"),
+        ("application/wasm", "application/wasm"),
+        ("image/png", "image/png"),
+        ("image/svg+xml", "image/svg+xml"),
+        ("text/plain", "text/plain; charset=utf-8"),
+    ]
+    .iter()
+    .find(|(k, _)| ct.starts_with(k))
+    .map_or("application/octet-stream", |(_, v)| v);
+    Ok((status, kind, all[at + 4..].to_vec()))
+}
+
 fn file(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> {
     let c = the_copy(ctx, params)?;
     let f = params.get("file").map(String::as_str).unwrap_or("");
@@ -669,7 +861,9 @@ fn file(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> {
     let home = &ctx.paths.home;
     let path = match (c.kind, f.split_once('/')) {
         (Kind::New, Some(("play", rest))) => play_dir(home, &c.name).join(rest),
-        (Kind::Theme, Some(("shots", _))) | (Kind::New, None) if f.ends_with(".png") => {
+        (Kind::Theme, Some(("shots" | "compare", _))) | (Kind::New, None)
+            if f.ends_with(".png") =>
+        {
             j::record_dir(home, c.kind, &c.name).join(f)
         }
         _ => return Err(Fail::not_found("not here")),
@@ -738,9 +932,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_look_link_answers_only_while_something_listens_on_this_computer() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        assert!(answers(&format!("http://127.0.0.1:{port}/p?g=a/b")));
+        drop(l);
+        assert!(!answers(&format!("http://127.0.0.1:{port}/p?g=a/b")));
+        assert!(!answers("http://example.com:80/p"));
+        assert!(!answers("not a link"));
+    }
+
+    #[test]
     fn a_title_makes_a_folder_name() {
         assert_eq!(slug("Night Time, Neon!"), "night-time-neon");
         assert_eq!(slug("  2 Moons "), "my-2-moons");
         assert_eq!(slug("..."), "my");
+    }
+
+    #[test]
+    fn the_last_compare_run_gives_each_moments_pair_in_order() {
+        let base = "/api/journeys/theme/night/file";
+        let mut jobs = serde_json::Map::new();
+        // Not run yet, or still running: nothing to show.
+        assert_eq!(compared(&jobs, base), json!([]));
+        jobs.insert("compare".into(), json!({"state": "running"}));
+        assert_eq!(compared(&jobs, base), json!([]));
+        jobs.insert(
+            "compare".into(),
+            json!({"state": "done", "ended_ms": 7, "json": {"paired": [
+                {"rom": "r", "moment": "still", "shows": "the start", "frame": 560,
+                 "file": "/home/x/compare/pair-r-still.png"},
+                {"rom": "r", "moment": "walk", "shows": "walking", "frame": 685,
+                 "file": "/home/x/compare/pair-r-walk.png"},
+            ]}}),
+        );
+        let c = compared(&jobs, base);
+        assert_eq!(c.as_array().unwrap().len(), 2);
+        assert_eq!(c[0]["moment"], "still");
+        assert_eq!(
+            c[1]["src"],
+            "/api/journeys/theme/night/file/compare/pair-r-walk.png?t=7"
+        );
     }
 }

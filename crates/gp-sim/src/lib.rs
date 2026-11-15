@@ -22,6 +22,13 @@
 //! random number generator's state in the world, no clock, no floats, no
 //! hash-map iteration, and systems in an explicit order.
 
+/// The simulation API a hook crate sees (`Ext`, `ExtCx`, `World`, `Spec`),
+/// as major.minor. A package's `sim-api` names the major it needs. An added
+/// method with a default is a minor change, since every hook crate still
+/// builds and runs as before; a changed or removed one is a major change.
+/// 1.1 added [`Ext::sound_requests`].
+pub const SIM_API: &str = "1.1";
+
 pub mod draws;
 pub mod ext;
 pub mod fx;

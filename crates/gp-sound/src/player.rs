@@ -20,7 +20,8 @@ impl Cursor {
     fn new(set: &SongSet, song: usize, looping: bool) -> Self {
         let s = &set.songs[song];
         let mut tracks: [Vec<Placed>; 5] = Default::default();
-        for t in &s.tracks {
+        // An AY-8910 track (gp-songs 0.2) isn't the APU's to play.
+        for t in s.tracks.iter().filter(|t| t.channel.is_apu()) {
             tracks[t.channel.index()] = t.placed(s.tempo);
         }
         Self {
@@ -169,7 +170,7 @@ impl Player {
             Channel::Pulse2 => w.push((0, 0x04, 0x30)),
             Channel::Triangle => w.push((0, 0x08, 0x80)),
             Channel::Noise => w.push((0, 0x0C, 0x30)),
-            Channel::Dmc => {}
+            _ => {}
         }
     }
 
@@ -234,6 +235,8 @@ impl Player {
                     w.push((0, 0x15, 0x1F));
                 }
             }
+            // An AY-8910 channel has no APU registers.
+            _ => {}
         }
     }
 }

@@ -123,6 +123,25 @@ pub struct RecheckArgs {
     /// nothing goes to the index or the mirrors.
     #[arg(long)]
     pub dry_run: bool,
+    /// Recheck a theme in this registry instead (a folder, git:PATH or
+    /// s3://BUCKET): GAME and THEME are then package names (GAME
+    /// lex00/donkey-kong, THEME friend/night). The version the game's list
+    /// names is fetched by its id and read as the page's lift reads it,
+    /// over --rom or a ROM of the game in $GP_ROM_DIR, and the result goes
+    /// into that version's line of by-game/ as `recheck` (the date, pass or
+    /// fail, and why), re-signed with --key. A failed recheck is recorded
+    /// and exits 1; the page still offers the theme and says why. A
+    /// recheck that couldn't run records nothing. Example: --registry
+    /// git:$HOME/gp-registry
+    #[arg(long, value_name = "TARGET", conflicts_with_all = ["model", "assets", "index", "no_gate"])]
+    pub registry: Option<String>,
+    /// With --registry: the registry's signing private key file, for a
+    /// registry whose list files are signed. Example: --key ~/.ssh/gp-signing
+    #[arg(long, requires = "registry")]
+    pub key: Option<PathBuf>,
+    /// With --registry on a git:PATH target: commit, and don't push.
+    #[arg(long, requires = "registry")]
+    pub no_push: bool,
 }
 
 /// Where the themes index lives: the games checkout, which holds the
@@ -1377,6 +1396,9 @@ fn game_templates(repo: &Path, game: &str) -> Vec<(PathBuf, gp_model::Model)> {
 /// model's result, slot fingerprint and look digest added to the theme's
 /// index line. The package and its signature are left as they are.
 pub(crate) fn recheck(a: &RecheckArgs, paths: &Paths, rec: &mut RunRecorder) -> Result<Outcome> {
+    if let Some(target) = &a.registry {
+        return crate::registry_recheck::run(a, target);
+    }
     let repo = repo_root()?;
     let game = family(&repo, &a.game);
     let ipath = index_path(&repo, &game, a.index.as_deref());

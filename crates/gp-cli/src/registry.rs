@@ -298,6 +298,63 @@ pub enum RegistryCmd {
         #[arg(long, requires = "theme")]
         rom: Option<PathBuf>,
     },
+    /// Offer a game or theme to a registry you can't write to, such as
+    /// lex00/gp-registry, as a pull request its owner merges or not.
+    ///
+    /// Stages DIR without its hidden files (.git, .gitignore), clones the
+    /// registry, and on a branch of its own runs what the owner would run:
+    /// gp registry grant for a namespace the registry doesn't grant yet (an
+    /// unsigned registry only), gp registry publish, with every check it
+    /// runs (each file compared with each ROM the package names, a game with
+    /// its own pictures with every ROM in $GP_ROM_DIR), and gp registry
+    /// reindex --keep, so the pull request holds the package and its lines
+    /// in the list files. Then it pushes the branch to your fork (made with
+    /// gh repo fork when you have none) and opens the pull request with gh.
+    /// If a check fails, it stops there and says which: nothing is pushed,
+    /// no pull request is opened, and the same version can be sent again
+    /// once it is fixed. Sending the same version again replaces the branch
+    /// and keeps its pull request. Needs gh logged in to GitHub.
+    ///
+    /// Example: gp registry submit ./my-theme --name friend/night --version
+    /// 0.9.0 --title "Night" --for lex00/donkey-kong --dry-run
+    Submit {
+        /// The folder to submit, as it should arrive. Example: ./my-theme
+        dir: PathBuf,
+        /// The package's name, NAMESPACE/NAME; the namespace is usually
+        /// your GitHub login. Example: --name friend/night
+        #[arg(long)]
+        name: String,
+        /// This version, never published before under the name. Example:
+        /// --version 0.9.0
+        #[arg(long)]
+        version: String,
+        /// content (a theme) or game. Example: --kind content
+        #[arg(long, default_value = "content")]
+        kind: String,
+        /// The name players see. Example: --title "Night"
+        #[arg(long)]
+        title: String,
+        /// A game this content is for, as NAMESPACE/NAME; repeat for more.
+        /// Example: --for lex00/donkey-kong
+        #[arg(long = "for")]
+        for_games: Vec<String>,
+        /// The registry's GitHub repo, OWNER/REPO. Example: --to
+        /// lex00/gp-registry
+        #[arg(long, default_value = crate::registry_submit::UPSTREAM)]
+        to: String,
+        /// Your fork to push to, OWNER/REPO (default: YOUR-LOGIN/REPO,
+        /// made when it isn't there). Example: --fork friend/gp-registry
+        #[arg(long)]
+        fork: Option<String>,
+        /// Your namespace's signing private key file, for a signed
+        /// registry. Example: --key ~/.ssh/gp-friend
+        #[arg(long)]
+        key: Option<PathBuf>,
+        /// Run every check and make the commits in the clone, and stop:
+        /// nothing is forked, pushed or opened. Example: --dry-run
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 /// How a command that writes to a registry writes.
@@ -422,6 +479,40 @@ pub fn run(cmd: &RegistryCmd) -> Result<Outcome> {
                 )?;
             }
             Ok(o)
+        }
+        RegistryCmd::Submit {
+            dir,
+            name,
+            version,
+            kind,
+            title,
+            for_games,
+            to,
+            fork,
+            key,
+            dry_run,
+        } => {
+            let paths = gp_evidence::Paths::from_env()?;
+            let gh = std::env::var("GP_GH").unwrap_or_else(|_| "gh".into());
+            let work = paths.home.join("work").join("registry-submit");
+            crate::registry_submit::run(
+                &crate::registry_submit::Submission {
+                    dir,
+                    name,
+                    version,
+                    kind,
+                    title,
+                    for_games,
+                    key: key.as_deref(),
+                },
+                &crate::registry_submit::Route {
+                    upstream: to,
+                    fork: fork.as_deref(),
+                    dry_run: *dry_run,
+                    gh: &gh,
+                    work: &work,
+                },
+            )
         }
     }
 }
@@ -661,7 +752,7 @@ fn committing_as(
 /// `f` on the target: for real through [`committing`], or with
 /// `--dry-run` on a copy held in memory over it, and then what it would
 /// have written.
-fn writing(
+pub(crate) fn writing(
     target: &str,
     message: &str,
     how: Writing,
@@ -834,23 +925,28 @@ fn line_diff(old: &str, new: &str) -> Vec<String> {
 
 /// Nothing goes into a repo with a ROM's bytes in it: a repo's history keeps
 /// what it's given. Every file of a package that names ROMs is compared with
-/// each of them, and a ROM not found here stops the publish.
-fn no_rom_bytes(dir: &Path) -> Result<()> {
+/// each of them (found under `roms`), and a ROM not found there stops the
+/// publish. Returns the line saying what it compared, as gp package scan
+/// says it: "ROM comparison: done against" and the entries' ids.
+fn no_rom_bytes(dir: &Path, roms: &Path) -> Result<String> {
     if !dir.join("package.toml").exists() {
-        return Ok(());
+        return Ok(
+            "ROM comparison: this folder has no package.toml, so it names no ROM to compare with"
+                .into(),
+        );
     }
     let pkg = crate::package::Package::load(dir)?;
     let wanted = pkg.rom_hashes();
     if wanted.is_empty() {
-        return Ok(());
+        return Ok("ROM comparison: this package names no ROM".into());
     }
-    let paths = gp_evidence::Paths::from_env()?;
-    let found = crate::roms::find(&wanted, &[], &paths.roms)?;
+    let found = crate::roms::find(&wanted, &[], roms)?;
     if let Some(gone) = wanted.iter().find(|h| !found.contains_key(*h)) {
         anyhow::bail!(
             "ROM {gone} isn't in $GP_ROM_DIR, so this package can't be compared with it before going into a repo"
         );
     }
+    let mut files = 0usize;
     let mut stack = vec![dir.to_owned()];
     while let Some(d) = stack.pop() {
         for e in fs::read_dir(&d).with_context(|| d.display().to_string())? {
@@ -859,6 +955,7 @@ fn no_rom_bytes(dir: &Path) -> Result<()> {
                 stack.push(p);
                 continue;
             }
+            files += 1;
             let bytes = fs::read(&p)?;
             for (id, rom) in &found {
                 if let Some((at, len)) = crate::served::runs_of_rom(&bytes, rom.data()).first() {
@@ -871,7 +968,12 @@ fn no_rom_bytes(dir: &Path) -> Result<()> {
             }
         }
     }
-    Ok(())
+    let mut ids: Vec<&str> = pkg.entries.iter().map(|e| e.id.as_str()).collect();
+    ids.dedup();
+    Ok(format!(
+        "ROM comparison: done against {}: none of the {files} files holds a run of their bytes",
+        ids.join(", ")
+    ))
 }
 
 /// A folder, `git:PATH`, `s3://BUCKET` or an https address.
@@ -937,7 +1039,10 @@ fn ssh_sign(key: &Path, data: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 /// `f` given a signer for the key file, or one that signs nothing.
-fn signing<T>(key: Option<&Path>, f: impl FnOnce(&Signer) -> Result<T, String>) -> Result<T> {
+pub(crate) fn signing<T>(
+    key: Option<&Path>,
+    f: impl FnOnce(&Signer) -> Result<T, String>,
+) -> Result<T> {
     let Some(key) = key else {
         return f(&Signer::none()).map_err(|e| anyhow!(e));
     };
@@ -1048,18 +1153,31 @@ pub fn publish_cmd(
     key: Option<&Path>,
     how: Writing,
 ) -> Result<Outcome> {
-    if Repo::at(target).is_some() {
-        no_rom_bytes(dir)?;
-    }
     let paths = gp_evidence::Paths::from_env()?;
+    let compared = if Repo::at(target).is_some() {
+        no_rom_bytes(dir, &paths.roms)?
+    } else {
+        format!(
+            "ROM comparison: not run; a package is compared with its ROMs only before it goes into a git: target, and {target} isn't one"
+        )
+    };
     let own = own_pictures_guard(dir, &paths.roms, &paths.home)?;
+    let exact = crate::publish_rule::arcade_exact_guard(dir, kind)?;
     let mut o = writing(target, &format!("Publish {name}@{version}"), how, |t| {
         publish_inner(t, dir, (name, version), (kind, title), for_games, key)
     })?;
+    o.text.push('\n');
+    o.text.push_str(&compared);
+    o.json["rom_comparison"] = json!(compared);
     if let Some(line) = own {
         o.text.push('\n');
         o.text.push_str(&line);
         o.json["own_pictures"] = json!(line);
+    }
+    if let Some(line) = exact {
+        o.text.push('\n');
+        o.text.push_str(&line);
+        o.json["arcade_exact"] = json!(line);
     }
     Ok(o)
 }
@@ -1257,6 +1375,7 @@ fn page_would(
             version: version.to_owned(),
             id: id.to_owned(),
             title: title.to_owned(),
+            recheck: None,
         });
         out.push(match gp_web_registry::choose(game, &lines, &yanks).verdict(name) {
             Some(Ok(_)) => format!(
@@ -1466,7 +1585,7 @@ fn public_key_file(file: &Path) -> Result<String> {
 }
 
 /// Grants a namespace: its file and registry.toml's line, one commit on a
-/// git: target, with the message the grant of ddmoney420 had.
+/// git: target, with the message a grant has always had.
 pub fn grant_cmd(
     target: &str,
     ns: &str,
@@ -1718,7 +1837,7 @@ fn offered_cmd(
         );
         match &installed {
             Ok(r) => lines.push(format!(
-                "ok      theme {}@{}: offered for {game} as `{}` ({}), {} files{}",
+                "ok      theme {}@{}: offered for {game} as `{}` ({}), {} files{}{}",
                 x.name,
                 x.version,
                 gp_web_registry::theme_id(&x.name),
@@ -1727,7 +1846,8 @@ fn offered_cmd(
                 r.yank
                     .as_ref()
                     .map(|y| format!("; withdrawn ({}): {}", y.severity, y.reason))
-                    .unwrap_or_default()
+                    .unwrap_or_default(),
+                crate::registry_recheck::said(x.recheck.as_ref())
             )),
             Err(e) => {
                 failed = true;
@@ -1740,7 +1860,7 @@ fn offered_cmd(
         offered.push(json!({
             "name": x.name, "version": x.version, "id": gp_web_registry::theme_id(&x.name),
             "title": x.title, "installs": installed.is_ok(),
-            "error": installed.as_ref().err(),
+            "error": installed.as_ref().err(), "recheck": x.recheck,
         }));
     }
     for l in &offer.left_out {
@@ -1891,7 +2011,17 @@ fn look_check(
         .iter()
         .find(|p| p.name == name)
         .ok_or_else(|| anyhow!("{name} isn't in the catalog"))?;
-    let (_, files) = r.fetch(name, &p.latest, &p.id).map_err(|e| anyhow!(e))?;
+    look_check_at(&r, (name, &p.latest, &p.id), game, rom)
+}
+
+/// [`look_check`] of one exact version, fetched by its id through `r`.
+pub(crate) fn look_check_at(
+    r: &Reader,
+    (name, version, id): (&str, &str, &str),
+    game: &str,
+    rom: Option<&Path>,
+) -> Result<Value> {
+    let (_, files) = r.fetch(name, version, id).map_err(|e| anyhow!(e))?;
     let dir = tempfile::tempdir()?;
     for (rel, b) in &files {
         let f = dir.path().join(rel);
@@ -2800,6 +2930,48 @@ mod command_tests {
         out
     }
 
+    /// Before a git: publish the package is compared with each ROM it
+    /// names, and the line says which; a file holding a run of a ROM's
+    /// bytes stops it.
+    #[test]
+    fn the_rom_comparison_names_the_roms_it_compared_against() {
+        let d = tempfile::tempdir().unwrap();
+        let roms = d.path().join("roms");
+        fs::create_dir_all(&roms).unwrap();
+        let (a, b) = (made_up_rom(3), made_up_rom(11));
+        fs::write(roms.join("a.nes"), &a).unwrap();
+        fs::write(roms.join("b.nes"), &b).unwrap();
+        let pkg = d.path().join("pkg");
+        fs::create_dir_all(pkg.join("assets")).unwrap();
+        fs::write(
+            pkg.join("package.toml"),
+            format!(
+                "[package]\nname = \"own/two\"\nversion = \"0.1.0\"\nkind = \"game\"\n\n[[rom.entry]]\nid = \"two-a\"\nsha256 = \"{}\"\n\n[[rom.entry]]\nid = \"two-b\"\nsha256 = \"{}\"\n",
+                crate::roms::sha256_of(&a).unwrap(),
+                crate::roms::sha256_of(&b).unwrap()
+            ),
+        )
+        .unwrap();
+        fs::write(pkg.join("assets/map.toml"), "made = \"up\"\n").unwrap();
+        let said = no_rom_bytes(&pkg, &roms).unwrap();
+        assert_eq!(
+            said,
+            "ROM comparison: done against two-a, two-b: none of the 2 files holds a run of their bytes"
+        );
+        fs::write(pkg.join("assets/lifted.bin"), &b[4096..8192]).unwrap();
+        let e = no_rom_bytes(&pkg, &roms).unwrap_err().to_string();
+        assert!(
+            e.contains("lifted.bin holds") && e.contains("nothing was published"),
+            "{e}"
+        );
+        let bare = tempfile::tempdir().unwrap();
+        assert!(
+            no_rom_bytes(bare.path(), &roms)
+                .unwrap()
+                .contains("no package.toml")
+        );
+    }
+
     #[test]
     fn a_dry_run_writes_nothing_and_says_what_it_would_write() {
         let (_d, spec) = scratch();
@@ -2826,6 +2998,7 @@ mod command_tests {
             o.text
         );
         assert!(o.text.contains(&id), "{}", o.text);
+        assert!(o.text.contains("ROM comparison: not run;"), "{}", o.text);
         assert!(
             o.text.contains("add     2 blobs (0 already there)"),
             "{}",
@@ -3039,5 +3212,183 @@ mod command_tests {
                 );
             }
         }
+    }
+
+    /// The owner's rule for an arcade game (#3): `gp registry publish`
+    /// refuses one unless the score record in its evidence/ for its model
+    /// and corpus as they are has every clip exact on state and every
+    /// compared screen frame the same on picture, with the package's
+    /// mapping and ROM, and says how to get there. A made-up package and
+    /// made-up records: no ROM is read.
+    #[test]
+    fn an_arcade_game_is_published_only_when_every_clip_scores_exact() {
+        let (_d, spec) = scratch();
+        let g = tempfile::tempdir().unwrap();
+        let dir = g.path();
+        let rom = "ab".repeat(32);
+        let put = |f: &str, t: &str| {
+            let p = dir.join(f);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, t).unwrap();
+        };
+        put(
+            "package.toml",
+            &format!(
+                "[package]\nname = \"own/cab\"\nversion = \"0.1.0\"\nkind = \"game\"\ntitle = \"Cab\"\n\n[[rom.entry]]\nid = \"cab\"\nrole = \"scored\"\nsha256 = \"{rom}\"\nplatform = \"arcade\"\nsystem = \"cab\"\nasset_map = \"assets/cab.toml\"\nasset_map_sha256 = \"00\"\n"
+            ),
+        );
+        put("model.toml", "# made up for the test\n");
+        put("mapping.toml", "# made up mapping\n");
+        put(
+            "inputs/a.start.presses",
+            "gp-presses 0\nframes 4\nstart@1-2\n",
+        );
+        put("inputs/a.presses", "gp-presses 0\nframes 10\nright@0-5\n");
+        put(
+            "corpus.toml",
+            &format!(
+                "[corpus]\nformat = \"1.0.0\"\nname = \"cab\"\nversion = \"1.0.0\"\nrecipes = \"x\"\n\n[target]\ngame = \"cab\"\nrom = \"{rom}\"\n\n[[clip]]\nid = \"cab.1\"\nname = \"one\"\nsource = \"played\"\nstart = \"inputs/a.start.presses\"\npresses = \"inputs/a.presses\"\nframes = 10\n"
+            ),
+        );
+        let publish_as = |version: &str| {
+            publish_cmd(
+                &spec,
+                dir,
+                ("own/cab", version),
+                ("game", "Cab"),
+                &[],
+                None,
+                Writing::default(),
+            )
+        };
+        let publish = || publish_as("0.1.0");
+        let published = || {
+            fs::read_dir(Path::new(&spec).join("packages"))
+                .map(|d| d.count())
+                .unwrap_or(0)
+        };
+        // No record: refused, saying how to get one, and nothing written.
+        let e = publish().err().unwrap().to_string();
+        assert!(
+            e.contains("own/cab is an arcade game")
+                && e.contains("holds no score record")
+                && e.contains("gp corpus score GAME_DIR --run publish --write GAME_DIR")
+                && e.ends_with("Nothing was published"),
+            "{e}"
+        );
+        assert_eq!(published(), 0);
+
+        let model = crate::corpus_score::model_key("# made up for the test\n");
+        let corpus = crate::corpus_score::load(dir).unwrap().hash;
+        let file = crate::corpus_score::record_path(dir, &model, &corpus);
+        let h = |t: &str| gp_evidence::Hash::of(t.as_bytes()).to_string();
+        // `screen` is the clip's (same, compared) screen frames, on both
+        // layers; None for a row with no screen counts.
+        let record = |exact: u64, mapping: &str, screen: Option<(u64, u64)>| {
+            let mut row = json!({"id": "cab.1", "exact": exact == 1});
+            if let Some((same, total)) = screen {
+                row["screen"] = json!({
+                    "sprites": {"same": same, "total": total},
+                    "background": {"same": total, "total": total},
+                });
+            }
+            let v = json!({
+                "predicateType": crate::corpus_score::PREDICATE,
+                "predicate": {
+                    "corpus": {"name": "cab", "version": "1.0.0", "hash": corpus},
+                    "rom": {"sha256": rom},
+                    "model": {"hash": model},
+                    "mapping": {"hash": h(mapping)},
+                    "contract": h(""),
+                    "gp": {"version": "0.0.0", "build": "gp test"},
+                    "results": {"clips": 1, "exact": exact, "errors": 0},
+                    "clips": [row],
+                },
+            });
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(&file, v.to_string()).unwrap();
+        };
+        // A record with a clip not exact: refused, naming it.
+        record(0, "# made up mapping\n", Some((40, 40)));
+        let e = publish().err().unwrap().to_string();
+        assert!(
+            e.contains("has 0 of 1 clips exact on state")
+                && e.contains("(not exact: cab.1)")
+                && e.contains("picture: 40 of 40 screen frames the same"),
+            "{e}"
+        );
+        assert_eq!(published(), 0);
+        // Every clip exact, but scored with another mapping: refused.
+        record(1, "# another mapping\n", Some((40, 40)));
+        let e = publish().err().unwrap().to_string();
+        assert!(e.contains("its mapping.toml isn't the one"), "{e}");
+        assert_eq!(published(), 0);
+        // Every clip exact on state, but a screen frame differs on the
+        // picture: refused, saying state and picture apart and naming it.
+        record(1, "# made up mapping\n", Some((39, 40)));
+        let e = publish().err().unwrap().to_string();
+        assert!(
+            e.contains("has 1 of 1 clips exact on state; picture: 39 of 40 screen frames the same")
+                && e.contains("1 of 1 clips differ on picture (differ on picture: cab.1)"),
+            "{e}"
+        );
+        assert_eq!(published(), 0);
+        // Exact on state with no screen frames compared: refused too.
+        record(1, "# made up mapping\n", None);
+        let e = publish().err().unwrap().to_string();
+        assert!(
+            e.contains("picture: 0 of 0 screen frames the same")
+                && e.contains("with no screen frames compared"),
+            "{e}"
+        );
+        assert_eq!(published(), 0);
+        // Every clip exact on state and every screen frame the same on the
+        // package as it is: published, and it says so.
+        record(1, "# made up mapping\n", Some((40, 40)));
+        let o = publish().unwrap();
+        assert!(
+            o.text.contains(
+                "own/cab is an arcade game: all 1 clips of its corpus cab 1.0.0 score exact on state and all 40 of their screen frames are the same on picture"
+            ),
+            "{}",
+            o.text
+        );
+        assert_eq!(published(), 1);
+        // A game with hooks: a record from before records named the module
+        // is refused, one naming another module than play/module.wasm too,
+        // and one naming the module it ships is taken.
+        let pkg = fs::read_to_string(dir.join("package.toml")).unwrap();
+        put(
+            "package.toml",
+            &format!("{pkg}\n[hooks]\ncrate = \"ext\"\n"),
+        );
+        let e = publish_as("0.2.0").err().unwrap().to_string();
+        assert!(
+            e.contains("from before score records named the hooks module"),
+            "{e}"
+        );
+        put("play/module.wasm", "made-up module bytes");
+        let with_module = |hash: &str| {
+            let mut v: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+            v["predicate"]["module"] = json!({"hash": hash});
+            fs::write(&file, v.to_string()).unwrap();
+        };
+        with_module(&h("another module"));
+        let e = publish_as("0.2.0").err().unwrap().to_string();
+        assert!(e.contains("and the package ships"), "{e}");
+        with_module(&h("made-up module bytes"));
+        publish_as("0.2.0").unwrap();
+        assert_eq!(published(), 2);
+        // A clip changed after the record: the record is for another corpus.
+        fs::write(
+            dir.join("inputs/a.presses"),
+            "gp-presses 0\nframes 10\nright@0-6\n",
+        )
+        .unwrap();
+        let e = publish_as("0.3.0").err().unwrap().to_string();
+        assert!(
+            e.contains("its one record is for another model or corpus"),
+            "{e}"
+        );
     }
 }

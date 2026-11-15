@@ -145,7 +145,9 @@ fi
 dk_rom=$(sed -n 's/^rom = "\([0-9a-f]*\)"$/\1/p' "$games/donkey-kong/corpus.toml" 2>/dev/null | head -1)
 if [ ! -f "$games/donkey-kong/corpus.toml" ]; then
     skip score-dk "no games checkout with donkey-kong/ at $games"
-elif [ ! -d "$roms" ] || ! GP_ROM_DIR="$roms" "$gp" --json roms scan 2>/dev/null | grep -q "\"sha256\": \"$dk_rom\""; then
+# The scan is read whole before it is searched: piped into grep -q, gp
+# could be cut off once grep has its line, and pipefail took that for no ROM.
+elif [ ! -d "$roms" ] || ! grep -q "\"sha256\": \"$dk_rom\"" <<<"$(GP_ROM_DIR="$roms" "$gp" --json roms scan 2>/dev/null)"; then
     skip score-dk "no Donkey Kong ROM the corpus is for (sha256 $dk_rom) in $roms"
 else
     what="$gp corpus score --run check-all-dk $games/donkey-kong, every clip exact"

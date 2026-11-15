@@ -53,7 +53,7 @@ struct Shared {
 }
 
 /// A ROM's windows of `SEED_BYTES`, each with the offsets it's at, without
-/// windows of fill and steady counts.
+/// windows of fill and steady counts, of bytes or of 16-bit words.
 fn rom_windows(rom: &[u8]) -> HashMap<&[u8], Vec<usize>> {
     let mut map: HashMap<&[u8], Vec<usize>> = HashMap::new();
     if rom.len() < SEED_BYTES {
@@ -61,7 +61,7 @@ fn rom_windows(rom: &[u8]) -> HashMap<&[u8], Vec<usize>> {
     }
     for i in 0..=rom.len() - SEED_BYTES {
         let w = &rom[i..i + SEED_BYTES];
-        if distinct(w) >= MIN_DISTINCT && !counts(w) {
+        if distinct(w) >= MIN_DISTINCT && !counts(w) && !counts_by_two(w) {
             let v = map.entry(w).or_default();
             if v.len() < SEEDS_PER_WINDOW {
                 v.push(i);
@@ -84,6 +84,16 @@ pub fn runs_of_rom(data: &[u8], rom: &[u8]) -> Vec<(usize, usize)> {
 fn counts(w: &[u8]) -> bool {
     let step = w[1].wrapping_sub(w[0]);
     w.windows(2).all(|p| p[1].wrapping_sub(p[0]) == step)
+}
+
+/// Whether the even bytes of `w` and its odd bytes each count steadily: a
+/// list of 16-bit numbers going up by the same step, such as a compiled
+/// module's run of indices, which any ROM with a table of the same kind
+/// shares by chance.
+fn counts_by_two(w: &[u8]) -> bool {
+    let even: Vec<u8> = w.iter().step_by(2).copied().collect();
+    let odd: Vec<u8> = w.iter().skip(1).step_by(2).copied().collect();
+    even.len() >= 2 && odd.len() >= 2 && counts(&even) && counts(&odd)
 }
 
 fn distinct(w: &[u8]) -> usize {
@@ -679,6 +689,20 @@ mod tests {
         let found = shared_in_text(&text.join(", "), &data, &windows);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].rom_offset, 100);
+    }
+
+    #[test]
+    fn a_run_of_counting_words_counts_for_nothing() {
+        // A ROM with 16-bit numbers counting up by one, and a file with the
+        // same count (a compiled module's indices, two bytes each).
+        let mut data = rom();
+        let words: Vec<u8> = (0x02ac_u16..0x02c0).flat_map(|n| n.to_le_bytes()).collect();
+        data[200..200 + words.len()].copy_from_slice(&words);
+        let windows = rom_windows(&data);
+        let pos: Vec<usize> = (0..words.len()).collect();
+        let mut shared = Vec::new();
+        shared_runs(&words, &pos, &data, &windows, "raw", &mut shared);
+        assert!(shared.is_empty(), "{shared:?}");
     }
 
     #[test]

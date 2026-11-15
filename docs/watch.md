@@ -22,11 +22,11 @@ Every event a run gave names the run's recipe (`run`) and the frame. The session
 
 ## The format
 
-One JSON object a line, `gp_events::watch::WatchEvent`:
+One JSON object a line, `gp_events::watch::WatchEvent`, format 2 ([formats/watch-events.md](formats/watch-events.md) has the versions and the `hook` event's fields):
 
 | Field | Meaning |
 |---|---|
-| `v` | The format's version, 1 |
+| `v` | The format's version, 2 (1 on lines written before 2026-11-14, which read the same) |
 | `seq` | 1, 2, 3, ... with no gaps |
 | `run`, `frame`, `level` | The recipe, frame and level an event from a run came from |
 | `kind`, `data` | The kind and its fields, as the table above lists |
@@ -57,7 +57,7 @@ game-printer served the session list at `/api/watch`; that route is the mechanic
 
 | Command | Writes |
 |---|---|
-| `gp watch rerun NAME [--watch ADDR] [--hook AT]` | `rerun`, then each watched write (`watch`: address, value, writer) and each hooked instruction about to run (`hook`: its registers), at most 200 of each a recipe, then `rerun.end` |
+| `gp watch rerun NAME [--watch ADDR] [--hook AT]` | `rerun`, then each watched write (`watch`: address, value, writer) and each hooked instruction about to run (`hook`: its CPU's registers, tagged `cpu` `6502` or `z80`), at most 200 of each a recipe, then `rerun.end` |
 | `gp watch explore NAME [--aim stops] [--budget N] [--seed S]` | Another search from the start clips, ending with `watch.end` |
 
 `gp watch detail NAME --recipe H --frames A..B` and `gp watch point NAME --recipe H --frame F --rect X,Y,W,H` only read.
@@ -75,7 +75,8 @@ Given a romset zip (`gp watch start tap tapper.zip --start-frames 900`), `gp wat
 | `stop.reached` | A `jp (..)` first taken, to the routine it went to |
 | `fact` | A routine the code map gains from the runs (a `jp (..)` or interrupt target) |
 | `clip.kept` | `end_hash` is the machine's state hash |
+| `hook` (rerun) | `at` the main-CPU address, `cpu` `z80` and the Z80's register pairs |
 
-`gp watch rerun --watch` reads gp-arcade's access log; `--hook` is refused, since a `hook` event holds the 6502's registers. `gp watch detail` prints each instruction of both Z80s with its registers, and `gp watch point` the sprites under the box from the sprite list with the instruction that last wrote each one's bytes. No `bank`, `pointer` or `behaviour` events are made (no banks, no pointer in memory, and the behaviour reader, `crates/gp-cli/src/behave.rs`, reads gp-events' NES runs). `--aim unread` is the 6502 static reader's report and is refused; `unrun`, `stops` and `--target sub_XXXX` work.
+`gp watch rerun --watch` reads gp-arcade's access log. `--hook 0158` (or `sub_0158`) hooks a main-CPU address: each time the main Z80 is about to run it, from gp-arcade's instruction trace, comes back as a `hook` event with `cpu` `z80` and the register pairs `af`, `bc`, `de`, `hl`, `ix`, `iy` and `sp`. `gp watch detail` prints each instruction of both Z80s with its registers, and `gp watch point` the sprites under the box from the sprite list with the instruction that last wrote each one's bytes. No `bank`, `pointer` or `behaviour` events are made (no banks, no pointer in memory, and the behaviour reader, `crates/gp-cli/src/behave.rs`, reads gp-events' NES runs). `--aim unread` is the 6502 static reader's report and is refused; `unrun`, `stops` and `--target sub_XXXX` work.
 
 A start clip of Tapper that tends no bar loses every life within a minute, so with the default `--start-frames 3600` the search starts in attract mode and finds nothing new; start from clips in play (`--start`, or `--start-frames 900`).

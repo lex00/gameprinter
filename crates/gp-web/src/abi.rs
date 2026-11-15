@@ -426,6 +426,27 @@ pub extern "C" fn gp_audio() -> i32 {
     }
 }
 
+/// The sound requests the hooks made on the last frame in the output
+/// buffer, two bytes each (the latch, then the byte), and how many there
+/// are (Preview::sound_requests); -1 with no game loaded. A page whose
+/// module has no such export (one built before it) plays silent.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_sound_requests() -> i32 {
+    match with_preview(|p| {
+        Ok(p.sound_requests()
+            .into_iter()
+            .flat_map(|(l, v)| [l, v])
+            .collect::<Vec<u8>>())
+    }) {
+        Ok(b) => {
+            let n = (b.len() / 2) as i32;
+            set_out(&b);
+            n
+        }
+        Err(_) => -1,
+    }
+}
+
 /// Opens the standard settings screen (docs/settings.md) over the game:
 /// the text of the model's `profiles.toml` and the profile the game runs
 /// in, by the name the player chose (`retro`, `normal`, or switches joined

@@ -258,8 +258,10 @@ const ROUTES = {
     // romDeaths): its last death ends in GAME OVER and the title, whose
     // demo then walks Mario to `mario` by `frame`. In Normal the last
     // death held the game for good until 2026-11-08 (quick_restart,
-    // templates/donkey-kong-oe/profiles.toml).
-    gameOver: { profile: "normal", holds: ["start@40-44"], frames: 3000, frame: 2800, mario: [195, 201] },
+    // templates/donkey-kong-oe/profiles.toml). Since 2026-11-14 Normal's
+    // deaths play their whole spin (games bd0815f), so the demo walks
+    // Mario there 473 frames later than before.
+    gameOver: { profile: "normal", holds: ["start@40-44"], frames: 3500, frame: 3273, mario: [195, 201] },
   },
   "donkey-kong-ju": {
     plays: ["main", "m75", "m100"],
@@ -1601,7 +1603,7 @@ async function keptLook(S, { name, rom }) {
 
 // Theme picks that overlap. A look's pictures are decoded before it is
 // drawn, and the player can pick again, or a new mode can restart the
-// game, in that wait. On the live page (2026-11-14) Diaper Tantrum picked
+// game, in that wait. On the live page (2026-11-14) a large-art theme picked
 // with the JU ROM ended twice in 14 runs in Original, the bar saying
 // "Theme not changed: no large-art look loaded": a second pick cleared the
 // first one's art in the module while its pictures were decoded. Here the
@@ -2222,7 +2224,7 @@ async function registryLocalChange(S) {
     const db = await new Promise((ok) => (indexedDB.open("gp-installs").onsuccess = (e) => ok(e.target.result)));
     // The game's own record, the one under `current`: the store holds a
     // record for each theme installed with it too, and one from a namespace
-    // that sorts before the game's (ddmoney420/ before lex00/) comes first.
+    // that sorts before the game's (acme/ before lex00/) comes first.
     const games = db.transaction("games").objectStore("games");
     const get = (k) => new Promise((ok) => (games.get(k).onsuccess = (e) => ok(e.target.result)));
     const rec = await get(await get("current"));
@@ -3045,9 +3047,116 @@ const pickBytes = async (p, name, buffer, kinds = ["error"]) => {
 };
 const boardFetched = (S) => S.requests.some((r) => /\/gp_board\.wasm(\?|$)/.test(r.url));
 
+// "What is this?" on Donkey Kong by the link (what-is-this.js,
+// explain.js): the button holds the game, a click on Mario names him from
+// the package's own model with a box around him and his place from the
+// state, a click on the stage says it is the stage, "Play on" lets the game
+// go on; then the same with a tap at 360 pixels wide, the answer under the
+// game and the page not scrolling sideways. Nothing is asked of a server:
+// every request stays the page's own or the source's.
+async function whatIsThisSection(S, r) {
+  const { p, check, gp, key, waitFrames, errors } = S;
+  await p.setViewportSize({ width: 1400, height: 900 });
+  await p.goto(`${S.origin}/${LINK}`);
+  check(await S.installed(), "the link opens");
+  check(!(await p.locator("#what").isVisible()), "with no game playing there is no What is this? button");
+  await S.loadRom(r.rom);
+  check(await waitFrames(30), `${r.name} plays`);
+  check(await p.locator("#what").isVisible(), "with a game playing the header has a What is this? button");
+  // Into 25m, past the stage's start, Mario standing at the bottom.
+  await key("Enter");
+  const inPlay = await S.until(() => window.__gp.state().level === "main" && window.__gp.state().frame > 900, null, 30000);
+  check(inPlay, "Start takes the game into 25m");
+  await p.waitForTimeout(4500);
+  // Where Mario is drawn, as fractions of the canvas: the first spot of a
+  // grid the frame's own spot names him at.
+  const findOn = () =>
+    gp(() => {
+      for (let y = 0.02; y < 1; y += 0.02) for (let x = 0.01; x < 1; x += 0.01) {
+        const h = window.__gp.spot(x, y, 0).hits[0];
+        if (h?.kind === "player") return { x, y, at: [h.x, h.y] };
+      }
+      return null;
+    });
+  // The canvas's box, which Playwright gives in the page's own pixels.
+  const pageAt = async (f) => {
+    const c = await (await S.game()).locator("#game").boundingBox();
+    return { x: c.x + f.x * c.width, y: c.y + f.y * c.height };
+  };
+  const requestsBefore = S.requests.length;
+  await p.locator("#what").click();
+  check((await p.locator("#what").getAttribute("aria-pressed")) === "true" && (await p.locator("#what-panel").isVisible()), "pressed, it opens a panel that asks to point at something");
+  // The hold is a message to the frame, taken at its next animation frame.
+  await p.waitForTimeout(300);
+  const h0 = await gp(() => window.__gp.hashes.length);
+  await p.waitForTimeout(600);
+  const h1held = await gp(() => window.__gp.hashes.length);
+  check(h1held === h0, `and the game holds while it is asked (${h1held - h0} frames stepped in 0.6 s)`);
+  const mario = await findOn();
+  check(!!mario, `Mario is drawn somewhere on the picture (${JSON.stringify(mario)})`);
+  if (!mario) return;
+  const pt = await pageAt(mario);
+  await p.mouse.click(pt.x, pt.y);
+  await p.waitForFunction(() => document.getElementById("what-panel").dataset.answer, null, { timeout: 15000 }).catch(() => {});
+  const said = await p.locator("#what-panel").innerText();
+  check((await p.locator("#what-panel").getAttribute("data-answer")) === "player" && /^Mario\b/.test(said), `a click on Mario names him ("${said.replace(/\s+/g, " ").slice(0, 300)}")`);
+  check(said.includes(`at x ${mario.at[0]}, y ${mario.at[1]}`), `with his place in the model's state (x ${mario.at[0]}, y ${mario.at[1]})`);
+  check(/the one you play/.test(said) && /state mapping reads it from RAM/.test(said) && /How it was worked out/.test(said), "from the package's model and mapping: his role, how he was worked out, where the original keeps him");
+  check(/gp element explain/.test(said) && /no server/.test(said), "and it says what only the tools can add");
+  const box = await p.locator("#what-layer .what-box").boundingBox();
+  check(!!box && pt.x >= box.x && pt.x <= box.x + box.width && pt.y >= box.y && pt.y <= box.y + box.height, `a box is drawn around him (${JSON.stringify(box)})`);
+  await S.shot("what-is-this-1400.png");
+  // The stage: a spot with no body or HUD field on it.
+  const empty = await gp(() => {
+    for (let y = 0.5; y < 0.95; y += 0.05) for (let x = 0.3; x < 0.9; x += 0.05) {
+      const s = window.__gp.spot(x, y, 0);
+      if (!s.hits.length) return { x, y };
+    }
+    return null;
+  });
+  if (empty) {
+    const e = await pageAt(empty);
+    await p.mouse.click(e.x, e.y);
+    await p.waitForFunction(() => document.getElementById("what-panel").dataset.answer === "place", null, { timeout: 5000 }).catch(() => {});
+    const t = await p.locator("#what-panel").innerText();
+    check(/^The stage/.test(t) && /25m/.test(t), `a click on the stage says it is the stage ("${t.split("\n").slice(0, 2).join(" ")}")`);
+  } else check(false, "a spot with nothing on it was found");
+  check(
+    S.requests.slice(requestsBefore).every((q) => q.method === "GET" && (q.url.startsWith(S.origin) || isSourceUrl(S.origin, q.url) || q.url.startsWith("blob:"))),
+    "the answers asked nothing of any server",
+  );
+  await p.locator('#what-panel [data-what="done"]').click();
+  check(!(await p.locator("#what-panel").isVisible()) && (await p.locator("#what").getAttribute("aria-pressed")) === "false", "Play on closes it");
+  const h1 = await gp(() => window.__gp.hashes.length);
+  await p.waitForTimeout(800);
+  check((await gp(() => window.__gp.hashes.length)) > h1 + 10, "and the game goes on");
+  // A phone: 360 pixels wide, a tap.
+  await p.setViewportSize({ width: 360, height: 760 });
+  await p.waitForTimeout(800);
+  await p.locator("#what").click();
+  await p.waitForTimeout(300);
+  const m2 = await findOn();
+  check(!!m2, "at 360 pixels wide Mario is still found on the picture");
+  if (m2) {
+    const q = await pageAt(m2);
+    await p.locator("#what-layer").dispatchEvent("pointerup", { clientX: q.x, clientY: q.y, pointerType: "touch", bubbles: true });
+    await p.waitForFunction(() => document.getElementById("what-panel").dataset.answer === "player", null, { timeout: 10000 }).catch(() => {});
+    check((await p.locator("#what-panel").getAttribute("data-answer")) === "player", "a tap on Mario names him at 360 pixels wide");
+    const pb = await p.locator("#what-panel").boundingBox();
+    const gb = await p.locator("#game").boundingBox();
+    check(!!pb && !!gb && pb.y >= gb.y + gb.height - 1 && pb.width <= 360, `the answer is under the game (game ends at ${Math.round(gb?.y + gb?.height)}, answer starts at ${Math.round(pb?.y ?? 0)})`);
+  }
+  const wide = await p.evaluate(() => document.documentElement.scrollWidth);
+  check(wide <= 360, `and the page doesn't scroll sideways (${wide} wide)`);
+  await S.shot("what-is-this-360.png");
+  await p.keyboard.press("Escape");
+  check(!(await p.locator("#what-panel").isVisible()), "Esc closes it");
+  check(errors.length === 0, `no page errors (${errors.join("; ")})`);
+}
+
 // The arcade game by its name, played from the visitor's own zip: its
 // facts from its package (the romset line, the cabinet's keys and the line
-// that it plays silent), the picker taking a zip, the lift, and the game in
+// about its sound), the picker taking a zip, the lift, and the game in
 // the page's frame: the board's 512 by 480 picture from gp_board.wasm, the
 // coin and the start taken. Shots of it at 1400 and at 360 pixels wide.
 async function arcadePlay(S, { zip }) {
@@ -3063,8 +3172,11 @@ async function arcadePlay(S, { zip }) {
   check(/\.zip/.test((await p.locator("#rom").getAttribute("accept")) ?? ""), `the picker takes a zip (accept ${await p.locator("#rom").getAttribute("accept")})`);
   const howto = await p.locator("#howto").innerText();
   check(/5 drops a coin and 1 starts/.test(howto), "the how-to-play lines give the cabinet's keys");
-  const silent = (await p.locator("#howto p").allInnerTexts()).filter((t) => /plays silent/.test(t));
-  check(silent.length === 1 && silent[0] === "Sound: This game plays silent for now: the page doesn't play an arcade board's sound yet.", `and one plain line says it plays silent ("${silent.join(" | ")}")`);
+  const sound = (await p.locator("#howto p").allInnerTexts()).filter((t) => /^Sound:/.test(t));
+  check(
+    sound.length === 1 && sound[0] === "Sound: The board's own sound, played from your romset in this browser. It starts on your first key or click.",
+    `and one plain line says where its sound comes from and when it starts ("${sound.join(" | ")}")`,
+  );
   check(!boardFetched(S), "no gp_board.wasm is fetched before a game plays");
   await p.setViewportSize({ width: 1400, height: 900 });
   const said = await S.loadRom(zip);
@@ -3094,7 +3206,7 @@ async function arcadePlay(S, { zip }) {
   await p.waitForTimeout(3000);
   const after = await gp(() => window.__gp.hashes.length);
   check(after - before > 30, `after a coin and a start it plays on (${after - before} frames)`);
-  check((await gp(() => window.__gp.error)) === null, `with no error in the frame (silence is not one): ${await gp(() => window.__gp.error)}`);
+  check((await gp(() => window.__gp.error)) === null, `with no error in the frame: ${await gp(() => window.__gp.error)}`);
   const lit = await gp(() => {
     const c = document.getElementById("game");
     const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
@@ -3113,6 +3225,42 @@ async function arcadePlay(S, { zip }) {
   const box = await p.locator("#game").boundingBox();
   check(wide <= 360 && box && box.width <= 360, `at 360 pixels wide the page doesn't scroll sideways (page ${wide}, game ${Math.round(box?.width ?? 0)} wide)`);
   await S.shot("arcade-play-360.png");
+  check(errors.length === 0, `no page errors (${errors.join("; ")})`);
+}
+
+// The arcade game's own sound on the public page, under Safari's rule for
+// sound (a context runs only when made or resumed during a key or a click)
+// and with the zip loaded with no click: the game's module gives each
+// frame's sound requests (gp_sound_requests), the frame powers the board's
+// sound on from the zip in game/gp_arcade_play.wasm and feeds it every
+// frame, and nothing is heard until the first key, which starts it; then
+// a coin and a start, and the board's sound plays with no error.
+const arcadePlayFetched = (S) => S.requests.some((r) => /\/gp_arcade_play\.wasm(\?|$)/.test(r.url));
+async function arcadeSound(S, { zip }) {
+  const { p, check, gp, waitFrames, errors } = S;
+  await p.goto(`${S.origin}/${ARCADE_LINK}`);
+  check(await arcadeInstalled(p), `${ARCADE} by its name is installed with no click`);
+  check(!arcadePlayFetched(S), "no gp_arcade_play.wasm is fetched before a game plays");
+  await S.loadRom(zip);
+  check(await waitFrames(60), "the game plays in the page's frame");
+  check(await S.until(() => window.__gp.boardSound === true), "its frame powered the board's sound on from the zip (the module gives sound requests)");
+  check(arcadePlayFetched(S), "gp_arcade_play.wasm was fetched for it");
+  const stepped = await gp(() => window.__gp.boardSoundFrames());
+  const before = await S.soundOf(p, await S.game());
+  const state = await gp(() => window.__gp.audioState());
+  check(stepped.frames > 0 && before.buffers === 0 && state !== "running", `the board runs from the game's first frames but nothing is heard before a key (${stepped.frames} frames stepped, ${before.buffers} buffers queued, context ${state})`);
+  await S.soundReset(p, await S.game());
+  await S.key("Digit5", 200);
+  await p.waitForTimeout(800);
+  await S.key("Digit1", 200);
+  await p.waitForTimeout(3000);
+  const after = await S.soundOf(p, await S.game());
+  const heard = await gp(() => window.__gp.boardSoundFrames());
+  const running = await gp(() => window.__gp.audioState());
+  check(running === "running" && heard.heard > 30 && after.buffers > 60, `the first key starts it: the board's sound is queued from then on (context ${running}, ${heard.heard} frames heard, ${after.buffers} buffers)`);
+  check(after.loud > 0, `and a coin and a start sound (${after.loud} of ${after.buffers} buffers with sound)`);
+  check(after.lead !== null && after.lead < 0.3, `played at once (${after.lead === null ? "nothing played" : after.lead.toFixed(2) + " s ahead"})`);
+  check((await gp(() => window.__gp.error)) === null && (await gp(() => window.__gp.boardSound)) === true, `the sound runs on with no error in the frame: ${await gp(() => window.__gp.error)}`);
   check(errors.length === 0, `no page errors (${errors.join("; ")})`);
 }
 
@@ -3136,6 +3284,47 @@ async function arcadeRefused(S, { zip }) {
   } else S.lines.push("skip  no tapper.zip in $GP_ROM_DIR: a zip with a chip left out isn't checked");
   check(!boardFetched(S), "nothing of a refused zip is drawn (no gp_board.wasm fetched)");
   await S.shot("arcade-refused.png");
+  check(errors.length === 0, `no page errors (${errors.join("; ")})`);
+}
+
+// The owner's notice for an arcade game (#3) and the sets to bring: the
+// page says by the picker, and again in About, in one short line that a person needs their own romset and that the
+// game's names and trademarks belong to their owners (the package's
+// trademark line, or the page's own for an arcade game), and names the MAME
+// sets the page takes with the files each zip must hold; a refused zip's
+// message ends saying which set to bring. Reads no zip.
+async function arcadeNoticeSection(S) {
+  const { p, check, errors } = S;
+  await p.goto(`${S.origin}/${ARCADE_LINK}`);
+  check(await arcadeInstalled(p), `${ARCADE} by its name is installed`);
+  const title = await p.title();
+  const mark = (await p.locator("#about-mark").textContent()).trim();
+  check(
+    mark === `You need your own ${title} romset to play; ${title}'s names and trademarks belong to their owners.` && mark.length <= 160 && !/Nintendo/.test(mark),
+    `About's notice is the one short line ("${mark}")`,
+  );
+  // The same line by the picker, visible with About closed, at 1400 and at
+  // 360 pixels wide.
+  for (const [width, height] of [[1400, 900], [360, 760]]) {
+    await p.setViewportSize({ width, height });
+    await p.waitForTimeout(300);
+    const shown = await p.locator("#rom-notice").isVisible();
+    const line = (await p.locator("#rom-notice").innerText()).trim();
+    const wide = await p.evaluate(() => document.documentElement.scrollWidth);
+    const closed = !(await p.locator("#about-box").evaluate((d) => d.open));
+    check(shown && closed && line === mark && wide <= width, `at ${width} pixels wide the notice shows by the picker, with About closed and no sideways scroll ("${line}", page ${wide} wide)`);
+    await S.shot(`arcade-notice-${width}.png`);
+  }
+  const sets = (await p.locator("#about-sets p").allTextContents()).slice(1);
+  check(
+    (await p.locator("#about-sets").getAttribute("hidden")) === null && sets.length > 0 && sets.every((t) => /^[a-z0-9_]+, .+: \d+ files: .+ \(\d+ bytes, SHA-1 [0-9a-f]{40}\)/.test(t)),
+    `About names the sets the page takes with each zip's files (${sets.map((t) => t.split(":")[0]).join(" | ")})`,
+  );
+  const said = await pickBytes(p, "tapper.zip", Buffer.from("This is not a zip, only some words.\n"));
+  check(
+    /^This file isn't a zip\./.test(said) && / Bring (MAME's [a-z0-9_]+ \(.+\) set: a zip of its \d+ files|one of MAME's sets .+ or .+: About lists the files each zip must hold)/.test(said),
+    `a refused zip's message says which set to bring ("${said}")`,
+  );
   check(errors.length === 0, `no page errors (${errors.join("; ")})`);
 }
 
@@ -3188,6 +3377,7 @@ if (roms.length) {
   }
   add("later-visit", 6, (S) => laterVisit(S, first), { rom: first.sha });
   add("kept-look", 8, (S) => keptLook(S, first), { rom: first.sha });
+  add("what-is-this", 25, (S) => whatIsThisSection(S, first), { rom: first.sha });
   for (const r of roms) add(`theme-picks-${r.sha.slice(0, 8)}`, 20, (S) => themePicks(S, r), { rom: r.sha });
 }
 
@@ -3246,11 +3436,14 @@ if (ownHere && !registryStopped) {
 {
   const zip = findZip("tapper");
   const garbled = findZip("rbtapper");
-  if (!arcadeHere) skips.push(`skip  arcade-play, arcade-refused: no ${ARCADE} in the registry folder (publish one into a copy of the registry; docs/web.md, "Arcade games")`);
+  if (!arcadeHere) skips.push(`skip  arcade-play, arcade-refused, arcade-notice: no ${ARCADE} in the registry folder (publish one into a copy of the registry; docs/web.md, "Arcade games")`);
   else {
     if (zip) add("arcade-play", 30, (S) => arcadePlay(S, { zip }), { arcade: true, rom: "tapper.zip" });
     else skips.push("skip  arcade-play: no tapper.zip in $GP_ROM_DIR/arcade: the arcade game isn't played");
+    if (zip) add("arcade-sound", 20, (S) => arcadeSound(S, { zip }), { arcade: true, rom: "tapper.zip", gesture: "safari" });
+    else skips.push("skip  arcade-sound: no tapper.zip in $GP_ROM_DIR/arcade: the arcade game's sound isn't played");
     add("arcade-refused", 20, (S) => arcadeRefused(S, { zip }), { arcade: true, rom: "tapper.zip" });
+    add("arcade-notice", 10, arcadeNoticeSection, { arcade: true });
   }
   if (!unplacedHere) skips.push(`skip  arcade-unplaced: no ${UNPLACED} in the registry folder (scripts/web/test-registry.sh makes one when the registry has ${ARCADE})`);
   else if (!garbled) skips.push("skip  arcade-unplaced: no rbtapper.zip in $GP_ROM_DIR/arcade: the refusal of a set not drawn right yet isn't checked");
@@ -3395,6 +3588,7 @@ try {
           S.check(S.sockets.length === 0, "no WebSocket opens");
           // An arcade model's drawing (2.4 MB) is fetched for an arcade game only.
           if (!sec.arcade) S.check(!boardFetched(S), "no request for gp_board.wasm (only an arcade game's board art needs it)");
+          if (!sec.arcade) S.check(!arcadePlayFetched(S), "no request for gp_arcade_play.wasm (only an arcade game's sound needs it)");
           if (rules.length) S.check(S.violations.length === 0, `the policy refused nothing (${S.violations.length}${S.violations[0] ? ": " + S.violations[0].slice(0, 200) : ""})`);
           writeFileSync(S.file(`requests-${sec.name}.txt`), S.requests.map((r) => `${r.method} ${r.body} ${r.url.replace(origin, "")}`).join("\n") + "\n");
         } catch (e) {

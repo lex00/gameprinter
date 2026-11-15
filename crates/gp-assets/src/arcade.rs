@@ -541,7 +541,9 @@ fn pixels(a: &ArcadeAsset, gfx: &Decoded) -> Result<Vec<u8>, Error> {
 }
 
 /// A 4-bit indexed PNG with 16 gray previews: only the values are data.
-fn write_png(w: u32, h: u32, px: &[u8]) -> Vec<u8> {
+/// The lift writes its pictures so, and an edit written back into a
+/// lifted folder (gp_mcp::board_trip) does the same.
+pub fn write_png(w: u32, h: u32, px: &[u8]) -> Vec<u8> {
     let grays: Vec<u8> = (0..16u8).flat_map(|i| [i * 17; 3]).collect();
     let mut packed = Vec::with_capacity((w.div_ceil(2) * h) as usize);
     for row in px.chunks_exact(w as usize) {

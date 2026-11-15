@@ -7,11 +7,17 @@
 //! board's colours, and read back with the same checks: its size, values 0
 //! to 15 (or the exported colours), and nothing else changed.
 //!
-//! The trip ends where the NES's turns into a proposal: the art history
-//! (crate::edit_log) keeps a picture as rows of the digits 0 to 9
-//! (crate::sprite_ops::Pic::rows) and a slot's state from an NES asset map
-//! (crate::catalog), and a board sprite has 16 values and an arcade map. A
-//! save is checked and reported, and nothing is written over the lift.
+//! A save that changed pixels goes into the art history (crate::edit_log)
+//! as the NES trip's does: proposed, or placed with `place`. Its entry
+//! keeps each changed sprite as a `tiles` item whose number is the
+//! sprite's index in the slot's sheet and whose before and after are its
+//! 1024 values in hex digits (crate::sprite_ops::digit), and the slot's
+//! state from the slot catalog's reading of the arcade map
+//! (crate::catalog::arcade_slot_assets). Accept, undo, redo and reject
+//! write the sprites into the copy's own lifted folder (`<copy>/assets/`,
+//! made from the lift on first use), which gp_assets::arcade::unpack puts
+//! back into the chips' layout. The board draws these sprites; the
+//! simulation doesn't read them, so no baseline is run.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -22,6 +28,8 @@ use gp_model::Model;
 use gp_model::model::AssetKind;
 use serde_json::{Value, json};
 
+use crate::catalog::{self, Origin, SlotState, State, Status};
+use crate::edit_log::{self, EditStatus, Entry, TileEdit};
 use crate::editor_trip::{TRIP_FILE, TRIP_FORMAT, Trip};
 use crate::{Config, Reply};
 
@@ -30,9 +38,6 @@ const SIDE: u32 = 32;
 
 /// The frame id prefix of a board sprite in a trip: `board-sprite.4d`.
 pub const FRAME_PREFIX: &str = "board-sprite.";
-
-/// What the trip needs that the art history can't hold yet, said once.
-pub const NO_PROPOSAL: &str = "a proposal can't be kept for an arcade board's sprites yet: the art history (asset-edits.jsonl and asset-proposals/) holds a picture as rows of the digits 0 to 9 and a slot's state from an NES asset map, and a board sprite has 16 values and an arcade map";
 
 /// The arcade lift a copy runs on, when it is one: its folder and map.
 pub fn arcade_lift(
@@ -423,33 +428,478 @@ pub fn import(config: &Config, dir: &Path) -> Result<Result<Saved, Vec<String>>,
     })
 }
 
-/// A save checked and reported, as the NES trip's `propose_save` replies:
-/// refused at the import stage when a check fails, and otherwise at the
-/// proposal stage with what changed, since the history can't keep it.
-pub fn propose_save(config: &Config, dir: &Path) -> Result<Reply, String> {
-    match import(config, dir)? {
-        Err(problems) => Ok(Reply::refused(json!({
-            "ok": false, "written": false, "stage": "import", "problems": problems,
+/// Whether a history entry is a board sprite edit.
+pub fn is_board_entry(e: &Entry) -> bool {
+    e.pictures.iter().any(|p| p.starts_with(FRAME_PREFIX))
+}
+
+/// A sprite's values as hex digits, row by row.
+fn digits(px: &[u8]) -> String {
+    px.iter().map(|&v| crate::sprite_ops::digit(v)).collect()
+}
+
+/// A sprite's values from its digits.
+fn values(d: &str, what: &str) -> Result<Vec<u8>, String> {
+    let v: Option<Vec<u8>> = d.bytes().map(crate::sprite_ops::value).collect();
+    v.filter(|v| v.len() == (SIDE * SIDE) as usize)
+        .ok_or(format!("{what}: not {} hex digits", SIDE * SIDE))
+}
+
+/// The rows of a sprite, as `Pic::rows` writes them.
+fn rows(px: &[u8]) -> Vec<String> {
+    px.chunks(SIDE as usize).map(digits).collect()
+}
+
+/// A picture of each changed sprite, before on the left and after on the
+/// right, four times its size, over a dark backdrop where the board draws
+/// nothing.
+fn preview(pairs: &[(&[u8], &[u8])], colours: &[[u8; 3]; 16]) -> Vec<u8> {
+    const SCALE: u32 = 4;
+    const GAP: u32 = 8;
+    let cell = SIDE * SCALE;
+    let (w, h) = (2 * cell + GAP, pairs.len() as u32 * (cell + GAP) - GAP);
+    let mut rgb = vec![0x20u8; (w * h * 3) as usize];
+    for (row, (before, after)) in pairs.iter().enumerate() {
+        for (col, px) in [before, after].into_iter().enumerate() {
+            let (ox, oy) = (col as u32 * (cell + GAP), row as u32 * (cell + GAP));
+            for y in 0..cell {
+                for x in 0..cell {
+                    let v = px[((y / SCALE) * SIDE + x / SCALE) as usize];
+                    if v & 7 == 0 {
+                        continue;
+                    }
+                    let i = (((oy + y) * w + ox + x) * 3) as usize;
+                    rgb[i..i + 3].copy_from_slice(&colours[usize::from(v)]);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let mut enc = png::Encoder::new(&mut out, w, h);
+    enc.set_color(png::ColorType::Rgb);
+    enc.set_depth(png::BitDepth::Eight);
+    let mut wr = enc.write_header().expect("PNG header into memory");
+    wr.write_image_data(&rgb).expect("PNG data into memory");
+    wr.finish().expect("PNG end into memory");
+    out
+}
+
+/// The copy's own lifted folder (`<copy>/assets/`), made from the lift on
+/// first use: the map, `source.toml`, every asset's file the lift has,
+/// and `slots.toml` (the lift's, or every slot original). The map goes in
+/// last, so a folder left half made is never taken for the copy's own
+/// (Config::assets_of looks for it).
+fn own_lift(config: &Config, dir: &Path, model: &Model) -> Result<(PathBuf, ArcadeMap), String> {
+    let to = dir.join(crate::place::COPY_ASSETS);
+    let (from, map) =
+        arcade_lift(config, dir, model)?.ok_or("the copy's lift isn't an arcade one")?;
+    if from == to {
+        return Ok((to, map));
+    }
+    fs::create_dir_all(&to).map_err(|e| format!("making {}: {e}", to.display()))?;
+    let mut names = vec![gp_assets::arcade::SOURCE_FILE.to_owned()];
+    names.extend(map.assets.iter().map(ArcadeAsset::file));
+    for name in names {
+        if from.join(&name).is_file() {
+            fs::copy(from.join(&name), to.join(&name))
+                .map_err(|e| format!("copying {name}: {e}"))?;
+        }
+    }
+    let state = match State::read(&from)? {
+        Some(s) => s,
+        None => {
+            let license = catalog::original_license(dir);
+            let mut s = State::new(&model.model.name);
+            for (slot, a) in catalog::arcade_slot_assets(model, &map)? {
+                if from.join(a.file()).is_file() {
+                    s.slots.insert(
+                        slot.to_owned(),
+                        catalog::arcade_original(&map, &from, a, license)?,
+                    );
+                }
+            }
+            s
+        }
+    };
+    fs::write(to.join(catalog::STATE_FILE), state.to_toml())
+        .map_err(|e| format!("writing {}: {e}", catalog::STATE_FILE))?;
+    fs::copy(from.join(gp_assets::MAP_FILE), to.join(gp_assets::MAP_FILE))
+        .map_err(|e| format!("copying {}: {e}", gp_assets::MAP_FILE))?;
+    Ok((to, map))
+}
+
+/// The slot's state in a lifted folder now: from its `slots.toml`, or
+/// original.
+fn state_now(
+    dir: &Path,
+    at: &Path,
+    map: &ArcadeMap,
+    a: &ArcadeAsset,
+    slot: &str,
+) -> Result<SlotState, String> {
+    match State::read(at)?.and_then(|s| s.slots.get(slot).cloned()) {
+        Some(s) => Ok(s),
+        None => catalog::arcade_original(map, at, a, catalog::original_license(dir)),
+    }
+}
+
+/// The state a board sprite edit leaves its slot in.
+fn edited_state(e: &Entry, now: &SlotState, author: Option<&str>) -> SlotState {
+    SlotState {
+        status: Status::Replaced,
+        origin: if e.editor.is_some() {
+            Origin::Uploaded
+        } else {
+            Origin::Generated
+        },
+        license: now.license.clone(),
+        sha256: String::new(),
+        generator: Some(match &e.editor {
+            Some(ed) => format!("{ed} via gp assets open (picture)"),
+            None => "picture".into(),
+        }),
+        author: author.map(str::to_owned),
+        note: e.prompt.clone(),
+    }
+}
+
+/// Writes a board sprite edit into the copy's own lift, forward (each
+/// sprite's after) or back (its before), once what is there now is the
+/// other side; Ok(Err(why)) when it isn't. Every slot of the sheet's asset
+/// then takes the state `state` makes from the slot's state now, with the
+/// sheet's new digest. Returns the slot's state before and after.
+fn put(
+    config: &Config,
+    copy: &str,
+    e: &Entry,
+    forward: bool,
+    state: impl FnOnce(&SlotState) -> SlotState,
+) -> Result<Result<(SlotState, SlotState), String>, String> {
+    let dir = config.existing_copy(copy)?;
+    let model = read_model(&dir)?;
+    if gp_interp::lifted::simulation_slots(&model)
+        .iter()
+        .any(|s| s.as_str() == e.slot)
+    {
+        return Err(format!(
+            "the simulation reads slot `{}`; change it with model_edit",
+            e.slot
+        ));
+    }
+    let (at, map) = own_lift(config, &dir, &model)?;
+    let a = slot_asset(&model, &map, &e.slot, AssetKind::BoardSprites)?.clone();
+    let file = a.file();
+    let size = a.image_size();
+    let mut px = gp_assets::chr::read_png(
+        &fs::read(at.join(&file)).map_err(|err| format!("reading {file}: {err}"))?,
+        size,
+    )
+    .map_err(|err| format!("{file}: {err}"))?;
+    let before = state_now(&dir, &at, &map, &a, &e.slot)?;
+    for te in &e.tiles {
+        if te.tile >= a.count {
+            return Err(format!(
+                "sprite {} is past the {} of `{}`",
+                te.tile, a.count, a.name
+            ));
+        }
+        let (cx, cy) = ((te.tile % a.per_row) * SIDE, (te.tile / a.per_row) * SIDE);
+        let at_px = |i: u32| ((cy + i / SIDE) * size.0 + cx + i % SIDE) as usize;
+        let now: Vec<u8> = (0..SIDE * SIDE).map(|i| px[at_px(i)]).collect();
+        let (want, new) = if forward {
+            (&te.before, &te.after)
+        } else {
+            (&te.after, &te.before)
+        };
+        if digits(&now) != *want {
+            return Ok(Err(format!(
+                "sprite {} changed since edit {} (by another edit, a tool or by hand)",
+                te.tile, e.seq
+            )));
+        }
+        for (i, v) in values(new, &format!("sprite {}", te.tile))?
+            .into_iter()
+            .enumerate()
+        {
+            px[at_px(i as u32)] = v;
+        }
+    }
+    let tmp = at.join(format!("{file}.tmp-edit"));
+    fs::write(&tmp, gp_assets::arcade::write_png(size.0, size.1, &px))
+        .map_err(|err| format!("writing {file}: {err}"))?;
+    fs::rename(&tmp, at.join(&file)).map_err(|err| format!("writing {file}: {err}"))?;
+    let mut after = state(&before);
+    after.sha256 = catalog::SlotAsset::Arcade(&a).digest(&at)?;
+    let mut st = State::read(&at)?.unwrap_or_else(|| State::new(&model.model.name));
+    for (slot, other) in catalog::arcade_slot_assets(&model, &map)? {
+        if other.name == a.name {
+            st.slots.insert(slot.to_owned(), after.clone());
+        }
+    }
+    st.slots.insert(e.slot.clone(), after.clone());
+    fs::write(at.join(catalog::STATE_FILE), st.to_toml())
+        .map_err(|err| format!("writing {}: {err}", catalog::STATE_FILE))?;
+    Ok(Ok((before, after)))
+}
+
+fn read_model(dir: &Path) -> Result<Model, String> {
+    Model::parse(
+        &fs::read_to_string(dir.join(gp_model::MODEL_FILE))
+            .map_err(|e| format!("reading {}: {e}", gp_model::MODEL_FILE))?,
+    )
+    .map_err(|e| format!("{}: {e}", gp_model::MODEL_FILE))
+}
+
+/// A save brought back, as the NES trip's `propose_save` does: refused
+/// at the import stage when a check fails; when pixels changed, kept in
+/// the art history as a proposal (or placed, with `place`) with a
+/// preview of each changed sprite before and after. A save that changed
+/// nothing is reported and kept nowhere. The caller holds the copy.
+pub fn propose_save(
+    config: &Config,
+    dir: &Path,
+    place: bool,
+    author: Option<&str>,
+) -> Result<Reply, String> {
+    let pics = match import(config, dir)? {
+        Err(problems) => {
+            return Ok(Reply::refused(json!({
+                "ok": false, "written": false, "stage": "import", "problems": problems,
+            })));
+        }
+        Ok(p) => p,
+    };
+    let changed: Value = pics
+        .iter()
+        .filter(|(_, (_, n))| *n > 0)
+        .map(|(id, (_, n))| (id.clone(), json!(n)))
+        .collect::<serde_json::Map<_, _>>()
+        .into();
+    let pixels: usize = pics.values().map(|(_, n)| n).sum();
+    if pixels == 0 {
+        return Ok(Reply::refused(json!({
+            "ok": false,
+            "written": false,
+            "stage": "proposal",
+            "checked": pics.len(),
+            "changed": changed,
+            "pixels_changed": 0,
+            "error": "the save changed no pixel of the exported sprites, so there is nothing to keep",
+        })));
+    }
+    let trip = crate::editor_trip::read_trip(dir)?;
+    let copy = config.existing_copy(&trip.copy)?;
+    let model = read_model(&copy)?;
+    let (lifted, map) =
+        arcade_lift(config, &copy, &model)?.ok_or("the copy's lift isn't an arcade one")?;
+    let a = slot_asset(&model, &map, &trip.slot, AssetKind::BoardSprites)?;
+    let sheet = read_sheet(&lifted, a)?;
+    let bits = model
+        .entities
+        .get(&trip.entity)
+        .and_then(|e| e.core.board_sprite.as_ref())
+        .and_then(|b| b.flags.as_ref())
+        .and_then(|f| f.number)
+        .unwrap_or(0) as u8;
+    let colours = colours(&model, &map, &lifted, bits)?;
+    let mut tiles = Vec::new();
+    let mut ids = Vec::new();
+    let mut pairs: Vec<(&[u8], &[u8])> = Vec::new();
+    for (id, (px, n)) in &pics {
+        if *n == 0 {
+            continue;
+        }
+        let code = u32::from_str_radix(&id[FRAME_PREFIX.len()..], 16)
+            .map_err(|_| format!("frame {id} isn't a board sprite"))?;
+        let k = code - a.first;
+        let was = &sheet[k as usize];
+        tiles.push(TileEdit {
+            tile: k,
+            before: digits(was),
+            after: digits(px),
+        });
+        ids.push(id.clone());
+        pairs.push((was, px));
+    }
+    let seq = edit_log::next_seq(&copy)?;
+    let mut e = Entry {
+        seq,
+        slot: trip.slot.clone(),
+        entity: trip.entity.clone(),
+        ops: vec![],
+        palette_ops: vec![],
+        prompt: Some(format!("saved in {}", trip.editor)),
+        before: rows(pairs[0].0),
+        after: rows(pairs[0].1),
+        state_before: state_now(&copy, &lifted, &map, a, &trip.slot)?,
+        frames: ids.clone(),
+        tiles,
+        palettes: None,
+        pictures: ids,
+        editor: Some(trip.editor.clone()),
+        sprite: None,
+        status: EditStatus::Proposed,
+        decided_by: None,
+        tile: None,
+    };
+    let previews = crate::asset_edit::write_previews(&copy, seq, &preview(&pairs, &colours), None)?;
+    let mut out = json!({
+        "item": e.item(&trip.copy),
+        "seq": seq,
+        "stage": "proposal",
+        "checked": pics.len(),
+        "changed": changed,
+        "pixels_changed": pixels,
+        "previews": previews,
+    });
+    if !place {
+        edit_log::write_proposal(&copy, &e)?;
+        out["ok"] = json!(true);
+        out["written"] = json!(false);
+        out["status"] = json!("proposed");
+        out["note"] = json!(format!(
+            "a proposal, number {seq}: accepted, it is written into the copy's own lifted sprites. {}",
+            crate::sprite_proposal::ON_THE_PAGE
+        ));
+        return Ok(Reply::ok(out));
+    }
+    match put(config, &trip.copy, &e, true, |now| {
+        edited_state(&e, now, author)
+    })? {
+        Err(why) => {
+            out["ok"] = json!(false);
+            out["written"] = json!(false);
+            out["error"] = json!(why);
+            Ok(Reply::refused(out))
+        }
+        Ok((before, after)) => {
+            e.status = EditStatus::Placed;
+            e.state_before = before;
+            let mut history = edit_log::read_history(&copy)?;
+            history.push(e);
+            edit_log::write_history(&copy, &history)?;
+            edit_log::write_redo(&copy, &[])?;
+            out["ok"] = json!(true);
+            out["written"] = json!(true);
+            out["status"] = json!("placed");
+            out["state"] = json!(after);
+            out["history"] = json!({ "depth": history.len() });
+            Ok(Reply::ok(out))
+        }
+    }
+}
+
+/// Accepts a board sprite proposal: its sprites written into the copy's
+/// own lift, and the entry pushed on the history as accepted.
+pub fn accept(config: &Config, copy: &str, mut e: Entry, by: &str) -> Result<Reply, String> {
+    let dir = config.existing_copy(copy)?;
+    let ed = e.clone();
+    match put(config, copy, &e, true, |now| {
+        edited_state(&ed, now, Some(by))
+    })? {
+        Err(why) => Ok(Reply::refused(json!({
+            "ok": false, "written": false, "item": e.item(copy),
+            "error": format!("{why}; the proposal was made from art that's gone, so ask for the edit again"),
         }))),
-        Ok(pics) => {
-            let changed: Value = pics
-                .iter()
-                .filter(|(_, (_, n))| *n > 0)
-                .map(|(id, (_, n))| (id.clone(), json!(n)))
-                .collect::<serde_json::Map<_, _>>()
-                .into();
-            let pixels: usize = pics.values().map(|(_, n)| n).sum();
-            Ok(Reply::refused(json!({
-                "ok": false,
-                "written": false,
-                "stage": "proposal",
-                "checked": pics.len(),
-                "changed": changed,
-                "pixels_changed": pixels,
-                "error": NO_PROPOSAL,
+        Ok((before, after)) => {
+            e.status = EditStatus::Accepted;
+            e.decided_by = Some(by.to_owned());
+            e.state_before = before;
+            let mut history = edit_log::read_history(&dir)?;
+            history.push(e.clone());
+            edit_log::write_history(&dir, &history)?;
+            edit_log::write_redo(&dir, &[])?;
+            edit_log::write_proposal(&dir, &e)?;
+            Ok(Reply::ok(json!({
+                "ok": true, "written": true, "item": e.item(copy), "status": "accepted",
+                "decided_by": by, "state": after,
+                "history": { "seq": e.seq, "depth": history.len() },
             })))
         }
     }
+}
+
+/// Puts back a board sprite edit undone last (asset_edit's redo).
+pub fn redo(
+    config: &Config,
+    copy: &str,
+    mut e: Entry,
+    rest: &[Entry],
+    author: Option<&str>,
+) -> Result<Reply, String> {
+    let dir = config.existing_copy(copy)?;
+    let ed = e.clone();
+    let (before, after) = match put(config, copy, &e, true, |now| edited_state(&ed, now, author))? {
+        Ok(s) => s,
+        Err(why) => return Err(format!("{why}, so redo would lose that")),
+    };
+    e.status = EditStatus::Placed;
+    e.state_before = before;
+    let mut history = edit_log::read_history(&dir)?;
+    history.push(e.clone());
+    edit_log::write_history(&dir, &history)?;
+    edit_log::write_redo(&dir, rest)?;
+    Ok(Reply::ok(json!({
+        "ok": true, "written": true, "item": e.item(copy), "status": "placed", "state": after,
+        "redone": { "seq": e.seq, "ops": e.op_names() },
+        "history": { "depth": history.len(), "redo": rest.len() },
+    })))
+}
+
+/// Takes a board sprite edit out of the history by writing its sprites
+/// back (asset_edit's revert): the newest puts the slot's state back as
+/// it was; an older one leaves the slot replaced, with a note.
+pub fn revert(
+    config: &Config,
+    copy: &str,
+    dir: &Path,
+    mut history: Vec<Entry>,
+    idx: usize,
+    status: EditStatus,
+    by: Option<&str>,
+) -> Result<(Reply, Entry), String> {
+    let e = history[idx].clone();
+    let newest = idx + 1 == history.len();
+    let restore = |now: &SlotState| {
+        if newest {
+            e.state_before.clone()
+        } else {
+            SlotState {
+                status: Status::Replaced,
+                note: Some(format!("edit {} undone", e.seq)),
+                ..now.clone()
+            }
+        }
+    };
+    let (_, after) = match put(config, copy, &e, false, restore)? {
+        Ok(s) => s,
+        Err(why) => {
+            return Err(format!(
+                "{why}, so undo would lose that; save the picture you want again"
+            ));
+        }
+    };
+    history.remove(idx);
+    edit_log::write_history(dir, &history)?;
+    let mut done = e.clone();
+    done.status = status;
+    done.decided_by = by.map(str::to_owned);
+    if status == EditStatus::Undone {
+        let mut redo = edit_log::read_redo(dir)?;
+        redo.push(done.clone());
+        edit_log::write_redo(dir, &redo)?;
+    } else {
+        edit_log::write_proposal(dir, &done)?;
+    }
+    Ok((
+        Reply::ok(json!({
+            "ok": true, "written": true, "item": e.item(copy), "status": status.name(),
+            "state": after,
+            "undone": { "seq": e.seq, "ops": e.op_names() },
+            "history": { "depth": history.len() },
+        })),
+        done,
+    ))
 }
 
 #[cfg(test)]
@@ -540,14 +990,12 @@ y = 191
         out
     }
 
-    /// A copy of the made-up game on a made-up arcade lift: the export
-    /// writes sprite 1 in the colours of bits 2 (palette entries 16 on)
-    /// and no more, a save that changes three pixels comes back checked
-    /// with those three counted and is reported at the proposal stage
-    /// with nothing written over the lift, a save with a value past 15 is
-    /// refused at the import stage, and a folder in a repo is refused.
+    /// An arcade copy's proposal is a card on the person's page too
+    /// (crate::sprite_proposal): ACCEPT writes the copy's own lift, PUT THE
+    /// OLD ONE BACK puts its sprite back.
     #[test]
-    fn an_arcade_copy_exports_its_board_sprites_and_reads_a_save_back() {
+    fn an_arcade_proposal_is_a_card_the_person_answers() {
+        use crate::sprite_proposal::{self as card, Answer};
         let home = tempfile::tempdir().unwrap();
         let work = home.path().join("work").join("mcp");
         let copy = work.join("cab");
@@ -559,7 +1007,88 @@ y = 191
         let sheet: Vec<u8> = (0..64 * 32u32)
             .map(|i| ((i % 64) / 32 * 5 + i % 3) as u8)
             .collect();
-        fs::write(lifted.join("sprites.png"), indexed(64, 32, &sheet)).unwrap();
+        fs::write(
+            lifted.join("sprites.png"),
+            gp_assets::arcade::write_png(64, 32, &sheet),
+        )
+        .unwrap();
+        let colors: Vec<String> = (0..64).map(|n| (n * 8).to_string()).collect();
+        fs::write(
+            lifted.join("colors.toml"),
+            format!("colors = [{}]\n", colors.join(", ")),
+        )
+        .unwrap();
+        let config = Config {
+            gp: PathBuf::from("gp"),
+            repo: home.path().to_owned(),
+            work,
+            home: home.path().to_owned(),
+            rom: None,
+            assets: Some(lifted.clone()),
+            games: None,
+        };
+        let out = home.path().join("out");
+        export(&config, "cab", "player", "png", &out).unwrap();
+        let c = super::colours(
+            &Model::parse(MODEL).unwrap(),
+            &ArcadeMap::parse(MAP).unwrap(),
+            &lifted,
+            2,
+        )
+        .unwrap();
+        let png = fs::read(out.join("player-01.png")).unwrap();
+        let mut px = read_sprite(&png, &c).unwrap();
+        let before = px.clone();
+        px[0] = 12;
+        fs::write(out.join("player-01.png"), write_sprite(&px, &c)).unwrap();
+        let r = propose_save(&config, &out, false, None).unwrap();
+        assert!(
+            r.json["note"].as_str().unwrap().contains("card"),
+            "{}",
+            r.json
+        );
+        let q = card::queue(home.path());
+        assert_eq!(q.len(), 1, "{q:?}");
+        assert_eq!(q[0]["board"], true);
+        assert_eq!(q[0]["preview"], true);
+        let id = q[0]["id"].as_str().unwrap().to_owned();
+        assert!(card::png(home.path(), &id, "edit").is_some());
+        let a = card::decide(&config, &id, Answer::Accept, None).unwrap();
+        assert_eq!(a["state"], "accepted", "{a}");
+        let own = copy.join(crate::place::COPY_ASSETS);
+        let m = ArcadeMap::parse(MAP).unwrap().assets[0].clone();
+        assert_eq!(read_sheet(&own, &m).unwrap()[1], px);
+        let u = card::decide(&config, &id, Answer::Undo, None).unwrap();
+        assert_eq!(u["state"], "undone", "{u}");
+        assert_eq!(read_sheet(&own, &m).unwrap()[1], before);
+    }
+
+    /// A copy of the made-up game on a made-up arcade lift: the export
+    /// writes sprite 1 in the colours of bits 2 (palette entries 16 on)
+    /// and no more. A save that changes nothing is reported and kept
+    /// nowhere; one that changes three pixels, one of them to a value past
+    /// 9, comes back checked with those three counted and kept as a
+    /// proposal whose rows are hex, with nothing written over the lift.
+    /// Accepting it writes the sprite into the copy's own lifted folder
+    /// (the lift untouched) and marks the slot replaced; undo puts the
+    /// sprite and the slot's state back, and redo writes it again. A save
+    /// with a value past 15 is refused at the import stage, and a folder
+    /// in a repo is refused.
+    #[test]
+    fn an_arcade_copy_exports_its_board_sprites_and_keeps_a_save() {
+        let home = tempfile::tempdir().unwrap();
+        let work = home.path().join("work").join("mcp");
+        let copy = work.join("cab");
+        fs::create_dir_all(&copy).unwrap();
+        fs::write(copy.join(gp_model::MODEL_FILE), MODEL).unwrap();
+        let lifted = home.path().join("lift");
+        fs::create_dir_all(&lifted).unwrap();
+        fs::write(lifted.join(gp_assets::MAP_FILE), MAP).unwrap();
+        let sheet: Vec<u8> = (0..64 * 32u32)
+            .map(|i| ((i % 64) / 32 * 5 + i % 3) as u8)
+            .collect();
+        let sheet_png = gp_assets::arcade::write_png(64, 32, &sheet);
+        fs::write(lifted.join("sprites.png"), &sheet_png).unwrap();
         let colors: Vec<String> = (0..64).map(|n| (n * 8).to_string()).collect();
         fs::write(
             lifted.join("colors.toml"),
@@ -592,25 +1121,83 @@ y = 191
         let mut px = read_sprite(&png, &c).unwrap();
         assert_eq!(px[0], sheet[32]);
         // Nothing changed: checked, nothing to keep.
-        let r = propose_save(&config, &out).unwrap();
+        let r = propose_save(&config, &out, false, None).unwrap();
         assert_eq!(r.json["stage"], "proposal");
         assert_eq!(r.json["pixels_changed"], 0);
-        for i in [0, 40, 1023] {
-            px[i] = 15 - px[i];
+        assert!(edit_log::proposals(&copy).unwrap().is_empty());
+        let lifted_px = px.clone();
+        // The sheet's sprite 1 holds values 5 to 7.
+        for (i, v) in [(0, 12), (40, 3), (1023, 15)] {
+            px[i] = v;
         }
         fs::write(out.join("player-01.png"), write_sprite(&px, &c)).unwrap();
-        let r = propose_save(&config, &out).unwrap();
-        assert!(r.is_error);
-        assert_eq!(r.json["stage"], "proposal");
+        let r = propose_save(&config, &out, false, Some("person")).unwrap();
+        assert!(!r.is_error, "{}", r.json);
+        assert_eq!(r.json["status"], "proposed");
         assert_eq!(r.json["changed"]["board-sprite.01"], 3);
         assert_eq!(r.json["written"], false);
-        assert_eq!(
-            fs::read(lifted.join("sprites.png")).unwrap(),
-            indexed(64, 32, &sheet)
+        assert!(fs::metadata(r.json["previews"]["edit"].as_str().unwrap()).is_ok());
+        assert_eq!(fs::read(lifted.join("sprites.png")).unwrap(), sheet_png);
+        let seq = r.json["seq"].as_u64().unwrap();
+        let e = edit_log::read_proposal(&copy, seq).unwrap().unwrap();
+        assert!(is_board_entry(&e));
+        assert_eq!(e.tiles[0].tile, 1);
+        assert_eq!(e.tiles[0].after, digits(&px));
+        assert!(
+            e.after
+                .iter()
+                .flat_map(|r| r.chars())
+                .any(|c| c.is_ascii_lowercase())
         );
+        assert_eq!(crate::sprite_ops::Pic::from_rows(&e.after).unwrap().px, px);
+        assert_eq!(e.state_before.status, Status::Original);
+        // Accept: into the copy's own lift, which the copy then runs on.
+        let r = crate::asset_edit::decide(&config, "cab", seq, true, "person").unwrap();
+        assert!(!r.is_error, "{}", r.json);
+        assert_eq!(r.json["status"], "accepted");
+        assert_eq!(fs::read(lifted.join("sprites.png")).unwrap(), sheet_png);
+        let own = copy.join(crate::place::COPY_ASSETS);
+        let model = Model::parse(MODEL).unwrap();
+        assert_eq!(arcade_lift(&config, &copy, &model).unwrap().unwrap().0, own);
+        let a = ArcadeMap::parse(MAP).unwrap().assets[0].clone();
+        assert_eq!(read_sheet(&own, &a).unwrap()[1], px);
+        let st = State::read(&own).unwrap().unwrap();
+        assert_eq!(st.slots["sprites"].status, Status::Replaced);
+        assert_eq!(st.slots["sprites"].origin, Origin::Uploaded);
+        assert_eq!(st.slots["colors"].status, Status::Original);
+        // The catalog reads the copy's arcade map and finds the files as
+        // the state says.
+        let map = catalog::Map::read(&own).unwrap();
+        let rec = catalog::record(
+            &model,
+            None,
+            Some(map.as_ref()),
+            Some(&st),
+            Some(&own),
+            "sprites",
+        );
+        assert_eq!(rec["status"], "replaced");
+        assert_eq!(rec["format"], "mcr-sprites");
+        assert_eq!(rec["used_by"][0]["entity"], "player");
+        // Undo puts it back, state and all; redo writes it again.
+        let undo = |redo: bool| {
+            let a: crate::asset_edit::EditArgs = serde_json::from_value(json!({
+                "copy": "cab", "undo": !redo, "redo": redo,
+            }))
+            .unwrap();
+            crate::asset_edit::edit(&config, a).unwrap()
+        };
+        let r = undo(false);
+        assert!(!r.is_error, "{}", r.json);
+        assert_eq!(read_sheet(&own, &a).unwrap()[1], lifted_px);
+        let st = State::read(&own).unwrap().unwrap();
+        assert_eq!(st.slots["sprites"].status, Status::Original);
+        let r = undo(true);
+        assert!(!r.is_error, "{}", r.json);
+        assert_eq!(read_sheet(&own, &a).unwrap()[1], px);
         px[5] = 16;
         fs::write(out.join("player-01.png"), indexed(32, 32, &px)).unwrap();
-        let r = propose_save(&config, &out).unwrap();
+        let r = propose_save(&config, &out, false, None).unwrap();
         assert_eq!(r.json["stage"], "import");
         assert!(
             r.json["problems"][0].as_str().unwrap().contains("past")

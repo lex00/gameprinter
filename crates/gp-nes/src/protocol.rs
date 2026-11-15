@@ -732,6 +732,16 @@ impl Runtime for NesRuntime {
     }
 
     fn query(&self, selector: &str) -> Result<Vec<Entry>, String> {
+        // One RAM byte, the read a comparison makes most, answered without
+        // a parsed selector: the same entry `read` gives.
+        if let Some(addr) = gp_runtime::select::canonical_ram(selector)
+            && let Some(b) = self.ram().get(usize::from(addr))
+        {
+            return Ok(vec![Entry {
+                path: selector.to_owned(),
+                value: Value::Int((*b).into()),
+            }]);
+        }
         self.read(&Selector::parse(selector)?)
     }
 
@@ -811,6 +821,22 @@ mod tests {
 
     fn press(pad: u8) -> InputFrame {
         InputFrame::pads([pad, 0, 0, 0])
+    }
+
+    /// A RAM byte asked as `ram_text` writes it answers as the parsed
+    /// selector does, at every address (past the 2 KB of RAM, the same
+    /// refusal), read at the frame's end and at the NMI.
+    #[test]
+    fn a_ram_byte_answers_as_the_parsed_selector_does() {
+        for at_nmi in [false, true] {
+            let mut rt = runtime();
+            rt.set("read_at_nmi", Value::Flag(at_nmi)).unwrap();
+            rt.step(&[press(0x10), press(0), press(0x80)]).unwrap();
+            for addr in 0..=u16::MAX {
+                let text = gp_runtime::select::ram_text(addr);
+                assert_eq!(rt.query(&text), rt.read(&Selector::ram(addr)), "{}", &*text);
+            }
+        }
     }
 
     fn one(rt: &NesRuntime, sel: &str) -> i64 {

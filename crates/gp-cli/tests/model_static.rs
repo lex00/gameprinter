@@ -203,3 +203,137 @@ fn another_layout_gives_its_own_facts() {
         w == "code in switched banks" || w.starts_with("call into a switched bank")
     }));
 }
+
+/// The model `--model` writes is one `gp model propose` reads: on Moss Hop,
+/// over a recording of made-up presses, propose measures the slug's patrol
+/// against the model's own facts. The facts the format has no place for
+/// (RAM addresses) are named as left out, and each placeholder has
+/// evidence of confidence 0 or the console's. The addresses go in the
+/// mapping.toml beside it instead, so propose reads the player's place
+/// from RAM and measures the jump (speed, gravity, max_fall) as it does on
+/// the real model.
+#[test]
+fn moss_hops_static_model_goes_through_propose() {
+    if gp_arcade::skip_slow_test() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let build = StdCommand::new(repo().join("scripts/mosshop/build.sh"))
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "Moss Hop didn't build; this test needs cc65 like just check:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let rom = tmp.path().join("mosshop.nes");
+    let home = tmp.path().join("home");
+    // `gp record` reads the games' roms.toml files: there are none here.
+    std::fs::create_dir_all(home.join("games")).unwrap();
+    let model = tmp.path().join("model");
+    let json = |args: &[&str]| -> Value {
+        let out = gp(&home).args(args).output().unwrap();
+        assert!(
+            out.status.success(),
+            "gp {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        v.get("data").cloned().unwrap_or(v)
+    };
+    let s = |p: &Path| p.to_str().unwrap().to_owned();
+    let v = json(&[
+        "--json",
+        "model",
+        "static",
+        &s(&rom),
+        "--assets",
+        "assets/mosshop.toml",
+        "--no-run",
+        "--model",
+        &s(&model),
+    ]);
+    let left: Vec<&str> = v["model_left_out"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["path"].as_str().unwrap())
+        .collect();
+    for p in ["entities.player.bytes", "cameras.main.bytes", "hardware"] {
+        assert!(left.contains(&p), "{p} not left out: {left:?}");
+    }
+    let text = std::fs::read_to_string(model.join("model.toml")).unwrap();
+    let m = gp_model::Model::parse(&text).unwrap();
+    // The mapping holds the player's bytes the code names, PLAYER_X and
+    // PLAYER_Y, and no byte it doesn't (the high bytes, the fraction).
+    let map = gp_interp::mapping::Mapping::parse(
+        &std::fs::read_to_string(model.join("mapping.toml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(map.model, "static");
+    assert_eq!(map.source, "mosshop");
+    let ram = |p: &str| {
+        map.fields
+            .iter()
+            .find(|f| f.path == p)
+            .map(|f| f.ram.clone())
+            .unwrap_or_else(|| panic!("no field {p}"))
+    };
+    assert_eq!(ram("entities.player[0].x"), [0x10]);
+    assert_eq!(ram("entities.player[0].y"), [0x12]);
+    assert_eq!(ram("cameras.main.x"), [0x1A]);
+    assert_eq!(ram("rules.state_05.state"), [0x05]);
+    assert!(map.fields.iter().all(|f| f.frac.is_none()));
+    for p in v["model_placeholders"].as_array().unwrap() {
+        let e = &m.evidence[p["path"].as_str().unwrap()];
+        assert!(e.confidence == 0 || e.confidence == 90, "{p}");
+    }
+    let input = tmp.path().join("walk.input");
+    let log = gp_evidence::input_log::generate(
+        600,
+        &[
+            "right@20-90",
+            "right+b@110-220",
+            "a@240-262",
+            "right@280-420",
+        ],
+    )
+    .unwrap();
+    std::fs::write(&input, log.to_text()).unwrap();
+    let rec = json(&["--json", "record", "--rom", &s(&rom), "--input", &s(&input)]);
+    let id = rec["id"].as_str().unwrap()[..12].to_owned();
+    let p = json(&[
+        "--json",
+        "model",
+        "propose",
+        &s(&model),
+        "--recording",
+        &id,
+        "--no-questions",
+    ]);
+    assert_eq!(p["model"], "static", "{p:#}");
+    let proposed: Vec<&str> = p["proposals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|x| x["path"].as_str())
+        .collect();
+    assert!(proposed.contains(&"entities.slots_20.patrol.step"), "{p:#}");
+    // The jump, measured from the mapping's player bytes, agrees with the
+    // facts static read from the code.
+    for path in [
+        "entities.player.jump.speed",
+        "entities.player.jump.gravity",
+        "entities.player.jump.max_fall",
+    ] {
+        let x = p["proposals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["path"] == path)
+            .unwrap_or_else(|| panic!("no proposal for {path}: {p:#}"));
+        assert_eq!(x["agrees"], true, "{x:#}");
+    }
+    assert!(p["accuracy"]["compared"].as_u64().unwrap() >= 5, "{p:#}");
+}

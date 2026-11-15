@@ -279,7 +279,7 @@ const PHRASES: &[(&str, &str, &str)] = &[
     ("sound_edit", "change", "the sound"),
     ("sound_preview", "play", "the sound"),
     // A new game, a template, the browser, landing, publishing.
-    ("game new", "start", "a new game from your ROM"),
+    ("game new", "start", "a new game"),
     ("game fetch", "fetch", "a published game"),
     ("game build", "build", "the game's code"),
     ("game test", "test", "the game's code"),

@@ -695,8 +695,7 @@ pub struct Ran {
 /// Runs `cmd` until it ends or `limit` passes; then stops it and every
 /// process it started (its own process group).
 pub fn run_limited(mut cmd: Command, limit: Duration) -> Result<Ran, String> {
-    #[cfg(unix)]
-    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    crate::proc::own_group(&mut cmd);
     let started = Instant::now();
     let mut child = cmd
         .stdin(Stdio::null())
@@ -724,7 +723,7 @@ pub fn run_limited(mut cmd: Command, limit: Duration) -> Result<Ran, String> {
             Some(s) => break Some(s),
             None if started.elapsed() >= limit => {
                 timed_out = true;
-                stop_group(child.id());
+                crate::proc::stop_group(child.id(), Duration::from_millis(200));
                 let _ = child.kill();
                 break child.wait().ok();
             }
@@ -744,20 +743,6 @@ pub fn run_limited(mut cmd: Command, limit: Duration) -> Result<Ran, String> {
         timed_out,
         seconds: started.elapsed().as_secs_f64(),
     })
-}
-
-/// Stops the process group `pid` leads: the command and what it started.
-fn stop_group(pid: u32) {
-    #[cfg(unix)]
-    for signal in ["-TERM", "-KILL"] {
-        let _ = Command::new("kill")
-            .arg(signal)
-            .arg(format!("-{pid}"))
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        std::thread::sleep(Duration::from_millis(200));
-    }
 }
 
 /// The port of the address in $`var` when it is on 127.0.0.1 (as gp
@@ -1338,10 +1323,9 @@ mod tests {
 
     /// A stand-in gp: a shell script that runs `body`.
     fn fake_gp(dir: &Path, body: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt as _;
         let f = dir.join("gp");
         std::fs::write(&f, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::proc::make_executable(&f).unwrap();
         std::fs::create_dir_all(dir.join("work")).unwrap();
         f
     }

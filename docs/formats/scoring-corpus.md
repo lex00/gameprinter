@@ -63,6 +63,27 @@ A clip's recipe hash is the BLAKE3 of its canonical JSON: its ID, the BLAKE3 of 
 
 The recipe-set hash is `b3:` and the BLAKE3 of `gp-corpus-recipes 1` and a line `ID RECIPE-HASH` per clip, sorted by ID. A plan records only that hash, not each clip's, so to say which clips changed `gp corpus bump` compares with the plan as git has it at HEAD, when HEAD's is the recorded version, and `gp corpus import` with the plan before the import.
 
+## Score records
+
+`gp corpus score GAME --run NAME --write TEMPLATE` writes a score record to `TEMPLATE/evidence/MODEL/CORPUS.json`, named by the model's hash (`model.hash`) and the corpus's recipe-set hash. It is an in-toto Statement (`_type` `https://in-toto.io/Statement/v1`) with `predicateType` `urn:game-printer:score-record:0` and these predicate fields:
+
+| Field | What |
+|---|---|
+| `record_format` | `0.3.0`; `0.2.0` before `results.picture`, `0.1.0` before `module` |
+| `corpus` | `name`, `version` and `hash`, the recipe-set hash |
+| `rom` | `sha256` of the ROM or romset the clips were made from, and `patch` for a hack, else null |
+| `model` | `hash` (BLAKE3 of its canonical tree), `short` and `name` |
+| `mapping` | `hash` (BLAKE3 of mapping.toml) and `schema` |
+| `contract` | BLAKE3 of fidelity.toml (of nothing when there is none) |
+| `module` | `{"hash": ...}`, the BLAKE3 of the hooks module the clips were played through (named with `--module`, or built for the game), as `gp game hash` prints it; null for a model with gp's own hooks alone. Added in 0.2.0 |
+| `runtime`, `gp` | The interpreter and scenario version; gp's version and build |
+| `results` | `clips`, `exact`, `errors`, `fidelity_permille`, `bars` (`held`, `met`) or null, and `picture`. `exact` is on state alone: clips whose state curve matches the original's. `picture` (added in 0.3.0) is the screen apart: `frames` compared, `frames_same` and `clips_same`, the clips whose every compared screen frame is the same |
+| `clips` | One row a clip: its result (`exact`, on state), curve, pairing and bars, and `screen` when its screen was compared: `sprites` and `background`, each `same` (frames within the screen tolerance) of `total` (frames compared) |
+
+A clip's picture, in `results.picture` and in the publish rule, is read from its `screen`: a frame is the same only when both layers are, so a clip's frames the same are the lower of its two layers' `same` and its frames compared the higher of their `total`. A clip is the same on picture when those are equal and more than none. `gp corpus score` says the two on two lines: "On corpus NAME VERSION (HASH), on state: E of N clips exact, fidelity P%, X couldn't be scored. Model HASH." and "On picture: S of F screen frames the same, C of N clips the same on every screen frame compared."
+
+`gp registry publish` reads it for an arcade game ([packages.md](../packages.md#publishing-an-arcade-game)), taking one only when every clip is exact on state and the same on picture; for a game with hooks the record's `module.hash` must be the module the package ships (`play/module.wasm`), and a 0.1.0 record, which has no `module`, is refused; for a game without hooks a 0.1.0 record is taken.
+
 ## Versions
 
 | Change | Step | Why |

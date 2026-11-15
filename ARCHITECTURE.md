@@ -52,7 +52,7 @@ Every tool reaches a running game through one runtime protocol, so the original,
 |---|---|---|
 | The runtime protocol: sessions, stepping, state, queries, `load-state` | `wit/runtime/runtime.wit`, mirrored by hand in `crates/gp-runtime` with a test that keeps the two in step | 0.4.0 |
 | A game module's calls beyond the protocol: `info`, `describe`, the draws, APU events and reads a hook needs | `wit/game/game.wit`; why each exists is in [docs/inventory.md](docs/inventory.md) | 0.1.0 |
-| The simulation API a hook crate sees (`Ext`, `ExtCx`, `World`, `Spec`) | `crates/gp-sim`; a package declares it as `sim-api` | 1 |
+| The simulation API a hook crate sees (`Ext`, `ExtCx`, `World`, `Spec`) | `crates/gp-sim` (`gp_sim::SIM_API`); a package declares the major it needs as `sim-api`. An added method with a default is a minor change, a changed or removed one major | 1.1 |
 | The package format: blobs by BLAKE3 hash and a manifest | `crates/gp-package`, header `gp-package 1` | 1 |
 
 A module declares the `runtime-wit` and `sim-api` it was built for, and the host refuses one it doesn't implement.

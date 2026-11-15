@@ -423,7 +423,7 @@ fn check_arcade(dir: &Path, rom: &[u8], text: &str) -> Result<Outcome> {
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod symlink_tests {
     use super::write_file;
 

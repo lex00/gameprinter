@@ -139,10 +139,14 @@ pub struct EditArgs {
     /// Put back the edit undone last.
     #[serde(default)]
     pub redo: bool,
-    /// Keep an edit (a proposal is placed): its sequence number.
+    /// Keep an edit the agent placed: its sequence number. A proposal, and
+    /// an edit the person decided, are refused: only the person answers
+    /// those (crate::sprite_proposal).
     #[serde(default)]
     pub accept: Option<u64>,
-    /// Turn an edit down (a placed one is undone): its sequence number.
+    /// Turn down an edit the agent placed (it is undone): its sequence
+    /// number. Refused for a proposal and an edit the person decided, as
+    /// accept is.
     #[serde(default)]
     pub reject: Option<u64>,
     /// The consistency critic: `off`, `advise` (default) or `enforce`
@@ -603,7 +607,7 @@ pub fn edit(config: &Config, mut a: EditArgs) -> Result<Reply, String> {
             ));
         }
         if crate::board_trip::is_board_trip(&trip) {
-            return crate::board_trip::propose_save(config, &dir);
+            return crate::board_trip::propose_save(config, &dir, a.place, a.author.as_deref());
         }
         match crate::editor_trip::import(&dir)? {
             Ok(pics) => {
@@ -636,8 +640,17 @@ pub fn edit(config: &Config, mut a: EditArgs) -> Result<Reply, String> {
         return redo(config, &a);
     }
     if let Some(seq) = a.accept.or(a.reject) {
-        let by = a.author.as_deref().unwrap_or("agent");
-        return decide(config, &a.copy, seq, a.accept.is_some(), by);
+        // An open proposal, or an edit the person decided, is the
+        // person's to answer (crate::sprite_proposal), on their page or
+        // with gp assets proposal in their terminal.
+        let dir = config.existing_copy(&a.copy)?;
+        if !crate::sprite_proposal::agent_may_decide(&dir, seq)? {
+            return Ok(Reply::refused(json!({
+                "ok": false, "written": false, "item": format!("{}:{seq}", a.copy),
+                "refused": crate::sprite_proposal::PERSON_DECIDES,
+            })));
+        }
+        return decide(config, &a.copy, seq, a.accept.is_some(), "agent");
     }
     if a.seq.is_some() {
         return Err("seq goes with undo".into());
@@ -696,8 +709,9 @@ pub(crate) fn record(
         out["written"] = json!(false);
         out["status"] = json!("proposed");
         out["note"] = json!(format!(
-            "a proposal: accept {} to place it, reject it to drop it",
-            entry.seq
+            "a proposal, number {}. {}",
+            entry.seq,
+            crate::sprite_proposal::ON_THE_PAGE
         ));
         return Ok(Reply::ok(out.take()));
     }
@@ -1421,8 +1435,8 @@ fn legacy_tiles(t: &Target, e: &Entry) -> Result<Vec<TileEdit>, String> {
         let mut s = String::with_capacity(64);
         for y in 0..8 {
             for x in 0..8 {
-                s.push(char::from(
-                    b'0' + p.px[((sy + y) * p.w + sx + x) as usize].min(9),
+                s.push(crate::sprite_ops::digit(
+                    p.px[((sy + y) * p.w + sx + x) as usize],
                 ));
             }
         }
@@ -1557,6 +1571,9 @@ fn revert(
     status: EditStatus,
     by: Option<&str>,
 ) -> Result<(Reply, Entry), String> {
+    if crate::board_trip::is_board_entry(&history[idx]) {
+        return crate::board_trip::revert(config, copy, dir, history, idx, status, by);
+    }
     let e = history[idx].clone();
     let newest = idx + 1 == history.len();
     let t = place::target(config, copy, &e.slot, e.entity_ref())?;
@@ -1696,6 +1713,9 @@ fn redo(config: &Config, a: &EditArgs) -> Result<Reply, String> {
     let dir = config.existing_copy(&a.copy)?;
     let mut redo = edit_log::read_redo(&dir)?;
     let mut e = redo.pop().ok_or("there's nothing to redo")?;
+    if crate::board_trip::is_board_entry(&e) {
+        return crate::board_trip::redo(config, &a.copy, e, &redo, a.author.as_deref());
+    }
     let t = place::target(config, &a.copy, &e.slot, e.entity_ref())?;
     let state_before = t.state.clone();
     let p = edit_provenance(&t, &e, a.author.as_deref());
@@ -1793,6 +1813,9 @@ pub fn decide(
             json!({ "ok": true, "written": false, "item": e.item(copy), "status": "rejected", "decided_by": by }),
         ));
     }
+    if crate::board_trip::is_board_entry(&e) {
+        return crate::board_trip::accept(config, copy, e, by);
+    }
     let t = place::target(config, copy, &e.slot, e.entity_ref())?;
     let state_before = t.state.clone();
     let p = edit_provenance(&t, &e, Some(by));
@@ -1848,6 +1871,9 @@ pub fn history(config: &Config, a: HistoryArgs) -> Result<Reply, String> {
         "undone": s(edit_log::read_redo(&dir)?),
         "proposals": s(proposals),
         "waiting": open,
+        // The person's answers on their page (crate::sprite_proposal),
+        // with what they wrote; reading them here marks them read.
+        "answers": crate::sprite_proposal::tell(&config.home, &a.copy),
         "next_seq": edit_log::next_seq(&dir)?,
     })))
 }

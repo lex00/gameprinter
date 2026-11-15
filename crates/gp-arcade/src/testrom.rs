@@ -23,6 +23,40 @@ pub fn romset(main: &[u8], ssio: &[u8]) -> Romset {
     }
 }
 
+/// A made-up sound program: turns on AY 0's tone A and both chips'
+/// ports (so the SSIO's duty volumes are the loudest and it isn't
+/// muted), then writes the latch-0 byte's low half to tone A's volume
+/// over and over.
+pub const SOUND: [u8; 46] = [
+    0x3E, 0x07, 0x32, 0x00, 0xA0, 0x3E, 0x7E, 0x32, 0x02, 0xA0, // AY 0 reg 7 = 7e
+    0x3E, 0x00, 0x32, 0x00, 0xA0, 0x3E, 0x80, 0x32, 0x02, 0xA0, // AY 0 reg 0 = 80
+    0x3E, 0x07, 0x32, 0x00, 0xB0, 0x3E, 0xBF, 0x32, 0x02, 0xB0, // AY 1 reg 7 = bf
+    0x3E, 0x08, 0x32, 0x00, 0xA0, // loop: AY 0 reg 8 =
+    0x3A, 0x00, 0x90, 0xE6, 0x0F, 0x32, 0x02, 0xA0, // latch 0 & 0f
+    0xC3, 0x1E, 0x00, // jp loop
+];
+
+/// A made-up main program: counts in A, writing it to latch 0 and
+/// feeding the watchdog, with a wait between.
+pub const MAIN: [u8; 12] = [
+    0x3C, // inc a
+    0xD3, 0x1C, // out (1c),a
+    0xD3, 0xE0, // out (e0),a
+    0x06, 0xFF, // ld b,ff
+    0x10, 0xFE, // djnz $
+    0x18, 0xF5, // jr 0
+    0x00,
+];
+
+/// A set that sounds: [`MAIN`] counts into latch 0 and [`SOUND`] plays it
+/// as AY 0's tone A's volume, with a made-up PROM of alternate bits for
+/// the SSIO's duty volumes.
+pub fn sounding() -> Romset {
+    let mut rom = romset(&MAIN, &SOUND);
+    rom.ssio_prom = Some(vec![0xAA; 32]);
+    rom
+}
+
 /// Both programs loop at 0 (`JR $`).
 pub fn looping() -> Romset {
     romset(&[0x18, 0xfe], &[0x18, 0xfe])

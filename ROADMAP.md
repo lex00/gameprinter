@@ -14,7 +14,7 @@ The full lists behind it are the port ledger and its three audits, kept outside 
 | The games repo | `lex00/games`, one package folder a game: Donkey Kong (its OE and JU ROMs, one package, now 1.0.9) and Tapper |
 | A home of its own | `~/.gameprinter`; game-printer's `~/.game-printer` is gone |
 | Registry | `lex00/gp-registry`, a public git repo read at its raw GitHub address, unsigned by the owner's choice |
-| The public page | [nes-donkey-kong.intentius.workers.dev](https://nes-donkey-kong.intentius.workers.dev): Donkey Kong from a ROM the visitor loads, with the clay theme `lex00/turnips` beside it |
+| The public page | [gameprinter.intentius.workers.dev](https://gameprinter.intentius.workers.dev): Donkey Kong from a ROM the visitor loads, with the clay theme `lex00/turnips` beside it |
 | Game modules | A game's hooks in one Wasm module, built from a kit in a sandbox with no network, the same bytes on a Mac and on Linux, run in the page's Worker and in gp under wasmtime with a deadline and a memory cap ([docs/modules.md](docs/modules.md)) |
 | Gates | `gp model gate` for games and `gp tool gate` for the tool, with batches, three-way merges and append-only rows; the tool gate publishes each landing's build ([docs/gate.md](docs/gate.md)) |
 | Workers | `gp worker env`, the locked cargo and the rules in [docs/workers.md](docs/workers.md) |

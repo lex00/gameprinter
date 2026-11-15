@@ -81,7 +81,12 @@ pub(crate) fn env(paths: &Paths) -> Result<Outcome> {
         .exists()
         .then(|| Store::open(&paths.store).and_then(|s| s.stats()))
         .transpose()?;
-    let git = gp_metrics::run::git_info();
+    // The run record's answer, which asks git only when the work tree
+    // changed since git was last asked there.
+    let git = crate::runrec::git().unwrap_or_else(|| {
+        let dir = std::env::current_dir().ok()?;
+        gp_metrics::gitstate::git_info_cached(&dir, &paths.runs_dir().join("git-state.json"))
+    });
     let v = json!({
         "version": env!("CARGO_PKG_VERSION"),
         "paths": paths,

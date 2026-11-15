@@ -118,10 +118,15 @@ pub enum OracleCmd {
     /// recording. Every class must be triaged and none a fork bug; then the
     /// verdict is stored with the triage records it relied on, and the
     /// recordings log gets a golden entry. Exits 1 if it can't be golden.
+    /// An arcade recording is held to a MAME capture that
+    /// oracle/mame-captures.toml names (`--against tapper-m3b-cycle`),
+    /// checked by its hash: golden when it ran the capture's input and
+    /// every frame matches.
     Golden {
         /// The gp-nes recording.
         id: String,
-        /// The Mesen recording of the same run.
+        /// The Mesen recording of the same run; for an arcade recording,
+        /// a capture oracle/mame-captures.toml names.
         #[arg(long)]
         against: String,
         /// The gp-nes recording's ROM, if it isn't in $GP_ROM_DIR.
@@ -135,9 +140,13 @@ pub enum OracleCmd {
     /// them and check every class is triaged, all in a temporary store.
     /// `just check-mesen` runs it. Known fork bugs are listed but don't
     /// fail it. Baselines without their ROM in $GP_ROM_DIR are skipped. Exits
-    /// 1 if a class isn't triaged or two platforms' Mesen runs differ.
+    /// 1 if a class isn't triaged or two platforms' Mesen runs differ. A
+    /// captures file (oracle/mame-captures.toml) plays each capture's input
+    /// on gp-arcade against the MAME capture it names by hash, kept under
+    /// $GP_HOME/work/oracle/; a capture not on this machine is skipped with
+    /// the command that makes it, and one that differs on a frame fails.
     Check {
-        /// Baseline files or directories.
+        /// Baseline files or directories, or a captures file.
         #[arg(required = true)]
         baselines: Vec<PathBuf>,
         /// linux/arm64 or linux/amd64; repeat for both (default: this
@@ -892,9 +901,7 @@ fn golden(
     let store = Store::open(&paths.store)?;
     let a = open(&store, id)?;
     if crate::oracle_mame::is_arcade(&a.manifest) {
-        bail!(
-            "golden is the NES's: a gp-nes recording against its Mesen recording, every class triaged. An arcade recording is held to MAME with gp oracle diff ID CAPTURE; a MAME capture isn't a store recording, so no verdict is stored for it yet"
-        );
+        return crate::oracle_captures::golden(&store, &a.entry, &a.manifest, against, rom, paths);
     }
     let b = open(&store, against)?;
     if a.manifest.runtime.name == mesen::RUNTIME || b.manifest.runtime.name != mesen::RUNTIME {
@@ -993,12 +1000,39 @@ fn check(
             .map(|p| arch(Some(p)))
             .collect::<Result<_>>()?
     };
+    // A captures file (oracle/mame-captures.toml) is the arcade's: its
+    // input logs on gp-arcade against the MAME captures it names.
+    let (captures, list): (Vec<PathBuf>, Vec<PathBuf>) = list
+        .into_iter()
+        .partition(|f| crate::oracle_captures::Captures::is_one(f));
+    let (mut arcade_lines, mut arcade_results, mut arcade) = (Vec::new(), Vec::new(), [0u64; 3]);
+    for f in &captures {
+        let (l, r, n) = crate::oracle_captures::check(f, paths)?;
+        arcade_lines.extend(l);
+        arcade_results.extend(r);
+        for i in 0..3 {
+            arcade[i] += n[i];
+        }
+    }
+    if list.is_empty() {
+        let [passed, failed, skipped] = arcade;
+        crate::runrec::metric("oracle.check.passed", passed as f64, "count");
+        crate::runrec::metric("oracle.check.failed", failed as f64, "count");
+        arcade_lines.push(format!(
+            "{passed} captures passed, {failed} failed, {skipped} skipped"
+        ));
+        return Ok(Outcome {
+            json: json!({ "results": arcade_results, "passed": passed, "failed": failed, "skipped": skipped }),
+            text: arcade_lines.join("\n"),
+            exit: u8::from(failed > 0),
+        });
+    }
     let triage_path = triage_path(triage_file)?;
     let triage = Triage::load(&triage_path)?;
     let tmp = tempfile::tempdir().context("creating a temporary store")?;
     let store = Store::open(tmp.path())?;
-    let (mut lines, mut results) = (Vec::new(), Vec::new());
-    let (mut passed, mut failed, mut skipped) = (0u64, 0u64, 0u64);
+    let (mut lines, mut results) = (arcade_lines, arcade_results);
+    let [mut passed, mut failed, mut skipped] = arcade;
     for file in &list {
         let b = Baseline::load(file)?;
         let name = file
@@ -1119,7 +1153,7 @@ fn check(
     crate::runrec::metric("oracle.check.passed", passed as f64, "count");
     crate::runrec::metric("oracle.check.failed", failed as f64, "count");
     lines.push(format!(
-        "{passed} baselines passed, {failed} failed, {skipped} skipped (triage: {})",
+        "{passed} baselines and captures passed, {failed} failed, {skipped} skipped (triage: {})",
         triage_path.display()
     ));
     Ok(Outcome {

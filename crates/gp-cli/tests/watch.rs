@@ -60,7 +60,7 @@ fn a_session_is_numbered_whole_and_the_same_each_time() {
         .collect();
     for (i, e) in evs.iter().enumerate() {
         assert_eq!(e["seq"], i as u64 + 1, "seq has no gaps");
-        assert_eq!(e["v"], 1);
+        assert_eq!(e["v"], gp_events::watch::SCHEMA, "the events format");
     }
     let kinds: Vec<&str> = evs.iter().map(|e| e["kind"].as_str().unwrap()).collect();
     assert_eq!(kinds[..2], ["watch.start", "snapshot"]);

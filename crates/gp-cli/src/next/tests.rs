@@ -632,3 +632,28 @@ fn a_proposed_sound_waits_for_the_person_then_its_answer_for_the_agent() {
         a.also
     );
 }
+
+#[test]
+fn a_proposed_sprite_waits_for_the_person_then_its_answer_for_the_agent() {
+    let mut p = json!({"id": "my_hop-3", "copy": "my_hop", "seq": 3, "subject": "hero",
+        "why": "a red cap", "state": "open", "place": 1, "of": 2});
+    let (y, st) = super::sprite_wait(&p);
+    assert_eq!(y.what, "sprite");
+    assert_eq!(y.id.as_deref(), Some("my_hop-3"));
+    assert_eq!(y.sprite.as_ref().unwrap()["of"], 2);
+    let st = st.expect("the person's step");
+    assert_eq!(st.who, Who::Person);
+    assert_eq!(
+        st.says,
+        "Your agent proposes a change to a sprite: A change to the hero in my_hop: a red cap. Look at it before and after and press ACCEPT or REJECT on the card."
+    );
+    // The second in the queue is a card later, not a step now.
+    p["place"] = json!(2);
+    assert!(super::sprite_wait(&p).1.is_none());
+    p["state"] = json!("rejected");
+    let (y, st) = super::sprite_wait(&p);
+    assert_eq!(y.says, "You rejected the change to the hero in my_hop.");
+    let st = st.expect("the agent's step");
+    assert_eq!(st.who, Who::Agent);
+    assert!(st.says.contains("assets_history"), "{}", st.says);
+}

@@ -154,7 +154,7 @@ pub(crate) fn stub(
     let records = catalog::records(
         &model,
         contract.as_ref(),
-        Some(&map),
+        Some(catalog::MapRef::Nes(&map)),
         Some(&state),
         Some(&out),
     );

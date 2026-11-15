@@ -14,7 +14,7 @@ Manifests go to `$GP_HOME/runs/<YYYY-MM-DD>/<run_id>.json`, and each run and its
 | `run_group` | `$GP_RUN_GROUP` when set. `just` sets one per invocation, so every run in one `just check` shares it |
 | `started_at`, `finished_at`, `duration_ms` | RFC 3339 times and wall duration |
 | `status` | `{"kind": "ok"}` or `{"kind": "failed", "message"}` |
-| `git` | `commit`, `dirty` (tracked files changed) and `branch`, when run inside a work tree |
+| `git` | `commit`, `dirty` (tracked files changed) and `branch`, when run inside a work tree, as the run starts, on a thread of its own so the command doesn't wait on it. It is `git status`'s answer: when HEAD, the index file and every tracked file's stat are what they were the last time git was asked in that work tree (`$GP_HOME/runs/git-state.json`, crates/gp-metrics/src/gitstate.rs), the answer git gave then, without running git; otherwise one `git status` |
 | `host` | `os` and `arch` |
 | `tool` | `name` and `version` of `gp` |
 | `tools` | Other programs the run depended on, as `[{name, version}]`, when any. `gp metrics time --tool wasmtime=48.0.7` adds one; the wasm checks use it |

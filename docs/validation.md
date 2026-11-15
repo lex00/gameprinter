@@ -21,7 +21,7 @@ With neither `--against` nor `--store`, `gp validate GAME` runs the check that f
 | The folder | The check | `check` in the JSON |
 |---|---|---|
 | Its source has recordings of the original in the checkout's `baselines/<source>` (only Moss Hop today) | The fidelity contract against them, exactly as `--against baselines/<source>` runs it, with that run's JSON at the top level. A person's copy (a folder in no git work tree) also gets the changed-game check, under `changed`, and that check decides `ok` and the exit code (`decided_by` is `changed`): the contract's result is beside it under `contract` (`ok`, `exit`, `passed`, `failed` and `says`, "differs from the original, as you changed it" when the change shows; its checks stay at the top level). For the original in the checkout nothing changes: `ok` and the exit are the contract's | `contract` (`also` is `changed` for a copy) |
-| It holds a corpus (`corpus.toml`) and is an original: in a git work tree, or a published package as `gp game fetch` writes one | A port's: the corpus scored on the model as `gp game score` scores it (the game's module built from this gp's kit when it has hooks, the ROM from `$GP_ROM_DIR`), NES or arcade. It passes when every clip is exact; the clips that aren't are named. The score record is kept in `$GP_HOME/work/validate/GAME/score.json`. Of the flags it takes only `--module` | `port` |
+| It holds a corpus (`corpus.toml`) and is an original: in a git work tree, or a published package as `gp game fetch` writes one | A port's: the corpus scored on the model as `gp game score` scores it (the game's module built from this gp's kit when it has hooks, the ROM from `$GP_ROM_DIR`), NES or arcade. It says state and picture apart, each on its own line: state is every clip exact (the clips that aren't are named), picture is every compared screen frame the same (the clips that differ are named, with their counts). An NES port passes on state alone, its picture said; an arcade game passes only when both hold, as the [publish rule](packages.md#publishing-an-arcade-game) asks. The score record is kept in `$GP_HOME/work/validate/GAME/score.json`. Of the flags it takes only `--module` | `port` |
 | Anything else: a person's copy (a copy of a port too, since it holds the port's corpus but was changed on purpose), or a game made here | A changed or new game's: the model is well formed (`gp model check`, its evidence read against the checkout for a copy of a template), then every stage is reached and finished | `changed` |
 
 Recordings of an original read a change made on purpose (a higher jump, a faster barrel) as a failure, so a changed game is held to what the person can still do in it instead. Each stage is checked by the tool that already checks one of its kind:
@@ -32,7 +32,7 @@ Recordings of an original read a change made on purpose (a higher jump, a faster
 | A stage verify couldn't play to its end (its search stopped at its limit, or no way to tell the stage's end) | None | Not checked, with `gp level verify`'s words. Where the kit covers the stage, a broken rule still fails it |
 | Any stage of a game with no level kit | `gp interp reach` and its playthrough (`gp_interp::reach`) | The goal is reachable by the player alone, and a run with every enemy in reaches it |
 
-How far a stage's layout is from the original's is said and not held: `gp level verify` refuses a new stage too close to the original's, and a stage the person left as it was still plays. A stage none of these can search (the reach search moves a platformer's player by its walk and jump, so a Tapper bar can't be searched) is named under `changed.unchecked` with the reason, `changed.complete` is false, and the last line says the check is not a full one; nothing failing still exits 0. The JSON's `changed` has `ok`, `complete`, `well_formed` (`ok`, `problems`), `stages` (each `level`, `ok`, `how`, `said` and `detail`), `failed` and `unchecked`; `port` has `ok`, `clips`, `exact`, `errors`, `fidelity_permille`, `not_exact`, `problems` and `record_file`.
+How far a stage's layout is from the original's is said and not held: `gp level verify` refuses a new stage too close to the original's, and a stage the person left as it was still plays. A stage none of these can search (the reach search moves a platformer's player by its walk and jump, so a Tapper bar can't be searched) is named under `changed.unchecked` with the reason, `changed.complete` is false, and the last line says the check is not a full one; nothing failing still exits 0. The JSON's `changed` has `ok`, `complete`, `well_formed` (`ok`, `problems`), `stages` (each `level`, `ok`, `how`, `said` and `detail`), `failed` and `unchecked`; `port` has `ok`, `state_ok`, `clips`, `exact`, `errors`, `fidelity_permille`, `not_exact`, `picture` (`ok`, `frames_same`, `frames`, `differ`, and `decides`, true for an arcade game), `problems` and `record_file`.
 
 ```sh
 gp validate templates/mosshop            # the contract against baselines/mosshop
@@ -41,6 +41,28 @@ gp validate tapper --which               # says a port's corpus score fits, and 
 ```
 
 The MCP tool `validate` runs the same command on a copy, unless `baselines` names some, and returns `check`, `also`, `why`, `decided_by`, `contract`, `changed` and `port` with the contract's fields.
+
+### Difficulty against a target
+
+`--target NAME=VALUE` (repeated; `NAME=VALUE+-TOL` or `NAME=VALUE+-TOL%` with a tolerance) holds a changed or new game's measured numbers to what the person asked for. The code is `crates/gp-cli/src/validate_target.rs`. Nothing new is measured: the numbers are the ones the stage checks above already give.
+
+| Names | Measured by |
+|---|---|
+| Every number `gp level measure` prints (`route_frames`, `climb_frames_min`, `climb_frames_median`, `jump_window_median`, `throw_to_drum_median`, `leave_by_ladder_share`, `ladders`, `broken`, `rollers`, ...) | `gp level verify` on a girder stage of a game with a level kit |
+| `run_frames` | The playthrough: frames a run with every enemy in takes to the goal (a tile stage's `gp level verify`, `gp interp reach`) |
+| `difficulty_bits` | `gp level difficulty`'s score of the run's inputs, measured only when a target names it |
+| `airtime`, `rise`, `walk_distance`, `run_distance` | The jump's envelope (`gp_interp::reach::envelope`), the numbers `gp author`'s feel check compares, measured only when a target names them |
+
+`difficulty_bits` and the jump's numbers come from the reach search, which moves a platformer's player on tiles, so a stage of girders and ladders (Donkey Kong's four) doesn't get them: on Donkey Kong they read as not measured, with that reason, rather than as the reach search's wrong numbers for a jump the game's own code makes.
+
+A target is held on every stage that measures its name. With no tolerance given, the level kit's `within` for that measure is used where the kit is written for the stage and gives one number (`10%`, `3 frames`), else the number must be equal. A name no stage measures is listed as not measured, with the names that are, and the result is then not a full check (`changed.complete` false); it neither passes nor fails on it. A port, and the original game held to its recordings, don't hold targets, and say so under `difficulty`.
+
+The feel the person asked for in words ("floatier", "tense") has no measure: no tool here turns words into a number, and the result says so under `difficulty.feel`. The agent asks for a number instead (the jump's airtime, the route's frames). The JSON's `changed.difficulty` has `ok`, `complete`, `targets` (each `target`, `level`, `measured`, `have`, `want`, `within`, `tolerance_from`, `ok`, or `measured` false with `why`) and `feel`. The MCP tool `validate` takes them as `targets` and returns `difficulty`.
+
+```sh
+gp validate mine --target run_frames=330+-10 --target airtime=40
+gp validate my-dk --target route_frames=1300 --target jump_window_median=18+-2
+```
 
 ## What is compared
 

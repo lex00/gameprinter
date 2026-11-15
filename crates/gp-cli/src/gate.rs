@@ -2476,10 +2476,7 @@ mod tests {
         let bin = tempfile::tempdir().unwrap();
         let gp = bin.path().join("gp");
         fs::write(&gp, "#!/bin/sh\nprintf 'a\\nb\\n' > \"$3\"\n").unwrap();
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&gp, fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        gp_mcp::proc::make_executable(&gp).unwrap();
         assert!(regenerate(d, &gp).unwrap());
         assert_eq!(fs::read_to_string(d.join("CLI.md")).unwrap(), "a\nb\n");
         assert_eq!(g(&["diff", "--cached", "--name-only"]), "CLI.md");

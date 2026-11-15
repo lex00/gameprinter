@@ -3,7 +3,9 @@
 //! decoded driver format and an agent's edit all produce a [`SongSet`];
 //! the player, the synthesizer and the model's `songs` slots read one.
 //!
-//! A song has a track per NES channel. A track is patterns placed in order;
+//! A song has a track per channel: the NES APU's, or (from 0.2.0) an
+//! arcade board's AY-8910 tone channels, noise and envelope. A track is
+//! patterns placed in order;
 //! a pattern holds notes timed in frames from its start, so a song keeps
 //! its exact timing whatever its tempo grid. Instruments are envelopes per
 //! frame (volume, duty and a pitch offset in timer units), shared by every
@@ -12,11 +14,20 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::apu::{Channel, Region, Sample, period_of};
+use crate::apu::{AyPart, Channel, Region, Sample, period_of};
 
-/// The file format's name and version.
+/// The file format's name and version. 0.2.0 added the AY-8910's channels
+/// and voices and the set's `clock`; a 0.1 file reads as it always did.
 pub const FORMAT: &str = "gp-songs";
-pub const VERSION: &str = "0.1.0";
+pub const VERSION: &str = "0.2.0";
+/// The oldest minor version this reader takes (0.1).
+const OLDEST_MINOR: u32 = 1;
+/// What a set holding nothing 0.2.0 added says, so a reader from before
+/// 0.2.0 (a game package built with an older kit) still takes it.
+pub const PLAIN_VERSION: &str = "0.1.0";
+
+/// An AY-8910's clock when a set doesn't give one: 2 MHz, Midway's SSIO.
+pub const AY_CLOCK: u32 = 2_000_000;
 
 /// What a channel's instrument drives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -26,6 +37,17 @@ pub enum Voice {
     Triangle,
     Noise,
     Dmc,
+    /// An AY-8910 tone channel: a square of fixed duty. Its `duty`
+    /// envelope is the chip's mixer for the channel a frame (1 tone, 2
+    /// noise, 3 both, 0 neither) and a `volume` of 16 means the chip's
+    /// envelope sets the loudness.
+    Tone,
+    /// An AY-8910's noise period, shared by the chip's three channels.
+    #[serde(rename = "ay-noise")]
+    AyNoise,
+    /// An AY-8910's envelope generator, shared by the chip's three
+    /// channels.
+    Envelope,
 }
 
 impl Voice {
@@ -35,7 +57,17 @@ impl Voice {
             Channel::Triangle => Self::Triangle,
             Channel::Noise => Self::Noise,
             Channel::Dmc => Self::Dmc,
+            _ => match c.ay().map(|(_, p)| p) {
+                Some(AyPart::Noise) => Self::AyNoise,
+                Some(AyPart::Envelope) => Self::Envelope,
+                _ => Self::Tone,
+            },
         }
+    }
+
+    /// One of the AY-8910's voices (gp-songs 0.2).
+    pub fn is_ay(self) -> bool {
+        matches!(self, Self::Tone | Self::AyNoise | Self::Envelope)
     }
 }
 
@@ -74,9 +106,11 @@ pub struct Instrument {
     /// `sfx`), for sound banks and themes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
-    /// Volume, 0-15, a frame each.
+    /// Volume, 0-15, a frame each; on an AY tone channel 16 hands the
+    /// loudness to the chip's envelope.
     pub volume: Vec<u8>,
-    /// Pulse duty 0-3, or the noise mode (1: the short loop).
+    /// Pulse duty 0-3, or the noise mode (1: the short loop), or an AY
+    /// tone channel's mixer (1 tone, 2 noise, 3 both).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub duty: Vec<u8>,
     /// Timer period offset from the note's own, a frame each: vibrato,
@@ -117,8 +151,10 @@ pub struct Note {
     pub at: u32,
     /// Frames it sounds.
     pub len: u32,
-    /// A MIDI note number for pulse and triangle (60 is middle C); the
-    /// period index 0-15 for noise; the rate index 0-15 for the DMC.
+    /// A MIDI note number for pulse, triangle and AY tone (60 is middle
+    /// C); the period index 0-15 for noise; the rate index 0-15 for the
+    /// DMC; the noise period 0-31 on an AY's noise; the shape 0-15 on an
+    /// AY's envelope, which the note's start writes (restarting it).
     pub pitch: u8,
     /// The timer period's offset from the pitch's nearest period, so a
     /// captured note plays at exactly the period the game used.
@@ -126,6 +162,10 @@ pub struct Note {
     pub fine: i16,
     /// Index into the set's instruments.
     pub instrument: u16,
+    /// An AY envelope note's period (registers 11 and 12), which is 16
+    /// bits and too slow for a pitch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub period: Option<u16>,
 }
 
 fn is_zero(v: &i16) -> bool {
@@ -133,15 +173,46 @@ fn is_zero(v: &i16) -> bool {
 }
 
 impl Note {
-    /// The timer period it starts at on `channel`.
+    /// The timer period it starts at on `channel`; an AY channel's at the
+    /// default clock ([`Note::period_at`] takes a set's own).
     pub fn period(&self, channel: Channel, region: Region) -> u16 {
-        match channel {
-            Channel::Noise | Channel::Dmc => u16::from(self.pitch & 0x0F),
-            _ => (i32::from(period_of(channel, f64::from(self.pitch), region))
+        self.period_at(channel, region, None)
+    }
+
+    /// The period it starts at on `channel`, with an AY channel's counted
+    /// in `clock` (the chip's, else [`AY_CLOCK`]): on a tone channel the
+    /// chip's clock over 16 over the period, 12 bits.
+    pub fn period_at(&self, channel: Channel, region: Region, clock: Option<u32>) -> u16 {
+        match channel.ay().map(|(_, p)| p) {
+            Some(AyPart::Tone(_)) => (i32::from(ay_period_of(f64::from(self.pitch), clock))
                 + i32::from(self.fine))
-            .clamp(0, 0x7FF) as u16,
+            .clamp(0, 0xFFF) as u16,
+            Some(AyPart::Noise) => u16::from(self.pitch & 0x1F),
+            Some(AyPart::Envelope) => self.period.unwrap_or(0),
+            None => match channel {
+                Channel::Noise | Channel::Dmc => u16::from(self.pitch & 0x0F),
+                _ => (i32::from(period_of(channel, f64::from(self.pitch), region))
+                    + i32::from(self.fine))
+                .clamp(0, 0x7FF) as u16,
+            },
         }
     }
+}
+
+/// The AY-8910 tone period nearest a MIDI note: the clock over 16 over the
+/// period is the tone's frequency.
+pub fn ay_period_of(note: f64, clock: Option<u32>) -> u16 {
+    let f = 440.0 * 2f64.powf((note - 69.0) / 12.0);
+    let p = f64::from(clock.unwrap_or(AY_CLOCK)) / (16.0 * f);
+    p.round().clamp(1.0, 4095.0) as u16
+}
+
+/// An AY-8910 tone period's pitch as a MIDI note number with a fraction.
+pub fn ay_pitch(period: u16, clock: Option<u32>) -> Option<f64> {
+    (period > 0).then(|| {
+        let f = f64::from(clock.unwrap_or(AY_CLOCK)) / (16.0 * f64::from(period));
+        69.0 + 12.0 * (f / 440.0).log2()
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -309,12 +380,34 @@ impl Song {
     }
 }
 
+/// The minor version of a version this reader takes (0.1 to 0.2, any
+/// patch), else `None`.
+fn minor_of(version: &str) -> Option<u32> {
+    let mut it = version.split('.');
+    let (major, minor) = (it.next()?, it.next()?.parse::<u32>().ok()?);
+    let max = minor_of_const();
+    (major == "0" && (OLDEST_MINOR..=max).contains(&minor) && it.count() <= 1).then_some(minor)
+}
+
+fn minor_of_const() -> u32 {
+    VERSION
+        .split('.')
+        .nth(1)
+        .and_then(|m| m.parse().ok())
+        .unwrap_or(0)
+}
+
 /// Songs, effects and the instruments they share.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SongSet {
     pub format: String,
     pub version: String,
+    /// The NES clock an APU track's periods count in.
     pub region: Region,
+    /// The AY-8910's clock in hertz an AY track's periods count in, when
+    /// it isn't [`AY_CLOCK`] (0.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock: Option<u32>,
     pub instruments: Vec<Instrument>,
     pub songs: Vec<Song>,
     /// DMC samples' bytes, when capture read them.
@@ -326,8 +419,9 @@ impl SongSet {
     pub fn new(region: Region) -> Self {
         Self {
             format: FORMAT.into(),
-            version: VERSION.into(),
+            version: PLAIN_VERSION.into(),
             region,
+            clock: None,
             instruments: Vec::new(),
             songs: Vec::new(),
             samples: Vec::new(),
@@ -339,11 +433,7 @@ impl SongSet {
         if s.format != FORMAT {
             return Err(format!("not a {FORMAT} file: format `{}`", s.format));
         }
-        let ok = s
-            .version
-            .rsplit_once('.')
-            .is_some_and(|(mm, _)| VERSION.starts_with(&format!("{mm}.")));
-        if !ok {
+        if minor_of(&s.version).is_none() {
             return Err(format!(
                 "{FORMAT} {} isn't readable by this reader ({VERSION})",
                 s.version
@@ -353,12 +443,40 @@ impl SongSet {
         Ok(s)
     }
 
+    /// The file's text. A set that holds AY channels or a clock says at
+    /// least 0.2.0, whatever it was read as.
     pub fn to_text(&self) -> String {
-        serde_json::to_string_pretty(self).expect("songs serialize") + "\n"
+        let text = |s: &SongSet| serde_json::to_string_pretty(s).expect("songs serialize") + "\n";
+        if self.uses_02() && minor_of(&self.version).is_none_or(|m| m < 2) {
+            return text(&SongSet {
+                version: VERSION.into(),
+                ..self.clone()
+            });
+        }
+        text(self)
     }
 
-    /// Every note names an instrument that exists and fits its channel.
+    /// Whether it holds anything 0.2.0 added.
+    fn uses_02(&self) -> bool {
+        self.has_ay() || self.clock.is_some() || self.instruments.iter().any(|i| i.voice.is_ay())
+    }
+
+    /// Whether any track is on an AY-8910's channel.
+    pub fn has_ay(&self) -> bool {
+        self.songs
+            .iter()
+            .any(|s| s.tracks.iter().any(|t| !t.channel.is_apu()))
+    }
+
+    /// Every note names an instrument that exists and fits its channel,
+    /// and a file that says 0.1 holds nothing 0.2 added.
     pub fn check(&self) -> Result<(), String> {
+        if minor_of(&self.version).is_some_and(|m| m < 2) && self.uses_02() {
+            return Err(format!(
+                "{FORMAT} {} has AY-8910 channels or a clock, which came in 0.2.0",
+                self.version
+            ));
+        }
         for s in &self.songs {
             for t in &s.tracks {
                 for p in &t.patterns {
@@ -399,6 +517,7 @@ impl SongSet {
     /// play songs and effects from several slots. The first set's region.
     pub fn merged(sets: &[(String, &SongSet)]) -> SongSet {
         let mut out = SongSet::new(sets.first().map_or_else(Region::default, |s| s.1.region));
+        out.clock = sets.iter().find_map(|s| s.1.clock);
         for (prefix, set) in sets {
             let base = out.instruments.len() as u16;
             out.instruments.extend(set.instruments.iter().cloned());
@@ -421,6 +540,12 @@ impl SongSet {
             }
         }
         out
+    }
+
+    /// The period a note starts at on `channel`, an AY's counted in this
+    /// set's clock.
+    pub fn period(&self, channel: Channel, note: &Note) -> u16 {
+        note.period_at(channel, self.region, self.clock)
     }
 
     pub fn song(&self, name: &str) -> Option<&Song> {

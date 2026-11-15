@@ -7372,6 +7372,45 @@ mod tests {
         assert!(crate::ext::hook_apu(&s, &w, &crate::ext::Exts::new()).is_empty());
     }
 
+    /// Asks the sound board for its count on every frame, from latch 1.
+    struct Asks;
+
+    impl crate::ext::Ext for Asks {
+        fn step(&self, cx: &mut crate::ext::ExtCx<'_>) {
+            cx.me.ext[0] += 1;
+        }
+
+        fn sound_requests(&self, _: &Spec, world: &World, id: usize) -> Vec<(u8, u8)> {
+            vec![(1, world.bodies[id].ext[0] as u8)]
+        }
+    }
+
+    #[test]
+    fn hook_sound_requests_gives_each_hooks_requests_and_changes_nothing() {
+        let mut s = quiet(spec());
+        s.kinds[1].ext = Some("asks".into());
+        let mut exts = crate::ext::Exts::new();
+        exts.insert("asks".into(), Box::new(Asks));
+        let mut w = World::power_on(&s);
+        for _ in 0..2 {
+            step_with_ext(&s, &mut w, 0, &exts);
+        }
+        let hooked = w
+            .bodies
+            .iter()
+            .filter(|b| b.kind == 1 && b.active())
+            .count();
+        let before = w.hash();
+        let asked = crate::ext::hook_sound_requests(&s, &w, &exts);
+        assert_eq!(w.hash(), before);
+        assert_eq!(asked.len(), hooked);
+        assert!(asked.iter().all(|&(l, v)| l == 1 && v == 2));
+        // Beeps makes no requests, and no hooks make none.
+        let mut beeps = crate::ext::Exts::new();
+        beeps.insert("asks".into(), Box::new(Beeps) as Box<dyn crate::ext::Ext>);
+        assert!(crate::ext::hook_sound_requests(&s, &w, &beeps).is_empty());
+    }
+
     #[test]
     fn a_hook_through_stops_runs_while_a_state_stops_its_system() {
         let mut s = quiet(spec());

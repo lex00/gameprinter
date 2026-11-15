@@ -84,6 +84,13 @@ propose DIR --role ROLE --wav FILE`, issue #30): it names the theme, the
 role and its take, plays the role's sound as it is and the new one whole,
 and says NO SOUND THERE YET, with the button off, when the theme has no
 file there (a new take, or a role with no sound yet).
+A sprite edit the agent proposes with `assets_edit` for the person's
+copy (YOUR AGENT PROPOSES A SPRITE CHANGE, `mechanic/sprite-card.js`, in
+the picture card's look; an NES copy's tiles or an arcade copy's board
+sprites) shows the edit's own pictures, the sprite before and after close
+up and in the recorded frames (`GET /api/sprites/ID/edit.png`,
+`context.png`); the answer goes to `POST /api/sprites/ID`
+(docs/sprite-editing.md, "On the page").
 
 When the agent changes the game through `gp_run` while the page is open
 (any command that writes, but the talk and the log, which redraw on their
@@ -141,7 +148,7 @@ The sections below keep the old names for CLIPS's two views and PLAY.
 
 `/start/` (and gp serve's root when no game or copy was opened yet) asks
 what the person wants to do (issue #5). It is `mechanic/start.html` with
-`mechanic/journeys/` (start.js, journey.js, journeys.css), served by
+`mechanic/journeys/` (start.js, journey.js, tabs.js, journeys.css), served by
 `crates/gp-cli/src/serve/journeys.rs`. The game page's GAME PRINTER logo
 opens it. It says once, at the top, what the model is (the game's rules
 as a plain-text file) and what a template is (a game's rules without its
@@ -167,6 +174,23 @@ where it stands and the one next step with whose turn it is (YOU, YOUR
 AGENT, THE TOOLS), the agent's cards (YES and NO, and the pictures and
 sound changes it proposes with ACCEPT and REJECT), and its six steps, the
 one now open.
+
+The tabs follow the open copy (issue #5, the owner's decision). The
+header's picker names what is open, a game being ported or a copy, on the
+first screen's page and on the game's page alike, and the tab bar under it
+shows that one's tabs (`mechanic/journeys/tabs.js`):
+
+| Open | Tabs | It opens at |
+|---|---|---|
+| A port | CLIPS, REFINE, PLAY, THEMES, on the game's page at `/mechanic/GAME/`, as before | CLIPS |
+| A theme | PLAY (the game in that look, in a frame of the page: SEE IT IN THE GAME's `gp theme look play`, passed through gp serve, the person's ROM loaded there for a ported game), THEMES (the theme's journey, BESIDE THE ORIGINAL in its step 5) | THEMES |
+| A new game, from nothing or a template | PLAY (the game built to play, or BUILD IT TO PLAY), STEPS (its journey) | STEPS |
+
+CLIPS and REFINE hide for a theme and a new game: neither has an original
+to match clip by clip. The tab is in the URL (`&tab=play`, `themes`,
+`steps`); CARRY ON, the first screen's MAKE buttons and gp serve's root
+open a copy at its first tab. Leaving PLAY stops the game in it.
+
 The steps, what each needs and when each is the step are in
 [progress.md](progress.md#copies-and-the-other-journeys); the answer is
 the same one `gp progress --next --copy` and the MCP tool `next` give, so
@@ -372,6 +396,7 @@ as before.
 | `GET /api/journeys/KIND/NAME` | A copy's answer (steps, whose turn), its buttons' last runs and its pictures |
 | `POST /api/journeys/KIND/NAME/set` | `{style}`, or `{step, done}` for a step only the person finishes |
 | `GET`, `POST /api/journeys/KIND/NAME/do/WHICH` | A button's last run, or starts it: `look-check`, `look-play`, `shots`; `build`, `render`, `verify`, `undo`. `verify` (CHECK THE STAGE) runs `gp level verify` on the copy's stage, a girder or tile stage alike (Moss Hop's is one); when it refused a stage, the page says what the tools said and keeps the button, so a later gp can check it |
+| `GET /api/journeys/theme/NAME/look/...` | The theme's game as SEE IT IN THE GAME serves it, passed through for PLAY's frame: the public page's headers let only its own origin hold it in a frame |
 | `GET /api/journeys/KIND/NAME/file/...` | `stage.png`, `shots/...`, and `play/...` (the new game built to play) |
 | `GET /api/clips/N.rebuild.json` | REVIEW REBUILD's clip: each compared frame's pictures, agreement, entities and differing measures, and the draws |
 | `GET /api/clips/N/review.json`, `/api/clips/N/review/NAME.png` | The same review as kept |

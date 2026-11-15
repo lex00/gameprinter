@@ -180,6 +180,19 @@ function ownGameOf(j, files) {
   return { title: j.title, player: j.player, rom: { kind: "none", game: r.game }, howto, trademark: null, madeBy: j.made_by ?? null, about: j.about ?? null };
 }
 
+/** An arcade game's MAME sets from its play/page.json's `rom.sets` (what
+ * `gp roms sets` says of each: its name, title, identity and the files its
+ * zip must hold, by name, size and SHA-1), each held to its shape; null
+ * when it has none. Throws an error in words for a list the page can't
+ * read. */
+function setsOf(v) {
+  if (v === undefined) return null;
+  const file = (f) => str(f?.name, 200) && Number.isInteger(f.size) && f.size > 0 && /^[0-9a-f]{40}$/.test(f.sha1 ?? "");
+  const ok = (x) => WORD.test(x?.name ?? "") && str(x.title, 200) && /^[0-9a-f]{64}$/.test(x.sha256 ?? "") && Array.isArray(x.files) && x.files.length > 0 && x.files.length <= 64 && x.files.every(file);
+  if (!Array.isArray(v) || v.length > 20 || !v.every(ok)) throw new Error("its play/page.json's rom.sets isn't a list of MAME sets and their files");
+  return v.map((x) => ({ name: x.name, title: x.title, sha256: x.sha256, files: x.files.map((f) => ({ name: f.name, size: f.size, sha1: f.sha1 })) }));
+}
+
 /** The game's page facts from its play files (`files`, path under play/ to
  * bytes): play/page.json when the package has one, else the lift's
  * game.json and sources-nes.toml (a package from before page.json, played
@@ -215,10 +228,11 @@ export function gamePageOf(files, title) {
     const howto = Array.isArray(j.howto) ? j.howto : [];
     if (howto.length > 8 || !howto.every((h) => str(h, 400))) throw new Error("its play/page.json's howto isn't a few lines of text");
     if (j.trademark !== undefined && !str(j.trademark, 600)) throw new Error("its play/page.json's trademark isn't a line of text");
+    const sets = setsOf(r.sets);
     facts = {
       title: j.title,
       player: j.player,
-      rom: { kind: r.kind, game: r.game, title: r.name, name: r.name, known: known, file: r.file, known_sha256: sha },
+      rom: { kind: r.kind, game: r.game, title: r.name, name: r.name, known: known, file: r.file, known_sha256: sha, ...(sets ? { sets } : {}) },
       howto,
       trademark: j.trademark ?? null,
     };

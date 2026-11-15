@@ -63,6 +63,7 @@ fn stage(game_dir: &Path, sides: &[Side], to: &Path) -> Result<()> {
     // The game's own theme of a side's id gives way to the one looked at.
     let ids: Vec<String> = sides
         .iter()
+        .filter(|s| !matches!(s, Side::Original))
         .map(|s| format!("themes/{}/", s.look_id()))
         .collect();
     for (rel, bytes) in theme_files(game_dir)? {
@@ -185,7 +186,7 @@ pub(super) fn run(
     // server reads from `_headers` as it does a built page's.
     fs::write(out.join("_headers"), gp_mcp::page_headers::PUBLIC)?;
     let have = offered(&out);
-    for s in sides {
+    for s in sides.iter().filter(|s| !matches!(s, Side::Original)) {
         if !have.iter().any(|i| i == s.look_id()) {
             let why = skipped.iter().find(|k| k.id == s.look_id()).map_or_else(
                 || "its theme/look.txt didn't read as a large-art look".to_owned(),
@@ -204,7 +205,12 @@ pub(super) fn run(
         game_dir.display(),
         assets.display()
     );
-    let link_of = |s: &Side| format!("/index.html?files=here&theme={}", s.look_id());
+    // The game's own pictures: the build's own look, whatever look a visit
+    // kept (preview.js, own-look).
+    let link_of = |s: &Side| match s {
+        Side::Original => "/index.html?files=here&own-look".to_owned(),
+        _ => format!("/index.html?files=here&theme={}", s.look_id()),
+    };
 
     // Pictures.
     if let Some(shots_out) = &a.shots {
@@ -304,7 +310,10 @@ fn offered_titles(out: &Path, sides: &[Side], first: usize) -> Vec<String> {
     );
     let mut v: Vec<String> = order
         .iter()
-        .map(|s| format!("{}@{}", s.name(), s.version()))
+        .map(|s| match s {
+            Side::Original => "the game's own look".to_owned(),
+            _ => format!("{}@{}", s.name(), s.version()),
+        })
         .collect();
     let ours: BTreeMap<&str, ()> = sides.iter().map(|s| (s.look_id(), ())).collect();
     v.extend(

@@ -156,6 +156,12 @@ impl Source {
         })
     }
 
+    /// The hooks module's hash (BLAKE3, as `gp game hash` prints it) when
+    /// the model's hooks run in a game's module, else None.
+    pub(crate) fn module_hash(&self) -> Option<&str> {
+        self.module.as_ref().map(|_| self.hooks.as_str())
+    }
+
     /// How a run reads the model's values on each frame, for `--json`:
     /// `native` (the built-in interpreter), `query-values` (the module's one
     /// call for them all) or `query` (one call a path: a module built
@@ -376,6 +382,19 @@ impl Model {
             Self::Module(mut h) => {
                 h.rt.set_apu_events().map_err(|e| anyhow!("{e}"))?;
                 Ok(Self::Module(h))
+            }
+        }
+    }
+
+    /// Makes `step` return the sound requests the hooks made as events. A
+    /// module built before game-printer:game@0.3.0 has no such call: its
+    /// runs go on making none.
+    pub(crate) fn with_sound_events(self) -> Self {
+        match self {
+            Self::Native(i) => Self::Native(Box::new(i.with_sound_events())),
+            Self::Module(mut h) => {
+                let _ = h.rt.set_sound_events();
+                Self::Module(h)
             }
         }
     }

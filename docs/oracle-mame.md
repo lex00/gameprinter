@@ -125,6 +125,28 @@ The main board's ranges are mcr.cpp's `cpu_91490_map`; the sound board's is midw
 
 **The picture hash.** The script asks MAME for the frame as 32-bit pixels, `0xAARRGGBB`, in rows from the top, at 512x480. It then takes FNV-1a over 64 bits, one pixel at a time, using each pixel's 24-bit `0xRRGGBB` with alpha left out. h starts at `0xcbf29ce484222325`, and for each pixel h = (h XOR rgb) * `0x100000001b3`, modulo 2^64. It works on whole pixels, not bytes, so our emulator can compute the same number from its own picture without matching MAME's pixel format.
 
+## Captures the repo names
+
+A capture is derived from the ROM, so it is never in a repo. `oracle/mame-captures.toml` names the captures gp holds gp-arcade to, with only what it takes to make each one again and the hash it must come out with:
+
+| Field | What |
+|---|---|
+| `name` | The folder under `$GP_HOME/work/oracle/` the capture is kept in on each machine |
+| `system` | MAME's name for the romset (`rbtapper`, `tapper`) |
+| `mame` | The MAME version that made it, the image's |
+| `input`, `input_sha256` | The input log, from the checkout's root, and its SHA-256, so a changed log is caught |
+| `frames` | How many frames it runs |
+| `sha256` | The capture's hash: the SHA-256 of the digest lines (`HASH  ./FILE`, as `shasum -a 256` prints them) of `ay.tsv`, `capture.txt`, `frames.tsv` and `ram.bin`, those it has, in that order. For a capture made with no pictures and no WAV, it is the SHA-256 of its `SHA256SUMS` |
+
+To make one: `just mame-build` once, then `just mame-record $GP_ROM_DIR/arcade/SYSTEM.zip INPUT NAME 0`. The `0` asks for no pictures, which would change `frames.tsv` and `capture.txt`. A gp that finds a capture missing prints that command with the romset's path, and one that finds a capture whose hash isn't the file's refuses it and says the same.
+
+| Command | What |
+|---|---|
+| `gp oracle golden ID --against NAME` | ID is a gp-arcade recording (`gp record --rom ZIP --input INPUT`). The capture must be one the file names, with its hash; the recording must be of its romset and have run its input. Then the recording plays on gp-arcade against the capture, and if every frame matches, a verdict object (the capture's name, hash, MAME version and input, and the comparison) goes in the store and the recordings log gets a golden entry naming it. Otherwise it prints the frames that differ and exits 1 |
+| `gp oracle check oracle/mame-captures.toml` | Each capture's input on gp-arcade against the capture, every frame, with no store. A capture whose romset or folder isn't on this machine is skipped, the folder's with the command that makes it; a wrong hash, a changed input or a frame that differs fails it (exit 1). NES baselines given with it are checked as before |
+
+`gp oracle check` takes a TOML file with `[[capture]]` tables as a captures file and any other as a baseline.
+
 ## Holding gp-arcade to it
 
 `crates/gp-arcade` is our own Tapper. Its compare example plays a capture's input log and checks every frame's RAM, input ports and picture hash against the capture, stopping at the first difference and saying what it is:

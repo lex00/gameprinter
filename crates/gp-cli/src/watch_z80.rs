@@ -15,11 +15,11 @@
 //! | `fact` | A routine the code map has with the runs that it didn't before (a `jp (..)` target found) |
 //! | `clip.kept` | As on the NES; `end_hash` is the machine's state hash in hex (`OriginalRuntime::state_hex`) |
 //! | `watch` (rerun) | A write to a watched address, from gp-arcade's access log, its writer `XXXX` |
+//! | `hook` (rerun) | A main-CPU instruction about to run, `at` its address `XXXX`, with `cpu` `z80` and the Z80's register pairs (`af`, `bc`, `de`, `hl`, `ix`, `iy`, `sp`), from gp-arcade's instruction trace |
 //!
 //! Not made on the board: `bank` (no banks), `pointer` (a `jp (hl)` has no
-//! pointer in memory), `behaviour` (gp behave's detectors read gp-events'
-//! NES runs), and a rerun's `hook` events (their registers are the
-//! 6502's: A, X, Y, S and P).
+//! pointer in memory) and `behaviour` (gp behave's detectors read
+//! gp-events' NES runs).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -30,7 +30,7 @@ use gp_arcade::levels::{EdgeKind as ZEdge, Levels, Watcher};
 use gp_arcade::mcr::AccessKind;
 use gp_arcade::{Controls, Romset};
 use gp_events::EdgeKind;
-use gp_events::watch::{ExploreOpts, StartClip, Stop, WatchBody};
+use gp_events::watch::{ExploreOpts, HookRegs, RegsZ80, StartClip, Stop, WatchBody};
 use gp_evidence::Paths;
 use serde_json::{Value, json};
 
@@ -473,36 +473,72 @@ pub(crate) fn explore_more(
     search_into(w, &mut seen, e, &set, rom, dir, starts, &known, &map)
 }
 
-/// `gp watch rerun --watch` on a romset session: each write to a watched
-/// address, from gp-arcade's access log, with the instruction that made
-/// it. Returns the hits seen and written.
-pub(crate) fn rerun_watch(
+/// An instruction to hook on the main Z80, as `gp watch rerun --hook`
+/// names it on a romset: its address in hex (`0158`, `$0158`, `0x0158`)
+/// or a routine's name (`sub_0158`).
+pub(crate) fn parse_hook(s: &str) -> Result<u16> {
+    let t = s.trim();
+    let h = t
+        .strip_prefix("sub_")
+        .or_else(|| t.strip_prefix('$'))
+        .or_else(|| t.strip_prefix("0x"))
+        .unwrap_or(t);
+    if h.is_empty() || h.len() > 4 {
+        anyhow::bail!("{s:?} isn't a main-CPU address (four hex digits, such as 0158 or sub_0158)");
+    }
+    u16::from_str_radix(h, 16).map_err(|_| {
+        anyhow::anyhow!(
+            "{s:?} isn't a main-CPU address (four hex digits, such as 0158 or sub_0158)"
+        )
+    })
+}
+
+/// What a rerun saw and wrote.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Rerun {
+    pub watch_hits: usize,
+    pub hook_hits: usize,
+    pub written: usize,
+}
+
+/// `gp watch rerun` on a romset session: each write to a watched address,
+/// from gp-arcade's access log, with the instruction that made it, and
+/// each hooked main-CPU instruction about to run, with the Z80's
+/// registers, from its instruction trace (which changes no cycle of the
+/// run). At most `cap` events an address or hook a recipe.
+pub(crate) fn rerun(
     w: &mut Writer,
-    rom: &[u8],
+    set: &Romset,
     all: &[ClipInput],
     addrs: &BTreeSet<u16>,
+    hooks: &BTreeSet<u16>,
     cap: usize,
-) -> Result<(usize, usize)> {
-    let set = Romset::from_zip(rom)?;
-    let (mut hits, mut written) = (0usize, 0usize);
+) -> Result<Rerun> {
+    let mut out = Rerun::default();
     for c in all {
         let recipe = c.key()?;
-        let mut count: BTreeMap<u16, usize> = BTreeMap::new();
-        let mut t = gp_arcade::Tapper::power_on(&set);
+        let mut count: BTreeMap<(bool, u16), usize> = BTreeMap::new();
+        let mut t = gp_arcade::Tapper::power_on(set);
         for f in &c.inputs {
-            t.set_accesses(true);
-            t.step(Controls::from_bits(f.buttons_word()));
+            let controls = Controls::from_bits(f.buttons_word());
+            t.set_accesses(!addrs.is_empty());
+            let trace = if hooks.is_empty() {
+                t.step(controls);
+                Vec::new()
+            } else {
+                crate::covered::frame_trace(&mut t, controls)
+            };
             let acc = t.take_accesses();
             t.set_accesses(false);
             for a in acc
                 .iter()
                 .filter(|a| a.cpu == 0 && a.kind == AccessKind::Write && addrs.contains(&a.addr))
             {
-                hits += 1;
-                let n = count.entry(a.addr).or_insert(0);
+                out.watch_hits += 1;
+                let n = count.entry((false, a.addr)).or_insert(0);
                 *n += 1;
                 if *n <= cap {
-                    written += 1;
+                    out.written += 1;
                     w.emit(
                         Some(&recipe),
                         Some(t.frame()),
@@ -515,9 +551,39 @@ pub(crate) fn rerun_watch(
                     )?;
                 }
             }
+            // An interrupt's entry comes just before its handler's first
+            // instruction, with the same PC: only the instruction counts.
+            for e in trace
+                .iter()
+                .filter(|e| e.cpu == 0 && e.interrupt.is_none() && hooks.contains(&e.pc))
+            {
+                out.hook_hits += 1;
+                let n = count.entry((true, e.pc)).or_insert(0);
+                *n += 1;
+                if *n <= cap {
+                    out.written += 1;
+                    w.emit(
+                        Some(&recipe),
+                        Some(t.frame()),
+                        Some(2),
+                        WatchBody::Hook {
+                            at: format!("{:04X}", e.pc),
+                            regs: HookRegs::Z80(RegsZ80 {
+                                af: e.af,
+                                bc: e.bc,
+                                de: e.de,
+                                hl: e.hl,
+                                ix: e.ix,
+                                iy: e.iy,
+                                sp: e.sp,
+                            }),
+                        },
+                    )?;
+                }
+            }
         }
     }
-    Ok((hits, written))
+    Ok(out)
 }
 
 /// `gp watch detail` on a romset session: each instruction both Z80s ran
@@ -629,4 +695,71 @@ pub(crate) fn point(
         "recipe": hash, "frame": n, "rect": [rect.0, rect.1, rect.2, rect.3],
         "sprite_ram": 0xe800, "sprites": sprites, "words": words,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_hook_names_a_main_cpu_address() {
+        assert_eq!(parse_hook("0158").unwrap(), 0x0158);
+        assert_eq!(parse_hook("sub_0158").unwrap(), 0x0158);
+        assert_eq!(parse_hook("$C27D").unwrap(), 0xc27d);
+        assert_eq!(parse_hook("0x3").unwrap(), 3);
+        assert!(parse_hook("01:8000").is_err());
+        assert!(parse_hook("12345").is_err());
+        assert!(parse_hook("zz").is_err());
+    }
+
+    /// On a made-up set (gp_arcade::testrom::busy), a hook on the main
+    /// loop's `in a,(01)` comes back with the Z80's registers: the stack
+    /// pointer the reset set, and HL as the last pass left it; a watch on
+    /// the frame counter sees its writes. Each is capped a recipe.
+    #[test]
+    fn a_rerun_hooks_the_main_z80() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("session.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("events.ndjson"), "").unwrap();
+        let clip = ClipInput {
+            set: "t".into(),
+            id: "idle".into(),
+            power_on: Default::default(),
+            inputs: vec![Default::default(); 3],
+        };
+        let set = gp_arcade::testrom::busy();
+        let r = {
+            let mut w = Writer::append(dir.path()).unwrap();
+            rerun(
+                &mut w,
+                &set,
+                &[clip],
+                &BTreeSet::from([0xe001]),
+                &BTreeSet::from([0x0003]),
+                5,
+            )
+            .unwrap()
+        };
+        assert!(r.hook_hits > 5 && r.watch_hits > 5, "{r:?}");
+        assert_eq!(r.written, 10);
+        let text = std::fs::read_to_string(dir.path().join("events.ndjson")).unwrap();
+        let events: Vec<gp_events::watch::WatchEvent> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let hooks: Vec<&RegsZ80> = events
+            .iter()
+            .filter_map(|e| match &e.body {
+                WatchBody::Hook {
+                    at,
+                    regs: HookRegs::Z80(r),
+                } if at == "0003" => Some(r),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(hooks.len(), 5);
+        assert!(hooks.iter().all(|r| r.sp == 0xe7f0), "{hooks:?}");
+        assert!(text.lines().all(|l| l.contains(r#""v":2"#)));
+        assert!(text.contains(r#""cpu":"z80""#), "{text}");
+    }
 }

@@ -12,6 +12,7 @@ mod arcade_stage0;
 mod assets;
 mod assets_find;
 mod assets_open;
+mod assets_proposal;
 mod assets_stub;
 mod attest;
 mod author;
@@ -23,6 +24,7 @@ mod bench_scratch;
 mod bundle;
 mod capture;
 mod catalog;
+mod chrome;
 mod chunks;
 mod cli_doc;
 mod cli_tree;
@@ -59,6 +61,7 @@ mod findings;
 mod findings_clip;
 mod from_trace;
 mod game;
+mod game_empty;
 mod game_new;
 mod game_share;
 mod gaps;
@@ -93,6 +96,8 @@ mod misc_w9;
 mod model;
 mod model_blind;
 mod model_static;
+mod model_static_fit;
+mod model_static_map;
 mod model_static_z80;
 mod model_w9;
 mod module;
@@ -104,6 +109,7 @@ mod observe;
 mod odds;
 mod open;
 mod oracle;
+mod oracle_captures;
 mod oracle_mame;
 mod original;
 mod package;
@@ -114,6 +120,7 @@ mod pool;
 mod progress;
 mod progress_measure;
 mod publish;
+mod publish_rule;
 mod query_clip;
 mod ramrole_z80;
 mod reach;
@@ -123,6 +130,8 @@ mod recindex;
 mod recordings;
 mod refine;
 mod registry;
+mod registry_recheck;
+mod registry_submit;
 mod repo;
 mod rom_dataset;
 mod rom_extract;
@@ -193,6 +202,7 @@ mod track;
 mod translate;
 mod validate;
 mod validate_fit;
+mod validate_target;
 mod video;
 mod watch;
 mod watch_serve;
@@ -676,6 +686,14 @@ enum ToolCmd {
 
 #[derive(Subcommand)]
 enum AssetsCmd {
+    /// The sprite edits your agent proposed for your copies (assets_edit),
+    /// and your answer to each from a terminal: list, accept, reject, undo.
+    /// Your page shows each as a card with the same answers. Example: gp
+    /// assets proposal list
+    Proposal {
+        #[command(subcommand)]
+        cmd: assets_proposal::ProposalCmd,
+    },
     /// Decode a ROM's assets into files: tiles as indexed PNG, palettes,
     /// metatiles, levels, tables, text and pointer tables as TOML, object
     /// lists and music as directories of TOML files, plus the asset map as
@@ -1073,16 +1091,24 @@ enum GameCmd {
     /// Port a game from a ROM you own that no game names yet: its folder (a
     /// template) in the games checkout, with a model skeleton for the
     /// genre, the ROM's hashes in roms.toml, pins that hold, and no clips.
-    /// Writes over nothing
+    /// With --empty, a new game from nothing instead: the smallest game
+    /// that builds, validates and plays on the page (one stage of floor, a
+    /// player that walks and jumps, its own pictures as plain shapes, no
+    /// sound), as a copy in $GP_HOME/work/mcp/GAME. Writes over nothing
     New {
-        /// The game's id: lower-case letters, digits and dashes (qbert-usa)
+        /// The game's id: lower-case letters, digits and dashes (qbert-usa).
+        /// With --empty, the new game's name: letters, digits and _ (my_hop)
         game: String,
         /// The ROM, already in $GP_ROM_DIR (`gp roms add` puts it there)
-        #[arg(long)]
-        rom: PathBuf,
+        #[arg(long, required_unless_present = "empty")]
+        rom: Option<PathBuf>,
         /// The genre: platformer, topdown, gridhop, events or other
-        #[arg(long)]
-        genre: String,
+        #[arg(long, required_unless_present = "empty")]
+        genre: Option<String>,
+        /// Start from nothing: no ROM and no template. Example: gp game new
+        /// my_game --empty
+        #[arg(long, conflicts_with_all = ["rom", "genre", "namespace", "games", "no_draws", "source"])]
+        empty: bool,
         /// The game's title (default: GAME)
         #[arg(long)]
         title: Option<String>,
@@ -1417,6 +1443,9 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
                 force,
             } => assets_stub::stub(model, lifted, out, original_license.as_deref(), *force),
             AssetsCmd::Open(a) => assets_open::open(a, &gp_evidence::Paths::from_env()?),
+            AssetsCmd::Proposal { cmd } => {
+                assets_proposal::run(cmd, &gp_evidence::Paths::from_env()?)
+            }
             AssetsCmd::Hash {
                 rom,
                 map,
@@ -1647,13 +1676,29 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             cmd:
                 GameCmd::New {
                     game,
-                    rom,
-                    genre,
+                    empty: true,
+                    title,
+                    ..
+                },
+        } => game_empty::run(
+            &game_empty::Empty {
+                name: game,
+                title: title.as_deref(),
+            },
+            &gp_evidence::Paths::from_env()?,
+        ),
+        Cmd::Game {
+            cmd:
+                GameCmd::New {
+                    game,
+                    rom: Some(rom),
+                    genre: Some(genre),
                     title,
                     namespace,
                     games,
                     no_draws,
                     source,
+                    ..
                 },
         } => game_new::run(
             &game_new::New {
@@ -1669,6 +1714,9 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             },
             &gp_evidence::Paths::from_env()?,
         ),
+        Cmd::Game {
+            cmd: GameCmd::New { .. },
+        } => anyhow::bail!("gp game new takes --rom and --genre, or --empty"),
         Cmd::Game {
             cmd: GameCmd::Kit { out },
         } => module::kit(out),

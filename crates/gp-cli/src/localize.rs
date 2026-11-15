@@ -2550,7 +2550,8 @@ fn paths_home() -> std::path::PathBuf {
     std::env::var_os("GP_HOME")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
-            std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".gameprinter")
+            let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+            std::path::PathBuf::from(home.unwrap_or_default()).join(".gameprinter")
         })
 }
 

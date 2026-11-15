@@ -323,8 +323,14 @@ pub(crate) fn template_scores(template: &Path) -> Option<Value> {
 
 fn record_line(r: &Value) -> String {
     let f = r["results"]["fidelity_permille"].as_u64().unwrap_or(0);
+    // The picture, apart: a record from before 0.3.0 doesn't count it.
+    let pic = &r["results"]["picture"];
+    let picture = match (pic["frames_same"].as_u64(), pic["frames"].as_u64()) {
+        (Some(s), Some(n)) => format!("; on picture {s} of {n} screen frames the same"),
+        _ => String::new(),
+    };
     format!(
-        "model {}: corpus {} {} ({}): {} of {} exact, fidelity {}.{}% (gp {})",
+        "model {}: corpus {} {} ({}): {} of {} exact on state, fidelity {}.{}%{picture} (gp {})",
         short(r["model"].as_str().unwrap_or("")),
         r["corpus"]["name"].as_str().unwrap_or("?"),
         r["corpus"]["version"].as_str().unwrap_or("?"),

@@ -145,8 +145,11 @@ pub(crate) fn run_resumed_on<O: crate::screen::Shows>(
     watch: &[String],
 ) -> Result<(Lockstep, Json, Vec<String>)> {
     let model = source.parse_model()?;
-    // The hooks' APU writes, for the sound measure.
-    let mut interp = source.open()?.with_apu_events()?;
+    // The hooks' APU writes and sound requests, for the sound measures,
+    // and the original's latch writes (an arcade original; another has no
+    // such switch and gives none).
+    let mut interp = source.open()?.with_apu_events()?.with_sound_events();
+    let _ = original.set("latch_events", gp_runtime::Value::Flag(true));
     // From the model's own power-on, a draws script starts at the first
     // compared frame: the run starts there with the model's power-on state
     // loaded as it stands, which starts the script with its base at the
@@ -233,6 +236,10 @@ pub(crate) fn run_resumed_on<O: crate::screen::Shows>(
     if let Some((sj, sl)) = sound_report(&ls) {
         j["sound"] = sj;
         lines.extend(sl);
+    }
+    if let Some((rj, rl)) = requests_report(&ls) {
+        j["sound_requests"] = rj;
+        lines.extend(rl);
     }
     let (sj, sl) = stretches_report(&ls, mapping, model.model.frame_rate.milli());
     j["stretches"] = sj;
@@ -591,6 +598,77 @@ pub(crate) fn sound_report(ls: &Lockstep) -> Option<(Json, Vec<String>)> {
                 "to": at(*y).1,
                 "channels": chs.iter().map(|c| c.name()).collect::<Vec<_>>(),
             }))
+            .collect::<Vec<_>>(),
+    });
+    Some((j, lines))
+}
+
+/// The sound request measure: each compared frame's sound requests, the
+/// original's latch writes (an arcade original with `latch_events` on)
+/// against the model's hooks' requests (gp_sim::Ext::sound_requests), the
+/// same latches and bytes in the same order or not. None when neither side
+/// made one.
+pub(crate) fn requests_report(ls: &Lockstep) -> Option<(Json, Vec<String>)> {
+    if !ls
+        .requests
+        .iter()
+        .any(|f| !f.0.is_empty() || !f.1.is_empty())
+    {
+        return None;
+    }
+    let at = |i: usize| ls.frames.get(i).copied().unwrap_or_default();
+    let text = |w: &[(u8, u8)]| {
+        if w.is_empty() {
+            return "none".to_string();
+        }
+        w.iter()
+            .map(|(l, v)| format!("{l}:{v:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let asked = ls
+        .requests
+        .iter()
+        .filter(|f| !f.0.is_empty() || !f.1.is_empty())
+        .count();
+    let apart: Vec<usize> = (0..ls.requests.len())
+        .filter(|&i| ls.requests[i].0 != ls.requests[i].1)
+        .collect();
+    let (original, model) = ls
+        .requests
+        .iter()
+        .fold((0, 0), |(o, m), f| (o + f.0.len(), m + f.1.len()));
+    let mut lines = vec![format!(
+        "sound requests: {} of {} compared frames agree; {asked} frames with a request, the original {original} latch writes, the model {model}",
+        ls.requests.len() - apart.len(),
+        ls.requests.len(),
+    )];
+    for &i in apart.iter().take(10) {
+        let (m, o) = at(i);
+        let (ow, mw) = &ls.requests[i];
+        lines.push(format!(
+            "  differs at model frame {m} (original frame {o}): original {}, model {}",
+            text(ow),
+            text(mw)
+        ));
+    }
+    if apart.len() > 10 {
+        lines.push(format!("  and {} frames more", apart.len() - 10));
+    }
+    let j = json!({
+        "frames": ls.requests.len(),
+        "agree": ls.requests.len() - apart.len(),
+        "frames_with_requests": asked,
+        "original_writes": original,
+        "model_writes": model,
+        "apart": apart
+            .iter()
+            .take(100)
+            .map(|&i| {
+                let (m, o) = at(i);
+                let (ow, mw) = &ls.requests[i];
+                json!({"frame": m, "original_frame": o, "original": text(ow), "model": text(mw)})
+            })
             .collect::<Vec<_>>(),
     });
     Some((j, lines))

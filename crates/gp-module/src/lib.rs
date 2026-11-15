@@ -344,6 +344,14 @@ impl ModuleRuntime {
             .map(|_| ())
     }
 
+    /// Makes `step` return the sound requests the hooks made as events
+    /// (`set-sound-events`, game-printer:game@0.3.0). A module built before
+    /// has no such call and refuses it: its runs make no requests.
+    pub fn set_sound_events(&mut self) -> Result<(), String> {
+        self.call(wire::SET_SOUND_EVENTS, CALL_TICKS, |_| {})
+            .map(|_| ())
+    }
+
     /// Gives the run a draws script whole: its text and base as
     /// [`Self::set_draws`] does, and its origin, whether it is lenient and
     /// whether it keeps the run's draw calls ([`Self::draw_calls`]).

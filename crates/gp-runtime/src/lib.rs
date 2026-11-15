@@ -24,8 +24,8 @@ pub const WIT_PACKAGE: &str = "game-printer:runtime@0.4.0";
 /// The package of wit/game/game.wit a game's module built from this tool's
 /// kit exports. A module answers `info` (`wire::INFO`) with
 /// [`WIT_PACKAGE`] and, from 0.2.0 on, this after it; a module built
-/// before says only the first.
-pub const GAME_WIT_PACKAGE: &str = "game-printer:game@0.2.0";
+/// before says only the first. 0.3.0 added `run.set-sound-events`.
+pub const GAME_WIT_PACKAGE: &str = "game-printer:game@0.3.0";
 
 /// A selector or model path, such as `ram[0x0770]` or `cpu.pc` ([`select`]).
 pub type Path = String;

@@ -78,8 +78,8 @@ pub struct CaptureArgs {
     /// sound requests (gp gaps, which replays with the code observer)
     /// split music from effects. On an arcade recording the requests (at
     /// the sound board's latch) are written to requests.json; its notes
-    /// stay in songs.json (gp-ay-songs), which a model's songs slot
-    /// (gp-songs, the NES's five channels) can't hold, so none is bound.
+    /// stay in songs.json (gp-ay-songs); gp-songs 0.2 holds AY channels,
+    /// but no AY capture writes it yet, so none is bound.
     #[arg(long)]
     pub template: Option<String>,
     /// The model level the captured music plays in.
@@ -291,10 +291,9 @@ fn model_names(t: &crate::gaps::Template) -> (Vec<String>, Vec<String>, Vec<Stri
 /// `gp sound capture` of an arcade recording: its AY register log and
 /// notes (crate::sound_ay), and with `--template` the sound requests gp
 /// gaps finds at the sound board's latch in the frames, in requests.json.
-/// The notes stay in the AY's own file (`gp-ay-songs 0`): a model's songs
-/// slot holds `gp-songs`, whose channels, voices and clock are the NES
-/// APU's, so none is bound to the model (docs/sound.md says what the
-/// format would need).
+/// The notes stay in the AY's own file (`gp-ay-songs 0`): `gp-songs` 0.2
+/// has the AY's channels, voices and clock, but no capture writes them to
+/// it yet, so none is bound to the model (docs/sound.md).
 fn capture_ay(a: &CaptureArgs, opened: &Opened, paths: &Paths) -> Result<Outcome> {
     let range = parse_frames(&a.frames, opened.manifest.frames)?;
     let range = range.start.max(1)..range.end.min(opened.manifest.frames + 1);
@@ -360,7 +359,7 @@ fn capture_ay(a: &CaptureArgs, opened: &Opened, paths: &Paths) -> Result<Outcome
         )?;
         let via: Vec<String> = ifaces.iter().map(|i| i.name.clone()).collect();
         said = format!(
-            "\n{} sound requests in the frames via {}; none is bound to the model: a model's songs slot holds gp-songs, whose channels are the NES's five, and the AY's six channels' notes stay in songs.json (gp-ay-songs)",
+            "\n{} sound requests in the frames via {}; none is bound to the model: the AY's six channels' notes stay in songs.json (gp-ay-songs), since capture doesn't write gp-songs 0.2's AY channels yet",
             asked.len(),
             if via.is_empty() {
                 "no interface found".to_owned()

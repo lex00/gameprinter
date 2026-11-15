@@ -5,6 +5,7 @@
 
 pub mod budgets;
 pub mod db;
+pub mod gitstate;
 pub mod report;
 pub mod run;
 pub mod spans;

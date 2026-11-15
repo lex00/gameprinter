@@ -242,6 +242,11 @@ pub struct Board {
     pub accesses: Option<Vec<Access>>,
     /// The instruction each CPU is running, while accesses are logged.
     pub cur_pc: [u16; 2],
+    /// When on, each main-board latch write as it reached the sound board:
+    /// the time its timeslice ended (the sound CPU ran to there before the
+    /// byte landed), the latch and the byte. What [`crate::ssio`] needs to
+    /// sound as this machine does. Not part of the state.
+    pub latches: Option<Vec<(Attotime, u8, u8)>>,
 }
 
 /// What an access did.
@@ -751,6 +756,7 @@ impl Tapper {
             irq_taken: [None; 2],
             accesses: None,
             cur_pc: [0; 2],
+            latches: None,
         };
         // The screen's configure(): VBLANK starts a frame from now, and
         // since this is line 0, reset_partial_updates sets the line-0 tick.
@@ -958,7 +964,12 @@ impl Tapper {
                     b.ssio_irq.set(&mut b.sched, on);
                 }
             }
-            What::SsioWrite => b.ssio_data[((param >> 8) & 3) as usize] = param as u8,
+            What::SsioWrite => {
+                b.ssio_data[((param >> 8) & 3) as usize] = param as u8;
+                if let Some(l) = &mut b.latches {
+                    l.push((b.sched.basetime, ((param >> 8) & 3) as u8, param as u8));
+                }
+            }
             What::MainIrq => {
                 for state in b.main_irq.take() {
                     let chain = b.ctc.irq_state() & DAISY_INT != 0;
@@ -1076,6 +1087,23 @@ impl Tapper {
     pub fn take_accesses(&mut self) -> Vec<Access> {
         self.board
             .accesses
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
+
+    /// Logs each latch write as it reaches the sound board, or stops
+    /// ([`Board::latches`]).
+    pub fn set_latch_log(&mut self, on: bool) {
+        self.board.latches = on.then(Vec::new);
+    }
+
+    /// The latch writes that reached the sound board since the last call:
+    /// when (the end of the timeslice they came in), the latch and the
+    /// byte, for [`crate::ssio::SoundBoard::latch`].
+    pub fn take_latch_log(&mut self) -> Vec<(Attotime, u8, u8)> {
+        self.board
+            .latches
             .as_mut()
             .map(std::mem::take)
             .unwrap_or_default()

@@ -167,7 +167,11 @@ pub struct Options {
     /// Keep both games' APU writes for every compared frame, in
     /// [`Lockstep::sound`]: the original's `apu-write` events (gp-nes with
     /// its event log on) and the model's ([`crate::runtime::APU_KIND`],
-    /// an interpreter made [`crate::Interp::with_apu_events`]).
+    /// an interpreter made [`crate::Interp::with_apu_events`]). The sound
+    /// requests too, in [`Lockstep::requests`]: the original's
+    /// `latch-write` events (gp-arcade with `latch_events` on) and the
+    /// model's ([`crate::runtime::SOUND_KIND`], an interpreter made
+    /// [`crate::Interp::with_sound_events`]).
     pub sound: bool,
     /// Stop at the first split: only whether the run splits, and where,
     /// is wanted (`gp capture prune --mutants` on a clip the real model
@@ -296,6 +300,12 @@ pub struct Lockstep {
     /// frame before (its lag frames' too), the model's on its step to the
     /// frame. The first compared frame has none.
     pub sound: Vec<(ApuWrites, ApuWrites)>,
+    /// With [`Options::sound`], each compared frame's sound requests, the
+    /// original's and the model's, each as the latch and the byte, in
+    /// order, taken as [`Lockstep::sound`] is: the original's since the
+    /// compared frame before, the model's on its step to the frame. The
+    /// first compared frame has none.
+    pub requests: Vec<(ApuWrites, ApuWrites)>,
     /// With [`Options::watch`], each compared frame's values of each
     /// watched path, the original's and the model's (`None` for a path
     /// the mapping doesn't know). The model's is empty on a frame its
@@ -411,6 +421,35 @@ pub fn watch_model<M: QueryValues>(model: &M, spec: &Spec, path: &str) -> Vec<Va
         .filter(|(n, _)| index.is_none_or(|i| i == *n))
         .map(|(_, (_, b))| Value::Int(b.ext[w]))
         .collect()
+}
+
+/// The two `u8` entries `a` and `b` of each event of `kind` among a
+/// step's events, in order.
+fn pairs(events: &[gp_runtime::Event], kind: &str, a: &str, b: &str) -> Vec<(u8, u8)> {
+    let int = |e: &gp_runtime::Event, p: &str| {
+        e.data
+            .iter()
+            .find(|d| d.path == p)
+            .and_then(|d| d.value.as_int())
+            .and_then(|v| u8::try_from(v).ok())
+    };
+    events
+        .iter()
+        .filter(|e| e.kind == kind)
+        .filter_map(|e| Some((int(e, a)?, int(e, b)?)))
+        .collect()
+}
+
+/// The sound latch writes among a step's events: gp-arcade's
+/// `latch-write` events, each the latch and the byte.
+pub fn latch_writes(events: &[gp_runtime::Event]) -> Vec<(u8, u8)> {
+    pairs(events, "latch-write", "latch", "value")
+}
+
+/// The sound requests a model's hooks made among a step's events
+/// ([`crate::runtime::SOUND_KIND`]), each the latch and the byte.
+pub fn sound_requests(events: &[gp_runtime::Event]) -> Vec<(u8, u8)> {
+    pairs(events, crate::runtime::SOUND_KIND, "latch", "value")
 }
 
 /// The APU writes among a step's events: gp-nes's `apu-write` events
@@ -835,6 +874,7 @@ fn run<O: Runtime, M: QueryValues>(
         scope_end: None,
         out_of_scope: 0,
         sound: Vec::new(),
+        requests: Vec::new(),
         watched: Vec::new(),
     };
     let scene = Scene::of(full)?;
@@ -1026,16 +1066,29 @@ fn run<O: Runtime, M: QueryValues>(
     // model's on its last step.
     let mut heard: Vec<(u8, u8)> = Vec::new();
     let mut said: Vec<(u8, u8)> = Vec::new();
+    // The same for the sound requests.
+    let mut asked: Vec<(u8, u8)> = Vec::new();
+    let mut made: Vec<(u8, u8)> = Vec::new();
     // After a check: a compared frame takes what was heard since the last
     // one, the first none.
-    let hear = |out: &mut Lockstep, heard: &mut Vec<(u8, u8)>, said: &mut Vec<(u8, u8)>| {
+    let hear = |out: &mut Lockstep,
+                heard: &mut Vec<(u8, u8)>,
+                said: &mut Vec<(u8, u8)>,
+                asked: &mut Vec<(u8, u8)>,
+                made: &mut Vec<(u8, u8)>| {
         if opts.sound && out.frames.len() > out.sound.len() {
             let (o, m) = (std::mem::take(heard), std::mem::take(said));
+            let (ro, rm) = (std::mem::take(asked), std::mem::take(made));
             let first = out.sound.is_empty();
             out.sound.push(if first {
                 (Vec::new(), Vec::new())
             } else {
                 (o, m)
+            });
+            out.requests.push(if first {
+                (Vec::new(), Vec::new())
+            } else {
+                (ro, rm)
             });
         }
     };
@@ -1053,7 +1106,7 @@ fn run<O: Runtime, M: QueryValues>(
             &mut screens,
             &mut measure,
         )?;
-        hear(&mut out, &mut heard, &mut said);
+        hear(&mut out, &mut heard, &mut said, &mut asked, &mut made);
     }
     let skip = resume.map_or(0, |p| p.inputs);
     for (i, input) in inputs.iter().enumerate().skip(skip) {
@@ -1082,6 +1135,7 @@ fn run<O: Runtime, M: QueryValues>(
             .map_err(|e| format!("the original: {e}"))?;
         if opts.sound {
             heard.extend(apu_writes(&events));
+            asked.extend(latch_writes(&events));
         }
         out.original_frames += 1;
         // Out of the template's scope: the run stops on this frame, and it
@@ -1106,7 +1160,7 @@ fn run<O: Runtime, M: QueryValues>(
                     &mut screens,
                     &mut measure,
                 )?;
-                hear(&mut out, &mut heard, &mut said);
+                hear(&mut out, &mut heard, &mut said, &mut asked, &mut made);
             } else {
                 out.before_start += 1;
             }
@@ -1132,15 +1186,17 @@ fn run<O: Runtime, M: QueryValues>(
                 &mut screens,
                 &mut measure,
             )?;
-            hear(&mut out, &mut heard, &mut said);
+            hear(&mut out, &mut heard, &mut said, &mut asked, &mut made);
         }
         let mut events = model
             .step(std::slice::from_ref(input))
             .map_err(|e| format!("the model: {e}"))?;
         if opts.sound {
             said = apu_writes(&events);
+            made = sound_requests(&events);
         }
-        events.retain(|e| e.kind != crate::runtime::APU_KIND);
+        events
+            .retain(|e| e.kind != crate::runtime::APU_KIND && e.kind != crate::runtime::SOUND_KIND);
         if let Some(sc) = screens.as_deref_mut() {
             sc.model_changed(model, false);
             sc.model_events(model, &events);
@@ -1152,7 +1208,7 @@ fn run<O: Runtime, M: QueryValues>(
             Vec::new()
         };
         check(&mut out, original, model, kinds, &mut screens, &mut measure)?;
-        hear(&mut out, &mut heard, &mut said);
+        hear(&mut out, &mut heard, &mut said, &mut asked, &mut made);
     }
     out.screen = measure.finish();
     if pause == Some(inputs.len()) && out.start.is_none() {
@@ -1994,6 +2050,7 @@ mod track_tests {
             scope_end: None,
             out_of_scope: 0,
             sound: Vec::new(),
+            requests: Vec::new(),
             watched: Vec::new(),
         }
     }

@@ -59,6 +59,10 @@ A module answers `info` (op 2) with the runtime protocol's package and, from 0.2
 
 The page doesn't read values this way: it plays a module through the preview's exports, so the browser players are unchanged.
 
+## Sound requests
+
+An arcade game's model asks its sound board for sounds as the original's main CPU does: a byte written to one of the board's latches. A hook keeps the requests it made on a frame and gives them back through `Ext::sound_requests` (each a latch, 0 to 3, and a byte). `run.set-sound-events` in `wit/game/game.wit` (op 30, game-printer:game 0.3.0) makes `step` return them as `sound-request` events with `latch` and `value`, which `gp interp compare` holds to the original's `latch-write` events (gp-arcade's `latch_events`) frame by frame. The page reads them through the preview's export `gp_sound_requests` and feeds them to `gp_arcade_play.wasm`'s sound board ([docs/web.md](web.md)). A module built before 0.3.0 refuses op 30 and has no `gp_sound_requests`: it loads and plays as before, silent.
+
 ## Not done yet
 
 - The official client's scan of a module on fetch waits for 3.3, when `gp` runs modules.

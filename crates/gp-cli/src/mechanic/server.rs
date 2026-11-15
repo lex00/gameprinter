@@ -337,7 +337,6 @@ fn runs(bin: &Path) -> bool {
 /// socket closes with the exec and the new build binds the port again, a
 /// fraction of a second later. Returns only when the exec fails.
 fn restart(srv: &Server, bin: &Path, a: &Start) -> anyhow::Error {
-    use std::os::unix::process::CommandExt as _;
     let mechanic = srv
         .session
         .lock()
@@ -364,7 +363,25 @@ fn restart(srv: &Server, bin: &Path, a: &Start) -> anyhow::Error {
             c.arg(flag).arg(v);
         }
     }
-    anyhow::Error::new(c.env(RESTARTED, "1").exec())
+    c.env(RESTARTED, "1");
+    exec(c)
+}
+
+#[cfg(unix)]
+fn exec(mut c: std::process::Command) -> anyhow::Error {
+    use std::os::unix::process::CommandExt as _;
+    anyhow::Error::new(c.exec())
+}
+
+/// Windows can't replace a running process with another, and the new
+/// build couldn't bind the port this one holds, so --follow says so and
+/// stays on this build.
+#[cfg(not(unix))]
+fn exec(c: std::process::Command) -> anyhow::Error {
+    let _ = c;
+    anyhow::anyhow!(
+        "this system can't restart a server in place; stop gp mechanic and start it again"
+    )
 }
 
 /// What the page says beside an arcade game's model on review.
@@ -837,6 +854,10 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         // picture card's look.
         ("GET" | "HEAD", "/sound-card.js") => {
             page("sound-card.js", "text/javascript; charset=utf-8")
+        }
+        // A sprite edit the agent proposes for the person's copy, the same.
+        ("GET" | "HEAD", "/sprite-card.js") => {
+            page("sprite-card.js", "text/javascript; charset=utf-8")
         }
         // The old inspector's views on the page (mechanic/details/).
         ("GET" | "HEAD", p) if part_in(p, "/details/").is_some() => {

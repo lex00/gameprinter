@@ -212,6 +212,9 @@ fn voice_name(v: Voice) -> &'static str {
         Voice::Triangle => "triangle",
         Voice::Noise => "noise",
         Voice::Dmc => "dmc",
+        Voice::Tone => "tone",
+        Voice::AyNoise => "ay-noise",
+        Voice::Envelope => "envelope",
     }
 }
 
@@ -235,6 +238,7 @@ pub fn to_note(n: &RawNote, instrument: u16, region: Region) -> Note {
         pitch: p,
         fine,
         instrument,
+        period: None,
     }
 }
 

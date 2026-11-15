@@ -20,6 +20,7 @@
 //! `gp_interp::reach`). A stage none of them can play to its end is
 //! named NOT CHECKED, with the reason.
 
+use crate::corpus_score::Picture;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -166,6 +167,11 @@ pub(crate) fn run(args: &ValidateArgs, paths: &Paths, which: bool) -> Result<Out
     let text = fs::read_to_string(dir.join(MODEL_FILE))
         .with_context(|| dir.join(MODEL_FILE).display().to_string())?;
     let model = Model::parse(&text).ok();
+    let targets = args
+        .targets
+        .iter()
+        .map(|t| crate::validate_target::parse(t))
+        .collect::<Result<Vec<_>>>()?;
     let h = holds(&dir, model.as_ref());
     let (fit, also, why) = choose(&name, &h);
     let head = json!({
@@ -192,6 +198,7 @@ pub(crate) fn run(args: &ValidateArgs, paths: &Paths, which: bool) -> Result<Out
                 no_save: args.no_save,
                 power_on: args.power_on,
                 which: false,
+                targets: Vec::new(),
             };
             let o = crate::validate::run(&contract, paths)?;
             let mut json = o.json;
@@ -200,10 +207,15 @@ pub(crate) fn run(args: &ValidateArgs, paths: &Paths, which: bool) -> Result<Out
             }
             let mut text = format!("{name}: {why}.\n{}", o.text);
             let mut exit = o.exit;
+            if also.is_none() && !targets.is_empty() {
+                text.push_str("\nThe targets weren't held: this is the original game, held to its recordings. A copy of it (template_fork) is checked as a changed game, and holds them");
+                json["difficulty"] =
+                    json!({"held": false, "why": "the original game is held to its recordings"});
+            }
             if also == Some(Fit::Changed) {
                 // A person's copy: the changed game's check decides, and the
                 // contract says how far the change moved it.
-                let c = changed(&dir, &name, model.as_ref(), args, paths)?;
+                let c = changed(&dir, &name, model.as_ref(), args, &targets, paths)?;
                 let says = against_original(o.exit);
                 json["contract"] = json!({
                     "ok": json["ok"].clone(), "exit": o.exit,
@@ -225,10 +237,17 @@ pub(crate) fn run(args: &ValidateArgs, paths: &Paths, which: bool) -> Result<Out
         }
         Fit::Port => {
             let o = port(&dir, &name, args, paths)?;
-            Ok(merge(head, &why, &name, o, "port"))
+            let mut o = merge(head, &why, &name, o, "port");
+            if !targets.is_empty() {
+                not_held(
+                    &mut o,
+                    "a port is held to its clips of the original, every one exact, so its difficulty is the original's",
+                );
+            }
+            Ok(o)
         }
         Fit::Changed => {
-            let mut o = changed(&dir, &name, model.as_ref(), args, paths)?;
+            let mut o = changed(&dir, &name, model.as_ref(), args, &targets, paths)?;
             // A copy of a port still has the port's clips: what they say is
             // how far the change moved it from the original.
             if h.corpus && o.json["complete"] == false && o.json["well_formed"]["ok"] == true {
@@ -250,6 +269,14 @@ fn against_original(exit: u8) -> &'static str {
         1 => "differs from the original, as you changed it",
         _ => "not compared: no recording of the original could be run",
     }
+}
+
+/// Targets given where the check that fits doesn't hold them.
+fn not_held(o: &mut Outcome, why: &str) {
+    o.text.push_str(&format!(
+        "\nThe targets weren't held: {why}. A copy of it (template_fork) is checked as a changed game, and holds them"
+    ));
+    o.json["difficulty"] = json!({"held": false, "why": why});
 }
 
 fn merge(head: Value, why: &str, name: &str, o: Outcome, key: &str) -> Outcome {
@@ -276,12 +303,22 @@ fn port(dir: &Path, name: &str, args: &ValidateArgs, paths: &Paths) -> Result<Ou
         .join(name)
         .join("score.json");
     let o = crate::corpus_score::game_score(paths, dir, args.module.as_deref(), &out)?;
-    let r = &o.json["record"]["predicate"]["results"];
+    let arcade = crate::publish_rule::is_arcade_game(dir);
+    Ok(port_verdict(name, arcade, &o.json, &o.text, &out))
+}
+
+/// The port's verdict from its corpus score (`score` is `gp corpus score`'s
+/// JSON, `text` its summary): state and picture apart. Every clip exact on
+/// state passes an NES port; an arcade game must also have every compared
+/// screen frame the same on picture, as the publish rule asks
+/// (crate::publish_rule). An NES port's picture is said, and doesn't decide.
+fn port_verdict(name: &str, arcade: bool, score: &Value, text: &str, out: &Path) -> Outcome {
+    let r = &score["record"]["predicate"]["results"];
     let n = r["clips"].as_u64().unwrap_or(0);
     let exact = r["exact"].as_u64().unwrap_or(0);
     let errors = r["errors"].as_u64().unwrap_or(0);
     let permille = r["fidelity_permille"].as_u64().unwrap_or(0);
-    let rows = o.json["record"]["predicate"]["clips"]
+    let rows = score["record"]["predicate"]["clips"]
         .as_array()
         .cloned()
         .unwrap_or_default();
@@ -295,9 +332,25 @@ fn port(dir: &Path, name: &str, args: &ValidateArgs, paths: &Paths) -> Result<Ou
             })
         })
         .collect();
-    let problems = o.json["problems"].as_array().cloned().unwrap_or_default();
-    let ok = n > 0 && exact == n && errors == 0 && problems.is_empty();
-    let mut lines = vec![o.text.clone()];
+    // The picture, from each scored clip's screen counts.
+    let pictures: Vec<(String, Picture)> = rows
+        .iter()
+        .filter(|c| c.get("error").is_none_or(Value::is_null))
+        .map(|c| (c["id"].as_str().unwrap_or("?").to_owned(), Picture::of(c)))
+        .collect();
+    let (same, frames) = pictures
+        .iter()
+        .fold((0, 0), |(s, f), (_, pc)| (s + pc.same, f + pc.frames));
+    let picture_off: Vec<&str> = pictures
+        .iter()
+        .filter(|(_, pc)| !pc.exact())
+        .map(|(id, _)| id.as_str())
+        .collect();
+    let picture_ok = n > 0 && pictures.len() as u64 == n && picture_off.is_empty();
+    let problems = score["problems"].as_array().cloned().unwrap_or_default();
+    let state_ok = n > 0 && exact == n && errors == 0 && problems.is_empty();
+    let ok = state_ok && (!arcade || picture_ok);
+    let mut lines = vec![text.to_owned()];
     for c in not_exact.iter().take(20) {
         let id = c["id"].as_str().unwrap_or("");
         let said = match c["error"].as_str() {
@@ -317,32 +370,61 @@ fn port(dir: &Path, name: &str, args: &ValidateArgs, paths: &Paths) -> Result<Ou
                 format!("{}.{}%{first}", p / 10, p % 10)
             }
         };
-        lines.push(format!("  not exact: {id}: {said}"));
+        lines.push(format!("  not exact on state: {id}: {said}"));
     }
     if not_exact.len() > 20 {
         lines.push(format!("  and {} more", not_exact.len() - 20));
     }
-    lines.push(if ok {
-        format!("PASS: every one of {name}'s {n} clips is exact on the model")
-    } else if n == 0 {
+    for (id, pc) in pictures.iter().filter(|(_, pc)| !pc.exact()).take(20) {
+        lines.push(format!(
+            "  differs on picture: {id}: {} of {} screen frames the same",
+            pc.same, pc.frames
+        ));
+    }
+    if picture_off.len() > 20 {
+        lines.push(format!("  and {} more", picture_off.len() - 20));
+    }
+    let picture = format!("{same} of {frames} screen frames the same");
+    let state = if n == 0 {
         format!(
             "FAIL: {name}'s corpus has no clips to score yet (gp corpus import makes them from the game's sessions)"
         )
+    } else if state_ok {
+        format!("PASS on state: every one of {name}'s {n} clips is exact on the model")
     } else {
         format!(
-            "FAIL: {} of {n} clips aren't exact; gp clip score {name} CLIP shows where one splits",
+            "FAIL on state: {} of {n} clips aren't exact; gp clip score {name} CLIP shows where one splits",
             n - exact
         )
-    });
-    Ok(Outcome {
+    };
+    lines.push(state);
+    if n > 0 {
+        lines.push(if picture_ok {
+            format!("PASS on picture: {picture}, every one of the {n} clips")
+        } else if arcade {
+            format!(
+                "FAIL on picture: {picture}, {} of {n} clips differ; an arcade game passes only when every compared screen frame is the same",
+                n.saturating_sub(pictures.len() as u64 - picture_off.len() as u64)
+            )
+        } else {
+            format!(
+                "On picture: {picture}, {} of {n} clips differ (said, not decided: an NES port passes on state)",
+                n.saturating_sub(pictures.len() as u64 - picture_off.len() as u64)
+            )
+        });
+    }
+    Outcome {
         json: json!({
             "ok": ok, "clips": n, "exact": exact, "errors": errors,
             "fidelity_permille": permille, "not_exact": not_exact,
+            "state_ok": state_ok,
+            "picture": {"ok": picture_ok, "frames_same": same, "frames": frames,
+                "differ": picture_off, "decides": arcade},
             "problems": problems, "record_file": out,
         }),
         text: lines.join("\n"),
         exit: u8::from(!ok),
-    })
+    }
 }
 
 // --- A changed or new game ------------------------------------------------
@@ -388,6 +470,8 @@ struct Stage {
     how: &'static str,
     said: String,
     detail: Value,
+    /// Its numbers by name, for --target.
+    measured: crate::validate_target::Measured,
 }
 
 /// A changed or new game's check: the model well formed, then each stage
@@ -397,6 +481,7 @@ fn changed(
     name: &str,
     model: Option<&Model>,
     args: &ValidateArgs,
+    targets: &[crate::validate_target::Target],
     paths: &Paths,
 ) -> Result<Outcome> {
     let assets = assets_for(dir, model, args, paths);
@@ -417,7 +502,7 @@ fn changed(
     }];
     let mut stages = Vec::new();
     if let (true, Some(m)) = (well_formed, model) {
-        stages = check_stages(dir, m, args, paths);
+        stages = check_stages(dir, m, args, targets, paths);
     } else {
         lines.push("stages: not checked, since the model isn't well formed".into());
     }
@@ -439,8 +524,27 @@ fn changed(
         .filter(|s| s.ok.is_none())
         .map(|s| s.level.as_str())
         .collect();
-    let ok = well_formed && failed.is_empty();
-    let complete = well_formed && unchecked.is_empty();
+    let mut ok = well_formed && failed.is_empty();
+    let mut complete = well_formed && unchecked.is_empty();
+    let mut difficulty = Value::Null;
+    if !targets.is_empty() {
+        if well_formed {
+            let measured: Vec<_> = stages.iter().map(|s| s.measured.clone()).collect();
+            let (j, l, met, all) = crate::validate_target::hold(targets, &measured);
+            lines.extend(l);
+            ok &= met;
+            complete &= all;
+            difficulty = j;
+        } else {
+            difficulty = json!({"held": false, "why": "the model isn't well formed"});
+        }
+    }
+    let off: usize = difficulty["targets"]
+        .as_array()
+        .map_or(0, |r| r.iter().filter(|r| r["ok"] == false).count());
+    let unmeasured: usize = difficulty["targets"]
+        .as_array()
+        .map_or(0, |r| r.iter().filter(|r| r["measured"] == false).count());
     lines.push(if !well_formed {
         "FAIL: the model isn't well formed; fix what gp model check names first".into()
     } else if !failed.is_empty() {
@@ -450,13 +554,32 @@ fn changed(
             stages.len(),
             failed.join(", ")
         )
+    } else if off > 0 {
+        format!(
+            "FAIL: every stage can be reached and finished, but {off} of the measures you set a target for {} off it",
+            if off == 1 { "is" } else { "are" }
+        )
+    } else if unmeasured > 0 {
+        format!(
+            "PASS on what could be checked, NOT a full check: nothing failed, but {unmeasured} of your targets couldn't be measured{}",
+            if unchecked.is_empty() {
+                String::new()
+            } else {
+                format!(", and no tool here could search {}", unchecked.join(", "))
+            }
+        )
     } else if unchecked.is_empty() {
         format!(
-            "PASS: {name}'s model is well formed and {} can be reached and finished",
+            "PASS: {name}'s model is well formed and {} can be reached and finished{}",
             if stages.len() == 1 {
                 "its one stage".to_owned()
             } else {
                 format!("all {} stages", stages.len())
+            },
+            if targets.is_empty() {
+                ""
+            } else {
+                ", and every measure you set a target for is on it"
             }
         )
     } else {
@@ -478,6 +601,7 @@ fn changed(
             "ok": ok, "complete": complete,
             "well_formed": {"ok": well_formed, "problems": mc.json["problems"]},
             "stages": stage_json, "failed": failed, "unchecked": unchecked,
+            "difficulty": difficulty,
         }),
         text: lines.join("\n"),
         exit: u8::from(!ok),
@@ -485,7 +609,13 @@ fn changed(
 }
 
 /// Every stage of the model, each by the tool that can check it.
-fn check_stages(dir: &Path, model: &Model, args: &ValidateArgs, paths: &Paths) -> Vec<Stage> {
+fn check_stages(
+    dir: &Path,
+    model: &Model,
+    args: &ValidateArgs,
+    targets: &[crate::validate_target::Target],
+    paths: &Paths,
+) -> Vec<Stage> {
     // gp level list's view: each level's kind, and whether the kit covers it.
     let listed = crate::level_edit::list_cmd(dir, paths).ok().map(|o| o.json);
     let kit = listed.as_ref().is_some_and(|l| l["kit"] == true);
@@ -534,8 +664,39 @@ fn check_stages(dir: &Path, model: &Model, args: &ValidateArgs, paths: &Paths) -
                 how: "reach and playthrough",
                 said: format!("the model couldn't be opened to search it: {e}"),
                 detail: Value::Null,
+                measured: Default::default(),
             },
         });
+    }
+    // The numbers a target names that cost a search of their own. They
+    // come from the reach search's moves (a platformer's walk and jump on
+    // tiles), so a girder stage, whose climbs and jumps the stage tools
+    // play instead, doesn't get them.
+    for s in &mut out {
+        s.measured.level = s.level.clone();
+        if kit && kind_of(&s.level) == "girders and ladders" {
+            for t in targets {
+                if crate::validate_target::ON_DEMAND.contains(&t.name.as_str()) {
+                    s.measured.not.insert(
+                        t.name.clone(),
+                        "it is measured by the reach search, which moves a platformer's player on tiles; this is a stage of girders and ladders, which the reach search doesn't play".into(),
+                    );
+                }
+            }
+            continue;
+        }
+        match &source {
+            Ok(src) => crate::validate_target::on_demand(src, &s.level, targets, &mut s.measured),
+            Err(e) => {
+                for t in targets {
+                    if crate::validate_target::ON_DEMAND.contains(&t.name.as_str()) {
+                        s.measured
+                            .not
+                            .insert(t.name.clone(), format!("the model couldn't be opened: {e}"));
+                    }
+                }
+            }
+        }
     }
     out
 }
@@ -566,6 +727,7 @@ fn verify_stage(
                 how,
                 said: format!("gp level verify couldn't check it: {e:#}"),
                 detail: Value::Null,
+                measured: Default::default(),
             };
         }
     };
@@ -643,6 +805,18 @@ fn verified(dir: &Path, level: &str, covers: bool, covered: &[String], j: &Value
             "finished": j["finished"], "breaks": j["breaks"], "kit_covers": covers,
             "original": j["original"], "picture": j["picture"],
         }),
+        // The kit's tolerances only where its rules are written for this
+        // stage.
+        measured: crate::validate_target::Measured {
+            level: level.into(),
+            numbers: crate::validate_target::numbers_of(&j["measured"]),
+            kit: if covers {
+                j["measures"].as_array().cloned().unwrap_or_default()
+            } else {
+                Vec::new()
+            },
+            not: Default::default(),
+        },
     }
 }
 
@@ -651,11 +825,20 @@ fn verified(dir: &Path, level: &str, covers: bool, covered: &[String], j: &Value
 /// to it with every enemy in.
 fn reach_stage(src: &crate::hosted::Source, level: &str) -> Stage {
     let how = "reach and playthrough";
-    let stage = |ok, said: String, detail| Stage {
+    let stage = |ok, said: String, detail: Value| Stage {
         level: level.into(),
         ok,
         how,
         said,
+        measured: crate::validate_target::Measured {
+            level: level.into(),
+            numbers: detail["frames"]
+                .as_f64()
+                .map(|f| ("run_frames".to_owned(), f))
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        },
         detail,
     };
     let spec = &src.spec;
@@ -719,6 +902,83 @@ fn reach_stage(src: &crate::hosted::Source, level: &str) -> Stage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A made-up score of two clips, both exact on state, the second with
+    /// `second` of 10 screen frames the same.
+    fn made_up_score(second: u64) -> Value {
+        let screen = |same: u64| json!({"sprites": {"same": same, "total": 10}, "background": {"same": 10, "total": 10}});
+        json!({"problems": [], "record": {"predicate": {
+        "results": {"clips": 2, "exact": 2, "errors": 0, "fidelity_permille": 1000},
+        "clips": [
+            {"id": "a.1", "exact": true, "permille": 1000, "screen": screen(10)},
+            {"id": "a.2", "exact": true, "permille": 1000, "screen": screen(second)},
+        ]}}})
+    }
+
+    #[test]
+    fn a_port_says_state_and_picture_apart_and_an_arcade_game_fails_on_picture() {
+        let out = Path::new("made-up/score.json");
+        // Exact on state, a frame different on picture: an arcade game fails.
+        let o = port_verdict("cab", true, &made_up_score(9), "summary", out);
+        assert_eq!(
+            (o.json["ok"].as_bool(), o.exit),
+            (Some(false), 1),
+            "{}",
+            o.text
+        );
+        assert!(
+            o.text
+                .contains("PASS on state: every one of cab's 2 clips is exact")
+                && o.text.contains(
+                    "FAIL on picture: 19 of 20 screen frames the same, 1 of 2 clips differ"
+                )
+                && o.text
+                    .contains("differs on picture: a.2: 9 of 10 screen frames the same"),
+            "{}",
+            o.text
+        );
+        assert_eq!(o.json["picture"]["differ"], json!(["a.2"]));
+        // An NES port: the picture is said, and state decides.
+        let o = port_verdict("nes", false, &made_up_score(9), "summary", out);
+        assert_eq!(
+            (o.json["ok"].as_bool(), o.exit),
+            (Some(true), 0),
+            "{}",
+            o.text
+        );
+        assert!(
+            o.text.contains("On picture: 19 of 20 screen frames the same, 1 of 2 clips differ (said, not decided"),
+            "{}",
+            o.text
+        );
+        // Every screen frame the same: an arcade game passes on both.
+        let o = port_verdict("cab", true, &made_up_score(10), "summary", out);
+        assert_eq!(
+            (o.json["ok"].as_bool(), o.exit),
+            (Some(true), 0),
+            "{}",
+            o.text
+        );
+        assert!(
+            o.text
+                .contains("PASS on picture: 20 of 20 screen frames the same"),
+            "{}",
+            o.text
+        );
+        // No screen counts at all: an arcade game fails on picture.
+        let mut none = made_up_score(10);
+        for c in none["record"]["predicate"]["clips"].as_array_mut().unwrap() {
+            c.as_object_mut().unwrap().remove("screen");
+        }
+        let o = port_verdict("cab", true, &none, "summary", out);
+        assert_eq!(o.json["ok"], false, "{}", o.text);
+        assert!(
+            o.text
+                .contains("FAIL on picture: 0 of 0 screen frames the same, 2 of 2 clips differ"),
+            "{}",
+            o.text
+        );
+    }
 
     #[test]
     fn a_stage_verify_couldnt_play_is_not_checked_and_one_it_played_counts() {

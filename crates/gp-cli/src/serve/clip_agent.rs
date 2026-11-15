@@ -1213,7 +1213,7 @@ fn run_agent(
         .stderr(Stdio::from(log))
         .stdin(Stdio::piped());
     // Its own process group, so stop ends what it started too.
-    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    gp_mcp::proc::own_group(&mut cmd);
     let mut child = cmd.spawn().context("starting the clip agent")?;
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(&fs::read(&prompt_path).unwrap_or_default());
@@ -1224,9 +1224,12 @@ fn run_agent(
     // The agent and every process it started (a build, an attempt): its
     // own process group, by its own PID.
     let end = |child: &mut std::process::Child| {
+        #[cfg(unix)]
         let _ = Command::new("kill")
             .args(["-TERM", &format!("-{}", child.id())])
             .status();
+        #[cfg(not(unix))]
+        gp_mcp::proc::stop_group(child.id(), Duration::ZERO);
         let _ = child.kill();
         let _ = child.wait();
     };

@@ -96,6 +96,16 @@ pub struct ValidateArgs {
     /// check for a game changed on purpose or made new.
     #[arg(long, conflicts_with_all = ["against", "store"])]
     pub which: bool,
+    /// A difficulty number to hold a changed or new game to, measured on
+    /// each stage by the tools that check one: NAME=VALUE, NAME=VALUE+-TOL
+    /// or NAME=VALUE+-TOL% (without a tolerance, the level kit's for that
+    /// measure, else equal). Names: what gp level measure prints
+    /// (route_frames, jump_window_median, throw_to_drum_median, ...),
+    /// run_frames, difficulty_bits, and the jump's airtime, rise,
+    /// walk_distance and run_distance. A name no stage measures is said,
+    /// not passed. Repeat it for each. Example: --target route_frames=1300+-10%
+    #[arg(long = "target", value_name = "NAME=VALUE[+-TOL]", conflicts_with_all = ["against", "store"])]
+    pub targets: Vec<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]

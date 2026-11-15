@@ -285,10 +285,8 @@ fn missing_tools(c: &Cx) -> Vec<&'static str> {
         .copied()
         .filter(|t| {
             !std::env::split_paths(&path).any(|d| {
-                fs::metadata(d.join(t)).is_ok_and(|m| {
-                    use std::os::unix::fs::PermissionsExt as _;
-                    m.is_file() && m.permissions().mode() & 0o111 != 0
-                })
+                gp_mcp::proc::is_executable(&d.join(t))
+                    || (cfg!(windows) && d.join(format!("{t}.exe")).is_file())
             })
         })
         .collect()
@@ -333,17 +331,15 @@ fn run_killable(
     stop: &AtomicBool,
     log: &Path,
 ) -> std::result::Result<(String, String), String> {
-    use std::os::unix::process::CommandExt as _;
     if let Some(d) = log.parent() {
         fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
     }
     let (out, err) = (log.with_extension("out"), log.with_extension("err"));
     let file = |p: &Path| fs::File::create(p).map_err(|e| format!("{}: {e}", p.display()));
-    let mut child = cmd
+    let mut child = gp_mcp::proc::own_group(cmd)
         .stdin(Stdio::null())
         .stdout(file(&out)?)
         .stderr(file(&err)?)
-        .process_group(0)
         .spawn()
         .map_err(|e| format!("running {what}: {e}"))?;
     let pid = child.id();
@@ -371,6 +367,11 @@ fn run_killable(
 /// Stops a lane's process group: TERM, then KILL after 3 s. std has no
 /// killpg and gp-cli no libc, so through kill(1).
 fn kill_group(pid: u32, child: &mut std::process::Child) {
+    if cfg!(not(unix)) {
+        gp_mcp::proc::stop_group(pid, std::time::Duration::ZERO);
+        let _ = child.wait();
+        return;
+    }
     let signal = |sig: &str| {
         let _ = Command::new("kill")
             .args([sig, "--", &format!("-{pid}")])
@@ -1528,7 +1529,6 @@ fn hooked_games(games: &Path) -> Vec<PathBuf> {
 /// output in `$GP_HOME/work/warm-modules.log`; the gate doesn't wait, and a
 /// failed one only means the page builds it on open, as before.
 fn warm_modules(c: &Cx, commit: &str, scored: Option<&Scored>, lines: &mut Vec<String>) {
-    use std::os::unix::process::CommandExt as _;
     let gp = c.home.join("bin").join(format!("gp-{}", &commit[..12]));
     let games = hooked_games(&c.games_repo);
     if games.is_empty() || !gp.is_file() {
@@ -1563,7 +1563,8 @@ fn warm_modules(c: &Cx, commit: &str, scored: Option<&Scored>, lines: &mut Vec<S
         return;
     };
     let Ok(err) = out.try_clone() else { return };
-    let started = Command::new("sh")
+    let mut sh = Command::new("sh");
+    let started = gp_mcp::proc::own_group(&mut sh)
         .arg("-c")
         .arg(r#"gp=$1; shift; for d; do "$gp" game build "$d"; done"#)
         .arg("sh")
@@ -1572,7 +1573,6 @@ fn warm_modules(c: &Cx, commit: &str, scored: Option<&Scored>, lines: &mut Vec<S
         .stdin(Stdio::null())
         .stdout(out)
         .stderr(err)
-        .process_group(0)
         .spawn();
     match started {
         Ok(_) => lines.push(format!(
@@ -1845,6 +1845,7 @@ mod tests {
     /// Scoring a build leaves it and the next newest, whatever the score
     /// says, and touches nothing but older builds. `true` is the gp: it
     /// prints no JSON, so the score itself is an error.
+    #[cfg(unix)]
     #[test]
     fn scoring_a_build_keeps_only_the_two_newest() {
         let dir = tempfile::tempdir().unwrap();
@@ -1892,10 +1893,9 @@ mod tests {
     }
 
     fn script(path: &Path, body: &str) {
-        use std::os::unix::fs::PermissionsExt as _;
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, body).unwrap();
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        gp_mcp::proc::make_executable(path).unwrap();
     }
 
     /// A tool repo and a gate around it, with stand-ins for cargo, just and

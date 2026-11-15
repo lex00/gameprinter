@@ -24,6 +24,7 @@
 // the ROM's message rather than stopping the page with no word.
 
 import { gamePageOf, linkSettings, profileNames, readLink, shareLink } from "./share.js";
+import { whatIsThis } from "./what-is-this.js";
 
 const $ = (id) => document.getElementById(id);
 const frame = $("game");
@@ -49,11 +50,14 @@ const KINDS = {
 };
 // The players by the name a package gives (`player`, kept for packages
 // already published: lex00/donkey-kong@1.0.9 names `nes`), each with the
-// ROM kinds it takes. An arcade game plays silent: the board's sound chips
-// aren't driven by the model yet (docs/web.md, "Arcade games").
+// ROM kinds it takes. An arcade game sounds through its board's own sound
+// CPU and chips, run in this browser from the visitor's romset and fed the
+// requests the game's module makes (game/gp_arcade_play.wasm, preview.js
+// BoardSound; docs/web.md, "Arcade games"); a module built before it makes
+// none, and plays silent.
 const PLAYERS = {
   nes: { kinds: ["nes"] },
-  arcade: { kinds: ["zip"], silent: "This game plays silent for now: the page doesn't play an arcade board's sound yet." },
+  arcade: { kinds: ["zip"], sound: "The board's own sound, played from your romset in this browser. It starts on your first key or click." },
   own: { kinds: ["none"] },
 };
 const LIFT_MODULE = "game/lift/gp-web-lift.wasm";
@@ -126,19 +130,52 @@ function showFacts(f) {
     `Load your own ${rom.name} ${k.noun} (${rom.file}) to play. ` + "It is checked and read in this browser and never uploaded.";
   $("title").textContent = f.title;
   document.title = f.title;
-  // The how-to-play lines, and for a player with no sound a line saying
-  // so, as text.
-  const silent = PLAYERS[f.player]?.silent;
-  const lines = f.howto?.length ? [...f.howto] : silent ? [...$("howto").children].map((p) => p.textContent) : [];
-  if (silent) lines.push(`Sound: ${silent}`);
+  // The how-to-play lines, and for a player whose sound needs saying a
+  // line about it, as text.
+  const sound = PLAYERS[f.player]?.sound;
+  const lines = f.howto?.length ? [...f.howto] : sound ? [...$("howto").children].map((p) => p.textContent) : [];
+  if (sound) lines.push(`Sound: ${sound}`);
   if (lines.length) $("howto").replaceChildren(...lines.map((t) => Object.assign(document.createElement("p"), { textContent: t })));
   if (!link.own || rom.kind !== "nes") {
     $("about-rom").textContent = `"Load your own ROM" accepts a ${rom.name} ${k.file} that you own. The page checks and reads it in your browser. It is never uploaded.`;
   }
   if (!link.own || f.trademark) {
     $("about-mark").textContent =
-      f.trademark ?? `This page is not affiliated with or endorsed by the makers of ${f.title}, which is named here only to say which file is accepted.`;
+      f.trademark ??
+      (rom.kind === "zip"
+        ? arcadeNotice(f.title)
+        : `This page is not affiliated with or endorsed by the makers of ${f.title}, which is named here only to say which file is accepted.`);
   }
+  // An arcade game's notice shows by the picker too, not only in About.
+  const notice = rom.kind === "zip" ? (f.trademark ?? arcadeNotice(f.title)) : "";
+  $("rom-notice").textContent = notice;
+  $("rom-notice").hidden = !notice;
+  showSets(rom.sets);
+}
+// The owner's one-line notice for an arcade game (#3), when its package
+// gives no trademark line of its own.
+const arcadeNotice = (title) => `You need your own ${title} romset to play; ${title}'s names and trademarks belong to their owners.`;
+// The MAME sets an arcade game takes (play/page.json's rom.sets) under
+// About, each with the files its zip must hold, as text.
+function showSets(sets) {
+  const box = $("about-sets");
+  if (!box) return;
+  box.hidden = !sets?.length;
+  if (!sets?.length) return box.replaceChildren();
+  const p = (t) => Object.assign(document.createElement("p"), { textContent: t });
+  box.replaceChildren(
+    p("The romsets this page takes, by MAME's names, and the files each one's zip must hold (under any names: the page knows a file by its SHA-1):"),
+    ...sets.map((s) => p(`${s.name}, ${s.title}: ${s.files.length} files: ${s.files.map((f) => `${f.name} (${f.size} bytes, SHA-1 ${f.sha1})`).join(", ")}.`)),
+  );
+}
+// What to bring, after a romset zip the lift refused: the set or sets by
+// MAME's names, from the package's facts.
+function bringLine(r) {
+  const sets = r?.kind === "zip" ? (r.sets ?? []) : [];
+  if (!sets.length) return "";
+  const named = sets.map((s) => `${s.name} (${s.title})`);
+  if (named.length === 1) return ` Bring MAME's ${named[0]} set: a zip of its ${sets[0].files.length} files, listed with their SHA-1s under About.`;
+  return ` Bring one of MAME's sets ${named.slice(0, -1).join(", ")} or ${named.at(-1)}: About lists the files each zip must hold, with their SHA-1s.`;
 }
 // page.json read into `page`, and for the page's own game into `facts`
 // and `rom`: what a ROM needs before it can play. Another game's facts
@@ -227,6 +264,10 @@ const installing = ready.then(async () => {
   const listed = offer?.offered ?? null;
   const notOffered = (offer?.leftOut ?? []).map((l) => ({ name: l.name, title: l.title, reason: l.reason, detail: l.detail }));
   const list = listed ?? [];
+  // A theme offered whose last recheck failed (its by-game line's
+  // `recheck`, passed on by gp-registry.wasm only when it failed) is still
+  // offered, and says when and why in the same line and in About.
+  const rechecked = list.filter((o) => o.recheck).map((o) => ({ name: o.name, title: o.title, date: o.recheck.date, reason: o.recheck.reason }));
   if (listed && link.content && !listed.some((o) => o.name === link.content.name)) {
     const left = notOffered.find((l) => l.name === link.content.name);
     notices.push(
@@ -276,14 +317,14 @@ const installing = ready.then(async () => {
     if (a.linked) theme = t;
   }
   for (const l of notOffered) console.info(`gp: theme ${l.name} not offered: ${l.reason} (${l.detail})`);
-  showAboutThemes(notOffered);
+  showAboutThemes(notOffered, [], [], rechecked);
   // Settings, Theme lists them in this order after Original: the themes
   // from the game's own namespace first (for lex00/donkey-kong,
   // lex00/turnips before a theme someone else made), then the rest as the
   // source offered them. The games site orders a game's themes the same way.
   themes.sort((a, b) => b.own - a.own);
   say("");
-  return { game: g.record, theme, themes, files, names, profile: settings.profile, notOffered };
+  return { game: g.record, theme, themes, files, names, profile: settings.profile, notOffered, rechecked };
 });
 installing.catch(() => {});
 
@@ -316,6 +357,11 @@ window.__gpAudio = (make = true) => {
   return audioContext;
 };
 for (const e of ["keydown", "pointerdown", "click", "touchend"]) addEventListener(e, () => window.__gpAudio(true), true);
+// The romset an arcade game plays from, for the game frame's sound board
+// (preview.js, `parent.__gpRom`): the bytes the visitor loaded, which
+// never leave this browser. Null until one is loaded, and for an NES game.
+let romBytes = null;
+window.__gpRom = () => romBytes;
 // A key pressed while the shell has the focus goes to the game.
 addEventListener("keydown", (e) => {
   if (e.target === document.body) focusGame();
@@ -441,11 +487,17 @@ function romName(found) {
 // themes offered with some of their lines passed over (looks_partial).
 // Each names the theme's title and the reason, written to follow
 // "because". Without them a theme is missing from the settings, or drawn
-// in part, with no word.
-function notOfferedText(skipped = [], left = [], partial = []) {
+// in part, with no word. Last, the themes offered whose recheck failed
+// (`rechecked`), each with the day and what failed.
+function notOfferedText(skipped = [], left = [], partial = [], rechecked = linked?.rechecked ?? []) {
   const one = (list, single, many) =>
     list.length ? `${list.length === 1 ? single : many}: ` + list.map((s) => `${s.title}, because ${s.reason}`).join("; ") + "." : "";
-  return [one(skipped, "ROM theme not offered", "ROM themes not offered"), one(left, "Theme not offered", "Themes not offered"), one(partial, "Theme drawn in part", "Themes drawn in part")]
+  const failed = rechecked.length
+    ? `${rechecked.length === 1 ? "Theme that failed a recheck" : "Themes that failed a recheck"}: ` +
+      rechecked.map((s) => `${s.title}, on ${s.date}: ${s.reason.replace(/\.$/, "")}`).join("; ") +
+      "."
+    : "";
+  return [one(skipped, "ROM theme not offered", "ROM themes not offered"), one(left, "Theme not offered", "Themes not offered"), one(partial, "Theme drawn in part", "Themes drawn in part"), failed]
     .filter(Boolean)
     .join(" ");
 }
@@ -463,10 +515,10 @@ function showSkipped(skipped = [], partial = []) {
 
 // The same in About, so it can be found with or without a ROM: what the
 // source's list leaves out from the start, and what the ROM's lift adds.
-function showAboutThemes(left = [], skipped = [], partial = []) {
+function showAboutThemes(left = [], skipped = [], partial = [], rechecked = linked?.rechecked ?? []) {
   const el = $("about-themes");
   if (!el) return;
-  const text = notOfferedText(skipped, left, partial);
+  const text = notOfferedText(skipped, left, partial, rechecked);
   el.hidden = !text;
   el.textContent = text;
 }
@@ -564,7 +616,7 @@ async function liftAndPlay(file, name) {
       extraThemes: linked.themes ?? (linked.theme ? [linked.theme] : []),
     });
     if (!r.ok) {
-      say(r.error, "error");
+      say(r.error + bringLine(facts?.rom), "error");
       return;
     }
     const f = r.found;
@@ -574,6 +626,9 @@ async function liftAndPlay(file, name) {
         (f?.warning ? ` ${f.warning}` : ""),
       f?.warning ? "warn" : "ok",
     );
+    // An arcade game's frame powers its board's sound on from the romset
+    // (preview.js BoardSound): its bytes, kept in this page only.
+    romBytes = rom?.kind === "zip" ? (typeof file.arrayBuffer === "function" ? await file.arrayBuffer() : file) : null;
     play("rom", f, r.looks_skipped ?? [], r.looks_partial ?? []);
   } catch (err) {
     say(`The ROM couldn't be read: ${err.message ?? err}`, "error");
@@ -629,6 +684,8 @@ try {
   say(`${what} couldn't be installed: ${err.message ?? err}.`, "error");
 }
 window.__page = { play, liftRom: async (...a) => (await lift()).liftRom(...a), showSkipped, installing };
+// "What is this?": answered in this browser from the game's package.
+whatIsThis({ frame, installing });
 // A game that plays from its own files plays at once; any other, no game
 // until a ROM, unless one picked while the page loaded already plays.
 if (started && ownFiles()) play("own");

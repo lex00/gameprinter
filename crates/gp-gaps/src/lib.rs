@@ -349,6 +349,18 @@ pub struct Run {
     /// The main CPU's writes to a sound board's latch, in order (an arcade
     /// board; empty on the NES, whose game code writes the APU itself).
     pub latch: Vec<LatchWrite>,
+    /// A code map of the program, for a CPU that isn't the NES's 6502 (an
+    /// arcade board's Z80): [`code::body`] reads a routine from it instead
+    /// of walking `prg` as 6502 code.
+    pub code_map: Option<CodeMap>,
+}
+
+/// A static code map's instruction starts and routine entries, by PRG
+/// offset.
+#[derive(Debug, Clone, Default)]
+pub struct CodeMap {
+    pub starts: std::collections::BTreeSet<u32>,
+    pub entries: std::collections::BTreeSet<u32>,
 }
 
 /// One write to a sound board's latch by the main CPU.

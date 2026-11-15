@@ -45,13 +45,7 @@ pub fn page_file(home: &Path) -> PathBuf {
 
 /// Whether a process is running.
 pub fn alive(pid: u64) -> bool {
-    std::process::Command::new("kill")
-        .arg("-0")
-        .arg(pid.to_string())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+    crate::proc::alive(pid)
 }
 
 /// Whether a gp serve is running for this home, so the person has a page
@@ -312,6 +306,13 @@ pub fn says(n: &New) -> String {
                 .unwrap_or_default()
         ),
         "registry reindex" => format!("Rewrite the public index of the registry{to}."),
+        "registry submit" => format!(
+            "Send{} to the registry {} as a pull request on GitHub, from your fork (made if you have none). Everyone can see the pull request; the registry's owner decides whether it goes in.",
+            v(&["name", "dir"])
+                .map(|d| format!(" {d}"))
+                .unwrap_or_default(),
+            v(&["to"]).unwrap_or("lex00/gp-registry")
+        ),
         "registry yank" => format!(
             "Withdraw{} in the registry{to}. Players are told it was withdrawn.",
             v(&["version"]).map(|d| format!(" {d}")).unwrap_or_default()

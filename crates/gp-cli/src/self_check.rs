@@ -359,22 +359,26 @@ fn checks(paths: &Paths) -> Vec<Item> {
             .and_then(|p| first_line(p, &["--version"]))
             .map(|v| format!("node {v}"))
             .unwrap_or_else(|| "not on PATH".into()),
-        for_what: "gp theme look play --shots (pictures of your theme in the page), the mechanic demo's decision server, and the page's own checks in a checkout. Playing your theme in a browser doesn't need it",
+        for_what: "the mechanic demo's decision server and the page's own checks in a checkout. Playing your theme in a browser and gp theme look play --shots don't need it",
         fix: "install Node 22 or later from https://nodejs.org".into(),
         needed_by: vec![],
     });
 
     let chrome = paths.home.join("work").join("chrome-headless-shell");
+    let browser = crate::chrome::installed(&paths.home);
     items.push(Item {
         what: "a headless browser",
-        ok: chrome.is_dir(),
-        found: if chrome.is_dir() {
-            chrome.display().to_string()
-        } else {
-            format!("none in {}", chrome.display())
+        ok: browser.is_some(),
+        found: match &browser {
+            Some(b) => b.display().to_string(),
+            None => format!("none in {}", chrome.display()),
         },
-        for_what: "gp theme look play --shots, with Node and playwright-core",
-        fix: "give one with --browser, or fetch Chrome Headless Shell with scripts/inspector/fetch-browser.sh in a gameprinter checkout (about 100 MB)".into(),
+        for_what: "gp theme look play --shots, which drives it itself",
+        fix: if crate::chrome::pin().is_some() {
+            "nothing to do: gp theme look play --shots downloads Chrome Headless Shell the first time (about 100 MB), or give one with --browser".into()
+        } else {
+            "gp has no pinned download for this machine: install Chrome Headless Shell and give it to --shots with --browser".into()
+        },
         needed_by: vec![],
     });
 

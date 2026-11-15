@@ -1,8 +1,8 @@
 // A copy's journey on the first screen (start.js): a theme for a game, or
-// a new game from a template. Its six steps, whose turn each is (you, your
-// agent, or the tools), where it stands and the one next step, from gp
-// serve's /api/journeys/KIND/NAME: the same answer `gp progress --next
-// --copy` and the MCP tool `next` give the agent. Each step opens to what
+// a new game from nothing or from a template. Its six steps, whose turn
+// each is (you, your agent, or the tools), where it stands and the one
+// next step, from gp serve's /api/journeys/KIND/NAME: the same answer
+// `gp progress --next --copy` and the MCP tool `next` give the agent. Each step opens to what
 // it needs: words to type, a button that runs a free gp command (through
 // the agent's own gp_run, marked as the person's), or what to say to the
 // agent. A step with no tool yet says so. Nothing here publishes or
@@ -10,6 +10,7 @@
 
 import { pictureCard, picturesSection } from "../picture-card.js";
 import { soundCard } from "../sound-card.js";
+import { spriteCard } from "../sprite-card.js";
 
 export const WHO = { person: "YOU", agent: "YOUR AGENT", tools: "THE TOOLS" };
 
@@ -37,6 +38,7 @@ const BUTTONS = {
   "look-check": ["CHECK MY THEME", "Reads your theme the way the game does and lists what is wrong. Free, under a minute."],
   "look-play": ["SEE IT IN THE GAME", "Opens the game with your theme, on this computer only, for an hour."],
   shots: ["PICTURES OF IT IN THE GAME", "Plays the game with your theme from your copy of it and keeps pictures of each stage here. A few minutes."],
+  compare: ["BESIDE THE ORIGINAL", "Plays the game's route twice from your copy of it, once in your theme and once in the game's own pictures, and keeps the two pictures of each moment side by side here. A few minutes."],
   build: ["BUILD IT TO PLAY", "Builds your game to play in this browser. A few minutes the first time."],
   render: ["SHOW THE STAGE", "Draws the stage, each piece coloured by what it is."],
   verify: ["CHECK THE STAGE", "Checks the stage still follows the game's rules and can be finished. Free."],
@@ -61,6 +63,8 @@ export function mountJourney(box, kind, name, nav) {
   const errors = new Map();
   // The pictures list is kept across redraws: it draws itself.
   let pictures = null;
+  // The moment shown beside the original, kept across redraws.
+  let moment = 0;
 
   async function load() {
     try {
@@ -249,6 +253,7 @@ export function mountJourney(box, kind, name, nav) {
       }
       case "T5": {
         b.append(el("p", "", "Play it and tell your agent which pictures to change. A new picture shows as a card with the one you have beside it, and nothing changes until you press ACCEPT."));
+        b.append(beside(f));
         b.append(say("Make the hero's hat bigger."));
         pictures ??= picturesSection();
         b.append(pictures);
@@ -293,6 +298,65 @@ export function mountJourney(box, kind, name, nav) {
         break;
       }
     }
+  }
+
+  /** Your theme beside the game in its own pictures, moment by moment
+   * along the game's route: the pairs the last BESIDE THE ORIGINAL kept. */
+  function beside(f) {
+    const box = el("section", "jr-beside");
+    box.id = "jr-beside";
+    box.append(el("h3", "", "Your theme beside the original"));
+    const pairs = v.files.compare ?? [];
+    if (!f.rom && !pairs.length) {
+      box.append(el("p", "muted", "Seeing your theme beside the original needs your own copy of the game on this computer. Your agent can bring it in."));
+      return box;
+    }
+    box.append(button("compare", { go: !pairs.length }));
+    if (!pairs.length) {
+      box.append(el("p", "muted", "Each moment of the game's route shows twice, your theme on the left and the game's own pictures on the right, so you can see what changed and what to ask for."));
+      return box;
+    }
+    moment = Math.max(0, Math.min(pairs.length - 1, moment));
+    const fig = el("figure", "jr-pair");
+    const heads = el("div", "jr-pair-heads");
+    heads.append(el("span", "", "YOUR THEME"), el("span", "", "THE ORIGINAL"));
+    const img = el("img");
+    img.id = "jr-pair-img";
+    const cap = el("figcaption");
+    const show = () => {
+      const p = pairs[moment];
+      img.src = p.src;
+      img.alt = `Your theme and the original at ${p.moment}`;
+      cap.textContent = `${moment + 1} of ${pairs.length}: ${p.shows || p.moment}${pairs.some((x) => x.rom !== p.rom) ? ` (${p.rom})` : ""}, frame ${p.frame}`;
+      sel.value = String(moment);
+      prev.disabled = moment === 0;
+      next.disabled = moment === pairs.length - 1;
+    };
+    const go = (d) => { moment = Math.max(0, Math.min(pairs.length - 1, moment + d)); show(); };
+    const prev = el("button", "jr-btn", "BEFORE");
+    prev.type = "button";
+    prev.title = "The moment before";
+    prev.addEventListener("click", () => go(-1));
+    const next = el("button", "jr-btn", "NEXT");
+    next.type = "button";
+    next.title = "The moment after";
+    next.addEventListener("click", () => go(1));
+    const sel = el("select");
+    sel.id = "jr-moment";
+    sel.setAttribute("aria-label", "The moment");
+    pairs.forEach((p, i) => {
+      const o = el("option", "", `${i + 1}. ${p.shows || p.moment}`);
+      o.value = String(i);
+      sel.append(o);
+    });
+    sel.addEventListener("change", () => { moment = Number(sel.value); show(); });
+    const bar = el("div", "jr-pair-bar");
+    bar.append(prev, sel, next);
+    fig.append(heads, img, cap);
+    box.append(bar, fig);
+    box.append(el("p", "muted", "These pictures show your own copy of the game: they stay on this computer. Press BESIDE THE ORIGINAL again after a change."));
+    show();
+    return box;
   }
 
   // -------------------------------------------------------------------
@@ -427,12 +491,13 @@ export function mountJourney(box, kind, name, nav) {
   // -------------------------------------------------------------------
 
   /** The cards of what waits for the person: the agent's asks (YES, NO)
-   * and the pictures and sound changes it proposes (ACCEPT, REJECT). */
+   * and the pictures, sound changes and sprite edits it proposes
+   * (ACCEPT, REJECT). */
   function asks() {
     const d = el("div");
     d.id = "asks";
     d.setAttribute("aria-live", "polite");
-    const list = (v.answer.waits_for_yes ?? []).filter((y) => y.id && (!["picture", "sound"].includes(y.what) || y.state !== "open" || ((y.picture ?? y.sound)?.place ?? 1) === 1));
+    const list = (v.answer.waits_for_yes ?? []).filter((y) => y.id && (!["picture", "sound", "sprite"].includes(y.what) || y.state !== "open" || ((y.picture ?? y.sound ?? y.sprite)?.place ?? 1) === 1));
     for (const y of list) {
       if (y.what === "picture" && y.picture) {
         if (y.state === "open") d.append(pictureCard(y.picture, () => { drawn = ""; void load(); }));
@@ -440,6 +505,10 @@ export function mountJourney(box, kind, name, nav) {
       }
       if (y.what === "sound" && y.sound) {
         if (y.state === "open") d.append(soundCard(y.sound, () => { drawn = ""; void load(); }));
+        continue;
+      }
+      if (y.what === "sprite" && y.sprite) {
+        if (y.state === "open") d.append(spriteCard(y.sprite, () => { drawn = ""; void load(); }));
         continue;
       }
       if (y.state !== "open" && y.state !== "yes") continue;
@@ -478,7 +547,7 @@ export function mountJourney(box, kind, name, nav) {
     head.append(back);
     box.append(head);
     const kindWords = kind === "theme" ? "Your theme" : "Your new game";
-    const from = c.from ? (c.from.kind === "template" ? ` from the template ${c.from.title}` : c.from.kind === "new" ? ` for your new game ${c.from.title}` : ` for ${c.from.title}`) : "";
+    const from = c.from ? (c.from.kind === "template" ? ` from the template ${c.from.title}` : c.from.kind === "empty" ? " started from nothing" : c.from.kind === "new" ? ` for your new game ${c.from.title}` : ` for ${c.from.title}`) : "";
     box.append(el("h2", "", `${kindWords} ${a.facts.title ?? name}${from}`));
     box.append(el("p", "muted", `Changed ${when(c.touched_ms)}. Step ${a.stage.n} of ${a.stage.of}: ${a.stage.name}.`));
     // Where it stands and the next step, as the game page's status line.

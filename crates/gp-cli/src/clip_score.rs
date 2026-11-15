@@ -1167,6 +1167,7 @@ mod tests {
             scope_end: None,
             out_of_scope: 0,
             sound: Vec::new(),
+            requests: Vec::new(),
             watched: Vec::new(),
         }
     }

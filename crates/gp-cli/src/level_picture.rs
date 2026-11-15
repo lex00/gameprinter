@@ -182,6 +182,21 @@ pub(crate) fn by_kind(spec: &Spec, i: usize, lay: &Layout, marks: &Marks<'_>) ->
             }
         }
     }
+    // A stage of tiles with no girders (a grid of metatiles): its solid
+    // cells, as a girder is drawn, so the stage's ground shows.
+    if l.ground.is_empty() {
+        let cols = l.size[0].max(0) as usize;
+        for (k, tile) in l.tiles.iter().enumerate() {
+            if cols == 0 || !matches!(tile, gp_sim::spec::Tile::Solid) {
+                continue;
+            }
+            let (x, y) = ((k % cols) as i64 * t, (k / cols) as i64 * t);
+            c.fill(x, y, x + t - 1, y + t - 1, GIRDER);
+            if k < cols || !matches!(l.tiles.get(k - cols), Some(gp_sim::spec::Tile::Solid)) {
+                c.fill(x, y, x + t - 1, y, GIRDER_EDGE);
+            }
+        }
+    }
     draw_layout(&mut c, spec, i, lay, marks);
     c
 }

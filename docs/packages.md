@@ -39,7 +39,7 @@ A registry holds the same keys on every target it can live on (a folder, a git r
 | `packages/<id>.sig` | The manifest's SSH signature, when the publish was signed |
 | `index/<ns>/<name>/<version>.toml` | The version file: the id, kind, title, size, the publish time, the signer and, for content, the games it is for |
 
-Every key but the list files (`catalog.toml`, `by-game/` and `yanks.toml`, which `gp registry reindex` rewrites) is written once: a key that is there holds the same bytes, since its name is their hash. A publish writes the blobs first, then the manifest, then the version file, so a reader never sees a version with parts missing. Every read is checked: a blob against its hash and its size in the manifest, a manifest against the id it was asked for by. A mismatch stops the read.
+Every key but the list files (`catalog.toml`, `by-game/` and `yanks.toml`, which `gp registry reindex` rewrites; [their format](formats/registry-lists.md), with a by-game line's optional `recheck`) is written once: a key that is there holds the same bytes, since its name is their hash. A publish writes the blobs first, then the manifest, then the version file, so a reader never sees a version with parts missing. Every read is checked: a blob against its hash and its size in the manifest, a manifest against the id it was asked for by. A mismatch stops the read.
 
 A reader refuses a registry with no `yanks.toml`, since it can't tell which versions were withdrawn, so `gp registry init` writes an empty one (signed by the signing key when the registry is signed, with the same seven-day expiry a reindex gives it). A publish onto an older registry that has none writes one when its key may sign the list files, and otherwise says that `gp registry reindex TARGET --key SIGNING_KEY` writes it.
 
@@ -67,6 +67,46 @@ A game made with pictures of its own (a new game, from a template whose `source.
 
 Its `[page]` table may give `about` (what the game is, a line of up to 600 characters) and `made_by` (who made it, up to 120), which the page shows as text.
 
+## Submitting to a registry you can't write to
+
+`gp registry submit DIR --name NS/NAME --version V --title T [--kind game] [--for GAME]` offers a game or theme to a registry in a GitHub repo, `lex00/gp-registry` unless `--to OWNER/REPO` names another, as a pull request (issue #9). The owner still decides: nothing reaches the registry until they merge.
+
+| Step | What happens |
+|---|---|
+| Stage | DIR is copied to `$GP_HOME/work/registry-submit/NS-NAME-V/stage`, leaving out every file and folder whose name starts with `.` (named in the output), since publish takes every file it is given |
+| Clone | The registry is cloned fresh beside it (`registry/`), on a branch `submit/NS-NAME-V`, with no `origin`, so the registry commands below commit and never pull or push |
+| Grant | A namespace registry.toml doesn't list is granted in the branch (`gp registry grant`) when the registry is unsigned; the pull request says so, and merging it grants the namespace. A signed registry's root key is the owner's, so the submission stops and asks the person to have the owner grant it |
+| Publish | `gp registry publish` into the clone, the same code with every check it runs: each file compared with each ROM the package names, a game with its own pictures compared with every ROM in `$GP_ROM_DIR` and every lifted folder, the namespace key for a signed registry (`--key`), and each check another change adds to publish. Its verdict on what the page will offer goes in the pull request |
+| List | `gp registry reindex --keep NAME@V`, so the branch holds the package's lines in `catalog.toml` and `by-game/`. A signed registry's lists are signed by the owner's key, so then it isn't listed and the pull request says the owner reindexes after merging |
+| Fork | The person's fork, `--fork OWNER/REPO` or LOGIN/REPO by their GitHub login (`gh api user`), made with `gh repo fork --default-branch-only` when it isn't there |
+| Push and open | The branch is pushed to the fork (replacing an earlier push of the same submission) and `gh pr create` opens the pull request on the registry, titled `Submit NAME@V`, its body the package, the checks it passed, the grant and the commits. A pull request already open for the branch is kept and named |
+
+When a check fails, the submission stops at that step and prints the check's own words, then that nothing was pushed to the fork and no pull request was opened, that the registry and the fork are as they were, and that the same version can be sent again once DIR is fixed, since it was never published. It exits 1 and names the clone it was checked in. `--dry-run` runs every step up to the fork in the clone, commits included, and sends nothing. It needs `gh` logged in to GitHub; `$GP_GH` names another program in its place, which the tests use with two bare repos on disk standing in for the registry and the fork. From MCP it is an ask-first tool (`registry submit`, a yes unless `--dry-run`).
+
+## Publishing an arcade game
+
+The owner's rule for an arcade game (issue #3): it is published only when every clip of its corpus scores exact on state and every screen frame each clip compares is the same on picture. The two are apart: a clip "exact" in a score record is exact on the game's state alone, and its picture is its `screen` counts, the frames whose sprites and background both match the original's. `gp registry publish` takes a game package (`--kind game`) for an arcade board (a `[[rom.entry]]` with `platform = "arcade"`, a template whose `[source]` platform is `arcade`, or a `play/page.json` whose player is `arcade` or whose `rom.kind` is `zip`) only when its `evidence/` holds the score record `gp corpus score --write` keeps for its model and corpus as they are, `evidence/MODEL/CORPUS.json` ([fidelity](fidelity.md)), and that record says:
+
+- every clip exact on state, none that couldn't be scored, and as many clips as the corpus has now;
+- every clip the same on picture: of its compared screen frames, as many the same as were compared, and more than none compared (a clip with no `screen` counts fails);
+- the package's own `mapping.toml` and `fidelity.toml` (their hashes), its scored romset (`role = "scored"`) as the ROM, and for a game with hooks the module it ships.
+
+It doesn't score anything itself. The record sits in the game's folder and is committed with it, so the pass is the one for the package's commit and goes into the registry with the package. Anything else stops the publish (a dry run too) before a file is written, saying what is missing and how to get there:
+
+```text
+lex00/tapper is an arcade game, and an arcade game is published only when every clip of its corpus scores exact on state and every screen frame is the same on picture, but it holds no score record for its model and corpus as they are (evidence/b3:.../b3:....json isn't there). Score it in the game's folder with `gp corpus score GAME_DIR --run publish --write GAME_DIR` (for a game with hooks, add `--module PLAY_DIR/module.wasm`, the module the package ships, which build-page.sh or `gp game build` makes) until every clip is exact on state and every screen frame is the same on picture. That writes the record into GAME_DIR/evidence/; commit it with the game, and publish the folder again. Nothing was published
+```
+
+A record for another model or corpus (one changed after the score) is said so, and a record with clips not exact on state names up to five of them. A refusal says the state and the picture apart, and names up to five clips that differ on picture. Tapper's record on games main (2026-11-15) would be refused so, its model having no pictures yet:
+
+```text
+... but its score record evidence/.../....json has 54 of 54 clips exact on state; picture: 0 of 336 screen frames the same, 54 of 54 clips differ on picture (differ on picture: ..., and more). ...
+```
+
+A publish it takes adds a line such as `lex00/tapper is an arcade game: all 54 clips of its corpus tapper 0.2.0 score exact on state and all 336 of their screen frames are the same on picture, on its model as it is (score record evidence/.../....json, by gp ...)`. The rule reads each clip's `screen` counts, so a record from before 0.3.0 (no `results.picture`) is judged the same way. For a game with hooks (`[hooks]` in package.toml) the record must name the hooks module it was scored through ([record format](formats/scoring-corpus.md#score-records) 0.2.0 on), and that must be the module the package ships, `play/module.wasm`: score with `--module PLAY_DIR/module.wasm`. A record from before records named the module is refused for such a game and taken for a game without hooks. An NES game, a theme and a game with its own pictures are published as before.
+
+The package also names the MAME romsets it needs: `build-page.sh` writes them into `play/page.json` as `rom.sets`, each set's MAME name, title, identity and the files its zip must hold by name, size and SHA-1, from `gp roms sets` (MAME's own list, compiled into gp-arcade; a game's `roms.toml` gives each set's name as `system` and its identity as `sha256`). [web.md](web.md#what-the-page-reads-from-the-games-package) says what the page does with them.
+
 ## Tests
 
 | Test | What |
@@ -74,4 +114,8 @@ Its `[page]` table may give `about` (what the game is, a line of up to 600 chara
 | `gp_package::tests` | A manifest round trip and its id; the same files in another order give the same id; bad paths and texts refused; a blob checked by size and hash |
 | `gp_package::store::tests` | A package through a folder store and back; two paths with the same bytes as one blob; a key written once; a blob or manifest changed on disk refused |
 | `gp_package::index::tests` | The themes index round trip; a bad index refused; keys from a newer gp passed over |
-| `gp_package::registry::tests` | A package published, listed and read back; a wrong root, an edited file, a stranger's signature, a changed blob or manifest and an expired list refused; a version published once; attestations written once; a registry with no keys read with no signatures and its hashes still checked |
+| `registry::command_tests::an_arcade_game_is_published_only_when_every_clip_scores_exact` (gp-cli) | A made-up arcade package refused with no score record, with a record of a clip not exact (naming it) and with a record scored with another mapping, each with nothing written; refused with every clip exact on state but a screen frame different (saying "1 of 1 clips exact on state; picture: 39 of 40 screen frames the same" and naming the clip), and with no screen frames compared; published once its record has every clip exact on state and every screen frame the same on the package as it is; with hooks, a record from before records named the module and one naming another module than play/module.wasm refused and one naming it taken; refused again after a clip's presses change |
+| `gp_package::registry::tests` | A package published, listed and read back; a wrong root, an edited file, a stranger's signature, a changed blob or manifest and an expired list refused; a version published once; attestations written once; a registry with no keys read with no signatures and its hashes still checked; a by-game line's recheck ([list files](formats/registry-lists.md#tests)) |
+| `registry_submit::tests::a_submission_forks_pushes_and_opens_a_pull_request` (gp-cli) | A made-up theme submitted to a bare repo standing in for the registry, through a stand-in gh: a dry run forks and opens nothing; the real run makes the fork, pushes one branch with the grant, the publish and the listing, opens the pull request with the head `friend:submit/...`, leaves `.git` out of the package, and leaves the registry's own branch as it was |
+| `registry_submit::tests::a_failed_check_stops_before_anything_leaves` (gp-cli) | A package publish refuses (it says it has its own pictures and has a `roms.toml`) stops at the publish checks with publish's words and the plain account, and gh is never asked to fork or open anything |
+| `registry_submit::tests::a_stage_leaves_out_hidden_files` (gp-cli) | `.git`, `.gitignore` and a hidden folder inside are left out of the stage and named |

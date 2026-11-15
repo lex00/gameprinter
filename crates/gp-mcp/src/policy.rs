@@ -234,6 +234,8 @@ const COUNTS: &[&str] = &["agents"];
 const PERSON_DECIDES: &str = "only the person decides a proposed picture, with ACCEPT, REJECT or PUT THE OLD ONE BACK on their page. Propose with theme picture propose, wait with next (wait_s) until waits_for_yes shows it answered, and read their answer with theme picture list.";
 /// Only the person decides a sound change the agent proposes for their copy.
 const PERSON_DECIDES_SOUND: &str = "only the person decides a proposed sound change, with ACCEPT, REJECT or PUT THE OLD ONE BACK on their page. Propose with sound_edit (or theme sound propose), wait with next (wait_s) until waits_for_yes shows it answered, and read their answer with theme sound list.";
+/// Only the person decides a sprite edit the agent proposes for their copy.
+const PERSON_DECIDES_SPRITE: &str = crate::sprite_proposal::PERSON_DECIDES;
 const SERVE: &str = "it serves a page until stopped. The person starts `gp serve` themselves and opens http://127.0.0.1:7710/; for a local preview use build_publish.";
 
 /// Every gp command, with its road and rule. Sorted by path.
@@ -250,6 +252,22 @@ pub const TABLE: &[Row] = &[
         ),
     ),
     r("assets pack", J, Read),
+    r(
+        "assets proposal accept",
+        J,
+        Rule::Refuse(PERSON_DECIDES_SPRITE),
+    ),
+    r("assets proposal list", J, Read),
+    r(
+        "assets proposal reject",
+        J,
+        Rule::Refuse(PERSON_DECIDES_SPRITE),
+    ),
+    r(
+        "assets proposal undo",
+        J,
+        Rule::Refuse(PERSON_DECIDES_SPRITE),
+    ),
     r("assets stub", J, Write),
     r("corpus bump", J, Write),
     r("corpus diff", J, Read),
@@ -294,11 +312,16 @@ pub const TABLE: &[Row] = &[
     r("registry publish", J, Rule::Ask(Ask::Publish, DRY_RUN)),
     r("registry reindex", J, Rule::Ask(Ask::Publish, DRY_RUN)),
     r("registry serve", J, Rule::Refuse(SERVE)),
+    // Pushes to the person's fork on GitHub and opens a pull request on
+    // the registry's repo: others see it. --dry-run makes the commits in a
+    // clone under the work area and sends nothing.
+    r("registry submit", J, Rule::Ask(Ask::Publish, DRY_RUN)),
     r("registry yank", J, Rule::Ask(Ask::Publish, DRY_RUN)),
     r("roms add", J, Write),
     r("roms clean", J, Write),
     r("roms diff", J, Read),
     r("roms scan", J, Read),
+    r("roms sets", J, Read),
     r("serve", J, Rule::Refuse(SERVE)),
     r("template build", J, Write),
     r("template check", J, Read),
@@ -829,6 +852,7 @@ mod tests {
         );
         for p in [
             "registry publish",
+            "registry submit",
             "self publish",
             "tool gate",
             "game attest",

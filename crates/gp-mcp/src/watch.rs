@@ -248,7 +248,8 @@ pub struct WatchArgs {
     /// Addresses whose writes to report: `$F0`, `0x6F0`.
     #[serde(default)]
     pub addrs: Vec<String>,
-    /// Instructions to hook: `01:8000`, `C27D`, `sub_C1FB`.
+    /// Instructions to hook: `01:8000`, `C27D`, `sub_C1FB`; on an arcade
+    /// romset a main-CPU address, `0158`.
     #[serde(default)]
     pub at: Vec<String>,
 }

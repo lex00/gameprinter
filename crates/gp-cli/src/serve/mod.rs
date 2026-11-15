@@ -63,6 +63,7 @@ mod resolve;
 pub(crate) mod scenarios;
 mod select;
 mod sounds;
+mod sprites;
 pub(crate) mod tell;
 mod tiles;
 mod variants;
@@ -101,6 +102,7 @@ const MODULES: &[fn() -> Vec<Route>] = &[
     asks::routes,
     pictures::routes,
     sounds::routes,
+    sprites::routes,
     jobs::routes,
     journeys::routes,
 ];

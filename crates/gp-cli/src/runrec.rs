@@ -44,9 +44,12 @@ pub fn start(name: &str) {
         version: env!("CARGO_PKG_VERSION").into(),
     };
     let run_group = std::env::var("GP_RUN_GROUP").ok().filter(|g| !g.is_empty());
-    let rec = RunRecorder::start(name, args, tool)
+    let mut rec = RunRecorder::start(name, args, tool)
         .with_spans(spans)
         .with_run_group(run_group);
+    if let Ok(paths) = gp_evidence::Paths::from_env() {
+        rec = rec.with_git_cache(paths.runs_dir().join("git-state.json"));
+    }
     *REC.lock().unwrap_or_else(|e| e.into_inner()) = Some(rec);
 }
 
@@ -54,6 +57,16 @@ fn with(f: impl FnOnce(&mut RunRecorder)) {
     if let Some(r) = REC.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
         f(r);
     }
+}
+
+/// This run's git state, as its manifest records it (from the run
+/// record's cached git state, crates/gp-metrics/src/gitstate.rs), or None
+/// when no run was started.
+pub fn git() -> Option<Option<gp_metrics::run::GitInfo>> {
+    REC.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_mut()
+        .map(RunRecorder::git)
 }
 
 /// Records one metric in this run.

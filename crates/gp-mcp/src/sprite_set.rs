@@ -444,14 +444,15 @@ pub fn holds(
     Ok(bad)
 }
 
-/// One 8x8 tile of a sheet as 64 digits, row by row.
+/// One 8x8 tile of a sheet as 64 hex digits, row by row
+/// (crate::sprite_ops::digit).
 pub fn tile_digits(sheet: &[u8], sheet_w: u32, per_row: u32, t: u32) -> String {
     let (tx, ty) = ((t % per_row) * 8, (t / per_row) * 8);
     let mut s = String::with_capacity(64);
     for y in 0..8 {
         for x in 0..8 {
-            s.push(char::from(
-                b'0' + sheet[((ty + y) * sheet_w + tx + x) as usize].min(9),
+            s.push(crate::sprite_ops::digit(
+                sheet[((ty + y) * sheet_w + tx + x) as usize],
             ));
         }
     }
@@ -466,13 +467,14 @@ pub fn put_tile(
     t: u32,
     digits: &str,
 ) -> Result<(), String> {
-    if digits.len() != 64 || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(format!("tile {t}: not 64 color digits"));
-    }
+    let values: Option<Vec<u8>> = digits.bytes().map(crate::sprite_ops::value).collect();
+    let values = values
+        .filter(|v| v.len() == 64)
+        .ok_or(format!("tile {t}: not 64 color digits"))?;
     let (tx, ty) = ((t % per_row) * 8, (t / per_row) * 8);
-    for (i, b) in digits.bytes().enumerate() {
+    for (i, v) in values.into_iter().enumerate() {
         let (x, y) = (i as u32 % 8, i as u32 / 8);
-        sheet[((ty + y) * sheet_w + tx + x) as usize] = b - b'0';
+        sheet[((ty + y) * sheet_w + tx + x) as usize] = v;
     }
     Ok(())
 }

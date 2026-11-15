@@ -109,6 +109,12 @@ pub struct RunRecorder {
     inputs: Vec<Artifact>,
     outputs: Vec<Artifact>,
     metrics: Vec<Metric>,
+    /// [`git_info`], asked on a thread of its own as the run starts
+    /// ([`RunRecorder::with_git_cache`]), so the command doesn't wait on
+    /// git; without one, asked as the run ends.
+    git: Option<std::thread::JoinHandle<Option<GitInfo>>>,
+    /// The answer once [`RunRecorder::git`] has waited for it.
+    git_known: Option<Option<GitInfo>>,
 }
 
 impl RunRecorder {
@@ -125,7 +131,35 @@ impl RunRecorder {
             inputs: Vec::new(),
             outputs: Vec::new(),
             metrics: Vec::new(),
+            git: None,
+            git_known: None,
         }
+    }
+
+    /// The run's git state, the one its manifest records: the answer of
+    /// the thread [`RunRecorder::with_git_cache`] started (so a command
+    /// that shows it asks git no more than the record does), or
+    /// [`git_info`] without one.
+    pub fn git(&mut self) -> Option<GitInfo> {
+        if self.git_known.is_none() {
+            self.git_known = Some(match self.git.take() {
+                Some(asked) => asked.join().ok().flatten(),
+                None => git_info(),
+            });
+        }
+        self.git_known.clone().flatten()
+    }
+
+    /// Asks git for the run's [`GitInfo`] now, on a thread of its own,
+    /// answered from `cache` (`$GP_HOME/runs/git-state.json`) when the
+    /// work tree is as git last saw it ([`crate::gitstate`]).
+    pub fn with_git_cache(mut self, cache: PathBuf) -> Self {
+        let dir = std::env::current_dir();
+        self.git = std::thread::Builder::new()
+            .name("gp-run-git".into())
+            .spawn(move || crate::gitstate::git_info_cached(&dir.ok()?, &cache))
+            .ok();
+        self
     }
 
     pub fn with_run_group(mut self, group: Option<String>) -> Self {
@@ -183,7 +217,11 @@ impl RunRecorder {
             finished_at: rfc3339(finished_at),
             duration_ms: elapsed.as_secs_f64() * 1000.0,
             status,
-            git: git_info(),
+            git: match (self.git_known, self.git) {
+                (Some(known), _) => known,
+                (None, Some(asked)) => asked.join().ok().flatten(),
+                (None, None) => git_info(),
+            },
             host: Host::current(),
             tool: self.tool,
             tools: self.tools,
@@ -227,27 +265,89 @@ impl RunManifest {
     }
 }
 
-/// The current directory's git state, if it's in a work tree.
+/// The current directory's git state, if it's in a work tree: what
+/// `git status --porcelain=v2 --branch --untracked-files=no` says, one git
+/// process (two cost about 40 ms on macOS, where `/usr/bin/git` is a shim
+/// that runs xcrun first, and every command paid it). It takes no optional
+/// locks, so it never holds the index while another git writes it.
 pub fn git_info() -> Option<GitInfo> {
-    let run = |args: &[&str]| -> Option<String> {
-        let out = Command::new("git").args(args).output().ok()?;
-        out.status
-            .success()
-            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
-    };
-    // Two git processes, not three: each spawn costs about 20 ms, and every
-    // command pays this.
-    let refs = run(&["rev-parse", "HEAD", "--abbrev-ref", "HEAD"])?;
-    let mut lines = refs.lines();
-    let commit = lines.next()?.to_owned();
-    let branch = lines.next().filter(|b| *b != "HEAD").map(str::to_owned);
-    let dirty =
-        run(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty());
+    git_info_in(None)
+}
+
+/// [`git_info`] of `dir`, or of the current directory.
+pub(crate) fn git_info_in(dir: Option<&Path>) -> Option<GitInfo> {
+    let mut git = Command::new(git_program());
+    if let Some(dir) = dir {
+        git.current_dir(dir);
+    }
+    let out = git
+        .args([
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v2",
+            "--branch",
+            "--untracked-files=no",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_status(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// [`GitInfo`] from `git status --porcelain=v2 --branch`'s text: the
+/// commit from `branch.oid` (none before the first commit), the branch
+/// from `branch.head` (none when detached), and dirty when any tracked
+/// file's line follows.
+fn parse_status(text: &str) -> Option<GitInfo> {
+    let (mut commit, mut branch, mut dirty) = (None, None, false);
+    for line in text.lines() {
+        if let Some(oid) = line.strip_prefix("# branch.oid ") {
+            commit = Some(oid.trim().to_owned()).filter(|c| c != "(initial)");
+        } else if let Some(head) = line.strip_prefix("# branch.head ") {
+            branch = Some(head.trim().to_owned()).filter(|b| b != "(detached)");
+        } else if !line.starts_with('#') && !line.is_empty() {
+            dirty = true;
+        }
+    }
     Some(GitInfo {
-        commit,
+        commit: commit?,
         dirty,
         branch,
     })
+}
+
+/// The git to run: the first `git` on PATH, except that on macOS the
+/// `/usr/bin/git` shim is passed over for the git it would run (the
+/// selected developer folder's, by `DEVELOPER_DIR` or `xcode-select`'s
+/// link), which saves the shim's xcrun lookup, about 10 ms a call.
+fn git_program() -> PathBuf {
+    let on_path = std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|d| d.join("git"))
+            .find(|g| g.is_file())
+    });
+    match on_path {
+        Some(g) if cfg!(target_os = "macos") && g == Path::new("/usr/bin/git") => {
+            developer_git().unwrap_or(g)
+        }
+        Some(g) => g,
+        None => PathBuf::from("git"),
+    }
+}
+
+/// The git inside macOS's selected developer folder, if there is one.
+fn developer_git() -> Option<PathBuf> {
+    let dir = std::env::var_os("DEVELOPER_DIR")
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::fs::read_link("/var/db/xcode_select_link").ok())
+        .unwrap_or_else(|| PathBuf::from("/Library/Developer/CommandLineTools"));
+    let git = dir.join("usr/bin/git");
+    git.is_file().then_some(git)
 }
 
 #[cfg(test)]
@@ -284,6 +384,94 @@ mod tests {
         assert!(a < b, "{a} should sort before {b}");
         let rfc = time::format_description::well_known::Rfc3339;
         assert!(OffsetDateTime::parse(&a, &rfc).is_ok());
+    }
+
+    /// A command that shows the run's git state (gp env) gets the answer
+    /// the record's own thread gave, and the manifest records the same.
+    #[test]
+    fn the_run_git_state_is_asked_once_and_recorded_as_shown() {
+        let info = GitInfo {
+            commit: "made-up".into(),
+            dirty: true,
+            branch: Some("work".into()),
+        };
+        let mut rec = RunRecorder::start("env", vec![], tool());
+        let given = info.clone();
+        rec.git = Some(std::thread::spawn(move || Some(given)));
+        assert_eq!(rec.git(), Some(info.clone()));
+        assert_eq!(rec.git(), Some(info.clone()), "asked again, the same");
+        assert_eq!(rec.finish(RunStatus::Ok).git, Some(info));
+    }
+
+    #[test]
+    fn git_status_names_the_commit_the_branch_and_any_change() {
+        let oid = "f699af1d38edf802c7edec44fcdf04717db5b116";
+        let clean = format!("# branch.oid {oid}\n# branch.head main\n");
+        assert_eq!(
+            parse_status(&clean),
+            Some(GitInfo {
+                commit: oid.into(),
+                dirty: false,
+                branch: Some("main".into()),
+            })
+        );
+        let changed = format!(
+            "# branch.oid {oid}\n# branch.head (detached)\n1 .M N... 100644 100644 100644 {oid} {oid} src/lib.rs\n"
+        );
+        assert_eq!(
+            parse_status(&changed),
+            Some(GitInfo {
+                commit: oid.into(),
+                dirty: true,
+                branch: None,
+            })
+        );
+        assert_eq!(
+            parse_status("# branch.oid (initial)\n# branch.head main\n"),
+            None
+        );
+        assert_eq!(parse_status(""), None);
+    }
+
+    /// In a work tree of its own, the state git itself reports: the
+    /// commit, the branch, and dirty only once a tracked file changes.
+    #[test]
+    fn git_info_reads_a_work_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let ok = Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .current_dir(tmp.path())
+                .output()
+                .unwrap();
+            assert!(ok.status.success(), "{args:?}: {ok:?}");
+            String::from_utf8(ok.stdout).unwrap().trim().to_owned()
+        };
+        git(&["init", "-q", "-b", "trunk"]);
+        std::fs::write(tmp.path().join("a"), "one").unwrap();
+        git(&["add", "a"]);
+        git(&["commit", "-q", "-m", "one"]);
+        std::fs::write(tmp.path().join("untracked"), "x").unwrap();
+        let head = git(&["rev-parse", "HEAD"]);
+        let at = |dir: &Path| git_info_in(Some(dir));
+        assert_eq!(
+            at(tmp.path()),
+            Some(GitInfo {
+                commit: head.clone(),
+                dirty: false,
+                branch: Some("trunk".into()),
+            })
+        );
+        std::fs::write(tmp.path().join("a"), "two").unwrap();
+        assert!(at(tmp.path()).unwrap().dirty);
     }
 
     #[test]

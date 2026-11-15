@@ -155,6 +155,19 @@ pub fn body(
     entries: &std::collections::BTreeSet<u32>,
 ) -> std::collections::BTreeSet<u32> {
     let mut out = std::collections::BTreeSet::new();
+    // Another CPU's code: the map's instructions from the entry to the
+    // next routine's.
+    if let Some(m) = &run.code_map {
+        let end = m
+            .entries
+            .range(l.prg.saturating_add(1)..)
+            .next()
+            .copied()
+            .unwrap_or(u32::MAX);
+        out.extend(m.starts.range(l.prg..end));
+        out.insert(l.prg);
+        return out;
+    }
     let prg = &run.prg;
     if prg.is_empty() {
         out.insert(l.prg);
@@ -199,7 +212,7 @@ pub fn body(
                         // A call into the fixed bank from a switched one.
                         let t = u16::from_le_bytes([byte(1), byte(2)]);
                         (t >= 0xC000 && prg.len() >= 0x4000)
-                            .then(|| (prg.len() - 0x10000 + usize::from(t)) as u32)
+                            .then(|| (prg.len() + usize::from(t) - 0x10000) as u32)
                     });
                     if callee.is_some_and(|c| pulls_return(prg, c)) {
                         break;
@@ -253,6 +266,28 @@ mod tests {
         // A jump to another routine's entry is a tail call, not this body.
         let b = body(&r, &l, &[10u32].into_iter().collect());
         assert!(!b.contains(&10));
+    }
+
+    #[test]
+    fn a_body_on_another_cpu_comes_from_its_code_map() {
+        // Bytes that would read as a 6502 JSR into the fixed bank: the map
+        // is what's read, not the bytes.
+        let mut r = run_with(&[0x20, 0x00, 0xC0]);
+        r.prg.truncate(0x4000 + 0x2000);
+        r.code_map = Some(crate::CodeMap {
+            starts: [0, 1, 3, 4, 6, 8].into_iter().collect(),
+            entries: [0, 6].into_iter().collect(),
+        });
+        let l = RomLabel {
+            name: "R".into(),
+            prg: 0,
+            addr: 0,
+            size: 1,
+        };
+        let b = body(&r, &l, &Default::default());
+        assert_eq!(b.into_iter().collect::<Vec<_>>(), vec![0, 1, 3, 4]);
+        let l = RomLabel { prg: 6, ..l };
+        assert_eq!(body(&r, &l, &Default::default()).len(), 2);
     }
 
     #[test]

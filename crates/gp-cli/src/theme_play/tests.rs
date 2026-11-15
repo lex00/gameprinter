@@ -135,13 +135,23 @@ fn the_kept_ports_are_never_taken() {
 fn a_pair_is_both_pictures_side_by_side() {
     let mut a = Rgba::new(3, 2);
     a.set(0, 0, [255, 0, 0, 255]);
-    let mut b = Rgba::new(2, 4);
-    b.set(1, 3, [0, 255, 0, 255]);
+    let mut b = Rgba::new(2, 3);
+    b.set(1, 2, [0, 255, 0, 255]);
     let p = pair(&a, &b);
-    assert_eq!((p.width, p.height), (3 + 16 + 2, 4));
+    assert_eq!((p.width, p.height), (3 + 16 + 2, 3));
     assert_eq!(p.get(0, 0), [255, 0, 0, 255]);
-    assert_eq!(p.get(3 + 16 + 1, 3), [0, 255, 0, 255]);
+    assert_eq!(p.get(3 + 16 + 1, 2), [0, 255, 0, 255]);
     assert_eq!(p.get(5, 0), [24, 24, 24, 255]);
+    // A large-art look beside the console's pictures: the small one is
+    // made a whole number of times bigger, each pixel a square.
+    let mut small = Rgba::new(2, 2);
+    small.set(1, 1, [0, 0, 255, 255]);
+    let big = Rgba::new(10, 7);
+    let p = pair(&big, &small);
+    assert_eq!((p.width, p.height), (10 + 16 + 6, 7));
+    assert_eq!(p.get(10 + 16 + 3, 3), [0, 0, 255, 255]);
+    assert_eq!(p.get(10 + 16 + 5, 5), [0, 0, 255, 255]);
+    assert_eq!(p.get(10 + 16 + 2, 2), [0, 0, 0, 0]);
 }
 
 /// A made-up theme folder: package.toml, theme/ and git's files.
@@ -559,4 +569,39 @@ fn a_theme_is_served_under_a_name_a_registry_takes_and_drawn_by_its_look_id() {
     let p2 = theme_pkg(&theme_folder(d2.path(), "me/my-theme", "0.2.0")).unwrap();
     assert_eq!(p2.renamed, None);
     assert_eq!(Side::Folder(p2).look_id(), "my-theme");
+}
+
+#[test]
+fn the_original_side_is_the_game_in_its_own_pictures_with_no_theme_chosen() {
+    let d = tempfile::tempdir().unwrap();
+    let src = source(&d.path().join("src"));
+    let side = against_side("original").unwrap();
+    assert!(matches!(side, Side::Original));
+    assert_eq!(side.tag(), "original");
+    assert_eq!(side.content_param(), "");
+    // Its registry holds the game and the themes offered, and nothing of
+    // its own.
+    let out = d.path().join("scratch");
+    let b = build_registry(&src, &out, "maker/game", &side, None).unwrap();
+    assert_eq!(b.themes[0], "the game's own look");
+    let mut l = listed(&out);
+    l.sort();
+    assert!(l.iter().all(|(p, _)| p != "original"), "{l:?}");
+    // The page chooses no theme.
+    let page = d.path().join("page");
+    fs::create_dir_all(&page).unwrap();
+    fs::write(
+        page.join("page.json"),
+        r#"{"game":"maker/game","source":{"name":"r","url":"https://example.invalid/reg"},"content":"maker/default"}"#,
+    )
+    .unwrap();
+    let ov = d.path().join("overlay");
+    overlay(&ov, &page, &side, &BTreeMap::new()).unwrap();
+    let pj: Value =
+        serde_json::from_str(&fs::read_to_string(ov.join("page.json")).unwrap()).unwrap();
+    assert!(pj.get("content").is_none(), "{pj}");
+    // A folder's side still names its theme in the link.
+    let root = theme_folder(d.path(), "me/my-theme", "0.2.0");
+    let mine = Side::Folder(theme_pkg(&root).unwrap());
+    assert_eq!(mine.content_param(), "&c=me/my-theme");
 }

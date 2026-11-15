@@ -145,6 +145,74 @@ pub(crate) struct Yes {
     /// plays the sound now and the new one, with ACCEPT and REJECT.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sound: Option<Value>,
+    /// A sprite edit the agent proposes with `assets_edit` for the
+    /// person's copy (gp_mcp::sprite_proposal), with `what` "sprite": the
+    /// proposal, with its place in the queue when open. The page's card
+    /// shows the sprite before and after, with ACCEPT and REJECT.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sprite: Option<Value>,
+}
+
+/// The status line's entry for a sprite edit the agent proposes
+/// (gp_mcp::sprite_proposal), and the person's step when it is the card
+/// to answer, or the agent's when an answer waits to be read.
+pub(crate) fn sprite_wait(p: &Value) -> (Yes, Option<Step>) {
+    let s = |k: &str| p[k].as_str().map(str::to_owned);
+    let what = s("subject")
+        .filter(|t| !t.is_empty())
+        .map_or_else(|| "a sprite".into(), |t| format!("the {t}"));
+    let copy = s("copy").unwrap_or_else(|| "your game".into());
+    let state = s("state").unwrap_or_default();
+    let says = match state.as_str() {
+        "open" => format!(
+            "A change to {what} in {copy}{}",
+            s("why")
+                .map(|w| w.trim().to_owned())
+                .filter(|w| !w.is_empty())
+                .map_or_else(
+                    || ".".into(),
+                    |w| {
+                        let end = if w.ends_with(['.', '!', '?']) {
+                            ""
+                        } else {
+                            "."
+                        };
+                        format!(": {w}{end}")
+                    }
+                )
+        ),
+        "accepted" => format!("You accepted the change to {what} in {copy}."),
+        "rejected" => format!("You rejected the change to {what} in {copy}."),
+        _ => format!("You put {what} in {copy} back as it was."),
+    };
+    let step = if state == "open" {
+        (p["place"] == json!(1)).then(|| {
+            step(
+                Who::Person,
+                format!(
+                    "Your agent proposes a change to a sprite: {says} Look at it before and after and press ACCEPT or REJECT on the card."
+                ),
+            )
+        })
+    } else {
+        Some(step(
+            Who::Agent,
+            format!("{says} Your agent reads your answer with assets_history."),
+        ))
+    };
+    (
+        Yes {
+            what: "sprite".into(),
+            says,
+            id: s("id"),
+            state: Some(state),
+            game: None,
+            picture: None,
+            sound: None,
+            sprite: Some(p.clone()),
+        },
+        step,
+    )
 }
 
 /// The status line's entry for a sound change the agent proposes
@@ -212,6 +280,7 @@ pub(crate) fn sound_wait(p: &Value) -> (Yes, Option<Step>) {
             game: None,
             picture: None,
             sound: Some(p.clone()),
+            sprite: None,
         },
         step,
     )
@@ -400,6 +469,9 @@ pub(crate) struct Facts {
     /// The sound changes the agent proposes for the person's copies, the
     /// same way (gp_mcp::sound_proposal::for_next).
     pub sounds: Vec<Value>,
+    /// The sprite edits the agent proposes for the person's copies, the
+    /// same way (gp_mcp::sprite_proposal::for_next).
+    pub sprites: Vec<Value>,
     /// The agent's calls running now (gp_mcp::activity): what, in words.
     pub agent_runs: Vec<(String, u64)>,
     /// The same calls started by a button on the page (serve/jobs.rs),
@@ -758,6 +830,7 @@ pub(crate) fn answer(f: &Facts) -> Answer {
             game: s("game"),
             picture: None,
             sound: None,
+            sprite: None,
         });
         steps.push(if a["state"] == json!("open") {
             step(
@@ -793,6 +866,7 @@ pub(crate) fn answer(f: &Facts) -> Answer {
             game: s("game"),
             picture: Some(p.clone()),
             sound: None,
+            sprite: None,
         });
         if state == "open" {
             if p["place"] == json!(1) {
@@ -820,6 +894,12 @@ pub(crate) fn answer(f: &Facts) -> Answer {
         waits.push(y);
         steps.extend(st);
     }
+    // 2d. A sprite edit it proposes for the person's copy, the same way.
+    for p in &f.sprites {
+        let (y, st) = sprite_wait(p);
+        waits.push(y);
+        steps.extend(st);
+    }
     if n == 11 {
         waits.push(Yes {
             what: "publish".into(),
@@ -829,6 +909,7 @@ pub(crate) fn answer(f: &Facts) -> Answer {
             game: None,
             picture: None,
             sound: None,
+            sprite: None,
         });
         steps.push(step(
             Who::Person,
@@ -1362,14 +1443,7 @@ fn age_s(p: &Path) -> u64 {
 
 /// Whether a process is running, for the background's record.
 fn alive(pid: u64) -> bool {
-    if pid == u64::from(std::process::id()) {
-        return true;
-    }
-    std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+    gp_mcp::proc::alive(pid)
 }
 
 /// The last turn of a session's talk: who and the words. A tell about a
@@ -1511,6 +1585,7 @@ pub(crate) fn gather(
         asks: gp_mcp::asks::pending(home),
         pictures: crate::theme_picture::for_next(home),
         sounds: gp_mcp::sound_proposal::for_next(home),
+        sprites: gp_mcp::sprite_proposal::for_next(home),
         agent_runs: runs
             .iter()
             .filter(|r| !by_page(r))

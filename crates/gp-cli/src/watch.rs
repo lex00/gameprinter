@@ -20,7 +20,9 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use gp_events::edges::EdgeKey;
 use gp_events::names::Namer;
-use gp_events::watch::{ExploreOpts, SCHEMA, StartClip, Stop, WatchBody, WatchEvent};
+use gp_events::watch::{
+    ExploreOpts, HookRegs, Regs6502, SCHEMA, StartClip, Stop, WatchBody, WatchEvent,
+};
 use gp_events::{Bits, Collector, FrameEvents, Levels};
 use gp_evidence::Paths;
 use gp_explore::Progress;
@@ -59,9 +61,11 @@ pub enum WatchCmd {
     /// aimed at the stops left by default), writing into the session.
     Explore(WatchExploreArgs),
     /// Run the session's recipes again watching addresses (`--watch $F0`)
-    /// and hooking instructions (`--hook 01:8000`, `--hook sub_C1FB`),
-    /// writing each write and call as `watch` and `hook` events (at most
-    /// 200 for each in each recipe; the rest are counted).
+    /// and hooking instructions (`--hook 01:8000`, `--hook sub_C1FB`; on
+    /// an arcade romset a main-CPU address, `--hook 0158`), writing each
+    /// write and call as `watch` and `hook` events, a hook with its CPU's
+    /// registers (at most 200 for each in each recipe; the rest are
+    /// counted).
     Rerun {
         name: String,
         #[arg(long = "watch", value_name = "ADDR")]
@@ -898,7 +902,7 @@ fn list(paths: &Paths) -> Result<Outcome> {
 
 impl Writer {
     /// Reopens a session to append to its events, taking its writer lock.
-    fn append(dir: &Path) -> Result<Writer> {
+    pub(crate) fn append(dir: &Path) -> Result<Writer> {
         if !dir.join("session.json").is_file() {
             bail!("no watch session at {}", dir.display());
         }
@@ -1159,11 +1163,10 @@ fn rerun(paths: &Paths, name: &str, watch: &[String], hooks: &[String]) -> Resul
     let mut all = sess.starts.clone();
     all.extend(sess.kept.iter().cloned());
     let Some(board) = &sess.board else {
-        if !hooks.is_empty() {
-            bail!(
-                "--hook writes the 6502's registers (A, X, Y, S, P) in its events; an arcade session's recipes run on the Z80, whose registers the event can't hold. Watch writes with --watch, or read a window's instructions and registers with `gp watch detail`"
-            );
-        }
+        let at: BTreeSet<u16> = hooks
+            .iter()
+            .map(|h| crate::watch_z80::parse_hook(h))
+            .collect::<Result<_>>()?;
         let mut w = Writer::append(&dir)?;
         w.emit(
             None,
@@ -1171,27 +1174,30 @@ fn rerun(paths: &Paths, name: &str, watch: &[String], hooks: &[String]) -> Resul
             None,
             WatchBody::Rerun {
                 watch: addrs.iter().map(|a| format!("{a:04X}")).collect(),
-                hooks: Vec::new(),
+                hooks: hooks.to_vec(),
                 recipes: all.len(),
             },
         )?;
-        let (watch_hits, written) =
-            crate::watch_z80::rerun_watch(&mut w, &sess.rom, &all, &addrs, RERUN_CAP)?;
+        let set = gp_arcade::Romset::from_zip(&sess.rom)?;
+        let r = crate::watch_z80::rerun(&mut w, &set, &all, &addrs, &at, RERUN_CAP)?;
         w.emit(
             None,
             None,
             None,
             WatchBody::RerunEnd {
-                watch_hits,
-                hook_hits: 0,
-                written,
+                watch_hits: r.watch_hits,
+                hook_hits: r.hook_hits,
+                written: r.written,
             },
         )?;
         return Ok(Outcome::ok(
-            json!({"name": name, "recipes": all.len(), "watch_hits": watch_hits, "hook_hits": 0, "written": written, "events": w.seq}),
+            json!({"name": name, "recipes": all.len(), "watch_hits": r.watch_hits, "hook_hits": r.hook_hits, "written": r.written, "events": w.seq}),
             format!(
-                "session {name}: {} recipes run again; {watch_hits} watched writes, {written} written as events",
-                all.len()
+                "session {name}: {} recipes run again; {} watched writes, {} hook calls, {} written as events",
+                all.len(),
+                r.watch_hits,
+                r.hook_hits,
+                r.written
             ),
         ));
     };
@@ -1248,11 +1254,13 @@ fn rerun(paths: &Paths, name: &str, watch: &[String], hooks: &[String]) -> Resul
                             Some(2),
                             WatchBody::Hook {
                                 at: namer.name(h.offset, h.cpu),
-                                a: h.a,
-                                x: h.x,
-                                y: h.y,
-                                s: h.s,
-                                p: h.p,
+                                regs: HookRegs::Mos6502(Regs6502 {
+                                    a: h.a,
+                                    x: h.x,
+                                    y: h.y,
+                                    s: h.s,
+                                    p: h.p,
+                                }),
                             },
                         )?;
                     }

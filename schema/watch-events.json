@@ -76,6 +76,106 @@
           ],
           "type": "object"
         },
+        "Regs6502": {
+          "description": "The 6502's registers.",
+          "properties": {
+            "a": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "p": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "s": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "x": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "y": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "a",
+            "x",
+            "y",
+            "s",
+            "p"
+          ],
+          "type": "object"
+        },
+        "RegsZ80": {
+          "description": "The Z80's main registers, as 16-bit pairs (`af` holds A in its high\nbyte and F in its low byte).",
+          "properties": {
+            "af": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "bc": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "de": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "hl": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "ix": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "iy": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sp": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "af",
+            "bc",
+            "de",
+            "hl",
+            "ix",
+            "iy",
+            "sp"
+          ],
+          "type": "object"
+        },
         "StartClip": {
           "description": "A start clip of the session: a recipe from power-on.",
           "properties": {
@@ -668,51 +768,45 @@
           "type": "object"
         },
         {
-          "description": "A hooked instruction about to run in a rerun, with its registers.",
+          "description": "A hooked instruction about to run in a rerun, with its CPU's\nregisters, tagged by the CPU (`cpu`).",
           "properties": {
             "data": {
-              "properties": {
-                "a": {
-                  "format": "uint8",
-                  "maximum": 255,
-                  "minimum": 0,
-                  "type": "integer"
+              "description": "A hooked instruction's registers, as they were before it ran, tagged by\nthe CPU that ran it: `\"cpu\": \"6502\"` with `a`, `x`, `y`, `s` and `p`,\nor `\"cpu\": \"z80\"` with the register pairs. A `hook` event of format 1\nhas no `cpu` and the 6502's fields, and reads as [`HookRegs::Mos6502`].",
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/Regs6502",
+                  "properties": {
+                    "cpu": {
+                      "const": "6502",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu"
+                  ],
+                  "type": "object"
                 },
+                {
+                  "$ref": "#/$defs/RegsZ80",
+                  "properties": {
+                    "cpu": {
+                      "const": "z80",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cpu"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "properties": {
                 "at": {
                   "type": "string"
-                },
-                "p": {
-                  "format": "uint8",
-                  "maximum": 255,
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "s": {
-                  "format": "uint8",
-                  "maximum": 255,
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "x": {
-                  "format": "uint8",
-                  "maximum": 255,
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "y": {
-                  "format": "uint8",
-                  "maximum": 255,
-                  "minimum": 0,
-                  "type": "integer"
                 }
               },
               "required": [
-                "at",
-                "a",
-                "x",
-                "y",
-                "s",
-                "p"
+                "at"
               ],
               "type": "object"
             },
@@ -898,6 +992,6 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "One object a line of a watch session's events.ndjson (event) and inputs.ndjson (input). docs/watch.md",
-  "title": "Game Printer watch events, format 1"
+  "description": "One object a line of a watch session's events.ndjson (event, format 2) and inputs.ndjson (input, format 1). docs/formats/watch-events.md",
+  "title": "Game Printer watch events, format 2"
 }

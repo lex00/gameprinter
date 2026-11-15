@@ -6,7 +6,7 @@
 //! the routine and bytes that decide them.
 //!
 //! `--model DIR` also writes the facts as a model (model.toml) a later
-//! stage starts from; `--grade` grades the harvest against the game's
+//! stage starts from, in the model format (crate::model_static_fit); `--grade` grades the harvest against the game's
 //! answer key (crate::static_grade). Deterministic: the same ROM and asset
 //! map give the same bytes.
 //!
@@ -44,7 +44,16 @@ pub struct StaticArgs {
     #[arg(long)]
     pub write: Option<PathBuf>,
     /// Write the facts as a model directory: model.toml with the
-    /// harvest's own names.
+    /// harvest's own names, in the model format `gp model propose` reads.
+    /// A fact the format has no place for (a RAM address, a port) is left
+    /// out and listed; a field the format needs that the code doesn't give
+    /// is a placeholder with evidence saying so. The directory's own
+    /// `[model]` header is kept. Beside it, mapping.toml in the state
+    /// mapping format: the addresses the harvest names for the model's
+    /// parts (an entity's x and y, a camera's, a counter's byte, a game
+    /// state's byte), and the controller's bytes, the frame counter and
+    /// the pointers as ignored bytes; a slot table's bytes are left out. A
+    /// mapping.toml static didn't write is kept.
     #[arg(long)]
     pub model: Option<PathBuf>,
     /// With --model: write the facts in the real model's names, by an
@@ -368,18 +377,115 @@ pub(crate) fn harvest_seeded(
     Ok((h, u))
 }
 
-/// The facts as a model.toml: each path set to its value, with the
-/// harvest's names, and the evidence of each.
-pub(crate) fn model_text(facts: &[(String, Value)], name: &str) -> Result<String> {
+/// The facts as a model.toml the model format takes
+/// (crate::model_static_fit): each path set to its value, in the harvest's
+/// names or the key's, put in the format's shapes under a header (`dir`'s
+/// own when its model.toml has one), and the facts the format has no
+/// place for, which are left out.
+pub(crate) fn model_text(
+    facts: &[(String, Value)],
+    name: &str,
+    console: crate::model_static_fit::Console,
+    dir: &Path,
+) -> Result<crate::model_static_fit::Fitted> {
     let mut doc = toml::Table::new();
-    let mut head = toml::Table::new();
-    head.insert("name".into(), Toml::String(name.into()));
-    head.insert("source".into(), Toml::String("gp model static".into()));
-    doc.insert("model".into(), Toml::Table(head));
     for (p, v) in facts {
         set_path(&mut doc, p, to_toml(v));
     }
-    Ok(toml::to_string(&doc)?)
+    let old = fs::read_to_string(dir.join(gp_model::MODEL_FILE)).ok();
+    crate::model_static_fit::fit(doc, name, console, old.as_deref())
+}
+
+/// `--model`'s mapping.toml beside the model (crate::model_static_map):
+/// written unless the directory holds a mapping.toml static didn't write,
+/// which is kept. Returns what it wrote, or None when it kept one.
+pub(crate) fn write_mapping(
+    dir: &Path,
+    facts: &[(String, Value)],
+    harvest: &Value,
+    model: &crate::model_static_fit::Fitted,
+    source: &str,
+    console: crate::model_static_fit::Console,
+) -> Result<Option<crate::model_static_map::Mapped>> {
+    let file = dir.join(gp_interp::mapping::MAPPING_FILE);
+    if let Ok(old) = fs::read_to_string(&file)
+        && !old.starts_with(crate::model_static_map::MARK)
+    {
+        return Ok(None);
+    }
+    let m = crate::model_static_map::mapping(
+        facts,
+        &harvest["machines"],
+        &model.text,
+        source,
+        console,
+    )?;
+    fs::write(&file, &m.text)?;
+    Ok(Some(m))
+}
+
+/// What `--model`'s mapping adds to the output: the fields it maps, the
+/// bytes it ignores and the address facts it left out, or that a mapping
+/// someone else wrote was kept.
+pub(crate) fn mapping_note(
+    dir: &Path,
+    m: Option<&crate::model_static_map::Mapped>,
+    out: &mut Value,
+) -> String {
+    let file = dir.join(gp_interp::mapping::MAPPING_FILE);
+    let Some(m) = m else {
+        out["mapping_kept"] = Value::Bool(true);
+        return format!(
+            "Mapping: {} kept: gp model static didn't write it\n",
+            file.display()
+        );
+    };
+    out["mapping_fields"] = serde_json::json!(m.fields);
+    out["mapping_ignored"] = serde_json::json!(m.ignored);
+    out["mapping_left_out"] = serde_json::to_value(&m.left_out).unwrap_or_default();
+    format!(
+        "Mapping: {}\n  {} fields{}\n  {} bytes in the ignore list; {} address facts left out\n",
+        file.display(),
+        m.fields.len(),
+        if m.fields.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", m.fields.join(", "))
+        },
+        m.ignored.len(),
+        m.left_out.len(),
+    )
+}
+
+/// What `--model` adds to the output: where the model went, the facts it
+/// left out and the placeholders it holds.
+pub(crate) fn model_note(
+    dir: &Path,
+    f: &crate::model_static_fit::Fitted,
+    out: &mut Value,
+) -> Result<String> {
+    out["model_left_out"] = serde_json::to_value(&f.left_out)?;
+    out["model_placeholders"] = serde_json::to_value(&f.placeholders)?;
+    let list = |l: &[crate::model_static_fit::LeftOut]| {
+        let names: Vec<&str> = l.iter().take(8).map(|x| x.path.as_str()).collect();
+        if names.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ": {}{}",
+                names.join(", "),
+                if l.len() > names.len() { ", ..." } else { "" }
+            )
+        }
+    };
+    Ok(format!(
+        "\nModel: {}\n  {} facts the model format has no place for left out{}\n  {} placeholders where the format needs a field the code doesn't give, each with evidence saying so{}\n",
+        dir.join(gp_model::MODEL_FILE).display(),
+        f.left_out.len(),
+        list(&f.left_out),
+        f.placeholders.len(),
+        list(&f.placeholders),
+    ))
 }
 
 fn to_toml(v: &Value) -> Toml {
@@ -517,6 +623,7 @@ pub(crate) fn run(a: &StaticArgs, paths: &Paths) -> Result<Outcome> {
             )?;
         }
     }
+    let mut left_out = None;
     if let Some(d) = &a.model {
         fs::create_dir_all(d)?;
         let facts: Vec<(String, Value)> = match &a.names {
@@ -530,7 +637,24 @@ pub(crate) fn run(a: &StaticArgs, paths: &Paths) -> Result<Outcome> {
                 .map(|f| (f.path.clone(), f.value.clone()))
                 .collect(),
         };
-        fs::write(d.join(gp_model::MODEL_FILE), model_text(&facts, "static")?)?;
+        let f = model_text(&facts, "static", crate::model_static_fit::Console::Nes, d)?;
+        fs::write(d.join(gp_model::MODEL_FILE), &f.text)?;
+        // The original's source ID: the asset map's.
+        let source = map
+            .as_deref()
+            .and_then(|m| fs::read_to_string(m).ok())
+            .and_then(|t| toml::from_str::<toml::Table>(&t).ok())
+            .and_then(|t| t.get("source").and_then(Toml::as_str).map(str::to_owned))
+            .unwrap_or_default();
+        let m = write_mapping(
+            d,
+            &facts,
+            &doc,
+            &f,
+            &source,
+            crate::model_static_fit::Console::Nes,
+        )?;
+        left_out = Some((d.clone(), f, m));
     }
     let grade = match &a.grade {
         Some(k) => Some(crate::static_grade::grade(&h, k)?),
@@ -541,6 +665,10 @@ pub(crate) fn run(a: &StaticArgs, paths: &Paths) -> Result<Outcome> {
         out["grade"] = g.clone();
     }
     let mut text = summary(&h, &rom, secs, grade.as_ref());
+    if let Some((d, f, m)) = &left_out {
+        text += &model_note(d, f, &mut out)?;
+        text += &mapping_note(d, m.as_ref(), &mut out);
+    }
     if let Some(r) = &runs {
         let v = runs_against_map(&rom, &h, r)?;
         text += &format!(

@@ -121,7 +121,11 @@ impl Region {
     }
 }
 
-/// The five channels, in register order.
+/// A song track's channel: the APU's five, in register order, then an
+/// arcade board's AY-8910 channels (gp-songs 0.2): each chip's three tone
+/// channels, and its noise period and envelope generator, which the chip
+/// keeps per chip rather than per channel. The APU (this module, the
+/// player, capture) only ever takes the first five ([`Channel::ALL`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Channel {
@@ -130,15 +134,59 @@ pub enum Channel {
     Triangle,
     Noise,
     Dmc,
+    #[serde(rename = "ay0.a")]
+    Ay0A,
+    #[serde(rename = "ay0.b")]
+    Ay0B,
+    #[serde(rename = "ay0.c")]
+    Ay0C,
+    #[serde(rename = "ay0.noise")]
+    Ay0Noise,
+    #[serde(rename = "ay0.envelope")]
+    Ay0Envelope,
+    #[serde(rename = "ay1.a")]
+    Ay1A,
+    #[serde(rename = "ay1.b")]
+    Ay1B,
+    #[serde(rename = "ay1.c")]
+    Ay1C,
+    #[serde(rename = "ay1.noise")]
+    Ay1Noise,
+    #[serde(rename = "ay1.envelope")]
+    Ay1Envelope,
+}
+
+/// What an AY-8910 channel of a song track is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AyPart {
+    /// Tone channel 0, 1 or 2 (A, B, C).
+    Tone(u8),
+    Noise,
+    Envelope,
 }
 
 impl Channel {
+    /// The APU's five channels, in register order.
     pub const ALL: [Channel; 5] = [
         Self::Pulse1,
         Self::Pulse2,
         Self::Triangle,
         Self::Noise,
         Self::Dmc,
+    ];
+
+    /// The AY-8910 channels of two chips (Midway's SSIO board has two).
+    pub const AY: [Channel; 10] = [
+        Self::Ay0A,
+        Self::Ay0B,
+        Self::Ay0C,
+        Self::Ay0Noise,
+        Self::Ay0Envelope,
+        Self::Ay1A,
+        Self::Ay1B,
+        Self::Ay1C,
+        Self::Ay1Noise,
+        Self::Ay1Envelope,
     ];
 
     pub fn name(self) -> &'static str {
@@ -148,15 +196,53 @@ impl Channel {
             Self::Triangle => "triangle",
             Self::Noise => "noise",
             Self::Dmc => "dmc",
+            Self::Ay0A => "ay0.a",
+            Self::Ay0B => "ay0.b",
+            Self::Ay0C => "ay0.c",
+            Self::Ay0Noise => "ay0.noise",
+            Self::Ay0Envelope => "ay0.envelope",
+            Self::Ay1A => "ay1.a",
+            Self::Ay1B => "ay1.b",
+            Self::Ay1C => "ay1.c",
+            Self::Ay1Noise => "ay1.noise",
+            Self::Ay1Envelope => "ay1.envelope",
         }
     }
 
+    /// One of the APU's five by its name.
     pub fn parse(s: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|c| c.name() == s)
     }
 
+    /// Any channel by its name, an AY-8910's included.
+    pub fn parse_any(s: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .chain(Self::AY)
+            .find(|c| c.name() == s)
+    }
+
+    /// The APU channel's place in register order (0 to 4). Only for the
+    /// APU's channels: an AY channel has none (see [`Channel::ay`]).
     pub fn index(self) -> usize {
+        debug_assert!(self.is_apu(), "{} isn't an APU channel", self.name());
         self as usize
+    }
+
+    /// One of the APU's five.
+    pub fn is_apu(self) -> bool {
+        (self as usize) < Self::ALL.len()
+    }
+
+    /// For an AY-8910 channel, the chip (0 or 1) and what it is.
+    pub fn ay(self) -> Option<(u8, AyPart)> {
+        let k = (self as usize).checked_sub(Self::ALL.len())?;
+        let part = match k % 5 {
+            t @ 0..=2 => AyPart::Tone(t as u8),
+            3 => AyPart::Noise,
+            _ => AyPart::Envelope,
+        };
+        Some(((k / 5) as u8, part))
     }
 }
 

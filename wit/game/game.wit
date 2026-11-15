@@ -8,15 +8,19 @@
 // gp-nes and the hookless interpreter never implement them, and the protocol
 // stays at 0.4.0.
 //
-// Any change a hook can see (Ext, ExtCx, Body, World, Spec) is a major bump
-// of the sim-api the module declares, not a version of this file.
+// A change a hook can see (Ext, ExtCx, Body, World, Spec) is a version of
+// the sim-api the module declares (gp_sim::SIM_API), not of this file. An
+// added method with a default is a minor change: every hook crate still
+// builds and runs as before. A changed or removed method, or a change to a
+// type a hook reads, is a major one. sim-api 1.1 added Ext::sound_requests.
 //
 // 0.2.0 added `run.query-values`. A call is only ever added here, so a module
 // built before still loads and runs: `info` (op 2 of gp_runtime::wire)
 // answers the runtime protocol's package and, from 0.2.0 on, this package
 // after it, and the host reads a frame's values a `query` at a time from a
-// module that names no 0.2.0.
-package game-printer:game@0.2.0;
+// module that names no 0.2.0. 0.3.0 added `run.set-sound-events`; a module
+// built before refuses it and its runs make no sound requests.
+package game-printer:game@0.3.0;
 
 interface module {
   // What the module is, read once when it is opened. The host refuses a
@@ -26,7 +30,8 @@ interface module {
   record module-info {
     // The runtime protocol it exports, such as `0.4.0`.
     runtime-wit: string,
-    // gp-sim's major version, as `package.toml`'s `sim-api`.
+    // gp-sim's sim-api major version (gp_sim::SIM_API), as `package.toml`'s
+    // `sim-api`. A minor version never changes it.
     sim-api: u32,
     // The content spec majors the module's gp-present draws.
     content-spec-majors: list<u32>,
@@ -140,6 +145,14 @@ interface run {
   // events (Ext::apu_peek, worked out inside the module), for the sound
   // measure and `--apu-log`.
   set-apu-events: func(rt: borrow<runtime>, on: bool);
+
+  // Since 0.3.0: whether `step` returns the sound requests the hooks made
+  // on the frame as `sound-request` events, each a `latch` and a `value`
+  // (Ext::sound_requests): for an arcade game, the latch of the sound board
+  // the main CPU wrote and the byte, which the page plays through the
+  // board's own sound CPU, and the lockstep holds to the original's
+  // `latch-write` events.
+  set-sound-events: func(rt: borrow<runtime>, on: bool);
 
   // Puts the session's level on a flat floor, 512 by 16 cells with one row of
   // solid cells at the bottom, no pit, no goal and the first spawn at the top

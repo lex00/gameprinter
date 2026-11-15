@@ -63,7 +63,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "next",
             title: "Where the port stands and what's next",
-            description: "Where the port of a game stands (stands, one sentence for the person), the one next step and who does it (next.who: tools, agent or person; next.how says the page's button and the command), up to two other steps (also), what runs in the background and when to look again (running), anything that costs money or makes something public (waits_for_yes), and a clue when the person seems lost (clue). text is all of it as the terminal prints it. Read from files only, the same answer as `gp progress --next` and the status line on the page; it never starts work. Works before any game exists (it asks for the game's file) and on a finished port. The person's copies (a theme they are making, a new game from a template) have their own steps: copies lists each with where it stands and whose turn it is, and copy (a copy's name) answers for one, with steps (each step, whose turn and which is now) and the same next, also and waits_for_yes. With wait_s (at most 30) it waits for the answer to change, so a hand-off or an answer the person gives on the page reaches you: changed says whether it did.",
+            description: "Where the port of a game stands (stands, one sentence for the person), the one next step and who does it (next.who: tools, agent or person; next.how says the page's button and the command), up to two other steps (also), what runs in the background and when to look again (running), anything that costs money or makes something public (waits_for_yes), and a clue when the person seems lost (clue). text is all of it as the terminal prints it. Read from files only, the same answer as `gp progress --next` and the status line on the page; it never starts work. Works before any game exists (it asks for the game's file) and on a finished port. The person's copies (a theme they are making, a new game from a template or from nothing) have their own steps: copies lists each with where it stands and whose turn it is, and copy (a copy's name) answers for one, with steps (each step, whose turn and which is now) and the same next, also and waits_for_yes. With wait_s (at most 30) it waits for the answer to change, so a hand-off or an answer the person gives on the page reaches you: changed says whether it did.",
             input_schema: schema::<crate::next::NextArgs>(),
             read_only: true,
             destructive: false,
@@ -135,7 +135,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "assets_edit",
             title: "Edit an entity's sprite or a level tile's look",
-            description: "Edit an entity's sprite set or palette with deterministic semantic ops. ops run in order on each frame picked (frames: base, clip0.1, state.dead or all; the reply's sprite_set lists them): recolor (pairs of color indices, swapped at once, optionally in a region), flip, mirror, shift, outline, fill, pixels, copy (another entity's sprite or tiles of the sheet), load (a PNG an external editor saved after assets_export), match_style (take another entity's outline), tween (an in-between of two frames). frames also takes a clip's name (clip0) for all its frames; frames that share tiles must agree after the ops or the edit is refused, and also_changes lists other frames a changed tile draws. pictures puts whole frames in by rows; import reads back a folder assets_export wrote that an editor saved into (with the image format's checks), recorded as uploaded from that editor. palette_ops instead change the entity's palette colors (color, swap, hue, brightness, copy_from; same_role for every palette of its role). The model must know the sprite well enough to edit, or it is refused with what's missing. Each picture keeps its size and tiles. The result is reviewed by the consistency critic, checked against the hitbox and standing edge, drawn into the recorded frames it shows in with its readability against the backgrounds there (in_context), and placed with assets_place's checks. place false makes a proposal that accept places. Every edit has a seq in the copy's history: undo (newest, or seq when no later edit touched its tiles) any number of times, redo, accept or reject (seq). tile instead of entity edits a level tile kind (a metatile, by its asset map name such as \"stone block\", <slot>[<index>] or its tiles in hex): ops (recolor, flip, mirror, shift, outline, fill, pixels, pictures) on its 16x16 picture of four tiles, palette_ops on the background palette the level draws it in (same_role for every palette of its role); also_changes names the other tile kinds, and also_changes_sprites the sprites, that draw a changed tile or palette; in_context crops the recorded frames around cells of the kind; proposals, accept, reject, undo and redo are the same.",
+            description: "Edit an entity's sprite set or palette with deterministic semantic ops. ops run in order on each frame picked (frames: base, clip0.1, state.dead or all; the reply's sprite_set lists them): recolor (pairs of color indices, swapped at once, optionally in a region), flip, mirror, shift, outline, fill, pixels, copy (another entity's sprite or tiles of the sheet), load (a PNG an external editor saved after assets_export), match_style (take another entity's outline), tween (an in-between of two frames). frames also takes a clip's name (clip0) for all its frames; frames that share tiles must agree after the ops or the edit is refused, and also_changes lists other frames a changed tile draws. pictures puts whole frames in by rows; import reads back a folder assets_export wrote that an editor saved into (with the image format's checks), recorded as uploaded from that editor. palette_ops instead change the entity's palette colors (color, swap, hue, brightness, copy_from; same_role for every palette of its role). The model must know the sprite well enough to edit, or it is refused with what's missing. Each picture keeps its size and tiles. The result is reviewed by the consistency critic, checked against the hitbox and standing edge, drawn into the recorded frames it shows in with its readability against the backgrounds there (in_context), and placed with assets_place's checks. place false makes a proposal: it waits on the person's page as a card with the sprite before and after, and only the person accepts or rejects it there (or with gp assets proposal in their terminal); read their answer with assets_history. Every edit has a seq in the copy's history: undo (newest, or seq when no later edit touched its tiles) any number of times, redo, and accept or reject (seq) of an edit you placed (place true) that the person hasn't decided. tile instead of entity edits a level tile kind (a metatile, by its asset map name such as \"stone block\", <slot>[<index>] or its tiles in hex): ops (recolor, flip, mirror, shift, outline, fill, pixels, pictures) on its 16x16 picture of four tiles, palette_ops on the background palette the level draws it in (same_role for every palette of its role); also_changes names the other tile kinds, and also_changes_sprites the sprites, that draw a changed tile or palette; in_context crops the recorded frames around cells of the kind; proposals, accept, reject, undo and redo are the same.",
             input_schema: schema::<crate::asset_edit::EditArgs>(),
             read_only: false,
             destructive: true,
@@ -144,7 +144,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "assets_history",
             title: "List a copy's art edits",
-            description: "A copy's sprite and palette edits by seq with their status (proposed, placed, accepted, rejected, undone) and who decided: what a person accepted or rejected in the live panel. waiting lists proposals still open.",
+            description: "A copy's sprite and palette edits by seq with their status (proposed, placed, accepted, rejected, undone) and who decided. waiting lists proposals still open; answers lists what the person answered on their page (ACCEPT, REJECT or PUT THE OLD ONE BACK on a sprite card) with the words they wrote, and reading it marks them read.",
             input_schema: schema::<crate::asset_edit::HistoryArgs>(),
             read_only: true,
             destructive: false,
@@ -207,7 +207,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "validate",
             title: "Validate against the original",
-            description: "Check the model, then run the check gp validate picks for the copy from what its folder holds, and say which (check, with the reason in why): the fidelity contract against the original game's recorded runs in the repo's baselines/<source> when there are some (Moss Hop; each check gives its measured and expected values), and for a person's copy (a folder in no git work tree) also the check for a game changed on purpose, under changed, which then decides ok (decided_by: changed), with the contract's own result under contract (contract.says: \"differs from the original, as you changed it\" when the change shows); a port's corpus score (gp corpus score, NES or arcade, under port, every clip exact) for a port's original; and for a game changed on purpose or made new (under changed) its model well formed and every stage reached and finished (gp level verify, gp interp reach and its playthrough), with any stage no tool can search named under changed.unchecked. ok is false when the check that decides fails: on a changed copy tell the person whether it still works (ok) and how far it now is from the original (contract.says and the failing checks). baselines names baselines of the original to hold the contract to instead. With scenarios true it also runs the copy's scenario tests (scenarios.toml) in parallel and returns the failing expectations under scenarios.",
+            description: "Check the model, then run the check gp validate picks for the copy from what its folder holds, and say which (check, with the reason in why): the fidelity contract against the original game's recorded runs in the repo's baselines/<source> when there are some (Moss Hop; each check gives its measured and expected values), and for a person's copy (a folder in no git work tree) also the check for a game changed on purpose, under changed, which then decides ok (decided_by: changed), with the contract's own result under contract (contract.says: \"differs from the original, as you changed it\" when the change shows); a port's corpus score (gp corpus score, NES or arcade, under port, every clip exact) for a port's original; and for a game changed on purpose or made new (under changed) its model well formed and every stage reached and finished (gp level verify, gp interp reach and its playthrough), with any stage no tool can search named under changed.unchecked. targets (each NAME=VALUE, NAME=VALUE+-TOL or NAME=VALUE+-TOL%, like route_frames=1300+-10%) holds a changed or new game's measured difficulty numbers to what the person asked for, under difficulty: each target on each stage that measures it (have, want, ok), and a name no stage measures marked measured false with the names that are; difficulty.feel says the feel asked for in words is not measured, so ask the person for a number (a longer jump's airtime, a route's frames) rather than a word. ok is false when the check that decides fails: on a changed copy tell the person whether it still works (ok) and how far it now is from the original (contract.says and the failing checks). baselines names baselines of the original to hold the contract to instead. With scenarios true it also runs the copy's scenario tests (scenarios.toml) in parallel and returns the failing expectations under scenarios.",
             input_schema: schema::<ValidateArgs>(),
             read_only: true,
             destructive: false,
@@ -279,7 +279,7 @@ pub fn list() -> Vec<ToolDef> {
         ToolDef {
             name: "watch_hook",
             title: "Hook instructions in a session",
-            description: "Run the session's recipes again with instructions hooked (at: `01:8000`, `C27D`, `sub_C1FB`): each time one is about to run it comes back as a hook event with its frame and the registers (a, x, y, s, p), at most 200 per hook per recipe. The hooks are the cartridge shim's: no cycle of the run changes.",
+            description: "Run the session's recipes again with instructions hooked (at: `01:8000`, `C27D`, `sub_C1FB`; on an arcade romset a main-CPU address such as `0158`): each time one is about to run it comes back as a hook event with its frame and its CPU's registers, tagged by cpu (6502: a, x, y, s, p; z80: af, bc, de, hl, ix, iy, sp), at most 200 per hook per recipe. No cycle of the run changes.",
             input_schema: schema::<crate::watch::WatchArgs>(),
             read_only: false,
             destructive: false,
@@ -594,7 +594,7 @@ fn describe(config: &Config, a: CopyArgs) -> Result<Reply, String> {
     let map = assets
         .as_ref()
         .and_then(|a| fs::read_to_string(a.join("assets.toml")).ok())
-        .and_then(|t| gp_assets::AssetMap::parse(&t).ok());
+        .and_then(|t| crate::catalog::Map::parse(&t).ok());
     let state = match &assets {
         Some(a) => crate::catalog::State::read(a)?,
         None => None,
@@ -602,7 +602,7 @@ fn describe(config: &Config, a: CopyArgs) -> Result<Reply, String> {
     let slots = crate::catalog::records(
         &model,
         contract.as_ref(),
-        map.as_ref(),
+        map.as_ref().map(crate::catalog::Map::as_ref),
         state.as_ref(),
         assets.as_deref(),
     );
@@ -1048,6 +1048,14 @@ pub struct ValidateArgs {
     /// With `scenarios`: only these, by name.
     #[serde(default)]
     pub scenario_names: Vec<String>,
+    /// Difficulty targets for a changed or new game, each NAME=VALUE,
+    /// NAME=VALUE+-TOL or NAME=VALUE+-TOL% (gp validate --target), such as
+    /// route_frames=1300+-10%. Names: what gp level measure prints
+    /// (route_frames, jump_window_median, throw_to_drum_median, ...),
+    /// run_frames, difficulty_bits, and the jump's airtime, rise,
+    /// walk_distance and run_distance.
+    #[serde(default)]
+    pub targets: Vec<String>,
 }
 
 fn validate(config: &Config, a: ValidateArgs) -> Result<Reply, String> {
@@ -1103,6 +1111,16 @@ fn validate(config: &Config, a: ValidateArgs) -> Result<Reply, String> {
         args.push("--assets".as_ref());
         args.push(a.as_os_str());
     }
+    if !a.targets.is_empty() && !against.is_empty() {
+        return Err(
+            "targets are held by the check for a changed game; leave out baselines to run it"
+                .into(),
+        );
+    }
+    for t in &a.targets {
+        args.push("--target".as_ref());
+        args.push(t.as_ref());
+    }
     let (_, v) = run_gp(config, &args)?;
     let unchecked: BTreeMap<String, usize> = v["unchecked"]
         .as_object()
@@ -1151,6 +1169,7 @@ fn validate(config: &Config, a: ValidateArgs) -> Result<Reply, String> {
         "contract": v["contract"],
         "changed": v["changed"],
         "port": v["port"],
+        "difficulty": if v["changed"]["difficulty"].is_null() { v["difficulty"].clone() } else { v["changed"]["difficulty"].clone() },
         "passed": v["passed"],
         "failed": v["failed"],
         "unexercised": v["unexercised"],

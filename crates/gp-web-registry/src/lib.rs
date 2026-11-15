@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use gp_package::Manifest;
-use gp_package::registry::{ByGameLine, Reader, Target, Yank};
+use gp_package::registry::{ByGameLine, Reader, Recheck, Target, Yank};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -43,6 +43,11 @@ pub struct Offered {
     pub version: String,
     pub id: String,
     pub title: String,
+    /// A recheck of this version that failed, from its by-game line: the
+    /// page still offers the theme and says why the recheck failed. A
+    /// recheck that passed isn't passed on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recheck: Option<Recheck>,
 }
 
 /// Two versions in order by their dotted numbers (1.0.10 after 1.0.9); a
@@ -196,6 +201,7 @@ pub fn choose(game: &str, lines: &[ByGameLine], yanks: &[Yank]) -> Offer {
             version: l.version.clone(),
             id: l.id.clone(),
             title: l.title.clone(),
+            recheck: l.recheck.clone().filter(Recheck::failed),
         });
     }
     out
@@ -580,6 +586,7 @@ mod tests {
             version: "1.0.0".into(),
             id: id.into(),
             title: t.into(),
+            recheck: None,
         };
         let o = choose(
             "a/game",
@@ -590,6 +597,36 @@ mod tests {
         let left = o.verdict("y/clay").unwrap().unwrap_err();
         assert!(left.detail.contains("first by title"), "{left:?}");
         assert!(o.verdict("z/none").is_none());
+    }
+
+    /// A theme whose recheck failed is still offered, with the recheck's
+    /// date and reason; one that passed carries nothing.
+    #[test]
+    fn a_failed_recheck_comes_with_the_offer() {
+        let lines = by_game(&[("a/clay", "2.0.0", "c2", "Clay"), ("a/moss", "1.0.0", "m1", "Moss")])
+            .replace(
+                "title = \"Clay\"\n",
+                "title = \"Clay\"\n\n[line.recheck]\ndate = \"2026-11-14\"\nresult = \"fail\"\nreason = \"made up: the lift leaves it out\"\n",
+            )
+            .replace(
+                "title = \"Moss\"\n",
+                "title = \"Moss\"\n\n[line.recheck]\ndate = \"2026-11-14\"\nresult = \"pass\"\nreason = \"made up\"\n",
+            );
+        let v = list(&[
+            ("registry.toml", REGISTRY),
+            ("yanks.toml", &yanks(&[])),
+            ("by-game/a/game.toml", &lines),
+        ]);
+        let ok = v["ok"].as_array().unwrap();
+        assert_eq!(ok.len(), 2, "{v}");
+        assert_eq!(ok[0]["name"], "a/clay");
+        assert_eq!(ok[0]["recheck"]["result"], "fail");
+        assert_eq!(ok[0]["recheck"]["date"], "2026-11-14");
+        assert_eq!(
+            ok[0]["recheck"]["reason"],
+            "made up: the lift leaves it out"
+        );
+        assert!(ok[1].get("recheck").is_none(), "{v}");
     }
 
     #[test]

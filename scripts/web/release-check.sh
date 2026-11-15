@@ -28,7 +28,8 @@
 #    theme-sound-takes section (scripts/web/mosshop-takes.sh, the same way).
 # 3. The lift under Node (lift.test.mjs) on the page's own lift files, and
 #    the page check's theme line rule (theme-line.test.mjs), and the
-#    page's address and share link rules (share.test.mjs).
+#    page's address and share link rules (share.test.mjs), and the page's
+#    What is this? answers (explain.test.mjs).
 # 4. `gp package scan` on the game's package: it must have no needs-rewrite
 #    item, and must have been compared with the ROMs.
 # 5. The page's size, its files and their SHA-256, also written to
@@ -211,6 +212,9 @@ s=$?
 node --test "$repo/scripts/web/public/share.test.mjs"
 s=$?
 [ $s -eq 0 ] || fail+=("the page's address and share link rules (share.test.mjs, exit $s)")
+node --test "$repo/scripts/web/public/explain.test.mjs"
+s=$?
+[ $s -eq 0 ] || fail+=("the page's What is this? answers (explain.test.mjs, exit $s)")
 
 step "gp package scan on the game's package"
 # A scan reads the package's folder, the ROMs in $GP_ROM_DIR and gp. Only

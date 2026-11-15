@@ -22,14 +22,23 @@ jobs:
       matrix:
         include:
           - { os: macos-15, target: aarch64-apple-darwin }
-          - { os: macos-13, target: x86_64-apple-darwin }
-          - { os: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
+          # macos-13 is retired; macos-15-intel is GitHub's Intel Mac now.
+          - { os: macos-15-intel, target: x86_64-apple-darwin }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
-          # Windows is left out: gp doesn't compile there yet (std::os::unix
-          # in publish.rs, gate_copy.rs, tool_gate.rs, mechanic/server.rs and
-          # serve/clip_agent.rs; install.md lists the rest).
+          # Git Bash runs the scripts; MSVC's linker is on the runner. The
+          # archive is a .zip with gp.exe in it.
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
     runs-on: ${{ matrix.os }}
+    # Every step in bash, Git Bash on Windows, so build.sh runs as it is.
+    defaults:
+      run:
+        shell: bash
     steps:
+      # Windows checks out with CRLF line ends by default, which would put
+      # CRLF in the files gp carries and in the shell scripts.
+      - if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -39,11 +48,11 @@ jobs:
       - name: Tools
         run: |
           rustup show
-          rustup target add wasm32-unknown-unknown
+          rustup target add wasm32-unknown-unknown ${{ matrix.target }}
           cargo install --locked cargo-about --version 0.9.2
           if [ "$RUNNER_OS" = Linux ]; then
             sudo apt-get -o Acquire::Retries=5 update -qq
-            sudo apt-get -o Acquire::Retries=5 install -y -qq zip rsync
+            sudo apt-get -o Acquire::Retries=5 install -y -qq zip
           fi
       - name: Editor
         working-directory: editor
@@ -55,19 +64,34 @@ jobs:
         env:
           GP_RELEASE_TARGET: ${{ matrix.target }}
           GP_HOME: ${{ runner.temp }}/gp-home
-        run: scripts/release/build.sh "$RUNNER_TEMP/release"
+        run: scripts/release/build.sh "$RUNNER_TEMP/release" --target ${{ matrix.target }}
+      # Its own build, unpacked from the archive as a person would, run in
+      # an empty home with the checkout out of reach.
       - name: Try it outside the checkout
         run: |
           set -euo pipefail
-          dir="$(ls -d "$RUNNER_TEMP"/release/gp-*/ | head -1)"
-          cd "$RUNNER_TEMP"
-          mkdir -p empty-home
-          HOME="$RUNNER_TEMP/empty-home" GP_HOME="$RUNNER_TEMP/empty-home/.gameprinter" "$dir/gp" --version
-          HOME="$RUNNER_TEMP/empty-home" GP_HOME="$RUNNER_TEMP/empty-home/.gameprinter" "$dir/gp" self check
+          tmp="$RUNNER_TEMP"
+          if [ "$RUNNER_OS" = Windows ]; then tmp="$(cygpath -u "$tmp")"; fi
+          mkdir -p "$tmp/unpacked" "$tmp/empty-home"
+          cd "$tmp/unpacked"
+          if [ "$RUNNER_OS" = Windows ]; then
+            7z x -bso0 "$tmp"/release/gp-*.zip
+            gp="$(ls -d "$tmp"/unpacked/gp-*/)gp.exe"
+            USERPROFILE="$(cygpath -w "$tmp/empty-home")"
+            export USERPROFILE
+          else
+            tar -xzf "$tmp"/release/gp-*.tar.gz
+            gp="$(ls -d "$tmp"/unpacked/gp-*/)gp"
+          fi
+          cd "$tmp"
+          export HOME="$tmp/empty-home" GP_HOME="$tmp/empty-home/.gameprinter"
+          "$gp" --version
+          "$gp" self check
       - uses: actions/upload-artifact@v4
         with:
           name: gp-${{ matrix.target }}
           path: |
             ${{ runner.temp }}/release/*.tar.gz
-            ${{ runner.temp }}/release/*.tar.gz.sha256
+            ${{ runner.temp }}/release/*.zip
+            ${{ runner.temp }}/release/*.sha256
           if-no-files-found: error

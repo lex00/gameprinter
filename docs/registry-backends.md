@@ -38,6 +38,8 @@ To make a registry with no signing, leave out `--root-key`, `--signing-key` and 
 
 ## Adding a publisher, adding versions, withdrawing one
 
+`gp registry publish` refuses an arcade game unless the score record in its `evidence/` has every clip of its corpus exact on the package as it is, and says how to get one ([packages.md](packages.md#publishing-an-arcade-game)). A scratch registry for the page check (`scripts/web/test-registry.sh`, or a copy made as `scripts/web/local-registry.sh` shows) is held to the same rule.
+
 A namespace that wasn't given to `init` is added with `gp registry grant TARGET NS`: it writes `namespaces/NS.toml` and the name's place in `registry.toml`, as `init` would have, and refuses a namespace already granted. `gp registry grants TARGET` lists them. Without the grant the page lists a package in that namespace and then fails to install it.
 
 `gp registry reindex TARGET --keep NAME@VERSION` adds a published version to the list files and keeps what they list now. Given versions without `--keep`, reindex rebuilds the lists from exactly those, and refuses when that would leave out a version the lists name now unless each one is named with `--drop`.

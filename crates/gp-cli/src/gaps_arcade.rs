@@ -197,6 +197,10 @@ pub(crate) fn build(args: &GapsArgs, t: &Template, paths: &Paths, opened: Opened
         let levels = w.finish();
         let map = crate::code_z80::CodeMap::of(set, 0, Some(&levels.cpus[0]));
         let routines: BTreeSet<u16> = map.routines.keys().copied().collect();
+        run.code_map = Some(gp_gaps::CodeMap {
+            starts: map.insns.keys().map(|&a| u32::from(a)).collect(),
+            entries: routines.iter().map(|&a| u32::from(a)).collect(),
+        });
         run.executed = (0..0xe000usize.div_ceil(64))
             .map(|wd| {
                 (0..64).fold(0u64, |acc, b| {

@@ -141,8 +141,10 @@ impl std::ops::Deref for RamText {
     }
 }
 
-/// The address of a selector written as [`ram_text`] writes it.
-fn canonical_ram(text: &str) -> Option<u16> {
+/// The address of a selector written as [`ram_text`] writes it, which is
+/// also the path a runtime answers that byte with: a runtime that holds
+/// its RAM can answer it without parsing a [`Selector`].
+pub fn canonical_ram(text: &str) -> Option<u16> {
     let digits = text.strip_prefix("ram[0x")?.strip_suffix(']')?;
     if digits.len() != 4
         || !digits

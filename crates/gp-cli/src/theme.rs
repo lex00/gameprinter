@@ -296,7 +296,12 @@ pub enum ThemeCmd {
     /// recorded, and lands the index line with the model's result, slot
     /// fingerprint and look digest through the gate. A look that differs
     /// from the recorded one is reported and not added. The package and
-    /// its signature are left as they are. --dry-run writes nothing.
+    /// its signature are left as they are. --dry-run writes nothing. With
+    /// --registry TARGET, GAME and THEME are package names and the theme
+    /// is one the registry offers for the game: it is read as the page's
+    /// lift reads it over your ROM, and the date, pass or fail and why go
+    /// into its line of the registry's by-game list (`recheck`), which the
+    /// page shows when it failed.
     Recheck(crate::theme_publish::RecheckArgs),
     /// Fetch a published theme by the game's index: the manifest by its
     /// hash, its signature, and each file by its hash, from the local

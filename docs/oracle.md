@@ -139,6 +139,6 @@ A 900-frame run of Donkey Kong: Original Edition (start, a walk right, a jump an
 
 `gp oracle diff ID CAPTURE` plays the recording again on gp-arcade and compares every frame with the capture, as gp-arcade's `compare` example does: the RAM record (work, sprite, video, palette and sound RAM), the input ports, the picture's hash and, when the capture has them, the AY writes. It prints the first frames that differ (`--max`), counts the frames that differ in each way, and exits 1 if any does. CAPTURE is a folder name under `$GP_HOME/work/oracle/` or a path.
 
-A MAME capture isn't a store recording, so the field-by-field classes, the triage and `golden` stay the NES's; `gp oracle golden` refuses an arcade recording in words, and `gp oracle check` takes the NES baselines.
+The field-by-field classes and the triage stay the NES's. `gp oracle golden ID --against NAME` and `gp oracle check oracle/mame-captures.toml` hold arcade runs to the MAME captures the repo names by hash ([oracle-mame.md](oracle-mame.md), "Captures the repo names"): golden when the recording ran the capture's input and every frame matches, and the check plays each capture's input on gp-arcade against it.
 
 On 2026-11-13, a recording of `scripts/oracle/inputs/tapper-first.input` on rbtapper (1,511 frames) ran in MAME 0.276 in 9 s and matched gp-arcade on every frame, AY writes included, as it does against the capture the MAME oracle's first run made. The five-levels recording of Tapper (10,934 frames) matches its MAME capture (`tapper-m3-five`) on every frame too.

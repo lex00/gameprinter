@@ -56,7 +56,7 @@ Not yet: a handed-off clip that fails its row's goal (needs the triage's test on
 
 ## Copies and the other journeys
 
-Porting a game is one of three journeys. The other two make a copy: a theme for a game, or a new game from a template (issue #5). The page's first screen (`/start/` on gp serve, [mechanic-page.md](mechanic-page.md#the-first-screen)) starts both and lists every copy with CARRY ON; `gp progress --next --copy NAME` and the MCP tool `next` with `copy` give the same answer as for a port, with the copy's six steps and whose turn each is. The code is `crates/gp-cli/src/journeys.rs` (the copies, the facts and the answer, from files only) and its tests in `journeys/tests.rs`.
+Porting a game is one of three journeys. The other two make a copy: a theme for a game, or a new game from nothing or from a template (issue #5). The page's first screen (`/start/` on gp serve, [mechanic-page.md](mechanic-page.md#the-first-screen)) starts both and lists every copy with CARRY ON; `gp progress --next --copy NAME` and the MCP tool `next` with `copy` give the same answer as for a port, with the copy's six steps and whose turn each is. The code is `crates/gp-cli/src/journeys.rs` (the copies, the facts and the answer, from files only) and its tests in `journeys/tests.rs`.
 
 | Copy | Where it is | Made by |
 |---|---|---|
@@ -73,14 +73,14 @@ A theme's steps:
 | T2 Make the pictures | Your agent | It has no pictures | What to say; the folder for the person's own pictures |
 | T3 The look check | The tools | It changed since its last check, or the check found problems | CHECK MY THEME and the findings in words |
 | T4 See it in the game | You | It passes and wasn't played since | SEE IT IN THE GAME (`gp theme look play --background`), PICTURES OF IT IN THE GAME (`--shots`) when the ROM is here or the game has pictures of its own |
-| T5 Change pictures | You | Until the person presses READY TO SHARE | The pictures the agent proposes, on their cards |
+| T5 Change pictures | You | Until the person presses READY TO SHARE | BESIDE THE ORIGINAL (`gp theme look play --shots DIR --against original`): each moment of the game's route in the theme and in the game's own pictures, side by side, stepped through with BEFORE and NEXT; and the pictures the agent proposes, on their cards |
 | T6 Share it | You | Then | The share link and the publish request, shown to send by hand: nothing is published from the page |
 
 A new game's steps:
 
 | Step | Whose turn | It is the step while | The page has |
 |---|---|---|---|
-| N1 Start from a template | You | (done once the copy exists) | What a template is |
+| N1 Start from nothing or a template | You | (done once the copy exists) | Nothing, the first choice (`gp game new NAME --empty`: one stage of floor, a player that walks and jumps, a goal, its own plain pictures and no sound), then each template and what a template is |
 | N2 Name it | You | (done once the copy exists) | Its folder |
 | N3 See it play | The tools | Its pictures and levels aren't there, or it was never built to play | BUILD IT TO PLAY (`build_publish`) and PLAY IT |
 | N4 Change a stage | You | Until the person presses DONE WITH THE STAGE | SHOW THE STAGE (`gp level render`), CHECK THE STAGE (`gp level verify`), UNDO THE LAST CHANGE (`gp level undo`) |

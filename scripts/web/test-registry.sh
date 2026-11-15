@@ -31,12 +31,18 @@
 #                      ($GP_HOME/work/assets/mosshop: just check, or
 #                      scripts/web/mosshop-hud.sh, makes them).
 #   test/tapper-unplaced  only when FROM lists lex00/tapper: a copy of its
-#                      play/ files (the lift's folder, page.json and the
-#                      module, from FROM's own blobs: a package's text and
-#                      code, never a ROM's bytes) with every place its asset
+#                      files (the lift's folder, page.json and the module,
+#                      the model, corpus and its score record in evidence/,
+#                      from FROM's own blobs: a package's text and code,
+#                      never a ROM's bytes) with every place its play/ asset
 #                      maps record for the rbtapper set taken out, so the
 #                      lift refuses rbtapper.zip as a set whose tables have
-#                      no place (check-page.mjs, arcade-refused).
+#                      no place (check-page.mjs, arcade-unplaced). gp
+#                      registry publish takes an arcade game only with a
+#                      score record of every clip exact (docs/web.md,
+#                      "Publishing an arcade game"), which the copy carries;
+#                      a lex00/tapper published without one is left out
+#                      with a line.
 # OUT is made again each run. GP names the gp to run (default
 # target/debug/gp, which has `gp registry grant`). Exit codes: 0 made, 2 couldn't.
 set -euo pipefail
@@ -122,16 +128,20 @@ tapper = next((p for p in cat["package"] if p["name"] == "lex00/tapper"), None)
 if tapper:
     u = f"{stage}/unplaced"
     for line in open(f"{reg}/packages/{tapper['id']}"):
-        m = re.match(r"^file ([0-9a-f]{64}) \d+ (play/.+)$", line.rstrip("\n"))
+        m = re.match(r"^file ([0-9a-f]{64}) \d+ (.+)$", line.rstrip("\n"))
         if not m:
             continue
         data = open(f"{reg}/blobs/{m.group(1)}", "rb").read()
-        if m.group(2).endswith("/asset-map.toml"):
+        if m.group(2).startswith("play/") and m.group(2).endswith("/asset-map.toml"):
             data = re.sub(rb"(?m)^rbtapper = .*\n", b"", data)
+        if m.group(2) == "package.toml":
+            data = re.sub(rb'(?m)^name = "lex00/tapper"$', b'name = "test/tapper-unplaced"', data)
+            data = re.sub(rb'(?m)^version = ".*"$', b'version = "0.1.0"', data, count=1)
         dst = os.path.join(u, m.group(2))
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         open(dst, "wb").write(data)
-    open(f"{u}/package.toml", "w").write('[package]\nname = "test/tapper-unplaced"\nversion = "0.1.0"\nkind = "game"\ntitle = "Tapper"\n')
+    if not os.path.exists(f"{u}/package.toml"):
+        open(f"{u}/package.toml", "w").write('[package]\nname = "test/tapper-unplaced"\nversion = "0.1.0"\nkind = "game"\ntitle = "Tapper"\n')
 l = f"{stage}/look"
 os.makedirs(f"{l}/theme", exist_ok=True)
 open(f"{l}/package.toml", "w").write('[package]\nname = "test/made-up-look"\nversion = "0.1.0"\nkind = "content"\ntitle = "Made Up Look"\n')
@@ -183,8 +193,11 @@ else
   echo "test-registry.sh: no Moss Hop pictures in $home/work/assets/mosshop, so test/own-hop (a game with its own pictures) is left out" >&2
 fi
 if [ -d "$stage/unplaced" ]; then
-  "$gp" registry publish "$out" "$stage/unplaced" --name test/tapper-unplaced --version 0.1.0 --kind game --title "Tapper" >/dev/null
-  added+=(test/tapper-unplaced@0.1.0)
+  if "$gp" registry publish "$out" "$stage/unplaced" --name test/tapper-unplaced --version 0.1.0 --kind game --title "Tapper" >/dev/null 2>"$stage/unplaced.err"; then
+    added+=(test/tapper-unplaced@0.1.0)
+  else
+    echo "test-registry.sh: test/tapper-unplaced is left out: $(head -c 600 "$stage/unplaced.err")" >&2
+  fi
 fi
 # The list files keep what they list and add these.
 "$gp" registry reindex "$out" --keep "${added[@]}" >/dev/null

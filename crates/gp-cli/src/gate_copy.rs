@@ -126,8 +126,7 @@ fn write_hooks(repo: &Path) -> Result<()> {
     fs::create_dir_all(&hooks)?;
     let exec = |path: PathBuf, text: &str| -> Result<()> {
         fs::write(&path, text)?;
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
+        gp_mcp::proc::make_executable(&path)?;
         Ok(())
     };
     exec(hooks.join("pre-commit"), HOOK)?;

@@ -332,7 +332,7 @@ fn export_board(config: &Config, a: &ExportArgs) -> Result<Option<Reply>, String
             "save as PNG over the file, indexed or RGB(A)",
         ],
         "import": import,
-        "proposal": crate::board_trip::NO_PROPOSAL,
+        "proposal": "a save that changes pixels comes back as a proposal in the art history; accepting it writes the sprites into the copy's own lifted sprites",
     }))))
 }
 

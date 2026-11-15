@@ -11,8 +11,9 @@
 //! recording again on gp-arcade and compares every frame with the capture,
 //! as gp-arcade's `compare` example does: the RAM record (work, sprite,
 //! video, palette and sound RAM), the input ports, the picture's hash and
-//! the AY writes. A capture isn't a store recording, so `golden`, `check`
-//! and the triage classes stay the NES's.
+//! the AY writes. `golden` and `check` hold a recording, or the input logs
+//! oracle/mame-captures.toml names, to the captures that file names by
+//! hash (crate::oracle_captures); the triage classes stay the NES's.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -52,6 +53,23 @@ fn romset(m: &RecordingManifest, given: Option<&Path>, paths: &Paths) -> Result<
     let SourceRef::Romset { identity, system } = &m.source else {
         bail!("not an arcade recording");
     };
+    let zip = find_zip(identity, given, paths)?.with_context(|| {
+        format!(
+            "no romset with identity {}... in {}; give --rom",
+            &identity[..16.min(identity.len())],
+            paths.roms.display()
+        )
+    })?;
+    Ok((zip, system.clone()))
+}
+
+/// The zip in the ROM folder (or `given`, which must be it) whose romset
+/// identity is `identity`; `None` when the folder has none.
+pub(crate) fn find_zip(
+    identity: &str,
+    given: Option<&Path>,
+    paths: &Paths,
+) -> Result<Option<PathBuf>> {
     let matches = |p: &Path| {
         crate::roms::Rom::read(p)
             .ok()
@@ -64,23 +82,15 @@ fn romset(m: &RecordingManifest, given: Option<&Path>, paths: &Paths) -> Result<
                 g.display()
             );
         }
-        return Ok((g.to_path_buf(), system.clone()));
+        return Ok(Some(g.to_path_buf()));
     }
     let mut files = Vec::new();
     crate::files::walk_lenient(&paths.roms, &mut files);
     files.sort();
-    files
+    Ok(files
         .into_iter()
         .filter(|p| p.extension().is_some_and(|e| e == "zip"))
-        .find(|p| matches(p))
-        .map(|p| (p, system.clone()))
-        .with_context(|| {
-            format!(
-                "no romset with identity {}... in {}; give --rom",
-                &identity[..16.min(identity.len())],
-                paths.roms.display()
-            )
-        })
+        .find(|p| matches(p)))
 }
 
 /// `gp oracle record` on an arcade recording: its input log played on its
@@ -225,29 +235,7 @@ pub(crate) fn diff(
     {
         bail!("the capture is of {s}, the recording of {system}");
     }
-    let frames = cap.rows.len().min(log.frames.len() + 1);
-    let mut t = gp_arcade::Tapper::power_on(&set);
-    let mut shown: Vec<(usize, FrameDiff)> = Vec::new();
-    let (mut differ, mut ram_f, mut port_f, mut pic_f, mut ay_f) = (0, 0, 0, 0, 0);
-    let mut first: Option<usize> = None;
-    for n in 0..frames {
-        if n > 0 {
-            t.step(log.controls(n));
-        }
-        let d = compare(&t, &cap, n);
-        if d.is_empty() {
-            continue;
-        }
-        differ += 1;
-        ram_f += usize::from(!d.ram.is_empty());
-        port_f += usize::from(d.ports.is_some());
-        pic_f += usize::from(d.picture.is_some());
-        ay_f += usize::from(d.ay.is_some());
-        first.get_or_insert(n);
-        if shown.len() < max {
-            shown.push((n, d));
-        }
-    }
+    let c = play(&set, &log, &cap, max);
     let mut lines = vec![
         format!(
             "a: {} ({}), {} {}",
@@ -263,7 +251,7 @@ pub(crate) fn diff(
         ),
         format!(
             "compared frames 0 to {}: the RAM record, the input ports, the picture's hash{}",
-            frames.saturating_sub(1),
+            c.frames.saturating_sub(1),
             if cap.ay.is_some() {
                 " and the AY writes"
             } else {
@@ -271,37 +259,105 @@ pub(crate) fn diff(
             }
         ),
     ];
-    match first {
-        None => lines.push("no divergence: every compared frame matches".into()),
-        Some(f) => lines.push(format!(
-            "first divergence at frame {f}; {differ} frames differ (RAM {ram_f}, ports {port_f}, picture {pic_f}, AY {ay_f})"
-        )),
-    }
-    for (n, d) in &shown {
-        lines.push(format!("  frame {n}:"));
-        for l in d.describe(8).lines() {
-            lines.push(format!("      {l}"));
-        }
-    }
-    if differ > shown.len() {
-        lines.push(format!(
-            "  shown the first {} frames that differ (--max)",
-            shown.len()
-        ));
-    }
-    crate::runrec::metric("oracle.diff.divergences", differ as f64, "count");
-    let json = json!({
-        "a": entry.id,
-        "b": capture,
-        "frames": frames,
-        "differ": differ,
-        "first": first,
-        "by_kind": {"ram": ram_f, "ports": port_f, "picture": pic_f, "ay": ay_f},
-        "shown": shown.iter().map(|(n, d)| json!({"frame": n, "says": d.describe(64)})).collect::<Vec<_>>(),
-    });
+    lines.extend(c.lines());
+    crate::runrec::metric("oracle.diff.divergences", c.differ as f64, "count");
+    let mut json = c.json();
+    json["a"] = json!(entry.id);
+    json["b"] = json!(capture);
     Ok(Outcome {
         json,
         text: lines.join("\n"),
-        exit: u8::from(differ > 0),
+        exit: u8::from(c.differ > 0),
     })
+}
+
+/// A recording's input played on gp-arcade against a MAME capture.
+pub(crate) struct Compared {
+    /// Frames compared, from power-on (frame 0).
+    pub frames: usize,
+    pub differ: usize,
+    pub first: Option<usize>,
+    ram: usize,
+    ports: usize,
+    picture: usize,
+    ay: usize,
+    /// The first frames that differ, at most the `max` asked for.
+    shown: Vec<(usize, FrameDiff)>,
+}
+
+impl Compared {
+    pub(crate) fn lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        match self.first {
+            None => lines.push("no divergence: every compared frame matches".into()),
+            Some(f) => lines.push(format!(
+                "first divergence at frame {f}; {} frames differ (RAM {}, ports {}, picture {}, AY {})",
+                self.differ, self.ram, self.ports, self.picture, self.ay
+            )),
+        }
+        for (n, d) in &self.shown {
+            lines.push(format!("  frame {n}:"));
+            for l in d.describe(8).lines() {
+                lines.push(format!("      {l}"));
+            }
+        }
+        if self.differ > self.shown.len() {
+            lines.push(format!(
+                "  shown the first {} frames that differ (--max)",
+                self.shown.len()
+            ));
+        }
+        lines
+    }
+
+    pub(crate) fn json(&self) -> serde_json::Value {
+        json!({
+            "frames": self.frames,
+            "differ": self.differ,
+            "first": self.first,
+            "by_kind": {"ram": self.ram, "ports": self.ports, "picture": self.picture, "ay": self.ay},
+            "shown": self.shown.iter().map(|(n, d)| json!({"frame": n, "says": d.describe(64)})).collect::<Vec<_>>(),
+        })
+    }
+}
+
+/// Plays `log` on `set` from power-on and compares every frame the
+/// capture has with it, as gp-arcade's `compare` example does.
+pub(crate) fn play(
+    set: &gp_arcade::Romset,
+    log: &OracleLog,
+    cap: &Capture,
+    max: usize,
+) -> Compared {
+    let frames = cap.rows.len().min(log.frames.len() + 1);
+    let mut t = gp_arcade::Tapper::power_on(set);
+    let mut c = Compared {
+        frames,
+        differ: 0,
+        first: None,
+        ram: 0,
+        ports: 0,
+        picture: 0,
+        ay: 0,
+        shown: Vec::new(),
+    };
+    for n in 0..frames {
+        if n > 0 {
+            t.step(log.controls(n));
+        }
+        let d = compare(&t, cap, n);
+        if d.is_empty() {
+            continue;
+        }
+        c.differ += 1;
+        c.ram += usize::from(!d.ram.is_empty());
+        c.ports += usize::from(d.ports.is_some());
+        c.picture += usize::from(d.picture.is_some());
+        c.ay += usize::from(d.ay.is_some());
+        c.first.get_or_insert(n);
+        if c.shown.len() < max {
+            c.shown.push((n, d));
+        }
+    }
+    c
 }

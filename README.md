@@ -8,7 +8,7 @@ In files: the model is `model.toml`, TOML read when the game loads and never com
 
 It came from game-printer, the old one-repo tool. The games moved to their own repo, `lex00/games`, and the Bevy generator, `gp loop` and the other games' code were left behind.
 
-Today there are two games: Donkey Kong (NES), playable at [nes-donkey-kong.intentius.workers.dev](https://nes-donkey-kong.intentius.workers.dev) from a ROM you load, and Tapper (arcade, MAME's `rbtapper`), whose model is in progress. Moss Hop, a small game written here in NES assembly for testing, lives here and is what the checks run on.
+Today there are two games: Donkey Kong (NES), playable at [gameprinter.intentius.workers.dev](https://gameprinter.intentius.workers.dev) from a ROM you load, and Tapper (arcade, MAME's `rbtapper`), whose model is in progress. Moss Hop, a small game written here in NES assembly for testing, lives here and is what the checks run on.
 
 ## What's in the repo
 

@@ -28,6 +28,7 @@ fn song(name: &str, looped: bool) -> Song {
             pitch,
             fine: 0,
             instrument,
+            period: None,
         },
     };
     Song {

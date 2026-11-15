@@ -13,6 +13,20 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// A color index as the art history writes it: one hex digit, 0 to 9
+/// then `a` to `f` (docs/formats/art-history.md). An NES index (0 to 3)
+/// is the decimal digit it always was; an arcade board sprite's value
+/// (0 to 15) needs the rest. Past 15 is written as `f`.
+pub fn digit(v: u8) -> char {
+    char::from(b"0123456789abcdef"[usize::from(v.min(15))])
+}
+
+/// A hex digit's color index, 0 to 15: `0` to `9` and `a` to `f` (upper
+/// case read too); None for anything else.
+pub fn value(c: u8) -> Option<u8> {
+    char::from(c).to_digit(16).map(|v| v as u8)
+}
+
 /// Color indices, row by row; 0 is transparent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pic {
@@ -43,12 +57,12 @@ impl Pic {
         self.px.iter().filter(|&&p| p != 0).count()
     }
 
-    /// The rows as digit strings, as `.pix` rows are written: compact,
-    /// readable and diffable, for the edit history.
+    /// The rows as strings of hex digits, one a pixel ([`digit`]):
+    /// compact, readable and diffable, for the edit history.
     pub fn rows(&self) -> Vec<String> {
         self.px
             .chunks(self.w as usize)
-            .map(|r| r.iter().map(|&p| char::from(b'0' + p.min(9))).collect())
+            .map(|r| r.iter().map(|&p| digit(p)).collect())
             .collect()
     }
 
@@ -61,10 +75,7 @@ impl Pic {
                 return Err("rows of different lengths".into());
             }
             for c in r.bytes() {
-                if !c.is_ascii_digit() {
-                    return Err(format!("`{}` isn't a color index", char::from(c)));
-                }
-                px.push(c - b'0');
+                px.push(value(c).ok_or(format!("`{}` isn't a color index", char::from(c)))?);
             }
         }
         Pic::new(w, h, px)
@@ -564,6 +575,23 @@ mod tests {
 
     fn rows(p: &Pic) -> Vec<String> {
         p.rows()
+    }
+
+    /// Rows are hex: 0 to 9 read as they always did, a to f are 10 to
+    /// 15, and a picture of 16 values comes back the same.
+    #[test]
+    fn rows_are_hex_and_old_decimal_rows_read_the_same() {
+        let old = pic(&["0123", "3210"]);
+        assert_eq!(old.px, [0, 1, 2, 3, 3, 2, 1, 0]);
+        assert_eq!(rows(&old), ["0123", "3210"]);
+        let p = Pic::new(8, 2, (0..16).collect()).unwrap();
+        assert_eq!(rows(&p), ["01234567", "89abcdef"]);
+        assert_eq!(pic(&["01234567", "89abcdef"]), p);
+        assert_eq!(
+            pic(&["89ABCDEF", "01234567"]).px[2..8],
+            [10, 11, 12, 13, 14, 15]
+        );
+        assert!(Pic::from_rows(&["0g".to_owned()]).is_err());
     }
 
     #[test]

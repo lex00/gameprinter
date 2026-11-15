@@ -108,8 +108,68 @@ pub fn clusters(oam: &[u8], tall: bool) -> Vec<Cluster> {
 }
 
 /// A frame's visible sprites grouped into objects: sprites of one palette
-/// whose boxes touch are one object.
+/// whose boxes touch are one object. With no sprite sets known, every
+/// picture is in one set; [`group_in_sets`] splits by set.
 pub fn group(sprites: &[Sprite]) -> Vec<Cluster> {
+    group_in_sets(sprites, &Sets::default())
+}
+
+/// A recording's pictures sorted into sprite sets (docs/formats/tracks.md,
+/// "Tracks"). A picture (a tile and its palette) the game draws as an
+/// object of its own, touching no other picture of its palette, on more
+/// than half of the times it is drawn is a set by itself: Tapper's tap,
+/// which the bartender stands over while he pours. Every other picture of a
+/// palette is in one set. Sprites of different sets are never one object,
+/// even when they touch and move together.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Sets {
+    /// The pictures that are a set by themselves, by (palette, tile), sorted.
+    pub own: Vec<(u8, u16)>,
+}
+
+impl Sets {
+    /// The sets of a recording's frames, each frame's visible sprites.
+    pub fn of<'a>(frames: impl IntoIterator<Item = &'a [Sprite]>) -> Self {
+        use std::collections::BTreeMap;
+        // For each picture: the objects (by the one-set rule) it was in,
+        // and of those the ones that held no other picture.
+        let mut count: BTreeMap<(u8, u16), (u32, u32)> = BTreeMap::new();
+        for sprites in frames {
+            for c in group(sprites) {
+                let alone = c.tiles.len() == 1;
+                for &t in &c.tiles {
+                    let n = count.entry((c.palette, t)).or_default();
+                    n.0 += 1;
+                    n.1 += u32::from(alone);
+                }
+            }
+        }
+        Self {
+            own: count
+                .into_iter()
+                .filter(|(_, (n, alone))| alone * 2 > *n)
+                .map(|(k, _)| k)
+                .collect(),
+        }
+    }
+
+    fn own(&self, s: &Sprite) -> bool {
+        self.own.binary_search(&(s.palette, s.tile)).is_ok()
+    }
+
+    /// Whether two sprites are drawn from one set.
+    pub fn same(&self, a: &Sprite, b: &Sprite) -> bool {
+        match (self.own(a), self.own(b)) {
+            (false, false) => true,
+            (true, true) => a.tile == b.tile,
+            _ => false,
+        }
+    }
+}
+
+/// A frame's visible sprites grouped into objects: sprites of one palette
+/// and one sprite set whose boxes touch are one object.
+pub fn group_in_sets(sprites: &[Sprite], sets: &Sets) -> Vec<Cluster> {
     let n = sprites.len();
     let mut parent: Vec<usize> = (0..n).collect();
     fn root(parent: &mut [usize], mut i: usize) -> usize {
@@ -127,6 +187,7 @@ pub fn group(sprites: &[Sprite]) -> Vec<Cluster> {
                 && b.x <= a.x + i16::from(a.w) + JOIN_GAP
                 && a.y <= b.y + i16::from(b.h) + JOIN_GAP
                 && b.y <= a.y + i16::from(a.h) + JOIN_GAP
+                && sets.same(a, b)
             {
                 let (ri, rj) = (root(&mut parent, i), root(&mut parent, j));
                 parent[ri.max(rj)] = ri.min(rj);
@@ -327,6 +388,44 @@ mod tests {
         assert_eq!(c[0].tiles, vec![1, 2, 3, 4]);
         assert_eq!(c[1].palette, 1);
         assert_eq!(c[2].x0, 76);
+    }
+
+    /// A picture drawn on its own most of the time is a sprite set of its
+    /// own (Tapper's tap): an object of other pictures that stands over it
+    /// stays a track apart from it, as one that never touches it would.
+    #[test]
+    fn a_picture_drawn_on_its_own_is_a_set_and_a_track_of_its_own() {
+        let s = |x: i16, tile: u16| Sprite {
+            x,
+            y: 100,
+            w: 8,
+            h: 8,
+            tile,
+            palette: 0,
+            flip_x: false,
+            flip_y: false,
+        };
+        // A two-sprite object (pictures 1 and 2) walks right across a tap
+        // (picture 9) at x 60, and stands on it from frame 20 to 29.
+        let frames: Vec<Vec<Sprite>> = (0..60i16)
+            .map(|f| {
+                let x = 20 + 2 * f.min(20) + f.saturating_sub(30).min(20);
+                vec![s(60, 9), s(x, 1), s(x + 8, 2)]
+            })
+            .collect();
+        let sets = Sets::of(frames.iter().map(Vec::as_slice));
+        assert_eq!(sets.own, vec![(0, 9)]);
+        // One rule for all would make them one object where they touch.
+        assert_eq!(group(&frames[25]).len(), 1);
+        assert_eq!(group_in_sets(&frames[25], &sets).len(), 2);
+        let mut t = Tracker::new(4);
+        for (f, sprites) in frames.iter().enumerate() {
+            t.push(f as u64, group_in_sets(sprites, &sets));
+        }
+        let tracks = t.finish();
+        let tiles: Vec<&[u16]> = tracks.iter().map(|t| t.tiles.as_slice()).collect();
+        assert_eq!(tiles, vec![&[1, 2][..], &[9][..]], "{tracks:?}");
+        assert!(tracks.iter().all(|t| t.obs.len() == 60));
     }
 
     #[test]

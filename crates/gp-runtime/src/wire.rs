@@ -45,6 +45,10 @@ pub const STEP_HOOKS: u32 = 28;
 /// each its values without their paths or its error out
 /// ([`Writer::value_rows`]). A module built before 0.2.0 has no such call.
 pub const QUERY_VALUES: u32 = 29;
+/// Makes `step` return the sound requests the hooks made as
+/// `sound-request` events (`set-sound-events` in wit/game/game.wit,
+/// game-printer:game@0.3.0). A module built before 0.3.0 has no such call.
+pub const SET_SOUND_EVENTS: u32 = 30;
 
 #[derive(Default)]
 pub struct Writer(pub Vec<u8>);

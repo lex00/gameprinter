@@ -10,7 +10,7 @@
 
 use serde::Serialize;
 
-use crate::sprites::{Obs, Track, Tracker, clusters, group};
+use crate::sprites::{Obs, Sets, Sprite, Track, Tracker, from_oam, group_in_sets};
 use crate::{Frame, Options, Source};
 
 /// What the first pass keeps: the tracks, and per frame the scroll, the
@@ -38,7 +38,8 @@ impl Seen {
 }
 
 pub fn pass_sprites(source: &mut dyn Source, opts: &Options) -> Result<Seen, String> {
-    let mut tracker = Tracker::new(opts.max_gap);
+    // Each frame's sprites, kept until the sprite sets are known.
+    let mut drawn: Vec<Vec<Sprite>> = Vec::new();
     let mut first = None;
     let mut next = 0u64;
     let mut scroll = Vec::new();
@@ -56,10 +57,10 @@ pub fn pass_sprites(source: &mut dyn Source, opts: &Options) -> Result<Seen, Str
             broken = Some(f.frame);
         }
         next = f.frame + 1;
-        match f.sprites {
-            Some(list) => tracker.push(f.frame, group(list)),
-            None => tracker.push(f.frame, clusters(f.oam, f.tall)),
-        }
+        drawn.push(match f.sprites {
+            Some(list) => list.to_vec(),
+            None => from_oam(f.oam, f.tall),
+        });
         // The page the game copies its sprite table from, when the table is
         // the NES's.
         if f.oam.len() >= 256 {
@@ -83,6 +84,11 @@ pub fn pass_sprites(source: &mut dyn Source, opts: &Options) -> Result<Seen, Str
     }
     let first = first.unwrap_or(0);
     let frames = scroll.len();
+    let sets = Sets::of(drawn.iter().map(Vec::as_slice));
+    let mut tracker = Tracker::new(opts.max_gap);
+    for (i, sprites) in drawn.iter().enumerate() {
+        tracker.push(first + i as u64, group_in_sets(sprites, &sets));
+    }
     let sprite_pages = (0..8u16)
         .filter(|p| frames > 0 && page_equal[usize::from(*p)] as usize * 2 > frames)
         .collect();
