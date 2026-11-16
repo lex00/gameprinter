@@ -9,7 +9,7 @@ const fill = { p: 'var(--gp-paper)', b: 'var(--gp-body)', k: 'var(--gp-ink)', c:
 const logo = `<svg class="gp-hero-logo" viewBox="0 0 16 16" width="240" height="240" shape-rendering="crispEdges" role="img" aria-label="The Game Printer logo, a pixel-art printer">${rects()
 	.map((r) => `<rect x="${r.x}" y="${r.y}" width="${r.w}" height="1" fill="${fill[r.c as keyof typeof fill]}"/>`)
 	.join('')}</svg>`;
-const description = 'Docs for people improving, making and hosting games with Game Printer.';
+const description = 'Make original games that play in your browser, and port mechanics from ROMs you own.';
 ---
 <StarlightPage
 	frontmatter={{

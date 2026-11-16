@@ -3,7 +3,7 @@ title: ROM rules
 description: What may and may not happen with a ROM when you use or contribute to Game Printer.
 ---
 
-A commercial game's ROM belongs to its publisher. Game Printer is built so that its data never leaves your machine.
+A commercial game's ROM belongs to its publisher. Game Printer is built to keep a ROM's data on your own machine, and these rules are how you help.
 
 ## The rules
 
@@ -30,6 +30,13 @@ A commercial game's ROM belongs to its publisher. Game Printer is built so that 
 | `gp package scan` | Before a game or theme is published | Any file holding data from a ROM it names |
 | The registry | On publish | Any file holding 32 or more bytes in a row from a named ROM |
 
-The checks are a backstop. Following the rules is still on you.
+These checks are a backstop. Following the rules is still up to you.
 
-A clip's presses are frame numbers, and a few of them can equal bytes of a ROM by chance (one of Tapper's clips matched seven bytes of a tile chip). `gp package scan` lets such a match pass only when it is narrow: the file is a `.presses` file, every number the match covers is a press timing (the frame count, or a span's first or last frame), those numbers rise as play's do, and the match is at most 8 numbers. A longer match, or one touching any other number, is still refused.
+A clip's presses are frame numbers, and now and then a few of them match bytes of a ROM by chance (one of Tapper's clips matched seven bytes of a tile chip). `gp package scan` lets such a match through only when all of these hold:
+
+- the file is a `.presses` file
+- every number in the match is a press timing (the frame count, or a span's first or last frame)
+- those numbers rise the way play does
+- the match is 8 numbers or fewer
+
+A longer match, or one that touches any other number, is still refused.

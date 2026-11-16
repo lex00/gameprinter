@@ -51,18 +51,18 @@ export default defineConfig({
 				ThemeProvider: './src/components/ThemeProvider.astro',
 				ThemeSelect: './src/components/ThemeSelect.astro',
 			},
-			description: 'Docs for people improving, making and hosting games with Game Printer.',
+			description: 'Make original games that play in your browser, and port mechanics from ROMs you own.',
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/lex00/gameprinter' }],
 			sidebar: [
 				{
 					label: 'What do you want to do?',
 					items: [
-						{ label: 'Play', link: 'https://lex00.github.io/games/', attrs: { rel: 'noopener' } },
-						{ label: 'Improve a game', slug: 'improve' },
 						{ label: 'Make your own game', slug: 'make' },
+						{ label: 'Play', link: 'https://lex00.github.io/games/', attrs: { rel: 'noopener' } },
 						{ label: 'Themes and levels', slug: 'themes' },
 						{ label: 'Host your theme', slug: 'host-your-own' },
 						{ label: 'Bring in a game', slug: 'bring' },
+						{ label: 'Improve a game', slug: 'improve' },
 					],
 				},
 				{

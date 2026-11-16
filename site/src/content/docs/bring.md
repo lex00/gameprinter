@@ -1,13 +1,17 @@
 ---
 title: Bring in a game
-description: Port a game from a ROM you own, from copying the ROM in to a model scored on runs it has never seen, step by step, for an NES game and an arcade game.
+description: Port a game's mechanics from a ROM you own, step by step, for an NES game and an arcade game.
 ---
 
-Bringing in a game (porting it) starts from a ROM you own and ends with a model of the game and a set of clips that prove the model matches it. The game's folder is then a template: it holds the model and nothing from the ROM, so anyone can copy it to start a game of their own ([what a model and a template are](../)). The ported game plays in a browser. Its art and levels are read from each player's own ROM inside the page, and it never becomes a new ROM. Donkey Kong plays that way today; no arcade game plays in a browser yet. You'd normally direct an agent to do the reading and modelling, and step in to judge what you see when you play.
+Porting a game starts with a ROM you own. You play it and record clips, and your agent reads the game's code and writes down how it plays: what moves, how fast, what happens on contact. That written version is the game's model, `model.toml`, and the clips prove it matches the original. Your part is mostly playing and saying what looks wrong.
+
+The finished folder holds the model and nothing from the ROM. That makes it a template anyone can copy to start a game of their own. The ported game plays in a browser, reading its art and levels from each player's own ROM inside the page, and it never becomes a new ROM. Donkey Kong plays that way today. No arcade game plays in a browser yet.
 
 ## The steps, in order
 
-This is game-printer's checklist for bringing in a game (its `docs/new-game.md`), with the command that does each step now. The order is the one Donkey Kong's first stage taught (`docs/research/dk-25m-retrospective.md` in the gameprinter repo). The corpus and the gate come before the first clip, so every clip is scored the same way from the start. The player's place goes in the state mapping before the first clip joins the corpus, since a clip scored over no fields agrees on every frame. GAME is the game's folder in your games checkout (`games/my-game`), RUN a scoring run's name. The page is `gp serve`'s, opened by `gp mechanic start`; its tabs are CLIPS, REFINE, PLAY and THEMES. The sections after the table say more about each part.
+This is the checklist from game-printer, the older tool (its `docs/new-game.md`), with the command that does each step today. Donkey Kong's first stage taught us the order (`docs/research/dk-25m-retrospective.md` in the gameprinter repo). Set up the corpus and the gate before the first clip, and every clip gets scored the same way from the start. Put the player's place in the state mapping before the first clip joins the corpus too: a clip scored over no fields agrees on every frame and tells you nothing.
+
+In the table, GAME is the game's folder in your games checkout (`games/my-game`) and RUN is a scoring run's name. The page is the one `gp serve` hosts and `gp mechanic start` opens. Its tabs are CLIPS, REFINE, PLAY and THEMES. The sections after the table go into each part.
 
 | # | Step | NES | Arcade (a MAME romset) | On the page | Done when |
 |---|---|---|---|---|---|
@@ -32,25 +36,25 @@ This is game-printer's checklist for bringing in a game (its `docs/new-game.md`)
 | 19 | Record the held-out runs | The sealed-run row of the quest log | The same | CLIPS: Select or Tab in review seals a run | Full runs of the first stage are under `~/.gameprinter/sealed/GAME/`, never in a session's clips |
 | 20 | Score the held-out runs | `gp sealed score GAME RUN`, the coordinator alone | The same | | Each run's line is in `~/.gameprinter/sealed/GAME/ledger.txt` |
 
-Once the model holds, THEMES lists the game's themes and its theme kit: [Themes and levels](../themes/) has how to make one. `gp game new` doesn't yet find a movie that syncs (try each published movie of the ROM's hash with `gp movie diagnose`) or the player's and the stage's bytes, and it writes the region `ntsc` for a new NES entry, which you correct for a PAL dump.
+Once the model holds, THEMES lists the game's themes and its theme kit; [Themes and levels](../themes/) says how to make one. A few things `gp game new` doesn't do yet. It doesn't find a movie that syncs (try each published movie of the ROM's hash with `gp movie diagnose`), and it doesn't find the player's or the stage's bytes. It also writes the region `ntsc` for every new NES entry, so correct that for a PAL dump.
 
 ## 1. Put your ROM in your ROM folder
 
-ROMs live in one folder on your machine, `$GP_ROM_DIR` (by default `~/.gameprinter/roms`), never in a repo. Copy a ROM you own there:
+ROMs live in one folder on your machine, `$GP_ROM_DIR` (`~/.gameprinter/roms` unless you set it), and never in a repo. Copy a ROM you own there:
 
 ```sh
 gp roms add ~/Downloads/my-game.nes
 ```
 
-Each file is named by the game whose `roms.toml` in your [games checkout](https://github.com/lex00/games) holds its hash. A ROM no game names yet is added as unknown, and that's the one you start a game from. `--move` moves the file instead of copying it, and `--clean` adds a copy without the junk some dumps carry (a trainer, bytes after the game data), with a note of what was removed.
+Each file gets named after the game whose `roms.toml` in your [games checkout](https://github.com/lex00/games) holds its hash. A ROM that no game names yet is added as unknown, and that's the one you start a new game from. `--move` moves the file instead of copying it. `--clean` adds a copy without the junk some dumps carry (a trainer, bytes after the game data) and notes what it removed.
 
-A ROM hack is a patched source: a game's `roms.toml` names the base it is made from, the author's patch and the patched image by their hashes (`kind = "patched"`). Game Printer doesn't apply patches, so make the patched image outside it from your own base; `gp roms add` then knows it by its hash like any other dump. The patch and the patched image never go in a repo.
+A ROM hack's entry in `roms.toml` (`kind = "patched"`) holds the hashes of the base ROM, the author's patch and the patched image. Game Printer doesn't apply patches. Make the patched image yourself from your own base, outside Game Printer, and `gp roms add` will know it by its hash like any other dump. The patch and the patched image never go in a repo.
 
 `gp roms scan` lists what's in the folder and which game each file belongs to.
 
-If the game has several revisions, compare them and choose one as the target. `gp roms diff a.nes b.nes --summary` lists each range of PRG and CHR that differs, named by the first one's asset map and labels (graphics, level data, a table, code), without quoting any byte. When the two programs sit at different offsets, `--cpu C000-FFFF` compares what the CPU sees there instead. `docs/roms-diff.md` in the gameprinter repo has the rest.
+If the game has several revisions, compare them and pick one as the target. `gp roms diff a.nes b.nes --summary` lists each range of PRG and CHR that differs, named from the first ROM's asset map and labels (graphics, level data, a table, code), without quoting any bytes. When the two programs sit at different offsets, `--cpu C000-FFFF` compares what the CPU sees there instead. `docs/roms-diff.md` in the gameprinter repo has the rest.
 
-A dump of a game that already has a folder may keep the same assets at other offsets. `gp assets find GAME --rom ROM` searches it for each of the game's assets by the content its asset map holds and says where each asset is and whether it changed. When no game knows the ROM it prints a draft `roms.toml` entry; `--lift DIR` lifts what it found. `gp assets hash ROM` writes that content into the asset map from your own ROM, hashes only. On an arcade zip, find compares the files with every chip of each set the game's map lists by SHA-1, whatever their names. `docs/assets.md` has the rest.
+Another dump of a game that already has a folder may keep the same assets at other offsets. `gp assets find GAME --rom ROM` looks for each of the game's assets by the content its asset map records, and says where each one is and whether it changed. When no game knows the ROM, it prints a draft `roms.toml` entry, and `--lift DIR` lifts what it found. `gp assets hash ROM` writes that content into the asset map from your own ROM, as hashes only. On an arcade zip, find compares the files with every chip of each set the game's map lists, by SHA-1, whatever the files are called. `docs/assets.md` has the rest.
 
 ## 2. Start the game's folder
 
@@ -58,9 +62,9 @@ A dump of a game that already has a folder may keep the same assets at other off
 gp game new my-game --rom ~/.gameprinter/roms/nes/my-game.nes --genre platformer --title "My Game"
 ```
 
-This makes `my-game/` in your games checkout. It holds `package.toml`, the ROM's hashes in `roms.toml`, an asset map of what the ROM's header says, and a model skeleton for the genre (`platformer`, `topdown`, `gridhop` for a hop on a grid of cells such as Q*bert, `events` for track and field, or `other`): a pad, a player and an empty level, each marked as a placeholder. There's a corpus with no clips, and pins that already hold against your ROM. No byte of the ROM is written. It writes over nothing, and it refuses a ROM another game already names.
+This makes `my-game/` in your games checkout with `package.toml`, `roms.toml` (the ROM's hashes) and an asset map of what the ROM's header says. It also writes a model skeleton for the genre: a pad, a player and an empty level, each marked as a placeholder. The genres are `platformer`, `topdown`, `gridhop` (hopping on a grid of cells, as in Q*bert), `events` (track and field) and `other`. There's a corpus with no clips yet, and pins that already hold against your ROM. No byte of the ROM is written. It never writes over anything, and it refuses a ROM another game already names.
 
-The ROM's source in `roms.toml` is named after the game; `--source ID` names it otherwise (`qbert-u`), when the game will have more than one ROM. The six ROMs game-printer registered have their entries in `roms/known.toml` in the gameprinter repo, and `roms.toml` gets the one for yours with its board facts and evidence.
+The ROM's source in `roms.toml` is named after the game. When the game will have more than one ROM, `--source ID` gives it another name (`qbert-u`). The six ROMs game-printer registered have entries in `roms/known.toml` in the gameprinter repo, and if yours is one of them, `roms.toml` gets its entry with the board facts and evidence.
 
 Check what it made:
 
@@ -70,51 +74,64 @@ gp template check my-game --rom ~/.gameprinter/roms/nes/my-game.nes
 gp package scan my-game
 ```
 
-`gp package scan --json` output kept as a baseline (`--baseline FILE`) lists what the scan found then as known, so a later scan fails only on something new.
+If you keep `gp package scan --json` output as a baseline (`--baseline FILE`), a later scan treats what it found then as known and fails only on something new.
 
-The first real work is finding where the game keeps the player in RAM and adding it to `mapping.toml`, before the first clip.
+The first real job is finding where the game keeps the player in RAM and adding that to `mapping.toml`, before the first clip.
 
 ## 3. Play, record and talk to the agent
 
-`gp game new` also starts the game's quest log: the mechanics to record for its genre (the title screen, walking, jumping, enemies and so on), each with a line saying what to show. In your gameprinter checkout, build the browser player once, then open the page on one of them:
+`gp game new` also starts the game's quest log, a list of the mechanics to record for its genre (the title screen, walking, jumping, enemies and so on), each with a line saying what to show. In your gameprinter checkout, build the browser player once, then open the page on one of them:
 
 ```sh
 scripts/web/build-play.sh
 gp mechanic start my-game walk
 ```
 
-It opens the page in `gp serve`, at `http://127.0.0.1:7710/mechanic/my-game/?tab=clips` (on your machine only; it starts `gp serve` when none is running), and prints a line to give your agent. The page has four tabs. **CLIPS** is where you record and review: the quest log, the game in the middle on the original (THE ORIGINAL) or a clip on the game's model (ON THE MODEL), and under it a line of the background work. **REFINE** is the background work: the clips being scored and refined on the game's model, what each round kept, and its questions. **PLAY** is the game's model on its own, with its settings. **THEMES** is the game's themes: its theme kit, making and fitting a theme, the readability and originality checks, and each theme's clip review and refinement ([Themes](../themes/)). **AGENT'S LOG** in the header (or L) opens what your agent is doing beside any tab. `gp mechanic start --own-server` serves the page on a server of its own, as before; when a new `gp` is published to `~/.gameprinter/bin/gp` (by the gate, or `gp self publish`), that server restarts into it between requests, on the same port and mechanic, and `--no-follow` keeps it on the build it started with. `--rom FILE` names the ROM instead of finding it in your ROM folder. Play with the keyboard or a controller. R (or the right bumper) starts a recording and stops it; type a note and press Enter to hand the clip to your agent. The agent reads the session with `gp mechanic show my-game walk` and answers with `gp mechanic say`; its words show over the game, which waits until you answer. Click another row of the quest log to work on it next. In PLAY your agent's words wait until Esc brings you back to CLIPS.
+It opens the page in `gp serve` at `http://127.0.0.1:7710/mechanic/my-game/?tab=clips`, on your machine only (it starts `gp serve` if none is running), and prints a line to give your agent. `--rom FILE` names the ROM instead of finding it in your ROM folder.
 
-Once a mechanic's clips are in the corpus and a patch lands through `gp model gate`, the gate writes its scores to `~/.gameprinter/work/refine/my-game/status.json`, and the quest log (`gp mechanic queue my-game`, and the page's list) shows each row's scores: how many clips meet the contract's bars, the share of frames together, and the first split. A row whose clips all meet the bars shows as done.
+The page has four tabs:
 
-If you worked on a game with game-printer, the old tool, `gp mechanic import my-game --from ~/.game-printer` brings its mechanic sessions, quest log, scores and sealed runs into this home under the game's name here (the old name is the corpus's import prefix, such as donkey-kong-oe for donkey-kong). `--dry-run` lists what it would copy. It overwrites nothing.
+- CLIPS is where you record and review. It shows the quest log, the game in the middle (the original, THE ORIGINAL, or a clip on the game's model, ON THE MODEL), and a line about the background work underneath.
+- REFINE is that background work: the clips being scored and refined on the game's model, what each round kept, and its questions.
+- PLAY is the game's model by itself, with its settings.
+- THEMES has the game's themes: its theme kit, making and fitting a theme, the readability and originality checks, and each theme's clip review and refinement ([Themes](../themes/)).
+
+AGENT'S LOG in the header (or L) shows what your agent is doing, beside any tab.
+
+Play with the keyboard or a controller. R (or the right bumper) starts and stops a recording. Type a note and press Enter to hand the clip to your agent. The agent reads the session with `gp mechanic show my-game walk` and replies with `gp mechanic say`. Its words show over the game, which waits for your answer. Click another row of the quest log to work on that next. In PLAY, your agent's words wait until Esc takes you back to CLIPS.
+
+`gp mechanic start --own-server` serves the page on a server of its own, as before. When a new `gp` is published to `~/.gameprinter/bin/gp` (by the gate, or `gp self publish`), that server restarts into it between requests, on the same port and mechanic; `--no-follow` keeps it on the build it started with.
+
+Once a mechanic's clips are in the corpus and a patch lands through `gp model gate`, the gate writes its scores to `~/.gameprinter/work/refine/my-game/status.json`. The quest log (`gp mechanic queue my-game`, and the list on the page) then shows each row's scores: how many clips meet the contract's bars, the share of frames that agree, and the first split. When all of a row's clips meet the bars, the row shows as done.
+
+If you worked on a game with game-printer, the old tool, `gp mechanic import my-game --from ~/.game-printer` brings over its mechanic sessions, quest log, scores and sealed runs, under the game's name here. The old name becomes the corpus's import prefix, such as donkey-kong-oe for donkey-kong. `--dry-run` lists what it would copy, and it never overwrites anything.
 
 Clips are kept as presses, never pictures, under `~/.gameprinter/mechanics/my-game/`.
 
-A clip of a session is scored on the model before it's in the corpus: `gp clip score my-game walk:3` scores clip 3 of the walk session, `gp clip score my-game walk` every clip of it, and `--all` every clip of every session. `gp clip log my-game walk:3` writes the clip's input from power-on, its start checked against the state saved with it. A sealed session (its name starts with `sealed`) is refused, and left out of `--all`.
+You can score a session's clips on the model before they're in the corpus. `gp clip score my-game walk:3` scores clip 3 of the walk session, `gp clip score my-game walk` scores all of them, and `--all` scores every clip of every session. `gp clip log my-game walk:3` writes the clip's input from power-on, checking its start against the state saved with it. A sealed session (one whose name starts with `sealed`) is refused, and `--all` leaves it out.
 
-Beside the game, **Your agent** shows what the agent is doing while you play: its status and a log (`gp mechanic log`), pictures and clips it pins for you to look at (`gp mechanic pin`, such as a sheet of frames or the original against the model), and a table of the problems it has found with the state of each (`gp mechanic problem`). Tell it what you see in the conversation.
+Next to the game, Your agent shows what the agent is up to while you play. You see its status and a log (`gp mechanic log`), pictures and clips it pins for you to look at (`gp mechanic pin`, such as a sheet of frames or the original against the model), and a table of the problems it has found and where each stands (`gp mechanic problem`). Tell it what you see in the conversation.
 
-Each clip in the list has an **ON THE MODEL** button: it plays the clip through the original and through the game's model, the way the score does, and shows the two side by side, the model over the original, or their differences, frame by frame. A strip under the pictures is green where the two agree and red where they differ, and the DIFF buttons jump between differences. A game with custom code (hooks, Rust compiled to WebAssembly) runs as its compiled module: start the page with `--module FILE` (`gp game build` makes it), or keep it at `~/.gameprinter/work/modules/GAME.wasm`.
+Each clip in the list has an ON THE MODEL button. It plays the clip through the original and through the game's model, the way the score does, and shows them side by side, the model over the original, or just their differences, frame by frame. A strip under the pictures is green where they agree and red where they differ, and the DIFF buttons jump between differences. A game with custom code (hooks, Rust compiled to WebAssembly) runs as its compiled module. Start the page with `--module FILE` (`gp game build` makes it), or keep the module at `~/.gameprinter/work/modules/GAME.wasm`.
 
 ## 4. Put the clips in the corpus
 
-The clips you hand off stay in the session until they join the game's corpus, the clips its model is scored against:
+The clips you hand off stay in the session until they join the game's corpus, the set of clips its model is scored against:
 
 ```sh
 gp corpus import my-game
 gp corpus import my-game --write
 ```
 
-The first says which clips it would add, change and leave out, and the version step; `--write` writes them into `corpus.toml` and `inputs/` and records the new version. A clip already there is kept as it is, and nothing is removed unless you name it with `--remove`. `--session walk` takes only that session's clips. Sealed runs, rows marked out of scope and anything `[import] exclude` names stay out. After editing `corpus.toml` by hand, `gp corpus bump my-game` says what changed since the recorded version and `--write` records the next one. The format and the version rules are in `docs/formats/scoring-corpus.md` in the gameprinter repo.
+The first line tells you which clips it would add, change and leave out, and the version step. With `--write` it puts them in `corpus.toml` and `inputs/` and records the new version. Clips already there stay as they are, and nothing is removed unless you name it with `--remove`. `--session walk` takes only that session's clips. Sealed runs, rows marked out of scope and anything `[import] exclude` names stay out. If you edit `corpus.toml` by hand, `gp corpus bump my-game` says what changed since the recorded version, and `--write` records the next one. The format and the version rules are in `docs/formats/scoring-corpus.md` in the gameprinter repo.
 
-In a games repo the import can go through the gate instead: `gp model gate my-game --import` runs the import on the branch's tip from your sessions, gates the result as a patch (the corpus scored before and after) and lands it when nothing got worse. With nothing new in the sessions it lands nothing. `--removes ID` lets it remove a clip, as for a patch.
+In a games repo the import can go through the gate instead. `gp model gate my-game --import` runs the import from your sessions on the branch's tip, gates the result as a patch (scoring the corpus before and after), and lands it if nothing got worse. If the sessions hold nothing new, it lands nothing. `--removes ID` lets it remove a clip, as with a patch.
 
-A corpus grows one session at a time, and many clips end up running the same code. `gp corpus reduce my-game` proposes the fewest clips that still run every routine and branch way the corpus runs in each stage. Clips your fix commits name are always kept. Without `--write` nothing changes; `--write ~/.gameprinter/work/reduce.toml` writes the plan with each clip kept or dropped and why. On an arcade romset both Z80s' code is counted. The rules are in `docs/formats/scoring-corpus.md`, "Reduce".
+A corpus grows a session at a time, and a lot of clips end up running the same code. `gp corpus reduce my-game` proposes the fewest clips that still run every routine and branch way the corpus runs in each stage. Clips that your fix commits name are always kept. Without `--write` nothing changes; `--write ~/.gameprinter/work/reduce.toml` writes the plan, with each clip kept or dropped and why. On an arcade romset it counts both Z80s' code. The rules are in `docs/formats/scoring-corpus.md`, "Reduce".
 
 ## 5. Measure what the original does
 
-Once the mapping holds the player and a few clips are in, your agent measures the original and holds the model to it. These read RAM and the state mapping, so they work on an NES game and an arcade game alike:
+Once the mapping has the player and a few clips are in, your agent measures the original and holds the model to it. These commands read RAM and the state mapping, and work the same on an NES game and an arcade game:
 
 - `gp mechanic probe my-game` runs the probe recipes in `my-game/probes.toml`: a start, some presses, and measures read from RAM after each frame, such as the frames from a jump's press to its landing. Each measure with an expected value is checked, so the facts a mechanic rests on run again with no agent.
 - `gp interp moments` lists the game's own moments in a run (jumps, landings, deaths, lives lost, counters, level changes) and whether the model does each one.
@@ -123,7 +140,7 @@ Once the mapping holds the player and a few clips are in, your agent measures th
 - `gp interp slots` and `gp interp odds` hold the model's enemies to the original's enemy slots, and its random choices to the odds its own rules give.
 - `gp picture my-game --run RUN` and `gp solve my-game --run RUN` go through a scored corpus: the first puts each picture difference down to a cause, the second proposes the model numbers that would close a clip's gap.
 
-A game with custom code (hooks) runs it as a compiled module, so give these `--module FILE`. [Measuring the original](https://github.com/lex00/gameprinter/blob/main/docs/original-measures.md) has each command in full.
+For a game with custom code (hooks), give these `--module FILE`, since the hooks run as a compiled module. [Measuring the original](https://github.com/lex00/gameprinter/blob/main/docs/original-measures.md) has each command in full.
 
 ## Tools for reading the game
 
@@ -135,7 +152,7 @@ A game can keep a labels file, `labels.toml` in its folder, naming its RAM varia
 
 ## An arcade game
 
-An arcade game comes in as a romset: a MAME zip named for its MAME system, such as `rbtapper.zip`. Game Printer knows a set by its chips, never by the file names inside: each chip's SHA-1 must match the set's list from MAME's own source. The set's identity, the `sha256` its `roms.toml` and `package.toml` give, is the SHA-256 of its chips' SHA-1s, sorted, one a line, so it is the same for any zip that holds those chips. The sets known so far are Tapper's: `rbtapper`, `tapper`, `tappera`, `tapperg` and `sutapper`.
+An arcade game comes in as a romset, a MAME zip named after its MAME system, such as `rbtapper.zip`. Game Printer recognises a set by its chips and ignores the file names inside. Each chip's SHA-1 has to match the set's list from MAME's own source. The set's identity, the `sha256` in its `roms.toml` and `package.toml`, is the SHA-256 of its chips' SHA-1s, sorted, one per line. Any zip holding those chips has the same identity. So far the known sets are Tapper's: `rbtapper`, `tapper`, `tappera`, `tapperg` and `sutapper`.
 
 ```sh
 gp roms add ~/Downloads/rbtapper.zip
@@ -143,16 +160,22 @@ gp roms scan
 gp game new tapper --rom ~/.gameprinter/roms/arcade/rbtapper.zip --genre other --title Tapper
 ```
 
-`gp roms add` checks the zip against the sets and copies it whole to `$GP_ROM_DIR/arcade/`. `gp game new` writes the game's folder as for an NES game, with `platform = "arcade"` and the MAME set in `system`, a model on the arcade controls (coin, start1, a joystick and button1) at 30 frames a second with a 512x480 screen, and a state mapping marked `platform = "arcade"`, whose `ram[...]` reads the main CPU's addresses (Tapper's work RAM is at `0xE000`). Its asset map, `assets/tapper.toml`, is the board's: the 1024 background tiles (`gfx1`) and 256 sprites (`gfx2`) by index, the same in every Tapper set, so the same model draws with whichever set's art a player has (`tapper`'s, or `tapperg`'s other sprites). `gp model check`, `gp template check` (the romset's identity, the map and what it lifts) and `gp package scan` work on it.
+`gp roms add` checks the zip against the sets and copies it whole to `$GP_ROM_DIR/arcade/`. `gp game new` writes the game's folder much as for an NES game, with these differences:
 
-Lift the pictures, from whichever listed set the zip is, into a folder outside any repo, and check they pack back to the chips:
+- `platform = "arcade"`, and the MAME set in `system`
+- a model on the arcade controls (coin, start1, a joystick and button1) at 30 frames a second, with a 512x480 screen
+- a state mapping marked `platform = "arcade"`, whose `ram[...]` reads the main CPU's addresses (Tapper's work RAM is at `0xE000`)
+
+Its asset map, `assets/tapper.toml`, describes the board: the 1024 background tiles (`gfx1`) and 256 sprites (`gfx2`) by index. Those are the same in every Tapper set, and the same model draws with whichever set's art a player has (`tapper`'s, or `tapperg`'s other sprites). `gp model check`, `gp template check` (the romset's identity, the map and what it lifts) and `gp package scan` all work on it.
+
+Lift the pictures from whichever listed set your zip is into a folder outside any repo, and check that they pack back to the chips:
 
 ```sh
 gp assets lift ~/.gameprinter/roms/arcade/tapper.zip --map ../games/tapper/assets/tapper.toml -o ~/.gameprinter/work/assets/tapper
 gp assets pack ~/.gameprinter/work/assets/tapper --check ~/.gameprinter/roms/arcade/tapper.zip
 ```
 
-Each picture is an indexed PNG of 4-bit values with gray previews, and `source.toml` says which set they came from. The colours aren't in the chips: the board looks them up in its palette RAM, which the game writes as it runs, so a model does the same.
+Each picture is an indexed PNG of 4-bit values with gray previews, and `source.toml` records which set they came from. The colours aren't in the chips. The board looks them up in palette RAM, which the game writes as it runs, and a model has to do the same.
 
 To play it, build the arcade player once, then open the page:
 
@@ -161,7 +184,7 @@ scripts/web/build-play.sh --arcade
 gp mechanic start tapper walk
 ```
 
-5 drops a coin and 1 starts, as in MAME; the arrows move and X or Space taps. On a controller, Select is the coin, Start starts and A taps. Recording, notes, hand-offs, talk and FREE PLAY work as for an NES game. Clips are kept in the MAME oracle's input log format (`gp-arcade-input 0`), so MAME can replay any clip as it is. **ON THE MODEL** has nothing to show on an arcade game yet: Tapper has a model, but no model draws an arcade board's pictures yet. The board's sound plays in stereo, as MAME makes it: the first AY-8910 on the left, the second on the right. U turns it off and on.
+As in MAME, 5 drops a coin and 1 starts. The arrows move, and X or Space taps. On a controller, Select is the coin, Start starts and A taps. Recording, notes, hand-offs, talk and FREE PLAY work as for an NES game. Clips are kept in the MAME oracle's input log format (`gp-arcade-input 0`), and MAME can replay any clip as it is. ON THE MODEL has nothing to show on an arcade game yet: Tapper has a model, but no model draws an arcade board's pictures yet. The board's sound plays in stereo the way MAME makes it, the first AY-8910 on the left and the second on the right. U turns it off and on.
 
 To keep a clip in the game's corpus, save it as presses:
 
@@ -169,7 +192,7 @@ To keep a clip in the game's corpus, save it as presses:
 gp clip presses ../games/tapper tapper.serve.001 --from-session walk/1 --name "Serving at three bars"
 ```
 
-This writes `inputs/tapper.serve.001.start.presses` (power-on to the clip's start) and `inputs/tapper.serve.001.presses` (the clip), adds the clip to `corpus.toml` and makes its `recipes` hash again. An arcade game's files say which set and buttons they're for on their third line, `arcade tapper CSRLDUT`, and name the buttons `coin`, `start1`, `up`, `down`, `left`, `right` and `tap` (`start1@120-125`, `up+tap@300-340`). The files are read back as the scorer reads them, and the clip is replayed to the state its session recorded. `--log FILE --start N` takes a clip from any input log from power-on instead, such as a MAME oracle log.
+This writes `inputs/tapper.serve.001.start.presses` (power-on to the clip's start) and `inputs/tapper.serve.001.presses` (the clip), adds the clip to `corpus.toml` and remakes its `recipes` hash. An arcade game's files give the set and buttons on their third line, `arcade tapper CSRLDUT`, and call the buttons `coin`, `start1`, `up`, `down`, `left`, `right` and `tap` (`start1@120-125`, `up+tap@300-340`). The files are read back the way the scorer reads them, and the clip is replayed to the state its session recorded. `--log FILE --start N` takes a clip from any input log that starts at power-on instead, such as a MAME oracle log.
 
 Before a model is held to the screen measure, check the measure on the original against itself:
 
@@ -177,9 +200,9 @@ Before a model is held to the screen measure, check the measure on the original 
 gp clip screen ../games/tapper tapper.score.001 --mask ~/.gameprinter/work/tapper-mask.png
 ```
 
-It plays the clip on the board live, keeping a score tape, then from that tape, and measures each frame's two pictures with the sprite mask (every pixel a sprite drew); every frame must come out exact. `--mask` writes a frame beside its mask in red. Scoring an arcade clip keeps the board's side in a score tape as for the NES, keyed by the romset's identity, so a long clip doesn't replay the board each time.
+It plays the clip on the board live, keeping a score tape, then plays it again from that tape, and measures each frame's two pictures with the sprite mask (every pixel a sprite drew). Every frame has to come out exact. `--mask` writes a frame beside its mask in red. Scoring an arcade clip keeps the board's side in a score tape, as for the NES, keyed by the romset's identity, so a long clip doesn't replay the board every time.
 
-Tapper's board has ways a model of it must copy to match it frame for frame. Model each one as a quirk switch in the profiles, as for the NES games (Retro is the original's behaviour, Normal turns the quirk off), not as fixed behaviour:
+Tapper's board has habits a model must copy to match it frame for frame. Model each one as a quirk switch in the profiles, as the NES games do, rather than as fixed behaviour. Retro is the original's behaviour, and Normal turns the quirk off:
 
 | Quirk | What the board does |
 |---|---|
@@ -196,25 +219,25 @@ Tapper's board has ways a model of it must copy to match it frame for frame. Mod
 | Sound: volume steps | The SSIO's volumes and mute act a 20 ms piece at a time (MAME's stream updates), not at the write |
 | Sound: stereo by chip | Each AY has its own speaker |
 
-Also still missing: support for a game on a cartridge type the emulator doesn't handle yet, which would first need a [change to the tool](../contribute/).
+Also still missing: games on a cartridge type the emulator doesn't handle yet. Those need a [change to the tool](../contribute/) first.
 
-In the meantime, [improving a game](../improve/) uses the same model, clips and gate.
+[Improving a game](../improve/) uses the same model, clips and gate, if you'd like to start there.
 
 ## Recordings, the event stream and press searches
 
-These read the original's code as it runs. An NES ROM runs on gp-nes and an arcade romset on gp-arcade.
+These commands read the original's code as it runs, an NES ROM on gp-nes and an arcade romset on gp-arcade.
 
-`gp record --source my-game-rom --input run.input` keeps a run of the original in the store, and `gp replay`, `gp query`, `gp run-until`, `gp trace` and `gp events` read it back at any frame: its RAM, its CPU, every instruction, its interrupts and bank switches. `gp movie import` turns a published FCEUX or BizHawk movie into an input log for it. An arcade romset records the same way from an arcade input log, and `gp movie import` reads a MAME `.inp` recording of it. `docs/recording.md` in the gameprinter repo has the rest.
+`gp record --source my-game-rom --input run.input` keeps a run of the original in the store. `gp replay`, `gp query`, `gp run-until`, `gp trace` and `gp events` read it back at any frame, down to its RAM, its CPU, every instruction, its interrupts and its bank switches. `gp movie import` turns a published FCEUX or BizHawk movie into an input log for it. An arcade romset records the same way from an arcade input log, and `gp movie import` reads a MAME `.inp` recording of it. `docs/recording.md` in the gameprinter repo has the rest.
 
-`gp watch start my-game ~/roms/my-game.nes` runs stage 0 on a ROM, with no model: it reads the code, runs seeded starts, searches for presses that reach code no run has, and writes each thing it finds first (new code, banks, jumps, pointer values) to `~/.gameprinter/watch/my-game/events.ndjson` as it goes. Your agent follows it with `gp watch events my-game --follow`, and a page with the `/api/watch/my-game/stream` route of the mechanic page's server. `gp explore` is the search on its own: it writes the presses it keeps as a clip set. `gp capture dense games/my-game` searches from your game's clip starts for a few short clips that each run much more of the original's code. `docs/watch.md` and `docs/capture.md` have the rest.
+`gp watch start my-game ~/roms/my-game.nes` runs stage 0 on a ROM, with no model. It reads the code, runs seeded starts, and searches for presses that reach code no run has reached. Each new thing it finds (new code, banks, jumps, pointer values) goes to `~/.gameprinter/watch/my-game/events.ndjson` as it goes. Your agent follows along with `gp watch events my-game --follow`, and a page can follow the `/api/watch/my-game/stream` route of the mechanic page's server. `gp explore` is the search on its own: it writes the presses it keeps as a clip set. `gp capture dense games/my-game` searches from your game's clip starts for a few short clips that each run much more of the original's code. `docs/watch.md` and `docs/capture.md` have the rest.
 
 ## Reading the original's code
 
-These read the NES's 6502 code, or on an arcade romset the Z80's; what a romset can't do yet is said below.
+These read the NES's 6502 code, or the Z80's on an arcade romset. Where a romset can't do something yet, it says so below.
 
 `gp model static ~/roms/my-game.nes --unread` reads everything the code settles without running it: its routines and dispatch, constants, state machines, the RAM a model will need, and where the reader stopped. `gp code listing ~/roms/my-game.nes --clips clips.toml` lists each routine with how often each instruction ran and each branch went each way over your clips, and `gp code tables ~/roms/my-game.nes --index '$53'` finds the tables a RAM byte (a stage counter) indexes. `gp reach` says what your clips ran, by routine with `--window`, and compares two windows or clip sets with `--diff-*`.
 
-On an arcade romset, `gp model static ~/roms/arcade/tapper.zip` reads the main Z80's code alone, with nothing run: the interrupt handlers the CTC's vectors name, the routines and what each does (a frame wait, a jump table, the random routine), the record tables loops walk with IX, IY or HL, state machines, counters, timers, input bytes, and each call of the random routine. `--write`, `--model` and `--grade` work as for the NES; `--clips` and `--unread` don't yet.
+On an arcade romset, `gp model static ~/roms/arcade/tapper.zip` reads the main Z80's code alone, without running anything. It finds the interrupt handlers the CTC's vectors name, the routines and what each does (a frame wait, a jump table, the random routine), the record tables that loops walk with IX, IY or HL, and the state machines, counters, timers, input bytes and calls of the random routine. `--write`, `--model` and `--grade` work as for the NES; `--clips` and `--unread` don't yet.
 
 `gp interp draws --find ~/roms/my-game.nes --input run.input` finds the game's random number generator and the places its code reads it, and proposes `[[draws]]` entries for your mapping; `gp game new` already runs it on a minute of no input. `gp element inputs --run games/my-game --clip CLIP` names the routine that wrote a wrong measure's byte on the clip's first wrong frame, and every byte and branch that decided it. `gp cycles` measures the CPU's work per frame, for a game that steps its random generator while it waits for the next frame. `docs/code-reading.md`, `docs/element.md`, `docs/formats/draws.md` and `docs/cycles.md` in the gameprinter repo have the rest.
 
@@ -224,17 +247,17 @@ These read the code and sprites of an NES ROM or of an arcade romset.
 
 `gp dataset rom ~/roms/my-game.nes --out ~/.gameprinter/work/datasets/my-game` writes stage 0 of a ROM as tables: its routines and branches, the RAM it writes, its elements, state machines, constants, the mechanics it can name and what it leaves open. No file holds the ROM's bytes, and the command fails if one would. `gp dataset gaps DIR...` counts what datasets leave open. `docs/formats/rom-dataset.md` in the gameprinter repo has every table.
 
-`gp dataset grade DIR` runs the ROM (or the arcade romset) from stage 0's starts and counts what the run touched that the dataset gives a row, and what it leaves open. Given a game's key folder too, it grades the dataset against the key (`docs/formats/rom-dataset-key.md`); `--counts` prints counts only. No game in the games checkout has a key yet.
+`gp dataset grade DIR` runs the ROM (or the arcade romset) from stage 0's starts and counts how much of what the run touched has a row in the dataset, and how much it leaves open. Given a game's key folder too, it grades the dataset against the key (`docs/formats/rom-dataset-key.md`); `--counts` prints counts only. No game in the games checkout has a key yet.
 
-`gp mechanic harvest my-game RECORDING` replays a long recording (a published speedrun, imported with `gp movie import`) once and runs the mechanic sessions' detectors over all of it: head hits, side hits, landings, stomps, items, hurts, input ignored, changes nothing explains, code and objects seen for the first time. Each kind gets an example clip per level in a `harvest-LEVEL` session, and `--add` puts the kinds in your quest log. `gp mechanic leads my-game` replays every session clip and lists the code and RAM stage 0's runs reached that no clip has, by the routine it branches off: what to play next.
+`gp mechanic harvest my-game RECORDING` replays a long recording once (a published speedrun, imported with `gp movie import`) and runs the mechanic sessions' detectors over all of it. The detectors look for head and side hits, landings and stomps, items and hurts, ignored input, changes nothing explains, and code and objects seen for the first time. Each kind gets an example clip per level in a `harvest-LEVEL` session, and `--add` puts the kinds in your quest log. `gp mechanic leads my-game` replays every session clip and lists the code and RAM that stage 0's runs reached and no clip has, by the routine it branches off. That's your list of what to play next.
 
-A clip is evidence your agent can cite. `gp mechanic contacts my-game walk 3` runs the detectors over one clip and writes where the player touched something, and what changed then, beside it for the page to draw. `gp mechanic compare my-game jump 4 2` answers a question the measurements settle as a turn in the session, such as the tallest jump of clip 4 against clip 2 (on an arcade game, how far across each clip took the player). `gp mechanic video my-game walk 3` records the clip after checking its start and draws it as an animated PNG under `~/.gameprinter/videos/`. Any recording can be drawn the same way with `gp video RECORDING`, NES or arcade, with every frame checked as it is drawn. A clip from an input log that runs from power-on is saved with `gp mechanic clip-save my-game walk --log FULL.log --start N`. `docs/video.md` has the rest.
+Your agent can cite a clip as evidence. `gp mechanic contacts my-game walk 3` runs the detectors over one clip and writes, next to it, where the player touched something and what changed at that moment, for the page to draw. `gp mechanic compare my-game jump 4 2` answers a question the measurements settle as a turn in the session, such as the tallest jump of clip 4 against clip 2 (on an arcade game, how far across each clip took the player). `gp mechanic video my-game walk 3` records the clip after checking its start and draws it as an animated PNG under `~/.gameprinter/videos/`. Any recording can be drawn the same way with `gp video RECORDING`, NES or arcade, with every frame checked as it is drawn. A clip from an input log that runs from power-on is saved with `gp mechanic clip-save my-game walk --log FULL.log --start N`. `docs/video.md` has the rest.
 
 ## A first model from the ROM alone, and the jumpathon
 
-`gp model blind ~/my-game-model --rom ~/roms/my-game.nes` plays the ROM with no model and no mapping: it finds play start, the player's x and y bytes, the jump and run buttons and the forward direction, then measures the walk and run speeds, the jump's takeoff speed, gravity and fastest fall, and the player's size, and writes them as `observed` facts with the frames they came from, and the player's bytes as mapping fields. `--play-rounds N` adds a search over the first level with a decision model (`--decide`, as `gp farm` uses). It works on platformers whose start the blind discovery can reach; on Donkey Kong it stops at "play start: no start run reaches play". An arcade romset (`--rom tapper.zip`) plays on gp-arcade with the board's work RAM, its sprite list and the arcade device's buttons (a coin goes in before Start); the rest is the same rules. Where no button makes a jump, it looks for lanes: a stick way that moves the player's y by one amount a press and holds it there, with a lane number that changes on the same frame. A lane player gets its own measures: the button held until it acts (the count it runs, and what changes when it ends), the score (a decimal digit a byte, rising in play and never falling, its digits the ones the points routine writes), the search's moves built from those (walk, lane up and down, hold and let go) with the score as progress, the lane rule fitted from all of it with `gp rule lane`'s fitter and checked frame by frame, and the order of the frame's work from the board's access log. The mapping it writes (`entities.player[0].x`, `.y`, `.lane`, `counters.score`) is what `gp rule lane` reads; the output prints the command. On Tapper it finds the bartender's x, y and bar, the tap's pour and the score, with no model.
+`gp model blind ~/my-game-model --rom ~/roms/my-game.nes` plays the ROM with no model and no mapping. First it finds where play starts and which way is forward, the player's x and y bytes, and the jump and run buttons. Then it measures the walk and run speeds, the jump (takeoff speed, gravity and fastest fall) and the player's size. The measures become `observed` facts with the frames they came from, and the player's bytes become mapping fields. `--play-rounds N` adds a search over the first level with a decision model (`--decide`, as `gp farm` uses). It works on platformers whose start the blind discovery can reach; on Donkey Kong it stops at "play start: no start run reaches play". An arcade romset (`--rom tapper.zip`) plays on gp-arcade with the board's work RAM, its sprite list and the arcade device's buttons (a coin goes in before Start); the rest is the same rules. Where no button makes a jump, it looks for lanes: a stick way that moves the player's y by one amount a press and holds it there, with a lane number that changes on the same frame. A lane player gets its own measures: the button held until it acts (the count it runs, and what changes when it ends), the score (a decimal digit a byte, rising in play and never falling, its digits the ones the points routine writes), the search's moves built from those (walk, lane up and down, hold and let go) with the score as progress, the lane rule fitted from all of it with `gp rule lane`'s fitter and checked frame by frame, and the order of the frame's work from the board's access log. The mapping it writes (`entities.player[0].x`, `.y`, `.lane`, `counters.score`) is what `gp rule lane` reads; the output prints the command. On Tapper it finds the bartender's x, y and bar, the tap's pour and the score, with no model.
 
-`gp mechanic sweep jump my-game` is the jumpathon: a grid of jumps (takeoff speed, how long A is held, steering in the air) from open ground found blind, each played on the original and on your model in lockstep, and the grid says which cells the model gets wrong first. `--along PATH` sweeps every place a path through a level stands on, and `--fit-blind DIR` fits the jump from the game's own clips into a scratch copy of the model. Both read the NES's RAM and sprite table, and refuse an arcade game in words for now.
+`gp mechanic sweep jump my-game` is the jumpathon. It finds open ground blind and makes a grid of jumps from it (takeoff speed, how long A is held, steering in the air), plays each on the original and on your model in lockstep, and shows which cells the model gets wrong first. `--along PATH` sweeps every place a path through a level stands on, and `--fit-blind DIR` fits the jump from the game's own clips into a scratch copy of the model. Both read the NES's RAM and sprite table, and refuse an arcade game in words for now.
 
 ## What the original shows that your model doesn't
 
@@ -246,7 +269,7 @@ These read a recording of the original (`gp record`) beside your game's folder, 
 
 ## What the tools found, as one record
 
-`gp findings ingest my-game` reads what the tools have written for a game and keeps one line per finding in `~/.gameprinter/findings/my-game.ndjson`, with its evidence and status. A finding is a lead until a clip of real inputs shows it. `gp findings cut my-game` cuts those clips from a farm run's path (`gp farm --blind`) and the jumpathon's strips into the game's `findings` session. `gp findings confirm my-game ID` is the gate. It records the clip with `gp record` and checks it frame by frame with `gp replay`, then runs the detector the finding's kind names again. Only if that detector fires, at the finding's place when it has one, is the finding confirmed. `--confirm` on `cut` runs the gate on every clip, and `gp findings list my-game` counts the findings by kind and status. On Tapper the same steps run on gp-arcade with the board's work RAM and sprite list.
+`gp findings ingest my-game` collects what the tools have written about a game, one line per finding with its evidence and status, in `~/.gameprinter/findings/my-game.ndjson`. A finding stays a lead until a clip of real inputs shows it. `gp findings cut my-game` cuts those clips from a farm run's path (`gp farm --blind`) and the jumpathon's strips into the game's `findings` session. `gp findings confirm my-game ID` is the gate. It records the clip with `gp record`, checks it frame by frame with `gp replay`, and runs the detector for the finding's kind again. The finding is confirmed only if that detector fires, and at the finding's place when it has one. `--confirm` on `cut` runs the gate on every clip, and `gp findings list my-game` counts the findings by kind and status. On Tapper the same steps run on gp-arcade with the board's work RAM and sprite list.
 
 ## Holding the emulators to a reference
 
@@ -254,4 +277,4 @@ These read a recording of the original (`gp record`) beside your game's folder, 
 
 ## Play no run has made yet
 
-`gp localize my-game --level main` replays every clip and blind run of the game and finds the branches that only ever went one way in the level. For each it slices back to the guard and places that on the level grid (the mapping's `[cells]`). A search goes there next unless `--no-probe` is given. For now an arcade game is refused in words, since localize needs branch directions from gp-arcade's trace and a level grid in the mapping.
+`gp localize my-game --level main` replays every clip and blind run of the game and finds the branches that only ever went one way in the level. For each one it traces back to the guard and puts it on the level grid (the mapping's `[cells]`), and a search goes there next unless you pass `--no-probe`. For now it refuses an arcade game and says why: it needs branch directions from gp-arcade's trace and a level grid in the mapping.

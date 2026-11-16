@@ -3,9 +3,9 @@ title: Install gp
 description: Download the gp command, check it, connect your AI agent to it, or build it from source.
 ---
 
-`gp` is the command-line tool behind Game Printer. Playing a game takes a browser and nothing installed; a ported game such as Donkey Kong also asks for your own ROM of it, which stays in your browser. You need `gp` to make something.
+You don't need anything installed to play; a browser is enough, plus your own ROM for a ported game such as Donkey Kong. To make something, you need `gp`, Game Printer's command-line tool.
 
-A released `gp` is one file that carries the pages and files it needs, so making a theme takes no copy of the gameprinter repo and no Rust.
+A released `gp` is a single file with the pages and files it needs built in. You can make a theme without a copy of the gameprinter repo and without Rust.
 
 ## Download it
 
@@ -18,7 +18,7 @@ A release has an archive for each of these:
 | Linux on a 64-bit ARM processor | `aarch64-unknown-linux-gnu.tar.gz` |
 | Windows 10 or 11, 64-bit Intel or AMD | `x86_64-pc-windows-msvc.zip` |
 
-A release built before the Linux and Windows builds existed has only the Mac one; on another machine, [build it from source](#build-it-from-source). The Linux builds are made on Ubuntu 24.04, so they may not start on a Linux older than that (one with a glibc before 2.39). `uname -m` prints `x86_64` or `aarch64` to say which Linux one you need.
+Older releases, from before the Linux and Windows builds, only have the Mac one; on another machine, [build it from source](#build-it-from-source). The Linux builds are made on Ubuntu 24.04 and may not start on an older Linux (one with a glibc before 2.39). Run `uname -m` to see which Linux build you need: it prints `x86_64` or `aarch64`.
 
 ### With Homebrew
 
@@ -27,7 +27,7 @@ brew install lex00/tap/gp
 gp --version
 ```
 
-This is for a Mac; the Homebrew formula doesn't have the Linux builds yet. Homebrew checks the archive's checksum itself and puts `gp` at `/opt/homebrew/bin/gp`; that is the path to give an agent below. `brew upgrade gp` takes a newer release. The rest of this section is the same install by hand.
+This is for a Mac; the Homebrew formula doesn't have the Linux builds yet. Homebrew checks the archive's checksum for you and puts `gp` at `/opt/homebrew/bin/gp`, which is the path you'll give an agent below. `brew upgrade gp` gets a newer release. The rest of this section does the same install by hand.
 
 ### By hand, on a Mac
 
@@ -37,7 +37,7 @@ Each archive comes with its checksum, the same name ending in `.sha256`. Downloa
 shasum -a 256 -c gp-*-aarch64-apple-darwin.tar.gz.sha256
 ```
 
-It must print the archive's name and `OK`. A `FAILED` means the file isn't the one that was published, so delete it and don't run it.
+It should print the archive's name and `OK`. If it says `FAILED`, the file isn't the one that was published: delete it and don't run it.
 
 Then unpack it and put `gp` in a folder on your PATH:
 
@@ -54,12 +54,12 @@ The archive also holds `LICENSE` (gp's, Apache-2.0) and `THIRD-PARTY.md`, the li
 
 ### What a Mac says
 
-This `gp` isn't signed with an Apple developer certificate yet. A file a browser downloaded is marked as downloaded, and macOS refuses to run an unsigned one the first time: Terminal prints `killed` and a window says Apple could not verify that "gp" is free of malware. Once the checksum says `OK`, you can tell macOS you trust this file, in either of two ways:
+This `gp` isn't signed with an Apple developer certificate yet. macOS marks files your browser downloads, and the first time you run an unsigned one it refuses. Terminal prints `killed`, and a window says Apple could not verify that "gp" is free of malware. Once the checksum says `OK`, there are two ways to tell macOS you trust the file:
 
 - Open System Settings and go to Privacy & Security. Near the bottom is a line about "gp" with an Open Anyway button. Choose it, and run `gp --version` again.
 - Or in Terminal: `xattr -d com.apple.quarantine ~/.local/bin/gp`
 
-A file downloaded with `curl` in Terminal isn't marked, so macOS doesn't ask:
+Files downloaded with `curl` in Terminal aren't marked, and macOS won't ask about them:
 
 ```sh
 curl -fLO https://github.com/lex00/gameprinter/releases/download/TAG/gp-VERSION-COMMIT-aarch64-apple-darwin.tar.gz
@@ -67,7 +67,7 @@ curl -fLO https://github.com/lex00/gameprinter/releases/download/TAG/gp-VERSION-
 shasum -a 256 -c gp-*-aarch64-apple-darwin.tar.gz.sha256
 ```
 
-The checksum is still the step that matters: it is how you know the file is the one published.
+Don't skip the checksum, though: it's the last line above.
 
 ### On Linux
 
@@ -81,7 +81,7 @@ mv gp-*-x86_64-unknown-linux-gnu/gp ~/.local/bin/gp
 gp --version
 ```
 
-`sha256sum` answers `OK` after the archive's name when the file is the one published. Most Linux systems already have `~/.local/bin` on the PATH once it exists; if `gp --version` says the command isn't found, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc` (or your shell's startup file) and open a new terminal. Linux doesn't ask about unsigned programs the way a Mac does.
+`sha256sum` prints `OK` after the archive's name when the file is the one that was published. Most Linux systems put `~/.local/bin` on the PATH once it exists. If `gp --version` says the command isn't found, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc` (or your shell's startup file) and open a new terminal. Linux doesn't ask about unsigned programs the way a Mac does.
 
 ### On Windows
 
@@ -92,7 +92,7 @@ Download `gp-VERSION-COMMIT-x86_64-pc-windows-msvc.zip` and its `.sha256` into o
 Get-Content .\gp-*-x86_64-pc-windows-msvc.zip.sha256
 ```
 
-The two must be the same string of letters and digits (PowerShell prints it in capitals, the file in small letters; that doesn't matter). If they differ, delete the file and don't run it.
+The two should be the same string of letters and digits. PowerShell prints it in capitals and the file has it in lower case, which doesn't matter. If they differ, delete the file and don't run it.
 
 Unpack the zip and add a folder for `gp.exe` to your PATH:
 
@@ -103,11 +103,11 @@ Move-Item .\gp-*-x86_64-pc-windows-msvc\gp.exe "$env:LOCALAPPDATA\Programs\gp\gp
 [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$env:LOCALAPPDATA\Programs\gp", "User")
 ```
 
-A PowerShell window opened after this finds `gp`, which `gp --version` shows. An agent needs gp by its full path, `C:\Users\YOU\AppData\Local\Programs\gp\gp.exe`.
+Any PowerShell window you open after this finds `gp`; try `gp --version`. An agent needs the full path, `C:\Users\YOU\AppData\Local\Programs\gp\gp.exe`.
 
-This `gp.exe` isn't signed either. The first time it runs, Windows may show a blue "Windows protected your PC" window (SmartScreen): choose More info, then Run anyway, once the checksum matched.
+This `gp.exe` isn't signed either. The first time it runs, Windows may show a blue "Windows protected your PC" window (SmartScreen). If the checksum matched, choose More info, then Run anyway.
 
-The Windows build is new: the release workflow builds it and runs `gp self check` on it, but no one has made a theme with it yet. It should run what a theme needs (fetching a game, `gp theme look check`, `gp theme look play` in your browser), `gp mcp` for an agent, and `gp self check`. Fetching uses the `curl.exe` that Windows 10 and 11 have. Building a game's own code (`gp game build`) doesn't: gp has no build sandbox for Windows yet, and `gp self check` says so. Commands that run the repo's build scripts (building the public page yourself, `gp game share` for a game with its own pictures) need a checkout and Git Bash. Your home folder is `C:\Users\YOU\.gameprinter`, and `GP_HOME` and `GP_ROM_DIR` work as on the other systems.
+The Windows build is new. The release workflow builds it and runs `gp self check` on it, but nobody has made a theme with it yet. It should handle what a theme needs (fetching a game, `gp theme look check`, `gp theme look play` in your browser), `gp mcp` for an agent, and `gp self check`. Fetching uses the `curl.exe` that comes with Windows 10 and 11. Building a game's own code (`gp game build`) doesn't work yet, because gp has no build sandbox for Windows, and `gp self check` tells you so. Commands that run the repo's build scripts, such as building the public page yourself or `gp game share` for a game with its own pictures, need a checkout and Git Bash. Your home folder is `C:\Users\YOU\.gameprinter`, and `GP_HOME` and `GP_ROM_DIR` work as on the other systems.
 
 ## Check what works
 
@@ -115,7 +115,7 @@ The Windows build is new: the release workflow builds it and runs `gp self check
 gp self check
 ```
 
-For each thing `gp` reads or runs, it says whether this machine has it. A missing piece comes with what needs it and how to get it. The last lines say what this machine is ready for (a theme, a game from a template, a port). Nothing is installed or changed. This table lists the pieces it looks at.
+This goes through everything `gp` reads or runs and says whether your machine has it. For anything missing, it says what needs it and how to get it. The last lines tell you what the machine is ready for: a theme, a game from a template, or a port. It installs and changes nothing. These are the pieces it looks at:
 
 | Piece | What needs it | Making a theme needs it? |
 |---|---|---|
@@ -132,7 +132,7 @@ For each thing `gp` reads or runs, it says whether this machine has it. A missin
 
 ## Get a game to work on
 
-A theme is checked against the game's folder. Put your ROM of the game in `~/.gameprinter/roms` first, then fetch the game from the public registry, outside any git repo:
+Themes are checked against the game's folder, so you'll want a copy of it. Put your ROM of the game in `~/.gameprinter/roms` first, then fetch the game from the public registry into a folder outside any git repo:
 
 ```sh
 mkdir -p ~/.gameprinter/roms
@@ -141,11 +141,11 @@ gp game fetch lex00/donkey-kong@1.0.9 \
   --into ~/games/donkey-kong --rom-dir ~/.gameprinter/roms
 ```
 
-gp reads the package's id from the version's `id` line in the registry's [index](https://github.com/lex00/gp-registry/tree/main/index/lex00/donkey-kong), checks every file against it, and prints the id it used. Leave off `@1.0.9` to get the catalog's latest version. To pin an exact package, give its id with `--id`. Then [start a theme](../themes/) with `--game ~/games/donkey-kong`, or set `GP_GAMES_DIR=~/games` and use `--game donkey-kong`.
+gp reads the package's id from the version's `id` line in the registry's [index](https://github.com/lex00/gp-registry/tree/main/index/lex00/donkey-kong), checks every file against it, and prints the id it used. Leave off `@1.0.9` for the catalog's latest version, or pin an exact package by giving its id with `--id`. Then [start a theme](../themes/) with `--game ~/games/donkey-kong`, or set `GP_GAMES_DIR=~/games` and use `--game donkey-kong`.
 
 ## Connect your AI agent
 
-`gp mcp` gives an agent Game Printer's tools over MCP. The agent starts it itself; you only tell the agent where `gp` is. Use the full path to `gp` (`~/.local/bin/gp` above is `/Users/YOU/.local/bin/gp`), since an agent app doesn't read your shell's PATH. Outside the gameprinter repo, `gp mcp` uses the templates the released `gp` carries.
+`gp mcp` gives an agent Game Printer's tools over MCP. The agent starts it; all you do is tell the agent where `gp` is. Give the full path (`~/.local/bin/gp` above is `/Users/YOU/.local/bin/gp`), because agent apps don't read your shell's PATH. Outside the gameprinter repo, `gp mcp` uses the templates built into the released `gp`.
 
 ### Claude Code
 
@@ -177,11 +177,11 @@ The `env` line is only needed when your ROMs aren't in `~/.gameprinter/roms`. On
 
 ### Another MCP client
 
-`gp mcp` is a local server over stdio (no network port). Give the client the command `/Users/YOU/.local/bin/gp` with the one argument `mcp`, and name the server `gp`; its tools then appear as `gp`'s. More about the tools is in the repo's `docs/mcp.md`.
+`gp mcp` is a local server over stdio, with no network port. Give the client the command `/Users/YOU/.local/bin/gp` with the single argument `mcp`, and name the server `gp`, and its tools show up under `gp`. The repo's `docs/mcp.md` has more about the tools.
 
 ## Build it from source
 
-To change `gp` itself, or on a machine there's no download for yet.
+Do this if you want to change `gp` itself, or if there's no download for your machine yet.
 
 | Tool | Why |
 |---|---|
@@ -199,7 +199,9 @@ export PATH="$HOME/.gameprinter/bin:$PATH"
 gp --help
 ```
 
-`just setup` turns on the hook that refuses a commit holding ROM data. `just publish` builds an optimized `gp` and puts it in `~/.gameprinter/bin`. Add the `export` line to your shell's startup file to keep it. A `gp` built this way reads the page's files from the checkout; `just release` builds one that carries them, as a download does. It's built and tested on macOS. It compiles for Linux and Windows, and the release workflow builds and checks it on both, but day-to-day work happens on a Mac. On Windows, run the repo's recipes from Git Bash; `gp game build` there has no sandbox and refuses.
+`just setup` turns on the hook that refuses any commit holding ROM data. `just publish` builds an optimized `gp` and puts it in `~/.gameprinter/bin`; add the `export` line to your shell's startup file to keep it on your PATH. A `gp` built this way reads the page's files from the checkout. `just release` builds one with them built in, like a download.
+
+Day-to-day work happens on a Mac, where it's built and tested. It also compiles for Linux and Windows, and the release workflow builds and checks it on both. On Windows, run the repo's recipes from Git Bash. `gp game build` refuses there, since it has no sandbox.
 
 ## Where your files go
 

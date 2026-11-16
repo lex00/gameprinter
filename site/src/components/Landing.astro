@@ -1,13 +1,14 @@
 ---
-// The home page under the hero: the six paths, each saying where it stands.
+// The home page under the hero: the six paths, making your own game first,
+// each saying where it stands.
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const ways = [
-	{ title: 'Play', href: 'https://lex00.github.io/games/', text: 'Go to the games.' },
-	{ title: 'Improve a game', href: `${base}/improve/`, text: 'Fix how a published game plays, and send the change back.' },
-	{ title: 'Make your own game', href: `${base}/make/`, text: 'Start from the small test game and change it. Early: it runs on your machine only.' },
-	{ title: 'Themes and levels', href: `${base}/themes/`, text: 'Give a game new pictures or a new stage. Early: no preview yet.' },
-	{ title: 'Host your theme', href: `${base}/host-your-own/`, text: 'Put your theme in a registry of your own and share a link that plays it on the public page. Your AI agent can walk you through it.' },
-	{ title: 'Bring in a game', href: `${base}/bring/`, text: 'Port a game from a ROM you own. Not available yet.' },
+	{ title: 'Make your own game', href: `${base}/make/`, text: 'Copy a small starter game and change how it plays. Early: it runs on your own computer for now.' },
+	{ title: 'Play', href: 'https://lex00.github.io/games/', text: 'Play the published games in your browser.' },
+	{ title: 'Themes and levels', href: `${base}/themes/`, text: 'Draw new pictures and sounds for a game, or lay out a new stage. Early: players can\'t pick a new stage yet.' },
+	{ title: 'Host your theme', href: `${base}/host-your-own/`, text: 'Share your theme with a link that plays it on the public page. Your AI agent can walk you through it.' },
+	{ title: 'Bring in a game', href: `${base}/bring/`, text: 'Port a game\'s mechanics from a ROM you own. Early: NES games and Tapper\'s arcade board so far.' },
+	{ title: 'Improve a game', href: `${base}/improve/`, text: 'Fix something in how a published game plays, and send the fix back.' },
 ];
 const more = [
 	{ title: 'Install gp', href: `${base}/install/` },
@@ -18,7 +19,7 @@ const more = [
 ];
 ---
 <div class="gp-landing not-content">
-	<p class="gp-intro">Game Printer writes down how a game plays: what moves, how fast, what happens when things touch. That written-down game is a plain text file called the <strong>model</strong>. A web page plays it, so nothing gets installed. The pictures, sounds and level layouts of an old game come from your own copy of it, which your browser reads there and sends nowhere. A <strong>template</strong> is a finished model that holds nothing from any old game, ready to copy. Porting a game makes a new template; making your own game starts from a copy of one.</p>
+	<p class="gp-intro">Game Printer lets you create original games that run in your browser with nothing to install. It has powerful tools to help you port mechanics from your old ROMs and breathe new life into old games.</p>
 	<ul class="gp-ways">
 		{ways.map((w) => (
 			<li>

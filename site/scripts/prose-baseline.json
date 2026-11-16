@@ -1,8 +1,8 @@
 {
  "site/src/content/docs/bring.md": {
-  "tricolon/comma-series": 18,
-  "claude/colon-reveal": 3,
-  "repetition/near-duplicate": 11
+  "tricolon/comma-series": 16,
+  "claude/colon-reveal": 2,
+  "repetition/near-duplicate": 7
  },
  "site/src/content/docs/contribute.md": {
   "tricolon/comma-series": 1
@@ -11,7 +11,7 @@
   "tricolon/comma-series": 4
  },
  "site/src/content/docs/make.md": {
-  "tricolon/comma-series": 6,
+  "tricolon/comma-series": 4,
   "anaphora/repeated-opening": 1
  },
  "site/src/content/docs/registry.md": {
@@ -22,12 +22,12 @@
  },
  "site/src/content/docs/themes.md": {
   "dead-metaphor/rare-lemma": 1,
-  "discourse/punchy-fragments": 1,
-  "tricolon/comma-series": 2
+  "tricolon/comma-series": 2,
+  "discourse/punchy-fragments": 1
  },
  "README.md": {
-  "tricolon/comma-series": 3,
   "discourse/punchy-fragments": 3,
+  "tricolon/comma-series": 1,
   "anaphora/repeated-opening": 1
  }
 }
