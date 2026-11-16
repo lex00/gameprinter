@@ -607,6 +607,18 @@ const stored = (() => {
     return files;
   });
 })();
+// The game's sets for the board's sound: its package's lift/sources.toml,
+// or null.
+async function boardSets() {
+  if (HERE) return fetch("lift/sources.toml").then((r) => (r.ok ? r.text() : null)).catch(() => null);
+  try {
+    const { playFiles } = await import("./install.js");
+    const b = (await playFiles())?.get("lift/sources.toml");
+    return b ? new TextDecoder().decode(b) : null;
+  } catch {
+    return null;
+  }
+}
 // A `blob:` URL (a downloaded theme's file, from the cache) is fetched in
 // either case.
 async function load(url, init) {
@@ -1243,7 +1255,10 @@ async function main() {
     try {
       const zip = parent !== window && typeof parent.__gpRom === "function" ? await parent.__gpRom() : null;
       if (zip) boardZip = new Uint8Array(zip);
-      const sets = zip ? await fetch("lift/sources.toml").then((r) => (r.ok ? r.text() : null)).catch(() => null) : null;
+      // The sets the board knows are the game's chip rows, its package's
+      // play/lift/sources.toml: beside the frame with files=here, else in
+      // the installed package (a ROM game's own store holds what was lifted).
+      const sets = zip ? await boardSets() : null;
       if (zip) boardSound = await BoardSound.open(await fetch("gp_arcade_play.wasm").then((r) => {
         if (!r.ok) throw new Error(`gp_arcade_play.wasm: ${r.status}`);
         return r.arrayBuffer();
