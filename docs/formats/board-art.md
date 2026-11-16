@@ -81,7 +81,7 @@ column = 0
 | `palette_writes` | Bytes the program writes into palette RAM after loading `palette`, in order: byte `column` of row `row` (both default 0) of a `rows` slot goes to palette RAM's byte `at` (0 to 127). As the board's palette RAM does, colour `at / 2` takes the byte as its low 8 bits, and as its ninth bit 1 when `at` is odd and 0 when even |
 | `sprite_order` | (`present.sprite_order`, as on the NES) each entity's entry of sprite RAM: body k of the entity takes `at + step * k`, k being its slot (or its `word` less one, or its place among its kind's bodies). Entries run 0 to 127. A body with no entry, or whose entry another body took, takes the lowest free one, under the rest |
 
-`looks` (other looks chosen by counters) and `counters` and `repeats` (counters drawn as tiles) are below. The board draws a level only when it has `present.board`; a level without one is drawn as before. The board has one tile region and one sprite region, so a model names one `board-tiles` and one `board-sprites` slot.
+`looks` (other looks chosen by counters), `counters` and `repeats` (counters drawn as tiles) and `texts` (strings drawn as tiles) are below. The board draws a level only when it has `present.board`; a level without one is drawn as before. The board has one tile region and one sprite region, so a model names one `board-tiles` and one `board-sprites` slot.
 
 ## Looks chosen by counters
 
@@ -164,6 +164,27 @@ A cell's two bytes are video RAM's, low first: the tile code (bits 0 to 7) and t
 | `when` | Counter tests that must all hold for it to be drawn, as a look's |
 
 A counter drawn this way is the model's own: it shows what the model's counter holds, so a game whose hooks don't keep the score yet shows the score its clip started with. This is the arcade form of an NES model's HUD (`present.hud.field`'s `counter`, `digits` and `when`, drawn in a `font`'s characters): an MCR board has no HUD layer of its own, so the digits are cells of the one tile layer, in its codes.
+
+## Strings drawn as tiles
+
+A game's text routine writes a message into video RAM a byte at a time: Tapper's `$0350` writes each byte of a string as a cell's tile code, a space as tile 0, and the colour byte `E38F` holds beside it, up to a zero byte. `texts` (feature `level.board.counters`) draws such a string while counters say so:
+
+```toml
+[[levels.main.present.board.texts]]
+text = { slot = "attract_text", row = 0 }
+at = [6, 2]
+high = { slot = "attract_text", row = 4 }
+when = [{ counter = "attract_screen", cmp = "==", value = 2 }]
+```
+
+| Key | Meaning |
+|---|---|
+| `text` | Required: where the string starts, a `rows` slot's row read from `column` up to a zero byte or the row's end. Each byte is a cell's tile code, a space (0x20) drawn as tile 0. The bytes are the player's romset's, as every slot's are |
+| `at` | Required: `[column, row]` of the first character's cell |
+| `high` | Required: the cells' high byte |
+| `when` | Counter tests that must all hold for it to be drawn |
+
+A theme names a string's cells `text-SLOT`, after its slot.
 
 ## An entity's board sprite
 

@@ -459,10 +459,11 @@ pub const FEATURES: &[Feature] = &[
     core(
         "level.board.counters",
         "",
-        "Counters drawn into an arcade board's tile layer, as digits or as one tile repeated, with tile codes lifted from the player's romset",
+        "Counters drawn into an arcade board's tile layer, as digits or as one tile repeated, and strings drawn there while counters say so, with tile codes lifted from the player's romset",
         &[
             "levels.*.present.board.counters",
             "levels.*.present.board.repeats",
+            "levels.*.present.board.texts",
         ],
     ),
     core(

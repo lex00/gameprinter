@@ -1054,6 +1054,31 @@ pub struct BoardLook {
     /// repeated, as lives are shown as a row of pictures.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub repeats: Vec<BoardRepeat>,
+    /// Feature `level.board.counters`: strings drawn into the tile layer
+    /// while counters say so, as a game's text routine writes a message.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub texts: Vec<BoardText>,
+}
+
+/// A string drawn in an arcade board's tile layer (feature
+/// `level.board.counters`), as a game's text routine writes one into
+/// video RAM: one cell a byte, left to right from `at`, until a zero byte.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoardText {
+    /// Where the string starts, lifted: a `rows` slot's row, read from
+    /// `column` up to a zero byte or the row's end. Each byte is one
+    /// cell's tile code, and a space (0x20) is drawn as tile 0, as the
+    /// routine writes it.
+    pub text: RowByte,
+    /// Column and row of the first character's cell.
+    pub at: [u32; 2],
+    /// The cells' high byte, lifted: the colour bank and flips the routine
+    /// writes beside each character.
+    pub high: RowByte,
+    /// Drawn only while every one of these counter tests holds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub when: Vec<Guard>,
 }
 
 /// Another look of a level drawn by its arcade board (feature

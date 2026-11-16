@@ -60,6 +60,8 @@ struct LevelBoard {
     numbers: Vec<Number>,
     /// Counters drawn as one tile repeated (`repeats`).
     repeats: Vec<Repeat>,
+    /// Strings drawn while counters say so (`texts`).
+    texts: Vec<Text>,
 }
 
 /// A screen and its colours.
@@ -104,6 +106,16 @@ struct Number {
     codes: [u8; 10],
     high: u8,
     zeros: bool,
+    when: Vec<Test>,
+}
+
+/// A string drawn while counters say so: each character's cell and word.
+#[derive(Clone)]
+struct Text {
+    /// Its slot, as a theme names its cells.
+    name: String,
+    /// Each character's cell and its two bytes.
+    cells: Vec<(usize, [u8; 2])>,
     when: Vec<Test>,
 }
 
@@ -177,7 +189,7 @@ impl LevelBoard {
         w: &World,
         omit: Option<&[bool]>,
     ) -> (std::borrow::Cow<'a, [u8]>, Vec<CellDrawn>) {
-        if self.numbers.is_empty() && self.repeats.is_empty() {
+        if self.numbers.is_empty() && self.repeats.is_empty() && self.texts.is_empty() {
             return (std::borrow::Cow::Borrowed(videoram), Vec::new());
         }
         let mut v = videoram.to_vec();
@@ -227,6 +239,11 @@ impl LevelBoard {
             let count = value(r.counter, r.plus) as usize;
             for &cell in r.cells.iter().take(count) {
                 put(cell, r.word, counter_name(&r.name, None));
+            }
+        }
+        for t in self.texts.iter().filter(|t| Test::all(&t.when, w)) {
+            for &(cell, word) in &t.cells {
+                put(cell, word, format!("text-{}", t.name));
             }
         }
         (std::borrow::Cow::Owned(v), drawn)
@@ -648,11 +665,35 @@ impl BoardArt {
                     when: tests(&r.when).map_err(at_r)?,
                 });
             }
+            let mut texts = Vec::with_capacity(look.texts.len());
+            for (i, t) in look.texts.iter().enumerate() {
+                let at_t = |e: String| at(format!("texts[{i}]: {e}"));
+                let high = row_byte(&t.high.slot, t.high.row, t.high.column).map_err(at_t)?;
+                let mut cells = Vec::new();
+                for k in 0..32u32 {
+                    let Ok(b) = row_byte(&t.text.slot, t.text.row, t.text.column + k) else {
+                        break;
+                    };
+                    if b == 0 {
+                        break;
+                    }
+                    let (x, y) = (t.at[0] + k, t.at[1]);
+                    if x < 32 && y < 30 {
+                        cells.push(((y * 32 + x) as usize, [if b == 0x20 { 0 } else { b }, high]));
+                    }
+                }
+                texts.push(Text {
+                    name: t.text.slot.clone(),
+                    cells,
+                    when: tests(&t.when).map_err(at_t)?,
+                });
+            }
             levels.push(Some(LevelBoard {
                 base,
                 looks,
                 numbers,
                 repeats,
+                texts,
             }));
         }
         let kinds = spec
@@ -1597,9 +1638,11 @@ y = 191
         lift(dir);
         let map = std::fs::read_to_string(dir.join("assets.toml")).unwrap()
             + "\n[[asset]]\nname = \"codes\"\nformat = \"byte-rows\"\nregion = \"maincpu\"\noffset = 0\ncount = 1\nwidth = 4\n\n\
-               [[asset]]\nname = \"stage2\"\nformat = \"mcr-screen\"\nregion = \"maincpu\"\noffset = 0\n";
+               [[asset]]\nname = \"stage2\"\nformat = \"mcr-screen\"\nregion = \"maincpu\"\noffset = 0\n\n\
+               [[asset]]\nname = \"words\"\nformat = \"byte-rows\"\nregion = \"maincpu\"\noffset = 0\ncount = 1\nwidth = 6\n";
         std::fs::write(dir.join("assets.toml"), map).unwrap();
         std::fs::write(dir.join("codes.toml"), "rows = [[48, 48, 119, 16]]\n").unwrap();
+        std::fs::write(dir.join("words.toml"), "rows = [[72, 73, 32, 74, 0, 75]]\n").unwrap();
         let row = vec!["0x0001"; 32].join(", ");
         let rows = vec![format!("[{row}]"); 30].join(",\n");
         std::fs::write(dir.join("stage2.toml"), format!("rows = [{rows}]\n")).unwrap();
@@ -1627,6 +1670,12 @@ tile = { slot = "codes" }
 high = { slot = "codes", column = 1 }
 when = [{ counter = "bar", cmp = "<", value = 3 }]
 
+[[levels.main.present.board.texts]]
+text = { slot = "words" }
+at = [4, 5]
+high = { slot = "codes", column = 1 }
+when = [{ counter = "bar", cmp = "==", value = 2 }]
+
 [[levels.main.present.board.repeats]]
 counter = "lives"
 plus = -1
@@ -1644,6 +1693,13 @@ role = "graphics"
 [assets.codes.from]
 source = "cab"
 asset = "codes"
+
+[assets.words]
+kind = "rows"
+role = "graphics"
+[assets.words.from]
+source = "cab"
+asset = "words"
 
 [assets.stage2]
 kind = "board-screen"
@@ -1696,6 +1752,38 @@ asset = "stage2"
         assert_eq!(at_of(&art.draw(&w, &[], &[]).unwrap(), 0, 0), 16 + 5);
     }
 
+    /// A string drawn while its counter test holds, a byte a cell up to
+    /// its zero byte, a space as tile 0, as a game's text routine writes
+    /// one.
+    #[test]
+    fn a_text_is_drawn_while_its_counters_say_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, spec, art) = with_looks_and_counters(dir.path());
+        let mut w = World {
+            counters: vec![0; spec.counters.len()],
+            ..Default::default()
+        };
+        let level = art.levels[0].as_ref().unwrap();
+        let cell = |v: &[u8], x: usize, y: usize| {
+            let i = (y * 32 + x) * 2;
+            u16::from_le_bytes([v[i], v[i + 1]])
+        };
+        let screen = level.look(&w).videoram.clone();
+        let v = level.cells(&level.look(&w).videoram, &w).into_owned();
+        assert_eq!(
+            cell(&v, 4, 5),
+            cell(&screen, 4, 5),
+            "not drawn while bar is 0"
+        );
+        w.counters[spec.counters.index_of("bar").unwrap()] = 2;
+        let v = level.cells(&level.look(&w).videoram, &w).into_owned();
+        assert_eq!(cell(&v, 4, 5), 0x3048);
+        assert_eq!(cell(&v, 5, 5), 0x3049);
+        assert_eq!(cell(&v, 6, 5), 0x3000, "a space is tile 0");
+        assert_eq!(cell(&v, 7, 5), 0x304A);
+        assert_eq!(cell(&v, 8, 5), cell(&screen, 8, 5), "the zero byte ends it");
+    }
+
     /// Counters drawn as digits and as a tile repeated, over the screen's
     /// own cells, as a game's vblank writes its score and lives.
     #[test]
@@ -1743,6 +1831,7 @@ asset = "stage2"
         let mut bare = level.clone();
         bare.numbers.clear();
         bare.repeats.clear();
+        bare.texts.clear();
         assert!(matches!(
             bare.cells(&bare.base.videoram, &w),
             std::borrow::Cow::Borrowed(_)
