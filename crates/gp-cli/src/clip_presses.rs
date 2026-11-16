@@ -166,7 +166,9 @@ pub(crate) fn run(
         format!("read back: the same input from power-on, the clip starting at frame {start}"),
         format!("recipes = {}", loaded.hash),
     ];
-    match crate::clip_score::rom_of(paths, game, rom) {
+    // A clip on another of the game's sets replays on that set's ROM.
+    let set = log.arcade.as_ref().map(|a| a.system.as_str());
+    match crate::clip_score::rom_of_set(paths, game, rom, set) {
         Ok(bytes) => {
             let (at_start, at_end) = replay(&bytes, &back, start)?;
             if let Some(want) = &recorded

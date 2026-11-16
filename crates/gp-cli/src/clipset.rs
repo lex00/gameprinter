@@ -127,6 +127,11 @@ pub(crate) struct Recipe {
     /// Clips the queue needs to pass first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<String>,
+    /// The romset an arcade clip plays, by its id in the package's
+    /// `[[rom.entry]]` rows: its presses' `arcade` line. Empty, or the
+    /// scored set's id, plays the scored set.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub set: String,
     pub start: StartRecipe,
 }
 
@@ -1026,9 +1031,120 @@ pub(crate) fn bench_for(w: &Work) -> anyhow::Result<crate::scenario::Bench> {
     )
 }
 
+/// One of a game's romsets as its `package.toml` names it (`[[rom.entry]]`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PackageSet {
+    pub id: String,
+    /// The MAME set name, which an arcade clip's `arcade` line names.
+    pub system: String,
+    pub sha256: String,
+    pub scored: bool,
+}
+
+/// The romsets a game's `package.toml` names, the first scored one marked
+/// (else the first): none when the folder has no package.
+pub(crate) fn package_sets(game: &Path) -> Vec<PackageSet> {
+    let Ok(text) = fs::read_to_string(game.join("package.toml")) else {
+        return Vec::new();
+    };
+    let Ok(pkg) = text.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    let field =
+        |e: &toml::Value, k: &str| e.get(k).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+    let entries = pkg
+        .get("rom")
+        .and_then(|r| r.get("entry"))
+        .and_then(|e| e.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let scored = entries
+        .iter()
+        .position(|e| e.get("role").and_then(|v| v.as_str()) == Some("scored"))
+        .unwrap_or(0);
+    entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| PackageSet {
+            id: field(e, "id"),
+            system: field(e, "system"),
+            sha256: field(e, "sha256"),
+            scored: i == scored,
+        })
+        .collect()
+}
+
+/// The set a clip plays when it isn't the scored one: the package entry
+/// its `set` names by id or MAME system. A set the package doesn't name is
+/// an error.
+pub(crate) fn other_set<'a>(
+    sets: &'a [PackageSet],
+    r: &Recipe,
+) -> anyhow::Result<Option<&'a PackageSet>> {
+    if r.set.is_empty() || sets.is_empty() {
+        return Ok(None);
+    }
+    let Some(s) = sets.iter().find(|s| s.id == r.set || s.system == r.set) else {
+        bail!(
+            "clip {} plays the set {}, which the game's package.toml doesn't name",
+            r.id,
+            r.set
+        );
+    };
+    Ok((!s.scored).then_some(s))
+}
+
+/// Another of a game's sets made ready to score its clips on: its ROM from
+/// the ROM folder, its assets lifted by the game's asset map into
+/// `$GP_HOME/work/assets/SOURCE@SET` (again when the map changed), and the
+/// model hosted with them.
+pub(crate) struct SetWork {
+    pub rom: Vec<u8>,
+    pub assets: PathBuf,
+    pub source: Arc<crate::hosted::Source>,
+}
+
+pub(crate) fn set_work(
+    paths: &Paths,
+    game: &Path,
+    mdir: &Path,
+    base: &crate::hosted::Source,
+    s: &PackageSet,
+) -> anyhow::Result<SetWork> {
+    let mut found = crate::roms::find(std::slice::from_ref(&s.sha256), &[], &paths.roms)?;
+    let rom = found.remove(&s.sha256).with_context(|| {
+        format!(
+            "no ROM of the set {} (sha256 {}) in {}: add yours with gp roms add",
+            s.id,
+            s.sha256,
+            paths.roms.display()
+        )
+    })?;
+    let file = mdir.join(gp_model::MODEL_FILE);
+    let text = fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?;
+    let model = gp_model::Model::parse(&text).with_context(|| file.display().to_string())?;
+    let source = model
+        .model
+        .source
+        .context("the model names no source to lift another set's assets for")?;
+    let assets = paths
+        .home
+        .join("work")
+        .join("assets")
+        .join(format!("{source}@{}", s.id));
+    crate::corpus_score::lift_into(game, &rom.bytes, &assets)?;
+    let hosted = base.with_assets(mdir, &assets)?;
+    Ok(SetWork {
+        rom: rom.bytes,
+        assets,
+        source: Arc::new(hosted),
+    })
+}
+
 /// Every clip of the set in `set_dir` (those `only` names, when given) made
 /// again from the ROM into the run, scored once on the model, and each
-/// curve compared with the set's.
+/// curve compared with the set's. A clip on another of the game's sets
+/// (its `set`) is made and scored on that set's ROM and assets.
 pub(crate) fn regen_with(
     w: &Work,
     set_dir: &Path,
@@ -1066,15 +1182,65 @@ pub(crate) fn regen_with(
     b.reads = how.reads;
     b.stop.clone_from(&how.stop);
     let (m, text) = b.model()?;
-    let (mut made, mut outcomes) =
-        make_and_score(w, set_dir, &mapping_parsed, &recipes, &b, &m, &text)?;
+    // The game's other sets its clips play, each made ready once.
+    let sets = package_sets(set_dir);
+    let mut others: BTreeMap<String, SetWork> = BTreeMap::new();
+    for r in &recipes {
+        if let Some(s) = other_set(&sets, r)?
+            && !others.contains_key(&s.id)
+        {
+            others.insert(
+                s.id.clone(),
+                set_work(w.paths, set_dir, w.mdir, &w.source, s)?,
+            );
+        }
+    }
+    let run = |these: &[Recipe]| -> anyhow::Result<Tried<Ran>> {
+        let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (i, r) in these.iter().enumerate() {
+            let key = other_set(&sets, r)?
+                .map(|s| s.id.clone())
+                .unwrap_or_default();
+            groups.entry(key).or_default().push(i);
+        }
+        let mut made = vec![false; these.len()];
+        let mut outcomes = BTreeMap::new();
+        for (key, idx) in groups {
+            let group: Vec<Recipe> = idx.iter().map(|&i| these[i].clone()).collect();
+            let (gm, go) = match others.get(&key) {
+                None => make_and_score(w, set_dir, &mapping_parsed, &group, &b, &m, &text)?,
+                Some(o) => {
+                    let ow = Work {
+                        paths: w.paths,
+                        run_dir: w.run_dir,
+                        run: w.run,
+                        mdir: w.mdir,
+                        assets: &o.assets,
+                        rom: o.rom.clone(),
+                        source: o.source.clone(),
+                    };
+                    let mut ob = bench_for(&ow)?;
+                    ob.reads = how.reads;
+                    ob.stop.clone_from(&how.stop);
+                    let (om, otext) = ob.model()?;
+                    make_and_score(&ow, set_dir, &mapping_parsed, &group, &ob, &om, &otext)?
+                }
+            };
+            for (k, &i) in idx.iter().enumerate() {
+                made[i] = gm[k];
+            }
+            outcomes.extend(go);
+        }
+        Ok((made, outcomes))
+    };
+    let (mut made, mut outcomes) = run(&recipes)?;
     // A clip that couldn't be made or scored (a module call past its
     // deadline on a loaded machine, say) is made and scored once more
     // before it counts.
     let ids: Vec<String> = recipes.iter().map(|r| r.id.clone()).collect();
     let reran = rerun_failed(&ids, &mut made, &mut outcomes, |again| {
         let these: Vec<Recipe> = again.iter().map(|&i| recipes[i].clone()).collect();
-        make_and_score(w, set_dir, &mapping_parsed, &these, &b, &m, &text)
+        run(&these)
     })?;
     let (mut differ, mut measured, mut failed, mut stopped) = (0, 0, 0, 0);
     let mut curves = BTreeMap::new();
@@ -1184,6 +1350,51 @@ mod tests {
         assert!(outcomes.is_empty());
         assert_eq!(reran[0].first, "not made");
         assert_eq!(reran[0].now, Err("not made".to_owned()));
+    }
+
+    #[test]
+    fn a_clip_plays_its_own_set_when_the_package_names_it() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.toml"),
+            "[[rom.entry]]\nid = \"g-one\"\nrole = \"scored\"\nsystem = \"gone\"\nsha256 = \"aa\"\n\n\
+             [[rom.entry]]\nid = \"g-two\"\nrole = \"play\"\nsystem = \"gtwo\"\nsha256 = \"bb\"\n",
+        )
+        .unwrap();
+        let sets = package_sets(dir.path());
+        assert_eq!(sets.len(), 2);
+        assert!(sets[0].scored && !sets[1].scored);
+        let clip = |set: &str| Recipe {
+            id: "g.walk.001".into(),
+            set: set.into(),
+            ..Recipe::default()
+        };
+        // No set, or the scored one by id or system: the scored set.
+        assert_eq!(other_set(&sets, &clip("")).unwrap(), None);
+        assert_eq!(other_set(&sets, &clip("g-one")).unwrap(), None);
+        assert_eq!(other_set(&sets, &clip("gone")).unwrap(), None);
+        // Another entry, by its system or its id, whatever its role.
+        assert_eq!(
+            other_set(&sets, &clip("gtwo"))
+                .unwrap()
+                .map(|s| s.sha256.as_str()),
+            Some("bb")
+        );
+        assert_eq!(
+            other_set(&sets, &clip("g-two"))
+                .unwrap()
+                .map(|s| s.id.as_str()),
+            Some("g-two")
+        );
+        // A set the package doesn't name is an error that names it.
+        let e = other_set(&sets, &clip("gthree")).unwrap_err().to_string();
+        assert!(e.contains("gthree") && e.contains("doesn't name"), "{e}");
+        // A folder with no package plays everything on the scored set.
+        let none = tempfile::tempdir().unwrap();
+        assert_eq!(
+            other_set(&package_sets(none.path()), &clip("gtwo")).unwrap(),
+            None
+        );
     }
 
     #[test]

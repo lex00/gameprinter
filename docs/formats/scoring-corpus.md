@@ -57,6 +57,8 @@ says = "The corpus plan: curves leave the package and are derived (format 1.0.0)
 
 A `.presses` file is `gp-presses 0`, `frames N` and a span a line (`right@18-351`).
 
+An arcade clip's presses carry an `arcade SET COLUMNS` line, which names the romset the clip plays. A corpus can hold clips on more than one of the game's sets. A clip whose set is another `[[rom.entry]]` of the game's `package.toml` (matched by its `id` or its MAME `system`, whatever its `role`) is made and scored on that set's ROM, found by its hash in the ROM folder. It plays with that set's assets, lifted by the game's asset map into `$GP_HOME/work/assets/SOURCE@SET` and lifted again when the map changes. Every other clip plays the scored set, and `[target] rom` stays the scored set's hash. A clip on a set the package doesn't name is an error, and so is a clip whose set's ROM isn't in the ROM folder; the error names the set. `gp corpus score`, `gp clip score`, `gp picture` and `gp model gate` score each clip on its own set, and `gp clip presses` replays a new clip on its own set. The set isn't in the recipe hash: it is the presses' own line, which the start's hash already holds.
+
 ## The hashes
 
 A clip's recipe hash is the BLAKE3 of its canonical JSON: its ID, the BLAKE3 of its start's presses file in canonical form, its own spans and its frames. Names, reasons and the source are metadata, in no hash.

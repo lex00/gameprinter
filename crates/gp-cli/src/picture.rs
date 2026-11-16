@@ -935,24 +935,6 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
         );
     }
     recipes.sort_by(|a, b| a.id.cmp(&b.id));
-    let b = crate::clipset::bench_for(&work)?;
-    let made = crate::clipset::make(&paths.home, &dir, game, &rom, &b.mapping, &recipes)?;
-    // Clips that couldn't be made count as errors, as in the corpus score.
-    let mut unmade: BTreeMap<String, String> = BTreeMap::new();
-    let mut list: Vec<Scenario> = Vec::new();
-    for (r, m) in recipes.iter().zip(made) {
-        match m {
-            Ok(m) => list.push(m.scenario),
-            Err(e) => {
-                unmade.insert(r.id.clone(), e);
-            }
-        }
-    }
-    crate::scenario::resolve_logs(&mut list, &paths.home);
-    let (model, text) = b.model()?;
-    let mh = crate::scenario::model_hash(&text);
-    let spec = b.hosted.spec.clone();
-    let looks = Arc::new(Looks::of(&model, &spec));
     let shots = match (&args.shots, &args.shots_dir) {
         (Some(list), Some(dir)) => {
             std::fs::create_dir_all(dir)?;
@@ -960,20 +942,84 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
         }
         _ => None,
     };
-    let ran = crate::scenario::watch_each(
-        &b,
-        &model,
-        &text,
-        &list,
-        |art, _| {
-            art.map(|a| {
-                let mut w = Watch::new(a, looks.clone());
-                w.shots = shots.clone();
-                w
-            })
-        },
-        |w| w.found,
-    )?;
+    // A clip on another of the game's sets plays on that set's ROM, with
+    // its assets: the clips are run a set at a time, then put back in order.
+    let sets = crate::clipset::package_sets(game);
+    let mut by_set: BTreeMap<String, Vec<crate::clipset::Recipe>> = BTreeMap::new();
+    for r in &recipes {
+        let key = crate::clipset::other_set(&sets, r)?
+            .map(|s| s.id.clone())
+            .unwrap_or_default();
+        by_set.entry(key).or_default().push(r.clone());
+    }
+    let mut unmade: BTreeMap<String, String> = BTreeMap::new();
+    let mut ran_by: BTreeMap<String, (Scenario, crate::scenario::Watched<Vec<Found>>)> =
+        BTreeMap::new();
+    let mut mh = String::new();
+    for (key, group) in &by_set {
+        let other = if key.is_empty() {
+            None
+        } else {
+            let s = sets
+                .iter()
+                .find(|s| &s.id == key)
+                .expect("a set the package names");
+            Some(crate::clipset::set_work(
+                paths,
+                game,
+                &mdir,
+                &work.source,
+                s,
+            )?)
+        };
+        let gw = other.as_ref().map(|o| crate::clipset::Work {
+            paths,
+            run_dir: &dir,
+            run: &args.run,
+            mdir: &mdir,
+            assets: &o.assets,
+            rom: o.rom.clone(),
+            source: o.source.clone(),
+        });
+        let w = gw.as_ref().unwrap_or(&work);
+        let b = crate::clipset::bench_for(w)?;
+        let made = crate::clipset::make(&paths.home, &dir, game, &w.rom, &b.mapping, group)?;
+        // Clips that couldn't be made count as errors, as in the corpus score.
+        let mut list: Vec<Scenario> = Vec::new();
+        for (r, m) in group.iter().zip(made) {
+            match m {
+                Ok(m) => list.push(m.scenario),
+                Err(e) => {
+                    unmade.insert(r.id.clone(), e);
+                }
+            }
+        }
+        crate::scenario::resolve_logs(&mut list, &paths.home);
+        let (model, text) = b.model()?;
+        if key.is_empty() || mh.is_empty() {
+            mh = crate::scenario::model_hash(&text);
+        }
+        let spec = b.hosted.spec.clone();
+        let looks = Arc::new(Looks::of(&model, &spec));
+        let ran = crate::scenario::watch_each(
+            &b,
+            &model,
+            &text,
+            &list,
+            |art, _| {
+                art.map(|a| {
+                    let mut w = Watch::new(a, looks.clone());
+                    w.shots = shots.clone();
+                    w
+                })
+            },
+            |w| w.found,
+        )?;
+        for (sc, r) in list.into_iter().zip(ran) {
+            ran_by.insert(sc.id.clone(), (sc, r));
+        }
+    }
+    let (list, ran): (Vec<Scenario>, Vec<_>) = ran_by.into_values().unzip();
 
     let mut groups: BTreeMap<&'static str, Tally> = BTreeMap::new();
     let mut details: BTreeMap<(&'static str, String), Tally> = BTreeMap::new();

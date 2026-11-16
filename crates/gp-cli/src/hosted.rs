@@ -156,6 +156,31 @@ impl Source {
         })
     }
 
+    /// This model with another romset's lifted assets in `assets` (the
+    /// model read again from `dir`), its hooks the same module: a clip on
+    /// another of the game's sets plays with that set's pictures and
+    /// tables.
+    pub(crate) fn with_assets(&self, dir: &Path, assets: &Path) -> Result<Self> {
+        let file = dir.join(gp_model::MODEL_FILE);
+        let text =
+            fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?;
+        let model = gp_model::Model::parse(&text).with_context(|| file.display().to_string())?;
+        let lifted = Lifted::read_dir(assets, &model).map_err(|e| anyhow!("{e}"))?;
+        let bundle = Bundle::new(&model, lifted);
+        let interp = Interp::from_bundle(&bundle).map_err(|e| anyhow!("{e}"))?;
+        let spec = interp.spec().clone();
+        let bytes = bundle.to_bytes();
+        Ok(Self {
+            bundle,
+            bytes,
+            spec,
+            exts: self.exts.clone(),
+            module: self.module.clone(),
+            hooks: self.hooks.clone(),
+            batch: self.batch,
+        })
+    }
+
     /// The hooks module's hash (BLAKE3, as `gp game hash` prints it) when
     /// the model's hooks run in a game's module, else None.
     pub(crate) fn module_hash(&self) -> Option<&str> {

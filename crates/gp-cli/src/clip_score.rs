@@ -377,11 +377,48 @@ impl Ctx {
     }
 
     pub(crate) fn open(paths: &Paths, game: &Path, how: &Open) -> Result<Ctx> {
+        Self::open_on(paths, game, how, None)
+    }
+
+    /// [`Ctx::open`] for clips on `set` (by the package entry's id or MAME
+    /// system): another of the game's sets plays its own ROM, with its
+    /// assets lifted by the game's asset map into
+    /// `$GP_HOME/work/assets/SOURCE@SET` unless `--assets` names them.
+    pub(crate) fn open_on(
+        paths: &Paths,
+        game: &Path,
+        how: &Open,
+        set: Option<&str>,
+    ) -> Result<Ctx> {
         let model_dir = how.model.unwrap_or(game).to_owned();
-        let rom = rom_of(paths, game, how.rom)?;
+        let sets = clipset::package_sets(game);
+        let other = set.and_then(|id| {
+            sets.iter()
+                .find(|s| (s.id == id || s.system == id) && !s.scored)
+        });
+        let rom = rom_of_set(paths, game, how.rom, set)?;
         // The lifted assets as `gp corpus score` finds them: lifted again
         // when the game's asset map changed.
-        let lifted = crate::corpus_score::assets_of(paths, game, &model_dir, how.assets, &rom)?;
+        let lifted = match (other, how.assets) {
+            (Some(s), None) => {
+                let model = gp_model::Model::parse(
+                    &fs::read_to_string(model_dir.join(gp_model::MODEL_FILE))
+                        .context("reading the model")?,
+                )?;
+                let source = model
+                    .model
+                    .source
+                    .context("the model names no source to lift another set's assets for")?;
+                let out = paths
+                    .home
+                    .join("work")
+                    .join("assets")
+                    .join(format!("{source}@{}", s.id));
+                crate::corpus_score::lift_into(game, &rom, &out)?;
+                out
+            }
+            _ => crate::corpus_score::assets_of(paths, game, &model_dir, how.assets, &rom)?,
+        };
         let (source, assets) = Source::open_dir(&model_dir, Some(&lifted), paths, how.module)?;
         let mfile = model_dir.join(gp_interp::mapping::MAPPING_FILE);
         let mapping = Mapping::parse(
@@ -401,6 +438,36 @@ impl Ctx {
             values: Vec::new(),
         })
     }
+}
+
+/// The ROM a clip on `set` plays (an arcade clip's `arcade` line, by the
+/// package entry's id or MAME system): that set's when it is another of the
+/// game's sets, from `--rom` or found by its hash in the ROM folder; else
+/// the scored ROM ([`rom_of`]).
+pub(crate) fn rom_of_set(
+    paths: &Paths,
+    game: &Path,
+    rom: Option<&Path>,
+    set: Option<&str>,
+) -> Result<Vec<u8>> {
+    let sets = crate::clipset::package_sets(game);
+    let other = set.and_then(|id| {
+        sets.iter()
+            .find(|s| (s.id == id || s.system == id) && !s.scored)
+    });
+    let Some(s) = other else {
+        return rom_of(paths, game, rom);
+    };
+    let given: Vec<PathBuf> = rom.iter().map(|p| p.to_path_buf()).collect();
+    let mut found = crate::roms::find(std::slice::from_ref(&s.sha256), &given, &paths.roms)?;
+    found.remove(&s.sha256).map(|r| r.bytes).with_context(|| {
+        format!(
+            "no ROM of the set {} (sha256 {}) in {}: add yours with gp roms add",
+            s.id,
+            s.sha256,
+            paths.roms.display()
+        )
+    })
 }
 
 /// The scored ROM: the first the game's `package.toml` names, from `--rom`
@@ -1063,6 +1130,18 @@ fn score_cmd(
     }
     let mut ctx = Ctx::open(paths, game, how)?;
     ctx.values = values.to_vec();
+    // Corpus clips on another of the game's sets score on that set.
+    let sets = clipset::package_sets(game);
+    let mut on_set: std::collections::BTreeMap<String, Ctx> = std::collections::BTreeMap::new();
+    for c in &corpus {
+        if let Some(s) = clipset::other_set(&sets, &c.recipe)?
+            && !on_set.contains_key(&s.id)
+        {
+            let mut x = Ctx::open_on(paths, game, how, Some(&s.id))?;
+            x.values = values.to_vec();
+            on_set.insert(s.id.clone(), x);
+        }
+    }
     let out = out.map_or_else(|| out_dir(paths), Path::to_owned);
     // Each clip's name, its output folder, and where its full log comes from.
     enum From<'a> {
@@ -1089,7 +1168,15 @@ fn score_cmd(
                 From::Corpus(c) => c.log(),
             }
             .map_err(|e| format!("{e:#}"))?;
-            score_one(&ctx, name, &log, start, &out.join(folder)).map_err(|e| format!("{e:#}"))
+            let here = match from {
+                From::Corpus(c) => clipset::other_set(&sets, &c.recipe)
+                    .ok()
+                    .flatten()
+                    .and_then(|s| on_set.get(&s.id)),
+                From::Session(_) => None,
+            };
+            score_one(here.unwrap_or(&ctx), name, &log, start, &out.join(folder))
+                .map_err(|e| format!("{e:#}"))
         },
         &mut |_| {},
     );

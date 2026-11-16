@@ -241,6 +241,11 @@ fn recipe(
         presses_file,
         frames: c.frames,
         why: c.why.clone(),
+        set: from
+            .arcade
+            .as_ref()
+            .map(|a| a.system.clone())
+            .unwrap_or_default(),
         start: StartRecipe {
             presses_from_power_on: Some(c.start.clone()),
             frame: start_frames,
@@ -400,6 +405,20 @@ frames = 5
         assert_eq!(p.manifest.corpus.hash, "RECIPES");
         assert_eq!(p.hash, recipe_set_hash(&p.recipes));
         assert!(p.hash.starts_with(PREFIX));
+    }
+
+    #[test]
+    fn an_arcade_clip_plays_the_set_its_presses_name() {
+        let d = folder();
+        fs::write(
+            d.path().join("inputs/b.start.presses"),
+            "gp-presses 0\nframes 8\narcade gtwo CSRLDUT\n",
+        )
+        .unwrap();
+        let p = load(d.path()).unwrap().unwrap();
+        let by = |id: &str| p.set.clips.iter().find(|c| c.id == id).unwrap().set.clone();
+        assert_eq!(by("b.1"), "gtwo");
+        assert_eq!(by("a.1"), "", "a clip with no arcade line names no set");
     }
 
     #[test]

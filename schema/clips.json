@@ -141,6 +141,10 @@
             "type": "string"
           }
         },
+        "set": {
+          "description": "The romset an arcade clip plays, by its id in the package's\n`[[rom.entry]]` rows: its presses' `arcade` line. Empty, or the\nscored set's id, plays the scored set.",
+          "type": "string"
+        },
         "source": {
           "description": "`generated`, `played` (a person's, from a save point), `aimed` or\n`dense` (chosen for the original's code it runs).",
           "type": "string",
