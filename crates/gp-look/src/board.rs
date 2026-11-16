@@ -157,11 +157,35 @@ impl Byte {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct KindSprite {
     picture: Byte,
     flags: Option<Byte>,
     flip_when_facing_left: bool,
+    /// Its other sprites (`board_sprite.extra`).
+    extra: Vec<ExtraSprite>,
+}
+
+/// One of a body's other sprites: its place from the body's, its picture
+/// and flags.
+#[derive(Clone, Copy)]
+struct ExtraSprite {
+    offset: [i32; 2],
+    picture: Byte,
+    flags: Option<Byte>,
+    flip_when_facing_left: bool,
+}
+
+impl KindSprite {
+    /// The entry's position bytes for a body at (x, y) in its own units.
+    fn bytes(board_units: bool, x: i64, y: i64) -> (i64, i64) {
+        if board_units {
+            let (x, y) = video::sprite_bytes(x as i32, y as i32);
+            (i64::from(x), i64::from(y))
+        } else {
+            (x.rem_euclid(256), y.rem_euclid(256))
+        }
+    }
 }
 
 impl LevelBoard {
@@ -287,9 +311,12 @@ pub const CELL_SIZE: [u32; 2] = [16, 16];
 /// its sprite entry draws (0 to 511: byte 2, and bit 3 of byte 1) and the
 /// entry's flags (byte 1: colour bank, flips), and the entry of sprite
 /// RAM it takes (0 to 127: a later entry is drawn over an earlier one).
+/// `extra` is which of the body's other sprites it is
+/// (`board_sprite.extra`), None for the body's own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Drawn {
     pub body: usize,
+    pub extra: Option<usize>,
     pub kind: usize,
     pub entry: usize,
     pub rect: [i64; 4],
@@ -605,10 +632,22 @@ impl BoardArt {
                     Some(_) => &[&o.palette_writes],
                     None => &[&look.palette_writes, &o.palette_writes],
                 };
+                if o.clear && o.screen.is_some() {
+                    return Err(at_o(
+                        "a look that clears the tile layer names no screen".into(),
+                    ));
+                }
+                // A look that clears the tile layer draws no screen: tile
+                // 0 everywhere, as the level with none.
+                let screen = if o.clear {
+                    None
+                } else {
+                    o.screen.as_deref().or(look.screen.as_deref())
+                };
                 let made = make(
                     o.palette.as_deref().unwrap_or(&look.palette),
                     writes,
-                    o.screen.as_deref().or(look.screen.as_deref()),
+                    screen,
                 )
                 .map_err(at_o)?;
                 looks.push((tests(&o.when).map_err(at_o)?, made));
@@ -713,6 +752,16 @@ impl BoardArt {
                     picture: Byte::of(&b.picture),
                     flags: b.flags.as_ref().map(Byte::of),
                     flip_when_facing_left: b.flip_when_facing_left,
+                    extra: b
+                        .extra
+                        .iter()
+                        .map(|e| ExtraSprite {
+                            offset: e.offset,
+                            picture: Byte::of(&e.picture),
+                            flags: e.flags.as_ref().map(Byte::of),
+                            flip_when_facing_left: e.flip_when_facing_left,
+                        })
+                        .collect(),
                 }))
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -837,6 +886,9 @@ impl BoardArt {
             }
         }
         let mut drawn = Vec::new();
+        // The bodies' other sprites, placed once every body has its own
+        // entry: (body, which, its entry's bytes).
+        let mut extras: Vec<(usize, usize, [u8; 4])> = Vec::new();
         for (i, r) in at {
             let b = &w.bodies[i];
             let Some(Some(k)) = self.kinds.get(b.kind) else {
@@ -844,12 +896,23 @@ impl BoardArt {
             };
             // The entry's bytes: the position's own, or in the board's
             // units those that draw the sprite there.
-            let (x, y) = if self.board_units {
-                let (x, y) = video::sprite_bytes(b.x.floor() as i32, b.y.floor() as i32);
-                (i64::from(x), i64::from(y))
-            } else {
-                (b.x.floor().rem_euclid(256), b.y.floor().rem_euclid(256))
-            };
+            let (x, y) = KindSprite::bytes(self.board_units, b.x.floor(), b.y.floor());
+            for (n, e) in k.extra.iter().enumerate() {
+                let picture = e.picture.read(b);
+                if picture == 0 {
+                    continue;
+                }
+                let mut flags = e.flags.map_or(0, |f| f.read(b));
+                if e.flip_when_facing_left && b.facing_left {
+                    flags ^= 0x10;
+                }
+                let (ex, ey) = KindSprite::bytes(
+                    self.board_units,
+                    b.x.floor() + i64::from(e.offset[0]),
+                    b.y.floor() + i64::from(e.offset[1]),
+                );
+                extras.push((i, n, [ey as u8, flags, picture, ex as u8]));
+            }
             let mut flags = k.flags.map_or(0, |f| f.read(b));
             if k.flip_when_facing_left && b.facing_left {
                 flags ^= 0x10;
@@ -864,6 +927,7 @@ impl BoardArt {
                 % self.gfx.sprites.len().max(1) as u16;
             drawn.push(Drawn {
                 body: i,
+                extra: None,
                 kind: b.kind,
                 entry: r,
                 rect: [i64::from(px) * u, i64::from(py) * u, 32, 32],
@@ -871,7 +935,32 @@ impl BoardArt {
                 flags,
             });
         }
-        drawn.sort_by_key(|d| d.body);
+        // The other sprites, each in the lowest entry still free, in the
+        // bodies' order; with every entry taken they aren't drawn.
+        for (i, n, bytes) in extras {
+            let Some(r) = taken.iter().position(|t| !t) else {
+                break;
+            };
+            taken[r] = true;
+            if !omit.bodies.get(i).copied().unwrap_or(false) {
+                ram[r * 4..r * 4 + 4].copy_from_slice(&bytes);
+            }
+            let [y, flags, picture, x] = bytes;
+            let (px, py) = video::sprite_place(i32::from(x), i32::from(y));
+            let u = i64::from(video::UNIT);
+            let code = (u16::from(picture) + 256 * u16::from((flags >> 3) & 1))
+                % self.gfx.sprites.len().max(1) as u16;
+            drawn.push(Drawn {
+                body: i,
+                extra: Some(n),
+                kind: w.bodies[i].kind,
+                entry: r,
+                rect: [i64::from(px) * u, i64::from(py) * u, 32, 32],
+                code,
+                flags,
+            });
+        }
+        drawn.sort_by_key(|d| (d.body, d.extra));
         let omit_cells = (!omit.cells.is_empty()).then_some(omit.cells.as_slice());
         let (videoram, cells) = level.cells_with(&look.videoram, w, omit_cells);
         if !paint {
@@ -1452,6 +1541,7 @@ y = 191
             p.drawn,
             vec![Drawn {
                 body: 0,
+                extra: None,
                 kind: 0,
                 entry: 0,
                 rect: [100, 100, 32, 32],
@@ -1752,6 +1842,85 @@ asset = "stage2"
         assert_eq!(at_of(&art.draw(&w, &[], &[]).unwrap(), 0, 0), 16 + 5);
     }
 
+    /// A look that clears the tile layer draws tile 0 everywhere, in
+    /// colour bank 0, while its counters choose it; a look can't both
+    /// clear and name a screen.
+    #[test]
+    fn a_look_that_clears_draws_no_tiles() {
+        let dir = tempfile::tempdir().unwrap();
+        lift(dir.path());
+        let text = MODEL.replace(
+            "[[levels.main.spawn]]",
+            "[[levels.main.present.board.looks]]\nwhen = [{ counter = \"bar\", cmp = \"==\", value = 1 }]\nclear = true\n\n[[levels.main.spawn]]",
+        ) + "\n[counters.bar]\n";
+        let model = Model::parse(&text).unwrap();
+        assert!(model.features_used().contains("level.board.looks.clear"));
+        let lifted = gp_interp::Lifted::read_dir(dir.path(), &model).unwrap();
+        let spec = gp_interp::compile::compile(&model, &lifted).unwrap();
+        let art = BoardArt::load(&model, &spec, dir.path()).unwrap().unwrap();
+        let mut w = World {
+            counters: vec![0; spec.counters.len()],
+            ..Default::default()
+        };
+        assert_eq!(at_of(&art.draw(&w, &[], &[]).unwrap(), 0, 0), 16 + 5);
+        w.counters[spec.counters.index_of("bar").unwrap()] = 1;
+        let p = art.draw(&w, &[], &[]).unwrap();
+        assert_eq!(at_of(&p, 0, 0), 0);
+        assert_eq!(p.screen, None);
+        let both = Model::parse(&text.replace("clear = true", "clear = true\nscreen = \"stage\""))
+            .unwrap();
+        let err = BoardArt::load(&both, &spec, dir.path()).err().unwrap();
+        assert!(err.contains("clears the tile layer"), "{err}");
+    }
+
+    /// A body's other sprite takes the lowest entry free after every
+    /// body's own, at its offset, while its picture isn't 0.
+    #[test]
+    fn a_bodys_other_sprite_is_drawn_while_its_picture_is_set() {
+        let dir = tempfile::tempdir().unwrap();
+        lift(dir.path());
+        let text = MODEL.replace(
+            "flags = { word = 1 }\n",
+            "flags = { word = 1 }\n\n[[entities.player.board_sprite.extra]]\noffset = [16, 0]\npicture = { word = 2 }\nflags = { number = 3 }\n",
+        );
+        let model = Model::parse(&text).unwrap();
+        let errs: Vec<_> = gp_model::validate::validate(&model)
+            .into_iter()
+            .filter(|p| p.message != "no evidence covers this fact")
+            .collect();
+        assert!(errs.is_empty(), "{errs:?}");
+        assert!(model.features_used().contains("sprite.board.extra"));
+        let lifted = gp_interp::Lifted::read_dir(dir.path(), &model).unwrap();
+        let spec = gp_interp::compile::compile(&model, &lifted).unwrap();
+        let art = BoardArt::load(&model, &spec, dir.path()).unwrap().unwrap();
+        let mut w = World::default();
+        w.bodies.push(gp_sim::world::Body {
+            x: gp_sim::Fx::from_int(53),
+            y: gp_sim::Fx::from_int(191),
+            alive: true,
+            ext: [0, 0x0203, 0, 0],
+            ..Default::default()
+        });
+        assert_eq!(art.draw(&w, &[true], &[u32::MAX]).unwrap().drawn.len(), 1);
+        w.bodies[0].ext[2] = 1;
+        let p = art.draw(&w, &[true], &[u32::MAX]).unwrap();
+        let (px, py) = video::sprite_place(69, 191);
+        let u = i64::from(video::UNIT);
+        assert_eq!(
+            p.drawn[1],
+            Drawn {
+                body: 0,
+                extra: Some(0),
+                kind: 0,
+                entry: 1,
+                rect: [i64::from(px) * u, i64::from(py) * u, 32, 32],
+                code: 1,
+                flags: 3,
+            }
+        );
+        assert_eq!(p.drawn[0].extra, None);
+    }
+
     /// A string drawn while its counter test holds, a byte a cell up to
     /// its zero byte, a space as tile 0, as a game's text routine writes
     /// one.
@@ -1862,6 +2031,7 @@ asset = "stage2"
             }],
             palette: None,
             screen: None,
+            clear: false,
             palette_writes: Vec::new(),
         });
         b.counters[0].at = [30, 1];

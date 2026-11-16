@@ -711,8 +711,15 @@ pub fn validate(model: &Model) -> Vec<Problem> {
                 &b.slot,
                 AssetKind::BoardSprites,
             );
-            let bytes = std::iter::once(("picture", &b.picture))
-                .chain(b.flags.as_ref().map(|f| ("flags", f)));
+            let bytes = std::iter::once(("picture".to_owned(), &b.picture))
+                .chain(b.flags.as_ref().map(|f| ("flags".to_owned(), f)))
+                .chain(b.extra.iter().enumerate().flat_map(|(i, e)| {
+                    std::iter::once((format!("extra[{i}].picture"), &e.picture)).chain(
+                        e.flags
+                            .as_ref()
+                            .map(move |f| (format!("extra[{i}].flags"), f)),
+                    )
+                }));
             for (part, v) in bytes {
                 let here = format!("{bat}.{part}");
                 match (v.word, v.number) {
@@ -1323,10 +1330,20 @@ pub fn validate(model: &Model) -> Vec<Problem> {
                             );
                         }
                     }
-                    if l.palette.is_none() && l.screen.is_none() && l.palette_writes.is_empty() {
+                    if l.clear && l.screen.is_some() {
+                        c.add(
+                            format!("{lat}.clear"),
+                            "a look that clears the tile layer draws no screen: give it `clear` or `screen`, not both",
+                        );
+                    }
+                    if !l.clear
+                        && l.palette.is_none()
+                        && l.screen.is_none()
+                        && l.palette_writes.is_empty()
+                    {
                         c.add(
                             lat.clone(),
-                            "the look changes nothing: give it a `screen`, a `palette` or `palette_writes`",
+                            "the look changes nothing: give it a `screen`, `clear`, a `palette` or `palette_writes`",
                         );
                     }
                     writes(&mut c, &lat, &l.palette_writes);

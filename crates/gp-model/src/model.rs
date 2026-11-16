@@ -997,6 +997,32 @@ pub struct BoardSprite {
     /// faces left.
     #[serde(default, skip_serializing_if = "is_false")]
     pub flip_when_facing_left: bool,
+    /// Feature `sprite.board.extra`: more sprites the board draws for the
+    /// same object, as a program that copies an object's second sprite
+    /// (something it holds) into the next entry of sprite RAM. Each is
+    /// drawn while its picture isn't 0, in the lowest entry free after
+    /// every body's own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra: Vec<BoardSpriteExtra>,
+}
+
+/// Another sprite a body is drawn with (feature `sprite.board.extra`): its
+/// place from the body's, and its picture and flags.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoardSpriteExtra {
+    /// Its x and y from the body's, in the body's position units.
+    #[serde(default, skip_serializing_if = "is_zero_pair")]
+    pub offset: [i32; 2],
+    /// The picture byte. A picture of 0 draws nothing.
+    pub picture: BoardByte,
+    /// The flags byte, as the body's own. Without it, 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flags: Option<BoardByte>,
+    /// Mirrored left to right, on top of the flags' flip, while the body
+    /// faces left.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flip_when_facing_left: bool,
 }
 
 /// One byte of a board sprite's entry: a byte of one of the body's `ext`
@@ -1098,6 +1124,12 @@ pub struct BoardLookWhen {
     /// A slot of kind `board-screen`, in place of the level's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub screen: Option<String>,
+    /// Feature `level.board.looks.clear`: the tile layer cleared, tile 0
+    /// everywhere in colour bank 0, in place of any screen, as a program
+    /// that clears video RAM for an interlude. The counters, repeats and
+    /// texts still draw over it. Not with `screen`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub clear: bool,
     /// More bytes written into palette RAM, after the level's own
     /// `palette_writes` (or, with `palette`, after loading it): a bar's
     /// colours by the bar shown.
@@ -3252,6 +3284,9 @@ pub struct Ref {
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+fn is_zero_pair(p: &[i32; 2]) -> bool {
+    *p == [0, 0]
 }
 fn is_true(b: &bool) -> bool {
     *b

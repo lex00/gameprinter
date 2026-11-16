@@ -295,6 +295,22 @@ impl Watch {
                 behind: scene.behind.get(i).copied().unwrap_or(false),
             });
         }
+        // A body's other board sprites (`board_sprite.extra`) are its own
+        // too, so a box over one is put down to that body.
+        for (i, rect) in art.extra_sprites(w, &scene) {
+            let Some(b) = w.bodies.get(i) else {
+                continue;
+            };
+            bodies.push(Drawn {
+                kind: spec
+                    .kinds
+                    .get(b.kind)
+                    .map_or_else(String::new, |k| k.name.clone()),
+                rect: [rect[0] - cx, rect[1] - cy, rect[2], rect[3]],
+                fallback: false,
+                behind: scene.behind.get(i).copied().unwrap_or(false),
+            });
+        }
         let mut cells = Vec::new();
         if let Some(level) = spec.levels.get(w.level) {
             let ts = level.tile_size.max(1);

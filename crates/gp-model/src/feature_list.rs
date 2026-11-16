@@ -445,6 +445,12 @@ pub const FEATURES: &[Feature] = &[
         &["entities.*.board_sprite"],
     ),
     core(
+        "sprite.board.extra",
+        "",
+        "A body drawn with more of an arcade board's sprites than its own, as an object's second sprite, each at its own place from the body's with its own picture and flags",
+        &["entities.*.board_sprite.extra"],
+    ),
+    core(
         "level.board",
         "",
         "A level drawn as an arcade board draws its picture: its background tile layer from a whole screen, in the board's colours",
@@ -455,6 +461,12 @@ pub const FEATURES: &[Feature] = &[
         "",
         "A level drawn by an arcade board with other looks, a screen and colours each, chosen by the model's counters as the frame is drawn",
         &["levels.*.present.board.looks"],
+    ),
+    core(
+        "level.board.looks.clear",
+        "",
+        "A look of a level drawn by an arcade board whose tile layer is cleared, as a program clears video RAM for an interlude, with the counters and strings still drawn over it",
+        &["levels.*.present.board.looks.clear"],
     ),
     core(
         "level.board.counters",

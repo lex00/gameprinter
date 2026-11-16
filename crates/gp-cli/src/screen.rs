@@ -435,6 +435,31 @@ pub(crate) fn world_frame(
 }
 
 impl Art {
+    /// The boxes of the bodies' other board sprites (`board_sprite.extra`)
+    /// on a frame of the world, each with its body's index, in the board
+    /// picture's pixels; none off a level with board art.
+    pub(crate) fn extra_sprites(
+        &self,
+        w: &gp_sim::World,
+        scene: &gp_present::Scene,
+    ) -> Vec<(usize, [i64; 4])> {
+        let Some(ba) = &self.board_art else {
+            return Vec::new();
+        };
+        let shown: Vec<bool> = (0..w.bodies.len())
+            .map(|i| scene.bodies.get(i).is_some_and(Option::is_some))
+            .collect();
+        ba.layout(w, &shown, &scene.rank)
+            .map(|pic| {
+                pic.drawn
+                    .iter()
+                    .filter(|d| d.extra.is_some())
+                    .map(|d| (d.body, d.rect))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Whether its bodies are placed on an arcade board's screen in the
     /// board's own units (a mapping's `board_units`): screen pixels are
     /// then [`gp_arcade::video::UNIT`] to one of the model's.

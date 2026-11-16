@@ -372,6 +372,10 @@
       "additionalProperties": false,
       "description": "Another look of a level drawn by its arcade board (feature\n`level.board.looks`): what it changes from the level's own look while\nevery test of `when` holds.",
       "properties": {
+        "clear": {
+          "description": "Feature `level.board.looks.clear`: the tile layer cleared, tile 0\neverywhere in colour bank 0, in place of any screen, as a program\nthat clears video RAM for an interlude. The counters, repeats and\ntexts still draw over it. Not with `screen`.",
+          "type": "boolean"
+        },
         "palette": {
           "description": "A slot of kind `board-palette`, loaded in place of the level's: the\nlevel's `palette_writes` aren't written over it then, only this\nlook's, as a program that loads its colours again.",
           "type": [
@@ -478,6 +482,13 @@
       "additionalProperties": false,
       "description": "Feature `sprite.board`: a body drawn as one of an arcade board's\nsprites. The board draws a sprite from four bytes of its sprite RAM (y,\nflags, picture, x); the body's position stands for y and x, and this\nsays where the other two come from: the body's words, which a state\nmapping loads from the game's object slots (the program copies those\nbytes to sprite RAM), or numbers the model fixes. Presentation only.",
       "properties": {
+        "extra": {
+          "description": "Feature `sprite.board.extra`: more sprites the board draws for the\nsame object, as a program that copies an object's second sprite\n(something it holds) into the next entry of sprite RAM. Each is\ndrawn while its picture isn't 0, in the lowest entry free after\nevery body's own.",
+          "items": {
+            "$ref": "#/$defs/BoardSpriteExtra"
+          },
+          "type": "array"
+        },
         "flags": {
           "anyOf": [
             {
@@ -504,6 +515,45 @@
       },
       "required": [
         "slot",
+        "picture"
+      ],
+      "type": "object"
+    },
+    "BoardSpriteExtra": {
+      "additionalProperties": false,
+      "description": "Another sprite a body is drawn with (feature `sprite.board.extra`): its\nplace from the body's, and its picture and flags.",
+      "properties": {
+        "flags": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BoardByte"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The flags byte, as the body's own. Without it, 0."
+        },
+        "flip_when_facing_left": {
+          "description": "Mirrored left to right, on top of the flags' flip, while the body\nfaces left.",
+          "type": "boolean"
+        },
+        "offset": {
+          "description": "Its x and y from the body's, in the body's position units.",
+          "items": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "picture": {
+          "$ref": "#/$defs/BoardByte",
+          "description": "The picture byte. A picture of 0 draws nothing."
+        }
+      },
+      "required": [
         "picture"
       ],
       "type": "object"

@@ -104,8 +104,17 @@ palette_writes = [{ at = 0x60, slot = "bar_colors", row = 1 }, { at = 0x6C, slot
 |---|---|
 | `when` | Required: the counter tests, each `{ counter, cmp, value }` as a HUD field's `when` (`cmp` one of `<`, `<=`, `==`, `!=`, `>=`, `>`). The look is chosen while every one holds |
 | `screen` | A `board-screen` slot in place of the level's `screen` |
+| `clear` | `true`: the tile layer cleared, tile 0 everywhere in colour bank 0, in place of any screen (feature `level.board.looks.clear`), as a program that clears video RAM for an interlude. The counters, repeats and texts still draw over it. Not with `screen` |
 | `palette` | A `board-palette` slot loaded in place of the level's. The level's `palette_writes` aren't written over it then, only the look's own, as a program that loads its colours again |
 | `palette_writes` | More bytes written into palette RAM: after the level's own writes, or with `palette` after loading it |
+
+A look that clears the screen, for a "get ready" message drawn on an empty layer:
+
+```toml
+[[levels.main.present.board.looks]]
+when = [{ counter = "interlude", cmp = "==", value = 1 }]
+clear = true
+```
 
 Each frame is drawn with the first look whose tests hold, or the level's own when none does. The choice is made as the frame is drawn, from the world's counters then: a hook that sets a counter (`ExtCx::set_counter`) changes the stage and its colours on that frame, and the level, its bodies and its spawns stay as they are. A level's look is drawn with the level's `tiles`, so a look's screen needs them.
 
@@ -205,6 +214,26 @@ picture = { number = 0x4D }        # fixed by the model
 | `picture` | Required: the entry's picture byte (byte 2), the sprite's number; its ninth bit is bit 3 of the flags |
 | `flags` | The entry's flags byte (byte 1), as the board reads it: bit 3 the picture's ninth bit, bits 0 and 1 the colour bank inverted, bit 4 a flip left to right, bit 5 a flip top to bottom. Default 0 |
 | `flip_when_facing_left` | Mirrored left to right, on top of the flags' flip, while the body faces left |
+
+### More sprites for one body
+
+A board whose program copies two sprites for one object (a customer and the mug it holds, an object's second half) gives the body's other sprites as `extra` (feature `sprite.board.extra`), each drawn while its picture isn't 0:
+
+```toml
+[[entities.customer.board_sprite.extra]]
+offset = [16, 0]                     # from the body's position, in its units
+picture = { word = 1, byte = 3 }     # the second sprite's picture
+flags = { word = 1, byte = 2 }       # and its flags
+```
+
+| Key | Meaning |
+|---|---|
+| `offset` | Its x and y from the body's position, in the position's units. Default `[0, 0]` |
+| `picture` | Required: its picture byte. 0 draws nothing |
+| `flags` | Its flags byte. Default 0 |
+| `flip_when_facing_left` | As the body's own |
+
+Each takes the lowest entry of sprite RAM still free once every body has its own, in the bodies' order, so it is drawn over the bodies placed before it and under any later entry. The screen measure puts a box over it down to its body (`gp picture`), as it does the body's own sprite.
 
 Each of `picture` and `flags` is `{ word = W, byte = B }`, byte B (0 the lowest, default 0) of the body's `ext[W]` (W 0 to 3), or `{ number = N }`, N 0 to 255. A state mapping that reads two bytes into one word (`ram = [flags, picture]`) puts the first at byte 0 and the second at byte 1, so one word holds both.
 
