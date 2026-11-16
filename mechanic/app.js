@@ -2707,6 +2707,10 @@ async function main() {
   const r = await fetch("rom");
   if (!r.ok) throw new Error(`the ROM: ${await r.text()}`);
   rom = new Uint8Array(await r.arrayBuffer());
+  // The rebuild's frame sounds an arcade model through the board, from the
+  // ROM this page already holds (preview.js asks `parent.__gpRom`); it
+  // never leaves the page.
+  window.__gpRom = () => rom;
   // An arcade board knows a romset by the chip lists gp read from the
   // games' roms.toml files; the server hands them over first.
   if (player.x.gp_sets_load) {

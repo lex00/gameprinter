@@ -68,7 +68,12 @@ impl Rebuild {
     /// set's.
     pub fn assets_for(&self, paths: &Paths, rom: &[u8]) -> Result<PathBuf> {
         match &self.assets {
-            Some(a) => Ok(a.clone()),
+            // Lifted again when the game's asset map changed since (an
+            // asset added to the model), so a rebuild never lacks one.
+            Some(a) => {
+                crate::corpus_score::lift_into(&self.game, rom, a)?;
+                Ok(a.clone())
+            }
             None => crate::corpus_score::assets_of(paths, &self.game, &self.game, None, rom),
         }
     }

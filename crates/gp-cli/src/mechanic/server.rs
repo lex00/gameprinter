@@ -1253,6 +1253,23 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             }
             Err(r) => Ok(r),
         },
+        // An arcade model sounds through the board's own sound CPU, which
+        // the rebuild's frame runs from the player (the same build as
+        // /gp_play.wasm), the sets gp knows and the session's ROM, which
+        // the page hands it (`__gpRom`, mechanic/app.js).
+        ("GET" | "HEAD", "/rebuild/gp_arcade_play.wasm") if s.platform == Platform::Arcade => {
+            match fs::read(&s.wasm) {
+                Ok(b) => Ok(Response::bytes("application/wasm", b)),
+                Err(_) => Ok(Response::error(
+                    404,
+                    "the arcade player isn't built: run scripts/web/build-play.sh --arcade",
+                )),
+            }
+        }
+        ("GET" | "HEAD", "/rebuild/lift/sources.toml") => Ok(Response::bytes(
+            "text/plain; charset=utf-8",
+            gp_arcade::romset::known_roms_toml().into_bytes(),
+        )),
         ("GET" | "HEAD", p) if p.starts_with("/rebuild/") => {
             super::live::file(&s.paths, &s.repo, &s.game, &p["/rebuild/".len()..])
         }
@@ -1892,6 +1909,16 @@ mod tests {
         let (s, body) = get(&srv, "/gp_play.wasm");
         assert_eq!(s, 404);
         assert!(body.contains("build-play.sh --arcade"), "{body}");
+        // The rebuild's board sound: the player beside the frame, and the
+        // sets gp knows as the lift's sources.toml.
+        assert_eq!(get(&srv, "/rebuild/gp_arcade_play.wasm").0, 404);
+        fs::create_dir_all(d.path().join("no-such")).unwrap();
+        fs::write(&srv.wasm, b"\0asm").unwrap();
+        let (s, kind, _) = call(&srv, "GET", "/rebuild/gp_arcade_play.wasm", None);
+        assert_eq!((s, kind.as_str()), (200, "application/wasm"));
+        let (s, body) = get(&srv, "/rebuild/lift/sources.toml");
+        assert_eq!(s, 200);
+        assert_eq!(body, gp_arcade::romset::known_roms_toml());
         let play = log(&["........", "........"]);
         let (_, v) = post(&srv, "/api/paths", json!({"log": play}));
         let path = v["path"].as_str().unwrap().to_owned();
