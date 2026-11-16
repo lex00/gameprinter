@@ -1779,7 +1779,10 @@ async function refresh() {
   session = await api("api/session");
   $("title").textContent = `${session.game} / ${session.mechanic}`;
   const all = session.queue ?? [];
-  $("score").textContent = all.length ? `${all.filter((q) => q.status === "done").length} / ${all.length} MEASURED` : "";
+  // The session's mechanics done, said in words, each one's status on hover.
+  const done = all.filter((q) => q.status === "done").length;
+  $("score").textContent = all.length ? `${done} of ${all.length} mechanics done` : "";
+  $("score").title = all.map((q) => `${q.mechanic}: ${q.status}`).join("\n");
   // Rebuilt only when it changes: a list redrawn under the mouse every poll
   // loses the click.
   const queue = $("queue");
