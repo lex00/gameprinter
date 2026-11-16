@@ -309,9 +309,8 @@ fn port(dir: &Path, name: &str, args: &ValidateArgs, paths: &Paths) -> Result<Ou
 
 /// The port's verdict from its corpus score (`score` is `gp corpus score`'s
 /// JSON, `text` its summary): state and picture apart. Every clip exact on
-/// state passes an NES port; an arcade game must also have every compared
-/// screen frame the same on picture, as the publish rule asks
-/// (crate::publish_rule). An NES port's picture is said, and doesn't decide.
+/// state passes a port, NES or arcade, as the publish rule asks
+/// (crate::publish_rule); the picture is said, and doesn't decide.
 fn port_verdict(name: &str, arcade: bool, score: &Value, text: &str, out: &Path) -> Outcome {
     let r = &score["record"]["predicate"]["results"];
     let n = r["clips"].as_u64().unwrap_or(0);
@@ -349,7 +348,7 @@ fn port_verdict(name: &str, arcade: bool, score: &Value, text: &str, out: &Path)
     let picture_ok = n > 0 && pictures.len() as u64 == n && picture_off.is_empty();
     let problems = score["problems"].as_array().cloned().unwrap_or_default();
     let state_ok = n > 0 && exact == n && errors == 0 && problems.is_empty();
-    let ok = state_ok && (!arcade || picture_ok);
+    let ok = state_ok;
     let mut lines = vec![text.to_owned()];
     for c in not_exact.iter().take(20) {
         let id = c["id"].as_str().unwrap_or("");
@@ -401,14 +400,9 @@ fn port_verdict(name: &str, arcade: bool, score: &Value, text: &str, out: &Path)
     if n > 0 {
         lines.push(if picture_ok {
             format!("PASS on picture: {picture}, every one of the {n} clips")
-        } else if arcade {
-            format!(
-                "FAIL on picture: {picture}, {} of {n} clips differ; an arcade game passes only when every compared screen frame is the same",
-                n.saturating_sub(pictures.len() as u64 - picture_off.len() as u64)
-            )
         } else {
             format!(
-                "On picture: {picture}, {} of {n} clips differ (said, not decided: an NES port passes on state)",
+                "On picture: {picture}, {} of {n} clips differ (said, not decided: a port passes on state)",
                 n.saturating_sub(pictures.len() as u64 - picture_off.len() as u64)
             )
         });
@@ -419,7 +413,7 @@ fn port_verdict(name: &str, arcade: bool, score: &Value, text: &str, out: &Path)
             "fidelity_permille": permille, "not_exact": not_exact,
             "state_ok": state_ok,
             "picture": {"ok": picture_ok, "frames_same": same, "frames": frames,
-                "differ": picture_off, "decides": arcade},
+                "differ": picture_off, "decides": false, "arcade": arcade},
             "problems": problems, "record_file": out,
         }),
         text: lines.join("\n"),
@@ -916,13 +910,14 @@ mod tests {
     }
 
     #[test]
-    fn a_port_says_state_and_picture_apart_and_an_arcade_game_fails_on_picture() {
+    fn a_port_says_state_and_picture_apart_and_state_decides() {
         let out = Path::new("made-up/score.json");
-        // Exact on state, a frame different on picture: an arcade game fails.
+        // Exact on state, a frame different on picture: an arcade game
+        // passes, the picture said.
         let o = port_verdict("cab", true, &made_up_score(9), "summary", out);
         assert_eq!(
             (o.json["ok"].as_bool(), o.exit),
-            (Some(false), 1),
+            (Some(true), 0),
             "{}",
             o.text
         );
@@ -930,7 +925,7 @@ mod tests {
             o.text
                 .contains("PASS on state: every one of cab's 2 clips is exact")
                 && o.text.contains(
-                    "FAIL on picture: 19 of 20 screen frames the same, 1 of 2 clips differ"
+                    "On picture: 19 of 20 screen frames the same, 1 of 2 clips differ (said, not decided"
                 )
                 && o.text
                     .contains("differs on picture: a.2: 9 of 10 screen frames the same"),
@@ -965,16 +960,17 @@ mod tests {
             "{}",
             o.text
         );
-        // No screen counts at all: an arcade game fails on picture.
+        // No screen counts at all: an arcade game still passes on state,
+        // the picture said.
         let mut none = made_up_score(10);
         for c in none["record"]["predicate"]["clips"].as_array_mut().unwrap() {
             c.as_object_mut().unwrap().remove("screen");
         }
         let o = port_verdict("cab", true, &none, "summary", out);
-        assert_eq!(o.json["ok"], false, "{}", o.text);
+        assert_eq!(o.json["ok"], true, "{}", o.text);
         assert!(
             o.text
-                .contains("FAIL on picture: 0 of 0 screen frames the same, 2 of 2 clips differ"),
+                .contains("On picture: 0 of 0 screen frames the same, 2 of 2 clips differ"),
             "{}",
             o.text
         );

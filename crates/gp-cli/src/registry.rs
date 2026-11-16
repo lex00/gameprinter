@@ -3286,11 +3286,11 @@ mod command_tests {
         }
     }
 
-    /// The owner's rule for an arcade game (#3): `gp registry publish`
-    /// refuses one unless the score record in its evidence/ for its model
-    /// and corpus as they are has every clip exact on state and every
-    /// compared screen frame the same on picture, with the package's
-    /// mapping and ROM, and says how to get there. A made-up package and
+    /// The owner's rule for an arcade game (#3, changed 2026-11-16): `gp
+    /// registry publish` refuses one unless the score record in its
+    /// evidence/ for its model and corpus as they are has every clip exact
+    /// on state, with the package's mapping and ROM, and says how to get
+    /// there; the picture is said, not required. A made-up package and
     /// made-up records: no ROM is read.
     #[test]
     fn an_arcade_game_is_published_only_when_every_clip_scores_exact() {
@@ -3395,32 +3395,15 @@ mod command_tests {
         let e = publish().err().unwrap().to_string();
         assert!(e.contains("its mapping.toml isn't the one"), "{e}");
         assert_eq!(published(), 0);
-        // Every clip exact on state, but a screen frame differs on the
-        // picture: refused, saying state and picture apart and naming it.
+        // Every clip exact on state, a screen frame different on the
+        // picture: published, the picture said and not required.
         record(1, "# made up mapping\n", Some((39, 40)));
-        let e = publish().err().unwrap().to_string();
-        assert!(
-            e.contains("has 1 of 1 clips exact on state; picture: 39 of 40 screen frames the same")
-                && e.contains("1 of 1 clips differ on picture (differ on picture: cab.1)"),
-            "{e}"
-        );
-        assert_eq!(published(), 0);
-        // Exact on state with no screen frames compared: refused too.
-        record(1, "# made up mapping\n", None);
-        let e = publish().err().unwrap().to_string();
-        assert!(
-            e.contains("picture: 0 of 0 screen frames the same")
-                && e.contains("with no screen frames compared"),
-            "{e}"
-        );
-        assert_eq!(published(), 0);
-        // Every clip exact on state and every screen frame the same on the
-        // package as it is: published, and it says so.
-        record(1, "# made up mapping\n", Some((40, 40)));
         let o = publish().unwrap();
         assert!(
             o.text.contains(
-                "own/cab is an arcade game: all 1 clips of its corpus cab 1.0.0 score exact on state and all 40 of their screen frames are the same on picture"
+                "own/cab is an arcade game: all 1 clips of its corpus cab 1.0.0 score exact on state"
+            ) && o.text.contains(
+                "picture: 39 of 40 screen frames the same, 1 of 1 clips differ on picture (said, not required)"
             ),
             "{}",
             o.text

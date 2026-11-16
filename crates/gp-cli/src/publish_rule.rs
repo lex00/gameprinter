@@ -1,9 +1,10 @@
-//! The rule for publishing an arcade game (the owner's decisions on #3):
-//! `gp registry publish` takes one only when every clip of its corpus
-//! scores exact on state and every screen frame each clip compares is the
-//! same on picture (the record's per-clip `screen` counts: same equal to
-//! compared, and more than none compared). It doesn't score: it reads the score record `gp corpus
-//! score --write` keeps in the package's own `evidence/`, the one for the
+//! The rule for publishing an arcade game (the owner's decisions on #3,
+//! changed on 2026-11-16): `gp registry publish` takes one only when every
+//! clip of its corpus scores exact on state. The record's picture counts
+//! (each clip's `screen`, its compared frames the same) are read and said,
+//! never required; picture labels by cause (#38) may tighten that later.
+//! It doesn't score: it reads the score record `gp corpus score --write`
+//! keeps in the package's own `evidence/`, the one for the
 //! package's model and corpus as they are (`evidence/MODEL/CORPUS.json`),
 //! and checks that the record's mapping, contract and ROM are the
 //! package's too. A record kept in the package is committed with it, so
@@ -48,13 +49,13 @@ pub(crate) fn is_arcade_game(dir: &Path) -> bool {
 }
 
 /// What a person does to get an arcade game published.
-const HOW: &str = "Score it in the game's folder with `gp corpus score GAME_DIR --run publish --write GAME_DIR` (for a game with hooks, add `--module PLAY_DIR/module.wasm`, the module the package ships, which build-page.sh or `gp game build` makes) until every clip is exact on state and every screen frame is the same on picture. That writes the record into GAME_DIR/evidence/; commit it with the game, and publish the folder again";
+const HOW: &str = "Score it in the game's folder with `gp corpus score GAME_DIR --run publish --write GAME_DIR` (for a game with hooks, add `--module PLAY_DIR/module.wasm`, the module the package ships, which build-page.sh or `gp game build` makes) until every clip is exact on state. That writes the record into GAME_DIR/evidence/; commit it with the game, and publish the folder again";
 
 /// Stops the publish of an arcade game (`kind` game) unless its
 /// evidence/ holds a score record for its model and corpus as they are,
-/// with every clip exact on state, none that couldn't be scored, every
-/// clip's compared screen frames the same on picture, and the record's
-/// mapping, contract and ROM the package's. Returns a line saying what it
+/// with every clip exact on state, none that couldn't be scored, and the
+/// record's mapping, contract and ROM the package's. The picture is said,
+/// not required. Returns a line saying what it
 /// read, or None for a package that isn't an arcade game.
 pub(crate) fn arcade_exact_guard(dir: &Path, kind: &str) -> Result<Option<String>> {
     if kind != "game" || !is_arcade_game(dir) {
@@ -63,7 +64,7 @@ pub(crate) fn arcade_exact_guard(dir: &Path, kind: &str) -> Result<Option<String
     let what = package_name(dir);
     let stop = |why: String| {
         anyhow!(
-            "{what} is an arcade game, and an arcade game is published only when every clip of its corpus scores exact on state and every screen frame is the same on picture, but {why}. {HOW}. Nothing was published"
+            "{what} is an arcade game, and an arcade game is published only when every clip of its corpus scores exact on state, but {why}. {HOW}. Nothing was published"
         )
     };
     let model = fs::read_to_string(dir.join(gp_model::MODEL_FILE))
@@ -112,7 +113,8 @@ pub(crate) fn arcade_exact_guard(dir: &Path, kind: &str) -> Result<Option<String
         )));
     }
     let rows = p["clips"].as_array().cloned().unwrap_or_default();
-    // The picture apart from the state: each clip's compared screen frames.
+    // The picture apart from the state, said and not required: each clip's
+    // compared screen frames.
     let pictures: Vec<(&str, Picture)> = rows
         .iter()
         .filter(|c| c.get("error").is_none_or(Value::is_null))
@@ -141,28 +143,10 @@ pub(crate) fn arcade_exact_guard(dir: &Path, kind: &str) -> Result<Option<String
             named(not, "not exact")
         )));
     }
-    let off: Vec<&str> = pictures
-        .iter()
-        .filter(|(_, pc)| !pc.exact())
-        .map(|(id, _)| *id)
-        .collect();
     if rows.len() as u64 != n {
         return Err(stop(format!(
             "its score record {rel} has {} clip rows for its {n} clips",
             rows.len()
-        )));
-    }
-    if !off.is_empty() {
-        let none = pictures.iter().filter(|(_, pc)| pc.frames == 0).count();
-        let unseen = if none > 0 {
-            format!(", {none} of them with no screen frames compared")
-        } else {
-            String::new()
-        };
-        return Err(stop(format!(
-            "its score record {rel} has {n} of {n} clips exact on state; {picture}, {} of {n} clips differ on picture{unseen}{}",
-            off.len(),
-            named(off.clone(), "differ on picture")
         )));
     }
     let h = |b: &[u8]| gp_evidence::Hash::of(b).to_string();
@@ -198,8 +182,9 @@ pub(crate) fn arcade_exact_guard(dir: &Path, kind: &str) -> Result<Option<String
             p["rom"]["sha256"].as_str().unwrap_or("none")
         )));
     }
+    let off = pictures.iter().filter(|(_, pc)| !pc.exact()).count();
     Ok(Some(format!(
-        "{what} is an arcade game: all {n} clips of its corpus {} {} score exact on state and all {frames} of their screen frames are the same on picture, on its model as it is (score record {rel}, by {})",
+        "{what} is an arcade game: all {n} clips of its corpus {} {} score exact on state, on its model as it is (score record {rel}, by {}); {picture}, {off} of {n} clips differ on picture (said, not required)",
         p["corpus"]["name"].as_str().unwrap_or("?"),
         p["corpus"]["version"].as_str().unwrap_or("?"),
         p["gp"]["build"]
