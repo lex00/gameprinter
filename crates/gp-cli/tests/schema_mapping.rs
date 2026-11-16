@@ -14,9 +14,7 @@ fn repo() -> PathBuf {
 /// The games checkout, when this machine has one: a folder with a game's
 /// package in it.
 fn games() -> Option<PathBuf> {
-    let dir = std::env::var_os("GP_GAMES_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| repo().join("../games"));
+    let dir = std::env::var_os("GP_GAMES_DIR").map(PathBuf::from)?;
     let has_game = std::fs::read_dir(&dir)
         .into_iter()
         .flatten()

@@ -194,16 +194,12 @@ pub fn games_dir(given: Option<&Path>) -> Option<PathBuf> {
         })
     };
     let cwd = std::env::current_dir().ok()?;
-    for d in cwd.ancestors() {
-        if holds_games(d) {
-            return Some(d.to_path_buf());
-        }
-        let beside = d.join("games");
-        if holds_games(&beside) {
-            return Some(beside);
-        }
-    }
-    None
+    // Run from inside a games checkout, that checkout. A `games` folder
+    // beside some other folder is never looked for: a command finds games
+    // only where it was pointed.
+    cwd.ancestors()
+        .find(|d| holds_games(d))
+        .map(Path::to_path_buf)
 }
 
 /// Every game's roms.toml in the games checkout, as one registry, and what
@@ -654,7 +650,13 @@ mod tests {
         assert_eq!(out.json["roms"].as_array().unwrap().len(), 1);
         assert_eq!(out.json["romsets"].as_array().unwrap().len(), 0);
         let problem = out.json["problems"][0]["line"].as_str().unwrap();
-        assert!(problem.contains("no set gp-arcade knows"), "{problem}");
+        // Refused either way: as no known set, or, with no games checkout
+        // at all, as no set known.
+        assert!(
+            problem.contains("no set gp-arcade knows")
+                || problem.contains("no arcade romset is known"),
+            "{problem}"
+        );
         let src = d.path().join("other.zip");
         fs::write(&src, &empty_zip).unwrap();
         let e = add(&[src], false, false, &p, &Registry::default(), "nowhere")

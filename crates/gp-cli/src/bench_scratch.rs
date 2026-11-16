@@ -58,7 +58,7 @@ pub struct ScratchArgs {
     #[arg(long)]
     pub rom: Option<PathBuf>,
     /// The directory the bench file's paths are relative to (default: the
-    /// games checkout, $GP_GAMES_DIR or ../games beside the repo).
+    /// games checkout, $GP_GAMES_DIR).
     #[arg(long)]
     pub root: Option<PathBuf>,
     /// The bench's own home, made afresh (default:

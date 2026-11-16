@@ -155,14 +155,18 @@ test("a link's registry: read, carried by a share link, and left out when it isn
 test("the registry the page also takes themes from: the link's, else the one it was built with, never its own again", () => {
   const own = { name: "gp-registry", url: "https://raw.githubusercontent.com/lex00/gp-registry/main", root: "ssh-ed25519 OWN" };
   assert.equal(themesSource(own, readLink("?g=a/b")), null);
-  assert.equal(themesSource(own, readLink(`?r=${own.url}/`)), null, "the page's own registry isn't a second one");
-  assert.deepEqual(themesSource(own, readLink(`?r=${REG}`)), { name: REG, url: REG, root: null, byLink: true });
-  assert.equal(themesSource(own, readLink(`?r=${REG}&rk=${encodeURIComponent(RK)}`)).root, `ssh-ed25519 ${RK}`);
-  assert.equal(themesSource(own, readLink("?r=http://evil.example")), null);
+  assert.equal(themesSource(own, readLink(`?r=${own.url}/`), null, true), null, "the page's own registry isn't a second one");
+  assert.deepEqual(themesSource(own, readLink(`?r=${REG}`), null, true), { name: REG, url: REG, root: null, byLink: true });
+  assert.equal(themesSource(own, readLink(`?r=${REG}&rk=${encodeURIComponent(RK)}`), null, true).root, `ssh-ed25519 ${RK}`);
+  assert.equal(themesSource(own, readLink("?r=http://evil.example"), null, true), null);
   const built = { name: "harbor-registry", url: REG, root: null };
   assert.deepEqual(themesSource(own, readLink("?g=a/b"), built), { name: "harbor-registry", url: REG, root: null, byLink: false });
-  assert.equal(themesSource(own, readLink("?r=https://other.example/r"), built).url, "https://other.example/r", "the link's wins");
+  assert.equal(themesSource(own, readLink("?r=https://other.example/r"), built, true).url, "https://other.example/r", "the link's wins");
   assert.equal(themesSource(own, readLink(""), { url: "http://x.example" }), null);
+  // A page not built to take a link's registry never reads one: only its
+  // own registries' themes play there.
+  assert.equal(themesSource(own, readLink(`?r=${REG}`)), null, "the link's registry is ignored by default");
+  assert.deepEqual(themesSource(own, readLink(`?r=${REG}`), built), { name: "harbor-registry", url: REG, root: null, byLink: false }, "the page's own second registry still plays");
 });
 
 const enc = (o) => new TextEncoder().encode(typeof o === "string" ? o : JSON.stringify(o));

@@ -63,7 +63,8 @@
 # GP_WEB_REUSE=1), and so is a package scan with nothing to rewrite.
 # Reused results are printed with "kept". --full reuses nothing: it makes
 # and checks everything again, and keeps the results for the next run.
-# deploy.sh always runs --full. The page check runs every section each
+# deploy.sh always runs --full. A page that already passed, file for file,
+# is not checked again (GP_RECHECK=1 checks it). The page check runs every section each
 # time either way (check-page.mjs says why).
 #
 # GP names the gp to run (default target/debug/gp); WEB_TOOLS,
@@ -94,8 +95,8 @@ done
 if [ -n "$game" ]; then
   games_dir="${GP_GAMES_DIR:-$(dirname "$game")}"
 else
-  games_dir="${GP_GAMES_DIR:-$repo/../games}"
-  [ -f "$games_dir/page.toml" ] || { echo "release-check: give --game GAME_DIR, or a games checkout ($games_dir: GP_GAMES_DIR, else games beside this repo) whose page.toml names the page's game" >&2; exit 2; }
+  games_dir="${GP_GAMES_DIR:-}"
+  [ -n "$games_dir" ] && [ -f "$games_dir/page.toml" ] || { echo "release-check: give --game GAME_DIR, or GP_GAMES_DIR, a games checkout whose page.toml names the page's game" >&2; exit 2; }
   game_folder="$(python3 -I -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["game"])' "$games_dir/page.toml")" \
     || { echo "release-check: $games_dir/page.toml names no game (game = \"FOLDER\")" >&2; exit 2; }
   game="$games_dir/$game_folder"
@@ -215,6 +216,19 @@ if [ ! -f "$out/index.html" ]; then
 fi
 out="$(cd "$out" && pwd)"
 built="$(python3 -I "$repo/scripts/web/page-digest.py" "$out")" || exit 2
+
+# A page whose every file is as it was when the release check last passed
+# on it (the same digest, and with ROMs if this run has them) is not
+# checked again: it is that page. GP_RECHECK=1 checks it anyway.
+prior="$home/work/page-release/passed/$built"
+if [ ${#fail[@]} -eq 0 ] && [ "${GP_RECHECK:-}" != 1 ] && [ -f "$prior" ] \
+  && { [ $no_roms = 1 ] || grep -qx 'roms some' "$prior"; }; then
+  echo
+  echo "kept  this page passed already, file for file ($(sed -n 's/^when //p' "$prior")): not checked again (GP_RECHECK=1 checks it)"
+  echo "PASS: the page can be deployed (digest $built, recorded in $home/work/page-release/passed)"
+  echo "bundle: $out"
+  exit 0
+fi
 
 step "Moss Hop with two made-up themes, for the page check's theme-hud-over section"
 # The page's own player draws them (check-page.mjs serves DIR.mosshop beside

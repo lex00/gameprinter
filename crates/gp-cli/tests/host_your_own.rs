@@ -118,7 +118,7 @@ fn a_registry_of_your_own_from_an_empty_repo_to_the_link() {
     assert!(says.contains("isn't on GitHub"), "{h}");
     let h = host(&gh);
     assert_eq!(h["stage"]["n"], 2, "{h}");
-    assert_eq!(h["steps"].as_array().unwrap().len(), 7, "{h}");
+    assert_eq!(h["steps"].as_array().unwrap().len(), 6, "{h}");
     let raw = "https://raw.githubusercontent.com/acme/harbor-registry/main";
     assert_eq!(h["raw"], raw);
 
@@ -176,11 +176,9 @@ fn a_registry_of_your_own_from_an_empty_repo_to_the_link() {
         !w.path("acme-registry/index/test").exists(),
         "the registry holds no game"
     );
-    assert_eq!(
-        h["link"],
-        format!(
-            "https://gameprinter.intentius.workers.dev/p?g=test/made-up&c=acme/harbor-lights&r={raw}"
-        )
+    assert!(
+        h.get("link").is_none(),
+        "no link to the project's page, which reads only its own registry: {h}"
     );
     assert_eq!(h["themes"]["url"], raw, "{h}");
     // The theme list for the game reads as the page reads it, with no game

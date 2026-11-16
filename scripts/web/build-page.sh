@@ -175,6 +175,10 @@ if by_url:
         if not re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/]{68}( \S+)?", root):
             sys.exit("build-page.sh: GP_PAGE_SOURCE_ROOT must be an ssh-ed25519 public key line")
         source["root"] = root
+# GP_PAGE_LINK_REGISTRY=1 builds a page that also takes themes from the
+# registry a link names (r=). Off by default: the page plays only its own
+# registries' themes.
+link_registry = os.environ.get("GP_PAGE_LINK_REGISTRY", "") == "1"
 themes = None
 themes_url = os.environ.get("GP_PAGE_THEMES_URL", "")
 if themes_url:
@@ -205,6 +209,8 @@ if kind == "none":
             page[k] = facts[k]
     if themes:
         page["themes"] = themes
+    if link_registry:
+        page["link_registry"] = True
     open(f"{out}/page.json", "w").write(json.dumps(page, indent=1) + "\n")
     os.makedirs(f"{out}.facts", exist_ok=True)
     open(f"{out}.facts/page.json", "w").write(json.dumps(facts, indent=1) + "\n")
@@ -285,6 +291,8 @@ page["howto"] = howto
 page["trademark"] = trademark
 if themes:
     page["themes"] = themes
+if link_registry:
+    page["link_registry"] = True
 open(f"{out}/page.json", "w").write(json.dumps(page, indent=1) + "\n")
 r = page["rom"]
 facts = {

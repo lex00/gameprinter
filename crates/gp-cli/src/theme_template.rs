@@ -220,8 +220,7 @@ pub(crate) fn find_game(name: &str) -> Option<PathBuf> {
 pub(crate) fn test_games() -> Option<PathBuf> {
     let d = std::env::var_os("GP_GAMES_DIR")
         .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../games"));
+        .map(PathBuf::from)?;
     (!templates_in(&d).is_empty()).then_some(d)
 }
 

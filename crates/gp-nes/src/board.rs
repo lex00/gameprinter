@@ -109,9 +109,10 @@ mod tests {
             eprintln!("GP_ROM_DIR isn't set; skipped");
             return;
         };
-        let games = std::env::var_os("GP_GAMES_DIR")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../games"));
+        let Some(games) = std::env::var_os("GP_GAMES_DIR").map(std::path::PathBuf::from) else {
+            eprintln!("GP_GAMES_DIR isn't set; skipped");
+            return;
+        };
         let Ok(sources) = Registry::load_games(&games) else {
             eprintln!("no games checkout at {}; skipped", games.display());
             return;

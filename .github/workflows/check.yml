@@ -4,15 +4,14 @@ on:
   pull_request:
 jobs:
   check:
-    # Hosted, so it holds no ROM. Everything here runs on Moss Hop, built from source.
+    # Hosted, so it holds no ROM: the tool and Moss Hop, built from source.
+    # The browser checks are check-web.yml, run only when web code changes.
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 45
     env:
       CARGO_TERM_COLOR: never
-      # The page check's waits for a build, three times a Mac's: the runner
-      # has four cores, shared by every lane of just check at once
-      # (scripts/web/check-mechanic.mjs).
-      GP_CHECK_BUILD_WAIT: 3
+      # The slow tests run here, not in the tool gate, which lands in minutes.
+      GP_SLOW_TESTS: "1"
     steps:
       - uses: actions/checkout@v4
       # The build sandbox, which gp game build and its test need, and cc65
@@ -55,12 +54,5 @@ jobs:
           # Kept when the check fails too, so the next push doesn't build
           # everything again.
           cache-on-failure: true
-      # The pinned Chrome Headless Shell the page checks drive
-      # (scripts/inspector/fetch-browser.sh checks its SHA-256).
-      - uses: actions/cache@v4
-        with:
-          path: ~/.gameprinter/work/chrome-headless-shell
-          key: chrome-headless-shell-${{ runner.os }}-${{ hashFiles('scripts/inspector/fetch-browser.sh') }}
       - run: just setup
       - run: just check
-      - run: just check-web

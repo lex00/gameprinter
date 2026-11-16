@@ -12,8 +12,9 @@ set -euo pipefail
 trap 'exit 2' ERR
 real="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$real"
-games="$(cd "${1:-$real/../games}" && pwd)"
-theme="$(cd "${2:-$real/../turnips}" && pwd)"
+[ -n "${1:-${GP_GAMES_DIR:-}}" ] && [ -n "${2:-}" ] || { echo "local-registry.sh: give GAMES_DIR (or GP_GAMES_DIR) and THEME_DIR" >&2; exit 2; }
+games="$(cd "${1:-$GP_GAMES_DIR}" && pwd)"
+theme="$(cd "$2" && pwd)"
 home="${GP_HOME:-$HOME/.gameprinter}"
 keys="$home/keys/staging"
 reg="$home/registry"

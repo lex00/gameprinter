@@ -370,14 +370,9 @@ mod tests {
     }
 
     /// The game folder the games checkout's page.toml names (`game =
-    /// "FOLDER"`): the checkout is $GP_GAMES_DIR, else `games` beside this
-    /// repo. None without one.
+    /// "FOLDER"`): the checkout is $GP_GAMES_DIR. None without one.
     fn page_game() -> Option<std::path::PathBuf> {
-        let games = std::env::var_os("GP_GAMES_DIR")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../games")
-            });
+        let games = std::env::var_os("GP_GAMES_DIR").map(std::path::PathBuf::from)?;
         let page: toml::Value =
             toml::from_str(&std::fs::read_to_string(games.join("page.toml")).ok()?).ok()?;
         Some(games.join(page.get("game")?.as_str()?))

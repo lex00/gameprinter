@@ -88,7 +88,7 @@ pub struct ClipsArgs {
     #[arg(long)]
     pub rom: Option<PathBuf>,
     /// The directory the bench file's paths are relative to (default: the
-    /// games checkout, $GP_GAMES_DIR or ../games beside the repo).
+    /// games checkout, $GP_GAMES_DIR).
     #[arg(long)]
     pub root: Option<PathBuf>,
     /// The bench's own home, made afresh (default:
@@ -252,10 +252,12 @@ pub(crate) fn bench_file(game: &str, root: &Path) -> Result<(PathBuf, String)> {
 pub(crate) fn root_of(given: Option<&Path>) -> Result<PathBuf> {
     let r = match given {
         Some(r) => r.to_owned(),
-        None => std::env::var_os("GP_GAMES_DIR").map_or_else(
-            || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../games"),
-            PathBuf::from,
-        ),
+        None => std::env::var_os("GP_GAMES_DIR")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .context(
+                "give the bench's root with --root, or set GP_GAMES_DIR to a games checkout",
+            )?,
     };
     fs::canonicalize(&r).with_context(|| format!("the bench's root {}", r.display()))
 }

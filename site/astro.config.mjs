@@ -60,7 +60,7 @@ export default defineConfig({
 						{ label: 'Make your own game', slug: 'make' },
 						{ label: 'Play', link: 'https://lex00.github.io/games/', attrs: { rel: 'noopener' } },
 						{ label: 'Themes and levels', slug: 'themes' },
-						{ label: 'Host your theme', slug: 'host-your-own' },
+						{ label: 'Host your game or theme', slug: 'host-your-own' },
 						{ label: 'Bring in a game', slug: 'bring' },
 						{ label: 'Improve a game', slug: 'improve' },
 					],

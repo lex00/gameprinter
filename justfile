@@ -226,8 +226,8 @@ site-prose:
 # hasn't: each NES ROM a game in the games checkout names boots in gp-nes as
 # tetanes-core boots the file, and its junk copies record the same
 # (gp-nes's registered_roms_boot_as_their_files_do); then the profiles and
-# clip_agree tests on each game of the games checkout ($GP_GAMES_DIR, else
-# ../games beside the repo) that has them (`just check-profiles-roms` and
+# clip_agree tests on each game of the games checkout ($GP_GAMES_DIR) that
+# has them (`just check-profiles-roms` and
 # `just check-clip-agree-roms` say which). CI has no ROM, so there it checks
 # nothing.
 check-roms: build
@@ -238,7 +238,7 @@ check-roms: build
         echo "check-roms: skipped, no ROM folder at $roms"
         exit 0
     fi
-    export GP_ROM_DIR="$roms" GP_GAMES_DIR="${GP_GAMES_DIR:-{{justfile_directory() / ".." / "games"}}}"
+    export GP_ROM_DIR="$roms" GP_GAMES_DIR="${GP_GAMES_DIR:?set GP_GAMES_DIR to a games checkout}"
     out=$(GP_CHECK_ROM_BOOT=1 cargo test -q -p gp-nes --profile {{profile}} --lib registered_roms_boot_as_their_files_do -- --ignored --nocapture 2>&1) || { echo "$out" >&2; exit 1; }
     grep -E 'identical|skipped' <<<"$out" || true
     just --no-deps _rom-tier "profiles clip_agree"
@@ -269,7 +269,7 @@ _rom-tier TESTS *GAMES:
     #!/usr/bin/env bash
     set -euo pipefail
     roms="${GP_ROM_DIR:-{{gp_home / "roms"}}}"
-    games="${GP_GAMES_DIR:-{{justfile_directory() / ".." / "games"}}}"
+    games="${GP_GAMES_DIR:-}"
     export GP_ROM_DIR="$roms" GP_GAMES_DIR="$games"
     facts() { python3 -I -B scripts/check/game-facts.py "$@"; }
     list=()
@@ -358,7 +358,7 @@ play-web: mosshop
     echo "play-web: Moss Hop played in gp_play.wasm and replayed natively: every frame hash agrees ($web)"
 
 # The arcade player: gp_arcade_play.wasm built into target/play-web, and
-# for an arcade game of the games checkout ($GP_GAMES_DIR, else ../games),
+# for an arcade game of the games checkout ($GP_GAMES_DIR),
 # a MAME capture's input that its oracle/mame-captures.toml names (the
 # first for the set) played in it under node, drawing every frame, with a
 # save point restored on the way, then the same log replayed natively;
@@ -376,7 +376,7 @@ play-web: mosshop
 play-web-arcade GAME="" SOURCE="":
     #!/usr/bin/env bash
     set -euo pipefail
-    games="${GP_GAMES_DIR:-{{justfile_directory() / ".." / "games"}}}"
+    games="${GP_GAMES_DIR:-}"
     facts() { python3 -I -B scripts/check/game-facts.py "$@"; }
     work={{quote(gp_home / "work" / "play-web")}}
     built=""
@@ -470,7 +470,7 @@ play-web-arcade GAME="" SOURCE="":
 # answer from gp mechanic say, FREE PLAY, and the page's message when the
 # player isn't built (scripts/web/check-mechanic.mjs). That part needs no
 # games checkout. Then an arcade part for each arcade game of the games
-# checkout ($GP_GAMES_DIR, else ../games) whose package.toml's `play` set
+# checkout ($GP_GAMES_DIR) whose package.toml's `play` set
 # is on this machine ($GP_ROM_DIR/arcade/SYSTEM.zip, SYSTEM its roms.toml
 # `system`): coin, start, a
 # clip that is play by the game's checks.toml, gp mechanic say, ON THE
@@ -491,7 +491,7 @@ mechanic-page: build mosshop
             --shots {{quote(gp_home / "work" / "mechanic-page")}}
     }
     check
-    games="${GP_GAMES_DIR:-{{justfile_directory() / ".." / "games"}}}"
+    games="${GP_GAMES_DIR:-}"
     # gp, which the check starts, knows the arcade sets from this checkout.
     export GP_GAMES_DIR="$games"
     facts() { python3 -I -B scripts/check/game-facts.py "$@"; }
@@ -767,7 +767,7 @@ web-parity: build mosshop
 # (docs/web.md, "Parity"): from the original's state at each clip's
 # start, its module under Node through the page's exports and gp interp run
 # through the same module must give the same state hash on every frame.
-# GAME is a folder of the games checkout (GP_GAMES_DIR or ../games) or a
+# GAME is a folder of the games checkout (GP_GAMES_DIR) or a
 # path; CLIPS are its corpus clip IDs (default: its checks.toml's
 # [web_parity] clips). Needs the game's model.toml and the romset its corpus
 # is for, $GP_ROM_DIR/arcade/SYSTEM.zip (SYSTEM its roms.toml `system`);
@@ -777,7 +777,7 @@ web-parity-arcade GAME *CLIPS: build
     set -euo pipefail
     facts() { python3 -I -B scripts/check/game-facts.py "$@"; }
     game={{quote(GAME)}}
-    [ -d "$game" ] || game="${GP_GAMES_DIR:-{{justfile_directory() / ".." / "games"}}}/$game"
+    [ -d "$game" ] || game="${GP_GAMES_DIR:?set GP_GAMES_DIR to a games checkout}/$game"
     name=$(basename "$game")
     zip="${GP_ROM_DIR:-}/arcade/$(facts "$game" system || true).zip"
     if [ ! -f "$game/model.toml" ] || [ ! -f "$zip" ]; then
@@ -799,8 +799,8 @@ web-parity-arcade GAME *CLIPS: build
         $clips | grep -v '^{'
 
 # Build a registry in a folder on this machine and the page that installs from it.
-local-registry:
-    GP_HOME={{quote(gp_home)}} scripts/web/local-registry.sh
+local-registry GAMES THEME:
+    GP_HOME={{quote(gp_home)}} scripts/web/local-registry.sh {{quote(GAMES)}} {{quote(THEME)}}
 
 # Serve them at http://127.0.0.1:8377/p?g=NAMESPACE/NAME (the page's game,
 # as its package.toml names it) until stopped.

@@ -179,6 +179,11 @@ The `env` line is only needed when your ROMs aren't in `~/.gameprinter/roms`. On
 
 `gp mcp` is a local server over stdio, with no network port. Give the client the command `/Users/YOU/.local/bin/gp` with the single argument `mcp`, and name the server `gp`, and its tools show up under `gp`. The repo's `docs/mcp.md` has more about the tools.
 
+### What to ask your agent next
+
+- To make a theme: [Themes and levels](../themes/) has a prompt to hand your agent.
+- To put your game or theme online: [Host your game or theme](../host-your-own/) has one too. For the upload your agent uses wrangler, which is Cloudflare's own tool. It asks you to log in once.
+
 ## Build it from source
 
 Do this if you want to change `gp` itself, or if there's no download for your machine yet.

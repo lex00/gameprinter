@@ -337,10 +337,6 @@ pub enum RegistryCmd {
         /// GitHub address. Example: --github acme/harbor-registry
         #[arg(long)]
         github: Option<String>,
-        /// The page to try it on, with r=. Example: --page
-        /// https://gameprinter.intentius.workers.dev
-        #[arg(long, default_value = crate::journeys::PUBLIC_PAGE)]
-        page: String,
     },
     /// Offer a game or theme to a registry you can't write to that takes
     /// submissions, as a pull request its owner merges or not. Name its repo
@@ -533,14 +529,12 @@ pub fn run(cmd: &RegistryCmd) -> Result<Outcome> {
             theme_dir,
             game,
             github,
-            page,
         } => crate::registry_host::host(&crate::registry_host::HostArgs {
             dir: dir.as_deref(),
             github: github.as_deref(),
             theme: theme.as_deref(),
             theme_dir: theme_dir.as_deref(),
             game: game.as_deref(),
-            page,
         }),
         RegistryCmd::Submit {
             dir,

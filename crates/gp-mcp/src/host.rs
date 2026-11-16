@@ -2,8 +2,9 @@
 //! person's own (docs/host-your-own.md), step by step, from `gp --json
 //! registry host` (crates/gp-cli/src/registry_host.rs): a repo for the
 //! registry, the registry in it, their namespace, their theme, the check
-//! from outside, the public page with `r=` (which adds their themes to its
-//! own registry's games), and optionally a page of their own. Like `next` it reads and starts
+//! from outside, and a page of their own, which offers their themes beside
+//! the project's games (the project's public page plays only its own
+//! registry's themes). Like `next` it reads and starts
 //! nothing: every step's commands run through `gp_run`, where each one that
 //! writes to the outside world (init, grant, publish and reindex on a git:
 //! target, which commit and push) needs the person's yes.

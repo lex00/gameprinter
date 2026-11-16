@@ -171,7 +171,22 @@ fn cargo(c: &Cx) -> Command {
     };
     let mut cmd = Command::new(program);
     gate_env(&mut cmd);
+    // The gate's two targets (the build's and the tests') and every tree
+    // share compiled crates through sccache when this machine has it, so a
+    // gate builds only what the patch changed.
+    if std::env::var_os("RUSTC_WRAPPER").is_none() && which("sccache") {
+        cmd.env("RUSTC_WRAPPER", "sccache");
+        if std::env::var_os("SCCACHE_DIR").is_none() {
+            cmd.env("SCCACHE_DIR", c.home.join("work/sccache"));
+        }
+    }
     cmd
+}
+
+/// Whether `name` is a program on PATH.
+fn which(name: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()))
 }
 
 /// The gate's own build settings for a child that builds: the profile's
@@ -483,7 +498,7 @@ fn tests_lane(c: &Cx, stop: &AtomicBool) -> std::result::Result<Vec<String>, Str
             .args(extra)
             .current_dir(&c.tree)
             .env("CARGO_TARGET_DIR", &target)
-            .env("GP_SLOW_TESTS", "1");
+            .env_remove("GP_SLOW_TESTS");
         cmd
     };
     c.steps.time(
@@ -498,10 +513,12 @@ fn tests_lane(c: &Cx, stop: &AtomicBool) -> std::result::Result<Vec<String>, Str
         },
         Result::is_ok,
     )?;
-    let runs = test_runs(&slow_tests(&c.tree));
+    // The slow tests (GP_SLOW_TESTS) are CI's: the gate runs the rest, so a
+    // change lands in minutes.
+    let runs = test_runs(&[]);
     progress(format!(
-        "cargo test: {} slow tests each in a run of its own, beside the rest",
-        runs.len() - 1
+        "cargo test: the {} slow tests are left to CI",
+        slow_tests(&c.tree).len()
     ));
     let test = &test;
     let fails: Vec<String> = std::thread::scope(|s| {
@@ -1186,9 +1203,8 @@ date +%s > '{times}/just.end'
     }
 
     /// The gate's own test run is the whole workspace in the gate's
-    /// profile with the slow tests on (GP_SLOW_TESTS=1): built once, then
-    /// the slow test in a run of its own beside the rest, which skips it.
-    /// A failing test there fails the gate.
+    /// profile with the slow tests off (they are CI's): built once, then
+    /// run once. A failing test there fails the gate.
     #[test]
     fn the_gates_test_run_has_every_test_and_a_failure_stops_it() {
         let dir = tempfile::tempdir().unwrap();
@@ -1197,14 +1213,12 @@ date +%s > '{times}/just.end'
         let o = dry_run(&c, &patch);
         assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
         let seen = fs::read_to_string(tests_target(&c).join("cargo-test-seen")).unwrap();
-        let mut runs: Vec<&str> = seen.lines().collect();
-        runs[1..].sort_unstable();
+        let runs: Vec<&str> = seen.lines().collect();
         assert_eq!(
             runs,
             [
-                "test -q --workspace --profile fastdev --no-run | GP_SLOW_TESTS=1",
-                "test -q --workspace --profile fastdev -- --skip a_slow_one | GP_SLOW_TESTS=1",
-                "test -q --workspace --profile fastdev -- a_slow_one | GP_SLOW_TESTS=1",
+                "test -q --workspace --profile fastdev --no-run | GP_SLOW_TESTS=",
+                "test -q --workspace --profile fastdev -- | GP_SLOW_TESTS=",
             ],
             "{seen}"
         );
@@ -1250,7 +1264,6 @@ date +%s > '{times}/just.end'
             "check/baseline-mosshop",
             "test compile",
             "tests/rest",
-            "tests/a_slow_one",
             "lane tests",
             "lanes",
             "commit",

@@ -72,26 +72,11 @@ gp registry check https://raw.githubusercontent.com/acme/harbor-registry/main \
 
 This reads the registry as a player's browser does: CORS, every file by its hash, and the game's theme list as the page reads it (with no game in the registry), saying whether your theme is offered and, if not, why. GitHub's raw host caches each file for five minutes, so a version you just pushed can take that long to show.
 
-## 6. Try it on the public page
+## 6. The project's page doesn't take your registry
 
-Open the public page with your registry's address as `r=`:
+The project's public page plays only its own registry's games and themes: a link's `r=` is not read there (the page is built without `GP_PAGE_LINK_REGISTRY=1`), and the page says so. Your themes go on a page of your own, next.
 
-    https://gameprinter.intentius.workers.dev/p?g=lex00/donkey-kong&c=acme/harbor-lights&r=https://raw.githubusercontent.com/acme/harbor-registry/main
-
-The page installs the game from its own registry as always, then reads your registry's list for that game too and offers its themes beside its own registry's, in Settings, Theme. With `c=` naming your theme it opens in it. A line under the header says that themes also come from your registry, that the link named it, that games come only from the page's own registry, and how your files are checked. A theme both registries offer by the same name is taken from the page's own. Load your ROM and it plays in your theme. The Share button keeps `r=` in the link it copies, so whoever opens your link gets your themes too.
-
-What the page holds to:
-
-| | |
-|---|---|
-| Only https | An `r=` that isn't an `https://` address with no query, fragment or login is left out: the page says so in words and reads no themes from it |
-| The same checks | A theme from your registry goes through the page's usual install checks: every file against its hash before it is kept, its line on your registry's list for the game, and a file changed in the browser's storage refused before it is used. A theme that fails is named and left out; the game plays on |
-| Signatures | A signed registry's root key can go in the link as `rk=`, the key's base64 body (`AAAAC3NzaC1lZDI1NTE5AAAAI...`, with `+` written `%2B`). The page then checks every signature and expiry of your registry against it and refuses a theme that fails. Without `rk=` signatures aren't looked at, and the line under the header says so |
-| Its own registry | `r=` naming the page's own registry is the same as no `r=` |
-
-The page's Content-Security-Policy already allows it: `connect-src 'self' https:` lets the page fetch from any https host, which covers raw.githubusercontent.com, a github.io site, S3 and any other. Plain http, `ws:` and every other scheme stay refused. The host must send `Access-Control-Allow-Origin` (GitHub's raw host and GitHub Pages both send `*`), since the page is cross-origin isolated and reads the files with CORS.
-
-## 7. A page of your own (optional)
+## 7. A page of your own
 
 Build the page with your registry as its second registry of themes, check it, and put it up. Its games still come from the project's registry. You need checkouts of gameprinter and of the games repo beside it, and Node. No ROM: `--no-roms` skips every check that needs one and says so in a line each.
 

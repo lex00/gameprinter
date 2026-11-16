@@ -33,7 +33,7 @@ repo="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$repo" || exit 2
 gp_home="${GP_HOME:-$HOME/.gameprinter}"
 roms="${GP_ROM_DIR:-$gp_home/roms}"
-games="${GP_GAMES_DIR:-$repo/../games}"
+games="${GP_GAMES_DIR:-}"
 facts() { python3 -I -B "$repo/scripts/check/game-facts.py" "$@"; }
 dry="${CHECK_ALL_DRY:-}"
 logs="${CARGO_TARGET_DIR:-$repo/target}/check-all"
@@ -148,10 +148,10 @@ if [ "$parity" -eq 0 ]; then
     skip web-parity-arcade "no arcade game with model.toml and checks.toml's [web_parity] in the games checkout at $games"
 fi
 
-# The recipe builds from the games checkout beside the repo, the game its
+# The recipe builds from the games checkout GP_GAMES_DIR names, the game its
 # page.toml names.
-if ! page_game=$(scripts/web/page-game.sh "$repo/../games" 2>/dev/null) || [ ! -f "$page_game/package.toml" ]; then
-    skip web-page "no games checkout beside the repo whose page.toml names a game package, at $repo/../games"
+if [ -z "$games" ] || ! page_game=$(scripts/web/page-game.sh "$games" 2>/dev/null) || [ ! -f "$page_game/package.toml" ]; then
+    skip web-page "no games checkout (GP_GAMES_DIR) whose page.toml names a game package"
 elif [ -z "$dry" ] && ! online; then
     skip web-page "no network (the registry at raw.githubusercontent.com doesn't answer)"
 else

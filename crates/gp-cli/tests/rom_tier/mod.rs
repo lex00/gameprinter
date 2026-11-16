@@ -11,10 +11,12 @@ pub fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+/// The games checkout GP_GAMES_DIR names; an empty path, which holds no
+/// game, without it. A tool test never looks for one beside the repo.
 pub fn games() -> PathBuf {
     std::env::var_os("GP_GAMES_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| repo().join("../games"))
+        .unwrap_or_default()
 }
 
 pub fn read_toml(path: &Path) -> Option<toml::Table> {

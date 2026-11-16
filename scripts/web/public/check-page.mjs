@@ -203,7 +203,12 @@ function framesOf(holds, n, named = BITS) {
 //   page-pictures.txt  the picture references (below, "Pictures")
 //   roms.toml, package.toml  the sources' ids, titles and hashes, and the
 //                      package's name and [[rom.entry]] roles
-const gamesDir = resolve(opt("games") ?? process.env.GP_GAMES_DIR ?? join(repo, "..", "games"));
+const gamesArg = opt("games") ?? process.env.GP_GAMES_DIR;
+if (!gamesArg) {
+  console.error("check-page: give the games checkout (--games DIR or GP_GAMES_DIR)");
+  process.exit(2);
+}
+const gamesDir = resolve(gamesArg);
 if (!existsSync(gamesDir)) {
   console.error(`check-page: no games checkout at ${gamesDir} (give --games DIR or set GP_GAMES_DIR)`);
   process.exit(2);
@@ -2290,6 +2295,18 @@ async function registryByAddress(S) {
   try {
     await prepare(S.context, asked);
     const ownSource = (r) => isSourceUrl(S.origin, r.url);
+    if (page.link_registry !== true) {
+      // A page not built to take a link's registry (the default) reads
+      // nothing from it: the game plays, the second registry is never
+      // asked, and the page says why.
+      await p.goto(`${S.origin}/p?g=${page.game}&r=${BY_ADDRESS}`);
+      check(await S.installed(), `with r= on a page that takes no link's registry, ${page.game} is still installed`);
+      check(asked.length === 0, `and nothing is asked of the registry the link names (${asked.length} requests)`);
+      const words = await p.evaluate(() => document.body.innerText);
+      check(/plays themes only from its own registry/.test(words), "and the page says it plays themes only from its own registry");
+      await S.shot("registry-by-address.png");
+      return;
+    }
     await p.goto(`${S.origin}/p?g=${page.game}&c=${ART_THEME}&r=${BY_ADDRESS}`);
     check(await S.installed(), `with r= naming a second registry, ${page.game} is installed`);
     const gameBlobs = S.requests.filter((r) => ownSource(r) && r.url.includes("/blobs/")).length;

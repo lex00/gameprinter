@@ -3,10 +3,10 @@
 //!
 //! It reads a registry's checkout and says where the road to hosting it
 //! stands, step by step, as `next` does for a port: the repo, the registry
-//! in it, the namespace, the theme, the check from outside, the public page
-//! with `r=`, and a page of your own. A page always installs games from its
+//! in it, the namespace, the theme, the check from outside, and a page of
+//! your own (the project's public page plays only its own registry's themes). A page always installs games from its
 //! own registry and takes only themes from yours, so yours holds no game.
-//! It prints the repo's raw address, which the public page takes as `r=`
+//! It prints the repo's raw address, which your own page takes as its registry of themes
 //! and a page of your own as its second registry of themes
 //! (`GP_PAGE_THEMES_URL`). It writes nothing; it asks git what the remote
 //! holds.
@@ -44,17 +44,6 @@ pub(crate) fn raw_of(owner: &str, repo: &str, branch: &str) -> String {
     format!("https://raw.githubusercontent.com/{owner}/{repo}/{branch}")
 }
 
-/// A link to `page` playing `game` in `theme` (or its own look) from the
-/// registry at `raw`, as the page's share.js writes it.
-pub(crate) fn page_link(page: &str, game: &str, theme: Option<&str>, raw: &str) -> String {
-    let mut l = format!("{}/p?g={game}", page.trim_end_matches('/'));
-    if let Some(t) = theme {
-        l.push_str(&format!("&c={t}"));
-    }
-    l.push_str(&format!("&r={raw}"));
-    l
-}
-
 fn git(dir: &Path, args: &[&str]) -> Option<String> {
     let o = Command::new("git")
         .arg("-C")
@@ -79,8 +68,6 @@ pub struct HostArgs<'a> {
     pub theme_dir: Option<&'a Path>,
     /// The game the theme is for, NAMESPACE/NAME.
     pub game: Option<&'a str>,
-    /// The public page to try it on.
-    pub page: &'a str,
 }
 
 /// What the checkout holds, read once.
@@ -280,18 +267,10 @@ pub fn host(a: &HostArgs) -> Result<Outcome> {
             asks_first: false,
         },
         Step {
-            name: "Try it on the public page",
+            name: "A page of your own",
             who: "person",
             done: None,
-            says: format!("Open the public page with your registry's address as r=. It installs {game_s} from its own registry as always, offers your theme beside its own, says so under its header, and plays it from your own ROM. Share that link."),
-            cli: vec![page_link(a.page, &game_s, Some(theme_s), &raw_s)],
-            asks_first: false,
-        },
-        Step {
-            name: "A page of your own (optional)",
-            who: "person",
-            done: None,
-            says: "Build the page with your registry as its second registry of themes (games still come from the project's) and put it on your own Cloudflare worker (it uploads, so it asks first). GitHub Pages works only for games with no module: it can't send the headers the page needs.".into(),
+            says: format!("The project's public page plays only its own registry's themes, so yours go on a page of your own: build the page with your registry as its registry of themes ({game_s} still comes from the project's registry) and put it on your own free Cloudflare worker (it uploads, so it asks first). Then share your page's link. GitHub Pages works only for games with no module: it can't send the headers the page needs."),
             cli: vec![
                 format!("GP_PAGE_THEMES_URL={raw_s} GP_PAGE_CONTENT={theme_s} scripts/web/release-check.sh --no-roms --game GAME_DIR"),
                 "scripts/web/deploy.sh --no-roms --worker NAME --subdomain YOUR_SUBDOMAIN".into(),
@@ -337,10 +316,6 @@ pub fn host(a: &HostArgs) -> Result<Outcome> {
         Some(r) => {
             text.push(format!("Your registry's address: {r}"));
             text.push(format!(
-                "  as r= on the public page: {}",
-                page_link(a.page, &game_s, Some(theme_s), r)
-            ));
-            text.push(format!(
                 "  as your own page's registry of themes: GP_PAGE_THEMES_URL={r}"
             ));
         }
@@ -354,7 +329,6 @@ pub fn host(a: &HostArgs) -> Result<Outcome> {
         "next": next.json(now, now),
         "steps": steps.iter().enumerate().map(|(i, s)| s.json(i + 1, now)).collect::<Vec<_>>(),
         "raw": raw,
-        "link": raw.as_ref().map(|r| page_link(a.page, &game_s, a.theme, r)),
         "themes": raw.as_ref().map(|r| json!({"name": f.name.clone().unwrap_or_else(|| repo.clone()), "url": r})),
         "facts": {
             "dir": f.dir, "git": f.git, "origin": f.origin,

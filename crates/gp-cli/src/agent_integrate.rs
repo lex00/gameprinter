@@ -36,7 +36,7 @@ pub(crate) struct Args<'a> {
     /// Run `just check` on the branch at the end.
     pub check: bool,
     /// The games checkout the model check runs on (default:
-    /// $GP_GAMES_DIR, else one beside the repo).
+    /// $GP_GAMES_DIR; with neither, no game is checked).
     pub games: Option<&'a Path>,
 }
 
@@ -788,8 +788,7 @@ pub(crate) fn run(args: &Args, paths: &Paths) -> anyhow::Result<Outcome> {
     // gp model check on every game of the games checkout.
     let mut failed: Vec<String> = Vec::new();
     let mut checked: Vec<String> = Vec::new();
-    let games = crate::roms_cmd::games_dir(args.games)
-        .or_else(|| Some(repo.parent()?.join("games")).filter(|g| g.is_dir()));
+    let games = crate::roms_cmd::games_dir(args.games);
     if let Some(Ok(d)) = games.as_ref().map(fs::read_dir) {
         let mut dirs: Vec<PathBuf> = d
             .flatten()

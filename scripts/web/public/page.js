@@ -120,7 +120,7 @@ function gameLink(p) {
 // when there is one: where it came from, that games don't, and how its
 // files are checked, as text. A link's `r` that isn't an https address is
 // said in words, and no second registry is read for it.
-function showSource(e, l) {
+function showSource(e, l, linkAllowed) {
   const line = $("registry-line");
   if (!line) return;
   if (e) {
@@ -134,7 +134,8 @@ function showSource(e, l) {
     line.textContent = "";
     line.hidden = true;
   }
-  if (l.ignored.includes("r")) notices.push("The link's registry (r=) isn't an https address, so no themes are read from it.");
+  if (l.registry && !linkAllowed) notices.push("This page plays themes only from its own registry, so the link's registry (r=) isn't read. To share themes from your own registry, host your own copy of the page.");
+  else if (l.ignored.includes("r")) notices.push("The link's registry (r=) isn't an https address, so no themes are read from it.");
 }
 // The game's facts shown on the page: its title, the ROM line, and for a
 // game that isn't the page's own its how-to-play lines and its About
@@ -213,8 +214,8 @@ const ready = pageFile.then((p) => {
   page = p;
   link = gameLink(p);
   source = p.source;
-  extra = themesSource(p.source, link, p.themes ?? null);
-  showSource(extra, link);
+  extra = themesSource(p.source, link, p.themes ?? null, p.link_registry === true);
+  showSource(extra, link, p.link_registry === true);
   if (link.own) {
     facts = { title: p.title, player: p.player ?? "nes", rom: { kind: "nes", ...p.rom }, howto: p.howto ?? [], trademark: p.trademark ?? null, madeBy: p.made_by ?? null, about: p.about ?? null };
     showFacts(facts);

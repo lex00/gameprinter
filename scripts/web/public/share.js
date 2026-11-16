@@ -61,10 +61,12 @@ export function rootKey(v) {
  * link's `rk`, or page.json's), else with none: every file is still
  * checked against its hash, and signatures only against a key the page
  * or the link holds. `byLink` says the link named it. Returns { name,
- * url, root, byLink } or null. */
-export function themesSource(own, link, built = null) {
+ * url, root, byLink } or null. A link's registry is read only on a page
+ * built to take one (page.json's `link_registry`, `linkAllowed`); a page
+ * without it plays themes only from its own registries. */
+export function themesSource(own, link, built = null, linkAllowed = false) {
   const ownUrl = String(own?.url ?? "").replace(/\/+$/, "");
-  const r = link?.registry;
+  const r = linkAllowed ? link?.registry : null;
   if (r) return r.url === ownUrl ? null : { name: r.url, url: r.url, root: r.root ?? null, byLink: true };
   const b = built && typeof built.url === "string" ? registryAddress(built.url) : null;
   if (!b || b === ownUrl) return null;
