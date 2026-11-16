@@ -425,6 +425,11 @@ impl Ctx {
             &fs::read_to_string(&mfile).with_context(|| format!("reading {}", mfile.display()))?,
         )
         .map_err(|e| anyhow::anyhow!("{}: {e}", mfile.display()))?;
+        // A clip on another set takes its draws at that set's sites.
+        let mapping = match other {
+            Some(s) => mapping.for_set(&s.id),
+            None => mapping,
+        };
         let fps_milli = source.parse_model()?.model.frame_rate.milli();
         Ok(Ctx {
             fps_milli,

@@ -1279,6 +1279,7 @@ mod tests {
             reg: None,
             note: None,
             soft: false,
+            at: Default::default(),
         };
         let hand = [
             site("bonus_shake", 0x258D),
@@ -1304,6 +1305,7 @@ mod tests {
             reg: None,
             note: None,
             soft: false,
+            at: Default::default(),
         };
         let hand = [site("choice", 0xC030, 0x11), site("other", 0xC100, 0x10)];
         let v = against(&found, &hand);

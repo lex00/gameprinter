@@ -3615,6 +3615,21 @@ fn draw_sites_parse_and_a_site_name_is_one_word() {
     assert!(crate::mapping::Mapping::parse(&base.replace("\"ladder\"", "\"two words\"")).is_err());
 }
 
+/// Feature `draws.at`: a site gives its address in another romset; the
+/// mapping read for that set has it there, and for any other set at `pc`.
+#[test]
+fn a_draw_site_has_its_address_in_another_set() {
+    let m = crate::mapping::Mapping::parse(&SLOT_MAPPING.replace(
+        "[slots]",
+        "[[draws]]\nsite = \"pick\"\npc = 0xC010\nram = 0x19\n\n[draws.at]\nsecond = 0xC014\n\n[[draws]]\nsite = \"other\"\npc = 0xC100\nram = 0x19\n\n[slots]",
+    ))
+    .unwrap();
+    let pcs = |m: &crate::mapping::Mapping| m.draws.iter().map(|d| d.pc).collect::<Vec<_>>();
+    assert_eq!(pcs(&m), vec![0xC010, 0xC100]);
+    assert_eq!(pcs(&m.for_set("second")), vec![0xC014, 0xC100]);
+    assert_eq!(pcs(&m.for_set("third")), vec![0xC010, 0xC100]);
+}
+
 /// Feature `draws.reg`: a site reads a CPU register in place of a RAM
 /// byte, one of its platform's, and has one or the other, never both.
 #[test]

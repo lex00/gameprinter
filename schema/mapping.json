@@ -335,6 +335,17 @@
       "description": "One of the original's random draw sites: the instruction at `pc` reads\na random byte, `ram` or, indexed, one past it (one game's fires read\n`$19,X`); a recording takes the byte the instruction reads. A hook\ndraws for it by `site`.",
       "type": "object",
       "properties": {
+        "at": {
+          "description": "Feature `draws.at`: the site's address in another of the game's\nromsets, by the set's id as the package names it (`[[rom.entry]]`),\nwhere that set's code sits elsewhere (`[draws.at] SET = 0x2594`, as\nan asset map's `[asset.at]`). A clip on that set takes its draws\nthere ([`Mapping::for_set`]); a set not listed uses `pc`.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0
+          },
+          "default": {}
+        },
         "note": {
           "type": [
             "string",

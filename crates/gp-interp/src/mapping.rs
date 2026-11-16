@@ -227,6 +227,13 @@ pub struct DrawSite {
     /// another or not at all ([`gp_sim::DrawScript::soft`]).
     #[serde(default)]
     pub soft: bool,
+    /// Feature `draws.at`: the site's address in another of the game's
+    /// romsets, by the set's id as the package names it (`[[rom.entry]]`),
+    /// where that set's code sits elsewhere (`[draws.at] SET = 0x2594`, as
+    /// an asset map's `[asset.at]`). A clip on that set takes its draws
+    /// there ([`Mapping::for_set`]); a set not listed uses `pc`.
+    #[serde(default)]
+    pub at: std::collections::BTreeMap<String, u16>,
     #[serde(default)]
     pub note: Option<String>,
 }
@@ -583,6 +590,21 @@ pub enum ReadAt {
     /// As the CPU takes the NMI after the frame's end: once a handler that
     /// ran past the end has let it be taken.
     Nmi,
+}
+
+impl Mapping {
+    /// The mapping as a clip on romset `set` reads it: each draw site at
+    /// its address in that set (its `at` entry), else at `pc`.
+    #[must_use]
+    pub fn for_set(&self, set: &str) -> Mapping {
+        let mut m = self.clone();
+        for d in &mut m.draws {
+            if let Some(&pc) = d.at.get(set) {
+                d.pc = pc;
+            }
+        }
+        m
+    }
 }
 
 impl Mapping {

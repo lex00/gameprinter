@@ -277,7 +277,19 @@ A launcher table (the cannons a game has drawn, from which it picks one to fire)
 
 ## Random draw sites
 
-`[[draws]]` (feature `draws`) names the original's random draw sites. Each has a `site` name and the `pc` of the instruction that reads a random byte, and gives that byte as `ram`, or, with `reg` in place of `ram` (feature `draws.reg`), a CPU register the instruction reads, such as the Z80's `r` at an `ld a,r` (one or the other, never both). A site with `soft = true` (feature `draws.soft`) is a byte read only for presentation, such as a sound driver's random pitch: the rebuild takes its draws when it asks on the same frame, and they never desync the script. `gp interp draws` records a clip's draws at them, which `gp interp compare --draws` gives the rebuild ([random draws script](draws.md)). With `score_draws = true` (feature `draws.score`) every score of a clip takes them with no script file. `gp game new` proposes a new game's sites from a minute of no input.
+`[[draws]]` (feature `draws`) names the original's random draw sites. Each has a `site` name and the `pc` of the instruction that reads a random byte, and gives that byte as `ram`, or, with `reg` in place of `ram` (feature `draws.reg`), a CPU register the instruction reads, such as the Z80's `r` at an `ld a,r` (one or the other, never both). A site with `soft = true` (feature `draws.soft`) is a byte read only for presentation, such as a sound driver's random pitch: the rebuild takes its draws when it asks on the same frame, and they never desync the script. `gp interp draws` records a clip's draws at them, which `gp interp compare --draws` gives the rebuild ([random draws script](draws.md)). With `score_draws = true` (feature `draws.score`) every score of a clip takes them with no script file. A game whose other romset makes the same draws from code at other addresses gives each such site its address there in `[draws.at]` (feature `draws.at`), by the set's id as `package.toml` names it, as an asset map's `[asset.at]` does:
+
+```toml
+[[draws]]
+site = "shake"
+pc = 0x258A
+ram = 0xE390
+
+[draws.at]
+second_set = 0x2594
+```
+
+A clip on that set (its presses' `arcade` line, [scoring corpus](scoring-corpus.md)) records and takes its draws at 0x2594; a set not listed uses `pc`. `gp game new` proposes a new game's sites from a minute of no input.
 
 ## Stretches
 
@@ -445,7 +457,7 @@ Without the list they're derived from the fields the mapping sets. With it, each
 | 21 | `[[ignore]]` (`ignore`) |
 | 22 | A slot rest's `word` (`slot.rest_word`) |
 
-Each step read every earlier mapping as before and refused one that used what it added, and a build that read only up to the step before refused it. The features added after 22 have no schema note: `cells.becomes`, `slots.field.stride`, `slots.no_id`, `slots.no_clock`, `slots.active_stride`, `slots.field.index`, `slots.free`, `slots.vacant`, `slots.vacant_from`, `draws`, `draws.soft`, `draws.reg`, `draws.score`, `stretches.play`, `stretches.state`, `scope.while`, `scope.leaves`, `field.bcd`, `field.case.unmeasured`, `slots.resync`, `field.lookup`, `field.case.ram`, `field.case.oam`, `field.case.nametable`, `field.case.number`, `field.case_flag`, `entity.jumping`, `field.whole_64`, `align.read_at_nmi`, `field.nametable`, `field.oam`, `field.oam_tile`, `field.machine`, `slots.group.name`, `platform` and `platform.board_units`.
+Each step read every earlier mapping as before and refused one that used what it added, and a build that read only up to the step before refused it. The features added after 22 have no schema note: `cells.becomes`, `slots.field.stride`, `slots.no_id`, `slots.no_clock`, `slots.active_stride`, `slots.field.index`, `slots.free`, `slots.vacant`, `slots.vacant_from`, `draws`, `draws.soft`, `draws.reg`, `draws.at`, `draws.score`, `stretches.play`, `stretches.state`, `scope.while`, `scope.leaves`, `field.bcd`, `field.case.unmeasured`, `slots.resync`, `field.lookup`, `field.case.ram`, `field.case.oam`, `field.case.nametable`, `field.case.number`, `field.case_flag`, `entity.jumping`, `field.whole_64`, `align.read_at_nmi`, `field.nametable`, `field.oam`, `field.oam_tile`, `field.machine`, `slots.group.name`, `platform` and `platform.board_units`.
 
 ## Decisions
 

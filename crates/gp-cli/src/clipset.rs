@@ -1222,8 +1222,11 @@ pub(crate) fn regen_with(
                     let mut ob = bench_for(&ow)?;
                     ob.reads = how.reads;
                     ob.stop.clone_from(&how.stop);
+                    // The set's own draw sites (`[draws.at]`).
+                    ob.mapping = ob.mapping.for_set(&key);
+                    let on_set = mapping_parsed.for_set(&key);
                     let (om, otext) = ob.model()?;
-                    make_and_score(&ow, set_dir, &mapping_parsed, &group, &ob, &om, &otext)?
+                    make_and_score(&ow, set_dir, &on_set, &group, &ob, &om, &otext)?
                 }
             };
             for (k, &i) in idx.iter().enumerate() {

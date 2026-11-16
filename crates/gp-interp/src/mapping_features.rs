@@ -351,6 +351,12 @@ pub const FEATURES: &[Feature] = &[
         &["draws.reg"],
     ),
     mapping(
+        "draws.at",
+        "",
+        "A `[[draws]]` site's `[draws.at]`: its address in another of the game's romsets, by the set's id, where that set's code sits elsewhere; a clip on that set takes its draws there",
+        &["draws.at"],
+    ),
+    mapping(
         "draws.score",
         "",
         "`score_draws`: a clip's score gives the rebuild the original's random draws over the clip, recorded at the `[[draws]]` sites, as `gp interp compare --draws` does",
