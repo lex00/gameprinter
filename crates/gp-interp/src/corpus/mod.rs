@@ -141,7 +141,7 @@ pub enum How {
 /// A situation a press happens in, and where it was found.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Context {
-    /// `ground.still`, `ground.edge[1].over`, `enemy.near[goomba]`.
+    /// `ground.still`, `ground.edge[1].over`, `enemy.near[walker]`.
     pub id: String,
     /// "On the ground, standing still".
     pub words: String,

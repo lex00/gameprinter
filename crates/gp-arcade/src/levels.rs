@@ -7,7 +7,7 @@
 //! | L1, edges | Every transfer of control with its kind, count and first frame; for `jp (hl)`, `jp (ix)` and `jp (iy)` each target is an edge of its own |
 //! | L2, frame events | Per frame: the board's events, the instructions first seen, and the RAM bytes that changed |
 //!
-//! A [`Watcher`] steps a [`Tapper`] with its instruction trace, access log
+//! A [`Watcher`] steps a [`Mcr`] with its instruction trace, access log
 //! and event log on, and adds each frame to the levels. None of them is
 //! part of the state, so a watched run reaches the states an unwatched one
 //! does.
@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use crate::dasm::{self, Flow};
 use crate::events::BoardEvent;
 use crate::mcr::{AccessKind, Trace};
-use crate::{Controls, Tapper};
+use crate::{Controls, Mcr};
 
 /// How control went from one instruction to another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -227,7 +227,7 @@ impl Watcher {
 
     /// Runs one frame of `t` with `controls`, watched. Returns the frame's
     /// trace and accesses for a caller that wants them too.
-    pub fn step(&mut self, t: &mut Tapper, controls: Controls) -> Watched {
+    pub fn step(&mut self, t: &mut Mcr, controls: Controls) -> Watched {
         let w = self.step_quiet(t, controls);
         for c in 0..2 {
             self.levels.cpus[c] = self.dense[c].levels();
@@ -238,7 +238,7 @@ impl Watcher {
     /// [`Watcher::step`] without bringing [`Watcher::levels`]'s per-CPU
     /// levels up to date: for a long run, call [`Watcher::finish`] at its
     /// end.
-    pub fn step_quiet(&mut self, t: &mut Tapper, controls: Controls) -> Watched {
+    pub fn step_quiet(&mut self, t: &mut Mcr, controls: Controls) -> Watched {
         t.set_trace(true);
         t.set_accesses(true);
         t.set_events(true);
@@ -392,8 +392,8 @@ mod tests {
     #[test]
     fn the_busy_program_has_its_levels() {
         let set = crate::testrom::busy();
-        let mut plain = Tapper::power_on(&set);
-        let mut t = Tapper::power_on(&set);
+        let mut plain = Mcr::power_on(&set);
+        let mut t = Mcr::power_on(&set);
         let mut w = Watcher::new(true);
         for i in 0..6 {
             let c = Controls {

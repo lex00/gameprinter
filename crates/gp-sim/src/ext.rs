@@ -50,7 +50,7 @@ pub trait Ext: Send + Sync {
     /// The APU register writes, each as its offset from $4000 and the
     /// value in the order made, that this instance's hook makes on the
     /// frame after `world`. It's for presentation: a hook that keeps a
-    /// game's sound driver as state (Donkey Kong's `dk_sound`) gives the
+    /// game's sound driver as state (a ladder game's sound hook) gives the
     /// writes its next step makes, worked out on a copy, so a runtime
     /// plays the game's own sound data through gp-sound's APU
     /// ([`hook_apu`]). It never changes the world. The default makes none.
@@ -223,7 +223,7 @@ impl ExtCx<'_> {
     /// its random bytes there: the run's random draws script's, when it
     /// has one and hasn't desynced ([`crate::draws`]), else the low byte of
     /// the generator's next number. A hook tests the byte as the original
-    /// does (Donkey Kong's ladder choice: `byte & 0x88 == 0`), so the odds
+    /// does (a ladder game's ladder choice: `byte & 0x88 == 0`), so the odds
     /// are the original's too.
     pub fn draw(&mut self, site: &str) -> u8 {
         if let Some(v) = self.scripted_draw(site) {
@@ -235,7 +235,7 @@ impl ExtCx<'_> {
     /// The run's random draws script's byte for the draw site `site`, as
     /// [`Self::draw`] takes it, or None when the run has no script or it
     /// has none here. A hook whose game keeps its random register as model
-    /// state reads the register then (Donkey Kong's $18-$1F, stepped by its
+    /// state reads the register then (a ladder game's $18-$1F, stepped by its
     /// idle loop) in place of the generator.
     pub fn scripted_draw(&mut self, site: &str) -> Option<u8> {
         self.draws
@@ -382,7 +382,7 @@ impl ExtCx<'_> {
     /// Holds an input action, by name, for the rest of this frame, or lets
     /// it go: the systems after this hook see the pad so, and the next
     /// frame counts it as held on this one. A game that plays itself, as
-    /// Donkey Kong's attract demo puts its script's direction where the
+    /// a ladder game's attract demo puts its script's direction where the
     /// player's routine reads the pad ($EBDA), with core
     /// `entity.hook_first` so it runs before the player moves. Does
     /// nothing for an action the model hasn't.
@@ -416,10 +416,10 @@ impl ExtCx<'_> {
         self.requests.push(Request::SetTile { x, y, tile });
     }
 
-    /// As `set_tile`, for a game that writes the cell's picture: the cell
-    /// stays a change even when `tile` is its built kind, so presentation
-    /// draws it by that kind (`present.cells.kinds`) in place of its built
-    /// picture. Donkey Kong's 100m ending blanks the prizes, built as empty
+    /// As `set_tile`, for a game that writes the cell's picture: the cell stays
+    /// a change even when `tile` is its built kind, so presentation draws it by
+    /// that kind (`present.cells.kinds`) in place of its built picture. A
+    /// ladder game's last stage's ending blanks the prizes, built as empty
     /// cells, and lays girder over the rivets' places.
     pub fn write_tile(&mut self, x: i64, y: i64, tile: Tile) {
         self.requests.push(Request::WriteTile { x, y, tile });

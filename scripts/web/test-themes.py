@@ -1,59 +1,59 @@
 #!/usr/bin/env python3
-# Two made-up large-art themes for Donkey Kong, for the page check's
-# sections that need more than one theme besides the page's own
-# (check-page.mjs: the overlapping theme picks, the theme line, a theme
-# from a namespace that sorts before the game's). The release check
-# publishes them into its scratch copy of the registry
-# (scripts/web/test-registry.sh), never into the real one, so what the
-# check covers doesn't hang on what people publish there.
-#   python3 -I scripts/web/test-themes.py OUT
+# Two made-up large-art themes for a game, for the page check's sections
+# that need more than one theme besides the page's own (check-page.mjs: the
+# overlapping theme picks, the theme line, a theme from a namespace that
+# sorts before the game's). The release check publishes them into its
+# scratch copy of the registry (scripts/web/test-registry.sh), never into
+# the real one, so what the check covers doesn't hang on what people
+# publish there.
+#   python3 -I scripts/web/test-themes.py OUT GAME_DIR
 #
-# OUT gets one theme folder a package, as lex00/turnips is laid out:
+# GAME_DIR is the game's folder in the games checkout; its page-check.toml
+# [test_themes] names the pictures to draw: each entry's pictures of `size`
+# game pixels, `name` with {n} put for each number from n[0] to n[1] or the
+# names in `names` (the game's picture names, colouring 0, as `gp theme
+# look check THEME --game GAME` names each pose's picture), and `empty`,
+# the poses the kit says to draw as nothing; a name the game doesn't have
+# is passed over by the page. OUT gets one theme folder a package, as a
+# large-art theme package is laid out:
 #   OUT/harbor-lights  acme/harbor-lights, "Harbor Lights": navy and amber
-#                      rounded blobs (acme/ sorts before lex00/)
+#                      rounded blobs (acme/ sorts before most namespaces)
 #   OUT/paper-moon     test/paper-moon, "Paper Moon": grey and white boxes
-#                      with a dark rim (test/ sorts after lex00/)
+#                      with a dark rim (test/ sorts after most)
 # Each holds package.toml, theme/look.txt, theme/art.txt (scale 6) and a
-# picture in theme/art/ for each of the game's moving pictures and its
-# digits, drawn here from plain shapes and colours: nothing in them is
-# read from a ROM or from the game's art. The stages, the belt ends, the
-# score display and the title screen are left as the game draws them, so
-# `gp theme look check` names those seven slots as still to draw and finds
-# nothing else wrong but three bodies' feet rows (warnings). The picture
-# names are the game's build's (`gp theme look check THEME --game
-# donkey-kong` lists them by pose); a name the game doesn't have is passed
-# over by the page.
+# picture in theme/art/ for each picture named, drawn here from plain
+# shapes and colours: nothing in them is read from a ROM or from the
+# game's art.
 # The game draws a picture in up to four colourings (frame-N-0.png to
 # frame-N-3.png, glyph-0-3-D.png to glyph-3-3-D.png); each gets the same
-# picture here. Poses the kit says to draw as nothing get a clear one.
+# picture here.
 import os
 import struct
 import sys
+import tomllib
 import zlib
 
 SCALE = 6
 
-# (picture names, width, height) in game pixels, from Donkey Kong's theme
-# kit as `gp theme look check` names each pose's picture, colouring 0.
-PICTURES = [
-    ([f"frame-{n}-0.png" for n in range(0, 9)], 16, 16),  # rolling hazard
-    (["frame-20-0.png"], 16, 8),  # lift platform
-    ([f"frame-{n}-0.png" for n in range(22, 27)], 16, 16),  # wandering flame
-    (["frame-38-0.png", "frame-39-0.png"], 8, 16),  # smashing tool
-    ([f"frame-{n}-0.png" for n in range(41, 53)], 48, 32),  # big foe
-    (["frame-69-0.png"], 16, 16),  # sliding ladder
-    (["frame-71-0.png", "frame-72-0.png"], 16, 8),  # fire source flames
-    (["frame-73-0.png", "frame-74-0.png"], 16, 24),  # the one to rescue
-    ([f"frame-{n}-0.png" for n in range(77, 82)], 16, 16),  # sliding hazard
-    ([f"frame-{n}-0.png" for n in range(82, 103)], 16, 16),  # hero
-    (["frame-104-0.png"], 16, 16),  # bouncing hazard
-    (["frame-106-0.png", "frame-107-0.png"], 16, 8),  # points
-    (["screen-11-sprite-0.png", "screen-16-sprite-0.png"], 8, 8),  # cursor
-    ([f"glyph-0-3-{n}.png" for n in range(30, 40)], 8, 8),  # digits
-]
 
-# Poses the kit says to draw as nothing.
-EMPTY = {"frame-81-0.png", "frame-107-0.png"}
+def pictures_of(game_dir):
+    """The game's [test_themes]: ([(names, width, height)], empty)."""
+    path = os.path.join(game_dir, "page-check.toml")
+    try:
+        with open(path, "rb") as f:
+            t = tomllib.load(f).get("test_themes")
+    except OSError:
+        t = None
+    if not t or not t.get("pictures"):
+        print(f"test-themes.py: {path} has no [test_themes] pictures, so there is nothing to draw the themes for", file=sys.stderr)
+        sys.exit(2)
+    def names(p):
+        if "name" in p:
+            first, last = p["n"]
+            return [p["name"].replace("{n}", str(n)) for n in range(first, last + 1)]
+        return list(p["names"])
+
+    return [(names(p), p["size"][0], p["size"][1]) for p in t["pictures"]], set(t.get("empty", []))
 
 
 def colourings(name):
@@ -131,10 +131,11 @@ def draw(theme, w, h, k):
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("usage: python3 -I scripts/web/test-themes.py OUT", file=sys.stderr)
+    if len(sys.argv) != 3:
+        print("usage: python3 -I scripts/web/test-themes.py OUT GAME_DIR", file=sys.stderr)
         sys.exit(2)
     out = sys.argv[1]
+    pictures, empty = pictures_of(sys.argv[2])
     for t in THEMES:
         d = os.path.join(out, t["dir"])
         art = os.path.join(d, "theme", "art")
@@ -146,9 +147,9 @@ def main():
             "limit off",
         ]
         k = 0
-        for names, w, h in PICTURES:
+        for names, w, h in pictures:
             for name in names:
-                pixel = (lambda x, y: (0, 0, 0, 0)) if name in EMPTY else draw(t, w * SCALE, h * SCALE, k)
+                pixel = (lambda x, y: (0, 0, 0, 0)) if name in empty else draw(t, w * SCALE, h * SCALE, k)
                 png(os.path.join(art, name), w * SCALE, h * SCALE, pixel)
                 lines += [f"pic {c} art/{name} {w} {h} 0 0" for c in colourings(name)]
                 k += 1

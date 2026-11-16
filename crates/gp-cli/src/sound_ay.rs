@@ -1,5 +1,5 @@
 //! `gp sound capture`, `fidelity` and `compare` on an arcade recording
-//! (port wave 6): the AY-8910 register log of Tapper's sound board, from
+//! (port wave 6): the AY-8910 register log of the MCR sound board, from
 //! the recording's `ay-write` events (or a replay with the event log on),
 //! in place of the NES's APU log.
 //!
@@ -561,18 +561,21 @@ mod tests {
         assert_eq!(c["matched"], 1);
     }
 
-    /// With tapper.zip on this machine: the log made from the event
+    /// With a real romset ($GP_GAME_DIR's first set): the log made from the event
     /// stream holds the same register writes, frame by frame, as
-    /// milestone 3's AY write list (Tapper::ay_writes, held to MAME's).
+    /// milestone 3's AY write list (Mcr::ay_writes, held to MAME's).
     /// Skipped without it.
     #[test]
-    fn the_events_give_milestone_3s_writes_on_tapper() {
-        let Some(zip) = gp_arcade::romset::local_romset("tapper") else {
-            eprintln!("skipped: no tapper romset");
-            return;
+    fn the_events_give_milestone_3s_writes_on_a_real_set() {
+        let (_, zip) = match gp_arcade::romset::test_romset_path() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("skipped: {e}");
+                return;
+            }
         };
         let set = gp_arcade::Romset::load_zip(&zip).unwrap();
-        let mut t = gp_arcade::Tapper::power_on(&set);
+        let mut t = gp_arcade::Mcr::power_on(&set);
         t.set_events(true);
         let mut latch = [None::<u8>; 2];
         let (mut checked, mut writes) = (0, 0);

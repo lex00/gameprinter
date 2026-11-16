@@ -213,16 +213,16 @@ mod tests {
         let home = t.path();
         let patch = home.join("p.patch");
         fs::write(&patch, "diff").unwrap();
-        let me = Ticket::enter(home, req(home, "dk", "main", "gate"), &patch).unwrap();
-        let same = Ticket::enter(home, req(home, "dk", "main", "gate"), &patch).unwrap();
+        let me = Ticket::enter(home, req(home, "mosshop", "main", "gate"), &patch).unwrap();
+        let same = Ticket::enter(home, req(home, "mosshop", "main", "gate"), &patch).unwrap();
         let game = Ticket::enter(home, req(home, "other", "main", "gate"), &patch).unwrap();
-        let branch = Ticket::enter(home, req(home, "dk", "dev", "gate"), &patch).unwrap();
-        let run = Ticket::enter(home, req(home, "dk", "main", "canary"), &patch).unwrap();
+        let branch = Ticket::enter(home, req(home, "mosshop", "dev", "gate"), &patch).unwrap();
+        let run = Ticket::enter(home, req(home, "mosshop", "main", "trial"), &patch).unwrap();
         // A ticket left by a process that is gone is cleared, not taken.
         let dead = home.join("queue/000000000000000000000001-999999999.json");
         fs::write(
             &dead,
-            serde_json::to_vec(&req(home, "dk", "main", "gate")).unwrap(),
+            serde_json::to_vec(&req(home, "mosshop", "main", "gate")).unwrap(),
         )
         .unwrap();
 

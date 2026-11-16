@@ -3,7 +3,7 @@
 //! theme (`theme.toml` and its files) or only `same_as.toml`:
 //!
 //! ```toml
-//! theme = "../../../donkey-kong-oe/themes/paper"
+//! theme = "../../../rooftop-oe/themes/paper"
 //! ```
 //!
 //! The path is relative to the pointing folder and names a theme folder of

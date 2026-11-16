@@ -1,6 +1,6 @@
 //! Style cards (docs/theme-kit.md, "Style cards"): a small file that says
 //! how a theme looks, apart from any game, so one card makes a theme for
-//! Donkey Kong, Moss Hop or a new game alike. `gp theme sheet --style
+//! a ported game, Moss Hop or a new game alike. `gp theme sheet --style
 //! NAME` merges it into every prompt it writes.
 //!
 //! Shareable cards are `themes/styles/<name>.toml` in the repo and name no

@@ -102,7 +102,8 @@ struct CliEnv<'a> {
     rom_file: Option<(String, Vec<u8>)>,
     registry: gp_evidence::registry::Registry,
     definition: Option<Definition>,
-    dir: Option<PathBuf>,
+    /// Where definitions are looked for, in order ([`definitions_dirs`]).
+    dirs: Vec<PathBuf>,
 }
 
 impl Env for CliEnv<'_> {
@@ -135,24 +136,45 @@ impl Env for CliEnv<'_> {
         let id = source_id
             .map(str::to_owned)
             .or_else(|| game_of(repo_root().as_deref(), sha256));
-        match (&self.dir, id) {
-            (Some(dir), Some(id)) => Definition::find(dir, &id).map_err(|e| e.to_string()),
-            _ => Ok(None),
+        let Some(id) = id else { return Ok(None) };
+        for dir in &self.dirs {
+            if let Some(def) = Definition::find(dir, &id).map_err(|e| e.to_string())? {
+                return Ok(Some(def));
+            }
         }
+        Ok(None)
     }
 }
 
-/// The directory definitions are found in: $GP_COVERAGE, `coverage/` at
-/// or above the working directory, or the gameprinter checkout's.
-fn definitions_dir() -> Result<Option<PathBuf>> {
+/// The directories definitions are found in: $GP_COVERAGE alone when it
+/// is set; else `coverage/` at or above the working directory, or the
+/// gameprinter checkout's, then the games checkout's: each game's own
+/// `coverage/` and `known/coverage/` (the definitions of games with no
+/// folder yet, which `gp game new` copies into the new game's).
+fn definitions_dirs() -> Result<Vec<PathBuf>> {
     if let Some(dir) = std::env::var_os("GP_COVERAGE").filter(|v| !v.is_empty()) {
-        return Ok(Some(PathBuf::from(dir)));
+        return Ok(vec![PathBuf::from(dir)]);
     }
-    Ok(Definition::find_dir(&std::env::current_dir()?).or_else(|| {
-        repo_root()
-            .map(|r| r.join("coverage"))
+    let mut dirs: Vec<PathBuf> = Definition::find_dir(&std::env::current_dir()?)
+        .or_else(|| {
+            repo_root()
+                .map(|r| r.join("coverage"))
+                .filter(|d| d.is_dir())
+        })
+        .into_iter()
+        .collect();
+    if let Some(games) = crate::roms_cmd::games_dir(None) {
+        let mut own: Vec<PathBuf> = std::fs::read_dir(&games)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path().join("coverage"))
             .filter(|d| d.is_dir())
-    }))
+            .collect();
+        own.sort();
+        dirs.extend(own);
+    }
+    Ok(dirs)
 }
 
 /// The gameprinter checkout: the working folder or one above it holding
@@ -241,7 +263,7 @@ fn covered(select: &Select, check: bool, paths: &Paths) -> Result<Outcome> {
         rom_file,
         registry: load_registry()?,
         definition,
-        dir: definitions_dir()?,
+        dirs: definitions_dirs()?,
     };
     let threads = select.threads.map_or_else(
         || std::thread::available_parallelism().map_or(1, |n| n.get()),

@@ -1,11 +1,12 @@
 //! `gp tool gate`: a patch to the tool repo (`gameprinter`), held to the
-//! tool's own checks and a Donkey Kong canary. A worktree in the gate's
-//! home is put at the branch tip and the game gate's no-op scored through
-//! the tip's gp, then the patch is applied and built, `just check` and the
-//! tests run, and the no-op scored through the patched gp: no row may get
-//! worse. What passes lands on the branch
-//! and is published at $GP_HOME/bin/gp. Keeps the shape of `gate.rs` and
-//! shares its apply, hook, tree and landing code.
+//! tool's own checks. A worktree in the gate's home is put at the branch
+//! tip, the patch is applied and built, and `just check` and the tests run
+//! at once. `just check` is the game check: Moss Hop, built from its source
+//! with no ROM, held to its baselines, in the interpreter, in the page's
+//! players and in web parity, all through the patched gp. The gate reads no
+//! ROM and no games checkout. What passes lands on the branch and is
+//! published at $GP_HOME/bin/gp. Keeps the shape of `gate.rs` and shares its
+//! apply, hook, tree and landing code.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,35 +19,12 @@ use gp_evidence::Paths;
 use serde_json::{Value, json};
 
 use crate::Outcome;
-use crate::clip_score::rom_of;
-use crate::gate::{self, Failed, Patch, Row, Rows, git};
+use crate::gate::{self, Failed, Patch, git};
 use crate::publish;
 
-/// The canary game's folder in the games repo.
-const CANARY: &str = "donkey-kong";
 /// The profile the gate builds and publishes.
 const PROFILE: &str = "fastdev";
 const TIP_TRIES: usize = 5;
-/// How many scored builds stay under `<gate home>/tool/canary/`, at about
-/// 1.1 GB each.
-const KEEP_BUILDS: usize = 2;
-/// The version of the kept canary scores, in their files' names
-/// (`base<N>-<key>.json`, [`canary_key`]) and in the key. Bumped when what
-/// a score is made with changes, so a score made the old way is never read:
-/// version 2 was the first made with the tip's own kit, in a fixed folder
-/// and environment; version 3 is keyed by everything a score depends on.
-const BASE_FORMAT: u32 = 3;
-/// What a canary score keeps of the gate's environment. The rest goes, since
-/// a variable such as GP_BUILD, GP_DK_MODULE, GP_ASSETS or GP_TOOL_SRC could
-/// change a score; `scored` sets GP_HOME, GP_ROM_DIR and GP_TOOL_SRC itself.
-const SCORE_ENV: &[&str] = &[
-    "PATH",
-    "HOME",
-    "TMPDIR",
-    "RUSTUP_HOME",
-    "CARGO_HOME",
-    "GP_JOBS",
-];
 
 #[derive(Args)]
 pub struct ToolGateArgs {
@@ -61,13 +39,9 @@ pub struct ToolGateArgs {
     #[arg(long)]
     pub onto: Option<String>,
     /// The gate's home (default: $GP_GATE_HOME, else ~/.gameprinter/gate).
-    /// Its worktree, target folder and canary runs are kept there.
+    /// Its worktree and target folders are kept there.
     #[arg(long)]
     pub home: Option<PathBuf>,
-    /// The games checkout the canary reads (default: the folder `games`
-    /// beside this repo, else $GP_GAMES_DIR).
-    #[arg(long)]
-    pub games: Option<PathBuf>,
     /// Say PASS or FAIL and land nothing.
     #[arg(long)]
     pub dry_run: bool,
@@ -80,12 +54,8 @@ struct Cx {
     tree: PathBuf,
     /// One target folder for every try, `<home>/tool/target`.
     target: PathBuf,
-    canary_dir: PathBuf,
     /// The person's $GP_HOME: where builds are published.
     home: PathBuf,
-    games_repo: PathBuf,
-    games_tree: PathBuf,
-    paths: Paths,
     steps: Steps,
     /// The programs `just check` runs that must be on PATH ([`TOOLS`]).
     tools: &'static [&'static str],
@@ -209,7 +179,7 @@ fn cargo(c: &Cx) -> Command {
 /// CARGO_INCREMENTAL=0, or a CARGO_PROFILE_FASTDEV_INCREMENTAL, doesn't
 /// reach it and make every build in the kept target a whole one.
 /// GP_GATE_NO_INCREMENTAL=1 keeps the caller's (after an incremental-cache
-/// failure, say). The canary's module builds set their own (module.rs).
+/// failure, say).
 fn gate_env(cmd: &mut Command) -> &mut Command {
     if std::env::var_os("GP_GATE_NO_INCREMENTAL").is_some_and(|v| v == "1") {
         return cmd;
@@ -492,8 +462,8 @@ fn check_lane(c: &Cx, stop: &AtomicBool) -> std::result::Result<Vec<String>, Str
 /// than `-p gp-cli` does (syn's extra-traits, fold and visit, through the
 /// workspace's dev-dependencies), which changes thiserror's build, so in one
 /// target folder each rebuilt tetanes-core and everything above it, gp-cli
-/// too, for the other: 40 s or more a gate, and a gp that changed under the
-/// canary. Apart, each stays built.
+/// too, for the other: 40 s or more a gate, and a gp that changed under
+/// `just check`. Apart, each stays built.
 fn tests_target(c: &Cx) -> PathBuf {
     c.target.with_file_name("target-tests")
 }
@@ -585,33 +555,6 @@ fn note_changes(c: &Cx, step: &str, since: std::time::SystemTime) {
         files.len(),
         shown.join(", ")
     ));
-}
-
-/// What the canary's kit would read that a commit of the index doesn't
-/// hold: the files that differ from the index, and the files under crates/
-/// and third_party/ git doesn't track and doesn't ignore.
-fn uncommitted(tree: &Path) -> std::result::Result<Vec<String>, String> {
-    let e = |e: anyhow::Error| format!("{e:#}");
-    let changed = git(tree, &["diff", "--name-only", "-z"]).map_err(e)?;
-    let others = git(
-        tree,
-        &[
-            "ls-files",
-            "-z",
-            "--others",
-            "--exclude-standard",
-            "--",
-            "crates",
-            "third_party",
-        ],
-    )
-    .map_err(e)?;
-    Ok(changed
-        .split('\0')
-        .chain(others.split('\0'))
-        .filter(|f| !f.is_empty())
-        .map(str::to_owned)
-        .collect())
 }
 
 fn changed_since(tree: &Path, since: std::time::SystemTime) -> Vec<String> {
@@ -719,585 +662,16 @@ fn test_runs(slow: &[String]) -> Vec<(String, Vec<String>)> {
         .collect()
 }
 
-/// The arguments of a canary score after `--home`'s value: in the kept
-/// score's key, so a gate that scores another way never reads an old score.
-const SCORE_ARGS: &[&str] = &["--json", "model", "gate", "--score-only", "--run", "canary"];
-
-/// The rows of the corpus scored by `gp`: `gp model gate --score-only`
-/// with a home of its own (`label`), since a home's caches are the build's.
-/// gp finds its module kit in the tree it was built in, so `GP_TOOL_SRC`
-/// names the gate's tree: the caller scores each side while the tree holds
-/// that side's sources. It runs in its home with [`SCORE_ENV`] alone, so
-/// the two sides differ only in the gp and the kit.
-fn scored(c: &Cx, gp: &Path, label: &str) -> std::result::Result<Value, String> {
-    scored_until(c, gp, label, &AtomicBool::new(false))
-}
-
-/// `cmd` with the gate's environment cleared but [`SCORE_ENV`].
-fn kept_env(cmd: &mut Command) -> &mut Command {
-    cmd.env_clear();
-    for k in SCORE_ENV {
-        if let Some(v) = std::env::var_os(k) {
-            cmd.env(k, v);
-        }
-    }
-    cmd
-}
-
-/// `gp` as a canary score runs it: in `home`, with [`SCORE_ENV`] alone and
-/// GP_HOME, GP_ROM_DIR and GP_TOOL_SRC set by the gate.
-fn score_cmd(c: &Cx, gp: &Path, home: &Path) -> Command {
-    let mut cmd = Command::new(gp);
-    kept_env(&mut cmd)
-        .current_dir(home)
-        .env("GP_HOME", home)
-        .env("GP_ROM_DIR", &c.paths.roms)
-        .env("GP_TOOL_SRC", &c.tree);
-    cmd
-}
-
-/// The home a score is made in: `<name>-<the score's key, 12 hex>`. Named
-/// by the key, a home is never met by a score of another tree, so the kit
-/// it holds is always the tree's that the key describes.
-fn score_label(name: &str, parts: &KeyParts) -> String {
-    format!("{name}-{}", &canary_key(parts)[..12])
-}
-
-/// The module kit the score in `home` reads, made with `gp game kit` into
-/// `home/work/module-kit/<the gp's hash>`, where that gp looks for it
-/// (module.rs, `own_kit`). Made before the score starts, while nothing else
-/// runs in the tree, so a file a check writes and puts back while the canary
-/// runs can't end up in it. A home named by its key ([`score_label`]) that
-/// already has one keeps it: the same key is the same tree.
-fn make_kit(c: &Cx, gp: &Path, parts: &KeyParts, home: &Path) -> std::result::Result<(), String> {
-    let dir = home.join("work").join("module-kit").join(&parts.gp[..16]);
-    if dir.join("Cargo.lock").is_file() {
-        return Ok(());
-    }
-    let kits = home.join("work").join("module-kit");
-    fs::create_dir_all(&kits).map_err(|e| format!("{}: {e}", kits.display()))?;
-    let tmp = dir.with_extension(format!("tmp{}", std::process::id()));
-    run_step(
-        score_cmd(c, gp, home).args(["game", "kit", "-o"]).arg(&tmp),
-        "gp game kit (the canary's module kit)",
-    )?;
-    fs::rename(&tmp, &dir).map_err(|e| format!("moving the kit to {}: {e}", dir.display()))
-}
-
-/// [`scored`], stopped when `stop` is set.
-fn scored_until(
-    c: &Cx,
-    gp: &Path,
-    label: &str,
-    stop: &AtomicBool,
-) -> std::result::Result<Value, String> {
-    let game = c.games_tree.join(CANARY);
-    let home = c.canary_dir.join(label);
-    fs::create_dir_all(&home).map_err(|e| format!("{}: {e}", home.display()))?;
-    let mut cmd = score_cmd(c, gp, &home);
-    cmd.args(&SCORE_ARGS[..3])
-        .arg(&game)
-        .args(&SCORE_ARGS[3..])
-        .arg("--home")
-        .arg(&home);
-    let r = run_killable(
-        &mut cmd,
-        &format!("{} ({label})", gp.display()),
-        stop,
-        &lane_log(c, &format!("canary-{label}")),
-    );
-    mark_used(&home);
-    prune_builds(&c.canary_dir);
-    let (out, _) = r?;
-    serde_json::from_str(&out).map_err(|e| format!("gp gave no JSON: {e}"))
-}
-
-/// Stamps a build's home as just used: scoring a build again reuses its
-/// home, which needn't change the folder's own time.
-fn mark_used(home: &Path) {
-    if let Ok(f) = fs::File::open(home) {
-        let _ = f.set_modified(std::time::SystemTime::now());
-    }
-}
-
-/// Removes all but the newest [`KEEP_BUILDS`] scored builds: the `tip-*` and
-/// `patch-*` folders. The `base-*.json` scores are small and stay, so a
-/// second patch on the same tip still doesn't score the tip again.
-fn prune_builds(dir: &Path) {
-    let Ok(rd) = fs::read_dir(dir) else {
-        return;
-    };
-    let mut builds: Vec<(std::time::SystemTime, PathBuf)> = rd
-        .flatten()
-        .filter_map(|e| {
-            let n = e.file_name();
-            let n = n.to_str()?;
-            (n.starts_with("tip-") || n.starts_with("patch-")).then_some(())?;
-            e.file_type().ok()?.is_dir().then_some(())?;
-            Some((e.metadata().ok()?.modified().ok()?, e.path()))
-        })
-        .collect();
-    builds.sort();
-    for (_, p) in builds.iter().rev().skip(KEEP_BUILDS) {
-        match fs::remove_dir_all(p) {
-            Ok(()) => progress(format!("canary: removed old build {}", p.display())),
-            Err(e) => progress(format!("canary: couldn't remove {}: {e}", p.display())),
-        }
-    }
-}
-
-fn rows_of(v: &Value) -> Rows {
-    v["clips"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|c| (c["id"].as_str().unwrap_or("").to_owned(), Row::of(c)))
-        .collect()
-}
-
-/// What a canary score depends on, each part as text, for the key its
-/// kept score is filed under ([`canary_key`]).
-#[derive(Clone)]
-struct KeyParts {
-    /// blake3 of the gp file that scored.
-    gp: String,
-    /// The tool tree it scored against ([`tree_state`]).
-    tree: String,
-    /// The games tree ([`games_state`]).
-    games: String,
-    /// blake3 of the canary's ROM.
-    rom: String,
-    /// `rustc -vV` in the tree, the toolchain its module is built with, run
-    /// with [`SCORE_ENV`] alone, and the cargo settings in CARGO_HOME.
-    toolchain: String,
-    /// The environment the score kept ([`SCORE_ENV`], and GP_ROM_DIR).
-    env: Vec<(String, String)>,
-    /// How it was scored ([`SCORE_ARGS`] and the canary's name).
-    args: String,
-}
-
-/// The key a canary score is kept under: the first 24 hex digits of blake3
-/// over [`BASE_FORMAT`] and each part, each followed by a 0 byte.
-fn canary_key(p: &KeyParts) -> String {
-    let mut h = blake3::Hasher::new();
-    let mut part = |s: &str| {
-        h.update(s.as_bytes());
-        h.update(&[0]);
-    };
-    part(&BASE_FORMAT.to_string());
-    for s in [&p.gp, &p.tree, &p.games, &p.rom, &p.toolchain] {
-        part(s);
-    }
-    for (k, v) in &p.env {
-        part(k);
-        part(v);
-    }
-    part(&p.args);
-    h.finalize().to_hex()[..24].to_owned()
-}
-
-fn file_hash(p: &Path) -> std::result::Result<String, String> {
-    let mut h = blake3::Hasher::new();
-    let mut f = fs::File::open(p).map_err(|e| format!("{}: {e}", p.display()))?;
-    std::io::copy(&mut f, &mut h).map_err(|e| format!("{}: {e}", p.display()))?;
-    Ok(h.finalize().to_hex().to_string())
-}
-
-/// The tool tree as a canary score reads it: the tree of its index (`git
-/// write-tree`), every file that differs from the index with its bytes,
-/// and the files under crates/ and third_party/ git doesn't track, ignored
-/// ones too, with their bytes, since the module kit copies those folders
-/// as they are on disk (module.rs, `walk`). target/, node_modules/ and
-/// .DS_Store, which the kit leaves out, are left out.
-fn tree_state(tree: &Path) -> std::result::Result<String, String> {
-    let e = |e: anyhow::Error| format!("{e:#}");
-    let mut h = blake3::Hasher::new();
-    h.update(git(tree, &["write-tree"]).map_err(e)?.as_bytes());
-    let changed = git(tree, &["diff", "--name-only", "-z"]).map_err(e)?;
-    let others = git(
-        tree,
-        &["ls-files", "-z", "--others", "--", "crates", "third_party"],
-    )
-    .map_err(e)?;
-    let ignored = git(
-        tree,
-        &[
-            "ls-files",
-            "-z",
-            "--others",
-            "--ignored",
-            "--exclude-standard",
-            "--",
-            "crates",
-            "third_party",
-        ],
-    )
-    .map_err(e)?;
-    // As `walk` leaves them out: node_modules and .DS_Store anywhere, but a
-    // `target` folder only as a crate's build output (crates/NAME/target, or
-    // one beside a Cargo.toml), since a source folder can be named target.
-    let left_out = |f: &str| {
-        let parts: Vec<&str> = f.split('/').collect();
-        parts.iter().enumerate().any(|(i, c)| match *c {
-            "node_modules" | ".DS_Store" => true,
-            "target" => {
-                let dir = parts[..i].join("/");
-                i == 0
-                    || (i == 2 && parts[0] == "crates")
-                    || tree.join(&dir).join("Cargo.toml").is_file()
-            }
-            _ => false,
-        })
-    };
-    let mut files: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-    for list in [&changed, &others, &ignored] {
-        files.extend(list.split('\0').filter(|f| !f.is_empty() && !left_out(f)));
-    }
-    for f in files {
-        h.update(b"\0");
-        h.update(f.as_bytes());
-        h.update(b"\0");
-        // A file the index has and the tree lost reads as empty: its name
-        // still counts.
-        h.update(&fs::read(tree.join(f)).unwrap_or_default());
-    }
-    Ok(h.finalize().to_hex().to_string())
-}
-
-/// The games tree as a score reads it: its HEAD's tree, what `git status`
-/// says differs, and the files that differ from HEAD and those git doesn't
-/// track (ignored ones too), with their bytes.
-fn games_state(games: &Path) -> std::result::Result<String, String> {
-    let e = |e: anyhow::Error| format!("{e:#}");
-    let head = git(games, &["rev-parse", "HEAD^{tree}"]).map_err(e)?;
-    let status = git(games, &["status", "--porcelain", "--ignored"]).map_err(e)?;
-    // Without --exclude-standard: the untracked files, ignored ones too.
-    let others = git(games, &["ls-files", "-z", "--others"]).map_err(e)?;
-    let changed = git(games, &["diff", "HEAD", "--name-only", "-z"]).map_err(e)?;
-    let mut h = blake3::Hasher::new();
-    for f in changed
-        .split('\0')
-        .chain(others.split('\0'))
-        .filter(|f| !f.is_empty())
-    {
-        h.update(f.as_bytes());
-        h.update(b"\0");
-        h.update(&fs::read(games.join(f)).unwrap_or_default());
-        h.update(b"\0");
-    }
-    Ok(format!("{head}\n{status}\n{}", h.finalize().to_hex()))
-}
-
-/// The cargo settings of `cargo_home` (its config.toml, or the older
-/// config), which can set flags for the module's build: each file's name
-/// and bytes.
-fn cargo_config(cargo_home: &Path) -> String {
-    let mut out = String::new();
-    for f in ["config.toml", "config"] {
-        if let Ok(b) = fs::read(cargo_home.join(f)) {
-            out.push_str(&format!("\n{f}:\n{}", String::from_utf8_lossy(&b)));
-        }
-    }
-    out
-}
-
-/// The key parts of a score through `gp` against the trees as they are.
-fn key_parts(c: &Cx, gp: &Path) -> std::result::Result<KeyParts, String> {
-    let rom = rom_of(&c.paths, &c.games_tree.join(CANARY), None).map_err(|e| format!("{e:#}"))?;
-    // In the score's environment, so a caller's RUSTUP_TOOLCHAIN, which the
-    // score doesn't see, doesn't name the toolchain.
-    let toolchain = kept_env(&mut Command::new("rustc"))
-        .arg("-vV")
-        .current_dir(&c.tree)
-        .output()
-        .map_err(|e| format!("rustc -vV: {e}"))?;
-    let cargo_home = std::env::var_os("CARGO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".cargo")))
-        .unwrap_or_default();
-    let mut env: Vec<(String, String)> = SCORE_ENV
-        .iter()
-        .map(|k| {
-            let v = std::env::var_os(k).unwrap_or_default();
-            ((*k).to_owned(), v.to_string_lossy().into_owned())
-        })
-        .collect();
-    env.push((
-        "GP_ROM_DIR".into(),
-        c.paths.roms.to_string_lossy().into_owned(),
-    ));
-    Ok(KeyParts {
-        gp: file_hash(gp)?,
-        tree: tree_state(&c.tree)?,
-        games: games_state(&c.games_tree)?,
-        rom: blake3::hash(&rom).to_hex().to_string(),
-        toolchain: format!(
-            "{}{}{}",
-            String::from_utf8_lossy(&toolchain.stdout),
-            String::from_utf8_lossy(&toolchain.stderr),
-            cargo_config(&cargo_home)
-        ),
-        env,
-        args: format!("{} {CANARY}", SCORE_ARGS.join(" ")),
-    })
-}
-
-/// The kept score's file for a key.
-fn base_file(c: &Cx, key: &str) -> PathBuf {
-    c.canary_dir.join(format!("base{BASE_FORMAT}-{key}.json"))
-}
-
-/// Writes a kept score through a new file renamed into place, so a reader
-/// never sees half of one.
-fn keep_score(file: &Path, v: &Value) -> std::result::Result<(), String> {
-    if let Some(d) = file.parent() {
-        fs::create_dir_all(d).map_err(|e| e.to_string())?;
-    }
-    let tmp = file.with_extension(format!("tmp{}", std::process::id()));
-    fs::write(&tmp, serde_json::to_vec(v).unwrap_or_default()).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, file).map_err(|e| e.to_string())
-}
-
-#[cfg(test)]
-thread_local! {
-    static VERIFY_IN_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// GP_GATE_CANARY_VERIFY=1: score the tip even when its score is kept, and
-/// fail unless the two agree.
-fn verify_mode() -> bool {
-    #[cfg(test)]
-    if VERIFY_IN_TEST.with(std::cell::Cell::get) {
-        return true;
-    }
-    std::env::var_os("GP_GATE_CANARY_VERIFY").is_some_and(|v| v == "1")
-}
-
-/// The tip's canary score, or `None` with a line saying why when there's no
-/// ROM. Called while the tree is at the tip, before the patch is applied:
-/// the tip's gp reads its kit from the tree, and scored after the patch it
-/// would run the patched gp-sim and gp-interp inside Donkey Kong's module.
-/// Kept under the key of everything it depends on ([`key_parts`]), so a
-/// second patch on the same tip doesn't pay for it again, nor a gate on a
-/// tip the gate landed (the landing keeps its patched score under the key
-/// this computes).
-fn tip_score(
-    c: &Cx,
-    tip: &str,
-    tip_gp: &Path,
-    lines: &mut Vec<String>,
-) -> std::result::Result<Option<Value>, String> {
-    let game = c.games_tree.join(CANARY);
-    if rom_of(&c.paths, &game, None).is_err() {
-        lines.push(format!(
-            "canary skipped: no ROM for {CANARY} in {}",
-            c.paths.roms.display()
-        ));
-        return Ok(None);
-    }
-    let parts = key_parts(c, tip_gp)?;
-    let key = canary_key(&parts);
-    let file = base_file(c, &key);
-    let kept = fs::read(&file)
-        .ok()
-        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-        .filter(|v| !rows_of(v).is_empty());
-    if let Some(v) = &kept
-        && !verify_mode()
-    {
-        lines.push(format!(
-            "canary: the tip's score is kept ({})",
-            file.display()
-        ));
-        return Ok(Some(v.clone()));
-    }
-    progress(format!("canary: scoring {CANARY} through the tip's gp"));
-    let label = score_label(&format!("tip-{}", &tip[..12]), &parts);
-    make_kit(c, tip_gp, &parts, &c.canary_dir.join(&label))?;
-    let v = scored(c, tip_gp, &label)?;
-    lines.extend(gate::reran_lines(&v, "canary, the tip's gp"));
-    if let Some(k) = kept {
-        let (a, b) = (rows_of(&k), rows_of(&v));
-        let same = a.len() == b.len()
-            && a.iter().zip(&b).all(|((i, _), (j, _))| i == j)
-            && gate::worse(&a, &b).is_none()
-            && gate::worse(&b, &a).is_none();
-        if !same {
-            return Err(format!(
-                "GP_GATE_CANARY_VERIFY: the tip scored now differs from its kept score {}: the key misses something a score depends on",
-                file.display()
-            ));
-        }
-        lines.push("canary: the kept score of the tip agrees with a new one".into());
-        return Ok(Some(v));
-    }
-    keep_score(&file, &v)?;
-    Ok(Some(v))
-}
-
-/// The patched gp's rows held to the tip's (`base`): a FAIL, or the line
-/// saying they held.
-fn compare(base: &Value, new: &Value) -> std::result::Result<String, String> {
-    let (base_rows, new_rows) = (rows_of(base), rows_of(new));
-    if base_rows.is_empty() {
-        return Err("the tip's canary score has no rows".into());
-    }
-    for (id, _) in &base_rows {
-        if !new_rows.iter().any(|(i, _)| i == id) {
-            return Err(format!("{id}: no row through the patched gp"));
-        }
-    }
-    let reran = gate::reran_lines(new, "canary, the patched gp").join("\n");
-    if let Some(why) = gate::worse(&base_rows, &new_rows) {
-        return Err(if reran.is_empty() {
-            why
-        } else {
-            format!("{why}\n{reran}")
-        });
-    }
-    Ok(format!(
-        "canary: {} clips of {CANARY} held through the patched gp{}{reran}",
-        base_rows.len(),
-        if reran.is_empty() { "" } else { "\n" }
-    ))
-}
-
-/// The canary: the patched gp's score in the home `label` against the
-/// tip's (`base`), the score, or why it failed. `stop` stops it when
-/// another lane failed.
-fn canary(
-    c: &Cx,
-    base: &Value,
-    gp: &Path,
-    label: &str,
-    stop: &AtomicBool,
-) -> std::result::Result<(Value, String), String> {
-    progress(format!("canary: scoring {CANARY} through the patched gp"));
-    let new = scored_until(c, gp, label, stop)
-        .map_err(|why| format!("the patched gp can't score {CANARY}: {why}"))?;
-    let line = compare(base, &new)?;
-    Ok((new, line))
-}
-
-/// A copy of the gate's build, `<canary dir>/bins/gp-<blake3, 16 hex>`, to
-/// score: the build in the target folder can be replaced while the checks
-/// run, and the gate publishes only bytes it scored. Returns the copy and
-/// the full hash. The four newest copies are kept.
-fn snapshot(c: &Cx) -> std::result::Result<(PathBuf, String), String> {
-    let gp = built_gp(c);
-    let hash = file_hash(&gp)?;
-    let dir = c.canary_dir.join("bins");
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let dest = dir.join(format!("gp-{}", &hash[..16]));
-    if !dest.is_file() || file_hash(&dest).ok().as_deref() != Some(hash.as_str()) {
-        // A new file renamed into place (publish.rs has why).
-        let tmp = dir.join(format!("gp-{}.tmp{}", &hash[..16], std::process::id()));
-        fs::copy(&gp, &tmp).map_err(|e| format!("copying {}: {e}", gp.display()))?;
-        fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
-        if file_hash(&dest)? != hash {
-            return Err(format!("{} changed while it was copied", gp.display()));
-        }
-    }
-    mark_used(&dest);
-    if let Ok(rd) = fs::read_dir(&dir) {
-        let mut bins: Vec<(std::time::SystemTime, PathBuf)> = rd
-            .flatten()
-            .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
-            .collect();
-        bins.sort();
-        for (_, p) in bins.iter().rev().skip(4) {
-            let _ = fs::remove_file(p);
-        }
-    }
-    Ok((dest, hash))
-}
-
-/// `<gate home>/tool/published.json`: each commit the gate published, with
-/// the blake3 of the build. A published tip build is scored as the tip only
-/// when it is listed here with its bytes.
-fn published_file(c: &Cx) -> PathBuf {
-    c.steps.file.with_file_name("published.json")
-}
-
-fn published_by_gate(c: &Cx, commit: &str, file: &Path) -> bool {
-    let Ok(b) = fs::read(published_file(c)) else {
-        return false;
-    };
-    let Ok(v) = serde_json::from_slice::<Value>(&b) else {
-        return false;
-    };
-    v[commit]
-        .as_str()
-        .is_some_and(|h| file_hash(file).ok().as_deref() == Some(h))
-}
-
-fn note_published(c: &Cx, commit: &str, file: &Path) -> std::result::Result<(), String> {
-    let f = published_file(c);
-    let mut v: Value = fs::read(&f)
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .filter(Value::is_object)
-        .unwrap_or_else(|| json!({}));
-    v[commit] = json!(file_hash(file)?);
-    keep_score(&f, &v)
-}
-
-fn games_dir(a: &ToolGateArgs, repo: &Path) -> Result<PathBuf> {
-    if let Some(g) = &a.games {
-        return fs::canonicalize(g).with_context(|| g.display().to_string());
-    }
-    if let Some(g) = std::env::var_os("GP_GAMES_DIR") {
-        return Ok(PathBuf::from(g));
-    }
-    // Beside this repo's main checkout, where a worktree's own parent isn't.
-    let common = git(
-        repo,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )?;
-    let g = Path::new(&common)
-        .parent()
-        .and_then(Path::parent)
-        .map(|p| p.join("games"));
-    match g {
-        Some(g) if g.join(CANARY).is_dir() => Ok(g),
-        _ => bail!(
-            "no games checkout beside this repo for the canary; pass --games or set GP_GAMES_DIR"
-        ),
-    }
-}
-
-/// A patched gp's canary score, kept for the next gate once its commit
-/// lands: the scored copy of the build, its hash, the key's parts and the
-/// score.
-struct Scored {
-    gp: PathBuf,
-    hash: String,
-    /// The home it was scored in, whose module kit it read.
-    home: PathBuf,
-    parts: KeyParts,
-    value: Value,
-}
-
-/// The commit a passing try made, and its canary score (`None`: no canary).
-struct Tried {
-    commit: String,
-    scored: Option<Scored>,
-}
-
-/// The tree's patch, or why it was refused. `base` is the tip's canary
-/// score (`None`: no canary), made before this applies the patch. After the
-/// build, `just check`, the tests and the patched canary run at once as
-/// lanes ([`run_lanes`]); the first failure stops the rest.
-#[allow(clippy::too_many_arguments)]
+/// The tree's patch, or why it was refused: the commit a passing try made.
+/// After the build, `just check` and the tests run at once as lanes
+/// ([`run_lanes`]); the first failure stops the other.
 fn trial(
     c: &Cx,
     a: &ToolGateArgs,
     patch: &Patch,
     tip: &str,
-    base: Option<&Value>,
-    patch_hash: &str,
     lines: &mut Vec<String>,
-) -> Result<std::result::Result<Tried, Failed>> {
+) -> Result<std::result::Result<(String, bool), Failed>> {
     macro_rules! refuse {
         ($why:expr, $phase:expr) => {
             return Ok(Err(Failed {
@@ -1338,6 +712,34 @@ fn trial(
     {
         refuse!(format!("the ROM-blocking hook refuses it: {why}"), "hook");
     }
+    let msg = a
+        .message
+        .clone()
+        .unwrap_or_else(|| "A patch, by gp tool gate".into());
+    // Words alone (Markdown, the site's pages): the prose lint, then land.
+    // Nothing is built, so nothing is tested twice and nothing is published.
+    if docs_only(&files) {
+        lines.push("words only: the prose lint, no build and no checks".into());
+        let mut lint = Command::new("just");
+        lint.current_dir(tree)
+            .args(["--no-deps", "site-prose"])
+            .env("PATH", path_with_locked(c)?);
+        if let Err(why) = c.steps.time(
+            "prose",
+            || run_step(gate_env(&mut lint), "just site-prose"),
+            Result::is_ok,
+        ) {
+            refuse!(why, "prose");
+        }
+        if let Err(e) = c.steps.time(
+            "commit",
+            || gate::commit(tree, &msg, patch, &gate_gp),
+            Result::is_ok,
+        ) {
+            refuse!(format!("{e:#}"), "commit");
+        }
+        return Ok(Ok((git(tree, &["rev-parse", "HEAD"])?, true)));
+    }
     if let Err(why) = c.steps.time("fmt", || fmt(c), Result::is_ok) {
         refuse!(why, "fmt");
     }
@@ -1355,138 +757,14 @@ fn trial(
             Err(e) => refuse!(format!("{e:#}"), "build"),
         }
     }
-    // The canary scores a copy of this build, against the tree as it is
-    // now: the key of its score is taken here, and its module kit made
-    // here, before the lanes start, from the same quiet tree. What the kit
-    // reads must be what lands: the index, so nothing may differ from it.
-    let scoring = match base {
-        None => None,
-        Some(_) => {
-            let loose = uncommitted(tree).map_err(|e| anyhow::anyhow!(e))?;
-            if !loose.is_empty() {
-                refuse!(
-                    format!(
-                        "the tree differs from what would be committed, so the canary would score something else: {}",
-                        loose.join(", ")
-                    ),
-                    "tree"
-                );
-            }
-            let made = c.steps.time(
-                "canary kit",
-                || {
-                    let (gp, hash) = snapshot(c)?;
-                    let parts = key_parts(c, &gp)?;
-                    let label = score_label(&format!("patch-{patch_hash}"), &parts);
-                    make_kit(c, &gp, &parts, &c.canary_dir.join(&label))?;
-                    Ok((gp, hash, parts, label))
-                },
-                Result::is_ok,
-            );
-            match made {
-                Ok(s) => Some(s),
-                Err(why) => refuse!(why, "canary"),
-            }
-        }
-    };
-    let lanes_from = std::time::SystemTime::now();
-    let slot: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
-    let mut lanes: Vec<(&'static str, &'static str, LaneFn<'_>)> = vec![
+    let lanes: Vec<(&'static str, &'static str, LaneFn<'_>)> = vec![
         ("check", "just check", Box::new(|stop| check_lane(c, stop))),
         ("tests", "tests", Box::new(|stop| tests_lane(c, stop))),
     ];
-    if let (Some(base), Some((gp, _, _, label))) = (base, &scoring) {
-        let slot = &slot;
-        lanes.push((
-            "canary",
-            "canary",
-            Box::new(move |stop| {
-                let (v, line) = canary(c, base, gp, label, stop)?;
-                *slot.lock().expect("the canary's slot") = Some(v);
-                Ok(vec![line])
-            }),
-        ));
-    }
     match run_lanes(c, lanes) {
         Ok(l) => lines.extend(l),
         Err(f) => return Ok(Err(f)),
     }
-    // What lands and is published must be what the canary scored: the
-    // tree and the build's bytes. A check that changed the tree is refused:
-    // the kit was made before it, and the commit holds the index, so no
-    // score could stand for what lands. A check that built gp again from
-    // the same tree means the canary scores the new build, now.
-    let scored = match (base, scoring) {
-        (Some(base), Some((gp, hash, parts, label))) => {
-            let tree_now = tree_state(tree).map_err(|e| anyhow::anyhow!(e))?;
-            if tree_now != parts.tree {
-                let files = changed_since(tree, lanes_from);
-                let named = if files.is_empty() {
-                    "a file the canary's kit or the commit reads".to_owned()
-                } else {
-                    files.join(", ")
-                };
-                refuse!(
-                    format!(
-                        "a check changed the tree after the canary's kit was made, so what would land isn't what was scored: {named}"
-                    ),
-                    "tree"
-                );
-            }
-            let now = file_hash(&built_gp(c)).map_err(|e| anyhow::anyhow!(e))?;
-            if now == hash {
-                let value = slot
-                    .into_inner()
-                    .expect("the canary's slot")
-                    .context("the canary lane gave no score")?;
-                Some(Scored {
-                    gp,
-                    hash,
-                    home: c.canary_dir.join(label),
-                    parts,
-                    value,
-                })
-            } else {
-                lines.push("canary: gp changed during the checks, scored again".to_owned());
-                progress(lines.last().expect("just pushed"));
-                let again = snapshot(c).and_then(|(gp, hash)| {
-                    let parts = key_parts(c, &gp)?;
-                    let label = score_label(&format!("patch-{patch_hash}"), &parts);
-                    let home = c.canary_dir.join(&label);
-                    let (value, line) = c.steps.time(
-                        "canary (again)",
-                        || {
-                            make_kit(c, &gp, &parts, &home)?;
-                            canary(c, base, &gp, &label, &AtomicBool::new(false))
-                        },
-                        Result::is_ok,
-                    )?;
-                    Ok((
-                        Scored {
-                            gp,
-                            hash,
-                            home,
-                            parts,
-                            value,
-                        },
-                        line,
-                    ))
-                });
-                match again {
-                    Ok((s, line)) => {
-                        lines.push(line);
-                        Some(s)
-                    }
-                    Err(why) => refuse!(why, "canary"),
-                }
-            }
-        }
-        _ => None,
-    };
-    let msg = a
-        .message
-        .clone()
-        .unwrap_or_else(|| "A patch, by gp tool gate".into());
     if let Err(e) = c.steps.time(
         "commit",
         || gate::commit(tree, &msg, patch, &gate_gp),
@@ -1494,130 +772,19 @@ fn trial(
     ) {
         refuse!(format!("{e:#}"), "commit");
     }
-    Ok(Ok(Tried {
-        commit: git(tree, &["rev-parse", "HEAD"])?,
-        scored,
-    }))
+    Ok(Ok((git(tree, &["rev-parse", "HEAD"])?, false)))
 }
 
-/// The game folders in `games` whose package.toml has hooks, so a module:
-/// what a page open builds first.
-fn hooked_games(games: &Path) -> Vec<PathBuf> {
-    let Ok(rd) = fs::read_dir(games) else {
-        return Vec::new();
-    };
-    let mut out: Vec<PathBuf> = rd
-        .flatten()
-        .map(|e| e.path())
-        .filter(|d| {
-            fs::read_to_string(d.join("package.toml"))
-                .ok()
-                .and_then(|t| t.parse::<toml::Table>().ok())
-                .is_some_and(|t| t.contains_key("hooks"))
-        })
-        .collect();
-    out.sort();
-    out
-}
-
-/// After a landing, the hooked games' modules built with the gp just
-/// published, so the first page open after it doesn't wait for them. The
-/// new gp's module kit is the one its canary made (`<its score home>/work/
-/// module-kit/<the gp's hash>`, same bytes, same key), copied into the
-/// person's home first, so the builds don't read the gate's tree, which the
-/// next gate moves. The builds run detached, one after another, with their
-/// output in `$GP_HOME/work/warm-modules.log`; the gate doesn't wait, and a
-/// failed one only means the page builds it on open, as before.
-fn warm_modules(c: &Cx, commit: &str, scored: Option<&Scored>, lines: &mut Vec<String>) {
-    let gp = c.home.join("bin").join(format!("gp-{}", &commit[..12]));
-    let games = hooked_games(&c.games_repo);
-    if games.is_empty() || !gp.is_file() {
-        return;
-    }
-    let work = c.home.join("work");
-    if let Some(s) = scored {
-        let key = &s.hash[..16];
-        let to = work.join("module-kit").join(key);
-        // The kit the canary read, in the home it scored in.
-        let from = Some(s.home.join("work").join("module-kit").join(key))
-            .filter(|k| k.join("Cargo.lock").is_file());
-        if let Some(from) = from
-            && !to.join("Cargo.lock").is_file()
-        {
-            let tmp = to.with_extension(format!("tmp{}", std::process::id()));
-            let copied = fs::create_dir_all(work.join("module-kit")).is_ok()
-                && Command::new("cp")
-                    .arg("-R")
-                    .arg(&from)
-                    .arg(&tmp)
-                    .status()
-                    .is_ok_and(|s| s.success());
-            // Another gp may have made it meanwhile; theirs is the same.
-            if !copied || (fs::rename(&tmp, &to).is_err() && !to.join("Cargo.lock").is_file()) {
-                lines.push(format!("couldn't copy the module kit to {}", to.display()));
-            }
-        }
-    }
-    let log = work.join("warm-modules.log");
-    let Ok(out) = fs::create_dir_all(&work).and_then(|()| fs::File::create(&log)) else {
-        return;
-    };
-    let Ok(err) = out.try_clone() else { return };
-    let mut sh = Command::new("sh");
-    let started = gp_mcp::proc::own_group(&mut sh)
-        .arg("-c")
-        .arg(r#"gp=$1; shift; for d; do "$gp" game build "$d"; done"#)
-        .arg("sh")
-        .arg(&gp)
-        .args(&games)
-        .stdin(Stdio::null())
-        .stdout(out)
-        .stderr(err)
-        .spawn();
-    match started {
-        Ok(_) => lines.push(format!(
-            "building the modules of {} hooked games with the new gp, beside ({})",
-            games.len(),
-            log.display()
-        )),
-        Err(e) => lines.push(format!("couldn't start the module builds: {e}")),
-    }
-}
-
-/// After a landing: the published build is the scored one, byte for byte,
-/// or the gate says so and keeps nothing. Then it is noted as the gate's
-/// in published.json, and the canary score is kept as the score of the
-/// landed commit's build, under the key the next gate computes for its tip.
-fn keep_landed(c: &Cx, commit: &str, scored: Option<&Scored>, lines: &mut Vec<String>) {
-    let published = c.home.join("bin").join(format!("gp-{}", &commit[..12]));
-    let hash = match file_hash(&published) {
-        Ok(h) => h,
-        Err(e) => {
-            lines.push(format!("couldn't read the published build: {e}"));
-            return;
-        }
-    };
-    if let Some(s) = scored
-        && s.hash != hash
-    {
-        lines.push(format!(
-            "the published {} isn't the build the canary scored; its score isn't kept",
-            published.display()
-        ));
-        return;
-    }
-    if let Err(e) = note_published(c, commit, &published) {
-        lines.push(format!("couldn't note the published build: {e}"));
-    }
-    if let Some(s) = scored {
-        let parts = KeyParts {
-            gp: hash,
-            ..s.parts.clone()
-        };
-        if let Err(e) = keep_score(&base_file(c, &canary_key(&parts)), &s.value) {
-            lines.push(format!("couldn't keep the canary score: {e}"));
-        }
-    }
+/// A patch of words alone: every file it changes is Markdown or a page of
+/// the docs site. CLI.md is generated from gp's commands, so a change to it
+/// is not words alone.
+fn docs_only(files: &str) -> bool {
+    files.lines().all(|f| {
+        f != "CLI.md"
+            && (f.ends_with(".md")
+                || f.starts_with("site/src/content/")
+                || f.starts_with("site/public/"))
+    })
 }
 
 pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
@@ -1629,7 +796,6 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
     lock.lock()?;
     let tool = home.join("tool");
     fs::create_dir_all(&tool)?;
-    let games_repo = games_dir(a, &repo)?;
     let patch_bytes = fs::read(&a.patch).with_context(|| a.patch.display().to_string())?;
     let patch_hash = blake3::hash(&patch_bytes).to_hex()[..12].to_owned();
     let patch = match gate::read_patch(&a.patch, &tool)? {
@@ -1649,17 +815,11 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
         onto,
         tree: tool.join("tree"),
         target: tool.join("target"),
-        canary_dir: tool.join("canary"),
         home: paths.home.clone(),
-        games_repo,
-        games_tree: tool.join("games-tree"),
-        paths: paths.clone(),
         steps: Steps::new(tool.join("steps.jsonl"), &patch_hash),
         tools: TOOLS,
     };
-    let games_head = git(&c.games_repo, &["rev-parse", "HEAD"])?;
-    gate::checkout(&c.games_repo, &c.games_tree, &games_head)?;
-    let o = tries(&c, a, &patch, &patch_hash);
+    let o = tries(&c, a, &patch);
     c.steps.record(
         "gate",
         c.steps.t0.elapsed().as_secs_f64(),
@@ -1669,11 +829,8 @@ pub(crate) fn run(a: &ToolGateArgs, paths: &Paths) -> Result<Outcome> {
 }
 
 /// The gate's tries on the branch tip, each from a fresh tree, until one
-/// lands, fails, or the tip has moved [`TIP_TRIES`] times. The tip's gp is
-/// built and its canary scored while the tree is at the tip, and only then
-/// is the patch applied.
-fn tries(c: &Cx, a: &ToolGateArgs, patch: &Patch, patch_hash: &str) -> Result<Outcome> {
-    let paths = &c.paths;
+/// lands, fails, or the tip has moved [`TIP_TRIES`] times.
+fn tries(c: &Cx, a: &ToolGateArgs, patch: &Patch) -> Result<Outcome> {
     let mut lines = Vec::new();
     let mut failed = None;
     let missing = missing_tools(c);
@@ -1694,43 +851,9 @@ fn tries(c: &Cx, a: &ToolGateArgs, patch: &Patch, patch_hash: &str) -> Result<Ou
             || gate::checkout(&c.repo, &c.tree, &tip),
             Result::is_ok,
         )?;
-        let published = paths.home.join("bin").join(format!("gp-{}", &tip[..12]));
-        let tip_gp = if published.is_file() && published_by_gate(c, &tip, &published) {
-            lines.push(format!("tip {}: using its published build", &tip[..12]));
-            published
-        } else {
-            if let Err(why) = c.steps.time("tip build", || build(c), Result::is_ok) {
-                bail!("the tip doesn't build: {why}");
-            }
-            if published.is_file() {
-                // A `just publish` from someone's checkout: built from what
-                // that checkout held, which needn't be the tip. Left alone.
-                lines.push(format!(
-                    "tip {}: its published build isn't one the gate published, so the gate scores its own",
-                    &tip[..12]
-                ));
-                snapshot(c).map_err(|e| anyhow::anyhow!(e))?.0
-            } else {
-                c.steps.time(
-                    "tip publish",
-                    || publish::publish(&c.home, &built_gp(c), &tip, &c.repo, &mut lines),
-                    Result::is_ok,
-                )?;
-                note_published(c, &tip, &published).map_err(|e| anyhow::anyhow!(e))?;
-                published
-            }
-        };
-        let base = match c.steps.time(
-            "canary (tip)",
-            || tip_score(c, &tip, &tip_gp, &mut lines),
-            Result::is_ok,
-        ) {
-            Ok(b) => b,
-            Err(e) => bail!("the tip's canary score: {e}"),
-        };
         let tried = c.steps.time(
             "try",
-            || trial(c, a, patch, &tip, base.as_ref(), patch_hash, &mut lines),
+            || trial(c, a, patch, &tip, &mut lines),
             |r| matches!(r, Ok(Ok(_))),
         )?;
         match tried {
@@ -1739,7 +862,7 @@ fn tries(c: &Cx, a: &ToolGateArgs, patch: &Patch, patch_hash: &str) -> Result<Ou
                 gate::clean(&c.tree);
                 break;
             }
-            Ok(Tried { commit, scored }) => {
+            Ok((commit, words_only)) => {
                 if a.dry_run {
                     lines.push("--dry-run: PASS, nothing lands".into());
                     return Ok(Outcome::ok(
@@ -1755,19 +878,28 @@ fn tries(c: &Cx, a: &ToolGateArgs, patch: &Patch, patch_hash: &str) -> Result<Ou
                 match landed {
                     Ok(()) => {
                         lines.push(format!("PASS: landed {commit} on {}", c.onto));
+                        if words_only {
+                            lines.push(
+                                "words only: nothing built, so gp isn't published again".into(),
+                            );
+                            return Ok(Outcome::ok(
+                                json!({"verdict": "PASS", "commit": commit, "tip": tip, "lines": lines}),
+                                lines.join("\n"),
+                            ));
+                        }
                         c.steps.time(
                             "publish",
                             || {
-                                // The scored copy, when the canary ran.
-                                let file = scored
-                                    .as_ref()
-                                    .map_or_else(|| built_gp(c), |s| s.gp.clone());
-                                publish::publish(&c.home, &file, &commit, &c.repo, &mut lines)
+                                publish::publish(
+                                    &c.home,
+                                    &built_gp(c),
+                                    &commit,
+                                    &c.repo,
+                                    &mut lines,
+                                )
                             },
                             Result::is_ok,
                         )?;
-                        keep_landed(c, &commit, scored.as_ref(), &mut lines);
-                        warm_modules(c, &commit, scored.as_ref(), &mut lines);
                         return Ok(Outcome::ok(
                             json!({"verdict": "PASS", "commit": commit, "tip": tip, "lines": lines}),
                             lines.join("\n"),
@@ -1815,21 +947,36 @@ mod tests {
             onto: "main".into(),
             tree: root.join("tree"),
             target: root.join("target"),
-            canary_dir: root.join("canary"),
             home: root.join("home"),
-            games_repo: root.join("games"),
-            games_tree: root.join("games-tree"),
-            paths: Paths {
-                home: root.join("home"),
-                store: root.join("store"),
-                roms: root.join("roms"),
-            },
             steps: Steps::new(root.join("steps.jsonl"), "test"),
             tools: &["just", "git"],
         }
     }
 
     /// A FAIL line names the tests cargo says failed.
+    #[test]
+    fn a_patch_of_words_alone_lands_after_the_prose_lint_with_no_build() {
+        let d = tempfile::tempdir().unwrap();
+        let c = gate_rig(d.path());
+        let patch = patch_of(&c, "README.md", "the tool, said in other words\n");
+        let out = gate(&c, &patch, false);
+        assert!(out.text.contains("words only"), "{}", out.text);
+        assert!(out.text.contains("PASS: landed"), "{}", out.text);
+        assert!(!out.text.contains("just check"), "{}", out.text);
+    }
+
+    #[test]
+    fn words_only_is_markdown_and_the_sites_pages_never_cli_md_or_code() {
+        assert!(docs_only(
+            "README.md\nsite/src/content/docs/themes.md\ndocs/gate.md"
+        ));
+        assert!(docs_only("site/public/logo.svg"));
+        assert!(!docs_only("CLI.md"));
+        assert!(!docs_only("docs/gate.md\ncrates/gp-cli/src/main.rs"));
+        assert!(!docs_only("site/src/components/Landing.astro"));
+        assert!(!docs_only("justfile"));
+    }
+
     #[test]
     fn the_failed_tests_are_read_from_cargos_output() {
         let out = "running 3 tests\ntest a::b ... ok\ntest serve::agent::tests::slow ... FAILED\ntest c ... FAILED\n\nfailures:\n";
@@ -1840,46 +987,6 @@ mod tests {
         )
         .unwrap_err();
         assert!(why.starts_with("cargo test failed (x::y):"), "{why}");
-    }
-
-    /// Scoring a build leaves it and the next newest, whatever the score
-    /// says, and touches nothing but older builds. `true` is the gp: it
-    /// prints no JSON, so the score itself is an error.
-    #[cfg(unix)]
-    #[test]
-    fn scoring_a_build_keeps_only_the_two_newest() {
-        let dir = tempfile::tempdir().unwrap();
-        let c = cx(dir.path());
-        fs::create_dir(&c.canary_dir).unwrap();
-        for (i, name) in ["tip-rescored", "patch-b", "patch-c", "patch-d"]
-            .iter()
-            .enumerate()
-        {
-            let home = c.canary_dir.join(name);
-            fs::create_dir(&home).unwrap();
-            fs::write(home.join("cache"), b"x").unwrap();
-            set_time(&home, 1000 + i as u64);
-        }
-        let base = c.canary_dir.join("base-a-b.json");
-        fs::write(&base, b"{}").unwrap();
-        let other = c.canary_dir.join("other");
-        fs::create_dir(&other).unwrap();
-        set_time(&other, 1);
-        let outside = dir.path().join("outside");
-        fs::create_dir(&outside).unwrap();
-        let link = c.canary_dir.join("tip-link");
-        std::os::unix::fs::symlink(&outside, &link).unwrap();
-
-        assert!(scored(&c, Path::new("true"), "tip-rescored").is_err());
-
-        let has = |n: &str| c.canary_dir.join(n).exists();
-        assert!(has("tip-rescored"), "the build just scored is the newest");
-        assert!(has("patch-d"), "the next newest stays");
-        assert!(!has("patch-c"), "an older build goes");
-        assert!(!has("patch-b"), "an older build goes");
-        assert!(base.is_file(), "a kept score isn't a build");
-        assert!(other.is_dir(), "only tip-* and patch-* folders are builds");
-        assert!(outside.is_dir(), "a link isn't followed");
     }
 
     fn git_in(dir: &Path, args: &[&str]) {
@@ -1898,34 +1005,24 @@ mod tests {
         gp_mcp::proc::make_executable(path).unwrap();
     }
 
-    /// A tool repo and a gate around it, with stand-ins for cargo, just and
-    /// gp. The repo's `crates/gp-sim/step` stands for the simulation in the
-    /// module kit and `Cargo.lock` for the kit's lock. The cargo stand-in
-    /// "builds" a gp that, like the real one, holds the path of the tree it
-    /// was built in and finds its kit there unless GP_TOOL_SRC names
-    /// another. Like the real one it scores with the kit in its home's
-    /// work/module-kit/ when one is there, else copies one from the tree
-    /// first; `game kit -o DIR` makes one in DIR. Its bytes don't depend on
-    /// the kit's files, so two trees that differ only there build the same
-    /// gp. That gp scores the one clip 10 of 10 frames together when
-    /// the kit's step is `right` and 5 of 10 when not, refuses a kit whose
-    /// lock isn't the one it was built with (as the module's `--locked`
-    /// build did), and leaves what it read, its folder and its environment
-    /// in its home. The cargo stand-in's `test` adds a line of its
-    /// arguments and GP_SLOW_TESTS to `<target>/cargo-test-seen` and fails
-    /// when the tree's README.md says `a failing test`, as a failing test
-    /// would. The repo has one slow test, `a_slow_one`. The just stand-in
-    /// leaves GP_GATE_RUNS_TESTS and GP_GATE_RUN in `<target>/just-seen`.
+    /// A tool repo and a gate around it, with stand-ins for cargo and just,
+    /// and no ROM folder and no games checkout anywhere: the gate needs
+    /// neither. The cargo stand-in's `build` writes a gp that prints the
+    /// tree it was built in; its `test` adds a line of its arguments and
+    /// GP_SLOW_TESTS to `<target>/cargo-test-seen` and fails when the
+    /// tree's tool.txt says `a failing test`, as a failing test would. The
+    /// repo has one slow test, `a_slow_one`. The just stand-in leaves
+    /// GP_GATE_RUNS_TESTS and GP_GATE_RUN in `<target>/just-seen`, and the
+    /// gp it was handed (`target/fastdev/gp`, the patched build) in
+    /// `<times>/just-gp`.
     fn gate_rig(root: &Path) -> Cx {
         let c = cx(root);
         fs::create_dir_all(&c.repo).unwrap();
         git_in(&c.repo, &["init", "-q", "-b", "main"]);
         git_in(&c.repo, &["config", "user.name", "gate test"]);
         git_in(&c.repo, &["config", "user.email", "gate@test"]);
-        fs::create_dir_all(c.repo.join("crates/gp-sim")).unwrap();
-        fs::write(c.repo.join("crates/gp-sim/step"), "right\n").unwrap();
-        fs::write(c.repo.join("Cargo.lock"), "lock-a\n").unwrap();
         fs::write(c.repo.join("README.md"), "the tool\n").unwrap();
+        fs::write(c.repo.join("tool.txt"), "the tool\n").unwrap();
         fs::create_dir_all(c.repo.join("crates/gp-x/tests")).unwrap();
         fs::write(
             c.repo.join("crates/gp-x/tests/slow.rs"),
@@ -1936,97 +1033,20 @@ mod tests {
         git_in(&c.repo, &["add", "-A"]);
         git_in(&c.repo, &["commit", "-q", "-m", "the tip"]);
 
-        let rom = {
-            let mut r = b"NES\x1a\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00".to_vec();
-            r.extend(vec![7u8; 16384 + 8192]);
-            r
-        };
-        fs::create_dir_all(&c.paths.roms).unwrap();
-        fs::write(c.paths.roms.join("dk.nes"), &rom).unwrap();
-        let sha = crate::roms::Rom::of_bytes(rom).unwrap().sha256;
-        let game = c.games_tree.join(CANARY);
-        fs::create_dir_all(&game).unwrap();
-        fs::write(
-            game.join("package.toml"),
-            format!(
-                "[package]\nname = \"dk\"\n\n[[rom.entry]]\nsha256 = \"{sha}\"\nrole = \"scored\"\n"
-            ),
-        )
-        .unwrap();
-        git_in(&c.games_tree, &["init", "-q", "-b", "main"]);
-        git_in(&c.games_tree, &["add", "-A"]);
-        git_in(
-            &c.games_tree,
-            &[
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@t",
-                "commit",
-                "-q",
-                "-m",
-                "games",
-            ],
-        );
-
-        let gp_body = root.join("gp-body.sh");
         let (ctl, times) = (root.join("ctl"), root.join("times"));
         fs::create_dir_all(&ctl).unwrap();
         fs::create_dir_all(&times).unwrap();
-        // `ctl/meet`: each lane, once started, waits until all three have
-        // started (just check, a cargo test run, the patched canary), so
-        // the lanes end only if they ran at once. One that waits 30 s
-        // without the others leaves NAME.alone and goes on.
+        // `ctl/meet`: each lane, once started, waits until both have
+        // started (just check, a cargo test run), so the lanes end only if
+        // they ran at once. One that waits 30 s without the other leaves
+        // NAME.alone and goes on.
         let meet = |me: &str| {
             format!(
-                "if [ -f '{ctl}/meet' ]; then n=0; while [ ! -f '{times}/just.start' ] || [ ! -f '{times}/test.start' ] || [ ! -f '{times}/gp.start' ]; do n=$((n+1)); if [ $n -gt 300 ]; then : > '{times}/{me}.alone'; break; fi; sleep 0.1; done; fi",
+                "if [ -f '{ctl}/meet' ]; then n=0; while [ ! -f '{times}/just.start' ] || [ ! -f '{times}/test.start' ]; do n=$((n+1)); if [ $n -gt 300 ]; then : > '{times}/{me}.alone'; break; fi; sleep 0.1; done; fi",
                 ctl = ctl.display(),
                 times = times.display()
             )
         };
-        fs::write(
-            &gp_body,
-            format!(
-                r#"src="${{GP_TOOL_SRC:-$BUILT_IN}}"
-ctl='{ctl}'
-times='{times}'
-if [ "$1 $2" = "game kit" ]; then
-  mkdir -p "$4"; cp "$src/crates/gp-sim/step" "$src/Cargo.lock" "$4/"; echo "$4" >> "$times/kits"; exit 0
-fi
-home="$9"
-mkdir -p "$home"
-if [ "$1" = game ]; then echo "$*" >> "$times/warm"; exit 0; fi
-side=tip; case "$home" in */patch-*) side=patch ;; esac
-echo "$side" >> "$times/gp-runs"
-if [ "$side" = patch ]; then
-  echo $$ > "$times/gp.pid"
-  date +%s > "$times/gp.start"
-  {meet_gp}
-  if [ -f "$ctl/gp-fails" ]; then echo "error: the kit doesn't match" >&2; exit 1; fi
-  [ -f "$ctl/gp-sleep" ] && sleep "$(cat "$ctl/gp-sleep")"
-fi
-kit=""
-for k in "$home"/work/module-kit/*; do [ -f "$k/Cargo.lock" ] && kit="$k"; done
-if [ -z "$kit" ]; then
-  kit="$home/work/module-kit/own"; mkdir -p "$kit"; cp "$src/crates/gp-sim/step" "$src/Cargo.lock" "$kit/"
-fi
-cat "$kit/step" > "$home/kit-seen"
-pwd -P > "$home/cwd-seen"
-env > "$home/env-seen"
-if [ "$(cat "$kit/Cargo.lock")" != "$BUILT_LOCK" ]; then
-  echo "error: cannot update the lock file because --locked was passed" >&2
-  exit 1
-fi
-if [ "$(cat "$kit/step")" = right ]; then t=10; else t=5; fi
-[ "$side" = patch ] && date +%s > "$times/gp.end"
-printf '{{"clips":[{{"id":"c1","frames":10,"frames_together":%s}}]}}\n' "$t"
-"#,
-                ctl = ctl.display(),
-                times = times.display(),
-                meet_gp = meet("gp")
-            ),
-        )
-        .unwrap();
         let locked = c.home.join("bin/locked");
         script(
             &locked.join("cargo"),
@@ -2036,45 +1056,41 @@ if [ "$1" = test ]; then
   mkdir -p "$CARGO_TARGET_DIR"
   echo "$* | GP_SLOW_TESTS=${{GP_SLOW_TESTS:-}}" >> "$CARGO_TARGET_DIR/cargo-test-seen"
   case " $* " in *" --no-run "*) exit 0 ;; esac
+  echo $$ > '{times}/test.pid'
   date +%s > '{times}/test.start'
   {meet_test}
   [ -f '{ctl}/test-sleep' ] && sleep "$(cat '{ctl}/test-sleep')"
-  if grep -q 'a failing test' README.md; then echo 'test fails ... FAILED'; exit 101; fi
+  if grep -q 'a failing test' tool.txt; then echo 'test fails ... FAILED'; exit 101; fi
+  date +%s > '{times}/test.end'
   exit 0
 fi
-if [ "$1" = fmt ] && grep -q 'bad format' README.md; then echo 'Diff in src/lib.rs at line 1:'; exit 1; fi
+if [ "$1" = fmt ] && grep -q 'bad format' tool.txt; then echo 'Diff in src/lib.rs at line 1:'; exit 1; fi
 [ "$1" = build ] || exit 0
 mkdir -p "$CARGO_TARGET_DIR/fastdev"
 out="$CARGO_TARGET_DIR/fastdev/gp"
-{{ printf '#!/bin/sh\nBUILT_IN=%s\nBUILT_LOCK=%s\n' "$(pwd -P)" "$(cat Cargo.lock)"; cat '{}'; }} > "$out.new"
+printf '#!/bin/sh\necho built in %s\n' "$(pwd -P)" > "$out.new"
 chmod +x "$out.new"
 mv "$out.new" "$out"
 "#,
-                gp_body.display(),
                 ctl = ctl.display(),
                 times = times.display(),
                 meet_test = meet("test")
             ),
         );
         // just check: `ctl/just-fails` fails it after 0.2 s, `ctl/just-sleep`
-        // holds it, `ctl/just-rebuilds` builds gp again with other bytes,
-        // as a check step that dirtied gp-cli did.
+        // holds it.
         script(
             &locked.join("just"),
             &format!(
                 r#"#!/bin/sh
 printf 'GP_GATE_RUNS_TESTS=%s\nGP_GATE_RUN=%s\n' "${{GP_GATE_RUNS_TESTS:-}}" "${{GP_GATE_RUN:-}}" > "$CARGO_TARGET_DIR/just-seen"
+"$CARGO_TARGET_DIR/fastdev/gp" > '{times}/just-gp'
 date +%s > '{times}/just.start'
 {meet_just}
-[ -f '{ctl}/just-writes' ] && echo 'fn x() {{}}' > crates/gp-sim/gen.rs
-if [ -f '{ctl}/just-flips' ]; then echo wrong > crates/gp-sim/step; sleep 2; echo right > crates/gp-sim/step; fi
 if [ -f '{ctl}/just-fails' ]; then sleep 0.2; echo 'check-step: clippy 0.2 s (failed)'; exit 1; fi
 [ -f '{ctl}/just-sleep' ] && sleep "$(cat '{ctl}/just-sleep')"
-if [ -f '{ctl}/just-rebuilds' ]; then
-  gp="$CARGO_TARGET_DIR/fastdev/gp"
-  {{ cat "$gp"; echo '# built again'; }} > "$gp.new"; chmod +x "$gp.new"; mv "$gp.new" "$gp"
-fi
 echo 'check-step: fmt 0.4 s'
+echo 'check-step: baseline-mosshop 1.5 s'
 date +%s > '{times}/just.end'
 "#,
                 ctl = ctl.display(),
@@ -2095,7 +1111,7 @@ date +%s > '{times}/just.end'
     }
 
     /// A patch to `file` in the rig's repo, written as `git diff` writes it.
-    fn patch_of(c: &Cx, file: &str, text: &str) -> (Patch, String) {
+    fn patch_of(c: &Cx, file: &str, text: &str) -> Patch {
         fs::write(c.repo.join(file), text).unwrap();
         let o = Command::new("git")
             .arg("-C")
@@ -2106,156 +1122,67 @@ date +%s > '{times}/just.end'
         git_in(&c.repo, &["checkout", "--", "."]);
         let f = c.repo.parent().unwrap().join("fix.patch");
         fs::write(&f, &o.stdout).unwrap();
-        let hash = blake3::hash(&o.stdout).to_hex()[..12].to_owned();
-        (
-            Patch {
-                diff: f,
-                message: Some("a patch".into()),
-                author: None,
-                date: None,
-            },
-            hash,
-        )
+        Patch {
+            diff: f,
+            message: Some("a patch".into()),
+            author: None,
+            date: None,
+        }
     }
 
-    fn dry_run(c: &Cx, patch: &Patch, hash: &str) -> Outcome {
+    fn gate(c: &Cx, patch: &Patch, dry_run: bool) -> Outcome {
         let a = ToolGateArgs {
             patch: patch.diff.clone(),
             message: None,
             onto: Some("main".into()),
             home: None,
-            games: None,
-            dry_run: true,
+            dry_run,
         };
-        tries(c, &a, patch, hash).unwrap()
+        tries(c, &a, patch).unwrap()
     }
 
-    fn seen(c: &Cx, side: &str, what: &str) -> String {
-        let rd = fs::read_dir(&c.canary_dir).unwrap();
-        let home = rd
-            .flatten()
-            .map(|e| e.path())
-            .find(|p| p.file_name().unwrap().to_string_lossy().starts_with(side))
-            .unwrap_or_else(|| panic!("no {side} home"));
-        fs::read_to_string(home.join(what)).unwrap()
+    fn dry_run(c: &Cx, patch: &Patch) -> Outcome {
+        gate(c, patch, true)
     }
 
-    /// The tip's gp is scored with the tip's kit and the patched gp with the
-    /// patched kit, so a patch that makes the simulation step wrongly scores
-    /// worse than the tip and fails at the canary. Scored after the patch
-    /// was applied, the tip read the wrong step too and the patch passed.
+    /// The gate's game check is `just check`'s, through the patched gp: the
+    /// gp `just check` runs is the one built from the patched tree. With no
+    /// ROM folder and no games checkout the gate passes, and it reads and
+    /// makes nothing of a game's: no score homes, no module builds.
     #[test]
-    fn each_side_of_the_canary_is_scored_with_its_own_kit() {
+    fn the_gate_checks_through_the_patched_gp_with_no_rom_and_no_games() {
         let dir = tempfile::tempdir().unwrap();
         let c = gate_rig(dir.path());
-        let (patch, hash) = patch_of(&c, "crates/gp-sim/step", "wrong\n");
-        let o = dry_run(&c, &patch, &hash);
-        assert_eq!(o.json["verdict"], "FAIL", "{}", o.text);
-        assert_eq!(o.json["phase"], "canary", "{}", o.text);
-        assert!(
-            o.text
-                .contains("c1: was 100% (10/10 frames together), now 5/10"),
-            "{}",
-            o.text
-        );
-        assert_eq!(seen(&c, "tip-", "kit-seen"), "right\n");
-        assert_eq!(seen(&c, "patch-", "kit-seen"), "wrong\n");
+        let patch = patch_of(&c, "tool.txt", "the tool, said again\n");
+        let o = dry_run(&c, &patch);
+        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
+        let tree = fs::canonicalize(&c.tree).unwrap();
         assert_eq!(
-            fs::read_to_string(c.tree.join("crates/gp-sim/step")).unwrap(),
-            "right\n",
-            "a refused patch leaves the tree at the tip"
+            stamp(&c, "just-gp").unwrap().trim(),
+            format!("built in {}", tree.display())
         );
-    }
-
-    /// A patch that changes the kit's Cargo.lock: the tip's gp scores with
-    /// the tip's lock, so its module still builds, and the patch passes.
-    /// Scored after the patch was applied, the tip's gp met the patched lock
-    /// and the gate stopped.
-    #[test]
-    fn a_patch_to_the_lock_leaves_the_tips_score_alone() {
-        let dir = tempfile::tempdir().unwrap();
-        let c = gate_rig(dir.path());
-        let (patch, hash) = patch_of(&c, "Cargo.lock", "lock-b\n");
-        let o = dry_run(&c, &patch, &hash);
-        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
-        assert!(
-            o.text.contains("canary: 1 clips of donkey-kong held"),
-            "{}",
-            o.text
+        let mut names: Vec<String> = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "ctl",
+                "fix.patch",
+                "home",
+                "logs",
+                "repo",
+                "steps.jsonl",
+                "target",
+                "target-tests",
+                "times",
+                "tree"
+            ]
         );
-    }
-
-    /// Each side is scored in its own home with the kept environment alone:
-    /// nothing else of the gate's environment reaches it, and GP_HOME,
-    /// GP_ROM_DIR and GP_TOOL_SRC are the gate's. A second patch on the same
-    /// tip reads the tip's kept score.
-    #[test]
-    fn a_canary_score_runs_in_its_home_with_the_kept_environment() {
-        let dir = tempfile::tempdir().unwrap();
-        let c = gate_rig(dir.path());
-        let (patch, hash) = patch_of(&c, "README.md", "the tool, said again\n");
-        let o = dry_run(&c, &patch, &hash);
-        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
-        for side in ["tip-", "patch-"] {
-            let cwd = seen(&c, side, "cwd-seen");
-            assert!(
-                cwd.contains(&format!(
-                    "canary/{side}{}-",
-                    if side == "tip-" {
-                        o.json["tip"].as_str().unwrap()[..12].to_owned()
-                    } else {
-                        hash.clone()
-                    }
-                )),
-                "{side} ran in {cwd}"
-            );
-            let env = seen(&c, side, "env-seen");
-            let mut names = Vec::new();
-            for line in env.lines() {
-                let Some((k, v)) = line.split_once('=') else {
-                    continue;
-                };
-                names.push(k.to_owned());
-                match k {
-                    "GP_TOOL_SRC" => assert_eq!(v, c.tree.to_str().unwrap()),
-                    "GP_ROM_DIR" => assert_eq!(v, c.paths.roms.to_str().unwrap()),
-                    "GP_HOME" => assert!(v.contains("/canary/"), "{v}"),
-                    // What the shell sets of itself.
-                    "PWD" | "OLDPWD" | "SHLVL" | "_" => {}
-                    k => assert!(SCORE_ENV.contains(&k), "{side} got {k}"),
-                }
-            }
-            for k in ["GP_TOOL_SRC", "GP_ROM_DIR", "GP_HOME"] {
-                assert!(names.iter().any(|n| n == k), "{side} has no {k}");
-            }
-        }
-        let tip = o.json["tip"].as_str().unwrap();
-        let kept = fs::read_dir(&c.canary_dir).unwrap().flatten().any(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .starts_with(&format!("base{BASE_FORMAT}-"))
-        });
-        assert!(kept, "the tip's score is kept");
-        // The tip's gp gone: a second patch on this tip uses the kept score.
-        let tip_homes = || -> Vec<PathBuf> {
-            fs::read_dir(&c.canary_dir)
-                .unwrap()
-                .flatten()
-                .filter(|e| {
-                    e.file_name()
-                        .to_string_lossy()
-                        .starts_with(&format!("tip-{}-", &tip[..12]))
-                })
-                .map(|e| e.path())
-                .collect()
-        };
-        for h in tip_homes() {
-            fs::remove_dir_all(h).unwrap();
-        }
-        let (patch, hash) = patch_of(&c, "README.md", "the tool, once more\n");
-        let o = dry_run(&c, &patch, &hash);
-        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
-        assert!(tip_homes().is_empty());
+        assert!(!c.home.join("work").exists(), "no module builds started");
     }
 
     /// The gate's own test run is the whole workspace in the gate's
@@ -2266,8 +1193,8 @@ date +%s > '{times}/just.end'
     fn the_gates_test_run_has_every_test_and_a_failure_stops_it() {
         let dir = tempfile::tempdir().unwrap();
         let c = gate_rig(dir.path());
-        let (patch, hash) = patch_of(&c, "README.md", "the tool, said again\n");
-        let o = dry_run(&c, &patch, &hash);
+        let patch = patch_of(&c, "tool.txt", "the tool, said again\n");
+        let o = dry_run(&c, &patch);
         assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
         let seen = fs::read_to_string(tests_target(&c).join("cargo-test-seen")).unwrap();
         let mut runs: Vec<&str> = seen.lines().collect();
@@ -2287,8 +1214,8 @@ date +%s > '{times}/just.end'
             "just check leaves the tests to this gate's run, which it names"
         );
 
-        let (patch, hash) = patch_of(&c, "README.md", "a failing test\n");
-        let o = dry_run(&c, &patch, &hash);
+        let patch = patch_of(&c, "tool.txt", "a failing test\n");
+        let o = dry_run(&c, &patch);
         assert_eq!(o.json["verdict"], "FAIL", "{}", o.text);
         assert_eq!(o.json["phase"], "tests", "{}", o.text);
         assert!(
@@ -2304,8 +1231,8 @@ date +%s > '{times}/just.end'
     fn a_gate_run_leaves_a_line_per_step() {
         let dir = tempfile::tempdir().unwrap();
         let c = gate_rig(dir.path());
-        let (patch, hash) = patch_of(&c, "README.md", "the tool, said again\n");
-        let o = dry_run(&c, &patch, &hash);
+        let patch = patch_of(&c, "tool.txt", "the tool, said again\n");
+        let o = dry_run(&c, &patch);
         assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
         let text = fs::read_to_string(dir.path().join("steps.jsonl")).unwrap();
         let steps: Vec<Value> = text
@@ -2314,17 +1241,16 @@ date +%s > '{times}/just.end'
             .collect();
         for want in [
             "checkout",
-            "tip build",
-            "canary (tip)",
             "apply",
             "hook",
+            "fmt",
             "build",
             "lane check",
             "check/fmt",
+            "check/baseline-mosshop",
             "test compile",
             "tests/rest",
             "tests/a_slow_one",
-            "lane canary",
             "lane tests",
             "lanes",
             "commit",
@@ -2336,6 +1262,9 @@ date +%s > '{times}/just.end'
                 .unwrap_or_else(|| panic!("no {want} in {text}"));
             assert_eq!(s["ok"], true, "{want}");
             assert!(s["secs"].as_f64().is_some() && s["since_start"].as_f64().is_some());
+        }
+        for gone in ["tip build", "tip publish", "lane canary"] {
+            assert!(!steps.iter().any(|s| s["step"] == gone), "{gone} in {text}");
         }
         let fmt = steps.iter().find(|s| s["step"] == "check/fmt").unwrap();
         assert_eq!(fmt["secs"], 0.4);
@@ -2351,13 +1280,13 @@ date +%s > '{times}/just.end'
     }
 
     /// A patch cargo fmt refuses fails at "fmt" before anything is built
-    /// or tested; a tool missing from PATH fails before the tip is scored.
+    /// or tested; a tool missing from PATH fails before the tip is touched.
     #[test]
     fn fmt_and_the_tools_fail_first() {
         let dir = tempfile::tempdir().unwrap();
         let c = gate_rig(dir.path());
-        let (patch, hash) = patch_of(&c, "README.md", "bad format\n");
-        let o = dry_run(&c, &patch, &hash);
+        let patch = patch_of(&c, "tool.txt", "bad format\n");
+        let o = dry_run(&c, &patch);
         assert_eq!(o.json["phase"], "fmt", "{}", o.text);
         assert!(o.text.contains("Diff in src/lib.rs"), "{}", o.text);
         assert!(!tests_target(&c).join("cargo-test-seen").exists());
@@ -2369,8 +1298,8 @@ date +%s > '{times}/just.end'
 
         let mut c = c;
         c.tools = &["just", "no-such-tool-here"];
-        let (patch, hash) = patch_of(&c, "README.md", "the tool, said again\n");
-        let o = dry_run(&c, &patch, &hash);
+        let patch = patch_of(&c, "tool.txt", "the tool, said again\n");
+        let o = dry_run(&c, &patch);
         assert_eq!(o.json["phase"], "preflight", "{}", o.text);
         assert!(
             o.text.contains("needs no-such-tool-here on PATH"),
@@ -2424,440 +1353,98 @@ date +%s > '{times}/just.end'
         );
     }
 
-    fn landing(c: &Cx, patch: &Patch, hash: &str) -> Outcome {
-        let a = ToolGateArgs {
-            patch: patch.diff.clone(),
-            message: None,
-            onto: Some("main".into()),
-            home: None,
-            games: None,
-            dry_run: false,
-        };
-        tries(c, &a, patch, hash).unwrap()
-    }
-
-    fn runs_of(c: &Cx, side: &str) -> usize {
-        stamp(c, "gp-runs")
-            .unwrap_or_default()
-            .lines()
-            .filter(|l| *l == side)
-            .count()
-    }
-
-    /// just check, the tests and the patched canary run at once: each
-    /// lane waits for the other two to start (`ctl/meet`), so run one
-    /// after another the first would wait alone and say so. No clock
-    /// bound: a loaded machine makes them slower, not apart.
+    /// just check and the tests run at once: each lane waits for the other
+    /// to start (`ctl/meet`), so run one after the other the first would
+    /// wait alone and say so. No clock bound: a loaded machine makes them
+    /// slower, not apart.
     #[test]
     fn lanes_run_at_the_same_time() {
         let dir = tempfile::tempdir().unwrap();
         let c = gate_rig(dir.path());
         switch(&c, "meet", "");
-        let (patch, hash) = patch_of(&c, "README.md", "the tool, said again\n");
-        let o = dry_run(&c, &patch, &hash);
+        let patch = patch_of(&c, "tool.txt", "the tool, said again\n");
+        let o = dry_run(&c, &patch);
         assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
-        for n in ["just.start", "test.start", "gp.start", "just.end", "gp.end"] {
+        for n in ["just.start", "test.start", "just.end", "test.end"] {
             assert!(stamp(&c, n).is_some(), "{n}: the lane didn't run through");
         }
-        for n in ["just", "test", "gp"] {
+        for n in ["just", "test"] {
             assert!(
                 stamp(&c, &format!("{n}.alone")).is_none(),
-                "{n} waited 30 s and the other lanes didn't start: they ran one after another"
+                "{n} waited 30 s and the other lane didn't start: they ran one after the other"
             );
         }
     }
 
-    /// A lane that fails stops the others at once: just check fails after
-    /// 0.2 s while the canary would take 10.
+    /// A lane that fails stops the other at once: just check fails after
+    /// 0.2 s while a test run would take 30.
     #[test]
     fn the_first_failing_lane_stops_the_others() {
         let dir = tempfile::tempdir().unwrap();
         let c = gate_rig(dir.path());
         switch(&c, "just-fails", "");
-        switch(&c, "gp-sleep", "30");
-        let (patch, hash) = patch_of(&c, "README.md", "the tool, said again\n");
-        let o = dry_run(&c, &patch, &hash);
+        switch(&c, "test-sleep", "30");
+        let patch = patch_of(&c, "tool.txt", "the tool, said again\n");
+        let o = dry_run(&c, &patch);
         assert_eq!(o.json["verdict"], "FAIL", "{}", o.text);
         assert_eq!(o.json["phase"], "just check", "{}", o.text);
-        // Not stopped, the canary would have slept its 30 s and written
-        // gp.end before the gate ended; no clock bound is needed.
-        assert!(stamp(&c, "gp.end").is_none(), "the canary was stopped");
-        let pid = stamp(&c, "gp.pid").unwrap();
+        // Not stopped, a test run would have slept its 30 s and written
+        // test.end before the gate ended; no clock bound is needed.
+        assert!(stamp(&c, "test.end").is_none(), "the tests were stopped");
+        let pid = stamp(&c, "test.pid").unwrap();
         let alive = Command::new("kill")
             .args(["-0", pid.trim()])
             .status()
             .unwrap()
             .success();
-        assert!(!alive, "the canary's gp {pid} is gone");
+        assert!(!alive, "the test run {pid} is gone");
     }
 
-    /// A canary that fails stops just check.
+    /// A failing test stops just check.
     #[test]
-    fn a_failing_canary_stops_check_early() {
+    fn a_failing_test_stops_check_early() {
         let dir = tempfile::tempdir().unwrap();
         let c = gate_rig(dir.path());
-        switch(&c, "gp-fails", "");
         switch(&c, "just-sleep", "30");
-        let (patch, hash) = patch_of(&c, "README.md", "the tool, said again\n");
-        let o = dry_run(&c, &patch, &hash);
-        assert_eq!(o.json["phase"], "canary", "{}", o.text);
-        assert!(o.text.contains("the kit doesn't match"), "{}", o.text);
+        let patch = patch_of(&c, "tool.txt", "a failing test\n");
+        let o = dry_run(&c, &patch);
+        assert_eq!(o.json["phase"], "tests", "{}", o.text);
         // Not stopped, just check would have slept its 30 s and written
         // just.end before the gate ended.
         assert!(stamp(&c, "just.end").is_none(), "just check was stopped");
     }
 
-    /// gp built again during the check: the canary scored the first build,
-    /// so it scores the build that will be published, again.
+    /// A landing moves the branch to the commit the try made and publishes
+    /// that build as the gp of the commit; a dry run lands and publishes
+    /// nothing.
     #[test]
-    fn the_published_gp_is_the_one_scored() {
+    fn a_landing_lands_and_publishes_the_patched_build() {
         let dir = tempfile::tempdir().unwrap();
         let c = gate_rig(dir.path());
-        switch(&c, "just-rebuilds", "");
-        let (patch, hash) = patch_of(&c, "README.md", "the tool, said again\n");
-        let o = dry_run(&c, &patch, &hash);
-        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
-        assert!(
-            o.text
-                .contains("gp changed during the checks, scored again"),
-            "{}",
-            o.text
-        );
-        assert_eq!(runs_of(&c, "patch"), 2);
-    }
-
-    /// What the newest score home of `side` holds in `what`.
-    fn newest_seen(c: &Cx, side: &str, what: &str) -> String {
-        let home = fs::read_dir(&c.canary_dir)
-            .unwrap()
-            .flatten()
-            .filter(|e| e.file_name().to_string_lossy().starts_with(side))
-            .max_by_key(|e| e.metadata().unwrap().modified().unwrap())
-            .unwrap_or_else(|| panic!("no {side} home"))
-            .path();
-        fs::read_to_string(home.join(what)).unwrap()
-    }
-
-    /// The same patch again after the tip moved in kit-only code: gp's
-    /// bytes are the same, but the patched canary reads the new tree's kit,
-    /// not the kit an earlier score of the patch left in its home.
-    #[test]
-    fn a_score_never_reads_an_older_trees_kit() {
-        let dir = tempfile::tempdir().unwrap();
-        let c = gate_rig(dir.path());
-        let (patch, hash) = patch_of(&c, "README.md", "the tool, said again\n");
-        let o = dry_run(&c, &patch, &hash);
-        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
-        assert_eq!(newest_seen(&c, "patch-", "kit-seen"), "right\n");
-        // The tip moves: only the kit's code changes, so gp is the same.
-        fs::write(c.repo.join("crates/gp-sim/step"), "wrong\n").unwrap();
-        git_in(&c.repo, &["commit", "-qam", "kit-only change"]);
-        let o = dry_run(&c, &patch, &hash);
-        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
-        assert_eq!(
-            newest_seen(&c, "patch-", "kit-seen"),
-            "wrong\n",
-            "the patched canary read the old tree's kit: {}",
-            o.text
-        );
-    }
-
-    /// A check that leaves a file in the tree: what would land isn't what
-    /// the canary scored, so the gate refuses and names the file.
-    #[test]
-    fn a_check_that_changes_the_tree_is_refused() {
-        let dir = tempfile::tempdir().unwrap();
-        let c = gate_rig(dir.path());
-        switch(&c, "just-writes", "");
-        let (patch, hash) = patch_of(&c, "README.md", "the tool, said again\n");
-        let o = dry_run(&c, &patch, &hash);
-        assert_eq!(o.json["verdict"], "FAIL", "{}", o.text);
-        assert_eq!(o.json["phase"], "tree", "{}", o.text);
-        assert!(o.text.contains("crates/gp-sim/gen.rs"), "{}", o.text);
-        assert_eq!(runs_of(&c, "patch"), 1, "nothing is scored again");
-    }
-
-    /// The canary's kit is made before the lanes start: a check that
-    /// writes a kit file and puts it back while the canary runs doesn't
-    /// reach the score.
-    #[test]
-    fn the_kit_is_made_before_the_checks_run() {
-        let dir = tempfile::tempdir().unwrap();
-        let c = gate_rig(dir.path());
-        switch(&c, "just-flips", "");
-        switch(&c, "gp-sleep", "1");
-        let (patch, hash) = patch_of(&c, "README.md", "the tool, said again\n");
-        let o = dry_run(&c, &patch, &hash);
-        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
-        assert_eq!(newest_seen(&c, "patch-", "kit-seen"), "right\n");
-    }
-
-    /// A landing keeps the patched gp's score as the score of the commit it
-    /// landed, so the next gate on that tip doesn't score the tip; and it
-    /// records what it published, so that build is trusted as the tip's.
-    #[test]
-    fn the_tip_score_is_kept_for_the_next_tip() {
-        let dir = tempfile::tempdir().unwrap();
-        let c = gate_rig(dir.path());
-        let (patch, hash) = patch_of(&c, "README.md", "the tool, said again\n");
-        let o = landing(&c, &patch, &hash);
-        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
-        assert_eq!((runs_of(&c, "tip"), runs_of(&c, "patch")), (1, 1));
-        let (patch, hash) = patch_of(&c, "README.md", "the tool, once more\n");
-        let o = dry_run(&c, &patch, &hash);
-        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
-        assert!(o.text.contains("using its published build"), "{}", o.text);
-        assert!(
-            o.text.contains("canary: the tip's score is kept"),
-            "{}",
-            o.text
-        );
-        assert_eq!(
-            (runs_of(&c, "tip"), runs_of(&c, "patch")),
-            (1, 2),
-            "the second gate scored only its patch"
-        );
-        // Verify mode scores the tip anyway and finds the kept score right.
-        let (patch, hash) = patch_of(&c, "README.md", "the tool, a third time\n");
-        let o = tries_verifying(&c, &patch, &hash);
-        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
-        assert!(
-            o.text.contains("canary: the kept score of the tip agrees"),
-            "{}",
-            o.text
-        );
-        assert_eq!(runs_of(&c, "tip"), 2);
-    }
-
-    /// A landing starts the hooked games' module builds with the new gp,
-    /// and only those games'.
-    #[test]
-    fn a_landing_builds_the_hooked_games_modules() {
-        let dir = tempfile::tempdir().unwrap();
-        let c = gate_rig(dir.path());
-        for (g, hooks) in [("dk", true), ("plain", false)] {
-            let d = c.games_repo.join(g);
-            fs::create_dir_all(&d).unwrap();
-            let extra = if hooks {
-                "\n[hooks]\nstep = \"ext\"\n"
-            } else {
-                ""
-            };
-            fs::write(
-                d.join("package.toml"),
-                format!("[package]\nname = \"{g}\"\n{extra}"),
-            )
-            .unwrap();
-        }
-        assert_eq!(hooked_games(&c.games_repo), [c.games_repo.join("dk")]);
-        let (patch, hash) = patch_of(&c, "README.md", "the tool, said again\n");
-        let o = landing(&c, &patch, &hash);
-        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
-        assert!(
-            o.text.contains("building the modules of 1 hooked games"),
-            "{}",
-            o.text
-        );
-        let end = std::time::Instant::now() + Duration::from_secs(10);
-        while stamp(&c, "warm").is_none() && std::time::Instant::now() < end {
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        let warm = stamp(&c, "warm").unwrap();
-        assert_eq!(
-            warm.trim(),
-            format!("game build {}", c.games_repo.join("dk").display())
-        );
-    }
-
-    fn tries_verifying(c: &Cx, patch: &Patch, hash: &str) -> Outcome {
-        let a = ToolGateArgs {
-            patch: patch.diff.clone(),
-            message: None,
-            onto: Some("main".into()),
-            home: None,
-            games: None,
-            dry_run: true,
-        };
-        VERIFY_IN_TEST.with(|v| v.set(true));
-        let o = tries(c, &a, patch, hash).unwrap();
-        VERIFY_IN_TEST.with(|v| v.set(false));
-        o
-    }
-
-    /// A gp in the published folder that the gate didn't publish (a `just
-    /// publish` from someone's checkout) isn't scored as the tip: the gate
-    /// builds the tip itself, and leaves that file alone.
-    #[test]
-    fn a_tip_build_the_gate_didnt_publish_is_built_again() {
-        let dir = tempfile::tempdir().unwrap();
-        let c = gate_rig(dir.path());
+        let patch = patch_of(&c, "tool.txt", "the tool, said again\n");
         let tip = git(&c.repo, &["rev-parse", "main"]).unwrap();
-        let hand = c.home.join("bin").join(format!("gp-{}", &tip[..12]));
-        script(&hand, "#!/bin/sh\nexit 7\n");
-        let (patch, hash) = patch_of(&c, "README.md", "the tool, said again\n");
-        let o = dry_run(&c, &patch, &hash);
+        let o = dry_run(&c, &patch);
         assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
+        assert_eq!(git(&c.repo, &["rev-parse", "main"]).unwrap(), tip);
         assert!(
-            o.text.contains("isn't one the gate published"),
+            !c.home.join("bin/gp").exists(),
+            "a dry run publishes nothing"
+        );
+
+        let o = gate(&c, &patch, false);
+        assert_eq!(o.json["verdict"], "PASS", "{}", o.text);
+        let commit = o.json["commit"].as_str().unwrap();
+        assert_eq!(git(&c.repo, &["rev-parse", "main"]).unwrap(), commit);
+        let published = c.home.join("bin").join(format!("gp-{}", &commit[..12]));
+        assert_eq!(
+            fs::read(&published).unwrap(),
+            fs::read(built_gp(&c)).unwrap()
+        );
+        assert!(
+            o.text.contains(&format!("PASS: landed {commit} on main")),
             "{}",
             o.text
         );
-        assert_eq!(fs::read_to_string(&hand).unwrap(), "#!/bin/sh\nexit 7\n");
-    }
-
-    /// The kept score's key changes with each thing a score depends on.
-    #[test]
-    fn the_canary_key_covers_each_part() {
-        let parts = KeyParts {
-            gp: "g".into(),
-            tree: "t".into(),
-            games: "m".into(),
-            rom: "r".into(),
-            toolchain: "rustc 1".into(),
-            env: vec![("PATH".into(), "/bin".into())],
-            args: "--json model gate".into(),
-        };
-        let k = canary_key(&parts);
-        assert_eq!(k, canary_key(&parts.clone()));
-        assert_eq!(k.len(), 24);
-        let changed: Vec<KeyParts> = vec![
-            KeyParts {
-                gp: "g2".into(),
-                ..parts.clone()
-            },
-            KeyParts {
-                tree: "t2".into(),
-                ..parts.clone()
-            },
-            KeyParts {
-                games: "m2".into(),
-                ..parts.clone()
-            },
-            KeyParts {
-                rom: "r2".into(),
-                ..parts.clone()
-            },
-            KeyParts {
-                toolchain: "rustc 2".into(),
-                ..parts.clone()
-            },
-            KeyParts {
-                env: vec![("PATH".into(), "/usr/bin".into())],
-                ..parts.clone()
-            },
-            KeyParts {
-                args: "--json model gate x".into(),
-                ..parts.clone()
-            },
-        ];
-        for p in changed {
-            assert_ne!(canary_key(&p), k);
-        }
-        // Parts don't run together: "ab" + "c" isn't "a" + "bc".
-        let a = KeyParts {
-            gp: "ab".into(),
-            tree: "c".into(),
-            ..parts.clone()
-        };
-        let b = KeyParts {
-            gp: "a".into(),
-            tree: "bc".into(),
-            ..parts.clone()
-        };
-        assert_ne!(canary_key(&a), canary_key(&b));
-    }
-
-    /// The tree's state is its index's tree with what differs from it: a
-    /// file changed, added or ignored under crates/ is in it, target/ isn't.
-    #[test]
-    fn the_tree_state_sees_changed_and_ignored_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let t = dir.path();
-        git_in(t, &["init", "-q"]);
-        fs::create_dir_all(t.join("crates/a/target")).unwrap();
-        fs::write(t.join("crates/a/lib.rs"), "1").unwrap();
-        fs::write(t.join(".gitignore"), "*.gen\n").unwrap();
-        git_in(t, &["add", "-A"]);
-        let s0 = tree_state(t).unwrap();
-        fs::write(t.join("crates/a/target/out"), "x").unwrap();
-        assert_eq!(tree_state(t).unwrap(), s0, "target/ isn't the tree's");
-        fs::write(t.join("crates/a/x.gen"), "x").unwrap();
-        let s1 = tree_state(t).unwrap();
-        assert_ne!(s1, s0, "an ignored file under crates/ counts");
-        fs::write(t.join("crates/a/x.gen"), "y").unwrap();
-        assert_ne!(tree_state(t).unwrap(), s1, "and its bytes");
-        fs::write(t.join("crates/a/lib.rs"), "2").unwrap();
-        assert_ne!(
-            tree_state(t).unwrap(),
-            s1,
-            "a change not in the index counts"
-        );
-    }
-
-    /// A source folder named target inside a crate is copied into the kit
-    /// (module.rs, `walk`), so it is in the tree's state; a crate's own
-    /// target/ isn't.
-    #[test]
-    fn a_source_folder_named_target_is_in_the_tree_state() {
-        let dir = tempfile::tempdir().unwrap();
-        let t = dir.path();
-        git_in(t, &["init", "-q"]);
-        fs::create_dir_all(t.join("crates/a/src/target")).unwrap();
-        fs::create_dir_all(t.join("crates/a/target")).unwrap();
-        fs::write(t.join("crates/a/Cargo.toml"), "[package]\n").unwrap();
-        git_in(t, &["add", "-A"]);
-        let s0 = tree_state(t).unwrap();
-        fs::write(t.join("crates/a/target/out"), "x").unwrap();
-        assert_eq!(tree_state(t).unwrap(), s0, "a crate's build output");
-        fs::write(t.join("crates/a/src/target/mod.rs"), "x").unwrap();
-        assert_ne!(tree_state(t).unwrap(), s0, "source under src/target");
-    }
-
-    /// The games tree's state holds the bytes of the files git ignores
-    /// there, not only their names.
-    #[test]
-    fn the_games_state_sees_an_ignored_files_bytes() {
-        let dir = tempfile::tempdir().unwrap();
-        let g = dir.path();
-        git_in(g, &["init", "-q"]);
-        fs::write(g.join(".gitignore"), "*.gen\n").unwrap();
-        git_in(g, &["add", "-A"]);
-        git_in(
-            g,
-            &[
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@t",
-                "commit",
-                "-qm",
-                "g",
-            ],
-        );
-        fs::write(g.join("x.gen"), "1").unwrap();
-        let s1 = games_state(g).unwrap();
-        fs::write(g.join("x.gen"), "2").unwrap();
-        assert_ne!(games_state(g).unwrap(), s1);
-    }
-
-    /// `rustc -vV` for the key runs with the score's environment alone, as
-    /// the score does: a variable of the gate's (cargo test sets
-    /// CARGO_MANIFEST_DIR) doesn't reach it. The cargo settings in
-    /// CARGO_HOME are in the key.
-    #[test]
-    fn the_toolchain_part_is_read_as_the_score_reads_it() {
-        assert!(std::env::var_os("CARGO_MANIFEST_DIR").is_some());
-        let o = kept_env(&mut Command::new("env")).output().unwrap();
-        let env = String::from_utf8_lossy(&o.stdout);
-        assert!(!env.contains("CARGO_MANIFEST_DIR="), "{env}");
-        let dir = tempfile::tempdir().unwrap();
-        let none = cargo_config(dir.path());
-        fs::write(
-            dir.path().join("config.toml"),
-            "[build]\nrustflags = [\"-g\"]\n",
-        )
-        .unwrap();
-        assert_ne!(cargo_config(dir.path()), none);
     }
 
     /// A slow test is the `fn` above its switch line; a mention of the
@@ -2882,37 +1469,5 @@ date +%s > '{times}/just.end'
             ]
         );
         assert_eq!(test_runs(&[]), [("rest".to_owned(), vec![])]);
-    }
-
-    #[test]
-    fn the_canary_says_which_clips_ran_again_and_a_second_failure_still_fails() {
-        let row = |id: &str| json!({"id": id, "frames": 10, "frames_together": 10});
-        let base = json!({"clips": [row("a"), row("b")]});
-        let held = json!({"clips": [row("a"), row("b")],
-            "reran": [{"id": "b", "first": "past its deadline", "ok": true}]});
-        let line = compare(&base, &held).unwrap();
-        assert_eq!(
-            line,
-            "canary: 2 clips of donkey-kong held through the patched gp\n\
-             canary, the patched gp: 1 clips couldn't be made or scored at first and were run once more:\n  \
-             b: made and scored the second time (the first try: past its deadline)"
-        );
-        let failed = json!({"clips": [row("a"), {"id": "b", "error": "past its deadline again"}],
-            "reran": [{"id": "b", "first": "past its deadline", "ok": false, "error": "past its deadline again"}]});
-        let why = compare(&base, &failed).unwrap_err();
-        assert!(
-            why.starts_with("b: scored before, now can't be: past its deadline again\n"),
-            "{why}"
-        );
-        assert!(
-            why.ends_with(
-                "b: failed again: past its deadline again (the first try: past its deadline)"
-            ),
-            "{why}"
-        );
-        assert_eq!(
-            compare(&base, &base).unwrap(),
-            "canary: 2 clips of donkey-kong held through the patched gp"
-        );
     }
 }

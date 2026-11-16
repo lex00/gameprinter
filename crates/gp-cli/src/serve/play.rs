@@ -8,6 +8,7 @@
 //! |---|---|
 //! | `GET /api/play/gp_play.wasm` | The NES player module |
 //! | `GET /api/play/gp_arcade_play.wasm` | The arcade board's player module |
+//! | `GET /api/play/roms.toml` | The arcade sets gp knows, as roms.toml chip rows, which the board's player takes first (`gp_sets_load`) |
 //!
 //! game-printer's recorded play sessions (`/api/play/sessions`, which
 //! record into the store) are not here yet.
@@ -28,6 +29,11 @@ pub(super) fn routes() -> Vec<Route> {
             path: "/api/play/gp_arcade_play.wasm",
             about: "The arcade board's live player module (gp_arcade_play.wasm)",
             handler: arcade_wasm,
+        },
+        Route {
+            path: "/api/play/roms.toml",
+            about: "The arcade sets gp knows, as roms.toml chip rows, for the board's player (gp_sets_load)",
+            handler: sets,
         },
     ]
 }
@@ -67,4 +73,11 @@ fn arcade_wasm(ctx: &Ctx, _req: &Request, _params: &Params) -> Result<Response, 
         "gp_arcade_play.wasm",
         "scripts/web/build-play.sh --arcade (just play-web-arcade)",
     )
+}
+
+fn sets(_ctx: &Ctx, _req: &Request, _params: &Params) -> Result<Response, Fail> {
+    Ok(Response::bytes(
+        "text/plain; charset=utf-8",
+        gp_arcade::romset::known_roms_toml().into_bytes(),
+    ))
 }

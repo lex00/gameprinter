@@ -1,14 +1,17 @@
-//! The MAME captures the repo names (oracle/mame-captures.toml), and `gp
-//! oracle golden` and `gp oracle check` on arcade against them.
+//! The MAME captures a game names (GAME/oracle/mame-captures.toml in the
+//! games checkout), and `gp oracle golden` and `gp oracle check` on arcade
+//! against them.
 //!
 //! A capture is derived from the ROM, so it lives on each machine under
 //! `$GP_HOME/work/oracle/NAME` (where `just mame-record` and `gp oracle
 //! record` put them, and `just check-all`'s MAME match reads them), never
-//! in a repo. The repo's file holds only how to make each one again (the
+//! in a repo. The game's file holds only how to make each one again (the
 //! MAME version, the romset's MAME name and the input log, with its hash)
 //! and the hash the capture must have, so a missing capture is named with
 //! the command that makes it, and one that isn't the capture named is
-//! refused. docs/oracle-mame.md, "Captures the repo names".
+//! refused. The tool knows no game by name, so it holds no captures file of
+//! its own: `--against NAME` looks in every game's. docs/oracle-mame.md,
+//! "Captures the repo names".
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -27,7 +30,7 @@ use crate::Outcome;
 use crate::open::now_rfc3339;
 use crate::oracle_mame::MAME_VERSION;
 
-/// The file, from the checkout's root.
+/// The file, from a game's folder.
 pub(crate) const FILE: &str = "oracle/mame-captures.toml";
 
 /// The files a capture's hash covers, in this order, those it has: what
@@ -41,11 +44,25 @@ pub(crate) struct Captures {
     pub schema: u32,
     #[serde(default, rename = "capture")]
     pub captures: Vec<Entry>,
-    /// Where the file is: input paths are from its checkout's root.
+    /// The captures the arcade tests replay against the board
+    /// (gp_arcade::romset::test_replays): each by its folder's name and
+    /// its input log. Made once and kept on this machine, with no hash.
+    #[serde(default, rename = "replay")]
+    pub replays: Vec<Replay>,
+    /// Where the file is: input paths are from its game's folder.
     #[serde(skip)]
     pub root: PathBuf,
     #[serde(skip)]
     pub path: PathBuf,
+}
+
+/// A capture the arcade tests replay: its folder's name and input log.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Replay {
+    pub name: String,
+    /// The input log, from the game's folder.
+    pub input: String,
 }
 
 /// One capture: its folder's name, how to make it again, and its hash.
@@ -53,11 +70,11 @@ pub(crate) struct Captures {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Entry {
     pub name: String,
-    /// MAME's name for the romset (`rbtapper`, `tapper`).
+    /// MAME's name for the romset (roms.toml's `system`).
     pub system: String,
     /// The MAME version that made it (the image `just mame-build` makes).
     pub mame: String,
-    /// The input log, from the checkout's root.
+    /// The input log, from the game's folder.
     pub input: String,
     pub input_sha256: String,
     pub frames: u64,
@@ -89,24 +106,71 @@ impl Captures {
             .map(Path::to_path_buf)
             .unwrap_or_default();
         c.path = abs;
+        // A capture the tests replay must name an input log the game has.
+        for r in &c.replays {
+            if !c.root.join(&r.input).is_file() {
+                bail!(
+                    "{}: [[replay]] {}'s input {} isn't in the game's folder",
+                    path.display(),
+                    r.name,
+                    r.input
+                );
+            }
+        }
         Ok(c)
     }
 
-    /// The checkout's file: the nearest oracle/mame-captures.toml in the
-    /// current directory or above it.
-    pub(crate) fn find() -> Result<Captures> {
-        let cwd = std::env::current_dir()?;
-        let path = cwd
-            .ancestors()
-            .map(|d| d.join(FILE))
-            .find(|p| p.is_file())
-            .with_context(|| {
-                format!(
-                    "no {FILE} in {} or above it: run gp from the gameprinter checkout",
-                    cwd.display()
-                )
-            })?;
-        Captures::load(&path)
+    /// Every captures file there is: the one in the current folder or
+    /// above it (a game's folder), then each game's of the games checkout
+    /// ([`crate::roms_cmd::games_dir`]).
+    pub(crate) fn files() -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = Vec::new();
+        if let Ok(cwd) = std::env::current_dir()
+            && let Some(p) = cwd.ancestors().map(|d| d.join(FILE)).find(|p| p.is_file())
+        {
+            out.push(p);
+        }
+        if let Some(games) = crate::roms_cmd::games_dir(None) {
+            let mut found: Vec<PathBuf> = fs::read_dir(&games)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path().join(FILE))
+                .filter(|p| p.is_file())
+                .collect();
+            found.sort();
+            out.extend(found);
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        out.retain(|p| seen.insert(fs::canonicalize(p).unwrap_or_else(|_| p.clone())));
+        out
+    }
+
+    /// The captures file that names capture `name`, among [`Captures::files`].
+    pub(crate) fn find(name: &str) -> Result<Captures> {
+        let files = Captures::files();
+        if files.is_empty() {
+            bail!(
+                "no game names a MAME capture: no {FILE} in a game's folder of the games checkout ($GP_GAMES_DIR, else a games folder beside the working folder), or in the current folder or above it"
+            );
+        }
+        let mut names = Vec::new();
+        for f in &files {
+            let c = Captures::load(f)?;
+            if c.named(name).is_some() {
+                return Ok(c);
+            }
+            names.extend(c.captures.iter().map(|e| e.name.clone()));
+        }
+        bail!(
+            "{name} isn't a capture a game names; {} name {}. A capture is held to only once a game names it with its hash",
+            files
+                .iter()
+                .map(|f| f.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            names.join(", ")
+        )
     }
 
     pub(crate) fn named(&self, name: &str) -> Option<&Entry> {
@@ -184,9 +248,8 @@ pub(crate) fn how_to_make(c: &Captures, e: &Entry, zip: Option<&Path>, paths: &P
         )
     };
     format!(
-        "make it from {}: {image}, then `just mame-record {zip} {} {} 0` ({} frames), which writes {} with SHA-256 {} ({})",
-        c.root.display(),
-        e.input,
+        "make it from a gameprinter checkout: {image}, then `just mame-record {zip} {} {} 0` ({} frames), which writes {} with SHA-256 {} ({})",
+        c.root.join(&e.input).display(),
         e.name,
         e.frames,
         dir_of(e, paths).display(),
@@ -237,18 +300,10 @@ pub(crate) fn golden(
     rom: Option<&Path>,
     paths: &Paths,
 ) -> Result<Outcome> {
-    let c = Captures::find()?;
-    let e = c.named(against).with_context(|| {
-        format!(
-            "{against} isn't a capture {} names; it names {}. A capture is held to only once the repo names it with its hash",
-            c.path.display(),
-            c.captures
-                .iter()
-                .map(|e| e.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    })?;
+    let c = Captures::find(against)?;
+    let e = c
+        .named(against)
+        .context("the captures file lost the capture it was found by")?;
     let SourceRef::Romset { system, .. } = &manifest.source else {
         bail!("not an arcade recording");
     };
@@ -439,32 +494,77 @@ mod tests {
         assert_ne!(capture_hash(d.path()).unwrap(), want);
     }
 
+    /// A made-up game folder with a captures file naming one capture of a
+    /// made-up set, and the input log it names.
+    fn made_up_game() -> (tempfile::TempDir, PathBuf) {
+        let d = tempfile::tempdir().unwrap();
+        let game = d.path().join("made-up");
+        fs::create_dir_all(game.join("oracle")).unwrap();
+        fs::create_dir_all(game.join("inputs/oracle")).unwrap();
+        let log = "gp-arcade-input 0\nsystem madeup\ncolumns CSRLDUT\n2 .......\n1 C......\n";
+        fs::write(game.join("inputs/oracle/first.input"), log).unwrap();
+        let file = game.join(FILE);
+        fs::write(
+            &file,
+            format!(
+                "schema = 0\n\n[[capture]]\nname = \"made-up-first\"\nsystem = \"madeup\"\nmame = \"{MAME_VERSION}\"\ninput = \"inputs/oracle/first.input\"\ninput_sha256 = \"{}\"\nframes = 3\nsha256 = \"{}\"\n",
+                hex(&sha2::Sha256::digest(log.as_bytes())),
+                "0".repeat(64)
+            ),
+        )
+        .unwrap();
+        (d, file)
+    }
+
+    /// A game's captures file reads, and its inputs are from the game's
+    /// folder, checked by their hash.
     #[test]
-    fn the_repo_file_reads_and_names_its_inputs() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join(FILE);
+    fn a_games_file_reads_and_names_its_inputs() {
+        let (_d, path) = made_up_game();
         assert!(Captures::is_one(&path));
         let c = Captures::load(&path).unwrap();
-        assert!(!c.captures.is_empty());
-        for e in &c.captures {
-            assert!(gp_arcade::romset::set(&e.system).is_some(), "{}", e.system);
-            assert_eq!(e.mame, MAME_VERSION, "{}", e.name);
-            assert_eq!(e.sha256.len(), 64);
-            let log = OracleLog::parse(&c.input(e).unwrap()).unwrap();
-            assert_eq!(log.system, e.system, "{}", e.name);
-        }
+        assert_eq!(c.root, path.parent().unwrap().parent().unwrap());
+        let e = c.named("made-up-first").unwrap();
+        let log = OracleLog::parse(&c.input(e).unwrap()).unwrap();
+        assert_eq!(log.system, "madeup");
+        fs::write(c.root.join(&e.input), "gp-arcade-input 0\n").unwrap();
+        let err = c.input(e).unwrap_err().to_string();
+        assert!(err.contains("the input changed"), "{err}");
         let baseline =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../baselines/gp-testrom/buttons.toml");
         assert!(!Captures::is_one(&baseline));
     }
 
+    /// Each captures file of the games checkout ($GP_GAMES_DIR), when there
+    /// is one: every entry's set is one gp-arcade runs, made by this
+    /// checkout's MAME, and its input log is there with its hash and names
+    /// the set. Skips without the checkout.
+    #[test]
+    fn the_games_files_name_their_inputs() {
+        let Some(games) = std::env::var_os("GP_GAMES_DIR").map(PathBuf::from) else {
+            eprintln!("skipped: no GP_GAMES_DIR");
+            return;
+        };
+        for g in fs::read_dir(&games).into_iter().flatten().flatten() {
+            let path = g.path().join(FILE);
+            if !path.is_file() {
+                continue;
+            }
+            let c = Captures::load(&path).unwrap();
+            for e in &c.captures {
+                assert!(gp_arcade::romset::set(&e.system).is_some(), "{}", e.system);
+                assert_eq!(e.mame, MAME_VERSION, "{}", e.name);
+                assert_eq!(e.sha256.len(), 64);
+                let log = OracleLog::parse(&c.input(e).unwrap()).unwrap();
+                assert_eq!(log.system, e.system, "{}", e.name);
+            }
+        }
+    }
+
     /// A missing capture is named with the command that makes it.
     #[test]
     fn a_missing_capture_says_how_to_make_it() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join(FILE);
+        let (_d, path) = made_up_game();
         let c = Captures::load(&path).unwrap();
         let home = tempfile::tempdir().unwrap();
         let paths = Paths::resolve(Some(home.path().to_path_buf()), None, None).unwrap();

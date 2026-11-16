@@ -42,7 +42,7 @@ pub struct Moment {
     pub kind: &'static str,
     /// Its number among the run's moments of its kind, from 1.
     pub n: usize,
-    /// What it happened to: `entities.mario[0]`, `counters.coins`,
+    /// What it happened to: `entities.hero[0]`, `counters.coins`,
     /// `level`, or empty for a model event that names no part.
     pub part: String,
     /// The original's frames it spans, both included: a jump's takeoff
@@ -72,8 +72,8 @@ fn flag(v: &Value) -> Option<bool> {
     }
 }
 
-/// An entity path's part and field: `entities.mario[0].vy` is
-/// (`entities.mario[0]`, `vy`).
+/// An entity path's part and field: `entities.hero[0].vy` is
+/// (`entities.hero[0]`, `vy`).
 fn entity_field(path: &str) -> Option<(&str, &str)> {
     let (part, field) = path.rsplit_once('.')?;
     part.starts_with("entities.").then_some((part, field))

@@ -33,10 +33,10 @@ town_hall = "layout"
 
 # Mechanics taken from other templates (docs/originals.md, "Provenance").
 [[inspired_by]]
-template = "smb1-ntsc-prg0"
-took = ["entities.mario.run", "entities.mario.jump", "entities.paratroopa_green.hop", "entities.piranha_plant.path", "entities.bullet_bill.fly"]
+template = "platformer"
+took = ["entities.player.run", "entities.player.jump", "entities.hopper.hop", "entities.plant.path", "entities.bullet.fly"]
 into = ["entities.candidate.run", "entities.candidate.jump", "entities.heckler.hop", "entities.pundit.path", "entities.attack_ad.fly"]
-note = "Taken whole; the candidate moves as Mario does, so no speed is converted. The bullet is aimed at the player"
+note = "Taken whole; the candidate moves as that game's player does, so no speed is converted. The bullet is aimed at the player"
 
 [[inspired_by]]
 template = "mosshop"

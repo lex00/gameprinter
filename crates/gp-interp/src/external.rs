@@ -1,7 +1,7 @@
 //! External runtimes (docs/interpreter.md, "External runtimes"): another
 //! program that can't load the original's state, but can start at a level
 //! start the way a player does and log a trace of what happens, one line a
-//! frame. Super Mario Bros. Remastered, run under Godot with our probe
+//! frame. A remastered PC port of an NES platformer, run under Godot with our probe
 //! (scripts/remastered/, docs/remastered.md), is the first.
 //!
 //! | Part | What |
@@ -121,7 +121,7 @@ impl Trace {
 /// How one model path is read from a trace's column.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MapField {
-    /// The model path: `entities.mario[0].x`.
+    /// The model path: `entities.hero[0].x`.
     pub path: String,
     /// The trace's column.
     pub column: String,
@@ -436,28 +436,28 @@ game = "smb1r"
 model = "smb1"
 
 [[field]]
-path = "entities.mario[0].x"
+path = "entities.hero[0].x"
 column = "x"
 offset = 248
 
 [[field]]
-path = "entities.mario[0].vx"
+path = "entities.hero[0].vx"
 column = "vx"
 scale = 0.016666666666666666
 
 [[field]]
-path = "entities.mario[0].y"
+path = "entities.hero[0].y"
 column = "y"
 offset = 176
 round = true
 
 [[field]]
-path = "entities.mario[0].on_ground"
+path = "entities.hero[0].on_ground"
 column = "ground"
 flag = true
 
 [[field]]
-path = "entities.mario[0].facing"
+path = "entities.hero[0].facing"
 column = "facing"
 values = { "1" = "right", "-1" = "left" }
 "#;
@@ -548,7 +548,7 @@ values = { "1" = "right", "-1" = "left" }
         let m = TraceMap::parse(MAP).unwrap();
         let mut r = TraceRuntime::new(&t, &m, "w1_1").unwrap();
         assert_eq!(r.frame(), 0);
-        let x = |r: &TraceRuntime| r.query("entities.mario[0].x").unwrap()[0].value.clone();
+        let x = |r: &TraceRuntime| r.query("entities.hero[0].x").unwrap()[0].value.clone();
         assert_eq!(x(&r), Value::Fixed(40 << 16));
         r.step(&[frame(u32::from(button::RIGHT))]).unwrap();
         assert_eq!(x(&r), Value::Fixed(fixed(40.1)));

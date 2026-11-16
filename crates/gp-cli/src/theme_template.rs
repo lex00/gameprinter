@@ -163,6 +163,15 @@ pub(crate) fn games_root() -> Option<PathBuf> {
     crate::roms_cmd::games_dir(None)
 }
 
+/// The game a games checkout's page.toml names (`game = "FOLDER"`): the
+/// public page's game, which the tools use where they need one game of
+/// the checkout and are given none.
+pub(crate) fn page_game(games: &Path) -> Option<String> {
+    let text = fs::read_to_string(games.join("page.toml")).ok()?;
+    let t: toml::Table = text.parse().ok()?;
+    t.get("game")?.as_str().map(str::to_owned)
+}
+
 /// The template folders in a folder (each holding template.toml).
 fn templates_in(dir: &Path) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = fs::read_dir(dir)
@@ -186,7 +195,7 @@ pub(crate) fn game_dirs() -> Vec<PathBuf> {
 
 /// A game folder named by a template id or a game: `GAME` in the games
 /// checkout, else the game folder whose template.toml has that id
-/// (`donkey-kong-oe` is `games/donkey-kong`). game-printer's was
+/// (`rooftop-oe` is `games/rooftop`). game-printer's was
 /// `templates/ID` in its repo.
 pub(crate) fn find_game(name: &str) -> Option<PathBuf> {
     let roots = [
@@ -205,14 +214,26 @@ pub(crate) fn find_game(name: &str) -> Option<PathBuf> {
 }
 
 /// The games checkout for tests: `$GP_GAMES_DIR`, else `games` beside the
-/// gameprinter checkout. None (and the test passes over it) without one.
+/// gameprinter checkout, when it holds a game folder. None (and the test
+/// passes over it) without one.
 #[cfg(test)]
 pub(crate) fn test_games() -> Option<PathBuf> {
     let d = std::env::var_os("GP_GAMES_DIR")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../games"));
-    d.join("donkey-kong/template.toml").is_file().then_some(d)
+    (!templates_in(&d).is_empty()).then_some(d)
+}
+
+/// The games checkout's page game for tests ([`page_game`]), else its
+/// first game folder. None (and the test passes over it) without one.
+#[cfg(test)]
+pub(crate) fn test_page_game() -> Option<PathBuf> {
+    let games = test_games()?;
+    match page_game(&games) {
+        Some(g) => Some(games.join(g)).filter(|d| d.join("template.toml").is_file()),
+        None => templates_in(&games).into_iter().next(),
+    }
 }
 
 /// The games checkout's game folders and gameprinter's own templates, for
@@ -228,7 +249,7 @@ pub(crate) fn test_game_dirs() -> Vec<PathBuf> {
 
 /// gameprinter's own templates only (Moss Hop), for the tests that hold a
 /// kit to its model: the games checkout's kits are its own data, checked
-/// there (its Donkey Kong kit is older than its model: `gp theme kit`
+/// there (one game's kit there is older than its model: `gp theme kit`
 /// refuses it with game-printer's binary too).
 #[cfg(test)]
 pub(crate) fn test_own_templates() -> Vec<PathBuf> {

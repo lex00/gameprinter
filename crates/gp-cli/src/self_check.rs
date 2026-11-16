@@ -116,12 +116,13 @@ fn writable(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// The command that fetches Donkey Kong from the public registry into
-/// games/donkey-kong, lifting from the ROMs in `roms`: the newest version
-/// the registry's index lists, so it needs no version or id.
+/// The command that fetches a game from the public registry into
+/// games/GAME, lifting from the ROMs in `roms`: the newest version the
+/// registry's index lists, so it needs no version or id. OWNER/GAME is
+/// the game's name in the registry, which the person fills in.
 fn fetch_hint(roms: &Path) -> String {
     format!(
-        "gp game fetch lex00/donkey-kong --from https://raw.githubusercontent.com/lex00/gp-registry/main --into games/donkey-kong --rom-dir {}",
+        "gp game fetch OWNER/GAME --from https://raw.githubusercontent.com/lex00/gp-registry/main --into games/GAME --rom-dir {}",
         roms.display()
     )
 }
@@ -224,7 +225,7 @@ fn checks(paths: &Paths) -> Vec<Item> {
             || "none here (no GP_GAMES_DIR, and no folder of games at or above this one)".into(),
             |g| g.display().to_string(),
         ),
-        for_what: "naming a game by its name (--game donkey-kong) and gp serve; without one, give a game's folder, which gp game fetch makes",
+        for_what: "naming a game by its name (--game GAME) and gp serve; without one, give a game's folder, which gp game fetch makes",
         fix: format!(
             "{}, then set GP_GAMES_DIR to that games folder",
             fetch_hint(&paths.roms)

@@ -2,7 +2,7 @@
 schema = "0.4.0"
 name = "badge_in"
 title = "Badge In"
-description = "An original: the return-to-office mandate as a platformer. Badge in at the far end of each floor before the clock runs out, past middle managers, a printer that jams and reply-all chains. Its mechanics are composed from Moss Hop's player and Super Mario Bros.' walkers, shells and bullets, scaled to the player's walking speed (docs/originals.md)"
+description = "An original: the return-to-office mandate as a platformer. Badge in at the far end of each floor before the clock runs out, past middle managers, a printer that jams and reply-all chains. Its mechanics are composed from Moss Hop's player and a platformer template's walkers, shells and bullets (template.toml's inspired_by), scaled to the player's walking speed (docs/originals.md)"
 source = "badge-in"
 view = "side"
 frame_rate = "60"
@@ -514,18 +514,18 @@ at = "inspired-by:mosshop"
 [evidence."entities.middle_manager.fall"]
 source = "stated"
 confidence = 100
-note = "Super Mario Bros.' enemy gravity and fall cap (entities.goomba.fall), without move_first"
+note = "The source platformer's enemy gravity and fall cap (its walker's fall, template.toml's inspired_by), without move_first"
 
 [[evidence."entities.middle_manager.fall".refs]]
-at = "inspired-by:smb1-ntsc-prg0"
+at = "inspired-by:platformer"
 
 [evidence."entities.middle_manager.walk"]
 source = "stated"
 confidence = 100
-note = "Super Mario Bros.' goomba walks at 0.5 against Mario's walk of 1.5 (templates/smb1-ntsc-prg0/model.toml, entities.goomba.walk). The ratio, 1/3, is kept against the associate's walk of 1 and rounded to 1/65536"
+note = "The source platformer's walker walks at 0.5 against its player's walk of 1.5 (the platformer template's `entities.walker.walk`, template.toml's inspired_by). The ratio, 1/3, is kept against the associate's walk of 1 and rounded to 1/65536"
 
 [[evidence."entities.middle_manager.walk".refs]]
-at = "inspired-by:smb1-ntsc-prg0"
+at = "inspired-by:platformer"
 
 [evidence."entities.printer.fall"]
 source = "stated"
@@ -533,15 +533,15 @@ confidence = 100
 note = "As the middle manager's"
 
 [[evidence."entities.printer.fall".refs]]
-at = "inspired-by:smb1-ntsc-prg0"
+at = "inspired-by:platformer"
 
 [evidence."entities.printer.machine"]
 source = "stated"
 confidence = 100
-note = "Super Mario Bros.' shell (entities.koopa_green.machine): stomped it stops, a touch kicks it, it slides and is stomped still again, and after 336 frames it walks. The slide is 2, twice the associate's walk, as 3 is twice Mario's"
+note = "The source platformer's shelled enemy (its machine, template.toml's inspired_by): stomped it stops, a touch kicks it, it slides and is stomped still again, and after 336 frames it walks. The slide is 2, twice the associate's walk, as 3 is twice that player's"
 
 [[evidence."entities.printer.machine".refs]]
-at = "inspired-by:smb1-ntsc-prg0"
+at = "inspired-by:platformer"
 
 [evidence."entities.printer.walk"]
 source = "stated"
@@ -549,15 +549,15 @@ confidence = 100
 note = "As the middle manager's"
 
 [[evidence."entities.printer.walk".refs]]
-at = "inspired-by:smb1-ntsc-prg0"
+at = "inspired-by:platformer"
 
 [evidence."entities.reply_all.fly"]
 source = "stated"
 confidence = 100
-note = "Super Mario Bros.' bullet bill flies left at 1.5 against Mario's walk of 1.5 (entities.bullet_bill.fly), so 1 here"
+note = "The source platformer's bullet flies left at 1.5 against its player's walk of 1.5 (the bullet's fly, template.toml's inspired_by), so 1 here"
 
 [[evidence."entities.reply_all.fly".refs]]
-at = "inspired-by:smb1-ntsc-prg0"
+at = "inspired-by:platformer"
 
 [evidence.input]
 source = "stated"

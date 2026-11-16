@@ -2,7 +2,7 @@
 //! every other tool then names. A template is a game's folder holding
 //! `template.toml` and a model and nothing from a ROM: each folder under
 //! the repo's `templates/` (Moss Hop and the games made here) and each game
-//! folder of the games checkout (Donkey Kong, Tapper) is one.
+//! folder of the games checkout (each ported game) is one.
 //!
 //! The whole folder is copied, subfolders too (`level-kit/`, `baselines/`,
 //! `themes/`, `ext/`), leaving out what never belongs in a copy: build
@@ -30,8 +30,8 @@ pub const MANIFEST: &str = "template.toml";
 #[serde(deny_unknown_fields)]
 pub struct ForkArgs {
     /// The template: its folder's name under the repo's templates/ or in
-    /// the games checkout (`mosshop`, `donkey-kong`), or its template id
-    /// (`donkey-kong-oe`).
+    /// the games checkout (`mosshop`, `rooftop`), or its template id
+    /// (`rooftop-oe`).
     pub template: String,
     /// The new copy's name: letters, digits and `_`.
     pub copy: String,

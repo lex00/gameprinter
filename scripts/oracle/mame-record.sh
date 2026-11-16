@@ -1,11 +1,14 @@
 #!/bin/bash
 # Runs one capture in the MAME oracle image (docs/oracle-mame.md):
 #   scripts/oracle/mame-record.sh IMAGE ROMSET LOG OUT [SHOT_EVERY]
-# ROMSET is a MAME romset zip named for its system (rbtapper.zip). LOG is an
-# input log in the gp-arcade-input format. OUT is a folder name under
+# ROMSET is a MAME romset zip named for its system (SYSTEM.zip). LOG is an
+# input log in the gp-arcade-input format, which a game of the games
+# checkout keeps (GAME/inputs/oracle/). OUT is a folder name under
 # $GP_HOME/work/oracle/, or a path inside it; it must not exist yet.
-# SHOT_EVERY writes a PNG every N frames (default 30, one a second for
-# Tapper; 0 for none). With GP_ORACLE_WAV=1 in the environment, MAME also
+# SHOT_EVERY writes a PNG every N frames (default 30, one a second on a
+# 30 Hz screen; 0 for none). The system's control table is the game's
+# oracle/mame-controls.lua, found in the game folder above LOG, or the file
+# GP_ORACLE_CONTROLS names. With GP_ORACLE_WAV=1 in the environment, MAME also
 # records what reaches the speakers as OUT/sound.wav (48 kHz, 16-bit
 # stereo, about 11 MB a minute).
 #
@@ -37,7 +40,7 @@ die() { echo "mame-record: $*" >&2; exit 2; }
 [ -f "$romset" ] || die "no romset at $romset"
 case "$romset" in
   *.zip) ;;
-  *) die "the romset must be a zip named for its MAME system, like rbtapper.zip" ;;
+  *) die "the romset must be a zip named for its MAME system, like SYSTEM.zip" ;;
 esac
 [ -f "$log" ] || die "no input log at $log"
 case "$shot_every" in
@@ -49,6 +52,19 @@ docker image inspect "$image" >/dev/null 2>&1 || die "no image $image: run just 
 romset="$(cd "$(dirname "$romset")" && pwd)/$(basename "$romset")"
 log="$(cd "$(dirname "$log")" && pwd)/$(basename "$log")"
 system="$(basename "$romset" .zip)"
+
+# The control table: GP_ORACLE_CONTROLS, else the game's, in the nearest
+# folder above the log that holds oracle/mame-controls.lua.
+controls="${GP_ORACLE_CONTROLS:-}"
+if [ -z "$controls" ]; then
+  d="$(dirname "$log")"
+  while [ "$d" != / ]; do
+    if [ -f "$d/oracle/mame-controls.lua" ]; then controls="$d/oracle/mame-controls.lua"; break; fi
+    d="$(dirname "$d")"
+  done
+fi
+[ -n "$controls" ] && [ -f "$controls" ] || die "no control table for $log: keep the log in a game's folder beside its oracle/mame-controls.lua, or set GP_ORACLE_CONTROLS"
+controls="$(cd "$(dirname "$controls")" && pwd)/$(basename "$controls")"
 
 mkdir -p "$oracle_dir"
 oracle_dir="$(cd "$oracle_dir" && pwd -P)"
@@ -82,10 +98,12 @@ docker run --rm --network none \
   -v "$romset:/roms/$system.zip:ro" \
   -v "$script_dir/mame-capture.lua:/oracle/mame-capture.lua:ro" \
   -v "$log:/oracle/input.log:ro" \
+  -v "$controls:/oracle/controls.lua:ro" \
   -v "$out:/out" \
   -e GP_ORACLE_LOG=/oracle/input.log \
   -e GP_ORACLE_OUT=/out \
   -e GP_ORACLE_SHOT_EVERY="$shot_every" \
+  -e GP_ORACLE_CONTROLS=/oracle/controls.lua \
   "$image" "$system" \
   -rompath /roms \
   -autoboot_script /oracle/mame-capture.lua \

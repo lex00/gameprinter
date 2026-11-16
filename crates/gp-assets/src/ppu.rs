@@ -3,7 +3,7 @@
 //! (high byte first), a control byte and its data: bit 7 of the control
 //! byte steps the address by 32 after each byte (down a column) instead of
 //! by 1, bit 6 writes one byte over and over, and the low six bits are the
-//! byte count. A string is updates up to an end byte. Super Mario Bros.
+//! byte count. A string is updates up to an end byte. One NES platformer
 //! keeps its status bar and message text this way (`WriteBufferToScreen`
 //! and `WriteGameText` in the disassembly), and its palettes.
 //!
@@ -43,7 +43,7 @@ pub struct PpuStrings {
     #[serde(default)]
     pub end: u8,
     /// The game ends a string at the end byte wherever it falls, not only
-    /// where an update's address would start (Super Mario Bros.'
+    /// where an update's address would start (one platformer's
     /// `WriteGameText`), so `pack` refuses it in any byte.
     #[serde(default)]
     pub end_anywhere: bool,
@@ -56,8 +56,8 @@ pub struct PpuStrings {
 }
 
 /// One string. `records` is set for a string that has that many updates
-/// and no end byte, running on into the next string, as Super Mario Bros.'
-/// "MARIO" line runs into "TIME UP".
+/// and no end byte, running on into the next string, as one platformer's
+/// player-name line runs into "TIME UP".
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StringEntry {

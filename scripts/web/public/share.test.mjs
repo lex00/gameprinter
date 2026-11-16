@@ -33,16 +33,16 @@ test("a profiles.toml's modes and switches, and nothing else", () => {
 });
 
 test("names and versions are held to their shape", () => {
-  assert.deepEqual(packageRef("lex00/donkey-kong"), { name: "lex00/donkey-kong", version: null });
-  assert.deepEqual(packageRef("lex00/donkey-kong@1.0.9"), { name: "lex00/donkey-kong", version: "1.0.9" });
-  for (const bad of ["donkey-kong", "../x/y", "lex00/../catalog", "a/b/c", "Lex00/dk", "lex00/dk@latest", "lex00/dk@1.0", "lex00/<b>", "lex00/dk@1.0.0@2", "", "a/" + "b".repeat(80)]) {
+  assert.deepEqual(packageRef("lex00/made-up-game"), { name: "lex00/made-up-game", version: null });
+  assert.deepEqual(packageRef("lex00/made-up-game@1.0.9"), { name: "lex00/made-up-game", version: "1.0.9" });
+  for (const bad of ["made-up-game", "../x/y", "lex00/../catalog", "a/b/c", "Lex00/mg", "lex00/mg@latest", "lex00/mg@1.0", "lex00/<b>", "lex00/mg@1.0.0@2", "", "a/" + "b".repeat(80)]) {
     assert.equal(packageRef(bad), null, bad);
   }
 });
 
 test("a link's keys are read, unknown or misshapen ones left out by name only", () => {
-  const l = readLink("?g=lex00/donkey-kong&c=lex00/turnips&mode=normal&on=smooth_walk,quick_restart&rom=AAAA&g2=x");
-  assert.deepEqual(l.game, { name: "lex00/donkey-kong", version: null });
+  const l = readLink("?g=lex00/made-up-game&c=lex00/turnips&mode=normal&on=smooth_walk,quick_restart&rom=AAAA&g2=x");
+  assert.deepEqual(l.game, { name: "lex00/made-up-game", version: null });
   assert.deepEqual(l.content, { name: "lex00/turnips", version: null });
   assert.equal(l.mode, "normal");
   assert.deepEqual(l.on, ["smooth_walk", "quick_restart"]);
@@ -74,17 +74,17 @@ test("the settings a link asks for are held to the game's own", () => {
 test("a share link carries the game, the theme or look and the settings, and reads back the same", () => {
   const n = profileNames(PROFILES);
   const base = "https://play.example/p?g=old/game&rom=x#saves";
-  const a = shareLink(base, { game: "lex00/donkey-kong", content: "lex00/turnips", profile: "normal", names: n });
-  assert.equal(a, "https://play.example/p?g=lex00/donkey-kong&c=lex00/turnips&mode=normal");
-  const b = shareLink(base, { game: "lex00/donkey-kong", look: "original", profile: "smooth_walk+quick_restart", names: n });
-  assert.equal(b, "https://play.example/p?g=lex00/donkey-kong&look=original&on=smooth_walk,quick_restart");
+  const a = shareLink(base, { game: "lex00/made-up-game", content: "lex00/turnips", profile: "normal", names: n });
+  assert.equal(a, "https://play.example/p?g=lex00/made-up-game&c=lex00/turnips&mode=normal");
+  const b = shareLink(base, { game: "lex00/made-up-game", look: "original", profile: "smooth_walk+quick_restart", names: n });
+  assert.equal(b, "https://play.example/p?g=lex00/made-up-game&look=original&on=smooth_walk,quick_restart");
   // A switch the game hasn't, or a profile that isn't one, is left out.
-  const c = shareLink(base, { game: "lex00/donkey-kong", profile: "smooth_walk+<x>+gone", names: n });
-  assert.equal(c, "https://play.example/p?g=lex00/donkey-kong&on=smooth_walk");
+  const c = shareLink(base, { game: "lex00/made-up-game", profile: "smooth_walk+<x>+gone", names: n });
+  assert.equal(c, "https://play.example/p?g=lex00/made-up-game&on=smooth_walk");
   for (const [url, profile] of [[a, "normal"], [b, "smooth_walk+quick_restart"]]) {
     const back = readLink(new URL(url).search);
     assert.deepEqual(back.ignored, []);
-    assert.equal(back.game.name, "lex00/donkey-kong");
+    assert.equal(back.game.name, "lex00/made-up-game");
     assert.equal(linkSettings(back, n).profile, profile);
   }
   assert.throws(() => shareLink(base, { game: "not a name" }));
@@ -126,14 +126,14 @@ test("a root key in a link is an ssh-ed25519 key's body, a + read back from a sp
 });
 
 test("a link's registry: read, carried by a share link, and left out when it isn't one", () => {
-  const l = readLink(`?g=lex00/donkey-kong&c=acme/harbor-lights&r=${REG}`);
+  const l = readLink(`?g=lex00/made-up-game&c=acme/harbor-lights&r=${REG}`);
   assert.deepEqual(l.registry, { url: REG, root: null });
   assert.deepEqual(l.ignored, []);
-  const signed = readLink(`?g=lex00/donkey-kong&r=${encodeURIComponent(REG)}&rk=${encodeURIComponent(RK)}`);
+  const signed = readLink(`?g=lex00/made-up-game&r=${encodeURIComponent(REG)}&rk=${encodeURIComponent(RK)}`);
   assert.deepEqual(signed.registry, { url: REG, root: `ssh-ed25519 ${RK}` });
   // A + not escaped arrives as a space, and is read back.
   assert.equal(readLink(`?r=${REG}&rk=${RK}`).registry.root, `ssh-ed25519 ${RK}`);
-  const http = readLink("?g=lex00/donkey-kong&r=http://raw.githubusercontent.com/acme/r/main");
+  const http = readLink("?g=lex00/made-up-game&r=http://raw.githubusercontent.com/acme/r/main");
   assert.equal(http.registry, null);
   assert.deepEqual(http.ignored, ["r"]);
   assert.deepEqual(readLink(`?rk=${encodeURIComponent(RK)}`).ignored, ["rk"], "a key with no registry is left out");
@@ -142,14 +142,14 @@ test("a link's registry: read, carried by a share link, and left out when it isn
   assert.deepEqual(readLink(`?r=${REG}&r=https://other.example`).ignored, ["r"], "a registry given twice is not guessed at");
 
   const base = "https://play.example/p";
-  const a = shareLink(base, { game: "lex00/donkey-kong", content: "acme/harbor-lights", registry: l.registry });
-  assert.equal(a, `https://play.example/p?g=lex00/donkey-kong&c=acme/harbor-lights&r=${REG}`);
+  const a = shareLink(base, { game: "lex00/made-up-game", content: "acme/harbor-lights", registry: l.registry });
+  assert.equal(a, `https://play.example/p?g=lex00/made-up-game&c=acme/harbor-lights&r=${REG}`);
   assert.deepEqual(readLink(new URL(a).search).registry, l.registry);
-  const b = shareLink(base, { game: "lex00/donkey-kong", registry: signed.registry });
+  const b = shareLink(base, { game: "lex00/made-up-game", registry: signed.registry });
   assert.ok(b.includes("%2B"), "a key's + stays escaped");
   assert.deepEqual(readLink(new URL(b).search).registry, signed.registry);
-  assert.equal(shareLink(base, { game: "lex00/donkey-kong", registry: { url: "http://x.example" } }), "https://play.example/p?g=lex00/donkey-kong");
-  assert.equal(shareLink(base, { game: "lex00/donkey-kong" }), "https://play.example/p?g=lex00/donkey-kong");
+  assert.equal(shareLink(base, { game: "lex00/made-up-game", registry: { url: "http://x.example" } }), "https://play.example/p?g=lex00/made-up-game");
+  assert.equal(shareLink(base, { game: "lex00/made-up-game" }), "https://play.example/p?g=lex00/made-up-game");
 });
 
 test("the registry the page also takes themes from: the link's, else the one it was built with, never its own again", () => {
@@ -203,7 +203,7 @@ test("a game's page facts from its play/page.json, each field held to its shape"
   bad((j) => (j.format = 2), /format 1/);
   bad((j) => (j.player = "<script>"), /player/);
   bad((j) => (j.rom.game = "../x"), /game/);
-  bad((j) => (j.rom.game = "donkey-kong"), /its lift is for made-up/);
+  bad((j) => (j.rom.game = "another-game"), /its lift is for made-up/);
   bad((j) => (j.rom.known_sha256 = { a: "not a hash" }), /known_sha256/);
   bad((j) => (j.howto = [{}]), /howto/);
   assert.throws(() => gamePageOf(new Map([["page.json", enc(facts)]]), "x"), /lift\/index.json/);

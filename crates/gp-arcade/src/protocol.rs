@@ -1,5 +1,5 @@
 //! The runtime protocol (`gp_runtime::Runtime`) for an arcade original:
-//! the time, state and observe operations over a [`Tapper`].
+//! the time, state and observe operations over a [`Mcr`].
 //!
 //! An `InputFrame`'s `buttons` low byte holds the controls, bits 0 to 6
 //! coin, start, right, left, down, up and tap ([`Controls::from_bits`]);
@@ -18,9 +18,9 @@
 //! | `ports[N]` | The five input ports as the game read them in the last frame |
 //! | `cpu.pc`, `sound_cpu.pc` | The two Z80s' program counters |
 //!
-//! The canonical state is the machine's snapshot ([`Tapper::snapshot`]):
+//! The canonical state is the machine's snapshot ([`Mcr::snapshot`]):
 //! both CPUs, the timers, every RAM and the last frame's picture. Its hash
-//! is [`Tapper::state_hash`]. Each frame stepped gives one `frame` event
+//! is [`Mcr::state_hash`]. Each frame stepped gives one `frame` event
 //! with a `polled` flag, false on a frame where the game didn't read its
 //! inputs. With `set("ay_events", true)` it also gives an `ay-write` event
 //! for each AY register the sound CPU wrote in the frame, in order, with
@@ -39,7 +39,7 @@ use gp_runtime::{
     input_at,
 };
 
-use crate::{Controls, Romset, Tapper};
+use crate::{Controls, Mcr, Romset};
 
 /// The kind of the events that carry the AY writes.
 pub const AY_KIND: &str = "ay-write";
@@ -47,10 +47,10 @@ pub const AY_KIND: &str = "ay-write";
 /// The kind of the events that carry the main CPU's sound latch writes.
 pub const LATCH_KIND: &str = "latch-write";
 
-/// Tapper behind the runtime protocol.
+/// An MCR machine behind the runtime protocol.
 #[derive(Clone)]
 pub struct ArcadeRuntime {
-    tapper: Tapper,
+    mcr: Mcr,
     /// Whether a step gives `ay-write` events.
     ay_events: bool,
     /// Whether a step gives `latch-write` events.
@@ -60,7 +60,7 @@ pub struct ArcadeRuntime {
 impl ArcadeRuntime {
     /// Powers the set on.
     pub fn load(rom: &Romset) -> Self {
-        Self::new(Tapper::power_on(rom))
+        Self::new(Mcr::power_on(rom))
     }
 
     /// Powers on the set in a MAME zip's bytes.
@@ -71,26 +71,26 @@ impl ArcadeRuntime {
     }
 
     /// Wraps a machine already running, such as one restored from a start.
-    pub fn new(tapper: Tapper) -> Self {
+    pub fn new(mcr: Mcr) -> Self {
         Self {
-            tapper,
+            mcr,
             ay_events: false,
             latch_events: false,
         }
     }
 
-    pub fn tapper(&self) -> &Tapper {
-        &self.tapper
+    pub fn mcr(&self) -> &Mcr {
+        &self.mcr
     }
 
     /// The machine, for a caller that steps it watched (its trace or
     /// access log on), as gp-cli's covered steps do.
-    pub fn tapper_mut(&mut self) -> &mut Tapper {
-        &mut self.tapper
+    pub fn mcr_mut(&mut self) -> &mut Mcr {
+        &mut self.mcr
     }
 
-    pub fn into_tapper(self) -> Tapper {
-        self.tapper
+    pub fn into_mcr(self) -> Mcr {
+        self.mcr
     }
 
     /// Runs one frame and returns whether the game read its inputs.
@@ -107,13 +107,13 @@ impl ArcadeRuntime {
                 input.buttons
             ));
         }
-        self.tapper.step(Controls::from_bits(input.buttons));
-        Ok(self.tapper.polled())
+        self.mcr.step(Controls::from_bits(input.buttons));
+        Ok(self.mcr.polled())
     }
 
     fn step_frame(&mut self, input: &InputFrame) -> Result<Vec<Event>, String> {
         let polled = self.advance(input)?;
-        let frame = self.tapper.frame();
+        let frame = self.mcr.frame();
         let mut events = vec![Event {
             frame,
             kind: "frame".into(),
@@ -129,7 +129,7 @@ impl ArcadeRuntime {
                 value: Value::Int(i64::from(v)),
             };
             events.extend(
-                self.tapper
+                self.mcr
                     .ay_registers_written()
                     .iter()
                     .map(|&(chip, reg, value)| Event {
@@ -146,7 +146,7 @@ impl ArcadeRuntime {
                 value: Value::Int(i64::from(v)),
             };
             events.extend(
-                self.tapper
+                self.mcr
                     .take_latch_log()
                     .into_iter()
                     .map(|(_, latch, value)| Event {
@@ -162,22 +162,22 @@ impl ArcadeRuntime {
 
     /// Reads a parsed selector.
     pub fn read(&self, sel: &Selector) -> Result<Vec<Entry>, String> {
-        read_board(&self.tapper, sel)
+        read_board(&self.mcr, sel)
     }
 
     fn holds(&self, cond: &Condition) -> Result<bool, String> {
-        holds_on(&self.tapper, cond)
+        holds_on(&self.mcr, cond)
     }
 }
 
 /// Whether `cond` holds on the board as it stands, its selectors read as
 /// [`read_board`] reads them: what `run_until` stops on, and the goal
-/// `gp mechanic autoplay --until` plays to.
-pub fn holds_on(t: &Tapper, cond: &Condition) -> Result<bool, String> {
+/// a game's auto-player's `--until` plays to.
+pub fn holds_on(t: &Mcr, cond: &Condition) -> Result<bool, String> {
     cond.eval(&mut |sel| read_one(t, sel))
 }
 
-fn read_one(t: &Tapper, sel: &Selector) -> Result<i64, String> {
+fn read_one(t: &Mcr, sel: &Selector) -> Result<i64, String> {
     match read_board(t, sel)?.as_slice() {
         [Entry { value, .. }] => value
             .as_int()
@@ -190,7 +190,7 @@ fn read_one(t: &Tapper, sel: &Selector) -> Result<i64, String> {
 }
 
 /// Reads a parsed selector on the board ([`ArcadeRuntime::read`]).
-pub fn read_board(t: &Tapper, sel: &Selector) -> Result<Vec<Entry>, String> {
+pub fn read_board(t: &Mcr, sel: &Selector) -> Result<Vec<Entry>, String> {
     {
         let name = sel.name();
         let index = sel.last_index()?;
@@ -225,7 +225,7 @@ pub fn read_board(t: &Tapper, sel: &Selector) -> Result<Vec<Entry>, String> {
     }
 }
 
-/// Answers `sel` from a RAM record (the oracle's layout, [`Tapper::ram_record`])
+/// Answers `sel` from a RAM record (the oracle's layout, [`Mcr::ram_record`])
 /// alone, as [`ArcadeRuntime::read`] would on the machine that made it:
 /// `ram[...]` (or `bus[...]`) from 0xE000 up, `sound_ram[...]` and `palette[...]`. `None`
 /// for a selector the record can't answer (the program below 0xE000, the
@@ -352,15 +352,15 @@ impl Runtime for ArcadeRuntime {
     }
 
     fn frame(&self) -> u64 {
-        self.tapper.frame()
+        self.mcr.frame()
     }
 
     fn snapshot(&self) -> Vec<u8> {
-        self.tapper.snapshot()
+        self.mcr.snapshot()
     }
 
     fn restore(&mut self, snap: &[u8]) -> Result<(), String> {
-        self.tapper.restore(snap)
+        self.mcr.restore(snap)
     }
 
     fn fork(&self) -> Self {
@@ -368,11 +368,11 @@ impl Runtime for ArcadeRuntime {
     }
 
     fn canonical_state(&self) -> Vec<u8> {
-        self.tapper.snapshot()
+        self.mcr.snapshot()
     }
 
     fn state_hash(&self) -> u64 {
-        self.tapper.state_hash()
+        self.mcr.state_hash()
     }
 
     /// Refused: the board has no model state to load.
@@ -386,7 +386,7 @@ impl Runtime for ArcadeRuntime {
         if let Some(addr) = gp_runtime::select::canonical_ram(selector) {
             return Ok(vec![Entry {
                 path: selector.to_owned(),
-                value: Value::Int(self.tapper.peek(addr).into()),
+                value: Value::Int(self.mcr.peek(addr).into()),
             }]);
         }
         self.read(&Selector::parse(selector)?)
@@ -431,7 +431,7 @@ impl Runtime for ArcadeRuntime {
             }
             ("latch_events", Value::Flag(on)) => {
                 self.latch_events = on;
-                self.tapper.set_latch_log(on);
+                self.mcr.set_latch_log(on);
                 Ok(())
             }
             _ => Err(format!(
@@ -513,19 +513,22 @@ mod tests {
         assert!(rt.load_state(&[]).is_err());
     }
 
-    /// `ay_events` turns the AY write events on; with the owner's romset,
-    /// the sound board's start-up writes come out as events. Skipped
-    /// without it.
+    /// `ay_events` turns the AY write events on; with a real romset
+    /// (romset::test_romset), the sound board's start-up writes come out
+    /// as events. Skipped without one.
     #[test]
     fn ay_events_carry_the_sound_cpus_writes() {
         let mut rt = ArcadeRuntime::load(&looping());
         assert!(rt.set("ay_events", Value::Flag(true)).is_ok());
         assert!(rt.set("volume", Value::Int(3)).is_err());
-        let Some(zip) = crate::romset::local_romset("rbtapper") else {
-            eprintln!("skipped: no rbtapper romset");
-            return;
+        let rom = match crate::romset::test_romset() {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("skipped: {e}");
+                return;
+            }
         };
-        let mut rt = ArcadeRuntime::load_zip(&std::fs::read(zip).unwrap()).unwrap();
+        let mut rt = ArcadeRuntime::load(&rom);
         rt.set("ay_events", Value::Flag(true)).unwrap();
         let ev = rt.step(&vec![InputFrame::default(); 30]).unwrap();
         let ay: Vec<&Event> = ev.iter().filter(|e| e.kind == AY_KIND).collect();
@@ -538,7 +541,7 @@ mod tests {
     #[test]
     fn latch_events_carry_the_main_cpus_latch_writes() {
         let rom = crate::testrom::sounding();
-        let mut logged = Tapper::power_on(&rom);
+        let mut logged = Mcr::power_on(&rom);
         logged.set_latch_log(true);
         let mut rt = ArcadeRuntime::load(&rom);
         rt.set("latch_events", Value::Flag(true)).unwrap();
@@ -577,7 +580,7 @@ mod tests {
     fn a_ram_record_answers_as_the_machine() {
         let mut rt = ArcadeRuntime::load(&looping());
         rt.step(&vec![InputFrame::default(); 3]).unwrap();
-        let rec = rt.tapper().ram_record();
+        let rec = rt.mcr().ram_record();
         for sel in [
             "ram[0xe000..0xe010]",
             "ram[0xe9f0..0xec10]",

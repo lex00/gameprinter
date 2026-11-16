@@ -1,11 +1,11 @@
-//! Plays a MAME oracle capture's input log in gp-arcade's Tapper and
+//! Plays a MAME oracle capture's input log on gp-arcade's MCR board and
 //! compares every frame's RAM, input ports and picture hash with MAME's,
 //! and the AY writes when the capture has them (`ay.tsv`).
 //!
 //!   cargo run --release -p gp-arcade --example compare -- \
-//!       --rom ~/Downloads/rbtapper.zip \
-//!       --capture ~/.gameprinter/work/oracle/tapper-first-a \
-//!       --log scripts/oracle/inputs/tapper-first.input \
+//!       --rom $GP_ROM_DIR/arcade/SET.zip \
+//!       --capture ~/.gameprinter/work/oracle/CAPTURE \
+//!       --log GAME/inputs/oracle/LOG.input \
 //!       [--all] [--png DIR] [--at N] [--dump N]...
 //!
 //! It prints the first frame that differs and how, or that every frame
@@ -15,14 +15,16 @@
 //! left. The pictures show the game's art, so DIR must be outside any repo.
 //! `--dump N` prints, for frame N, every 16-byte row of the RAM record
 //! that differs, ours above MAME's, and both CPUs' registers. `--trace N`
-//! prints every instruction both CPUs start during frame N.
+//! prints every instruction both CPUs start during frame N. The set's chip
+//! list comes from its game's roms.toml: $GP_GAMES_DIR names the games
+//! checkout (gp_arcade::romset).
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use gp_arcade::oracle::{Capture, FrameDiff, InputLog, compare};
 use gp_arcade::video::{HEIGHT, WIDTH};
-use gp_arcade::{Romset, Tapper};
+use gp_arcade::{Mcr, Romset};
 
 struct Args {
     rom: PathBuf,
@@ -36,9 +38,8 @@ struct Args {
 }
 
 fn args() -> Result<Args, String> {
-    let home = std::env::var("HOME").unwrap_or_default();
     let mut a = Args {
-        rom: PathBuf::from(&home).join("Downloads/rbtapper.zip"),
+        rom: PathBuf::new(),
         capture: PathBuf::new(),
         log: PathBuf::new(),
         all: false,
@@ -64,8 +65,11 @@ fn args() -> Result<Args, String> {
             _ => return Err(format!("unknown argument {arg}")),
         }
     }
-    if a.capture.as_os_str().is_empty() || a.log.as_os_str().is_empty() {
-        return Err("--capture and --log are needed".into());
+    if a.rom.as_os_str().is_empty()
+        || a.capture.as_os_str().is_empty()
+        || a.log.as_os_str().is_empty()
+    {
+        return Err("--rom, --capture and --log are needed".into());
     }
     Ok(a)
 }
@@ -127,7 +131,7 @@ fn write_side_by_side(
     Ok(differ)
 }
 
-fn dump(t: &Tapper, cap: &Capture, n: usize) {
+fn dump(t: &Mcr, cap: &Capture, n: usize) {
     let ours = t.ram_record();
     let theirs = cap.ram(n);
     println!("frame {n} dump (ours, then MAME's):");
@@ -174,7 +178,7 @@ fn run() -> Result<bool, String> {
     let frames = cap.rows.len();
     println!("capture {}: {} frames", a.capture.display(), frames);
 
-    let mut t = Tapper::power_on(&rom);
+    let mut t = Mcr::power_on(&rom);
     let mut first: Option<(usize, FrameDiff)> = None;
     let (mut ram_frames, mut port_frames, mut pic_frames, mut ay_frames) = (0, 0, 0, 0);
     let mut ay_writes = 0usize;

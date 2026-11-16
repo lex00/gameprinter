@@ -13,7 +13,7 @@ ROMs stay where the owner keeps them. The romset zip is mounted read-only into t
 | Step | Command |
 |---|---|
 | Build the image, once per architecture | `just mame-build`, or `just mame-build linux/amd64` |
-| Run a capture | `just mame-record ~/Downloads/rbtapper.zip scripts/oracle/inputs/tapper-first.input tapper-first` |
+| Run a capture | `just mame-record ~/Downloads/rbtapper.zip ../games/tapper/inputs/oracle/first.input tapper-first` |
 | Fewer or no PNGs | add a fourth argument: `90` for one every 3 seconds, `0` for none |
 | The speakers too | add a fifth argument, `1`: MAME records what reaches the speakers as `sound.wav` (48 kHz, 16-bit stereo, about 11 MB a minute) |
 
@@ -127,23 +127,25 @@ The main board's ranges are mcr.cpp's `cpu_91490_map`; the sound board's is midw
 
 ## Captures the repo names
 
-A capture is derived from the ROM, so it is never in a repo. `oracle/mame-captures.toml` names the captures gp holds gp-arcade to, with only what it takes to make each one again and the hash it must come out with:
+A capture is derived from the ROM, so it is never in a repo. Each game's `oracle/mame-captures.toml`, in its folder of the games checkout, names the captures gp holds gp-arcade to on that game, with only what it takes to make each one again and the hash it must come out with. The tool knows no game by name, so it keeps no captures file of its own; `gp oracle golden --against NAME` looks in every game's, and `just check-all` plays every capture they name (`mame-NAME`). The game's `oracle/mame-controls.lua` holds the control table the capture script reads for its sets (columns, ports and RAM, from MAME's source), which `just mame-record` finds beside the log's game folder.
 
 | Field | What |
 |---|---|
 | `name` | The folder under `$GP_HOME/work/oracle/` the capture is kept in on each machine |
-| `system` | MAME's name for the romset (`rbtapper`, `tapper`) |
+| `system` | MAME's name for the romset (roms.toml's `system`) |
 | `mame` | The MAME version that made it, the image's |
-| `input`, `input_sha256` | The input log, from the checkout's root, and its SHA-256, so a changed log is caught |
+| `input`, `input_sha256` | The input log, from the game's folder (its `inputs/oracle/`), and its SHA-256, so a changed log is caught |
 | `frames` | How many frames it runs |
 | `sha256` | The capture's hash: the SHA-256 of the digest lines (`HASH  ./FILE`, as `shasum -a 256` prints them) of `ay.tsv`, `capture.txt`, `frames.tsv` and `ram.bin`, those it has, in that order. For a capture made with no pictures and no WAV, it is the SHA-256 of its `SHA256SUMS` |
+
+The same file's `[[replay]]` rows, each a `name` and an `input`, are the captures gp-arcade's own tests replay against the board (`crates/gp-arcade/tests/oracle_mcr.rs` and `ssio_alone.rs`, with `$GP_GAME_DIR` naming the game's folder): captures made once by hand and kept on this machine, with no hash, each skipped where it isn't there. Every frame must match; with `ay.tsv` the AY writes too, with `sound.wav` the speakers, and a log whose watchdog runs out must reset the board and come back.
 
 To make one: `just mame-build` once, then `just mame-record $GP_ROM_DIR/arcade/SYSTEM.zip INPUT NAME 0`. The `0` asks for no pictures, which would change `frames.tsv` and `capture.txt`. A gp that finds a capture missing prints that command with the romset's path, and one that finds a capture whose hash isn't the file's refuses it and says the same.
 
 | Command | What |
 |---|---|
 | `gp oracle golden ID --against NAME` | ID is a gp-arcade recording (`gp record --rom ZIP --input INPUT`). The capture must be one the file names, with its hash; the recording must be of its romset and have run its input. Then the recording plays on gp-arcade against the capture, and if every frame matches, a verdict object (the capture's name, hash, MAME version and input, and the comparison) goes in the store and the recordings log gets a golden entry naming it. Otherwise it prints the frames that differ and exits 1 |
-| `gp oracle check oracle/mame-captures.toml` | Each capture's input on gp-arcade against the capture, every frame, with no store. A capture whose romset or folder isn't on this machine is skipped, the folder's with the command that makes it; a wrong hash, a changed input or a frame that differs fails it (exit 1). NES baselines given with it are checked as before |
+| `gp oracle check GAME/oracle/mame-captures.toml` | Each capture's input on gp-arcade against the capture, every frame, with no store. A capture whose romset or folder isn't on this machine is skipped, the folder's with the command that makes it; a wrong hash, a changed input or a frame that differs fails it (exit 1). NES baselines given with it are checked as before |
 
 `gp oracle check` takes a TOML file with `[[capture]]` tables as a captures file and any other as a baseline.
 
@@ -155,7 +157,7 @@ To make one: `just mame-build` once, then `just mame-record $GP_ROM_DIR/arcade/S
 cargo run --release -p gp-arcade --example compare -- \
     --rom ~/Downloads/rbtapper.zip \
     --capture ~/.gameprinter/work/oracle/tapper-first-a \
-    --log scripts/oracle/inputs/tapper-first.input
+    --log ../games/tapper/inputs/oracle/first.input
 ```
 
 When the capture has an `ay.tsv`, the AY writes are compared too, frame by frame. `--all` runs to the end and counts the frames that differ in each way. `--png DIR --at N` writes our picture of frame N beside MAME's shot and a third panel with the differing pixels in red; DIR goes outside the repo, since the pictures show the game. `--dump N` prints frame N's differing RAM rows and both CPUs' registers, and `--trace N` every instruction both CPUs start in frame N.
@@ -173,7 +175,7 @@ When the capture has an `ay.tsv`, the AY writes are compared too, frame by frame
 | `tapper-diagonal-a` | `tapper-diagonal.input` | 1167 | all match, AY writes too (5,390 writes); diagonals reach the board as held |
 | `tapper-diagonal-4way-a` | `tapper-diagonal-4way.input` | 1167 | all match, AY writes too (5,338 writes); MAME's 4-way filter changed 160 frames, and `FourWay` changes the same |
 
-The `tapper-*` plays of milestone 3 were made by gp-arcade's autoplay example, a player that reads the board's RAM and decides each frame's presses: coin and start, then serving, catching mugs and taking tips. tapper-eight-levels clears eight levels (the saloon, the sports bar and three punk bar levels) and both bonus rounds. tapper-cycle, from the player's search, clears levels 1 to 15 (the saloon, the sports bar, the punk bar, the space bar and the saloon again as the game cycles) and wins bonus rounds 1 to 5. The speakers on tapper-five-levels (`tapper-m3-five-sound`, 6 minutes) differ from MAME's WAV by at most one step of 16 bits, as on tapper-first.
+The `tapper-*` plays of milestone 3 were made by the game's auto-player (now a game-side driver in its folder, which `gp mechanic autoplay` runs), a player that reads the board's RAM and decides each frame's presses: coin and start, then serving, catching mugs and taking tips. tapper-eight-levels clears eight levels (the saloon, the sports bar and three punk bar levels) and both bonus rounds. tapper-cycle, from the player's search, clears levels 1 to 15 (the saloon, the sports bar, the punk bar, the space bar and the saloon again as the game cycles) and wins bonus rounds 1 to 5. The speakers on tapper-five-levels (`tapper-m3-five-sound`, 6 minutes) differ from MAME's WAV by at most one step of 16 bits, as on tapper-first.
 
 tapper-watchdog makes the watchdog run out from the game's own code. Tapper checks the tilt switch in the CTC's channel 1 interrupt (0158 in rbtapper and tapper): while the switch is held it feeds the watchdog, and once it's let go it jumps to itself with interrupts off. So a tilt during play hangs the game, and 16 frames later the watchdog resets the board as MAME's soft reset does: every device's reset in MAME's order, the RAM, the palette and the screen's timing kept. The game then tests its RAM again, goes back to attract mode and takes a second coin. Two things about the reset were found only by comparing with MAME's WAV: the sound devices are brought up to the reset's time before they reset (`device_sound_interface::interface_pre_reset`), so the speaker samples before it keep the volumes from before, and that update ends at the 48 kHz sample its time rounds down to.
 
@@ -183,7 +185,7 @@ The sound example plays a capture's log with the sound on and compares the speak
 cargo run --release -p gp-arcade --example sound -- \
     --rom ~/Documents/roms/arcade/rbtapper.zip \
     --capture ~/.gameprinter/work/oracle/tapper-first-sound \
-    --log scripts/oracle/inputs/tapper-first.input
+    --log ../games/tapper/inputs/oracle/first.input
 ```
 
 On `tapper-first-sound`, 2,415,360 samples a speaker (50.3 seconds), 12 of the 4,830,720 differ, each by one step of 16 bits; the rest are equal. gp-arcade makes the sound the way MAME 0.276 does: each AY's 250 kHz samples with a write landing at the first sample at or after its time, MAME's 50 Hz stream updates with the gains as they stand at each, its default resampler to 48 kHz, and its 16-bit mix. The one-step differences look like float rounding in the order the mixer adds the channels. One thing was found only by comparing: MAME's speakers get each 48 kHz sample one sample after the resampler makes it, so gp-arcade holds each back one sample too.

@@ -3,7 +3,7 @@
 //! traces and writes the files.
 //!
 //! On the NES it reads the sprite table, CHR banks and palette. On an
-//! arcade game (port wave T, Midway MCR as in Tapper) it reads each
+//! arcade game (port wave T, Midway MCR) it reads each
 //! frame's sprite RAM through gp-arcade's sprite list
 //! ([`gp_arcade::video::sprite_list`]) and finds each sprite's picture by
 //! its number among the arcade lift's `mcr-sprites` (gfx2, 32 by 32):

@@ -8,8 +8,8 @@
 //! takes a few seconds for a long recording; `gp coverage --store` stores
 //! every recording's, so the inspector reads them at once.
 //!
-//! Ported from game-printer's serve/coverage.rs (wave 8); Super Mario
-//! Bros.'s generated listing was that game's and is cut, as gp-interp's
+//! Ported from game-printer's serve/coverage.rs (wave 8); a ported
+//! platformer's generated listing was that game's and is cut, as gp-interp's
 //! other games were.
 
 use std::path::PathBuf;

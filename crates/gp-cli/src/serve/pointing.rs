@@ -313,7 +313,7 @@ pub fn a(name: &str) -> String {
     format!("{} {n}", if vowel { "an" } else { "a" })
 }
 
-/// "the goomba", "Mario": an entity kind as a person would say it. The
+/// "the slug", "Pip": an entity kind as a person would say it. The
 /// player's kind is called by its own name when it has one.
 pub fn entity_label(kind: &str, role: Option<&str>) -> String {
     let words = kind.replace('_', " ");
@@ -923,10 +923,10 @@ mod tests {
 
     #[test]
     fn labels_are_plain() {
-        assert_eq!(entity_label("goomba", Some("enemy")), "the goomba");
-        assert_eq!(entity_label("mario", Some("player")), "Mario");
+        assert_eq!(entity_label("slug", Some("enemy")), "the slug");
+        assert_eq!(entity_label("pip", Some("player")), "Pip");
         assert_eq!(entity_label("player", Some("player")), "the player");
-        assert_eq!(entity_label("koopa_red", Some("enemy")), "the koopa red");
+        assert_eq!(entity_label("beetle_red", Some("enemy")), "the beetle red");
         assert_eq!(hud_label("score"), "the score");
         assert_eq!(parse_rect("250,230,20,20").unwrap().w, 6);
         assert!(parse_rect("0,240,1,1").is_err());

@@ -524,25 +524,26 @@ mod tests {
             "You checked the game's tests: done, 12 s"
         );
         let d = tempfile::tempdir().unwrap();
-        bump_page(d.path(), Some("dk"));
-        assert_eq!(page_changes(d.path(), Some("dk")), 1);
-        assert_eq!(changes(d.path(), Some("dk")), 0);
+        bump_page(d.path(), Some("rooftop"));
+        assert_eq!(page_changes(d.path(), Some("rooftop")), 1);
+        assert_eq!(changes(d.path(), Some("rooftop")), 0);
     }
 
     #[test]
     fn a_call_leaves_a_line_in_the_open_mechanic_s_log() {
         let d = tempfile::tempdir().unwrap();
         let home = d.path();
-        std::fs::create_dir_all(home.join("mechanics/dk/walk")).unwrap();
-        std::fs::write(home.join("mechanics/dk/current"), "walk\n").unwrap();
+        std::fs::create_dir_all(home.join("mechanics/rooftop/walk")).unwrap();
+        std::fs::write(home.join("mechanics/rooftop/current"), "walk\n").unwrap();
         assert_eq!(
-            game_of(home, &json!({"args": {"game": "dk"}})),
-            Some("dk".into())
+            game_of(home, &json!({"args": {"game": "rooftop"}})),
+            Some("rooftop".into())
         );
         assert_eq!(game_of(home, &json!({"game": "../x"})), None);
-        let w = start(home, Some("dk".into()), "corpus score".into());
+        let w = start(home, Some("rooftop".into()), "corpus score".into());
         w.end(&Ended::As("done".into()));
-        let log = std::fs::read_to_string(home.join("mechanics/dk/walk/watch/log.ndjson")).unwrap();
+        let log =
+            std::fs::read_to_string(home.join("mechanics/rooftop/walk/watch/log.ndjson")).unwrap();
         let line: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
         assert!(
             line["text"]
@@ -556,10 +557,10 @@ mod tests {
         // No mechanic open: the agent topic.
         log_to(home, "tp");
         assert!(home.join("mechanics/tp/agent/watch/log.ndjson").is_file());
-        assert_eq!(changes(home, Some("dk")), 0);
-        bump(home, Some("dk"));
+        assert_eq!(changes(home, Some("rooftop")), 0);
+        bump(home, Some("rooftop"));
         bump(home, None);
-        assert_eq!(changes(home, Some("dk")), 2);
+        assert_eq!(changes(home, Some("rooftop")), 2);
         assert_eq!(changes(home, Some("tp")), 1);
         assert_eq!(cut("one two three four", 9), "one two...");
     }
@@ -609,8 +610,8 @@ mod tests {
             assert!(VERBS.iter().any(|v| v.0 == p.1), "{}: no verb {}", p.0, p.1);
         }
         assert_eq!(
-            reason("warning: x\nError: no game dk in the games checkout\n").as_deref(),
-            Some("no game dk in the games checkout")
+            reason("warning: x\nError: no game rooftop in the games checkout\n").as_deref(),
+            Some("no game rooftop in the games checkout")
         );
         assert_eq!(
             reason("gp: /tmp/x/no-such-game has neither a corpus.toml nor a template.toml")

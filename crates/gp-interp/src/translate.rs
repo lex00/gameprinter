@@ -151,7 +151,7 @@ pub fn from_original<O: Runtime>(
 /// Changes the cells in view the original has changed, for a mapping whose
 /// `[cells]` hold its level grid: one of the kinds it names, here in the
 /// model, whose byte in the original is 0 is emptied, or with `becomes`
-/// takes the kind its byte gives. Super Mario Bros.' block buffer has the
+/// takes the kind its byte gives. A platformer's block buffer has the
 /// coins already taken gone, and the model's level has them all; Moss
 /// Hop's has its ? block used.
 fn carry_cells<O: Runtime>(
@@ -325,8 +325,8 @@ fn carry_slots<O: Runtime>(
         .map(|i| gp_sim::systems::reached(spec, w, i))
         .collect();
     // A level's own fixture stays: a body its spawns placed whose entity
-    // takes no slot and no slot names (Donkey Kong's oil drum and Donkey
-    // Kong himself, which the game keeps outside any slot).
+    // takes no slot and no slot names (one game's oil drum and its
+    // villain, which the game keeps outside any slot).
     let slotted: Vec<&str> = mapping
         .slot_groups()
         .into_iter()
@@ -471,7 +471,7 @@ fn carry_slots<O: Runtime>(
             s.body = index;
         }
         // A launcher's entry is its slot in its group (platformer 0.4.28):
-        // Super Mario Bros.' cannon table.
+        // a platformer's cannon table.
         if spec.kinds[kind].launcher.is_some()
             && let Some(b) = w.bodies.last_mut()
         {

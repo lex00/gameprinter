@@ -59,7 +59,7 @@ pub fn items(mapping: &str) -> Result<BTreeSet<Item>, String> {
         if a.is_empty() {
             continue;
         }
-        // entities.mario[0].x
+        // entities.player[0].x
         let Some(rest) = path.strip_prefix("entities.") else {
             continue;
         };
@@ -67,7 +67,7 @@ pub fn items(mapping: &str) -> Result<BTreeSet<Item>, String> {
             continue;
         };
         let name = name.split('[').next().unwrap_or(name);
-        let is_player = name == "player" || name == "mario";
+        let is_player = name == "player";
         match (field, is_player) {
             ("x", true) => {
                 out.insert(("player_x", a[0]));

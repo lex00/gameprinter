@@ -1,7 +1,7 @@
 // license:BSD-3-Clause
 // copyright-holders:Aaron Giles
 //
-// Tapper's boards as MAME 0.276 has them: the 91490 CPU board
+// The MCR boards as MAME 0.276 has them: the 91490 CPU board
 // (src/mame/midway/mcr.cpp: cpu_91490_map, cpu_91490_portmap, mcr_91490,
 // mcr_m.cpp: mcr_interrupt), the 91464 video board (mcr_v.cpp, in
 // video.rs), and the 90913 Super Sound I/O board (src/mame/midway/
@@ -152,7 +152,8 @@ impl Controls {
     }
 
     /// The five SSIO input ports, active low, from mcr.cpp's
-    /// INPUT_PORTS_START( tapper ) with the DIP switches at their defaults
+    /// INPUT_PORTS_START for the 91490 board's first game, with the DIP
+    /// switches at their defaults
     /// (demo sounds on, upright, one coin meter).
     ///
     /// MAME's 4-way joystick filter isn't modelled: only one direction at
@@ -682,9 +683,16 @@ impl Z80Bus for SsioBus<'_> {
     fn reti(&mut self, _icount: &mut i32) {}
 }
 
-/// Tapper: both boards, the screen and the frame counter.
+/// What a snapshot ([`Mcr::snapshot`]) starts with. Version 3: version 2's
+/// layout under a name that is the board's. A change to the layout, or to
+/// this, changes every snapshot's hash, so it bumps
+/// [`crate::RUNTIME_VERSION`] too: what was saved by another runtime
+/// (recordings' checkpoints, cached starts) is made again from power-on.
+pub const SNAPSHOT_MAGIC: &[u8] = b"gp-arcade mcr 3";
+
+/// An MCR machine: both boards, the screen and the frame counter.
 #[derive(Clone)]
-pub struct Tapper {
+pub struct Mcr {
     pub main: Z80,
     pub ssio: Z80,
     pub board: Board,
@@ -697,7 +705,7 @@ pub struct Tapper {
     frame: u64,
 }
 
-impl Tapper {
+impl Mcr {
     /// The machine at power-on (the oracle's frame 0): MAME's device start
     /// and reset, in MAME's order, at time zero.
     pub fn power_on(rom: &Romset) -> Self {
@@ -770,7 +778,7 @@ impl Tapper {
         board.vblank_end = Attotime::new(0, VBLANK_PERIOD);
 
         // The AYs reset in Sound::new; the rest in reset_devices.
-        let mut tapper = Self {
+        let mut mcr = Self {
             main: Z80::new(),
             ssio: Z80::new(),
             board,
@@ -779,8 +787,8 @@ impl Tapper {
             pens_palette: [0; 64],
             frame: 0,
         };
-        tapper.reset_devices();
-        tapper
+        mcr.reset_devices();
+        mcr
     }
 
     /// running_machine::reset_all_devices, in device order, without the
@@ -1137,13 +1145,13 @@ impl Tapper {
     }
 
     /// The AY registers the sound CPU wrote in the last frame run: chip,
-    /// register, value, in order (the data writes of [`Tapper::ay_writes`]
+    /// register, value, in order (the data writes of [`Mcr::ay_writes`]
     /// with the register each landed in).
     pub fn ay_registers_written(&self) -> &[(u8, u8, u8)] {
         &self.board.sound.written
     }
 
-    /// Keeps the speakers' samples from now on ([`Tapper::take_audio`]),
+    /// Keeps the speakers' samples from now on ([`Mcr::take_audio`]),
     /// or stops keeping them. They're not part of the state.
     pub fn set_audio(&mut self, on: bool) {
         self.board.sound.out = on.then(Vec::new);
@@ -1170,7 +1178,7 @@ impl Tapper {
     /// The whole machine state, without the ROMs.
     pub fn snapshot(&self) -> Vec<u8> {
         let mut w = Writer::default();
-        w.bytes(b"gp-arcade tapper 2");
+        w.bytes(SNAPSHOT_MAGIC);
         w.u64(self.frame);
         save_z80(&mut w, &self.main);
         save_z80(&mut w, &self.ssio);
@@ -1219,8 +1227,11 @@ impl Tapper {
     /// Puts back a snapshot of this machine (same ROMs).
     pub fn restore(&mut self, snap: &[u8]) -> Result<(), String> {
         let mut r = Reader::new(snap);
-        if r.bytes()? != b"gp-arcade tapper 2" {
-            return Err("not a gp-arcade Tapper snapshot".into());
+        if r.bytes()? != SNAPSHOT_MAGIC {
+            return Err(format!(
+                "not a gp-arcade MCR snapshot of this gp's kind ({}): one an older gp saved is made again from power-on",
+                String::from_utf8_lossy(SNAPSHOT_MAGIC)
+            ));
         }
         let mut next = self.clone();
         next.frame = r.u64()?;
@@ -1499,6 +1510,32 @@ fn load_irq(r: &mut Reader, l: &mut IrqLine<What>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A snapshot starts with the board's magic, and one that doesn't (an
+    /// older gp's, of another layout name) is refused in words.
+    #[test]
+    fn a_snapshot_of_another_kind_is_refused_in_words() {
+        let mut m = Mcr::power_on(&crate::testrom::looping());
+        m.step(Controls::default());
+        let snap = m.snapshot();
+        assert!(
+            snap.windows(SNAPSHOT_MAGIC.len())
+                .take(16)
+                .any(|w| w == SNAPSHOT_MAGIC)
+        );
+        let mut other = snap.clone();
+        let at = other
+            .windows(SNAPSHOT_MAGIC.len())
+            .position(|w| w == SNAPSHOT_MAGIC)
+            .unwrap();
+        other[at + SNAPSHOT_MAGIC.len() - 1] = b'2';
+        let e = m.restore(&other).unwrap_err();
+        assert!(
+            e.contains("older gp") && e.contains("gp-arcade mcr 3"),
+            "{e}"
+        );
+        assert!(m.restore(&snap).is_ok());
+    }
 
     #[test]
     fn controls_map_to_active_low_ports() {

@@ -1,5 +1,5 @@
 // Coverage: which PRG ROM bytes the recording ran, drawn over the game's
-// source listing (the disassembly for Super Mario Bros., the source for
+// source listing (a disassembly for a ported game, the source for
 // Moss Hop) when the server has one, and by PRG ROM page and bank when it
 // doesn't. A line is green when all its bytes ran, amber when some did and
 // red when none did. The line holding the current frame's program counter

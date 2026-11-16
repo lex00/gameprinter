@@ -59,7 +59,7 @@ export const KIND_WORDS: Record<MomentKind, { name: string; does: string; doesnt
   level: { name: "Level change", does: "changes level", doesnt: "stays in the level" },
 };
 
-/** Who a moment happened to: "Mario", "the second slug", "the coins". */
+/** Who a moment happened to: "Hero", "the second slug", "the coins". */
 export function partName(g: GameWords | undefined, part: string): string {
   const e = /^entities\.([a-z0-9_]+)\[(\d+)\]$/.exec(part);
   if (e) {

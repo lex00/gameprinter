@@ -23,7 +23,7 @@ export function byRole(g: GameWords | undefined, role: string): string | undefin
 
 /**
  * An entity as a person says it: the player's own name when it has one
- * ("Mario"), otherwise "the" and its name ("the slug", "the player").
+ * ("Hero"), otherwise "the" and its name ("the slug", "the player").
  */
 export function thing(g: GameWords | undefined, name: string): string {
   const e = g?.vocab.entities.find((x) => x.name === name);
@@ -281,7 +281,7 @@ export function gapGroups(gaps: Found[]): GapGroup[] {
   });
 }
 
-/** An event name as words: `player.died (mario)` -> "Mario died". */
+/** An event name as words: `player.died (hero)` -> "Hero died". */
 export function eventWords(g: GameWords | undefined, e: string): string {
   const m = /^([a-z_]+)\.([a-z_]+)(?: \(([^)]+)\))?$/.exec(e.trim());
   if (!m) return words(e);

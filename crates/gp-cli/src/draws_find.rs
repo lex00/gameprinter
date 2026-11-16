@@ -480,7 +480,7 @@ impl Site {
         self.steps * 2 > self.reads
     }
     /// The value read reached a conditional branch or a table's index. A
-    /// rare draw may go one way only in a run (Donkey Kong's roll-off at
+    /// rare draw may go one way only in a run (one game's roll-off at
     /// $DCB3 is read once in run 5658S), so one way is enough.
     pub fn decides(&self) -> bool {
         !self.branches.is_empty() || !self.indexes.is_empty()
@@ -1173,7 +1173,7 @@ mod tests {
     }
 
     /// A made-up game: the main loop steps a 16-bit shift register at
-    /// $10-$11 as often as it can, as Donkey Kong's idle loop does; the NMI
+    /// $10-$11 as often as it can, as one NES game's idle loop does; the NMI
     /// handler draws from it ($C030 decides a branch), copies it without
     /// deciding anything ($C038), and counts frames with an add ($30).
     fn game() -> Vec<u8> {

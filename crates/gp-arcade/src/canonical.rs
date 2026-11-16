@@ -6,14 +6,14 @@
 //! [`FIELDS`] in order: little-endian numbers and fixed byte arrays. The
 //! fields up to `ports` repeat parts of the machine by name, so `gp trace
 //! frame` and `gp trace diff` can say which part changed; the last,
-//! `machine`, is the BLAKE3 hash of the snapshot ([`Tapper::snapshot`]),
+//! `machine`, is the BLAKE3 hash of the snapshot ([`Mcr::snapshot`]),
 //! so the state's hash covers everything a restore needs while every
 //! frame's state keeps one size (a trace chunk wants that; the snapshot's
 //! timer list and pending sound writes vary). The snapshots themselves are
 //! the recording's checkpoints. A recording's field table is made from [`FIELDS`] (gp-cli's
 //! arcade recordings), the same way gp-nes's canonical state has its own.
 
-use crate::Tapper;
+use crate::Mcr;
 
 pub const STATE_MAGIC: [u8; 4] = *b"GPAR";
 /// Bumped when a field is added, removed or changes width.
@@ -63,7 +63,7 @@ pub const FIELDS: &[(&str, Option<u32>)] = &[
     ("machine", Some(MACHINE_BYTES)),
 ];
 
-impl Tapper {
+impl Mcr {
     /// The recorded state ([`FIELDS`]).
     pub fn recorded_state(&self) -> Vec<u8> {
         let snap = self.snapshot();
@@ -102,7 +102,7 @@ mod tests {
     fn the_fields_cover_the_state() {
         let fixed: u32 = FIELDS.iter().map(|f| f.1.unwrap()).sum();
         let rom = crate::testrom::looping();
-        let t = Tapper::power_on(&rom);
+        let t = Mcr::power_on(&rom);
         let s = t.recorded_state();
         assert_eq!(s.len(), 8 + fixed as usize);
         let at = s.len() - MACHINE_BYTES as usize;

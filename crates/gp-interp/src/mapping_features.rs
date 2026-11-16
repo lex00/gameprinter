@@ -588,7 +588,7 @@ mod tests {
             .iter()
             .find(|f| f.path.ends_with(".y"))
             .unwrap();
-        // A sprite byte of 48 (Tapper's bottom bar) is 193 units down.
+        // A sprite byte of 48 (an arcade game's bottom bar) is 193 units down.
         assert_eq!(f.value(&[48]), gp_runtime::Value::Fixed(193 << 16));
         assert_eq!(f.value(&[241]), gp_runtime::Value::Fixed(0));
         let listed = format!(

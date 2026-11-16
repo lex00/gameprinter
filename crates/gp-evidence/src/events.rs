@@ -9,12 +9,12 @@
 //! position is `scanline * 341 + dot`, and the first event in a frame counts
 //! from 0. Storing the change rather than the scanline and dot makes the
 //! same writes in consecutive frames the same bytes, which is what LZ4
-//! finds: it took the event stream of the Super Mario Bros. baseline run from
+//! finds: it took the event stream of one NES platformer's baseline run from
 //! 246KB to 58KB. See docs/formats/recording.md.
 //!
 //! An arcade board's frame isn't the NES's 312 lines of 341 dots, so a
-//! recording of one counts positions in its own [`Geometry`]: Tapper's is
-//! [`Geometry::MCR`], 481 lines of 512 pixels. The bytes are the same
+//! recording of one counts positions in its own [`Geometry`]: a Midway MCR
+//! board's is [`Geometry::MCR`], 481 lines of 512 pixels. The bytes are the same
 //! format; which geometry a stream uses follows from the recording's
 //! source (a romset), and the NES's is the default everywhere.
 
@@ -48,7 +48,7 @@ impl Geometry {
         lines: MAX_SCANLINES,
         dots: DOTS,
     };
-    /// Midway's MCR boards (Tapper): 480 lines of 512 pixels a frame, from
+    /// Midway's MCR boards: 480 lines of 512 pixels a frame, from
     /// the start of one VBLANK to the next, and one line more for what a
     /// CPU runs past the frame's end before the scheduler stops it.
     pub const MCR: Self = Self {

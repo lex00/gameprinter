@@ -80,7 +80,7 @@ pub(crate) fn stub(
     let mut stubbed = Vec::new();
     for asset in &map.assets {
         let Some(names) = slots_of.get(asset.name()) else {
-            // An asset no slot names, such as Super Mario Bros.' area
+            // An asset no slot names, such as a platformer's area
             // parser tables: kept as lifted.
             copy_files(lifted, &out, asset)?;
             unslotted.push(asset.name().to_owned());

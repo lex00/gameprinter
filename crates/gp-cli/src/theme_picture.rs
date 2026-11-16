@@ -46,7 +46,7 @@ pub enum PictureCmd {
     /// they accept. Writes only the proposal, under
     /// $GP_HOME/work/proposals/pictures/. Exits 1, with why, when a check
     /// refuses it. Example: gp theme picture propose
-    /// ~/.gameprinter/work/themes/clay --game donkey-kong --picture
+    /// ~/.gameprinter/work/themes/clay --game rooftop --picture
     /// art/hero.png --png /tmp/hero-red.png --why "A red cap, as you asked."
     Propose {
         /// The theme's folder (holding theme/look.txt, or look.txt), under

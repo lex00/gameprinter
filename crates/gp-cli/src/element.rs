@@ -70,17 +70,17 @@ pub enum ElementCmd {
     /// determine. Read-only. Answers a person's "what is this?" from the
     /// page (docs/element.md, "What is at a spot").
     ///
-    /// Example: gp element explain --run games/donkey-kong --clip dk.walk.001 --frame 120 --at 100,180
+    /// Example: gp element explain --run games/GAME --clip rooftop.walk.001 --frame 120 --at 100,180
     Explain(explain::ExplainArgs),
 }
 
 #[derive(Args, Clone, Default)]
 pub struct InputsArgs {
-    /// The game's package folder (games/donkey-kong). In game-printer this
+    /// The game's package folder (games/GAME). In game-printer this
     /// was a capture run.
     #[arg(long)]
     pub run: PathBuf,
-    /// A clip of the game's corpus by its ID (dk.hammer.018).
+    /// A clip of the game's corpus by its ID (rooftop.hammer.018).
     #[arg(long)]
     pub clip: String,
     /// The clip's frame, counted from its start as its score counts it
@@ -93,10 +93,10 @@ pub struct InputsArgs {
     #[arg(long)]
     pub byte: Option<String>,
     /// The measure, as the score names it (`bodies.podoboo[1].vy`,
-    /// `entities.mario[0].facing`). Default: the clip's first wrong one.
+    /// `entities.hero[0].facing`). Default: the clip's first wrong one.
     #[arg(long)]
     pub measure: Option<String>,
-    /// An element by its model entity (`goomba`): its first wrong measure
+    /// An element by its model entity (`walker`): its first wrong measure
     /// in the clip, and the routines that wrote its slot's bytes on the
     /// frame.
     #[arg(long)]

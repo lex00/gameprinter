@@ -723,8 +723,8 @@ pub fn search(config: &Config, a: SearchArgs) -> Result<Reply, String> {
         });
     } else if !query.is_empty() {
         // A template the query names (its directory or ID) comes before
-        // one whose description or mechanics only mention it: "smb1" is
-        // Super Mario Bros. before a hack of it.
+        // one whose description or mechanics only mention it: "rooftop1" is
+        // that game before a hack of it.
         templates.sort_by_key(|t| {
             let named = words(&format!(
                 "{} {}",
@@ -880,9 +880,9 @@ do = ["next-level"]
 
     #[test]
     fn query_words_start_words() {
-        let hay = words("Donkey Kong donkey-kong-ju boss");
-        assert!(matches(&["donkey".into(), "bo".into()], &hay));
-        assert!(!matches(&["pauline".into()], &hay));
+        let hay = words("Rooftop Run rooftop-run-ju boss");
+        assert!(matches(&["rooftop".into(), "bo".into()], &hay));
+        assert!(!matches(&["harbor".into()], &hay));
         assert!(matches(&[], &hay));
     }
 }

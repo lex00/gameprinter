@@ -947,7 +947,7 @@ pub fn stands_row(t: Tiles<'_>, kind: &Kind, b: &Body, row: i64, from: i64) -> b
 
 /// Core `level.tile_surfaces`: a body standing on ground, moved across,
 /// follows the surface under it up or down by at most [`SURFACE_STEP`]
-/// pixels (Donkey Kong's sloped girders, a pixel every 24). It keeps its
+/// pixels (a ladder game's sloped girders, a pixel every 24). It keeps its
 /// height while any column of its tile hitbox stands on it, then goes to
 /// the highest surface the hitbox covers. A step only goes to a row with a
 /// surface.
@@ -957,7 +957,7 @@ pub fn follow_surface(t: Tiles<'_>, kind: &Kind, b: &mut Body) {
     }
     // Platformer `level.ground`: the feet keep the height while they meet
     // a box on the row under the tile hitbox; meeting none, they go to the
-    // nearest row up or down whose box they meet (Donkey Kong's $D91A and
+    // nearest row up or down whose box they meet (a ladder game's $D91A and
     // $D8EB, after each move across).
     if !t.level.ground.is_empty() {
         let below = b.y.floor() + kind.tile_hitbox.y.floor() + kind.tile_hitbox.h.floor();
@@ -1063,7 +1063,7 @@ pub fn ground_at(t: Tiles<'_>, b: &Body, row: i64) -> Option<GroundHit> {
 
 /// Platformer `level.ground_bodies`: a ground test's result on the ride.
 /// A ground body starts a ride on it, no box ends one, and one of the
-/// level's boxes leaves it as it was (Donkey Kong's $D326 runs only when
+/// level's boxes leaves it as it was (a ladder game's $D326 runs only when
 /// the stage's boxes meet nothing, $D316).
 pub fn ride_by(b: &mut Body, hit: GroundHit) {
     match hit {
@@ -1103,11 +1103,11 @@ pub fn ground_land_hit(
 }
 
 /// Platformer `level.ground_land`: the row of the first ground box, in the
-/// level's order, that the body's feet (`ground_feet` from its x) meet on a
-/// row from `reach` pixels above `row` down to `row`, edges included.
-/// Donkey Kong's jump tests Mario's feet box, a row 3 pixels deep, against
-/// the girder pieces of his floor in their list's order ($D91A) and puts
-/// him on the first it meets ($D5D3).
+/// level's order, that the body's feet (`ground_feet` from its x) meet on a row
+/// from `reach` pixels above `row` down to `row`, edges included. A ladder
+/// game's jump tests the player's feet box, a row 3 pixels deep, against the
+/// girder pieces of its floor in their list's order ($D91A) and puts it on the
+/// first it meets ($D5D3).
 ///
 /// A box is passed on the rows of one of `holes` (platformer
 /// `level.pickup_holes`) whose columns hold the feet whole.

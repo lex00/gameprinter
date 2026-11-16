@@ -388,7 +388,7 @@ pub fn watch_original<O: Runtime>(
 /// entity path read as `entities.`. An entity's mechanic word
 /// (`ext[0]` to `[3]`) that the state's view leaves out, because no hook
 /// or component of its kind counts in it (a timer a hook elsewhere keeps,
-/// as Tapper's), is read from the model's canonical state: every body of
+/// as one arcade game's), is read from the model's canonical state: every body of
 /// the kind, in the view's order. None when it holds nothing.
 pub fn watch_model<M: QueryValues>(model: &M, spec: &Spec, path: &str) -> Vec<Value> {
     let path = match path.strip_prefix("bodies.") {
@@ -510,8 +510,8 @@ pub fn distance_of(whole: bool, original: &Value, model: &Value) -> Fx {
 /// The model's value of each field, read in one batch
 /// ([`gp_runtime::QueryValues`]). A field a case leaves unmeasured on
 /// this frame (`quiet`) whose path names nothing in the model's state
-/// (a body of a kind the level has none of, such as Donkey Kong's hammers
-/// on 75m) reads as false: it isn't compared.
+/// (a body of a kind the level has none of, such as one game's hammers
+/// on a stage without them) reads as false: it isn't compared.
 fn read_model<M: QueryValues>(
     model: &M,
     mapping: &Mapping,
@@ -1866,7 +1866,7 @@ pub fn is_camera(path: &str) -> bool {
 }
 
 /// The track a mapped path is scored on: the entity kind it belongs to
-/// (`mario` for `entities.mario[0].vx`), `camera`, or `game` for the
+/// (`hero` for `entities.hero[0].vx`), `camera`, or `game` for the
 /// counters, ticks, rules and level.
 pub fn track(path: &str) -> String {
     if is_camera(path) {
@@ -1926,7 +1926,7 @@ pub fn first_wrong(ls: &Lockstep, from: u64) -> Option<FirstWrong> {
     on(false).or_else(|| on(true))
 }
 
-/// A measure in a person's words: "mario's speed across",
+/// A measure in a person's words: "hero's speed across",
 /// "the camera's place across", "counters.time".
 pub fn words(path: &str) -> String {
     let field = path.rsplit('.').next().unwrap_or(path);
@@ -1974,25 +1974,25 @@ mod track_tests {
     #[test]
     fn the_camera_is_its_own_track() {
         assert!(is_camera("cameras.main.x"));
-        assert!(!is_camera("entities.mario[0].x"));
-        assert_eq!(track("entities.mario[0].vx"), "mario");
+        assert!(!is_camera("entities.hero[0].x"));
+        assert_eq!(track("entities.hero[0].vx"), "hero");
         assert_eq!(track("entities.slug[1].x"), "slug");
         assert_eq!(track("cameras.main.x"), "camera");
         assert_eq!(track("counters.time"), "game");
-        assert_eq!(words("entities.mario[0].vx"), "Mario's speed across");
+        assert_eq!(words("entities.hero[0].vx"), "Hero's speed across");
         assert_eq!(words("cameras.main.x"), "the camera's place across");
         assert_eq!(track("bodies.piranha_plant[0].phase"), "piranha_plant");
         assert_eq!(
-            words("bodies.goomba[1].x"),
-            "the second goomba's place across"
+            words("bodies.walker[1].x"),
+            "the second walker's place across"
         );
         assert_eq!(
             words("bodies.piranha_plant[0].y"),
             "the piranha plant's height"
         );
         assert_eq!(
-            words("bodies.koopa_red[0].moving"),
-            "the koopa red's direction"
+            words("bodies.shell_red[0].moving"),
+            "the shell red's direction"
         );
     }
 
@@ -2102,7 +2102,7 @@ mod track_tests {
         assert_eq!(clear.longest_any(), 6);
         // A run that starts out of play (a title, a menu) and is exact
         // from there to its end: its longest is all of its play, though no
-        // stretch is whole (dk.title.001 and dk.two-players.001 scored 0 s
+        // stretch is whole (one game's title.001 and two-players.001 clips scored 0 s
         // with no split before).
         let title = stretches(&run(".........", "---aaaaaa"));
         assert!(title.whole.is_empty());
@@ -2134,7 +2134,7 @@ mod track_tests {
         assert_eq!(seconds(601, NES), "10.0");
     }
 
-    /// The NES's rate as Donkey Kong's model gives it.
+    /// The NES's rate as one NES game's model gives it.
     const NES: u64 = 60_099;
 
     fn rate(text: &str) -> u64 {

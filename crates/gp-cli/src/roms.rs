@@ -55,7 +55,7 @@ pub struct Rom {
     /// An NES image's headerless SHA-256, or a romset's identity.
     pub sha256: String,
     pub platform: Platform,
-    /// A romset's MAME set name (rbtapper); none for the NES.
+    /// A romset's MAME set name (acmeset); none for the NES.
     pub system: Option<String>,
     /// A romset's chips, unzipped, one after another in the set's order:
     /// what a copy of its bytes would hold. Empty for the NES.

@@ -6,7 +6,7 @@
 // applies to each direction of a PORT_4WAY joystick.
 
 //! MAME's 4-way joystick filter: what a player's joystick or keys put on
-//! Tapper's four direction bits.
+//! the MCR board's four direction bits.
 //!
 //! MAME filters what a player presses, not what a script sets: a field
 //! given a value with `set_value` (the oracle's default) skips the filter,

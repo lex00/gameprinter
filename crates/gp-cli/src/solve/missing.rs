@@ -8,7 +8,7 @@
 //! |---|---|---|---|
 //! | `bodies` | `only_original`, `only_model` | the clip's paired bodies: a body one game has alone | "the original has a bullet bill cannon the model doesn't, from frame 5"; whether the model makes any of that kind in the clip |
 //! | `states` | `unseen` | a measure of names or flags: the original's value where it is first wrong, against every value the model takes in any of the run's clips | "the original's facing is (unnamed value 3), which the rebuilt game never has in 255 clips" |
-//! | `states` | `entry` | the first wrong frame, and the same body's `state` changing there in the original | "Mario's speed across parts on the frame the state turns dying_hold" |
+//! | `states` | `entry` | the first wrong frame, and the same body's `state` changing there in the original | "the player's speed across parts on the frame the state turns dying_hold" |
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -32,8 +32,8 @@ pub struct Finding {
     pub says: String,
 }
 
-/// A measure's path without its slot indexes: `bodies.goomba[1].x` is
-/// `bodies.goomba.x`.
+/// A measure's path without its slot indexes: `bodies.slug[1].x` is
+/// `bodies.slug.x`.
 pub fn key(path: &str) -> String {
     let mut out = String::with_capacity(path.len());
     let mut skip = false;
@@ -48,8 +48,8 @@ pub fn key(path: &str) -> String {
     out
 }
 
-/// The entity part of a path: `entities.mario[0].vx` is
-/// `entities.mario[0]`.
+/// The entity part of a path: `entities.frog[0].vx` is
+/// `entities.frog[0]`.
 fn owner(path: &str) -> &str {
     path.rsplit_once('.').map_or(path, |(a, _)| a)
 }
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn a_value_the_model_never_takes_and_a_body_only_the_original_has() {
-        let facing = "entities.mario[0].facing";
+        let facing = "entities.frog[0].facing";
         let o = outcome(
             vec![measure(
                 facing,
@@ -309,12 +309,12 @@ mod tests {
 
     #[test]
     fn a_split_on_the_frame_a_state_turns_is_its_entry() {
-        let vx = "entities.mario[0].vx";
+        let vx = "entities.frog[0].vx";
         let o = outcome(
             vec![
                 measure(vx, &["a", "a", "b"], &["a", "a", "a"], Some(2)),
                 measure(
-                    "entities.mario[0].state",
+                    "entities.frog[0].state",
                     &["small", "small", "dying_hold"],
                     &["small", "small", "dying_hold"],
                     None,
@@ -334,8 +334,8 @@ mod tests {
 
     #[test]
     fn a_path_loses_its_slot_indexes() {
-        assert_eq!(key("bodies.goomba[1].x"), "bodies.goomba.x");
-        assert_eq!(key("entities.mario[0].facing"), "entities.mario.facing");
-        assert_eq!(owner("entities.mario[0].vx"), "entities.mario[0]");
+        assert_eq!(key("bodies.slug[1].x"), "bodies.slug.x");
+        assert_eq!(key("entities.frog[0].facing"), "entities.frog.facing");
+        assert_eq!(owner("entities.frog[0].vx"), "entities.frog[0]");
     }
 }

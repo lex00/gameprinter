@@ -79,7 +79,7 @@
       "default": null
     },
     "read_at": {
-      "description": "Feature `align.read_at_nmi`: when in its frame the original's RAM\nis read. Without it, at the frame's end. `nmi`: as the CPU takes the\nnext NMI, for a game that runs its frame in the NMI handler and\nsometimes takes longer than a frame, so the handler's last routines\n(Donkey Kong's timers at $F4AC) have run when the frame is read.\nThe original's runtime must know `read_at_nmi` (gp-nes does).",
+      "description": "Feature `align.read_at_nmi`: when in its frame the original's RAM\nis read. Without it, at the frame's end. `nmi`: as the CPU takes the\nnext NMI, for a game that runs its frame in the NMI handler and\nsometimes takes longer than a frame, so the handler's last routines\n(one game's timers at $F4AC) have run when the frame is read.\nThe original's runtime must know `read_at_nmi` (gp-nes does).",
       "anyOf": [
         {
           "$ref": "#/$defs/ReadAt"
@@ -177,7 +177,7 @@
           "default": null
         },
         "nametable": {
-          "description": "Feature `field.case.nametable`: while `when` holds, a field that\nreads the name tables (its `nametable`) reads these PPU addresses\nin place of its own, as many of them. A picture a game draws at\nanother place on one stage: Donkey Kong draws Kong at $2084 on 25m\nand 75m and at $208D on 100m (the table at $C608 by $53), so the\ncell 25m reads at $20C5 is at $20CE there.",
+          "description": "Feature `field.case.nametable`: while `when` holds, a field that\nreads the name tables (its `nametable`) reads these PPU addresses\nin place of its own, as many of them. A picture a game draws at\nanother place on one stage: one game draws its villain at $2084 on its\nfirst two stages and at $208D on its last (the table at $C608 by $53),\nso the cell the first stage reads at $20C5 is at $20CE there.",
           "type": [
             "array",
             "null"
@@ -198,7 +198,7 @@
           "default": null
         },
         "number": {
-          "description": "Feature `field.case.number`: a number field's value while `when`\nholds, whatever its bytes say. Donkey Kong keeps a jump's takeoff\nheight in $95 and puts $FF there once the fall is too far; a case\ngives that the takeoff far above, so the landing kills.",
+          "description": "Feature `field.case.number`: a number field's value while `when`\nholds, whatever its bytes say. One game keeps a jump's takeoff\nheight in $95 and puts $FF there once the fall is too far; a case\ngives that the takeoff far above, so the landing kills.",
           "type": [
             "integer",
             "null"
@@ -207,7 +207,7 @@
           "default": null
         },
         "oam": {
-          "description": "Feature `field.case.oam`: while `when` holds, a field that reads\nOAM (its `oam`) reads these sprite table bytes in place of its own,\nas many of them. A game that sends its sprites to OAM in another\norder on one stage: Donkey Kong: Original Edition's 50m copies its\nsprite buffer into page $07 in turns ($895F), so Pauline's body is\nsprite 16 there, not 60.",
+          "description": "Feature `field.case.oam`: while `when` holds, a field that reads\nOAM (its `oam`) reads these sprite table bytes in place of its own,\nas many of them. A game that sends its sprites to OAM in another\norder on one stage: one derived game's second stage copies its\nsprite buffer into page $07 in turns ($895F), so the captive's body is\nsprite 16 there, not 60.",
           "type": [
             "array",
             "null"
@@ -221,7 +221,7 @@
           }
         },
         "ram": {
-          "description": "Feature `field.case.ram`: while `when` holds, the field reads these\naddresses in place of its `ram`, as many of them. A value a game\nkeeps once per player at an address picked by whose turn it is:\nDonkey Kong's scores at $25 + 4 times the player ($52).",
+          "description": "Feature `field.case.ram`: while `when` holds, the field reads these\naddresses in place of its `ram`, as many of them. A value a game\nkeeps once per player at an address picked by whose turn it is:\none game's scores at $25 + 4 times the player ($52).",
           "type": [
             "array",
             "null"
@@ -235,7 +235,7 @@
           }
         },
         "unmeasured": {
-          "description": "Feature `field.case.unmeasured`: why the field means nothing to\ncompare while `when` holds. A run doesn't compare it on those\nframes (they count as agreeing); a translation still loads it.\nDonkey Kong counts Kong's throw timer and the 11-frame divider on\nthrough a death and reuses $43 as the death's own timer, while\nthe model holds them still and restart-level sets them again.",
+          "description": "Feature `field.case.unmeasured`: why the field means nothing to\ncompare while `when` holds. A run doesn't compare it on those\nframes (they count as agreeing); a translation still loads it.\nOne game counts its villain's throw timer and the 11-frame divider on\nthrough a death and reuses $43 as the death's own timer, while\nthe model holds them still and restart-level sets them again.",
           "type": [
             "string",
             "null"
@@ -332,7 +332,7 @@
       ]
     },
     "DrawSite": {
-      "description": "One of the original's random draw sites: the instruction at `pc` reads\na random byte, `ram` or, indexed, one past it (Donkey Kong's fires read\n`$19,X`); a recording takes the byte the instruction reads. A hook\ndraws for it by `site`.",
+      "description": "One of the original's random draw sites: the instruction at `pc` reads\na random byte, `ram` or, indexed, one past it (one game's fires read\n`$19,X`); a recording takes the byte the instruction reads. A hook\ndraws for it by `site`.",
       "type": "object",
       "properties": {
         "note": {
@@ -386,7 +386,7 @@
       "type": "object",
       "properties": {
         "bcd": {
-          "description": "Feature `field.bcd`: each byte holds two decimal digits (packed\nBCD), most significant byte first, as Donkey Kong keeps its score\n($25-$27) and its bonus timer ($2E).",
+          "description": "Feature `field.bcd`: each byte holds two decimal digits (packed\nBCD), most significant byte first, as one game keeps its score\n($25-$27) and its bonus timer ($2E).",
           "type": "boolean",
           "default": false
         },
@@ -434,7 +434,7 @@
           "minimum": 0
         },
         "index": {
-          "description": "A slot field whose value is the slot's own number, plus `offset`\n(feature `slots.field.index`), with `ram = []`: for a hook that\nkeeps which slot it is in a word, as Donkey Kong's oil-drum fires,\nwhose slot picks their random byte and their climb.",
+          "description": "A slot field whose value is the slot's own number, plus `offset`\n(feature `slots.field.index`), with `ram = []`: for a hook that\nkeeps which slot it is in a word, as one game's oil-drum fires,\nwhose slot picks their random byte and their climb.",
           "type": "boolean",
           "default": false
         },
@@ -443,7 +443,7 @@
           "default": false
         },
         "lookup": {
-          "description": "Feature `field.lookup`: pairs of the number the bytes hold and the\nnumber the model has for it, for a byte that a game's script steps\nunevenly (Donkey Kong's death wait at $43). A number not listed is\ntaken as it is.",
+          "description": "Feature `field.lookup`: pairs of the number the bytes hold and the\nnumber the model has for it, for a byte that a game's script steps\nunevenly (one game's death wait at $43). A number not listed is\ntaken as it is.",
           "type": "array",
           "default": [],
           "items": {
@@ -472,7 +472,7 @@
           "default": null
         },
         "machine": {
-          "description": "Feature `field.machine`: a selector of the original's runtime\nprotocol whose number is the field's, in place of `ram`, for state\nthe console keeps outside memory: gp-nes's `nmi.` selectors, the\nconsole as the CPU takes the next NMI (where the code it stopped\ngoes on, the CPU cycle and the PPU dot of its entry), which Donkey\nKong's idle loop needs at a clip's start (docs/cycles.md). Read\nas 4 bytes, low first, so `bits` and `flag` apply.",
+          "description": "Feature `field.machine`: a selector of the original's runtime\nprotocol whose number is the field's, in place of `ram`, for state\nthe console keeps outside memory: gp-nes's `nmi.` selectors, the\nconsole as the CPU takes the next NMI (where the code it stopped\ngoes on, the CPU cycle and the PPU dot of its entry), which one\ngame's idle loop needs at a clip's start (docs/cycles.md). Read\nas 4 bytes, low first, so `bits` and `flag` apply.",
           "type": [
             "string",
             "null"
@@ -500,7 +500,7 @@
           }
         },
         "nametable": {
-          "description": "Feature `field.nametable`: name table cells by PPU address ($2000\nto $2FFF), low byte first, in place of `ram`, read through the\ncartridge's mirroring (the canonical state's `mapper.mirroring`)\nfrom its `nametables`. For a value a game keeps only on the\nscreen: Donkey Kong draws Kong as background tiles.",
+          "description": "Feature `field.nametable`: name table cells by PPU address ($2000\nto $2FFF), low byte first, in place of `ram`, read through the\ncartridge's mirroring (the canonical state's `mapper.mirroring`)\nfrom its `nametables`. For a value a game keeps only on the\nscreen: one game draws its villain as background tiles.",
           "type": "array",
           "default": [],
           "items": {
@@ -555,7 +555,7 @@
           "type": "string"
         },
         "presentation": {
-          "description": "A presentation value (schema 4): a translation loads it, but no\nrun compares it, so it is no measure and counts for nothing in a\nscore. Super Mario Bros.' color rotation is one.",
+          "description": "A presentation value (schema 4): a translation loads it, but no\nrun compares it, so it is no measure and counts for nothing in a\nscore. A platformer's color rotation is one.",
           "type": "boolean",
           "default": false
         },
@@ -583,7 +583,7 @@
           "default": null
         },
         "shared": {
-          "description": "A slot field whose bytes are at one address for every slot (schema\n12), a value the game keeps once and not per object: Super Mario\nBros.' FrenzyEnemyTimer.",
+          "description": "A slot field whose bytes are at one address for every slot (schema\n12), a value the game keeps once and not per object: a platformer's\nFrenzyEnemyTimer.",
           "type": "boolean",
           "default": false
         },
@@ -593,7 +593,7 @@
           "default": false
         },
         "stride": {
-          "description": "A slot field's bytes from one slot to the next (feature\n`slots.field.stride`): slot `i`'s are `i * stride` past slot 0's.\nWithout it, 1. Donkey Kong's barrels are drawn from a sprite buffer\nwith 16 bytes a barrel, and the game keeps no other copy of their\nplaces.",
+          "description": "A slot field's bytes from one slot to the next (feature\n`slots.field.stride`): slot `i`'s are `i * stride` past slot 0's.\nWithout it, 1. One game's barrels are drawn from a sprite buffer\nwith 16 bytes a barrel, and the game keeps no other copy of their\nplaces.",
           "type": [
             "integer",
             "null"
@@ -604,7 +604,7 @@
           "minimum": 0
         },
         "strides": {
-          "description": "Feature `slots.field.strides`: a stride for each byte the field\nreads (`ram`, then `frac`), in place of `stride`, for a value made\nof bytes from records that repeat at different steps. Tapper keeps\na customer's record every 32 bytes from E4B2 and its object (its\nflags and picture) every 8 from E262, and one word holds bytes of\nboth: `ram = [0xE4B2, 0xE4BF, 0xE263, 0xE264]`,\n`strides = [32, 32, 8, 8]`.",
+          "description": "Feature `slots.field.strides`: a stride for each byte the field\nreads (`ram`, then `frac`), in place of `stride`, for a value made\nof bytes from records that repeat at different steps. One arcade game keeps\na customer's record every 32 bytes from E4B2 and its object (its\nflags and picture) every 8 from E262, and one word holds bytes of\nboth: `ram = [0xE4B2, 0xE4BF, 0xE263, 0xE264]`,\n`strides = [32, 32, 8, 8]`.",
           "type": "array",
           "default": [],
           "items": {
@@ -739,7 +739,7 @@
       ]
     },
     "Pending": {
-      "description": "Changes to a counter the original holds back in `count` slots of its\nown, each with a byte that says how much and a timer. A slot changes\nthe counter on the frame it reads its timer as `at`, so a timer above\nthat is a change still to come. Super Mario Bros.' floatey numbers hold\nan award this way.",
+      "description": "Changes to a counter the original holds back in `count` slots of its\nown, each with a byte that says how much and a timer. A slot changes\nthe counter on the frame it reads its timer as `at`, so a timer above\nthat is a change still to come. One platformer's floatey numbers hold\nan award this way.",
       "type": "object",
       "properties": {
         "amount": {
@@ -810,7 +810,7 @@
       ]
     },
     "Scope": {
-      "description": "Where a run leaves what the template holds: the first of the\noriginal's frames after the comparison starts on which `while` no\nlonger holds, or on which a `leaves` selector's value differs from its\nvalue on the first compared frame (Donkey Kong's stage byte when 25m\ngives way to 75m).",
+      "description": "Where a run leaves what the template holds: the first of the\noriginal's frames after the comparison starts on which `while` no\nlonger holds, or on which a `leaves` selector's value differs from its\nvalue on the first compared frame (a game's stage byte when its first\nstage gives way to the next).",
       "type": "object",
       "properties": {
         "leaves": {
@@ -923,7 +923,7 @@
           }
         },
         "holds_slot": {
-          "description": "Optional: the object only holds its slot. A start carries it as a\nbody of this entity, so a new object takes the slot the original's\ndoes, and no run pairs or measures it: Super Mario Bros.' defeated\npiranha plant, which stays in its pipe until the view leaves it.",
+          "description": "Optional: the object only holds its slot. A start carries it as a\nbody of this entity, so a new object takes the slot the original's\ndoes, and no run pairs or measures it: a platformer's defeated\npiranha plant, which stays in its pipe until the view leaves it.",
           "type": "boolean",
           "default": false
         },
@@ -1000,7 +1000,7 @@
           "minimum": 0
         },
         "active_stride": {
-          "description": "The flag's bytes from one slot to the next (feature\n`slots.active_stride`). Without it, 1. Donkey Kong's oil-drum fires\nare free while their sprite's y in the sprite buffer, 16 bytes a\nfire, is $FF.",
+          "description": "The flag's bytes from one slot to the next (feature\n`slots.active_stride`). Without it, 1. One game's oil-drum fires\nare free while their sprite's y in the sprite buffer, 16 bytes a\nfire, is $FF.",
           "type": [
             "integer",
             "null"
@@ -1011,7 +1011,7 @@
           "minimum": 0
         },
         "clock": {
-          "description": "The original's frame counter, one byte. A life's body steps once\neach time it advances, with its value as the frame's low byte.\nWithout it (feature `slots.no_clock`), the bodies step once a frame\nand a start leaves the model's frame count as it is: Donkey Kong\nkeeps no frame counter.",
+          "description": "The original's frame counter, one byte. A life's body steps once\neach time it advances, with its value as the frame's low byte.\nWithout it (feature `slots.no_clock`), the bodies step once a frame\nand a start leaves the model's frame count as it is: one game\nkeeps no frame counter.",
           "type": [
             "integer",
             "null"
@@ -1056,7 +1056,7 @@
           "minimum": 0
         },
         "group": {
-          "description": "Since schema 9: more object slots of their own, each with its own\ncount, flag, ID and kinds, read as these are: Super Mario Bros.'\nfireballs and hammers, which the game keeps apart from its enemies.\nA group's lives are paired and measured as bodies and carried into\na start as these are; it takes the levels of these slots and has\nnone of its own and no groups. Its `rest` (schema 11) is by\n[`SHOT_REST_PATHS`].",
+          "description": "Since schema 9: more object slots of their own, each with its own\ncount, flag, ID and kinds, read as these are: a platformer's\nfireballs and hammers, which the game keeps apart from its enemies.\nA group's lives are paired and measured as bodies and carried into\na start as these are; it takes the levels of these slots and has\nnone of its own and no groups. Its `rest` (schema 11) is by\n[`SHOT_REST_PATHS`].",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Slots"
@@ -1074,7 +1074,7 @@
           ]
         },
         "id": {
-          "description": "Slot 0's object ID. Without it (feature `slots.no_id`), every\nslot's ID is 0, for a game whose slots hold one kind of object and\nkeep no ID: Donkey Kong's barrels.",
+          "description": "Slot 0's object ID. Without it (feature `slots.no_id`), every\nslot's ID is 0, for a game whose slots hold one kind of object and\nkeep no ID: one game's barrels.",
           "type": [
             "integer",
             "null"
@@ -1106,7 +1106,7 @@
           "default": null
         },
         "name": {
-          "description": "A group's name (feature `slots.group.name`), for people and for a\nderived template: `gp template derive` merges a delta's groups over\nits base's by name when every group has one, so a derived game adds\na group of its own and keeps its base's (until 2026-11-06, Donkey\nKong: Original Edition's 50m pies and moving ladders beside the\nfires, springs and elevators of the template it was derived from).\nNo run reads it.",
+          "description": "A group's name (feature `slots.group.name`), for people and for a\nderived template: `gp template derive` merges a delta's groups over\nits base's by name when every group has one, so a derived game adds\na group of its own and keeps its base's (until 2026-11-06, one\nderived game's second stage's pies and moving ladders beside the\nfires, springs and elevators of the template it was derived from).\nNo run reads it.",
           "type": [
             "string",
             "null"
@@ -1121,7 +1121,7 @@
           "default": null
         },
         "part_flag": {
-          "description": "The flag bit of a slot that is only a second part of another's\nobject: its other bits name that object's slot, and its ID means\nnothing, so it is no object unless a kind's `flags` lists the flag.\nA start gives it to that object's body, for a model entity with\n`extra_slots`. Super Mario Bros.' DuplicateEnemyObj.",
+          "description": "The flag bit of a slot that is only a second part of another's\nobject: its other bits name that object's slot, and its ID means\nnothing, so it is no object unless a kind's `flags` lists the flag.\nA start gives it to that object's body, for a model entity with\n`extra_slots`. A platformer's DuplicateEnemyObj.",
           "type": [
             "integer",
             "null"
@@ -1132,7 +1132,7 @@
           "minimum": 0
         },
         "presentation": {
-          "description": "Feature `slots.group.presentation`, a group's only: its objects\nare drawn, never compared. A start carries each of them as a body,\nits fields loaded from the original's state at the clip's start,\nand no run pairs or measures them, as a kind's `holds_slot` does\nfor every kind of the group. In free play nothing loads them, so\n`gp model check` holds the model to making them itself: each kind's\nentity has a hook of its own (`ext`) or is placed by a level's\n`spawn`. Tapper's bars' end pieces, objects the model doesn't run\nduring the end scripts.",
+          "description": "Feature `slots.group.presentation`, a group's only: its objects\nare drawn, never compared. A start carries each of them as a body,\nits fields loaded from the original's state at the clip's start,\nand no run pairs or measures them, as a kind's `holds_slot` does\nfor every kind of the group. In free play nothing loads them, so\n`gp model check` holds the model to making them itself: each kind's\nentity has a hook of its own (`ext`) or is placed by a level's\n`spawn`. An arcade game's bars' end pieces, objects the model doesn't run\nduring the end scripts.",
           "type": "boolean",
           "default": false
         },
@@ -1144,7 +1144,7 @@
           }
         },
         "resync": {
-          "description": "Feature `slots.resync`: a resync carries the original's slot\nobjects into the model as a start does, in place of the model's\nown, so after a split the whole world is back in step. Without it a\nresync keeps the model's enemies. Donkey Kong's barrels: a barrel\nthat has split stays split for the rest of a clip otherwise.",
+          "description": "Feature `slots.resync`: a resync carries the original's slot\nobjects into the model as a start does, in place of the model's\nown, so after a split the whole world is back in step. Without it a\nresync keeps the model's enemies. One game's barrels: a barrel\nthat has split stays split for the rest of a clip otherwise.",
           "type": "boolean",
           "default": false
         },
@@ -1171,7 +1171,7 @@
           "minimum": 0
         },
         "vacant": {
-          "description": "A condition over the original's state under which its slots hold\nnone of these objects, so every slot reads free (feature\n`slots.vacant`): the game has drawn something else in the bytes the\nslots are read from. A group without one takes its slots'. Donkey\nKong: Original Edition's stage-clear scene draws Kong carrying\nPauline in the barrels' and the fires' sprites ($8B03, while its\nscene step $0450 is 3 or more).",
+          "description": "A condition over the original's state under which its slots hold\nnone of these objects, so every slot reads free (feature\n`slots.vacant`): the game has drawn something else in the bytes the\nslots are read from. A group without one takes its slots'. One\nderived game's stage-clear scene draws its villain carrying\nthe captive in the barrels' and the fires' sprites ($8B03, while its\nscene step $0450 is 3 or more).",
           "type": [
             "string",
             "null"
@@ -1179,7 +1179,7 @@
           "default": null
         },
         "vacant_from": {
-          "description": "Feature `slots.vacant_from`: the slots from `slot` on read free\nwhile `when` holds, for a stage that uses fewer of them and the\nbytes of the rest for something else. Donkey Kong's fires take 4\nslots on 100m (C1F6[3]) and 2 elsewhere, where slots 2 and 3's\nsprites at $0230 and $0240 are barrels'.",
+          "description": "Feature `slots.vacant_from`: the slots from `slot` on read free\nwhile `when` holds, for a stage that uses fewer of them and the\nbytes of the rest for something else. One game's fires take 4\nslots on its last stage (C1F6[3]) and 2 elsewhere, where slots 2 and 3's\nsprites at $0230 and $0240 are barrels'.",
           "anyOf": [
             {
               "$ref": "#/$defs/VacantFrom"

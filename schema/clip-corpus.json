@@ -273,7 +273,7 @@
       "type": "object",
       "properties": {
         "id": {
-          "description": "`ground.still`, `ground.edge[1].over`, `enemy.near[goomba]`.",
+          "description": "`ground.still`, `ground.edge[1].over`, `enemy.near[walker]`.",
           "type": "string"
         },
         "lead": {

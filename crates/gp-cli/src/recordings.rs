@@ -34,7 +34,7 @@ use crate::recindex::Index;
 #[derive(clap::Args)]
 pub struct RecordArgs {
     /// The source to run, by the ROM entry's ID in a game's roms.toml
-    /// (e.g. donkey-kong-oe); found in $GP_ROM_DIR by hash.
+    /// (e.g. mosshop); found in $GP_ROM_DIR by hash.
     #[arg(long, conflicts_with = "rom", required_unless_present = "rom")]
     source: Option<String>,
     /// A ROM file to run instead of a registered source.
@@ -102,7 +102,7 @@ pub struct ReplayArgs {
 #[derive(clap::Args)]
 pub struct QueryArgs {
     /// The recording's ID, or a unique prefix of at least 4 characters; or
-    /// a corpus clip's play as clip:GAME:CLIP (clip:tapper:tapper.gameover.002,
+    /// a corpus clip's play as clip:GAME:CLIP (clip:acme:acme.gameover.002,
     /// GAME a package folder or a game's name), played from power-on on the
     /// original with no recording made.
     id: String,
@@ -984,7 +984,7 @@ pub(crate) fn query_on(
         let cursor = s.arcade(frame)?;
         let note = arcade_note(&cursor, s.opened());
         let (checkpoint, replayed, stale) = (cursor.checkpoint, cursor.replayed, cursor.stale);
-        let runtime = gp_arcade::ArcadeRuntime::new(cursor.into_tapper());
+        let runtime = gp_arcade::ArcadeRuntime::new(cursor.into_mcr());
         let mut entries = Vec::new();
         for s in selectors {
             entries.extend(runtime.query(s).map_err(anyhow::Error::msg)?);
@@ -1081,7 +1081,7 @@ pub(crate) fn query_frames_on(
             })
             .collect::<Result<_>>()?;
         let hashes = cursor.hashes().to_vec();
-        let mut runtime = gp_arcade::ArcadeRuntime::new(cursor.into_tapper());
+        let mut runtime = gp_arcade::ArcadeRuntime::new(cursor.into_mcr());
         let mut rows = Vec::new();
         let mut diverged = None;
         for (i, frame) in range.clone().enumerate() {
@@ -1091,7 +1091,7 @@ pub(crate) fn query_frames_on(
                     .map_err(anyhow::Error::msg)?;
             }
             if diverged.is_none()
-                && crate::arcade_rec::matches(runtime.tapper(), &hashes) == Some(false)
+                && crate::arcade_rec::matches(runtime.mcr(), &hashes) == Some(false)
             {
                 diverged = Some(frame);
             }
@@ -1319,14 +1319,14 @@ fn run_until_arcade(
         .map(|f| gp_runtime::InputFrame::pads(f.pads))
         .collect();
     let (hashes, stale) = (cursor.hashes().to_vec(), cursor.stale);
-    let mut runtime = gp_arcade::ArcadeRuntime::new(cursor.into_tapper());
+    let mut runtime = gp_arcade::ArcadeRuntime::new(cursor.into_mcr());
     let met = runtime
         .run_until(condition, &inputs, max)
         .map_err(anyhow::Error::msg)?
         .met;
     let ran = runtime.frame() - from;
     let at = runtime.frame();
-    let matches = crate::arcade_rec::matches(runtime.tapper(), &hashes);
+    let matches = crate::arcade_rec::matches(runtime.mcr(), &hashes);
     let note = note_unless_arcade(matches != Some(false), at, stale, opened);
     let mut entries = Vec::new();
     for s in show {

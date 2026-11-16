@@ -96,7 +96,7 @@ pub struct Mapping {
     /// is read. Without it, at the frame's end. `nmi`: as the CPU takes the
     /// next NMI, for a game that runs its frame in the NMI handler and
     /// sometimes takes longer than a frame, so the handler's last routines
-    /// (Donkey Kong's timers at $F4AC) have run when the frame is read.
+    /// (one game's timers at $F4AC) have run when the frame is read.
     /// The original's runtime must know `read_at_nmi` (gp-nes does).
     #[serde(default)]
     pub read_at: Option<ReadAt>,
@@ -160,8 +160,8 @@ pub struct Mapping {
 /// Where a run leaves what the template holds: the first of the
 /// original's frames after the comparison starts on which `while` no
 /// longer holds, or on which a `leaves` selector's value differs from its
-/// value on the first compared frame (Donkey Kong's stage byte when 25m
-/// gives way to 75m).
+/// value on the first compared frame (a game's stage byte when its first
+/// stage gives way to the next).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Scope {
@@ -203,7 +203,7 @@ pub struct NamedState {
 }
 
 /// One of the original's random draw sites: the instruction at `pc` reads
-/// a random byte, `ram` or, indexed, one past it (Donkey Kong's fires read
+/// a random byte, `ram` or, indexed, one past it (one game's fires read
 /// `$19,X`); a recording takes the byte the instruction reads. A hook
 /// draws for it by `site`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
@@ -272,7 +272,7 @@ impl Ignore {
 /// Changes to a counter the original holds back in `count` slots of its
 /// own, each with a byte that says how much and a timer. A slot changes
 /// the counter on the frame it reads its timer as `at`, so a timer above
-/// that is a change still to come. Super Mario Bros.' floatey numbers hold
+/// that is a change still to come. One platformer's floatey numbers hold
 /// an award this way.
 #[derive(Debug, Clone, PartialEq, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -343,7 +343,7 @@ pub struct Slots {
     /// with `free`, while it isn't that value).
     pub active: u16,
     /// The flag's bytes from one slot to the next (feature
-    /// `slots.active_stride`). Without it, 1. Donkey Kong's oil-drum fires
+    /// `slots.active_stride`). Without it, 1. One game's oil-drum fires
     /// are free while their sprite's y in the sprite buffer, 16 bytes a
     /// fire, is $FF.
     #[serde(default)]
@@ -354,13 +354,13 @@ pub struct Slots {
     pub free: Option<u8>,
     /// Slot 0's object ID. Without it (feature `slots.no_id`), every
     /// slot's ID is 0, for a game whose slots hold one kind of object and
-    /// keep no ID: Donkey Kong's barrels.
+    /// keep no ID: one game's barrels.
     #[serde(default)]
     pub id: Option<u16>,
     /// The original's frame counter, one byte. A life's body steps once
     /// each time it advances, with its value as the frame's low byte.
     /// Without it (feature `slots.no_clock`), the bodies step once a frame
-    /// and a start leaves the model's frame count as it is: Donkey Kong
+    /// and a start leaves the model's frame count as it is: one game
     /// keeps no frame counter.
     #[serde(default)]
     pub clock: Option<u16>,
@@ -372,16 +372,16 @@ pub struct Slots {
     /// A condition over the original's state under which its slots hold
     /// none of these objects, so every slot reads free (feature
     /// `slots.vacant`): the game has drawn something else in the bytes the
-    /// slots are read from. A group without one takes its slots'. Donkey
-    /// Kong: Original Edition's stage-clear scene draws Kong carrying
-    /// Pauline in the barrels' and the fires' sprites ($8B03, while its
+    /// slots are read from. A group without one takes its slots'. One
+    /// derived game's stage-clear scene draws its villain carrying
+    /// the captive in the barrels' and the fires' sprites ($8B03, while its
     /// scene step $0450 is 3 or more).
     #[serde(default)]
     pub vacant: Option<String>,
     /// Feature `slots.vacant_from`: the slots from `slot` on read free
     /// while `when` holds, for a stage that uses fewer of them and the
-    /// bytes of the rest for something else. Donkey Kong's fires take 4
-    /// slots on 100m (C1F6[3]) and 2 elsewhere, where slots 2 and 3's
+    /// bytes of the rest for something else. One game's fires take 4
+    /// slots on its last stage (C1F6[3]) and 2 elsewhere, where slots 2 and 3's
     /// sprites at $0230 and $0240 are barrels'.
     #[serde(default)]
     pub vacant_from: Option<VacantFrom>,
@@ -396,13 +396,13 @@ pub struct Slots {
     /// object: its other bits name that object's slot, and its ID means
     /// nothing, so it is no object unless a kind's `flags` lists the flag.
     /// A start gives it to that object's body, for a model entity with
-    /// `extra_slots`. Super Mario Bros.' DuplicateEnemyObj.
+    /// `extra_slots`. A platformer's DuplicateEnemyObj.
     #[serde(default)]
     pub part_flag: Option<u8>,
     /// Feature `slots.resync`: a resync carries the original's slot
     /// objects into the model as a start does, in place of the model's
     /// own, so after a split the whole world is back in step. Without it a
-    /// resync keeps the model's enemies. Donkey Kong's barrels: a barrel
+    /// resync keeps the model's enemies. One game's barrels: a barrel
     /// that has split stays split for the rest of a clip otherwise.
     #[serde(default)]
     pub resync: bool,
@@ -437,7 +437,7 @@ pub struct Slots {
     /// for every kind of the group. In free play nothing loads them, so
     /// `gp model check` holds the model to making them itself: each kind's
     /// entity has a hook of its own (`ext`) or is placed by a level's
-    /// `spawn`. Tapper's bars' end pieces, objects the model doesn't run
+    /// `spawn`. An arcade game's bars' end pieces, objects the model doesn't run
     /// during the end scripts.
     #[serde(default)]
     pub presentation: bool,
@@ -446,7 +446,7 @@ pub struct Slots {
     #[serde(default)]
     pub turn: Option<u16>,
     /// Since schema 9: more object slots of their own, each with its own
-    /// count, flag, ID and kinds, read as these are: Super Mario Bros.'
+    /// count, flag, ID and kinds, read as these are: a platformer's
     /// fireballs and hammers, which the game keeps apart from its enemies.
     /// A group's lives are paired and measured as bodies and carried into
     /// a start as these are; it takes the levels of these slots and has
@@ -457,8 +457,8 @@ pub struct Slots {
     /// A group's name (feature `slots.group.name`), for people and for a
     /// derived template: `gp template derive` merges a delta's groups over
     /// its base's by name when every group has one, so a derived game adds
-    /// a group of its own and keeps its base's (until 2026-11-06, Donkey
-    /// Kong: Original Edition's 50m pies and moving ladders beside the
+    /// a group of its own and keeps its base's (until 2026-11-06, one
+    /// derived game's second stage's pies and moving ladders beside the
     /// fires, springs and elevators of the template it was derived from).
     /// No run reads it.
     #[serde(default)]
@@ -510,7 +510,7 @@ pub struct SlotKind {
     pub ends: Option<u8>,
     /// Optional: the object only holds its slot. A start carries it as a
     /// body of this entity, so a new object takes the slot the original's
-    /// does, and no run pairs or measures it: Super Mario Bros.' defeated
+    /// does, and no run pairs or measures it: a platformer's defeated
     /// piranha plant, which stays in its pipe until the view leaves it.
     #[serde(default)]
     pub holds_slot: bool,
@@ -622,7 +622,7 @@ pub struct Field {
     /// to $2FFF), low byte first, in place of `ram`, read through the
     /// cartridge's mirroring (the canonical state's `mapper.mirroring`)
     /// from its `nametables`. For a value a game keeps only on the
-    /// screen: Donkey Kong draws Kong as background tiles.
+    /// screen: one game draws its villain as background tiles.
     #[serde(default)]
     pub nametable: Vec<u16>,
     /// Feature `field.oam`: sprite memory bytes by index (a slot's 4
@@ -639,8 +639,8 @@ pub struct Field {
     /// protocol whose number is the field's, in place of `ram`, for state
     /// the console keeps outside memory: gp-nes's `nmi.` selectors, the
     /// console as the CPU takes the next NMI (where the code it stopped
-    /// goes on, the CPU cycle and the PPU dot of its entry), which Donkey
-    /// Kong's idle loop needs at a clip's start (docs/cycles.md). Read
+    /// goes on, the CPU cycle and the PPU dot of its entry), which one
+    /// game's idle loop needs at a clip's start (docs/cycles.md). Read
     /// as 4 bytes, low first, so `bits` and `flag` apply.
     #[serde(default)]
     pub machine: Option<String>,
@@ -664,7 +664,7 @@ pub struct Field {
     #[serde(default)]
     pub digits: bool,
     /// Feature `field.bcd`: each byte holds two decimal digits (packed
-    /// BCD), most significant byte first, as Donkey Kong keeps its score
+    /// BCD), most significant byte first, as one game keeps its score
     /// ($25-$27) and its bonus timer ($2E).
     #[serde(default)]
     pub bcd: bool,
@@ -685,7 +685,7 @@ pub struct Field {
     pub names: Vec<(u32, String)>,
     /// Feature `field.lookup`: pairs of the number the bytes hold and the
     /// number the model has for it, for a byte that a game's script steps
-    /// unevenly (Donkey Kong's death wait at $43). A number not listed is
+    /// unevenly (one game's death wait at $43). A number not listed is
     /// taken as it is.
     #[serde(default)]
     pub lookup: Vec<(i64, i64)>,
@@ -705,24 +705,24 @@ pub struct Field {
     pub cases: Vec<Case>,
     /// A presentation value (schema 4): a translation loads it, but no
     /// run compares it, so it is no measure and counts for nothing in a
-    /// score. Super Mario Bros.' color rotation is one.
+    /// score. A platformer's color rotation is one.
     #[serde(default)]
     pub presentation: bool,
     /// A slot field whose bytes are at one address for every slot (schema
-    /// 12), a value the game keeps once and not per object: Super Mario
-    /// Bros.' FrenzyEnemyTimer.
+    /// 12), a value the game keeps once and not per object: a platformer's
+    /// FrenzyEnemyTimer.
     #[serde(default)]
     pub shared: bool,
     /// A slot field's bytes from one slot to the next (feature
     /// `slots.field.stride`): slot `i`'s are `i * stride` past slot 0's.
-    /// Without it, 1. Donkey Kong's barrels are drawn from a sprite buffer
+    /// Without it, 1. One game's barrels are drawn from a sprite buffer
     /// with 16 bytes a barrel, and the game keeps no other copy of their
     /// places.
     #[serde(default)]
     pub stride: Option<u16>,
     /// Feature `slots.field.strides`: a stride for each byte the field
     /// reads (`ram`, then `frac`), in place of `stride`, for a value made
-    /// of bytes from records that repeat at different steps. Tapper keeps
+    /// of bytes from records that repeat at different steps. One arcade game keeps
     /// a customer's record every 32 bytes from E4B2 and its object (its
     /// flags and picture) every 8 from E262, and one word holds bytes of
     /// both: `ram = [0xE4B2, 0xE4BF, 0xE263, 0xE264]`,
@@ -731,7 +731,7 @@ pub struct Field {
     pub strides: Vec<u16>,
     /// A slot field whose value is the slot's own number, plus `offset`
     /// (feature `slots.field.index`), with `ram = []`: for a hook that
-    /// keeps which slot it is in a word, as Donkey Kong's oil-drum fires,
+    /// keeps which slot it is in a word, as one game's oil-drum fires,
     /// whose slot picks their random byte and their climb.
     #[serde(default)]
     pub index: bool,
@@ -791,13 +791,13 @@ pub struct Case {
     /// Feature `field.case.unmeasured`: why the field means nothing to
     /// compare while `when` holds. A run doesn't compare it on those
     /// frames (they count as agreeing); a translation still loads it.
-    /// Donkey Kong counts Kong's throw timer and the 11-frame divider on
+    /// One game counts its villain's throw timer and the 11-frame divider on
     /// through a death and reuses $43 as the death's own timer, while
     /// the model holds them still and restart-level sets them again.
     #[serde(default)]
     pub unmeasured: Option<String>,
     /// Feature `field.case.number`: a number field's value while `when`
-    /// holds, whatever its bytes say. Donkey Kong keeps a jump's takeoff
+    /// holds, whatever its bytes say. One game keeps a jump's takeoff
     /// height in $95 and puts $FF there once the fall is too far; a case
     /// gives that the takeoff far above, so the landing kills.
     #[serde(default)]
@@ -805,23 +805,23 @@ pub struct Case {
     /// Feature `field.case.ram`: while `when` holds, the field reads these
     /// addresses in place of its `ram`, as many of them. A value a game
     /// keeps once per player at an address picked by whose turn it is:
-    /// Donkey Kong's scores at $25 + 4 times the player ($52).
+    /// one game's scores at $25 + 4 times the player ($52).
     #[serde(default)]
     pub ram: Option<Vec<u16>>,
     /// Feature `field.case.oam`: while `when` holds, a field that reads
     /// OAM (its `oam`) reads these sprite table bytes in place of its own,
     /// as many of them. A game that sends its sprites to OAM in another
-    /// order on one stage: Donkey Kong: Original Edition's 50m copies its
-    /// sprite buffer into page $07 in turns ($895F), so Pauline's body is
+    /// order on one stage: one derived game's second stage copies its
+    /// sprite buffer into page $07 in turns ($895F), so the captive's body is
     /// sprite 16 there, not 60.
     #[serde(default)]
     pub oam: Option<Vec<u16>>,
     /// Feature `field.case.nametable`: while `when` holds, a field that
     /// reads the name tables (its `nametable`) reads these PPU addresses
     /// in place of its own, as many of them. A picture a game draws at
-    /// another place on one stage: Donkey Kong draws Kong at $2084 on 25m
-    /// and 75m and at $208D on 100m (the table at $C608 by $53), so the
-    /// cell 25m reads at $20C5 is at $20CE there.
+    /// another place on one stage: one game draws its villain at $2084 on its
+    /// first two stages and at $208D on its last (the table at $C608 by $53),
+    /// so the cell the first stage reads at $20C5 is at $20CE there.
     #[serde(default)]
     pub nametable: Option<Vec<u16>>,
     #[serde(default)]
@@ -1496,7 +1496,7 @@ impl Field {
         // The value is shifted 16 bits for its fraction, so it has 47
         // bits: 5 bytes, or 14 digits. A plain whole number takes no shift:
         // up to 8 bytes, the eighth's top bit the number's sign bit
-        // (feature field.whole_64, Donkey Kong's 64-bit register $18-$1F).
+        // (feature field.whole_64, one game's 64-bit register $18-$1F).
         let plain = f.frac.is_none()
             && f.scale.is_none()
             && f.offset.is_none()

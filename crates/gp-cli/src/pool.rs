@@ -12,7 +12,7 @@
 //!
 //! The helpers are shared by the machine too. Every gp process with
 //! helpers working leaves a locked file in `~/.gameprinter/work/helpers`
-//! (from `$HOME`, not `$GP_HOME`, so the gate's canary homes count as well;
+//! (from `$HOME`, not `$GP_HOME`, so every home on the machine counts;
 //! the kernel drops the lock when a process dies). Each process lets at
 //! most every core less two, divided by the processes there, of its
 //! helpers run an item at once, and looks again about once a second: three

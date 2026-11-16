@@ -70,7 +70,7 @@ Docs and tests land with each wave. The wave-10 branch brings the three agent sk
 
 - Six source entries: Kirby, Ninja Gaiden, Gauntlet, Gauntlet II, Q*bert, Track & Field.
 - Donkey Kong's `evidence/` score records, including the whole-corpus baseline the evaluation put at step 3.3.
-- `profiles_dk`'s frame-by-frame hammer and jump checks, which need a module run's counters on every frame.
+- The `profiles` test's frame-by-frame hammer and jump checks, which need a module run's counters on every frame.
 - The wasmtime, x86_64, Docker and tetanes vendor checks.
 - The recipes whose scripts didn't come: `upgrades`, `build-timings`, `bench`.
 

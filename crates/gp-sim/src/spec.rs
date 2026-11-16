@@ -1429,9 +1429,9 @@ pub struct Level {
     /// row under its tile hitbox ([`crate::world::ground_land_row`]).
     pub ground_land: Option<i64>,
     /// Platformer `level.ground_boxes`: the ground is one box a row, so the
-    /// walk takes no step where the feet meet none and a fall off a ledge
-    /// drops its `speed` on its first frame, not its `first` (Donkey Kong's
-    /// $D8AD on 75m, where 25m's $D91A steps a pixel, $D8EB).
+    /// walk takes no step where the feet meet none and a fall off a ledge drops
+    /// its `speed` on its first frame, not its `first` (a ladder game's $D8AD
+    /// on its third stage, where the first stage's $D91A steps a pixel, $D8EB).
     pub ground_boxes: bool,
     /// Platformer `level.ground_land_rising`: a jump lands on the ground
     /// its feet meet on any frame after its takeoff, rising too.
@@ -1498,7 +1498,7 @@ pub struct Level {
     /// free one, with the speed up and down and the fraction across its
     /// last body left (core 0.4.11): [`crate::world::World::slot_rest`].
     pub slot_rest: bool,
-    /// The level's `hard_spawns` (platformer 0.4.26): Super Mario Bros.'
+    /// The level's `hard_spawns` (platformer 0.4.26): a side-scroller's
     /// SecondaryHardMode, which a launcher's `hard_mask` reads too.
     pub hard: bool,
     /// How the level is drawn ahead of the view, for `drawn` spawns.
@@ -1521,7 +1521,7 @@ pub struct ScrollStop {
 }
 
 /// A level that sends the player back when its draw reaches a check and the
-/// player isn't where the check wants (Super Mario Bros.' ProcLoopCommand).
+/// player isn't where the check wants (a side-scroller's ProcLoopCommand).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoopBack {
     /// Pixels the player and the view go back: a whole number of the
@@ -1695,8 +1695,8 @@ pub struct Camera {
 /// whole-pixel move this frame, by where the entity was in the view on
 /// the frame before: not at all while that place is under `from`, the
 /// move less `short_by` (but at least a pixel) from `from`, and the whole
-/// move from `full` on. A move back or none doesn't move it. Super Mario
-/// Bros.' ScrollHandler, with 80, 112 and 1.
+/// move from `full` on. A move back or none doesn't move it. a
+/// side-scroller's ScrollHandler, with 80, 112 and 1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ByMove {
     pub from: Fx,

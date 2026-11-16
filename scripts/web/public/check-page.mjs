@@ -10,10 +10,13 @@
 // any frame makes is logged: each must be a GET with no body to the page's
 // own server (or a blob: URL), and no WebSocket may open, so nothing of
 // the ROM leaves the browser.
-//   node scripts/web/public/check-page.mjs --dist OUT --browser BROWSER [--shots DIR] [--full] [--jobs N] [--only REGEX] [--accept-pictures]
+//   node scripts/web/public/check-page.mjs --dist OUT --browser BROWSER [--games DIR] [--shots DIR] [--full] [--jobs N] [--only REGEX] [--accept-pictures]
 // The picture sections (pictures-*) play fixed moments and compare the
-// game canvas's pixels with the references in pictures.txt (below,
-// "Pictures"); --accept-pictures records new ones.
+// game canvas's pixels with the references in each game's page-pictures.txt
+// (below, "Pictures"); --accept-pictures records new ones. What it holds
+// each game to (its routes, its loads, its page lines, its arcade facts) is
+// in the game's own folder in the games checkout, --games DIR (below, "The
+// games checkout").
 // With no accepted ROM in $GP_ROM_DIR the ROM steps are skipped and it
 // says so. Exit codes: 0 passed, 1 a check failed, 2 couldn't run.
 //
@@ -30,6 +33,7 @@
 // --only runs just the sections whose names match REGEX (rom-.*-play, say)
 // and leaves the others out of the run and its lines; the release check
 // never passes it.
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
@@ -172,152 +176,109 @@ function findRom(sha) {
 // (`gp-frames 1`, docs/generator.md): "right+a@100-120" holds Right and A
 // from frame 100 to 120, both included.
 const BITS = { a: 1, b: 2, select: 4, start: 8, up: 16, down: 32, left: 64, right: 128 };
-function framesOf(holds, n) {
+function framesOf(holds, n, named = BITS) {
   const pad = new Array(n).fill(0);
   for (const h of holds) {
     const [keys, span] = h.split("@");
     const [a, b] = span.split("-");
-    const bits = keys.split("+").reduce((m, k) => m | BITS[k], 0);
+    const bits = keys.split("+").reduce((m, k) => {
+      if (!(k in named)) throw new Error(`a hold names a key the run hasn't: ${h}`);
+      return m | named[k];
+    }, 0);
     for (let f = Number(a); f <= (b === "" ? n - 1 : Number(b)); f++) pad[f] |= bits;
   }
   return "gp-frames 1\n" + pad.map((v) => v.toString(16).padStart(2, "0")).join("\n") + "\n";
 }
 
-// Each ROM's game played from power-on through every stage it has, in the
-// real game's order, to 100m's ending and 25m a loop on. `plays` is that
-// order, from the game, not from the model: Original Edition goes 25m,
-// 50m, 75m, 100m; Donkey Kong (JU) has no 50m and goes 25m, 75m, 100m
-// ($53 from 1 to 3). Each of `stages` is one stage of it: `level` the
-// model's level that plays it, `start` a frame at its start with Mario
-// standing at `mario`, `shot` a frame of it with `kinds` about, `clear`
-// the frame Mario finishes it (the stage counter moves on: the goal on
-// 25m, 50m and 75m, the last rivet on 100m), with Mario at a y of `top`
-// or less. `ending` is a frame of 100m's ending with `kinds` about, and
-// `again` a frame of the next loop's 25m, with Mario at his start;
-// `frames` is the run's length. `leftOut` names the rules and entity kinds
-// of the model the ROM's game hasn't, which the lifted model must not have
-// and no frame may show.
-//
-// Original Edition's run: 25m by the route `gp level measure --clears`
-// found (worker relfix, 2026-11-07), then the original's own presses
-// from dk.m100-clear.001's start (power-on to 100m's last rivet on the
-// real game, templates/donkey-kong-oe/clips) for 50m, dk.m75-clear.001's
-// for 75m and dk.m100-clear.001's again with that clip's own for 100m
-// and the ending, each moved to the frame the stage starts on in the
-// model (gp interp run on the model, 2026-11-07).
-const ROUTES = {
-  "donkey-kong-oe": {
-    plays: ["main", "m50", "m75", "m100"],
-    stages: [
-      { name: "25m", level: "main", start: 550, mario: [53, 204], shot: 1200, kinds: ["kong", "barrel", "oil_drum"], clear: 1754, top: 40 },
-      { name: "50m", level: "m50", start: 2156, mario: [61, 204], shot: 2500, kinds: ["kong_50m", "pie", "conveyor"], clear: 2852, top: 60 },
-      { name: "75m", level: "m75", start: 3256, mario: [21, 188], shot: 3600, kinds: ["kong_75m", "elevator", "spring"], clear: 4401, top: 40 },
-      { name: "100m", level: "m100", start: 4807, mario: [61, 204], shot: 5600, kinds: ["kong_100m", "fire"], clear: 6633, top: 60 },
-    ],
-    ending: { frame: 6900, kinds: ["heart", "kong_fallen", "ending_mario"] },
-    again: { frame: 7620, mario: [53, 204] },
-    frames: 7700,
-    holds: [
-      "start@40-44", "right@561-777", "up@778-847", "left@848-986", "up@987-1072", "right@1073-1091",
-      "up@1092-1177", "left@1178-1259", "right@1260-1277", "up@1278-1357", "right@1358-1520", "up@1521-1588",
-      "left@1589-1679", "up@1680-1753", "right@2156-2209", "up@2210-2304", "left@2315-2322", "up@2323-2440",
-      "left@2443-2455", "left+a@2456-2457", "left@2458-2499", "left@2532-2559", "up@2560-2678", "left@2681-2733",
-      "up@2734-2851", "right@3257-3260", "up@3261-3385", "right@3386-3395", "up@3396-3567", "right@3577-3582",
-      "right+a@3672-3672", "right@3673-3684", "right@3697-3714", "right+a@3715-3715", "right@3716-3755", "right@3952-3986",
-      "right+a@3987-3987", "right@3988-4026", "right+a@4027-4027", "right@4028-4047", "right@4067-4098", "right+a@4099-4099",
-      "right@4100-4119", "left@4141-4143", "up@4147-4257", "left@4287-4329", "up@4330-4407", "left@4808-4873",
-      "up@4874-4968", "right@4969-5279", "up@5280-5397", "left@5402-5688", "up@5689-5806", "right@5815-6077",
-      "up@6078-6195", "left@6196-6242", "down@6243-6340", "left@6341-6496", "up@6497-6572", "up@6573-6615",
-      "left@6616-6632",
-    ],
-    // Deaths the route doesn't play (romDeaths, below): `holds` from
-    // power-on, Mario dead by frame `hit` at `at` (his body still there,
-    // the game holding), back at his start `mario` on `level` by frame
-    // `restart`, the game stepping on after it.
-    deaths: [
-      {
-        // The route to 50m and up its second ladder (x 81), stopped a
-        // step short of girder 3; a fire coming down from the middle
-        // conveyor meets him there (the user, 2026-11-08: "scaling the
-        // top of the 2nd ladder, fireball hit me, then the game froze").
-        name: "50m: a fire at the top of the ladder at x 81",
-        level: "m50",
-        holds: [
-          "start@40-44", "right@561-777", "up@778-847", "left@848-986", "up@987-1072", "right@1073-1091",
-          "up@1092-1177", "left@1178-1259", "right@1260-1277", "up@1278-1357", "right@1358-1520", "up@1521-1588",
-          "left@1589-1679", "up@1680-1753", "right@2156-2209", "up@2210-2304", "left@2315-2322", "up@2323-2425",
-        ],
-        at: [81, 137],
-        hit: 3660,
-        restart: 4104,
-        mario: [61, 204],
-        frames: 4400,
-      },
-    ],
-    // A game lost standing still at 25m's start in a profile (`gameOver`,
-    // romDeaths): its last death ends in GAME OVER and the title, whose
-    // demo then walks Mario to `mario` by `frame`. In Normal the last
-    // death held the game for good until 2026-11-08 (quick_restart,
-    // templates/donkey-kong-oe/profiles.toml). Since 2026-11-14 Normal's
-    // deaths play their whole spin (games bd0815f), so the demo walks
-    // Mario there 473 frames later than before.
-    gameOver: { profile: "normal", holds: ["start@40-44"], frames: 3500, frame: 3273, mario: [195, 201] },
-  },
-  "donkey-kong-ju": {
-    plays: ["main", "m75", "m100"],
-    // Original Edition's stage-clear scene, Kong taking Pauline up: JU's
-    // game goes on from the clear with the stage as it stands.
-    leftOut: ["clear_scene", "kong_carry", "pauline_carry"],
-    stages: [
-      { name: "25m", level: "main", start: 550, mario: [53, 204], shot: 1200, kinds: ["kong", "barrel", "oil_drum"], clear: 1730, top: 40 },
-      { name: "75m", level: "m75", start: 2134, mario: [21, 188], shot: 2478, kinds: ["kong_75m", "elevator", "spring"], clear: 3288, top: 40 },
-      { name: "100m", level: "m100", start: 3685, mario: [61, 204], shot: 4478, kinds: ["kong_100m", "fire"], clear: 5511, top: 60 },
-    ],
-    ending: { frame: 5778, kinds: ["heart", "kong_fallen", "ending_mario"] },
-    again: { frame: 6498, mario: [53, 204] },
-    frames: 6578,
-    holds: [
-      "start@40-44", "right@561-777", "up@778-847", "left@848-986", "up@987-1072", "right@1073-1091", "up@1092-1177",
-      "left@1178-1241", "up@1242-1321", "right@1322-1484", "up@1485-1552", "left@1553-1592", "left+a@1593-1593",
-      "left@1594-1656", "up@1657-1729", "left+a@2134-2165", "up@2166-2173", "a@2182-2197", "up@2198-2206", "left+a@2255-2278",
-      "up@2279-2424", "right@2425-2436", "right+a@2453-2500", "right@2501-2512", "down@2537-2540", "left@2541-2564",
-      "right@2565-2570", "a@2571-2602", "up@2603-2604", "right+a@2605-2616", "left+a@2617-2632", "down@2633-2638",
-      "a@2639-2639", "left@2640-2663", "left+a@2664-2669", "a@2670-2701", "right+a@2704-2707", "down@2708-2719",
-      "down@2752-2763", "right+a@2764-2769", "a@2770-2793", "right@2794-2841", "right+a@2842-2873", "down@2874-2885",
-      "right+a@2886-2893", "right@2926-2949", "right@2956-2961", "right+a@2962-2977", "right@2978-3000", "up@3001-3094",
-      "left@3175-3218", "up@3219-3288", "left@3686-3751", "up@3752-3846", "right@3847-4157", "up@4158-4275",
-      "left@4280-4566", "up@4567-4684", "right@4693-4955", "up@4956-5073", "left@5074-5120", "down@5121-5218",
-      "left@5219-5374", "up@5375-5450", "up@5451-5493", "left@5494-5510",
-    ],
-  },
-};
-// A Donkey Kong (JU) ROM plays Original Edition's model (its template's
-// [[loads]]) over JU's own lifted tables, which move its barrels and 75m
-// otherwise, so it has a run of its own, looked up by the folder the lift
-// names (result.json's `found.template`). Until 2026-11-06 JU had a model
-// and a route of its own; from then until 2026-11-07 the check gave it
-// Original Edition's run, which dies on JU's 25m. Its 25m is the route
-// `gp level measure --clears 1` finds on JU's lift; its 75m is the one
-// worker relfix's search of the page's module found, moved to the frame
-// 75m starts on; its 100m and ending are Original Edition's presses from
-// dk.m100-clear.001, moved so the first one lands on the first frame
-// Mario moves on JU's 100m as on Original Edition's (3686 and 4808). Each
-// start was read off the page's module (relfix's tools, gp_web.wasm under
-// Node). Found again on 2026-11-07 when JU's map gained the code from
-// $C707 on (code_c707, code_c735, code_c74e): it had been zeros, and JU's
-// own code moves the barrels on 25m.
+// ---- The games checkout: what the check holds each game to ----
 
-// A ROM a template only loads to play ([[loads]]; docs/web.md, "ROMs to
-// play") has its own asset map and not every slot of the template's model:
-// the assets of what its game does without ([[loads.without]]) are left
-// blank, and nothing is filled from anywhere else (until 2026-11-11 they
-// came from Rivet Rodeo, the retired open version). Its lift's counts, by
-// the folder `found.template` names: `found` of `of` assets from the ROM,
-// `blank` left blank, and `without` what the page names as missing from
-// the ROM's game. A template's own ROM is held to every asset found.
-const LOADS = {
-  "donkey-kong-ju": { found: 57, of: 72, blank: 15, without: ["50m", "stage-clear scene"] },
-};
+// The games checkout (--games DIR, else $GP_GAMES_DIR, else `games` beside
+// the tools): each game folder's facts, read once. The tools know no game by
+// name: a game's routes, its loads, its page lines and its arcade facts are
+// in its own folder (docs/web.md, "The games' check files"):
+//   page-check.toml    [page] characters and owner, [what_is_this],
+//                      [[route]] and [[load]] by roms.toml id, [arcade],
+//                      [test_themes]
+//   theme-shots.toml   the [[run]]s a route names by `run`
+//   page-pictures.txt  the picture references (below, "Pictures")
+//   roms.toml, package.toml  the sources' ids, titles and hashes, and the
+//                      package's name and [[rom.entry]] roles
+const gamesDir = resolve(opt("games") ?? process.env.GP_GAMES_DIR ?? join(repo, "..", "games"));
+if (!existsSync(gamesDir)) {
+  console.error(`check-page: no games checkout at ${gamesDir} (give --games DIR or set GP_GAMES_DIR)`);
+  process.exit(2);
+}
+const GAMES = JSON.parse(
+  execFileSync(
+    "python3",
+    [
+      "-I",
+      "-c",
+      `import json, os, sys, tomllib
+root = sys.argv[1]
+def read(p):
+    return tomllib.load(open(p, "rb")) if os.path.isfile(p) else None
+out = []
+for d in sorted(os.listdir(root)):
+    f = os.path.join(root, d)
+    pkg = read(os.path.join(f, "package.toml"))
+    if not pkg or pkg.get("package", {}).get("kind") != "game":
+        continue
+    out.append({
+        "dir": f,
+        "name": pkg["package"]["name"],
+        "title": pkg["package"].get("title"),
+        "entries": [{"id": e.get("id"), "role": e.get("role")} for e in pkg.get("rom", {}).get("entry", [])],
+        "roms": (read(os.path.join(f, "roms.toml")) or {}).get("source", []),
+        "check": read(os.path.join(f, "page-check.toml")),
+        "shots": (read(os.path.join(f, "theme-shots.toml")) or {}).get("run", []),
+        "pictures": os.path.join(f, "page-pictures.txt"),
+    })
+print(json.dumps(out))`,
+      gamesDir,
+    ],
+    { encoding: "utf8" },
+  ),
+);
+// The game a package name names, and the page's own.
+const gameNamed = (name) => GAMES.find((g) => g.name === name) ?? null;
+const pageGame = gameNamed(page.game);
+// A game's names a page about another game must not show: its package's
+// title, its sources' titles and its maker.
+const namesOf = (g) => [g.title, ...g.roms.map((r) => r.title), g.check?.page?.owner].filter(Boolean);
+const othersNames = (but = null) => [...new Set(GAMES.filter((g) => g.name !== but).flatMap(namesOf))];
+const anyOf = (words) => (words.length ? new RegExp(words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")) : /(?!)/);
+
+// Each ROM's game played from power-on through every stage it has, in the
+// real game's order, to its last stage's ending and its first stage a loop
+// on, by the ROM's id (roms.toml's, the lift's template): the game's
+// page-check.toml [[route]] (its comments say what each field is). A route's
+// `run` names theme-shots.toml's [[run]] whose holds and frames it plays.
+const ROUTES = {};
+// A ROM a template only loads to play: its lift's counts, by the ROM's id
+// (page-check.toml's [[load]]). A template's own ROM is held to every asset
+// found.
+const LOADS = {};
+for (const g of GAMES) {
+  for (const r of g.check?.route ?? []) {
+    const run = r.run ? g.shots.find((x) => x.name === r.run) : r;
+    if (!run?.holds) throw new Error(`${g.dir}/page-check.toml: the route for ${r.rom} names a run theme-shots.toml hasn't (${r.run})`);
+    ROUTES[r.rom] = {
+      plays: r.plays,
+      leftOut: r.left_out,
+      stages: r.stage ?? [],
+      ending: r.ending,
+      again: r.again,
+      frames: run.frames,
+      holds: run.holds,
+      deaths: r.death ?? [],
+      gameOver: r.game_over,
+    };
+  }
+  for (const l of g.check?.load ?? []) LOADS[l.rom] = { found: l.found, of: l.of, blank: l.blank, without: l.without };
+}
+// A ROM's id by its headerless SHA-256.
+const romIdOf = (sha) => GAMES.flatMap((g) => g.roms).find((r) => r.sha256 === sha)?.id ?? null;
 
 // What the game frame gives its AudioContexts, read in every frame: each
 // buffer's swing (a frame with sound swings, one level held doesn't) and
@@ -1038,7 +999,8 @@ async function noRomPage(S) {
   check(await S.installed(), "the game is installed with no click");
   const title = await p.title();
   check(title === page.title, `the page is titled ${page.title} (${title})`);
-  check(!/mario|pauline|jumpman/i.test(await p.locator("header").innerText()), "the header names no Nintendo character");
+  const characters = pageGame?.check?.page?.characters ?? [];
+  check(!new RegExp(anyOf(characters).source, "i").test(await p.locator("header").innerText()), `the header names none of the game's characters (${characters.join(", ") || "none named in its page-check.toml"})`);
   check(!(await p.locator("#game").getAttribute("src")) && !(await p.locator("#game").isVisible()), "nothing plays until a ROM is loaded");
   check((await p.locator("#mode").innerText()) === "No ROM loaded", "and the header says so");
   check(await p.locator("#load-label").isVisible(), "Load your own ROM is offered");
@@ -1166,7 +1128,7 @@ async function romPlay(S, { name, sha, rom }) {
   await S.soundReset(p, await S.game());
   await key("Enter");
   // Sound from the game's start, before any death: the stage's start
-  // takes about six seconds and Mario can't die in it.
+  // takes about six seconds and the player can't die in it.
   await p.waitForTimeout(3000);
   const early = await S.soundOf(p, await S.game());
   check(early.loud >= 60, `${name}: sound plays within 3 s of Start, before any death (${early.loud} of ${early.buffers} frames with sound)`);
@@ -1265,13 +1227,13 @@ async function romPlay(S, { name, sha, rom }) {
 // The ROM's game from power-on through every stage it has, in the real
 // game's order (ROUTES' `plays`): the lifted model's stages list plays
 // that order, and a run clears each stage in turn. Each stage starts with
-// Mario at his start, is shown in the ROM's art and in Turnips with its big
-// foe and what it has about (rom-TAG-25m.png, rom-TAG-25m-turnips.png, and
-// so on) and is cleared; the level played after each clear is the next
-// of `plays`, so a stage that plays another level fails. After 100m, its
-// ending (rom-TAG-ending.png) and the next loop's 25m. Until 2026-11-07
-// the page played 25m in 50m's and 100m's places (build-page.sh's
-// GP_LIFT_LEVELS=main,m75), and this section held it to that.
+// the player at its start, is shown in the ROM's art and in Turnips with
+// what it has about (rom-TAG-STAGE.png, rom-TAG-STAGE-turnips.png) and is
+// cleared; the level played after each clear is the next of `plays`, so a
+// stage that plays another level fails. After the last stage, its ending
+// (rom-TAG-ending.png) and the next loop's first stage. Until 2026-11-07
+// the page played a game's first stage in the places of two later ones
+// (build-page.sh's GP_LIFT_LEVELS), and this section held it to that.
 async function romRoute(S, { name, sha, rom }) {
   const { p, check, gp } = S;
   await p.goto(`${S.origin}/${entry}`);
@@ -1338,7 +1300,7 @@ async function romRoute(S, { name, sha, rom }) {
   };
   const player = (st) => st?.bodies.find((b) => b[0] === "player" && b[4]);
   const kinds = (st) => [...new Set(st?.bodies.filter((b) => b[4]).map((b) => b[0]))];
-  const where = (st) => `level ${st?.level ?? "none"}, Mario at ${player(st)?.slice(1, 3) ?? "none"}`;
+  const where = (st) => `level ${st?.level ?? "none"}, the player at ${player(st)?.slice(1, 3) ?? "none"}`;
   // The page's theme drawn over this ROM's art, at a fixed frame of
   // the same run, so the picture compares with an earlier page's.
   const paper = await shot(c.stages[0].clear - 120, `rom-${tag}-turnips.png`, "&theme=turnips");
@@ -1350,7 +1312,7 @@ async function romRoute(S, { name, sha, rom }) {
     check(st.level === want, `${what}: the route plays the game's stage ${i + 1} here (${want}; the route has ${st.level})`);
     const begun = await at(st.start);
     const [x, y] = player(begun)?.slice(1, 3) ?? [];
-    check(begun?.level === want && x === st.mario[0] && y === st.mario[1], `${what} is played by its own level from frame ${st.start}, Mario at his start ${st.mario} (${where(begun)})`);
+    check(begun?.level === want && x === st.player[0] && y === st.player[1], `${what} is played by its own level from frame ${st.start}, the player at its start ${st.player} (${where(begun)})`);
     const mid = await shot(st.shot, `rom-${tag}-${st.name}.png`);
     const missing = st.kinds.filter((k) => !kinds(mid).includes(k));
     check(mid?.level === want && missing.length === 0, `${what} in the ROM's art at frame ${st.shot}: ${st.kinds.join(", ")} there${missing.length ? ` (missing: ${missing.join(", ")})` : ""} (level ${mid?.level}, rom-${tag}-${st.name}.png)`);
@@ -1373,19 +1335,20 @@ async function romRoute(S, { name, sha, rom }) {
   const last = c.plays[c.plays.length - 1];
   const end = await shot(c.ending.frame, `rom-${tag}-ending.png`);
   const gone = c.ending.kinds.filter((k) => !kinds(end).includes(k));
-  check(end?.level === last && gone.length === 0, `${name}: 100m's ending plays at frame ${c.ending.frame}: ${c.ending.kinds.join(", ")} there${gone.length ? ` (missing: ${gone.join(", ")})` : ""} (level ${end?.level}, rom-${tag}-ending.png)`);
+  check(end?.level === last && gone.length === 0, `${name}: ${c.stages.at(-1)?.name}'s ending plays at frame ${c.ending.frame}: ${c.ending.kinds.join(", ")} there${gone.length ? ` (missing: ${gone.join(", ")})` : ""} (level ${end?.level}, rom-${tag}-ending.png)`);
   const endPaper = await shot(c.ending.frame, `rom-${tag}-ending-turnips.png`, "&theme=turnips");
   check(endPaper?.level === last, `${name}: and in Turnips (level ${endPaper?.level}, rom-${tag}-ending-turnips.png)`);
   const again = await shot(c.again.frame, `rom-${tag}-loop-2.png`);
   const [ax, ay] = player(again)?.slice(1, 3) ?? [];
-  check(again?.level === c.plays[0] && ax === c.again.mario[0] && ay === c.again.mario[1], `${name}: then the game goes round, the next loop's first stage played by ${c.plays[0]} with Mario at his start ${c.again.mario} at frame ${c.again.frame} (${where(again)}, rom-${tag}-loop-2.png)`);
+  check(again?.level === c.plays[0] && ax === c.again.player[0] && ay === c.again.player[1], `${name}: then the game goes round, the next loop's first stage played by ${c.plays[0]} with the player at its start ${c.again.player} at frame ${c.again.frame} (${where(again)}, rom-${tag}-loop-2.png)`);
 }
 
 // Deaths off the route (ROUTES' `deaths`), each played from power-on in
-// the ROM's art: Mario dies where it says, the game holds through the
-// death and starts the stage again with him at his start, and it steps on
-// from there in real time with no error. Until 2026-11-07 the page never
-// played 50m, so no death there had been played in the browser.
+// the ROM's art: the player dies where it says, the game holds through
+// the death and starts the stage again with the player at its start, and
+// it steps on from there in real time with no error. Until 2026-11-07 the
+// page never played one of the stages, so no death there had been played
+// in the browser.
 async function romDeaths(S, { name, rom }) {
   const { p, check, gp } = S;
   await p.goto(`${S.origin}/${entry}`);
@@ -1397,7 +1360,7 @@ async function romDeaths(S, { name, rom }) {
   check(!!c, `${name}: the check has a route through its game for its model (${found?.template})`);
   if (!c?.deaths?.length && !c?.gameOver) return;
   const player = (st) => st?.bodies.find((b) => b[0] === "player" && b[4]);
-  const where = (st) => `frame ${st?.frame ?? "none"}, level ${st?.level ?? "none"}, Mario at ${player(st)?.slice(1, 3) ?? "none"}`;
+  const where = (st) => `frame ${st?.frame ?? "none"}, level ${st?.level ?? "none"}, the player at ${player(st)?.slice(1, 3) ?? "none"}`;
   // The run played to `from`, then on in real time to `to`: the state once
   // it reaches `want` (null if it doesn't in 30 s), and the error the
   // game frame met.
@@ -1421,11 +1384,11 @@ async function romDeaths(S, { name, rom }) {
   const o = c.gameOver;
   if (o) {
     S.runs.set("game-over", framesOf(o.holds, o.frames));
-    const what = `${name}: a game lost at 25m's start in ${o.profile}`;
+    const what = `${name}: a game lost at ${c.stages[0]?.name}'s start in ${o.profile}`;
     const end = await play("game-over", o.frame, o.frame, o.frame, `&profile=${o.profile}`);
     const profile = await gp(() => window.__gp.profile).catch(() => null);
     const [ox, oy] = player(end.st)?.slice(1, 3) ?? [];
-    check(profile === o.profile && ox === o.mario[0] && oy === o.mario[1] && !end.error, `${what}: the last death ends in GAME OVER and the title's demo, Mario walked to ${o.mario} by frame ${o.frame} (${profile}, ${where(end.last)}${end.error ? `, error ${end.error}` : ""})`);
+    check(profile === o.profile && ox === o.player[0] && oy === o.player[1] && !end.error, `${what}: the last death ends in GAME OVER and the title's demo, the player walked to ${o.player} by frame ${o.frame} (${profile}, ${where(end.last)}${end.error ? `, error ${end.error}` : ""})`);
   }
   for (const [i, d] of (c.deaths ?? []).entries()) {
     const run = `death-${i}`;
@@ -1439,7 +1402,7 @@ async function romDeaths(S, { name, rom }) {
     check(!!on.st && !on.error, `${what}: the game steps on through the death to frame ${d.restart + 60} with no error (${where(on.last)}${on.error ? `, error ${on.error}` : ""})`);
     const back = await play(run, d.restart, d.restart, d.restart);
     const [bx, by] = player(back.st)?.slice(1, 3) ?? [];
-    check(back.st?.level === d.level && bx === d.mario[0] && by === d.mario[1] && !back.error, `${what}: the stage starts again by frame ${d.restart}, Mario at his start ${d.mario} (${where(back.last)}${back.error ? `, error ${back.error}` : ""})`);
+    check(back.st?.level === d.level && bx === d.player[0] && by === d.player[1] && !back.error, `${what}: the stage starts again by frame ${d.restart}, the player at its start ${d.player} (${where(back.last)}${back.error ? `, error ${back.error}` : ""})`);
   }
 }
 
@@ -1500,8 +1463,8 @@ async function romUnload(S, { name, rom }) {
 // Sound from the game's start in ROM mode, as a new visitor plays it:
 // the ROM loaded by a click on the page, then Start and play from the
 // keyboard or a gamepad, under Chrome's rule and Safari's for starting
-// sound. With a gamepad there was none at all (the user, 2026-11-04:
-// "no sound until Mario's first death"): the sound started on a key or a
+// sound. With a gamepad there was none at all (the user, 2026-11-04: no
+// sound until the player's first death): the sound started on a key or a
 // click in the game only, and a gamepad's buttons are neither. Under
 // Safari's rule the click on Load was no help until 2026-11-05 (the
 // user: no sound until a key), as the game's frame made its context
@@ -1580,13 +1543,34 @@ async function visitor(S, { rule, input, load, rom }) {
 // and the page looked as if the ROM never loaded (2026-11-07, reported
 // from Safari and missed here, since every section starts in a fresh
 // browser).
+// The game's models, by the names the page keeps a look under: each lift
+// template's model.toml name (a template that loads to play names its
+// player's), and the template's id as a model name.
+function modelNames() {
+  const lift = join(playDir, "lift");
+  const names = new Set();
+  let templates = [];
+  try {
+    templates = JSON.parse(readFileSync(join(lift, "game.json"), "utf8")).templates ?? [];
+  } catch {}
+  for (const t of templates) {
+    names.add(t.replaceAll("-", "_"));
+    try {
+      const m = /^\[model\][^[]*?^name = "([^"]+)"/ms.exec(readFileSync(join(lift, t, "model.toml"), "utf8"));
+      if (m) names.add(m[1]);
+    } catch {}
+  }
+  return [...names];
+}
 async function keptLook(S, { name, rom }) {
   const { p, check } = S;
   await p.goto(`${S.origin}/${entry}`);
   await S.installed();
-  await p.evaluate(() => {
-    for (const m of ["donkey_kong_oe", "donkey_kong_ju"]) localStorage.setItem(`gp-theme:${m}`, "paper");
-  });
+  const models = modelNames();
+  if (!models.length) check(false, `the game's models are named in its lift folder (${join(playDir, "lift")})`);
+  await p.evaluate((models) => {
+    for (const m of models) localStorage.setItem(`gp-theme:${m}`, "paper");
+  }, models);
   await S.loadRom(rom);
   // The ROM's frame, and never the one it replaces: on a host that redirects
   // the frame's address, the old document is still there for a moment.
@@ -1779,7 +1763,8 @@ async function laterVisit(S, { rom }) {
 
 // ---- Pictures: the game's canvas at fixed frames, against references ----
 
-// The references (scripts/web/public/pictures.txt): for each moment, the
+// The references (each game folder's page-pictures.txt in the games
+// checkout, the moments of the ROMs its routes are for): for each moment, the
 // run and frame it is played to, what a person sees there, and the
 // SHA-256 of the game canvas's RGBA pixels at that frame, all text (the
 // repo holds no pictures). A moment with `pending` is played and its
@@ -1794,11 +1779,11 @@ async function laterVisit(S, { rom }) {
 // $GP_HOME/work/page-pictures/, so a later difference shows the old one.
 // A difference fails its section naming the moment, with old, new and
 // diff pictures in $GP_HOME/work/page-shots/.
-const picturesFile = join(here, "pictures.txt");
+const picturesFiles = GAMES.map((g) => g.pictures).filter((f) => existsSync(f));
 const acceptPictures = process.argv.includes("--accept-pictures");
 const pictureStore = join(gpHome, "work", "page-pictures");
 const pictureShots = join(gpHome, "work", "page-shots");
-function readPictures() {
+function readPictures(picturesFile) {
   const out = [];
   let cur = null;
   for (const raw of readFileSync(picturesFile, "utf8").split("\n")) {
@@ -1806,7 +1791,7 @@ function readPictures() {
     if (!line.trim() || line.trimStart().startsWith("#")) continue;
     const head = /^moment (\S+)$/.exec(line);
     if (head) {
-      out.push((cur = { id: head[1] }));
+      out.push((cur = { id: head[1], file: picturesFile }));
       continue;
     }
     const kv = /^\s+(\w+)\s+(.*)$/.exec(line);
@@ -1815,7 +1800,7 @@ function readPictures() {
   }
   return out;
 }
-function writePictures(moments) {
+function writePictures(picturesFile, moments) {
   const head = readFileSync(picturesFile, "utf8")
     .split("\n")
     .filter((l, i, a) => a.slice(0, i + 1).every((x) => !x.trim() || x.startsWith("#")))
@@ -1824,7 +1809,7 @@ function writePictures(moments) {
   const body = moments.map((m) => [`moment ${m.id}`, ...keys.filter((k) => m[k] !== undefined && m[k] !== "").map((k) => `  ${k.padEnd(7)} ${m[k]}`)].join("\n"));
   writeFileSync(picturesFile, `${head.trimEnd()}\n\n${body.join("\n\n")}\n`);
 }
-const pictureMoments = existsSync(picturesFile) ? readPictures() : [];
+const pictureMoments = picturesFiles.flatMap(readPictures);
 // What each section found, by moment, for --accept-pictures.
 const pictureResults = new Map();
 
@@ -2402,12 +2387,20 @@ const madeUpRom = (S) => {
 // The page's own game by its registry name, and a second game by its name:
 // each is installed from the source, and the page takes its title, its ROM
 // line, its how-to-play lines and its About line from the game, as text.
+// The page's own game's first how-to-play line, as its play files give it.
+const ownHowto = (() => {
+  try {
+    return JSON.parse(readFileSync(join(playDir, "page.json"), "utf8")).howto?.[0] ?? null;
+  } catch {
+    return null;
+  }
+})();
 async function gameByName(S) {
   const { p, check, errors } = S;
   await p.goto(`${S.origin}/p?g=${page.game}`);
   check(await S.installed(), `${page.game} by its name is installed`);
   check((await p.title()) === page.title && (await p.locator("#rom-help").innerText()).includes(page.rom.name), `and the page is its own: ${page.title}, the ROM line naming ${page.rom.name}`);
-  check(/arrows move, X jumps, Enter starts/.test(await p.locator("#howto").innerText()), "with the page's own how-to-play lines");
+  check(!!ownHowto && (await p.locator("#howto").innerText()).includes(ownHowto), `with the page's own how-to-play lines ("${ownHowto}")`);
   if (!madeUpHere) {
     S.lines.push(`skip  no ${MADE_UP} in the registry folder (scripts/web/test-registry.sh makes one): a second game isn't checked`);
     return;
@@ -2418,11 +2411,12 @@ async function gameByName(S) {
   check(rec?.kind === "game" && rec.files.some((f) => f.path === "play/page.json"), `from its package (${rec?.name}@${rec?.version}, ${rec?.files.length} files, play/page.json among them)`);
   check((await p.title()) === "Made Up Game" && (await p.locator("#title").innerText()) === "Made Up Game", `the page is titled for it (${await p.title()})`);
   const help = await p.locator("#rom-help").innerText();
-  check(help.includes("Made Up Game") && help.includes("(A) or (B)") && !/Donkey Kong/.test(help), `the ROM line is its package's (${help.slice(0, 90)}...)`);
+  const madeUpFile = JSON.parse(readFileSync(join(registryFolder, "blobs", madeUpFiles().hashes.get("play/page.json")), "utf8")).rom.file;
+  check(help.includes("Made Up Game") && help.includes(madeUpFile) && !anyOf(othersNames()).test(help), `the ROM line is its package's (${help.slice(0, 90)}...)`);
   const howto = p.locator("#howto");
   check(/Made-up controls: the page check reads this line/.test(await howto.innerText()), "the how-to-play lines are its package's");
   check((await howto.innerText()).includes("<b>Not HTML</b>") && (await howto.locator("b").count()) === 0, "and its text is shown as text, never read as HTML");
-  check((await p.locator("#about-mark").textContent()) === "Made Up Game is made up for the page check." && !/Nintendo|Donkey/.test(await p.locator("#about").textContent()), "the About lines are its own and name no other game");
+  check((await p.locator("#about-mark").textContent()) === "Made Up Game is made up for the page check." && !anyOf(othersNames()).test(await p.locator("#about").textContent()), "the About lines are its own and name no other game");
   check((await p.evaluate(() => window.__page !== undefined)) && !(await p.locator("#game").getAttribute("src")), "nothing plays until a ROM is loaded");
   await S.shot("game-made-up.png");
   // A ROM that isn't its: refused by the lift, naming the game.
@@ -2440,7 +2434,7 @@ async function gameByName(S) {
   // The page's own game, after another: its own facts again.
   await p.goto(`${S.origin}/${entry}`);
   check(await S.installed(), "the plain address installs the page's own game again");
-  check((await p.title()) === page.title && /arrows move, X jumps/.test(await p.locator("#howto").innerText()), "with its own title and how-to-play lines");
+  check((await p.title()) === page.title && !!ownHowto && (await p.locator("#howto").innerText()).includes(ownHowto), "with its own title and how-to-play lines");
   check(errors.length === 0, `no page errors (${errors.join("; ")})`);
 }
 
@@ -2456,7 +2450,7 @@ async function gameBadName(S) {
   await refused("p?g=nobody/nothing", /nobody\/nothing couldn't be installed: .*isn't in this source's catalog/, "a game the source doesn't have is refused in words");
   await refused(`p?g=${ART_THEME}`, /isn't a game on this page's source/, "a theme named as the game is refused in words");
   const before = S.requests.length;
-  for (const bad of ["p?g=../../registry", "p?g=lex00/%3Cimg%20src%3Dx%3E", "p?g=lex00/donkey-kong@latest", "p?g=a/b&g=c/d"]) {
+  for (const bad of ["p?g=../../registry", "p?g=lex00/%3Cimg%20src%3Dx%3E", `p?g=${page.game}@latest`, "p?g=a/b&g=c/d"]) {
     await p.goto(`${S.origin}/${bad}`);
     check(await S.installed(), `${decodeURIComponent(bad)}: not a name, so the page's own game plays`);
     const said = await messageOf(p, ["warn"], 10000);
@@ -2877,7 +2871,7 @@ async function ownGame(S) {
   check(/X is the A button/.test(howto) && !/Load your own ROM|ROM/.test(howto), `the how-to-play lines name its keys and no ROM ("${howto.replace(/\n+/g, " / ")}")`);
   const about = await p.locator("#about").textContent();
   check(
-    about.includes("Own Hop is made up for the page check: a copy of the Moss Hop template, with its pictures and no ROM. It plays from its own pictures, so there is no ROM to load. Made by the page check.") && !/Nintendo|Donkey|accepts a/.test(about),
+    about.includes("Own Hop is made up for the page check: a copy of the Moss Hop template, with its pictures and no ROM. It plays from its own pictures, so there is no ROM to load. Made by the page check.") && !anyOf(othersNames()).test(about) && !/accepts a/.test(about),
     "About says what it is and who made it, from its package, and names no ROM",
   );
   await S.shot("own-game.png");
@@ -2949,46 +2943,78 @@ async function ownGameTampered(S, which) {
   check((await installedOf(p, OWN)) === null, "nothing is installed");
 }
 
+// ---- An arcade game's facts, from the games checkout ----
+
+// The arcade game the arcade sections play (--arcade-game NAME, else the
+// first game of the games checkout whose sources are arcade sets and whose
+// page-check.toml has [arcade]), from the registry folder, and its romsets
+// in $GP_ROM_DIR by their MAME names (the roms.toml ids): the set
+// package.toml's [[rom.entry]] calls "scored" is the one played. The zips
+// are read by the browser where they lie, never copied, and a zip with a
+// chip left out is made in memory and handed to the picker as bytes, never
+// written to disk.
+const arcadeGame = opt("arcade-game") ? gameNamed(opt("arcade-game")) : (GAMES.find((g) => g.check?.arcade && g.roms.some((r) => r.platform === "arcade")) ?? null);
+const ARCADE = opt("arcade-game") ?? arcadeGame?.name ?? null;
+const ARCADE_LINK = `p?g=${ARCADE}`;
+const arcadeHere = !!ARCADE && !!registryFolder && existsSync(join(registryFolder, "index", ARCADE));
+const arcadeSource = (id) => arcadeGame?.roms.find((r) => r.id === id) ?? null;
+// The scored set, the game's title and the set's full title.
+const ARCADE_SET = arcadeGame?.entries.find((e) => e.role === "scored")?.id ?? arcadeGame?.roms[0]?.id ?? null;
+const ARCADE_TITLE = arcadeSource(ARCADE_SET)?.title ?? arcadeGame?.title ?? null;
+const ARCADE_REVISION = arcadeSource(ARCADE_SET)?.revision ?? ARCADE_TITLE;
+const reText = (t) => String(t).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// A copy of the arcade game whose maps record no place of one set's tables
+// ([arcade] unplaced; scripts/web/test-registry.sh makes it from the game's
+// package): the set the lift refuses as not drawn right yet.
+const UNPLACED = "test/arcade-unplaced";
+const UNPLACED_SET = arcadeGame?.check?.arcade?.unplaced ?? null;
+const unplacedHere = !!registryFolder && existsSync(join(registryFolder, "index", UNPLACED));
+
 // ---- A theme on an arcade game's board (gp_board.wasm, gp_present::art) ----
 
-// Tapper's preview from the player's own romset with one made-up theme,
-// `flat`, as scripts/web/tapper-theme.sh writes it (--tapper-theme DIR,
-// default DIST.tapper-theme): the bartender's sprite (every code of the
-// entity `player`) as a flat square of one colour, nothing else named. Its
-// files are served beside the page's own player files (game/index.html,
-// preview.js, gp_web.wasm, gp_board.wasm), so the page's own code draws the
-// frame. The same run in the board's own look and in the theme: the square
-// is drawn where the bartender's sprite was, 32 by 32, and every pixel
-// outside it is the board's as before (the customers, the bars, the
-// screen).
-const tapperThemeDir = resolve(opt("tapper-theme") ?? `${dist}.tapper-theme`);
-const tapperThemeHere = existsSync(join(tapperThemeDir, "bundle.json")) && existsSync(join(tapperThemeDir, "themes", "flat", "art.txt"));
+// The arcade game's preview from the player's own romset with one made-up
+// theme, `flat`, which draws the player's sprite (every code of its entity)
+// as a flat square of one colour and names nothing else (--arcade-theme
+// DIR, default DIST.arcade-theme; the game's own folder has the script that
+// makes it, as its page-check.toml [arcade.theme] says). Its files are
+// served beside the page's own player files (game/index.html, preview.js,
+// gp_web.wasm, gp_board.wasm), so the page's own code draws the frame. The
+// same run ([arcade.theme] holds and frames) in the board's own look and in
+// the theme: the square is drawn where the board draws the player's sprite
+// ([arcade.theme] origin and scale, from its place in the game), `size` of
+// the board's pixels, and every pixel outside it is the board's as before.
+const arcadeThemeDir = resolve(opt("arcade-theme") ?? `${dist}.arcade-theme`);
+const arcadeThemeFacts = arcadeGame?.check?.arcade?.theme ?? null;
+const arcadeThemeHere = !!arcadeThemeFacts && existsSync(join(arcadeThemeDir, "bundle.json")) && existsSync(join(arcadeThemeDir, "themes", "flat", "art.txt"));
+// The cabinet's columns, as an arcade input log has them: coin, start,
+// right, left, down, up and the button, from bit 0 on.
+const ARCADE_BITS = { coin: 1, start: 2, right: 4, left: 8, down: 16, up: 32, button: 64 };
 async function arcadeTheme(S) {
   const { p, check } = S;
+  const t_ = arcadeThemeFacts;
+  const [sw, sh] = arcadeGame.check.arcade.screen;
+  const [qw, qh] = t_.size;
   const own = (u) => existsSync(join(dist, decodeURIComponent(u.pathname))) || /^\/game\/runs\/.+\.frames$/.test(u.pathname);
   await S.context.route(
     (u) => u.origin === S.origin && u.pathname.startsWith("/game/") && !own(u),
     (route) => {
       const path = new URL(route.request().url()).pathname;
-      const f = join(tapperThemeDir, decodeURIComponent(path.slice("/game/".length)));
-      if (!f.startsWith(tapperThemeDir) || !existsSync(f) || statSync(f).isDirectory()) return route.fulfill({ status: 404, body: "" });
+      const f = join(arcadeThemeDir, decodeURIComponent(path.slice("/game/".length)));
+      if (!f.startsWith(arcadeThemeDir) || !existsSync(f) || statSync(f).isDirectory()) return route.fulfill({ status: 404, body: "" });
       const headers = Object.fromEntries(headersFor(path));
       headers["content-type"] = types[extname(f)] ?? "application/octet-stream";
       return route.fulfill({ status: 200, headers, body: readFileSync(f) });
     },
   );
-  // A coin and the start (the cabinet's columns: coin is bit 0, start bit
-  // 1), as the corpus's start of play has them, then 500 frames of play.
-  const n = 700;
-  const pad = new Array(n).fill(0);
-  for (let f = 124; f <= 134; f++) pad[f] |= 1;
-  for (let f = 195; f <= 201; f++) pad[f] |= 2;
-  S.runs.set("arcade-theme", "gp-frames 1\n" + pad.map((v) => v.toString(16).padStart(2, "0")).join("\n") + "\n");
+  // A coin and the start, as the corpus's start of play has them, then
+  // play to the run's end, in the cabinet's columns.
+  const n = t_.frames;
+  S.runs.set("arcade-theme", framesOf(t_.holds, n, ARCADE_BITS));
   const drawn = async (theme) => {
     await p.goto(`${S.origin}/game/index.html?files=here&run=arcade-theme${theme ? `&theme=${theme}` : ""}`);
     // The run plays in time (about 23 s at 30 frames a second) and stops
     // at its end, so both pictures are of the same frame.
-    check(await S.waitFrames(n + 1, 120000), `Tapper plays ${n} frames from a coin and the start ${theme ? `in the made-up theme ${theme}` : "in the board's own look"}`);
+    check(await S.waitFrames(n + 1, 120000), `${ARCADE_TITLE} plays ${n} frames from a coin and the start ${theme ? `in the made-up theme ${theme}` : "in the board's own look"}`);
     await p.waitForTimeout(300);
     const t = await S.gp(() => ({ theme: window.__gp.theme ?? null, board: window.__gp.board, error: window.__gp.error, frames: window.__gp.hashes.length }));
     check(t.frames === n + 1, `and stops at the run's end (${t.frames - 1} frames)`);
@@ -3000,20 +3026,22 @@ async function arcadeTheme(S) {
       const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
       let bin = "";
       for (let i = 0; i < d.length; i += 0x8000) bin += String.fromCharCode(...d.subarray(i, i + 0x8000));
-      // The bartender (the entity `player`) where the board puts his
-      // sprite: x - 3 and 241 - y in the game's units, two pixels each.
-      const b = window.__gp.state().bodies.find(([k, , , , alive]) => k === "player" && alive);
-      const rect = b && [(((b[1] % 256) + 256) % 256 - 3) * 2, (241 - (((b[2] % 256) + 256) % 256)) * 2];
+      // The player's entity where the board puts its sprite: x plus
+      // origin[0] and origin[1] less y in the game's units, `scale` board
+      // pixels each.
+      const b = window.__gp.state().bodies.find(([k, , , , alive]) => k === entity && alive);
+      const mod = (v) => ((v % 256) + 256) % 256;
+      const rect = b && [(mod(b[1]) + origin[0]) * scale, (origin[1] - mod(b[2])) * scale];
       return { w: c.width, h: c.height, rgba: btoa(bin), rect };
-    });
+    }, { entity: t_.entity, origin: t_.origin, scale: t_.scale });
     return { ...got, rgba: Buffer.from(got.rgba, "base64") };
   };
   const plain = await drawn(null);
   const themed = await drawn("flat");
-  check(plain.w === 512 && plain.h === 480 && themed.w === 512 && themed.h === 480, `both are the board's 512 by 480 picture (${plain.w} by ${plain.h}, ${themed.w} by ${themed.h})`);
+  check(plain.w === sw && plain.h === sh && themed.w === sw && themed.h === sh, `both are the board's ${sw} by ${sh} picture (${plain.w} by ${plain.h}, ${themed.w} by ${themed.h})`);
   const at = (img, x, y) => [...img.rgba.subarray((y * img.w + x) * 4, (y * img.w + x) * 4 + 3)];
   const same = (a, b) => a.every((v, i) => v === b[i]);
-  const square = [200, 40, 160];
+  const square = t_.colour;
   const box = [Infinity, Infinity, -Infinity, -Infinity];
   let ink = 0;
   for (let y = 0; y < themed.h; y++)
@@ -3026,7 +3054,7 @@ async function arcadeTheme(S) {
         box[3] = Math.max(box[3], y + 1);
       }
   const [bw, bh] = [box[2] - box[0], box[3] - box[1]];
-  check(ink === 32 * 32 && bw === 32 && bh === 32, `the theme's square is drawn once, 32 by 32 of the board's pixels (${ink} pixels in ${bw} by ${bh} at ${box[0]}, ${box[1]})`);
+  check(ink === qw * qh && bw === qw && bh === qh, `the theme's square is drawn once, ${qw} by ${qh} of the board's pixels (${ink} pixels in ${bw} by ${bh} at ${box[0]}, ${box[1]})`);
   const inBox = (x, y) => x >= box[0] && x < box[2] && y >= box[1] && y < box[3];
   let outside = 0;
   let was = 0;
@@ -3036,11 +3064,11 @@ async function arcadeTheme(S) {
       if (differ && !inBox(x, y)) outside++;
       if (differ && inBox(x, y)) was++;
     }
-  check(outside === 0, `every pixel outside the square is the board's own look's: the unthemed sprites (customers, mugs, the bartender's other parts) and the screen are unchanged (${outside} differ)`);
-  check(!!plain.rect && plain.rect[0] === box[0] && plain.rect[1] === box[1], `and it stands where the board draws the bartender's sprite, from his place in the game (${plain.rect?.join(", ")})`);
+  check(outside === 0, `every pixel outside the square is the board's own look's: the unthemed sprites (the other entities and the player's other parts) and the screen are unchanged (${outside} differ)`);
+  check(!!plain.rect && plain.rect[0] === box[0] && plain.rect[1] === box[1], `and it stands where the board draws the player's sprite, from its place in the game (${plain.rect?.join(", ")})`);
   let his = 0;
   for (let y = box[1]; y < box[3]; y++) for (let x = box[0]; x < box[2]; x++) if (!same(at(plain, x, y), at(plain, box[0], box[3] - 1))) his++;
-  check(was > 0 && his > 64, `where the board's own look has his picture (${his} of its pixels differ from the box's corner; ${was} differ from the theme's)`);
+  check(was > 0 && his > (qw * qh) / 16, `where the board's own look has the player's picture (${his} of its pixels differ from the box's corner; ${was} differ from the theme's)`);
   // The theme's three files and the page's player, nothing else of it.
   const asked = S.requests.map((r) => new URL(r.url).pathname).filter((u) => u.startsWith("/game/themes/"));
   const want = ["/game/themes/index.json", "/game/themes/flat/look.txt", "/game/themes/flat/art.txt", "/game/themes/flat/art/square.png"];
@@ -3049,21 +3077,6 @@ async function arcadeTheme(S) {
   check(S.errors.length === 0, `no page errors (${S.errors.join("; ")})`);
 }
 
-// ---- An arcade game by its name: played from the visitor's romset zip ----
-
-// The arcade game the sections play (--arcade-game, default lex00/tapper)
-// from the registry folder, and its romsets in $GP_ROM_DIR by their MAME
-// names: the zips are read by the browser where they lie, never copied, and
-// a zip with a chip left out is made in memory and handed to the picker as
-// bytes, never written to disk.
-const ARCADE = opt("arcade-game") ?? "lex00/tapper";
-const arcadeHere = !!registryFolder && existsSync(join(registryFolder, "index", ARCADE));
-const ARCADE_LINK = `p?g=${ARCADE}`;
-// A copy of the arcade game whose maps record no place of the Root Beer
-// set's tables (scripts/web/test-registry.sh makes it from the game's
-// package): the set the lift refuses as not drawn right yet.
-const UNPLACED = "test/tapper-unplaced";
-const unplacedHere = !!registryFolder && existsSync(join(registryFolder, "index", UNPLACED));
 // The arcade game named in the link, installed (page.js sets __page once
 // it is, or couldn't be).
 const arcadeInstalled = async (p, name = ARCADE) => {
@@ -3173,15 +3186,19 @@ const pickBytes = async (p, name, buffer, kinds = ["error"]) => {
 };
 const boardFetched = (S) => S.requests.some((r) => /\/gp_board\.wasm(\?|$)/.test(r.url));
 
-// "What is this?" on Donkey Kong by the link (what-is-this.js,
-// explain.js): the button holds the game, a click on Mario names him from
-// the package's own model with a box around him and his place from the
-// state, a click on the stage says it is the stage, "Play on" lets the game
+// "What is this?" on the page's own game by the link (what-is-this.js,
+// explain.js), with the words of its page-check.toml [what_is_this]: the
+// button holds the game, a click on the player names it (`player`) from the
+// package's own model with a box around it and its place from the state, a
+// click on the stage says it is the stage (the ROM's route's first stage,
+// played past frame `after`), "Play on" lets the game
 // go on; then the same with a tap at 360 pixels wide, the answer under the
 // game and the page not scrolling sideways. Nothing is asked of a server:
 // every request stays the page's own or the source's.
-async function whatIsThisSection(S, r) {
+async function whatIsThisSection(S, r, w) {
   const { p, check, gp, key, waitFrames, errors } = S;
+  const stage = ROUTES[romIdOf(r.sha)]?.stages?.[0];
+  if (!stage) return check(false, `the check has a route with a first stage for ${r.name} (${romIdOf(r.sha)}; the game's page-check.toml)`);
   await p.setViewportSize({ width: 1400, height: 900 });
   await p.goto(`${S.origin}/${LINK}`);
   check(await S.installed(), "the link opens");
@@ -3189,13 +3206,13 @@ async function whatIsThisSection(S, r) {
   await S.loadRom(r.rom);
   check(await waitFrames(30), `${r.name} plays`);
   check(await p.locator("#what").isVisible(), "with a game playing the header has a What is this? button");
-  // Into 25m, past the stage's start, Mario standing at the bottom.
+  // Into the first stage, past its start, the player standing there.
   await key("Enter");
-  const inPlay = await S.until(() => window.__gp.state().level === "main" && window.__gp.state().frame > 900, null, 30000);
-  check(inPlay, "Start takes the game into 25m");
+  const inPlay = await S.until(({ level, after }) => window.__gp.state().level === level && window.__gp.state().frame > after, { level: stage.level, after: w.after }, 30000);
+  check(inPlay, `Start takes the game into ${stage.name}`);
   await p.waitForTimeout(4500);
-  // Where Mario is drawn, as fractions of the canvas: the first spot of a
-  // grid the frame's own spot names him at.
+  // Where the player is drawn, as fractions of the canvas: the first spot
+  // of a grid the frame's own spot names it at.
   const findOn = () =>
     gp(() => {
       for (let y = 0.02; y < 1; y += 0.02) for (let x = 0.01; x < 1; x += 0.01) {
@@ -3218,19 +3235,19 @@ async function whatIsThisSection(S, r) {
   await p.waitForTimeout(600);
   const h1held = await gp(() => window.__gp.hashes.length);
   check(h1held === h0, `and the game holds while it is asked (${h1held - h0} frames stepped in 0.6 s)`);
-  const mario = await findOn();
-  check(!!mario, `Mario is drawn somewhere on the picture (${JSON.stringify(mario)})`);
-  if (!mario) return;
-  const pt = await pageAt(mario);
+  const hero = await findOn();
+  check(!!hero, `${w.player} is drawn somewhere on the picture (${JSON.stringify(hero)})`);
+  if (!hero) return;
+  const pt = await pageAt(hero);
   await p.mouse.click(pt.x, pt.y);
   await p.waitForFunction(() => document.getElementById("what-panel").dataset.answer, null, { timeout: 15000 }).catch(() => {});
   const said = await p.locator("#what-panel").innerText();
-  check((await p.locator("#what-panel").getAttribute("data-answer")) === "player" && /^Mario\b/.test(said), `a click on Mario names him ("${said.replace(/\s+/g, " ").slice(0, 300)}")`);
-  check(said.includes(`at x ${mario.at[0]}, y ${mario.at[1]}`), `with his place in the model's state (x ${mario.at[0]}, y ${mario.at[1]})`);
-  check(/the one you play/.test(said) && /state mapping reads it from RAM/.test(said) && /How it was worked out/.test(said), "from the package's model and mapping: his role, how he was worked out, where the original keeps him");
+  check((await p.locator("#what-panel").getAttribute("data-answer")) === "player" && said.startsWith(w.player) && !/^\w/.test(said.slice(w.player.length)), `a click on ${w.player} names it ("${said.replace(/\s+/g, " ").slice(0, 300)}")`);
+  check(said.includes(`at x ${hero.at[0]}, y ${hero.at[1]}`), `with its place in the model's state (x ${hero.at[0]}, y ${hero.at[1]})`);
+  check(/the one you play/.test(said) && /state mapping reads it from RAM/.test(said) && /How it was worked out/.test(said), "from the package's model and mapping: its role, how it was worked out, where the original keeps him");
   check(/gp element explain/.test(said) && /no server/.test(said), "and it says what only the tools can add");
   const box = await p.locator("#what-layer .what-box").boundingBox();
-  check(!!box && pt.x >= box.x && pt.x <= box.x + box.width && pt.y >= box.y && pt.y <= box.y + box.height, `a box is drawn around him (${JSON.stringify(box)})`);
+  check(!!box && pt.x >= box.x && pt.x <= box.x + box.width && pt.y >= box.y && pt.y <= box.y + box.height, `a box is drawn around it (${JSON.stringify(box)})`);
   await S.shot("what-is-this-1400.png");
   // The stage: a spot with no body or HUD field on it.
   const empty = await gp(() => {
@@ -3245,7 +3262,7 @@ async function whatIsThisSection(S, r) {
     await p.mouse.click(e.x, e.y);
     await p.waitForFunction(() => document.getElementById("what-panel").dataset.answer === "place", null, { timeout: 5000 }).catch(() => {});
     const t = await p.locator("#what-panel").innerText();
-    check(/^The stage/.test(t) && /25m/.test(t), `a click on the stage says it is the stage ("${t.split("\n").slice(0, 2).join(" ")}")`);
+    check(/^The stage/.test(t) && t.includes(stage.name), `a click on the stage says it is the stage ("${t.split("\n").slice(0, 2).join(" ")}")`);
   } else check(false, "a spot with nothing on it was found");
   check(
     S.requests.slice(requestsBefore).every((q) => q.method === "GET" && (q.url.startsWith(S.origin) || isSourceUrl(S.origin, q.url) || q.url.startsWith("blob:"))),
@@ -3262,12 +3279,12 @@ async function whatIsThisSection(S, r) {
   await p.locator("#what").click();
   await p.waitForTimeout(300);
   const m2 = await findOn();
-  check(!!m2, "at 360 pixels wide Mario is still found on the picture");
+  check(!!m2, `at 360 pixels wide ${w.player} is still found on the picture`);
   if (m2) {
     const q = await pageAt(m2);
     await p.locator("#what-layer").dispatchEvent("pointerup", { clientX: q.x, clientY: q.y, pointerType: "touch", bubbles: true });
     await p.waitForFunction(() => document.getElementById("what-panel").dataset.answer === "player", null, { timeout: 10000 }).catch(() => {});
-    check((await p.locator("#what-panel").getAttribute("data-answer")) === "player", "a tap on Mario names him at 360 pixels wide");
+    check((await p.locator("#what-panel").getAttribute("data-answer")) === "player", `a tap on ${w.player} names it at 360 pixels wide`);
     const pb = await p.locator("#what-panel").boundingBox();
     const gb = await p.locator("#game").boundingBox();
     check(!!pb && !!gb && pb.y >= gb.y + gb.height - 1 && pb.width <= 360, `the answer is under the game (game ends at ${Math.round(gb?.y + gb?.height)}, answer starts at ${Math.round(pb?.y ?? 0)})`);
@@ -3283,7 +3300,7 @@ async function whatIsThisSection(S, r) {
 // The arcade game by its name, played from the visitor's own zip: its
 // facts from its package (the romset line, the cabinet's keys and the line
 // about its sound), the picker taking a zip, the lift, and the game in
-// the page's frame: the board's 512 by 480 picture from gp_board.wasm, the
+// the page's frame: the board's picture ([arcade] screen) from gp_board.wasm, the
 // coin and the start taken. Shots of it at 1400 and at 360 pixels wide.
 async function arcadePlay(S, { zip }) {
   const { p, check, gp, waitFrames, errors } = S;
@@ -3292,7 +3309,7 @@ async function arcadePlay(S, { zip }) {
   const rec = await installedOf(p, ARCADE);
   check(rec?.kind === "game" && rec.files.some((f) => f.path === "play/page.json"), `from its package (${rec?.name}@${rec?.version}, ${rec?.files.length} files)`);
   const title = await p.title();
-  check(title === "Tapper" && !/Donkey|Nintendo/.test(await p.locator("#about").textContent()), `the page is titled for it (${title}) and names no other game`);
+  check(title === ARCADE_TITLE && !anyOf(othersNames(ARCADE)).test(await p.locator("#about").textContent()), `the page is titled for it (${title}) and names no other game`);
   const help = await p.locator("#rom-help").innerText();
   check(/romset/.test(help) && /zip/.test(help) && !/\.nes/.test(help) && /never uploaded/.test(help), `the line under Load names a romset zip, not an .nes file ("${help}")`);
   check(/\.zip/.test((await p.locator("#rom").getAttribute("accept")) ?? ""), `the picker takes a zip (accept ${await p.locator("#rom").getAttribute("accept")})`);
@@ -3306,14 +3323,15 @@ async function arcadePlay(S, { zip }) {
   check(!boardFetched(S), "no gp_board.wasm is fetched before a game plays");
   await p.setViewportSize({ width: 1400, height: 900 });
   const said = await S.loadRom(zip);
-  check(/Tapper \(Budweiser, 1\/27\/84\)/.test(said) && (await p.locator("#message").getAttribute("data-kind")) === "ok", `the zip is lifted and named ("${said}")`);
+  check(said.includes(ARCADE_REVISION) && (await p.locator("#message").getAttribute("data-kind")) === "ok", `the zip is lifted and named ("${said}")`);
   const mode = await p.locator("#mode").innerText();
-  check(/^Playing your own Tapper \(Budweiser, 1\/27\/84\) romset: all \d+ of its assets found/.test(mode), `the header says what plays ("${mode}")`);
+  check(new RegExp(`^Playing your own ${reText(ARCADE_REVISION)} romset: all \\d+ of its assets found`).test(mode), `the header says what plays ("${mode}")`);
   check(await waitFrames(30), "the game plays in the page's frame");
   check(await S.until(() => window.__gp.board === true), "with the board's art (gp_board.wasm loaded the lifted files)");
   check(boardFetched(S), "gp_board.wasm was fetched for it");
   const size = await gp(() => [document.getElementById("game").width, document.getElementById("game").height]);
-  check(size[0] === 512 && size[1] === 480, `the canvas is the board's size (${size.join(" by ")})`);
+  const [sw, sh] = arcadeGame.check.arcade.screen;
+  check(size[0] === sw && size[1] === sh, `the canvas is the board's size (${size.join(" by ")})`);
   // The key hint under the game comes from the cabinet's layout: 5 and 1
   // are the coin and the start, so the slots load on 2-4 and the mute keys
   // are 6-9, and the NES hint's keys aren't named.
@@ -3341,8 +3359,7 @@ async function arcadePlay(S, { zip }) {
     return seen.size;
   });
   check(lit >= 8, `and the board's picture has colours in it (${lit} seen)`);
-  // The shots a few seconds into the first bar, the bartender and the
-  // customers out.
+  // The shots a few seconds into play.
   await p.waitForTimeout(5000);
   await S.shot("arcade-play-1400.png");
   await p.setViewportSize({ width: 360, height: 760 });
@@ -3398,16 +3415,17 @@ async function arcadeRefused(S, { zip }) {
   await p.goto(`${S.origin}/${ARCADE_LINK}`);
   check(await arcadeInstalled(p), `${ARCADE} by its name is installed`);
   const none = async () => !(await p.locator("#game").getAttribute("src"));
-  let said = await pickBytes(p, "tapper.zip", Buffer.from("This is not a zip, only some words.\n"));
-  check(/^This file isn't a zip\. This page takes a MAME romset zip of Tapper: tapper/.test(said) && (await none()), `a file that isn't a zip is refused in words ("${said}")`);
-  said = await pickBytes(p, "tapper.zip", madeUpZip([["made-up.bin", Buffer.from(Array.from({ length: 4096 }, (_, i) => (i * 31) & 0xff))]]));
-  check(/^This zip holds no chip of a Tapper romset\./.test(said) && (await none()), `a zip of no chip of the game is refused in words ("${said}")`);
+  const zipName = `${ARCADE_SET}.zip`;
+  let said = await pickBytes(p, zipName, Buffer.from("This is not a zip, only some words.\n"));
+  check(said.startsWith(`This file isn't a zip. This page takes a MAME romset zip of ${ARCADE_TITLE}: ${ARCADE_SET}`) && (await none()), `a file that isn't a zip is refused in words ("${said}")`);
+  said = await pickBytes(p, zipName, madeUpZip([["made-up.bin", Buffer.from(Array.from({ length: 4096 }, (_, i) => (i * 31) & 0xff))]]));
+  check(said.startsWith(`This zip holds no chip of a ${ARCADE_TITLE} romset.`) && (await none()), `a zip of no chip of the game is refused in words ("${said}")`);
   if (zip) {
     const bytes = readFileSync(zip);
     const first = zipNames(bytes)[0];
-    said = await pickBytes(p, "tapper.zip", zipWithout(bytes, first).zip);
-    check(new RegExp(`^This zip isn't a whole Tapper romset: it has \\d+ of the \\d+ chips of tapper .*lacks ${first.replace(/[.]/g, "\\.")}`).test(said) && (await none()), `a zip with a chip left out is refused naming it ("${said}")`);
-  } else S.lines.push("skip  no tapper.zip in $GP_ROM_DIR: a zip with a chip left out isn't checked");
+    said = await pickBytes(p, zipName, zipWithout(bytes, first).zip);
+    check(new RegExp(`^This zip isn't a whole ${reText(ARCADE_TITLE)} romset: it has \\d+ of the \\d+ chips of ${reText(ARCADE_SET)} .*lacks ${reText(first)}`).test(said) && (await none()), `a zip with a chip left out is refused naming it ("${said}")`);
+  } else S.lines.push(`skip  no ${zipName} in $GP_ROM_DIR: a zip with a chip left out isn't checked`);
   check(!boardFetched(S), "nothing of a refused zip is drawn (no gp_board.wasm fetched)");
   await S.shot("arcade-refused.png");
   check(errors.length === 0, `no page errors (${errors.join("; ")})`);
@@ -3426,7 +3444,7 @@ async function arcadeNoticeSection(S) {
   const title = await p.title();
   const mark = (await p.locator("#about-mark").textContent()).trim();
   check(
-    mark === `You need your own ${title} romset to play; ${title}'s names and trademarks belong to their owners.` && mark.length <= 160 && !/Nintendo/.test(mark),
+    mark === `You need your own ${title} romset to play; ${title}'s names and trademarks belong to their owners.` && mark.length <= 160 && !anyOf(othersNames(ARCADE)).test(mark),
     `About's notice is the one short line ("${mark}")`,
   );
   // The same line by the picker, visible with About closed, at 1400 and at
@@ -3446,7 +3464,7 @@ async function arcadeNoticeSection(S) {
     (await p.locator("#about-sets").getAttribute("hidden")) === null && sets.length > 0 && sets.every((t) => /^[a-z0-9_]+, .+: \d+ files: .+ \(\d+ bytes, SHA-1 [0-9a-f]{40}\)/.test(t)),
     `About names the sets the page takes with each zip's files (${sets.map((t) => t.split(":")[0]).join(" | ")})`,
   );
-  const said = await pickBytes(p, "tapper.zip", Buffer.from("This is not a zip, only some words.\n"));
+  const said = await pickBytes(p, `${ARCADE_SET}.zip`, Buffer.from("This is not a zip, only some words.\n"));
   check(
     /^This file isn't a zip\./.test(said) && / Bring (MAME's [a-z0-9_]+ \(.+\) set: a zip of its \d+ files|one of MAME's sets .+ or .+: About lists the files each zip must hold)/.test(said),
     `a refused zip's message says which set to bring ("${said}")`,
@@ -3455,9 +3473,10 @@ async function arcadeNoticeSection(S) {
 }
 
 // A set whose tables the game's maps record no place for (the owner's
-// decision: refused in words, never offered and never hidden): the Root
-// Beer set, rbtapper.zip, on the copy of the game with its places taken
-// out. Refused by name, saying it isn't drawn right yet; nothing plays.
+// decision: refused in words, never offered and never hidden): the set
+// [arcade] unplaced names, its zip, on the copy of the game with its places
+// taken out. Refused by name, saying it isn't drawn right yet; nothing
+// plays.
 async function arcadeUnplaced(S, { garbled }) {
   const { p, check, errors } = S;
   await p.goto(`${S.origin}/p?g=${UNPLACED}`);
@@ -3466,8 +3485,8 @@ async function arcadeUnplaced(S, { garbled }) {
   await p.setInputFiles("#rom", garbled);
   const said = await messageOf(p);
   check(
-    /^This is rbtapper \(Tapper \(Root Beer\)\), which this page doesn't draw right yet/.test(said) && !(await p.locator("#game").getAttribute("src")),
-    `rbtapper.zip is refused in words naming the set and saying it isn't drawn right yet, and nothing plays ("${said}")`,
+    said.startsWith(`This is ${UNPLACED_SET} (${arcadeSource(UNPLACED_SET)?.revision ?? UNPLACED_SET}), which this page doesn't draw right yet`) && !(await p.locator("#game").getAttribute("src")),
+    `${UNPLACED_SET}.zip is refused in words naming the set and saying it isn't drawn right yet, and nothing plays ("${said}")`,
   );
   check(!boardFetched(S), "nothing of it is drawn (no gp_board.wasm fetched)");
   await S.shot("arcade-unplaced.png");
@@ -3494,7 +3513,7 @@ for (const [name, sha] of Object.entries(page.rom.known_sha256 ?? {})) {
   add(`rom-${tag}-deaths`, 10, (S) => romDeaths(S, r), { rom: sha, preview: false });
   add(`rom-${tag}-saves`, 52, (S) => romSaves(S, r), { rom: sha, preview: false });
   add(`rom-${tag}-unload`, 6, (S) => romUnload(S, r), { rom: sha });
-  if (pictureMoments.some((m) => m.section === `pictures-rom-${tag}`)) add(`pictures-rom-${tag}`, 15, (S) => romPictures(S, r), { rom: sha, preview: false, files: [picturesFile] });
+  if (pictureMoments.some((m) => m.section === `pictures-rom-${tag}`)) add(`pictures-rom-${tag}`, 15, (S) => romPictures(S, r), { rom: sha, preview: false, files: picturesFiles });
 }
 if (roms.length) {
   const first = roms[0];
@@ -3503,7 +3522,9 @@ if (roms.length) {
   }
   add("later-visit", 6, (S) => laterVisit(S, first), { rom: first.sha });
   add("kept-look", 8, (S) => keptLook(S, first), { rom: first.sha });
-  add("what-is-this", 25, (S) => whatIsThisSection(S, first), { rom: first.sha });
+  const w = pageGame?.check?.what_is_this;
+  if (w) add("what-is-this", 25, (S) => whatIsThisSection(S, first, w), { rom: first.sha });
+  else skips.push(`skip  what-is-this: ${pageGame ? `${pageGame.dir}/page-check.toml has no [what_is_this]` : `no ${page.game} in the games checkout (${gamesDir})`}, so the check doesn't know the player's name`);
   for (const r of roms) add(`theme-picks-${r.sha.slice(0, 8)}`, 20, (S) => themePicks(S, r), { rom: r.sha });
 }
 
@@ -3516,8 +3537,9 @@ if (mosshopRegionHere) add("theme-in-region", 10, themeInRegion);
 else skips.push(`skip  theme-in-region: no Moss Hop build with the made-up theme instart at ${mosshopDir} (scripts/web/mosshop-hud.sh DIR makes one; give it with --mosshop DIR)`);
 if (takesHere) add("theme-sound-takes", 10, themeSoundTakes);
 else skips.push(`skip  theme-sound-takes: no Moss Hop build with the made-up sound role at ${takesDir} (scripts/web/mosshop-takes.sh DIR makes one; give it with --mosshop-takes DIR)`);
-if (tapperThemeHere) add("arcade-theme", 20, arcadeTheme, { arcade: true });
-else skips.push(`skip  arcade-theme: no Tapper build with the made-up theme at ${tapperThemeDir} (scripts/web/tapper-theme.sh DIR makes one from $GP_ROM_DIR/arcade/tapper.zip; give it with --tapper-theme DIR)`);
+if (arcadeThemeHere) add("arcade-theme", 20, arcadeTheme, { arcade: true });
+else if (!arcadeThemeFacts) skips.push(`skip  arcade-theme: no game of the games checkout (${gamesDir}) has a page-check.toml [arcade.theme]`);
+else skips.push(`skip  arcade-theme: no ${ARCADE_TITLE} build with the made-up theme at ${arcadeThemeDir} (${join(arcadeGame.dir, arcadeThemeFacts.script ?? "its page-check.toml's [arcade.theme] script")} DIR makes one from $GP_ROM_DIR/arcade/${ARCADE_SET}.zip; give it with --arcade-theme DIR)`);
 if (roms.length) add("module", 15, (S) => moduleSection(S, roms[0]), { rom: roms[0].sha });
 for (const r of roms) {
   const tag = r.sha.slice(0, 8);
@@ -3562,20 +3584,23 @@ if (ownHere && !registryStopped) {
 // from its zip, and the zips its lift refuses are refused in words. Left out
 // with a line without the game in the registry folder or its zip.
 {
-  const zip = findZip("tapper");
-  const garbled = findZip("rbtapper");
-  if (!arcadeHere) skips.push(`skip  arcade-play, arcade-refused, arcade-notice: no ${ARCADE} in the registry folder (publish one into a copy of the registry; docs/web.md, "Arcade games")`);
+  const zipName = `${ARCADE_SET}.zip`;
+  const zip = ARCADE_SET && findZip(ARCADE_SET);
+  const garbled = UNPLACED_SET && findZip(UNPLACED_SET);
+  if (!ARCADE) skips.push(`skip  arcade-play, arcade-refused, arcade-notice, arcade-unplaced: no arcade game with a page-check.toml [arcade] in the games checkout (${gamesDir}), and no --arcade-game`);
+  else if (!arcadeHere) skips.push(`skip  arcade-play, arcade-refused, arcade-notice: no ${ARCADE} in the registry folder (publish one into a copy of the registry; docs/web.md, "Arcade games")`);
   else {
-    if (zip) add("arcade-play", 30, (S) => arcadePlay(S, { zip }), { arcade: true, rom: "tapper.zip" });
-    else skips.push("skip  arcade-play: no tapper.zip in $GP_ROM_DIR/arcade: the arcade game isn't played");
-    if (zip) add("arcade-sound", 20, (S) => arcadeSound(S, { zip }), { arcade: true, rom: "tapper.zip", gesture: "safari" });
-    else skips.push("skip  arcade-sound: no tapper.zip in $GP_ROM_DIR/arcade: the arcade game's sound isn't played");
-    add("arcade-refused", 20, (S) => arcadeRefused(S, { zip }), { arcade: true, rom: "tapper.zip" });
+    if (zip) add("arcade-play", 30, (S) => arcadePlay(S, { zip }), { arcade: true, rom: zipName });
+    else skips.push(`skip  arcade-play: no ${zipName} in $GP_ROM_DIR/arcade: the arcade game isn't played`);
+    if (zip) add("arcade-sound", 20, (S) => arcadeSound(S, { zip }), { arcade: true, rom: zipName, gesture: "safari" });
+    else skips.push(`skip  arcade-sound: no ${zipName} in $GP_ROM_DIR/arcade: the arcade game's sound isn't played`);
+    add("arcade-refused", 20, (S) => arcadeRefused(S, { zip }), { arcade: true, rom: zipName });
     add("arcade-notice", 10, arcadeNoticeSection, { arcade: true });
   }
-  if (!unplacedHere) skips.push(`skip  arcade-unplaced: no ${UNPLACED} in the registry folder (scripts/web/test-registry.sh makes one when the registry has ${ARCADE})`);
-  else if (!garbled) skips.push("skip  arcade-unplaced: no rbtapper.zip in $GP_ROM_DIR/arcade: the refusal of a set not drawn right yet isn't checked");
-  else add("arcade-unplaced", 15, (S) => arcadeUnplaced(S, { garbled }), { arcade: true, rom: "rbtapper.zip" });
+  if (!ARCADE) {
+  } else if (!unplacedHere) skips.push(`skip  arcade-unplaced: no ${UNPLACED} in the registry folder (scripts/web/test-registry.sh makes one when the registry has ${ARCADE} and its page-check.toml names [arcade] unplaced)`);
+  else if (!garbled) skips.push(`skip  arcade-unplaced: no ${UNPLACED_SET}.zip in $GP_ROM_DIR/arcade: the refusal of a set not drawn right yet isn't checked`);
+  else add("arcade-unplaced", 15, (S) => arcadeUnplaced(S, { garbled }), { arcade: true, rom: `${UNPLACED_SET}.zip` });
 }
 
 if (opt("only") || acceptPictures) {
@@ -3782,8 +3807,8 @@ if (acceptPictures) {
   const errored = [...results.values()].some((r) => r.error);
   if (errored) console.log("check-page: --accept-pictures: a section threw, so no reference is written");
   else {
-    writePictures(next);
-    console.log(`check-page: --accept-pictures: ${changed} reference(s) changed of ${byId.size} played, written to ${relative(repo, picturesFile)}`);
+    for (const f of picturesFiles) writePictures(f, next.filter((m) => m.file === f));
+    console.log(`check-page: --accept-pictures: ${changed} reference(s) changed of ${byId.size} played, written to ${picturesFiles.join(", ") || "no file"}`);
   }
 }
 if (rules.length) {

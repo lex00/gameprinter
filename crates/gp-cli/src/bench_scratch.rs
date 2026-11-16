@@ -51,8 +51,8 @@ pub const SCRATCH_SCHEMA: &str = "gp bench scratch 3";
 
 #[derive(Args, Clone)]
 pub struct ScratchArgs {
-    /// The game (its bench file is bench/GAME.toml in the gameprinter
-    /// repo), or a bench file.
+    /// The game (its bench file is GAME/bench.toml in the games checkout,
+    /// or `--root`), or a bench file.
     pub game: String,
     /// The ROM, instead of the one the package accepts in $GP_ROM_DIR.
     #[arg(long)]
@@ -1122,7 +1122,7 @@ fn check_empty_start(text: &str) -> Result<()> {
 
 pub fn scratch(paths: &Paths, a: &ScratchArgs) -> Result<Value> {
     let root = crate::bench_clips::root_of(a.root.as_deref())?;
-    let (spec_file, game) = crate::bench_clips::bench_file(&a.game)?;
+    let (spec_file, game) = crate::bench_clips::bench_file(&a.game, &root)?;
     let spec: BenchFile = toml::from_str(
         &fs::read_to_string(&spec_file)
             .with_context(|| format!("reading {}", spec_file.display()))?,

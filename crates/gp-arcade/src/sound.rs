@@ -1,7 +1,7 @@
 // license:BSD-3-Clause
 // copyright-holders:Couriersud, Aaron Giles
 //
-// Tapper's sound as MAME 0.276 makes it: two AY-8910s on the Super Sound
+// The MCR board's sound as MAME 0.276 makes it: two AY-8910s on the Super Sound
 // I/O board. Ported from src/devices/sound/ay8910.cpp and ay8910.h
 // (copyright-holders Couriersud: the register file, the tone, noise and
 // envelope generators, the legacy output tables), src/mame/midway/

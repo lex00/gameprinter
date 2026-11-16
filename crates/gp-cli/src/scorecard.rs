@@ -1727,10 +1727,11 @@ mod tests {
     fn a_commercial_game_without_runs_needs_its_rom() {
         let home = tempfile::tempdir().unwrap();
         let rec = Recorded::from_pairs(&[]);
-        // game-printer used mm2-usa, which gameprinter cut; Donkey Kong in
-        // the games checkout is a commercial game too. Skips without it.
+        // game-printer used a template of its own, which gameprinter cut;
+        // the games checkout's page game (its page.toml) is a commercial
+        // game too. Skips without it.
         let Some(dir) = crate::roms_cmd::games_dir(None)
-            .map(|g| g.join("donkey-kong"))
+            .and_then(|g| crate::theme_template::page_game(&g).map(|n| g.join(n)))
             .filter(|d| d.join("model.toml").is_file())
         else {
             return;

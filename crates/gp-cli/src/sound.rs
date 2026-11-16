@@ -8,12 +8,12 @@
 //! is game content and goes under `$GP_HOME/work/sound/`, never the repo.
 //!
 //! These are the NES APU's: its register log format, channels and synth.
-//! An arcade recording (Tapper's two AY-8910s, port wave 6) is captured,
+//! An arcade recording (an arcade game's two AY-8910s, port wave 6) is captured,
 //! held to its notes and compared through crate::sound_ay instead: an
 //! `ay.log` from the recording's `ay-write` events, and notes per
 //! channel, with `--template` the sound requests gp gaps finds at the
 //! sound board's latch. `decode` reads songs with a registered driver's decoder
-//! (gp_sound::drivers); Tapper's driver decodes the AY log. `render`
+//! (gp_sound::drivers); the midway-ssio driver decodes the AY log. `render`
 //! writes WAV files and `banks` lists the sound banks found; AY logs and
 //! songs render through the arcade board's sound (crate::sound_ay_render).
 
@@ -125,7 +125,7 @@ pub struct DecodeArgs {
     #[arg(long)]
     pub against: Option<PathBuf>,
     /// An AY register log (`gp sound capture`'s ay.log, or its folder),
-    /// for a driver that decodes one (midway-ssio, Tapper's).
+    /// for a driver that decodes one (midway-ssio).
     #[arg(long)]
     pub ay_log: Option<PathBuf>,
     /// On an AY log, the frames of silence on all six channels that end a
@@ -152,7 +152,7 @@ pub struct RenderArgs {
     #[arg(long)]
     pub banks: Option<PathBuf>,
     /// For AY sound, the romset whose SSIO PROM sets the voices' volumes
-    /// (default: tapper's from $GP_ROM_DIR; without one every voice plays
+    /// (default: any known set's from $GP_ROM_DIR; without one every voice plays
     /// at full volume).
     #[arg(long)]
     pub rom: Option<PathBuf>,
@@ -769,17 +769,29 @@ fn compare_cmd(a: &CompareArgs) -> Result<Outcome> {
 fn drivers_cmd() -> Result<Outcome> {
     let mut text = String::new();
     let mut v = Vec::new();
+    // The games' sources that name each driver (roms.toml `sound_driver`).
+    let (reg, _) = crate::roms_cmd::sources(None)?;
     for d in gp_sound::drivers::REGISTRY {
+        let games: Vec<&str> = reg
+            .sources
+            .iter()
+            .filter(|s| s.sound_driver.as_deref() == Some(d.name))
+            .map(|s| s.id.as_str())
+            .collect();
         let _ = writeln!(
             text,
             "{:<11} {:<11} decoder {:<3} {}: {}",
             d.name,
             d.format,
             if d.decoder { "yes" } else { "no" },
-            d.games.join(", "),
+            if games.is_empty() {
+                "no game's roms.toml names it".to_owned()
+            } else {
+                games.join(", ")
+            },
             d.about
         );
-        v.push(json!({"name": d.name, "format": d.format, "decoder": d.decoder, "games": d.games}));
+        v.push(json!({"name": d.name, "format": d.format, "decoder": d.decoder, "games": games}));
     }
     Ok(Outcome::ok(json!(v), text.trim_end().to_owned()))
 }
@@ -827,13 +839,20 @@ fn decode_cmd(a: &DecodeArgs, paths: &Paths) -> Result<Outcome> {
                 .iter()
                 .find_map(|x| drivers::by_format(x.format()).map(|d| (d, x.name().to_owned())))
         });
+    // The game's own roms.toml says which driver a source uses.
+    let named = crate::roms_cmd::sources(None).ok().and_then(|(reg, _)| {
+        reg.sources
+            .iter()
+            .find(|s| s.id == a.source || s.system.as_deref() == Some(a.source.as_str()))
+            .and_then(|s| s.sound_driver.clone())
+    });
     let driver = by_asset
         .as_ref()
         .map(|(d, _)| *d)
-        .or_else(|| drivers::by_game(&a.source))
+        .or_else(|| named.as_deref().and_then(drivers::by_name))
         .with_context(|| {
             format!(
-                "no asset of {}'s map has a registered driver's format, and no driver lists the game (gp sound drivers)",
+                "no asset of {}'s map has a registered driver's format, and no game's roms.toml names its sound_driver (gp sound drivers)",
                 a.source
             )
         })?;
@@ -846,8 +865,8 @@ fn decode_cmd(a: &DecodeArgs, paths: &Paths) -> Result<Outcome> {
         );
     }
     if driver.format != drivers::AY_LOG {
-        // Every NES decoder game-printer had was another game's (Super
-        // Mario Bros.'s), cut in the port.
+        // Every NES decoder game-printer had was another game's (a ported
+        // platformer's), cut in the port.
         bail!(
             "driver `{}` decodes `{}` music data, which gameprinter has no decoder for",
             driver.name,
@@ -1025,9 +1044,12 @@ fn render_ay(a: &RenderArgs, text: &str) -> Result<Outcome> {
             format!("song {name}"),
         )
     };
+    // The board's PROM is in every set's zip: any known set's here will do.
     let zip = match &a.rom {
         Some(p) => Some(p.clone()),
-        None => gp_arcade::romset::local_romset("tapper"),
+        None => gp_arcade::romset::known()
+            .iter()
+            .find_map(|s| gp_arcade::romset::local_romset(s.name)),
     };
     let prom = zip
         .as_deref()

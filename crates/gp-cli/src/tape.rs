@@ -27,7 +27,7 @@
 //! The key holds the clip's start files by their bytes, not their paths
 //! (which name the run and its home), so tapes are kept in one folder for
 //! the machine ([`dir`], `~/.gameprinter/work/tapes`, held to a size cap):
-//! a new run name, or the gate's canary in a home of its own, reads the
+//! a new run name, or a run in a home of its own, reads the
 //! tapes an earlier run of the same clips on the same emulator wrote.
 
 use std::cell::{Cell, RefCell};
@@ -206,7 +206,7 @@ impl Tape {
 
 /// Where tapes and the draws beside them are kept: `$GP_TAPE_DIR`, else
 /// `~/.gameprinter/work/tapes` from `$HOME`. One folder for every run and
-/// every home on the machine (the gate's canary homes among them): a
+/// every home on the machine: a
 /// tape's key holds everything its run depends on, so any run of the same
 /// clip on the same emulator reads it. `None` without either, and the
 /// caller keeps tapes in its own folder.
@@ -227,7 +227,7 @@ pub(crate) fn dir() -> Option<PathBuf> {
 }
 
 /// The tape folder's size cap: `$GP_TAPE_CAP_MB` megabytes, else 8 GB.
-/// Donkey Kong's 114 tapes are about 350 MB.
+/// One NES game's 114 tapes are about 350 MB.
 fn cap_bytes() -> u64 {
     std::env::var("GP_TAPE_CAP_MB")
         .ok()
@@ -427,7 +427,7 @@ impl Original {
                 if self.record
                     && let OriginalRuntime::Arcade(a) = live
                 {
-                    let (pens, palette) = a.tapper().pens();
+                    let (pens, palette) = a.mcr().pens();
                     let mut px: Vec<u8> = palette
                         .iter()
                         .flat_map(|c| [(c >> 16) as u8, (c >> 8) as u8, *c as u8])
@@ -531,7 +531,7 @@ impl Original {
                     .borrow_mut()
                     .ram
                     .entry(nes.frame())
-                    .or_insert_with(|| pack(&a.tapper().ram_record()));
+                    .or_insert_with(|| pack(&a.mcr().ram_record()));
                 return Some(r);
             }
             if self.tape.borrow().ram.contains_key(&nes.frame()) {
@@ -702,7 +702,7 @@ impl Runtime for Original {
                 if ram {
                     t.ram
                         .entry(f)
-                        .or_insert_with(|| pack(&a.tapper().ram_record()));
+                        .or_insert_with(|| pack(&a.mcr().ram_record()));
                 } else {
                     t.other
                         .entry(f)
@@ -955,12 +955,15 @@ mod tests {
     /// An arcade original's tape: its RAM record answers the RAM
     /// selectors, the other selectors are kept as asked, and its pictures
     /// come back as they were drawn, sprite mask included. Needs the
-    /// owner's rbtapper romset; skipped without it.
+    /// real romset ($GP_GAME_DIR's first oracle set); skipped without it.
     #[test]
     fn an_arcade_tape_replays_its_reads_and_pictures() {
-        let Some(zip) = gp_arcade::romset::local_romset("rbtapper") else {
-            eprintln!("skipped: no rbtapper romset");
-            return;
+        let (_, zip) = match gp_arcade::romset::test_oracle_set_path() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("skipped: {e}");
+                return;
+            }
         };
         let rom = std::fs::read(zip).unwrap();
         let o = OriginalRuntime::of_rom(&rom).unwrap();

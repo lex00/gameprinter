@@ -477,7 +477,7 @@ pub struct Phase {
     pub until_counter: Option<usize>,
     /// As `until_counter`, with the one of these counters that is highest
     /// as the phase starts: the timer the event's picture took, for a game
-    /// with several slots for it (Donkey Kong's two points sprites, $41
+    /// with several slots for it (one game's two points sprites, $41
     /// and $42, of which $CFC6 takes the first free).
     pub until_counters: Vec<usize>,
     /// Ends on the frame its event's entity is gone (no longer alive), and
@@ -751,7 +751,7 @@ pub struct Scene {
     /// runtime draws these bodies last.
     pub front: Vec<bool>,
     /// By body: tiles the game writes into the background's name table
-    /// (Donkey Kong), drawn as any body but counted as the background's.
+    /// (as one ported game does), drawn as any body but counted as the background's.
     pub name_table: Vec<bool>,
     /// The HUD's layer and tiles, in screen pixels, then its sprites.
     pub hud: Vec<Draw>,
@@ -1464,7 +1464,7 @@ impl Animator {
             return None;
         }
         // A body facing both ways (`run.face_both`) draws as facing left:
-        // Super Mario Bros.' DrawSpriteObject reads PlayerFacingDir's bit 1.
+        // one platformer's DrawSpriteObject reads PlayerFacingDir's bit 1.
         if look.facing_flip && (b.facing_left || b.faced_both) {
             f.flip_x = !f.flip_x;
         }

@@ -1,7 +1,7 @@
 //! The springboard (platformer 0.4.4): a body that holds a player who
 //! stands on it for the frames of its steps, moving the player and itself
 //! a set amount each frame, and then throws the player up, higher when an
-//! action is pressed during the press. Super Mario Bros.' jumpspring
+//! action is pressed during the press. A side-scroller's jumpspring
 //! (JumpspringHandler, ChkForLandJumpSpring) is one; any game with a
 //! spring or a trampoline that holds the player can say the same.
 //!

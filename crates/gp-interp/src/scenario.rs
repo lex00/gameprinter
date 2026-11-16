@@ -963,12 +963,12 @@ pub struct OutOfScope {
     pub frames: u64,
 }
 
-/// One body over a scenario: "the second goomba".
+/// One body over a scenario: "the second walker".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BodyScore {
     /// The model entity.
     pub kind: String,
-    /// In words: "the second goomba".
+    /// In words: "the second walker".
     pub name: String,
     /// Both games had it at some point.
     pub paired: bool,
@@ -982,13 +982,13 @@ pub struct BodyScore {
     pub events: Vec<BodyEvent>,
     /// The first event the two games don't have on the same frame, short:
     /// "turns left 4 frames late". Or, for a body one game has alone, "the
-    /// original has a goomba the model doesn't".
+    /// original has a walker the model doesn't".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first: Option<String>,
     /// The frame (from the start) of the first such event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_frame: Option<u64>,
-    /// In a sentence: "the original's goomba turns left at frame 40, the
+    /// In a sentence: "the original's walker turns left at frame 40, the
     /// model's at 44", or "the same in both".
     pub says: String,
 }
@@ -1052,8 +1052,8 @@ pub fn bodies(ls: &Lockstep, start: u64) -> Vec<BodyScore> {
         .collect()
 }
 
-/// A mismatch in words, short ("the second goomba turns left 4 frames
-/// late") and long ("the original's goomba turns left at frame 40, the
+/// A mismatch in words, short ("the second walker turns left 4 frames
+/// late") and long ("the original's walker turns left at frame 40, the
 /// model's at 44").
 fn mismatch_words(
     name: &str,
@@ -1091,7 +1091,7 @@ fn mismatch_words(
     }
 }
 
-/// Where one track first goes wrong in a scenario: "Mario: wrong from
+/// Where one track first goes wrong in a scenario: "Hero: wrong from
 /// frame 1".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrackFirst {
@@ -1107,12 +1107,12 @@ pub struct TrackFirst {
     pub model: String,
     pub words: String,
     /// For a body's track, why in words, from its events: "the second
-    /// goomba turns left 4 frames late", "the original has a goomba the
+    /// walker turns left 4 frames late", "the original has a walker the
     /// model doesn't".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    /// "Mario: wrong from frame 1 (Mario's speed across, original 0.0625,
-    /// rebuilt 0.037109375)", "Goomba: wrong from frame 40 (the goomba
+    /// "Hero: wrong from frame 1 (Hero's speed across, original 0.0625,
+    /// rebuilt 0.037109375)", "Walker: wrong from frame 40 (the walker
     /// turns left 4 frames late)".
     pub says: String,
 }
@@ -1805,7 +1805,7 @@ pub fn clip_name(level: &str, sequence: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Quiet {
     pub frame: u64,
-    /// "Mario standing on the ground at 3.2 s, nothing near".
+    /// "Hero standing on the ground at 3.2 s, nothing near".
     pub says: String,
     /// Standing still (else only on the ground).
     pub still: bool,

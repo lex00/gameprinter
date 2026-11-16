@@ -1,19 +1,22 @@
-//! The disassembler against the CPU itself: on Tapper, every instruction
-//! either CPU runs is followed by the one its length and flow say, unless
-//! an interrupt comes between. Skipped without tapper.zip
-//! (gp_arcade::romset::local_romset).
+//! The disassembler against the CPU itself: on a real set, every
+//! instruction either CPU runs is followed by the one its length and flow
+//! say, unless an interrupt comes between. The set is the first of the
+//! game $GP_GAME_DIR names whose zip is here
+//! (gp_arcade::romset::test_romset); skipped without one.
 
 use gp_arcade::dasm::{Flow, decode};
-use gp_arcade::{Controls, Romset, Tapper};
+use gp_arcade::{Controls, Mcr};
 
 #[test]
 fn lengths_and_flow_match_what_the_cpus_run() {
-    let Some(zip) = gp_arcade::romset::local_romset("tapper") else {
-        eprintln!("skipped: no tapper romset");
-        return;
+    let set = match gp_arcade::romset::test_romset() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("skipped: {e}");
+            return;
+        }
     };
-    let set = Romset::load_zip(&zip).unwrap();
-    let mut t = Tapper::power_on(&set);
+    let mut t = Mcr::power_on(&set);
     let mut checked = 0u64;
     for frame in 1..=900u32 {
         let coin = (600..606).contains(&frame);

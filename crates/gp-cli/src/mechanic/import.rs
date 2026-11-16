@@ -4,8 +4,8 @@
 //! log (queue.json), the gate's scores ($GP_HOME/work/refine/GAME/) and the
 //! sealed runs ($GP_HOME/sealed/GAME/).
 //!
-//! The old home named the game as game-printer did: for Donkey Kong that is
-//! donkey-kong-oe, the prefix the games repo's corpus.toml gives its
+//! The old home named the game as game-printer did: by its old source id,
+//! the prefix the games repo's corpus.toml gives its
 //! imported clips (`[import] prefix`), so the old name is that prefix
 //! unless `--old-name` says otherwise, and the game itself when there is
 //! neither.
@@ -236,50 +236,50 @@ mod tests {
         let new = tempfile::tempdir().unwrap();
         let o = old.path();
         put(
-            &o.join("mechanics/dk-oe/queue.json"),
+            &o.join("mechanics/oldhop/queue.json"),
             "[{\"mechanic\":\"walk\",\"status\":\"in line\"}]",
         );
         put(
-            &o.join("mechanics/dk-oe/walk/session.toml"),
-            "game = \"dk-oe\"\nmechanic = \"walk\"\nprompt = \"old\"\n",
+            &o.join("mechanics/oldhop/walk/session.toml"),
+            "game = \"oldhop\"\nmechanic = \"walk\"\nprompt = \"old\"\n",
         );
-        put(&o.join("mechanics/dk-oe/walk/talk.ndjson"), "{\"n\":1}\n");
-        put(&o.join("mechanics/dk-oe/walk/clips/001.log"), "log");
+        put(&o.join("mechanics/oldhop/walk/talk.ndjson"), "{\"n\":1}\n");
+        put(&o.join("mechanics/oldhop/walk/clips/001.log"), "log");
         put(
-            &o.join("mechanics/dk-oe/jump/session.toml"),
-            "game = \"dk-oe\"\nmechanic = \"jump\"\n",
+            &o.join("mechanics/oldhop/jump/session.toml"),
+            "game = \"oldhop\"\nmechanic = \"jump\"\n",
         );
-        put(&o.join("mechanics/dk-oe/jump/clips/001.log"), "old jump");
-        put(&o.join("work/refine/dk-oe/status.json"), "{}");
-        put(&o.join("sealed/dk-oe/sealed-run/clips/001.toml"), "x");
+        put(&o.join("mechanics/oldhop/jump/clips/001.log"), "old jump");
+        put(&o.join("work/refine/oldhop/status.json"), "{}");
+        put(&o.join("sealed/oldhop/sealed-run/clips/001.toml"), "x");
         let n = new.path();
         // An unused walk (as gp mechanic start makes) and a jump with a clip.
         put(
-            &n.join("mechanics/dk/walk/session.toml"),
-            "game = \"dk\"\nmechanic = \"walk\"\nprompt = \"\"\n",
+            &n.join("mechanics/mosshop/walk/session.toml"),
+            "game = \"mosshop\"\nmechanic = \"walk\"\nprompt = \"\"\n",
         );
-        fs::create_dir_all(n.join("mechanics/dk/walk/clips")).unwrap();
+        fs::create_dir_all(n.join("mechanics/mosshop/walk/clips")).unwrap();
         put(
-            &n.join("mechanics/dk/jump/session.toml"),
-            "game = \"dk\"\nmechanic = \"jump\"\n",
+            &n.join("mechanics/mosshop/jump/session.toml"),
+            "game = \"mosshop\"\nmechanic = \"jump\"\n",
         );
-        put(&n.join("mechanics/dk/jump/clips/001.log"), "new jump");
+        put(&n.join("mechanics/mosshop/jump/clips/001.log"), "new jump");
         let paths = Paths {
             home: n.to_path_buf(),
             store: n.join("store"),
             roms: n.join("roms"),
         };
         let a = Import {
-            game: "dk",
+            game: "mosshop",
             from: o,
-            old_name: Some("dk-oe"),
+            old_name: Some("oldhop"),
             games: None,
             dry_run: true,
         };
         let r = run(&paths, &a).unwrap();
         assert!(r.text.starts_with("Dry run:"), "{}", r.text);
         assert!(
-            !n.join("mechanics/dk/queue.json").exists(),
+            !n.join("mechanics/mosshop/queue.json").exists(),
             "a dry run writes nothing"
         );
 
@@ -289,22 +289,22 @@ mod tests {
         };
         let r = run(&paths, &a).unwrap();
         assert!(r.text.contains("kept as it is: jump"), "{}", r.text);
-        let walk = fs::read_to_string(n.join("mechanics/dk/walk/session.toml")).unwrap();
+        let walk = fs::read_to_string(n.join("mechanics/mosshop/walk/session.toml")).unwrap();
         assert!(
-            walk.contains("game = \"dk\"") && walk.contains("prompt = \"old\""),
+            walk.contains("game = \"mosshop\"") && walk.contains("prompt = \"old\""),
             "{walk}"
         );
         assert_eq!(
-            fs::read_to_string(n.join("mechanics/dk/walk/clips/001.log")).unwrap(),
+            fs::read_to_string(n.join("mechanics/mosshop/walk/clips/001.log")).unwrap(),
             "log"
         );
         assert_eq!(
-            fs::read_to_string(n.join("mechanics/dk/jump/clips/001.log")).unwrap(),
+            fs::read_to_string(n.join("mechanics/mosshop/jump/clips/001.log")).unwrap(),
             "new jump"
         );
-        assert!(n.join("mechanics/dk/queue.json").is_file());
-        assert!(n.join("work/refine/dk/status.json").is_file());
-        assert!(n.join("sealed/dk/sealed-run/clips/001.toml").is_file());
+        assert!(n.join("mechanics/mosshop/queue.json").is_file());
+        assert!(n.join("work/refine/mosshop/status.json").is_file());
+        assert!(n.join("sealed/mosshop/sealed-run/clips/001.toml").is_file());
 
         // Again: everything is here now, so nothing is copied.
         let r = run(&paths, &a).unwrap();

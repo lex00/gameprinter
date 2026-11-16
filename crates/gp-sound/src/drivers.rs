@@ -16,9 +16,9 @@
 //! the sound program wrote (gp-cli's sound_ay), so it works on any game
 //! the board runs.
 //!
-//! game-printer's registry held Super Mario Bros.'s decoder and Mega Man
-//! 2's and Super Mario Bros. 2's drivers; gameprinter's games are Donkey
-//! Kong and Tapper, so those were cut and these two entered.
+//! Drivers are named by the board or chip they drive, never by a game.
+//! Which game uses which driver is the game's own fact: its roms.toml
+//! says so per source (`sound_driver`, docs/sound.md, "Drivers").
 
 /// What the registry knows about one driver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,8 +27,6 @@ pub struct Driver {
     /// The asset map format (or `blobs` asset name) its music data lifts
     /// as; `ay-log` for a driver decoded from an AY-8910 register log.
     pub format: &'static str,
-    /// Games it's known in, by source ID.
-    pub games: &'static [&'static str],
     /// Whether a decoder is written.
     pub decoder: bool,
     pub about: &'static str,
@@ -39,16 +37,14 @@ pub const AY_LOG: &str = "ay-log";
 
 pub const REGISTRY: &[Driver] = &[
     Driver {
-        name: "nintendo-dk",
-        format: "dk-music",
-        games: &["donkey-kong-ju", "donkey-kong-oe"],
+        name: "nes-apu-music",
+        format: "nes-apu-music",
         decoder: false,
-        about: "Nintendo's sound engine of Donkey Kong (NES): no asset map lifts its music data yet, so there is no decoder; gp sound capture reads its songs from the APU log",
+        about: "A sound engine on the NES's APU whose music data no asset map lifts yet, so there is no decoder; gp sound capture reads its songs from the APU log",
     },
     Driver {
         name: "midway-ssio",
         format: AY_LOG,
-        games: &["tapper", "rbtapper", "tapperg", "sutapper", "tappera"],
         decoder: true,
         about: "Bally Midway's SSIO board: a sound Z80 driving two AY-8910s on the main CPU's sound latch. Its music data isn't mapped, so the decoder reads the songs from an AY register log (gp sound capture's ay.log): each run of sound between silences is a song",
     },
@@ -62,21 +58,16 @@ pub fn by_format(format: &str) -> Option<&'static Driver> {
     REGISTRY.iter().find(|d| d.format == format)
 }
 
-/// The driver a game (by source ID) is known to use.
-pub fn by_game(source: &str) -> Option<&'static Driver> {
-    REGISTRY.iter().find(|d| d.games.contains(&source))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn the_registry_finds_drivers_by_name_format_and_game() {
-        assert_eq!(by_game("tapper").map(|d| d.name), Some("midway-ssio"));
+        assert_eq!(by_format(AY_LOG).map(|d| d.name), Some("midway-ssio"));
         assert!(by_format(AY_LOG).is_some_and(|d| d.decoder));
-        assert!(by_name("nintendo-dk").is_some_and(|d| !d.decoder));
-        assert!(by_game("smb1-ntsc-prg0").is_none());
+        assert!(by_name("nes-apu-music").is_some_and(|d| !d.decoder));
+        assert!(by_name("no-such-driver").is_none());
         let mut names: Vec<_> = REGISTRY.iter().map(|d| d.name).collect();
         names.dedup();
         assert_eq!(names.len(), REGISTRY.len());

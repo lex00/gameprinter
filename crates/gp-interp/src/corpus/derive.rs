@@ -26,7 +26,7 @@ use crate::scenario::params_table;
 /// A number the refinement loop can change, as the model sets it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fitted {
-    /// `entities.mario.jump.bands[0].below`.
+    /// `entities.hero.jump.bands[0].below`.
     pub path: String,
     pub mechanic: String,
     /// Its value in 16.16 fixed point.
@@ -45,7 +45,7 @@ pub fn raw_of(v: &toml::Value) -> Option<i64> {
     }
 }
 
-/// The mechanics a part of the model carries (`entities.mario`), each with
+/// The mechanics a part of the model carries (`entities.hero`), each with
 /// the table its parameters are in.
 pub fn carried<'a>(
     catalog: &'a Catalog,

@@ -343,7 +343,7 @@ mod tests {
                 .into(),
             )]
             .into(),
-            hooks: [("dk_barrel".to_owned(), hook_hash.to_owned())].into(),
+            hooks: [("crate_roll".to_owned(), hook_hash.to_owned())].into(),
             ..Fingerprint::default()
         }
     }
@@ -358,7 +358,7 @@ mod tests {
                 {"id": "d", "recipe": "rd", "error": "no start"},
             ]}},
             "reads": {
-                "a": {"kinds": ["barrel"], "hooks": ["dk_barrel"]},
+                "a": {"kinds": ["barrel"], "hooks": ["crate_roll"]},
                 "b": {"kinds": ["spring"]},
                 "c": {"kinds": ["*"]},
             },
@@ -420,8 +420,20 @@ mod tests {
             eprintln!("skipped: no GP_GAMES_DIR");
             return;
         };
-        for g in ["donkey-kong", "tapper"] {
-            let dir = games.join(g);
+        let mut dirs: Vec<std::path::PathBuf> = std::fs::read_dir(&games)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.join("package.toml").is_file())
+            .collect();
+        dirs.sort();
+        for dir in dirs {
+            let g = dir
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
             let Ok(Some(ext)) = crate::package::hook_code(&dir) else {
                 continue;
             };

@@ -1,13 +1,13 @@
 //! Profiles (profiles format 0.2.0, docs/model.md "Profiles"): named
 //! switches, each a set of overrides of a model's mechanic parameters and
 //! options, kept beside the model in `profiles.toml` and shown in groups,
-//! such as Super Mario Bros.' physics fixes ("smooth steps", "turn in the
+//! such as a side-scroller's physics fixes ("smooth steps", "turn in the
 //! air") and its assist ("more lives", "no timer").
 //!
 //! The model as written is the profile [`BASE`], "retro": every switch off.
 //! It is the default and what every comparison, score and refinement runs.
 //! Switches combine freely, since no two may change the same part. A preset
-//! (Super Mario Bros.' "normal") names a set of switches. Switches are
+//! (a side-scroller's "normal") names a set of switches. Switches are
 //! applied only when a game is built or played: [`Profiles::apply`] writes
 //! the overrides of every switch on into a copy of the model and names the
 //! set in `model.profile` (the switch names in order, joined by `+`), which
@@ -17,7 +17,7 @@
 //! A switch can only override a path the base model has, and only one of
 //! a mechanic's parameters or options: a path classed `parameter` or
 //! `mechanic` that names its mechanic ([`crate::classify`]), such as
-//! `entities.mario.run.move_step`, `counters.lives.start` or, since
+//! `entities.player.run.move_step`, `counters.lives.start` or, since
 //! `switch.rules`, `rules.game.states.dying.transition[0].after`. Content,
 //! presentation, the header and a part with no mechanic (an entity's
 //! `role`) are refused.
@@ -421,7 +421,7 @@ fn overlaps<'a>(switches: &[&'a Switch]) -> Vec<(&'a str, &'a str, String)> {
 
 /// The model's top-level parts a switch may change. `rules` is the
 /// profiles format's `switch.rules` (no version bump): a game rule's
-/// timing or flow, such as Donkey Kong's death hold, is an engine
+/// timing or flow, such as a ladder game's death hold, is an engine
 /// behaviour a switch can turn off like any mechanic's option. Under
 /// `input` only `keep_direction` is a mechanic; the bindings aren't.
 const SWITCHABLE: [&str; 6] = [

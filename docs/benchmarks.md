@@ -36,7 +36,7 @@ What it left behind:
 
 ## gp bench clips, scratch and report
 
-These grade the ROM-only tools on a game whose answer key is known. game-printer ran them on Moss Hop, its own homebrew, through its capture-run loop and against a ground truth written from Moss Hop's source. gameprinter runs them on a game package over its corpus, with the package's hand-written model and state mapping as the answer key. The bench files are `bench/donkey-kong.toml` and `bench/tapper.toml` in this repo; their paths are under the games checkout (`$GP_GAMES_DIR`, else `../games` beside the repo, or `--root`). Each bench runs its tools in a home of its own (`$GP_HOME/work/bench/GAME`, or `--work`) with a copy of the ROM, and writes `report.json` there. Only crates/gp-cli/src/bench_grade.rs reads the answer key.
+These grade the ROM-only tools on a game whose answer key is known. game-printer ran them on Moss Hop, its own homebrew, through its capture-run loop and against a ground truth written from Moss Hop's source. gameprinter runs them on a game package over its corpus, with the package's hand-written model and state mapping as the answer key. Each game's bench file is its own `bench.toml`, in its folder of the games checkout (the tool knows no game by name, so this repo holds none; `gp bench clips GAME` reads `GAME/bench.toml`); its paths are under the games checkout (`$GP_GAMES_DIR`, else `../games` beside the repo, or `--root`). Each bench runs its tools in a home of its own (`$GP_HOME/work/bench/GAME`, or `--work`) with a copy of the ROM, and writes `report.json` there. Only crates/gp-cli/src/bench_grade.rs reads the answer key.
 
 `gp bench clips GAME` runs these stages:
 

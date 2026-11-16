@@ -1,13 +1,13 @@
-//! `gp sound render` on Tapper's sound (crate::sound_ay): an AY register
-//! log or an AY song file played through milestone 3's board sound
-//! (gp_arcade::sound, the two AY-8910s, the SSIO's volumes and the
+//! `gp sound render` on an arcade game's AY sound (crate::sound_ay): an
+//! AY register log or an AY song file played through milestone 3's board
+//! sound (gp_arcade::sound, the two AY-8910s, the SSIO's volumes and the
 //! speakers, as MAME makes them) into a stereo WAV.
 //!
 //! A register log holds each frame's writes but not their times within
-//! the frame, so a render puts every write at its frame's start (Tapper
-//! runs at 30 frames a second). The SSIO sets each voice's loudness by a
-//! duty cycle read from its PROM; the romset gives it, and without one
-//! every duty plays at full volume.
+//! the frame, so a render puts every write at its frame's start (the
+//! Midway MCR game this was made for runs at 30 frames a second). The SSIO
+//! sets each voice's loudness by a duty cycle read from its PROM; the
+//! romset gives it, and without one every duty plays at full volume.
 
 use gp_arcade::attotime::{ATTOSECONDS_PER_SECOND, Attotime};
 use gp_arcade::sound::{OUT_RATE, Sound, UPDATE_HZ, to_i16};
@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use crate::sound_ay::{AyLog, Write};
 
-/// Tapper's frame rate.
+/// The frame rate of the Midway MCR game the render was made for.
 const FPS: i64 = 30;
 
 fn at(attos: i128) -> Attotime {

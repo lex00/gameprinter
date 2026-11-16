@@ -388,7 +388,7 @@ mod tests {
     #[test]
     fn a_session_streams_its_events_after_a_seq() {
         let d = tempfile::tempdir().unwrap();
-        let s = d.path().join("watch/dk");
+        let s = d.path().join("watch/hop");
         std::fs::create_dir_all(&s).unwrap();
         std::fs::write(
             s.join("events.ndjson"),
@@ -402,7 +402,7 @@ mod tests {
         assert!(text.contains("id: 2\ndata: {\"seq\":2,\"kind\":\"b\"}\n\n"));
         assert!(text.contains("id: 3\n"));
         assert!(!text.contains("id: 1\n"));
-        assert_eq!(split("/api/watch/dk/stream"), Some(("dk", "stream")));
+        assert_eq!(split("/api/watch/hop/stream"), Some(("hop", "stream")));
         assert_eq!(split("/api/watch/files/log.txt"), None);
         assert_eq!(split("/api/watch"), None);
     }

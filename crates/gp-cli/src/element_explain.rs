@@ -78,10 +78,10 @@ impl Side {
 
 #[derive(Args, Clone, Default)]
 pub struct ExplainArgs {
-    /// The game's package folder (games/donkey-kong).
+    /// The game's package folder (games/GAME).
     #[arg(long)]
     pub run: PathBuf,
-    /// A clip of the game's corpus by its ID (dk.walk.001): the recordings
+    /// A clip of the game's corpus by its ID (hop.walk.001): the recordings
     /// the page's game view plays from the game's tests.
     #[arg(long)]
     pub clip: String,
@@ -94,7 +94,7 @@ pub struct ExplainArgs {
     #[arg(long)]
     pub log_frame: Option<u64>,
     /// A point on the picture in screen pixels, `X,Y` (the NES's picture is
-    /// 256x240, an arcade board's as drawn, Tapper's 512x480). A point is
+    /// 256x240, an arcade board's as drawn, such as 512x480). A point is
     /// a box of one pixel.
     #[arg(long, conflicts_with = "spot_box")]
     pub at: Option<String>,
@@ -457,8 +457,8 @@ pub fn owners(m: &Mapping, addr: u16, byte: &dyn Fn(u16) -> Option<u8>) -> Vec<O
 }
 
 /// When no code read leads to a named byte: the slot whose block of bytes
-/// holds `addr`, for a slot group whose fields step by a stride (Donkey
-/// Kong's barrels: 16 bytes of the sprite buffer a barrel, the x and y the
+/// holds `addr`, for a slot group whose fields step by a stride (one
+/// game's barrels: 16 bytes of the sprite buffer a barrel, the x and y the
 /// mapping reads at the block's first sprite). The block runs from the
 /// slot's lowest field byte for one stride. Said as found by place, not
 /// by the code.
@@ -1407,9 +1407,9 @@ fn nes_frame(
 fn arcade_frame(rom: &[u8], log: &gp_evidence::InputLog, of: u64) -> Result<OrigFrame> {
     use gp_arcade::video;
     let set = gp_arcade::Romset::from_zip(rom)?;
-    let mut t = gp_arcade::Tapper::power_on(&set);
+    let mut t = gp_arcade::Mcr::power_on(&set);
     let mut before: Option<(Vec<u8>, Vec<u8>)> = None;
-    let ram_of = |t: &gp_arcade::Tapper| -> (Vec<u8>, Vec<u8>) {
+    let ram_of = |t: &gp_arcade::Mcr| -> (Vec<u8>, Vec<u8>) {
         (
             (0xE800..0xEA00u16).map(|a| t.peek(a)).collect(),
             (0xF000..0xF800u16).map(|a| t.peek(a)).collect(),

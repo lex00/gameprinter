@@ -499,7 +499,7 @@ fn the_header_is_not_editable() {
     let err = edited(&[set("model.source", json!("../../tmp"))]).unwrap_err();
     assert!(err.contains("header"), "{err}");
     assert!(!crate::is_source_name("../../tmp"));
-    assert!(crate::is_source_name("donkey-kong-ju"));
+    assert!(crate::is_source_name("rooftop-ju"));
 }
 
 #[test]

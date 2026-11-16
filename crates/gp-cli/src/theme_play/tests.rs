@@ -2,29 +2,53 @@
 
 use super::*;
 
-/// A made-up page check: two ROM versions' routes, comments, trailing
-/// commas and a death list the moments leave out.
-const CHECK_PAGE: &str = r#"
-const other = { x: 1 };
-// Each ROM's route.
-const ROUTES = {
-  "made-up-a": {
-    plays: ["main", "m2"],
-    stages: [
-      { name: "1st", level: "main", start: 10, mario: [1, 2], shot: 20, kinds: ["a"], clear: 30, top: 4 },
-      { name: "2nd", level: "m2", start: 40, shot: 50, clear: 60, top: 4 }, // the last
-    ],
-    ending: { frame: 70, kinds: ["heart"] },
-    again: { frame: 80, mario: [1, 2] },
-    frames: 90,
-    holds: [
-      "start@1-2", "right@5-8",
-    ],
-    deaths: [{ name: "a fall: off the edge", holds: ["left@3-4"], hit: 9 }],
-  },
-  "made-up-b": { stages: [], frames: 50, holds: ["a@1-1"], ending: { frame: 40 } },
-};
-const after = 1;
+/// A made-up page-check.toml: two ROM versions' routes, one that names a
+/// theme-shots.toml run (passed over here) and a death list the moments
+/// leave out.
+const PAGE_CHECK: &str = r#"
+[page]
+characters = ["someone"]
+
+[[route]]
+rom = "made-up-a"
+plays = ["main", "m2"]
+ending = { frame = 70, kinds = ["heart"] }
+again = { frame = 80, player = [1, 2] }
+frames = 90
+holds = ["start@1-2", "right@5-8"]
+
+[[route.stage]]
+name = "1st"
+level = "main"
+start = 10
+player = [1, 2]
+shot = 20
+kinds = ["a"]
+clear = 30
+top = 4
+
+[[route.stage]]
+name = "2nd"
+level = "m2"
+start = 40
+shot = 50
+clear = 60
+top = 4
+
+[[route.death]]
+name = "a fall: off the edge"
+holds = ["left@3-4"]
+hit = 9
+
+[[route]]
+rom = "made-up-b"
+frames = 50
+holds = ["a@1-1"]
+ending = { frame = 40 }
+
+[[route]]
+rom = "made-up-c"
+run = "c-route"
 "#;
 
 const PICTURES: &str = "# made up\n\nmoment a-walk\n  section pictures-rom-aaaa1111\n  frame   15\n  shows   walking\n\nmoment a-end-night\n  section pictures-rom-aaaa1111\n  frame   70\n  look    night\n\nmoment a-late-night\n  section pictures-rom-aaaa1111\n  frame   75\n  look    night\n\nmoment a-jump\n  section pictures-rom-aaaa1111\n  frame   25\n  press   a@22-23\n  shows   a jump\n\nmoment b-only\n  section pictures-rom-bbbb2222\n  frame   12\n";
@@ -38,20 +62,8 @@ fn roms() -> Vec<(String, String)> {
 }
 
 #[test]
-fn a_script_s_object_literal_reads_as_json() {
-    let lit = object_after(CHECK_PAGE, "ROUTES").unwrap();
-    assert!(lit.starts_with('{') && lit.ends_with('}'));
-    let v: Value = serde_json::from_str(&js_literal_to_json(lit)).unwrap();
-    assert_eq!(v["made-up-a"]["frames"], 90);
-    assert_eq!(v["made-up-a"]["holds"][1], "right@5-8");
-    // A colon inside a string is not a key.
-    assert_eq!(v["made-up-a"]["deaths"][0]["name"], "a fall: off the edge");
-    assert!(object_after(CHECK_PAGE, "NOTHERE").is_none());
-}
-
-#[test]
 fn the_page_check_gives_each_rom_its_route_and_moments() {
-    let m = page_check_moments(CHECK_PAGE, PICTURES, &roms()).unwrap();
+    let m = page_check_moments(PAGE_CHECK, PICTURES, &roms()).unwrap();
     m.check().unwrap();
     let names: Vec<(&str, &str, u32)> = m
         .shot
@@ -81,7 +93,7 @@ fn the_page_check_gives_each_rom_its_route_and_moments() {
     let jump = m.run.iter().find(|r| r.name == "made-up-a-a-jump").unwrap();
     assert_eq!(jump.holds, vec!["start@1-2", "right@5-8", "a@22-23"]);
     assert_eq!(jump.rom, "made-up-a");
-    // A ROM the page check has no route for has no moments.
+    // A ROM the page check has no route of its own for has no moments.
     assert!(m.run.iter().all(|r| r.rom != "made-up-c"));
 }
 

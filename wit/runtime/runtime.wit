@@ -114,7 +114,7 @@ interface types {
   }
 
   // One part of a loaded state, by model path (a pattern such as
-  // `entities.goomba[*]` for many), and why it was taken as it was.
+  // `entities.walker[*]` for many), and why it was taken as it was.
   record load-note {
     path: path,
     how: load-how,

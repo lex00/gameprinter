@@ -47,7 +47,7 @@ use crate::screen::{Art, Probe};
 
 #[derive(Args)]
 pub struct PictureArgs {
-    /// The game's package folder (games/donkey-kong), with its corpus plan.
+    /// The game's package folder (games/mosshop), with its corpus plan.
     pub game: std::path::PathBuf,
     /// The run's name, as `gp corpus score --run` takes it: its starts are
     /// kept under $GP_HOME/capture/RUN.
@@ -377,7 +377,7 @@ impl Screens<OriginalRuntime, Model> for Watch {
             }
             OriginalRuntime::Arcade(a) => {
                 shown.backdrop = o.rgb.first().copied().unwrap_or_default();
-                let t = a.tapper();
+                let t = a.mcr();
                 let ram: Vec<u8> = (0..0x200u16).map(|i| t.peek(0xe800 + i)).collect();
                 (arcade_sprites(&ram), None)
             }

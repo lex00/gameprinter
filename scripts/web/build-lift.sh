@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds the public page's in-browser ROM lift (docs/web.md, "The public
 # page"):
-#   scripts/web/build-lift.sh OUT [GAME]
+#   scripts/web/build-lift.sh OUT GAME
 #
 # OUT gets wasi.js and lift.js (scripts/web/public/), beside the preview's
 # preview.js, which imports lift.js for `files=idb:GAME`, and OUT/lift/:
@@ -10,7 +10,7 @@
 # list of ROMs (sources/nes.toml as sources-nes.toml for an NES game, or
 # sources/arcade.toml as sources.toml when the templates' source.platform
 # is arcade, whose romsets the lift knows by their chips), and a folder for each template whose template.game
-# is GAME (default donkey-kong) and whose source is a ROM, with its
+# is GAME (the game's id, which build-page.sh gives) and whose source is a ROM, with its
 # model.toml, profiles.toml, template.toml, its asset map as
 # asset-map.toml (with the map's content hashes, which the lift finds the
 # assets of any dump by), its themes and its level kit's kit.toml when the
@@ -37,13 +37,13 @@
 set -euo pipefail
 trap 'exit 2' ERR
 
-if [ $# -lt 1 ]; then
-  echo "usage: scripts/web/build-lift.sh OUT [GAME]" >&2
+if [ $# -ne 2 ]; then
+  echo "usage: scripts/web/build-lift.sh OUT GAME" >&2
   exit 2
 fi
 out="$1"
 repo="$(cd "$(dirname "$0")/../.." && pwd)"
-game="${2:-donkey-kong}"
+game="$2"
 target="$(cd "$repo" && mkdir -p "${CARGO_TARGET_DIR:-target}" && cd "${CARGO_TARGET_DIR:-target}" && pwd)"
 
 reuse="$repo/scripts/web/reuse.py"

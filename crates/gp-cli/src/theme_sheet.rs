@@ -1383,8 +1383,8 @@ mod tests {
     }
 
     /// One style card makes sheets for gameprinter's own templates (Moss
-    /// Hop; game-printer's test had Donkey Kong, Moss Hop and Signal
-    /// Failure, and the games checkout's Donkey Kong words file is older
+    /// Hop; game-printer's test had a ported game, Moss Hop and Signal
+    /// Failure, and the games checkout's words file for that game is older
     /// than its model), its look in every prompt, Gen-4's prompts within
     /// the limit, and the manifest reads back.
     #[test]

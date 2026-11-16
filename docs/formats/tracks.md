@@ -64,7 +64,7 @@ A track's slot is the group slot its x byte is in, and its ID is read from the I
 | `x`, `x_page`, `y` | Each slot's position bytes |
 | `active`, `id` | Each slot's flag and object ID |
 | `clock` | The frame counter |
-| `player_x`, `player_page`, `player_y` | The `player` or `mario` entity's position |
+| `player_x`, `player_page`, `player_y` | The `player` entity's position |
 
 The proposal is the player's pairs and the frame counter, plus the one group that overlaps the mapping most.
 

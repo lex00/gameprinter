@@ -132,7 +132,7 @@ fn chosen(paths: &Paths, game: &str) -> Option<String> {
     Some(t.trim().to_owned()).filter(|t| !t.is_empty())
 }
 
-/// Chooses the ROM set a game's page plays, by its id in roms.toml (rbtapper)
+/// Chooses the ROM set a game's page plays, by its id in roms.toml
 /// or by a file of it (a zip or a .nes): kept for the game, so the page,
 /// gp serve and gp mechanic start all play it until another is chosen. The
 /// set's id.
@@ -948,6 +948,12 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             "application/octet-stream",
             s.rom.as_ref().clone(),
         )),
+        // The arcade sets gp knows (the games' roms.toml chip rows), which
+        // the page hands its board player (gp_sets_load) before the zip.
+        ("GET" | "HEAD", "/roms.toml") => Ok(Response::bytes(
+            "text/plain; charset=utf-8",
+            gp_arcade::romset::known_roms_toml().into_bytes(),
+        )),
         ("GET" | "HEAD", "/api/session") => Ok(Response::json(&s.open_session()?.state()?)),
         ("GET" | "HEAD", "/api/working") => working(s, req.param("mechanic")),
         ("GET" | "HEAD", p) if clip_number(p, "/api/clips/", ".log").is_some() => {
@@ -1668,16 +1674,16 @@ mod tests {
         ] {
             fs::write(repo.join("mechanic").join(f), format!("the page's {f}")).unwrap();
         }
-        let open = Arc::new(Session::create(&p, "dk", "walk", None, "ab").unwrap());
+        let open = Arc::new(Session::create(&p, "mosshop", "walk", None, "ab").unwrap());
         write_queue(
-            &d.join("mechanics/dk/queue.json"),
+            &d.join("mechanics/mosshop/queue.json"),
             &[
                 json!({"mechanic": "walk", "note": "walking", "status": "agent working"}),
                 json!({"mechanic": "fireball-moves", "note": "a fireball", "status": "next"}),
             ],
         )
         .unwrap();
-        let mut srv = Server::new(p, "dk", &repo, rom(), "ab", 7710);
+        let mut srv = Server::new(p, "mosshop", &repo, rom(), "ab", 7710);
         srv.wasm = d.join("no-such/gp_play.wasm");
         *srv.session.lock().unwrap() = Some(open.clone());
         srv.open.lock().unwrap().insert("walk".into(), open);
@@ -1773,9 +1779,9 @@ mod tests {
     fn a_sealed_run_is_kept_apart() {
         let d = tempfile::tempdir().unwrap();
         let srv = server(d.path());
-        let mut q = read_queue(&d.path().join("mechanics/dk/queue.json"));
+        let mut q = read_queue(&d.path().join("mechanics/mosshop/queue.json"));
         q.push(json!({"mechanic": SEALED_ROW, "note": "held out", "status": "next"}));
-        write_queue(&d.path().join("mechanics/dk/queue.json"), &q).unwrap();
+        write_queue(&d.path().join("mechanics/mosshop/queue.json"), &q).unwrap();
         let play = log(&["........", "........", ".......A"]);
         let (_, v) = post(&srv, "/api/paths", json!({"log": play}));
         let path = v["path"].as_str().unwrap().to_owned();
@@ -1786,13 +1792,17 @@ mod tests {
             json!({"path": path, "start": 3, "inputs": inputs, "note": "a clear", "sealed": true}),
         );
         assert_eq!(s, 200, "{v}");
-        assert_eq!(v["sealed"], "sealed/dk/sealed-run/clips/001");
+        assert_eq!(v["sealed"], "sealed/mosshop/sealed-run/clips/001");
         assert!(
             d.path()
-                .join("sealed/dk/sealed-run/clips/001.toml")
+                .join("sealed/mosshop/sealed-run/clips/001.toml")
                 .is_file()
         );
-        assert!(!d.path().join("mechanics/dk/walk/clips/001.toml").exists());
+        assert!(
+            !d.path()
+                .join("mechanics/mosshop/walk/clips/001.toml")
+                .exists()
+        );
         let (_, body) = get(&srv, "/api/sealed");
         let runs: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(runs["runs"][0]["id"], "sealed-run-001");
@@ -1802,10 +1812,10 @@ mod tests {
         let (s, body) = get(&srv, "/api/sealed/sealed-run-001.rebuild.json");
         assert_eq!(s, 409);
         assert!(body.contains("gp sealed"), "{body}");
-        let row = Session::open(&srv.paths, "dk", SEALED_ROW).unwrap();
+        let row = Session::open(&srv.paths, "mosshop", SEALED_ROW).unwrap();
         assert_eq!(
             row.turns().unwrap().last().unwrap()["sealed"],
-            "sealed/dk/sealed-run/clips/001"
+            "sealed/mosshop/sealed-run/clips/001"
         );
     }
 
@@ -1816,7 +1826,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let srv = server(d.path());
         assert_eq!(get(&srv, "/api/rebuild/scores").1, r#"{"status":null}"#);
-        let f = d.path().join("work/refine/dk/status.json");
+        let f = d.path().join("work/refine/mosshop/status.json");
         fs::create_dir_all(f.parent().unwrap()).unwrap();
         fs::write(
             &f,
@@ -2028,7 +2038,7 @@ mod tests {
         let (s, v) = post(&srv, "/api/pick", json!({"mechanic": "fireball-moves"}));
         assert_eq!((s, v["mechanic"].clone()), (200, json!("fireball-moves")));
         assert!(srv.open_session().unwrap().dir.ends_with("fireball-moves"));
-        assert_eq!(current(&srv.paths, "dk").unwrap(), "fireball-moves");
+        assert_eq!(current(&srv.paths, "mosshop").unwrap(), "fireball-moves");
         let status = || read_queue(&srv.queue_file().unwrap())[1]["status"].clone();
         let before = status();
         assert_ne!(before, "agent working");
@@ -2238,19 +2248,19 @@ mod tests {
     fn the_mechanic_to_open() {
         let d = tempfile::tempdir().unwrap();
         let p = paths(d.path());
-        assert!(mechanic_to_open(&p, "dk", None).is_err());
+        assert!(mechanic_to_open(&p, "mosshop", None).is_err());
         write_queue(
-            &d.path().join("mechanics/dk/queue.json"),
+            &d.path().join("mechanics/mosshop/queue.json"),
             &[
                 json!({"mechanic": "title", "status": "done"}),
                 json!({"mechanic": "walk", "status": "next"}),
             ],
         )
         .unwrap();
-        assert_eq!(mechanic_to_open(&p, "dk", None).unwrap(), "walk");
-        Session::create(&p, "dk", "jump", None, "ab").unwrap();
-        set_current(&p, "dk", "jump").unwrap();
-        assert_eq!(mechanic_to_open(&p, "dk", None).unwrap(), "jump");
-        assert_eq!(mechanic_to_open(&p, "dk", Some("hop")).unwrap(), "hop");
+        assert_eq!(mechanic_to_open(&p, "mosshop", None).unwrap(), "walk");
+        Session::create(&p, "mosshop", "jump", None, "ab").unwrap();
+        set_current(&p, "mosshop", "jump").unwrap();
+        assert_eq!(mechanic_to_open(&p, "mosshop", None).unwrap(), "jump");
+        assert_eq!(mechanic_to_open(&p, "mosshop", Some("hop")).unwrap(), "hop");
     }
 }

@@ -130,7 +130,7 @@ pub enum Anchor {
     Right,
     Top,
     Bottom,
-    /// A y that counts up the screen (an arcade board's, as Tapper's), read
+    /// A y that counts up the screen (an arcade board's, as a Midway MCR board's), read
     /// from the box's top: the byte plus the screen y is the same number.
     TopUp,
     /// The same from the box's bottom.

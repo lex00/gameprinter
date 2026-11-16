@@ -1,5 +1,5 @@
 //! The arcade board's chord palette (port wave 6): the presses a search,
-//! stage 0's starts and `gp mechanic demo` pick from on Tapper's MCR
+//! stage 0's starts and `gp mechanic demo` pick from on a Midway MCR
 //! board, as [`crate::presses`] has them for the NES pad.
 //!
 //! A frame's controls are one byte, as an arcade input log's columns
@@ -80,7 +80,7 @@ fn hold(pads: &mut [u8], a: usize, b_end: usize, b: u8) {
 }
 
 /// A coin at frame `at` and Start 60 frames later, each held 6 frames (a
-/// coin switch needs a few frames closed; Tapper takes it in attract).
+/// coin switch needs a few frames closed; an MCR game takes it in attract).
 fn coin_and_start(pads: &mut [u8], at: usize) {
     hold(pads, at, at + 5, COIN);
     hold(pads, at + 60, at + 65, START);

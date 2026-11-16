@@ -892,7 +892,7 @@ fn an_agent_finds_moss_hop_generates_art_and_checks_a_publish() {
     assert_eq!(t["tier"], "open");
     assert_eq!(t["ready"], true, "{t}");
     assert_eq!(t["needs"]["extracted"]["matches_pin"], true, "{t}");
-    // game-printer also searched for Super Mario Bros., whose template
+    // game-printer also searched for another NES game, whose template
     // gameprinter doesn't carry. The mechanic index, provenance and search
     // by example (docs/originals.md), over the three originals beside
     // Moss Hop.

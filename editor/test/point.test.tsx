@@ -79,14 +79,14 @@ describe("tell", () => {
 
   it("asks what a spot is, with the side, at once or with what is under it", () => {
     const box = { x: 4, y: 5, w: 16, h: 16 };
-    const q = questionInput("dk.walk.001", 412, box, "model");
+    const q = questionInput("mg.walk.001", 412, box, "model");
     expect(q.kind).toBe("request");
     expect(q.text).toBe(ASK_WORDS);
     const d = q.data as Record<string, any>;
     expect(d.ask).toBe("explain");
     expect(d.side).toBe("model");
     expect(d.frame).toBe(412);
-    expect(d.recording).toBe("dk.walk.001");
+    expect(d.recording).toBe("mg.walk.001");
     expect(d.rect).toEqual(box);
     expect(d.point.things).toEqual([]);
     const withPoint = questionInput("session", 300, box, "original", pointed).data as Record<string, any>;

@@ -19,7 +19,7 @@
 //! below. It plays gp-nes and reads the NES's RAM and sprite table past
 //! discovery. On an arcade game blind discovery runs on the board (it plays
 //! either, crate::farm::machine) and the sweep stops after it, saying what
-//! it found and why it stops: Tapper's player changes lanes and has no
+//! it found and why it stops: an arcade game's player that changes lanes and has no
 //! jump, and the method's changes for such a player wait for the owner.
 
 use std::fs;
@@ -711,12 +711,12 @@ fn x_high(
             let dx = (i64::from(b) - i64::from(a) + 384).rem_euclid(256) - 128;
             let wrapped = dx.abs() <= 8 && ((dx > 0 && b < a) || (dx < 0 && b > a));
             for k in 0..0x800 {
-                let dk = (i64::from(w[k]) - i64::from(p[k]) + 384).rem_euclid(256) - 128;
+                let dw = (i64::from(w[k]) - i64::from(p[k]) + 384).rem_euclid(256) - 128;
                 if wrapped {
-                    if dk == dx.signum() {
+                    if dw == dx.signum() {
                         fits[k] += 1;
                     }
-                } else if dk != 0 {
+                } else if dw != 0 {
                     other[k] += 1;
                 }
             }

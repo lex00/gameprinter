@@ -60,7 +60,7 @@ pub(crate) fn run(a: &RecheckArgs, target: &str) -> Result<Outcome> {
     for (what, n) in [("GAME", game), ("THEME", name)] {
         if !gp_package::registry::name_ok(n) {
             bail!(
-                "with --registry, {what} is a package name, NAMESPACE/NAME (lex00/donkey-kong, friend/night), not {n:?}"
+                "with --registry, {what} is a package name, NAMESPACE/NAME (acme/rooftop, friend/night), not {n:?}"
             );
         }
     }

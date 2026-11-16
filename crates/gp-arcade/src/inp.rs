@@ -3,7 +3,7 @@
 //!
 //! The layout, as MAME 0.276 writes it (src/emu/ioport.cpp, `inp_header`
 //! and `record_frame`/`record_port`), and as checked against a recording
-//! of Tapper made in the oracle's image:
+//! of an MCR game made in the oracle's image:
 //!
 //! - A 64-byte header: `MAMEINP\0`, the base time (8 bytes), the format's
 //!   major and minor version (3 and 0), 2 reserved bytes, the system's
@@ -15,7 +15,7 @@
 //!   as their exclusive or.
 //!
 //! Record N holds the ports the game reads during frame N+1, the frame an
-//! input log's entry N runs ([`crate::Controls`]). Tapper's board has six
+//! input log's entry N runs ([`crate::Controls`]). The MCR board has six
 //! ports in that order: one the game never reads, then the SSIO's IP0 to
 //! IP4 (coins and starts, player 1, player 2, the DIP switches, unused).
 //! Only what an arcade input log can say is taken: coin 1, start 1, tilt
@@ -39,11 +39,11 @@ pub struct Inp {
 }
 
 const HEADER: usize = 64;
-/// Ports in a Tapper recording, and the bytes of one frame's record.
+/// Ports in a recording of an MCR set, and the bytes of one frame's record.
 const PORTS: usize = 6;
 const RECORD: usize = 16 + PORTS * 8;
 
-/// Reads a recording of a Tapper set. `max_frames` bounds what a crafted
+/// Reads a recording of a known MCR set. `max_frames` bounds what a crafted
 /// file can make it decompress.
 pub fn parse(bytes: &[u8], max_frames: usize) -> Result<Inp, String> {
     if bytes.len() < HEADER || &bytes[..8] != b"MAMEINP\0" {
@@ -62,14 +62,18 @@ pub fn parse(bytes: &[u8], max_frames: usize) -> Result<Inp, String> {
     let system = text(&bytes[20..32]);
     let made_by = text(&bytes[32..64]);
     if crate::romset::set(&system).is_none() {
-        return Err(format!(
-            "the recording was made on {system}, which isn't a set gp-arcade runs ({})",
-            crate::romset::SETS
-                .iter()
-                .map(|s| s.name)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
+        let known = crate::romset::known();
+        return Err(if known.is_empty() {
+            format!(
+                "the recording was made on {system}, and {}",
+                crate::romset::NO_SETS
+            )
+        } else {
+            format!(
+                "the recording was made on {system}, which isn't a set gp-arcade knows ({})",
+                known.iter().map(|s| s.name).collect::<Vec<_>>().join(", ")
+            )
+        });
     }
     let limit = (max_frames * RECORD) as u64 + 1;
     let mut body = Vec::new();
@@ -82,7 +86,7 @@ pub fn parse(bytes: &[u8], max_frames: usize) -> Result<Inp, String> {
     }
     if body.len() % RECORD != 0 {
         return Err(format!(
-            "{} bytes of frames isn't a whole number of {RECORD}-byte records: not a Tapper recording of MAME 0.276's layout ({PORTS} input ports)",
+            "{} bytes of frames isn't a whole number of {RECORD}-byte records: not an MCR recording of MAME 0.276's layout ({PORTS} input ports)",
             body.len()
         ));
     }
@@ -187,21 +191,23 @@ mod tests {
 
     #[test]
     fn a_written_recording_reads_back() {
-        let bytes = write("tapper", &frames());
+        crate::testrom::known_made_up_set("madeupinp");
+        let bytes = write("madeupinp", &frames());
         let inp = parse(&bytes, 1000).unwrap();
-        assert_eq!(inp.system, "tapper");
+        assert_eq!(inp.system, "madeupinp");
         assert_eq!(inp.frames, frames());
     }
 
     #[test]
     fn refusals() {
         assert!(parse(b"not an inp", 10).is_err());
-        let good = write("tapper", &frames());
+        crate::testrom::known_made_up_set("madeupinp");
+        let good = write("madeupinp", &frames());
         let mut bad = good.clone();
         bad[16] = 2;
         assert!(parse(&bad, 10_000).unwrap_err().contains("format 2"));
-        let other = write("dkong", &frames());
-        assert!(parse(&other, 10_000).unwrap_err().contains("dkong"));
+        let other = write("madeupnot", &frames());
+        assert!(parse(&other, 10_000).unwrap_err().contains("madeupnot"));
         assert!(parse(&good, 10).unwrap_err().contains("longer than 10"));
         // Player 2's start (IP0 bit 3) can't be said in the log.
         let mut body = Vec::new();
@@ -216,8 +222,9 @@ mod tests {
         assert!(parse(&p2, 10_000).unwrap_err().contains("frame 1"));
     }
 
-    /// With a recording MAME made of tapper on this machine (see
-    /// docs/movies.md): it reads, and its first frames are idle.
+    /// With a recording MAME made on this machine (see docs/movies.md) and
+    /// a games checkout naming its set ($GP_GAMES_DIR): it reads, and its
+    /// first frames are idle.
     #[test]
     fn a_mame_recording_reads_when_present() {
         let Some(home) = std::env::var_os("GP_HOME")
@@ -233,8 +240,12 @@ mod tests {
             eprintln!("skipped: no MAME recording at {}", path.display());
             return;
         };
+        if crate::romset::known().is_empty() {
+            eprintln!("skipped: no arcade set known (set GP_GAMES_DIR to a games checkout)");
+            return;
+        }
         let inp = parse(&bytes, 1_000_000).unwrap();
-        assert_eq!(inp.system, "tapper");
+        assert!(crate::romset::set(&inp.system).is_some());
         assert!(inp.made_by.starts_with("MAME 0.276"));
         assert_eq!(inp.frames[0], Controls::default());
         assert!(inp.frames.iter().any(|c| c.coin));

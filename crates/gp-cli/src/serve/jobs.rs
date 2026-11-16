@@ -278,7 +278,7 @@ mod tests {
         assert_eq!(check["state"], "done");
         assert_eq!(check["exit"], 1);
         let failed = ended(&reply(
-            json!({"exit": 2, "stderr": "error: no ROM for donkey-kong in /roms"}),
+            json!({"exit": 2, "stderr": "error: no ROM for rooftop in /roms"}),
         ));
         assert_eq!(failed["state"], "failed");
         assert!(

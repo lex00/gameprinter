@@ -12,8 +12,8 @@
 //! One Z80 difference: a byte stored from a value made from the refresh
 //! register (`ld a,r`, which counts instructions run) is a generator the
 //! game calls when it needs a number, so it needs only many values over
-//! the frames it was stepped, not a step on most frames. Tapper's is one
-//! (docs/formats/draws.md).
+//! the frames it was stepped, not a step on most frames. The first MCR
+//! game ported has one (docs/formats/draws.md).
 //! The second run follows each read of the register through the
 //! registers (as 8-bit units; `exx` and `ex af,af'` move the second set as
 //! one), the flags and memory (by the addresses the access log saw), for
@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 use gp_arcade::dasm::{self, Addr, Alu, Flow, Insn, Op, Ptr, reg};
 use gp_arcade::mcr::{Access, AccessKind, Trace};
-use gp_arcade::{Controls, Romset, Tapper};
+use gp_arcade::{Controls, Mcr, Romset};
 use gp_evidence::input_log::InputFrame;
 
 use crate::draws_find::{ByteStats, Found, Kind, Register, Site};
@@ -67,7 +67,7 @@ struct Step<'a> {
 /// Runs one frame with the trace and access log on, and gives the main
 /// CPU's instructions in order, each with its accesses, and interrupts as
 /// entries of their own (`insn` unread).
-pub(crate) fn frame(t: &mut Tapper, c: Controls) -> (Vec<Trace>, Vec<Access>) {
+pub(crate) fn frame(t: &mut Mcr, c: Controls) -> (Vec<Trace>, Vec<Access>) {
     t.set_trace(true);
     t.set_accesses(true);
     t.step(c);
@@ -121,7 +121,7 @@ struct Frame {
     stepped: Option<u16>,
     /// A read of the register that started in this routine (the site and
     /// the byte), for a routine that passes a drawn number on in A
-    /// (Tapper's $5FAC, which brings $5FBD's number into a range).
+    /// (such as a wrapper that brings the generator's number into a range).
     drew: Option<(u16, u16)>,
 }
 
@@ -242,7 +242,7 @@ impl Scan {
         self.calls.after(s);
     }
 
-    fn frame_end(&mut self, t: &Tapper) {
+    fn frame_end(&mut self, t: &Mcr) {
         for (a, b) in self.bytes.iter_mut().enumerate() {
             let v = t.peek(RAM + a as u16);
             b.seen[usize::from(v >> 6)] |= 1 << (v & 63);
@@ -605,7 +605,7 @@ impl Readers {
             self.active = self.suspended.pop().unwrap_or_default();
         }
         // A routine that stepped the register returns its number in A, as
-        // a Z80 game's generator does (Tapper's at $5FBD): its call is a
+        // a Z80 game's generator does: its call is a
         // read of the register, followed from the instruction after it.
         // And a routine that took a number so and returns it on in A (A
         // still made from it) makes its own call a read too, so the draw
@@ -693,7 +693,7 @@ impl Readers {
 /// random registers, once to follow their reads. Frames up to `from` run
 /// unwatched.
 pub(crate) fn find(set: &Romset, inputs: &[InputFrame], from: u64) -> Result<Found> {
-    let mut t = Tapper::power_on(set);
+    let mut t = Mcr::power_on(set);
     let mut scan = Scan {
         bytes: vec![ByteStats::default(); RAM_LEN],
         calls: Calls::default(),
@@ -720,7 +720,7 @@ pub(crate) fn find(set: &Romset, inputs: &[InputFrame], from: u64) -> Result<Fou
     let registers = scan.registers();
     let mut sites = Vec::new();
     if !registers.is_empty() {
-        let mut t = Tapper::power_on(set);
+        let mut t = Mcr::power_on(set);
         let mut readers = Readers::new(&registers);
         for (n, input) in inputs.iter().enumerate() {
             if (n as u64) < from {
@@ -802,7 +802,7 @@ mod tests {
         assert!(step.is_step());
     }
 
-    /// A generator routine that returns its number in A, as Tapper's does:
+    /// A generator routine that returns its number in A, as a Z80 game's does:
     /// the call is the draw site, and the caller's branch on A decides.
     #[test]
     fn finds_a_draw_through_a_routines_return() {

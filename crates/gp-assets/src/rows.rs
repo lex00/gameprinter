@@ -1,5 +1,5 @@
 //! The `byte-rows` format: a table stored row by row, `width` bytes to a
-//! row, such as Super Mario Bros.' sprite tile tables (six tile numbers per
+//! row, such as a platformer's sprite tile tables (six tile numbers per
 //! enemy frame) or a sound effect's frequencies. The lifted file has one
 //! list per row, or a string when the map gives a charset and every byte
 //! of the row has a character.

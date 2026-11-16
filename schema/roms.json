@@ -13,6 +13,43 @@
     }
   },
   "$defs": {
+    "ArcadeChip": {
+      "description": "One chip of an arcade set, as MAME's list has it: hashes and places\nonly, never its bytes.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "The chip's file name in MAME's list.",
+          "type": "string"
+        },
+        "offset": {
+          "description": "Where in the region it loads.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "region": {
+          "description": "The MAME region it loads into: `maincpu`, `ssio:cpu`, `gfx1` or\n`gfx2` on the MCR board.",
+          "type": "string"
+        },
+        "sha1": {
+          "description": "Its SHA-1, lower-case hex.",
+          "type": "string"
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "region",
+        "offset",
+        "size",
+        "sha1"
+      ]
+    },
     "BoardMirroring": {
       "description": "How a board wires nametable mirroring.",
       "oneOf": [
@@ -53,6 +90,13 @@
             "string",
             "null"
           ]
+        },
+        "chip": {
+          "description": "An arcade source's chips, `[[source.chip]]`: its set's list from\nMAME, by which the tools know a romset zip (gp_arcade::romset;\ndocs/sources.md, \"Arcade chips\"). Empty for an NES source.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ArcadeChip"
+          }
         },
         "chr_ram_bytes": {
           "type": [
@@ -175,6 +219,13 @@
           "description": "SHA-256 of PRG and CHR without header (see `source::identify_nes`);\nfor an arcade romset, its set's identity (gp_arcade::romset).",
           "type": "string"
         },
+        "sound_driver": {
+          "description": "The sound driver the source's game uses, by its name in\ngp_sound::drivers (`gp sound drivers`), such as `midway-ssio`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "status": {
           "$ref": "#/$defs/SourceStatus"
         },
@@ -189,7 +240,7 @@
           "minimum": 0
         },
         "system": {
-          "description": "An arcade source's MAME set name, such as `rbtapper`.",
+          "description": "An arcade source's MAME set name, such as `rooftop2`.",
           "type": [
             "string",
             "null"

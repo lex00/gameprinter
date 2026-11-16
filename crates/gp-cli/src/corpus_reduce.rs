@@ -5,7 +5,7 @@
 //! Each clip's own frames (its start to its end) are counted as `gp code
 //! listing` counts them (`gp_events::profile`), cut where the template's
 //! stage byte changes (the mapping field the model's `[stages] counter`
-//! names, `$53` on Donkey Kong), and kept in the events store. A clip's
+//! names, `$53` on one NES game), and kept in the events store. A clip's
 //! features are the routines it ran and the branch ways it took, each
 //! tagged with the stage it was on (system code is not, unless
 //! `--stage-system`). With `--values`, after the cover, each sweep family
@@ -37,8 +37,8 @@
 //! routine is an entry of the code map ([`crate::code_z80::CodeMap`]),
 //! named `main:5FAC` or `sound:0276` with why it is one as its element, and a
 //! branch way is a conditional's edge, taken or fallen. The stage byte is a
-//! main CPU address; a game whose model has no `[stages] counter` (Tapper's
-//! has none yet) is counted as one stage. Arcade windows are not kept in the
+//! main CPU address; a game whose model has no `[stages] counter` (one arcade
+//! game's has none yet) is counted as one stage. Arcade windows are not kept in the
 //! events store (it holds 6502 counts). `--values` reads the NES's compare
 //! classes from gp_events::profile and a romset's from the Z80 compare log
 //! ([`Z80Flips`]) kept while its runs are watched.
@@ -60,7 +60,7 @@ use crate::code::{CodeMap, event_store};
 
 #[derive(clap::Args, Debug, Clone)]
 pub struct ReduceArgs {
-    /// The game's package folder (games/donkey-kong) or a template folder:
+    /// The game's package folder (games/GAME) or a template folder:
     /// its corpus plan (corpus.toml) or clips.toml, model.toml and
     /// mapping.toml.
     pub template: PathBuf,
@@ -331,7 +331,7 @@ struct Clip {
 
 /// The fix commits of the template: those changing its model, mapping or
 /// hooks, newest first, each with the clips its message names in the
-/// order it names them (`dk.m100.012`, or `m100 clip 12`).
+/// order it names them (`hop.m100.012`, or `m100 clip 12`).
 fn fix_commits(t: &Path, ids: &[String]) -> Vec<(String, String, Vec<usize>)> {
     let out = std::process::Command::new("git")
         .arg("-C")
@@ -951,7 +951,7 @@ fn count_arcade(
         |_, _, &k| -> std::result::Result<Vec<ArcadeSeg>, String> {
             let (_, first, last, i) = &runs[k];
             let c = &inputs[*i];
-            let mut t = gp_arcade::Tapper::power_on(set);
+            let mut t = gp_arcade::Mcr::power_on(set);
             let mut by: BTreeMap<u8, Watcher> = BTreeMap::new();
             let mut log = Z80Flips::default();
             let mut flips: BTreeMap<u8, BTreeMap<Va, u16>> = BTreeMap::new();
@@ -1842,18 +1842,29 @@ mod tests {
         assert_eq!(z80_hex(z80_va(1, 0x0276)), "sound:0276");
     }
 
-    /// Tapper's romset from $GP_ROM_DIR, idle for 200 frames: one stretch on
-    /// one stage, the main CPU's reset routine run, and branches read both
-    /// ways. Skips without the romset.
+    /// The first known romset in $GP_ROM_DIR/arcade, idle for 200 frames:
+    /// one stretch on one stage, the main CPU's reset routine run, and
+    /// branches read both ways. Skips without one.
     #[test]
     fn a_romset_run_is_counted_by_z80_routine() {
         let Some(dir) = std::env::var_os("GP_ROM_DIR") else {
             return;
         };
-        let Ok(zip) = fs::read(Path::new(&dir).join("arcade/tapper.zip")) else {
+        let mut zips: Vec<std::path::PathBuf> = fs::read_dir(Path::new(&dir).join("arcade"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "zip"))
+            .collect();
+        zips.sort();
+        let Some(set) = zips
+            .iter()
+            .filter_map(|p| fs::read(p).ok())
+            .find_map(|zip| gp_arcade::Romset::from_zip(&zip).ok())
+        else {
             return;
         };
-        let set = gp_arcade::Romset::from_zip(&zip).expect("romset");
         let clip = crate::reach::ClipInput {
             set: String::new(),
             id: "idle".into(),

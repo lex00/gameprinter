@@ -608,9 +608,9 @@ fn generated_schemas_are_json_with_their_ids() {
     assert!(td["$defs"]["Move8"]["properties"]["speed"].is_object());
 }
 
-// Core 0.2.0 and platformer 0.2.0: what Super Mario Bros. needs.
+// Core 0.2.0 and platformer 0.2.0: what a side-scroller needs.
 
-/// A model shaped like Super Mario Bros.: levels built from object lists,
+/// A model shaped like a side-scroller: levels built from object lists,
 /// an entity state machine, guards, counters that tick and wrap, jump
 /// bands and walking enemies.
 const SHAPED: &str = r#"
@@ -1157,8 +1157,8 @@ fn ext_params_belong_to_the_hook() {
     assert_eq!(Model::parse(&m.to_toml()).unwrap(), m);
 }
 
-/// Core 0.4.0 and platformer 0.4.0: the parts Mega Man 2 and Super Mario
-/// Bros. 2 needed, on the shaped model.
+/// Core 0.4.0 and platformer 0.4.0: the parts a run-and-gun game and another
+/// platformer needed, on the shaped model.
 fn core_four() -> String {
     let s = shaped_edit(
         "start_level = \"one\"\n",
@@ -2302,5 +2302,35 @@ fn no_extension_reuses_another_extensions_names() {
                 assert!(!b.systems.contains(s), "{s}");
             }
         }
+    }
+}
+
+#[test]
+fn a_renamed_map_format_reads_by_its_old_name_and_its_new() {
+    use crate::model::{AssetKind, MAP_FORMAT_ALIASES, map_format_name};
+    let kinds = [
+        AssetKind::LevelObjects,
+        AssetKind::SpawnObjects,
+        AssetKind::Songs,
+        AssetKind::SoundEffects,
+    ];
+    for (old, new) in MAP_FORMAT_ALIASES {
+        assert_eq!(map_format_name(old), *new);
+        assert_eq!(map_format_name(new), *new);
+        for k in kinds {
+            assert_eq!(k.takes(old), k.takes(new), "{old} {new}");
+        }
+    }
+    assert!(AssetKind::LevelObjects.takes("smb-area-objects"));
+    assert!(AssetKind::LevelObjects.takes("nes-area-objects-v1"));
+    assert!(AssetKind::SpawnObjects.takes("mm2-spawns"));
+    assert!(AssetKind::SpawnObjects.takes("nes-spawn-objects-v3"));
+    assert!(AssetKind::Songs.takes("smb-music"));
+    assert!(AssetKind::Songs.takes("nes-music-v1"));
+    assert!(!AssetKind::Songs.takes("smb-area-objects"));
+    assert_eq!(map_format_name("chr-2bpp"), "chr-2bpp");
+    // No new name is any game's.
+    for (_, new) in MAP_FORMAT_ALIASES {
+        assert!(new.starts_with("nes-"), "{new}");
     }
 }

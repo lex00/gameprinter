@@ -17,8 +17,8 @@
 # Last it runs `gp template served` on the game: the files of both folders
 # against each ROM the game names (result also in OUT.served.txt).
 #
-# GAME_DIR is the game's folder (games/donkey-kong, games/tapper, or a game
-# `gp game new` made): an NES game played from a ROM, or an arcade game played
+# GAME_DIR is the game's folder (a game folder of the games checkout, or a
+# game `gp game new` made): an NES game played from a ROM, or an arcade game played
 # from a MAME romset zip, by its template's source.platform; or a game that
 # plays from its own pictures (a new game, a copy of a template such as Moss
 # Hop, whose template says how = "build" or "authored"), whose built files go
@@ -213,9 +213,9 @@ game = json.load(open(game_file))
 shell = open(index).read()
 def plain(fragment):
     return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", fragment))).strip()
-# The page's own lines are an NES game's (Donkey Kong's keys and maker); an
-# arcade game's are the cabinet's keys (preview.js, ARCADE_LAYOUT) and no
-# maker's name.
+# The page's own lines are an NES game's (index.html's keys and its line
+# naming no maker); an arcade game's are the cabinet's keys (preview.js,
+# ARCADE_LAYOUT) and no maker's name.
 if platform == "arcade":
     own_howto = [
         "Controls: 5 drops a coin and 1 starts, as on a cabinet; the arrows or WASD move and X or Space is the button. On a controller Select drops a coin, Start starts and A is the button.",
@@ -236,7 +236,7 @@ for tid in game["templates"]:
     src = next((s for s in sources if s["id"] == tid), None)
     if src:
         rev = src.get("revision", "")
-        # An arcade set's revision is its full title ("Tapper (Root Beer)").
+        # An arcade set's revision is its full title (the game's title, then the set's words).
         n = rev if platform == "arcade" and rev.startswith(src["title"]) else f'{src["title"]} ({rev})'.replace(" ()", "")
         names.append(n)
         known[n] = src["sha256"]
@@ -279,11 +279,10 @@ page = {
 }
 if platform == "arcade":
     page["rom"]["sets"] = rom_sets
-# An arcade page's own game shows its own help and About line, not the
-# page's NES ones (page.js reads them from here for the page's own game).
-if platform == "arcade":
-    page["howto"] = howto
-    page["trademark"] = trademark
+# The page's own game shows its own help and About line (page.js reads
+# them from here for the page's own game): the package's, else the page's.
+page["howto"] = howto
+page["trademark"] = trademark
 if themes:
     page["themes"] = themes
 open(f"{out}/page.json", "w").write(json.dumps(page, indent=1) + "\n")

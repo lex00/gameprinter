@@ -1,11 +1,14 @@
-//! Plays a MAME oracle capture's input log in gp-arcade's Tapper with the
+//! Plays a MAME oracle capture's input log on gp-arcade's MCR board with the
 //! sound on and compares what reaches the speakers with the capture's
 //! `sound.wav` (recorded with `just mame-record ... 1`, docs/oracle-mame.md).
 //!
 //!   cargo run --release -p gp-arcade --example sound -- \
-//!       --rom ~/Documents/roms/arcade/rbtapper.zip \
-//!       --capture ~/.gameprinter/work/oracle/tapper-first-sound \
-//!       --log scripts/oracle/inputs/tapper-first.input [--wav OUT.wav]
+//!       --rom $GP_ROM_DIR/arcade/SET.zip \
+//!       --capture ~/.gameprinter/work/oracle/CAPTURE \
+//!       --log GAME/inputs/oracle/LOG.input [--wav OUT.wav]
+//!
+//! with $GP_GAMES_DIR naming the games checkout whose roms.toml lists the
+//! set's chips.
 //!
 //! It prints, for each speaker, how many 16-bit samples are equal, how many
 //! are within 1 and within 16, the largest difference, and the difference's
@@ -18,7 +21,7 @@ use std::process::ExitCode;
 
 use gp_arcade::oracle::InputLog;
 use gp_arcade::sound::{OUT_RATE, to_i16};
-use gp_arcade::{Romset, Tapper};
+use gp_arcade::{Mcr, Romset};
 
 fn read_wav(path: &std::path::Path) -> Result<Vec<[i16; 2]>, String> {
     let d = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -155,7 +158,7 @@ fn run() -> Result<(), String> {
         &std::fs::read_to_string(&log).map_err(|e| format!("{}: {e}", log.display()))?,
     )?;
     let theirs = read_wav(&capture.join("sound.wav"))?;
-    let mut t = Tapper::power_on(&rom);
+    let mut t = Mcr::power_on(&rom);
     t.set_audio(true);
     let mut ours: Vec<[i16; 2]> = Vec::new();
     for n in 1..=log.frames.len() {

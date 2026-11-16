@@ -26,7 +26,7 @@ pub struct KnownSource {
     pub region: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
-    /// An arcade source's MAME set name, such as `rbtapper`.
+    /// An arcade source's MAME set name, such as `rooftop2`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
     /// SHA-256 of PRG and CHR without header (see `source::identify_nes`);
@@ -89,6 +89,32 @@ pub struct KnownSource {
     /// hashes are the patched image's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub patch: Option<PatchSource>,
+    /// An arcade source's chips, `[[source.chip]]`: its set's list from
+    /// MAME, by which the tools know a romset zip (gp_arcade::romset;
+    /// docs/sources.md, "Arcade chips"). Empty for an NES source.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chip: Vec<ArcadeChip>,
+    /// The sound driver the source's game uses, by its name in
+    /// gp_sound::drivers (`gp sound drivers`), such as `midway-ssio`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sound_driver: Option<String>,
+}
+
+/// One chip of an arcade set, as MAME's list has it: hashes and places
+/// only, never its bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ArcadeChip {
+    /// The chip's file name in MAME's list.
+    pub name: String,
+    /// The MAME region it loads into: `maincpu`, `ssio:cpu`, `gfx1` or
+    /// `gfx2` on the MCR board.
+    pub region: String,
+    /// Where in the region it loads.
+    pub offset: u64,
+    pub size: u64,
+    /// Its SHA-1, lower-case hex.
+    pub sha1: String,
 }
 
 #[derive(

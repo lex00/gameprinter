@@ -2,7 +2,7 @@
 //! and gp-arcade, and what they build on), so a tape
 //! (`src/tape.rs`) is reused only for the same emulator. Sets
 //! `GP_ORIGINAL_SOURCES`. Tapes are shared by every run on the machine
-//! (the gate's canary homes too), so the code that starts the original for
+//! (every home on it too), so the code that starts the original for
 //! a clip (scenario.rs, original.rs, clip_score.rs, and clip.rs's start
 //! cache) and records its random draws (lockstep.rs, gp-sim's draws.rs)
 //! is in the hash as well: a patch to any of them is scored on the

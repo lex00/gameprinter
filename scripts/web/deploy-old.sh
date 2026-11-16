@@ -98,7 +98,7 @@ echo "  version   $version"
 echo "  preview   $preview"
 
 bad=0
-for path in "/" "/p?g=lex00/donkey-kong&c=lex00/turnips" "/game/index.html?files=here"; do
+for path in "/" "/p?g=test/made-up&c=test/made-up-look" "/game/index.html?files=here"; do
   got="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 20 "$preview$path")"
   want="301 $target$path"
   if [ "$got" = "$want" ]; then echo "ok    $path answers $got"

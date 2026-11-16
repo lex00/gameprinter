@@ -215,7 +215,7 @@ export function readToml(text) {
 // ---- The package's hooks, in words ----
 
 /** What each hook does, from the hooks' own table in their source's doc
- * lines (`//! | \`dk_barrel\` | barrel | Held, then rolls ... |`), by the
+ * lines (`//! | \`crate_roll\` | crate | Held, then rolls ... |`), by the
  * hook's name: { file, kinds, words }. `sources` is a Map of path to text. */
 export function hookWords(sources) {
   const out = new Map();

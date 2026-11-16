@@ -199,12 +199,12 @@ fn p1_no_game_and_no_rom_asks_for_the_file() {
 #[test]
 fn p2_a_rom_and_no_game_sets_it_up_or_asks_which() {
     let fx = Fx::new();
-    fx.rom("Kong.nes", 1);
+    fx.rom("Acme.nes", 1);
     let a = fx.answer(None);
     assert_eq!(a.stage.n, 2);
     assert_eq!(
         a.stands,
-        "Your game file Kong.nes is here, but no game is set up from it yet."
+        "Your game file Acme.nes is here, but no game is set up from it yet."
     );
     assert_eq!(a.next.who, Who::Agent);
     fx.rom("Other.nes", 2);
@@ -212,7 +212,7 @@ fn p2_a_rom_and_no_game_sets_it_up_or_asks_which() {
     assert_eq!(a.next.who, Who::Person);
     assert_eq!(
         a.next.says,
-        "Say which of them to bring over: Kong.nes and Other.nes."
+        "Say which of them to bring over: Acme.nes and Other.nes."
     );
 }
 

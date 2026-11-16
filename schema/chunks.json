@@ -12,7 +12,7 @@
       }
     },
     "controls": {
-      "description": "Objects of the format that changed no cell of the grid, by kind and\ncount: page jumps and area pointers, scenery the grid doesn't hold\n(Super Mario Bros.' castles and ropes are drawn but not kept), and\nobjects a later one drew over entirely.",
+      "description": "Objects of the format that changed no cell of the grid, by kind and\ncount: page jumps and area pointers, scenery the grid doesn't hold\n(one platformer's castles and ropes are drawn but not kept), and\nobjects a later one drew over entirely.",
       "type": "object",
       "additionalProperties": {
         "type": "integer",

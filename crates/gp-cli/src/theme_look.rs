@@ -88,9 +88,9 @@ pub enum LookCmd {
     /// it does the same for a second theme and writes the pairs side by
     /// side. Nothing is published.
     ///
-    /// Example: gp theme look play ~/my-theme --game donkey-kong --open
+    /// Example: gp theme look play ~/my-theme --game rooftop --open
     ///
-    /// Example: gp theme look play ~/my-theme --game donkey-kong --shots
+    /// Example: gp theme look play ~/my-theme --game rooftop --shots
     /// ~/theme-shots --against friend/night@0.9.2
     Play(crate::theme_play::PlayArgs),
     /// For an arcade game drawn by its board's art: the names a theme may
@@ -104,7 +104,7 @@ pub enum LookCmd {
     /// `gp theme look check` then warns of a sprite code the game wasn't
     /// seen to show.
     ///
-    /// Example: gp theme look sheet --game tapper
+    /// Example: gp theme look sheet --game rooftop
     Sheet {
         /// The game: its folder, or its name in the games checkout.
         #[arg(long)]

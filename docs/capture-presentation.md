@@ -37,7 +37,7 @@ Two NES facts come up again and again. A sprite's attribute byte holds its palet
 
 | | |
 |---|---|
-| Asset map and labels | A `chr-2bpp` entry per pattern table or bank. For a CHR ROM game it's the CHR region; for CHR RAM, the PRG data the game copies there (Mega Man 2's `mm2-chr-uploads`) |
+| Asset map and labels | A `chr-2bpp` entry per pattern table or bank. For a CHR ROM game it's the CHR region; for CHR RAM, the PRG data the game copies there (Mega Man 2's `nes-chr-uploads-v1`) |
 | Traces | A trace doesn't hold CHR, but its PPU control byte says which pattern table sprites and the background use |
 | Manual today | The entry, and which tiles slot is the background's and which the sprites' |
 | Automatic with | The mapper's banks listed from the ROM header, and the pattern table split read from `ppu.ctrl` in a trace |

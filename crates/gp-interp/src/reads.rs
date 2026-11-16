@@ -135,7 +135,7 @@ mod tests {
         let mut r = Reads::default();
         r.parts[List::Kind as usize] = gp_sim::reads::Seen::of(false, [1, 70]);
         r.parts[List::Level as usize] = gp_sim::reads::Seen::of(true, []);
-        r.hooks.insert("dk_barrel".into());
+        r.hooks.insert("crate_roll".into());
         let mut w = gp_runtime::wire::Writer::default();
         write_reads(&r, &mut w);
         let back = read_reads(&w.0).unwrap();
@@ -146,13 +146,13 @@ mod tests {
     fn a_read_set_meets_a_change_to_what_it_read_and_to_a_list_it_read_whole() {
         let mut a = ReadSet::default();
         a.0.insert("kinds".into(), ["barrel".to_owned()].into());
-        a.0.insert("hooks".into(), ["dk_barrel".to_owned()].into());
+        a.0.insert("hooks".into(), ["crate_roll".to_owned()].into());
         let ch = |l: &str, n: &str| -> BTreeMap<String, BTreeSet<String>> {
             [(l.to_owned(), [n.to_owned()].into())].into()
         };
         assert!(a.meets(&ch("kinds", "barrel")));
         assert!(!a.meets(&ch("kinds", "spring")));
-        assert!(a.meets(&ch("hooks", "dk_barrel")));
+        assert!(a.meets(&ch("hooks", "crate_roll")));
         assert!(!a.meets(&ch("levels", "m75")));
         let mut b = ReadSet::default();
         b.0.insert("levels".into(), [ALL.to_owned()].into());

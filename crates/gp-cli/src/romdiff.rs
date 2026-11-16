@@ -22,7 +22,7 @@
 //! The base's ROM is named, and its asset map and labels found, from the
 //! games checkout (each game's roms.toml and package.toml) instead of the
 //! old repo's `sources/` and asset map folder. The asset formats of other
-//! games (Super Mario Bros., Mega Man 2, Super Mario Bros. 2) are cut.
+//! games (three NES games of game-printer's) are cut.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -905,16 +905,42 @@ size = 8
         assert!(e.to_string().contains("isn't a romset zip"), "{e}");
     }
 
-    /// With tapper.zip and tapperg.zip on this machine: the alternate
-    /// graphics set has the same programs and other graphics, chip by chip.
+    /// With two sets of the game $GP_GAME_DIR names that share their
+    /// program chips but not all their graphics, both on this machine: the
+    /// diff finds the same programs and other graphics, chip by chip.
     /// Skipped without them.
     #[test]
-    fn tapper_and_tapperg_differ_in_their_graphics_only() {
-        let (Some(a), Some(b)) = (
-            gp_arcade::romset::local_romset("tapper"),
-            gp_arcade::romset::local_romset("tapperg"),
-        ) else {
-            eprintln!("skipped: no tapper and tapperg romsets");
+    fn two_sets_of_one_program_differ_in_their_graphics_only() {
+        use gp_arcade::romset::Region;
+        if let Err(e) = gp_arcade::romset::test_game() {
+            eprintln!("skipped: {e}");
+            return;
+        }
+        let program = |s: &gp_arcade::romset::SetInfo| {
+            let mut v: Vec<&str> = s
+                .chips
+                .iter()
+                .filter(|c| matches!(c.region, Region::MainCpu | Region::SsioCpu))
+                .map(|c| c.sha1)
+                .collect();
+            v.sort_unstable();
+            v
+        };
+        let sets = gp_arcade::romset::known();
+        let pair = sets.iter().enumerate().find_map(|(i, x)| {
+            sets[i + 1..].iter().find_map(|y| {
+                (program(x) == program(y) && x.identity() != y.identity())
+                    .then(|| {
+                        Some((
+                            gp_arcade::romset::local_romset(x.name)?,
+                            gp_arcade::romset::local_romset(y.name)?,
+                        ))
+                    })
+                    .flatten()
+            })
+        });
+        let Some((a, b)) = pair else {
+            eprintln!("skipped: no two sets of one program on this machine");
             return;
         };
         let d = tempfile::tempdir().unwrap();

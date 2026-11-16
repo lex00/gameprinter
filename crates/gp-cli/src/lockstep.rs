@@ -286,7 +286,7 @@ pub(crate) fn record_draws(
     }
     if crate::original::Platform::of_file(rom) == crate::original::Platform::Arcade {
         let set = gp_arcade::Romset::from_zip(rom)?;
-        return record_draws_arcade(gp_arcade::Tapper::power_on(&set), mapping, inputs, from);
+        return record_draws_arcade(gp_arcade::Mcr::power_on(&set), mapping, inputs, from);
     }
     let nes = gp_nes::Nes::power_on(rom, PowerOn::default()).map_err(anyhow::Error::msg)?;
     record_draws_on(nes, mapping, inputs, from)
@@ -302,7 +302,7 @@ pub(crate) fn record_draws_saved(
 ) -> Result<gp_sim::DrawScript> {
     if crate::original::Platform::of_file(rom) == crate::original::Platform::Arcade {
         let set = gp_arcade::Romset::from_zip(rom)?;
-        let mut t = gp_arcade::Tapper::power_on(&set);
+        let mut t = gp_arcade::Mcr::power_on(&set);
         t.restore(&saved.snap).map_err(anyhow::Error::msg)?;
         return record_draws_arcade(t, mapping, inputs, from);
     }
@@ -311,7 +311,7 @@ pub(crate) fn record_draws_saved(
 
 /// The random draws of an arcade original (port wave 6), from gp-arcade's
 /// instruction trace and access log on the main Z80. A Z80 game's random
-/// routine returns its number in A (Tapper's `call $5fac`), so a site can
+/// routine returns its number in A (a `call` of the game's random routine), so a site can
 /// name either the call (what `gp interp draws --find` proposes) or the
 /// instruction after it (where A holds the draw): either way the draw is A
 /// when control comes back from the routine, which may be a frame later.
@@ -321,7 +321,7 @@ pub(crate) fn record_draws_saved(
 /// ([`z80_reg`]). A draw is in the frame it completes in. Frames are
 /// counted on from the machine's own count.
 pub(crate) fn record_draws_arcade(
-    mut t: gp_arcade::Tapper,
+    mut t: gp_arcade::Mcr,
     mapping: &Mapping,
     inputs: &[gp_evidence::input_log::InputFrame],
     from: u64,
@@ -899,9 +899,9 @@ fn count(notes: &[LoadNote], how: gp_runtime::LoadHow) -> usize {
 mod arcade_tests {
     use std::fs;
 
-    /// The seam end to end, with the owner's rbtapper romset: the skeleton
-    /// `gp game new` writes for it (an arcade mapping with no fields yet)
-    /// in lockstep with Tapper on gp-arcade, a coin and a start on the way.
+    /// The seam end to end, with a real romset ($GP_GAME_DIR's first
+    /// oracle set): the skeleton `gp game new` writes for it (an arcade
+    /// mapping with no fields yet) in lockstep with the set on gp-arcade, a coin and a start on the way.
     /// The model is a placeholder, so this shows only that the lockstep
     /// runs on an arcade original and lines its frames up; scoring waits
     /// for a model. Skipped without the romset.
@@ -910,9 +910,12 @@ mod arcade_tests {
         if gp_arcade::skip_slow_test() {
             return;
         }
-        let Some(zip) = gp_arcade::romset::local_romset("rbtapper") else {
-            eprintln!("skipped: no rbtapper romset");
-            return;
+        let (set_name, zip) = match gp_arcade::romset::test_oracle_set_path() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("skipped: {e}");
+                return;
+            }
         };
         let d = tempfile::tempdir().unwrap();
         let home = d.path().join("home");
@@ -922,13 +925,13 @@ mod arcade_tests {
             roms: home.join("roms"),
         };
         fs::create_dir_all(paths.roms.join("arcade")).unwrap();
-        let rom_path = paths.roms.join("arcade/rbtapper.zip");
+        let rom_path = paths.roms.join(format!("arcade/{set_name}.zip"));
         fs::copy(&zip, &rom_path).unwrap();
         let games = d.path().join("games");
         fs::create_dir_all(&games).unwrap();
         crate::game_new::run(
             &crate::game_new::New {
-                game: "tapper",
+                game: "made-up",
                 rom: &rom_path,
                 genre: "other",
                 title: None,
@@ -941,7 +944,7 @@ mod arcade_tests {
             &paths,
         )
         .unwrap();
-        let dir = games.join("tapper");
+        let dir = games.join("made-up");
         // No arcade assets are lifted yet: an empty lift, as a map with
         // no assets would give.
         let assets = d.path().join("assets");
@@ -949,8 +952,8 @@ mod arcade_tests {
         fs::write(
             assets.join(gp_assets::MAP_FILE),
             format!(
-                "schema = 1\nsource = \"tapper\"\nsha256 = \"{}\"\nasset = []\n",
-                gp_arcade::romset::set("rbtapper").unwrap().identity()
+                "schema = 1\nsource = \"made-up\"\nsha256 = \"{}\"\nasset = []\n",
+                gp_arcade::romset::set(set_name).unwrap().identity()
             ),
         )
         .unwrap();
@@ -1010,14 +1013,14 @@ mod arcade_tests {
         .unwrap();
         let inputs = vec![gp_evidence::input_log::InputFrame::default(); 3];
         let script = crate::lockstep::record_draws_arcade(
-            gp_arcade::Tapper::power_on(&set),
+            gp_arcade::Mcr::power_on(&set),
             &mapping,
             &inputs,
             1,
         )
         .unwrap();
         // What A was at 0006 and what 0010 read, from the trace itself.
-        let mut t = gp_arcade::Tapper::power_on(&set);
+        let mut t = gp_arcade::Mcr::power_on(&set);
         t.step(gp_arcade::Controls::default());
         let mut want = Vec::new();
         // A call made before the first frame watched isn't a draw of it.
@@ -1077,13 +1080,13 @@ mod arcade_tests {
         .unwrap();
         let inputs = vec![gp_evidence::input_log::InputFrame::default(); 3];
         let script = crate::lockstep::record_draws_arcade(
-            gp_arcade::Tapper::power_on(&set),
+            gp_arcade::Mcr::power_on(&set),
             &mapping,
             &inputs,
             1,
         )
         .unwrap();
-        let mut t = gp_arcade::Tapper::power_on(&set);
+        let mut t = gp_arcade::Mcr::power_on(&set);
         t.step(gp_arcade::Controls::default());
         let mut want = Vec::new();
         for f in 2..=3 {

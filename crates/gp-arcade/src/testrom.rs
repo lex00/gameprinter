@@ -218,15 +218,53 @@ pub fn records() -> Romset {
     romset(&main, &[0x18, 0xfe])
 }
 
+/// A made-up set named `system`, as a game's roms.toml would list it: three
+/// chips of made-up bytes (a program chip, a tile chip and a sprite chip,
+/// filled with a byte from the name), and those chips as a zip's files would hold them.
+pub fn made_up_set(system: &str) -> (String, Vec<(String, Vec<u8>)>) {
+    let fill = system
+        .bytes()
+        .fold(7u8, |a, b| a.wrapping_mul(31).wrapping_add(b));
+    let files = vec![
+        (format!("{system}.1a"), vec![fill; 0x1000]),
+        (format!("{system}.bg"), vec![fill.wrapping_add(1); 0x2000]),
+        (format!("{system}.fg"), vec![fill.wrapping_add(2); 0x2000]),
+    ];
+    let hex = |d: &[u8]| -> String {
+        crate::sha1::sha1(d)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    };
+    let (ha, hb, hc) = (hex(&files[0].1), hex(&files[1].1), hex(&files[2].1));
+    let id = crate::romset::identity([ha.as_str(), hb.as_str(), hc.as_str()]);
+    let toml = format!(
+        "[[source]]\nid = \"{system}\"\ntitle = \"Made Up\"\nplatform = \"arcade\"\nregion = \"us\"\n\
+         revision = \"Made Up ({system})\"\nsystem = \"{system}\"\nsha256 = \"{id}\"\nstatus = \"unverified\"\n\n\
+         [[source.chip]]\nname = \"{system}.1a\"\nregion = \"maincpu\"\noffset = 0x0000\nsize = 0x1000\nsha1 = \"{ha}\"\n\n\
+         [[source.chip]]\nname = \"{system}.bg\"\nregion = \"gfx1\"\noffset = 0x0000\nsize = 0x2000\nsha1 = \"{hb}\"\n\n\
+         [[source.chip]]\nname = \"{system}.fg\"\nregion = \"gfx2\"\noffset = 0x0000\nsize = 0x2000\nsha1 = \"{hc}\"\n"
+    );
+    (toml, files)
+}
+
+/// [`made_up_set`], added to the sets known ([`crate::romset::known`]):
+/// its files, which [`Romset::identify`] then knows as `system`.
+pub fn known_made_up_set(system: &str) -> Vec<(String, Vec<u8>)> {
+    let (toml, files) = made_up_set(system);
+    crate::romset::add_roms_toml(&toml).expect("a made-up set's roms.toml reads");
+    files
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Controls, Tapper};
+    use crate::{Controls, Mcr};
 
     /// The busy program runs as its comments say.
     #[test]
     fn the_busy_program_runs() {
-        let mut t = Tapper::power_on(&busy());
+        let mut t = Mcr::power_on(&busy());
         t.step(Controls::default());
         t.step(Controls {
             tap: true,
@@ -242,8 +280,8 @@ mod tests {
     #[test]
     fn the_busy_program_logs_its_events() {
         use crate::events::Happened;
-        let mut quiet = Tapper::power_on(&busy());
-        let mut t = Tapper::power_on(&busy());
+        let mut quiet = Mcr::power_on(&busy());
+        let mut t = Mcr::power_on(&busy());
         t.set_events(true);
         for _ in 0..3 {
             quiet.step(Controls::default());

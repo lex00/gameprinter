@@ -16,7 +16,10 @@
 // module's sound board alone (gp_sound_load, gp_sound_frame), as a page
 // whose game is a model would, and each frame's sound must be the whole
 // machine's.
-//   node scripts/web/check-play-arcade.mjs WASM ZIP LOG OUT [SOUND_OUT [LATCHES]]
+// With ROMS set to a roms.toml (the game's, with its [[source.chip]]
+// rows), the module is handed its sets first (gp_sets_load), as a page
+// does; the board knows none of its own.
+//   ROMS=GAME/roms.toml node scripts/web/check-play-arcade.mjs WASM ZIP LOG OUT [SOUND_OUT [LATCHES]]
 // Prints the digest. Exit codes: 0 played, 2 couldn't.
 import fs from "node:fs";
 
@@ -65,6 +68,10 @@ try {
     return p;
   };
   const zip = fs.readFileSync(zipPath);
+  if (process.env.ROMS) {
+    const sets = new TextEncoder().encode(fs.readFileSync(process.env.ROMS, "utf8"));
+    if (x.gp_sets_load(put(sets), sets.length)) throw new Error(text());
+  }
   if (x.gp_play_load(0, put(zip), zip.length)) throw new Error(text());
   if (x.gp_play_info(0)) throw new Error(text());
   const info = JSON.parse(text());

@@ -48,7 +48,7 @@ pub(crate) enum RuleCmd {
     /// that carry its fractions and the gravity each frame, read from the
     /// clips, and how many frames of each jump the rule reproduces.
     Jump {
-        /// The game's package folder (games/donkey-kong).
+        /// The game's package folder (games/mosshop).
         game: PathBuf,
         /// The mechanic sessions whose clips to use (default: every one).
         #[arg(long = "session")]
@@ -71,8 +71,8 @@ pub(crate) enum RuleCmd {
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    /// The rule for a player who moves between lanes (Tapper's bartender:
-    /// the bars): each lane's row, the frames a move to another lane takes
+    /// The rule for a player who moves between lanes (a server
+    /// moving between bars): each lane's row, the frames a move to another lane takes
     /// and keeps the stick busy, where the player lands on the new lane,
     /// the walk along a lane, and the step back after a send. Fitted from
     /// the clips and checked against the original frame by frame.

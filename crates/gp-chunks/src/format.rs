@@ -42,7 +42,7 @@ pub struct Catalog {
     pub layers: Layers,
     /// Objects of the format that changed no cell of the grid, by kind and
     /// count: page jumps and area pointers, scenery the grid doesn't hold
-    /// (Super Mario Bros.' castles and ropes are drawn but not kept), and
+    /// (one platformer's castles and ropes are drawn but not kept), and
     /// objects a later one drew over entirely.
     pub controls: BTreeMap<String, usize>,
     /// The chunk kinds, by layer and then most frequent first.

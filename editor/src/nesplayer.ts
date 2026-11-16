@@ -35,6 +35,7 @@ interface Exports {
   gp_play_save(slot: number): number;
   gp_play_restore(slot: number, ptr: number, len: number): number;
   gp_play_info?(slot: number): number;
+  gp_sets_load?(ptr: number, len: number): number;
 }
 
 /** Stubs for every import the module names. */
@@ -69,7 +70,21 @@ export class NesPlayer {
     const bytes = await res.arrayBuffer();
     const module = await WebAssembly.compile(bytes);
     const instance = await WebAssembly.instantiate(module, stubImports(module));
-    return new NesPlayer(instance.exports as unknown as Exports);
+    const player = new NesPlayer(instance.exports as unknown as Exports);
+    // An arcade board knows a romset only by the chip lists gp read from
+    // the games' roms.toml files, served beside the module.
+    if (player.x.gp_sets_load) {
+      const sets = await fetch(new URL("roms.toml", new URL(url, location.href)).href);
+      if (sets.ok) player.sets(await sets.text());
+    }
+    return player;
+  }
+
+  /** Gives an arcade board the sets it may load (gp_sets_load). */
+  sets(text: string): void {
+    if (!this.x.gp_sets_load) return;
+    const b = enc.encode(text);
+    this.check(this.x.gp_sets_load(this.put(b), b.length));
   }
 
   /** The player for a ROM: gp_play.wasm, or gp_arcade_play.wasm for a MAME zip. */

@@ -34,17 +34,23 @@
 // pictures one over the other. Any error the page throws fails the
 // check. With --shots DIR a screenshot of each mode goes to DIR.
 //
-// With --arcade-rom ZIP (the owner's rbtapper romset) and --arcade-wasm
-// WASM (gp_arcade_play.wasm), an arcade run follows: gp roms add and gp
-// game new on the romset, then the page on it at 512x480 and 30 frames a
+// With --arcade-game DIR (an arcade game of the games checkout), --arcade-rom
+// ZIP (the owner's romset of the set its package.toml plays, `role =
+// "play"`) and --arcade-wasm WASM (gp_arcade_play.wasm), an arcade run
+// follows (alone with --only arcade): gp roms add and gp game new on the
+// romset, under the game's folder name, then the page on it at 512x480 and 30 frames a
 // second with MAME's keys. It drops a coin (5), starts (1), records a clip
 // of moves and taps with a note and hands it off, checks the clip's arcade
 // log and state hash in the session, that gp mechanic say shows, and that
 // REVIEW REBUILD plays the clip on the model gp game new wrote, drawn by
 // tile kind and saying so, that FREE PLAY plays the model at 512x480, and
 // that gp mechanic demo says in words why it has nothing to play yet.
-// Without the
-// two options the arcade run is skipped, as other ROM checks are.
+// What makes the clip play, and the board's input columns, are the game's
+// checks.toml `[mechanic_page]` with its labels.toml. Then the ROM set
+// picker on a copy of the game's folder, with the owner's sets beside
+// --arcade-rom. The tool knows no game by name: everything about the game
+// comes from its folder. Without the three options the arcade run is
+// skipped, as other ROM checks are.
 //
 // Playwright comes from scripts/web/node_modules (`npm ci --prefix
 // scripts/web`), or PLAYWRIGHT_FROM names another package.json whose
@@ -68,13 +74,19 @@ const opt = (n) => {
 };
 const gp = opt("gp"), romFile = opt("rom"), wasm = opt("wasm"), browserPath = opt("browser");
 const arcadeRom = opt("arcade-rom"), arcadeWasm = opt("arcade-wasm");
-// --only arcade: the arcade run alone (it needs no Moss Hop run before it).
+// --only arcade: the arcade run and the ROM set picker alone (they need no
+// Moss Hop run before them).
 // --only journeys: the first screen, the copies and their tabs alone.
 const only = process.argv.includes("--only") ? process.argv[process.argv.indexOf("--only") + 1] : null;
-// --arcade-games DIR: a games checkout with tapper/ (its roms.toml names
-// tapper, rbtapper and the rest), for the ROM set picker, with the sets
-// beside --arcade-rom.
-const arcadeGames = opt("arcade-games");
+// --arcade-game DIR: the arcade game's folder in the games checkout: its
+// roms.toml, package.toml, labels.toml and checks.toml say what to play
+// and check.
+const arcadeGame = opt("arcade-game");
+/** One fact of a game folder (scripts/check/game-facts.py), or null. */
+function fact(dir, ...what) {
+  const r = spawnSync("python3", ["-I", "-B", join(here, "..", "check", "game-facts.py"), dir, ...what], { encoding: "utf8" });
+  return r.status === 0 ? r.stdout.trim() : null;
+}
 // --shots DIR: a screenshot of each mode goes there (never a repo: they
 // show the game).
 const shots = opt("shots");
@@ -122,8 +134,8 @@ function serve(extra = {}, game = GAME, mech = MECH, gamesDir = games, more = []
   return new Promise((res, rej) => {
     let out = "";
     // A fresh home builds the game's module from the kit first (about a
-    // minute for Tapper's hook crate), so the address can be slow to come.
-    const t = setTimeout(() => rej(new Error(`gp mechanic start printed no address: ${out}${err}`)), 240000);
+    // minute for an arcade game's hook crate), so the address can be slow to come.
+    const t = setTimeout(() => rej(new Error(`gp mechanic start printed no address: ${out}${err}`)), 240000 * buildWait);
     p.stdout.on("data", (d) => {
       out += d;
       const m = out.match(/http:\/\/127\.0\.0\.1:\d+\//);
@@ -133,15 +145,32 @@ function serve(extra = {}, game = GAME, mech = MECH, gamesDir = games, more = []
   });
 }
 
+/** How many times longer the waits for a build (those of two minutes or
+ * more: the players, the preview, a game's module) may take on this
+ * machine: GP_CHECK_BUILD_WAIT, default 1. The numbers below are a Mac's,
+ * where every lane of just check has many cores; CI's four-core runner
+ * builds the same wasm while the other lanes compile too, and sets 3.
+ * Only how long the check waits changes, never what it checks. */
+const buildWait = Math.max(1, Number(process.env.GP_CHECK_BUILD_WAIT) || 1);
+
 /** Polls `f` until it gives something truthy; that, or a failure naming `what`. */
 async function until(what, f, ms = 15000) {
-  const end = Date.now() + ms;
+  const end = Date.now() + (ms >= 120000 ? ms * buildWait : ms);
   for (;;) {
     const v = await f();
     if (v) return v;
     if (Date.now() > end) fail(`timed out: ${what}`);
     await new Promise((r) => setTimeout(r, 100));
   }
+}
+
+/** Whether `page` shows the game's own mechanic page, open: its #title
+ * names the game and it has the tabs. gp serve's waiting page has the same
+ * #title but no tabs, and reloads itself once the game is ready, so a look
+ * made then would land in that reload (as on CI's slower machines). */
+async function gamePageOpen(page) {
+  if (!(await text(page, "#title").catch(() => "")).startsWith(GAME)) return false;
+  return Boolean(await page.$("#tabs").catch(() => null)) && !(await page.$("#wait").catch(() => true));
 }
 
 /** A screenshot of the page into --shots, when given: the whole page, or
@@ -564,11 +593,20 @@ async function main() {
 
 /** The arcade run: the owner's romset in the page (see the head). */
 async function arcade() {
-  if (!arcadeRom || !arcadeWasm) {
-    console.log("skip the arcade run: no --arcade-rom and --arcade-wasm (the owner's rbtapper romset isn't here)");
+  if (!arcadeRom || !arcadeWasm || !arcadeGame) {
+    console.log("skip the arcade run: no --arcade-game, --arcade-rom and --arcade-wasm (no arcade game's romset here)");
     return;
   }
-  const game = "tapper", mech = "walk";
+  const game = arcadeGame.split("/").pop(), mech = "walk";
+  const play = fact(arcadeGame, "role", "play"), system = play && fact(arcadeGame, "system", play);
+  const checks = JSON.parse(fact(arcadeGame, "check", "mechanic_page") ?? "null");
+  if (!system || !checks?.playing || !checks?.moves || !checks?.columns || !checks?.button) fail(`${arcadeGame} needs package.toml's play set with a system in roms.toml, and checks.toml's [mechanic_page] with playing, moves, columns and button`);
+  const at = (label) => fact(arcadeGame, "label", label) ?? fail(`${arcadeGame}/labels.toml has no label ${label}`);
+  const playingAt = at(checks.playing.label), movesAt = at(checks.moves.label);
+  // The board's input log: its system and columns, with the button pressed
+  // on some frame.
+  const head = `gp-arcade-input 0\nsystem ${system}\ncolumns ${checks.columns}\n`;
+  const pressed = (log) => log.split("\n").some((l) => /^\d+ \S+$/.test(l) && l.split(" ")[1][checks.columns.indexOf(checks.button)] === checks.button);
   gpRun(["roms", "add", arcadeRom, "--games", games]);
   const zip = join(home, "roms", "arcade", arcadeRom.split("/").pop());
   gpRun(["game", "new", game, "--rom", zip, "--genre", "other", "--namespace", "check", "--games", games]);
@@ -649,21 +687,21 @@ async function arcade() {
   }, 60000);
   if (!meta.includes(`note = "${note}"`)) fail(`the arcade clip's toml: ${meta}`);
   const log = readFileSync(join(dir, "clips", "001.log"), "utf8");
-  if (!log.startsWith("gp-arcade-input 0\nsystem rbtapper\ncolumns CSRLDUT\n") || !/T\n/.test(log)) fail(`the arcade clip's log: ${log}`);
+  if (!log.startsWith(head) || !pressed(log)) fail(`the arcade clip's log: ${log}`);
   ok("the arcade clip is in the session: an arcade input log with taps, its note, path and state hash");
   // The clip is play, read from the board's RAM: the clip's whole log
   // from power-on recorded in the run's store, and on every frame of the
-  // clip the game's mode byte says a game is on and the bartender's bar
-  // moves with the presses. The addresses are rbtapper's (games/tapper's
-  // labels.toml: mode E3BD, 0 in a game; bar E6F9, the bartender's bar).
+  // clip the byte checks.toml's `playing` names says a game is on and the
+  // one `moves` names moves with the presses (the addresses from the
+  // game's labels.toml).
   const clipAt = { start: Number(meta.match(/^start = (\d+)/m)?.[1]), frames: Number(meta.match(/^frames = (\d+)/m)?.[1]) };
-  const full = join(work, "tapper-clip-1.log");
+  const full = join(work, `${game}-clip-1.log`);
   writeFileSync(full, Buffer.from(await (await page.request.get(`${url}api/clips/1.log`)).body()));
-  const recorded = JSON.parse(gpRun(["--json", "record", "--rom", zip, "--input", full, "--name", "check-tapper-clip-1", "--no-trace", "--no-events"]));
-  const rows = JSON.parse(gpRun(["--json", "query", recorded.id, "ram[0xE3BD]", "ram[0xE6F9]", "--frames", `${clipAt.start}..${clipAt.start + clipAt.frames}`, "--rom", zip])).rows;
+  const recorded = JSON.parse(gpRun(["--json", "record", "--rom", zip, "--input", full, "--name", `check-${game}-clip-1`, "--no-trace", "--no-events"]));
+  const rows = JSON.parse(gpRun(["--json", "query", recorded.id, `ram[0x${playingAt}]`, `ram[0x${movesAt}]`, "--frames", `${clipAt.start}..${clipAt.start + clipAt.frames}`, "--rom", zip])).rows;
   const modes = new Set(rows.map((r) => r.entries[0].value)), bars = new Set(rows.map((r) => r.entries[1].value));
-  if (!(clipAt.start > 0) || rows.length !== clipAt.frames || modes.size !== 1 || !modes.has(0) || bars.size < 2 || [...bars].some((b) => b > 3)) fail(`Tapper's clip 1 isn't play: frames ${clipAt.start} to ${clipAt.start + clipAt.frames}, mode ${[...modes]}, bar ${[...bars]}`);
-  ok(`Tapper's clip 1 is play: on its ${rows.length} frames from frame ${clipAt.start} the board's mode is a game's and the bartender moves between bars ${[...bars].sort().join(", ")}`);
+  if (!(clipAt.start > 0) || rows.length !== clipAt.frames || modes.size !== 1 || !modes.has(checks.playing.value) || bars.size < 2 || [...bars].some((b) => b > checks.moves.max)) fail(`${game}'s clip 1 isn't play: frames ${clipAt.start} to ${clipAt.start + clipAt.frames}, ${checks.playing.label} ${[...modes]}, ${checks.moves.label} ${[...bars]}`);
+  ok(`${game}'s clip 1 is play: on its ${rows.length} frames from frame ${clipAt.start} the board's ${checks.playing.label} is ${checks.playing.value} and its ${checks.moves.label} moves between ${[...bars].sort().join(", ")}`);
   await until("the arcade hand-off in the conversation", async () => (await text(page, "#talk")).includes(`player: ${note}`));
   const said = "Got it. Which bar was that?";
   gpRun(["mechanic", "say", game, mech, said]);
@@ -675,19 +713,19 @@ async function arcade() {
   // shown in every layout. The model names no picture slot, so its side is
   // drawn by tile kind, and the page says so in a sentence.
   await page.click("#clips .rv2-open");
-  await until("Tapper's REVIEW REBUILD", async () => (await page.evaluate(() => document.getElementById("tab-refine").classList.contains("on"))));
-  const rv = await until("Tapper's review", async () => {
+  await until(`${game}'s REVIEW REBUILD`, async () => (await page.evaluate(() => document.getElementById("tab-refine").classList.contains("on"))));
+  const rv = await until(`${game}'s review`, async () => {
     const t = await text(page, "#busy-text");
     return /\d+ of \d+ frames the same/.test(t) ? t : /couldn't|No clips|draws nothing yet/.test(t) ? fail(t) : null;
   }, 300000);
   if (!rv.includes("drawn by tile kind")) fail(`REVIEW REBUILD doesn't say the arcade model is drawn by tile kind: ${rv}`);
   const reviewed = join(dir, "clips", "001.review", "meta.json");
-  if (!existsSync(reviewed)) fail(`Tapper's review isn't kept in ${reviewed}`);
+  if (!existsSync(reviewed)) fail(`${game}'s review isn't kept in ${reviewed}`);
   const review = JSON.parse(readFileSync(reviewed, "utf8"));
-  if (!Array.isArray(review.diffs) || !Array.isArray(review.drawn)) fail(`Tapper's review has no diffs or drawn things: ${Object.keys(review)}`);
+  if (!Array.isArray(review.diffs) || !Array.isArray(review.drawn)) fail(`${game}'s review has no diffs or drawn things: ${Object.keys(review)}`);
   // A frame some way in, where the game is under way, if it has pictures.
   const have = review.have.map((h, k) => (h ? k : -1)).filter((k) => k >= 0);
-  if (!have.length) fail("Tapper's review kept no pictures");
+  if (!have.length) fail(`${game}'s review kept no pictures`);
   const shown = have[Math.floor(have.length / 2)];
   // The model's one thing, its player, as the board places a sprite: 32
   // by 32 pixels for its 16 by 16 of the game's units (drawn as pixels, as
@@ -697,7 +735,7 @@ async function arcade() {
   // frame it is drawn, its box is the board's size.
   const heroes = review.drawn.map((d) => (d.boxes ?? []).find((b) => b[4] === "player") ?? null);
   const wrong = heroes.find((b) => b && (b[2] !== 32 || b[3] !== 32));
-  if (wrong) fail(`Tapper's player on the model isn't the board's 32 by 32: ${JSON.stringify(wrong)}`);
+  if (wrong) fail(`${game}'s player on the model isn't the board's 32 by 32: ${JSON.stringify(wrong)}`);
   const hero = heroes[shown];
   // Both pictures of that frame, by the pixels not in its commonest color
   // (the backdrop): the original's scene (here a bar in play) fills a
@@ -722,9 +760,9 @@ async function arcade() {
       return { n, other: n - Math.max(...count.values()), colors: count.size };
     }, `api/clips/1/review/${side}-${String(shown).padStart(5, "0")}.png?mechanic=${mech}`);
     const bad = side === "o" ? px.other < px.n / 10 || px.colors < 4 : px.other !== heroArea;
-    if (bad) fail(`Tapper's ${side === "o" ? "original" : "model"} picture at frame ${shown}: ${JSON.stringify(px)}`);
+    if (bad) fail(`${game}'s ${side === "o" ? "original" : "model"} picture at frame ${shown}: ${JSON.stringify(px)}`);
   }
-  await until("the badge on Tapper", async () => (await text(page, "#modebadge")) === "REVIEWING THE MODEL");
+  await until(`the badge on ${game}`, async () => (await text(page, "#modebadge")) === "REVIEWING THE MODEL");
   await page.keyboard.press("KeyX"); // A pauses
   await page.evaluate((k) => { const s = document.getElementById("rv-scrub"); s.value = String(k); s.dispatchEvent(new Event("input")); }, shown);
   const lit = () => page.evaluate(() => {
@@ -735,34 +773,34 @@ async function arcade() {
   });
   for (const v of ["side", "top", "diff"]) {
     await page.selectOption("#rv-layout", v);
-    await until(`Tapper's ${v} layout drawn`, lit);
+    await until(`${game}'s ${v} layout drawn`, lit);
     if (shots) {
       mkdirSync(shots, { recursive: true });
       await page.screenshot({ path: join(shots, `${game}-review-rebuild-${v}.png`), fullPage: true });
     }
   }
-  if ((await page.evaluate(() => document.body.dataset.frameSource)) !== "clip+rebuild") fail("Tapper's REVIEW REBUILD didn't draw the clip beside the rebuild");
-  if (await page.isHidden("#rv-strip")) fail("no strip of the frames that agree on Tapper");
-  if (!/Frame \d+ of \d+/.test(await text(page, "#ctx-frame"))) fail(`Tapper's right margin: ${await text(page, "#ctx-frame")}`);
+  if ((await page.evaluate(() => document.body.dataset.frameSource)) !== "clip+rebuild") fail(`${game}'s REVIEW REBUILD didn't draw the clip beside the rebuild`);
+  if (await page.isHidden("#rv-strip")) fail(`no strip of the frames that agree on ${game}`);
+  if (!/Frame \d+ of \d+/.test(await text(page, "#ctx-frame"))) fail(`${game}'s right margin: ${await text(page, "#ctx-frame")}`);
   await page.selectOption("#rv-layout", "side");
-  // Tapper's 512x480 pictures side by side at full size in 1280x720.
-  const tsb = await until("Tapper's pair fitted", async () => { const q = await pair(page); return q.w[1] > 0 ? q : null; });
-  if (tsb.w.some((w) => w !== 512) || tsb.h.some((h) => h !== 480) || !tsb.inside || tsb.stacked) fail(`Tapper's pictures side by side at 1280x720 aren't both 512x480 in the window: ${JSON.stringify(tsb)}`);
-  ok("Tapper's two 512x480 pictures show side by side at full size in 1280x720");
+  // The board's 512x480 pictures side by side at full size in 1280x720.
+  const tsb = await until(`${game}'s pair fitted`, async () => { const q = await pair(page); return q.w[1] > 0 ? q : null; });
+  if (tsb.w.some((w) => w !== 512) || tsb.h.some((h) => h !== 480) || !tsb.inside || tsb.stacked) fail(`${game}'s pictures side by side at 1280x720 aren't both 512x480 in the window: ${JSON.stringify(tsb)}`);
+  ok(`${game}'s two 512x480 pictures show side by side at full size in 1280x720`);
   await page.keyboard.press("KeyC");
-  if (!(await page.evaluate(() => document.getElementById("rv-boxes").checked))) fail("C didn't outline Tapper's entities");
+  if (!(await page.evaluate(() => document.getElementById("rv-boxes").checked))) fail(`C didn't outline ${game}'s entities`);
   await page.keyboard.press("ArrowRight");
-  await until("a step on Tapper", async () => /frame \d+ of/.test(await text(page, "#rv-at")));
-  ok(`REVIEW REBUILD shows Tapper's clip 1: ${rv.match(/\d+ of \d+ frames the same/)[0]}, the original's scene and the model's player where the board draws it (on the screen on ${heroes.filter((b) => b).length} of ${heroes.length} frames) at frame ${shown}, in all three layouts, with the strip, the outlines, the frame's measures and "drawn by tile kind"`);
+  await until(`a step on ${game}`, async () => /frame \d+ of/.test(await text(page, "#rv-at")));
+  ok(`REVIEW REBUILD shows ${game}'s clip 1: ${rv.match(/\d+ of \d+ frames the same/)[0]}, the original's scene and the model's player where the board draws it (on the screen on ${heroes.filter((b) => b).length} of ${heroes.length} frames) at frame ${shown}, in all three layouts, with the strip, the outlines, the frame's measures and "drawn by tile kind"`);
   // FREE PLAY plays the arcade game's model in the interpreter preview,
   // keyed as a cabinet (issue #3): the rebuild's frame loads the model,
   // reads the arcade layout and draws a 512x480 picture, never the
   // original. The skeleton names no board art, so the frame draws its
   // scene; a model that names some is drawn by gp_board.wasm.
   await page.click("#tab-play");
-  await until("Tapper's FREE PLAY", async () => {
+  await until(`${game}'s FREE PLAY`, async () => {
     const t = (await text(page, "#toast")) + (await text(page, "#state"));
-    if (/draws nothing yet|couldn't start/.test(t)) fail(`Tapper's FREE PLAY: ${t}`);
+    if (/draws nothing yet|couldn't start/.test(t)) fail(`${game}'s FREE PLAY: ${t}`);
     return (await text(page, "#modebadge")) === "FREE PLAY: THE MODEL";
   }, 600000);
   const rb = await until("the arcade model's first frame", async () => {
@@ -776,14 +814,14 @@ async function arcade() {
     }).catch(() => null));
     return g;
   }, 120000);
-  if (rb.error) fail(`Tapper's model in FREE PLAY: ${rb.error}`);
-  if (rb.w !== 512 || rb.h !== 480) fail(`Tapper's model in FREE PLAY draws ${rb.w}x${rb.h}, not 512x480`);
+  if (rb.error) fail(`${game}'s model in FREE PLAY: ${rb.error}`);
+  if (rb.w !== 512 || rb.h !== 480) fail(`${game}'s model in FREE PLAY draws ${rb.w}x${rb.h}, not 512x480`);
   const fsrc = await page.evaluate(() => document.body.dataset.frameSource);
-  if (fsrc === "original") fail("Tapper's FREE PLAY showed the original");
-  await shot(page, "tapper-free-play");
-  ok(`FREE PLAY plays Tapper's model: a 512x480 picture from the preview (board art ${rb.board ? "drawn" : "not named"}), never the original`);
+  if (fsrc === "original") fail(`${game}'s FREE PLAY showed the original`);
+  await shot(page, `${game}-free-play`);
+  ok(`FREE PLAY plays ${game}'s model: a 512x480 picture from the preview (board art ${rb.board ? "drawn" : "not named"}), never the original`);
   await page.keyboard.press("Escape");
-  await until("CLIPS after Tapper's FREE PLAY", async () => page.evaluate(() => document.getElementById("tab-mech").classList.contains("on")));
+  await until(`CLIPS after ${game}'s FREE PLAY`, async () => page.evaluate(() => document.getElementById("tab-mech").classList.contains("on")));
   // The stand-in decision server, as the Moss Hop run uses: without
   // --decide, demo asks for Laya at 127.0.0.1:7720 before it reads the
   // game, and the check would pass only on a machine with Laya running.
@@ -798,7 +836,7 @@ async function arcade() {
   if (r.status === 0 || !r.stderr.includes("whose state mapping doesn't name the player")) fail(`gp mechanic demo on an arcade game: ${r.status} ${r.stderr}`);
   ok("gp mechanic demo refuses, in words, an arcade game whose mapping names no player");
   if (errors.length) fail(`the arcade page threw: ${errors.join("; ")}`);
-  await arcadeOriginalFreePlay(game);
+  await arcadeOriginalFreePlay(game, head, pressed);
 }
 
 /** FREE PLAY of the original on an arcade game, in REFINE's game view
@@ -807,7 +845,7 @@ async function arcade() {
  * server rebuilds natively to the same hashes, back to it with F8 (a new
  * branch), and a clip from it whose log is the board's. Needs the
  * editor's build (`just editor`); without it the step says so. */
-async function arcadeOriginalFreePlay(game) {
+async function arcadeOriginalFreePlay(game, head, pressed) {
   const base = await gpServe(games);
   const index = await fetch(`${base}index.html`);
   if (!index.ok || !(index.headers.get("content-type") ?? "").includes("text/html")) {
@@ -845,7 +883,7 @@ async function arcadeOriginalFreePlay(game) {
   if (!saved.sp.native.matches) fail(`the arcade save point rebuilt to other hashes: ${JSON.stringify(saved.sp)}`);
   await until("the save point's words on the page", async () => /rebuilt the same/.test(await text(page, "[data-testid=save-points]")), 15000);
   ok(`FREE PLAY of the arcade original: 512x480 with the cabinet's keys, a coin and a start, and save point 1 at frame ${saved.sp.frame} rebuilt natively to the page's hashes`);
-  await shot(page, "tapper-free-play-original");
+  await shot(page, `${game}-free-play-original`);
   await page.waitForTimeout(1500);
   await page.keyboard.press("F8");
   await until("a branch from the save point", async () => ((await sessions())[0]?.branches?.length ?? 0) >= 2, 30000);
@@ -860,7 +898,7 @@ async function arcadeOriginalFreePlay(game) {
   await page.click("[data-testid=clip-stop]");
   await until("the arcade clip saved", async () => page.isVisible("[data-testid=clip-saved]"), 30000);
   const clip = JSON.parse(readFileSync(join(home, "play", "free", saved.s.id, "clips", "0001.json"), "utf8"));
-  if (!clip.log?.startsWith("gp-arcade-input 0\nsystem rbtapper\ncolumns CSRLDUT\n") || !/T\n/.test(clip.log)) fail(`the arcade free play clip's log: ${clip.log}`);
+  if (!clip.log?.startsWith(head) || !pressed(clip.log)) fail(`the arcade free play clip's log: ${clip.log}`);
   if (clip.start?.frame !== saved.sp.frame) fail(`the arcade clip doesn't start at its save point: ${JSON.stringify(clip.start)}`);
   ok(`F8 went back to the save point on a new branch, and a clip from it (${clip.frames} frames) holds the board's log with taps from frame ${clip.start.frame}`);
   if (errors.length) fail(`free play on the arcade original threw: ${errors.join("; ")}`);
@@ -960,47 +998,50 @@ async function oneServer() {
   await page.close();
 }
 
-/** The ROM set picker, on Tapper: the games checkout's tapper/ (five sets
- * in its roms.toml) with the owner's sets beside --arcade-rom. The page
- * lists the sets that are here, plays the scored one (tapper) at first,
- * and choosing rbtapper plays it, keeps it for the game and loads the page
- * again; gp serve --rom tapper=FILE chooses it too. */
+/** The ROM set picker, on the arcade game: a copy of --arcade-game's
+ * folder (its roms.toml names its sets) with the owner's sets beside
+ * --arcade-rom. The page lists the sets that are here, plays the scored
+ * one (package.toml's `role = "scored"`) at first, and choosing the one
+ * --arcade-rom is (the `play` set) plays it, keeps it for the game and
+ * loads the page again; gp serve --rom GAME=FILE chooses it too. */
 async function romSets() {
-  if (!arcadeRom || !arcadeWasm || !arcadeGames || !existsSync(join(arcadeGames, "tapper", "roms.toml"))) {
-    console.log("skip the ROM sets: no --arcade-rom, --arcade-wasm and --arcade-games with tapper/");
+  if (!arcadeRom || !arcadeWasm || !arcadeGame || !existsSync(join(arcadeGame, "roms.toml"))) {
+    console.log("skip the ROM sets: no --arcade-rom, --arcade-wasm and --arcade-game with a roms.toml");
     return;
   }
+  const game = arcadeGame.split("/").pop();
+  const scored = fact(arcadeGame, "role", "scored"), play = fact(arcadeGame, "role", "play");
+  const PLAY = play && fact(arcadeGame, "sha256", play);
+  if (!scored || !play || !PLAY || scored === play) fail(`${arcadeGame}'s package.toml needs a scored set and another to play, each in roms.toml`);
   const games2 = join(work, "games2");
-  cpSync(join(arcadeGames, "tapper"), join(games2, "tapper"), { recursive: true, filter: (p) => !p.includes("/target") });
+  cpSync(arcadeGame, join(games2, game), { recursive: true, filter: (p) => !p.includes("/target") });
   const romDir = dirname(arcadeRom);
-  const RB = "05c721e1f53c60355abc0f38c4db05040b305118630b86e67721ced1bda22657";
-  const url = await serve({ GP_ROM_DIR: romDir }, "tapper", "sets", games2);
+  const url = await serve({ GP_ROM_DIR: romDir }, game, "sets", games2);
   const page = await browser.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.goto(url);
-  await until("Tapper's page", async () => (await text(page, "#title")) === "tapper / sets");
+  await until(`${game}'s page`, async () => (await text(page, "#title")) === `${game} / sets`);
   const listed = await until("the set picker", async () => (!(await page.isHidden("#rom-pick")) ? page.evaluate(() => [...document.querySelectorAll("#rom-pick option")].map((o) => o.value)) : null));
-  if (!listed.includes("rbtapper") || listed.length < 2) fail(`the set picker lists ${listed}`);
+  if (!listed.includes(play) || listed.length < 2) fail(`the set picker lists ${listed}`);
   const first = await page.evaluate(() => fetch("api/rom").then((r) => r.json()));
   ok(`the set picker lists the sets here (${listed.join(", ")}), playing ${first.set}`);
-  await page.selectOption("#rom-pick", "rbtapper");
-  await until("the page again on rbtapper", async () => {
+  await page.selectOption("#rom-pick", play);
+  await until(`the page again on ${play}`, async () => {
     const r = await page.evaluate(() => fetch("api/rom").then((x) => x.json()).catch(() => null)).catch(() => null);
-    return r?.set === "rbtapper" && r?.sha256 === RB && (await text(page, "#title").catch(() => "")) === "tapper / sets";
+    return r?.set === play && r?.sha256 === PLAY && (await text(page, "#title").catch(() => "")) === `${game} / sets`;
   }, 30000);
   const f0 = await frame(page);
   await page.waitForTimeout(800);
   if ((await frame(page)) <= f0) fail("the page doesn't play after the set changed");
-  const kept = readFileSync(join(home, "mechanics", "tapper", "rom-set"), "utf8").trim();
-  if (kept !== "rbtapper") fail(`the set kept for tapper: ${kept}`);
-  ok("choosing rbtapper plays it (its identity 05c721e1...), keeps it for the game, and the page plays on");
+  const kept = readFileSync(join(home, "mechanics", game, "rom-set"), "utf8").trim();
+  if (kept !== play) fail(`the set kept for ${game}: ${kept}`);
+  ok(`choosing ${play} plays it (its identity ${PLAY.slice(0, 8)}...), keeps it for the game, and the page plays on`);
   await page.close();
 
-  // gp serve --rom tapper=FILE: the set chosen from the command line.
-  writeFileSync(join(home, "mechanics", "tapper", "rom-set"), "tapper\n");
-  const rbZip = join(romDir, "rbtapper.zip");
-  const p = spawn(gp, ["serve", "--port", "0", "--games", games2, "--rom", `tapper=${rbZip}`], { env: { ...env, GP_ROM_DIR: romDir } });
+  // gp serve --rom GAME=FILE: the set chosen from the command line.
+  writeFileSync(join(home, "mechanics", game, "rom-set"), `${scored}\n`);
+  const p = spawn(gp, ["serve", "--port", "0", "--games", games2, "--rom", `${game}=${arcadeRom}`], { env: { ...env, GP_ROM_DIR: romDir } });
   servers.push(p);
   const base = await new Promise((res, rej) => {
     let out = "", err = "";
@@ -1015,16 +1056,16 @@ async function romSets() {
   // As the page does: ask whether the game is ready (asking starts making
   // it) and wait for it; its routes would wait too, but the page never asks
   // them before.
-  await until("tapper made ready", async () => {
-    const r = await (await fetch(`${base}api/mechanic/tapper/ready`)).json();
-    if (r.failed) fail(`gp serve couldn't make tapper ready: ${r.failed}`);
+  await until(`${game} made ready`, async () => {
+    const r = await (await fetch(`${base}api/mechanic/${game}/ready`)).json();
+    if (r.failed) fail(`gp serve couldn't make ${game} ready: ${r.failed}`);
     return r.ready;
   }, 120000);
-  const romRes = await fetch(`${base}mechanic/tapper/api/rom`);
+  const romRes = await fetch(`${base}mechanic/${game}/api/rom`);
   if (!romRes.ok) fail(`gp serve --rom: /api/rom answered ${romRes.status}: ${await romRes.text()}`);
   const viaServe = await romRes.json();
-  if (viaServe.set !== "rbtapper") fail(`gp serve --rom tapper=rbtapper.zip played ${viaServe.set}`);
-  ok("gp serve --rom tapper=FILE plays that set");
+  if (viaServe.set !== play) fail(`gp serve --rom ${game}=${arcadeRom} played ${viaServe.set}`);
+  ok(`gp serve --rom ${game}=FILE plays that set (${play})`);
   if (errors.length) fail(`the set picker's page threw: ${errors.join("; ")}`);
 }
 
@@ -1099,7 +1140,7 @@ async function agentOnThePage() {
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.goto(`${base}mechanic/${GAME}/?tab=play&log=1`);
-  await until("the page", async () => (await text(page, "#title").catch(() => "")).startsWith(GAME));
+  await until("the page", () => gamePageOpen(page), 60000);
   ok("gp serve answers /api/mechanic/GAME/ready, and the page opens once the game is ready");
   const agent = mcpClient();
   const paid = { command: "capture background", args: { run: GAME, agents: 1 } };
@@ -1217,7 +1258,7 @@ async function agentOnThePage() {
   const fp = await browser.newPage({ viewport: { width: 1000, height: 800 } });
   await fp.goto(first);
   const words = await until("the first screen", async () => text(fp, "#first"));
-  for (const w of ["plain-text rules file", "your own copy of the game", "What to say to your agent"]) {
+  for (const w of ["nothing to install", "your own copy of the game", "What to say to your agent"]) {
     if (!words.toLowerCase().includes(w.toLowerCase())) fail(`the first screen doesn't say ${w}: ${words}`);
   }
   if (/\bgp [a-z]/.test(words)) fail(`the first screen names a command: ${words}`);
@@ -1589,7 +1630,7 @@ async function pictureProposals() {
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.goto(`${base}mechanic/${GAME}/?tab=themes`);
-  await until("the page", async () => (await text(page, "#title").catch(() => "")).startsWith(GAME));
+  await until("the page", () => gamePageOpen(page), 60000);
   const agent = mcpClient();
   const propose = (png, why) => agent.call("gp_run", { command: "theme picture propose", args: { dir: theme, game: GAME, picture: "art/hero.png", png, why } });
   const bad = await propose(wide, "Wider.");
@@ -1694,7 +1735,7 @@ async function soundProposals() {
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.goto(`${base}mechanic/${GAME}/?tab=clips`);
-  await until("the page", async () => (await text(page, "#title").catch(() => "")).startsWith(GAME));
+  await until("the page", () => gamePageOpen(page), 60000);
   const lower = [{ op: "transpose", song: "theme", semitones: -12 }];
   const direct = await agent.call("sound_edit", { copy: "check_tune", ops: lower, write: true, confirmed_by_person: true });
   if (!/ACCEPT/.test(direct?.refused ?? "") || existsSync(own)) fail(`a direct write with the page open: ${JSON.stringify(direct).slice(0, 300)}`);
@@ -1804,7 +1845,7 @@ async function roleSoundProposals() {
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.goto(`${base}mechanic/${GAME}/?tab=themes`);
-  await until("the page", async () => (await text(page, "#title").catch(() => "")).startsWith(GAME));
+  await until("the page", () => gamePageOpen(page), 60000);
   const agent = mcpClient();
   const propose = (take, wav, why) => agent.call("gp_run", { command: "theme sound propose", args: { copy: theme, game: GAME, role: "hop", take, wav: join(work, wav), why } });
   const gap = await propose(3, "hop-2.wav", "A third hop.");
@@ -1868,8 +1909,8 @@ async function journeys() {
   });
   if (choices.join() !== "PORT A GAME I OWN,MAKE A THEME FOR A GAME,MAKE A NEW GAME") fail(`the three choices: ${choices}`);
   const intro = await text(page, "#intro");
-  if (!/called the model/.test(intro) || !/A template is a game's rules without its pictures/.test(intro)) fail(`the first screen doesn't say what the model and a template are: ${intro}`);
-  ok(`the first screen asks what the person wants to do: ${choices.join(", ")}, and says what the model and a template are`);
+  if (!/^Game Printer lets you create original games that run in your browser/.test(intro)) fail(`the first screen doesn't open with what Game Printer is for: ${intro}`);
+  ok(`the first screen asks what the person wants to do: ${choices.join(", ")}, after saying what Game Printer is for`);
   await shot(page, "start-1400");
   const fitsHere = () => page.evaluate(() => {
     const W = innerWidth;
@@ -2228,8 +2269,8 @@ async function copyTabs() {
 
   // A port: the four tabs, as before.
   await page.selectOption("#copy-pick", `port:${GAME}`);
-  await until("the picker opens the port", async () => page.url().includes(`/mechanic/${GAME}/`) && (await text(page, "#title").catch(() => "")).startsWith(GAME), 240000);
-  const portTabs = await until("the port's tabs", async () => { const t = await shown(); return t.split(" ").length === 4 ? t : null; });
+  await until("the picker opens the port", async () => page.url().includes(`/mechanic/${GAME}/`) && (await gamePageOpen(page)), 240000);
+  const portTabs = await until("the port's tabs", async () => { const t = await shown().catch(() => ""); return t.split(" ").length === 4 ? t : null; });
   if (portTabs !== "CLIPS* REFINE PLAY THEMES") fail(`the port's tabs: ${portTabs}`);
   const picks = await until("the port's picker lists the copies", async () => {
     const v = await page.evaluate(() => [...document.querySelectorAll("#game-pick option")].map((o) => o.value));
@@ -2326,7 +2367,7 @@ async function narrow() {
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.goto(`${base}mechanic/${GAME}/?tab=clips`);
-  await until("the page at 360 px", async () => (await text(page, "#title").catch(() => "")).startsWith(GAME));
+  await until("the page at 360 px", () => gamePageOpen(page), 60000);
   const fits = () => page.evaluate(() => {
     const W = innerWidth;
     // What sticks out past the window: the outermost element that does,
@@ -2407,6 +2448,7 @@ try {
   if (only === "arcade") {
     browser = await chromium.launch({ executablePath: browserPath, args: ["--no-sandbox"] });
     await arcade();
+    await romSets();
   } else if (only === "journeys") await journeysOnly();
   else await whole();
   console.log(`mechanic-page: passed in ${((Date.now() - t0) / 1000).toFixed(1)} s`);

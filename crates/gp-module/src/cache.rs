@@ -1,5 +1,5 @@
 //! Compiled modules kept on disk, so a gp call that opens a game's module
-//! doesn't compile it again: compiling Donkey Kong's or Tapper's module
+//! doesn't compile it again: compiling a ported game's module
 //! takes 0.4 to 0.7 s, a large share of scoring a short clip.
 //!
 //! An entry is keyed by the module's bytes and by everything wasmtime says
@@ -54,7 +54,7 @@ pub(crate) fn dir() -> Option<PathBuf> {
 }
 
 /// The folder's size cap: `$GP_MODULE_CACHE_MB` megabytes, else 2 GB.
-/// Donkey Kong's compiled module is about 14 MB.
+/// One ported NES game's compiled module is about 14 MB.
 fn cap_bytes() -> u64 {
     std::env::var("GP_MODULE_CACHE_MB")
         .ok()

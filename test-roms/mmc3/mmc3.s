@@ -1,6 +1,6 @@
 ; An MMC3 (mapper 4) test program of our own, for `gp testroms run` and the
-; open baseline baselines/mmc3 (docs/test-roms.md). Kirby's Adventure is
-; MMC3. The pinned collection's MMC3 tests cover the IRQ counter in depth;
+; open baseline baselines/mmc3 (docs/test-roms.md). Commercial NES games
+; use MMC3. The pinned collection's MMC3 tests cover the IRQ counter in depth;
 ; this one covers banking and mirroring, and runs the scanline IRQ the way
 ; a game does, so a recording holds bank registers changing every frame.
 ;

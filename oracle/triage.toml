@@ -25,7 +25,7 @@ class = "palette"
 verdict = "accepted-configuration"
 sources = ["gp-testrom"]
 frames = [0, 0]
-note = "Frame 0: power-on palette RAM isn't defined on hardware. With RAM init zeros or ones, Mesen fills it with a fixed table that matches blargg's power-up palette test (NesPpu.cpp: 09 01 00 01 ...); tetanes-core fills it with zeros. Super Mario Bros. writes the palette in its first frames and the two agree from then on; gp-testrom never writes it, so the same 24 bytes differ for the whole run and are reported once, at frame 0. A palette byte differing anywhere else is outside this record."
+note = "Frame 0: power-on palette RAM isn't defined on hardware. With RAM init zeros or ones, Mesen fills it with a fixed table that matches blargg's power-up palette test (NesPpu.cpp: 09 01 00 01 ...); tetanes-core fills it with zeros. A commercial game that writes the palette in its first frames shows the two agreeing from then on and the two agree from then on; gp-testrom never writes it, so the same 24 bytes differ for the whole run and are reported once, at frame 0. A palette byte differing anywhere else is outside this record."
 date = "2026-10-27"
 
 [[class]]

@@ -189,8 +189,8 @@ fn action_bit(model: &Model, action: &str) -> Option<u8> {
 }
 
 /// Frames a speed must hold, with the same input, on the ground, before it
-/// counts as the speed walking or running settles at. Longer than Super
-/// Mario Bros.' running timer, which keeps Mario at running speed for 10
+/// counts as the speed walking or running settles at. Longer than one
+/// platformer's running timer, which keeps the player at running speed for 10
 /// frames after B is let go.
 pub const SETTLE_FRAMES: usize = 16;
 
@@ -287,8 +287,8 @@ pub const WINDOW_FRAMES: usize = 4;
 /// which it doesn't move are left out. Over a few
 /// frames a speed with a fraction (half a pixel a frame, as one pixel every
 /// other frame) shows whole, and the most common is the walking speed even
-/// when the game also holds its enemies still for a moment (Super Mario
-/// Bros. does while Mario grows or dies), kicks them, or reuses a slot.
+/// when the game also holds its enemies still for a moment (one platformer
+/// does while the player grows or dies), kicks them, or reuses a slot.
 pub fn patrol_steps(trace: &Trace, model: &Model, entity: &str) -> Vec<(usize, Fixed)> {
     let w = WINDOW_FRAMES;
     let mut out = Vec::new();
@@ -482,8 +482,8 @@ pub fn model_graph(model: &Model) -> Graph {
     }
     // The stages in order (core `stages`): each leads to the next, the last
     // back to the first. A stage the model has no level for is a level of
-    // the graph too, as the original's mapping names it (Donkey Kong's 25m
-    // to 75m, played by the stand-in).
+    // the graph too, as the original's mapping names it (one game's first
+    // stage to its third, played by the stand-in).
     if let Some(st) = &model.stages {
         for (i, a) in st.order.iter().enumerate() {
             let b = &st.order[(i + 1) % st.order.len()];

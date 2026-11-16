@@ -371,7 +371,7 @@ pub enum Body {
         /// The person's words.
         #[serde(default)]
         text: String,
-        /// What was pointed at, in plain words ("a brick", "the goomba").
+        /// What was pointed at, in plain words ("a brick", "the walking enemy").
         #[serde(default)]
         label: String,
         /// The region in both games and the things resolved there, as

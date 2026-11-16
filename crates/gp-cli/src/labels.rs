@@ -8,8 +8,8 @@
 //! patched source) is read with its base's labels.
 //!
 //! Ported from game-printer's labels.rs and serve/labels.rs. The files the
-//! old repo generated under `$GP_HOME/work` from the Super Mario Bros., Mega
-//! Man 2 and Super Mario Bros. 2 disassemblies are those games' and are not
+//! old repo generated under `$GP_HOME/work` from three NES games'
+//! disassemblies are those games' and are not
 //! here.
 
 use std::fmt::Write as _;
@@ -76,7 +76,7 @@ pub enum LabelsCmd {
 
 #[derive(Args)]
 pub struct Which {
-    /// The game: a source ID a game's roms.toml lists (donkey-kong-oe), a
+    /// The game: a source ID a game's roms.toml lists (rooftop-oe), a
     /// game's folder name in the games checkout, or `mosshop`.
     pub source: String,
     /// The labels file, instead of the game's usual one.

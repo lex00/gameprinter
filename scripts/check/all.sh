@@ -2,20 +2,24 @@
 # all.sh GP (`just check-all`): `just check`, then the checks that until
 # now ran only by hand, each when what it needs is on this machine:
 #
-#   web-parity-arcade  Tapper's model in the page's player against the native
-#                      run (the games checkout's tapper/, tapper.zip)
+#   web-parity-arcade-GAME  each arcade game's model in the page's player
+#                      against the native run (a game of the games checkout
+#                      with model.toml and checks.toml's [web_parity], and
+#                      the romset its corpus is for in the ROM folder)
 #   web-page           the public page built and played headless, and its
-#                      lift's tests (the games checkout's donkey-kong/, the
+#                      lift's tests (the games checkout beside the repo, the
 #                      network for the registry and the page's tools)
 #   page-tests         the public page's share.test.mjs and theme-line.test.mjs
-#   score-dk           gp corpus score on Donkey Kong: every clip exact (the
-#                      games checkout, Donkey Kong: Original Edition in the
-#                      ROM folder)
-#   score-tapper       the same on Tapper (the games checkout, tapper.zip)
-#   mame-match         Tapper against MAME's capture, every frame, AY writes
-#                      too (tapper.zip, the capture tapper-m3b-cycle under
-#                      $GP_HOME/work/oracle); builds gp-arcade's compare
-#                      example in release
+#   score-GAME         gp corpus score on each game of the games checkout
+#                      with a corpus.toml: every clip exact (the ROM its
+#                      corpus.toml names in the ROM folder; for an arcade
+#                      game, roms.toml's system for it, SYSTEM.zip)
+#   mame-NAME          each MAME capture a game's oracle/mame-captures.toml
+#                      names, played on gp-arcade: every frame, AY writes
+#                      too (SYSTEM.zip, the capture NAME under
+#                      $GP_HOME/work/oracle, the input log the entry names,
+#                      with its hash); builds gp-arcade's compare example in
+#                      release
 #   baselines          gp baseline check over the repo's baselines/
 #
 # A check it can't run is one line: what was skipped and what is missing.
@@ -30,6 +34,7 @@ cd "$repo" || exit 2
 gp_home="${GP_HOME:-$HOME/.gameprinter}"
 roms="${GP_ROM_DIR:-$gp_home/roms}"
 games="${GP_GAMES_DIR:-$repo/../games}"
+facts() { python3 -I -B "$repo/scripts/check/game-facts.py" "$@"; }
 dry="${CHECK_ALL_DRY:-}"
 logs="${CARGO_TARGET_DIR:-$repo/target}/check-all"
 mkdir -p "$logs"
@@ -94,10 +99,11 @@ score() {
     echo "check-all: $line"
 }
 
+# mame_match ZIP CAPTURE LOG: the log on gp-arcade against MAME's capture.
 mame_match() {
     local out
-    out=$(cargo run -q --release -p gp-arcade --example compare -- --rom "$roms/arcade/tapper.zip" \
-        --capture "$gp_home/work/oracle/tapper-m3b-cycle" --log scripts/oracle/inputs/tapper-cycle.input --all 2>&1)
+    out=$(GP_GAMES_DIR="$games" cargo run -q --release -p gp-arcade --example compare -- --rom "$1" \
+        --capture "$2" --log "$3" --all 2>&1)
     local status=$?
     echo "$out"
     [ "$status" -eq 0 ] && grep -Eq 'all [0-9]+ frames match MAME' <<<"$out"
@@ -117,18 +123,35 @@ if ! step check just check; then
     exit 1
 fi
 
-tapper_zip="$roms/arcade/tapper.zip"
-if [ ! -f "$games/tapper/model.toml" ]; then
-    skip web-parity-arcade "no games checkout with tapper/ at $games"
-elif [ ! -f "$tapper_zip" ]; then
-    skip web-parity-arcade "no $tapper_zip"
-else
-    step web-parity-arcade just --no-deps web-parity-arcade
+# zip_of GAME: the romset an arcade game's corpus is for, SYSTEM.zip in
+# the ROM folder, whether or not it is there.
+zip_of() {
+    echo "$roms/arcade/$(facts "$1" system).zip"
+}
+
+arcade_games=$(facts arcade "$games" 2>/dev/null || true)
+parity=0
+for g in $arcade_games; do
+    name=$(basename "$g")
+    if [ ! -f "$g/model.toml" ] || ! facts "$g" check web_parity.clips > /dev/null; then
+        continue
+    fi
+    parity=1
+    zip=$(zip_of "$g")
+    if [ ! -f "$zip" ]; then
+        skip "web-parity-arcade-$name" "no $zip"
+    else
+        step "web-parity-arcade-$name" just --no-deps web-parity-arcade "$g"
+    fi
+done
+if [ "$parity" -eq 0 ]; then
+    skip web-parity-arcade "no arcade game with model.toml and checks.toml's [web_parity] in the games checkout at $games"
 fi
 
-# The recipe builds from the games checkout beside the repo.
-if [ ! -f "$repo/../games/donkey-kong/package.toml" ]; then
-    skip web-page "no games checkout with donkey-kong/ beside the repo, at $repo/../games"
+# The recipe builds from the games checkout beside the repo, the game its
+# page.toml names.
+if ! page_game=$(scripts/web/page-game.sh "$repo/../games" 2>/dev/null) || [ ! -f "$page_game/package.toml" ]; then
+    skip web-page "no games checkout beside the repo whose page.toml names a game package, at $repo/../games"
 elif [ -z "$dry" ] && ! online; then
     skip web-page "no network (the registry at raw.githubusercontent.com doesn't answer)"
 else
@@ -142,34 +165,60 @@ else
     skip page-tests "no node on PATH"
 fi
 
-dk_rom=$(sed -n 's/^rom = "\([0-9a-f]*\)"$/\1/p' "$games/donkey-kong/corpus.toml" 2>/dev/null | head -1)
-if [ ! -f "$games/donkey-kong/corpus.toml" ]; then
-    skip score-dk "no games checkout with donkey-kong/ at $games"
 # The scan is read whole before it is searched: piped into grep -q, gp
 # could be cut off once grep has its line, and pipefail took that for no ROM.
-elif [ ! -d "$roms" ] || ! grep -q "\"sha256\": \"$dk_rom\"" <<<"$(GP_ROM_DIR="$roms" "$gp" --json roms scan 2>/dev/null)"; then
-    skip score-dk "no Donkey Kong ROM the corpus is for (sha256 $dk_rom) in $roms"
-else
-    what="$gp corpus score --run check-all-dk $games/donkey-kong, every clip exact"
-    step score-dk score dk "$games/donkey-kong"
+scan=""
+scored=0
+for g in $(facts list "$games" corpus.toml 2>/dev/null || true); do
+    name=$(basename "$g")
+    scored=1
+    rom=$(facts "$g" rom || true)
+    if [ "$(facts "$g" platform || true)" = arcade ]; then
+        zip=$(zip_of "$g")
+        if [ ! -f "$zip" ]; then
+            skip "score-$name" "no $zip, the romset $name's corpus is for (sha256 $rom)"
+            continue
+        fi
+    else
+        if [ -z "$scan" ] && [ -d "$roms" ]; then
+            scan=$(GP_ROM_DIR="$roms" "$gp" --json roms scan 2>/dev/null)
+        fi
+        if [ -z "$rom" ] || ! grep -q "\"sha256\": \"$rom\"" <<<"$scan"; then
+            skip "score-$name" "no ROM $name's corpus is for (sha256 $rom) in $roms"
+            continue
+        fi
+    fi
+    what="$gp corpus score --run check-all-$name $g, every clip exact"
+    step "score-$name" score "$name" "$g"
+done
+if [ "$scored" -eq 0 ]; then
+    skip score "no game with a corpus.toml in the games checkout at $games"
 fi
 
-if [ ! -f "$games/tapper/corpus.toml" ]; then
-    skip score-tapper "no games checkout with tapper/ at $games"
-elif [ ! -f "$tapper_zip" ]; then
-    skip score-tapper "no $tapper_zip"
-else
-    what="$gp corpus score --run check-all-tapper $games/tapper, every clip exact"
-    step score-tapper score tapper "$games/tapper"
-fi
-
-if [ ! -f "$tapper_zip" ]; then
-    skip mame-match "no $tapper_zip"
-elif [ ! -d "$gp_home/work/oracle/tapper-m3b-cycle" ]; then
-    skip mame-match "no MAME capture at $gp_home/work/oracle/tapper-m3b-cycle (just mame-record makes one)"
-else
-    what="cargo run --release -p gp-arcade --example compare -- --rom $tapper_zip --capture $gp_home/work/oracle/tapper-m3b-cycle --log scripts/oracle/inputs/tapper-cycle.input --all, every frame matching"
-    step mame-match mame_match
+captured=0
+for g in $(facts list "$games" oracle/mame-captures.toml 2>/dev/null || true); do
+    while read -r cap system input input_sha _frames _sha; do
+        [ -n "$cap" ] || continue
+        captured=1
+        zip="$roms/arcade/$system.zip"
+        dir="$gp_home/work/oracle/$cap"
+        log="$g/$input"
+        if [ ! -f "$zip" ]; then
+            skip "mame-$cap" "no $zip"
+        elif [ ! -d "$dir" ]; then
+            skip "mame-$cap" "no MAME capture at $dir (just mame-record $zip $log $cap 0 makes one)"
+        elif [ "$(shasum -a 256 < "$log" 2>/dev/null | cut -d' ' -f1)" != "$input_sha" ]; then
+            what=""
+            echo "check-all: mame-$cap FAILED: $log isn't the input $g/oracle/mame-captures.toml names (sha256 $input_sha)"
+            failed+=("mame-$cap")
+        else
+            what="cargo run --release -p gp-arcade --example compare -- --rom $zip --capture $dir --log $log --all, every frame matching"
+            step "mame-$cap" mame_match "$zip" "$dir" "$log"
+        fi
+    done < <(facts "$g" captures || true)
+done
+if [ "$captured" -eq 0 ]; then
+    skip mame "no game with oracle/mame-captures.toml in the games checkout at $games"
 fi
 
 step baselines env GP_ROM_DIR="$roms" "$gp" baseline check

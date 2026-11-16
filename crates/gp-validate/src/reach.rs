@@ -65,7 +65,7 @@ pub fn outcomes(plan: &Plan, spec: &Spec, sim: &dyn Sim) -> Vec<Outcome> {
                         ));
                     }
                     // The search's moves walk and jump; none climbs, so a
-                    // goal a ladder leads to (Donkey Kong's Pauline) is
+                    // goal a ladder leads to (a captive at the top of a stage) is
                     // never found, and a miss says nothing about a player
                     // that climbs.
                     None if climbs(spec) => {

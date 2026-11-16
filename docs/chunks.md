@@ -38,9 +38,9 @@ A level is read as a grid of cells. Everything below works on that grid, so it's
 | Layout asset kind | Cell value | Tile kinds | Objects |
 |---|---|---|---|
 | `level-grid` with a `metatiles` tileset (Moss Hop, the originals) | The grid's metatile number, named by the tileset | none beyond the class | none |
-| `smb-area-objects` | The block buffer's metatile (`gp_assets::smb_area`), named by the metatile sets | coin, hidden, bumpable, breakable, climbable, the contents of a block, pipe parts (`AreaTables::properties`) | The area's objects and its header |
-| `smb2-level-objects` | The area's tile (`gp_assets::smb2_area`), its tiles from `tile_quads_1` to `_4` | top only, climbable (the collision tables), doors, jars and light entrances by cell | The level's objects and its header |
-| `mm2-screens` | The 16-pixel quadrant's byte of its metatile (two collision bits and a tile group) | none beyond the class | none: the screens are raw metatiles |
+| `nes-area-objects-v1` | The block buffer's metatile (`gp_assets::smb_area`), named by the metatile sets | coin, hidden, bumpable, breakable, climbable, the contents of a block, pipe parts (`AreaTables::properties`) | The area's objects and its header |
+| `nes-area-objects-v2` | The area's tile (`gp_assets::smb2_area`), its tiles from `tile_quads_1` to `_4` | top only, climbable (the collision tables), doors, jars and light entrances by cell | The level's objects and its header |
+| `nes-screens-v1` | The 16-pixel quadrant's byte of its metatile (two collision bits and a tile group) | none beyond the class | none: the screens are raw metatiles |
 | `ppu-strings` (Donkey Kong, gameprinter only) | The tile the string writes on the first name table, 0 where nothing is drawn; the level is the name table's 32 by 30 cells | none beyond the class | Each update of the string: a `row` or `column` of tiles, with `x`, `y` and `length` |
 
 Levels that share a layout (Super Mario Bros.' 56 levels use 34 areas) are read once, with every level name kept.
@@ -145,7 +145,7 @@ Moss Hop's one level gives one gap 2 wide (a jump) and, with `--min-count 1`, it
 | Part | General | Per game (as data) |
 |---|---|---|
 | The grid, classes and spawns | One reader for every model, through the compiled level | none |
-| Cell values, names, tile kinds | One reader per layout asset kind (grid, `smb-area-objects`, `smb2-level-objects`, `mm2-screens`); a new game in a known kind needs nothing | The formats' tables, lifted by the asset map |
+| Cell values, names, tile kinds | One reader per layout asset kind (grid, `nes-area-objects-v1`, `nes-area-objects-v2`, `nes-screens-v1`); a new game in a known kind needs nothing | The formats' tables, lifted by the asset map |
 | Objects and footprints | One method for any object-list format: builds of the list's prefixes, by the format's own builder | The format's unit splitter and kind names, beside the format's parser in gp-assets |
 | Groups, gaps, windows, slices, compounds | Rules on the grid that know no game | The thresholds in `settings` |
 | Function | Classes, kinds, interactive matches by tile numbers, spawns, placement, adjacency; reachability through the model's own movement | The gaps catalog's kinds, the model's mechanics |

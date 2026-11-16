@@ -273,7 +273,7 @@ struct Files<'a> {
     /// Tiles assets a theme restyles whole, by asset name: the theme's file.
     tiles_from: BTreeMap<String, std::path::PathBuf>,
     /// The same by model slot, which wins over the asset's: two slots
-    /// filled from one asset (Original Edition's title and 50m both draw
+    /// filled from one asset (one game's title and second stage both draw
     /// CHR bank 1) may each have a restyle of their own.
     tiles_from_slot: BTreeMap<String, std::path::PathBuf>,
     /// Layout entries a theme draws as pictures (format 0.1.3), by model
@@ -408,7 +408,7 @@ impl Files<'_> {
 
     /// A palettes slot, with the background color `present` names.
     ///
-    /// A slot shorter than a whole set (Super Mario Bros.' snow palettes are
+    /// A slot shorter than a whole set (one platformer's snow palettes are
     /// one palette) is written over the start of `base`, as the game writes
     /// it over the area type's set.
     fn palettes(
@@ -663,8 +663,8 @@ pub fn art_themed(model: &Model, spec: &Spec, dir: &Path, theme: &Resolved) -> R
 /// and a spec of it (which may lack levels: only its kinds' order is
 /// read), for a model that is `names`' with levels and entity kinds taken
 /// out: a ROM loaded only to play another template's model
-/// (Donkey Kong (JU) plays Original Edition's without 50m and the
-/// stage-clear scene). The sprite palette sets and the HUD's (`frame-N-S`,
+/// (one game's first release plays a later edition's model without its
+/// second stage and the stage-clear scene). The sprite palette sets and the HUD's (`frame-N-S`,
 /// `hud-S`, `glyph-S-...`) are numbered by `names`' levels and the sprite
 /// frames (`frame-N`) by `names`' kinds, so a large-art look made on
 /// `names`' pictures fits these too. What `names` has and the model hasn't
@@ -1985,7 +1985,7 @@ fn hud_art(
             .writes(&text, &l.entry)
             .map_err(|e| format!("present.hud.layer: {e}"))?;
         let (names, mut attrs) = name_table(&writes);
-        // A layer that writes no attribute bytes (Donkey Kong's status
+        // A layer that writes no attribute bytes (one game's status
         // box) takes the palettes the level's own string gives the name
         // table, which the game writes once for both.
         if !writes_attributes(&writes)
@@ -2255,8 +2255,8 @@ fn name_table(writes: &[gp_assets::ppu::Write]) -> (Vec<Option<u8>>, Vec<u8>) {
 /// each level's cells colored by their tile kind and every entity a box of
 /// its size, so the generated game is playable and the simulation can be
 /// seen while the art is missing. A last resort: a model gives its art
-/// through its asset slots and `present` (Mega Man 2's and Super Mario
-/// Bros. 2's do). It reads only the spec, never a theme.
+/// through its asset slots and `present` (two NES games' models
+/// do). It reads only the spec, never a theme.
 pub fn tile_art(spec: &Spec, screen: gp_present::Screen) -> Art {
     use gp_sim::spec::Tile;
     let color = |t: Tile| -> [u8; 4] {
@@ -2497,8 +2497,8 @@ fn layout_picture(
 
 /// A level drawn from a PPU update string (core `level.layout_ppu_strings`)
 /// shows the palettes the string writes ($3F00 to $3F1F) over its own, in
-/// the string's order, as the game's screen does: Donkey Kong's 50m, 75m
-/// and 100m strings each write a stage's colors after the first set.
+/// the string's order, as the game's screen does: one game's second, third
+/// and fourth stages' strings each write a stage's colors after the first set.
 /// A level drawn otherwise is left as it is.
 fn layout_palette_writes(
     model: &Model,
@@ -2577,7 +2577,7 @@ fn ppu_layout_picture(
     let (cols, rows) = (size[0].min(32), size[1].min(30));
     // Color 0 is left clear, so the backdrop (the scene's clear color)
     // shows there and a sprite behind the background (attribute bit 5)
-    // shows through it, as the PPU draws: Donkey Kong's 75m elevators in
+    // shows through it, as the PPU draws: one game's elevators in
     // the pulleys ($E968).
     let mut ix = Indexed::new(size[0] * 8, size[1] * 8);
     ix.roles.fill(role_id("sky"));
@@ -2680,8 +2680,8 @@ fn cell_look(
 ) -> Result<gp_present::CellLook, String> {
     use gp_sim::spec::Tile;
     // A level whose cells are single tiles (a PPU string's name table,
-    // Donkey Kong) has no role for a tile: a cell the game changes to a
-    // kind that isn't empty (100m's ending lays a girder under the fallen
+    // as one ported game has) has no role for a tile: a cell the game changes to a
+    // kind that isn't empty (one game's last stage's ending lays a girder under the fallen
     // foe) is drawn in role `terrain`, so a theme colors it as ground,
     // not as the backdrop it tints (paper's cream, 2026-11-07).
     let ink_of = |t: Tile| (lt.single && t != Tile::Empty).then(|| role_id("terrain"));
@@ -2773,7 +2773,7 @@ fn cell_look(
 }
 
 /// The tiles slot a level's metatiles are drawn from: the only one, or else
-/// the only one no entity's sprite draws from (Super Mario Bros. has a
+/// the only one no entity's sprite draws from (one platformer has a
 /// background bank and a sprite bank). None when that doesn't pick one.
 pub fn level_tiles_slot(model: &Model) -> Option<String> {
     let all: Vec<&String> = model
@@ -2785,8 +2785,8 @@ pub fn level_tiles_slot(model: &Model) -> Option<String> {
     if all.len() == 1 {
         return Some(all[0].clone());
     }
-    // A model whose sprites draw from the background's table too (Donkey
-    // Kong, drawn into the name table) names its level's slot by role.
+    // A model whose sprites draw from the background's table too (one ported
+    // game, drawn into the name table) names its level's slot by role.
     let tilesets: Vec<&&String> = all
         .iter()
         .filter(|n| {
@@ -2892,7 +2892,7 @@ mod tests {
     use super::*;
 
     /// A sprite whose right half is its left half mirrored, as a game that
-    /// saves tiles draws one (Super Mario Bros.' standing Mario's feet):
+    /// saves tiles draws one (one platformer's standing player's feet):
     /// the right tile must be drawn flipped, or the two halves don't meet
     /// and the background shows through between them. A made-up tile
     /// whose right four columns are color 1 stands for the left half.
@@ -2925,7 +2925,7 @@ mod tests {
     }
 
     /// An arcade game's lifted folder, as `gp assets lift` writes it for
-    /// Tapper: its map names `mcr-tiles` and `mcr-sprites` pictures, which
+    /// a Midway MCR game: its map names `mcr-tiles` and `mcr-sprites` pictures, which
     /// an NES map hasn't got, beside a `byte-rows` table the model's slot
     /// reads. The model's pictures are drawn from it (by tile kind, as it
     /// names no picture slot) instead of the map being refused, so the

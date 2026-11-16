@@ -17,9 +17,9 @@
 //! - `contacts` reads the board's work RAM (E000 to E7FF) and its sprite
 //!   list where the NES's RAM and sprite table are, and the player's bytes
 //!   from the ROM dataset or the game's mapping (entities.player[0].x and
-//!   .y, Tapper's E2E9 and E2E6). On arcade a head hit must rise for two
-//!   frames: a one-frame rise is a move between rows (Tapper's bartender
-//!   changing bars), not a jump.
+//!   .y, two RAM addresses on an arcade board). On arcade a head hit must
+//!   rise for two frames: a one-frame rise is a move between rows (a
+//!   player stepping from one row to the next), not a jump.
 //! - `compare` measures jumps from the game's mapping on the NES
 //!   (demo::measure_jumps, as `gp mechanic say --judge` does). An arcade
 //!   game's player doesn't jump, so there it compares the player's place
@@ -235,7 +235,7 @@ fn compare_text(new: u64, a: &[Value], old: u64, b: &[Value]) -> (String, Value)
         _ => "lower",
     };
     let text = format!(
-        "The see-through Mario is clip {old}. The solid one is clip {new}.\n{}\n\nNothing to answer: this was measured.",
+        "The see-through player is clip {old}. The solid one is clip {new}.\n{}\n\nNothing to answer: this was measured.",
         match d {
             0 => format!("Their highest jumps are the same height, {ta} px."),
             d if d > 0 =>
@@ -408,7 +408,7 @@ fn replay(paths: &Paths, s: &Session, clip: u64, rom: &[u8]) -> Result<Replay> {
         super::probe::step(&mut o, f)?;
         match &o {
             OriginalRuntime::Arcade(a) => {
-                let t = a.tapper();
+                let t = a.mcr();
                 r.ram.push(
                     (crate::arcade_stage0::RAM_BASE..crate::arcade_stage0::RAM_END)
                         .map(|k| t.peek(k))

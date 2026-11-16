@@ -159,11 +159,11 @@ The three asset maps hold 1,251 assets in 21 formats. They fall into a few kinds
 
 | Pattern | Formats | Shape | Instances | Model kind |
 |---|---|---|---|---|
-| Tile graphics | `chr-2bpp`, `mm2-chr-uploads` | 16 bytes a tile | All three: the CHR banks; Mega Man 2 uploads CHR RAM from PRG | `tiles` |
-| Palettes | `palette`, `mm2-palettes` | 4 colors a palette, sets of 8 | Super Mario Bros.' per area type, Mega Man 2's per stage, Super Mario Bros. 2's per world | `palettes` |
-| Metatile sets | `metatiles`, `mm2-metatiles` | 4 tile numbers (2 by 2) and an attribute | All three; Mega Man 2's are 4 by 4 of 2 by 2 | `metatiles` |
-| Object lists (level geometry) | `smb-area-objects`, `smb2-level-objects`, `mm2-screens` | variable-length records with a terminator, one list per area or screen | All three | `level-objects` |
-| Spawn lists | `smb-enemy-objects`, `smb2-enemy-objects`, `mm2-spawns` | records of (position, kind) | All three | `spawn-objects` |
+| Tile graphics | `chr-2bpp`, `nes-chr-uploads-v1` | 16 bytes a tile | All three: the CHR banks; Mega Man 2 uploads CHR RAM from PRG | `tiles` |
+| Palettes | `palette`, `nes-palette-sets-v1` | 4 colors a palette, sets of 8 | Super Mario Bros.' per area type, Mega Man 2's per stage, Super Mario Bros. 2's per world | `palettes` |
+| Metatile sets | `metatiles`, `nes-metatiles-4x4-v1` | 4 tile numbers (2 by 2) and an attribute | All three; Mega Man 2's are 4 by 4 of 2 by 2 | `metatiles` |
+| Object lists (level geometry) | `nes-area-objects-v1`, `nes-area-objects-v2`, `nes-screens-v1` | variable-length records with a terminator, one list per area or screen | All three | `level-objects` |
+| Spawn lists | `nes-spawn-objects-v1`, `nes-spawn-objects-v2`, `nes-spawn-objects-v3` | records of (position, kind) | All three | `spawn-objects` |
 | Pointer tables | `pointers` | split low and high bytes, or words, into a region | Super Mario Bros.' area and enemy pointers, Super Mario Bros. 2's 25 | (read by the decoders) |
 | Per-kind property tables | `table` with `count` equal to the number of object kinds, several columns | one row an object kind | Mega Man 2's `enemy_ai_routine`, `enemy_spawn`, `boss_ai_flags`; Super Mario Bros. 2's `enemy_initialization` and `enemy_behavior_pointer` (142 kinds) | `table`, read by `ext_tables` or a slot's `entities` |
 | Physics tables | `table` or `byte-rows` whose names say speed, velocity, acceleration, gravity, force or jump | a few rows of speeds | Super Mario Bros.' `player_physics`, `player_max_speed_*`; Super Mario Bros. 2's `player_control_acceleration`, `enemy_ninji_jump_velocity`, `character_stats`; Mega Man 2's `airman_jump`, `quickman_y_vel` | `table`; the values are a component's parameters, cited by evidence |
@@ -173,7 +173,7 @@ The three asset maps hold 1,251 assets in 21 formats. They fall into a few kinds
 | Timing and chance tables | names with rng, random, delay, ranges, heights, times | waits, masks and choices | Super Mario Bros.' `bowser_ranges` and `bowser_flame_heights`, Mega Man 2's `cannon_fire_rng_mask` and `heatman_random_delay`, Super Mario Bros. 2's `birdo_spit_delay` | a component's `waits`, a hook's `ext_tables` marked content |
 | Screen layouts | names with ppu_, nametable, layout, buffer | whole screens or PPU writes | Mega Man 2's `password_ppu_layout`, Super Mario Bros. 2's `title_layout` and the ending's screens | presentation |
 | Text | `byte-rows` with a `charset`, `ppu-strings` | characters | Super Mario Bros.' names and messages, Super Mario Bros. 2's story | presentation |
-| Music and sound | `smb-music`, `byte-rows` named note, envelope, freq, sfx | notes and lengths | All three | presentation |
+| Music and sound | `nes-music-v1`, `byte-rows` named note, envelope, freq, sfx | notes and lengths | All three | presentation |
 | Level structure tables | `table` named area, world, screen, checkpoint, link | one row a level or screen | Super Mario Bros.' `world_areas`; Mega Man 2's `*_screen_links`, `*_checkpoints`; Super Mario Bros. 2's `level_area_starts` | level fields (`next`, exits) |
 | Code and other bytes | `blobs` | anything | Mega Man 2 and Super Mario Bros. 2 | none |
 

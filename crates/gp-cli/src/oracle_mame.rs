@@ -330,7 +330,7 @@ pub(crate) fn play(
     max: usize,
 ) -> Compared {
     let frames = cap.rows.len().min(log.frames.len() + 1);
-    let mut t = gp_arcade::Tapper::power_on(set);
+    let mut t = gp_arcade::Mcr::power_on(set);
     let mut c = Compared {
         frames,
         differ: 0,

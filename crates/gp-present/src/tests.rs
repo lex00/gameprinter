@@ -360,7 +360,7 @@ fn a_body_clock_draws_then_steps_when_its_timer_runs_out() {
     let mut w = world(0x8000);
     let mut a = Animator::new();
     // A new body's timer has run out: it draws the first picture, then
-    // steps and sets the timer to 4, as Super Mario Bros.'
+    // steps and sets the timer to 4, as one platformer's
     // AnimationControl does.
     let got = pictures_with(&p, &spec, &mut w, &mut a, &[true; 10]);
     assert_eq!(got, [3, 5, 5, 5, 5, 7, 7, 7, 7, 3]);
@@ -807,7 +807,7 @@ fn a_clip_timed_by_the_speed_before_picks_its_time_a_frame_late() {
     let spec = spec();
     // Fast for two frames, then slow: the walk's picture changes on the
     // third frame and takes the slow time there, or the fast one when it
-    // reads the speed of the frame before (Super Mario Bros.'
+    // reads the speed of the frame before (one platformer's
     // GetPlayerAnimSpeed runs before ImposeFriction).
     let (fast, slow) = (0x20000, 0x8000);
     let speeds = [fast, fast, slow, slow, slow, slow, slow];
@@ -1208,7 +1208,7 @@ fn a_bump_rises_and_falls_back_to_its_cell() {
         gravity: 0x5000,
         max_fall: None,
     };
-    // Super Mario Bros.' bouncing block (BumpBlock, ImposeGravityBlock):
+    // One platformer's bouncing block (BumpBlock, ImposeGravityBlock):
     // back at its cell on the 14th frame.
     let path: Vec<i64> = (1..=14).map(|n| m.offset(n)).collect();
     assert_eq!(
@@ -1349,7 +1349,7 @@ fn an_effect_stops_while_frozen_unless_it_goes_on() {
         w.held_cells.push((1, Tile::Solid, 15));
         a.step(&p, &spec, &w);
         a.fired_kinds(&p, &spec, &w, &[(0, None)]);
-        // The game machine's frozen state, as Mario's death holds it.
+        // The game machine's frozen state, as the player's death holds it.
         w.machines[0].state = 1;
         let mut out = Vec::new();
         for _ in 0..3 {
@@ -1447,7 +1447,7 @@ fn present_text_keeps_counter_tests_lengths_and_the_name_table() {
     assert_eq!(crate::text::read(&text).unwrap(), p);
 }
 
-/// Donkey Kong's points ($CFC6, $CFA8): a smash's 500 waits, drawing
+/// One game's points ($CFC6, $CFA8): a smash's 500 waits, drawing
 /// nothing, until the barrel goes, then shows until the frame after its
 /// timer (counter 1 here) reads 0.
 #[test]

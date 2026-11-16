@@ -2,7 +2,7 @@
 //! main.rs had them (wave 9 of the port). `input-log generate` also writes
 //! an arcade log (`--arcade SYSTEM --columns COLUMNS`, the layout a game's
 //! presses files name), and `input-log check` reads one, so both work for
-//! Tapper as for an NES game. `input-log fork` cuts a run at a frame and
+//! an arcade game as for an NES game. `input-log fork` cuts a run at a frame and
 //! goes on with new presses, on either platform.
 
 use std::fs;
@@ -38,11 +38,11 @@ pub enum InputLogCmd {
         /// (baselines/), so a recording can replay a baseline's input.
         #[arg(long, conflicts_with_all = ["frames", "holds"])]
         baseline: Option<PathBuf>,
-        /// Write an arcade log for this MAME set (`tapper`), with --columns.
+        /// Write an arcade log for this MAME set (`acmeset`), with --columns.
         #[arg(long, requires = "columns", conflicts_with = "baseline")]
         arcade: Option<String>,
         /// The arcade log's columns, one letter a button (`CSRLDUT` for
-        /// Tapper), as the game's presses files name them.
+        /// one arcade game), as the game's presses files name them.
         #[arg(long, requires = "arcade")]
         columns: Option<String>,
         /// Write here instead of stdout.

@@ -153,7 +153,7 @@ impl Seen {
     fn run(&mut self, w: &mut Writer, clip: &ClipInput) -> Result<Levels> {
         let recipe = clip.key()?;
         w.recipe_arcade(clip, &recipe, &ez::layout(&self.set))?;
-        let mut t = gp_arcade::Tapper::power_on(&self.set);
+        let mut t = gp_arcade::Mcr::power_on(&self.set);
         let mut watcher = Watcher::new(false);
         for f in &clip.inputs {
             let frame = t.frame() + 1;
@@ -518,7 +518,7 @@ pub(crate) fn rerun(
     for c in all {
         let recipe = c.key()?;
         let mut count: BTreeMap<(bool, u16), usize> = BTreeMap::new();
-        let mut t = gp_arcade::Tapper::power_on(set);
+        let mut t = gp_arcade::Mcr::power_on(set);
         for f in &c.inputs {
             let controls = Controls::from_bits(f.buttons_word());
             t.set_accesses(!addrs.is_empty());
@@ -591,7 +591,7 @@ pub(crate) fn rerun(
 /// them.
 pub(crate) fn detail(rom: &[u8], clip: &ClipInput, a: u64, last: u64) -> Result<(Value, String)> {
     let set = Romset::from_zip(rom)?;
-    let mut t = gp_arcade::Tapper::power_on(&set);
+    let mut t = gp_arcade::Mcr::power_on(&set);
     let mut text = String::new();
     let mut n = 0usize;
     for (i, f) in clip.inputs.iter().enumerate() {
@@ -631,7 +631,7 @@ pub(crate) fn point(
 ) -> Result<Value> {
     let set = Romset::from_zip(rom)?;
     let n = usize::try_from(frame)?.min(clip.inputs.len());
-    let mut t = gp_arcade::Tapper::power_on(&set);
+    let mut t = gp_arcade::Mcr::power_on(&set);
     let mut writers: BTreeMap<u16, (u16, u64, u8)> = BTreeMap::new();
     for f in &clip.inputs[..n] {
         t.set_accesses(true);

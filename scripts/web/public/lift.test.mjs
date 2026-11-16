@@ -5,13 +5,13 @@
 //   GP_WEB_LIFT_OUT  the folder scripts/web/build-lift.sh wrote (required;
 //                    the tests skip without it)
 //   GP_WEB_PREP      the native gp-web-prep, to compare with (optional)
-//   GP_ROM_DIR       where the person's ROMs are; the Donkey Kong (JU) and
-//                    Original Edition ROMs are found there by their hashes
-//                    and read, never copied
+//   GP_ROM_DIR       where the person's ROMs are; the ROMs of the lift
+//                    folder's templates (its sources-nes.toml) are found
+//                    there by their hashes and read, never copied
 //   GP_WORKER_OUT    where the comparison writes its files (else the
 //                    system's temp folder)
 //   GP_WEB_LIFT_ARCADE_OUT  a folder like GP_WEB_LIFT_OUT's for an arcade
-//                    game (Tapper's: lift/ with gp-web-lift.wasm and the
+//                    game (lift/ with gp-web-lift.wasm and the
 //                    play/lift/ files build-page.sh writes for it); the
 //                    arcade tests skip without it. They lift made-up zips
 //                    only: a set is known by its chips' real hashes, so
@@ -30,11 +30,37 @@ import { MemFs, runWasi } from "./wasi.js";
 import { themesInOrder } from "./lift.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const repo = path.resolve(here, "../../..");
 const out = process.env.GP_WEB_LIFT_OUT;
 const skip = out ? false : "GP_WEB_LIFT_OUT isn't set (run scripts/web/build-lift.sh OUT first)";
-const DK = "aa408f5a6b97c0d738e7e8b489a5617ad4a9ecdee2b05c4ee504210ce31b2825";
-const OE = "45440d8ef512b4660dce0c753e110004aef96fa30f2967f9260e946d808db07d";
+
+// The game the lift folder is for, from the folder itself: game.json's
+// title and templates, sources-nes.toml's hashes and titles, and each
+// template's load.json when it only loads to play another's model. The
+// tests name no game: what they hold a lift to is the folder's own.
+const liftDir = out ? path.join(out, "lift") : null;
+const gameJson = out ? JSON.parse(fs.readFileSync(path.join(liftDir, "game.json"), "utf8")) : { templates: [] };
+// The [[source]] tables of sources-nes.toml, as {id, title, sha256}: the
+// fields are one key = "string" a line.
+function sources() {
+  if (!out) return [];
+  const list = [];
+  for (const line of fs.readFileSync(path.join(liftDir, "sources-nes.toml"), "utf8").split("\n")) {
+    if (line.trim() === "[[source]]") list.push({});
+    const m = /^(id|title|sha256) = "([^"]*)"$/.exec(line.trim());
+    if (m && list.length) list.at(-1)[m[1]] = m[2];
+  }
+  return list;
+}
+const SOURCES = sources();
+const loadOf = (t) => {
+  const f = out && path.join(liftDir, t, "load.json");
+  return f && fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null;
+};
+// A template's model name (model.toml's [model] name).
+const modelName = (t) => /^\[model\][^[]*?^name = "([^"]+)"/ms.exec(fs.readFileSync(path.join(liftDir, t, "model.toml"), "utf8"))?.[1] ?? null;
+const TEMPLATES = gameJson.templates.map((id) => ({ id, source: SOURCES.find((s) => s.id === id) ?? null, load: loadOf(id) }));
+const owners = TEMPLATES.filter((t) => !t.load);
+const loaders = TEMPLATES.filter((t) => t.load);
 
 async function lift(rom, from = out, romPath = "/rom.nes") {
   const dir = path.join(from, "lift");
@@ -61,7 +87,7 @@ function headerless(bytes) {
 
 function findRom(sha) {
   const dir = process.env.GP_ROM_DIR && path.join(process.env.GP_ROM_DIR, "nes");
-  if (!dir || !fs.existsSync(dir)) return null;
+  if (!sha || !dir || !fs.existsSync(dir)) return null;
   for (const name of fs.readdirSync(dir)) {
     const p = path.join(dir, name);
     if (!name.endsWith(".nes") || !fs.statSync(p).isFile()) continue;
@@ -70,6 +96,8 @@ function findRom(sha) {
   }
   return null;
 }
+for (const t of TEMPLATES) t.rom = findRom(t.source?.sha256);
+const romSkip = (t) => skip || (t?.rom ? false : `the ${t?.source?.title ?? "game's"} ROM ${t?.id ?? ""} isn't in $GP_ROM_DIR/nes`);
 
 // The themes the page gives the lift are listed in Settings, Theme in the
 // order given (page.js puts the game's own namespace first), not in the
@@ -86,7 +114,7 @@ test("the themes given are listed in the order given", () => {
   assert.deepEqual(got.themes.map((t) => t.id), ["clay", "turnips", "harbor-lights"]);
 });
 
-test("a ROM of no Donkey Kong is refused, naming the ones the page knows", { skip }, async () => {
+test("a ROM of no game of the folder is refused, naming the ones the page knows", { skip }, async () => {
   // A made-up NROM image: 16KB of PRG and 8KB of CHR counting up.
   const rom = new Uint8Array(16 + 16384 + 8192);
   rom.set([0x4e, 0x45, 0x53, 0x1a, 1, 1]);
@@ -94,8 +122,8 @@ test("a ROM of no Donkey Kong is refused, naming the ones the page knows", { ski
   const run = await lift(rom);
   assert.equal(run.code, 3, run.stderr);
   assert.equal(run.result.ok, false);
-  assert.match(run.result.error, /doesn't look like a Donkey Kong: Original Edition ROM/);
-  assert.deepEqual(run.result.expected.map((e) => e.id), ["donkey-kong-oe", "donkey-kong-ju"]);
+  assert.ok(run.result.error.includes(`doesn't look like a ${gameJson.title} ROM`), run.result.error);
+  assert.deepEqual(run.result.expected.map((e) => e.id), gameJson.templates);
   assert.equal([...run.mem.files.keys()].filter((f) => f.startsWith("/out/")).length, 1, "only result.json");
 });
 
@@ -105,67 +133,77 @@ test("a file that isn't a ROM is refused", { skip }, async () => {
   assert.match(run.result.error, /isn't an NES ROM/);
 });
 
-const rom = out ? findRom(DK) : null;
-test(
-  "the Donkey Kong (JU) ROM plays JU's game on Original Edition's model through its own asset map, without 50m and the stage-clear scene",
-  { skip: skip || (rom ? false : "the Donkey Kong (JU) ROM isn't in $GP_ROM_DIR/nes") },
-  async () => {
-    const run = await lift(rom);
-    assert.equal(run.code, 0, run.stderr);
-    assert.equal(run.result.ok, true);
-    assert.equal(run.result.sha256, DK);
-    for (const f of ["bundle.json", "preview.json", "profiles.toml", "assets/present.txt", "assets/sound.json"]) {
-      assert.ok(run.result.files.includes(f), `${f} is written`);
-    }
-    const f = run.result.found;
-    assert.equal(f.template, "donkey-kong-ju", "lifted through JU's own asset map (templates/donkey-kong-oe [[loads]])");
-    assert.equal(f.plays, "donkey-kong-oe");
-    assert.equal(f.match, "exact");
-    const by = (k) => f.assets.filter((a) => a.from === k).map((a) => a.name);
-    assert.ok(by("same").includes("stage_screens") && by("same").includes("tiles") && by("same").includes("sound_jingles"));
-    // What JU's game hasn't (template.toml's [[loads.without]]): 50m's
-    // assets and the stage-clear scene's are left blank, and nothing is
-    // filled from anywhere.
-    for (const n of ["stage_screens_50m", "ground_runs_50m", "ladders_50m", "scene_sprite_tiles", "palette_scene"]) {
-      assert.ok(by("blank").includes(n), `${n} is left blank: ${JSON.stringify(by("blank"))}`);
-    }
-    for (const a of f.assets) assert.ok(["same", "blank"].includes(a.from), `${a.name}: ${a.from}`);
-    for (const a of f.assets.filter((a) => a.from === "blank")) assert.ok(["50m", "stage-clear scene"].includes(a.without), `${a.name}: without ${a.without}`);
-    const preview = JSON.parse(new TextDecoder().decode(run.mem.readFile("/out/preview.json")));
-    assert.equal(preview.model, "donkey_kong_oe");
-    assert.ok(!preview.levels.includes("m50"), "the model has no level m50 for JU");
-    // The model's text in the bundle: its stages list keeps m50 in the
-    // game's order and skips it (stages.skip), so 25m, 75m, 100m; the
-    // stage-clear scene's rule and kinds are gone.
-    const bundle = new TextDecoder().decode(run.mem.readFile("/out/bundle.json"));
-    const order = bundle.match(/\[stages\]\\norder = \[([^\]]*)\]/)?.[1] ?? "";
-    const skip = bundle.match(/\\nskip = \[([^\]]*)\]/)?.[1] ?? "";
-    assert.ok(order.includes("m75") && skip.includes("m50") && !skip.includes("m75"), `the stages list skips 50m and plays 75m: order ${order}, skip ${skip}`);
-    for (const t of ["[rules.clear_scene]", "[entities.kong_carry]", "[entities.pauline_carry]"]) assert.ok(!bundle.includes(t), `${t} is left out`);
-    console.log(`lift JU: ${Math.round(run.ms)} ms, ${run.result.files.length} files, ${by("blank").length} left blank (${by("blank").join(", ")})`);
-  },
-);
+// Each template that only loads to play another's model (its load.json):
+// its ROM plays its game on that model through its own asset map, without
+// what its game hasn't ([[loads.without]]: those levels and parts).
+for (const t of loaders.length ? loaders : [null]) {
+  test(
+    `a ROM a template only loads to play plays its game on the model it names, through its own asset map, without what its game hasn't${t ? ` (${t.id})` : ""}`,
+    { skip: t ? romSkip(t) : skip || "the lift folder has no template that only loads to play" },
+    async () => {
+      const load = t.load;
+      const run = await lift(t.rom);
+      assert.equal(run.code, 0, run.stderr);
+      assert.equal(run.result.ok, true);
+      assert.equal(run.result.sha256, t.source.sha256);
+      for (const f of ["bundle.json", "preview.json", "profiles.toml", "assets/present.txt", "assets/sound.json"]) {
+        assert.ok(run.result.files.includes(f), `${f} is written`);
+      }
+      const f = run.result.found;
+      assert.equal(f.template, t.id, "lifted through its own asset map (the model's template's [[loads]])");
+      assert.equal(f.plays, load.plays);
+      assert.equal(f.match, "exact");
+      const by = (k) => f.assets.filter((a) => a.from === k).map((a) => a.name);
+      assert.ok(by("same").length > 0, "assets are found");
+      // What its game hasn't: those assets are left blank, and nothing is
+      // filled from anywhere.
+      const whats = load.without.map((w) => w.what);
+      for (const w of load.without) for (const n of w.blank ?? []) assert.ok(by("blank").includes(n), `${n} (${w.what}) is left blank: ${JSON.stringify(by("blank"))}`);
+      for (const a of f.assets) assert.ok(["same", "blank"].includes(a.from), `${a.name}: ${a.from}`);
+      for (const a of f.assets.filter((a) => a.from === "blank")) assert.ok(whats.includes(a.without), `${a.name}: without ${a.without}`);
+      const preview = JSON.parse(new TextDecoder().decode(run.mem.readFile("/out/preview.json")));
+      assert.equal(preview.model, modelName(load.plays));
+      const gone = load.without.flatMap((w) => w.levels ?? []);
+      for (const l of gone) assert.ok(!preview.levels.includes(l), `the model has no level ${l} for it`);
+      // The model's text in the bundle: its stages list keeps the levels it
+      // hasn't in the game's order and skips them (stages.skip), and plays
+      // the rest; the parts it hasn't are gone.
+      const bundle = new TextDecoder().decode(run.mem.readFile("/out/bundle.json"));
+      // (A JSON string: its quotes come escaped.)
+      const order = (bundle.match(/\[stages\]\\norder = \[([^\]]*)\]/)?.[1] ?? "").replaceAll('\\"', '"');
+      const skipped = (bundle.match(/\\nskip = \[([^\]]*)\]/)?.[1] ?? "").replaceAll('\\"', '"');
+      for (const l of load.levels) assert.ok(order.includes(`"${l}"`) && !skipped.includes(`"${l}"`), `the stages list plays ${l}: order ${order}, skip ${skipped}`);
+      for (const l of gone) assert.ok(skipped.includes(`"${l}"`), `the stages list skips ${l}: order ${order}, skip ${skipped}`);
+      for (const part of load.without.flatMap((w) => w.parts ?? [])) {
+        for (const tbl of [`[rules.${part}]`, `[entities.${part}]`]) assert.ok(!bundle.includes(tbl), `${tbl} is left out`);
+      }
+      console.log(`lift ${t.id}: ${Math.round(run.ms)} ms, ${run.result.files.length} files, ${by("blank").length} left blank (${by("blank").join(", ")})`);
+    },
+  );
+}
 
-const oe = out ? findRom(OE) : null;
-test(
-  "Original Edition loads its own model with every asset found",
-  { skip: skip || (oe ? false : "the Original Edition ROM isn't in $GP_ROM_DIR/nes") },
-  async () => {
-    const run = await lift(oe);
+// Each template with a model of its own: its ROM loads it with every asset
+// of its asset map found, and each template that loads to play it shares
+// its program.
+for (const t of owners) {
+  test(`a ROM loads its own template's model with every asset found (${t.id})`, { skip: romSkip(t) }, async () => {
+    const run = await lift(t.rom);
     assert.equal(run.code, 0, run.stderr);
     const f = run.result.found;
-    assert.equal(f.template, "donkey-kong-oe");
+    assert.equal(f.template, t.id);
     assert.equal(f.match, "exact");
-    assert.ok(f.assets.length >= 21 && f.assets.every((a) => a.from === "same"), JSON.stringify(f.assets));
-    for (const n of ["stage_screens", "ground_runs_25m", "ladders_25m", "palettes_25m", "sprite_tiles", "tiles"]) {
-      assert.ok(f.assets.some((a) => a.name === n), `25m's ${n} is found`);
+    assert.ok(f.assets.length > 0 && f.assets.every((a) => a.from === "same"), JSON.stringify(f.assets));
+    for (const l of loaders.filter((l) => l.load.plays === t.id)) {
+      const c = f.compared.find((c) => c.template === l.id);
+      assert.ok(c?.program_share > 0.9, `${l.id}'s program is there (${c?.program_share})`);
     }
-    const ju = f.compared.find((c) => c.template === "donkey-kong-ju");
-    assert.ok(ju.program_share > 0.9, `JU's program is there (${ju.program_share})`);
-    console.log(`lift OE: ${Math.round(run.ms)} ms`);
+    console.log(`lift ${t.id}: ${Math.round(run.ms)} ms`);
     const prep = process.env.GP_WEB_PREP;
     if (!prep) return;
-    // The native gp-web-prep on the same lifted files writes the same bytes.
+    // The native gp-web-prep on the same lifted files writes the same bytes
+    // (GP_WEB_PREP_TEMPLATE: the template's folder it reads).
+    const tdir = process.env.GP_WEB_PREP_TEMPLATE;
+    if (!tdir) return console.log("GP_WEB_PREP is set without GP_WEB_PREP_TEMPLATE (the template's folder), so gp-web-prep isn't compared");
     const work = fs.mkdtempSync(path.join(process.env.GP_WORKER_OUT || os.tmpdir(), "lift-test-"));
     for (const [p, b] of run.mem.files) {
       if (p.startsWith("/out/lifted/")) {
@@ -174,13 +212,13 @@ test(
         fs.writeFileSync(to, b);
       }
     }
-    execFileSync(prep, [path.join(repo, "templates/donkey-kong-oe"), path.join(work, "lifted"), path.join(work, "prep")], { stdio: "pipe" });
+    execFileSync(prep, [tdir, path.join(work, "lifted"), path.join(work, "prep")], { stdio: "pipe" });
     for (const f of run.result.files) {
       const native = fs.readFileSync(path.join(work, "prep", f));
       assert.ok(Buffer.from(run.mem.readFile(`/out/${f}`)).equals(native), `${f} is the same as gp-web-prep's`);
     }
-  },
-);
+  });
+}
 
 // The lifted pictures (assets/*.png) of a run, as name -> SHA-256.
 function pictures(run) {
@@ -194,54 +232,60 @@ function pictures(run) {
 
 // A large-art look (a theme's look.txt and art.txt) replaces the game's
 // pictures by name (frame-N-S.png, hud-S.png, glyph-S-...), and a theme is
-// made on one ROM's pictures. JU plays Original Edition's model without
-// 50m and the stage-clear scene, so its sprite frames and palette sets
-// must be numbered as Original Edition's are, or a theme draws another
-// thing in their place (issue 13: a ladder piece for the hero, a carrying
-// pose for the lady). So both lifts name the same sprite frames and sets,
-// and a picture JU draws as Original Edition does under one name isn't
-// JU's under another (left-out kinds' frames are blank in JU; a blank
-// picture both have under one name doesn't count). The pictures' bytes
-// are only compared here, never kept.
-test(
-  "Donkey Kong (JU) names its pictures as Original Edition does, so one theme fits both",
-  { skip: skip || (rom && oe ? false : "the Donkey Kong (JU) and Original Edition ROMs aren't both in $GP_ROM_DIR/nes") },
-  async () => {
-    const [a, b] = [pictures(await lift(oe)), pictures(await lift(rom))];
-    const sprites = (m) => [...m.keys()].filter((n) => /^(frame|hud)-/.test(n)).sort();
-    assert.deepEqual(sprites(b), sprites(a), "the same sprite frames and HUD sets, by name");
-    const named = new Map();
-    for (const [n, h] of a) named.set(h, [...(named.get(h) ?? []), n]);
-    const moved = [];
-    for (const [n, h] of b) {
-      if (a.get(n) === h) continue;
-      const elsewhere = (named.get(h) ?? []).filter((x) => b.get(x) !== h);
-      if (elsewhere.length) moved.push(`${n} (Original Edition's ${elsewhere.join(", ")})`);
-    }
-    assert.deepEqual(moved, [], "a picture JU draws as Original Edition does has the same name in both");
-    const same = [...b].filter(([n, h]) => a.get(n) === h).length;
-    console.log(`JU's pictures by Original Edition's names: ${same} of ${b.size} the same picture`);
-  },
-);
+// made on one ROM's pictures. A ROM that loads to play another's model
+// without some of its parts must number its sprite frames and palette sets
+// as the model's own ROM does, or a theme draws another thing in their
+// place (issue 13: a ladder piece for the hero, a carrying pose for the
+// lady). So both lifts name the same sprite frames and sets, and a picture
+// the loader draws as the model's ROM does under one name isn't the
+// loader's under another (left-out kinds' frames are blank in the loader; a
+// blank picture both have under one name doesn't count). The pictures'
+// bytes are only compared here, never kept.
+for (const l of loaders.length ? loaders : [null]) {
+  const o = l && TEMPLATES.find((t) => t.id === l.load.plays);
+  test(
+    `a ROM that loads to play names its pictures as the model's own ROM does, so one theme fits both${l ? ` (${l.id} and ${o?.id})` : ""}`,
+    { skip: !l ? skip || "the lift folder has no template that only loads to play" : romSkip(l) || romSkip(o) },
+    async () => {
+      const [a, b] = [pictures(await lift(o.rom)), pictures(await lift(l.rom))];
+      const sprites = (m) => [...m.keys()].filter((n) => /^(frame|hud)-/.test(n)).sort();
+      assert.deepEqual(sprites(b), sprites(a), "the same sprite frames and HUD sets, by name");
+      const named = new Map();
+      for (const [n, h] of a) named.set(h, [...(named.get(h) ?? []), n]);
+      const moved = [];
+      for (const [n, h] of b) {
+        if (a.get(n) === h) continue;
+        const elsewhere = (named.get(h) ?? []).filter((x) => b.get(x) !== h);
+        if (elsewhere.length) moved.push(`${n} (${o.id}'s ${elsewhere.join(", ")})`);
+      }
+      assert.deepEqual(moved, [], `a picture ${l.id} draws as ${o.id} does has the same name in both`);
+      const same = [...b].filter(([n, h]) => a.get(n) === h).length;
+      console.log(`${l.id}'s pictures by ${o.id}'s names: ${same} of ${b.size} the same picture`);
+    },
+  );
+}
 
+// A dump with its first pattern table's bytes turned over: the lift fills
+// nothing, so it refuses the dump naming the slot it can't find.
+const turned = loaders.find((t) => t.rom) ?? TEMPLATES.find((t) => t.rom) ?? loaders[0] ?? TEMPLATES[0] ?? null;
 test(
-  "a Donkey Kong (JU) dump with its sprite tiles gone is refused, as nothing fills them",
-  { skip: skip || (rom ? false : "the Donkey Kong (JU) ROM isn't in $GP_ROM_DIR/nes") },
+  `a dump with its sprite tiles gone is refused, as nothing fills them${turned ? ` (${turned.id})` : ""}`,
+  { skip: romSkip(turned) },
   async () => {
     // In memory only: another header byte (so another file, the same
     // program) and the first pattern table's bytes turned over.
-    const b = Uint8Array.from(rom);
+    const b = Uint8Array.from(turned.rom);
     b[7] ^= 0x10;
-    const chr = 16 + 16384;
+    const chr = 16 + (b[6] & 4 ? 512 : 0) + b[4] * 16384;
     for (let i = 0; i < 4096; i++) b[chr + i] ^= 0xa5;
     const run = await lift(b);
     assert.equal(run.code, 2, run.stderr);
     assert.equal(run.result.ok, false);
-    assert.match(run.result.error, /sprite_tiles \(slot sprite_tiles\) isn't in this ROM/);
+    assert.match(run.result.error, /\(slot [a-z0-9_]+\) isn't in this ROM/);
   },
 );
 
-test("a 1 MB ROM of no Donkey Kong is searched and refused in well under a second", { skip }, async () => {
+test("a 1 MB ROM of no game of the folder is searched and refused in well under a second", { skip }, async () => {
   const n = 16 + 512 * 1024 + 512 * 1024;
   const big = new Uint8Array(n);
   big.set([0x4e, 0x45, 0x53, 0x1a, 32, 64, 0x10]);

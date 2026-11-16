@@ -141,7 +141,7 @@ fn shape_of(a: &ArtSlot) -> &'static str {
         // Original Edition's 100m ending: the heart between the hero and
         // the friend.
         _ if d.contains("heart") => "heart",
-        // A platform the hero rides (Donkey Kong's elevators) is a plank,
+        // A platform the hero rides (one game's elevators) is a plank,
         // not a character.
         "npc" if d.contains("platform") => "plank",
         // Original Edition's turning belt ends, cells far apart in one
@@ -341,7 +341,7 @@ impl Pins {
 /// of the foe's very size that isn't a foe itself (Original Edition's
 /// thrower falling and fallen in 100m's ending), or a figure the game
 /// draws as rows of sprites ([`stack_rows`]: the thrower going up with
-/// Pauline, five rows of six) as big as a large character and as wide as
+/// the captive, five rows of six) as big as a large character and as wide as
 /// the foe. It takes the foe's shape and tones, so the thrower going up
 /// is the red thrower, not a teal robot (2026-11-07). The first such foe
 /// in the kit, or none.
@@ -376,7 +376,7 @@ fn look_of<'a>(kit: &'a Kit, local: &Local, a: &ArtSlot) -> Option<&'a ArtSlot> 
 
 /// Frames that are rows of one figure, each a row of tiles: frame j is
 /// the row below frame i when it has the same tiles one higher at the same
-/// places (Original Edition's thrower going up with Pauline, five bodies
+/// places (Original Edition's thrower going up with the captive, five bodies
 /// of six sprites, the k-th row of a pose from tile $40 + k and on in
 /// steps of 5). Painted a row at a time, each row was a figure of its own,
 /// a stack of streaks (2026-11-07). Returns the frames with each chain of
@@ -491,7 +491,7 @@ fn stack_rows(
 /// Each frame's group: the first frame it shares a tile with, directly or
 /// through others (one group for frames whose tiles chain together). The
 /// game's blank tile (`blank`) is never painted, so it joins no frames:
-/// before 2026-11-05 it did, and Donkey Kong's big foe's two side poses,
+/// before 2026-11-05 it did, and one game's big foe's two side poses,
 /// which share no other tile, were painted in the box of all seven
 /// frames, 2.5 px off their own.
 /// A frame borrowed from (and in [`tile_groups`] apart from) the
@@ -504,7 +504,7 @@ fn tile_groups(cuts: &[crate::theme_kit::Cut], blank: &[u32]) -> Vec<usize> {
 /// (`true` for each): every tile, but the blank, is away from its home,
 /// the place (column and row, a mirrored frame's column read unmirrored)
 /// most frames that show the tile put it (the first such, on a tie).
-/// Original Edition draws Mario, as he walks off a girder's end, from
+/// Original Edition draws the player, as they walk off a girder's end, from
 /// tiles 2, 4, 3 and 5: the right half of one walking pose and the left
 /// half of the standing one. Painted as a frame of its own it chained the
 /// walking poses into one group, a figure in the box of them all
@@ -670,7 +670,7 @@ fn disc(&(cx, cy, r): &Hand) -> Vec<(i32, i32)> {
 /// tenths of its size; then moved in as well, at those sizes; then
 /// smaller, to 2 px. Where no place is taken, there is no hand. Until
 /// 2026-11-05 a hand moved in before it moved up or down or got smaller,
-/// so in Donkey Kong's side poses, whose cells by the box's side are open
+/// so in one game's big foe's side poses, whose cells by the box's side are open
 /// only low down, it went into the body and the figure drew 38 px of the
 /// original's 43.
 fn hand_place(
@@ -746,8 +746,8 @@ fn hand_place(
 /// draws from a tile other than the blank one. Its reach is its disc and a
 /// pixel round it, which the paper finish's edges change. Each view takes
 /// its pose's hands where they fit with the fewest other views holding
-/// them; a view another's hand reached holds that hand. 2026-11-05: Donkey
-/// Kong's big foe's seven frames share tiles, and before this every frame
+/// them; a view another's hand reached holds that hand. 2026-11-05: one
+/// game's big foe's seven frames share tiles, and before this every frame
 /// was painted with the first's hands, so two of them lost half a hand
 /// where they draw the blank tile (the user: "vanishing hands").
 fn group_hands(
@@ -1209,7 +1209,7 @@ fn paint_frame_in(shape: &str, w: u32, h: u32, k: u32, hands: Option<[Option<Han
 /// replaced, on 2026-11-03, a 5 by 7 face of the common LCD kind that
 /// Rivet Rodeo's own pictures (scripts/rivet-rodeo/art.py) also drew,
 /// so `gp theme check --original` refused Rivet Rodeo's paper font at
-/// 0.967 against its own art. The digits score 0.38 against Donkey Kong's
+/// 0.967 against its own art. The digits score 0.38 against one ported game's
 /// lifted font and 0.49 against Rivet Rodeo's (refused at 0.75).
 pub(crate) fn glyph(c: char) -> Option<[&'static str; 7]> {
     Some(match c {
@@ -1562,7 +1562,7 @@ fn level_picture(
     }
     // The other cells the game draws, by their shape: a block of two by
     // two in a palette none of the boxes' cells use is a thing on its
-    // own (Donkey Kong's prizes on 50m, 75m and 100m), a paper gem; a
+    // own (one game's prizes on its later stages), a paper gem; a
     // block two by two or more is a paper card (a stack of things, a
     // drum, or a thing in the ground's colors), a row of three
     // or more a strip of the ground, a column of two or more a ladder (a
@@ -1614,8 +1614,8 @@ fn level_picture(
         // A thing on its own: the drawn cells of a palette block (two by
         // two cells, aligned, as a console's attributes give a palette)
         // in a palette none of the boxes' cells use, two or more of them,
-        // with no drawn cell of that palette just outside it. Donkey Kong's
-        // prizes on 50m, 75m and 100m; a ladder in such a palette runs on
+        // with no drawn cell of that palette just outside it. One game's
+        // prizes on its later stages; a ladder in such a palette runs on
         // out of its block.
         let gem = [[0x6e, 0x52, 0x10], [0xd8, 0xa8, 0x28], [0xf8, 0xe0, 0x90]];
         for r0 in (0..rows).step_by(2) {
@@ -1818,13 +1818,13 @@ fn one_per_cell(fields: Vec<(HudNumber, bool)>) -> Vec<HudNumber> {
 /// A label: the column of its number, the number's width, the row and the text.
 type HudLabel = (u32, u32, u32, String);
 
-/// The labels a box of numbers in one row gets, set apart as Donkey
-/// Kong's status box sets its M, BONUS and L apart: each over its number,
+/// The labels a box of numbers in one row gets, set apart as one
+/// game's status box sets its M, BONUS and L apart: each over its number,
 /// with a line between neighbours. A row is such a box when two or more of
 /// its numbers each follow a one-letter label on their own row (the labels
 /// and numbers then run together, "L2B4900N1"; the letter moves up), or
 /// when a number has the game's own marks over all of it (a word drawn as
-/// a picture, Donkey Kong's BONUS). A letter is spelled out as its
+/// a picture, that game's BONUS). A letter is spelled out as its
 /// counter's name when the name starts with it, is a plain word and fits
 /// over the number. Returns the labels (column of the number, its width,
 /// row, text) and the rows that are boxes, and blanks the moved letters
@@ -1955,8 +1955,8 @@ fn hud_picture(
             }
         }
     }
-    // A word of the game's title is a name (a hero's, on Super Mario
-    // Bros.' score line): left out, as the kit leaves names out.
+    // A word of the game's title is a name (a hero's, on one
+    // platformer's score line): left out, as the kit leaves names out.
     let names: Vec<String> = title
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|w| w.len() > 2)
@@ -2518,8 +2518,8 @@ pub fn paint_tiles(
             .flatten()
             .map(frame_key)
             .collect();
-        // A slot whose frames are all another slot's (Donkey Kong's big
-        // foe on 75m shows three of the 25m big foe's poses, from the same
+        // A slot whose frames are all another slot's (one game's big
+        // foe on its third stage shows three of the first stage's big foe's poses, from the same
         // tiles) takes that slot's paint: painted again in a box of its
         // own frames, it would draw over the other's tiles in other poses.
         if let Some(b) = same_frames_as(kit.art.iter().map(|b| b.id.as_str()), &local.cuts, &a.id) {
@@ -3107,8 +3107,8 @@ mod tests {
     #[test]
     fn a_slot_showing_only_another_slots_frames_is_painted_there() {
         // Made-up cuts: a big foe of three frames, and a second slot that
-        // shows two of them (as Donkey Kong's 75m big foe shows 25m's
-        // poses), one listed before the other; a third slot shares a
+        // shows two of them (as one game's big foe on a later stage shows the
+        // first stage's poses), one listed before the other; a third slot shares a
         // frame and has one of its own, so it is painted itself.
         let cut = |tiles: [u32; 2]| crate::theme_kit::Cut {
             slot: "tiles".into(),
@@ -3163,8 +3163,8 @@ mod tests {
         assert!(mid.contains(&true) && mid.contains(&false));
     }
 
-    /// A made-up big foe of five frames, 6 by 4 tiles, cut as Donkey
-    /// Kong's is (the tiles made up): frames 0 and 1 are the same tiles,
+    /// A made-up big foe of five frames, 6 by 4 tiles, cut as one
+    /// game's is (the tiles made up): frames 0 and 1 are the same tiles,
     /// whose own tiles are one row on each side; frame 2 shares the tiles
     /// over frame 0's left hand row, and frame 3 those over its right; both
     /// draw the blank tile (0) where a hand of their pose would go, and
@@ -3324,7 +3324,7 @@ mod tests {
 
     #[test]
     fn a_picture_word_over_a_number_gets_its_name() {
-        // Donkey Kong's status box: M and L read, BONUS is the game's
+        // One game's status box: M and L read, BONUS is the game's
         // picture over the number.
         let mut grid: Vec<Vec<char>> = vec![
             "?M??????L?".chars().collect(),
@@ -3374,28 +3374,32 @@ mod tests {
         assert_eq!(gp_theme::pix::parse(&text).unwrap(), img);
     }
 
-    /// Every sound role of a template's kit can be a `.tune`: Donkey
-    /// Kong's 14 are, in its paper theme, and each parses and renders. An
+    /// Every sound role of a template's kit can be a `.tune`: all 14 of
+    /// one game's are, in its paper theme, and each parses and renders. An
     /// effect by parameters (`sfx`) is a `.tune` too.
     #[test]
     fn every_sound_role_is_a_tune() {
-        // gameprinter: the kit is the games checkout's, and the paper theme,
-        // taken out of the game on 2026-11-11, is one `gp theme paint` made
-        // ($GP_THEME_PAPER); skipped when either is absent.
-        let Some(games) = crate::theme_template::test_games() else {
+        // gameprinter: the kit is the games checkout's page game's (its
+        // page.toml), and the paper theme, taken out of the game on
+        // 2026-11-11, is one `gp theme paint` made for it ($GP_THEME_PAPER);
+        // skipped when either is absent.
+        let Some(game) = crate::theme_template::test_page_game() else {
             return;
         };
-        let kit_dir = games.join("donkey-kong/themes");
+        let kit_dir = game.join("themes");
         let Some(paper) = std::env::var_os("GP_THEME_PAPER").map(std::path::PathBuf::from) else {
             return;
         };
         if !paper.join("theme.toml").is_file() {
             return;
         }
-        let kit: Kit =
-            toml::from_str(&fs::read_to_string(kit_dir.join("kit/kit.toml")).unwrap()).unwrap();
+        let text = fs::read_to_string(kit_dir.join("kit/kit.toml")).unwrap();
+        let kit: Kit = toml::from_str(&text).unwrap();
         let theme = gp_theme::Theme::load(&paper).unwrap();
-        assert_eq!(kit.sound.len(), 14);
+        // Exactly the roles the kit lists, one `[[sound]]` table each.
+        let listed = text.lines().filter(|l| l.trim() == "[[sound]]").count();
+        assert!(listed > 0);
+        assert_eq!(kit.sound.len(), listed);
         for s in &kit.sound {
             let r = theme.sound.iter().find(|x| x.role == s.role).unwrap();
             assert!(r.file.ends_with(".tune"), "{}", s.role);

@@ -35,7 +35,7 @@ use std::path::Path;
 use anyhow::{Result, bail};
 use gp_arcade::dasm::{self, Addr, Alu, Flow, Insn, Op, reg};
 use gp_arcade::mcr::AccessKind;
-use gp_arcade::{Controls, Romset, Tapper};
+use gp_arcade::{Controls, Mcr, Romset};
 use serde_json::{Value, json};
 
 use crate::Outcome;
@@ -639,7 +639,7 @@ impl Board {
 
     /// The player's place now, in the board's units, with `mem` (64 KB,
     /// by the CPU's addresses) filled from the board's RAM.
-    fn player(&self, t: &Tapper, mem: &mut [u8]) -> (i64, i64) {
+    fn player(&self, t: &Mcr, mem: &mut [u8]) -> (i64, i64) {
         for a in RAM..=0xffff {
             mem[usize::from(a)] = t.peek(a);
         }
@@ -726,7 +726,7 @@ pub(crate) fn places(
     // (source, frame)}.
     let mut grid_seen: BTreeMap<u16, BTreeMap<u8, (usize, usize)>> = BTreeMap::new();
     for (si, s) in srcs.iter().enumerate() {
-        let mut t = Tapper::power_on(set);
+        let mut t = Mcr::power_on(set);
         let mut n = 0usize;
         for (fi, f) in s.frames.iter().enumerate() {
             t.step(controls(f));
@@ -770,7 +770,7 @@ pub(crate) fn places(
         }
         for (si, frames) in &need {
             let last = *frames.iter().max().expect("a frame");
-            let mut t = Tapper::power_on(set);
+            let mut t = Mcr::power_on(set);
             let mut ys: Vec<i64> = Vec::new();
             for (k, f) in srcs[*si].frames[..=last].iter().enumerate() {
                 if !frames.contains(&k) {
@@ -865,7 +865,7 @@ fn controls(f: &gp_evidence::input_log::InputFrame) -> Controls {
 
 /// The level the board's RAM is in: the work RAM and the key's bytes, by
 /// the CPU's addresses.
-fn level_of(t: &Tapper, level: &LevelKey, mem: &mut [u8]) -> Option<String> {
+fn level_of(t: &Mcr, level: &LevelKey, mem: &mut [u8]) -> Option<String> {
     if level.ram.is_empty() && level.when.is_none() {
         return level.of(mem);
     }
@@ -889,7 +889,7 @@ pub(crate) fn scan(set: &Romset, srcs: &[Src], level: &LevelKey, name: &str) -> 
     let mut flows: Vec<Option<([u8; 4], Flow, u8)>> = vec![None; 0x10000];
     let mut mem = vec![0u8; 0x10000];
     for (si, s) in srcs.iter().enumerate() {
-        let mut t = Tapper::power_on(set);
+        let mut t = Mcr::power_on(set);
         let mut in_level = level_of(&t, level, &mut mem).is_some_and(|l| l == name);
         for (fi, f) in s.frames.iter().enumerate() {
             if !in_level {
@@ -972,7 +972,7 @@ pub(crate) fn guards(
     }
     let mut out = HashMap::new();
     for (si, frames) in &want {
-        let mut t = Tapper::power_on(set);
+        let mut t = Mcr::power_on(set);
         let last = *frames.keys().max().expect("a frame");
         for (fi, f) in srcs[*si].frames.iter().enumerate().take(last + 1) {
             let Some(pcs) = frames.get(&fi) else {

@@ -20,7 +20,7 @@
 //!   (crate::serve::background). A corpus clip starts from a save point
 //!   with a level, not from a start the tool classified (a pit, a wall, an
 //!   enemy), so a column is the clip's level and the mechanic session it
-//!   came from (`walk` of `dk.walk.001`): the place a person recorded that
+//!   came from (`walk` of `hop.walk.001`): the place a person recorded that
 //!   mechanic at. A clip with no level is in the model's start level.
 //! - A clip covers its column for the mechanic rows its session or name
 //!   names (a word of the mechanic's name: `jump` for `platformer.jump`),
@@ -805,14 +805,14 @@ mod tests {
             rows: vec![
                 row("mechanic:platformer.jump", "mechanic", "platformer.jump"),
                 row("mechanic:platformer.walk", "mechanic", "platformer.walk"),
-                row("entity:mario", "entity", "mario"),
+                row("entity:frog", "entity", "frog"),
             ],
             cols: vec![
                 col("a/jump", &["g.jump.001"]),
                 col("a/walk", &["g.walk.001"]),
                 col("b/walk", &[]),
             ],
-            player: Some("entity:mario".into()),
+            player: Some("entity:frog".into()),
         }
     }
 

@@ -40,7 +40,7 @@
 //!   name, as a clip's score keeps it.
 //! - [`external`]: an external runtime's trace (one that can't load the
 //!   original's state but starts at a level start and logs each frame,
-//!   such as Super Mario Bros. Remastered under our probe), read through a
+//!   such as a remastered PC port under our probe), read through a
 //!   trace map and stepped as a runtime, so the lockstep scores it as it
 //!   scores the model.
 //!

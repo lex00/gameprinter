@@ -34,8 +34,8 @@ pub struct Edit {
     pub new: String,
 }
 
-/// The part of the model a measure belongs to: `entities.mario[0].x` and
-/// `bodies.koopa[1].x` are `entities.mario` and `entities.koopa`,
+/// The part of the model a measure belongs to: `entities.frog[0].x` and
+/// `bodies.beetle[1].x` are `entities.frog` and `entities.beetle`,
 /// `ticks.time[0]` is `counters.time`.
 pub fn part_of(path: &str) -> String {
     let Ok(p) = gp_model::Path::parse(path) else {

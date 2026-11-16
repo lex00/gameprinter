@@ -29,7 +29,7 @@ height = "5%"
 [[rule]]
 path = "entities[role=enemy]"
 level = "metric"
-note = "Super Mario Bros.' walkers and shell, at the ratios kept, within its 3%"
+note = "The source platformer's walkers and shell, at the ratios kept, within its 3%"
 
 [rule.tolerance]
 speed = "3%"

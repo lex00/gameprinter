@@ -486,7 +486,7 @@ pub struct RunArgs {
     /// The command's words after gp: `corpus score`, `roms scan`.
     pub command: String,
     /// Its arguments and flags by name, as gp_commands gives them for the
-    /// command: `{"game": "tapper", "dry-run": true, "clip": ["a", "b"]}`.
+    /// command: `{"game": "rooftop", "dry-run": true, "clip": ["a", "b"]}`.
     /// A switch takes true, a repeated one a list.
     #[serde(default)]
     pub args: Map<String, Value>,
@@ -1261,7 +1261,7 @@ mod tests {
         let b = build(
             gate,
             &args(json!({
-                "game": "tapper",
+                "game": "rooftop",
                 "dry_run": true,
                 "--patch": "-weird.diff",
                 "removes": ["a", "b*"],
@@ -1283,7 +1283,7 @@ mod tests {
                 "3",
                 "-v",
                 "-v",
-                "tapper"
+                "rooftop"
             ]
         );
         assert!(b.given.contains("dry-run"));
@@ -1477,13 +1477,16 @@ mod tests {
         let c = config(dir.path(), &gp);
         let r = call(
             &c,
-            json!({"command": "model gate", "args": {"game": "tapper", "dry-run": true}}),
+            json!({"command": "model gate", "args": {"game": "rooftop", "dry-run": true}}),
         );
         assert!(!r.is_error, "{}", r.json);
-        assert_eq!(r.json["json"]["args"], "--json model gate --dry-run tapper");
+        assert_eq!(
+            r.json["json"]["args"],
+            "--json model gate --dry-run rooftop"
+        );
         let r = call(
             &c,
-            json!({"command": "model gate", "args": {"game": "tapper"}}),
+            json!({"command": "model gate", "args": {"game": "rooftop"}}),
         );
         assert!(r.is_error);
         assert_eq!(
@@ -1792,7 +1795,7 @@ mod tests {
         ] {
             assert!(default_timeout(path) > DEFAULT_TIMEOUT, "{path}");
         }
-        // Tapper's corpus score took 444 s in a debug build.
+        // An arcade game's corpus score took 444 s in a debug build.
         assert!(default_timeout("corpus score") >= Duration::from_secs(900));
         assert_eq!(default_timeout("env"), DEFAULT_TIMEOUT);
     }

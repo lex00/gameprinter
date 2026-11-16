@@ -18,7 +18,7 @@ use crate::{Config, Reply};
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MomentsArgs {
-    /// The game, by its folder's name in the games checkout (donkey-kong).
+    /// The game, by its folder's name in the games checkout (rooftop).
     /// No capture run is needed.
     pub run: String,
     /// The recording the person is watching, by the name the page gives it

@@ -3,7 +3,7 @@
 //! element-extraction/SKILL.md).
 //!
 //! `gp code listing` prints the routines of the static harvest's code map
-//! (`gp model static --no-run`'s 249 routines on Donkey Kong) with how
+//! (`gp model static --no-run`'s 249 routines on one NES game) with how
 //! often each instruction ran and how often each branch was taken and
 //! fell through, over chosen clips and frames (`gp_events::profile`).
 //! `gp code tables` finds the ROM tables the code reads with one RAM byte
@@ -112,7 +112,7 @@ pub struct TablesArgs {
     /// (the index byte's reads are followed through it).
     #[arg(long)]
     pub input: Option<PathBuf>,
-    /// The RAM byte used as the index: `$53` (Donkey Kong's stage).
+    /// The RAM byte used as the index: `$53` (one game's stage).
     #[arg(long)]
     pub index: String,
     /// The values the byte takes: `1..=4`, `1..5` or `1,2,4`. Default: from

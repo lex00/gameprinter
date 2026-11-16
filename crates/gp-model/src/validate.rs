@@ -122,7 +122,7 @@ pub const CHANGE: &str = "change:";
 pub const EMIT: &str = "emit:";
 
 /// The action that adds one counter's value to another (feature
-/// `action.add`): `add:<to>:<from>`, as Donkey Kong adds the bonus timer to
+/// `action.add`): `add:<to>:<from>`, as a ladder game adds the bonus timer to
 /// the score when a stage is cleared.
 pub const ADD: &str = "add:";
 
@@ -133,23 +133,23 @@ pub fn add_action(a: &str) -> Option<(&str, &str)> {
 }
 
 /// The action that sets a counter (feature `action.set`):
-/// `set:<counter>:<value>`, as Donkey Kong's stage setup puts the bonus
+/// `set:<counter>:<value>`, as a ladder game's stage setup puts the bonus
 /// timer back at 5000 during the clear scene.
 pub const SET: &str = "set:";
 
 /// The action that takes every active body of an entity out of the level
 /// at once, with no event (feature `action.clear`): `clear:<entity>`, as
-/// Donkey Kong's death wait redraws the screen and its barrels are gone.
+/// a ladder game's death wait redraws the screen and its barrels are gone.
 pub const CLEAR: &str = "clear:";
 
 /// The action that puts every active body of an entity back at its spawn's
 /// place, at rest, its state kept (feature `action.respawn`):
-/// `respawn:<entity>`, as Donkey Kong draws Mario at his start late in a
+/// `respawn:<entity>`, as a ladder game draws the player at its start late in a
 /// death's wait, before the restart.
 pub const RESPAWN: &str = "respawn:";
 /// The action that takes a body out of the level by a counter (feature
 /// `action.remove_body`): `remove-body:<counter>`, the body whose ID plus
-/// one the counter holds, as Donkey Kong takes away the barrel the hammer
+/// one the counter holds, as a ladder game takes away the barrel the hammer
 /// smashed when the smash ends.
 pub const REMOVE_BODY: &str = "remove-body:";
 
@@ -1080,7 +1080,7 @@ pub fn validate(model: &Model) -> Vec<Problem> {
                 for p in st.problems {
                     // A state that turns `keep_fall_gravity` off leaves the
                     // entity's `start_fall_gravity` unread in that state
-                    // only, which is what it means to (Super Mario Bros.'
+                    // only, which is what it means to (a side-scroller's
                     // death fall sets its gravity every frame).
                     let unread_start = p.path.ends_with(".jump.start_fall_gravity")
                         && p.message.starts_with("is read only with keep_fall_gravity");
@@ -3070,7 +3070,7 @@ fn components(
         );
     }
     // Since platformer 0.4.10 a flier may fall too: a projectile thrown
-    // in an arc, as Super Mario Bros.' fireball.
+    // in an arc, as a side-scroller's fireball.
     if p.path.is_some() && p.fall.is_some() {
         c.add(
             format!("{at}.fall"),

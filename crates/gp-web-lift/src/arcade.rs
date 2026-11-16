@@ -103,9 +103,9 @@ fn takers(dir: &Path, game: &GameFile) -> Result<Vec<Taker>, String> {
 /// own list's title.
 fn set_named(registry: &[Entry], identity: &str) -> Named {
     let mut n = named(registry, identity);
-    // An arcade set's revision is its whole title ("Tapper (Root Beer)",
-    // MAME's), so it is the name as it stands, not "Tapper (Tapper (Root
-    // Beer))".
+    // An arcade set's revision is its whole title (MAME's, such as "Game
+    // (Rev B)"), so it is the name as it stands, not "Game (Game (Rev
+    // B))".
     if let Some(r) = registry
         .iter()
         .find(|e| {
@@ -120,8 +120,8 @@ fn set_named(registry: &[Entry], identity: &str) -> Named {
         n.name = Some(r);
     }
     if n.name.is_none()
-        && let Some(s) = gp_arcade::romset::SETS
-            .iter()
+        && let Some(s) = gp_arcade::romset::known()
+            .into_iter()
             .find(|s| s.identity().eq_ignore_ascii_case(identity))
     {
         n.id = Some(s.name.to_owned());
@@ -133,14 +133,14 @@ fn set_named(registry: &[Entry], identity: &str) -> Named {
 
 /// MAME's name of the set with this identity, when the board knows it.
 fn mame_name(identity: &str) -> Option<&'static str> {
-    gp_arcade::romset::SETS
-        .iter()
+    gp_arcade::romset::known()
+        .into_iter()
         .find(|s| s.identity().eq_ignore_ascii_case(identity))
         .map(|s| s.name)
 }
 
-/// The sets a game takes, for a sentence: "tapper, rbtapper, ... or
-/// tappera", by MAME's names.
+/// The sets a game takes, for a sentence: "seta, setb, ... or setc", by
+/// MAME's names.
 fn sets_sentence(expected: &[Named]) -> String {
     let names: Vec<String> = expected
         .iter()
@@ -263,6 +263,11 @@ pub(crate) fn lift_game(
     game: &GameFile,
     registry: &[Entry],
 ) -> Result<Outcome, String> {
+    // The sets' chip lists: the game's roms.toml, which the page build
+    // copies in as sources.toml ([[source.chip]] rows, docs/sources.md).
+    if let Ok(text) = read(&dir.join("sources.toml")) {
+        gp_arcade::romset::add_roms_toml(&text).map_err(|e| format!("sources.toml: {e}"))?;
+    }
     let takers = takers(dir, game)?;
     let expected: Vec<Named> = takers
         .iter()
@@ -514,37 +519,91 @@ mod tests {
         out
     }
 
-    /// An arcade game folder as build-lift.sh writes one, with the sets'
-    /// identities the board knows: tapper as the template, rbtapper loaded
-    /// only to play. No chip and no picture: only names and hashes.
+    /// Made-up sets, as a game's roms.toml lists them: (MAME name, the
+    /// byte its program chip is filled with, its tile chip's). madeupd runs
+    /// madeupa's program with other tiles.
+    const MADE_UP: [(&str, u8, u8); 4] = [
+        ("madeupa", 1, 2),
+        ("madeupb", 3, 4),
+        ("madeupc", 5, 6),
+        ("madeupd", 1, 7),
+    ];
+
+    /// A made-up set's files: a program chip and a tile chip.
+    pub(crate) fn made_up_files(system: &str) -> Vec<(String, Vec<u8>)> {
+        let (_, m, g) = MADE_UP.iter().find(|s| s.0 == system).unwrap();
+        vec![
+            (format!("{system}.1a"), vec![*m; 0x1000]),
+            (format!("{system}.bg"), vec![*g; 0x2000]),
+        ]
+    }
+
+    fn sha1_hex(d: &[u8]) -> String {
+        gp_arcade::sha1::sha1(d)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
+    /// The made-up sets' roms.toml, with their [[source.chip]] rows.
+    pub(crate) fn made_up_toml() -> String {
+        let mut t = String::new();
+        for (system, _, _) in MADE_UP {
+            let files = made_up_files(system);
+            let (ha, hb) = (sha1_hex(&files[0].1), sha1_hex(&files[1].1));
+            let id = gp_arcade::romset::identity([ha.as_str(), hb.as_str()]);
+            t += &format!(
+                "[[source]]\nid = \"{system}\"\ntitle = \"Made Up\"\nplatform = \"arcade\"\nregion = \"us\"\n\
+                 revision = \"Made Up ({system})\"\nsystem = \"{system}\"\nsha256 = \"{id}\"\nstatus = \"unverified\"\n\n\
+                 [[source.chip]]\nname = \"{system}.1a\"\nregion = \"maincpu\"\noffset = 0\nsize = 0x1000\nsha1 = \"{ha}\"\n\n\
+                 [[source.chip]]\nname = \"{system}.bg\"\nregion = \"gfx1\"\noffset = 0\nsize = 0x2000\nsha1 = \"{hb}\"\n\n"
+            );
+        }
+        t
+    }
+
+    fn made_up_zip(system: &str) -> Vec<u8> {
+        let files = made_up_files(system);
+        let refs: Vec<(&str, &[u8])> = files
+            .iter()
+            .map(|(n, d)| (n.as_str(), d.as_slice()))
+            .collect();
+        zip(&refs)
+    }
+
+    /// An arcade game folder as build-lift.sh writes one, with the made-up
+    /// sets' list as sources.toml: madeupa as the template, madeupb loaded
+    /// only to play. No picture: only names and hashes.
     pub(crate) fn folder(d: &Path) {
-        folder_with(d, "\n[asset.at]\nrbtapper = 0\n");
+        folder_with(d, "\n[asset.at]\nmadeupb = 0\n");
     }
 
     /// [`folder`] with `at` after its one table: its places, or none.
     fn folder_with(d: &Path, at: &str) {
+        gp_arcade::romset::add_roms_toml(&made_up_toml()).unwrap();
+        std::fs::write(d.join("sources.toml"), made_up_toml()).unwrap();
         let id = |n: &str| gp_arcade::romset::set(n).unwrap().identity();
         std::fs::write(
             d.join(crate::GAME_FILE),
-            r#"{"game": "tapper", "title": "Tapper", "templates": ["tapper", "rbtapper"]}"#,
+            r#"{"game": "made-up", "title": "Made Up", "templates": ["madeupa", "madeupb"]}"#,
         )
         .unwrap();
         let manifest = format!(
-            "[source]\naccepts = [\"{}\"]\n\n[[loads]]\nsource = \"rbtapper\"\naccepts = [\"{}\"]\n",
-            id("tapper"),
-            id("rbtapper")
+            "[source]\naccepts = [\"{}\"]\n\n[[loads]]\nsource = \"madeupb\"\naccepts = [\"{}\"]\n",
+            id("madeupa"),
+            id("madeupb")
         );
         let map = format!(
-            "schema = 1\nplatform = \"arcade\"\nsource = \"tapper\"\nsets = [\"tapper\", \"rbtapper\"]\n\n[[asset]]\nname = \"one\"\nformat = \"byte-rows\"\nregion = \"maincpu\"\noffset = 0\ncount = 1\nwidth = 1\n{at}"
+            "schema = 1\nplatform = \"arcade\"\nsource = \"madeupa\"\nsets = [\"madeupa\", \"madeupb\"]\n\n[[asset]]\nname = \"one\"\nformat = \"byte-rows\"\nregion = \"maincpu\"\noffset = 0\ncount = 1\nwidth = 1\n{at}"
         );
-        for t in ["tapper", "rbtapper"] {
+        for t in ["madeupa", "madeupb"] {
             std::fs::create_dir_all(d.join(t)).unwrap();
             std::fs::write(d.join(t).join("template.toml"), &manifest).unwrap();
             std::fs::write(d.join(t).join("asset-map.toml"), &map).unwrap();
         }
         std::fs::write(
-            d.join("rbtapper").join(crate::LOAD_FILE),
-            r#"{"plays": "tapper"}"#,
+            d.join("madeupb").join(crate::LOAD_FILE),
+            r#"{"plays": "madeupa"}"#,
         )
         .unwrap();
     }
@@ -566,12 +625,12 @@ mod tests {
     fn a_file_that_is_not_a_zip_is_refused_naming_the_game_and_its_sets() {
         let r = refused(b"NES\x1a not a romset");
         assert!(
-            r.error.starts_with("This file isn't a zip. This page takes a MAME romset zip of Tapper: tapper or rbtapper."),
+            r.error.starts_with("This file isn't a zip. This page takes a MAME romset zip of Made Up: madeupa or madeupb."),
             "{}",
             r.error
         );
         assert_eq!(r.expected.len(), 2);
-        assert_eq!(r.expected[1].id.as_deref(), Some("rbtapper"));
+        assert_eq!(r.expected[1].id.as_deref(), Some("madeupb"));
     }
 
     #[test]
@@ -579,7 +638,7 @@ mod tests {
         let r = refused(&zip(&[("readme.txt", b"made up"), ("a.bin", &[7u8; 64])]));
         assert!(
             r.error
-                .starts_with("This zip holds no chip of a Tapper romset."),
+                .starts_with("This zip holds no chip of a Made Up romset."),
             "{}",
             r.error
         );
@@ -595,39 +654,25 @@ mod tests {
         assert!(r.error.starts_with("This zip can't be read"), "{}", r.error);
     }
 
-    /// The owner's romsets, when they are on this machine: each lifts
-    /// onto its folder's model, and a set with a chip taken out is refused
-    /// naming the chip.
+    /// A whole made-up set lifts onto its folder's model, and the set
+    /// with a chip taken out is refused naming the chip.
     #[test]
     fn a_whole_set_is_known_and_a_set_with_a_chip_out_is_refused_by_chip() {
-        let Some(path) = gp_arcade::romset::local_romset("rbtapper") else {
-            eprintln!("skip: no rbtapper.zip in $GP_ROM_DIR");
-            return;
-        };
-        let bytes = std::fs::read(path).unwrap();
-        let files = gp_arcade::romset::read_zip(&bytes).unwrap();
-        let set = gp_arcade::romset::set("rbtapper").unwrap();
-        // Every file but the first chip, stored again.
-        let first = set.chips[0];
-        let kept: Vec<(&str, &[u8])> = files
+        let bytes = made_up_zip("madeupb");
+        let files = made_up_files("madeupb");
+        let first = &files[0];
+        let kept: Vec<(&str, &[u8])> = files[1..]
             .iter()
-            .filter(|(_, d)| {
-                gp_arcade::sha1::sha1(d)
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<String>()
-                    != first.sha1
-            })
             .map(|(n, d)| (n.as_str(), d.as_slice()))
             .collect();
         let r = refused(&zip(&kept));
         assert!(
-            r.error.contains("isn't a whole Tapper romset")
-                && r.error.contains(&format!("lacks {}", first.name)),
+            r.error.contains("isn't a whole Made Up romset")
+                && r.error.contains(&format!("lacks {}", first.0)),
             "{}",
             r.error
         );
-        // The whole set: taken by the rbtapper folder. The made-up map
+        // The whole set: taken by the madeupb folder. The made-up map
         // lifts one byte into a folder of the test's, and the model is missing, so the lift
         // stops there: the set was known and taken.
         let dir = tempfile::tempdir().unwrap();
@@ -635,7 +680,7 @@ mod tests {
         let e = crate::lift_rom(&bytes, dir.path(), &dir.path().join("out"))
             .err()
             .expect("the made-up folder has no model");
-        assert!(e.contains("rbtapper") && e.contains("model.toml"), "{e}");
+        assert!(e.contains("madeupb") && e.contains("model.toml"), "{e}");
         // The same set where the map records no place of its tables:
         // refused by name, before anything is lifted.
         let dir = tempfile::tempdir().unwrap();
@@ -644,9 +689,9 @@ mod tests {
         match crate::lift_rom(&bytes, dir.path(), &out).unwrap() {
             Outcome::Refused(r) => {
                 assert!(
-                    r.error.starts_with("This is rbtapper (")
+                    r.error.starts_with("This is madeupb (")
                         && r.error.contains("which this page doesn't draw right yet: the places of its program's table one aren't recorded")
-                        && r.error.ends_with("This page takes a MAME romset zip of Tapper: tapper (rbtapper isn't drawn right yet)."),
+                        && r.error.ends_with("This page takes a MAME romset zip of Made Up: madeupa (madeupb isn't drawn right yet)."),
                     "{}",
                     r.error
                 );
@@ -664,10 +709,10 @@ mod tests {
             Outcome::Refused(r) => {
                 assert_eq!(
                     r.error,
-                    "This file isn't a zip. This page takes a MAME romset zip of Tapper: tapper (rbtapper isn't drawn right yet)."
+                    "This file isn't a zip. This page takes a MAME romset zip of Made Up: madeupa (madeupb isn't drawn right yet)."
                 );
                 let taken: Vec<_> = r.expected.iter().map(|n| n.id.as_deref()).collect();
-                assert_eq!(taken, [Some("tapper")], "the sets taken leave it out");
+                assert_eq!(taken, [Some("madeupa")], "the sets taken leave it out");
             }
             Outcome::Lifted { .. } => panic!("lifted"),
         }
@@ -676,32 +721,33 @@ mod tests {
     /// A map of one program table, its places given by `at`.
     fn map_with(at: &str) -> gp_assets::arcade::ArcadeMap {
         gp_assets::arcade::ArcadeMap::parse(&format!(
-            "schema = 1\nplatform = \"arcade\"\nsource = \"tapper\"\nsets = [\"tapper\", \"rbtapper\", \"tapperg\", \"tappera\"]\n\n[[asset]]\nname = \"one\"\nformat = \"byte-rows\"\nregion = \"maincpu\"\noffset = 0\ncount = 1\nwidth = 1\n{at}"
+            "schema = 1\nplatform = \"arcade\"\nsource = \"madeupa\"\nsets = [\"madeupa\", \"madeupb\", \"madeupd\", \"madeupc\"]\n\n[[asset]]\nname = \"one\"\nformat = \"byte-rows\"\nregion = \"maincpu\"\noffset = 0\ncount = 1\nwidth = 1\n{at}"
         ))
         .unwrap()
     }
 
     #[test]
     fn a_set_whose_program_tables_have_no_place_is_unplaced() {
+        gp_arcade::romset::add_roms_toml(&made_up_toml()).unwrap();
         let none = map_with("");
         // Another program, no place recorded: unplaced.
-        assert_eq!(tables_unplaced(&none, "rbtapper"), ["one"]);
-        assert_eq!(tables_unplaced(&none, "tappera"), ["one"]);
-        // The map's own set, and a set with the same program chips (tapperg
-        // is tapper's program with other sprites): read where the map says.
-        assert!(tables_unplaced(&none, "tapper").is_empty());
-        assert!(same_program("tapper", "tapperg"));
-        assert!(tables_unplaced(&none, "tapperg").is_empty());
+        assert_eq!(tables_unplaced(&none, "madeupb"), ["one"]);
+        assert_eq!(tables_unplaced(&none, "madeupc"), ["one"]);
+        // The map's own set, and a set with the same program chips (madeupd
+        // is madeupa's program with other tiles): read where the map says.
+        assert!(tables_unplaced(&none, "madeupa").is_empty());
+        assert!(same_program("madeupa", "madeupd"));
+        assert!(tables_unplaced(&none, "madeupd").is_empty());
         // A place recorded for the set: placed.
-        let placed = map_with("\n[asset.at]\nrbtapper = 0x10\n");
-        assert!(tables_unplaced(&placed, "rbtapper").is_empty());
-        assert_eq!(tables_unplaced(&placed, "tappera"), ["one"]);
+        let placed = map_with("\n[asset.at]\nmadeupb = 0x10\n");
+        assert!(tables_unplaced(&placed, "madeupb").is_empty());
+        assert_eq!(tables_unplaced(&placed, "madeupc"), ["one"]);
         // A map that reads no program table has nothing to place.
         let pictures = gp_assets::arcade::ArcadeMap::parse(
-            "schema = 1\nplatform = \"arcade\"\nsource = \"tapper\"\nsets = [\"tapper\", \"rbtapper\"]\n\n[[asset]]\nname = \"tiles\"\nformat = \"mcr-tiles\"\nregion = \"gfx1\"\nfirst = 0\ncount = 4\n",
+            "schema = 1\nplatform = \"arcade\"\nsource = \"madeupa\"\nsets = [\"madeupa\", \"madeupb\"]\n\n[[asset]]\nname = \"tiles\"\nformat = \"mcr-tiles\"\nregion = \"gfx1\"\nfirst = 0\ncount = 4\n",
         )
         .unwrap();
-        assert!(tables_unplaced(&pictures, "rbtapper").is_empty());
+        assert!(tables_unplaced(&pictures, "madeupb").is_empty());
     }
 
     /// A made-up map of five program tables and a picture region: a set
@@ -711,28 +757,29 @@ mod tests {
     /// needs none.
     #[test]
     fn a_set_with_some_places_recorded_and_others_missing_is_unplaced_naming_them() {
+        gp_arcade::romset::add_roms_toml(&made_up_toml()).unwrap();
         let table = |name: &str, at: &str| {
             format!(
                 "\n[[asset]]\nname = \"{name}\"\nformat = \"byte-rows\"\nregion = \"maincpu\"\noffset = 0x100\ncount = 1\nwidth = 1\n{at}"
             )
         };
         let text = format!(
-            "schema = 1\nplatform = \"arcade\"\nsource = \"tapper\"\nsets = [\"tapper\", \"rbtapper\", \"tappera\"]\n\n[[asset]]\nname = \"tiles\"\nformat = \"mcr-tiles\"\nregion = \"gfx1\"\nfirst = 0\ncount = 4\n{}{}{}{}{}",
-            table("moved", "\n[asset.at]\nrbtapper = 0x180\ntappera = 0x190\n"),
-            table("same_place", "\n[asset.at]\nrbtapper = 0x100\n"),
+            "schema = 1\nplatform = \"arcade\"\nsource = \"madeupa\"\nsets = [\"madeupa\", \"madeupb\", \"madeupc\"]\n\n[[asset]]\nname = \"tiles\"\nformat = \"mcr-tiles\"\nregion = \"gfx1\"\nfirst = 0\ncount = 4\n{}{}{}{}{}",
+            table("moved", "\n[asset.at]\nmadeupb = 0x180\nmadeupc = 0x190\n"),
+            table("same_place", "\n[asset.at]\nmadeupb = 0x100\n"),
             table("walk", ""),
-            table("wait", "\n[asset.at]\ntappera = 0x1A0\n"),
+            table("wait", "\n[asset.at]\nmadeupc = 0x1A0\n"),
             table("idle", ""),
         );
         let map = gp_assets::arcade::ArcadeMap::parse(&text).unwrap();
-        assert_eq!(tables_unplaced(&map, "rbtapper"), ["walk", "wait", "idle"]);
+        assert_eq!(tables_unplaced(&map, "madeupb"), ["walk", "wait", "idle"]);
         assert_eq!(
-            tables_unplaced(&map, "tappera"),
+            tables_unplaced(&map, "madeupc"),
             ["same_place", "walk", "idle"]
         );
-        assert!(tables_unplaced(&map, "tapperg").is_empty());
+        assert!(tables_unplaced(&map, "madeupd").is_empty());
         assert_eq!(
-            tables_words(&tables_unplaced(&map, "rbtapper")),
+            tables_words(&tables_unplaced(&map, "madeupb")),
             "walk, wait and idle"
         );
         let many: Vec<String> = (1..=5).map(|i| format!("t{i}")).collect();
@@ -740,11 +787,11 @@ mod tests {
         assert_eq!(tables_words(&many[..1]), "t1");
         // Every place recorded for the set: placed.
         let all = format!(
-            "schema = 1\nplatform = \"arcade\"\nsource = \"tapper\"\nsets = [\"tapper\", \"rbtapper\"]\n{}{}",
-            table("moved", "\n[asset.at]\nrbtapper = 0x180\n"),
-            table("walk", "\n[asset.at]\nrbtapper = 0x100\n"),
+            "schema = 1\nplatform = \"arcade\"\nsource = \"madeupa\"\nsets = [\"madeupa\", \"madeupb\"]\n{}{}",
+            table("moved", "\n[asset.at]\nmadeupb = 0x180\n"),
+            table("walk", "\n[asset.at]\nmadeupb = 0x100\n"),
         );
         let all = gp_assets::arcade::ArcadeMap::parse(&all).unwrap();
-        assert!(tables_unplaced(&all, "rbtapper").is_empty());
+        assert!(tables_unplaced(&all, "madeupb").is_empty());
     }
 }

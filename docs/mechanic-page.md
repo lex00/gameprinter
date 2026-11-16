@@ -368,7 +368,7 @@ the row. The tools, in order:
 |---|---|
 | corpus | The corpus plan's clips, each play once, the test looked for inside each clip |
 | script | The row's `try` steps (probe steps) from its `from` start |
-| autoplay | Tapper's auto-player, `gp mechanic autoplay --search`, which ships inside gp (arcade; `--autoplay` or $GP_AUTOPLAY name another): once from power-on, then on from the row's near point, a save point |
+| autoplay | The game's own auto-player, `gp mechanic autoplay --search`, which runs the driver the game's checks.toml `[autoplay]` names in its folder (arcade; a game without one has none; `--autoplay` or $GP_AUTOPLAY name another): once from power-on, then on from the row's near point, a save point |
 | search | Seeded presses from the row's near point, the generator `gp capture dense` uses |
 | demo | `gp mechanic demo` with Laya (NES), when Laya answers |
 

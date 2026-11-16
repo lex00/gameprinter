@@ -5,35 +5,27 @@
 //! the same clip they must give the same frames together, the same start
 //! and the same first split. On 2026-11-04 a private log script that read
 //! a clip's `presses` and not its `presses_file` gave `gp interp compare` a
-//! clip in which Mario stood still, where the corpus scorer split at the
+//! clip in which the player stood still, where the corpus scorer split at the
 //! clip's frame 1330. `gp clip log` and `gp clip score` take a corpus
 //! clip's ID now, so no one writes that log by hand.
 //!
-//! Ported from game-printer: Donkey Kong is the games checkout's
-//! donkey-kong package now ($GP_GAMES_DIR, or `games` beside the repo),
-//! its hooks run in its module ($GP_DK_MODULE, which `just check-roms`
-//! builds from this tool's kit), and no capture run is started first.
-//! `just check-roms` runs it; it skips with a notice without the ROM, the
-//! games checkout or the module.
+//! Ported from game-printer, where it ran on one game. The tool knows no
+//! game by name now: the game is $GP_GAME_DIR (a game folder), else the
+//! first game of the games checkout ($GP_GAMES_DIR, or `games` beside the
+//! repo) whose checks.toml has a `[clip_agree]` table, whose `clips` are
+//! the corpus clips it checks. Its hooks run in its module
+//! ($GP_GAME_MODULE, which `just check-roms` builds from this tool's kit),
+//! its ROM is the one its corpus.toml names, and no capture run is started
+//! first. `just check-roms` runs it on every game that has one; it skips in
+//! words without the ROM, the game or the module.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::Value;
 
-/// Clips of the Donkey Kong corpus: a short walk, and a hammer clip with
-/// a presses file and random draws.
-const CLIPS: &[&str] = &["dk.walk.001", "dk.hammer.005"];
-
-fn repo() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-fn games() -> PathBuf {
-    std::env::var_os("GP_GAMES_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| repo().join("../games"))
-}
+mod rom_tier;
+use rom_tier::{corpus_rom, game_with, games, repo};
 
 fn gp(home: &Path, roms: &Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_gp"));
@@ -60,34 +52,44 @@ fn json(home: &Path, roms: &Path, args: &[&str]) -> Value {
 }
 
 #[test]
-#[ignore = "ROM tier: needs Donkey Kong: Original Edition in $GP_ROM_DIR, the games checkout and DK's module"]
+#[ignore = "ROM tier: needs a game of the games checkout with checks.toml's [clip_agree], its ROM in $GP_ROM_DIR and its module"]
 fn clip_score_and_corpus_score_agree_on_a_corpus_clip() {
     let Some(roms) = std::env::var_os("GP_ROM_DIR").map(PathBuf::from) else {
         eprintln!("clip_agree: skipped, GP_ROM_DIR isn't set");
         return;
     };
-    let game = games().join("donkey-kong");
+    let (game, checks) = match game_with("clip_agree") {
+        Ok(g) => g,
+        Err(why) => {
+            eprintln!("clip_agree: skipped, {why}");
+            return;
+        }
+    };
+    let name = game.file_name().unwrap().to_string_lossy().into_owned();
+    let clips: Vec<&str> = checks
+        .get("clips")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|c| c.as_str()).collect())
+        .unwrap_or_default();
+    assert!(
+        !clips.is_empty(),
+        "{name}'s checks.toml [clip_agree] names no clips: {checks:?}"
+    );
     if !game.join("corpus.toml").is_file() {
-        eprintln!(
-            "clip_agree: skipped, no games checkout at {}",
-            games().display()
-        );
+        eprintln!("clip_agree: skipped, {name} has no corpus.toml");
         return;
     }
-    let Some(module) = std::env::var_os("GP_DK_MODULE").map(PathBuf::from) else {
-        eprintln!("clip_agree: skipped, GP_DK_MODULE doesn't name Donkey Kong's module");
+    let Some(module) = std::env::var_os("GP_GAME_MODULE").map(PathBuf::from) else {
+        eprintln!("clip_agree: skipped, GP_GAME_MODULE doesn't name {name}'s module");
         return;
     };
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path();
     std::fs::create_dir_all(home.join("store")).unwrap();
     let scan = json(home, &roms, &["roms", "scan"]);
-    let have = scan["roms"]
-        .as_array()
-        .is_some_and(|r| r.iter().any(|r| r["known"]["id"] == "donkey-kong-oe"));
-    if !have {
+    if corpus_rom(&game, &scan).is_none() {
         eprintln!(
-            "clip_agree: skipped, no donkey-kong-oe ROM in {}",
+            "clip_agree: skipped, no ROM {name}'s corpus.toml names in {}",
             roms.display()
         );
         return;
@@ -96,15 +98,15 @@ fn clip_score_and_corpus_score_agree_on_a_corpus_clip() {
     let mut args = vec![
         "corpus", "score", game, "--run", "agree", "--module", module,
     ];
-    for id in CLIPS {
+    for id in &clips {
         args.extend(["--only", id]);
     }
     let corpus = json(home, &roms, &args);
     let mut args = vec!["clip", "score", game, "--module", module];
-    args.extend(CLIPS);
+    args.extend(clips.iter().copied());
     let clip = json(home, &roms, &args);
     let rows = corpus["record"]["predicate"]["clips"].as_array().unwrap();
-    for id in CLIPS {
+    for id in &clips {
         let c = rows
             .iter()
             .find(|r| r["id"] == *id)
@@ -126,7 +128,7 @@ fn clip_score_and_corpus_score_agree_on_a_corpus_clip() {
         );
         assert_eq!(s["start"].as_u64(), c["start"].as_u64(), "{id}: the start");
         eprintln!(
-            "clip_agree: {id}: {} of {} frames together both ways, start {}",
+            "clip_agree: {name}: {id}: {} of {} frames together both ways, start {}",
             s["straight"]["together"], s["straight"]["frames"], s["start"]
         );
     }

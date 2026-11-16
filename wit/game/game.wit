@@ -44,8 +44,8 @@ interface module {
 
   // gp_sim::mechanic::Record, as data: what `gp model mechanics`, the
   // catalog and the clean-room check read of a hook. A hook that describes
-  // nothing is reported as opaque, as it is today (every Donkey Kong hook
-  // does, as of this writing).
+  // nothing is reported as opaque, as it is today (every hook of the one
+  // ported game with hooks does, as of this writing).
   enum carrier { entity, level, game }
 
   enum table-kind { mechanic, content }

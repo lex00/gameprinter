@@ -503,26 +503,26 @@ mod tests {
 
     #[test]
     fn a_pointed_turn_says_where_in_show() {
-        let v = json!({"game": "dk", "mechanic": "walk", "talk": [{
+        let v = json!({"game": "mosshop", "mechanic": "walk", "talk": [{
             "n": 1, "by": "player", "text": "stop at the top",
-            "point": {"label": "Mario", "recording": "walk.001", "frame": 412,
+            "point": {"label": "the frog", "recording": "walk.001", "frame": 412,
                       "rect": [96, 120, 24, 24], "things": [{"label": "ladder"}]}}]});
         let t = show_text(&v);
         assert!(
-            t.contains("1 player: stop at the top [pointing at Mario in walk.001 at frame 412, box 96,120,24,24: ladder]"),
+            t.contains("1 player: stop at the top [pointing at the frog in walk.001 at frame 412, box 96,120,24,24: ladder]"),
             "{t}"
         );
     }
 
     #[test]
     fn a_question_says_the_call_that_answers_it_in_show() {
-        let v = json!({"game": "dk", "mechanic": "walk", "talk": [{
+        let v = json!({"game": "mosshop", "mechanic": "walk", "talk": [{
             "n": 2, "by": "player", "text": "what is this?",
-            "point": {"label": "a spot", "recording": "dk.walk.001", "frame": 412, "rect": [96, 120, 16, 16],
-                      "ask": "explain", "explain": "gp element explain --run g --clip dk.walk.001 --log-frame 412 --box 96,120,16,16 --side original"}}]});
+            "point": {"label": "a spot", "recording": "mosshop.walk.001", "frame": 412, "rect": [96, 120, 16, 16],
+                      "ask": "explain", "explain": "gp element explain --run g --clip mosshop.walk.001 --log-frame 412 --box 96,120,16,16 --side original"}}]});
         let t = show_text(&v);
         assert!(
-            t.contains("[asks what this is: answer from `gp element explain --run g --clip dk.walk.001 --log-frame 412 --box 96,120,16,16 --side original`]"),
+            t.contains("[asks what this is: answer from `gp element explain --run g --clip mosshop.walk.001 --log-frame 412 --box 96,120,16,16 --side original`]"),
             "{t}"
         );
     }

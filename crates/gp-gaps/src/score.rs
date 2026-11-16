@@ -25,8 +25,8 @@ use crate::interactive::Catalog;
 /// RAM items read from the top of the RAM place.
 pub const RAM_TOP: usize = 25;
 
-/// The reference sets kept with the crate, by template. Other games' sets
-/// (Super Mario Bros., Mega Man 2, Super Mario Bros. 2) stayed in game-printer.
+/// The reference sets kept with the crate, by template. Three other NES
+/// games' sets stayed in game-printer.
 pub fn builtin(template: &str) -> Option<&'static str> {
     match template {
         "mosshop" => Some(include_str!("../truth/mosshop.toml")),

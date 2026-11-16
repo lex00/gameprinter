@@ -116,7 +116,7 @@ pub struct Input {
     /// What the move is, in words.
     pub what: String,
     /// The model's parts it used: the options it held and the events it
-    /// caused, as `run.run`, `jump.bands[1]`, `enemy.stomped goomba`.
+    /// caused, as `run.run`, `jump.bands[1]`, `enemy.stomped walker`.
     pub parts: Vec<String>,
     pub edges: Vec<Edge>,
     /// The narrowest edge's width, and its cost in thousandths of a bit.

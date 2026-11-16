@@ -5,8 +5,8 @@
 //! from there once its hash matches the pin, and skips the ref with a
 //! notice when the download isn't there.
 //!
-//! Ported from game-printer's pinned.rs. Its three pins were Super Mario
-//! Bros., Mega Man 2 and Super Mario Bros. 2's disassemblies, cut with those
+//! Ported from game-printer's pinned.rs. Its three pins were three NES
+//! games' disassemblies, cut with those
 //! games, so no game here cites a pinned download yet and [`PINS`] is
 //! empty: a ref with `in` is refused by name until a game adds its pin.
 

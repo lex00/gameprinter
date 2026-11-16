@@ -422,8 +422,8 @@ impl RolePlayer {
     /// the frame's `n` samples.
     pub fn frame(&mut self, cues: &Cues, world: &World, n: usize) -> Vec<i16> {
         // A cue read after this tick sounds from the next frame, as a
-        // game's driver takes the requests the last frame left (Donkey
-        // Kong's at its NMI, $FA48): the driver's first note of a request
+        // game's driver takes the requests the last frame left (one
+        // game's at its NMI, $FA48): the driver's first note of a request
         // comes one frame after the request.
         let now = self.director.roles(cues, world);
         let (starts, stops) = std::mem::replace(&mut self.pending, now);

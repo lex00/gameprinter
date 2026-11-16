@@ -403,7 +403,7 @@ fn run_clips(
 struct Wrong {
     track: String,
     path: String,
-    /// The entity kind (`mario`, `barrel`), from the path.
+    /// The entity kind (`hero`, `barrel`), from the path.
     kind: String,
     /// The field measured (`y`, `facing`).
     field: String,
@@ -436,8 +436,8 @@ fn wrong_of(s: &Value) -> Vec<Wrong> {
         .collect()
 }
 
-/// `bodies.spiny[0].y` -> (`spiny`, `y`); `entities.mario[0].facing` ->
-/// (`mario`, `facing`); `camera.x` -> (`camera`, `x`).
+/// `bodies.spiker[0].y` -> (`spiker`, `y`); `entities.hero[0].facing` ->
+/// (`hero`, `facing`); `camera.x` -> (`camera`, `x`).
 fn kind_field(path: &str) -> (String, String) {
     let parts: Vec<&str> = path.split('.').collect();
     let bare = |s: &str| s.split('[').next().unwrap_or(s).to_owned();
@@ -1068,12 +1068,12 @@ mod tests {
     #[test]
     fn a_measure_path_gives_its_entity_and_field() {
         assert_eq!(
-            kind_field("bodies.spiny[0].y"),
-            ("spiny".into(), "y".into())
+            kind_field("bodies.spiker[0].y"),
+            ("spiker".into(), "y".into())
         );
         assert_eq!(
-            kind_field("entities.mario[0].facing"),
-            ("mario".into(), "facing".into())
+            kind_field("entities.hero[0].facing"),
+            ("hero".into(), "facing".into())
         );
         assert_eq!(kind_field("camera.x"), ("camera".into(), "x".into()));
     }
@@ -1098,8 +1098,8 @@ mod tests {
     fn arguments_are_quoted_only_when_they_need_it() {
         assert_eq!(q("/a/b.nes"), "/a/b.nes");
         assert_eq!(
-            q("/roms/Super Mario (PRG 0).nes"),
-            "\"/roms/Super Mario (PRG 0).nes\""
+            q("/roms/Rooftop Run (PRG 0).nes"),
+            "\"/roms/Rooftop Run (PRG 0).nes\""
         );
         assert_eq!(q("say \"hi\" $x"), "\"say \\\"hi\\\" \\$x\"");
     }

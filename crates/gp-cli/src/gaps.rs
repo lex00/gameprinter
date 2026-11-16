@@ -72,8 +72,8 @@ pub struct GapsArgs {
     #[arg(long)]
     pub labels: Option<PathBuf>,
     /// An ld65 debug file whose labels name the routines, for a game whose
-    /// labels file has RAM labels only (Super Mario Bros.'s `just
-    /// smb-listing`). Used for boards with 32KB of PRG or less.
+    /// labels file has RAM labels only (one built from a game's
+    /// disassembly). Used for boards with 32KB of PRG or less.
     #[arg(long)]
     pub listing: Option<PathBuf>,
     /// The model's lifted assets, for the drawn-box check (default
@@ -470,7 +470,7 @@ fn whole(v: &Value) -> Option<i64> {
 pub(crate) fn read(f: &Field, ram: &[u8], slot: u16) -> Option<i64> {
     // A field read from the sprite table, the nametables or a machine's
     // state has no RAM bytes to read here. (game-printer panicked on one,
-    // Donkey Kong's `counters.frame_odd`.)
+    // one game's `counters.frame_odd`.)
     if !f.index
         && (f.machine.is_some()
             || f.oam_tile.is_some()

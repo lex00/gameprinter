@@ -5,10 +5,10 @@
 use std::path::{Path, PathBuf};
 
 use crate::joystick::FourWay;
-use crate::mcr::{Controls, RAM_RECORD, Tapper};
+use crate::mcr::{Controls, Mcr, RAM_RECORD};
 
 /// The oracle's input log: one entry per frame from frame 1, as bits in
-/// the order of its `columns` line: CSRLDUT for Tapper, or CSRLDUTX with
+/// the order of its `columns` line: CSRLDUT for the MCR board, or CSRLDUTX with
 /// the tilt switch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputLog {
@@ -61,7 +61,7 @@ impl InputLog {
                 let c = c.trim();
                 if !matches!(c, "CSRLDUT" | "CSRLDUTX") {
                     return Err(format!(
-                        "line {}: columns {c}; Tapper's are CSRLDUT, or CSRLDUTX with the tilt",
+                        "line {}: columns {c}; the MCR board's are CSRLDUT, or CSRLDUTX with the tilt",
                         n + 1
                     ));
                 }
@@ -295,7 +295,7 @@ impl FrameDiff {
 }
 
 /// Compares our machine, at the end of frame `n`, with the capture's.
-pub fn compare(t: &Tapper, cap: &Capture, n: usize) -> FrameDiff {
+pub fn compare(t: &Mcr, cap: &Capture, n: usize) -> FrameDiff {
     let ours = t.ram_record();
     let theirs = cap.ram(n);
     let ram = ours
@@ -328,10 +328,10 @@ mod tests {
     #[test]
     fn reads_the_input_log() {
         let log = InputLog::parse(
-            "gp-arcade-input 0\n# a comment\nsystem rbtapper\ncolumns CSRLDUT\n2 .......\n1 C.....T # coin and tap\n",
+            "gp-arcade-input 0\n# a comment\nsystem madeup\ncolumns CSRLDUT\n2 .......\n1 C.....T # coin and tap\n",
         )
         .unwrap();
-        assert_eq!(log.system, "rbtapper");
+        assert_eq!(log.system, "madeup");
         assert_eq!(log.frames, vec![0, 0, 0b100_0001]);
         assert_eq!(
             log.controls(3),
@@ -344,7 +344,7 @@ mod tests {
         assert_eq!(log.controls(9), Controls::default());
         assert!(InputLog::parse("gp-arcade-input 0\nsystem x\ncolumns CS\n1 X.\n").is_err());
         let tilt = InputLog::parse(
-            "gp-arcade-input 0\nsystem tapper\ncolumns CSRLDUTX\n1 ........\n1 .......X\n",
+            "gp-arcade-input 0\nsystem madeup\ncolumns CSRLDUTX\n1 ........\n1 .......X\n",
         )
         .unwrap();
         assert_eq!(
@@ -355,7 +355,7 @@ mod tests {
             }
         );
         assert_eq!(tilt.controls(2).ports()[0], 0xdf);
-        let diag = "gp-arcade-input 0\nsystem tapper\ncolumns CSRLDUT\n1 .......\n2 ..R..U.\n";
+        let diag = "gp-arcade-input 0\nsystem madeup\ncolumns CSRLDUT\n1 .......\n2 ..R..U.\n";
         let direct = InputLog::parse(diag).unwrap();
         assert_eq!(direct.controls(2).ports()[1], !0x09);
         let filtered = InputLog::parse(&diag.replace("columns", "joystick 4way\ncolumns")).unwrap();

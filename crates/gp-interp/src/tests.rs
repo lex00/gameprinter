@@ -322,8 +322,8 @@ fn enemies_spawn_by_the_view_walk_toward_the_player_and_fall() {
 
 #[test]
 fn an_enemy_stands_on_its_tile_box_not_its_contact_box() {
-    // A small contact box inside the frame, as Super Mario Bros.' goomba
-    // has, and the box the game looks for ground and walls with: its foot
+    // A small contact box inside the frame, as a classic platformer's walking
+    // enemy has, and the box the game looks for ground and walls with: its foot
     // 24 below the position. Without a tile box the contact box's bottom
     // touches the floor, and the body stands 4 lower than the game's
     // position, so a frame captured from that position draws 4 into the
@@ -1229,7 +1229,7 @@ fn an_object_that_holds_its_slot_is_carried_and_not_measured() {
 
 /// A watched path the run doesn't compare reads on the original: a slot
 /// field of an object that only holds its slot (a hook's state the start
-/// carries, as Tapper's timers), by its entity's order or every one, and a
+/// carries, as one arcade game's timers), by its entity's order or every one, and a
 /// presentation field. A path the mapping maps nowhere is `None`. The
 /// numbers are made up.
 #[test]
@@ -1272,7 +1272,7 @@ fn a_watched_path_reads_slot_fields_and_presentation_fields() {
 }
 
 /// A watched entity word the model's view leaves out (no hook or
-/// component of its kind counts in it, as Tapper's timers, which a hook
+/// component of its kind counts in it, as one arcade game's timers, which a hook
 /// elsewhere keeps) reads from the model's state. Made-up numbers.
 #[test]
 fn a_watched_word_the_view_leaves_out_reads_from_the_models_state() {
@@ -2450,7 +2450,7 @@ const CLOCK: &str =
     "[counters.clock]\nstart = 100\n\n[[counters.clock.change]]\nevery = 8\nby = -1\n";
 
 /// The model with [`CLOCK`], as an original that keeps the clock the way
-/// Super Mario Bros. keeps its timer: the value at 0x50, and at 0x51 a
+/// one platformer keeps its timer: the value at 0x50, and at 0x51 a
 /// countdown to the next change, 8 just after one and 1 on the frame
 /// before the next.
 #[derive(Clone)]

@@ -40,7 +40,7 @@ pub enum CorpusCmd {
     Show { dir: PathBuf },
     /// The clips added, removed and changed from corpus A to corpus B, and
     /// the version step that makes. Each is a folder, or REV:DIR for a
-    /// folder as git revision REV has it (`HEAD~1:games/donkey-kong`).
+    /// folder as git revision REV has it (`HEAD~1:games/GAME`).
     Diff { a: String, b: String },
     /// Check the corpus's content hash, then make every clip again from the
     /// ROM through the game's module into run RUN (as `gp corpus score`
@@ -132,7 +132,7 @@ pub enum CorpusCmd {
         #[arg(long)]
         date: Option<String>,
         /// A clip to remove from the plan: its ID, or a pattern with `*`
-        /// (`dk.climb-sweep.*`). Repeat it for each. No other clip is
+        /// (`hop.climb-sweep.*`). Repeat it for each. No other clip is
         /// removed: a clip whose session isn't in the home, or that the
         /// sessions now leave out, is kept as it is.
         #[arg(long, value_name = "ID")]
@@ -147,7 +147,7 @@ pub enum CorpusCmd {
     /// ROM, played through the model and checked against its curve. Prints
     /// the clips exact and the fidelity and, with --json, the score record.
     Score {
-        /// The game's package folder (games/donkey-kong), with its corpus
+        /// The game's package folder (games/GAME), with its corpus
         /// plan (corpus.toml) or, for a game not moved yet, clips.toml too.
         game: PathBuf,
         /// The run's name: its starts and caches are kept under $GP_HOME.

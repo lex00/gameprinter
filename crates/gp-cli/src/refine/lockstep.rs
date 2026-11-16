@@ -544,7 +544,7 @@ fn get<'a>(tree: &'a toml::Value, path: &str) -> Option<&'a toml::Value> {
 }
 
 /// The part of the model a mapped path belongs to, as the catalog's
-/// `used_by` names it: `entities.mario[0].x` is `entities.mario`.
+/// `used_by` names it: `entities.hero[0].x` is `entities.hero`.
 fn part_of(path: &str) -> String {
     let Ok(p) = gp_model::Path::parse(path) else {
         return String::new();
@@ -1943,7 +1943,7 @@ pub(crate) fn run_scoped(
                     !ks.is_empty() && ks.iter().all(|k| code_cited(&model, &k.path).is_some());
                 q["code"] = Json::from(coded);
                 // The detector that stopped it, and what the original does
-                // there, in words: "Mario's speed up and down: the
+                // there, in words: "The player's speed up and down: the
                 // original's vy changes by -5, 0, 6 from frame to frame;
                 // every number platformer.jump has for it is the game's
                 // code, and none from a quarter to four times makes the
@@ -2327,7 +2327,7 @@ fn missing_mechanic(
 use gp_interp::scenario::curve_value as curve_num;
 
 /// A number's name in words: `entities.player.run.walk_speed` is "walk
-/// speed", `entities.mario.jump.bands[1].gravity` is "bands 2 gravity".
+/// speed", `entities.hero.jump.bands[1].gravity` is "bands 2 gravity".
 fn param_words(path: &str) -> String {
     let segs: Vec<&str> = path.split('.').collect();
     let last = segs.last().copied().unwrap_or(path).replace('_', " ");
@@ -2470,7 +2470,7 @@ impl Impact {
     }
 }
 
-/// The impact pass in words and JSON: "Most effect on Mario's speed across:
+/// The impact pass in words and JSON: "Most effect on the player's speed across:
 /// walk speed (big), gravity (none)", and the closest drastic value.
 fn impact_json(impacts: &[Impact], path: Option<&str>) -> Json {
     let what = path.map_or("the measure".to_owned(), lockstep::words);
@@ -2534,7 +2534,7 @@ fn closest_says(impacts: &[Impact], first: u64) -> Option<String> {
 /// The round's target in words and JSON: the first wrong frame from the
 /// original's state, counted from `start`, each measure wrong there with
 /// both games' values, and the mechanics whose numbers are tried: "Wrong
-/// from frame 1: Mario's speed across (original 0.0625, rebuilt
+/// from frame 1: the player's speed across (original 0.0625, rebuilt
 /// 0.0371). Trying only platformer.run's numbers."
 fn target_json(
     base: &Lockstep,
@@ -2604,7 +2604,7 @@ fn target_json(
            "says": format!("Wrong from frame {frame}: {what}. {trying}")})
 }
 
-/// Where a window drifted, in words: "Stopped at 3.1 s: entities.mario[0].x
+/// Where a window drifted, in words: "Stopped at 3.1 s: entities.hero[0].x
 /// 2.4 px apart. Working on 2.6 to 3.1 s".
 fn drift_json(setup: &Setup, d: &lockstep::Drift, w: Window) -> Json {
     let f = |x: Fx| x.raw() as f64 / 65536.0;
@@ -3015,41 +3015,63 @@ at = "game.s:11"
     /// A hook's numbers are tried like a mechanic's: each number in its
     /// entity's ext_params, whole when the model writes it whole, under
     /// `ext:HOOK` for a hook that describes nothing; and a counter's hooks
-    /// are those that may write it. Donkey Kong's model from the games
-    /// checkout beside this one; skipped without it.
+    /// are those that may write it. A made-up model whose crane runs a hook
+    /// no record describes.
     #[test]
     fn a_hooks_numbers_are_knobs() {
-        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../games/donkey-kong/model.toml");
-        let Ok(text) = std::fs::read_to_string(&file) else {
-            return;
-        };
+        let text = format!(
+            "{CODED}{}",
+            r#"
+[entities.crane]
+role = "enemy"
+size = [48, 32]
+ext = "crate_drop"
+no_slot = true
+
+[entities.crane.hitbox]
+x = 0
+y = 0
+w = 48
+h = 32
+
+[entities.crane.ext_params]
+hold = 16
+interval = 176
+
+[counters.drop_timer]
+min = 0
+
+[[counters.drop_timer.change]]
+every = 1
+by = -1
+"#
+        );
         let model = Model::parse(&text).unwrap();
         let catalog = gp_interp::mechanics::catalog(&model, &gp_sim::ext::Exts::new());
         let tree = model.to_tree();
-        let ks = hook_knobs(&model, &catalog, &tree, "entities.kong");
+        let ks = hook_knobs(&model, &catalog, &tree, "entities.crane");
         let hold = ks
             .iter()
-            .find(|k| k.path == "entities.kong.ext_params.hold")
+            .find(|k| k.path == "entities.crane.ext_params.hold")
             .unwrap();
-        assert_eq!(hold.mechanic, "ext:dk_throw");
+        assert_eq!(hold.mechanic, "ext:crate_drop");
         assert!(hold.whole);
         assert_eq!(hold.value, Fx::from_int(16));
         assert!(
-            counter_hooks(&model, &catalog, "drop_timer").contains(&"entities.kong".to_owned())
+            counter_hooks(&model, &catalog, "drop_timer").contains(&"entities.crane".to_owned())
         );
-        assert!(hook_named(&model, "ext:dk_throw") && !hook_named(&model, "ext:nope"));
+        assert!(hook_named(&model, "ext:crate_drop") && !hook_named(&model, "ext:nope"));
         assert!(hook_owns(
             &model,
             &catalog,
-            "ext:dk_throw",
-            "entities.kong[0].x"
+            "ext:crate_drop",
+            "entities.crane[0].x"
         ));
         assert!(!hook_owns(
             &model,
             &catalog,
-            "ext:dk_throw",
-            "entities.player[0].x"
+            "ext:crate_drop",
+            "entities.hero[0].x"
         ));
     }
 }

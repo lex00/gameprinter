@@ -438,7 +438,7 @@ export function pictureOf(run, clip) {
 }
 
 /** A clip's picture as an image, 128 across, as game-printer's NES cards
- * were, at the machine's own shape (Tapper's 512 by 480 as much as the
+ * were, at the machine's own shape (an arcade board's 512 by 480 as much as the
  * NES's 256 by 240); loaded when it scrolls into view. */
 export function clipPicture(x, clip) {
   const { width, height } = x.screen;

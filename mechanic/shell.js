@@ -120,7 +120,7 @@ function bars(k, n, w = 10) {
   return "#".repeat(f) + ".".repeat(w - f);
 }
 
-/** One line for a job running: "round 3 on dk.m75.037 ####......". */
+/** One line for a job running: "round 3 on hop.m75.037 ####......". */
 function jobLine(j) {
   const what = j.kind === "refine" ? `round ${j.round ?? "?"} on ${j.name ?? j.clip}` : `scoring ${j.name ?? j.clip}`;
   return `${what} ${bars(j.k ?? 0, j.n ?? 0)}${j.target?.says ? "  " + j.target.says : ""}`;

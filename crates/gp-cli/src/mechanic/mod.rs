@@ -46,6 +46,7 @@ use gp_evidence::Paths;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+mod autoplay;
 mod demo;
 pub(crate) mod detect;
 mod evidence;
@@ -98,7 +99,7 @@ pub enum MechanicCmd {
         #[arg(long)]
         module: Option<PathBuf>,
         /// The ROM set to play, for a game with several in its roms.toml:
-        /// its id (rbtapper) or a file of it. Kept for the game, as the
+        /// its id (such as `game-rev-b`) or a file of it. Kept for the game, as the
         /// page's set picker keeps it (default: the set chosen last, else
         /// the package's scored set).
         #[arg(long)]
@@ -115,7 +116,7 @@ pub enum MechanicCmd {
     /// platform's emulator. Makes the session if it is new. Needs no ROM.
     /// Runs until stopped.
     Watch {
-        /// A name for the work's game (tapper).
+        /// A name for the work's game (its folder's name).
         game: String,
         /// What is being worked on (emulator).
         topic: String,
@@ -297,8 +298,8 @@ pub enum MechanicCmd {
     /// An old home's mechanic work for GAME, brought into this home: its
     /// sessions (clips, conversation, watch files), the quest log, the
     /// gate's scores and the sealed runs. The old name is --old-name, else
-    /// the games checkout's corpus.toml `[import] prefix` (donkey-kong-oe for
-    /// donkey-kong), else GAME. Nothing here is overwritten: a session this
+    /// the games checkout's corpus.toml `[import] prefix` (the old source id
+    /// its clips were imported under), else GAME. Nothing here is overwritten: a session this
     /// home has but never used takes the old one's place; one with clips or
     /// conversation of its own is kept and listed.
     Import {
@@ -441,7 +442,7 @@ pub enum MechanicCmd {
     },
     /// The tools try each quest log row and each lead first, with a
     /// budget, so the queue holds only play the tools can't get: the
-    /// corpus's clips, the row's scripted presses, gp-arcade's autoplay
+    /// corpus's clips, the row's scripted presses, the game's auto-player
     /// with its search (from power-on and from save points), seeded
     /// presses from the row's near point, and the demo with Laya. What a
     /// row has to show is its test in the package's triage.toml. A run
@@ -483,14 +484,12 @@ pub enum MechanicCmd {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Tapper's auto-player (gp_arcade::autoplay): plays the romset from
-    /// power-on, searching past each life lost, and writes NAME.input (an
-    /// oracle input log) and NAME.phases, and the log so far as
-    /// NAME-partial.input as it goes. The flags are the player's own:
-    /// `--rom FILE --out NAME [--search] [--frames N] [--levels N]
-    /// [--idle] [--from LOG] [--until COND] [--jobs N]`; `--until` plays to a
-    /// goal on the board (`ram[0xE70F] == 0`) and stops where it holds.
-    /// `gp mechanic triage` runs it.
+    /// Runs the game's own auto-player: the game whose romset `--rom ZIP`
+    /// is (its identity in a game's roms.toml) names one in its folder's
+    /// checks.toml `[autoplay]`, a cargo package gp builds and runs or a
+    /// program, and gets the flags as given (`--rom ZIP --help` lists
+    /// them). A game without one has none, and this says so. `gp mechanic
+    /// triage` runs it.
     #[command(disable_help_flag = true)]
     Autoplay {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -1010,10 +1009,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                 replace: *replace,
             },
         ),
-        MechanicCmd::Autoplay { args } => {
-            gp_arcade::autoplay::main_with(args.iter().cloned());
-            Ok(Outcome::ok(Value::Null, String::new()))
-        }
+        MechanicCmd::Autoplay { args } => autoplay::run(args),
         MechanicCmd::Leads { game, top, add } => {
             if !name_ok(game) {
                 bail!("a game name is lower-case letters, digits and dashes: {game}");

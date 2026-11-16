@@ -582,9 +582,9 @@ fn machine_vs_model(lv: &Levels<'_>, model: &Model) -> Outcome {
 /// event or an alignment) on any frame from its `after` on, since it fires
 /// on the first frame both hold. A counter condition (`if`) picks between
 /// transitions rather than waiting, so it keeps the exact frame (Moss
-/// Hop's dying state lasts 90 frames, then goes on by its lives). Donkey Kong's spin ends
+/// Hop's dying state lasts 90 frames, then goes on by its lives). One game's death spin ends
 /// 121 frames or more after it starts, on the next frame its step word is
-/// 4 or 12 (128 frames in dk-walk-user-1 at frame 1238).
+/// 4 or 12 (128 frames in one of its walk recordings at frame 1238).
 fn takes(transitions: &[gp_model::model::Transition], to: &str, took: u32) -> bool {
     transitions
         .iter()
@@ -1365,7 +1365,7 @@ fn against_original(lv: &Levels<'_>, model: &Model, subject: &Trace) -> Vec<Outc
             // The two runs are compared while they're on the same path:
             // up to the first frame both are in a level and not the same
             // one. A subject that leaves the original's path (a model whose
-            // Mario misses a jump the recording makes) can't be held to the
+            // player misses a jump the recording makes) can't be held to the
             // levels the original goes on to, which the model's own graph
             // is held to instead. Objects depend on how long a run stays,
             // so only the levels entered and the ways out are compared.
@@ -1523,7 +1523,7 @@ mod tests {
     use super::*;
 
     /// A wrapping counter goes round past `max` as the interpreter's does:
-    /// Donkey Kong's divider (0 to 10, up one a frame) failed its check
+    /// One game's divider (0 to 10, up one a frame) failed its check
     /// at every wrap, 10 + 1 read as 11, not 0.
     #[test]
     fn a_wrapping_counter_goes_round_past_its_max() {
@@ -1537,7 +1537,7 @@ mod tests {
 
     /// A counter a hook may write is held to the model's own changes only
     /// where they explain it; the rest is the hook's, held against the
-    /// original frame for frame. Donkey Kong's hooks keep 50 counters no
+    /// original frame for frame. One ported game's hooks keep 50 counters no
     /// change of the model's names (walk_pose, the barrels' tiles), each of
     /// which failed against the model on its first change.
     #[test]

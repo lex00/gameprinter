@@ -271,27 +271,34 @@ mod tests {
     }
 
     /// An arcade game's path and clip, in the arcade log's spelling, with
-    /// the owner's rbtapper romset: the start is the same cached or
+    /// a real romset ($GP_GAME_DIR's first oracle set): the start is the same cached or
     /// replayed, and the clip's full log is its path then its frames.
     /// Skipped without the romset.
     #[test]
     fn an_arcade_clip_starts_the_same_cached_or_replayed() {
-        let Some(zip) = gp_arcade::romset::local_romset("rbtapper") else {
-            eprintln!("skipped: no rbtapper romset");
-            return;
+        let (set_name, zip) = match gp_arcade::romset::test_oracle_set_path() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("skipped: {e}");
+                return;
+            }
         };
         let rom = fs::read(zip).unwrap();
         let d = tempfile::tempdir().unwrap();
-        let play = "gp-arcade-input 0\nsystem rbtapper\ncolumns CSRLDUT\n40 .......\n6 C......\n20 .......\n";
+        let play = format!(
+            "gp-arcade-input 0\nsystem {set_name}\ncolumns CSRLDUT\n40 .......\n6 C......\n20 .......\n"
+        );
+        let play = play.as_str();
         let (sha, n) = put_path(d.path(), play).unwrap();
         assert_eq!(n, 66);
         let first = original_at(d.path(), &rom, &sha, 50).unwrap();
         assert_eq!(gp_runtime::Runtime::frame(&first), 50);
         let again = original_at(d.path(), &rom, &sha, 50).unwrap();
         assert_eq!(first.state_hex().unwrap(), again.state_hex().unwrap());
-        let own =
-            InputLog::parse("gp-arcade-input 0\nsystem rbtapper\ncolumns CSRLDUT\n5 .S.....\n")
-                .unwrap();
+        let own = InputLog::parse(&format!(
+            "gp-arcade-input 0\nsystem {set_name}\ncolumns CSRLDUT\n5 .S.....\n"
+        ))
+        .unwrap();
         let (t, log) = clip_fields(&sha, 50, &own);
         assert!(log.starts_with("gp-arcade-input 0\n"), "{log}");
         let dir = d.path().join("s");

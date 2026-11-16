@@ -13,8 +13,10 @@
 # machine slows a pass down but doesn't change what it finds.
 # docs/research/farm-ledger.md keeps the history.
 #
-# game-printer's bench also named other games; gameprinter keeps Moss Hop
-# and Donkey Kong only.
+# This file holds the tool's own game, Moss Hop. The tool knows no other
+# game by name: a game of the games checkout joins the bench from its own
+# folder, with a `[farm_blind]` table in its bench.toml (`source`, a
+# roms.toml id whose sha256 finds the ROM, and `set`).
 
 rounds = 1500
 
@@ -23,10 +25,3 @@ name = "mosshop"
 set = "train"
 # Moss Hop, the project's own reference game: `just mosshop` builds it.
 path = "target/mosshop/mosshop.nes"
-
-[[game]]
-name = "donkey-kong-ju"
-set = "train"
-# Donkey Kong (JU). On 2026-11-12 none of stage 0's start runs reached
-# play on it, so its pass ends at "play start" (as in game-printer).
-sha256 = "aa408f5a6b97c0d738e7e8b489a5617ad4a9ecdee2b05c4ee504210ce31b2825"

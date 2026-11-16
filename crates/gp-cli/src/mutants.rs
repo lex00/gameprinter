@@ -41,7 +41,7 @@ pub(crate) struct Mutant {
     pub fix: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub says: String,
-    /// Paths into model.toml to remove: `entities.mario.run.move_step`;
+    /// Paths into model.toml to remove: `entities.hero.run.move_step`;
     /// `*` matches every key, and an array of tables is gone through
     /// element by element.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

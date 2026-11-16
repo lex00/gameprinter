@@ -36,7 +36,7 @@ into = ["entities.associate.jump", "entities.associate.run"]
 note = "Taken whole"
 
 [[inspired_by]]
-template = "smb1-ntsc-prg0"
-took = ["entities.goomba.walk", "entities.goomba.fall", "entities.koopa_green.machine", "entities.bullet_bill.fly"]
+template = "platformer"
+took = ["entities.walker.walk", "entities.walker.fall", "entities.shell.machine", "entities.bullet.fly"]
 into = ["entities.middle_manager.walk", "entities.middle_manager.fall", "entities.printer.machine", "entities.reply_all.fly"]
 note = "Speeds kept at their ratio to the player's walk; the sliding shell kills instead of hurting; frames and sprites dropped"

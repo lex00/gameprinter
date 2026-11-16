@@ -322,7 +322,7 @@ impl Shows for crate::original::OriginalRuntime {
     fn shown(&self) -> Frame {
         match self {
             Self::Nes(n) => original_frame(n),
-            Self::Arcade(a) => arcade_frame(a.tapper()),
+            Self::Arcade(a) => arcade_frame(a.mcr()),
         }
     }
 
@@ -333,7 +333,7 @@ impl Shows for crate::original::OriginalRuntime {
 
 /// An arcade original's frame: its picture, from its pens and the
 /// palette they were drawn with.
-pub(crate) fn arcade_frame(t: &gp_arcade::Tapper) -> Frame {
+pub(crate) fn arcade_frame(t: &gp_arcade::Mcr) -> Frame {
     let (pens, palette) = t.pens();
     let rgb: Vec<[u8; 3]> = palette
         .iter()

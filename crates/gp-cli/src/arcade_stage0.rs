@@ -250,7 +250,7 @@ pub(crate) fn extract(set: &Romset, runs: usize, seed: u64) -> Result<Dataset> {
     // role the main Z80's trace suggests (crate::ramrole_z80,
     // gp_nes::ramrole's rules) in its open row. The NES states the
     // classifier's input role, graded exact on its games; on the board it
-    // isn't: stage 0's idle and Start runs give Tapper 383 bytes by the
+    // isn't: stage 0's idle and Start runs give the first MCR game 383 bytes by the
     // mask rule, most of them filled by the power-on RAM test, so no role
     // is stated. Sprite, video and palette RAM are the picture's.
     let mut bytes: BTreeSet<u16> = lv
@@ -417,14 +417,18 @@ pub(crate) fn dataset_routines(d: Option<&Dataset>) -> BTreeSet<u16> {
 mod tests {
     use super::*;
 
-    /// With the rbtapper romset: the idle and Start runs give a dataset
+    /// With a real romset ($GP_GAME_DIR's first oracle set): the idle
+    /// and Start runs give a dataset
     /// with the board's row, routines that ran, branches both ways and work
     /// RAM rows, written without a byte of the romset. Skipped without it.
     #[test]
     fn an_arcade_dataset_reads_the_main_z80() {
-        let Some(zip) = gp_arcade::romset::local_romset("rbtapper") else {
-            eprintln!("skipped: no rbtapper romset");
-            return;
+        let (set_name, zip) = match gp_arcade::romset::test_oracle_set_path() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("skipped: {e}");
+                return;
+            }
         };
         let set = Romset::from_zip(&std::fs::read(zip).unwrap()).unwrap();
         let mut d = extract(&set, 0, 1).unwrap();
@@ -432,7 +436,7 @@ mod tests {
         let rom = &d.rows("rom")[0];
         assert_eq!(
             rom["board"],
-            crate::rom_dataset::Cell::S(Some("midway-mcr (rbtapper)".into()))
+            crate::rom_dataset::Cell::S(Some(format!("midway-mcr ({set_name})")))
         );
         assert_eq!(d.rows("runs").len(), 2);
         let ran = d
@@ -456,7 +460,7 @@ mod tests {
         )
         .unwrap();
         // A frame's entries: the reset routine's first, then what it calls.
-        let mut t = gp_arcade::Tapper::power_on(&set);
+        let mut t = gp_arcade::Mcr::power_on(&set);
         let trace = crate::covered::frame_trace(&mut t, gp_arcade::Controls::default());
         assert!(!entries(&trace, &dataset_routines(Some(&d))).is_empty());
     }

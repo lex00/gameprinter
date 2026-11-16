@@ -2,7 +2,7 @@
 schema = "0.4.0"
 name = "swing_state"
 title = "Swing State"
-description = "An original: a campaign as a platformer. The candidate runs the trail from a town hall to election night, stomping hecklers, dodging attack ads and pundits who rise from their lecterns, and taking donations on the way. Its mechanics are composed from Super Mario Bros.' movement, paratroopas, piranha plants and bullet bills and Moss Hop's patrolling slugs, rescaled to the candidate (docs/originals.md)"
+description = "An original: a campaign as a platformer. The candidate runs the trail from a town hall to election night, stomping hecklers, dodging attack ads and pundits who rise from their lecterns, and taking donations on the way. Its mechanics are composed from a platformer template's movement, hopping walkers, rising plants and bullets (template.toml's inspired_by) and Moss Hop's patrolling slugs, rescaled to the candidate (docs/originals.md)"
 source = "swing-state"
 view = "side"
 frame_rate = "60"
@@ -617,7 +617,7 @@ at = "template:swing-state"
 [evidence.cameras]
 source = "stated"
 confidence = 100
-note = "The template author's; scroll_back false as in Super Mario Bros."
+note = "The template author's; scroll_back false as in the source platformer"
 
 [[evidence.cameras.refs]]
 at = "template:swing-state"
@@ -641,50 +641,50 @@ at = "template:swing-state"
 [evidence."entities.attack_ad.fly"]
 source = "stated"
 confidence = 100
-note = "Super Mario Bros.' bullet bill speed (entities.bullet_bill.fly), aimed at the player"
+note = "The source platformer's bullet speed (the bullet's fly, template.toml's inspired_by), aimed at the player"
 
 [[evidence."entities.attack_ad.fly".refs]]
-at = "inspired-by:smb1-ntsc-prg0"
+at = "inspired-by:platformer"
 
 [evidence."entities.candidate.hitbox"]
 source = "stated"
 confidence = 100
-note = "Small Mario's hitbox (entities.mario.hitbox) moved to the top of a 16 by 16 box"
+note = "The source platformer's small player's hitbox moved to the top of a 16 by 16 box"
 
 [[evidence."entities.candidate.hitbox".refs]]
-at = "inspired-by:smb1-ntsc-prg0"
+at = "inspired-by:platformer"
 
 [evidence."entities.candidate.jump"]
 source = "stated"
 confidence = 100
-note = "Super Mario Bros.' jump with its bands, gravity while held and move_first, taken whole from entities.mario.jump"
+note = "The source platformer's jump with its bands, gravity while held and move_first, taken whole from its player's jump"
 
 [[evidence."entities.candidate.jump".refs]]
-at = "inspired-by:smb1-ntsc-prg0"
+at = "inspired-by:platformer"
 
 [evidence."entities.candidate.run"]
 source = "stated"
 confidence = 100
-note = "Super Mario Bros.' run, taken whole from entities.mario.run: the candidate is the scale the rest is converted to"
+note = "The source platformer's run, taken whole from its player's run: the candidate is the scale the rest is converted to"
 
 [[evidence."entities.candidate.run".refs]]
-at = "inspired-by:smb1-ntsc-prg0"
+at = "inspired-by:platformer"
 
 [evidence."entities.heckler"]
 source = "stated"
 confidence = 100
-note = "Super Mario Bros.' jumping paratroopa (entities.paratroopa_green): walk, fall, hop -3, and a stomp that leaves a walker. Speeds are unchanged, since the candidate moves as Mario does"
+note = "The source platformer's hopping walker: walk, fall, hop -3, and a stomp that leaves a walker. Speeds are unchanged, since the candidate moves as that game's player does"
 
 [[evidence."entities.heckler".refs]]
-at = "inspired-by:smb1-ntsc-prg0"
+at = "inspired-by:platformer"
 
 [evidence."entities.heckler_on_foot"]
 source = "stated"
 confidence = 100
-note = "The koopa a stomped paratroopa becomes, without its shell"
+note = "The walker a stomped hopping walker becomes, without its shell"
 
 [[evidence."entities.heckler_on_foot".refs]]
-at = "inspired-by:smb1-ntsc-prg0"
+at = "inspired-by:platformer"
 
 [evidence."entities.pollster.contact"]
 source = "stated"
@@ -705,10 +705,10 @@ at = "inspired-by:mosshop"
 [evidence."entities.pundit.path"]
 source = "stated"
 confidence = 100
-note = "Super Mario Bros.' piranha plant path (entities.piranha_plant.path), unchanged"
+note = "The source platformer's rising plant's path, unchanged"
 
 [[evidence."entities.pundit.path".refs]]
-at = "inspired-by:smb1-ntsc-prg0"
+at = "inspired-by:platformer"
 
 [evidence.input]
 source = "stated"

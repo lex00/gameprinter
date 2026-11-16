@@ -5,7 +5,7 @@
 // z80.inc). The instructions themselves are in ops.rs, generated from
 // MAME's z80.lst by tools/gen_z80.py. This file holds the registers, the
 // flag tables and the helpers the instructions call, as z80.cpp has them.
-// Only the NMOS Z80 that both of Tapper's boards use is here.
+// Only the NMOS Z80 that both MCR boards use is here.
 
 //! MAME's Z80, step for step.
 //!

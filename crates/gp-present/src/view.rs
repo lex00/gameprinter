@@ -211,7 +211,7 @@ pub fn level_edges(spec: &Spec, w: &World) -> (Option<i64>, bool) {
 /// body order), each body's sprites left to right. A body the game draws
 /// into the name table isn't counted. When the limit flickers the bodies'
 /// order is turned by the frame number. A body may lose a few lines of one
-/// column: Original Edition's 50m drops a moving ladder's lower sprites on
+/// column: one game's second stage drops a moving ladder's lower sprites on
 /// the lines its pies crowd, as the ladders come last in the table
 /// ($02C0).
 pub fn sprite_cuts(p: &Present, s: &Scene, win: &Window, frame: u64) -> Vec<Vec<[i64; 4]>> {

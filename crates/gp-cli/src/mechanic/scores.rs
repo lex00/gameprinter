@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn the_quest_log_takes_its_scores_from_the_gates_status() {
         let d = tempfile::tempdir().unwrap();
-        let g = d.path().join("mechanics/dk");
+        let g = d.path().join("mechanics/mosshop");
         for (m, n) in [("walk", 1), ("clear", 2)] {
             fs::create_dir_all(g.join(m).join("clips")).unwrap();
             for i in 1..=n {
@@ -177,7 +177,7 @@ mod tests {
                 {"mechanic": "jump", "status": "next", "note": "not recorded"}]"#,
         )
         .unwrap();
-        let r = d.path().join("work/refine/dk");
+        let r = d.path().join("work/refine/mosshop");
         fs::create_dir_all(&r).unwrap();
         fs::write(
             r.join("status.json"),
@@ -188,17 +188,17 @@ mod tests {
                     {"mechanic": "clear", "straight": {"together": 3000, "of": 3360, "pct": 89.3},
                      "resync": {"together": 3300, "of": 3360, "pct": 98.2}, "longest_exact": {"frames": 1640, "clip": 1}}],
                 "clips": [
-                    {"id": "dk.walk.001", "mechanic": "walk", "clip": 1, "straight": {"together": 352, "of": 352},
+                    {"id": "mosshop.walk.001", "mechanic": "walk", "clip": 1, "straight": {"together": 352, "of": 352},
                      "first_split": null, "bars": {"together": true, "longest_stretch": null}},
-                    {"id": "dk.clear-25m.001", "mechanic": "clear", "clip": 1, "straight": {"together": 3000, "of": 3360},
-                     "first_split": {"frame": 3446, "clip_frame": 3000, "what": "mario.x apart"},
+                    {"id": "mosshop.clear-1.001", "mechanic": "clear", "clip": 1, "straight": {"together": 3000, "of": 3360},
+                     "first_split": {"frame": 3446, "clip_frame": 3000, "what": "hero.x apart"},
                      "bars": {"together": false, "longest_stretch": true}},
-                    {"id": "dk.blind-farm.001", "mechanic": "blind-farm", "clip": 1, "straight": {"together": 1, "of": 1}}]
+                    {"id": "mosshop.blind-farm.001", "mechanic": "blind-farm", "clip": 1, "straight": {"together": 1, "of": 1}}]
             }))
             .unwrap(),
         )
         .unwrap();
-        let q = scored_queue(d.path(), "dk");
+        let q = scored_queue(d.path(), "mosshop");
         assert_eq!(q[0]["status"], "done");
         assert_eq!(q[0]["typed_status"], "agent working");
         assert_eq!(q[0]["note"], "typed: 4 of 4");
@@ -214,7 +214,7 @@ mod tests {
             "{s}"
         );
         assert!(
-            s.contains("first split: clip 1 at frame 3446 (the clip's 3000), mario.x apart"),
+            s.contains("first split: clip 1 at frame 3446 (the clip's 3000), hero.x apart"),
             "{s}"
         );
         assert!(s.contains("1 clip not in the game's tests yet"), "{s}");

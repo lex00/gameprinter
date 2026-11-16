@@ -247,16 +247,16 @@ pub struct Input {
     /// a game filters them. A direction that acted on the frame before and
     /// is still held stays the only one, and newly held ones wait until it
     /// is let go; with none of them held, every direction held acts.
-    /// Donkey Kong's pad routine ($F549) keeps the old directions that are
-    /// still held, so Up added while walking left doesn't climb until Left
+    /// One single-screen game's pad routine ($F549) keeps the old
+    /// directions that are still held, so Up added while walking left doesn't climb until Left
     /// is let go.
     #[serde(default, skip_serializing_if = "is_false")]
     pub keep_direction: bool,
     /// Feature `input.turn`: in a game whose players take turns, the
     /// player whose turn it is plays from their own controller. While the
     /// counter is k, these actions read controller k + 1; every other
-    /// action reads controller 1. Donkey Kong's player routine reads the
-    /// pad at $15 + 2 times the player in $52 ($D175), so player 2 plays
+    /// action reads controller 1. One single-screen game's player routine
+    /// reads the pad at $15 + 2 times the player in $52 ($D175), so player 2 plays
     /// from controller 2, while Start and Select are read from controller
     /// 1 only ($CF42, $CE8B).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -267,9 +267,9 @@ pub struct Input {
 /// level of its name or, for a stage the model doesn't hold yet, by a
 /// stand-in level. A counter the model's rules step as the game does says
 /// which stage is being played; `next-level` and `restart-level` start the
-/// level that plays it. Donkey Kong's NES port plays 25m, 75m and 100m and
-/// then 25m again a loop harder ($D096-$D0AE); a model with 25m only plays
-/// 25m in each slot, while the stage counter, the loops and what they
+/// level that plays it. One single-screen game plays three stages and
+/// then the first again a loop harder ($D096-$D0AE); a model with the
+/// first stage only plays it in each slot, while the stage counter, the loops and what they
 /// change (the bonus, the difficulty, the level number) go on as the
 /// game's.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -289,9 +289,10 @@ pub struct Stages {
     /// Feature `stages.skip`: stages of `order` the game passes over.
     /// When the rules step the counter onto one, it steps on again the
     /// same way (past the end with its wrap), so no level plays it.
-    /// Donkey Kong (JU) has no 50m and steps its stage number $53 from 1
-    /// (25m) to 3 (75m); Original Edition's model, loaded with a JU ROM,
-    /// skips 50m's place rather than playing a stand-in in it.
+    /// One game's first release has no second stage and steps its stage
+    /// number $53 from 1 to 3; a later edition's model, which has that
+    /// stage, loaded with the first release's ROM skips the stage's place
+    /// rather than playing a stand-in in it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skip: Vec<String>,
 }
@@ -366,7 +367,7 @@ pub enum Button {
     Coin,
     /// An arcade one-player start button.
     Start1,
-    /// An arcade player's first button (Tapper's tap).
+    /// An arcade player's first button (an arcade game's one action button).
     Button1,
 }
 
@@ -404,11 +405,11 @@ pub struct AssetSlot {
     /// For a `screen-text` slot: the `tiles` slot its layouts are drawn
     /// with where a screen shows them (`present.screens`), in place of
     /// the level's (feature `assets.screen_tiles`): a screen the game
-    /// draws with another pattern table or CHR bank. Donkey Kong: Original
-    /// Edition draws its title with CHR bank 1 (the hook at $C8F3).
+    /// draws with another pattern table or CHR bank. One game's later
+    /// edition draws its title with CHR bank 1 (the hook at $C8F3).
     /// For a `level-objects` slot filled from update strings: the `tiles`
     /// slot a level drawn from it uses, in place of the level's (feature
-    /// `assets.layout_tiles`); Original Edition draws 50m with CHR bank 1
+    /// `assets.layout_tiles`); that edition draws a stage with CHR bank 1
     /// ($CB5D -> $838A). Presentation only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tiles: Option<String>,
@@ -451,11 +452,10 @@ pub enum AssetKind {
     /// Rows of numbers (`table`).
     Table,
     /// Lists of objects that build a level's tiles, one list per entry
-    /// (`smb-area-objects`, `smb2-level-objects`, or Mega Man 2's
-    /// `mm2-screens`).
+    /// (the asset map's area, level and screen object formats).
     LevelObjects,
     /// Lists of objects that place entities in a level, one list per entry
-    /// (`smb-enemy-objects`, `smb2-enemy-objects`, or `mm2-spawns`).
+    /// (the asset map's enemy object and spawn formats).
     SpawnObjects,
     /// Rows of bytes, such as a game's sprite frames (`byte-rows`).
     Rows,
@@ -508,6 +508,32 @@ pub enum AssetKind {
     BoardFont,
 }
 
+/// Asset map formats that were renamed, as (old name, name): the old
+/// names were the games each format was first written for, and a map that
+/// still says one reads as the new name.
+pub const MAP_FORMAT_ALIASES: &[(&str, &str)] = &[
+    ("smb-area-objects", "nes-area-objects-v1"),
+    ("smb2-level-objects", "nes-area-objects-v2"),
+    ("mm2-screens", "nes-screens-v1"),
+    ("mm2-overlay-sets", "nes-overlay-sets-v1"),
+    ("smb-enemy-objects", "nes-spawn-objects-v1"),
+    ("smb2-enemy-objects", "nes-spawn-objects-v2"),
+    ("mm2-spawns", "nes-spawn-objects-v3"),
+    ("smb-music", "nes-music-v1"),
+    ("mm2-chr-uploads", "nes-chr-uploads-v1"),
+    ("mm2-palettes", "nes-palette-sets-v1"),
+    ("mm2-metatiles", "nes-metatiles-4x4-v1"),
+];
+
+/// An asset map format's name: the new name for an old one
+/// ([`MAP_FORMAT_ALIASES`]), any other name as it is.
+pub fn map_format_name(format: &str) -> &str {
+    MAP_FORMAT_ALIASES
+        .iter()
+        .find(|(old, _)| *old == format)
+        .map_or(format, |(_, new)| new)
+}
+
 impl AssetKind {
     /// The asset map formats that lift into this kind of slot. Each object
     /// list format has a builder in the runtimes (docs/model.md, "Asset
@@ -520,24 +546,34 @@ impl AssetKind {
             Self::LevelGrid => &["level-grid"],
             Self::Table => &["table"],
             Self::LevelObjects => &[
-                "smb-area-objects",
-                "smb2-level-objects",
-                "mm2-screens",
+                "nes-area-objects-v1",
+                "nes-area-objects-v2",
+                "nes-screens-v1",
                 "ppu-strings",
             ],
-            Self::SpawnObjects => &["smb-enemy-objects", "smb2-enemy-objects", "mm2-spawns"],
+            Self::SpawnObjects => &[
+                "nes-spawn-objects-v1",
+                "nes-spawn-objects-v2",
+                "nes-spawn-objects-v3",
+            ],
             Self::Rows => &["byte-rows"],
             // A font is a charset: a string asset's, or a tile asset's own.
             Self::Font => &["ppu-strings", "chr-2bpp"],
             Self::ScreenText => &["ppu-strings"],
             Self::SpriteSet => &["sprite-set"],
-            Self::Songs | Self::SoundEffects => &["gp-songs", "smb-music"],
+            Self::Songs | Self::SoundEffects => &["gp-songs", "nes-music-v1"],
             Self::BoardTiles => &["mcr-tiles"],
             Self::BoardSprites => &["mcr-sprites"],
             Self::BoardScreen => &["mcr-screen"],
             Self::BoardPalette => &["mcr-palette"],
             Self::BoardFont => &["mcr-font"],
         }
+    }
+
+    /// Whether an asset map format lifts into this kind of slot, by its
+    /// name or by the older name it had ([`map_format_name`]).
+    pub fn takes(self, format: &str) -> bool {
+        self.map_formats().contains(&map_format_name(format))
     }
 
     /// The first of [`AssetKind::map_formats`], for messages.
@@ -642,55 +678,55 @@ pub struct EntityCore {
     /// as rows. Only an entity with `ext` has them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ext_rows: BTreeMap<String, String>,
-    /// Takes none of a level's `spawn_slots`: Super Mario Bros.' hammers
+    /// Takes none of a level's `spawn_slots`: a scrolling game's hammers
     /// and a firebar's fireballs, which the game keeps outside its enemy
     /// slots. Since core 0.4.10.
     #[serde(default, skip_serializing_if = "is_false")]
     pub no_slot: bool,
     /// Feature `entity.hook_through_stops`: its `ext` hook still runs on a
     /// frame a state's `stops` lists the system it runs in (not under a
-    /// `freeze`). Donkey Kong's oil drum keeps the game's frame timers,
+    /// `freeze`). One game's oil drum hook keeps the game's frame timers,
     /// which count on through a death while the fires stand still.
     #[serde(default, skip_serializing_if = "is_false")]
     pub hook_through_stops: bool,
     /// Feature `entity.hook_frame_start`: its `ext` hook's `frame_start`
     /// runs at the start of every frame, before the first system, frozen
     /// or not, as a game's NMI runs its sound driver before anything else.
-    /// Donkey Kong's sound driver steps there.
+    /// One single-screen game's sound driver steps there.
     #[serde(default, skip_serializing_if = "is_false")]
     pub hook_frame_start: bool,
     /// Feature `entity.hook_first`: its `ext` hook runs at the start of the
     /// `platformer.player` system, before the player moves, rather than in
     /// `platformer.enemies` after it: a game routine that sets what the
-    /// player's routine reads. Donkey Kong's attract demo ($EBDA) puts the
-    /// script's direction in $56 just before Mario's routine reads it.
+    /// player's routine reads. One game's attract demo ($EBDA) puts the
+    /// script's direction in $56 just before the player's routine reads it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub hook_first: bool,
     /// Feature `entity.hook_last`: its `ext` hook runs once at the end of
     /// every frame, after every system, frozen, stopped or a level start
     /// alike, and not in `platformer.enemies`: a game's idle loop, which
-    /// runs after the frame's work whatever it was. Donkey Kong's ($C7E1)
+    /// runs after the frame's work whatever it was. One game's ($C7E1)
     /// steps its random register once a pass while it waits for the NMI.
     #[serde(default, skip_serializing_if = "is_false")]
     pub hook_last: bool,
     /// More of a level's `spawn_slots` it takes besides its own, numbered
-    /// slots included: Super Mario Bros.' long firebar, for which
+    /// slots included: a scrolling game's long firebar, for which
     /// DuplicateEnemyObj takes the next free enemy slot.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub extra_slots: u32,
-    /// Its own `despawn_behind`, in place of the level's: Super Mario
-    /// Bros.' piranha plants and hammer brothers go sooner than the rest
+    /// Its own `despawn_behind`, in place of the level's: a scrolling
+    /// game's pipe plants and hammer throwers go sooner than the rest
     /// (OffscreenBoundsCheck). Since core 0.4.10.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub despawn_behind: Option<Fixed>,
     /// `[from, behind]`: while the view's left edge is `from` or more into
-    /// its 256-pixel page, `behind` stands in for `despawn_behind`. Super
-    /// Mario Bros.' OffscreenBoundsCheck adds 57 to the edge's low byte and
+    /// its 256-pixel page, `behind` stands in for `despawn_behind`. A
+    /// scrolling game's OffscreenBoundsCheck adds 57 to the edge's low byte and
     /// the carry out of that takes a whole page off the limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub despawn_behind_wrap: Option<[u32; 2]>,
-    /// Its own `despawn_ahead`, in place of the level's: Super Mario Bros.'
-    /// cannon bill flies off to the right and goes past the same line
+    /// Its own `despawn_ahead`, in place of the level's: a scrolling game's
+    /// cannon shell flies off to the right and goes past the same line
     /// (OffscreenBoundsCheck), where a level's would also take what a start
     /// or a layout leaves out there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -847,7 +883,7 @@ pub struct Sprite {
     /// Mirrored left to right while the entity faces left.
     #[serde(default, skip_serializing_if = "is_false")]
     pub flip_when_facing_left: bool,
-    /// Since core 0.4.20: a second picture below the first (Super Mario Bros.'
+    /// Since core 0.4.20: a second picture below the first (a scrolling game's
     /// DrawSmallPlatform draws a small lift twice).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub copy: Option<SpriteCopy>,
@@ -885,7 +921,7 @@ pub struct Sprite {
     pub behind: bool,
     /// Drawn behind the level's picture, as `behind`, on the frames this
     /// holds: a game that sets a sprite's priority bit by where the object
-    /// is or what it is doing, as Donkey Kong gives a barrel rolling on
+    /// is or what it is doing, as one single-screen game gives a barrel rolling on
     /// the bottom girder left of x $30 attribute $23, behind the oil drum
     /// ($DFC3). Presentation only. Feature `sprite.behind_when`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -893,28 +929,28 @@ pub struct Sprite {
     /// A part of the picture held where the body is while the rest is
     /// drawn moved by two counters' values: a game that moves one of an
     /// object's hardware sprites and leaves the others where its last
-    /// draw put them for a frame, as Donkey Kong moves only Mario's first
-    /// sprite on the frame he walks off a girder's end with the hammer
+    /// draw put them for a frame, as one game moves only the player's first
+    /// sprite on the frame they walk off a girder's end with the hammer
     /// ($D70A/$D710, $D72B) and draws none of the others. Presentation
     /// only. Feature `sprite.split`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub split: Option<Split>,
     /// Drawn as the picture the body it replaced showed last: a body a
     /// defeat leaves (`health.defeat.becomes`) looks like the enemy it
-    /// was, turned over with `flip_y`, as Super Mario Bros.' defeated
+    /// was, turned over with `flip_y`, as a scrolling game's defeated
     /// enemies fall upside down. A body with nothing to copy (one a start
     /// carried in) draws the sprite's own frame. Since core 0.4.21.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replaced: Option<Replaced>,
     /// Drawn over every body without it, whatever their order: a console
-    /// draws its first sprites over the rest, and Super Mario Bros. puts
-    /// Mario's first (Player_SprDataOffset, DefaultSprOffsets' $04).
+    /// draws its first sprites over the rest, and a scrolling game puts
+    /// the player's first (Player_SprDataOffset, DefaultSprOffsets' $04).
     /// Since core 0.4.21.
     #[serde(default, skip_serializing_if = "is_false")]
     pub front: bool,
     /// Tiles the game writes into the background's name table rather
-    /// than sprites, drawn as a body: Donkey Kong is background tiles, his
-    /// poses rewritten in place. The screen measure counts its pixels as
+    /// than sprites, drawn as a body: one game's large ape is background
+    /// tiles, its poses rewritten in place. The screen measure counts its pixels as
     /// the background's, and the sprite limit doesn't count it. Feature
     /// `sprite.name_table`.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -922,14 +958,14 @@ pub struct Sprite {
     /// Mirrored where it is, as a console flips a sprite by its attribute
     /// bits: a facing or clip flip leaves the picture's left edge at
     /// `offset` instead of turning it about the middle of the hitbox.
-    /// Donkey Kong draws Mario facing left at the same $0203 as facing
+    /// One game draws its player facing left at the same $0203 as facing
     /// right. Feature `sprite.flip_in_place`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub flip_in_place: bool,
     /// The picture a body that replaces this one draws, when its sprite
     /// has `replaced`, in place of this one's last picture turned over: a
-    /// game that draws a defeated enemy with a frame of its own, as Super
-    /// Mario Bros.' koopas fall as an upside-down shell
+    /// game that draws a defeated enemy with a frame of its own, as a
+    /// scrolling game's shelled enemies fall as an upside-down shell
     /// (CheckUpsideDownShell). Its slot, frame, width, palette, cells and
     /// offset are read. Since core 0.4.21.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1231,8 +1267,8 @@ pub struct Clip {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub by_speed: Vec<SpeedStep>,
     /// `by_speed` reads the speed the entity had on the frame before, as
-    /// a game that picks its animation's time before it moves. Super Mario
-    /// Bros.' GetPlayerAnimSpeed runs before ImposeFriction. Since core
+    /// a game that picks its animation's time before it moves. A scrolling
+    /// game's GetPlayerAnimSpeed runs before ImposeFriction. Since core
     /// 0.4.18.
     #[serde(default, skip_serializing_if = "is_false")]
     pub speed_before: bool,
@@ -1288,31 +1324,31 @@ pub struct When {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub climbing: Option<bool>,
     /// One of the entity's `ext` hook's words is in a range, such as
-    /// Super Mario Bros.' Lakitu ducking into its cloud while its copy of
+    /// a scrolling game's cloud rider ducking into its cloud while its copy of
     /// FrenzyEnemyTimer is below 16. Since core 0.4.21.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub word: Option<WordTest>,
     /// More word tests, each of which must hold too, for a hook that keeps
-    /// what a picture depends on in two words (Donkey Kong's barrels: their
+    /// what a picture depends on in two words (one game's barrels: their
     /// state and their girder). Feature `clip.when_words`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub words: Vec<WordTest>,
     /// The model's counters are in ranges, each one given, for a picture
     /// the game picks by a timer or a flag the model keeps as a counter
-    /// (Donkey Kong's oil drum burns while `drum` is above 0). Presentation
+    /// (one game's oil drum burns while `drum` is above 0). Presentation
     /// reads the counters; nothing in the simulation reads the clip.
     /// Feature `clip.when_counter`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub counters: Vec<CounterTest>,
     /// Counters named by the body's slot, each in its range: the test's
-    /// `name` followed by the number of the slot the body is in (Donkey
-    /// Kong's `barrel_tile` names `barrel_tile0` for the barrel in slot
+    /// `name` followed by the number of the slot the body is in (one
+    /// game's `barrel_tile` names `barrel_tile0` for the barrel in slot
     /// 0), for a picture the game keeps per object slot. A body in no slot
     /// fails it. Presentation only. Feature `clip.when_slot_counter`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub slot_counters: Vec<CounterTest>,
     /// The entity's x in whole pixels is at least this, for a picture the
-    /// game picks by where the object is on the screen (Donkey Kong's
+    /// game picks by where the object is on the screen (one game's
     /// barrel goes behind the oil drum left of x $30, $DFC3). Presentation
     /// only. Feature `clip.when_x`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1367,7 +1403,7 @@ pub struct ClipFrame {
     pub row: Option<u32>,
     /// The `rows` slot `row` is read from, in place of the sprite's frame
     /// slot, for a game that keeps its pictures in tables of their own
-    /// (Donkey Kong's poses, each behind a size byte). Feature
+    /// (one game's poses, each behind a size byte). Feature
     /// `clip.frame_slot`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot: Option<String>,
@@ -1386,20 +1422,20 @@ pub struct ClipFrame {
     pub cells: Vec<Cell>,
     /// Its picture's top left from the entity's position, as the sprite's
     /// `offset`, for a game that places each picture of a turn apart
-    /// (Super Mario Bros.' hammer, DrawHammer). Without it, the sprite's.
+    /// (a scrolling game's hammer, DrawHammer). Without it, the sprite's.
     /// Since core 0.4.21.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<[i32; 2]>,
     /// Frames this picture shows for, in place of the clip's `every`, for
-    /// a game that holds some pictures longer than others (Donkey Kong's
-    /// Pauline calls for help in eight 16-frame steps, then waits). Every
+    /// a game that holds some pictures longer than others (one game's
+    /// captive calls for help in eight 16-frame steps, then waits). Every
     /// frame of the clip gives one, or none does. Feature
     /// `clip.frame_every`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub every: Option<u32>,
     /// Its colors, as the sprite's `colors`, for a game that writes a
-    /// sprite palette while something lasts (Donkey Kong's 100m turns the
-    /// fires' palette blue from a hammer's touch to its end, $D89A and
+    /// sprite palette while something lasts (one game's last stage turns
+    /// the fires' palette blue from a hammer's touch to its end, $D89A and
     /// $D7F2). Without it, the sprite's. Feature `clip.frame_colors`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub colors: Option<PaletteRef>,
@@ -1469,7 +1505,7 @@ pub struct LevelPresent {
     pub sprite_order: BTreeMap<String, SpriteOrder>,
     /// Feature `present.effect_order`: each effect's place in the same
     /// table, by the event that starts it, so it is painted under or over
-    /// the bodies as the console draws it. Donkey Kong's points sprites
+    /// the bodies as the console draws it. One game's points sprites
     /// are $02C0 and $02C8 ($CFC6), sprites 48 and 50, over the hammers'
     /// 52 and under the barrels' 12 on. Presentation only.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1498,10 +1534,11 @@ pub struct EffectOrder {
 /// sprites from `at + step * k`, k being its slot (its `ext` word `word`
 /// less one, for a hook that keeps the slot there, when set; else the
 /// level's numbered spawn slot it is in) or else its count among the
-/// entity's drawn bodies before it. Donkey Kong's 25m keeps Mario at 0,
-/// the fires from 4, the barrels from 12 ($0230 + 16 * X), the hammers
-/// at 52, the drum's flame at 56 and Pauline at 58. Original Edition's 50m
-/// lays its table out as Mario 0, the fires from 4 ($0210, 16 bytes a
+/// entity's drawn bodies before it. One game's first stage keeps the
+/// player at 0, the fires from 4, the barrels from 12 ($0230 + 16 * X), the
+/// hammers at 52, the drum's flame at 56 and the captive at 58. Its later
+/// edition's second stage lays its table out as the player 0, the fires
+/// from 4 ($0210, 16 bytes a
 /// slot, $EFE7), the pies from 12 ($0230 + 16 * $5D, $EFD5), the moving
 /// ladders from 48 ($02C0 + 16 * X, $8899) and the hammers at 60.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1519,7 +1556,7 @@ pub struct SpriteOrder {
     pub word: Option<u32>,
     /// The game copies the slots into the table starting from a slot that
     /// turns: k is the slot less this counter's value, around `count`
-    /// slots. Original Edition's 50m copies its seven pie slots from
+    /// slots. One game's second stage copies its seven pie slots from
     /// $0493, one further each frame ($895F), so the pie a crowded line
     /// drops takes turns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1574,7 +1611,7 @@ pub struct Present {
     pub screens: Vec<StateScreen>,
     /// Feature `present.hidden`: bodies the game doesn't draw while a
     /// rule state holds and counters are in ranges, though they are
-    /// still in play, such as Donkey Kong's sprites from a death's 13th
+    /// still in play, such as one game's sprites from a death's 13th
     /// divider wrap ($F08C) until the 21st draws the stage's objects
     /// again ($CC34).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1598,7 +1635,7 @@ pub struct Hidden {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kinds: Vec<String>,
     /// The HUD not drawn either: its layer, its fields and its sprites,
-    /// as Donkey Kong's 100m ending blanks the status rows ($C6E4, entry
+    /// as one game's last stage's ending blanks the status rows ($C6E4, entry
     /// $0A of $C03C). With no `kinds`, only the HUD.
     #[serde(default, skip_serializing_if = "is_false")]
     pub hud: bool,
@@ -1607,7 +1644,7 @@ pub struct Hidden {
 /// A screen shown in place of the level while a rule state holds
 /// (feature `present.screens`): its picture, drawn from update strings as
 /// the game writes its name table and palettes, and sprites fixed on it,
-/// each moved by a counter. Donkey Kong's title is the string the title
+/// each moved by a counter. One game's title is the string the title
 /// routine draws ($C807 with 8) and a cursor sprite 16 lines down a menu
 /// line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1616,7 +1653,7 @@ pub struct StateScreen {
     /// The rule states it shows in, as `<machine>.<state>`.
     pub states: Vec<String>,
     /// The model's counters in ranges, each of which must hold too
-    /// (feature `present.screens_when`): Donkey Kong's screen is blank
+    /// (feature `present.screens_when`): one game's screen is blank
     /// while a death's wait $43 is in the stage setup's part.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub when: Vec<CounterTest>,
@@ -1635,7 +1672,7 @@ pub struct StateScreen {
     /// `present.screens_from_line`). The lines above it show the frame as
     /// it would be drawn without this screen, the level, its bodies and
     /// the HUD, and the lines from it the backdrop, as a console whose
-    /// picture is turned off partway down the frame. Donkey Kong's stage
+    /// picture is turned off partway down the frame. One game's stage
     /// clear turns it off at line 34 ($CBB7 -> $D19A on the clear script's
     /// $7A step), so the status rows show on that frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1645,7 +1682,7 @@ pub struct StateScreen {
     pub sprite: Vec<ScreenSprite>,
     /// Text written into its name table over the layout or the blank
     /// (feature `present.screens_text`), in the characters of the HUD's
-    /// font (`present.hud.font`): Donkey Kong's turn screen, PLAYER I or
+    /// font (`present.hud.font`): one game's turn screen, PLAYER I or
     /// PLAYER II on a cleared name table ($CBCA, $C6AA).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub text: Vec<ScreenText>,
@@ -1829,7 +1866,7 @@ pub struct EffectPhase {
     /// As `until_counter`, with the one of these counters that is highest
     /// as the phase starts: the timer the event's picture took, for a game
     /// that shows it in whichever of several slots is free (feature
-    /// `present.effects.until_counters`). Donkey Kong's points sprites:
+    /// `present.effects.until_counters`). One game's points sprites:
     /// `points_timer` and `points_timer_2` ($41, $42; $CFC6 takes the
     /// first free).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1987,7 +2024,7 @@ pub struct Screen {
     pub sprite_limit: Option<SpriteLimit>,
     /// Rule states, each `<machine>.<state>`, in which the console's
     /// sprite layer is off: the level, the HUD's tiles and the bodies
-    /// drawn as name-table tiles show, and no sprite does. Donkey Kong
+    /// drawn as name-table tiles show, and no sprite does. One game
     /// turns its sprites off once a Start pause's 64 frames are out
     /// ($CFA1 sets bit 4 of $11, which the NMI writes to $2001 inverted).
     /// Presentation only. Feature `present.sprites_off`.
@@ -1996,8 +2033,8 @@ pub struct Screen {
     /// The console's sprite x is a byte, so a sprite the game places left
     /// of the screen (x below 0) shows at x + 256, at the right edge: each
     /// hardware sprite of a body's picture (8 pixels across) whose left
-    /// column is left of the screen is drawn 256 pixels on. Donkey Kong's
-    /// hammer swung left of Mario at the screen's left edge puts its head
+    /// column is left of the screen is drawn 256 pixels on. One game's
+    /// hammer swung left of the player at the screen's left edge puts its head
     /// at x 255 ($02D3 wraps). Presentation only, for a game that never
     /// scrolls. Feature `present.sprite_x_wraps`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -2104,7 +2141,7 @@ pub struct HudField {
     #[serde(default, skip_serializing_if = "is_false")]
     pub sprite: bool,
     /// Feature `present.hud.field_when`: drawn only while every one of
-    /// these counter tests holds. Donkey Kong draws player 2's label and
+    /// these counter tests holds. One game draws player 2's label and
     /// score only in a two-player game, and each player's score in its own
     /// place whoever's turn it is.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2177,7 +2214,7 @@ pub struct LevelCore {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind_property: Option<String>,
     /// The kind of tile each value is: of `kind_property` for a grid, or of
-    /// the object format's collision class for a layout (Mega Man 2's
+    /// the object format's collision class for a layout (one game's
     /// stage classes). Keys are the values in decimal. A value not listed
     /// keeps the kind the format gives it (solid or empty).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -2185,7 +2222,7 @@ pub struct LevelCore {
     /// Feature `level.tile_surfaces`: for a tile value, the pixel row
     /// inside its cell where a top-only or ladder tile stands (0 is the
     /// cell's top). A body standing on such tiles follows the surface as
-    /// it walks, a pixel at a time (Donkey Kong's sloped girders). Keys are
+    /// it walks, a pixel at a time (one game's sloped girders). Keys are
     /// tile values in decimal, as `tile_kinds`'.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tile_surfaces: BTreeMap<String, u8>,
@@ -2238,19 +2275,19 @@ pub struct LevelCore {
     /// At most this many entities other than the player (and those with
     /// `no_slot`) are in the level at once: one whose spawn comes within
     /// reach of the view while all are taken waits, and a `drawn` one is
-    /// left out. Super Mario Bros.' five enemy slots. Since core 0.4.10.
+    /// left out. A scrolling game's five enemy slots. Since core 0.4.10.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spawn_slots: Option<u32>,
     /// What `despawn_behind` and `despawn_ahead` measure from the view's
     /// edges: `edge` (the default), the entity's far edge behind and its
     /// near edge ahead; or `position`, its position's whole pixels both
-    /// ways (Super Mario Bros.' OffscreenBoundsCheck compares
+    /// ways (a scrolling game's OffscreenBoundsCheck compares
     /// Enemy_X_Position). Since core 0.4.10.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub despawn_at: Option<DespawnAt>,
     /// `despawn_behind` and `despawn_ahead` are tested after the enemies
     /// system has moved everything, rather than in the `spawn` system:
-    /// Super Mario Bros.' RunNormalEnemies ends in OffscreenBoundsCheck, so
+    /// A scrolling game's RunNormalEnemies ends in OffscreenBoundsCheck, so
     /// an enemy goes on the frame its own step takes it past the line.
     /// Since core 0.4.18.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -2258,8 +2295,8 @@ pub struct LevelCore {
     /// Entities appear by the view in the order of their spawns (the
     /// `drawn` ones aside), at most one for each free slot a frame: one
     /// waits for those before it, and one whose spawn is already left of
-    /// the view's last column when its turn comes never appears. Super
-    /// Mario Bros.' ProcessEnemyData. Since core 0.4.10.
+    /// the view's last column when its turn comes never appears. A
+    /// scrolling game's ProcessEnemyData. Since core 0.4.10.
     #[serde(default, skip_serializing_if = "is_false")]
     pub spawn_in_order: bool,
     /// An entity that appears by the view first moves on the frame after,
@@ -2270,13 +2307,13 @@ pub struct LevelCore {
     /// With `spawn_slots`, the slots are numbered and keep what their last
     /// entity left: an entity that appears takes the lowest free one and
     /// starts with that entity's speed up and down and the fraction of
-    /// its place across, as Super Mario Bros.' enemy init routines leave
+    /// its place across, as a scrolling game's enemy init routines leave
     /// Enemy_Y_Speed and Enemy_X_MoveForce as the slot had them. A level
     /// starts with them 0. The slots are world state. Since core 0.4.11.
     #[serde(default, skip_serializing_if = "is_false")]
     pub slot_rest: bool,
     /// The width, in pixels, an entity's touches use in this level in place
-    /// of its hitbox's, by entity name, as Super Mario Bros.' SPBBox picks
+    /// of its hitbox's, by entity name, as a scrolling game's SPBBox picks
     /// a narrower box for lifts in castles and hard mode.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub hit_widths: BTreeMap<String, u32>,
@@ -2285,7 +2322,7 @@ pub struct LevelCore {
     /// 0.4.10.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub draw: Option<Draw>,
-    /// With `draw`: what drawing one column does. Super Mario Bros.'
+    /// With `draw`: what drawing one column does. A scrolling game's
     /// ScrollLockObject_Warp, a warp zone's area object.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scroll_stop: Option<ScrollStop>,
@@ -2412,7 +2449,7 @@ impl TileKind {
 /// A level's checkpoint (feature `level.halfway`): when `restart-level` starts the
 /// level again while the first camera's x is at least `from`, that camera
 /// starts at `from` and the player at `at`, and the entities come as the
-/// view reaches them from there. Super Mario Bros.' PlayerLoseLife sets
+/// view reaches them from there. A scrolling game's PlayerLoseLife sets
 /// HalfwayPage from HalfwayPageNybbles when ScreenLeft_PageLoc has reached
 /// the level's page, and InitializeArea starts the area at that page.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -2432,7 +2469,7 @@ pub enum DespawnAt {
     Position,
 }
 
-/// How a level is drawn ahead of the view (Super Mario Bros.' area
+/// How a level is drawn ahead of the view (a scrolling game's area
 /// parser): when it starts, every column left of `ahead` pixels past the
 /// view's far edge; then, each time the view's near edge passes a whole
 /// `step` (counted from the level's left edge), the next `step` pixels of
@@ -2448,7 +2485,7 @@ pub struct Draw {
     /// Frames from one column of a set to the next.
     pub every: u32,
     /// Frames after a set starts on which no entity appears by the view
-    /// but `drawn` ones (Super Mario Bros.' enemy loop leaves while
+    /// but `drawn` ones (a scrolling game's enemy loop leaves while
     /// AreaParserTaskNum is 7).
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub pause: u32,
@@ -2471,8 +2508,8 @@ pub struct ScrollStop {
 /// free, a player who isn't standing at the check's height goes back
 /// `back` pixels with the view and the draw, the level's other entities go
 /// and wait at their spawns (a `drawn` spawn behind the draw never comes
-/// back), and the last `keep` columns drawn go back with the view. Super
-/// Mario Bros.' castle mazes (ProcLoopCommand, ExecGameLoopback).
+/// back), and the last `keep` columns drawn go back with the view. A
+/// scrolling game's castle mazes (ProcLoopCommand, ExecGameLoopback).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LoopBack {
@@ -2514,15 +2551,15 @@ pub struct LevelCamera {
     pub hold_player: bool,
     /// Feature `level.camera.keep_in_view`: the followed entity's bounds
     /// in the view across while this level plays, instead of the camera's
-    /// `keep_in_view` and its `keep_in_view_rows`. Donkey Kong's walk
+    /// `keep_in_view` and its `keep_in_view_rows`. One game's walk
     /// stops at a stage's own edges ($D99D reads them by $53 from $C1B4):
-    /// sprite x 16 to 224 on 25m, 8 to 232 on 50m.
+    /// sprite x 16 to 224 on the first stage, 8 to 232 on the second.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep_in_view: Option<[Fixed; 2]>,
     /// Feature `level.camera.keep_in_view_rows`: with `keep_in_view`, other
     /// bounds while the followed entity's row is in a range, as a camera's
-    /// `keep_in_view_rows`. Donkey Kong's $D990 stops a walk left at sprite
-    /// x 104 on 75m's fifth girder as on 25m's sixth ($D9C3-$D9DB).
+    /// `keep_in_view_rows`. One game's $D990 stops a walk left at sprite
+    /// x 104 on the third stage's fifth girder as on the first's sixth ($D9C3-$D9DB).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keep_in_view_rows: Vec<KeepRow>,
 }
@@ -2609,13 +2646,13 @@ pub struct Spawn {
     pub params: BTreeMap<String, Fixed>,
     /// It appears when the level's `draw` draws the column its x is in,
     /// rather than by `spawn_ahead`, and only if a slot is free then:
-    /// Super Mario Bros.' piranha plants, which VerticalPipe makes as it
+    /// a scrolling game's pipe plants, which VerticalPipe makes as it
     /// draws the pipe's first column. Since core 0.4.10.
     #[serde(default, skip_serializing_if = "is_false")]
     pub drawn: bool,
     /// When it appears it is placed this many pixels past the view's last
     /// column along the level's axis, instead of at its x (or y), which is
-    /// then only where the view reaches it: Super Mario Bros.' group
+    /// then only where the view reaches it: a scrolling game's group
     /// enemies, which HandleGroupEnemies starts at the screen's right edge
     /// and 24 pixels apart. Since core 0.4.11.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2645,7 +2682,7 @@ pub struct Camera {
     /// Keeps the view inside the level.
     #[serde(default, skip_serializing_if = "is_false")]
     pub clamp_to_level: bool,
-    /// Can move back left (or up). Super Mario Bros.' camera can't.
+    /// Can move back left (or up). A scrolling game's camera may not.
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub scroll_back: bool,
     /// Moves by the followed entity's move instead of keeping it `lead`
@@ -2658,31 +2695,31 @@ pub struct Camera {
     /// after the camera's step, whether the camera moves or not. Past
     /// either, the entity is put back at it, keeping the fraction of its
     /// place, and its speed's whole steps across become 0 unless only the
-    /// direction away from that edge is held (its `run` actions). Super
-    /// Mario Bros.' ScrollHandler ends in ChkPOffscr and KeepOnscr: 0 and
+    /// direction away from that edge is held (its `run` actions). A
+    /// scrolling game's ScrollHandler ends in ChkPOffscr and KeepOnscr: 0 and
     /// 239, the screen's right edge less 16.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep_in_view: Option<[i64; 2]>,
     /// Since core 0.4.17: `keep_in_view`'s first bound acts when the place
     /// reaches it, not only past it, so an entity at that edge loses its
-    /// speed as one past it does. Super Mario Bros.' GetXOffscreenBits
+    /// speed as one past it does. A scrolling game's GetXOffscreenBits
     /// sets bit 7 from a difference of 0, while the right edge's test
     /// starts a pixel past its bound.
     #[serde(default, skip_serializing_if = "is_false")]
     pub keep_in_view_touch: bool,
     /// Feature `camera.keep_in_view_turn`: an entity in the air at either
     /// bound (or past it) moving toward it turns around, its speed across
-    /// reversed, instead of losing its speed there. Donkey Kong's jump
-    /// ($D547) flips Mario's way ($56) at the screen's edge ($D990).
+    /// reversed, instead of losing its speed there. One game's jump
+    /// ($D547) flips the player's way ($56) at the screen's edge ($D990).
     #[serde(default, skip_serializing_if = "is_false")]
     pub keep_in_view_turn: bool,
     /// Feature `camera.keep_in_view_rows`: other bounds for `keep_in_view`
     /// while the followed entity's row is in a range: its whole y on the
     /// ground, and in the air the height it took off from when
     /// `jump.fatal_drop` keeps it (mechanic word 3), else its y. The first
-    /// row that holds gives the bounds. Donkey Kong's edge test $D990 also
-    /// stops a walk left on 25m's sixth girder ($59 = 6) at sprite x 104,
-    /// short of Kong.
+    /// row that holds gives the bounds. One game's edge test $D990 also
+    /// stops a walk left on the first stage's sixth girder ($59 = 6) at
+    /// sprite x 104, short of the ape.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keep_in_view_rows: Vec<KeepRow>,
 }
@@ -2701,7 +2738,7 @@ pub struct KeepRow {
 /// frame before, in whole pixels from the view's top left corner: not at
 /// all while that place is under `from`, the move less `short_by` (but at
 /// least a pixel) from `from`, and the whole move from `full` on. A move
-/// back or none doesn't move it. Super Mario Bros.' ScrollHandler is 80,
+/// back or none doesn't move it. A scrolling game's ScrollHandler is 80,
 /// 112 and 1.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -2715,7 +2752,7 @@ pub struct ByMove {
     /// Since core 0.4.11: after the followed entity is pushed out of a
     /// wall (a platformer `run.walls` point or `jump.land_depth`), the
     /// camera doesn't move on this many frames less one, from the next.
-    /// Super Mario Bros.' ImpedePlayerMove sets SideCollisionTimer to $10,
+    /// A scrolling game's ImpedePlayerMove sets SideCollisionTimer to $10,
     /// which ScrollHandler waits for, and DecTimers counts it down at the
     /// start of each frame. The frames left are world state
     /// (`cameras.<name>.hold`).
@@ -2723,16 +2760,16 @@ pub struct ByMove {
     pub push_hold: u32,
     /// Since core 0.4.12: on a frame when a state stops the followed
     /// entity's system (`stops`) and not the camera's, the camera moves as
-    /// if the entity had moved by its last move again. Super Mario Bros.'
+    /// if the entity had moved by its last move again. A scrolling game's
     /// ScrollHandler reads Player_X_Scroll, which only the player's
-    /// movement routines set, so the screen goes on scrolling while Mario
-    /// shrinks. The last move is world state (`cameras.<name>.move`).
+    /// movement routines set, so the screen goes on scrolling while the
+    /// player shrinks. The last move is world state (`cameras.<name>.move`).
     #[serde(default, skip_serializing_if = "is_false")]
     pub keep_move: bool,
     /// Since core 0.4.23: `push_hold` is a frame timer: it counts down on
     /// every frame the `counters` system runs (not frozen, not stopped by a
     /// state), whether a state stops the camera or not, and on no other.
-    /// Super Mario Bros.' DecTimers counts SideCollisionTimer down at the
+    /// A scrolling game's DecTimers counts SideCollisionTimer down at the
     /// start of each frame unless TimerControl is set, and ScrollLock, which
     /// stops ScrollHandler, doesn't stop it.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -2773,7 +2810,7 @@ pub struct State {
     /// Since core 0.4.12: a part freeze. These systems (names from
     /// `model.systems` that move things) don't run on a frame that starts
     /// in this state, from the next frame as with `freeze`, while the
-    /// others do. Super Mario Bros.' injury: TimerControl stops the enemies
+    /// others do. A scrolling game's injury: TimerControl stops the enemies
     /// and the frame timers while the player routine runs on its own
     /// schedule. With `freeze` it is ignored.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2781,15 +2818,15 @@ pub struct State {
     /// Since core 0.4.12: of the systems this state stops (all that move,
     /// with `freeze`), these also stop for the rest of the frame it is
     /// entered in, when they haven't run yet: InjurePlayer sets
-    /// TimerControl inside the enemy loop, so the enemy that hurt Mario
+    /// TimerControl inside the enemy loop, so the enemy that hurt the player
     /// and the ones after it don't move that frame.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stops_at_once: Vec<String>,
     /// Since core 0.4.12: counters whose `every` changes wait while the
     /// world starts a frame in this state: the frames still count, up to
     /// the change, and the change is made on the first frame after the
-    /// state that comes round to it. Super Mario Bros.' RunGameTimer leaves
-    /// while Mario is below the screen, though DecTimers goes on counting
+    /// state that comes round to it. A scrolling game's RunGameTimer leaves
+    /// while the player is below the screen, though DecTimers goes on counting
     /// GameTimerCtrlTimer down to 0.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub holds: Vec<String>,
@@ -2802,49 +2839,49 @@ pub struct State {
     /// Feature `state.stops_machines`: while a frame begins in this state,
     /// the entities' own machines don't run (their time, their
     /// transitions and a `step_word`), as the game machines still do.
-    /// Donkey Kong's Start pause stops Mario's routine, his death spin's
+    /// One game's Start pause stops the player's routine, its death spin's
     /// counter included, and only the Start check runs.
     #[serde(default, skip_serializing_if = "is_false")]
     pub stops_machines: bool,
     /// Feature `state.frees_at_once`, a game machine's state: systems that
     /// move things which run for the rest of the frame on which the state
     /// is left, from the system after the one that left it, though the
-    /// frame began frozen in it. Donkey Kong's unpause clears $0516 in the
+    /// frame began frozen in it. One game's unpause clears $0516 in the
     /// Start check and then counts the frame timers on that frame.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub frees_at_once: Vec<String>,
     /// Since core 0.4.12, an entity's state only: while a camera `by_move`
     /// follows the entity in this state, it keeps the entity's place in
     /// its view only on frames whose number is a multiple of this, the
-    /// frames the entity is drawn. Super Mario Bros.' PlayerGfxHandler
+    /// frames the entity is drawn. A scrolling game's PlayerGfxHandler
     /// leaves on odd frames while InjuryTimer is set (the blink), before
     /// RenderPlayerSub sets Player_Pos_ForScroll, which ScrollHandler reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seen_every: Option<u32>,
     /// Since core 0.4.13, an entity's state only: what entering it does to
-    /// the entity's standing. `leave` takes it off the ground, as Super
-    /// Mario Bros.' ForceInjury sets Player_State to 1 though Mario stays
-    /// where he is; `land` puts it back on the ground if there is ground
+    /// the entity's standing. `leave` takes it off the ground, as a
+    /// scrolling game's ForceInjury sets Player_State to 1 though the
+    /// player stays where it is; `land` puts it back on the ground if there is ground
     /// under it, as PlayerBGCollision does on the first frame
     /// PlayerCtrlRoutine runs again, though PlayerMovementSubs doesn't move
-    /// him while he shrinks.
+    /// the player while it shrinks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ground: Option<GroundOnEnter>,
     /// Since core 0.4.15, an entity's state only: entering it sets the
-    /// entity's speed across and up and down. Super Mario Bros.'
-    /// KillPlayer stops Mario across and sets his vertical speed to -4.
+    /// entity's speed across and up and down. A scrolling game's
+    /// KillPlayer stops the player across and sets its vertical speed to -4.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enter_speed: Option<[Fixed; 2]>,
     /// Since core 0.4.15, with `enter_speed`: the speed up and down keeps
     /// the fraction below a pixel it had, and only its whole pixels are
     /// set. KillPlayer stores Player_Y_Speed and leaves Player_Y_MoveForce
-    /// as it was, so Mario's speed is -4 plus the fraction of his last.
+    /// as it was, so the player's speed is -4 plus the fraction of its last.
     #[serde(default, skip_serializing_if = "is_false")]
     pub enter_keeps_fraction: bool,
     /// Feature `state.step_word`, an entity's state only: on each frame
     /// the entity is in it, frozen or not, its mechanic word 0 (the step
     /// counter of `run.step_cycle`) goes up by one, back to 0 at this, before
-    /// its transitions are tested. Donkey Kong's death spin calls $D9E6
+    /// its transitions are tested. One game's death spin calls $D9E6
     /// every frame, so $88 goes on counting while the world stands still.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub step_word: Option<u32>,
@@ -2881,7 +2918,7 @@ pub struct Transition {
     pub after: Option<u32>,
     /// Since core 0.4.12, with `after`: once the time is up, it is taken
     /// only on a frame whose number (the frame count from power-on) is a
-    /// multiple of this. Super Mario Bros.' HandleChangeSize steps the
+    /// multiple of this. A scrolling game's HandleChangeSize steps the
     /// shrink on frames whose FrameCounter is a multiple of 4, so its end
     /// depends on that counter's phase.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2889,33 +2926,33 @@ pub struct Transition {
     /// Feature `transition.align_to`, with `after`: once the time is up, it is taken
     /// only on a frame whose counter's first `every` clock has just come
     /// round (its count is 0), so the state lasts to a beat that clock
-    /// keeps. Super Mario Bros.' lives screen waits for ScreenTimer, an
+    /// keeps. A scrolling game's lives screen waits for ScreenTimer, an
     /// interval timer DecTimers counts down once every 21 frames, when
     /// IntervalTimerControl runs out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub align_to: Option<String>,
     /// Feature `transition.below`, in an entity's machine: taken once the entity's
-    /// y is at or past this (and its `after` is up, with one). Super Mario
-    /// Bros.' PlayerHole ends a death once Player_Y_HighPos reaches 4,
-    /// however high Mario was hit.
+    /// y is at or past this (and its `after` is up, with one). A scrolling
+    /// game's PlayerHole ends a death once Player_Y_HighPos reaches 4,
+    /// however high the player was hit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub below: Option<Fixed>,
     /// Feature `transition.word`, in an entity's machine with `after`:
     /// taken only on a frame on which one of the entity's mechanic words
-    /// is in this range. Donkey Kong's death spin ends on the frame $88
+    /// is in this range. One game's death spin ends on the frame $88
     /// comes round to 4, 120 frames or more after it starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub word: Option<WordTest>,
     /// Feature `transition.pressed`, without `on`: taken on a frame on
     /// which this input action is newly pressed (held, and not on the
     /// frame before), and with `after` only once that many frames have
-    /// passed in the state. Donkey Kong's Start pauses the game, and
+    /// passed in the state. One game's Start pauses the game, and
     /// unpauses it once the pause's 64-frame timer ($0517) has run out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pressed: Option<String>,
     /// Feature `transition.held`, without `on` or `pressed`: taken on every
     /// frame on which this input action is held, and with `after` only
-    /// once that many frames have passed in the state. Donkey Kong's title
+    /// once that many frames have passed in the state. One game's title
     /// sets its idle timer to 64 on each frame Select is held ($C95D).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held: Option<String>,
@@ -2970,7 +3007,7 @@ impl Cmp {
 /// that pass its `per_tests` when it has one. The simulation sums it at the end of each
 /// frame, before the `hook_last` hooks, adds what the hooks added
 /// (`ExtCx::add_cycles`), and a hook reads the sum
-/// (`ExtCx::frame_cycles`): Donkey Kong's idle loop steps its random
+/// (`ExtCx::frame_cycles`): one game's idle loop steps its random
 /// register in the cycles the frame's work leaves.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -3068,24 +3105,24 @@ pub struct Counter {
     #[serde(default, skip_serializing_if = "is_false")]
     pub wrap: bool,
     /// Its `every` changes go on counting while the world is frozen
-    /// (Super Mario Bros.' color rotation, which runs while Mario dies).
+    /// (a scrolling game's color rotation, which runs while the player dies).
     /// Since core 0.4.8.
     #[serde(default, skip_serializing_if = "is_false")]
     pub runs_when_frozen: bool,
     /// Since core 0.4.20: the counter is a shift register: it steps every frame the `counters`
-    /// system runs (Super Mario Bros.' PseudoRandomBitReg, which the NMI
+    /// system runs (a scrolling game's PseudoRandomBitReg, which the NMI
     /// rotates every frame).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shift: Option<CounterShift>,
     /// Feature `counter.restarts_clock`: a level start that sets the counter (the level's
-    /// `counters`) also starts its `every` clocks over, as Super Mario
-    /// Bros.' InitializeArea clears GameTimerCtrlTimer with the other frame
+    /// `counters`) also starts its `every` clocks over, as a scrolling
+    /// game's InitializeArea clears GameTimerCtrlTimer with the other frame
     /// timers when an area starts.
     #[serde(default, skip_serializing_if = "is_false")]
     pub restarts_clock: bool,
     /// Feature `counter.high_of`: the counter keeps the highest value the
     /// named counter has had, raised as that one changes, as a top score
-    /// does (Donkey Kong's $21-$23, which $D03E raises from the score after
+    /// does (one game's $21-$23, which $D03E raises from the score after
     /// every award).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub high_of: Option<String>,
@@ -3122,14 +3159,14 @@ pub struct Change {
     pub of: Vec<String>,
     /// Since core 0.4.13, with `on`: the change is made this many frames
     /// after the event, counted every frame, frozen or not, from the next
-    /// one. Super Mario Bros. adds an enemy's points when its floatey
+    /// one. A scrolling game adds an enemy's points when its floatey
     /// number's timer, set to $30 by SetupFloateyNumber, reads $2b in
     /// FloateyNumbersRoutine, 5 frames after the kill. Default 0, at once.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub after: u32,
     /// Feature `change.if`, with `on`: the event changes the counter only
     /// while this counter condition holds, tested as the event fires.
-    /// Donkey Kong's points routine ($D008) adds nothing while the attract
+    /// One game's points routine ($D008) adds nothing while the attract
     /// demo plays ($58), though the points sprite still shows.
     #[serde(default, rename = "if", skip_serializing_if = "Option::is_none")]
     pub guard: Option<Guard>,

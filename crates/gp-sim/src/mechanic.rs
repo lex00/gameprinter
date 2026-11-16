@@ -100,7 +100,7 @@ impl Carrier {
 
 /// A table a hook reads: part of how the mechanic works, which a formula
 /// could replace (a firebar's circle), or choices, which are content and a
-/// clean room replaces (Bowser's flame heights).
+/// clean room replaces (a boss flame's heights).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TableKind {
     Mechanic,
@@ -1161,7 +1161,7 @@ pub const COMPONENTS: &[Record] = &[
         system: "platformer.player",
         class: "input",
         implementation: "gp_sim::systems::climb, gp_sim::systems::fall",
-        about: "A player's actions that do nothing while a counter holds (feature power.locks): Donkey Kong's hammer takes jumping and climbing away while its timer runs",
+        about: "A player's actions that do nothing while a counter holds (feature power.locks): a ladder game's hammer takes jumping and climbing away while its timer runs",
         params: &[
             Param::new("while", "condition", "counter"),
             Param::new("actions", "list", "action names"),

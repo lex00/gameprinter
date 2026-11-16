@@ -1,5 +1,5 @@
 //! Recordings of an arcade original (port wave 6): what gp-nes's
-//! `recording` and `seek` do for the NES, on gp-arcade's Tapper, in the
+//! `recording` and `seek` do for the NES, on gp-arcade's MCR board, in the
 //! same store objects, so `gp record`, `gp replay`, `gp query`, `gp
 //! run-until`, `gp trace`, `gp events` and `gp recordings` read both.
 //!
@@ -13,7 +13,7 @@
 //!   `gp record` reports come from the board's own input port reads.
 //! - Each frame's state is [`gp_arcade::canonical`]'s recorded state: named
 //!   fields, then the whole machine. Its hash is the frame hash's `state`,
-//!   and the hash of the oracle's RAM record ([`gp_arcade::Tapper::ram_record`],
+//!   and the hash of the oracle's RAM record ([`gp_arcade::Mcr::ram_record`],
 //!   the five RAMs) its `ram`.
 //! - The event stream holds the board's events ([`gp_arcade::events`]):
 //!   `irq` (the main CPU's CTC interrupts, with the handler and vector),
@@ -28,7 +28,7 @@ use std::time::Instant;
 
 use anyhow::{Result, bail};
 use gp_arcade::events::{BoardEvent, Happened};
-use gp_arcade::{Controls, Romset, Tapper};
+use gp_arcade::{Controls, Mcr, Romset};
 use gp_evidence::chunk;
 use gp_evidence::events::{self, Event, EventKind, EventWriter, Geometry};
 use gp_evidence::frame_hashes::{self, FrameHash};
@@ -112,7 +112,7 @@ pub(crate) fn stored(frame: u64, e: &BoardEvent) -> Event {
 }
 
 /// The frame hashes of a machine's state.
-fn frame_hash(t: &Tapper) -> FrameHash {
+fn frame_hash(t: &Mcr) -> FrameHash {
     FrameHash {
         state: Hash::of(&t.recorded_state()),
         ram: Hash::of(&t.ram_record()),
@@ -170,7 +170,7 @@ pub(crate) fn record(store: &Store, req: Request<'_>) -> Result<Recorded> {
         bail!("the checkpoint interval must be at least 1 frame");
     }
     let interval = u64::from(req.checkpoint_interval);
-    let mut t = Tapper::power_on(req.set);
+    let mut t = Mcr::power_on(req.set);
     let mut hashes = Vec::with_capacity(req.input.frames.len() + 1);
     let mut checkpoints = Vec::new();
     let (mut bytes, mut new_bytes) = (0u64, 0u64);
@@ -352,7 +352,7 @@ pub(crate) fn made_by_this_runtime(manifest: &RecordingManifest) -> bool {
     manifest.runtime == runtime_ref()
 }
 
-fn compare(t: &Tapper, hashes: &[FrameHash], frame: u64) -> Option<DivergenceKind> {
+fn compare(t: &Mcr, hashes: &[FrameHash], frame: u64) -> Option<DivergenceKind> {
     let want = hashes[frame as usize];
     let have = frame_hash(t);
     if have.ram != want.ram {
@@ -365,7 +365,7 @@ fn compare(t: &Tapper, hashes: &[FrameHash], frame: u64) -> Option<DivergenceKin
 }
 
 /// Restores a checkpoint, refusing a snapshot that doesn't load.
-fn restore(t: &mut Tapper, store: &Store, cp: &Checkpoint) -> Result<()> {
+fn restore(t: &mut Mcr, store: &Store, cp: &Checkpoint) -> Result<()> {
     t.restore(&store.get(&cp.snapshot)?)
         .map_err(|e| anyhow::anyhow!("the checkpoint at frame {}: {e}", cp.frame))
 }
@@ -421,7 +421,7 @@ pub(crate) fn replay(
     from_checkpoint: Option<u64>,
 ) -> Result<ReplayReport> {
     let (input, hashes) = load(store, manifest)?;
-    let mut t = Tapper::power_on(set);
+    let mut t = Mcr::power_on(set);
     let recorded_events = match &manifest.events {
         Some(_) => Some(events_by_frame(store, manifest)?),
         None => None,
@@ -489,7 +489,7 @@ pub(crate) fn verify_checkpoints(
     set: &Romset,
 ) -> Result<Option<Divergence>> {
     let (_, hashes) = load(store, manifest)?;
-    let mut t = Tapper::power_on(set);
+    let mut t = Mcr::power_on(set);
     for cp in &manifest.checkpoints {
         let snap = store.get(&cp.snapshot)?;
         let what = if t.restore(&snap).is_err() || t.snapshot() != snap {
@@ -510,7 +510,7 @@ pub(crate) fn verify_checkpoints(
 /// A machine positioned in an arcade recording, as gp-nes's seek cursor.
 #[derive(Clone)]
 pub(crate) struct Cursor {
-    tapper: Tapper,
+    mcr: Mcr,
     input: InputLog,
     hashes: Vec<FrameHash>,
     /// The checkpoint it started from, or `None` for power-on.
@@ -555,7 +555,7 @@ pub(crate) fn open_with(
             manifest.frames
         );
     }
-    let mut tapper = Tapper::power_on(set);
+    let mut mcr = Mcr::power_on(set);
     let usable = made_by_this_runtime(manifest);
     let checkpoint = manifest
         .checkpoints
@@ -563,10 +563,10 @@ pub(crate) fn open_with(
         .filter(|c| usable && c.frame <= frame)
         .max_by_key(|c| c.frame);
     if let Some(cp) = checkpoint {
-        restore(&mut tapper, store, cp)?;
+        restore(&mut mcr, store, cp)?;
     }
     let mut cursor = Cursor {
-        tapper,
+        mcr,
         input,
         hashes,
         checkpoint: checkpoint.map(|c| c.frame),
@@ -578,21 +578,21 @@ pub(crate) fn open_with(
 }
 
 impl Cursor {
-    pub fn tapper(&self) -> &Tapper {
-        &self.tapper
+    pub fn mcr(&self) -> &Mcr {
+        &self.mcr
     }
 
     /// The machine, to turn its event log on and take its events.
-    pub fn tapper_mut(&mut self) -> &mut Tapper {
-        &mut self.tapper
+    pub fn mcr_mut(&mut self) -> &mut Mcr {
+        &mut self.mcr
     }
 
-    pub fn into_tapper(self) -> Tapper {
-        self.tapper
+    pub fn into_mcr(self) -> Mcr {
+        self.mcr
     }
 
     pub fn frame(&self) -> u64 {
-        self.tapper.frame()
+        self.mcr.frame()
     }
 
     /// The input log entry applied to the state at `frame`.
@@ -620,7 +620,7 @@ impl Cursor {
             );
         };
         self.replayed += 1;
-        self.tapper.step(controls(&input)?);
+        self.mcr.step(controls(&input)?);
         Ok(())
     }
 
@@ -639,13 +639,13 @@ impl Cursor {
 
     /// Whether the machine is in the state recorded for its frame.
     pub fn matches_recording(&self) -> bool {
-        matches(&self.tapper, &self.hashes) != Some(false)
+        matches(&self.mcr, &self.hashes) != Some(false)
     }
 }
 
 /// Whether `t` is in the state `hashes` recorded for its frame, or `None`
 /// past the last frame.
-pub(crate) fn matches(t: &Tapper, hashes: &[FrameHash]) -> Option<bool> {
+pub(crate) fn matches(t: &Mcr, hashes: &[FrameHash]) -> Option<bool> {
     let want = hashes.get(t.frame() as usize)?;
     Some(frame_hash(t) == *want)
 }
@@ -657,7 +657,7 @@ pub(crate) fn replayed_state(
     set: &Romset,
     frame: u64,
 ) -> Result<Vec<u8>> {
-    Ok(open(store, manifest, set, frame)?.tapper.recorded_state())
+    Ok(open(store, manifest, set, frame)?.mcr.recorded_state())
 }
 
 /// The events of frames in `range`, by replay.
@@ -673,11 +673,11 @@ pub(crate) fn replayed_events(
         return Ok(out);
     }
     let mut cursor = open(store, manifest, set, range.start.saturating_sub(1))?;
-    cursor.tapper.set_events(true);
+    cursor.mcr.set_events(true);
     while cursor.frame() < end - 1 {
         cursor.step()?;
         let frame = cursor.frame();
-        let happened = cursor.tapper.take_events();
+        let happened = cursor.mcr.take_events();
         if range.contains(&frame) {
             out.extend(happened.iter().map(|e| stored(frame, e)));
         }
@@ -729,12 +729,12 @@ pub(crate) fn trace_instructions(
             .map(|(i, c)| if held & (1 << i) != 0 { c } else { '.' })
             .collect();
         writeln!(out, "; frame {frame}, controls {letters}")?;
-        cursor.tapper.set_trace(true);
+        cursor.mcr.set_trace(true);
         cursor.step()?;
-        let mut entries = cursor.tapper.take_trace();
-        cursor.tapper.set_trace(false);
+        let mut entries = cursor.mcr.take_trace();
+        cursor.mcr.set_trace(false);
         entries.sort_by_key(|e| e.time);
-        let start = cursor.tapper.frame_start();
+        let start = cursor.mcr.frame_start();
         let mut text = String::new();
         for e in &entries {
             if let Some(v) = e.interrupt {
@@ -891,7 +891,7 @@ mod tests {
         assert_eq!((cursor.checkpoint, cursor.replayed), (Some(30), 3));
         assert!(cursor.matches_recording());
         // The tap reached port 1 in the second half.
-        assert_eq!(cursor.tapper().peek(0xe000), 0xef);
+        assert_eq!(cursor.mcr().peek(0xe000), 0xef);
         let again = record(&store, request(&set, &input)).unwrap();
         assert_eq!(again.id, rec.id);
         assert!(again.existing);
@@ -956,24 +956,27 @@ mod tests {
         assert!(e.to_string().contains("arcade input log"), "{e}");
     }
 
-    /// With tapper.zip on this machine: thirty seconds of Tapper idling
+    /// With a real romset ($GP_GAME_DIR's first set): thirty seconds idling
     /// into its attract mode, recorded and replayed frame-exact, and each
     /// frame's RAM the board's own. Skipped without it.
     #[test]
-    fn tapper_records_and_replays() {
-        let Some(zip) = gp_arcade::romset::local_romset("tapper") else {
-            eprintln!("skipped: no tapper romset");
-            return;
+    fn a_real_set_records_and_replays() {
+        let (set_name, zip) = match gp_arcade::romset::test_romset_path() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("skipped: {e}");
+                return;
+            }
         };
         let set = Romset::load_zip(&zip).unwrap();
         let (_dir, store) = store();
-        let mut text = String::from("gp-arcade-input 0\nsystem tapper\ncolumns CSRLDUT\n");
+        let mut text = format!("gp-arcade-input 0\nsystem {set_name}\ncolumns CSRLDUT\n");
         text.push_str("600 .......\n6 C......\n60 .......\n6 .S.....\n228 .......\n");
         let input = InputLog::parse(&text).unwrap();
         let rec = record(&store, request(&set, &input)).unwrap();
         let r = replay(&store, &rec.manifest, &set, None).unwrap();
         assert_eq!((r.frames_checked, r.divergence), (900, None));
-        let mut t = Tapper::power_on(&set);
+        let mut t = Mcr::power_on(&set);
         let (_, hashes) = load(&store, &rec.manifest).unwrap();
         for (i, f) in input.frames.iter().enumerate() {
             t.step(controls(f).unwrap());

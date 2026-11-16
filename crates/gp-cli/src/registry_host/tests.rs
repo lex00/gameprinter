@@ -34,11 +34,11 @@ fn the_raw_address_and_the_link_with_it() {
     assert_eq!(
         page_link(
             "https://gameprinter.intentius.workers.dev/",
-            "lex00/donkey-kong",
+            "acme/rooftop",
             Some("acme/harbor-lights"),
             &raw
         ),
-        "https://gameprinter.intentius.workers.dev/p?g=lex00/donkey-kong&c=acme/harbor-lights&r=https://raw.githubusercontent.com/acme/harbor-registry/main"
+        "https://gameprinter.intentius.workers.dev/p?g=acme/rooftop&c=acme/harbor-lights&r=https://raw.githubusercontent.com/acme/harbor-registry/main"
     );
 }
 
@@ -49,7 +49,7 @@ fn with_no_registry_yet_the_first_step_is_the_repo() {
         github: None,
         theme: Some("acme/harbor-lights"),
         theme_dir: None,
-        game: Some("lex00/donkey-kong"),
+        game: Some("acme/rooftop"),
         page: PUBLIC_PAGE,
     })
     .unwrap();

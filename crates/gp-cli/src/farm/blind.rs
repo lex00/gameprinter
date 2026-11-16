@@ -756,7 +756,7 @@ pub(crate) fn discover(bytes: &[u8], paths: &Paths) -> Result<Discovery> {
                     clips[ci].power_on,
                     clips[ci].id.clone(),
                 ),
-                // No start run moves the player (Donkey Kong: its start
+                // No start run moves the player (on one NES port its start
                 // run taps Start and then stands, and its random runs
                 // pause the game with Start): from power-on, the presses
                 // below (Start, then the first action, until the pad moves
@@ -2151,9 +2151,9 @@ fn hi_and_fraction(
             if wrapped && d.abs() <= 8 {
                 wraps += 1;
                 for k in 0..0x800u16 {
-                    let dk = wrap8(i64::from(w[usize::from(k)]) - i64::from(p[usize::from(k)]));
+                    let dw = wrap8(i64::from(w[usize::from(k)]) - i64::from(p[usize::from(k)]));
                     let e = hi.entry(k).or_default();
-                    if dk == d.signum() {
+                    if dw == d.signum() {
                         e.0 += 1;
                     }
                 }
@@ -2406,7 +2406,74 @@ fn levels_of(path: &[usize]) -> usize {
     new_scenes_of(path).len()
 }
 
-/// The bench file: games by name, a ROM by hash or a path, train or held out.
+/// The bench's games: the bench file's `[[game]]`, then each game of the
+/// games checkout ([`crate::roms_cmd::games_dir`]) whose bench.toml has a
+/// `[farm_blind]` table: its `source` (a roms.toml id, which names the game
+/// in the bench and gives the ROM's sha256) and its `set`. The tool knows
+/// no game by name, so its own file holds only its own games.
+pub(crate) fn bench_games(file: &Path) -> Result<Vec<toml::Value>> {
+    let mut games: Vec<toml::Value> = match fs::read_to_string(file) {
+        Ok(text) => {
+            let t: toml::Table = toml::from_str(&text)?;
+            t.get("game")
+                .and_then(|g| g.as_array())
+                .cloned()
+                .unwrap_or_default()
+        }
+        Err(_) => Vec::new(),
+    };
+    let Some(root) = crate::roms_cmd::games_dir(None) else {
+        return Ok(games);
+    };
+    let mut dirs: Vec<PathBuf> = fs::read_dir(&root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|d| d.join("bench.toml").is_file())
+        .collect();
+    dirs.sort();
+    let read =
+        |p: &Path| -> Option<toml::Table> { toml::from_str(&fs::read_to_string(p).ok()?).ok() };
+    for d in dirs {
+        let Some(fb) = read(&d.join("bench.toml"))
+            .and_then(|t| t.get("farm_blind").and_then(|v| v.as_table()).cloned())
+        else {
+            continue;
+        };
+        let source = fb.get("source").and_then(|v| v.as_str()).unwrap_or("");
+        let sha = read(&d.join("roms.toml")).and_then(|t| {
+            t.get("source")?.as_array()?.iter().find_map(|s| {
+                (s.get("id")?.as_str()? == source)
+                    .then(|| s.get("sha256")?.as_str().map(str::to_owned))?
+            })
+        });
+        let mut g = toml::Table::new();
+        g.insert("name".into(), toml::Value::String(source.to_owned()));
+        if let Some(set) = fb.get("set") {
+            g.insert("set".into(), set.clone());
+        }
+        match sha {
+            Some(h) => {
+                g.insert("sha256".into(), toml::Value::String(h));
+            }
+            None => {
+                g.insert(
+                    "skip".into(),
+                    toml::Value::String(format!(
+                        "{}'s bench.toml names source {source}, which its roms.toml doesn't have with a sha256",
+                        d.display()
+                    )),
+                );
+            }
+        }
+        games.push(toml::Value::Table(g));
+    }
+    Ok(games)
+}
+
+/// The bench file: games by name, a ROM by hash or a path, train or held
+/// out, and the games checkout's ([`bench_games`]).
 pub(crate) fn bench(
     file: &Path,
     held_out: bool,
@@ -2415,10 +2482,12 @@ pub(crate) fn bench(
     only: Option<&str>,
 ) -> Result<Value> {
     let t: toml::Table = toml::from_str(&fs::read_to_string(file)?)?;
-    let games = t
-        .get("game")
-        .and_then(|g| g.as_array())
-        .context("the bench file has no [[game]]")?;
+    let games = bench_games(file)?;
+    if games.is_empty() {
+        bail!(
+            "the bench file has no [[game]], and no game of the games checkout has a bench.toml with [farm_blind]"
+        );
+    }
     let repo = m::repo_root()?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
@@ -2431,7 +2500,7 @@ pub(crate) fn bench(
     o.seconds = o.seconds.max(3600.0);
     let o = &o;
     let mut out = Vec::new();
-    for g in games {
+    for g in &games {
         let name = g.get("name").and_then(|v| v.as_str()).unwrap_or("");
         let set = g.get("set").and_then(|v| v.as_str()).unwrap_or("train");
         if (set == "held-out") != held_out {
@@ -2519,17 +2588,12 @@ fn find_by_hash(dir: &Path, sha: &str) -> Option<std::path::PathBuf> {
 /// Refuses a ROM the bench file lists as held out: those are played only
 /// by `gp farm bench --held-out`, never one at a time.
 pub(crate) fn refuse_held_out(rom: &Path, bench_file: &Path) -> Result<()> {
-    let Ok(text) = fs::read_to_string(bench_file) else {
+    let games = bench_games(bench_file)?;
+    if games.is_empty() {
         return Ok(());
-    };
-    let t: toml::Table = toml::from_str(&text)?;
+    }
     let sha = super::machine::rom_sha256(&fs::read(rom)?)?;
-    for g in t
-        .get("game")
-        .and_then(|g| g.as_array())
-        .into_iter()
-        .flatten()
-    {
+    for g in &games {
         if g.get("set").and_then(|v| v.as_str()) == Some("held-out")
             && g.get("sha256").and_then(|v| v.as_str()) == Some(sha.as_str())
         {

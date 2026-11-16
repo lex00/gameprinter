@@ -143,8 +143,8 @@ mod tests {
     use super::*;
     use gp_theme::Scope;
 
-    /// A made-up theme over the repo's Donkey Kong models (no ROM data:
-    /// model.toml and the asset maps only).
+    /// A made-up theme over a game's models (no ROM data: model.toml and
+    /// the asset maps only).
     fn made_up(for_models: &str, restyles: &[(&str, Option<&str>)]) -> Theme {
         let mut text = format!(
             "format = \"0.1.3\"\nid = \"made-up\"\ntitle = \"Made up\"\nlicense = \"CC0-1.0\"\nfor = [{for_models}]\n"
@@ -158,24 +158,50 @@ mod tests {
         toml::from_str(&text).unwrap()
     }
 
-    /// Donkey Kong in the games checkout; None (the test passes over it)
-    /// without one.
-    fn dk() -> Option<(PathBuf, Model)> {
-        let d = crate::theme_template::test_games()?.join("donkey-kong");
-        let (m, _) = crate::theme::read_model(&d).unwrap();
-        Some((d, m))
+    /// The games checkout's game folders and gameprinter's own templates,
+    /// with their models and slots, the page's game first.
+    fn games() -> Vec<(PathBuf, Model, ModelSlots)> {
+        let mut dirs: Vec<PathBuf> = crate::theme_template::test_page_game()
+            .into_iter()
+            .collect();
+        for d in crate::theme_template::test_game_dirs() {
+            if !dirs.contains(&d) {
+                dirs.push(d);
+            }
+        }
+        dirs.into_iter()
+            .filter_map(|d| {
+                let (m, _) = crate::theme::read_model(&d).ok()?;
+                let s = slots_of(&d, &m);
+                Some((d, m, s))
+            })
+            .collect()
+    }
+
+    /// A name made wrong by its last letter.
+    fn misspelt(name: &str) -> String {
+        let mut s = name.to_owned();
+        let last = s.pop().unwrap();
+        s.push(if last == 'q' { 'x' } else { 'q' });
+        s
     }
 
     #[test]
     fn a_misspelt_slot_is_refused_with_the_nearest_name() {
-        let Some((d, m)) = dk() else { return };
-        let t = made_up("\"donkey_kong_oe\"", &[("sprite_tile", None)]);
+        let Some((d, m, s)) = games().into_iter().next() else {
+            return;
+        };
+        let slot = s.slots.keys().find(|k| k.len() > 4).unwrap();
+        let wrong = misspelt(slot);
+        let nearest = slots::nearest(&wrong, s.slots.keys()).unwrap();
+        let name = &m.model.name;
+        let t = made_up(&format!("\"{name}\""), &[(&wrong, None)]);
         let c = check(&d, &m, &[&t]);
         assert!(c.refused, "{}", c.text);
         assert!(
-            c.text.contains(
-                "REFUSED restyle 1 (x.pix): no slot `sprite_tile` in donkey_kong_oe; the nearest is `sprite_tiles`"
-            ),
+            c.text.contains(&format!(
+                "REFUSED restyle 1 (x.pix): no slot `{wrong}` in {name}; the nearest is `{nearest}`"
+            )),
             "{}",
             c.text
         );
@@ -183,25 +209,62 @@ mod tests {
 
     #[test]
     fn a_misspelt_entry_is_refused_with_the_nearest_entry() {
-        let Some((d, m)) = dk() else { return };
-        let t = made_up("", &[("stage_screens", Some("screen_25n"))]);
-        let c = check(&d, &m, &[&t]);
+        // A made-up template: Moss Hop's model, with an asset map of our own
+        // that names three entries of the asset its `level` slot comes from.
+        let d = tempfile::tempdir().unwrap();
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        fs::copy(
+            repo.join("templates/mosshop/model.toml"),
+            d.path().join("model.toml"),
+        )
+        .unwrap();
+        fs::write(
+            d.path().join("template.toml"),
+            "[template]\nid = \"made-up\"\n\n[recipe]\nasset_map = \"map.toml\"\n",
+        )
+        .unwrap();
+        fs::write(
+            d.path().join("map.toml"),
+            "[[asset]]\nname = \"level\"\n\n[[asset.entry]]\nname = \"meadow_first\"\n\n\
+             [[asset.entry]]\nname = \"meadow_second\"\n\n[[asset.entry]]\nname = \"pond_third\"\n",
+        )
+        .unwrap();
+        let (m, _) = crate::theme::read_model(d.path()).unwrap();
+        assert_eq!(
+            slots_of(d.path(), &m).slots["level"]
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["meadow_first", "meadow_second", "pond_third"]
+        );
+        let t = made_up("", &[("level", Some("meadow_secont"))]);
+        let c = check(d.path(), &m, &[&t]);
         assert!(c.refused, "{}", c.text);
-        assert!(c.text.contains("the nearest is `screen_25m`"), "{}", c.text);
+        assert!(
+            c.text.contains("the nearest is `meadow_second`"),
+            "{}",
+            c.text
+        );
     }
 
     #[test]
     fn without_for_only_the_given_model_is_checked() {
-        let Some((d, m)) = dk() else { return };
-        let c = check(&d, &m, &[&made_up("", &[("title_tile", None)])]);
+        let Some((d, m, _)) = games().into_iter().next() else {
+            return;
+        };
+        let c = check(&d, &m, &[&made_up("", &[("no_such_slot", None)])]);
         assert!(c.refused, "{}", c.text);
-        assert!(c.text.contains("against donkey_kong_oe:"), "{}", c.text);
+        assert!(
+            c.text.contains(&format!("against {}:", m.model.name)),
+            "{}",
+            c.text
+        );
     }
 
     #[test]
     fn every_templates_themes_pass() {
         // gameprinter: its own templates' themes (Moss Hop) and the games
-        // checkout's, whose Donkey Kong has its kit only since its paper
+        // checkout's, where one game has its kit only since its paper
         // theme was taken out (2026-11-11).
         let dirs = crate::theme_template::test_game_dirs();
         let mut seen = 0;

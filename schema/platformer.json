@@ -20,7 +20,7 @@
   ],
   "$defs": {
     "Bounce": {
-      "description": "Since 0.4.10: after it moves, the tile at `point` (from its position)\nis looked at. A tile there that isn't empty, water or a ladder, met\nwhile moving down for the first frame in a row, bounces it: its speed\nup and down becomes `speed`, its fraction kept (FireballBGCollision\nstores $fd in Fireball_Y_Speed and leaves the force alone), and its\nwhole height is rounded down to a\nmultiple of `snap`, its fraction kept. One met while moving up, or on\nthe frame after a bounce, removes it. Super Mario Bros.' fireballs\n(FireballBGCollision, BlockBufferChk_FBall): a wall is met the same way,\nso a fireball dies against one. Above `from_y` nothing is looked at.",
+      "description": "Since 0.4.10: after it moves, the tile at `point` (from its position)\nis looked at. A tile there that isn't empty, water or a ladder, met\nwhile moving down for the first frame in a row, bounces it: its speed\nup and down becomes `speed`, its fraction kept (FireballBGCollision\nstores $fd in Fireball_Y_Speed and leaves the force alone), and its\nwhole height is rounded down to a\nmultiple of `snap`, its fraction kept. One met while moving up, or on\nthe frame after a bounce, removes it. A side-scroller's fireballs\n(FireballBGCollision, BlockBufferChk_FBall): a wall is met the same way,\nso a fireball dies against one. Above `from_y` nothing is looked at.",
       "type": "object",
       "properties": {
         "from_y": {
@@ -153,11 +153,11 @@
           }
         },
         "down_holds": {
-          "description": "Feature `climb.down_holds`: `down` held while standing and not\nclimbing keeps the body still: the run gets no input and the step\ncounter doesn't step. Up held walks as usual (Donkey Kong's walk\nroutine looks for a ladder down instead of walking). A jump comes\nfirst: the takeoff frame and a landing hold aren't held.",
+          "description": "Feature `climb.down_holds`: `down` held while standing and not\nclimbing keeps the body still: the run gets no input and the step\ncounter doesn't step. Up held walks as usual (a ladder game's walk\nroutine looks for a ladder down instead of walking). A jump comes\nfirst: the takeoff frame and a landing hold aren't held.",
           "type": "boolean"
         },
         "down_through": {
-          "description": "Feature `climb.down_through`, with `by_feet`: down newly pressed\nalso starts a climb from standing with the feet in a ladder cell (a\nladder's foot), and climbing down tests nothing on the way: it goes on until\nthe feet reach a surface row, and the height wraps at this many\npixels, as an 8-bit coordinate does. Neither `kill_below` nor a\ngoal touches a body climbing so. Donkey Kong looks for a girder\nonly of the floor its y + 8 is in, and Down at a ladder's foot\nclimbs down through the floor, round the screen and onto the top\ngirder.",
+          "description": "Feature `climb.down_through`, with `by_feet`: down newly pressed also\nstarts a climb from standing with the feet in a ladder cell (a ladder's\nfoot), and climbing down tests nothing on the way: it goes on until the\nfeet reach a surface row, and the height wraps at this many pixels, as\nan 8-bit coordinate does. Neither `kill_below` nor a goal touches a body\nclimbing so. A ladder game looks for a girder only of the floor its y +\n8 is in, and Down at a ladder's foot climbs down through the floor,\nround the screen and onto the top girder.",
           "type": [
             "integer",
             "null"
@@ -166,11 +166,11 @@
           "minimum": 0
         },
         "down_through_step": {
-          "description": "Feature `climb.down_through_step`, with `down_through`: the press of\ndown at a ladder's foot climbs down through the floor only while the\nentity's last move across stepped it up a surface. Donkey Kong's\nwalk tests the ground ($D20B) after the move across and before the\nstep up, so $5A is 0 after a step up the slope, and $D432 skips its\nladder-top test then (the ladder-zip, TASVideos 2299S).",
+          "description": "Feature `climb.down_through_step`, with `down_through`: the press of\ndown at a ladder's foot climbs down through the floor only while the\nentity's last move across stepped it up a surface. A ladder game's\nwalk tests the ground ($D20B) after the move across and before the\nstep up, so $5A is 0 after a step up the slope, and $D432 skips its\nladder-top test then (the ladder-zip, TASVideos 2299S).",
           "type": "boolean"
         },
         "grab": {
-          "description": "Feature `climb.grab`, `[x0, y0, x1, y1]` from the entity's place, in\nwhole pixels: in a level with `ladders`, a climb up starts only\nwhere this box (edges included) meets one of the level's ladder\nboxes below the box's top row, instead of by the cell at the\nentity's middle. Standing on a ladder's top, up does nothing (the\ngame's climb routine finds the top in a list of its own, $D50A).\nDonkey Kong's ladder routine ($D28B) tests Mario's feet box against\neach ladder's box ($D8AD).",
+          "description": "Feature `climb.grab`, `[x0, y0, x1, y1]` from the entity's place, in\nwhole pixels: in a level with `ladders`, a climb up starts only where\nthis box (edges included) meets one of the level's ladder boxes below\nthe box's top row, instead of by the cell at the entity's middle.\nStanding on a ladder's top, up does nothing (the game's climb routine\nfinds the top in a list of its own, $D50A). A ladder game's ladder\nroutine ($D28B) tests the player's feet box against each ladder's box\n($D8AD).",
           "type": [
             "array",
             "null"
@@ -194,7 +194,7 @@
           ]
         },
         "grab_snap": {
-          "description": "With `grab` (feature `climb.grab`): a climb up by a ladder box\nstarts with the entity's x at the box's left plus this, instead of\nthe middle of the cell. Donkey Kong's $D2B9 puts Mario's sprite at\nthe ladder's x less 4 ($A1).",
+          "description": "With `grab` (feature `climb.grab`): a climb up by a ladder box starts\nwith the entity's x at the box's left plus this, instead of the middle\nof the cell. A ladder game's $D2B9 puts the player's sprite at the\nladder's x less 4 ($A1).",
           "type": [
             "integer",
             "null"
@@ -202,14 +202,14 @@
           "format": "int32"
         },
         "hold_still": {
-          "description": "Holding this action keeps it still on the ladder (firing, in Mega\nMan 2).",
+          "description": "Holding this action keeps it still on the ladder (firing, in a\nrun-and-gun game).",
           "type": [
             "string",
             "null"
           ]
         },
         "lone_way": {
-          "description": "Feature `climb.lone_way`: the climb reads one way from the pad, as\nthe walk does with `run.lone_direction`: up or down starts or moves\na climb only held alone, and on a ladder left or right held alone\n(both, with `run.both_left`) turns the climber to it without moving\nit. Donkey Kong's $D175 latches $56 only for a lone direction and\nwrites $57 from Left or Right on every frame but a jump's or a\nfall's, the ladder's too, and the ladder routine ($D37E) climbs on\n$56 = 8 or 4 (wallW's ladder probes, 2026-11-04: Left on a ladder\nfaces left on the frame it is pressed; Down and Left stand still).",
+          "description": "Feature `climb.lone_way`: the climb reads one way from the pad, as\nthe walk does with `run.lone_direction`: up or down starts or moves\na climb only held alone, and on a ladder left or right held alone\n(both, with `run.both_left`) turns the climber to it without moving\nit. A ladder game's $D175 latches $56 only for a lone direction and\nwrites $57 from Left or Right on every frame but a jump's or a\nfall's, the ladder's too, and the ladder routine ($D37E) climbs on\n$56 = 8 or 4 (wallW's ladder probes, 2026-11-04: Left on a ladder\nfaces left on the frame it is pressed; Down and Left stand still).",
           "type": "boolean"
         },
         "release": {
@@ -227,14 +227,14 @@
           "type": "boolean"
         },
         "top_test": {
-          "description": "Feature `climb.top_test`, with `grab`: a climb from standing asks\nthe level's `ladder_tops` and `ladder_stops` by the grab box (edges\nincluded). Down starts only where the box meets one of the level's\nladder boxes, and a top and no stop, at the ladder's left plus\n`grab_snap`; up doesn't start where it meets a top or a stop; and\nclimbing, up doesn't move where it meets a stop. With\n`down_through_step`, a press of down after a step up skips the top\nand stop test but still needs the ladder box. Donkey Kong's ladder routine\nasks $D50A on the girder while $5A is set ($D397 up, $D43B down)\nand before each move ($D3AF, $D45A): 1 in a top's box, 2 in a\nstop's.",
+          "description": "Feature `climb.top_test`, with `grab`: a climb from standing asks the\nlevel's `ladder_tops` and `ladder_stops` by the grab box (edges\nincluded). Down starts only where the box meets one of the level's\nladder boxes, and a top and no stop, at the ladder's left plus\n`grab_snap`; up doesn't start where it meets a top or a stop; and\nclimbing, up doesn't move where it meets a stop. With\n`down_through_step`, a press of down after a step up skips the top and\nstop test but still needs the ladder box. A ladder game's ladder routine\nasks $D50A on the girder while $5A is set ($D397 up, $D43B down) and\nbefore each move ($D3AF, $D45A): 1 in a top's box, 2 in a stop's.",
           "type": "boolean"
         },
         "up": {
           "type": "string"
         },
         "up_cycle": {
-          "description": "Feature `climb.up_cycle`: whole pixels moved up on each count of\nthe body's step counter (its mechanic word 0, shared with\n`run.step_cycle`), in place of `speed`. A frame up is held at a\nladder steps the counter, and the climb starts on a count that\nmoves (Donkey Kong's $88 pattern at $D9E8, $24 and $49).",
+          "description": "Feature `climb.up_cycle`: whole pixels moved up on each count of\nthe body's step counter (its mechanic word 0, shared with\n`run.step_cycle`), in place of `speed`. A frame up is held at a\nladder steps the counter, and the climb starts on a count that\nmoves (a ladder game's $88 pattern at $D9E8, $24 and $49).",
           "type": "array",
           "items": {
             "type": "integer",
@@ -266,7 +266,7 @@
       "type": "object",
       "properties": {
         "after_move": {
-          "description": "The touch is tested in the entity's own turn, after its move, not\nbefore the enemies move. Super Mario Bros.' BulletBillHandler moves a\ncannon's bill and then calls PlayerEnemyCollision, in ProcessCannons\nafter the enemy loop, so all the enemies have moved on the frame a\nbill hits Mario. Default off.",
+          "description": "The touch is tested in the entity's own turn, after its move, not\nbefore the enemies move. A side-scroller's BulletBillHandler moves a\ncannon's bill and then calls PlayerEnemyCollision, in ProcessCannons\nafter the enemy loop, so all the enemies have moved on the frame a\nbill hits the player. Default off.",
           "type": "boolean"
         },
         "bounce": {
@@ -290,7 +290,7 @@
           "minimum": 0
         },
         "every": {
-          "description": "Since 0.4.9: the touch is tested only on frames whose number is a\nmultiple of this (the frame count from power-on), as Super Mario\nBros.' PlayerEnemyCollision leaves on frames whose FrameCounter is\nodd. Default every frame.",
+          "description": "Since 0.4.9: the touch is tested only on frames whose number is a\nmultiple of this (the frame count from power-on), as a side-scroller's\nPlayerEnemyCollision leaves on frames whose FrameCounter is odd. Default\nevery frame.",
           "type": [
             "integer",
             "null"
@@ -299,11 +299,11 @@
           "minimum": 0
         },
         "in_turn": {
-          "description": "Since 0.4.25: a state's `stops_at_once` that this touch sets off\nleaves the bodies in earlier numbered slots to finish their move.\nSuper Mario Bros.' RunNormalEnemies tests a touch inside the enemy\nloop, so TimerControl stops the enemy that hurt Mario and those after\nit, and those before it have moved. Default off, and a body without a\nnumbered slot stops them all.",
+          "description": "Since 0.4.25: a state's `stops_at_once` that this touch sets off leaves\nthe bodies in earlier numbered slots to finish their move. A\nside-scroller's RunNormalEnemies tests a touch inside the enemy loop, so\nTimerControl stops the enemy that hurt the player and those after it,\nand those before it have moved. Default off, and a body without a\nnumbered slot stops them all.",
           "type": "boolean"
         },
         "invincible": {
-          "description": "Since 0.4.10: what a touch does while the player is invincible\n(its `invincible`). Default `defeat` for an entity whose touch would\nhurt or kill the player or kick it, or that can be stomped, and\n`otherwise` for the rest. Super Mario Bros.' firebars and hammers\ndo nothing to a player with the star.",
+          "description": "Since 0.4.10: what a touch does while the player is invincible\n(its `invincible`). Default `defeat` for an entity whose touch would\nhurt or kill the player or kick it, or that can be stomped, and\n`otherwise` for the rest. A side-scroller's firebars and hammers\ndo nothing to a player with the star.",
           "anyOf": [
             {
               "$ref": "#/$defs/Touch"
@@ -314,11 +314,11 @@
           ]
         },
         "keep_on_stomp": {
-          "description": "A stomp leaves the entity in place, for its state machine to change\n(a Koopa into its shell, a Goomba flattened for a while).",
+          "description": "A stomp leaves the entity in place, for its state machine to change\n(a shelled enemy into its shell, a walking enemy flattened for a while).",
           "type": "boolean"
         },
         "near": {
-          "description": "The touch is tested by the player's `touch_points` near the entity's\nposition, in the entity's turn after it moves, in place of the\nhitboxes in the contact system. Super Mario Bros.' FirebarCollision\nruns inside ProcFirebar. Default off.",
+          "description": "The touch is tested by the player's `touch_points` near the entity's\nposition, in the entity's turn after it moves, in place of the\nhitboxes in the contact system. A side-scroller's FirebarCollision\nruns inside ProcFirebar. Default off.",
           "anyOf": [
             {
               "$ref": "#/$defs/Near"
@@ -339,7 +339,7 @@
           "minimum": 0
         },
         "ride": {
-          "description": "Since 0.4.26, with `stand`: how the player rides the entity. The player is placed\non the entity after the entity's own move on the same frame, keeping\nthe fraction of its height, as Super Mario Bros.' MoveSmallPlatform\nand ChkYPCollision run PositionPlayerOnVPlat after the platform moves.\nIt needs `platformer.contact` before `platformer.enemies` in the\nsystem order. Default off: the player is placed in the contact\nsystem, on a whole pixel.",
+          "description": "Since 0.4.26, with `stand`: how the player rides the entity. The player\nis placed on the entity after the entity's own move on the same frame,\nkeeping the fraction of its height, as a side-scroller's\nMoveSmallPlatform and ChkYPCollision run PositionPlayerOnVPlat after the\nplatform moves. It needs `platformer.contact` before\n`platformer.enemies` in the system order. Default off: the player is\nplaced in the contact system, on a whole pixel.",
           "anyOf": [
             {
               "$ref": "#/$defs/Ride"
@@ -350,7 +350,7 @@
           ]
         },
         "sides": {
-          "description": "Since 0.4.22: the entity's sides stop the player. A touch at a side\nimpedes the player as a wall does: its speed across becomes 0 and\nit moves one pixel away, unless it is already moving away. Super\nMario Bros.' PlatformSideCollisions calls ImpedePlayerMove. Default\noff: a touch doesn't move the player.",
+          "description": "Since 0.4.22: the entity's sides stop the player. A touch at a side\nimpedes the player as a wall does: its speed across becomes 0 and\nit moves one pixel away, unless it is already moving away. a\nside-scroller's PlatformSideCollisions calls ImpedePlayerMove. Default\noff: a touch doesn't move the player.",
           "anyOf": [
             {
               "$ref": "#/$defs/Sides"
@@ -376,7 +376,7 @@
           ]
         },
         "touch_edges": {
-          "description": "Since 0.4.14: the touch's test takes each hitbox one pixel wider and\ntaller, so two that only meet at their edges touch. Super Mario\nBros.' SprObjectCollisionCore compares a box's left and right as\noffsets from BoundBoxCtrlData, each a pixel in the box, and counts\nequal as a touch. Default off: hitboxes touch when they share a pixel.",
+          "description": "Since 0.4.14: the touch's test takes each hitbox one pixel wider and\ntaller, so two that only meet at their edges touch. a side-scroller's\nSprObjectCollisionCore compares a box's left and right as offsets from\nBoundBoxCtrlData, each a pixel in the box, and counts equal as a touch.\nDefault off: hitboxes touch when they share a pixel.",
           "type": "boolean"
         }
       },
@@ -596,7 +596,7 @@
           ]
         },
         "locks": {
-          "description": "A player's actions that do nothing while a counter holds (feature\n`power.locks`): Donkey Kong's hammer, held while its timer runs,\ntakes away jumping and climbing.",
+          "description": "A player's actions that do nothing while a counter holds (feature\n`power.locks`): a ladder game's hammer, held while its timer runs,\ntakes away jumping and climbing.",
           "anyOf": [
             {
               "$ref": "#/$defs/Locks"
@@ -708,7 +708,7 @@
           ]
         },
         "touch_points": {
-          "description": "A player's points, in pixels from its position, that a\n`contact.near` tests. Super Mario Bros.' FirebarCollision tests\ny+24 for small Mario and y, y+12 and y+24 for big Mario, 4 pixels in\nfrom his left. Default none: no `contact.near` touches this player.",
+          "description": "A player's points, in pixels from its position, that a `contact.near`\ntests. A side-scroller's FirebarCollision tests y+24 for the small\nplayer and y, y+12 and y+24 for the big player, 4 pixels in from its\nleft. Default none: no `contact.near` touches this player.",
           "type": "array",
           "items": {
             "type": "array",
@@ -738,7 +738,7 @@
       "type": "object",
       "properties": {
         "feet": {
-          "description": "Since 0.4.19: the columns where the ground is looked for, in pixels\nfrom the entity's x, as `jump.feet`. Without them it is every column\nof the tile hitbox. Super Mario Bros.' ChkUnderEnemy tests one point,\nx + 8, so a goomba drops off a ledge once its middle is past the\nedge.",
+          "description": "Since 0.4.19: the columns where the ground is looked for, in pixels\nfrom the entity's x, as `jump.feet`. Without them it is every column\nof the tile hitbox. A side-scroller's ChkUnderEnemy tests one point,\nx + 8, so a walking enemy drops off a ledge once its middle is past the\nedge.",
           "type": [
             "array",
             "null"
@@ -758,11 +758,11 @@
           "type": "boolean"
         },
         "move_first": {
-          "description": "The position moves by the old vertical speed before gravity is\nadded, as Super Mario Bros. does, rather than after.",
+          "description": "The position moves by the old vertical speed before gravity is\nadded, as a side-scroller does, rather than after.",
           "type": "boolean"
         },
         "stands_still": {
-          "description": "Since 0.4.19: a body on the ground takes no gravity. It only looks\nfor the ground, and falls from the frame after it has gone. Placed\nin a numbered slot it takes the slot's height fraction (since\n0.4.21), and on the ground no speed from the slot. Super Mario\nBros.' enemy in state 0 skips MoveD_EnemyVertically, ChkForRedKoopa's\nchange to state 1 moves it from the next frame, nothing clears\nEnemy_YMF_Dummy, and SetBBox runs on into InitVStf.",
+          "description": "Since 0.4.19: a body on the ground takes no gravity. It only looks\nfor the ground, and falls from the frame after it has gone. Placed\nin a numbered slot it takes the slot's height fraction (since\n0.4.21), and on the ground no speed from the slot. A\nside-scroller's enemy in state 0 skips MoveD_EnemyVertically, its\nred-shell turn's\nchange to state 1 moves it from the next frame, nothing clears\nEnemy_YMF_Dummy, and SetBBox runs on into InitVStf.",
           "type": "boolean"
         }
       },
@@ -793,7 +793,7 @@
           "$ref": "#/$defs/Heading"
         },
         "keep_speed": {
-          "description": "Since 0.4.10: it keeps the speed across it has (one a start carries\nfrom the original, or `shoot.vx`), and takes `speed` the way it\nfaces only while that is 0. Super Mario Bros.' fireball moves by\nwhatever Fireball_X_Speed holds.",
+          "description": "Since 0.4.10: it keeps the speed across it has (one a start carries\nfrom the original, or `shoot.vx`), and takes `speed` the way it\nfaces only while that is 0. A side-scroller's fireball moves by\nwhatever Fireball_X_Speed holds.",
           "type": "boolean"
         },
         "speed": {
@@ -832,18 +832,18 @@
       ]
     },
     "Ground": {
-      "description": "Feature `level.ground`: each row of `runs` is a run of boxes, its first\nfive bytes x, y, shape, the step across from one box to the next (a\nsigned byte) and the count; each box is `rise` pixels above the last,\nand x and y wrap as bytes. The shape divided by `shape_step` is a row\nof `shapes`, whose four bytes are the box's left, top, right and bottom\nfrom its place, edges included. A body on the ground keeps its height\nwhile its feet, the columns `feet` from its x on the row under its tile\nhitbox, meet a box; once they meet none it moves to the nearest row a\npixel or two up or down whose box they meet. Donkey Kong's walk tests\nMario's feet box ($C186: his sprite +8 to +10, +17 down) against the\ngirder pieces of his row ($D91A, the runs at $C08C, each piece a pixel\nhigher) after each move across and steps a pixel when it finds none\n($D8EB).",
+      "description": "Feature `level.ground`: each row of `runs` is a run of boxes, its first\nfive bytes x, y, shape, the step across from one box to the next (a\nsigned byte) and the count; each box is `rise` pixels above the last,\nand x and y wrap as bytes. The shape divided by `shape_step` is a row\nof `shapes`, whose four bytes are the box's left, top, right and bottom\nfrom its place, edges included. A body on the ground keeps its height\nwhile its feet, the columns `feet` from its x on the row under its tile\nhitbox, meet a box; once they meet none it moves to the nearest row a\npixel or two up or down whose box they meet. A ladder game's walk tests\nthe player's feet box ($C186: its sprite +8 to +10, +17 down) against the\ngirder pieces of its row ($D91A, the runs at $C08C, each piece a pixel\nhigher) after each move across and steps a pixel when it finds none\n($D8EB).",
       "type": "object",
       "properties": {
         "bodies": {
-          "description": "Feature `level.ground_bodies`: entities whose box is ground too, so\nthe ground can move. A ground test meets the level's boxes first,\nthen these bodies' boxes in the bodies' order. A body whose test\nmeets one of these rides it: it moves by the same step whenever\nthat body moves, and it stays standing without a test until it\nmoves across or leaves the ground. The ride ends at the next test\nthat meets no box at all (the walk's after a move across, each\nframe of a jump after its takeoff, a ledge fall's); a test that\nmeets one of the level's boxes leaves it as it was. Donkey Kong's\n75m: when the stage's boxes hold nothing ($D316), $D326 tests the\nsix elevator platforms against Mario's feet box and sets $DA by the\ncolumn it meets, or clears it when it meets none; $E834 then moves\nMario's sprite with the column on each of its steps while $DA holds.",
+          "description": "Feature `level.ground_bodies`: entities whose box is ground too, so the\nground can move. A ground test meets the level's boxes first, then these\nbodies' boxes in the bodies' order. A body whose test meets one of these\nrides it: it moves by the same step whenever that body moves, and it\nstays standing without a test until it moves across or leaves the\nground. The ride ends at the next test that meets no box at all (the\nwalk's after a move across, each frame of a jump after its takeoff, a\nledge fall's); a test that meets one of the level's boxes leaves it as\nit was. A ladder game's third stage: when the stage's boxes hold nothing\n($D316), $D326 tests the six elevator platforms against the player's\nfeet box and sets $DA by the column it meets, or clears it when it meets\nnone; $E834 then moves the player's sprite with the column on each of\nits steps while $DA holds.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/GroundBody"
           }
         },
         "boxes": {
-          "description": "Feature `level.ground_boxes`: each row of `runs` is one box, its\nfirst three bytes x, y and shape, with no step across or count.\nDonkey Kong's ground on every stage but 25m ($D2E2 reads the\nstage's rows through the pointer at $C46B and tests Mario's feet box\nagainst each, $D8AD; 75m's at $C20C).",
+          "description": "Feature `level.ground_boxes`: each row of `runs` is one box, its first\nthree bytes x, y and shape, with no step across or count. A ladder\ngame's ground on every stage but the first ($D2E2 reads the stage's rows\nthrough the pointer at $C46B and tests the player's feet box against\neach, $D8AD; the third stage's at $C20C).",
           "type": "boolean"
         },
         "feet": {
@@ -856,7 +856,7 @@
           "minItems": 2
         },
         "land": {
-          "description": "Feature `level.ground_land`: a jump falling (its vertical speed 0\nor more) lands on the first box its feet meet on a row from this\nmany pixels above the row under its tile hitbox down to that row,\nwherever it was the frame before, and the tiles don't land it. A\nledge fall (`jump.ledge_fall`) lands the same way, where it is.\nDonkey Kong's jump tests Mario's feet box, +10 to +12 down from his\nheight, against the girder pieces in their list's order ($D5CC,\n$D2CB, $D91A) and puts him on the first it meets ($D5D3); his fall\noff a girder's end tests the same box and dies where it meets one\n($D6BC).",
+          "description": "Feature `level.ground_land`: a jump falling (its vertical speed 0 or\nmore) lands on the first box its feet meet on a row from this many\npixels above the row under its tile hitbox down to that row, wherever it\nwas the frame before, and the tiles don't land it. A ledge fall\n(`jump.ledge_fall`) lands the same way, where it is. A ladder game's\njump tests the player's feet box, +10 to +12 down from its height,\nagainst the girder pieces in their list's order ($D5CC, $D2CB, $D91A)\nand puts it on the first it meets ($D5D3); its fall off a girder's end\ntests the same box and dies where it meets one ($D6BC).",
           "type": [
             "integer",
             "null"
@@ -865,7 +865,7 @@
           "minimum": 0
         },
         "land_rising": {
-          "description": "Feature `level.ground_land_rising`: with `land`, a jump lands on a\nbox its feet meet on any frame after its takeoff, rising too. Donkey\nKong's jump runs its ground test ($D5CC) on every frame but the\ntakeoff's ($D5BB) whichever way the arc goes, so a jump whose feet\nrise into a box's top lands there.",
+          "description": "Feature `level.ground_land_rising`: with `land`, a jump lands on a\nbox its feet meet on any frame after its takeoff, rising too. a\nladder game's jump runs its ground test ($D5CC) on every frame but the\ntakeoff's ($D5BB) whichever way the arc goes, so a jump whose feet\nrise into a box's top lands there.",
           "type": "boolean"
         },
         "rise": {
@@ -894,7 +894,7 @@
       ]
     },
     "GroundBody": {
-      "description": "Feature `level.ground_bodies`: an entity kind whose bodies are ground,\nand its box: left, top, right and bottom from the body's place, edges\nincluded. Donkey Kong's elevator platform is the box at $C2C8: its\nsprite's x to x + 18 on the row under its y ($D326 with $2A).",
+      "description": "Feature `level.ground_bodies`: an entity kind whose bodies are ground,\nand its box: left, top, right and bottom from the body's place, edges\nincluded. A ladder game's elevator platform is the box at $C2C8: its\nsprite's x to x + 18 on the row under its y ($D326 with $2A).",
       "type": "object",
       "properties": {
         "box": {
@@ -976,7 +976,7 @@
           ]
         },
         "busy_while": {
-          "description": "Feature `head.busy_while`: while this holds, every cell that stops movement is\nhit as a `solid` one: no event, no change to the cell. Super Mario\nBros.' PlayerBGCollision reads BlockBounceTimer, which a block hit\nsets to 16 frames, and takes no block hit while it runs (NYSpd).",
+          "description": "Feature `head.busy_while`: while this holds, every cell that stops\nmovement is hit as a `solid` one: no event, no change to the cell. a\nside-scroller's PlayerBGCollision reads BlockBounceTimer, which a block\nhit sets to 16 frames, and takes no block hit while it runs (NYSpd).",
           "anyOf": [
             {
               "$ref": "#/$defs/Guard"
@@ -1019,7 +1019,7 @@
       ]
     },
     "HeadAbove": {
-      "description": "What a head hit does to the cell above the one hit (feature `head.above`): when\nthat cell is `tile`, it becomes `becomes` and `event` fires for the\nentity. Super Mario Bros.' BumpBlock and BrickShatter call\nCheckTopOfBlock, which takes a coin sitting on the block that was hit.",
+      "description": "What a head hit does to the cell above the one hit (feature `head.above`):\nwhen that cell is `tile`, it becomes `becomes` and `event` fires for the\nentity. A side-scroller's BumpBlock and BrickShatter call CheckTopOfBlock,\nwhich takes a coin sitting on the block that was hit.",
       "type": "object",
       "properties": {
         "becomes": {
@@ -1174,7 +1174,7 @@
           "minimum": 0
         },
         "every": {
-          "description": "Since 0.4.10: hits are tested only on frames whose number less\n`phase` is a multiple of this, as `contact.every` (Super Mario\nBros.' FireballEnemyCollision runs on even frames).",
+          "description": "Since 0.4.10: hits are tested only on frames whose number less\n`phase` is a multiple of this, as `contact.every` (a\nside-scroller's FireballEnemyCollision runs on even frames).",
           "type": [
             "integer",
             "null"
@@ -1186,7 +1186,7 @@
           "type": "boolean"
         },
         "move_first": {
-          "description": "Since 0.4.10: the hitter moves (its components, as the enemies\nsystem moves it) in the contact system, just before its hits are\ntested, and not in the enemies system, so it hits the others where\nthey were before they move. Super Mario Bros. runs FireballObjCore,\nwhich moves a fireball and tests it against the enemies, ahead of\nits enemy loop.",
+          "description": "Since 0.4.10: the hitter moves (its components, as the enemies\nsystem moves it) in the contact system, just before its hits are\ntested, and not in the enemies system, so it hits the others where\nthey were before they move. A side-scroller runs FireballObjCore,\nwhich moves a fireball and tests it against the enemies, ahead of\nits enemy loop.",
           "type": "boolean"
         },
         "phase": {
@@ -1218,11 +1218,11 @@
           "minimum": 0
         },
         "land_first": {
-          "description": "Since 0.4.8: the landing comes before the move, as Super Mario\nBros.' EnemyJump runs in EnemyToBGCollisionDet before\nMoveJumpingEnemy. At the start of its turn, standing on ground\n(its bottom row in a tile that stops it) with its speed's whole\npart anything but -2, -1 or 0 (the game adds 2 to Enemy_Y_Speed and\ncompares it with 3 unsigned), it is placed on that tile's top, its\nheight's fraction kept, and takes the hop's speed; then it moves by\nits `fall`, and a move into the ground doesn't stop it.",
+          "description": "Since 0.4.8: the landing comes before the move, as a\nside-scroller's EnemyJump runs in EnemyToBGCollisionDet before\nMoveJumpingEnemy. At the start of its turn, standing on ground\n(its bottom row in a tile that stops it) with its speed's whole\npart anything but -2, -1 or 0 (the game adds 2 to Enemy_Y_Speed and\ncompares it with 3 unsigned), it is placed on that tile's top, its\nheight's fraction kept, and takes the hop's speed; then it moves by\nits `fall`, and a move into the ground doesn't stop it.",
           "type": "boolean"
         },
         "land_while_stopped": {
-          "description": "Since 0.4.26: with `land_first`, the landing still happens on a frame a freeze or\na state's `stops` or `stops_at_once` keeps the enemies from moving,\nas Super Mario Bros.' RunNormalEnemies runs EnemyToBGCollisionDet\nbefore its TimerControl check, which skips only EnemyMovementSubs.",
+          "description": "Since 0.4.26: with `land_first`, the landing still happens on a frame a\nfreeze or a state's `stops` or `stops_at_once` keeps the enemies from\nmoving, as a side-scroller's RunNormalEnemies runs EnemyToBGCollisionDet\nbefore its TimerControl check, which skips only EnemyMovementSubs.",
           "type": "boolean"
         },
         "pattern": {
@@ -1263,7 +1263,7 @@
       ]
     },
     "Invincible": {
-      "description": "Since 0.4.10: a player that is invincible while `while` holds (a\ncounter compared with a number, as a transition's `if` is). While it\ndoes, a touch does the toucher's `contact.invincible` instead of a\nstomp or its `otherwise`: by default an entity whose touch would hurt\nor kill the player, or kick it, is defeated (Super Mario Bros.'\nStarInvincibleTimer: CheckForPUpCollision jumps to ShellOrBlockDefeat\nbefore HandlePECollisions looks at a stomp).",
+      "description": "Since 0.4.10: a player that is invincible while `while` holds (a\ncounter compared with a number, as a transition's `if` is). While it\ndoes, a touch does the toucher's `contact.invincible` instead of a\nstomp or its `otherwise`: by default an entity whose touch would hurt\nor kill the player, or kick it, is defeated (a side-scroller's\nStarInvincibleTimer: CheckForPUpCollision jumps to ShellOrBlockDefeat\nbefore HandlePECollisions looks at a stomp).",
       "type": "object",
       "properties": {
         "while": {
@@ -1297,7 +1297,7 @@
           "minimum": 0
         },
         "collide_y": {
-          "description": "Since 0.4.8: the entity meets tiles (landing, the head, the feet's\ndepth and the wall points) only while its y, in whole pixels, is at\nleast the first and below the second; elsewhere it goes through\nthem. Super Mario Bros.' PlayerBGCollision does nothing while\nMario's high byte is off the screen or his y is $cf or more, so he\nfalls into a pit past the ground's side.",
+          "description": "Since 0.4.8: the entity meets tiles (landing, the head, the feet's\ndepth and the wall points) only while its y, in whole pixels, is at\nleast the first and below the second; elsewhere it goes through\nthem. A side-scroller's PlayerBGCollision does nothing while\nthe player's high byte is off the screen or its y is $cf or more, so it\nfalls into a pit past the ground's side.",
           "type": [
             "array",
             "null"
@@ -1316,7 +1316,7 @@
           "minimum": 0
         },
         "fatal_drop": {
-          "description": "Feature `jump.fatal_drop`: a jump that lands this many pixels or\nmore below its takeoff kills the player, when its `land_hold` ends\n(on landing without one). Mechanic word 3 keeps the takeoff height.\nDonkey Kong sets $95 to $FF 16 px below the takeoff and kills after\nthe 4-frame hold.",
+          "description": "Feature `jump.fatal_drop`: a jump that lands this many pixels or\nmore below its takeoff kills the player, when its `land_hold` ends\n(on landing without one). Mechanic word 3 keeps the takeoff height.\nA ladder game sets $95 to $FF 16 px below the takeoff and kills after\nthe 4-frame hold.",
           "type": [
             "integer",
             "null"
@@ -1325,7 +1325,7 @@
           "minimum": 0
         },
         "fatal_drop_in_air": {
-          "description": "Feature `jump.fatal_drop_in_air`: with `fatal_drop`, mechanic word\n3 keeps the height after the takeoff frame's move, and the drop is\ntested on every later frame in the air, on the height the frame's\nmove reaches before a landing puts the body on the ground. Once it\nholds, the word is -1000 and the landing kills. Donkey Kong's jump\nroutine keeps $95 from $01 after the arc's first step ($D570-$D57C,\n$D5EA), sets it to $FF once the step's height less 16 is at or past\nit ($D5BF-$D5CA), before the landing test ($D5CC), and kills on $FF\nas the hold ends ($D615).",
+          "description": "Feature `jump.fatal_drop_in_air`: with `fatal_drop`, mechanic word\n3 keeps the height after the takeoff frame's move, and the drop is\ntested on every later frame in the air, on the height the frame's\nmove reaches before a landing puts the body on the ground. Once it\nholds, the word is -1000 and the landing kills. A ladder game's jump\nroutine keeps $95 from $01 after the arc's first step ($D570-$D57C,\n$D5EA), sets it to $FF once the step's height less 16 is at or past\nit ($D5BF-$D5CA), before the landing test ($D5CC), and kills on $FF\nas the hold ends ($D615).",
           "type": "boolean"
         },
         "feet": {
@@ -1378,7 +1378,7 @@
           "minimum": 0
         },
         "land_hold": {
-          "description": "Feature `jump.land_hold`: for this many frames after the frame a\njump lands, the entity neither walks, jumps nor takes a ladder; it\nstands. Mechanic word 2 counts the frames left. Donkey Kong keeps\nMario in his jump state for 4 frames after landing ($94 from $F0 to\n$F4), and the jump routine runs no ladder test (clear-25m clip 1,\nframes 3086-3089).",
+          "description": "Feature `jump.land_hold`: for this many frames after the frame a\njump lands, the entity neither walks, jumps nor takes a ladder; it\nstands. Mechanic word 2 counts the frames left. A ladder game keeps\nthe player in its jump state for 4 frames after landing ($94 from $F0 to\n$F4), and the jump routine runs no ladder test (clip 1 of a first-stage\nclear, frames 3086-3089).",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
@@ -1407,7 +1407,7 @@
           "type": "boolean"
         },
         "move_first": {
-          "description": "The position moves by the old vertical speed before gravity is\nadded, as Super Mario Bros. does, rather than after.",
+          "description": "The position moves by the old vertical speed before gravity is\nadded, as a side-scroller does, rather than after.",
           "type": "boolean"
         },
         "no_gravity_on_ground": {
@@ -1452,7 +1452,7 @@
           ]
         },
         "takeoff_fraction": {
-          "description": "Feature `jump.takeoff_fraction`: a takeoff sets the height's\nfraction to this (from 0, below 1), as a game that keeps a jump's\nheight in a fraction byte of its own and starts it at a set value.\nDonkey Kong's jump routine starts its fraction at $F0.",
+          "description": "Feature `jump.takeoff_fraction`: a takeoff sets the height's\nfraction to this (from 0, below 1), as a game that keeps a jump's\nheight in a fraction byte of its own and starts it at a set value.\nA ladder game's jump routine starts its fraction at $F0.",
           "anyOf": [
             {
               "$ref": "#/$defs/Fixed"
@@ -1527,11 +1527,11 @@
       ]
     },
     "Ladders": {
-      "description": "Feature `level.ladders`: each row of `places` is a ladder, its first\nthree bytes its x, its y and its shape; the shape divided by\n`shape_step` is a row of `shapes`, whose four bytes are the box's left,\ntop, right and bottom from the ladder's x and y, edges included.\nDonkey Kong keeps each stage's ladders this way ($C0E3 and $C10B for\n25m).",
+      "description": "Feature `level.ladders`: each row of `places` is a ladder, its first\nthree bytes its x, its y and its shape; the shape divided by\n`shape_step` is a row of `shapes`, whose four bytes are the box's left,\ntop, right and bottom from the ladder's x and y, edges included.\nA ladder game keeps each stage's ladders this way ($C0E3 and $C10B for\nthe first stage).",
       "type": "object",
       "properties": {
         "end": {
-          "description": "Feature `level.ladder_lists`: the byte that ends a list read by\n`places_at`. Default 254 ($FE, Donkey Kong's).",
+          "description": "Feature `level.ladder_lists`: the byte that ends a list read by\n`places_at`. Default 254 ($FE, a ladder game's).",
           "type": [
             "integer",
             "null"
@@ -1577,7 +1577,7 @@
       ]
     },
     "Launcher": {
-      "description": "Since 0.4.28: a launcher, an object that fires the entity `fires` on its\nown timer and a shift counter's bits, aimed at the player's side (Super\nMario Bros.' bullet bill cannons: SetupCannon, ProcessCannons and\nBulletBillHandler).\n\nThe level's launchers keep `table` entries. One that appears (a `drawn`\nspawn, as its column is drawn) takes the entry the counter `next` names,\nending the launcher that had it and keeping that one's timer, and moves\n`next` on, back to 0 after the last. One placed left of `from_x` takes its\nentry and fires nothing, so it has no body. A launcher that appears is\npicked from the next frame on (the area parser runs after the enemies).\n\nEach frame after the other enemies, the level's first `slots` numbered\nslots (`slot_rest`) take a turn each, the last first. A slot that holds a\nshot gives the shot its turn: shots move there, not with the other\nenemies. A free slot reads a byte of `counter` from bit `at`, `slot_step`\nbits lower for each slot after the first, and'ed with `mask` (`hard_mask`\nin a level with `hard_spawns`). A value below `table` picks that entry's\nlauncher: a timer above 0 counts down by 1, and at 0 it fires, unless the\nenemies are frozen. The shot appears at the launcher moved by `offset`,\nin that slot with the slot's rest fraction across, and doesn't move that\nframe; the timer is set to `rearm`. A freeze counts timers down too.\n\nOn its first turn a shot goes if it is past the view's right edge,\n`behind` pixels or more left of its left edge, or within `near` pixels of\nthe player. The test is on the whole-pixel difference modulo `near_wrap`\n(none when 0), with 1 added when the shot is at or right of the player:\n`(d + near + carry) mod wrap < 2 near`. Otherwise it faces the player's\nside and flies. The launcher keeps its timer and entry in mechanic words 0\nand 1, and a shot keeps \"aimed\" in its word 0, so neither has an `ext`\nhook.",
+      "description": "Since 0.4.28: a launcher, an object that fires the entity `fires` on its\nown timer and a shift counter's bits, aimed at the player's side (a\nside-scroller's cannons: SetupCannon, ProcessCannons and\nBulletBillHandler).\n\nThe level's launchers keep `table` entries. One that appears (a `drawn`\nspawn, as its column is drawn) takes the entry the counter `next` names,\nending the launcher that had it and keeping that one's timer, and moves\n`next` on, back to 0 after the last. One placed left of `from_x` takes its\nentry and fires nothing, so it has no body. A launcher that appears is\npicked from the next frame on (the area parser runs after the enemies).\n\nEach frame after the other enemies, the level's first `slots` numbered\nslots (`slot_rest`) take a turn each, the last first. A slot that holds a\nshot gives the shot its turn: shots move there, not with the other\nenemies. A free slot reads a byte of `counter` from bit `at`, `slot_step`\nbits lower for each slot after the first, and'ed with `mask` (`hard_mask`\nin a level with `hard_spawns`). A value below `table` picks that entry's\nlauncher: a timer above 0 counts down by 1, and at 0 it fires, unless the\nenemies are frozen. The shot appears at the launcher moved by `offset`,\nin that slot with the slot's rest fraction across, and doesn't move that\nframe; the timer is set to `rearm`. A freeze counts timers down too.\n\nOn its first turn a shot goes if it is past the view's right edge,\n`behind` pixels or more left of its left edge, or within `near` pixels of\nthe player. The test is on the whole-pixel difference modulo `near_wrap`\n(none when 0), with 1 added when the shot is at or right of the player:\n`(d + near + carry) mod wrap < 2 near`. Otherwise it faces the player's\nside and flies. The launcher keeps its timer and entry in mechanic words 0\nand 1, and a shot keeps \"aimed\" in its word 0, so neither has an `ext`\nhook.",
       "type": "object",
       "properties": {
         "at": {
@@ -1834,7 +1834,7 @@
           "$ref": "#/$defs/PathAxis"
         },
         "bottom_margin": {
-          "description": "Since 0.4.24: it also leaves at or past the view's height less this\nmargin, whatever the `axis`. Super Mario Bros.' fireball goes at\nheight 240 (0 here), where FBall_OffscreenBits' vertical half sets\na bit FireballObjCore tests, as well as past the sides.",
+          "description": "Since 0.4.24: it also leaves at or past the view's height less this\nmargin, whatever the `axis`. A side-scroller's fireball goes at\nheight 240 (0 here), where FBall_OffscreenBits' vertical half sets\na bit FireballObjCore tests, as well as past the sides.",
           "anyOf": [
             {
               "$ref": "#/$defs/Fixed"
@@ -1845,7 +1845,7 @@
           ]
         },
         "far_margin": {
-          "description": "Since 0.4.10: the margin at the view's far edge (right or bottom),\nwhen it isn't `margin`. Super Mario Bros.' fireball goes once any\nof it is off the screen: its left edge past the left, or its right\nedge, 8 pixels on, past the right.",
+          "description": "Since 0.4.10: the margin at the view's far edge (right or bottom),\nwhen it isn't `margin`. A side-scroller's fireball goes once any\nof it is off the screen: its left edge past the left, or its right\nedge, 8 pixels on, past the right.",
           "anyOf": [
             {
               "$ref": "#/$defs/Fixed"
@@ -1865,7 +1865,7 @@
       ]
     },
     "LedgeFall": {
-      "description": "A fall off a ledge at a fixed speed (feature `jump.ledge_fall`). The\nframe the body walks off it moves `first` pixels down (or `speed`), and\n`speed` on each frame after, with no gravity and no move across; the\nrun gets no input, and a step counter (`run.step_cycle`) steps on each\nframe of the fall. With `kills` the landing kills the player. Donkey\nKong's state 8 ($D697): 2 a frame, 3 on the first, and death on landing.",
+      "description": "A fall off a ledge at a fixed speed (feature `jump.ledge_fall`). The frame\nthe body walks off it moves `first` pixels down (or `speed`), and `speed` on\neach frame after, with no gravity and no move across; the run gets no input,\nand a step counter (`run.step_cycle`) steps on each frame of the fall. With\n`kills` the landing kills the player. a ladder game's state 8 ($D697): 2 a\nframe, 3 on the first, and death on landing.",
       "type": "object",
       "properties": {
         "first": {
@@ -1917,7 +1917,7 @@
           ]
         },
         "hard_spawns": {
-          "description": "Since 0.4.26: the level's `spawn_objects` list also places the\nobjects it marks for hard mode, which are left out otherwise.\nSuper Mario Bros.' ProcessEnemyData skips them until\nSecondaryHardMode is set, from level 5-3 on.",
+          "description": "Since 0.4.26: the level's `spawn_objects` list also places the\nobjects it marks for hard mode, which are left out otherwise.\nA side-scroller's ProcessEnemyData skips them until\nSecondaryHardMode is set, from level 5-3 on.",
           "type": "boolean"
         },
         "hazard": {
@@ -1954,7 +1954,7 @@
           ]
         },
         "ladder_stops": {
-          "description": "Feature `level.ladder_stops`: the boxes where a climb is refused,\nread as `ladders` is, for a climber's `climb.top_test`. Donkey\nKong's $D50A refuses a climb where Mario's feet box meets one of the\nbroken ladders' zones ($C161 and $C16E for 25m).",
+          "description": "Feature `level.ladder_stops`: the boxes where a climb is refused, read\nas `ladders` is, for a climber's `climb.top_test`. a ladder game's $D50A\nrefuses a climb where the player's feet box meets one of the broken\nladders' zones ($C161 and $C16E for the first stage).",
           "anyOf": [
             {
               "$ref": "#/$defs/Ladders"
@@ -1965,7 +1965,7 @@
           ]
         },
         "ladder_tops": {
-          "description": "Feature `level.ladder_tops`: the boxes of the level's ladder tops,\nread from two `byte-rows` slots as `ladders` is, for a climber's\n`climb.top_test`. Donkey Kong's $D50A tests Mario's feet box against\neach stage's list of whole ladders' top rows ($C127 and $C143 for\n25m).",
+          "description": "Feature `level.ladder_tops`: the boxes of the level's ladder tops, read\nfrom two `byte-rows` slots as `ladders` is, for a climber's\n`climb.top_test`. A ladder game's $D50A tests the player's feet box\nagainst each stage's list of whole ladders' top rows ($C127 and $C143\nfor the first stage).",
           "anyOf": [
             {
               "$ref": "#/$defs/Ladders"
@@ -1994,7 +1994,7 @@
           }
         },
         "pit_event": {
-          "description": "Since 0.4.9: a player falling into the pit fires this event (one of\n`model.events`) on the frame its top edge first reaches\n`kill_below`, instead of dying, and goes on moving, so the model's\nrules say what a fall does and when the life ends. Super Mario\nBros.' PlayerHole locks the screen once Mario is below it and ends\nthe life only later, while he and the enemies go on.",
+          "description": "Since 0.4.9: a player falling into the pit fires this event (one of\n`model.events`) on the frame its top edge first reaches `kill_below`,\ninstead of dying, and goes on moving, so the model's rules say what a\nfall does and when the life ends. a side-scroller's PlayerHole locks the\nscreen once the player is below it and ends the life only later, while\nit and the enemies go on.",
           "type": [
             "string",
             "null"
@@ -2015,7 +2015,7 @@
       "additionalProperties": false
     },
     "Locks": {
-      "description": "Feature `power.locks`: while `while` holds (a counter compared with a\nnumber, as `invincible`'s), the named actions count as not held and not\npressed for this entity's jump and climb. Donkey Kong's hammer: with\nits timer running, A doesn't jump and Up doesn't take a ladder.",
+      "description": "Feature `power.locks`: while `while` holds (a counter compared with a\nnumber, as `invincible`'s), the named actions count as not held and not\npressed for this entity's jump and climb. A ladder game's hammer: with\nits timer running, A doesn't jump and Up doesn't take a ladder.",
       "type": "object",
       "properties": {
         "actions": {
@@ -2065,7 +2065,7 @@
       "type": "object",
       "properties": {
         "angle_in_slot": {
-          "description": "In a level with `slot_rest`, a new pivot takes its whole angle from\nits slot's speed up and down, wrapped to `angles`, and a pivot that\nleaves puts its whole angle there. Super Mario Bros.'\nInitShortFirebar clears FirebarSpinState_Low only, and\nFirebarSpinState_High is the slot's Enemy_Y_Speed. Default off: it\nstarts at angle 0.",
+          "description": "In a level with `slot_rest`, a new pivot takes its whole angle from\nits slot's speed up and down, wrapped to `angles`, and a pivot that\nleaves puts its whole angle there. A side-scroller's\nInitShortFirebar clears FirebarSpinState_Low only, and\nFirebarSpinState_High is the slot's Enemy_Y_Speed. Default off: it\nstarts at angle 0.",
           "type": "boolean"
         },
         "angles": {
@@ -2093,7 +2093,7 @@
           "minItems": 2
         },
         "place_on_appear": {
-          "description": "Since 0.4.20: it moves by `place` and spawns its parts on the frame\nit appears, in the spawn system, rather than on its first turn in\nthe enemies system, so its first turn already moves its angle.\nSuper Mario Bros.' InitShortFirebar runs as the area parser puts\nthe firebar in its slot, and ProcFirebar spins it from the next\nframe.",
+          "description": "Since 0.4.20: it moves by `place` and spawns its parts on the frame\nit appears, in the spawn system, rather than on its first turn in\nthe enemies system, so its first turn already moves its angle.\nA side-scroller's InitShortFirebar runs as the area parser puts\nthe firebar in its slot, and ProcFirebar spins it from the next\nframe.",
           "type": "boolean"
         },
         "skip": {
@@ -2169,7 +2169,7 @@
           "type": "boolean"
         },
         "rest_creep_every": {
-          "description": "At no speed along the axis, its position's fraction is cleared, and\nshort of where it's placed it takes no force and moves a pixel\ntoward that place on frames that are multiples of this number\n(Super Mario Bros.' ProcMoveRedPTroopa).",
+          "description": "At no speed along the axis, its position's fraction is cleared, and\nshort of where it's placed it takes no force and moves a pixel\ntoward that place on frames that are multiples of this number\n(a side-scroller's ProcMoveRedPTroopa).",
           "type": [
             "integer",
             "null"
@@ -2201,7 +2201,7 @@
           "$ref": "#/$defs/Fixed"
         },
         "every": {
-          "description": "Since 0.4.7: it moves only on frames whose number plus `phase` is a\nmultiple of this (Super Mario Bros.' piranha plant moves a pixel on\nodd frames). 0 or 1 for every frame.",
+          "description": "Since 0.4.7: it moves only on frames whose number plus `phase` is a\nmultiple of this (a side-scroller's pipe plant moves a pixel on\nodd frames). 0 or 1 for every frame.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
@@ -2231,7 +2231,7 @@
           ]
         },
         "wait_near_wrap": {
-          "description": "Since 0.4.10, with `wait_near`: the distance across, in whole\npixels, is taken modulo this before it is compared, as Super Mario\nBros.' ChkPlayerNearPipe compares only PlayerEnemyDiff's low byte\n(256), so a plant a page and a few pixels from Mario waits. 0 for\nnone.",
+          "description": "Since 0.4.10, with `wait_near`: the distance across, in whole pixels, is\ntaken modulo this before it is compared, as a side-scroller's\nChkPlayerNearPipe compares only PlayerEnemyDiff's low byte (256), so a\nplant a page and a few pixels from the player waits. 0 for none.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
@@ -2312,7 +2312,7 @@
       ]
     },
     "PickupCells": {
-      "description": "Feature `level.pickup_cells`: place k's first cell is the number made\nof the bytes at `at[0] + k` (high) and `at[1] + k` (low) of the group's\n`table`, less `base`, counted row by row across the level's width; it\ncovers `size` cells across and down from there, less any outside the\nlevel. Donkey Kong's $EF38\nwrites blank tiles ($24) over a rivet taken (1 by 1, as $CC = $11 at\n$EEB6 asks) or a prize (2 by 2, $CC = $22 at $EF0C), at the name-table\naddress $C5D6 (high) and $C5E9 (low) give the place's entry.",
+      "description": "Feature `level.pickup_cells`: place k's first cell is the number made\nof the bytes at `at[0] + k` (high) and `at[1] + k` (low) of the group's\n`table`, less `base`, counted row by row across the level's width; it\ncovers `size` cells across and down from there, less any outside the\nlevel. A ladder game's $EF38\nwrites blank tiles ($24) over a rivet taken (1 by 1, as $CC = $11 at\n$EEB6 asks) or a prize (2 by 2, $CC = $22 at $EF0C), at the name-table\naddress $C5D6 (high) and $C5E9 (low) give the place's entry.",
       "type": "object",
       "properties": {
         "at": {
@@ -2352,11 +2352,11 @@
       ]
     },
     "Pickups": {
-      "description": "Feature `level.pickups`: `count` places, their x from index `x_at` of\nthe byte table `table` (a slot's column, `slot.column`) on and their y\nfrom `y_at` on. Place k is in the counter `<counter>_<k>`, 0 while it\nis there and 1 once taken; the level's counters set them at its start.\nAfter the player's moves, on a frame it moved across or is in a jump,\nits place less `offset` touches the first place not taken whose x is\nits x and whose y is within `window` of its y (place y + window[0] to\nplace y + window[1], edges included), unless it is falling off a ledge\nor out: the place's counter becomes 1 and `event` fires. Groups are\ntested in order and one touch a frame ends the test. Donkey Kong's\n$EE79 tests Mario's sprite ($0200, $0203: his place less 5) against\n100m's 8 rivets ($C5AE and $C5C2 from entry 11, a window of 16 above)\nand then the stage's 3 prizes ($EEF0, entry $C5FA[$53], exact), on a\nframe his step beat $BE is set, and returns after the first it finds.",
+      "description": "Feature `level.pickups`: `count` places, their x from index `x_at` of the\nbyte table `table` (a slot's column, `slot.column`) on and their y from\n`y_at` on. Place k is in the counter `<counter>_<k>`, 0 while it is there\nand 1 once taken; the level's counters set them at its start. After the\nplayer's moves, on a frame it moved across or is in a jump, its place less\n`offset` touches the first place not taken whose x is its x and whose y is\nwithin `window` of its y (place y + window[0] to place y + window[1], edges\nincluded), unless it is falling off a ledge or out: the place's counter\nbecomes 1 and `event` fires. Groups are tested in order and one touch a\nframe ends the test. A ladder game's $EE79 tests the player's sprite ($0200,\n$0203: its place less 5) against the last stage's 8 rivets ($C5AE and $C5C2\nfrom entry 11, a window of 16 above) and then the stage's 3 prizes ($EEF0,\nentry $C5FA[$53], exact), on a frame its step beat $BE is set, and returns\nafter the first it finds.",
       "type": "object",
       "properties": {
         "by_hook": {
-          "description": "Feature `level.pickup_by_hook`: the engine takes none of the\ngroup's places; an `ext` hook sets its counters, and the group gives\nthe places' cells (`level.pickup_cells`). Original Edition's 50m\ntakes a prize on a climb's step too ($EEF0 on $BE), which the\n`dk_prizes` hook models, and $EF38 blanks its cells as on 100m.",
+          "description": "Feature `level.pickup_by_hook`: the engine takes none of the\ngroup's places; an `ext` hook sets its counters, and the group gives\nthe places' cells (`level.pickup_cells`). One game's later edition\nhas a stage that takes a prize on a climb's step too ($EEF0 on $BE),\nwhich that game's prize hook models, and $EF38 blanks its cells as\non its last stage.",
           "type": "boolean"
         },
         "cells": {
@@ -2388,7 +2388,7 @@
           ]
         },
         "hole": {
-          "description": "Feature `level.pickup_holes`: a place taken is a hole, this box\n(left, top, right, bottom from the place, edges included): a touch\nof it, as a take's but not in a jump, starts the player's fall off\na ledge (`jump.ledge_fall`) on the next frame, and that fall doesn't\nland on a ground box (`level.ground`) on the hole's rows while the\nplayer's feet are within the hole. Donkey Kong's $EED9 puts Mario in\nhis fall ($96 = 8) on a removed rivet's spot unless he is jumping;\nthe fall ($D697) goes 2 pixels a frame down past the floor, whose\nbox test ($D2CB) finds no floor under him there.",
+          "description": "Feature `level.pickup_holes`: a place taken is a hole, this box (left,\ntop, right, bottom from the place, edges included): a touch of it, as a\ntake's but not in a jump, starts the player's fall off a ledge\n(`jump.ledge_fall`) on the next frame, and that fall doesn't land on a\nground box (`level.ground`) on the hole's rows while the player's feet\nare within the hole. A ladder game's $EED9 puts the player in its fall\n($96 = 8) on a removed rivet's spot unless it is jumping; the fall\n($D697) goes 2 pixels a frame down past the floor, whose box test\n($D2CB) finds no floor under it there.",
           "type": [
             "array",
             "null"
@@ -2401,7 +2401,7 @@
           "minItems": 4
         },
         "offset": {
-          "description": "What the player's place less this is compared with: Donkey Kong's\nsprite is 5 left of and above Mario's place.",
+          "description": "What the player's place less this is compared with: a ladder game's\nsprite is 5 left of and above the player's place.",
           "type": "array",
           "default": [
             0,
@@ -2465,7 +2465,7 @@
           "minimum": 0
         },
         "copy_below": {
-          "description": "A second box this many pixels below the first, tested after it.\nSuper Mario Bros.' SmallPlatformCollision moves the box down $80 and\ntests again. Default 0: one box.",
+          "description": "A second box this many pixels below the first, tested after it.\nA side-scroller's SmallPlatformCollision moves the box down $80 and\ntests again. Default 0: one box.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
@@ -2521,7 +2521,7 @@
           ]
         },
         "air_step_cycle": {
-          "description": "Feature `run.air_step_cycle`, with `step_cycle` and without\n`air_control`: in the air the entity moves across by this list\ninstead of its speed, the way it took off (the way held on the\ntakeoff frame; none held, it doesn't move across), by a counter of\nits own in mechanic word 1, which a frame that moves advances first.\nDonkey Kong's jump moves Mario a pixel every other frame by the\ntoggle $9E: `[1, 0]`.",
+          "description": "Feature `run.air_step_cycle`, with `step_cycle` and without\n`air_control`: in the air the entity moves across by this list\ninstead of its speed, the way it took off (the way held on the\ntakeoff frame; none held, it doesn't move across), by a counter of\nits own in mechanic word 1, which a frame that moves advances first.\nA ladder game's jump moves the player a pixel every other frame by the\ntoggle $9E: `[1, 0]`.",
           "type": "array",
           "items": {
             "type": "integer",
@@ -2530,7 +2530,7 @@
           }
         },
         "both_left": {
-          "description": "Feature `run.both_left`: left and right held together turn the\nentity left and move it nowhere, on the ground and (with\n`climb.lone_way`) on a ladder. Donkey Kong's pad routine $D175\nwrites $57 left for the pad's Left and Right bits together and\nleaves $56 0, so Mario faces left and stands (wallW's pad probes,\n2026-11-04: x kept at 120 on girder 1 with both held).",
+          "description": "Feature `run.both_left`: left and right held together turn the\nentity left and move it nowhere, on the ground and (with\n`climb.lone_way`) on a ladder. A ladder game's pad routine $D175\nwrites $57 left for the pad's Left and Right bits together and\nleaves $56 0, so the player faces left and stands (wallW's pad probes,\n2026-11-04: x kept at 120 on girder 1 with both held).",
           "type": "boolean"
         },
         "cap_whole": {
@@ -2567,7 +2567,7 @@
           ]
         },
         "face_both": {
-          "description": "Since 0.4.15: both directions held where the facing turns face the\nentity neither way, and count as a way of their own for the run's\ntests against the way it last moved, though right still wins for\nthe speed. A `skid_by = \"last_motion\"` then doubles the rate on the\nnext frame whichever way it moved, and a slow skid leaves it last\nmoved both ways. Super Mario Bros.' OnGroundStateSub stores\nLeft_Right_Buttons in PlayerFacingDir as it is, 3 with both held,\nwhich X_Physics compares with Player_MovingDir. It is world state\n(`facing` and `moved` are `both`).",
+          "description": "Since 0.4.15: both directions held where the facing turns face the\nentity neither way, and count as a way of their own for the run's\ntests against the way it last moved, though right still wins for\nthe speed. A `skid_by = \"last_motion\"` then doubles the rate on the\nnext frame whichever way it moved, and a slow skid leaves it last\nmoved both ways. A side-scroller's OnGroundStateSub stores\nLeft_Right_Buttons in PlayerFacingDir as it is, 3 with both held,\nwhich X_Physics compares with Player_MovingDir. It is world state\n(`facing` and `moved` are `both`).",
           "type": "boolean"
         },
         "face_on_ground": {
@@ -2575,11 +2575,11 @@
           "type": "boolean"
         },
         "face_way": {
-          "description": "Feature `run.face_way`: the facing is a way the game keeps from\nthe pad: the frame a jump takes off (with `takeoff_in_air`) turns\nthe entity to a lone direction held, a landing hold (`jump.land_hold`)\nkeeps it, a turn at the view's edge in the air\n(`camera.keep_in_view_turn`) turns it with the speed, and a level's\nrestart keeps it. Donkey Kong's pad routine $D175 writes $57 from\nLeft or Right held alone on every frame but the jump's and the\nwalk-off fall's ($CEC1-$CED3), the jump's edge turn writes it\n($D55F-$D56E), the stage setup leaves it, and $F070 mirrors his\npictures by it.",
+          "description": "Feature `run.face_way`: the facing is a way the game keeps from\nthe pad: the frame a jump takes off (with `takeoff_in_air`) turns\nthe entity to a lone direction held, a landing hold (`jump.land_hold`)\nkeeps it, a turn at the view's edge in the air\n(`camera.keep_in_view_turn`) turns it with the speed, and a level's\nrestart keeps it. A ladder game's pad routine $D175 writes $57 from\nLeft or Right held alone on every frame but the jump's and the\nwalk-off fall's ($CEC1-$CED3), the jump's edge turn writes it\n($D55F-$D56E), the stage setup leaves it, and $F070 mirrors its\npictures by it.",
           "type": "boolean"
         },
         "lone_direction": {
-          "description": "Feature `run.lone_direction`: left or right moves the entity only\nheld alone, with neither of its climb's up and down actions held.\nDonkey Kong's walk and hammer routines move Mario only while the\npad's latched byte $56 is exactly 1 or 2 ($D1CF, $D6DE), so Up or\nDown with a direction stands him still.",
+          "description": "Feature `run.lone_direction`: left or right moves the entity only\nheld alone, with neither of its climb's up and down actions held.\nA ladder game's walk and hammer routines move the player only while the\npad's latched byte $56 is exactly 1 or 2 ($D1CF, $D6DE), so Up or\nDown with a direction stands it still.",
           "type": "boolean"
         },
         "move_step": {
@@ -2594,11 +2594,11 @@
           ]
         },
         "off": {
-          "description": "Since 0.4.16: the run does nothing, so the speed across stays as it\nis and no input reaches it. For a machine state to set: while\nSuper Mario Bros.' PlayerDeath runs, PlayerCtrlRoutine loads no\nbuttons and GameEngine clears Left_Right_Buttons every frame, so\nImposeFriction doesn't run.",
+          "description": "Since 0.4.16: the run does nothing, so the speed across stays as it\nis and no input reaches it. For a machine state to set: while\na side-scroller's PlayerDeath runs, PlayerCtrlRoutine loads no\nbuttons and GameEngine clears Left_Right_Buttons every frame, so\nImposeFriction doesn't run.",
           "type": "boolean"
         },
         "push_masks": {
-          "description": "Since 0.4.8: on the frame after a wall or the feet push the entity\nout to one side, a direction held toward that side doesn't change\nits speed, as if nothing were held, as Super Mario Bros.'\nImpedePlayerMove clears that side's bit of Player_CollisionBits and\nImposeFriction masks the buttons with it the next frame. The side is\nworld state (`pushed`).",
+          "description": "Since 0.4.8: on the frame after a wall or the feet push the entity\nout to one side, a direction held toward that side doesn't change\nits speed, as if nothing were held, as a side-scroller's\nImpedePlayerMove clears that side's bit of Player_CollisionBits and\nImposeFriction masks the buttons with it the next frame. The side is\nworld state (`pushed`).",
           "type": "boolean"
         },
         "run_acceleration": {
@@ -2666,14 +2666,14 @@
           ]
         },
         "skid_turn_with": {
-          "description": "Since 0.4.11, with `skid_turn_below`: input actions that steer for\nthe quick turn as a direction does. While one of them is held and\nno direction is, or a direction that isn't the way it last moved,\na speed below `skid_turn_below` is set to 0 at once and the entity\nturns to the way it faces, on the ground and not on a frame that\njumps. Super Mario Bros.' GetPlayerAnimSpeed takes any button but A\nas steering (ChkSkid), so B held after letting go of the direction\nstops Mario dead below $0b.",
+          "description": "Since 0.4.11, with `skid_turn_below`: input actions that steer for\nthe quick turn as a direction does. While one of them is held and\nno direction is, or a direction that isn't the way it last moved,\na speed below `skid_turn_below` is set to 0 at once and the entity\nturns to the way it faces, on the ground and not on a frame that\njumps. A side-scroller's GetPlayerAnimSpeed takes any button but A\nas steering (ChkSkid), so B held after letting go of the direction\nstops the player dead below $0b.",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "speed_before_walls": {
-          "description": "Since 0.4.11: the run's speed tests (`decel_bands`,\n`decel_hold_from`, `skid_turn_below`, `air_run_from`) and the jump's\n`bands` read the speed as the run itself last left it, before a\nwall stopped it, instead of the speed as the frame starts. The run\nleaves it each frame on the ground, and in the air while a\ndirection is held. Super Mario Bros.' ImposeFriction writes\nPlayer_XSpeedAbsolute and ImpedePlayerMove nulls Player_X_Speed\nonly, so the frame after Mario runs into a wall still reads his\nrunning speed. It is world state (`seen_speed`).",
+          "description": "Since 0.4.11: the run's speed tests (`decel_bands`,\n`decel_hold_from`, `skid_turn_below`, `air_run_from`) and the jump's\n`bands` read the speed as the run itself last left it, before a\nwall stopped it, instead of the speed as the frame starts. The run\nleaves it each frame on the ground, and in the air while a\ndirection is held. A side-scroller's ImposeFriction writes\nPlayer_XSpeedAbsolute and ImpedePlayerMove nulls Player_X_Speed\nonly, so the frame after the player runs into a wall still reads its\nrunning speed. It is world state (`seen_speed`).",
           "type": "boolean"
         },
         "start": {
@@ -2688,7 +2688,7 @@
           ]
         },
         "step_cycle": {
-          "description": "Feature `run.step_cycle`: the whole pixels the entity moves on each\nwalking frame on the ground, by a step counter it keeps in its\nmechanic word 0. A walking frame (a direction held, on the ground)\nfirst advances the counter by one, back to 0 at the list's length,\nthen moves the entry at the counter, and `walk_speed` no longer\nmoves it. The counter also advances on every frame in the air and\nof a `jump.land_hold`, and not while it stands. Donkey Kong's walk\nroutine steps one counter, $88, through 15 frames, moving on the\nbits of the pattern $DB/$36: 2 px every 3 frames, the same both\nways, with the phase kept through stops and jumps.",
+          "description": "Feature `run.step_cycle`: the whole pixels the entity moves on each\nwalking frame on the ground, by a step counter it keeps in its\nmechanic word 0. A walking frame (a direction held, on the ground)\nfirst advances the counter by one, back to 0 at the list's length,\nthen moves the entry at the counter, and `walk_speed` no longer\nmoves it. The counter also advances on every frame in the air and\nof a `jump.land_hold`, and not while it stands. A ladder game's walk\nroutine steps one counter, $88, through 15 frames, moving on the\nbits of the pattern $DB/$36: 2 px every 3 frames, the same both\nways, with the phase kept through stops and jumps.",
           "type": "array",
           "items": {
             "type": "integer",
@@ -2756,7 +2756,7 @@
           ]
         },
         "after_move": {
-          "description": "Since 0.4.10, a player's: it shoots after it moves this frame, from\nwhere it has got to, as Super Mario Bros.' ProcFireball_Bubble runs\nin GameEngine after GameRoutines has moved Mario.",
+          "description": "Since 0.4.10, a player's: it shoots after it moves this frame, from\nwhere it has got to, as a side-scroller's ProcFireball_Bubble runs\nin GameEngine after GameRoutines has moved the player.",
           "type": "boolean"
         },
         "ahead": {
@@ -2788,7 +2788,7 @@
           "minimum": 0
         },
         "unmirrored": {
-          "description": "Since 0.4.10: `ahead` across isn't mirrored for a shooter facing\nleft (Super Mario Bros.' fireball starts 4 pixels right of Mario\nwhichever way he faces).",
+          "description": "Since 0.4.10: `ahead` across isn't mirrored for a shooter facing\nleft (a side-scroller's fireball starts 4 pixels right of the player\nwhichever way it faces).",
           "type": "boolean"
         },
         "vx": {
@@ -2968,7 +2968,7 @@
       ]
     },
     "Springboard": {
-      "description": "A springboard (since 0.4.4): a player that stands on it (its feet on\nthe springboard's top as placed, or riding it through `contact.stand`)\nis held for the frames of its `steps`, then thrown up at `speed`. Each\nframe of a step moves the player by the step's `move` (positive down)\nand puts the springboard at its `offset` below where it was placed.\nWhile held the player doesn't move by its speed, jump or fall, though\nits run still changes its speed. The press's last frame throws it,\nhigher with a `boost`. With `throw_late` the thrown player stands one\nmore frame, moving across but not up, and rises from the frame after,\nas when a game throws after the player's move. The press is kept in\nthe body's mechanic words 0 to 2, so a springboard has no `ext` hook.\nIts `on_ground` is false while it presses, for its sprite's clips.\nSuper Mario Bros.' jumpspring, or any spring or trampoline.",
+      "description": "A springboard (since 0.4.4): a player that stands on it (its feet on\nthe springboard's top as placed, or riding it through `contact.stand`)\nis held for the frames of its `steps`, then thrown up at `speed`. Each\nframe of a step moves the player by the step's `move` (positive down)\nand puts the springboard at its `offset` below where it was placed.\nWhile held the player doesn't move by its speed, jump or fall, though\nits run still changes its speed. The press's last frame throws it,\nhigher with a `boost`. With `throw_late` the thrown player stands one\nmore frame, moving across but not up, and rises from the frame after,\nas when a game throws after the player's move. The press is kept in\nthe body's mechanic words 0 to 2, so a springboard has no `ext` hook.\nIts `on_ground` is false while it presses, for its sprite's clips.\nA side-scroller's jumpspring, or any spring or trampoline.",
       "type": "object",
       "properties": {
         "boost": {
@@ -3003,7 +3003,7 @@
       ]
     },
     "Stream": {
-      "description": "A level marker that sends entities in (Super Mario Bros.' frenzy objects).\nOnce it appears, and while a slot of the level is free, a new `entity`\ncomes in `past_edge` pixels past the view's last column, then the next\nafter `wait` frames plus the next row of the entity's `times` table, in\nturn. A shift counter's byte (`draw`, read as a leap's, by the new body's\nslot) picks its row of the `heights` table, which is its y; its `ext`\nword 0 is that row and word 3 is 1, so a hook sees it is set up. The\nmarker needs `no_slot`, and it ends once a body of `until` is in the\nlevel. It keeps the wait and the turn in its mechanic words 0 and 1.\nNeeds a level with `spawn_slots`.",
+      "description": "A level marker that sends entities in (a side-scroller's frenzy objects).\nOnce it appears, and while a slot of the level is free, a new `entity`\ncomes in `past_edge` pixels past the view's last column, then the next\nafter `wait` frames plus the next row of the entity's `times` table, in\nturn. A shift counter's byte (`draw`, read as a leap's, by the new body's\nslot) picks its row of the `heights` table, which is its y; its `ext`\nword 0 is that row and word 3 is 1, so a hook sees it is set up. The\nmarker needs `no_slot`, and it ends once a body of `until` is in the\nlevel. It keeps the wait and the turn in its mechanic words 0 and 1.\nNeeds a level with `spawn_slots`.",
       "type": "object",
       "properties": {
         "draw": {
@@ -3110,7 +3110,7 @@
       "type": "object",
       "properties": {
         "bump": {
-          "description": "Walkers with this turn each other when their hitboxes touch, as\nSuper Mario Bros.' EnemiesCollision and EnemyTurnAround do.",
+          "description": "Walkers with this turn each other when their hitboxes touch, as\na side-scroller's EnemiesCollision and EnemyTurnAround do.",
           "anyOf": [
             {
               "$ref": "#/$defs/WalkBump"
@@ -3121,7 +3121,7 @@
           ]
         },
         "ledge_at": {
-          "description": "With `turn_at_ledges`: the ledge is looked for after the move, at\nthis many pixels across the entity whichever way it faces, in place\nof the leading bottom corner before the move, as Super Mario Bros.'\nChkUnderEnemy reads one point under the enemy's middle and\nChkForRedKoopa only reverses the speed.",
+          "description": "With `turn_at_ledges`: the ledge is looked for after the move, at\nthis many pixels across the entity whichever way it faces, in place\nof the leading bottom corner before the move, as a side-scroller's\nChkUnderEnemy reads one point under the enemy's middle and\nits red-shell turn only reverses the speed.",
           "anyOf": [
             {
               "$ref": "#/$defs/Fixed"
@@ -3136,14 +3136,14 @@
           "$ref": "#/$defs/Fixed"
         },
         "turn_after_move": {
-          "description": "Since 0.4.26: a wall doesn't stop the move. It moves, and if the leading edge of\nthe tile hitbox's top row is then in a solid tile it turns where it\nstands, as Super Mario Bros.' DoEnemySideCheck runs after the move\nand only reverses the speed.",
+          "description": "Since 0.4.26: a wall doesn't stop the move. It moves, and if the leading\nedge of the tile hitbox's top row is then in a solid tile it turns where\nit stands, as a side-scroller's DoEnemySideCheck runs after the move and\nonly reverses the speed.",
           "type": "boolean"
         },
         "turn_at_ledges": {
           "type": "boolean"
         },
         "walls_at_top": {
-          "description": "Since 0.4.8: walls are met only at the tile hitbox's top row, as\nSuper Mario Bros.' DoEnemySideCheck tests two points at y + 20 while\nthe hitbox reaches the foot at y + 24; a hopper that has sunk into\nthe ground (`hop.land_first`) doesn't take the ground for a wall.",
+          "description": "Since 0.4.8: walls are met only at the tile hitbox's top row, as\na side-scroller's DoEnemySideCheck tests two points at y + 20 while\nthe hitbox reaches the foot at y + 24; a hopper that has sunk into\nthe ground (`hop.land_first`) doesn't take the ground for a wall.",
           "type": "boolean"
         }
       },

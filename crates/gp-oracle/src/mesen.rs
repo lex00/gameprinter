@@ -491,7 +491,7 @@ pub fn encode(frame: &Frame, region_: Region) -> Result<Vec<u8>, EncodeError> {
 
 /// A capture's events in the event stream's terms. Positions are Mesen's
 /// PPU position when its callback ran, renumbered and otherwise as they
-/// are: over the Super Mario Bros. baseline the most common offset from
+/// are: over one NES platformer's baseline the most common offset from
 /// `gp-nes`'s (the position after the CPU cycle that made the event) is 0
 /// for controller reads and register writes (docs/oracle.md).
 pub fn events(frame: &Frame, region_: Region) -> Result<Vec<Event>, String> {

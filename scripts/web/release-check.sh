@@ -3,6 +3,12 @@
 # public page"): everything that must hold before the page is uploaded.
 #   scripts/web/release-check.sh [--full] [--no-roms] [--out DIR] [--game GAME_DIR]
 #
+# The games checkout is $GP_GAMES_DIR, else GAME_DIR's parent with --game,
+# else `games` beside this repo. With no --game the page's game is the one
+# the checkout's page.toml names (`game = "FOLDER"`). The page check reads
+# what it holds each game to from the checkout's game folders
+# (check-page.mjs --games; docs/web.md, "The games' check files").
+#
 # --no-roms is for someone with no ROMs, deploying a copy of the page
 # (docs/host-your-own.md): GP_ROM_DIR is an empty folder of its own, so
 # every check that needs a ROM is skipped and says so (the page check's ROM
@@ -21,8 +27,8 @@
 #    nothing. A clone that fails ends the run (exit 2): the check never falls
 #    back to the live registry. A page whose source is its own address
 #    (GP_PAGE_SOURCE=local) has nothing to clone.
-# 1. Builds the page from GAME_DIR (default ../games/donkey-kong, beside
-#    this repo) at this checkout's tip into a folder of its own,
+# 1. Builds the page from GAME_DIR (above) at this checkout's tip into a
+#    folder of its own,
 #    $GP_HOME/work/page-release/<commit>-games-<games commit>, each commit
 #    with -dirty-<digest of the changes> when that repo has uncommitted
 #    changes (a new folder for each, so no file is left from an older
@@ -75,7 +81,7 @@ gp="${GP:-$repo/target/debug/gp}"
 full=0
 no_roms=0
 out=""
-game="$repo/../games/donkey-kong"
+game=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --full) full=1; shift ;;
@@ -85,8 +91,18 @@ while [ $# -gt 0 ]; do
     *) echo "usage: scripts/web/release-check.sh [--full] [--no-roms] [--out DIR] [--game GAME_DIR]" >&2; exit 2 ;;
   esac
 done
+if [ -n "$game" ]; then
+  games_dir="${GP_GAMES_DIR:-$(dirname "$game")}"
+else
+  games_dir="${GP_GAMES_DIR:-$repo/../games}"
+  [ -f "$games_dir/page.toml" ] || { echo "release-check: give --game GAME_DIR, or a games checkout ($games_dir: GP_GAMES_DIR, else games beside this repo) whose page.toml names the page's game" >&2; exit 2; }
+  game_folder="$(python3 -I -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["game"])' "$games_dir/page.toml")" \
+    || { echo "release-check: $games_dir/page.toml names no game (game = \"FOLDER\")" >&2; exit 2; }
+  game="$games_dir/$game_folder"
+fi
 [ -f "$game/package.toml" ] || { echo "release-check: $game is no game package (no package.toml)" >&2; exit 2; }
 game="$(cd "$game" && pwd)"
+games_dir="$(cd "$games_dir" && pwd)" || exit 2
 # A repo's commit, and the digest of its uncommitted changes (tracked and
 # new, by content) when it has any.
 version() {
@@ -162,7 +178,7 @@ case "$source_url" in
     # (acme/harbor-lights, test/paper-moon), so the theme sections never
     # hang on what people publish. The page's own game reads the same files
     # in both. deploy.sh's check of the uploaded page reads this copy too.
-    if any="$(GP="$gp" "$repo/scripts/web/test-registry.sh" "$snapshot" "$snapshot.any" | tail -1)" && [ -d "$any/index/test/made-up" ]; then
+    if any="$(GP="$gp" "$repo/scripts/web/test-registry.sh" "$snapshot" "$snapshot.any" "$game" "$games_dir" | tail -1)" && [ -d "$any/index/test/made-up" ]; then
       echo "ok: the check reads a copy with a made-up second game added ($any)"
       snapshot="$any"
     else
@@ -231,7 +247,7 @@ if [ -z "${PLAYWRIGHT_FROM:-}" ] && [ ! -d "$repo/scripts/web/node_modules/playw
 fi
 page_full=""
 [ $full = 1 ] && page_full="--full"
-node "$repo/scripts/web/public/check-page.mjs" --dist "$out" --browser "$browser" --shots "$out.shots" $page_full ${registry_folder[@]+"${registry_folder[@]}"}
+node "$repo/scripts/web/public/check-page.mjs" --dist "$out" --browser "$browser" --games "$games_dir" --shots "$out.shots" $page_full ${registry_folder[@]+"${registry_folder[@]}"}
 s=$?
 [ $s -eq 0 ] || fail+=("the page's headless check (exit $s; shots in $out.shots)")
 
@@ -325,7 +341,7 @@ if [ ${#fail[@]} -eq 0 ]; then
   mkdir -p "$passed" || exit 2
   roms=some
   [ $no_roms = 1 ] && roms=none
-  printf 'bundle %s\nid %s\ngame %s\nfull %s\nroms %s\nwhen %s\n' "$out" "$id" "$game" "$full" "$roms" "$(date '+%Y-%m-%dT%H:%M:%S')" > "$passed/$checked"
+  printf 'bundle %s\nid %s\ngame %s\ngames %s\nfull %s\nroms %s\nwhen %s\n' "$out" "$id" "$game" "$games_dir" "$full" "$roms" "$(date '+%Y-%m-%dT%H:%M:%S')" > "$passed/$checked"
   if [ $no_roms = 1 ]; then
     echo "PASS without ROMs: every check that needs a ROM was skipped (above); the page can be deployed (digest $checked, recorded in $passed as made without ROMs)"
   else

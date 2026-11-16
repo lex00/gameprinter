@@ -10,7 +10,7 @@
 //!   is back at or above the caller's (a `ret`, or a routine that drops its
 //!   return address and returns to its caller's caller). Its cycles run
 //!   from the call's start to that instruction's, less any interrupt the
-//!   board took inside it (Tapper's game loop runs with interrupts on, so
+//!   board took inside it (a game loop may run with interrupts on, so
 //!   a call there can have the CTC's handler in the middle); that
 //!   handler's accesses aren't the call's either.
 //! - The frame's handler is the first interrupt the main CPU takes in the
@@ -42,7 +42,7 @@ use anyhow::{Context as _, Result, bail};
 use gp_arcade::dasm::{self, Addr, Flow};
 use gp_arcade::mcr::{Access, AccessKind, Trace};
 use gp_arcade::z80::{Z80, Z80Bus};
-use gp_arcade::{Controls, Romset, Tapper};
+use gp_arcade::{Controls, Mcr, Romset};
 use gp_evidence::{Hash, InputLog};
 use serde_json::json;
 
@@ -112,9 +112,9 @@ fn frames(
     set: &Romset,
     log: &InputLog,
     (from, to): (u64, u64),
-    each: &mut dyn FnMut(&Frame, &Tapper) -> Result<()>,
+    each: &mut dyn FnMut(&Frame, &Mcr) -> Result<()>,
 ) -> Result<()> {
-    let mut t = Tapper::power_on(set);
+    let mut t = Mcr::power_on(set);
     for (i, fr) in log.frames.iter().enumerate().take(to as usize) {
         let n = i as u64 + 1;
         let c = controls(fr).with_context(|| format!("frame {n}"))?;
@@ -213,7 +213,7 @@ fn fold(a: u16) -> Option<usize> {
 }
 
 impl Flat {
-    fn of(t: &Tapper) -> Self {
+    fn of(t: &Mcr) -> Self {
         let mut mem = vec![0xff; 0x1_0000];
         for (a, b) in mem.iter_mut().enumerate() {
             if fold(a as u16) == Some(a) {
@@ -332,7 +332,7 @@ fn cost_alone(f: &Frame, e: &Trace, main: &Z80) -> Option<u64> {
 }
 
 /// The cycles MAME's NMOS Z80 takes to acknowledge an interrupt in mode 2
-/// (Tapper's: the CTC's vector) and mode 1, before the handler's first
+/// (the MCR board's: the CTC's vector) and mode 1, before the handler's first
 /// instruction.
 const ACK_IM2: u64 = 19;
 const ACK_IM1: u64 = 13;
@@ -669,14 +669,17 @@ pub(crate) fn idle_passes(
 mod tests {
     use super::*;
 
-    /// With the rbtapper romset: in attract mode the handler's routines
+    /// With a real romset ($GP_GAME_DIR's first oracle set): in attract mode the handler's routines
     /// are called every frame, each call's cost run alone matches the
     /// board's, and split finds one handler a frame. Skipped without it.
     #[test]
     fn calls_on_the_board_cost_what_they_cost_alone() {
-        let Some(zip) = gp_arcade::romset::local_romset("rbtapper") else {
-            eprintln!("skipped: no rbtapper romset");
-            return;
+        let (_, zip) = match gp_arcade::romset::test_oracle_set_path() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("skipped: {e}");
+                return;
+            }
         };
         let bytes = fs::read(zip).unwrap();
         let log = InputLog {

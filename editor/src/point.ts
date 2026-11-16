@@ -1,6 +1,6 @@
 // Pause, point and tell (docs/point-and-tell.md): the person pauses the
 // two games, clicks a spot or drags a box on either, sees what's there in
-// plain words ("a brick", "the goomba", "the score") and says what should
+// plain words ("a brick", "the slug", "the score") and says what should
 // happen there. Pure, so the tests drive it with made-up events and boxes.
 
 import type { Box, CaptureInput } from "./api";

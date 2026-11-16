@@ -6,10 +6,10 @@
 // with them, only a GET of the module.
 //
 //   const r = await liftRom(file, { moduleUrl: "lift/gp-web-lift.wasm", templateFiles });
-//   r.ok ? (await loadStored("donkey-kong")) : r.error
+//   r.ok ? (await loadStored(GAME)) : r.error
 //
 // IndexedDB: database `gp-public`, store `files`, keys `GAME/<path>`
-// (`donkey-kong/bundle.json`, `donkey-kong/assets/present.txt`), values
+// (`GAME/bundle.json`, `GAME/assets/present.txt`), values
 // ArrayBuffers, `GAME/.rom` holding the ROM itself, and `GAME/.ok` holding
 // { sha256, files, found, at }, where `found` is what the lift found and
 // filled in (null for a one-template folder). The ROM is kept so a later

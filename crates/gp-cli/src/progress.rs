@@ -848,7 +848,7 @@ fn stage_whole(f: &Facts) -> Stage {
     st
 }
 
-/// "mario" as "Mario".
+/// "hero" as "Hero".
 fn capital(w: &str) -> String {
     let mut c = w.chars();
     c.next()
@@ -1657,9 +1657,9 @@ mod tests {
             named_ram: [0x10, 0x11, 0x12].into(),
             labels: [(0x13, "Timer".to_owned())].into(),
             slots: true,
-            slot_kinds: [((0, 6), "goomba".to_owned()), ((0, 0), "koopa".to_owned())].into(),
-            entities: ["mario", "goomba", "koopa"].map(String::from).into(),
-            player: Some("mario".into()),
+            slot_kinds: [((0, 6), "walker".to_owned()), ((0, 0), "shell".to_owned())].into(),
+            entities: ["hero", "walker", "shell"].map(String::from).into(),
+            player: Some("hero".into()),
             game_levels: ["w1_1", "w1_2"].map(String::from).into(),
             level_names: [("w1_1".to_owned(), "World 1-1".to_owned())].into(),
             model_levels: ["w1_1"].map(String::from).into(),
@@ -1674,7 +1674,7 @@ mod tests {
                 together_permille: 955,
                 fidelity: 70,
                 picture: Some(40),
-                measured_kinds: ["mario", "goomba"].map(String::from).into(),
+                measured_kinds: ["hero", "walker"].map(String::from).into(),
             }),
             ..Facts::default()
         }
@@ -1703,14 +1703,14 @@ mod tests {
                     frame: 200,
                     original_frame: 260,
                     level: "w1_1".into(),
-                    paths: vec!["entities.mario[0].x".into()],
+                    paths: vec!["entities.hero[0].x".into()],
                 }),
                 player: Some(FirstSplit {
                     at: 400,
                     frame: 400,
                     original_frame: 460,
                     level: "w1_1".into(),
-                    paths: vec!["entities.mario[0].x".into()],
+                    paths: vec!["entities.hero[0].x".into()],
                 }),
                 resync: Some((700, 800)),
                 levels: vec![
@@ -1723,7 +1723,7 @@ mod tests {
                             frame: 200,
                             original_frame: 260,
                             level: "w1_1".into(),
-                            paths: vec!["entities.mario[0].x".into()],
+                            paths: vec!["entities.hero[0].x".into()],
                         }),
                         cant: None,
                     },
@@ -1758,10 +1758,10 @@ mod tests {
         let s = stage(&f, "source");
         assert_eq!((s.percent, s.done), (Some(100), true));
         f.source.labels = None;
-        f.source.labels_recipe = "just smb-labels".into();
+        f.source.labels_recipe = "just hop-labels".into();
         let s = stage(&f, "source");
         assert_eq!((s.with, s.of, s.done), (Some(3), Some(4), false));
-        assert_eq!(s.measure.as_deref(), Some("just smb-labels"));
+        assert_eq!(s.measure.as_deref(), Some("just hop-labels"));
         assert!(s.says.contains("labels from its code"), "{}", s.says);
     }
 
@@ -1951,7 +1951,7 @@ mod tests {
         assert_eq!(s.also[0], "not modelled: group 2's other states");
         // Without slots: the model's kinds a field measures.
         f.slots = false;
-        f.mapped_kinds = ["goomba"].map(String::from).into();
+        f.mapped_kinds = ["walker"].map(String::from).into();
         let s = stage(&f, "objects");
         assert_eq!((s.with, s.of), (Some(1), Some(3)));
     }
@@ -2025,7 +2025,7 @@ mod tests {
         assert_eq!((s.with, s.of, s.percent), (Some(200), Some(800), Some(25)));
         assert_eq!(
             s.says,
-            "200 of 800 frames play identically from the original's state at its frame 60, then they part at its frame 260 in World 1-1: Mario's place across"
+            "200 of 800 frames play identically from the original's state at its frame 60, then they part at its frame 260 in World 1-1: Hero's place across"
         );
         // Level by level: each from its own start.
         assert!(
@@ -2046,7 +2046,7 @@ mod tests {
         assert!(
             s.also
                 .iter()
-                .any(|a| a == "Mario's own measures hold for 400 frames (50%), then part at the original's frame 460 in World 1-1: Mario's place across"),
+                .any(|a| a == "Hero's own measures hold for 400 frames (50%), then part at the original's frame 460 in World 1-1: Hero's place across"),
             "{:?}",
             s.also
         );
@@ -2060,7 +2060,7 @@ mod tests {
     #[test]
     fn a_timers_count_is_said_in_words() {
         assert_eq!(path_words("ticks.star[0]"), "the star timer's count");
-        assert_eq!(capital("mario"), "Mario");
+        assert_eq!(capital("hero"), "Hero");
         assert_eq!(capital(""), "");
     }
 
@@ -2119,7 +2119,7 @@ path = "x"
 ram = [0x87]
 
 [[slots.kind]]
-entity = "goomba"
+entity = "walker"
 ids = [6]
 "#,
         )
@@ -2132,7 +2132,7 @@ ids = [6]
         assert_eq!(few(&["a", "b", "c"].map(String::from)), "a, b and c");
         assert_eq!(
             slot_kinds(&m).get(&(0, 6)).map(String::as_str),
-            Some("goomba")
+            Some("walker")
         );
     }
 }

@@ -505,7 +505,7 @@ class BoardDraw {
 // CPU writes to the board's latches. Its samples are stereo at 48 kHz.
 class BoardSound {
   static RATE = 48000;
-  static async open(bytes, zip) {
+  static async open(bytes, zip, sets) {
     const module = await WebAssembly.compile(bytes);
     const imports = {};
     for (const i of WebAssembly.Module.imports(module)) {
@@ -514,6 +514,7 @@ class BoardSound {
       };
     }
     const s = new BoardSound((await WebAssembly.instantiate(module, imports)).exports);
+    if (sets) s.sets(sets);
     s.load(zip);
     return s;
   }
@@ -528,12 +529,18 @@ class BoardSound {
   error() {
     return text.decode(new Uint8Array(this.x.memory.buffer, this.x.gp_out_ptr(), this.x.gp_out_len()));
   }
+  // The sets the board may load: the game's roms.toml chip rows, which the
+  // page build puts in the lift's folder as sources.toml.
+  sets(text) {
+    const bytes = new TextEncoder().encode(text);
+    if (this.x.gp_sets_load(...this.put(bytes))) throw new Error(`the board's sets didn't load: ${this.error()}`);
+  }
   // The board at power-on, from the romset zip's bytes.
   load(zip) {
     if (this.x.gp_sound_load(...this.put(zip))) throw new Error(`the board's sound didn't load: ${this.error()}`);
   }
   // One frame with these requests (latch, byte pairs, as the game's module
-  // gives them), each reaching the board when Tapper's interrupt sends it
+  // gives them), each reaching the board when the game's interrupt sends it
   // (gp_sound_requests_frame, gp_arcade_play::REQUEST_AT); its samples,
   // left and right interleaved.
   frame(requests) {
@@ -1236,10 +1243,11 @@ async function main() {
     try {
       const zip = parent !== window && typeof parent.__gpRom === "function" ? await parent.__gpRom() : null;
       if (zip) boardZip = new Uint8Array(zip);
+      const sets = zip ? await fetch("lift/sources.toml").then((r) => (r.ok ? r.text() : null)).catch(() => null) : null;
       if (zip) boardSound = await BoardSound.open(await fetch("gp_arcade_play.wasm").then((r) => {
         if (!r.ok) throw new Error(`gp_arcade_play.wasm: ${r.status}`);
         return r.arrayBuffer();
-      }), boardZip);
+      }), boardZip, sets);
       else console.info("gp: the arcade game plays silent: the page around it keeps no romset");
     } catch (e) {
       boardSound = null;

@@ -5,7 +5,7 @@
 # `gp mechanic start GAME ROW`.
 #
 # Brought over from game-printer's docs/research/genres.md ("Quest log
-# checklists"), whose rows came from the Donkey Kong quest log. The old
+# checklists"), whose rows came from the first NES game's quest log. The old
 # lists ended with `sealed-run`, the held-out run no worker sees; sealed
 # runs aren't in gameprinter yet, so that row is left out until they are.
 # `other` is a short list of what every game has, from the rows the old
@@ -103,7 +103,7 @@ what = "Running out of health, and what happens next"
 row = "game-over"
 what = "The game over and the way back to the title"
 
-# A hop on a grid of cells (Q*bert).
+# A hop on a grid of cells, as in an isometric pyramid game.
 [[gridhop]]
 row = "title"
 what = "The title screen and the attract demo from power-on: the menu, the demo, and what Start does"
@@ -140,7 +140,7 @@ what = "Clearing the first level, and the scene after it"
 row = "game-over"
 what = "Losing the last life: the game over and the way back to the title"
 
-# Track and field events (Track & Field): button runs and timed presses.
+# Athletics events: button runs and timed presses.
 [[events]]
 row = "title"
 what = "The title screen and the attract demo from power-on: the menu, the demo, and what Start does"

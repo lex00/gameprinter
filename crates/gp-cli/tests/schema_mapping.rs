@@ -11,12 +11,18 @@ fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// The games checkout, when this machine has one.
+/// The games checkout, when this machine has one: a folder with a game's
+/// package in it.
 fn games() -> Option<PathBuf> {
     let dir = std::env::var_os("GP_GAMES_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| repo().join("../games"));
-    dir.join("donkey-kong").is_dir().then_some(dir)
+    let has_game = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|e| e.path().join("package.toml").is_file());
+    has_game.then_some(dir)
 }
 
 fn toml_files(dir: &Path, out: &mut Vec<PathBuf>) {

@@ -10,9 +10,9 @@
 //! | `level` grid with a `metatiles` tileset | the grid's metatile number | none |
 //! | `ppu-strings` | the tile its string draws on the first name table | each update of the string: a run of tiles across or down |
 //!
-//! game-printer read Super Mario Bros.', Super Mario Bros. 2's and Mega Man
-//! 2's layouts too; gameprinter cut other games' code, so those readers
-//! are gone. The PPU-strings reader is new here: Donkey Kong's stages are
+//! game-printer read three other NES games' object-format
+//! layouts too; gameprinter cut other games' code, so those readers
+//! are gone. The PPU-strings reader is new here: one ported game's stages are
 //! drawn that way, and game-printer refused them.
 
 use std::collections::BTreeMap;
@@ -191,7 +191,7 @@ fn grid_level(
     Ok(())
 }
 
-/// A level drawn by a PPU string, as Donkey Kong's stages are: each cell's
+/// A level drawn by a PPU string, as some games' stages are: each cell's
 /// value is the tile the string writes there on the first name table (0
 /// where nothing is drawn), and each of its updates is an object, a run of
 /// tiles across (`row`) or down (`column`) from a cell. The level is the

@@ -47,7 +47,7 @@ fn source(
 
 /// A template named on the command line: a folder holding model.toml, else
 /// a name under templates/ (Moss Hop), else a game's package folder in the
-/// games checkout (donkey-kong), as game-printer took a name under its
+/// games checkout (rooftop), as game-printer took a name under its
 /// templates/.
 pub(crate) fn template_dir(t: &Path) -> PathBuf {
     if t.exists() || t.components().count() != 1 {
@@ -348,7 +348,7 @@ pub enum LevelCmd {
     Difficulty {
         /// The template: a directory holding model.toml, a name under
         /// templates/ (mosshop) or a game's folder in the games checkout
-        /// (donkey-kong).
+        /// (rooftop).
         #[arg(long)]
         template: PathBuf,
         /// The level, by its name in the model.
@@ -378,7 +378,7 @@ pub enum LevelCmd {
     Measure {
         /// The template: a directory holding model.toml, a name under
         /// templates/ (mosshop) or a game's folder in the games checkout
-        /// (donkey-kong).
+        /// (rooftop).
         #[arg(long)]
         template: PathBuf,
         /// The level, by its name in the model.
@@ -428,11 +428,11 @@ pub enum LevelCmd {
     /// kit's rules cover it, and whether the folder is a copy an edit may
     /// change. A game with no level kit says so in words.
     ///
-    /// Example: gp level list dk_mine
+    /// Example: gp level list my_mine
     List {
         /// The game: a copy's name (template_fork's, under
         /// $GP_HOME/work/mcp), a folder holding model.toml, a name under
-        /// templates/ or a game in the games checkout (donkey-kong).
+        /// templates/ or a game in the games checkout (rooftop).
         game: PathBuf,
     },
     /// One level as data, in the level kit's terms: its girders (the
@@ -442,7 +442,7 @@ pub enum LevelCmd {
     /// the shape `gp level edit --from` takes back), the kit's rules,
     /// limits and play measures, and any rule the level breaks now.
     ///
-    /// Example: gp --json level show dk_mine --level main
+    /// Example: gp --json level show my_mine --level main
     Show {
         /// The game, as for gp level list.
         game: PathBuf,
@@ -463,7 +463,7 @@ pub enum LevelCmd {
     /// from the person's lift, with the pieces outlined: it stays on this
     /// computer, outside any repo.
     ///
-    /// Example: gp level render dk_mine -o /tmp/stage.png
+    /// Example: gp level render my_mine -o /tmp/stage.png
     Render {
         /// The game, as for gp level list.
         game: PathBuf,
@@ -496,7 +496,7 @@ pub enum LevelCmd {
     /// and returns the picture by kind and the play measures against the
     /// kit's tolerances.
     ///
-    /// Example: gp level edit dk_mine --op "move ladder 6 x=136" --op "move spawn hammer#0 x=40"
+    /// Example: gp level edit my_mine --op "move ladder 6 x=136" --op "move spawn hammer#0 x=40"
     Edit {
         /// The copy, as for gp level list.
         game: PathBuf,
@@ -523,7 +523,7 @@ pub enum LevelCmd {
     /// Put back a copy's newest level edit, as it was before it, from the
     /// copy's level-edits.jsonl. Run it again for the one before.
     ///
-    /// Example: gp level undo dk_mine
+    /// Example: gp level undo my_mine
     Undo {
         /// The copy, as for gp level list.
         game: PathBuf,
@@ -542,7 +542,7 @@ pub enum LevelCmd {
     /// be finished, it is too close to the original's layout, or it
     /// couldn't be played to its end (NOT CHECKED, never a pass).
     ///
-    /// Example: gp level verify dk_mine
+    /// Example: gp level verify my_mine
     Verify {
         /// The game, as for gp level list.
         game: PathBuf,

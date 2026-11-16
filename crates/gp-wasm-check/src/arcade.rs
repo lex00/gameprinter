@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use gp_arcade::events::{BoardEvent, Happened};
-use gp_arcade::{Controls, Romset, Tapper};
+use gp_arcade::{Controls, Mcr, Romset};
 use gp_evidence::chunk;
 use gp_evidence::events::{self, Event, EventKind, Geometry};
 use gp_evidence::frame_hashes::{self, FrameHash};
@@ -55,14 +55,14 @@ fn stored(frame: u64, e: &BoardEvent) -> Event {
     }
 }
 
-fn frame_hash(t: &Tapper) -> FrameHash {
+fn frame_hash(t: &Mcr) -> FrameHash {
     FrameHash {
         state: Hash::of(&t.recorded_state()),
         ram: Hash::of(&t.ram_record()),
     }
 }
 
-fn compare(t: &Tapper, hashes: &[FrameHash], frame: u64) -> Option<DivergenceKind> {
+fn compare(t: &Mcr, hashes: &[FrameHash], frame: u64) -> Option<DivergenceKind> {
     let want = hashes[frame as usize];
     let have = frame_hash(t);
     if have.ram != want.ram {
@@ -132,7 +132,7 @@ fn replay(
     set: &Romset,
 ) -> Result<(u64, Option<Divergence>), String> {
     let (input, hashes) = load(store, m)?;
-    let mut t = Tapper::power_on(set);
+    let mut t = Mcr::power_on(set);
     let recorded = match &m.events {
         Some(_) => Some(events_by_frame(store, m)?),
         None => None,
@@ -166,7 +166,7 @@ fn verify_checkpoints(
     set: &Romset,
 ) -> Result<Option<Divergence>, String> {
     let (_, hashes) = load(store, m)?;
-    let mut t = Tapper::power_on(set);
+    let mut t = Mcr::power_on(set);
     for cp in &m.checkpoints {
         let snap = store.get(&cp.snapshot).map_err(|e| e.to_string())?;
         let what = if t.restore(&snap).is_err() || t.snapshot() != snap {

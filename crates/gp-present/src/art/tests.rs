@@ -12,8 +12,8 @@ fn present() -> Present {
             pic("level.png", 256, 240),
             pic("hero.png", 16, 16),
             pic("foe.png", 16, 16),
-            pic("kong.png", 48, 32),
-            pic("kong-throw.png", 48, 32),
+            pic("boss.png", 48, 32),
+            pic("boss-throw.png", 48, 32),
             pic("ball.png", 16, 16),
             pic("other-level.png", 256, 240),
             pic("bug.png", 16, 16),
@@ -70,9 +70,9 @@ fn arts(f: &ArtFrame) -> Vec<(u32, i64, i64)> {
 fn reads_rules() {
     let r = ArtRules::read(
         "gp-art 1\nscale 6\nlimit off\n# a note\npic hero.png a/hero.png 16 18 0 -2\n\
-         timed kong.png 0 12 a/push.png 48 38 0 -5 every=60 after=ball.png wait=26 hide\n\
+         timed boss.png 0 12 a/push.png 48 38 0 -5 every=60 after=ball.png wait=26 hide\n\
          face bug.png\nface_turn 4\nheld ball.png\n\
-         near a/yell.png 48 38 0 -5\nnear_when kong.png\nnear_other hero.png\n\
+         near a/yell.png 48 38 0 -5\nnear_when boss.png\nnear_other hero.png\n\
          elsewhere level.png 0 -9 foe.png\n\
          prop level.png a/stump.png 28 200 37 18\nprop_over ball.png\nprop_burst foe.png\n\
          drift level.png 47 8 72\ndrift_art a/s.png 51 208\ndrift_at 23 0\n",
@@ -166,9 +166,9 @@ fn replaced_pictures_draw_as_art_and_the_rest_as_the_builds() {
 #[test]
 fn timed_frames_follow_how_long_a_picture_has_shown() {
     let p = present();
-    let a = art("pic kong.png a/stand.png 48 38 0 -5\n\
-         timed kong.png 0 12 a/push.png 48 38 0 -5\n\
-         timed kong.png 12 26 a/hold.png 48 38 0 -5 hide\n");
+    let a = art("pic boss.png a/stand.png 48 38 0 -5\n\
+         timed boss.png 0 12 a/push.png 48 38 0 -5\n\
+         timed boss.png 12 26 a/hold.png 48 38 0 -5 hide\n");
     let s = Scene {
         bodies: vec![draw(3, 10, 30)],
         ..Scene::default()
@@ -190,22 +190,22 @@ fn timed_frames_follow_how_long_a_picture_has_shown() {
 #[test]
 fn a_timed_frame_after_another_picture_needs_it_before() {
     let p = present();
-    let a = art("timed kong.png 0 99 a/after.png 48 38 0 0 after=hero.png");
+    let a = art("timed boss.png 0 99 a/after.png 48 38 0 0 after=hero.png");
     let mut pt = Painter::new();
     let one = |pic| Scene {
         bodies: vec![draw(pic, 0, 0)],
         ..Scene::default()
     };
-    // kong straight away: no picture before it.
+    // boss straight away: no picture before it.
     pt.step(&a, &one(3));
     assert!(arts(&pt.frame(&a, &p, &framed(one(3)), 224)).is_empty());
-    // foe, then hero, then kong: the picture before the last (hero) is foe.
+    // foe, then hero, then boss: the picture before the last (hero) is foe.
     let mut pt = Painter::new();
     for pic in [2, 1, 3] {
         pt.step(&a, &one(pic));
     }
     assert!(arts(&pt.frame(&a, &p, &framed(one(3)), 224)).is_empty());
-    // hero, then kong-throw, then kong: it is hero.
+    // hero, then boss-throw, then boss: it is hero.
     let mut pt = Painter::new();
     for pic in [1, 4, 3] {
         pt.step(&a, &one(pic));
@@ -216,7 +216,7 @@ fn a_timed_frame_after_another_picture_needs_it_before() {
 #[test]
 fn a_held_ball_is_hidden_while_the_pose_holds_it() {
     let p = present();
-    let a = art("timed kong.png 0 99 a/hold.png 48 38 0 0 hide\nheld ball.png");
+    let a = art("timed boss.png 0 99 a/hold.png 48 38 0 0 hide\nheld ball.png");
     let s = Scene {
         bodies: vec![draw(3, 20, 40), draw(5, 30, 50), draw(5, 120, 50)],
         ..Scene::default()
@@ -230,7 +230,7 @@ fn a_held_ball_is_hidden_while_the_pose_holds_it() {
         .filter(|d| d.src == Src::Own(5))
         .map(|d| d.x / ART_SUB)
         .collect();
-    // The ball in Kong's box isn't drawn; the one away from him is.
+    // The ball in the boss's box isn't drawn; the one away from it is.
     assert_eq!(balls, vec![120]);
 }
 
@@ -263,8 +263,8 @@ fn a_face_body_turns_only_after_it_has_gone_far_enough() {
 #[test]
 fn the_near_pose_turns_toward_the_other_body() {
     let p = present();
-    let a = art("near a/yell.png 48 38 0 -5\nnear_when kong.png\nnear_other hero.png");
-    // Kong at x 100, y 20: his feet at 52. The hero level with them, left.
+    let a = art("near a/yell.png 48 38 0 -5\nnear_when boss.png\nnear_other hero.png");
+    // The boss at x 100, y 20: its feet at 52. The hero level with them, left.
     let s = Scene {
         bodies: vec![draw(3, 100, 20), draw(1, 60, 36)],
         ..Scene::default()

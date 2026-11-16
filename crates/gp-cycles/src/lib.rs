@@ -1,7 +1,7 @@
 //! The cycle cost of one of an original's routines (docs/cycles.md).
 //!
 //! A game that steps its random generator once per pass of an idle loop
-//! (Donkey Kong: JSR $F4ED at $C7E1) steps it as many times as the frame's
+//! (one NES game: JSR $F4ED at $C7E1) steps it as many times as the frame's
 //! spare CPU time allows, so a model that steps it as the game does (the
 //! retro profile) needs the frame's work in cycles. That work is a function
 //! of the RAM the frame's routines read (`gp cycles readset` shows it), and

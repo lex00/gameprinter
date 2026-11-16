@@ -1140,8 +1140,10 @@ dependencies = [
  "flate2",
  "gp-runtime",
  "png",
+ "serde",
  "sha2 0.11.1",
  "thiserror",
+ "toml",
 ]
 
 [[package]]

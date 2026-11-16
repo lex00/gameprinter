@@ -199,8 +199,8 @@ impl<R: Runtime> Runtime for Polled<R> {
 /// What the validation engine reads from the original beyond the state
 /// mapping: the current level, and entities kept in slots whose kind
 /// changes (`observe.toml` in the model directory, docs/validation.md).
-/// The state mapping maps fixed model paths; a slot holds a goomba one
-/// moment and a koopa the next, so it can't say these.
+/// The state mapping maps fixed model paths; a slot holds a walking enemy one
+/// moment and a shelled one the next, so it can't say these.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObserveMap {
@@ -212,7 +212,7 @@ pub struct ObserveMap {
     pub slots: Vec<SlotMap>,
     /// A condition over the original's state (the runtime protocol's
     /// grammar) that holds while the player controls the game: outside it
-    /// the game moves the player itself (Super Mario Bros.' pipe intros and
+    /// the game moves the player itself (a platformer's pipe intros and
     /// castle walk), and the input doesn't drive it. Read as the path
     /// [`crate::profile::CONTROL_PATH`], 1 or 0.
     #[serde(default)]
@@ -781,9 +781,9 @@ active = 0x30
 x = [0x40, 0x50]
 
 [slots.names]
-"0x06" = "goomba"
-"0x07" = "goomba"
-"0x00" = "koopa"
+"0x06" = "walker"
+"0x07" = "walker"
+"0x00" = "shell"
 "#;
 
     #[test]
@@ -792,19 +792,19 @@ x = [0x40, 0x50]
         let mut ram = vec![0u8; 0x800];
         ram[0x10] = 1;
         ram[0x11] = 9;
-        ram[0x20] = 6; // slot 0: a goomba at 300
+        ram[0x20] = 6; // slot 0: a walker at 300
         ram[0x30] = 1;
         ram[0x40] = 0x2c;
         ram[0x50] = 1;
-        ram[0x21] = 7; // slot 1: another goomba kind, not in use
+        ram[0x21] = 7; // slot 1: another walker kind, not in use
         let e = read(&map, &ram);
         let text = |p: &str| e.get(p).map(ToString::to_string);
         assert_eq!(text("level").as_deref(), Some("two"));
-        assert_eq!(text("entities.goomba[0].x").as_deref(), Some("300"));
-        assert_eq!(text("entities.goomba[0].alive").as_deref(), Some("1"));
-        assert_eq!(text("entities.koopa[0].alive").as_deref(), Some("0"));
-        assert_eq!(text("entities.goomba[1].alive").as_deref(), Some("0"));
-        assert_eq!(text("entities.goomba[1].x"), None);
+        assert_eq!(text("entities.walker[0].x").as_deref(), Some("300"));
+        assert_eq!(text("entities.walker[0].alive").as_deref(), Some("1"));
+        assert_eq!(text("entities.shell[0].alive").as_deref(), Some("0"));
+        assert_eq!(text("entities.walker[1].alive").as_deref(), Some("0"));
+        assert_eq!(text("entities.walker[1].x"), None);
         // Bytes no key names are no level.
         ram[0x10] = 2;
         assert_eq!(read(&map, &ram).get("level"), None);
@@ -916,7 +916,7 @@ x = [0x40, 0x50]
     /// The traces hold the frames a clip's lockstep compares: a path a
     /// case leaves unmeasured reads as nothing on both sides, the run stops
     /// at the mapping's scope, and a start hook runs once, at the first
-    /// compared frame. Before, validate read Donkey Kong's unmeasured
+    /// compared frame. Before, validate read a ported game's unmeasured
     /// frames as values and failed on them.
     #[test]
     fn the_traces_leave_out_what_a_lockstep_does() {
@@ -988,7 +988,7 @@ while = "ram[0x0012] < 4"
 
     /// A presentation field is loaded, never compared, so the comparison's
     /// rows leave it out; the traces hold one value per compared path
-    /// (Donkey Kong's 47 presentation fields made `gp validate` panic).
+    /// (a ported game's 47 presentation fields made `gp validate` panic).
     #[test]
     fn presentation_fields_stay_out_of_the_traces() {
         let mapping = Mapping::parse(

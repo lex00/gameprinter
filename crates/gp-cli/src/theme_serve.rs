@@ -51,7 +51,7 @@ use crate::theme::{RunRecorder, ThemeArgs};
 /// What a request on one game's page sees.
 pub(crate) struct At<'a> {
     pub paths: &'a Paths,
-    /// The game's folder name (`donkey-kong`).
+    /// The game's folder name (`rooftop`).
     pub game: &'a str,
     /// The game's folder in the games checkout.
     pub dir: &'a Path,
@@ -1505,7 +1505,7 @@ mod tests {
 
     #[test]
     fn names_from_the_page_stay_in_their_folder() {
-        assert!(safe("dk.m50-ladders.005"));
+        assert!(safe("hop.m50-ladders.005"));
         assert!(safe("e9cb1d89ad40"));
         for bad in ["", "..", "../x", "a/b", ".hidden", "a b"] {
             assert!(!safe(bad), "{bad}");

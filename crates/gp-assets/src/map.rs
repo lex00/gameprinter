@@ -166,7 +166,7 @@ pub enum Asset {
         /// The CPU address of PRG offset 0 (0x8000 for 32KB of NROM PRG).
         cpu_base: u32,
         /// The PRG offset `cpu_base` stands for, when the pointers point
-        /// into a switched bank: 0x10000 for Super Mario Bros. 2's banks 8
+        /// into a switched bank: 0x10000 for an MMC3 game's banks 8
         /// and 9, which it maps at $8000. 0 by default.
         #[serde(default)]
         prg_base: u32,
@@ -189,8 +189,8 @@ pub enum TileOrder {
     /// Top left, top right, bottom left, bottom right.
     #[default]
     Rows,
-    /// Top left, bottom left, top right, bottom right, as Super Mario
-    /// Bros. stores them.
+    /// Top left, bottom left, top right, bottom right, as some NES
+    /// platformers store them.
     Columns,
 }
 
@@ -205,14 +205,14 @@ pub struct Entry {
     /// use the area.
     pub note: Option<String>,
     /// An empty list with no bytes of its own: its pointer points at the
-    /// previous entry's end marker. Super Mario Bros.' `E_GroundArea10`
+    /// previous entry's end marker. One platformer's `E_GroundArea10`
     /// is one. Enemy lists only, since an area list has a header.
     #[serde(default)]
     pub tail: bool,
-    /// How many pages a Super Mario Bros. 2 enemy list has. The game counts
+    /// How many pages an enemy list has. The game counts
     /// them from the area's level, so the list's bytes don't say.
     pub pages: Option<u32>,
-    /// A Super Mario Bros. 2 level list that is only its end marker, with
+    /// A level list that is only its end marker, with
     /// no header (`LevelData_7_3_Area0`, an area no level uses).
     #[serde(default)]
     pub bare: bool,

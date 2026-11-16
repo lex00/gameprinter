@@ -25,8 +25,8 @@
 //!   there is one with the same name, else over HTTPS (blobs cached by hash
 //!   in `$GP_HOME/cache/registry-blobs`).
 //! - The moments: `--moments`, else the game's `theme-shots.toml`, else the
-//!   page check's own route and pictures (`ROUTES` in
-//!   scripts/web/public/check-page.mjs and scripts/web/public/pictures.txt).
+//!   page check's own route and pictures (the game's `page-check.toml`
+//!   `[[route]]` and `page-pictures.txt`).
 //! - The browser: Chrome Headless Shell, driven from gp itself
 //!   (src/chrome.rs): `--browser`, else the one in
 //!   `$GP_HOME/work/chrome-headless-shell`, else the pinned build gp
@@ -62,7 +62,7 @@ pub struct PlayArgs {
     /// folder. Example: ~/my-theme
     pub dir: PathBuf,
     /// The game: its folder, or its name in the games checkout. Example:
-    /// --game donkey-kong
+    /// --game rooftop
     #[arg(long)]
     pub game: PathBuf,
     /// The port on 127.0.0.1 to serve on; 0 takes any free port. 7710, 7720
@@ -83,7 +83,7 @@ pub struct PlayArgs {
     #[arg(long, value_name = "DIR")]
     pub shots: Option<PathBuf>,
     /// Your ROM, for the check and the pictures (default: each one under
-    /// $GP_ROM_DIR the game takes). Example: --rom ~/roms/dk.nes
+    /// $GP_ROM_DIR the game takes). Example: --rom ~/roms/rooftop.nes
     #[arg(long)]
     pub rom: Option<PathBuf>,
     /// A second theme to set beside yours: a folder, a published
@@ -95,7 +95,7 @@ pub struct PlayArgs {
     pub against: Option<String>,
     /// The moments to picture, a TOML file of [[run]] and [[shot]] tables
     /// (default: the game's theme-shots.toml, else the page check's route
-    /// and pictures.txt). Example: --moments shots.toml
+    /// in its page-check.toml and page-pictures.txt). Example: --moments shots.toml
     #[arg(long)]
     pub moments: Option<PathBuf>,
     /// The built page to serve, a folder holding index.html and page.json
@@ -863,119 +863,31 @@ impl Moments {
     }
 }
 
-/// A JavaScript object literal (unquoted keys, comments, trailing commas,
-/// double-quoted strings) as JSON.
-pub(crate) fn js_literal_to_json(s: &str) -> String {
-    let b: Vec<char> = s.chars().collect();
-    let mut out = String::new();
-    let mut i = 0;
-    let trim_comma = |out: &mut String| {
-        let t = out.trim_end().len();
-        if out[..t].ends_with(',') {
-            out.truncate(t - 1);
-        }
-    };
-    while i < b.len() {
-        let c = b[i];
-        if c == '"' {
-            out.push(c);
-            i += 1;
-            while i < b.len() {
-                out.push(b[i]);
-                if b[i] == '\\' && i + 1 < b.len() {
-                    out.push(b[i + 1]);
-                    i += 2;
-                    continue;
-                }
-                i += 1;
-                if b[i - 1] == '"' {
-                    break;
-                }
-            }
-        } else if c == '/' && b.get(i + 1) == Some(&'/') {
-            while i < b.len() && b[i] != '\n' {
-                i += 1;
-            }
-        } else if c == '/' && b.get(i + 1) == Some(&'*') {
-            i += 2;
-            while i + 1 < b.len() && !(b[i] == '*' && b[i + 1] == '/') {
-                i += 1;
-            }
-            i += 2;
-        } else if c.is_ascii_alphabetic() || c == '_' || c == '$' {
-            let start = i;
-            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == '_' || b[i] == '$') {
-                i += 1;
-            }
-            let word: String = b[start..i].iter().collect();
-            let mut j = i;
-            while j < b.len() && b[j].is_whitespace() {
-                j += 1;
-            }
-            if b.get(j) == Some(&':') {
-                let _ = write!(out, "\"{word}\"");
-            } else {
-                out.push_str(&word);
-            }
-        } else if c == '}' || c == ']' {
-            trim_comma(&mut out);
-            out.push(c);
-            i += 1;
-        } else {
-            out.push(c);
-            i += 1;
-        }
-    }
-    out
-}
-
-/// The object literal after `const NAME = ` in a script, braces matched
-/// past strings and comments.
-pub(crate) fn object_after<'a>(script: &'a str, name: &str) -> Option<&'a str> {
-    let at = script.find(&format!("const {name} = {{"))?;
-    let start = at + script[at..].find('{')?;
-    let b = script.as_bytes();
-    let (mut depth, mut i) = (0usize, start);
-    while i < b.len() {
-        match b[i] {
-            b'"' => {
-                i += 1;
-                while i < b.len() && b[i] != b'"' {
-                    i += if b[i] == b'\\' { 2 } else { 1 };
-                }
-            }
-            b'/' if b.get(i + 1) == Some(&b'/') => {
-                while i < b.len() && b[i] != b'\n' {
-                    i += 1;
-                }
-            }
-            b'{' | b'[' => depth += 1,
-            b'}' | b']' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(&script[start..=i]);
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    None
-}
-
-/// The page check's moments: each ROM version's route in `ROUTES`
-/// (check-page.mjs) with each stage's start, its shot and its clear, the
-/// ending and the next loop, and the moments of pictures.txt on that ROM.
-/// `roms` is each ROM entry's id and hash.
+/// The page check's moments: each ROM version's route in the game's
+/// page-check.toml (`[[route]]` by its `rom`, with `holds` and `frames` of
+/// its own; a route that names a theme-shots.toml run instead is passed
+/// over, as a game with that file reads it) with each stage's start, its
+/// shot and its clear, the ending and the next loop, and the moments of the
+/// game's page-pictures.txt on that ROM. `roms` is each ROM entry's id and
+/// hash.
 pub(crate) fn page_check_moments(
-    check_page: &str,
+    page_check: &str,
     pictures: &str,
     roms: &[(String, String)],
 ) -> Result<Moments> {
-    let lit = object_after(check_page, "ROUTES")
-        .ok_or_else(|| anyhow!("check-page.mjs has no ROUTES"))?;
-    let routes: Value = serde_json::from_str(&js_literal_to_json(lit))
-        .context("reading check-page.mjs's ROUTES")?;
+    let file: toml::Value = toml::from_str(page_check).context("reading page-check.toml")?;
+    let file = serde_json::to_value(file).context("reading page-check.toml")?;
+    let mut routes = serde_json::Map::new();
+    for r in file["route"].as_array().into_iter().flatten() {
+        if let Some(rom) = r["rom"].as_str()
+            && r["holds"].is_array()
+        {
+            let mut r = r.clone();
+            r["stages"] = r["stage"].take();
+            routes.insert(rom.to_owned(), r);
+        }
+    }
+    let routes = Value::Object(routes);
     let mut m = Moments::default();
     let strs = |v: &Value| -> Vec<String> {
         v.as_array()
@@ -1143,20 +1055,22 @@ fn moments_for(
     if own.is_file() {
         return from_file(&own);
     }
-    // The page check's route, where it has one for a ROM of this game.
-    if let Some(repo) = checkout() {
-        let pub_dir = repo.join("scripts/web/public");
-        let cp =
-            fs::read_to_string(pub_dir.join("check-page.mjs")).context("reading check-page.mjs")?;
-        let pics = fs::read_to_string(pub_dir.join("pictures.txt")).unwrap_or_default();
-        let m = page_check_moments(&cp, &pics, roms)?;
+    // The page check's route, where the game's page-check.toml has one for
+    // a ROM of this game.
+    let pc_file = game_dir.join("page-check.toml");
+    if pc_file.is_file() {
+        let pc = fs::read_to_string(&pc_file)
+            .with_context(|| format!("reading {}", pc_file.display()))?;
+        let pics = fs::read_to_string(game_dir.join("page-pictures.txt")).unwrap_or_default();
+        let m =
+            page_check_moments(&pc, &pics, roms).with_context(|| pc_file.display().to_string())?;
         if !m.shot.is_empty() {
             m.check()?;
             return Ok((
                 m,
                 format!(
-                    "the page check's route ({}) and pictures.txt",
-                    pub_dir.join("check-page.mjs").display()
+                    "the page check's route ({}) and page-pictures.txt",
+                    pc_file.display()
                 ),
             ));
         }

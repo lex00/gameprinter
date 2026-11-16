@@ -663,7 +663,7 @@ fn draws_of(
     cache: bool,
 ) -> Result<gp_sim::DrawScript> {
     // The draws depend on the mapping's draw sites as well as the tape's
-    // run: a site added later (Donkey Kong's fires' `fire_way`) needs a
+    // run: a site added later (one game's fires' `fire_way`) needs a
     // script that has it.
     let sites = key(&[format!("{:?}", b.mapping.draws).as_bytes()]);
     let file = tape.with_extension(format!("{sites}.draws"));
@@ -700,7 +700,7 @@ fn draws_of(
             st.original_frame,
         )?,
         crate::original::OriginalRuntime::Arcade(a) => crate::lockstep::record_draws_arcade(
-            a.clone().into_tapper(),
+            a.clone().into_mcr(),
             &b.mapping,
             &inputs,
             st.original_frame,

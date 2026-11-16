@@ -789,7 +789,8 @@ mod tests {
 
     #[test]
     fn a_chip_by_its_name_with_other_bytes_is_changed_and_one_not_there_is_missing() {
-        let set = gp_arcade::romset::set("tapper").unwrap();
+        gp_arcade::testrom::known_made_up_set("madeupfind");
+        let set = gp_arcade::romset::set("madeupfind").unwrap();
         let first = &set.chips[0];
         // Made-up bytes under the first chip's name, at its size.
         let bytes = vec![0x5A; first.size];

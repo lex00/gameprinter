@@ -72,7 +72,7 @@ fn replay_arcade(
 ) -> Result<()> {
     use crate::arcade_stage0::{RAM_BASE, RAM_END};
     let set = gp_arcade::Romset::from_zip(rom)?;
-    let mut t = gp_arcade::Tapper::power_on(&set);
+    let mut t = gp_arcade::Mcr::power_on(&set);
     for (i, f) in log.frames.iter().enumerate() {
         let bits = f.buttons_word();
         anyhow::ensure!(

@@ -297,7 +297,7 @@ mod tests {
         let game = d.path().join("t");
         fs::create_dir_all(&game).unwrap();
         fs::write(game.join("corpus.toml"), PLAN).unwrap();
-        let log = "gp-arcade-input 0\nsystem tapper\ncolumns CSRLDUT\n10 .......\n4 C......\n6 .......\n3 .S.....\n5 .....UT\n";
+        let log = "gp-arcade-input 0\nsystem madeupa\ncolumns CSRLDUT\n10 .......\n4 C......\n6 .......\n3 .S.....\n5 .....UT\n";
         let file = d.path().join("a.input");
         fs::write(&file, log).unwrap();
         let paths = Paths {
@@ -321,12 +321,12 @@ mod tests {
         let start = fs::read_to_string(game.join("inputs/t.serve.1.start.presses")).unwrap();
         assert_eq!(
             start,
-            "gp-presses 0\nframes 20\narcade tapper CSRLDUT\ncoin@10-13\n"
+            "gp-presses 0\nframes 20\narcade madeupa CSRLDUT\ncoin@10-13\n"
         );
         let own = fs::read_to_string(game.join("inputs/t.serve.1.presses")).unwrap();
         assert_eq!(
             own,
-            "gp-presses 0\nframes 8\narcade tapper CSRLDUT\nstart1@0-2\nup+tap@3-7\n"
+            "gp-presses 0\nframes 8\narcade madeupa CSRLDUT\nstart1@0-2\nup+tap@3-7\n"
         );
         let plan = fs::read_to_string(game.join("corpus.toml")).unwrap();
         assert!(!plan.contains("b3:0"), "{plan}");

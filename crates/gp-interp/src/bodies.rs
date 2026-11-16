@@ -31,8 +31,8 @@ use gp_sim::Spec;
 use crate::lockstep::{Lockstep, PathSeries};
 use crate::mapping::{Mapping, Slots};
 
-/// The first segment of a slot body's measures: `bodies.goomba[1].x` is the
-/// run's second goomba's place across.
+/// The first segment of a slot body's measures: `bodies.walker[1].x` is the
+/// run's second walker's place across.
 pub const PREFIX: &str = "bodies";
 
 /// The way a slot body last moved across: `left`, `right`, or `none`
@@ -88,7 +88,7 @@ pub struct Body {
 }
 
 impl Body {
-    /// "the goomba", "the second goomba".
+    /// "the walker", "the second walker".
     pub fn name(&self) -> String {
         name(&self.kind, self.nth)
     }
@@ -137,8 +137,8 @@ impl Mismatch {
     }
 }
 
-/// A kind and its place as a person says it: "the goomba" for the first,
-/// "the second goomba", "the piranha plant".
+/// A kind and its place as a person says it: "the walker" for the first,
+/// "the second walker", "the piranha plant".
 pub fn name(kind: &str, nth: usize) -> String {
     const ORD: [&str; 9] = [
         "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth",
@@ -728,7 +728,7 @@ impl Tracker {
         // body of a kind the pairing holds is gone and new ones of that
         // kind are here on the same frame. The original's bodies of that
         // kind that go on let go of their model side and pair again, as
-        // after a resync (Donkey Kong's 75m draws its platforms and fires
+        // after a resync (one game's second stage draws its platforms and fires
         // on a death's 21st divider wrap and keeps them through the setup,
         // while the model's restart places them anew).
         let mut held: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
@@ -1231,8 +1231,8 @@ mod tests {
 
     #[test]
     fn bodies_are_named_by_their_place_and_events_are_matched_in_order() {
-        assert_eq!(name("goomba", 0), "the goomba");
-        assert_eq!(name("goomba", 1), "the second goomba");
+        assert_eq!(name("walker", 0), "the walker");
+        assert_eq!(name("walker", 1), "the second walker");
         assert_eq!(name("piranha_plant", 0), "the piranha plant");
         let ev = |at, original, what: &str| Event {
             at,
@@ -1240,7 +1240,7 @@ mod tests {
             what: what.into(),
         };
         let b = Body {
-            kind: "goomba".into(),
+            kind: "walker".into(),
             nth: 1,
             slot: Some(2),
             model: Some(9),

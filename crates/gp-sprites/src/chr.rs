@@ -2,8 +2,8 @@
 //! through the cartridge's banks (CHR ROM) or as the game wrote it (CHR
 //! RAM), matched to the lifted `chr-2bpp` assets. A CHR ROM tile is found
 //! by its place in the CHR data, a CHR RAM tile by its pixels, so a game
-//! that copies tiles from PRG (Mega Man 2) is found as well as one that
-//! switches CHR banks (Super Mario Bros. 2).
+//! that copies tiles from PRG is found as well as one that
+//! switches CHR banks.
 //!
 //! An arcade lift (gp_assets::arcade) holds whole pictures instead: Midway
 //! MCR's `mcr-sprites`, 32 by 32 pixels, one value 0 to 15 each. Its

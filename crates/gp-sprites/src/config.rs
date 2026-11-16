@@ -61,7 +61,7 @@ fn two() -> u32 {
 #[serde(tag = "shape", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Table {
     /// A `byte-rows` asset whose rows are frames: tile numbers, `width` to
-    /// a row of the picture (Super Mario Bros.' EnemyGraphicsTable).
+    /// a row of the picture (one platformer's EnemyGraphicsTable).
     Rows {
         name: String,
         asset: String,
@@ -78,7 +78,7 @@ pub enum Table {
         index: Option<Index>,
     },
     /// Frames as records of tile and attribute bytes, with the sprites'
-    /// places in a second table of layouts (Mega Man 2's frames and OAM
+    /// places in a second table of layouts (one NES game's frames and OAM
     /// layouts): a `blobs` asset whose head gives the sprite count and the
     /// layout number, and rows `[tile, attribute]`; layouts are `blobs`
     /// with rows `[y, x]`, signed.
@@ -97,7 +97,7 @@ pub enum Table {
     Oam { name: String, frames: Blob },
     /// Animation sequences: a `blobs` asset whose head gives the last step
     /// and the frames per step, and whose bytes are frame numbers in the
-    /// table `frames` names, by entity ID (Mega Man 2's sprite
+    /// table `frames` names, by entity ID (one NES game's sprite
     /// definitions).
     Sequences {
         name: String,

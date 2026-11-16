@@ -14,7 +14,7 @@
 
 use gp_arcade::dasm::{self, Flow};
 use gp_arcade::mcr::Trace;
-use gp_arcade::{Controls, Tapper};
+use gp_arcade::{Controls, Mcr};
 use gp_nes::coverage::{CodeMap, EXEC, FELL, TAKEN};
 use gp_runtime::InputFrame;
 
@@ -39,7 +39,7 @@ pub(crate) fn step_covered(
                 return a.advance(input);
             }
             Ok(frame_covered(
-                a.tapper_mut(),
+                a.mcr_mut(),
                 Controls::from_bits(input.buttons),
                 map,
             ))
@@ -49,7 +49,7 @@ pub(crate) fn step_covered(
 
 /// One frame of the machine with its trace on, its features added to
 /// `map`; whether the game read its inputs.
-pub(crate) fn frame_covered(t: &mut Tapper, c: Controls, map: &mut CodeMap) -> bool {
+pub(crate) fn frame_covered(t: &mut Mcr, c: Controls, map: &mut CodeMap) -> bool {
     let trace = frame_trace(t, c);
     add_trace(&trace, map);
     t.polled()
@@ -57,7 +57,7 @@ pub(crate) fn frame_covered(t: &mut Tapper, c: Controls, map: &mut CodeMap) -> b
 
 /// One frame with the instruction trace on: both CPUs' instructions in
 /// time order.
-pub(crate) fn frame_trace(t: &mut Tapper, c: Controls) -> Vec<Trace> {
+pub(crate) fn frame_trace(t: &mut Mcr, c: Controls) -> Vec<Trace> {
     t.set_trace(true);
     t.step(c);
     let mut trace = t.take_trace();
@@ -101,14 +101,17 @@ pub(crate) fn add_trace(trace: &[Trace], map: &mut CodeMap) {
 mod tests {
     use super::*;
 
-    /// With the rbtapper romset: attract mode runs main-CPU code and
+    /// With a real romset ($GP_GAME_DIR's first oracle set): attract mode runs main-CPU code and
     /// branches both ways, the sound CPU's features land in the extra
     /// range, and a covered frame ends where an uncovered one does.
     #[test]
     fn an_arcade_frame_covers_both_cpus_and_changes_nothing() {
-        let Some(zip) = gp_arcade::romset::local_romset("rbtapper") else {
-            eprintln!("skipped: no rbtapper romset");
-            return;
+        let (_, zip) = match gp_arcade::romset::test_oracle_set_path() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("skipped: {e}");
+                return;
+            }
         };
         let rom = std::fs::read(zip).unwrap();
         let mut a = OriginalRuntime::of_rom(&rom).unwrap();

@@ -610,7 +610,7 @@ pub const TABLE: &[Row] = &[
 /// The commands known to run longer than gp_run's usual limit
 /// (`run::DEFAULT_TIMEOUT`, 300 s), with the seconds a call that gives no
 /// `timeout_s` gets instead. Measured on 2026-11-14: `corpus score` on
-/// Tapper took 444 s in a debug build; a gate runs a whole check and a
+/// an arcade game took 444 s in a debug build; a gate runs a whole check and a
 /// corpus, 30 to 60 minutes. Every path is a row of [`TABLE`] (a test
 /// holds it), and none is past `run::MAX_TIMEOUT`.
 pub const LONG: &[(&str, u64)] = &[

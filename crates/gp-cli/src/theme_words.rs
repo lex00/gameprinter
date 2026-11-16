@@ -5,7 +5,7 @@
 //! and a pose phrase for each frame, and each sound role a description, in
 //! place of the words the kit takes from the model. It also lists the
 //! words no prompt-facing text of the kit may hold: the original's names
-//! and its iconic things (Donkey Kong's barrels and girders). The game's
+//! and its iconic things (one game's barrels and girders). The game's
 //! own terms stay in each entry's `note`, which never reaches the kit.
 //!
 //! `gp theme kit` writes the kit with the words applied, `gp theme sheet`

@@ -566,7 +566,7 @@ pub(crate) fn run(a: &OddsArgs, paths: &Paths) -> Result<Outcome> {
         ));
         let mut pools_j = Vec::new();
         // The generator's real output at the site: the bytes the original
-        // drew there. Donkey Kong's register ($18-$1F, stepped by the idle
+        // drew there. One NES game's register ($18-$1F, stepped by the idle
         // loop) doesn't give the 256 values evenly, so even the original's
         // own draws failed against an even split (roll_off p 0.0005,
         // fire_way p 0.0004).

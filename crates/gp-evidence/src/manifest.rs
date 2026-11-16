@@ -50,7 +50,7 @@ pub enum SourceRef {
     Model { name: String, bundle: Hash },
     /// An arcade romset, run by gp-arcade: `identity` is the set's
     /// identity (gp_arcade::romset::identity, the SHA-256 of its chips'
-    /// SHA-1s sorted) and `system` MAME's name for the set (`tapper`).
+    /// SHA-1s sorted) and `system` MAME's name for the set (`rooftop`).
     /// Added 2026-11-12 within schema 1: older builds refuse it as an
     /// unknown kind.
     Romset { identity: String, system: String },
@@ -615,7 +615,7 @@ mod tests {
   "source": {
     "kind": "nes-rom",
     "sha256": "2d3f6c8a1b0e4f5d6c7b8a9e0f1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5",
-    "name": "Super Mario Bros. (NTSC, PRG0)",
+    "name": "Harbor Lights (NTSC, PRG0)",
     "mapper": 0
   },
   "runtime": {
@@ -644,7 +644,7 @@ mod tests {
   "frame_hashes": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
   "provenance": {
     "kind": "scripted",
-    "name": "smb-run-right"
+    "name": "rooftop-run-right"
   },
   "golden": false,
   "created_at": "2026-10-27T09:12:44Z"

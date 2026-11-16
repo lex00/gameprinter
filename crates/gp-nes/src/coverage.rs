@@ -14,7 +14,7 @@
 //! | `0x3_0000..0x4_0000` | A caller's own feature, such as a value of a mapped measure ([`CodeMap::extra`]) |
 //!
 //! Addresses are the CPU's, so on a board that switches banks two banks'
-//! code at one address count once. Super Mario Bros. (mapper 0) has no
+//! code at one address count once. A mapper 0 game has no
 //! banks. A bank-aware key would read the event stream's bank switches.
 
 use tetanes_core::bus::Bus;

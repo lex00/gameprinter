@@ -231,10 +231,10 @@ ROMs and the store are refused inside any git work tree, so nothing made from a 
 | `store/` | `$GP_STORE` by default: the content-addressed store of recordings and other objects (`objects/`, `index/recordings.jsonl`, `lock`, `tmp/`) |
 | `work/` | Everything made from a ROM or a build: lifted assets, module builds, the page's build and release check, oracle captures (`work/oracle/`), cycle slices, worker folders (`work/workers/NAME`) and per-worktree cargo targets (`work/target/BRANCH/HASH`) |
 | `mechanics/` | Mechanic sessions by game: clips, conversation, watch files |
-| `capture/` | Scratch by run name for `gp corpus score --run`, `gp picture`, `gp solve`, the bench, the gate's canary and the background queue (`generated/` and the like); an event folder's `events.ndjson` and `writer.lock` |
+| `capture/` | Scratch by run name for `gp corpus score --run`, `gp picture`, `gp solve`, the bench and the background queue (`generated/` and the like); an event folder's `events.ndjson` and `writer.lock` |
 | `watch/` | `gp watch` sessions and their event streams |
 | `sealed/` | Sealed runs, behind the guard |
-| `gate/` | The gates' home (`$GP_GATE_HOME`): worktrees, the queue of waiting patches, scores, the tool canary's homes |
+| `gate/` | The gates' home (`$GP_GATE_HOME`): worktrees, the queue of waiting patches, scores, the tool gate's target folders and logs |
 | `keys/` | Signing keys, such as the staging key |
 | `themes/`, `sound-banks/`, `config/`, `reports/`, `play/`, `author/` | Theme stacks, SF2 banks, image config, gap reports, free-play sessions and the authoring log |
 
@@ -255,6 +255,6 @@ Moss Hop, the test game the tool owns, stays in this repo: its source in `games/
 
 ## Checks and gates
 
-`just check` builds gp, assembles Moss Hop with cc65, and runs formatting, clippy, the workspace tests, the CLI.md check, the baselines, the asset round trip, the model checks, the interpreter on Moss Hop, the browser players against their native replays (`play-web`, and `play-web-arcade` when an rbtapper romset is on the machine), the editor's tests, the mechanic page, web parity, the template check, the hook's self-test and the ROM guard's tests.
+`just check` builds gp, assembles Moss Hop with cc65, and runs formatting, clippy, the workspace tests, the CLI.md check, the baselines, the asset round trip, the model checks, the interpreter on Moss Hop, the browser players against their native replays (`play-web`, and `play-web-arcade` on each arcade game whose romset is on the machine), the editor's tests, the mechanic page, web parity, the template check, the hook's self-test and the ROM guard's tests.
 
-Nothing lands on `main` except through a gate. `gp tool gate` builds the patched tool, runs `just check` and the whole test suite, and plays Donkey Kong's corpus through the old and new gp as a canary; it then publishes the new build to `$GP_HOME/bin`. `gp model gate` does the same for a game, on its corpus. Workers each have a worktree, an output folder and a target folder of their own ([docs/workers.md](docs/workers.md)).
+Nothing lands on `main` except through a gate. `gp tool gate` builds the patched tool, runs `just check` (which holds Moss Hop, built from source with no ROM, to its baselines, the interpreter, web parity and the page's players, all through the patched gp) and the whole test suite; it then publishes the new build to `$GP_HOME/bin`. `gp model gate` does the same for a game, on its corpus. Workers each have a worktree, an output folder and a target folder of their own ([docs/workers.md](docs/workers.md)).

@@ -10,11 +10,11 @@
 // the game the page takes ROMs of), game/ (the preview: gp_web.wasm,
 // preview.js, the authored stage's bundle and pictures, themes/ with the
 // looks the preview offers in its settings screen, and lift/ with
-// gp-web-lift.wasm and Donkey Kong's templates). Any dump of the game is
+// gp-web-lift.wasm and the game's templates). Any dump of the game is
 // taken: the lift finds its assets by content and picks the model its
-// program matches; a ROM whose game has less than the model (Donkey Kong
-// (JU) has no 50m) leaves blank what only that part uses (docs/web.md,
-// "The ROM, in the browser").
+// program matches; a ROM whose game has less than the model (one revision
+// without a stage another has) leaves blank what only that part uses
+// (docs/web.md, "The ROM, in the browser").
 //
 // Nothing here waits before the ROM picker is handled: boot.js (a classic
 // script, which runs first) takes the picked file, says "Checking NAME..."
@@ -49,7 +49,7 @@ const KINDS = {
   none: { own: true },
 };
 // The players by the name a package gives (`player`, kept for packages
-// already published: lex00/donkey-kong@1.0.9 names `nes`), each with the
+// already published: a package from before names `nes`), each with the
 // ROM kinds it takes. An arcade game sounds through its board's own sound
 // CPU and chips, run in this browser from the visitor's romset and fed the
 // requests the game's module makes (game/gp_arcade_play.wasm, preview.js
@@ -166,9 +166,7 @@ function showFacts(f) {
   const lines = f.howto?.length ? [...f.howto] : sound ? [...$("howto").children].map((p) => p.textContent) : [];
   if (sound) lines.push(`Sound: ${sound}`);
   if (lines.length) $("howto").replaceChildren(...lines.map((t) => Object.assign(document.createElement("p"), { textContent: t })));
-  if (!link.own || rom.kind !== "nes") {
-    $("about-rom").textContent = `"Load your own ROM" accepts a ${rom.name} ${k.file} that you own. The page checks and reads it in your browser. It is never uploaded.`;
-  }
+  $("about-rom").textContent = `"Load your own ROM" accepts a ${rom.name} ${k.file} that you own. The page checks and reads it in your browser. It is never uploaded.`;
   if (!link.own || f.trademark) {
     $("about-mark").textContent =
       f.trademark ??
@@ -371,8 +369,8 @@ const installing = ready.then(async () => {
   for (const l of notOffered) console.info(`gp: theme ${l.name} not offered: ${l.reason} (${l.detail})`);
   showAboutThemes(notOffered, [], [], rechecked);
   // Settings, Theme lists them in this order after Original: the themes
-  // from the game's own namespace first (for lex00/donkey-kong,
-  // lex00/turnips before a theme someone else made), then the rest as the
+  // from the game's own namespace first (for a game lex00/GAME, a theme
+  // lex00/THEME before a theme someone else made), then the rest as the
   // source offered them. The games site orders a game's themes the same way.
   themes.sort((a, b) => b.own - a.own);
   say("");
@@ -506,7 +504,7 @@ $("howto-toggle").addEventListener("click", () => {
   focusGame();
 });
 
-// Asset names in words: `kong_take` is "kong take".
+// Asset names in words: `stage_screens` is "stage screens".
 const words = (names) => names.map((n) => n.replaceAll("_", " ")).join(", ");
 
 // What the lift found, and what it left blank, in a sentence or two.

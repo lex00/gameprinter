@@ -49,7 +49,7 @@ opt-level = 3
 # with the original's (gp-interp's screen) on every frame of a lockstep, at
 # 131 offsets a frame when the background is far apart. On an arcade board's
 # 512 by 480 picture that was most of `gp clip score`'s time at opt-level 1:
-# Tapper's l6.001 took 7.4 s, 4.6 s at 3.
+# one arcade game's six-level clip took 7.4 s, 4.6 s at 3.
 [profile.fastdev.package.gp-interp]
 opt-level = 3
 
@@ -77,6 +77,6 @@ opt-level = 3
 [profile.dev.package.gp-sound]
 opt-level = 3
 
-# Tapper's tests play 1511 frames of two Z80s against the MAME oracle.
+# gp-arcade's tests play 1511 frames of two Z80s against the MAME oracle.
 [profile.dev.package.gp-arcade]
 opt-level = 3

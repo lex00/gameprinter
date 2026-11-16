@@ -56,7 +56,7 @@ pub enum SealedCmd {
     /// to ledger.txt.
     Score {
         /// The game: its folder's name in the games checkout, or a source
-        /// ID its roms.toml lists (donkey-kong-oe). Its sealed runs are
+        /// ID its roms.toml lists (rooftop-oe). Its sealed runs are
         /// under $GP_HOME/sealed/GAME/.
         game: String,
         /// The sealed run: N for clip N the page sealed

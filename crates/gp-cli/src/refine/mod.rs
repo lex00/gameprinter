@@ -50,7 +50,7 @@ use gp_extract::questions::{QUESTIONS_FILE, Question, Questions};
 
 #[derive(Args)]
 pub struct RefineArgs {
-    /// The game's package folder (games/donkey-kong): its corpus is what
+    /// The game's package folder (games/mosshop): its corpus is what
     /// the model is refined on.
     pub game: PathBuf,
     /// Refine from the lockstep with the original, clip by clip. Without
@@ -80,10 +80,10 @@ pub struct RefineArgs {
     #[arg(long = "clip", value_name = "ID")]
     pub clips: Vec<String>,
     /// A score whose rows record each clip's curve (`gp corpus score`,
-    /// `gp game score` or a canary's JSON): each clip is checked against
-    /// it before it is used. Without `--lockstep`, what gp validate holds
-    /// the model against, as its `--against` (default: the recordings
-    /// measured).
+    /// `gp game score` or `gp model gate --score-only`'s JSON): each clip
+    /// is checked against it before it is used. Without `--lockstep`, what
+    /// gp validate holds the model against, as its `--against` (default:
+    /// the recordings measured).
     #[arg(long)]
     pub against: Option<PathBuf>,
     /// The game's built module. Needed for a model with hooks.
@@ -292,8 +292,9 @@ pub(crate) fn refuse_checkout(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The curve each clip is recorded with in a score's JSON: a canary's
-/// `clips`, or a score record's `record.predicate.clips`.
+/// The curve each clip is recorded with in a score's JSON: a
+/// `gp model gate --score-only` run's `clips`, or a score record's
+/// `record.predicate.clips`.
 fn recorded_curves(file: &Path) -> Result<BTreeMap<String, String>> {
     let v: Value = serde_json::from_slice(
         &fs::read(file).with_context(|| format!("reading {}", file.display()))?,

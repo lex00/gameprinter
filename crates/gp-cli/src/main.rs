@@ -680,8 +680,9 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum ToolCmd {
-    /// Hold a patch to gameprinter to the tool's checks and a Donkey Kong
-    /// canary, and land it when it passes (docs/gate.md).
+    /// Hold a patch to gameprinter to the tool's checks (`just check`, which
+    /// holds Moss Hop through the patched gp, and every test), and land it
+    /// when it passes (docs/gate.md).
     Gate(tool_gate::ToolGateArgs),
 }
 
@@ -792,7 +793,7 @@ enum AssetsCmd {
     /// with small changes (where and how much) or missing. A ROM the
     /// ROM no game's roms.toml knows gets a draft entry (docs/sources.md).
     Find {
-        /// The game id (a template's `template.game`, such as donkey-kong),
+        /// The game id (a template's `template.game`, such as mosshop),
         /// or a template's id.
         game: String,
         /// The ROM to search.
@@ -1097,7 +1098,7 @@ enum GameCmd {
     /// player that walks and jumps, its own pictures as plain shapes, no
     /// sound), as a copy in $GP_HOME/work/mcp/GAME. Writes over nothing
     New {
-        /// The game's id: lower-case letters, digits and dashes (qbert-usa).
+        /// The game's id: lower-case letters, digits and dashes (rooftop-usa).
         /// With --empty, the new game's name: letters, digits and _ (my_hop)
         game: String,
         /// The ROM, already in $GP_ROM_DIR (`gp roms add` puts it there)
@@ -1138,7 +1139,7 @@ enum GameCmd {
     /// yanked for security is fetched only with --id, and so is any version of a
     /// registry with no yank list (yanks.toml, which gp registry reindex writes).
     Fetch {
-        /// NAME@VERSION, or NAME alone with no --id. Example: lex00/donkey-kong@1.0.9
+        /// NAME@VERSION, or NAME alone with no --id. Example: acme/rooftop@1.0.9
         name: String,
         /// The package's exact id. Without it, the id comes from the registry's index.
         #[arg(long)]
@@ -1376,7 +1377,7 @@ enum TemplateCmd {
     /// may be the ROM's. With --folder, the same for every file of a folder
     /// to be served. Exits 1 on any find, and 2 when a ROM isn't found.
     Served {
-        /// The package folder (games/donkey-kong).
+        /// The package folder (games/mosshop).
         dir: PathBuf,
         /// A folder to be served; repeat for more.
         #[arg(long)]
@@ -1918,6 +1919,21 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
     }
 }
 
+/// The innermost subcommand's `--games DIR`, when it takes one.
+fn games_flag(m: &clap::ArgMatches) -> Option<std::path::PathBuf> {
+    let mut m = m;
+    let mut found = None;
+    loop {
+        if let Ok(Some(p)) = m.try_get_one::<std::path::PathBuf>("games") {
+            found = Some(p.clone());
+        }
+        match m.subcommand() {
+            Some((_, sub)) => m = sub,
+            None => return found,
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let matches = <Cli as clap::CommandFactory>::command().get_matches();
     let cli = match <Cli as clap::FromArgMatches>::from_arg_matches(&matches) {
@@ -1935,6 +1951,13 @@ fn main() -> ExitCode {
         pool::set_jobs(n);
     }
     host::JSON_OUT.store(cli.json, std::sync::atomic::Ordering::Relaxed);
+    // The arcade sets the board knows come from the games' roms.toml files
+    // ([[source.chip]] rows): the command's own --games when it takes one,
+    // else the games checkout found as `gp roms scan` finds it. A bad
+    // roms.toml is said once here; a command that needs a set says so too.
+    if let Err(e) = roms_cmd::know_sets(games_flag(&matches).as_deref()) {
+        eprintln!("gp: {e:#}");
+    }
     if cli.json && matches!(cli.cmd, Cmd::Mcp(_)) {
         // gp prints its JSON on stdout when a command ends, which for `gp
         // mcp` is the MCP channel.

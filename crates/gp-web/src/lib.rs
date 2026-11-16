@@ -934,21 +934,55 @@ mod settings_tests {
     use super::*;
     use gp_present::settings::{Key, Outcome, Screen};
 
-    /// Donkey Kong's own file: the screen lists the timing group first,
-    /// every switch, and normal turns them all on.
+    /// A made-up profiles file with a timing group first: the screen lists
+    /// it first, every switch, and normal turns them all on.
+    const PROFILES: &str = r#"format = "0.2.0"
+
+[[groups]]
+name = "timing"
+title = "Timing"
+description = "The frame's timing"
+
+[[groups.switches]]
+name = "no_lag"
+description = "No lag frames"
+
+[groups.switches.set]
+"entities.slug.patrol.period" = 4
+
+[[groups.switches]]
+name = "steady"
+description = "Steady steps"
+
+[groups.switches.set]
+"entities.slug.contact.stomp_depth" = 12
+
+[[groups]]
+name = "assist"
+title = "Assist"
+description = "Easier play"
+
+[[groups.switches]]
+name = "slow"
+description = "Slower enemies"
+
+[groups.switches.set]
+"entities.slug.patrol.period" = 8
+
+[presets.normal]
+description = "Every switch on"
+switches = ["no_lag", "steady", "slow"]
+"#;
+
     #[test]
-    #[ignore = "needs the games repo beside this one (phase 1.3)"]
     fn the_preview_screen_reads_a_templates_profiles() {
-        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../games/donkey-kong/profiles.toml");
-        let text = std::fs::read_to_string(file).unwrap();
-        let c = settings_catalog(&text).unwrap();
+        let c = settings_catalog(PROFILES).unwrap();
         assert_eq!(c.groups[0].title, "Timing");
-        assert_eq!(c.groups.iter().map(|g| g.switches.len()).sum::<usize>(), 12);
+        assert_eq!(c.groups.iter().map(|g| g.switches.len()).sum::<usize>(), 3);
         assert_eq!(c.modes()[..2], ["retro", "normal"]);
         let mut s = Screen::open(c, "retro");
         assert_eq!(s.key(settings_key(3).unwrap()), Outcome::Redraw);
-        assert_eq!(s.on.len(), 12);
+        assert_eq!(s.on.len(), 3);
         assert_eq!(
             s.key(Key::Open),
             Outcome::Closed {

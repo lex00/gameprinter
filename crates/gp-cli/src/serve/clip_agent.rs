@@ -1411,7 +1411,7 @@ mod tests {
     #[test]
     fn a_group_leaves_the_slot_out() {
         assert_eq!(group_key("entities.barrel3.x"), "entities.barrel.x");
-        assert_eq!(group_key("entities.mario.vy"), "entities.mario.vy");
+        assert_eq!(group_key("entities.frog.vy"), "entities.frog.vy");
     }
 
     #[test]

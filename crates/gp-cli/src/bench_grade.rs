@@ -10,8 +10,8 @@
 //! Ported from game-printer. Its grader also graded `gp clips matrix` and
 //! `gp capture grid --code` against a ground truth written from Moss Hop's
 //! source (routines, their reads and the branch ways never taken) and RAM
-//! labels. gameprinter has neither command nor Moss Hop, and Donkey Kong
-//! and Tapper have no source, so those grades aren't here: the bench grades
+//! labels. gameprinter has neither command nor Moss Hop, and the ported
+//! games have no source, so those grades aren't here: the bench grades
 //! the corpus's code coverage by `gp corpus reduce` instead (bench_clips.rs).
 
 use std::collections::{BTreeMap, BTreeSet};

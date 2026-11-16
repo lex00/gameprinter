@@ -506,7 +506,7 @@ pub(crate) fn render_arcade(
     for e in recorded.iter().flatten() {
         by_frame[(e.frame - range.start) as usize].push(*e);
     }
-    cursor.tapper_mut().set_events(true);
+    cursor.mcr_mut().set_events(true);
     let (w, h) = if style.overlay {
         (AW, AH + band_height(1))
     } else {
@@ -540,7 +540,7 @@ pub(crate) fn render_arcade(
                 .expect("the range is inside the recording");
             cursor.step()?;
             let events: Vec<Event> = cursor
-                .tapper_mut()
+                .mcr_mut()
                 .take_events()
                 .iter()
                 .map(|e| crate::arcade_rec::stored(frame, e))
@@ -555,7 +555,7 @@ pub(crate) fn render_arcade(
             if let (Some(what), None) = (what, first_diff) {
                 first_diff = Some((frame, what));
             }
-            for (i, px) in cursor.tapper().picture().iter().enumerate() {
+            for (i, px) in cursor.mcr().picture().iter().enumerate() {
                 canvas.rgb[i * 3..i * 3 + 3].copy_from_slice(&[
                     (px >> 16) as u8,
                     (px >> 8) as u8,

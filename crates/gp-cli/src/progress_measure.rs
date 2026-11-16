@@ -27,7 +27,7 @@
 //! of the game's ROMs; the clips are the game's corpus clips; the start and
 //! the lockstep from it are the sweep's ([`crate::sweep::measure`]) rather
 //! than a copy; and the original is [`OriginalRuntime`], so an arcade
-//! game (Tapper) is measured through its own mapping on gp-arcade.
+//! game is measured through its own mapping on gp-arcade.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -203,7 +203,7 @@ fn ram(o: &OriginalRuntime) -> Vec<u8> {
 fn peek(o: &OriginalRuntime, a: u16) -> u8 {
     match o {
         OriginalRuntime::Nes(n) => n.nes().peek(a),
-        OriginalRuntime::Arcade(r) => r.tapper().peek(a),
+        OriginalRuntime::Arcade(r) => r.mcr().peek(a),
     }
 }
 
@@ -262,7 +262,7 @@ fn step(
             if input.reset || !input.axes.is_empty() || input.buttons > 0x7f {
                 return a.advance(input).map_err(anyhow::Error::msg);
             }
-            let t = a.tapper_mut();
+            let t = a.mcr_mut();
             let trace =
                 crate::ramrole_z80::step(t, gp_arcade::Controls::from_bits(input.buttons), z80);
             crate::covered::add_trace(&trace, frame);

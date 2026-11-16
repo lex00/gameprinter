@@ -3,24 +3,24 @@
 //!
 //! An NES map ([`crate::AssetMap`]) describes one ROM by its SHA-256 and
 //! offsets in its PRG and CHR. An arcade game comes in several sets that
-//! share a board and a layout but not always their art: Tapper's `tapper`
-//! and `tapperg` run the same code with different sprites. So an arcade
+//! share a board and a layout but not always their art: two sets may run
+//! the same code with different sprites. So an arcade
 //! map names its assets by the board's graphics region (MAME's `gfx1`,
 //! `gfx2`) and the index of each tile or sprite in it, and lists the sets
 //! whose chips are laid out that way. The lift reads the regions from
 //! whichever of those sets the zip is (gp_arcade::Romset finds it by its
 //! chips' hashes, and gp_arcade::video::Gfx decodes them; gp-cli joins the
 //! two, so this crate, which game modules build, doesn't need gp-arcade),
-//! so the same model loads `tapper`'s art or `tapperg`'s, and the lifted
+//! so the same model loads either set's art, and the lifted
 //! folder's `source.toml` says which it was.
 //!
 //! ```toml
 //! schema = 1
 //! platform = "arcade"
-//! source = "tapper"
-//! title = "Tapper"
+//! source = "madeupa"
+//! title = "Made Up"
 //! board = "mcr_91490"
-//! sets = ["tapper", "tapperg", "tappera", "rbtapper", "sutapper"]
+//! sets = ["madeupa", "madeupb", "madeupc"]
 //!
 //! [[asset]]
 //! name = "tiles"
@@ -40,9 +40,9 @@
 //! | `mcr-sprites` | `gfx2` | Sprites, 32 by 32, 4 bits a pixel |
 //! | `mcr-font` | `gfx1` | Background tiles that draw text, lifted as `mcr-tiles` are, with a `charset` (crate::charset) whose numbers count from the asset's `first`: the tile a character is drawn with is `first` plus its number. A model's `board-font` slot, the letters a theme or a new game draws text with |
 //! | `sprite-set` | none | Sprite frames as layouts of the `mcr-sprites` pictures (crate::sprite_set): `gp sprites capture` writes it from recordings, so it names no region and lifts nothing, as in an NES map |
-//! | `byte-rows` | `maincpu` | A data table of the program: `count` rows of `width` bytes from `offset` (a CPU address), lifted as a TOML file of rows like the NES map's `byte-rows`, which hooks read through an entity's `ext_rows`. `[asset.at]` gives its place in a set whose program keeps it elsewhere (Tapper's `rbtapper`) |
+//! | `byte-rows` | `maincpu` | A data table of the program: `count` rows of `width` bytes from `offset` (a CPU address), lifted as a TOML file of rows like the NES map's `byte-rows`, which hooks read through an entity's `ext_rows`. `[asset.at]` gives its place in a set whose program keeps it elsewhere (another revision's) |
 //! | `mcr-screen` | `maincpu` | A whole screen of the background tile layer as the program keeps it to copy into video RAM: 30 rows of 32 cells from `offset`, two bytes a cell (low byte first: the tile's number in bits 0 to 9, flip x 10, flip y 11, colour bank 12 and 13, priority 14 and 15). Lifted as a TOML file of 30 rows of 32 cell words. A model's `board-screen` slot |
-//! | `mcr-palette` | `maincpu` | The board's 64 colours as the program keeps them to copy into palette RAM, two bytes a colour from `offset`, unpacked as Tapper's loader ($600F) unpacks them into the board's 9 bits (red, blue, green, 3 each). Lifted as a TOML file of 64 colours. A model's `board-palette` slot |
+//! | `mcr-palette` | `maincpu` | The board's 64 colours as the program keeps them to copy into palette RAM, two bytes a colour from `offset`, unpacked as the program's own loader unpacks them into the board's 9 bits (red, blue, green, 3 each). Lifted as a TOML file of 64 colours. A model's `board-palette` slot |
 //!
 //! Each asset lifts to one indexed PNG, its tiles or sprites left to right,
 //! `per_row` to a row, each pixel its 4-bit value (0 to 15) with gray
@@ -72,7 +72,7 @@ pub struct ArcadeMap {
     pub platform: String,
     pub source: String,
     pub title: Option<String>,
-    /// MAME's machine configuration the layout is for (Tapper's is
+    /// MAME's machine configuration the layout is for (such as
     /// `mcr_91490`), for people.
     pub board: Option<String>,
     /// The MAME sets whose graphics chips this map fits.
@@ -180,7 +180,7 @@ pub struct ArcadeAsset {
     #[serde(default)]
     pub width: u32,
     /// A `byte-rows` table's place in a set whose program keeps it
-    /// elsewhere, by the set's name (`rbtapper = 0xC3F1`): the sets share
+    /// elsewhere, by the set's name (`madeupb = 0xC3F1`): the sets share
     /// a layout of pictures, not always of code. The public page's lift
     /// takes a set of another program only when every program table names
     /// it here, one kept at the same place with `offset` again
@@ -455,8 +455,8 @@ fn screen_file(a: &ArcadeAsset, gfx: &Decoded, source: &str) -> Result<Vec<u8>, 
     Ok(out.into_bytes())
 }
 
-/// One colour of an `mcr-palette` table, two bytes, unpacked as Tapper's
-/// loader ($600F) does: the first byte's nibbles go to bits 0 to 3 and 3
+/// One colour of an `mcr-palette` table, two bytes, unpacked as the
+/// program's own loader does: the first byte's nibbles go to bits 0 to 3 and 3
 /// to 6 (or'd), the second byte turned right twice is or'd in less its
 /// low bit, and that low bit is the ninth bit (the loader writes the
 /// colour's odd byte of palette RAM for it).
@@ -667,7 +667,7 @@ pub fn unpack(
 }
 
 /// The arcade map `gp game new` writes for the sets of Midway's MCR
-/// boards with the 91490 CPU board (all of Tapper's): every tile and
+/// boards with the 91490 CPU board: every tile and
 /// sprite.
 pub fn mcr_91490_map(source: &str, title: &str, sets: &[&str]) -> String {
     let sets: Vec<String> = sets.iter().map(|s| format!("{s:?}")).collect();
@@ -690,7 +690,7 @@ pub fn mcr_91490_map(source: &str, title: &str, sets: &[&str]) -> String {
 mod tests {
     use super::*;
 
-    const SETS: [&str; 2] = ["tapper", "tapperg"];
+    const SETS: [&str; 2] = ["madeupa", "madeupd"];
 
     /// Made-up decoded regions: a pattern, no game's bytes.
     fn decoded(set: &str, salt: u8) -> Decoded {
@@ -712,11 +712,11 @@ mod tests {
     /// same names, and each unpacks back to its own regions.
     #[test]
     fn a_map_lifts_any_listed_set_and_unpacks_back() {
-        let text = mcr_91490_map("tapper", "Tapper", &SETS);
+        let text = mcr_91490_map("madeupa", "Made Up", &SETS);
         let map = ArcadeMap::parse(&text).unwrap();
         assert!(is_arcade(&text));
-        let a = decoded("tapper", 0);
-        let g = decoded("tapperg", 5);
+        let a = decoded("madeupa", 0);
+        let g = decoded("madeupd", 5);
         let (fa, la) = lift(&a, &map, &text).unwrap();
         let (fg, _) = lift(&g, &map, &text).unwrap();
         assert_eq!(la.len(), 2);
@@ -727,7 +727,7 @@ mod tests {
         );
         assert_eq!(names(&fa), names(&fg));
         assert_ne!(fa[3].bytes, fg[3].bytes);
-        assert!(String::from_utf8_lossy(&fg[1].bytes).contains("tapperg"));
+        assert!(String::from_utf8_lossy(&fg[1].bytes).contains("madeupd"));
         for (d, files) in [(&a, &fa), (&g, &fg)] {
             let read = |n: &str| {
                 files
@@ -750,14 +750,14 @@ mod tests {
     fn a_byte_rows_table_lifts_from_the_program() {
         let text = format!(
             "{}\n[[asset]]\nname = \"ends\"\nformat = \"byte-rows\"\nregion = \"maincpu\"\noffset = 4\ncount = 2\nwidth = 3\n",
-            mcr_91490_map("tapper", "Tapper", &SETS)
+            mcr_91490_map("madeupa", "Made Up", &SETS)
         );
         let map = ArcadeMap::parse(&text).unwrap();
-        let (files, lifted) = lift(&decoded("tapper", 0), &map, &text).unwrap();
+        let (files, lifted) = lift(&decoded("madeupa", 0), &map, &text).unwrap();
         assert_eq!(lifted.len(), 3);
-        let moved = text.replace("width = 3\n", "width = 3\n[asset.at]\ntapperg = 10\n");
+        let moved = text.replace("width = 3\n", "width = 3\n[asset.at]\nmadeupd = 10\n");
         let (g, _) = lift(
-            &decoded("tapperg", 0),
+            &decoded("madeupd", 0),
             &ArcadeMap::parse(&moved).unwrap(),
             &moved,
         )
@@ -782,7 +782,7 @@ mod tests {
         let far = text.replace("offset = 4", "offset = 62");
         assert!(
             lift(
-                &decoded("tapper", 0),
+                &decoded("madeupa", 0),
                 &ArcadeMap::parse(&far).unwrap(),
                 &far
             )
@@ -802,11 +802,11 @@ mod tests {
     fn a_sprite_set_entry_lifts_nothing() {
         let text = format!(
             "{}\n[[asset]]\nname = \"sprite_set\"\nformat = \"sprite-set\"\nwritten_by = \"gp sprites capture\"\n",
-            mcr_91490_map("tapper", "Tapper", &SETS)
+            mcr_91490_map("madeupa", "Made Up", &SETS)
         );
         let map = ArcadeMap::parse(&text).unwrap();
         assert_eq!(map.assets[2].file(), "sprite_set.toml");
-        let (files, lifted) = lift(&decoded("tapper", 0), &map, &text).unwrap();
+        let (files, lifted) = lift(&decoded("madeupa", 0), &map, &text).unwrap();
         assert_eq!(lifted.len(), 2);
         assert!(!files.iter().any(|f| f.name.starts_with("sprite_set")));
         let bad = text.replace(
@@ -825,11 +825,11 @@ mod tests {
         let text = format!(
             "{}\n[[asset]]\nname = \"stage\"\nformat = \"mcr-screen\"\nregion = \"maincpu\"\noffset = 0x10\n\n\
              [[asset]]\nname = \"colors\"\nformat = \"mcr-palette\"\nregion = \"maincpu\"\noffset = 0x800\n\n\
-             [asset.at]\ntapperg = 0x900\n",
-            mcr_91490_map("tapper", "Tapper", &SETS)
+             [asset.at]\nmadeupd = 0x900\n",
+            mcr_91490_map("madeupa", "Made Up", &SETS)
         );
         let map = ArcadeMap::parse(&text).unwrap();
-        let mut gfx = decoded("tapper", 0);
+        let mut gfx = decoded("madeupa", 0);
         let program: Vec<u8> = (0..0xA00u32).map(|i| (i * 7 % 251) as u8).collect();
         gfx.regions.insert("maincpu".into(), program.clone());
         let (files, lifted) = lift(&gfx, &map, &text).unwrap();
@@ -847,7 +847,7 @@ mod tests {
         );
         let colors = read_palette(&file("colors.toml")).unwrap();
         assert_eq!(colors[1], palette_color(program[0x802], program[0x803]));
-        // Tapper's loader: the first byte's high nibble goes a bit down
+        // The program's loader: the first byte's high nibble goes a bit down
         // and its low nibble stays ($FF $00 is 0x07F); the second byte
         // turned right twice gives bit 7 up ($00 $02 is 0x080) and, from
         // its low bit, the ninth ($00 $04 is 0x100); $12 $08 is 0x08 or
@@ -856,9 +856,9 @@ mod tests {
         assert_eq!(palette_color(0x00, 0x02), 0x080);
         assert_eq!(palette_color(0x00, 0x04), 0x100);
         assert_eq!(palette_color(0x12, 0x08), 0x00A);
-        // tapperg's table is elsewhere.
+        // madeupd's table is elsewhere.
         let mut g = gfx;
-        g.set = "tapperg".into();
+        g.set = "madeupd".into();
         let (files, _) = lift(&g, &map, &text).unwrap();
         let f = files.iter().find(|f| f.name == "colors.toml").unwrap();
         let colors = read_palette(std::str::from_utf8(&f.bytes).unwrap()).unwrap();
@@ -879,7 +879,7 @@ mod tests {
     fn a_font_lifts_its_tiles_and_names_its_glyphs() {
         let text = format!(
             "{}\n[[asset]]\nname = \"font\"\nformat = \"mcr-font\"\nregion = \"gfx1\"\nfirst = 0x100\ncount = 16\nper_row = 16\ncharset = [[0, \"0123456789\"], [12, \"AB\"]]\n",
-            mcr_91490_map("tapper", "Tapper", &SETS)
+            mcr_91490_map("madeupa", "Made Up", &SETS)
         );
         let map = ArcadeMap::parse(&text).unwrap();
         let font = map.assets.iter().find(|a| a.name == "font").unwrap();
@@ -887,7 +887,7 @@ mod tests {
         assert_eq!(font.glyph('B'), Some(0x10D));
         assert_eq!(font.glyph('C'), None);
         assert_eq!(font.image_size(), (128, 8));
-        let gfx = decoded("tapper", 3);
+        let gfx = decoded("madeupa", 3);
         let (files, lifted) = lift(&gfx, &map, &text).unwrap();
         assert_eq!(lifted.len(), 3);
         let f = files.iter().find(|f| f.name == "font.png").unwrap();
@@ -901,7 +901,7 @@ mod tests {
                 .map(|f| f.bytes.clone())
                 .ok_or_else(|| std::io::Error::other("missing"))
         };
-        let mut back = decoded("tapper", 9);
+        let mut back = decoded("madeupa", 9);
         unpack(&mut back, &map, &read).unwrap();
         assert!(back.tiles == gfx.tiles);
         let no_charset = text.replace("charset = [[0, \"0123456789\"], [12, \"AB\"]]\n", "");
@@ -918,7 +918,7 @@ mod tests {
                 .to_string()
                 .contains("past")
         );
-        let on_tiles = mcr_91490_map("tapper", "Tapper", &SETS)
+        let on_tiles = mcr_91490_map("madeupa", "Made Up", &SETS)
             .replace("per_row = 32\n", "per_row = 32\ncharset = [[0, \"0\"]]\n");
         assert!(
             ArcadeMap::parse(&on_tiles)

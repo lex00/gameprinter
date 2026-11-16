@@ -794,7 +794,7 @@ end = 192
         assert_eq!(p.stands[0], [24, 176]);
     }
 
-    /// A shell walker in Super Mario Bros.' style (walk, fall, a stomp that
+    /// A shell walker in a classic platformer's style (walk, fall, a stomp that
     /// leaves a shell, a kick), made of platformer components with made-up
     /// numbers, added to Moss Hop: the composed model compiles and its
     /// reachability is Moss Hop's, since the player's mechanics didn't

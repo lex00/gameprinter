@@ -9,7 +9,7 @@
 //! |---|---|
 //! | `corpus` | Replays the corpus plan's clips (the same play once for all clips that share it) and looks for the test inside each clip |
 //! | `script` | Plays the row's `try` steps (`gp mechanic probe`'s steps) from its `from` start |
-//! | `autoplay` | Runs Tapper's auto-player, `gp mechanic autoplay --search` (gp_arcade::autoplay, inside gp), from power-on once, and from each row's near point (a save point) on, and looks in its logs (arcade only) |
+//! | `autoplay` | Runs the game's own auto-player, `gp mechanic autoplay --search` (the game's checks.toml [autoplay]), from power-on once, and from each row's near point (a save point) on, and looks in its logs (arcade only) |
 //! | `search` | Seeded presses from the row's near points, as `gp capture dense`'s generator makes them, kept when the test holds |
 //! | `demo` | `gp mechanic demo` with Laya, when Laya answers (it has no row's test yet, so it only says so) |
 //!
@@ -35,7 +35,7 @@
 //! hold = 1                 # frames in a row it must hold
 //! near = "mode == 0"       # where the hard stretch begins: the start point
 //! slots = { at = 0xE2C2, stride = 4, count = 8 }  # `@K` in a test: byte K of any slot
-//! from = "tapper.l4.001@120"  # the script's start (power-on, ID, ID@F, ID@end, SESSION:N@F)
+//! from = "game.l4.001@120"  # the script's start (power-on, ID, ID@F, ID@end, SESSION:N@F)
 //! try = ["T 30", ". 60"]   # scripted presses
 //! where = "..."; do = "..."; stop = "..."   # the person's request
 //! ```
@@ -326,14 +326,14 @@ fn step_seeing(
     if !targets.is_empty()
         && let OriginalRuntime::Arcade(a) = o
     {
-        a.tapper_mut().set_trace(true);
+        a.mcr_mut().set_trace(true);
         let stepped = a.advance(&gp_runtime::InputFrame {
             buttons: f.buttons_word(),
             axes: Vec::new(),
             reset: f.reset,
         });
-        let trace = a.tapper_mut().take_trace();
-        a.tapper_mut().set_trace(false);
+        let trace = a.mcr_mut().take_trace();
+        a.mcr_mut().set_trace(false);
         stepped.map_err(anyhow::Error::msg)?;
         ran.extend(
             trace
@@ -485,8 +485,8 @@ struct AutoplayBin {
 }
 
 /// The auto-player: `--autoplay`, else $GP_AUTOPLAY, else this gp's own
-/// `gp mechanic autoplay` (gp_arcade::autoplay), which every published gp
-/// carries.
+/// `gp mechanic autoplay`, which runs the game's own auto-player (its
+/// checks.toml [autoplay]).
 fn autoplay_bin(given: Option<&Path>) -> Option<AutoplayBin> {
     let other = |p: PathBuf, how: &str| AutoplayBin {
         said: format!("{} ({how})", p.display()),

@@ -99,7 +99,7 @@ pub struct Options {
     /// Frames a track needs before it's bound to RAM.
     pub min_frames: usize,
     /// How many bytes of each frame's RAM to search: [`RAM`] for the NES,
-    /// an arcade board's work RAM for it (Tapper's is 2048 too, at E000).
+    /// an arcade board's work RAM for it (a Midway MCR board's is 2048 too, at E000).
     pub ram: usize,
 }
 
@@ -139,7 +139,7 @@ pub struct Report {
 impl Report {
     /// Moves every RAM address it names by `base`: the tracker counts from
     /// the start of the RAM it searched, which is 0 on the NES and, say,
-    /// 0xE000 for Tapper's work RAM.
+    /// 0xE000 for an MCR board's work RAM.
     pub fn rebase(&mut self, base: u16) {
         let field = |f: &mut slots::Field| f.ram = f.ram.wrapping_add(base);
         if let Some(p) = &mut self.player {

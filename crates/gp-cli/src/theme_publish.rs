@@ -3,8 +3,8 @@
 //! (gp_package, docs/theme-packages.md), checked, signed, kept in the local
 //! store, copied to the mirrors and listed in its game's themes index,
 //! `themes/index/<game>.toml`, through the gate. A game is a template's
-//! `template.game` (Donkey Kong JU and Original Edition are both
-//! `donkey-kong`), else its id.
+//! `template.game` (two versions of one game, each its own template, are
+//! both that game), else its id.
 //!
 //! Two kinds of package: a look package (`look/`, drawn by gp) for a game
 //! with no ROM art, and a source package (the theme's own files and
@@ -71,9 +71,10 @@ pub struct PublishArgs {
     /// themes/index/<game>.toml).
     #[arg(long, value_name = "FILE")]
     pub index: Option<PathBuf>,
-    /// The template whose gate lands the index change.
-    #[arg(long, default_value = "donkey-kong")]
-    pub gate: PathBuf,
+    /// The template whose gate lands the index change (default: the game
+    /// the games checkout's page.toml names).
+    #[arg(long)]
+    pub gate: Option<PathBuf>,
     /// Write the index file in place instead of landing it through the
     /// gate (for a fork's own index, or a test's).
     #[arg(long)]
@@ -112,9 +113,10 @@ pub struct RecheckArgs {
     /// The index file (default: the repo's themes/index/<game>.toml).
     #[arg(long, value_name = "FILE")]
     pub index: Option<PathBuf>,
-    /// The template whose gate lands the index change.
-    #[arg(long, default_value = "donkey-kong")]
-    pub gate: PathBuf,
+    /// The template whose gate lands the index change (default: the game
+    /// the games checkout's page.toml names).
+    #[arg(long)]
+    pub gate: Option<PathBuf>,
     /// Write the index file in place instead of landing it through the
     /// gate (for a fork's own index, or a test's).
     #[arg(long)]
@@ -125,7 +127,7 @@ pub struct RecheckArgs {
     pub dry_run: bool,
     /// Recheck a theme in this registry instead (a folder, git:PATH or
     /// s3://BUCKET): GAME and THEME are then package names (GAME
-    /// lex00/donkey-kong, THEME friend/night). The version the game's list
+    /// acme/rooftop, THEME friend/night). The version the game's list
     /// names is fetched by its id and read as the page's lift reads it,
     /// over --rom or a ROM of the game in $GP_ROM_DIR, and the result goes
     /// into that version's line of by-game/ as `recheck` (the date, pass or
@@ -829,7 +831,7 @@ fn land_index(
     repo: &Path,
     ipath: &Path,
     new_index: &str,
-    (no_gate, gate): (bool, &Path),
+    (no_gate, gate): (bool, Option<&Path>),
     msg: &str,
     work: &Path,
     tag: &str,
@@ -849,11 +851,20 @@ fn land_index(
         let patch = whole_file_patch(&rel.to_string_lossy(), &old, new_index);
         let pfile = work.join(format!("index-{tag}.patch"));
         fs::write(&pfile, patch)?;
+        let gate = match gate {
+            Some(g) => g.to_owned(),
+            None => crate::theme_template::games_root()
+                .and_then(|g| crate::theme_template::page_game(&g))
+                .map(PathBuf::from)
+                .context(
+                    "no --gate: give the template whose gate lands the index change, or a games checkout whose page.toml names a game (game = \"FOLDER\")",
+                )?,
+        };
         let exe = std::env::current_exe()?;
         let g = Command::new(exe)
             .current_dir(repo)
             .args(["model", "gate"])
-            .arg(gate)
+            .arg(&gate)
             .arg("--patch")
             .arg(&pfile)
             .arg("-m")
@@ -1339,7 +1350,7 @@ pub(crate) fn publish(a: &PublishArgs, paths: &Paths, rec: &mut RunRecorder) -> 
         &repo,
         &ipath,
         &new_index,
-        (a.no_gate, &a.gate),
+        (a.no_gate, a.gate.as_deref()),
         &msg,
         &work,
         &id[..12],
@@ -1721,7 +1732,7 @@ pub(crate) fn recheck(a: &RecheckArgs, paths: &Paths, rec: &mut RunRecorder) -> 
         &repo,
         &ipath,
         &new_index,
-        (a.no_gate, &a.gate),
+        (a.no_gate, a.gate.as_deref()),
         &msg,
         &work,
         &tag,

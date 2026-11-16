@@ -16,7 +16,7 @@
 //! guards); where paths meet, only the guards both share stay.
 //!
 //! Jumps stay in the activation wherever they land, so a tail two routines
-//! share (Tapper's `jp $60b8`, the jump through a table) is read in each
+//! share (a `jp` to a jump through a table) is read in each
 //! one's state. What it reads is kept as events, per activation: reads,
 //! writes, steps, branch tests, calls, jumps through a register, ports, and
 //! reads of the R register. The rules in [`super::rules`] read the events.
@@ -1650,8 +1650,8 @@ impl<'a> Reader<'a> {
                 break;
             }
             let t = self.board.word(e);
-            // A table's routines are near it (Tapper's within a few
-            // hundred bytes); a word far off is data past the table's end.
+            // A table's routines are near it (within a few hundred
+            // bytes in the programs seen); a word far off is data past the table's end.
             let near = t.abs_diff(at) <= TABLE_REACH;
             if !looks_like_code(self.board, t) || !near || (t >= at && t < e.wrapping_add(2)) {
                 if known.is_none() {

@@ -29,7 +29,7 @@ use crate::scenario::{self as sc, Started};
 
 #[derive(Args)]
 pub struct SolveArgs {
-    /// The game's package folder (games/donkey-kong), with its corpus.
+    /// The game's package folder (games/rooftop), with its corpus.
     pub game: PathBuf,
     /// The run's name, as `gp corpus score --run` names it: its starts and
     /// score caches are kept under $GP_HOME.

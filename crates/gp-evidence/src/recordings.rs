@@ -43,7 +43,7 @@ pub struct IndexEntry {
     pub id: Hash,
     /// RFC 3339.
     pub created_at: String,
-    /// Source ID from the registry, such as `smb1-ntsc-prg0`, when known.
+    /// Source ID from the registry, such as `rooftop-ntsc-prg0`, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     pub frames: u64,
@@ -479,14 +479,14 @@ mod tests {
         fs::write(
             &path,
             format!(
-                "{{\"id\":\"{id}\",\"created_at\":\"2026-10-27T00:00:00Z\",\"source\":\"smb1-ntsc-prg0\",\"frames\":1800,\"name\":\"smb-run-right\"}}\n"
+                "{{\"id\":\"{id}\",\"created_at\":\"2026-10-27T00:00:00Z\",\"source\":\"rooftop-ntsc-prg0\",\"frames\":1800,\"name\":\"rooftop-run-right\"}}\n"
             ),
         )
         .unwrap();
         let e = resolve(&store, &id.to_hex()[..6]).unwrap();
         assert_eq!(
             (e.name.as_str(), e.notes, e.golden),
-            ("smb-run-right", None, false)
+            ("rooftop-run-right", None, false)
         );
     }
 

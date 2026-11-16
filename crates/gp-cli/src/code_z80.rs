@@ -18,7 +18,7 @@
 //! target, an interrupt handler, a jump table's entry, or an entry; each
 //! instruction belongs to the nearest routine at or below it.
 //!
-//! Tapper's main CPU sees 56 KB of ROM at 0000-DFFF with no banking (the
+//! The MCR main CPU sees 56 KB of ROM at 0000-DFFF with no banking (the
 //! board has no bank switch: mcr.rs maps it whole), so an address is a
 //! place in one chip; the sound CPU's 16 KB is at 0000-3FFF.
 //!
@@ -32,7 +32,7 @@ use anyhow::{Context as _, Result, bail};
 use gp_arcade::dasm::{self, Flow, Insn};
 use gp_arcade::levels::{CpuLevels, EdgeKind, Levels, Watcher};
 use gp_arcade::romset::{self, Region};
-use gp_arcade::{Controls, Romset, Tapper};
+use gp_arcade::{Controls, Mcr, Romset};
 use gp_evidence::input_log::InputFrame;
 use serde_json::{Value, json};
 
@@ -93,7 +93,7 @@ pub(crate) fn insn_at(set: &Romset, cpu: usize, pc: u16) -> Option<Insn> {
 pub(crate) fn run_clips(set: &Romset, clips: &[ClipInput], window: (u64, u64)) -> Result<Levels> {
     let mut levels = Levels::default();
     for clip in clips {
-        let mut t = Tapper::power_on(set);
+        let mut t = Mcr::power_on(set);
         let mut w = Watcher::new(false);
         for (i, f) in clip.inputs.iter().enumerate() {
             let c = controls(f).with_context(|| format!("clip {}, frame {}", clip.id, i + 1))?;
@@ -119,9 +119,9 @@ pub(crate) fn run_input(set: &Romset, inputs: &[InputFrame]) -> Result<Levels> {
 pub(crate) fn run_input_with(
     set: &Romset,
     inputs: &[InputFrame],
-    each: &mut dyn FnMut(&gp_arcade::levels::Watched, &Tapper),
+    each: &mut dyn FnMut(&gp_arcade::levels::Watched, &Mcr),
 ) -> Result<Levels> {
-    let mut t = Tapper::power_on(set);
+    let mut t = Mcr::power_on(set);
     let mut w = Watcher::new(false);
     for f in inputs {
         let seen = w.step_quiet(&mut t, controls(f)?);
@@ -610,9 +610,9 @@ fn index_offset(s: &str, x: char) -> Option<u8> {
 /// The callback fields the `jp (hl)` at `pc` jumps through: in the
 /// straight run before it, H and L loaded from one record (`ld h,(ix+a)`,
 /// `ld l,(ix+b)`) with nothing after them writing H or L, in a routine
-/// that loads the list's base into that index register. Tapper's timers
+/// that loads the list's base into that index register. A game's timers
 /// (a list of records, each a count and the routine to run when it ends)
-/// are run this way.
+/// may be run this way.
 fn callback_fields(
     insns: &BTreeMap<u16, Insn>,
     routines: &BTreeMap<u16, &'static str>,
@@ -1383,7 +1383,7 @@ pub(crate) fn coverage(set: &Romset, levels: &Levels) -> Value {
 pub(crate) fn tables(set: &Romset, inputs: &[InputFrame], index: u16) -> Result<(String, Value)> {
     use gp_arcade::dasm::{Addr, Ptr, reg};
     use gp_arcade::mcr::AccessKind;
-    let mut t = Tapper::power_on(set);
+    let mut t = Mcr::power_on(set);
     // (reader pc) -> index value -> addresses read
     let mut reads: BTreeMap<u16, BTreeMap<u8, BTreeSet<u16>>> = BTreeMap::new();
     for f in inputs {

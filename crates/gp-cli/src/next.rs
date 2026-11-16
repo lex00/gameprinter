@@ -1165,7 +1165,7 @@ const OFF_TARGET: &[&str] = &[
 ];
 
 /// The explanation of what Game Printer makes (PRODUCT-REVIEW.md, 2d).
-const EXPLAIN: &str = "Game Printer writes down how a game plays: what moves, how fast, what happens when things touch. That written-down game is the model, and a web page plays it, so nothing gets installed. The pictures, sounds and level layouts come from your own copy of the game, read inside your browser and never sent anywhere. It never writes or changes a ROM file.";
+const EXPLAIN: &str = "Game Printer lets you create original games that run in your browser with nothing to install. It has powerful tools to help you port mechanics from your old ROMs and breathe new life into old games. It never writes or changes a ROM file.";
 
 /// One clue, when one applies: what the page saw first, then what the
 /// files show.

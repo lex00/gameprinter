@@ -1,6 +1,6 @@
 # Games made here (the originals)
 
-Brought from game-printer's docs/originals.md with the three originals, Badge In, Signal Failure and Swing State, which live in `templates/` beside Moss Hop. Rivet Rodeo, the original derived from Donkey Kong's template, is retired and not here. The Super Mario Bros. template the originals took mechanics from (`smb1-ntsc-prg0`) isn't carried either: its `inspired-by:` refs and `[[inspired_by]]` entries are provenance, read as data.
+Brought from game-printer's docs/originals.md with the three originals, Badge In, Signal Failure and Swing State, which live in `templates/` beside Moss Hop. Rivet Rodeo, the original derived from Donkey Kong's template, is retired and not here. The Super Mario Bros. template the originals took mechanics from (`smb1-ntsc-prg0`) isn't carried either. Its `inspired-by:` refs and `[[inspired_by]]` entries are provenance, read as data, and since 2026-11-15 they name it only as `platformer`, with neutral entity paths (`entities.player.run` for its player's run), so the tools' files name no game.
 
 A game made here is a template written directly as a model, with no old game behind it. The recipe and some of the code call these the originals (`just originals`, `source.how = "authored"`), and this page does too; elsewhere in the docs "the original" is only the old game being ported. Each plays in the interpreter like any model; the `.nes` data image `gp template build` writes is an internal file the lift reads, and nothing plays it. Its levels and tilesets, tables and palettes are written by hand as data. Its tiles are generated stubs, and its runs are recorded on the model itself. This page covers the first three originals and the tooling they exercise: authored assets and model baselines recorded by search, reachability and composed mechanics with "inspired by" provenance, and the mechanic index that `registry_search` searches. It is the first and second bullets of Milestone 5 in [the roadmap](../ROADMAP.md). The templates are content for the tooling: they give the model and interpreter, composition and reachability, and the templates, stubs and MCP tools something new to run on that isn't Moss Hop or a commercial game.
 
@@ -185,8 +185,8 @@ Each taken value's evidence says where it came from and what was converted, with
 
 ```toml
 [[inspired_by]]
-template = "smb1-ntsc-prg0"
-took = ["entities.goomba.walk", "entities.goomba.fall", "entities.koopa_green.machine", "entities.bullet_bill.fly"]
+template = "platformer"
+took = ["entities.walker.walk", "entities.walker.fall", "entities.shell.machine", "entities.bullet.fly"]
 into = ["entities.middle_manager.walk", "entities.middle_manager.fall", "entities.printer.machine", "entities.reply_all.fly"]
 note = "Speeds kept at their ratio to the player's walk; the sliding shell kills instead of hurting; frames and sprites dropped"
 ```

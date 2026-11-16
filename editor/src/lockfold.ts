@@ -72,7 +72,7 @@ const FIELD: Record<string, string> = {
 
 const ORDINAL = ["", "second ", "third ", "fourth ", "fifth "];
 
-/** A measure as a person says it: "Mario's speed up and down", "the score", "the view's position across". */
+/** A measure as a person says it: "Hero's speed up and down", "the score", "the view's position across". */
 export function measureName(g: GameWords | undefined, path: string): string {
   const m = /^entities\.([a-z0-9_]+)\[(\d+)\]\.([a-z_]+)$/.exec(path);
   if (m) {
@@ -115,7 +115,7 @@ export function seconds(frame: number): string {
 /**
  * The one-line summary: what agrees on every frame, and what splits first
  * and when. "The two agree on the score and the coins on every frame;
- * Mario's speed up and down splits first, at 5.8 seconds (jump)."
+ * Hero's speed up and down splits first, at 5.8 seconds (jump)."
  */
 export function lockSummary(g: GameWords | undefined, ls: Lockstep): string {
   const together = ls.paths.filter((p) => !p.first_split).map((p) => measureName(g, p.path));
@@ -398,7 +398,7 @@ export function focusMisses(ls: Lockstep, f: Focus): Miss[] {
   return out.sort((a, b) => b.apart - a.apart || a.first - b.first);
 }
 
-/** A miss in words: "Mario's position across: apart on 280 of 300 frames, up to 3 px". */
+/** A miss in words: "Hero's position across: apart on 280 of 300 frames, up to 3 px". */
 export function missLine(g: GameWords | undefined, m: Miss): string {
   const unit = measureUnit(m.path);
   const up = unit.startsWith("apart") ? "" : `, up to ${fmt(m.max)}${unit ? ` ${unit}` : ""}`;
@@ -509,7 +509,7 @@ export function driftAt(ls: Lockstep, from: number, to = Infinity): DriftAt | un
   return undefined;
 }
 
-/** A drift in words: "They drifted apart here: Mario's height, 2.4 px (more than 2 px)". */
+/** A drift in words: "They drifted apart here: Hero's height, 2.4 px (more than 2 px)". */
 export function driftWords(g: GameWords | undefined, d: DriftAt): string {
   const unit = measureUnit(d.path);
   const u = unit && !unit.startsWith("apart") ? ` ${unit}` : "";

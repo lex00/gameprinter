@@ -38,10 +38,10 @@ pub enum ClipCmd {
     /// presses file. Prints the file and the frame the clip starts at, the
     /// frame to give `gp interp compare --from`.
     Log {
-        /// The game's package folder (games/donkey-kong).
+        /// The game's package folder (games/GAME).
         game: PathBuf,
         /// The clip: SESSION:N (jump:3), a clip of the game's mechanic
-        /// sessions, or a clip of the game's corpus by its ID (dk.hammer.018).
+        /// sessions, or a clip of the game's corpus by its ID (hop.jump.018).
         clip: String,
         /// Where to write it, `-` for standard output (default: CLIP.log or
         /// SESSION-NNN.log in the output folder,
@@ -61,9 +61,9 @@ pub enum ClipCmd {
     /// clip and prints the state hash at its start and end; a mechanic
     /// session's clip must replay to the start state it recorded
     Presses {
-        /// The game's package folder (games/tapper).
+        /// The game's package folder (games/GAME).
         game: PathBuf,
-        /// The clip's ID in the corpus (tapper.serve.001).
+        /// The clip's ID in the corpus (rooftop.serve.001).
         id: String,
         /// A clip of the game's mechanic sessions, MECHANIC/N (serve/1).
         #[arg(long, conflicts_with_all = ["log", "start"])]
@@ -100,7 +100,7 @@ pub enum ClipCmd {
     /// writes one frame's picture beside its sprite mask in red (outside
     /// any repo)
     Screen {
-        /// The game's package folder (games/tapper).
+        /// The game's package folder (games/GAME).
         game: PathBuf,
         /// A clip of the game's corpus by its ID.
         clip: String,
@@ -123,10 +123,10 @@ pub enum ClipCmd {
     /// both lockstep JSONs and its score into OUT/CLIP/ (OUT/SESSION-NNN/
     /// for a session's clip). Refuses a sealed session.
     Score {
-        /// The game's package folder (games/donkey-kong).
+        /// The game's package folder (games/GAME).
         game: PathBuf,
         /// Clips: SESSION:N, SESSION for every clip of a mechanic session,
-        /// or a clip of the game's corpus by its ID (dk.hammer.018).
+        /// or a clip of the game's corpus by its ID (hop.jump.018).
         #[arg(required_unless_present = "all")]
         clips: Vec<String>,
         /// Every clip of every mechanic session of the game, leaving out

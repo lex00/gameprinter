@@ -1,5 +1,5 @@
 //! Arcade boards, emulated to match MAME frame by frame. The first is
-//! Midway's MCR with the 91490 CPU board, as in Tapper (MAME's `rbtapper`).
+//! Midway's MCR with the 91490 CPU board (MAME's `mcr_91490`).
 //!
 //! # Why a port of MAME's own code
 //!
@@ -28,9 +28,11 @@
 //! # Using it
 //!
 //! ```no_run
-//! # use gp_arcade::{Controls, Romset, Tapper};
-//! let rom = Romset::load_zip("rbtapper.zip".as_ref()).unwrap();
-//! let mut t = Tapper::power_on(&rom);
+//! # use gp_arcade::{Controls, Romset, Mcr};
+//! // The set's chip list comes from its game's roms.toml (romset).
+//! gp_arcade::romset::add_games_dir("GAMES/NAME".as_ref()).unwrap();
+//! let rom = Romset::load_zip("SET.zip".as_ref()).unwrap();
+//! let mut t = Mcr::power_on(&rom);
 //! t.step(Controls { coin: true, ..Controls::default() });
 //! let ram = t.ram_record(); // the oracle's 5,760-byte layout
 //! let snap = t.snapshot();
@@ -38,7 +40,7 @@
 //! # let _ = (ram, t.picture_hash(), t.state_hash());
 //! ```
 //!
-//! [`Tapper`] has what gp_runtime::Runtime needs, in the shape gp-nes's
+//! [`Mcr`] has what gp_runtime::Runtime needs, in the shape gp-nes's
 //! `Nes` gives it to `NesRuntime`: `step` runs one frame (one 30 Hz video
 //! frame, ending where MAME's does, at the start of VBLANK) with a frame's
 //! controls; `frame`, `peek` and `ram_record` read it; `snapshot`,
@@ -49,8 +51,9 @@
 //! wrapper is [`ArcadeRuntime`] ([`protocol`], with its selectors).
 //!
 //! examples/compare.rs plays an oracle capture's input log and checks
-//! every frame against MAME; tests/rbtapper.rs does the same in
-//! `cargo test` when the romset and captures are on the machine.
+//! every frame against MAME; tests/oracle_mcr.rs does the same in
+//! `cargo test` for the game $GP_GAME_DIR names, when its romset and
+//! captures are on the machine.
 //!
 //! # The crate's name
 //!
@@ -59,7 +62,6 @@
 //! them. The MCR board itself is one module, `mcr`.
 
 pub mod attotime;
-pub mod autoplay;
 pub mod canonical;
 pub mod ctc;
 pub mod dasm;
@@ -83,13 +85,15 @@ pub mod video;
 pub mod z80;
 
 pub use joystick::FourWay;
-pub use mcr::{Controls, Tapper};
+pub use mcr::{Controls, Mcr};
 
 /// What made a snapshot: a start cache keys its snapshots by it, so a
 /// change to the board's emulation or its snapshot bumps it, by hand.
 /// mcr 2: the AYs make sound, and their generators are in the snapshot.
 /// mcr 3: the watchdog resets the board; the tilt switch.
-pub const RUNTIME_VERSION: &str = concat!("gp-arcade ", env!("CARGO_PKG_VERSION"), " mcr 3");
+/// mcr 4: the snapshot starts `gp-arcade mcr 3` (mcr::SNAPSHOT_MAGIC), so
+/// every state hash changed.
+pub const RUNTIME_VERSION: &str = concat!("gp-arcade ", env!("CARGO_PKG_VERSION"), " mcr 4");
 pub use protocol::ArcadeRuntime;
 pub use romset::Romset;
 

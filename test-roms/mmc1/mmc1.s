@@ -1,6 +1,6 @@
 ; An MMC1 (mapper 1) test program of our own, for `gp testroms run`
 ; (docs/test-roms.md). The pinned test ROM collection has no MMC1 test that
-; reports a result, and Mega Man 2 is MMC1.
+; reports a result, and commercial NES games use MMC1.
 ;
 ; The cartridge is SKROM-shaped: 256KB PRG ROM in 16 banks of 16KB, 128KB
 ; CHR ROM in 32 banks of 4KB, and 8KB PRG RAM at $6000. The first byte of

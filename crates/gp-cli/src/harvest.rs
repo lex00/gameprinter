@@ -946,7 +946,7 @@ pub(crate) fn harvest(
             .map(|(k, v)| format!("{k} {v}"))
             .collect();
         text.push_str(&format!(
-            "  type {}: first in {} at frame {}, {} frames out in {} levels; {} routine(s), branches both ways {}, one way {}, never reached {}; with Mario: {}\n",
+            "  type {}: first in {} at frame {}, {} frames out in {} levels; {} routine(s), branches both ways {}, one way {}, never reached {}; with the player: {}\n",
             t["type"].as_str().unwrap_or(""), t["first_level"].as_str().unwrap_or(""), t["first_frame"], t["frames_active"], t["levels"],
             t["routines"].as_array().map_or(0, Vec::len), t["branches_both"], t["branches_one_way"], t["branches_never"],
             if inter.is_empty() { "nothing seen".to_owned() } else { inter.join(", ") }
@@ -1147,7 +1147,7 @@ fn replay_arcade(
     known: &BTreeSet<u16>,
 ) -> Result<Replay> {
     let set = gp_arcade::Romset::from_zip(rom)?;
-    let mut t = gp_arcade::Tapper::power_on(&set);
+    let mut t = gp_arcade::Mcr::power_on(&set);
     let n = log.frames.len();
     let mut out = Replay {
         ram: Vec::with_capacity(n),

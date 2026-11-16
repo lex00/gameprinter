@@ -15,7 +15,7 @@
 //! `--diff-reach` and `--cites` stay the NES's: an arcade `gp reach
 //! --write` holds counts by chip, not instruction starts, and the
 //! templates' cite index reads addresses from $8000 up (the NES's program),
-//! where Tapper's code is 0000-DFFF.
+//! where the MCR program is 0000-DFFF.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -557,14 +557,17 @@ mod tests {
         assert_eq!(c.keys().next().map(|k| k.0), Some(0));
     }
 
-    /// With the rbtapper romset: an idle run's later frames, by routine,
+    /// With a real romset ($GP_GAME_DIR's first oracle set): an idle run's later frames, by routine,
     /// hold the interrupt handler, and against its first frames the diff
     /// names what only one side ran. Skipped without it.
     #[test]
     fn a_window_reads_by_routine_of_both_cpus() {
-        let Some(zip) = gp_arcade::romset::local_romset("rbtapper") else {
-            eprintln!("skipped: no rbtapper romset");
-            return;
+        let (_, zip) = match gp_arcade::romset::test_oracle_set_path() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("skipped: {e}");
+                return;
+            }
         };
         let set = Romset::from_zip(&std::fs::read(zip).unwrap()).unwrap();
         let clip = ClipInput {

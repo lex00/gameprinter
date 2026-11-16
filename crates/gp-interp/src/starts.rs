@@ -54,7 +54,7 @@ impl Near {
         }
     }
 
-    /// A short key for IDs: `start`, `pit`, `enemy-goomba`.
+    /// A short key for IDs: `start`, `pit`, `enemy-walker`.
     pub fn key(&self) -> String {
         match self {
             Near::LevelStart => "start".into(),
@@ -77,12 +77,12 @@ pub struct FoundStart {
     /// The model level the original is in.
     pub level: String,
     pub near: Near,
-    /// "Mario standing on the ground at 3.7 s, nothing near".
+    /// "Hero standing on the ground at 3.7 s, nothing near".
     pub says: String,
     /// Standing still (else only on the ground).
     pub still: bool,
     /// Why the rebuilt game can't start here, when it can't: "enemies
-    /// aren't carried over yet: the original has a goomba here".
+    /// aren't carried over yet: the original has a walker here".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cant: Option<String>,
 }
@@ -648,17 +648,17 @@ mod tests {
         assert_eq!(Near::Pit.words(), "before the first pit");
         assert_eq!(
             Near::Enemy {
-                entity: "koopa_green".into()
+                entity: "shell_green".into()
             }
             .words(),
-            "near the first koopa green"
+            "near the first shell green"
         );
         assert_eq!(
             Near::Enemy {
-                entity: "goomba".into()
+                entity: "walker".into()
             }
             .key(),
-            "enemy-goomba"
+            "enemy-walker"
         );
     }
 }

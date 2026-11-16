@@ -1122,7 +1122,7 @@
                 },
                 "label": {
                   "default": "",
-                  "description": "What was pointed at, in plain words (\"a brick\", \"the goomba\").",
+                  "description": "What was pointed at, in plain words (\"a brick\", \"the walking enemy\").",
                   "type": "string"
                 },
                 "recording": {

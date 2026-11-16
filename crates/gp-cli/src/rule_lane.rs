@@ -1,9 +1,9 @@
 //! `gp rule lane`: the rule for a player who moves between lanes, as
-//! Tapper's bartender moves between the bars. Fitted from the clips and
+//! a server moves between the bars of an arcade bar game. Fitted from the clips and
 //! checked against the original frame by frame, as `gp rule jump` is.
 //!
 //! The player's bytes are the lane (0 the lane whose number is lowest:
-//! Tapper's bottom bar, its y counting up the screen), x and y. They come from
+//! the bottom bar, its y counting up the screen), x and y. They come from
 //! the flags or from the state mapping: `entities.player[0].x` and `.y`,
 //! and `entities.player[0].lane`; each lane's tap, where it has one, from
 //! `entities.tap[K].x` (or `--tap`, one per lane, lane 0 first).
@@ -46,7 +46,7 @@ use crate::Outcome;
 
 #[derive(Args, Debug)]
 pub(crate) struct LaneArgs {
-    /// The game's package folder (games/tapper).
+    /// The game's package folder (games/acme).
     pub game: PathBuf,
     /// The mechanic sessions whose clips to use (default: every one).
     #[arg(long = "session")]

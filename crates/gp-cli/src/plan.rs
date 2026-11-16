@@ -5,8 +5,8 @@
 //!
 //! Each clip is a start and presses from there, as canonical `.presses`
 //! files in `inputs/` (`gp-presses 0`, `frames N`, a span a line), a frame
-//! count, and metadata that isn't hashed. A plan names no probes: Donkey
-//! Kong's clips don't use them yet, so a clip made by a probe is refused.
+//! count, and metadata that isn't hashed. A plan names no probes: the
+//! ported games' clips don't use them yet, so a clip made by a probe is refused.
 //!
 //! A plan loads as the same [`ClipSet`] the older `clips.toml` does, so
 //! everything after loading is the same code; only curves differ, being

@@ -23,7 +23,7 @@ pub const POLL: Duration = Duration::from_secs(2);
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NextArgs {
-    /// The game, by its folder's name in the games checkout (donkey-kong).
+    /// The game, by its folder's name in the games checkout (rooftop).
     /// Default: the game whose page was opened last, or the only game.
     #[serde(default)]
     pub game: Option<String>,
@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn a_game_name_is_a_folder_name() {
-        assert!(game_ok("donkey-kong") && game_ok("t_1"));
+        assert!(game_ok("harbor-lights") && game_ok("t_1"));
         assert!(!game_ok("../x") && !game_ok("") && !game_ok("a b"));
     }
 
@@ -200,7 +200,7 @@ mod tests {
         let r = next(
             &config,
             NextArgs {
-                game: Some("tapper".into()),
+                game: Some("rooftop".into()),
                 copy: None,
                 wait_s: 0,
             },
@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(r.json["next"]["who"], "person");
         assert_eq!(r.json["changed"], false);
         let args = std::fs::read_to_string(d.path().join("args")).unwrap();
-        assert_eq!(args.trim(), "--json progress --next --template tapper");
+        assert_eq!(args.trim(), "--json progress --next --template rooftop");
         assert!(
             next(
                 &config,

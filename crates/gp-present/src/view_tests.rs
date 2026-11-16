@@ -135,7 +135,7 @@ fn the_sprite_limit_drops_bodies_past_eight_sprites_on_a_line() {
 
 /// Core `present.sprite_order`: the NES drops sprites line by line, by
 /// their place in the table, so a body sharing only some lines with a
-/// full row loses those lines alone (Original Edition's 50m: a moving
+/// full row loses those lines alone (one game's second stage: a moving
 /// ladder's lower sprites on the lines its pies crowd).
 #[test]
 fn the_limit_drops_the_lines_a_later_body_shares() {
@@ -407,7 +407,7 @@ fn the_viewer_never_changes_the_world() {
 fn a_body_in_the_name_table_takes_no_sprites() {
     let p = limited(false);
     let mut s = row(6, 100);
-    // The first two are background tiles (Donkey Kong): the rest fit.
+    // The first two are background tiles (as one ported game draws some): the rest fit.
     s.name_table = vec![true, true, false, false, false, false];
     let win = window(&p.screen, [0, 0], None, None, false);
     assert!(over_limit(&p, &s, &win, 0).iter().all(|h| !h));

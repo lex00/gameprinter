@@ -166,16 +166,21 @@ pub fn asset_pattern(format: &str, name: &str, columns: &[String]) -> &'static s
                 .iter()
                 .any(|c| words.iter().any(|w| c.to_ascii_lowercase().contains(w)))
     };
-    match format {
-        "chr-2bpp" | "mm2-chr-uploads" => return "tile graphics",
-        "palette" | "mm2-palettes" => return "palettes",
-        "metatiles" | "mm2-metatiles" => return "metatile sets",
-        "smb-area-objects" | "smb2-level-objects" | "mm2-screens" | "mm2-overlay-sets" => {
+    match gp_model::map_format_name(format) {
+        "chr-2bpp" | "nes-chr-uploads-v1" => return "tile graphics",
+        "palette" | "nes-palette-sets-v1" => return "palettes",
+        "metatiles" | "nes-metatiles-4x4-v1" => return "metatile sets",
+        "nes-area-objects-v1"
+        | "nes-area-objects-v2"
+        | "nes-screens-v1"
+        | "nes-overlay-sets-v1" => {
             return "object lists";
         }
-        "smb-enemy-objects" | "smb2-enemy-objects" | "mm2-spawns" => return "spawn lists",
+        "nes-spawn-objects-v1" | "nes-spawn-objects-v2" | "nes-spawn-objects-v3" => {
+            return "spawn lists";
+        }
         "pointers" => return "pointer tables",
-        "smb-music" => return "music and sound",
+        "nes-music-v1" => return "music and sound",
         "ppu-strings" => return "text",
         "blobs" => return "code and other bytes",
         _ => {}
@@ -1034,6 +1039,18 @@ mod tests {
     #[test]
     fn asset_patterns_by_format_and_name() {
         assert_eq!(asset_pattern("chr-2bpp", "x", &[]), "tile graphics");
+        // A renamed format, by its old name and its new.
+        for (old, new, pattern) in [
+            ("smb-area-objects", "nes-area-objects-v1", "object lists"),
+            ("mm2-spawns", "nes-spawn-objects-v3", "spawn lists"),
+            ("smb-music", "nes-music-v1", "music and sound"),
+            ("mm2-chr-uploads", "nes-chr-uploads-v1", "tile graphics"),
+            ("mm2-palettes", "nes-palette-sets-v1", "palettes"),
+            ("mm2-metatiles", "nes-metatiles-4x4-v1", "metatile sets"),
+        ] {
+            assert_eq!(asset_pattern(old, "x", &[]), pattern, "{old}");
+            assert_eq!(asset_pattern(new, "x", &[]), pattern, "{new}");
+        }
         assert_eq!(
             asset_pattern("table", "player_physics", &[]),
             "physics tables"

@@ -118,15 +118,15 @@ pub enum OracleCmd {
     /// recording. Every class must be triaged and none a fork bug; then the
     /// verdict is stored with the triage records it relied on, and the
     /// recordings log gets a golden entry. Exits 1 if it can't be golden.
-    /// An arcade recording is held to a MAME capture that
-    /// oracle/mame-captures.toml names (`--against tapper-m3b-cycle`),
-    /// checked by its hash: golden when it ran the capture's input and
-    /// every frame matches.
+    /// An arcade recording is held to a MAME capture that a game's
+    /// oracle/mame-captures.toml names (`--against NAME`), checked by its
+    /// hash: golden when it ran the capture's input and every frame
+    /// matches.
     Golden {
         /// The gp-nes recording.
         id: String,
         /// The Mesen recording of the same run; for an arcade recording,
-        /// a capture oracle/mame-captures.toml names.
+        /// a capture a game's oracle/mame-captures.toml names.
         #[arg(long)]
         against: String,
         /// The gp-nes recording's ROM, if it isn't in $GP_ROM_DIR.
@@ -141,7 +141,7 @@ pub enum OracleCmd {
     /// `just check-mesen` runs it. Known fork bugs are listed but don't
     /// fail it. Baselines without their ROM in $GP_ROM_DIR are skipped. Exits
     /// 1 if a class isn't triaged or two platforms' Mesen runs differ. A
-    /// captures file (oracle/mame-captures.toml) plays each capture's input
+    /// game's captures file (GAME/oracle/mame-captures.toml) plays each capture's input
     /// on gp-arcade against the MAME capture it names by hash, kept under
     /// $GP_HOME/work/oracle/; a capture not on this machine is skipped with
     /// the command that makes it, and one that differs on a frame fails.
@@ -1000,7 +1000,7 @@ fn check(
             .map(|p| arch(Some(p)))
             .collect::<Result<_>>()?
     };
-    // A captures file (oracle/mame-captures.toml) is the arcade's: its
+    // A game's captures file (GAME/oracle/mame-captures.toml) is the arcade's: its
     // input logs on gp-arcade against the MAME captures it names.
     let (captures, list): (Vec<PathBuf>, Vec<PathBuf>) = list
         .into_iter()

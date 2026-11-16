@@ -637,10 +637,10 @@ pub(crate) fn run_romset(set: &gp_arcade::Romset, paths: &Paths) -> Result<Ran> 
     let mut changed: BTreeSet<u32> = BTreeSet::new();
     let mut frames = 0u64;
     for c in &clips {
-        let mut t = gp_arcade::Tapper::power_on(set);
+        let mut t = gp_arcade::Mcr::power_on(set);
         let mut w = gp_arcade::levels::Watcher::new(false);
         let ram =
-            |t: &gp_arcade::Tapper| -> Vec<u8> { (RAM_BASE..RAM_END).map(|a| t.peek(a)).collect() };
+            |t: &gp_arcade::Mcr| -> Vec<u8> { (RAM_BASE..RAM_END).map(|a| t.peek(a)).collect() };
         let mut before = ram(&t);
         for f in &c.inputs {
             let bits = f.buttons_word();
@@ -1241,9 +1241,9 @@ pub(crate) fn grade_keyed(key: &Key, d: &Dataset) -> Keyed {
         st_el.stated += 1;
         let mut seen = vec!["match"];
         let mut wrong = Vec::new();
-        if let (Some(kk), Some(dk)) = (&e.kind, s(r, "kind")) {
+        if let (Some(kk), Some(dd)) = (&e.kind, s(r, "kind")) {
             seen.push("kind");
-            if kk != dk {
+            if kk != dd {
                 wrong.push("kind");
             }
         }

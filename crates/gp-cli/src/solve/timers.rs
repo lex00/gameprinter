@@ -330,7 +330,7 @@ mod tests {
             &whole(&[100, 100, 200])
         ));
         assert!(!count_like(
-            "entities.mario[0].x",
+            "entities.frog[0].x",
             &[ONE / 2, ONE],
             &[ONE, ONE]
         ));

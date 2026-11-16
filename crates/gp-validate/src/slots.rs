@@ -75,7 +75,7 @@ impl Rows {
                     continue;
                 }
                 // In whole pixels on both sides: a slot's position can be
-                // whole pixels only (Super Mario Bros.' y has no fraction
+                // whole pixels only (one platformer's y has no fraction
                 // byte), and 0.9375 a frame then moves 4 pixels in most
                 // windows, not 3.75.
                 for (side, from, to) in [(&mut original, a.1, b.1), (&mut model, a.2, b.2)] {
@@ -121,7 +121,7 @@ fn fields_of(model: &Model, entity: &str, report: &SlotReport) -> Vec<String> {
 }
 
 /// Whether an entity moves by an `ext` hook rather than walking: a walker
-/// with a hook (Super Mario Bros.' spiny, for its egg) is a walker.
+/// with a hook (a platformer's thrown enemy, for its egg) is a walker.
 fn hook_of(model: &Model, entity: &str) -> bool {
     model
         .entities
@@ -225,7 +225,7 @@ pub fn evaluate(plan: &Plan, model: &Model, reports: &[SlotReport], rows: &Rows)
                 out.push(o);
                 continue;
             };
-            // A hook that draws random bytes chooses by them (Donkey Kong's
+            // A hook that draws random bytes chooses by them (one game's
             // barrels at a ladder and after a fall), and the body beside the
             // slot draws its own, not the original's, so its path and its
             // turns aren't the slot's. The clip scorer, which gives the
@@ -357,10 +357,10 @@ mod tests {
         // still (stomped) while the body walks on, then a gap.
         for f in 0..12u64 {
             let o = f.min(4) as i64 * 32768;
-            rows.push(&row("goomba", 1, f, o, f as i64 * 32768));
+            rows.push(&row("walker", 1, f, o, f as i64 * 32768));
         }
-        rows.push(&row("goomba", 1, 40, 0, 0));
-        let (a, b) = rows.speeds("goomba", "x", false);
+        rows.push(&row("walker", 1, 40, 0, 0));
+        let (a, b) = rows.speeds("walker", "x", false);
         assert_eq!(profile::mode(&a), Some(Fixed::from_raw(32768)));
         assert_eq!(profile::mode(&b), Some(Fixed::from_raw(32768)));
         // The original's windows that end standing still are left out; the
@@ -369,29 +369,44 @@ mod tests {
         assert_eq!(b.len(), 8);
     }
 
+    /// The game folder the games checkout's page.toml names (`game =
+    /// "FOLDER"`): the checkout is $GP_GAMES_DIR, else `games` beside this
+    /// repo. None without one.
+    fn page_game() -> Option<std::path::PathBuf> {
+        let games = std::env::var_os("GP_GAMES_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../games")
+            });
+        let page: toml::Value =
+            toml::from_str(&std::fs::read_to_string(games.join("page.toml")).ok()?).ok()?;
+        Some(games.join(page.get("game")?.as_str()?))
+    }
+
     /// A hooked entity whose hook drew in the run is left unmeasured: the
-    /// body beside the slot drew its own bytes. Donkey Kong's barrels
+    /// body beside the slot drew its own bytes. One ported game's barrels
     /// choose ladders by the random byte, and their speed and period
     /// failed against the original's slots on every recording.
     #[test]
     fn a_hook_that_draws_is_left_unmeasured() {
-        // The games checkout beside this one; skipped without it.
-        let dir =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../games/donkey-kong");
-        if !dir.join("model.toml").is_file() {
+        // The games checkout's page game, with an entity moved by a hook;
+        // skipped without one.
+        let Some(dir) = page_game().filter(|d| d.join("model.toml").is_file()) else {
             return;
-        }
+        };
         let model =
             Model::parse(&std::fs::read_to_string(dir.join("model.toml")).unwrap()).unwrap();
         let contract = gp_contract::Contract::parse(
             &std::fs::read_to_string(dir.join("fidelity.toml")).unwrap(),
         )
         .unwrap();
-        let slotted = BTreeSet::from(["barrel".to_owned()]);
+        let Some(hooked) = model.entities.keys().find(|e| hook_of(&model, e)).cloned() else {
+            return;
+        };
+        let slotted = BTreeSet::from([hooked.clone()]);
         let plan = crate::compile::compile_with_slots(&model, &contract, &slotted).unwrap();
-        assert!(hook_of(&model, "barrel"));
         let report = |drew: bool| SlotReport {
-            entity: "barrel".into(),
+            entity: hooked.clone(),
             lives: 1,
             frames: 10,
             drew,

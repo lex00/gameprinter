@@ -642,7 +642,7 @@ esac
         }
 
         fn submit(&self, dir: &Path, dry_run: bool) -> Outcome {
-            let games = ["lex00/donkey-kong".to_owned()];
+            let games = ["acme/rooftop".to_owned()];
             let work = self.d.path().join("work");
             run(
                 &Submission {
@@ -720,7 +720,7 @@ esac
         );
         let by_game = out(
             &w.fork(),
-            &["show", &format!("{branch}:by-game/lex00/donkey-kong.toml")],
+            &["show", &format!("{branch}:by-game/acme/rooftop.toml")],
         );
         assert!(by_game.contains("package = \"friend/night\""), "{by_game}");
         assert!(

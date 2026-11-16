@@ -83,6 +83,13 @@ export class NesPlayer {
     return i;
   }
 
+  /** Gives an arcade board the sets it may load (a roms.toml's
+   * [[source.chip]] rows; gp_sets_load). The NES's module has none. */
+  sets(text) {
+    if (!this.x.gp_sets_load) return;
+    const b = enc.encode(text);
+    this.check(this.x.gp_sets_load(this.put(b), b.length));
+  }
   /** Powers a ROM on in a slot. */
   power(slot, rom) {
     this.check(this.x.gp_play_load(slot, this.put(rom), rom.length));

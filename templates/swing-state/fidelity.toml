@@ -20,7 +20,7 @@ level = "exact"
 [[rule]]
 path = "entities.candidate.jump"
 level = "metric"
-note = "Super Mario Bros.' jump, held to its tolerances"
+note = "The source platformer's jump, held to its tolerances"
 
 [rule.tolerance]
 airtime = 2

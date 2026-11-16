@@ -361,7 +361,7 @@ freeze = true
             ("counters.c_E3F3+1k".into(), json!("E3F3+1k")),
         ];
         let model = model.split("[entities.player]").next().unwrap();
-        let m = mapping(&facts, &json!([]), model, "tapper", Console::Arcade).unwrap();
+        let m = mapping(&facts, &json!([]), model, "acme", Console::Arcade).unwrap();
         assert!(m.fields.is_empty());
         assert_eq!(m.ignored, ["0xE08A", "0xE090", "0xE16C"]);
         assert!(m.text.contains("platform = \"arcade\""));

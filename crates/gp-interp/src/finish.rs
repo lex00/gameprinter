@@ -7,7 +7,7 @@
 //! | Kind | What the model says | What finishes it |
 //! |---|---|---|
 //! | Crossed on a carrier | A body the level's ground holds (platformer `level.ground.bodies`), moved by the model each frame, that the player stands on and rides | The goal reached, as for any stage |
-//! | Ended by a condition | No goal; the game's rules end the stage some other way (Donkey Kong's 100m when every rivet is taken: its pickups' counters and a hook's event) | Play leaves the stage with the player alive and the game moves on to another level |
+//! | Ended by a condition | No goal; the game's rules end the stage some other way (one game's last stage when every rivet is taken: its pickups' counters and a hook's event) | Play leaves the stage with the player alive and the game moves on to another level |
 //!
 //! The search plays the stage as the game reaches it ([`crate::stage::enter`]),
 //! everything in it: enemies, timers, hooks and the game's rules. From

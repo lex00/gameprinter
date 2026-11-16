@@ -350,7 +350,7 @@ fn slot_asset<'a>(
             "asset slot `{slot}` names `{}`, which the asset map doesn't have",
             from.asset
         ))?;
-    if !kind.map_formats().contains(&a.format.name()) {
+    if !kind.takes(a.format.name()) {
         return Err(format!(
             "asset slot `{slot}` names `{}`, which is {}, not {}",
             from.asset,
@@ -1533,7 +1533,7 @@ y = 191
     }
 
     /// The same made-up scene drawn twice: once with its positions the
-    /// sprite RAM's bytes (an unmarked model, as Tapper's is today), once
+    /// sprite RAM's bytes (an unmarked model, as one arcade port's is today), once
     /// in the board's own units (a mapping's `board_units`), top left and
     /// y down. The board's picture, what it lists as drawn and a theme's
     /// draw of a sprite are the same, pen for pen and pixel for pixel.

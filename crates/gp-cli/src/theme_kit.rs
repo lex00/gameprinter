@@ -276,7 +276,7 @@ pub fn scrub(text: &str, names: &mut BTreeSet<String>) -> String {
     s
 }
 
-/// An identifier with any name in it hidden: `pauline_shown` -> `x_shown`.
+/// An identifier with any name in it hidden: `wren_shown` -> `x_shown`.
 fn redact(id: &str, names: &BTreeSet<String>) -> String {
     id.split('.')
         .map(|part| {
@@ -332,7 +332,7 @@ pub fn names_of(m: &Model) -> BTreeSet<String> {
 }
 
 /// An entity's art slot id: `entity.<name>`, or by its role where the
-/// name is a character's (`entity.npc.pauline` -> `entity.npc_1`).
+/// name is a character's (`entity.npc.wren` -> `entity.npc_1`).
 pub fn entity_id(name: &str, role: &str, names: &BTreeSet<String>) -> String {
     if redact(name, names) == name && name.split('_').all(|w| GENERIC.contains(&w)) {
         format!("entity.{name}")
@@ -1698,19 +1698,16 @@ mod tests {
     fn scrub_leaves_out_names_and_addresses() {
         let mut names = BTreeSet::new();
         assert_eq!(
-            scrub("Donkey Kong, who throws the barrels ($EB06)", &mut names),
+            scrub("Grumble Ogre, who throws the barrels ($EB06)", &mut names),
             "who throws the barrels"
         );
-        assert!(names.contains("kong"));
-        assert_eq!(scrub("Mario", &mut names), "");
+        assert!(names.contains("ogre"));
+        assert_eq!(scrub("Pip", &mut names), "");
         assert_eq!(
             scrub("A fire out of the oil drum", &mut names),
             "a fire out of the oil drum"
         );
-        assert_eq!(
-            redact("pauline_shown", &["pauline".into()].into()),
-            "x_shown"
-        );
+        assert_eq!(redact("wren_shown", &["wren".into()].into()), "x_shown");
     }
 
     #[test]
@@ -1865,7 +1862,7 @@ mod tests {
     }
 
     /// Every template's kit.toml holds the fingerprint its model gives now,
-    /// words file and all; Donkey Kong's two versions differ.
+    /// words file and all; two versions of one game differ.
     #[test]
     fn templates_kits_hold_their_models_fingerprint() {
         // gameprinter: its own templates (game-printer's had every game's).

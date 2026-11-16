@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Result, bail};
 use gp_arcade::dasm::{self, Flow, Insn, reg};
 use gp_arcade::mcr::{Access, AccessKind, Trace};
-use gp_arcade::{Controls, Romset, Tapper};
+use gp_arcade::{Controls, Mcr, Romset};
 use gp_evidence::input_log::InputFrame;
 use serde_json::{Value, json};
 
@@ -45,7 +45,7 @@ pub(crate) struct Ran {
     pub(crate) accesses: Vec<Vec<Access>>,
 }
 
-pub(crate) fn run_frame(t: &mut Tapper, c: Controls) -> Ran {
+pub(crate) fn run_frame(t: &mut Mcr, c: Controls) -> Ran {
     let (trace, acc) = crate::draws_find_z80::frame(t, c);
     let mut accesses = Vec::with_capacity(trace.len());
     let mut j = 0;
@@ -317,7 +317,7 @@ pub(crate) fn inputs(
             inputs.len() - start
         );
     }
-    let mut t = Tapper::power_on(set);
+    let mut t = Mcr::power_on(set);
     for f in &inputs[..start] {
         t.step(controls(f));
     }

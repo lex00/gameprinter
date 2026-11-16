@@ -72,8 +72,7 @@ pub struct GateArgs {
     /// since no score compares a clip that is gone.
     #[arg(long = "removes", value_name = "ID")]
     pub removes: Vec<String>,
-    /// Score the tip and stop: no patch, nothing lands. The tool gate's
-    /// canary runs this through the patched gp and compares the rows.
+    /// Score the tip and stop: no patch, nothing lands.
     #[arg(long, conflicts_with = "patch")]
     pub score_only: bool,
     /// Apply the patch only as it is. By default a patch that no longer
@@ -1703,8 +1702,7 @@ pub(crate) fn first_baseline(rows: &Rows) -> std::result::Result<String, String>
     ))
 }
 
-/// `--score-only`: the tip scored, and nothing lands. The tool gate's
-/// canary runs this through the patched gp and compares the rows.
+/// `--score-only`: the tip scored, and nothing lands.
 fn score_only(c: &Ctx, rom: &[u8]) -> Result<Outcome> {
     let tip = git(&c.repo, &["rev-parse", &c.onto])?;
     let started = std::time::Instant::now();
@@ -2011,7 +2009,7 @@ pub(crate) fn unnamed_removals(
         return None;
     }
     Some(format!(
-        "the patch removes {n} clip{} from the corpus without naming {}: {}. No score compares a clip that is gone, so a patch that means to remove clips names them: `--removes ID` (repeated, or a pattern such as `dk.climb-sweep.*`)",
+        "the patch removes {n} clip{} from the corpus without naming {}: {}. No score compares a clip that is gone, so a patch that means to remove clips names them: `--removes ID` (repeated, or a pattern such as `mosshop.hop-sweep.*`)",
         if n == 1 { "" } else { "s" },
         if n == 1 { "it" } else { "them" },
         each.join("; ")
@@ -2200,8 +2198,8 @@ mod tests {
     /// its own), so only the changed parts are left.
     #[test]
     fn changed_parts_are_read_from_the_texts() {
-        let a = "[entities.player.jump]\nland_hold = 4\n[entities.barrel]\nsize = [8, 8]\n";
-        let b = "[entities.player.jump]\nland_hold = 5\n[entities.barrel]\nsize = [8, 8]\n";
+        let a = "[entities.player.jump]\nland_hold = 4\n[entities.enemy]\nsize = [8, 8]\n";
+        let b = "[entities.player.jump]\nland_hold = 5\n[entities.enemy]\nsize = [8, 8]\n";
         assert_eq!(
             changed_parts(a, b).unwrap(),
             vec!["entities.player.jump".to_owned()]
@@ -2210,17 +2208,17 @@ mod tests {
 
     #[test]
     fn a_patch_takes_the_lane_its_files_need() {
-        let g = "donkey-kong";
+        let g = "mosshop";
         let lane = |fs: &[&str]| lane_of(&fs.iter().map(|f| f.to_string()).collect::<Vec<_>>(), g);
-        assert_eq!(lane(&["donkey-kong/NOTES.md", "README.md"]), Lane::Free);
+        assert_eq!(lane(&["mosshop/NOTES.md", "README.md"]), Lane::Free);
         assert_eq!(
-            lane(&["donkey-kong/themes/kit/a.pix", "donkey-kong/x.md"]),
+            lane(&["mosshop/themes/kit/a.pix", "mosshop/x.md"]),
             Lane::Picture
         );
-        assert_eq!(lane(&["donkey-kong/model.toml"]), Lane::Picture);
-        assert_eq!(lane(&["donkey-kong/mapping.toml"]), Lane::Behaviour);
+        assert_eq!(lane(&["mosshop/model.toml"]), Lane::Picture);
+        assert_eq!(lane(&["mosshop/mapping.toml"]), Lane::Behaviour);
         assert_eq!(
-            lane(&["donkey-kong/ext/src/lib.rs", "donkey-kong/x.md"]),
+            lane(&["mosshop/ext/src/lib.rs", "mosshop/x.md"]),
             Lane::Behaviour
         );
         assert_eq!(lane(&["other/model.toml"]), Lane::Behaviour);
@@ -2605,39 +2603,39 @@ mod tests {
         assert!(e.ends_with("conflicts in g/model.toml"), "{e}");
         assert_eq!(run(&["status", "--porcelain", "--untracked-files=no"]), "");
         assert!(canonical_file("templates/mosshop/model.toml"));
-        assert!(canonical_file("donkey-kong/fidelity.toml"));
-        assert!(!canonical_file("donkey-kong/themes/model.toml"));
+        assert!(canonical_file("mosshop/fidelity.toml"));
+        assert!(!canonical_file("mosshop/themes/model.toml"));
     }
 
     /// The loads guard: a ROM the package loads only to play, named as the
-    /// corpus's target or the template's source, is refused; Donkey Kong's
-    /// own layout (OE scored, JU played) passes.
+    /// corpus's target or the template's source, is refused; a game with
+    /// one ROM scored and another only played passes.
     #[test]
     fn a_rom_loaded_only_to_play_is_never_a_source() {
         let t = tempfile::tempdir().unwrap();
         let d = t.path();
-        let (oe, ju) = ("a".repeat(64), "b".repeat(64));
+        let (scored, played) = ("a".repeat(64), "b".repeat(64));
         fs::write(
             d.join("package.toml"),
             format!(
-                "[[rom.entry]]\nid = \"g-oe\"\nrole = \"scored\"\nsha256 = \"{oe}\"\n\n[[rom.entry]]\nid = \"g-ju\"\nrole = \"play\"\nsha256 = \"{ju}\"\n"
+                "[[rom.entry]]\nid = \"g-scored\"\nrole = \"scored\"\nsha256 = \"{scored}\"\n\n[[rom.entry]]\nid = \"g-played\"\nrole = \"play\"\nsha256 = \"{played}\"\n"
             ),
         )
         .unwrap();
         fs::write(
             d.join("template.toml"),
-            format!("[source]\nid = \"g-oe\"\naccepts = [\"{oe}\"]\n\n[[loads]]\nsource = \"g-ju\"\naccepts = [\"{ju}\"]\n"),
+            format!("[source]\nid = \"g-scored\"\naccepts = [\"{scored}\"]\n\n[[loads]]\nsource = \"g-played\"\naccepts = [\"{played}\"]\n"),
         )
         .unwrap();
         fs::write(
             d.join("corpus.toml"),
-            format!("[target]\ngame = \"g-oe\"\nrom = \"{oe}\"\n"),
+            format!("[target]\ngame = \"g-scored\"\nrom = \"{scored}\"\n"),
         )
         .unwrap();
         assert!(loads_problems(d).is_empty());
         fs::write(
             d.join("corpus.toml"),
-            format!("[target]\ngame = \"g-oe\"\nrom = \"{ju}\"\n"),
+            format!("[target]\ngame = \"g-scored\"\nrom = \"{played}\"\n"),
         )
         .unwrap();
         let p = loads_problems(d);
@@ -2646,20 +2644,8 @@ mod tests {
             p[0].starts_with("corpus.toml [target] rom names bbbb"),
             "{p:?}"
         );
-        fs::write(d.join("template.toml"), "[source]\nid = \"g-ju\"\n").unwrap();
+        fs::write(d.join("template.toml"), "[source]\nid = \"g-played\"\n").unwrap();
         assert_eq!(loads_problems(d).len(), 2);
-    }
-
-    /// Donkey Kong in the games checkout beside this repo, when it's there,
-    /// passes the loads guard.
-    #[test]
-    fn donkey_kong_names_no_play_only_rom_as_a_source() {
-        let dk = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../games/donkey-kong");
-        if !dk.join("package.toml").is_file() {
-            eprintln!("no games checkout beside this repo; skipped");
-            return;
-        }
-        assert_eq!(loads_problems(&dk), Vec::<String>::new());
     }
 }
 
@@ -2795,7 +2781,7 @@ fn status_line(c: &Ctx, commit: &str, base: &Rows, new: &Rows) -> String {
     }
 }
 
-/// A clip ID's mechanic session and clip number: `dk.clear-25m.001`.
+/// A clip ID's mechanic session and clip number: `mosshop.clear-1.001`.
 fn session_of(id: &str) -> (String, Option<u64>) {
     let mut parts = id.rsplitn(2, '.');
     let n = parts.next().and_then(|n| n.parse().ok());
@@ -2960,7 +2946,7 @@ mod status_tests {
 
     fn row(id: &str, together: u64, frames: u64) -> (String, Row) {
         let first = (together < frames).then(
-            || json!({"frame": together, "original_frame": together + 100, "path": "mario.x"}),
+            || json!({"frame": together, "original_frame": together + 100, "path": "player.x"}),
         );
         (
             id.to_owned(),
@@ -2978,11 +2964,17 @@ mod status_tests {
     #[test]
     fn a_landing_writes_the_status_the_quest_log_reads() {
         let d = tempfile::tempdir().unwrap();
-        let base = vec![row("dk.walk.001", 100, 100), row("dk.jump.001", 40, 80)];
-        let new = vec![row("dk.walk.001", 100, 100), row("dk.jump.001", 80, 80)];
+        let base = vec![
+            row("mosshop.walk.001", 100, 100),
+            row("mosshop.jump.001", 40, 80),
+        ];
+        let new = vec![
+            row("mosshop.walk.001", 100, 100),
+            row("mosshop.jump.001", 80, 80),
+        ];
         let f = write_status(
             d.path(),
-            "dk",
+            "mosshop",
             "0123456789ab",
             ("Jump fixed", "2026-11-12"),
             "h",
@@ -2998,7 +2990,7 @@ mod status_tests {
         assert!(v["merges"][0]["rows"].get("walk").is_none());
         let f = write_status(
             d.path(),
-            "dk",
+            "mosshop",
             "fedcba98",
             ("Again", "2026-11-12"),
             "h",
@@ -3011,6 +3003,6 @@ mod status_tests {
             (v["version"].as_u64(), v["merges"].as_array().unwrap().len()),
             (Some(2), 2)
         );
-        assert_eq!(v["clips"][1]["first_split"]["what"], "mario.x apart");
+        assert_eq!(v["clips"][1]["first_split"]["what"], "player.x apart");
     }
 }

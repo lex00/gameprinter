@@ -1,5 +1,5 @@
 //! What blind discovery looks for past x and the jump (Wave T, from
-//! modelling Tapper by hand): which of two bytes that move alike is the
+//! modelling an arcade game by hand): which of two bytes that move alike is the
 //! one the game copies from, a player who changes lanes instead of
 //! jumping, a button held for a while (a pour) instead of pressed, and the
 //! score, for progress where x doesn't go anywhere. Each runs from a

@@ -358,7 +358,7 @@ impl Seek for Warm<'_> {
                 None => crate::arcade_rec::open(store, manifest, set, at)?,
             };
             if self.session.slot_bytes == 0 {
-                let state = base.tapper().snapshot().len();
+                let state = base.mcr().snapshot().len();
                 let rom = set.maincpu.len() + set.ssiocpu.len() + set.gfx1.len() + set.gfx2.len();
                 self.session.slot_bytes = slot_bytes(state, base.hashes().len(), rom);
             }

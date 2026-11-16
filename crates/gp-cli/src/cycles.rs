@@ -77,10 +77,10 @@ pub enum CyclesCmd {
         from: u64,
         #[arg(long)]
         to: u64,
-        /// The idle loop's first instruction, hex (Donkey Kong: c7e1).
+        /// The idle loop's first instruction, hex (one NES game's: c7e1).
         #[arg(long)]
         idle: String,
-        /// RAM bytes the machine keeps, as `lo-hi` hex (Donkey Kong's random
+        /// RAM bytes the machine keeps, as `lo-hi` hex (one NES game's random
         /// bytes: 18-1f).
         #[arg(long, default_value = "")]
         keep: String,
@@ -486,7 +486,7 @@ pub(crate) fn run(cmd: &CyclesCmd, paths: &Paths) -> Result<Outcome> {
 }
 
 /// Closes the open calls a routine left by pulling its return address
-/// (Donkey Kong's $E0F1 at $E107: PLA, PLA, then an RTS to its caller's
+/// (one NES game's $E0F1 at $E107: PLA, PLA, then an RTS to its caller's
 /// caller): at an RTS or RTI with the stack pointer at `sp`, each call
 /// whose return address sat below it has ended, its cycles to the end of
 /// this instruction counted. Without it the handler's call stack never

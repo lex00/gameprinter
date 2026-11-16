@@ -54,7 +54,7 @@ mod tests {
     }
 
     /// How many frames a mapper-set mirroring bit may take to stop mattering:
-    /// Super Mario Bros. 2 writes MMC3's mirroring register by frame 4.
+    /// one MMC3 game writes MMC3's mirroring register by frame 4.
     const MIRRORING_SETTLES_BY: usize = 8;
 
     /// A copy of `raw` with junk a dump can carry: archaic bytes in the

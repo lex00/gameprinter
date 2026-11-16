@@ -557,7 +557,7 @@ pub fn parse_movie(path: &Path, bytes: &[u8]) -> Result<Movie> {
 }
 
 /// Reads a MAME input recording (gp_arcade::inp) into an arcade log, with
-/// Tapper's columns.
+/// the MCR board's columns.
 pub fn parse_inp(bytes: &[u8]) -> Result<Movie> {
     let inp = gp_arcade::inp::parse(bytes, MAX_FRAMES).map_err(anyhow::Error::msg)?;
     // The tilt switch is the oracle's eighth column, named only when used.
@@ -861,7 +861,7 @@ pub fn parse_bk2(bytes: &[u8]) -> Result<Movie> {
         bail!("the movie runs in PAL mode; only NTSC is recorded");
     }
     // BizHawk names the ROM by `SHA1`, or for some games by `MD5`, the
-    // headerless MD5 (TASVideos 6366M, Super Mario Bros. 2).
+    // headerless MD5 (TASVideos 6366M, for one NES game).
     let rom_hash = header.get("SHA1").map(|v| bk2_hash(v)).or_else(|| {
         header
             .get("MD5")
@@ -1025,7 +1025,7 @@ fn bk2_input(text: &str) -> Result<(u8, Vec<InputFrame>)> {
 mod tests {
     use super::*;
 
-    const FM2: &str = "version 3\nemuVersion 22020\nrerecordCount 5\npalFlag 0\nromFilename smb\nromChecksum base64:jjYwGG411HcjG/j9UOVM3Q==\nguid 00000000-0000-0000-0000-000000000000\nfourscore 0\nmicrophone 0\nport0 1\nport1 1\nport2 0\nFDS 0\nNewPPU 0\n|2|........|........||\n|0|....T...|........||\n|0|R......A|.L......||\n";
+    const FM2: &str = "version 3\nemuVersion 22020\nrerecordCount 5\npalFlag 0\nromFilename hop\nromChecksum base64:jjYwGG411HcjG/j9UOVM3Q==\nguid 00000000-0000-0000-0000-000000000000\nfourscore 0\nmicrophone 0\nport0 1\nport1 1\nport2 0\nFDS 0\nNewPPU 0\n|2|........|........||\n|0|....T...|........||\n|0|R......A|.L......||\n";
 
     #[test]
     fn fm2_buttons_and_checksum() {
@@ -1221,7 +1221,7 @@ mod tests {
         .unwrap();
         assert_eq!(m.rom_hash, None);
         let target = Target {
-            source: Some("smb1-ntsc-prg0".into()),
+            source: Some("acme-ntsc-prg0".into()),
             md5: vec![],
             sha1: vec!["ea343f4e445a9050d4b4fbac2c77d0693b1d0922".into()],
             system: None,
@@ -1323,11 +1323,12 @@ mod tests {
         let mut frames = vec![gp_arcade::Controls::default(); 12];
         frames[3].coin = true;
         frames[7].tap = true;
-        let bytes = gp_arcade::inp::write("tapper", &frames);
+        gp_arcade::testrom::known_made_up_set("madeupa");
+        let bytes = gp_arcade::inp::write("madeupa", &frames);
         let movie = parse_movie(Path::new("x.inp"), &bytes).unwrap();
         assert_eq!(movie.format, "inp");
         let text = movie.log.to_text();
-        assert!(text.starts_with("gp-arcade-input 0\nsystem tapper\ncolumns CSRLDUT\n"));
+        assert!(text.starts_with("gp-arcade-input 0\nsystem madeupa\ncolumns CSRLDUT\n"));
         assert_eq!(InputLog::parse(&text).unwrap().frames.len(), 12);
         assert_eq!(movie.log.frames[3].pads[0], 0x01);
         assert_eq!(movie.log.frames[7].pads[0], 0x40);
@@ -1338,9 +1339,9 @@ mod tests {
             sha1: Vec::new(),
             system: system.map(str::to_owned),
         };
-        assert!(check_identity(&movie, &target(Some("tapper")), &registry).is_ok());
-        let e = check_identity(&movie, &target(Some("rbtapper")), &registry).unwrap_err();
-        assert!(e.to_string().contains("not rbtapper"), "{e}");
+        assert!(check_identity(&movie, &target(Some("madeupa")), &registry).is_ok());
+        let e = check_identity(&movie, &target(Some("madeupb")), &registry).unwrap_err();
+        assert!(e.to_string().contains("not madeupb"), "{e}");
         let e = check_identity(&movie, &target(None), &registry).unwrap_err();
         assert!(e.to_string().contains("NES ROM"), "{e}");
     }

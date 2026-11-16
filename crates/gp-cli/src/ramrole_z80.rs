@@ -20,7 +20,7 @@
 
 use gp_arcade::dasm::{self, Addr, Flow, Insn, Op, reg};
 use gp_arcade::mcr::{Access, AccessKind, Trace};
-use gp_arcade::{Controls, Tapper};
+use gp_arcade::{Controls, Mcr};
 use gp_nes::ramrole::{Classified, RamTrace};
 
 /// The main board's work RAM.
@@ -239,7 +239,7 @@ impl Z80Roles {
 /// One frame of `t` with its trace and access log on, fed to `roles`: both
 /// CPUs' instructions, in time order, for a caller that wants the trace
 /// too (crate::covered's code features).
-pub(crate) fn step(t: &mut Tapper, c: Controls, roles: &mut Z80Roles) -> Vec<Trace> {
+pub(crate) fn step(t: &mut Mcr, c: Controls, roles: &mut Z80Roles) -> Vec<Trace> {
     t.set_trace(true);
     t.set_accesses(true);
     t.step(c);
@@ -289,7 +289,7 @@ pub(crate) mod tests {
     #[test]
     fn a_z80_trace_gives_each_bytes_role() {
         let set = program();
-        let mut t = Tapper::power_on(&set);
+        let mut t = Mcr::power_on(&set);
         let mut r = Z80Roles::new();
         for n in 0..12 {
             step(
@@ -313,7 +313,7 @@ pub(crate) mod tests {
         // the game's.
         assert!(role(0x7ee).is_none() && role(0x7ef).is_none(), "{c:?}");
         // A traced frame ends where an untraced one does.
-        let mut plain = Tapper::power_on(&set);
+        let mut plain = Mcr::power_on(&set);
         for n in 0..12 {
             plain.step(Controls {
                 tap: n % 3 == 0,

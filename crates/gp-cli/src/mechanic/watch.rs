@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn the_game_view_takes_every_topics_watch_files() {
         let d = tempfile::tempdir().unwrap();
-        let game = d.path().join("tapper");
+        let game = d.path().join("made-up");
         let (title, emu) = (game.join("title"), game.join("emulator"));
         fs::create_dir_all(title.join("watch")).unwrap();
         fs::create_dir_all(emu.join("watch")).unwrap();

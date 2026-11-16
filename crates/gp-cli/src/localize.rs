@@ -62,7 +62,7 @@ pub(crate) struct LocalizeArgs {
     #[arg(long)]
     pub rom: Option<std::path::PathBuf>,
     /// The level to look in, by its observe.toml [level] name (game-printer
-    /// defaulted to Super Mario Bros.' w1_1; gameprinter to Donkey Kong's).
+    /// defaulted to its first NES game's w1_1; gameprinter to its first game's).
     #[arg(long, default_value = "main")]
     pub level: String,
     /// The decision server for the probes.
@@ -2648,15 +2648,15 @@ mod out_tests {
     #[test]
     fn out_takes_the_leads_and_runs_out_of_the_home() {
         let home = Path::new("/made/up/home");
-        let a = Cli::try_parse_from(["gp", "tapper", "--out", "/made/up/trial"])
+        let a = Cli::try_parse_from(["gp", "rooftop", "--out", "/made/up/trial"])
             .unwrap()
             .a;
-        assert_eq!(a.leads_dir(home, "tapper"), Path::new("/made/up/trial"));
+        assert_eq!(a.leads_dir(home, "rooftop"), Path::new("/made/up/trial"));
         assert_eq!(a.runs_dir(), Path::new("/made/up/trial/runs"));
-        let a = Cli::try_parse_from(["gp", "tapper"]).unwrap().a;
+        let a = Cli::try_parse_from(["gp", "rooftop"]).unwrap().a;
         assert_eq!(
-            a.leads_dir(home, "tapper"),
-            home.join("work/localize/tapper")
+            a.leads_dir(home, "rooftop"),
+            home.join("work/localize/rooftop")
         );
         assert!(a.runs_dir().ends_with("work/localize/runs"));
     }

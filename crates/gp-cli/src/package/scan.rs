@@ -1484,7 +1484,7 @@ fn press_timings(x: &Text) -> BTreeSet<usize> {
 
 /// Whether a match is allowed as press timings that happen to equal ROM
 /// bytes: a clip's presses are frame numbers in rising order, made by
-/// playing, and a few of them (Tapper's clip matched 7 bytes) can equal a
+/// playing, and a few of them (one arcade game's clip matched 7 bytes) can equal a
 /// rising run in a ROM table by chance, however unlikely the detector's
 /// model says that is. The rule, kept narrow so typed-out ROM data still
 /// fails: the file is a `.presses` file, every number the match covers is

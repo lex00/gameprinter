@@ -35,7 +35,7 @@ const LAYOUTS = {
     footer: "Arrows move, X is A, Z is B, Enter is Start. F5 or the left trigger saves, F8 or the right trigger loads. R or the right bumper records. U turns the sound off and on. Player 2: I J K L move, M is A, N is B, H is Select, Y is Start, or a second controller.",
   },
   // An arcade cabinet, as MAME keys it: 5 drops a coin, 1 is the one-player
-  // start. Coin, start, right, left, down, up, button 1 (Tapper's tap).
+  // start. Coin, start, right, left, down, up, button 1 (an arcade player's first button).
   arcade: {
     fps: 30,
     keys: [["Digit5"], ["Digit1"], ["ArrowRight", "KeyD"], ["ArrowLeft", "KeyA"], ["ArrowDown", "KeyS"], ["ArrowUp", "KeyW"], ["KeyX", "Space"]],
@@ -1117,7 +1117,7 @@ function drawLiveRebuild() {
     return;
   }
   // The preview's canvas is the visible part of the screen (256 by 224 on
-  // Donkey Kong, from y 8): copied pixel for pixel to its place, never
+  // one NES game, from y 8): copied pixel for pixel to its place, never
   // stretched, so the picture stays sharp.
   const g = rbOff.getContext("2d", { willReadFrequently: true });
   g.imageSmoothingEnabled = false;
@@ -2707,6 +2707,12 @@ async function main() {
   const r = await fetch("rom");
   if (!r.ok) throw new Error(`the ROM: ${await r.text()}`);
   rom = new Uint8Array(await r.arrayBuffer());
+  // An arcade board knows a romset by the chip lists gp read from the
+  // games' roms.toml files; the server hands them over first.
+  if (player.x.gp_sets_load) {
+    const sets = await fetch("roms.toml");
+    if (sets.ok) player.sets(await sets.text());
+  }
   player.power(0, rom);
   useMachine(player.info(0));
   showSound();
@@ -2764,7 +2770,7 @@ async function main() {
     if (refineLast && showClip) void refineShow(refineLast);
   });
   // A clip named in REFINE (mechanic/refine/'s "gp-open-clip", a corpus
-  // clip's ID such as dk.walk.003): CLIPS, on the model, at that clip of
+  // clip's ID such as hop.walk.003): CLIPS, on the model, at that clip of
   // its mechanic's session.
   window.addEventListener("gp-open-clip", async (e) => {
     const id = String(e.detail?.clip ?? "");

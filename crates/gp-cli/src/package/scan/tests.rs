@@ -351,9 +351,10 @@ fn a_disagreement_between_package_and_roms_toml_needs_rewrite() {
 /// A place in a romset is named by MAME's region and the chip, not PRG.
 #[test]
 fn a_romset_place_names_its_region_and_chip() {
-    let set = gp_arcade::romset::set("tapper").unwrap();
+    gp_arcade::testrom::known_made_up_set("madeupscan");
+    let set = gp_arcade::romset::set("madeupscan").unwrap();
     let total: usize = set.chips.iter().map(|c| c.size).sum();
-    let s = Source::of_romset("t".into(), "tapper", &vec![0; total], Vec::new());
+    let s = Source::of_romset("t".into(), "madeupscan", &vec![0; total], Vec::new());
     let first = &set.chips[0];
     assert_eq!(
         s.place(0x10),
@@ -420,7 +421,7 @@ fn a_baseline_excuses_the_items_it_lists() {
 /// one in another kind of file isn't.
 #[test]
 fn press_timings_have_an_allowance() {
-    let text = "gp-presses 0\nframes 335\narcade tapper CSRLDUT\ntap@9-41\ndown@51-58\ntap@68-100\nstart1@110-117\n";
+    let text = "gp-presses 0\nframes 335\narcade acmeset CSRLDUT\ntap@9-41\ndown@51-58\ntap@68-100\nstart1@110-117\n";
     let x = super::Text {
         rel: "inputs/a.presses".into(),
         role: super::Role::Whole("clip recipe"),

@@ -26,7 +26,7 @@ use serde_json::json;
 
 #[derive(Args, Debug, Clone)]
 pub struct CarryArgs {
-    /// The game's package folder (games/donkey-kong). In game-printer this
+    /// The game's package folder (games/GAME). In game-printer this
     /// was a capture run.
     pub run: PathBuf,
     /// Also sample the starts' presses from power-on every this many
@@ -261,7 +261,7 @@ pub(crate) fn cli(paths: &gp_evidence::Paths, o: &CarryArgs) -> anyhow::Result<c
                 let vals = gp_interp::translate::read_original(&or, mapping)
                     .map_err(anyhow::Error::msg)?;
                 // On the ground, for a game whose player has a ground; any
-                // polled frame in play for one with none (Tapper's bartender).
+                // polled frame in play for one with none (an arcade game's player behind a counter).
                 if gi.is_some_and(|i| !matches!(vals[i], Value::Flag(true))) {
                     continue;
                 }

@@ -34,7 +34,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use anyhow::{Context as _, Result, bail};
 use gp_arcade::dasm::Flow;
 use gp_arcade::levels::{EdgeKind, Levels, Watcher};
-use gp_arcade::{Controls, Romset, Tapper};
+use gp_arcade::{Controls, Mcr, Romset};
 use gp_explore::presses::Rng;
 use gp_explore::{Drive, Plan};
 
@@ -441,8 +441,8 @@ fn controls(f: &gp_evidence::input_log::InputFrame) -> Result<Controls> {
 }
 
 /// The machine at the end of a clip's input.
-pub(crate) fn run_to_end(set: &Romset, clip: &ClipInput) -> Result<Tapper> {
-    let mut t = Tapper::power_on(set);
+pub(crate) fn run_to_end(set: &Romset, clip: &ClipInput) -> Result<Mcr> {
+    let mut t = Mcr::power_on(set);
     for (i, f) in clip.inputs.iter().enumerate() {
         t.step(controls(f).with_context(|| format!("clip {}, frame {}", clip.id, i + 1))?);
     }
@@ -450,7 +450,7 @@ pub(crate) fn run_to_end(set: &Romset, clip: &ClipInput) -> Result<Tapper> {
 }
 
 /// A candidate's run from a start, watched.
-pub(crate) fn run_from(start: &Tapper, pads: &[u8]) -> Levels {
+pub(crate) fn run_from(start: &Mcr, pads: &[u8]) -> Levels {
     let mut t = start.clone();
     let mut w = Watcher::new(false);
     for &p in pads {
@@ -596,7 +596,7 @@ pub(crate) fn explore_with(
         .map(|&i| graph.name(i))
         .chain(points.iter().map(|p| p.name(&graph)))
         .collect();
-    let starts: Vec<Tapper> = crate::pool::map(
+    let starts: Vec<Mcr> = crate::pool::map(
         &start_clips,
         || (),
         |_, _, c| run_to_end(set, c),
@@ -787,7 +787,7 @@ mod tests {
             ],
             &[0x18, 0xfe],
         );
-        let start = Tapper::power_on(&set);
+        let start = Mcr::power_on(&set);
         let run = run_from(&start, &[0; 3]);
         let map = CodeMap::of(&set, 0, Some(&run.cpus[0]));
         let g = Graph::of(&map);

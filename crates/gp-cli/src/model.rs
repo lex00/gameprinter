@@ -316,7 +316,7 @@ fn check_arcade_slots(
             continue;
         };
         match map.assets.iter().find(|a| a.name == from.asset) {
-            Some(a) if !slot.kind.map_formats().contains(&a.format.name()) => out.push((
+            Some(a) if !slot.kind.takes(a.format.name()) => out.push((
                 format!("assets.{name}.from"),
                 format!(
                     "`{}` is {}, but a {} slot holds {}",
@@ -452,7 +452,7 @@ fn check_slots(model: &Model, map: &AssetMap, checked: &mut Vec<String>) -> Vec<
                 at,
                 format!("{} has no asset named `{}`", map.source, from.asset),
             )),
-            Some(a) if !slot.kind.map_formats().contains(&a.format()) => out.push((
+            Some(a) if !slot.kind.takes(a.format()) => out.push((
                 at,
                 format!(
                     "`{}` is {}, but a {} slot holds {}",

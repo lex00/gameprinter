@@ -4,8 +4,8 @@
 # The tag is gameprinter-mame:<MAME version>-<arch>, set by `just mame-build`.
 #
 # The image holds MAME and the libraries it needs, nothing from any game.
-# The romset, the input log and the capture script are mounted when a
-# container runs, and the romset only read-only.
+# The romset, the input log, the capture script and the game's control
+# table are mounted when a container runs, the romset read-only.
 
 # debian:trixie-slim, the multi-arch index as of 2026-11-04.
 ARG BASE_IMAGE=debian@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
@@ -17,8 +17,9 @@ ARG BASE_IMAGE=debian@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070
 # never expire, hence Check-Valid-Until off.
 ARG DEBIAN_SNAPSHOT=20261104T212339Z
 
-# Debian 13's MAME. rbtapper has been in MAME since long before 0.276, and
-# this version runs it (docs/oracle-mame.md, "The image").
+# Debian 13's MAME. The arcade sets the games use have been in MAME since
+# long before 0.276, and this version runs them (docs/oracle-mame.md, "The
+# image").
 ARG MAME_DEB_VERSION=0.276+dfsg.1-1+deb13u1
 
 FROM ${BASE_IMAGE}

@@ -1,6 +1,6 @@
 //! The `blobs` format: a span of variable-length records that one or more
-//! pointer tables point into, such as Mega Man 2's sprite frames (split
-//! low and high tables, 256 frame numbers each) or Super Mario Bros. 2's
+//! pointer tables point into, such as one NES game's sprite frames (split
+//! low and high tables, 256 frame numbers each) or another's
 //! sound effects (one-byte offsets from the table). The span is cut where
 //! any pointer points, and each piece is a blob. The lifted file lists the
 //! blobs in storage order and gives each pointer as a blob's number, so a

@@ -7,9 +7,9 @@ The mechanics are composed from two sources (docs/originals.md, "Composition"):
 | Part | Taken from | Converted |
 |---|---|---|
 | The associate's run and jump | Moss Hop, `entities.player` | Taken whole: same tile size and frame scale |
-| Middle managers (walk, fall, stomp) | Super Mario Bros., `entities.goomba` | Walk kept at 1/3 of the player's walk, as the goomba's is of Mario's |
-| The printer's jam, kick and slide | Super Mario Bros., `entities.koopa_green.machine` | Slide at twice the player's walk, as the shell's is; a sliding touch kills instead of hurting |
-| Reply-all chains | Super Mario Bros., `entities.bullet_bill.fly` | Speed equal to the player's walk, as the bullet's is |
+| Middle managers (walk, fall, stomp) | A platformer template, `entities.walker` | Walk kept at 1/3 of the player's walk, as the walker's is of that game's player's |
+| The printer's jam, kick and slide | The same template, `entities.shell.machine` | Slide at twice the player's walk, as the shell's is; a sliding touch kills instead of hurting |
+| Reply-all chains | The same template, `entities.bullet.fly` | Speed equal to the player's walk, as the bullet's is |
 
 ## Files
 

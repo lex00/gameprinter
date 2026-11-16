@@ -55,10 +55,12 @@ Loudness correlates below the notes because the player writes constant-volume re
 
 `gp sound drivers` lists the registry (`gp_sound::drivers`). A driver is a sound engine several games share; the registry finds it by the asset map format its music data lifts as, so a new game whose map lifts that format reuses the decoder with no code. An arcade driver whose music data isn't mapped has the format `ay-log`: its decoder reads the songs from the AY-8910 register log the sound program wrote, so it works on any game the board runs, whatever the romset.
 
-| Driver | Format | Decoder | Games |
-|---|---|---|---|
-| `nintendo-dk` | `dk-music` | No: no asset map lifts Donkey Kong's music data yet. `gp sound capture` reads its songs from the APU log, and the model keeps the driver as state (`dk_sound`, below) | `donkey-kong-ju`, `donkey-kong-oe` |
-| `midway-ssio` | `ay-log` | Yes, from an AY register log: each run of frames where a channel sounds, ended by `--gap` frames (60 by default) of silence on all six channels, is a song, holding each channel's notes as `gp sound capture` makes them | `tapper`, `rbtapper`, `tapperg`, `sutapper`, `tappera` |
+Drivers are named by the board or chip they drive. Which game uses which is the game's own fact: each source in its roms.toml names its driver (`sound_driver = "midway-ssio"`), and `gp sound drivers` lists the sources of the games checkout that name each one.
+
+| Driver | Format | Decoder |
+|---|---|---|
+| `nes-apu-music` | `nes-apu-music` | No: no asset map lifts the music data of a game on it yet. `gp sound capture` reads its songs from the APU log, and the model keeps the driver as state (`dk_sound`, below) |
+| `midway-ssio` | `ay-log` | Yes, from an AY register log: each run of frames where a channel sounds, ended by `--gap` frames (60 by default) of silence on all six channels, is a song, holding each channel's notes as `gp sound capture` makes them |
 
 `gp sound decode --source SOURCE` finds the source's asset map (`--maps DIR`, else `$GP_ASSETS`, else the tool's `assets/` and each game's `assets/` in the games checkout), and the driver by an asset's format or, failing that, by the games the registry lists. A driver with no decoder is refused in words. On Tapper, `--ay-log` names `gp sound capture`'s `ay.log` (or its folder):
 

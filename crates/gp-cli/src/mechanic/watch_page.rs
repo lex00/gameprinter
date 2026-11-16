@@ -178,7 +178,7 @@ mod tests {
             roms: d.join("roms"),
         };
         Watch {
-            session: Session::create(&paths, "tapper", "emulator", None, "").unwrap(),
+            session: Session::create(&paths, "made-up", "emulator", None, "").unwrap(),
             page: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../mechanic"),
             port: 7711,
         }
@@ -204,7 +204,7 @@ mod tests {
         assert_eq!(v["status"]["text"], "Booting the main Z80");
         assert_eq!(
             (v["game"].as_str(), v["topic"].as_str()),
-            (Some("tapper"), Some("emulator"))
+            (Some("made-up"), Some("emulator"))
         );
         let r = handle(
             &w,

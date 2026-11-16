@@ -663,7 +663,7 @@ pub fn counters(spec: &Spec, w: &mut World, f: &mut Frame) {
 /// Core `entity.hook_last`: each such hook, in body order, once at the
 /// end of the frame after every system, whatever ran: a frozen frame, a
 /// stopped one and a level start's too. A game's idle loop runs every
-/// frame after its frame's work, as Donkey Kong's ($C7E1) steps its random
+/// frame after its frame's work, as a ladder game's ($C7E1) steps its random
 /// register while it waits for the next NMI.
 pub fn end_frame_ext(spec: &Spec, w: &mut World, f: &mut Frame, exts: &Exts) {
     if spec.cost.is_some() {
@@ -786,7 +786,7 @@ pub fn run_frozen(system: System, spec: &Spec, w: &mut World, f: &mut Frame) {
                     continue;
                 }
                 // A hold that is a frame timer counts down while a state
-                // stops the camera (core 0.4.23): SMB's ScrollLock stops
+                // stops the camera (core 0.4.23): a side-scroller's ScrollLock stops
                 // ScrollHandler, not DecTimers.
                 if spec.cameras[i]
                     .by_move
@@ -883,9 +883,9 @@ fn change_counter(spec: &Spec, w: &mut World, f: &mut Frame, i: usize, by: i64) 
     if c.min.is_some_and(|min| v == min && old != min) {
         emit(spec, w, f, reached_min, None);
     }
-    // Core `stages.skip`: the rules stepped the stage counter onto a stage
-    // the game passes over, so it steps on the same way (Donkey Kong (JU)
-    // goes from 25m's $53 = 1 to 75m's 3). Compile refuses a list that
+    // Core `stages.skip`: the rules stepped the stage counter onto a stage the
+    // game passes over, so it steps on the same way (a ladder game goes from
+    // the first stage's $53 = 1 to the third's 3). Compile refuses a list that
     // skips every stage.
     if by != 0 && skipped_stage(spec, w, i) {
         change_counter(spec, w, f, i, by.signum());
@@ -1128,7 +1128,7 @@ fn act(spec: &Spec, w: &mut World, f: &mut Frame, action: Do) {
         Do::Respawn(kind) => {
             // With `stages`, the spawns of the level that plays the stage
             // the counter names: after a goal has stepped the stage, the
-            // next stage's places, which Donkey Kong's setup draws 11
+            // next stage's places, which a ladder game's setup draws 11
             // divider wraps before that stage starts ($CADE). Without
             // `stages`, or within a stage, the level being played.
             let level = stage_level(spec, w).unwrap_or(w.level);
@@ -1258,7 +1258,7 @@ pub fn take_exit(spec: &Spec, w: &mut World, f: &mut Frame, p: usize, e: &crate:
         nb.home = [nb.x, nb.y];
         let k = spec.kind(&nb);
         // Placed through an exit, its falls take the start's gravity again,
-        // as Super Mario Bros.' Entrance_GameTimerSetup sets
+        // as a side-scroller's Entrance_GameTimerSetup sets
         // VerticalForceDown on every area's entrance.
         nb.fall_gravity = crate::world::start_fall_gravity(k);
         nb.on_ground = k.tile_collision && ground_under_t(w.tiles(spec), k, &nb);
@@ -1461,8 +1461,8 @@ pub fn player_ext(spec: &Spec, w: &mut World, f: &mut Frame, exts: &Exts) {
     }
     // Feature `camera.keep_in_view_rows`: a row's bounds are a wall, so
     // they hold the player as its system ends, before the enemies and
-    // contacts test its place, as Donkey Kong's $D990 refuses the walk's
-    // move before the barrels test Mario ($EC44).
+    // contacts test its place, as a ladder game's $D990 refuses the walk's
+    // move before the barrels test the player ($EC44).
     if !f.level_started {
         let level_rows = spec.levels[w.level]
             .camera
@@ -1586,7 +1586,7 @@ fn locked(kind: &crate::spec::Kind, w: &World, action: usize) -> bool {
 }
 
 /// Up and down as a climb of `kind` reads them this frame: held, and with
-/// `climb.lone_way` held alone, no other direction with it (Donkey Kong's
+/// `climb.lone_way` held alone, no other direction with it (a ladder game's
 /// $D175 latches $56 only for a lone direction). Hooks that move a climb
 /// read them here too.
 pub fn climb_ways(spec: &Spec, w: &World, kind: &crate::spec::Kind) -> [bool; 2] {
@@ -1640,7 +1640,7 @@ pub fn climb(spec: &Spec, w: &mut World, f: &mut Frame, i: usize) -> bool {
         b.steps = 0;
     };
     // A jump's landing hold (`jump.land_hold`) takes no ladder either: the
-    // body is still in its jump (Donkey Kong's $94 $F0-$F3, in state 4).
+    // body is still in its jump (a ladder game's $94 $F0-$F3, in state 4).
     let holding = kind
         .jump
         .as_ref()
@@ -1693,7 +1693,7 @@ pub fn climb(spec: &Spec, w: &mut World, f: &mut Frame, i: usize) -> bool {
             };
         // With `top_test`, down takes a ladder of the level's that the grab
         // box meets, edges included (the walk's test of the ladder list,
-        // Donkey Kong's $D28B, before $D50A's).
+        // a ladder game's $D28B, before $D50A's).
         let down_ladder = grab_box.filter(|_| cl.top_test).and_then(|g| {
             ladders
                 .iter()
@@ -1721,7 +1721,7 @@ pub fn climb(spec: &Spec, w: &mut World, f: &mut Frame, i: usize) -> bool {
                 t.at(cx, bottom + 1) == Tile::Ladder
             };
         // With `grab_snap`, a climb by a ladder box starts at the box's left
-        // plus this, as the game places Mario by the ladder's x: up by the
+        // plus this, as the game places the player by the ladder's x: up by the
         // box it grabbed, down (with `top_test`) by the one it took.
         let snap_to = |b: &mut Body| {
             let by = if up { grabbed } else { down_ladder };
@@ -1799,7 +1799,7 @@ enum TopTest {
 }
 
 /// Platformer `climb.top_test`: whether the box `g` (edges included)
-/// meets one of the level's stops, else one of its tops (Donkey Kong's
+/// meets one of the level's stops, else one of its tops (a ladder game's
 /// $D50A: 2, 1 or 0).
 fn top_test(level: &crate::spec::Level, g: [i64; 4]) -> TopTest {
     let meets = |l: &[i64; 4]| g[2] >= l[0] && l[2] >= g[0] && g[3] >= l[1] && l[3] >= g[1];
@@ -1829,10 +1829,10 @@ fn ledge_falling(spec: &Spec, w: &World, i: usize) -> bool {
 /// Platformer `climb.down_holds`: the body stands, isn't climbing and
 /// holds its climb's `down`, so it doesn't walk this frame. A jump comes
 /// first: a frame that takes off, or a jump's landing hold, isn't held,
-/// so the run steps its counter as on any jump frame (Donkey Kong's pad
+/// so the run steps its counter as on any jump frame (a ladder game's pad
 /// routine sets the jump state at $D195 before the walk routine looks for
 /// a ladder down, and the jump routine steps $88 on every frame of the
-/// jump and its landing hold; dk-tas-zeros2, original frame 2985, Down
+/// jump and its landing hold; a recorded run of that game, original frame 2985, Down
 /// and A after Up).
 fn down_holds(spec: &Spec, w: &World, i: usize) -> bool {
     let b = &w.bodies[i];
@@ -2211,8 +2211,8 @@ pub fn enemies_ext(spec: &Spec, w: &mut World, f: &mut Frame, exts: &Exts) {
 }
 
 /// Walkers turning each other (`walk.bump`), in body `i`'s turn, before it
-/// moves: it's tested against each earlier body, nearest first, as Super
-/// Mario Bros.' EnemiesCollision tests a slot against the slots below it.
+/// moves: it's tested against each earlier body, nearest first, as a
+/// side-scroller's EnemiesCollision tests a slot against the slots below it.
 /// Both boxes stand where the frame started (`before`), since an earlier
 /// slot's box was made ahead of its move. A touching pair turns once, so the
 /// earlier body moves the new way from the next frame and this one from now.
@@ -2275,7 +2275,7 @@ fn bump(spec: &Spec, w: &mut World, i: usize, before: &[Body]) {
 
 /// The numbered slots that hold a launcher's shot, or what a shot becomes
 /// when defeated, as the frame starts: a launcher fires into none of them
-/// this frame, even when the body goes during it. Super Mario Bros.' bills,
+/// this frame, even when the body goes during it. A side-scroller's bills,
 /// flying or falling stomped, take their turns in ProcessCannons, which
 /// tests a slot's Enemy_Flag before the bill's turn erases it
 /// (OffscreenBoundsCheck, EnemyGfxHandler). The defeated kind may be
@@ -2298,8 +2298,8 @@ fn shot_slots(spec: &Spec, w: &World) -> Vec<bool> {
         .collect()
 }
 
-/// The launchers' turn, after the other enemies (platformer 0.4.28; Super
-/// Mario Bros.' ProcessCannons, which GameEngine runs after its enemy
+/// The launchers' turn, after the other enemies (platformer 0.4.28; a
+/// side-scroller's ProcessCannons, which GameEngine runs after its enemy
 /// loop): for each launcher kind, each of its first `slots` numbered slots,
 /// the last first. A slot holding a shot gives it its turn. A free one
 /// reads its bits, which may pick a launcher: the pick's timer counts down,
@@ -2360,8 +2360,9 @@ pub fn launchers(
             }) else {
                 continue;
             };
-            // One that appeared this frame isn't in the table yet: Super
-            // Mario Bros.' area parser runs SetupCannon after ProcessCannons.
+            // One that appeared this frame isn't in the table yet: a
+            // side-scroller's area parser runs SetupCannon after
+            // ProcessCannons.
             if f.fresh_bodies.get(j).copied().unwrap_or(false) {
                 continue;
             }
@@ -2471,7 +2472,7 @@ fn touch_after_move(spec: &Spec, w: &mut World, f: &mut Frame, e: usize) {
 }
 
 /// `contact.near`: after body `e`'s move, a player with a `touch_points`
-/// point near it is touched, as Super Mario Bros.' FirebarCollision tests
+/// point near it is touched, as a side-scroller's FirebarCollision tests
 /// the fireball it has just placed.
 fn near_touch(spec: &Spec, w: &mut World, f: &mut Frame, e: usize) {
     let Some(eb) = w.bodies.get(e).copied() else {
@@ -2648,8 +2649,8 @@ pub fn enemy(spec: &Spec, w: &mut World, f: &mut Frame, i: usize, exts: &Exts) {
 /// water or a ladder at the bounce point bounces a body moving down that
 /// didn't bounce on the last frame (its speed up and down becomes the
 /// bounce's, its whole height rounded down to a multiple of `snap`), and
-/// removes one moving up or that bounced on the last frame, as Super Mario
-/// Bros.' FireballBGCollision sets a fireball exploding. With nothing
+/// removes one moving up or that bounced on the last frame, as a
+/// side-scroller's FireballBGCollision sets a fireball exploding. With nothing
 /// there the last bounce is forgotten.
 pub fn bounce(spec: &Spec, w: &mut World, i: usize) {
     let mut b = w.bodies[i];
@@ -2682,7 +2683,7 @@ pub fn bounce(spec: &Spec, w: &mut World, i: usize) {
     w.bodies[i] = b;
 }
 
-/// A hopper with `land_first` lands before it moves, as Super Mario Bros.'
+/// A hopper with `land_first` lands before it moves, as a side-scroller's
 /// EnemyJump runs in EnemyToBGCollisionDet ahead of the enemy's move: if
 /// it stands on ground (its tile hitbox's bottom row in a tile that stops
 /// it, sunk into it or not) and its speed's whole part is not -2, -1 or 0
@@ -2860,8 +2861,8 @@ fn leap_start(l: &crate::spec::Leap, b: &Body) -> Fx {
 }
 
 /// Body `i`'s byte of a shift counter as it will be at the end of this frame,
-/// in the counters system: a register stepped earlier in the frame, as Super
-/// Mario Bros.' NMI steps PseudoRandomBitReg before its enemies run. A body
+/// in the counters system: a register stepped earlier in the frame, as a
+/// side-scroller's NMI steps PseudoRandomBitReg before its enemies run. A body
 /// with no numbered slot reads the first slot's byte.
 fn drawn_byte(spec: &Spec, w: &World, d: &crate::spec::LeapDraw, i: usize) -> u8 {
     let slot = w.slots.iter().position(|s| s.body == i as u32 + 1);
@@ -2881,7 +2882,7 @@ pub(crate) fn shift_byte(spec: &Spec, w: &World, counter: usize, at: u32) -> u8 
 
 /// Whether counter `counter`'s first `every` comes round at the end of this
 /// frame, in the counters system: a tick on a shared beat, read earlier in
-/// the frame, as Super Mario Bros.' DecTimers ticks before its enemies run.
+/// the frame, as a side-scroller's DecTimers ticks before its enemies run.
 fn tick_comes_round(spec: &Spec, w: &World, counter: usize) -> bool {
     let mut tick = 0;
     for (i, c) in spec.counters.iter().enumerate() {
@@ -3370,7 +3371,7 @@ fn slots_taken(spec: &Spec, w: &World) -> i64 {
 }
 
 /// Spawning by the view with core 0.4.10's rules, in the order a game
-/// that keeps its enemies in slots runs it (Super Mario Bros.' enemy loop,
+/// that keeps its enemies in slots runs it (a side-scroller's enemy loop,
 /// then its area parser at the end of the frame):
 ///
 /// 1. `drawn` spawns whose column is drawn already appear, for a level
@@ -3619,8 +3620,8 @@ fn show(spec: &Spec, w: &mut World, f: &mut Frame, i: usize, free: &mut i64) {
     // With `slot_rest` it takes a numbered slot and what its last body left
     // there: the fraction across and the speed up and down. A body that
     // falls takes the fraction of its height too (ImposeGravity adds to
-    // Super Mario Bros.' Enemy_YMF_Dummy and nothing clears it, and a mover
-    // by whole pixels, as its piranha plant, never reads it). One that
+    // a side-scroller's Enemy_YMF_Dummy and nothing clears it, and a mover
+    // by whole pixels, as its pipe plant, never reads it). One that
     // `stands_still` starts at rest on the ground, as SetBBox runs on into
     // InitVStf, and so does a swing that `starts_at_rest`.
     if level.slot_rest
@@ -3686,14 +3687,14 @@ pub fn spawn(spec: &Spec, w: &mut World, f: &mut Frame) {
     }
 }
 
-/// A level's `loop_back`, in the enemy loop's free slot as Super Mario
-/// Bros.' ProcLoopCommand runs it: with a slot free and the draw finished at
-/// a check's column, a player who isn't standing at the check's height goes
-/// back, with the view and the draw (ExecGameLoopback). Everything else in
-/// the level goes (KillAllEnemies) and waits at its spawn, but `drawn`
-/// spawns behind the draw, whose columns aren't drawn again. The `keep`
-/// columns behind the draw go back with the view, since the game's tile
-/// buffer holds them; columns the draw will reach are as built again.
+/// A level's `loop_back`, in the enemy loop's free slot as a side-scroller's
+/// ProcLoopCommand runs it: with a slot free and the draw finished at a check's
+/// column, a player who isn't standing at the check's height goes back, with
+/// the view and the draw (ExecGameLoopback). Everything else in the level goes
+/// (KillAllEnemies) and waits at its spawn, but `drawn` spawns behind the draw,
+/// whose columns aren't drawn again. The `keep` columns behind the draw go back
+/// with the view, since the game's tile buffer holds them; columns the draw
+/// will reach are as built again.
 fn loop_back(spec: &Spec, w: &mut World) {
     let level = &spec.levels[w.level];
     let (Some(l), Some(d)) = (&level.loop_back, level.draw) else {
@@ -4318,7 +4319,7 @@ pub fn run(spec: &Spec, w: &mut World, f: &mut Frame, i: usize) {
         // doesn't change.
         // In the air it faces the way it moves, which only a turn at the
         // view's edge changes (`camera.keep_in_view_turn`): the frame after
-        // the turn, as Donkey Kong's jump tests the edge before it moves
+        // the turn, as a ladder game's jump tests the edge before it moves
         // ($D55A; hammer clip 13, frames 1902 and 1903).
         if both_left && b.on_ground && !holding {
             b.facing_left = true;
@@ -4328,9 +4329,9 @@ pub fn run(spec: &Spec, w: &mut World, f: &mut Frame, i: usize) {
                 b.facing_left = facing_before;
             } else if lift && let Some(left) = dir {
                 // A takeoff at the view's edge, toward it, turns at once:
-                // Donkey Kong's jump tests the edge before its first move
+                // A ladder game's jump tests the edge before its first move
                 // ($D547 calls $D990), so a running jump from x 229 with
-                // Right held faces left on its first frame (dk.walk-sweep.003,
+                // Right held faces left on its first frame (that game's walk-sweep clip 003,
                 // frame 1307).
                 b.facing_left = left != turns_at_bound(spec, w, &b, left);
             } else if !b.on_ground && !b.climbing && b.vx != Fx::ZERO {
@@ -4367,7 +4368,7 @@ pub const LAND_HOLD_WORD: usize = 2;
 pub const TAKEOFF_Y_WORD: usize = 3;
 /// The takeoff word once `jump.fatal_drop_in_air` has found the drop too
 /// far: the landing kills. A state mapping gives the same number for the
-/// original's mark (Donkey Kong's $95 at $FF).
+/// original's mark (a ladder game's $95 at $FF).
 pub const FATAL_MARK: i64 = -1000;
 
 /// One step of a cycle on the body's step counter (mechanic word 0):
@@ -4568,7 +4569,7 @@ pub fn fall(spec: &Spec, w: &mut World, f: &mut Frame, i: usize, takeoff_speed: 
         None => (jump.gravity, jump.gravity_held),
     };
     // With `keep_fall_gravity` the gravity outside the held phase is the
-    // body's own, kept from its last jump, as Super Mario Bros.'
+    // body's own, kept from its last jump, as a side-scroller's
     // FallingSub and DumpFall use VerticalForceDown, which only InitJS (a
     // jump) and Entrance_GameTimerSetup set.
     let gravity = if jump.keep_fall_gravity {
@@ -4724,7 +4725,7 @@ pub fn fall(spec: &Spec, w: &mut World, f: &mut Frame, i: usize, takeoff_speed: 
 
 /// Platformer `level.ground_land_rising`: a jump in the air after its
 /// takeoff frame lands on the first ground box its feet meet, whichever way
-/// it moves, as [`vertical`] lands a falling one (Donkey Kong's $D5CC).
+/// it moves, as [`vertical`] lands a falling one (a ladder game's $D5CC).
 /// With `level.ground_bodies` the test starts or ends a ride as well.
 fn land_rising(spec: &Spec, tiles: Tiles<'_>, b: &mut Body) {
     let level = tiles.level;
@@ -4896,8 +4897,8 @@ fn vertical(
 }
 
 /// Whether a body meets tiles where it is: with `tile_collision`, and with
-/// `jump.collide_y` only while its whole y is in that band (Super Mario
-/// Bros.' PlayerBGCollision leaves at once below $cf or off the screen).
+/// `jump.collide_y` only while its whole y is in that band (a side-scroller's
+/// PlayerBGCollision leaves at once below $cf or off the screen).
 fn meets_tiles(kind: &crate::spec::Kind, b: &Body) -> bool {
     kind.tile_collision
         && kind
@@ -4909,7 +4910,7 @@ fn meets_tiles(kind: &crate::spec::Kind, b: &Body) -> bool {
 
 /// Feet too deep in a tile to land (`land_depth`): the body is impeded
 /// across the way it last moved, as against a wall on that side, and no
-/// wall points are tested this frame, as Super Mario Bros.' feet check
+/// wall points are tested this frame, as a side-scroller's feet check
 /// jumps to ImpedePlayerMove with Player_MovingDir and leaves
 /// PlayerBGCollision. Moving right last, it moves a pixel left unless its
 /// speed takes it left; otherwise a pixel right unless its speed takes it
@@ -4937,7 +4938,7 @@ fn feet_wall(f: &mut Frame, i: usize, b: &mut Body, mark: bool) {
 
 /// Pickup points, after the frame's moves: the first point in a cell of the
 /// pickup's kind changes the cell and fires its event, and no wall points
-/// are tested this frame, as Super Mario Bros.' PlayerBGCollision leaves
+/// are tested this frame, as a side-scroller's PlayerBGCollision leaves
 /// through HandleCoinMetatile at the first coin it finds, one a frame.
 fn pickup(spec: &Spec, w: &mut World, f: &mut Frame, i: usize) {
     let b = w.bodies[i];
@@ -4970,12 +4971,12 @@ fn pickup(spec: &Spec, w: &mut World, f: &mut Frame, i: usize) {
 /// counter 1, the group's event fired); a taken place with a `hole`
 /// (`level.pickup_holes`) starts the player's fall off a ledge on the next
 /// frame unless it is in a jump or its landing hold. One touch a frame.
-/// Donkey Kong's $EE79, from the play routine after Mario's ($CEE8): the
-/// rivets ($EE84-$EED8) then the stage's prizes ($EEF0), on a frame his
+/// A ladder game's $EE79, from the play routine after the player's ($CEE8): the
+/// rivets ($EE84-$EED8) then the stage's prizes ($EEF0), on a frame its
 /// step beat $BE is set (each step of the walk, every frame of a jump),
-/// not while he falls off an edge or dies ($96 = 8 or $FF); a removed
-/// rivet's spot sets $96 to 8 unless he is jumping ($EED9), and the fall
-/// ($D697) moves him from the next frame.
+/// not while it falls off an edge or dies ($96 = 8 or $FF); a removed
+/// rivet's spot sets $96 to 8 unless it is jumping ($EED9), and the fall
+/// ($D697) moves it from the next frame.
 pub fn pickups(spec: &Spec, w: &mut World, f: &mut Frame, i: usize, from_x: Fx, from_jump: bool) {
     let groups = &spec.levels[w.level].pickups;
     // Platformer `level.pickup_by_hook`: a hook takes those places.
@@ -5042,8 +5043,8 @@ fn marks_push(kind: &crate::spec::Kind) -> bool {
     kind.run.as_ref().is_some_and(|r| r.push_masks)
 }
 
-/// Wall points, after the frame's moves across and up or down, as Super
-/// Mario Bros.' PlayerBGCollision checks its sides after the head and the
+/// Wall points, after the frame's moves across and up or down, as a
+/// side-scroller's PlayerBGCollision checks its sides after the head and the
 /// feet: the first point, left ones then right ones, in a cell that stops
 /// movement impedes the body (ImpedePlayerMove): on the left unless it
 /// moves right, it moves one pixel right and its speed across becomes 0;
@@ -5093,14 +5094,14 @@ fn impede(spec: &Spec, w: &mut World, f: &mut Frame, i: usize, side: i64) -> boo
     nb.vx = Fx::ZERO;
     nb.x = nb.x.add(Fx::from_int(side));
     // A camera `by_move` following it scrolls by the move before the
-    // push, as Super Mario Bros.' ScrollHandler scrolls by what
+    // push, as a side-scroller's ScrollHandler scrolls by what
     // MovePlayerHorizontally moved.
     f.pushed.push((i, side));
     true
 }
 
 /// A push of body `p` by `side` after the camera system has run, as
-/// Super Mario Bros.' platforms impede the player after ScrollHandler: the
+/// a side-scroller's platforms impede the player after ScrollHandler: the
 /// cameras following it keep what the camera system would have, so the
 /// frame's scroll stands, the hold starts and the next move leaves out the
 /// push.
@@ -5132,7 +5133,7 @@ fn camera_after_push(spec: &Spec, w: &mut World, p: usize, side: i64) {
 /// stops movement sets the speed's whole part to its hit's `speed` (0
 /// when no hit lists its kind), keeping the fraction with `keep_fraction`,
 /// fires the hit's event and changes the cell to `becomes`. The body isn't
-/// moved, as Super Mario Bros.' PlayerBGCollision moves nothing on a head
+/// moved, as a side-scroller's PlayerBGCollision moves nothing on a head
 /// hit.
 fn head(spec: &Spec, w: &mut World, f: &mut Frame, i: usize, b: &mut Body, hd: &Head) {
     let ts = spec.levels[w.level].tile_size;
@@ -5202,7 +5203,7 @@ fn head(spec: &Spec, w: &mut World, f: &mut Frame, i: usize, b: &mut Body, hd: &
 /// A vertical speed held to the fall limit. Without `from_half` it is
 /// at most `max_fall`. With it, a speed whose whole part is at least
 /// `max_fall` and whose fraction is at least one half is set to `max_fall`,
-/// and any other is kept, as Super Mario Bros.' ImposeGravity compares the
+/// and any other is kept, as a side-scroller's ImposeGravity compares the
 /// speed's whole byte with the maximum and its fraction with $80.
 pub fn fall_limit(v: Fx, max_fall: Fx, from_half: bool) -> Fx {
     if !from_half {
@@ -5449,7 +5450,7 @@ fn touches(spec: &Spec, w: &mut World, f: &mut Frame, only: Option<usize>) {
             if riding {
                 w.bodies[p].riding = 0;
             }
-            // `sides` (platformer 0.4.22), as Super Mario Bros.'
+            // `sides` (platformer 0.4.22), as a side-scroller's
             // ProcLPlatCollisions: near the top a falling player isn't at
             // a side; otherwise it is on the left within `left` of that
             // edge, else on the right within `right` of the other.
@@ -5532,7 +5533,7 @@ fn touch(spec: &Spec, w: &mut World, f: &mut Frame, p: usize, e: usize, t: Touch
 
 /// What body `e`, defeated, leaves in its place (`health.defeat`,
 /// platformer 0.4.12): a body that keeps its numbered slot until it goes,
-/// as Super Mario Bros.' ShellOrBlockDefeat leaves an enemy in its slot
+/// as a side-scroller's ShellOrBlockDefeat leaves an enemy in its slot
 /// with Enemy_State's d5 set.
 fn leave_defeated(spec: &Spec, w: &mut World, f: &mut Frame, e: usize) {
     if f.level_started || e >= w.bodies.len() {
@@ -5648,8 +5649,8 @@ fn keep_in_view(spec: &Spec, w: &mut World, i: usize) {
     let at = b.x.floor() - left;
     // With `keep_in_view_turn`, in the air at a bound or past it and moving
     // toward it, the entity turns around: its speed across reversed, its
-    // place put back at the bound (Donkey Kong's jump at the screen edge),
-    // less what it went past. Donkey Kong's jump tests the bound before it
+    // place put back at the bound (a ladder game's jump at the screen edge),
+    // less what it went past. A ladder game's jump tests the bound before it
     // moves ($D547 calls $D990) and moves the other way on the same frame,
     // so a jump that takes off at x 229 toward it lands its first frame at
     // 228 (wallW's wall-jump clips, 2026-11-04).
@@ -5736,7 +5737,7 @@ pub fn level_keep_in_view(spec: &Spec, w: &World) -> Option<[i64; 2]> {
 /// `keep_in_view_rows` its row is in (camera.keep_in_view_rows), else
 /// `bounds`. The row is its y on the ground, and in the air the height
 /// it took off from when its jump keeps it (`jump.fatal_drop`'s word),
-/// as Donkey Kong's $59 keeps the girder a jump left.
+/// as a ladder game's $59 keeps the girder a jump left.
 pub fn keep_bounds(spec: &Spec, b: &Body, i: usize, bounds: [i64; 2]) -> [i64; 2] {
     rows_bounds(spec, b, &spec.cameras[i].keep_in_view_rows, bounds)
 }
@@ -7868,8 +7869,8 @@ mod tests {
 
     /// Core `stages.skip`: a step of the stage counter onto a stage the
     /// game passes over steps on past it, through the counter's wrap, and
-    /// next-level starts the stage after it, as Donkey Kong (JU) goes from
-    /// 25m to 75m with no 50m.
+    /// next-level starts the stage after it, as a ladder game goes from
+    /// its first stage to its third with no second.
     #[test]
     fn a_skipped_stage_is_stepped_past() {
         let mut s = spec();
@@ -8072,7 +8073,8 @@ mod tests {
     }
 
     /// `ledge_at`: the ledge is one point under the walker after its step,
-    /// and it turns where it stands, as ChkUnderEnemy and ChkForRedKoopa.
+    /// and it turns where it stands, as a side-scroller's ChkUnderEnemy and
+    /// its red-shell turn do.
     #[test]
     fn ledge_at_turns_on_the_point_after_the_move() {
         let step = |ledge_at: Option<Fx>, x: Fx, left: bool| {
@@ -9007,7 +9009,7 @@ mod tests {
         step(&s, &mut w, 0);
         assert_eq!(w.bodies[0].x, n(19));
         // At the edge already and moving toward it, it turns and moves back
-        // on the same frame, as Donkey Kong's jump tests the edge before it
+        // on the same frame, as a ladder game's jump tests the edge before it
         // moves ($D547 calls $D990).
         let mut w = World::power_on(&s);
         w.cameras[0][0] = n(0);
@@ -9380,7 +9382,7 @@ mod tests {
             c.down_through = 64;
         });
         // A ladder cell in column 0, row 2, with a surface on its top row
-        // (Donkey Kong's ladder foot in a girder), and a top tile in row 1
+        // (a ladder game's ladder foot in a girder), and a top tile in row 1
         // to land on after the wrap.
         s.levels[0].tiles[16] = Tile::Ladder;
         s.levels[0].tiles[8] = Tile::Top;
@@ -9729,7 +9731,7 @@ mod tests {
         assert_eq!(died, Some(landed + 4));
     }
 
-    /// Feature `power.locks`, measured on Donkey Kong's hammer (clip
+    /// Feature `power.locks`, measured on a ladder game's hammer (clip
     /// hammer/003 against hammer/004): while its timer runs, Up at a ladder
     /// doesn't climb; once it reaches 0 the same ladder climbs.
     #[test]
@@ -10989,9 +10991,10 @@ mod tests {
         assert!(!Tile::Coin.solid(), "a coin stops nothing");
     }
 
-    /// Features `head.busy_while` and `head.above`: `busy_while` makes every block a solid hit,
-    /// with no event and no change; a hit's `above` takes a coin sitting
-    /// on the block, as Super Mario Bros.' NYSpd and CheckTopOfBlock do.
+    /// Features `head.busy_while` and `head.above`: `busy_while` makes every
+    /// block a solid hit, with no event and no change; a hit's `above` takes a
+    /// coin sitting on the block, as a side-scroller's NYSpd and
+    /// CheckTopOfBlock do.
     #[test]
     fn a_busy_head_hits_blocks_as_solid_and_a_hit_takes_the_coin_above() {
         let mut s = spec();
@@ -11193,9 +11196,9 @@ mod tests {
         assert_eq!(w.bodies[0].ext[0], w0 + 2);
     }
 
-    /// Features `transition.below` and `action.emit`: a transition `below` is taken once the body is at that
-    /// depth, and `emit:` fires the event, as Super Mario Bros.'
-    /// PlayerHole ends the death at Player_Y_HighPos 4.
+    /// Features `transition.below` and `action.emit`: a transition `below` is
+    /// taken once the body is at that depth, and `emit:` fires the event, as a
+    /// side-scroller's PlayerHole ends the death at Player_Y_HighPos 4.
     #[test]
     fn a_transition_below_is_taken_at_its_depth_and_emits() {
         let mut s = runner(|_| {});
@@ -12283,7 +12286,7 @@ mod tests {
         w.bodies[0].y = n(40);
         at_view(&s, &mut w, 64);
         assert_eq!(w.cameras[0][0], n(64));
-        // In the air at that height he goes back.
+        // In the air at that height it goes back.
         let mut w = drawn_to_check(&s);
         w.bodies[0].on_ground = false;
         w.bodies[0].y = n(40);
@@ -12546,7 +12549,7 @@ mod tests {
     /// entity is made that many frames later, counted while frozen too,
     /// and an event of another kind's changes nothing.
     /// Feature `action.add`: `add:<to>:<from>` changes the first counter
-    /// by the second's value, bounds included, as Donkey Kong adds the
+    /// by the second's value, bounds included, as a ladder game adds the
     /// bonus timer to the score at the stage clear.
     /// Feature `counter.high_of`: a counter that keeps another's highest
     /// value is raised as that one changes, and never lowered.

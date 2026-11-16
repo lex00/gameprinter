@@ -28,7 +28,7 @@
 //!
 //! ```text
 //! gp-arcade-input 0
-//! system rbtapper
+//! system madeup
 //! columns CSRLDUT
 //! 600 .......
 //! 6 C......
@@ -106,7 +106,7 @@ pub struct InputLog {
 }
 
 /// What an arcade log names: the MAME set and its button columns, a
-/// letter each from bit 0 (Tapper's `CSRLDUT`: coin, start, right, left,
+/// letter each from bit 0 (the MCR board's `CSRLDUT`: coin, start, right, left,
 /// down, up, tap).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArcadeLayout {
@@ -706,12 +706,12 @@ mod tests {
     /// one spelling: runs merged, comments gone.
     #[test]
     fn an_arcade_log_reads_and_writes_the_oracle_spelling() {
-        let text = "gp-arcade-input 0\n# a comment\nsystem rbtapper\ncolumns CSRLDUT\n3 .......\n2 C......\n1 C......\n4 .S..D.T\n";
+        let text = "gp-arcade-input 0\n# a comment\nsystem madeupb\ncolumns CSRLDUT\n3 .......\n2 C......\n1 C......\n4 .S..D.T\n";
         let log = InputLog::parse(text).unwrap();
         let a = log.arcade.as_ref().unwrap();
         assert_eq!(
             (a.system.as_str(), a.columns.as_str()),
-            ("rbtapper", "CSRLDUT")
+            ("madeupb", "CSRLDUT")
         );
         assert_eq!(log.frames.len(), 10);
         assert_eq!(log.frames[3].pads[0], 1);
@@ -721,12 +721,12 @@ mod tests {
         let out = log.to_text();
         assert_eq!(
             out,
-            "gp-arcade-input 0\nsystem rbtapper\ncolumns CSRLDUT\n3 .......\n3 C......\n4 .S..D.T\n"
+            "gp-arcade-input 0\nsystem madeupb\ncolumns CSRLDUT\n3 .......\n3 C......\n4 .S..D.T\n"
         );
         assert_eq!(InputLog::parse(&out).unwrap(), log);
         assert!(InputLog::parse("gp-arcade-input 0\nsystem x\ncolumns AB\n1 BA\n").is_err());
         assert!(InputLog::parse("gp-arcade-input 0\ncolumns AB\n1 A.\n").is_err());
-        let mut fresh = InputLog::new_arcade("rbtapper", "CSRLDUT");
+        let mut fresh = InputLog::new_arcade("madeupb", "CSRLDUT");
         fresh.frames = log.frames.clone();
         assert_eq!(fresh.to_text(), out);
     }
@@ -861,7 +861,7 @@ mod tests {
     #[test]
     fn arcade_spans_make_an_arcade_log_and_come_back() {
         let layout = ArcadeLayout {
-            system: "tapper".into(),
+            system: "madeupa".into(),
             columns: "CSRLDUT".into(),
         };
         let spans = ["coin@2-3", "start1@6-6", "up+tap@8-9", "left@10-"];
@@ -872,7 +872,7 @@ mod tests {
         assert_eq!(log.frames[8].pads[0], 0b110_0000);
         assert_eq!(log.frames[11].pads[0], 0b1000);
         let text = log.to_text();
-        assert!(text.starts_with("gp-arcade-input 0\nsystem tapper\ncolumns CSRLDUT\n"));
+        assert!(text.starts_with("gp-arcade-input 0\nsystem madeupa\ncolumns CSRLDUT\n"));
         let back = arcade_spans_of(&InputLog::parse(&text).unwrap().frames, &layout).unwrap();
         assert_eq!(back, ["coin@2-3", "start1@6-6", "up+tap@8-9", "left@10-11"]);
         let refs: Vec<&str> = back.iter().map(String::as_str).collect();

@@ -65,7 +65,7 @@ pub(crate) struct Args<'a> {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ImportRules {
-    /// The clip IDs' first part: `dk` in `dk.walk.001`. Every clip whose ID
+    /// The clip IDs' first part: `hop` in `hop.walk.001`. Every clip whose ID
     /// starts with it and a dot, and is `played`, is the import's to add,
     /// change or remove. Blank: the game's name.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -366,7 +366,7 @@ fn owned(r: &Recipe, prefix: &str) -> bool {
     r.source == "played" && r.id.starts_with(&format!("{prefix}."))
 }
 
-/// The session an owned clip's ID names: `walk` in `dk.walk.001`.
+/// The session an owned clip's ID names: `walk` in `hop.walk.001`.
 fn session_of<'a>(id: &'a str, prefix: &str) -> Option<&'a str> {
     id.strip_prefix(prefix)?
         .strip_prefix('.')?

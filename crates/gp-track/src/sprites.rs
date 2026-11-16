@@ -117,8 +117,8 @@ pub fn group(sprites: &[Sprite]) -> Vec<Cluster> {
 /// A recording's pictures sorted into sprite sets (docs/formats/tracks.md,
 /// "Tracks"). A picture (a tile and its palette) the game draws as an
 /// object of its own, touching no other picture of its palette, on more
-/// than half of the times it is drawn is a set by itself: Tapper's tap,
-/// which the bartender stands over while he pours. Every other picture of a
+/// than half of the times it is drawn is a set by itself: one arcade game's
+/// beer tap, which the player stands over while pouring. Every other picture of a
 /// palette is in one set. Sprites of different sets are never one object,
 /// even when they touch and move together.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -391,7 +391,7 @@ mod tests {
     }
 
     /// A picture drawn on its own most of the time is a sprite set of its
-    /// own (Tapper's tap): an object of other pictures that stands over it
+    /// own (one arcade game's beer tap): an object of other pictures that stands over it
     /// stays a track apart from it, as one that never touches it would.
     #[test]
     fn a_picture_drawn_on_its_own_is_a_set_and_a_track_of_its_own() {

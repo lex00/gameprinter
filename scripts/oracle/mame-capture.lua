@@ -8,11 +8,12 @@
 --   GP_ORACLE_LOG         the input log (format in docs/oracle-mame.md)
 --   GP_ORACLE_OUT         the output folder; it must exist and be empty
 --   GP_ORACLE_SHOT_EVERY  write a PNG every N frames; 0 writes none
+--   GP_ORACLE_CONTROLS    the game's control table (mame-controls.lua)
 --
 -- What a frame is. MAME ends a video frame when the primary screen's VBLANK
 -- starts: video_manager::frame_update finishes the screen's picture and then
--- calls the machine's frame notifiers. Tapper's screen runs at 30 Hz, so
--- that's 30 frames a second. Frame 0 is power-on: the autoboot script runs
+-- calls the machine's frame notifiers. A screen at 30 Hz gives 30 frames a
+-- second. Frame 0 is power-on: the autoboot script runs
 -- at emulated time zero, after the reset and before any instruction. Frame
 -- n is the state at the n-th frame notifier call, after emulating from the
 -- end of frame n-1. Everything for frame n is read in that notifier.
@@ -54,46 +55,16 @@ local function fail(message)
 	error(message)
 end
 
--- The controls the log can name, per system. Each is a port tag and a bit
--- mask from mcr.cpp's INPUT_PORTS_START( tapper ); all are active low.
-local TAPPER = {
-	columns = "CSRLDUT",
-	-- Columns a log may add after those, in this order.
-	optional = "X",
-	-- The joystick's columns, which `joystick 4way` sends through MAME's
-	-- 4-way filter.
-	joystick = "RLDU",
-	controls = {
-		C = { ":ssio:IP0", 0x01 }, -- coin 1
-		S = { ":ssio:IP0", 0x04 }, -- start 1
-		R = { ":ssio:IP1", 0x01 }, -- joystick right
-		L = { ":ssio:IP1", 0x02 }, -- joystick left
-		D = { ":ssio:IP1", 0x04 }, -- joystick down
-		U = { ":ssio:IP1", 0x08 }, -- joystick up
-		T = { ":ssio:IP1", 0x10 }, -- tap (button 1)
-		X = { ":ssio:IP0", 0x20 }, -- tilt
-	},
-	-- Every port the game reads through the SSIO board, recorded per frame.
-	ports = { ":ssio:IP0", ":ssio:IP1", ":ssio:IP2", ":ssio:IP3", ":ssio:IP4" },
-	-- The DIP switch port. Its fields must sit at mcr.cpp's defaults.
-	dips = ":ssio:IP3",
-	-- What goes in ram.bin for each frame, in this order. Main board RAM
-	-- from mcr.cpp's cpu_91490_map, then the SSIO board's RAM from
-	-- midway_sound.cpp's ssio_map. The palette RAM is write-only on the bus,
-	-- so it's read from its memory share instead.
-	ram = {
-		{ "main e000-e7ff work RAM (nvram)", "space", ":maincpu", 0xe000, 0xe7ff },
-		{ "main e800-e9ff sprite RAM", "space", ":maincpu", 0xe800, 0xe9ff },
-		{ "main f000-f7ff video RAM", "space", ":maincpu", 0xf000, 0xf7ff },
-		{ "main f800-f87f palette RAM", "share", ":paletteram", 0x00, 0x7f },
-		{ "ssio 8000-83ff sound CPU RAM", "space", ":ssio:cpu", 0x8000, 0x83ff },
-	},
-}
-local SYSTEMS = { tapper = TAPPER, tapperg = TAPPER, tappera = TAPPER,
-	tapperb = TAPPER, sutapper = TAPPER, rbtapper = TAPPER }
+-- The controls the log can name, per system: a table from each MAME
+-- system name to its columns, controls, ports, DIP switch port and RAM,
+-- which the game's own folder holds (GAME/oracle/mame-controls.lua in the
+-- games checkout; the tool knows no game by name). `just mame-record`
+-- mounts it and names it in GP_ORACLE_CONTROLS.
+local CONTROLS = assert(os.getenv("GP_ORACLE_CONTROLS"), "GP_ORACLE_CONTROLS is not set")
+local SYSTEMS = dofile(CONTROLS)
 
 local system_name = emu.romname()
-local SYSTEM = SYSTEMS[system_name] or fail("no control table for system " .. system_name)
+local SYSTEM = SYSTEMS[system_name] or fail("no control table for system " .. system_name .. " in " .. CONTROLS)
 
 -- The input log.
 

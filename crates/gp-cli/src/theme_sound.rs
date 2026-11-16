@@ -50,7 +50,7 @@ pub enum SoundCmd {
     /// problem the theme didn't have (the ROM-data check among them). The
     /// card plays the role's sound as it is and the new one. Example: gp
     /// theme sound propose ~/.gameprinter/work/themes/clay --game
-    /// donkey-kong --role jump --take 2 --wav /tmp/jump-2.wav --why "A
+    /// rooftop --role jump --take 2 --wav /tmp/jump-2.wav --why "A
     /// second jump, so it varies."
     Propose {
         /// The copy's name (a folder under $GP_HOME/work/mcp/); with

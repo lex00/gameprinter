@@ -25,7 +25,7 @@
 # What Pages can't do: it sends no headers of the page's choosing, so the
 # page isn't cross-origin isolated (no Cross-Origin-Opener-Policy and
 # Cross-Origin-Embedder-Policy). A game with its own module (every game
-# with hooks: Donkey Kong, Tapper) is then refused with "this page wasn't
+# with hooks, as every ported game has) is then refused with "this page wasn't
 # served with its isolation headers, so it can't run a game module with its
 # limits" (page/module-host.js); only a game that plays in the page's own
 # interpreter (one `gp game new` made, with no hooks) plays. The policy as
@@ -133,6 +133,6 @@ echo "  2. make a public GitHub repo, add it as origin, and push main"
 echo "  3. in the repo's Settings, Pages, set Source to \"GitHub Actions\"; the workflow publishes on each push"
 echo "  4. the page is then at https://OWNER.github.io/REPO/ (and /p?g=GAME for a game by its name)"
 echo
-echo "On Pages the page has no isolation headers, so a game with its own module (one with hooks, such as"
-echo "Donkey Kong or Tapper) is refused; only a game with no hooks plays. Cloudflare (scripts/web/deploy.sh)"
+echo "On Pages the page has no isolation headers, so a game with its own module (one with hooks, as every"
+echo "ported game has) is refused; only a game with no hooks plays. Cloudflare (scripts/web/deploy.sh)"
 echo "serves the headers the page needs."

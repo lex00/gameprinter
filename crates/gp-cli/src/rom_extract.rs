@@ -1513,8 +1513,8 @@ pub(crate) fn extract(
             (field(&|g| g.y.as_ref().map(|f| f.ram)), "y", None),
         ];
         // A group states its x and y bytes only. The tracker's active-flag
-        // and kind bytes named wrong bytes on SMB1, and its page byte on
-        // Mega Man 2; its slot numbers count from the first slot the runs
+        // and kind bytes named wrong bytes on one NES game, and its page byte on
+        // another; its slot numbers count from the first slot the runs
         // drew, not from the game's array, so no slot number is stated.
         for i in first..count {
             let off = (stride * i) as u16;

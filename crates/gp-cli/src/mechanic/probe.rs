@@ -48,7 +48,7 @@
 //!
 //! Addresses are the platform's own: the NES's 2 KB of work RAM (0 to
 //! 0x7FF), or an arcade board's main CPU address space (0 to 0xFFFF, as
-//! gp-arcade's `ram[A]` reads it, work RAM at 0xE000 on Tapper's board).
+//! gp-arcade's `ram[A]` reads it, work RAM at 0xE000 on the MCR board).
 //!
 //! Ported from game-printer's probe.rs. What gameprinter's layout changed:
 //! the original runs through [`OriginalRuntime`] (gp-nes or gp-arcade by
@@ -217,7 +217,7 @@ pub(crate) fn peek(o: &OriginalRuntime, a: u16) -> Result<u8> {
         return Ok(n.nes().wram()[usize::from(a)]);
     }
     if let OriginalRuntime::Arcade(r) = o {
-        return Ok(r.tapper().peek(a));
+        return Ok(r.mcr().peek(a));
     }
     let sel = format!("ram[{a:#06x}]");
     o.query(&sel)
@@ -1518,7 +1518,7 @@ mod tests {
     /// addresses they read.
     #[test]
     fn an_arcade_board_reads_its_columns_and_its_address_space() {
-        let b = Board::arcade("rbtapper");
+        let b = Board::arcade("madeup");
         assert_eq!(pads(&b, "C").unwrap(), 0x01);
         assert_eq!(pads(&b, "RT").unwrap(), 0x44);
         assert!(pads(&b, "A").is_err());
@@ -1543,18 +1543,21 @@ mod tests {
         assert!(addr(&w(), "0x900").is_err());
     }
 
-    /// With the owner's rbtapper romset on this machine: a made-up probe
+    /// With a real romset ($GP_GAME_DIR's first oracle set) on this machine: a made-up probe
     /// plays presses on gp-arcade from power-on and reads its RAM by Z80
     /// address. Skipped without it.
     #[test]
     fn a_probe_runs_on_an_arcade_board() {
-        let Some(zip) = gp_arcade::romset::local_romset("rbtapper") else {
-            eprintln!("skipped: no rbtapper romset");
-            return;
+        let (set_name, zip) = match gp_arcade::romset::test_oracle_set_path() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("skipped: {e}");
+                return;
+            }
         };
         let rom = fs::read(zip).unwrap();
         let board = Board::of_rom(&rom).unwrap();
-        assert_eq!(board.arcade.as_ref().unwrap().system, "rbtapper");
+        assert_eq!(board.arcade.as_ref().unwrap().system, set_name);
         let f: File = toml::from_str(
             r#"
 [watch]

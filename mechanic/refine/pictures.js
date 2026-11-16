@@ -8,7 +8,7 @@
 
 import { clipPicture, clipState, h, openClip } from "./fold.js";
 
-/** The mechanic a clip of the tests was recorded for: dk.walk.004 is walk. */
+/** The mechanic a clip of the tests was recorded for: hop.walk.004 is walk. */
 export function groupOf(id) {
   const p = String(id).split(".");
   return p.length >= 3 ? p.slice(1, -1).join(".") : "other clips";

@@ -810,7 +810,7 @@ mod tests {
 
     #[test]
     fn name_tags_are_hints() {
-        let tags = name_tags("Mega Man (U) [o1][T+Eng1.0_Foo] (Hack) (PRG 0) [!].nes");
+        let tags = name_tags("Rooftop Run (U) [o1][T+Eng1.0_Foo] (Hack) (PRG 0) [!].nes");
         let got: Vec<_> = tags.iter().map(|t| (t.tag.as_str(), t.meaning)).collect();
         assert_eq!(
             got,
@@ -821,7 +821,7 @@ mod tests {
                 ("[!]", "a verified good dump"),
             ]
         );
-        assert!(name_tags("Super Mario Bros (JU) (PRG 1).nes").is_empty());
+        assert!(name_tags("Harbor Lights (JU) (PRG 1).nes").is_empty());
         assert!(name_tags("broken [h").is_empty());
     }
 

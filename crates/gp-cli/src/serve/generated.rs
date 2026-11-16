@@ -37,7 +37,7 @@ pub(super) fn routes() -> Vec<Route> {
 pub(crate) struct Made {
     pub id: String,
     pub name: String,
-    /// The mechanic session it came from: `walk` of `dk.walk.001`.
+    /// The mechanic session it came from: `walk` of `hop.walk.001`.
     pub group: String,
     pub frames: u64,
 }
@@ -159,8 +159,8 @@ mod tests {
 
     #[test]
     fn a_clip_is_grouped_by_its_session() {
-        assert_eq!(group_of("dk.climb-ladder.006"), "climb-ladder");
-        assert_eq!(group_of("dk.m50-girder3.001"), "m50-girder3");
+        assert_eq!(group_of("hop.climb-ladder.006"), "climb-ladder");
+        assert_eq!(group_of("hop.m50-girder3.001"), "m50-girder3");
         assert_eq!(group_of("plain"), "corpus");
     }
 }

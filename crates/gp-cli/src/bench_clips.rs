@@ -15,8 +15,8 @@
 //!
 //! The grade keeps the plan's measures table. Rows game-printer graded
 //! against Moss Hop's source ground truth (elements found, unreachable
-//! directions told apart, inputs found) say they need one; Donkey Kong and
-//! Tapper have no source. The report is the same for the same files, ROM
+//! directions told apart, inputs found) say they need one; a ported game
+//! has no source. The report is the same for the same files, ROM
 //! and build; its hash leaves out the wall times.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -81,8 +81,8 @@ pub struct ReportArgs {
 
 #[derive(Args, Clone)]
 pub struct ClipsArgs {
-    /// The game (its bench file is bench/GAME.toml in the gameprinter
-    /// repo), or a bench file.
+    /// The game (its bench file is GAME/bench.toml in the games checkout,
+    /// or `--root`), or a bench file.
     pub game: String,
     /// The ROM, instead of the one the package accepts in $GP_ROM_DIR.
     #[arg(long)]
@@ -221,25 +221,29 @@ struct WrongModel {
     set: BTreeMap<String, Toml>,
 }
 
-/// The bench file and the game's name: GAME is `bench/GAME.toml` in the
-/// gameprinter repo (here, else the build's), or a bench file's path.
-pub(crate) fn bench_file(game: &str) -> Result<(PathBuf, String)> {
+/// The bench file and the game's name: GAME is the game's own
+/// `GAME/bench.toml` under the root (the games checkout: the tool knows no
+/// game by name, so it holds no game's bench), or a bench file's path. A
+/// bench file named `bench.toml` is its folder's game's.
+pub(crate) fn bench_file(game: &str, root: &Path) -> Result<(PathBuf, String)> {
     if game.ends_with(".toml") {
         let f = fs::canonicalize(game).with_context(|| format!("reading {game}"))?;
-        let g = f
-            .file_stem()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let g = if f.file_name().is_some_and(|n| n == "bench.toml") {
+            f.parent().and_then(Path::file_name)
+        } else {
+            f.file_stem()
+        }
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
         return Ok((f, g));
     }
-    let here = PathBuf::from("bench").join(format!("{game}.toml"));
-    let f = if here.is_file() {
-        here
-    } else {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../bench")
-            .join(format!("{game}.toml"))
-    };
+    let f = root.join(game).join("bench.toml");
+    if !f.is_file() {
+        bail!(
+            "{game} has no bench: no {} (a game's bench is its folder's bench.toml in the games checkout)",
+            f.display()
+        );
+    }
     Ok((f, game.to_owned()))
 }
 
@@ -487,7 +491,7 @@ pub fn clips(paths: &Paths, a: &ClipsArgs) -> Result<Value> {
         *clock = Instant::now();
     };
     let root = root_of(a.root.as_deref())?;
-    let (spec_file, game) = bench_file(&a.game)?;
+    let (spec_file, game) = bench_file(&a.game, &root)?;
     let spec: BenchFile = toml::from_str(
         &fs::read_to_string(&spec_file)
             .with_context(|| format!("reading {}", spec_file.display()))?,

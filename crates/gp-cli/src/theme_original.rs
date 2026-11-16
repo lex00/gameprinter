@@ -700,8 +700,8 @@ pub fn read_picture(img: &Rgba, glyphs: &[Glyph]) -> String {
 /// names the kit leaves out, of four letters or more. An original
 /// template's (`source.how = "authored"`) title is its own, so with
 /// `authored` its words are left out unless a name of the model's
-/// entities holds them too: Rivet Rodeo's paper says RIVET RODEO, and
-/// Donkey Kong's names, which its model keeps, are still refused.
+/// entities holds them too: Rivet Rodeo's paper says RIVET RODEO, and a
+/// ported game's names, which its model keeps, are still refused.
 pub fn names_for_text(m: &Model, authored: bool) -> Vec<String> {
     let mut own: Vec<String> = Vec::new();
     if authored {
@@ -1152,7 +1152,7 @@ mod tests {
 
     #[test]
     fn a_name_in_a_picture_is_read_and_refused() {
-        // KONG and CLIMB in the theme's own font at 2x, on a 96 by 40
+        // OGRE and CLIMB in the theme's own font at 2x, on a 96 by 40
         // picture.
         let mut p = Tones {
             w: 120,
@@ -1171,13 +1171,13 @@ mod tests {
                 }
             }
         };
-        put("KONG", 4, 4);
+        put("OGRE", 4, 4);
         put("CLIMB", 50, 22);
         let read = read_text(&p, &own_glyphs());
-        assert!(read.contains("KONG") && read.contains("CLIMB"), "{read}");
-        let s = text_score("t".into(), &read, &["kong".into(), "donkey".into()]);
+        assert!(read.contains("OGRE") && read.contains("CLIMB"), "{read}");
+        let s = text_score("t".into(), &read, &["ogre".into(), "grumble".into()]);
         assert!(s.refused, "{s:?}");
-        let s = text_score("t".into(), "RIVET RODEO", &["kong".into()]);
+        let s = text_score("t".into(), "RIVET RODEO", &["ogre".into()]);
         assert!(!s.refused);
     }
 

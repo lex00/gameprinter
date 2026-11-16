@@ -843,7 +843,7 @@ mod tests {
         assert!(matches!(&l.stmt, Stmt::Data { width: 1, items } if items.len() == 4));
         let l = parse_line_z80("        defw 5FACh");
         assert!(matches!(&l.stmt, Stmt::Data { width: 2, .. }));
-        assert!(is_z80_source("notes/tapper.asm", "  ld a,1\n  ret\n"));
+        assert!(is_z80_source("notes/rooftop.asm", "  ld a,1\n  ret\n"));
         assert!(is_z80_source("x.z80", "  lda #1\n"));
         assert!(!is_z80_source(
             "src/main.asm",

@@ -98,6 +98,22 @@ fn sounding(p: Result<Player, String>) -> Result<Player, String> {
     })
 }
 
+/// Adds the arcade sets a roms.toml lists (its `[[source.chip]]` rows,
+/// docs/sources.md "Arcade chips") to those the board knows, so a zip of
+/// one of them loads: call it before `gp_play_load` or `gp_sound_load`.
+/// The board knows no set of its own. 0 with how many were new in the
+/// output buffer, or 1 with the error.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_sets_load(ptr: *mut u8, len: usize) -> i32 {
+    let bytes = input(ptr, len);
+    result(
+        std::str::from_utf8(&bytes)
+            .map_err(|e| e.to_string())
+            .and_then(gp_arcade::romset::add_roms_toml)
+            .map(|n| n.to_string()),
+    )
+}
+
 /// Powers on the romset (a MAME zip's bytes) in a slot.
 #[unsafe(no_mangle)]
 pub extern "C" fn gp_play_load(slot: u32, ptr: *mut u8, len: usize) -> i32 {
@@ -312,7 +328,7 @@ pub extern "C" fn gp_sound_frame(ptr: *mut u8, len: usize) -> i32 {
 
 /// Runs the sound board one frame with a model's sound requests, two bytes
 /// each (the latch, then the byte; `len` 0 for none, with any `ptr`),
-/// timed as Tapper's interrupt sends them ([`crate::REQUEST_AT`]).
+/// timed as the game's interrupt sends them ([`crate::REQUEST_AT`]).
 #[unsafe(no_mangle)]
 pub extern "C" fn gp_sound_requests_frame(ptr: *mut u8, len: usize) -> i32 {
     let bytes = if len == 0 {

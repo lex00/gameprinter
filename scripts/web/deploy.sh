@@ -38,8 +38,9 @@
 #    writes (WRANGLER_OUTPUT_FILE_PATH, else its "Worker Version ID:" and
 #    "Version Preview URL:" lines). Visitors still get the live version.
 # 5. Runs the page check (check-page.mjs --live PREVIEW_URL) on that
-#    address, every section, with the release check's registry snapshot and
-#    Moss Hop and Tapper folders beside the page. A failure stops here; the
+#    address, every section, with the release check's registry snapshot, the
+#    games checkout it read (its pass record's `games`) and the Moss Hop and
+#    arcade theme folders beside the page. A failure stops here; the
 #    version stays uploaded and is never made live.
 # 6. Asks you to type the worker's name, then makes the version live:
 #      npx wrangler@WRANGLER versions deploy VERSION_ID@100% --message ... --yes
@@ -171,6 +172,13 @@ fi
 record_id="$(sed -n 's/^id //p' "$passed/$digest")"
 record_when="$(sed -n 's/^when //p' "$passed/$digest")"
 record_roms="$(sed -n 's/^roms //p' "$passed/$digest")"
+# The games checkout the release check read, for the preview's page check
+# (a record from before it was kept: GP_GAMES_DIR, else check-page.mjs's own
+# default).
+record_games="$(sed -n 's/^games //p' "$passed/$digest")"
+games=()
+if [ -n "${GP_GAMES_DIR:-}" ]; then games=(--games "$GP_GAMES_DIR")
+elif [ -n "$record_games" ]; then games=(--games "$record_games"); fi
 roms_note=""
 [ "$record_roms" = none ] && roms_note=", made without ROMs (--no-roms): the checks that need a ROM were skipped"
 
@@ -236,7 +244,7 @@ if [ -d "$page.registry.any" ]; then registry_folder=(--registry-folder "$page.r
 elif [ -d "$page.registry" ]; then registry_folder=(--registry-folder "$page.registry"); fi
 only=()
 [ -n "${GP_PREVIEW_ONLY:-}" ] && only=(--only "$GP_PREVIEW_ONLY")
-node "$repo/scripts/web/public/check-page.mjs" --live "$preview" --dist "$page" --browser "$browser" --shots "$page.preview-shots" ${registry_folder[@]+"${registry_folder[@]}"} ${only[@]+"${only[@]}"}
+node "$repo/scripts/web/public/check-page.mjs" --live "$preview" --dist "$page" --browser "$browser" --shots "$page.preview-shots" ${games[@]+"${games[@]}"} ${registry_folder[@]+"${registry_folder[@]}"} ${only[@]+"${only[@]}"}
 s=$?
 if [ $s -ne 0 ]; then
   echo "deploy: the page check failed on the preview (exit $s; shots in $page.preview-shots). Version $version stays uploaded and is not live; nothing changed at $address." >&2

@@ -87,7 +87,7 @@ pub enum RegistryCmd {
     /// origin first and commits "Publish NAME@VERSION".
     ///
     /// Example: gp registry publish git:$HOME/gp-registry ./stage --name
-    /// friend/night --version 0.9.0 --title "Night" --for lex00/donkey-kong
+    /// friend/night --version 0.9.0 --title "Night" --for acme/rooftop
     /// --dry-run
     Publish {
         /// The registry: a folder, git:PATH (commits, then pushes to origin)
@@ -114,7 +114,7 @@ pub enum RegistryCmd {
         title: String,
         /// A game this content is for, as NAMESPACE/NAME; repeat for more.
         /// The page offers it for that game after a reindex. Example: --for
-        /// lex00/donkey-kong
+        /// acme/rooftop
         #[arg(long = "for")]
         for_games: Vec<String>,
         /// The namespace's signing private key file, for a signed registry;
@@ -143,7 +143,7 @@ pub enum RegistryCmd {
         target: String,
         /// Published versions to list, as NAME@VERSION. Without --keep,
         /// every version that should stay listed. Example:
-        /// lex00/donkey-kong@1.0.9 friend/night@0.9.2
+        /// acme/rooftop@1.0.9 friend/night@0.9.2
         versions: Vec<String>,
         /// Start from every version the list files name now and add the
         /// versions given, so adding one can't drop the others. Given no
@@ -272,7 +272,7 @@ pub enum RegistryCmd {
     /// https://raw.githubusercontent.com/lex00/gp-registry/main
     ///
     /// Example: gp registry check $HOME/gp-registry --for
-    /// lex00/donkey-kong --theme friend/night
+    /// acme/rooftop --theme friend/night
     Check {
         /// The registry: a folder, git:PATH, s3://BUCKET or an https
         /// address. Example: $HOME/gp-registry
@@ -284,7 +284,7 @@ pub enum RegistryCmd {
         root: Option<PathBuf>,
         /// A game, NAMESPACE/NAME: read its theme list as the page does,
         /// with what the page offers and what it leaves out and why.
-        /// Example: --for lex00/donkey-kong
+        /// Example: --for acme/rooftop
         #[arg(long = "for", value_name = "GAME")]
         for_game: Option<String>,
         /// A theme, NAMESPACE/NAME, with --for: is it offered for the game,
@@ -294,7 +294,7 @@ pub enum RegistryCmd {
         theme: Option<String>,
         /// Your ROM of the game, for --theme's reading of the theme's files
         /// as the page's lift does (default: one under $GP_ROM_DIR the game
-        /// accepts). Example: --rom "$GP_ROM_DIR/Donkey Kong (JU).nes"
+        /// accepts). Example: --rom "$GP_ROM_DIR/Rooftop (U).nes"
         #[arg(long, requires = "theme")]
         rom: Option<PathBuf>,
     },
@@ -315,7 +315,7 @@ pub enum RegistryCmd {
     /// holds. Without DIR it gives the first step. docs/host-your-own.md.
     ///
     /// Example: gp registry host ~/acme-registry --theme acme/harbor-lights
-    /// --game lex00/donkey-kong
+    /// --game acme/rooftop
     Host {
         /// The registry's checkout: a clone of its GitHub repo. Example:
         /// ~/acme-registry
@@ -330,7 +330,7 @@ pub enum RegistryCmd {
         theme_dir: Option<PathBuf>,
         /// The game the theme is for, NAMESPACE/NAME (default: the first
         /// game the published theme names). Example: --game
-        /// lex00/donkey-kong
+        /// acme/rooftop
         #[arg(long)]
         game: Option<String>,
         /// The GitHub repo, OWNER/REPO, when the checkout's origin isn't a
@@ -362,7 +362,7 @@ pub enum RegistryCmd {
     /// and keeps its pull request. Needs gh logged in to GitHub.
     ///
     /// Example: gp registry submit ./my-theme --name friend/night --version
-    /// 0.9.0 --title "Night" --for lex00/donkey-kong --to acme/harbor-registry
+    /// 0.9.0 --title "Night" --for acme/rooftop --to acme/harbor-registry
     /// --dry-run
     Submit {
         /// The folder to submit, as it should arrive. Example: ./my-theme
@@ -382,7 +382,7 @@ pub enum RegistryCmd {
         #[arg(long)]
         title: String,
         /// A game this content is for, as NAMESPACE/NAME; repeat for more.
-        /// Example: --for lex00/donkey-kong
+        /// Example: --for acme/rooftop
         #[arg(long = "for")]
         for_games: Vec<String>,
         /// The registry's GitHub repo, OWNER/REPO; required. Example: --to
@@ -2196,6 +2196,18 @@ pub(crate) fn answer(mut stream: std::net::TcpStream, roots: &[PathBuf], headers
     }
 }
 
+/// The first game the registry's catalog.toml lists, for the address
+/// `serve` prints; none when the catalog lists no game.
+fn first_game(dir: &Path) -> Option<String> {
+    let text = fs::read_to_string(dir.join("catalog.toml")).ok()?;
+    let v: toml::Value = toml::from_str(&text).ok()?;
+    v.get("package")?
+        .as_array()?
+        .iter()
+        .find(|p| p.get("kind").and_then(|k| k.as_str()) == Some("game"))
+        .and_then(|p| p.get("name")?.as_str().map(str::to_owned))
+}
+
 /// Serves a folder registry and a built page from one address, on this
 /// machine only, until stopped.
 pub fn serve(dir: &Path, page: &Path, port: u16) -> Result<Outcome> {
@@ -2215,7 +2227,11 @@ pub fn serve(dir: &Path, page: &Path, port: u16) -> Result<Outcome> {
         .with_context(|| format!("listening on 127.0.0.1:{port}"))?;
     let headers = std::sync::Arc::new(page_headers(page));
     let roots = std::sync::Arc::new(vec![page.to_owned(), dir.to_owned()]);
-    println!("playing at http://127.0.0.1:{port}/p?g=lex00/donkey-kong (ctrl-C stops it)");
+    let at = match first_game(dir) {
+        Some(g) => format!("http://127.0.0.1:{port}/p?g={g}"),
+        None => format!("http://127.0.0.1:{port}/"),
+    };
+    println!("playing at {at} (ctrl-C stops it)");
     for stream in listener.incoming().flatten() {
         let (roots, headers) = (roots.clone(), headers.clone());
         std::thread::spawn(move || answer(stream, &roots, &headers));

@@ -31,6 +31,11 @@ case "$(uname -s)-$(uname -m)" in
     platform="arm64-macos"
     sha256="ad66da82ac13f163e424b1643f16c6dfcccc98b5966296b43e52d3cab04f84a8"
     ;;
+  Linux-x86_64)
+    # GitHub's hosted runners, and a Linux maker's machine.
+    platform="x86_64-linux"
+    sha256="2dc9c7813f5375db93d96ead4b78222fcc3e2677bbb832297af4797782a37489"
+    ;;
   *)
     echo "fetch-tools: no pinned binaryen for $(uname -s) $(uname -m)." >&2
     echo "  Add the SHA-256 of binaryen-$binaryen-<platform>.tar.gz from https://github.com/WebAssembly/binaryen/releases/tag/$binaryen to $0." >&2

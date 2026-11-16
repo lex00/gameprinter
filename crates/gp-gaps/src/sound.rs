@@ -484,7 +484,7 @@ pub fn detect(run: &Run) -> (Vec<Interface>, Vec<Request>) {
 /// board, whose sound CPU plays what the main CPU writes to its latches):
 /// the latch the game writes the most values to, three or more over three
 /// or more writes, every write to it a request with the value as the
-/// effect's ID. A game that writes all its latches at once (Tapper) asks
+/// effect's ID. A game that writes all its latches at once (an MCR arcade game) asks
 /// once a write group, so one latch is the interface; the others are named
 /// in its evidence. A frame that writes one value to every latch it
 /// writes, two or more, is the board's test or a silence, not a request,

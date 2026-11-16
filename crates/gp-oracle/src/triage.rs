@@ -64,7 +64,7 @@ impl Verdict {
 pub struct Record {
     pub class: String,
     pub verdict: Verdict,
-    /// The sources (registry IDs, such as `smb1-ntsc-prg0`) it applies to;
+    /// The sources (registry IDs, such as `rooftop-ntsc-prg0`) it applies to;
     /// empty for any.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<String>,
@@ -329,19 +329,19 @@ mod tests {
     fn a_scope_limits_what_a_record_accepts() {
         let mut t = Triage::default();
         t.set(Record {
-            sources: vec!["smb1-ntsc-prg0".into()],
+            sources: vec!["rooftop-ntsc-prg0".into()],
             frames: Some([0, 0]),
             ..record("ppu.dot", Verdict::AcceptedConfiguration)
         });
         t.set(Record {
-            sources: vec!["smb1-ntsc-prg0".into()],
+            sources: vec!["rooftop-ntsc-prg0".into()],
             frames: Some([2, 2]),
             ..record("cpu.a", Verdict::ForkBug)
         });
-        let smb = Some("smb1-ntsc-prg0");
-        assert!(t.check(smb, [("ppu.dot", &[0][..])]).passed());
+        let src = Some("rooftop-ntsc-prg0");
+        assert!(t.check(src, [("ppu.dot", &[0][..])]).passed());
         // Another frame, or another game, is outside the scope.
-        let c = t.check(smb, [("ppu.dot", &[0, 500][..])]);
+        let c = t.check(src, [("ppu.dot", &[0, 500][..])]);
         assert_eq!(c.untriaged, vec!["ppu.dot"]);
         assert!(
             c.uncovered[0].contains("first at frame 500"),
@@ -357,9 +357,9 @@ mod tests {
             vec!["ppu.dot"]
         );
         // The fork bug is known at frame 2 only.
-        assert_eq!(t.check(smb, [("cpu.a", &[2][..])]).fork_bugs, vec!["cpu.a"]);
+        assert_eq!(t.check(src, [("cpu.a", &[2][..])]).fork_bugs, vec!["cpu.a"]);
         assert_eq!(
-            t.check(smb, [("cpu.a", &[2, 9][..])]).untriaged,
+            t.check(src, [("cpu.a", &[2, 9][..])]).untriaged,
             vec!["cpu.a"]
         );
         // Two scopes of one class are two records; the same scope replaces.

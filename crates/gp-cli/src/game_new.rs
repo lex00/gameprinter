@@ -115,7 +115,7 @@ fn shape(genre: &str) -> Shape {
             view: "top-down",
             extension: ext("topdown"),
         },
-        // A hop on a grid of cells (Q*bert): no extension yet, and the
+        // A hop on a grid of cells, seen at an angle: no extension yet, and the
         // model's view has no `isometric`, so top-down.
         "gridhop" => Shape {
             view: "top-down",
@@ -273,11 +273,11 @@ pub fn run(a: &New<'_>, paths: &Paths) -> Result<Outcome> {
         format!(
             "  rom      {source} ({}), {}, in roms.toml{}",
             &sha[..16],
-            known_entry(&sha)
+            known_entry(&known_text(a.games), &sha)
                 .and_then(|b| b.lines().find_map(|l| l.strip_prefix("status = ")))
                 .map_or("unverified", |v| v.trim_matches('"')),
-            if known_entry(&sha).is_some() {
-                " (its entry from roms/known.toml)"
+            if known_entry(&known_text(a.games), &sha).is_some() {
+                " (its entry from the games checkout's known/sources.toml)"
             } else {
                 ""
             }
@@ -355,8 +355,9 @@ fn nes_files(
     } else {
         (None, 0, "not searched (--no-draws)".to_owned())
     };
+    let known = known_text(a.games);
 
-    let files: Vec<(String, String)> = vec![
+    let mut files: Vec<(String, String)> = vec![
         (
             "package.toml".into(),
             package_toml(
@@ -372,7 +373,7 @@ fn nes_files(
         ),
         (
             "roms.toml".into(),
-            roms_toml(source, &title, image, a.date)?,
+            roms_toml(&known, source, &title, image, a.date)?,
         ),
         (
             "template.toml".into(),
@@ -403,6 +404,22 @@ fn nes_files(
             corpus_toml(source, &title, &sha, &recipes),
         ),
     ];
+    // A game with no folder yet may have a coverage definition waiting
+    // in the games checkout (known/coverage/<id>.toml): it comes with the
+    // entry, under the new game's source id.
+    if let Some(def) = known_entry(&known, &sha).and_then(|b| known_coverage(a.games, b)) {
+        let def: String = def
+            .lines()
+            .map(|l| {
+                if l.starts_with("source = ") {
+                    format!("source = {}\n", q(source))
+                } else {
+                    format!("{l}\n")
+                }
+            })
+            .collect();
+        files.push((format!("coverage/{source}.toml"), def));
+    }
     let about = About {
         input: "a pad",
         assets: format!(
@@ -435,10 +452,11 @@ fn arcade_files(
     let game = a.game;
     let source = a.source.unwrap_or(game);
     let system = rom.system.clone().unwrap_or_default();
-    let set = gp_arcade::romset::set(&system).with_context(|| format!("no arcade set {system}"))?;
+    let set = gp_arcade::romset::set(&system)
+        .with_context(|| format!("no arcade set {system}: {}", gp_arcade::romset::NO_SETS))?;
     let recipes = crate::plan::recipe_set_hash(&BTreeMap::new());
     let map_rel = format!("assets/{game}.toml");
-    let sets: Vec<&str> = gp_arcade::romset::SETS.iter().map(|s| s.name).collect();
+    let sets: Vec<&str> = gp_arcade::romset::known().iter().map(|s| s.name).collect();
     let map_text = gp_assets::arcade::mcr_91490_map(game, title, &sets);
     let (lifted, _) = crate::assets::lift_files(&rom.bytes, &map_text)
         .context("lifting with the skeleton's asset map")?;
@@ -557,10 +575,23 @@ fn arcade_roms_toml(
         s,
         "notes = {}",
         q(&format!(
-            "MAME's {} ({}, {}), Midway MCR boards 91490 and 90913: a 512x480 screen at 30 frames a second. The region is a guess.",
-            set.name, set.title, set.year
+            "MAME's {} ({}), Midway MCR boards 91490 and 90913: a 512x480 screen at 30 frames a second. The region is a guess.",
+            set.name, set.title
         ))
     );
+    // The set's chips, as the roms.toml it came from lists them: what the
+    // tools know the set by (docs/sources.md, "Arcade chips").
+    for c in set.chips {
+        let _ = write!(
+            s,
+            "\n[[source.chip]]\nname = {}\nregion = {}\noffset = {:#07x}\nsize = {:#06x}\nsha1 = {}\n",
+            q(c.name),
+            q(c.region.name()),
+            c.offset,
+            c.size,
+            q(c.sha1)
+        );
+    }
     gp_evidence::registry::Registry::from_toml(&s, Path::new("roms.toml"))
         .map_err(|e| anyhow::anyhow!("the new roms.toml doesn't read back: {e}"))?;
     Ok(s)
@@ -633,25 +664,44 @@ fn package_toml(
     )
 }
 
-/// The NES ROM entries game-printer registered for games with no folder
-/// here yet (roms/known.toml).
-const KNOWN: &str = include_str!("../../../roms/known.toml");
+/// Where the games checkout keeps the ROM entries of games that have no
+/// folder yet (game-printer's registered NES entries), and their coverage
+/// definitions (`known/coverage/<id>.toml`).
+pub(crate) const KNOWN_FILE: &str = "known/sources.toml";
 
-/// The entry of roms/known.toml with this headerless SHA-256, as its
+/// The games checkout's [`KNOWN_FILE`], or nothing.
+fn known_text(games: Option<&Path>) -> String {
+    crate::roms_cmd::games_dir(games)
+        .and_then(|g| fs::read_to_string(g.join(KNOWN_FILE)).ok())
+        .unwrap_or_default()
+}
+
+/// The entry of the known list with this headerless SHA-256, as its
 /// text, from its `id` line to its last.
-fn known_entry(sha256: &str) -> Option<&'static str> {
+fn known_entry<'a>(known: &'a str, sha256: &str) -> Option<&'a str> {
     let line = format!("sha256 = {}", q(sha256));
-    KNOWN
+    known
         .split("\n[[source]]\n")
         .skip(1)
         .find(|b| b.lines().any(|l| l == line))
 }
 
-fn roms_toml(id: &str, title: &str, image: &NesImage, date: &str) -> Result<String> {
-    if let Some(block) = known_entry(&image.sha256) {
+/// The coverage definition waiting for a known entry (its `id`), in the
+/// games checkout's `known/coverage/`.
+fn known_coverage(games: Option<&Path>, block: &str) -> Option<String> {
+    let id = block
+        .lines()
+        .find_map(|l| l.strip_prefix("id = "))?
+        .trim_matches('"');
+    let dir = crate::roms_cmd::games_dir(games)?;
+    fs::read_to_string(dir.join("known/coverage").join(format!("{id}.toml"))).ok()
+}
+
+fn roms_toml(known: &str, id: &str, title: &str, image: &NesImage, date: &str) -> Result<String> {
+    if let Some(block) = known_entry(known, &image.sha256) {
         // The known entry, under the new game's source id.
         let mut s = String::from(
-            "# Hashes and facts only: never the game itself. Copied by gp game new from gameprinter's roms/known.toml, which game-printer's sources/nes.toml registered.\n[[source]]\n",
+            "# Hashes and facts only: never the game itself. Copied by gp game new from the games checkout's known/sources.toml, which game-printer's sources/nes.toml registered.\n[[source]]\n",
         );
         for l in block.trim_end().lines() {
             if l.starts_with("id = ") {
@@ -750,7 +800,7 @@ fn template_toml(
 const BUTTONS: &[&str] = &["left", "right", "up", "down", "a", "b", "start", "select"];
 
 /// The arcade skeleton's actions: each named for its button but the
-/// button, which is the game's to name (Tapper's tap).
+/// button, which is the game's to name (a tap, a jump).
 const ARCADE_ACTIONS: &[(&str, &str)] = &[
     ("coin", "coin"),
     ("start1", "start1"),
@@ -920,7 +970,7 @@ fn fidelity_toml(name: &str, title: &str) -> String {
         q(gp_contract::VERSION),
         q(name),
         q(&format!(
-            "{title}: the original's play frame for frame through the state mapping, its random choices given. The corpus bars are what `gp corpus score` and `gp model gate` hold every clip to: the owner's bar for Donkey Kong (2026-11-02), every game's default until its own is set (written by gp game new)"
+            "{title}: the original's play frame for frame through the state mapping, its random choices given. The corpus bars are what `gp corpus score` and `gp model gate` hold every clip to: the owner's bar of 2026-11-02 for the first game ported, every game's default until its own is set (written by gp game new)"
         ))
     );
     gp_contract::Contract::parse(&text)
@@ -1132,8 +1182,8 @@ mod tests {
         );
     }
 
-    /// An arcade game from the owner's rbtapper romset, when it's on this
-    /// machine: the package names the set by its identity, the model reads
+    /// An arcade game from a real romset ($GP_GAME_DIR's first oracle
+    /// set), when it's on this machine: the package names the set by its identity, the model reads
     /// the arcade device at 30 frames a second, and no chip's bytes are in
     /// any file written. Skipped without the romset.
     #[test]
@@ -1141,9 +1191,12 @@ mod tests {
         if gp_arcade::skip_slow_test() {
             return;
         }
-        let Some(zip) = gp_arcade::romset::local_romset("rbtapper") else {
-            eprintln!("skipped: no rbtapper romset");
-            return;
+        let (set_name, zip) = match gp_arcade::romset::test_oracle_set_path() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("skipped: {e}");
+                return;
+            }
         };
         let d = tempfile::tempdir().unwrap();
         let home = d.path().join("home");
@@ -1153,15 +1206,15 @@ mod tests {
             roms: home.join("roms"),
         };
         fs::create_dir_all(paths.roms.join("arcade")).unwrap();
-        let rom = paths.roms.join("arcade/rbtapper.zip");
+        let rom = paths.roms.join(format!("arcade/{set_name}.zip"));
         fs::copy(&zip, &rom).unwrap();
         let games = d.path().join("games");
         fs::create_dir_all(&games).unwrap();
         let a = New {
-            game: "tapper",
+            game: "made-up",
             rom: &rom,
             genre: "other",
-            title: Some("Tapper"),
+            title: Some("Made Up"),
             namespace: Some("someone"),
             games: Some(&games),
             source: None,
@@ -1170,12 +1223,12 @@ mod tests {
         };
         let out = run(&a, &paths).unwrap();
         assert_eq!(out.json["platform"], "arcade");
-        assert_eq!(out.json["system"], "rbtapper");
+        assert_eq!(out.json["system"], set_name);
         assert_eq!(
             out.json["rom"],
-            gp_arcade::romset::set("rbtapper").unwrap().identity()
+            gp_arcade::romset::set(set_name).unwrap().identity()
         );
-        let dir = games.join("tapper");
+        let dir = games.join("made-up");
         crate::model::check(&dir, None).unwrap();
         let m =
             gp_model::Model::parse(&fs::read_to_string(dir.join("model.toml")).unwrap()).unwrap();
@@ -1191,7 +1244,14 @@ mod tests {
         // In the board's own units: a grid of 8, a sprite's hitbox of 16.
         assert!(mapping.board_units);
         assert_eq!(m.levels["main"].core.tile_size, 8);
-        assert_eq!(pkg.entries[0].system.as_deref(), Some("rbtapper"));
+        assert_eq!(pkg.entries[0].system.as_deref(), Some(set_name));
+        // The new game lists its set's chips, as its source's roms.toml did.
+        let roms = fs::read_to_string(dir.join("roms.toml")).unwrap();
+        let listed = gp_arcade::romset::sets_from_roms_toml(&roms).unwrap();
+        assert_eq!(
+            listed[0].identity(),
+            gp_arcade::romset::set(set_name).unwrap().identity()
+        );
         assert!(pkg.roms_toml_disagreements().unwrap().is_empty());
         let t = crate::template::check(&dir, &rom).unwrap();
         assert_eq!(t.exit, 0, "{}", t.text);
@@ -1206,16 +1266,37 @@ mod tests {
         }
     }
 
-    /// A ROM game-printer registered gets its entry from roms/known.toml.
+    /// A ROM with an entry in the games checkout's known list gets that
+    /// entry, and its coverage definition when one waits, under the new
+    /// game's id (a made-up entry and definition).
     #[test]
-    fn the_known_entries_load_and_one_is_copied_under_the_new_games_id() {
-        let reg = gp_evidence::registry::Registry::from_toml(KNOWN, Path::new("roms/known.toml"))
-            .unwrap();
-        assert_eq!(reg.sources.len(), 6);
-        let kirby = "a6b81fec11c24a33fd763db5c28005e760a1614e70c1bb5ccde0bd4242431000";
-        let block = known_entry(kirby).unwrap();
-        assert!(block.starts_with("id = \"kirby-usa-prg0\""));
-        assert!(known_entry(&"0".repeat(64)).is_none());
+    fn a_known_entry_and_its_coverage_are_found_in_the_games_checkout() {
+        let d = tempfile::tempdir().unwrap();
+        let sha = "ab".repeat(32);
+        fs::create_dir_all(d.path().join("known/coverage")).unwrap();
+        fs::write(
+            d.path().join(KNOWN_FILE),
+            format!("# made up\n[[source]]\nid = \"made-up-a\"\ntitle = \"Made Up\"\nplatform = \"nes\"\nregion = \"ntsc\"\nsha256 = \"{sha}\"\nstatus = \"unverified\"\n"),
+        )
+        .unwrap();
+        fs::write(
+            d.path().join("known/coverage/made-up-a.toml"),
+            "schema = 1\nsource = \"made-up-a\"\n",
+        )
+        .unwrap();
+        let known = known_text(Some(d.path()));
+        let reg =
+            gp_evidence::registry::Registry::from_toml(&known, Path::new(KNOWN_FILE)).unwrap();
+        assert_eq!(reg.sources.len(), 1);
+        let block = known_entry(&known, &sha).unwrap();
+        assert!(block.starts_with("id = \"made-up-a\""));
+        assert!(known_entry(&known, &"0".repeat(64)).is_none());
+        assert!(
+            known_coverage(Some(d.path()), block)
+                .unwrap()
+                .contains("made-up-a")
+        );
+        assert!(known_text(Some(&d.path().join("none"))).is_empty());
     }
 
     /// The state mapping parses with the draw search's sites, without them,

@@ -3,7 +3,7 @@
 //! latch and to the watchdog, the sound CPU's AY-8910 register writes, and
 //! both CPUs' interrupts (the main CPU's come from its CTC).
 //!
-//! Off by default ([`crate::Tapper::set_events`]), and never part of the
+//! Off by default ([`crate::Mcr::set_events`]), and never part of the
 //! state: a run that logs them reaches the same states as one that doesn't.
 //!
 //! A position is where the screen's beam was when it happened, counted from

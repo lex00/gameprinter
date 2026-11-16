@@ -7,8 +7,8 @@
 //! derived value differs from the model's.
 //!
 //! Ported from game-printer's derive.rs. Its pinned downloads
-//! (game-printer's pinned.rs) were other games' disassemblies (Super Mario
-//! Bros., Mega Man 2, Super Mario Bros. 2), cut with those games, so a ref
+//! (game-printer's pinned.rs) were three other NES games' disassemblies,
+//! cut with those games, so a ref
 //! `in` a pinned download is reported as not read. A model in a game's
 //! package (a folder with package.toml) reads its refs from the package,
 //! where game-printer read them from the repo. The run recorder's metrics

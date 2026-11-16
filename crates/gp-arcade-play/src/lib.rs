@@ -1,7 +1,7 @@
 //! An arcade original played live in the mechanic page: gp-play's
 //! [`Player`] for gp-arcade.
 //!
-//! [`Player`] runs Tapper a frame at a time with the controls a person
+//! [`Player`] runs an MCR set a frame at a time with the controls a person
 //! holds, keeps what they played as an arcade input log (gp-evidence's
 //! `InputLog` in the oracle's spelling, `gp-arcade-input 0`) and every
 //! frame's picture hash, and draws each frame as RGBA for a canvas. Built
@@ -24,7 +24,7 @@
 use gp_arcade::attotime::Attotime;
 use gp_arcade::ssio::{FRAME, SoundBoard};
 use gp_arcade::video::{HEIGHT, WIDTH};
-use gp_arcade::{Controls, FourWay, Romset, Tapper};
+use gp_arcade::{Controls, FourWay, Mcr, Romset};
 use gp_evidence::Hash;
 use gp_evidence::input_log::{InputFrame, InputLog};
 
@@ -67,7 +67,7 @@ fn text<E: std::fmt::Display>(e: E) -> String {
 
 /// One machine being played, and what was played on it.
 pub struct Player {
-    tapper: Tapper,
+    mcr: Mcr,
     /// The frames played so far; `frames.len()` is the machine's frame.
     log: InputLog,
     /// Every frame's picture hash from frame 0 (the oracle's).
@@ -92,10 +92,10 @@ impl Player {
     /// Powers on a set already read (a test's made-up one,
     /// gp_arcade::testrom).
     pub fn from_romset(rom: &Romset) -> Self {
-        let tapper = Tapper::power_on(rom);
-        let pictures = vec![tapper.picture_hash()];
+        let mcr = Mcr::power_on(rom);
+        let pictures = vec![mcr.picture_hash()];
         Self {
-            tapper,
+            mcr,
             log: InputLog::new_arcade(rom.name, COLUMNS),
             pictures,
             script: None,
@@ -145,7 +145,7 @@ impl Player {
 
     /// Turns keeping each frame's sound on or off.
     pub fn set_audio(&mut self, on: bool) {
-        self.tapper.set_audio(on);
+        self.mcr.set_audio(on);
         self.audio.clear();
     }
 
@@ -171,25 +171,26 @@ impl Player {
         }
         let bits = self.stick.filter(Controls::from_bits(bits)).bits();
         self.play(bits);
-        Ok(self.tapper.polled())
+        Ok(self.mcr.polled())
     }
 
     /// One frame with these bits on the board as they are.
     fn play(&mut self, bits: u32) {
-        self.tapper.step(Controls::from_bits(bits));
+        self.mcr.step(Controls::from_bits(bits));
         self.audio.clear();
         self.audio
-            .extend(self.tapper.take_audio().iter().flat_map(|s| [s[0], s[1]]));
+            .extend(self.mcr.take_audio().iter().flat_map(|s| [s[0], s[1]]));
         // The game's own flag, as gp-play keeps it: false on the boot
-        // frames before the game first reads its ports (Tapper's first 94)
+        // frames before the game first reads its ports (94 in the first set
+        // ported)
         // and on any other frame it doesn't. The text log can't say it, so
         // a log read back has every frame polled.
         self.log.frames.push(InputFrame {
-            polled: self.tapper.polled(),
+            polled: self.mcr.polled(),
             pads: [bits as u8, 0, 0, 0],
             reset: false,
         });
-        self.pictures.push(self.tapper.picture_hash());
+        self.pictures.push(self.mcr.picture_hash());
     }
 
     /// Plays the next frame of the log being replayed. False when there's
@@ -224,7 +225,7 @@ impl Player {
     /// The player's whole state as bytes: the machine's snapshot, the
     /// input log and every frame's picture hash.
     pub fn save(&self) -> Result<Vec<u8>, String> {
-        let snap = self.tapper.snapshot();
+        let snap = self.mcr.snapshot();
         let log = self.log.to_text();
         let pictures: Vec<u8> = self.pictures.iter().flat_map(|h| h.to_le_bytes()).collect();
         let mut out = Vec::with_capacity(32 + snap.len() + log.len() + pictures.len());
@@ -276,8 +277,8 @@ impl Player {
         if log.frames.len() as u64 != frame || pictures.len() as u64 != frame + 1 {
             return Err("the saved state's log and hashes don't reach its frame".into());
         }
-        self.tapper.restore(&snap)?;
-        self.tapper.take_audio();
+        self.mcr.restore(&snap)?;
+        self.mcr.take_audio();
         self.audio.clear();
         // The filter's state isn't saved: it starts again from the last
         // frame's directions, which differs only while a diagonal is held.
@@ -298,18 +299,18 @@ impl Player {
     /// Keeps each frame's latch writes as they reached the sound board
     /// ([`Player::take_latches`]), or stops.
     pub fn set_latch_log(&mut self, on: bool) {
-        self.tapper.set_latch_log(on);
+        self.mcr.set_latch_log(on);
     }
 
     /// The last frames' latch writes as [`SoundPlayer::frame`] takes them,
     /// timed from the start of the frame that began at `frame_start`.
     pub fn take_latches(&mut self, frame_start: Attotime) -> Vec<u8> {
-        latch_records(frame_start, &self.tapper.take_latch_log())
+        latch_records(frame_start, &self.mcr.take_latch_log())
     }
 
     /// The emulated time.
     pub fn time(&self) -> Attotime {
-        self.tapper.time()
+        self.mcr.time()
     }
 
     /// What was played, as an arcade input log's text.
@@ -332,7 +333,7 @@ impl Player {
     /// The machine's state hash now: the BLAKE3 of its snapshot, as a
     /// clip's `state` keeps it.
     pub fn state_hash(&self) -> Hash {
-        Hash::of(&self.tapper.snapshot())
+        Hash::of(&self.mcr.snapshot())
     }
 
     /// The last frame's picture as RGBA, 512 by 480.
@@ -342,7 +343,7 @@ impl Player {
             .as_chunks_mut::<4>()
             .0
             .iter_mut()
-            .zip(self.tapper.picture())
+            .zip(self.mcr.picture())
         {
             *px = [(c >> 16) as u8, (c >> 8) as u8, c as u8, 255];
         }
@@ -373,15 +374,15 @@ pub fn latch_records(frame_start: Attotime, writes: &[(Attotime, u8, u8)]) -> Ve
 }
 
 /// When a frame's sound requests reach the board, for a model that gives
-/// only each latch and byte (gp_sim::Ext::sound_requests): Tapper's
-/// interrupt sends the queue early in the frame, a write about every 10
-/// microseconds (gp-arcade's latch log on tapper-first: from 1.26 to 1.43
-/// ms in). Timed from 1.30 ms on, 10 microseconds apart, the board alone
-/// makes the whole machine's sound on every frame of tapper-first in the
-/// tapper, tapperg, sutapper and tappera sets; at the frame's start it
-/// differs on a quarter of them. Root Beer Tapper's own sound program
-/// (rbtapper) hears the times closer: its AY writes are the machine's on
-/// all but a few frames, its samples on three quarters.
+/// only each latch and byte (gp_sim::Ext::sound_requests): the first MCR
+/// game ported sends the queue from its interrupt early in the frame, a
+/// write about every 10 microseconds (gp-arcade's latch log on its first
+/// oracle capture: from 1.26 to 1.43 ms in). Timed from 1.30 ms on, 10
+/// microseconds apart, the board alone makes the whole machine's sound on
+/// every frame of that capture in four of the game's five sets; at the
+/// frame's start it differs on a quarter of them. The fifth set's own
+/// sound program hears the times closer: its AY writes are the machine's
+/// on all but a few frames, its samples on three quarters.
 pub const REQUEST_AT: i64 = 1_300_000_000_000_000;
 /// The time between two requests of a frame ([`REQUEST_AT`]).
 pub const REQUEST_STEP: i64 = 10_000_000_000_000;
@@ -500,17 +501,33 @@ mod tests {
 
     /// A model's requests, the latch and the byte alone, timed by
     /// [`REQUEST_AT`]: the board alone fed the whole machine's latch
-    /// writes so makes its sound on every frame of tapper-first (the MAME
-    /// capture's input), with the owner's tapper set. Skipped without it.
+    /// writes so makes its sound on every frame of the game's first oracle
+    /// input log, with the game's first set ($GP_GAME_DIR,
+    /// romset::test_romset_path). Skipped without them.
     #[test]
     fn requests_without_their_times_sound_as_the_whole_machine() {
-        let Some(path) = gp_arcade::romset::local_romset("tapper") else {
-            eprintln!("skipped: no tapper romset");
-            return;
+        let ((name, path), log) = match (
+            gp_arcade::romset::test_romset_path(),
+            gp_arcade::romset::test_input_log(),
+        ) {
+            (Ok(p), Ok(l)) => (p, l),
+            (Err(e), _) | (_, Err(e)) => {
+                eprintln!("skipped: {e}");
+                return;
+            }
         };
         let zip = std::fs::read(path).unwrap();
-        let log = include_str!("../../../scripts/oracle/inputs/tapper-first.input")
-            .replace("system rbtapper", "system tapper");
+        // The log played on this set, whichever set it was recorded on.
+        let log: String = log
+            .lines()
+            .map(|l| {
+                if l.starts_with("system ") {
+                    format!("system {name}\n")
+                } else {
+                    format!("{l}\n")
+                }
+            })
+            .collect();
         let log = log.as_str();
         let mut whole = Player::replay(&zip, log).unwrap();
         whole.set_audio(true);
@@ -540,12 +557,15 @@ mod tests {
         );
     }
 
+    /// A real set's zip ($GP_GAME_DIR, romset::test_romset_path).
     fn zip() -> Option<Vec<u8>> {
-        let Some(p) = gp_arcade::romset::local_romset("rbtapper") else {
-            eprintln!("skipped: no rbtapper romset");
-            return None;
-        };
-        Some(std::fs::read(p).unwrap())
+        match gp_arcade::romset::test_romset_path() {
+            Ok((_, p)) => Some(std::fs::read(p).unwrap()),
+            Err(e) => {
+                eprintln!("skipped: {e}");
+                None
+            }
+        }
     }
 
     /// Played with a coin and a start, the log replays to the same picture
@@ -637,7 +657,7 @@ mod tests {
 
     #[test]
     fn info_is_json_with_the_screen() {
-        let i = info("rbtapper");
+        let i = info("madeup");
         assert!(
             i.contains("\"width\":512") && i.contains("\"fps\":[30,1]"),
             "{i}"

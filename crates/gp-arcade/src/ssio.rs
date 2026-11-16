@@ -2,7 +2,7 @@
 // copyright-holders:Aaron Giles
 //
 // The 90913 Super Sound I/O board on its own, as MAME 0.276 runs it inside
-// Tapper (src/mame/midway/midway.cpp, midway_ssio_device: the sound CPU's
+// the MCR machine (src/mame/midway/midway.cpp, midway_ssio_device: the sound CPU's
 // map, its 14024 interrupt counter and the four latches from the main
 // board), with the scheduling of src/emu/schedule.cpp. BSD-3-Clause.
 
@@ -10,7 +10,7 @@
 //! interrupts it, the four latches the main board writes and the two
 //! AY-8910s ([`crate::sound`]), with no main board.
 //!
-//! [`crate::Tapper`] runs this board beside the main CPU. A player whose
+//! [`crate::Mcr`] runs this board beside the main CPU. A player whose
 //! game is a model rather than the original's main CPU (the public page,
 //! where a Rust model plays the game) has no main CPU to write the
 //! latches, so it runs this instead and writes them itself: the board's
@@ -19,8 +19,8 @@
 //! and the same speaker samples as the whole machine (tests/ssio_alone.rs,
 //! with the romset on the machine).
 //!
-//! The SSIO's answers to the main board (its status latch, which Tapper's
-//! boot waits on) are kept but go nowhere.
+//! The SSIO's answers to the main board (its status latch, which a game's
+//! boot may wait on) are kept but go nowhere.
 
 use std::sync::Arc;
 
@@ -31,7 +31,7 @@ use crate::sched::{Exec, Scheduler};
 use crate::sound::Sound;
 use crate::z80::{Z80, Z80Bus};
 
-/// One of Tapper's 30 Hz video frames, the length [`SoundBoard::frame`]
+/// One of the MCR board's 30 Hz video frames, the length [`SoundBoard::frame`]
 /// runs.
 pub const FRAME: Attotime = Attotime {
     seconds: 0,
@@ -78,13 +78,13 @@ pub struct SoundBoard {
 
 impl SoundBoard {
     /// The board at power-on, from the romset's sound program and PROM, as
-    /// it is at [`crate::Tapper::power_on`].
+    /// it is at [`crate::Mcr::power_on`].
     pub fn power_on(rom: &Romset) -> Self {
         let mut sched = Scheduler::new(
             vec![Exec::new(crate::mcr::SSIO_CPU_CLOCK)],
             Attotime::from_hz(60),
         );
-        // In Tapper's order: the sound manager's timer first, then the
+        // In the whole machine's order: the sound manager's timer first, then the
         // counter's.
         let t_sound = sched.alloc(What::SoundUpdate);
         let fifty = Attotime::from_hz(50);
@@ -171,7 +171,7 @@ impl SoundBoard {
 
     /// The sound CPU's writes to the AYs since the last frame started:
     /// chip, latch (0 address, 2 data) and value, as
-    /// [`crate::Tapper::ay_writes`] gives them.
+    /// [`crate::Mcr::ay_writes`] gives them.
     pub fn ay_writes(&self) -> &[(u8, u8, u8)] {
         &self.bus.ay_writes
     }
@@ -189,7 +189,7 @@ impl SoundBoard {
 
     /// The speakers' samples made since the last call, left (AY 0) and
     /// right (AY 1), at [`crate::sound::OUT_RATE`], as
-    /// [`crate::Tapper::take_audio`] gives them.
+    /// [`crate::Mcr::take_audio`] gives them.
     pub fn take_audio(&mut self) -> Vec<[f32; 2]> {
         self.bus
             .sound
@@ -332,7 +332,7 @@ impl Z80Bus for Bus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Controls, Tapper};
+    use crate::{Controls, Mcr};
 
     fn made_up() -> Romset {
         crate::testrom::sounding()
@@ -356,7 +356,7 @@ mod tests {
     #[test]
     fn alone_it_sounds_as_it_does_in_the_whole_machine() {
         let rom = made_up();
-        let mut whole = Tapper::power_on(&rom);
+        let mut whole = Mcr::power_on(&rom);
         whole.set_audio(true);
         whole.set_latch_log(true);
         let mut alone = SoundBoard::power_on(&rom);

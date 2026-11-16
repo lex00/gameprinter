@@ -25,7 +25,7 @@ pub struct Board {
 }
 
 impl Board {
-    /// The MCR main CPU (Tapper's): ROM at 0000-DFFF, work RAM E000-E7FF.
+    /// The MCR main CPU: ROM at 0000-DFFF, work RAM E000-E7FF.
     pub fn mcr_main(rom: &[u8]) -> Board {
         Board {
             rom: rom.to_vec(),

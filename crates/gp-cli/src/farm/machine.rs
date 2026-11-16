@@ -127,7 +127,7 @@ pub(crate) fn rom_sha256(bytes: &[u8]) -> Result<String> {
 #[derive(Clone)]
 pub(crate) enum Machine {
     Nes(gp_nes::Nes),
-    Arcade(Box<gp_arcade::Tapper>),
+    Arcade(Box<gp_arcade::Mcr>),
 }
 
 impl Machine {
@@ -141,7 +141,7 @@ impl Machine {
             }
             crate::original::Platform::Arcade => {
                 let set = gp_arcade::Romset::from_zip(bytes).map_err(|e| anyhow!("{e}"))?;
-                Machine::Arcade(Box::new(gp_arcade::Tapper::power_on(&set)))
+                Machine::Arcade(Box::new(gp_arcade::Mcr::power_on(&set)))
             }
         })
     }

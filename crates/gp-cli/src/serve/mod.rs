@@ -145,7 +145,7 @@ pub struct ServeOpts {
     /// Claude unasked (`serve/clip_agent.rs`).
     #[arg(long, value_name = "COMMAND")]
     clip_agent: Option<String>,
-    /// A game's ROM set, as GAME=SET or GAME=FILE (tapper=rbtapper): the
+    /// A game's ROM set, as GAME=SET or GAME=FILE (rooftop=rooftop2): the
     /// set its page plays, kept for the game as the page's set picker keeps
     /// it.
     #[arg(long, value_name = "GAME=SET")]
@@ -713,13 +713,13 @@ pub(crate) mod tests {
         assert!(matches("/api/play/free/{session}", "/api/play/free/a/b").is_none());
         let p = matches(
             "/api/capture/{run}/preview/{*file}",
-            "/api/capture/dk/preview/a/b.js",
+            "/api/capture/hop/preview/a/b.js",
         )
         .unwrap();
         assert_eq!(p["file"], "a/b.js");
         assert_eq!(
-            matches("/api/capture/{run}/game", "/api/capture/donkey%2Dkong/game").unwrap()["run"],
-            "donkey-kong"
+            matches("/api/capture/{run}/game", "/api/capture/roof%2Dtop/game").unwrap()["run"],
+            "roof-top"
         );
     }
 

@@ -67,7 +67,7 @@ impl SessionClip {
 }
 
 /// Whether a clip spec names a session's clips rather than a corpus clip:
-/// corpus IDs have no `:` and are dotted (dk.hammer.018); a session's name
+/// corpus IDs have no `:` and are dotted (hop.jump.018); a session's name
 /// is lower-case letters, digits and dashes.
 pub(crate) fn is_session_spec(spec: &str) -> bool {
     spec.contains(':') || (!spec.contains('.') && crate::mechanic::name_ok(spec))
@@ -229,25 +229,25 @@ mod tests {
             store: d.path().join("store"),
             roms: d.path().join("roms"),
         };
-        session(d.path(), "dk", "jump", &[1, 2, 10]);
-        session(d.path(), "dk", "walk", &[3]);
-        session(d.path(), "dk", "sealed-1", &[1]);
-        let one = clips(&paths, "dk", "jump:2").unwrap();
+        session(d.path(), "hop", "jump", &[1, 2, 10]);
+        session(d.path(), "hop", "walk", &[3]);
+        session(d.path(), "hop", "sealed-1", &[1]);
+        let one = clips(&paths, "hop", "jump:2").unwrap();
         assert_eq!(one.len(), 1);
         assert_eq!(
             (one[0].name(), one[0].key()),
             ("jump:2".into(), "jump-002".into())
         );
-        let names: Vec<String> = clips(&paths, "dk", "jump")
+        let names: Vec<String> = clips(&paths, "hop", "jump")
             .unwrap()
             .iter()
             .map(SessionClip::name)
             .collect();
         assert_eq!(names, ["jump:1", "jump:2", "jump:10"]);
-        assert!(clips(&paths, "dk", "jump:4").is_err());
-        assert!(clips(&paths, "dk", "sealed-1:1").is_err());
-        assert!(clips(&paths, "dk", "../x").is_err());
-        let (every, sealed, left_out) = all(&paths, "dk").unwrap();
+        assert!(clips(&paths, "hop", "jump:4").is_err());
+        assert!(clips(&paths, "hop", "sealed-1:1").is_err());
+        assert!(clips(&paths, "hop", "../x").is_err());
+        let (every, sealed, left_out) = all(&paths, "hop").unwrap();
         assert_eq!((sealed, left_out), (1, 0));
         let names: Vec<String> = every.iter().map(SessionClip::name).collect();
         assert_eq!(names, ["jump:1", "jump:2", "jump:10", "walk:3"]);
@@ -259,6 +259,6 @@ mod tests {
     fn a_corpus_id_is_not_a_session() {
         assert!(is_session_spec("jump:3"));
         assert!(is_session_spec("climb-ladder"));
-        assert!(!is_session_spec("dk.hammer.018"));
+        assert!(!is_session_spec("hop.jump.018"));
     }
 }

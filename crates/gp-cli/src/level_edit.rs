@@ -2033,8 +2033,8 @@ fn check(
             }
         }
         // Ladders the code climbs, by the model's numbers: the kit's
-        // rule for the stages it covers (Donkey Kong's barrels and fires
-        // climb 25m's ladders by these; another stage's code reads its own
+        // rule for the stages it covers (one game's barrels and fires
+        // climb its first stage's ladders by these; another stage's code reads its own
         // tables, which these numbers aren't).
         let held = kit_covers(g, refs) || g.kit().is_none();
         for (entity, name, x, foot, size) in code_ladders(model, &spec).into_iter().filter(|_| held)
@@ -2079,8 +2079,8 @@ fn check(
                 });
             }
             // The goal, by full ladders from the start's girder: the kit's
-            // rule where it covers the stage (Donkey Kong's 75m is crossed
-            // by its elevators; the play check says what it couldn't play).
+            // rule where it covers the stage (one game's elevator stage
+            // is crossed by its elevators; the play check says what it couldn't play).
             if let Some(goal) = lay.goal_under.filter(|_| held) {
                 let stand = feet - p.y.floor();
                 let start = lay
@@ -2259,7 +2259,7 @@ fn group_words(v: &[Option<usize>]) -> String {
 
 /// Ladders the model's numbers say a thing's code climbs: an entity's
 /// params `ladder_<k>_x` with `ladder_<k>_foot`, or `ladder_c<k>` with
-/// `ladder_cfoot<k>` (Donkey Kong's fires' four and the barrels' third).
+/// `ladder_cfoot<k>` (one game's fires' four and its barrels' third).
 /// Each as (entity, the params' name, x, foot, the entity's size).
 fn code_ladders(model: &Model, spec: &Spec) -> Vec<(String, String, i64, i64, [i64; 2])> {
     let mut out = Vec::new();
@@ -4015,9 +4015,9 @@ mod tests {
         let games = t.path().join("games");
         let copy = home.join("work").join("mcp").join("mine");
         fs::create_dir_all(&copy).unwrap();
-        fs::create_dir_all(games.join("donkey-kong")).unwrap();
+        fs::create_dir_all(games.join("rooftop")).unwrap();
         assert!(editable_in(&copy, &home, Some(&games)).is_ok());
-        let e = editable_in(&games.join("donkey-kong"), &home, Some(&games)).unwrap_err();
+        let e = editable_in(&games.join("rooftop"), &home, Some(&games)).unwrap_err();
         assert!(e.contains("games checkout's original"), "{e}");
         let e = editable_in(&t.path().join("elsewhere"), &home, Some(&games)).unwrap_err();
         assert!(e.contains("isn't a copy in this home"), "{e}");

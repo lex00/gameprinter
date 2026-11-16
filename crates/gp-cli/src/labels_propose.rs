@@ -29,7 +29,7 @@ use std::path::Path;
 use anyhow::{Context as _, Result, bail};
 use gp_arcade::levels::{EdgeKind, Watcher};
 use gp_arcade::mcr::AccessKind;
-use gp_arcade::{Controls, Romset, Tapper};
+use gp_arcade::{Controls, Mcr, Romset};
 use gp_evidence::input_log::InputFrame;
 use serde_json::{Value, json};
 
@@ -100,7 +100,7 @@ pub(crate) fn propose(
     inputs: &[InputFrame],
     names: &BTreeMap<u16, String>,
 ) -> Result<(String, Value)> {
-    let mut t = Tapper::power_on(set);
+    let mut t = Mcr::power_on(set);
     let mut w = Watcher::new(false);
     // By RAM address: writers and readers by PC; and each byte's frames
     // changed and frames up by one.

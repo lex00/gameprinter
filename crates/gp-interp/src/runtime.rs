@@ -21,7 +21,7 @@ pub const FRAME_KIND: &str = "frame";
 /// frame there, so a random draws script lines its frames up from that
 /// frame and not from the frame the start was asked for: a run from
 /// power-on (`from` 0) starts at the original's first polled frame, 3 for
-/// Donkey Kong, and its draws came 3 frames off ("the rebuild drew
+/// one NES game, and its draws came 3 frames off ("the rebuild drew
 /// `ladder` on frame 781; the original's next draw is `ladder` on frame
 /// 784"). A runtime without draws needn't know the path.
 pub const DRAWS_BASE: &str = "draws.base";
@@ -29,7 +29,7 @@ pub const DRAWS_BASE: &str = "draws.base";
 /// The path a lockstep `set`s on each of the original's lag frames past
 /// its start, which the model doesn't step: the original's frames run one
 /// ahead of the model's from then on, so the draws script's do too. With
-/// a lag frame not counted, Donkey Kong's game B clip 1 drew `fire_way` a
+/// a lag frame not counted, one game's game B clip 1 drew `fire_way` a
 /// frame early after its lag at 1510 ("the rebuild drew `fire_way` on
 /// frame 1520; the original's next draw is `sound_buzz` on frame 1521").
 pub const DRAWS_LAG: &str = "draws.lag";

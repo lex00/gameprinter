@@ -547,8 +547,8 @@ pub fn prep_model(
     }
     if bound {
         // Without $GP_HOME (in the browser) there are no captures or banks:
-        // a model whose sound is its roles and a driver's APU writes (Donkey
-        // Kong's) needs neither, and a slot with no capture plays nothing.
+        // a model whose sound is its roles and a driver's APU writes (as one
+        // ported game's is) needs neither, and a slot with no capture plays nothing.
         let sets = home
             .map(|h| gp_look::sound::slot_sets(&model, h))
             .unwrap_or_default();
@@ -775,7 +775,7 @@ pub struct Named {
     pub sha256: String,
     pub id: Option<String>,
     pub title: Option<String>,
-    /// The title with its revision, such as `Donkey Kong (JU)`.
+    /// The title with its revision, such as `Rooftop Run (JU)`.
     pub name: Option<String>,
 }
 
@@ -1008,9 +1008,9 @@ pub fn play_only(model: &mut Model, levels: &[String]) {
 /// Each stage of the model's stages list whose level the model has but a
 /// ROM loaded only to play hasn't (not in `levels`) is one the game passes
 /// over (core `stages.skip`): that ROM's own game has no such stage, so
-/// the stage counter steps past it. Donkey Kong (JU) has no 50m and goes
-/// from 25m to 75m ($53 from 1 to 3), so with a JU ROM Original
-/// Edition's model plays 25m, 75m and 100m. The levels stay in the model.
+/// the stage counter steps past it. One game's first release has no
+/// second stage and steps its stage number $53 from 1 to 3, so with that
+/// ROM a later edition's model plays its first, third and fourth stages. The levels stay in the model.
 pub fn skip_missing(model: &mut Model, levels: &[String]) {
     let Some(st) = model.stages.as_mut() else {
         return;
@@ -1036,7 +1036,7 @@ pub const LOAD_FILE: &str = "load.json";
 /// which the ROM lacks and the lift leaves blank ([`found::fill`]).
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct Without {
-    /// What it is, in words a player reads ("50m").
+    /// What it is, in words a player reads ("stage 2").
     pub what: String,
     /// Levels of the model's the ROM's game hasn't: none may be in the
     /// load's `levels`. The lift takes them out of the model, and the game
@@ -1185,8 +1185,8 @@ impl Load {
 /// The model's text with its screens' text (`present.screens.text`) in
 /// the font `map` gives the HUD's slot: a ROM loaded only to play has its
 /// own font, whose charset may not name a character the model's template
-/// writes (Original Edition's turn screen numerals, `|` and `#`, on a
-/// Donkey Kong (JU) ROM). Such a character is written as a blank, as a
+/// writes (a later edition's turn screen numerals, `|` and `#`, on a
+/// first release's ROM). Such a character is written as a blank, as a
 /// HUD field leaves out one its font hasn't. A font the map doesn't hold
 /// or with no charset changes nothing.
 fn screen_text_in_font(text: &str, map: &gp_assets::AssetMap) -> Result<String, String> {
@@ -1356,8 +1356,8 @@ pub fn lift_game(rom: &[u8], dir: &Path, out: &Path) -> Result<Outcome, String> 
                 without: None,
             });
         }
-        // The model's assets the map hasn't (Original Edition's 50m on a
-        // Donkey Kong (JU) ROM), left blank.
+        // The model's assets the map hasn't (a later edition's second stage on a
+        // first release's ROM), left blank.
         let names: Vec<String> = t.map.assets.iter().map(|a| a.name().to_owned()).collect();
         if load.is_some() {
             for n in found::fill(
@@ -1428,8 +1428,8 @@ pub fn lift_game(rom: &[u8], dir: &Path, out: &Path) -> Result<Outcome, String> 
     );
     // A ROM loaded only to play draws the played model's pictures under
     // the names they have there, so a large-art look made on them fits it
-    // (issue 13: Donkey Kong (JU) without Original Edition's 50m and
-    // stage-clear scene numbered its frames and palette sets apart).
+    // (issue 13: a first release's ROM without the later edition's second
+    // stage and stage-clear scene numbered its frames and palette sets apart).
     let names = load.as_ref().map(|_| model.clone());
     // The whole model, so a look's line for a picture it hasn't got is the
     // look's to fix (add_ready_looks).
@@ -2224,67 +2224,62 @@ refs = [{ at = "notes.txt:4" }]
         assert!(e.contains("doesn't check"), "{e}");
     }
 
-    /// Original Edition's stages list names its levels m50 (50m), m75 and
-    /// m100 after 25m; with the page playing main only, main plays the slot
-    /// of each of them the model has a level for (m50 always; m75 since
-    /// 2026-11-05), a slot with no level is left as the model plays it, and
-    /// m50 stays in the model.
+    /// A made-up model with four stages after Moss Hop's level: s2 and s3
+    /// are levels, s4 isn't. Stages s2 and s3 are copies of main.
+    fn staged_model() -> Model {
+        let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../templates/mosshop/model.toml");
+        let text = format!(
+            "{}\n[stages]\norder = [\"main\", \"s2\", \"s3\", \"s4\"]\nstand_in = \"main\"\ncounter = \"lives\"\n",
+            read(&file).unwrap()
+        );
+        let mut model = Model::parse(&text).unwrap();
+        let main = model.levels["main"].clone();
+        model.levels.insert("s2".into(), main.clone());
+        model.levels.insert("s3".into(), main);
+        model.model.start_level = Some("main".into());
+        model
+    }
+
+    /// A stages list whose levels the page doesn't all play: with the page
+    /// playing main only, main plays the slot of each stage the model has
+    /// a level for, a slot with no level is left as the model plays it,
+    /// and the levels stay in the model.
     #[test]
-    #[ignore = "needs the games repo beside this one (phase 1.3)"]
     fn a_stage_whose_level_the_page_does_not_play_is_the_stand_ins() {
-        let file =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../games/donkey-kong/model.toml");
-        let mut model = Model::parse(&read(&file).unwrap()).unwrap();
+        let mut model = staged_model();
+        play_only(&mut model, &["main".to_owned()]);
         assert_eq!(
             model.stages.as_ref().unwrap().order,
-            ["main", "m50", "m75", "m100"]
+            ["main", "main", "main", "s4"]
         );
-        let expected: Vec<String> = model
-            .stages
-            .as_ref()
-            .unwrap()
-            .order
-            .iter()
-            .map(|s| {
-                if s != "main" && model.levels.contains_key(s) {
-                    "main".to_owned()
-                } else {
-                    s.clone()
-                }
-            })
-            .collect();
-        assert_eq!(
-            expected[1], "main",
-            "m50 is a level, so main stands in for it"
-        );
-        play_only(&mut model, &["main".to_owned()]);
-        assert_eq!(model.stages.as_ref().unwrap().order, expected);
-        assert!(model.levels.contains_key("m50"));
+        assert!(model.levels.contains_key("s2"));
         // A list that leaves the stand-in out changes nothing.
-        let mut other = Model::parse(&read(&file).unwrap()).unwrap();
-        play_only(&mut other, &["m50".to_owned()]);
+        let mut other = staged_model();
+        play_only(&mut other, &["s2".to_owned()]);
         assert_eq!(
             other.stages.as_ref().unwrap().order,
-            ["main", "m50", "m75", "m100"]
+            ["main", "s2", "s3", "s4"]
         );
     }
 
-    /// A Donkey Kong (JU) ROM has 25m, 75m and 100m (template.toml's
-    /// [[loads]]): Original Edition's 50m is a stage it passes over, not
-    /// one 25m plays, and the order and the levels stay as they are.
+    /// A ROM loaded only to play whose own game has no s2 (a template's
+    /// [[loads]]): s2 is a stage it passes over, not one main plays, and
+    /// the order and the levels stay as they are.
     #[test]
-    #[ignore = "needs the games repo beside this one (phase 1.3)"]
     fn a_stage_a_loaded_rom_has_no_level_for_is_skipped() {
-        let file =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../games/donkey-kong/model.toml");
-        let mut model = Model::parse(&read(&file).unwrap()).unwrap();
-        let levels = ["main", "m75", "m100"].map(str::to_owned);
+        let mut model = staged_model();
+        let levels = ["main", "s3"].map(str::to_owned);
         skip_missing(&mut model, &levels);
         let st = model.stages.as_ref().unwrap();
-        assert_eq!(st.order, ["main", "m50", "m75", "m100"]);
-        assert_eq!(st.skip, ["m50"]);
-        assert!(model.levels.contains_key("m50"));
-        assert!(gp_model::validate::validate(&model).is_empty());
+        assert_eq!(st.order, ["main", "s2", "s3", "s4"]);
+        assert_eq!(st.skip, ["s2"]);
+        assert!(model.levels.contains_key("s2"));
+        // Valid but for the evidence the made-up stages list hasn't got.
+        let problems: Vec<_> = gp_model::validate::validate(&model)
+            .into_iter()
+            .filter(|p| p.message != "no evidence covers this fact")
+            .collect();
+        assert!(problems.is_empty(), "{problems:?}");
     }
 
     /// A finished look for an arcade game names the board's pictures: it

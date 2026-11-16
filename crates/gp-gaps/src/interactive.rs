@@ -306,7 +306,7 @@ fn context(
             && a != b
         {
             // Wrapping, as changes.rs takes a counter's change: a mapped
-            // "counter" may be eight bytes (Donkey Kong's random register).
+            // "counter" may be eight bytes (one NES game's random register).
             counters.insert(name.clone(), b.wrapping_sub(*a));
         }
     }

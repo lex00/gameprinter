@@ -458,8 +458,8 @@ impl Nes {
     /// copy of the console run on an instruction at a time, so this one is
     /// left where it is. A game that runs its frame in the NMI handler
     /// can take longer than a frame: at the frame's end the handler is
-    /// still running, and the RAM there is a frame half done (Donkey
-    /// Kong's timer routine $F4AC, last in the handler, hasn't run yet on
+    /// still running, and the RAM there is a frame half done (one
+    /// game's timer routine $F4AC, last in the handler, hasn't run yet on
     /// a ladder grab with seven barrels out). The next NMI is taken only
     /// once the handler lets it, so the RAM then is the whole frame's.
     /// `None` when the CPU is at the NMI's entry already (the RAM is that

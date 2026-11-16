@@ -2,7 +2,7 @@
 //! facts built from gp-arcade instead of the NES's sprite table,
 //! nametables, APU and 6502 code.
 //!
-//! | Fact | NES | Arcade (Tapper's MCR board) |
+//! | Fact | NES | Arcade (an MCR board) |
 //! |---|---|---|
 //! | RAM | internal RAM, $0000-$07FF | the main CPU's address space, so a mapping's addresses (E000 on) read as they are; `ram_changed` is the work RAM, E000-E7FF |
 //! | objects | OAM clusters | the sprite list (`gp_arcade::video::sprite_list`) clustered as gp-track clusters them, in the game's half-pixel units |
@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context as _, Result, bail};
-use gp_arcade::Tapper;
+use gp_arcade::Mcr;
 use gp_arcade::dasm::{self, Flow};
 use gp_arcade::mcr::AccessKind;
 use gp_evidence::Paths;
@@ -177,7 +177,7 @@ pub(crate) fn build(args: &GapsArgs, t: &Template, paths: &Paths, opened: Opened
     if let Some(set) = &set {
         run.prg = set.maincpu[..0xe000].to_vec();
         // The routines: the code map of a watched run of these frames.
-        let mut t0 = Tapper::power_on(set);
+        let mut t0 = Mcr::power_on(set);
         let mut w = gp_arcade::levels::Watcher::new(false);
         let mut kept = Vec::new();
         for (i, f) in log.frames.iter().enumerate().take((range.end - 1) as usize) {

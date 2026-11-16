@@ -29,7 +29,7 @@ pub struct HostArgs {
     /// The theme's folder, for the publish command in the steps.
     #[serde(default)]
     pub theme_dir: Option<String>,
-    /// The game the theme is for, NAMESPACE/NAME (lex00/donkey-kong).
+    /// The game the theme is for, NAMESPACE/NAME (acme/rooftop).
     #[serde(default)]
     pub game: Option<String>,
     /// The GitHub repo, OWNER/REPO, when the checkout's origin isn't a
@@ -134,7 +134,7 @@ mod tests {
                 registry: Some("git:/tmp/acme-registry".into()),
                 theme: Some("acme/harbor-lights".into()),
                 theme_dir: None,
-                game: Some("lex00/donkey-kong".into()),
+                game: Some("acme/rooftop".into()),
                 github: None,
             },
         )
@@ -144,7 +144,7 @@ mod tests {
         assert!(r.json["how"].as_str().unwrap().contains("ask first"));
         assert_eq!(
             std::fs::read_to_string(&log).unwrap().trim(),
-            "--json registry host /tmp/acme-registry --theme acme/harbor-lights --game lex00/donkey-kong"
+            "--json registry host /tmp/acme-registry --theme acme/harbor-lights --game acme/rooftop"
         );
     }
 

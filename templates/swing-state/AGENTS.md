@@ -6,10 +6,10 @@ The mechanics are composed from two sources (docs/originals.md, "Composition"):
 
 | Part | Taken from | Converted |
 |---|---|---|
-| The candidate's run and jump, with its bands and held gravity | Super Mario Bros., `entities.mario` | Taken whole; the candidate is the scale |
-| Hecklers: walk, fall, hop, and a stomp that leaves a walker (`become`) | Super Mario Bros., `entities.paratroopa_green` | Unchanged |
-| Pundits rising from lecterns | Super Mario Bros., `entities.piranha_plant.path` | Unchanged |
-| Attack ads | Super Mario Bros., `entities.bullet_bill.fly` | Aimed at the player instead of left |
+| The candidate's run and jump, with its bands and held gravity | A platformer template, `entities.player` | Taken whole; the candidate is the scale |
+| Hecklers: walk, fall, hop, and a stomp that leaves a walker (`become`) | The same template, `entities.hopper` | Unchanged |
+| Pundits rising from lecterns | The same template, `entities.plant.path` | Unchanged |
+| Attack ads | The same template, `entities.bullet.fly` | Aimed at the player instead of left |
 | Pollsters' patrols, from a spawn table per level | Moss Hop, `entities.slug` | Kept at half the player's walk: 3 pixels every 4 frames |
 
 ## Files

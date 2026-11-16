@@ -32,7 +32,7 @@ gp roms add --clean ~/Downloads/game.nes    # adds a cleaned copy and its sideca
 
 ### ROMs game-printer registered
 
-`roms/known.toml` in the tool repo holds the six NES entries game-printer's `sources/nes.toml` registered for games that have no folder here yet: Kirby's Adventure (`kirby-usa-prg0`), Ninja Gaiden, Gauntlet, Gauntlet II, Q*bert and Track & Field, with their hashes, board facts where a cartridge database confirmed them, evidence and notes. Nothing names a ROM by them, so `roms scan` still calls these ROMs unknown and `gp game new` can start a game from one; when it does, it copies the matching entry into the new game's `roms.toml` under the new game's source id, instead of drafting one from the header. gp-nes's compiled-in list, `roms/nes.toml`, stays empty: a game's board facts live with the game.
+`known/sources.toml` in the games checkout holds the six NES entries game-printer's `sources/nes.toml` registered for games that have no folder here yet: Kirby's Adventure (`kirby-usa-prg0`), Ninja Gaiden, Gauntlet, Gauntlet II, Q*bert and Track & Field, with their hashes, board facts where a cartridge database confirmed them, evidence and notes. Nothing names a ROM by them, so `roms scan` still calls these ROMs unknown and `gp game new` can start a game from one; when it does, it copies the matching entry into the new game's `roms.toml` under the new game's source id, instead of drafting one from the header, and the entry's coverage definition from `known/coverage/` into the new game's `coverage/`. gp-nes's compiled-in list, `roms/nes.toml`, stays empty: a game's board facts live with the game.
 
 ## 3. Identify it
 
@@ -86,6 +86,8 @@ Checksums come in several forms. NesCartDB gives the SHA-1 and CRC32 of PRG and 
 | `evidence` | How it was verified, or where the hash came from |
 | `notes` | Anything that matters later, such as how it differs from other revisions |
 | `kind`, `[source.patch]` | For a patched source ([below](#patched-sources)) |
+| `[[source.chip]]` | An arcade source's chips: its set's list from MAME, which the tools know a romset zip by ([Arcade chips](#arcade-chips)) |
+| `sound_driver` | The sound driver the game uses, by its name in `gp sound drivers`, such as `midway-ssio` |
 
 The package's `[[rom.entry]]` gives the same `id`, `sha256` and `platform`, the entry's `role` (`scored` for the ROM the corpus is scored on, `play` for one the package only loads to play), its asset map and that map's pins.
 
@@ -93,7 +95,34 @@ Not here yet: `gp sources list`, the registry printed. `gp assets find` finds a 
 
 ## Arcade romsets
 
-An arcade game comes in as a romset: a MAME zip named for its MAME system, such as `rbtapper.zip`. Game Printer knows a set by its chips, never by the file names inside: each chip's SHA-1 must match the set's list from MAME's own source. The set's identity, the `sha256` its `roms.toml` and `package.toml` give, is the SHA-256 of its chips' SHA-1s, sorted, one a line, so it is the same for any zip that holds those chips. The sets known so far are Tapper's: `rbtapper`, `tapper`, `tappera`, `tapperg` and `sutapper`. `gp roms add` checks the zip against the sets and copies it whole to `$GP_ROM_DIR/arcade/`. `gp roms clean` and `gp roms diff` are for NES images.
+An arcade game comes in as a romset: a MAME zip named for its MAME system, such as `rbtapper.zip`. Game Printer knows a set by its chips, never by the file names inside: each chip's SHA-1 must match the set's list from MAME's own source. The set's identity, the `sha256` its `roms.toml` and `package.toml` give, is the SHA-256 of its chips' SHA-1s, sorted, one a line, so it is the same for any zip that holds those chips. `gp roms add` checks the zip against the sets and copies it whole to `$GP_ROM_DIR/arcade/`. `gp roms clean` and `gp roms diff` are for NES images.
+
+### Arcade chips
+
+The tools know no set of their own. A set's chip list lives with its game, in the game's `roms.toml`, as `[[source.chip]]` rows under the arcade `[[source]]`:
+
+```toml
+[[source]]
+id = "made-up-a"
+title = "Made Up"
+platform = "arcade"
+region = "us"
+revision = "Made Up (rev A)"
+system = "madeup"
+sha256 = "..."          # the set's identity: its chips' SHA-1s, sorted
+status = "unverified"
+
+[[source.chip]]
+name = "madeup.1a"      # the file name in MAME's list
+region = "maincpu"      # maincpu, ssio:cpu, gfx1 or gfx2 (the MCR board's)
+offset = 0x0000         # where it loads in the region
+size = 0x4000
+sha1 = "..."            # lower-case hex, as MAME lists it
+```
+
+Each row is one chip of MAME's `ROM_START` list, with nothing from the ROM but its hash. The set's name is its `system`, its title its `revision`, and its `sha256` must be the identity of the rows, or the file is refused. The board's own SSIO PROM is in no set's list and needs no row: the board knows it by its hash.
+
+The tools read the rows from a games checkout: `--games DIR` where a command takes it, else `$GP_GAMES_DIR`, else the game folder or checkout the current folder is in, else a `games` folder beside it. The library reads `$GP_GAMES_DIR` itself (`gp_arcade::romset::known`). In the browser, the page's lift reads the game's `roms.toml`, which the page build copies in as `sources.toml`, and the board player takes it through `gp_sets_load` before a zip. With none of these the tools know no set and say so, and `gp roms sets` lists none. The ROM-blocking hook reads the same rows ([below](#rom-bytes-in-text)).
 
 ## Patched sources
 
@@ -125,7 +154,7 @@ A game's corpus plan (`corpus.toml`, [scoring corpus format](formats/scoring-cor
 
 The pre-commit hook catches game images and binary dumps by their contents and by hash. A table copied out of a ROM into source, a doc or a test is text, so the hook also runs `scripts/romguard/rom_text.py` on the staged diff.
 
-What it guards is read from the repo, hashes only: `.githooks/guarded-roms.toml` (NES images by headerless SHA-256, and arcade chips by SHA-1 with their set, region and offset), `roms/*.toml`, every `*/roms.toml` and every `package.toml`'s `[[rom.entry]]`. Every source game-printer's `sources/nes.toml` listed is in `guarded-roms.toml`, so a game it registered stays guarded before its package comes over.
+What it guards is read from the repo, hashes only: `.githooks/guarded-roms.toml` (NES images by headerless SHA-256, under ids made of their hashes' first digits so the file names no game, and the SSIO board's PROM by SHA-1), `roms/*.toml`, every `*/roms.toml` (with each arcade source's `[[source.chip]]` rows, its chips by SHA-1 with their region and offset), the games checkout's `*/roms.toml` when the repo isn't one (`$GP_GAMES_DIR`, else a `games` folder beside the repo) and every `package.toml`'s `[[rom.entry]]`. Every source game-printer's `sources/nes.toml` listed is in `guarded-roms.toml`, so a game it registered stays guarded before its package comes over.
 
 It reads the added lines of each staged text file, finds runs of byte values written as numbers, and refuses a run that holds 16 or more consecutive bytes of a guarded ROM or arcade chip present in `$GP_ROM_DIR`. The ROMs are found by hash, the same way `gp roms scan` finds them, and a set's chips that load one after another are also read joined, so a table typed across two chips is found. When no guarded ROM is present this part does nothing and says so, so a clone without ROMs can still commit. A staged file whose hash is a guarded image's or chip's is refused whole, ROM or no ROM.
 

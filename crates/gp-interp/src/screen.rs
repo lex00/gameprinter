@@ -750,7 +750,7 @@ pub fn shift_words([dx, dy]: [i64; 2]) -> String {
 }
 
 /// A layer's line: "Characters: 96% of frames the same; different from
-/// frame 1: 3 places (Mario, something the model doesn't draw)".
+/// frame 1: 3 places (Hero, something the model doesn't draw)".
 fn says(label: &str, s: &LayerScore, background: bool) -> String {
     let pct = (s.same * 100).checked_div(s.total).unwrap_or(100);
     let Some(first) = s.first else {

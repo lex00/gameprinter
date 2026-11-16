@@ -1,27 +1,32 @@
-//! The sound board run alone (gp_arcade::ssio) against the whole machine
-//! on Tapper, when the rbtapper romset is on this machine (else skipped):
-//! tapper-first's input played on the whole board, and the latch writes
-//! that reached its sound board fed to a sound board of its own, must give
-//! the same AY writes and the same speaker samples on every frame.
-
-use std::path::PathBuf;
+//! The sound board run alone (gp_arcade::ssio) against the whole machine,
+//! on the game $GP_GAME_DIR names when its romset is on this machine
+//! (else skipped): the first input log its oracle/mame-captures.toml
+//! lists to replay, played on
+//! the whole board, and the latch writes that reached its sound board fed
+//! to a sound board of its own, must give the same AY writes and the same
+//! speaker samples on every frame.
 
 use gp_arcade::oracle::InputLog;
 use gp_arcade::ssio::SoundBoard;
-use gp_arcade::{Romset, Tapper};
+use gp_arcade::{Mcr, Romset};
 
 #[test]
-fn tappers_sound_board_alone_sounds_as_the_whole_machine() {
-    let Some(path) = gp_arcade::romset::local_romset("rbtapper") else {
-        eprintln!("skipped: no rbtapper romset");
-        return;
+fn the_sound_board_alone_sounds_as_the_whole_machine() {
+    let log = match gp_arcade::romset::test_input_log() {
+        Ok(t) => InputLog::parse(&t).expect("it parses"),
+        Err(e) => {
+            eprintln!("skipped: {e}");
+            return;
+        }
     };
-    let rom = Romset::load_zip(&path).expect("the rbtapper romset loads");
-    let log = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../scripts/oracle/inputs/tapper-first.input");
-    let log =
-        InputLog::parse(&std::fs::read_to_string(log).expect("the input log")).expect("it parses");
-    let mut whole = Tapper::power_on(&rom);
+    let rom: Romset = match gp_arcade::romset::test_set(&log.system) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("skipped: {e}");
+            return;
+        }
+    };
+    let mut whole = Mcr::power_on(&rom);
     whole.set_audio(true);
     whole.set_latch_log(true);
     let mut alone = SoundBoard::power_on(&rom);

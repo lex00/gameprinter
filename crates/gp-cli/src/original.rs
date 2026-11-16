@@ -202,14 +202,17 @@ mod tests {
         assert!(e.to_string().contains("romset zip"), "{e}");
     }
 
-    /// With the owner's rbtapper romset on this machine: the arcade
+    /// With a real romset ($GP_GAME_DIR's first oracle set) on this machine: the arcade
     /// original steps, reads `ram[...]` and the sound RAM, and a start
     /// saved for the cache restores to the same state. Skipped without it.
     #[test]
     fn an_arcade_original_steps_and_restores_from_a_start() {
-        let Some(zip) = gp_arcade::romset::local_romset("rbtapper") else {
-            eprintln!("skipped: no rbtapper romset");
-            return;
+        let (_, zip) = match gp_arcade::romset::test_oracle_set_path() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("skipped: {e}");
+                return;
+            }
         };
         let rom = std::fs::read(zip).unwrap();
         let mut o = OriginalRuntime::of_rom(&rom).unwrap();

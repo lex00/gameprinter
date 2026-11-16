@@ -19,7 +19,7 @@
 //! under templates/; here they come from the package's mapping.toml
 //! (`entities.player[0].x` and `.y`, as `gp mechanic demo` reads them) and
 //! observe.toml, and the ROM from its roms.toml. The decision model's
-//! plan and question named Super Mario Bros.' hero; they say "the player"
+//! plan and question named one platformer's hero; they say "the player"
 //! now. The search over a package reads the NES's RAM and sprite table; on
 //! an arcade game it runs blind discovery on the board and stops after it,
 //! saying what it found and why (blind::stop_on_arcade). The blind search
@@ -595,7 +595,7 @@ impl World<'_> {
             "speed_px_a_frame": p.dx,
             "gap_ahead": gap.map_or(json!("none"), |(d, w)| json!(format!("{d} px ahead, {w} px wide"))),
             "wall_ahead": wall.map_or(json!("none"), |(d, h)| json!(format!("{d} px ahead, {h} px tall"))),
-            "enemy_ahead": enemy.map_or(json!("none"), |(d, dy)| json!(format!("{d} px ahead, {} , {} frames away", if dy < -8 { "higher up" } else if dy > 8 { "lower down" } else { "level with Mario" }, d / speed))),
+            "enemy_ahead": enemy.map_or(json!("none"), |(d, dy)| json!(format!("{d} px ahead, {} , {} frames away", if dy < -8 { "higher up" } else if dy > 8 { "lower down" } else { "level with the player" }, d / speed))),
             "ceiling": ceiling.map_or(json!("none"), |d| json!(format!("{d} px above"))),
             "failed_here": failed.iter().collect::<Vec<_>>(),
         })

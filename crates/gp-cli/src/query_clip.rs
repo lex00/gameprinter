@@ -22,7 +22,7 @@ pub(crate) const PREFIX: &str = "clip:";
 fn split(spec: &str) -> Result<(PathBuf, String)> {
     let rest = spec.strip_prefix(PREFIX).unwrap_or(spec);
     let Some((game, clip)) = rest.split_once(':') else {
-        bail!("a clip is clip:GAME:CLIP (clip:tapper:tapper.gameover.002), not {spec}");
+        bail!("a clip is clip:GAME:CLIP (clip:acme:acme.gameover.002), not {spec}");
     };
     let dir = Path::new(game);
     if dir.join("package.toml").is_file() {

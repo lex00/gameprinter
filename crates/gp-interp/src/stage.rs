@@ -545,7 +545,7 @@ fn moves_now(spec: &Variant, w: &World, o: &Options) -> bool {
 ///
 /// Nothing here is read from a ROM or a recording: the stages before are
 /// passed by the model's own rules from the place of its goal. A stage
-/// with no goal (one ended some other way, as Donkey Kong's 100m by its
+/// with no goal (one ended some other way, as one game's last stage by its
 /// rivets) can't be passed, and is said to be the reason.
 pub fn enter(
     spec: &Variant,

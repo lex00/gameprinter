@@ -466,16 +466,16 @@ mod tests {
     fn the_slots_take_turns_and_only_a_built_one_is_current() {
         let d = tempfile::tempdir().unwrap();
         let p = paths(d.path());
-        assert!(current(&p, "dk").ends_with("a"));
-        assert_eq!(spare(&p, "dk").1, "a");
-        let a = out_dir(&p, "dk").join("a");
+        assert!(current(&p, "mosshop").ends_with("a"));
+        assert_eq!(spare(&p, "mosshop").1, "a");
+        let a = out_dir(&p, "mosshop").join("a");
         std::fs::create_dir_all(&a).unwrap();
         std::fs::write(a.join("gp_web.wasm"), b"").unwrap();
         std::fs::write(a.join("bundle.json"), b"{}").unwrap();
-        std::fs::write(out_dir(&p, "dk").join("current"), "a").unwrap();
-        assert_eq!(spare(&p, "dk").1, "b");
-        std::fs::write(out_dir(&p, "dk").join("current"), "b").unwrap();
-        assert!(current(&p, "dk").ends_with("b"));
+        std::fs::write(out_dir(&p, "mosshop").join("current"), "a").unwrap();
+        assert_eq!(spare(&p, "mosshop").1, "b");
+        std::fs::write(out_dir(&p, "mosshop").join("current"), "b").unwrap();
+        assert!(current(&p, "mosshop").ends_with("b"));
     }
 
     #[test]
@@ -485,14 +485,27 @@ mod tests {
         let repo = d.path().join("repo");
         std::fs::create_dir_all(repo.join("scripts/web/page")).unwrap();
         std::fs::write(repo.join("scripts/web/page/preview.js"), "js").unwrap();
-        let a = out_dir(&p, "dk").join("a");
+        let a = out_dir(&p, "mosshop").join("a");
         std::fs::create_dir_all(&a).unwrap();
         std::fs::write(a.join("bundle.json"), "{}").unwrap();
-        assert_eq!(file(&p, &repo, "dk", "preview.js").unwrap().body, b"js");
-        assert_eq!(file(&p, &repo, "dk", "bundle.json").unwrap().body, b"{}");
+        assert_eq!(
+            file(&p, &repo, "mosshop", "preview.js").unwrap().body,
+            b"js"
+        );
+        assert_eq!(
+            file(&p, &repo, "mosshop", "bundle.json").unwrap().body,
+            b"{}"
+        );
         for bad in ["../x", "/etc/passwd", "a b", ""] {
-            assert_eq!(file(&p, &repo, "dk", bad).unwrap().status, 404, "{bad}");
+            assert_eq!(
+                file(&p, &repo, "mosshop", bad).unwrap().status,
+                404,
+                "{bad}"
+            );
         }
-        assert_eq!(file(&p, &repo, "dk", "module.wasm").unwrap().status, 404);
+        assert_eq!(
+            file(&p, &repo, "mosshop", "module.wasm").unwrap().status,
+            404
+        );
     }
 }

@@ -454,7 +454,7 @@
           ]
         },
         {
-          "description": "An arcade romset, run by gp-arcade: `identity` is the set's\nidentity (gp_arcade::romset::identity, the SHA-256 of its chips'\nSHA-1s sorted) and `system` MAME's name for the set (`tapper`).\nAdded 2026-11-12 within schema 1: older builds refuse it as an\nunknown kind.",
+          "description": "An arcade romset, run by gp-arcade: `identity` is the set's\nidentity (gp_arcade::romset::identity, the SHA-256 of its chips'\nSHA-1s sorted) and `system` MAME's name for the set (`rooftop`).\nAdded 2026-11-12 within schema 1: older builds refuse it as an\nunknown kind.",
           "type": "object",
           "properties": {
             "identity": {

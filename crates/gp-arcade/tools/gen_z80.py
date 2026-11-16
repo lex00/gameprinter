@@ -435,7 +435,7 @@ CONSTS = {
 
 TABLES = {"SZ", "SZ_BIT", "SZP", "SZHV_inc", "SZHV_dec", "SZHVC_add", "SZHVC_sub"}
 
-# Callbacks MAME leaves unconnected on both of Tapper's Z80s, and logging.
+# Callbacks MAME leaves unconnected on both of the MCR board's Z80s, and logging.
 DROPPED_CALLS = {
     "m_refresh_cb", "m_nomreq_cb", "m_branch_cb", "m_irqack_cb", "m_irqfetch_cb", "m_reti_cb",
     "m_busack_cb", "m_halt_cb",

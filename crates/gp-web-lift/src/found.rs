@@ -21,7 +21,7 @@ pub struct AssetLoad {
     /// zero bytes of its shape).
     pub from: &'static str,
     /// For a blank asset, what the ROM's game does without that uses it,
-    /// in words (`Without::what`: "50m").
+    /// in words (`Without::what`: "stage 2").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub without: Option<String>,
 }

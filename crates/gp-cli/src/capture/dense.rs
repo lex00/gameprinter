@@ -46,7 +46,7 @@ use crate::original::{OriginalRuntime, Platform};
 
 #[derive(Args, Debug, Clone)]
 pub struct DenseArgs {
-    /// The game's package folder (games/donkey-kong): its scored ROM,
+    /// The game's package folder (games/GAME): its scored ROM,
     /// mapping.toml and clips. In game-printer this was a capture run.
     pub run: PathBuf,
     /// The folder to write the clip set into, refused when it exists and
@@ -146,7 +146,7 @@ impl<'a> Measures<'a> {
         }
         let peek = |a: u16| match o {
             OriginalRuntime::Nes(n) => n.nes().peek(a),
-            OriginalRuntime::Arcade(t) => t.tapper().peek(a),
+            OriginalRuntime::Arcade(t) => t.mcr().peek(a),
         };
         for (t, sl) in self.tables.iter().enumerate() {
             for i in 0..sl.count {
@@ -403,7 +403,7 @@ fn greedy(maps: &[(&CodeMap, u64)], n: usize) -> Vec<(usize, usize)> {
 }
 
 /// Where the program is in the CPU's address space: the NES cartridge's
-/// 8000-FFFF, Tapper's main Z80's ROM below E000.
+/// 8000-FFFF, an MCR board's main Z80's ROM below E000.
 pub(crate) fn rom_range(rom: &[u8]) -> std::ops::Range<u32> {
     if Platform::of_file(rom) == Platform::Arcade {
         0..0xE000

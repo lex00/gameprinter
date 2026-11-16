@@ -16,7 +16,7 @@
 //!
 //! An arcade recording (a gp-arcade run of a romset) is replayed from its
 //! romset, found by its identity among the zips under ROMS (src/arcade.rs),
-//! so Tapper's recordings replay on WASM too.
+//! so an arcade game's recordings replay on WASM too.
 //!
 //! Model recordings (`gp record --model`) need no ROM: replay-all replays
 //! them in the interpreter from the model bundle in the store, so the

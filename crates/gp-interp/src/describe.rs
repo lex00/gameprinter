@@ -224,7 +224,7 @@ mod tests {
             kind: TableKind::Content,
         }];
         let rec = Record {
-            name: "dk.fire",
+            name: "acme.fire",
             version: "1",
             carrier: Carrier::Game,
             system: "rules",
