@@ -1,14 +1,14 @@
 # Game Printer
 
-gameprinter is the tool repo of Game Printer. With it a person who talks to an AI agent can port an old game, give a game themes or make a new game.
+Game Printer lets you create original games that run in your browser with nothing to install. It has powerful tools to help you port mechanics from your old ROMs and breathe new life into old games. Most people use it by talking to an AI agent, which runs the command-line tool, `gp`, for them. This repo holds that tool and its code, and the docs for people using it are on [the docs site](https://lex00.github.io/gameprinter/).
 
-Game Printer writes down how a game plays: what moves, how fast, what happens when things touch. That written-down game is a plain text file called the model. A web page plays it, so nothing gets installed. The pictures, sounds and level layouts of an old game come from your own copy of it, which your browser reads there and sends nowhere. A template is a finished model that holds nothing from any old game, ready to copy. Porting a game makes a new template; making your own game starts from a copy of one.
+Each game's rules and numbers live in `model.toml`, a TOML file that's read when the game loads and never compiled. Some games add custom code (Rust hooks in the game's `ext/` crate) for what the model can't say; Donkey Kong has some and Moss Hop has none. A game's folder with a `template.toml`, its model and no ROM data is a template, which anyone can copy to start a game. Every ported game's folder in the games checkout is one, and so is each starter under `templates/`.
 
-In files: the model is `model.toml`, TOML read when the game loads and never compiled. Some games add custom code (Rust hooks in the game's `ext/` crate) for what the model text can't say. Donkey Kong has some and Moss Hop has none. A template is a game's folder holding `template.toml` and the model and no ROM data. Every ported game's folder in the games checkout is one, and so is each starter under `templates/`. A port is checked by playing a set of recorded clips, the corpus, on the original and on the model and comparing them frame by frame. Then it is published to a registry, and a web page plays it from the visitor's own ROM. The result is never a new ROM.
+To check a port, the tools play its corpus (a set of recorded clips) through both the original and the model and compare them frame by frame. Then the port is published to a registry. A web page plays it and takes the art and levels from the visitor's own ROM, inside their browser. It never makes a new ROM.
 
-It came from game-printer, the old one-repo tool. The games moved to their own repo, `lex00/games`, and the Bevy generator, `gp loop` and the other games' code were left behind.
+The repo grew out of game-printer, the older tool that kept everything in one repo. The games moved to their own repo, `lex00/games`, and the Bevy generator, `gp loop` and the other games' code stayed behind.
 
-Today there are two games: Donkey Kong (NES), playable at [gameprinter.intentius.workers.dev](https://gameprinter.intentius.workers.dev) from a ROM you load, and Tapper (arcade, MAME's `rbtapper`), whose model is in progress. Moss Hop, a small game written here in NES assembly for testing, lives here and is what the checks run on.
+Two games have been ported so far. Donkey Kong (NES) plays at [gameprinter.intentius.workers.dev](https://gameprinter.intentius.workers.dev) from a ROM you load, and Tapper (arcade, MAME's `rbtapper`) has a model in progress. The checks run on Moss Hop, a small game we wrote in NES assembly for testing, which lives in this repo.
 
 ## What's in the repo
 
@@ -39,11 +39,11 @@ gp --help
 
 `just check` builds gp, assembles Moss Hop and runs formatting, clippy, the tests and the Moss Hop checks.
 
-`just check-all` (scripts/check/all.sh, most of an hour) runs `just check` and then, each when what it needs is on the machine: Tapper's model in the page's player against the native run (`just web-parity-arcade`), the public page built and played headless with its lift's tests (`just web-page check`, which needs the games checkout beside the repo and the network) and its `share.test.mjs` and `theme-line.test.mjs`, `gp corpus score` on Donkey Kong and on Tapper with every clip exact, Tapper against MAME's capture `tapper-m3b-cycle` on every frame (gp-arcade's compare example, built in release), and `gp baseline check`. A check it can't run is one line naming what is missing (`check-all: skipped score-dk: no Donkey Kong ROM ...`). It exits 1 only when a check that ran failed; each check's output is in `target/check-all/`, and `CHECK_ALL_DRY=1` prints what it would run.
+`just check-all` (scripts/check/all.sh, most of an hour) runs `just check` and then the checks below, each one only when what it needs is on the machine. The tool knows no game by name, so it finds the games in the games checkout (`$GP_GAMES_DIR`, else `../games`) and reads what to check from each game's own files: each arcade game's model in the page's player against the native run (`just web-parity-arcade GAME`, step `web-parity-arcade-GAME`), the public page built and played headless with its lift's tests (`just web-page check`, which needs the games checkout beside the repo and the network) and its `share.test.mjs` and `theme-line.test.mjs`, `gp corpus score` on each game with a `corpus.toml` with every clip exact (`score-GAME`), each MAME capture a game's `oracle/mame-captures.toml` names on every frame (`mame-NAME`, gp-arcade's compare example, built in release), and `gp baseline check`. A check it can't run gets one line naming what's missing (`check-all: skipped score-GAME: no ROM GAME's corpus is for ...`), and with no games checkout the game checks are skipped in words. It exits 1 only when a check that ran failed; each check's output is in `target/check-all/`, and `CHECK_ALL_DRY=1` prints what it would run.
 
 Changes land on `main` only through `gp tool gate` ([docs/gate.md](docs/gate.md)).
 
-ROMs never go in a repo. They live in `$GP_ROM_DIR` (default `~/.gameprinter/roms`), and the git hook refuses them. Read the [ROM rules](site/src/content/docs/rom-rules.md) before you use one.
+ROMs never go in a repo. They live in `$GP_ROM_DIR` (`~/.gameprinter/roms` by default), and the git hook refuses them. Read the [ROM rules](site/src/content/docs/rom-rules.md) before you use one.
 
 ## Where the docs are
 
@@ -54,14 +54,14 @@ The docs site's pages, in `site/src/content/docs/`, are for people using the too
 | [install.md](site/src/content/docs/install.md) | Building `gp` |
 | [bring.md](site/src/content/docs/bring.md) | Bringing in a game from a ROM you own |
 | [improve.md](site/src/content/docs/improve.md) | Changing a published game and sending the change |
-| [make.md](site/src/content/docs/make.md) | Making your own game from Moss Hop |
+| [make.md](site/src/content/docs/make.md) | Making your own game, from Moss Hop or from nothing |
 | [themes.md](site/src/content/docs/themes.md) | Themes and levels |
 | [registry.md](site/src/content/docs/registry.md) | Running a registry of your own |
 | [host-your-own.md](site/src/content/docs/host-your-own.md) | Hosting your own registry on GitHub and your own copy of the page ([docs/host-your-own.md](docs/host-your-own.md) has the details) |
 | [contribute.md](site/src/content/docs/contribute.md) | Changing the tool |
 | [rom-rules.md](site/src/content/docs/rom-rules.md) | What may and may not happen with a ROM |
 
-The files in [docs/](docs/) are for contributors and agents. Start with [CLI.md](CLI.md), the list of every `gp` command, generated from the code; [docs/workers.md](docs/workers.md) and [docs/gate.md](docs/gate.md) for taking a task and landing it; and [docs/modules.md](docs/modules.md), [docs/web.md](docs/web.md) and [docs/mechanic-page.md](docs/mechanic-page.md) for the page and game modules.
+The files in [docs/](docs/) are for contributors and agents. A good place to start is [CLI.md](CLI.md), every `gp` command, generated from the code. For taking a task and landing it, read [docs/workers.md](docs/workers.md) and [docs/gate.md](docs/gate.md). For the page and game modules, read [docs/modules.md](docs/modules.md), [docs/web.md](docs/web.md) and [docs/mechanic-page.md](docs/mechanic-page.md).
 
 ## Licence
 
