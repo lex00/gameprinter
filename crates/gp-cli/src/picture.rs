@@ -246,7 +246,13 @@ pub(crate) struct Watch {
 
 impl Watch {
     pub(crate) fn new(art: Arc<Art>, looks: Arc<Looks>) -> Self {
-        let opts = crate::screen::nes_options();
+        // The platform's own measure, as the corpus score's: an arcade
+        // board's picture isn't behind its RAM (lag 0), a NES's is.
+        let opts = if art.on_board() {
+            crate::screen::options_for(crate::original::Platform::Arcade)
+        } else {
+            crate::screen::nes_options()
+        };
         Watch {
             probe: Probe::new(art, opts),
             looks,

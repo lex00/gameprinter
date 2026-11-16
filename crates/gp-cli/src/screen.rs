@@ -36,6 +36,13 @@ pub(crate) struct Art {
     board_art: Option<gp_look::board::BoardArt>,
 }
 
+impl Art {
+    /// Whether the bodies go on an arcade board's screen.
+    pub(crate) fn on_board(&self) -> bool {
+        self.board.is_some()
+    }
+}
+
 /// An arcade model's bodies placed on its board's screen. In a model whose
 /// state mapping says `board_units` (feature `platform.board_units`) the
 /// positions are the board's own units, top left with y down, and the
