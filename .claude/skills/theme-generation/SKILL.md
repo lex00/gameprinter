@@ -5,7 +5,7 @@ description: Make a new theme of your own (art and sound) for a game in Game Pri
 
 # Theme generation
 
-A theme restyles a game without touching how it plays: new pictures for every sprite, stage piece and screen, drawn larger than the game's own at the place and size of the picture each one stands for, and a rules file that says how to draw them. Every body keeps its place and its hit box, because the game's model (its rules and numbers as text, `model.toml`) stays as it is. On a ported game the levels and the rules' tables still come from the player's own ROM, so the game with the theme plays in a browser only for someone who has that ROM; tell the person so. site/src/content/docs/themes.md is the reference for the theme's files and rules, and [`lex00/turnips`](https://github.com/lex00/turnips) (a clay theme for Donkey Kong) is the one to copy.
+A theme restyles a game without touching how it plays: new pictures for every sprite, stage piece and screen, drawn larger than the game's own at the place and size of the picture each one stands for, and a rules file that says how to draw them. Every body keeps its place and its hit box, because the game's model (its rules and numbers as text, `model.toml`) stays as it is. On a ported game the levels and the rules' tables still come from the player's own ROM, so the game with the theme plays in a browser only for someone who has that ROM; tell the person so. site/src/content/docs/themes.md is the reference for the theme's files and rules, and Turnips (a clay theme for Donkey Kong, `donkey-kong/themes/turnips/` in the games repo) is the one to copy.
 
 This skill came from game-printer, where `gp theme kit`, `style`, `sheet`, `generate`, `fit`, `check`, `video` and `paint` made a paper-cutout kind of theme (theme.toml, `.pix` and `.tune` files). Those commands came to gameprinter with wave 8 (docs/theme-kit.md) and still make that paper kind of theme. The owner chose the large-art theme for the live page instead (the clay theme, 2026-11-09 to 11-11), and the steps below make one by hand and with small scripts in your work folder, as the clay theme was. Where a step used a `gp theme` command, it says so.
 
@@ -16,7 +16,7 @@ The rules, from the owner (2026-11-03), hold at every step:
 - Only our files go to an image model: our own earlier outputs, a style board, turnarounds, a cell we approved. Never the original sprites, a screenshot of the game, the lifted assets or anything made from the ROM.
 - Nothing from the ROM goes into the theme or any repo. A stage is never a picture in the theme: the `stage`, `stage_piece` and `level` rules build it from pieces over the level picture the player's own ROM gives.
 
-Work in a folder of your own outside every repo (`WORK` below, such as `~/.gameprinter/work/themes/NAME`). `GAME` is the game's folder in the games checkout (`games/donkey-kong`), its template. The theme ends in a repo of its own (`THEME`).
+Work in a folder of your own outside every repo (`WORK` below, such as `~/.gameprinter/work/themes/NAME`). `GAME` is the game's folder in the games checkout (`games/donkey-kong`), its template. The theme ends in the game's own folder in the games repo, `GAME/themes/NAME/` (`THEME`), never in a repo of its own.
 
 ## The steps and their cost
 
@@ -83,7 +83,7 @@ If you used an AI tool to make any of it, name the tool in the README, and make 
 
 ## 9. Ship it
 
-The theme lives in a repo of its own, with its pictures in Git LFS. Players get themes from the registry the page reads, `lex00/gp-registry`. Nobody but its owner can publish there: the person opens an issue there with the repo's link, and the owner grants the namespace if it is new (`gp registry grant`), publishes it for the game (`gp registry publish ... --for lex00/donkey-kong`) and reindexes. Before that, `gp theme look check`'s "On the page" lines say whether the page would offer it; after, `gp registry check https://raw.githubusercontent.com/lex00/gp-registry/main --for lex00/donkey-kong --theme NAME` says whether it is offered and, if not, why. site/src/content/docs/themes.md and registry.md have the rest.
+The owner's themes live with their game in the games repo, `GAME/themes/NAME/`, their pictures and sound in Git LFS (the repo's `.gitattributes` sends `*/themes/**/*.png` and `.wav` there), and are listed in `GAME/themes/README.md`. The owner decided on 2026-11-16: never a GitHub repo per theme. Players get themes from the registry the page reads, `lex00/gp-registry`, which the owner publishes from that folder (`gp registry publish git:REGISTRY GAME/themes/NAME --kind content --for lex00/GAME ...`) and reindexes. Someone else's theme is theirs to host, on a page and registry of their own (site/src/content/docs/host-your-own.md); the owner's registry carries only the owner's themes. Before that, `gp theme look check`'s "On the page" lines say whether the page would offer it; after, `gp registry check https://raw.githubusercontent.com/lex00/gp-registry/main --for lex00/donkey-kong --theme NAME` says whether it is offered and, if not, why. site/src/content/docs/themes.md and registry.md have the rest.
 
 ## From game-printer
 
