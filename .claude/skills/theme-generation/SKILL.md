@@ -1,106 +1,102 @@
 ---
 name: theme-generation
-description: Make a new theme of your own (art and sound) for a game in Game Printer, in a style the person names ("make me a theme in style X for my ROM of GAME"), as a large-art theme in its own repo (theme/look.txt, theme/art.txt and the pictures, lex00/turnips is the pattern), with pictures an image model makes from our own words and references (Runway's gen4_image, gen4_image_turbo and gpt_image_2), checked to hold nothing from the ROM and played in the page before it is published. Use it when someone asks for new pictures or sound for a game, a reskin, a new look, or a theme. Never copy or trace the original art or melodies.
+description: Make a new theme of your own (art and sound) for any game in Game Printer, in a style the person names ("make me a theme in style X for my ROM of GAME"), as a frame-accurate skin of the original - one new picture for each of the game's pictures, showing the same pose at the same place and box, and every stage or room kept to its layout - through gameprinter's own commands (gp theme kit, gp theme look sheet, gp theme sheet, gp theme fit, gp theme look check and play), with pictures an image model makes from our own words and references (Runway's gen4_image, gen4_image_turbo and gpt_image_2). The theme lives in the game's folder in the games repo (GAME/themes/NAME, pictures in Git LFS); Turnips for Donkey Kong is the pattern. Use it when someone asks for new pictures or sound for a game, a reskin, a new look, or a theme. Never copy or trace the original art or melodies.
 ---
 
 # Theme generation
 
-A theme restyles a game without touching how it plays: new pictures for every sprite, stage piece and screen, drawn larger than the game's own at the place and size of the picture each one stands for, and a rules file that says how to draw them. Every body keeps its place and its hit box, because the game's model (its rules and numbers as text, `model.toml`) stays as it is. On a ported game the levels and the rules' tables still come from the player's own ROM, so the game with the theme plays in a browser only for someone who has that ROM; tell the person so. site/src/content/docs/themes.md is the reference for the theme's files and rules, and Turnips (a clay theme for Donkey Kong, `donkey-kong/themes/turnips/` in the games repo) is the one to copy.
+A theme is a skin of the original game, frame accurate. Each of the game's pictures gets one new picture that shows the same thing in the new style: the same pose, facing, anchor, feet row and box. Each stage or room keeps its layout, built from new pieces laid on the real floors, ladders, bars and doors. The game's model (its rules and numbers, `model.toml`) is untouched, so every body keeps its place and hit box. On a ported game the levels and tables still come from the player's own ROM, so the themed game plays only for someone with that ROM; tell the person so.
 
-This skill came from game-printer, where `gp theme kit`, `style`, `sheet`, `generate`, `fit`, `check`, `video` and `paint` made a paper-cutout kind of theme (theme.toml, `.pix` and `.tune` files). Those commands came to gameprinter with wave 8 (docs/theme-kit.md) and still make that paper kind of theme. The owner chose the large-art theme for the live page instead (the clay theme, 2026-11-09 to 11-11), and the steps below make one, as the clay theme was: with gameprinter's commands for every step they cover (the table under "Use gameprinter's tools"), and your own small scripts only between them.
+Turnips (a clay theme for Donkey Kong, `donkey-kong/themes/turnips/` in the games repo) is the pattern. Its `sheets.json` ties each of 128 sheet cells to the game's frames by name, and its `art.txt` has one `pic` line for each of the game's 551 pictures, at the game's own size. Its stages are rules that lay planks, rails and ropes on the level the player's ROM gives. site/src/content/docs/themes.md is the reference for the files and rules.
 
-## Use gameprinter's tools, frame by frame
+The procedure below is the same for every game. Each step names the gameprinter command that does it and says when it is done. Don't start a step before the one above it is done, and don't replace a command with a script of your own. When a command comes up short for the game (an arcade game's kit with `art = []`, a room the stage rules can't describe), stop: fix the command through the tool gate, or tell the person what's missing. Your own scripts only fill gaps between commands, never the link between a game picture and its new picture.
 
-A theme is a skin of the original, frame accurate: each of the game's pictures gets one new picture that shows the same thing (the same pose, facing, anchor, feet row and box) in the new style, and each of the game's stages or rooms keeps its layout. Turnips is built this way: `sheets.json` ties each sheet cell to the game's frames by name, and `art.txt` has a `pic` line for each of the game's 551 pictures. Never pair art with the game's pictures by number order or by guess. Tapper's first themes (Neon Shift, 2026-11-16) were withdrawn because they did: gestures assigned to sprite codes in order, invented rooms, and halos from a home-made key.
+What went wrong when this was skipped (Tapper's Neon Shift, withdrawn 2026-11-16): art paired with sprite codes in number order, so every frame showed a random gesture; rooms painted from imagination; a colour-distance key and a Lanczos resize that left a halo round every figure, made worse by an added glow rim.
 
-| Step | The tool | Not this |
-|---|---|---|
-| What the game draws | `gp theme kit GAME` (slots and frames); for an arcade game drawn by its board's art, `gp theme look sheet --game GAME`: every picture name the recorded plays show, with a contact sheet of each entity's sprite codes and each screen | Guessing from a few played shots |
-| Every room or stage on record | The game's recorded plays (`inputs/`): names.toml must list every room the game has before you draw any; if one is missing, record a clip that reaches it (the corpus, `gp clip`) | Drawing a room the plays never showed |
-| Grids and prompts | `gp theme sheet`: one labelled cell per frame, sized to it, with its pose words, and `sheets.json` naming the frames each cell stands for | A pose sheet of free gestures per character |
-| Pose words | One phrase per frame or sprite code in `GAME/themes/kit/words.toml`, written from that frame's picture on the contact sheet | Words for the character only |
-| Key and shrink | `gp theme fit`'s rules: alpha, the key colour or a flood from the edges; area averaging, a pixel solid when half its area is figure, coloured by the figure's pixels only | A colour-distance key plus a Lanczos resize: it leaves a backdrop-coloured halo. Never add glow rims |
-| Stages and rooms | `stage` and `stage_piece` rules: pieces laid on the real floors, bars, ladders and doors from the player's ROM | A painted room that moves or invents the layout |
-| Check and compare | `gp theme look check`, then `gp theme look play --shots DIR --against Original` at every named moment | Judging from one screenshot |
-
-When a tool comes up short for the game (Tapper's kit has `art = []`, so `gp theme sheet` has nothing to grid), stop and fix the tool through the tool gate, or tell the person; don't work around it with scripts that skip the frame-by-frame link. A skin also needs the base game to draw the right picture on each frame: before paying for art, check the corpus's picture differences on the pictures the theme replaces.
-
-The rules, from the owner (2026-11-03), hold at every step:
+## The owner's rules, at every step
 
 - Art and sound of your own only. No character's likeness, name or logo, and no original melody, even played on other instruments.
-- Prompts come from the game's theme-kit words (`GAME/themes/kit/words.toml` in the games checkout: labels, descriptions and pose words) and the style the person names, never from a character's or the game's name. Check every prompt against the words file's `deny` list before sending it (`gp theme sheet` refuses such a prompt in the prompts it writes; check yours by eye or with a grep).
-- Only our files go to an image model: our own earlier outputs, a style board, turnarounds, a cell we approved. Never the original sprites, a screenshot of the game, the lifted assets or anything made from the ROM.
-- Nothing from the ROM goes into the theme or any repo. A stage is never a picture in the theme: the `stage`, `stage_piece` and `level` rules build it from pieces over the level picture the player's own ROM gives.
+- Prompts come from the game's kit words (`GAME/themes/kit/words.toml`) and the style the person names, never from a character's or the game's name. Check every prompt against the words file's `deny` list before sending it (`gp theme sheet` refuses a denied word in the prompts it writes; check any of yours by grep).
+- Only our own files go to an image model: our earlier outputs, a style board, a cell we approved. Never the original sprites, a screenshot of the game, the lifted assets or anything made from the ROM. The contact sheets and the game's pictures are for you to look at, to write words and measure boxes.
+- Nothing from the ROM goes into the theme or any repo. A stage or room is never a picture in the theme: rules build it from pieces over what the player's ROM gives.
+- Theme work happens in a folder outside every repo (`WORK`, such as `~/.gameprinter/work/themes/NAME`). The theme ends in `GAME/themes/NAME/` in the games repo (`THEME`), with its pictures and sound in Git LFS. Never a repo of its own.
 
-Work in a folder of your own outside every repo (`WORK` below, such as `~/.gameprinter/work/themes/NAME`). `GAME` is the game's folder in the games checkout (`games/donkey-kong`), its template. The theme ends in the game's own folder in the games repo, `GAME/themes/NAME/` (`THEME`), never in a repo of its own.
+## 1. The game is ready to skin
 
-## The steps and their cost
+A skin swaps art for the picture the game draws on each frame, so the game must draw the right picture.
 
-| Step | How | Donkey Kong, clay (2026-11-09 to 11-11) |
-|---|---|---|
-| 1. What to draw | The game's kit: `GAME/themes/kit/kit.toml` (art slots, sound roles), `geometry.toml` (boxes, feet, floors), `words.toml` (labels, poses, deny), and the build's picture names | 0 calls |
-| 2. Style board | gen4_image, 1920x1080, from the person's style words | 1 call, 8 credits |
-| 3. One approved cell per character | gen4_image_turbo, one cell; or gpt_image_2 medium for a pose far from the reference | 2 credits a turbo cell, 5 for gpt_image_2 medium |
-| 4. Every pose | gen4_image_turbo a cell (2 credits) with the approved cell as the only character reference, or gpt_image_2 filling a grid of cells (20 credits at high, 5 at medium) | tens of calls |
-| 5. Stage pieces | gen4_image_turbo or gpt_image_2: a plank, a ladder rail, a rope, a wheel; built into stages by the rules | a few calls |
-| 6. Lettering and logo | gpt_image_2 medium; it spells words right | 5 credits a sheet |
-| 7. Key, crop and fit | Your scripts: key the backdrop out, crop to the figure, one scale per sprite group, write `art.txt` lines | 0 calls |
-| 8. Check and play | `gp theme look check`, then `gp theme look play` | 0 calls |
+- Run the corpus's picture score (`gp corpus score GAME`, or `gp picture` per clip) and sort the differences on the pictures a theme replaces: a wrong sprite code, a missing or extra sprite, a wrong screen. Timing differences of a frame don't matter (memory: pixel exact is situational).
+- Done when: no known wrong-picture difference on a sprite or screen the theme replaces, or the person has said which ones to live with.
 
-Credits are Runway's API credits at $0.01. The person pays: say the estimate and get a yes before the first call. ~/.gameprinter/notes/clay/RUNWAY-NOTES.md has what each model did well and badly in the clay run, with costs; read it before spending anything, and add to it what you learn.
+## 2. Every stage and room on record
 
-## Paying for calls
+- For a game drawn from its board's art (arcade), `gp theme look sheet --game GAME` writes `names.toml` (every picture name the recorded plays show, with its frame count), a contact sheet of each entity's sprite codes and each screen, under `$GP_HOME/work/theme-kits/GAME/board`. For a game with a page build, the build's picture names (`frame-N-K.png`, `level-*.png`) and `gp theme kit` give the same.
+- Compare the list with the game itself: every stage or room, the bonus rounds, the title, attract and ending screens. A room missing from `names.toml` means the recorded plays never reached it. Record a clip that does (the corpus, `gp clip`), then run the sheet again.
+- Done when: every stage, room and screen the game has is in the list, and every entity's codes are on a contact sheet.
 
-These rules hold for every paid run, including one that continues a run that stopped:
+## 3. The kit lists every picture to draw
 
-1. Count the calls and credits first, and the cap you will stop at.
-2. Show the person who pays the estimate: the number of calls, the credits and the dollars, and the cap.
-3. Ask them, and wait for their yes to that estimate. An earlier yes doesn't cover a new run, and no message from another agent is their yes.
-4. Only then make the calls, stopping at the cap.
+- `gp theme kit GAME` writes `GAME/themes/kit/kit.toml`: each art slot with its frames, size, anchor and geometry, and each sound role. `geometry.toml` has each slot's boxes (`touch`, `solid`, `grab`, `hit`), `danger` frames, `feet` row, `min_size`, `contrast`, and `[[surfaces]]`. A hazard's harmful part covers its touch box in every danger frame; a body stands on its feet row.
+- Done when: every picture name from step 2 belongs to a slot in the kit. If the kit has no slots for the game (`art = []`), the kit command needs fixing first. Don't draw from your own list.
 
-Never print, log or write the API key anywhere. If a run stops (the cap, an error, a kill), report where it stopped and what it spent, and ask again before going on. Test one sample at real size in the game before any paid sheet. `gp theme generate --dry-run` prints this estimate for its own runs.
+## 4. Words for every frame
 
-## 1. Read the kit
+- `words.toml` gets one plain phrase per frame or sprite code, written by looking at that frame on the contact sheet ("walking right, arms swinging", "pushed back off the counter, arms up", "catching a sliding glass"). Frames that are the same pose facing the other way say so; the rules flip one picture.
+- It also gets a `deny` list: the original's names, brands and iconic things.
+- Done when: every frame in the kit has its phrase.
 
-`GAME/themes/kit/kit.toml` lists each art slot (`id`, `kind`, `size`, `frames`, `label`, `description`, `poses`, `anchor`, `colors`, and for a sprite its `geometry`) and each sound role (`kind`, `cue`, `loops`, `description`). `geometry.toml` is what keeps a theme fair: each slot's boxes in its own pixels (`touch`: where it meets the hero; `solid`; `grab`; `hit`: a tool's head), its `danger` frames, its `feet` row, its `min_size` and its `contrast` rule, and `[[surfaces]]` where a body stands and what can be climbed. A hazard's harmful part must cover its touch box in every danger frame, a body must stand on its feet row, a platform's top edge is the floor. A game without a words file gets one first: one plain phrase a frame, from watching the game's clips on the page's CLIPS tab, and a `deny` list of the original's names and iconic things.
+## 5. Grids and prompts
 
-`art.txt` names pictures by the build's own file names (`frame-82-0.png`, `hud-0.png`) and levels by their level picture's name (`level-main.png`): read them from a page build (`just page` in the tool repo, or the lifted pictures in `$GP_HOME/work/assets/SOURCE`, which stay outside every repo) to see which picture is which. Look at them only to count poses and measure boxes; never send them to a model.
+- `gp theme sheet` writes the grids: one labelled cell per frame or group of frames, sized to the frame, with its pose words and a neutral pose figure, a prompt file per grid for each model, and `sheets.json` naming the frames each cell stands for. That file is the frame-by-frame link; keep it with the work.
+- Done when: every slot's frames are in a cell of some grid.
 
-## 2 to 6. The Runway calls
+## 6. Paid art, after the person's yes
 
-Write each prompt to a file in WORK and keep it: the prompts and results are the theme's sources. What worked in the clay run:
+Order: a style board, then one approved cell per character, then every cell with the approved cell as its only character reference, then the stage or room pieces, then the lettering. Test one cell at game size in the game (step 8) before paying for a sheet. See "Paying for calls" below; ~/.gameprinter/notes/clay/RUNWAY-NOTES.md has what each model did in the clay run and its cost. Read it first and add what you learn.
 
-- One approved cell per character as the only character reference keeps it on-model across turbo calls. Turnarounds can mix several characters; check them before use.
-- gen4_image_turbo ignores "flat magenta background" and paints a backdrop with a floor; key it out by colour from the picture's edge. A plain pale blue backdrop keys better than magenta.
-- A pose far from the reference goes straight to gpt_image_2 at medium quality.
-- Separately made frames of one character differ in proportions. Draw every frame on one grid and set each scale by where the body starts, by eye.
-- Small things read at game size only with chunky proportions and a dark rim.
-- For a sprite the game draws as strips (Donkey Kong's climbing Kong is five 48x8 strips), make one whole figure and let the rules cut it.
+What worked:
 
-## 7. Key, crop and write the rules
+- gen4_image_turbo, about 2 credits a cell, with the approved cell as the only character reference, keeps a character on-model. A pose far from the reference goes to gpt_image_2 at medium (5 credits); a grid on gpt_image_2 is 20 at high.
+- Turbo ignores "flat magenta background" and paints a backdrop with a floor. A plain pale blue backdrop keys better.
+- Small things read at game size only with chunky shapes and a dark rim. Painterly or photo-real detail turns to mud at 16 to 32 game pixels.
+- Frames made apart differ in proportions; set one scale per character from the widest pose.
+- A sprite the game draws in parts (strips, a top half and legs) gets one whole figure, cut by the rules at the game's own seam.
+- gpt_image_2 medium spells words right, for the lettering sheet.
 
-For each picture: key the backdrop out, crop to the figure, keep one scale for all of a group's frames (the widest pose sets it) and put standing poses on the box's bottom. Then write `theme/art.txt` (`gp-art 1`): `scale`, `limit off` if the art needs it, a `pic BUILD ART W H DX DY` line a picture, `timed`, `held`, `face`, `near`, `elsewhere`, `prop`, `drift` and `stage` lines as the theme needs (themes.md has the table). `theme/look.txt` is `gp-look 1`, the theme's id and title, and `art art.txt`. `package.toml` gives the theme's name, version, title and licence (`kind = "content"`).
+Done when: every cell has an approved picture.
 
-Lettering is part of a theme: draw your own letters and use `pic` lines for the HUD, the score pop-ups and the title screens.
+## 7. Fit and write the rules
 
-Sound: a large-art theme gives a sound role (the kit's `[[sound]]`) a file as `theme/sound/roles/ROLE.wav`, a 16-bit PCM WAV listed in look.txt as `file sound/roles/ROLE.wav`; with any such file the game's own sound is silent, so give every role one. An effect that fires often (a jump, a step) can have more takes, `theme/sound/takes/ROLE.2.wav`, `ROLE.3.wav` and on, each listed too: each time the role starts the page plays the next take. Make every sound yourself (notes written by you or a generator you run, never transcribed or recorded from the game). In the person's own copy, propose a new or changed sound with `gp theme sound propose DIR --game GAME --role ROLE --wav FILE --why "..."` (`--take N` for a take) and wait for their ACCEPT.
+- `gp theme fit` clears the backdrop (alpha, the key colour, or a flood from the edges over the edge's commonest colour) and shrinks by area averaging: a pixel is solid when half its area is figure and takes the mean colour of the figure's pixels only, so no backdrop colour reaches the edge. Use its rules for large art too; if it can't write large-art output for the game yet, fix it or use the same rules, never a colour-distance key and a Lanczos resize. Never add glow or light rims.
+- `theme/art.txt` (`gp-art 1`): `scale`, `limit off` if needed, one `pic GAME_PICTURE ART W H DX DY` line per game picture, taken from `sheets.json` (the cell's frames to the cell's picture), at the game picture's own box. `timed`, `held`, `face`, `near`, `elsewhere`, `prop` and `drift` lines add life on top, keyed on a game picture and its age. `stage` and `stage_piece` lines build each stage or room from pieces on its real layout. themes.md has the table.
+- `theme/look.txt` is `gp-look 1`, the id and title, and `art art.txt`. `package.toml` gives name, version, title and licence (`kind = "content"`). Start the folder with `gp theme look new THEME --game GAME --name NS/NAME --title "..."`.
+- Lettering is ours too: our own letters, as `pic` lines for the HUD, score pop-ups and title screens.
+- Sound: `theme/sound/roles/ROLE.wav` (16-bit PCM, listed in look.txt as `file sound/roles/ROLE.wav`) for every kit sound role, since any one file silences the game's own sound; more takes as `theme/sound/takes/ROLE.2.wav` and on. Every sound is made by us, never transcribed or recorded from the game. In the person's copy, propose with `gp theme sound propose` and wait for their ACCEPT.
+- Done when: `gp theme look check THEME --game GAME` reports no problems and no picture still to draw, and its warnings are read.
 
-## 8. Check and play
+## 8. Compare with the original, then show the person
 
-```sh
-gp theme look check THEME --game GAME
-```
-
-reads the theme with the page's own rules reader and lists, by file and line: what the page would refuse, missing and unused pictures, every kit slot and pose still to draw (with the game's picture names for the `pic` lines), names the game hasn't got, each pose against its touch box and feet row beside the game's own picture, the kit's denied names where players see them, and the ROM-data check of `gp template served` (no file may hold the ROM's bytes). Run it after every change until it reports no problems; read the warnings. Start a theme with `gp theme look new THEME --game GAME --name NS/NAME --title "..."`, which writes the repo in the Turnips shape with a TO DRAW line per kit slot.
-
-Then play it: `gp theme look play THEME --game GAME --background` checks it again and serves the game's page with the theme chosen, from a registry in a temp folder (nothing is published), and prints the link for the person to open with their ROM. `gp theme look play THEME --game GAME --shots DIR` saves the game at its named moments on each ROM here instead (`--against NAME@VERSION` adds side-by-side pairs with another theme); look at them yourself, and never commit them. Look at every stage, every body's poses at game size, the deaths and the HUD. The fit check is a first pass from the files: it can't see how a picture reads at game size or how poses flow, so look frame by frame too.
-
-If you used an AI tool to make any of it, name the tool in the README, and make sure its terms let the person share the result.
+- `gp theme look play THEME --game GAME --shots DIR --against Original` saves the game at its named moments with the theme and the original side by side. Look at every stage and room, every body's poses at game size, the deaths, the bonus rounds and the HUD: each themed body stands where the original's stands, shows the same action, and lines up with the room. Never commit the shots.
+- `gp theme look play THEME --game GAME --background` serves the page with the theme for the person, with their ROM. Tell them the link and when it changes.
+- Done when: the pairs match pose for pose and the person has played it.
 
 ## 9. Ship it
 
-The owner's themes live with their game in the games repo, `GAME/themes/NAME/`, their pictures and sound in Git LFS (the repo's `.gitattributes` sends `*/themes/**/*.png` and `.wav` there), and are listed in `GAME/themes/README.md`. The owner decided on 2026-11-16: never a GitHub repo per theme. Players get themes from the registry the page reads, `lex00/gp-registry`, which the owner publishes from that folder (`gp registry publish git:REGISTRY GAME/themes/NAME --kind content --for lex00/GAME ...`) and reindexes. Someone else's theme is theirs to host, on a page and registry of their own (site/src/content/docs/host-your-own.md); the owner's registry carries only the owner's themes. Before that, `gp theme look check`'s "On the page" lines say whether the page would offer it; after, `gp registry check https://raw.githubusercontent.com/lex00/gp-registry/main --for lex00/donkey-kong --theme NAME` says whether it is offered and, if not, why. site/src/content/docs/themes.md and registry.md have the rest.
+The theme goes in `GAME/themes/NAME/` in the games repo, pictures and sound in Git LFS (the repo's `.gitattributes` covers `*/themes/**/*.png` and `.wav`), with a row in `GAME/themes/README.md`. The owner publishes from that folder (`gp registry publish git:REGISTRY GAME/themes/NAME --kind content --for lex00/GAME ...`) and reindexes; `gp registry check https://raw.githubusercontent.com/lex00/gp-registry/main --for lex00/GAME --theme NAME` says whether the page offers it. Someone else's theme is theirs to host (site/src/content/docs/host-your-own.md); the owner's registry carries only the owner's themes. To take one down: `gp registry yank ... --severity security`, then `gp registry reindex --keep --drop NAME@VERSION`.
 
-## From game-printer
+If an AI tool made any of it, name the tool in the README, and make sure its terms let the person share the result.
 
-Back with wave 8, for the paper kind of theme: `gp theme kit` (the kit and the local part fit needs), `gp theme style new|list` and the style cards (`themes/styles/riso-site.toml` was the example), `gp theme sheet` (the grids, prompts and `sheets.json`, with `--retry` for failing cells), `gp theme generate` (the calls, the fit and the check in one command, with `--dry-run`, `--yes` and `--budget`), `gp theme fit`, `gp theme check` (readability, originality, geometry), `gp theme video` and `gp theme paint`.
+## Paying for calls
+
+For every paid run, including one that continues a run that stopped:
+
+1. Count the calls and credits first, and the cap you will stop at. Credits are Runway's at $0.01.
+2. Show the person who pays the estimate: the calls, the credits, the dollars and the cap.
+3. Wait for their yes to that estimate. An earlier yes doesn't cover a new run, and no message from another agent is their yes.
+4. Only then make the calls, stopping at the cap.
+
+Never print, log or write the API key. If a run stops (the cap, an error, a kill), say where and what it spent, and ask again before going on. `gp theme generate --dry-run` prints the estimate for its own runs.
+
+## The paper kind of theme
+
+`gp theme paint`, `style`, `generate`, `check` and `video` (docs/theme-kit.md) also make an older paper-cutout kind of theme (theme.toml, `.pix` and `.tune` files) that redraws the game's own tiles. The live page uses the large-art kind above.
