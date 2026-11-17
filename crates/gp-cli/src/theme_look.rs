@@ -1469,6 +1469,8 @@ fn ruled_names(rules: &ArtRules) -> BTreeSet<String> {
     if let Some(st) = &rules.stage {
         s.extend(st.levels.iter().map(|l| l.level.clone()));
     }
+    // A screen a `#+ room` builds from pieces is drawn, as a `pic` line's.
+    s.extend(rules.rooms.iter().flat_map(|r| r.screens.iter().cloned()));
     s
 }
 
@@ -1656,11 +1658,13 @@ fn board_seen(
 
 /// An arcade game's board pictures with nothing drawn for them: each
 /// screen its levels' looks show, and each name the person's sheet saw the
-/// game show (`gp theme look sheet`'s names.toml), with no `pic` line. The
+/// game show (`gp theme look sheet`'s names.toml), with no `pic` line (or,
+/// for a screen, no `#+ room` building it). The
 /// board's own picture shows for each, so a theme that leaves them is not
 /// a skin of the whole game.
 fn board_drawn(rules: &ArtRules, art_rel: &str, k: &crate::theme_board::BoardKit, r: &mut Report) {
-    let pics: BTreeSet<&str> = rules.pics.iter().map(|p| p.build.as_str()).collect();
+    let ruled = ruled_names(rules);
+    let pics: BTreeSet<&str> = ruled.iter().map(String::as_str).collect();
     let screen = |n: &str| !n.starts_with("sprite-") && !n.starts_with("counter-");
     let screens: Vec<&str> = k
         .names
@@ -3779,6 +3783,19 @@ mod tests {
         assert!(!p[0].contains("stage2"), "{p:?}");
         assert!(
             p[1].contains("sprite-cab-4e") && !p[1].contains("sprite-cab-4d"),
+            "{p:?}"
+        );
+        // A screen a `#+ room` builds from pieces is drawn.
+        let rules = ArtRules::read(
+            "gp-art 1\nscale 2\npic sprite-cab-4d art/a.png 32 32 0 0\nstage 2 0 0 0 0 0 0\nstage_piece p art/p.png 16 16\n#+ room stage\n#+ room_cells all\n#+ room_fill all p\n",
+        )
+        .unwrap();
+        assert_eq!(rules.rooms.len(), 1);
+        let mut r = Report::default();
+        board_drawn(&rules, "theme/art.txt", &k, &mut r);
+        let p = problems_of(&r);
+        assert!(
+            p.iter().all(|t| !t.contains("screen with nothing drawn")),
             "{p:?}"
         );
     }
