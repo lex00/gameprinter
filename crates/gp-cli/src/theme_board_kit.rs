@@ -23,7 +23,7 @@ use gp_look::board::{BoardArt, CELL_SIZE, SCREEN_SIZE, SPRITE_SIZE};
 use gp_model::Model;
 use gp_model::model::BoardByte;
 
-use crate::theme_kit::{ArtSlot, Kit, Local, entity_id, role_label, role_words, scrub};
+use crate::theme_kit::{ArtSlot, Kit, Local, entity_id, role_label, role_words};
 
 /// A board sprite's slot kind: one picture a code, 32 by 32.
 pub(crate) const SPRITE: &str = "board-sprite";
@@ -31,6 +31,11 @@ pub(crate) const SPRITE: &str = "board-sprite";
 pub(crate) const SCREEN: &str = "board-screen";
 /// A counter's digits or its repeated tile, 16 by 16 a cell.
 pub(crate) const COUNTER: &str = "board-counter";
+
+/// Whether a slot is one of a board-drawn game's.
+pub(crate) fn is_board(a: &ArtSlot) -> bool {
+    matches!(a.kind.as_str(), SPRITE | SCREEN | COUNTER)
+}
 
 /// A picture code the model fixes: the picture byte's number with the
 /// ninth bit from a fixed flags byte (bit 3), None when a word gives it.
@@ -55,13 +60,11 @@ fn frame_of(code: u16) -> String {
 }
 
 /// The board's slots of a model, from the model alone. `id_names` are the
-/// names an entity's slot id hides (`theme_kit::names_of`), `names` those
-/// its words leave out.
-pub(crate) fn slots(
-    m: &Model,
-    id_names: &BTreeSet<String>,
-    names: &mut BTreeSet<String>,
-) -> Vec<ArtSlot> {
+/// names an entity's slot id hides (`theme_kit::names_of`). A sprite's
+/// description is its role's words only: a board game's model describes a
+/// body by the program's addresses and routines, which no prompt can use,
+/// so the words file gives each its own.
+pub(crate) fn slots(m: &Model, id_names: &BTreeSet<String>) -> Vec<ArtSlot> {
     let Some(n) = crate::theme_board::model_names(m) else {
         return Vec::new();
     };
@@ -85,21 +88,12 @@ pub(crate) fn slots(
             .collect();
         codes.sort_unstable();
         codes.dedup();
-        let desc = e
-            .core
-            .description
-            .as_deref()
-            .map(|d| scrub(d, names))
-            .unwrap_or_default();
-        let mut description = format!(
+        let description = format!(
             "{}, {} by {} pixels",
             role_words(&e.core.role),
             SPRITE_SIZE[0],
             SPRITE_SIZE[1]
         );
-        if desc.split_whitespace().count() >= 3 {
-            description.push_str(&format!(": {desc}"));
-        }
         let frame_names: Vec<String> = codes.into_iter().map(frame_of).collect();
         out.push(ArtSlot {
             id: entity_id(name, &e.core.role, id_names),
@@ -184,6 +178,37 @@ pub(crate) fn slots(
         });
     }
     out
+}
+
+/// The entity a board sprite slot is: the one whose slot id is the slot's.
+fn entity_of<'a>(m: &'a Model, slot: &str) -> Option<&'a str> {
+    let ids = crate::theme_kit::names_of(m);
+    m.entities.iter().find_map(|(n, e)| {
+        (e.core.board_sprite.is_some() && entity_id(n, &e.core.role, &ids) == slot)
+            .then_some(n.as_str())
+    })
+}
+
+/// The name a theme's rules give a board slot's frame: `sprite-ENTITY-CODE`,
+/// the screen's slot, `counter-NAME-D` or `counter-NAME`.
+pub(crate) fn picture(m: &Model, slot: &ArtSlot, frame: &str) -> Option<String> {
+    match slot.kind.as_str() {
+        SPRITE => Some(gp_look::board::sprite_name(
+            entity_of(m, &slot.id)?,
+            code_of(frame)?,
+        )),
+        SCREEN => slot.id.strip_prefix("screen.").map(str::to_owned),
+        COUNTER => {
+            if let Some(c) = slot.id.strip_prefix("digits.") {
+                Some(gp_look::board::counter_name(c, Some(frame.parse().ok()?)))
+            } else {
+                slot.id
+                    .strip_prefix("tile.")
+                    .map(|c| gp_look::board::counter_name(c, None))
+            }
+        }
+        _ => None,
+    }
 }
 
 /// The kit with the local part's codes added to each board sprite slot,
@@ -353,6 +378,22 @@ high = { slot = "codes", column = 1 }
         assert_eq!(coin.size, [32, 32]);
         assert_eq!(kit.art[2].size, [512, 480]);
         assert_eq!(kit.art[4].size, [16, 16]);
+        // Each frame's picture name, as a theme's rules draw it.
+        let names: Vec<String> = kit
+            .art
+            .iter()
+            .flat_map(|a| a.frame_names.iter().filter_map(|f| picture(&m, a, f)))
+            .collect();
+        assert_eq!(
+            names
+                .iter()
+                .filter(|n| n.starts_with("counter-score-"))
+                .count(),
+            10
+        );
+        for n in ["sprite-coin-14d", "stage", "stage2", "counter-lives"] {
+            assert!(names.iter().any(|x| x == n), "{n} in {names:?}");
+        }
         // The board's own names hold every one of them.
         assert!(
             kit.art.iter().all(|a| a.geometry.is_none()),
@@ -383,6 +424,7 @@ high = { slot = "codes", column = 1 }
         let p = kit.art.iter().find(|a| a.id == "entity.player").unwrap();
         assert_eq!(p.frame_names, ["12", "4e"]);
         assert_eq!(p.frames, 2);
+        assert_eq!(picture(&m, p, "4e").as_deref(), Some("sprite-player-4e"));
         // A code the model fixes stays when the plays didn't show it.
         let mk = kit.art.iter().find(|a| a.id == "entity.coin").unwrap();
         assert_eq!(mk.frame_names, ["14d"]);

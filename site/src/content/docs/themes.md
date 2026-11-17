@@ -19,6 +19,7 @@ Themes today are large-art themes. Your pictures are drawn bigger than the game'
 | `theme/look.txt` | `gp-look 1`, the theme's id and title, and `art art.txt` |
 | `theme/art.txt` | The rules, `gp-art 1`, one per line |
 | `theme/art/` | The pictures |
+| `theme/made-from.txt` | Which cell of your sheets, or your own hand, each picture came from (below) |
 | `theme/sound/roles/` | A sound for each of the game's sound roles, if you give the theme sound (below) |
 | `theme/sound/takes/` | More takes of a role's sound, played in turn |
 
@@ -50,6 +51,16 @@ A theme never holds a picture of a stage. The `stage`, `stage_piece` and `level`
 The `#+` lines are newer than the rest. A page built before them reads them as notes and still offers your theme, just drawn without them: the HUD's text goes under the bodies, and each body shows its full picture everywhere. Any other line a page doesn't know makes it drop the whole theme, so stick to the lines on this page. In a game whose HUD is drawn as sprites (Moss Hop's), the text is over the bodies already, and `gp theme look check` tells you so.
 
 Lettering belongs to the theme too. Draw your own letters and use `pic` lines for the HUD, the score pop-ups and the title screens.
+
+### Fit it from the sheets
+
+`gp theme sheet GAME -o WORK/sheets` writes the grids an image model fills: one labelled cell for each of the game's frames (each sprite code, on an arcade game), with the pose words from the kit's `words.toml`, and `sheets.json`, which names the game's pictures each cell stands for. Once the grids are filled,
+
+```sh
+gp theme fit my-game --sheets WORK/sheets -o my-theme --large
+```
+
+writes a picture and a `pic` line for each of the game's pictures a cell stands for. Each picture is the cell's figure with its backdrop cleared, standing where the original's body stands in that frame, at the theme's `scale`. It also writes `theme/made-from.txt`, which says which cell each picture came from (or `hand NAME` for one you drew yourself), and which the check reads. Keep the work folder, sheets.json with it, outside the repo.
 
 ### Sound
 
@@ -183,6 +194,7 @@ The older way to make a theme comes from game-printer, the tool before this one.
 | `gp theme sheet GAME --style CARD -o DIR` | Starting grids and prompts for an image model |
 | `gp theme generate GAME --style CARD --dry-run` | The image model calls a theme would take and their cost. A real run pays Runway, so it needs `--yes` and your own key |
 | `gp theme fit GAME --sheets DIR -o THEME` | Fits filled grids (or `--art DIR`) to the game's slots |
+| `gp theme fit GAME --sheets DIR -o THEME --large` | Fits filled grids into a large-art theme folder: a picture for each of the game's pictures, placed where the original's body stands in that frame, its `pic` line, and `theme/made-from.txt` |
 | `gp theme paint GAME -o THEME` | A paper theme, painted in code |
 | `gp theme check GAME --theme THEME --original` | The readability check, the style and geometry checks, and the originality check against your own ROM |
 | `gp theme video GAME --input LOG --theme THEME -o FILE.png` | The model played on an input, drawn with the theme |

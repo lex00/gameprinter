@@ -47,7 +47,7 @@ An arcade game's model draws its bodies with its board's own sprites, picked by 
 
 Which codes a body shows is the person's romset's. `gp theme look sheet --game GAME` plays the game's recorded inputs on their romset and writes `names.toml` (each name the game showed) under `$GP_HOME/work/theme-kits/MODEL/board`. Then `gp theme kit GAME`, with the romset found in `$GP_ROM_DIR` or given with `--rom`, writes the local part, `local.json` under `$GP_HOME/work/theme-kits/GAME/`: `board_frames`, the codes each sprite slot showed, and `board_bodies`, each of those pictures' visible body in the original (`[x0, y0, x1, y1]` in its 32 by 32 picture, unflipped, as the board draws it before its flips), from the person's own lift. Without names.toml it says to run the sheet first. `gp theme sheet` and `gp theme fit` read the slots with the local part's codes added, in code order.
 
-The kit names no entity whose name may be a character's: a slot's id is the entity's as for a sprite (`entity.<role>_<n>` where the name isn't a plain word), and its frames are codes, `base` or digits. The name a theme draws a frame by (`sprite-ENTITY-CODE`, the screen's slot, `counter-NAME-D`) is made from the model when it is needed (`theme_board_kit::picture`). Pose words for a board sprite go by code, since no order is fixed ("Prompt words", below). The tests are `theme_board_kit::tests` (a made-up model: a body whose code a word gives, one the model fixes at 0x14d, two screens, a score and a lives tile).
+The kit names no entity whose name may be a character's: a slot's id is the entity's as for a sprite (`entity.<role>_<n>` where the name isn't a plain word), and its frames are codes, `base` or digits. The name a theme draws a frame by (`sprite-ENTITY-CODE`, the screen's slot, `counter-NAME-D`) is made from the model when it is needed (`theme_board_kit::picture`). A board sprite slot's description is its role's words alone, since a board game's model describes a body by the program's addresses and routines; the words file gives each slot its label and description. Pose words for a board sprite go by code, since no order is fixed ("Prompt words", below). The tests are `theme_board_kit::tests` (a made-up model: a body whose code a word gives, one the model fixes at 0x14d, two screens, a score and a lives tile).
 
 ## Gameplay geometry
 
@@ -206,6 +206,8 @@ Shareable cards are `themes/styles/<name>.toml` in the repo; they hold no game's
 | `sheet-NN.gen4_image.txt` | The same for gen4_image, within its 1000 characters (cells past the limit are "as labeled") |
 | `pictures/<id>.gen4_image.txt`, `pictures/<id>.guide.png` | A whole picture's prompt (a stage, the score display, a title) and, for a stage, the geometry guide from the local kit (platforms orange, ladders blue) when it may be sent (below) |
 
+A game drawn by its board ("A game drawn by its board", above) gets a cell for each code each sprite slot lists, the local part's codes included, with the code's pose words (`[art.frames]` in words.toml), the dashed box at the original's body from the local part's `board_bodies`, and a cell for each digit and repeated tile of its counters. Each screen is a whole picture (`pictures[]`), 512 by 480. The output says how many cells have no pose words yet, and how many don't name their game pictures.
+
 A grid has a sheet for each main subject (split evenly when over 16 cells) and for any slot with 8 or more drawings; the other slots share props sheets of up to 16 cells. Frames whose tiles the local kit cuts the same are one drawing, one cell. The font and slots of 8 by 8 or less are listed under `code`: drawn in code, since a model's picture that small is mush. A cell is bordered in black on a magenta (`#FF00FF`) ground, with gutters of magenta between cells and a white label strip above it (the cell code, the slot's label and the pose words). Inside it are a thin box at the slot's size times the sheet's scale, the line the figure stands on, and a gray pose figure drawn from the pose words alone: a stick figure for a body (arms up, forward or down, legs together or apart, turned for a spin), a block shape for the rest (a ring, a flame, a bar, a tool, a number). With a local kit, a dashed box marks the original's body in the cell's frames and the figure fills it ("Gameplay geometry"): a size and a place, no shape. Nothing else in a grid comes from the original. Every prompt is checked against the game's denied words before anything is written. Donkey Kong gives 6 sheets of 58 cells (the hero 14 and 14, the rolling hazard 10, the big foe 6, the one to rescue 2, props 12), 4 refs and 3 pictures, with 3 slots in code.
 
 ### sheets.json
@@ -253,6 +255,8 @@ Stable as `gp-sheets 1`; a runner (the Runway one) reads it and `gp theme fit --
 | `cells[].rect` | The cell's inside, `[x, y, w, h]` in the grid: what fit cuts |
 | `cells[].body`, `baseline` | The box (slot size times `scale`) and the row it stands on, in the grid |
 | `cells[].frames`, `frame_names` | The kit frames the drawing is |
+| `cells[].pictures` | For each of `frames`, the game's pictures it is drawn as, by the names a large-art theme's rules give them (`frame-82-0.png`, `sprite-ENTITY-CODE`, `counter-score-7`): the link from a cell to the game's frames that `gp theme fit --large` writes its `pic` lines from. A board's are made from the model; an NES game's come from its build when the ROM is here, else the field is left out and fit reads them from the build |
+| `pictures[].pictures` | The same for a whole picture: a board's screen by its slot |
 | `pictures[].out` | Where the runner writes the whole picture; fit scales it to `size` |
 | `pictures[].rom_derived` | `true` when the guide is made from the person's ROM; absent otherwise |
 
@@ -276,6 +280,40 @@ To retry some cells, `gp theme sheet GAME -o DIR --retry D03,F02` writes `retry-
 | Tones | One lightness split for all of a slot's frames: thirds between the 2nd and 98th percentiles of the slot's lightness, so a color keeps its tone from frame to frame (each frame's own range before 2026-11-03, which made tones flicker) |
 
 The tiles are then cut as before: three tones a tile, the tones' colors the art's mean per role, a tile two frames share taking the first frame's art. `--contact FILE` writes each slot's fitted frames at 1x and 4x, a row a slot, for a person to look at.
+
+### Fitting a large-art theme
+
+`gp theme fit GAME --sheets DIR -o THEME --large` fits the filled grids into a large-art theme folder instead: the one `gp theme look new` writes (`theme/look.txt`, `theme/art.txt`), the shape Turnips has. The code is `crates/gp-cli/src/theme_fit_large.rs`.
+
+| Step | What |
+|---|---|
+| Which pictures | Each cell's `pictures` from sheets.json (else the board's names, else the game's build, which needs the ROM): one new picture for each game picture the cell stands for |
+| Background | As above: alpha, the key color, or a flood from the edges. No color-distance key |
+| Place | The figure's box is moved and scaled, one scale both ways, to fill the original's body in that frame (the local part's `board_bodies` or `bodies`): it stands on the body's bottom, centered on its middle. Without a body (a digit) it keeps its place against the cell's box |
+| Scale | To the game picture's size times the theme's `scale` (`--scale`, else art.txt's, else 2 for a board's 512 by 480 picture and 6 otherwise), by area averaging: a pixel is solid when half its area is figure and takes the mean color of the figure's pixels in it only, so no backdrop color reaches an edge. Lone pixels are dropped. No glow or rim is added |
+| Rules | A picture in `theme/art/` and a `pic NAME art/NAME.png W H 0 0` line in `theme/art.txt` for each, at the game picture's own size and place; a line for a picture drawn now replaces its old one, and every other line stays |
+| Record | `theme/made-from.txt` (below) |
+
+A board's screen is its sheet picture scaled whole to 512 by 480 times the scale, with nothing cleared. An NES stage is never a picture: it is left for `stage` lines, and the output says so.
+
+`theme/made-from.txt` says where each picture came from, so `gp theme look check` can hold each `pic` line to the game frame it stands for:
+
+```text
+gp-made-from 1
+sheets $GP_HOME/work/themes/neon/sheets/sheets.json
+cell sheet-02 B03 sprite-cab-4d sprite-cab-4e
+picture screen-stage stage
+hand counter-score-0
+```
+
+| Line | Meaning |
+|---|---|
+| `sheets PATH` | The sheets.json the cells are in, under `$GP_HOME` written so, naming no one's folders |
+| `cell SHEET CELL NAME...` | The game pictures fitted from that cell |
+| `picture ID NAME...` | The game pictures fitted from a whole picture of the sheets |
+| `hand NAME...` | Pictures drawn by hand for those game pictures, each at its own box: a hand-made theme says so here |
+
+A fit again keeps the lines for game pictures it didn't draw this time. Tests: `theme_fit_large::tests` (a made-up figure filling a body at scale 2 with no key color at its edge, the half-area rule, the record's `$GP_HOME`).
 
 ## Sound roles
 

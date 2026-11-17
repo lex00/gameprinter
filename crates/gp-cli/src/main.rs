@@ -181,6 +181,7 @@ mod theme_apng;
 mod theme_board;
 mod theme_board_kit;
 mod theme_fit;
+mod theme_fit_large;
 mod theme_generate;
 mod theme_geometry;
 mod theme_kit;

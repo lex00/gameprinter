@@ -191,6 +191,13 @@ pub struct SheetCell {
     /// (docs/theme-kit.md, "Gameplay geometry"). Absent without one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep: Option<[u32; 4]>,
+    /// The game's pictures each of `frames` is drawn as, by the names a
+    /// large-art theme's rules give them (`frame-82-0.png`,
+    /// `sprite-ENTITY-CODE`): what `gp theme fit --large` writes a `pic`
+    /// line for. Empty where the sheet couldn't tell (an NES game's
+    /// without its ROM here); fit then reads them from the game's build.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pictures: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -214,6 +221,9 @@ pub struct PictureJob {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rom_derived: bool,
     pub refs: Vec<String>,
+    /// The game's pictures it is drawn as (a board's screen by its slot).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pictures: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -318,9 +328,15 @@ fn drawings(a: &ArtSlot, local: Option<&Local>) -> Vec<Vec<u32>> {
 
 /// A pose phrase: the words file's, else the frame's name.
 fn pose_of(a: &ArtSlot, k: u32) -> String {
-    a.poses.get(k as usize).cloned().unwrap_or_else(|| {
+    let words = a.poses.get(k as usize).filter(|p| !p.trim().is_empty());
+    words.cloned().unwrap_or_else(|| {
         format!(
-            "frame {}",
+            "{} {}",
+            if a.kind == crate::theme_board_kit::SPRITE {
+                "code"
+            } else {
+                "frame"
+            },
             a.frame_names
                 .get(k as usize)
                 .cloned()
@@ -811,7 +827,13 @@ pub fn sheet_cmd(
     let tdir = crate::theme_kit::template_dir(game)?;
     let (m, _) = crate::theme::read_model(&tdir)?;
     let (id, _, _) = crate::theme_kit::manifest(&tdir);
-    let (kit, problems) = crate::theme_kit::kit_for(&m, &id, &tdir)?;
+    // The local part first: an arcade game's sprite slots take the codes
+    // the person's romset showed from it, before their words go in.
+    let ldir = crate::theme_kit::local_dir(paths, &id);
+    let local: Option<Local> = fs::read_to_string(ldir.join("local.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok());
+    let (kit, problems) = crate::theme_kit::kit_with_local(&m, &id, &tdir, local.as_ref())?;
     if !problems.is_empty() {
         bail!(
             "the words file doesn't fit the kit:\n  {}",
@@ -825,10 +847,40 @@ pub fn sheet_cmd(
         Some(s) => Some(crate::theme_style::find(s, paths)?),
         None => None,
     };
-    let ldir = crate::theme_kit::local_dir(paths, &kit.game);
-    let local: Option<Local> = fs::read_to_string(ldir.join("local.json"))
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok());
+    // Each frame's game pictures, by the names a large-art theme's rules
+    // give them: a board's from the model, an NES game's from its build
+    // when the ROM is here.
+    let built_pictures = if kit.art.iter().all(crate::theme_board_kit::is_board) {
+        None
+    } else {
+        crate::theme_look::game_pictures(&tdir, &kit, None, paths).ok()
+    };
+    let pictures_of = |a: &ArtSlot, frames: &[u32]| -> Vec<Vec<String>> {
+        let list: Vec<Vec<String>> = frames
+            .iter()
+            .map(|&f| {
+                if crate::theme_board_kit::is_board(a) {
+                    a.frame_names
+                        .get(f as usize)
+                        .and_then(|n| crate::theme_board_kit::picture(&m, a, n))
+                        .into_iter()
+                        .collect()
+                } else {
+                    built_pictures
+                        .as_ref()
+                        .and_then(|g| g.frames.get(&a.id))
+                        .and_then(|v| v.get(f as usize))
+                        .cloned()
+                        .unwrap_or_default()
+                }
+            })
+            .collect();
+        if list.iter().all(Vec::is_empty) {
+            Vec::new()
+        } else {
+            list
+        }
+    };
     if out.join(SHEETS_FILE).exists() && !force {
         bail!(
             "{} has sheets; pass --force to write them again",
@@ -852,7 +904,7 @@ pub fn sheet_cmd(
     let mut groups: Vec<(String, Vec<Planned>)> = Vec::new();
     let mut props: Vec<Planned> = Vec::new();
     for a in &kit.art {
-        if a.kind == "picture" {
+        if a.kind == "picture" || a.kind == crate::theme_board_kit::SCREEN {
             continue;
         }
         if a.kind == "font" || a.size[0] * a.size[1] <= 64 {
@@ -914,11 +966,9 @@ pub fn sheet_cmd(
         within(&board, GEN4_LIMIT),
     ));
     let mut subjects: Vec<&ArtSlot> = Vec::new();
-    for a in kit
-        .art
-        .iter()
-        .filter(|a| a.kind == "sprite" && is_subject(a))
-    {
+    for a in kit.art.iter().filter(|a| {
+        (a.kind == "sprite" || a.kind == crate::theme_board_kit::SPRITE) && is_subject(a)
+    }) {
         if subjects.iter().any(|s| s.label == a.label) {
             continue;
         }
@@ -1062,6 +1112,7 @@ pub fn sheet_cmd(
                 baseline: by + bh,
                 pose,
                 keep,
+                pictures: pictures_of(a, &p.frames),
             });
             let _ = first;
         }
@@ -1168,7 +1219,11 @@ pub fn sheet_cmd(
     if rom_guides && !authored {
         warnings.push("WARNING: --rom-guides writes stage guides made from your ROM (the original's platforms and ladders). They are marked rom_derived in sheets.json, and gp theme generate sends them to a service only with its own --rom-guides. Never share them.".to_owned());
     }
-    for a in kit.art.iter().filter(|a| a.kind == "picture") {
+    for a in kit
+        .art
+        .iter()
+        .filter(|a| a.kind == "picture" || a.kind == crate::theme_board_kit::SCREEN)
+    {
         let pid = a.id.replace('.', "-");
         let mut prefs = vec!["style-board".to_owned()];
         let guide_src =
@@ -1222,6 +1277,7 @@ pub fn sheet_cmd(
             rom_derived: guide.is_some() && !authored,
             guide,
             refs: prefs,
+            pictures: pictures_of(a, &[0]).into_iter().flatten().collect(),
         });
     }
 
@@ -1270,6 +1326,19 @@ pub fn sheet_cmd(
         serde_json::to_string_pretty(&manifest)?,
     )?;
     let n_cells: usize = manifest.sheets.iter().map(|s| s.cells.len()).sum();
+    let wordless: Vec<String> = manifest
+        .sheets
+        .iter()
+        .flat_map(|s| s.cells.iter())
+        .filter(|c| c.pose.starts_with("frame ") || c.pose.starts_with("code "))
+        .map(|c| format!("{} {} ({})", c.cell, c.label, c.pose))
+        .collect();
+    let unnamed = manifest
+        .sheets
+        .iter()
+        .flat_map(|s| s.cells.iter())
+        .filter(|c| c.pictures.is_empty())
+        .count();
     let gen4_calls =
         manifest.refs.iter().filter(|r| r.image.is_none()).count() + manifest.pictures.len();
     let skipped_guides = manifest
@@ -1280,6 +1349,19 @@ pub fn sheet_cmd(
     let mut text = warnings.join("\n");
     if !text.is_empty() {
         text.push('\n');
+    }
+    if !wordless.is_empty() {
+        text.push_str(&format!(
+            "{} cells have no pose words in the kit's words.toml yet, so their prompts say only the frame: {}{}\n",
+            wordless.len(),
+            wordless.iter().take(8).cloned().collect::<Vec<_>>().join(", "),
+            if wordless.len() > 8 { ", ..." } else { "" }
+        ));
+    }
+    if unnamed > 0 {
+        text.push_str(&format!(
+            "{unnamed} cells don't name the game's pictures they stand for (the game's build needs your ROM here); `gp theme fit --large` reads them from the build then\n"
+        ));
     }
     if !authored && !rom_guides && local.is_some() && skipped_guides > 0 {
         text.push_str("no stage guides: a guide made from your ROM goes only with --rom-guides\n");

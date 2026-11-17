@@ -640,6 +640,55 @@ fn slot_pictures(kit: &Kit, slot: &ArtSlot, b: &Built) -> Option<Vec<Vec<u32>>> 
     None
 }
 
+/// Each kit slot's frames as the game's pictures they are drawn as, by
+/// the names a large-art theme's rules give them, and each picture's size
+/// in game pixels: for `gp theme sheet` and `gp theme fit --large`.
+pub(crate) struct GamePictures {
+    /// By slot id, per frame, the game's pictures (blank ones left out).
+    pub frames: BTreeMap<String, Vec<Vec<String>>>,
+}
+
+/// [`GamePictures`] from the game's build with the person's lift, or why
+/// there is none.
+pub(crate) fn game_pictures(
+    game_dir: &Path,
+    kit: &Kit,
+    rom: Option<&Path>,
+    paths: &Paths,
+) -> Result<GamePictures, String> {
+    let game = game_of(game_dir).map_err(|e| format!("{e:#}"))?;
+    let b = build(&game, rom, paths)?;
+    let mut frames = BTreeMap::new();
+    for slot in &kit.art {
+        if crate::theme_board_kit::is_board(slot) {
+            let v = slot
+                .frame_names
+                .iter()
+                .map(|f| {
+                    crate::theme_board_kit::picture(&b.model, slot, f)
+                        .into_iter()
+                        .collect()
+                })
+                .collect();
+            frames.insert(slot.id.clone(), v);
+            continue;
+        }
+        if let Some(fr) = slot_pictures(kit, slot, &b) {
+            let v = fr
+                .iter()
+                .map(|pics| {
+                    pics.iter()
+                        .filter(|&&p| !b.blank(p))
+                        .map(|&p| b.file(p).to_owned())
+                        .collect()
+                })
+                .collect();
+            frames.insert(slot.id.clone(), v);
+        }
+    }
+    Ok(GamePictures { frames })
+}
+
 // ---------------------------------------------------------------------
 // The check.
 

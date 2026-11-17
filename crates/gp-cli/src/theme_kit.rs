@@ -779,7 +779,7 @@ fn kit_named(
     art.extend(pics);
     art.extend(extra);
     // A game drawn by its board's art: its entities, screens and counters.
-    art.extend(crate::theme_board_kit::slots(m, &id_names, &mut names));
+    art.extend(crate::theme_board_kit::slots(m, &id_names));
     let mut sound = Vec::new();
     if let Some(snd) = &present.sound {
         for r in &snd.roles {

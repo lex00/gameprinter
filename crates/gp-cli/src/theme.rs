@@ -178,7 +178,11 @@ pub enum ThemeCmd {
     /// downscaled by area averaging, and cut into the game's tiles by one
     /// lightness split for the slot. Each picture slot (`ART/<slot id>.png`, or
     /// the sheets' picture) is kept whole. Needs the kit's local part (`gp
-    /// theme kit --rom`). Merges into OUT's theme.toml when it has one.
+    /// theme kit --rom`). Merges into OUT's theme.toml when it has one. With
+    /// --large it fits the filled grids into a large-art theme folder
+    /// instead (docs/theme-kit.md, "Fitting a large-art theme"): a picture
+    /// and a `pic` line for each game picture a cell stands for, placed by
+    /// the original's body in that frame, and theme/made-from.txt.
     Fit {
         /// A template directory, or a template id under ./templates.
         game: PathBuf,
@@ -195,6 +199,23 @@ pub enum ThemeCmd {
         /// 4x.
         #[arg(long, value_name = "FILE")]
         contact: Option<PathBuf>,
+        /// Fit the filled grids (--sheets) into a large-art theme folder
+        /// instead (the one `gp theme look new` writes): a picture for each
+        /// game picture a cell stands for, at the theme's scale, placed by
+        /// the original's body in that frame from the kit's local part; a
+        /// `pic` line each in OUT/theme/art.txt; and OUT/theme/made-from.txt
+        /// naming the cell each came from.
+        #[arg(long, requires = "sheets", conflicts_with_all = ["art", "contact"])]
+        large: bool,
+        /// With --large: canvas pixels to a game pixel (default: art.txt's
+        /// `scale`, else 2 for a board's 512 by 480 picture and 6 otherwise).
+        #[arg(long, requires = "large")]
+        scale: Option<u32>,
+        /// With --large: your ROM of the game, to name the game's pictures a
+        /// cell stands for when sheets.json doesn't (default: one under
+        /// $GP_ROM_DIR the game accepts).
+        #[arg(long, requires = "large")]
+        rom: Option<PathBuf>,
     },
     /// Write starting grids and prompts for an image model from a game's kit
     /// and a style card (docs/theme-kit.md, "Sheets"). Each grid holds a
@@ -534,10 +555,20 @@ pub(crate) fn run(cmd: &ThemeCmd, paths: &Paths, rec: &mut RunRecorder) -> Resul
         ),
         ThemeCmd::Fit {
             game,
+            sheets: Some(sheets),
+            out,
+            large: true,
+            scale,
+            rom,
+            ..
+        } => crate::theme_fit_large::fit_large(game, sheets, out, *scale, rom.as_deref(), paths),
+        ThemeCmd::Fit {
+            game,
             art,
             sheets,
             out,
             contact,
+            ..
         } => crate::theme_fit::fit_cmd(
             game,
             art.as_deref(),
