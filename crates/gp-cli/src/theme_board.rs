@@ -216,7 +216,17 @@ fn existing(p: &Path) -> PathBuf {
 
 /// The recorded plays of a game: each `inputs/ID.start.presses` from
 /// power-on with its clip's `inputs/ID.presses` after it, as frames.
-fn plays(game: &Path) -> Result<Vec<(String, Vec<gp_runtime::InputFrame>)>> {
+/// A recorded play from power-on: its name, the set its log names (an
+/// arcade log's `arcade SET` line), the log's frames as the original takes
+/// them and as the model takes them.
+struct Play {
+    name: String,
+    set: Option<String>,
+    log: Vec<gp_evidence::input_log::InputFrame>,
+    frames: Vec<gp_runtime::InputFrame>,
+}
+
+fn plays(game: &Path) -> Result<Vec<Play>> {
     let dir = game.join("inputs");
     let mut starts: Vec<PathBuf> = fs::read_dir(&dir)
         .with_context(|| format!("reading {}", dir.display()))?
@@ -227,12 +237,11 @@ fn plays(game: &Path) -> Result<Vec<(String, Vec<gp_runtime::InputFrame>)>> {
         })
         .collect();
     starts.sort();
-    let frames_of = |p: &Path| -> Result<Vec<gp_runtime::InputFrame>> {
+    let log_of = |p: &Path| -> Result<gp_evidence::InputLog> {
         let text = fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?;
         let presses = crate::clipset::parse_presses(&text)?;
-        let log = gp_evidence::InputLog::parse(&crate::clipset::log_of_presses(&presses)?)
-            .map_err(|e| anyhow!("{}: {e}", p.display()))?;
-        Ok(crate::run::frames(&log))
+        gp_evidence::InputLog::parse(&crate::clipset::log_of_presses(&presses)?)
+            .map_err(|e| anyhow!("{}: {e}", p.display()))
     };
     let mut out = Vec::new();
     for s in starts {
@@ -244,12 +253,17 @@ fn plays(game: &Path) -> Result<Vec<(String, Vec<gp_runtime::InputFrame>)>> {
                     .to_owned()
             })
             .unwrap_or_default();
-        let mut frames = frames_of(&s)?;
+        let mut log = log_of(&s)?;
         let clip = dir.join(format!("{name}.presses"));
         if clip.is_file() {
-            frames.extend(frames_of(&clip)?);
+            log.frames.extend(log_of(&clip)?.frames);
         }
-        out.push((name, frames));
+        out.push(Play {
+            set: log.arcade.as_ref().map(|a| a.system.clone()),
+            frames: crate::run::frames(&log),
+            log: log.frames,
+            name,
+        });
     }
     Ok(out)
 }
@@ -316,11 +330,46 @@ pub(crate) fn sheet(
             model.model.title
         );
     }
+    // A game whose play turns on random draws (the mapping's `[[draws]]`)
+    // follows a recorded play only with the original's draws: without them
+    // the model's own draws send different customers or barrels, the play
+    // ends early, and the later stages never show. They are recorded on
+    // the person's own romset, as clip scoring records them.
+    let mfile = game_dir.join(gp_interp::mapping::MAPPING_FILE);
+    let mapping = match fs::read_to_string(&mfile) {
+        Ok(t) => Some(
+            gp_interp::mapping::Mapping::parse(&t)
+                .map_err(|e| anyhow!("{}: {e}", mfile.display()))?,
+        ),
+        Err(_) => None,
+    }
+    .filter(|m| !m.draws.is_empty());
+    let mut no_draws: Vec<String> = Vec::new();
     let mut frames = 0u64;
     let mut not_run = Vec::new();
-    for (_, inputs) in &runs {
+    for play in &runs {
+        let inputs = &play.frames;
         let mut rt = crate::theme_run::Run::open(&bundle, &game_dir, paths)?;
         not_run = rt.not_run.clone();
+        if let Some(m) = &mapping {
+            let draws = crate::clip_score::rom_of_set(paths, &game_dir, rom, play.set.as_deref())
+                .and_then(|r| {
+                    let sets = crate::clipset::package_sets(&game_dir);
+                    let other = play.set.as_deref().and_then(|id| {
+                        sets.iter()
+                            .find(|s| (s.id == id || s.system == id) && !s.scored)
+                    });
+                    let m = match other {
+                        Some(s) => m.clone().for_set(&s.id),
+                        None => m.clone(),
+                    };
+                    crate::lockstep::record_draws(&r, &m, &play.log, 0)
+                });
+            match draws {
+                Ok(d) => rt = rt.with_draws(d)?,
+                Err(e) => no_draws.push(format!("{} ({e:#})", play.name)),
+            }
+        }
         let mut anim = gp_present::Animator::new();
         for f in inputs {
             rt.advance(f).map_err(anyhow::Error::msg)?;
@@ -411,6 +460,13 @@ pub(crate) fn sheet(
         "  screens: {}",
         screens.keys().cloned().collect::<Vec<_>>().join(", ")
     );
+    if !no_draws.is_empty() {
+        let _ = writeln!(
+            text,
+            "These plays ran without the original's random draws, so they may end sooner than the recording and show less: {}",
+            no_draws.join("; ")
+        );
+    }
     if !not_run.is_empty() {
         let _ = writeln!(
             text,

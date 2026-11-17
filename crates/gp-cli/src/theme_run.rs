@@ -131,6 +131,23 @@ impl Run {
         self.rt.spec()
     }
 
+    /// Gives the run the original's random draws, so a game whose play
+    /// turns on them (who comes in, where) follows the recorded play.
+    /// A script only starts on a load, so the run's power-on state is
+    /// loaded again once it has the script, as clip scoring does: the
+    /// model then takes the original's draws from its first frame.
+    pub(crate) fn with_draws(self, mut d: gp_sim::DrawScript) -> Result<Self> {
+        use gp_runtime::Runtime as _;
+        let power_on = self.rt.canonical_state();
+        d.base = 0;
+        let mut rt = self.rt.with_draws(d)?;
+        rt.load_state(&power_on).map_err(|e| anyhow!("{e}"))?;
+        Ok(Self {
+            rt,
+            not_run: self.not_run,
+        })
+    }
+
     pub(crate) fn world(&self) -> &World {
         self.rt.world()
     }
