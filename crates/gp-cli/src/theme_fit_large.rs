@@ -419,7 +419,7 @@ pub(crate) fn fit_large(
     fs::write(&art_path, &text)?;
 
     // The record: each cell or picture and the game pictures it gave,
-    // merged over the one there (a hand line or a cell fitted before
+    // merged over the one there (a placed line or a cell fitted before
     // keeps its names that weren't drawn now).
     let rec_path = theme.join(MADE_FROM);
     let mut kept: Vec<String> = Vec::new();
@@ -429,7 +429,7 @@ pub(crate) fn fit_large(
             let at = match w.first() {
                 Some(&"cell") => 3,
                 Some(&"picture") => 2,
-                Some(&"hand") => 1,
+                Some(&"placed" | &"hand") => 1,
                 _ => continue,
             };
             let rest: Vec<&str> = w
@@ -446,7 +446,7 @@ pub(crate) fn fit_large(
     let sheets_abs = fs::canonicalize(sheets.join(crate::theme_sheet::SHEETS_FILE))
         .unwrap_or_else(|_| sheets.join(crate::theme_sheet::SHEETS_FILE));
     let mut rec = format!(
-        "{MADE_FROM_FORMAT}\n# Where each picture of this theme came from (`gp theme look check` reads it): a cell of\n# the sheets `gp theme sheet` wrote, and the game pictures it was fitted to by\n# `gp theme fit --large`; `hand NAME...` for a picture drawn by hand for those.\nsheets {}\n",
+        "{MADE_FROM_FORMAT}\n# Where each picture of this theme came from (`gp theme look check` reads it): a cell of\n# the sheets `gp theme sheet` wrote, and the game pictures it was fitted to by\n# `gp theme fit --large`; `placed NAME...` for a picture made for those another way.\nsheets {}\n",
         home_form(&sheets_abs, &paths.home)
     );
     let mut seen_lines = BTreeSet::new();

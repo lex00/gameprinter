@@ -1735,9 +1735,16 @@ fn original_body(b: &Built, name: &str, poses: Option<&BTreeSet<String>>) -> Opt
 }
 
 /// Each sprite pose a `pic` line draws against the original's body in
-/// that frame: a picture wider or taller than it by more than the kit's
-/// `size`, its middle more than `edge` off, or its bottom more than `feet`
-/// off is a problem, since the game's boxes and floors are the original's.
+/// that frame. Its bottom more than the kit's `feet` and `size` together
+/// off is a problem, since the game stands the body on the original's
+/// floor; more than `feet` alone, a warning. A picture wider or taller by
+/// more than `size`, or its middle more than `edge` off, is a warning: large art draws its own figure, which needn't keep
+/// the original's outline. A picture whose original is bigger than
+/// [`BODY_MAX`] on a side is a scene, not a body, and isn't measured.
+/// The largest original, in game pixels a side, the pose check takes for
+/// a body.
+const BODY_MAX: f64 = 64.0;
+
 #[allow(clippy::too_many_arguments)]
 fn body_check(
     tol: &crate::theme_geometry::Tolerance,
@@ -1750,11 +1757,15 @@ fn body_check(
     r: &mut Report,
 ) {
     let mut off: Vec<(f64, String)> = Vec::new();
+    let mut shape: Vec<(f64, String)> = Vec::new();
     let mut measured = 0usize;
     for p in &rules.pics {
         let Some(own) = original_body(b, &p.build, poses) else {
             continue;
         };
+        if own[2] - own[0] > BODY_MAX || own[3] - own[1] > BODY_MAX {
+            continue;
+        }
         let Some(img) = images.get(&p.art.art) else {
             continue;
         };
@@ -1773,39 +1784,69 @@ fn body_check(
         let dx = (a[0] + a[2] - own[0] - own[2]) / 2.0;
         let dy = (a[1] + a[3] - own[1] - own[3]) / 2.0;
         let df = a[3] - own[3];
-        let mut said = Vec::new();
-        let mut worst = 0f64;
-        let mut over = |v: f64, limit: i64, more: &str, less: &str, what: &str| {
-            if v.abs() > limit as f64 + half {
-                said.push(format!(
-                    "{what} {:.1} px {}",
-                    v.abs(),
-                    if v > 0.0 { more } else { less }
-                ));
-                worst = worst.max(v.abs() - limit as f64);
-            }
+        let over = |v: f64, limit: i64, more: &str, less: &str, what: &str| {
+            (v.abs() > limit as f64 + half).then(|| {
+                (
+                    v.abs() - limit as f64,
+                    format!(
+                        "{what} {:.1} px {}",
+                        v.abs(),
+                        if v > 0.0 { more } else { less }
+                    )
+                    .trim()
+                    .to_owned(),
+                )
+            })
         };
-        over(dw, tol.size, "wider", "narrower", "");
-        over(dh, tol.size, "taller", "shorter", "");
-        over(dx, tol.edge, "right", "left", "its middle");
-        over(dy, tol.edge, "low", "high", "its middle");
-        over(df, tol.feet, "low", "high", "its bottom");
+        let line = pic_line(text, &p.build).unwrap_or(0);
+        let said: Vec<(f64, String)> = [
+            over(dw, tol.size, "wider", "narrower", ""),
+            over(dh, tol.size, "taller", "shorter", ""),
+            over(dx, tol.edge, "right", "left", "its middle"),
+            over(dy, tol.edge, "low", "high", "its middle"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         if !said.is_empty() {
-            let said: Vec<String> = said.iter().map(|s| s.trim().to_owned()).collect();
-            off.push((
+            let worst = said.iter().map(|s| s.0).fold(0f64, f64::max);
+            let words: Vec<&str> = said.iter().map(|s| s.1.as_str()).collect();
+            shape.push((
                 worst,
-                format!(
-                    "{} (line {}): {}",
-                    p.build,
-                    pic_line(text, &p.build).unwrap_or(0),
-                    said.join(", ")
-                ),
+                format!("{} (line {line}): {}", p.build, words.join(", ")),
             ));
         }
+        // Off the floor by more than the feet and size tolerances together
+        // is a problem (a body visibly standing in the air or sunk in
+        // the floor); by less, a warning with the shape.
+        if let Some((worst, said)) = over(df, tol.feet + tol.size, "low", "high", "its bottom") {
+            off.push((worst, format!("{} (line {line}): {said}", p.build)));
+        } else if let Some((worst, said)) = over(df, tol.feet, "low", "high", "its bottom") {
+            shape.push((worst, format!("{} (line {line}): {said}", p.build)));
+        }
+    }
+    if !shape.is_empty() {
+        shape.sort_by(|x, y| y.0.total_cmp(&x.0));
+        let n = shape.len();
+        let shown: Vec<String> = shape.into_iter().take(5).map(|x| x.1).collect();
+        r.add(
+            Group::Fit,
+            Level::Warning,
+            Some(art_rel),
+            None,
+            format!(
+                "{n} of {measured} poses differ from the original's body by more than the kit's tolerance (size {} px, middle {} px, bottom {} px). Large art may draw its own figure; look that each still reads as the body the game moves and stands where it stands; {}: {}",
+                tol.size,
+                tol.edge,
+                tol.feet,
+                if n > shown.len() { "the most" } else if n == 1 { "it is" } else { "they are" },
+                shown.join("; ")
+            ),
+        );
     }
     if off.is_empty() {
         if measured > 0 {
-            r.add(Group::Fit, Level::Ok, None, None, format!("{measured} poses within the kit's tolerance of the original's body (size {}, middle {}, bottom {} game pixels)", tol.size, tol.edge, tol.feet));
+            r.add(Group::Fit, Level::Ok, None, None, format!("{measured} poses stand within the kit's tolerance of the original's bottom ({} game pixels)", tol.feet));
         }
         return;
     }
@@ -1818,10 +1859,8 @@ fn body_check(
         Some(art_rel),
         None,
         format!(
-            "{n} of {measured} poses stand off the original's body in their frame by more than the kit's tolerance (size {} px, middle {} px, bottom {} px), so the body is drawn where the game's boxes and floors aren't. Fit them with `gp theme fit --large`, which places each by the original's body, or redraw them; {}: {}",
-            tol.size,
-            tol.edge,
-            tol.feet,
+            "{n} of {measured} poses stand with their bottom off the original's by more than {} px (the kit's feet and size tolerances together), so the body is drawn off the floor the game stands it on. Fit them with `gp theme fit --large`, which stands each on the original's body, or move them with the rule's DY; {}: {}",
+            tol.feet + tol.size,
             if n > shown.len() { "the worst" } else if n == 1 { "it is" } else { "they are" },
             shown.join("; ")
         ),
@@ -1831,8 +1870,8 @@ fn body_check(
 /// Where each `pic` line's picture came from: theme/made-from.txt
 /// (`gp theme fit --large` writes it) names, for each game picture, the
 /// cell of the sheets it was fitted from (`cell SHEET CELL NAME...`), a
-/// whole picture (`picture ID NAME...`), or that it was drawn by hand for
-/// that game picture (`hand NAME...`). Its `sheets` line names the
+/// whole picture (`picture ID NAME...`), or that it was made another way
+/// for that game picture (`placed NAME...`, or `hand`). Its `sheets` line names the
 /// sheets.json; where that file is on this machine, each cell is held to
 /// the game pictures sheets.json says it stands for.
 fn made_from(
@@ -1859,7 +1898,7 @@ fn made_from(
             Some(&rel),
             None,
             format!(
-                "{art_rel} has {} `pic` lines and nothing says where their pictures came from, so nothing ties each to the game's frame it stands for. `gp theme fit --large` fits the sheets' cells (sheets.json names the game's pictures each cell is) and writes {MADE_FROM}; for a picture you drew by hand for a game picture, add `hand NAME` to it (its first line `{MADE_FROM_FORMAT}`)",
+                "{art_rel} has {} `pic` lines and nothing says where their pictures came from, so nothing ties each to the game's frame it stands for. `gp theme fit --large` fits the sheets' cells (sheets.json names the game's pictures each cell is) and writes {MADE_FROM}; for a picture made for a game picture some other way (generated and placed by your own script, edited in a paint program), add `placed NAME` to it (its first line `{MADE_FROM_FORMAT}`)",
                 pics.len()
             ),
         );
@@ -1899,9 +1938,9 @@ fn made_from(
             ["picture", id, names @ ..] if !names.is_empty() => {
                 (names, From::Picture((*id).to_owned()))
             }
-            ["hand", names @ ..] if !names.is_empty() => (names, From::Hand),
+            ["placed" | "hand", names @ ..] if !names.is_empty() => (names, From::Hand),
             _ => {
-                r.add(Group::Kit, Level::Problem, Some(&rel), Some(i + 1), "a line it can't read: each is `sheets PATH`, `cell SHEET CELL NAME...`, `picture ID NAME...` or `hand NAME...`");
+                r.add(Group::Kit, Level::Problem, Some(&rel), Some(i + 1), "a line it can't read: each is `sheets PATH`, `cell SHEET CELL NAME...`, `picture ID NAME...` or `placed NAME...`");
                 continue;
             }
         };
@@ -1932,7 +1971,7 @@ fn made_from(
             Some(art_rel),
             pic_line(text, unsourced[0]),
             format!(
-                "{} `pic` line{} whose picture {MADE_FROM} doesn't say came from a sheet's cell or was drawn by hand for that game picture: {}{}. Fit them with `gp theme fit --large`, or add `hand NAME` for one you drew yourself for it",
+                "{} `pic` line{} whose picture {MADE_FROM} doesn't say came from a sheet's cell or was placed for that game picture: {}{}. Fit them with `gp theme fit --large`, or add `placed NAME` for one made for it another way",
                 unsourced.len(),
                 if unsourced.len() == 1 { "" } else { "s" },
                 shown.join(", "),
@@ -1965,7 +2004,7 @@ fn made_from(
     .filter(|p| p.is_file())
     .and_then(|p| crate::theme_sheet::Manifest::load(p.parent()?).ok());
     let Some(m) = manifest else {
-        r.add(Group::Kit, Level::Note, Some(&rel), None, format!("{cells} pictures from the sheets' cells and {hand} drawn by hand; the sheets.json it names ({sl}) isn't on this machine, so the check can't hold each cell to the game pictures it stands for there"));
+        r.add(Group::Kit, Level::Note, Some(&rel), None, format!("{cells} pictures from the sheets' cells and {hand} placed by other means; the sheets.json it names ({sl}) isn't on this machine, so the check can't hold each cell to the game pictures it stands for there"));
         return;
     };
     let mut wrong: Vec<String> = Vec::new();
@@ -2000,7 +2039,7 @@ fn made_from(
         }
     }
     if wrong.is_empty() {
-        r.add(Group::Kit, Level::Ok, None, None, format!("{cells} pictures each fitted from the sheets' cell that stands for its game picture, and {hand} drawn by hand"));
+        r.add(Group::Kit, Level::Ok, None, None, format!("{cells} pictures each fitted from the sheets' cell that stands for its game picture, and {hand} placed by other means"));
     } else {
         let n = wrong.len();
         let shown: Vec<String> = wrong.into_iter().take(6).collect();
@@ -3052,7 +3091,7 @@ mod tests {
         put(dir, "package.toml", package.as_bytes());
         put(dir, "theme/look.txt", look.as_bytes());
         put(dir, "theme/art.txt", art.as_bytes());
-        // Drawn by hand, each for its game picture.
+        // Placed another way, each for its game picture.
         let names: Vec<&str> = art
             .lines()
             .filter_map(|l| l.trim().strip_prefix("pic "))
@@ -3064,7 +3103,7 @@ mod tests {
         put(
             dir,
             "theme/made-from.txt",
-            format!("gp-made-from 1\nhand {}\n", names.join(" ")).as_bytes(),
+            format!("gp-made-from 1\nplaced {}\n", names.join(" ")).as_bytes(),
         );
     }
 
@@ -3564,10 +3603,10 @@ mod tests {
     }
 
     /// A theme whose `pic` lines don't say where their pictures came
-    /// from is refused; `hand` lines satisfy it; a cell is held to the
+    /// from is refused; `placed` lines (or `hand`) satisfy it; a cell is held to the
     /// game pictures sheets.json says it stands for.
     #[test]
-    fn each_pic_line_says_which_cell_or_hand_it_came_from() {
+    fn each_pic_line_says_which_cell_or_placing_it_came_from() {
         let t = tempfile::tempdir().unwrap();
         let art = "gp-art 1\nscale 4\npic frame-0-0.png art/a.png 16 16 0 0\npic frame-1-0.png art/b.png 16 16 0 0\n";
         put(t.path(), "theme/art.txt", art.as_bytes());
@@ -3594,7 +3633,7 @@ mod tests {
             "{:?}",
             problems_of(&r)
         );
-        let r = check(Some("gp-made-from 1\nhand frame-0-0.png frame-1-0.png\n"));
+        let r = check(Some("gp-made-from 1\nplaced frame-0-0.png frame-1-0.png\n"));
         assert!(problems_of(&r).is_empty(), "{:?}", problems_of(&r));
         let r = check(Some("gp-made-from 1\nhand frame-0-0.png\n"));
         assert!(
@@ -3647,7 +3686,7 @@ mod tests {
     /// A pose drawn off the original's body in its frame, beyond the
     /// kit's tolerance, is a problem.
     #[test]
-    fn a_pose_off_the_originals_body_is_refused() {
+    fn a_pose_off_the_originals_bottom_is_refused_and_its_shape_warned() {
         let t = tempfile::tempdir().unwrap();
         // The original's body in frame-0-0.png is 2..14 by 2..16; this one
         // is 0..16 by 0..10: its middle 4 px high, its bottom 6 px high.
@@ -3676,6 +3715,31 @@ mod tests {
             "{p:?}"
         );
         assert!(p[0].contains("its bottom 6.0 px high"), "{p:?}");
+        // Narrower and off its middle but standing on the original's
+        // bottom: large art draws its own figure, so only a warning.
+        let art2 = "gp-art 1\nscale 4\npic frame-0-0.png art/c.png 16 16 0 0\n";
+        let rules2 = ArtRules::read(art2).unwrap();
+        let images2: BTreeMap<String, Rgba> =
+            [("art/c.png".to_owned(), picture(64, 64, [0, 16, 24, 64]))].into();
+        let mut r2 = Report::default();
+        body_check(
+            &Tolerance::default(),
+            &rules2,
+            art2,
+            "theme/art.txt",
+            &images2,
+            &built(),
+            None,
+            &mut r2,
+        );
+        assert!(problems_of(&r2).is_empty(), "{:?}", problems_of(&r2));
+        assert!(
+            r2.found
+                .iter()
+                .any(|f| f.level == Level::Warning && f.text.contains("1 of 1 poses differ")),
+            "{:?}",
+            r2.found
+        );
         let _ = t;
     }
 
