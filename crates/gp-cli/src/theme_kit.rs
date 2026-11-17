@@ -315,7 +315,9 @@ const GENERIC: &[&str] = &[
     "fish", "bat", "plant", "shell", "small", "big", "red", "green", "grey", "gray", "blue",
     "left", "right", "up", "down", "1", "2", "3", "a", "b", "goal", "pole", "cloud", "item",
     "power", "life", "bonus", "timer", "score", "hud", "camera", "box", "crate", "sound", "demo",
-    "idle", "spawner", "turtle", "beetle", "bug", "frog", "ghost", "heart", "fallen",
+    "idle", "spawner", "turtle", "beetle", "bug", "frog", "ghost", "heart", "fallen", "customer",
+    "guest", "mug", "glass", "cup", "tip", "tap", "counter", "bar", "end", "part", "object",
+    "legend", "sign", "table", "shelf",
 ];
 
 /// The names a kit leaves out: the model title's words and every
@@ -1781,6 +1783,18 @@ fn reference_sheet(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An object named by plain nouns keeps its name as its slot id, so a
+    /// words file can say which slot it describes; a character's name
+    /// still goes by its role.
+    #[test]
+    fn a_plain_object_keeps_its_name_and_a_character_does_not() {
+        let names: BTreeSet<String> = ["wren".to_owned()].into();
+        assert_eq!(entity_id("mug", "npc", &names), "entity.mug");
+        assert_eq!(entity_id("bar_end", "npc", &names), "entity.bar_end");
+        assert_eq!(entity_id("customer", "enemy", &names), "entity.customer");
+        assert!(entity_id("wren", "npc", &names).starts_with("entity.npc_"));
+    }
 
     #[test]
     fn scrub_leaves_out_names_and_addresses() {
