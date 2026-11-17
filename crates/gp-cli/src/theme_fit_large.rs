@@ -15,7 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use gp_evidence::Paths;
@@ -160,6 +160,14 @@ fn home_form(p: &Path, home: &Path) -> String {
     match p.strip_prefix(home) {
         Ok(rest) => format!("$GP_HOME/{}", rest.display()),
         Err(_) => p.display().to_string(),
+    }
+}
+
+/// A `sheets` line's path, with `$GP_HOME` put back.
+pub(crate) fn sheets_path(s: &str, home: &Path) -> PathBuf {
+    match s.strip_prefix("$GP_HOME/") {
+        Some(rest) => home.join(rest),
+        None => PathBuf::from(s),
     }
 }
 
@@ -545,6 +553,7 @@ mod tests {
         let p = home.join("work/themes/x/sheets/sheets.json");
         let s = home_form(&p, home);
         assert_eq!(s, "$GP_HOME/work/themes/x/sheets/sheets.json");
+        assert_eq!(sheets_path(&s, home), p);
         assert_eq!(art_file("frame-1-0.png"), "art/frame-1-0.png");
         assert_eq!(art_file("sprite-cab-4d"), "art/sprite-cab-4d.png");
     }

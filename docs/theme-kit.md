@@ -313,7 +313,7 @@ hand counter-score-0
 | `picture ID NAME...` | The game pictures fitted from a whole picture of the sheets |
 | `hand NAME...` | Pictures drawn by hand for those game pictures, each at its own box: a hand-made theme says so here |
 
-A fit again keeps the lines for game pictures it didn't draw this time. Tests: `theme_fit_large::tests` (a made-up figure filling a body at scale 2 with no key color at its edge, the half-area rule, the record's `$GP_HOME`).
+`gp theme look check` refuses a theme whose `pic` lines aren't all in this record, and, where the sheets.json is on the machine, one whose cell doesn't stand for the game picture it is given (the paired-in-number-order mistake). It also refuses each sprite pose off the original's body in its frame by more than `[tolerance]` (size 4, middle 2, bottom 1, game pixels), and, for a game drawn by its board, each screen or seen name with no `pic` line (site docs, themes.md, "Check it"; tests `theme_look::tests::each_pic_line_says_which_cell_or_hand_it_came_from`, `a_pose_off_the_originals_body_is_refused`, `a_board_picture_the_game_shows_with_nothing_drawn_is_refused`). A fit again keeps the lines for game pictures it didn't draw this time. Tests: `theme_fit_large::tests` (a made-up figure filling a body at scale 2 with no key color at its edge, the half-area rule, the record's `$GP_HOME`).
 
 ## Sound roles
 

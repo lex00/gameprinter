@@ -37,11 +37,12 @@ A skin swaps art for the picture the game draws on each frame, so the game must 
 ## 3. The kit lists every picture to draw
 
 - `gp theme kit GAME` writes `GAME/themes/kit/kit.toml`: each art slot with its frames, size, anchor and geometry, and each sound role. `geometry.toml` has each slot's boxes (`touch`, `solid`, `grab`, `hit`), `danger` frames, `feet` row, `min_size`, `contrast`, and `[[surfaces]]`. A hazard's harmful part covers its touch box in every danger frame; a body stands on its feet row.
-- Done when: every picture name from step 2 belongs to a slot in the kit. If the kit has no slots for the game (`art = []`), the kit command needs fixing first. Don't draw from your own list.
+- For a game drawn by its board, run `gp theme kit GAME` after step 2's sheet: the kit has a slot for each entity, screen and counter, and its local part (never committed) adds the codes your plays showed and each one's body in the original.
+- Done when: every picture name from step 2 belongs to a slot in the kit. Don't draw from your own list.
 
 ## 4. Words for every frame
 
-- `words.toml` gets one plain phrase per frame or sprite code, written by looking at that frame on the contact sheet ("walking right, arms swinging", "pushed back off the counter, arms up", "catching a sliding glass"). Frames that are the same pose facing the other way say so; the rules flip one picture.
+- `words.toml` gets one plain phrase per frame or sprite code (a board sprite's by code, in `[art.frames]`: `"4d" = "..."`), written by looking at that frame on the contact sheet ("walking right, arms swinging", "pushed back off the counter, arms up", "catching a sliding glass"). Frames that are the same pose facing the other way say so; the rules flip one picture.
 - It also gets a `deny` list: the original's names, brands and iconic things.
 - Done when: every frame in the kit has its phrase.
 
@@ -67,7 +68,7 @@ Done when: every cell has an approved picture.
 
 ## 7. Fit and write the rules
 
-- `gp theme fit` clears the backdrop (alpha, the key colour, or a flood from the edges over the edge's commonest colour) and shrinks by area averaging: a pixel is solid when half its area is figure and takes the mean colour of the figure's pixels only, so no backdrop colour reaches the edge. Use its rules for large art too; if it can't write large-art output for the game yet, fix it or use the same rules, never a colour-distance key and a Lanczos resize. Never add glow or light rims.
+- `gp theme fit GAME --sheets WORK/sheets -o THEME --large` fits the cells into the theme: a picture and a `pic` line for each game picture, placed by the original's body, and `theme/made-from.txt`. It clears the backdrop (alpha, the key colour, or a flood from the edges over the edge's commonest colour) and shrinks by area averaging: a pixel is solid when half its area is figure and takes the mean colour of the figure's pixels only, so no backdrop colour reaches the edge. Never a colour-distance key and a Lanczos resize, and never glow or light rims.
 - `theme/art.txt` (`gp-art 1`): `scale`, `limit off` if needed, one `pic GAME_PICTURE ART W H DX DY` line per game picture, taken from `sheets.json` (the cell's frames to the cell's picture), at the game picture's own box. `timed`, `held`, `face`, `near`, `elsewhere`, `prop` and `drift` lines add life on top, keyed on a game picture and its age. `stage` and `stage_piece` lines build each stage or room from pieces on its real layout. themes.md has the table.
 - `theme/look.txt` is `gp-look 1`, the id and title, and `art art.txt`. `package.toml` gives name, version, title and licence (`kind = "content"`). Start the folder with `gp theme look new THEME --game GAME --name NS/NAME --title "..."`.
 - Lettering is ours too: our own letters, as `pic` lines for the HUD, score pop-ups and title screens.

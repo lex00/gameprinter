@@ -423,10 +423,17 @@ struct Built {
     /// An arcade game drawn by its board's art: the names its rules give
     /// instead of the build's pictures (crate::theme_board).
     board: Option<crate::theme_board::BoardKit>,
+    /// And its board's pictures, to measure a sprite's body in the
+    /// original.
+    board_art: Option<gp_look::board::BoardArt>,
     _lifted: Option<tempfile::TempDir>,
 }
 
 impl Built {
+    /// How many levels the board's pictures may be drawn in.
+    fn board_art_levels(&self) -> usize {
+        self.model.levels.len().max(1)
+    }
     /// The pictures a theme's rules name: the board's for a game its board
     /// draws, else the build's.
     fn present(&self) -> &gp_present::Present {
@@ -476,6 +483,11 @@ fn build(game: &Game, rom: Option<&Path>, paths: &Paths) -> Result<Built, String
     let spec = gp_interp::compile::compile(&model, &bundle.assets)?;
     let art = gp_look::present::art(&model, &spec, &dir)?;
     let board = crate::theme_board::kit(&model, &spec, &dir, &paths.home)?;
+    let board_art = if board.is_some() {
+        gp_look::board::BoardArt::load(&model, &spec, &dir)?
+    } else {
+        None
+    };
     let mut kinds = Vec::new();
     let mut initial = Vec::new();
     for k in &spec.kinds {
@@ -488,6 +500,7 @@ fn build(game: &Game, rom: Option<&Path>, paths: &Paths) -> Result<Built, String
         kinds,
         initial,
         board,
+        board_art,
         _lifted: keep,
     })
 }
@@ -921,6 +934,47 @@ fn report(
     // The game's pictures, as the page builds them.
     if let (Some(rules), Some(text), Ok(b)) = (&rules, &art_text, &built) {
         names_check(rules, text, &art_rel, b, &mut r);
+        if let Some(k) = &b.board {
+            board_drawn(rules, &art_rel, k, &mut r);
+        }
+        let tol = game
+            .kit
+            .as_ref()
+            .map(|k| k.tolerance.clone())
+            .unwrap_or_default();
+        // A body's poses: the pictures the kit's bodies are drawn as.
+        let poses: Option<BTreeSet<String>> = game.kit.as_ref().map(|k| {
+            k.art
+                .iter()
+                .filter(|a| a.kind == "sprite" && a.id.starts_with("entity."))
+                .filter_map(|a| slot_pictures(k, a, b))
+                .flatten()
+                .flatten()
+                .map(|p| b.file(p).to_owned())
+                .collect()
+        });
+        body_check(
+            &tol,
+            rules,
+            text,
+            &art_rel,
+            &images,
+            b,
+            poses.as_ref(),
+            &mut r,
+        );
+    }
+
+    // Where each `pic` line's picture came from.
+    if let (Some(rules), Some(text)) = (&rules, &art_text) {
+        made_from(
+            &folder,
+            rules,
+            text,
+            &art_rel,
+            rom_check.map(|(_, p)| p.home.as_path()),
+            &mut r,
+        );
     }
 
     // The lines added since gp-art 1 began (`#+`).
@@ -1529,6 +1583,366 @@ fn board_seen(
             seen.len()
         ),
     );
+}
+
+/// An arcade game's board pictures with nothing drawn for them: each
+/// screen its levels' looks show, and each name the person's sheet saw the
+/// game show (`gp theme look sheet`'s names.toml), with no `pic` line. The
+/// board's own picture shows for each, so a theme that leaves them is not
+/// a skin of the whole game.
+fn board_drawn(rules: &ArtRules, art_rel: &str, k: &crate::theme_board::BoardKit, r: &mut Report) {
+    let pics: BTreeSet<&str> = rules.pics.iter().map(|p| p.build.as_str()).collect();
+    let screen = |n: &str| !n.starts_with("sprite-") && !n.starts_with("counter-");
+    let screens: Vec<&str> = k
+        .names
+        .iter()
+        .map(|(n, _)| n.as_str())
+        .filter(|n| screen(n) && !pics.contains(n))
+        .filter(|n| k.seen.as_ref().is_none_or(|s| s.contains_key(*n)))
+        .collect();
+    if !screens.is_empty() {
+        r.add(
+            Group::Kit,
+            Level::Problem,
+            Some(art_rel),
+            None,
+            format!(
+                "the game shows {} screen{} with nothing drawn for {}, so the board's own room shows behind your pictures: {}. Draw each from its sheet's picture (`gp theme sheet`, then `gp theme fit --large`), a `pic SLOT art/SLOT.png 512 480 0 0` line each",
+                screens.len(),
+                if screens.len() == 1 { "" } else { "s" },
+                if screens.len() == 1 { "it" } else { "them" },
+                screens.join(", ")
+            ),
+        );
+    }
+    let Some(seen) = &k.seen else { return };
+    let left: Vec<&str> = seen
+        .keys()
+        .map(String::as_str)
+        .filter(|n| !screen(n) && !pics.contains(n))
+        .collect();
+    if !left.is_empty() {
+        let shown: Vec<&str> = left.iter().take(12).copied().collect();
+        r.add(
+            Group::Kit,
+            Level::Problem,
+            Some(art_rel),
+            None,
+            format!(
+                "the game was seen to show {} picture{} in its recorded plays that no `pic` line draws, so the board's own picture shows for {}: {}{}. Each needs its own picture, from its cell of the sheets (`gp theme fit --large` writes the lines; {} lists what the game showed)",
+                left.len(),
+                if left.len() == 1 { "" } else { "s" },
+                if left.len() == 1 { "it" } else { "them" },
+                shown.join(", "),
+                if left.len() > shown.len() { ", ..." } else { "" },
+                k.sheet.join(crate::theme_board::SEEN_FILE).display()
+            ),
+        );
+    }
+}
+
+/// The original's visible body of a game picture a `pic` line names, in
+/// game pixels: a sprite frame's own drawn part (an NES build's
+/// `frame-N-K.png`, a board's `sprite-ENTITY-CODE` as the board draws it
+/// unflipped). None for a stage, a screen, a glyph or a counter, and for an
+/// NES picture that isn't one of `poses` (a body's frames, by the kit).
+fn original_body(b: &Built, name: &str, poses: Option<&BTreeSet<String>>) -> Option<[f64; 4]> {
+    let ink = if let Some(rest) = name.strip_prefix("sprite-") {
+        let art = b.board_art.as_ref()?;
+        let code = u16::from_str_radix(rest.rsplit_once('-')?.1, 16).ok()?;
+        let level = (0..b.board_art_levels()).find_map(|l| art.sprite_rgba(l, code, 0))?;
+        let mut img = Rgba::new(32, 32);
+        for (i, p) in level.iter().enumerate() {
+            img.set(i as u32 % 32, i as u32 / 32, *p);
+        }
+        ink_box(&img)?
+    } else if name.starts_with("frame-") && poses.is_none_or(|s| s.contains(name)) {
+        let p = b.art.pictures.iter().find(|p| p.file == name)?;
+        ink_box(&Rgba::from_png(&p.png).ok()?)?
+    } else {
+        return None;
+    };
+    Some(ink.map(f64::from))
+}
+
+/// Each sprite pose a `pic` line draws against the original's body in
+/// that frame: a picture wider or taller than it by more than the kit's
+/// `size`, its middle more than `edge` off, or its bottom more than `feet`
+/// off is a problem, since the game's boxes and floors are the original's.
+#[allow(clippy::too_many_arguments)]
+fn body_check(
+    tol: &crate::theme_geometry::Tolerance,
+    rules: &ArtRules,
+    text: &str,
+    art_rel: &str,
+    images: &BTreeMap<String, Rgba>,
+    b: &Built,
+    poses: Option<&BTreeSet<String>>,
+    r: &mut Report,
+) {
+    let mut off: Vec<(f64, String)> = Vec::new();
+    let mut measured = 0usize;
+    for p in &rules.pics {
+        let Some(own) = original_body(b, &p.build, poses) else {
+            continue;
+        };
+        let Some(img) = images.get(&p.art.art) else {
+            continue;
+        };
+        let Some(ink) = ink_box(img) else { continue };
+        let place = Place { img, rule: &p.art };
+        let a = [
+            place.to_game_x(ink[0]),
+            place.to_game_y(ink[1]),
+            place.to_game_x(ink[2]),
+            place.to_game_y(ink[3]),
+        ];
+        measured += 1;
+        let half = 0.5;
+        let dw = (a[2] - a[0]) - (own[2] - own[0]);
+        let dh = (a[3] - a[1]) - (own[3] - own[1]);
+        let dx = (a[0] + a[2] - own[0] - own[2]) / 2.0;
+        let dy = (a[1] + a[3] - own[1] - own[3]) / 2.0;
+        let df = a[3] - own[3];
+        let mut said = Vec::new();
+        let mut worst = 0f64;
+        let mut over = |v: f64, limit: i64, more: &str, less: &str, what: &str| {
+            if v.abs() > limit as f64 + half {
+                said.push(format!(
+                    "{what} {:.1} px {}",
+                    v.abs(),
+                    if v > 0.0 { more } else { less }
+                ));
+                worst = worst.max(v.abs() - limit as f64);
+            }
+        };
+        over(dw, tol.size, "wider", "narrower", "");
+        over(dh, tol.size, "taller", "shorter", "");
+        over(dx, tol.edge, "right", "left", "its middle");
+        over(dy, tol.edge, "low", "high", "its middle");
+        over(df, tol.feet, "low", "high", "its bottom");
+        if !said.is_empty() {
+            let said: Vec<String> = said.iter().map(|s| s.trim().to_owned()).collect();
+            off.push((
+                worst,
+                format!(
+                    "{} (line {}): {}",
+                    p.build,
+                    pic_line(text, &p.build).unwrap_or(0),
+                    said.join(", ")
+                ),
+            ));
+        }
+    }
+    if off.is_empty() {
+        if measured > 0 {
+            r.add(Group::Fit, Level::Ok, None, None, format!("{measured} poses within the kit's tolerance of the original's body (size {}, middle {}, bottom {} game pixels)", tol.size, tol.edge, tol.feet));
+        }
+        return;
+    }
+    off.sort_by(|x, y| y.0.total_cmp(&x.0));
+    let n = off.len();
+    let shown: Vec<String> = off.into_iter().take(5).map(|x| x.1).collect();
+    r.add(
+        Group::Fit,
+        Level::Problem,
+        Some(art_rel),
+        None,
+        format!(
+            "{n} of {measured} poses stand off the original's body in their frame by more than the kit's tolerance (size {} px, middle {} px, bottom {} px), so the body is drawn where the game's boxes and floors aren't. Fit them with `gp theme fit --large`, which places each by the original's body, or redraw them; {}: {}",
+            tol.size,
+            tol.edge,
+            tol.feet,
+            if n > shown.len() { "the worst" } else if n == 1 { "it is" } else { "they are" },
+            shown.join("; ")
+        ),
+    );
+}
+
+/// Where each `pic` line's picture came from: theme/made-from.txt
+/// (`gp theme fit --large` writes it) names, for each game picture, the
+/// cell of the sheets it was fitted from (`cell SHEET CELL NAME...`), a
+/// whole picture (`picture ID NAME...`), or that it was drawn by hand for
+/// that game picture (`hand NAME...`). Its `sheets` line names the
+/// sheets.json; where that file is on this machine, each cell is held to
+/// the game pictures sheets.json says it stands for.
+fn made_from(
+    folder: &Folder,
+    rules: &ArtRules,
+    text: &str,
+    art_rel: &str,
+    home: Option<&Path>,
+    r: &mut Report,
+) {
+    use crate::theme_fit_large::{MADE_FROM, MADE_FROM_FORMAT};
+    let mut pics: Vec<&str> = rules.pics.iter().map(|p| p.build.as_str()).collect();
+    pics.sort_unstable();
+    pics.dedup();
+    if pics.is_empty() {
+        return;
+    }
+    let path = folder.theme.join(MADE_FROM);
+    let rel = folder.rel(&path);
+    let Ok(t) = fs::read_to_string(&path) else {
+        r.add(
+            Group::Kit,
+            Level::Problem,
+            Some(&rel),
+            None,
+            format!(
+                "{art_rel} has {} `pic` lines and nothing says where their pictures came from, so nothing ties each to the game's frame it stands for. `gp theme fit --large` fits the sheets' cells (sheets.json names the game's pictures each cell is) and writes {MADE_FROM}; for a picture you drew by hand for a game picture, add `hand NAME` to it (its first line `{MADE_FROM_FORMAT}`)",
+                pics.len()
+            ),
+        );
+        return;
+    };
+    #[derive(Clone)]
+    enum From {
+        Cell(String, String),
+        Picture(String),
+        Hand,
+    }
+    let mut from: BTreeMap<String, (usize, From)> = BTreeMap::new();
+    let mut sheets_line: Option<String> = None;
+    let mut lines = t.lines().enumerate();
+    if lines.next().map(|(_, l)| l.trim()) != Some(MADE_FROM_FORMAT) {
+        r.add(
+            Group::Kit,
+            Level::Problem,
+            Some(&rel),
+            Some(1),
+            format!("its first line is `{MADE_FROM_FORMAT}`"),
+        );
+        return;
+    }
+    for (i, l) in lines {
+        let w: Vec<&str> = l.split_whitespace().collect();
+        let (names, src) = match w.as_slice() {
+            [] => continue,
+            [c, ..] if c.starts_with('#') => continue,
+            ["sheets", p] => {
+                sheets_line = Some((*p).to_owned());
+                continue;
+            }
+            ["cell", sheet, cell, names @ ..] if !names.is_empty() => {
+                (names, From::Cell((*sheet).to_owned(), (*cell).to_owned()))
+            }
+            ["picture", id, names @ ..] if !names.is_empty() => {
+                (names, From::Picture((*id).to_owned()))
+            }
+            ["hand", names @ ..] if !names.is_empty() => (names, From::Hand),
+            _ => {
+                r.add(Group::Kit, Level::Problem, Some(&rel), Some(i + 1), "a line it can't read: each is `sheets PATH`, `cell SHEET CELL NAME...`, `picture ID NAME...` or `hand NAME...`");
+                continue;
+            }
+        };
+        for n in names {
+            if from.contains_key(*n) {
+                r.add(
+                    Group::Kit,
+                    Level::Problem,
+                    Some(&rel),
+                    Some(i + 1),
+                    format!("names {n} a second time: each game picture has one source"),
+                );
+                continue;
+            }
+            from.insert((*n).to_owned(), (i + 1, src.clone()));
+        }
+    }
+    let unsourced: Vec<&str> = pics
+        .iter()
+        .copied()
+        .filter(|n| !from.contains_key(*n))
+        .collect();
+    if !unsourced.is_empty() {
+        let shown: Vec<&str> = unsourced.iter().take(8).copied().collect();
+        r.add(
+            Group::Kit,
+            Level::Problem,
+            Some(art_rel),
+            pic_line(text, unsourced[0]),
+            format!(
+                "{} `pic` line{} whose picture {MADE_FROM} doesn't say came from a sheet's cell or was drawn by hand for that game picture: {}{}. Fit them with `gp theme fit --large`, or add `hand NAME` for one you drew yourself for it",
+                unsourced.len(),
+                if unsourced.len() == 1 { "" } else { "s" },
+                shown.join(", "),
+                if unsourced.len() > shown.len() { ", ..." } else { "" }
+            ),
+        );
+    }
+    let cells = from
+        .values()
+        .filter(|(_, s)| !matches!(s, From::Hand))
+        .count();
+    let hand = from.len() - cells;
+    if cells == 0 {
+        return;
+    }
+    let Some(sl) = sheets_line else {
+        r.add(
+            Group::Kit,
+            Level::Problem,
+            Some(&rel),
+            None,
+            "it names cells but no `sheets PATH` line, the sheets.json the cells are in",
+        );
+        return;
+    };
+    let manifest = Some(match home {
+        Some(h) => crate::theme_fit_large::sheets_path(&sl, h),
+        None => PathBuf::from(&sl),
+    })
+    .filter(|p| p.is_file())
+    .and_then(|p| crate::theme_sheet::Manifest::load(p.parent()?).ok());
+    let Some(m) = manifest else {
+        r.add(Group::Kit, Level::Note, Some(&rel), None, format!("{cells} pictures from the sheets' cells and {hand} drawn by hand; the sheets.json it names ({sl}) isn't on this machine, so the check can't hold each cell to the game pictures it stands for there"));
+        return;
+    };
+    let mut wrong: Vec<String> = Vec::new();
+    for (name, (line, s)) in &from {
+        let stands: Option<Vec<&String>> = match s {
+            From::Cell(sheet, cell) => m
+                .sheets
+                .iter()
+                .find(|x| x.id == *sheet)
+                .and_then(|x| x.cells.iter().find(|c| c.cell == *cell))
+                .map(|c| c.pictures.iter().flatten().collect()),
+            From::Picture(id) => m
+                .pictures
+                .iter()
+                .find(|p| p.id == *id)
+                .map(|p| p.pictures.iter().collect()),
+            From::Hand => continue,
+        };
+        match stands {
+            None => wrong.push(format!("line {line}: {name}'s cell isn't in sheets.json")),
+            // A cell the sheet couldn't name pictures for can't be held.
+            Some(v) if v.is_empty() => {}
+            Some(v) if !v.contains(&name) => wrong.push(format!(
+                "line {line}: {name}, but that cell stands for {}",
+                v.iter()
+                    .take(4)
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+            Some(_) => {}
+        }
+    }
+    if wrong.is_empty() {
+        r.add(Group::Kit, Level::Ok, None, None, format!("{cells} pictures each fitted from the sheets' cell that stands for its game picture, and {hand} drawn by hand"));
+    } else {
+        let n = wrong.len();
+        let shown: Vec<String> = wrong.into_iter().take(6).collect();
+        r.add(
+            Group::Kit,
+            Level::Problem,
+            Some(&rel),
+            None,
+            format!("{n} game pictures given a cell of the sheets that doesn't stand for them (sheets.json ties each cell to the game's frames), so the picture shows another pose: {}. Fit again with `gp theme fit --large`", shown.join("; ")),
+        );
+    }
 }
 
 /// Every kit slot drawn: each pose of each body, the stages, the screens
@@ -2560,6 +2974,7 @@ mod tests {
             kinds: vec![ENTITY.into()],
             initial: vec![0],
             board: None,
+            board_art: None,
             _lifted: None,
         }
     }
@@ -2568,6 +2983,20 @@ mod tests {
         put(dir, "package.toml", package.as_bytes());
         put(dir, "theme/look.txt", look.as_bytes());
         put(dir, "theme/art.txt", art.as_bytes());
+        // Drawn by hand, each for its game picture.
+        let names: Vec<&str> = art
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("pic "))
+            .filter_map(|l| l.split_whitespace().next())
+            .collect();
+        let mut names = names;
+        names.sort_unstable();
+        names.dedup();
+        put(
+            dir,
+            "theme/made-from.txt",
+            format!("gp-made-from 1\nhand {}\n", names.join(" ")).as_bytes(),
+        );
     }
 
     pub(super) const GOOD_PACKAGE: &str = "[package]\nname = \"someone/bright\"\nversion = \"0.1.0\"\nkind = \"content\"\ntitle = \"Bright\"\nlicense = \"CC-BY-4.0\"\n";
@@ -3055,5 +3484,169 @@ mod tests {
         assert_eq!(o.exit, 0, "{}", o.text);
         assert!(o.text.contains("has no theme kit yet"), "{}", o.text);
         assert!(o.text.contains("gp theme kit"), "{}", o.text);
+    }
+
+    fn problems_of(r: &Report) -> Vec<String> {
+        r.found
+            .iter()
+            .filter(|f| f.level == Level::Problem)
+            .map(|f| f.text.clone())
+            .collect()
+    }
+
+    /// A theme whose `pic` lines don't say where their pictures came
+    /// from is refused; `hand` lines satisfy it; a cell is held to the
+    /// game pictures sheets.json says it stands for.
+    #[test]
+    fn each_pic_line_says_which_cell_or_hand_it_came_from() {
+        let t = tempfile::tempdir().unwrap();
+        let art = "gp-art 1\nscale 4\npic frame-0-0.png art/a.png 16 16 0 0\npic frame-1-0.png art/b.png 16 16 0 0\n";
+        put(t.path(), "theme/art.txt", art.as_bytes());
+        let rules = ArtRules::read(art).unwrap();
+        let folder = Folder::of(t.path());
+        let check = |made: Option<&str>| {
+            let f = t
+                .path()
+                .join("theme")
+                .join(crate::theme_fit_large::MADE_FROM);
+            match made {
+                Some(m) => fs::write(&f, m).unwrap(),
+                None => {
+                    let _ = fs::remove_file(&f);
+                }
+            }
+            let mut r = Report::default();
+            made_from(&folder, &rules, art, "theme/art.txt", None, &mut r);
+            r
+        };
+        let r = check(None);
+        assert!(
+            problems_of(&r)[0].contains("nothing says where their pictures came from"),
+            "{:?}",
+            problems_of(&r)
+        );
+        let r = check(Some("gp-made-from 1\nhand frame-0-0.png frame-1-0.png\n"));
+        assert!(problems_of(&r).is_empty(), "{:?}", problems_of(&r));
+        let r = check(Some("gp-made-from 1\nhand frame-0-0.png\n"));
+        assert!(
+            problems_of(&r)[0].contains("frame-1-0.png"),
+            "{:?}",
+            problems_of(&r)
+        );
+        // Cells, held to sheets.json: B02 stands for frame-1-0.png only.
+        let w = tempfile::tempdir().unwrap();
+        let cell = |c: &str, pic: &str| {
+            serde_json::json!({"cell": c, "slot": "entity.blob", "label": "blob", "frames": [0], "frame_names": ["base"],
+                "rect": [0, 0, 10, 10], "body": [0, 0, 10, 10], "size": [16, 16], "anchor": "", "baseline": 10,
+                "pose": "rolling", "pictures": [[pic]]})
+        };
+        let m = serde_json::json!({"format": crate::theme_sheet::SHEETS_FORMAT, "game": "made-up", "style": null, "key": "#FF00FF",
+            "refs": [], "pictures": [], "code": [],
+            "sheets": [{"id": "sheet-01", "image": "sheet-01.png", "size": [1024, 1024], "scale": 4, "model": "gpt_image_2",
+                "prompts": {}, "out": "sheet-01.out.png", "refs": [], "cells": [cell("B01", "frame-0-0.png"), cell("B02", "frame-1-0.png")]}]});
+        let sj = w.path().join(crate::theme_sheet::SHEETS_FILE);
+        fs::write(&sj, m.to_string()).unwrap();
+        let good = format!(
+            "gp-made-from 1\nsheets {}\ncell sheet-01 B01 frame-0-0.png\ncell sheet-01 B02 frame-1-0.png\n",
+            sj.display()
+        );
+        let r = check(Some(&good));
+        assert!(problems_of(&r).is_empty(), "{:?}", problems_of(&r));
+        // Paired in another order: each picture shows another frame's pose.
+        let swapped = format!(
+            "gp-made-from 1\nsheets {}\ncell sheet-01 B02 frame-0-0.png\ncell sheet-01 B01 frame-1-0.png\n",
+            sj.display()
+        );
+        let r = check(Some(&swapped));
+        assert!(
+            problems_of(&r)[0].contains("doesn't stand for them"),
+            "{:?}",
+            problems_of(&r)
+        );
+        // Sheets elsewhere: a note, not a pass or a problem.
+        let r = check(Some(
+            "gp-made-from 1\nsheets $GP_HOME/none/sheets.json\ncell sheet-01 B01 frame-0-0.png frame-1-0.png\n",
+        ));
+        assert!(problems_of(&r).is_empty());
+        assert!(
+            r.found
+                .iter()
+                .any(|f| f.level == Level::Note && f.text.contains("isn't on this machine"))
+        );
+    }
+
+    /// A pose drawn off the original's body in its frame, beyond the
+    /// kit's tolerance, is a problem.
+    #[test]
+    fn a_pose_off_the_originals_body_is_refused() {
+        let t = tempfile::tempdir().unwrap();
+        // The original's body in frame-0-0.png is 2..14 by 2..16; this one
+        // is 0..16 by 0..10: its middle 4 px high, its bottom 6 px high.
+        let art = "gp-art 1\nscale 4\npic frame-0-0.png art/a.png 16 16 0 0\npic frame-1-0.png art/b.png 16 16 0 0\n";
+        let rules = ArtRules::read(art).unwrap();
+        let images: BTreeMap<String, Rgba> = [
+            ("art/a.png".to_owned(), picture(64, 64, [0, 0, 64, 40])),
+            ("art/b.png".to_owned(), picture(64, 64, [8, 8, 56, 64])),
+        ]
+        .into();
+        let mut r = Report::default();
+        body_check(
+            &Tolerance::default(),
+            &rules,
+            art,
+            "theme/art.txt",
+            &images,
+            &built(),
+            None,
+            &mut r,
+        );
+        let p = problems_of(&r);
+        assert_eq!(p.len(), 1, "{p:?}");
+        assert!(
+            p[0].contains("1 of 2 poses") && p[0].contains("frame-0-0.png (line 3)"),
+            "{p:?}"
+        );
+        assert!(p[0].contains("its bottom 6.0 px high"), "{p:?}");
+        let _ = t;
+    }
+
+    /// An arcade game's screens and the names its plays showed, with no
+    /// `pic` line, are problems.
+    #[test]
+    fn a_board_picture_the_game_shows_with_nothing_drawn_is_refused() {
+        let k = crate::theme_board::BoardKit {
+            names: vec![
+                ("stage".into(), [512, 480]),
+                ("stage2".into(), [512, 480]),
+                ("sprite-cab-4d".into(), [32, 32]),
+                ("sprite-cab-4e".into(), [32, 32]),
+            ],
+            present: gp_present::Present::default(),
+            seen: Some(
+                [
+                    ("stage".to_owned(), 9),
+                    ("sprite-cab-4d".to_owned(), 3),
+                    ("sprite-cab-4e".to_owned(), 1),
+                ]
+                .into(),
+            ),
+            sheet: PathBuf::from("/made/up/board"),
+        };
+        let rules =
+            ArtRules::read("gp-art 1\nscale 2\npic sprite-cab-4d art/a.png 32 32 0 0\n").unwrap();
+        let mut r = Report::default();
+        board_drawn(&rules, "theme/art.txt", &k, &mut r);
+        let p = problems_of(&r);
+        assert_eq!(p.len(), 2, "{p:?}");
+        // The screen the plays showed; the one they didn't isn't asked for.
+        assert!(
+            p[0].contains("1 screen with nothing drawn for it") && p[0].contains("stage."),
+            "{p:?}"
+        );
+        assert!(!p[0].contains("stage2"), "{p:?}");
+        assert!(
+            p[1].contains("sprite-cab-4e") && !p[1].contains("sprite-cab-4d"),
+            "{p:?}"
+        );
     }
 }
