@@ -113,7 +113,7 @@ impl Test {
             k,
         })
     }
-    fn holds(&self, c: [u8; 3]) -> bool {
+    pub(crate) fn holds(&self, c: [u8; 3]) -> bool {
         self.a.of(c) > self.b.of(c) + self.k
     }
 }
@@ -283,7 +283,7 @@ pub struct StageDraw {
 }
 
 impl StageDraw {
-    fn piece(p: u32, x: i64, y: i64, w: i64, h: i64) -> Self {
+    pub(crate) fn piece(p: u32, x: i64, y: i64, w: i64, h: i64) -> Self {
         StageDraw {
             src: StageSrc::Piece(p),
             part: [0, 1000],

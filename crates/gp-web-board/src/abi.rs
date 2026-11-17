@@ -133,7 +133,8 @@ pub extern "C" fn gp_board_frame(
 /// names with `art`) over the board's named pictures
 /// (docs/formats/board-art.md, "Themes"); an empty text takes them away.
 /// The output buffer holds the art files the frames name by number, as
-/// `gp_load_art` gives them: `{"files": [...], "stages": []}`.
+/// `gp_load_art` gives them: `{"files": [...], "stages": []}`, and the
+/// rooms it built over the board's screens (`"rooms"`, `crate::files_json`).
 #[unsafe(no_mangle)]
 pub extern "C" fn gp_board_load_art(text: *mut u8, text_len: usize) -> i32 {
     let t = input(text, text_len);

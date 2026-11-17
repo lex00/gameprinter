@@ -155,15 +155,62 @@ fn art_json(t: &gp_look::board::Themed) -> String {
 }
 
 /// The files a theme's rules name, as JSON in `gp_load_art`'s shape
-/// (`{"files": [...], "stages": []}`: the board builds no stages).
+/// (`{"files": [...], "stages": []}`: the board builds no stages over
+/// pictures the page hands it), and the rooms it built (`#+ room`) over
+/// the board's screens from the player's lift: `"rooms": [[pic, stage],
+/// ...]`, each stage as the game module's `gp_art_stage` gives one, which
+/// the page paints once and draws where the frame's draws hold
+/// `["stage", pic]`.
 pub fn files_json(theme: &gp_look::board::BoardTheme) -> String {
+    use gp_present::art::stage::StageSrc;
     let files: Vec<String> = theme
         .art
         .files
         .iter()
         .map(|f| format!("\"{}\"", f.replace('\\', "\\\\").replace('"', "\\\"")))
         .collect();
-    format!("{{\"files\":[{}],\"stages\":[]}}", files.join(","))
+    let rgb = |c: [u8; 3]| format!("[{},{},{}]", c[0], c[1], c[2]);
+    let mut rooms = Vec::new();
+    for r in &theme.rooms {
+        let Some(st) = theme.art.stage(r.pic) else {
+            continue;
+        };
+        let draws: Vec<String> = st
+            .draws
+            .iter()
+            .map(|d| {
+                let src = match d.src {
+                    StageSrc::Piece(i) => format!("[\"piece\",{i}]"),
+                    StageSrc::Backdrop => "[\"backdrop\"]".to_owned(),
+                };
+                let clip = d.clip.map_or("null".to_owned(), |c| ints(&c));
+                format!(
+                    "[{src},{},{},{},{},{},{},{},{clip}]",
+                    ints(&d.part),
+                    d.x,
+                    d.y,
+                    d.w,
+                    d.h,
+                    d.flip_x,
+                    d.shade
+                )
+            })
+            .collect();
+        rooms.push(format!(
+            "[{},{{\"size\":{},\"scale\":{},\"backdrop\":[{},{}],\"draws\":[{}]}}]",
+            r.pic,
+            ints(&st.size),
+            st.scale,
+            rgb(st.backdrop[0]),
+            rgb(st.backdrop[1]),
+            draws.join(",")
+        ));
+    }
+    format!(
+        "{{\"files\":[{}],\"stages\":[],\"rooms\":[{}]}}",
+        files.join(","),
+        rooms.join(",")
+    )
 }
 
 #[cfg(target_arch = "wasm32")]

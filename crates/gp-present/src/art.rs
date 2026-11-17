@@ -60,6 +60,11 @@
 //!   elsewhere the picture's other rules, as before. The regions are named
 //!   in the game's kit and given with [`Art::set_regions`]; until then no
 //!   `in` rule holds.
+//! - `#+ room SCREEN...`, `#+ room_cells`, `#+ room_fill`, `#+ room_run`
+//!   and `#+ room_box`: an arcade game's screens built from the stage's
+//!   pieces on the cells of the screen the player's lift gives
+//!   ([`room`]). The runtime gives each screen's cells with
+//!   [`Art::build_room`].
 //!
 //! A [`Painter`] steps once after each game frame, keeping what the rules
 //! need from frame to frame. [`Painter::frame`] turns a framed scene into
@@ -70,7 +75,9 @@
 use crate::view::Framed;
 use crate::{Draw, Present, Scene};
 
+pub mod room;
 pub mod stage;
+use room::RoomRules;
 use stage::{Stage, StageRules, StageSrc};
 
 /// The rules file's first line.
@@ -177,6 +184,9 @@ pub struct ArtRules {
     pub region_pics: Vec<(String, ArtPic)>,
     /// `#+ in REGION timed ...`, likewise.
     pub region_timed: Vec<(String, Timed)>,
+    /// `#+ room SCREEN...` and the lines after it: screens built from the
+    /// stage's pieces ([`room`]).
+    pub rooms: Vec<RoomRules>,
     /// The `#+` lines this reader can't read, by line number, passed over
     /// as an older reader passes over every `#+` line.
     pub skipped: Vec<(usize, String)>,
@@ -200,6 +210,7 @@ impl Default for ArtRules {
             hud_over: None,
             region_pics: Vec::new(),
             region_timed: Vec::new(),
+            rooms: Vec::new(),
             skipped: Vec::new(),
         }
     }
@@ -235,7 +246,7 @@ impl ArtRules {
             // can't read is passed over too, so the look still draws.
             if let Some(rest) = line.strip_prefix(ADDED) {
                 let w: Vec<&str> = rest.split_whitespace().collect();
-                if r.added(&w).is_err() {
+                if r.added(&w, n + 2).is_err() {
                     r.skipped.push((n + 2, line.to_owned()));
                 }
                 continue;
@@ -247,9 +258,12 @@ impl ArtRules {
         Ok(r)
     }
 
-    /// A `#+` line's words: `hud_over [ROW...]`, or `in REGION` and a `pic`
-    /// or `timed` line.
-    fn added(&mut self, w: &[&str]) -> Result<(), ()> {
+    /// A `#+` line's words: `hud_over [ROW...]`, `in REGION` and a `pic`
+    /// or `timed` line, or a room's line; `line` is its number.
+    fn added(&mut self, w: &[&str], line: usize) -> Result<(), ()> {
+        if RoomRules::line(&mut self.rooms, self.stage.as_ref(), w, line)? {
+            return Ok(());
+        }
         match w {
             ["hud_over"] => self.hud_over = Some(Vec::new()),
             ["hud_over", rows @ ..] => {
@@ -455,6 +469,9 @@ impl ArtRules {
         }
         if let Some(st) = &self.stage {
             named.extend(st.levels.iter().map(|l| l.level.as_str()));
+        }
+        for r in &self.rooms {
+            named.extend(r.screens.iter().map(String::as_str));
         }
         let mut seen = std::collections::BTreeSet::new();
         named.retain(|n| seen.insert(*n));
@@ -821,6 +838,69 @@ impl Art {
         }
         self.stages[pic as usize] = Some(built);
         Ok(self.stages[pic as usize].as_ref().expect("just built"))
+    }
+
+    /// The screens the look builds rooms of (`#+ room`), by picture
+    /// number, each with its room's number in [`ArtRules::rooms`]: a
+    /// runtime gives [`Art::build_room`] each one's cells. A screen two
+    /// rooms name is the first's.
+    #[must_use]
+    pub fn room_screens(&self, p: &Present) -> Vec<(u32, usize)> {
+        if self.rules.stage.is_none() {
+            return Vec::new();
+        }
+        let mut out: Vec<(u32, usize)> = Vec::new();
+        for (k, r) in self.rules.rooms.iter().enumerate() {
+            for s in &r.screens {
+                if let Some(i) = p.pictures.iter().position(|x| x.file == *s)
+                    && !out.iter().any(|(pic, _)| *pic == i as u32)
+                {
+                    out.push((i as u32, k));
+                }
+            }
+        }
+        out
+    }
+
+    /// Builds the room over screen picture `pic` from its cells (the
+    /// player's lift's) and keeps it for the frames, drawn as the stage
+    /// over that picture. Gives the cells each of the room's rules found,
+    /// by its place in [`room::RoomRules::places`].
+    pub fn build_room(
+        &mut self,
+        p: &Present,
+        pic: u32,
+        cells: &room::Cells,
+    ) -> Result<Vec<usize>, String> {
+        let st = self
+            .rules
+            .stage
+            .as_ref()
+            .ok_or("the look builds no rooms (no `stage` line)")?;
+        let k = self
+            .room_screens(p)
+            .into_iter()
+            .find(|(x, _)| *x == pic)
+            .map(|(_, k)| k)
+            .ok_or("the look builds no room over that picture")?;
+        if cells.cells.len() != cells.cols * cells.rows {
+            return Err(format!(
+                "{} cells for a screen of {} by {}",
+                cells.cells.len(),
+                cells.cols,
+                cells.rows
+            ));
+        }
+        let mut built = room::build(st, &self.rules.rooms[k], cells);
+        for d in &mut built.stage.draws {
+            if let StageSrc::Piece(i) = d.src {
+                let art = &st.pieces[i as usize].1;
+                d.src =
+                    StageSrc::Piece(self.files.iter().position(|f| f == art).unwrap_or(0) as u32);
+            }
+        }
+        self.stages[pic as usize] = Some(built.stage);
+        Ok(built.cells)
     }
 
     /// The stage built over level picture `pic`, if any.

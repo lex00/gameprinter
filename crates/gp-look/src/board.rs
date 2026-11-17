@@ -1068,6 +1068,46 @@ impl BoardArt {
         }
     }
 
+    /// A screen's cells as a theme's rooms read them
+    /// (`gp_present::art::room`): its 32 by 30 cells of 16 pixels, each
+    /// one's tile code, colour bank and priority from the screen's word,
+    /// and the colours of its tile's 64 pixels in the colours of the first
+    /// look that shows the screen (the level's own, then its `looks`). None
+    /// for a screen no look shows. All of it from the player's lift.
+    #[must_use]
+    pub fn screen_cells(&self, screen: &str) -> Option<gp_present::art::room::Cells> {
+        let look = self.levels.iter().flatten().find_map(|l| {
+            std::iter::once(&l.base)
+                .chain(l.looks.iter().map(|(_, x)| x))
+                .find(|x| x.screen.as_deref() == Some(screen))
+        })?;
+        let rgb = |c: u32| [(c >> 16) as u8, (c >> 8) as u8, c as u8];
+        let cells = (0..960)
+            .map(|i| {
+                let v = &look.videoram;
+                let word = u16::from(v[i * 2]) | (u16::from(v[i * 2 + 1]) << 8);
+                let bank = ((word >> 12) & 3) as u8;
+                let tile = word & 0x3ff;
+                let colors = self.gfx.tiles[usize::from(tile) % self.gfx.tiles.len()]
+                    .iter()
+                    .map(|&pix| rgb(look.palette[usize::from(bank * 16 + (pix & 0x0f)) & 0x3f]))
+                    .collect();
+                gp_present::art::room::Cell {
+                    tile,
+                    bank,
+                    prio: ((word >> 14) & 3) as u8,
+                    colors,
+                }
+            })
+            .collect();
+        Some(gp_present::art::room::Cells {
+            cols: 32,
+            rows: 30,
+            size: CELL_SIZE[0] as i64,
+            cells,
+        })
+    }
+
     /// A picture of the board's, as the frame's sprite of `kind` with
     /// `code` and `flags` draws it on its own, 32 by 32 RGBA: for a
     /// person's own contact sheet of the codes an entity shows, from their
@@ -1183,6 +1223,45 @@ pub struct BoardTheme {
     painter: gp_present::art::Painter,
     /// The game frame the painter last stepped on.
     last: Option<u64>,
+    /// The rooms the theme built (`#+ room`), each over a screen the board
+    /// shows, from the screen's cells in the player's lift.
+    pub rooms: Vec<BuiltRoom>,
+}
+
+impl BoardTheme {
+    /// The room rules (`#+ room_fill`, `room_run`, `room_box`) whose class
+    /// found no cell on a screen `shown` takes, so they draw nothing
+    /// there: each rule's line, its class and those screens, by line.
+    #[must_use]
+    pub fn empty_rooms(&self, shown: &dyn Fn(&str) -> bool) -> Vec<(usize, String, Vec<String>)> {
+        let mut out: Vec<(usize, String, Vec<String>)> = Vec::new();
+        for built in self.rooms.iter().filter(|b| shown(&b.screen)) {
+            let room = &self.art.rules.rooms[built.room];
+            for (place, cells) in room.places.iter().zip(&built.cells) {
+                if *cells > 0 {
+                    continue;
+                }
+                match out.iter_mut().find(|(l, _, _)| *l == place.line) {
+                    Some(o) => o.2.push(built.screen.clone()),
+                    None => out.push((place.line, place.class.clone(), vec![built.screen.clone()])),
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+}
+
+/// A room a theme built over one of the board's screens: the screen's
+/// slot and picture number, its room's number in the rules' `rooms`, and
+/// the cells each of the room's rules found (by its place in the room's
+/// `places`). A rule that found none draws nothing on that screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuiltRoom {
+    pub screen: String,
+    pub pic: u32,
+    pub room: usize,
+    pub cells: Vec<usize>,
 }
 
 /// A frame drawn in a theme: the board's picture with what the theme
@@ -1205,7 +1284,21 @@ impl BoardArt {
     pub fn theme(&self, text: &str) -> Result<BoardTheme, String> {
         let rules = gp_present::art::ArtRules::read(text)?;
         let present = self.present();
-        let art = gp_present::art::Art::new(rules, &present)?;
+        let mut art = gp_present::art::Art::new(rules, &present)?;
+        // Each room over its screen's cells, as the board has them.
+        let mut rooms = Vec::new();
+        for (pic, room) in art.room_screens(&present) {
+            let screen = present.pictures[pic as usize].file.clone();
+            if let Some(cells) = self.screen_cells(&screen) {
+                let found = art.build_room(&present, pic, &cells)?;
+                rooms.push(BuiltRoom {
+                    screen,
+                    pic,
+                    room,
+                    cells: found,
+                });
+            }
+        }
         let index = present
             .pictures
             .iter()
@@ -1218,6 +1311,7 @@ impl BoardArt {
             index,
             painter: gp_present::art::Painter::new(),
             last: None,
+            rooms,
         })
     }
 
@@ -2257,6 +2351,86 @@ asset = "stage2"
         assert_eq!(seen, ["a.png", "a.png", "b.png", "b.png"]);
         w.frame = 40;
         assert_eq!(file(&mut theme, &w), "a.png");
+    }
+
+    /// A room built from the theme's pieces on the screen's own cells: a
+    /// counter where the lift's screen has cells of colour bank 2, the
+    /// back wall on the rest, drawn as the stage under the board's
+    /// sprites, and the board's own screen left out.
+    #[test]
+    fn a_room_is_built_on_the_screens_own_cells() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, _, w) = two_bodies(dir.path());
+        // Row 10, columns 4 to 19: tile 0 in colour bank 2.
+        let mut rows = Vec::new();
+        for y in 0..30 {
+            let row: Vec<&str> = (0..32)
+                .map(|x| {
+                    if y == 10 && (4..20).contains(&x) {
+                        "0x2000"
+                    } else {
+                        "0x1001"
+                    }
+                })
+                .collect();
+            rows.push(format!("[{}]", row.join(", ")));
+        }
+        std::fs::write(
+            dir.path().join("stage.toml"),
+            format!("rows = [{}]\n", rows.join(",\n")),
+        )
+        .unwrap();
+        let model = Model::parse(MODEL).unwrap();
+        let lifted = gp_interp::Lifted::read_dir(dir.path(), &model).unwrap();
+        let spec = gp_interp::compile::compile(&model, &lifted).unwrap();
+        let art = BoardArt::load(&model, &spec, dir.path()).unwrap().unwrap();
+        let cells = art.screen_cells("stage").unwrap();
+        let wall = &cells.cells[0];
+        assert_eq!((wall.tile, wall.bank, wall.colors.len()), (1, 1, 64));
+        let c = art.levels[0].as_ref().unwrap().base.palette[16 + 5];
+        assert_eq!(wall.colors[0], [(c >> 16) as u8, (c >> 8) as u8, c as u8]);
+        assert_eq!(cells.cells[10 * 32 + 4].bank, 2);
+        assert!(art.screen_cells("nothing").is_none());
+        let text = "gp-art 1\nscale 2\nstage 2 0 0 0 0 0 0\n\
+                    stage_piece top top.png 64 32\nstage_piece brick brick.png 64 64\n\
+                    #+ room stage\n#+ room_cells counter bank=2\n#+ room_cells back !counter\n\
+                    #+ room_cells sky b>r+200\n\
+                    #+ room_fill back brick\n#+ room_run counter - top -\n#+ room_fill sky brick\n";
+        let mut theme = art.theme(text).unwrap();
+        assert!(theme.art.rules.skipped.is_empty());
+        assert_eq!(theme.rooms.len(), 1);
+        assert_eq!(theme.rooms[0].screen, "stage");
+        // The back wall, the counter, and nothing of the sky.
+        assert_eq!(theme.rooms[0].cells, [960 - 16, 16, 0]);
+        // The check's list: the sky's rule, line 12, on the screen shown.
+        assert_eq!(
+            theme.empty_rooms(&|_| true),
+            [(12, "sky".to_owned(), vec!["stage".to_owned()])]
+        );
+        assert!(theme.empty_rooms(&|s| s != "stage").is_empty());
+        let t = art
+            .themed(&mut theme, &w, &[true, true], &[u32::MAX; 2])
+            .unwrap();
+        let pic = theme.rooms[0].pic;
+        assert_eq!(t.frame.draws[0].src, gp_present::art::Src::Stage(pic));
+        assert_eq!(t.frame.draws[0].of, gp_present::art::Of::Level);
+        assert_eq!(t.board_at, 1);
+        let at = |x: usize, y: usize| t.picture.pens[y * video::WIDTH + x];
+        assert_eq!(at(0, 0), TRANSPARENT);
+        assert_eq!(at(100, 100), 0x03 | video::SPRITE_BIT);
+        // The counter's run: the top (64 by 32, so 64 wide at the row's 32
+        // stage pixels) across columns 4 to 20, cut there.
+        let st = theme.art.stage(pic).unwrap();
+        let tops: Vec<_> = st
+            .draws
+            .iter()
+            .filter(|d| d.src == gp_present::art::stage::StageSrc::Piece(0))
+            .collect();
+        assert_eq!(tops.len(), 8);
+        assert!(
+            tops.iter()
+                .all(|d| d.clip == Some([4 * 32, 10 * 32, 16 * 32, 32]))
+        );
     }
 
     #[test]

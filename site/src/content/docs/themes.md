@@ -44,6 +44,7 @@ Pictures are named by the build's own file names (`frame-82-0.png`, `hud-0.png`)
 | `stage SCALE R G B R G B` | Stages built from pieces over a gradient backdrop |
 | `#+ hud_over` | The HUD's text is drawn over the bodies, so a body standing on a HUD row doesn't cover it. Without the line it is drawn under them, as before |
 | `#+ hud_over ROW...` | The same for those rows of the HUD only, 8 pixels each from the screen's top (row 2 is y 16 to 24) |
+| `#+ room SCREEN...`, `#+ room_cells`, `#+ room_fill`, `#+ room_run`, `#+ room_box` | An arcade game's rooms built from your pieces on the screen your romset gives (below, "An arcade game") |
 | `#+ in REGION pic ...`, `#+ in REGION timed ...` | A `pic` or `timed` line that holds only while the body stands in a region of the stage the game's level kit names, such as a shorter picture on a low ledge. Moss Hop's kit names one, `start`, where the hero starts; Donkey Kong's and Tapper's name none yet |
 
 A theme never holds a picture of a stage. The `stage`, `stage_piece` and `level` lines describe how to build each stage from pieces (a plank, a ladder rail, a rope, a wheel) on top of the level picture from the player's own ROM, finding floors, ladders and ropes by colour. That way a theme carries no layout from the original.
@@ -108,6 +109,36 @@ gp theme kit tapper
 ```
 
 gives the game's kit a slot for each entity the board draws, each screen and each counter, and from `names.toml` and your romset writes the kit's local part: the codes each entity showed, and the box each one's picture fills in the original. Your theme's pictures are fitted to those boxes. The kit in the game's folder lists only what the model says; the codes and boxes stay on your machine. The words a prompt uses for each code go in the kit's `words.toml` by code (`"4d" = "walking left"`).
+
+A room (one of the board's screens) is built from your pieces, never painted whole. The board's screen is a grid of 32 by 30 cells, and the `#+ room` lines sort those cells into classes by what your romset draws in each (its tile number, its colour bank, its colours), then lay your pieces on each class. The layout comes from your romset when the game loads, so the theme holds none of it:
+
+```text
+stage 2 40 30 60 20 16 30
+stage_piece plank pieces/plank.png 64 32
+stage_piece cap pieces/cap.png 24 32
+stage_piece boards pieces/boards.png 64 64
+stage_piece paper pieces/paper.png 128 128
+stage_piece door pieces/door.png 40 64
+#+ room screen_saloon
+#+ room_cells door r>g+60 g>b+40 max>0+200 share=25
+#+ room_cells counter r>b+40 r>g+20 share=40 !door
+#+ room_cells floor min>max-12 max>0+60 !counter !door
+#+ room_cells wall !counter !door !floor
+#+ room_fill wall paper
+#+ room_fill floor boards
+#+ room_box door door
+#+ room_run counter cap plank cap
+```
+
+| Line | What it does |
+|---|---|
+| `#+ room SCREEN...` | The lines after it build those screens. It comes after the `stage` line, whose scale and backdrop it uses, and its pieces are `stage_piece` lines |
+| `#+ room_cells CLASS TEST...` | A class of cells. `tile=N` or `tile=LO-HI` (decimal or `0x` hex), `bank=N` and `prio=N` test the cell's tile, colour bank and priority. A colour test like a stage's `floor` (`r>g+40`) holds when at least `share=P` percent of the cell's pixels pass (half when not given). `!CLASS` leaves out a class given before |
+| `#+ room_fill CLASS PIECE` | The piece repeated over the class's cells at its own size: a wall, a floor |
+| `#+ room_run CLASS LEFT MID RIGHT` | Each group of the class's cells gets the end pieces at its ends and the middle one repeated between, as tall as the group: a counter, a shelf. `-` for none |
+| `#+ room_box CLASS PIECE` | The piece stretched over each group: a door, a sign |
+
+Cells are 16 board pixels square, so a slanted edge becomes a staircase of cells. A page built before these lines draws the board's own screen there. `gp theme look check` builds every room from your romset as the page does. A room line whose class finds no cell on a screen the game shows is a problem: change the class's tests until it finds the cells you mean.
 
 ### Start it
 

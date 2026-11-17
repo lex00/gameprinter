@@ -423,8 +423,8 @@ struct Built {
     /// An arcade game drawn by its board's art: the names its rules give
     /// instead of the build's pictures (crate::theme_board).
     board: Option<crate::theme_board::BoardKit>,
-    /// And its board's pictures, to measure a sprite's body in the
-    /// original.
+    /// Its board's pictures, to measure a sprite's body in the original
+    /// and to build a theme's rooms as the page does.
     board_art: Option<gp_look::board::BoardArt>,
     _lifted: Option<tempfile::TempDir>,
 }
@@ -911,7 +911,10 @@ fn report(
                 ),
             );
         }
-        if let Some(st) = &rules.stage {
+        // A stage only for an arcade game's rooms has no planks or rails.
+        if let Some(st) = &rules.stage
+            && (rules.rooms.is_empty() || !st.levels.is_empty())
+        {
             stage_checks(st, text, &art_rel, &mut r);
         }
         twice(text, &art_rel, &mut r);
@@ -1364,8 +1367,12 @@ fn added_checks(
         let why = match word {
             "hud_over" => "`#+ hud_over` takes no row or rows of the HUD, each a number from 0 to 63 (8 pixels each from the screen's top)".to_owned(),
             "in" => "`#+ in` takes a region's name (lowercase letters, digits, - and _) and then a whole `pic` or `timed` line".to_owned(),
+            "room" => "`#+ room` takes one or more screens, after the `stage` line".to_owned(),
+            "room_cells" => "`#+ room_cells` takes a new class's name (lowercase letters, digits, - and _) after a `#+ room` line, then its tests: tile=N or tile=LO-HI, bank=N, prio=N (0 to 3), share=P (1 to 100), !CLASS for a class given before, and colour tests such as r>g+40".to_owned(),
+            "room_fill" | "room_box" => format!("`#+ {word}` takes a class its room gives and a piece"),
+            "room_run" => "`#+ room_run` takes a class its room gives and three pieces, left, middle and right, `-` for none".to_owned(),
             "" => "it says nothing after `#+`".to_owned(),
-            w => format!("no page knows `#+ {w}`; the lines are `#+ hud_over` and `#+ in`"),
+            w => format!("no page knows `#+ {w}`; the lines are `#+ hud_over`, `#+ in` and the room lines (`#+ room`, `room_cells`, `room_fill`, `room_run`, `room_box`)"),
         };
         r.add(
             Group::Files,
@@ -1443,14 +1450,14 @@ fn added_checks(
             }
         }
     }
-    let used = rules.hud_over.is_some() || !rules.regions().is_empty();
+    let used = rules.hud_over.is_some() || !rules.regions().is_empty() || !rules.rooms.is_empty();
     if used {
         r.add(
             Group::Files,
             Level::Note,
             Some(art_rel),
             line_of(text, gp_present::art::ADDED),
-            "uses `#+` lines, which a page built before them takes for notes: there the theme is still offered, with the HUD's text under the bodies and each body's full picture everywhere",
+            "uses `#+` lines, which a page built before them takes for notes: there the theme is still offered, with the HUD's text under the bodies and each body's full picture everywhere, and the board's own screens where it builds rooms",
         );
     }
 }
@@ -1513,9 +1520,71 @@ fn names_check(rules: &ArtRules, text: &str, art_rel: &str, b: &Built, r: &mut R
     }
     if let Some(k) = &b.board {
         board_seen(rules, text, art_rel, k, r);
+        if let Some(a) = &b.board_art {
+            room_checks(rules, text, art_rel, a, k.seen.as_ref(), r);
+        }
     }
     if let Err(e) = gp_present::art::Art::new(rules.clone(), b.present()) {
         r.add(Group::Kit, Level::Problem, Some(art_rel), None, format!("the page refuses these rules for this game: {e}. Check the picture names against the game's"));
+    }
+}
+
+/// An arcade game's rooms (`#+ room`), built as the page builds them from
+/// the screens in the person's lift: a rule whose class found no cell on
+/// a screen the game shows (every screen of its looks, or with a sheet
+/// those it showed) draws nothing there, and a piece no `stage_piece`
+/// gives is passed over.
+fn room_checks(
+    rules: &ArtRules,
+    text: &str,
+    art_rel: &str,
+    a: &gp_look::board::BoardArt,
+    seen: Option<&BTreeMap<String, u64>>,
+    r: &mut Report,
+) {
+    if rules.rooms.is_empty() {
+        return;
+    }
+    let Ok(theme) = a.theme(text) else { return };
+    let pieces: BTreeSet<&str> = rules
+        .stage
+        .iter()
+        .flat_map(|st| st.pieces.iter().map(|p| p.0.as_str()))
+        .collect();
+    let shown = |screen: &str| seen.is_none_or(|s| s.contains_key(screen));
+    for (line, class, screens) in theme.empty_rooms(&shown) {
+        r.add(
+            Group::Kit,
+            Level::Problem,
+            Some(art_rel),
+            Some(line),
+            format!(
+                "its class `{class}` found no cell on {}, which the game shows, so it draws nothing there. Change the class's tests (its `#+ room_cells` line) to what that screen draws, by tile, bank or colour, or move the line to a room without that screen",
+                screens.join(", ")
+            ),
+        );
+    }
+    for room in &rules.rooms {
+        for place in &room.places {
+            let missing: Vec<&str> = place
+                .pieces()
+                .into_iter()
+                .filter(|p| !pieces.contains(p))
+                .collect();
+            if !missing.is_empty() {
+                r.add(
+                    Group::Kit,
+                    Level::Problem,
+                    Some(art_rel),
+                    Some(place.line),
+                    format!(
+                        "names {} no `stage_piece` line gives, and the page passes over {}. Add `stage_piece NAME ART W H` or fix the name",
+                        missing.join(", "),
+                        if missing.len() == 1 { "it" } else { "them" }
+                    ),
+                );
+            }
+        }
     }
 }
 

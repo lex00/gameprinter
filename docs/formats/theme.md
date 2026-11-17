@@ -317,6 +317,11 @@ A reader takes a line whose first word starts with `#` for a note. So a page bui
 | `#+ hud_over ROW...` | Only those rows of the HUD, each 8 pixels from the screen's top (row 2 is y 16 to 24, as a HUD field's `at` numbers it); the layer is cut into bands of rows by clips, the text goes by its row. Several lines add up; one with no row takes the whole HUD | |
 | `#+ in REGION pic BUILD ART W H DX DY` | A `pic` rule that holds only while the body is in the named region of the stage: the middle of its picture's bottom row inside the region's box, on the region's level | A body shows its other pictures |
 | `#+ in REGION timed BUILD FROM TO ART W H DX DY ...` | A `timed` rule likewise, with the same options | |
+| `#+ room SCREEN...` | An arcade game's screens built from the stage's pieces on their own cells (below, "Rooms"); the lines after it, up to the next `#+ room`, are those screens'. Needs the `stage` line before it | The board's own screen, or a `pic` line's picture of it |
+| `#+ room_cells CLASS TEST...` | A class of the screen's cells: those for which every test holds | |
+| `#+ room_fill CLASS PIECE` | The piece repeated over the class's cells at its own size, cut to them | |
+| `#+ room_run CLASS LEFT MID RIGHT` | On each group of the class's cells, the two end pieces at its ends and the middle one repeated between, as tall as the group | |
+| `#+ room_box CLASS PIECE` | The piece over each group of the class's cells | |
 
 In a region a body's `in` rules come first, its timed ones that hold now and then its picture, before its other `timed` rules and its `pic`. A region's name is lowercase letters, digits, `-` and `_`; the regions are named in the game's level kit (docs/level-kit.md, "Regions of a stage"), never by coordinates in the theme. `gp theme look check` refuses an `in` line whose region the kit doesn't name; the build carries the kit's regions in `preview.json` and the page gives them to the module (`Art::set_regions`). Moss Hop's kit names one, `start`; Donkey Kong's and Tapper's name none yet. The art an `in` line names is numbered after every other art file, so a look without the lines numbers its files as before.
 
@@ -325,6 +330,42 @@ The HUD's sprites (a field drawn in a sprite palette, a HUD sprite) are drawn la
 ### On an arcade game
 
 An arcade game drawn by its board's art (docs/formats/board-art.md, "Themes") takes the same rules, read and painted by the same `gp_present::art`, in the page's `gp_board.wasm` instead of the game's module. A rule names the board's pictures in place of the build's: a screen by its `board-screen` slot (`screen_saloon`), a sprite as `sprite-ENTITY-CODE` with the picture code in hex (`sprite-mug-4d`), a counter's digit as `counter-COUNTER-D` and a repeated tile as `counter-COUNTER`. Sizes and places are the board's picture's pixels (512 by 480). No rule line is new; the names are new values in the lines there were. A page built before them doesn't draw such a theme and draws nothing wrong: its arcade lift offered no finished theme, and its game's module refuses rules that name none of its pictures. A page with the board's names offers the theme in Settings, Theme and draws it.
+
+#### Rooms
+
+A theme never holds a picture of a room, as it never holds one of an NES stage: `#+ room` lines build a screen from the theme's pieces on the layout the player's own lift gives (`gp_present::art::room`). When the page's `gp_board.wasm` loads the rules it hands each named screen to the room as a grid of 32 by 30 cells (`BoardArt::screen_cells`), each with what the board draws there: the cell's tile code (0 to 1023), its colour bank and priority (0 to 3 each, from the screen's word), and the colours of its 64 pixels in the colours of the first look that shows the screen (the level's own, then its `looks` in order). The rules sort the cells into classes by those and lay pieces on each class. Nothing in the rules is a place on the screen, so the room has the original's layout and holds none of it.
+
+```text
+gp-art 1
+scale 2
+stage 2 40 30 60 20 16 30
+stage_piece plank pieces/plank.png 64 32
+stage_piece cap pieces/cap.png 24 32
+stage_piece boards pieces/boards.png 64 64
+stage_piece paper pieces/paper.png 128 128
+stage_piece door pieces/door.png 40 64
+#+ room screen_saloon
+#+ room_cells door r>g+60 g>b+40 max>0+200 share=25
+#+ room_cells counter r>b+40 r>g+20 share=40 !door
+#+ room_cells floor min>max-12 max>0+60 !counter !door
+#+ room_cells wall !counter !door !floor
+#+ room_fill wall paper
+#+ room_fill floor boards
+#+ room_box door door
+#+ room_run counter cap plank cap
+```
+
+| Line | Means |
+|---|---|
+| `#+ room SCREEN...` | The rules after it are those screens' (`board-screen` slots, as a `pic` line names a screen), up to the next `#+ room`. A screen two rooms name is the first's. It needs the `stage` line before it: the room is drawn in the stage's pixels (`stage SCALE ...`, SCALE to a board pixel) over its backdrop gradient, with the pieces its `stage_piece` lines give |
+| `#+ room_cells CLASS TEST...` | A class of cells (its name lowercase letters, digits, `-` and `_`, once a room). A cell is in it when every test holds. `tile=N` or `tile=LO-HI`: its tile code, decimal or `0x` hex. `bank=N`, `prio=N`: its colour bank, its priority. Several `tile=`, `bank=` or `prio=` tests hold when any one does. `!CLASS`: not in a class given before. A colour test as a stage's `floor` takes it (`A>B+K`, each side one of `r g b min max 0`) holds for the cell when at least `share=P` percent of its pixels (50 when not given) pass every colour test. A class with no test holds every cell |
+| `#+ room_fill CLASS PIECE` | The piece repeated at its own size, its `stage_piece` `W H` in stage pixels, on a grid from the screen's top left, over the class's cells and cut to them: a wall, a floor, a sky |
+| `#+ room_run CLASS LEFT MID RIGHT` | Each group of the class's cells (cells side by side or one above the other) is a run over its box: `LEFT` at its left end and `RIGHT` at its right end, each as tall as the box and as wide as its art's shape makes it, and `MID` repeated between them the same way, cut there. `-` for none. Ends wider than the box share it. A counter, a bar, a shelf |
+| `#+ room_box CLASS PIECE` | The piece stretched over each group's box: a door, a tap, a sign |
+
+The pieces are drawn in the order of their lines, the last on top. A room is drawn in place of its screen as the stage over an NES level is: under every sprite, with the counters' cells the theme doesn't draw still the board's, and in place of any `pic` line for the same screen. A screen with no room keeps the board's own picture or its `pic` line. `gp_board_load_art` gives each room's draws beside the files (`"rooms": [[pic, stage], ...]`, a stage as `gp_art_stage` gives one), the page paints each into its canvas once, and the frame's `["stage", pic]` draw places it. A sprite of the board (Tapper's bar ends and taps are sprites, not cells) is themed by its `sprite-` name, not by a room.
+
+The example was tried on Tapper's saloon from the owner's lift on 2026-11-16 (outside any repo): the doors, the four counters, the floor between them and the back wall each came out as their own class, with the floor's slanted left edge a staircase of cells. The taps on the right wall and the sign at the top draw the counters' browns, so they went to `counter` too and each got a run of its own; a theme that wants them drawn otherwise tells them apart by `tile=` from its own sheet. A cell is 16 board pixels square, so a room follows the screen's layout in steps of a cell: a slanted edge, like the floor of Tapper's saloon running back to the wall, is a staircase of cells, and a cell that is part floor and part wall goes to whichever class its `share` gives it. The tests read only what the lift holds, so a game whose screens draw two features with the same tiles and colours needs a theme that tells them apart some other way, which these lines don't have yet: a cell's neighbours, its row against another class's, or a region the game's kit names. `gp theme look check` builds every room as the page does and names, as a problem, a `room_fill`, `room_run` or `room_box` line whose class found no cell on a screen the game shows (it draws nothing there), and a piece no `stage_piece` line gives.
 
 ## Stacks
 

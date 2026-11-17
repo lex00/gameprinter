@@ -476,7 +476,9 @@ class BoardDraw {
   }
   // A large-art theme's rules over the board's named pictures
   // (docs/formats/board-art.md, "Themes"), as the game module's loadArt
-  // takes them: { files, stages } ("" takes them away). A gp_board.wasm
+  // takes them: { files, stages } ("" takes them away), and `rooms`, the
+  // stages the board built over its screens (`#+ room`), [pic, stage]
+  // each, which a gp_board.wasm built before rooms leaves out. A gp_board.wasm
   // built before themes can't: an error, so the look isn't offered as drawn.
   loadArt(artText) {
     if (!this.x.gp_board_load_art) throw new Error("this page's gp_board.wasm can't draw a theme on an arcade game; rebuild it");
@@ -1553,7 +1555,7 @@ async function main() {
     try {
       p.loadPresent(text);
       if (artText) {
-        const { files, stages } = artHost(p).loadArt(artText);
+        const { files, stages, rooms } = artHost(p).loadArt(artText);
         const missing = files.find((f) => !art.has(f));
         if (missing) throw new Error(`${missing}: not in the look`);
         nextArt = files.map((f) => art.get(f));
@@ -1565,6 +1567,10 @@ async function main() {
           const st = p.artStage(pic, img.width, img.height, rgba);
           nextStages.set(pic, { canvas: paintStage(st, nextArt), rgba, w: img.width, h: img.height });
         }
+        // An arcade game's rooms, built by gp_board.wasm from the
+        // screens in the player's lift: painted the same way, and built
+        // again by the board whenever it loads the rules.
+        for (const [pic, st] of rooms ?? []) nextStages.set(pic, { canvas: paintStage(st, nextArt) });
       } else if (lookArt) {
         artHost(p).loadArt("");
       }
@@ -1574,7 +1580,7 @@ async function main() {
       p.loadPresent(lookPresent);
       if (lookArt) {
         artHost(p).loadArt(lookArt);
-        for (const [pic, st] of artStages) p.artStage(pic, st.w, st.h, st.rgba);
+        for (const [pic, st] of artStages) if (st.rgba) p.artStage(pic, st.w, st.h, st.rgba);
       }
       throw err;
     }
@@ -1955,7 +1961,7 @@ async function main() {
       if (boardSound) boardSound.load(boardZip);
       if (lookArt) {
         artHost(p).loadArt(lookArt);
-        for (const [pic, st] of artStages) p.artStage(pic, st.w, st.h, st.rgba);
+        for (const [pic, st] of artStages) if (st.rgba) p.artStage(pic, st.w, st.h, st.rgba);
       }
       if (soundText) {
         p.loadSound(soundText);
