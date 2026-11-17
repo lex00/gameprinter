@@ -35,8 +35,19 @@ A finished theme is shared with `gp theme publish` ([theme publishing](theme-pub
 | `sprite` | `entity.<name>` (or `entity.<role>_<n>` where the entity's name is a character's), `effect.<n>`, `screen-sprite.<screen>.<n>` | One picture a frame, the slot's size. A game drawn from tiles cuts each into its tiles, so each 8 by 8 tile keeps three tones and transparent: dark, middle and light. A tile two frames share takes the first frame's art |
 | `picture` | `picture.<slot>.<entry>` | One picture of a layout entry, drawn whole in any colors (format 0.1.3's restyle `entry`): a stage, the score display's fixed part, a title screen |
 | `font` | `font` | The digits 0 to 9, a glyph a frame |
+| `board-sprite` | `entity.<name>` (as a sprite's) | A game drawn by its board's art (an arcade game): one picture a code its sprite entry draws, 32 by 32, drawn whole in any colors. The frames are the codes in hex (`4d`); a theme's rules draw each as `sprite-ENTITY-CODE` ("A game drawn by its board", below) |
+| `board-screen` | `screen.<slot>` | A whole screen of the board, 512 by 480, drawn as the theme's rules draw the screen's slot |
+| `board-counter` | `digits.<counter>`, `tile.<counter>` | A counter's digits 0 to 9 (`counter-NAME-D`) or the tile it repeats (`counter-NAME`), 16 by 16 a cell |
 
 Descriptions come from the role's words, the entity's size and its model description with every name left out: a capitalized word that isn't a common sentence starter, a word of the model's title, and a word of an entity's name that isn't a plain word for a thing (`theme_kit::GENERIC`). Counters in a clip's condition are shown with names hidden (`x_pose`).
+
+## A game drawn by its board
+
+An arcade game's model draws its bodies with its board's own sprites, picked by a code the game's program writes into the sprite entry (docs/formats/board-art.md), so its kit can't list frames from clips as an NES game's does. `gp theme kit GAME` gives it a `board-sprite` slot for each entity with a `board_sprite`, a `board-screen` slot for each screen its levels' looks show, and a `board-counter` slot for each counter drawn as digits or as a tile repeated (`crates/gp-cli/src/theme_board_kit.rs`). The shareable kit lists only what the model says: a sprite slot's frames are the codes the model fixes (`picture = { number = N }`), often none, since most bodies take their code from a word of their state.
+
+Which codes a body shows is the person's romset's. `gp theme look sheet --game GAME` plays the game's recorded inputs on their romset and writes `names.toml` (each name the game showed) under `$GP_HOME/work/theme-kits/MODEL/board`. Then `gp theme kit GAME`, with the romset found in `$GP_ROM_DIR` or given with `--rom`, writes the local part, `local.json` under `$GP_HOME/work/theme-kits/GAME/`: `board_frames`, the codes each sprite slot showed, and `board_bodies`, each of those pictures' visible body in the original (`[x0, y0, x1, y1]` in its 32 by 32 picture, unflipped, as the board draws it before its flips), from the person's own lift. Without names.toml it says to run the sheet first. `gp theme sheet` and `gp theme fit` read the slots with the local part's codes added, in code order.
+
+The kit names no entity whose name may be a character's: a slot's id is the entity's as for a sprite (`entity.<role>_<n>` where the name isn't a plain word), and its frames are codes, `base` or digits. The name a theme draws a frame by (`sprite-ENTITY-CODE`, the screen's slot, `counter-NAME-D`) is made from the model when it is needed (`theme_board_kit::picture`). Pose words for a board sprite go by code, since no order is fixed ("Prompt words", below). The tests are `theme_board_kit::tests` (a made-up model: a body whose code a word gives, one the model fixes at 0x14d, two screens, a score and a lives tile).
 
 ## Gameplay geometry
 
@@ -142,6 +153,7 @@ description = "a soft tick on every second step"
 | `art.label` | A short neutral name, printed on each cell of a sheet. Without one, the role's (`hero`, `foe`, `big foe`, `hazard`) |
 | `art.description` | The description a prompt starts from, in plain function words: "the big foe at the top who rolls hazards down", "a fire source at the bottom", "sloped platforms" |
 | `art.poses` | One plain phrase a frame, in the kit's frame order (`base`, then `clipI.J`): "walking, legs apart", "climbing, seen from behind, left hand up". `clip14.0` means nothing to an image model; these do |
+| `art.frames` | One plain phrase a frame by the frame's name, a table: `"4d" = "walking left, arms swinging"`. A board sprite's poses go only this way, since its frames are the codes the person's romset shows and `poses` in order is refused for it; a code the kit doesn't list is kept for a romset that shows it, and held to `deny` all the same. Any other slot may use it too, naming only its own frames |
 | `art.note`, `sound.note` | For people only: the game's own term. Never copied into the kit |
 | `sound.description` | The sound role's description |
 

@@ -182,10 +182,20 @@ pub struct Local {
     /// palette 0, as the presentation draws it.
     #[serde(default)]
     pub kind_cells: Vec<(String, Cut)>,
+    /// A game drawn by its board's art (crate::theme_board_kit): the
+    /// picture codes the person's recorded plays showed, by board sprite
+    /// slot, in hex (`4d`), from `gp theme look sheet`'s names.toml.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub board_frames: BTreeMap<String, Vec<String>>,
+    /// And each of those pictures' visible body in the original, by the
+    /// name a theme draws it by (`sprite-ENTITY-CODE`), `[x0, y0, x1, y1]`
+    /// in its 32 by 32 picture.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub board_bodies: BTreeMap<String, crate::theme_geometry::Body>,
 }
 
 /// The words a role's description starts with.
-fn role_words(role: &str) -> &'static str {
+pub(crate) fn role_words(role: &str) -> &'static str {
     match role {
         "player" => "the hero, the one the player moves",
         "enemy" => "an enemy that harms the hero",
@@ -438,12 +448,26 @@ pub fn kit_of(m: &Model, game: &str) -> Kit {
 /// words file applied (docs/theme-kit.md, "Prompt words"), the words it
 /// denies hidden in counter names too. Returns what doesn't fit the words.
 pub fn kit_for(m: &Model, game: &str, template: &Path) -> Result<(Kit, Vec<String>)> {
+    kit_with_local(m, game, template, None)
+}
+
+/// [`kit_for`] with what the local part saw added before the words are
+/// put in: for a game drawn by its board's art, the picture codes the
+/// person's romset showed (crate::theme_board_kit::add_seen), so each gets
+/// its pose words by its code.
+pub fn kit_with_local(
+    m: &Model,
+    game: &str,
+    template: &Path,
+    local: Option<&Local>,
+) -> Result<(Kit, Vec<String>)> {
     let geo = crate::theme_geometry::load(template)?;
     let Some(w) = crate::theme_words::load(template)? else {
-        return Ok((
-            kit_named(m, game, &BTreeSet::new(), geo.as_ref()),
-            Vec::new(),
-        ));
+        let mut kit = kit_named(m, game, &BTreeSet::new(), geo.as_ref());
+        if let Some(l) = local {
+            crate::theme_board_kit::add_seen(&mut kit, l);
+        }
+        return Ok((kit, Vec::new()));
     };
     let extra: BTreeSet<String> = w
         .deny
@@ -455,8 +479,25 @@ pub fn kit_for(m: &Model, game: &str, template: &Path) -> Result<(Kit, Vec<Strin
         })
         .collect();
     let mut kit = kit_named(m, game, &extra, geo.as_ref());
+    if let Some(l) = local {
+        crate::theme_board_kit::add_seen(&mut kit, l);
+    }
     let mut problems = crate::theme_words::apply(&mut kit, &w);
     problems.extend(crate::theme_words::check(&kit, &w.deny));
+    // Pose words for codes this romset didn't show reach no prompt here,
+    // but may on another's: they keep to the same words.
+    for aw in &w.art {
+        for (f, t) in &aw.frames {
+            let d = crate::theme_words::denied(t, &w.deny);
+            if !d.is_empty() && !problems.iter().any(|p| p.contains(t.as_str())) {
+                problems.push(format!(
+                    "{} frame {f} holds {}: \"{t}\"",
+                    aw.id,
+                    d.join(", ")
+                ));
+            }
+        }
+    }
     Ok((kit, problems))
 }
 
@@ -737,6 +778,8 @@ fn kit_named(
     }
     art.extend(pics);
     art.extend(extra);
+    // A game drawn by its board's art: its entities, screens and counters.
+    art.extend(crate::theme_board_kit::slots(m, &id_names, &mut names));
     let mut sound = Vec::new();
     if let Some(snd) = &present.sound {
         for r in &snd.roles {
@@ -1530,7 +1573,52 @@ pub fn kit(
         kit.slots
     );
     let mut local_path = None;
-    if let Some(rom) = rom {
+    if gp_look::board::names_board(&m) {
+        // A game drawn by its board's art: the codes its recorded plays
+        // showed on the person's romset, and each one's visible body.
+        let sheet = crate::theme_board::sheet_dir(&paths.home, &m.model.name);
+        let Some(seen) = crate::theme_board::read_seen(&sheet) else {
+            text.push_str(&format!(
+                "\n{} is drawn by its board's art, and its sprite slots list only the codes the model fixes. Run `gp theme look sheet --game {}` (it plays the recorded inputs on your romset and writes {}), then this command again to add the codes each entity showed to the local part",
+                m.model.title,
+                dir.display(),
+                sheet.join(crate::theme_board::SEEN_FILE).display()
+            ));
+            return Ok(Outcome::ok(
+                json!({ "kit": out.join(KIT_FILE), "model": kit.model, "slots": kit.slots, "art": kit.art.len(), "sound": kit.sound.len(), "local": null }),
+                text,
+            ));
+        };
+        let t = crate::template_extract::Template::load(&dir)?;
+        let lifted = match crate::template_font::lifted_dir(&t, rom, paths)? {
+            Ok(l) => l,
+            Err(why) => bail!(
+                "{why}: the local part's bodies are measured on your own romset; add it with `gp roms add`, or give it with --rom"
+            ),
+        };
+        let local = crate::theme_board_kit::local_of(&m, &kit, &seen, lifted.path())?;
+        let ldir = local_dir(paths, &id);
+        if gp_evidence::paths::enclosing_git_work_tree(&ldir).is_some() {
+            bail!(
+                "{} is inside a git work tree; the local kit stays outside",
+                ldir.display()
+            );
+        }
+        fs::create_dir_all(&ldir)?;
+        fs::write(
+            ldir.join("local.json"),
+            serde_json::to_string_pretty(&local)?,
+        )?;
+        rec.output("kit-local", ldir.display().to_string(), None);
+        let codes: usize = local.board_frames.values().map(Vec::len).sum();
+        text.push_str(&format!(
+            "\nwrote the local part to {}: {codes} picture codes the recorded plays showed, in {} sprite slots, each with its visible body in the original (from {}; never commit it)",
+            ldir.display(),
+            local.board_frames.len(),
+            sheet.join(crate::theme_board::SEEN_FILE).display()
+        ));
+        local_path = Some(ldir);
+    } else if let Some(rom) = rom {
         let bytes = fs::read(rom).with_context(|| format!("reading {}", rom.display()))?;
         let sum = gp_theme::format::sha256_hex(&bytes);
         let body = gp_theme::format::sha256_hex(bytes.get(16..).unwrap_or_default());

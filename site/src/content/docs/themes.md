@@ -90,6 +90,14 @@ gp theme look sheet --game tapper
 
 plays the game's recorded inputs on your romset. Under `$GP_HOME/work/theme-kits/tapper/board` it writes `names.toml`, with each name the game showed, and a contact sheet of the codes and screens it saw. `--out DIR` picks another folder, but never one inside a repo. These are pictures of your ROM's game, so keep them to yourself. `gp theme look new` then lists those codes in `art.txt`, and `gp theme look check` refuses a name the game doesn't have and warns about a code it never showed.
 
+Then
+
+```sh
+gp theme kit tapper
+```
+
+gives the game's kit a slot for each entity the board draws, each screen and each counter, and from `names.toml` and your romset writes the kit's local part: the codes each entity showed, and the box each one's picture fills in the original. Your theme's pictures are fitted to those boxes. The kit in the game's folder lists only what the model says; the codes and boxes stay on your machine. The words a prompt uses for each code go in the kit's `words.toml` by code (`"4d" = "walking left"`).
+
 ### Start it
 
 ```sh

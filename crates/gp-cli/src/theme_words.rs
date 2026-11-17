@@ -54,6 +54,11 @@ pub struct ArtWords {
     /// One plain phrase a frame, in the kit's frame order.
     #[serde(default)]
     pub poses: Vec<String>,
+    /// One plain phrase a frame by the frame's name: for an arcade game's
+    /// board sprite, whose frames are the picture codes the person's
+    /// romset shows (`"4d" = "walking left"`), so no order is fixed.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub frames: std::collections::BTreeMap<String, String>,
     /// For people only: the game's own term. Never copied into the kit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -99,6 +104,35 @@ pub fn apply(kit: &mut Kit, w: &Words) -> Vec<String> {
         }
         if let Some(d) = &aw.description {
             a.description.clone_from(d);
+        }
+        let board_sprite = a.kind == crate::theme_board_kit::SPRITE;
+        if board_sprite && !aw.poses.is_empty() {
+            problems.push(format!(
+                "`{}` is drawn by the board, its frames the picture codes your romset shows, so its poses go by code in `[art.frames]` (`\"4d\" = \"walking left\"`), never as a list in order",
+                aw.id
+            ));
+            continue;
+        }
+        if !aw.frames.is_empty() {
+            // A board sprite's words may name codes this kit doesn't list
+            // (the person's romset shows them); any other slot's frames are
+            // fixed.
+            if !board_sprite {
+                for f in aw.frames.keys() {
+                    if !a.frame_names.contains(f) {
+                        problems.push(format!(
+                            "`{}` has no frame `{f}` (its frames: {})",
+                            aw.id,
+                            a.frame_names.join(", ")
+                        ));
+                    }
+                }
+            }
+            a.poses = a
+                .frame_names
+                .iter()
+                .map(|f| aw.frames.get(f).cloned().unwrap_or_default())
+                .collect();
         }
         if !aw.poses.is_empty() {
             if aw.poses.len() != a.frames as usize {

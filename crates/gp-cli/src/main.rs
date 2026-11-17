@@ -178,6 +178,7 @@ mod testroms;
 mod theme;
 mod theme_apng;
 mod theme_board;
+mod theme_board_kit;
 mod theme_fit;
 mod theme_generate;
 mod theme_geometry;
