@@ -7,7 +7,23 @@ description: Make a new theme of your own (art and sound) for a game in Game Pri
 
 A theme restyles a game without touching how it plays: new pictures for every sprite, stage piece and screen, drawn larger than the game's own at the place and size of the picture each one stands for, and a rules file that says how to draw them. Every body keeps its place and its hit box, because the game's model (its rules and numbers as text, `model.toml`) stays as it is. On a ported game the levels and the rules' tables still come from the player's own ROM, so the game with the theme plays in a browser only for someone who has that ROM; tell the person so. site/src/content/docs/themes.md is the reference for the theme's files and rules, and Turnips (a clay theme for Donkey Kong, `donkey-kong/themes/turnips/` in the games repo) is the one to copy.
 
-This skill came from game-printer, where `gp theme kit`, `style`, `sheet`, `generate`, `fit`, `check`, `video` and `paint` made a paper-cutout kind of theme (theme.toml, `.pix` and `.tune` files). Those commands came to gameprinter with wave 8 (docs/theme-kit.md) and still make that paper kind of theme. The owner chose the large-art theme for the live page instead (the clay theme, 2026-11-09 to 11-11), and the steps below make one by hand and with small scripts in your work folder, as the clay theme was. Where a step used a `gp theme` command, it says so.
+This skill came from game-printer, where `gp theme kit`, `style`, `sheet`, `generate`, `fit`, `check`, `video` and `paint` made a paper-cutout kind of theme (theme.toml, `.pix` and `.tune` files). Those commands came to gameprinter with wave 8 (docs/theme-kit.md) and still make that paper kind of theme. The owner chose the large-art theme for the live page instead (the clay theme, 2026-11-09 to 11-11), and the steps below make one, as the clay theme was: with gameprinter's commands for every step they cover (the table under "Use gameprinter's tools"), and your own small scripts only between them.
+
+## Use gameprinter's tools, frame by frame
+
+A theme is a skin of the original, frame accurate: each of the game's pictures gets one new picture that shows the same thing (the same pose, facing, anchor, feet row and box) in the new style, and each of the game's stages or rooms keeps its layout. Turnips is built this way: `sheets.json` ties each sheet cell to the game's frames by name, and `art.txt` has a `pic` line for each of the game's 551 pictures. Never pair art with the game's pictures by number order or by guess. Tapper's first themes (Neon Shift, 2026-11-16) were withdrawn because they did: gestures assigned to sprite codes in order, invented rooms, and halos from a home-made key.
+
+| Step | The tool | Not this |
+|---|---|---|
+| What the game draws | `gp theme kit GAME` (slots and frames); for an arcade game drawn by its board's art, `gp theme look sheet --game GAME`: every picture name the recorded plays show, with a contact sheet of each entity's sprite codes and each screen | Guessing from a few played shots |
+| Every room or stage on record | The game's recorded plays (`inputs/`): names.toml must list every room the game has before you draw any; if one is missing, record a clip that reaches it (the corpus, `gp clip`) | Drawing a room the plays never showed |
+| Grids and prompts | `gp theme sheet`: one labelled cell per frame, sized to it, with its pose words, and `sheets.json` naming the frames each cell stands for | A pose sheet of free gestures per character |
+| Pose words | One phrase per frame or sprite code in `GAME/themes/kit/words.toml`, written from that frame's picture on the contact sheet | Words for the character only |
+| Key and shrink | `gp theme fit`'s rules: alpha, the key colour or a flood from the edges; area averaging, a pixel solid when half its area is figure, coloured by the figure's pixels only | A colour-distance key plus a Lanczos resize: it leaves a backdrop-coloured halo. Never add glow rims |
+| Stages and rooms | `stage` and `stage_piece` rules: pieces laid on the real floors, bars, ladders and doors from the player's ROM | A painted room that moves or invents the layout |
+| Check and compare | `gp theme look check`, then `gp theme look play --shots DIR --against Original` at every named moment | Judging from one screenshot |
+
+When a tool comes up short for the game (Tapper's kit has `art = []`, so `gp theme sheet` has nothing to grid), stop and fix the tool through the tool gate, or tell the person; don't work around it with scripts that skip the frame-by-frame link. A skin also needs the base game to draw the right picture on each frame: before paying for art, check the corpus's picture differences on the pictures the theme replaces.
 
 The rules, from the owner (2026-11-03), hold at every step:
 
