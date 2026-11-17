@@ -1097,6 +1097,7 @@ impl BoardArt {
                     bank,
                     prio: ((word >> 14) & 3) as u8,
                     colors,
+                    flip: [word & 0x400 != 0, word & 0x800 != 0],
                 }
             })
             .collect();
@@ -1229,7 +1230,7 @@ pub struct BoardTheme {
 }
 
 impl BoardTheme {
-    /// The room rules (`#+ room_fill`, `room_run`, `room_box`) whose class
+    /// The room rules (`#+ room_fill`, `room_run`, `room_box`, `room_at`) whose class
     /// found no cell on a screen `shown` takes, so they draw nothing
     /// there: each rule's line, its class and those screens, by line.
     #[must_use]

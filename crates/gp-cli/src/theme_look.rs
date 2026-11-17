@@ -1470,9 +1470,10 @@ fn added_checks(
             "room" => "`#+ room` takes one or more screens, after the `stage` line".to_owned(),
             "room_cells" => "`#+ room_cells` takes a new class's name (lowercase letters, digits, - and _) after a `#+ room` line, then its tests: tile=N or tile=LO-HI, bank=N, prio=N (0 to 3), share=P (1 to 100), !CLASS for a class given before, and colour tests such as r>g+40".to_owned(),
             "room_fill" | "room_box" => format!("`#+ {word}` takes a class its room gives and a piece"),
+            "room_at" => "`#+ room_at` takes a class its room gives, a piece and its offset from each cell, DX DY in screen pixels".to_owned(),
             "room_run" => "`#+ room_run` takes a class its room gives and three pieces, left, middle and right, `-` for none".to_owned(),
             "" => "it says nothing after `#+`".to_owned(),
-            w => format!("no page knows `#+ {w}`; the lines are `#+ hud_over`, `#+ in` and the room lines (`#+ room`, `room_cells`, `room_fill`, `room_run`, `room_box`)"),
+            w => format!("no page knows `#+ {w}`; the lines are `#+ hud_over`, `#+ in` and the room lines (`#+ room`, `room_cells`, `room_fill`, `room_run`, `room_box`, `room_at`)"),
         };
         r.add(
             Group::Files,

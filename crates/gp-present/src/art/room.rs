@@ -22,7 +22,9 @@
 //!   (50 when not given) of its pixels pass all of them.
 //! - `#+ room_fill CLASS PIECE`: the piece repeated over the class's cells
 //!   at its own size (`stage_piece`'s `W H`, in stage pixels) from the
-//!   screen's top left, cut to the cells.
+//!   screen's top left, cut to the cells. A piece one cell square is laid
+//!   cell by cell instead, mirrored where the board mirrors the cell's
+//!   tile, so a piece for each tile code skins a room tile for tile.
 //! - `#+ room_run CLASS LEFT MID RIGHT`: on each group of the class's cells
 //!   (cells side by side or one above the other), over its box, `LEFT` at
 //!   its left end, `RIGHT` at its right end and `MID` repeated between,
@@ -30,6 +32,14 @@
 //!   none. A counter, a bar, a shelf.
 //! - `#+ room_box CLASS PIECE`: the piece over each group's box. A door, a
 //!   tap, a sign.
+//! - `#+ room_at CLASS PIECE DX DY`: the piece at its own size at each of
+//!   the class's cells, its top left `DX DY` screen pixels from the cell's
+//!   (either may be negative). A class of one tile that each door or cask
+//!   has once, as its anchor, places a whole door or cask where the
+//!   original draws it, however its cells touch another's. Where the board
+//!   mirrors the anchor's tile left to right, the piece is mirrored and
+//!   its offset with it, so a room the game draws mirrored needs no rules
+//!   of its own.
 //!
 //! The pieces are drawn in the order of their lines, the last on top, over
 //! the stage's backdrop.
@@ -54,6 +64,9 @@ pub struct Cell {
     pub bank: u8,
     pub prio: u8,
     pub colors: Vec<[u8; 3]>,
+    /// Whether the board draws the tile mirrored, left to right and top
+    /// to bottom.
+    pub flip: [bool; 2],
 }
 
 /// A class of cells (`#+ room_cells`).
@@ -76,6 +89,8 @@ pub enum Lay {
     /// Left, middle, right.
     Run([Option<String>; 3]),
     Box(String),
+    /// A piece at each cell, offset in screen pixels.
+    At(String, [i64; 2]),
 }
 
 /// A rule laying pieces on a class's cells, with its line in the rules.
@@ -91,7 +106,7 @@ impl Place {
     #[must_use]
     pub fn pieces(&self) -> Vec<&str> {
         match &self.lay {
-            Lay::Fill(p) | Lay::Box(p) => vec![p],
+            Lay::Fill(p) | Lay::Box(p) | Lay::At(p, _) => vec![p],
             Lay::Run(r) => r.iter().flatten().map(String::as_str).collect(),
         }
     }
@@ -175,7 +190,7 @@ impl RoomRules {
                 room.classes.push(c);
             }
             [
-                k @ ("room_fill" | "room_run" | "room_box"),
+                k @ ("room_fill" | "room_run" | "room_box" | "room_at"),
                 class,
                 pieces @ ..,
             ] => {
@@ -187,6 +202,10 @@ impl RoomRules {
                 let lay = match (*k, pieces) {
                     ("room_fill", [p]) if *p != "-" => Lay::Fill((*p).to_owned()),
                     ("room_box", [p]) if *p != "-" => Lay::Box((*p).to_owned()),
+                    ("room_at", [p, dx, dy]) if *p != "-" => Lay::At(
+                        (*p).to_owned(),
+                        [dx.parse().map_err(|_| ())?, dy.parse().map_err(|_| ())?],
+                    ),
                     ("room_run", [l, m, r]) => {
                         let run = [piece(l), piece(m), piece(r)];
                         if run.iter().all(Option::is_none) {
@@ -382,6 +401,15 @@ pub fn build(st: &StageRules, r: &RoomRules, cells: &Cells) -> Room {
                 let Some((p, [tw, th])) = piece(p) else {
                     continue;
                 };
+                if tw == side && th == side {
+                    for (i, _) in grid.iter().enumerate().filter(|(_, c)| **c) {
+                        let (x, y) = ((i % cols) as i64 * side, (i / cols) as i64 * side);
+                        let mut d = StageDraw::piece(p, x, y, side, side);
+                        d.flip_x = cells.cells[i].flip[0];
+                        out.draws.push(d);
+                    }
+                    continue;
+                }
                 for b in rects(grid, cols, rows) {
                     let [x0, y0, x1, y1] = px(b);
                     let clip = [x0, y0, x1 - x0, y1 - y0];
@@ -404,6 +432,25 @@ pub fn build(st: &StageRules, r: &RoomRules, cells: &Cells) -> Room {
                     let [x0, y0, x1, y1] = px(b);
                     out.draws
                         .push(StageDraw::piece(p, x0, y0, x1 - x0, y1 - y0));
+                }
+            }
+            Lay::At(p, [dx, dy]) => {
+                let Some((p, [w, h])) = piece(p) else {
+                    continue;
+                };
+                for (i, _) in grid.iter().enumerate().filter(|(_, c)| **c) {
+                    let (x, y) = ((i % cols) as i64 * side, (i / cols) as i64 * side);
+                    let mirror = cells.cells[i].flip[0];
+                    // Mirrored, the piece's left edge mirrors about the
+                    // cell's middle.
+                    let x = if mirror {
+                        x + side - dx * s - w
+                    } else {
+                        x + dx * s
+                    };
+                    let mut d = StageDraw::piece(p, x, y + dy * s, w, h);
+                    d.flip_x = mirror;
+                    out.draws.push(d);
                 }
             }
             Lay::Run([l, m, rr]) => {
@@ -495,6 +542,7 @@ mod tests {
             bank,
             prio: 0,
             colors: vec![c; 4],
+            flip: [false; 2],
         };
         let mut cells = vec![cell(1, 0, [90, 90, 90]); 8 * 6];
         for x in 2..7 {
@@ -539,6 +587,8 @@ mod tests {
             "room_fill nothing wall",
             "room_run bar - - -",
             "room_box bar",
+            "room_at bar door 1",
+            "room_at bar door x 0",
         ] {
             let w: Vec<&str> = bad.split_whitespace().collect();
             assert_eq!(
@@ -626,6 +676,65 @@ mod tests {
             .map(|d| [d.x, d.y, d.w, d.h])
             .collect();
         assert_eq!(boxes, [[0, 32, 32, 64], [64, 96, 160, 32]]);
+    }
+
+    #[test]
+    fn a_piece_at_each_anchor_cell_keeps_its_size_and_offset() {
+        let (st, r) = rules(&["room s", "room_cells door tile=3", "room_at door door -4 2"]);
+        assert_eq!(r.places[0].lay, Lay::At("door".into(), [-4, 2]));
+        let room = build(&st, &r, &screen());
+        assert_eq!(room.cells, [2]);
+        let at: Vec<[i64; 4]> = room
+            .stage
+            .draws
+            .iter()
+            .map(|d| [d.x, d.y, d.w, d.h])
+            .collect();
+        // Cells (0, 1) and (0, 2) at scale 2, moved -8, 4 stage pixels;
+        // the door's own 40 by 80 each time, though the cells touch.
+        assert_eq!(at, [[-8, 36, 40, 80], [-8, 68, 40, 80]]);
+        // The same door mirrored: its right edge 8 past the cell's right.
+        let mut cells = screen();
+        cells.cells[8].flip[0] = true;
+        let room = build(&st, &r, &cells);
+        let d = &room.stage.draws[0];
+        assert_eq!([d.x, d.y, d.w, d.h], [32 + 8 - 40, 36, 40, 80]);
+        assert!(d.flip_x && !room.stage.draws[1].flip_x);
+    }
+
+    #[test]
+    fn a_tile_sized_fill_goes_cell_by_cell_and_mirrors_with_the_board() {
+        let mut st = None;
+        for l in [
+            "stage 2 10 10 10 20 20 20",
+            "stage_piece t pieces/t.png 32 32",
+        ] {
+            let w: Vec<&str> = l.split_whitespace().collect();
+            StageRules::line(&mut st, &w).unwrap();
+        }
+        let st = st.unwrap();
+        let mut rooms = Vec::new();
+        for l in ["room s", "room_cells bar tile=2", "room_fill bar t"] {
+            let w: Vec<&str> = l.split_whitespace().collect();
+            RoomRules::line(&mut rooms, Some(&st), &w, 1).unwrap();
+        }
+        let mut cells = screen();
+        cells.cells[3 * 8 + 4].flip[0] = true;
+        let room = build(&st, &rooms[0], &cells);
+        let d = &room.stage.draws;
+        assert_eq!(d.len(), 5);
+        assert!(
+            d.iter()
+                .all(|d| d.w == 32 && d.h == 32 && d.y == 96 && d.clip.is_none())
+        );
+        assert_eq!(
+            d.iter().map(|d| d.x).collect::<Vec<_>>(),
+            [64, 96, 128, 160, 192]
+        );
+        assert_eq!(
+            d.iter().map(|d| d.flip_x).collect::<Vec<_>>(),
+            [false, false, true, false, false]
+        );
     }
 
     #[test]

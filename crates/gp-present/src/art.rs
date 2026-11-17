@@ -60,8 +60,8 @@
 //!   elsewhere the picture's other rules, as before. The regions are named
 //!   in the game's kit and given with [`Art::set_regions`]; until then no
 //!   `in` rule holds.
-//! - `#+ room SCREEN...`, `#+ room_cells`, `#+ room_fill`, `#+ room_run`
-//!   and `#+ room_box`: an arcade game's screens built from the stage's
+//! - `#+ room SCREEN...`, `#+ room_cells`, `#+ room_fill`, `#+ room_run`,
+//!   `#+ room_box` and `#+ room_at`: an arcade game's screens built from the stage's
 //!   pieces on the cells of the screen the player's lift gives
 //!   ([`room`]). The runtime gives each screen's cells with
 //!   [`Art::build_room`].
