@@ -140,6 +140,14 @@ stage_piece door pieces/door.png 40 64
 
 Cells are 16 board pixels square, so a slanted edge becomes a staircase of cells. A page built before these lines draws the board's own screen there. `gp theme look check` builds every room from your romset as the page does. A room line whose class finds no cell on a screen the game shows is a problem: change the class's tests until it finds the cells you mean.
 
+To see what your tests match, print a screen's cells:
+
+```sh
+gp theme look cells . --game tapper --screen screen_saloon
+```
+
+It prints the screen's 32 by 30 cells from your romset. Each cell reads `TILE.BANK` (the tile code in hex and the colour bank) and then the first letter of the class your rules put it in, or `.` for none. Each class's count follows the grid. Tile codes are the surest test: a counter top uses a few tiles of its own, and so does a door or a sign. Like the sheet, it comes from your ROM's game: keep it off any repo.
+
 ### Start it
 
 ```sh

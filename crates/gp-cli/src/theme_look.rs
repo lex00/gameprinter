@@ -15,7 +15,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::Subcommand;
 use gp_evidence::Paths;
 use gp_model::Model;
@@ -44,6 +44,27 @@ pub enum LookCmd {
         /// The game: its folder, or its name in the games checkout.
         #[arg(long)]
         game: PathBuf,
+        /// Your ROM of the game (default: one under $GP_ROM_DIR the game
+        /// accepts).
+        #[arg(long)]
+        rom: Option<PathBuf>,
+    },
+    /// An arcade room's cells as its `#+ room` rules see them: a grid of the
+    /// screen's 32 by 30 cells from your own romset, each with its tile code
+    /// in hex and its colour bank, and the class its rules put it in (the
+    /// class's first letter, `.` for none), with the classes' letters
+    /// listed. For writing `#+ room_cells` tests; printed only, never
+    /// written to a repo.
+    Cells {
+        /// The theme's folder (holding package.toml and theme/), or its
+        /// theme/ folder.
+        dir: PathBuf,
+        /// The game: its folder, or its name in the games checkout.
+        #[arg(long)]
+        game: PathBuf,
+        /// The screen, by its slot (`gp theme look sheet` lists them).
+        #[arg(long)]
+        screen: String,
         /// Your ROM of the game (default: one under $GP_ROM_DIR the game
         /// accepts).
         #[arg(long)]
@@ -123,6 +144,12 @@ pub enum LookCmd {
 pub(crate) fn run(cmd: &LookCmd, paths: &Paths) -> Result<Outcome> {
     match cmd {
         LookCmd::Check { dir, game, rom } => check(dir, game, rom.as_deref(), paths),
+        LookCmd::Cells {
+            dir,
+            game,
+            screen,
+            rom,
+        } => cells(dir, game, screen, rom.as_deref(), paths),
         LookCmd::New {
             dir,
             game,
@@ -717,6 +744,79 @@ pub(crate) fn check(
     // A theme copy's journey keeps its last check (crate::journeys).
     crate::journeys::note_check(&paths.home, dir, &out.json);
     Ok(out)
+}
+
+/// `gp theme look cells`: a screen's cells and the classes the theme's
+/// room rules put them in.
+fn cells(
+    dir: &Path,
+    game_arg: &Path,
+    screen: &str,
+    rom: Option<&Path>,
+    paths: &Paths,
+) -> Result<Outcome> {
+    let game = game_of(game_arg)?;
+    let built = build(&game, rom, paths).map_err(|e| anyhow!(e))?;
+    let a = built.board_art.as_ref().ok_or_else(|| {
+        anyhow!(
+            "{} isn't drawn by an arcade board's art, so it has no rooms",
+            game.title
+        )
+    })?;
+    let cells = a
+        .screen_cells(screen)
+        .ok_or_else(|| anyhow!("{} shows no screen {screen}", game.title))?;
+    let folder = Folder::of(dir);
+    let text = fs::read_to_string(folder.theme.join(ART_FILE_DEFAULT)).unwrap_or_default();
+    let rules = ArtRules::read(&text).map_err(|e| anyhow!("{}: {e}", ART_FILE_DEFAULT))?;
+    let room = rules
+        .rooms
+        .iter()
+        .find(|r| r.screens.iter().any(|s| s == screen));
+    let classes = room.map(|r| gp_present::art::room::classify(r, &cells));
+    let mut text = format!(
+        "{screen}: {} by {} cells of {} board pixels; each cell is TILE.BANK then its class{}\n",
+        cells.cols,
+        cells.rows,
+        cells.size,
+        if room.is_none() {
+            " (no `#+ room` line names this screen, so none)"
+        } else {
+            ""
+        }
+    );
+    let letter = |i: usize| -> char {
+        match (room, &classes) {
+            (Some(r), Some(c)) => c
+                .iter()
+                .position(|g| g[i])
+                .and_then(|k| r.classes[k].name.chars().next())
+                .unwrap_or('.'),
+            _ => '.',
+        }
+    };
+    for row in 0..cells.rows {
+        let line: Vec<String> = (0..cells.cols)
+            .map(|col| {
+                let i = row * cells.cols + col;
+                let c = &cells.cells[i];
+                format!("{:03x}.{}{}", c.tile, c.bank, letter(i))
+            })
+            .collect();
+        let _ = writeln!(text, "{row:2} {}", line.join(" "));
+    }
+    if let (Some(r), Some(c)) = (room, &classes) {
+        for (k, cl) in r.classes.iter().enumerate() {
+            let n = c[k].iter().filter(|b| **b).count();
+            let _ = writeln!(
+                text,
+                "{}: {} ({n} cells)",
+                cl.name.chars().next().unwrap_or('?'),
+                cl.name
+            );
+        }
+    }
+    Ok(Outcome::ok(json!({ "screen": screen }), text))
 }
 
 /// The check on a theme folder with the game's build (or why there is

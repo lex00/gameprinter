@@ -241,7 +241,8 @@ pub struct Room {
 }
 
 /// Each class's cells, by class, as a grid of `cols` by `rows`.
-fn classify(r: &RoomRules, cells: &Cells) -> Vec<Vec<bool>> {
+#[must_use]
+pub fn classify(r: &RoomRules, cells: &Cells) -> Vec<Vec<bool>> {
     let mut out: Vec<Vec<bool>> = Vec::with_capacity(r.classes.len());
     for c in &r.classes {
         let not: Vec<usize> = c
