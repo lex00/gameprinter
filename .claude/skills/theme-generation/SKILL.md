@@ -52,7 +52,7 @@ A skin swaps art for the picture the game draws on each frame, so the game must 
 
 ## 6. Paid art, after the person's yes
 
-Order: a style board, then one approved cell per character, then every cell with the approved cell as its only character reference, then the stage or room pieces, then the lettering. Test one cell at game size in the game (step 8) before paying for a sheet. See "Paying for calls" below; ~/.gameprinter/notes/clay/RUNWAY-NOTES.md has what each model did in the clay run and its cost. Read it first and add what you learn.
+Order (the owner's, 2026-11-16): a style board; then the scenery, every stage or room's pieces, built and shown in the game; then the objects (props, pickups, hazards, the HUD's lettering); and the characters last, one approved cell per character, then every cell with the approved cell as its only character reference. The characters are drawn to fit the finished rooms. Test one cell at game size in the game (step 8) before paying for a sheet. See "Paying for calls" below; ~/.gameprinter/notes/clay/RUNWAY-NOTES.md has what each model did in the clay run and its cost. Read it first and add what you learn.
 
 What worked:
 
