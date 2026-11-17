@@ -1031,6 +1031,7 @@ fn the_yes(
 fn dry_run_cost(config: &Config, c: &CommandDef, path: &str, argv: &[String]) -> Option<String> {
     let mut cmd = Command::new(&config.gp);
     cmd.env(crate::CALLER_ENV, "mcp");
+    cmd.env("GP_NO_HINTS", "1");
     if c.json {
         cmd.arg("--json");
     }

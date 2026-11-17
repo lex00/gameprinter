@@ -221,6 +221,9 @@ pub fn run_gp(config: &Config, args: &[&std::ffi::OsStr]) -> Result<(i32, Value)
         .arg("--json")
         .args(args)
         .env(CALLER_ENV, "mcp")
+        // The tool's own answer says the step; gp's hint would only crowd
+        // its stderr, which an exit 2 returns as the error.
+        .env("GP_NO_HINTS", "1")
         .env("GP_STORE", config.store())
         .stdin(std::process::Stdio::null())
         .output()

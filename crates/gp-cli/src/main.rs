@@ -71,6 +71,7 @@ mod gate_append;
 mod gate_copy;
 mod gate_queue;
 mod harvest;
+mod hints;
 mod hook_closure;
 mod host;
 mod hosted;
@@ -1944,6 +1945,8 @@ fn main() -> ExitCode {
     // Every run is recorded (gp-metrics), as game-printer did.
     let name = runrec::command_name(&matches);
     runrec::start(&name);
+    // Which workflow and step the command is, on stderr (GP_NO_HINTS=1 hides it).
+    hints::print(&name);
     // Every reader of a recording or an input log asks the sealed-run guard.
     if let Ok(p) = gp_evidence::Paths::from_env() {
         sealed::install(&p.home);

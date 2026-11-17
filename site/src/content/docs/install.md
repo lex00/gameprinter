@@ -184,6 +184,16 @@ The `env` line is only needed when your ROMs aren't in `~/.gameprinter/roms`. On
 - To make a theme: [Themes and levels](../themes/) has a prompt to hand your agent.
 - To put your game or theme online: [Host your game or theme](../host-your-own/) has one too. For the upload your agent uses wrangler, which is Cloudflare's own tool. It asks you to log in once.
 
+### Hints
+
+A command that is a step of a workflow says so first, on stderr. The hint names the step and the skill or MCP tool behind it, then what usually comes next. `gp theme sheet` starts with this:
+
+```
+hint: gp theme sheet belongs to the theme procedure, step 5 of 9, grids and prompts (skill theme-generation; MCP next). Next: paid art after the person's yes (step 6), then gp theme fit (step 7).
+```
+
+The workflows are the skills in the repo's `.claude/skills` and the pages on this site. stdout and `--json` output don't change. Set `GP_NO_HINTS=1` to turn the hints off.
+
 ## Build it from source
 
 Do this if you want to change `gp` itself, or if there's no download for your machine yet.
@@ -215,5 +225,6 @@ Day-to-day work happens on a Mac, where it's built and tested. It also compiles 
 | `GP_HOME` | `~/.gameprinter` | Built tools and working files, and the files a released `gp` unpacks the first time it needs them |
 | `GP_ROM_DIR` | `~/.gameprinter/roms` | Your own ROMs, read by hash whatever they're called |
 | `GP_GAMES_DIR` | none | A folder of game folders, so a game can be named by its name |
+| `GP_NO_HINTS` | unset | Set to 1 to stop the workflow hint a command prints first on stderr |
 
 Read the [ROM rules](../rom-rules/) before you use a ROM with the tool.
