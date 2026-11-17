@@ -188,6 +188,32 @@ pub fn sprite_bytes(x: i32, y: i32) -> (u8, u8) {
 /// nothing yet hides every sprite under it, so the tile shows through
 /// there: such a pixel isn't in the mask, since what shows is the tile.
 pub fn draw(gfx: &Gfx, videoram: &[u8], spriteram: &[u8], flip: bool, pens: &mut [u8]) {
+    draw_inner(gfx, videoram, spriteram, flip, pens, None);
+}
+
+/// [`draw`], and in `masked` (one a pixel) each pixel a sprite's mask
+/// covers: a pixel that shows the tile because a sprite hid what was under
+/// it, so the tile there is part of the sprite's look (a glass that shows
+/// the room through it).
+pub fn draw_masked(
+    gfx: &Gfx,
+    videoram: &[u8],
+    spriteram: &[u8],
+    flip: bool,
+    pens: &mut [u8],
+    masked: &mut [bool],
+) {
+    draw_inner(gfx, videoram, spriteram, flip, pens, Some(masked));
+}
+
+fn draw_inner(
+    gfx: &Gfx,
+    videoram: &[u8],
+    spriteram: &[u8],
+    flip: bool,
+    pens: &mut [u8],
+    mut masked: Option<&mut [bool]>,
+) {
     let mut pri = vec![0u8; WIDTH * HEIGHT];
 
     // The tilemap, 32x30 tiles of 16x16, each pixel opaque. MAME draws it
@@ -256,6 +282,8 @@ pub fn draw(gfx: &Gfx, videoram: &[u8], spriteram: &[u8], flip: bool, pens: &mut
                             pri[at] = 0xff;
                             if pix & 0x07 != 0 {
                                 pens[at] = pix | SPRITE_BIT;
+                            } else if let Some(m) = masked.as_deref_mut() {
+                                m[at] = true;
                             }
                         }
                     }

@@ -831,7 +831,7 @@ impl BoardArt {
     /// [`BoardArt::draw`] with what a theme draws itself left out
     /// (`omit`): those bodies' sprite entries, the counters' cells (the
     /// screen's own words there), and with the screen every pixel no
-    /// sprite drew as [`TRANSPARENT`], but for the counters' cells still
+    /// sprite drew (or showed through its mask) as [`TRANSPARENT`], but for the counters' cells still
     /// drawn, whose pixels of colour 0 in their bank are transparent and
     /// the rest kept. `drawn` and `cells` still list everything, as the
     /// frame would draw it whole. Omitting nothing draws [`BoardArt::draw`]'s
@@ -973,7 +973,8 @@ impl BoardArt {
             });
         }
         let mut pens = vec![0u8; video::WIDTH * video::HEIGHT];
-        video::draw(&self.gfx, &videoram, &ram, false, &mut pens);
+        let mut masked = vec![false; video::WIDTH * video::HEIGHT];
+        video::draw_masked(&self.gfx, &videoram, &ram, false, &mut pens, &mut masked);
         if omit.screen {
             let mut kept = vec![false; 960];
             for (k, c) in cells.iter().enumerate() {
@@ -982,7 +983,9 @@ impl BoardArt {
                 }
             }
             for (i, p) in pens.iter_mut().enumerate() {
-                if *p & video::SPRITE_BIT != 0 {
+                // A sprite's own pixels, and the screen a sprite's mask
+                // shows through it, stay the board's.
+                if *p & video::SPRITE_BIT != 0 || masked[i] {
                     continue;
                 }
                 let cell = (i / video::WIDTH / 16) * 32 + (i % video::WIDTH) / 16;
@@ -1352,21 +1355,24 @@ impl BoardArt {
                 order[d.body] = (ENTRIES - d.entry) as u32;
             }
         }
-        // Every counter cell by its name; one the names lack (none do) is
-        // drawn by the board.
+        // Every counter cell by its name; one the names lack (a text's
+        // letters) is drawn by the board.
         let mut cells = Vec::new();
         let mut cell_of = Vec::new();
+        let mut unnamed = vec![false; full.cells.len()];
         for (k, c) in full.cells.iter().enumerate() {
-            if let Some(p) = pic(&c.name) {
-                cells.push(gp_present::Draw {
-                    pic: p,
-                    x: (c.cell % 32) as i64 * 16,
-                    y: (c.cell / 32) as i64 * 16,
-                    flip_x: false,
-                    flip_y: false,
-                });
-                cell_of.push(k);
-            }
+            let Some(p) = pic(&c.name) else {
+                unnamed[k] = true;
+                continue;
+            };
+            cells.push(gp_present::Draw {
+                pic: p,
+                x: (c.cell % 32) as i64 * 16,
+                y: (c.cell / 32) as i64 * 16,
+                flip_x: false,
+                flip_y: false,
+            });
+            cell_of.push(k);
         }
         let level = full.screen.as_deref().and_then(pic);
         let scene = gp_present::Scene {
@@ -1406,7 +1412,7 @@ impl BoardArt {
             .frame(&theme.art, &theme.present, &framed, SCREEN_SIZE[1]);
         // What the board still draws: what the theme left as the game's own.
         let mut keep_body = vec![false; n];
-        let mut keep_cell = vec![false; full.cells.len()];
+        let mut keep_cell = unnamed;
         let mut keep_screen = false;
         for d in &f.draws {
             if !matches!(d.src, Src::Own(_)) {
@@ -1467,7 +1473,7 @@ mod tests {
     use super::*;
 
     /// A made-up arcade lift: 1024 tiles, tile 1 all value 5; 4 sprites,
-    /// sprite 2 all value 3, sprite 3 all value 2; a screen of tile 1 in colour bank 1; a
+    /// sprite 1 a mask on its left half, sprite 2 all value 3, sprite 3 all value 2; a screen of tile 1 in colour bank 1; a
     /// palette whose entry n is n. No game's bytes.
     fn lift(dir: &Path) {
         let map = "schema = 1\nplatform = \"arcade\"\nsource = \"cab\"\nsets = [\"cab\"]\n\n\
@@ -1500,6 +1506,11 @@ mod tests {
         for y in 0..32 {
             for x in 64..96 {
                 s[y * sw as usize + x] = 3;
+            }
+            // Sprite 1: its left half a mask (value 8: it draws nothing
+            // and shows the tile through).
+            for x in 32..48 {
+                s[y * sw as usize + x] = 8;
             }
             // Sprite 3: value 2, for a second body.
             for x in 96..128 {
@@ -2291,6 +2302,32 @@ asset = "stage2"
         assert_eq!(at(300, 100), 0x02 | video::SPRITE_BIT);
     }
 
+    /// Under a themed screen, where a board sprite's mask shows the tile
+    /// through it (a glass the room shows through), the board's tile stays:
+    /// the sprite looks as the board draws it, whatever the theme's room.
+    #[test]
+    fn a_sprites_mask_keeps_the_boards_screen_under_a_themed_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, art, mut w) = two_bodies(dir.path());
+        w.bodies.truncate(1);
+        w.bodies[0].ext[1] = 0x0103;
+        let plain = art.draw(&w, &[true], &[u32::MAX]).unwrap();
+        let mut theme = art
+            .theme("gp-art 1\nscale 2\npic stage saloon.png 512 480 0 0\n")
+            .unwrap();
+        let t = art.themed(&mut theme, &w, &[true], &[u32::MAX]).unwrap();
+        let mut kept = 0;
+        for (a, b) in t.picture.pens.iter().zip(&plain.pens) {
+            if *a != TRANSPARENT {
+                assert_eq!(a, b);
+                assert_eq!(*a, 16 + 5, "the screen's tile 1 in bank 1");
+                kept += 1;
+            }
+        }
+        // The mask's 16 columns by 32 rows, each a pixel of the board.
+        assert_eq!(kept, 16 * 32);
+    }
+
     /// A counter's digit drawn by the theme: the cell is the screen's own
     /// in the board's picture, and the theme's digit goes there.
     #[test]
@@ -2323,6 +2360,34 @@ asset = "stage2"
         let at = |p: &Picture, x: usize, y: usize| p.pens[y * video::WIDTH + x];
         assert_eq!(at(&t.picture, 4 * 16, 16), 16 + 5);
         assert_eq!(at(&t.picture, 3 * 16, 16), at(&plain, 3 * 16, 16));
+    }
+
+    /// A text's letters have no name a theme can give, so a theme that
+    /// draws other cells leaves them the board's: the words still show.
+    #[test]
+    fn a_text_stays_the_boards_under_a_theme_of_other_cells() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, spec, art) = with_looks_and_counters(dir.path());
+        let c = |n: &str| spec.counters.index_of(n).unwrap();
+        let mut w = World {
+            counters: vec![0; spec.counters.len()],
+            ..Default::default()
+        };
+        w.counters[c("score")] = 120;
+        w.counters[c("bar")] = 2;
+        let plain = art.draw(&w, &[], &[]).unwrap();
+        assert!(plain.cells.iter().any(|x| x.name.starts_with("text-")));
+        let mut theme = art
+            .theme("gp-art 1\npic counter-score-2 two.png 16 16 0 0\n")
+            .unwrap();
+        let t = art.themed(&mut theme, &w, &[], &[]).unwrap();
+        let at = |p: &Picture, x: usize, y: usize| p.pens[y * video::WIDTH + x];
+        for col in 4..8 {
+            for (dx, dy) in [(0, 0), (5, 7), (11, 3)] {
+                let (x, y) = (col * 16 + dx, 5 * 16 + dy);
+                assert_eq!(at(&t.picture, x, y), at(&plain, x, y), "cell ({col}, 5)");
+            }
+        }
     }
 
     /// A `timed` rule counts the frames a body has shown its picture, one
