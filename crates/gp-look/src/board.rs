@@ -112,6 +112,8 @@ struct Number {
 /// A string drawn while counters say so: each character's cell and word.
 #[derive(Clone)]
 struct Text {
+    /// Its slot, as a theme's `text_say` names it.
+    name: String,
     /// Each character's cell and its two bytes.
     cells: Vec<(usize, [u8; 2])>,
     when: Vec<Test>,
@@ -216,7 +218,7 @@ impl LevelBoard {
         }
         let mut v = videoram.to_vec();
         let mut drawn = Vec::new();
-        let mut put = |cell: usize, word: [u8; 2], name: String| {
+        let mut put = |cell: usize, word: [u8; 2], name: String, text: Option<(usize, usize)>| {
             let left = omit.is_some_and(|o| o.get(drawn.len()).copied().unwrap_or(false));
             if !left && let Some(c) = v.get_mut(cell * 2..cell * 2 + 2) {
                 c.copy_from_slice(&word);
@@ -225,7 +227,7 @@ impl LevelBoard {
                 // A cell written again shows its last word, as the board's
                 // video RAM does: only that one is drawn.
                 drawn.retain(|d: &CellDrawn| d.cell != cell);
-                drawn.push(CellDrawn { name, cell });
+                drawn.push(CellDrawn { name, cell, text });
             }
         };
         let value = |counter: usize, plus: i64| {
@@ -257,18 +259,24 @@ impl LevelBoard {
                     n.cell + k,
                     [n.codes[*d as usize], n.high],
                     counter_name(&n.name, Some(*d)),
+                    None,
                 );
             }
         }
         for r in self.repeats.iter().filter(|r| Test::all(&r.when, w)) {
             let count = value(r.counter, r.plus) as usize;
             for &cell in r.cells.iter().take(count) {
-                put(cell, r.word, counter_name(&r.name, None));
+                put(cell, r.word, counter_name(&r.name, None), None);
             }
         }
-        for t in self.texts.iter().filter(|t| Test::all(&t.when, w)) {
-            for &(cell, word) in &t.cells {
-                put(cell, word, letter_name(word));
+        for (ti, t) in self
+            .texts
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| Test::all(&t.when, w))
+        {
+            for (ci, &(cell, word)) in t.cells.iter().enumerate() {
+                put(cell, word, letter_name(word), Some((ti, ci)));
             }
         }
         (std::borrow::Cow::Owned(v), drawn)
@@ -281,6 +289,9 @@ impl LevelBoard {
 pub struct CellDrawn {
     pub name: String,
     pub cell: usize,
+    /// For a text's letter: the text (its place in the level's texts) and
+    /// the letter's place in it.
+    pub text: Option<(usize, usize)>,
 }
 
 /// The name a theme gives a sprite of the board: its entity and its
@@ -741,6 +752,7 @@ impl BoardArt {
                     }
                 }
                 texts.push(Text {
+                    name: t.text.slot.clone(),
                     cells,
                     when: tests(&t.when).map_err(at_t)?,
                 });
@@ -1385,19 +1397,81 @@ impl BoardArt {
                 order[d.body] = (ENTRIES - d.entry) as u32;
             }
         }
-        // Every counter cell by its name; one the names lack (a text's
-        // letters) is drawn by the board.
+        // Every counter cell by its name; one the names lack is drawn by
+        // the board. A text the theme words its own way (`#+ text_say`)
+        // takes its letters from those words, and one it centres
+        // (`#+ text_center`) moves as a line.
+        let texts = self
+            .levels
+            .get(w.level)
+            .and_then(Option::as_ref)
+            .map_or(&[][..], |l| &l.texts[..]);
+        let rules = &theme.art.rules;
+        let said = |ti: usize| {
+            texts
+                .get(ti)
+                .and_then(|t| rules.text_say.iter().find(|(slot, _)| *slot == t.name))
+                .map(|(_, words)| words.as_bytes())
+        };
+        let names: Vec<(String, bool)> = full
+            .cells
+            .iter()
+            .map(
+                |c| match c.text.and_then(|(ti, ci)| said(ti).map(|w| (w, ci))) {
+                    Some((w, ci)) => (letter_name([w.get(ci).copied().unwrap_or(b' '), 0]), true),
+                    None => (c.name.clone(), false),
+                },
+            )
+            .collect();
+        // Each text line's move, in pixels: its letters (not its spaces)
+        // centred between a rule's columns when all its cells lie there.
+        let mut shift: BTreeMap<(usize, usize), i64> = BTreeMap::new();
+        if !rules.text_center.is_empty() {
+            let mut lines: BTreeMap<(usize, usize), (i64, i64, i64, i64)> = BTreeMap::new();
+            for (c, (name, _)) in full.cells.iter().zip(&names) {
+                let Some((ti, _)) = c.text else { continue };
+                let (col, row) = ((c.cell % 32) as i64, c.cell / 32);
+                let e = lines
+                    .entry((ti, row))
+                    .or_insert((col, col, i64::MAX, i64::MIN));
+                e.0 = e.0.min(col);
+                e.1 = e.1.max(col);
+                if name != "letter-x020" {
+                    e.2 = e.2.min(col);
+                    e.3 = e.3.max(col);
+                }
+            }
+            for (k, (lo, hi, first, last)) in lines {
+                if first > last {
+                    continue;
+                }
+                if let Some([x0, x1]) = rules
+                    .text_center
+                    .iter()
+                    .find(|[x0, x1]| *x0 <= lo && hi <= *x1)
+                {
+                    shift.insert(k, ((x0 + x1) - (first + last)) * 8);
+                }
+            }
+        }
         let mut cells = Vec::new();
         let mut cell_of = Vec::new();
         let mut unnamed = vec![false; full.cells.len()];
-        for (k, c) in full.cells.iter().enumerate() {
-            let Some(p) = pic(&c.name) else {
-                unnamed[k] = true;
+        for (k, (c, (name, own_words))) in full.cells.iter().zip(&names).enumerate() {
+            let Some(p) = pic(name) else {
+                // A worded line's letter the theme has no picture for (a
+                // space) is drawn by neither.
+                unnamed[k] = !own_words;
                 continue;
             };
+            let dx = c
+                .text
+                .and_then(|(ti, _)| shift.get(&(ti, c.cell / 32)))
+                .copied()
+                .unwrap_or(0);
             cells.push(gp_present::Draw {
                 pic: p,
-                x: (c.cell % 32) as i64 * 16,
+                x: (c.cell % 32) as i64 * 16 + dx,
                 y: (c.cell / 32) as i64 * 16,
                 flip_x: false,
                 flip_y: false,
@@ -2400,6 +2474,51 @@ asset = "stage2"
         let at = |p: &Picture, x: usize, y: usize| p.pens[y * video::WIDTH + x];
         assert_eq!(at(&t.picture, 4 * 16, 16), 16 + 5);
         assert_eq!(at(&t.picture, 3 * 16, 16), at(&plain, 3 * 16, 16));
+    }
+
+    /// `#+ text_center` moves a text line so its letters sit centred
+    /// between the rule's columns; `#+ text_say` words a text the theme's
+    /// way, in its own cells, a space drawn by neither theme nor board.
+    #[test]
+    fn a_theme_centres_and_words_a_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, spec, art) = with_looks_and_counters(dir.path());
+        let mut w = World {
+            counters: vec![0; spec.counters.len()],
+            ..Default::default()
+        };
+        w.counters[spec.counters.index_of("bar").unwrap()] = 2;
+        let font = "gp-art 1\npic letter-H h.png 16 16 0 0\npic letter-I i.png 16 16 0 0\npic letter-J j.png 16 16 0 0\n";
+        let u = gp_present::art::ART_SUB;
+        let at = |t: &Themed| -> Vec<(i64, i64)> {
+            t.frame.draws.iter().map(|d| (d.x / u, d.y / u)).collect()
+        };
+        // "HI J" from column 4: letters 4 to 7, centred between 0 and 31.
+        let mut theme = art.theme(&format!("{font}#+ text_center 0 31\n")).unwrap();
+        let t = art.themed(&mut theme, &w, &[], &[]).unwrap();
+        let shift = (31 - (4 + 7)) * 8;
+        assert!(at(&t).contains(&(4 * 16 + shift, 5 * 16)), "{:?}", at(&t));
+        // Worded "IJ": I and J in the first two cells, the rest drawn by
+        // neither (the board's own letters left out).
+        let mut theme = art.theme(&format!("{font}#+ text_say words IJ\n")).unwrap();
+        let t = art.themed(&mut theme, &w, &[], &[]).unwrap();
+        let files: Vec<String> = t
+            .frame
+            .draws
+            .iter()
+            .filter_map(|d| match d.src {
+                gp_present::art::Src::Art(f) => Some(theme.art.files[f as usize].clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(files, ["i.png", "j.png"]);
+        let px = |x: usize, y: usize| t.picture.pens[y * video::WIDTH + x];
+        let plain = art.draw(&w, &[], &[]).unwrap();
+        // The H's cell isn't the board's H any more.
+        assert_ne!(
+            px(4 * 16 + 5, 5 * 16 + 7),
+            plain.pens[(5 * 16 + 7) * video::WIDTH + 4 * 16 + 5]
+        );
     }
 
     /// Two texts on the same cells (one message giving way to the next):

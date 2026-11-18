@@ -96,6 +96,8 @@ An arcade game such as Tapper is drawn by its board, and its theme uses the same
 | A repeated counter tile | `counter-NAME`, such as `counter-lives` | 16 by 16 |
 | A letter of the game's texts | `letter-A` to `letter-Z`, `letter-0` to `letter-9`, any other `letter-xNNN` by its tile code (`letter-x02e`): one picture redraws it in every text, a font | 16 by 16 |
 
+Two rules change how a board game's texts are drawn in your letters: `#+ text_center X0 X1` centres each text line that lies within columns X0 to X1 (cells of 16 pixels) between them, its spaces at either end left out, so lines the game padded unevenly sit in the middle; `#+ text_say SLOT WORDS...` draws the text with that slot in your letters as those words instead, in its own cells, for a line you word your own way (a space your letters lack is drawn by neither, so the room shows).
+
 Sizes and places are the board's picture's pixels, 512 by 480; `scale 2` draws the art at twice that. Which codes each entity shows comes from your own romset, never from the theme or the game's package:
 
 ```sh

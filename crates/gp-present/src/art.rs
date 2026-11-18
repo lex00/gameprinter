@@ -182,6 +182,14 @@ pub struct ArtRules {
     /// the screen's top (all of them with none named). None, the default,
     /// draws them under the bodies.
     pub hud_over: Option<Vec<i64>>,
+    /// `#+ text_center X0 X1`: a board game's text lines that lie within
+    /// columns X0 to X1 (cells of 16 pixels) drawn centred between them,
+    /// their spaces at either end left out.
+    pub text_center: Vec<[i64; 2]>,
+    /// `#+ text_say SLOT WORDS...`: a board game's text (by its slot) drawn
+    /// in the theme's letters as these words instead, in its own cells: a
+    /// line the theme words its own way.
+    pub text_say: Vec<(String, String)>,
     /// `#+ in REGION pic ...`: a picture drawn only while the body is in a
     /// named region of the stage.
     pub region_pics: Vec<(String, ArtPic)>,
@@ -212,6 +220,8 @@ impl Default for ArtRules {
             drift: None,
             stage: None,
             hud_over: None,
+            text_center: Vec::new(),
+            text_say: Vec::new(),
             region_pics: Vec::new(),
             region_timed: Vec::new(),
             rooms: Vec::new(),
@@ -289,6 +299,19 @@ impl ArtRules {
                     rows.sort_unstable();
                     rows.dedup();
                 }
+            }
+            ["text_center", x0, x1] => {
+                let (a, b) = (
+                    x0.parse::<i64>().map_err(|_| ())?,
+                    x1.parse::<i64>().map_err(|_| ())?,
+                );
+                if !(0..64).contains(&a) || !(a..64).contains(&b) {
+                    return Err(());
+                }
+                self.text_center.push([a, b]);
+            }
+            ["text_say", slot, words @ ..] if !words.is_empty() => {
+                self.text_say.push(((*slot).to_owned(), words.join(" ")));
             }
             ["in", region, rest @ ..] if region_name(region) => {
                 let mut one = ArtRules::default();
