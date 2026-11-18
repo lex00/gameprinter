@@ -59,7 +59,9 @@ pub fn open(bundle: &[u8], present: &[u8], packed: &[u8]) -> Result<Option<Compa
 
 /// A frame's picture as the page reads it: its width and height as
 /// little-endian u16s, each pixel's pen (0 to 63) row by row, then the 64
-/// colours as R, G, B, 255.
+/// colours as R, G, B, 255; then a theme's own colours (`#+ recolor`), pen
+/// 65 and on, which its recoloured pixels take (a page from before them
+/// reads the 64 and draws those pixels in the board's colours).
 pub fn picture_bytes(pic: &Picture) -> Vec<u8> {
     let mut out = Vec::with_capacity(4 + pic.pens.len() + 256);
     for n in [WIDTH, HEIGHT] {
@@ -68,6 +70,26 @@ pub fn picture_bytes(pic: &Picture) -> Vec<u8> {
     out.extend(pic.pens.iter().map(|p| p & 0x3f));
     for c in pic.palette {
         out.extend([(c >> 16) as u8, (c >> 8) as u8, c as u8, 255]);
+    }
+    let mut extra: Vec<[u8; 3]> = Vec::new();
+    for &(at, rgb) in &pic.recolor {
+        // Nothing: pen 64, which the page draws as nothing.
+        let Some(rgb) = rgb else {
+            out[4 + at as usize] = 64;
+            continue;
+        };
+        let k = match extra.iter().position(|c| *c == rgb) {
+            Some(k) => k,
+            None if extra.len() < 190 => {
+                extra.push(rgb);
+                extra.len() - 1
+            }
+            None => continue,
+        };
+        out[4 + at as usize] = 65 + k as u8;
+    }
+    for c in extra {
+        out.extend([c[0], c[1], c[2], 255]);
     }
     out
 }
@@ -253,6 +275,7 @@ mod tests {
             screen: None,
             stage: None,
             cells: Vec::new(),
+            recolor: Vec::new(),
         });
         assert_eq!(u16::from_le_bytes([b[0], b[1]]) as usize, WIDTH);
         assert_eq!(u16::from_le_bytes([b[2], b[3]]) as usize, HEIGHT);
@@ -260,6 +283,33 @@ mod tests {
         let pal = &b[4 + WIDTH * HEIGHT..];
         assert_eq!(&pal[20..24], &[0x12, 0x34, 0x56, 255]);
         assert_eq!(b.len(), 4 + WIDTH * HEIGHT + 256);
+    }
+
+    /// A recoloured pixel takes pen 65 and on, its colour after the 64.
+    #[test]
+    fn a_recolored_pixel_takes_a_colour_after_the_boards() {
+        let pens = vec![3u8 | 0x80; WIDTH * HEIGHT];
+        let pic = Picture {
+            pens,
+            palette: [0x102030; 64],
+            drawn: Vec::new(),
+            screen: None,
+            stage: None,
+            cells: Vec::new(),
+            recolor: vec![
+                (7, Some([1, 2, 3])),
+                (9, Some([4, 5, 6])),
+                (11, Some([1, 2, 3])),
+                (13, None),
+            ],
+        };
+        let b = picture_bytes(&pic);
+        assert_eq!(
+            (b[4 + 7], b[4 + 9], b[4 + 11], b[4 + 8], b[4 + 13]),
+            (65, 66, 65, 3, 64)
+        );
+        let pal = 4 + WIDTH * HEIGHT + 256;
+        assert_eq!(&b[pal..], &[1, 2, 3, 255, 4, 5, 6, 255]);
     }
 
     /// A themed frame's picture is the plain one's bytes but for the pens
@@ -275,6 +325,7 @@ mod tests {
             screen: Some("stage".into()),
             stage: None,
             cells: Vec::new(),
+            recolor: Vec::new(),
         };
         let mut d = gp_present::art::ArtFrame {
             size: [512, 480],

@@ -466,12 +466,16 @@ class BoardDraw {
     return BoardDraw.image(this.out());
   }
   // A picture's bytes as ImageData: its size, its pens and its 64 colours;
-  // pen 64 (left to a theme) draws nothing.
+  // pen 64 (left to a theme) draws nothing; the colours after the 64 are a
+  // theme's own (`#+ recolor`), pens 65 and on.
   static image(b) {
     const [w, h] = [b[0] | (b[1] << 8), b[2] | (b[3] << 8)];
-    const colors = new Uint32Array(65);
     const pal = 4 + w * h;
-    for (let i = 0; i < 64; i++) colors[i] = (b[pal + i * 4] | (b[pal + i * 4 + 1] << 8) | (b[pal + i * 4 + 2] << 16) | (0xff << 24)) >>> 0;
+    const extra = Math.max(0, Math.floor((b.length - pal - 256) / 4));
+    const colors = new Uint32Array(65 + extra);
+    const rgba = (o) => (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (0xff << 24)) >>> 0;
+    for (let i = 0; i < 64; i++) colors[i] = rgba(pal + i * 4);
+    for (let i = 0; i < extra; i++) colors[65 + i] = rgba(pal + 256 + i * 4);
     const img = new ImageData(w, h);
     const px = new Uint32Array(img.data.buffer);
     for (let i = 0; i < w * h; i++) px[i] = colors[b[4 + i]];

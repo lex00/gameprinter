@@ -371,6 +371,10 @@ pub struct Picture {
     /// (`screen_title-3`), which a theme can draw in place of the screen's.
     pub stage: Option<String>,
     pub cells: Vec<CellDrawn>,
+    /// Pixels a theme's `#+ recolor` draws in its own colours: each by its
+    /// place in `pens` and its colour, None for nothing (what is under it
+    /// shows).
+    pub recolor: Vec<(u32, Option<[u8; 3]>)>,
 }
 
 /// A pen in [`Picture::pens`] that draws nothing: the screen's pixels
@@ -1032,6 +1036,7 @@ impl BoardArt {
                 screen: look.screen.clone(),
                 stage: look.stage.clone(),
                 cells,
+                recolor: Vec::new(),
             });
         }
         let mut pens = vec![0u8; video::WIDTH * video::HEIGHT];
@@ -1063,6 +1068,7 @@ impl BoardArt {
             screen: look.screen.clone(),
             stage: look.stage.clone(),
             cells,
+            recolor: Vec::new(),
         })
     }
 
@@ -1397,6 +1403,61 @@ impl BoardArt {
         })
     }
 
+    /// The pixels `#+ recolor` gives its colours: of each sprite the board
+    /// draws whose name a rule gives, each pixel of a colour number the
+    /// rule names that the board drew from that sprite (its pen there).
+    fn recolored(
+        &self,
+        rules: &[gp_present::art::Recolor],
+        pic: &Picture,
+        omit: &Omit,
+    ) -> Vec<(u32, Option<[u8; 3]>)> {
+        let mut out = Vec::new();
+        if rules.is_empty() || pic.pens.is_empty() {
+            return out;
+        }
+        for d in &pic.drawn {
+            if omit.bodies.get(d.body).copied().unwrap_or(false) {
+                continue;
+            }
+            let name = sprite_name(&self.kind_names[d.kind], d.code);
+            let Some(sprite) = self.gfx.sprites.get(usize::from(d.code)) else {
+                continue;
+            };
+            // Every rule for the picture, each in its own box.
+            for rule in rules.iter().filter(|r| r.build == name) {
+                let color = ((!d.flags & 3) << 4) & 0x30;
+                let (hf, vf) = (d.flags & 0x10 != 0, d.flags & 0x20 != 0);
+                for y in 0..32usize {
+                    for x in 0..32usize {
+                        let (tx, ty) = (if hf { 31 - x } else { x }, if vf { 31 - y } else { y });
+                        let v = sprite[ty * 32 + tx];
+                        if let Some([x0, y0, x1, y1]) = rule.area
+                            && !((x0 as usize..=x1 as usize).contains(&tx)
+                                && (y0 as usize..=y1 as usize).contains(&ty))
+                        {
+                            continue;
+                        }
+                        let Some((_, rgb)) = rule.colors.iter().find(|(n, _)| *n == v) else {
+                            continue;
+                        };
+                        let (sx, sy) = (d.rect[0] + x as i64, d.rect[1] + y as i64);
+                        if !(0..video::WIDTH as i64).contains(&sx)
+                            || !(0..video::HEIGHT as i64).contains(&sy)
+                        {
+                            continue;
+                        }
+                        let at = sy as usize * video::WIDTH + sx as usize;
+                        if pic.pens[at] == (color | v) | video::SPRITE_BIT {
+                            out.push((at as u32, *rgb));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// By body: whether every pixel its sprites draw has the colour the
     /// screen has there without sprites, so the board shows nothing of it
     /// (a body with no sprite drawn is not unseen, nor one with a mask
@@ -1659,12 +1720,13 @@ impl BoardArt {
                 _ => draws.push(d.clone()),
             }
         }
-        let picture =
+        let mut picture =
             if omit.screen || omit.bodies.iter().any(|b| *b) || omit.cells.iter().any(|c| *c) {
                 self.draw_omitting(w, shown, rank, &omit)?
             } else {
                 full
             };
+        picture.recolor = self.recolored(&theme.art.rules.recolor, &picture, &omit);
         Some(Themed {
             picture,
             frame: gp_present::art::ArtFrame { draws, ..f },
@@ -2580,6 +2642,55 @@ asset = "stage2"
         let plain = art.draw(&w, &[true], &[u32::MAX]).unwrap();
         assert_eq!(t.picture.drawn.len(), plain.drawn.len());
         assert!(!art.unseen(&w, &[true], &[u32::MAX], &plain)[0]);
+    }
+
+    /// `#+ recolor` gives a picture's pixels of a colour number the theme's
+    /// colour, where the board drew them, and leaves the rest the board's.
+    #[test]
+    fn a_recolor_gives_a_pictures_colour_the_themes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, art, mut w) = two_bodies(dir.path());
+        w.bodies.truncate(1);
+        // Picture 3: all value 2.
+        w.bodies[0].ext[1] = 0x0302;
+        let mut theme = art
+            .theme("gp-art 1\nscale 2\npic stage saloon.png 512 480 0 0\n#+ recolor sprite-player-03 2=c08040 7=ffffff\n")
+            .unwrap();
+        assert_eq!(theme.art.rules.recolor[0].build, "sprite-player-03");
+        assert_eq!(
+            theme.art.rules.recolor[0].colors,
+            vec![(2, Some([0xc0, 0x80, 0x40])), (7, Some([255, 255, 255]))]
+        );
+        let t = art.themed(&mut theme, &w, &[true], &[u32::MAX]).unwrap();
+        assert_eq!(t.picture.recolor.len(), 32 * 32);
+        assert!(
+            t.picture
+                .recolor
+                .iter()
+                .all(|(_, c)| *c == Some([0xc0, 0x80, 0x40]))
+        );
+        // `2=-`: drawn as nothing.
+        let mut theme = art
+            .theme("gp-art 1\nscale 2\npic stage saloon.png 512 480 0 0\n#+ recolor sprite-player-03 2=-\n")
+            .unwrap();
+        let t = art.themed(&mut theme, &w, &[true], &[u32::MAX]).unwrap();
+        assert!(t.picture.recolor.iter().all(|(_, c)| c.is_none()));
+        // `box=0,0,7,3`: only those of its pixels, 8 by 4.
+        let mut theme = art
+            .theme("gp-art 1\nscale 2\npic stage saloon.png 512 480 0 0\n#+ recolor sprite-player-03 box=0,0,7,3 2=-\n")
+            .unwrap();
+        let t = art.themed(&mut theme, &w, &[true], &[u32::MAX]).unwrap();
+        assert_eq!(t.picture.recolor.len(), 32);
+        // Two rules for one picture, each in its box: both hold.
+        let mut theme = art
+            .theme("gp-art 1\nscale 2\npic stage saloon.png 512 480 0 0\n#+ recolor sprite-player-03 box=0,0,7,3 2=-\n#+ recolor sprite-player-03 box=0,4,7,7 2=ffffff\n")
+            .unwrap();
+        let t = art.themed(&mut theme, &w, &[true], &[u32::MAX]).unwrap();
+        assert_eq!(t.picture.recolor.len(), 64);
+        // Another picture: no rule names it.
+        w.bodies[0].ext[1] = 0x0202;
+        let t = art.themed(&mut theme, &w, &[true], &[u32::MAX]).unwrap();
+        assert!(t.picture.recolor.is_empty());
     }
 
     /// A board game's model has no palettes of its own, so its look is

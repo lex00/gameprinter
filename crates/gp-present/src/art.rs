@@ -188,6 +188,14 @@ pub struct ArtRules {
     /// spaces at either end left out: `[X0, X1, Y0, Y1]`, rows 0 to 63
     /// when none are given.
     pub text_center: Vec<[i64; 4]>,
+    /// `#+ recolor BUILD N=RRGGBB...`: a board game's picture drawn as the
+    /// board draws it, each of its pixels of colour number N (1 to 15, the
+    /// picture's own numbers) in the colour given instead, or drawn as
+    /// nothing with `N=-` (what is under it shows): a part of a picture the
+    /// theme restyles where the rest (a hand on a lever) stays the game's,
+    /// pixel for pixel. `box=X0,Y0,X1,Y1` first keeps the rule to those of
+    /// the picture's own pixels (0 to 31, before any mirroring).
+    pub recolor: Vec<Recolor>,
     /// `#+ text_say SLOT WORDS...`: a board game's text (by its slot) drawn
     /// in the theme's letters as these words instead, in its own cells: a
     /// line the theme words its own way.
@@ -223,6 +231,7 @@ impl Default for ArtRules {
             stage: None,
             hud_over: None,
             text_center: Vec::new(),
+            recolor: Vec::new(),
             text_say: Vec::new(),
             region_pics: Vec::new(),
             region_timed: Vec::new(),
@@ -317,6 +326,47 @@ impl ArtRules {
                     return Err(());
                 }
                 self.text_center.push([a, b, c, d]);
+            }
+            ["recolor", build, rest @ ..] if !rest.is_empty() => {
+                let (area, pairs) = match rest {
+                    [b, more @ ..] if b.starts_with("box=") => {
+                        let v: Vec<u8> = b[4..]
+                            .split(',')
+                            .map(|n| n.parse::<u8>().map_err(|_| ()))
+                            .collect::<Result<_, _>>()?;
+                        let [x0, y0, x1, y1] = v[..] else {
+                            return Err(());
+                        };
+                        if x0 > x1 || y0 > y1 || x1 > 31 || y1 > 31 || more.is_empty() {
+                            return Err(());
+                        }
+                        (Some([x0, y0, x1, y1]), more)
+                    }
+                    _ => (None, rest),
+                };
+                let mut m = Vec::new();
+                for p in pairs {
+                    let (n, c) = p.split_once('=').ok_or(())?;
+                    let n: u8 = n.parse().map_err(|_| ())?;
+                    if !(1..=15).contains(&n) {
+                        return Err(());
+                    }
+                    if c == "-" {
+                        m.push((n, None));
+                        continue;
+                    }
+                    let c = c.trim_start_matches('#');
+                    if c.len() != 6 {
+                        return Err(());
+                    }
+                    let v = u32::from_str_radix(c, 16).map_err(|_| ())?;
+                    m.push((n, Some([(v >> 16) as u8, (v >> 8) as u8, v as u8])));
+                }
+                self.recolor.push(Recolor {
+                    build: (*build).to_owned(),
+                    area,
+                    colors: m,
+                });
             }
             ["text_say", slot, words @ ..] if !words.is_empty() => {
                 self.text_say.push(((*slot).to_owned(), words.join(" ")));
@@ -557,6 +607,15 @@ impl ArtRules {
         self.also.iter().for_each(|a| add(&a.art.art));
         out
     }
+}
+
+/// One `#+ recolor` line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recolor {
+    pub build: String,
+    /// `[x0, y0, x1, y1]` of the picture's own pixels, the bounds kept.
+    pub area: Option<[u8; 4]>,
+    pub colors: Vec<(u8, Option<[u8; 3]>)>,
 }
 
 /// An art file by its [`Art::files`] number, its size and its offset.

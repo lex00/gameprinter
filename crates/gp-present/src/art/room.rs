@@ -41,6 +41,11 @@
 //!   its offset with it, so a room the game draws mirrored needs no rules
 //!   of its own.
 //!
+//! - `#+ room_mask CLASS PIECE TEST...`: the piece laid on the class's
+//!   cells, cell by cell as a fill of one cell, but only on the cell's own
+//!   pixels whose colour passes every test (as `room_cells` takes them):
+//!   the floor's edge through a cell the room shares with a wall, a door
+//!   or a cask, where the original draws it.
 //! - `#+ room_front C0 R0 C1 R1`: the room drawn again over the bodies in
 //!   the cells from column C0, row R0 to column C1, row R1: a wall a body
 //!   walks or is thrown into hides it there.
@@ -95,6 +100,8 @@ pub enum Lay {
     Box(String),
     /// A piece at each cell, offset in screen pixels.
     At(String, [i64; 2]),
+    /// A piece on each cell's pixels that pass the tests.
+    Mask(String, Vec<Test>),
 }
 
 /// A rule laying pieces on a class's cells, with its line in the rules.
@@ -110,7 +117,7 @@ impl Place {
     #[must_use]
     pub fn pieces(&self) -> Vec<&str> {
         match &self.lay {
-            Lay::Fill(p) | Lay::Box(p) | Lay::At(p, _) => p.split('|').collect(),
+            Lay::Fill(p) | Lay::Box(p) | Lay::At(p, _) | Lay::Mask(p, _) => p.split('|').collect(),
             Lay::Run(r) => r.iter().flatten().flat_map(|p| p.split('|')).collect(),
         }
     }
@@ -206,7 +213,7 @@ impl RoomRules {
                 room.front.push(b);
             }
             [
-                k @ ("room_fill" | "room_run" | "room_box" | "room_at"),
+                k @ ("room_fill" | "room_run" | "room_box" | "room_at" | "room_mask"),
                 class,
                 pieces @ ..,
             ] => {
@@ -218,6 +225,13 @@ impl RoomRules {
                 let lay = match (*k, pieces) {
                     ("room_fill", [p]) if *p != "-" => Lay::Fill((*p).to_owned()),
                     ("room_box", [p]) if *p != "-" => Lay::Box((*p).to_owned()),
+                    ("room_mask", [p, tests @ ..]) if *p != "-" && !tests.is_empty() => Lay::Mask(
+                        (*p).to_owned(),
+                        tests
+                            .iter()
+                            .map(|t| Test::parse(t).ok_or(()))
+                            .collect::<Result<_, _>>()?,
+                    ),
                     ("room_at", [p, dx, dy]) if *p != "-" => Lay::At(
                         (*p).to_owned(),
                         [dx.parse().map_err(|_| ())?, dy.parse().map_err(|_| ())?],
@@ -482,6 +496,42 @@ pub fn build_seeded(st: &StageRules, r: &RoomRules, cells: &Cells, seed: u64) ->
                     }
                 }
             }
+            Lay::Mask(p, tests) => {
+                let Some((p, _)) = piece(p) else { continue };
+                for (i, _) in grid.iter().enumerate().filter(|(_, c)| **c) {
+                    let c = &cells.cells[i];
+                    // The cell's pixels as a square, row by row, in the
+                    // tile's own way round (mirrored as the board draws it).
+                    let k = (c.colors.len() as f64).sqrt() as usize;
+                    if k == 0 || k * k != c.colors.len() {
+                        continue;
+                    }
+                    let (x, y) = ((i % cols) as i64 * side, (i / cols) as i64 * side);
+                    let px = |v: usize| v as i64 * side / k as i64;
+                    for r in 0..k {
+                        let sr = if c.flip[1] { k - 1 - r } else { r };
+                        let on = |col: usize| {
+                            let sc = if c.flip[0] { k - 1 - col } else { col };
+                            tests.iter().all(|t| t.holds(c.colors[sr * k + sc]))
+                        };
+                        let mut col = 0;
+                        while col < k {
+                            if !on(col) {
+                                col += 1;
+                                continue;
+                            }
+                            let c0 = col;
+                            while col < k && on(col) {
+                                col += 1;
+                            }
+                            let mut d = StageDraw::piece(p, x, y, side, side);
+                            d.clip =
+                                Some([x + px(c0), y + px(r), px(col) - px(c0), px(r + 1) - px(r)]);
+                            out.draws.push(d);
+                        }
+                    }
+                }
+            }
             Lay::Box(p) => {
                 let Some((p, _)) = piece(p) else { continue };
                 for b in groups(grid, cols, rows) {
@@ -562,6 +612,30 @@ pub fn build_seeded(st: &StageRules, r: &RoomRules, cells: &Cells, seed: u64) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `#+ room_mask` lays its piece only on a cell's pixels that pass its
+    /// tests, a run of them a draw, cut to it.
+    #[test]
+    fn a_rooms_mask_lays_a_piece_on_the_pixels_that_pass() {
+        let mut sc = screen();
+        // Cell 9: its top row red, its bottom row grey (2 by 2 pixels).
+        sc.cells[9].colors = vec![[200, 40, 30], [200, 40, 30], [90, 90, 90], [90, 90, 90]];
+        let (st, r) = rules(&["room s", "room_cells c tile=1", "room_mask c wall r>g+100"]);
+        let room = build(&st, &r, &sc);
+        let z = sc.size * st.scale;
+        // Only cell 9's top row: one draw, cut to it.
+        assert_eq!(room.stage.draws.len(), 1);
+        let d = &room.stage.draws[0];
+        assert_eq!((d.x, d.y), (z, z));
+        assert_eq!(d.clip, Some([z, z, z, z / 2]));
+        // Mirrored, the same row: a whole row is the same either way.
+        sc.cells[9].flip = [true, false];
+        assert_eq!(build(&st, &r, &sc).stage.draws.len(), 1);
+        // Turned top to bottom, the bottom row.
+        sc.cells[9].flip = [false, true];
+        let room = build(&st, &r, &sc);
+        assert_eq!(room.stage.draws[0].clip, Some([z, z + z / 2, z, z / 2]));
+    }
 
     /// `#+ room_front` keeps its boxes of cells, and the built room gives
     /// them in game pixels; a box turned round is refused.
