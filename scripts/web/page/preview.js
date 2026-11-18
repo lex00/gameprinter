@@ -742,7 +742,13 @@ const padBits = () => {
     const [ax, ay] = [g.axes[0] ?? 0, g.axes[1] ?? 0];
     const stick = [];
     [ay < -0.5, ay > 0.5, ax < -0.5, ax > 0.5].forEach((v, i) => (stick[LAYOUT.stick[i]] = v));
-    const set = LAYOUT.pad.map((bs, bit) => bs.some(on) || !!stick[bit]);
+    // Any stick after the first, pulled down, holds the game's main button
+    // (the bit the pad's A gives): on a cabinet with a lever, such as a
+    // drink tap, pulling down pours and letting go sends.
+    const main = LAYOUT.pad.findIndex((bs) => bs.includes(0));
+    let pulled = false;
+    for (let a = 3; a < (g.axes?.length ?? 0); a += 2) if ((g.axes[a] ?? 0) > 0.5) pulled = true;
+    const set = LAYOUT.pad.map((bs, bit) => bs.some(on) || !!stick[bit] || (pulled && bit === main));
     set.forEach((v, bit) => {
       if (v) bits |= 1 << (bit + shift);
     });
