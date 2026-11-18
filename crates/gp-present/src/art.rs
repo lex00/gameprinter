@@ -182,10 +182,12 @@ pub struct ArtRules {
     /// the screen's top (all of them with none named). None, the default,
     /// draws them under the bodies.
     pub hud_over: Option<Vec<i64>>,
-    /// `#+ text_center X0 X1`: a board game's text lines that lie within
-    /// columns X0 to X1 (cells of 16 pixels) drawn centred between them,
-    /// their spaces at either end left out.
-    pub text_center: Vec<[i64; 2]>,
+    /// `#+ text_center X0 X1 [Y0 Y1]`: a board game's text lines that lie
+    /// within columns X0 to X1 (cells of 16 pixels), and in rows Y0 to Y1
+    /// when they are given, drawn centred between the columns, their
+    /// spaces at either end left out: `[X0, X1, Y0, Y1]`, rows 0 to 63
+    /// when none are given.
+    pub text_center: Vec<[i64; 4]>,
     /// `#+ text_say SLOT WORDS...`: a board game's text (by its slot) drawn
     /// in the theme's letters as these words instead, in its own cells: a
     /// line the theme words its own way.
@@ -300,15 +302,21 @@ impl ArtRules {
                     rows.dedup();
                 }
             }
-            ["text_center", x0, x1] => {
-                let (a, b) = (
-                    x0.parse::<i64>().map_err(|_| ())?,
-                    x1.parse::<i64>().map_err(|_| ())?,
-                );
-                if !(0..64).contains(&a) || !(a..64).contains(&b) {
+            ["text_center", x0, x1, rows @ ..] if rows.is_empty() || rows.len() == 2 => {
+                let n = |s: &str| s.parse::<i64>().map_err(|_| ());
+                let (a, b) = (n(x0)?, n(x1)?);
+                let (c, d) = match rows {
+                    [y0, y1] => (n(y0)?, n(y1)?),
+                    _ => (0, 63),
+                };
+                if !(0..64).contains(&a)
+                    || !(a..64).contains(&b)
+                    || !(0..64).contains(&c)
+                    || !(c..64).contains(&d)
+                {
                     return Err(());
                 }
-                self.text_center.push([a, b]);
+                self.text_center.push([a, b, c, d]);
             }
             ["text_say", slot, words @ ..] if !words.is_empty() => {
                 self.text_say.push(((*slot).to_owned(), words.join(" ")));
@@ -544,6 +552,9 @@ impl ArtRules {
         // Last, so a look without them numbers its files as before.
         self.region_pics.iter().for_each(|(_, p)| add(&p.art.art));
         self.region_timed.iter().for_each(|(_, t)| add(&t.art.art));
+        // An `also` picture is loaded too: without it in the list, its
+        // number fell to the first file's, and that picture was drawn.
+        self.also.iter().for_each(|a| add(&a.art.art));
         out
     }
 }

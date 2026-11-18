@@ -1481,10 +1481,11 @@ impl BoardArt {
                 if first > last {
                     continue;
                 }
-                if let Some([x0, x1]) = rules
+                let row = k.1 as i64;
+                if let Some([x0, x1, _, _]) = rules
                     .text_center
                     .iter()
-                    .find(|[x0, x1]| *x0 <= lo && hi <= *x1)
+                    .find(|[x0, x1, y0, y1]| *x0 <= lo && hi <= *x1 && (*y0..=*y1).contains(&row))
                 {
                     shift.insert(k, ((x0 + x1) - (first + last)) * 8);
                 }
@@ -2527,7 +2528,7 @@ asset = "stage2"
     }
 
     /// `#+ text_center` moves a text line so its letters sit centred
-    /// between the rule's columns; `#+ text_say` words a text the theme's
+    /// between the rule's columns (only in its rows when it names them); `#+ text_say` words a text the theme's
     /// way, in its own cells, a space drawn by neither theme nor board.
     #[test]
     fn a_theme_centres_and_words_a_text() {
@@ -2547,6 +2548,18 @@ asset = "stage2"
         let mut theme = art.theme(&format!("{font}#+ text_center 0 31\n")).unwrap();
         let t = art.themed(&mut theme, &w, &[], &[]).unwrap();
         let shift = (31 - (4 + 7)) * 8;
+        assert!(at(&t).contains(&(4 * 16 + shift, 5 * 16)), "{:?}", at(&t));
+        // With rows given, a line outside them stays where the game put it
+        // (the text is in row 5); one inside them moves.
+        let mut theme = art
+            .theme(&format!("{font}#+ text_center 0 31 6 9\n"))
+            .unwrap();
+        let t = art.themed(&mut theme, &w, &[], &[]).unwrap();
+        assert!(at(&t).contains(&(4 * 16, 5 * 16)), "{:?}", at(&t));
+        let mut theme = art
+            .theme(&format!("{font}#+ text_center 0 31 3 5\n"))
+            .unwrap();
+        let t = art.themed(&mut theme, &w, &[], &[]).unwrap();
         assert!(at(&t).contains(&(4 * 16 + shift, 5 * 16)), "{:?}", at(&t));
         // Worded "IJ": I and J in the first two cells, the rest drawn by
         // neither (the board's own letters left out).

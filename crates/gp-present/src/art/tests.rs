@@ -621,11 +621,13 @@ fn a_pose_by_place_shows_only_in_its_region() {
 }
 
 /// An `also` picture is drawn with a body while it shows its build, over
-/// the body and turned with it; another pose draws none.
+/// the body and turned with it; another pose draws none. It is a file of
+/// its own: a `pic` before it doesn't take its place.
 #[test]
 fn an_also_picture_comes_with_its_pose() {
     let p = present();
-    let a = art("scale 6\nalso hero.png a/lever.png 8 8 4 -6");
+    let a = art("scale 6\npic bug.png a/first.png 8 8 0 0\nalso hero.png a/lever.png 8 8 4 -6");
+    assert_eq!(a.files, ["a/first.png", "a/lever.png"]);
     let mut f = framed(Scene {
         level: Some(0),
         bodies: vec![draw(1, 40, 100), draw(2, 80, 100)],
@@ -636,7 +638,7 @@ fn an_also_picture_comes_with_its_pose() {
     assert_eq!(out.draws.len(), 4);
     assert_eq!(out.draws[1].src, Src::Own(1));
     let e = &out.draws[2];
-    assert_eq!(e.src, Src::Art(0));
+    assert_eq!(e.src, Src::Art(1));
     assert_eq!(
         [e.x, e.y, e.w, e.h],
         [44 * ART_SUB, 86 * ART_SUB, 8 * ART_SUB, 8 * ART_SUB]
