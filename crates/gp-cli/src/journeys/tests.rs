@@ -347,8 +347,9 @@ fn copies_are_found_where_the_tools_make_them() {
     let f = gather(&paths, &all, &neon);
     let a = answer(&f, &Around::default());
     assert_eq!(a.stage.id, "T2", "{}", a.stands);
-    // A picture, then a check left by gp theme look check.
-    put(&t.join("theme/art/hero.png"), "not really a png");
+    // A picture (a room's piece, in a folder of its own), then a check
+    // left by gp theme look check.
+    put(&t.join("theme/pieces/room/floor.png"), "not really a png");
     note_check(
         &home,
         &t.join("theme"),

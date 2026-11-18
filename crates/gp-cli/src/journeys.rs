@@ -604,14 +604,19 @@ fn theme_facts(home: &Path, roms: Option<&Path>, c: &Copy) -> ThemeFacts {
                 .find_map(|l| l.strip_prefix("title ").map(|s| s.trim().to_owned()))
         })
         .unwrap_or_else(|| c.name.clone());
+    // Every picture under the theme's folder: art/, and the pieces a
+    // stage or room is built from wherever the rules keep them.
     let mut pictures = 0;
-    for d in [look.clone(), look.join("art")] {
+    let mut dirs = vec![look.clone()];
+    while let Some(d) = dirs.pop() {
         for e in fs::read_dir(d).into_iter().flatten().flatten() {
             let p = e.path();
-            if p.is_file()
-                && p.extension()
-                    .and_then(|x| x.to_str())
-                    .is_some_and(|x| PICTURE_EXTS.contains(&x.to_ascii_lowercase().as_str()))
+            if p.is_dir() {
+                dirs.push(p);
+            } else if p
+                .extension()
+                .and_then(|x| x.to_str())
+                .is_some_and(|x| PICTURE_EXTS.contains(&x.to_ascii_lowercase().as_str()))
             {
                 pictures += 1;
             }
