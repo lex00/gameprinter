@@ -619,3 +619,28 @@ fn a_pose_by_place_shows_only_in_its_region() {
     a.set_regions(&p, &[]);
     assert_eq!(at(&a, &painter, 40, 20, 0), 0);
 }
+
+/// An `also` picture is drawn with a body while it shows its build, over
+/// the body and turned with it; another pose draws none.
+#[test]
+fn an_also_picture_comes_with_its_pose() {
+    let p = present();
+    let a = art("scale 6\nalso hero.png a/lever.png 8 8 4 -6");
+    let mut f = framed(Scene {
+        level: Some(0),
+        bodies: vec![draw(1, 40, 100), draw(2, 80, 100)],
+        ..Scene::default()
+    });
+    f.scene.bodies[0].as_mut().unwrap().flip_x = true;
+    let out = Painter::new().frame(&a, &p, &f, 224);
+    assert_eq!(out.draws.len(), 4);
+    assert_eq!(out.draws[1].src, Src::Own(1));
+    let e = &out.draws[2];
+    assert_eq!(e.src, Src::Art(0));
+    assert_eq!(
+        [e.x, e.y, e.w, e.h],
+        [44 * ART_SUB, 86 * ART_SUB, 8 * ART_SUB, 8 * ART_SUB]
+    );
+    assert!(e.flip_x);
+    assert_eq!(out.draws[3].src, Src::Own(2));
+}

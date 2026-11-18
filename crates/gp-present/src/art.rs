@@ -164,6 +164,9 @@ pub struct ArtRules {
     /// Whether the console's sprite limit is drawn.
     pub limit: bool,
     pub pics: Vec<ArtPic>,
+    /// `also BUILD ART W H DX DY`: another picture drawn with a body while
+    /// it shows BUILD, over it (a tap's lever in a pose that holds it).
+    pub also: Vec<ArtPic>,
     pub timed: Vec<Timed>,
     pub held: Vec<String>,
     pub face: Vec<String>,
@@ -198,6 +201,7 @@ impl Default for ArtRules {
             scale: 1,
             limit: true,
             pics: Vec::new(),
+            also: Vec::new(),
             timed: Vec::new(),
             held: Vec::new(),
             face: Vec::new(),
@@ -332,6 +336,10 @@ impl ArtRules {
             ["limit", "on"] => r.limit = true,
             ["limit", "off"] => r.limit = false,
             ["pic", b, a, ww, h, dx, dy] => r.pics.push(ArtPic {
+                build: (*b).to_owned(),
+                art: art(a, ww, h, dx, dy)?,
+            }),
+            ["also", b, a, ww, h, dx, dy] => r.also.push(ArtPic {
                 build: (*b).to_owned(),
                 art: art(a, ww, h, dx, dy)?,
             }),
@@ -579,6 +587,8 @@ pub struct Art {
     pics: Vec<Option<Placed>>,
     timed: Vec<Vec<TimedAt>>,
     held: Vec<bool>,
+    /// By the build's picture: the `also` pictures drawn with it.
+    also: Vec<Vec<Placed>>,
     face: Vec<bool>,
     near: Option<(Placed, Vec<bool>, Vec<bool>)>,
     elsewhere: Vec<(Option<u32>, [i64; 2], Vec<bool>)>,
@@ -718,6 +728,12 @@ impl Art {
                 in_region[i as usize].push((region(r), InRegion::Pic(placed(&a.art))));
             }
         }
+        let mut also = vec![Vec::new(); n];
+        for a in &rules.also {
+            if let Some(i) = pic(&a.build) {
+                also[i as usize].push(placed(&a.art));
+            }
+        }
         let mut hud_layers = vec![false; n];
         for l in p.levels.iter().filter_map(|l| l.hud_layer) {
             if let Some(v) = hud_layers.get_mut(l as usize) {
@@ -745,6 +761,7 @@ impl Art {
             stages: vec![None; n],
             holes,
             held: set(&rules.held)?,
+            also,
             face: set(&rules.face)?,
             files,
             pics,
@@ -1263,7 +1280,15 @@ impl Painter {
                 a.cut = s.cut.get(i).cloned().unwrap_or_default();
             }
             a.of = Of::Body(i);
+            let (ax, ay, alpha) = (d.x + ox, d.y + oy, a.alpha);
             out.draws.push(a);
+            for p in art.also.get(d.pic as usize).into_iter().flatten() {
+                let mut e = placed(Some(*p), d.pic, ax, ay);
+                e.flip_x = flip_x;
+                e.flip_y = d.flip_y;
+                e.alpha = alpha;
+                out.draws.push(e);
+            }
         };
         let order = s.paint_order();
         let at = |v: &[bool], i: usize| v.get(i).copied().unwrap_or(false);

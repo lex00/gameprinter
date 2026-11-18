@@ -35,6 +35,7 @@ Pictures are named by the build's own file names (`frame-82-0.png`, `hud-0.png`)
 | `limit off` | Draws without the console's sprite limit |
 | `pic BUILD ART W H DX DY` | Draws `ART` in place of the build's picture, `W` by `H`, moved by `DX`, `DY` |
 | `timed BUILD FROM TO ART W H DX DY` | Another picture while a body has shown `BUILD` for `FROM` to `TO` frames. Add `every=N` for a repeat, `after=PIC`, `wait=N` or `hide` |
+| `also BUILD ART W H DX DY` | Another picture drawn with a body while it shows `BUILD`, over it and placed as a `pic` line places its art: a lever drawn into a character's pose, replaced before the character is |
 | `held BUILD...` | Not drawn while a `hide` pose holds it, such as a ball in a hand |
 | `face BUILD...` | Turned the way the body really moves, after `face_turn N` pixels (6 by default) |
 | `near ART W H DX DY`, `near_when`, `near_other` | A pose shown while another body stands level with this one |
