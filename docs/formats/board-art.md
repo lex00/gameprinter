@@ -251,6 +251,7 @@ A large-art theme (docs/formats/theme.md, "Large-art rules") changes an arcade g
 | A sprite | `sprite-ENTITY-CODE`: the entity with a `board_sprite` and the picture code its entry draws, in hex (0 to 1ff, the ninth bit from the flags): `sprite-mug-4d` | 32 by 32 |
 | A counter's digit | `counter-COUNTER-D` for a `counters` entry, D from 0 to 9: `counter-score-7` | 16 by 16 |
 | A counter's tile | `counter-COUNTER` for a `repeats` entry: `counter-lives` | 16 by 16 |
+| A screen's stage | `SLOT-N` for a screen several of a level's looks show (its colours changing a stage at a time, such as a title lit letter by letter), N its look's place among them from 1, the base look first: `screen_attract_logo-3`. A theme that draws a stage draws it on that look; any other look of the screen takes the screen's own picture | 512 by 480 |
 | A text's letter | `letter-C` for a letter or digit a `texts` entry writes (the text's byte is its tile's code): `letter-A`, `letter-7`; any other tile `letter-xNNN`, its code in hex: `letter-x02e`. One picture redraws the letter in every text | 16 by 16 |
 
 A theme centres text lines with `#+ text_center X0 X1` (each line within columns X0 to X1, centred between them by its letters) and words a text its own way with `#+ text_say SLOT WORDS...` (that text's cells drawn as those words in the theme's letters; a space with no picture is drawn by neither). Each drawn cell of a text keeps its text and place (`CellDrawn::text`).

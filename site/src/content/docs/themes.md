@@ -94,6 +94,7 @@ An arcade game such as Tapper is drawn by its board, and its theme uses the same
 | A sprite | `sprite-ENTITY-CODE`, the entity and the picture code it shows in hex, such as `sprite-mug-4d` | 32 by 32 |
 | A counter's digit | `counter-NAME-D`, such as `counter-score-7` | 16 by 16 |
 | A repeated counter tile | `counter-NAME`, such as `counter-lives` | 16 by 16 |
+| One stage of a screen shown by several looks | `SLOT-N`, such as `screen_attract_logo-3`: the screen as its Nth look shows it (a title lit letter by letter); a look you draw no stage for takes the screen's picture | 512 by 480 |
 | A letter of the game's texts | `letter-A` to `letter-Z`, `letter-0` to `letter-9`, any other `letter-xNNN` by its tile code (`letter-x02e`): one picture redraws it in every text, a font | 16 by 16 |
 
 Two rules change how a board game's texts are drawn in your letters: `#+ text_center X0 X1` centres each text line that lies within columns X0 to X1 (cells of 16 pixels) between them, its spaces at either end left out, so lines the game padded unevenly sit in the middle; `#+ text_say SLOT WORDS...` draws the text with that slot in your letters as those words instead, in its own cells, for a line you word your own way (a space your letters lack is drawn by neither, so the room shows).

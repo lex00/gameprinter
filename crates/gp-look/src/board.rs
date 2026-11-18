@@ -69,6 +69,10 @@ struct LevelBoard {
 struct Look {
     /// The `board-screen` slot its screen is, None for a look with none.
     screen: Option<String>,
+    /// For a screen several of the level's looks show (a title lit letter
+    /// by letter by its colours): this look's own name, the slot and its
+    /// place among them from 1 (`screen_title-3`), the base look first.
+    stage: Option<String>,
     /// Video RAM as the board reads it: 960 cells of two bytes, low first.
     videoram: Vec<u8>,
     /// The 64 colours as 0xRRGGBB.
@@ -363,6 +367,9 @@ pub struct Picture {
     pub palette: [u32; 64],
     pub drawn: Vec<Drawn>,
     pub screen: Option<String>,
+    /// The look's own name for its screen when several looks show it
+    /// (`screen_title-3`), which a theme can draw in place of the screen's.
+    pub stage: Option<String>,
     pub cells: Vec<CellDrawn>,
 }
 
@@ -642,6 +649,7 @@ impl BoardArt {
                 };
                 Ok(Look {
                     screen: screen.map(str::to_owned),
+                    stage: None,
                     videoram,
                     palette: colors,
                 })
@@ -756,6 +764,29 @@ impl BoardArt {
                     cells,
                     when: tests(&t.when).map_err(at_t)?,
                 });
+            }
+            // A screen several looks show: each look's own name for it.
+            let mut base = base;
+            {
+                let mut all: Vec<&mut Look> = std::iter::once(&mut base)
+                    .chain(looks.iter_mut().map(|(_, l)| l))
+                    .collect();
+                let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+                for l in &all {
+                    if let Some(sc) = &l.screen {
+                        *seen.entry(sc.clone()).or_default() += 1;
+                    }
+                }
+                let mut at: BTreeMap<String, usize> = BTreeMap::new();
+                for l in &mut all {
+                    if let Some(sc) = l.screen.clone()
+                        && seen.get(&sc).copied().unwrap_or(0) > 1
+                    {
+                        let k = at.entry(sc.clone()).or_default();
+                        *k += 1;
+                        l.stage = Some(format!("{sc}-{k}"));
+                    }
+                }
             }
             levels.push(Some(LevelBoard {
                 base,
@@ -999,6 +1030,7 @@ impl BoardArt {
                 palette: look.palette,
                 drawn,
                 screen: look.screen.clone(),
+                stage: look.stage.clone(),
                 cells,
             });
         }
@@ -1029,6 +1061,7 @@ impl BoardArt {
             palette: look.palette,
             drawn,
             screen: look.screen.clone(),
+            stage: look.stage.clone(),
             cells,
         })
     }
@@ -1053,6 +1086,9 @@ impl BoardArt {
             for x in looks {
                 if let Some(sc) = &x.screen {
                     add(sc.clone(), SCREEN_SIZE, &mut out);
+                }
+                if let Some(st) = &x.stage {
+                    add(st.clone(), SCREEN_SIZE, &mut out);
                 }
             }
         }
@@ -1478,7 +1514,14 @@ impl BoardArt {
             });
             cell_of.push(k);
         }
-        let level = full.screen.as_deref().and_then(pic);
+        // A look's own stage of its screen, when the theme draws that
+        // stage; else the screen's.
+        let level = full
+            .stage
+            .as_deref()
+            .filter(|st| theme.art.rules.pics.iter().any(|p| p.build == *st))
+            .or(full.screen.as_deref())
+            .and_then(pic);
         let scene = gp_present::Scene {
             level,
             cells,
@@ -1935,6 +1978,12 @@ y = 191
     /// read: digit 0's code 0x30, the high byte 0x30, a colour byte 0x77
     /// and the lives' tile 0x10. No game's bytes.
     fn with_looks_and_counters(dir: &Path) -> (Model, Spec, BoardArt) {
+        with_looks_and(dir, "")
+    }
+
+    /// [`with_looks_and_counters`] with `more` (more of the level's board
+    /// tables) before its spawns.
+    fn with_looks_and(dir: &Path, more: &str) -> (Model, Spec, BoardArt) {
         lift(dir);
         let map = std::fs::read_to_string(dir.join("assets.toml")).unwrap()
             + "\n[[asset]]\nname = \"codes\"\nformat = \"byte-rows\"\nregion = \"maincpu\"\noffset = 0\ncount = 1\nwidth = 4\n\n\
@@ -1948,7 +1997,8 @@ y = 191
         std::fs::write(dir.join("stage2.toml"), format!("rows = [{rows}]\n")).unwrap();
         let text = MODEL.replace(
             "[[levels.main.spawn]]",
-            r#"[[levels.main.present.board.looks]]
+            &(more.to_owned()
+                + r#"[[levels.main.present.board.looks]]
 when = [{ counter = "bar", cmp = "==", value = 1 }]
 screen = "stage2"
 palette_writes = [{ at = 0x2A, slot = "codes", column = 2 }]
@@ -1985,7 +2035,7 @@ most = 3
 tile = { slot = "codes", column = 3 }
 high = { slot = "codes", column = 1 }
 
-[[levels.main.spawn]]"#,
+[[levels.main.spawn]]"#),
         ) + r#"
 [assets.codes]
 kind = "rows"
@@ -2519,6 +2569,46 @@ asset = "stage2"
             px(4 * 16 + 5, 5 * 16 + 7),
             plain.pens[(5 * 16 + 7) * video::WIDTH + 4 * 16 + 5]
         );
+    }
+
+    /// A screen two looks show has a name for each look, and a theme that
+    /// draws one of those stages draws it on that look only.
+    #[test]
+    fn a_screen_shown_by_two_looks_has_a_stage_each() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, spec, art) = with_looks_and(
+            dir.path(),
+            "[[levels.main.present.board.looks]]\nwhen = [{ counter = \"bar\", cmp = \"==\", value = 3 }]\nscreen = \"stage2\"\n\n",
+        );
+        let names: Vec<String> = art.names().into_iter().map(|(n, _)| n).collect();
+        assert!(
+            names.contains(&"stage2-1".to_owned()) && names.contains(&"stage2-2".to_owned()),
+            "{names:?}"
+        );
+        let mut w = World {
+            counters: vec![0; spec.counters.len()],
+            ..Default::default()
+        };
+        let bar = spec.counters.index_of("bar").unwrap();
+        let text = "gp-art 1\npic stage2 any.png 512 480 0 0\npic stage2-2 two.png 512 480 0 0\n";
+        let file = |w: &World| {
+            let mut theme = art.theme(text).unwrap();
+            let t = art.themed(&mut theme, w, &[], &[]).unwrap();
+            t.frame
+                .draws
+                .iter()
+                .find_map(|d| match d.src {
+                    gp_present::art::Src::Art(f) => Some(theme.art.files[f as usize].clone()),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        w.counters[bar] = 3;
+        let first = file(&w);
+        w.counters[bar] = 1;
+        let second = file(&w);
+        assert_ne!(first, second);
+        assert!([first.as_str(), second.as_str()].contains(&"two.png"));
     }
 
     /// Two texts on the same cells (one message giving way to the next):

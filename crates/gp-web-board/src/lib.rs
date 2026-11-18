@@ -251,6 +251,7 @@ mod tests {
             palette,
             drawn: Vec::new(),
             screen: None,
+            stage: None,
             cells: Vec::new(),
         });
         assert_eq!(u16::from_le_bytes([b[0], b[1]]) as usize, WIDTH);
@@ -272,6 +273,7 @@ mod tests {
             palette: [0x102030; 64],
             drawn: Vec::new(),
             screen: Some("stage".into()),
+            stage: None,
             cells: Vec::new(),
         };
         let mut d = gp_present::art::ArtFrame {
