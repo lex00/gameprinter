@@ -82,6 +82,9 @@ addEventListener("error", (e) => {
 
 const text = new TextDecoder();
 const enc = new TextEncoder();
+// The seed a theme's rooms pick their piece alternatives by (a painting of
+// several), drawn once a page: the same pick however often the art loads.
+const ROOM_SEED = [(Math.random() * 2 ** 32) >>> 0, (Math.random() * 2 ** 32) >>> 0];
 const hex = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 
 class Preview {
@@ -482,8 +485,9 @@ class BoardDraw {
   // built before themes can't: an error, so the look isn't offered as drawn.
   loadArt(artText) {
     if (!this.x.gp_board_load_art) throw new Error("this page's gp_board.wasm can't draw a theme on an arcade game; rebuild it");
-    // A new seed each load: a room's piece alternatives each as likely.
-    this.x.gp_board_room_seed?.((Math.random() * 2 ** 32) >>> 0, (Math.random() * 2 ** 32) >>> 0);
+    // One seed for the page's game: a room's piece alternatives each as
+    // likely, the same pick each time the art loads again.
+    this.x.gp_board_room_seed?.(...ROOM_SEED);
     const code = this.x.gp_board_load_art(...this.put(enc.encode(artText)));
     if (code !== 0) throw new Error(text.decode(this.out()));
     this.art = artText.trim() !== "";
