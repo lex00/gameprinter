@@ -45,7 +45,7 @@ Pictures are named by the build's own file names (`frame-82-0.png`, `hud-0.png`)
 | `stage SCALE R G B R G B` | Stages built from pieces over a gradient backdrop |
 | `#+ hud_over` | The HUD's text is drawn over the bodies, so a body standing on a HUD row doesn't cover it. Without the line it is drawn under them, as before |
 | `#+ hud_over ROW...` | The same for those rows of the HUD only, 8 pixels each from the screen's top (row 2 is y 16 to 24) |
-| `#+ room SCREEN...`, `#+ room_cells`, `#+ room_fill`, `#+ room_run`, `#+ room_box`, `#+ room_at` | An arcade game's rooms built from your pieces on the screen your romset gives (below, "An arcade game") |
+| `#+ room SCREEN...`, `#+ room_cells`, `#+ room_fill`, `#+ room_run`, `#+ room_box`, `#+ room_at`, `#+ room_front` | An arcade game's rooms built from your pieces on the screen your romset gives (below, "An arcade game") |
 | `#+ in REGION pic ...`, `#+ in REGION timed ...` | A `pic` or `timed` line that holds only while the body stands in a region of the stage the game's level kit names, such as a shorter picture on a low ledge. Moss Hop's kit names one, `start`, where the hero starts; Donkey Kong's and Tapper's name none yet |
 
 A theme never holds a picture of a stage. The `stage`, `stage_piece` and `level` lines describe how to build each stage from pieces (a plank, a ladder rail, a rope, a wheel) on top of the level picture from the player's own ROM, finding floors, ladders and ropes by colour. That way a theme carries no layout from the original.
@@ -143,6 +143,7 @@ stage_piece door pieces/door.png 40 64
 | `#+ room_run CLASS LEFT MID RIGHT` | Each group of the class's cells gets the end pieces at its ends and the middle one repeated between, as tall as the group: a counter, a shelf. `-` for none |
 | `#+ room_box CLASS PIECE` | The piece stretched over each group: a door, a sign. A PIECE written `a|b|c` (in any room rule) is one of them, each as likely, picked again each time the page loads the theme and the same on every screen of the room: a painting that changes from game to game |
 | `#+ room_at CLASS PIECE DX DY` | The piece at its own size at each of the class's cells, moved `DX DY` screen pixels. Give it a class of one tile each door or cask has once, and each one is placed whole where the original draws it, mirrored where the game mirrors it |
+| `#+ room_front C0 R0 C1 R1` | The room drawn again over the bodies in the cells from column C0, row R0 to column C1, row R1, so a wall a body walks or is thrown into hides it there, where the original's own colours would show through |
 
 Cells are 16 board pixels square, so a slanted edge becomes a staircase of cells. A page built before these lines draws the board's own screen there. `gp theme look check` builds every room from your romset as the page does. A room line whose class finds no cell on a screen the game shows is a problem: change the class's tests until it finds the cells you mean.
 

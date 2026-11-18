@@ -1397,6 +1397,58 @@ impl BoardArt {
         })
     }
 
+    /// By body: whether every pixel its sprites draw has the colour the
+    /// screen has there without sprites, so the board shows nothing of it
+    /// (a body with no sprite drawn is not unseen, nor one with a mask
+    /// pixel, which hides the sprites under it).
+    fn unseen(&self, w: &World, shown: &[bool], rank: &[u32], full: &Picture) -> Vec<bool> {
+        let n = w.bodies.len();
+        let bare = Omit {
+            bodies: vec![true; n],
+            ..Omit::default()
+        };
+        let Some(bare) = self.draw_omitting(w, shown, rank, &bare) else {
+            return vec![false; n];
+        };
+        let rgb = |pen: u8| full.palette[usize::from(pen & 0x3f)];
+        let mut seen = vec![false; n];
+        let mut any = vec![false; n];
+        for d in &full.drawn {
+            let Some(sprite) = self.gfx.sprites.get(usize::from(d.code)) else {
+                continue;
+            };
+            any[d.body] = true;
+            let color = ((!d.flags & 3) << 4) & 0x30;
+            let (hf, vf) = (d.flags & 0x10 != 0, d.flags & 0x20 != 0);
+            for y in 0..32usize {
+                for x in 0..32usize {
+                    let (tx, ty) = (if hf { 31 - x } else { x }, if vf { 31 - y } else { y });
+                    let pix = color | sprite[ty * 32 + tx];
+                    if pix & 0x0f == 0 {
+                        continue;
+                    }
+                    // A mask pixel draws nothing but hides the sprites
+                    // under it (a door the guests come out of): it shows.
+                    if pix & 0x07 == 0 {
+                        seen[d.body] = true;
+                        continue;
+                    }
+                    let (sx, sy) = (d.rect[0] + x as i64, d.rect[1] + y as i64);
+                    if !(0..video::WIDTH as i64).contains(&sx)
+                        || !(0..video::HEIGHT as i64).contains(&sy)
+                    {
+                        continue;
+                    }
+                    let under = bare.pens[sy as usize * video::WIDTH + sx as usize];
+                    if rgb(pix) != rgb(under) {
+                        seen[d.body] = true;
+                    }
+                }
+            }
+        }
+        (0..n).map(|b| any[b] && !seen[b]).collect()
+    }
+
     /// The frame drawn in `theme`, or None when its level has no board
     /// look. A frame whose pictures the theme draws none of is
     /// [`BoardArt::draw`]'s picture as it is, with `board_at` 0 and the
@@ -1414,9 +1466,16 @@ impl BoardArt {
         let full = self.draw(w, shown, rank)?;
         let n = w.bodies.len();
         let pic = |name: &str| theme.index.get(name).copied();
+        // A body the board draws in the colours already under it (a tap
+        // kept in place on a screen that hides it) shows nothing there:
+        // neither the theme nor the board draws it.
+        let unseen = self.unseen(w, shown, rank, &full);
         let mut bodies = vec![None; n];
         let mut order = vec![u32::MAX; n];
         for d in &full.drawn {
+            if unseen.get(d.body).copied().unwrap_or(false) {
+                continue;
+            }
             if let (Some(p), Some(b)) = (
                 pic(&sprite_name(&self.kind_names[d.kind], d.code)),
                 bodies.get_mut(d.body),
@@ -1581,7 +1640,7 @@ impl BoardArt {
         // A body the theme names no picture for stays the board's.
         for d in &full.drawn {
             let themed = framed_named(&framed.scene, d.body);
-            omit.bodies[d.body] = themed && !keep_body[d.body];
+            omit.bodies[d.body] = (themed && !keep_body[d.body]) || unseen[d.body];
         }
         let mut draws: Vec<ArtDraw> = Vec::with_capacity(f.draws.len());
         let mut board_at = 0;
@@ -1592,6 +1651,9 @@ impl BoardArt {
                     draws.push(d.clone());
                     board_at = draws.len();
                 }
+                // The room over the bodies in its front boxes, after the
+                // board's picture.
+                (_, Src::Stage(_)) if d.clip.is_some() => draws.push(d.clone()),
                 // The board's own pictures are in its picture.
                 (_, Src::Own(_) | Src::Tint(..) | Src::Stage(_) | Src::Backdrop) => {}
                 _ => draws.push(d.clone()),
@@ -1621,7 +1683,7 @@ mod tests {
     use super::*;
 
     /// A made-up arcade lift: 1024 tiles, tile 1 all value 5; 4 sprites,
-    /// sprite 1 a mask on its left half, sprite 2 all value 3, sprite 3 all value 2; a screen of tile 1 in colour bank 1; a
+    /// sprite 0 all value 5, sprite 1 a mask on its left half, sprite 2 all value 3, sprite 3 all value 2; a screen of tile 1 in colour bank 1; a
     /// palette whose entry n is n. No game's bytes.
     fn lift(dir: &Path) {
         let map = "schema = 1\nplatform = \"arcade\"\nsource = \"cab\"\nsets = [\"cab\"]\n\n\
@@ -1663,6 +1725,11 @@ mod tests {
             // Sprite 3: value 2, for a second body.
             for x in 96..128 {
                 s[y * sw as usize + x] = 2;
+            }
+            // Sprite 0: value 5, the screen's own colour in bank 1 (with
+            // flags 2): drawn there, it shows nothing.
+            for x in 0..32 {
+                s[y * sw as usize + x] = 5;
             }
         }
         std::fs::write(dir.join("sprites.png"), png(sw, sh, &s)).unwrap();
@@ -2473,6 +2540,48 @@ asset = "stage2"
         assert!(t.picture.pens.iter().all(|p| *p == TRANSPARENT));
     }
 
+    /// A body the board draws in the colours the screen already has under
+    /// it shows nothing, so a theme naming its picture doesn't draw it
+    /// either; drawn in other colours, the theme does.
+    #[test]
+    fn a_body_the_board_shows_nothing_of_isnt_themed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, art, mut w) = two_bodies(dir.path());
+        w.bodies.truncate(1);
+        let mut theme = art
+            .theme("gp-art 1\nscale 2\npic sprite-player-00 tap.png 32 32 0 0\npic sprite-player-03 hero.png 32 32 0 0\n")
+            .unwrap();
+        let arts = |t: &Themed| {
+            t.frame
+                .draws
+                .iter()
+                .filter(|d| matches!(d.src, gp_present::art::Src::Art(_)))
+                .count()
+        };
+        // Picture 0 in bank 1 (flags 2): the screen's own pen 21 at every pixel.
+        w.bodies[0].ext[1] = 0x0002;
+        let t = art.themed(&mut theme, &w, &[true], &[u32::MAX]).unwrap();
+        assert_eq!(arts(&t), 0);
+        assert_eq!(
+            t.picture.pens,
+            art.draw(&w, &[false], &[u32::MAX]).unwrap().pens
+        );
+        // Picture 3: value 2, other than the screen's.
+        w.bodies[0].ext[1] = 0x0302;
+        let t = art.themed(&mut theme, &w, &[true], &[u32::MAX]).unwrap();
+        assert_eq!(arts(&t), 1);
+        // Picture 1: only mask pixels, which draw nothing but hide the
+        // sprites under them, so it shows: the board keeps it.
+        let mut theme = art
+            .theme("gp-art 1\nscale 2\npic stage saloon.png 512 480 0 0\n")
+            .unwrap();
+        w.bodies[0].ext[1] = 0x0102;
+        let t = art.themed(&mut theme, &w, &[true], &[u32::MAX]).unwrap();
+        let plain = art.draw(&w, &[true], &[u32::MAX]).unwrap();
+        assert_eq!(t.picture.drawn.len(), plain.drawn.len());
+        assert!(!art.unseen(&w, &[true], &[u32::MAX], &plain)[0]);
+    }
+
     /// A board game's model has no palettes of its own, so its look is
     /// drawn by tile kind; its levels still keep the sprite table's order,
     /// which ranks the board's sprites (a body takes its entry from it).
@@ -2786,7 +2895,8 @@ asset = "stage2"
                     stage_piece top top.png 64 32\nstage_piece brick brick.png 64 64\n\
                     #+ room stage\n#+ room_cells counter bank=2\n#+ room_cells back !counter\n\
                     #+ room_cells sky b>r+200\n\
-                    #+ room_fill back brick\n#+ room_run counter - top -\n#+ room_fill sky brick\n";
+                    #+ room_fill back brick\n#+ room_run counter - top -\n#+ room_fill sky brick\n\
+                    #+ room_front 0 0 3 2\n";
         let mut theme = art.theme(text).unwrap();
         assert!(theme.art.rules.skipped.is_empty());
         assert_eq!(theme.rooms.len(), 1);
@@ -2806,6 +2916,12 @@ asset = "stage2"
         assert_eq!(t.frame.draws[0].src, gp_present::art::Src::Stage(pic));
         assert_eq!(t.frame.draws[0].of, gp_present::art::Of::Level);
         assert_eq!(t.board_at, 1);
+        // `#+ room_front 0 0 3 2`: the room again after the board's
+        // picture (its sprites), cut to columns 0 to 3 and rows 0 to 2.
+        let front = &t.frame.draws[1];
+        assert_eq!(front.src, gp_present::art::Src::Stage(pic));
+        let u = gp_present::art::ART_SUB;
+        assert_eq!(front.clip, Some([0, 0, 4 * 16 * u, 3 * 16 * u]));
         let at = |x: usize, y: usize| t.picture.pens[y * video::WIDTH + x];
         assert_eq!(at(0, 0), TRANSPARENT);
         assert_eq!(at(100, 100), 0x03 | video::SPRITE_BIT);

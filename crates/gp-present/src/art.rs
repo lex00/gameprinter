@@ -1434,6 +1434,16 @@ impl Painter {
         for (d, a) in &f.ghosts {
             plain(&mut out, d, d.x + ox, d.y + oy, *a);
         }
+        // A room's `#+ room_front` boxes: the room again over the bodies,
+        // cut to each box.
+        if let (Some(l), Some(st)) = (s.level, stage) {
+            let [lw, lh] = own(l);
+            for &[x, y, w, h] in &st.front {
+                let mut d = ArtDraw::new(Src::Stage(l), ox * u, oy * u, lw * u, lh * u);
+                d.clip = Some([(ox + x) * u, (oy + y) * u, w * u, h * u]);
+                out.draws.push(d);
+            }
+        }
         hud_bg_part(&mut out, true);
         if win.wall > 0 {
             let mut d = ArtDraw::new(

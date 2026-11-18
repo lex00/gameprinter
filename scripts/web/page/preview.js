@@ -1732,7 +1732,15 @@ async function main() {
         const st = artStages.get(src[1]);
         if (st) {
           ctx.imageSmoothingEnabled = true;
+          // A room's front boxes draw it again, cut to each box.
+          ctx.save();
+          if (clip) {
+            ctx.beginPath();
+            ctx.rect(clip[0] * u, clip[1] * u, clip[2] * u, clip[3] * u);
+            ctx.clip();
+          }
           ctx.drawImage(st.canvas, x * u, y * u, w * u, h * u);
+          ctx.restore();
         }
         continue;
       }

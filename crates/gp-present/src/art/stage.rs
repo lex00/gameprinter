@@ -308,6 +308,9 @@ pub struct Stage {
     pub backdrop: [[u8; 3]; 2],
     pub draws: Vec<StageDraw>,
     pub ladders: Vec<[i64; 4]>,
+    /// Boxes `[x, y, w, h]` in game pixels where the stage is drawn again
+    /// over the bodies (a room's `#+ room_front`).
+    pub front: Vec<[i64; 4]>,
 }
 
 type Grid = Vec<Vec<bool>>;
@@ -494,6 +497,7 @@ pub fn build(r: &StageRules, l: &LevelRules, w: usize, h: usize, px: &[[u8; 4]])
         backdrop: r.backdrop,
         draws: Vec::new(),
         ladders: Vec::new(),
+        front: Vec::new(),
     };
     // Ladders, under the floors.
     if let Some((rail, _)) = piece("rail") {

@@ -41,6 +41,10 @@
 //!   its offset with it, so a room the game draws mirrored needs no rules
 //!   of its own.
 //!
+//! - `#+ room_front C0 R0 C1 R1`: the room drawn again over the bodies in
+//!   the cells from column C0, row R0 to column C1, row R1: a wall a body
+//!   walks or is thrown into hides it there.
+//!
 //! The pieces are drawn in the order of their lines, the last on top, over
 //! the stage's backdrop.
 
@@ -118,6 +122,9 @@ pub struct RoomRules {
     pub screens: Vec<String>,
     pub classes: Vec<CellClass>,
     pub places: Vec<Place>,
+    /// `#+ room_front`: boxes of cells, `[c0, r0, c1, r1]`, the room drawn
+    /// over the bodies.
+    pub front: Vec<[usize; 4]>,
 }
 
 fn number(s: &str) -> Option<u16> {
@@ -188,6 +195,15 @@ impl RoomRules {
                     }
                 }
                 room.classes.push(c);
+            }
+            ["room_front", c0, r0, c1, r1] => {
+                let room = rooms.last_mut().ok_or(())?;
+                let n = |s: &str| s.parse::<usize>().map_err(|_| ());
+                let b = [n(c0)?, n(r0)?, n(c1)?, n(r1)?];
+                if b[0] > b[2] || b[1] > b[3] || b[2] > 63 || b[3] > 63 {
+                    return Err(());
+                }
+                room.front.push(b);
             }
             [
                 k @ ("room_fill" | "room_run" | "room_box" | "room_at"),
@@ -398,6 +414,19 @@ pub fn build_seeded(st: &StageRules, r: &RoomRules, cells: &Cells, seed: u64) ->
         backdrop: st.backdrop,
         draws: Vec::new(),
         ladders: Vec::new(),
+        front: r
+            .front
+            .iter()
+            .map(|&[c0, r0, c1, r1]| {
+                let z = cells.size;
+                [
+                    c0 as i64 * z,
+                    r0 as i64 * z,
+                    (c1 - c0 + 1) as i64 * z,
+                    (r1 - r0 + 1) as i64 * z,
+                ]
+            })
+            .collect(),
     };
     let piece = |name: &str| {
         let name = pick(name, seed);
@@ -533,6 +562,22 @@ pub fn build_seeded(st: &StageRules, r: &RoomRules, cells: &Cells, seed: u64) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `#+ room_front` keeps its boxes of cells, and the built room gives
+    /// them in game pixels; a box turned round is refused.
+    #[test]
+    fn a_rooms_front_boxes_are_its_cells() {
+        let (st, r) = rules(&["room s", "room_cells c tile=1", "room_front 0 1 2 3"]);
+        assert_eq!(r.front, vec![[0, 1, 2, 3]]);
+        let room = build(&st, &r, &screen());
+        let z = screen().size;
+        assert_eq!(room.stage.front, vec![[0, z, 3 * z, 3 * z]]);
+        let mut rooms = Vec::new();
+        let w: Vec<&str> = ["room", "s"].to_vec();
+        RoomRules::line(&mut rooms, Some(&st), &w, 1).unwrap();
+        let w: Vec<&str> = "room_front 2 0 1 0".split_whitespace().collect();
+        assert!(RoomRules::line(&mut rooms, Some(&st), &w, 2).is_err());
+    }
 
     /// A piece name's alternatives are each picked about as often over
     /// seeds, a seed always picks the same, and the rule names them all.
