@@ -2318,6 +2318,26 @@ asset = "stage2"
         assert!(t.picture.pens.iter().all(|p| *p == TRANSPARENT));
     }
 
+    /// A board game's model has no palettes of its own, so its look is
+    /// drawn by tile kind; its levels still keep the sprite table's order,
+    /// which ranks the board's sprites (a body takes its entry from it).
+    #[test]
+    fn a_board_games_look_keeps_the_sprite_order() {
+        let dir = tempfile::tempdir().unwrap();
+        lift(dir.path());
+        let text = MODEL.replace(
+            "[[levels.main.spawn]]",
+            "[levels.main.present.sprite_order.player]\nat = 87\nstep = 1\n\n[[levels.main.spawn]]",
+        );
+        let model = Model::parse(&text).unwrap();
+        let lifted = gp_interp::Lifted::read_dir(dir.path(), &model).unwrap();
+        let spec = gp_interp::compile::compile(&model, &lifted).unwrap();
+        let art = crate::present::art(&model, &spec, dir.path()).unwrap();
+        let player = spec.kinds.iter().position(|k| k.name == "player").unwrap();
+        let o = art.present.levels[0].order[player].as_ref().unwrap();
+        assert_eq!((o.at, o.step), (87, 1));
+    }
+
     /// A counter's digit drawn by the theme: the cell is the screen's own
     /// in the board's picture, and the theme's digit goes there.
     #[test]

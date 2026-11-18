@@ -125,6 +125,13 @@ pub struct PlayArgs {
     /// --background). Example: --minutes 30
     #[arg(long)]
     pub minutes: Option<u64>,
+    /// Play your working copies as they are, for a dev loop: the page and
+    /// the game built now, from the gameprinter checkout this gp runs from
+    /// and from the game's folder, never a released page or a published
+    /// version of the game (and so not held to the publish's checks).
+    /// Example: --dev
+    #[arg(long)]
+    pub dev: bool,
     /// The folder a --background server serves (gp passes it to itself).
     #[arg(long, hide = true)]
     pub serve_prepared: Option<PathBuf>,
@@ -1719,7 +1726,14 @@ pub(crate) fn run(a: &PlayArgs, paths: &Paths) -> Result<Outcome> {
     let pkg = crate::package::Package::load(&game_dir)?;
 
     // 2. The page and the registries.
-    let PageBuilt { page, play } = find_page(a.page.as_deref(), &game_dir, &pkg.name, paths)?;
+    let PageBuilt { page, play } = if a.dev && a.page.is_none() {
+        let Some(repo) = checkout() else {
+            bail!("--dev builds the page from the gameprinter checkout, which this gp can't find");
+        };
+        build_page(&repo, &game_dir, &pkg.name, paths)?
+    } else {
+        find_page(a.page.as_deref(), &game_dir, &pkg.name, paths)?
+    };
     let source: Source = serde_json::from_value(page_json(&page)?["source"].clone())
         .context("the page's page.json has no source")?;
     let (src, src_words) = source_registry(a.registry.as_deref(), &source, &game_dir, paths)?;
@@ -1727,7 +1741,7 @@ pub(crate) fn run(a: &PlayArgs, paths: &Paths) -> Result<Outcome> {
     // A game the source doesn't have (one made here, not published yet)
     // is built here and published into the scratch registry alone.
     let local = match source_has(src.as_ref(), &pkg.name) {
-        Ok(true) => None,
+        Ok(true) if !a.dev => None,
         has => {
             let play = match play {
                 Some(p) => p,
@@ -1749,7 +1763,9 @@ pub(crate) fn run(a: &PlayArgs, paths: &Paths) -> Result<Outcome> {
                 pkg.name,
                 pkg.version,
                 game_dir.display(),
-                if has.is_err() {
+                if a.dev {
+                    "--dev plays the game's folder as it is"
+                } else if has.is_err() {
                     "the registry couldn't be read"
                 } else {
                     "the registry has no version of it"

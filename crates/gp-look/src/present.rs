@@ -772,7 +772,17 @@ pub fn art_named(
     // level showed.
     let own_sets = match (&default_slot, set_slot(model)) {
         (Some(_), _) => None,
-        (None, None) => return Ok(tile_art(spec, art.present.screen.clone())),
+        (None, None) => {
+            // Drawn by tile kind, but each level's sprite table order kept:
+            // a board-drawn game ranks its sprites by it.
+            let mut a = tile_art(spec, art.present.screen.clone());
+            for (li, look) in a.present.levels.iter_mut().enumerate() {
+                if let Some(level) = spec.levels.get(li).and_then(|l| model.levels.get(&l.name)) {
+                    look.order = sprite_orders(spec, &level.core);
+                }
+            }
+            return Ok(a);
+        }
         (None, Some(slot)) => Some(files.sprite_set(model, &slot)?),
     };
     let fallback = own_sets
@@ -967,24 +977,7 @@ pub fn art_named(
             .samples
             .add_color("sky", gp_theme::color::Rgb(clear), 1);
         // Core `present.sprite_order`: each kind's place in the table.
-        let order = spec
-            .kinds
-            .iter()
-            .map(|k| {
-                c.present
-                    .as_ref()
-                    .and_then(|p| p.sprite_order.get(&k.name))
-                    .map(|o| gp_present::SpriteOrder {
-                        at: o.at,
-                        step: o.step,
-                        word: o.word,
-                        turn: o.turn.as_ref().and_then(|t| {
-                            let c = spec.counters.iter().position(|x| x.name == t.counter)?;
-                            Some((c, t.count))
-                        }),
-                    })
-            })
-            .collect();
+        let order = sprite_orders(spec, c);
         // Core `present.effect_order`: each effect's place, by its event.
         let effect_order = present
             .effects
@@ -2249,6 +2242,31 @@ fn name_table(writes: &[gp_assets::ppu::Write]) -> (Vec<Option<u8>>, Vec<u8>) {
         }
     }
     (names, attrs)
+}
+
+/// Core `present.sprite_order` of a level (`c`, its core): each kind's
+/// place in the sprite table, by the spec's kinds.
+fn sprite_orders(
+    spec: &Spec,
+    c: &gp_model::model::LevelCore,
+) -> Vec<Option<gp_present::SpriteOrder>> {
+    spec.kinds
+        .iter()
+        .map(|k| {
+            c.present
+                .as_ref()
+                .and_then(|p| p.sprite_order.get(&k.name))
+                .map(|o| gp_present::SpriteOrder {
+                    at: o.at,
+                    step: o.step,
+                    word: o.word,
+                    turn: o.turn.as_ref().and_then(|t| {
+                        let c = spec.counters.iter().position(|x| x.name == t.counter)?;
+                        Some((c, t.count))
+                    }),
+                })
+        })
+        .collect()
 }
 
 /// The pictures of a model with no palettes slot, so no art of its own:
