@@ -1330,6 +1330,21 @@ fn overlay(dir: &Path, page: &Path, side: &Side, runs: &BTreeMap<String, String>
     Ok(())
 }
 
+/// Puts the person's ROM `r` (the package's ROM `id`) in the overlay at
+/// `dir` and names it in its page.json as `local_rom`, which the page
+/// plays at once (page.js). Only a page served on this computer has one.
+fn local_rom(dir: &Path, id: &str, r: &crate::roms::Rom) -> Result<()> {
+    let ext = if r.system.is_some() { "zip" } else { "nes" };
+    let name = format!("local/{id}.{ext}");
+    fs::create_dir_all(dir.join("local"))?;
+    fs::write(dir.join(&name), &r.bytes)?;
+    let pj = dir.join("page.json");
+    let mut v: Value = serde_json::from_str(&fs::read_to_string(&pj)?)?;
+    v["local_rom"] = json!(name);
+    fs::write(&pj, serde_json::to_string_pretty(&v)? + "\n")?;
+    Ok(())
+}
+
 fn answers(port: u16) -> bool {
     std::net::TcpStream::connect_timeout(
         &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
@@ -1786,12 +1801,25 @@ pub(crate) fn run(a: &PlayArgs, paths: &Paths) -> Result<Outcome> {
         return r;
     }
 
-    // 3b. Serving.
+    // 3b. Serving. The person's own ROM, when one the game takes is here
+    // (--rom, else $GP_ROM_DIR), goes with the page on this computer so it
+    // plays at once: page.json's `local_rom`, a file of the overlay, which
+    // goes when the server stops.
+    let wanted: Vec<String> = pkg.entries.iter().map(|e| e.sha256.clone()).collect();
+    let given: Vec<PathBuf> = a.rom.iter().cloned().collect();
+    let found = crate::roms::find(&wanted, &given, &paths.roms).unwrap_or_default();
+    let mine = pkg
+        .entries
+        .iter()
+        .find_map(|e| found.get(&e.sha256).map(|r| (e.id.clone(), r)));
     let mut served = Vec::new();
     let mut listeners = Vec::new();
     for (i, s) in sides.iter().enumerate() {
         let dir = work.path().join(format!("side-{i}"));
         overlay(&dir.join("overlay"), &page, s, &BTreeMap::new())?;
+        if let Some((id, r)) = &mine {
+            local_rom(&dir.join("overlay"), id, r)?;
+        }
         let l = bind(if i == 0 { a.port } else { 0 })?;
         let port = l.local_addr()?.port();
         let link = format!(
@@ -1813,7 +1841,11 @@ pub(crate) fn run(a: &PlayArgs, paths: &Paths) -> Result<Outcome> {
         built: &built,
         checked: (problems, warnings),
         source: &src_words,
-        hint: "Load your own ROM in the page; your theme is chosen (Settings, Theme lists the others). Nothing was published.",
+        hint: if mine.is_some() {
+            "Your ROM from this computer plays at once; your theme is chosen (Settings, Theme lists the others). Nothing was published."
+        } else {
+            "Load your own ROM in the page; your theme is chosen (Settings, Theme lists the others). Nothing was published."
+        },
     };
     serve_sides(a, paths, work, &how, served, listeners, text)
 }

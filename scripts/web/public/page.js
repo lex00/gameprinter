@@ -754,6 +754,13 @@ const { storedRom, loadStored, clearStored } = started && !ownFiles() ? await li
 const keptRom = storedRom ? await storedRom(rom.game).catch(() => null) : null;
 if (!keptRom && loadStored && (await loadStored(rom.game).catch(() => null))) await clearStored(rom.game).catch(() => {});
 if (keptRom) liftAndPlay(keptRom, "your ROM");
+// A page served on this computer for someone's own work (gp theme look
+// play) may name their ROM in page.json's `local_rom`, a file of the same
+// server: it plays at once, as if picked. The public page has none.
+else if (started && !ownFiles() && typeof page?.local_rom === "string") {
+  const r = await fetch(page.local_rom).catch(() => null);
+  if (r?.ok) liftAndPlay(new Blob([await r.arrayBuffer()]), page.local_rom.split("/").pop());
+}
 if (keptRom) {
   const again = document.createElement("button");
   again.className = "quiet";

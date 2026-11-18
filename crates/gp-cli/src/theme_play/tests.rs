@@ -617,3 +617,22 @@ fn the_original_side_is_the_game_in_its_own_pictures_with_no_theme_chosen() {
     let mine = Side::Folder(theme_pkg(&root).unwrap());
     assert_eq!(mine.content_param(), "&c=me/my-theme");
 }
+
+/// A page served on this computer names the person's ROM in its page.json
+/// (`local_rom`), a file beside it, so the game plays without the picker.
+#[test]
+fn a_served_page_names_the_rom_found_here() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("overlay");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("page.json"), "{\"title\": \"x\"}\n").unwrap();
+    let mut bytes = b"NES\x1a\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00".to_vec();
+    bytes.extend(vec![7u8; 16384 + 8192]);
+    let r = crate::roms::Rom::of_bytes(bytes.clone()).unwrap();
+    local_rom(&dir, "game", &r).unwrap();
+    let pj: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("page.json")).unwrap()).unwrap();
+    assert_eq!(pj["local_rom"], "local/game.nes");
+    assert_eq!(pj["title"], "x");
+    assert_eq!(fs::read(dir.join("local/game.nes")).unwrap(), bytes);
+}
