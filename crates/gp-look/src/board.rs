@@ -222,6 +222,9 @@ impl LevelBoard {
                 c.copy_from_slice(&word);
             }
             if cell < 960 {
+                // A cell written again shows its last word, as the board's
+                // video RAM does: only that one is drawn.
+                drawn.retain(|d: &CellDrawn| d.cell != cell);
                 drawn.push(CellDrawn { name, cell });
             }
         };
@@ -2397,6 +2400,38 @@ asset = "stage2"
         let at = |p: &Picture, x: usize, y: usize| p.pens[y * video::WIDTH + x];
         assert_eq!(at(&t.picture, 4 * 16, 16), 16 + 5);
         assert_eq!(at(&t.picture, 3 * 16, 16), at(&plain, 3 * 16, 16));
+    }
+
+    /// Two texts on the same cells (one message giving way to the next):
+    /// a cell lists only the letter written last, as the board shows it.
+    #[test]
+    fn a_cell_written_twice_lists_its_last_letter() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, spec, art) = with_looks_and_counters(dir.path());
+        let mut w = World {
+            counters: vec![0; spec.counters.len()],
+            ..Default::default()
+        };
+        w.counters[spec.counters.index_of("bar").unwrap()] = 2;
+        let level = art.levels[0].as_ref().unwrap();
+        let mut twice = level.clone();
+        let again = twice.texts[0].clone();
+        twice.texts.push(Text {
+            cells: again
+                .cells
+                .iter()
+                .map(|&(c, _)| (c, [b'Q', 0x30]))
+                .collect(),
+            ..again
+        });
+        let (_, cells) = twice.cells_with(&level.look(&w).videoram, &w, None);
+        let at = 5 * 32 + 4;
+        let here: Vec<&str> = cells
+            .iter()
+            .filter(|c| c.cell == at)
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(here, ["letter-Q"]);
     }
 
     /// A text's letters are named by the character each stands for, so one
