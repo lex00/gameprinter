@@ -629,11 +629,14 @@ fn call_of(home: &Path, c: &j::Copy, which: &str) -> Result<(&'static str, Value
             ),
             true,
         ),
+        // A theme is played while it is made: the check's problems (the
+        // rooms and figures still to draw) are listed with the run, never
+        // a reason to show nothing.
         (Kind::Theme, "look-play") => (
             "gp_run",
             run(
                 "theme look play",
-                json!({"dir": dir, "game": game()?, "background": true, "minutes": 60}),
+                json!({"dir": dir, "game": game()?, "background": true, "minutes": 60, "anyway": true}),
                 1200,
             ),
             true,
@@ -642,7 +645,7 @@ fn call_of(home: &Path, c: &j::Copy, which: &str) -> Result<(&'static str, Value
             "gp_run",
             run(
                 "theme look play",
-                json!({"dir": dir, "game": game()?, "shots": rd.join("shots")}),
+                json!({"dir": dir, "game": game()?, "shots": rd.join("shots"), "anyway": true}),
                 1800,
             ),
             true,
@@ -653,7 +656,7 @@ fn call_of(home: &Path, c: &j::Copy, which: &str) -> Result<(&'static str, Value
             "gp_run",
             run(
                 "theme look play",
-                json!({"dir": dir, "game": game()?, "shots": rd.join("compare"), "against": "original"}),
+                json!({"dir": dir, "game": game()?, "shots": rd.join("compare"), "against": "original", "anyway": true}),
                 2400,
             ),
             true,
