@@ -732,14 +732,15 @@ addEventListener("keyup", (e) => down.delete(e.code));
 // A and B, Select, Start, then the d-pad or the left stick.
 // The first gamepad is controller 1, a second one controller 2 (the high
 // byte), as on the console.
-// A lever pulled holds the main button at least this long, so a quick
-// flick of the stick does what a pull does on the cabinet: a pour that
-// runs to the end (a drink tap fills its glass in about a third of a
-// second; let go sooner and a part-filled one is sent).
-const LEVER_MS = 500;
-// When each pad's lever was last pulled (0 while it is let go), by its
-// index; it is let go below 0.3, so the stick's spring back past the
-// middle isn't a second pull.
+// A lever pulled holds the main button for this long and then lets go by
+// itself, whether the stick is still pulled or not, so a pull does at once
+// what a button held through a full pour does (a drink tap fills its glass
+// in 20 of the game's 30 frames a second; let go sooner and a part-filled
+// one is sent).
+const LEVER_MS = 700;
+// When each pad's lever was last pulled (0 once it is back below 0.3), by
+// its index: a new pull starts only from there, so the stick's spring
+// back past the middle isn't a second pull.
 const leverAt = [];
 const padBits = () => {
   let bits = 0;
@@ -761,7 +762,7 @@ const padBits = () => {
     const at = leverAt[g.index] ?? 0;
     if (most > 0.5 && !at) leverAt[g.index] = now;
     else if (most < 0.3 && at && now - at >= LEVER_MS) leverAt[g.index] = 0;
-    const pulled = !!leverAt[g.index];
+    const pulled = !!leverAt[g.index] && now - leverAt[g.index] < LEVER_MS;
     const set = LAYOUT.pad.map((bs, bit) => bs.some(on) || !!stick[bit] || (pulled && bit === main));
     set.forEach((v, bit) => {
       if (v) bits |= 1 << (bit + shift);
