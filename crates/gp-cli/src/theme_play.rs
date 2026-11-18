@@ -2171,8 +2171,14 @@ fn serve_sides(
         crate::journeys::note_play(&paths.home, &a.dir, json_out(Some(child.id())));
         return Ok(Outcome::ok(json_out(Some(child.id())), text));
     }
+    let mut handles = Vec::new();
     for (s, l) in served.iter().zip(listeners) {
-        serve_on(l, page, s);
+        handles.push(serve_on(l, page, s));
+    }
+    // A --dev server served here watches as one served in the background
+    // does: it builds again on a change and reloads the open pages.
+    if let Some(dev) = dev.clone() {
+        dev_watch(dev, handles);
     }
     summary(&mut text);
     let _ = write!(
