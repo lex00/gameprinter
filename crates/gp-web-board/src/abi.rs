@@ -132,6 +132,19 @@ pub extern "C" fn gp_board_frame(
 /// Loads a large-art theme's rules (`gp-art 1`, the file its `look.txt`
 /// names with `art`) over the board's named pictures
 /// (docs/formats/board-art.md, "Themes"); an empty text takes them away.
+thread_local! {
+    /// The seed the next theme's rooms pick their pieces' alternatives by.
+    static ROOM_SEED: std::cell::RefCell<u64> = const { std::cell::RefCell::new(0) };
+}
+
+/// Sets the seed the next `gp_board_load_art` picks a room's piece
+/// alternatives by (`#+ room_box picture a|b`): the page gives a random one
+/// before each load, so each alternative is as likely. Two halves, low first.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_board_room_seed(lo: u32, hi: u32) {
+    ROOM_SEED.with(|s| *s.borrow_mut() = u64::from(lo) | (u64::from(hi) << 32));
+}
+
 /// The output buffer holds the art files the frames name by number, as
 /// `gp_load_art` gives them: `{"files": [...], "stages": []}`, and the
 /// rooms it built over the board's screens (`"rooms"`, `crate::files_json`).
@@ -148,7 +161,7 @@ pub extern "C" fn gp_board_load_art(text: *mut u8, text_len: usize) -> i32 {
         return 0;
     }
     let r = BOARD.with(|x| match x.borrow().as_ref() {
-        Some(c) => c.art().theme(t),
+        Some(c) => c.art().theme_seeded(t, ROOM_SEED.with(|s| *s.borrow())),
         None => Err("no board art is open".to_owned()),
     });
     match r {

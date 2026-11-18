@@ -587,6 +587,10 @@ pub struct Art {
     /// By the build's picture: the stage built over that level picture
     /// ([`Art::build_stage`]), its pieces as [`Art::files`] numbers.
     stages: Vec<Option<Stage>>,
+    /// The seed a room's piece alternatives (`#+ room_box picture a|b`)
+    /// are picked by ([`room::pick`]); the page gives a new one each time
+    /// it loads a theme, so each is as likely.
+    pub room_seed: u64,
     /// By the build's picture: a changed cell drawn as the backdrop.
     holes: Vec<bool>,
     /// By the build's picture: a level's HUD layer.
@@ -737,6 +741,7 @@ impl Art {
             })
             .collect();
         Ok(Art {
+            room_seed: 0,
             stages: vec![None; n],
             holes,
             held: set(&rules.held)?,
@@ -891,7 +896,7 @@ impl Art {
                 cells.rows
             ));
         }
-        let mut built = room::build(st, &self.rules.rooms[k], cells);
+        let mut built = room::build_seeded(st, &self.rules.rooms[k], cells, self.room_seed);
         for d in &mut built.stage.draws {
             if let StageSrc::Piece(i) = d.src {
                 let art = &st.pieces[i as usize].1;

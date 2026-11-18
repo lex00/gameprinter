@@ -482,6 +482,8 @@ class BoardDraw {
   // built before themes can't: an error, so the look isn't offered as drawn.
   loadArt(artText) {
     if (!this.x.gp_board_load_art) throw new Error("this page's gp_board.wasm can't draw a theme on an arcade game; rebuild it");
+    // A new seed each load: a room's piece alternatives each as likely.
+    this.x.gp_board_room_seed?.((Math.random() * 2 ** 32) >>> 0, (Math.random() * 2 ** 32) >>> 0);
     const code = this.x.gp_board_load_art(...this.put(enc.encode(artText)));
     if (code !== 0) throw new Error(text.decode(this.out()));
     this.art = artText.trim() !== "";

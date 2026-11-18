@@ -1286,9 +1286,16 @@ impl BoardArt {
     /// got is passed over, as on the NES; rules that draw none of them are
     /// refused, as a theme made for another game.
     pub fn theme(&self, text: &str) -> Result<BoardTheme, String> {
+        self.theme_seeded(text, 0)
+    }
+
+    /// [`BoardArt::theme`], its rooms' piece alternatives (`a|b`) picked
+    /// by `seed` (the page gives a new one each time it loads a theme).
+    pub fn theme_seeded(&self, text: &str, seed: u64) -> Result<BoardTheme, String> {
         let rules = gp_present::art::ArtRules::read(text)?;
         let present = self.present();
         let mut art = gp_present::art::Art::new(rules, &present)?;
+        art.room_seed = seed;
         // Each room over its screen's cells, as the board has them.
         let mut rooms = Vec::new();
         for (pic, room) in art.room_screens(&present) {

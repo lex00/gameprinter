@@ -106,8 +106,8 @@ impl Place {
     #[must_use]
     pub fn pieces(&self) -> Vec<&str> {
         match &self.lay {
-            Lay::Fill(p) | Lay::Box(p) | Lay::At(p, _) => vec![p],
-            Lay::Run(r) => r.iter().flatten().map(String::as_str).collect(),
+            Lay::Fill(p) | Lay::Box(p) | Lay::At(p, _) => p.split('|').collect(),
+            Lay::Run(r) => r.iter().flatten().flat_map(|p| p.split('|')).collect(),
         }
     }
 }
@@ -359,10 +359,36 @@ fn rects(grid: &[bool], cols: usize, rows: usize) -> Vec<[usize; 4]> {
     out
 }
 
+/// One of a piece name's alternatives (`a|b|c`), each as likely, by
+/// `seed`: the same name and seed pick the same one, so a room drawn on
+/// several screens shows the same piece on each.
+#[must_use]
+pub fn pick(name: &str, seed: u64) -> &str {
+    let alts: Vec<&str> = name.split('|').collect();
+    if alts.len() < 2 {
+        return name;
+    }
+    let mut h = seed ^ 0x9e37_79b9_7f4a_7c15;
+    for b in name.bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    h ^= h >> 33;
+    alts[(h % alts.len() as u64) as usize]
+}
+
 /// Builds the room `r` over the screen's `cells` with the stage's scale,
-/// backdrop and pieces.
+/// backdrop and pieces: [`build_seeded`] with seed 0.
 #[must_use]
 pub fn build(st: &StageRules, r: &RoomRules, cells: &Cells) -> Room {
+    build_seeded(st, r, cells, 0)
+}
+
+/// The room `r` over `cells`, a piece name with alternatives (`a|b`)
+/// taking the one `seed` picks ([`pick`]).
+#[must_use]
+pub fn build_seeded(st: &StageRules, r: &RoomRules, cells: &Cells, seed: u64) -> Room {
     let s = st.scale;
     let (cols, rows) = (cells.cols, cells.rows);
     let side = cells.size * s;
@@ -374,6 +400,7 @@ pub fn build(st: &StageRules, r: &RoomRules, cells: &Cells) -> Room {
         ladders: Vec::new(),
     };
     let piece = |name: &str| {
+        let name = pick(name, seed);
         st.pieces
             .iter()
             .position(|p| p.0 == name)
@@ -506,6 +533,23 @@ pub fn build(st: &StageRules, r: &RoomRules, cells: &Cells) -> Room {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A piece name's alternatives are each picked about as often over
+    /// seeds, a seed always picks the same, and the rule names them all.
+    #[test]
+    fn a_pieces_alternatives_are_each_as_likely() {
+        let name = "p0|p1|p2|p3|p4|p5|p6|p7|p8|p9";
+        let mut n = [0u32; 10];
+        for seed in 0..20_000u64 {
+            let k: usize = pick(name, seed)[1..].parse().unwrap();
+            n[k] += 1;
+        }
+        assert!(n.iter().all(|c| (1_700..2_300).contains(c)), "{n:?}");
+        assert_eq!(pick(name, 7), pick(name, 7));
+        assert_eq!(pick("one", 7), "one");
+        let (_, r) = rules(&["room s", "room_cells c", "room_box c wall|door"]);
+        assert_eq!(r.places[0].pieces(), ["wall", "door"]);
+    }
     use crate::art::stage::StageSrc;
 
     /// Reads `#+` room lines (without the `#+`) after a stage.
