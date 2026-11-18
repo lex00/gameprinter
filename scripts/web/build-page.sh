@@ -43,6 +43,20 @@ out="$2"
 home="${GP_HOME:-$HOME/.gameprinter}"
 gp="${GP:-$real/target/debug/gp}"
 repo="$real/target/page-src"
+# One build at a time: two builds share target/page-src (each empties it
+# first), so a second one, from another server's rebuild or a shot run,
+# waits for the first. A lock whose holder is gone is taken over.
+lock="$real/target/page-build.lock"
+mkdir -p "$real/target"
+until mkdir "$lock" 2>/dev/null; do
+  if [ -f "$lock/pid" ] && ! kill -0 "$(cat "$lock/pid" 2>/dev/null)" 2>/dev/null; then
+    rm -rf "$lock"
+    continue
+  fi
+  sleep 1
+done
+echo $$ > "$lock/pid"
+trap 'rm -rf "$lock"' EXIT
 export CARGO_TARGET_DIR="$real/target/page-target"
 
 # The game's template id, the game it is a template of, and how its assets

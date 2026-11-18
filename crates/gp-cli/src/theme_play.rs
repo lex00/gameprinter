@@ -117,12 +117,13 @@ pub struct PlayArgs {
     #[arg(long)]
     pub browser: Option<PathBuf>,
     /// Serve from a process of its own and return at once with the link and
-    /// its PID; it stops by itself after --minutes (default 60). The way to
+    /// its PID; it stops by itself after --minutes (default 60, 480 with
+    /// --dev). The way to
     /// serve from an agent's tool. Example: --background
     #[arg(long)]
     pub background: bool,
     /// Stop serving after this many minutes (default: at ctrl-C, or 60 with
-    /// --background). Example: --minutes 30
+    /// --background, 480 with --background --dev). Example: --minutes 30
     #[arg(long)]
     pub minutes: Option<u64>,
     /// Play your working copies as they are, for a dev loop: the page and
@@ -1289,6 +1290,10 @@ struct DevWatch {
     watch: Vec<PathBuf>,
 }
 
+/// How long a --dev server started with --background serves: a working
+/// session, eight hours.
+const DEV_MINUTES: u64 = 480;
+
 fn refuse_port(port: u16) -> Result<()> {
     if TAKEN_PORTS.contains(&port) {
         bail!(
@@ -2054,7 +2059,11 @@ fn serve_sides(
 ) -> Result<Outcome> {
     let (page, built, (problems, warnings), src_words) =
         (how.page, how.built, how.checked, how.source);
-    let minutes = a.minutes.or(a.background.then_some(60));
+    // A --dev server is a working session's page: hours, not the hour a
+    // look at a theme gets.
+    let minutes = a
+        .minutes
+        .or(a.background.then_some(if a.dev { DEV_MINUTES } else { 60 }));
     let summary = |text: &mut String| {
         for (s, b) in served.iter().zip(built) {
             let _ = writeln!(

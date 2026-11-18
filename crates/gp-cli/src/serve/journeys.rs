@@ -636,7 +636,7 @@ fn call_of(home: &Path, c: &j::Copy, which: &str) -> Result<(&'static str, Value
             "gp_run",
             run(
                 "theme look play",
-                json!({"dir": dir, "game": game()?, "background": true, "minutes": 60, "anyway": true, "dev": true}),
+                json!({"dir": dir, "game": game()?, "background": true, "anyway": true, "dev": true}),
                 1200,
             ),
             true,
