@@ -476,6 +476,38 @@ fn build_page(repo: &Path, game_dir: &Path, game: &str, paths: &Paths) -> Result
         .join("theme-play")
         .join(game.replace('/', "-"))
         .join("page");
+    let exe = std::env::current_exe().context("finding gp")?;
+    let mut play = out.clone().into_os_string();
+    play.push(".play");
+    let play = PathBuf::from(play);
+    // The files the page is built from, and gp itself: when none has
+    // changed since the page here was built, it is served again as it is.
+    let stamp = out.with_extension("stamp");
+    let inputs = [
+        repo.join("crates"),
+        repo.join("scripts/web"),
+        game_dir.to_path_buf(),
+    ];
+    let built = fs::metadata(&exe)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |t| t.as_millis());
+    let now = format!("{:?} {built}", fingerprint(&inputs));
+    if out.join("index.html").is_file()
+        && play.is_dir()
+        && fs::read_to_string(&stamp).is_ok_and(|s| s == now)
+    {
+        eprintln!(
+            "the page in {} was built from these files: served again as it is",
+            out.display()
+        );
+        return Ok(PageBuilt {
+            page: out,
+            play: Some(play),
+        });
+    }
+    let _ = fs::remove_file(&stamp);
     eprintln!(
         "building the page from {} into {} (scripts/web/build-page.sh; a few minutes)",
         repo.display(),
@@ -484,7 +516,6 @@ fn build_page(repo: &Path, game_dir: &Path, game: &str, paths: &Paths) -> Result
     if let Some(p) = out.parent() {
         fs::create_dir_all(p)?;
     }
-    let exe = std::env::current_exe().context("finding gp")?;
     let o = Command::new("bash")
         .arg(repo.join("scripts/web/build-page.sh"))
         .arg(game_dir)
@@ -510,11 +541,10 @@ fn build_page(repo: &Path, game_dir: &Path, game: &str, paths: &Paths) -> Result
                 .join(" / ")
         );
     }
-    let mut play = out.clone().into_os_string();
-    play.push(".play");
+    let _ = fs::write(&stamp, now);
     Ok(PageBuilt {
         page: out,
-        play: Some(PathBuf::from(play)),
+        play: Some(play),
     })
 }
 
