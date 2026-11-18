@@ -831,7 +831,7 @@ impl BoardArt {
     /// [`BoardArt::draw`] with what a theme draws itself left out
     /// (`omit`): those bodies' sprite entries, the counters' cells (the
     /// screen's own words there), and with the screen every pixel no
-    /// sprite drew (or showed through its mask) as [`TRANSPARENT`], but for the counters' cells still
+    /// sprite drew as [`TRANSPARENT`], but for the counters' cells still
     /// drawn, whose pixels of colour 0 in their bank are transparent and
     /// the rest kept. `drawn` and `cells` still list everything, as the
     /// frame would draw it whole. Omitting nothing draws [`BoardArt::draw`]'s
@@ -973,8 +973,7 @@ impl BoardArt {
             });
         }
         let mut pens = vec![0u8; video::WIDTH * video::HEIGHT];
-        let mut masked = vec![false; video::WIDTH * video::HEIGHT];
-        video::draw_masked(&self.gfx, &videoram, &ram, false, &mut pens, &mut masked);
+        video::draw(&self.gfx, &videoram, &ram, false, &mut pens);
         if omit.screen {
             let mut kept = vec![false; 960];
             for (k, c) in cells.iter().enumerate() {
@@ -983,9 +982,10 @@ impl BoardArt {
                 }
             }
             for (i, p) in pens.iter_mut().enumerate() {
-                // A sprite's own pixels, and the screen a sprite's mask
-                // shows through it, stay the board's.
-                if *p & video::SPRITE_BIT != 0 || masked[i] {
+                // A sprite's own pixels stay the board's; where a sprite's
+                // mask hides what is under it, the theme's room shows (a
+                // door the guests come out of).
+                if *p & video::SPRITE_BIT != 0 {
                     continue;
                 }
                 let cell = (i / video::WIDTH / 16) * 32 + (i % video::WIDTH) / 16;
@@ -2302,30 +2302,20 @@ asset = "stage2"
         assert_eq!(at(300, 100), 0x02 | video::SPRITE_BIT);
     }
 
-    /// Under a themed screen, where a board sprite's mask shows the tile
-    /// through it (a glass the room shows through), the board's tile stays:
-    /// the sprite looks as the board draws it, whatever the theme's room.
+    /// Under a themed screen, a board sprite's mask (it draws nothing and
+    /// hides the sprites under it, as a door hides the guests coming out
+    /// of it) shows the theme's room, never the board's screen.
     #[test]
-    fn a_sprites_mask_keeps_the_boards_screen_under_a_themed_one() {
+    fn a_sprites_mask_shows_the_themes_room() {
         let dir = tempfile::tempdir().unwrap();
         let (_, art, mut w) = two_bodies(dir.path());
         w.bodies.truncate(1);
         w.bodies[0].ext[1] = 0x0103;
-        let plain = art.draw(&w, &[true], &[u32::MAX]).unwrap();
         let mut theme = art
             .theme("gp-art 1\nscale 2\npic stage saloon.png 512 480 0 0\n")
             .unwrap();
         let t = art.themed(&mut theme, &w, &[true], &[u32::MAX]).unwrap();
-        let mut kept = 0;
-        for (a, b) in t.picture.pens.iter().zip(&plain.pens) {
-            if *a != TRANSPARENT {
-                assert_eq!(a, b);
-                assert_eq!(*a, 16 + 5, "the screen's tile 1 in bank 1");
-                kept += 1;
-            }
-        }
-        // The mask's 16 columns by 32 rows, each a pixel of the board.
-        assert_eq!(kept, 16 * 32);
+        assert!(t.picture.pens.iter().all(|p| *p == TRANSPARENT));
     }
 
     /// A counter's digit drawn by the theme: the cell is the screen's own
