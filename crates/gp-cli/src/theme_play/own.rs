@@ -288,6 +288,7 @@ pub(super) fn run(
         .collect();
     let words = format!("{} (its own files, no registry)", game_dir.display());
     let how = Serving {
+        watch: Vec::new(),
         page: &out,
         built: &built,
         checked,

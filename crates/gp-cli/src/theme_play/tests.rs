@@ -636,3 +636,37 @@ fn a_served_page_names_the_rom_found_here() {
     assert_eq!(pj["title"], "x");
     assert_eq!(fs::read(dir.join("local/game.nes")).unwrap(), bytes);
 }
+
+/// A --dev server builds again when a watched file changes or comes, and
+/// never for build output (target/) or git.
+#[test]
+fn a_dev_server_sees_a_change_but_not_build_output() {
+    let d = tempfile::tempdir().unwrap();
+    let w = vec![d.path().to_owned()];
+    fs::create_dir_all(d.path().join("theme/target")).unwrap();
+    fs::write(d.path().join("theme/art.txt"), "gp-art 1\n").unwrap();
+    let before = fingerprint(&w);
+    fs::write(d.path().join("theme/target/x"), "built").unwrap();
+    fs::create_dir_all(d.path().join(".git")).unwrap();
+    fs::write(d.path().join(".git/HEAD"), "ref").unwrap();
+    assert_eq!(fingerprint(&w), before);
+    fs::write(d.path().join("theme/door.png"), "new").unwrap();
+    assert_ne!(fingerprint(&w), before);
+}
+
+/// A --dev page's page.json names the build number's file, which starts
+/// at 0.
+#[test]
+fn a_dev_page_names_its_build_number() {
+    let d = tempfile::tempdir().unwrap();
+    fs::write(d.path().join("page.json"), "{\"title\": \"x\"}\n").unwrap();
+    dev_overlay(d.path()).unwrap();
+    let pj: Value =
+        serde_json::from_str(&fs::read_to_string(d.path().join("page.json")).unwrap()).unwrap();
+    assert_eq!(pj["dev_reload"], "dev-rev.txt");
+    assert_eq!(pj["title"], "x");
+    assert_eq!(
+        fs::read_to_string(d.path().join("dev-rev.txt")).unwrap(),
+        "0\n"
+    );
+}

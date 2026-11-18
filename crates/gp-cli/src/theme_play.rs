@@ -37,7 +37,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -132,6 +132,10 @@ pub struct PlayArgs {
     /// Example: --dev
     #[arg(long)]
     pub dev: bool,
+    /// Build all a server serves and write its serve.json into this
+    /// folder, without serving: a --dev server rebuilding itself.
+    #[arg(long, hide = true)]
+    pub prepare_into: Option<PathBuf>,
     /// The folder a --background server serves (gp passes it to itself).
     #[arg(long, hide = true)]
     pub serve_prepared: Option<PathBuf>,
@@ -1270,6 +1274,19 @@ struct Prepared {
     page: PathBuf,
     minutes: u64,
     sides: Vec<Served>,
+    /// --dev: what the server watches and rebuilds from.
+    #[serde(default)]
+    dev: Option<DevWatch>,
+}
+
+/// A --dev server's rebuild: the theme folder and game it was asked for,
+/// the ROM given, and the folders whose changes make it build again.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DevWatch {
+    dir: PathBuf,
+    game: PathBuf,
+    rom: Option<PathBuf>,
+    watch: Vec<PathBuf>,
 }
 
 fn refuse_port(port: u16) -> Result<()> {
@@ -1295,17 +1312,144 @@ fn bind(port: u16) -> Result<std::net::TcpListener> {
 
 /// Serves the page, the overlay and the registry on `listener` from a
 /// thread of its own, until gp ends.
-fn serve_on(listener: std::net::TcpListener, page: &Path, side: &Served) {
-    let headers = Arc::new(crate::registry::page_headers(page));
-    let roots = Arc::new(vec![
-        side.overlay.clone(),
-        page.to_owned(),
-        side.registry.clone(),
-    ]);
+fn serve_on(listener: std::net::TcpListener, page: &Path, side: &Served) -> Arc<RwLock<Roots>> {
+    let now = Arc::new(RwLock::new(Roots::of(page, side)));
+    let shared = now.clone();
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
-            let (roots, headers) = (roots.clone(), headers.clone());
-            std::thread::spawn(move || crate::registry::answer(stream, &roots, &headers));
+            let r = shared
+                .read()
+                .map(|r| r.clone())
+                .unwrap_or_else(|e| e.into_inner().clone());
+            std::thread::spawn(move || crate::registry::answer(stream, &r.roots, &r.headers));
+        }
+    });
+    now
+}
+
+/// What one side serves: the overlay, the page and the registry, and the
+/// page's headers. A --dev server swaps in a new set when it rebuilds.
+#[derive(Clone)]
+struct Roots {
+    roots: Vec<PathBuf>,
+    headers: String,
+}
+
+impl Roots {
+    fn of(page: &Path, side: &Served) -> Self {
+        Self {
+            roots: vec![side.overlay.clone(), page.to_owned(), side.registry.clone()],
+            headers: crate::registry::page_headers(page),
+        }
+    }
+}
+
+/// A --dev page's overlay: page.json says to reload on a new build, and
+/// `dev-rev.txt` holds the build's number, which the page reads every
+/// two seconds (page.js).
+fn dev_overlay(dir: &Path) -> Result<()> {
+    let pj = dir.join("page.json");
+    let mut v: Value = serde_json::from_str(&fs::read_to_string(&pj)?)?;
+    v["dev_reload"] = json!("dev-rev.txt");
+    fs::write(&pj, serde_json::to_string_pretty(&v)? + "\n")?;
+    fs::write(dir.join("dev-rev.txt"), "0\n")?;
+    Ok(())
+}
+
+/// The newest change under `dirs`, by modification time, and the count of
+/// files: build output, git and installed packages left out.
+fn fingerprint(dirs: &[PathBuf]) -> (u128, u64) {
+    let mut newest = 0u128;
+    let mut count = 0u64;
+    let mut stack: Vec<PathBuf> = dirs.to_vec();
+    while let Some(d) = stack.pop() {
+        for e in fs::read_dir(&d).into_iter().flatten().flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.')
+                || ["target", "node_modules", "results"].contains(&name.as_ref())
+            {
+                continue;
+            }
+            let Ok(m) = e.metadata() else { continue };
+            if m.is_dir() {
+                stack.push(e.path());
+            } else {
+                count += 1;
+                let t = m
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |t| t.as_millis());
+                newest = newest.max(t);
+            }
+        }
+    }
+    (newest, count)
+}
+
+/// A --dev server's watch: when a watched file changes (and has stayed
+/// unchanged two seconds), gp builds everything again into a new folder
+/// (--prepare-into) while the old build is still served, then swaps the
+/// sides to it with the next build number, which reloads the open pages.
+fn dev_watch(dev: DevWatch, sides: Vec<Arc<RwLock<Roots>>>) {
+    std::thread::spawn(move || {
+        let mut seen = fingerprint(&dev.watch);
+        let mut rev = 0u64;
+        let mut last_build: Option<PathBuf> = None;
+        loop {
+            std::thread::sleep(Duration::from_secs(2));
+            let now = fingerprint(&dev.watch);
+            if now == seen {
+                continue;
+            }
+            std::thread::sleep(Duration::from_secs(2));
+            if fingerprint(&dev.watch) != now {
+                continue;
+            }
+            seen = now;
+            let Ok(into) = tempfile::Builder::new()
+                .prefix("gp-theme-dev-")
+                .tempdir()
+                .map(|t| t.keep())
+            else {
+                continue;
+            };
+            eprintln!("a change: building again into {}", into.display());
+            let Ok(exe) = std::env::current_exe() else {
+                continue;
+            };
+            let mut cmd = Command::new(exe);
+            cmd.args(["theme", "look", "play"])
+                .arg(&dev.dir)
+                .arg("--game")
+                .arg(&dev.game)
+                .args(["--dev", "--anyway", "--prepare-into"])
+                .arg(&into)
+                .stdin(Stdio::null());
+            if let Some(r) = &dev.rom {
+                cmd.arg("--rom").arg(r);
+            }
+            let ok = cmd.status().is_ok_and(|s| s.success());
+            let prep: Option<Prepared> = fs::read_to_string(into.join("serve.json"))
+                .ok()
+                .and_then(|t| serde_json::from_str(&t).ok());
+            let Some(prep) = prep.filter(|_| ok) else {
+                eprintln!("the build failed; the last one stays served");
+                continue;
+            };
+            rev += 1;
+            for (side, served) in sides.iter().zip(&prep.sides) {
+                let _ = fs::write(served.overlay.join("dev-rev.txt"), format!("{rev}\n"));
+                if let Ok(mut r) = side.write() {
+                    *r = Roots::of(&prep.page, served);
+                }
+            }
+            eprintln!("build {rev} served");
+            // The build before goes, its pages reloaded onto this one.
+            if let Some(old) = last_build.replace(into) {
+                let _ = fs::remove_dir_all(old);
+            }
         }
     });
 }
@@ -1381,9 +1525,17 @@ fn open_link(link: &str) {
 /// `--serve-prepared`: the --background server.
 fn serve_prepared(root: &Path) -> Result<Outcome> {
     let p: Prepared = serde_json::from_str(&fs::read_to_string(root.join("serve.json"))?)?;
+    let mut handles = Vec::new();
     for s in &p.sides {
-        serve_on(bind(s.port)?, &p.page, s);
+        handles.push(serve_on(bind(s.port)?, &p.page, s));
         println!("serving {} at {}", s.label, s.link);
+    }
+    if let Some(dev) = p.dev.clone() {
+        println!(
+            "watching {} folders, building again on a change",
+            dev.watch.len()
+        );
+        dev_watch(dev, handles);
     }
     std::thread::sleep(Duration::from_secs(p.minutes * 60));
     // Its scratch folder goes with it.
@@ -1836,6 +1988,9 @@ pub(crate) fn run(a: &PlayArgs, paths: &Paths) -> Result<Outcome> {
         if let Some((id, r)) = &mine {
             local_rom(&dir.join("overlay"), id, r)?;
         }
+        if a.dev {
+            dev_overlay(&dir.join("overlay"))?;
+        }
         let l = bind(if i == 0 { a.port } else { 0 })?;
         let port = l.local_addr()?.port();
         let link = format!(
@@ -1852,7 +2007,13 @@ pub(crate) fn run(a: &PlayArgs, paths: &Paths) -> Result<Outcome> {
         });
         listeners.push(l);
     }
+    // --dev: the theme, the game and the gameprinter checkout's sources.
+    let mut watch = vec![a.dir.clone(), game_dir.clone()];
+    if let Some(repo) = checkout() {
+        watch.extend(["crates", "scripts/web"].map(|d| repo.join(d)));
+    }
     let how = Serving {
+        watch,
         page: &page,
         built: &built,
         checked: (problems, warnings),
@@ -1868,6 +2029,8 @@ pub(crate) fn run(a: &PlayArgs, paths: &Paths) -> Result<Outcome> {
 
 /// What a served run says about itself.
 struct Serving<'a> {
+    /// The folders a --dev server watches.
+    watch: Vec<PathBuf>,
     page: &'a Path,
     built: &'a [Built],
     /// The look check's problems and warnings.
@@ -1922,6 +2085,29 @@ fn serve_sides(
             "minutes": minutes,
         })
     };
+    let dev = a.dev.then(|| DevWatch {
+        dir: a.dir.clone(),
+        game: a.game.clone(),
+        rom: a.rom.clone(),
+        watch: how.watch.clone(),
+    });
+    if let Some(into) = &a.prepare_into {
+        // Built for a --dev server to swap in: its folders stay.
+        let _ = work.keep();
+        drop(listeners);
+        let prep = Prepared {
+            page: page.to_owned(),
+            minutes: minutes.unwrap_or(60),
+            sides: served.clone(),
+            dev,
+        };
+        fs::create_dir_all(into)?;
+        fs::write(
+            into.join("serve.json"),
+            serde_json::to_string_pretty(&prep)?,
+        )?;
+        return Ok(Outcome::ok(json!({ "prepared": into }), "prepared".into()));
+    }
     if a.background {
         // The scratch folder stays for the server, which removes it when it
         // stops, and binds the ports itself.
@@ -1931,6 +2117,7 @@ fn serve_sides(
             page: page.to_owned(),
             minutes: minutes.unwrap_or(60),
             sides: served.clone(),
+            dev,
         };
         fs::write(
             root.join("serve.json"),

@@ -761,6 +761,19 @@ else if (started && !ownFiles() && typeof page?.local_rom === "string") {
   const r = await fetch(page.local_rom).catch(() => null);
   if (r?.ok) liftAndPlay(new Blob([await r.arrayBuffer()]), page.local_rom.split("/").pop());
 }
+// A page served for someone's work in progress (gp theme look play --dev)
+// names a file whose number changes when the server has built their
+// changes again: the page reloads onto the new build, the ROM with it.
+if (typeof page?.dev_reload === "string") {
+  let first = null;
+  setInterval(async () => {
+    const r = await fetch(page.dev_reload, { cache: "no-store" }).catch(() => null);
+    if (!r?.ok) return;
+    const n = (await r.text()).trim();
+    if (first === null) first = n;
+    else if (n !== first) location.reload();
+  }, 2000);
+}
 if (keptRom) {
   const again = document.createElement("button");
   again.className = "quiet";
