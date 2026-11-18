@@ -342,6 +342,7 @@ A feature is an optional part of a format with a name. A model lists the ones it
 | `stretches.state` |  | `[[stretches.state]]`: the original's states by name and condition, by which a lockstep lists its splits | `stretches.state` |
 | `scope.while` |  | `[scope] while`: a condition over the original's state that holds while a run is in the template's scope; a lockstep stops at the first frame it doesn't and counts the frames from there as out of scope | `scope.while` |
 | `scope.leaves` |  | `[scope] leaves`: selectors over the original's state, such as a stage byte; a run is out of the template's scope from the first frame one leaves the value it had on the first compared frame | `scope.leaves` |
+| `field.queue` |  | A field's `queue`: a count byte, then a queue's places, read as the count and that many places, the rest 0 | `field.queue` |
 | `field.bcd` |  | A field's `bcd`: bytes of two decimal digits each, most significant first | `field.bcd`, `slots.field.bcd` |
 | `field.case.unmeasured` |  | A case under which a field isn't compared: it means nothing then, though a translation loads it | `field.case.unmeasured`, `slots.field.case.unmeasured`, `slots.group.field.case.unmeasured` |
 | `slots.resync` |  | A resync carries the original's slot objects into the model as a start does | `slots.resync` |

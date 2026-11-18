@@ -393,6 +393,12 @@ pub const FEATURES: &[Feature] = &[
         &["field.bcd", "slots.field.bcd"],
     ),
     mapping(
+        "field.queue",
+        "",
+        "A field's `queue`: a count byte, then a queue's places, read as the count and that many places, the rest 0",
+        &["field.queue"],
+    ),
+    mapping(
         "field.case.unmeasured",
         "",
         "A case under which a field isn't compared: it means nothing then, though a translation loads it",
@@ -609,6 +615,21 @@ mod tests {
         .unwrap();
         let e = Mapping::parse(&format!("board_units = true\n{BASE}")).unwrap_err();
         assert!(e.contains("arcade mapping's"), "{e}");
+    }
+
+    /// A queue field reads its count and that many places; what the game
+    /// left past them reads 0, so it is never a difference.
+    #[test]
+    fn a_queue_field_reads_only_the_counted_places() {
+        let t = format!(
+            "{BASE}\n[[field]]\npath = \"entities.sound[0].ext[1]\"\nram = [0x14, 0xE1, 0xE2, 0xE3]\nqueue = true\n"
+        );
+        let m = Mapping::parse(&t).unwrap();
+        let f = m.fields.iter().find(|f| f.queue).unwrap();
+        assert_eq!(f.value(&[1, 0x39, 0x1d, 0x77]), f.value(&[1, 0x39, 0, 0]));
+        assert_ne!(f.value(&[2, 0x39, 0x1d, 0x77]), f.value(&[2, 0x39, 0, 0]));
+        let bad = t.replace("queue = true", "queue = true\nsigned = true");
+        assert!(Mapping::parse(&bad).unwrap_err().contains("queue"));
     }
 
     #[test]

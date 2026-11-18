@@ -570,6 +570,11 @@
           "type": "boolean",
           "default": false
         },
+        "queue": {
+          "description": "Feature `field.queue`: the first byte is a count and the rest a\nqueue's places: only the first count places are read, the ones past\nthem as 0, so what a game left there from before is no difference\n(a sound request queue the game empties by its count).",
+          "type": "boolean",
+          "default": false
+        },
         "ram": {
           "description": "RAM addresses, low byte first. Empty for a field that reads the\nPPU's state (`nametable`, `oam`, `oam_tile`) or is an `index`.",
           "type": "array",

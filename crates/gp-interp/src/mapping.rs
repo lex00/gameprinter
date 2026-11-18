@@ -690,6 +690,12 @@ pub struct Field {
     /// ($25-$27) and its bonus timer ($2E).
     #[serde(default)]
     pub bcd: bool,
+    /// Feature `field.queue`: the first byte is a count and the rest a
+    /// queue's places: only the first count places are read, the ones past
+    /// them as 0, so what a game left there from before is no difference
+    /// (a sound request queue the game empties by its count).
+    #[serde(default)]
+    pub queue: bool,
     /// Compare whole parts only: the model's value rounded down against the
     /// original's, for an original that keeps no fraction the model has.
     /// With `frac` as well, a translation loads the fraction and a run
@@ -1581,6 +1587,19 @@ impl Field {
         if !f.lookup.is_empty() && (f.flag || f.named()) {
             return Err(format!("{}: lookup goes with a number", f.path));
         }
+        if f.queue
+            && (f.digits
+                || f.bcd
+                || f.signed
+                || f.bits.is_some()
+                || f.frac.is_some()
+                || !(2..=8).contains(&n))
+        {
+            return Err(format!(
+                "{}: queue takes 2 to 8 bytes (a count, then the places) and no digits, bcd, signed, bits or frac",
+                f.path
+            ));
+        }
         if f.bcd && (f.digits || f.signed || f.bits.is_some() || f.frac.is_some() || n > 7) {
             return Err(format!(
                 "{}: bcd takes 1 to 7 bytes and no digits, signed, bits or frac",
@@ -1948,6 +1967,18 @@ impl Field {
     /// selectors read, in order.
     pub fn value(&self, bytes: &[u8]) -> Value {
         let n = self.width();
+        let kept: Vec<u8>;
+        let bytes = if self.queue && !bytes.is_empty() {
+            let count = usize::from(bytes[0]);
+            kept = bytes
+                .iter()
+                .enumerate()
+                .map(|(i, b)| if i == 0 || i <= count { *b } else { 0 })
+                .collect();
+            &kept[..]
+        } else {
+            bytes
+        };
         let mut v: i64 = 0;
         if self.digits {
             for b in &bytes[..n] {
