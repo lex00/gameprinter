@@ -93,6 +93,7 @@ An arcade game such as Tapper is drawn by its board, and its theme uses the same
 | A sprite | `sprite-ENTITY-CODE`, the entity and the picture code it shows in hex, such as `sprite-mug-4d` | 32 by 32 |
 | A counter's digit | `counter-NAME-D`, such as `counter-score-7` | 16 by 16 |
 | A repeated counter tile | `counter-NAME`, such as `counter-lives` | 16 by 16 |
+| A letter of the game's texts | `letter-A` to `letter-Z`, `letter-0` to `letter-9`, any other `letter-xNNN` by its tile code (`letter-x02e`): one picture redraws it in every text, a font | 16 by 16 |
 
 Sizes and places are the board's picture's pixels, 512 by 480; `scale 2` draws the art at twice that. Which codes each entity shows comes from your own romset, never from the theme or the game's package:
 

@@ -112,8 +112,6 @@ struct Number {
 /// A string drawn while counters say so: each character's cell and word.
 #[derive(Clone)]
 struct Text {
-    /// Its slot, as a theme names its cells.
-    name: String,
     /// Each character's cell and its two bytes.
     cells: Vec<(usize, [u8; 2])>,
     when: Vec<Test>,
@@ -267,7 +265,7 @@ impl LevelBoard {
         }
         for t in self.texts.iter().filter(|t| Test::all(&t.when, w)) {
             for &(cell, word) in &t.cells {
-                put(cell, word, format!("text-{}", t.name));
+                put(cell, word, letter_name(word));
             }
         }
         (std::borrow::Cow::Owned(v), drawn)
@@ -297,6 +295,24 @@ pub fn counter_name(counter: &str, digit: Option<u8>) -> String {
     match digit {
         Some(d) => format!("counter-{counter}-{d}"),
         None => format!("counter-{counter}"),
+    }
+}
+
+/// The name a theme gives a text's letter: the tile a text draws, by the
+/// character it stands for when it is a letter or a digit (`letter-A`,
+/// `letter-7`, the text's byte being the tile's code), else by the tile's
+/// code in hex (`letter-x2e`). One picture a letter redraws every text the
+/// game writes with it.
+#[must_use]
+pub fn letter_name(word: [u8; 2]) -> String {
+    let c = char::from(word[0]);
+    if (word[1] & 3) == 0 && (c.is_ascii_uppercase() || c.is_ascii_digit()) {
+        format!("letter-{c}")
+    } else {
+        format!(
+            "letter-x{:03x}",
+            u16::from(word[0]) | (u16::from(word[1] & 3) << 8)
+        )
     }
 }
 
@@ -722,7 +738,6 @@ impl BoardArt {
                     }
                 }
                 texts.push(Text {
-                    name: t.text.slot.clone(),
                     cells,
                     when: tests(&t.when).map_err(at_t)?,
                 });
@@ -1043,6 +1058,11 @@ impl BoardArt {
             }
             for r in &l.repeats {
                 add(counter_name(&r.name, None), CELL_SIZE, &mut out);
+            }
+            for t in &l.texts {
+                for &(_, word) in &t.cells {
+                    add(letter_name(word), CELL_SIZE, &mut out);
+                }
             }
         }
         out
@@ -2379,8 +2399,39 @@ asset = "stage2"
         assert_eq!(at(&t.picture, 3 * 16, 16), at(&plain, 3 * 16, 16));
     }
 
-    /// A text's letters have no name a theme can give, so a theme that
-    /// draws other cells leaves them the board's: the words still show.
+    /// A text's letters are named by the character each stands for, so one
+    /// picture a letter redraws every text written with it; a theme that
+    /// draws a letter draws it in that letter's cell.
+    #[test]
+    fn a_theme_draws_a_texts_letters_by_name() {
+        assert_eq!(letter_name([b'H', 0x30]), "letter-H");
+        assert_eq!(letter_name([b'7', 0x30]), "letter-7");
+        assert_eq!(letter_name([b'.', 0x30]), "letter-x02e");
+        assert_eq!(letter_name([b'H', 0x31]), "letter-x148");
+        let dir = tempfile::tempdir().unwrap();
+        let (_, spec, art) = with_looks_and_counters(dir.path());
+        let names: Vec<String> = art.names().into_iter().map(|(n, _)| n).collect();
+        assert!(names.contains(&"letter-H".to_owned()) && names.contains(&"letter-J".to_owned()));
+        let mut w = World {
+            counters: vec![0; spec.counters.len()],
+            ..Default::default()
+        };
+        w.counters[spec.counters.index_of("bar").unwrap()] = 2;
+        let mut theme = art
+            .theme("gp-art 1\npic letter-H h.png 16 16 0 0\n")
+            .unwrap();
+        let t = art.themed(&mut theme, &w, &[], &[]).unwrap();
+        let u = gp_present::art::ART_SUB;
+        assert!(
+            t.frame
+                .draws
+                .iter()
+                .any(|d| [d.x, d.y] == [4 * 16 * u, 5 * 16 * u])
+        );
+    }
+
+    /// A theme that draws other cells, and none of a text's letters,
+    /// leaves the letters the board's: the words still show.
     #[test]
     fn a_text_stays_the_boards_under_a_theme_of_other_cells() {
         let dir = tempfile::tempdir().unwrap();
@@ -2393,7 +2444,7 @@ asset = "stage2"
         w.counters[c("score")] = 120;
         w.counters[c("bar")] = 2;
         let plain = art.draw(&w, &[], &[]).unwrap();
-        assert!(plain.cells.iter().any(|x| x.name.starts_with("text-")));
+        assert!(plain.cells.iter().any(|x| x.name.starts_with("letter-")));
         let mut theme = art
             .theme("gp-art 1\npic counter-score-2 two.png 16 16 0 0\n")
             .unwrap();

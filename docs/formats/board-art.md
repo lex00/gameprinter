@@ -251,6 +251,7 @@ A large-art theme (docs/formats/theme.md, "Large-art rules") changes an arcade g
 | A sprite | `sprite-ENTITY-CODE`: the entity with a `board_sprite` and the picture code its entry draws, in hex (0 to 1ff, the ninth bit from the flags): `sprite-mug-4d` | 32 by 32 |
 | A counter's digit | `counter-COUNTER-D` for a `counters` entry, D from 0 to 9: `counter-score-7` | 16 by 16 |
 | A counter's tile | `counter-COUNTER` for a `repeats` entry: `counter-lives` | 16 by 16 |
+| A text's letter | `letter-C` for a letter or digit a `texts` entry writes (the text's byte is its tile's code): `letter-A`, `letter-7`; any other tile `letter-xNNN`, its code in hex: `letter-x02e`. One picture redraws the letter in every text | 16 by 16 |
 
 Sizes and places in the rules are the board's picture's pixels (512 by 480), and `scale N` draws the canvas N times that. A screen can also be built from the theme's pieces on its own cells, `#+ room` lines that sort the screen's cells by tile code, colour bank, priority and colours read from the lift (`BoardArt::screen_cells`), so the theme holds no picture or layout of it (docs/formats/theme.md, "Rooms"). A `pic` line draws its art at the picture's place: a sprite's at the rectangle the board draws its entry in, a counter cell's at its cell, a screen's over the whole picture. `timed`, `held`, `face`, `near`, `elsewhere`, `prop` and `drift` work as on the NES, a level being a screen's slot name; `#+ hud_over` changes nothing, since the board has no HUD of its own.
 
