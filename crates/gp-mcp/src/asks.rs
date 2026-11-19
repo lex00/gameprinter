@@ -265,8 +265,13 @@ pub fn mark_used(home: &Path, v: &Value) -> Result<(), String> {
     write(home, &v)
 }
 
-/// How long a call the runner ran on a yes still shows on the page.
+/// How long a call the runner ran on a yes still shows on the page once
+/// it finished (the page itself drops it sooner).
 pub const RAN_SHOWS_MS: u64 = 15 * 60 * 1000;
+
+/// How long a run the runner started still shows as running with no end:
+/// longer than a gate's time limit, so a run that died doesn't stay.
+pub const RUNNING_SHOWS_MS: u64 = 2 * 60 * 60 * 1000;
 
 /// Takes a yes for the loop's runner to run itself: marks it used, with
 /// `ran` {state: "running", at_ms}, so the yes runs once and gp_run's
@@ -295,20 +300,22 @@ pub fn set_ran(home: &Path, id: &str, state: &str, lines: &[String]) -> Result<(
     write(home, &v)
 }
 
-/// The asks the page shows: [`pending`] and the yeses the runner ran in
-/// the last [`RAN_SHOWS_MS`].
+/// The asks the page shows: [`pending`], the yeses the runner is running
+/// (up to [`RUNNING_SHOWS_MS`]) and those it finished in the last
+/// [`RAN_SHOWS_MS`].
 pub fn shown(home: &Path) -> Vec<Value> {
     let now = now_ms();
-    all(home)
-        .into_iter()
-        .filter(|v| {
-            is_open(v, now)
-                || is_yes(v, now)
-                || v["ran"]["at_ms"]
-                    .as_u64()
-                    .is_some_and(|t| now.saturating_sub(t) < RAN_SHOWS_MS)
-        })
-        .collect()
+    all(home).into_iter().filter(|v| is_shown(v, now)).collect()
+}
+
+fn is_shown(v: &Value, now: u64) -> bool {
+    let ago = |k: &str| v["ran"][k].as_u64().map(|t| now.saturating_sub(t));
+    is_open(v, now)
+        || is_yes(v, now)
+        || match ago("done_ms") {
+            Some(d) => d < RAN_SHOWS_MS,
+            None => ago("at_ms").is_some_and(|t| t < RUNNING_SHOWS_MS),
+        }
 }
 
 /// Writes a new open ask and returns it.
@@ -506,6 +513,25 @@ pub fn cost_of(dry: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A run the runner started shows while it runs, past the time a
+    /// finished one shows, and a finished one leaves after RAN_SHOWS_MS.
+    #[test]
+    fn a_running_card_stays_until_it_finishes() {
+        let now = 10 * RUNNING_SHOWS_MS;
+        let shows = |r: Value| is_shown(&json!({"state": "used", "ran": r}), now);
+        let long = now - RAN_SHOWS_MS - 1;
+        assert!(shows(json!({"state": "running", "at_ms": long})));
+        assert!(!shows(
+            json!({"state": "running", "at_ms": now - RUNNING_SHOWS_MS})
+        ));
+        assert!(shows(
+            json!({"state": "landed", "at_ms": long, "done_ms": now - 1000})
+        ));
+        assert!(!shows(
+            json!({"state": "landed", "at_ms": long, "done_ms": long})
+        ));
+    }
 
     /// A gate's card says what lands in the patch's own words and the
     /// files it changes.

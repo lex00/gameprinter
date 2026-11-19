@@ -113,26 +113,33 @@ canvas { display: block; background: #000; border: 2px solid var(--line); image-
 @media (max-width: 800px) {
   #below { grid-template-columns: minmax(0, 1fr); }
 }
-/* YOUR TURN: what the person can do now, at the top, each with its button. */
-#your-turn { display: flex; flex-direction: column; gap: 6px; width: min(1200px, 100%); margin: 8px auto; align-self: center; box-sizing: border-box; }
-#your-turn h2 { margin: 0; font: bold 13px var(--mono); color: var(--gold); letter-spacing: 0.08em; }
-#turn { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+/* YOUR TURN: what the person can do now, each with its button, in a
+   strip over the window's bottom right corner, out of the page's flow so
+   it never pushes the screens down: one line an item. */
+#your-turn { position: fixed; bottom: 8px; right: 8px; z-index: 9; display: flex; flex-direction: column; gap: 3px; width: min(560px, calc(100vw - 16px)); max-height: 45vh; overflow-y: auto; padding: 4px 6px; background: var(--bg); border: 2px solid var(--gold); box-shadow: 0 2px 8px #000c; }
+#your-turn h2 { margin: 0; font: bold 11px var(--mono); color: var(--gold); letter-spacing: 0.08em; }
+#turn { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
 #turn:empty { display: none; }
-#turn .turn-item { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; border: 2px solid var(--gold); background: #2a2000; padding: 6px 10px; }
-#turn .turn-row { font: bold 13px var(--mono); color: var(--gold); }
-#turn .turn-says { flex: 1 1 320px; }
-#turn .turn-play { font: bold 13px var(--mono); padding: 2px 14px; color: var(--bg); background: var(--gold); border: 2px solid var(--gold); cursor: pointer; }
-#turn .comment-open { font: bold 13px var(--mono); padding: 2px 14px; margin: 0; }
-#turn-none { margin: 0; color: var(--muted); font: bold 12px var(--mono); }
+#turn .turn-item { display: flex; flex-wrap: nowrap; align-items: center; gap: 2px 8px; border: 2px solid var(--gold); background: #2a2000; padding: 2px 6px; font-size: 13px; }
+#turn .turn-item:has(form.comment) { flex-wrap: wrap; }
+#turn .turn-row { flex: none; font: bold 11px var(--mono); color: var(--gold); }
+#turn .turn-says { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#turn .turn-item:hover .turn-says, #turn .turn-item:has(form.comment) .turn-says { white-space: normal; }
+#turn .turn-play { flex: none; font: bold 12px var(--mono); padding: 0 10px; color: var(--bg); background: var(--gold); border: 2px solid var(--gold); cursor: pointer; }
+#turn .comment-open { flex: none; font: bold 12px var(--mono); padding: 0 10px; margin: 0; }
+#turn-none { margin: 0; color: var(--muted); font: bold 11px var(--mono); }
 #turn-none[hidden] { display: none; }
-/* The agent's asks: a card each over the screens, with YES and NO. */
-#asks { display: flex; flex-direction: column; gap: 6px; }
+/* The agent's asks in YOUR TURN: one line a card, its question and YES
+   and NO; a click on the question opens its detail. */
+#asks { display: flex; flex-direction: column; gap: 3px; }
 #asks[hidden] { display: none; }
-#asks .ask-card { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; border: 2px solid var(--gold); background: #2a2000; padding: 6px 10px; }
-#asks .ask-head { font: bold 12px var(--mono); color: var(--gold); letter-spacing: 0.08em; }
-#asks .ask-says { flex: 1 1 320px; }
-#asks .ask-detail { flex-basis: 100%; color: var(--muted); font: 12px var(--mono); overflow-wrap: anywhere; }
-#asks button { font: bold 13px var(--mono); padding: 2px 14px; }
+#asks .ask-card { display: flex; flex-wrap: nowrap; align-items: center; gap: 2px 8px; border: 2px solid var(--gold); background: #2a2000; padding: 2px 6px; font-size: 13px; }
+#asks .ask-card.open { flex-wrap: wrap; }
+#asks .ask-card.ran { border-color: var(--muted); background: var(--panel, #1c1c1c); }
+#asks .ask-head { flex: none; font: bold 11px var(--mono); color: var(--gold); letter-spacing: 0.06em; white-space: nowrap; }
+#asks .ask-detail { flex-basis: 100%; order: 3; color: var(--muted); font: 12px var(--mono); overflow-wrap: anywhere; }
+#asks .ask-card:not(.open) .ask-detail, #asks .ask-card:not(.open) .ask-says { display: none; }
+#asks button { flex: none; font: bold 12px var(--mono); padding: 0 10px; }
 #asks .ask-yes { color: var(--bg); background: var(--gold); border: 2px solid var(--gold); }
 #asks .ask-no { color: var(--fg); background: transparent; border: 2px solid var(--muted); }
 /* Comments on a quest-log row or a clip, and the talk they go into. */
@@ -142,9 +149,10 @@ form.comment .comment-text { flex: 1; min-width: 0; font: 13px var(--mono); back
 .talk { flex-basis: 100%; display: flex; flex-direction: column; gap: 1px; margin-top: 2px; }
 .talk-line { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .talk-you { color: var(--gold); }
-#asks .ask-row { font: bold 12px var(--mono); color: var(--accent); background: transparent; border: 2px solid var(--accent); padding: 0 8px; }
-#asks .ask-question { flex-basis: 100%; font-weight: 700; font-size: 15px; }
-#asks .ask-says { flex-basis: 100%; color: var(--muted); font-size: 12px; }
+#asks .ask-row { font: bold 11px var(--mono); color: var(--accent); background: transparent; border: 2px solid var(--accent); padding: 0 6px; }
+#asks .ask-question { flex: 1 1 auto; min-width: 0; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+#asks .ask-card.open .ask-question { white-space: normal; flex-basis: 100%; order: 1; }
+#asks .ask-says { flex-basis: 100%; order: 2; color: var(--muted); font-size: 12px; }
 /* NOW: what is being worked on, and the loop's switches. */
 #now { width: min(1200px, 100%); margin: 6px auto; align-self: center; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px; }
 #now-work { display: flex; flex-direction: column; gap: 4px; }

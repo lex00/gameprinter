@@ -443,13 +443,20 @@ and the page asks for a build by itself, keeps the old build playing with
 one line saying the new one builds, and swaps the new one in at the same
 place when `status.build` changes, saying so.
 
-At the top of the screen, YOUR TURN lists only what the person can do now,
+YOUR TURN lists only what the person can do now,
 each with the button that does it: the agent's yes cards (YES and NO), the
 loop's steps for this game that are the person's and have a button (PLAY
 FROM HERE: the row opens, its request's path plays to its frame, the model
 starts there and RECORD records into the row, so the clip goes to the step's
 row), and the quest-log rows asking the person (ANSWER: their words go to
 the row's talk). With none of these it says NOTHING NEEDS YOU.
+
+It sits over the window's bottom right corner, out of the page's flow, so
+it never pushes the screens down, one line an item; a click on a yes card's
+question opens what it does. The yeses the runner lands in turn say which
+runs now and which wait (RUNNING NOW, 1 OF 3; WAITS, 2 OF 3), and one it
+finished says LANDED, DONE or FAILED with its last line, then leaves a
+minute later.
 
 ## Routes
 

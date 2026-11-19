@@ -912,21 +912,39 @@ async function tell(e) {
 
 // What the agent waits for the person's yes on -------------------------
 //
-// The asks gp_run left (gp_mcp::asks, GET /api/asks), as cards over the
-// screens: what it does in plain words, the command and its message (for
-// a gate, what lands), and YES and NO (POST /api/asks/ID). A yes stays
-// until the agent uses it.
+// The asks gp_run left (gp_mcp::asks, GET /api/asks), as cards in YOUR
+// TURN, the strip over the window's bottom right corner (out of the
+// page's flow, so the screens never move): one line a card, its question
+// and YES and NO (POST /api/asks/ID); a click on the question opens what
+// it does, the command and its message. A yes'd card is one line in the
+// runner's turn (RUNNING NOW, WAITS n OF m), and one the runner finished
+// says LANDED, DONE or FAILED with why, then leaves a minute later.
 
+/** How long a card the runner finished stays on the strip. */
+const ASK_DONE_SHOWS_MS = 60 * 1000;
+const asksOpen = new Set();
 let asksDrawn = "";
 let asksShown = 0; // the yes cards in YOUR TURN now
 async function refreshAsks() {
   let list = [];
+  const now = Date.now();
   try {
     const r = await fetch("/api/asks");
-    if (r.ok) list = ((await r.json()).asks ?? []).filter((a) => a.state === "open" || a.state === "yes" || a.ran);
+    if (r.ok) list = ((await r.json()).asks ?? []).filter((a) => a.ran
+      ? a.ran.state === "running" || now - (a.ran.done_ms ?? a.ran.at_ms ?? 0) < ASK_DONE_SHOWS_MS
+      : a.state === "open" || a.state === "yes");
   } catch (e) { /* the next look */ }
   asksShown = list.length;
-  const key = JSON.stringify(list.map((a) => [a.id, a.state, a.ran?.state]));
+  // The runner's turn: what it runs now, then the yeses in the order they
+  // were said, which it runs one at a time.
+  const turn = [
+    ...list.filter((a) => a.ran?.state === "running").sort((x, y) => (x.ran.at_ms ?? 0) - (y.ran.at_ms ?? 0)),
+    ...list.filter((a) => !a.ran && a.state === "yes").sort((x, y) => (x.answered_ms ?? 0) - (y.answered_ms ?? 0)),
+  ];
+  // Open questions first, then the runner's turn, then what it finished.
+  const rank = (a) => (!a.ran && a.state === "open" ? 0 : turn.includes(a) ? 1 : 2);
+  list.sort((x, y) => rank(x) - rank(y) || (rank(x) === 1 ? turn.indexOf(x) - turn.indexOf(y) : 0));
+  const key = JSON.stringify(list.map((a) => [a.id, a.state, a.ran?.state, turn.indexOf(a), asksOpen.has(a.id)]));
   if (key === asksDrawn) { drawYourTurn(); return; }
   asksDrawn = key;
   const box = $("asks");
@@ -934,9 +952,14 @@ async function refreshAsks() {
   box.hidden = list.length === 0;
   drawYourTurn();
   for (const a of list) {
-    const card = el("div", "ask-card");
-    const RAN = { running: "YOU SAID YES: THE LOOP IS RUNNING IT NOW", landed: "LANDED", passed: "DONE", failed: "IT FAILED" };
-    card.append(el("span", `ask-head${a.ran ? ` ask-ran-${a.ran.state}` : ""}`, a.ran ? RAN[a.ran.state] ?? "RUNNING" : a.state === "yes" ? "YOU SAID YES" : "YOUR AGENT ASKS"));
+    const card = el("div", `ask-card${a.ran || a.state === "yes" ? " ran" : ""}${asksOpen.has(a.id) ? " open" : ""}`);
+    card.dataset.ask = a.id;
+    const RAN = { landed: "LANDED", passed: "DONE", failed: "FAILED" };
+    const at = turn.indexOf(a);
+    const head = at >= 0
+      ? (a.ran ? `RUNNING NOW, ${at + 1} OF ${turn.length}` : `YOU SAID YES: WAITS, ${at + 1} OF ${turn.length}`)
+      : a.ran ? RAN[a.ran.state] ?? a.ran.state.toUpperCase() : "YOUR AGENT ASKS";
+    card.append(el("span", `ask-head${a.ran ? ` ask-ran-${a.ran.state}` : ""}`, head));
     // The question, naming this change: from the command's own message
     // (a gate's patch message: its game, then what changes, up to the
     // first stop), else the ask's sentence.
@@ -947,8 +970,17 @@ async function refreshAsks() {
     let what = msg.replace(new RegExp(`^${game}\\s*:\\s*`, "i"), "");
     what = what.split(/(?<=[a-z0-9)])[.;]\s|\s\(|: /)[0].trim();
     const verb = a.command === "model gate" ? "Land" : a.command === "registry publish" ? "Publish" : "Allow";
-    const question = what ? `${verb} in ${game || "the game"}: ${what}?` : `${a.says ?? ""}`;
-    card.append(el("span", "ask-question", question));
+    let question = what ? `${verb} in ${game || "the game"}: ${what}?` : `${a.says ?? ""}`;
+    // A failed run says why on its one line: its last line.
+    const why = a.ran?.state === "failed" ? String((a.ran.lines ?? []).filter((l) => String(l).trim()).at(-1) ?? "").trim() : "";
+    if (why) question = `${why} (${question})`;
+    const q = el("span", "ask-question", question);
+    q.title = asksOpen.has(a.id) ? "Click to close" : `${question}\nClick for what it does`;
+    q.addEventListener("click", () => {
+      if (asksOpen.has(a.id)) asksOpen.delete(a.id); else asksOpen.add(a.id);
+      void refreshAsks();
+    });
+    card.append(q);
     const says = el("span", "ask-says", msg || (a.says ?? ""));
     card.append(says);
     // The quest-log row it is for: its step's (row:GAME/ROW), which a
@@ -974,7 +1006,7 @@ async function refreshAsks() {
     if (a.ran) {
       for (const l of a.ran.lines ?? []) card.append(el("span", "ask-detail", l));
     } else if (a.state === "yes") {
-      card.append(el("span", "ask-detail", "The loop's runner runs it within a few seconds while it is on."));
+      card.append(el("span", "ask-detail", "The loop's runner runs the yeses one at a time, in the order you said them, while it is on."));
     } else {
       for (const [word, val] of [["YES", "yes"], ["NO", "no"]]) {
         const b = el("button", `ask-${val}`, word);
