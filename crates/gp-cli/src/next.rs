@@ -471,6 +471,8 @@ pub(crate) struct Facts {
     pub rows: Vec<Row>,
     /// The game has a triage.toml.
     pub triage_plan: bool,
+    /// The rows its items name, less those out of scope.
+    pub triage_rows: Vec<String>,
     pub session_clips: u64,
     /// Session clips the corpus doesn't hold yet (`walk 3`).
     pub not_kept: Vec<String>,
@@ -999,11 +1001,35 @@ pub(crate) fn answer(f: &Facts) -> Answer {
     }
     // 4. Free work for the tools that isn't running.
     if f.game.is_some() && f.player_mapped {
+        // The items triage.toml has a test for that no triage has tried
+        // yet: a row added after the first triage is tried on its own.
+        let fresh: Vec<String> = f
+            .triage_rows
+            .iter()
+            .filter(|w| {
+                !f.rows
+                    .iter()
+                    .any(|r| &r.mechanic == *w && (r.triaged || r.done))
+            })
+            .cloned()
+            .collect();
         if f.triage_plan && !f.rows.iter().any(|r| r.triaged) {
             steps.push(triage_step(
                 &g,
                 "The tools can try to get each quest item on their own, then list the few they can't.",
             ));
+        } else if !fresh.is_empty() {
+            steps.push(
+                triage_step(
+                    &g,
+                    &format!(
+                        "The tools can try to get {} on their own ({}), then say if they need you.",
+                        n_of(fresh.len() as u64, "new quest item", "new quest items"),
+                        few(&fresh)
+                    ),
+                )
+                .cli(format!("gp mechanic triage {g} {}", fresh.join(" "))),
+            );
         }
         if n == 6 && !scoring_now && (to_score > 0 || f.corpus_clips > 0) {
             let k = if to_score > 0 {
@@ -1727,6 +1753,15 @@ pub(crate) fn gather(
         .iter()
         .filter(|r| r["scope"] == json!("out"))
         .filter_map(|r| r["mechanic"].as_str().map(str::to_owned))
+        .collect();
+    f.triage_rows = std::fs::read_to_string(gdir.join("triage.toml"))
+        .ok()
+        .and_then(|t| t.parse::<toml::Table>().ok())
+        .and_then(|t| t.get("item").and_then(|i| i.as_array()).cloned())
+        .into_iter()
+        .flatten()
+        .filter_map(|i| i.get("row").and_then(|r| r.as_str()).map(str::to_owned))
+        .filter(|r| !out_of_scope.contains(r))
         .collect();
     for r in &queue {
         let Some(m) = r["mechanic"].as_str() else {

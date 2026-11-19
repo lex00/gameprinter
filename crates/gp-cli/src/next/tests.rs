@@ -277,6 +277,56 @@ fn p4_no_clips_sends_the_tools_first() {
     );
 }
 
+/// A row triage.toml gets after the first triage is tried on its own: the
+/// tools' step names only the items no triage has tried, and none that is
+/// done or out of scope.
+#[test]
+fn a_new_triage_item_is_tried_after_the_first_triage() {
+    let fx = Fx::new();
+    let d = fx.game("t", &["t.walk.001"]);
+    fx.gate("t", &["t.walk.001"], 0, false);
+    let item = |r: &str| format!("[[item]]\nrow = \"{r}\"\ngoal = \"x == 1\"\n");
+    write(
+        &d.join("triage.toml"),
+        &["walk", "die", "jump", "bonus", "swim"].map(item).concat(),
+    );
+    fx.queue(
+        "t",
+        json!([{"mechanic": "walk", "status": "next", "triage": {"by": "tools"}},
+               {"mechanic": "die", "status": "done"},
+               {"mechanic": "swim", "status": "next", "scope": "out"},
+               {"mechanic": "bonus", "status": "next"}]),
+    );
+    let a = fx.answer(Some("t"));
+    let s = a
+        .also
+        .iter()
+        .chain([&a.next])
+        .find(|s| s.who == Who::Tools && s.act == Some(Act::Start { action: "triage" }))
+        .expect("a triage step");
+    assert_eq!(
+        s.how.cli.as_deref(),
+        Some("gp mechanic triage t jump bonus")
+    );
+    assert!(s.says.contains("2 new quest items"), "{}", s.says);
+    // Once each is tried, no triage step is left.
+    fx.queue(
+        "t",
+        json!([{"mechanic": "walk", "status": "next", "triage": {"by": "tools"}},
+               {"mechanic": "jump", "status": "next", "triage": {"by": "you"}},
+               {"mechanic": "bonus", "status": "next", "triage": {"by": "tools"}},
+               {"mechanic": "swim", "status": "next", "scope": "out"},
+               {"mechanic": "die", "status": "done"}]),
+    );
+    let a = fx.answer(Some("t"));
+    assert!(
+        !a.also
+            .iter()
+            .chain([&a.next])
+            .any(|s| s.act == Some(Act::Start { action: "triage" }))
+    );
+}
+
 #[test]
 fn a_missing_rom_comes_first() {
     let fx = Fx::new();
