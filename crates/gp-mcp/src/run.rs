@@ -1253,9 +1253,10 @@ fn loop_check(
     cited: Option<&str>,
     row: &policy::Row,
 ) -> Option<Value> {
+    // A test's server isn't the worker whose gate runs the tests.
     let bound = std::env::var(steps::STEP_ENV)
         .ok()
-        .filter(|s| !s.trim().is_empty());
+        .filter(|s| !cfg!(test) && !s.trim().is_empty());
     if !steps::settings(&config.home).steps_required && bound.is_none() {
         return None;
     }

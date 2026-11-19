@@ -195,7 +195,12 @@ fn which(name: &str) -> bool {
 /// reach it and make every build in the kept target a whole one.
 /// GP_GATE_NO_INCREMENTAL=1 keeps the caller's (after an incremental-cache
 /// failure, say).
+///
+/// A loop worker's gate runs with the worker's GP_STEP and GP_WORKER set;
+/// the tests' own servers would cite that step and be refused, so they
+/// never reach a child.
 fn gate_env(cmd: &mut Command) -> &mut Command {
+    cmd.env_remove("GP_STEP").env_remove("GP_WORKER");
     if std::env::var_os("GP_GATE_NO_INCREMENTAL").is_some_and(|v| v == "1") {
         return cmd;
     }

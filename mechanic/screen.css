@@ -49,6 +49,8 @@ canvas { display: block; background: #000; border: 2px solid var(--line); image-
 /* Under the screens: the quest log and the clips. */
 #rec-to { font: bold 12px var(--mono); color: var(--gold); }
 #rec-to.on { color: var(--rec); }
+#toast { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); margin: 0; max-width: 90ch; padding: 6px 12px; background: var(--panel); border: 2px solid var(--gold); color: var(--gold); font-size: 13px; z-index: 10; }
+#toast[hidden] { display: none; }
 #below { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px 24px; width: min(1200px, 100%); margin-top: 8px; border-top: 2px solid var(--line); padding-top: 10px; }
 #below h2 { margin: 0 0 4px; font: bold 13px var(--mono); letter-spacing: 0.08em; color: var(--gold); }
 .how { margin: 0 0 8px; color: var(--muted); font-size: 12px; }

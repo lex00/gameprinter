@@ -88,7 +88,25 @@ const offB = document.createElement("canvas");
 function line(text) { $("line").textContent = text; }
 let lineUntil = 0;
 /** A line that stays a few seconds, then the next line goes back to the usual. */
-function note(text, ms = 4000) { line(text); lineUntil = performance.now() + ms; }
+function note(text, ms = 4000) {
+  line(text);
+  lineUntil = performance.now() + ms;
+  // The line sits under the screens; scrolled down to the lists, the person
+  // wouldn't see it, so it shows at the foot of the window too.
+  const r = $("line").getBoundingClientRect();
+  if (r.bottom > 0 && r.top < innerHeight) return;
+  let t = $("toast");
+  if (!t) {
+    t = document.createElement("p");
+    t.id = "toast";
+    t.setAttribute("aria-live", "polite");
+    document.body.append(t);
+  }
+  t.textContent = text;
+  t.hidden = false;
+  clearTimeout(note.timer);
+  note.timer = setTimeout(() => { t.hidden = true; }, Math.min(ms, 8000));
+}
 
 async function api(path, body) {
   const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -674,8 +692,25 @@ function talkLines(turns, n) {
   return box;
 }
 
+/** A press held in the quest log or the clips: the lists aren't drawn
+ * again until it is let go, since a row rebuilt between the press and the
+ * release takes no click (the refresh every 3 s rebuilds them whenever a
+ * status line changes). */
+let pressing = false;
+function holdWhilePressed(box) {
+  box.addEventListener("pointerdown", () => { pressing = true; });
+}
+for (const ev of ["pointerup", "pointercancel"]) {
+  addEventListener(ev, () => {
+    if (!pressing) return;
+    // After the click the release makes, which is dispatched next.
+    setTimeout(() => { pressing = false; drawQueue(); drawClips(); }, 0);
+  });
+}
+
 function drawQueue() {
   const q = $("queue");
+  if (pressing) return;
   const key = JSON.stringify([session?.mechanic, rows, clipsBy.map((g) => [g.mechanic, (g.talk ?? []).length])]);
   if (q.dataset.key === key) { markTarget(); return; }
   q.dataset.key = key;
@@ -711,6 +746,7 @@ function drawQueue() {
 
 function drawClips() {
   const box = $("clips");
+  if (pressing) return;
   const shown = clip ? `${clip.mechanic}/${clip.n}` : "";
   const key = JSON.stringify([clipsBy, shown]);  // talk included
   if (box.dataset.key === key) return;
@@ -730,6 +766,11 @@ function drawClips() {
       li.title = "Show it on both screens: Left and Right step, Space plays, Esc goes back to playing";
       li.addEventListener("click", () => {
         show.by = "person";
+        // Marked at once, and the screens it shows on brought into view.
+        for (const o of box.querySelectorAll("li.on")) o.classList.remove("on");
+        li.classList.add("on");
+        $("screens").scrollIntoView({ behavior: "smooth", block: "start" });
+        note(`Opening clip ${c.n} of ${g.mechanic}.`, 60000);
         void openClip(c.n, g.mechanic, 0).then(() => { drawClips(); report(); }).catch((e) => note(`Couldn't open clip ${c.n}: ${e.message ?? e}`, 8000));
       });
       ul.append(li);
@@ -745,6 +786,9 @@ async function pickRow(m) {
   if (sending) { note(`This clip goes to ${clipFor}. Wait for it to send.`); return; }
   if (recording) { clipFor = m; markTarget(); note(`This recording goes to ${m}.`); return; }
   if (m === session?.mechanic) { note(`Recordings go to ${m}.`); return; }
+  // Marked at once; the server's answer then draws it for good.
+  for (const li of $("queue").querySelectorAll("li[data-mechanic]")) li.classList.toggle("open", li.dataset.mechanic === m);
+  note(`Opening ${m}.`);
   try {
     await api("api/pick", { mechanic: m });
     await refreshLists(true);
@@ -1285,6 +1329,8 @@ function wire() {
   $("clip-live").addEventListener("click", (e) => { e.currentTarget.blur(); show.by = "person"; backToLive(); drawClips(); });
   $("tell").addEventListener("submit", (e) => void tell(e));
   $("tell-row").addEventListener("click", (e) => { e.currentTarget.blur(); void newRow(); });
+  holdWhilePressed($("queue"));
+  holdWhilePressed($("clips"));
 }
 
 async function setUpPictures() {

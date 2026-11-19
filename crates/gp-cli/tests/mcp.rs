@@ -21,6 +21,10 @@ fn gp(home: &Path) -> Command {
         .env_remove("GP_ROM_DIR")
         .env_remove("GP_LOG")
         .env_remove("GP_RUN_GROUP")
+        // A gate a loop worker runs has the worker's step set; the test's
+        // server would cite it and be refused.
+        .env_remove("GP_STEP")
+        .env_remove("GP_WORKER")
         .current_dir(repo());
     cmd
 }
