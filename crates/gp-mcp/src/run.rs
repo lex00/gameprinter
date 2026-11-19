@@ -23,6 +23,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::asks;
+use crate::held;
 use crate::policy::{self, Decision, Road};
 use crate::{Config, Reply, run_gp};
 
@@ -944,6 +945,11 @@ fn the_yes(
     let k = asks::key(path, &built.argv);
     let served = asks::page_served(home);
     let found = asks::find(home, a.ask_id.as_deref(), &k);
+    // What a call that replaces data would change, from its plan, so the
+    // card shows it and a yes holds only while the plan is the same.
+    let plan = (ask == policy::Ask::Replace)
+        .then(|| plan_of(config, c, path, &built.argv))
+        .flatten();
     let refusal = |words: String, ask_v: Option<&Value>| {
         let mut v = json!({
             "refused": words,
@@ -951,6 +957,9 @@ fn the_yes(
             "needs": ask.name(),
             "page_open": served,
         });
+        if let Some(p) = &plan {
+            v["plan"] = p["says"].clone();
+        }
         if let Some(x) = ask_v {
             v["ask_id"] = x["id"].clone();
             v["ask"] = json!({"says": x["says"], "state": x["state"]});
@@ -961,6 +970,17 @@ fn the_yes(
             v["runs_at_once_with"] = json!(free);
         }
         v
+    };
+    let found = match found {
+        // A yes to a plan that has changed since is no yes to this one.
+        asks::Found::Yes(v)
+            if v.get("plan").is_some()
+                && plan.as_ref().map(|p| &p["hash"]) != Some(&v["plan"]["hash"]) =>
+        {
+            let _ = v;
+            asks::Found::Other(json!({}))
+        }
+        f => f,
     };
     match found {
         asks::Found::Yes(v) => Ok(format!(
@@ -997,10 +1017,12 @@ fn the_yes(
                     about: &c.about,
                     needs: ask,
                     cost,
+                    plan: plan.clone(),
+                    held: None,
                 },
             );
             let lead = if other {
-                "The ask named was for another command or other arguments; a changed argument needs a new yes. "
+                "The ask named was for another command or other arguments, or what it would change is no longer what the person said yes to; a changed argument or plan needs a new yes. "
             } else {
                 ""
             };
@@ -1029,15 +1051,48 @@ fn the_yes(
 /// What a dry run says the command would cost, when it says (theme
 /// generate prints dollars); none when it can't run quickly.
 fn dry_run_cost(config: &Config, c: &CommandDef, path: &str, argv: &[String]) -> Option<String> {
+    let mut words = vec!["--dry-run".to_owned()];
+    // The dry-run flag before any `--` that ends the options.
+    words.extend(argv.iter().filter(|x| *x != "--yes").cloned());
+    asks::cost_of(&run_quietly(config, c, path, &words)?)
+}
+
+/// A call's plan: the same call without `--write` (or with `--dry-run`
+/// where the command has no `write`), which writes nothing, and what its
+/// JSON says it would change or remove of data already in the person's
+/// games (`replaces`, each with `says`), with a hash of that: `{says,
+/// hash}`. None when the command has no plan form or the plan can't run.
+pub fn plan_of(config: &Config, c: &CommandDef, path: &str, argv: &[String]) -> Option<Value> {
+    let has = |n: &str| c.args.iter().any(|d| d.name == n && d.kind == "switch");
+    let words: Vec<String> = if has("write") {
+        argv.iter().filter(|x| *x != "--write").cloned().collect()
+    } else if has("dry-run") {
+        std::iter::once("--dry-run".to_owned())
+            .chain(argv.iter().cloned())
+            .collect()
+    } else {
+        return None;
+    };
+    let v = run_quietly(config, c, path, &words)?;
+    let replaces = v.get("replaces")?.as_array()?;
+    let says: Vec<Value> = replaces
+        .iter()
+        .filter_map(|r| r["says"].as_str().map(|s| json!(s)))
+        .collect();
+    let hash = asks::key(&serde_json::to_string(replaces).ok()?, &[]);
+    Some(json!({"says": says, "hash": hash}))
+}
+
+/// Runs `gp PATH WORDS` as gp_run would, for at most two minutes, and
+/// gives its JSON.
+fn run_quietly(config: &Config, c: &CommandDef, path: &str, words: &[String]) -> Option<Value> {
     let mut cmd = Command::new(&config.gp);
     cmd.env(crate::CALLER_ENV, "mcp");
     cmd.env("GP_NO_HINTS", "1");
     if c.json {
         cmd.arg("--json");
     }
-    cmd.args(path.split(' ')).arg("--dry-run");
-    // The dry-run flag before any `--` that ends the options.
-    cmd.args(argv.iter().filter(|x| *x != "--yes"));
+    cmd.args(path.split(' ')).args(words);
     cmd.env("GP_HOME", &config.home);
     match &config.games {
         Some(g) => {
@@ -1048,8 +1103,117 @@ fn dry_run_cost(config: &Config, c: &CommandDef, path: &str, argv: &[String]) ->
         }
     }
     let ran = run_limited(cmd, Duration::from_secs(120)).ok()?;
-    let v: Value = serde_json::from_slice(&ran.stdout).ok()?;
-    asks::cost_of(&v)
+    serde_json::from_slice(&ran.stdout).ok()
+}
+
+/// The person's answer to a change the net held for this exact call, when
+/// there is one: a yes (or, with no page open, the agent's
+/// confirmed_by_person on an open one) puts the held change in place
+/// without running the command again; an open one or a no refuses. None:
+/// run the call.
+fn held_answer(config: &Config, path: &str, built: &Built, a: &RunArgs) -> Option<Reply> {
+    let home = &config.home;
+    let served = asks::page_served(home);
+    let hk = asks::held_key(path, &built.argv);
+    let put = |v: &Value, how: &str| match held::apply(&v["held"]) {
+        Ok(files) => Reply::ok(json!({
+            "command": format!("gp {path}"),
+            "applied": files,
+            "yes": format!("{how} (ask {}); the change gp {path} made and gp_run held is in place now, without running the command again. Another change needs another yes", v["id"].as_str().unwrap_or("")),
+        })),
+        Err(e) => Reply::refused(json!({
+            "refused": format!("gp {path}: the person's yes was for a held change that can't go in: {e}"),
+            "ask_id": v["id"],
+        })),
+    };
+    match asks::find(home, a.ask_id.as_deref(), &hk) {
+        asks::Found::Yes(v) => Some(put(&v, "the person said yes to this change on the page")),
+        asks::Found::No(v) => Some(Reply::refused(json!({
+            "refused": format!("gp {path}: the person said no on the page to the change this call makes to what is already in their games. Don't run it again; ask them what they would like instead."),
+            "ask_id": v["id"],
+        }))),
+        asks::Found::Open(v) if !served && a.confirmed_by_person => match asks::mark_used(home, &v)
+        {
+            Ok(()) => Some(put(
+                &v,
+                "no page is open for this home, so this went in on your word that the person said yes to this change after you showed it to them",
+            )),
+            Err(e) => Some(Reply::error(e)),
+        },
+        asks::Found::Open(v) => Some(Reply::refused(json!({
+            "refused": if served {
+                format!("gp {path}'s change to what is already in the person's games waits for their yes: it is on their page as a card with YES and NO. Tell them what it changes, then call next with wait_s until waits_for_yes shows this ask (ask_id) answered, and call gp_run again with ask_id. Setting confirmed_by_person doesn't replace their answer while the page is open.")
+            } else {
+                format!("gp {path}'s change to what is already in the person's games waits for their yes. No page is open for this home: show them what would change (the held change's diff, in {}), and if they say yes to it here, call again with confirmed_by_person: true.", v["held"]["dir"].as_str().unwrap_or("?"))
+            },
+            "ask_id": v["id"],
+            "would_change": held::each_in_words(&v["held"]),
+            "diff": held::diff_shown(&v["held"]),
+            "page_open": served,
+        }))),
+        _ => None,
+    }
+}
+
+/// The reply's words for a change the net caught and held, with the ask
+/// it made.
+fn held_refusal(
+    config: &Config,
+    c: &CommandDef,
+    path: &str,
+    built: &Built,
+    shown: &str,
+    h: Value,
+) -> Map<String, Value> {
+    let served = asks::page_served(&config.home);
+    let each = held::each_in_words(&h);
+    let says = format!(
+        "Let {shown} change what is already in your games: {}. It made these changes; they were put back as they were and are held until you say yes.",
+        each.join("; ")
+    );
+    let made = asks::make(
+        &config.home,
+        &asks::New {
+            command: path,
+            argv: &built.argv,
+            values: &built.values,
+            about: &c.about,
+            needs: policy::Ask::Replace,
+            cost: None,
+            plan: None,
+            held: Some((h.clone(), says)),
+        },
+    );
+    let then = if served {
+        "Tell the person in plain words what would change (would_change, diff) and that it waits on their page as a card with YES and NO; then call next with wait_s until waits_for_yes shows this ask (ask_id) answered, and call gp_run again with ask_id (or the same command and args): a yes puts the held change in place without running the command again."
+    } else {
+        "No page is open for this home (gp serve isn't running), so there is no card: show the person what would change (would_change, diff), and if they say yes to that change here, call gp_run again with the same command and args and confirmed_by_person: true, which puts the held change in place without running the command again."
+    };
+    let mut o = Map::new();
+    o.insert(
+        "refused".into(),
+        json!(format!(
+            "gp {path} changed or removed files already in the games checkout, which a tool may not do before the person has seen the change: {}. gp_run put them back as they were and holds the change (held_in). Files it made and lines it only added stay. {then}",
+            each.join("; ")
+        )),
+    );
+    o.insert("needs".into(), json!(policy::Ask::Replace.name()));
+    o.insert("would_change".into(), json!(each));
+    o.insert("diff".into(), json!(held::diff_shown(&h)));
+    o.insert("held_in".into(), h["dir"].clone());
+    o.insert("page_open".into(), json!(served));
+    match made {
+        Ok(v) => {
+            o.insert("ask_id".into(), v["id"].clone());
+        }
+        Err(e) => {
+            o.insert(
+                "ask_error".into(),
+                json!(format!("the ask couldn't be written: {e}")),
+            );
+        }
+    }
+    o
 }
 
 /// `gp_run`.
@@ -1091,7 +1255,8 @@ pub fn run_in(
     let row = row_of(c);
     let given = |n: &str| built.given.contains(n);
     let mut yes_note: Option<String> = None;
-    match policy::decide(&row, &given, &built.values) {
+    let decision = policy::decide(&row, &given, &built.values);
+    match decision.clone() {
         Decision::Refused(why) => {
             return Ok(Reply::refused(json!({
                 "refused": format!("gp {path} isn't run from a tool: {why}"),
@@ -1116,6 +1281,33 @@ pub fn run_in(
             "needs": "laya",
             "rule": row.rule.name(),
         })));
+    }
+    let stem = format!(
+        "{}-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis()),
+        path.replace(' ', "-")
+    );
+    // The net: a write's change to what is already in the games checkout
+    // waits for the person's yes (crate::held).
+    let mut snap: Option<(held::Snap, PathBuf)> = None;
+    if decision == Decision::RunHeld
+        && let Some(top) = config.games.as_deref().and_then(held::top_of)
+    {
+        if let Some(r) = held_answer(config, &path, &built, &a) {
+            return Ok(r);
+        }
+        let dir = saved_dir(config).join(format!("snap-{stem}"));
+        match held::snapshot(&top, &dir) {
+            Ok(s) => snap = Some((s, dir)),
+            Err(e) => {
+                return Ok(Reply::refused(json!({
+                    "refused": format!("gp {path} wasn't run: {e}"),
+                    "rule": row.rule.name(),
+                })));
+            }
+        }
     }
     let limit = a
         .timeout_s
@@ -1148,13 +1340,6 @@ pub fn run_in(
         .collect::<Vec<_>>()
         .join(" ");
     let ran = run_limited(cmd, limit)?;
-    let stem = format!(
-        "{}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis()),
-        path.replace(' ', "-")
-    );
     let mut reply = json!({
         "command": shown,
         "rule": row.rule.name(),
@@ -1166,10 +1351,8 @@ pub fn run_in(
     for (k, v) in out {
         o.insert(k, v);
     }
-    let writes = matches!(
-        policy::decide(&row, &given, &built.values),
-        Decision::Run { writes: true }
-    ) || yes_note.is_some();
+    let writes = matches!(decision, Decision::Run { writes: true } | Decision::RunHeld)
+        || yes_note.is_some();
     if let Some(n) = &yes_note {
         o.insert("yes".into(), json!(n));
     }
@@ -1199,6 +1382,34 @@ pub fn run_in(
     }
     if let Some(m) = row.road.mark() {
         o.insert("mark".into(), json!(m));
+    }
+    if let Some((s, dir)) = &snap {
+        let caught = held::changes(s).and_then(|list| {
+            if list.is_empty() {
+                return Ok(None);
+            }
+            let to = config.home.join("work").join("held").join(&stem);
+            held::hold(s, &list, &shown, &to).map(Some)
+        });
+        let _ = std::fs::remove_dir_all(dir);
+        match caught {
+            Ok(None) => {}
+            Ok(Some(h)) => {
+                for (k, v) in held_refusal(config, c, &path, &built, &shown, h) {
+                    o.insert(k, v);
+                }
+                return Ok(Reply::refused(reply));
+            }
+            Err(e) => {
+                o.insert(
+                    "net".into(),
+                    json!(format!(
+                        "gp_run couldn't check what this call changed in the games checkout: {e}. Look at git status there before going on."
+                    )),
+                );
+                return Ok(Reply::refused(reply));
+            }
+        }
     }
     if ran.timed_out {
         o.insert(
@@ -1247,6 +1458,24 @@ mod tests {
                 {"path": "mcp", "about": "Serve MCP.", "help": "Serve", "args": [], "json": false}
             ],
             "groups": [{"path": "model", "about": "Models."}, {"path": "registry", "about": "Registries."}]
+        }))
+        .unwrap()
+    }
+
+    /// Two writes, for the net.
+    fn net_tree() -> Tree {
+        serde_json::from_value(json!({
+            "commands": [
+                {"path": "model fmt", "about": "Format a model.", "help": "Format a model", "args": [
+                    {"name": "game", "position": 1, "kind": "value", "type": "string", "required": true}
+                ]},
+                {"path": "corpus import", "about": "Import clips.", "help": "Import clips", "args": [
+                    {"name": "game", "position": 1, "kind": "value", "type": "string", "required": true},
+                    {"name": "write", "long": "write", "kind": "switch", "type": "boolean"},
+                    {"name": "replace", "long": "replace", "kind": "value", "type": "string", "repeat": true}
+                ]}
+            ],
+            "groups": [{"path": "model", "about": "Models."}, {"path": "corpus", "about": "Corpora."}]
         }))
         .unwrap()
     }
@@ -1413,6 +1642,184 @@ mod tests {
         let r = call(&c, publish);
         assert!(r.is_error);
         assert_ne!(r.json["ask_id"], id);
+    }
+
+    fn call_net(c: &Config, v: Value) -> Reply {
+        let a: RunArgs = serde_json::from_value(v).unwrap();
+        run_in(c, &net_tree(), a, &|_| false).unwrap()
+    }
+
+    /// A games checkout in git with one committed file, for the net.
+    fn games(c: &mut Config, dir: &Path) -> PathBuf {
+        let top = dir.join("games");
+        std::fs::create_dir_all(top.join("g")).unwrap();
+        let g = |args: &[&str]| {
+            let o = Command::new("git")
+                .arg("-C")
+                .arg(&top)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        };
+        g(&["init", "-q"]);
+        g(&["config", "user.email", "t@example.com"]);
+        g(&["config", "user.name", "t"]);
+        g(&["config", "core.hooksPath", "/dev/null"]);
+        std::fs::write(top.join("g/corpus.toml"), "a\nb\nc\n").unwrap();
+        g(&["add", "-A"]);
+        g(&["commit", "-q", "-m", "base"]);
+        c.games = Some(top.clone());
+        top
+    }
+
+    /// A write that changes a file already in the games checkout is put
+    /// back and held, and the held change goes in on the person's word,
+    /// without running the command again; lines it only adds, and new
+    /// files, stay at once.
+    #[test]
+    fn a_write_that_changes_what_is_in_the_games_is_held_until_the_person_says_yes() {
+        let dir = tempfile::tempdir().unwrap();
+        // Each run of the stand-in counts itself in ran.txt, outside the
+        // checkout.
+        let gp = fake_gp(
+            dir.path(),
+            &format!(
+                "echo x >> {}/ran.txt\ncase \"$*\" in\n*add*) printf 'd\\n' >> g/corpus.toml ;;\n*) printf 'a\\nc\\n' > g/corpus.toml; echo n > g/new.toml ;;\nesac\necho '{{\"ok\": true}}'",
+                dir.path().display()
+            ),
+        );
+        let mut c = config(dir.path(), &gp);
+        let top = games(&mut c, dir.path());
+        let ran = || {
+            std::fs::read_to_string(dir.path().join("ran.txt"))
+                .unwrap()
+                .lines()
+                .count()
+        };
+        let fmt = json!({"command": "model fmt", "args": {"game": "g"}});
+        let r = call_net(&c, fmt.clone());
+        assert!(r.is_error, "{}", r.json);
+        let why = r.json["refused"].as_str().unwrap();
+        assert!(
+            why.starts_with("gp model fmt changed or removed files already in the games checkout, which a tool may not do before the person has seen the change: g/corpus.toml (1 line removed or changed, 0 added)"),
+            "{why}"
+        );
+        assert!(why.contains("confirmed_by_person: true"), "{why}");
+        assert_eq!(r.json["needs"], "replaces");
+        assert!(
+            r.json["diff"].as_str().unwrap().contains("-b"),
+            "{}",
+            r.json
+        );
+        assert_eq!(
+            std::fs::read_to_string(top.join("g/corpus.toml")).unwrap(),
+            "a\nb\nc\n"
+        );
+        assert!(top.join("g/new.toml").exists(), "a new file stays");
+        let id = r.json["ask_id"].clone();
+        let ask = crate::asks::read(&c.home, id.as_str().unwrap()).unwrap();
+        assert!(
+            ask["says"].as_str().unwrap().contains("g/corpus.toml"),
+            "{ask}"
+        );
+        // Called again without a yes: it waits, and nothing runs.
+        let r = call_net(&c, fmt.clone());
+        assert!(r.is_error);
+        assert_eq!(r.json["ask_id"], id);
+        assert!(
+            r.json["refused"]
+                .as_str()
+                .unwrap()
+                .contains("waits for their yes"),
+            "{}",
+            r.json
+        );
+        assert_eq!(ran(), 1);
+        // On the person's word (no page open), the held change goes in.
+        let r = call_net(
+            &c,
+            json!({"command": "model fmt", "args": {"game": "g"}, "confirmed_by_person": true}),
+        );
+        assert!(!r.is_error, "{}", r.json);
+        assert_eq!(r.json["applied"], json!(["g/corpus.toml"]));
+        assert_eq!(
+            std::fs::read_to_string(top.join("g/corpus.toml")).unwrap(),
+            "a\nc\n"
+        );
+        assert_eq!(ran(), 1, "the command isn't run again");
+        // Lines only added run at once.
+        let r = call_net(&c, json!({"command": "model fmt", "args": {"game": "add"}}));
+        assert!(!r.is_error, "{}", r.json);
+        assert_eq!(
+            std::fs::read_to_string(top.join("g/corpus.toml")).unwrap(),
+            "a\nc\nd\n"
+        );
+    }
+
+    /// With the page open, the held change is a card, and the person's yes
+    /// on it puts the change in; confirmed_by_person isn't enough.
+    #[test]
+    fn with_the_page_open_a_held_change_goes_in_on_the_card_s_yes() {
+        let dir = tempfile::tempdir().unwrap();
+        let gp = fake_gp(dir.path(), "printf 'z\\n' > g/corpus.toml\necho '{}'");
+        let mut c = config(dir.path(), &gp);
+        let top = games(&mut c, dir.path());
+        serve_page(&c);
+        let fmt =
+            json!({"command": "model fmt", "args": {"game": "g"}, "confirmed_by_person": true});
+        let r = call_net(&c, fmt.clone());
+        assert!(
+            r.is_error,
+            "confirmed_by_person doesn't skip showing the change: {}",
+            r.json
+        );
+        let id = r.json["ask_id"].clone();
+        let r = call_net(&c, fmt.clone());
+        assert!(r.is_error, "and isn't a yes while the page is open");
+        answer(&c, &id, true);
+        let r = call_net(
+            &c,
+            json!({"command": "model fmt", "args": {"game": "g"}, "ask_id": id}),
+        );
+        assert!(!r.is_error, "{}", r.json);
+        assert_eq!(
+            std::fs::read_to_string(top.join("g/corpus.toml")).unwrap(),
+            "z\n"
+        );
+    }
+
+    /// corpus import guards itself: adding runs at once with no net, and
+    /// --replace asks, its card saying what the plan would change.
+    #[test]
+    fn corpus_import_asks_to_replace_with_its_plan_on_the_card() {
+        let dir = tempfile::tempdir().unwrap();
+        let gp = fake_gp(
+            dir.path(),
+            "case \"$*\" in\n*--write*) printf 'q\\n' > g/corpus.toml; echo '{\"written\": true}' ;;\n*) echo '{\"replaces\": [{\"what\": \"g.a.001\", \"says\": \"changes clip g.a.001: its 40 frames becomes 20\"}]}' ;;\nesac",
+        );
+        let mut c = config(dir.path(), &gp);
+        games(&mut c, dir.path());
+        let r = call_net(
+            &c,
+            json!({"command": "corpus import", "args": {"game": "g", "write": true}}),
+        );
+        assert!(!r.is_error, "adding runs at once: {}", r.json);
+        let r = call_net(
+            &c,
+            json!({"command": "corpus import", "args": {"game": "g", "write": true, "replace": ["g.a.001"]}}),
+        );
+        assert!(r.is_error, "{}", r.json);
+        assert_eq!(r.json["needs"], "replaces");
+        assert_eq!(
+            r.json["plan"],
+            json!(["changes clip g.a.001: its 40 frames becomes 20"])
+        );
+        let says = r.json["ask"]["says"].as_str().unwrap();
+        assert!(
+            says.ends_with("It changes clip g.a.001: its 40 frames becomes 20."),
+            "{says}"
+        );
     }
 
     #[test]

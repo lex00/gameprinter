@@ -14,6 +14,14 @@
 //! A clip already in the plan whose recipe is unchanged is kept as it is,
 //! with its name, so an import changes only what the sessions changed.
 //!
+//! An import never changes a clip already in the plan unless it is told
+//! to (`--replace ID`, or a pattern with `*`). A clip whose session now
+//! gives other presses, start or frames is held: kept as it is, and listed
+//! in `held` with what would change, so a curated clip is never shortened
+//! or rewritten by a session of the same ID. A clip `--replace` names gets
+//! the session's presses, start and frames and keeps its other fields
+//! (name, why, level and the rest) as they were.
+//!
 //! An import removes only the clips it is told to (`--remove ID`, or a
 //! pattern with `*`). A clip whose session isn't in the home, or that the
 //! sessions now leave out, stays in the plan as it is.
@@ -56,6 +64,10 @@ pub(crate) struct Args<'a> {
     /// The clips to remove: IDs, or patterns with `*`. No other clip is
     /// removed.
     pub remove: &'a [String],
+    /// The clips the import may change: IDs, or patterns with `*`. A clip
+    /// already in the plan whose recipe the sessions change is held, kept
+    /// as it is, unless one of these names it.
+    pub replace: &'a [String],
     /// The sessions to import (`--session`); empty: every session. A clip
     /// of a session not named is left as it is.
     pub sessions: &'a [String],
@@ -399,9 +411,77 @@ struct Merged {
     added: Vec<String>,
     changed: Vec<String>,
     removed: Vec<String>,
+    /// Clips the sessions would change that `--replace` doesn't name:
+    /// kept as they are.
+    held: Vec<Held>,
     kept: usize,
     /// The plan's own clips no session gives, kept as they are.
     unsessioned: Vec<String>,
+}
+
+/// A clip already in the plan that the sessions would change, and how.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+struct Held {
+    id: String,
+    name: String,
+    /// Its own frames, in the plan and from the session.
+    frames: [u64; 2],
+    /// Frames from power-on to its start, in the plan and from the session
+    /// (none when the plan's start presses can't be read).
+    start: [Option<u64>; 2],
+    /// Whether its own presses differ.
+    presses_differ: bool,
+}
+
+impl Held {
+    fn new(r: &Recipe, old: Option<&(Spans, Spans)>, t: &Taken) -> Self {
+        Held {
+            id: r.id.clone(),
+            name: r.name.clone(),
+            frames: [r.frames, t.body.0],
+            start: [old.map(|o| o.0.0), Some(t.lead.0)],
+            presses_differ: old.is_none_or(|o| o.1.1 != t.body.1),
+        }
+    }
+
+    /// What would change, in words; `done` for a change being made.
+    fn says_as(&self, done: bool) -> String {
+        let (becomes, is, are) = if done {
+            ("becomes", "is", "are")
+        } else {
+            ("would become", "would be", "would be")
+        };
+        let mut what = Vec::new();
+        if self.frames[0] != self.frames[1] {
+            what.push(format!(
+                "its {} frames {becomes} {}",
+                self.frames[0], self.frames[1]
+            ));
+        }
+        match self.start {
+            [Some(a), Some(b)] if a != b => what.push(format!(
+                "its start, {a} frames from power-on, {becomes} {b}"
+            )),
+            [None, _] => what.push(format!("its start presses {are} written again")),
+            _ => {}
+        }
+        if self.presses_differ {
+            what.push(format!("its presses {are} other presses"));
+        }
+        if what.is_empty() {
+            what.push(format!("its recipe {is} written again"));
+        }
+        let name = if self.name.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", self.name)
+        };
+        format!("{}{name}: {}", self.id, what.join("; "))
+    }
+
+    fn says(&self) -> String {
+        self.says_as(false)
+    }
 }
 
 /// Whether `id` is named by one of the `--remove` patterns.
@@ -409,6 +489,7 @@ fn named(remove: &[String], id: &str) -> bool {
     remove.iter().any(|p| crate::gate::matches(p, id))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn merge(
     dir: &Path,
     old: &[Recipe],
@@ -416,6 +497,7 @@ fn merge(
     why: &str,
     taken: &[Taken],
     remove: &[String],
+    replace: &[String],
     only: &[String],
 ) -> Merged {
     let by_id: BTreeMap<&str, &Taken> = taken.iter().map(|t| (t.id.as_str(), t)).collect();
@@ -426,6 +508,7 @@ fn merge(
         added: Vec::new(),
         changed: Vec::new(),
         removed: Vec::new(),
+        held: Vec::new(),
         kept: 0,
         unsessioned: Vec::new(),
     };
@@ -474,8 +557,13 @@ fn merge(
             None => m.unsessioned.push(r.id.clone()),
             Some(t) => {
                 done.insert(r.id.clone());
-                if recipe_inputs(dir, r) == Some((t.lead.clone(), t.body.clone())) {
+                let was = recipe_inputs(dir, r);
+                if was == Some((t.lead.clone(), t.body.clone())) {
                     m.kept += 1;
+                } else if !named(replace, &r.id) {
+                    // A clip already in the plan changes only when the
+                    // call names it: it stays as it is.
+                    m.held.push(Held::new(r, was.as_ref(), t));
                 } else {
                     let c = clip(t, &mut m.files);
                     m.written.insert(r.id.clone(), c);
@@ -505,6 +593,65 @@ fn render(c: &PlanClip) -> Result<String> {
         clip: [&'a PlanClip; 1],
     }
     let s = toml::to_string(&Clips { clip: [c] })?;
+    Ok(format!("{}\n", s.trim_end()))
+}
+
+/// A clip's block with its recipe (source, start, presses and frames)
+/// taken from `c`, every other line kept as it was: its name, why, level
+/// and the rest stay. A key the block lacks goes after its last line. When
+/// a recipe key's value spans lines, the block is written again from its
+/// fields, the others as they were.
+fn replace_recipe(block: &str, c: &PlanClip) -> Result<String> {
+    #[derive(Deserialize, Serialize)]
+    struct Clips {
+        clip: Vec<toml::Table>,
+    }
+    let recipe: [(&str, toml::Value); 4] = [
+        ("source", toml::Value::String(c.source.clone())),
+        ("start", toml::Value::String(c.start.clone())),
+        ("presses", toml::Value::String(c.presses.clone())),
+        ("frames", toml::Value::Integer(i64::try_from(c.frames)?)),
+    ];
+    let old: Clips = toml::from_str(block)?;
+    let mut want = old.clip.first().cloned().unwrap_or_default();
+    for (k, v) in &recipe {
+        want.insert((*k).to_owned(), v.clone());
+    }
+    let mut out = String::new();
+    let mut seen = BTreeSet::new();
+    for l in block.split_inclusive('\n') {
+        let key = l
+            .split_once('=')
+            .map(|(k, _)| k.trim())
+            .filter(|_| !l.trim_start().starts_with('#'));
+        match key.and_then(|k| recipe.iter().find(|(n, _)| *n == k)) {
+            Some((k, v)) => {
+                out.push_str(&format!("{k} = {v}\n"));
+                seen.insert(*k);
+            }
+            None => out.push_str(l),
+        }
+    }
+    let missing: String = recipe
+        .iter()
+        .filter(|(k, _)| !seen.contains(k))
+        .map(|(k, v)| format!("{k} = {v}\n"))
+        .collect();
+    if !missing.is_empty() {
+        let body = out.trim_end_matches('\n').len();
+        let tail = out[body..].to_owned();
+        out.truncate(body);
+        out.push('\n');
+        out.push_str(&missing);
+        out.push_str(tail.strip_prefix('\n').unwrap_or(&tail));
+    }
+    let same = toml::from_str::<Clips>(&out)
+        .ok()
+        .is_some_and(|n| n.clip.len() == 1 && n.clip[0] == want);
+    if same {
+        return Ok(out);
+    }
+    let s = toml::to_string(&Clips { clip: vec![want] })?;
     Ok(format!("{}\n", s.trim_end()))
 }
 
@@ -578,7 +725,7 @@ fn edit_in_place(text: &str, m: &Merged) -> Result<String> {
                     out.pop();
                 }
             } else if let Some(c) = m.written.get(&id).filter(|_| m.changed.contains(&id)) {
-                out.push_str(&render(c)?);
+                out.push_str(&replace_recipe(&block, c)?);
             } else {
                 out.push_str(&block);
             }
@@ -662,6 +809,7 @@ pub(crate) fn run(a: &Args<'_>, paths: &Paths) -> Result<Outcome> {
         why,
         &taken,
         a.remove,
+        a.replace,
         a.sessions,
     );
     let step = if !m.removed.is_empty() || !m.changed.is_empty() {
@@ -676,7 +824,16 @@ pub(crate) fn run(a: &Args<'_>, paths: &Paths) -> Result<Outcome> {
         text.push(format!("added    {id}"));
     }
     for id in &m.changed {
-        text.push(format!("changed  {id}  (its presses or start)"));
+        text.push(format!(
+            "changed  {id}  (its presses, start and frames, from the session; --replace)"
+        ));
+    }
+    for h in &m.held {
+        text.push(format!(
+            "held     {}  (kept as it is; --replace {} would change it)",
+            h.says(),
+            h.id
+        ));
     }
     let left_of = |id: &str| {
         left.iter().find(|l| {
@@ -699,18 +856,45 @@ pub(crate) fn run(a: &Args<'_>, paths: &Paths) -> Result<Outcome> {
         }
     }
     text.push(format!(
-        "{} clips from the sessions: {} as they were, {} added, {} changed, {} removed; {} kept with no session; {} left out. A {step} step.",
+        "{} clips from the sessions: {} as they were, {} added, {} changed, {} removed, {} held; {} kept with no session; {} left out. A {step} step.",
         taken.len(),
         m.kept,
         m.added.len(),
         m.changed.len(),
         m.removed.len(),
+        m.held.len(),
         m.unsessioned.len(),
         left.len()
     ));
+    // What this call changes or removes of the clips already in the
+    // plan, in the shape gp_run's plan reads (`replaces`).
+    let mut replaces: Vec<serde_json::Value> = Vec::new();
+    for id in &m.changed {
+        let h = plan
+            .set
+            .clips
+            .iter()
+            .find(|r| &r.id == id)
+            .zip(taken.iter().find(|t| &t.id == id))
+            .map(|(r, t)| Held::new(r, recipe_inputs(&dir, r).as_ref(), t));
+        let says = h.map_or_else(
+            || format!("{id}: its recipe is written again"),
+            |h| h.says_as(true),
+        );
+        replaces.push(json!({"what": id, "says": format!("changes clip {says}")}));
+    }
+    for id in &m.removed {
+        replaces
+            .push(json!({"what": id, "says": format!("removes clip {id} and its presses files")}));
+    }
     let mut v = json!({
         "game": game, "dir": dir, "from": home, "prefix": prefix,
         "added": m.added, "changed": m.changed, "removed": m.removed, "kept": m.kept,
+        "held": m.held.iter().map(|h| json!({
+            "id": h.id, "name": h.name, "frames": h.frames, "start": h.start,
+            "presses_differ": h.presses_differ, "says": h.says(),
+        })).collect::<Vec<_>>(),
+        "replaces": replaces,
         "kept_without_session": m.unsessioned,
         "left_out": left.iter().map(|l| json!({"what": l.what, "why": l.why})).collect::<Vec<_>>(),
         "step": step, "written": false,
@@ -721,16 +905,31 @@ pub(crate) fn run(a: &Args<'_>, paths: &Paths) -> Result<Outcome> {
             dir.display()
         );
     }
+    let held_words = (!m.held.is_empty()).then(|| {
+        format!(
+            "{} clip{} already in the plan {} kept as {} {}: an import changes a clip already in the plan only when --replace names it.",
+            m.held.len(),
+            if m.held.len() == 1 { "" } else { "s" },
+            if m.held.len() == 1 { "is" } else { "are" },
+            if m.held.len() == 1 { "it" } else { "they" },
+            if m.held.len() == 1 { "is" } else { "are" },
+        )
+    });
     if !a.write {
         if step != "none" {
             text.push("Nothing written: --write writes the clips and records the version.".into());
         }
+        text.extend(held_words);
         return Ok(Outcome::ok(v, text.join("\n")));
     }
     if step == "none" {
-        text.push("The corpus has every clip of the sessions already.".into());
+        text.push(match held_words {
+            Some(w) => format!("Nothing written. {w}"),
+            None => "The corpus has every clip of the sessions already.".into(),
+        });
         return Ok(Outcome::ok(v, text.join("\n")));
     }
+    text.extend(held_words);
     // The plan, edited in place, and the presses files.
     let file = dir.join(FILE);
     fs::create_dir_all(dir.join("inputs"))?;
@@ -827,6 +1026,7 @@ mod tests {
             says: None,
             date: Some("2026-11-02"),
             remove: &[],
+            replace: &[],
             sessions: &[],
         }
     }
@@ -969,9 +1169,11 @@ mod tests {
         // files out.
         clip(&home, "walk", 1, 10, &["right@0-25"], 30);
         let remove = ["g.jump.*".to_owned()];
+        let replace = ["g.walk.001".to_owned()];
         let o = run(
             &Args {
                 remove: &remove,
+                replace: &replace,
                 ..args(&tpl, &home, true)
             },
             &p,
@@ -1019,6 +1221,172 @@ mod tests {
         assert_eq!(o.json["added"], json!(["g.jump.001"]));
         assert_eq!(o.json["kept_without_session"], json!(["g.walk.001"]));
         assert_eq!(o.json["removed"], json!([]));
+    }
+
+    /// A clip already in the plan, curated by hand (its name, why and
+    /// level), that a session of the same ID would make shorter is held:
+    /// a dry run says what would change, --write adds the new clips and
+    /// leaves it byte for byte, and only --replace changes it, keeping its
+    /// name, why and level.
+    #[test]
+    fn a_clip_already_in_the_plan_changes_only_when_replace_names_it() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let tpl = d.path().join("tpl");
+        clip(&home, "walk", 1, 10, &["right@0-39"], 40);
+        plan(&tpl, "");
+        let p = paths(&home);
+        run(&args(&tpl, &home, true), &p).unwrap();
+        // The clip is curated by hand: a name, a why and a level of its own.
+        let file = tpl.join(FILE);
+        let t = fs::read_to_string(&file).unwrap();
+        let t = t.replacen(
+            "name = \"walk 001: clip 1\"",
+            "name = \"The whole walk\"\nlevel = \"meadow\"",
+            1,
+        );
+        let t = t.replacen(
+            "why = \"a clip of the walk mechanic session\"",
+            "why = \"the walk to the end of the meadow\"",
+            1,
+        );
+        fs::write(&file, &t).unwrap();
+        let rec = crate::plan::load(&tpl).unwrap().unwrap();
+        crate::corpus_score::plan_bump(
+            &tpl,
+            true,
+            Some("curated"),
+            Some("2026-11-03"),
+            Some(&rec.recipes),
+        )
+        .unwrap();
+        let curated = fs::read_to_string(&file).unwrap();
+        let presses = fs::read_to_string(tpl.join("inputs/g.walk.001.presses")).unwrap();
+
+        // The session's clip of the same ID is now shorter, and there is a
+        // new one.
+        clip(&home, "walk", 1, 10, &["right@0-19"], 20);
+        clip(&home, "walk", 2, 3, &["a@0-4"], 9);
+        let o = run(&args(&tpl, &home, false), &p).unwrap();
+        assert_eq!(o.json["added"], json!(["g.walk.002"]));
+        assert_eq!(o.json["changed"], json!([]));
+        assert_eq!(o.json["replaces"], json!([]));
+        let held = &o.json["held"][0];
+        assert_eq!(held["id"], "g.walk.001");
+        assert_eq!(held["frames"], json!([40, 20]));
+        let says = held["says"].as_str().unwrap();
+        assert!(
+            says.contains("The whole walk") && says.contains("40 frames would become 20"),
+            "{says}"
+        );
+        assert!(o.text.contains("held     g.walk.001"), "{}", o.text);
+
+        // --write adds the new clip and leaves the curated one alone.
+        let o = run(&args(&tpl, &home, true), &p).unwrap();
+        assert_eq!(o.json["added"], json!(["g.walk.002"]));
+        assert_eq!(o.json["changed"], json!([]));
+        assert_eq!(
+            o.json["corpus"]["suggests"], "1.2.0",
+            "a minor step: {}",
+            o.json
+        );
+        let after = fs::read_to_string(&file).unwrap();
+        let block = |t: &str| {
+            let at = t.find("id = \"g.walk.001\"").unwrap();
+            t[at..at + t[at..].find("\n\n").unwrap()].to_owned()
+        };
+        assert_eq!(block(&after), block(&curated));
+        assert_eq!(
+            fs::read_to_string(tpl.join("inputs/g.walk.001.presses")).unwrap(),
+            presses
+        );
+        // With nothing new, the held clip still writes nothing.
+        let o = run(&args(&tpl, &home, true), &p).unwrap();
+        assert_eq!(o.json["written"], false);
+        assert!(
+            o.text
+                .contains("Nothing written. 1 clip already in the plan is kept"),
+            "{}",
+            o.text
+        );
+        assert_eq!(fs::read_to_string(&file).unwrap(), after);
+
+        // --replace changes it: the session's presses and frames, its own
+        // name, why and level kept.
+        let replace = ["g.walk.*".to_owned()];
+        let o = run(
+            &Args {
+                replace: &replace,
+                ..args(&tpl, &home, false)
+            },
+            &p,
+        )
+        .unwrap();
+        assert_eq!(o.json["changed"], json!(["g.walk.001"]));
+        let r = o.json["replaces"][0]["says"].as_str().unwrap();
+        assert!(
+            r.starts_with("changes clip g.walk.001 (The whole walk): its 40 frames becomes 20"),
+            "{r}"
+        );
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            after,
+            "a dry run writes nothing"
+        );
+        let o = run(
+            &Args {
+                replace: &replace,
+                ..args(&tpl, &home, true)
+            },
+            &p,
+        )
+        .unwrap();
+        assert_eq!(o.json["changed"], json!(["g.walk.001"]));
+        let loaded = crate::plan::load(&tpl).unwrap().unwrap();
+        assert_eq!(loaded.hash, loaded.manifest.corpus.hash);
+        let w = loaded
+            .set
+            .clips
+            .iter()
+            .find(|c| c.id == "g.walk.001")
+            .unwrap();
+        assert_eq!(w.frames, 20);
+        assert_eq!(w.name, "The whole walk");
+        assert_eq!(w.why, "the walk to the end of the meadow");
+        let replaced = fs::read_to_string(&file).unwrap();
+        assert!(
+            block(&replaced).contains("level = \"meadow\""),
+            "{replaced}"
+        );
+    }
+
+    #[test]
+    fn a_replaced_block_keeps_its_lines_and_takes_the_recipe() {
+        let c = PlanClip {
+            id: "g.a.001".into(),
+            name: "a 001: x".into(),
+            source: "played".into(),
+            start: "inputs/g.a.001.start.presses".into(),
+            presses: "inputs/g.a.001.presses".into(),
+            frames: 12,
+            why: "w".into(),
+        };
+        let block =
+            "[[clip]]\nid = \"g.a.001\"\nname = \"Mine\"\n# a note\nframes = 99\nlevel = \"x\"\n";
+        let out = replace_recipe(block, &c).unwrap();
+        assert!(out.starts_with("[[clip]]\nid = \"g.a.001\"\nname = \"Mine\"\n# a note\nframes = 12\nlevel = \"x\"\n"), "{out}");
+        assert!(
+            out.contains("start = \"inputs/g.a.001.start.presses\"\n"),
+            "{out}"
+        );
+        // A value over several lines: the block is written from its fields.
+        let block = "[[clip]]\nid = \"g.a.001\"\nname = \"Mine\"\npresses = [\n  \"a@0-1\",\n]\nframes = 99\n";
+        let out = replace_recipe(block, &c).unwrap();
+        let t: toml::Table = toml::from_str(&out).unwrap();
+        let clip = &t["clip"].as_array().unwrap()[0];
+        assert_eq!(clip["presses"].as_str(), Some("inputs/g.a.001.presses"));
+        assert_eq!(clip["name"].as_str(), Some("Mine"));
+        assert_eq!(clip["frames"].as_integer(), Some(12));
     }
 
     #[test]

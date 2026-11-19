@@ -7,7 +7,10 @@
 //!
 //! The rules, from the owner's standing rules:
 //! - read: writes nothing outside the home's work and cache areas.
-//! - write: writes the person's games, working copies or home.
+//! - write: writes the person's games, working copies or home. A write
+//!   that changes or removes a file already in the games checkout (more
+//!   than adding lines to it) is put back and held for the person's yes
+//!   (crate::held), unless the command is one of [`SELF_GUARDED`].
 //! - ask: publishes, uploads, pushes or lands a change through a gate;
 //!   spends money or reads a secret or answer key; or downloads a lot.
 //!   It runs only with the person's yes, unless one of its dry-run flags
@@ -67,6 +70,8 @@ pub enum Ask {
     Spend,
     /// Downloads a lot.
     Download,
+    /// Changes or removes data already in the person's games.
+    Replace,
 }
 
 impl Ask {
@@ -75,6 +80,7 @@ impl Ask {
             Ask::Publish => "publishes",
             Ask::Spend => "spends",
             Ask::Download => "downloads",
+            Ask::Replace => "replaces",
         }
     }
 
@@ -89,6 +95,9 @@ impl Ask {
             }
             Ask::Download => {
                 "it downloads a lot. Tell the person what it downloads and about how large it is, and ask them"
+            }
+            Ask::Replace => {
+                "it changes or removes data already in the person's games. Tell the person exactly what it changes (the plan in this reply lists it) and ask them"
             }
         }
     }
@@ -110,8 +119,9 @@ pub enum Rule {
     Write,
     /// Needs the person's yes, unless one of the flags (a dry run) is given.
     Ask(Ask, &'static [&'static str]),
-    /// Needs the person's yes when the argument is given; else the base.
-    AskWith(Ask, &'static str, Base),
+    /// Needs the person's yes when one of the arguments is given; else
+    /// the base.
+    AskWith(Ask, &'static [&'static str], Base),
     /// Refused; the text says what to use instead.
     Refuse(&'static str),
     /// Refused when the argument is given; else the base.
@@ -159,9 +169,17 @@ impl Rule {
                 a.name(),
                 flags(free)
             ),
-            Rule::AskWith(a, arg, _) => format!(
-                "Runs at once, but with `{arg}` {} it {} and needs the person's yes (confirmed_by_person).",
-                if COUNTS.contains(&arg) { "above 0" } else { "given" },
+            Rule::AskWith(a, args, _) => format!(
+                "Runs at once, but with {} {} it {} and needs the person's yes (confirmed_by_person).",
+                args.iter()
+                    .map(|x| format!("`{x}`"))
+                    .collect::<Vec<_>>()
+                    .join(" or "),
+                if args.iter().all(|x| COUNTS.contains(x)) {
+                    "above 0"
+                } else {
+                    "given"
+                },
                 a.name()
             ),
             Rule::Refuse(instead) => format!("Refused from a tool: {instead}"),
@@ -271,7 +289,14 @@ pub const TABLE: &[Row] = &[
     r("assets stub", J, Write),
     r("corpus bump", J, Write),
     r("corpus diff", J, Read),
-    r("corpus import", J, Write),
+    // Changes a clip already in the corpus only with --replace, removes
+    // one only with --remove (it holds the others and says so), and those
+    // need the person's yes; adding clips runs at once. SELF_GUARDED.
+    r(
+        "corpus import",
+        J,
+        Rule::AskWith(Ask::Replace, &["replace", "remove"], Base::Write),
+    ),
     r("corpus init", J, Write),
     r("corpus reduce", S, Write),
     r("corpus score", J, Write),
@@ -393,7 +418,7 @@ pub const TABLE: &[Row] = &[
     r(
         "capture background",
         S,
-        Rule::AskWith(Ask::Spend, "agents", Base::Write),
+        Rule::AskWith(Ask::Spend, &["agents"], Base::Write),
     ),
     r("capture carry", S, Read),
     r("capture dense", S, Write),
@@ -423,7 +448,7 @@ pub const TABLE: &[Row] = &[
     r(
         "dataset grade",
         D,
-        Rule::AskWith(Ask::Spend, "key", Base::Read),
+        Rule::AskWith(Ask::Spend, &["key"], Base::Read),
     ),
     r("dataset rom", S, Write),
     r("element explain", S, Read),
@@ -681,11 +706,30 @@ pub fn row_or_guess(path: &str, help: &str) -> Row {
     }
 }
 
+/// The writes that guard data already in the person's games themselves,
+/// so gp_run's net over the games checkout ([`crate::held`]) leaves them
+/// be: each changes or removes what is there only when an argument names
+/// it, and its rule asks for the person's yes on that argument. Its plan
+/// (the call without `--write`, or with `--dry-run`) lists in `replaces`
+/// what the call would change, which the ask shows. A command joins only
+/// with a test in gp-cli that it holds what isn't named.
+pub const SELF_GUARDED: &[&str] = &["corpus import"];
+
+/// Whether gp_run's net over the games checkout watches a call of `path`.
+pub fn netted(path: &str) -> bool {
+    !SELF_GUARDED.contains(&path)
+}
+
 /// What gp_run does with a call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
     /// Run it; `writes` when it may write the person's things.
     Run { writes: bool },
+    /// Run it as a write under the net: a change it makes to a file
+    /// already in the games checkout (more than lines added) is put back
+    /// and held until the person's yes on the ask that shows it
+    /// ([`crate::held`]); new files and added lines stay.
+    RunHeld,
     /// Run it only with the person's yes.
     NeedsYes(Ask),
     /// Never from a tool.
@@ -705,21 +749,31 @@ pub fn decide(row: &Row, given: &dyn Fn(&str) -> bool, values: &[(String, String
             ));
         }
     }
-    let base = |b: Base| Decision::Run {
-        writes: b == Base::Write,
+    // The rules for a write that changes data already in the games
+    // checkout live here: one that guards itself (SELF_GUARDED) asks on
+    // the arguments that name what it changes; every other write runs
+    // under the net, which holds such a change for the person's yes. A
+    // check that the call is the step `next` gave (issue #43) belongs
+    // here too, beside these, as one more input to the decision.
+    let base = |b: Base| match b {
+        Base::Read => Decision::Run { writes: false },
+        Base::Write if netted(row.path) => Decision::RunHeld,
+        Base::Write => Decision::Run { writes: true },
     };
     let decision = match row.rule {
         Rule::Read => base(Base::Read),
         Rule::Write => base(Base::Write),
         Rule::Ask(_, free) if free.iter().any(|f| given(f)) => base(Base::Read),
         Rule::Ask(a, _) => Decision::NeedsYes(a),
-        Rule::AskWith(a, arg, _)
-            if given(arg)
-                && !(COUNTS.contains(&arg)
-                    && values
-                        .iter()
-                        .filter(|(n, _)| n == arg)
-                        .all(|(_, v)| v == "0")) =>
+        Rule::AskWith(a, args, _)
+            if args.iter().any(|arg| {
+                given(arg)
+                    && !(COUNTS.contains(arg)
+                        && values
+                            .iter()
+                            .filter(|(n, _)| n == arg)
+                            .all(|(_, v)| v == "0"))
+            }) =>
         {
             Decision::NeedsYes(a)
         }
@@ -731,7 +785,7 @@ pub fn decide(row: &Row, given: &dyn Fn(&str) -> bool, values: &[(String, String
         Rule::RefuseUnless(_, why, _) => Decision::Refused(why.to_owned()),
     };
     // A target in git or a bucket publishes, whatever the command.
-    if let Decision::Run { .. } = decision
+    if matches!(decision, Decision::Run { .. } | Decision::RunHeld)
         && values
             .iter()
             .any(|(_, v)| v.starts_with("git:") || v.starts_with("s3://"))
@@ -781,7 +835,7 @@ pub fn summary() -> Value {
         },
         "write": {
             "commands": count(&|r| matches!(r, Rule::Write)),
-            "means": "writes the person's games, working copies or home; runs at once, and the reply says what it wrote when the command reports it",
+            "means": "writes the person's games, working copies or home; runs at once, and the reply says what it wrote when the command reports it. A change it makes to a file already in the games checkout (more than lines added) is put back and held: the reply is refused with would_change, diff and ask_id, and the held change goes in on the person's yes (the card, or with no page open confirmed_by_person on a later call after you showed them the change), without running the command again",
         },
         "ask": {
             "commands": count(&|r| matches!(r, Rule::Ask(..) | Rule::AskWith(..))),
@@ -888,11 +942,7 @@ mod tests {
         // Serving on a local port for a while, or pictures in a folder the
         // person named: runs at once, with no yes, as a write.
         for f in ["background", "shots"] {
-            assert_eq!(
-                decide(play, &given(&[f]), &[]),
-                Decision::Run { writes: true },
-                "{f}"
-            );
+            assert_eq!(decide(play, &given(&[f]), &[]), Decision::RunHeld, "{f}");
         }
         // The person's own ports stay theirs.
         let port = [("port".to_owned(), "7710".to_owned())];
@@ -993,14 +1043,45 @@ mod tests {
         );
     }
 
+    /// A write runs under the net, but one that guards itself asks on
+    /// the arguments that name what it changes, and adds at once.
+    #[test]
+    fn a_write_runs_under_the_net_and_corpus_import_asks_to_change_a_clip() {
+        assert_eq!(
+            decide(row("model fmt").unwrap(), &given(&[]), &[]),
+            Decision::RunHeld
+        );
+        let import = row("corpus import").unwrap();
+        assert_eq!(
+            decide(import, &given(&["write"]), &[]),
+            Decision::Run { writes: true }
+        );
+        for f in ["replace", "remove"] {
+            assert_eq!(
+                decide(import, &given(&["write", f]), &[]),
+                Decision::NeedsYes(Ask::Replace),
+                "{f}"
+            );
+        }
+        for p in SELF_GUARDED {
+            assert!(
+                matches!(
+                    row(p).map(|r| r.rule),
+                    Some(Rule::AskWith(Ask::Replace, _, Base::Write))
+                ),
+                "{p} guards itself, so its rule asks on what names a change"
+            );
+        }
+    }
+
     #[test]
     fn paid_clip_agents_need_a_yes() {
         let bg = row("capture background").unwrap();
         let vals = |n: &str| vec![("agents".to_owned(), n.to_owned())];
-        assert_eq!(decide(bg, &given(&[]), &[]), Decision::Run { writes: true });
+        assert_eq!(decide(bg, &given(&[]), &[]), Decision::RunHeld);
         assert_eq!(
             decide(bg, &given(&["agents"]), &vals("0")),
-            Decision::Run { writes: true }
+            Decision::RunHeld
         );
         assert_eq!(
             decide(bg, &given(&["agents"]), &vals("2")),
@@ -1140,11 +1221,7 @@ mod tests {
         for p in ["level edit", "level undo"] {
             let r = row(p).unwrap();
             assert_eq!(r.road, Road::Journey, "{p}");
-            assert_eq!(
-                decide(r, &given(&[]), &[]),
-                Decision::Run { writes: true },
-                "{p}"
-            );
+            assert_eq!(decide(r, &given(&[]), &[]), Decision::RunHeld, "{p}");
         }
         // A copy in git or a bucket would publish: that needs a yes.
         let git = [("game".to_owned(), "git:../games".to_owned())];

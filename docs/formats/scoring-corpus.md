@@ -100,7 +100,7 @@ A clip's picture, in `results.picture` and in the publish rule, is read from its
 |---|---|
 | `gp corpus bump DIR [--write] [--says S] [--date D]` | The step from the version the plan records to its clips now, and the next version. `--write` sets `version` and `recipes` in `[corpus]` where they stand and adds a changelog entry at the end; every other byte stays |
 | `gp corpus init DIR --name N [--version 1.0.0] [--title T] [--patch SHA]` | For the older form only: writes `corpus.toml` beside `DIR/clips.toml`. A game started with `gp game new` has a plan with no clips already, so it needs no `init` |
-| `gp corpus import GAME [--template DIR] [--from HOME] [--session NAME] [--remove ID] [--write]` | The game's mechanic sessions as the plan's clips, below |
+| `gp corpus import GAME [--template DIR] [--from HOME] [--session NAME] [--remove ID] [--replace ID] [--write]` | The game's mechanic sessions as the plan's clips, below |
 
 ## Import
 
@@ -110,6 +110,8 @@ Each clip of each session becomes a `played` clip `PREFIX.SESSION.NNN`: its inpu
 
 An import removes a clip only when it is told to: `--remove ID`, repeated, or a pattern with `*` (`dk.climb-sweep.*`). A clip already in the plan whose session isn't in the home (a probe's clips, or another person's sessions) is kept as it is, and so is one the rules below now leave out; the output names the latter with the `--remove` that would take it out (`kept_without_session` in the JSON lists both). `--session NAME`, repeated, imports only those sessions' clips, and leaves the plan's clips of other sessions as they are.
 
+An import changes a clip already in the plan only when it is told to: `--replace ID`, repeated, or a pattern with `*`. A clip whose session now gives other presses, start or frames is otherwise held: kept as it is, byte for byte, and listed in `held` with what would change (its frames then and now, its start, whether its presses differ), so a curated clip is never made shorter by a session of the same ID. A clip `--replace` names gets the session's presses, start and frames and keeps its name, why, level and its other lines. The JSON's `replaces` lists what the call changes or removes of the clips already there, each with `says` in words; gp_run reads it as the call's plan and shows it on the person's card (docs/mcp.md, "Writes that change what is already there").
+
 | Left out | How it is known |
 |---|---|
 | Sealed runs | A session named `sealed*`; a clip whose input is a sealed run's: the same log, path and start as a clip under `$GP_HOME/sealed/GAME/sealed-run/clips/`, the same input from power-on as a `.log` directly under `$GP_HOME/sealed/GAME/` or one of those clips, or one that plays into a sealed run's own presses (docs/sealed.md) |
@@ -117,7 +119,7 @@ An import removes a clip only when it is told to: `--remove ID`, repeated, or a 
 | By name | `[import] exclude`: a session (`title`) or a session's clip (`walk.006`), with why |
 | What can't be a recipe | A clip with no frames, or one that presses reset or a third or fourth controller |
 
-Without `--write` nothing is written. With it, the plan is edited in place: a new clip goes after the last clip (so before the changelog), a changed clip's block is written again, and a removed clip's block and its `inputs/` files go. Every other byte stays as it was. Then the version is recorded by the rules above, with a changelog line naming the clips. A mapping that maps no field yet (as `gp game new` writes it) is refused, since a clip scored over nothing agrees on every frame. `--from HOME` reads the sessions, paths and sealed runs from another home.
+Without `--write` nothing is written. With it, the plan is edited in place: a new clip goes after the last clip (so before the changelog), a replaced clip's block takes the session's presses, start and frames with its other lines kept, and a removed clip's block and its `inputs/` files go. Every other byte stays as it was. Then the version is recorded by the rules above, with a changelog line naming the clips. A mapping that maps no field yet (as `gp game new` writes it) is refused, since a clip scored over nothing agrees on every frame. `--from HOME` reads the sessions, paths and sealed runs from another home.
 
 The old import also measured new clips' curves in a capture run (`--run`) and recorded the version only once every clip had one. A plan keeps no curves, so the version is recorded on the same `--write`.
 

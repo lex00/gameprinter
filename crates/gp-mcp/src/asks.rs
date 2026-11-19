@@ -7,7 +7,7 @@
 //!
 //! | File | What |
 //! |---|---|
-//! | `$GP_HOME/work/asks/ID.json` | One ask: `{id, command, argv, key, game, needs, says, cost?, made_ms, state, answered_ms?, used_ms?}`; state is `open`, `yes`, `no` or `used` |
+//! | `$GP_HOME/work/asks/ID.json` | One ask: `{id, command, argv, key, game, needs, says, cost?, plan?, held?, made_ms, state, answered_ms?, used_ms?}`; state is `open`, `yes`, `no` or `used`. `plan` is what a call that replaces data would change, from its plan; `held` is a change gp_run's net put back ([`crate::held`]) |
 //! | `$GP_HOME/work/serve/page.json` | `{pid, port}`: the gp serve that answers the cards for this home, written when it starts |
 //!
 //! The yes guards against a careless agent, not a hostile one: a program
@@ -237,12 +237,37 @@ pub struct New<'a> {
     pub about: &'a str,
     pub needs: Ask,
     pub cost: Option<String>,
+    /// What the call would change of data already in the person's games,
+    /// from its plan: `{says: [..], hash}`. Its words go on the card.
+    pub plan: Option<Value>,
+    /// A change gp_run's net held (`crate::held`): the ask's key is then
+    /// [`held_key`]'s and the card says `held_says`.
+    pub held: Option<(Value, String)>,
+}
+
+/// The key of a change the net held for one exact call, apart from the
+/// call's own asks.
+pub fn held_key(command: &str, argv: &[String]) -> String {
+    key(&format!("{command} (held)"), argv)
+}
+
+/// Marks an open ask used, when the call it asks for goes ahead on the
+/// agent's confirmed_by_person with no page open.
+pub fn mark_used(home: &Path, v: &Value) -> Result<(), String> {
+    let mut v = v.clone();
+    v["state"] = json!("used");
+    v["used_ms"] = json!(now_ms());
+    write(home, &v)
 }
 
 /// Writes a new open ask and returns it.
 pub fn make(home: &Path, n: &New) -> Result<Value, String> {
     let made = now_ms();
-    let k = key(n.command, n.argv);
+    let k = if n.held.is_some() {
+        held_key(n.command, n.argv)
+    } else {
+        key(n.command, n.argv)
+    };
     let id = format!("{}-{}", made, &k[..8]);
     let game = n
         .values
@@ -257,12 +282,18 @@ pub fn make(home: &Path, n: &New) -> Result<Value, String> {
         "key": k,
         "game": game,
         "needs": n.needs.name(),
-        "says": says(n),
+        "says": n.held.as_ref().map_or_else(|| says(n), |(_, s)| s.clone()),
         "made_ms": made,
         "state": "open",
     });
     if let Some(c) = &n.cost {
         v["cost"] = json!(c);
+    }
+    if let Some(p) = &n.plan {
+        v["plan"] = p.clone();
+    }
+    if let Some((h, _)) = &n.held {
+        v["held"] = h.clone();
     }
     write(home, &v)?;
     Ok(v)
@@ -337,6 +368,9 @@ pub fn says(n: &New) -> String {
                 .unwrap_or_default()
         ),
         "agent integrate" => "Land a clip agent's work in the game's code.".to_owned(),
+        "corpus import" => {
+            format!("Change or remove clips already in the corpus{of}, from the mechanic sessions.")
+        }
         "self publish" => "Publish this build of Game Printer for others to install.".to_owned(),
         "tool gate" => "Land a change to Game Printer itself once it passes its checks.".to_owned(),
         "dataset grade" => {
@@ -348,6 +382,7 @@ pub fn says(n: &New) -> String {
                 Ask::Publish => "Publish or land something others get",
                 Ask::Spend => "Spend money",
                 Ask::Download => "Download a lot",
+                Ask::Replace => "Change or remove what is already in your games",
             };
             if about.is_empty() {
                 format!("{lead}.")
@@ -355,6 +390,13 @@ pub fn says(n: &New) -> String {
                 format!("{lead}: {about}.")
             }
         }
+    };
+    let main = match n.plan.as_ref().and_then(|p| p["says"].as_array()) {
+        Some(each) if !each.is_empty() => {
+            let each: Vec<&str> = each.iter().filter_map(Value::as_str).collect();
+            format!("{main} It {}.", each.join("; it "))
+        }
+        _ => main,
     };
     match &n.cost {
         Some(c) => format!("{main} Cost: {c}."),
@@ -385,6 +427,8 @@ mod tests {
             about: "Publish a package",
             needs: Ask::Publish,
             cost: None,
+            plan: None,
+            held: None,
         }
     }
 

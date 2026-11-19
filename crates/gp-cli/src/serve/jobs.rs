@@ -261,7 +261,7 @@ mod tests {
             assert!(
                 matches!(
                     gp_mcp::policy::decide(row, &given, &[]),
-                    gp_mcp::policy::Decision::Run { .. }
+                    gp_mcp::policy::Decision::Run { .. } | gp_mcp::policy::Decision::RunHeld
                 ),
                 "{} would need a yes or be refused",
                 a.command

@@ -72,6 +72,14 @@ pub struct GateArgs {
     /// since no score compares a clip that is gone.
     #[arg(long = "removes", value_name = "ID")]
     pub removes: Vec<String>,
+    /// A clip already in the corpus whose recipe the patch changes on
+    /// purpose (its presses, start, frames or any field but its name and
+    /// why, or the presses files it reads): its ID, or a pattern with `*`.
+    /// A patch that changes a clip it doesn't name fails: a clip made
+    /// shorter or played another way can score as well as before while
+    /// it holds less. With --import, the clips the import may change.
+    #[arg(long = "replaces", value_name = "ID")]
+    pub replaces: Vec<String>,
     /// Score the tip and stop: no patch, nothing lands.
     #[arg(long, conflicts_with = "patch")]
     pub score_only: bool,
@@ -649,6 +657,8 @@ pub(crate) struct Item {
     pub message: Option<String>,
     /// The clips it removes on purpose (`--removes`).
     pub removes: Vec<String>,
+    /// The clips already in the corpus it changes on purpose (`--replaces`).
+    pub replaces: Vec<String>,
     /// The files it changes, relative to the repo.
     pub files: Vec<String>,
 }
@@ -768,6 +778,12 @@ fn apply_items(
         });
         if let Some(why) = unnamed_removals(&removed, &item.removes) {
             return refuse(i, why, "removed clips");
+        }
+        let changed = changed_clips(tree, &files, |f| {
+            git(tree, &["show", &format!("HEAD:{f}")]).ok()
+        });
+        if let Some(why) = unnamed_changes(&changed, &item.replaces) {
+            return refuse(i, why, "changed clips");
         }
         let msg = item
             .message
@@ -1465,7 +1481,7 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
         let file = if a.score_only {
             PathBuf::new()
         } else if a.import {
-            match import_patch(&repo, &rel, &onto, &home, paths, &a.removes)? {
+            match import_patch(&repo, &rel, &onto, &home, paths, &a.removes, &a.replaces)? {
                 Imported::Nothing(o) => return Ok(o),
                 Imported::Patch(f, msg) => {
                     import_msg = Some(msg);
@@ -1491,6 +1507,7 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
                 onto: onto.clone(),
                 run: a.run.clone(),
                 removes: a.removes.clone(),
+                replaces: a.replaces.clone(),
             };
             ticket = Some(crate::gate_queue::Ticket::enter(&home, req, &file)?);
         }
@@ -1560,12 +1577,19 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
         patch_file.clone(),
         patch_file.display().to_string(),
         a.message.clone().or(import_msg),
-        a.removes.clone(),
+        (a.removes.clone(), a.replaces.clone()),
     );
-    let others = claimed
-        .into_iter()
-        .map(|(name, r)| (Some(name), r.patch, r.shown, r.message, r.removes));
-    for (k, (name, file, shown, message, removes)) in std::iter::once(own).chain(others).enumerate()
+    let others = claimed.into_iter().map(|(name, r)| {
+        (
+            Some(name),
+            r.patch,
+            r.shown,
+            r.message,
+            (r.removes, r.replaces),
+        )
+    });
+    for (k, (name, file, shown, message, (removes, replaces))) in
+        std::iter::once(own).chain(others).enumerate()
     {
         let work = c.home.join("batch").join(k.to_string());
         let patch = match read_patch(&file, &work)? {
@@ -1595,6 +1619,7 @@ pub(crate) fn run(a: &GateArgs, paths: &Paths) -> Result<Outcome> {
             shown,
             message,
             removes,
+            replaces,
             files,
         });
         asked.push(name);
@@ -1978,6 +2003,122 @@ pub(crate) fn removed_clips(
     out
 }
 
+/// A clip's recipe as the gate compares it: its block's fields but its
+/// name and why, and the contents of the presses files it names.
+fn recipes(text: &str, read: &dyn Fn(&str) -> Option<String>) -> BTreeMap<String, String> {
+    let Ok(v) = toml::from_str::<toml::Value>(text) else {
+        return BTreeMap::new();
+    };
+    let Some(clips) = v.get("clip").and_then(|c| c.as_array()) else {
+        return BTreeMap::new();
+    };
+    let mut out = BTreeMap::new();
+    for c in clips {
+        let Some(t) = c.as_table() else { continue };
+        let Some(id) = t.get("id").and_then(toml::Value::as_str) else {
+            continue;
+        };
+        let mut t = t.clone();
+        t.remove("name");
+        t.remove("why");
+        let mut files = String::new();
+        for k in ["start", "presses", "presses_file"] {
+            if let Some(p) = t.get(k).and_then(toml::Value::as_str)
+                && p.ends_with(".presses")
+            {
+                files.push_str(&format!("{p}\0{}\0", read(p).unwrap_or_default()));
+            }
+        }
+        out.insert(id.to_owned(), format!("{t}\0{files}"));
+    }
+    out
+}
+
+/// The clips a patch changes that were in the corpus before it: by each
+/// corpus.toml the patch changes (or whose game's inputs/ it changes),
+/// the IDs in both whose recipe differs. `old` reads a file at the tip.
+pub(crate) fn changed_clips(
+    tree: &Path,
+    files: &[String],
+    old: impl Fn(&str) -> Option<String>,
+) -> Vec<(String, Vec<String>)> {
+    let mut corpora: BTreeSet<String> = BTreeSet::new();
+    for f in files {
+        if f.ends_with("/corpus.toml") || f == "corpus.toml" {
+            corpora.insert(f.clone());
+        } else if let Some((dir, _)) = f
+            .split_once("/inputs/")
+            .or_else(|| f.strip_prefix("inputs/").map(|_| ("", "")))
+        {
+            corpora.insert(if dir.is_empty() {
+                "corpus.toml".to_owned()
+            } else {
+                format!("{dir}/corpus.toml")
+            });
+        }
+    }
+    let mut out = Vec::new();
+    for f in corpora {
+        let Some(before) = old(&f) else {
+            continue;
+        };
+        let dir = f.strip_suffix("corpus.toml").unwrap_or_default().to_owned();
+        let was = recipes(&before, &|p| old(&format!("{dir}{p}")));
+        let now_text = fs::read_to_string(tree.join(&f)).unwrap_or_default();
+        let now = recipes(&now_text, &|p| {
+            fs::read_to_string(tree.join(format!("{dir}{p}"))).ok()
+        });
+        let changed: Vec<String> = was
+            .iter()
+            .filter(|(id, r)| now.get(*id).is_some_and(|n| n != *r))
+            .map(|(id, _)| id.clone())
+            .collect();
+        if !changed.is_empty() {
+            out.push((f, changed));
+        }
+    }
+    out
+}
+
+/// The refusal for clips a patch changes that `--replaces` doesn't name.
+pub(crate) fn unnamed_changes(
+    changed: &[(String, Vec<String>)],
+    allowed: &[String],
+) -> Option<String> {
+    let mut each = Vec::new();
+    let mut n = 0;
+    for (file, ids) in changed {
+        let left: Vec<&str> = ids
+            .iter()
+            .filter(|id| !allowed.iter().any(|p| matches(p, id)))
+            .map(String::as_str)
+            .collect();
+        if left.is_empty() {
+            continue;
+        }
+        n += left.len();
+        let more = if left.len() > 8 {
+            format!(" and {} more", left.len() - 8)
+        } else {
+            String::new()
+        };
+        each.push(format!(
+            "{} in {file}: {}{more}",
+            left.len(),
+            left[..left.len().min(8)].join(", ")
+        ));
+    }
+    if each.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "the patch changes {n} clip{} already in the corpus without naming {}: {}. A clip made shorter or played another way can score as well as before while it holds less, so a patch that means to change a clip's recipe names it: `--replaces ID` (repeated, or a pattern with `*`)",
+        if n == 1 { "" } else { "s" },
+        if n == 1 { "it" } else { "them" },
+        each.join("; ")
+    ))
+}
+
 pub(crate) fn unnamed_removals(
     removed: &[(String, Vec<String>)],
     allowed: &[String],
@@ -2140,6 +2281,67 @@ mod tests {
             together,
             ..Row::default()
         }
+    }
+
+    /// A patch that shortens a clip already in the corpus, or changes the
+    /// presses file it reads, fails unless --replaces names it; a new clip,
+    /// a version step and a changed name or why don't need naming.
+    #[test]
+    fn a_changed_clip_needs_naming_and_a_new_one_doesnt() {
+        let d = tempfile::tempdir().unwrap();
+        let tree = d.path();
+        let before = "[corpus]\nversion = \"1.0.0\"\n\n[[clip]]\nid = \"g.a.001\"\nname = \"A\"\nstart = \"inputs/a.start.presses\"\npresses = \"inputs/a.presses\"\nframes = 40\nlevel = \"x\"\n";
+        let old = |f: &str| match f {
+            "g/corpus.toml" => Some(before.to_owned()),
+            "g/inputs/a.presses" => Some("gp-presses 0\nframes 40\n".to_owned()),
+            "g/inputs/a.start.presses" => Some("gp-presses 0\nframes 5\n".to_owned()),
+            _ => None,
+        };
+        fs::create_dir_all(tree.join("g/inputs")).unwrap();
+        fs::write(tree.join("g/inputs/a.presses"), "gp-presses 0\nframes 40\n").unwrap();
+        fs::write(
+            tree.join("g/inputs/a.start.presses"),
+            "gp-presses 0\nframes 5\n",
+        )
+        .unwrap();
+        let files = vec!["g/corpus.toml".to_owned()];
+        // A new clip, a new version, another name and why: nothing to name.
+        let added = before
+            .replace("1.0.0", "1.1.0")
+            .replace("name = \"A\"", "name = \"B\"\nwhy = \"w\"")
+            + "\n[[clip]]\nid = \"g.b.001\"\nname = \"N\"\nframes = 3\n";
+        fs::write(tree.join("g/corpus.toml"), &added).unwrap();
+        assert!(changed_clips(tree, &files, old).is_empty());
+        // Shorter, or a level dropped: named, or a FAIL.
+        for now in [
+            before.replace("frames = 40", "frames = 21"),
+            before.replace("level = \"x\"\n", ""),
+        ] {
+            fs::write(tree.join("g/corpus.toml"), &now).unwrap();
+            let changed = changed_clips(tree, &files, old);
+            assert_eq!(
+                changed,
+                vec![("g/corpus.toml".to_owned(), vec!["g.a.001".to_owned()])]
+            );
+            let why = unnamed_changes(&changed, &[]).unwrap();
+            assert!(
+                why.contains("1 clip already in the corpus") && why.contains("--replaces"),
+                "{why}"
+            );
+            assert_eq!(unnamed_changes(&changed, &["g.a.*".to_owned()]), None);
+        }
+        // Its presses file changed, corpus.toml as it was.
+        fs::write(tree.join("g/corpus.toml"), before).unwrap();
+        fs::write(
+            tree.join("g/inputs/a.presses"),
+            "gp-presses 0\nframes 40\nright@0-3\n",
+        )
+        .unwrap();
+        let files = vec!["g/inputs/a.presses".to_owned()];
+        assert_eq!(
+            changed_clips(tree, &files, old),
+            vec![("g/corpus.toml".to_owned(), vec!["g.a.001".to_owned()])]
+        );
     }
 
     #[test]
@@ -2668,6 +2870,7 @@ fn import_patch(
     home: &Path,
     paths: &Paths,
     removes: &[String],
+    replaces: &[String],
 ) -> Result<Imported> {
     let game = repo
         .join(rel)
@@ -2694,6 +2897,7 @@ fn import_patch(
                 says: None,
                 date: None,
                 remove: removes,
+                replace: replaces,
                 sessions: &[],
             },
             paths,

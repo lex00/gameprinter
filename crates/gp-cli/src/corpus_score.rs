@@ -137,6 +137,14 @@ pub enum CorpusCmd {
         /// sessions now leave out, is kept as it is.
         #[arg(long, value_name = "ID")]
         remove: Vec<String>,
+        /// A clip already in the plan the import may change: its ID, or a
+        /// pattern with `*`. Repeat it for each. A clip whose session now
+        /// gives other presses, start or frames is otherwise held, kept as
+        /// it is and listed with what would change; a clip named here gets
+        /// the session's presses, start and frames and keeps its name, why,
+        /// level and other fields.
+        #[arg(long, value_name = "ID")]
+        replace: Vec<String>,
         /// Import only this session's clips (repeat it for each), so a
         /// worker importing from a shared home adds its own sessions and
         /// nobody else's. The plan's other clips are left as they are.
@@ -256,6 +264,7 @@ pub(crate) fn run(cmd: &CorpusCmd, paths: &Paths) -> Result<Outcome> {
             says,
             date,
             remove,
+            replace,
             session,
         } => crate::corpus_import::run(
             &crate::corpus_import::Args {
@@ -266,6 +275,7 @@ pub(crate) fn run(cmd: &CorpusCmd, paths: &Paths) -> Result<Outcome> {
                 says: says.as_deref(),
                 date: date.as_deref(),
                 remove,
+                replace,
                 sessions: session,
             },
             paths,

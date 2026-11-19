@@ -37,6 +37,10 @@ pub(crate) struct Request {
     /// The clips the patch removes on purpose (`--removes`).
     #[serde(default)]
     pub removes: Vec<String>,
+    /// The clips already in the corpus the patch changes on purpose
+    /// (`--replaces`).
+    #[serde(default)]
+    pub replaces: Vec<String>,
 }
 
 impl Request {
@@ -201,6 +205,7 @@ mod tests {
             onto: onto.into(),
             run: run.into(),
             removes: Vec::new(),
+            replaces: Vec::new(),
         }
     }
 

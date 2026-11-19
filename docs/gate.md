@@ -12,7 +12,7 @@ One exception: `site/` in `games`, the list of games, holds no game code, and th
 gp model gate GAME --patch "$GP_WORKER_OUT/fix.patch" --onto main -m "GAME: ..."
 ```
 
-`gp model gate` scores the game's corpus on the tip of `games`, applies the patch, builds the game's module if its hooks changed, scans the package for ROM data, checks the model, and scores the corpus again. If no clip got worse, the commit lands on the branch. A patch that removes a clip from the corpus has to name it with `--removes`, or the gate refuses it. `--dry-run` says PASS or FAIL and lands nothing.
+`gp model gate` scores the game's corpus on the tip of `games`, applies the patch, builds the game's module if its hooks changed, scans the package for ROM data, checks the model, and scores the corpus again. If no clip got worse, the commit lands on the branch. A patch that removes a clip from the corpus has to name it with `--removes`, and one that changes a clip's recipe with `--replaces`, or the gate refuses it. `--dry-run` says PASS or FAIL and lands nothing.
 
 In order, a try of a patch (or of a batch's patches, below) on the tip:
 
@@ -21,6 +21,7 @@ In order, a try of a patch (or of a batch's patches, below) on the tip:
 | Patch | Applied as it is (`git apply --index`). A patch made on an older tip that no longer applies is merged onto the tip three ways (`git apply --3way`) and the merge is gated; a merge that conflicts is a FAIL naming the files. Three kinds of file have a rule for a conflict: CLI.md, which gp writes of itself, takes the tip's side and the tool gate writes it again with the merged build; an append-only file ("Append-only files" below) keeps both sides' added rows; a game's model.toml or fidelity.toml is merged through its canonical text (`gp model fmt`'s), so a patch made on a hand-laid layout lands as the facts it changes. `--no-rebase` turns the merge off: the patch must apply as it is. A patch may change only the game's folder |
 | Hook | The ROM-blocking hook over what is staged, before each commit, so a ROM's bytes never become a commit |
 | Removed clips | A clip the patch removes from corpus.toml fails unless `--removes` names it |
+| Changed clips | A clip already in corpus.toml whose recipe the patch changes (its fields but `name` and `why`, or the contents of the presses files it reads) fails unless `--replaces` names it: a clip made shorter or played another way can still score 100% while it holds less |
 | Module | The game's module built for its hook code, once per hook code and kit |
 | Package scan | A needs-rewrite item the tip doesn't have is a FAIL |
 | Model | `gp model check` against the lifted assets (an arcade map's slots are held to the asset being there), and `gp model fmt --check`: model.toml and fidelity.toml stay in canonical form (the old guard.py's `models`) |
