@@ -139,7 +139,7 @@ const ROW_CLI: &str = "gp mechanic show GAME ROW, gp mechanic start GAME ROW, gp
 /// game's rows that are next or being worked on, in the log's order, one
 /// step each, touching `row:GAME/ROW`. A step's id holds while the row's
 /// status does, so a worker that ends with its row still open isn't
-/// started again on it until the row changes.
+/// started again on it until the row's status or note changes.
 pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec<Value> {
     let dir = crate::roms_cmd::games_dir(games);
     let all = dir
@@ -176,7 +176,9 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
             }
             let mut commands = commands_of(&cli);
             commands.push("*".into());
-            let key = json!({"journey": "quest log", "game": g, "row": row, "status": status});
+            // The note is in the key: a row reopened with new words is a new
+            // step, which the runner starts again.
+            let key = json!({"journey": "quest log", "game": g, "row": row, "status": status, "note": note});
             let h = blake3::hash(key.to_string().as_bytes()).to_hex();
             out.push(json!({
                 "id": format!("s{}", &h[..12]),
