@@ -618,9 +618,65 @@ function markTarget() {
   $("rec-to").classList.toggle("on", !!recording);
 }
 
+/** Talk turns of a row (from api/screen/clips), oldest first. */
+function talkOf(m) {
+  return clipsBy.find((g) => g.mechanic === m)?.talk ?? [];
+}
+
+/** A COMMENT button that opens a line under `host`; what is typed goes to
+ * the row's talk as the person's turn (POST api/talk), naming `clips`. */
+function commentBox(host, mechanic, clips, label) {
+  const b = el("button", "comment-open", "COMMENT");
+  b.type = "button";
+  b.title = label;
+  b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    e.currentTarget.blur();
+    if (host.querySelector("form.comment")) return;
+    const f = el("form", "comment");
+    f.autocomplete = "off";
+    const t = el("input", "comment-text");
+    t.placeholder = label;
+    const go = el("button", "", "SEND");
+    go.type = "submit";
+    f.append(t, go);
+    for (const x of [f, t, go]) x.addEventListener("click", (ev) => ev.stopPropagation());
+    t.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.code === "Escape") f.remove(); });
+    f.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const text = t.value.trim();
+      if (!text) return;
+      go.disabled = true;
+      try {
+        await api("api/talk", { text, clips, mechanic });
+        f.remove();
+        note(clips.length ? `Your comment on clip ${clips[0]} of ${mechanic} went to your agent.` : `Your comment on ${mechanic} went to your agent.`, 5000);
+        await refreshLists(true);
+      } catch (err) {
+        go.disabled = false;
+        note(`Your comment didn't save: ${err.message ?? err}`, 8000);
+      }
+    });
+    host.append(f);
+    t.focus();
+  });
+  return b;
+}
+
+/** The last few turns of a row's talk, or those naming clip `n`. */
+function talkLines(turns, n) {
+  const box = el("div", "talk");
+  const shown = turns.filter((t) => n === undefined || (t.clips ?? []).includes(n)).slice(-3);
+  for (const t of shown) {
+    const who = t.by === "player" ? "YOU" : "AGENT";
+    box.append(el("div", `talk-line talk-${t.by === "player" ? "you" : "agent"}`, `${who}: ${t.text ?? ""}`));
+  }
+  return box;
+}
+
 function drawQueue() {
   const q = $("queue");
-  const key = JSON.stringify([session?.mechanic, rows]);
+  const key = JSON.stringify([session?.mechanic, rows, clipsBy.map((g) => [g.mechanic, (g.talk ?? []).length])]);
   if (q.dataset.key === key) { markTarget(); return; }
   q.dataset.key = key;
   q.textContent = "";
@@ -641,6 +697,9 @@ function drawQueue() {
     li.append(el("span", "qto", ""));
     if (r.scores) li.append(el("span", "qnote qscore", r.scores));
     if (r.note) li.append(el("span", "qnote", r.note));
+    const turns = talkOf(r.mechanic);
+    if (turns.length) li.append(talkLines(turns));
+    li.append(commentBox(li, r.mechanic, [], `A comment on ${r.mechanic} for your agent`));
     if (r.mechanic === session?.mechanic) li.classList.add("open");
     li.title = "Click: recordings go to this row";
     li.addEventListener("click", () => void pickRow(r.mechanic));
@@ -653,7 +712,7 @@ function drawQueue() {
 function drawClips() {
   const box = $("clips");
   const shown = clip ? `${clip.mechanic}/${clip.n}` : "";
-  const key = JSON.stringify([clipsBy, shown]);
+  const key = JSON.stringify([clipsBy, shown]);  // talk included
   if (box.dataset.key === key) return;
   box.dataset.key = key;
   box.textContent = "";
@@ -665,6 +724,9 @@ function drawClips() {
     for (const c of g.clips) {
       const li = el("li", `${g.mechanic}/${c.n}` === shown ? "on" : "");
       li.append(el("span", "cn", `CLIP ${c.n}`), `${((c.frames ?? 0) / fps).toFixed(1)} s `, el("span", "cby", `by ${c.by ?? "?"}${c.note ? `: ${c.note}` : ""}`));
+      li.append(commentBox(li, g.mechanic, [c.n], `A comment on clip ${c.n} of ${g.mechanic}`));
+      const said = (g.talk ?? []).filter((t) => (t.clips ?? []).includes(c.n) && !/^Here is clip \d+\.$/.test(t.text ?? ""));
+      if (said.length) li.append(talkLines(said, c.n));
       li.title = "Show it on both screens: Left and Right step, Space plays, Esc goes back to playing";
       li.addEventListener("click", () => {
         show.by = "person";

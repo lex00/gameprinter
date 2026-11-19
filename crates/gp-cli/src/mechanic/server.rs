@@ -970,8 +970,9 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         )),
         ("GET" | "HEAD", "/api/session") => Ok(Response::json(&s.open_session()?.state()?)),
         ("GET" | "HEAD", "/api/working") => working(s, req.param("mechanic")),
-        // Every quest-log row's clips, for the screen page's list under the
-        // screens: a row with no session has none (none is made here).
+        // Every quest-log row's clips and talk, for the screen page's list
+        // under the screens, where the person comments on a row or a clip:
+        // a row with no session has none (none is made here).
         ("GET" | "HEAD", "/api/screen/clips") => {
             let mut out = Vec::new();
             for r in read_queue(&s.queue_file()?) {
@@ -981,8 +982,10 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
                 if !Session::exists(&s.paths, &s.game, m).unwrap_or(false) {
                     continue;
                 }
-                let clips = Session::open(&s.paths, &s.game, m)?.clips()?;
-                out.push(json!({"mechanic": m, "clips": clips}));
+                let session = Session::open(&s.paths, &s.game, m)?;
+                out.push(
+                    json!({"mechanic": m, "clips": session.clips()?, "talk": session.turns()?}),
+                );
             }
             Ok(Response::json(&json!({"mechanics": out})))
         }
