@@ -83,3 +83,12 @@ canvas { display: block; background: #000; border: 2px solid var(--line); image-
 @media (max-width: 800px) {
   #below { grid-template-columns: minmax(0, 1fr); }
 }
+/* The agent's asks: a card each over the screens, with YES and NO. */
+#asks { display: flex; flex-direction: column; gap: 6px; width: min(1200px, 100%); margin: 8px 0; }
+#asks .ask-card { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; border: 2px solid var(--gold); background: #2a2000; padding: 6px 10px; }
+#asks .ask-head { font: bold 12px var(--mono); color: var(--gold); letter-spacing: 0.08em; }
+#asks .ask-says { flex: 1 1 320px; }
+#asks .ask-detail { flex-basis: 100%; color: var(--muted); font: 12px var(--mono); overflow-wrap: anywhere; }
+#asks button { font: bold 13px var(--mono); padding: 2px 14px; }
+#asks .ask-yes { color: var(--bg); background: var(--gold); border: 2px solid var(--gold); }
+#asks .ask-no { color: var(--fg); background: transparent; border: 2px solid var(--muted); }

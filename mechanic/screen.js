@@ -721,6 +721,65 @@ async function tell(e) {
   finally { $("tell-send").disabled = false; }
 }
 
+// What the agent waits for the person's yes on -------------------------
+//
+// The asks gp_run left (gp_mcp::asks, GET /api/asks), as cards over the
+// screens: what it does in plain words, the command and its message (for
+// a gate, what lands), and YES and NO (POST /api/asks/ID). A yes stays
+// until the agent uses it.
+
+let asksDrawn = "";
+async function refreshAsks() {
+  let list = [];
+  try {
+    const r = await fetch("/api/asks");
+    if (r.ok) list = ((await r.json()).asks ?? []).filter((a) => a.state === "open" || a.state === "yes");
+  } catch (e) { /* the next look */ }
+  const key = JSON.stringify(list.map((a) => [a.id, a.state]));
+  if (key === asksDrawn) return;
+  asksDrawn = key;
+  const box = $("asks");
+  box.textContent = "";
+  box.hidden = list.length === 0;
+  for (const a of list) {
+    const card = el("div", "ask-card");
+    card.append(el("span", "ask-head", a.state === "yes" ? "YOU SAID YES" : "YOUR AGENT ASKS"));
+    const says = el("span", "ask-says", a.says ?? "");
+    card.append(says);
+    const argv = a.argv ?? [];
+    const mi = argv.indexOf("--message");
+    const detail = [`gp ${a.command ?? ""}`, mi >= 0 ? argv[mi + 1] : ""].filter(Boolean).join(": ");
+    if (detail) card.append(el("span", "ask-detail", detail));
+    if (a.state === "yes") {
+      card.append(el("span", "ask-detail", "Your agent can go ahead, once."));
+    } else {
+      for (const [word, val] of [["YES", "yes"], ["NO", "no"]]) {
+        const b = el("button", `ask-${val}`, word);
+        b.type = "button";
+        b.title = val === "yes" ? "Let your agent do this, once" : "Your agent won't do this";
+        b.addEventListener("click", async (e) => {
+          e.currentTarget.blur();
+          for (const x of card.querySelectorAll("button")) x.disabled = true;
+          try {
+            const r = await fetch(`/api/asks/${encodeURIComponent(a.id)}`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ answer: val }),
+            });
+            if (!r.ok) says.textContent = `${a.says} (Your answer didn't save: ${(await r.json().catch(() => ({}))).error ?? r.status}.)`;
+          } catch (err) {
+            says.textContent = `${a.says} (Your answer didn't save. Is the page's server still running?)`;
+          }
+          asksDrawn = "";
+          void refreshAsks();
+        });
+        card.append(b);
+      }
+    }
+    box.append(card);
+  }
+}
+
 // What is shown, and the agent's asks -----------------------------------
 
 function setView(v, by = "person") {
@@ -1023,6 +1082,8 @@ async function main() {
   setInterval(() => void poll(), 1000);
   setInterval(() => void watchBuild(), 4000);
   setInterval(() => { if (!document.hidden) void refreshLists(); }, 3000);
+  void refreshAsks();
+  setInterval(() => { if (!document.hidden) void refreshAsks(); }, 2000);
 }
 
 main().catch((e) => {
