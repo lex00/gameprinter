@@ -81,6 +81,134 @@ pub struct PictureArgs {
     /// The folder `--shots` writes, outside any git work tree.
     #[arg(long)]
     pub shots_dir: Option<std::path::PathBuf>,
+    /// With `--clip`: write every compared frame's sprites here, a JSON
+    /// line a frame: the original's (board sprite code and box) and the
+    /// model's (body kind and box), the original's sprites no model body
+    /// or sprite pixel covers (`missing`) and the model's bodies over no
+    /// original sprite (`extra`). The report then lists the runs of frames
+    /// with either, so a gap shows whatever pictures the model is drawn in.
+    #[arg(long, requires = "clip")]
+    pub sprites: Option<std::path::PathBuf>,
+}
+
+/// What a clip's lockstep gives: its boxes' causes and, with `--sprites`,
+/// its frames' sprites.
+type ClipWatched = crate::scenario::Watched<(Vec<Found>, Option<Vec<SpriteLine>>)>;
+
+/// One frame's line of `--sprites`.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct SpriteLine {
+    frame: u64,
+    /// The original's shown sprites: code and box.
+    original: Vec<(u16, [i64; 4])>,
+    /// The model's bodies: kind and box.
+    model: Vec<(String, [i64; 4])>,
+    missing: Vec<(u16, [i64; 4])>,
+    extra: Vec<(String, [i64; 4])>,
+}
+
+/// The original's sprites against the model's bodies on one frame. A
+/// sprite or body is shown when it has sprite pixels on its own frame; a
+/// sprite is missing when no body
+/// overlaps it and the model's frame has no sprite pixel in its box, and a
+/// body is extra when no shown sprite overlaps it and the original's frame
+/// has no sprite pixel in its box.
+fn sprite_line(frame: u64, o: &Frame, m: &Frame, sprites: &[Oam], bodies: &[Drawn]) -> SpriteLine {
+    let original: Vec<(u16, [i64; 4])> = sprites
+        .iter()
+        .filter(|s| sprite_pixels(o, s.rect) > 0)
+        .map(|s| (s.tile, s.rect))
+        .collect();
+    let model: Vec<(String, [i64; 4])> = bodies
+        .iter()
+        .filter(|b| !b.behind && sprite_pixels(m, b.rect) > 0)
+        .map(|b| (b.kind.clone(), b.rect))
+        .collect();
+    let missing = original
+        .iter()
+        .filter(|(_, r)| {
+            model.iter().all(|(_, b)| overlap(*r, *b) == 0) && sprite_pixels(m, *r) == 0
+        })
+        .cloned()
+        .collect();
+    let extra = model
+        .iter()
+        .filter(|(_, b)| {
+            original.iter().all(|(_, r)| overlap(*r, *b) == 0) && sprite_pixels(o, *b) == 0
+        })
+        .cloned()
+        .collect();
+    SpriteLine {
+        frame,
+        original,
+        model,
+        missing,
+        extra,
+    }
+}
+
+/// The runs of `--sprites` frames with a missing or an extra sprite, as
+/// report lines: the frames, how many each side shows and an example of
+/// each kind of gap.
+fn sprite_runs(lines: &[SpriteLine]) -> Vec<String> {
+    let key = |l: &SpriteLine| {
+        let mut m: Vec<u16> = l.missing.iter().map(|x| x.0).collect();
+        m.sort_unstable();
+        m.dedup();
+        let mut e: Vec<String> = l.extra.iter().map(|x| x.0.clone()).collect();
+        e.sort();
+        e.dedup();
+        (m, e)
+    };
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let l = &lines[i];
+        if l.missing.is_empty() && l.extra.is_empty() {
+            i += 1;
+            continue;
+        }
+        let k = key(l);
+        let mut j = i;
+        while j + 1 < lines.len()
+            && lines[j + 1].frame == lines[j].frame + 1
+            && key(&lines[j + 1]) == k
+        {
+            j += 1;
+        }
+        let (a, b) = (&lines[i], &lines[j]);
+        let mut s = format!(
+            "  frames {} to {}: the original shows {} sprites, the model {} bodies",
+            a.frame,
+            b.frame,
+            a.original.len(),
+            a.model.len()
+        );
+        if let Some((_, r)) = a.missing.first() {
+            let codes: Vec<String> = k.0.iter().map(|c| format!("{c:03x}")).collect();
+            let _ = write!(
+                s,
+                "; missing from the model: {} sprites (codes {}), the first at {}, {}",
+                a.missing.len(),
+                codes.join(" "),
+                r[0],
+                r[1]
+            );
+        }
+        if let Some((_, r)) = a.extra.first() {
+            let _ = write!(
+                s,
+                "; drawn by the model only: {} ({}), the first at {}, {}",
+                a.extra.len(),
+                k.1.join(", "),
+                r[0],
+                r[1]
+            );
+        }
+        out.push(s);
+        i = j + 1;
+    }
+    out
 }
 
 /// The frame numbers `--shots` names: `12,40-45`.
@@ -242,6 +370,8 @@ pub(crate) struct Watch {
     pub(crate) found: Vec<Found>,
     /// `--shots`: the frames to write and the folder.
     shots: Option<(BTreeSet<u64>, std::path::PathBuf)>,
+    /// `--sprites`: each compared frame's sprites, kept when asked.
+    pub(crate) sprites: Option<Vec<SpriteLine>>,
 }
 
 impl Watch {
@@ -262,6 +392,7 @@ impl Watch {
             before: None,
             found: Vec::new(),
             shots: None,
+            sprites: None,
         }
     }
 
@@ -404,6 +535,9 @@ impl Screens<OriginalRuntime, Model> for Watch {
                 (arcade_sprites(&ram), None)
             }
         };
+        if let Some(lines) = &mut self.sprites {
+            lines.push(sprite_line(shown.frame, &o, &m, &sprites, &shown.bodies));
+        }
         let found = classify(
             &o,
             &m,
@@ -975,8 +1109,7 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
         by_set.entry(key).or_default().push(r.clone());
     }
     let mut unmade: BTreeMap<String, String> = BTreeMap::new();
-    let mut ran_by: BTreeMap<String, (Scenario, crate::scenario::Watched<Vec<Found>>)> =
-        BTreeMap::new();
+    let mut ran_by: BTreeMap<String, (Scenario, ClipWatched)> = BTreeMap::new();
     let mut mh = String::new();
     for (key, group) in &by_set {
         let other = if key.is_empty() {
@@ -1032,10 +1165,13 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
                 art.map(|a| {
                     let mut w = Watch::new(a, looks.clone());
                     w.shots = shots.clone();
+                    if args.sprites.is_some() {
+                        w.sprites = Some(Vec::new());
+                    }
                     w
                 })
             },
-            |w| w.found,
+            |w| (w.found, w.sprites),
         )?;
         for (sc, r) in list.into_iter().zip(ran) {
             ran_by.insert(sc.id.clone(), (sc, r));
@@ -1053,11 +1189,25 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
             json!({"behaviour": behaviour(&Err(anyhow::anyhow!("unmade"))), "error": e, "screen": null, "groups": {}}),
         );
     }
+    let mut sprite_report: Vec<String> = Vec::new();
     for (s, r) in list.iter().zip(ran) {
         let (outcome, watch) = match r {
             Ok((o, w)) => (Ok(o), w),
             Err(e) => (Err(e), None),
         };
+        let (watch, lines) = match watch {
+            Some((f, l)) => (Some(f), l),
+            None => (None, None),
+        };
+        if let (Some(path), Some(lines)) = (&args.sprites, lines) {
+            let mut text = String::new();
+            for l in &lines {
+                text.push_str(&serde_json::to_string(l)?);
+                text.push('\n');
+            }
+            std::fs::write(path, text)?;
+            sprite_report = sprite_runs(&lines);
+        }
         if let Ok(o) = &outcome {
             permille_sum += o.headline.together_permille;
             if let Some(x) = &o.screen {
@@ -1120,6 +1270,18 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
         (ppm(sprites.0, sprites.1), ppm(background.0, background.1));
 
     let mut text_out = String::new();
+    if let Some(path) = &args.sprites {
+        let _ = writeln!(
+            text_out,
+            "Sprites, every frame, in {}: {} runs of frames where the original and the model differ on sprites",
+            path.display(),
+            sprite_report.len()
+        );
+        for l in &sprite_report {
+            let _ = writeln!(text_out, "{l}");
+        }
+        let _ = writeln!(text_out);
+    }
     let _ = writeln!(
         text_out,
         "{}: {} clips scored again with this build. Fidelity {}.{}% (frames together), picture: characters {}%, background {}% of frames the same.",
