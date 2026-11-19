@@ -174,6 +174,12 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
             if tools {
                 touches.push("tools".into());
             }
+            // A tool row lands through the tool gate.
+            let cli = if r["repo"] == json!("tools") {
+                format!("{cli}, gp tool gate --patch FILE")
+            } else {
+                cli
+            };
             let mut commands = commands_of(&cli);
             commands.push("*".into());
             // The note is in the key: a row reopened with new words is a new
