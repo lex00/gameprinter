@@ -860,10 +860,13 @@ pub fn decide_step(decision: Decision, path: &str, st: &Steps) -> Decision {
     }
     let lands = matches!(decision, Decision::NeedsYes(_));
     let open: Vec<&Value> = st.open.iter().collect();
+    // "*" in a step's commands: any plain write (a check's files, the
+    // item's record); a landing, a publish or a spend still has to be
+    // named.
     let runs_it = |s: &&Value| {
         s["commands"]
             .as_array()
-            .is_some_and(|c| c.iter().any(|x| x == path))
+            .is_some_and(|c| c.iter().any(|x| x == path) || (!lands && c.iter().any(|x| x == "*")))
     };
     let these: Vec<&Value> = open.iter().copied().filter(runs_it).collect();
     let cited = st.cited.or(st.bound);
@@ -1355,6 +1358,26 @@ mod tests {
         let port = [("port".to_owned(), "7710".to_owned())];
         assert!(matches!(
             decide(row("level render").unwrap(), &given(&["port"]), &port),
+            Decision::Refused(_)
+        ));
+    }
+
+    #[test]
+    fn a_star_step_runs_any_plain_write_but_no_landing() {
+        let open = [
+            json!({"id": "s444444444444", "who": "agent", "subject": "g", "says": "Work on a row.", "commands": ["model gate", "*"]}),
+        ];
+        let st = Steps {
+            cited: Some("s444444444444"),
+            open: &open,
+            ..Steps::default()
+        };
+        let w = Decision::Run { writes: true };
+        assert_eq!(decide_step(w.clone(), "picture", &st), w);
+        let land = Decision::NeedsYes(Ask::Publish);
+        assert_eq!(decide_step(land.clone(), "model gate", &st), land);
+        assert!(matches!(
+            decide_step(land, "registry publish", &st),
             Decision::Refused(_)
         ));
     }

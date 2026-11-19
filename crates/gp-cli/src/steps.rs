@@ -174,6 +174,8 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
             if tools {
                 touches.push("tools".into());
             }
+            let mut commands = commands_of(&cli);
+            commands.push("*".into());
             let key = json!({"journey": "quest log", "game": g, "row": row, "status": status});
             let h = blake3::hash(key.to_string().as_bytes()).to_hex();
             out.push(json!({
@@ -182,7 +184,7 @@ pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec
                 "subject": g,
                 "who": "agent",
                 "says": says,
-                "commands": commands_of(&cli),
+                "commands": commands,
                 "touches": touches,
                 "how": {"cli": cli},
                 "repo": if tools { "tools" } else { "games" },
