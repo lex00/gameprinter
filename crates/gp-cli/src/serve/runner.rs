@@ -247,8 +247,13 @@ fn run_yeses(ctx: &Arc<Ctx>) {
         };
         let gp = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gp"));
         let games = ctx.games.clone();
+        let tools = ctx.repo.clone();
         let home = home.clone();
         std::thread::spawn(move || {
+            // One yes at a time: two gates at once would share the gate's
+            // own tree.
+            static ONE: Mutex<()> = Mutex::new(());
+            let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
             let mut args: Vec<String> = vec!["--json".into()];
             args.extend(
                 a["command"]
@@ -264,8 +269,19 @@ fn run_yeses(ctx: &Arc<Ctx>) {
                     .flatten()
                     .filter_map(|x| x.as_str().map(str::to_owned)),
             );
+            // The tool's own commands (gp tool gate) act on gameprinter's
+            // checkout, found from the current folder; the rest on the games.
+            let dir = if a["command"]
+                .as_str()
+                .is_some_and(|c| c.starts_with("tool "))
+            {
+                &tools
+            } else {
+                &games
+            };
             let out = Command::new(&gp)
                 .args(&args)
+                .current_dir(dir)
                 .env("GP_HOME", &home)
                 .env("GP_GAMES_DIR", &games)
                 .env("GP_NO_HINTS", "1")
