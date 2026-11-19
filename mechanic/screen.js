@@ -768,6 +768,21 @@ async function refreshLists(force) {
   finally { listing = false; }
 }
 
+/** The box's words as a new quest-log row (POST api/screen/row). */
+async function newRow() {
+  const t = $("tell-text").value.trim();
+  if (!t) { note("Say what the item is first."); return; }
+  $("tell-row").disabled = true;
+  try {
+    const { mechanic } = await api("api/screen/row", { text: t });
+    $("tell-text").value = "";
+    $("tell-text").blur();
+    note(`New item in the quest log: ${mechanic}.`, 6000);
+    await refreshLists(true);
+  } catch (err) { note(`The item didn't save: ${err.message ?? err}`, 8000); }
+  finally { $("tell-row").disabled = false; }
+}
+
 /** The box under the quest log: a turn to the open row's agent. */
 async function tell(e) {
   e.preventDefault();
@@ -1173,6 +1188,7 @@ function wire() {
   $("clip-scrub").addEventListener("change", (e) => { e.target.blur(); show.by = "person"; report(); });
   $("clip-live").addEventListener("click", (e) => { e.currentTarget.blur(); show.by = "person"; backToLive(); drawClips(); });
   $("tell").addEventListener("submit", (e) => void tell(e));
+  $("tell-row").addEventListener("click", (e) => { e.currentTarget.blur(); void newRow(); });
 }
 
 async function setUpPictures() {

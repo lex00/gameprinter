@@ -61,8 +61,9 @@
         <p id="rec-how" class="how">RECORD (or R) records what you play on THE ORIGINAL, from the press until you press it again, and sends it as a clip to the outlined row and to your agent. Click a row to record into it.</p>
         <ol id="queue"></ol>
         <form id="tell" autocomplete="off">
-          <input id="tell-text" placeholder="Tell your agent what to put in the quest log" aria-label="Tell your agent">
-          <button type="submit" id="tell-send">SEND</button>
+          <input id="tell-text" placeholder="A comment for the open row (SEND), or a new item for the quest log (NEW ITEM)" aria-label="Tell your agent">
+          <button type="submit" id="tell-send" title="Send it to your agent in the open row's talk">SEND</button>
+          <button type="button" id="tell-row" title="Make it a new item in the quest log, which the loop then drives">NEW ITEM</button>
         </form>
       </section>
       <section id="clips-box" aria-label="Clips">

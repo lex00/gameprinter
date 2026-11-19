@@ -41,7 +41,7 @@ use serde_json::{Value, json};
 
 use super::http::{self, Request, Response};
 use super::paths as clip_paths;
-use super::session::{Session, current, queue_file, read_queue, set_current};
+use super::session::{Session, current, queue_file, read_queue, set_current, write_queue};
 use crate::Outcome;
 use crate::original::Platform;
 
@@ -773,6 +773,22 @@ impl Server {
     }
 }
 
+/// A quest-log row's name from the person's words: their first four words
+/// of letters and digits, lower case, joined by dashes (`item` if none).
+fn row_name(text: &str) -> String {
+    let words: Vec<String> = text
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .take(4)
+        .map(str::to_ascii_lowercase)
+        .collect();
+    if words.is_empty() {
+        "item".to_owned()
+    } else {
+        words.join("-")
+    }
+}
+
 fn serve_one(s: &Server, conn: &TcpStream) -> std::io::Result<()> {
     let req = match http::read_request_up_to(conn, MAX_BODY) {
         Ok(r) => r,
@@ -1127,6 +1143,28 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             }
             let (n, again) = s.target(v["mechanic"].as_str())?.turn_once(t)?;
             Ok(Response::json(&json!({"turn": n, "again": again})))
+        }
+        // A new quest-log row from the person's words (the screen page's NEW
+        // ITEM): named from its first words, made unique, status "next" and
+        // the words as its note, so `next` drives it from now on.
+        ("POST", "/api/screen/row") => {
+            let v: Value = serde_json::from_slice(&req.body)?;
+            let text = v["text"].as_str().unwrap_or("").trim().to_owned();
+            if text.is_empty() {
+                return Ok(Response::error(400, "say what the item is"));
+            }
+            let f = s.queue_file()?;
+            let mut q = read_queue(&f);
+            let base = row_name(&text);
+            let mut name = base.clone();
+            let mut k = 2;
+            while q.iter().any(|r| r["mechanic"] == json!(name)) {
+                name = format!("{base}-{k}");
+                k += 1;
+            }
+            q.push(json!({"mechanic": name, "status": "next", "note": text, "by": "person"}));
+            write_queue(&f, &q)?;
+            Ok(Response::json(&json!({"mechanic": name})))
         }
         ("POST", "/api/handoff") => {
             let v: Value = serde_json::from_slice(&req.body)?;
@@ -1706,6 +1744,16 @@ fn post_clip(s: &Server, v: &Value) -> Result<Response> {
 
 #[cfg(test)]
 mod tests {
+
+    /// A row's name is the person's first four words, lower case.
+    #[test]
+    fn a_row_is_named_from_the_first_words() {
+        assert_eq!(
+            super::row_name("The GET READY screen needs work"),
+            "the-get-ready-screen"
+        );
+        assert_eq!(super::row_name("  !! "), "item");
+    }
     use super::*;
     use crate::mechanic::session::write_queue;
     use crate::test_paths as paths;
