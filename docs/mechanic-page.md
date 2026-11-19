@@ -183,7 +183,7 @@ shows that one's tabs (`mechanic/journeys/tabs.js`):
 | Open | Tabs | It opens at |
 |---|---|---|
 | A port | CLIPS, REFINE, PLAY, THEMES, on the game's page at `/mechanic/GAME/`, as before | CLIPS |
-| A theme | PLAY (the game in that look, in a frame of the page: SEE IT IN THE GAME's `gp theme look play`, passed through gp serve, the person's ROM loaded there for a ported game), THEMES (the theme's journey, BESIDE THE ORIGINAL in its step 5) | THEMES |
+| A theme | PLAY (the game in that look, in a frame of the page: for a theme of a game in the games checkout, [the screen](#the-screen) with the theme picked and the model alone; for a theme of a new game or a template, SEE IT IN THE GAME's `gp theme look play`, passed through gp serve), THEMES (the theme's journey, BESIDE THE ORIGINAL in its step 5) | THEMES |
 | A new game, from nothing or a template | PLAY (the game built to play, or BUILD IT TO PLAY), STEPS (its journey) | STEPS |
 
 CLIPS and REFINE hide for a theme and a new game: neither has an original
@@ -200,12 +200,15 @@ the copy opened last when it was opened after the last game.
 Each button runs a gp command through the agent's own `gp_run` (or
 `template_fork` and `build_publish`), marked as the person's, so the
 policy, the agent's log and the running record are the same as for the
-agent. None spends money, publishes or deletes. SEE IT IN THE GAME runs
-`gp theme look play --background` on the theme's game, whichever it is: a
-ported game opens in the page that plays any game by name, where the
-person loads their ROM, and a new game made from a template opens from its
-own files with no ROM; an arcade game is refused in words, since the page
-plays an arcade game but can't show a theme on one yet. The theme's share step
+agent. None spends money, publishes or deletes. SEE IT IN THE GAME on a
+theme of a game in the games checkout starts nothing: it answers with the
+game's [screen](#the-screen) on gp serve, the theme picked and the model
+alone (`/mechanic/GAME/screen.html?pictures=THEME&view=solo`), which PLAY
+holds in its frame. On a theme of a new game or a template it runs
+`gp theme look play --background` as before, the game opening from its own
+files with no ROM; `gp theme look play` stays for the command line. The
+route that passes a look-play server through (`/look/`) still answers for
+those. The theme's share step
 shows the share link and the words of the publish request to send by
 hand. A new game's last step, Play and share, has MAKE A SHARE LINK:
 `gp game share` makes the copy a package (`local/NAME`, a new version each
@@ -386,6 +389,50 @@ the row: the person plays only the hard stretch. Rows the tools made are
 under DONE BY THE TOOLS, collapsed, with their clips. Rows not triaged show
 as before.
 
+## The screen
+
+`/mechanic/GAME/screen.html` (mechanic/screen.html and screen.js) is one
+screen for a person who talks to their agent and watches: no tabs, no
+graphs. At the top, centred, THE ORIGINAL (their ROM, played by the page's
+player as CLIPS plays it) and THE MODEL (the rebuild's preview in a frame
+off screen, driven as CLIPS's PLAY THE MODEL drives it). The header has the
+PICTURES picker (the game's own, or each of the person's themes for the
+game), the view (SIDE BY SIDE; ON TOP, the model over the original at the
+transparency the slider sets; DIFFERENCE, black where they match; MODEL
+ONLY, the model alone at its own size, played live from its own start, as
+`gp theme look play` played a theme) and RECORD.
+
+Live, the person plays the original with the keyboard or a gamepad and the
+model follows on the frames the original read the pad on. RECORD (or R)
+starts a recording; pressing it again sends the clip to the mechanic open
+in the session and says so to the agent, as CLIPS's hand-off does (`POST
+api/paths`, `api/clips`, `api/talk`). A clip shows both games at a frame:
+the original replayed in the player's second console to the clip's start
+and stepped from there, the model started at the clip's start from the
+original's state (`api/rebuild/start`) with the clip's presses, seeked to
+the steps it had taken by the frame. Left and right step, Space plays,
+Esc goes back to live play.
+
+The agent drives it with the MCP tool `screen_show` (`gp mechanic screen
+GAME` from the command line): `clip` and `frame`, or `live`; `pictures`;
+`view`; `opacity`. Each part it leaves out stays as the page has it. The
+ask goes to `$GP_HOME/work/serve/GAME/screen-ask.json` with a number that
+goes up; the page reads `api/screen` every second, applies a new ask, and
+reports what it shows (`POST api/screen`, kept in `screen-shown.json`):
+the clip and frame, the pictures, the view, the ask it applied, any reason
+it couldn't, and `by: person` once the person picked something
+themselves. The tool waits up to 4 s for an open page to show the ask and
+returns the report with a sentence. A page opened after an ask no page
+showed yet, within 10 minutes, shows it.
+
+The screen is the developer's loop, the working copy as it is: a file of
+the theme shown changes (`api/screen` gives each theme's newest file
+time), and within two seconds the model's page is loaded again in it at
+the same place. The model's files change (`api/rebuild/status` is stale),
+and the page asks for a build by itself, keeps the old build playing with
+one line saying the new one builds, and swaps the new one in at the same
+place when `status.build` changes, saying so.
+
 ## Routes
 
 | Route | What |
@@ -406,4 +453,7 @@ as before.
 | `GET /api/sealed`, `/api/sealed/ID.log` | The sealed runs, for the person alone |
 | `GET /api/clips/N.measure.json` | A clip's measurements, once `gp mechanic contacts` writes them |
 | `GET /api/live` | The demo as it plays |
+| `GET /screen.html`, `/screen.js`, `/screen.css` | [The screen](#the-screen) |
+| `GET /api/screen`, `POST /api/screen` | The agent's last ask for the screen, what the page shows and each theme's newest file time; the page's report of what it shows |
+| `GET /api/screen/clip?n=N&mechanic=M` | A clip's start and length, for the screen to play it |
 | `GET /api/paths/SHA` | A stored path's log, for PLAY FROM HERE |

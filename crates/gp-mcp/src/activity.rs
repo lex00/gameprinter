@@ -195,6 +195,7 @@ const VERBS: &[(&str, &str, &str)] = &[
     ("save", "Saved", "saving"),
     ("score", "Scored", "scoring"),
     ("search", "Searched", "searching"),
+    ("show", "Showed", "showing"),
     ("sort", "Sorted", "sorting"),
     ("start", "Started", "starting"),
     ("take", "Took", "taking"),
@@ -253,6 +254,8 @@ const PHRASES: &[(&str, &str, &str)] = &[
     ("mechanic start", "open", "the game's page"),
     ("mechanic video", "make", "a clip's video"),
     ("view_now", "look", "at your page"),
+    ("screen_show", "show", "you something on the screen"),
+    ("mechanic screen", "show", "you something on the screen"),
     // Themes.
     ("theme generate", "make", "the theme's pictures"),
     ("theme check", "check", "the theme"),

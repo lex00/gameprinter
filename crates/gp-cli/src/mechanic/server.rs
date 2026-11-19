@@ -840,6 +840,20 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             req,
         )?
         .unwrap_or_else(|| Response::error(404, "not found"))),
+        // The screen (mechanic/screen.html): the original and the model on
+        // one screen, which the agent drives (gp_mcp::screen).
+        ("GET" | "HEAD", "/screen.html") => page("screen.html", "text/html; charset=utf-8"),
+        ("GET" | "HEAD", "/screen.js") => page("screen.js", "text/javascript; charset=utf-8"),
+        ("GET" | "HEAD", "/screen.css") => page("screen.css", "text/css; charset=utf-8"),
+        ("GET" | "HEAD", "/api/screen") => screen_state(s),
+        ("POST", "/api/screen") => {
+            let v: Value = serde_json::from_slice(&req.body)?;
+            match gp_mcp::screen::report(&s.paths.home, &s.game, &v) {
+                Ok(v) => Ok(Response::json(&v)),
+                Err(e) => Ok(Response::error(400, &e)),
+            }
+        }
+        ("GET" | "HEAD", "/api/screen/clip") => screen_clip(s, req),
         ("GET" | "HEAD", "/shell.js") => page("shell.js", "text/javascript; charset=utf-8"),
         // The status line: where the port stands and the next step.
         ("GET" | "HEAD", "/next.js") => page("next.js", "text/javascript; charset=utf-8"),
@@ -1553,6 +1567,44 @@ fn working(s: &Server, asked: Option<&str>) -> Result<Response> {
 /// `POST /api/clips`: a clip filed under the mechanic the page names,
 /// whatever is open now. Either a path, a start on it and the clip's own
 /// inputs, or a full log from power-on and a start.
+/// `GET /api/screen`: the agent's last ask for the screen, what the page
+/// reported last, and each of the person's themes for the game with the
+/// time its newest file was written, so the page shows a theme's change
+/// by itself.
+fn screen_state(s: &Server) -> Result<Response> {
+    let home = &s.paths.home;
+    let ask = gp_mcp::screen::ask_of(home, &s.game).map_err(anyhow::Error::msg)?;
+    let shown = gp_mcp::screen::shown_of(home, &s.game).map_err(anyhow::Error::msg)?;
+    let themes: serde_json::Map<String, Value> = super::live::theme_times(&s.paths, &s.game)
+        .into_iter()
+        .map(|(id, t)| (id, json!(t)))
+        .collect();
+    Ok(Response::json(
+        &json!({"ask": ask, "shown": shown, "themes": themes}),
+    ))
+}
+
+/// `GET /api/screen/clip?n=N&mechanic=M`: where a clip starts on its play
+/// and how long it is, for the screen to play it.
+fn screen_clip(s: &Server, req: &Request) -> Result<Response> {
+    let Some(n) = req.param("n").and_then(|n| n.parse::<u64>().ok()) else {
+        return Ok(Response::error(400, "n is the clip's number"));
+    };
+    let session = s.target(req.param("mechanic"))?;
+    let f = session.dir.join(format!("clips/{n:03}.toml"));
+    let Ok(text) = fs::read_to_string(&f) else {
+        return Ok(Response::error(404, "no such clip"));
+    };
+    let t: toml::Table = toml::from_str(&text)?;
+    Ok(Response::json(&json!({
+        "n": n,
+        "mechanic": session.mechanic(),
+        "start": t.get("start").and_then(|v| v.as_integer()),
+        "frames": t.get("frames").and_then(|v| v.as_integer()),
+        "note": t.get("note").and_then(|v| v.as_str()),
+    })))
+}
+
 fn post_clip(s: &Server, v: &Value) -> Result<Response> {
     // A sealed run goes to the sealed store, whatever row is open.
     let sealed = v["sealed"] == json!(true);
@@ -1960,6 +2012,57 @@ mod tests {
         srv.platform = Platform::Nes;
         assert_eq!(srv.art_said(json!({})), json!({}));
         assert!(wasm_path(Path::new("/r"), Platform::Arcade).ends_with("gp_arcade_play.wasm"));
+    }
+
+    /// The screen's routes: the agent's ask as the tool wrote it, the
+    /// page's report kept and read back, and a clip's start and length.
+    #[test]
+    fn the_screen_reads_the_ask_and_keeps_what_the_page_shows() {
+        let d = tempfile::tempdir().unwrap();
+        let srv = server(d.path());
+        let (s, body) = get(&srv, "/api/screen");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            (s, v["ask"].clone(), v["shown"].clone()),
+            (200, Value::Null, Value::Null)
+        );
+        let a = gp_mcp::screen::ShowArgs {
+            game: "mosshop".into(),
+            view: Some("diff".into()),
+            ..Default::default()
+        };
+        gp_mcp::screen::show_at(&srv.paths.home, &a, std::time::Duration::ZERO).unwrap();
+        let v: Value = serde_json::from_str(&get(&srv, "/api/screen").1).unwrap();
+        assert_eq!(
+            (v["ask"]["seq"].clone(), v["ask"]["view"].clone()),
+            (json!(1), json!("diff"))
+        );
+        let (s, r) = post(
+            &srv,
+            "/api/screen",
+            json!({"applied": 1, "view": "diff", "by": "agent", "clip": null}),
+        );
+        assert_eq!(s, 200, "{r}");
+        assert!(r["at_ms"].as_u64().is_some());
+        let v: Value = serde_json::from_str(&get(&srv, "/api/screen").1).unwrap();
+        assert_eq!(v["shown"]["applied"], 1);
+        assert_eq!(post(&srv, "/api/screen", json!([1])).0, 400);
+        // A clip's start and length, from the open row's clip.
+        let play = log(&["........", "........", ".......A", "........"]);
+        let (_, p) = post(&srv, "/api/paths", json!({"log": play}));
+        let body = json!({"path": p["path"], "start": 2, "inputs": log(&[".......A", "........"]), "mechanic": "walk"});
+        assert_eq!(post(&srv, "/api/clips", body).0, 200);
+        let v: Value = serde_json::from_str(&get(&srv, "/api/screen/clip?n=1").1).unwrap();
+        assert_eq!(
+            (
+                v["start"].clone(),
+                v["frames"].clone(),
+                v["mechanic"].clone()
+            ),
+            (json!(2), json!(2), json!("walk"))
+        );
+        assert_eq!(get(&srv, "/api/screen/clip?n=9").0, 404);
+        assert_eq!(get(&srv, "/api/screen/clip").0, 400);
     }
 
     /// The core loop over HTTP: the play kept as a path, a clip on it handed

@@ -1953,7 +1953,10 @@ async function main() {
     // A second model for still pictures, so asking for one never moves the
     // one being watched (seeking back starts a model over from power-on).
     const stills = new Preview(await openHost(gameModule));
-    control(p, stills, bundle, presentText, canvas, draw, profile, st, cfg.regions);
+    // The look drawn now, read when the control's models start again: its
+    // present text, large art and stages live in this function.
+    const lookNow = () => ({ present: lookPresent, art: lookArt, stages: artStages });
+    control(p, stills, bundle, lookNow, canvas, draw, profile, st, cfg.regions);
     placeInView(canvas, cfg.visible, cfg.view);
     return;
   }
@@ -2739,7 +2742,7 @@ function placeInView(canvas, visible, view) {
   });
 }
 
-function control(p, stills, bundle, presentText, canvas, drawGame, profile, st, regions) {
+function control(p, stills, bundle, lookNow, canvas, drawGame, profile, st, regions) {
   // The settings screen over the picture while the parent has it open.
   const draw = (pl = p) => {
     drawGame(pl);
@@ -2759,13 +2762,15 @@ function control(p, stills, bundle, presentText, canvas, drawGame, profile, st, 
     m.p.load(bundle);
     // The game's regions, which the module keeps from load to load.
     if (m.p !== p && regions?.length && !m.regionsGiven) m.regionsGiven = m.p.setRegions(regions);
-    m.p.loadPresent(presentText);
+    const look = lookNow();
+    m.p.loadPresent(look.present);
     loadBoard(bundle);
     // The board opened again forgets the look's art: given it again, as a
-    // restart does.
-    if (lookArt) {
-      artHost(m.p).loadArt(lookArt);
-      for (const [pic, st] of artStages) if (st.rgba) m.p.artStage(pic, st.w, st.h, st.rgba);
+    // restart does. (Until 2026-11-18 this read main's lookArt, which
+    // isn't in scope here, so every start of a model in control mode threw.)
+    if (look.art) {
+      artHost(m.p).loadArt(look.art);
+      for (const [pic, s] of look.stages) if (s.rgba) m.p.artStage(pic, s.w, s.h, s.rgba);
     }
     if (start) m.p.loadState(start);
     m.at = 0;

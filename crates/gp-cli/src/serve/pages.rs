@@ -236,7 +236,7 @@ fn mechanic(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail>
         State::Ready(s) => s,
         made => {
             return Ok(match file {
-                "" | "index.html" => waiting_page(game, &made),
+                "" | "index.html" | "screen.html" => waiting_page(game, &made),
                 // The waiting page's look, from the page's own files.
                 "style.css" => match mserver::repo_root()
                     .and_then(|r| Ok(std::fs::read(r.join("mechanic/style.css"))?))

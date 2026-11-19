@@ -36,7 +36,7 @@ const whoTag = (w) => el("span", `jr-who who-${w}`, WHO[w] ?? w);
 /** What each button is called, and what it does, in words. */
 const BUTTONS = {
   "look-check": ["CHECK MY THEME", "Reads your theme the way the game does and lists what is wrong. Free, under a minute."],
-  "look-play": ["SEE IT IN THE GAME", "Opens the game with your theme, on this computer only, for an hour."],
+  "look-play": ["SEE IT IN THE GAME", "Opens the game's screen with your theme picked, on this computer only."],
   shots: ["PICTURES OF IT IN THE GAME", "Plays the game with your theme from your copy of it and keeps pictures of each stage here. A few minutes."],
   compare: ["BESIDE THE ORIGINAL", "Plays the game's route twice from your copy of it, once in your theme and once in the game's own pictures, and keeps the two pictures of each moment side by side here. A few minutes."],
   build: ["BUILD IT TO PLAY", "Builds your game to play in this browser. A few minutes the first time."],

@@ -331,6 +331,15 @@ pub fn list() -> Vec<ToolDef> {
             idempotent: true,
         },
         ToolDef {
+            name: "screen_show",
+            title: "Show the person something on the game's screen",
+            description: "Set what the game's screen page shows (gp serve's /mechanic/GAME/screen.html: the original and the model) and read back what it shows, so the person sees what you talk about. Every part is optional and the parts left out stay as they are: clip (a clip number of the mechanic's session, mechanic defaults to the one open) at frame (from 0 at the clip's start), or live: true for live play; pictures (game for the game's own, or a theme's id); view (side, top, diff, or solo for the model alone at its own size, played from its own start) and opacity (0 to 1, for top). With no part given it only reads. It waits a few seconds for an open page to show the ask; shown is what the page shows now, with by: person when the person picked it themselves, and said puts it in words. The same as gp mechanic screen.",
+            input_schema: schema::<crate::screen::ShowArgs>(),
+            read_only: false,
+            destructive: false,
+            idempotent: true,
+        },
+        ToolDef {
             name: "gp_commands",
             title: "List every gp command",
             description: "Every command of the gp this server runs, read from gp's own command tree, so the list is always current. With no arguments: the groups of commands with what each is for, how many commands each holds, its road (journey first; developer and off-target tools last and marked, so don't steer the person to them), and the rules gp_run applies. With path set to a group (corpus) it lists that group's commands with their rules; with a command (corpus score) it gives the command's whole help, its rule in words, and the JSON Schema of the args gp_run takes for it. find searches the commands' help for words. The named tools are the short road for common steps; use this to reach everything else.",
@@ -519,6 +528,7 @@ fn call_tool(config: &Config, name: &str, args: Value) -> Option<Reply> {
         "watch_explore" => with(args, |a| crate::watch::explore(config, a)),
         "watch_point" => with(args, |a| crate::watch::point(config, a)),
         "view_now" => with(args, |a| crate::watch::view_now(config, a)),
+        "screen_show" => with(args, |a| crate::screen::show(config, a)),
 
         "moments" => with(args, |a| crate::moments::moments(config, a)),
         "gp_commands" => with(args, |a| crate::run::commands(config, a)),

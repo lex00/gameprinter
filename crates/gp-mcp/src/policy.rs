@@ -495,6 +495,7 @@ pub const TABLE: &[Row] = &[
     r("mechanic probe", S, Write),
     r("mechanic problem", J, Write),
     r("mechanic queue", J, Write),
+    r("mechanic screen", J, Write),
     laya("mechanic say", J, Write, Laya::With("judge")),
     r("mechanic show", J, Read),
     r(

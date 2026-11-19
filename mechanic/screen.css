@@ -1,0 +1,48 @@
+/* The screen (screen.html): the mechanic page's colours, one screen. */
+:root {
+  --bg: #000000;
+  --panel: #1c1c1c;
+  --line: #fcfcfc;
+  --fg: #fcfcfc;
+  --muted: #bcbcbc;
+  --accent: #3cbcfc;
+  --gold: #f8b800;
+  --orange: #fca044;
+  --rec: #f83800;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace;
+}
+* { box-sizing: border-box; border-radius: 0; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 var(--mono); }
+header { display: flex; gap: 8px 16px; align-items: center; justify-content: center; padding: 10px 16px; border-bottom: 2px solid var(--line); flex-wrap: wrap; }
+#logo { color: var(--rec); font-weight: 700; text-shadow: 2px 2px 0 var(--gold); text-decoration: none; letter-spacing: 0.08em; }
+#title { font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
+#controls { display: flex; gap: 8px 16px; align-items: center; flex-wrap: wrap; justify-content: center; }
+.pick { display: flex; gap: 6px; align-items: center; font: bold 12px var(--mono); color: var(--muted); }
+.pick[hidden] { display: none; }
+select, button { font: bold 12px var(--mono); background: var(--bg); color: var(--fg); border: 2px solid var(--line); padding: 2px 8px; cursor: pointer; }
+select { padding: 1px 4px; }
+#views { display: flex; }
+#views button + button { border-left: 0; }
+#views button.on { background: var(--fg); color: var(--bg); }
+#opacity { width: 120px; accent-color: var(--accent); }
+#opacity-at { min-width: 4ch; color: var(--fg); }
+#record.on { color: var(--rec); border-color: var(--rec); }
+#record:disabled { color: var(--muted); border-color: var(--muted); cursor: default; }
+main { padding: 12px 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+#screens { display: flex; gap: 12px; justify-content: center; align-items: flex-start; max-width: 100%; }
+#screens figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+#screens figure[hidden] { display: none; }
+figcaption { font: bold 12px var(--mono); letter-spacing: 0.08em; color: var(--muted); }
+canvas { display: block; background: #000; border: 2px solid var(--line); image-rendering: pixelated; width: var(--cw, 256px); height: var(--ch, 240px); }
+#clipbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; font-size: 13px; }
+#clipbar[hidden] { display: none; }
+#clip-name { color: var(--gold); font-weight: 700; }
+#clip-scrub { width: min(360px, 60vw); accent-color: var(--accent); }
+#clip-at { color: var(--muted); min-width: 16ch; }
+#line { margin: 0; color: var(--gold); font-size: 13px; min-height: 1.45em; text-align: center; max-width: 90ch; }
+#keys { margin: 0; color: var(--muted); font-size: 12px; text-align: center; max-width: 90ch; }
+/* The model's page, drawn off screen; its picture is copied onto THE MODEL. */
+#model-frame { position: absolute; left: -10000px; top: 0; width: 512px; height: 480px; border: 0; }
+@media (max-width: 640px) {
+  #screens.side { flex-direction: column; align-items: center; }
+}

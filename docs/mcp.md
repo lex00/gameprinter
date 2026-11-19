@@ -38,6 +38,7 @@ Many tools run `gp` as a child process; every command they need is in gameprinte
 | moments | `gp interp moments` |
 | build_publish | scripts/web/build-preview.sh |
 | view_now | the watch session's `inputs.ndjson`, which the watch page of `gp mechanic watch` or `gp mechanic start` writes as the person looks and points |
+| screen_show | gp-mcp itself (`gp_mcp::screen`); the game's screen page on gp serve reads what it writes. `gp mechanic screen` is its twin |
 
 tests/mcp.rs (game-printer's, end to end over stdio) runs eleven tests, none ignored: an agent forks Moss Hop, edits it, previews, validates and puts it back; refines a wrong walk speed back from the baselines; replaces and edits the player sprite; brings a pixel editor's save back through assets_export and assets_edit import (gp_run refuses `gp assets open`, which opens an editor on the person's screen); lists and runs any command through gp_run; follows a watch session into bank 1; and builds Moss Hop's preview. Each builds Moss Hop with cc65 and uses made-up bytes only. The default run takes about 25 s; the watch session (about 70 s) and the preview build (about 20 s with gp_web.wasm already built, minutes from cold) run only with GP_SLOW_TESTS=1, as `just test`'s slow lane sets it.
 
@@ -125,6 +126,7 @@ The server's instructions tell the agent to call `next` at the start of every co
 | | `watch_explore` | Built: another search in the session, in the background | `gp watch explore` | No |
 | | `watch_point` | Built: the sprites under a box at a frame and the routine that wrote each | `gp watch point` | Yes, besides the point it logs |
 | | `view_now` | Built: what the person's watch page shows and the last point | The session's `inputs.ndjson` | Yes |
+| | `screen_show` | Built: sets what the game's screen shows (a clip at a frame or live play, the game's own pictures or a theme, side by side, on top at a transparency, the difference or the model alone) and reads back what it shows, the person's own choice included ([the screen](mechanic-page.md#the-screen)) | `$GP_HOME/work/serve/GAME/screen-ask.json` and `screen-shown.json` | No: it writes the ask |
 | | `gp_commands` | Built: every gp command by group, with its road and rule; one command's help and the JSON Schema of its arguments; a search of the help ([every command](#every-command)) | `gp self commands` | Yes |
 | | `gp_run` | Built: runs any gp command by its words, with arguments as JSON, under the rules below ([every command](#every-command)) | the gp serving MCP | No |
 
@@ -305,7 +307,7 @@ The rules are one table, crates/gp-mcp/src/policy.rs, with a row for every comma
 | Rule | Commands | What runs |
 |---|---|---|
 | read | 115 | At once. Writes nothing outside the home's work and cache areas |
-| write | 131 | At once. Writes the person's games, working copies or home; `wrote` has what the command reported |
+| write | 132 | At once. Writes the person's games, working copies or home; `wrote` has what the command reported |
 | ask | 19 | Only with the person's yes (below). Publishing and landing (`registry publish`, `reindex`, `grant`, `yank` and `submit`, `game attest`, `theme publish` and `recheck`, `model gate`, `tool gate`, `agent integrate`, `self publish`), spending or reading a key (`theme generate`, `dataset grade` with a key, `capture background` with `--agents` above 0, which lets gp serve start paid Claude clip agents), large downloads (`game fetch`, `theme fetch`, `testroms fetch` and `run`). A dry-run flag (`--dry-run`, `model gate --score-only`, `testroms run --offline`) runs at once. Any value starting `git:` or `s3://` needs a yes too |
 | refused | 20 | Never: `serve`, `mcp`, `host serve`, `registry serve`, `mechanic start`, `watch` and `wait`, `assets open`, `metrics time` (it runs any program), `watch events --follow`, and `theme look play` in the foreground (with `--background` or `--shots` it is a write). Nor `theme picture`, `theme sound` and `assets proposal`'s `accept`, `reject` and `undo`: only the person decides a proposal, on their page or in their own terminal (and `assets_edit` refuses to accept or reject a sprite proposal, or an edit the person decided). The refusal names what to use instead. A test (`policy::tests::the_docs_count_the_commands_of_each_rule`) counts each rule's commands from the table, so these numbers fail it when they go stale |
 

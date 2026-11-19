@@ -177,15 +177,23 @@ function playPane(box, kind, name, nav) {
         return;
       }
       if (link) {
-        box.append(el("p", "muted", f.from?.kind === "new" ? "Your game, drawn in your theme. It plays from its own files, on this computer only." : `Load your own copy of ${game} in it to play. It plays on this computer only, for an hour from when it was opened. Leaving PLAY stops it.`));
-        const u = new URL(link);
-        box.append(...frame(`${base}/look${u.pathname}${u.search}`, `${game} in your theme ${title}`, link));
+        const said = link.startsWith("/mechanic/")
+          ? `${game}'s screen with your theme picked: the model alone in it, played from its own start. Pick another view at its top to see it beside the original. A change to your theme shows by itself.`
+          : f.from?.kind === "new" ? "Your game, drawn in your theme. It plays from its own files, on this computer only." : `Load your own copy of ${game} in it to play. It plays on this computer only, for an hour from when it was opened. Leaving PLAY stops it.`;
+        box.append(el("p", "muted", said));
+        // The screen is gp serve's own page: framed as it is. A game a
+        // server of its own plays comes through /look/.
+        if (link.startsWith("/mechanic/")) box.append(...frame(link, `${game} in your theme ${title}`));
+        else {
+          const u = new URL(link);
+          box.append(...frame(`${base}/look${u.pathname}${u.search}`, `${game} in your theme ${title}`, link));
+        }
       } else {
         const stopped = v.jobs?.["look-play"]?.state === "done";
         box.append(el("p", "", stopped
           ? `The game you opened before has stopped: it plays for an hour from when it is opened. Open it again to play ${game} in your theme.`
           : `Play ${game} drawn in your theme, on this computer only.`));
-        box.append(button("SEE IT IN THE GAME", "Opens the game with your theme here, on this computer only, for an hour."));
+        box.append(button("SEE IT IN THE GAME", "Opens the game with your theme here, on this computer only."));
       }
     } else {
       box.append(el("h2", "", `Play ${title}`));

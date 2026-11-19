@@ -1004,7 +1004,7 @@ fn theme_answer(f: &ThemeFacts) -> (u8, String, Vec<Step>) {
         4 => steps.push(
             step(
                 Who::Person,
-                "Press SEE IT IN THE GAME. The game opens with your theme, on this computer only. Load your copy of the game in it and play every stage.",
+                "Press SEE IT IN THE GAME. It opens the game's screen with your theme picked: the model alone, in your theme, for you to play, or beside the original. Play every stage.",
             )
             .page("SEE IT IN THE GAME")
             .cli(format!("gp theme look play {dir} --game {g} --background"))

@@ -427,7 +427,11 @@ fn detail(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> 
     if let Some(j) = jobs.get_mut("look-play")
         && j["state"] == "done"
     {
-        let serving = j["json"]["links"][0].as_str().is_some_and(answers);
+        // The screen's link is gp serve's own page, so it answers while
+        // this server does.
+        let serving = j["json"]["links"][0]
+            .as_str()
+            .is_some_and(|l| l.starts_with("/mechanic/") || answers(l));
         j["serving"] = json!(serving);
     }
     let rd = j::record_dir(home, c.kind, &c.name);
@@ -695,12 +699,35 @@ fn call_of(home: &Path, c: &j::Copy, which: &str) -> Result<(&'static str, Value
     })
 }
 
+/// The screen with the theme picked and the model alone, for a theme of a
+/// game of the games checkout: SEE IT IN THE GAME opens it on gp serve, so
+/// no server of its own is started. None for a theme of a person's new
+/// game or of a template, which `gp theme look play` still plays.
+fn screen_link(c: &j::Copy) -> Option<String> {
+    let from = c.from.as_ref()?;
+    (c.kind == Kind::Theme && from.kind == "game" && super::game::is_name(&from.name)).then(|| {
+        format!(
+            "/mechanic/{}/screen.html?pictures={}&view=solo",
+            from.name, c.name
+        )
+    })
+}
+
 fn act(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {
     let c = the_copy(ctx, params)?;
     let which = params.get("which").cloned().unwrap_or_default();
     let home = ctx.paths.home.clone();
     if req.method != "POST" {
         return Ok(Response::json(&job(&home, &c, &which)));
+    }
+    if which == "look-play"
+        && let Some(link) = screen_link(&c)
+    {
+        let now = j::now_ms();
+        let v = json!({"action": which, "tool": "screen", "state": "done", "exit": 0,
+            "started_ms": now, "ended_ms": now, "json": {"links": [link], "screen": true}});
+        j::write(&home, c.kind, &c.name, "do-look-play.json", &v)?;
+        return Ok(Response::json(&v));
     }
     let (tool, args, reads_only) = call_of(&home, &c, &which)?;
     let key = (format!("{}/{}", c.kind.word(), c.name), which.clone());
@@ -952,6 +979,31 @@ mod tests {
         assert!(closed_port_is_silent);
         assert!(!answers("http://example.com:80/p"));
         assert!(!answers("not a link"));
+    }
+
+    /// A theme of a game opens the screen with it picked; a theme of a new
+    /// game or a template keeps its own server.
+    #[test]
+    fn see_it_in_the_game_opens_the_screen_for_a_game_s_theme() {
+        let copy = |kind: &'static str| j::Copy {
+            kind: Kind::Theme,
+            name: "last-call".into(),
+            dir: std::path::PathBuf::from("/x/last-call"),
+            from: Some(j::Origin {
+                name: "tapper".into(),
+                title: "Tapper".into(),
+                kind,
+                dir: None,
+            }),
+            touched_ms: 0,
+            record: Value::Null,
+        };
+        assert_eq!(
+            screen_link(&copy("game")).as_deref(),
+            Some("/mechanic/tapper/screen.html?pictures=last-call&view=solo")
+        );
+        assert_eq!(screen_link(&copy("new")), None);
+        assert_eq!(screen_link(&copy("template")), None);
     }
 
     #[test]

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Game Printer</title>
+  <link rel="stylesheet" href="screen.css">
+</head>
+<body>
+  <!-- The screen (docs/mechanic-page.md, "The screen"): the original and
+       the model on one screen, played live or at a frame of a clip, which
+       the person watches while they talk to their agent, and which the
+       agent sets with screen_show (gp mechanic screen). -->
+  <header>
+    <a id="logo" href="./" title="The game's full page: clips, refine, play and themes">GAME PRINTER</a>
+    <span id="title">Loading</span>
+    <div id="controls">
+      <label class="pick" title="The pictures the model is drawn in: the game's own, or one of your themes for this game">PICTURES
+        <select id="pictures"><option value="game">THE GAME'S OWN</option></select>
+      </label>
+      <div id="views" role="group" aria-label="How the two show">
+        <button type="button" data-view="side" title="The original and the model side by side">SIDE BY SIDE</button>
+        <button type="button" data-view="top" title="The model over the original, as see-through as the slider says">ON TOP</button>
+        <button type="button" data-view="diff" title="The difference between the two: black where they match">DIFFERENCE</button>
+        <button type="button" data-view="solo" title="The model alone at its own size, played from its own start">MODEL ONLY</button>
+      </div>
+      <label id="opacity-pick" class="pick" hidden title="How much of the model shows over the original">MODEL
+        <input type="range" id="opacity" min="0" max="100" value="50"><span id="opacity-at">50%</span>
+      </label>
+      <button type="button" id="record" title="R: record what you play as a clip for your agent; press again to send it">RECORD</button>
+    </div>
+  </header>
+  <main>
+    <div id="screens" class="side">
+      <figure id="fig-a"><figcaption id="cap-a">THE ORIGINAL</figcaption><canvas id="a" width="256" height="240"></canvas></figure>
+      <figure id="fig-b"><figcaption id="cap-b">THE MODEL</figcaption><canvas id="b" width="256" height="240"></canvas></figure>
+    </div>
+    <div id="clipbar" hidden>
+      <span id="clip-name"></span>
+      <button type="button" id="clip-play" title="Space: play or stand still">PLAY</button>
+      <input type="range" id="clip-scrub" min="0" max="1" value="0" aria-label="The clip's frame">
+      <span id="clip-at"></span>
+      <button type="button" id="clip-live" title="Esc: back to playing the game">BACK TO PLAYING</button>
+    </div>
+    <p id="line" aria-live="polite"></p>
+    <p id="keys"></p>
+    <iframe id="model-frame" title="the model" src="about:blank" tabindex="-1"></iframe>
+  </main>
+  <script type="module" src="screen.js"></script>
+</body>
+</html>

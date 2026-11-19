@@ -199,6 +199,35 @@ pub enum MechanicCmd {
     /// Show what a session holds, for the agent: the mechanic and its clips
     /// with their notes, the conversation and whose turn it is.
     Show { game: String, mechanic: String },
+    /// Set what the game's screen page shows (gp serve's
+    /// /mechanic/GAME/screen.html: the original and the model) and print
+    /// what it shows, so the person sees what you talk about. The parts
+    /// left out stay as they are; with none it only reads. The same as the
+    /// screen_show tool.
+    Screen {
+        game: String,
+        /// A clip of the mechanic's session to show, stood still at --frame.
+        #[arg(long)]
+        clip: Option<u64>,
+        /// The clip's mechanic; the one open on the game's page by default.
+        #[arg(long)]
+        mechanic: Option<String>,
+        /// The clip's frame, from 0 at its start.
+        #[arg(long)]
+        frame: Option<u64>,
+        /// Back to live play, which the person plays.
+        #[arg(long, conflicts_with_all = ["clip", "frame"])]
+        live: bool,
+        /// `game` for the game's own pictures, or a theme's id.
+        #[arg(long)]
+        pictures: Option<String>,
+        /// side, top, diff, or solo (the model alone).
+        #[arg(long)]
+        view: Option<String>,
+        /// The model's opacity over the original in the top view, 0 to 1.
+        #[arg(long)]
+        opacity: Option<f64>,
+    },
     /// Say something to the person in a session: an answer, what is now
     /// known, a question or the clip you want next. It shows over their game,
     /// which pauses until they answer. With `--choice` they pick one with the
@@ -795,6 +824,31 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             ),
         },
         MechanicCmd::Wait { game, mechanic } => wait(paths, game, mechanic.as_deref()),
+        MechanicCmd::Screen {
+            game,
+            clip,
+            mechanic,
+            frame,
+            live,
+            pictures,
+            view,
+            opacity,
+        } => {
+            let a = gp_mcp::screen::ShowArgs {
+                game: game.clone(),
+                clip: *clip,
+                mechanic: mechanic.clone(),
+                frame: *frame,
+                live: *live,
+                pictures: pictures.clone(),
+                view: view.clone(),
+                opacity: *opacity,
+            };
+            let v = gp_mcp::screen::show_at(&paths.home, &a, std::time::Duration::from_secs(4))
+                .map_err(anyhow::Error::msg)?;
+            let line = v["said"].as_str().unwrap_or("").to_owned();
+            Ok(Outcome::ok(v, line))
+        }
         MechanicCmd::Show { game, mechanic } => {
             let v = Session::open(paths, game, mechanic)?.state()?;
             Ok(Outcome::ok(v.clone(), show_text(&v)))

@@ -72,7 +72,7 @@ A theme's steps:
 | T1 Pick the game and a style | You | The theme doesn't say which game, or has no style words | The style box |
 | T2 Make the pictures | Your agent | It has no pictures | What to say; the folder for the person's own pictures |
 | T3 The look check | The tools | It changed since its last check, or the check found problems | CHECK MY THEME and the findings in words |
-| T4 See it in the game | You | It passes and wasn't played since | SEE IT IN THE GAME (`gp theme look play --background`), PICTURES OF IT IN THE GAME (`--shots`) when the ROM is here or the game has pictures of its own |
+| T4 See it in the game | You | It passes and wasn't played since | SEE IT IN THE GAME (the game's screen on gp serve with the theme picked, for a game of the games checkout; `gp theme look play --background` for a theme of a new game or a template), PICTURES OF IT IN THE GAME (`--shots`) when the ROM is here or the game has pictures of its own |
 | T5 Change pictures | You | Until the person presses READY TO SHARE | BESIDE THE ORIGINAL (`gp theme look play --shots DIR --against original`): each moment of the game's route in the theme and in the game's own pictures, side by side, stepped through with BEFORE and NEXT; and the pictures the agent proposes, on their cards |
 | T6 Share it | You | Then | The share link and the publish request, shown to send by hand: nothing is published from the page |
 
@@ -87,7 +87,7 @@ A new game's steps:
 | N5 Give it a look | You | Until DONE WITH THE LOOK or SKIP | MAKE A THEME FOR IT: the theme journey on the new game |
 | N6 Play and share | You | Then | PLAY IT, and MAKE A SHARE LINK (`gp game share`): the game in the person's own registry on this computer, with the themes made for it, and the link that plays it, `/share/p?g=local/NAME&look=ID` |
 
-Not there yet, and said so on the page: a new game's share link opens on this computer only, until the person puts the page and their registry online together (the page says so in one sentence); and CHECK THE STAGE on a stage `gp level verify` can't play to its end answers NOT CHECKED with the reason (docs/level-kit.md, "Editing a stage", says which kinds it plays; Moss Hop's tile stage is one). SEE IT IN THE GAME on an arcade game shows the tool's refusal: the page plays an arcade game but can't show a theme on one yet.
+Not there yet, and said so on the page: a new game's share link opens on this computer only, until the person puts the page and their registry online together (the page says so in one sentence); and CHECK THE STAGE on a stage `gp level verify` can't play to its end answers NOT CHECKED with the reason (docs/level-kit.md, "Editing a stage", says which kinds it plays; Moss Hop's tile stage is one).
 
 ## The ladder
 

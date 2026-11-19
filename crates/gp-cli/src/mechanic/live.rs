@@ -196,6 +196,8 @@ pub(crate) fn status(paths: &Paths, repo: &Path, game: &str, rb: &Rebuild) -> Va
         "built": is_built,
         // Older than the model: still played, while a newer one builds.
         "stale": is_built && made.trim() != content_key(paths, repo, rb),
+        // Which build is played: a page holding another reloads.
+        "build": is_built.then(|| made.trim().to_owned()),
         "building": b.and_then(|b| b.started).map(|t| t.elapsed().as_secs_f64()),
         "error": b.and_then(|b| b.error.clone()),
         "seconds": b.and_then(|b| b.seconds),
@@ -435,6 +437,28 @@ fn own_themes(paths: &Paths, game: &str) -> Vec<(String, PathBuf)> {
         .into_iter()
         .filter(|c| c.kind == Kind::Theme && c.from.as_ref().is_some_and(|o| o.name == game))
         .filter_map(|c| Some((c.name.clone(), look_dir(&c.dir)?)))
+        .collect()
+}
+
+/// Each of the person's themes for `game` with the time, in ms since 1970,
+/// its folder's newest file was written: a theme being made changes the
+/// screen by itself.
+pub(crate) fn theme_times(paths: &Paths, game: &str) -> Vec<(String, u64)> {
+    own_themes(paths, game)
+        .into_iter()
+        .map(|(id, dir)| {
+            let mut files = Vec::new();
+            crate::files::walk_lenient(&dir, &mut files);
+            let newest = files
+                .iter()
+                .filter_map(|f| std::fs::metadata(f).ok()?.modified().ok())
+                .chain(std::fs::metadata(&dir).ok().and_then(|m| m.modified().ok()))
+                .filter_map(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .max()
+                .unwrap_or(0);
+            (id, newest)
+        })
         .collect()
 }
 

@@ -198,6 +198,7 @@ fn every_tool_takes_an_object() {
             "watch_explore",
             "watch_point",
             "view_now",
+            "screen_show",
             "gp_commands",
             "gp_run"
         ]
@@ -218,6 +219,22 @@ fn every_listed_tool_is_dispatched() {
         );
     }
     assert!(crate::tools::call(&c, "no_such_tool", serde_json::json!({})).is_none());
+}
+
+/// screen_show through the tool table: an ask written and read back, and a
+/// wrong one refused, with no page open and no gp.
+#[test]
+fn screen_show_asks_and_reads_back() {
+    let work = tempfile::tempdir().unwrap();
+    let c = config(work.path());
+    let r = tools::call(&c, "screen_show", json!({"game": "tapper", "view": "solo"})).unwrap();
+    assert!(!r.is_error, "{}", r.json);
+    assert_eq!(r.json["asked"]["view"], "solo");
+    assert_eq!(r.json["page_open"], false);
+    let r = tools::call(&c, "screen_show", json!({"game": "tapper"})).unwrap();
+    assert_eq!(r.json["asked"], Value::Null);
+    let r = tools::call(&c, "screen_show", json!({"game": "tapper", "view": "x"})).unwrap();
+    assert!(r.is_error, "{}", r.json);
 }
 
 #[test]

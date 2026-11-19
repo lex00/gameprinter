@@ -271,6 +271,7 @@ fn an_agent_edits_previews_and_validates_moss_hop() {
             "watch_explore",
             "watch_point",
             "view_now",
+            "screen_show",
             "gp_commands",
             "gp_run"
         ]
