@@ -4,7 +4,7 @@
 //!
 //! | Endpoint | What |
 //! |---|---|
-//! | `GET /api/steps` | `{open, halted, settings}`: the open steps as `gp loop steps` gives them, the halt, the home's loop settings |
+//! | `GET /api/steps` | `{open, halted, workers, settings, runner}`: the open steps as `gp loop steps` gives them, the halt, the runner's workers, the home's loop settings and the runner in words |
 //! | `POST /api/steps/{id}/wrong` | `{why}`: marks open step `id` wrong; the loop halts until a landed change names the objection |
 
 use serde_json::{Value, json};
@@ -30,6 +30,7 @@ pub(super) fn routes() -> Vec<Route> {
 fn list(ctx: &Ctx, _req: &Request, _params: &Params) -> Result<Response, Fail> {
     let mut v = crate::loop_cmd::steps_json(&ctx.paths, Some(&ctx.games));
     v["settings"] = json!(gp_mcp::steps::settings(&ctx.paths.home));
+    v["runner"] = super::runner::status(ctx);
     Ok(Response::json(&v))
 }
 

@@ -2,7 +2,7 @@
 
 Issue #43. The owner, 2026-11-19: "i want the loop to run agents autonomously with no agent controlling the loop at the highest level", and "this has to support parallel work for a real dev loop". The loop is a rules engine: `next` (crates/gp-cli/src/next.rs) reads only files and emits steps, and the steps, not an agent, decide what is done next. Before this an agent read `next` and improvised, and in the owner's experience an agent that controls the loop bends it.
 
-This page is the first phase: step ids and the set of open steps, gp_run held to them, and WRONG, which halts the loop.
+This page is the first phase: step ids and the set of open steps, gp_run held to them, WRONG, which halts the loop, and the runner, which starts workers on the open steps in parallel.
 
 ## Steps and their ids
 
@@ -20,7 +20,7 @@ Two steps name the command they lead to, so a call citing them may make it: the 
 
 ## gp loop steps
 
-`gp loop steps` (`--json` for the record) lists the open steps of the whole home: each game's port in the games checkout, then each of the person's copies. A step that touches something an earlier answer's open step touches (the page, which every game's cards share) is left for later, so across the home too no two open steps touch the same thing. Each is `{id, journey, subject, who, says, commands, touches, how}`. It reads files only, as `next` does, and gp_run runs it at once.
+`gp loop steps` (`--json` for the record) lists the open steps of the whole home: each game's port in the games checkout, then each of the person's copies. A step that touches something an earlier answer's open step touches (the page, which every game's cards share) is left for later, so across the home too no two open steps touch the same thing. Each is `{id, journey, subject, who, says, commands, touches, how}`. A step that touches what a step held by one of the runner's live workers touches is left out too, but for the held step itself. The JSON also has `halted` (below) and `workers`, the runner's workers' records, newest first. It reads files only, as `next` does, and gp_run runs it at once.
 
 ## gp_run runs writes as steps
 
@@ -59,3 +59,42 @@ An objection is `$GP_HOME/work/loop/wrong/ID.json`: its id (`w` and 12 hex digit
 The rule that clears it: a commit on the tool's main branch that adds a line naming the objection's id. That line is the test or fixture that pins the rule change, so a halt ends only with a change to the rules that comes with its test, through the tool gate, which already waits for the owner's yes when an agent runs it. The tool gate checks each patch it lands and clears every open objection a line it adds names; its result then has a line "the loop resumes: the change names objection ID, which halted it". `gp loop resume ID` (run in the gameprinter checkout, `--onto` for another branch) clears one by the same rule for a commit that landed some other way or before: it looks for a commit on the branch that adds the id (`git log -S ID`) and refuses when there is none. gp_run refuses `gp loop wrong` and `gp loop resume`: only the person marks a step wrong or resumes the loop.
 
 A program that can write the home could write a cleared objection, as it could write a yes; the halt guards against an agent that bends the loop, not one that attacks it.
+
+## The runner
+
+gp serve's runner (crates/gp-cli/src/serve/runner.rs) starts the workers, so no agent controls the loop at the top. It is off by default: `gp loop set --runner on` turns it on, `--max-workers N` sets how many at once (2 by default), `--spending WORDS` puts the owner's note on spending beside it on the page (the runner keeps no count of money yet), and `gp loop set --runner off` turns it off. It reads the settings on each look, so they change without a restart. Turning it off starts nothing new; workers already at work go on until they end or are stopped.
+
+Every 5 seconds, while it is on, an agent command is set and the loop isn't halted, it reads the open steps (as `gp loop steps` gives them) and starts a worker on each open step whose `who` is the agent, that no worker has had (a step done or stopped isn't started again while the facts it was decided from hold), and that touches nothing a live worker's step touches, up to `max_workers` live at once.
+
+| What | How |
+|---|---|
+| The command | The clip agent's: `gp serve --clip-agent CMD`, else `$GP_CLIP_AGENT` (serve/clip_agent.rs). Without either nothing starts, and the page says how to set one |
+| Its worktree | `$GP_HOME/work/loop/trees/ID` on branch `loop/ID`, made from main of the repo `$GP_AGENT_REPO` names (else the gameprinter checkout gp serve runs from). The brief tells it to run `eval "$(gp worker env loop-ID --shell)"` there (docs/workers.md) |
+| Its brief | On stdin, and in `$GP_HOME/work/loop/files/ID/brief.N.txt`: the step's id, subject, words, command, commands and touches, the rules (one step, land only through the gates, a landing waits for the person's yes, stop with a report), and for a step that names `gp agent brief --run RUN --clip CLIP` (the step to fix a port's model when a clip goes wrong first) that brief's output |
+| Its step | `GP_STEP` is set to the step's id, so gp_run cites it unasked and refuses any other. A `claude` command gets gp's MCP server (`files/ID/mcp.json`, with `GP_STEP` in its environment), the tools `next`, `gp_commands` and `gp_run`, file tools scoped to its worktree and a few cargo and git commands; any other command gets `GP_STEP`, `GP_WORKER`, `GP_LOOP_BRIEF`, `GP_LOOP_WORKTREE`, `GP_GP`, `GP_HOME` and `GP_GAMES_DIR` |
+| Its limits | The clip agent's time limit (`GP_CLIP_AGENT_TIMEOUT`, 3600 s by default). A worker that ends with an error is started again with how its last try ended in its brief, 2 tries in all |
+
+Each worker's record is `$GP_HOME/work/loop/workers/ID.json`: its step, `state`, `why`, `worktree`, `branch`, `log`, `brief`, `command`, `tries`, `pid` and `last` (its log's last line). The states:
+
+| State | When |
+|---|---|
+| `working` | Its process runs |
+| `attempting` | Its `gp agent attempt` runs (an activity record with its step) |
+| `waiting for a yes` | An open ask its gp_run left is its step's (an ask made under `GP_STEP` keeps it as `step`) |
+| `retrying` | A try ended with an error and the next starts in a few seconds |
+| `done` | It ended its step (exit 0) |
+| `stopped` | The person stopped it, its tries or its time ran out, it couldn't start, or it ended while gp serve wasn't running |
+
+A live worker's step stays citable by its gp_run calls though the facts it was decided from change as it works (`gp_mcp::steps::held`). Its results go back through the gates, and the engine recomputes the steps from the files on the runner's next look, so a landing shows as new steps. STEPS on the screen page lists the workers under the open steps: each with its state, its step, why and its last line, and STOP (`POST /api/loop/workers/ID/stop`), which ends it and everything it started (its own process group). The runner's line says whether it is on, how many are at work of how many, and the spending note.
+
+A halt stops new starts; workers already running finish their step, but with `steps_required` on nothing they make lands or publishes until the halt clears.
+
+## What is left of #43
+
+- A failed gate attempt going back to the worker with the gate's score as a new brief, and a step that fails N times becoming a problem row for the owner (part 6). Today a worker that ends with an error is tried again once with its exit and last line.
+- Watching each worker's transcript and stopping one that runs a command outside its step, writes without a plan, or does by hand what gp has a tool for (part 7, issue #41).
+- A step waiting on another (a picture fix waiting on a tool change) held until that one lands (part 9).
+- A gate failure after another worker's landing handed back as a retry with the new tip (part 11).
+- A spending cap the runner counts against, and a machine-load ceiling from `gp worker env`'s load and cores (part 12).
+- Steps that touch `tools` (a change to the tool's crates) and the page: the vocabulary is there, but `next` emits no step of the tool's own yet.
+- The model-fix step's `gp model gate` and the agent's step after a yes are the only landings a step names; other journeys' steps (a theme, a new game) name few commands, so with `steps_required` on most of their writes are refused until their steps say what they run.

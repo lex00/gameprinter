@@ -425,7 +425,13 @@ pub fn start_by(home: &Path, game: Option<String>, cmd: String, by: By) -> Watch
             return;
         }
         let _ = std::fs::create_dir_all(runs_dir(&h));
-        let rec = json!({"what": s.doing, "command": c, "game": g, "started_ms": started_ms, "pid": std::process::id(), "by": by.word()});
+        let mut rec = json!({"what": s.doing, "command": c, "game": g, "started_ms": started_ms, "pid": std::process::id(), "by": by.word()});
+        // A worker of the loop's runner: its step, for the page's list.
+        if let Ok(st) = std::env::var(crate::steps::STEP_ENV)
+            && !st.trim().is_empty()
+        {
+            rec["step"] = json!(st.trim());
+        }
         let _ = std::fs::write(&r, rec.to_string());
         if let Some(g) = &g {
             let mut d = s.doing.clone();

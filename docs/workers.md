@@ -1,6 +1,6 @@
 # Workers
 
-A worker is an agent given one task, working in a git worktree of its own, on a machine other workers share. Point a new worker at this page; its brief then says only the task, the branch and what to report. This page and [docs/gate.md](gate.md) are enough to take a task and land it, in `gameprinter` (the tool) or `games` (the games).
+A worker is an agent given one task, working in a git worktree of its own, on a machine other workers share. Point a new worker at this page; its brief then says only the task, the branch and what to report. gp serve's runner starts workers on the loop's open steps this way, each told its step ([loop.md](loop.md)). This page and [docs/gate.md](gate.md) are enough to take a task and land it, in `gameprinter` (the tool) or `games` (the games).
 
 ## Before the first task on a machine
 

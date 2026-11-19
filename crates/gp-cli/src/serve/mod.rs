@@ -60,6 +60,7 @@ mod point;
 pub(crate) mod pointing;
 mod recordings;
 mod resolve;
+pub(crate) mod runner;
 pub(crate) mod scenarios;
 mod select;
 mod sounds;
@@ -102,6 +103,7 @@ const MODULES: &[fn() -> Vec<Route>] = &[
     next::routes,
     asks::routes,
     steps::routes,
+    runner::routes,
     pictures::routes,
     sounds::routes,
     sprites::routes,

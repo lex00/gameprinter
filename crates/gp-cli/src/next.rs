@@ -383,6 +383,8 @@ pub(crate) struct Scores {
     pub exact: u64,
     /// The clip that goes wrong first, in words.
     pub first_wrong: Option<String>,
+    /// Its id, for `gp agent brief --clip`.
+    pub first_wrong_clip: Option<String>,
     /// Clips waiting to be scored on the model as it stands.
     pub to_score: u64,
     /// The scores are from an older model.
@@ -1061,7 +1063,10 @@ pub(crate) fn answer(f: &Facts) -> Answer {
                         format!("Your agent can read the game's code behind {w}, the clip that goes wrong first. You can watch on REFINE."),
                     )
                     .page("REFINE")
-                    .cli(format!("gp model gate {g} --patch FILE -m MSG, with the fix made in a worktree of the games repo")),
+                    .cli(match &s.first_wrong_clip {
+                        Some(c) => format!("gp agent brief --run {g} --clip {c}, then gp model gate {g} --patch FILE -m MSG, with the fix made in a worktree of the games repo"),
+                        None => format!("gp model gate {g} --patch FILE -m MSG, with the fix made in a worktree of the games repo"),
+                    }),
                 );
             }
         }
@@ -1541,10 +1546,16 @@ fn gate_scores(home: &Path, game: &str, gdir: &Path) -> Option<Scores> {
             _ => 0,
         }
     }));
+    let first_wrong_clip = clips
+        .iter()
+        .find(|c| !meets(c))
+        .and_then(|c| c["id"].as_str())
+        .map(str::to_owned);
     Some(Scores {
         clips: clips.len() as u64,
         exact,
         first_wrong,
+        first_wrong_clip,
         to_score: 0,
         stale,
         fidelity_permille,
@@ -1565,6 +1576,12 @@ fn background_scores(paths: &gp_evidence::Paths, games: &Path, game: &str) -> Op
         .filter_map(|a| scores.get(&a.id).map(|s| (a.name.as_str(), s)))
         .filter(|(_, s)| s["model"].as_str() == Some(model.as_str()) && s["error"].is_null())
         .collect();
+    let first_wrong_clip = active
+        .iter()
+        .filter_map(|a| scores.get(&a.id).map(|s| (a.id.as_str(), s)))
+        .filter(|(_, s)| s["model"].as_str() == Some(model.as_str()) && s["error"].is_null())
+        .find(|(_, s)| s["exact"] != json!(true))
+        .map(|(id, _)| id.to_owned());
     if on_model.is_empty() {
         return None;
     }
@@ -1578,6 +1595,7 @@ fn background_scores(paths: &gp_evidence::Paths, games: &Path, game: &str) -> Op
             .iter()
             .find(|s| s.1["exact"] != json!(true))
             .map(|s| s.0.to_owned()),
+        first_wrong_clip,
         to_score: (active.len() - on_model.len()) as u64,
         stale: false,
         fidelity_permille: mean_permille(on_model.iter().map(|s| {

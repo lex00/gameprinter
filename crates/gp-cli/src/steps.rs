@@ -163,13 +163,20 @@ pub(crate) fn answers(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec<A
 
 /// The open steps of every answer, no two touching the same thing: an
 /// answer's steps that touch something an earlier answer's open step
-/// does (the page, a card of every game) are left for later.
-pub(crate) fn open_of(answers: &[Answer]) -> Vec<Value> {
-    let mut taken: BTreeSet<String> = BTreeSet::new();
+/// does (the page, a card of every game) are left for later, and so are
+/// steps that touch what a step the runner's live workers hold (`held`)
+/// touches, but for that step itself.
+pub(crate) fn open_of(answers: &[Answer], held: &[Value]) -> Vec<Value> {
+    let ids: BTreeSet<&str> = held.iter().filter_map(|s| s["id"].as_str()).collect();
+    let mut taken: BTreeSet<String> = held
+        .iter()
+        .flat_map(|s| s["touches"].as_array().cloned().unwrap_or_default())
+        .filter_map(|t| t.as_str().map(str::to_owned))
+        .collect();
     let mut out = Vec::new();
     for a in answers {
         for s in &a.open {
-            if s.touches.iter().all(|t| !taken.contains(t)) {
+            if ids.contains(s.id.as_str()) || s.touches.iter().all(|t| !taken.contains(t)) {
                 taken.extend(s.touches.iter().cloned());
                 out.push(listed(a, s));
             }

@@ -237,6 +237,7 @@ static CTX: OnceLock<Arc<Ctx>> = OnceLock::new();
 /// paused.
 pub(crate) fn start_dispatcher(ctx: Arc<Ctx>) {
     let _ = CTX.set(ctx.clone());
+    super::runner::start(ctx.clone());
     super::clip_agent::start_hand_off(ctx);
 }
 

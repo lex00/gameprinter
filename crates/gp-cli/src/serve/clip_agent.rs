@@ -117,7 +117,7 @@ fn env_u64(name: &str, default: u64) -> u64 {
 }
 
 /// A program on PATH, or a path that exists.
-fn find_program(program: &str) -> Option<PathBuf> {
+pub(crate) fn find_program(program: &str) -> Option<PathBuf> {
     if program.is_empty() {
         return None;
     }
@@ -130,7 +130,7 @@ fn find_program(program: &str) -> Option<PathBuf> {
         .find(|f| f.is_file())
 }
 
-fn is_claude(program: &str) -> bool {
+pub(crate) fn is_claude(program: &str) -> bool {
     Path::new(program)
         .file_name()
         .is_some_and(|n| n == "claude")
@@ -1138,7 +1138,7 @@ fn clear_build(wt: &Path) {
 }
 
 /// A command line as one string, each part quoted when it needs it.
-fn command_line(parts: &[String]) -> String {
+pub(crate) fn command_line(parts: &[String]) -> String {
     parts
         .iter()
         .map(|p| {

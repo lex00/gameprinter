@@ -860,6 +860,7 @@ async function refreshSteps() {
     if (r.ok) v = await r.json();
   } catch (e) { /* the next look */ }
   if (!v) return;
+  drawWorkers(v);
   const key = JSON.stringify([v.halted?.id ?? null, (v.open ?? []).map((s) => s.id)]);
   if (key === stepsDrawn) return;
   stepsDrawn = key;
@@ -908,6 +909,44 @@ async function refreshSteps() {
     list.append(li);
   }
   if ((v.open ?? []).length === 0 && !v.halted) list.append(el("li", "", "No open steps."));
+}
+
+// The runner's workers (serve/runner.rs): each with its step, its state
+// and its last log line, and STOP while it works.
+const LIVE = ["working", "attempting", "waiting for a yes", "retrying"];
+let workersDrawn = "";
+function drawWorkers(v) {
+  const shown = (v.workers ?? []).filter((w, i) => LIVE.includes(w.state) || i < 5);
+  const key = JSON.stringify([v.runner?.says, shown.map((w) => [w.step?.id, w.state, w.last, w.why])]);
+  if (key === workersDrawn) return;
+  workersDrawn = key;
+  $("runner").textContent = [v.runner?.says, v.runner?.spending ? `Spending: ${v.runner.spending}.` : ""].filter(Boolean).join(" ");
+  const list = $("workers");
+  list.textContent = "";
+  for (const w of shown) {
+    const live = LIVE.includes(w.state);
+    const li = el("li", live ? "live" : "");
+    li.append(el("span", "wstate", (w.state ?? "").toUpperCase()));
+    const st = w.step ?? {};
+    li.append(el("span", "wsays", st.subject ? `${st.subject}: ${st.says}` : st.says ?? ""));
+    li.append(el("span", "sid", st.id ?? ""));
+    if (live) {
+      const b = el("button", "wstop", "STOP");
+      b.type = "button";
+      b.title = "Stop this worker and what it started";
+      b.addEventListener("click", async () => {
+        b.disabled = true;
+        try { await api(`/api/loop/workers/${encodeURIComponent(st.id)}/stop`, {}); }
+        catch (err) { note(`It didn't stop: ${err.message ?? err}`, 8000); }
+        workersDrawn = "";
+        void refreshSteps();
+      });
+      li.append(b);
+    }
+    const last = [w.why, w.last].filter(Boolean).join(". ");
+    if (last) li.append(el("span", "wlast", last));
+    list.append(li);
+  }
 }
 
 // What is shown, and the agent's asks -----------------------------------

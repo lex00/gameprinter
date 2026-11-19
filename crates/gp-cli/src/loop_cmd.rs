@@ -87,9 +87,16 @@ fn settings_text(s: &gp_mcp::steps::Settings) -> String {
 /// The steps as JSON, for gp_run's check and the page.
 pub(crate) fn steps_json(paths: &gp_evidence::Paths, games: Option<&std::path::Path>) -> Value {
     let answers = crate::steps::answers(paths, games);
+    // The runner's workers, newest first, with the live ones' steps.
+    let mut workers = gp_mcp::steps::workers(&paths.home);
+    workers.reverse();
     match crate::wrong::halt(&paths.home) {
-        Some(h) => json!({"open": [], "halted": crate::wrong::halted_json(&h)}),
-        None => json!({"open": crate::steps::open_of(&answers), "halted": null}),
+        Some(h) => json!({"open": [], "halted": crate::wrong::halted_json(&h), "workers": workers}),
+        None => json!({
+            "open": crate::steps::open_of(&answers, &gp_mcp::steps::held(&paths.home)),
+            "halted": null,
+            "workers": workers,
+        }),
     }
 }
 

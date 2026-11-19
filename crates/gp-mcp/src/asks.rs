@@ -295,6 +295,13 @@ pub fn make(home: &Path, n: &New) -> Result<Value, String> {
     if let Some((h, _)) = &n.held {
         v["held"] = h.clone();
     }
+    // A worker the loop's runner started asks for its step, which the
+    // page's list of workers shows as waiting for a yes.
+    if let Ok(s) = std::env::var(crate::steps::STEP_ENV)
+        && !s.trim().is_empty()
+    {
+        v["step"] = json!(s.trim());
+    }
     write(home, &v)?;
     Ok(v)
 }
