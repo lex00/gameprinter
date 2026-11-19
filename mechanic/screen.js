@@ -821,7 +821,19 @@ async function refreshAsks() {
   for (const a of list) {
     const card = el("div", "ask-card");
     card.append(el("span", "ask-head", a.state === "yes" ? "YOU SAID YES" : "YOUR AGENT ASKS"));
-    const says = el("span", "ask-says", a.says ?? "");
+    // The question, naming this change: from the command's own message
+    // (a gate's patch message: its game, then what changes, up to the
+    // first stop), else the ask's sentence.
+    const argv = a.argv ?? [];
+    const mi = argv.indexOf("--message");
+    const msg = mi >= 0 ? String(argv[mi + 1] ?? "").trim() : "";
+    const game = a.game ?? "";
+    let what = msg.replace(new RegExp(`^${game}\\s*:\\s*`, "i"), "");
+    what = what.split(/(?<=[a-z0-9)])[.;]\s|\s\(|: /)[0].trim();
+    const verb = a.command === "model gate" ? "Land" : a.command === "registry publish" ? "Publish" : "Allow";
+    const question = what ? `${verb} in ${game || "the game"}: ${what}?` : `${a.says ?? ""}`;
+    card.append(el("span", "ask-question", question));
+    const says = el("span", "ask-says", msg || (a.says ?? ""));
     card.append(says);
     // The quest-log row it is for: its step's (row:GAME/ROW), which a
     // click opens; a card with no step was raised outside the loop.
