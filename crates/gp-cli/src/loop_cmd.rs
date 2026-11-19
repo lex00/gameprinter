@@ -117,6 +117,26 @@ fn open_with_rows(
     answers: &[crate::next::Answer],
 ) -> Vec<Value> {
     let mut open = crate::steps::open_of(answers, &gp_mcp::steps::held(&paths.home));
+    // A row set back to the agent (status next) is the agent's: the
+    // engine's step asking the person to play it gives way to the row's.
+    let rows = crate::steps::row_steps(paths, games);
+    let row_touch: std::collections::BTreeSet<String> = rows
+        .iter()
+        .flat_map(|s| s["touches"].as_array().cloned().unwrap_or_default())
+        .filter_map(|t| {
+            t.as_str()
+                .filter(|t| t.starts_with("row:"))
+                .map(str::to_owned)
+        })
+        .collect();
+    open.retain(|s| {
+        s["who"] != json!("person")
+            || !s["touches"].as_array().is_some_and(|t| {
+                t.iter()
+                    .filter_map(Value::as_str)
+                    .any(|t| row_touch.contains(t))
+            })
+    });
     let taken: std::collections::BTreeSet<String> = open
         .iter()
         .flat_map(|s| s["touches"].as_array().cloned().unwrap_or_default())
