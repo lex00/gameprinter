@@ -101,6 +101,36 @@ impl Session {
 
     /// Opens the session, making it with `prompt` as what the mechanic is
     /// when it is new.
+    /// The session of a quest-log row, made from its note when it has none
+    /// yet (as the page's pick makes one), with the ROM another of the
+    /// game's sessions was made with: so a loop worker can post the row's
+    /// status and log from its first step.
+    pub fn open_or_make(paths: &Paths, game: &str, mechanic: &str) -> Result<Session> {
+        if Self::exists(paths, game, mechanic)? {
+            return Self::open(paths, game, mechanic);
+        }
+        let q = read_queue(&queue_file(paths, game)?);
+        let Some(row) = q
+            .iter()
+            .find(|r| r["mechanic"] == serde_json::json!(mechanic))
+        else {
+            return Self::open(paths, game, mechanic);
+        };
+        let note = row["note"].as_str().unwrap_or("").to_owned();
+        let rom = fs::read_dir(game_dir(paths, game)?)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| fs::read_to_string(e.path().join("session.toml")).ok())
+            .find_map(|t| {
+                t.parse::<toml::Table>()
+                    .ok()
+                    .and_then(|v| v.get("rom").and_then(|r| r.as_str()).map(str::to_owned))
+            })
+            .unwrap_or_default();
+        Self::create(paths, game, mechanic, Some(&note), &rom)
+    }
+
     pub fn create(
         paths: &Paths,
         game: &str,

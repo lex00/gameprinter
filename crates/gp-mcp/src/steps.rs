@@ -133,11 +133,6 @@ pub fn inside() -> bool {
     ancestors().iter().any(|c| is_gp(c))
 }
 
-/// Whether this process's parent is a gp (gp_run's commands, a gate's).
-pub fn parent_is_gp() -> bool {
-    ancestors().first().is_some_and(|c| is_gp(c))
-}
-
 /// A worker's own write from its shell, not through gp_run: refused, so
 /// the step and the person's yes hold for it (a gate run from a shell asks
 /// no one). None when this gp may go on.
@@ -145,7 +140,15 @@ pub fn worker_shell_write() -> Option<String> {
     let step = std::env::var(STEP_ENV)
         .ok()
         .filter(|s| !s.trim().is_empty())?;
-    (!parent_is_gp()).then(|| format!(
+    // A gp between this one and the worker's agent started it (gp_run's
+    // commands, a script a gp command runs): the loop's own machinery.
+    let up = ancestors();
+    let agent = up
+        .iter()
+        .position(|c| c == "claude" || c.ends_with("/claude"))
+        .unwrap_or(up.len());
+    let by_gp = up[..agent].iter().any(|c| is_gp(c));
+    (!by_gp).then(|| format!(
         "this is a loop worker's shell (step {step}): a gp command that writes, lands or publishes runs only through the gp_run tool, where the step and the person's yes hold. Run it with gp_run."
     ))
 }

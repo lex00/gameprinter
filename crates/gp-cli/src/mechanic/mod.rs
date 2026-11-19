@@ -737,7 +737,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             mechanic,
             text,
         } => {
-            Session::open(paths, game, mechanic)?.set_busy(text)?;
+            Session::open_or_make(paths, game, mechanic)?.set_busy(text)?;
             Ok(Outcome::ok(json!({}), format!("busy: {text}")))
         }
         MechanicCmd::Log {
@@ -745,7 +745,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             mechanic,
             text,
         } => {
-            let line = watch::log(&Session::open(paths, game, mechanic)?.dir, text)?;
+            let line = watch::log(&Session::open_or_make(paths, game, mechanic)?.dir, text)?;
             Ok(Outcome::ok(
                 line.clone(),
                 format!("{} {}", line["at"].as_str().unwrap_or(""), text.trim()),
