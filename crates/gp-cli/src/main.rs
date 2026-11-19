@@ -1947,6 +1947,10 @@ fn games_flag(m: &clap::ArgMatches) -> Option<std::path::PathBuf> {
     }
 }
 
+fn first_word(name: &str) -> &str {
+    name.split(' ').next().unwrap_or("")
+}
+
 fn main() -> ExitCode {
     let matches = <Cli as clap::CommandFactory>::command().get_matches();
     let cli = match <Cli as clap::FromArgMatches>::from_arg_matches(&matches) {
@@ -1958,6 +1962,16 @@ fn main() -> ExitCode {
     runrec::start(&name);
     // Which workflow and step the command is, on stderr (GP_NO_HINTS=1 hides it).
     hints::print(&name);
+    // A loop worker writes through gp_run only (gp_mcp::steps::worker_shell_write).
+    let read =
+        gp_mcp::policy::row(&name).is_some_and(|r| matches!(r.rule, gp_mcp::policy::Rule::Read));
+    if !read
+        && first_word(&name) != "worker"
+        && let Some(why) = gp_mcp::steps::worker_shell_write()
+    {
+        eprintln!("gp {name}: {why}");
+        return ExitCode::from(3);
+    }
     // The runner check (gp_mcp::steps::no_runner): a call from outside the
     // loop while no runner goes is told so, loudly; a write is refused.
     let first = name.split(' ').next().unwrap_or("");
@@ -1968,8 +1982,6 @@ fn main() -> ExitCode {
         && let Some(why) = gp_mcp::steps::no_runner_here(&p.home)
     {
         eprintln!("{}", gp_mcp::steps::no_runner_says(&why));
-        let read = gp_mcp::policy::row(&name)
-            .is_some_and(|r| matches!(r.rule, gp_mcp::policy::Rule::Read));
         if !read {
             eprintln!("gp {name} writes, so it doesn't run outside the loop.");
             return ExitCode::from(3);

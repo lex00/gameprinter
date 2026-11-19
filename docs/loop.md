@@ -102,6 +102,10 @@ While the runner is on, a YES on a card runs that exact call at once: the runner
 
 gp serve's runner writes a heartbeat every look (`$GP_HOME/work/loop/runner.json`: its process, the time, whether a worker command is set). While no runner goes (no fresh heartbeat from a live gp serve, the runner off, or no worker command), every gp command run from outside the loop prints a banner saying so, and one that writes (anything but a read in the policy table) is refused with exit 3; gp_run refuses a write, a landing or a publish the same way. `gp loop`, `gp serve`, `gp mcp`, `gp tool` and `gp worker` are exempt, and so is a gp a gp started (serve's children, a gate's checks, gp_run's commands: an ancestor process is a gp), a worker (`GP_STEP`), CI, and a home in the temp folder (tests).
 
+## A worker writes through gp_run
+
+A worker's shell runs gp's reads, but a gp command that writes, lands or publishes from it (`GP_STEP` set and the parent process not a gp) is refused with exit 3: the worker runs it through gp_run, where its step and the person's yes hold. A gate run from a shell asks no one, so this is what keeps a worker's landing on the person's card. When a quest-log item's worker ends, the runner puts its report in the item's log (`gp mechanic log`), so the page says what it did and what is left.
+
 ## What is left of #43
 
 - A failed gate attempt going back to the worker with the gate's score as a new brief, and a step that fails N times becoming a problem row for the owner (part 6). Today a worker that ends with an error is tried again once with its exit and last line.

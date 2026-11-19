@@ -367,11 +367,62 @@ pub(crate) fn spawn(setup: Setup, step: Value) -> std::thread::JoinHandle<()> {
         }
         rec["pid"] = Value::Null;
         write(&setup.home, &rec);
+        report_on_row(&setup, &rec);
         RUNNING
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&id);
     })
+}
+
+/// A quest-log item's worker that ended: its report goes into the item's
+/// log, so the person reads on the page what it did and what is left.
+fn report_on_row(setup: &Setup, rec: &Value) {
+    let Some((game, row)) = row_of(&rec["step"]) else {
+        return;
+    };
+    let id = rec["step"]["id"].as_str().unwrap_or("");
+    let dir = files_dir(&setup.home, id);
+    let newest = fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "log"))
+        .max_by_key(|p| fs::metadata(p).and_then(|m| m.modified()).ok());
+    let report = newest
+        .and_then(|p| fs::read_to_string(p).ok())
+        .and_then(|t| {
+            t.lines().rev().find_map(|l| {
+                let v: Value = serde_json::from_str(l).ok()?;
+                if v["type"] == json!("result") {
+                    v["result"].as_str().map(str::to_owned)
+                } else {
+                    None
+                }
+            })
+        });
+    let state = rec["state"].as_str().unwrap_or("?");
+    let words = match report {
+        Some(r) => format!(
+            "Worker loop-{id} ended ({state}): {}",
+            crate::next::cut(&r, 1500)
+        ),
+        None => format!(
+            "Worker loop-{id} ended ({state}): {}",
+            rec["why"].as_str().unwrap_or("no report")
+        ),
+    };
+    let _ = Command::new(&setup.gp)
+        .args(["mechanic", "log", &game, &row, &words])
+        .env("GP_HOME", &setup.home)
+        .env("GP_GAMES_DIR", &setup.games)
+        .env("GP_NO_HINTS", "1")
+        .env_remove(loop_state::STEP_ENV)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 /// The worker's worktree, made from main the first time.
@@ -436,7 +487,7 @@ pub(crate) fn brief(setup: &Setup, step: &Value, wt: &Path, branch: &str, before
         format!("It touches: {}", list("touches")),
         String::new(),
         format!("Your worktree is {} (branch {branch}).", wt.display()),
-        format!("Run gp commands with the gp_run tool, or in Bash as {gp} COMMAND ARGS, one command a call: no eval, no &&, no pipes. Before cargo in the worktree, run {gp} worker env loop-{id} --rust and set what it prints."),
+        format!("Run gp commands that write, land or publish with the gp_run tool only: from your shell they are refused. Reads may run in Bash as {gp} COMMAND ARGS, one command a call: no eval, no &&, no pipes. Before cargo in the worktree, run {gp} worker env loop-{id} --rust and set what it prints."),
         format!("Every gp_run call that writes, lands or publishes is this step: gp_run cites {id} for you and refuses any other step."),
         "A change lands only through a gate: gp model gate for a game, gp tool gate for the tool. A landing waits for the person's yes on their page; ask and wait, never work around it.".to_owned(),
         "When the step is done, or you can't do it, stop with a short report: what you did, what you checked, and what is left.".to_owned(),
@@ -451,7 +502,7 @@ pub(crate) fn brief(setup: &Setup, step: &Value, wt: &Path, branch: &str, before
             },
             format!("First: {gp} mechanic show {game} {row} (the item, its notes and talk). If {gp} mechanic busy says there's no session, start one with {gp} mechanic start {game} {row}."),
             format!("At every step say where you are on the person's page: {gp} mechanic busy {game} {row} \"WHAT YOU ARE DOING. Next: WHAT COMES NEXT\"; put what you found with {gp} mechanic log {game} {row} \"...\"."),
-            format!("Land a change with git diff > a patch file and gp model gate {game} --patch FILE --message \"{game}: WHAT CHANGES. Expect: WHAT THE PERSON SEES. Checked: HOW\" --dry-run first; then the same without --dry-run puts a card on the page, and the loop runs it on the person's YES."),
+            format!("Land a change with git diff > a patch file in your worktree, then gp_run model gate with game {game}, patch FILE, message \"{game}: WHAT CHANGES. Expect: WHAT THE PERSON SEES. Checked: HOW\" and dry_run first; then the same without dry_run puts a card on the person's page and the loop runs it on their YES. Don't wait for it: say in your report that the card is up, and stop. Never run a gate from your shell, and never land onto your own branch."),
             format!("When the item is done: {gp} mechanic queue {game} {row} --status done --note \"WHAT LANDED\". When it needs the person: --status \"asking you\" with the question in --note."),
         ]);
     }

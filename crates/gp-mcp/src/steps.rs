@@ -76,13 +76,11 @@ pub fn save(home: &Path, s: &Settings) -> Result<(), String> {
     std::fs::write(settings_file(home), text).map_err(|e| e.to_string())
 }
 
-/// Whether a gp started this one, at any remove: gp serve's children, a
-/// gate's checks, gp_run's commands. The runner check holds the person's
-/// and an agent's own calls to it, not the loop's own machinery. Read
-/// from the process table (`ps`) once.
-pub fn inside() -> bool {
-    static INSIDE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *INSIDE.get_or_init(|| {
+/// The commands of this process's ancestors, nearest first, from the
+/// process table (`ps`), read once.
+fn ancestors() -> &'static [String] {
+    static UP: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    UP.get_or_init(|| {
         #[cfg(unix)]
         {
             let Ok(o) = Command::new("ps")
@@ -91,7 +89,7 @@ pub fn inside() -> bool {
                 .stderr(Stdio::null())
                 .output()
             else {
-                return false;
+                return Vec::new();
             };
             let t = String::from_utf8_lossy(&o.stdout);
             let mut up = std::collections::HashMap::new();
@@ -105,24 +103,51 @@ pub fn inside() -> bool {
                     up.insert(pid, (ppid, comm));
                 }
             }
+            let mut out = Vec::new();
             let mut at = std::os::unix::process::parent_id();
             for _ in 0..64 {
                 let Some((ppid, comm)) = up.get(&at) else {
                     break;
                 };
-                if comm == "gp" || comm.ends_with("/gp") {
-                    return true;
-                }
+                out.push(comm.clone());
                 if *ppid == at || *ppid == 0 {
                     break;
                 }
                 at = *ppid;
             }
-            false
+            out
         }
         #[cfg(not(unix))]
-        false
+        Vec::new()
     })
+}
+
+fn is_gp(comm: &str) -> bool {
+    comm == "gp" || comm.ends_with("/gp")
+}
+
+/// Whether a gp started this one, at any remove: gp serve's children, a
+/// gate's checks, gp_run's commands. The runner check holds the person's
+/// and an agent's own calls to it, not the loop's own machinery.
+pub fn inside() -> bool {
+    ancestors().iter().any(|c| is_gp(c))
+}
+
+/// Whether this process's parent is a gp (gp_run's commands, a gate's).
+pub fn parent_is_gp() -> bool {
+    ancestors().first().is_some_and(|c| is_gp(c))
+}
+
+/// A worker's own write from its shell, not through gp_run: refused, so
+/// the step and the person's yes hold for it (a gate run from a shell asks
+/// no one). None when this gp may go on.
+pub fn worker_shell_write() -> Option<String> {
+    let step = std::env::var(STEP_ENV)
+        .ok()
+        .filter(|s| !s.trim().is_empty())?;
+    (!parent_is_gp()).then(|| format!(
+        "this is a loop worker's shell (step {step}): a gp command that writes, lands or publishes runs only through the gp_run tool, where the step and the person's yes hold. Run it with gp_run."
+    ))
 }
 
 /// The runner's heartbeat: gp serve's runner writes it every look.
