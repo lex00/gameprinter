@@ -609,6 +609,13 @@ fn claude_args(setup: &Setup, wt: &Path, mcp: &Path) -> Vec<String> {
     .map(String::from)
     .to_vec();
     a.push(mcp.display().to_string());
+    // The home's themes, which a worker brings into the games checkout
+    // (they are read there, never changed in place).
+    let themes = setup.home.join("work").join("themes");
+    if themes.is_dir() {
+        a.push("--add-dir".into());
+        a.push(themes.display().to_string());
+    }
     a.push("--allowedTools".into());
     for t in [
         "Read".to_owned(),
