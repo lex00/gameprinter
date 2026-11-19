@@ -465,3 +465,10 @@ fn press_timings_have_an_allowance() {
     };
     assert!(super::press_timings(&other).is_empty());
 }
+
+/// With no program image (an arcade game's scan) a routine's walk finds no
+/// operands and doesn't panic.
+#[test]
+fn a_routine_in_no_image_has_no_operands() {
+    assert!(transcribe::routine_operands(&[], 0x8000).is_empty());
+}

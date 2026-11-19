@@ -301,9 +301,11 @@ pub fn fn_operands(src: &str, item: &Item) -> (Vec<i64>, usize) {
 /// ($8000 to $FFFF) from `start` to its returns: every instruction reached
 /// by falling through, branching or a JMP near its start.
 pub fn routine_operands(image: &[u8], start: u16) -> Vec<i64> {
+    // No image (an arcade game's scan, which reads no NES program): every
+    // byte reads 0, so the walk finds nothing.
     let read = |a: u16| -> u8 {
-        if a >= 0x8000 {
-            image[usize::from(a - 0x8000) % image.len().max(1)]
+        if a >= 0x8000 && !image.is_empty() {
+            image[usize::from(a - 0x8000) % image.len()]
         } else {
             0
         }
