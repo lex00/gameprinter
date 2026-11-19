@@ -643,8 +643,8 @@ function talkOf(m) {
 
 /** A COMMENT button that opens a line under `host`; what is typed goes to
  * the row's talk as the person's turn (POST api/talk), naming `clips`. */
-function commentBox(host, mechanic, clips, label) {
-  const b = el("button", "comment-open", "COMMENT");
+function commentBox(host, mechanic, clips, label, word = "COMMENT") {
+  const b = el("button", "comment-open", word);
   b.type = "button";
   b.title = label;
   b.addEventListener("click", (e) => {
@@ -809,6 +809,7 @@ async function refreshLists(force) {
     drawQueue();
     drawClips();
     drawNowWork();
+    drawYourTurn();
   } catch (e) { /* the next look */ }
   finally { listing = false; }
 }
@@ -851,18 +852,21 @@ async function tell(e) {
 // until the agent uses it.
 
 let asksDrawn = "";
+let asksShown = 0; // the yes cards in YOUR TURN now
 async function refreshAsks() {
   let list = [];
   try {
     const r = await fetch("/api/asks");
     if (r.ok) list = ((await r.json()).asks ?? []).filter((a) => a.state === "open" || a.state === "yes" || a.ran);
   } catch (e) { /* the next look */ }
+  asksShown = list.length;
   const key = JSON.stringify(list.map((a) => [a.id, a.state, a.ran?.state]));
-  if (key === asksDrawn) return;
+  if (key === asksDrawn) { drawYourTurn(); return; }
   asksDrawn = key;
   const box = $("asks");
   box.textContent = "";
   box.hidden = list.length === 0;
+  drawYourTurn();
   for (const a of list) {
     const card = el("div", "ask-card");
     const RAN = { running: "YOU SAID YES: THE LOOP IS RUNNING IT NOW", landed: "LANDED", passed: "DONE", failed: "IT FAILED" };
@@ -933,6 +937,100 @@ async function refreshAsks() {
   }
 }
 
+// Your turn ------------------------------------------------------------
+//
+// At the top, only what the person can do now, each with a button that
+// does it: the yes cards above (#asks), the loop's steps for this game
+// that are the person's and have a button (PLAY FROM HERE: the row's start
+// point, recording into the row), and the quest-log rows asking them
+// (ANSWER: their words to the row's talk). With none of them, NOTHING
+// NEEDS YOU.
+
+let turnDrawn = "";
+function drawYourTurn() {
+  const list = $("turn");
+  // A box being typed in stays until it is sent or closed.
+  if (list.querySelector("form.comment")) return;
+  const game = session?.game ?? "";
+  const plays = openSteps.filter((s) => s.who === "person" && s.act?.do === "play_from"
+    && (!game || (s.touches ?? []).includes(`row:${game}/${s.act.row}`)));
+  const played = new Set(plays.map((s) => s.act.row));
+  const asking = rows.filter((r) => r.status === "asking you" && r.mechanic && !played.has(r.mechanic));
+  const key = JSON.stringify([plays.map((s) => [s.id, s.says]), asking.map((r) => [r.mechanic, r.note]), asksShown]);
+  if (key === turnDrawn) return;
+  turnDrawn = key;
+  list.textContent = "";
+  for (const s of plays) {
+    const li = el("li", "turn-item");
+    li.dataset.step = s.id;
+    li.append(el("span", "turn-row", s.act.row.toUpperCase()), el("span", "turn-says", s.says));
+    const b = el("button", "turn-play", "PLAY FROM HERE");
+    b.type = "button";
+    b.title = `Plays from ${s.act.row}'s start point and records into it: play the stretch, then RECORD (or R) sends it`;
+    b.addEventListener("click", (e) => { e.currentTarget.blur(); void playFrom(s.act.row); });
+    li.append(b);
+    list.append(li);
+  }
+  for (const r of asking) {
+    const li = el("li", "turn-item");
+    li.dataset.mechanic = r.mechanic;
+    li.append(el("span", "turn-row", r.mechanic.toUpperCase()), el("span", "turn-says", r.note || "Your agent asks you about this row."));
+    li.append(commentBox(li, r.mechanic, [], `Your answer on ${r.mechanic} for your agent`, "ANSWER"));
+    list.append(li);
+  }
+  $("turn-none").hidden = asksShown + plays.length + asking.length > 0;
+}
+
+/** A step's PLAY FROM HERE (app.js's playFrom): opens the row, plays its
+ * request's path to its frame, starts the model there and records into
+ * the row, so the person plays only the stretch it asks for. */
+let starting = null;
+async function playFrom(m) {
+  if (starting) { note("Still loading the start point."); return; }
+  if (recording || sending) { note("Send the recording first: RECORD (or R)."); return; }
+  if (m !== session?.mechanic) {
+    await pickRow(m);
+    if (session?.mechanic !== m) return;
+  }
+  const r = rows.find((q) => q.mechanic === m)?.triage?.request ?? null;
+  if (show.view === "solo") setView("side");
+  if (mode === "clip") { clip = null; $("clipbar").hidden = true; drawClips(); }
+  $("screens").scrollIntoView({ behavior: "smooth", block: "start" });
+  starting = m;
+  mode = "loading";
+  model.on = false;
+  model.say = "THE MODEL JOINS AT THE START POINT";
+  try {
+    if (r?.path) {
+      const res = await fetch(`api/paths/${r.path}`);
+      if (!res.ok) throw new Error(await res.text());
+      player.replay(0, rom, await res.text());
+      const target = r.frame ?? 0;
+      while (player.frame(0) < target) {
+        const before = player.frame(0);
+        player.runTo(0, Math.min(target, before + 300));
+        if (player.frame(0) === before) break;
+        line(`Loading the start point: frame ${player.frame(0)} of ${target}.`);
+        await new Promise((t) => setTimeout(t, 0));
+      }
+    } else {
+      player.power(0, rom);
+    }
+    mode = "live";
+    $("record").disabled = false;
+    if (model.ready) void startModel(++model.token); else void loadModel();
+    startRecording();
+    clipFor = m;
+    markTarget();
+    note(`Recording into ${m} from its start point. ${r?.stop ? `Stop: ${r.stop}. ` : ""}RECORD (or R) sends it.`, 8000);
+  } catch (e) {
+    note(`Couldn't load the start point: ${e.message ?? e}`, 8000);
+  } finally {
+    if (mode === "loading") mode = "live";
+    starting = null;
+  }
+}
+
 // Now ------------------------------------------------------------------
 //
 // At the top of the page: the quest-log items being worked on (status
@@ -1000,6 +1098,7 @@ async function refreshSteps() {
   if (!v) return;
   openSteps = v.open ?? [];
   drawWorkers(v);
+  drawYourTurn();
   const key = JSON.stringify([v.halted?.id ?? null, (v.open ?? []).map((s) => s.id)]);
   if (key === stepsDrawn) return;
   stepsDrawn = key;

@@ -35,7 +35,15 @@
     <div id="now-work"></div>
     <div id="now-loop"></div>
   </section>
-  <section id="asks" aria-live="polite" hidden></section>
+  <!-- YOUR TURN: only what the person can do now, each with its button:
+       the yes cards, the loop's steps that are theirs, and the rows that
+       ask them; or NOTHING NEEDS YOU. -->
+  <section id="your-turn" aria-live="polite" aria-label="Your turn">
+    <h2>YOUR TURN</h2>
+    <div id="asks"></div>
+    <ol id="turn"></ol>
+    <p id="turn-none">NOTHING NEEDS YOU</p>
+  </section>
   <main>
     <div id="screens" class="side">
       <figure id="fig-a"><figcaption id="cap-a">THE ORIGINAL</figcaption><canvas id="a" width="256" height="240"></canvas></figure>
