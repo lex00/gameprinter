@@ -150,9 +150,26 @@ pub fn worker_shell_write() -> Option<String> {
     ))
 }
 
-/// The runner's heartbeat: gp serve's runner writes it every look.
+/// The runner's heartbeats: each gp serve's runner writes its own,
+/// `runner-PID.json`, every look, so two servers on one home (two ports)
+/// don't write over each other.
 pub fn beat_file(home: &Path) -> PathBuf {
-    loop_dir(home).join("runner.json")
+    loop_dir(home).join(format!("runner-{}.json", std::process::id()))
+}
+
+/// Every server's heartbeat on this home.
+fn beats(home: &Path) -> Vec<Value> {
+    std::fs::read_dir(loop_dir(home))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.starts_with("runner") && n.ends_with(".json")
+        })
+        .filter_map(|e| std::fs::read(e.path()).ok())
+        .filter_map(|b| serde_json::from_slice(&b).ok())
+        .collect()
 }
 
 /// How old a heartbeat may be and its runner still count as going.
@@ -197,24 +214,21 @@ pub fn why_no_runner(home: &Path) -> Option<String> {
     if !checked(home) {
         return None;
     }
-    let beat: Option<Value> = std::fs::read(beat_file(home))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok());
     let now = crate::asks::now_ms();
-    let fresh = beat.as_ref().is_some_and(|b| {
-        b["pid"].as_u64().is_some_and(crate::proc::alive)
-            && now.saturating_sub(b["at_ms"].as_u64().unwrap_or(0)) <= BEAT_FOR_MS
-    });
-    if !fresh {
+    let fresh: Vec<Value> = beats(home)
+        .into_iter()
+        .filter(|b| {
+            b["pid"].as_u64().is_some_and(crate::proc::alive)
+                && now.saturating_sub(b["at_ms"].as_u64().unwrap_or(0)) <= BEAT_FOR_MS
+        })
+        .collect();
+    if fresh.is_empty() {
         return Some("No gp serve is running the loop's runner for this home.".into());
     }
     if !settings(home).runner.on {
         return Some("gp serve is running, but its runner is off.".into());
     }
-    if !beat
-        .as_ref()
-        .is_some_and(|b| b["agent"] == serde_json::json!(true))
-    {
+    if !fresh.iter().any(|b| b["agent"] == serde_json::json!(true)) {
         return Some(
             "The runner is on, but no worker command is set, so it starts nothing.".into(),
         );

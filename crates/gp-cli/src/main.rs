@@ -1965,8 +1965,14 @@ fn main() -> ExitCode {
     // A loop worker writes through gp_run only (gp_mcp::steps::worker_shell_write).
     let read =
         gp_mcp::policy::row(&name).is_some_and(|r| matches!(r.rule, gp_mcp::policy::Rule::Read));
+    // gp's own front ends and the loop's controls run as they are: the
+    // worker's MCP server (gp mcp) is how its writes go through gp_run.
+    let exempt = matches!(
+        first_word(&name),
+        "" | "loop" | "serve" | "mcp" | "tool" | "worker" | "help"
+    );
     if !read
-        && first_word(&name) != "worker"
+        && !exempt
         && let Some(why) = gp_mcp::steps::worker_shell_write()
     {
         eprintln!("gp {name}: {why}");
@@ -1974,11 +1980,8 @@ fn main() -> ExitCode {
     }
     // The runner check (gp_mcp::steps::no_runner): a call from outside the
     // loop while no runner goes is told so, loudly; a write is refused.
-    let first = name.split(' ').next().unwrap_or("");
-    if !matches!(
-        first,
-        "" | "loop" | "serve" | "mcp" | "tool" | "worker" | "help"
-    ) && let Ok(p) = gp_evidence::Paths::from_env()
+    if !exempt
+        && let Ok(p) = gp_evidence::Paths::from_env()
         && let Some(why) = gp_mcp::steps::no_runner_here(&p.home)
     {
         eprintln!("{}", gp_mcp::steps::no_runner_says(&why));

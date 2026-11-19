@@ -100,7 +100,7 @@ While the runner is on, a YES on a card runs that exact call at once: the runner
 
 ## No runner, no writes
 
-gp serve's runner writes a heartbeat every look (`$GP_HOME/work/loop/runner.json`: its process, the time, whether a worker command is set). While no runner goes (no fresh heartbeat from a live gp serve, the runner off, or no worker command), every gp command run from outside the loop prints a banner saying so, and one that writes (anything but a read in the policy table) is refused with exit 3; gp_run refuses a write, a landing or a publish the same way. `gp loop`, `gp serve`, `gp mcp`, `gp tool` and `gp worker` are exempt, and so is a gp a gp started (serve's children, a gate's checks, gp_run's commands: an ancestor process is a gp), a worker (`GP_STEP`), CI, and a home in the temp folder (tests).
+Each gp serve's runner writes a heartbeat of its own every look (`$GP_HOME/work/loop/runner-PID.json`, so two servers on one home don't write over each other; the runner goes when any is fresh with a worker command): its process, the time, whether a worker command is set). While no runner goes (no fresh heartbeat from a live gp serve, the runner off, or no worker command), every gp command run from outside the loop prints a banner saying so, and one that writes (anything but a read in the policy table) is refused with exit 3; gp_run refuses a write, a landing or a publish the same way. `gp loop`, `gp serve`, `gp mcp`, `gp tool` and `gp worker` are exempt, and so is a gp a gp started (serve's children, a gate's checks, gp_run's commands: an ancestor process is a gp), a worker (`GP_STEP`), CI, and a home in the temp folder (tests).
 
 ## A worker writes through gp_run
 
