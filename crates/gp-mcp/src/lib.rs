@@ -51,6 +51,7 @@ pub mod sound_proposal;
 pub mod sprite_ops;
 pub mod sprite_proposal;
 pub mod sprite_set;
+pub mod steps;
 
 pub mod testgame;
 pub mod tile_edit;

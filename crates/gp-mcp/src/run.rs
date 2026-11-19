@@ -25,6 +25,7 @@ use serde_json::{Map, Value, json};
 use crate::asks;
 use crate::held;
 use crate::policy::{self, Decision, Road};
+use crate::steps;
 use crate::{Config, Reply, run_gp};
 
 /// How long a command runs when the call doesn't say and the command
@@ -503,6 +504,13 @@ pub struct RunArgs {
     /// arguments finds its answer without it too.
     #[serde(default)]
     pub ask_id: Option<String>,
+    /// The id of the loop's step this call is (an open step from next or
+    /// gp loop steps, `s` and 12 hex digits). When the home's loop.toml has
+    /// steps_required on, a call that writes, lands or publishes runs only
+    /// citing an open step whose commands include its command; reads never
+    /// need one. A worker the runner started cites its own step unasked.
+    #[serde(default)]
+    pub step: Option<String>,
     /// Seconds before the command is stopped: at most 3600. Left out, 300,
     /// or for a command known to run long (corpus score, model refine,
     /// the gates) the longer default gp_commands shows as timeout_s.
@@ -1216,6 +1224,72 @@ fn held_refusal(
     o
 }
 
+/// The loop's check (docs/loop.md, policy::decide_step): with the home's
+/// steps_required on, or in a worker the runner started (`GP_STEP`), a
+/// call that writes, lands or publishes runs only as an open step that
+/// runs its command. None when it may go on; else the refusal.
+fn loop_check(
+    config: &Config,
+    path: &str,
+    decision: &Decision,
+    cited: Option<&str>,
+    row: &policy::Row,
+) -> Option<Value> {
+    let bound = std::env::var(steps::STEP_ENV)
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    if !steps::settings(&config.home).steps_required && bound.is_none() {
+        return None;
+    }
+    if !matches!(
+        decision,
+        Decision::Run { writes: true } | Decision::RunHeld | Decision::NeedsYes(_)
+    ) {
+        return None;
+    }
+    let cur = match steps::current(config) {
+        Ok(v) => v,
+        Err(e) => {
+            return Some(json!({
+                "refused": format!("gp {path} writes, lands or publishes, and the loop's steps couldn't be read to check it against them: {e}"),
+                "needs": "step",
+                "rule": row.rule.name(),
+            }));
+        }
+    };
+    let open = cur["open"].as_array().cloned().unwrap_or_default();
+    let held = steps::held(&config.home);
+    let halted = cur["halted"].as_object().map(|h| {
+        format!(
+            "step {} was marked wrong: {}",
+            h.get("id").and_then(Value::as_str).unwrap_or("?"),
+            h.get("why")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim_end_matches('.')
+        )
+    });
+    let st = policy::Steps {
+        cited,
+        open: &open,
+        held: &held,
+        halted: halted.as_deref(),
+        bound: bound.as_deref(),
+    };
+    match policy::decide_step(decision.clone(), path, &st) {
+        Decision::Refused(why) => Some(json!({
+            "refused": why,
+            "needs": "step",
+            "rule": row.rule.name(),
+            "open_steps": open.iter().map(|s| json!({
+                "id": s["id"], "who": s["who"], "subject": s["subject"],
+                "says": s["says"], "commands": s["commands"],
+            })).collect::<Vec<_>>(),
+        })),
+        _ => None,
+    }
+}
+
 /// `gp_run`.
 pub fn run(config: &Config, a: RunArgs) -> Result<Reply, String> {
     let tree = tree(config)?;
@@ -1256,6 +1330,9 @@ pub fn run_in(
     let given = |n: &str| built.given.contains(n);
     let mut yes_note: Option<String> = None;
     let decision = policy::decide(&row, &given, &built.values);
+    if let Some(r) = loop_check(config, &path, &decision, a.step.as_deref(), &row) {
+        return Ok(Reply::refused(r));
+    }
     match decision.clone() {
         Decision::Refused(why) => {
             return Ok(Reply::refused(json!({
@@ -1563,6 +1640,55 @@ mod tests {
     fn call(c: &Config, v: Value) -> Reply {
         let a: RunArgs = serde_json::from_value(v).unwrap();
         run_in(c, &tree(), a, &|_| false).unwrap()
+    }
+
+    /// With the home's steps_required on, a write runs only citing an open
+    /// step that runs it; a read runs without one (docs/loop.md).
+    #[test]
+    fn with_steps_required_a_write_cites_an_open_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let gp = fake_gp(
+            dir.path(),
+            r#"if [ "$2" = loop ]; then echo '{"open": [{"id": "s111111111111", "who": "agent", "subject": "g", "says": "Format it.", "commands": ["model fmt"]}], "halted": null}'; else echo '{"ok": true}'; fi"#,
+        );
+        let c = config(dir.path(), &gp);
+        let t = net_tree();
+        let a = |step: Option<&str>| RunArgs {
+            command: "model fmt".into(),
+            args: serde_json::from_value(json!({"game": "g"})).unwrap(),
+            confirmed_by_person: false,
+            ask_id: None,
+            step: step.map(str::to_owned),
+            timeout_s: None,
+        };
+        // Off (the default): runs as before.
+        let r = run_in(&c, &t, a(None), &|_| false).unwrap();
+        assert!(!r.is_error, "{}", r.json);
+        let mut s = steps::settings(&c.home);
+        s.steps_required = true;
+        steps::save(&c.home, &s).unwrap();
+        let r = run_in(&c, &t, a(None), &|_| false).unwrap();
+        assert!(r.is_error);
+        assert_eq!(r.json["needs"], "step");
+        let why = r.json["refused"].as_str().unwrap();
+        assert!(why.starts_with("gp model fmt writes, lands or publishes, so gp_run runs it only as a step the loop gave"), "{why}");
+        assert!(
+            why.contains("s111111111111 (agent, g): Format it, runs model fmt"),
+            "{why}"
+        );
+        assert_eq!(r.json["open_steps"][0]["id"], "s111111111111");
+        let r = run_in(&c, &t, a(Some("s111111111111")), &|_| false).unwrap();
+        assert!(!r.is_error, "{}", r.json);
+        let r = run_in(&c, &t, a(Some("s000000000000")), &|_| false).unwrap();
+        assert!(
+            r.json["refused"]
+                .as_str()
+                .unwrap()
+                .contains("isn't open now")
+        );
+        // A read needs no step.
+        let r = call(&c, json!({"command": "env"}));
+        assert!(!r.is_error, "{}", r.json);
     }
 
     #[test]
@@ -2071,6 +2197,7 @@ mod tests {
             args: Map::new(),
             confirmed_by_person: false,
             ask_id: None,
+            step: None,
             timeout_s: None,
         };
         let r = run_in(&c, &t, a(), &|_| false).unwrap();
@@ -2106,6 +2233,7 @@ mod tests {
                 args: Map::new(),
                 confirmed_by_person: false,
                 ask_id: None,
+                step: None,
                 timeout_s: None,
             },
             &|p| p == local_port("GP_LAYA_URL", 7720),

@@ -254,6 +254,8 @@ const PERSON_DECIDES: &str = "only the person decides a proposed picture, with A
 const PERSON_DECIDES_SOUND: &str = "only the person decides a proposed sound change, with ACCEPT, REJECT or PUT THE OLD ONE BACK on their page. Propose with sound_edit (or theme sound propose), wait with next (wait_s) until waits_for_yes shows it answered, and read their answer with theme sound list.";
 /// Only the person decides a sprite edit the agent proposes for their copy.
 const PERSON_DECIDES_SPRITE: &str = crate::sprite_proposal::PERSON_DECIDES;
+/// Only the person changes the loop's rules (docs/loop.md).
+const PERSON_SETS_LOOP: &str = "only the person changes the loop's settings (whether a write needs a step, the runner), in their own terminal with gp loop set. Work as the open steps say: next and gp loop steps list them.";
 const SERVE: &str = "it serves a page until stopped. The person starts `gp serve` themselves and opens http://127.0.0.1:7710/; for a local preview use build_publish.";
 
 /// Every gp command, with its road and rule. Sorted by path.
@@ -632,6 +634,7 @@ pub const TABLE: &[Row] = &[
     r("watch rerun", S, Write),
     r("watch start", S, Write),
     r("worker env", D, Read),
+    r("loop set", S, Rule::Refuse(PERSON_SETS_LOOP)),
     r("loop steps", S, Read),
 ];
 
@@ -753,9 +756,9 @@ pub fn decide(row: &Row, given: &dyn Fn(&str) -> bool, values: &[(String, String
     // The rules for a write that changes data already in the games
     // checkout live here: one that guards itself (SELF_GUARDED) asks on
     // the arguments that name what it changes; every other write runs
-    // under the net, which holds such a change for the person's yes. A
-    // check that the call is the step `next` gave (issue #43) belongs
-    // here too, beside these, as one more input to the decision.
+    // under the net, which holds such a change for the person's yes. The
+    // check that the call is a step `next` gave (issue #43) is one more
+    // input to the decision, applied to what this returns: decide_step.
     let base = |b: Base| match b {
         Base::Read => Decision::Run { writes: false },
         Base::Write if netted(row.path) => Decision::RunHeld,
@@ -792,6 +795,122 @@ pub fn decide(row: &Row, given: &dyn Fn(&str) -> bool, values: &[(String, String
             .any(|(_, v)| v.starts_with("git:") || v.starts_with("s3://"))
     {
         return Decision::NeedsYes(Ask::Publish);
+    }
+    decision
+}
+
+/// What the loop knows when gp_run checks a call against its steps
+/// (docs/loop.md, crate::steps): the step the call cites, the steps open
+/// now and those the runner's live workers hold (`{id, who, subject, says,
+/// commands}` each), why the loop is halted, and the step a worker's gp
+/// was started for (`GP_STEP`).
+#[derive(Debug, Default)]
+pub struct Steps<'a> {
+    pub cited: Option<&'a str>,
+    pub open: &'a [Value],
+    pub held: &'a [Value],
+    pub halted: Option<&'a str>,
+    pub bound: Option<&'a str>,
+}
+
+/// A step in a sentence: its id, who, subject, words and commands.
+pub fn step_words(s: &Value) -> String {
+    let cmds: Vec<&str> = s["commands"]
+        .as_array()
+        .map(|c| c.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    format!(
+        "{} ({}, {}): {}{}",
+        s["id"].as_str().unwrap_or("?"),
+        s["who"].as_str().unwrap_or("?"),
+        s["subject"].as_str().unwrap_or("the home"),
+        s["says"].as_str().unwrap_or("").trim_end_matches('.'),
+        if cmds.is_empty() {
+            ", runs no gp command".to_owned()
+        } else {
+            format!(", runs {}", cmds.join(", "))
+        }
+    )
+}
+
+fn steps_named(list: &[&Value]) -> String {
+    if list.is_empty() {
+        return "none".into();
+    }
+    let mut w: Vec<String> = list.iter().take(8).map(|s| step_words(s)).collect();
+    if list.len() > 8 {
+        w.push(format!("and {} more (gp loop steps)", list.len() - 8));
+    }
+    w.join("; ")
+}
+
+/// The loop's check on a decision (issue #43): a call that writes, lands
+/// or publishes runs only as a step the loop gave, cited by its id, whose
+/// commands include the call's. Reads, and refusals already made, pass as
+/// they are. While the loop is halted nothing is a step, but a worker
+/// holding one may still write (not land or publish) to finish it.
+pub fn decide_step(decision: Decision, path: &str, st: &Steps) -> Decision {
+    if !matches!(
+        decision,
+        Decision::Run { writes: true } | Decision::RunHeld | Decision::NeedsYes(_)
+    ) {
+        return decision;
+    }
+    let lands = matches!(decision, Decision::NeedsYes(_));
+    let open: Vec<&Value> = st.open.iter().collect();
+    let runs_it = |s: &&Value| {
+        s["commands"]
+            .as_array()
+            .is_some_and(|c| c.iter().any(|x| x == path))
+    };
+    let these: Vec<&Value> = open.iter().copied().filter(runs_it).collect();
+    let cited = st.cited.or(st.bound);
+    if let (Some(b), Some(c)) = (st.bound, st.cited)
+        && b != c
+    {
+        return Decision::Refused(format!(
+            "this worker was started for step {b}, and a call may cite no other (it cited {c})"
+        ));
+    }
+    let found = cited.and_then(|id| {
+        open.iter()
+            .copied()
+            .chain(st.held.iter())
+            .find(|s| s["id"] == json!(id))
+    });
+    if let Some(why) = st.halted {
+        let held = cited.is_some_and(|id| st.held.iter().any(|s| s["id"] == json!(id)));
+        if lands || !held {
+            return Decision::Refused(format!(
+                "the loop is halted: {why}. Nothing {} until a tool-gate landing clears it (docs/loop.md, \"Wrong\")",
+                if lands {
+                    "lands or publishes"
+                } else {
+                    "writes as a step"
+                }
+            ));
+        }
+    }
+    let Some(id) = cited else {
+        return Decision::Refused(format!(
+            "gp {path} writes, lands or publishes, so gp_run runs it only as a step the loop gave: call again with step set to the id of an open step whose commands include {path}. Open steps that run it: {}. All open steps: {}",
+            steps_named(&these),
+            steps_named(&open)
+        ));
+    };
+    let Some(s) = found else {
+        return Decision::Refused(format!(
+            "step {id} isn't open now: the facts it was decided from changed, or it was never a step (next and gp loop steps give the open ones). Open steps that run gp {path}: {}. All open steps: {}",
+            steps_named(&these),
+            steps_named(&open)
+        ));
+    };
+    if !runs_it(&s) {
+        return Decision::Refused(format!(
+            "step {} doesn't run gp {path}. Open steps that run it: {}",
+            step_words(s),
+            steps_named(&these)
+        ));
     }
     decision
 }
@@ -1235,6 +1354,111 @@ mod tests {
         assert!(matches!(
             decide(row("level render").unwrap(), &given(&["port"]), &port),
             Decision::Refused(_)
+        ));
+    }
+
+    #[test]
+    fn a_write_runs_only_as_an_open_step_that_runs_its_command() {
+        let open = [
+            json!({"id": "s111111111111", "who": "agent", "subject": "g", "says": "Add the clips.", "commands": ["corpus import"]}),
+            json!({"id": "s222222222222", "who": "person", "subject": "g", "says": "Press YES.", "commands": []}),
+        ];
+        let held = [
+            json!({"id": "s333333333333", "who": "agent", "subject": "h", "says": "Fix it.", "commands": ["mechanic say"]}),
+        ];
+        let w = Decision::Run { writes: true };
+        let st = |cited| Steps {
+            cited,
+            open: &open,
+            held: &held,
+            ..Steps::default()
+        };
+        // Reads are free, with or without a step.
+        let read = Decision::Run { writes: false };
+        assert_eq!(decide_step(read.clone(), "progress", &st(None)), read);
+        // No step: refused, naming the open steps and the one that runs it.
+        let Decision::Refused(why) = decide_step(w.clone(), "corpus import", &st(None)) else {
+            panic!("a write with no step runs")
+        };
+        assert!(why.contains("call again with step set to"), "{why}");
+        assert!(
+            why.contains("s111111111111 (agent, g): Add the clips, runs corpus import"),
+            "{why}"
+        );
+        // The step that runs it: as decided.
+        assert_eq!(
+            decide_step(w.clone(), "corpus import", &st(Some("s111111111111"))),
+            w
+        );
+        assert_eq!(
+            decide_step(
+                Decision::RunHeld,
+                "corpus import",
+                &st(Some("s111111111111"))
+            ),
+            Decision::RunHeld
+        );
+        // A step that runs something else, or one not open.
+        assert!(matches!(
+            decide_step(w.clone(), "corpus import", &st(Some("s222222222222"))),
+            Decision::Refused(r) if r.contains("doesn't run gp corpus import")
+        ));
+        assert!(matches!(
+            decide_step(w.clone(), "corpus import", &st(Some("s999999999999"))),
+            Decision::Refused(r) if r.contains("isn't open now")
+        ));
+        // A landing needs its step too; a live worker's step still counts.
+        assert!(matches!(
+            decide_step(Decision::NeedsYes(Ask::Publish), "model gate", &st(None)),
+            Decision::Refused(_)
+        ));
+        assert_eq!(
+            decide_step(w.clone(), "mechanic say", &st(Some("s333333333333"))),
+            w
+        );
+        // A worker's gp may cite no step but its own, and cites it unasked.
+        let bound = Steps {
+            bound: Some("s111111111111"),
+            ..st(None)
+        };
+        assert_eq!(decide_step(w.clone(), "corpus import", &bound), w);
+        let other = Steps {
+            cited: Some("s333333333333"),
+            ..bound
+        };
+        assert!(matches!(
+            decide_step(w.clone(), "mechanic say", &other),
+            Decision::Refused(r) if r.contains("started for step s111111111111")
+        ));
+    }
+
+    #[test]
+    fn a_halted_loop_runs_no_step_but_lets_a_worker_finish_its_writes() {
+        let open = [
+            json!({"id": "s111111111111", "who": "agent", "subject": "g", "says": "Add.", "commands": ["corpus import"]}),
+        ];
+        let held = [
+            json!({"id": "s333333333333", "who": "agent", "subject": "h", "says": "Fix.", "commands": ["mechanic say", "model gate"]}),
+        ];
+        let st = |cited| Steps {
+            cited,
+            open: &open,
+            held: &held,
+            halted: Some("step s111111111111 was marked wrong: it adds the wrong clips"),
+            bound: None,
+        };
+        let w = Decision::Run { writes: true };
+        assert!(matches!(
+            decide_step(w.clone(), "corpus import", &st(Some("s111111111111"))),
+            Decision::Refused(r) if r.starts_with("the loop is halted: step s111111111111 was marked wrong")
+        ));
+        assert_eq!(
+            decide_step(w.clone(), "mechanic say", &st(Some("s333333333333"))),
+            w
+        );
+        assert!(matches!(
+            decide_step(Decision::NeedsYes(Ask::Publish), "model gate", &st(Some("s333333333333"))),
+            Decision::Refused(r) if r.contains("Nothing lands or publishes")
         ));
     }
 }
