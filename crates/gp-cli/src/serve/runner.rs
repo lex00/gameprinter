@@ -435,7 +435,8 @@ pub(crate) fn brief(setup: &Setup, step: &Value, wt: &Path, branch: &str, before
         format!("The gp commands it runs: {}", list("commands")),
         format!("It touches: {}", list("touches")),
         String::new(),
-        format!("Your worktree is {} (branch {branch}). Start each shell there with: eval \"$({gp} worker env loop-{id} --shell)\" (add --rust when you change Rust).", wt.display()),
+        format!("Your worktree is {} (branch {branch}).", wt.display()),
+        format!("Run gp commands with the gp_run tool, or in Bash as {gp} COMMAND ARGS, one command a call: no eval, no &&, no pipes. Before cargo in the worktree, run {gp} worker env loop-{id} --rust and set what it prints."),
         format!("Every gp_run call that writes, lands or publishes is this step: gp_run cites {id} for you and refuses any other step."),
         "A change lands only through a gate: gp model gate for a game, gp tool gate for the tool. A landing waits for the person's yes on their page; ask and wait, never work around it.".to_owned(),
         "When the step is done, or you can't do it, stop with a short report: what you did, what you checked, and what is left.".to_owned(),
@@ -549,6 +550,10 @@ fn claude_args(setup: &Setup, wt: &Path, mcp: &Path) -> Vec<String> {
         "mcp__gp__gp_commands".to_owned(),
         "mcp__gp__gp_run".to_owned(),
         format!("Bash({g} worker env:*)"),
+        // gp itself, one command a call: the item's record, the checks and
+        // the gates, which hold the writes to the loop's rules.
+        format!("Bash({g}:*)"),
+        "Bash(gp:*)".to_owned(),
         "Bash(cargo build:*)".to_owned(),
         "Bash(cargo test:*)".to_owned(),
         "Bash(cargo fmt:*)".to_owned(),
