@@ -31,7 +31,7 @@ pub(super) fn routes() -> Vec<Route> {
 
 fn list(ctx: &Ctx, _req: &Request, _params: &Params) -> Result<Response, Fail> {
     Ok(Response::json(
-        &json!({"asks": asks::pending(&ctx.paths.home)}),
+        &json!({"asks": asks::shown(&ctx.paths.home)}),
     ))
 }
 

@@ -418,6 +418,11 @@ pub enum MechanicCmd {
         /// Take the out-of-scope mark off the row.
         #[arg(long, requires = "mechanic")]
         in_scope: bool,
+        /// Where the row's work is: games (the game's folder, the default)
+        /// or tools (gameprinter itself). The loop's runner gives the
+        /// row's worker a worktree of that repo.
+        #[arg(long, requires = "mechanic", value_parser = ["games", "tools"])]
+        repo: Option<String>,
     },
     /// A sweep of one mechanic: a grid of clips from one spot, each played
     /// on the original and on a rebuilt model in lockstep. `jump` (the
@@ -952,6 +957,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             out_of_scope,
             in_scope,
             worker,
+            repo,
         } => queue(
             paths,
             game,
@@ -968,6 +974,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                 opens,
                 out_of_scope: out_of_scope.as_deref(),
                 in_scope: *in_scope,
+                repo: repo.as_deref(),
             },
         ),
         MechanicCmd::Sweep {
@@ -1164,6 +1171,7 @@ struct RowChange<'a> {
     opens: &'a [String],
     out_of_scope: Option<&'a str>,
     in_scope: bool,
+    repo: Option<&'a str>,
 }
 
 fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Result<Outcome> {
@@ -1175,6 +1183,7 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
             || !c.reads.is_empty()
             || !c.opens.is_empty()
             || c.out_of_scope.is_some()
+            || c.repo.is_some()
             || c.in_scope)
     {
         if !name_ok(m) {
@@ -1206,6 +1215,15 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
             }
         }
         if let Some(o) = r.as_object_mut() {
+            match c.repo {
+                Some("tools") => {
+                    o.insert("repo".into(), json!("tools"));
+                }
+                Some(_) => {
+                    o.remove("repo");
+                }
+                None => {}
+            }
             if let Some(why) = c.out_of_scope {
                 o.insert("scope".into(), json!("out"));
                 o.insert("scope_why".into(), json!(why));
@@ -1399,6 +1417,7 @@ mod tests {
             opens: none,
             out_of_scope: None,
             in_scope: false,
+            repo: None,
         };
         assert!(
             queue(&p, "test-hop", Some("hop"), &plain)

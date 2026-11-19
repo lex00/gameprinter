@@ -43,6 +43,10 @@ pub enum LoopCmd {
         /// dollars a day"); the runner keeps no count of money yet.
         #[arg(long)]
         spending: Option<String>,
+        /// The games whose quest-log items the loop works on, by name,
+        /// comma-separated ("tapper"); "all" for every game's.
+        #[arg(long)]
+        games: Option<String>,
     },
     /// Mark an open step wrong, with why: the loop halts (next emits no
     /// steps, gp_run runs none, the runner starts no worker) until a change
@@ -72,8 +76,13 @@ pub enum LoopCmd {
 fn settings_text(s: &gp_mcp::steps::Settings) -> String {
     let w = |b: bool| if b { "on" } else { "off" };
     format!(
-        "steps required by gp_run: {}\nrunner: {}, at most {} workers{}",
+        "steps required by gp_run: {}\nquest-log items of: {}\nrunner: {}, at most {} workers{}",
         w(s.steps_required),
+        if s.games.is_empty() {
+            "every game".to_owned()
+        } else {
+            s.games.join(", ")
+        },
         w(s.runner.on),
         s.runner.max_workers,
         if s.runner.spending.is_empty() {
@@ -93,11 +102,39 @@ pub(crate) fn steps_json(paths: &gp_evidence::Paths, games: Option<&std::path::P
     match crate::wrong::halt(&paths.home) {
         Some(h) => json!({"open": [], "halted": crate::wrong::halted_json(&h), "workers": workers}),
         None => json!({
-            "open": crate::steps::open_of(&answers, &gp_mcp::steps::held(&paths.home)),
+            "open": open_with_rows(paths, games, &answers),
             "halted": null,
             "workers": workers,
         }),
     }
+}
+
+/// The engine's open steps, then the quest-log items' steps that touch
+/// nothing those do (crate::steps::row_steps).
+fn open_with_rows(
+    paths: &gp_evidence::Paths,
+    games: Option<&std::path::Path>,
+    answers: &[crate::next::Answer],
+) -> Vec<Value> {
+    let mut open = crate::steps::open_of(answers, &gp_mcp::steps::held(&paths.home));
+    let taken: std::collections::BTreeSet<String> = open
+        .iter()
+        .flat_map(|s| s["touches"].as_array().cloned().unwrap_or_default())
+        .filter_map(|t| t.as_str().map(str::to_owned))
+        .collect();
+    let free = |s: &Value| {
+        s["touches"].as_array().is_some_and(|t| {
+            t.iter()
+                .filter_map(Value::as_str)
+                .all(|t| !taken.contains(t))
+        })
+    };
+    open.extend(
+        crate::steps::row_steps(paths, games)
+            .into_iter()
+            .filter(free),
+    );
+    open
 }
 
 fn steps_text(v: &Value) -> String {
@@ -147,6 +184,7 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
             runner,
             max_workers,
             spending,
+            games,
         } => {
             let home = &paths.home;
             let mut s = gp_mcp::steps::settings(home);
@@ -162,7 +200,18 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
             if let Some(w) = spending {
                 s.runner.spending = w.trim().to_owned();
             }
-            let changed = steps_required.is_some()
+            if let Some(g) = games {
+                s.games = if g.trim() == "all" {
+                    Vec::new()
+                } else {
+                    g.split(',')
+                        .map(|x| x.trim().to_owned())
+                        .filter(|x| !x.is_empty())
+                        .collect()
+                };
+            }
+            let changed = games.is_some()
+                || steps_required.is_some()
                 || runner.is_some()
                 || max_workers.is_some()
                 || spending.is_some();

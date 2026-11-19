@@ -215,10 +215,93 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
     }
     std::thread::spawn(move || {
         loop {
-            std::thread::sleep(LOOK);
+            // The heartbeat the runner check reads (gp_mcp::steps::no_runner).
+            let agent = matches!(clip_agent::Settings::current(&ctx).mode, Mode::Command(_));
+            loop_state::beat(&ctx.paths.home, agent);
+            if loop_state::settings(&ctx.paths.home).runner.on {
+                run_yeses(&ctx);
+            }
             look(&ctx);
+            std::thread::sleep(LOOK);
         }
     });
+}
+
+/// The person's yeses, run by the runner itself: each yes on an ask not
+/// yet used runs that exact call once (`gp --json COMMAND ARGV`), in a
+/// thread of its own, and its ask records running, then landed, passed
+/// or failed with its last lines, which the page's card shows. No agent
+/// is needed between the YES and the run.
+fn run_yeses(ctx: &Arc<Ctx>) {
+    let home = ctx.paths.home.clone();
+    let now = gp_mcp::asks::now_ms();
+    for a in gp_mcp::asks::all(&home) {
+        if !gp_mcp::asks::is_yes(&a, now) {
+            continue;
+        }
+        let id = a["id"].as_str().unwrap_or("").to_owned();
+        let Some(a) = gp_mcp::asks::claim_for_runner(&home, &id) else {
+            continue;
+        };
+        let gp = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gp"));
+        let games = ctx.games.clone();
+        let home = home.clone();
+        std::thread::spawn(move || {
+            let mut args: Vec<String> = vec!["--json".into()];
+            args.extend(
+                a["command"]
+                    .as_str()
+                    .unwrap_or("")
+                    .split(' ')
+                    .map(str::to_owned),
+            );
+            args.extend(
+                a["argv"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|x| x.as_str().map(str::to_owned)),
+            );
+            let out = Command::new(&gp)
+                .args(&args)
+                .env("GP_HOME", &home)
+                .env("GP_GAMES_DIR", &games)
+                .env("GP_NO_HINTS", "1")
+                .stdin(Stdio::null())
+                .output();
+            let (state, lines) = match out {
+                Ok(o) => {
+                    let v: Value = serde_json::from_slice(&o.stdout).unwrap_or(Value::Null);
+                    let mut lines: Vec<String> = v["lines"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|l| l.as_str().map(str::to_owned))
+                        .collect();
+                    if lines.is_empty() {
+                        lines = String::from_utf8_lossy(&o.stderr)
+                            .lines()
+                            .chain(String::from_utf8_lossy(&o.stdout).lines())
+                            .filter(|l| !l.trim().is_empty())
+                            .map(str::to_owned)
+                            .collect();
+                    }
+                    let keep = lines.len().saturating_sub(6);
+                    let lines = lines.split_off(keep);
+                    let state = if !o.status.success() || v["verdict"] == json!("FAIL") {
+                        "failed"
+                    } else if v["landed"].is_string() {
+                        "landed"
+                    } else {
+                        "passed"
+                    };
+                    (state, lines)
+                }
+                Err(e) => ("failed", vec![format!("it couldn't start: {e}")]),
+            };
+            let _ = gp_mcp::asks::set_ran(&home, &id, state, &lines);
+        });
+    }
 }
 
 /// One look: start what the plan says, when the runner is on, an agent
@@ -292,8 +375,10 @@ pub(crate) fn spawn(setup: Setup, step: Value) -> std::thread::JoinHandle<()> {
 }
 
 /// The worker's worktree, made from main the first time.
-fn worktree(setup: &Setup, id: &str) -> anyhow::Result<(PathBuf, String)> {
-    let repo = &setup.repo;
+fn worktree(setup: &Setup, id: &str, row: bool) -> anyhow::Result<(PathBuf, String)> {
+    // A quest-log item's work is in the games checkout; any other step's
+    // in the repo the agent works on.
+    let repo = if row { &setup.games } else { &setup.repo };
     if !repo.join(".git").exists() {
         bail!(
             "{} isn't a git checkout, so there's nothing to make a worktree of (GP_AGENT_REPO names one)",
@@ -355,6 +440,20 @@ pub(crate) fn brief(setup: &Setup, step: &Value, wt: &Path, branch: &str, before
         "A change lands only through a gate: gp model gate for a game, gp tool gate for the tool. A landing waits for the person's yes on their page; ask and wait, never work around it.".to_owned(),
         "When the step is done, or you can't do it, stop with a short report: what you did, what you checked, and what is left.".to_owned(),
     ];
+    if let Some((game, row)) = row_of(step) {
+        b.push(String::new());
+        b.extend([
+            if step["repo"] == json!("tools") {
+                format!("The step is quest-log item {row} of {game}, and its work is in gameprinter itself: your worktree is of the gameprinter checkout. Land the change with gp tool gate --patch FILE -m MESSAGE.")
+            } else {
+                format!("The step is quest-log item {row} of {game}. Your worktree is of the games checkout: make the change there.")
+            },
+            format!("First: {gp} mechanic show {game} {row} (the item, its notes and talk). If {gp} mechanic busy says there's no session, start one with {gp} mechanic start {game} {row}."),
+            format!("At every step say where you are on the person's page: {gp} mechanic busy {game} {row} \"WHAT YOU ARE DOING. Next: WHAT COMES NEXT\"; put what you found with {gp} mechanic log {game} {row} \"...\"."),
+            format!("Land a change with git diff > a patch file and gp model gate {game} --patch FILE --message \"{game}: WHAT CHANGES. Expect: WHAT THE PERSON SEES. Checked: HOW\" --dry-run first; then the same without --dry-run puts a card on the page, and the loop runs it on the person's YES."),
+            format!("When the item is done: {gp} mechanic queue {game} {row} --status done --note \"WHAT LANDED\". When it needs the person: --status \"asking you\" with the question in --note."),
+        ]);
+    }
     if !before.is_empty() {
         b.push(String::new());
         b.push(before.to_owned());
@@ -387,6 +486,17 @@ pub(crate) fn brief(setup: &Setup, step: &Value, wt: &Path, branch: &str, before
         }
     }
     b.join("\n") + "\n"
+}
+
+/// The game and row of a quest-log item's step (it touches `row:GAME/ROW`).
+fn row_of(step: &Value) -> Option<(String, String)> {
+    step["touches"]
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .find_map(|t| t.strip_prefix("row:"))
+        .and_then(|r| r.split_once('/'))
+        .map(|(g, r)| (g.to_owned(), r.to_owned()))
 }
 
 /// The run and clip of a step whose command starts with `gp agent brief
@@ -499,7 +609,9 @@ fn last_line(log: &Path) -> Option<String> {
 fn work(setup: &Setup, flag: &AtomicBool, rec: &mut Value) -> anyhow::Result<()> {
     let step = rec["step"].clone();
     let id = step["id"].as_str().unwrap_or("").to_owned();
-    let (wt, branch) = worktree(setup, &id)?;
+    let row = row_of(&step);
+    let in_games = row.is_some() && step["repo"] != json!("tools");
+    let (wt, branch) = worktree(setup, &id, in_games)?;
     rec["worktree"] = json!(wt);
     rec["branch"] = json!(branch);
     let dir = files_dir(&setup.home, &id);

@@ -811,9 +811,9 @@ async function refreshAsks() {
   let list = [];
   try {
     const r = await fetch("/api/asks");
-    if (r.ok) list = ((await r.json()).asks ?? []).filter((a) => a.state === "open" || a.state === "yes");
+    if (r.ok) list = ((await r.json()).asks ?? []).filter((a) => a.state === "open" || a.state === "yes" || a.ran);
   } catch (e) { /* the next look */ }
-  const key = JSON.stringify(list.map((a) => [a.id, a.state]));
+  const key = JSON.stringify(list.map((a) => [a.id, a.state, a.ran?.state]));
   if (key === asksDrawn) return;
   asksDrawn = key;
   const box = $("asks");
@@ -821,7 +821,8 @@ async function refreshAsks() {
   box.hidden = list.length === 0;
   for (const a of list) {
     const card = el("div", "ask-card");
-    card.append(el("span", "ask-head", a.state === "yes" ? "YOU SAID YES" : "YOUR AGENT ASKS"));
+    const RAN = { running: "YOU SAID YES: THE LOOP IS RUNNING IT NOW", landed: "LANDED", passed: "DONE", failed: "IT FAILED" };
+    card.append(el("span", `ask-head${a.ran ? ` ask-ran-${a.ran.state}` : ""}`, a.ran ? RAN[a.ran.state] ?? "RUNNING" : a.state === "yes" ? "YOU SAID YES" : "YOUR AGENT ASKS"));
     // The question, naming this change: from the command's own message
     // (a gate's patch message: its game, then what changes, up to the
     // first stop), else the ask's sentence.
@@ -856,8 +857,10 @@ async function refreshAsks() {
         : "Raised outside the loop: no quest-log item, no step."));
     }
     card.append(el("span", "ask-detail", `gp ${a.command ?? ""}`));
-    if (a.state === "yes") {
-      card.append(el("span", "ask-detail", "Your agent can go ahead, once."));
+    if (a.ran) {
+      for (const l of a.ran.lines ?? []) card.append(el("span", "ask-detail", l));
+    } else if (a.state === "yes") {
+      card.append(el("span", "ask-detail", "The loop's runner runs it within a few seconds while it is on."));
     } else {
       for (const [word, val] of [["YES", "yes"], ["NO", "no"]]) {
         const b = el("button", `ask-${val}`, word);

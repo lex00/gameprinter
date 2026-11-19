@@ -137,3 +137,6 @@ form.comment .comment-text { flex: 1; min-width: 0; font: 13px var(--mono); back
 #steps li.srow-link { cursor: pointer; }
 #steps li.srow-link:hover { border-color: var(--muted); }
 #steps .srow { font: 12px var(--mono); color: var(--accent); }
+#asks .ask-ran-running { color: var(--accent); }
+#asks .ask-ran-landed, #asks .ask-ran-passed { color: var(--ok, #6c6); }
+#asks .ask-ran-failed { color: var(--rec); }

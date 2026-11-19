@@ -952,6 +952,22 @@ fn the_yes(
     let home = &config.home;
     let k = asks::key(path, &built.argv);
     let served = asks::page_served(home);
+    if let Some(v) = a.ask_id.as_deref().and_then(|id| asks::read(home, id))
+        && v["key"] == json!(k)
+        && v["ran"].is_object()
+    {
+        return Err(json!({
+            "refused": format!(
+                "the loop's runner ran this on the person's yes (ask {}), so it doesn't run again: it is {}. Its last lines: {}",
+                v["id"].as_str().unwrap_or(""),
+                v["ran"]["state"].as_str().unwrap_or("running"),
+                v["ran"]["lines"].as_array().map(|l| l.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" | ")).unwrap_or_default()
+            ),
+            "ran": v["ran"],
+            "ask_id": v["id"],
+            "rule": row.rule.name(),
+        }));
+    }
     let found = asks::find(home, a.ask_id.as_deref(), &k);
     // What a call that replaces data would change, from its plan, so the
     // card shows it and a yes holds only while the plan is the same.
@@ -1334,6 +1350,19 @@ pub fn run_in(
     let decision = policy::decide(&row, &given, &built.values);
     if let Some(r) = loop_check(config, &path, &decision, a.step.as_deref(), &row) {
         return Ok(Reply::refused(r));
+    }
+    if !path.starts_with("loop ")
+        && matches!(
+            decision,
+            Decision::Run { writes: true } | Decision::RunHeld | Decision::NeedsYes(_)
+        )
+        && let Some(why) = steps::no_runner_here(&config.home)
+    {
+        return Ok(Reply::refused(json!({
+            "refused": steps::no_runner_says(&why),
+            "needs": "runner",
+            "rule": row.rule.name(),
+        })));
     }
     match decision.clone() {
         Decision::Refused(why) => {

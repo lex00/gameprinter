@@ -263,6 +263,52 @@ pub fn mark_used(home: &Path, v: &Value) -> Result<(), String> {
     write(home, &v)
 }
 
+/// How long a call the runner ran on a yes still shows on the page.
+pub const RAN_SHOWS_MS: u64 = 15 * 60 * 1000;
+
+/// Takes a yes for the loop's runner to run itself: marks it used, with
+/// `ran` {state: "running", at_ms}, so the yes runs once and gp_run's
+/// later call with it finds what the runner did. None when it isn't a yes
+/// still to use, or puts a held change back (gp_run's own road).
+pub fn claim_for_runner(home: &Path, id: &str) -> Option<Value> {
+    let mut v = read(home, id)?;
+    if !is_yes(&v, now_ms()) || v.get("held").is_some_and(|h| !h.is_null()) {
+        return None;
+    }
+    let now = now_ms();
+    v["state"] = json!("used");
+    v["used_ms"] = json!(now);
+    v["ran"] = json!({"by": "runner", "state": "running", "at_ms": now});
+    write(home, &v).ok()?;
+    Some(v)
+}
+
+/// What the runner's run of a yes came to: `landed`, `passed` or
+/// `failed`, with its last lines.
+pub fn set_ran(home: &Path, id: &str, state: &str, lines: &[String]) -> Result<(), String> {
+    let mut v = read(home, id).ok_or_else(|| format!("there's no ask {id}"))?;
+    v["ran"]["state"] = json!(state);
+    v["ran"]["done_ms"] = json!(now_ms());
+    v["ran"]["lines"] = json!(lines);
+    write(home, &v)
+}
+
+/// The asks the page shows: [`pending`] and the yeses the runner ran in
+/// the last [`RAN_SHOWS_MS`].
+pub fn shown(home: &Path) -> Vec<Value> {
+    let now = now_ms();
+    all(home)
+        .into_iter()
+        .filter(|v| {
+            is_open(v, now)
+                || is_yes(v, now)
+                || v["ran"]["at_ms"]
+                    .as_u64()
+                    .is_some_and(|t| now.saturating_sub(t) < RAN_SHOWS_MS)
+        })
+        .collect()
+}
+
 /// Writes a new open ask and returns it.
 pub fn make(home: &Path, n: &New) -> Result<Value, String> {
     let made = now_ms();

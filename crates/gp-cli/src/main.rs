@@ -1958,6 +1958,23 @@ fn main() -> ExitCode {
     runrec::start(&name);
     // Which workflow and step the command is, on stderr (GP_NO_HINTS=1 hides it).
     hints::print(&name);
+    // The runner check (gp_mcp::steps::no_runner): a call from outside the
+    // loop while no runner goes is told so, loudly; a write is refused.
+    let first = name.split(' ').next().unwrap_or("");
+    if !matches!(
+        first,
+        "" | "loop" | "serve" | "mcp" | "tool" | "worker" | "help"
+    ) && let Ok(p) = gp_evidence::Paths::from_env()
+        && let Some(why) = gp_mcp::steps::no_runner_here(&p.home)
+    {
+        eprintln!("{}", gp_mcp::steps::no_runner_says(&why));
+        let read = gp_mcp::policy::row(&name)
+            .is_some_and(|r| matches!(r.rule, gp_mcp::policy::Rule::Read));
+        if !read {
+            eprintln!("gp {name} writes, so it doesn't run outside the loop.");
+            return ExitCode::from(3);
+        }
+    }
     // Every reader of a recording or an input log asks the sealed-run guard.
     if let Ok(p) = gp_evidence::Paths::from_env() {
         sealed::install(&p.home);

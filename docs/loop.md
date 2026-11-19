@@ -42,6 +42,7 @@ The home's loop settings are `$GP_HOME/loop.toml`, changed with `gp loop set` (w
 | `runner.on` | `--runner on\|off` | off | gp serve's runner starts workers |
 | `runner.max_workers` | `--max-workers N` | 2 | The most workers at once |
 | `runner.spending` | `--spending WORDS` | empty | A note on spending, shown on the page beside the runner |
+| `games` | `--games NAME,NAME` (`all` clears it) | every game | The games whose quest-log items the loop works on |
 
 `steps_required` is off by default because the tool gate publishes each landing at once to the gp every running agent uses: on by default, it would refuse the writes of agents already at work before the owner chose it. To turn it on, `gp loop set --steps-required on`; to turn it off, `gp loop set --steps-required off`.
 
@@ -88,6 +89,18 @@ Each worker's record is `$GP_HOME/work/loop/workers/ID.json`: its step, `state`,
 A live worker's step stays citable by its gp_run calls though the facts it was decided from change as it works (`gp_mcp::steps::held`). Its results go back through the gates, and the engine recomputes the steps from the files on the runner's next look, so a landing shows as new steps. STEPS on the screen page lists the workers under the open steps: each with its state, its step, why and its last line, and STOP (`POST /api/loop/workers/ID/stop`), which ends it and everything it started (its own process group). The runner's line says whether it is on, how many are at work of how many, and the spending note.
 
 A halt stops new starts; workers already running finish their step, but with `steps_required` on nothing they make lands or publishes until the halt clears.
+
+## Quest-log items are steps
+
+Each quest-log row of a game the loop works on (`games`) whose status is `next` or `agent working` is an open step of the agent's, after the engine's own, in the log's order: "Work on ROW: NOTE", touching `row:GAME/ROW` (and `tools` for a row marked `gp mechanic queue GAME ROW --repo tools`), running the item's own record commands (`mechanic show`, `start`, `busy`, `log`, `say`, `queue`, `probe`), `clip presses`, `corpus import` and `model gate`. Its id is a hash of the game, the row and its status, so a worker that ends with the row still open isn't started on it again until the row changes. The runner gives a row's worker a worktree of the games checkout (of gameprinter for a tools row), and its brief says to keep the row's status line (`gp mechanic busy`) and log up to date on the page, land through the gate, and mark the row done or asking you.
+
+## The runner runs a yes
+
+While the runner is on, a YES on a card runs that exact call at once: the runner takes the yes (the ask is marked used, with `ran` {state: running}), runs `gp --json COMMAND ARGV` with the home and the games checkout, and records landed, passed or failed with its last lines. The card shows each, for 15 minutes. A later gp_run with that ask's id is told what the runner did instead of running it again. A yes that puts a held change back stays gp_run's.
+
+## No runner, no writes
+
+gp serve's runner writes a heartbeat every look (`$GP_HOME/work/loop/runner.json`: its process, the time, whether a worker command is set). While no runner goes (no fresh heartbeat from a live gp serve, the runner off, or no worker command), every gp command run from outside the loop prints a banner saying so, and one that writes (anything but a read in the policy table) is refused with exit 3; gp_run refuses a write, a landing or a publish the same way. `gp loop`, `gp serve`, `gp mcp`, `gp tool` and `gp worker` are exempt, and so is a gp a gp started (serve's children, a gate's checks, gp_run's commands: an ancestor process is a gp), a worker (`GP_STEP`), CI, and a home in the temp folder (tests).
 
 ## What is left of #43
 

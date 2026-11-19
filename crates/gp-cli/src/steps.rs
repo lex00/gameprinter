@@ -131,6 +131,67 @@ pub(crate) fn listed(a: &Answer, s: &Step) -> Value {
     })
 }
 
+/// What a quest-log item's step may run: the item's own record, the
+/// checks and the gate its change lands through.
+const ROW_CLI: &str = "gp mechanic show GAME ROW, gp mechanic start GAME ROW, gp mechanic busy GAME ROW, gp mechanic log GAME ROW, gp mechanic say GAME ROW, gp mechanic queue GAME ROW, gp mechanic probe GAME, gp clip presses GAME, gp corpus import GAME, gp model gate GAME";
+
+/// The quest-log items that wait for work, as steps of the agent's: each
+/// game's rows that are next or being worked on, in the log's order, one
+/// step each, touching `row:GAME/ROW`. A step's id holds while the row's
+/// status does, so a worker that ends with its row still open isn't
+/// started again on it until the row changes.
+pub(crate) fn row_steps(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec<Value> {
+    let dir = crate::roms_cmd::games_dir(games);
+    let all = dir
+        .as_deref()
+        .map(crate::next::games_in)
+        .unwrap_or_default();
+    let only = gp_mcp::steps::settings(&paths.home).games;
+    let mut out = Vec::new();
+    for g in all.iter().filter(|g| only.is_empty() || only.contains(g)) {
+        let Ok(f) = crate::mechanic::session::queue_file(paths, g) else {
+            continue;
+        };
+        for r in crate::mechanic::session::read_queue(&f) {
+            let Some(row) = r["mechanic"].as_str() else {
+                continue;
+            };
+            let status = r["status"].as_str().unwrap_or("");
+            if !matches!(status, "next" | "agent working") {
+                continue;
+            }
+            let cli = ROW_CLI.replace("GAME", g).replace("ROW", row);
+            let note = r["note"].as_str().unwrap_or("");
+            let says = if note.is_empty() {
+                format!("Work on {row}.")
+            } else {
+                format!("Work on {row}: {}", crate::next::cut(note, 200))
+            };
+            // A row of the tool's work holds the tool too: one worker on
+            // gameprinter at a time.
+            let tools = r["repo"] == json!("tools");
+            let mut touches = vec![format!("row:{g}/{row}")];
+            if tools {
+                touches.push("tools".into());
+            }
+            let key = json!({"journey": "quest log", "game": g, "row": row, "status": status});
+            let h = blake3::hash(key.to_string().as_bytes()).to_hex();
+            out.push(json!({
+                "id": format!("s{}", &h[..12]),
+                "journey": "quest log",
+                "subject": g,
+                "who": "agent",
+                "says": says,
+                "commands": commands_of(&cli),
+                "touches": touches,
+                "how": {"cli": cli},
+                "repo": if tools { "tools" } else { "games" },
+            }));
+        }
+    }
+    out
+}
+
 /// Every answer the home has: each game's port and each of the person's
 /// copies.
 pub(crate) fn answers(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec<Answer> {
