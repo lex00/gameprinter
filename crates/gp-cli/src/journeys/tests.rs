@@ -248,7 +248,7 @@ fn a_picture_waiting_on_the_person_comes_first() {
     assert_eq!(a.next.who, Who::Person);
     assert!(a.next.says.contains("ACCEPT or REJECT"));
     assert_eq!(a.waits_for_yes[0].what, "picture");
-    assert_eq!(a.version, "next 2");
+    assert_eq!(a.version, "next 3");
 }
 
 fn mosshop(f: &str) -> String {

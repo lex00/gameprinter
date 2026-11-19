@@ -32,7 +32,7 @@ use serde_json::{Value, json};
 use crate::Outcome;
 
 /// The answer's version: a change to its shape or stages bumps it.
-pub(crate) const VERSION: &str = "next 2";
+pub(crate) const VERSION: &str = "next 3";
 /// The porting stages.
 const STAGES: u8 = 12;
 /// How old a question on REFINE is (seconds) before it earns a clue.
@@ -88,6 +88,20 @@ pub(crate) struct Step {
     pub how: How,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub act: Option<Act>,
+    /// The step's id: a hash of its command and the facts it was decided
+    /// from (crate::steps), the same while the facts are, which gp_run's
+    /// `step` cites (docs/loop.md).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    /// What it touches: `game:NAME`, `row:GAME/ROW`, `copy:JOURNEY/NAME`,
+    /// `tools` or `page`. Two steps that touch the same thing are not both
+    /// open.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub touches: Vec<String>,
+    /// The gp commands the step runs, by their path (`corpus import`),
+    /// read from its `how.cli`: the writes a call citing it may make.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<String>,
 }
 
 pub(crate) fn step(who: Who, says: impl Into<String>) -> Step {
@@ -96,6 +110,9 @@ pub(crate) fn step(who: Who, says: impl Into<String>) -> Step {
         says: says.into(),
         how: How::default(),
         act: None,
+        id: String::new(),
+        touches: Vec::new(),
+        commands: Vec::new(),
     }
 }
 
@@ -110,6 +127,12 @@ impl Step {
     }
     pub(crate) fn act(mut self, a: Act) -> Self {
         self.act = Some(a);
+        self
+    }
+    /// A thing the step touches (see [`Step::touches`]); without one, the
+    /// loop gives it its subject's (crate::steps).
+    pub(crate) fn touch(mut self, t: impl Into<String>) -> Self {
+        self.touches.push(t.into());
         self
     }
 }
@@ -309,6 +332,13 @@ pub(crate) struct Answer {
     pub stands: String,
     pub next: Step,
     pub also: Vec<Step>,
+    /// Every step that can run at once, `next` first, each with its id and
+    /// what it touches; no two touch the same thing (crate::steps). Empty
+    /// while the loop is halted.
+    pub open: Vec<Step>,
+    /// Why the loop is halted: a step the person marked wrong, with their
+    /// words (crate::steps). Null while it runs.
+    pub halted: Option<Value>,
     pub running: Vec<Running>,
     pub waits_for_yes: Vec<Yes>,
     pub clue: Option<Clue>,
@@ -838,10 +868,16 @@ pub(crate) fn answer(f: &Facts) -> Answer {
                 format!("Your agent waits for your yes: {says} Press YES or NO on the card."),
             )
         } else {
-            step(
+            let s = step(
                 Who::Agent,
                 format!("You said yes, so your agent can go ahead: {says}"),
-            )
+            );
+            // The call the yes is for is the step's command, so a call
+            // citing the step may make it.
+            match a["command"].as_str() {
+                Some(c) => s.cli(format!("gp {c}")),
+                None => s,
+            }
         });
     }
     // 2b. A picture the agent proposes for the person's theme: the oldest
@@ -931,7 +967,8 @@ pub(crate) fn answer(f: &Facts) -> Answer {
             )
             .cli(format!(
                 "gp mechanic show {g} {first}, then gp mechanic say {g} {first} WORDS"
-            )),
+            ))
+            .touch(format!("row:{g}/{first}")),
         );
     }
     // 3c. What the person told the agent about a clip, not answered.
@@ -954,7 +991,8 @@ pub(crate) fn answer(f: &Facts) -> Answer {
             )
             .cli(format!(
                 "gp agent tells --run {g} --open, then gp agent note --run {g} --clip {clip} --reply-to {id} WORDS"
-            )),
+            ))
+            .touch(format!("tells:{g}")),
         );
     }
     // 4. Free work for the tools that isn't running.
@@ -1022,7 +1060,8 @@ pub(crate) fn answer(f: &Facts) -> Answer {
                         Who::Agent,
                         format!("Your agent can read the game's code behind {w}, the clip that goes wrong first. You can watch on REFINE."),
                     )
-                    .page("REFINE"),
+                    .page("REFINE")
+                    .cli(format!("gp model gate {g} --patch FILE -m MSG, with the fix made in a worktree of the games repo")),
                 );
             }
         }
@@ -1087,6 +1126,35 @@ pub(crate) fn answer(f: &Facts) -> Answer {
     // Never two steps alike.
     let mut seen = BTreeSet::new();
     steps.retain(|s| seen.insert(s.says.clone()));
+    let s = f.scores.clone().unwrap_or_default();
+    let facts = json!({
+        "title": f.title,
+        "rom_found": f.rom_found,
+        "player_mapped": f.player_mapped,
+        "rows": f.rows.len(),
+        "rows_done": f.rows.iter().filter(|r| r.done).count(),
+        "needs_you": you.iter().map(|r| r.mechanic.clone()).collect::<Vec<_>>(),
+        "handoffs": f.handoffs,
+        "tells": f.tells.iter().map(|t| json!({"id": t.0, "clip": t.1})).collect::<Vec<_>>(),
+        "asked": f.asked.iter().map(|a| a.0.clone()).collect::<Vec<_>>(),
+        "session_clips": f.session_clips,
+        "corpus_clips": f.corpus_clips,
+        "not_kept": f.not_kept,
+        "scores": f.scores.as_ref().map(|_| json!({
+            "clips": s.clips, "exact": s.exact, "to_score": s.to_score,
+            "stale": s.stale, "first_wrong": s.first_wrong,
+            "fidelity_permille": s.fidelity_permille})),
+        "questions": f.questions.len(),
+        "whole": match &f.whole {
+            Whole::NotMeasured => json!("not measured"),
+            Whole::Stale => json!("on an older model"),
+            Whole::Parts { together, of, level } => json!({"together": together, "of": of, "level": level}),
+            Whole::Same => json!("the same"),
+        },
+        "published": f.published,
+        "background": {"on": f.background.on, "jobs": f.background.jobs.len()},
+    });
+    let open = crate::steps::settle("port", f.game.as_deref(), &facts, &mut steps);
     let next = steps.remove(0);
     // The others, the person's first when the next isn't theirs.
     let mut also: Vec<Step> = Vec::new();
@@ -1098,7 +1166,6 @@ pub(crate) fn answer(f: &Facts) -> Answer {
     also.truncate(ALSO);
 
     let clue = clue(f, n, &next);
-    let s = f.scores.clone().unwrap_or_default();
     Answer {
         version: VERSION,
         journey: "port",
@@ -1112,6 +1179,8 @@ pub(crate) fn answer(f: &Facts) -> Answer {
         stands: stands(f, n),
         next,
         also,
+        open,
+        halted: None,
         running,
         waits_for_yes: waits,
         clue,
@@ -1119,33 +1188,7 @@ pub(crate) fn answer(f: &Facts) -> Answer {
         page_changes: f.page_changes,
         steps: Vec::new(),
         copies: Vec::new(),
-        facts: json!({
-            "title": f.title,
-            "rom_found": f.rom_found,
-            "player_mapped": f.player_mapped,
-            "rows": f.rows.len(),
-            "rows_done": f.rows.iter().filter(|r| r.done).count(),
-            "needs_you": you.iter().map(|r| r.mechanic.clone()).collect::<Vec<_>>(),
-            "handoffs": f.handoffs,
-            "tells": f.tells.iter().map(|t| json!({"id": t.0, "clip": t.1})).collect::<Vec<_>>(),
-            "asked": f.asked.iter().map(|a| a.0.clone()).collect::<Vec<_>>(),
-            "session_clips": f.session_clips,
-            "corpus_clips": f.corpus_clips,
-            "not_kept": f.not_kept,
-            "scores": f.scores.as_ref().map(|_| json!({
-                "clips": s.clips, "exact": s.exact, "to_score": s.to_score,
-                "stale": s.stale, "first_wrong": s.first_wrong,
-                "fidelity_permille": s.fidelity_permille})),
-            "questions": f.questions.len(),
-            "whole": match &f.whole {
-                Whole::NotMeasured => json!("not measured"),
-                Whole::Stale => json!("on an older model"),
-                Whole::Parts { together, of, level } => json!({"together": together, "of": of, "level": level}),
-                Whole::Same => json!("the same"),
-            },
-            "published": f.published,
-            "background": {"on": f.background.on, "jobs": f.background.jobs.len()},
-        }),
+        facts,
     }
 }
 
@@ -1385,7 +1428,7 @@ pub(crate) fn json_of(a: &Answer) -> Value {
 
 /// The games of the games checkout: folders holding package.toml or
 /// model.toml.
-fn games_in(dir: &Path) -> Vec<String> {
+pub(crate) fn games_in(dir: &Path) -> Vec<String> {
     let mut out: Vec<String> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()

@@ -22,7 +22,7 @@ The code is `crates/gp-cli/src/progress.rs` (the ladder, from its facts alone, s
 
 It reads files and records only: the game's folder, the quest log and its sessions, the gate's scores (`$GP_HOME/work/refine/GAME/status.json`) or gp serve's background scores, the last `--measure`, and a published record (`$GP_HOME/work/published/GAME.json`, with its `link`; nothing writes it yet). It runs no score, ROM or build, so it answers in well under a second and a new conversation gets the same answer. It suggests and never starts work. Without `--template` it takes the game whose page was opened last, or the only game; with no game at all it reads the ROM folder and asks which file to bring over.
 
-The answer (`version` "next 2"; 2 added `steps` and `copies`):
+The answer (`version` "next 3"; 2 added `steps` and `copies`, 3 added `open`, `halted` and each step's `id`, `touches` and `commands`):
 
 | Field | What |
 |---|---|
@@ -30,6 +30,8 @@ The answer (`version` "next 2"; 2 added `steps` and `copies`):
 | `stands` | Where the work stands, in a sentence or two of plain words |
 | `next` | The one next step: `who` (`tools`, free and unattended, which the agent starts without asking; `agent`; or `person`), `says`, `how` (the page's button, the command) and `act` (what the page's button does) |
 | `also` | Up to two other steps, the person's first when `next` isn't theirs |
+| `open` | Every step that can run at once, `next` first: no two touch the same thing. Each step, here and in `next` and `also`, has an `id` (a hash of its command and the facts it was decided from), `touches` (`game:NAME`, `row:GAME/ROW`, `copy:JOURNEY/NAME`, `page`) and `commands` (the gp commands its `how.cli` runs). gp_run's `step` cites the id ([loop.md](loop.md)) |
+| `halted` | Null while the loop runs ([loop.md](loop.md)) |
 | `running` | What the background is doing and when to look again |
 | `waits_for_yes` | Steps that cost money or make something public (putting the game online), which wait for the person's own yes; and a picture the agent proposes for the person's theme (`what: "picture"`), open or answered and not yet read by the agent ([sprite-editing.md](sprite-editing.md#a-picture-of-your-own-theme)) |
 | `clue` | A clue when the person seems lost, or null |

@@ -1255,6 +1255,27 @@ pub(crate) fn answer(facts: &Facts, ar: &Around) -> Answer {
     first.append(&mut steps);
     let mut seen = std::collections::BTreeSet::new();
     first.retain(|s| seen.insert(s.says.clone()));
+    let facts_v = match facts {
+        Facts::Theme(f) => json!({
+            "dir": f.dir, "title": f.title, "from": f.from, "style": f.style,
+            "pictures": f.pictures, "to_draw": f.to_draw,
+            "check": f.check.as_ref().map(|c| json!({"at_ms": c.at_ms, "problems": c.problems,
+                "warnings": c.warnings, "first": c.first, "current": c.at_ms >= f.changed_ms})),
+            "played_ms": f.played_ms, "steps_done": f.done, "rom": f.rom,
+            "package": f.package, "game_package": f.game_package,
+            "share": share(f),
+        }),
+        Facts::New(f) => json!({
+            "dir": f.dir, "from": f.from, "assets": f.assets, "built_ms": f.built_ms,
+            "built_current": f.built_ms.is_some_and(|b| b >= f.changed_ms),
+            "edits": f.edits,
+            "verify": f.verify.as_ref().map(|(at, ok, said)| json!({"at_ms": at, "ok": ok, "said": said,
+                "current": *at >= f.edited_ms})),
+            "no_check": f.no_check,
+            "steps_done": f.done, "themes": f.themes,
+        }),
+    };
+    let open = crate::steps::settle(journey, Some(&subject), &facts_v, &mut first);
     let next = first.remove(0);
     let mut also: Vec<Step> = Vec::new();
     if next.who != Who::Person {
@@ -1279,26 +1300,6 @@ pub(crate) fn answer(facts: &Facts, ar: &Around) -> Answer {
             look_again_s: 30,
         }))
         .collect();
-    let facts = match facts {
-        Facts::Theme(f) => json!({
-            "dir": f.dir, "title": f.title, "from": f.from, "style": f.style,
-            "pictures": f.pictures, "to_draw": f.to_draw,
-            "check": f.check.as_ref().map(|c| json!({"at_ms": c.at_ms, "problems": c.problems,
-                "warnings": c.warnings, "first": c.first, "current": c.at_ms >= f.changed_ms})),
-            "played_ms": f.played_ms, "steps_done": f.done, "rom": f.rom,
-            "package": f.package, "game_package": f.game_package,
-            "share": share(f),
-        }),
-        Facts::New(f) => json!({
-            "dir": f.dir, "from": f.from, "assets": f.assets, "built_ms": f.built_ms,
-            "built_current": f.built_ms.is_some_and(|b| b >= f.changed_ms),
-            "edits": f.edits,
-            "verify": f.verify.as_ref().map(|(at, ok, said)| json!({"at_ms": at, "ok": ok, "said": said,
-                "current": *at >= f.edited_ms})),
-            "no_check": f.no_check,
-            "steps_done": f.done, "themes": f.themes,
-        }),
-    };
     Answer {
         version: VERSION,
         journey,
@@ -1312,12 +1313,14 @@ pub(crate) fn answer(facts: &Facts, ar: &Around) -> Answer {
         stands,
         next,
         also,
+        open,
+        halted: None,
         running,
         waits_for_yes: waits,
         clue: None,
         changes: 0,
         page_changes: 0,
-        facts,
+        facts: facts_v,
         steps: steps_of(list, prefix, n),
         copies: Vec::new(),
     }

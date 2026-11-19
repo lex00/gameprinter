@@ -632,6 +632,7 @@ pub const TABLE: &[Row] = &[
     r("watch rerun", S, Write),
     r("watch start", S, Write),
     r("worker env", D, Read),
+    r("loop steps", S, Read),
 ];
 
 /// The commands known to run longer than gp_run's usual limit

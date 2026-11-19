@@ -50,7 +50,7 @@ const LAB_CODE: &[&str] = &["code", "cycles", "element", "reach"];
 
 /// Lab commands of gp serve's clip agents (game-printer's gp agent), on a
 /// line of their own as the waves' are.
-const LAB_AGENTS: &[&str] = &["agent"];
+const LAB_AGENTS: &[&str] = &["agent", "loop"];
 
 /// Lab commands of derivation and validation (wave 5 of the port), on a
 /// line of their own as the other waves' are.

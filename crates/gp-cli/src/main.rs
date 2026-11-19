@@ -89,6 +89,7 @@ mod level_picture;
 mod localize;
 mod localize_z80;
 mod lockstep;
+mod loop_cmd;
 mod mcp;
 mod mechanic;
 mod mechanics;
@@ -165,6 +166,7 @@ mod sound_ay;
 mod sound_ay_render;
 mod sprites;
 mod static_grade;
+mod steps;
 mod store;
 mod sweep;
 mod tape;
@@ -531,6 +533,12 @@ enum Cmd {
     Template {
         #[command(subcommand)]
         cmd: TemplateCmd,
+    },
+    /// The loop's steps: the open steps of every game and copy, with the
+    /// ids gp_run's `step` cites (docs/loop.md).
+    Loop {
+        #[command(subcommand)]
+        cmd: loop_cmd::LoopCmd,
     },
     /// A worker's setup on a shared machine.
     Worker {
@@ -1471,6 +1479,7 @@ fn dispatch(cmd: &Cmd) -> Result<Outcome> {
             ),
         },
         Cmd::Worker { cmd } => worker::run(cmd, &gp_evidence::Paths::from_env()?),
+        Cmd::Loop { cmd } => loop_cmd::run(cmd, &gp_evidence::Paths::from_env()?),
         Cmd::Tool {
             cmd: ToolCmd::Gate(a),
         } => tool_gate::run(a, &gp_evidence::Paths::from_env()?),

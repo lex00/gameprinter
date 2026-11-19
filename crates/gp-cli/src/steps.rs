@@ -1,0 +1,241 @@
+//! The loop's steps (docs/loop.md, issue #43): every step `next` emits
+//! gets a stable id, what it touches and the gp commands it runs, and the
+//! steps that can run at once are all open, no two touching the same
+//! thing. gp_run checks a write against them (gp_mcp::steps), and gp
+//! serve's runner starts a worker on each open step of the agent's.
+//!
+//! An id is a hash of the step's subject, who does it, its command (its
+//! words when it has none), what it touches and the facts the answer was
+//! decided from, less the background's live counts, which differ between
+//! the page's server and a terminal. So it stays the same while the facts
+//! do, from the CLI, the MCP tool and the page alike, and a step decided
+//! from facts that have changed since is a new one.
+
+use std::collections::BTreeSet;
+use std::path::Path;
+
+use clap::CommandFactory;
+use serde_json::{Value, json};
+
+use crate::next::{Act, Answer, Step, Who};
+
+/// The id of one step decided from `facts`.
+pub(crate) fn id_of(journey: &str, subject: Option<&str>, s: &Step, facts: &Value) -> String {
+    let mut facts = facts.clone();
+    if let Some(o) = facts.as_object_mut() {
+        o.remove("background");
+    }
+    let what = match &s.how.cli {
+        Some(c) => json!({"cli": c}),
+        None => json!({"says": s.says}),
+    };
+    let key = json!({
+        "journey": journey,
+        "subject": subject,
+        "who": s.who,
+        "what": what,
+        "touches": s.touches,
+        "facts": facts,
+    });
+    let h = blake3::hash(key.to_string().as_bytes()).to_hex();
+    format!("s{}", &h[..12])
+}
+
+/// The gp commands a step's command line runs: each `gp` in it followed
+/// by the longest path of words that is one of gp's commands with no
+/// subcommands of its own. "gp mechanic show GAME ROW, then gp mechanic
+/// say ..." runs `mechanic show` and `mechanic say`.
+pub(crate) fn commands_of(cli: &str) -> Vec<String> {
+    let root = crate::Cli::command();
+    let words: Vec<&str> = cli
+        .split_whitespace()
+        .map(|w| w.trim_end_matches([',', '.', ';', ':']))
+        .collect();
+    let mut out: Vec<String> = Vec::new();
+    for (i, w) in words.iter().enumerate() {
+        if *w != "gp" {
+            continue;
+        }
+        let mut at = &root;
+        let mut path: Vec<&str> = Vec::new();
+        for x in &words[i + 1..] {
+            match at.find_subcommand(x) {
+                Some(c) if c.get_name() != "help" => {
+                    at = c;
+                    path.push(x);
+                }
+                _ => break,
+            }
+        }
+        let leaf = at.get_subcommands().all(|c| c.get_name() == "help");
+        if !path.is_empty() && leaf {
+            let p = path.join(" ");
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// What a step touches when it names nothing itself: the row a person
+/// plays, the page for the person's other steps, and the subject for
+/// the agent's and the tools' (a game's folder, or one of the person's
+/// copies).
+fn default_touches(journey: &str, subject: Option<&str>, s: &Step) -> Vec<String> {
+    match (s.who, &s.act, subject) {
+        (Who::Person, Some(Act::PlayFrom { row }), Some(g)) => vec![format!("row:{g}/{row}")],
+        (Who::Person, _, _) => vec!["page".into()],
+        (_, _, Some(g)) if journey == "port" => vec![format!("game:{g}")],
+        (_, _, Some(c)) => vec![format!("copy:{journey}/{c}")],
+        (_, _, None) => vec!["home".into()],
+    }
+}
+
+/// Fills in each candidate's touches, commands and id, in the order the
+/// rules put them, and returns the open ones: the first, then each that
+/// touches nothing an earlier open one does.
+pub(crate) fn settle(
+    journey: &str,
+    subject: Option<&str>,
+    facts: &Value,
+    steps: &mut [Step],
+) -> Vec<Step> {
+    let mut taken: BTreeSet<String> = BTreeSet::new();
+    let mut open = Vec::new();
+    for s in steps.iter_mut() {
+        if s.touches.is_empty() {
+            s.touches = default_touches(journey, subject, s);
+        }
+        s.commands = s.how.cli.as_deref().map(commands_of).unwrap_or_default();
+        s.id = id_of(journey, subject, s, facts);
+        if s.touches.iter().all(|t| !taken.contains(t)) {
+            taken.extend(s.touches.iter().cloned());
+            open.push(s.clone());
+        }
+    }
+    open
+}
+
+/// One open step as `gp loop steps` lists it, with the answer it is from.
+pub(crate) fn listed(a: &Answer, s: &Step) -> Value {
+    json!({
+        "id": s.id,
+        "journey": a.journey,
+        "subject": a.subject,
+        "who": s.who,
+        "says": s.says,
+        "commands": s.commands,
+        "touches": s.touches,
+        "how": s.how,
+    })
+}
+
+/// Every answer the home has: each game's port and each of the person's
+/// copies.
+pub(crate) fn answers(paths: &gp_evidence::Paths, games: Option<&Path>) -> Vec<Answer> {
+    let mut out = Vec::new();
+    let dir = crate::roms_cmd::games_dir(games);
+    let all = dir
+        .as_deref()
+        .map(crate::next::games_in)
+        .unwrap_or_default();
+    for g in &all {
+        if let Ok(f) = crate::next::gather(paths, games, Some(g), None) {
+            out.push(crate::next::answer(&f));
+        }
+    }
+    if all.is_empty()
+        && let Ok(f) = crate::next::gather(paths, games, None, None)
+    {
+        out.push(crate::next::answer(&f));
+    }
+    use crate::journeys as j;
+    let copies = j::list(&paths.home, games);
+    for c in &copies {
+        out.push(j::answer(
+            &j::gather(paths, &copies, c),
+            &j::around(&paths.home, c),
+        ));
+    }
+    out
+}
+
+/// The open steps of every answer, no two touching the same thing: an
+/// answer's steps that touch something an earlier answer's open step
+/// does (the page, a card of every game) are left for later.
+pub(crate) fn open_of(answers: &[Answer]) -> Vec<Value> {
+    let mut taken: BTreeSet<String> = BTreeSet::new();
+    let mut out = Vec::new();
+    for a in answers {
+        for s in &a.open {
+            if s.touches.iter().all(|t| !taken.contains(t)) {
+                taken.extend(s.touches.iter().cloned());
+                out.push(listed(a, s));
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::next::step;
+
+    #[test]
+    fn a_command_line_names_the_commands_it_runs() {
+        assert_eq!(
+            commands_of("gp mechanic show g row, then gp mechanic say g row WORDS"),
+            ["mechanic show", "mechanic say"]
+        );
+        assert_eq!(commands_of("gp corpus import g --write"), ["corpus import"]);
+        assert_eq!(
+            commands_of("gp progress --template g --run g --measure"),
+            ["progress"]
+        );
+        // A group alone, or no gp at all, runs nothing.
+        assert!(commands_of("gp mechanic").is_empty());
+        assert!(commands_of("LET THE TOOLS TRY").is_empty());
+    }
+
+    #[test]
+    fn the_id_holds_while_the_facts_do_and_the_background_is_left_out() {
+        let s = step(Who::Agent, "Add the clips.").cli("gp corpus import g --write");
+        let f1 = json!({"not_kept": ["a 1"], "background": {"on": true, "jobs": 3}});
+        let f2 = json!({"not_kept": ["a 1"], "background": {"on": false, "jobs": 0}});
+        let f3 = json!({"not_kept": ["a 1", "a 2"], "background": {"on": false, "jobs": 0}});
+        let id = id_of("port", Some("g"), &s, &f1);
+        assert!(id.starts_with('s') && id.len() == 13, "{id}");
+        assert_eq!(id, id_of("port", Some("g"), &s, &f2));
+        assert_ne!(id, id_of("port", Some("g"), &s, &f3));
+        assert_ne!(id, id_of("port", Some("h"), &s, &f1));
+    }
+
+    #[test]
+    fn two_steps_that_touch_the_same_thing_are_not_both_open() {
+        let mut steps = vec![
+            step(Who::Agent, "Add the clips.").cli("gp corpus import g --write"),
+            step(Who::Tools, "Score them."),
+            step(Who::Agent, "Answer the hand-off.").touch("row:g/jump"),
+            step(Who::Person, "Play the jump.").act(Act::PlayFrom { row: "jump".into() }),
+            step(Who::Person, "Press YES on the card."),
+        ];
+        let open = settle("port", Some("g"), &json!({}), &mut steps);
+        let says: Vec<&str> = open.iter().map(|s| s.says.as_str()).collect();
+        // The tools' step touches the game's folder as the first does.
+        assert_eq!(
+            says,
+            [
+                "Add the clips.",
+                "Answer the hand-off.",
+                "Press YES on the card."
+            ]
+        );
+        assert_eq!(open[0].touches, ["game:g"]);
+        assert_eq!(open[0].commands, ["corpus import"]);
+        assert!(steps.iter().all(|s| !s.id.is_empty()));
+        let ids: BTreeSet<&str> = steps.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids.len(), steps.len(), "every step has its own id");
+    }
+}
