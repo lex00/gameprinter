@@ -723,15 +723,19 @@ fn stands(f: &Facts, n: u8) -> String {
 /// The person's play for a row that needs them.
 fn play_step(f: &Facts, r: &Row) -> Step {
     let q = r.you.clone().unwrap_or_default();
-    let mut says = format!("Press PLAY FROM HERE on {}.", r.mechanic);
+    let mut says = format!(
+        "Click {} in the quest log, then press RECORD over THE ORIGINAL.",
+        r.mechanic
+    );
     if !q.todo.is_empty() {
         says.push_str(&format!(" {}", sentence(&q.todo)));
     }
     if !q.stop.is_empty() {
         says.push_str(&format!(" Stop: {}", sentence(&q.stop)));
     }
+    says.push_str(" RECORD again sends it.");
     step(Who::Person, says)
-        .page(format!("PLAY FROM HERE on {}", r.mechanic))
+        .page(format!("{} in the quest log, then RECORD", r.mechanic))
         .cli(format!("gp mechanic start {} {}", f.game(), r.mechanic))
         .act(Act::PlayFrom {
             row: r.mechanic.clone(),
@@ -741,13 +745,9 @@ fn play_step(f: &Facts, r: &Row) -> Step {
 /// The tools' quest-log step: free, so the page's LET THE TOOLS TRY starts
 /// it (serve/jobs.rs, `triage`) and the agent may start it unasked.
 fn triage_step(g: &str, what: &str) -> Step {
-    step(
-        Who::Tools,
-        format!("{what} Press LET THE TOOLS TRY, or your agent can start it."),
-    )
-    .page("LET THE TOOLS TRY on the status line")
-    .cli(format!("gp mechanic triage {g}"))
-    .act(Act::Start { action: "triage" })
+    step(Who::Tools, format!("{what} Your agent can start it."))
+        .cli(format!("gp mechanic triage {g}"))
+        .act(Act::Start { action: "triage" })
 }
 
 /// Words as a sentence: a capital first and a stop at the end.
@@ -772,11 +772,11 @@ fn person_answers(f: &Facts) -> Vec<Step> {
             step(
                 Who::Person,
                 format!(
-                    "Your agent asked about {row}: \"{}\" Answer it on CLIPS, over the game.",
+                    "Your agent asked about {row}: \"{}\" Click {row} in the quest log and answer in the box under it (SEND).",
                     cut(words, 140)
                 ),
             )
-            .page(format!("CLIPS, the open row {row}"))
+            .page(format!("{row} in the quest log, then SEND"))
             .act(Act::Tab { tab: "clips" }),
         );
     }
@@ -1041,11 +1041,11 @@ pub(crate) fn answer(f: &Facts) -> Answer {
                 step(
                     Who::Tools,
                     format!(
-                        "{} can be scored on the model as it stands. Press START THE WORK on REFINE and the tools score them.",
+                        "{} can be scored on the model as it stands. Your agent can start the tools on them.",
                         n_of(k, "clip", "clips")
                     ),
                 )
-                .page("START THE WORK on REFINE")
+                .cli(format!("gp corpus score {g} --run {g}"))
                 .act(Act::Tab { tab: "refine" }),
             );
         }
@@ -1255,17 +1255,17 @@ fn clue(f: &Facts, n: u8, next: &Step) -> Option<Clue> {
                         "idle",
                         if again {
                             format!(
-                                "If {} is hard to play, press HAND TO THE AGENT on it and your agent will look for another way, or pick another row.",
+                                "If {} is hard to play, say so in the box under the quest log (SEND) and your agent will look for another way, or pick another row.",
                                 r.mechanic
                             )
                         } else if p.shown % 2 == 1 {
                             format!(
-                                "{} still needs a bit of play. PLAY FROM HERE starts you at the spot and records; R stops.",
+                                "{} still needs a bit of play. Click it in the quest log and press R to record; R again sends it.",
                                 r.mechanic
                             )
                         } else {
                             format!(
-                                "One bit of play would help: {}. PLAY FROM HERE puts you at the spot.",
+                                "One bit of play would help: {}. Click it in the quest log, then RECORD.",
                                 r.mechanic
                             )
                         },
@@ -1285,7 +1285,7 @@ fn clue(f: &Facts, n: u8, next: &Step) -> Option<Clue> {
                     "drops",
                     if again {
                         format!(
-                            "{row} is a hard one to get. Press HAND TO THE AGENT on it and your agent will look for another way."
+                            "{row} is a hard one to get. Say so in the box under the quest log (SEND) and your agent will look for another way."
                         )
                     } else {
                         match stop {
@@ -1306,7 +1306,7 @@ fn clue(f: &Facts, n: u8, next: &Step) -> Option<Clue> {
                     return mk(
                         "away",
                         format!(
-                            "Your agent asked about {row}: \"{}\" It's on CLIPS, over the game.",
+                            "Your agent asked about {row}: \"{}\" Answer it in the box under the quest log (SEND).",
                             cut(words, 100)
                         ),
                     );
@@ -1330,7 +1330,7 @@ fn clue(f: &Facts, n: u8, next: &Step) -> Option<Clue> {
     if f.background.page_open && !f.background.on && n == 6 {
         return mk(
             "paused",
-            "The tools are paused since the page started. Press START THE WORK on REFINE and they'll score your clips while you play.".into(),
+            "The tools are paused since the page started. Ask your agent to start them and they'll score your clips while you play.".into(),
         );
     }
     if let Some(note) = f.notes.last() {
@@ -1790,9 +1790,15 @@ pub(crate) fn gather(
         if m.starts_with("sealed") || r["status"] == json!("done") {
             continue;
         }
+        let waits = r["status"] == json!("asking you");
         match last_turn(&mdirs.join(m)) {
             Some((by, _)) if by == "player" => f.handoffs.push(m.to_owned()),
-            Some((by, text)) if by == "agent" => f.asked.push((m.to_owned(), text)),
+            // The agent's last turn asks the person only when the row waits
+            // on them or the turn is a question: a report has nothing to
+            // answer.
+            Some((by, text)) if by == "agent" && (waits || text.trim_end().ends_with('?')) => {
+                f.asked.push((m.to_owned(), text))
+            }
             _ => {}
         }
     }

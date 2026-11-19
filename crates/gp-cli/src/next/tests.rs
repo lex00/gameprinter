@@ -368,7 +368,9 @@ fn p6_scores_from_an_older_model_or_none() {
     assert_eq!(a.stage.n, 6);
     assert_eq!(a.next.who, Who::Tools);
     assert!(
-        a.next.says.contains("Press START THE WORK on REFINE"),
+        a.next
+            .says
+            .contains("Your agent can start the tools on them"),
         "{}",
         a.next.says
     );
@@ -427,7 +429,7 @@ fn p7_and_p8_some_clips_differ() {
     assert_eq!(a.also[0].who, Who::Person);
     assert_eq!(
         a.also[0].says,
-        "Press PLAY FROM HERE on die. Lose a life at the far end. Stop: The next life starts."
+        "Click die in the quest log, then press RECORD over THE ORIGINAL. Lose a life at the far end. Stop: The next life starts. RECORD again sends it."
     );
     assert_eq!(a.also[0].act, Some(Act::PlayFrom { row: "die".into() }));
 }
@@ -493,13 +495,34 @@ fn a_hand_off_and_a_question_from_the_agent() {
     assert_eq!(a.next.who, Who::Person);
     assert_eq!(
         a.next.says,
-        "Your agent asked about jump: \"Does the jump go higher when you hold A?\" Answer it on CLIPS, over the game."
+        "Your agent asked about jump: \"Does the jump go higher when you hold A?\" Click jump in the quest log and answer in the box under it (SEND)."
     );
     assert_eq!(a.also[0].who, Who::Agent);
     assert_eq!(
         a.also[0].says,
         "Your agent can answer your hand-off on walk. If it hasn't yet, tell it you handed it over."
     );
+}
+
+#[test]
+fn an_agent_report_asks_the_person_nothing() {
+    let fx = Fx::new();
+    fx.game("t", &["t.walk.001"]);
+    fx.gate("t", &["t.walk.001"], 0, false);
+    fx.queue(
+        "t",
+        json!([{"mechanic": "jump", "status": "agent working"}]),
+    );
+    write(
+        &fx.home().join("mechanics/t/jump/talk.ndjson"),
+        "{\"by\":\"agent\",\"text\":\"The jump's height is fixed; the patch is on its card.\",\"n\":1}\n",
+    );
+    let f = fx.facts(Some("t"));
+    assert!(f.asked.is_empty(), "{:?}", f.asked);
+    let a = answer(&f);
+    let asks = |s: &Step| s.says.starts_with("Your agent asked");
+    assert!(!asks(&a.next), "{}", a.next.says);
+    assert!(!a.also.iter().any(asks));
 }
 
 #[test]
@@ -520,10 +543,16 @@ fn clues_from_the_page_and_the_files() {
     f.page = Some(sig("idle", 0));
     assert_eq!(
         answer(&f).clue.unwrap().says,
-        "One bit of play would help: die. PLAY FROM HERE puts you at the spot."
+        "One bit of play would help: die. Click it in the quest log, then RECORD."
     );
     f.page = Some(sig("idle", 3));
-    assert!(answer(&f).clue.unwrap().says.contains("HAND TO THE AGENT"));
+    assert!(
+        answer(&f)
+            .clue
+            .unwrap()
+            .says
+            .contains("box under the quest log (SEND)")
+    );
     f.page = Some(sig("drops", 0));
     assert_eq!(
         answer(&f).clue.unwrap().says,
