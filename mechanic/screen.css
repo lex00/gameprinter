@@ -170,3 +170,11 @@ form.comment .comment-text { flex: 1; min-width: 0; font: 13px var(--mono); back
 #asks .ask-ran-running { color: var(--accent); }
 #asks .ask-ran-landed, #asks .ask-ran-passed { color: var(--ok, #6c6); }
 #asks .ask-ran-failed { color: var(--rec); }
+/* The screens stay at the top: NOW and YOUR TURN sit under them, in the
+   page's flow, not pinned over it. */
+#your-turn { position: static; width: min(1200px, 100%); max-height: none; overflow: visible; box-shadow: none; margin: 6px auto; box-sizing: border-box; }
+/* Finished rows are archived: DONE stays folded until it is opened. */
+#queue .qgroup-done { cursor: pointer; }
+#queue .qgroup-done::after { content: " (click to show)"; color: var(--muted); font-weight: normal; }
+#queue.done-open .qgroup-done::after { content: " (click to hide)"; }
+#queue:not(.done-open) li.qrow-done { display: none; }

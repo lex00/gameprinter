@@ -31,19 +31,6 @@
       <span id="rec-to" title="The quest-log row a recording goes to: RECORD INTO THIS ROW on another row changes it"></span>
     </div>
   </header>
-  <section id="now" aria-live="polite">
-    <div id="now-work"></div>
-    <div id="now-loop"></div>
-  </section>
-  <!-- YOUR TURN: only what the person can do now, each with its button:
-       the yes cards, the loop's steps that are theirs, and the rows that
-       ask them; or NOTHING NEEDS YOU. -->
-  <section id="your-turn" aria-live="polite" aria-label="Your turn">
-    <h2>YOUR TURN</h2>
-    <div id="asks"></div>
-    <ol id="turn"></ol>
-    <p id="turn-none">NOTHING NEEDS YOU</p>
-  </section>
   <main>
     <div id="screens" class="side">
       <figure id="fig-a"><figcaption id="cap-a">THE ORIGINAL</figcaption><canvas id="a" width="256" height="240"></canvas></figure>
@@ -58,6 +45,19 @@
     </div>
     <p id="line" aria-live="polite"></p>
     <p id="keys"></p>
+    <section id="now" aria-live="polite">
+      <div id="now-work"></div>
+      <div id="now-loop"></div>
+    </section>
+    <!-- YOUR TURN: only what the person can do now, each with its button:
+         the yes cards, the loop's steps that are theirs, and the rows that
+         ask them; or NOTHING NEEDS YOU. -->
+    <section id="your-turn" aria-live="polite" aria-label="Your turn">
+      <h2>YOUR TURN</h2>
+      <div id="asks"></div>
+      <ol id="turn"></ol>
+      <p id="turn-none">NOTHING NEEDS YOU</p>
+    </section>
     <section id="below">
       <section id="loop-box" aria-label="The loop's steps">
         <h2>WHAT COMES NEXT</h2>

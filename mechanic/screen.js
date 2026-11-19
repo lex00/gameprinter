@@ -762,11 +762,20 @@ function drawQueue() {
   const opened = new Set([...q.querySelectorAll("li[data-mechanic]")].filter((li) => [...li.querySelectorAll("details")].some((d) => d.open)).map((li) => li.dataset.mechanic));
   q.dataset.key = key;
   q.textContent = "";
+  try { q.classList.toggle("done-open", localStorage.getItem("gp-done-open") === "1"); } catch (e) { /* no storage */ }
   const shown = rows.filter((r) => r.mechanic && !String(r.mechanic).startsWith("sealed"));
   for (const [g, title] of GROUPS) {
     const of = shown.filter((r) => groupOf(r) === g);
     if (!of.length) continue;
-    q.append(el("li", `qgroup qgroup-${g}`, `${title} (${of.length})`));
+    const head = el("li", `qgroup qgroup-${g}`, `${title} (${of.length})`);
+    if (g === "done") {
+      head.title = "Finished rows, archived here";
+      head.addEventListener("click", () => {
+        q.classList.toggle("done-open");
+        try { localStorage.setItem("gp-done-open", q.classList.contains("done-open") ? "1" : ""); } catch (e) { /* no storage */ }
+      });
+    }
+    q.append(head);
     for (const r of of) q.append(queueRow(r, g, opened.has(r.mechanic)));
   }
   if (!q.children.length) q.append(el("li", "", "No rows yet: tell your agent what to put in the quest log."));
