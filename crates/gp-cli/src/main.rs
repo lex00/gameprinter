@@ -214,6 +214,7 @@ mod watch;
 mod watch_serve;
 mod watch_z80;
 mod worker;
+mod wrong;
 
 use std::path::PathBuf;
 use std::process::ExitCode;

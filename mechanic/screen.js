@@ -842,6 +842,74 @@ async function refreshAsks() {
   }
 }
 
+// The loop's steps -----------------------------------------------------
+//
+// The open steps of the home (GET /api/steps: crate::steps, docs/loop.md),
+// each with who does it, its words and its id, and WRONG: the person's
+// words on why, sent as POST /api/steps/ID/wrong, which halts the loop
+// until a change to the tool that names the objection lands. While it is
+// halted the list is empty and the halt says why.
+
+let stepsDrawn = "";
+let stepsWriting = false; // a WRONG box is open: don't redraw under it
+async function refreshSteps() {
+  if (stepsWriting) return;
+  let v = null;
+  try {
+    const r = await fetch("/api/steps");
+    if (r.ok) v = await r.json();
+  } catch (e) { /* the next look */ }
+  if (!v) return;
+  const key = JSON.stringify([v.halted?.id ?? null, (v.open ?? []).map((s) => s.id)]);
+  if (key === stepsDrawn) return;
+  stepsDrawn = key;
+  const halt = $("halt");
+  halt.hidden = !v.halted;
+  halt.textContent = v.halted?.says ?? "";
+  const list = $("steps");
+  list.textContent = "";
+  for (const s of v.open ?? []) {
+    const li = el("li");
+    li.append(el("span", `swho swho-${s.who}`, (s.who ?? "").toUpperCase()));
+    li.append(el("span", "ssays", s.subject ? `${s.subject}: ${s.says}` : s.says));
+    li.append(el("span", "sid", s.id));
+    const b = el("button", "swrong", "WRONG");
+    b.type = "button";
+    b.title = "This step is wrong: say why, and the loop halts until a change to the tool fixes the rule";
+    b.addEventListener("click", () => {
+      if (li.querySelector("form")) return;
+      stepsWriting = true;
+      const f = el("form");
+      const why = el("input");
+      why.placeholder = "What is wrong with this step?";
+      why.setAttribute("aria-label", "What is wrong with this step");
+      const send = el("button", "", "HALT THE LOOP");
+      send.type = "submit";
+      const keep = el("button", "", "CANCEL");
+      keep.type = "button";
+      keep.addEventListener("click", () => { f.remove(); stepsWriting = false; });
+      f.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if (!why.value.trim()) { why.focus(); return; }
+        send.disabled = true;
+        try {
+          await api(`/api/steps/${encodeURIComponent(s.id)}/wrong`, { why: why.value });
+          note("The loop is halted: no step starts until a change to the tool that names your objection lands.", 8000);
+        } catch (err) { note(`It didn't save: ${err.message ?? err}`, 8000); }
+        stepsWriting = false;
+        stepsDrawn = "";
+        void refreshSteps();
+      });
+      f.append(why, send, keep);
+      li.append(f);
+      why.focus();
+    });
+    li.append(b);
+    list.append(li);
+  }
+  if ((v.open ?? []).length === 0 && !v.halted) list.append(el("li", "", "No open steps."));
+}
+
 // What is shown, and the agent's asks -----------------------------------
 
 function setView(v, by = "person") {
@@ -1146,6 +1214,8 @@ async function main() {
   setInterval(() => { if (!document.hidden) void refreshLists(); }, 3000);
   void refreshAsks();
   setInterval(() => { if (!document.hidden) void refreshAsks(); }, 2000);
+  void refreshSteps();
+  setInterval(() => { if (!document.hidden) void refreshSteps(); }, 3000);
 }
 
 main().catch((e) => {

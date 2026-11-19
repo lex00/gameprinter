@@ -4,7 +4,10 @@
 //! the commands it runs. It reads files only, as `next` does. `gp loop
 //! set` changes the home's loop settings (`$GP_HOME/loop.toml`,
 //! gp_mcp::steps): whether gp_run needs a step for a write, and gp serve's
-//! runner. Only the person runs it: gp_run refuses it.
+//! runner. `gp loop wrong` marks an open step wrong, which halts the loop,
+//! and `gp loop resume` clears the halt once a landed change names the
+//! objection (crate::wrong). Only the person runs these three: gp_run
+//! refuses them.
 
 use anyhow::Result;
 use clap::Subcommand;
@@ -41,6 +44,29 @@ pub enum LoopCmd {
         #[arg(long)]
         spending: Option<String>,
     },
+    /// Mark an open step wrong, with why: the loop halts (next emits no
+    /// steps, gp_run runs none, the runner starts no worker) until a change
+    /// to the tool that names the objection's id lands through gp tool gate.
+    /// The page's WRONG does the same. Only the person runs this.
+    Wrong {
+        /// The step's id, from gp loop steps or next.
+        step: String,
+        /// What is wrong with it, in the person's words.
+        #[arg(long)]
+        why: String,
+    },
+    /// Clear objection ID once a commit on the tool's branch adds a line
+    /// naming it (a test that pins the rule change). The tool gate does this
+    /// itself for each patch it lands; this is for one that landed another
+    /// way or before. Run in the gameprinter checkout. Only the person runs
+    /// this.
+    Resume {
+        /// The objection's id (w and 12 hex digits), from gp loop steps.
+        id: String,
+        /// The branch to look on (default: main).
+        #[arg(long, default_value = "main")]
+        onto: String,
+    },
 }
 
 fn settings_text(s: &gp_mcp::steps::Settings) -> String {
@@ -61,10 +87,16 @@ fn settings_text(s: &gp_mcp::steps::Settings) -> String {
 /// The steps as JSON, for gp_run's check and the page.
 pub(crate) fn steps_json(paths: &gp_evidence::Paths, games: Option<&std::path::Path>) -> Value {
     let answers = crate::steps::answers(paths, games);
-    json!({"open": crate::steps::open_of(&answers)})
+    match crate::wrong::halt(&paths.home) {
+        Some(h) => json!({"open": [], "halted": crate::wrong::halted_json(&h)}),
+        None => json!({"open": crate::steps::open_of(&answers), "halted": null}),
+    }
 }
 
 fn steps_text(v: &Value) -> String {
+    if let Some(h) = v["halted"]["says"].as_str() {
+        return h.to_owned();
+    }
     let open = v["open"].as_array().cloned().unwrap_or_default();
     if open.is_empty() {
         return "No open steps.".into();
@@ -134,6 +166,24 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
                 json!({"settings": s, "file": gp_mcp::steps::settings_file(home), "changed": changed}),
                 settings_text(&s),
             ))
+        }
+        LoopCmd::Wrong { step, why } => {
+            let v = crate::wrong::mark(paths, None, step, why)?;
+            let text = crate::wrong::says(&v);
+            Ok(Outcome::ok(v, text))
+        }
+        LoopCmd::Resume { id, onto } => {
+            let cwd = std::env::current_dir()?;
+            let repo = std::path::PathBuf::from(crate::gate::git(
+                &cwd,
+                &["rev-parse", "--show-toplevel"],
+            )?);
+            let v = crate::wrong::resume(&paths.home, &repo, onto, id)?;
+            let text = format!(
+                "The loop resumes: objection {id} is cleared by {}.",
+                v["cleared"]["commit"].as_str().unwrap_or("?")
+            );
+            Ok(Outcome::ok(v, text))
         }
     }
 }

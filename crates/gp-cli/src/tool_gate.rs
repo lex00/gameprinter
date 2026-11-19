@@ -927,6 +927,9 @@ fn tries(c: &Cx, a: &ToolGateArgs, patch: &Patch) -> Result<Outcome> {
                 match landed {
                     Ok(()) => {
                         lines.push(format!("PASS: landed {commit} on {}", c.onto));
+                        // A landing that names an objection to one of the
+                        // loop's steps clears it (crate::wrong).
+                        lines.extend(crate::wrong::clear_landed(&c.home, &c.repo, &commit));
                         if words_only {
                             lines.push(
                                 "words only: nothing built, so gp isn't published again".into(),

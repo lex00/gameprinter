@@ -64,6 +64,7 @@ pub(crate) mod scenarios;
 mod select;
 mod sounds;
 mod sprites;
+mod steps;
 pub(crate) mod tell;
 mod tiles;
 mod variants;
@@ -100,6 +101,7 @@ const MODULES: &[fn() -> Vec<Route>] = &[
     laya::routes,
     next::routes,
     asks::routes,
+    steps::routes,
     pictures::routes,
     sounds::routes,
     sprites::routes,

@@ -544,7 +544,7 @@ fn n_of(n: u64, one: &str, many: &str) -> String {
 }
 
 /// Words cut at about `max` characters, at a space.
-fn cut(s: &str, max: usize) -> String {
+pub(crate) fn cut(s: &str, max: usize) -> String {
     let s = s.trim();
     if s.chars().count() <= max {
         return s.to_owned();
@@ -1902,6 +1902,7 @@ pub(crate) fn copy_answer(
     let all = j::list(&paths.home, games);
     let mut a = j::answer(&j::gather(paths, &all, &c), &j::around(&paths.home, &c));
     a.copies = j::lines(paths, &all);
+    crate::wrong::apply_home(&paths.home, &mut a);
     Ok(Some(a))
 }
 
@@ -1916,6 +1917,7 @@ pub(crate) fn run(
         None => {
             let mut a = answer(&gather(paths, None, game, None)?);
             a.copies = crate::journeys::lines(paths, &crate::journeys::list(&paths.home, None));
+            crate::wrong::apply_home(&paths.home, &mut a);
             a
         }
     };

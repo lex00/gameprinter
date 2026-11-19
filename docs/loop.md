@@ -2,7 +2,7 @@
 
 Issue #43. The owner, 2026-11-19: "i want the loop to run agents autonomously with no agent controlling the loop at the highest level", and "this has to support parallel work for a real dev loop". The loop is a rules engine: `next` (crates/gp-cli/src/next.rs) reads only files and emits steps, and the steps, not an agent, decide what is done next. Before this an agent read `next` and improvised, and in the owner's experience an agent that controls the loop bends it.
 
-This page is the first phase: step ids and the set of open steps, and gp_run held to them.
+This page is the first phase: step ids and the set of open steps, gp_run held to them, and WRONG, which halts the loop.
 
 ## Steps and their ids
 
@@ -44,3 +44,18 @@ The home's loop settings are `$GP_HOME/loop.toml`, changed with `gp loop set` (w
 | `runner.spending` | `--spending WORDS` | empty | A note on spending, shown on the page beside the runner |
 
 `steps_required` is off by default because the tool gate publishes each landing at once to the gp every running agent uses: on by default, it would refuse the writes of agents already at work before the owner chose it. To turn it on, `gp loop set --steps-required on`; to turn it off, `gp loop set --steps-required off`.
+
+## Wrong
+
+The person can mark any open step wrong: WRONG beside it in STEPS on the screen page (mechanic/screen.html, which lists the open steps with who does each and its words), or `gp loop wrong STEP --why WORDS` in their own terminal. gp serve's routes are `GET /api/steps` (`{open, halted, settings}`) and `POST /api/steps/ID/wrong` with `{why}`. The code is crates/gp-cli/src/wrong.rs.
+
+An objection is `$GP_HOME/work/loop/wrong/ID.json`: its id (`w` and 12 hex digits), `state` (`open` or `cleared`), the step as `gp loop steps` listed it, the person's `why`, `at_ms`, and `facts`, the facts the step's answer was decided from, so a test can pin the case. While an objection is open the loop is halted:
+
+- `next` emits no steps: `open` and `also` are empty, `halted` is `{id, step, why, at_ms, says}`, and `next` is the person's, saying the loop is halted, by which step and why.
+- `gp loop steps` lists none, with the same `halted`.
+- gp_run runs no write as a step (with `steps_required` on). A worker that holds a step may still write to finish it, but nothing it makes lands or publishes.
+- The runner starts no worker.
+
+The rule that clears it: a commit on the tool's main branch that adds a line naming the objection's id. That line is the test or fixture that pins the rule change, so a halt ends only with a change to the rules that comes with its test, through the tool gate, which already waits for the owner's yes when an agent runs it. The tool gate checks each patch it lands and clears every open objection a line it adds names; its result then has a line "the loop resumes: the change names objection ID, which halted it". `gp loop resume ID` (run in the gameprinter checkout, `--onto` for another branch) clears one by the same rule for a commit that landed some other way or before: it looks for a commit on the branch that adds the id (`git log -S ID`) and refuses when there is none. gp_run refuses `gp loop wrong` and `gp loop resume`: only the person marks a step wrong or resumes the loop.
+
+A program that can write the home could write a cleared objection, as it could write a yes; the halt guards against an agent that bends the loop, not one that attacks it.

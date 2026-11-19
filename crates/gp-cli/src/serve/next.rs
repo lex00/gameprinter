@@ -63,7 +63,7 @@ fn answer(ctx: &Ctx, req: &Request, game: Option<&str>) -> Result<Response, Fail
             row: req.param("row").map(str::to_owned),
             shown: req.param("shown").and_then(|n| n.parse().ok()).unwrap_or(0),
         });
-    Ok(Response::json(&crate::next::json_of(&crate::next::answer(
-        &f,
-    ))))
+    let mut a = crate::next::answer(&f);
+    crate::wrong::apply_home(&ctx.paths.home, &mut a);
+    Ok(Response::json(&crate::next::json_of(&a)))
 }

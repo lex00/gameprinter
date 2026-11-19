@@ -416,6 +416,7 @@ fn detail(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> 
     let all = j::list(home, Some(&ctx.games));
     let mut a = j::answer(&j::gather(&ctx.paths, &all, &c), &j::around(home, &c));
     a.copies = j::lines(&ctx.paths, &all);
+    crate::wrong::apply_home(home, &mut a);
     let mut jobs: serde_json::Map<String, Value> = actions(c.kind)
         .iter()
         .map(|w| (w.to_string(), job(home, &c, w)))

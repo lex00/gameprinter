@@ -255,7 +255,7 @@ const PERSON_DECIDES_SOUND: &str = "only the person decides a proposed sound cha
 /// Only the person decides a sprite edit the agent proposes for their copy.
 const PERSON_DECIDES_SPRITE: &str = crate::sprite_proposal::PERSON_DECIDES;
 /// Only the person changes the loop's rules (docs/loop.md).
-const PERSON_SETS_LOOP: &str = "only the person changes the loop's settings (whether a write needs a step, the runner), in their own terminal with gp loop set. Work as the open steps say: next and gp loop steps list them.";
+const PERSON_SETS_LOOP: &str = "only the person changes the loop's settings (gp loop set), marks a step wrong (gp loop wrong, or WRONG on their page) or resumes a halted loop (gp loop resume), in their own terminal. Work as the open steps say: next and gp loop steps list them.";
 const SERVE: &str = "it serves a page until stopped. The person starts `gp serve` themselves and opens http://127.0.0.1:7710/; for a local preview use build_publish.";
 
 /// Every gp command, with its road and rule. Sorted by path.
@@ -634,8 +634,10 @@ pub const TABLE: &[Row] = &[
     r("watch rerun", S, Write),
     r("watch start", S, Write),
     r("worker env", D, Read),
+    r("loop resume", S, Rule::Refuse(PERSON_SETS_LOOP)),
     r("loop set", S, Rule::Refuse(PERSON_SETS_LOOP)),
     r("loop steps", S, Read),
+    r("loop wrong", S, Rule::Refuse(PERSON_SETS_LOOP)),
 ];
 
 /// The commands known to run longer than gp_run's usual limit
