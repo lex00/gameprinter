@@ -31,6 +31,10 @@
       <span id="rec-to" title="The quest-log row a recording goes to: click another row to change it"></span>
     </div>
   </header>
+  <section id="now" aria-live="polite">
+    <div id="now-work"></div>
+    <div id="now-loop"></div>
+  </section>
   <section id="asks" aria-live="polite" hidden></section>
   <main>
     <div id="screens" class="side">
@@ -48,8 +52,8 @@
     <p id="keys"></p>
     <section id="below">
       <section id="loop-box" aria-label="The loop's steps">
-        <h2>STEPS</h2>
-        <p class="how">What the loop has open now, and why (docs/loop.md). WRONG on a step halts the loop: no step starts until a change to the tool that names your objection lands.</p>
+        <h2>WHAT COMES NEXT</h2>
+        <p class="how">The loop's next steps for this game: who does each and for which item. Click one with an item to open it. WRONG halts the loop until a change to the tool fixes the rule.</p>
         <p id="halt" hidden></p>
         <ol id="steps"></ol>
         <h2>WORKERS</h2>

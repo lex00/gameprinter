@@ -123,3 +123,17 @@ form.comment .comment-text { flex: 1; min-width: 0; font: 13px var(--mono); back
 #asks .ask-row { font: bold 12px var(--mono); color: var(--accent); background: transparent; border: 2px solid var(--accent); padding: 0 8px; }
 #asks .ask-question { flex-basis: 100%; font-weight: 700; font-size: 15px; }
 #asks .ask-says { flex-basis: 100%; color: var(--muted); font-size: 12px; }
+/* NOW: what is being worked on, and the loop's switches. */
+#now { width: min(1200px, 100%); margin: 6px 0; display: flex; flex-direction: column; gap: 4px; }
+#now-work { display: flex; flex-direction: column; gap: 4px; }
+#now .now-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; border: 2px solid var(--accent); padding: 6px 10px; }
+#now .now-label { font: bold 12px var(--mono); color: var(--accent); letter-spacing: 0.08em; }
+#now .now-row { font: bold 14px var(--mono); color: var(--fg); background: transparent; border: none; padding: 0; text-decoration: underline; cursor: pointer; }
+#now .now-who { color: var(--muted); font: 12px var(--mono); }
+#now .now-status { flex-basis: 100%; }
+#now .now-idle { color: var(--muted); font: bold 12px var(--mono); }
+#now-loop { font: bold 12px var(--mono); color: var(--muted); }
+#now-loop.halted { color: var(--rec); }
+#steps li.srow-link { cursor: pointer; }
+#steps li.srow-link:hover { border-color: var(--muted); }
+#steps .srow { font: 12px var(--mono); color: var(--accent); }

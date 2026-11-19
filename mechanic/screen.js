@@ -764,6 +764,7 @@ async function refreshLists(force) {
     clipsBy = c.mechanics ?? [];
     drawQueue();
     drawClips();
+    drawNowWork();
   } catch (e) { /* the next look */ }
   finally { listing = false; }
 }
@@ -885,6 +886,52 @@ async function refreshAsks() {
   }
 }
 
+// Now ------------------------------------------------------------------
+//
+// At the top of the page: the quest-log items being worked on (status
+// "agent working"), by whom, with the open row's status line (its busy
+// text), and the loop's switches: the runner, its workers, whether
+// gp_run needs a step, and a halt.
+
+function drawNowWork() {
+  const box = $("now-work");
+  const working = rows.filter((r) => r.status === "agent working");
+  const key = JSON.stringify([working.map((r) => [r.mechanic, r.worker, r.note]), session?.mechanic, session?.busy]);
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
+  box.textContent = "";
+  if (!working.length) {
+    box.append(el("span", "now-idle", "NOBODY IS WORKING ON AN ITEM NOW"));
+    return;
+  }
+  for (const r of working) {
+    const line = el("div", "now-item");
+    const name = el("button", "now-row", r.mechanic.toUpperCase());
+    name.type = "button";
+    name.title = "Open this item in the quest log";
+    name.addEventListener("click", (e) => { e.currentTarget.blur(); void pickRow(r.mechanic); $("quest")?.scrollIntoView({ behavior: "smooth", block: "start" }); });
+    line.append(el("span", "now-label", "WORKING ON"), name, el("span", "now-who", r.worker ? `by ${r.worker}` : ""));
+    const status = r.mechanic === session?.mechanic && session?.busy ? session.busy : r.note ?? "";
+    if (status) line.append(el("span", "now-status", status));
+    box.append(line);
+  }
+}
+
+function drawNowLoop(v) {
+  const box = $("now-loop");
+  const st = v.settings ?? {};
+  const run = st.runner ?? {};
+  const parts = [
+    v.halted ? `LOOP HALTED: ${v.halted.says ?? ""}` : "LOOP RUNNING",
+    `RUNNER ${run.on ? `ON (at most ${run.max_workers ?? "?"} workers, ${(v.workers ?? []).length} now)` : "OFF"}`,
+    `STEPS REQUIRED ${st.steps_required ? "ON" : "OFF"}`,
+  ];
+  const text = parts.join("  ·  ");
+  if (box.textContent !== text) box.textContent = text;
+  box.classList.toggle("halted", !!v.halted);
+  box.title = v.runner?.says ?? "";
+}
+
 // The loop's steps -----------------------------------------------------
 //
 // The open steps of the home (GET /api/steps: crate::steps, docs/loop.md),
@@ -914,11 +961,26 @@ async function refreshSteps() {
   halt.textContent = v.halted?.says ?? "";
   const list = $("steps");
   list.textContent = "";
-  for (const s of v.open ?? []) {
+  const WHO = { person: "YOU", agent: "YOUR AGENT", tools: "THE TOOLS" };
+  const game = session?.game ?? "";
+  const mine = (v.open ?? []).filter((s) => !game || (s.touches ?? []).some((t) => t === `game:${game}` || t.startsWith(`row:${game}/`)) || s.subject === game);
+  for (const s of mine) {
     const li = el("li");
-    li.append(el("span", `swho swho-${s.who}`, (s.who ?? "").toUpperCase()));
-    li.append(el("span", "ssays", s.subject ? `${s.subject}: ${s.says}` : s.says));
-    li.append(el("span", "sid", s.id));
+    const row = (s.touches ?? []).find((t) => t.startsWith(`row:${game}/`))?.slice(`row:${game}/`.length) ?? null;
+    li.append(el("span", `swho swho-${s.who}`, WHO[s.who] ?? (s.who ?? "").toUpperCase()));
+    li.append(el("span", "ssays", s.says));
+    if (row) {
+      li.append(el("span", "srow", `for ${row}`));
+      li.classList.add("srow-link");
+      li.title = `Open ${row} in the quest log`;
+      li.addEventListener("click", (e) => {
+        if (e.target.closest("form, button")) return;
+        void pickRow(row);
+        $("quest")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    } else {
+      li.title = `Step ${s.id}`;
+    }
     const b = el("button", "swrong", "WRONG");
     b.type = "button";
     b.title = "This step is wrong: say why, and the loop halts until a change to the tool fixes the rule";
@@ -953,7 +1015,8 @@ async function refreshSteps() {
     li.append(b);
     list.append(li);
   }
-  if ((v.open ?? []).length === 0 && !v.halted) list.append(el("li", "", "No open steps."));
+  if (mine.length === 0 && !v.halted) list.append(el("li", "", "Nothing open for this game."));
+  drawNowLoop(v);
 }
 
 // The runner's workers (serve/runner.rs): each with its step, its state
