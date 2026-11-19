@@ -21,8 +21,10 @@ use sha2::Digest as _;
 
 use crate::policy::Ask;
 
-/// How long an open ask waits for an answer before it no longer shows.
-pub const OPEN_FOR_MS: u64 = 60 * 60 * 1000;
+/// How long an open ask waits for an answer before it no longer shows: a
+/// week, so a card the loop raised while the person is away waits for
+/// them (an hour lost the workers' results).
+pub const OPEN_FOR_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 /// How long a yes holds before it is used.
 pub const YES_FOR_MS: u64 = 30 * 60 * 1000;
 /// How long a no stops the same command being asked again.

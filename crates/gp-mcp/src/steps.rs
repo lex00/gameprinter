@@ -198,6 +198,10 @@ pub fn beat(home: &Path, agent: bool) {
 /// started, not in a worker (`GP_STEP`), not on CI, not on a home in the
 /// temp folder (tests).
 fn checked(home: &Path) -> bool {
+    // This crate's own tests run gp_run on homes of their own.
+    if cfg!(test) {
+        return false;
+    }
     if std::env::var_os(STEP_ENV).is_some_and(|v| !v.is_empty())
         || std::env::var_os("CI").is_some_and(|v| !v.is_empty())
     {
