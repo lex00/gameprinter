@@ -305,6 +305,38 @@ fn built_gp(c: &Cx) -> PathBuf {
     c.target.join(PROFILE).join("gp")
 }
 
+/// The page's two players built into the tree's target/play-web, where the
+/// published gp (built from the tree) serves them from: `just check` builds
+/// them into the gate's own target, which that gp never reads, so without
+/// this the screen and the mechanic page can't start.
+fn players(c: &Cx, lines: &mut Vec<String>) -> Result<()> {
+    let script = c.tree.join("scripts/web/build-play.sh");
+    if !script.is_file() {
+        return Ok(());
+    }
+    let out = c.tree.join("target/play-web");
+    for arcade in [false, true] {
+        let mut cmd = Command::new(&script);
+        if arcade {
+            cmd.arg("--arcade");
+        }
+        cmd.arg(&out)
+            .current_dir(&c.tree)
+            .env("CARGO_TARGET_DIR", &c.target);
+        gate_env(&mut cmd);
+        let o = cmd.output().context("running build-play.sh")?;
+        if !o.status.success() {
+            bail!(
+                "the published gp's players didn't build (build-play.sh{}): {}",
+                if arcade { " --arcade" } else { "" },
+                String::from_utf8_lossy(&o.stderr).trim()
+            );
+        }
+    }
+    lines.push(format!("the page's players built in {}", out.display()));
+    Ok(())
+}
+
 /// Runs `cmd` in a process group of its own, its stdout and stderr in
 /// `<log>.out` and `<log>.err` (files, not pipes: a grandchild that
 /// outlives a stopped lane can't hold a pipe open), and stops the whole
@@ -917,6 +949,8 @@ fn tries(c: &Cx, a: &ToolGateArgs, patch: &Patch) -> Result<Outcome> {
                             },
                             Result::is_ok,
                         )?;
+                        c.steps
+                            .time("players", || players(c, &mut lines), Result::is_ok)?;
                         return Ok(Outcome::ok(
                             json!({"verdict": "PASS", "commit": commit, "tip": tip, "lines": lines}),
                             lines.join("\n"),
