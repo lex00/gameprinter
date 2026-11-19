@@ -628,6 +628,10 @@ fn claude_args(setup: &Setup, wt: &Path, mcp: &Path) -> Vec<String> {
         "Bash(cargo test:*)".to_owned(),
         "Bash(cargo fmt:*)".to_owned(),
         "Bash(cargo clippy:*)".to_owned(),
+        // Moving files in its worktree (a theme brought into the games
+        // checkout): copies and folders, no deletes.
+        "Bash(cp:*)".to_owned(),
+        "Bash(mkdir:*)".to_owned(),
         "Bash(git status:*)".to_owned(),
         "Bash(git diff:*)".to_owned(),
         "Bash(git log:*)".to_owned(),
