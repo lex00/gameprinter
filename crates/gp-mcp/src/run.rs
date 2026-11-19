@@ -1441,6 +1441,12 @@ pub fn run_in(
             cmd.current_dir(&config.work);
         }
     }
+    // The tool's own commands (gp tool gate) act on gameprinter's checkout,
+    // found from the current folder: run them there, not in the games
+    // checkout, whose commits the tool gate took for its base.
+    if path.starts_with("tool ") {
+        cmd.current_dir(&config.repo);
+    }
     let shown = std::iter::once("gp".to_owned())
         .chain(c.json.then(|| "--json".to_owned()))
         .chain(path.split(' ').map(str::to_owned))
