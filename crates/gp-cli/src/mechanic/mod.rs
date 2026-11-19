@@ -392,6 +392,11 @@ pub enum MechanicCmd {
         /// One plain line: what is known, or what it's waiting on.
         #[arg(long, requires = "status")]
         note: Option<String>,
+        /// Who works the row while it is "agent working": a worker's name
+        /// (default: $GP_WORKER). The page shows it on the row and keeps
+        /// the rows being worked at the top. Another status clears it.
+        #[arg(long, requires = "status")]
+        worker: Option<String>,
         /// Something measured, exact (repeat for each). Replaces the list.
         #[arg(long, requires = "mechanic")]
         known: Vec<String>,
@@ -946,6 +951,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             opens,
             out_of_scope,
             in_scope,
+            worker,
         } => queue(
             paths,
             game,
@@ -953,6 +959,10 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             &RowChange {
                 status: status.as_deref(),
                 note: note.as_deref(),
+                worker: worker
+                    .clone()
+                    .or_else(|| std::env::var("GP_WORKER").ok().filter(|w| !w.is_empty()))
+                    .as_deref(),
                 known,
                 reads,
                 opens,
@@ -1148,6 +1158,7 @@ fn wait(paths: &Paths, game: &str, mechanic: Option<&str>) -> Result<Outcome> {
 struct RowChange<'a> {
     status: Option<&'a str>,
     note: Option<&'a str>,
+    worker: Option<&'a str>,
     known: &'a [String],
     reads: &'a [String],
     opens: &'a [String],
@@ -1182,6 +1193,12 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
         if let Some(st) = c.status {
             r["status"] = json!(st);
             r["note"] = json!(c.note.unwrap_or_default());
+            if let Some(o) = r.as_object_mut() {
+                match c.worker.filter(|_| st == "agent working") {
+                    Some(w) => o.insert("worker".into(), json!(w)),
+                    None => o.remove("worker"),
+                };
+            }
         }
         for (k, v) in [("known", c.known), ("read", c.reads), ("open", c.opens)] {
             if !v.is_empty() {
@@ -1205,9 +1222,13 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
         .iter()
         .map(|r| {
             let mut l = format!(
-                "{}: {}.",
+                "{}: {}{}.",
                 r["mechanic"].as_str().unwrap_or(""),
-                r["status"].as_str().unwrap_or("")
+                r["status"].as_str().unwrap_or(""),
+                r["worker"]
+                    .as_str()
+                    .map(|w| format!(" ({w})"))
+                    .unwrap_or_default()
             );
             for k in ["scores", "note"] {
                 if let Some(t) = r[k].as_str().filter(|t| !t.is_empty()) {
@@ -1372,6 +1393,7 @@ mod tests {
         let plain = RowChange {
             status: None,
             note: None,
+            worker: None,
             known: none,
             reads: none,
             opens: none,

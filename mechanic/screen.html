@@ -12,7 +12,7 @@
        the person watches while they talk to their agent, and which the
        agent sets with screen_show (gp mechanic screen). -->
   <header>
-    <a id="logo" href="./" title="The game's full page: clips, refine, play and themes">GAME PRINTER</a>
+    <a id="logo" href="/start/" title="The first screen: your games and your copies">GAME PRINTER</a>
     <span id="title">Loading</span>
     <div id="controls">
       <label class="pick" title="The pictures the model is drawn in: the game's own, or one of your themes for this game">PICTURES
@@ -27,7 +27,8 @@
       <label id="opacity-pick" class="pick" hidden title="How much of the model shows over the original">MODEL
         <input type="range" id="opacity" min="0" max="100" value="50"><span id="opacity-at">50%</span>
       </label>
-      <button type="button" id="record" title="R: record what you play as a clip for your agent; press again to send it">RECORD</button>
+      <button type="button" id="record" title="R: record what you play on THE ORIGINAL as a clip for the outlined quest-log row; press again to send it to your agent">RECORD</button>
+      <span id="rec-to" title="The quest-log row a recording goes to: click another row to change it"></span>
     </div>
   </header>
   <main>
@@ -44,6 +45,22 @@
     </div>
     <p id="line" aria-live="polite"></p>
     <p id="keys"></p>
+    <section id="below">
+      <section id="quest" aria-label="The quest log">
+        <h2>QUEST LOG</h2>
+        <p id="rec-how" class="how">RECORD (or R) records what you play on THE ORIGINAL, from the press until you press it again, and sends it as a clip to the outlined row and to your agent. Click a row to record into it.</p>
+        <ol id="queue"></ol>
+        <form id="tell" autocomplete="off">
+          <input id="tell-text" placeholder="Tell your agent what to put in the quest log" aria-label="Tell your agent">
+          <button type="submit" id="tell-send">SEND</button>
+        </form>
+      </section>
+      <section id="clips-box" aria-label="Clips">
+        <h2>CLIPS</h2>
+        <p class="how">Yours and your agent's, by quest-log row. Click one to show it on both screens.</p>
+        <div id="clips"></div>
+      </section>
+    </section>
     <iframe id="model-frame" title="the model" src="about:blank" tabindex="-1"></iframe>
   </main>
   <script type="module" src="screen.js"></script>

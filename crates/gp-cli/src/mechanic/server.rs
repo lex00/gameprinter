@@ -970,6 +970,22 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         )),
         ("GET" | "HEAD", "/api/session") => Ok(Response::json(&s.open_session()?.state()?)),
         ("GET" | "HEAD", "/api/working") => working(s, req.param("mechanic")),
+        // Every quest-log row's clips, for the screen page's list under the
+        // screens: a row with no session has none (none is made here).
+        ("GET" | "HEAD", "/api/screen/clips") => {
+            let mut out = Vec::new();
+            for r in read_queue(&s.queue_file()?) {
+                let Some(m) = r["mechanic"].as_str() else {
+                    continue;
+                };
+                if !Session::exists(&s.paths, &s.game, m).unwrap_or(false) {
+                    continue;
+                }
+                let clips = Session::open(&s.paths, &s.game, m)?.clips()?;
+                out.push(json!({"mechanic": m, "clips": clips}));
+            }
+            Ok(Response::json(&json!({"mechanics": out})))
+        }
         ("GET" | "HEAD", p) if clip_number(p, "/api/clips/", ".log").is_some() => {
             let n = clip_number(p, "/api/clips/", ".log").unwrap_or(0);
             let session = s.target(req.param("mechanic"))?;

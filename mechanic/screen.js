@@ -23,6 +23,12 @@
 // It is the developer's loop: a theme file changed shows within a few
 // seconds, and a model changed is built again by itself while the old
 // build plays, then swapped in at the same place.
+//
+// Under the screens, the quest log (the rows `gp mechanic queue GAME`
+// prints, as app.js drew them) and the clips of every row. A recording
+// goes to the row outlined: the open one when it starts, or one clicked
+// while it records. A row clicked otherwise opens it (api/pick), so the
+// next recording goes there. A clip clicked shows on both screens.
 
 import { NesPlayer } from "./nesplayer.js";
 
@@ -60,6 +66,9 @@ let applied = 0; // the last ask applied
 let recording = null; // {start} while recording
 let sending = false;
 let askError = null; // why the agent's last ask couldn't be shown
+// The quest-log row a recording goes to: the open one when it starts; a
+// row clicked while it records moves it there (app.js's clipFor).
+let clipFor = null;
 
 // The model in its frame.
 const model = {
@@ -536,12 +545,14 @@ function startRecording() {
   if (mode !== "live" || sending) return;
   if (show.view === "solo") { note("RECORD records the original: pick another view to record."); return; }
   recording = { start: player.frame(0) };
+  clipFor = session?.mechanic ?? null;
+  markTarget();
   $("record").classList.add("on");
   $("record").textContent = "STOP AND SEND";
   // The play so far goes up as the recording starts, so sending later
   // waits on no replay (app.js's warmPath).
   warming = sendPath(player.inputLog(0), recording.start).catch(() => undefined);
-  note("Recording. Press RECORD again (or R) to send it to your agent.", 3000);
+  note(`Recording into ${clipFor ?? "the open row"}. Press RECORD again (or R) to send it to your agent.`, 3000);
 }
 
 /** Ends the recording; with `send`, hands the clip to the open mechanic
@@ -552,13 +563,13 @@ async function stopRecording(send = true) {
   recording = null;
   $("record").classList.remove("on");
   $("record").textContent = "RECORD";
-  if (!r || !send) return;
+  if (!r || !send) { markTarget(); return; }
   const log = player.inputLog(0);
   const frames = player.frame(0) - r.start;
   if (frames < 10) { note("Too short to keep: under 10 frames."); return; }
   sending = true;
   $("record").disabled = true;
-  const mechanic = session?.mechanic ?? null;
+  const mechanic = clipFor ?? session?.mechanic ?? null;
   try {
     const { head, frames: all } = splitLog(log);
     if (warming) { line("Sending your play."); await warming; warming = null; }
@@ -569,13 +580,145 @@ async function stopRecording(send = true) {
     const { n, again } = await api("api/clips", { path, start: r.start, inputs, note: "", mechanic });
     await api("api/talk", { text: `Here is clip ${n}.`, clips: [n], mechanic });
     note(again ? `Clip ${n} of ${mechanic} was already handed off.` : `Clip ${n} sent to your agent (${mechanic}).`, 6000);
-    session = await api("api/session").catch(() => session);
+    await refreshLists(true);
   } catch (e) {
     note(`The clip didn't reach your agent: ${e.message ?? e}`, 10000);
   } finally {
     sending = false;
+    clipFor = null;
+    markTarget();
     $("record").disabled = mode !== "live" || show.view === "solo";
   }
+}
+
+// The quest log and the clips --------------------------------------------
+
+// What the queue's statuses show as (app.js's LABELS).
+const LABELS = { done: "MEASURED", "asking you": "YOUR MOVE", "agent working": "WORKING ON IT", "in line": "IN LINE", next: "NEXT" };
+let rows = []; // the quest log, as api/session gives it
+let clipsBy = []; // [{mechanic, clips: [{n, frames, by, note}]}]
+
+const el = (tag, cls, text) => {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+};
+
+/** The row a recording goes to, outlined, and said beside RECORD. */
+function markTarget() {
+  const to = recording || sending ? clipFor : session?.mechanic ?? null;
+  for (const li of $("queue").querySelectorAll("li[data-mechanic]")) {
+    const on = li.dataset.mechanic === to;
+    li.classList.toggle("target", on);
+    li.classList.toggle("recording", on && (!!recording || sending));
+    li.querySelector(".qto").textContent = on ? (recording ? "RECORDING INTO THIS ROW" : sending ? "SENDING TO THIS ROW" : "RECORD GOES HERE") : "";
+  }
+  $("rec-to").textContent = to ? `${recording ? "INTO" : "TO"}: ${to.toUpperCase()}` : "";
+  $("rec-to").classList.toggle("on", !!recording);
+}
+
+function drawQueue() {
+  const q = $("queue");
+  const key = JSON.stringify([session?.mechanic, rows]);
+  if (q.dataset.key === key) { markTarget(); return; }
+  q.dataset.key = key;
+  q.textContent = "";
+  // The rows being worked first, in the log's order, then the rest.
+  const working = (r) => r.status === "agent working";
+  const ordered = [...rows.filter(working), ...rows.filter((r) => !working(r))];
+  for (const r of ordered) {
+    if (!r.mechanic || String(r.mechanic).startsWith("sealed")) continue;
+    const li = el("li");
+    li.dataset.mechanic = r.mechanic;
+    const by = r.triage?.by;
+    const label = by === "you" ? "NEEDS YOU" : by === "tools" ? "BY THE TOOLS" : LABELS[r.status] ?? String(r.status ?? "").toUpperCase();
+    li.append(el("span", `st st-${String(r.status ?? "").replace(/ /g, "-")}`, label), el("span", "qname", r.mechanic));
+    if (working(r)) {
+      li.classList.add("active");
+      li.append(el("span", "qworker", r.worker ? `ACTIVE: ${String(r.worker).toUpperCase()}` : "ACTIVE"));
+    }
+    li.append(el("span", "qto", ""));
+    if (r.scores) li.append(el("span", "qnote qscore", r.scores));
+    if (r.note) li.append(el("span", "qnote", r.note));
+    if (r.mechanic === session?.mechanic) li.classList.add("open");
+    li.title = "Click: recordings go to this row";
+    li.addEventListener("click", () => void pickRow(r.mechanic));
+    q.append(li);
+  }
+  if (!q.children.length) q.append(el("li", "", "No rows yet: tell your agent what to put in the quest log."));
+  markTarget();
+}
+
+function drawClips() {
+  const box = $("clips");
+  const shown = clip ? `${clip.mechanic}/${clip.n}` : "";
+  const key = JSON.stringify([clipsBy, shown]);
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
+  box.textContent = "";
+  const fps = FPS || 60;
+  for (const g of clipsBy) {
+    if (!g.clips.length) continue;
+    box.append(el("h3", "", g.mechanic.toUpperCase()));
+    const ul = el("ul");
+    for (const c of g.clips) {
+      const li = el("li", `${g.mechanic}/${c.n}` === shown ? "on" : "");
+      li.append(el("span", "cn", `CLIP ${c.n}`), `${((c.frames ?? 0) / fps).toFixed(1)} s `, el("span", "cby", `by ${c.by ?? "?"}${c.note ? `: ${c.note}` : ""}`));
+      li.title = "Show it on both screens: Left and Right step, Space plays, Esc goes back to playing";
+      li.addEventListener("click", () => {
+        show.by = "person";
+        void openClip(c.n, g.mechanic, 0).then(() => { drawClips(); report(); }).catch((e) => note(`Couldn't open clip ${c.n}: ${e.message ?? e}`, 8000));
+      });
+      ul.append(li);
+    }
+    box.append(ul);
+  }
+  if (!box.children.length) box.append(el("p", "empty", "No clips yet. RECORD makes one; your agent's clips show here too."));
+}
+
+/** A row clicked: while recording (or sending) the clip goes there;
+ * otherwise the row opens (api/pick), and the next recording goes to it. */
+async function pickRow(m) {
+  if (sending) { note(`This clip goes to ${clipFor}. Wait for it to send.`); return; }
+  if (recording) { clipFor = m; markTarget(); note(`This recording goes to ${m}.`); return; }
+  if (m === session?.mechanic) { note(`Recordings go to ${m}.`); return; }
+  try {
+    await api("api/pick", { mechanic: m });
+    await refreshLists(true);
+    note(`Recordings go to ${m} now.`);
+  } catch (e) { note(`Couldn't open ${m}: ${e.message ?? e}`, 8000); }
+}
+
+/** The quest log and the clips, again from the server. */
+let listing = false;
+async function refreshLists(force) {
+  if (listing && !force) return;
+  listing = true;
+  try {
+    const [s, c] = await Promise.all([api("api/session"), api("api/screen/clips")]);
+    session = s;
+    rows = s.queue ?? [];
+    clipsBy = c.mechanics ?? [];
+    drawQueue();
+    drawClips();
+  } catch (e) { /* the next look */ }
+  finally { listing = false; }
+}
+
+/** The box under the quest log: a turn to the open row's agent. */
+async function tell(e) {
+  e.preventDefault();
+  const t = $("tell-text").value.trim();
+  if (!t) return;
+  $("tell-send").disabled = true;
+  try {
+    await api("api/talk", { text: t, clips: [], mechanic: session?.mechanic ?? null });
+    $("tell-text").value = "";
+    $("tell-text").blur();
+    note("Sent to your agent.");
+  } catch (err) { note(`Your agent didn't get it: ${err.message ?? err}`, 8000); }
+  finally { $("tell-send").disabled = false; }
 }
 
 // What is shown, and the agent's asks -----------------------------------
@@ -759,6 +902,11 @@ function frame(now) {
 // Keys and buttons -----------------------------------------------------
 
 window.addEventListener("keydown", (e) => {
+  // Typing to the agent: the keys are the box's.
+  if (e.target?.id === "tell-text") {
+    if (e.code === "Escape") e.target.blur();
+    return;
+  }
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) {
     if (e.code !== "Escape") return;
   }
@@ -795,7 +943,8 @@ function wire() {
   $("clip-play").addEventListener("click", (e) => { e.currentTarget.blur(); playClip(!clip?.playing); });
   $("clip-scrub").addEventListener("input", (e) => { playClip(false); seekClip(Number(e.target.value), true); });
   $("clip-scrub").addEventListener("change", (e) => { e.target.blur(); show.by = "person"; report(); });
-  $("clip-live").addEventListener("click", (e) => { e.currentTarget.blur(); show.by = "person"; backToLive(); });
+  $("clip-live").addEventListener("click", (e) => { e.currentTarget.blur(); show.by = "person"; backToLive(); drawClips(); });
+  $("tell").addEventListener("submit", (e) => void tell(e));
 }
 
 async function setUpPictures() {
@@ -838,6 +987,7 @@ async function main() {
   $("title").textContent = session?.game ?? "";
   document.title = `${session?.game ?? "Game"} screen`;
   await setUpPictures();
+  await refreshLists(true);
   // The view kept in this browser, then the agent's last ask when no page
   // has shown it yet and it is recent (asked before the page opened); one
   // shown already or old is taken as seen.
@@ -872,6 +1022,7 @@ async function main() {
   report();
   setInterval(() => void poll(), 1000);
   setInterval(() => void watchBuild(), 4000);
+  setInterval(() => { if (!document.hidden) void refreshLists(); }, 3000);
 }
 
 main().catch((e) => {

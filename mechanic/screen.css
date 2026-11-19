@@ -46,3 +46,40 @@ canvas { display: block; background: #000; border: 2px solid var(--line); image-
 @media (max-width: 640px) {
   #screens.side { flex-direction: column; align-items: center; }
 }
+/* Under the screens: the quest log and the clips. */
+#rec-to { font: bold 12px var(--mono); color: var(--gold); }
+#rec-to.on { color: var(--rec); }
+#below { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px 24px; width: min(1200px, 100%); margin-top: 8px; border-top: 2px solid var(--line); padding-top: 10px; }
+#below h2 { margin: 0 0 4px; font: bold 13px var(--mono); letter-spacing: 0.08em; color: var(--gold); }
+.how { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
+#queue { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+#queue li { border: 2px solid var(--panel); background: var(--panel); padding: 4px 8px; cursor: pointer; display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; font-size: 13px; }
+#queue li:hover { border-color: var(--muted); }
+#queue li.open { border-color: var(--fg); }
+#queue li.target { border: 2px dashed var(--gold); background: #2a2000; }
+#queue li.target.recording { border: 2px solid var(--rec); background: #2a0800; }
+#queue .qname { font-weight: 700; }
+#queue .st { font: bold 11px var(--mono); padding: 0 4px; border: 1px solid var(--muted); color: var(--muted); }
+#queue .st-done { color: #58d854; border-color: #58d854; }
+#queue .st-asking-you { color: var(--gold); border-color: var(--gold); }
+#queue .st-agent-working { color: var(--accent); border-color: var(--accent); }
+#queue li.active { border-color: var(--accent); }
+#queue .qworker { font: bold 11px var(--mono); color: var(--bg); background: var(--accent); padding: 0 4px; }
+#queue .qto { font: bold 11px var(--mono); color: var(--gold); margin-left: auto; }
+#queue li.recording .qto { color: var(--rec); }
+#queue .qnote { flex-basis: 100%; color: var(--muted); font-size: 12px; }
+#queue .qscore { color: var(--fg); }
+#tell { display: flex; gap: 6px; margin-top: 8px; }
+#tell-text { flex: 1; min-width: 0; font: 13px var(--mono); background: var(--bg); color: var(--fg); border: 2px solid var(--line); padding: 2px 6px; }
+#clips h3 { margin: 8px 0 2px; font: bold 12px var(--mono); color: var(--fg); letter-spacing: 0.06em; }
+#clips h3:first-child { margin-top: 0; }
+#clips ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+#clips li { padding: 2px 8px; cursor: pointer; border: 2px solid transparent; font-size: 13px; }
+#clips li:hover { border-color: var(--muted); }
+#clips li.on { border-color: var(--accent); color: var(--accent); }
+#clips .cn { font-weight: 700; margin-right: 8px; }
+#clips .cby { color: var(--muted); }
+#clips .empty { color: var(--muted); font-size: 12px; }
+@media (max-width: 800px) {
+  #below { grid-template-columns: minmax(0, 1fr); }
+}
