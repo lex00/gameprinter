@@ -2026,7 +2026,10 @@ fn recipes(text: &str, read: &dyn Fn(&str) -> Option<String>) -> BTreeMap<String
             if let Some(p) = t.get(k).and_then(toml::Value::as_str)
                 && p.ends_with(".presses")
             {
-                files.push_str(&format!("{p}\0{}\0", read(p).unwrap_or_default()));
+                // Trailing whitespace aside: the tip's text comes from git
+                // show, trimmed, and the tree's from disk.
+                let body = read(p).unwrap_or_default();
+                files.push_str(&format!("{p}\0{}\0", body.trim_end()));
             }
         }
         out.insert(id.to_owned(), format!("{t}\0{files}"));
@@ -2291,10 +2294,11 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let tree = d.path();
         let before = "[corpus]\nversion = \"1.0.0\"\n\n[[clip]]\nid = \"g.a.001\"\nname = \"A\"\nstart = \"inputs/a.start.presses\"\npresses = \"inputs/a.presses\"\nframes = 40\nlevel = \"x\"\n";
+        // Trimmed, as the gate's git show gives them.
         let old = |f: &str| match f {
-            "g/corpus.toml" => Some(before.to_owned()),
-            "g/inputs/a.presses" => Some("gp-presses 0\nframes 40\n".to_owned()),
-            "g/inputs/a.start.presses" => Some("gp-presses 0\nframes 5\n".to_owned()),
+            "g/corpus.toml" => Some(before.trim().to_owned()),
+            "g/inputs/a.presses" => Some("gp-presses 0\nframes 40".to_owned()),
+            "g/inputs/a.start.presses" => Some("gp-presses 0\nframes 5".to_owned()),
             _ => None,
         };
         fs::create_dir_all(tree.join("g/inputs")).unwrap();
