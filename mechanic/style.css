@@ -78,6 +78,9 @@ a#logo { text-decoration: none; }
 /* CLIPS's game pane: the original, or a clip on the model. */
 #views { display: flex; gap: 0; margin-bottom: 6px; }
 #views[hidden] { display: none; }
+#rb-look-pick { font: bold 12px var(--mono); letter-spacing: 1px; color: var(--muted); margin-left: 12px; align-self: center; }
+#rb-look-pick[hidden] { display: none; }
+#rb-look { font: bold 12px var(--mono); background: var(--nes-0f, #000); color: var(--fg, #fff); border: 2px solid var(--line); }
 #views button { font: bold 12px var(--mono); letter-spacing: 1px; padding: 3px 10px; background: var(--nes-0f, #000); color: var(--muted); border: 2px solid var(--line); cursor: pointer; }
 #views button + button { border-left: 0; }
 #views button.on { color: var(--fg); border-color: var(--nes-28); }

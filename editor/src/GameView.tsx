@@ -142,6 +142,21 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
   const canvas = useRef<HTMLCanvasElement>(null);
   const iframe = useRef<HTMLIFrameElement>(null);
   const model = useRef(new Model(() => iframe.current));
+  // The person's own themes for the game, which the rebuilt side can be
+  // drawn in (the preview's themes/index.json), and the one picked.
+  const [looks, setLooks] = useState<string[]>([]);
+  const [look, setLook] = useState("original");
+  useEffect(() => {
+    let live = true;
+    fetch(api.capturePreview(run, "themes/index.json"))
+      .then((r) => (r.ok ? r.json() : { themes: [] }))
+      .then((j: { themes?: { id: string }[] }) => live && setLooks((j.themes ?? []).map((t) => t.id)))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [api, run]);
+  useEffect(() => model.current.theme(look), [look]);
   const clipEnd = useRef<number | undefined>(undefined);
   const stillQueue = useRef<Promise<unknown>>(Promise.resolve());
   const rec = recording ?? start.recording;
@@ -443,6 +458,19 @@ export function GameView({ api, run, words: g, live, play, send, toolbar }: Game
             <option value="diff">the differences</option>
           </select>
         </label>
+        {looks.length > 0 && (
+          <label title="The rebuilt game drawn in one of your themes for this game, beside the original">
+            rebuilt game in{" "}
+            <select value={look} onChange={(e) => setLook(e.target.value)} data-testid="game-look">
+              <option value="original">its own pictures</option>
+              {looks.map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         {layout === "top" && (
           <label title="How much of the model shows over the original">
             original{" "}

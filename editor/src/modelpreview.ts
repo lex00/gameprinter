@@ -12,6 +12,8 @@ export class ModelPreview {
   private next = 1;
   /** The physics profile shown (docs/model.md, "Profiles"): "retro" is the model as written. */
   private physics = "retro";
+  /** The look the rebuilt game is drawn in: "" for the build's own. */
+  private look = "";
   /** What the preview said went wrong, such as a module too old to load a state. */
   onError?: (message: string) => void;
   constructor(private readonly frame: () => HTMLIFrameElement | null) {}
@@ -34,6 +36,7 @@ export class ModelPreview {
       q.forEach((x) => this.post(x));
       // A page loaded again starts in retro: it gets the chosen physics after its start.
       if (this.physics !== "retro") this.post({ gp: "profile", name: this.physics });
+      if (this.look) this.post({ gp: "theme", id: this.look });
     } else if (m?.gp === "snap" && m.id !== undefined) {
       this.snaps.get(m.id)?.(m.url ?? "");
       this.snaps.delete(m.id);
@@ -61,6 +64,12 @@ export class ModelPreview {
     this.physics = name;
     // A page not ready yet gets it once it is (receive).
     if (this.ready) this.post({ gp: "profile", name });
+  }
+  /** The rebuilt game drawn in look `id` (a theme of the person's the preview offers; "original" for the build's own), from the next frame. */
+  theme(id: string) {
+    if (id === this.look) return;
+    this.look = id;
+    if (this.ready) this.post({ gp: "theme", id });
   }
   snap(frame: number): Promise<string> {
     const id = this.next++;

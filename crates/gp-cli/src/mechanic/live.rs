@@ -427,6 +427,17 @@ pub(crate) fn opened(paths: &Paths, rb: &Rebuild, rom: &[u8]) -> Result<Opened> 
 
 /// A file of the preview: the page's scripts from the repo (so a build
 /// made before a fix still runs it), the rest from the build.
+/// The person's theme copies made from `game`, each by its name with the
+/// folder its look.txt is in.
+fn own_themes(paths: &Paths, game: &str) -> Vec<(String, PathBuf)> {
+    use crate::journeys::{Kind, list, look_dir};
+    list(&paths.home, None)
+        .into_iter()
+        .filter(|c| c.kind == Kind::Theme && c.from.as_ref().is_some_and(|o| o.name == game))
+        .filter_map(|c| Some((c.name.clone(), look_dir(&c.dir)?)))
+        .collect()
+}
+
 pub(crate) fn file(paths: &Paths, repo: &Path, game: &str, name: &str) -> Result<Response> {
     if name.is_empty()
         || name.contains("..")
@@ -436,6 +447,43 @@ pub(crate) fn file(paths: &Paths, repo: &Path, game: &str, name: &str) -> Result
             .all(|b| b.is_ascii_alphanumeric() || b"._-/".contains(&b))
     {
         return Ok(Response::error(404, "not found"));
+    }
+    // The person's own themes for this game (their theme copies, made
+    // from it), offered as the preview's looks: the side by side shows the
+    // rebuilt game in a theme being made beside the original.
+    let own = own_themes(paths, game);
+    if name == "preview.json" && !own.is_empty() {
+        let Ok(b) = std::fs::read(current(paths, game).join(name)) else {
+            return Ok(Response::error(404, "not in the preview: build it first"));
+        };
+        let mut v: Value = serde_json::from_slice(&b).unwrap_or(Value::Null);
+        v["looks"] = json!(true);
+        return Ok(Response::game_file(
+            "application/json",
+            serde_json::to_vec(&v).unwrap_or_default(),
+        ));
+    }
+    if name == "themes/index.json" {
+        let list: Vec<Value> = own.iter().map(|(id, _)| json!({ "id": id })).collect();
+        return Ok(Response::game_file(
+            "application/json",
+            serde_json::to_vec(&json!({ "themes": list })).unwrap_or_default(),
+        ));
+    }
+    if let Some(rest) = name.strip_prefix("themes/")
+        && let Some((id, file)) = rest.split_once('/')
+        && let Some((_, dir)) = own.iter().find(|(i, _)| i == id)
+    {
+        let f = dir.join(file);
+        let kind = match f.extension().and_then(|x| x.to_str()) {
+            Some("png") => "image/png",
+            Some("wav") => "audio/wav",
+            _ => "text/plain; charset=utf-8",
+        };
+        return Ok(match std::fs::read(&f) {
+            Ok(b) => Response::game_file(kind, b),
+            Err(_) => Response::error(404, "not in the theme"),
+        });
     }
     let f = if PAGE_SCRIPTS.contains(&name) {
         repo.join("scripts/web/page").join(name)

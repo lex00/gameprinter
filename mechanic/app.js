@@ -900,7 +900,7 @@ async function rbPlay(kind = "beside") {
       const prof = kind === "free" && liveRb.profile !== (profiles?.base ?? "retro") ? `&profile=${encodeURIComponent(liveRb.profile)}` : "";
       // files=here: the preview reads the build beside it, not the
       // browser's store of installed games.
-      f.src = `rebuild/index.html?control=1&files=here${prof}&t=${Date.now()}`;
+      f.src = `rebuild/index.html?control=1&files=here${prof}${lookParam()}&t=${Date.now()}`;
     });
     if (kind === "free") rbStartFree(); else await rbStart();
   } catch (e) {
@@ -925,6 +925,38 @@ function rbStartFree() {
   const older = liveRb.olderBuild ? " A newer build of the model is building; you're playing the previous one." : "";
   toast("Free play: the model alone, from its own start. R records, Esc stops." + older, older ? 7000 : 4000);
 }
+
+// The theme the live model is drawn in: one of the person's own themes
+// for this game, which the rebuild's page offers (rebuild/themes/), kept
+// in this browser; "" for the model's own pictures.
+const LOOK_KEY = "gp-clips-model-look";
+function lookParam() {
+  let id = "";
+  try { id = localStorage.getItem(LOOK_KEY) ?? ""; } catch (e) { /* no storage: its own pictures */ }
+  // Large art is drawn bigger than the board: fitted to the pane.
+  return id ? `&theme=${encodeURIComponent(id)}&scale=fit` : "";
+}
+async function setUpLooks() {
+  let themes = [];
+  try { themes = (await api("rebuild/themes/index.json")).themes ?? []; } catch (e) { return; }
+  if (!themes.length) return;
+  const sel = $("rb-look");
+  for (const t of themes) {
+    const o = document.createElement("option");
+    o.value = t.id;
+    o.textContent = t.id.toUpperCase();
+    sel.append(o);
+  }
+  try { sel.value = localStorage.getItem(LOOK_KEY) ?? ""; } catch (e) { /* its own pictures */ }
+  if (![...sel.options].some((o) => o.value === sel.value)) sel.value = "";
+  sel.onchange = () => {
+    try { localStorage.setItem(LOOK_KEY, sel.value); } catch (e) { /* this time only */ }
+    // The model playing now is drawn in it at once, no restart.
+    rbPost({ gp: "theme", id: sel.value || "original" });
+  };
+  $("rb-look-pick").hidden = false;
+}
+void setUpLooks();
 
 async function rbStart() {
   if (!liveRb) return;
@@ -1123,8 +1155,15 @@ function drawLiveRebuild() {
   g.imageSmoothingEnabled = false;
   g.fillStyle = "#000";
   g.fillRect(0, 0, W, H);
-  const [vl, vt] = liveRb.visible ?? [0, 0];
-  g.drawImage(c, vl, vt);
+  const [vl, vt, vw, vh] = liveRb.visible ?? [0, 0, W, H];
+  if (c.width > (vw ?? W) || c.height > (vh ?? H)) {
+    // A theme drawn larger than the board (large art): its picture
+    // scaled down into the board's place.
+    g.imageSmoothingEnabled = true;
+    g.drawImage(c, vl, vt, vw ?? W, vh ?? H);
+  } else {
+    g.drawImage(c, vl, vt);
+  }
   frameSource = view === "solo" ? "rebuild" : "original+rebuild";
   drawPair(player.rgba(0), g.getImageData(0, 0, W, H).data, (k) => {
     // The layout's name, for a few seconds after it changes; the badge

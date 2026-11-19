@@ -1585,6 +1585,10 @@ async function main() {
     const nextStages = new Map();
     try {
       p.loadPresent(text);
+      // An arcade game's large art is the board's to draw: open it first
+      // if it isn't yet (a page in control mode loads its bundle later),
+      // so the module's own reader never gets the board's rules.
+      if (artText && boardDraw && !boardDraw.on) loadBoard(bundle);
       if (artText) {
         const { files, stages, rooms } = artHost(p).loadArt(artText);
         const missing = files.find((f) => !art.has(f));
@@ -1644,7 +1648,7 @@ async function main() {
       await applyLook(wantLook);
     } catch (e) {
       // A kept theme that is no longer downloaded and can't be fetched.
-      console.warn(`theme ${wantLook} not drawn: ${e.message}`);
+      console.warn(`theme ${wantLook} not drawn (${boardDraw ? (boardDraw.on ? "by the board" : "the board not open") : "no board"}): ${e.message}`);
     }
   }
   t.theme = looks.current;
@@ -2757,6 +2761,12 @@ function control(p, stills, bundle, presentText, canvas, drawGame, profile, st, 
     if (m.p !== p && regions?.length && !m.regionsGiven) m.regionsGiven = m.p.setRegions(regions);
     m.p.loadPresent(presentText);
     loadBoard(bundle);
+    // The board opened again forgets the look's art: given it again, as a
+    // restart does.
+    if (lookArt) {
+      artHost(m.p).loadArt(lookArt);
+      for (const [pic, st] of artStages) if (st.rgba) m.p.artStage(pic, st.w, st.h, st.rgba);
+    }
     if (start) m.p.loadState(start);
     m.at = 0;
   };
