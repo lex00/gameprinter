@@ -413,6 +413,16 @@ original's state (`api/rebuild/start`) with the clip's presses, seeked to
 the steps it had taken by the frame. Left and right step, Space plays,
 Esc goes back to live play.
 
+Under the screens, the quest log is grouped by state, each group a heading
+in words with its count: NEEDS YOU (triage asks the person, or the row is
+asking them), AGENT WORKING, UP NEXT, DONE. Each note says who wrote it:
+YOU WROTE for a row the person made on the page, AGENT WROTE for the
+agent's; once the agent's note replaces the person's, their words stay as
+YOU ASKED (`asked` in `queue.json`, kept by `gp mechanic queue`). The
+sentences of a note holding RAM tests, addresses or hashes are folded under
+DETAILS, which a click on the row opens. A click on a row never moves where
+the next recording goes: its RECORD INTO THIS ROW does, and the line says so.
+
 The agent drives it with the MCP tool `screen_show` (`gp mechanic screen
 GAME` from the command line): `clip` and `frame`, or `live`; `pictures`;
 `view`; `opacity`. Each part it leaves out stays as the page has it. The

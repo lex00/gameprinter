@@ -1200,6 +1200,16 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
             .find(|r| r["mechanic"] == json!(m))
             .expect("just added");
         if let Some(st) = c.status {
+            // A row the person wrote on the page keeps their words (asked)
+            // when the agent's note takes its place, so the page can say
+            // who wrote which.
+            if r["by"] == json!("person")
+                && r.get("asked").is_none()
+                && let Some(o) = r.as_object_mut()
+            {
+                let said = o.get("note").cloned().unwrap_or(json!(""));
+                o.insert("asked".into(), said);
+            }
             r["status"] = json!(st);
             r["note"] = json!(c.note.unwrap_or_default());
             if let Some(o) = r.as_object_mut() {
@@ -1452,5 +1462,26 @@ mod tests {
             )
             .is_err()
         );
+        // A row the person wrote keeps their words once the agent's note
+        // replaces them, and keeps the first words on later notes.
+        let f = queue_file(&p, "test-hop").unwrap();
+        let mut q = read_queue(&f);
+        q.push(json!({"mechanic": "mine", "status": "next", "note": "the duck is slow", "by": "person"}));
+        write_queue(&f, &q).unwrap();
+        for note in ["measured the duck", "the duck is 2 frames late"] {
+            let change = RowChange {
+                status: Some("agent working"),
+                note: Some(note),
+                ..plain
+            };
+            queue(&p, "test-hop", Some("mine"), &change).unwrap();
+        }
+        let r = read_queue(&f)
+            .into_iter()
+            .find(|r| r["mechanic"] == "mine")
+            .unwrap();
+        assert_eq!(r["asked"], "the duck is slow");
+        assert_eq!(r["note"], "the duck is 2 frames late");
+        assert!(read_queue(&f)[0].get("asked").is_none());
     }
 }

@@ -25,10 +25,11 @@
 // build plays, then swapped in at the same place.
 //
 // Under the screens, the quest log (the rows `gp mechanic queue GAME`
-// prints, as app.js drew them) and the clips of every row. A recording
-// goes to the row outlined: the open one when it starts, or one clicked
-// while it records. A row clicked otherwise opens it (api/pick), so the
-// next recording goes there. A clip clicked shows on both screens.
+// prints), grouped NEEDS YOU, AGENT WORKING, UP NEXT, DONE, and the clips
+// of every row. A recording goes to the row outlined: the open one when it
+// starts. A row's RECORD INTO THIS ROW moves it there (api/pick when not
+// recording); a click elsewhere on the row only opens its details, the
+// RAM tests, addresses and hashes. A clip clicked shows on both screens.
 
 import { NesPlayer } from "./nesplayer.js";
 
@@ -630,7 +631,9 @@ function markTarget() {
     const on = li.dataset.mechanic === to;
     li.classList.toggle("target", on);
     li.classList.toggle("recording", on && (!!recording || sending));
-    li.querySelector(".qto").textContent = on ? (recording ? "RECORDING INTO THIS ROW" : sending ? "SENDING TO THIS ROW" : "RECORD GOES HERE") : "";
+    const here = li.querySelector(".qhere");
+    if (here) here.hidden = on;
+    li.querySelector(".qto").textContent = on ?(recording ? "RECORDING INTO THIS ROW" : sending ? "SENDING TO THIS ROW" : "RECORD GOES HERE") : "";
   }
   $("rec-to").textContent = to ? `${recording ? "INTO" : "TO"}: ${to.toUpperCase()}` : "";
   $("rec-to").classList.toggle("on", !!recording);
@@ -708,40 +711,102 @@ for (const ev of ["pointerup", "pointercancel"]) {
   });
 }
 
+// The quest log's groups, in the order they show: what waits for the person
+// first. A row's group is said in words in its heading and on its badge.
+const GROUPS = [
+  ["you", "NEEDS YOU"],
+  ["working", "AGENT WORKING"],
+  ["next", "UP NEXT"],
+  ["done", "DONE"],
+];
+function groupOf(r) {
+  if (r.triage?.by === "you" || r.status === "asking you") return "you";
+  if (r.status === "agent working") return "working";
+  if (r.status === "done") return "done";
+  return "next";
+}
+
+// The words in a note that are for the tools, not the person: RAM tests,
+// addresses ($00A3, 0x1F2), hashes and commits. A sentence holding one is
+// folded under DETAILS.
+const TECH = /\bRAM\b|\$[0-9a-f]{2,}\b|\b0x[0-9a-f]+\b|\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,64}\b|\bsha\d*\b|\bblake3\b/i;
+function splitNote(text) {
+  const plain = [], tech = [];
+  for (const s of String(text ?? "").split(/(?<=[.;])\s+/)) {
+    if (!s.trim()) continue;
+    (TECH.test(s) ? tech : plain).push(s);
+  }
+  return { plain: plain.join(" "), tech: tech.join(" ") };
+}
+
+/** One note of a row, with who wrote it, its tools' words folded. */
+function noteLine(who, text, cls) {
+  const box = el("div", `qnote ${cls ?? ""}`);
+  const { plain, tech } = splitNote(text);
+  box.append(el("span", "qwho", `${who}: `), plain || (tech ? "(details only)" : ""));
+  if (tech) {
+    const d = el("details", "qtech");
+    d.append(el("summary", "", "DETAILS"), el("span", "", tech));
+    d.addEventListener("click", (e) => e.stopPropagation());
+    box.append(d);
+  }
+  return box;
+}
+
 function drawQueue() {
   const q = $("queue");
   if (pressing) return;
   const key = JSON.stringify([session?.mechanic, rows, clipsBy.map((g) => [g.mechanic, (g.talk ?? []).length])]);
   if (q.dataset.key === key) { markTarget(); return; }
+  // Details opened stay open when the log is drawn again.
+  const opened = new Set([...q.querySelectorAll("li[data-mechanic]")].filter((li) => [...li.querySelectorAll("details")].some((d) => d.open)).map((li) => li.dataset.mechanic));
   q.dataset.key = key;
   q.textContent = "";
-  // The rows being worked first, in the log's order, then the rest.
-  const working = (r) => r.status === "agent working";
-  const ordered = [...rows.filter(working), ...rows.filter((r) => !working(r))];
-  for (const r of ordered) {
-    if (!r.mechanic || String(r.mechanic).startsWith("sealed")) continue;
-    const li = el("li");
-    li.dataset.mechanic = r.mechanic;
-    const by = r.triage?.by;
-    const label = by === "you" ? "NEEDS YOU" : by === "tools" ? "BY THE TOOLS" : LABELS[r.status] ?? String(r.status ?? "").toUpperCase();
-    li.append(el("span", `st st-${String(r.status ?? "").replace(/ /g, "-")}`, label), el("span", "qname", r.mechanic));
-    if (working(r)) {
-      li.classList.add("active");
-      li.append(el("span", "qworker", r.worker ? `ACTIVE: ${String(r.worker).toUpperCase()}` : "ACTIVE"));
-    }
-    li.append(el("span", "qto", ""));
-    if (r.scores) li.append(el("span", "qnote qscore", r.scores));
-    if (r.note) li.append(el("span", "qnote", r.note));
-    const turns = talkOf(r.mechanic);
-    if (turns.length) li.append(talkLines(turns));
-    li.append(commentBox(li, r.mechanic, [], `A comment on ${r.mechanic} for your agent`));
-    if (r.mechanic === session?.mechanic) li.classList.add("open");
-    li.title = "Click: recordings go to this row";
-    li.addEventListener("click", () => void pickRow(r.mechanic));
-    q.append(li);
+  const shown = rows.filter((r) => r.mechanic && !String(r.mechanic).startsWith("sealed"));
+  for (const [g, title] of GROUPS) {
+    const of = shown.filter((r) => groupOf(r) === g);
+    if (!of.length) continue;
+    q.append(el("li", `qgroup qgroup-${g}`, `${title} (${of.length})`));
+    for (const r of of) q.append(queueRow(r, g, opened.has(r.mechanic)));
   }
   if (!q.children.length) q.append(el("li", "", "No rows yet: tell your agent what to put in the quest log."));
   markTarget();
+}
+
+/** A quest-log row. A click opens its details; only RECORD INTO THIS ROW
+ * moves where the next recording goes. */
+function queueRow(r, g, open) {
+  const li = el("li", `qrow-${g}`);
+  li.dataset.mechanic = r.mechanic;
+  const label = r.triage?.by === "you" ? "NEEDS YOU" : r.triage?.by === "tools" ? "THE TOOLS TRY" : LABELS[r.status] ?? String(r.status ?? "").toUpperCase();
+  li.append(el("span", `st st-${String(r.status ?? "").replace(/ /g, "-")}`, label), el("span", "qname", r.mechanic));
+  if (g === "working") {
+    li.classList.add("active");
+    li.append(el("span", "qworker", r.worker ? `ACTIVE: ${String(r.worker).toUpperCase()}` : "ACTIVE"));
+  }
+  li.append(el("span", "qto", ""));
+  const here = el("button", "qhere", "RECORD INTO THIS ROW");
+  here.type = "button";
+  here.title = "Recordings go to this row from now on";
+  here.addEventListener("click", (e) => { e.stopPropagation(); e.currentTarget.blur(); void pickRow(r.mechanic); });
+  li.append(here);
+  if (r.scores) li.append(noteLine("SCORES", r.scores, "qscore"));
+  // Who wrote it: the person's words from the page (by: person) stay theirs
+  // (asked) once the agent's note takes the row over.
+  if (r.asked) li.append(noteLine("YOU ASKED", r.asked));
+  if (r.note) li.append(noteLine(r.by === "person" && !r.asked ? "YOU WROTE" : "AGENT WROTE", r.note));
+  const turns = talkOf(r.mechanic);
+  if (turns.length) li.append(talkLines(turns));
+  li.append(commentBox(li, r.mechanic, [], `A comment on ${r.mechanic} for your agent`));
+  if (r.mechanic === session?.mechanic) li.classList.add("open");
+  for (const d of li.querySelectorAll("details")) d.open = open;
+  li.title = "Click: show or hide its details (RAM tests, addresses, hashes)";
+  li.addEventListener("click", () => {
+    const ds = [...li.querySelectorAll("details")];
+    const to = !ds.some((d) => d.open);
+    for (const d of ds) d.open = to;
+  });
+  return li;
 }
 
 function drawClips() {
@@ -780,8 +845,9 @@ function drawClips() {
   if (!box.children.length) box.append(el("p", "empty", "No clips yet. RECORD makes one; your agent's clips show here too."));
 }
 
-/** A row clicked: while recording (or sending) the clip goes there;
- * otherwise the row opens (api/pick), and the next recording goes to it. */
+/** A row's RECORD INTO THIS ROW: while recording (or sending) the clip goes
+ * there; otherwise the row opens (api/pick), and the next recording goes to
+ * it. */
 async function pickRow(m) {
   if (sending) { note(`This clip goes to ${clipFor}. Wait for it to send.`); return; }
   if (recording) { clipFor = m; markTarget(); note(`This recording goes to ${m}.`); return; }
