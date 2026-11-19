@@ -389,6 +389,11 @@ pub struct Omit {
     pub bodies: Vec<bool>,
     pub screen: bool,
     pub cells: Vec<bool>,
+    /// Single sprites of a body left out, the rest of it drawn: `(body,
+    /// None)` its own sprite, `(body, Some(n))` its extra sprite `n` (a mug
+    /// a customer holds, which a theme draws while the board draws the
+    /// customer).
+    pub parts: Vec<(usize, Option<usize>)>,
 }
 
 /// Whether the model names any board art: a level's `present.board` or an
@@ -983,7 +988,7 @@ impl BoardArt {
                 flags ^= 0x10;
             }
             let picture = k.picture.read(b);
-            if !omit.bodies.get(i).copied().unwrap_or(false) {
+            if !omit.bodies.get(i).copied().unwrap_or(false) && !omit.parts.contains(&(i, None)) {
                 ram[r * 4..r * 4 + 4].copy_from_slice(&[y as u8, flags, picture, x as u8]);
             }
             let (px, py) = video::sprite_place(x as i32, y as i32);
@@ -1007,7 +1012,8 @@ impl BoardArt {
                 break;
             };
             taken[r] = true;
-            if !omit.bodies.get(i).copied().unwrap_or(false) {
+            if !omit.bodies.get(i).copied().unwrap_or(false) && !omit.parts.contains(&(i, Some(n)))
+            {
                 ram[r * 4..r * 4 + 4].copy_from_slice(&bytes);
             }
             let [y, flags, picture, x] = bytes;
@@ -1540,6 +1546,8 @@ impl BoardArt {
         let unseen = self.unseen(w, &full, bare.as_ref());
         let mut bodies = vec![None; n];
         let mut order = vec![u32::MAX; n];
+        // By body: which of its sprites the theme draws (the last named).
+        let mut chosen: Vec<Option<Option<usize>>> = vec![None; n];
         for d in &full.drawn {
             if unseen.get(d.body).copied().unwrap_or(false) {
                 continue;
@@ -1548,6 +1556,7 @@ impl BoardArt {
                 pic(&sprite_name(&self.kind_names[d.kind], d.code)),
                 bodies.get_mut(d.body),
             ) {
+                chosen[d.body] = Some(d.extra);
                 *b = Some(gp_present::Draw {
                     pic: p,
                     x: d.rect[0],
@@ -1704,11 +1713,22 @@ impl BoardArt {
             bodies: vec![false; n],
             screen: level.is_some() && !keep_screen,
             cells: keep_cell.iter().map(|k| !k).collect(),
+            parts: Vec::new(),
         };
-        // A body the theme names no picture for stays the board's.
+        // A body the theme names no picture for stays the board's. One the
+        // theme draws is left out whole when that is its only sprite; with
+        // more (a customer holding a mug) only the sprite the theme draws
+        // is left out, and the board draws the rest.
+        let mut sprites = vec![0usize; n];
         for d in &full.drawn {
-            let themed = framed_named(&framed.scene, d.body);
-            omit.bodies[d.body] = (themed && !keep_body[d.body]) || unseen[d.body];
+            sprites[d.body] += 1;
+        }
+        for i in 0..n {
+            let themed = framed_named(&framed.scene, i) && !keep_body[i];
+            match chosen[i] {
+                Some(part) if themed && sprites[i] > 1 => omit.parts.push((i, part)),
+                _ => omit.bodies[i] = themed || unseen[i],
+            }
         }
         let mut draws: Vec<ArtDraw> = Vec::with_capacity(f.draws.len());
         let mut board_at = 0;
@@ -1727,12 +1747,15 @@ impl BoardArt {
                 _ => draws.push(d.clone()),
             }
         }
-        let mut picture =
-            if omit.screen || omit.bodies.iter().any(|b| *b) || omit.cells.iter().any(|c| *c) {
-                self.draw_omitting(w, shown, rank, &omit)?
-            } else {
-                full
-            };
+        let mut picture = if omit.screen
+            || omit.bodies.iter().any(|b| *b)
+            || omit.cells.iter().any(|c| *c)
+            || !omit.parts.is_empty()
+        {
+            self.draw_omitting(w, shown, rank, &omit)?
+        } else {
+            full
+        };
         picture.recolor = self.recolored(&theme.art.rules.recolor, &picture, &omit);
         // A recolour's nothing shows what is under it: the theme's room
         // where the theme draws the screen, else the board's own screen
@@ -2331,6 +2354,34 @@ asset = "stage2"
             }
         );
         assert_eq!(p.drawn[0].extra, None);
+        // A theme naming only the other sprite's picture (1) draws that
+        // one; the board still draws the body's own (2), not the other.
+        let mut theme = art
+            .theme("gp-art 1\nscale 2\npic sprite-player-01 mug.png 32 32 0 0\n")
+            .unwrap();
+        let t = art.themed(&mut theme, &w, &[true], &[u32::MAX]).unwrap();
+        let own = video::SPRITE_BIT | 3;
+        assert!(
+            t.picture.pens.contains(&own),
+            "the body's own sprite is drawn"
+        );
+        let arts = t
+            .frame
+            .draws
+            .iter()
+            .filter(|d| matches!(d.src, gp_present::art::Src::Art(_)))
+            .count();
+        assert_eq!(arts, 1);
+        let other = art.draw(&w, &[true], &[u32::MAX]).unwrap();
+        let (x, y) = (
+            other.drawn[1].rect[0] as usize + 31,
+            other.drawn[1].rect[1] as usize + 31,
+        );
+        assert_ne!(
+            t.picture.pens[y * video::WIDTH + x] & video::SPRITE_BIT,
+            video::SPRITE_BIT,
+            "the other sprite is left to the theme"
+        );
     }
 
     /// A string drawn while its counter test holds, a byte a cell up to
