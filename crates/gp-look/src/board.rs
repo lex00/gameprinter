@@ -1462,13 +1462,9 @@ impl BoardArt {
     /// screen has there without sprites, so the board shows nothing of it
     /// (a body with no sprite drawn is not unseen, nor one with a mask
     /// pixel, which hides the sprites under it).
-    fn unseen(&self, w: &World, shown: &[bool], rank: &[u32], full: &Picture) -> Vec<bool> {
+    fn unseen(&self, w: &World, full: &Picture, bare: Option<&Picture>) -> Vec<bool> {
         let n = w.bodies.len();
-        let bare = Omit {
-            bodies: vec![true; n],
-            ..Omit::default()
-        };
-        let Some(bare) = self.draw_omitting(w, shown, rank, &bare) else {
+        let Some(bare) = bare else {
             return vec![false; n];
         };
         let rgb = |pen: u8| full.palette[usize::from(pen & 0x3f)];
@@ -1530,7 +1526,18 @@ impl BoardArt {
         // A body the board draws in the colours already under it (a tap
         // kept in place on a screen that hides it) shows nothing there:
         // neither the theme nor the board draws it.
-        let unseen = self.unseen(w, shown, rank, &full);
+        // The screen with no sprites: what shows under a body, for the
+        // bodies the board shows nothing of and for a recolour's nothing.
+        let bare = self.draw_omitting(
+            w,
+            shown,
+            rank,
+            &Omit {
+                bodies: vec![true; n],
+                ..Omit::default()
+            },
+        );
+        let unseen = self.unseen(w, &full, bare.as_ref());
         let mut bodies = vec![None; n];
         let mut order = vec![u32::MAX; n];
         for d in &full.drawn {
@@ -1727,6 +1734,21 @@ impl BoardArt {
                 full
             };
         picture.recolor = self.recolored(&theme.art.rules.recolor, &picture, &omit);
+        // A recolour's nothing shows what is under it: the theme's room
+        // where the theme draws the screen, else the board's own screen
+        // there (a screen a theme leaves the board's, as a title's).
+        if !omit.screen
+            && let Some(bare) = &bare
+        {
+            for (at, c) in &mut picture.recolor {
+                if c.is_none()
+                    && let Some(&pen) = bare.pens.get(*at as usize)
+                {
+                    let v = bare.palette[usize::from(pen & 0x3f)];
+                    *c = Some([(v >> 16) as u8, (v >> 8) as u8, v as u8]);
+                }
+            }
+        }
         Some(Themed {
             picture,
             frame: gp_present::art::ArtFrame { draws, ..f },
@@ -2641,7 +2663,8 @@ asset = "stage2"
         let t = art.themed(&mut theme, &w, &[true], &[u32::MAX]).unwrap();
         let plain = art.draw(&w, &[true], &[u32::MAX]).unwrap();
         assert_eq!(t.picture.drawn.len(), plain.drawn.len());
-        assert!(!art.unseen(&w, &[true], &[u32::MAX], &plain)[0]);
+        let bare = art.draw(&w, &[false], &[u32::MAX]);
+        assert!(!art.unseen(&w, &plain, bare.as_ref())[0]);
     }
 
     /// `#+ recolor` gives a picture's pixels of a colour number the theme's
@@ -2675,6 +2698,21 @@ asset = "stage2"
             .unwrap();
         let t = art.themed(&mut theme, &w, &[true], &[u32::MAX]).unwrap();
         assert!(t.picture.recolor.iter().all(|(_, c)| c.is_none()));
+        // With the screen left the board's (no picture for it), nothing
+        // shows the board's screen there: tile 1 in bank 1, pen 21.
+        let mut theme = art
+            .theme("gp-art 1\nscale 2\npic sprite-player-02 x.png 32 32 0 0\n#+ recolor sprite-player-03 2=-\n")
+            .unwrap();
+        let t = art.themed(&mut theme, &w, &[true], &[u32::MAX]).unwrap();
+        let screen = art.draw(&w, &[false], &[u32::MAX]).unwrap();
+        let v = screen.palette[usize::from(screen.pens[0] & 0x3f)];
+        assert!(!t.picture.recolor.is_empty());
+        assert!(
+            t.picture
+                .recolor
+                .iter()
+                .all(|(_, c)| *c == Some([(v >> 16) as u8, (v >> 8) as u8, v as u8]))
+        );
         // `box=0,0,7,3`: only those of its pixels, 8 by 4.
         let mut theme = art
             .theme("gp-art 1\nscale 2\npic stage saloon.png 512 480 0 0\n#+ recolor sprite-player-03 box=0,0,7,3 2=-\n")
