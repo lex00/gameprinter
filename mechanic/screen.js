@@ -823,10 +823,26 @@ async function refreshAsks() {
     card.append(el("span", "ask-head", a.state === "yes" ? "YOU SAID YES" : "YOUR AGENT ASKS"));
     const says = el("span", "ask-says", a.says ?? "");
     card.append(says);
-    const argv = a.argv ?? [];
-    const mi = argv.indexOf("--message");
-    const detail = [`gp ${a.command ?? ""}`, mi >= 0 ? argv[mi + 1] : ""].filter(Boolean).join(": ");
-    if (detail) card.append(el("span", "ask-detail", detail));
+    // The quest-log row it is for: its step's (row:GAME/ROW), which a
+    // click opens; a card with no step was raised outside the loop.
+    const step = a.step ? openSteps.find((x) => x.id === a.step) : null;
+    const row = (step?.touches ?? []).find((t) => t.startsWith("row:"))?.split("/").slice(1).join("/") ?? null;
+    if (row) {
+      const go = el("button", "ask-row", `FOR ${row.toUpperCase()}`);
+      go.type = "button";
+      go.title = "Open this quest-log item";
+      go.addEventListener("click", (e) => {
+        e.currentTarget.blur();
+        void pickRow(row);
+        $("quest")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      card.append(go);
+    } else {
+      card.append(el("span", "ask-detail", a.step
+        ? `For step ${a.step}, no longer open.`
+        : "Raised outside the loop: no quest-log item, no step."));
+    }
+    card.append(el("span", "ask-detail", `gp ${a.command ?? ""}`));
     if (a.state === "yes") {
       card.append(el("span", "ask-detail", "Your agent can go ahead, once."));
     } else {
@@ -866,6 +882,7 @@ async function refreshAsks() {
 // halted the list is empty and the halt says why.
 
 let stepsDrawn = "";
+let openSteps = []; // the open steps as /api/steps last gave them
 let stepsWriting = false; // a WRONG box is open: don't redraw under it
 async function refreshSteps() {
   if (stepsWriting) return;
@@ -875,6 +892,7 @@ async function refreshSteps() {
     if (r.ok) v = await r.json();
   } catch (e) { /* the next look */ }
   if (!v) return;
+  openSteps = v.open ?? [];
   drawWorkers(v);
   const key = JSON.stringify([v.halted?.id ?? null, (v.open ?? []).map((s) => s.id)]);
   if (key === stepsDrawn) return;

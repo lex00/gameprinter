@@ -243,6 +243,9 @@ pub struct New<'a> {
     /// A change gp_run's net held (`crate::held`): the ask's key is then
     /// [`held_key`]'s and the card says `held_says`.
     pub held: Option<(Value, String)>,
+    /// The loop's step the call cited (gp_run's `step`), so the page can
+    /// show the card with the quest-log row the step works on.
+    pub step: Option<&'a str>,
 }
 
 /// The key of a change the net held for one exact call, apart from the
@@ -295,9 +298,12 @@ pub fn make(home: &Path, n: &New) -> Result<Value, String> {
     if let Some((h, _)) = &n.held {
         v["held"] = h.clone();
     }
-    // A worker the loop's runner started asks for its step, which the
-    // page's list of workers shows as waiting for a yes.
-    if let Ok(s) = std::env::var(crate::steps::STEP_ENV)
+    // The step the call cited, or a runner's worker's own: the page shows
+    // the card with the step's quest-log row, and its list of workers this
+    // worker as waiting for a yes.
+    if let Some(st) = n.step.map(str::trim).filter(|s| !s.is_empty()) {
+        v["step"] = json!(st);
+    } else if let Ok(s) = std::env::var(crate::steps::STEP_ENV)
         && !s.trim().is_empty()
     {
         v["step"] = json!(s.trim());
@@ -315,6 +321,24 @@ fn value<'a>(values: &'a [(String, String)], names: &[&str]) -> Option<&'a str> 
 
 /// What the ask says to the person: what it does, in words they can judge,
 /// and what it publishes and where.
+/// The files a patch (`git diff` output, or a format-patch mail) changes,
+/// by the paths its `diff --git` lines name; none when it can't be read.
+fn patch_files(path: &str) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for l in text.lines() {
+        if let Some(rest) = l.strip_prefix("diff --git a/")
+            && let Some((a, _)) = rest.split_once(" b/")
+            && !out.iter().any(|x| x == a)
+        {
+            out.push(a.to_owned());
+        }
+    }
+    out
+}
+
 pub fn says(n: &New) -> String {
     let v = |names: &[&str]| value(n.values, names);
     let game = v(&["game", "template", "run"]);
@@ -334,9 +358,18 @@ pub fn says(n: &New) -> String {
         "theme generate" => format!(
             "Pay an image service (Runway) to draw the pictures for a theme{of}. The pictures are made from our own words, never the game's art."
         ),
-        "model gate" => format!(
-            "Land the changed model{of} in the game's folder, once it passes the game's checks. Everyone who uses the game gets it."
-        ),
+        // What lands, in the patch's own words, and the files it changes.
+        "model gate" => {
+            let what = v(&["message"]).map_or_else(
+                || format!("the changed model{of}"),
+                |m| format!("\"{}\"", m.trim()),
+            );
+            let files = v(&["patch"]).map(patch_files).filter(|f| !f.is_empty());
+            let files = files
+                .map(|f| format!(" It changes {}.", f.join(", ")))
+                .unwrap_or_default();
+            format!("Land {what}{of}, once it passes the game's checks.{files}")
+        }
         "registry publish" => format!(
             "Publish{} in the registry{to}. Anyone who reads that registry can get it.",
             v(&["dir", "package", "path"])
@@ -426,6 +459,30 @@ pub fn cost_of(dry: &Value) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// A gate's card says what lands in the patch's own words and the
+    /// files it changes.
+    #[test]
+    fn a_gate_card_says_what_lands() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("x.patch");
+        std::fs::write(&p, "diff --git a/g/model.toml b/g/model.toml\n--- a/g/model.toml\n+++ b/g/model.toml\n@@ -1 +1 @@\n-a\n+b\n").unwrap();
+        let path = p.to_string_lossy().to_string();
+        let argv: Vec<String> = Vec::new();
+        let values = vec![
+            ("game".to_owned(), "g".to_owned()),
+            ("patch".to_owned(), path),
+            ("message".to_owned(), "The ball bounces".to_owned()),
+        ];
+        let n = New {
+            command: "model gate",
+            needs: Ask::Publish,
+            ..new(&argv, &values)
+        };
+        let s = says(&n);
+        assert!(s.starts_with("Land \"The ball bounces\" of g"), "{s}");
+        assert!(s.contains("It changes g/model.toml."), "{s}");
+    }
+
     fn new<'a>(argv: &'a [String], values: &'a [(String, String)]) -> New<'a> {
         New {
             command: "registry publish",
@@ -436,6 +493,7 @@ mod tests {
             cost: None,
             plan: None,
             held: None,
+            step: None,
         }
     }
 

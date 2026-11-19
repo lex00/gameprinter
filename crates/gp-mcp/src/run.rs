@@ -1027,6 +1027,7 @@ fn the_yes(
                     cost,
                     plan: plan.clone(),
                     held: None,
+                    step: a.step.as_deref(),
                 },
             );
             let lead = if other {
@@ -1190,6 +1191,7 @@ fn held_refusal(
             cost: None,
             plan: None,
             held: Some((h.clone(), says)),
+            step: None,
         },
     );
     let then = if served {

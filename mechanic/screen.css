@@ -120,3 +120,4 @@ form.comment .comment-text { flex: 1; min-width: 0; font: 13px var(--mono); back
 .talk { flex-basis: 100%; display: flex; flex-direction: column; gap: 1px; margin-top: 2px; }
 .talk-line { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .talk-you { color: var(--gold); }
+#asks .ask-row { font: bold 12px var(--mono); color: var(--accent); background: transparent; border: 2px solid var(--accent); padding: 0 8px; }
