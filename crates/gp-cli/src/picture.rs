@@ -107,18 +107,58 @@ pub(crate) struct SpriteLine {
     extra: Vec<(String, [i64; 4])>,
 }
 
-/// The original's sprites against the model's bodies on one frame. A
-/// sprite or body is shown when it has sprite pixels on its own frame; a
-/// sprite is missing when no body
-/// overlaps it and the model's frame has no sprite pixel in its box, and a
-/// body is extra when no shown sprite overlaps it and the original's frame
-/// has no sprite pixel in its box.
-fn sprite_line(frame: u64, o: &Frame, m: &Frame, sprites: &[Oam], bodies: &[Drawn]) -> SpriteLine {
+/// The original's sprites against the model's on one frame. A sprite is
+/// shown when it has sprite pixels on its own frame. On a level with board
+/// art the model's side is the board's own entries (`board`), matched code
+/// for code within 4 pixels: a sprite is missing when the model draws no
+/// entry of its code near it, and an entry is extra the other way round,
+/// so a wrong picture shows. Otherwise the model's side is its bodies: a
+/// sprite is missing when no body overlaps it and the model's frame has no
+/// sprite pixel in its box, and a body is extra the other way round.
+fn sprite_line(
+    frame: u64,
+    o: &Frame,
+    m: &Frame,
+    sprites: &[Oam],
+    bodies: &[Drawn],
+    board: Option<&[(u16, [i64; 4])]>,
+) -> SpriteLine {
     let original: Vec<(u16, [i64; 4])> = sprites
         .iter()
         .filter(|s| sprite_pixels(o, s.rect) > 0)
         .map(|s| (s.tile, s.rect))
         .collect();
+    // On board art, the board's own entries: matched code for code within
+    // a few pixels, so a wrong picture shows as well as a missing one.
+    if let Some(board) = board {
+        let near = |a: [i64; 4], b: [i64; 4]| (a[0] - b[0]).abs() <= 4 && (a[1] - b[1]).abs() <= 4;
+        let model: Vec<(String, [i64; 4])> = board
+            .iter()
+            .filter(|(_, r)| sprite_pixels(m, *r) > 0)
+            .map(|(c, r)| (format!("{c:03x}"), *r))
+            .collect();
+        let missing = original
+            .iter()
+            .filter(|(c, r)| !board.iter().any(|(mc, mr)| mc == c && near(*mr, *r)))
+            .cloned()
+            .collect();
+        let extra = model
+            .iter()
+            .filter(|(c, r)| {
+                !original
+                    .iter()
+                    .any(|(oc, or)| &format!("{oc:03x}") == c && near(*or, *r))
+            })
+            .cloned()
+            .collect();
+        return SpriteLine {
+            frame,
+            original,
+            model,
+            missing,
+            extra,
+        };
+    }
     let model: Vec<(String, [i64; 4])> = bodies
         .iter()
         .filter(|b| !b.behind && sprite_pixels(m, b.rect) > 0)
@@ -300,6 +340,9 @@ struct Shown {
     /// Cells in view of a kind a game changes (blocks, bricks, coins), or
     /// changed: screen rect, the level's kind, the kind now.
     cells: Vec<([i64; 4], Tile, Tile)>,
+    /// On a level with board art, the board's sprite entries the model's
+    /// picture draws: picture code and box.
+    board: Option<Vec<(u16, [i64; 4])>>,
 }
 
 /// One box put down to a cause.
@@ -474,8 +517,10 @@ impl Watch {
                 }
             }
         }
+        let board = art.board_sprites(w, &scene);
         Shown {
             frame: self.steps,
+            board,
             bodies,
             camera: [cx, cy],
             tints: scene.tints.iter().map(|(m, _)| *m).collect(),
@@ -536,7 +581,14 @@ impl Screens<OriginalRuntime, Model> for Watch {
             }
         };
         if let Some(lines) = &mut self.sprites {
-            lines.push(sprite_line(shown.frame, &o, &m, &sprites, &shown.bodies));
+            lines.push(sprite_line(
+                shown.frame,
+                &o,
+                &m,
+                &sprites,
+                &shown.bodies,
+                shown.board.as_deref(),
+            ));
         }
         let found = classify(
             &o,

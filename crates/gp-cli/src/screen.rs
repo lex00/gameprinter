@@ -467,6 +467,22 @@ impl Art {
             .unwrap_or_default()
     }
 
+    /// The board's sprite entries on a frame of the world, as its picture
+    /// draws them: each one's picture code (0 to 511) and box in the board
+    /// picture's pixels. None off a level with board art.
+    pub(crate) fn board_sprites(
+        &self,
+        w: &gp_sim::World,
+        scene: &gp_present::Scene,
+    ) -> Option<Vec<(u16, [i64; 4])>> {
+        let ba = self.board_art.as_ref()?;
+        let shown: Vec<bool> = (0..w.bodies.len())
+            .map(|i| scene.bodies.get(i).is_some_and(Option::is_some))
+            .collect();
+        ba.layout(w, &shown, &scene.rank)
+            .map(|pic| pic.drawn.iter().map(|d| (d.code, d.rect)).collect())
+    }
+
     /// Whether its bodies are placed on an arcade board's screen in the
     /// board's own units (a mapping's `board_units`): screen pixels are
     /// then [`gp_arcade::video::UNIT`] to one of the model's.
