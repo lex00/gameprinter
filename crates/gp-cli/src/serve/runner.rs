@@ -65,6 +65,8 @@ pub(crate) struct Setup {
     pub games: PathBuf,
     /// The repo its worktree is made from.
     pub repo: PathBuf,
+    /// gameprinter's checkout, which its gp mcp reads.
+    pub tools: PathBuf,
     pub gp: PathBuf,
     pub argv: Vec<String>,
     pub program: PathBuf,
@@ -331,6 +333,7 @@ fn look(ctx: &Ctx) {
         home: home.clone(),
         games: ctx.games.clone(),
         repo: cs.repo.clone(),
+        tools: ctx.repo.clone(),
         gp: cs.gp.clone(),
         argv,
         program,
@@ -678,7 +681,9 @@ fn work(setup: &Setup, flag: &AtomicBool, rec: &mut Value) -> anyhow::Result<()>
     fs::write(
         &mcp,
         serde_json::to_vec_pretty(&json!({"mcpServers": {"gp": {
-            "command": setup.gp, "args": ["mcp"], "env": env,
+            // gp mcp reads gameprinter's own checkout (templates/), which a
+            // games worktree isn't: name it, and the games checkout.
+            "command": setup.gp, "args": ["mcp", "--repo", setup.tools, "--games", setup.games], "env": env,
         }}}))?,
     )?;
     let t0 = Instant::now();
@@ -904,6 +909,7 @@ mod tests {
         Setup {
             home: t.join("home"),
             games: t.join("games"),
+            tools: repo.clone(),
             repo,
             gp: PathBuf::from("/nonexistent/gp"),
             argv: vec!["sh".into(), sh.display().to_string()],
