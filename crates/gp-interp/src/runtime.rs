@@ -137,6 +137,17 @@ impl Interp {
         self.draws.as_ref()
     }
 
+    /// The random draws script to change, as a live run adds the
+    /// original's draws to it frame by frame (the screen page's model).
+    pub fn draws_mut(&mut self) -> Option<&mut gp_sim::DrawScript> {
+        self.draws.as_mut()
+    }
+
+    /// [`Self::with_draws`] in place, or no script with `None`.
+    pub fn set_draws(&mut self, draws: Option<gp_sim::DrawScript>) {
+        self.draws = draws;
+    }
+
     /// Sets the original's frame the next load starts the draws script at
     /// (also `set` on [`DRAWS_BASE`], which a lockstep does as it takes its
     /// start)

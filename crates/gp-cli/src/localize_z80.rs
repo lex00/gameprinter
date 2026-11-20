@@ -1486,6 +1486,7 @@ mod tests {
             i: 0,
             bytes,
             cycles: 0,
+            prev_pc: 0,
             interrupt: irq,
         };
         let trace = vec![

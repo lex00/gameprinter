@@ -414,6 +414,7 @@ pub(crate) fn start(
         "state": base64::engine::general_purpose::STANDARD.encode(&s.state),
         "missing": s.notes.iter().filter(|n| n.how.name() == "missing").count(),
         "notes": s.notes.len(),
+        "draw_sites": draw_sites(mapping),
     }))
 }
 
@@ -466,6 +467,32 @@ fn prefix_at(
         cache::write_note(home, &key, &tag, &serde_json::to_vec(&p)?);
     }
     Ok((original, p))
+}
+
+/// The mapping's draw sites for the page's player to record the
+/// original's random draws at, a site a line
+/// ([`gp_arcade::draws::Site::line`]), when the mapping scores with them
+/// (`score_draws`): the page hands each frame's draws to the model as a
+/// clip's score does, so the two make the same random choices live.
+/// Null when it doesn't.
+pub(crate) fn draw_sites(mapping: &Mapping) -> Value {
+    if !mapping.score_draws || mapping.draws.is_empty() {
+        return Value::Null;
+    }
+    let lines: String = crate::lockstep::arcade_sites(mapping)
+        .iter()
+        .map(|s| s.line() + "\n")
+        .collect();
+    json!(lines)
+}
+
+/// [`draw_sites`] of the game's mapping as it is on disk, without opening
+/// the model: null when there is none or it doesn't read.
+pub(crate) fn draw_sites_of(rb: &Rebuild) -> Value {
+    std::fs::read_to_string(rb.game.join(gp_interp::mapping::MAPPING_FILE))
+        .ok()
+        .and_then(|t| Mapping::parse(&t).ok())
+        .map_or(Value::Null, |m| draw_sites(&m))
 }
 
 /// The model and its mapping, opened once and kept while their files and

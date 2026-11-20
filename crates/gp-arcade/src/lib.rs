@@ -65,6 +65,7 @@ pub mod attotime;
 pub mod canonical;
 pub mod ctc;
 pub mod dasm;
+pub mod draws;
 pub mod events;
 pub mod harvest;
 pub mod inp;

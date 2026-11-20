@@ -14,20 +14,29 @@
 // one (the workspace's game view, docs/inspector.md): it has no clock of
 // its own and answers messages from its parent, of its own origin only:
 //   {gp: "frames", text, frame}  the input to play, as a frames file
-//   {gp: "load-state", state, text, frame}
+//   {gp: "load-state", state, text, frame, draws}
 //                                the input to play from a model state (the
 //                                canonical state's bytes in base64): every
-//                                seek back starts again from that state
+//                                seek back starts again from that state.
+//                                `draws` ({base, lines}), when given, is
+//                                the original's random draws from there
+//                                (docs/formats/draws.md, `frame site value`
+//                                lines; base the original's frame the
+//                                state stands for), which the model takes
+//                                in place of its own generator's
 //   {gp: "seek", frame}          step to that model frame and draw it
-//   {gp: "push", text}           more input played live (a frames file):
-//                                appended, then stepped to its end and drawn
+//   {gp: "push", text, draws}    more input played live (a frames file):
+//                                appended, then stepped to its end and
+//                                drawn; `draws`, more of the original's
+//                                draws (lines), first
 //   {gp: "snap", frame, id}      a picture of that frame, then back
 //   {gp: "profile", name}        the model in that physics profile from
 //                                the same start, stepped to the same frame
 //                                (`retro` is the model as written); it
 //                                answers {gp: "profile", name, frame}
-// It posts {gp: "ready"} once loaded, {gp: "at", frame, of} after each
-// seek and {gp: "snap", id, url} with each picture.
+// It posts {gp: "ready"} once loaded, {gp: "at", frame, of, draws} after
+// each seek (draws: how the model took the original's, or null) and
+// {gp: "snap", id, url} with each picture.
 //
 // Played from the keyboard or a gamepad (no `run` or `control`), the page
 // has the runtime shell (docs/web.md, "The shell"; docs/shell.md): the
@@ -175,6 +184,24 @@ class Preview {
     const code = this.run("gp_ring_back");
     if (code === 1) throw new Error(this.out());
     return code === 0;
+  }
+  // The original's random draws in place of the model's own generator
+  // (gp_web::Preview::set_draws): a draws script's text and the original's
+  // frame the next state loaded stands for. False from a gp_web.wasm
+  // built before it.
+  setDraws(script, base) {
+    if (!this.has("gp_set_draws")) return false;
+    this.check(this.run("gp_set_draws", enc.encode(script), base));
+    return true;
+  }
+  // More of the original's draws, `frame site value` lines.
+  addDraws(lines) {
+    this.check(this.run("gp_add_draws", enc.encode(lines)));
+  }
+  // How the model took them: {taken, of, desync, desyncs}, or null.
+  drawsReport() {
+    if (!this.has("gp_draws_report")) return null;
+    return JSON.parse(this.check(this.run("gp_draws_report")));
   }
   loadState(bytes) {
     if (!this.has("gp_load_state")) throw new Error("this preview's gp_web.wasm can't load a state; rebuild the run's preview");
@@ -2755,6 +2782,9 @@ function control(p, stills, bundle, lookNow, canvas, drawGame, profile, st, regi
   // The state the steps start from: power-on, or one loaded (the
   // original's, translated), so frame n is always n steps from it.
   let start = null;
+  // The original's random draws from that start ({base, lines}), given to
+  // the model at every start again, so a seek back takes the same ones.
+  let draws = null;
   // A model and the frame it's at: the one watched, and the one stills are taken on.
   const watched = { p, at: 0 };
   const still = { p: stills, at: 0 };
@@ -2772,6 +2802,8 @@ function control(p, stills, bundle, lookNow, canvas, drawGame, profile, st, regi
       artHost(m.p).loadArt(look.art);
       for (const [pic, s] of look.stages) if (s.rgba) m.p.artStage(pic, s.w, s.h, s.rgba);
     }
+    // A gp_web.wasm built before draws takes none: the model rolls its own.
+    if (draws && start && !m.p.setDraws(`gp-draws 0\n${draws.lines.join("")}`, draws.base)) draws = null;
     if (start) m.p.loadState(start);
     m.at = 0;
   };
@@ -2794,6 +2826,7 @@ function control(p, stills, bundle, lookNow, canvas, drawGame, profile, st, regi
     try {
       if (m.gp === "frames" || m.gp === "load-state") {
         start = m.gp === "load-state" ? Uint8Array.from(atob(m.state), (c) => c.charCodeAt(0)) : null;
+        draws = start && m.draws ? { base: Number(m.draws.base) || 0, lines: [String(m.draws.lines ?? "")] } : null;
         steps = parseFrames(m.text);
         reset(watched);
         reset(still);
@@ -2801,6 +2834,12 @@ function control(p, stills, bundle, lookNow, canvas, drawGame, profile, st, regi
       } else if (m.gp === "seek") {
         seek(m.frame);
       } else if (m.gp === "push") {
+        if (draws && m.draws) {
+          // Into both models' scripts as they stand: the still one takes
+          // them when it steps that far, as the watched one does now.
+          draws.lines.push(String(m.draws));
+          for (const x of [watched, still]) x.p.addDraws(String(m.draws));
+        }
         for (const x of parseFrames(m.text)) steps.push(x);
         seek(steps.length);
       } else if (m.gp === "bundle" || m.gp === "profile") {
@@ -2855,7 +2894,7 @@ function control(p, stills, bundle, lookNow, canvas, drawGame, profile, st, regi
         tell({ gp: "snap", id: m.id, url });
         return;
       } else return;
-      tell({ gp: "at", frame: watched.at, of: steps.length });
+      tell({ gp: "at", frame: watched.at, of: steps.length, draws: draws ? watched.p.drawsReport() : null });
     } catch (err) {
       t.error = String(err?.stack ?? err);
       tell({ gp: "error", message: String(err) });

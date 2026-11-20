@@ -16,9 +16,10 @@
 //! | `GET /api/session` | The open session's state ([`Session::state`]) |
 //! | `GET /api/working` | The mechanic the agent works on and its newest clip, for the idle screen |
 //! | `GET /api/clips/N.log` | A clip as its full log from power-on |
+//! | `GET /api/clips/N.draws` | The original's random draws over a clip as the page saw them while recording it (`POST /api/clips`'s `draws`, kept as `clips/NNN.draws`); 404 when none were kept |
 //! | `GET /api/live` | The agent's model playing live: always empty here |
 //! | `POST /api/paths` | Keeps the play so far as a path |
-//! | `POST /api/clips` | Saves a clip: a path, a start and its own inputs, or a full log and a start |
+//! | `POST /api/clips` | Saves a clip: a path, a start and its own inputs, or a full log and a start; with a path, `draws` (a draws script) keeps the original's random draws the page saw over it beside it |
 //! | `POST /api/talk` | The person's turn |
 //! | `POST /api/pick` | Opens another mechanic of the quest log; nothing goes to the agent |
 //! | `POST /api/handoff` | Hands a quest log row to the agent: its "Let's do" turn |
@@ -1024,6 +1025,16 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
                 log.into_bytes(),
             ))
         }
+        // The original's random draws over a clip as the page saw them
+        // when it was recorded (docs/formats/draws.md's text form).
+        ("GET" | "HEAD", p) if clip_number(p, "/api/clips/", ".draws").is_some() => {
+            let n = clip_number(p, "/api/clips/", ".draws").unwrap_or(0);
+            let session = s.target(req.param("mechanic"))?;
+            match fs::read(session.dir.join(format!("clips/{n:03}.draws"))) {
+                Ok(b) => Ok(Response::bytes("text/plain; charset=utf-8", b)),
+                Err(_) => Ok(Response::error(404, "no draws kept with this clip")),
+            }
+        }
         ("GET" | "HEAD", "/api/live") => {
             // The demo's lines (`gp mechanic demo`) from `after` on: the page
             // plays them as they come.
@@ -1677,7 +1688,9 @@ fn screen_work_clip(s: &Server, req: &Request) -> Result<Response> {
 }
 
 /// `GET /api/screen/clip?n=N&mechanic=M`: where a clip starts on its play
-/// and how long it is, for the screen to play it.
+/// and how long it is, for the screen to play it, with the original's
+/// random draws kept with it (`draws`, or null) and the mapping's draw
+/// sites (`draw_sites`, as `/api/rebuild/start` gives them).
 fn screen_clip(s: &Server, req: &Request) -> Result<Response> {
     let Some(n) = req.param("n").and_then(|n| n.parse::<u64>().ok()) else {
         return Ok(Response::error(400, "n is the clip's number"));
@@ -1688,12 +1701,19 @@ fn screen_clip(s: &Server, req: &Request) -> Result<Response> {
         return Ok(Response::error(404, "no such clip"));
     };
     let t: toml::Table = toml::from_str(&text)?;
+    // The original's random draws over the clip, kept when it was recorded
+    // on the page, and the sites to record them at again when not: the
+    // model beside the clip takes them, as it does live.
+    let draws = fs::read_to_string(session.dir.join(format!("clips/{n:03}.draws"))).ok();
+    let sites = s.rebuild().map_or(Value::Null, super::live::draw_sites_of);
     Ok(Response::json(&json!({
         "n": n,
         "mechanic": session.mechanic(),
         "start": t.get("start").and_then(|v| v.as_integer()),
         "frames": t.get("frames").and_then(|v| v.as_integer()),
         "note": t.get("note").and_then(|v| v.as_str()),
+        "draws": draws,
+        "draw_sites": sites,
     })))
 }
 
@@ -1732,7 +1752,23 @@ fn post_clip(s: &Server, v: &Value) -> Result<Response> {
     // answered first, and the hash is added to its .toml when the replay
     // ends.
     let (meta, log) = clip_paths::clip_fields(path, start, &inputs);
+    // The original's random draws the page saw over the clip, when it
+    // recorded them (a mapping with `score_draws`): checked before
+    // anything is saved.
+    let draws = match v["draws"].as_str() {
+        Some(t) => Some(
+            gp_sim::DrawScript::parse(t)
+                .map(|d| d.text())
+                .map_err(|e| anyhow::anyhow!("the clip's draws: {e}"))?,
+        ),
+        None => None,
+    };
     let (n, again) = session.add_player_clip(meta, &log, note)?;
+    if let Some(d) = draws
+        && !again
+    {
+        fs::write(session.dir.join(format!("clips/{n:03}.draws")), d)?;
+    }
     let kept = format!("sealed/{}/{SEALED_ROW}/clips/{n:03}", s.game);
     // The sealed-run row hears of it, by where it is kept and not by its
     // presses.
@@ -2152,17 +2188,26 @@ mod tests {
         // A clip's start and length, from the open row's clip.
         let play = log(&["........", "........", ".......A", "........"]);
         let (_, p) = post(&srv, "/api/paths", json!({"log": play}));
-        let body = json!({"path": p["path"], "start": 2, "inputs": log(&[".......A", "........"]), "mechanic": "walk"});
+        // With the draws the page saw over it, kept beside it.
+        let draws = "gp-draws 0\n3 pick 7\n";
+        let body = json!({"path": p["path"], "start": 2, "inputs": log(&[".......A", "........"]), "mechanic": "walk", "draws": draws});
         assert_eq!(post(&srv, "/api/clips", body).0, 200);
         let v: Value = serde_json::from_str(&get(&srv, "/api/screen/clip?n=1").1).unwrap();
         assert_eq!(
             (
                 v["start"].clone(),
                 v["frames"].clone(),
-                v["mechanic"].clone()
+                v["mechanic"].clone(),
+                v["draws"].clone()
             ),
-            (json!(2), json!(2), json!("walk"))
+            (json!(2), json!(2), json!("walk"), json!(draws))
         );
+        assert_eq!(get(&srv, "/api/clips/1.draws?mechanic=walk").1, draws);
+        // A script that doesn't read keeps no clip.
+        let bad = json!({"path": p["path"], "start": 1, "inputs": log(&["........"]), "mechanic": "walk", "draws": "nope"});
+        assert_ne!(post(&srv, "/api/clips", bad).0, 200);
+        assert_eq!(get(&srv, "/api/screen/clip?n=2").0, 404);
+        assert_eq!(get(&srv, "/api/clips/2.draws?mechanic=walk").0, 404);
         assert_eq!(get(&srv, "/api/screen/clip?n=9").0, 404);
         assert_eq!(get(&srv, "/api/screen/clip").0, 400);
     }

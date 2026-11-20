@@ -151,6 +151,28 @@ export class NesPlayer {
   hash(slot) {
     return this.check(this.x.gp_play_hash(slot));
   }
+  /** Whether the module records the game's random draws (an arcade
+   * board's does: gp_play_draw_sites). */
+  recordsDraws() {
+    return !!this.x.gp_play_draw_sites;
+  }
+  /** Records the random draws at these draw sites from the next frame on,
+   * a site a line as the server gives them (api/rebuild/start's
+   * `draw_sites`); "" stops. False when the module can't. */
+  drawSites(slot, sites) {
+    if (!this.x.gp_play_draw_sites) return false;
+    const b = enc.encode(sites);
+    this.check(this.x.gp_play_draw_sites(slot, this.put(b), b.length));
+    return true;
+  }
+  /** The last frame's draws, [site, value] each, in order. */
+  draws(slot) {
+    if (!this.x.gp_play_draws) return [];
+    return this.check(this.x.gp_play_draws(slot)).split("\n").filter((l) => l).map((l) => {
+      const [site, v] = l.split(" ");
+      return [site, Number(v)];
+    });
+  }
   /** The slot's whole state as bytes, copied out. */
   save(slot) {
     const p = this.x.gp_play_save(slot);

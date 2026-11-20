@@ -203,6 +203,33 @@ pub extern "C" fn gp_play_restore(slot: u32, ptr: *mut u8, len: usize) -> i32 {
     }))
 }
 
+/// Records the game's random draws at the draw sites in the buffer, one
+/// a line ([`crate::Player::set_draw_sites`]); empty stops.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_play_draw_sites(slot: u32, ptr: *mut u8, len: usize) -> i32 {
+    let bytes = if len == 0 {
+        Box::default()
+    } else {
+        input(ptr, len)
+    };
+    result(with_player(slot, |p| {
+        let text = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
+        p.set_draw_sites(text).map(|()| String::new())
+    }))
+}
+
+/// The last frame's random draws in the output buffer, `SITE VALUE` a
+/// line, the value in decimal ([`crate::Player::draws`]).
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_play_draws(slot: u32) -> i32 {
+    result(with_player(slot, |p| {
+        Ok(p.draws()
+            .iter()
+            .map(|(site, v)| format!("{site} {v}\n"))
+            .collect())
+    }))
+}
+
 /// Frames played since power-on.
 #[unsafe(no_mangle)]
 pub extern "C" fn gp_play_frame(slot: u32) -> u32 {

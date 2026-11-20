@@ -130,6 +130,8 @@ The draws on or before the start count as taken, so one script of a whole run se
 
 ## Scoring with draws
 
+The screen page plays with them too ([the screen](../mechanic-page.md#the-screen)): its player records each frame's draws at the mapping's sites as the person plays, through the same recorder as the tools (`gp_arcade::draws::Recorder`, which keeps the trace to the sites' own addresses, so it costs little on every frame), and the model takes them with that frame's presses.
+
 A state mapping with `score_draws = true` (feature `draws.score`) scores with the original's draws everywhere a clip is scored, with no script file: `gp interp compare` records one from its input when `--draws` isn't given, a clip's score (`gp clip score`, `gp corpus score` and the gate) records the draws over the clip from its start and keeps them beside the clip's tape, and `gp model refine --lockstep` (the queue's refine rounds) records the whole input's once and gives each trial the draws after its start. A run with no start (a whole run from power-on with no `--from`) takes none, since the script needs the original's frame its first load stands for.
 
 ## The behaviour check

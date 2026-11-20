@@ -168,6 +168,20 @@ impl DrawScript {
         }
     }
 
+    /// Adds the original's draws after the ones held, as a live run
+    /// learns them a frame at a time (the screen page's model, beside the
+    /// original): a script read as a whole and one added to frame by frame
+    /// take the same draws.
+    pub fn extend(&mut self, more: impl IntoIterator<Item = Draw>) {
+        if self.taken.len() != self.draws.len() {
+            self.taken = vec![false; self.draws.len()];
+        }
+        for d in more {
+            self.draws.push(d);
+            self.taken.push(false);
+        }
+    }
+
     /// Notes a desync for a draw of the original's the rebuild hasn't taken
     /// by the end of its frame `frame`.
     pub fn check_through(&mut self, frame: u64) {
@@ -357,6 +371,36 @@ mod tests {
         assert_eq!(s.next, s.draws.len());
         // A hard site is never peeked.
         assert_eq!(s.peek(1005, "ladder"), None);
+    }
+
+    /// A script added to a frame at a time, each frame's draws before the
+    /// rebuild steps it (the screen page's live play), takes what the
+    /// whole script takes.
+    #[test]
+    fn a_script_added_to_frame_by_frame_takes_the_same_draws() {
+        let text = "gp-draws 0\n101 ladder 3\n103 ladder 9\n103 fire 4\n106 ladder 1\n";
+        let mut whole = DrawScript::parse(text).unwrap();
+        whole.base = 100;
+        whole.start(1000);
+        let all = whole.draws.clone();
+        let mut live = DrawScript {
+            base: 100,
+            ..DrawScript::default()
+        };
+        live.start(1000);
+        let mut got = (Vec::new(), Vec::new());
+        for f in 1001..=1007u64 {
+            live.extend(all.iter().filter(|d| d.frame == f - 900).cloned());
+            for d in all.iter().filter(|d| d.frame == f - 900) {
+                got.0.push(whole.take(f, &d.site));
+                got.1.push(live.take(f, &d.site));
+            }
+            whole.check_through(f);
+            live.check_through(f);
+        }
+        assert_eq!(got.0, got.1);
+        assert_eq!(got.1, vec![Some(3), Some(9), Some(4), Some(1)]);
+        assert_eq!((live.next, live.desync.clone()), (4, None));
     }
 
     #[test]

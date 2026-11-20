@@ -309,16 +309,13 @@ pub(crate) fn record_draws_saved(
     record_draws_on(saved.nes(rom, PowerOn::default())?, mapping, inputs, from)
 }
 
-/// The random draws of an arcade original (port wave 6), from gp-arcade's
-/// instruction trace and access log on the main Z80. A Z80 game's random
-/// routine returns its number in A (a `call` of the game's random routine), so a site can
-/// name either the call (what `gp interp draws --find` proposes) or the
-/// instruction after it (where A holds the draw): either way the draw is A
-/// when control comes back from the routine, which may be a frame later.
-/// Any other site draws the first byte its instruction reads, as the NES
-/// path takes its operand's byte (the mapping's `ram` when it reads none),
-/// and a site with `reg` the register as its instruction reads it
-/// ([`z80_reg`]). A draw is in the frame it completes in. Frames are
+/// The random draws of an arcade original (port wave 6), recorded on the
+/// main Z80 by gp-arcade's [`gp_arcade::draws::Recorder`], the one the
+/// page's player records through too: a site may name the call of the
+/// game's random routine or the instruction after it (the draw is A when
+/// the routine returns, which may be a frame later), a site with `reg`
+/// draws the register ([`gp_arcade::draws::z80_reg`]), and any other the first byte its
+/// instruction reads. A draw is in the frame it completes in. Frames are
 /// counted on from the machine's own count.
 pub(crate) fn record_draws_arcade(
     mut t: gp_arcade::Mcr,
@@ -326,8 +323,6 @@ pub(crate) fn record_draws_arcade(
     inputs: &[gp_evidence::input_log::InputFrame],
     from: u64,
 ) -> Result<gp_sim::DrawScript> {
-    use gp_arcade::dasm::{self, Flow};
-    use gp_arcade::mcr::AccessKind;
     if mapping.draws.is_empty() {
         bail!("the state mapping names no `[[draws]]` sites");
     }
@@ -341,28 +336,8 @@ pub(crate) fn record_draws_arcade(
             .collect(),
         ..gp_sim::DrawScript::default()
     };
-    // Calls waiting for their routine to return: site, return address, SP.
-    let mut pending: Vec<(String, u16, u16)> = Vec::new();
-    // Sites just after a call: the call's address.
-    let after_call: std::collections::BTreeMap<u16, u16> = mapping
-        .draws
-        .iter()
-        .filter(|d| d.reg.is_none())
-        .filter_map(|d| {
-            let decode = |at: u16| {
-                let bytes: Vec<u8> = (0..4).map(|k| t.peek(at.wrapping_add(k))).collect();
-                dasm::decode(&bytes, at)
-            };
-            // A site that is itself a call draws by the call; otherwise a
-            // `call nn` just before it makes it the place the number lands.
-            let calls = |i: &dasm::Insn| matches!(i.flow, Flow::Call(_) | Flow::CallIf(_));
-            let at = d.pc.wrapping_sub(3);
-            let before = decode(at);
-            (!calls(&decode(d.pc)) && before.len == 3 && calls(&before)).then_some((d.pc, at))
-        })
-        .collect();
-    // The last main-CPU instruction run, across frames.
-    let mut prev_pc: Option<u16> = None;
+    let mut rec =
+        gp_arcade::draws::Recorder::new(arcade_sites(mapping), &t).map_err(anyhow::Error::msg)?;
     for (i, input) in inputs.iter().enumerate() {
         let frame = first + i as u64 + 1;
         let bits = input.buttons_word();
@@ -374,78 +349,12 @@ pub(crate) fn record_draws_arcade(
             t.step(c);
             continue;
         }
-        t.set_trace(true);
-        t.set_accesses(true);
+        rec.arm(&mut t);
         t.step(c);
-        let mut trace: Vec<_> = t.take_trace().into_iter().filter(|e| e.cpu == 0).collect();
-        trace.sort_by_key(|e| e.time);
-        let acc: Vec<_> = t
-            .take_accesses()
-            .into_iter()
-            .filter(|a| a.cpu == 0 && a.kind == AccessKind::Read)
-            .collect();
-        t.set_trace(false);
-        t.set_accesses(false);
-        let mut j = 0;
-        for (n, e) in trace.iter().enumerate() {
-            let end = trace.get(n + 1).map(|x| x.time);
-            let from_j = j;
-            while j < acc.len() && end.is_none_or(|end| acc[j].time < end) {
-                j += 1;
-            }
-            if e.interrupt.is_some() {
-                continue;
-            }
-            let came_from = prev_pc.replace(e.pc);
-            if let Some(k) = pending.iter().position(|p| p.1 == e.pc && p.2 == e.sp) {
-                let (site, _, _) = pending.remove(k);
-                script.draws.push(gp_sim::draws::Draw {
-                    frame,
-                    site,
-                    value: (e.af >> 8) as u8,
-                });
-            }
-            let Some(d) = mapping.draws.iter().find(|d| d.pc == e.pc) else {
-                continue;
-            };
-            if let Some(r) = &d.reg {
-                script.draws.push(gp_sim::draws::Draw {
-                    frame,
-                    site: d.site.clone(),
-                    value: z80_reg(e, r)?,
-                });
-                continue;
-            }
-            if let Some(&call) = after_call.get(&e.pc) {
-                // Back from the routine, not a conditional call that fell
-                // through without calling.
-                if came_from != Some(call) {
-                    script.draws.push(gp_sim::draws::Draw {
-                        frame,
-                        site: d.site.clone(),
-                        value: (e.af >> 8) as u8,
-                    });
-                }
-                continue;
-            }
-            let insn = dasm::decode(&e.bytes, e.pc);
-            match insn.flow {
-                Flow::Call(_) | Flow::CallIf(_) | Flow::Rst(_) => {
-                    let back = e.pc.wrapping_add(u16::from(insn.len));
-                    // A call not taken comes straight back with SP as is.
-                    pending.push((d.site.clone(), back, e.sp));
-                }
-                _ => {
-                    let value = acc[from_j..j]
-                        .first()
-                        .map_or_else(|| d.ram.map_or(0, |at| t.peek(at)), |a| a.value);
-                    script.draws.push(gp_sim::draws::Draw {
-                        frame,
-                        site: d.site.clone(),
-                        value,
-                    });
-                }
-            }
+        for (site, value) in rec.take(&mut t) {
+            script
+                .draws
+                .push(gp_sim::draws::Draw { frame, site, value });
         }
     }
     Ok(script)
@@ -490,34 +399,20 @@ pub(crate) fn force_pcs(
     out
 }
 
-/// The value a Z80 register site (`reg`) draws: the register as the
-/// instruction traced at `e` reads it. Every register but R is as it was
-/// at the instruction's start. R counts opcode fetches, the instruction's
-/// own as well (two with a prefix byte), so `ld a,r` loads R two past its
-/// count at the start, with bit 7 the one `ld r,a` set last.
-pub(crate) fn z80_reg(e: &gp_arcade::mcr::Trace, reg: &str) -> Result<u8> {
-    let hi = |w: u16| (w >> 8) as u8;
-    let lo = |w: u16| w as u8;
-    Ok(match reg {
-        "a" => hi(e.af),
-        "f" => lo(e.af),
-        "b" => hi(e.bc),
-        "c" => lo(e.bc),
-        "d" => hi(e.de),
-        "e" => lo(e.de),
-        "h" => hi(e.hl),
-        "l" => lo(e.hl),
-        "i" => e.i,
-        "r" => {
-            let fetches = if matches!(e.bytes[0], 0xcb | 0xdd | 0xed | 0xfd) {
-                2
-            } else {
-                1
-            };
-            (e.r.wrapping_add(fetches) & 0x7f) | (e.r2 & 0x80)
-        }
-        _ => bail!("draw site register {reg:?} isn't one of the Z80's"),
-    })
+/// A mapping's draw sites as gp-arcade records them, and as the page's
+/// player takes them (one [`gp_arcade::draws::Site::line`] each).
+pub(crate) fn arcade_sites(mapping: &Mapping) -> Vec<gp_arcade::draws::Site> {
+    mapping
+        .draws
+        .iter()
+        .map(|d| gp_arcade::draws::Site {
+            site: d.site.clone(),
+            pc: d.pc,
+            ram: d.ram,
+            reg: d.reg.clone(),
+            soft: d.soft,
+        })
+        .collect()
 }
 
 /// [`record_draws`] on a console already running: its frames are counted

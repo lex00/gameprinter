@@ -427,6 +427,20 @@ sentences of a note holding RAM tests, addresses or hashes are folded under
 DETAILS, which a click on the row opens. A click on a row never moves where
 the next recording goes: its RECORD INTO THIS ROW does, and the line says so.
 
+When the game's mapping scores with the original's random draws
+(`score_draws` and its `[[draws]]` sites, [draws](formats/draws.md)), the
+model takes them live too, so a random draw never parts the two games.
+`api/rebuild/start` gives the sites (`draw_sites`, a site a line), the
+player records the draws at them as the original makes each frame
+(gp-arcade's draws recorder, the one `gp clip score` records through), and
+the page hands each frame's draws to the model with that frame's presses.
+A recording keeps the draws it saw beside the clip (`clips/NNN.draws`,
+sent with `POST api/clips`), and a clip shown gives the model its draws:
+the kept ones, or recorded again from the clip's replay. The page's report
+says how the model took them (`draws`: taken, of, and the first desync).
+Only an arcade board's player records draws so far; on the NES the model
+rolls its own.
+
 The agent drives it with the MCP tool `screen_show` (`gp mechanic screen
 GAME` from the command line): `clip` and `frame`, or `live`; `pictures`;
 `view`; `opacity`. Each part it leaves out stays as the page has it. The

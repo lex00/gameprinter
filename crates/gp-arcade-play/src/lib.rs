@@ -80,6 +80,11 @@ pub struct Player {
     /// MAME's 4-way joystick filter, between the person's keys and the
     /// board ([`Player::step`]).
     stick: FourWay,
+    /// The random draws recorded at the game's draw sites, when given
+    /// ([`Player::set_draw_sites`]).
+    draws: Option<gp_arcade::draws::Recorder>,
+    /// The last frame's draws, site and byte in order.
+    last_draws: Vec<(String, u8)>,
 }
 
 impl Player {
@@ -102,7 +107,37 @@ impl Player {
             rgba: vec![0; RGBA_BYTES],
             audio: Vec::new(),
             stick: FourWay::default(),
+            draws: None,
+            last_draws: Vec::new(),
         }
+    }
+
+    /// Records the random draws the game makes at these draw sites from
+    /// the next frame on, one [`gp_arcade::draws::Site::line`] a line (a
+    /// state mapping's `[[draws]]`, as `gp` records a clip's: gp-arcade's
+    /// [`gp_arcade::draws::Recorder`]); an empty text stops. The page
+    /// hands each frame's draws to the model beside the original, so the
+    /// model makes the original's random choices.
+    pub fn set_draw_sites(&mut self, text: &str) -> Result<(), String> {
+        let sites = text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(gp_arcade::draws::Site::parse_line)
+            .collect::<Result<Vec<_>, _>>()?;
+        self.last_draws.clear();
+        self.draws = if sites.is_empty() {
+            None
+        } else {
+            Some(gp_arcade::draws::Recorder::new(sites, &self.mcr)?)
+        };
+        Ok(())
+    }
+
+    /// The draws of the last frame played, site and byte in order (none
+    /// without draw sites).
+    pub fn draws(&self) -> &[(String, u8)] {
+        &self.last_draws
     }
 
     /// Powers on to replay `log`, an arcade log of the same set.
@@ -176,7 +211,14 @@ impl Player {
 
     /// One frame with these bits on the board as they are.
     fn play(&mut self, bits: u32) {
+        if let Some(r) = &self.draws {
+            r.arm(&mut self.mcr);
+        }
         self.mcr.step(Controls::from_bits(bits));
+        self.last_draws.clear();
+        if let Some(r) = &mut self.draws {
+            self.last_draws = r.take(&mut self.mcr);
+        }
         self.audio.clear();
         self.audio
             .extend(self.mcr.take_audio().iter().flat_map(|s| [s[0], s[1]]));
@@ -280,6 +322,11 @@ impl Player {
         self.mcr.restore(&snap)?;
         self.mcr.take_audio();
         self.audio.clear();
+        // A call that was waiting to return belongs to the frames left.
+        if let Some(r) = &mut self.draws {
+            r.forget();
+        }
+        self.last_draws.clear();
         // The filter's state isn't saved: it starts again from the last
         // frame's directions, which differs only while a diagonal is held.
         self.stick = FourWay::default();

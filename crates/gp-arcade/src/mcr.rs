@@ -243,6 +243,14 @@ pub struct Board {
     pub accesses: Option<Vec<Access>>,
     /// The instruction each CPU is running, while accesses are logged.
     pub cur_pc: [u16; 2],
+    /// The instruction each CPU started before the one it is running,
+    /// while anything watches ([`Trace::prev_pc`]). Kept across frames.
+    pub last_pc: [u16; 2],
+    /// When set, the trace and the access log keep only the main CPU's
+    /// instructions at these addresses (a bit an address), and nothing of
+    /// the sound CPU's: what a draws recording reads
+    /// ([`crate::draws::Recorder`]), at a fraction of a full trace's cost.
+    pub watch: Option<Box<[u64; 1024]>>,
     /// When on, each main-board latch write as it reached the sound board:
     /// the time its timeslice ended (the sound CPU ran to there before the
     /// byte landed), the latch and the byte. What [`crate::ssio`] needs to
@@ -320,6 +328,11 @@ pub struct Trace {
     pub bytes: [u8; 4],
     /// The CPU's cycles since power-on at the instruction's start.
     pub cycles: u64,
+    /// The instruction the CPU started before this one, as the board saw
+    /// it while anything watched (across frames too): with the trace kept
+    /// to a few addresses ([`Mcr::set_watch`]) it still says where control
+    /// came from.
+    pub prev_pc: u16,
     /// For an interrupt rather than an instruction: the vector the CPU
     /// took (the CTC's on the main board, 0xff on the sound board). The
     /// entry comes just before the handler's first instruction, with the
@@ -343,6 +356,15 @@ impl Board {
         }
     }
 
+    /// Whether the trace and the access log keep `which`'s instruction at
+    /// `pc` ([`Board::watch`]).
+    fn kept(&self, which: usize, pc: u16) -> bool {
+        match &self.watch {
+            None => true,
+            Some(w) => which == MAIN && w[usize::from(pc >> 6)] & (1 << (pc & 63)) != 0,
+        }
+    }
+
     /// The instruction hook: the access log's PC, an interrupt's event and
     /// trace marker, and the trace.
     fn before_instruction(&mut self, which: usize, cpu: &Z80) {
@@ -350,6 +372,7 @@ impl Board {
             return;
         }
         self.cur_pc[which] = cpu.pc;
+        let kept = self.kept(which, cpu.pc);
         if let Some(vector) = self.irq_taken[which].take() {
             if self.events.is_some() {
                 let at = self.sched.execs[which].local_time(cpu.icount);
@@ -369,7 +392,7 @@ impl Board {
                     });
                 }
             }
-            if self.trace.is_some() {
+            if self.trace.is_some() && kept {
                 let e = self.trace_entry(which, cpu.icount, cpu);
                 if let Some(t) = &mut self.trace {
                     t.push(Trace {
@@ -379,7 +402,10 @@ impl Board {
                 }
             }
         }
-        self.trace_instruction(which, cpu);
+        if kept {
+            self.trace_instruction(which, cpu);
+        }
+        self.last_pc[which] = cpu.pc;
     }
 
     /// Logs an access by the running instruction, when the log is on.
@@ -387,8 +413,11 @@ impl Board {
         if self.accesses.is_none() {
             return;
         }
-        let time = self.sched.execs[which].local_time(icount);
         let pc = self.cur_pc[which];
+        if !self.kept(which, pc) {
+            return;
+        }
+        let time = self.sched.execs[which].local_time(icount);
         if let Some(log) = &mut self.accesses {
             log.push(Access {
                 cpu: which as u8,
@@ -445,6 +474,7 @@ impl Board {
             i: cpu.i,
             bytes: [0; 4],
             cycles: x.totalcycles + (x.cycles_running - icount).max(0) as u64,
+            prev_pc: self.last_pc[which],
             interrupt: None,
         }
     }
@@ -795,6 +825,8 @@ impl Mcr {
             irq_taken: [None; 2],
             accesses: None,
             cur_pc: [0; 2],
+            last_pc: [0; 2],
+            watch: None,
             latches: None,
             forces: Vec::new(),
             forced: Vec::new(),
@@ -1132,6 +1164,19 @@ impl Mcr {
             .as_mut()
             .map(std::mem::take)
             .unwrap_or_default()
+    }
+
+    /// Keeps the trace and the access log to the main CPU's instructions
+    /// at `pcs` ([`Board::watch`]), or, with `None`, to every instruction
+    /// of both CPUs again. Not part of the state.
+    pub fn set_watch(&mut self, pcs: Option<&[u16]>) {
+        self.board.watch = pcs.map(|pcs| {
+            let mut w = Box::new([0u64; 1024]);
+            for &pc in pcs {
+                w[usize::from(pc >> 6)] |= 1 << (pc & 63);
+            }
+            w
+        });
     }
 
     /// Turns the access log on or off ([`Access`]). Off drops what it held.

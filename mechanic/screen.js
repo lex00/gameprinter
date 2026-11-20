@@ -30,6 +30,14 @@
 // starts. A row's RECORD INTO THIS ROW moves it there (api/pick when not
 // recording); a click elsewhere on the row only opens its details, the
 // RAM tests, addresses and hashes. A clip clicked shows on both screens.
+//
+// The random draws: with a mapping that scores with the original's draws
+// (`score_draws` and its `[[draws]]` sites, docs/formats/draws.md), the
+// player records each frame's draws at the sites as the original makes
+// them, and the model takes them in place of its own generator, as a
+// clip's score gives them, so the two make the same random choices live.
+// A recording keeps the draws it saw (the clip's NNN.draws), and a clip
+// shown gives the model its draws, kept or recorded again from its replay.
 
 import { NesPlayer } from "./nesplayer.js";
 
@@ -80,7 +88,57 @@ const model = {
   build: null, // the build it loaded (live.rs's key)
   token: 0, // which start is current
   say: "", // what is drawn over it while it isn't on
+  draws: null, // how it took the original's draws ({taken, of, desync}), or null
 };
+
+// The original's random draws, recorded in the player's slot 0 at the
+// mapping's draw sites once they are known (api/rebuild/start's
+// `draw_sites`).
+const draws = {
+  sites: null, // the sites, a line each, or null: none to record
+  from: null, // slot 0's frame when it began recording them
+  log: [], // every draw since: [frame, site, value]
+  live: null, // the live model's numbering ({base, lags, early, lines}), or null
+};
+
+/** The soft sites of a sites text (`... soft`), as a draws script names
+ * them. */
+function softLines(sites) {
+  return (sites ?? "").split("\n").filter((l) => / soft$/.test(l.trim())).map((l) => `soft ${l.trim().split(/\s+/)[0]}\n`).join("");
+}
+
+/** One frame of the original's draws in the model's numbering from a
+ * start at the original's frame `n.base`: a frame the game didn't read
+ * the pad on, which the model doesn't step, puts the original a frame
+ * ahead from then on, as a lockstep's draws.lag does. Draws on or before
+ * the start are the start's own. */
+function drawLines(n, f, polled, ds) {
+  if (f <= n.base) return;
+  if (!polled) n.lags++;
+  for (const [site, v] of ds) n.lines.push(`${f - n.lags} ${site} ${v}\n`);
+}
+
+/** After a frame of live play: its draws kept, and handed to the model
+ * following it. */
+function liveDraws(polled) {
+  if (draws.from === null) return;
+  const f = player.frame(0);
+  const ds = player.draws(0);
+  for (const [site, v] of ds) draws.log.push([f, site, v]);
+  const n = draws.live;
+  if (!n) return;
+  if (n.base === null) n.early.push([f, polled, ds]);
+  else drawLines(n, f, polled, ds);
+}
+
+/** Starts recording the draws at `sites` in slot 0, once. */
+function recordLiveDraws(sites) {
+  if (!sites || draws.from !== null || !player.recordsDraws()) return false;
+  player.drawSites(0, sites);
+  draws.sites = sites;
+  draws.from = player.frame(0);
+  return true;
+}
 
 // The pictures of both, the size of the original's screen.
 const offA = document.createElement("canvas");
@@ -236,6 +294,10 @@ window.addEventListener("message", (e) => {
   if (e.origin !== location.origin || e.source !== $("model-frame").contentWindow) return;
   const m = e.data;
   if (m?.gp === "ready") { model.ready = true; model.onReady?.(); }
+  else if (m?.gp === "at") {
+    model.draws = m.draws ?? null;
+    document.body.dataset.draws = m.draws ? JSON.stringify(m.draws) : "";
+  }
   else if (m?.gp === "error") note(`The model: ${m.message}`, 6000);
 });
 
@@ -311,13 +373,27 @@ async function startModel(mine = model.token) {
   }
   model.free = false;
   const frame = player.frame(0);
+  // The draws from here on wait for the start's frame.
+  draws.live = draws.from !== null ? { base: null, lags: 0, early: [], lines: [] } : null;
   try {
     const path = await sendPath(player.inputLog(0).split("\n").slice(0, frame + 2).join("\n") + "\n");
     const r = await api("api/rebuild/start", { path, frame });
     if (mine !== model.token || mode !== "live" || show.view === "solo") return;
+    // The sites first heard of: recording starts now, so the start is
+    // taken again from here, with every draw after it.
+    if (recordLiveDraws(r.draw_sites ?? null)) { void startModel(mine); return; }
+    let given;
+    const n = draws.live;
+    if (n) {
+      n.base = r.original_frame ?? frame;
+      for (const [f, polled, ds] of n.early) drawLines(n, f, polled, ds);
+      n.early = [];
+      given = { base: n.base, lines: softLines(draws.sites) + n.lines.join("") };
+      n.lines = [];
+    }
     const frames = "gp-frames 1\n" + model.queue.map(framesLine).join("\n");
     model.queue = [];
-    modelPost({ gp: "load-state", state: r.state, text: frames + "\n", frame: 1e9 });
+    modelPost({ gp: "load-state", state: r.state, text: frames + "\n", frame: 1e9, draws: given });
     model.on = true;
   } catch (e) {
     // Not in play yet (the title screen): again in a second.
@@ -337,7 +413,13 @@ async function startModelAtClip(mine) {
     const r = await api("api/rebuild/start", { path: c.path, frame: c.start });
     if (mine !== model.token || clip !== c) return;
     const text = "gp-frames 1\n" + c.polled.map(framesLine).join("\n") + "\n";
-    modelPost({ gp: "load-state", state: r.state, text, frame: c.upTo[c.f] ?? 0 });
+    let given;
+    if (c.draws) {
+      const n = { base: r.original_frame ?? c.start, lags: 0, lines: [] };
+      for (const [f, polled] of c.frameDraws) drawLines(n, f, polled, c.draws.get(f) ?? []);
+      given = { base: n.base, lines: c.soft + n.lines.join("") };
+    }
+    modelPost({ gp: "load-state", state: r.state, text, frame: c.upTo[c.f] ?? 0, draws: given });
     model.on = true;
   } catch (e) {
     if (mine !== model.token || clip !== c) return;
@@ -462,6 +544,23 @@ function putOriginal(slot) {
 
 const SNAP_EVERY = 60;
 
+/** A draws script's draws by the original's frame: [site, value] each. */
+function readDraws(text) {
+  const by = new Map();
+  for (const l of text.split("\n")) {
+    const m = /^(\d+)\s+(\S+)\s+(\d+)$/.exec(l.split("#")[0].trim());
+    if (!m) continue;
+    const f = Number(m[1]);
+    if (!by.has(f)) by.set(f, []);
+    by.get(f).push([m[2], Number(m[3])]);
+  }
+  return by;
+}
+/** A draws script's `soft SITE` lines. */
+function softOf(text) {
+  return text.split("\n").filter((l) => /^soft\s+\S+$/.test(l.trim())).map((l) => l.trim() + "\n").join("");
+}
+
 /** Shows clip `n` of `mechanic` at frame `f`: the original replayed in the
  * player's second console to the clip's start, every frame of the clip
  * played once to learn which frames read the pad, then both games stood at
@@ -476,7 +575,7 @@ async function openClip(n, mechanic, f) {
   const r = await fetch(`api/clips/${n}.log?mechanic=${encodeURIComponent(meta.mechanic)}`);
   if (!r.ok) throw new Error(`clip ${n}: ${r.status}`);
   const log = await r.text();
-  await showClipLog({ key, n, mechanic: meta.mechanic, work: null, name: `CLIP ${n} OF ${meta.mechanic.toUpperCase()}`, says: `clip ${n} of ${meta.mechanic}`, note: meta.note ?? "", start: meta.start, frames: meta.frames, log }, f);
+  await showClipLog({ key, n, mechanic: meta.mechanic, work: null, name: `CLIP ${n} OF ${meta.mechanic.toUpperCase()}`, says: `clip ${n} of ${meta.mechanic}`, note: meta.note ?? "", start: meta.start, frames: meta.frames, log, draws: meta.draws ?? null, drawSites: meta.draw_sites ?? null }, f);
 }
 
 /** Shows the corpus clip a refine works on (api/screen/work-clip), looping
@@ -568,13 +667,30 @@ async function showClipLog(c, f) {
     if (mode !== "clip") return;
   }
   const snaps = new Map([[0, player.save(1)]]);
-  const polled = [], upTo = [];
+  // The original's draws over the clip: those kept with it when it was
+  // recorded, else recorded from the replay at the mapping's sites.
+  let clipDraws = c.draws ? readDraws(c.draws) : null;
+  const sites = c.drawSites ?? draws.sites;
+  const recordHere = !clipDraws && !!sites && player.recordsDraws();
+  if (recordHere) { player.drawSites(1, sites); clipDraws = new Map(); }
+  const polled = [], upTo = [], frameDraws = [];
   for (let i = 0; i < length; i++) {
-    if (player.step(1, pads[i])) polled.push(pads[i]);
+    const read = player.step(1, pads[i]);
+    if (read) polled.push(pads[i]);
     upTo.push(polled.length);
+    const f = player.frame(1);
+    frameDraws.push([f, read]);
+    if (recordHere) {
+      const ds = player.draws(1);
+      if (ds.length) clipDraws.set(f, ds);
+    }
     if ((i + 1) % SNAP_EVERY === 0) snaps.set(i + 1, player.save(1));
   }
-  clip = { key: c.key, n, mechanic, work: c.work, loop: null, note: c.note, start, frames: length, log, pads, polled, upTo, snaps, f: 0, pos: length, playing: false, path: null };
+  if (recordHere) player.drawSites(1, "");
+  clip = {
+    key: c.key, n, mechanic, work: c.work, loop: null, note: c.note, start, frames: length, log, pads, polled, upTo, snaps, f: 0, pos: length, playing: false, path: null,
+    draws: clipDraws, frameDraws, soft: c.draws ? softOf(c.draws) : softLines(sites),
+  };
   $("clip-scrub").max = String(length - 1);
   $("clip-name").textContent = c.name;
   $("clipbar").hidden = false;
@@ -777,7 +893,8 @@ async function stopRecording(send = true) {
   $("record").textContent = "RECORD";
   if (!r || !send) { markTarget(); return; }
   const log = player.inputLog(0);
-  const frames = player.frame(0) - r.start;
+  r.end = player.frame(0);
+  const frames = r.end - r.start;
   if (frames < 10) { note("Too short to keep: under 10 frames."); return; }
   sending = true;
   $("record").disabled = true;
@@ -789,7 +906,13 @@ async function stopRecording(send = true) {
     const path = await sendPath(log);
     line("Saving the clip.");
     const inputs = head + all.slice(r.start).join("\n") + "\n";
-    const { n, again } = await api("api/clips", { path, start: r.start, inputs, note: "", mechanic });
+    // The draws the original made over the clip, when they were recorded
+    // from before it started: kept with it, so it replays the same.
+    let kept;
+    if (draws.from !== null && draws.from <= r.start) {
+      kept = "gp-draws 0\n" + softLines(draws.sites) + draws.log.filter(([f]) => f > r.start && f <= r.end).map(([f, site, v]) => `${f} ${site} ${v}\n`).join("");
+    }
+    const { n, again } = await api("api/clips", { path, start: r.start, inputs, note: "", mechanic, draws: kept });
     await api("api/talk", { text: `Here is clip ${n}.`, clips: [n], mechanic });
     saved = { mechanic, n };
     note(again
@@ -1843,6 +1966,9 @@ function report() {
     work_clip: clip?.work ?? null, follow: follow.on,
     playing: clip ? clip.playing : mode === "live", recording: !!recording, error: askError,
     model: model.on ? "showing" : "starting",
+    // How the model took the original's random draws: taken of the
+    // script's, and the first desync; null while it rolls its own.
+    draws: model.draws,
   };
   void api("api/screen", v).catch(() => undefined);
 }
@@ -1947,8 +2073,10 @@ function frame(now) {
         const pad = padNow();
         if (pad) lastPlay = now;
         // The model takes the frames the original read the pad on; while
-        // it starts they wait in the queue.
-        if (player.step(0, pad)) model.queue.push(pad);
+        // it starts they wait in the queue. Their draws go with them.
+        const read = player.step(0, pad);
+        liveDraws(read);
+        if (read) model.queue.push(pad);
       } else if (clip?.playing) {
         // A followed refine's window loops; any other clip loops whole.
         const [lo, hi] = clip.loop ?? [0, clip.frames - 1];
@@ -1959,8 +2087,11 @@ function frame(now) {
     if (mode === "clip" && clip?.work && (gamepadBits(firstPad()) || (LAYOUT.keys2.length && gamepadBits(secondPad())))) personPressed();
     if (mode === "live" && show.view === "solo" && padNow()) lastPlay = now;
     if (mode === "live") {
-      if (model.on && model.queue.length) {
-        modelPost({ gp: "push", text: "gp-frames 1\n" + model.queue.map(framesLine).join("\n") + "\n" });
+      const n = draws.live;
+      const more = n && n.base !== null && n.lines.length ? n.lines.join("") : undefined;
+      if (model.on && (model.queue.length || more !== undefined)) {
+        if (more !== undefined) n.lines = [];
+        modelPost({ gp: "push", text: "gp-frames 1\n" + model.queue.map(framesLine).join("\n") + "\n", draws: more });
         model.queue = [];
       }
       if (show.view !== "solo") putOriginal(0);

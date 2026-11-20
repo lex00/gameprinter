@@ -176,6 +176,35 @@ pub extern "C" fn gp_load_state(ptr: *mut u8, len: usize) -> i32 {
     result(with_preview(|p| p.load_state(&bytes)).map(|()| String::new()))
 }
 
+/// Gives the model a random draws script (`Preview::set_draws`): its
+/// text from `gp_alloc`, and the original's frame the next state loaded
+/// stands for.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_set_draws(ptr: *mut u8, len: usize, base: u32) -> i32 {
+    let bytes = input(ptr, len);
+    result(with_preview(|p| {
+        let text = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
+        p.set_draws(text, u64::from(base)).map(|()| String::new())
+    }))
+}
+
+/// Adds draws to the model's script (`Preview::add_draws`).
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_add_draws(ptr: *mut u8, len: usize) -> i32 {
+    let bytes = input(ptr, len);
+    result(with_preview(|p| {
+        let text = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
+        p.add_draws(text).map(|()| String::new())
+    }))
+}
+
+/// How the model took its draws (`Preview::draws_report`), JSON in the
+/// output buffer.
+#[unsafe(no_mangle)]
+pub extern "C" fn gp_draws_report() -> i32 {
+    result(with_preview(|p| Ok(p.draws_report())))
+}
+
 /// The canonical model state's bytes (`Preview::state`), in the output
 /// buffer, for the page's save slots and rewind.
 #[unsafe(no_mangle)]

@@ -680,11 +680,59 @@ impl Preview {
     /// to both"). A state of another model is refused.
     pub fn load_state(&mut self, state: &[u8]) -> Result<(), String> {
         use gp_runtime::Runtime as _;
-        self.interp.restore(state)?;
+        // As the tools' runtime loads it: a draws script starts there.
+        self.interp.load_state(state)?;
         self.anim = gp_present::Animator::new();
         self.viewer.reset();
         self.step_view(&[]);
         Ok(())
+    }
+
+    /// Takes the original's random draws from a draws script
+    /// (docs/formats/draws.md's text form) in place of the model's own
+    /// generator, from the next state loaded on, which stands for the
+    /// original's frame `base`: as a lockstep gives a clip's draws to the
+    /// model it scores. An empty text with no draws is a script still to
+    /// be filled ([`Preview::add_draws`]), as live play is.
+    pub fn set_draws(&mut self, script: &str, base: u64) -> Result<(), String> {
+        let mut d = gp_sim::DrawScript::parse(script)?;
+        d.base = base;
+        self.interp.set_draws(Some(d));
+        Ok(())
+    }
+
+    /// Adds draws to the script [`Preview::set_draws`] gave, in its text
+    /// form's lines (`frame site value`, the header optional): the
+    /// original's draws as it makes them, before the model steps the frame.
+    pub fn add_draws(&mut self, lines: &str) -> Result<(), String> {
+        let text = if lines.trim_start().starts_with(gp_sim::draws::DRAWS_HEADER) {
+            lines.to_owned()
+        } else {
+            format!("{}\n{lines}", gp_sim::draws::DRAWS_HEADER)
+        };
+        let more = gp_sim::DrawScript::parse(&text)?;
+        let d = self
+            .interp
+            .draws_mut()
+            .ok_or("no draws script: give one first (set_draws)")?;
+        d.extend(more.draws);
+        Ok(())
+    }
+
+    /// How the model took the original's draws, as JSON: `taken` and `of`
+    /// (the script's), and the first `desync` (`[frame, why]`) or null.
+    /// Null without a script.
+    pub fn draws_report(&self) -> String {
+        match self.interp.draws() {
+            None => "null".into(),
+            Some(d) => serde_json::json!({
+                "taken": d.next,
+                "of": d.draws.len(),
+                "desync": d.desync.as_ref().map(|(f, why)| serde_json::json!([f, why])),
+                "desyncs": d.desyncs.len(),
+            })
+            .to_string(),
+        }
     }
 
     /// What to draw this frame, as JSON, from the presentation
