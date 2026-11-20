@@ -84,6 +84,9 @@ static RUNNING: Mutex<BTreeMap<String, Arc<AtomicBool>>> = Mutex::new(BTreeMap::
 
 /// How many yeses run now, from claimed to their ask's result written.
 static YESES_RUNNING: AtomicUsize = AtomicUsize::new(0);
+/// The asks whose yes this server runs now: one left `running` that isn't
+/// here died with the server that ran it ([`gp_mcp::asks::end_dead_runs`]).
+static YES_IDS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 /// The clip keeping's gates run now ([`keep_clips`]).
 static KEEPING: AtomicBool = AtomicBool::new(false);
 
@@ -267,6 +270,14 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
             // The heartbeat the runner check reads (gp_mcp::steps::no_runner).
             let agent = matches!(clip_agent::Settings::current(&ctx).mode, Mode::Command(_));
             loop_state::beat(&ctx.paths.home, agent);
+            // A yes whose run died (gp serve stopped mid-gate) fails, so its
+            // row goes back to next instead of waiting for a hand.
+            gp_mcp::asks::end_dead_runs(&ctx.paths.home, |id| {
+                YES_IDS
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains(id)
+            });
             settle_card_rows(&ctx.paths.home);
             // Moving onto a newly published gp (serve/reload.rs): nothing
             // new starts here; the new build takes it up.
@@ -318,15 +329,23 @@ fn run_yeses(ctx: &Arc<Ctx>) {
             .unwrap_or_else(|| ctx.repo.clone());
         let home = home.clone();
         YESES_RUNNING.fetch_add(1, Ordering::SeqCst);
+        YES_IDS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id.clone());
         std::thread::spawn(move || {
             // Counted until its result is written, whatever happens.
-            struct Ran;
+            struct Ran(String);
             impl Drop for Ran {
                 fn drop(&mut self) {
                     YESES_RUNNING.fetch_sub(1, Ordering::SeqCst);
+                    YES_IDS
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(&self.0);
                 }
             }
-            let _ran = Ran;
+            let _ran = Ran(id.clone());
             // One yes at a time: two gates at once would share the gate's
             // own tree.
             let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());

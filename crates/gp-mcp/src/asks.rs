@@ -285,9 +285,48 @@ pub fn claim_for_runner(home: &Path, id: &str) -> Option<Value> {
     let now = now_ms();
     v["state"] = json!("used");
     v["used_ms"] = json!(now);
-    v["ran"] = json!({"by": "runner", "state": "running", "at_ms": now});
+    v["ran"] = json!({"by": "runner", "state": "running", "at_ms": now, "pid": std::process::id()});
     write(home, &v).ok()?;
     Some(v)
+}
+
+/// Why a run [`end_dead_runs`] ended failed: its card and its row say it.
+const DIED: &str = "its run stopped before it ended: gp serve stopped while it ran";
+
+/// The runner's runs of a yes that died before their result was written
+/// (gp serve stopped, or moved onto a new build, while one ran): each ask
+/// left `running` that `live` doesn't name, whose server (`ran.pid`) is
+/// gone or is this one, is set `failed` with why, ended when it started,
+/// so its quest-log row goes back to next (a row changed since keeps what
+/// it says). Returns their ids.
+pub fn end_dead_runs(home: &Path, live: impl Fn(&str) -> bool) -> Vec<String> {
+    let me = u64::from(std::process::id());
+    let mut out = Vec::new();
+    for mut v in all(home) {
+        let id = v["id"].as_str().unwrap_or("").to_owned();
+        let ran = &v["ran"];
+        if ran["by"] != json!("runner")
+            || ran["state"] != json!("running")
+            || !ran["done_ms"].is_null()
+            || live(&id)
+        {
+            continue;
+        }
+        if ran["pid"]
+            .as_u64()
+            .is_some_and(|p| p != me && crate::proc::alive(p))
+        {
+            continue;
+        }
+        let at = ran["at_ms"].as_u64().unwrap_or(0);
+        v["ran"]["state"] = json!("failed");
+        v["ran"]["done_ms"] = json!(at);
+        v["ran"]["lines"] = json!([DIED]);
+        if write(home, &v).is_ok() {
+            out.push(id);
+        }
+    }
+    out
 }
 
 /// What the runner's run of a yes came to: `landed`, `passed` or
@@ -539,6 +578,47 @@ mod tests {
         assert!(!shows(
             json!({"state": "landed", "at_ms": long, "done_ms": long})
         ));
+    }
+
+    /// A yes left running by a server that is gone (or by this one, after
+    /// it moved onto a new build) fails, ended when it started; one this
+    /// server still runs, one another live server runs and a finished one
+    /// stay (tapper's scoreboard-matches-direct card, 2026-11-20).
+    #[cfg(unix)]
+    #[test]
+    fn a_run_that_died_with_its_server_fails() {
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path();
+        let me = u64::from(std::process::id());
+        // Another live server: the test's parent (cargo).
+        let other = u64::from(std::os::unix::process::parent_id());
+        let runs = [
+            ("a-1", "running", 5, json!(null)),
+            ("b-2", "running", 6, json!(me)),
+            ("c-3", "running", 7, json!(me)),
+            ("d-4", "running", 8, json!(other)),
+            ("e-5", "landed", 9, json!(me)),
+        ];
+        for (id, state, at, pid) in &runs {
+            let mut ran = json!({"by": "runner", "state": state, "at_ms": at, "pid": pid});
+            if *state == "landed" {
+                ran["done_ms"] = json!(10);
+            }
+            let v = json!({"id": id, "made_ms": 1, "state": "used", "ran": ran});
+            write(home, &v).unwrap();
+        }
+        let mut ended = end_dead_runs(home, |id| id == "c-3");
+        ended.sort();
+        assert_eq!(ended, ["a-1", "b-2"]);
+        let a = read(home, "a-1").unwrap();
+        assert_eq!(a["ran"]["state"], "failed");
+        assert_eq!(a["ran"]["done_ms"], 5);
+        assert_eq!(a["ran"]["lines"][0], DIED);
+        assert_eq!(read(home, "c-3").unwrap()["ran"]["state"], "running");
+        assert_eq!(read(home, "d-4").unwrap()["ran"]["state"], "running");
+        assert_eq!(read(home, "e-5").unwrap()["ran"]["state"], "landed");
+        // Once ended, it isn't ended again.
+        assert!(end_dead_runs(home, |id| id == "c-3").is_empty());
     }
 
     /// A gate's card says what lands in the patch's own words and the
