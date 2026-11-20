@@ -947,6 +947,10 @@ fn claude_args(setup: &Setup, wt: &Path, mcp: &Path) -> Vec<String> {
         // checkout): copies and folders, no deletes.
         "Bash(cp:*)".to_owned(),
         "Bash(mkdir:*)".to_owned(),
+        // Drawing a theme's pictures with a script, and taking a picture out
+        // of the worktree through git.
+        "Bash(python3:*)".to_owned(),
+        "Bash(git rm:*)".to_owned(),
         "Bash(git status:*)".to_owned(),
         "Bash(git diff:*)".to_owned(),
         "Bash(git log:*)".to_owned(),
