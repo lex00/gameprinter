@@ -1108,6 +1108,16 @@ pub fn plan_of(config: &Config, c: &CommandDef, path: &str, argv: &[String]) -> 
     Some(json!({"says": says, "hash": hash}))
 }
 
+/// The games checkout `gp PATH` runs in: a loop worker's own worktree of
+/// it, when it has one, so what the command writes stays there; else the
+/// person's. A gate always runs in the person's, the checkout it lands on.
+pub(crate) fn games_for<'a>(config: &'a Config, path: &str) -> Option<&'a Path> {
+    match &config.worker_games {
+        Some(w) if !path.ends_with(" gate") => Some(w),
+        _ => config.games.as_deref(),
+    }
+}
+
 /// Runs `gp PATH WORDS` as gp_run would, for at most two minutes, and
 /// gives its JSON.
 fn run_quietly(config: &Config, c: &CommandDef, path: &str, words: &[String]) -> Option<Value> {
@@ -1119,7 +1129,7 @@ fn run_quietly(config: &Config, c: &CommandDef, path: &str, words: &[String]) ->
     }
     cmd.args(path.split(' ')).args(words);
     cmd.env("GP_HOME", &config.home);
-    match &config.games {
+    match games_for(config, path) {
         Some(g) => {
             cmd.env("GP_GAMES_DIR", g).current_dir(g);
         }
@@ -1399,10 +1409,14 @@ pub fn run_in(
         path.replace(' ', "-")
     );
     // The net: a write's change to what is already in the games checkout
-    // waits for the person's yes (crate::held).
+    // waits for the person's yes (crate::held). A command run in a loop
+    // worker's own worktree leaves the person's checkout alone, and its
+    // changes reach it only through a gate.
+    let games = games_for(config, &path);
     let mut snap: Option<(held::Snap, PathBuf)> = None;
     if decision == Decision::RunHeld
-        && let Some(top) = config.games.as_deref().and_then(held::top_of)
+        && games == config.games.as_deref()
+        && let Some(top) = games.and_then(held::top_of)
     {
         if let Some(r) = held_answer(config, &path, &built, &a) {
             return Ok(r);
@@ -1434,7 +1448,7 @@ pub fn run_in(
     // serve there too: one variable decides everywhere.
     cmd.env("GP_LAYA_URL", format!("http://127.0.0.1:{laya}"));
     cmd.env("GP_SERVE_URL", format!("http://127.0.0.1:{serve}"));
-    match &config.games {
+    match games {
         Some(g) => {
             cmd.env("GP_GAMES_DIR", g).current_dir(g);
         }
@@ -1663,7 +1677,30 @@ mod tests {
             rom: None,
             assets: None,
             games: None,
+            worker_games: None,
         }
+    }
+
+    #[test]
+    fn a_loop_workers_commands_run_in_its_worktree_and_its_gates_on_the_persons_checkout() {
+        let d = Path::new("/x");
+        let mut c = config(d, d);
+        c.games = Some(d.join("games"));
+        assert_eq!(
+            games_for(&c, "corpus import"),
+            Some(d.join("games").as_path())
+        );
+        c.worker_games = Some(d.join("tree"));
+        assert_eq!(
+            games_for(&c, "corpus import"),
+            Some(d.join("tree").as_path())
+        );
+        assert_eq!(
+            games_for(&c, "mechanic probe"),
+            Some(d.join("tree").as_path())
+        );
+        assert_eq!(games_for(&c, "model gate"), Some(d.join("games").as_path()));
+        assert_eq!(games_for(&c, "tool gate"), Some(d.join("games").as_path()));
     }
 
     /// A stand-in gp: a shell script that runs `body`.

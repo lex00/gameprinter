@@ -2698,6 +2698,7 @@ fn own_assets(g: &mut Game, paths: &Paths) -> Result<()> {
         rom: None,
         assets: None,
         games: None,
+        worker_games: None,
     };
     let (to, _) =
         gp_mcp::place::copy_assets(&config, &g.dir, &g.model).map_err(|e| anyhow!("{e}"))?;

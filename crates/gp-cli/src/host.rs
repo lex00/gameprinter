@@ -185,6 +185,7 @@ fn config(at: &Where, paths: &Paths) -> Result<gp_mcp::Config> {
         rom: at.rom.as_deref().map(absolute).transpose()?,
         assets: at.assets.as_deref().map(absolute).transpose()?,
         games: crate::roms_cmd::games_dir(None),
+        worker_games: None,
     })
 }
 

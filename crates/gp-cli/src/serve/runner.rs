@@ -466,10 +466,10 @@ fn report_on_row(setup: &Setup, rec: &Value) {
 }
 
 /// The worker's worktree, made from main the first time.
-fn worktree(setup: &Setup, id: &str, row: bool) -> anyhow::Result<(PathBuf, String)> {
-    // A quest-log item's work is in the games checkout; any other step's
-    // in the repo the agent works on.
-    let repo = if row { &setup.games } else { &setup.repo };
+fn worktree(setup: &Setup, id: &str, games: bool) -> anyhow::Result<(PathBuf, String)> {
+    // A game's step works in the games checkout (in_games); any other
+    // step in the repo the agent works on.
+    let repo = if games { &setup.games } else { &setup.repo };
     if !repo.join(".git").exists() {
         bail!(
             "{} isn't a git checkout, so there's nothing to make a worktree of (GP_AGENT_REPO names one)",
@@ -590,6 +590,21 @@ fn row_of(step: &Value) -> Option<(String, String)> {
         .find_map(|t| t.strip_prefix("row:"))
         .and_then(|r| r.split_once('/'))
         .map(|(g, r)| (g.to_owned(), r.to_owned()))
+}
+
+/// Whether a step's work is in the games checkout: a quest-log item of a
+/// game's (not the tools'), or the engine's step on a game (it touches
+/// `game:NAME`, such as its corpus import). Its worker gets a worktree of
+/// the games checkout, and its gp writes go there.
+fn in_games(step: &Value) -> bool {
+    if step["repo"] == json!("tools") {
+        return false;
+    }
+    row_of(step).is_some()
+        || step["touches"].as_array().is_some_and(|t| {
+            t.iter()
+                .any(|t| t.as_str().is_some_and(|t| t.starts_with("game:")))
+        })
 }
 
 /// The run and clip of a step whose command starts with `gp agent brief
@@ -717,22 +732,36 @@ fn last_line(log: &Path) -> Option<String> {
 fn work(setup: &Setup, flag: &AtomicBool, rec: &mut Value) -> anyhow::Result<()> {
     let step = rec["step"].clone();
     let id = step["id"].as_str().unwrap_or("").to_owned();
-    let row = row_of(&step);
-    let in_games = row.is_some() && step["repo"] != json!("tools");
+    let in_games = in_games(&step);
     let (wt, branch) = worktree(setup, &id, in_games)?;
     rec["worktree"] = json!(wt);
     rec["branch"] = json!(branch);
+    // A games step's gp writes (corpus import's clips, a probe's saves) go
+    // to its own worktree, never into the person's checkout, which a
+    // landing may be using; they reach it only through a gate, and the
+    // gates still run on the person's checkout, the one they land on.
+    let games = if in_games { &wt } else { &setup.games };
     let dir = files_dir(&setup.home, &id);
     fs::create_dir_all(&dir)?;
     let mcp = dir.join("mcp.json");
-    let mut env = json!({"GP_HOME": setup.home, "GP_GAMES_DIR": setup.games});
+    let mut env = json!({"GP_HOME": setup.home, "GP_GAMES_DIR": games});
     env[loop_state::STEP_ENV] = json!(id);
+    // gp mcp reads gameprinter's own checkout (templates/), which a games
+    // worktree isn't: name it, and the games checkout.
+    let mut args = vec![
+        json!("mcp"),
+        json!("--repo"),
+        json!(setup.tools),
+        json!("--games"),
+        json!(setup.games),
+    ];
+    if in_games {
+        args.extend([json!("--worker-games"), json!(wt)]);
+    }
     fs::write(
         &mcp,
         serde_json::to_vec_pretty(&json!({"mcpServers": {"gp": {
-            // gp mcp reads gameprinter's own checkout (templates/), which a
-            // games worktree isn't: name it, and the games checkout.
-            "command": setup.gp, "args": ["mcp", "--repo", setup.tools, "--games", setup.games], "env": env,
+            "command": setup.gp, "args": args, "env": env,
         }}}))?,
     )?;
     let t0 = Instant::now();
@@ -756,7 +785,7 @@ fn work(setup: &Setup, flag: &AtomicBool, rec: &mut Value) -> anyhow::Result<()>
         rec["log"] = json!(log_path);
         rec["brief"] = json!(brief_path);
         cmd.env("GP_HOME", &setup.home)
-            .env("GP_GAMES_DIR", &setup.games)
+            .env("GP_GAMES_DIR", games)
             .env(loop_state::STEP_ENV, &id)
             .env("GP_WORKER", format!("loop-{id}"))
             .env("GP_LOOP_BRIEF", &brief_path)
@@ -964,7 +993,13 @@ mod tests {
         git_in(&repo, &["commit", "-qm", "first"]);
         let sh = t.join("agent.sh");
         fs::write(&sh, script).unwrap();
-        fs::create_dir_all(t.join("games")).unwrap();
+        // The games checkout, where a game's step gets its worktree.
+        let games = t.join("games");
+        fs::create_dir_all(&games).unwrap();
+        git_in(&games, &["init", "-q", "-b", "main"]);
+        fs::write(games.join("g.txt"), "g\n").unwrap();
+        git_in(&games, &["add", "."]);
+        git_in(&games, &["commit", "-qm", "first"]);
         Setup {
             home: t.join("home"),
             games: t.join("games"),
@@ -990,7 +1025,7 @@ mod tests {
         let setup = rig(
             t.path(),
             &format!(
-                "echo \"$GP_STEP $GP_WORKER $(git rev-parse --abbrev-ref HEAD)\" > {o}\ncat >> {o}\necho all done\n",
+                "echo \"$GP_STEP $GP_WORKER $(git rev-parse --abbrev-ref HEAD)\" > {o}\necho \"games $GP_GAMES_DIR\" >> {o}\ncat >> {o}\necho all done\n",
                 o = out.display()
             ),
         );
@@ -1008,6 +1043,23 @@ mod tests {
             "{seen}"
         );
         assert!(seen.contains("gp_run cites"), "{seen}");
+        // A game's step works in a worktree of the games checkout, and its
+        // gp and gp mcp write there, not in the person's checkout; its
+        // gates still run on the person's.
+        let wt = loop_state::loop_dir(&setup.home).join("trees").join(id);
+        assert!(wt.join("g.txt").is_file(), "a games worktree");
+        assert!(
+            seen.contains(&format!("games {}\n", wt.display())),
+            "{seen}"
+        );
+        let mcp = fs::read_to_string(files_dir(&setup.home, id).join("mcp.json")).unwrap();
+        let mcp: Value = serde_json::from_str(&mcp).unwrap();
+        let gp = &mcp["mcpServers"]["gp"];
+        assert_eq!(gp["env"]["GP_GAMES_DIR"], json!(wt));
+        let args = gp["args"].as_array().unwrap();
+        let after = |flag: &str| args.iter().position(|a| a == flag).map(|i| &args[i + 1]);
+        assert_eq!(after("--games"), Some(&json!(setup.games)));
+        assert_eq!(after("--worker-games"), Some(&json!(wt)));
         let r = record(&setup.home, id);
         assert_eq!(r["state"], "done");
         assert_eq!(r["tries"], 1);

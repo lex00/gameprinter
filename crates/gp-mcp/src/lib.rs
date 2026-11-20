@@ -84,6 +84,11 @@ pub struct Config {
     /// finds it as its other commands do: $GP_GAMES_DIR, else a `games`
     /// folder at, above or beside the current folder). None without one.
     pub games: Option<PathBuf>,
+    /// A loop worker's own worktree of the games checkout (`gp mcp
+    /// --worker-games`): gp_run runs its commands there, so what they write
+    /// stays in the worktree and reaches `games` only through a gate. The
+    /// gates themselves still run in `games`, the checkout they land on.
+    pub worker_games: Option<PathBuf>,
 }
 
 impl Config {

@@ -179,6 +179,7 @@ fn config(a: &OpenArgs, paths: &Paths) -> Result<gp_mcp::Config> {
         rom: None,
         assets: a.assets.as_deref().map(std::path::absolute).transpose()?,
         games: crate::roms_cmd::games_dir(None),
+        worker_games: None,
     })
 }
 

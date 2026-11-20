@@ -128,6 +128,7 @@ pub(crate) fn config(ctx: &Ctx) -> Result<gp_mcp::Config, Fail> {
         rom: None,
         assets: None,
         games: Some(ctx.games.clone()),
+        worker_games: None,
     })
 }
 

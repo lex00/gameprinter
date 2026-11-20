@@ -1026,6 +1026,7 @@ y = 191
             rom: None,
             assets: Some(lifted.clone()),
             games: None,
+            worker_games: None,
         };
         let out = home.path().join("out");
         export(&config, "cab", "player", "png", &out).unwrap();
@@ -1103,6 +1104,7 @@ y = 191
             rom: None,
             assets: Some(lifted.clone()),
             games: None,
+            worker_games: None,
         };
         let out = home.path().join("out");
         let (trip, files) = export(&config, "cab", "player", "png", &out).unwrap();

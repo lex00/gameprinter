@@ -115,6 +115,7 @@ mod tests {
             rom: None,
             assets: None,
             games: None,
+            worker_games: None,
         }
     }
 

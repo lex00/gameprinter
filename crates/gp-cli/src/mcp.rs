@@ -39,6 +39,10 @@ pub struct McpArgs {
     /// folder at or beside the current folder or one above it).
     #[arg(long, value_name = "DIR")]
     games: Option<PathBuf>,
+    /// A loop worker's own worktree of the games checkout: gp_run runs its
+    /// commands there, all but the gates, which land on --games.
+    #[arg(long, value_name = "DIR")]
+    worker_games: Option<PathBuf>,
 }
 
 fn absolute(p: &Path) -> Result<PathBuf> {
@@ -91,6 +95,7 @@ pub(crate) fn run(args: &McpArgs, paths: &Paths) -> Result<Outcome> {
         games: crate::roms_cmd::games_dir(args.games.as_deref())
             .map(|g| absolute(&g))
             .transpose()?,
+        worker_games: args.worker_games.as_deref().map(absolute).transpose()?,
     };
     let shown = json!({ "repo": config.repo, "work": config.work, "games": config.games });
     // The tools' `gp query` children ask this process, which keeps the

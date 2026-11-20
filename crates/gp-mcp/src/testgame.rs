@@ -282,6 +282,7 @@ pub fn config(root: &Path) -> (Config, PathBuf) {
         rom: None,
         assets: Some(lifted),
         games: None,
+        worker_games: None,
     };
     (config, gp)
 }

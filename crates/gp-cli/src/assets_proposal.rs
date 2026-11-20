@@ -68,6 +68,7 @@ fn config(paths: &Paths) -> gp_mcp::Config {
         rom: None,
         assets: None,
         games: None,
+        worker_games: None,
     }
 }
 
