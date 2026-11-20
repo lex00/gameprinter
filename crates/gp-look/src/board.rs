@@ -957,8 +957,8 @@ impl BoardArt {
         }
         let mut drawn = Vec::new();
         // The bodies' other sprites, placed once every body has its own
-        // entry: (body, which, its entry's bytes).
-        let mut extras: Vec<(usize, usize, [u8; 4])> = Vec::new();
+        // entry: (body, which, the entry it wants, its entry's bytes).
+        let mut extras: Vec<(usize, usize, usize, [u8; 4])> = Vec::new();
         for (i, r) in at {
             let b = &w.bodies[i];
             let Some(Some(k)) = self.kinds.get(b.kind) else {
@@ -967,11 +967,15 @@ impl BoardArt {
             // The entry's bytes: the position's own, or in the board's
             // units those that draw the sprite there.
             let (x, y) = KindSprite::bytes(self.board_units, b.x.floor(), b.y.floor());
+            let mut shown_extras = 0;
             for (n, e) in k.extra.iter().enumerate() {
                 let picture = e.picture.read(b);
                 if picture == 0 {
                     continue;
                 }
+                // The k-th one drawn wants the k-th entry after the body's.
+                let want = r + 1 + shown_extras;
+                shown_extras += 1;
                 let mut flags = e.flags.map_or(0, |f| f.read(b));
                 if e.flip_when_facing_left && b.facing_left {
                     flags ^= 0x10;
@@ -981,7 +985,7 @@ impl BoardArt {
                     b.x.floor() + i64::from(e.offset[0]),
                     b.y.floor() + i64::from(e.offset[1]),
                 );
-                extras.push((i, n, [ey as u8, flags, picture, ex as u8]));
+                extras.push((i, n, want, [ey as u8, flags, picture, ex as u8]));
             }
             let mut flags = k.flags.map_or(0, |f| f.read(b));
             if k.flip_when_facing_left && b.facing_left {
@@ -1005,10 +1009,16 @@ impl BoardArt {
                 flags,
             });
         }
-        // The other sprites, each in the lowest entry still free, in the
-        // bodies' order; with every entry taken they aren't drawn.
-        for (i, n, bytes) in extras {
-            let Some(r) = taken.iter().position(|t| !t) else {
+        // The other sprites, each in the entry after its body's own (the
+        // k-th drawn one k+1 after) as the program copies it there, else
+        // in the lowest entry still free, in the bodies' order; with every
+        // entry taken they aren't drawn.
+        for (i, n, want, bytes) in extras {
+            let r = if want < ENTRIES && !taken[want] {
+                want
+            } else if let Some(r) = taken.iter().position(|t| !t) {
+                r
+            } else {
                 break;
             };
             taken[r] = true;
@@ -2423,8 +2433,9 @@ asset = "stage2"
         assert!(err.contains("clears the tile layer"), "{err}");
     }
 
-    /// A body's other sprite takes the lowest entry free after every
-    /// body's own, at its offset, while its picture isn't 0.
+    /// A body's other sprite takes the entry after the body's own, else
+    /// the lowest entry free after every body's own, at its offset, while
+    /// its picture isn't 0.
     #[test]
     fn a_bodys_other_sprite_is_drawn_while_its_picture_is_set() {
         let dir = tempfile::tempdir().unwrap();
@@ -2497,6 +2508,16 @@ asset = "stage2"
             video::SPRITE_BIT,
             "the other sprite is left to the theme"
         );
+        // A body in entry 5 has its other sprite in entry 6, the one after
+        // its own, above every entry below; with 6 taken by another body
+        // it goes to the lowest free one.
+        let p = art.draw(&w, &[true], &[5]).unwrap();
+        assert_eq!((p.drawn[0].entry, p.drawn[1].entry), (5, 6));
+        w.bodies.push(w.bodies[0]);
+        w.bodies[1].ext[2] = 0;
+        let p = art.draw(&w, &[true, true], &[5, 6]).unwrap();
+        let entries: Vec<_> = p.drawn.iter().map(|d| (d.body, d.extra, d.entry)).collect();
+        assert_eq!(entries, [(0, None, 5), (0, Some(0), 0), (1, None, 6)]);
     }
 
     /// A string drawn while its counter test holds, a byte a cell up to

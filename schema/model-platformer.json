@@ -483,7 +483,7 @@
       "description": "Feature `sprite.board`: a body drawn as one of an arcade board's\nsprites. The board draws a sprite from four bytes of its sprite RAM (y,\nflags, picture, x); the body's position stands for y and x, and this\nsays where the other two come from: the body's words, which a state\nmapping loads from the game's object slots (the program copies those\nbytes to sprite RAM), or numbers the model fixes. Presentation only.",
       "properties": {
         "extra": {
-          "description": "Feature `sprite.board.extra`: more sprites the board draws for the\nsame object, as a program that copies an object's second sprite\n(something it holds) into the next entry of sprite RAM. Each is\ndrawn while its picture isn't 0, in the lowest entry free after\nevery body's own.",
+          "description": "Feature `sprite.board.extra`: more sprites the board draws for the\nsame object, as a program that copies an object's second sprite\n(something it holds) into the next entry of sprite RAM. Each is\ndrawn while its picture isn't 0: the k-th drawn in the entry k+1\nafter the body's own, or when that one is taken in the lowest\nentry free after every body's own.",
           "items": {
             "$ref": "#/$defs/BoardSpriteExtra"
           },

@@ -1000,8 +1000,9 @@ pub struct BoardSprite {
     /// Feature `sprite.board.extra`: more sprites the board draws for the
     /// same object, as a program that copies an object's second sprite
     /// (something it holds) into the next entry of sprite RAM. Each is
-    /// drawn while its picture isn't 0, in the lowest entry free after
-    /// every body's own.
+    /// drawn while its picture isn't 0: the k-th drawn in the entry k+1
+    /// after the body's own, or when that one is taken in the lowest
+    /// entry free after every body's own.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra: Vec<BoardSpriteExtra>,
 }

@@ -233,7 +233,7 @@ flags = { word = 1, byte = 2 }       # and its flags
 | `flags` | Its flags byte. Default 0 |
 | `flip_when_facing_left` | As the body's own |
 
-Each takes the lowest entry of sprite RAM still free once every body has its own, in the bodies' order, so it is drawn over the bodies placed before it and under any later entry. The screen measure puts a box over it down to its body (`gp picture`), as it does the body's own sprite.
+Once every body has its own entry, the k-th of a body's other sprites drawn (k from 0) takes the entry k+1 after the body's own, as the program copies it there, so it stacks with its body; when that entry is taken or past 127 it takes the lowest entry still free, in the bodies' order. A sprite is drawn over the entries below its own and under those above. The screen measure puts a box over it down to its body (`gp picture`), as it does the body's own sprite.
 
 Each of `picture` and `flags` is `{ word = W, byte = B }`, byte B (0 the lowest, default 0) of the body's `ext[W]` (W 0 to 3), or `{ number = N }`, N 0 to 255. A state mapping that reads two bytes into one word (`ram = [flags, picture]`) puts the first at byte 0 and the second at byte 1, so one word holds both.
 
