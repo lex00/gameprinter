@@ -560,9 +560,17 @@ fn keeping(home: &Path, games: &Path) -> Vec<String> {
 /// game with mechanic sessions, a dry `gp corpus import`, and when it
 /// would add clips, `gp model gate GAME --import`, which lands them only
 /// if no clip scores worse. It never changes or removes a clip already in
-/// the corpus (no --replaces, no --removes: those ask). A set of clips
-/// that failed isn't tried again until the sessions give another. What it
-/// did is in `work/loop/kept/GAME.json`, and the runner's status says it.
+/// the corpus (no --replaces: that asks). A set of clips that failed isn't
+/// tried again until the sessions give another.
+///
+/// A clip enters only when it plays together with the original (owner,
+/// gate-refuses-failing-clips): the gate fails one that doesn't with
+/// `refused`, and the runner holds it out (`--removes` keeps a new clip
+/// out of the import), puts why on its session's quest-log row
+/// ([`hold_rows`]) and gates the rest again at once. Held clips are tried
+/// again once the game's folder has a new commit. What it did is in
+/// `work/loop/kept/GAME.json` (with `held` and `held_at`), and the
+/// runner's status says it.
 fn keep_clips(ctx: &Arc<Ctx>) {
     static LAST: Mutex<Option<Instant>> = Mutex::new(None);
     static BUSY: AtomicBool = AtomicBool::new(false);
@@ -579,90 +587,208 @@ fn keep_clips(ctx: &Arc<Ctx>) {
         let home = &ctx.paths.home;
         for game in keeping(home, &ctx.games) {
             let dir = ctx.games.join(&game);
-            let Ok(o) = crate::corpus_import::run(
-                &crate::corpus_import::Args {
-                    game: &game,
-                    template: Some(&dir),
-                    from: Some(home),
-                    write: false,
-                    says: None,
-                    date: None,
-                    remove: &[],
-                    replace: &[],
-                    sessions: &[],
-                },
-                &ctx.paths,
-            ) else {
-                continue;
-            };
-            let added: Vec<String> = o.json["added"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|x| x.as_str().map(str::to_owned))
-                .collect();
-            if added.is_empty() {
-                continue;
-            }
             let f = kept_file(home, &game);
             let before: Value = fs::read(&f)
                 .ok()
                 .and_then(|b| serde_json::from_slice(&b).ok())
                 .unwrap_or(Value::Null);
-            if before["state"] == json!("failed") && before["added"] == json!(added) {
-                continue;
-            }
-            let gp = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gp"));
-            let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
-            let out = Command::new(&gp)
-                .args(["--json", "model", "gate"])
-                .arg(&dir)
-                .arg("--import")
-                .current_dir(&ctx.games)
-                .env("GP_HOME", home)
-                .env("GP_GAMES_DIR", &ctx.games)
-                .env("GP_NO_HINTS", "1")
-                .stdin(Stdio::null())
-                .output();
-            let (state, lines) = match out {
-                Ok(o) => {
-                    let v: Value = serde_json::from_slice(&o.stdout).unwrap_or(Value::Null);
-                    let lines: Vec<String> = v["lines"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|l| l.as_str().map(str::to_owned))
-                        .chain(
-                            v["lines"]
-                                .is_null()
-                                .then(|| String::from_utf8_lossy(&o.stderr).trim().to_owned())
-                                .filter(|s| !s.is_empty()),
-                        )
-                        .collect();
-                    let state = if !o.status.success() || v["verdict"] == json!("FAIL") {
-                        "failed"
-                    } else if v["landed"].is_string() {
-                        "landed"
-                    } else {
-                        "passed"
-                    };
-                    (state, lines)
-                }
-                Err(e) => ("failed", vec![format!("it couldn't start: {e}")]),
+            // The game's last commit: clips held out are tried again once
+            // it moves (the model may play them now).
+            let at = crate::gate::git(&ctx.games, &["log", "-1", "--format=%H", "--", &game])
+                .unwrap_or_default();
+            let mut held: Vec<Value> = if before["held_at"] == json!(at) {
+                before["held"].as_array().cloned().unwrap_or_default()
+            } else {
+                Vec::new()
             };
-            let keep = lines.len().saturating_sub(6);
-            let rec = json!({
-                "game": game,
-                "at_ms": gp_mcp::asks::now_ms(),
-                "added": added,
-                "state": state,
-                "lines": lines[keep..],
-            });
-            let _ = fs::create_dir_all(f.parent().unwrap_or(home));
-            let _ = fs::write(&f, serde_json::to_vec_pretty(&rec).unwrap_or_default());
+            // At most a few rounds: each holds out what the gate refused.
+            for _ in 0..3 {
+                let remove: Vec<String> = held
+                    .iter()
+                    .filter_map(|h| h["id"].as_str().map(str::to_owned))
+                    .collect();
+                let Ok(o) = crate::corpus_import::run(
+                    &crate::corpus_import::Args {
+                        game: &game,
+                        template: Some(&dir),
+                        from: Some(home),
+                        write: false,
+                        says: None,
+                        date: None,
+                        remove: &remove,
+                        replace: &[],
+                        sessions: &[],
+                    },
+                    &ctx.paths,
+                ) else {
+                    break;
+                };
+                let added: Vec<String> = o.json["added"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|x| x.as_str().map(str::to_owned))
+                    .collect();
+                if added.is_empty() {
+                    break;
+                }
+                if before["state"] == json!("failed") && before["added"] == json!(added) {
+                    break;
+                }
+                let (state, lines, refused) = gate_import(&ctx, &dir, &remove);
+                let fresh: Vec<Value> = refused
+                    .into_iter()
+                    .filter(|r| {
+                        r["id"]
+                            .as_str()
+                            .is_some_and(|i| added.iter().any(|a| a == i))
+                    })
+                    .collect();
+                let keep = lines.len().saturating_sub(6);
+                let mut rec = json!({
+                    "game": game,
+                    "at_ms": gp_mcp::asks::now_ms(),
+                    "added": added,
+                    "state": state,
+                    "lines": lines[keep..],
+                    "held": held,
+                    "held_at": at,
+                });
+                if !fresh.is_empty() {
+                    let _ = hold_rows(home, &game, &fresh);
+                    held.extend(fresh);
+                    rec["held"] = json!(held);
+                    rec["state"] = json!("held");
+                    let _ = fs::create_dir_all(f.parent().unwrap_or(home));
+                    let _ = fs::write(&f, serde_json::to_vec_pretty(&rec).unwrap_or_default());
+                    continue;
+                }
+                let _ = fs::create_dir_all(f.parent().unwrap_or(home));
+                let _ = fs::write(&f, serde_json::to_vec_pretty(&rec).unwrap_or_default());
+                break;
+            }
         }
         BUSY.store(false, Ordering::SeqCst);
     });
+}
+
+/// `gp model gate GAME --import`, holding out the clips `remove` names:
+/// its state (landed, passed or failed), its lines, and the clips it
+/// refused for not playing together (`refused`, `{id, why}`).
+fn gate_import(
+    ctx: &Ctx,
+    dir: &Path,
+    remove: &[String],
+) -> (&'static str, Vec<String>, Vec<Value>) {
+    let home = &ctx.paths.home;
+    let gp = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gp"));
+    let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut cmd = Command::new(&gp);
+    cmd.args(["--json", "model", "gate"])
+        .arg(dir)
+        .arg("--import");
+    for id in remove {
+        cmd.arg("--removes").arg(id);
+    }
+    let out = cmd
+        .current_dir(&ctx.games)
+        .env("GP_HOME", home)
+        .env("GP_GAMES_DIR", &ctx.games)
+        .env("GP_NO_HINTS", "1")
+        .stdin(Stdio::null())
+        .output();
+    match out {
+        Ok(o) => {
+            let v: Value = serde_json::from_slice(&o.stdout).unwrap_or(Value::Null);
+            let lines: Vec<String> = v["lines"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|l| l.as_str().map(str::to_owned))
+                .chain(
+                    v["lines"]
+                        .is_null()
+                        .then(|| String::from_utf8_lossy(&o.stderr).trim().to_owned())
+                        .filter(|s| !s.is_empty()),
+                )
+                .collect();
+            let state = if !o.status.success() || v["verdict"] == json!("FAIL") {
+                "failed"
+            } else if v["landed"].is_string() {
+                "landed"
+            } else {
+                "passed"
+            };
+            let refused = v["refused"].as_array().cloned().unwrap_or_default();
+            (state, lines, refused)
+        }
+        Err(e) => (
+            "failed",
+            vec![format!("it couldn't start: {e}")],
+            Vec::new(),
+        ),
+    }
+}
+
+/// The quest-log row a corpus clip's ID names: its session,
+/// `drink-far-end` of `tapper.drink-far-end.001`.
+fn row_of_clip(id: &str) -> Option<&str> {
+    let (rest, _n) = id.rsplit_once('.')?;
+    Some(rest.rsplit_once('.').map_or(rest, |(_, s)| s))
+}
+
+/// Each clip held out of the corpus waits on its session's quest-log row
+/// with why: the row's `open` gets a line for it (one a clip), and a row
+/// marked done goes back to next with that line as its note, since its
+/// clip doesn't play together yet. A row with no entry gets one.
+fn hold_rows(home: &Path, game: &str, held: &[Value]) -> anyhow::Result<()> {
+    if !crate::mechanic::session::name_ok(game) {
+        bail!("not a game name: {game}");
+    }
+    let f = home.join("mechanics").join(game).join("queue.json");
+    let mut q = crate::mechanic::session::read_queue(&f);
+    for h in held {
+        let (Some(id), Some(why)) = (h["id"].as_str(), h["why"].as_str()) else {
+            continue;
+        };
+        let Some(row) = row_of_clip(id) else {
+            continue;
+        };
+        let line = format!(
+            "{id} is held out of the corpus: {why}. It enters once the model plays it together with the original"
+        );
+        let at = match q.iter().position(|r| r["mechanic"] == json!(row)) {
+            Some(i) => i,
+            None => {
+                q.push(json!({"mechanic": row, "status": "next", "by": "loop"}));
+                q.len() - 1
+            }
+        };
+        let Some(o) = q[at].as_object_mut() else {
+            continue;
+        };
+        let mut open: Vec<Value> = o
+            .get("open")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        open.retain(|l| {
+            !l.as_str()
+                .is_some_and(|s| s.starts_with(&format!("{id} is held out")))
+        });
+        open.push(json!(line));
+        o.insert("open".into(), json!(open));
+        let status = o.get("status").and_then(Value::as_str).unwrap_or("");
+        if status == "done" || status.is_empty() {
+            o.insert("status".into(), json!("next"));
+            o.insert("note".into(), json!(crate::next::cut(&line, 600)));
+            o.remove("clip");
+        } else if o.get("note").is_none() {
+            o.insert("note".into(), json!(crate::next::cut(&line, 600)));
+        }
+        o.insert("changed_ms".into(), json!(gp_mcp::asks::now_ms()));
+    }
+    crate::mechanic::session::write_queue(&f, &q)
 }
 
 /// What the runner last took into each game's corpus, in words.
@@ -686,7 +812,25 @@ fn kept_says(home: &Path) -> Vec<String> {
                 .and_then(Value::as_str)
                 .unwrap_or("");
             let game = v["game"].as_str().unwrap_or("");
-            match v["state"].as_str().unwrap_or("") {
+            let held: Vec<&str> = v["held"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|h| h["id"].as_str())
+                .collect();
+            let held_says = if held.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " Held out, since {} play together with the original yet (why is on {} quest-log row{}): {}.",
+                    if held.len() == 1 { "it doesn't" } else { "they don't" },
+                    if held.len() == 1 { "its" } else { "their" },
+                    if held.len() == 1 { "" } else { "s" },
+                    held.join(", ")
+                )
+            };
+            let said = match v["state"].as_str().unwrap_or("") {
+                "held" => format!("{game}: took no clip into the corpus."),
                 "landed" => format!(
                     "{game}: took {} clip{} into the corpus on its own: {}.",
                     ids.len(),
@@ -698,7 +842,8 @@ fn kept_says(home: &Path) -> Vec<String> {
                     ids.join(", ")
                 ),
                 _ => format!("{game}: gated {}: {why}", ids.join(", ")),
-            }
+            };
+            format!("{said}{held_says}")
         })
         .collect();
     out.sort();
@@ -1577,6 +1722,79 @@ mod tests {
         assert_eq!(
             ask_row(home, &gp_mcp::asks::read(home, "ask-2").unwrap()),
             Some(("g".into(), "b".into()))
+        );
+    }
+
+    /// A clip the gate held out waits on its session's row with why: a
+    /// done row goes back to next with it as its note, a row asking the
+    /// person keeps its note and gets the line in `open` (once a clip), a
+    /// session with no row gets one; the runner's status says it.
+    #[test]
+    fn a_held_clip_waits_on_its_row_with_why() {
+        assert_eq!(
+            row_of_clip("tapper.drink-far-end.001"),
+            Some("drink-far-end")
+        );
+        assert_eq!(row_of_clip("hop.walk.002"), Some("walk"));
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path();
+        let f = home.join("mechanics").join("g").join("queue.json");
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        let q = vec![
+            json!({"mechanic": "drink", "status": "done", "note": "Landed it"}),
+            json!({"mechanic": "tip", "status": "asking you", "note": "Is the tip right?"}),
+        ];
+        crate::mechanic::session::write_queue(&f, &q).unwrap();
+        let held = vec![
+            json!({"id": "g.drink.001", "why": "1/400 frames together straight through"}),
+            json!({"id": "g.tip.002", "why": "8/10 frames together straight through"}),
+            json!({"id": "g.bonus.001", "why": "can't be scored: no presses"}),
+        ];
+        hold_rows(home, "g", &held).unwrap();
+        hold_rows(home, "g", &held[..1]).unwrap();
+        let q = crate::mechanic::session::read_queue(&f);
+        let row = |m: &str| {
+            q.iter()
+                .find(|r| r["mechanic"] == json!(m))
+                .unwrap()
+                .clone()
+        };
+        let drink = row("drink");
+        assert_eq!(drink["status"], "next");
+        assert!(
+            drink["note"]
+                .as_str()
+                .unwrap()
+                .starts_with("g.drink.001 is held out of the corpus: 1/400 frames together")
+        );
+        assert_eq!(drink["open"].as_array().unwrap().len(), 1);
+        let tip = row("tip");
+        assert_eq!(tip["status"], "asking you");
+        assert_eq!(tip["note"], "Is the tip right?");
+        assert!(
+            tip["open"][0]
+                .as_str()
+                .unwrap()
+                .starts_with("g.tip.002 is held out")
+        );
+        assert_eq!(row("bonus")["status"], "next");
+        let kept = kept_file(home, "g");
+        fs::create_dir_all(kept.parent().unwrap()).unwrap();
+        fs::write(
+            &kept,
+            serde_json::to_vec(
+                &json!({"game": "g", "added": ["g.walk.001"], "state": "landed",
+                "lines": [], "held": held[..1]}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let says = kept_says(home);
+        assert_eq!(
+            says,
+            [
+                "g: took 1 clip into the corpus on its own: g.walk.001. Held out, since it doesn't play together with the original yet (why is on its quest-log row): g.drink.001."
+            ]
         );
     }
 

@@ -987,6 +987,15 @@ fn trial(
         return fail(w, "corpus");
     }
     lines.extend(passes.into_iter().map(|p| format!("{TOLERATED}{p}")));
+    // A clip enters the corpus only when it plays together with the
+    // original (owner, gate-refuses-failing-clips); a new game's first
+    // baseline is what it is.
+    if !first {
+        let below = new_below_bar(&base.rows, &rows);
+        if !below.is_empty() {
+            return fail(refused_why(&below), NEW_CLIPS);
+        }
+    }
     // The looks the owner approved: every locked frame drawn no further from
     // the original, whatever the patch touches. No tolerance moves a lock;
     // only the owner's yes again does (gp mechanic approve).
@@ -1413,6 +1422,11 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
                     ),
                 };
                 let mut json = json;
+                if let Some(Err(f)) = &verdicts[i]
+                    && f.phase == NEW_CLIPS
+                {
+                    json["refused"] = json!(refused_of(&f.why));
+                }
                 json["tip"] = json!(tip);
                 json["tip_score"] = json!(tip_json);
                 if first && mine.is_some() {
@@ -1967,6 +1981,73 @@ fn clip_worse(id: &str, b: &Row, n: &Row) -> Option<String> {
         }
     }
     None
+}
+
+/// The phase a gate fails in when a clip it would add to the corpus
+/// doesn't play together with the original.
+pub(crate) const NEW_CLIPS: &str = "new clips";
+
+/// Whether a clip meets the bars the quest log counts
+/// (`mechanic::scores::meets`): the contract's together and
+/// longest-stretch bars where it sets them, else all of its frames
+/// together straight through.
+fn meets_bars(r: &Row) -> bool {
+    if r.error.is_some() || r.frames == 0 {
+        return false;
+    }
+    if r.bar_together.is_some() || r.bar_longest.is_some() {
+        return r.bar_together != Some(false) && r.bar_longest != Some(false);
+    }
+    r.full()
+}
+
+/// The clips `new` has and `base` hasn't that don't meet the bars, each
+/// with how far they play together.
+pub(crate) fn new_below_bar(base: &Rows, new: &Rows) -> Vec<(String, String)> {
+    new.iter()
+        .filter(|(id, r)| !base.iter().any(|(b, _)| b == id) && !meets_bars(r))
+        .map(|(id, r)| {
+            let why = match &r.error {
+                Some(e) => format!("can't be scored: {e}"),
+                None => format!(
+                    "{}/{} frames together straight through{}",
+                    r.together,
+                    r.frames,
+                    match &r.first {
+                        Some((f, of, p)) => format!(
+                            ", first apart at frame {f} of the clip (the original's {of}), {p}"
+                        ),
+                        None => String::new(),
+                    }
+                ),
+            };
+            (id.clone(), why)
+        })
+        .collect()
+}
+
+/// The gate's why for clips held out of the corpus: a line saying the
+/// rule, then a line `  ID: why` for each, which [`refused_of`] reads back.
+fn refused_why(below: &[(String, String)]) -> String {
+    let mut s = format!(
+        "{} new clip{} {} play together with the original, and a clip enters the corpus only when it plays straight through at the bar; each waits on its quest-log row:",
+        below.len(),
+        if below.len() == 1 { "" } else { "s" },
+        if below.len() == 1 { "doesn't" } else { "don't" }
+    );
+    for (id, why) in below {
+        s.push_str(&format!("\n  {id}: {why}"));
+    }
+    s
+}
+
+/// The clips a [`NEW_CLIPS`] failure held out, as `{id, why}`.
+pub(crate) fn refused_of(why: &str) -> Vec<Value> {
+    why.lines()
+        .skip(1)
+        .filter_map(|l| l.strip_prefix("  ")?.split_once(": "))
+        .map(|(id, why)| json!({"id": id, "why": why}))
+        .collect()
 }
 
 #[cfg(test)]
@@ -2562,6 +2643,42 @@ mod tests {
         let mut lost = base.clone();
         lost[1].1.bar_longest = Some(false);
         assert!(worse(&barred, &lost).unwrap().contains("longest stretch"));
+    }
+
+    /// A clip enters the corpus only when it plays together with the
+    /// original (owner, gate-refuses-failing-clips): a new clip below the
+    /// bar is refused with why, and the why reads back as `refused`; a
+    /// clip already in the corpus below the bar isn't new, so isn't.
+    #[test]
+    fn a_new_clip_below_the_bar_is_refused_with_why() {
+        let base: Rows = vec![("g.old.001".into(), row(10, 5))];
+        let mut split = row(400, 1);
+        split.first = Some((1, 413, "entities.player[0].x".into()));
+        let mut barred = row(10, 8);
+        barred.bar_together = Some(true);
+        let mut broken = row(10, 0);
+        broken.error = Some("the recording ended early".into());
+        let new: Rows = vec![
+            ("g.old.001".into(), row(10, 5)),
+            ("g.walk.001".into(), row(10, 10)),
+            ("g.drink.001".into(), split),
+            ("g.tip.001".into(), barred),
+            ("g.die.001".into(), broken),
+        ];
+        let below = new_below_bar(&base, &new);
+        let ids: Vec<&str> = below.iter().map(|(i, _)| i.as_str()).collect();
+        assert_eq!(ids, ["g.drink.001", "g.die.001"]);
+        let why = refused_why(&below);
+        assert!(why.starts_with("2 new clips don't play together with the original"));
+        let back = refused_of(&why);
+        assert_eq!(
+            back,
+            vec![
+                json!({"id": "g.drink.001", "why": "1/400 frames together straight through, first apart at frame 1 of the clip (the original's 413), entities.player[0].x"}),
+                json!({"id": "g.die.001", "why": "can't be scored: the recording ended early"}),
+            ]
+        );
+        assert!(new_below_bar(&new, &new).is_empty());
     }
 
     #[test]
