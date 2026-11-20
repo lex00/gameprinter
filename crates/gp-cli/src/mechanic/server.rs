@@ -1000,8 +1000,14 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
                     continue;
                 }
                 let session = Session::open(&s.paths, &s.game, m)?;
+                let talk = session.turns()?;
+                // The row's status line and whose turn it is, so YOUR TURN
+                // can show a question its agent asked with an ANSWER box.
+                let busy = super::session::busy_of(session.busy_file().as_ref(), &talk);
+                let waiting = super::session::waiting_for(&talk);
                 out.push(
-                    json!({"mechanic": m, "clips": session.clips()?, "talk": session.turns()?}),
+                    json!({"mechanic": m, "clips": session.clips()?, "talk": talk,
+                    "busy": busy, "waiting_for": waiting}),
                 );
             }
             Ok(Response::json(&json!({"mechanics": out})))

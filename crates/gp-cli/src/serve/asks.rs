@@ -30,9 +30,20 @@ pub(super) fn routes() -> Vec<Route> {
 }
 
 fn list(ctx: &Ctx, _req: &Request, _params: &Params) -> Result<Response, Fail> {
-    Ok(Response::json(
-        &json!({"asks": asks::shown(&ctx.paths.home)}),
-    ))
+    let home = &ctx.paths.home;
+    // Each card with the quest-log row it is for (`GAME/ROW`), from its
+    // step's worker record, so the page shows a row's card beside the row
+    // after its step has closed.
+    let shown: Vec<Value> = asks::shown(home)
+        .into_iter()
+        .map(|mut a| {
+            if let Some((g, r)) = super::runner::ask_row(home, &a) {
+                a["row"] = json!(format!("{g}/{r}"));
+            }
+            a
+        })
+        .collect();
+    Ok(Response::json(&json!({"asks": shown})))
 }
 
 fn answer(ctx: &Ctx, req: &Request, params: &Params) -> Result<Response, Fail> {

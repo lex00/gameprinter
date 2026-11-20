@@ -300,6 +300,14 @@ pub fn set_ran(home: &Path, id: &str, state: &str, lines: &[String]) -> Result<(
     write(home, &v)
 }
 
+/// Sets one field of an ask (the runner's `row_settled`, once the card's
+/// quest-log row has followed it).
+pub fn mark(home: &Path, id: &str, key: &str, value: Value) -> Result<(), String> {
+    let mut v = read(home, id).ok_or_else(|| format!("there's no ask {id}"))?;
+    v[key] = value;
+    write(home, &v)
+}
+
 /// The asks the page shows: [`pending`], the yeses the runner is running
 /// (up to [`RUNNING_SHOWS_MS`]) and those it finished in the last
 /// [`RAN_SHOWS_MS`].

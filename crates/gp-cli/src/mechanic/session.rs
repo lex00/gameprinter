@@ -71,6 +71,23 @@ pub(crate) struct Session {
     lock: Mutex<()>,
 }
 
+/// Whose turn the talk waits for: the agent's after the person's turn (or
+/// none), else the person's.
+pub fn waiting_for(turns: &[Value]) -> &'static str {
+    match turns.last().and_then(|t| t["by"].as_str()) {
+        Some("player") | None => "agent",
+        Some(_) => "player",
+    }
+}
+
+/// What the agent says it is doing, while no turn has come since its
+/// status line.
+pub fn busy_of(busy_file: Option<&Value>, turns: &[Value]) -> Option<String> {
+    busy_file
+        .filter(|b| b["after"].as_u64() == Some(turns.len() as u64))
+        .and_then(|b| b["text"].as_str().map(str::to_owned))
+}
+
 impl Session {
     fn dir_of(paths: &Paths, game: &str, mechanic: &str) -> Result<PathBuf> {
         if !name_ok(game) || !name_ok(mechanic) {
@@ -211,24 +228,22 @@ impl Session {
             .collect()
     }
 
+    /// The agent's status line as written (`busy.json`), if any.
+    pub fn busy_file(&self) -> Option<Value> {
+        fs::read_to_string(self.dir.join("busy.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+    }
+
     /// Everything the page and `show` read: the mechanic, its clips, the
     /// conversation, whose turn it is and the game's quest log.
     pub fn state(&self) -> Result<Value> {
         let info = self.info()?;
         let clips = self.clips()?;
         let turns = self.turns()?;
-        let waiting = match turns.last().and_then(|t| t["by"].as_str()) {
-            Some("player") | None => "agent",
-            Some(_) => "player",
-        };
-        // What the agent says it is doing, while no turn has come since.
-        let busy_file = fs::read_to_string(self.dir.join("busy.json"))
-            .ok()
-            .and_then(|t| serde_json::from_str::<Value>(&t).ok());
-        let busy = busy_file
-            .as_ref()
-            .filter(|b| b["after"].as_u64() == Some(turns.len() as u64))
-            .and_then(|b| b["text"].as_str().map(str::to_owned));
+        let waiting = waiting_for(&turns);
+        let busy_file = self.busy_file();
+        let busy = busy_of(busy_file.as_ref(), &turns);
         // When the agent last acted here: its newest status line or turn
         // (ms since the epoch; null when neither carries a time).
         let agent_ms = busy_file

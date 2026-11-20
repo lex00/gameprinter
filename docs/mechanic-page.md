@@ -417,7 +417,7 @@ original read the pad, kept in the start cache beside the original's
 snapshot: a model that counts its own frames, such as a boot that waits
 so many of them, goes on with the original wherever it joins.
 
-Under the screens, the quest log is grouped by state, each group a heading
+In THE LOOP'S DETAILS, the quest log is grouped by state, each group a heading
 in words with its count: NEEDS YOU (triage asks the person, or the row is
 asking them), AGENT WORKING, UP NEXT, DONE. Each note says who wrote it:
 YOU WROTE for a row the person made on the page, AGENT WROTE for the
@@ -447,8 +447,8 @@ fits and its last line in words. `api/screen` gives it as `work`, live for
 two minutes after the last write and not once the refine ended, and
 `api/screen/work-clip?id=ID` gives the clip's play from power-on. The page
 then shows that clip on both screens, the original beside the model,
-looping the window's frames and moving with each new window; the NOW panel
-under the screens reads REFINING with the clip and frames. The person
+looping the window's frames and moving with each new window; the status line
+under YOUR TURN reads REFINING with the clip and frames. The person
 comes first: a recording is never cut off; a game button (R records at
 once) goes back to playing; it follows again only after 20 s with no
 press; a clip the person opened stays until they go back to playing, one
@@ -467,13 +467,44 @@ and the page asks for a build by itself, keeps the old build playing with
 one line saying the new one builds, and swaps the new one in at the same
 place when `status.build` changes, saying so.
 
+Top to bottom the page is the screens; YOUR TURN; one status line; and THE
+LOOP'S DETAILS, folded (a click opens it, and the browser keeps it as left):
+the quest log with the NEW ITEM box at its top (Enter makes a new item, SEND
+comments on the open row), the steps, the workers and the runner's
+switches, and the clips. Finished rows are folded under DONE with their
+count. A row's badge comes from its status: the triage's mark (NEEDS YOU,
+THE TOOLS TRY) shows only on a row that isn't done or worked on.
+
+The status line says what is being worked on (each row marked agent
+working, by which worker, when it last acted and its status line, or
+MARKED WORKING, NO AGENT), then the loop: THE LOOP RUNS, THE LOOP WAITS ON
+YOU (with how many things are in YOUR TURN; a click goes there), THE LOOP
+IS STOPPED: THE RUNNER IS OFF, THE LOOP IS HALTED, or THE LOOP HAS NOTHING
+TO DO.
+
 YOUR TURN lists only what the person can do now,
 each with the button that does it: the agent's yes cards (YES and NO), the
 loop's steps for this game that are the person's and have a button (PLAY
 FROM HERE: the row opens, its request's path plays to its frame, the model
 starts there and RECORD records into the row, so the clip goes to the step's
-row), and the quest-log rows asking the person (ANSWER: their words go to
-the row's talk). With none of these it says NOTHING NEEDS YOU.
+row), and the rows' questions, each with an ANSWER box open beside it and
+the clip it is about. A question is a worker's newest turn in the row's
+talk when it asks something and waits on the person (`gp mechanic say`;
+the clip it shows gets LOOK AT IT), its status line when that asks
+(`gp mechanic busy`; `api/screen/clips` gives each row's `busy` and
+`waiting_for`), or the note of a row asking the person. The answer goes
+into the row's talk, which the waiting worker hears. With none of these it
+says NOTHING NEEDS YOU.
+
+A row that says to press YES shows only beside its card: `api/asks` gives
+each card its row (`row`, GAME/ROW, from its step's worker record). Once
+the card is gone the row follows it (the runner's `settle_card_rows`, for
+cards that ended in the last day): landed, the row is done (Landed on your
+YES: what); failed, it is next with why, so the loop takes it up again;
+the person's NO, or a card that ran out unanswered, leaves the row asking
+one plain question to answer. A row an agent works on waits; a done row
+moves only when its note still talks of the card; only a row's newest card
+moves it, once (`row_settled` on the card).
 
 A row that asks the person to judge something they can see carries the
 clip that shows it: `gp mechanic queue GAME ROW --status "asking you"
@@ -488,9 +519,7 @@ beside the model, in that theme (game for the game's own pictures), at
 those frames, played in a loop (one frame: stood still there). The person
 judges and answers in the same item.
 
-It sits over the window's bottom right corner, out of the page's flow, so
-it never pushes the screens down, one line an item; a click on a yes card's
-question opens what it does. The yeses the runner lands in turn say which
+A card is one line; a click on its question opens what it does. The yeses the runner lands in turn say which
 runs now and which wait (RUNNING NOW, 1 OF 3; WAITS, 2 OF 3), and one it
 finished says LANDED, DONE or FAILED with its last line, then leaves a
 minute later.

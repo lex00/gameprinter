@@ -809,7 +809,7 @@ async function stopRecording(send = true) {
 // The quest log and the clips --------------------------------------------
 
 // What the queue's statuses show as (app.js's LABELS).
-const LABELS = { done: "MEASURED", "asking you": "YOUR MOVE", "agent working": "WORKING ON IT", "in line": "IN LINE", next: "NEXT" };
+const LABELS = { done: "DONE", "asking you": "YOUR MOVE", "agent working": "WORKING ON IT", "in line": "IN LINE", next: "NEXT" };
 let rows = []; // the quest log, as api/session gives it
 let clipsBy = []; // [{mechanic, clips: [{n, frames, by, note}]}]
 
@@ -922,11 +922,20 @@ const GROUPS = [
   ["next", "UP NEXT"],
   ["done", "DONE"],
 ];
+// A row's group and badge come from its status; the triage's mark (NEEDS
+// YOU, THE TOOLS TRY) only counts on a row that isn't done.
 function groupOf(r) {
-  if (r.triage?.by === "you" || r.status === "asking you") return "you";
-  if (r.status === "agent working") return "working";
   if (r.status === "done") return "done";
+  if (r.status === "asking you" || r.triage?.by === "you") return "you";
+  if (r.status === "agent working") return "working";
   return "next";
+}
+function badgeOf(r) {
+  if (r.status !== "done" && r.status !== "agent working") {
+    if (r.triage?.by === "you") return "NEEDS YOU";
+    if (r.triage?.by === "tools") return "THE TOOLS TRY";
+  }
+  return LABELS[r.status] ?? String(r.status ?? "").toUpperCase();
 }
 
 // The words in a note that are for the tools, not the person: RAM tests,
@@ -990,8 +999,7 @@ function drawQueue() {
 function queueRow(r, g, open) {
   const li = el("li", `qrow-${g}`);
   li.dataset.mechanic = r.mechanic;
-  const label = r.triage?.by === "you" ? "NEEDS YOU" : r.triage?.by === "tools" ? "THE TOOLS TRY" : LABELS[r.status] ?? String(r.status ?? "").toUpperCase();
-  li.append(el("span", `st st-${String(r.status ?? "").replace(/ /g, "-")}`, label), el("span", "qname", r.mechanic));
+  li.append(el("span", `st st-${String(r.status ?? "").replace(/ /g, "-")}`, badgeOf(r)), el("span", "qname", r.mechanic));
   if (g === "working") {
     li.classList.add("active");
     li.append(el("span", "qworker", r.worker ? `ACTIVE: ${String(r.worker).toUpperCase()}` : "ACTIVE"));
@@ -1062,6 +1070,12 @@ function drawClips() {
     box.append(ul);
   }
   if (!box.children.length) box.append(el("p", "empty", "No clips yet. RECORD makes one; your agent's clips show here too."));
+}
+
+/** The quest log, unfolded (THE LOOP'S DETAILS) and brought into view. */
+function toQuestLog() {
+  $("details").open = true;
+  $("quest").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 /** A row's RECORD INTO THIS ROW: while recording (or sending) the clip goes
@@ -1167,7 +1181,7 @@ async function refreshAsks() {
   // Open questions first, then the runner's turn, then what it finished.
   const rank = (a) => (!a.ran && a.state === "open" ? 0 : turn.includes(a) ? 1 : 2);
   list.sort((x, y) => rank(x) - rank(y) || (rank(x) === 1 ? turn.indexOf(x) - turn.indexOf(y) : 0));
-  const key = JSON.stringify([list.map((a) => [a.id, a.state, a.ran?.state, turn.indexOf(a), asksOpen.has(a.id)]), rows.filter((r) => r.clip).map((r) => [r.mechanic, r.clip])]);
+  const key = JSON.stringify([list.map((a) => [a.id, a.state, a.row, a.ran?.state, turn.indexOf(a), asksOpen.has(a.id)]), rows.filter((r) => r.clip).map((r) => [r.mechanic, r.clip])]);
   if (key === asksDrawn) { drawYourTurn(); return; }
   asksDrawn = key;
   const box = $("asks");
@@ -1208,8 +1222,11 @@ async function refreshAsks() {
     card.append(says);
     // The quest-log row it is for: its step's (row:GAME/ROW), which a
     // click opens; a card with no step was raised outside the loop.
+    // The server names it (`row`, from the step's worker record) even after
+    // the step closed; else an open step's.
     const step = a.step ? openSteps.find((x) => x.id === a.step) : null;
-    const row = (step?.touches ?? []).find((t) => t.startsWith("row:"))?.split("/").slice(1).join("/") ?? null;
+    const row = a.row ? a.row.split("/").slice(1).join("/")
+      : (step?.touches ?? []).find((t) => t.startsWith("row:"))?.split("/").slice(1).join("/") ?? null;
     if (row) {
       const go = el("button", "ask-row", `FOR ${row.toUpperCase()}`);
       go.type = "button";
@@ -1217,7 +1234,7 @@ async function refreshAsks() {
       go.addEventListener("click", (e) => {
         e.currentTarget.blur();
         void pickRow(row);
-        $("quest")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        toQuestLog();
       });
       card.append(go);
       // The row's clip to judge on, when it has one: the card shows it too.
@@ -1263,24 +1280,112 @@ async function refreshAsks() {
 
 // Your turn ------------------------------------------------------------
 //
-// At the top, only what the person can do now, each with a button that
-// does it: the yes cards above (#asks), the loop's steps for this game
-// that are the person's and have a button (PLAY FROM HERE: the row's start
-// point, recording into the row), and the quest-log rows asking them
-// (ANSWER: their words to the row's talk). With none of them, NOTHING
-// NEEDS YOU.
+// Right under the screens, only what the person can do now, each with a
+// button that does it: the yes cards above (#asks), the loop's steps for
+// this game that are the person's and have a button (PLAY FROM HERE: the
+// row's start point, recording into the row), and the questions of the
+// rows (askOf: a worker's question in the talk or its status line, or a
+// row asking them), each with its clip and an ANSWER box open, whose words
+// go to the row's talk. A row that says to press YES shows only with its
+// card; once the card is gone the row follows it (serve/runner.rs,
+// settle_card_rows). With none of them, NOTHING NEEDS YOU.
+
+/** Whether words ask something: a `?` ending a sentence. */
+const isQuestion = (t) => /\?(?=$|[\s"')*_])/.test(String(t ?? ""));
+/** Whether a row's note speaks of its card (press YES, the card is up). */
+const ofCard = (t) => /\bcards?\b/i.test(String(t ?? "")) || /\bYES\b/.test(String(t ?? ""));
+
+/** The cards (asksNow) for row `m` of the open game. */
+function cardsOf(m) {
+  const game = session?.game ?? "";
+  return asksNow.filter((a) => a.row === `${game}/${m}`);
+}
+
+/** What a row asks the person now, or null: the question its agent said in
+ * the talk (its newest turn, waiting on the person), its status line when
+ * that asks, or its note when it is asking the person. A row whose note
+ * talks of a card the page no longer has asks only what is left to do. */
+function askOf(r) {
+  if (!r.mechanic || r.status === "done") return null;
+  const g = clipsBy.find((x) => x.mechanic === r.mechanic);
+  const last = (g?.talk ?? []).at(-1);
+  if (last && last.by === "agent" && g.waiting_for === "player" && isQuestion(last.text)) {
+    const n = typeof last.show === "number" ? last.show : (last.clips ?? [])[0];
+    return { says: last.text, from: "talk", clip: typeof n === "number" ? { n, frame: typeof last.frame === "number" ? last.frame : 0 } : null };
+  }
+  if (g?.busy && isQuestion(g.busy)) return { says: g.busy, from: "busy", clip: null };
+  if (r.status !== "asking you") return null;
+  if (ofCard(r.note)) {
+    const cards = cardsOf(r.mechanic);
+    // Its card is here (YOUR TURN shows it with YES and NO), or running.
+    if (cards.some((a) => a.ran?.state === "running" || (!a.ran && (a.state === "open" || a.state === "yes")))) return null;
+    // It just ran: its row follows it in a few seconds.
+    if (cards.some((a) => a.ran)) return null;
+    return { says: "Its card is no longer on your page. What should happen with it?", from: "gone", clip: null, was: r.note };
+  }
+  return { says: r.note || "Your agent asks you about this row.", from: "note", clip: null };
+}
+
+/** An ANSWER box, open: the person's words go into row `m`'s talk, which a
+ * worker waiting on the row hears. */
+function answerBox(m, clips) {
+  const f = el("form", "comment answer");
+  f.autocomplete = "off";
+  f.dataset.mechanic = m;
+  const t = el("input", "comment-text");
+  t.placeholder = `Your answer on ${m}`;
+  t.setAttribute("aria-label", `Your answer on ${m}`);
+  const go = el("button", "", "ANSWER");
+  go.type = "submit";
+  f.append(t, go);
+  for (const x of [f, t, go]) x.addEventListener("click", (ev) => ev.stopPropagation());
+  t.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.code === "Escape") t.blur(); });
+  f.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const text = t.value.trim();
+    if (!text) { t.focus(); return; }
+    go.disabled = true;
+    try {
+      await api("api/talk", { text, clips, mechanic: m });
+      t.value = "";
+      t.blur();
+      note(`Your answer on ${m} went to its agent.`, 5000);
+      turnDrawn = "";
+      await refreshLists(true);
+    } catch (err) {
+      note(`Your answer didn't save: ${err.message ?? err}`, 8000);
+    } finally { go.disabled = false; }
+  });
+  return f;
+}
+
+/** A LOOK AT IT button for a clip a turn of the talk names. */
+function lookButton(m, c) {
+  const b = el("button", "judge", `LOOK AT IT: CLIP ${c.n}${c.frame ? `, FRAME ${c.frame}` : ""}`);
+  b.type = "button";
+  b.title = "Shows this clip on the screens above: the original beside the model";
+  b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    e.currentTarget.blur();
+    show.by = "person";
+    setView("side");
+    $("screens").scrollIntoView({ behavior: "smooth", block: "start" });
+    void openClip(c.n, m, c.frame ?? 0).then(() => { drawClips(); report(); }).catch((err) => note(`Couldn't open clip ${c.n}: ${err.message ?? err}`, 8000));
+  });
+  return b;
+}
 
 let turnDrawn = "";
 function drawYourTurn() {
   const list = $("turn");
-  // A box being typed in stays until it is sent or closed.
-  if (list.querySelector("form.comment")) return;
+  // An answer being typed stays until it is sent or left empty.
+  if ([...list.querySelectorAll("input")].some((i) => i.value.trim() || i === document.activeElement)) return;
   const game = session?.game ?? "";
   const plays = openSteps.filter((s) => s.who === "person" && s.act?.do === "play_from"
     && (!game || (s.touches ?? []).includes(`row:${game}/${s.act.row}`)));
   const played = new Set(plays.map((s) => s.act.row));
-  const asking = rows.filter((r) => r.status === "asking you" && r.mechanic && !played.has(r.mechanic));
-  const key = JSON.stringify([plays.map((s) => [s.id, s.says]), asking.map((r) => [r.mechanic, r.note, r.clip ?? null]), asksShown]);
+  const asking = rows.filter((r) => !played.has(r.mechanic)).map((r) => [r, askOf(r)]).filter(([, q]) => q);
+  const key = JSON.stringify([plays.map((s) => [s.id, s.says]), asking.map(([r, q]) => [r.mechanic, q, r.clip ?? null]), asksShown]);
   if (key === turnDrawn) return;
   turnDrawn = key;
   list.textContent = "";
@@ -1295,16 +1400,25 @@ function drawYourTurn() {
     li.append(b);
     list.append(li);
   }
-  for (const r of asking) {
-    const li = el("li", "turn-item");
+  for (const [r, q] of asking) {
+    const li = el("li", "turn-item turn-ask");
     li.dataset.mechanic = r.mechanic;
-    li.append(el("span", "turn-row", r.mechanic.toUpperCase()), el("span", "turn-says", r.note || "Your agent asks you about this row."));
+    const says = el("span", "turn-says", q.says);
+    if (q.was) says.title = `The row said: ${q.was}`;
+    li.append(el("span", "turn-row", r.mechanic.toUpperCase()), says);
+    // The clip it is about: the row's clip to judge, else the one its
+    // agent's question names.
+    let clips = [];
     if (r.clip) {
       li.append(judgeButton(r));
       li.title = `Click: set up ${judgeWords(r).toLowerCase()} on the screens above`;
       li.addEventListener("click", () => void judgeOn(r));
+      if (!r.clip.id && !r.clip.mechanic) clips = [r.clip.n];
+    } else if (q.clip) {
+      li.append(lookButton(r.mechanic, q.clip));
+      clips = [q.clip.n];
     }
-    li.append(commentBox(li, r.mechanic, r.clip && !r.clip.id && !r.clip.mechanic ? [r.clip.n] : [], `Your answer on ${r.mechanic} for your agent`, "ANSWER"));
+    li.append(answerBox(r.mechanic, clips));
     list.append(li);
   }
   $("turn-none").hidden = asksShown + plays.length + asking.length > 0;
@@ -1362,14 +1476,13 @@ async function playFrom(m) {
 
 // Now ------------------------------------------------------------------
 //
-// At the top of the page: the quest-log items being worked on (status
-// "agent working"), by whom, with the open row's status line (its busy
-// text), and the loop's switches: the runner, its workers, whether
-// gp_run needs a step, and a halt. With no worker running and no step
-// able to start, it says why in plain words: THE LOOP IS WAITING ON YOU
-// (with each card and row asking the person, a click away), THE LOOP IS
-// STOPPED: THE RUNNER IS OFF, THE LOOP IS HALTED, or THE LOOP HAS
-// NOTHING TO DO.
+// One status line under YOUR TURN: the quest-log items being worked on
+// (status "agent working"), by whom, with each row's status line (its busy
+// text), then the loop: THE LOOP RUNS, or, with no worker running and no
+// step able to start, why in plain words: THE LOOP WAITS ON YOU (a click
+// goes to YOUR TURN), THE LOOP IS STOPPED: THE RUNNER IS OFF, THE LOOP IS
+// HALTED, or THE LOOP HAS NOTHING TO DO. The loop's switches (runner,
+// workers, steps required) are in THE LOOP'S DETAILS.
 
 /** "12 s ago", "4 min ago", "3 h ago", "2 days ago" from ms since the epoch. */
 function ago(ms) {
@@ -1460,51 +1573,50 @@ function drawNowWork() {
     return { r, w: !!w, there, last };
   });
   const idle = loopIdle();
-  const key = JSON.stringify([lines.map((l) => [l.r.mechanic, l.r.worker, l.r.note, l.there, l.last]), session?.mechanic, session?.busy, wk && [wk.clip, wk.from, wk.to, wk.says],
-    idle && [idle.head, idle.why, idle.waits.map((x) => x.label)]]);
+  const busyOf = (m) => clipsBy.find((g) => g.mechanic === m)?.busy ?? (m === session?.mechanic ? session?.busy : null) ?? null;
+  const key = JSON.stringify([lines.map((l) => [l.r.mechanic, l.r.worker, l.there, l.last, busyOf(l.r.mechanic)]), wk && [wk.clip, wk.from, wk.to, wk.says],
+    idle && [idle.kind, idle.head, idle.waits.length], loopNow?.halted?.says ?? null, loopNow?.settings?.runner?.on ?? null]);
   if (box.dataset.key === key) return;
   box.dataset.key = key;
   box.textContent = "";
-  // A refine running: the clip and the frames it fits, which the screens
-  // follow (FOLLOW THE WORK).
+  // One line (owner, page-one-design): what is being worked on and by
+  // whom, then whether the loop runs or waits on the person. The rest is
+  // in THE LOOP'S DETAILS.
+  const line = el("div", "now-line");
+  const part = (cls, text, title) => { const s = el("span", cls, text); if (title) s.title = title; line.append(s); return s; };
+  const sep = () => part("now-sep", " · ");
+  const work = [];
   if (wk) {
-    const line = el("div", "now-item");
     const [lo, hi] = workRange(wk);
-    line.append(el("span", "now-label", "REFINING"), el("span", "now-row", `${wk.clip}, frames ${lo} to ${hi}`));
-    if (wk.says) line.append(el("span", "now-status", wk.says));
-    box.append(line);
-  }
-  // No worker runs and no step can start: say so, and why, so a quiet
-  // loop never looks like one that stopped by itself.
-  if (idle && !wk) {
-    const line = el("div", `now-item now-stopped now-stopped-${idle.kind}`);
-    line.append(el("span", "now-label", idle.head));
-    if (idle.why) line.append(el("span", "now-who", idle.why));
-    for (const x of idle.waits) {
-      const b = el("button", "now-row now-wait", x.label);
-      b.type = "button";
-      b.title = x.title;
-      b.addEventListener("click", (e) => { e.currentTarget.blur(); x.go(); });
-      line.append(b);
-    }
-    box.append(line);
-  }
-  if (!working.length) {
-    if (wk || idle) return;
-    box.append(el("span", "now-idle", "NOBODY IS WORKING ON AN ITEM NOW"));
-    return;
+    work.push(() => { part("now-label", "REFINING "); part("now-what", `${wk.clip}, frames ${lo} to ${hi}`, wk.says ?? ""); });
   }
   for (const { r, w, there, last } of lines) {
-    const line = el("div", `now-item${w ? "" : " now-absent"}`);
-    const name = el("button", "now-row", r.mechanic.toUpperCase());
-    name.type = "button";
-    name.title = "Open this item in the quest log";
-    name.addEventListener("click", (e) => { e.currentTarget.blur(); void pickRow(r.mechanic); $("quest")?.scrollIntoView({ behavior: "smooth", block: "start" }); });
-    line.append(el("span", "now-label", w ? "WORKING ON" : "MARKED WORKING"), name, el("span", "now-who", `${there}, ${last}`));
-    const status = r.mechanic === session?.mechanic && session?.busy ? session.busy : r.note ?? "";
-    if (status) line.append(el("span", "now-status", status));
-    box.append(line);
+    work.push(() => {
+      part(`now-label${w ? "" : " now-absent"}`, w ? "WORKING ON " : "MARKED WORKING, NO AGENT: ");
+      const name = el("button", "now-row", r.mechanic.toUpperCase());
+      name.type = "button";
+      name.title = `${there}, ${last}. Click to open it in the quest log`;
+      name.addEventListener("click", (e) => { e.currentTarget.blur(); void pickRow(r.mechanic); toQuestLog(); });
+      line.append(name);
+      const by = w ? ` by ${workerOn(r)?.worker ?? r.worker ?? "an agent"}, ${last}` : "";
+      const b = busyOf(r.mechanic);
+      part("now-who", `${by}${b ? `: ${b.length > 140 ? `${b.slice(0, 137)}...` : b}` : ""}`, b ?? "");
+    });
   }
+  if (!work.length) part("now-idle", "NOBODY IS WORKING ON AN ITEM");
+  work.forEach((f, i) => { if (i) sep(); f(); });
+  sep();
+  // The loop: runs, or why it is still, from loopIdle.
+  if (idle) {
+    const s = part(`now-loop-state now-stopped-${idle.kind}`, idle.kind === "you" ? `THE LOOP WAITS ON YOU (${idle.waits.length} IN YOUR TURN)` : idle.head, idle.why);
+    if (idle.kind === "you") {
+      s.classList.add("now-click");
+      s.addEventListener("click", () => $("your-turn").scrollIntoView({ behavior: "smooth", block: "start" }));
+    }
+  } else if (loopNow) {
+    part("now-loop-state now-runs", loopNow.halted ? "THE LOOP IS HALTED" : loopNow.settings?.runner?.on ? "THE LOOP RUNS" : "THE RUNNER IS OFF", loopNow.runner?.says ?? "");
+  }
+  box.append(line);
 }
 
 // The agent's turns that name a clip (say --show N, with --frame F, or
@@ -1597,7 +1709,7 @@ async function refreshSteps() {
       li.addEventListener("click", (e) => {
         if (e.target.closest("form, button")) return;
         void pickRow(row);
-        $("quest")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        toQuestLog();
       });
     } else {
       li.title = `Step ${s.id}`;
@@ -1923,8 +2035,15 @@ function wire() {
   $("clip-scrub").addEventListener("change", (e) => { e.target.blur(); show.by = "person"; report(); });
   $("clip-live").addEventListener("click", (e) => { e.currentTarget.blur(); show.by = "person"; backToLive(); drawClips(); });
   $("follow-on").addEventListener("click", (e) => { e.currentTarget.blur(); setFollow(!follow.on); report(); });
-  $("tell").addEventListener("submit", (e) => void tell(e));
-  $("tell-row").addEventListener("click", (e) => { e.currentTarget.blur(); void newRow(); });
+  // The quest log's box: Enter (NEW ITEM) makes a new item; SEND comments.
+  $("tell").addEventListener("submit", (e) => { e.preventDefault(); void newRow(); });
+  $("tell-send").addEventListener("click", (e) => { e.currentTarget.blur(); void tell(e); });
+  // THE LOOP'S DETAILS stays as the person left it.
+  const det = $("details");
+  try { det.open = localStorage.getItem("gp-details-open") === "1"; } catch (e) { /* folded */ }
+  det.addEventListener("toggle", () => {
+    try { localStorage.setItem("gp-details-open", det.open ? "1" : ""); } catch (e) { /* not kept */ }
+  });
   holdWhilePressed($("queue"));
   holdWhilePressed($("clips"));
 }
