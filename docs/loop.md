@@ -105,6 +105,16 @@ What the loop finds becomes quest-log rows on its own, with no card (the owner, 
 - The picture check: `gp picture GAME --run RUN --propose` proposes a row for each cause it found on 2 frames or more, but flicker, the `--top` of each group, named `picture-GROUP-DETAIL`, from the clip, frame and box it was first seen on.
 - A worker: a problem it finds that isn't its own item's it proposes with its test, `--goal TEST` (and `--near`, `--start`, `--where`, `--do`, `--stop`), in the same call. The test is checked as the triage reads it and goes in the game's triage.toml as an `[[item]]` for the row (once), so the row is a step of the tools' triage before an agent or the person works on it (above). A test the triage can't read writes nothing. The worker's brief says so.
 
+## The loop files its own trouble
+
+The loop's own trouble becomes tools rows with no one noticing first (the owner, 2026-11-20). Each cause is one row named `trouble-WORDS-HASH`, next, `repo = "tools"`, `by = "loop"`, its note "Proposed by the loop: MESSAGE (from WHERE)", and a `trouble` table: `key` (the message with every word that holds a digit made `#`, so numbers, pids and ids don't split a cause), `kind`, `count`, `first_ms`, `last_ms`. The same cause again adds to `count` and leaves the note as it is (the note is in the row's step key); a done row it comes back to goes back to next, one out of scope stays so (crates/gp-cli/src/trouble.rs).
+
+- page: each error the screen page shows the person (a clip that won't set up, a refused answer, a model that won't start or build) goes to `POST /mechanic/GAME/api/trouble` {text, where} as it is shown (`fault` in mechanic/screen.js), filed once a minute at most for the same words.
+- health: a PROBLEM `gp loop health` prints in two checks a minute or more apart (a card that failed, a row marked working with no worker, a server on an old build), and again each check it lasts. gp serve's runner runs the check a minute after it starts and every 5 minutes after. The check ends with a TROUBLE line naming the open trouble rows.
+- hand: gp serve started within the hour after the one before it stopped (its heartbeat, `work/loop/runner-PID.json`), unless the server that started it set `GP_SERVE_RELOADED`; and `gp mechanic queue GAME ROW --status S` run with no `GP_STEP` and no `GP_WORKER` while the runner goes.
+
+Trouble with no game named (health, a restart) is filed under the loop's first game (loop.toml's games, else the games checkout's first). The screen page's status line says how many trouble rows are open, as a link to the first on the loop's page.
+
 ## The runner runs a yes
 
 While the runner is on, a YES on a card runs that exact call at once: the runner takes the yes (the ask is marked used, with `ran` {state: running}), runs `gp --json COMMAND ARGV` with the home and the games checkout, and records landed, passed or failed with its last lines. The card shows each, for 15 minutes. A later gp_run with that ask's id is told what the runner did instead of running it again. A yes that puts a held change back stays gp_run's.

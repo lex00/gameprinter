@@ -58,6 +58,9 @@ pub(crate) const TRIES: u32 = 2;
 /// How often the runner looks at the steps.
 const LOOK: Duration = Duration::from_secs(5);
 
+/// How often the runner checks the loop's health for trouble that lasts.
+const HEALTH_EVERY: Duration = Duration::from_secs(300);
+
 /// What a worker needs besides its step.
 #[derive(Clone)]
 pub(crate) struct Setup {
@@ -233,7 +236,16 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
         });
     }
     std::thread::spawn(move || {
+        // The loop's health, checked every few minutes so a problem that
+        // lasts files itself as a row (crate::trouble) with no one running
+        // gp loop health. The first check is a minute in, after the first
+        // heartbeats.
+        let mut health_at = Instant::now() + Duration::from_secs(60);
         loop {
+            if Instant::now() >= health_at {
+                health_at = Instant::now() + HEALTH_EVERY;
+                let _ = crate::loop_cmd::health_in(&ctx.paths, Some(&ctx.games));
+            }
             // The heartbeat the runner check reads (gp_mcp::steps::no_runner).
             let agent = matches!(clip_agent::Settings::current(&ctx).mode, Mode::Command(_));
             loop_state::beat(&ctx.paths.home, agent);

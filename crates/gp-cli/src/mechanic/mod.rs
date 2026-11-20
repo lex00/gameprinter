@@ -1097,6 +1097,11 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                 Some(c) => Some(row_clip(c, frames.as_deref(), look.as_deref())?),
                 None => None,
             };
+            // A row's status set from outside the loop's steps while the
+            // runner goes is a hand fix: the loop files it (crate::trouble).
+            if let (Some(m), Some(st)) = (mechanic.as_deref(), status.as_deref()) {
+                crate::trouble::status_by_hand(paths, game, m, st);
+            }
             queue(
                 paths,
                 game,

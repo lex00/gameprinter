@@ -177,6 +177,10 @@ pub(crate) fn run(opts: &ServeOpts, paths: &Paths) -> Result<Outcome> {
     );
     use std::io::Write as _;
     std::io::stdout().flush()?;
+    // A start after the server before stopped is a restart by hand, which
+    // the loop files as its own trouble (crate::trouble). Before this
+    // server's first heartbeat.
+    crate::trouble::serve_started(&ctx.paths, Some(&ctx.games), ctx.port);
     // The page answers the agent's asks for this home (gp_mcp::asks).
     let _ = gp_mcp::asks::mark_page_served(&ctx.paths.home, ctx.port);
     background::start_dispatcher(ctx.clone());

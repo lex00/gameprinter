@@ -364,8 +364,55 @@ fn clean_outcome(
 }
 
 /// The loop's health (`gp loop health`): each check's line, OK or PROBLEM
-/// with how to fix it, and the count of problems.
-fn health(paths: &gp_evidence::Paths) -> Value {
+/// with how to fix it, and the count of problems. A problem the check
+/// before printed too, a minute or more ago, is filed as a tools row of the
+/// loop's own trouble (crate::trouble), and the open ones are counted.
+pub(crate) fn health(paths: &gp_evidence::Paths) -> Value {
+    health_in(paths, None)
+}
+
+/// [`health`] with the games checkout named (gp serve's runner runs it).
+pub(crate) fn health_in(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Value {
+    let mut v = checks(paths, games_dir);
+    let home = &paths.home;
+    let problems: Vec<String> = v["lines"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(|l| l.strip_prefix("PROBLEM  "))
+        .map(str::to_owned)
+        .collect();
+    let Some(game) = crate::trouble::loop_game(home, games_dir) else {
+        return v;
+    };
+    if crate::trouble::live_home(home) {
+        crate::trouble::health_seen(paths, &game, &problems, gp_mcp::asks::now_ms());
+    }
+    if let Ok(f) = crate::mechanic::session::queue_file(paths, &game) {
+        let q = crate::mechanic::session::read_queue(&f);
+        let open = crate::trouble::open(&q);
+        let line = if open.is_empty() {
+            "OK       No row of the loop's own trouble is open".to_owned()
+        } else {
+            format!(
+                "TROUBLE  {} row(s) of the loop's own trouble open in {game}'s quest log: {}",
+                open.len(),
+                open.iter()
+                    .filter_map(|r| r["mechanic"].as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        if let Some(l) = v["lines"].as_array_mut() {
+            l.push(json!(line));
+        }
+        v["trouble_open"] = json!(open.len());
+    }
+    v
+}
+
+fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Value {
     use std::fs;
     use std::time::UNIX_EPOCH;
     let home = &paths.home;
@@ -540,7 +587,7 @@ fn health(paths: &gp_evidence::Paths) -> Value {
         .flat_map(|w| w["step"]["touches"].as_array().cloned().unwrap_or_default())
         .filter_map(|t| t.as_str().map(str::to_owned))
         .collect();
-    let games = crate::roms_cmd::games_dir(None);
+    let games = crate::roms_cmd::games_dir(games_dir);
     let mut asking = Vec::new();
     for g in games
         .as_deref()

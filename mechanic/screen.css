@@ -213,6 +213,7 @@ button.judge { flex: none; font: bold 12px var(--mono); padding: 0 10px; margin-
 #now .now-line .now-stopped-you { color: var(--gold); }
 #now .now-line .now-stopped-off, #now .now-line .now-stopped-halted { color: var(--rec); }
 #now .now-line .now-click { cursor: pointer; text-decoration: underline; }
+#now .now-line .now-trouble { color: var(--rec); font-weight: 700; }
 /* Two pages from one file (owner, page-minimal). The screen page: the
    screens, YOUR TURN and the status line, nothing more. The loop's page
    (body.loop-page, screen.html?page=loop): the quest log, steps, workers

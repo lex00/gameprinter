@@ -207,6 +207,18 @@ function note(text, ms = 4000) {
   note.timer = setTimeout(() => { t.hidden = true; }, Math.min(ms, 8000));
 }
 
+// An error shown to the person: noted as any line, and sent to the loop,
+// which files it as a tools row of its own trouble (crates/gp-cli/src/
+// trouble.rs; the same words within a minute are sent once).
+const faultSent = new Map();
+function fault(text, ms = 8000, where = "") {
+  note(text, ms);
+  const now = Date.now();
+  if (now - (faultSent.get(text) ?? 0) < 60000) return;
+  faultSent.set(text, now);
+  fetch("api/trouble", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, where }) }).catch(() => { /* the server is away: nothing to file it in */ });
+}
+
 async function api(path, body) {
   const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) {
@@ -338,7 +350,7 @@ window.addEventListener("message", (e) => {
     model.draws = m.draws ?? null;
     document.body.dataset.draws = m.draws ? JSON.stringify(m.draws) : "";
   }
-  else if (m?.gp === "error") note(`The model: ${m.message}`, 6000);
+  else if (m?.gp === "error") fault(`The model: ${m.message}`, 6000);
 });
 
 /** The theme's part of the model's address: large art is drawn bigger than
@@ -394,7 +406,7 @@ async function loadModel(why) {
   } catch (e) {
     if (mine !== model.token) return;
     model.say = "THE MODEL COULDN'T START";
-    note(`The model couldn't start: ${e.message ?? e}`, 10000);
+    fault(`The model couldn't start: ${e.message ?? e}`, 10000);
   }
 }
 
@@ -464,7 +476,7 @@ async function startModelAtClip(mine) {
   } catch (e) {
     if (mine !== model.token || clip !== c) return;
     model.say = "THE MODEL CAN'T START AT THIS CLIP";
-    note(`The model can't start at the clip's start: ${String(e.message ?? e).slice(0, 160)}`, 8000);
+    fault(`The model can't start at the clip's start: ${String(e.message ?? e).slice(0, 160)}`, 8000);
   }
 }
 
@@ -670,7 +682,7 @@ async function judgeOn(r) {
     note(`${r.mechanic}: ${judgeWords(r).toLowerCase()}, the original on the left. ${r.note ?? ""}`.trim(), 10000);
     drawClips();
     report();
-  } catch (e) { note(`Couldn't set up the clip for ${r.mechanic}: ${e.message ?? e}`, 8000); }
+  } catch (e) { fault(`Couldn't set up the clip for ${r.mechanic}: ${e.message ?? e}`, 8000, "LOOK AT IT on the row"); }
 }
 
 /** A LOOK AT IT button for row `r`'s clip. */
@@ -851,7 +863,7 @@ async function followWork(w) {
     drawClips();
     report();
   } catch (e) {
-    note(`Couldn't show the clip your agent refines (${wk.clip}): ${e.message ?? e}`, 8000);
+    fault(`Couldn't show the clip your agent refines (${wk.clip}): ${e.message ?? e}`, 8000);
     if (mode === "clip" && !clip) backToLive();
   } finally {
     follow.opening = false;
@@ -960,7 +972,7 @@ async function stopRecording(send = true) {
       : `Saved as clip ${n} of ${mechanic}: it is under ${String(mechanic).toUpperCase()} in CLIPS below, and your agent has it.`, 15000);
     await refreshLists(true);
   } catch (e) {
-    note(`The clip didn't reach your agent: ${e.message ?? e}`, 10000);
+    fault(`The clip didn't reach your agent: ${e.message ?? e}`, 10000);
   } finally {
     sending = false;
     clipFor = null;
@@ -1041,7 +1053,7 @@ function commentBox(host, mechanic, clips, label, word = "COMMENT") {
         await refreshLists(true);
       } catch (err) {
         go.disabled = false;
-        note(`Your comment didn't save: ${err.message ?? err}`, 8000);
+        fault(`Your comment didn't save: ${err.message ?? err}`, 8000);
       }
     });
     host.append(f);
@@ -1226,7 +1238,7 @@ function drawClips() {
         li.classList.add("on");
         $("screens").scrollIntoView({ behavior: "smooth", block: "start" });
         note(`Opening clip ${c.n} of ${g.mechanic}.`, 60000);
-        void openClip(c.n, g.mechanic, 0).then(() => { drawClips(); report(); }).catch((e) => note(`Couldn't open clip ${c.n}: ${e.message ?? e}`, 8000));
+        void openClip(c.n, g.mechanic, 0).then(() => { drawClips(); report(); }).catch((e) => fault(`Couldn't open clip ${c.n}: ${e.message ?? e}`, 8000));
       });
       ul.append(li);
     }
@@ -1257,7 +1269,7 @@ async function pickRow(m) {
     await api("api/pick", { mechanic: m });
     await refreshLists(true);
     note(`Recordings go to ${m} now.`);
-  } catch (e) { note(`Couldn't open ${m}: ${e.message ?? e}`, 8000); }
+  } catch (e) { fault(`Couldn't open ${m}: ${e.message ?? e}`, 8000); }
 }
 
 /** The quest log and the clips, again from the server. */
@@ -1290,7 +1302,7 @@ async function newRow() {
     $("tell-text").blur();
     note(`New item in the quest log: ${mechanic}.`, 6000);
     await refreshLists(true);
-  } catch (err) { note(`The item didn't save: ${err.message ?? err}`, 8000); }
+  } catch (err) { fault(`The item didn't save: ${err.message ?? err}`, 8000); }
   finally { $("tell-row").disabled = false; }
 }
 
@@ -1305,7 +1317,7 @@ async function tell(e) {
     $("tell-text").value = "";
     $("tell-text").blur();
     note("Sent to your agent.");
-  } catch (err) { note(`Your agent didn't get it: ${err.message ?? err}`, 8000); }
+  } catch (err) { fault(`Your agent didn't get it: ${err.message ?? err}`, 8000); }
   finally { $("tell-send").disabled = false; }
 }
 
@@ -1517,7 +1529,7 @@ function answerBox(m, clips) {
       turnDrawn = "";
       await refreshLists(true);
     } catch (err) {
-      note(`Your answer didn't save: ${err.message ?? err}`, 8000);
+      fault(`Your answer didn't save: ${err.message ?? err}`, 8000);
     } finally { go.disabled = false; }
   });
   return f;
@@ -1534,7 +1546,7 @@ function lookButton(m, c) {
     show.by = "person";
     setView("side");
     $("screens").scrollIntoView({ behavior: "smooth", block: "start" });
-    void openClip(c.n, m, c.frame ?? 0).then(() => { drawClips(); report(); }).catch((err) => note(`Couldn't open clip ${c.n}: ${err.message ?? err}`, 8000));
+    void openClip(c.n, m, c.frame ?? 0).then(() => { drawClips(); report(); }).catch((err) => fault(`Couldn't open clip ${c.n}: ${err.message ?? err}`, 8000));
   });
   return b;
 }
@@ -1631,7 +1643,7 @@ async function playFrom(m) {
     markTarget();
     note(`Recording into ${m} from its start point. ${r?.stop ? `Stop: ${r.stop}. ` : ""}RECORD (or R) sends it.`, 8000);
   } catch (e) {
-    note(`Couldn't load the start point: ${e.message ?? e}`, 8000);
+    fault(`Couldn't load the start point: ${e.message ?? e}`, 8000);
   } finally {
     if (mode === "loading") mode = "live";
     starting = null;
@@ -1737,9 +1749,10 @@ function drawNowWork() {
     return { r, w: !!w, there, last };
   });
   const idle = loopIdle();
-  const busyOf = (m) => clipsBy.find((g) => g.mechanic === m)?.busy ?? (m === session?.mechanic ? session?.busy : null) ?? null;
+  const trouble = rows.filter((r) => r.trouble && r.status !== "done");
+  const busyOf =(m) => clipsBy.find((g) => g.mechanic === m)?.busy ?? (m === session?.mechanic ? session?.busy : null) ?? null;
   const key = JSON.stringify([lines.map((l) => [l.r.mechanic, l.r.worker, l.there, l.last, busyOf(l.r.mechanic)]), wk && [wk.clip, wk.from, wk.to, wk.says],
-    idle && [idle.kind, idle.head, idle.waits.length], loopNow?.halted?.says ?? null, loopNow?.settings?.runner?.on ?? null]);
+    idle && [idle.kind, idle.head, idle.waits.length], loopNow?.halted?.says ?? null, loopNow?.settings?.runner?.on ?? null, trouble.map((r) => r.mechanic)]);
   if (box.dataset.key === key) return;
   box.dataset.key = key;
   box.textContent = "";
@@ -1780,6 +1793,15 @@ function drawNowWork() {
   } else if (loopNow) {
     part("now-loop-state now-runs", loopNow.halted ? "THE LOOP IS HALTED" : loopNow.settings?.runner?.on ? "THE LOOP RUNS" : "THE RUNNER IS OFF", loopNow.runner?.says ?? "");
   }
+  // The loop's own trouble it filed as rows (crates/gp-cli/src/trouble.rs),
+  // not done yet: how many, opening the first on the loop's page.
+  if (trouble.length) {
+    sep();
+    const t = el("a", "now-trouble", `${trouble.length} ROW${trouble.length === 1 ? "" : "S"} OF THE LOOP'S OWN TROUBLE`);
+    t.href = loopHref(trouble[0].mechanic);
+    t.title = `Errors and hand fixes the loop filed itself: ${trouble.map((r) => r.mechanic).join(", ")}`;
+    line.append(t);
+  }
   // Everything else is on the loop's page.
   sep();
   const to = el("a", "now-page", "THE LOOP'S PAGE");
@@ -1813,7 +1835,7 @@ function showNamedClip() {
   void openClip(n, m, f).then(() => { show.by = "agent"; drawClips(); drawFollow(); report(); })
     .catch((e) => {
       if (mode === "clip" && !clip) backToLive();
-      note(`Couldn't show clip ${n} your agent named: ${e.message ?? e}`, 8000);
+      fault(`Couldn't show clip ${n} your agent named: ${e.message ?? e}`, 8000);
     });
 }
 
@@ -1966,7 +1988,7 @@ async function refreshSteps() {
         try {
           await api(`/api/steps/${encodeURIComponent(s.id)}/wrong`, { why: why.value });
           note("The loop is halted: no step starts until a change to the tool that names your objection lands.", 8000);
-        } catch (err) { note(`It didn't save: ${err.message ?? err}`, 8000); }
+        } catch (err) { fault(`It didn't save: ${err.message ?? err}`, 8000); }
         stepsWriting = false;
         stepsDrawn = "";
         void refreshSteps();
@@ -2008,7 +2030,7 @@ function drawWorkers(v) {
       b.addEventListener("click", async () => {
         b.disabled = true;
         try { await api(`/api/loop/workers/${encodeURIComponent(st.id)}/stop`, {}); }
-        catch (err) { note(`It didn't stop: ${err.message ?? err}`, 8000); }
+        catch (err) { fault(`It didn't stop: ${err.message ?? err}`, 8000); }
         workersDrawn = "";
         void refreshSteps();
       });
@@ -2097,7 +2119,7 @@ async function applyAsk(a) {
     askError = String(e.message ?? e);
     // A clip that failed half way: back to live play.
     if (mode === "clip" && !clip) backToLive();
-    note(`Couldn't show what your agent asked: ${e.message ?? e}`, 15000);
+    fault(`Couldn't show what your agent asked: ${e.message ?? e}`, 15000);
   }
   show.by = "agent";
   report();
@@ -2144,14 +2166,14 @@ async function watchBuild() {
   building = st.building;
   if (st.stale && st.building === null && performance.now() - buildAskedAt > (st.error ? 60000 : 5000)) {
     buildAskedAt = performance.now();
-    await api("api/rebuild/build", {}).catch((e) => note(`The model couldn't be built again: ${e.message ?? e}`, 8000));
+    await api("api/rebuild/build", {}).catch((e) => fault(`The model couldn't be built again: ${e.message ?? e}`, 8000));
     return;
   }
   if (st.building === null && st.build && model.build && st.build !== model.build && model.ready) {
     model.build = st.build;
     await loadModel("The new version of the model is showing.");
   }
-  if (st.error && st.building === null && st.stale) note(`The new model didn't build: ${st.error.split("\n").pop()}`, 8000);
+  if (st.error && st.building === null && st.stale) fault(`The new model didn't build: ${st.error.split("\n").pop()}`, 8000);
 }
 
 /** The usual line under the screens. */

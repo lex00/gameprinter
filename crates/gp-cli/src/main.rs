@@ -209,6 +209,7 @@ mod theme_words;
 mod tool_gate;
 mod track;
 mod translate;
+mod trouble;
 mod validate;
 mod validate_fit;
 mod validate_target;

@@ -932,6 +932,19 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
         ("GET" | "HEAD", "/api/rom") => Ok(Response::json(
             &json!({"set": s.set, "sha256": s.rom_sha, "sets": s.sets}),
         )),
+        // An error the page showed the person: the loop files it as a
+        // tools row of its own (crate::trouble).
+        ("POST", "/api/trouble") => {
+            let v: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+            let text = v["text"].as_str().unwrap_or("").trim();
+            if text.is_empty() {
+                return Ok(Response::error(400, "say what the page showed (text)"));
+            }
+            let place = v["where"].as_str().unwrap_or("");
+            Ok(Response::json(&crate::trouble::from_page(
+                &s.paths, &s.game, text, place,
+            )?))
+        }
         ("POST", "/api/rom") => {
             let v: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
             let want = v["set"].as_str().unwrap_or("");
