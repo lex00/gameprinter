@@ -89,6 +89,58 @@ pub struct PictureArgs {
     /// with either, so a gap shows whatever pictures the model is drawn in.
     #[arg(long, requires = "clip")]
     pub sprites: Option<std::path::PathBuf>,
+    /// Add each gap the check finds to the game's quest log as a row of
+    /// its own (`gp mechanic propose`): every cause but flicker seen on at
+    /// least 2 frames, the `--top` of each group, status next, with the
+    /// clip and frame it was seen on. Rows the quest log has are left.
+    #[arg(long)]
+    pub propose: bool,
+}
+
+/// The gaps `--propose` makes rows of: each group's details by how many
+/// clips and frames show them, flicker and one-frame gaps left out, at most
+/// `top` of a group. Each is (row, what, from).
+fn proposals(
+    run: &str,
+    details: &BTreeMap<(&'static str, String), Tally>,
+    top: usize,
+) -> Vec<(String, String, String)> {
+    let mut by: BTreeMap<&'static str, Vec<(&String, &Tally)>> = BTreeMap::new();
+    for ((g, d), t) in details {
+        if *g != "flicker" && t.frames >= 2 {
+            by.entry(g).or_default().push((d, t));
+        }
+    }
+    let mut out = Vec::new();
+    for (g, mut ds) in by {
+        ds.sort_by_key(|(d, t)| {
+            (
+                std::cmp::Reverse(t.clips.len()),
+                std::cmp::Reverse(t.frames),
+                (*d).clone(),
+            )
+        });
+        for (d, t) in ds.into_iter().take(top) {
+            let row = format!(
+                "picture-{}",
+                crate::mechanic::propose::slug(&format!("{g} {d}"), 52)
+            );
+            let what = format!(
+                "the picture differs, {g}: {d} ({} clips, {} frames)",
+                t.clips.len(),
+                t.frames
+            );
+            let from = match &t.example {
+                Some((c, f, l, r)) => format!(
+                    "gp picture --run {run}, {c} frame {f}, {l} at {}, {} {}x{}",
+                    r[0], r[1], r[2], r[3]
+                ),
+                None => format!("gp picture --run {run}"),
+            };
+            out.push((row, what, from));
+        }
+    }
+    out
 }
 
 /// What a clip's lockstep gives: its boxes' causes and, with `--sprites`,
@@ -1401,8 +1453,34 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
             );
         }
     }
+    let mut proposed: Vec<Value> = Vec::new();
+    if args.propose {
+        let name = game
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        let list = proposals(&args.run, &details, args.top);
+        let _ = writeln!(text_out, "\nProposed to {name}'s quest log:");
+        if list.is_empty() {
+            let _ = writeln!(text_out, "  nothing: no gap but flicker or one-frame gaps");
+        }
+        for (row, what, from) in &list {
+            let p = crate::mechanic::propose::Proposal {
+                game: &name,
+                row,
+                from,
+                what,
+                ..Default::default()
+            };
+            let v = crate::mechanic::propose::propose(paths, None, &p)?;
+            let _ = writeln!(text_out, "  {}", crate::mechanic::propose::words(&v));
+            proposed.push(v);
+        }
+    }
     let v = json!({
         "run": args.run,
+        "proposed": proposed,
         "model": mh,
         "clips_scored": n,
         "fidelity": {
@@ -1606,6 +1684,42 @@ mod tests {
             vec![(
                 "drawn in one game only".into(),
                 "original only: tiles 2a".into()
+            )]
+        );
+    }
+
+    /// `--propose` makes a row of each gap seen on 2 frames or more, the
+    /// clip and frame it was seen on as where it came from; flicker and a
+    /// one-frame gap make none.
+    #[test]
+    fn the_gaps_proposed_are_the_lasting_ones() {
+        let f = |frame, detail: &str| Found {
+            group: "placed elsewhere",
+            detail: detail.into(),
+            frame,
+            layer: "sprites",
+            rect: [8, 16, 16, 16],
+            pixels: 10,
+        };
+        let mut details: BTreeMap<(&'static str, String), Tally> = BTreeMap::new();
+        for (g, d, frames) in [
+            ("placed elsewhere", "hero: 1 px further right", 3u64),
+            ("placed elsewhere", "crate: 2 px lower", 1),
+            ("flicker", "bird", 9),
+        ] {
+            let t = details.entry((g, d.into())).or_default();
+            for n in 0..frames {
+                t.add("game.l1.001", &f(40 + n, d), true);
+            }
+        }
+        let got = proposals("r1", &details, 4);
+        assert_eq!(
+            got,
+            vec![(
+                "picture-placed-elsewhere-hero-1-px-further-right".to_owned(),
+                "the picture differs, placed elsewhere: hero: 1 px further right (1 clips, 3 frames)"
+                    .to_owned(),
+                "gp picture --run r1, game.l1.001 frame 40, sprites at 8, 16 16x16".to_owned()
             )]
         );
     }

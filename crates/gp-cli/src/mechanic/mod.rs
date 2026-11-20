@@ -55,6 +55,7 @@ mod import;
 pub(crate) mod live;
 pub(crate) mod paths;
 pub(crate) mod probe;
+pub(crate) mod propose;
 pub(crate) mod review;
 pub(crate) mod scores;
 pub(crate) mod server;
@@ -186,6 +187,48 @@ pub enum MechanicCmd {
         /// open, working, fixed or wontfix (a new row is open).
         #[arg(long)]
         state: Option<String>,
+    },
+    /// Add a quest-log row the loop found it needs, with no card: status
+    /// next, its note "Proposed by the loop: WHAT (from FROM)". A worker
+    /// that finds a problem outside its own row proposes it here, with its
+    /// test (`--goal`, and the request the triage gives the person), which
+    /// goes in the game's triage.toml in the same call so the triage tries
+    /// the row first. A row the quest log has (any status) is left as it is.
+    Propose {
+        game: String,
+        /// The new row's name: lower-case letters, digits and dashes.
+        mechanic: String,
+        /// What is wrong or missing, in one line.
+        #[arg(long)]
+        what: String,
+        /// Where it came from: the command, clip and frame, or the step.
+        #[arg(long)]
+        from: String,
+        /// games (the game's folder, the default) or tools (gameprinter).
+        #[arg(long, value_parser = ["games", "tools"])]
+        repo: Option<String>,
+        /// The row's triage test: a test on RAM that comes to hold when a
+        /// clip shows it (triage.toml's goal, `lives == 2`).
+        #[arg(long)]
+        goal: Option<String>,
+        /// Where the hard stretch begins (triage.toml's near).
+        #[arg(long, requires = "goal")]
+        near: Option<String>,
+        /// The script's start (triage.toml's from: power-on, ID, ID@F).
+        #[arg(long = "start", requires = "goal")]
+        start: Option<String>,
+        /// The person's request: where to play.
+        #[arg(long = "where", requires = "goal")]
+        place: Option<String>,
+        /// The person's request: what to do.
+        #[arg(long = "do", requires = "goal")]
+        todo: Option<String>,
+        /// The person's request: when to stop.
+        #[arg(long, requires = "goal")]
+        stop: Option<String>,
+        /// The games checkout (default $GP_GAMES_DIR).
+        #[arg(long)]
+        games: Option<PathBuf>,
     },
     /// Wait until it is the agent's turn (the person handed off a clip or
     /// answered), then print the session as `show` does. Run it in the
@@ -809,6 +852,44 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                     row["what"].as_str().unwrap_or("")
                 ),
             ))
+        }
+        MechanicCmd::Propose {
+            game,
+            mechanic,
+            what,
+            from,
+            repo,
+            goal,
+            near,
+            start,
+            place,
+            todo,
+            stop,
+            games,
+        } => {
+            let dir = crate::roms_cmd::games_dir(games.as_deref())
+                .and_then(|g| crate::labels::game_folder(&g, game));
+            let v = propose::propose(
+                paths,
+                dir.as_deref(),
+                &propose::Proposal {
+                    game,
+                    row: mechanic,
+                    from,
+                    what,
+                    repo: repo.as_deref(),
+                    test: goal.as_deref().map(|goal| propose::Test {
+                        goal,
+                        near: near.as_deref(),
+                        from: start.as_deref(),
+                        place: place.as_deref(),
+                        todo: todo.as_deref(),
+                        stop: stop.as_deref(),
+                    }),
+                },
+            )?;
+            let text = propose::words(&v);
+            Ok(Outcome::ok(v, text))
         }
         MechanicCmd::Probe {
             game,

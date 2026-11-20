@@ -118,6 +118,28 @@ struct Item {
     stop: String,
 }
 
+/// Checks a test the way the triage reads it, with the names of the
+/// game's probes.toml and triage.toml, and says whether triage.toml has an
+/// item for `row` already. A test with `@K` bytes needs slots, which a
+/// proposed row's test has none of.
+pub(crate) fn check_test(game_dir: &Path, row: &str, goal: &str) -> Result<bool> {
+    let file = game_dir.join("triage.toml");
+    let plan: Plan = match fs::read_to_string(&file) {
+        Ok(t) => toml::from_str(&t).with_context(|| file.display().to_string())?,
+        Err(_) => Plan::default(),
+    };
+    let mut watch = probe::load(game_dir, None)
+        .map(|(_, f)| f.watch)
+        .unwrap_or_default();
+    watch.extend(plan.watch);
+    let names = Names {
+        watch,
+        space: 0x1_0000,
+    };
+    Test::parse(&names, goal, None).with_context(|| format!("the test {goal:?}"))?;
+    Ok(plan.item.iter().any(|i| i.row == row))
+}
+
 fn one() -> usize {
     1
 }

@@ -816,6 +816,7 @@ pub(crate) fn brief(setup: &Setup, step: &Value, wt: &Path, branch: &str, before
             format!("At every step say where you are on the person's page: {gp} mechanic busy {game} {row} \"WHAT YOU ARE DOING. Next: WHAT COMES NEXT\"; put what you found with {gp} mechanic log {game} {row} \"...\"."),
             format!("Land a change with git diff > a patch file in your worktree, then gp_run model gate with game {game}, patch FILE, message \"{game}: WHAT CHANGES. Expect: WHAT THE PERSON SEES. Checked: HOW\" and dry_run first; then the same without dry_run puts a card on the person's page and the loop runs it on their YES. Don't wait for it: say in your report that the card is up, and stop. Never run a gate from your shell, and never land onto your own branch."),
             format!("When the item is done: {gp} mechanic queue {game} {row} --status done --note \"WHAT LANDED\". When it needs the person: --status \"asking you\" with the question in --note."),
+            format!("A problem you find that isn't this item's becomes a row of its own, with no card: gp_run mechanic propose with game {game}, mechanic NEW-ROW, what \"WHAT IS WRONG\", from \"WHERE YOU SAW IT\" and its test in the same call (goal \"RAM TEST\", do, stop), which goes in triage.toml so the triage tries it first. Don't fix it in this step."),
         ]);
     }
     if !before.is_empty() {

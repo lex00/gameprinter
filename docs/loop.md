@@ -97,6 +97,13 @@ Each quest-log row of a game the loop works on (`games`) whose status is `next` 
 
 A row whose item is in the game's triage.toml and that no triage has tried (no `triage` on its quest-log row, not done, not out of scope) is a step of the tools' before the agent works on it: `gp mechanic triage GAME ROW...` with just those rows, so a row added after the first triage is tried too (next.rs, the tools' free work).
 
+## The loop proposes rows
+
+What the loop finds becomes quest-log rows on its own, with no card (the owner, 2026-11-19). `gp mechanic propose GAME ROW --what WORDS --from WHERE` adds the row as next, its note "Proposed by the loop: WHAT (from WHERE)", with `by = "loop"` and `from` on it; a row the quest log has, whatever its status, is left as it is, so a row the person finished or put out of scope stays so (crates/gp-cli/src/mechanic/propose.rs).
+
+- The picture check: `gp picture GAME --run RUN --propose` proposes a row for each cause it found on 2 frames or more, but flicker, the `--top` of each group, named `picture-GROUP-DETAIL`, from the clip, frame and box it was first seen on.
+- A worker: a problem it finds that isn't its own item's it proposes with its test, `--goal TEST` (and `--near`, `--start`, `--where`, `--do`, `--stop`), in the same call. The test is checked as the triage reads it and goes in the game's triage.toml as an `[[item]]` for the row (once), so the row is a step of the tools' triage before an agent or the person works on it (above). A test the triage can't read writes nothing. The worker's brief says so.
+
 ## The runner runs a yes
 
 While the runner is on, a YES on a card runs that exact call at once: the runner takes the yes (the ask is marked used, with `ran` {state: running}), runs `gp --json COMMAND ARGV` with the home and the games checkout, and records landed, passed or failed with its last lines. The card shows each, for 15 minutes. A later gp_run with that ask's id is told what the runner did instead of running it again. A yes that puts a held change back stays gp_run's.
