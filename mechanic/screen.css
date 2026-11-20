@@ -159,6 +159,9 @@ form.comment .comment-text { flex: 1; min-width: 0; font: 13px var(--mono); back
 .talk-line { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .talk-you { color: var(--gold); }
 #asks .ask-row { font: bold 11px var(--mono); color: var(--accent); background: transparent; border: 2px solid var(--accent); padding: 0 6px; }
+/* LOOK AT IT: a row's clip to judge on, set up on the screens. */
+button.judge { flex: none; font: bold 12px var(--mono); padding: 0 10px; margin-left: 6px; color: var(--bg); background: var(--gold); border: 2px solid var(--gold); cursor: pointer; white-space: nowrap; }
+#turn button.judge, #asks button.judge { margin-left: 0; }
 #asks .ask-question { flex: 1 1 auto; min-width: 0; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
 #asks .ask-card.open .ask-question { white-space: normal; flex-basis: 100%; order: 1; }
 #asks .ask-says { flex-basis: 100%; order: 2; color: var(--muted); font-size: 12px; }

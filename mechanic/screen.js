@@ -481,11 +481,66 @@ async function openClip(n, mechanic, f) {
 
 /** Shows the corpus clip a refine works on (api/screen/work-clip), looping
  * the window's frames [lo, hi] from the clip's start. */
-async function openWorkClip(id, lo, hi) {
+async function openWorkClip(id, lo, hi, name) {
   const meta = await api(`api/screen/work-clip?id=${encodeURIComponent(id)}`);
   if (mode === "clip" && clip) backToClipless();
-  await showClipLog({ key: `work/${id}`, n: null, mechanic: null, work: id, name: `THE CLIP YOUR AGENT REFINES: ${id.toUpperCase()}`, says: `corpus clip ${id}`, note: meta.name ?? "", start: meta.start, frames: meta.frames, log: meta.log }, lo);
+  await showClipLog({ key: `work/${id}`, n: null, mechanic: null, work: id, name: name ?? `THE CLIP YOUR AGENT REFINES: ${id.toUpperCase()}`, says: `corpus clip ${id}`, note: meta.name ?? "", start: meta.start, frames: meta.frames, log: meta.log }, lo);
   if (clip?.work === id) { clip.loop = [lo, Math.max(lo, hi)]; playClip(true); }
+}
+
+// A clip to judge on: a row asking the person may carry the clip that shows
+// what they are to judge (gp mechanic queue --clip N --frames A-B --look
+// THEME: row.clip, {n, mechanic?} or {id}, with from, to and look). A click
+// on the row, on its item in YOUR TURN or on its card sets it up on the
+// screens: the original beside the model, in that theme, at those frames
+// (played in a loop, or stood still on one frame).
+
+/** The words for a row's clip: "CLIP 1, FRAMES 200 TO 230, IN LAST-CALL". */
+function judgeWords(r) {
+  const c = r.clip;
+  let s = c.id ? `CLIP ${c.id}` : c.mechanic && c.mechanic !== r.mechanic ? `CLIP ${c.n} OF ${c.mechanic}` : `CLIP ${c.n}`;
+  if (typeof c.from === "number") s += c.to > c.from ? `, FRAMES ${c.from} TO ${c.to}` : `, FRAME ${c.from}`;
+  if (c.look) s += c.look === "game" ? ", IN THE GAME'S PICTURES" : `, IN ${c.look}`;
+  return s.toUpperCase();
+}
+
+/** Sets row `r`'s clip up on the screens for the person to judge. */
+async function judgeOn(r) {
+  const c = r?.clip;
+  if (!c) return;
+  if (recording || sending) { note("Send the recording first: RECORD (or R)."); return; }
+  show.by = "person";
+  setView("side");
+  if (c.look && c.look !== show.pictures) setPictures(c.look);
+  $("screens").scrollIntoView({ behavior: "smooth", block: "start" });
+  const lo = typeof c.from === "number" ? c.from : 0;
+  const hi = typeof c.to === "number" ? c.to : null;
+  note(`Setting up ${judgeWords(r).toLowerCase()} for ${r.mechanic}.`, 60000);
+  try {
+    if (c.id) await openWorkClip(c.id, lo, hi ?? lo, `TO JUDGE FOR ${r.mechanic.toUpperCase()}: ${String(c.id).toUpperCase()}`);
+    else {
+      await openClip(c.n, c.mechanic ?? r.mechanic, lo);
+      if (clip) $("clip-name").textContent = `TO JUDGE FOR ${r.mechanic.toUpperCase()}: CLIP ${c.n} OF ${String(c.mechanic ?? r.mechanic).toUpperCase()}`;
+    }
+    show.by = "person";
+    if (!clip) return;
+    seekClip(lo, true);
+    if (hi !== null && hi > lo) { clip.loop = [lo, Math.min(hi, clip.frames - 1)]; playClip(true); }
+    else { clip.loop = null; playClip(false); }
+    document.body.dataset.judging = r.mechanic;
+    note(`${r.mechanic}: ${judgeWords(r).toLowerCase()}, the original on the left. ${r.note ?? ""}`.trim(), 10000);
+    drawClips();
+    report();
+  } catch (e) { note(`Couldn't set up the clip for ${r.mechanic}: ${e.message ?? e}`, 8000); }
+}
+
+/** A LOOK AT IT button for row `r`'s clip. */
+function judgeButton(r) {
+  const b = el("button", "judge", `LOOK AT IT: ${judgeWords(r)}`);
+  b.type = "button";
+  b.title = "Sets this clip up on the screens above: the original beside the model, at the frames in question";
+  b.addEventListener("click", (e) => { e.stopPropagation(); e.currentTarget.blur(); void judgeOn(r); });
+  return b;
 }
 
 /** A clip's play from power-on on both screens, from `c.start` for
@@ -952,16 +1007,21 @@ function queueRow(r, g, open) {
   // (asked) once the agent's note takes the row over.
   if (r.asked) li.append(noteLine("YOU ASKED", r.asked));
   if (r.note) li.append(noteLine(r.by === "person" && !r.asked ? "YOU WROTE" : "AGENT WROTE", r.note));
+  if (r.clip) li.append(judgeButton(r));
   const turns = talkOf(r.mechanic);
   if (turns.length) li.append(talkLines(turns));
   li.append(commentBox(li, r.mechanic, [], `A comment on ${r.mechanic} for your agent`));
   if (r.mechanic === session?.mechanic) li.classList.add("open");
   for (const d of li.querySelectorAll("details")) d.open = open;
-  li.title = "Click: show or hide its details (RAM tests, addresses, hashes)";
+  li.title = r.clip
+    ? `Click: set up ${judgeWords(r).toLowerCase()} on the screens above, and show or hide its details`
+    : "Click: show or hide its details (RAM tests, addresses, hashes)";
   li.addEventListener("click", () => {
     const ds = [...li.querySelectorAll("details")];
     const to = !ds.some((d) => d.open);
     for (const d of ds) d.open = to;
+    // A row with a clip to judge on sets it up on the screens.
+    if (r.clip && to) void judgeOn(r);
   });
   return li;
 }
@@ -1107,7 +1167,7 @@ async function refreshAsks() {
   // Open questions first, then the runner's turn, then what it finished.
   const rank = (a) => (!a.ran && a.state === "open" ? 0 : turn.includes(a) ? 1 : 2);
   list.sort((x, y) => rank(x) - rank(y) || (rank(x) === 1 ? turn.indexOf(x) - turn.indexOf(y) : 0));
-  const key = JSON.stringify(list.map((a) => [a.id, a.state, a.ran?.state, turn.indexOf(a), asksOpen.has(a.id)]));
+  const key = JSON.stringify([list.map((a) => [a.id, a.state, a.ran?.state, turn.indexOf(a), asksOpen.has(a.id)]), rows.filter((r) => r.clip).map((r) => [r.mechanic, r.clip])]);
   if (key === asksDrawn) { drawYourTurn(); return; }
   asksDrawn = key;
   const box = $("asks");
@@ -1160,6 +1220,9 @@ async function refreshAsks() {
         $("quest")?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
       card.append(go);
+      // The row's clip to judge on, when it has one: the card shows it too.
+      const r = rows.find((x) => x.mechanic === row);
+      if (r?.clip) card.append(judgeButton(r));
     } else {
       card.append(el("span", "ask-detail", a.step
         ? `For step ${a.step}, no longer open.`
@@ -1217,7 +1280,7 @@ function drawYourTurn() {
     && (!game || (s.touches ?? []).includes(`row:${game}/${s.act.row}`)));
   const played = new Set(plays.map((s) => s.act.row));
   const asking = rows.filter((r) => r.status === "asking you" && r.mechanic && !played.has(r.mechanic));
-  const key = JSON.stringify([plays.map((s) => [s.id, s.says]), asking.map((r) => [r.mechanic, r.note]), asksShown]);
+  const key = JSON.stringify([plays.map((s) => [s.id, s.says]), asking.map((r) => [r.mechanic, r.note, r.clip ?? null]), asksShown]);
   if (key === turnDrawn) return;
   turnDrawn = key;
   list.textContent = "";
@@ -1236,7 +1299,12 @@ function drawYourTurn() {
     const li = el("li", "turn-item");
     li.dataset.mechanic = r.mechanic;
     li.append(el("span", "turn-row", r.mechanic.toUpperCase()), el("span", "turn-says", r.note || "Your agent asks you about this row."));
-    li.append(commentBox(li, r.mechanic, [], `Your answer on ${r.mechanic} for your agent`, "ANSWER"));
+    if (r.clip) {
+      li.append(judgeButton(r));
+      li.title = `Click: set up ${judgeWords(r).toLowerCase()} on the screens above`;
+      li.addEventListener("click", () => void judgeOn(r));
+    }
+    li.append(commentBox(li, r.mechanic, r.clip && !r.clip.id && !r.clip.mechanic ? [r.clip.n] : [], `Your answer on ${r.mechanic} for your agent`, "ANSWER"));
     list.append(li);
   }
   $("turn-none").hidden = asksShown + plays.length + asking.length > 0;
@@ -1347,8 +1415,9 @@ function loopIdle() {
     } });
   }
   for (const r of rows.filter((x) => x.status === "asking you" && x.mechanic)) {
-    waits.push({ label: r.mechanic.toUpperCase(), title: `${r.note ?? ""}\nClick to open this item`, go: () => {
+    waits.push({ label: r.mechanic.toUpperCase(), title: `${r.note ?? ""}\nClick to open this item${r.clip ? ` and set up ${judgeWords(r).toLowerCase()} on the screens` : ""}`, go: () => {
       void pickRow(r.mechanic);
+      if (r.clip) { void judgeOn(r); return; }
       $("your-turn")?.scrollIntoView({ behavior: "smooth", block: "start" });
     } });
   }

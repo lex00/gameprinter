@@ -471,6 +471,19 @@ starts there and RECORD records into the row, so the clip goes to the step's
 row), and the quest-log rows asking the person (ANSWER: their words go to
 the row's talk). With none of these it says NOTHING NEEDS YOU.
 
+A row that asks the person to judge something they can see carries the
+clip that shows it: `gp mechanic queue GAME ROW --status "asking you"
+--note QUESTION --clip N --frames A-B --look THEME` writes `clip` on the
+row in `queue.json` (`{"n": N}`, `{"mechanic": ROW, "n": N}` for another
+row's clip, or `{"id": ID}` for a corpus clip, with `from`, `to` and
+`look`; `--no-clip` takes it off, and a row set asking with no clip gets a
+hint). The row in the quest log, its item in YOUR TURN, its card and its
+button in NOW then have LOOK AT IT with the clip in words, and a click on
+any of them (or on the row itself) sets it up on the screens: the original
+beside the model, in that theme (game for the game's own pictures), at
+those frames, played in a loop (one frame: stood still there). The person
+judges and answers in the same item.
+
 It sits over the window's bottom right corner, out of the page's flow, so
 it never pushes the screens down, one line an item; a click on a yes card's
 question opens what it does. The yeses the runner lands in turn say which

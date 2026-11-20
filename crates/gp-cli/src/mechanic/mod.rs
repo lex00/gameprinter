@@ -470,6 +470,23 @@ pub enum MechanicCmd {
         /// row's worker a worktree of that repo.
         #[arg(long, requires = "mechanic", value_parser = ["games", "tools"])]
         repo: Option<String>,
+        /// The clip that shows what the person is to judge: N (clip N of
+        /// this row), ROW/N (clip N of another row) or a corpus clip's id
+        /// (tapper.l1.001). The row and its card get a LOOK AT IT button
+        /// that sets it up on the screens, the original beside the model.
+        #[arg(long, requires = "mechanic", conflicts_with = "no_clip")]
+        clip: Option<String>,
+        /// The clip's frames in question, from the clip's start: A-B (played
+        /// in a loop) or A (stood still there).
+        #[arg(long, requires = "clip")]
+        frames: Option<String>,
+        /// The pictures to judge it in: a theme of the game (last-call), or
+        /// game for the game's own.
+        #[arg(long, requires = "clip")]
+        look: Option<String>,
+        /// Take the clip off the row.
+        #[arg(long, requires = "mechanic")]
+        no_clip: bool,
     },
     /// A sweep of one mechanic: a grid of clips from one spot, each played
     /// on the original and on a rebuilt model in lockstep. `jump` (the
@@ -1047,25 +1064,37 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             in_scope,
             worker,
             repo,
-        } => queue(
-            paths,
-            game,
-            mechanic.as_deref(),
-            &RowChange {
-                status: status.as_deref(),
-                note: note.as_deref(),
-                worker: worker
-                    .clone()
-                    .or_else(|| std::env::var("GP_WORKER").ok().filter(|w| !w.is_empty()))
-                    .as_deref(),
-                known,
-                reads,
-                opens,
-                out_of_scope: out_of_scope.as_deref(),
-                in_scope: *in_scope,
-                repo: repo.as_deref(),
-            },
-        ),
+            clip,
+            frames,
+            look,
+            no_clip,
+        } => {
+            let clip = match clip {
+                Some(c) => Some(row_clip(c, frames.as_deref(), look.as_deref())?),
+                None => None,
+            };
+            queue(
+                paths,
+                game,
+                mechanic.as_deref(),
+                &RowChange {
+                    status: status.as_deref(),
+                    note: note.as_deref(),
+                    worker: worker
+                        .clone()
+                        .or_else(|| std::env::var("GP_WORKER").ok().filter(|w| !w.is_empty()))
+                        .as_deref(),
+                    known,
+                    reads,
+                    opens,
+                    out_of_scope: out_of_scope.as_deref(),
+                    in_scope: *in_scope,
+                    repo: repo.as_deref(),
+                    clip: clip.as_ref(),
+                    no_clip: *no_clip,
+                },
+            )
+        }
         MechanicCmd::Sweep {
             kind: _,
             game,
@@ -1261,11 +1290,85 @@ struct RowChange<'a> {
     out_of_scope: Option<&'a str>,
     in_scope: bool,
     repo: Option<&'a str>,
+    /// The clip the person judges on (row_clip's object).
+    clip: Option<&'a Value>,
+    no_clip: bool,
+}
+
+/// A row's clip, as the screen page reads it: `{"n": N}` (with
+/// `"mechanic"` for another row's) or `{"id": CORPUS-ID}`, with `from` and
+/// `to` (frames from the clip's start) and `look` (a theme, or game).
+fn row_clip(clip: &str, frames: Option<&str>, look: Option<&str>) -> Result<Value> {
+    let clip = clip.trim();
+    let mut v = if let Ok(n) = clip.parse::<u64>() {
+        json!({"n": n})
+    } else if let Some((m, n)) = clip.split_once('/')
+        && let Ok(n) = n.parse::<u64>()
+    {
+        if !name_ok(m) {
+            bail!("--clip ROW/N: {m} isn't a row's name");
+        }
+        json!({"mechanic": m, "n": n})
+    } else if !clip.is_empty() && clip.chars().all(id_char) {
+        json!({"id": clip})
+    } else {
+        bail!("--clip is N, ROW/N or a corpus clip's id (tapper.l1.001): {clip}");
+    };
+    if let Some(f) = frames {
+        let num = |s: &str| s.trim().parse::<u64>().ok();
+        let (a, b) = match f.split_once('-') {
+            Some((a, b)) => (num(a), num(b)),
+            None => (num(f), num(f)),
+        };
+        let (Some(a), Some(b)) = (a, b) else {
+            bail!("--frames is A-B or A, frames from the clip's start: {f}");
+        };
+        if b < a {
+            bail!("--frames {f}: the last frame is before the first");
+        }
+        v["from"] = json!(a);
+        v["to"] = json!(b);
+    }
+    if let Some(l) = look.map(str::trim).filter(|l| !l.is_empty()) {
+        if !name_ok(l) {
+            bail!("--look is a theme's name or game: {l}");
+        }
+        v["look"] = json!(l);
+    }
+    Ok(v)
+}
+
+/// A letter of a corpus clip's id: tapper.l1.001.
+fn id_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "._-".contains(c)
+}
+
+/// A row's clip in words: "clip 1 of get-ready-screen, frames 200 to 230,
+/// in last-call".
+fn clip_words(cl: &Value) -> String {
+    let mut s = match (cl["id"].as_str(), cl["n"].as_u64()) {
+        (Some(id), _) => format!("corpus clip {id}"),
+        (None, Some(n)) => match cl["mechanic"].as_str() {
+            Some(m) => format!("clip {n} of {m}"),
+            None => format!("clip {n}"),
+        },
+        _ => "a clip".to_owned(),
+    };
+    match (cl["from"].as_u64(), cl["to"].as_u64()) {
+        (Some(a), Some(b)) if a == b => s.push_str(&format!(", frame {a}")),
+        (Some(a), Some(b)) => s.push_str(&format!(", frames {a} to {b}")),
+        _ => {}
+    }
+    if let Some(l) = cl["look"].as_str() {
+        s.push_str(&format!(", in {l}"));
+    }
+    s
 }
 
 fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Result<Outcome> {
     let f = queue_file(paths, game)?;
     let mut q = read_queue(&f);
+    let mut hint: Option<String> = None;
     if let Some(m) = mechanic
         && (c.status.is_some()
             || !c.known.is_empty()
@@ -1273,6 +1376,8 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
             || !c.opens.is_empty()
             || c.out_of_scope.is_some()
             || c.repo.is_some()
+            || c.clip.is_some()
+            || c.no_clip
             || c.in_scope)
     {
         if !name_ok(m) {
@@ -1331,6 +1436,23 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
                 o.remove("scope");
                 o.remove("scope_why");
             }
+            if let Some(cl) = c.clip {
+                o.insert("clip".into(), cl.clone());
+            }
+            if c.no_clip {
+                o.remove("clip");
+            }
+        }
+        // A question for the person with nothing to look at: say how to
+        // give it one, since the page sets the clip up from the row.
+        let r = q
+            .iter()
+            .find(|r| r["mechanic"] == json!(m))
+            .expect("just changed");
+        if r["status"] == json!("asking you") && r.get("clip").is_none() {
+            hint = Some(format!(
+                "{m} asks the person without a clip: when they are to judge something they can see, give the row the clip that shows it (--clip N --frames A-B --look THEME), and the page sets it up on the screens"
+            ));
         }
         write_queue(&f, &q)?;
     }
@@ -1363,11 +1485,20 @@ fn queue(paths: &Paths, game: &str, mechanic: Option<&str>, c: &RowChange) -> Re
                     r["scope_why"].as_str().unwrap_or("")
                 ));
             }
+            if let Some(cl) = r.get("clip") {
+                l.push_str(&format!("\n    to judge on: {}", clip_words(cl)));
+            }
             l
         })
         .collect::<Vec<_>>()
         .join("\n");
-    Ok(Outcome::ok(json!({"queue": q}), text))
+    match hint {
+        Some(h) => Ok(Outcome::ok(
+            json!({"queue": q, "hint": h}),
+            format!("{text}\nhint: {h}"),
+        )),
+        None => Ok(Outcome::ok(json!({"queue": q}), text)),
+    }
 }
 
 /// Each genre's quest log rows, in order (checklists.toml).
@@ -1517,6 +1648,8 @@ mod tests {
             out_of_scope: None,
             in_scope: false,
             repo: None,
+            clip: None,
+            no_clip: false,
         };
         assert!(
             queue(&p, "test-hop", Some("hop"), &plain)
@@ -1572,5 +1705,80 @@ mod tests {
         assert_eq!(r["asked"], "the duck is slow");
         assert_eq!(r["note"], "the duck is 2 frames late");
         assert!(read_queue(&f)[0].get("asked").is_none());
+    }
+
+    /// A row asking the person carries the clip they judge on, which the
+    /// page sets up; one without a clip gets a hint, and --no-clip takes it
+    /// off.
+    #[test]
+    fn a_row_carries_the_clip_to_judge_on() {
+        assert_eq!(
+            row_clip("3", Some("200-230"), Some("last-call")).unwrap(),
+            json!({"n": 3, "from": 200, "to": 230, "look": "last-call"})
+        );
+        assert_eq!(
+            row_clip("get-ready-screen/1", Some("40"), None).unwrap(),
+            json!({"mechanic": "get-ready-screen", "n": 1, "from": 40, "to": 40})
+        );
+        let id = row_clip("tapper.l1.001", None, None).unwrap();
+        assert_eq!(id, json!({"id": "tapper.l1.001"}));
+        assert!(row_clip("", None, None).is_err());
+        assert!(row_clip("a b", None, None).is_err());
+        assert!(row_clip("2", Some("9-3"), None).is_err());
+        assert!(row_clip("2", Some("x"), None).is_err());
+        let other = row_clip("get-ready-screen/1", Some("200-230"), Some("last-call")).unwrap();
+        let words = "clip 1 of get-ready-screen, frames 200 to 230, in last-call";
+        assert_eq!(clip_words(&other), words);
+        assert_eq!(clip_words(&id), "corpus clip tapper.l1.001");
+        let d = tempfile::tempdir().unwrap();
+        let p = paths(d.path());
+        let none: &[String] = &[];
+        let plain = RowChange {
+            status: None,
+            note: None,
+            worker: None,
+            known: none,
+            reads: none,
+            opens: none,
+            out_of_scope: None,
+            in_scope: false,
+            repo: None,
+            clip: None,
+            no_clip: false,
+        };
+        let asking = RowChange {
+            status: Some("asking you"),
+            note: Some("does the mug look right?"),
+            ..plain
+        };
+        let o = queue(&p, "test-hop", Some("mug"), &asking).unwrap();
+        assert!(
+            o.json["hint"].as_str().unwrap().contains("--clip"),
+            "{}",
+            o.json
+        );
+        let cl = row_clip("1", Some("10-20"), Some("game")).unwrap();
+        let with_clip = RowChange {
+            clip: Some(&cl),
+            ..asking
+        };
+        let o = queue(&p, "test-hop", Some("mug"), &with_clip).unwrap();
+        assert!(o.json.get("hint").is_none(), "{}", o.json);
+        assert_eq!(o.json["queue"][0]["clip"], cl);
+        let words = "to judge on: clip 1, frames 10 to 20, in game";
+        assert!(o.text.contains(words), "{}", o.text);
+        // A later note keeps the clip; --no-clip takes it off.
+        let again = RowChange {
+            note: Some("again?"),
+            ..asking
+        };
+        let o = queue(&p, "test-hop", Some("mug"), &again).unwrap();
+        assert_eq!(o.json["queue"][0]["clip"], cl);
+        let off = RowChange {
+            no_clip: true,
+            ..plain
+        };
+        let o = queue(&p, "test-hop", Some("mug"), &off).unwrap();
+        assert!(o.json["queue"][0].get("clip").is_none());
     }
 }
