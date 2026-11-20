@@ -1796,6 +1796,59 @@ function drawNowLoop(v) {
 let stepsDrawn = "";
 let openSteps = []; // the open steps as /api/steps last gave them
 let stepsWriting = false; // a WRONG box is open: don't redraw under it
+// The scoreboard (docs/loop.md, "The scoreboard"): the game's parts, each
+// with its game state, background and sprites as gp serve last measured
+// them and how each moved since the measure before.
+let scoreDrawn = "";
+async function refreshScoreboard() {
+  const game = session?.game;
+  if (!game) return;
+  let v = null;
+  try {
+    const r = await fetch(`/api/scoreboard/${encodeURIComponent(game)}`);
+    if (r.ok) v = await r.json();
+  } catch (e) { /* the next look */ }
+  const lines = v?.lines ?? [];
+  const key = JSON.stringify([v?.error ?? null, lines]);
+  if (key === scoreDrawn) return;
+  scoreDrawn = key;
+  $("scoreboard").hidden = !v || (lines.length === 0 && !v.error);
+  const body = $("score-lines");
+  body.textContent = "";
+  if (v?.error) {
+    const tr = body.insertRow();
+    const td = tr.insertCell();
+    td.colSpan = 5;
+    td.textContent = `The scoreboard can't be read: ${v.error}`;
+    return;
+  }
+  const cell = (tr, text, moved, title) => {
+    const td = tr.insertCell();
+    td.textContent = text;
+    if (title) td.title = title;
+    if (moved) {
+      const m = document.createElement("span");
+      m.className = `mv ${moved}`;
+      m.textContent = moved;
+      td.append(m);
+    }
+    return td;
+  };
+  const frames = (x) => (x ? `${x.matched} of ${x.total}` : "not measured yet");
+  for (const l of lines) {
+    const tr = body.insertRow();
+    const when = l.measured_ms ? `measured ${ago(l.measured_ms)}` : "not measured yet";
+    const why = l.error ? `; the last measure failed: ${l.error}` : l.measuring ? "; being measured now" : l.stale ? "; out of date, measured again soon" : "";
+    cell(tr, l.name, "", `clip ${l.clip}${l.level ? `, level ${l.level}` : ""}; ${when}${why}`);
+    cell(tr, l.state ? `${l.state.pct}%` : "no score", l.state?.moved ?? "", l.state ? `of ${l.state.frames} frames` : "the gate has no score for this clip yet");
+    for (const k of ["background", "sprites"]) {
+      const td = cell(tr, frames(l[k]), l[k]?.moved ?? "", "frames matched of the clip's frames");
+      if (l.stale || l.measuring) td.classList.add("old");
+    }
+    cell(tr, l.approved?.length ? l.approved.join(", ") : "none", "");
+  }
+}
+
 async function refreshSteps() {
   if (stepsWriting) return;
   let v = null;
@@ -2260,6 +2313,8 @@ async function main() {
   setInterval(() => { if (!document.hidden) void refreshAsks(); }, 2000);
   void refreshSteps();
   setInterval(() => { if (!document.hidden) void refreshSteps(); }, 3000);
+  void refreshScoreboard();
+  setInterval(() => { if (!document.hidden) void refreshScoreboard(); }, 20000);
 }
 
 main().catch((e) => {

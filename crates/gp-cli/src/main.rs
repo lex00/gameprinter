@@ -151,6 +151,7 @@ mod scenario;
 mod scenario_refine;
 mod scenarios_cmd;
 mod schemas;
+mod scoreboard;
 mod scorecard;
 mod screen;
 mod sealed;

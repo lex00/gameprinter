@@ -116,6 +116,32 @@ Each gp serve's runner writes a heartbeat of its own every look (`$GP_HOME/work/
 
 A worker's shell runs gp's reads, but a gp command that writes, lands or publishes from it (`GP_STEP` set and the parent process not a gp) is refused with exit 3: the worker runs it through gp_run, where its step and the person's yes hold. A gate run from a shell asks no one, so this is what keeps a worker's landing on the person's card. When a quest-log item's worker ends, the runner puts its report in the item's log (`gp mechanic log`), so the page says what it did and what is left. If the row still says agent working then, no agent is on it any more: the runner sets it to asking you, with the report's questions as its note, when the report asks the person something, else to next, with what the report says is left.
 
+## The scoreboard
+
+A game's scoreboard is a few lines at the top of the screen page and at the end of `gp loop health`: one for each part of the game the owner works on now, each measured on one clip of the corpus. Each line has:
+
+| Column | What |
+|---|---|
+| GAME STATE | The gate's straight-through match for the clip (`straight.pct` in `$GP_HOME/work/refine/GAME/status.json`), read as it is now |
+| BACKGROUND, SPRITES | Frames matched of the clip's frames, from `gp picture GAME --run GAME --clip ID` (its `clips[ID].screen`) |
+| APPROVED | The looks the owner approved for the part: none until approved looks are kept |
+
+Beside each number is how it moved since the measure before: up, down or same.
+
+The parts are the game's own file, `GAME/scoreboard.toml` in the games checkout; a game without one has no scoreboard. Each `[[line]]` has a `name` and the `clip` it is measured on, or a `level` (the corpus clips' `level` field), whose first clip in corpus.toml is taken:
+
+```toml
+[[line]]
+name = "level 1"
+clip = "mygame.l1.001"
+
+[[line]]
+name = "the bonus round"
+level = "bonus"
+```
+
+A picture check takes about a minute a clip, so gp serve measures in the background: every 30 seconds it looks for lines out of date and measures them one at a time with the published gp (`$GP_HOME/bin/gp`). A line is out of date when its key changes: the model the gate last landed (`model.hash` in the status), the clip's recipe and its presses files, or the gp that measures (a tool landing). What it measured is kept in `$GP_HOME/work/scoreboard/GAME.json` by clip, with the measure before, and a failed measure keeps the numbers it had and is tried again after 10 minutes. `gp loop health` and the page (`GET /api/scoreboard/{game}`) only read it; a line not yet measured says so, and one out of date says gp serve measures it again. The code is crates/gp-cli/src/scoreboard.rs.
+
 ## What is left of #43
 
 - A failed gate attempt going back to the worker with the gate's score as a new brief, and a step that fails N times becoming a problem row for the owner (part 6). Today a worker that ends with an error is tried again once with its exit and last line.

@@ -1,0 +1,713 @@
+//! A game's scoreboard (docs/loop.md, "The scoreboard"): a line for each
+//! part of the game the owner works on now, each measured on one clip of
+//! the game's corpus. A line has the game state (the gate's straight-through
+//! match for its clip, `$GP_HOME/work/refine/GAME/status.json`), the
+//! background and the sprites (frames matched of frames, from `gp picture
+//! GAME --run GAME --clip ID`), and the looks the owner approved (none yet).
+//!
+//! Which parts is the game's own file, `GAME/scoreboard.toml`: each
+//! `[[line]]` has a `name` and the `clip` it is measured on, or a `level`
+//! of the corpus (`corpus.toml`'s clips' `level`), whose first clip is
+//! taken. Nothing here names a game.
+//!
+//! A picture check takes about a minute a clip, so gp serve measures in the
+//! background ([`start`]): a line is measured again when its key changes
+//! (the model the gate last landed, the clip's recipe and files, the gp
+//! that measures), and the result is kept in
+//! `$GP_HOME/work/scoreboard/GAME.json` with the measure before it, so each
+//! number says how it moved (up, down, same). `gp loop health` and the
+//! screen page (`GET /api/scoreboard/{game}`) only read that file.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use sha2::Digest as _;
+
+/// The game's file naming the lines.
+pub(crate) const FILE: &str = "scoreboard.toml";
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BoardFile {
+    #[serde(default)]
+    line: Vec<LineSpec>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LineSpec {
+    name: String,
+    #[serde(default)]
+    clip: String,
+    #[serde(default)]
+    level: String,
+}
+
+/// One line of the board: its name, the clip it is measured on and that
+/// clip's level in the corpus.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Line {
+    pub name: String,
+    pub clip: String,
+    pub level: String,
+}
+
+/// The corpus's clips as tables, in the file's order.
+fn corpus_clips(game_dir: &Path) -> Result<Vec<toml::Table>, String> {
+    let f = game_dir.join(crate::corpus_score::FILE);
+    let text = std::fs::read_to_string(&f).map_err(|e| format!("{}: {e}", f.display()))?;
+    let t: toml::Table = toml::from_str(&text).map_err(|e| format!("{}: {e}", f.display()))?;
+    Ok(t.get("clip")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c.as_table().cloned())
+        .collect())
+}
+
+fn field<'a>(t: &'a toml::Table, k: &str) -> &'a str {
+    t.get(k).and_then(toml::Value::as_str).unwrap_or("")
+}
+
+/// The board's lines, or None when the game has no scoreboard file. A line
+/// whose clip the corpus doesn't have is an error that names it.
+pub(crate) fn lines(game_dir: &Path) -> Option<Result<Vec<Line>, String>> {
+    let f = game_dir.join(FILE);
+    let text = std::fs::read_to_string(&f).ok()?;
+    Some((|| {
+        let b: BoardFile = toml::from_str(&text).map_err(|e| format!("{}: {e}", f.display()))?;
+        let clips = corpus_clips(game_dir)?;
+        let mut out = Vec::new();
+        for l in b.line {
+            let found = if l.clip.is_empty() {
+                clips.iter().find(|c| field(c, "level") == l.level)
+            } else {
+                clips.iter().find(|c| field(c, "id") == l.clip)
+            };
+            let Some(c) = found else {
+                return Err(if l.clip.is_empty() {
+                    format!(
+                        "{}: line {:?}: the corpus has no clip of level {:?}",
+                        f.display(),
+                        l.name,
+                        l.level
+                    )
+                } else {
+                    format!(
+                        "{}: line {:?}: the corpus has no clip {}",
+                        f.display(),
+                        l.name,
+                        l.clip
+                    )
+                });
+            };
+            out.push(Line {
+                name: l.name,
+                clip: field(c, "id").to_owned(),
+                level: field(c, "level").to_owned(),
+            });
+        }
+        Ok(out)
+    })())
+}
+
+/// The gate's status for the game, or Null.
+fn status(home: &Path, game: &str) -> Value {
+    std::fs::read(home.join("work/refine").join(game).join("status.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or(Value::Null)
+}
+
+/// A clip's straight-through match in the gate's status: its percent and
+/// frames.
+fn state_of(status: &Value, clip: &str) -> Option<(f64, u64)> {
+    let c = status["clips"]
+        .as_array()?
+        .iter()
+        .find(|c| c["id"] == json!(clip))?;
+    Some((c["straight"]["pct"].as_f64()?, c["frames"].as_u64()?))
+}
+
+/// The gp that measures: the gates' published build when there is one,
+/// else this one.
+fn measuring_gp(home: &Path) -> PathBuf {
+    let published = home.join("bin").join("gp");
+    if published.is_file() {
+        return published;
+    }
+    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gp"))
+}
+
+/// What a line's measure depends on, hashed: the model the gate last
+/// landed (its hash in the status, else model.toml), the clip's recipe and
+/// the files it names, and the gp that measures (its size and time). A
+/// change to any of them makes the line out of date.
+pub(crate) fn key_of(home: &Path, game_dir: &Path, game: &str, clip: &str, gp: &Path) -> String {
+    let mut h = sha2::Sha256::new();
+    let st = status(home, game);
+    match st["model"]["hash"].as_str() {
+        Some(m) => h.update(format!("model {m}\n")),
+        None => h.update(std::fs::read(game_dir.join(gp_model::MODEL_FILE)).unwrap_or_default()),
+    }
+    if let Ok(clips) = corpus_clips(game_dir)
+        && let Some(c) = clips.iter().find(|c| field(c, "id") == clip)
+    {
+        h.update(toml::to_string(c).unwrap_or_default());
+        for k in ["start", "presses"] {
+            let f = field(c, k);
+            if !f.is_empty() {
+                h.update(std::fs::read(game_dir.join(f)).unwrap_or_default());
+            }
+        }
+    }
+    let m = std::fs::metadata(gp).ok();
+    let t = m
+        .as_ref()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_millis());
+    h.update(format!("gp {} {t}\n", m.map_or(0, |m| m.len())));
+    hex::encode(h.finalize())[..16].to_owned()
+}
+
+/// One measure of a line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub(crate) struct Numbers {
+    pub background: [u64; 2],
+    pub sprites: [u64; 2],
+    /// The game state's percent when it was measured.
+    #[serde(default)]
+    pub state: Option<f64>,
+}
+
+/// A line's kept measure.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct Entry {
+    pub key: String,
+    pub measured_ms: u64,
+    #[serde(default)]
+    pub now: Option<Numbers>,
+    /// The measure before `now`, for how each number moved.
+    #[serde(default)]
+    pub before: Option<Numbers>,
+    /// Why the last measure gave no numbers.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct Cache {
+    /// By clip id.
+    #[serde(default)]
+    pub lines: BTreeMap<String, Entry>,
+}
+
+fn cache_file(home: &Path, game: &str) -> PathBuf {
+    home.join("work")
+        .join("scoreboard")
+        .join(format!("{game}.json"))
+}
+
+pub(crate) fn read_cache(home: &Path, game: &str) -> Cache {
+    std::fs::read(cache_file(home, game))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+fn write_cache(home: &Path, game: &str, c: &Cache) -> std::io::Result<()> {
+    let f = cache_file(home, game);
+    if let Some(d) = f.parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    let tmp = f.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(c).unwrap_or_default())?;
+    std::fs::rename(tmp, f)
+}
+
+/// Keeps a measure of `clip` under `key`: numbers that differ from the
+/// last measure's move it to `before`; the same numbers again keep the
+/// `before` they had, so a number still says how it moved last.
+pub(crate) fn record(
+    home: &Path,
+    game: &str,
+    clip: &str,
+    key: &str,
+    got: Result<Numbers, String>,
+) -> std::io::Result<()> {
+    let mut c = read_cache(home, game);
+    let e = c.lines.entry(clip.to_owned()).or_default();
+    e.key = key.to_owned();
+    e.measured_ms = gp_mcp::asks::now_ms();
+    match got {
+        Ok(n) => {
+            if e.now.is_some_and(|old| old != n) {
+                e.before = e.now;
+            }
+            e.now = Some(n);
+            e.error = None;
+        }
+        Err(why) => e.error = Some(why),
+    }
+    write_cache(home, game, &c)
+}
+
+/// How `now` moved from `before`, as frames matched of frames: up, down or
+/// same; empty with no measure before.
+fn moved(now: [u64; 2], before: Option<[u64; 2]>) -> &'static str {
+    let Some(b) = before else { return "" };
+    // Each as a share of its own frames, so a longer clip compares too.
+    let (a, z) = (
+        u128::from(now[0]) * u128::from(b[1].max(1)),
+        u128::from(b[0]) * u128::from(now[1].max(1)),
+    );
+    match a.cmp(&z) {
+        std::cmp::Ordering::Greater => "up",
+        std::cmp::Ordering::Less => "down",
+        std::cmp::Ordering::Equal => "same",
+    }
+}
+
+fn moved_pct(now: f64, before: Option<f64>) -> &'static str {
+    match before {
+        None => "",
+        Some(b) if (now - b).abs() < 0.05 => "same",
+        Some(b) if now > b => "up",
+        Some(_) => "down",
+    }
+}
+
+/// The clip being measured now in this process, as GAME/CLIP.
+static MEASURING: Mutex<Option<String>> = Mutex::new(None);
+
+fn measuring_now() -> Option<String> {
+    MEASURING.lock().map(|m| m.clone()).unwrap_or_default()
+}
+
+/// The game's board as the page and `gp loop health` show it: `{game,
+/// lines, error}`, each line with its state, background, sprites and
+/// approved, each number with how it moved, and whether it is out of date
+/// or being measured. None when the game has no scoreboard file.
+pub(crate) fn board(home: &Path, games: &Path, game: &str) -> Option<Value> {
+    let dir = games.join(game);
+    let lines = match lines(&dir)? {
+        Ok(l) => l,
+        Err(e) => return Some(json!({"game": game, "lines": [], "error": e})),
+    };
+    let st = status(home, game);
+    let cache = read_cache(home, game);
+    let gp = measuring_gp(home);
+    let busy = measuring_now();
+    let rows: Vec<Value> = lines
+        .iter()
+        .map(|l| {
+            let e = cache.lines.get(&l.clip);
+            let now = e.and_then(|e| e.now);
+            let before = e.and_then(|e| e.before);
+            let frames = |f: fn(&Numbers) -> [u64; 2]| -> Value {
+                match now {
+                    Some(n) => json!({
+                        "matched": f(&n)[0],
+                        "total": f(&n)[1],
+                        "moved": moved(f(&n), before.as_ref().map(f)),
+                    }),
+                    None => Value::Null,
+                }
+            };
+            // The state is the gate's, read now; it moved since the last
+            // measure when it differs from the state then.
+            let state = state_of(&st, &l.clip).map(|(pct, frames)| {
+                let then = now.and_then(|n| n.state);
+                let mv = match then {
+                    Some(t) if (t - pct).abs() >= 0.05 => moved_pct(pct, Some(t)),
+                    _ => moved_pct(pct, before.and_then(|b| b.state)),
+                };
+                json!({"pct": pct, "frames": frames, "moved": mv})
+            });
+            json!({
+                "name": l.name,
+                "clip": l.clip,
+                "level": l.level,
+                "state": state,
+                "background": frames(|n| n.background),
+                "sprites": frames(|n| n.sprites),
+                "approved": [],
+                "measured_ms": e.map(|e| e.measured_ms),
+                "stale": e.is_none_or(|e| e.key != key_of(home, &dir, game, &l.clip, &gp)),
+                "measuring": busy.as_deref() == Some(&format!("{game}/{}", l.clip)),
+                "error": e.and_then(|e| e.error.clone()),
+            })
+        })
+        .collect();
+    Some(json!({"game": game, "lines": rows, "error": null}))
+}
+
+/// The board as text lines, for `gp loop health`.
+pub(crate) fn text(b: &Value) -> Vec<String> {
+    let game = b["game"].as_str().unwrap_or("");
+    if let Some(e) = b["error"].as_str() {
+        return vec![format!("SCORE    {game}'s scoreboard can't be read: {e}")];
+    }
+    let word = |m: &Value| match m.as_str().unwrap_or("") {
+        "" => String::new(),
+        m => format!(" {m}"),
+    };
+    let frames = |v: &Value| {
+        if v.is_null() {
+            "not measured yet".to_owned()
+        } else {
+            format!("{} of {}{}", v["matched"], v["total"], word(&v["moved"]))
+        }
+    };
+    let mut out = vec![format!("SCORE    {game}'s scoreboard:")];
+    for l in b["lines"].as_array().into_iter().flatten() {
+        let state = if l["state"].is_null() {
+            "no gate score".to_owned()
+        } else {
+            format!(
+                "{}%{}",
+                l["state"]["pct"].as_f64().unwrap_or(0.0),
+                word(&l["state"]["moved"])
+            )
+        };
+        let mut s = format!(
+            "           {} ({}): state {state}, background {}, sprites {}, approved none",
+            l["name"].as_str().unwrap_or(""),
+            l["clip"].as_str().unwrap_or(""),
+            frames(&l["background"]),
+            frames(&l["sprites"]),
+        );
+        if let Some(e) = l["error"].as_str() {
+            s.push_str(&format!(
+                " (the last measure failed: {})",
+                crate::next::cut(e, 120)
+            ));
+        } else if l["stale"] == json!(true) && !l["background"].is_null() {
+            s.push_str(" (out of date: gp serve measures it again)");
+        }
+        out.push(s);
+    }
+    out
+}
+
+/// Runs the picture check on one clip and reads its numbers.
+fn measure(
+    gp: &Path,
+    games: &Path,
+    game: &str,
+    clip: &str,
+    module: Option<&Path>,
+) -> Result<Numbers, String> {
+    use std::process::{Command, Stdio};
+    let mut cmd = Command::new(gp);
+    cmd.arg("--json")
+        .arg("picture")
+        .arg(games.join(game))
+        .args(["--run", game, "--clip", clip]);
+    if let Some(m) = module {
+        cmd.arg("--module").arg(m);
+    }
+    let out = cmd
+        .current_dir(games)
+        .env("GP_GAMES_DIR", games)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("{}: {e}", gp.display()))?;
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
+    let c = &v["clips"][clip];
+    let pair = |k: &str| -> Option<[u64; 2]> {
+        let a = c["screen"][k].as_array()?;
+        Some([a.first()?.as_u64()?, a.get(1)?.as_u64()?])
+    };
+    match (pair("background"), pair("sprites")) {
+        (Some(background), Some(sprites)) => Ok(Numbers {
+            background,
+            sprites,
+            state: None,
+        }),
+        _ => Err(c["error"]
+            .as_str()
+            .map(str::to_owned)
+            .or_else(|| {
+                String::from_utf8_lossy(&out.stderr)
+                    .lines()
+                    .rev()
+                    .find(|l| !l.trim().is_empty())
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| "the picture check gave no numbers".into())),
+    }
+}
+
+/// A failed measure is tried again after this long, though nothing changed.
+const RETRY_MS: u64 = 10 * 60 * 1000;
+
+/// The lines out of date in the games checkout, as (game, clip, key): each
+/// game with a scoreboard file, each line whose kept key differs, or whose
+/// last measure failed long enough ago.
+pub(crate) fn out_of_date(home: &Path, games: &Path, gp: &Path) -> Vec<(String, String, String)> {
+    let now = gp_mcp::asks::now_ms();
+    let mut out = Vec::new();
+    for g in crate::next::games_in(games) {
+        let Some(Ok(lines)) = lines(&games.join(&g)) else {
+            continue;
+        };
+        let cache = read_cache(home, &g);
+        for l in lines {
+            let key = key_of(home, &games.join(&g), &g, &l.clip, gp);
+            let due = cache.lines.get(&l.clip).is_none_or(|e| {
+                e.key != key || (e.error.is_some() && now.saturating_sub(e.measured_ms) > RETRY_MS)
+            });
+            if due && !out.iter().any(|(og, oc, _)| og == &g && oc == &l.clip) {
+                out.push((g.clone(), l.clip, key));
+            }
+        }
+    }
+    out
+}
+
+/// Measures every line out of date once, one clip at a time, with
+/// `run` doing the measure; the state is the gate's at the time.
+pub(crate) fn refresh(
+    home: &Path,
+    games: &Path,
+    gp: &Path,
+    mut run: impl FnMut(&str, &str) -> Result<Numbers, String>,
+) {
+    for (g, clip, key) in out_of_date(home, games, gp) {
+        if let Ok(mut m) = MEASURING.lock() {
+            *m = Some(format!("{g}/{clip}"));
+        }
+        let got = run(&g, &clip).map(|mut n| {
+            n.state = state_of(&status(home, &g), &clip).map(|s| s.0);
+            n
+        });
+        if let Ok(mut m) = MEASURING.lock() {
+            *m = None;
+        }
+        let _ = record(home, &g, &clip, &key, got);
+    }
+}
+
+/// How often gp serve looks for lines out of date.
+const LOOK: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// gp serve's measurer: every half minute, the lines out of date measured
+/// again, once per server.
+pub(crate) fn start(home: PathBuf, games: PathBuf, modules: BTreeMap<String, PathBuf>) {
+    static STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if STARTED.set(()).is_err() {
+        return;
+    }
+    std::thread::spawn(move || {
+        loop {
+            let gp = measuring_gp(&home);
+            refresh(&home, &games, &gp, |g, clip| {
+                let module = modules.get(g).cloned().or_else(|| {
+                    let m = home.join("work/modules").join(format!("{g}.wasm"));
+                    m.is_file().then_some(m)
+                });
+                measure(&gp, &games, g, clip, module.as_deref())
+            });
+            std::thread::sleep(LOOK);
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn put(p: &Path, s: &str) {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, s).unwrap();
+    }
+
+    /// A games checkout with one made-up game: a corpus of three clips over
+    /// two levels and a model.
+    fn games() -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        let g = d.path().join("hop");
+        put(&g.join("model.toml"), "# a model\n");
+        put(
+            &g.join("corpus.toml"),
+            r#"[corpus]
+format = "1.0.0"
+
+[[clip]]
+id = "hop.title.001"
+presses = "inputs/hop.title.001.presses"
+frames = 100
+level = "title"
+
+[[clip]]
+id = "hop.l1.001"
+frames = 200
+level = "field"
+
+[[clip]]
+id = "hop.l2.001"
+frames = 300
+level = "field"
+"#,
+        );
+        put(&g.join("inputs/hop.title.001.presses"), "a@0-1\n");
+        d
+    }
+
+    fn board_file(games: &Path, s: &str) {
+        put(&games.join("hop").join(FILE), s);
+    }
+
+    #[test]
+    fn a_line_names_its_clip_or_takes_its_level_s_first() {
+        let d = games();
+        let g = d.path().join("hop");
+        assert!(lines(&g).is_none(), "no file, no board");
+        board_file(
+            d.path(),
+            "[[line]]\nname = \"the title\"\nlevel = \"title\"\n\n[[line]]\nname = \"level 2\"\nclip = \"hop.l2.001\"\n",
+        );
+        let l = lines(&g).unwrap().unwrap();
+        assert_eq!(
+            l,
+            vec![
+                Line {
+                    name: "the title".into(),
+                    clip: "hop.title.001".into(),
+                    level: "title".into()
+                },
+                Line {
+                    name: "level 2".into(),
+                    clip: "hop.l2.001".into(),
+                    level: "field".into()
+                },
+            ]
+        );
+        board_file(
+            d.path(),
+            "[[line]]\nname = \"gone\"\nclip = \"hop.l9.001\"\n",
+        );
+        let e = lines(&g).unwrap().unwrap_err();
+        assert!(e.contains("no clip hop.l9.001"), "{e}");
+    }
+
+    #[test]
+    fn a_measure_is_kept_and_says_how_it_moved() {
+        let d = games();
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        board_file(
+            d.path(),
+            "[[line]]\nname = \"the title\"\nclip = \"hop.title.001\"\n",
+        );
+        put(
+            &h.join("work/refine/hop/status.json"),
+            r#"{"model": {"hash": "m1"}, "clips": [{"id": "hop.title.001", "frames": 100, "straight": {"pct": 98.0}}]}"#,
+        );
+        let gp = h.join("bin/gp");
+        put(&gp, "a gp");
+        // Nothing measured: the line is out of date and has no numbers.
+        let b = board(h, d.path(), "hop").unwrap();
+        assert_eq!(b["lines"][0]["stale"], json!(true));
+        assert!(b["lines"][0]["background"].is_null());
+        let mut runs = 0;
+        refresh(h, d.path(), &gp, |_, _| {
+            runs += 1;
+            Ok(Numbers {
+                background: [90, 100],
+                sprites: [50, 100],
+                state: None,
+            })
+        });
+        assert_eq!(runs, 1);
+        // Measured and current: nothing to do again.
+        refresh(h, d.path(), &gp, |_, _| panic!("measured again"));
+        let b = board(h, d.path(), "hop").unwrap();
+        let l = &b["lines"][0];
+        assert_eq!(l["stale"], json!(false));
+        assert_eq!(
+            l["background"],
+            json!({"matched": 90, "total": 100, "moved": ""})
+        );
+        assert_eq!(l["state"]["pct"], json!(98.0));
+        assert_eq!(l["approved"], json!([]));
+        // A landing changes the model: measured again, and the numbers say
+        // how they moved.
+        put(
+            &h.join("work/refine/hop/status.json"),
+            r#"{"model": {"hash": "m2"}, "clips": [{"id": "hop.title.001", "frames": 100, "straight": {"pct": 100.0}}]}"#,
+        );
+        assert_eq!(
+            board(h, d.path(), "hop").unwrap()["lines"][0]["stale"],
+            json!(true)
+        );
+        refresh(h, d.path(), &gp, |_, _| {
+            Ok(Numbers {
+                background: [95, 100],
+                sprites: [40, 100],
+                state: None,
+            })
+        });
+        let b = board(h, d.path(), "hop").unwrap();
+        let l = &b["lines"][0];
+        assert_eq!(l["background"]["moved"], json!("up"));
+        assert_eq!(l["sprites"]["moved"], json!("down"));
+        assert_eq!(l["state"]["moved"], json!("up"));
+        let t = text(&b).join("\n");
+        assert!(
+            t.contains(
+                "the title (hop.title.001): state 100% up, background 95 of 100 up, sprites 40 of 100 down, approved none"
+            ),
+            "{t}"
+        );
+        // The clip's presses changed: out of date again.
+        put(
+            &d.path().join("hop/inputs/hop.title.001.presses"),
+            "b@0-1\n",
+        );
+        assert_eq!(out_of_date(h, d.path(), &gp).len(), 1);
+    }
+
+    #[test]
+    fn a_failed_measure_keeps_the_numbers_it_had() {
+        let d = games();
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        record(
+            h,
+            "hop",
+            "hop.l1.001",
+            "k1",
+            Ok(Numbers {
+                background: [1, 2],
+                sprites: [1, 2],
+                state: None,
+            }),
+        )
+        .unwrap();
+        record(h, "hop", "hop.l1.001", "k2", Err("no module".into())).unwrap();
+        let e = &read_cache(h, "hop").lines["hop.l1.001"];
+        assert_eq!(e.now.unwrap().background, [1, 2]);
+        assert_eq!(e.error.as_deref(), Some("no module"));
+        board_file(
+            d.path(),
+            "[[line]]\nname = \"one\"\nclip = \"hop.l1.001\"\n",
+        );
+        let t = text(&board(h, d.path(), "hop").unwrap()).join("\n");
+        assert!(t.contains("the last measure failed: no module"), "{t}");
+    }
+
+    #[test]
+    fn moves_compare_shares_of_frames() {
+        assert_eq!(moved([5, 10], None), "");
+        assert_eq!(moved([5, 10], Some([5, 10])), "same");
+        assert_eq!(moved([6, 10], Some([5, 10])), "up");
+        assert_eq!(moved([10, 20], Some([5, 10])), "same");
+        assert_eq!(moved([9, 20], Some([5, 10])), "down");
+    }
+}

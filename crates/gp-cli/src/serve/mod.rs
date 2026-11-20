@@ -180,6 +180,12 @@ pub(crate) fn run(opts: &ServeOpts, paths: &Paths) -> Result<Outcome> {
     // The page answers the agent's asks for this home (gp_mcp::asks).
     let _ = gp_mcp::asks::mark_page_served(&ctx.paths.home, ctx.port);
     background::start_dispatcher(ctx.clone());
+    // The games' scoreboards, measured again as they go out of date.
+    crate::scoreboard::start(
+        ctx.paths.home.clone(),
+        ctx.games.clone(),
+        ctx.modules.clone().into_iter().collect(),
+    );
     // `gp query` asks this process, which keeps recordings open between
     // queries (crate::session).
     let _sessions = crate::session::serve_in_background(paths);

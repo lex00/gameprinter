@@ -400,7 +400,11 @@ PICTURES picker (the game's own, or each of the person's themes for the
 game), the view (SIDE BY SIDE; ON TOP, the model over the original at the
 transparency the slider sets; DIFFERENCE, black where they match; MODEL
 ONLY, the model alone at its own size, played live from its own start, as
-`gp theme look play` played a theme) and RECORD.
+`gp theme look play` played a theme) and RECORD. Right under the header,
+when the game has a `scoreboard.toml`, is its scoreboard: a line for each
+part of the game worked on, with its game state, background and sprites
+matched and how each moved, read from gp serve's `GET
+/api/scoreboard/GAME` every 20 seconds (docs/loop.md, The scoreboard).
 
 Live, the person plays the original with the keyboard or a gamepad and the
 model follows on the frames the original read the pad on. RECORD (or R)

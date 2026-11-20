@@ -6,6 +6,7 @@
 //! |---|---|
 //! | `GET /api/steps` | `{open, halted, workers, settings, runner}`: the open steps as `gp loop steps` gives them, the halt, the runner's workers, the home's loop settings and the runner in words |
 //! | `POST /api/steps/{id}/wrong` | `{why}`: marks open step `id` wrong; the loop halts until a landed change names the objection |
+//! | `GET /api/scoreboard/{game}` | `{game, lines, error}`: the game's scoreboard as kept (crate::scoreboard), or `lines: []` when the game has none |
 
 use serde_json::{Value, json};
 
@@ -24,7 +25,24 @@ pub(super) fn routes() -> Vec<Route> {
             about: "POST {why}: the person marks an open step wrong, which halts the loop",
             handler: wrong,
         },
+        Route {
+            path: "/api/scoreboard/{game}",
+            about: "The game's scoreboard: a line for each part worked on, with its state, background, sprites and approved looks, and how each moved",
+            handler: scoreboard,
+        },
     ]
+}
+
+fn scoreboard(ctx: &Ctx, _req: &Request, params: &Params) -> Result<Response, Fail> {
+    let game = params.get("game").map(String::as_str).unwrap_or("");
+    if !crate::next::games_in(&ctx.games).iter().any(|g| g == game) {
+        return Err(Fail::not_found(format!(
+            "no game {game} in the games checkout"
+        )));
+    }
+    let v = crate::scoreboard::board(&ctx.paths.home, &ctx.games, game)
+        .unwrap_or_else(|| json!({"game": game, "lines": [], "error": null}));
+    Ok(Response::json(&v))
 }
 
 fn list(ctx: &Ctx, _req: &Request, _params: &Params) -> Result<Response, Fail> {

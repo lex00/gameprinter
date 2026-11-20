@@ -33,6 +33,22 @@
     </div>
   </header>
   <main>
+    <!-- The game's scoreboard (docs/loop.md, "The scoreboard"): a line for
+         each part of the game worked on now, from GAME/scoreboard.toml, as
+         gp serve last measured it (GET /api/scoreboard/GAME). Hidden when
+         the game has none. -->
+    <section id="scoreboard" hidden aria-label="The scoreboard">
+      <table>
+        <thead><tr>
+          <th>PART</th>
+          <th title="How much of the clip the model plays the same as the original, frame by frame, from its start">GAME STATE</th>
+          <th title="Frames whose background matches the original's, of the clip's frames">BACKGROUND</th>
+          <th title="Frames whose characters match the original's, of the clip's frames">SPRITES</th>
+          <th title="The looks you approved for this part">APPROVED</th>
+        </tr></thead>
+        <tbody id="score-lines"></tbody>
+      </table>
+    </section>
     <p id="follow" class="idle" aria-live="polite"></p>
     <div id="screens" class="side">
       <figure id="fig-a"><figcaption id="cap-a">THE ORIGINAL</figcaption><canvas id="a" width="256" height="240"></canvas></figure>

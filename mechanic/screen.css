@@ -225,3 +225,13 @@ button.judge { flex: none; font: bold 12px var(--mono); padding: 0 10px; margin-
 #queue .qgroup-done::after { content: " (click to show)"; color: var(--muted); font-weight: normal; }
 #queue.done-open .qgroup-done::after { content: " (click to hide)"; }
 #queue:not(.done-open) li.qrow-done { display: none; }
+/* The scoreboard at the top: a few lines, one per part of the game. */
+#scoreboard { width: min(900px, 100%); overflow-x: auto; }
+#scoreboard[hidden] { display: none; }
+#scoreboard table { width: 100%; border-collapse: collapse; font-size: 12px; }
+#scoreboard th { text-align: left; color: var(--gold); font-weight: 700; letter-spacing: 0.06em; padding: 2px 8px; border-bottom: 2px solid var(--panel); }
+#scoreboard td { padding: 2px 8px; white-space: nowrap; }
+#scoreboard td .mv { color: var(--muted); margin-left: 6px; }
+#scoreboard td .mv.up { color: #58d854; }
+#scoreboard td .mv.down { color: var(--rec); }
+#scoreboard td.old { color: var(--muted); }

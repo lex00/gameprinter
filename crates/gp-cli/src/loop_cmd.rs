@@ -29,8 +29,10 @@ pub enum LoopCmd {
     /// command, no halt, the yes cards taken and none failing, no row
     /// marked working with no worker on it, the games checkout clean
     /// (local changes block every landing), and, when nothing runs, what
-    /// the loop waits on. Each problem says how to fix it. Exits 1 on a
-    /// problem. Reads only.
+    /// the loop waits on. Each problem says how to fix it. Then each game's
+    /// scoreboard (GAME/scoreboard.toml's lines: the game state,
+    /// background and sprites matched, and how each moved), as gp serve
+    /// last measured it. Exits 1 on a problem. Reads only.
     Health,
     /// Change the home's loop settings ($GP_HOME/loop.toml) and print them.
     /// With no flag, print them. Only the person runs this: gp_run refuses
@@ -517,6 +519,16 @@ fn health(paths: &gp_evidence::Paths) -> Value {
                     &mut lines,
                     format!("The games checkout is clean under {g}/"),
                 );
+            }
+        }
+    }
+    // Each game's scoreboard, as gp serve last measured it.
+    if let Some(d) = games.as_deref() {
+        for g in crate::next::games_in(d) {
+            if (s.games.is_empty() || s.games.contains(&g))
+                && let Some(b) = crate::scoreboard::board(home, d, &g)
+            {
+                lines.extend(crate::scoreboard::text(&b));
             }
         }
     }
