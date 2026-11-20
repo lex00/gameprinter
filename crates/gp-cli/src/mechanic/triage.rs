@@ -694,8 +694,10 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
         .context("no games checkout found: pass --games or set GP_GAMES_DIR")?;
     let game_dir = crate::labels::game_folder(&games, a.game)
         .with_context(|| format!("no game {} in {}", a.game, games.display()))?;
-    let (rom, set_id, _) = super::server::game_rom(paths, Some(&games), a.game)?;
-    // The romset as a file, for autoplay: the bytes the page plays.
+    // The scored set, the one the corpus's clips are of, whatever set the
+    // page's picker holds.
+    let (rom, set_id) = super::server::clip_rom(paths, Some(&games), a.game, None)?;
+    // The romset as a file, for autoplay.
     let rom_file = match &rom.system {
         Some(sys) => {
             let d = runs_dir(home, a.game);

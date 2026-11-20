@@ -83,6 +83,32 @@ const canvas = $("game");
 const ctx = canvas.getContext("2d");
 const down = new Set();
 let player, rom;
+// The set the page's ROM is (api/rom), and the other sets' ROMs fetched for
+// clips recorded on them (rom?set=SET), as the screen page has them.
+let romSet = null;
+const setRoms = new Map();
+
+/** The set an input log was recorded on: an arcade log's `system` line. */
+function setOf(log) {
+  return /^system (\S+)/m.exec(log ?? "")?.[1] ?? null;
+}
+
+/** The ROM a log plays on: the set it was recorded on, whatever set the
+ * picker holds; the page's own when it is that set or names none. */
+async function romFor(log) {
+  const want = setOf(log);
+  if (!romSet) {
+    const v = await fetch("api/rom").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    romSet = v?.set ? { set: v.set, system: (v.sets ?? []).find((s) => s.id === v.set)?.system ?? v.set } : { set: null, system: null };
+  }
+  if (!want || !romSet.set || want === romSet.set || want === romSet.system) return rom;
+  if (!setRoms.has(want)) {
+    const r = await fetch(`rom?set=${encodeURIComponent(want)}`);
+    if (!r.ok) throw new Error(await r.text());
+    setRoms.set(want, new Uint8Array(await r.arrayBuffer()));
+  }
+  return setRoms.get(want);
+}
 let save = null; // the last save point's bytes
 let mode = "live"; // live | recording | review | sending | agent | idle | watch | refine
 // REFINE or THEMES shows in the game's place (shell.js): the games hold and
@@ -1623,7 +1649,8 @@ async function openClipView(n) {
  * so each loop restores it instead of replaying thousands of frames again.
  * False when `still()` turned false on the way. */
 async function loadClip(slot, c, label, still) {
-  player.replay(slot, rom, c.log);
+  // The clip plays on the set it was recorded on.
+  player.replay(slot, await romFor(c.log), c.log);
   if (!(await runToSliced(slot, c.start, label, still))) return false;
   try { c.startState = player.save(slot); } catch (e) { c.startState = null; }
   setBar(0, null);
@@ -1637,7 +1664,7 @@ function rewindClip() {
     player.restore(1, showClip.startState);
     return;
   }
-  player.replay(1, rom, showClip.log);
+  player.replay(1, setRoms.get(setOf(showClip.log)) ?? rom, showClip.log);
   player.runTo(1, showClip.start);
   try { showClip.startState = player.save(1); } catch (e) { showClip.startState = null; }
 }

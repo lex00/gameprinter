@@ -104,7 +104,35 @@ let FPS = LAYOUT.fps;
 let W = 256, H = 240;
 
 let player = null, rom = null;
+// The set the page's ROM is (api/rom: its id and MAME system), and the
+// other sets' ROMs fetched for clips recorded on them (rom?set=SET).
+let romSet = null;
+const setRoms = new Map();
 let session = null; // api/session: the game and the mechanic open
+
+/** The set an input log was recorded on: an arcade log's `system` line. */
+function setOf(log) {
+  return /^system (\S+)/m.exec(log ?? "")?.[1] ?? null;
+}
+
+/** The ROM a log plays on: the set it was recorded on, whatever set the
+ * picker holds; the page's own when it is that set or names none. */
+async function romFor(log) {
+  const want = setOf(log);
+  if (!want || !romSet || want === romSet.set || want === romSet.system) return rom;
+  if (!setRoms.has(want)) {
+    const r = await fetch(`rom?set=${encodeURIComponent(want)}`);
+    if (!r.ok) throw new Error(await r.text());
+    setRoms.set(want, new Uint8Array(await r.arrayBuffer()));
+  }
+  return setRoms.get(want);
+}
+
+/** A clip's name on the clip bar, with the set it plays on. */
+function clipName(name, log) {
+  const set = setOf(log);
+  return set ? `${name} (ON ${set.toUpperCase()})` : name;
+}
 const down = new Set();
 
 // What is shown. `by` is who chose it last: the agent's ask or the person.
@@ -671,7 +699,7 @@ async function judgeOn(r) {
     if (c.id) await openWorkClip(c.id, lo, hi ?? lo, `TO JUDGE FOR ${r.mechanic.toUpperCase()}: ${String(c.id).toUpperCase()}`);
     else {
       await openClip(c.n, c.mechanic ?? r.mechanic, lo);
-      if (clip) $("clip-name").textContent = `TO JUDGE FOR ${r.mechanic.toUpperCase()}: CLIP ${c.n} OF ${String(c.mechanic ?? r.mechanic).toUpperCase()}`;
+      if (clip) $("clip-name").textContent = clipName(`TO JUDGE FOR ${r.mechanic.toUpperCase()}: CLIP ${c.n} OF ${String(c.mechanic ?? r.mechanic).toUpperCase()}`, clip.log);
     }
     show.by = "person";
     if (!clip) return;
@@ -708,7 +736,9 @@ async function showClipLog(c, f) {
   model.say = "THE MODEL IS STARTING";
   const { n, mechanic } = c;
   note(`Loading ${c.says}.`, 60000);
-  player.replay(1, rom, log);
+  // The clip plays on the set it was recorded on.
+  player.replay(1, await romFor(log), log);
+  if (mode !== "clip") return;
   for (let at = player.frame(1); at < start;) {
     player.runTo(1, Math.min(start, at + 600));
     if (player.frame(1) === at) break;
@@ -744,7 +774,7 @@ async function showClipLog(c, f) {
     draws: clipDraws, frameDraws, soft: c.draws ? softOf(c.draws) : softLines(sites),
   };
   $("clip-scrub").max = String(length - 1);
-  $("clip-name").textContent = c.name;
+  $("clip-name").textContent = clipName(c.name, log);
   $("clipbar").hidden = false;
   $("record").disabled = true;
   seekClip(f ?? 0, true);
@@ -1623,7 +1653,9 @@ async function playFrom(m) {
     if (r?.path) {
       const res = await fetch(`api/paths/${r.path}`);
       if (!res.ok) throw new Error(await res.text());
-      player.replay(0, rom, await res.text());
+      // The start point plays on the set its path was recorded on.
+      const text = await res.text();
+      player.replay(0, await romFor(text), text);
       const target = r.frame ?? 0;
       while (player.frame(0) < target) {
         const before = player.frame(0);
@@ -2339,7 +2371,14 @@ async function main() {
   $("model-frame").style.height = `${H}px`;
   $("keys").textContent = LAYOUT.footer;
   session = await api("api/session").catch(() => null);
+  // The set the page plays live; a clip plays on its own (romFor).
+  const sets = await api("api/rom").catch(() => null);
+  if (sets?.set) romSet = { set: sets.set, system: (sets.sets ?? []).find((s) => s.id === sets.set)?.system ?? sets.set };
   $("title").textContent = session?.game ?? "";
+  if (romSet && session?.game) {
+    $("title").textContent = `${session.game} ON ${romSet.set}`;
+    $("title").title = "The set the screens play live; a clip plays on the set it was recorded on, named on the clip bar";
+  }
   document.title = `${session?.game ?? "Game"} ${LOOP_PAGE ? "loop" : "screen"}`;
   await setUpPictures();
   await refreshLists(true);

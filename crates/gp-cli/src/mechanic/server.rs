@@ -225,6 +225,99 @@ pub(super) fn game_rom(
     )
 }
 
+/// The ROM a clip plays on, whatever set the page's picker holds: the set
+/// it was recorded on (`set`, its log's `system` or a set's id in
+/// roms.toml), else the scored set (the one the corpus's clips are of),
+/// else the rest in roms.toml's order. The ROM and its set's id; a set
+/// that isn't in the ROM folder is refused in plain words.
+pub(crate) fn clip_rom(
+    paths: &Paths,
+    games: Option<&Path>,
+    game: &str,
+    set: Option<&str>,
+) -> Result<(crate::roms::Rom, String)> {
+    let (file, sources, _) = sets_of(games, game)?;
+    if let Some(want) = set {
+        let s = sources
+            .iter()
+            .find(|s| s.id == want || s.system.as_deref() == Some(want))
+            .with_context(|| {
+                format!(
+                    "the clip was recorded on {want}, a set {} doesn't name",
+                    file.display()
+                )
+            })?;
+        let mut found = crate::roms::find(std::slice::from_ref(&s.sha256), &[], &paths.roms)?;
+        let r = found.remove(&s.sha256).with_context(|| {
+            format!(
+                "the clip was recorded on {}, which isn't in {}: add it with gp roms add",
+                s.id,
+                paths.roms.display()
+            )
+        })?;
+        return Ok((r, s.id.clone()));
+    }
+    let shas: Vec<String> = sources.iter().map(|s| s.sha256.clone()).collect();
+    let mut found = crate::roms::find(&shas, &[], &paths.roms)?;
+    for s in &sources {
+        if let Some(r) = found.remove(&s.sha256) {
+            return Ok((r, s.id.clone()));
+        }
+    }
+    bail!(
+        "no ROM in {} that {} names: add yours with gp roms add",
+        paths.roms.display(),
+        file.display()
+    )
+}
+
+/// GET /rom?set=SET: the bytes of the game's set `want` (its id or MAME
+/// system), the one the page plays when it is that set; a set the game
+/// doesn't have, or one not in the ROM folder, said in plain words.
+fn set_rom(s: &Server, want: &str) -> Result<Response> {
+    let Some(row) = s
+        .sets
+        .iter()
+        .find(|r| r["id"] == json!(want) || r["system"] == json!(want))
+    else {
+        return Ok(Response::error(
+            404,
+            &format!(
+                "the clip was recorded on {want}, a set {} doesn't have",
+                s.game
+            ),
+        ));
+    };
+    let sha = row["sha256"].as_str().unwrap_or("");
+    if sha == s.rom_sha {
+        return Ok(Response::bytes(
+            "application/octet-stream",
+            s.rom.as_ref().clone(),
+        ));
+    }
+    let id = row["id"].as_str().unwrap_or(want);
+    let mut found = crate::roms::find(&[sha.to_owned()], &[], &s.paths.roms)?;
+    match found.remove(sha) {
+        Some(r) => Ok(Response::bytes("application/octet-stream", r.bytes)),
+        None => Ok(Response::error(
+            409,
+            &format!(
+                "the clip was recorded on {id}, which isn't in {}: add it with gp roms add",
+                s.paths.roms.display()
+            ),
+        )),
+    }
+}
+
+/// The set an input log was recorded on: an arcade log's `system`.
+pub(crate) fn log_set(log: &str) -> Option<String> {
+    gp_evidence::InputLog::parse(log)
+        .ok()?
+        .arcade
+        .map(|a| a.system)
+        .filter(|s| !s.is_empty())
+}
+
 /// The model's pictures for a ROM set: the scored set's in the usual place
 /// (corpus_score::assets_of, $GP_HOME/work/assets/SOURCE); another set's
 /// lifted by the same asset map, chip by chip and index by index, into
@@ -989,10 +1082,16 @@ fn handle(s: &Server, req: &Request) -> Result<Response> {
             }
             Ok(Response::bytes("application/wasm", fs::read(&s.wasm)?))
         }
-        ("GET" | "HEAD", "/rom") => Ok(Response::bytes(
-            "application/octet-stream",
-            s.rom.as_ref().clone(),
-        )),
+        // The ROM the page plays; ?set=SET (a set's id or MAME system), the
+        // set a clip was recorded on, which the page replays it on whatever
+        // set its picker holds.
+        ("GET" | "HEAD", "/rom") => match req.param("set").filter(|v| !v.is_empty()) {
+            None => Ok(Response::bytes(
+                "application/octet-stream",
+                s.rom.as_ref().clone(),
+            )),
+            Some(want) => set_rom(s, want),
+        },
         // The arcade sets gp knows (the games' roms.toml chip rows), which
         // the page hands its board player (gp_sets_load) before the zip.
         ("GET" | "HEAD", "/roms.toml") => Ok(Response::bytes(
@@ -1954,6 +2053,45 @@ mod tests {
             s.push_str(&format!("P {f}\n"));
         }
         s
+    }
+
+    /// A clip's own set (rom?set=SET): the page's ROM when it is that set,
+    /// by id or MAME system; another set not in the ROM folder, or one the
+    /// game doesn't have, said in plain words; and a log's set read.
+    #[test]
+    fn a_clip_plays_on_its_own_set() {
+        let d = tempfile::tempdir().unwrap();
+        let mut srv = server(d.path());
+        srv.set = "hop".into();
+        srv.sets = vec![
+            json!({"id": "hop", "system": "mosshop", "sha256": "ab", "here": true}),
+            json!({"id": "hopg", "system": "mosshopg", "sha256": "cd", "here": false}),
+        ];
+        let page = call(&srv, "GET", "/rom", None).2;
+        for want in ["hop", "mosshop"] {
+            let (s, kind, body) = call(&srv, "GET", &format!("/rom?set={want}"), None);
+            assert_eq!(
+                (s, kind.as_str()),
+                (200, "application/octet-stream"),
+                "{want}"
+            );
+            assert_eq!(body, page, "{want}");
+        }
+        let (s, body) = get(&srv, "/rom?set=mosshopg");
+        assert_eq!(s, 409, "{body}");
+        assert!(body.contains("recorded on hopg, which isn't in"), "{body}");
+        assert!(body.contains("gp roms add"), "{body}");
+        let (s, body) = get(&srv, "/rom?set=other");
+        assert_eq!(s, 404, "{body}");
+        assert!(
+            body.contains("recorded on other, a set mosshop doesn't have"),
+            "{body}"
+        );
+        assert_eq!(
+            log_set("gp-arcade-input 0\nsystem tapper\ncolumns CSRLDUT\n6 .......\n").as_deref(),
+            Some("tapper")
+        );
+        assert_eq!(log_set(&log(&["........"])), None);
     }
 
     /// The page's files, the ROM, and the player's absence said plainly as

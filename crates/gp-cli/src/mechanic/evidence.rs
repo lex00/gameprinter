@@ -42,8 +42,15 @@ use crate::Outcome;
 use crate::original::{OriginalRuntime, Platform};
 
 /// The game's folder and its ROM, and the set's id; `rom` chooses the set
-/// first (kept for the game, as `gp mechanic start --rom` keeps it).
-fn game_rom(paths: &Paths, game: &str, rom: Option<&Path>) -> Result<(PathBuf, Vec<u8>, String)> {
+/// first (kept for the game, as `gp mechanic start --rom` keeps it). Else
+/// the set `log` (a clip's) was recorded on, whatever set the page's
+/// picker holds; with no log, the page's set.
+fn game_rom(
+    paths: &Paths,
+    game: &str,
+    rom: Option<&Path>,
+    log: Option<&str>,
+) -> Result<(PathBuf, Vec<u8>, String)> {
     if let Some(r) = rom {
         super::server::choose_rom(paths, None, game, &r.to_string_lossy())?;
     }
@@ -51,8 +58,20 @@ fn game_rom(paths: &Paths, game: &str, rom: Option<&Path>) -> Result<(PathBuf, V
         crate::roms_cmd::games_dir(None).context("no games checkout found: set GP_GAMES_DIR")?;
     let dir = crate::labels::game_folder(&games, game)
         .with_context(|| format!("no game {game} in {}", games.display()))?;
+    if rom.is_none()
+        && let Some(set) = log.and_then(super::server::log_set)
+    {
+        let (r, id) = super::server::clip_rom(paths, None, game, Some(&set))?;
+        return Ok((dir, r.bytes, id));
+    }
     let (r, id, _) = super::server::game_rom(paths, None, game)?;
     Ok((dir, r.bytes, id))
+}
+
+/// Clip `n`'s log from power-on, when it can be read.
+fn clip_log(paths: &Paths, s: &Session, n: u64) -> Option<String> {
+    let (text, _) = clip_paths::full_log(&paths.home, &s.dir, n).ok()?;
+    Some(text)
 }
 
 fn clip_ref(s: &Session, mechanic: &str, n: u64) -> Result<crate::clip_session::SessionClip> {
@@ -79,7 +98,7 @@ pub(crate) fn clip_video(
     rom: Option<&Path>,
 ) -> Result<Outcome> {
     let s = Session::open(paths, game, mechanic)?;
-    let (_, bytes, set) = game_rom(paths, game, rom)?;
+    let (_, bytes, set) = game_rom(paths, game, rom, clip_log(paths, &s, clip).as_deref())?;
     let c = clip_ref(&s, mechanic, clip)?;
     // Refuses a clip whose start doesn't match its saved state.
     c.check_start(&paths.home, &bytes)?;
@@ -161,9 +180,9 @@ pub(crate) struct ClipSave<'a> {
 /// path, the state there hashed, and the clip keeping only its own frames.
 pub(crate) fn clip_save(paths: &Paths, a: &ClipSave) -> Result<Outcome> {
     let s = Session::open(paths, a.game, a.mechanic)?;
-    let (_, bytes, _) = game_rom(paths, a.game, None)?;
-    let parsed = InputLog::parse(&fs::read_to_string(a.log)?)
-        .map_err(|e| anyhow::anyhow!("{}: {e}", a.log.display()))?;
+    let text = fs::read_to_string(a.log)?;
+    let (_, bytes, _) = game_rom(paths, a.game, None, Some(&text))?;
+    let parsed = InputLog::parse(&text).map_err(|e| anyhow::anyhow!("{}: {e}", a.log.display()))?;
     let start = a.start;
     if start >= parsed.frames.len() {
         bail!(
@@ -333,7 +352,7 @@ pub(crate) fn compare(
     old: u64,
 ) -> Result<Outcome> {
     let s = Session::open(paths, game, mechanic)?;
-    let (dir, rom, _) = game_rom(paths, game, None)?;
+    let (dir, rom, _) = game_rom(paths, game, None, clip_log(paths, &s, new).as_deref())?;
     clip_ref(&s, mechanic, new)?;
     clip_ref(&s, mechanic, old)?;
     let (text, answer, measured) = if Platform::of_file(&rom) == Platform::Arcade {
@@ -637,7 +656,7 @@ pub(crate) fn contacts(
     rom: Option<&Path>,
 ) -> Result<Outcome> {
     let s = Session::open(paths, game, mechanic)?;
-    let (_, bytes, _) = game_rom(paths, game, rom)?;
+    let (_, bytes, _) = game_rom(paths, game, rom, clip_log(paths, &s, clip).as_deref())?;
     clip_ref(&s, mechanic, clip)?;
     let overlay = measure_overlay(paths, &s, game, clip, &bytes)?;
     fs::write(

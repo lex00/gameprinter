@@ -1256,21 +1256,44 @@ fn differs(
     Ok(None)
 }
 
-/// The game's package folder and its ROM: `--rom`, else the one its
-/// roms.toml names, found in the ROM folder as the mechanic page finds it.
-fn game_and_rom(paths: &Paths, a: &Args) -> Result<(PathBuf, Vec<u8>)> {
+/// The game's package folder and its ROM: `--rom`, else the set the probes'
+/// base clip was recorded on (its log's `system`), else the scored set,
+/// whatever set the page's picker holds ([`super::server::clip_rom`]).
+fn game_and_rom(paths: &Paths, a: &Args, set: Option<&str>) -> Result<(PathBuf, Vec<u8>)> {
     let games = crate::roms_cmd::games_dir(a.games)
         .context("no games checkout: pass --games or set GP_GAMES_DIR")?;
     let rom = match a.rom {
         Some(r) => fs::read(r).with_context(|| format!("reading {}", r.display()))?,
-        None => super::server::game_rom(paths, a.games, a.game)?.0.bytes,
+        None => {
+            let (r, _) = super::server::clip_rom(paths, a.games, a.game, set)?;
+            r.bytes
+        }
     };
     Ok((games.join(a.game), rom))
 }
 
+/// The set the chosen probes' base clips were recorded on: the first base
+/// that is a session's clip with an arcade log names it.
+fn base_set(home: &Path, game: &str, f: &File, ids: &[String]) -> Option<String> {
+    f.probe
+        .iter()
+        .filter(|p| ids.is_empty() || ids.contains(&p.id))
+        .find_map(|p| {
+            let (Some(s), Some(n)) = (&p.base.session, p.base.clip) else {
+                return None;
+            };
+            let dir = home.join("mechanics").join(game).join(s);
+            let (text, _) = full_log(home, &dir, n).ok()?;
+            super::server::log_set(&text)
+        })
+}
+
 pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
-    let (game_dir, rom) = game_and_rom(paths, a)?;
-    let (file, f) = load(&game_dir, a.file)?;
+    let games = crate::roms_cmd::games_dir(a.games)
+        .context("no games checkout: pass --games or set GP_GAMES_DIR")?;
+    let (file, f) = load(&games.join(a.game), a.file)?;
+    let set = base_set(&paths.home, a.game, &f, a.ids);
+    let (game_dir, rom) = game_and_rom(paths, a, set.as_deref())?;
     let board = Board::of_rom(&rom)?.with_draws(&game_dir, &rom)?;
     let names = names_of(&board, &f);
     let rom_sha = crate::roms::sha256_of(&rom)?;
