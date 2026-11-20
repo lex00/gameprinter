@@ -1,5 +1,18 @@
 # Agents in the loop
 
+## The agent watching the loop
+
+While the loop's runner is on (docs/loop.md), the workers do the quest log's work and the person answers the cards. The agent in the person's chat watches the setup and keeps it running; it does no row's work itself:
+
+1. `gp loop health` at the start and after anything changes. It lists each PROBLEM with its fix, and says IDLE with what the loop waits on when no worker runs.
+2. Fix what it lists: a gp serve down or on an older build than the published gp, restarted on the published one (after every tool landing that changes gp serve); a row marked working with no worker, set from its worker's report; a yes card no runner took, or one that failed, with why; a local change in the games checkout, which blocks every landing, set aside or gated.
+3. A bug in the loop or the tools is fixed in gameprinter and landed through `gp tool gate`.
+4. What the person reports goes into the quest log as a row (`gp mechanic queue GAME ROW --status next --note "Owner: ..."`, `--repo tools` for the tool's own work) for a worker; the agent tells the person in one line what is on their page.
+
+It never raises a row's card, lands a row's change or writes the games checkout itself: a row is real when it is in the loop.
+
+## The clip agent and the driver
+
 Brought from game-printer's docs/agents.md, edited to gameprinter's layout. Claude works on the clip the person is watching, so the clip visibly makes progress. The background work (`gp serve`'s queue, the REFINE tab) scores the clips and tunes numbers with `gp model refine --lockstep`; when no number makes a clip match, the clip is stuck on that model. A change to how a mechanic works is made by Claude, in a git worktree of gameprinter, and every step of it is posted to the clip: what it is reading, and each attempt with the clip's score before and after, a trial preview and a keep button.
 
 Two writers post to the same record:

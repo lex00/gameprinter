@@ -637,6 +637,7 @@ pub const TABLE: &[Row] = &[
     r("loop resume", S, Rule::Refuse(PERSON_SETS_LOOP)),
     r("loop set", S, Rule::Refuse(PERSON_SETS_LOOP)),
     r("loop steps", S, Read),
+    r("loop health", S, Read),
     r("loop wrong", S, Rule::Refuse(PERSON_SETS_LOOP)),
 ];
 

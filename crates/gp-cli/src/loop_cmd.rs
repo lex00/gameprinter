@@ -23,6 +23,15 @@ pub enum LoopCmd {
     /// commands it runs. No two open steps touch the same thing. gp_run's
     /// `step` cites one of these ids. Reads files only.
     Steps,
+    /// Is the loop set up to run on its own? The checks the agent watching
+    /// the loop runs instead of doing the work: a gp serve answering for
+    /// the home on the published build, the runner on with a worker
+    /// command, no halt, the yes cards taken and none failing, no row
+    /// marked working with no worker on it, the games checkout clean
+    /// (local changes block every landing), and, when nothing runs, what
+    /// the loop waits on. Each problem says how to fix it. Exits 1 on a
+    /// problem. Reads only.
+    Health,
     /// Change the home's loop settings ($GP_HOME/loop.toml) and print them.
     /// With no flag, print them. Only the person runs this: gp_run refuses
     /// it, so an agent can't turn the loop's rules off.
@@ -194,6 +203,22 @@ fn steps_text(v: &Value) -> String {
 
 pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> {
     match cmd {
+        LoopCmd::Health => {
+            let v = health(paths);
+            let text = v["lines"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let bad = v["problems"].as_u64().unwrap_or(0) > 0;
+            let mut o = Outcome::ok(v, text);
+            if bad {
+                o.exit = 1;
+            }
+            Ok(o)
+        }
         LoopCmd::Steps => {
             let v = steps_json(paths, None);
             let text = steps_text(&v);
@@ -262,4 +287,246 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
             Ok(Outcome::ok(v, text))
         }
     }
+}
+
+/// The loop's health (`gp loop health`): each check's line, OK or PROBLEM
+/// with how to fix it, and the count of problems.
+fn health(paths: &gp_evidence::Paths) -> Value {
+    use std::fs;
+    use std::time::UNIX_EPOCH;
+    let home = &paths.home;
+    let now = gp_mcp::asks::now_ms();
+    let mut lines: Vec<String> = Vec::new();
+    let mut problems = 0u64;
+    let ok = |l: &mut Vec<String>, s: String| l.push(format!("OK       {s}"));
+    let bad = |l: &mut Vec<String>, n: &mut u64, s: String| {
+        *n += 1;
+        l.push(format!("PROBLEM  {s}"));
+    };
+    // The servers: each heartbeat's process alive, fresh, and started after
+    // the published gp was written (else it runs an older build).
+    // The published gp ($GP_HOME/bin/gp, what the gates publish).
+    let published = fs::metadata(home.join("bin").join("gp"))
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_millis() as u64);
+    let dir = gp_mcp::steps::loop_dir(home);
+    let mut live = 0;
+    for e in fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        if !(n.starts_with("runner") && n.ends_with(".json")) {
+            continue;
+        }
+        let Some(b) = fs::read(e.path())
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        else {
+            continue;
+        };
+        let pid = b["pid"].as_u64().unwrap_or(0);
+        if !gp_mcp::proc::alive(pid) {
+            continue;
+        }
+        live += 1;
+        let age = now.saturating_sub(b["at_ms"].as_u64().unwrap_or(0)) / 1000;
+        let started = std::process::Command::new("ps")
+            .args(["-o", "lstart=", "-p", &pid.to_string()])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+            .unwrap_or_default();
+        let started_ms = std::process::Command::new("date")
+            .args(["-j", "-f", "%a %b %d %T %Y", &started, "+%s"])
+            .output()
+            .ok()
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .trim()
+                    .parse::<u64>()
+                    .ok()
+            })
+            .map_or(0, |s| s * 1000);
+        if age > 30 {
+            bad(
+                &mut lines,
+                &mut problems,
+                format!("gp serve {pid}: its runner last looked {age} s ago (stuck?). Restart it."),
+            );
+        } else if started_ms > 0 && published > started_ms + 1000 {
+            bad(
+                &mut lines,
+                &mut problems,
+                format!(
+                    "gp serve {pid} runs an older gp than the one published (started {started}). Restart it on the published build."
+                ),
+            );
+        } else {
+            ok(
+                &mut lines,
+                format!(
+                    "gp serve {pid}: answering, on the published build{}",
+                    if b["agent"] == json!(true) {
+                        ", worker command set"
+                    } else {
+                        ", no worker command"
+                    }
+                ),
+            );
+        }
+    }
+    if live == 0 {
+        bad(&mut lines, &mut problems, "No gp serve runs for this home: start one (gp serve --port 7796 --games DIR --clip-agent claude).".into());
+    }
+    let s = gp_mcp::steps::settings(home);
+    if s.runner.on {
+        ok(
+            &mut lines,
+            format!(
+                "Runner on, at most {} workers{}",
+                s.runner.max_workers,
+                if s.games.is_empty() {
+                    String::new()
+                } else {
+                    format!(", games {}", s.games.join(", "))
+                }
+            ),
+        );
+    } else {
+        bad(
+            &mut lines,
+            &mut problems,
+            "The runner is off: gp loop set --runner on.".into(),
+        );
+    }
+    if s.runner.max_workers == 0 {
+        bad(
+            &mut lines,
+            &mut problems,
+            "The runner may start no worker (max 0): gp loop set --max-workers 1 or more.".into(),
+        );
+    }
+    if let Some(h) = crate::wrong::halt(home) {
+        bad(
+            &mut lines,
+            &mut problems,
+            format!(
+                "The loop is halted: {}",
+                crate::wrong::halted_json(&h)["says"].as_str().unwrap_or("")
+            ),
+        );
+    }
+    // The yes cards: taken within a minute, and none failing.
+    let mut waiting = 0;
+    for a in gp_mcp::asks::all(home) {
+        if gp_mcp::asks::is_yes(&a, now)
+            && now.saturating_sub(a["answered_ms"].as_u64().unwrap_or(0)) > 60_000
+        {
+            bad(
+                &mut lines,
+                &mut problems,
+                format!(
+                    "Card {}: the person said yes over a minute ago and no runner has taken it.",
+                    a["id"].as_str().unwrap_or("")
+                ),
+            );
+        }
+        if a["ran"]["state"] == json!("failed")
+            && now.saturating_sub(a["ran"]["done_ms"].as_u64().unwrap_or(0)) < 3_600_000
+        {
+            let why = a["ran"]["lines"]
+                .as_array()
+                .and_then(|l| {
+                    l.iter()
+                        .rev()
+                        .filter_map(Value::as_str)
+                        .find(|l| !l.starts_with("(ran in"))
+                })
+                .unwrap_or("")
+                .to_owned();
+            bad(
+                &mut lines,
+                &mut problems,
+                format!(
+                    "Card {} failed in the last hour: {}",
+                    a["id"].as_str().unwrap_or(""),
+                    crate::next::cut(&why, 160)
+                ),
+            );
+        }
+        if gp_mcp::asks::is_open(&a, now) {
+            waiting += 1;
+        }
+    }
+    // Rows marked working with no live worker on them.
+    let workers = gp_mcp::steps::workers(home);
+    let held: std::collections::BTreeSet<String> = workers
+        .iter()
+        .filter(|w| gp_mcp::steps::holds(w))
+        .flat_map(|w| w["step"]["touches"].as_array().cloned().unwrap_or_default())
+        .filter_map(|t| t.as_str().map(str::to_owned))
+        .collect();
+    let games = crate::roms_cmd::games_dir(None);
+    let mut asking = Vec::new();
+    for g in games
+        .as_deref()
+        .map(crate::next::games_in)
+        .unwrap_or_default()
+    {
+        if !(s.games.is_empty() || s.games.contains(&g)) {
+            continue;
+        }
+        let Ok(f) = crate::mechanic::session::queue_file(paths, &g) else {
+            continue;
+        };
+        for r in crate::mechanic::session::read_queue(&f) {
+            let row = r["mechanic"].as_str().unwrap_or("");
+            if r["status"] == json!("agent working") && !held.contains(&format!("row:{g}/{row}")) {
+                bad(
+                    &mut lines,
+                    &mut problems,
+                    format!(
+                        "{g}/{row} is marked agent working, and no worker is on it: set it from its last worker's report."
+                    ),
+                );
+            }
+            if r["status"] == json!("asking you") {
+                asking.push(format!("{g}/{row}"));
+            }
+        }
+        // The games checkout clean: a local change blocks every landing.
+        if let Some(d) = games.as_deref() {
+            let out = std::process::Command::new("git")
+                .args(["status", "--porcelain", "--", &g])
+                .current_dir(d)
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                .unwrap_or_default();
+            let n = out.lines().count();
+            if n > 0 {
+                bad(
+                    &mut lines,
+                    &mut problems,
+                    format!(
+                        "The games checkout has {n} local changes under {g}/: a landing there fails until they are committed through a gate or set aside."
+                    ),
+                );
+            } else {
+                ok(
+                    &mut lines,
+                    format!("The games checkout is clean under {g}/"),
+                );
+            }
+        }
+    }
+    let at_work = workers.iter().filter(|w| gp_mcp::steps::holds(w)).count();
+    if at_work > 0 {
+        ok(&mut lines, format!("{at_work} worker(s) at work"));
+    } else if waiting > 0 || !asking.is_empty() {
+        lines.push(format!("IDLE     No worker at work: the loop waits on the person ({waiting} card(s), rows asking: {})", if asking.is_empty() { "none".to_owned() } else { asking.join(", ") }));
+    } else {
+        lines.push("IDLE     No worker at work and nothing waits on the person: the quest log has no open item".into());
+    }
+    json!({"lines": lines, "problems": problems})
 }

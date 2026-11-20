@@ -96,7 +96,7 @@ fn connect_cmd(mut cmd: Command, work: &Path) -> Client {
     assert!(
         init["result"]["instructions"]
             .as_str()
-            .is_some_and(|i| i.contains("Call next at the start of every conversation")),
+            .is_some_and(|i| i.contains("call next at the start of every conversation")),
         "{init}"
     );
     c.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
@@ -227,7 +227,7 @@ fn an_agent_edits_previews_and_validates_moss_hop() {
     assert!(
         init["result"]["instructions"]
             .as_str()
-            .is_some_and(|i| i.contains("Call next at the start of every conversation")),
+            .is_some_and(|i| i.contains("call next at the start of every conversation")),
         "{init}"
     );
     assert!(
@@ -686,7 +686,7 @@ fn connect(home: &Path, work: &Path, rom: &Path, lifted: &Path) -> Client {
     assert!(
         init["result"]["instructions"]
             .as_str()
-            .is_some_and(|i| i.contains("Call next at the start of every conversation")),
+            .is_some_and(|i| i.contains("call next at the start of every conversation")),
         "{init}"
     );
     c.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
