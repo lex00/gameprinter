@@ -122,8 +122,21 @@ fn ancestors() -> &'static [String] {
     })
 }
 
+/// Whether a process name is a gp: `gp`, or a published build's own copy
+/// `gp-HASH` ($GP_HOME/bin/gp-4d3b7d33b42b, what a worker's gp mcp runs),
+/// so gp_run's commands from a worker aren't taken for its shell's.
 fn is_gp(comm: &str) -> bool {
-    comm == "gp" || comm.ends_with("/gp")
+    let name = comm.rsplit('/').next().unwrap_or(comm);
+    name == "gp"
+        || name
+            .strip_prefix("gp-")
+            .is_some_and(|h| !h.is_empty() && h.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+/// Whether gp's home is a test's, in the temp folder: the loop's guards
+/// don't hold for it (a worker running gp-cli's tests from its shell).
+pub fn test_home() -> bool {
+    std::env::var_os("GP_HOME").is_some_and(|h| in_temp(Path::new(&h)))
 }
 
 /// Whether a gp started this one, at any remove: gp serve's children, a
@@ -140,6 +153,9 @@ pub fn worker_shell_write() -> Option<String> {
     let step = std::env::var(STEP_ENV)
         .ok()
         .filter(|s| !s.trim().is_empty())?;
+    if test_home() {
+        return None;
+    }
     // A gp between this one and the worker's agent started it (gp_run's
     // commands, a script a gp command runs): the loop's own machinery.
     let up = ancestors();
@@ -183,6 +199,8 @@ pub const BEAT_FOR_MS: u64 = 20_000;
 pub fn beat(home: &Path, agent: bool) {
     let f = beat_file(home);
     let _ = std::fs::create_dir_all(loop_dir(home));
+    static CLEARED: std::sync::Once = std::sync::Once::new();
+    CLEARED.call_once(|| clear_ended_beats(home, crate::asks::now_ms(), crate::proc::alive_since));
     let v = serde_json::json!({
         "pid": std::process::id(),
         "at_ms": crate::asks::now_ms(),
@@ -192,6 +210,69 @@ pub fn beat(home: &Path, agent: bool) {
     if std::fs::write(&tmp, serde_json::to_vec(&v).unwrap_or_default()).is_ok() {
         let _ = std::fs::rename(&tmp, &f);
     }
+}
+
+/// How long an ended server's heartbeat is kept: gp serve's start reads
+/// the last hour's to tell a restart by hand (gp-cli trouble.rs).
+pub const ENDED_BEAT_KEPT_MS: u64 = 3_600_000;
+
+/// Removes the heartbeats of servers that ended over
+/// [`ENDED_BEAT_KEPT_MS`] ago: their process isn't running, or its pid
+/// was given to a newer one (`alive_since(pid, at_ms)` false), which
+/// `gp loop health` would otherwise one day read as a stuck runner.
+pub fn clear_ended_beats(home: &Path, now: u64, alive_since: impl Fn(u64, u64) -> bool) {
+    for e in std::fs::read_dir(loop_dir(home))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let n = e.file_name().to_string_lossy().into_owned();
+        if !(n.starts_with("runner") && n.ends_with(".json")) {
+            continue;
+        }
+        let Some(b) = std::fs::read(e.path())
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        else {
+            continue;
+        };
+        let pid = b["pid"].as_u64().unwrap_or(0);
+        let at = b["at_ms"].as_u64().unwrap_or(0);
+        if pid == u64::from(std::process::id()) {
+            continue;
+        }
+        if now.saturating_sub(at) > ENDED_BEAT_KEPT_MS && !alive_since(pid, at) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+/// `p` with its symlinks resolved, though it doesn't exist yet: its
+/// nearest existing folder resolved, the rest as given. A test's home
+/// (`TMP/home`, made by the first gp that writes it) must read as in the
+/// temp folder, which on macOS resolves to /private/var/folders.
+fn resolved(p: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut at = p;
+    loop {
+        if let Ok(c) = std::fs::canonicalize(at) {
+            return rest.iter().rev().fold(c, |c, n| c.join(n));
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(up), Some(n)) => {
+                rest.push(n.to_os_string());
+                at = up;
+            }
+            _ => return p.to_path_buf(),
+        }
+    }
+}
+
+/// Whether `home` is in the temp folder (a test's home).
+fn in_temp(home: &Path) -> bool {
+    let h = resolved(home);
+    let tmp = resolved(&std::env::temp_dir());
+    h.starts_with(&tmp) || h.starts_with("/tmp") || h.starts_with("/private/tmp")
 }
 
 /// Whether the runner check holds for calls on `home`: not in a gp a gp
@@ -207,10 +288,7 @@ fn checked(home: &Path) -> bool {
     {
         return false;
     }
-    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    let h = canon(home);
-    let tmp = canon(&std::env::temp_dir());
-    !(h.starts_with(&tmp) || h.starts_with("/tmp") || h.starts_with("/private/tmp"))
+    !in_temp(home)
 }
 
 /// Why the loop's runner isn't going for `home`, in words; None when it
@@ -329,6 +407,54 @@ pub fn current(config: &Config) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_ended_servers_heartbeat_is_cleared_after_the_hour() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path();
+        let dir = loop_dir(home);
+        std::fs::create_dir_all(&dir).unwrap();
+        let now = 10 * ENDED_BEAT_KEPT_MS;
+        let put = |name: &str, pid: u64, at: u64| {
+            std::fs::write(
+                dir.join(name),
+                serde_json::json!({"pid": pid, "at_ms": at, "agent": true}).to_string(),
+            )
+            .unwrap();
+        };
+        // 1 runs and beat just now; 2 ended long ago (or its pid went to
+        // a newer process); 3 ended within the hour; 4 runs, an old beat.
+        put("runner-1.json", 1, now - 1000);
+        put("runner-2.json", 2, now - 2 * ENDED_BEAT_KEPT_MS);
+        put("runner-3.json", 3, now - ENDED_BEAT_KEPT_MS / 2);
+        put("runner-4.json", 4, now - 2 * ENDED_BEAT_KEPT_MS);
+        put("runner.json", 5, now - 2 * ENDED_BEAT_KEPT_MS);
+        clear_ended_beats(home, now, |pid, _| pid == 1 || pid == 4);
+        let left = |n: &str| dir.join(n).exists();
+        assert!(left("runner-1.json"));
+        assert!(!left("runner-2.json"));
+        assert!(left("runner-3.json"));
+        assert!(left("runner-4.json"));
+        assert!(!left("runner.json"));
+    }
+
+    #[test]
+    fn a_home_not_made_yet_in_the_temp_folder_is_a_test_home() {
+        // gp-cli's code_reading tests give gp TMP/home before anything
+        // makes it; on macOS the temp folder resolves to /private/var.
+        let t = tempfile::tempdir().unwrap();
+        assert!(in_temp(&t.path().join("home")));
+        assert!(in_temp(&t.path().join("home").join("work").join("loop")));
+        assert!(in_temp(t.path()));
+        assert!(!in_temp(Path::new("/Users/someone/.gameprinter")));
+    }
+
+    #[test]
+    fn a_published_builds_copy_is_a_gp() {
+        assert!(is_gp("gp") && is_gp("/Users/x/.gameprinter/bin/gp"));
+        assert!(is_gp("/Users/x/.gameprinter/bin/gp-4d3b7d33b42b"));
+        assert!(!is_gp("gp-") && !is_gp("/usr/bin/gpg") && !is_gp("gp-mcp-helper"));
+    }
 
     #[test]
     fn the_settings_are_off_without_a_file_and_keep_what_is_saved() {

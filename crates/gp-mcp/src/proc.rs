@@ -37,6 +37,55 @@ pub fn alive(pid: u64) -> bool {
     }
 }
 
+/// When process `pid` started, in ms since the epoch (to the second); None
+/// when it isn't running or that can't be told here.
+pub fn started_ms(pid: u64) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        let o = Command::new("ps")
+            .args(["-o", "lstart=", "-p", &pid.to_string()])
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        let lstart = String::from_utf8_lossy(&o.stdout).trim().to_owned();
+        if lstart.is_empty() {
+            return None;
+        }
+        // BSD date (macOS), then GNU date (Linux).
+        [
+            vec!["-j", "-f", "%a %b %d %T %Y", lstart.as_str(), "+%s"],
+            vec!["-d", lstart.as_str(), "+%s"],
+        ]
+        .iter()
+        .find_map(|args| {
+            let o = Command::new("date")
+                .args(args)
+                .stderr(Stdio::null())
+                .output()
+                .ok()
+                .filter(|o| o.status.success())?;
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<u64>()
+                .ok()
+        })
+        .map(|s| s * 1000)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+/// Whether process `pid` is the one that wrote a record at `at_ms`: it is
+/// running and had started by then. The system gives a pid out again once
+/// its process ends, so a newer process on the same pid didn't write it.
+/// Where the start can't be told, running is enough.
+pub fn alive_since(pid: u64, at_ms: u64) -> bool {
+    alive(pid) && started_ms(pid).is_none_or(|s| s <= at_ms + 1000)
+}
+
 /// Starts `cmd` in a process group of its own, so [`stop_group`] can stop
 /// it and every process it starts. On Windows a new process group keeps
 /// the console's Ctrl+C from reaching it, as on unix.
@@ -128,6 +177,23 @@ mod tests {
         let pid = child.id();
         child.wait().unwrap();
         assert!(!alive(u64::from(pid)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pid_given_again_isnt_the_process_that_wrote_before_it_started() {
+        let me = u64::from(std::process::id());
+        let now = crate::asks::now_ms();
+        let started = started_ms(me).unwrap();
+        assert!(started <= now + 1000);
+        assert!(alive_since(me, now));
+        // A record written before this process started isn't its.
+        assert!(!alive_since(me, started.saturating_sub(60_000)));
+        let mut child = Command::new("true").spawn().unwrap();
+        let pid = u64::from(child.id());
+        child.wait().unwrap();
+        assert!(!alive_since(pid, now));
+        assert_eq!(started_ms(pid), None);
     }
 
     #[cfg(unix)]

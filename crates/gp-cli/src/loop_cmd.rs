@@ -446,28 +446,20 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
             continue;
         };
         let pid = b["pid"].as_u64().unwrap_or(0);
-        if !gp_mcp::proc::alive(pid) {
+        let at_ms = b["at_ms"].as_u64().unwrap_or(0);
+        // A pid given again to a newer process isn't the server that beat
+        // (gp serve 52176's heartbeat, hours old, read as a stuck runner).
+        if !gp_mcp::proc::alive_since(pid, at_ms) {
             continue;
         }
         live += 1;
-        let age = now.saturating_sub(b["at_ms"].as_u64().unwrap_or(0)) / 1000;
-        let started = std::process::Command::new("ps")
-            .args(["-o", "lstart=", "-p", &pid.to_string()])
-            .output()
-            .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
-            .unwrap_or_default();
-        let started_ms = std::process::Command::new("date")
-            .args(["-j", "-f", "%a %b %d %T %Y", &started, "+%s"])
-            .output()
-            .ok()
-            .and_then(|o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .trim()
-                    .parse::<u64>()
-                    .ok()
-            })
-            .map_or(0, |s| s * 1000);
+        let age = now.saturating_sub(at_ms) / 1000;
+        let started_ms = gp_mcp::proc::started_ms(pid).unwrap_or(0);
+        let started = if started_ms > 0 {
+            format!("{} s ago", now.saturating_sub(started_ms) / 1000)
+        } else {
+            "at a time ps doesn't say".to_owned()
+        };
         // The server's own file (serve/reload.rs): a server that moved
         // onto a new gp keeps its pid and ps start time, so its start is
         // the file's; while it waits to move, the file says what for.
