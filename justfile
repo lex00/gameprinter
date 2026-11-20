@@ -16,7 +16,7 @@ assets := gp_home / "work" / "assets" / "mosshop"
 
 # Fails unless the ROM-blocking pre-commit hook is on in this clone.
 _hook-enabled:
-    @[ "$(git config core.hooksPath)" = ".githooks" ] || { echo "The ROM-blocking hook isn't enabled. Run: just setup" >&2; exit 1; }
+    @h="$(git config core.hooksPath)"; [ "$h" = ".githooks" ] || cmp -s "$h/pre-commit" .githooks/pre-commit || { echo "The ROM-blocking hook isn't enabled. Run: just setup" >&2; exit 1; }
 
 # Turns on the ROM-blocking hook and installs the locked cargo.
 setup:
