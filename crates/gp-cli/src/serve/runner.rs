@@ -202,6 +202,7 @@ pub(crate) fn status(ctx: &Ctx) -> Value {
         "spending": s.runner.spending,
         "agent": matches!(mode, Mode::Command(_)),
         "says": says,
+        "kept": kept_says(&ctx.paths.home),
     })
 }
 
@@ -229,6 +230,9 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
             loop_state::beat(&ctx.paths.home, agent);
             if loop_state::settings(&ctx.paths.home).runner.on {
                 run_yeses(&ctx);
+                if crate::wrong::halt(&ctx.paths.home).is_none() {
+                    keep_clips(&ctx);
+                }
             }
             look(&ctx);
             std::thread::sleep(LOOK);
@@ -272,7 +276,6 @@ fn run_yeses(ctx: &Arc<Ctx>) {
         std::thread::spawn(move || {
             // One yes at a time: two gates at once would share the gate's
             // own tree.
-            static ONE: Mutex<()> = Mutex::new(());
             let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
             let mut args: Vec<String> = vec!["--json".into()];
             args.extend(
@@ -341,6 +344,185 @@ fn run_yeses(ctx: &Arc<Ctx>) {
             let _ = gp_mcp::asks::set_ran(&home, &id, state, &lines);
         });
     }
+}
+
+/// One gate the runner runs at a time (a yes, or the clips it keeps): two
+/// gates at once would share the gate's own tree.
+static ONE: Mutex<()> = Mutex::new(());
+/// How often the runner looks for clips the corpus hasn't.
+const KEEP_EVERY: Duration = Duration::from_secs(120);
+
+/// What the runner last took into a game's corpus on its own.
+fn kept_file(home: &Path, game: &str) -> PathBuf {
+    loop_state::loop_dir(home)
+        .join("kept")
+        .join(format!("{game}.json"))
+}
+
+/// The games whose clips the runner keeps: each game of the games
+/// checkout with a corpus and mechanic sessions in the home.
+fn keeping(home: &Path, games: &Path) -> Vec<String> {
+    let Ok(dirs) = fs::read_dir(home.join("mechanics")) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = dirs
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().to_str().map(str::to_owned))
+        .filter(|g| games.join(g).join("corpus.toml").is_file())
+        .collect();
+    out.sort();
+    out
+}
+
+/// The clips every recording and every worker makes go into the corpus
+/// with no card (owner, gate-keeps-clips): every [`KEEP_EVERY`], for each
+/// game with mechanic sessions, a dry `gp corpus import`, and when it
+/// would add clips, `gp model gate GAME --import`, which lands them only
+/// if no clip scores worse. It never changes or removes a clip already in
+/// the corpus (no --replaces, no --removes: those ask). A set of clips
+/// that failed isn't tried again until the sessions give another. What it
+/// did is in `work/loop/kept/GAME.json`, and the runner's status says it.
+fn keep_clips(ctx: &Arc<Ctx>) {
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+    static BUSY: AtomicBool = AtomicBool::new(false);
+    {
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        if last.is_some_and(|t| t.elapsed() < KEEP_EVERY) || BUSY.load(Ordering::SeqCst) {
+            return;
+        }
+        *last = Some(Instant::now());
+    }
+    BUSY.store(true, Ordering::SeqCst);
+    let ctx = ctx.clone();
+    std::thread::spawn(move || {
+        let home = &ctx.paths.home;
+        for game in keeping(home, &ctx.games) {
+            let dir = ctx.games.join(&game);
+            let Ok(o) = crate::corpus_import::run(
+                &crate::corpus_import::Args {
+                    game: &game,
+                    template: Some(&dir),
+                    from: Some(home),
+                    write: false,
+                    says: None,
+                    date: None,
+                    remove: &[],
+                    replace: &[],
+                    sessions: &[],
+                },
+                &ctx.paths,
+            ) else {
+                continue;
+            };
+            let added: Vec<String> = o.json["added"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|x| x.as_str().map(str::to_owned))
+                .collect();
+            if added.is_empty() {
+                continue;
+            }
+            let f = kept_file(home, &game);
+            let before: Value = fs::read(&f)
+                .ok()
+                .and_then(|b| serde_json::from_slice(&b).ok())
+                .unwrap_or(Value::Null);
+            if before["state"] == json!("failed") && before["added"] == json!(added) {
+                continue;
+            }
+            let gp = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("gp"));
+            let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+            let out = Command::new(&gp)
+                .args(["--json", "model", "gate"])
+                .arg(&dir)
+                .arg("--import")
+                .current_dir(&ctx.games)
+                .env("GP_HOME", home)
+                .env("GP_GAMES_DIR", &ctx.games)
+                .env("GP_NO_HINTS", "1")
+                .stdin(Stdio::null())
+                .output();
+            let (state, lines) = match out {
+                Ok(o) => {
+                    let v: Value = serde_json::from_slice(&o.stdout).unwrap_or(Value::Null);
+                    let lines: Vec<String> = v["lines"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|l| l.as_str().map(str::to_owned))
+                        .chain(
+                            v["lines"]
+                                .is_null()
+                                .then(|| String::from_utf8_lossy(&o.stderr).trim().to_owned())
+                                .filter(|s| !s.is_empty()),
+                        )
+                        .collect();
+                    let state = if !o.status.success() || v["verdict"] == json!("FAIL") {
+                        "failed"
+                    } else if v["landed"].is_string() {
+                        "landed"
+                    } else {
+                        "passed"
+                    };
+                    (state, lines)
+                }
+                Err(e) => ("failed", vec![format!("it couldn't start: {e}")]),
+            };
+            let keep = lines.len().saturating_sub(6);
+            let rec = json!({
+                "game": game,
+                "at_ms": gp_mcp::asks::now_ms(),
+                "added": added,
+                "state": state,
+                "lines": lines[keep..],
+            });
+            let _ = fs::create_dir_all(f.parent().unwrap_or(home));
+            let _ = fs::write(&f, serde_json::to_vec_pretty(&rec).unwrap_or_default());
+        }
+        BUSY.store(false, Ordering::SeqCst);
+    });
+}
+
+/// What the runner last took into each game's corpus, in words.
+fn kept_says(home: &Path) -> Vec<String> {
+    let Ok(dir) = fs::read_dir(loop_state::loop_dir(home).join("kept")) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = dir
+        .flatten()
+        .filter_map(|e| serde_json::from_slice::<Value>(&fs::read(e.path()).ok()?).ok())
+        .map(|v| {
+            let ids: Vec<&str> = v["added"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            let why = v["lines"]
+                .as_array()
+                .and_then(|l| l.last())
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let game = v["game"].as_str().unwrap_or("");
+            match v["state"].as_str().unwrap_or("") {
+                "landed" => format!(
+                    "{game}: took {} clip{} into the corpus on its own: {}.",
+                    ids.len(),
+                    if ids.len() == 1 { "" } else { "s" },
+                    ids.join(", ")
+                ),
+                "failed" => format!(
+                    "{game}: couldn't take {} into the corpus: {why}",
+                    ids.join(", ")
+                ),
+                _ => format!("{game}: gated {}: {why}", ids.join(", ")),
+            }
+        })
+        .collect();
+    out.sort();
+    out
 }
 
 /// One look: start what the plan says, when the runner is on, an agent

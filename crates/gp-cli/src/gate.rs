@@ -32,6 +32,8 @@ use crate::corpus_score::{CorpusCmd, lift_into};
 
 /// Tries before giving up on a tip that keeps moving.
 const TIP_TRIES: usize = 5;
+/// How a line of the gate's says a regression it let pass.
+const TOLERATED: &str = "tolerated: ";
 
 #[derive(Args)]
 pub struct GateArgs {
@@ -967,12 +969,24 @@ fn trial(
     } else {
         None
     };
-    if picture && let Some(w) = picture_worse(&base.rows, &rows) {
-        return fail(w, "picture");
+    // A clip held worse fails the change, unless the game's tolerate.toml
+    // names it with a reason; a tolerated one passes and is said.
+    let tolerate = match tolerances(&game) {
+        Ok(t) => t,
+        Err(why) => return fail(why, "tolerate"),
+    };
+    if picture {
+        let (fails, passes) = sort_out(picture_worse_each(&base.rows, &rows), &tolerate);
+        if let Some(w) = first_of(&fails) {
+            return fail(w, "picture");
+        }
+        lines.extend(passes.into_iter().map(|p| format!("{TOLERATED}{p}")));
     }
-    if let Some(w) = worse(&base.rows, &rows) {
+    let (fails, passes) = sort_out(worse_each(&base.rows, &rows), &tolerate);
+    if let Some(w) = first_of(&fails) {
         return fail(w, "corpus");
     }
+    lines.extend(passes.into_iter().map(|p| format!("{TOLERATED}{p}")));
     // The curves measured again under a mapping the patch changed: the
     // corpus's new curves, version and record land with it, in a commit of
     // their own.
@@ -1380,6 +1394,12 @@ fn gate_batch(c: &Ctx, a: &GateArgs, items: &[Item], rom: &[u8]) -> Result<Vec<O
                     json["first_baseline"] = json!(end.json);
                 }
                 json["batch"] = json!(n);
+                // The regressions the batch let pass, with their reasons.
+                json["tolerated"] = json!(
+                    said.iter()
+                        .filter_map(|l| l.strip_prefix(TOLERATED))
+                        .collect::<Vec<_>>()
+                );
                 let mut all = said.clone();
                 all.push(line);
                 json["lines"] = json!(all);
@@ -1855,11 +1875,28 @@ fn pairing_of(r: &Row) -> String {
         .unwrap_or_default()
 }
 
+#[cfg(test)]
 pub(crate) fn worse(base: &Rows, new: &Rows) -> Option<String> {
+    worse_each(base, new).into_iter().next().map(|(_, w)| w)
+}
+
+/// Every clip `new` holds worse than `base`, by ID, with how: a clip only
+/// one of them has is never worse.
+pub(crate) fn worse_each(base: &Rows, new: &Rows) -> Vec<(String, String)> {
+    let mut out = Vec::new();
     for (id, b) in base {
         let Some((_, n)) = new.iter().find(|(i, _)| i == id) else {
             continue;
         };
+        if let Some(w) = clip_worse(id, b, n) {
+            out.push((id.clone(), w));
+        }
+    }
+    out
+}
+
+fn clip_worse(id: &str, b: &Row, n: &Row) -> Option<String> {
+    {
         let at = |r: &Row| match &r.first {
             Some((f, of, p)) => format!(
                 ", first wrong at frame {f} of the clip (the original's {of}), {p}{}",
@@ -1907,7 +1944,17 @@ pub(crate) fn worse(base: &Rows, new: &Rows) -> Option<String> {
     None
 }
 
+#[cfg(test)]
 fn picture_worse(base: &Rows, new: &Rows) -> Option<String> {
+    picture_worse_each(base, new)
+        .into_iter()
+        .next()
+        .map(|(_, w)| w)
+}
+
+/// Every clip whose picture `new` holds on fewer frames than `base`.
+fn picture_worse_each(base: &Rows, new: &Rows) -> Vec<(String, String)> {
+    let mut out = Vec::new();
     for (id, b) in base {
         let Some((_, n)) = new.iter().find(|(i, _)| i == id) else {
             continue;
@@ -1925,14 +1972,103 @@ fn picture_worse(base: &Rows, new: &Rows) -> Option<String> {
                 && bt == nt
                 && ns < bs
             {
-                return Some(format!(
-                    "{id}: the picture's {layer} is the same on {ns} of {} frames, {bs} before",
-                    nt.as_u64().unwrap_or(0)
+                out.push((
+                    id.clone(),
+                    format!(
+                        "{id}: the picture's {layer} is the same on {ns} of {} frames, {bs} before",
+                        nt.as_u64().unwrap_or(0)
+                    ),
                 ));
+                break;
             }
         }
     }
-    None
+    out
+}
+
+/// The file in a game's folder that names the regressions the gate lets
+/// pass, each with its reason (docs/gate.md, "Tolerated"):
+///
+/// ```toml
+/// [[tolerate]]
+/// clip = "tapper.attract.*"
+/// why = "the board's one-frame sprite lag (issue #42)"
+/// ```
+pub(crate) const TOLERATE_FILE: &str = "tolerate.toml";
+
+/// A clip (an ID, or a pattern with `*`) the gate lets score worse, and
+/// the stated reason: a known lag, a choice the owner made.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Tolerated {
+    pub clip: String,
+    pub why: String,
+}
+
+/// The game's tolerated regressions; none without the file. A tolerance
+/// with no clip or no reason is refused, so every one says why.
+pub(crate) fn tolerances(game: &Path) -> std::result::Result<Vec<Tolerated>, String> {
+    let f = game.join(TOLERATE_FILE);
+    let Ok(text) = fs::read_to_string(&f) else {
+        return Ok(Vec::new());
+    };
+    let v: toml::Table =
+        toml::from_str(&text).map_err(|e| format!("{TOLERATE_FILE}: {}", e.message()))?;
+    let mut out = Vec::new();
+    for (k, x) in &v {
+        if k != "tolerate" {
+            return Err(format!(
+                "{TOLERATE_FILE}: `{k}` isn't known; it holds [[tolerate]] tables"
+            ));
+        }
+        for (n, t) in x.as_array().into_iter().flatten().enumerate() {
+            let get = |key: &str| {
+                t.get(key)
+                    .and_then(toml::Value::as_str)
+                    .map(str::trim)
+                    .unwrap_or("")
+                    .to_owned()
+            };
+            let (clip, why) = (get("clip"), get("why"));
+            if clip.is_empty() || why.is_empty() {
+                return Err(format!(
+                    "{TOLERATE_FILE}: tolerance {} needs a clip and a why: a regression passes only for a stated reason",
+                    n + 1
+                ));
+            }
+            out.push(Tolerated { clip, why });
+        }
+    }
+    Ok(out)
+}
+
+/// Regressions split into those that fail the change and those a
+/// tolerance lets pass, each said with its reason.
+pub(crate) fn sort_out(
+    worse: Vec<(String, String)>,
+    tolerated: &[Tolerated],
+) -> (Vec<String>, Vec<String>) {
+    let mut fails = Vec::new();
+    let mut passes = Vec::new();
+    for (id, w) in worse {
+        match tolerated.iter().find(|t| matches(&t.clip, &id)) {
+            Some(t) => passes.push(format!("{w}; tolerated: {}", t.why)),
+            None => fails.push(w),
+        }
+    }
+    (fails, passes)
+}
+
+/// The first regression, and how many more.
+fn first_of(fails: &[String]) -> Option<String> {
+    let w = fails.first()?;
+    Some(match fails.len() {
+        1 => w.clone(),
+        n => format!(
+            "{w} (and {} more clip{} worse)",
+            n - 1,
+            if n == 2 { "" } else { "s" }
+        ),
+    })
 }
 
 /// The clip IDs a `corpus.toml` names: a plan's `[[clip]]` table, or an
@@ -2346,6 +2482,46 @@ mod tests {
             changed_clips(tree, &files, old),
             vec![("g/corpus.toml".to_owned(), vec!["g.a.001".to_owned()])]
         );
+    }
+
+    #[test]
+    fn a_regression_passes_only_when_tolerated_with_a_reason() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(tolerances(d.path()), Ok(vec![]));
+        fs::write(
+            d.path().join(TOLERATE_FILE),
+            "[[tolerate]]\nclip = \"g.lag.*\"\nwhy = \"the board's sprite lag\"\n",
+        )
+        .unwrap();
+        let t = tolerances(d.path()).unwrap();
+        assert_eq!(t[0].clip, "g.lag.*");
+        let base: Rows = vec![
+            ("g.lag.001".into(), row(10, 10)),
+            ("g.a.001".into(), row(10, 10)),
+        ];
+        let new: Rows = vec![
+            ("g.lag.001".into(), row(10, 9)),
+            ("g.a.001".into(), row(10, 8)),
+        ];
+        assert_eq!(worse_each(&base, &new).len(), 2);
+        let (fails, passes) = sort_out(worse_each(&base, &new), &t);
+        assert_eq!(fails.len(), 1);
+        assert!(fails[0].starts_with("g.a.001: was 100%"), "{fails:?}");
+        assert!(
+            passes[0].ends_with("tolerated: the board's sprite lag"),
+            "{passes:?}"
+        );
+        let two = vec!["x".to_owned(), "y".to_owned()];
+        assert_eq!(first_of(&two).unwrap(), "x (and 1 more clip worse)");
+        // No reason, or a table it doesn't know: refused.
+        for bad in [
+            "[[tolerate]]\nclip = \"g.a.001\"\n",
+            "[[tolerate]]\nclip = \"g.a.001\"\nwhy = \"  \"\n",
+            "[[allow]]\nclip = \"g.a.001\"\nwhy = \"w\"\n",
+        ] {
+            fs::write(d.path().join(TOLERATE_FILE), bad).unwrap();
+            assert!(tolerances(d.path()).is_err(), "{bad}");
+        }
     }
 
     #[test]

@@ -28,8 +28,26 @@ In order, a try of a patch (or of a batch's patches, below) on the tip:
 | Loads | No ROM the package loads only to play (a `[[rom.entry]]` whose role isn't `scored`, or a template.toml `[[loads]]`) is named as template.toml's `[source]` or corpus.toml's `[target]` (the old `ju_rom.py`): no tool may score or gate on one |
 | Themes | Each theme's files against their pins |
 | Hook tests | When the patch changes the hook crate (or the package's Cargo.lock), the crate's own tests, built from the kit in the build sandbox for this machine (`cargo test -p gp-ext-game`, about 12 s cold) |
-| Corpus | Every clip scored and compared with the tip's: a clip at 100% stays there, no bar a clip met is lost, no clip that scored stops scoring. A patch to the model's `present` sections and themes alone is held to the picture too |
+| Corpus | Every clip scored and compared with the tip's: a clip at 100% stays there, no bar a clip met is lost, no clip that scored stops scoring. A patch to the model's `present` sections and themes alone is held to the picture too. Every clip held worse is listed, and any one fails the change unless the game's `tolerate.toml` names it ("Tolerated" below) |
 | Land | Committed in the gate's worktree and fast-forwarded onto the branch, else the branch's ref is moved if it is still at the tip scored |
+
+### Tolerated
+
+A clip may score worse on a change only for a stated reason: a known lag, a choice the owner made. The reason lives in the game's folder, in `tolerate.toml`, one table per clip (an ID, or a pattern with `*`):
+
+```toml
+[[tolerate]]
+clip = "tapper.attract.*"
+why = "the board's one-frame sprite lag (issue #42)"
+```
+
+A tolerance with no `clip` or no `why` fails the gate. The file is read as the patch leaves it, so a patch that adds a tolerance shows it in its diff, and lands only with the person's yes like any patch. Each regression a tolerance lets pass is a line of the gate's (`tolerated: tapper.attract.001: was 100% ..., tolerated: the board's one-frame sprite lag`) and is in `--json` as `tolerated`, so the card says it.
+
+### Clips go in on their own
+
+`gp model gate GAME --import` takes the clips the mechanic sessions have that the corpus hasn't into the corpus through the gate, and needs no yes from a tool (gp_run): a clip only added changes nothing already held, and the gate fails the import if any clip scores worse. With `--replaces` or `--removes` it changes clips already there and asks, as before.
+
+While gp serve's runner is on and the loop isn't halted, it does this itself every two minutes for each game with mechanic sessions: a dry `gp corpus import`, and when that would add clips, `gp model gate GAME --import`. So every clip the person records and every clip a worker makes in a session goes into the corpus with no card. A set of clips that failed isn't tried again until the sessions give another. What it did last is in `$GP_HOME/work/loop/kept/GAME.json`, and in the runner's status (`kept`).
 
 ### A new game
 

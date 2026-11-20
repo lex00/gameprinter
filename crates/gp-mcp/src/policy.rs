@@ -766,7 +766,15 @@ pub fn decide(row: &Row, given: &dyn Fn(&str) -> bool, values: &[(String, String
         Base::Write if netted(row.path) => Decision::RunHeld,
         Base::Write => Decision::Run { writes: true },
     };
+    // gp model gate --import takes the sessions' new clips into the corpus
+    // with no yes (owner, 2026-11-19): a clip only added changes nothing
+    // already held, and the gate fails the import if any clip scores worse.
+    // With --replaces or --removes it changes clips already there, and asks.
+    let keeps_clips = row.path == "model gate"
+        && given("import")
+        && !["replaces", "removes", "patch"].iter().any(|f| given(f));
     let decision = match row.rule {
+        _ if keeps_clips => Decision::Run { writes: true },
         Rule::Read => base(Base::Read),
         Rule::Write => base(Base::Write),
         Rule::Ask(_, free) if free.iter().any(|f| given(f)) => base(Base::Read),
@@ -1028,6 +1036,19 @@ mod tests {
             decide(gate, &given(&["dry-run"]), &[]),
             Decision::Run { writes: false }
         );
+        // Taking the sessions' new clips in needs no yes; changing or
+        // removing clips already in the corpus does.
+        assert_eq!(
+            decide(gate, &given(&["import"]), &[]),
+            Decision::Run { writes: true }
+        );
+        for with in ["replaces", "removes"] {
+            assert_eq!(
+                decide(gate, &given(&["import", with]), &[]),
+                Decision::NeedsYes(Ask::Publish),
+                "{with}"
+            );
+        }
         let generate = row("theme generate").unwrap();
         assert_eq!(
             decide(generate, &given(&[]), &[]),
