@@ -516,6 +516,7 @@ pub(crate) fn brief(setup: &Setup, step: &Value, wt: &Path, branch: &str, before
         format!("Run gp commands that write, land or publish with the gp_run tool only: from your shell they are refused. Reads may run in Bash as {gp} COMMAND ARGS, one command a call: no eval, no &&, no pipes. Before cargo in the worktree, run {gp} worker env loop-{id} --rust and set what it prints."),
         format!("Every gp_run call that writes, lands or publishes is this step: gp_run cites {id} for you and refuses any other step."),
         "A change lands only through a gate: gp model gate for a game, gp tool gate for the tool. A landing waits for the person's yes on their page; ask and wait, never work around it.".to_owned(),
+        "The step is the whole item: do what it needs now, as far as a card for the person's yes. If what is left is a landing, make the patch, dry-run it and raise the card in this step; never leave it to another step. Don't answer the person with an explanation in place of the work: when they say they don't understand, do the next thing and tell them in one line what is on their page.".to_owned(),
         "When the step is done, or you can't do it, stop with a short report: what you did, what you checked, and what is left.".to_owned(),
     ];
     if let Some((game, row)) = row_of(step) {
