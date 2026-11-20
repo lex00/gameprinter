@@ -693,10 +693,15 @@ function personPressed() {
 // Recording ------------------------------------------------------------
 
 let warming = null;
+// The last recording saved ({mechanic, n}): said beside RECORD and marked in
+// the clips list until the next recording starts.
+let saved = null;
 function startRecording() {
   if (mode !== "live" || sending) return;
   if (show.view === "solo") { note("RECORD records the original: pick another view to record."); return; }
   recording = { start: player.frame(0) };
+  saved = null;
+  drawClips();
   clipFor = session?.mechanic ?? null;
   markTarget();
   $("record").classList.add("on");
@@ -731,7 +736,10 @@ async function stopRecording(send = true) {
     const inputs = head + all.slice(r.start).join("\n") + "\n";
     const { n, again } = await api("api/clips", { path, start: r.start, inputs, note: "", mechanic });
     await api("api/talk", { text: `Here is clip ${n}.`, clips: [n], mechanic });
-    note(again ? `Clip ${n} of ${mechanic} was already handed off.` : `Clip ${n} sent to your agent (${mechanic}).`, 6000);
+    saved = { mechanic, n };
+    note(again
+      ? `Already saved: this is clip ${n} of ${mechanic}, under ${String(mechanic).toUpperCase()} in CLIPS below.`
+      : `Saved as clip ${n} of ${mechanic}: it is under ${String(mechanic).toUpperCase()} in CLIPS below, and your agent has it.`, 15000);
     await refreshLists(true);
   } catch (e) {
     note(`The clip didn't reach your agent: ${e.message ?? e}`, 10000);
@@ -768,8 +776,15 @@ function markTarget() {
     if (here) here.hidden = on;
     li.querySelector(".qto").textContent = on ?(recording ? "RECORDING INTO THIS ROW" : sending ? "SENDING TO THIS ROW" : "RECORD GOES HERE") : "";
   }
-  $("rec-to").textContent = to ? `${recording ? "INTO" : "TO"}: ${to.toUpperCase()}` : "";
+  const done = !recording && !sending && saved;
+  $("rec-to").textContent = done
+    ? `SAVED: CLIP ${saved.n} OF ${String(saved.mechanic).toUpperCase()}`
+    : to ? `${recording ? "INTO" : "TO"}: ${to.toUpperCase()}` : "";
+  $("rec-to").title = done
+    ? `Your last recording is clip ${saved.n} of ${saved.mechanic}, in CLIPS below; the next recording goes to ${to ?? "the open row"}`
+    : "The quest-log row a recording goes to: RECORD INTO THIS ROW on another row changes it";
   $("rec-to").classList.toggle("on", !!recording);
+  $("rec-to").classList.toggle("saved", !!done);
 }
 
 /** Talk turns of a row (from api/screen/clips), oldest first. */
@@ -955,7 +970,7 @@ function drawClips() {
   const box = $("clips");
   if (pressing) return;
   const shown = clip ? `${clip.mechanic}/${clip.n}` : "";
-  const key = JSON.stringify([clipsBy, shown]);  // talk included
+  const key = JSON.stringify([clipsBy, shown, saved]);  // talk included
   if (box.dataset.key === key) return;
   box.dataset.key = key;
   box.textContent = "";
@@ -965,7 +980,9 @@ function drawClips() {
     box.append(el("h3", "", g.mechanic.toUpperCase()));
     const ul = el("ul");
     for (const c of g.clips) {
-      const li = el("li", `${g.mechanic}/${c.n}` === shown ? "on" : "");
+      const just = saved && saved.mechanic === g.mechanic && Number(saved.n) === Number(c.n);
+      const li = el("li", [`${g.mechanic}/${c.n}` === shown ? "on" : "", just ? "saved" : ""].join(" ").trim());
+      if (just) li.append(el("span", "csaved", "JUST SAVED"));
       li.append(el("span", "cn", `CLIP ${c.n}`), `${((c.frames ?? 0) / fps).toFixed(1)} s `, el("span", "cby", `by ${c.by ?? "?"}${c.note ? `: ${c.note}` : ""}`));
       li.append(commentBox(li, g.mechanic, [c.n], `A comment on clip ${c.n} of ${g.mechanic}`));
       const said = (g.talk ?? []).filter((t) => (t.clips ?? []).includes(c.n) && !/^Here is clip \d+\.$/.test(t.text ?? ""));
