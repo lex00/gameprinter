@@ -33,7 +33,7 @@ use std::fs::{self, File};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -81,6 +81,22 @@ pub(crate) struct Setup {
 
 /// The live workers: a step id and its stop flag.
 static RUNNING: Mutex<BTreeMap<String, Arc<AtomicBool>>> = Mutex::new(BTreeMap::new());
+
+/// How many yeses run now, from claimed to their ask's result written.
+static YESES_RUNNING: AtomicUsize = AtomicUsize::new(0);
+/// The clip keeping's gates run now ([`keep_clips`]).
+static KEEPING: AtomicBool = AtomicBool::new(false);
+
+/// What the runner has at work now: its workers, the yeses it runs and
+/// whether the clip keeping runs. serve/reload.rs moves onto a new gp only
+/// once all are none.
+pub(crate) fn at_work() -> (usize, usize, bool) {
+    (
+        RUNNING.lock().unwrap_or_else(|e| e.into_inner()).len(),
+        YESES_RUNNING.load(Ordering::SeqCst),
+        KEEPING.load(Ordering::SeqCst),
+    )
+}
 
 fn running_ids() -> BTreeSet<String> {
     RUNNING
@@ -181,7 +197,9 @@ pub(crate) fn status(ctx: &Ctx) -> Value {
         .iter()
         .filter(|w| loop_state::holds(w))
         .count();
-    let says = if !s.runner.on {
+    let says = if let Some(w) = super::reload::waiting_words() {
+        w
+    } else if !s.runner.on {
         "The runner is off: nothing starts a worker. gp loop set --runner on turns it on."
             .to_owned()
     } else if mode == Mode::Off {
@@ -250,13 +268,17 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
             let agent = matches!(clip_agent::Settings::current(&ctx).mode, Mode::Command(_));
             loop_state::beat(&ctx.paths.home, agent);
             settle_card_rows(&ctx.paths.home);
-            if loop_state::settings(&ctx.paths.home).runner.on {
-                run_yeses(&ctx);
-                if crate::wrong::halt(&ctx.paths.home).is_none() {
-                    keep_clips(&ctx);
+            // Moving onto a newly published gp (serve/reload.rs): nothing
+            // new starts here; the new build takes it up.
+            if !super::reload::draining() {
+                if loop_state::settings(&ctx.paths.home).runner.on {
+                    run_yeses(&ctx);
+                    if crate::wrong::halt(&ctx.paths.home).is_none() {
+                        keep_clips(&ctx);
+                    }
                 }
+                look(&ctx);
             }
-            look(&ctx);
             std::thread::sleep(LOOK);
         }
     });
@@ -295,7 +317,16 @@ fn run_yeses(ctx: &Arc<Ctx>) {
             })
             .unwrap_or_else(|| ctx.repo.clone());
         let home = home.clone();
+        YESES_RUNNING.fetch_add(1, Ordering::SeqCst);
         std::thread::spawn(move || {
+            // Counted until its result is written, whatever happens.
+            struct Ran;
+            impl Drop for Ran {
+                fn drop(&mut self) {
+                    YESES_RUNNING.fetch_sub(1, Ordering::SeqCst);
+                }
+            }
+            let _ran = Ran;
             // One yes at a time: two gates at once would share the gate's
             // own tree.
             let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
@@ -594,15 +625,14 @@ fn keeping(home: &Path, games: &Path) -> Vec<String> {
 /// runner's status says it.
 fn keep_clips(ctx: &Arc<Ctx>) {
     static LAST: Mutex<Option<Instant>> = Mutex::new(None);
-    static BUSY: AtomicBool = AtomicBool::new(false);
     {
         let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
-        if last.is_some_and(|t| t.elapsed() < KEEP_EVERY) || BUSY.load(Ordering::SeqCst) {
+        if last.is_some_and(|t| t.elapsed() < KEEP_EVERY) || KEEPING.load(Ordering::SeqCst) {
             return;
         }
         *last = Some(Instant::now());
     }
-    BUSY.store(true, Ordering::SeqCst);
+    KEEPING.store(true, Ordering::SeqCst);
     let ctx = ctx.clone();
     std::thread::spawn(move || {
         let home = &ctx.paths.home;
@@ -689,7 +719,7 @@ fn keep_clips(ctx: &Arc<Ctx>) {
                 break;
             }
         }
-        BUSY.store(false, Ordering::SeqCst);
+        KEEPING.store(false, Ordering::SeqCst);
     });
 }
 

@@ -59,6 +59,7 @@ mod play;
 mod point;
 pub(crate) mod pointing;
 mod recordings;
+pub(crate) mod reload;
 mod resolve;
 pub(crate) mod runner;
 pub(crate) mod scenarios;
@@ -184,6 +185,8 @@ pub(crate) fn run(opts: &ServeOpts, paths: &Paths) -> Result<Outcome> {
     // The page answers the agent's asks for this home (gp_mcp::asks).
     let _ = gp_mcp::asks::mark_page_served(&ctx.paths.home, ctx.port);
     background::start_dispatcher(ctx.clone());
+    // Onto a newly published gp by itself, once nothing is at work.
+    reload::start(ctx.clone());
     // The games' scoreboards, measured again as they go out of date.
     crate::scoreboard::start(
         ctx.paths.home.clone(),
@@ -613,6 +616,17 @@ fn serve_one(ctx: &Ctx, conn: &TcpStream) -> std::io::Result<()> {
             .unwrap_or(0);
         return stream(conn, run, after);
     }
+    // Counted while answered, so a move onto a new gp waits for it.
+    let Some(_answering) = reload::Answering::begin() else {
+        return http::write_response(
+            conn,
+            &Response::error(
+                503,
+                "gp serve is moving onto a newly published gp; try again in a second",
+            ),
+            false,
+        );
+    };
     let res = handle(ctx, &req);
     http::write_response(conn, &res, req.method == "HEAD")
 }

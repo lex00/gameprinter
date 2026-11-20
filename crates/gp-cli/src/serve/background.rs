@@ -307,6 +307,16 @@ pub(crate) fn working_on(run: &Run) -> std::collections::BTreeSet<String> {
     with_live(run, |l| l.flight.values().map(|f| f.clip.clone()).collect())
 }
 
+/// How many background jobs run now, over every run (serve/reload.rs
+/// waits for none before it moves onto a new gp).
+pub(crate) fn jobs_in_flight() -> usize {
+    LIVE.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .map(|l| l.flight.len())
+        .sum()
+}
+
 /// The queue as the server knows it, for the loop's answer
 /// (crate::next): on or paused, the clips a job has now, and the error
 /// that stopped it.

@@ -468,12 +468,22 @@ fn checks(paths: &gp_evidence::Paths, games_dir: Option<&std::path::Path>) -> Va
                     .ok()
             })
             .map_or(0, |s| s * 1000);
+        // The server's own file (serve/reload.rs): a server that moved
+        // onto a new gp keeps its pid and ps start time, so its start is
+        // the file's; while it waits to move, the file says what for.
+        let own: Value = fs::read(crate::serve::reload::file(home, pid as u32))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or(Value::Null);
+        let started_ms = own["started_ms"].as_u64().unwrap_or(started_ms);
         if age > 30 {
             bad(
                 &mut lines,
                 &mut problems,
                 format!("gp serve {pid}: its runner last looked {age} s ago (stuck?). Restart it."),
             );
+        } else if let Some(says) = own["moving"]["says"].as_str() {
+            ok(&mut lines, format!("gp serve {pid}: {says}"));
         } else if started_ms > 0 && published > started_ms + 1000 {
             bad(
                 &mut lines,

@@ -301,14 +301,14 @@ const RESTARTED: &str = "GP_MECHANIC_RESTARTED";
 
 /// What `bin/gp` resolves to and when that file was written: a change
 /// means a new build was published.
-fn published_id(link: &Path) -> Option<(std::path::PathBuf, std::time::SystemTime)> {
+pub(crate) fn published_id(link: &Path) -> Option<(std::path::PathBuf, std::time::SystemTime)> {
     let real = fs::canonicalize(link).ok()?;
     let when = fs::metadata(&real).ok()?.modified().ok()?;
     Some((real, when))
 }
 
 /// Whether `bin --version` exits 0 within ten seconds.
-fn runs(bin: &Path) -> bool {
+pub(crate) fn runs(bin: &Path) -> bool {
     let Ok(mut child) = std::process::Command::new(bin)
         .arg("--version")
         .stdout(std::process::Stdio::null())
@@ -369,7 +369,7 @@ fn restart(srv: &Server, bin: &Path, a: &Start) -> anyhow::Error {
 }
 
 #[cfg(unix)]
-fn exec(mut c: std::process::Command) -> anyhow::Error {
+pub(crate) fn exec(mut c: std::process::Command) -> anyhow::Error {
     use std::os::unix::process::CommandExt as _;
     anyhow::Error::new(c.exec())
 }
@@ -378,7 +378,7 @@ fn exec(mut c: std::process::Command) -> anyhow::Error {
 /// build couldn't bind the port this one holds, so --follow says so and
 /// stays on this build.
 #[cfg(not(unix))]
-fn exec(c: std::process::Command) -> anyhow::Error {
+pub(crate) fn exec(c: std::process::Command) -> anyhow::Error {
     let _ = c;
     anyhow::anyhow!(
         "this system can't restart a server in place; stop gp mechanic and start it again"
