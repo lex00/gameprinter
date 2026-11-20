@@ -248,6 +248,24 @@ pub struct Board {
     /// byte landed), the latch and the byte. What [`crate::ssio`] needs to
     /// sound as this machine does. Not part of the state.
     pub latches: Option<Vec<(Attotime, u8, u8)>>,
+    /// Random draws to force on the main CPU, waiting in order
+    /// ([`Mcr::force_draws`]). A run input, not part of the state.
+    pub forces: Vec<Force>,
+    /// The forces that fired in the frame being run, in order. Cleared when
+    /// a frame starts; not part of the state.
+    pub forced: Vec<Force>,
+}
+
+/// A random draw forced on the main CPU: the next time it is about to run
+/// the instruction at `pc`, A becomes `value`. A Z80 game's random routine
+/// returns its number in A, so `pc` is where a call of it comes back to
+/// (the instruction after the `call`), and the caller takes `value` as the
+/// routine's number. Nothing else changes: the game's own random register
+/// steps as it would. Each force fires once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Force {
+    pub pc: u16,
+    pub value: u8,
 }
 
 /// What an access did.
@@ -313,6 +331,16 @@ impl Board {
     /// Whether anything watches the CPUs between instructions.
     fn watched(&self) -> bool {
         self.trace.is_some() || self.events.is_some() || self.accesses.is_some()
+    }
+
+    /// The first waiting force at the main CPU's `pc`, fired: A set to its
+    /// value.
+    fn force(&mut self, cpu: &mut Z80) {
+        if let Some(k) = self.forces.iter().position(|f| f.pc == cpu.pc) {
+            let f = self.forces.remove(k);
+            cpu.af = (cpu.af & 0x00ff) | (u16::from(f.value) << 8);
+            self.forced.push(f);
+        }
     }
 
     /// The instruction hook: the access log's PC, an interrupt's event and
@@ -634,7 +662,10 @@ impl Z80Bus for MainBus<'_> {
         }
         v
     }
-    fn instruction(&mut self, cpu: &Z80) {
+    fn instruction(&mut self, cpu: &mut Z80) {
+        if !self.0.forces.is_empty() {
+            self.0.force(cpu);
+        }
         self.0.before_instruction(MAIN, cpu);
     }
     fn reti(&mut self, icount: &mut i32) {
@@ -677,7 +708,7 @@ impl Z80Bus for SsioBus<'_> {
         }
         v
     }
-    fn instruction(&mut self, cpu: &Z80) {
+    fn instruction(&mut self, cpu: &mut Z80) {
         self.0.before_instruction(SSIO, cpu);
     }
     fn reti(&mut self, _icount: &mut i32) {}
@@ -765,6 +796,8 @@ impl Mcr {
             accesses: None,
             cur_pc: [0; 2],
             latches: None,
+            forces: Vec::new(),
+            forced: Vec::new(),
         };
         // The screen's configure(): VBLANK starts a frame from now, and
         // since this is line 0, reset_partial_updates sets the line-0 tick.
@@ -824,6 +857,21 @@ impl Mcr {
         board.cocktail_flip = false;
     }
 
+    /// Adds random draws to force, after any still waiting ([`Force`]).
+    pub fn force_draws(&mut self, forces: impl IntoIterator<Item = Force>) {
+        self.board.forces.extend(forces);
+    }
+
+    /// The forces still waiting.
+    pub fn forces_waiting(&self) -> &[Force] {
+        &self.board.forces
+    }
+
+    /// The forces that fired in the last frame run.
+    pub fn forced(&self) -> &[Force] {
+        &self.board.forced
+    }
+
     /// Frames run since power-on.
     pub fn frame(&self) -> u64 {
         self.frame
@@ -844,6 +892,7 @@ impl Mcr {
     pub fn step(&mut self, controls: Controls) {
         self.board.ports = controls.ports();
         self.board.polled = false;
+        self.board.forced.clear();
         self.board.ay_writes.clear();
         self.board.sound.written.clear();
         self.board.frame_start = self.board.sched.basetime;
@@ -1535,6 +1584,41 @@ mod tests {
             "{e}"
         );
         assert!(m.restore(&snap).is_ok());
+    }
+
+    /// A forced draw sets A where the random routine's call comes back, so
+    /// the caller keeps the forced number; it fires once, in the frame it
+    /// lands in, and the routine's own register steps as it would. Without
+    /// it the number is the routine's.
+    #[test]
+    fn a_forced_draw_is_the_number_the_caller_gets() {
+        let rom = crate::testrom::drawing();
+        let mut free = Mcr::power_on(&rom);
+        free.step(Controls::default());
+        assert_eq!((free.peek(0xe000), free.peek(0xe002)), (0xff, 0xff));
+        assert!(free.forced().is_empty());
+
+        let mut m = Mcr::power_on(&rom);
+        let f = Force {
+            pc: 0x0006,
+            value: 0x5a,
+        };
+        m.force_draws([f]);
+        m.step(Controls::default());
+        assert_eq!((m.peek(0xe000), m.peek(0xe002)), (0x5a, 0xff));
+        assert_eq!(m.forced(), &[f]);
+        assert!(m.forces_waiting().is_empty());
+        m.step(Controls::default());
+        assert!(m.forced().is_empty());
+
+        // A force at an address the program never reaches waits.
+        let mut w = Mcr::power_on(&rom);
+        w.force_draws([Force {
+            pc: 0x0100,
+            value: 1,
+        }]);
+        w.step(Controls::default());
+        assert_eq!((w.peek(0xe000), w.forces_waiting().len()), (0xff, 1));
     }
 
     #[test]

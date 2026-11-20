@@ -103,6 +103,25 @@ pub fn busy() -> Romset {
     romset(main, ssio)
 }
 
+/// A main program that draws one random number and stops: it calls a
+/// made-up random routine at 0010 (`ld a,(e002) / rlca / ld (e002),a /
+/// ret`), stores the number it returns at `e000` and loops on itself. The
+/// call is at 0003, so the number lands in A at 0006. Work RAM starts at
+/// 0xff, so the routine returns 0xff.
+pub fn drawing() -> Romset {
+    let main: &[u8] = &[
+        // 0000: ld sp,e7f0 ; call 0010
+        0x31, 0xf0, 0xe7, 0xcd, 0x10, 0x00, //
+        // 0006: ld (e000),a ; jr $
+        0x32, 0x00, 0xe0, 0x18, 0xfe, //
+        // 000b..000f: nops
+        0, 0, 0, 0, 0, //
+        // 0010: ld a,(e002) ; rlca ; ld (e002),a ; ret
+        0x3a, 0x02, 0xe0, 0x07, 0x32, 0x02, 0xe0, 0xc9,
+    ];
+    romset(main, &[0x18, 0xfe])
+}
+
 /// A main program for the static harvest, as code at each address. The
 /// reset sets up IM 2 with I = 0 and the CTC vector $80; channel 0's
 /// handler counts frames in E000; the main loop waits for it, walks 4

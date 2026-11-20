@@ -93,6 +93,16 @@ The run decides recall: a site the input never reaches can't be found, so find w
 
 So Tapper has one random generator, a shift register at $E390 mixed with R, and every number the game takes from it goes through $5FAC. Because R counts instructions, a model of Tapper's draws needs the number of instructions run, which only the original gives exactly: the draws should be taken from the original (`[[draws]]` with `score_draws`) rather than computed.
 
+## Setting a draw on purpose
+
+Scoring with the original's draws makes the model choose as the original did; a probe can also choose for the original. On an arcade original, the probe step `draw SITE V` (`gp mechanic probe`, crates/gp-cli/src/mechanic/probe.rs) makes the game's next draw at SITE the byte V. gp-arcade sets A to V where the site's call of the random routine comes back (`Mcr::force_draws`, `gp_arcade::mcr::Force`), so the caller takes V as the routine's number and the game's own register (Tapper's $E390) steps as it would. A site after an `ld a,r` or `ld a,i` is set the same way, after the load. A site that reads its byte from RAM can't be set this way and isn't offered (`lockstep::force_pcs` lists the ones that can). The run reports the frame each set draw landed in, and a `draw` whose site the game never drew at before the probe ended.
+
+Tapper has one generator, and every number goes through $5FAC (the register $E390 mixed with the Z80's R register at $5FBD), so its sites are the calls of $5FAC that the mapping names: `arrival_wait` (a new customer's first wait), `customer_wait_start`, `pushed_drink`, `throw_wait`, `tip_show_pick` and the rest. A draw is the number the caller gets (0 to the A it asked with), so V is that number, as the script's lines give it. `draw arrival_wait 0` gives the next new customer the shortest first wait (16 frames, the site's 0 to 16 plus 16).
+
+The model takes the same numbers by recording the draws from the original as scoring does (`score_draws`): the recording reads A after the force, so a script made from a forced run holds the forced values.
+
+A clip keeps only its inputs, so it would replay from power-on with the game's own draws: `--save` keeps no clip of a cell whose draws were set. For a recording to keep them, its clip would carry the set draws (frame, site and value, as this script's lines), and every replay of the clip on the original (the tape, the start cache, scoring, the screen page's original) would force them again. That, and a control on the screen page to set a draw, are not built yet.
+
 ## Text form
 
 ```

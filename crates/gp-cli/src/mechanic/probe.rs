@@ -13,6 +13,7 @@
 //! | `repeat K: STEP, STEP` | The steps, K times |
 //! | `replay_until COND [max N]` | Plays the base's own inputs on until the condition holds |
 //! | `mark` | Measures start here, not at the probe's start |
+//! | `draw SITE V` | The game's next random draw at SITE (a `[[draws]]` site of its mapping.toml) is V, on an arcade original: A is set to V where the site's call of the random routine comes back ([`gp_arcade::mcr::Force`]). The run says the frame each set draw landed in; `--save` keeps no clip of such a cell |
 //!
 //! A sweep names variables and their values, and `rows` names an asset
 //! whose rows (lifted from the ROM by the template's asset map) give more:
@@ -90,6 +91,9 @@ pub(crate) struct Board {
     space: u32,
     /// An arcade log's set and columns, for the logs saved; none on the NES.
     pub(crate) arcade: Option<ArcadeLayout>,
+    /// The random draw sites a `draw SITE V` step can force, by name: the
+    /// address A is set at ([`crate::lockstep::force_pcs`]). Arcade only.
+    pub(crate) draws: BTreeMap<String, u16>,
 }
 
 impl Board {
@@ -103,6 +107,7 @@ impl Board {
             two: true,
             space: 0x800,
             arcade: None,
+            draws: BTreeMap::new(),
         }
     }
 
@@ -120,7 +125,40 @@ impl Board {
                 system: system.to_owned(),
                 columns: String::from_utf8_lossy(ARCADE_ORDER).into_owned(),
             }),
+            draws: BTreeMap::new(),
         }
+    }
+
+    /// The board with the draw sites of the game's state mapping in
+    /// `game_dir`, at their addresses in the ROM's set, when the original
+    /// is an arcade board and the mapping names any.
+    pub(crate) fn with_draws(mut self, game_dir: &Path, rom: &[u8]) -> Result<Self> {
+        let Some(set) = self.arcade.as_ref().map(|a| a.system.clone()) else {
+            return Ok(self);
+        };
+        let file = game_dir.join(gp_interp::mapping::MAPPING_FILE);
+        let Ok(text) = fs::read_to_string(&file) else {
+            return Ok(self);
+        };
+        let mapping = gp_interp::mapping::Mapping::parse(&text)
+            .map_err(|e| anyhow::anyhow!("{}: {e}", file.display()))?
+            .for_set(&set);
+        if mapping.draws.is_empty() {
+            return Ok(self);
+        }
+        let romset =
+            gp_arcade::romset::Romset::from_zip(rom).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let t = gp_arcade::Mcr::power_on(&romset);
+        self.draws = crate::lockstep::force_pcs(&mapping, |a| t.peek(a));
+        Ok(self)
+    }
+
+    /// The site a forced draw at `pc` stands for.
+    fn site_at(&self, pc: u16) -> String {
+        self.draws
+            .iter()
+            .find(|&(_, &p)| p == pc)
+            .map_or_else(|| format!("{pc:#06x}"), |(s, _)| s.clone())
     }
 
     /// The board the ROM is for.
@@ -238,6 +276,9 @@ pub(crate) fn step(o: &mut OriginalRuntime, f: &InputFrame) -> Result<()> {
     .map_err(anyhow::Error::msg)?;
     Ok(())
 }
+/// Why `--save` keeps no clip of a cell whose draws a `draw` step set.
+const NOT_KEPT: &str = "its random draws were set by `draw` steps, and a clip keeps only its inputs, so it would play other draws";
+
 /// The most frames a `walk_to` or `until` step holds when it names no max.
 const STEP_MAX: usize = 600;
 
@@ -819,6 +860,9 @@ struct Ran {
     unreached: Option<String>,
     /// Each measure, filled for the cell, and its value.
     values: Vec<(String, Value)>,
+    /// [`Played::forced`] and [`Played::unforced`].
+    forced: Vec<(usize, String, u8)>,
+    unforced: Vec<String>,
 }
 
 /// One played cell: its inputs from `at` and RAM after each of its frames.
@@ -829,6 +873,11 @@ pub(crate) struct Played {
     pub unreached: Option<String>,
     /// Where the measures start: the last `mark` step's frame (from `at`).
     pub mark: usize,
+    /// The draws `draw` steps forced: the played frame each landed in
+    /// (counted from 1, from `at`), the site and the value.
+    pub forced: Vec<(usize, String, u8)>,
+    /// The `draw` steps' sites whose draw never came.
+    pub unforced: Vec<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -849,14 +898,20 @@ pub(crate) fn play(
     // as `gp trace frame` numbers them.
     let mut ram = vec![layout.row(&o)?];
     let mut unreached = None;
-    let run = |o: &mut OriginalRuntime,
-               f: InputFrame,
-               inputs: &mut Vec<InputFrame>,
-               ram: &mut Vec<Vec<u8>>|
+    let mut forced = Vec::new();
+    let mut run = |o: &mut OriginalRuntime,
+                   f: InputFrame,
+                   inputs: &mut Vec<InputFrame>,
+                   ram: &mut Vec<Vec<u8>>|
      -> Result<()> {
         step(o, &f)?;
         inputs.push(f);
         ram.push(layout.row(o)?);
+        if let OriginalRuntime::Arcade(r) = o {
+            for d in r.mcr().forced() {
+                forced.push((inputs.len(), board.site_at(d.pc), d.value));
+            }
+        }
         Ok(())
     };
     for f in tail {
@@ -896,6 +951,26 @@ pub(crate) fn play(
                 }
             }
             Some("mark") => mark = ram.len() - 1,
+            Some("draw") => {
+                let [_, site, v] = t else {
+                    bail!("{s}: draw SITE V");
+                };
+                let pc = *board.draws.get(*site).with_context(|| {
+                    let known: Vec<&str> = board.draws.keys().map(String::as_str).collect();
+                    if known.is_empty() {
+                        format!("{s}: the game's mapping.toml names no draw site a probe can set (an arcade game's [[draws]] at a call of its random routine)")
+                    } else {
+                        format!("{s}: no draw site {site}; the sites are {}", known.join(", "))
+                    }
+                })?;
+                let value = u8::try_from(num(v)?)
+                    .map_err(|_| anyhow::anyhow!("{s}: a draw is a byte, 0 to 255"))?;
+                let OriginalRuntime::Arcade(r) = &mut o else {
+                    bail!("{s}: a forced draw needs an arcade original");
+                };
+                r.mcr_mut()
+                    .force_draws([gp_arcade::mcr::Force { pc, value }]);
+            }
             Some("replay_until") => {
                 let c = cond(names, &t[1..])?;
                 let mut k = 0;
@@ -951,11 +1026,22 @@ pub(crate) fn play(
             run(&mut o, press(0), &mut inputs, &mut ram)?;
         }
     }
+    let unforced = match &o {
+        OriginalRuntime::Arcade(r) => r
+            .mcr()
+            .forces_waiting()
+            .iter()
+            .map(|d| board.site_at(d.pc))
+            .collect(),
+        _ => Vec::new(),
+    };
     Ok(Played {
         inputs,
         ram,
         unreached,
         mark,
+        forced,
+        unforced,
     })
 }
 
@@ -1185,7 +1271,7 @@ fn game_and_rom(paths: &Paths, a: &Args) -> Result<(PathBuf, Vec<u8>)> {
 pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
     let (game_dir, rom) = game_and_rom(paths, a)?;
     let (file, f) = load(&game_dir, a.file)?;
-    let board = Board::of_rom(&rom)?;
+    let board = Board::of_rom(&rom)?.with_draws(&game_dir, &rom)?;
     let names = names_of(&board, &f);
     let rom_sha = crate::roms::sha256_of(&rom)?;
     let chosen: Vec<&Probe> = f
@@ -1248,6 +1334,8 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
                         inputs: played.inputs,
                         unreached: played.unreached,
                         values,
+                        forced: played.forced,
+                        unforced: played.unforced,
                     })
                 };
                 go().map_err(|e| format!("{e:#}"))
@@ -1291,6 +1379,23 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
             if let Some(u) = &played.unreached {
                 text.push_str(&format!("  {label}the step `{u}` ran out of frames\n"));
             }
+            for (fr, site, v) in &played.forced {
+                let fr = at + fr;
+                text.push_str(&format!("  {label}draw {site} set to {v} on frame {fr}\n"));
+            }
+            for site in &played.unforced {
+                text.push_str(&format!(
+                    "  {label}draw {site}: the game made no draw there before the probe ended\n"
+                ));
+            }
+            let forced_json: Vec<Value> = played
+                .forced
+                .iter()
+                .map(|(fr, site, v)| json!({"frame": at + fr, "site": site, "value": v}))
+                .collect();
+            // A clip plays from power-on on its inputs alone, so a cell
+            // whose draws were set wouldn't play the same as a clip.
+            let keeps = played.forced.is_empty() && played.unforced.is_empty();
             // The saved clip it reproduces, if any.
             let mut clip_json = Value::Null;
             let saving = Saving {
@@ -1309,11 +1414,15 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
                         d.as_deref().unwrap_or("the same inputs from power-on")
                     ));
                     clip_json = json!({"session": s, "clip": n, "same": d.is_none(), "differs": d});
+                } else if a.save && !keeps {
+                    text.push_str(&format!("  {label}not saved: {NOT_KEPT}\n"));
                 } else if a.save {
                     let n = saving.save(s, &base, &played.inputs, Some(n), &p.note)?;
                     text.push_str(&format!("  {label}saved as {s} clip {n}\n"));
                     clip_json = json!({"session": s, "clip": n, "saved": true});
                 }
+            } else if a.save && p.session.is_some() && !keeps {
+                text.push_str(&format!("  {label}not saved: {NOT_KEPT}\n"));
             } else if a.save
                 && let Some(s) = &p.session
             {
@@ -1325,6 +1434,7 @@ pub(crate) fn run(paths: &Paths, a: &Args) -> Result<Outcome> {
             cells.push(json!({
                 "cell": kv, "frames": played.inputs.len(), "unreached": played.unreached,
                 "measures": ms, "clip": clip_json,
+                "forced": forced_json, "unforced": played.unforced,
             }));
         }
         out.push(json!({"id": p.id, "at": at, "cells": cells}));
@@ -1541,6 +1651,54 @@ mod tests {
         .unwrap();
         assert_eq!(l.addrs, vec![0xe0f0, 0xe100, 0xe200]);
         assert!(addr(&w(), "0x900").is_err());
+    }
+
+    /// On a made-up program that draws one number (a call of its random
+    /// routine at 0003): a mapping site at the call, or at the instruction
+    /// after it, is set at 0006; `draw pick 90` makes the number the
+    /// program stores 90 and says the frame it landed in; a draw the game
+    /// never makes is reported; a site the mapping hasn't is refused with
+    /// the ones it has.
+    #[test]
+    fn a_draw_step_sets_the_number_the_game_draws() {
+        let set = gp_arcade::testrom::drawing();
+        let t = gp_arcade::Mcr::power_on(&set);
+        let mapping = gp_interp::mapping::Mapping::parse(
+            "platform = \"arcade\"\nschema = 22\nmodel = \"m\"\nsource = \"m\"\n\
+             description = \"made up\"\nalign = \"polled\"\nfield = []\n\
+             [[draws]]\nsite = \"pick\"\npc = 0x0003\nram = 0xE002\n\
+             [[draws]]\nsite = \"after\"\npc = 0x0006\nram = 0xE002\n\
+             [[draws]]\nsite = \"read\"\npc = 0x0010\nram = 0xE002\n",
+        )
+        .unwrap();
+        let pcs = crate::lockstep::force_pcs(&mapping, |a| t.peek(a));
+        assert_eq!(
+            pcs,
+            BTreeMap::from([("after".to_string(), 6u16), ("pick".to_string(), 6u16)])
+        );
+        let mut board = Board::arcade("test");
+        board.draws = BTreeMap::from([("pick".to_string(), 6u16)]);
+        let names = Names {
+            watch: BTreeMap::from([("n".to_string(), 0xe000u16)]),
+            space: board.space,
+        };
+        let layout = layout_of(&board, &names, &["value n at 1".into()]).unwrap();
+        let run = |steps: &[&str]| {
+            let o = OriginalRuntime::Arcade(gp_arcade::protocol::ArcadeRuntime::load(&set));
+            let steps: Vec<String> = steps.iter().map(|s| (*s).to_owned()).collect();
+            play(o, &board, &names, &layout, &[], &[], &steps, None)
+        };
+        let p = run(&["draw pick 90", ". 2"]).unwrap();
+        assert_eq!(p.forced, vec![(1, "pick".to_string(), 90)]);
+        assert!(p.unforced.is_empty());
+        assert_eq!(layout.get(&p.ram[2], 0xe000), 90);
+        let free = run(&[". 2"]).unwrap();
+        assert_eq!(layout.get(&free.ram[2], 0xe000), 0xff);
+        // The game draws once: a second draw waits to the end.
+        let p = run(&["draw pick 1", ". 1", "draw pick 2", ". 1"]).unwrap();
+        assert_eq!(p.unforced, vec!["pick".to_string()]);
+        let e = run(&["draw bar 1"]).err().unwrap();
+        assert!(e.to_string().contains("the sites are pick"), "{e}");
     }
 
     /// With a real romset ($GP_GAME_DIR's first oracle set) on this machine: a made-up probe

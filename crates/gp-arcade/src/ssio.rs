@@ -325,7 +325,7 @@ impl Z80Bus for Bus {
     fn irq_ack(&mut self, _icount: &mut i32) -> i32 {
         self.irq.ack_vector()
     }
-    fn instruction(&mut self, _cpu: &Z80) {}
+    fn instruction(&mut self, _cpu: &mut Z80) {}
     fn reti(&mut self, _icount: &mut i32) {}
 }
 

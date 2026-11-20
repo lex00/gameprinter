@@ -41,9 +41,11 @@ pub trait Z80Bus {
     fn reti(&mut self, icount: &mut i32);
     /// Called before each instruction (MAME's debugger hook), for tracing:
     /// the CPU as it is before the instruction, `pc` at its first byte and
-    /// `icount` the cycles left in the timeslice.
+    /// `icount` the cycles left in the timeslice. The bus may change the
+    /// CPU's registers here, before the instruction runs (a forced random
+    /// draw, [`crate::mcr::Force`]).
     #[inline(always)]
-    fn instruction(&mut self, _cpu: &Z80) {}
+    fn instruction(&mut self, _cpu: &mut Z80) {}
 }
 
 pub const CF: u8 = 0x01;

@@ -305,7 +305,7 @@ impl gp_arcade::z80::Z80Bus for Probe {
         0xff
     }
     fn reti(&mut self, _icount: &mut i32) {}
-    fn instruction(&mut self, cpu: &gp_arcade::z80::Z80) {
+    fn instruction(&mut self, cpu: &mut gp_arcade::z80::Z80) {
         if self.left.is_none() && cpu.pc >= self.end {
             self.left = Some(cpu.pc);
         }

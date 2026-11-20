@@ -286,7 +286,7 @@ impl Z80Bus for Alone<'_> {
         0xff
     }
     fn reti(&mut self, _icount: &mut i32) {}
-    fn instruction(&mut self, cpu: &Z80) {
+    fn instruction(&mut self, cpu: &mut Z80) {
         if self.ended.is_none() && self.seen > 0 && cpu.sp >= self.sp {
             self.ended = Some(cpu.icount);
         }

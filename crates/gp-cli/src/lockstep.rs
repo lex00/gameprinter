@@ -451,6 +451,45 @@ pub(crate) fn record_draws_arcade(
     Ok(script)
 }
 
+/// Where a forced draw at each of an arcade mapping's sites lands
+/// ([`gp_arcade::mcr::Force`]): the instruction after the site's `call` of
+/// the random routine (the site's own address when it is that instruction,
+/// as [`record_draws_arcade`] reads it), or after an `ld a,r` or `ld a,i`
+/// site, where A holds the number the caller tests. A site that reads its
+/// byte from RAM has no such place and isn't listed. `peek` reads the main
+/// CPU's code.
+pub(crate) fn force_pcs(
+    mapping: &Mapping,
+    peek: impl Fn(u16) -> u8,
+) -> std::collections::BTreeMap<String, u16> {
+    use gp_arcade::dasm::{self, Flow};
+    let decode = |at: u16| {
+        let bytes: Vec<u8> = (0..4).map(|k| peek(at.wrapping_add(k))).collect();
+        dasm::decode(&bytes, at)
+    };
+    let calls = |i: &dasm::Insn| matches!(i.flow, Flow::Call(_) | Flow::CallIf(_));
+    let mut out = std::collections::BTreeMap::new();
+    for d in &mapping.draws {
+        let here = decode(d.pc);
+        let to = match d.reg.as_deref() {
+            Some("r" | "i") => {
+                let (b0, b1) = (peek(d.pc), peek(d.pc.wrapping_add(1)));
+                (b0 == 0xed && matches!(b1, 0x5f | 0x57)).then_some(d.pc.wrapping_add(2))
+            }
+            Some(_) => None,
+            None if calls(&here) => Some(d.pc.wrapping_add(u16::from(here.len))),
+            None => {
+                let before = decode(d.pc.wrapping_sub(3));
+                (before.len == 3 && calls(&before)).then_some(d.pc)
+            }
+        };
+        if let Some(pc) = to {
+            out.insert(d.site.clone(), pc);
+        }
+    }
+    out
+}
+
 /// The value a Z80 register site (`reg`) draws: the register as the
 /// instruction traced at `e` reads it. Every register but R is as it was
 /// at the instruction's start. R counts opcode fetches, the instruction's
