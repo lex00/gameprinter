@@ -352,6 +352,14 @@ pub(crate) fn profiles(paths: &Paths, game: &str, rb: &Rebuild) -> Result<Value>
 /// presses, so the start is the frame itself when the game reads the pad
 /// on it. Until the game is in play (a title screen) the mapping's start
 /// doesn't hold and this says so; the page tries again.
+///
+/// The model stands at the frame a lockstep from power-on would have it
+/// at, one step for each frame the original read the pad (the start
+/// cache's prefix): a model that counts its own frames (a boot that waits
+/// so many frames from the model's first) then goes on with the original.
+/// Until 2026-11-19 it stood at its first frame wherever it started, so
+/// one started in the boot waited the whole boot again and trailed the
+/// original on the screen page by as many frames as it joined late.
 pub(crate) fn start(
     paths: &Paths,
     rb: &Rebuild,
@@ -359,6 +367,7 @@ pub(crate) fn start(
     path: &str,
     frame: u64,
 ) -> Result<Value> {
+    use gp_interp::lockstep::{Mode, Options};
     if frame == 0 {
         bail!("the game hasn't started");
     }
@@ -367,20 +376,38 @@ pub(crate) fn start(
     }
     let opened = opened(paths, rb, rom)?;
     let (source, mapping) = (&opened.0, &opened.1);
-    let mut model = source.open()?;
-    let log = super::paths::read_path(&paths.home, path)?;
+    let mut log = super::paths::read_path(&paths.home, path)?;
     let at = usize::try_from(frame)?;
     if at > log.frames.len() {
         bail!("the play has {} frames, not {frame}", log.frames.len());
     }
-    let original = super::paths::original_at(&paths.home, rom, path, at - 1)?;
-    let mut one = log.clone();
-    one.frames = vec![log.frames[at - 1]];
-    let inputs = crate::run::frames(&one);
+    log.frames.truncate(at);
+    let inputs = crate::run::frames(&log);
     let spec = source.spec.clone();
-    let (_, s) =
-        gp_interp::lockstep::start_at(&original, &mut model, &spec, mapping, &inputs, frame)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let opts = Options {
+        mode: Mode::Free,
+        from: Some(frame),
+        until_start: true,
+        ..Options::default()
+    };
+    let (mut original, p) = prefix_at(paths, rom, source, mapping, &log, &inputs, &opts, at - 1)?;
+    let mut model = source.open()?;
+    let ls = gp_interp::lockstep::lockstep_resumed(
+        &mut original,
+        &mut model,
+        &spec,
+        mapping,
+        &inputs,
+        &opts,
+        None,
+        p,
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let s = ls.start.ok_or_else(|| {
+        anyhow::anyhow!(
+            "the original never reached a frame the model stands for at frame {frame} (the mapping's start doesn't hold, or the frame was one the game didn't read the pad on)"
+        )
+    })?;
     Ok(json!({
         "original_frame": s.original_frame,
         "frame": s.frame,
@@ -388,6 +415,57 @@ pub(crate) fn start(
         "missing": s.notes.iter().filter(|n| n.how.name() == "missing").count(),
         "notes": s.notes.len(),
     }))
+}
+
+/// The original after the first `k` frames of `log` and where a lockstep
+/// from power-on stands there ([`gp_interp::lockstep::Prefix`]): from the
+/// start cache, under the clip scorer's tag, else played once from
+/// power-on and kept.
+#[allow(clippy::too_many_arguments)]
+fn prefix_at(
+    paths: &Paths,
+    rom: &[u8],
+    source: &crate::hosted::Source,
+    mapping: &Mapping,
+    log: &gp_evidence::input_log::InputLog,
+    inputs: &[gp_runtime::InputFrame],
+    opts: &gp_interp::lockstep::Options,
+    k: usize,
+) -> Result<(
+    crate::original::OriginalRuntime,
+    gp_interp::lockstep::Prefix,
+)> {
+    use crate::clip::cache;
+    use crate::original::OriginalRuntime;
+    use gp_evidence::manifest::PowerOn;
+    let home = &paths.home;
+    let key = cache::start_key(rom, &PowerOn::default(), &log.frames, k);
+    let tag = crate::clip_score::prefix_tag(mapping);
+    if cache::starts_on()
+        && let Some(p) = cache::read_note(home, &key, &tag)
+            .and_then(|b| serde_json::from_slice::<gp_interp::lockstep::Prefix>(&b).ok())
+            .filter(|p| p.inputs == k)
+        && let Some(saved) = cache::read_start(home, &key, rom, PowerOn::default())
+    {
+        return Ok((OriginalRuntime::from_saved(rom, &saved)?, p));
+    }
+    let mut original = OriginalRuntime::of_rom(rom)?;
+    let mut interp = source.open()?;
+    let p = gp_interp::lockstep::prefix(
+        &mut original,
+        &mut interp,
+        &source.spec,
+        mapping,
+        inputs,
+        opts,
+        k,
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    if cache::starts_on() {
+        cache::write_start_of(home, &key, &original)?;
+        cache::write_note(home, &key, &tag, &serde_json::to_vec(&p)?);
+    }
+    Ok((original, p))
 }
 
 /// The model and its mapping, opened once and kept while their files and

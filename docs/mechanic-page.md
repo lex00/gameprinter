@@ -411,7 +411,11 @@ the original replayed in the player's second console to the clip's start
 and stepped from there, the model started at the clip's start from the
 original's state (`api/rebuild/start`) with the clip's presses, seeked to
 the steps it had taken by the frame. Left and right step, Space plays,
-Esc goes back to live play.
+Esc goes back to live play. Either way the model starts at the frame a
+lockstep from power-on would have it at, one step for each frame the
+original read the pad, kept in the start cache beside the original's
+snapshot: a model that counts its own frames, such as a boot that waits
+so many of them, goes on with the original wherever it joins.
 
 Under the screens, the quest log is grouped by state, each group a heading
 in words with its count: NEEDS YOU (triage asks the person, or the row is

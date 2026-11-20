@@ -575,6 +575,16 @@ pub(crate) fn first_lasting(ls: &Lockstep, hold: usize) -> Option<(usize, Vec<us
     })
 }
 
+/// The tag a lockstep's [`gp_interp::lockstep::Prefix`] is kept under
+/// beside a start in the start cache: what its counts depend on besides
+/// the input.
+pub(crate) fn prefix_tag(mapping: &gp_interp::mapping::Mapping) -> String {
+    format!(
+        "lockstep prefix 1\nstart {:?}\nalign {:?}\n",
+        mapping.start, mapping.align
+    )
+}
+
 /// The clip's start from the start cache (`clip::cache::start_state`):
 /// the original [`crate::clip::cache::START_LEAD`] frames before the
 /// clip's start and where a lockstep from power-on stands there
@@ -596,10 +606,7 @@ pub(crate) fn resume_of(
     }
     let home = &ctx.home;
     let key = cache::start_key(&ctx.rom, &PowerOn::default(), &log.frames, k);
-    let tag = format!(
-        "lockstep prefix 1\nstart {:?}\nalign {:?}\n",
-        ctx.mapping.start, ctx.mapping.align
-    );
+    let tag = prefix_tag(&ctx.mapping);
     let opts = gp_interp::lockstep::Options {
         mode: Mode::Free,
         from: Some(start as u64),
