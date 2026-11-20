@@ -72,7 +72,7 @@ Any clip can be watched on the model: its ON THE MODEL button, or C (the left bu
 
 ### The quest log
 
-The list of mechanics beside the game is the quest log (`$GP_HOME/mechanics/GAME/queue.json`, `gp mechanic queue GAME`). Its statuses and notes are typed by the agent, except where the gate has scored the row: a row whose clips are in the corpus takes its status and a line of scores from the gate's status file (`$GP_HOME/work/refine/GAME/status.json`, [gate.md](gate.md)), shown above the typed note.
+The list of mechanics beside the game is the quest log (`$GP_HOME/mechanics/GAME/queue.json`, `gp mechanic queue GAME`). Its statuses and notes are typed by the agent, and the page shows them as typed: a row the log says is done shows done. Where the gate has scored the row (its clips are in the corpus), it also gets a line of scores from the gate's status file (`$GP_HOME/work/refine/GAME/status.json`, [gate.md](gate.md)), shown above the typed note.
 
 Donkey Kong's log on 2026-11-02, in game-printer, from the gate's status after c610add3 (two rows):
 
@@ -87,7 +87,7 @@ The hammer's typed note still quotes 0 to 8%; the line above it is the gate's.
 
 | From the status file | What |
 |---|---|
-| Status | `done` when every clip of the row meets the contract's bars (100% of frames together where it sets none). Otherwise the typed status, and a row typed `done` shows `next` |
+| Meets the bars | `meets_bars` in the JSON: whether every clip of the row meets the contract's bars (100% of frames together where it sets none). It never changes the row's status, which stays the typed one |
 | Scores | The clips that meet the bars, the row's frames together straight through and with resync, its longest exact stretch, the first split of the first clip below the bars (the original's frame, the clip's frame and what differs), and how many of the session's clips aren't in the corpus yet |
 | Note | Typed, unchanged: what a person reads. Scores are never typed |
 

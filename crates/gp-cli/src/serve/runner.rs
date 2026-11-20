@@ -442,7 +442,7 @@ fn settle_card_rows(home: &Path) {
         let moved = if newer {
             Ok(true)
         } else {
-            settle_row_by_card(home, game, row, kind, &card_what(a), a)
+            settle_row_by_card(home, game, row, kind, ended, &card_what(a), a)
         };
         if let Ok(true) = moved {
             let _ = gp_mcp::asks::mark(home, id, "row_settled", json!(true));
@@ -450,13 +450,17 @@ fn settle_card_rows(home: &Path) {
     }
 }
 
-/// Row `row` of `game` after its card ended as `kind`. Ok(false) when it
-/// waits (an agent works on it), Ok(true) once it's settled.
+/// Row `row` of `game` after its card ended as `kind` at `ended` (ms).
+/// Ok(false) when it waits (an agent works on it), Ok(true) once it's
+/// settled. A row changed after the card ended (set by hand, or by its
+/// worker) is left as it is: the card is older than what the row says
+/// (owner, page-status-matches-log).
 fn settle_row_by_card(
     home: &Path,
     game: &str,
     row: &str,
     kind: &str,
+    ended: u64,
     what: &str,
     a: &Value,
 ) -> anyhow::Result<bool> {
@@ -470,6 +474,9 @@ fn settle_row_by_card(
     };
     if r["status"] == json!("agent working") {
         return Ok(false);
+    }
+    if r["changed_ms"].as_u64().is_some_and(|c| c > ended) {
+        return Ok(true);
     }
     let note = r["note"].as_str().unwrap_or("");
     let of_card = note.to_lowercase().contains("card") || note.contains("YES");
@@ -1472,6 +1479,12 @@ mod tests {
                 {"mechanic": "b", "status": "asking you", "note": "The card waits for your YES"},
                 {"mechanic": "c", "status": "done", "note": "Done long ago"},
                 {"mechanic": "d", "status": "agent working", "note": "card up"},
+                // Set by hand after its card failed (tapper's move); set
+                // aside after its NO (double-drink-end).
+                {"mechanic": "e", "status": "done", "note": "Landed by hand after the first card failed",
+                 "changed_ms": gp_mcp::asks::now_ms() - 100},
+                {"mechanic": "f", "status": "in line", "note": "Its card was set aside",
+                 "changed_ms": gp_mcp::asks::now_ms() - 100},
             ])
             .to_string(),
         )
@@ -1510,6 +1523,12 @@ mod tests {
             "d",
             json!({"state": "used", "ran": {"state": "landed", "done_ms": now}}),
         );
+        card(
+            5,
+            "e",
+            json!({"state": "used", "ran": {"state": "failed", "done_ms": now - 500, "lines": ["local changes"]}}),
+        );
+        card(6, "f", json!({"state": "no", "answered_ms": now - 500}));
         settle_card_rows(home);
         let row = |m: &str| -> Value {
             crate::mechanic::session::read_queue(&f)
@@ -1527,6 +1546,15 @@ mod tests {
         );
         // A done row whose note no longer talks of a card stays done.
         assert_eq!(row("c")["status"], "done");
+        // A row changed after its card ended keeps what it says.
+        assert_eq!(row("e")["status"], "done");
+        assert_eq!(row("f")["status"], "in line");
+        assert_eq!(
+            gp_mcp::asks::read(home, "ask-5").unwrap()["row_settled"],
+            true
+        );
+        // The rows the cards moved carry when they changed.
+        assert!(row("a")["changed_ms"].as_u64().unwrap() >= now);
         // A row an agent works on waits, and its card isn't settled yet.
         assert_eq!(row("d")["status"], "agent working");
         assert_eq!(

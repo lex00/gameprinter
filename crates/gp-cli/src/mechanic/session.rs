@@ -41,11 +41,42 @@ pub(crate) fn read_queue(f: &Path) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+/// Writes the quest log, stamping `changed_ms` on each row that is new or
+/// differs from the file's (a card that ended before it can't move it:
+/// the runner's `settle_card_rows`); a row as it was keeps its stamp.
 pub(crate) fn write_queue(f: &Path, q: &[Value]) -> Result<()> {
     if let Some(d) = f.parent() {
         fs::create_dir_all(d)?;
     }
-    fs::write(f, serde_json::to_string_pretty(q)?)?;
+    let old = read_queue(f);
+    let bare = |r: &Value| {
+        let mut r = r.clone();
+        if let Some(o) = r.as_object_mut() {
+            o.remove("changed_ms");
+        }
+        r
+    };
+    let now = gp_mcp::asks::now_ms();
+    let q: Vec<Value> = q
+        .iter()
+        .map(|r| {
+            let was = old
+                .iter()
+                .find(|o| o["mechanic"] == r["mechanic"] && !r["mechanic"].is_null());
+            let mut r = r.clone();
+            let stamp = match was {
+                Some(o) if bare(o) == bare(&r) => o["changed_ms"].clone(),
+                _ => json!(now),
+            };
+            if let Some(o) = r.as_object_mut()
+                && !stamp.is_null()
+            {
+                o.insert("changed_ms".into(), stamp);
+            }
+            r
+        })
+        .collect();
+    fs::write(f, serde_json::to_string_pretty(&q)?)?;
     Ok(())
 }
 

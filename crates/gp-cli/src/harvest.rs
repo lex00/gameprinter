@@ -728,7 +728,7 @@ pub(crate) fn harvest(
                 }
             }
         }
-        fs::write(&qf, serde_json::to_string_pretty(&q)?)?;
+        crate::mechanic::session::write_queue(&qf, &q)?;
     }
     // Object types: first level and frame, frames active, events while
     // active, and the routines that run (almost) only while it is active,

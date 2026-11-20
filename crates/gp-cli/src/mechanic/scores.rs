@@ -1,5 +1,5 @@
 //! The quest log with the gate's scores: a row whose clips are in the
-//! corpus takes its status and a line of scores from the status file the
+//! corpus takes a line of scores from the status file the
 //! gate writes when it lands a patch (`$GP_HOME/work/refine/GAME/status.json`,
 //! `crate::gate::write_status`).
 //!
@@ -14,11 +14,13 @@ use super::session::read_queue;
 
 /// The quest log as shown: [`read_queue`] with each row's scores from the
 /// gate's status file when its clips are in the corpus. Such a row's
-/// `status` is `done` when every clip meets the contract's bars (100% of
-/// frames together where the contract sets none), and `scores` says the
-/// score, the first split and what differs; the typed status stays as
-/// `typed_status` and the typed note as `note`. A row out of scope, a
-/// sealed row, or a row with no clip in the corpus, is shown as typed.
+/// `scores` says the score, the first split and what differs, and
+/// `meets_bars` whether every clip meets the contract's bars (100% of
+/// frames together where the contract sets none). Its `status` stays the
+/// typed one (also `typed_status`), so the page shows what the log says
+/// (owner, page-status-matches-log): a row the log says is done shows done.
+/// A row out of scope, a sealed row, or a row with no clip in the corpus,
+/// has no scores.
 pub(crate) fn scored_queue(home: &Path, game: &str) -> Vec<Value> {
     let mut q = read_queue(&home.join("mechanics").join(game).join("queue.json"));
     let status: Value = fs::read(
@@ -57,13 +59,7 @@ pub(crate) fn scored_queue(home: &Path, game: &str) -> Vec<Value> {
         r["typed_status"] = r["status"].clone();
         let (line, all) = scores_line(&status, &m, &clips, in_session, fps);
         r["scores"] = json!(line);
-        r["status"] = json!(if all {
-            "done"
-        } else if r["typed_status"] == json!("done") {
-            "next"
-        } else {
-            r["typed_status"].as_str().unwrap_or("next")
-        });
+        r["meets_bars"] = json!(all);
     }
     q
 }
@@ -199,15 +195,18 @@ mod tests {
         )
         .unwrap();
         let q = scored_queue(d.path(), "mosshop");
-        assert_eq!(q[0]["status"], "done");
+        // The status is the log's, whatever the scores say.
+        assert_eq!(q[0]["status"], "agent working");
+        assert_eq!(q[0]["meets_bars"], true);
         assert_eq!(q[0]["typed_status"], "agent working");
         assert_eq!(q[0]["note"], "typed: 4 of 4");
         assert_eq!(
             q[0]["scores"],
             "1 of 1 clips meet the bars; 100.0% straight through; scored on model version 07701d77"
         );
-        // Typed done, but below the bars: back in the queue.
-        assert_eq!(q[1]["status"], "next");
+        // Typed done, below the bars: still done, the scores say the rest.
+        assert_eq!(q[1]["status"], "done");
+        assert_eq!(q[1]["meets_bars"], false);
         let s = q[1]["scores"].as_str().unwrap();
         assert!(
             s.starts_with("0 of 1 clips meet the bars; 89.3% straight through; 98.2% with resync; longest exact stretch 27.3 s"),

@@ -428,9 +428,9 @@ pub enum MechanicCmd {
     /// The game's quest log, shown beside the game: each mechanic with its
     /// status (done, asking you, agent working, in line, next) and one plain
     /// line. With `--status`, adds the mechanic or changes it; without,
-    /// prints the quest log. A row whose clips are in the corpus takes its
-    /// status and a line of scores from the gate's status.json; the typed
-    /// note is shown under it.
+    /// prints the quest log. A row whose clips are in the corpus takes a
+    /// line of scores from the gate's status.json, and keeps its typed
+    /// status; the typed note is shown under it.
     Queue {
         game: String,
         mechanic: Option<String>,
