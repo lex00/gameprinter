@@ -63,12 +63,13 @@
     </div>
     <p id="line" aria-live="polite"></p>
     <p id="keys"></p>
-    <!-- The page, top to bottom (owner, page-one-design): the screens; YOUR
+    <!-- The page shows three things (owner, page-minimal): the screens; YOUR
          TURN, only what the person can act on (cards, questions, clips to
          judge), each with its clip and its button, or NOTHING NEEDS YOU on
-         one line; one status line (what is worked on, by whom, and whether
-         the loop runs or waits on the person); and the rest folded under
-         THE LOOP'S DETAILS. -->
+         one line; and one status line (what is worked on, by whom, and
+         whether the loop runs or waits on the person), which links to the
+         loop's page. The loop's page (screen.html?page=loop) is this same
+         file showing only #details: the quest log, steps, workers, clips. -->
     <section id="your-turn" aria-live="polite" aria-label="Your turn">
       <h2>YOUR TURN</h2>
       <div id="asks"></div>
@@ -78,8 +79,8 @@
     <section id="now" aria-live="polite" aria-label="What the loop is doing">
       <div id="now-work"></div>
     </section>
-    <details id="details">
-      <summary>THE LOOP'S DETAILS</summary>
+    <section id="details" aria-label="The loop's page">
+      <p id="loop-head"><span>THE LOOP'S PAGE</span> <a id="to-screens" href="screen.html">BACK TO THE SCREENS</a></p>
       <section id="below">
         <section id="quest" aria-label="The quest log">
           <h2>QUEST LOG</h2>
@@ -107,7 +108,7 @@
           <div id="clips"></div>
         </section>
       </section>
-    </details>
+    </section>
     <iframe id="model-frame" title="the model" src="about:blank" tabindex="-1"></iframe>
   </main>
   <script type="module" src="screen.js"></script>

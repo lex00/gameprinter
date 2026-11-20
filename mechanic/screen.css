@@ -213,12 +213,20 @@ button.judge { flex: none; font: bold 12px var(--mono); padding: 0 10px; margin-
 #now .now-line .now-stopped-you { color: var(--gold); }
 #now .now-line .now-stopped-off, #now .now-line .now-stopped-halted { color: var(--rec); }
 #now .now-line .now-click { cursor: pointer; text-decoration: underline; }
-/* THE LOOP'S DETAILS: everything else, a click away. */
+/* Two pages from one file (owner, page-minimal). The screen page: the
+   screens, YOUR TURN and the status line, nothing more. The loop's page
+   (body.loop-page, screen.html?page=loop): the quest log, steps, workers
+   and clips; the screens show there only while a clip is open on them. */
 #details { width: min(1200px, 100%); margin-top: 4px; }
-#details > summary { cursor: pointer; font: bold 13px var(--mono); letter-spacing: 0.08em; color: var(--gold); padding: 4px 0; border-top: 2px solid var(--line); }
-#details > summary::after { content: " (click to show)"; color: var(--muted); font-weight: normal; }
-#details[open] > summary::after { content: " (click to hide)"; }
+body:not(.loop-page) #details { display: none; }
+body.loop-page #your-turn, body.loop-page #now, body.loop-page #keys, body.loop-page #follow, body.loop-page #controls { display: none; }
+body.loop-page main:has(#clipbar[hidden]) #screens { display: none; }
+#loop-head { margin: 0; padding: 4px 0; border-bottom: 2px solid var(--line); font: bold 13px var(--mono); letter-spacing: 0.08em; color: var(--gold); display: flex; justify-content: space-between; }
+#loop-head a, #now .now-page { color: var(--accent); font: bold 12px var(--mono); text-decoration: underline; }
 #details #below { width: 100%; border-top: 0; margin-top: 0; padding-top: 4px; }
+/* A long sentence in YOUR TURN or the status line: its first sentence,
+   the rest a click away. */
+.more { font: bold 11px var(--mono); padding: 0 6px; margin-left: 6px; color: var(--accent); border-color: var(--accent); background: transparent; }
 #quest #tell { margin: 0 0 8px; }
 /* Finished rows are archived: DONE stays folded until it is opened. */
 #queue .qgroup-done { cursor: pointer; }

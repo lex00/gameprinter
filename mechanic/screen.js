@@ -24,9 +24,12 @@
 // seconds, and a model changed is built again by itself while the old
 // build plays, then swapped in at the same place.
 //
-// Under the screens, the quest log (the rows `gp mechanic queue GAME`
-// prints), grouped NEEDS YOU, AGENT WORKING, UP NEXT, DONE, and the clips
-// of every row. A recording goes to the row outlined: the open one when it
+// The screen page shows only the screens, YOUR TURN and one status line
+// (owner, page-minimal). The loop's page, this same file at
+// screen.html?page=loop (LOOP_PAGE), shows the quest log (the rows `gp
+// mechanic queue GAME` prints), grouped NEEDS YOU, AGENT WORKING, UP NEXT,
+// DONE, the steps, the workers and the clips of every row, and the screens
+// only while a clip is open on them. A recording goes to the row outlined: the open one when it
 // starts. A row's RECORD INTO THIS ROW moves it there (api/pick when not
 // recording); a click elsewhere on the row only opens its details, the
 // RAM tests, addresses and hashes. A clip clicked shows on both screens.
@@ -42,6 +45,43 @@
 import { NesPlayer } from "./nesplayer.js";
 
 const $ = (id) => document.getElementById(id);
+
+/** Whether this is the loop's page (screen.html?page=loop), not the screen. */
+const LOOP_PAGE = new URLSearchParams(location.search).get("page") === "loop";
+document.body.classList.toggle("loop-page", LOOP_PAGE);
+/** The loop's page, opened at row `m` when one is given. */
+const loopHref = (m) => `screen.html?page=loop${m ? `&row=${encodeURIComponent(m)}` : ""}`;
+
+/** One plain sentence of `text`: the question it asks, else its first
+ * sentence, at most `max` characters (cut at a word, with "..."). */
+function oneSentence(text, max = 160) {
+  const t = String(text ?? "").replace(/\s+/g, " ").trim();
+  const sentences = t.match(/[^.!?]+(?:[.!?]+(?=\s|$)|$)/g) ?? [t];
+  let s = (sentences.find((x) => isQuestion(x)) ?? sentences[0] ?? "").trim();
+  if (s.length > max) s = `${s.slice(0, max - 3).replace(/\s+\S*$/, "")}...`;
+  return s;
+}
+
+/** A span of `text` cut to one sentence, with MORE showing the rest. */
+function shortText(cls, text) {
+  const full = String(text ?? "").trim();
+  const short = oneSentence(full);
+  const s = el("span", cls, short);
+  if (short === full) return s;
+  s.title = full;
+  const more = el("button", "more", "MORE");
+  more.type = "button";
+  more.title = "Show all of it";
+  more.addEventListener("click", (e) => {
+    e.stopPropagation();
+    e.currentTarget.blur();
+    const open = more.textContent === "MORE";
+    s.firstChild.textContent = open ? full : short;
+    more.textContent = open ? "LESS" : "MORE";
+  });
+  s.append(more);
+  return s;
+}
 
 // The machine's keys, as app.js's LAYOUTS have them: each button's keys in
 // the order of the player's bits.
@@ -1195,9 +1235,11 @@ function drawClips() {
   if (!box.children.length) box.append(el("p", "empty", "No clips yet. RECORD makes one; your agent's clips show here too."));
 }
 
-/** The quest log, unfolded (THE LOOP'S DETAILS) and brought into view. */
-function toQuestLog() {
-  $("details").open = true;
+/** The quest log at row `m`: on the screen page, the loop's page opened
+ * there; on the loop's page, the row opened and brought into view. */
+function toQuestLog(m) {
+  if (!LOOP_PAGE) { location.href = loopHref(m); return; }
+  if (m) void pickRow(m);
   $("quest").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -1356,8 +1398,7 @@ async function refreshAsks() {
       go.title = "Open this quest-log item";
       go.addEventListener("click", (e) => {
         e.currentTarget.blur();
-        void pickRow(row);
-        toQuestLog();
+        toQuestLog(row);
       });
       card.append(go);
       // The row's clip to judge on, when it has one: the card shows it too.
@@ -1515,7 +1556,7 @@ function drawYourTurn() {
   for (const s of plays) {
     const li = el("li", "turn-item");
     li.dataset.step = s.id;
-    li.append(el("span", "turn-row", s.act.row.toUpperCase()), el("span", "turn-says", s.says));
+    li.append(el("span", "turn-row", s.act.row.toUpperCase()), shortText("turn-says", s.says));
     const b = el("button", "turn-play", "PLAY FROM HERE");
     b.type = "button";
     b.title = `Plays from ${s.act.row}'s start point and records into it: play the stretch, then RECORD (or R) sends it`;
@@ -1526,7 +1567,7 @@ function drawYourTurn() {
   for (const [r, q] of asking) {
     const li = el("li", "turn-item turn-ask");
     li.dataset.mechanic = r.mechanic;
-    const says = el("span", "turn-says", q.says);
+    const says = shortText("turn-says", q.says);
     if (q.was) says.title = `The row said: ${q.was}`;
     li.append(el("span", "turn-row", r.mechanic.toUpperCase()), says);
     // The clip it is about: the row's clip to judge, else the one its
@@ -1605,7 +1646,7 @@ async function playFrom(m) {
 // step able to start, why in plain words: THE LOOP WAITS ON YOU (a click
 // goes to YOUR TURN), THE LOOP IS STOPPED: THE RUNNER IS OFF, THE LOOP IS
 // HALTED, or THE LOOP HAS NOTHING TO DO. The loop's switches (runner,
-// workers, steps required) are in THE LOOP'S DETAILS.
+// workers, steps required) are on the loop's page, which the line links.
 
 /** "12 s ago", "4 min ago", "3 h ago", "2 days ago" from ms since the epoch. */
 function ago(ms) {
@@ -1704,7 +1745,7 @@ function drawNowWork() {
   box.textContent = "";
   // One line (owner, page-one-design): what is being worked on and by
   // whom, then whether the loop runs or waits on the person. The rest is
-  // in THE LOOP'S DETAILS.
+  // on the loop's page, which the line ends with a link to.
   const line = el("div", "now-line");
   const part = (cls, text, title) => { const s = el("span", cls, text); if (title) s.title = title; line.append(s); return s; };
   const sep = () => part("now-sep", " · ");
@@ -1719,11 +1760,11 @@ function drawNowWork() {
       const name = el("button", "now-row", r.mechanic.toUpperCase());
       name.type = "button";
       name.title = `${there}, ${last}. Click to open it in the quest log`;
-      name.addEventListener("click", (e) => { e.currentTarget.blur(); void pickRow(r.mechanic); toQuestLog(); });
+      name.addEventListener("click", (e) => { e.currentTarget.blur(); toQuestLog(r.mechanic); });
       line.append(name);
       const by = w ? ` by ${workerOn(r)?.worker ?? r.worker ?? "an agent"}, ${last}` : "";
       const b = busyOf(r.mechanic);
-      part("now-who", `${by}${b ? `: ${b.length > 140 ? `${b.slice(0, 137)}...` : b}` : ""}`, b ?? "");
+      part("now-who", `${by}${b ? `: ${oneSentence(b, 120)}` : ""}`, b ?? "");
     });
   }
   if (!work.length) part("now-idle", "NOBODY IS WORKING ON AN ITEM");
@@ -1739,6 +1780,12 @@ function drawNowWork() {
   } else if (loopNow) {
     part("now-loop-state now-runs", loopNow.halted ? "THE LOOP IS HALTED" : loopNow.settings?.runner?.on ? "THE LOOP RUNS" : "THE RUNNER IS OFF", loopNow.runner?.says ?? "");
   }
+  // Everything else is on the loop's page.
+  sep();
+  const to = el("a", "now-page", "THE LOOP'S PAGE");
+  to.href = loopHref(null);
+  to.title = "The quest log, the steps, the workers and the clips";
+  line.append(to);
   box.append(line);
 }
 
@@ -1884,8 +1931,7 @@ async function refreshSteps() {
       li.title = `Open ${row} in the quest log`;
       li.addEventListener("click", (e) => {
         if (e.target.closest("form, button")) return;
-        void pickRow(row);
-        toQuestLog();
+        toQuestLog(row);
       });
     } else {
       li.title = `Step ${s.id}`;
@@ -2222,12 +2268,6 @@ function wire() {
   // The quest log's box: Enter (NEW ITEM) makes a new item; SEND comments.
   $("tell").addEventListener("submit", (e) => { e.preventDefault(); void newRow(); });
   $("tell-send").addEventListener("click", (e) => { e.currentTarget.blur(); void tell(e); });
-  // THE LOOP'S DETAILS stays as the person left it.
-  const det = $("details");
-  try { det.open = localStorage.getItem("gp-details-open") === "1"; } catch (e) { /* folded */ }
-  det.addEventListener("toggle", () => {
-    try { localStorage.setItem("gp-details-open", det.open ? "1" : ""); } catch (e) { /* not kept */ }
-  });
   holdWhilePressed($("queue"));
   holdWhilePressed($("clips"));
 }
@@ -2270,9 +2310,12 @@ async function main() {
   $("keys").textContent = LAYOUT.footer;
   session = await api("api/session").catch(() => null);
   $("title").textContent = session?.game ?? "";
-  document.title = `${session?.game ?? "Game"} screen`;
+  document.title = `${session?.game ?? "Game"} ${LOOP_PAGE ? "loop" : "screen"}`;
   await setUpPictures();
   await refreshLists(true);
+  // The loop's page opened at a row (the status line's or a card's link).
+  const at = LOOP_PAGE ? new URLSearchParams(location.search).get("row") : null;
+  if (at) toQuestLog(at);
   // The view kept in this browser, then the agent's last ask when no page
   // has shown it yet and it is recent (asked before the page opened); one
   // shown already or old is taken as seen.

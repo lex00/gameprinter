@@ -421,7 +421,7 @@ original read the pad, kept in the start cache beside the original's
 snapshot: a model that counts its own frames, such as a boot that waits
 so many of them, goes on with the original wherever it joins.
 
-In THE LOOP'S DETAILS, the quest log is grouped by state, each group a heading
+On the loop's page, the quest log is grouped by state, each group a heading
 in words with its count: NEEDS YOU (triage asks the person, or the row is
 asking them), AGENT WORKING, UP NEXT, DONE. Each note says who wrote it:
 YOU WROTE for a row the person made on the page, AGENT WROTE for the
@@ -485,12 +485,17 @@ and the page asks for a build by itself, keeps the old build playing with
 one line saying the new one builds, and swaps the new one in at the same
 place when `status.build` changes, saying so.
 
-Top to bottom the page is the screens; YOUR TURN; one status line; and THE
-LOOP'S DETAILS, folded (a click opens it, and the browser keeps it as left):
-the quest log with the NEW ITEM box at its top (Enter makes a new item, SEND
-comments on the open row), the steps, the workers and the runner's
-switches, and the clips. Finished rows are folded under DONE with their
-count. A row's badge comes from its status: the triage's mark (NEEDS YOU,
+The screen page shows three things: the screens, YOUR TURN and one status
+line, which ends with THE LOOP'S PAGE. Everything else is on the loop's
+page, the same file at `screen.html?page=loop` (`&row=ROW` opens a row
+there, as a click on a row's name in the status line or a card's FOR ROW
+does): the quest log with the NEW ITEM box at its top (Enter makes a new
+item, SEND comments on the open row), the steps, the workers and the
+runner's switches, and the clips. The loop's page shows the screens only
+while a clip is open on them. Finished rows are folded under DONE with
+their count. A long sentence in YOUR TURN or the status line is cut to one
+plain sentence (the question it asks, else its first), with MORE for the
+rest. A row's badge comes from its status: the triage's mark (NEEDS YOU,
 THE TOOLS TRY) shows only on a row that isn't done or worked on.
 
 The status line says what is being worked on (each row marked agent
