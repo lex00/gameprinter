@@ -28,12 +28,31 @@ pub enum LoopCmd {
     /// the home on the published build, the runner on with a worker
     /// command, no halt, the yes cards taken and none failing, no row
     /// marked working with no worker on it, the games checkout clean
-    /// (local changes block every landing), and, when nothing runs, what
+    /// (local changes block every landing), 20 GB free on the home's disk
+    /// (else the biggest folders gp loop clean clears), and, when nothing runs, what
     /// the loop waits on. Each problem says how to fix it. Then each game's
     /// scoreboard (GAME/scoreboard.toml's lines: the game state,
     /// background and sprites matched, and how each moved), as gp serve
     /// last measured it. Exits 1 on a problem. Reads only.
     Health,
+    /// Clear the build folders the loop left: each ended worker's cargo
+    /// target ($GP_HOME/work/target/loop-STEP, or under $GP_TARGET_DIR)
+    /// and the folders of $GP_HOME/work/regenerate no run touched in six
+    /// hours, and print what each freed. A live worker's build is kept.
+    /// gp serve's runner removes a worker's build itself when its step
+    /// ends; this is for what is left (gp loop health says PROBLEM under
+    /// 20 GB free).
+    Clean {
+        /// Also clear the tool gate's build folders (tool/target and
+        /// tool/target-tests in its home, $GP_GATE_HOME else
+        /// ~/.gameprinter/gate), unless a gate runs now; its next run
+        /// builds from nothing.
+        #[arg(long)]
+        gate: bool,
+        /// List what would be cleared, with sizes, and remove nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Change the home's loop settings ($GP_HOME/loop.toml) and print them.
     /// With no flag, print them. Only the person runs this: gp_run refuses
     /// it, so an agent can't turn the loop's rules off.
@@ -221,6 +240,22 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
             }
             Ok(o)
         }
+        LoopCmd::Clean { gate, dry_run } => {
+            let home = &paths.home;
+            let none = std::collections::BTreeSet::new();
+            let gate_home = if *gate {
+                Some(crate::gate::gate_home(None)?)
+            } else {
+                None
+            };
+            let g = gate_home.as_deref();
+            let (done, skipped) = if *dry_run {
+                (crate::builds::clearable(home, &none, g), Vec::new())
+            } else {
+                crate::builds::clean(home, &none, g)
+            };
+            Ok(clean_outcome(home, *dry_run, &done, &skipped))
+        }
         LoopCmd::Steps => {
             let v = steps_json(paths, None);
             let text = steps_text(&v);
@@ -289,6 +324,43 @@ pub(crate) fn run(cmd: &LoopCmd, paths: &gp_evidence::Paths) -> Result<Outcome> 
             Ok(Outcome::ok(v, text))
         }
     }
+}
+
+/// gp loop clean's outcome: what it cleared (or would), what it skipped
+/// and the disk's free space after.
+fn clean_outcome(
+    home: &std::path::Path,
+    dry_run: bool,
+    done: &[(std::path::PathBuf, u64)],
+    skipped: &[String],
+) -> Outcome {
+    let gb = crate::builds::gb;
+    let total: u64 = done.iter().map(|(_, n)| n).sum();
+    let head = if done.is_empty() {
+        "Nothing to clear.".to_owned()
+    } else if dry_run {
+        format!("Would clear {} in {} folders:", gb(total), done.len())
+    } else {
+        format!("Cleared {} in {} folders:", gb(total), done.len())
+    };
+    let mut lines = vec![head];
+    for (p, n) in done {
+        lines.push(format!("  {} {}", gb(*n), p.display()));
+    }
+    for s in skipped {
+        lines.push(format!("  skipped {s}"));
+    }
+    if let Some(f) = crate::builds::free_bytes(home) {
+        lines.push(format!("{} free on the home's disk", gb(f)));
+    }
+    let cleared: Vec<Value> = done
+        .iter()
+        .map(|(p, n)| json!({"path": p, "bytes": n}))
+        .collect();
+    Outcome::ok(
+        json!({"dry_run": dry_run, "cleared": cleared, "bytes": total, "skipped": skipped}),
+        lines.join("\n"),
+    )
 }
 
 /// The loop's health (`gp loop health`): each check's line, OK or PROBLEM
@@ -521,6 +593,12 @@ fn health(paths: &gp_evidence::Paths) -> Value {
                 );
             }
         }
+    }
+    // The home's free disk: workers' builds fill it (loop-cleans-its-builds).
+    match crate::builds::disk_line(home) {
+        Some(Ok(l)) => ok(&mut lines, l),
+        Some(Err(l)) => bad(&mut lines, &mut problems, l),
+        None => {}
     }
     // Each game's scoreboard, as gp serve last measured it.
     if let Some(d) = games.as_deref() {

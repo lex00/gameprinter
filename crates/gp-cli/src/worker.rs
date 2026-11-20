@@ -136,7 +136,7 @@ pub(crate) const PROFILE: &str = "fastdev";
 
 /// A branch name as a folder name: `/` and anything but letters, digits,
 /// `-`, `_` and `.` become `-` (`m3/stage0-coverage` -> `m3-stage0-coverage`).
-fn branch_folder(branch: &str) -> String {
+pub(crate) fn branch_folder(branch: &str) -> String {
     let f: String = branch
         .chars()
         .map(|c| {
@@ -326,7 +326,7 @@ pub(crate) fn run(cmd: &WorkerCmd, paths: &Paths) -> Result<Outcome> {
             rust,
             shell,
         } => {
-            let target = std::env::var_os("GP_TARGET_DIR").map(PathBuf::from);
+            let target = Some(crate::builds::target_root(&paths.home));
             let branch = branch.clone().or_else(current_branch);
             let worktree = current_worktree()?;
             let env = Env::new(

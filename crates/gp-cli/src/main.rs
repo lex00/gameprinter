@@ -22,6 +22,7 @@ mod bench;
 mod bench_clips;
 mod bench_grade;
 mod bench_scratch;
+mod builds;
 mod bundle;
 mod capture;
 mod catalog;

@@ -223,6 +223,15 @@ pub(crate) fn start(ctx: Arc<Ctx>) {
             write(&ctx.paths.home, &w);
         }
     }
+    // The build folders of workers that ended while no gp serve ran.
+    {
+        let home = ctx.paths.home.clone();
+        std::thread::spawn(move || {
+            for p in crate::builds::ended_loop_builds(&home, &running_ids()) {
+                let _ = fs::remove_dir_all(p);
+            }
+        });
+    }
     std::thread::spawn(move || {
         loop {
             // The heartbeat the runner check reads (gp_mcp::steps::no_runner).
@@ -913,6 +922,12 @@ pub(crate) fn spawn(setup: Setup, step: Value) -> std::thread::JoinHandle<()> {
             rec["why"] = json!(format!("it couldn't start: {e:#}"));
         }
         rec["pid"] = Value::Null;
+        // Its build folder: nothing needs it once the worker ended (its
+        // card's gate builds in the gate's own tree from the patch).
+        let freed = crate::builds::remove_loop_build(&setup.home, &id);
+        if freed > 0 {
+            rec["build_removed"] = json!(freed);
+        }
         write(&setup.home, &rec);
         report_on_row(&setup, &rec);
         RUNNING
