@@ -107,7 +107,7 @@ Each gp serve's runner writes a heartbeat of its own every look (`$GP_HOME/work/
 
 ## A worker writes through gp_run
 
-A worker's shell runs gp's reads, but a gp command that writes, lands or publishes from it (`GP_STEP` set and the parent process not a gp) is refused with exit 3: the worker runs it through gp_run, where its step and the person's yes hold. A gate run from a shell asks no one, so this is what keeps a worker's landing on the person's card. When a quest-log item's worker ends, the runner puts its report in the item's log (`gp mechanic log`), so the page says what it did and what is left.
+A worker's shell runs gp's reads, but a gp command that writes, lands or publishes from it (`GP_STEP` set and the parent process not a gp) is refused with exit 3: the worker runs it through gp_run, where its step and the person's yes hold. A gate run from a shell asks no one, so this is what keeps a worker's landing on the person's card. When a quest-log item's worker ends, the runner puts its report in the item's log (`gp mechanic log`), so the page says what it did and what is left. If the row still says agent working then, no agent is on it any more: the runner sets it to asking you, with the report's questions as its note, when the report asks the person something, else to next, with what the report says is left.
 
 ## What is left of #43
 

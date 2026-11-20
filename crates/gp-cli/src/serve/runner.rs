@@ -625,16 +625,16 @@ fn report_on_row(setup: &Setup, rec: &Value) {
             })
         });
     let state = rec["state"].as_str().unwrap_or("?");
-    let words = match report {
+    let why = rec["why"].as_str().unwrap_or("no report");
+    let said = report.clone().unwrap_or_else(|| why.to_owned());
+    let words = match &report {
         Some(r) => format!(
             "Worker loop-{id} ended ({state}): {}",
-            crate::next::cut(&r, 1500)
+            crate::next::cut(r, 1500)
         ),
-        None => format!(
-            "Worker loop-{id} ended ({state}): {}",
-            rec["why"].as_str().unwrap_or("no report")
-        ),
+        None => format!("Worker loop-{id} ended ({state}): {said}"),
     };
+    let _ = settle_row(&setup.home, &game, &row, &said);
     let _ = Command::new(&setup.gp)
         .args(["mechanic", "log", &game, &row, &words])
         .env("GP_HOME", &setup.home)
@@ -645,6 +645,95 @@ fn report_on_row(setup: &Setup, rec: &Value) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
+}
+
+/// A row its worker left marked `agent working` when it ended: no agent is
+/// on it any more, so it takes its status from the worker's report:
+/// `asking you` with the report's questions when it asks the person
+/// something, else `next` with what the report says is left. A row the
+/// worker moved itself (done, asking you, ...) stays as it is.
+fn settle_row(home: &Path, game: &str, row: &str, report: &str) -> anyhow::Result<()> {
+    if !crate::mechanic::session::name_ok(game) {
+        bail!("not a game name: {game}");
+    }
+    let f = home.join("mechanics").join(game).join("queue.json");
+    let mut q = crate::mechanic::session::read_queue(&f);
+    let Some(r) = q
+        .iter_mut()
+        .find(|r| r["mechanic"] == json!(row) && r["status"] == json!("agent working"))
+    else {
+        return Ok(());
+    };
+    let (status, note) = match asks_of(report) {
+        Some(a) => ("asking you", a),
+        None => ("next", left_of(report)),
+    };
+    let Some(o) = r.as_object_mut() else {
+        return Ok(());
+    };
+    // The person's own words stay theirs (as gp mechanic queue keeps them).
+    if o.get("by") == Some(&json!("person")) && !o.contains_key("asked") {
+        let said = o.get("note").cloned().unwrap_or(json!(""));
+        o.insert("asked".into(), said);
+    }
+    o.insert("status".into(), json!(status));
+    o.insert("note".into(), json!(crate::next::cut(&note, 600)));
+    o.remove("worker");
+    crate::mechanic::session::write_queue(&f, &q)
+}
+
+/// The report's lines that ask the person something (a `?` ending a
+/// sentence), or None when it asks nothing.
+fn asks_of(report: &str) -> Option<String> {
+    let asks: Vec<&str> = report
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            l.char_indices().any(|(i, c)| {
+                c == '?'
+                    && l[i + 1..]
+                        .chars()
+                        .next()
+                        .is_none_or(|n| n.is_whitespace() || "\"')*_".contains(n))
+            })
+        })
+        .collect();
+    (!asks.is_empty()).then(|| asks.join(" "))
+}
+
+/// What the report says is left: from its line naming what is left (or
+/// still open) to its end, else its last paragraph.
+fn left_of(report: &str) -> String {
+    let lines: Vec<&str> = report.lines().collect();
+    let named = lines.iter().position(|l| {
+        let l = l.to_lowercase();
+        [
+            "left:",
+            "is left",
+            "'s left",
+            "still open",
+            "remaining:",
+            "left to do",
+        ]
+        .iter()
+        .any(|k| l.contains(k))
+    });
+    let part: Vec<&str> = match named {
+        Some(i) => lines[i..].to_vec(),
+        None => {
+            let body: Vec<&str> = report.trim_end().lines().collect();
+            let start = body
+                .iter()
+                .rposition(|l| l.trim().is_empty())
+                .map_or(0, |i| i + 1);
+            body[start..].to_vec()
+        }
+    };
+    part.iter()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The worker's worktree, made from main the first time.
@@ -1140,6 +1229,55 @@ mod tests {
         let live: BTreeSet<String> = ["s000000000009".to_owned()].into();
         assert_eq!(ids(plan(&open, &workers, &live, 2)), ["s000000000004"]);
         assert!(plan(&open, &workers, &live, 1).is_empty());
+    }
+
+    #[test]
+    fn a_row_left_agent_working_takes_its_status_from_the_report() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path();
+        let f = home.join("mechanics/g/queue.json");
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        let q = json!([
+            {"mechanic": "a", "status": "agent working", "worker": "loop-x", "note": "go", "by": "person"},
+            {"mechanic": "b", "status": "agent working", "worker": "loop-y"},
+            {"mechanic": "c", "status": "done", "note": "landed"},
+        ]);
+        fs::write(&f, q.to_string()).unwrap();
+        let row = |m: &str| -> Value {
+            crate::mechanic::session::read_queue(&f)
+                .into_iter()
+                .find(|r| r["mechanic"] == json!(m))
+                .unwrap()
+        };
+        settle_row(
+            home,
+            "g",
+            "a",
+            "I made the clip.\nShould I model the initials screen? Or leave it?\n",
+        )
+        .unwrap();
+        let a = row("a");
+        assert_eq!(a["status"], "asking you");
+        assert_eq!(
+            a["note"],
+            "Should I model the initials screen? Or leave it?"
+        );
+        assert_eq!(a["asked"], "go");
+        assert!(a.get("worker").is_none());
+        settle_row(
+            home,
+            "g",
+            "b",
+            "Did the fix (see https://x/?a=1).\n\nLeft: the card for the gate.\nThen done.",
+        )
+        .unwrap();
+        let b = row("b");
+        assert_eq!(b["status"], "next");
+        assert_eq!(b["note"], "Left: the card for the gate. Then done.");
+        settle_row(home, "g", "c", "Anything left?").unwrap();
+        assert_eq!(row("c")["status"], "done");
+        // With no line naming what is left, its last paragraph.
+        assert_eq!(left_of("Did it.\n\nThe card is up."), "The card is up.");
     }
 
     #[test]
