@@ -144,7 +144,14 @@ pub(crate) fn plan(
             break;
         }
         let Some(id) = s["id"].as_str() else { continue };
-        if s["who"] != json!("agent") || had.contains(id) || !id_ok(id) {
+        // Only quest-log items: the engine's own agent steps are hints for
+        // an agent at the keyboard (one, "add the clips", imports into the
+        // games checkout itself), not work the runner starts unasked.
+        if s["who"] != json!("agent")
+            || s["journey"] != json!("quest log")
+            || had.contains(id)
+            || !id_ok(id)
+        {
             continue;
         }
         let touches: Vec<String> = s["touches"]
@@ -861,8 +868,18 @@ mod tests {
     use super::*;
 
     fn s(id: &str, who: &str, touches: &[&str]) -> Value {
-        json!({"id": id, "who": who, "subject": "g", "says": "Do it.", "commands": ["corpus import"],
+        json!({"id": id, "journey": "quest log", "who": who, "subject": "g", "says": "Do it.", "commands": ["corpus import"],
             "touches": touches, "how": {"cli": "gp corpus import g --write"}})
+    }
+
+    #[test]
+    fn the_plan_leaves_the_engines_own_steps_to_an_agent_at_the_keyboard() {
+        let mut engine = s("s000000000009", "agent", &["game:a"]);
+        engine["journey"] = json!("porting a game");
+        let open = [engine, s("s000000000008", "agent", &["row:a/r"])];
+        let got = plan(&open, &[], &BTreeSet::new(), 5);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0]["id"], json!("s000000000008"));
     }
 
     #[test]
