@@ -164,7 +164,8 @@ fn measuring_gp(home: &Path) -> PathBuf {
 }
 
 /// What a line's measure depends on, hashed: the model the gate last
-/// landed (its hash in the status, else model.toml), the clip's recipe and
+/// landed (its hash in the status, else model.toml), the game's hook code,
+/// the clip's recipe and
 /// the files it names, and the gp that measures (its size and time). A
 /// change to any of them makes the line out of date.
 pub(crate) fn key_of(home: &Path, game_dir: &Path, game: &str, clip: &str, gp: &Path) -> String {
@@ -173,6 +174,10 @@ pub(crate) fn key_of(home: &Path, game_dir: &Path, game: &str, clip: &str, gp: &
     match st["model"]["hash"].as_str() {
         Some(m) => h.update(format!("model {m}\n")),
         None => h.update(std::fs::read(game_dir.join(gp_model::MODEL_FILE)).unwrap_or_default()),
+    }
+    // The game's own hooks, which the picture check builds its module from.
+    if let Ok(Some(code)) = crate::package::hook_code(game_dir) {
+        h.update(format!("hooks {code}\n"));
     }
     if let Ok(clips) = corpus_clips(game_dir)
         && let Some(c) = clips.iter().find(|c| field(c, "id") == clip)
@@ -607,6 +612,27 @@ pub(crate) fn refresh(
 /// How often gp serve looks for lines out of date.
 const LOOK: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// The module a line is measured with, as `gp picture` run by hand picks
+/// it: one given to gp serve with `--module`; else, for a game with hook
+/// code of its own, none, so picture builds it from the game's hooks and
+/// a stale `$GP_HOME/work/modules/GAME.wasm` is never measured; else that
+/// file when it is there.
+fn module_for(
+    home: &Path,
+    game_dir: &Path,
+    game: &str,
+    given: &BTreeMap<String, PathBuf>,
+) -> Option<PathBuf> {
+    if let Some(m) = given.get(game) {
+        return Some(m.clone());
+    }
+    if matches!(crate::package::hook_code(game_dir), Ok(Some(_))) {
+        return None;
+    }
+    let m = home.join("work/modules").join(format!("{game}.wasm"));
+    m.is_file().then_some(m)
+}
+
 /// gp serve's measurer: every half minute, the lines out of date measured
 /// again, once per server.
 pub(crate) fn start(home: PathBuf, games: PathBuf, modules: BTreeMap<String, PathBuf>) {
@@ -618,10 +644,7 @@ pub(crate) fn start(home: PathBuf, games: PathBuf, modules: BTreeMap<String, Pat
         loop {
             let gp = measuring_gp(&home);
             refresh(&home, &games, &gp, |g, line| {
-                let module = modules.get(g).cloned().or_else(|| {
-                    let m = home.join("work/modules").join(format!("{g}.wasm"));
-                    m.is_file().then_some(m)
-                });
+                let module = module_for(&home, &games.join(g), g, &modules);
                 if line.own_draws {
                     measure_own(&gp, &home, &games, g, &line.clip, module.as_deref())
                 } else {
@@ -869,6 +892,39 @@ level = "field"
             json!({"clips": [{"clip": "hop.title.001", "straight": {"together": 7, "frames": 9}}]});
         assert_eq!(own_numbers(&v, "hop.title.001").unwrap().own, Some([7, 9]));
         assert!(own_numbers(&v, "hop.l1.001").is_none());
+    }
+
+    #[test]
+    fn a_game_with_hooks_is_measured_on_its_own_hooks() {
+        let d = games();
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        let g = d.path().join("hop");
+        put(&h.join("work/modules/hop.wasm"), "an old module");
+        let none = BTreeMap::new();
+        // No hook code: the module kept for the game.
+        assert_eq!(
+            module_for(h, &g, "hop", &none),
+            Some(h.join("work/modules/hop.wasm"))
+        );
+        // Hook code of its own: none, so picture builds it as by hand.
+        let gp = h.join("bin/gp");
+        put(&gp, "a gp");
+        let before = key_of(h, &g, "hop", "hop.l1.001", &gp);
+        put(&g.join("ext/src/lib.rs"), "// hooks\n");
+        assert_eq!(module_for(h, &g, "hop", &none), None);
+        // And the hooks are part of the line's key.
+        let with = key_of(h, &g, "hop", "hop.l1.001", &gp);
+        assert_ne!(before, with);
+        put(&g.join("ext/src/lib.rs"), "// other hooks\n");
+        assert_ne!(with, key_of(h, &g, "hop", "hop.l1.001", &gp));
+        // A module given to gp serve is always the one.
+        let given: BTreeMap<String, PathBuf> =
+            [("hop".to_owned(), PathBuf::from("/given.wasm"))].into();
+        assert_eq!(
+            module_for(h, &g, "hop", &given),
+            Some(PathBuf::from("/given.wasm"))
+        );
     }
 
     #[test]
