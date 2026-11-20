@@ -8,7 +8,9 @@
 //! Which parts is the game's own file, `GAME/scoreboard.toml`: each
 //! `[[line]]` has a `name` and the `clip` it is measured on, or a `level`
 //! of the corpus (`corpus.toml`'s clips' `level`), whose first clip is
-//! taken. Nothing here names a game.
+//! taken. A line with `own_draws = true` measures instead the clip's frames
+//! together straight through with the model on its own random generator
+//! (`gp clip score --own-draws`). Nothing here names a game.
 //!
 //! A picture check takes about a minute a clip, so gp serve measures in the
 //! background ([`start`]): a line is measured again when its key changes
@@ -44,15 +46,33 @@ struct LineSpec {
     clip: String,
     #[serde(default)]
     level: String,
+    #[serde(default)]
+    own_draws: bool,
 }
 
 /// One line of the board: its name, the clip it is measured on and that
-/// clip's level in the corpus.
+/// clip's level in the corpus. An `own_draws` line measures the model on
+/// its own random generator instead of the pictures: the clip's frames
+/// together straight through with none of the original's draws handed
+/// over (`gp clip score --own-draws`).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Line {
     pub name: String,
     pub clip: String,
     pub level: String,
+    pub own_draws: bool,
+}
+
+impl Line {
+    /// Where the line's measure is kept: its clip, and apart from it for
+    /// an `own_draws` line, so a clip can have both.
+    pub(crate) fn slot(&self) -> String {
+        if self.own_draws {
+            format!("{} own draws", self.clip)
+        } else {
+            self.clip.clone()
+        }
+    }
 }
 
 /// The corpus's clips as tables, in the file's order.
@@ -108,6 +128,7 @@ pub(crate) fn lines(game_dir: &Path) -> Option<Result<Vec<Line>, String>> {
                 name: l.name,
                 clip: field(c, "id").to_owned(),
                 level: field(c, "level").to_owned(),
+                own_draws: l.own_draws,
             });
         }
         Ok(out)
@@ -182,6 +203,10 @@ pub(crate) struct Numbers {
     /// The game state's percent when it was measured.
     #[serde(default)]
     pub state: Option<f64>,
+    /// An `own_draws` line's frames together straight through, of frames,
+    /// with the model on its own generator.
+    #[serde(default)]
+    pub own: Option<[u64; 2]>,
 }
 
 /// A line's kept measure.
@@ -305,18 +330,27 @@ pub(crate) fn board(home: &Path, games: &Path, game: &str) -> Option<Value> {
     let rows: Vec<Value> = lines
         .iter()
         .map(|l| {
-            let e = cache.lines.get(&l.clip);
+            let e = cache.lines.get(&l.slot());
             let now = e.and_then(|e| e.now);
             let before = e.and_then(|e| e.before);
             let frames = |f: fn(&Numbers) -> [u64; 2]| -> Value {
                 match now {
-                    Some(n) => json!({
+                    Some(n) if l.own_draws == n.own.is_some() => json!({
                         "matched": f(&n)[0],
                         "total": f(&n)[1],
                         "moved": moved(f(&n), before.as_ref().map(f)),
                     }),
-                    None => Value::Null,
+                    _ => Value::Null,
                 }
+            };
+            let (background, sprites, own) = if l.own_draws {
+                (
+                    Value::Null,
+                    Value::Null,
+                    frames(|n| n.own.unwrap_or_default()),
+                )
+            } else {
+                (frames(|n| n.background), frames(|n| n.sprites), Value::Null)
             };
             // The state is the gate's, read now; it moved since the last
             // measure when it differs from the state then.
@@ -332,13 +366,15 @@ pub(crate) fn board(home: &Path, games: &Path, game: &str) -> Option<Value> {
                 "name": l.name,
                 "clip": l.clip,
                 "level": l.level,
+                "own_draws": l.own_draws,
                 "state": state,
-                "background": frames(|n| n.background),
-                "sprites": frames(|n| n.sprites),
+                "background": background,
+                "sprites": sprites,
+                "own": own,
                 "approved": [],
                 "measured_ms": e.map(|e| e.measured_ms),
                 "stale": e.is_none_or(|e| e.key != key_of(home, &dir, game, &l.clip, &gp)),
-                "measuring": busy.as_deref() == Some(&format!("{game}/{}", l.clip)),
+                "measuring": busy.as_deref() == Some(&format!("{game}/{}", l.slot())),
                 "error": e.and_then(|e| e.error.clone()),
             })
         })
@@ -374,19 +410,30 @@ pub(crate) fn text(b: &Value) -> Vec<String> {
                 word(&l["state"]["moved"])
             )
         };
-        let mut s = format!(
-            "           {} ({}): state {state}, background {}, sprites {}, approved none",
-            l["name"].as_str().unwrap_or(""),
-            l["clip"].as_str().unwrap_or(""),
-            frames(&l["background"]),
-            frames(&l["sprites"]),
-        );
+        let own = l["own_draws"] == json!(true);
+        let numbers = if own { &l["own"] } else { &l["background"] };
+        let mut s = if own {
+            format!(
+                "           {} ({}): on the model's own random draws, straight through {} (with the original's: {state})",
+                l["name"].as_str().unwrap_or(""),
+                l["clip"].as_str().unwrap_or(""),
+                frames(&l["own"]),
+            )
+        } else {
+            format!(
+                "           {} ({}): state {state}, background {}, sprites {}, approved none",
+                l["name"].as_str().unwrap_or(""),
+                l["clip"].as_str().unwrap_or(""),
+                frames(&l["background"]),
+                frames(&l["sprites"]),
+            )
+        };
         if let Some(e) = l["error"].as_str() {
             s.push_str(&format!(
                 " (the last measure failed: {})",
                 crate::next::cut(e, 120)
             ));
-        } else if l["stale"] == json!(true) && !l["background"].is_null() {
+        } else if l["stale"] == json!(true) && !numbers.is_null() {
             s.push_str(" (out of date: gp serve measures it again)");
         }
         out.push(s);
@@ -428,6 +475,7 @@ fn measure(
             background,
             sprites,
             state: None,
+            own: None,
         }),
         _ => Err(c["error"]
             .as_str()
@@ -443,15 +491,73 @@ fn measure(
     }
 }
 
+/// Scores one clip with the model on its own random draws (`gp clip score
+/// --own-draws`), into the board's own folder, and reads its frames
+/// together straight through.
+fn measure_own(
+    gp: &Path,
+    home: &Path,
+    games: &Path,
+    game: &str,
+    clip: &str,
+    module: Option<&Path>,
+) -> Result<Numbers, String> {
+    use std::process::{Command, Stdio};
+    let mut cmd = Command::new(gp);
+    cmd.arg("--json")
+        .args(["clip", "score"])
+        .arg(games.join(game))
+        .arg(clip)
+        .arg("--own-draws")
+        .arg("--out")
+        .arg(home.join("work/scoreboard/own").join(game));
+    if let Some(m) = module {
+        cmd.arg("--module").arg(m);
+    }
+    let out = cmd
+        .current_dir(games)
+        .env("GP_GAMES_DIR", games)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("{}: {e}", gp.display()))?;
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
+    own_numbers(&v, clip).ok_or_else(|| {
+        v["clips"][0]["error"]
+            .as_str()
+            .map(str::to_owned)
+            .or_else(|| {
+                String::from_utf8_lossy(&out.stderr)
+                    .lines()
+                    .rev()
+                    .find(|l| !l.trim().is_empty())
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| "the clip's score gave no numbers".into())
+    })
+}
+
+/// An `own_draws` line's numbers from `gp clip score --json`'s output.
+fn own_numbers(v: &Value, clip: &str) -> Option<Numbers> {
+    let c = v["clips"]
+        .as_array()?
+        .iter()
+        .find(|c| c["clip"] == json!(clip))?;
+    let s = &c["straight"];
+    Some(Numbers {
+        own: Some([s["together"].as_u64()?, s["frames"].as_u64()?]),
+        ..Numbers::default()
+    })
+}
+
 /// A failed measure is tried again after this long, though nothing changed.
 const RETRY_MS: u64 = 10 * 60 * 1000;
 
-/// The lines out of date in the games checkout, as (game, clip, key): each
+/// The lines out of date in the games checkout, as (game, line, key): each
 /// game with a scoreboard file, each line whose kept key differs, or whose
 /// last measure failed long enough ago.
-pub(crate) fn out_of_date(home: &Path, games: &Path, gp: &Path) -> Vec<(String, String, String)> {
+pub(crate) fn out_of_date(home: &Path, games: &Path, gp: &Path) -> Vec<(String, Line, String)> {
     let now = gp_mcp::asks::now_ms();
-    let mut out = Vec::new();
+    let mut out: Vec<(String, Line, String)> = Vec::new();
     for g in crate::next::games_in(games) {
         let Some(Ok(lines)) = lines(&games.join(&g)) else {
             continue;
@@ -459,11 +565,15 @@ pub(crate) fn out_of_date(home: &Path, games: &Path, gp: &Path) -> Vec<(String, 
         let cache = read_cache(home, &g);
         for l in lines {
             let key = key_of(home, &games.join(&g), &g, &l.clip, gp);
-            let due = cache.lines.get(&l.clip).is_none_or(|e| {
+            let due = cache.lines.get(&l.slot()).is_none_or(|e| {
                 e.key != key || (e.error.is_some() && now.saturating_sub(e.measured_ms) > RETRY_MS)
             });
-            if due && !out.iter().any(|(og, oc, _)| og == &g && oc == &l.clip) {
-                out.push((g.clone(), l.clip, key));
+            if due
+                && !out
+                    .iter()
+                    .any(|(og, ol, _)| og == &g && ol.slot() == l.slot())
+            {
+                out.push((g.clone(), l, key));
             }
         }
     }
@@ -476,20 +586,21 @@ pub(crate) fn refresh(
     home: &Path,
     games: &Path,
     gp: &Path,
-    mut run: impl FnMut(&str, &str) -> Result<Numbers, String>,
+    mut run: impl FnMut(&str, &Line) -> Result<Numbers, String>,
 ) {
-    for (g, clip, key) in out_of_date(home, games, gp) {
+    for (g, line, key) in out_of_date(home, games, gp) {
+        let slot = line.slot();
         if let Ok(mut m) = MEASURING.lock() {
-            *m = Some(format!("{g}/{clip}"));
+            *m = Some(format!("{g}/{slot}"));
         }
-        let got = run(&g, &clip).map(|mut n| {
-            n.state = state_of(&status(home, &g), &clip).map(|s| s.0);
+        let got = run(&g, &line).map(|mut n| {
+            n.state = state_of(&status(home, &g), &line.clip).map(|s| s.0);
             n
         });
         if let Ok(mut m) = MEASURING.lock() {
             *m = None;
         }
-        let _ = record(home, &g, &clip, &key, got);
+        let _ = record(home, &g, &slot, &key, got);
     }
 }
 
@@ -506,12 +617,16 @@ pub(crate) fn start(home: PathBuf, games: PathBuf, modules: BTreeMap<String, Pat
     std::thread::spawn(move || {
         loop {
             let gp = measuring_gp(&home);
-            refresh(&home, &games, &gp, |g, clip| {
+            refresh(&home, &games, &gp, |g, line| {
                 let module = modules.get(g).cloned().or_else(|| {
                     let m = home.join("work/modules").join(format!("{g}.wasm"));
                     m.is_file().then_some(m)
                 });
-                measure(&gp, &games, g, clip, module.as_deref())
+                if line.own_draws {
+                    measure_own(&gp, &home, &games, g, &line.clip, module.as_deref())
+                } else {
+                    measure(&gp, &games, g, &line.clip, module.as_deref())
+                }
             });
             std::thread::sleep(LOOK);
         }
@@ -579,12 +694,14 @@ level = "field"
                 Line {
                     name: "the title".into(),
                     clip: "hop.title.001".into(),
-                    level: "title".into()
+                    level: "title".into(),
+                    own_draws: false,
                 },
                 Line {
                     name: "level 2".into(),
                     clip: "hop.l2.001".into(),
-                    level: "field".into()
+                    level: "field".into(),
+                    own_draws: false,
                 },
             ]
         );
@@ -621,7 +738,7 @@ level = "field"
             Ok(Numbers {
                 background: [90, 100],
                 sprites: [50, 100],
-                state: None,
+                ..Numbers::default()
             })
         });
         assert_eq!(runs, 1);
@@ -650,7 +767,7 @@ level = "field"
             Ok(Numbers {
                 background: [95, 100],
                 sprites: [40, 100],
-                state: None,
+                ..Numbers::default()
             })
         });
         let b = board(h, d.path(), "hop").unwrap();
@@ -686,7 +803,7 @@ level = "field"
             Ok(Numbers {
                 background: [1, 2],
                 sprites: [1, 2],
-                state: None,
+                ..Numbers::default()
             }),
         )
         .unwrap();
@@ -700,6 +817,58 @@ level = "field"
         );
         let t = text(&board(h, d.path(), "hop").unwrap()).join("\n");
         assert!(t.contains("the last measure failed: no module"), "{t}");
+    }
+
+    #[test]
+    fn an_own_draws_line_is_kept_apart_from_its_clip_s_pictures() {
+        let d = games();
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        board_file(
+            d.path(),
+            "[[line]]\nname = \"the title\"\nclip = \"hop.title.001\"\n\n[[line]]\nname = \"on its own\"\nclip = \"hop.title.001\"\nown_draws = true\n",
+        );
+        let gp = h.join("bin/gp");
+        put(&gp, "a gp");
+        // Two lines on one clip are two measures, each its own way.
+        let mut asked = Vec::new();
+        refresh(h, d.path(), &gp, |_, l| {
+            asked.push(l.own_draws);
+            Ok(if l.own_draws {
+                Numbers {
+                    own: Some([400, 1000]),
+                    ..Numbers::default()
+                }
+            } else {
+                Numbers {
+                    background: [90, 100],
+                    sprites: [80, 100],
+                    ..Numbers::default()
+                }
+            })
+        });
+        assert_eq!(asked, vec![false, true]);
+        let b = board(h, d.path(), "hop").unwrap();
+        let (pic, own) = (&b["lines"][0], &b["lines"][1]);
+        assert_eq!(pic["background"]["matched"], json!(90));
+        assert!(pic["own"].is_null());
+        assert_eq!(own["own_draws"], json!(true));
+        assert!(own["background"].is_null() && own["sprites"].is_null());
+        assert_eq!(
+            own["own"],
+            json!({"matched": 400, "total": 1000, "moved": ""})
+        );
+        assert_eq!(own["stale"], json!(false));
+        let t = text(&b).join("\n");
+        assert!(
+            t.contains("on its own (hop.title.001): on the model's own random draws, straight through 400 of 1000"),
+            "{t}"
+        );
+        // The numbers as gp clip score --json gives them.
+        let v =
+            json!({"clips": [{"clip": "hop.title.001", "straight": {"together": 7, "frames": 9}}]});
+        assert_eq!(own_numbers(&v, "hop.title.001").unwrap().own, Some([7, 9]));
+        assert!(own_numbers(&v, "hop.l1.001").is_none());
     }
 
     #[test]

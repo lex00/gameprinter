@@ -159,6 +159,12 @@ pub enum ClipCmd {
         /// order) or `entities.timer[*].ext[0]` (every one).
         #[arg(long = "values")]
         values: Vec<String>,
+        /// Hand the model none of the original's random draws, even with
+        /// the mapping's `score_draws`: its hooks draw from its own
+        /// generator, as when it plays alone. The score says how many
+        /// draws the original made and the first
+        #[arg(long)]
+        own_draws: bool,
     },
 }
 
@@ -229,6 +235,7 @@ pub(crate) fn run(cmd: &ClipCmd, paths: &Paths) -> Result<Outcome> {
             rom,
             out,
             values,
+            own_draws,
         } => score_cmd(
             paths,
             game,
@@ -240,7 +247,7 @@ pub(crate) fn run(cmd: &ClipCmd, paths: &Paths) -> Result<Outcome> {
                 rom: rom.as_deref(),
             },
             out.as_deref(),
-            values,
+            (values, *own_draws),
         ),
     }
 }
@@ -360,6 +367,10 @@ pub(crate) struct Ctx {
     /// The model's frame rate, in frames a second times 1000: seconds
     /// printed for a clip are the game's own.
     pub fps_milli: u64,
+    /// The model draws from its own generator: the original's draws are
+    /// recorded and reported but not handed over (`gp clip score
+    /// --own-draws`).
+    pub own_draws: bool,
 }
 
 /// What a tool was told about the model and the ROM.
@@ -441,6 +452,7 @@ impl Ctx {
             home: paths.home.clone(),
             starts: true,
             values: Vec::new(),
+            own_draws: false,
         })
     }
 }
@@ -848,6 +860,38 @@ fn draws_of(
     Ok(d)
 }
 
+/// What `--own-draws` reports of the original's draws it didn't hand over:
+/// how many the original made over the clip and the first (the original's
+/// frame and site), or Null for a mapping that records none.
+fn own_draws_of(recorded: Option<&gp_sim::DrawScript>) -> Value {
+    match recorded {
+        Some(d) => json!({
+            "original_draws": d.draws.len(),
+            "first_draw": d.draws.first().map(|f| json!({"original_frame": f.frame, "site": f.site})),
+        }),
+        None => json!({"original_draws": null, "first_draw": null}),
+    }
+}
+
+/// The `own draws` line of a score: the straight-through frames with the
+/// model on its own generator, beside the original's first draw.
+fn own_draws_says(o: &Value, straight: &Value) -> String {
+    let first = match &o["first_draw"] {
+        Value::Null if o["original_draws"].is_null() => "the mapping records no draws".to_owned(),
+        Value::Null => "the original drew nothing over the clip".to_owned(),
+        f => format!(
+            "the original drew {} times, the first `{}` at its frame {}",
+            o["original_draws"],
+            f["site"].as_str().unwrap_or(""),
+            f["original_frame"]
+        ),
+    };
+    format!(
+        "the model drew from its own generator, none of the original's handed over: {}/{} frames together straight through; {first}",
+        straight["together"], straight["frames"]
+    )
+}
+
 /// The clip's two locksteps, straight through (keeping each frame's
 /// values) and with resync, as `run` plays one on an original. With a
 /// tape, each plays its own replay of it, on helper threads when two are
@@ -911,13 +955,17 @@ pub(crate) fn score_one(
     let inputs = crate::run::frames(log);
     let resume = resume_of(ctx, log, &inputs, start)?;
     let tape = tape_file(ctx, log, start, resume.as_ref())?;
-    let draws = if ctx.mapping.score_draws {
+    let recorded = if ctx.mapping.score_draws {
         let d = draws_of(ctx, log, from, resume.as_ref(), tape.as_deref())?;
         fs::write(out.join("draws.txt"), d.text())?;
         Some(d)
     } else {
         None
     };
+    // With --own-draws the model takes none of them: its hooks draw from
+    // its own generator, as it plays with no original beside it.
+    let own_draws = ctx.own_draws.then(|| own_draws_of(recorded.as_ref()));
+    let draws = if ctx.own_draws { None } else { recorded };
     let run = |o: &mut crate::tape::Original, mode: Mode, values: bool| {
         crate::lockstep::run_resumed_on(
             o,
@@ -1014,6 +1062,9 @@ pub(crate) fn score_one(
         straight["frames"],
         percent(&straight)
     ));
+    if let Some(o) = &own_draws {
+        lines.push(format!("  own draws: {}", own_draws_says(o, &straight)));
+    }
     lines.push(format!(
         "  with resync: {}/{} frames together ({}), {} splits",
         resync["together"],
@@ -1097,6 +1148,7 @@ pub(crate) fn score_one(
         })),
         "splits_by_measure": st["splits_by_measure"],
         "draws": rs_j["draws"],
+        "own_draws": own_draws,
         "sound": sound.map(|s| s.0),
         "out": out,
     });
@@ -1115,7 +1167,7 @@ fn score_cmd(
     (specs, all): (&[String], bool),
     how: &Open,
     out: Option<&Path>,
-    values: &[String],
+    (values, own_draws): (&[String], bool),
 ) -> Result<Outcome> {
     // Session clips, each refused if it is sealed; with --all, sealed
     // sessions are left out instead. Corpus clips by ID.
@@ -1142,6 +1194,7 @@ fn score_cmd(
     }
     let mut ctx = Ctx::open(paths, game, how)?;
     ctx.values = values.to_vec();
+    ctx.own_draws = own_draws;
     // Corpus clips on another of the game's sets score on that set.
     let sets = clipset::package_sets(game);
     let mut on_set: std::collections::BTreeMap<String, Ctx> = std::collections::BTreeMap::new();
@@ -1151,6 +1204,7 @@ fn score_cmd(
         {
             let mut x = Ctx::open_on(paths, game, how, Some(&s.id))?;
             x.values = values.to_vec();
+            x.own_draws = own_draws;
             on_set.insert(s.id.clone(), x);
         }
     }

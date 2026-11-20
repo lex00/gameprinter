@@ -1888,9 +1888,17 @@ async function refreshScoreboard() {
     const why = l.error ? `; the last measure failed: ${l.error}` : l.measuring ? "; being measured now" : l.stale ? "; out of date, measured again soon" : "";
     cell(tr, l.name, "", `clip ${l.clip}${l.level ? `, level ${l.level}` : ""}; ${when}${why}`);
     cell(tr, l.state ? `${l.state.pct}%` : "no score", l.state?.moved ?? "", l.state ? `of ${l.state.frames} frames` : "the gate has no score for this clip yet");
-    for (const k of ["background", "sprites"]) {
-      const td = cell(tr, frames(l[k]), l[k]?.moved ?? "", "frames matched of the clip's frames");
+    if (l.own_draws) {
+      // The model on its own random draws: frames together straight
+      // through, in place of the pictures.
+      const td = cell(tr, `own draws: ${frames(l.own)}`, l.own?.moved ?? "", "frames together straight through with none of the original's random draws handed over (gp clip score --own-draws)");
+      td.colSpan = 2;
       if (l.stale || l.measuring) td.classList.add("old");
+    } else {
+      for (const k of ["background", "sprites"]) {
+        const td = cell(tr, frames(l[k]), l[k]?.moved ?? "", "frames matched of the clip's frames");
+        if (l.stale || l.measuring) td.classList.add("old");
+      }
     }
     cell(tr, l.approved?.length ? l.approved.join(", ") : "none", "");
   }

@@ -138,7 +138,14 @@ clip = "mygame.l1.001"
 [[line]]
 name = "the bonus round"
 level = "bonus"
+
+[[line]]
+name = "from power-on on its own draws"
+clip = "mygame.poweron.001"
+own_draws = true
 ```
+
+A line with `own_draws = true` measures how far the model plays with its own random generator: `gp clip score GAME CLIP --own-draws` scores the clip with none of the original's random draws handed over (docs/formats/draws.md), and the line shows its frames together straight through (OWN DRAWS, in place of BACKGROUND and SPRITES). Its GAME STATE is still the gate's, with the original's draws, so the two side by side say how much of the gap is the random draws. It is kept apart from a picture line on the same clip, under `CLIP own draws`.
 
 A picture check takes about a minute a clip, so gp serve measures in the background: every 30 seconds it looks for lines out of date and measures them one at a time with the published gp (`$GP_HOME/bin/gp`). A line is out of date when its key changes: the model the gate last landed (`model.hash` in the status), the clip's recipe and its presses files, or the gp that measures (a tool landing). What it measured is kept in `$GP_HOME/work/scoreboard/GAME.json` by clip, with the measure before, and a failed measure keeps the numbers it had and is tried again after 10 minutes. `gp loop health` and the page (`GET /api/scoreboard/{game}`) only read it; a line not yet measured says so, and one out of date says gp serve measures it again. The code is crates/gp-cli/src/scoreboard.rs.
 
