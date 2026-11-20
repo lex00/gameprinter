@@ -222,13 +222,29 @@ impl Session {
             Some(_) => "player",
         };
         // What the agent says it is doing, while no turn has come since.
-        let busy = fs::read_to_string(self.dir.join("busy.json"))
+        let busy_file = fs::read_to_string(self.dir.join("busy.json"))
             .ok()
-            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok());
+        let busy = busy_file
+            .as_ref()
             .filter(|b| b["after"].as_u64() == Some(turns.len() as u64))
             .and_then(|b| b["text"].as_str().map(str::to_owned));
+        // When the agent last acted here: its newest status line or turn
+        // (ms since the epoch; null when neither carries a time).
+        let agent_ms = busy_file
+            .as_ref()
+            .and_then(|b| b["at_ms"].as_u64())
+            .into_iter()
+            .chain(
+                turns
+                    .iter()
+                    .filter(|t| t["by"] == json!("agent"))
+                    .filter_map(|t| t["at_ms"].as_u64()),
+            )
+            .max();
         Ok(json!({
             "busy": busy,
+            "agent_ms": agent_ms,
             "game": info.get("game").and_then(|v| v.as_str()),
             "mechanic": info.get("mechanic").and_then(|v| v.as_str()),
             "prompt": info.get("prompt").and_then(|v| v.as_str()),
@@ -259,7 +275,7 @@ impl Session {
         let n = self.turns()?.len();
         fs::write(
             self.dir.join("busy.json"),
-            json!({"text": text, "after": n}).to_string(),
+            json!({"text": text, "after": n, "at_ms": gp_mcp::asks::now_ms()}).to_string(),
         )?;
         Ok(())
     }
@@ -275,6 +291,9 @@ impl Session {
     fn append_turn(&self, mut v: Value) -> Result<usize> {
         let n = self.turns()?.len() + 1;
         v["n"] = json!(n);
+        if v["at_ms"].is_null() {
+            v["at_ms"] = json!(gp_mcp::asks::now_ms());
+        }
         let mut f = fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -575,14 +594,19 @@ mod tests {
         assert_eq!(v["waiting_for"], "agent");
         s.set_busy("measuring").unwrap();
         assert_eq!(s.state().unwrap()["busy"], "measuring");
+        // The page says when the agent last acted: its status line's time.
+        let busy_ms = s.state().unwrap()["agent_ms"].as_u64().unwrap();
+        assert!(busy_ms > 0);
         s.turn(
             json!({"by": "agent", "text": "show me a running jump", "choices": ["ok", "not now"]}),
         )
         .unwrap();
         let v = s.state().unwrap();
         assert_eq!(v["waiting_for"], "player");
-        // Busy lasts only until the agent's next turn.
+        // Busy lasts only until the agent's next turn, which has a time.
         assert!(v["busy"].is_null());
+        assert!(v["agent_ms"].as_u64().unwrap() >= busy_ms);
+        assert!(v["talk"][1]["at_ms"].as_u64().is_some());
         let text = show_text(&v);
         assert!(text.contains("a held jump"), "{text}");
         assert!(text.contains("[choices: ok | not now]"), "{text}");

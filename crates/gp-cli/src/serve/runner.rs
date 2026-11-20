@@ -832,6 +832,10 @@ fn work(setup: &Setup, flag: &AtomicBool, rec: &mut Value) -> anyhow::Result<()>
             let now = state_now(&setup.home, &id);
             let last = last_line(&log_path);
             if rec["state"] != json!(now) || rec["last"] != json!(last) {
+                // When the worker last acted: its log's newest line.
+                if rec["last"] != json!(last) {
+                    rec["last_ms"] = json!(gp_mcp::asks::now_ms());
+                }
                 rec["state"] = json!(now);
                 rec["last"] = json!(last);
                 write(&setup.home, rec);

@@ -167,6 +167,8 @@ form.comment .comment-text { flex: 1; min-width: 0; font: 13px var(--mono); back
 #now .now-row { font: bold 14px var(--mono); color: var(--fg); background: transparent; border: none; padding: 0; text-decoration: underline; cursor: pointer; }
 #now .now-who { color: var(--muted); font: 12px var(--mono); }
 #now .now-status { flex-basis: 100%; }
+#now .now-item.now-absent { border-style: dashed; border-color: var(--muted); }
+#now .now-absent .now-label, #now .now-absent .now-who { color: var(--rec); }
 #now .now-idle { color: var(--muted); font: bold 12px var(--mono); }
 #now-loop { font: bold 12px var(--mono); color: var(--muted); }
 #now-loop.halted { color: var(--rec); }

@@ -242,6 +242,10 @@ pub enum MechanicCmd {
         /// A clip to replay in the window while they answer.
         #[arg(long)]
         show: Option<u64>,
+        /// The frame of the shown clip the words are about: the screen page
+        /// opens the clip there on both screens.
+        #[arg(long, requires = "show")]
+        frame: Option<u64>,
         /// A clip to compare the shown one with: the page plays both from
         /// their starts, in step, as an overlay, side by side, or a diff.
         #[arg(long, requires = "show")]
@@ -869,6 +873,7 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
             text,
             choices,
             show,
+            frame,
             against,
             judge,
             measure,
@@ -889,6 +894,9 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                 "show": show, "against": against, "facts": facts});
             if *measure {
                 turn["measure"] = json!(true);
+            }
+            if let Some(f) = frame {
+                turn["frame"] = json!(f);
             }
             let mut line = String::new();
             if *judge {

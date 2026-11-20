@@ -1018,6 +1018,7 @@ async function refreshLists(force) {
     drawClips();
     drawNowWork();
     drawYourTurn();
+    showNamedClip();
   } catch (e) { /* the next look */ }
   finally { listing = false; }
 }
@@ -1278,11 +1279,40 @@ async function playFrom(m) {
 // text), and the loop's switches: the runner, its workers, whether
 // gp_run needs a step, and a halt.
 
+/** "12 s ago", "4 min ago", "3 h ago", "2 days ago" from ms since the epoch. */
+function ago(ms) {
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 60) return `${s} s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return `${Math.floor(s / 86400)} days ago`;
+}
+
+let loopNow = null; // /api/steps as last seen: the runner and its workers
+
+/** The live worker on row `r` of the open game, if one runs. */
+function workerOn(r) {
+  const game = session?.game ?? "";
+  return (loopNow?.workers ?? []).find((w) => LIVE.includes(w.state)
+    && ((r.worker && w.worker === r.worker) || (w.step?.touches ?? []).includes(`row:${game}/${r.mechanic}`))) ?? null;
+}
+
 function drawNowWork() {
   const box = $("now-work");
   const working = rows.filter((r) => r.status === "agent working");
   const wk = follow.work;
-  const key = JSON.stringify([working.map((r) => [r.mechanic, r.worker, r.note]), session?.mechanic, session?.busy, wk && [wk.clip, wk.from, wk.to, wk.says]]);
+  // Whether an agent is there for each row, and when it last acted: a row
+  // marked working with no live worker says so, with the runner's state.
+  const lines = working.map((r) => {
+    const w = workerOn(r);
+    const times = [w ? w.last_ms ?? w.started_ms : null, r.mechanic === session?.mechanic ? session?.agent_ms : null].filter((t) => typeof t === "number");
+    const last = times.length ? `last acted ${ago(Math.max(...times))}` : "no time of its last act";
+    const there = w
+      ? `YOUR AGENT IS THERE (${w.worker ?? w.step?.id ?? "a worker"})`
+      : `NO AGENT IS RUNNING FOR IT${loopNow && !loopNow.settings?.runner?.on ? ": THE RUNNER IS OFF" : ""}`;
+    return { r, w: !!w, there, last };
+  });
+  const key = JSON.stringify([lines.map((l) => [l.r.mechanic, l.r.worker, l.r.note, l.there, l.last]), session?.mechanic, session?.busy, wk && [wk.clip, wk.from, wk.to, wk.says]]);
   if (box.dataset.key === key) return;
   box.dataset.key = key;
   box.textContent = "";
@@ -1300,17 +1330,45 @@ function drawNowWork() {
     box.append(el("span", "now-idle", "NOBODY IS WORKING ON AN ITEM NOW"));
     return;
   }
-  for (const r of working) {
-    const line = el("div", "now-item");
+  for (const { r, w, there, last } of lines) {
+    const line = el("div", `now-item${w ? "" : " now-absent"}`);
     const name = el("button", "now-row", r.mechanic.toUpperCase());
     name.type = "button";
     name.title = "Open this item in the quest log";
     name.addEventListener("click", (e) => { e.currentTarget.blur(); void pickRow(r.mechanic); $("quest")?.scrollIntoView({ behavior: "smooth", block: "start" }); });
-    line.append(el("span", "now-label", "WORKING ON"), name, el("span", "now-who", r.worker ? `by ${r.worker}` : ""));
+    line.append(el("span", "now-label", w ? "WORKING ON" : "MARKED WORKING"), name, el("span", "now-who", `${there}, ${last}`));
     const status = r.mechanic === session?.mechanic && session?.busy ? session.busy : r.note ?? "";
     if (status) line.append(el("span", "now-status", status));
     box.append(line);
   }
+}
+
+// The agent's turns that name a clip (say --show N, with --frame F, or
+// words like "clip 3, frame 120"): the newest new one opens on the screens
+// there, held like an ask of the agent's. Turns from before the page opened
+// aren't replayed.
+let agentTurnSeen = null; // [mechanic, n] of the newest agent turn looked at
+function showNamedClip() {
+  const m = session?.mechanic;
+  const talk = session?.talk ?? [];
+  const t = [...talk].reverse().find((x) => x.by === "agent");
+  if (!m) return;
+  const seen = agentTurnSeen;
+  agentTurnSeen = [m, t?.n ?? 0];
+  if (!t || !seen || seen[0] !== m || (t.n ?? 0) <= seen[1]) return;
+  const words = String(t.text ?? "");
+  const n = typeof t.show === "number" ? t.show : Number(/\bclip\s+(\d+)/i.exec(words)?.[1] ?? NaN);
+  if (!Number.isFinite(n)) return;
+  const f = typeof t.frame === "number" ? t.frame : Number(/\bframe\s+(\d+)/i.exec(words)?.[1] ?? 0);
+  if (recording || sending) return;
+  show.by = "agent";
+  agentHeldUntil = performance.now() + AGENT_HOLD_MS;
+  note(`Your agent is showing clip ${n} of ${m}, frame ${f}.`, 8000);
+  void openClip(n, m, f).then(() => { show.by = "agent"; drawClips(); drawFollow(); report(); })
+    .catch((e) => {
+      if (mode === "clip" && !clip) backToLive();
+      note(`Couldn't show clip ${n} your agent named: ${e.message ?? e}`, 8000);
+    });
 }
 
 function drawNowLoop(v) {
@@ -1348,7 +1406,9 @@ async function refreshSteps() {
   } catch (e) { /* the next look */ }
   if (!v) return;
   openSteps = v.open ?? [];
+  loopNow = v;
   drawWorkers(v);
+  drawNowWork();
   drawYourTurn();
   const key = JSON.stringify([v.halted?.id ?? null, (v.open ?? []).map((s) => s.id)]);
   if (key === stepsDrawn) return;
