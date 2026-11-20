@@ -987,6 +987,31 @@ fn trial(
         return fail(w, "corpus");
     }
     lines.extend(passes.into_iter().map(|p| format!("{TOLERATED}{p}")));
+    // The looks the owner approved: every locked frame drawn no further from
+    // the original, whatever the patch touches. No tolerance moves a lock;
+    // only the owner's yes again does (gp mechanic approve).
+    let looks = match crate::approved::read(&game) {
+        Ok(l) => l,
+        Err(why) => return fail(why, "approved"),
+    };
+    if !looks.is_empty() {
+        let worse = crate::approved::check(
+            &c.paths,
+            &game,
+            module.as_deref(),
+            Some(assets.as_path()),
+            &c.run,
+            &looks,
+        );
+        if let Some(w) = first_of(&worse) {
+            return fail(w, "approved");
+        }
+        lines.push(format!(
+            "{}: the {} looks the owner approved are drawn as approved or closer to the original",
+            what_of(set),
+            looks.len()
+        ));
+    }
     // The curves measured again under a mapping the patch changed: the
     // corpus's new curves, version and record land with it, in a commit of
     // their own.

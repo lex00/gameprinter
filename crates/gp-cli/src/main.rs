@@ -7,6 +7,7 @@ mod agent_bench;
 mod agent_brief;
 mod agent_cmd;
 mod agent_integrate;
+mod approved;
 mod arcade_rec;
 mod arcade_stage0;
 mod assets;

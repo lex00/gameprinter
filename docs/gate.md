@@ -29,6 +29,7 @@ In order, a try of a patch (or of a batch's patches, below) on the tip:
 | Themes | Each theme's files against their pins |
 | Hook tests | When the patch changes the hook crate (or the package's Cargo.lock), the crate's own tests, built from the kit in the build sandbox for this machine (`cargo test -p gp-ext-game`, about 12 s cold) |
 | Corpus | Every clip scored and compared with the tip's: a clip at 100% stays there, no bar a clip met is lost, no clip that scored stops scoring. A patch to the model's `present` sections and themes alone is held to the picture too. Every clip held worse is listed, and any one fails the change unless the game's `tolerate.toml` names it ("Tolerated" below) |
+| Approved | Each look the owner approved (the game's `approved.toml`) played again: no locked frame further from the original ("Approved looks" below) |
 | Land | Committed in the gate's worktree and fast-forwarded onto the branch, else the branch's ref is moved if it is still at the tip scored |
 
 ### Tolerated
@@ -42,6 +43,25 @@ why = "the board's one-frame sprite lag (issue #42)"
 ```
 
 A tolerance with no `clip` or no `why` fails the gate. The file is read as the patch leaves it, so a patch that adds a tolerance shows it in its diff, and lands only with the person's yes like any patch. Each regression a tolerance lets pass is a line of the gate's (`tolerated: tapper.attract.001: was 100% ..., tolerated: the board's one-frame sprite lag`) and is in `--json` as `tolerated`, so the card says it.
+
+### Approved looks
+
+When the owner says yes to a look (a quest-log row's clip and frames, judged on the screens in the game's own pictures), `gp mechanic approve GAME ROW` locks it: the row's clip (a corpus clip, or clip N of a row once it is in the corpus as GAME.ROW.NNN) is played as `gp picture` plays it, and each of its frames from the row's `from` to `to` is written to the game's `approved.toml` with its pixels apart from the original on each layer (the screen measure's distances):
+
+```toml
+[[look]]
+row = "get-ready-screen"
+clip = "tapper.l1.001"
+frames = [70, 88]
+look = "game"
+approved = "2026-11-20"
+apart = [
+  [70, 0, 0],
+  [71, 12, 0],
+]
+```
+
+The gate plays each locked clip again on every change, whatever the patch touches, and fails it (phase `approved`) when a locked frame is further apart from the original on either layer than when approved, or isn't compared any more. Closer passes. No tolerance moves a lock; the owner's yes again (`gp mechanic approve` once more, which replaces the row's lock) does, and the file is read as the patch leaves it, so a patch that edits a lock shows it in its diff. Only the game's own look is locked yet: a theme's look is refused.
 
 ### Clips go in on their own
 

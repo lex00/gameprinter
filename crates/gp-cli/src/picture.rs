@@ -95,6 +95,12 @@ pub struct PictureArgs {
     /// clip and frame it was seen on. Rows the quest log has are left.
     #[arg(long)]
     pub propose: bool,
+    /// Each compared frame's pixels apart, kept in the JSON as `apart`
+    /// (frame, sprites, background): what an approved look is locked to
+    /// (crate::approved). Not a flag: the gate and `gp mechanic approve`
+    /// set it.
+    #[arg(skip)]
+    pub apart: bool,
 }
 
 /// The gaps `--propose` makes rows of: each group's details by how many
@@ -143,9 +149,13 @@ fn proposals(
     out
 }
 
-/// What a clip's lockstep gives: its boxes' causes and, with `--sprites`,
-/// its frames' sprites.
-type ClipWatched = crate::scenario::Watched<(Vec<Found>, Option<Vec<SpriteLine>>)>;
+/// Each compared frame's pixels apart: the frame from the clip's start,
+/// the sprites' distance and the background's (gp_interp::screen).
+pub(crate) type Apart = Vec<[u64; 3]>;
+
+/// What a clip's lockstep gives: its boxes' causes, with `--sprites` its
+/// frames' sprites, and with `apart` each frame's pixels apart.
+type ClipWatched = crate::scenario::Watched<(Vec<Found>, Option<Vec<SpriteLine>>, Option<Apart>)>;
 
 /// One frame's line of `--sprites`.
 #[derive(Debug, Clone, Serialize)]
@@ -467,6 +477,9 @@ pub(crate) struct Watch {
     shots: Option<(BTreeSet<u64>, std::path::PathBuf)>,
     /// `--sprites`: each compared frame's sprites, kept when asked.
     pub(crate) sprites: Option<Vec<SpriteLine>>,
+    /// Each compared frame's pixels apart, kept when asked.
+    pub(crate) apart: Option<Apart>,
+    color: u8,
 }
 
 impl Watch {
@@ -488,6 +501,8 @@ impl Watch {
             found: Vec::new(),
             shots: None,
             sprites: None,
+            apart: None,
+            color: opts.color,
         }
     }
 
@@ -636,6 +651,14 @@ impl Screens<OriginalRuntime, Model> for Watch {
                 (arcade_sprites(&ram), None)
             }
         };
+        if let Some(apart) = &mut self.apart {
+            let (b, s) = screen::measure(&o, &m, self.color);
+            apart.push([
+                shown.frame,
+                s.distance(screen::SPRITES),
+                b.distance(screen::BACKGROUND),
+            ]);
+        }
         if let Some(lines) = &mut self.sprites {
             lines.push(sprite_line(
                 shown.frame,
@@ -1276,10 +1299,13 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
                     if args.sprites.is_some() {
                         w.sprites = Some(Vec::new());
                     }
+                    if args.apart {
+                        w.apart = Some(Vec::new());
+                    }
                     w
                 })
             },
-            |w| (w.found, w.sprites),
+            |w| (w.found, w.sprites, w.apart),
         )?;
         for (sc, r) in list.into_iter().zip(ran) {
             ran_by.insert(sc.id.clone(), (sc, r));
@@ -1303,9 +1329,9 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
             Ok((o, w)) => (Ok(o), w),
             Err(e) => (Err(e), None),
         };
-        let (watch, lines) = match watch {
-            Some((f, l)) => (Some(f), l),
-            None => (None, None),
+        let (watch, lines, apart) = match watch {
+            Some((f, l, a)) => (Some(f), l, a),
+            None => (None, None, None),
         };
         if let (Some(path), Some(lines)) = (&args.sprites, lines) {
             let mut text = String::new();
@@ -1368,6 +1394,7 @@ pub(crate) fn run(args: &PictureArgs, paths: &gp_evidence::Paths) -> Result<Outc
                     "background": [x.background.same, x.background.total],
                 })),
                 "groups": mine,
+                "apart": apart,
             }),
         );
     }

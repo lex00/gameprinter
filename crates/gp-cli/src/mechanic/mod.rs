@@ -230,6 +230,24 @@ pub enum MechanicCmd {
         #[arg(long)]
         games: Option<PathBuf>,
     },
+    /// Lock a look the owner said yes to: the row's clip (a corpus clip, or
+    /// clip N once it is in the corpus), its frames and look (the game's
+    /// own) are measured on the game as it is and written to the game's
+    /// approved.toml, each frame's pixels apart from the original. The
+    /// model gate then fails a change that draws one of those frames
+    /// further apart. Run it on the owner's yes only, and again to move
+    /// the lock (docs/gate.md, "Approved looks").
+    Approve {
+        game: String,
+        /// The row whose clip the owner approved.
+        mechanic: String,
+        /// The game's built module. Needed for a model with hooks.
+        #[arg(long)]
+        module: Option<PathBuf>,
+        /// The games checkout (default $GP_GAMES_DIR).
+        #[arg(long)]
+        games: Option<PathBuf>,
+    },
     /// Wait until it is the agent's turn (the person handed off a clip or
     /// answered), then print the session as `show` does. Run it in the
     /// background after each turn you give the person. Without a mechanic,
@@ -870,6 +888,12 @@ pub(crate) fn run(cmd: &MechanicCmd, paths: &Paths) -> Result<Outcome> {
                 ),
             ))
         }
+        MechanicCmd::Approve {
+            game,
+            mechanic,
+            module,
+            games,
+        } => crate::approved::approve(paths, game, mechanic, games.as_deref(), module.as_deref()),
         MechanicCmd::Propose {
             game,
             mechanic,

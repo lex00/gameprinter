@@ -508,6 +508,7 @@ pub const TABLE: &[Row] = &[
         J,
         Rule::Refuse("it is this server; it is already running."),
     ),
+    r("mechanic approve", J, Write),
     r("mechanic autoplay", S, Write),
     r("mechanic busy", J, Write),
     r("mechanic clip-save", S, Write),
